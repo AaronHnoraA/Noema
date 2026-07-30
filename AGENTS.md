@@ -4,8 +4,6 @@ Noema is a standalone application. The canonical source tree is this
 repository; Emacs integrates through compatibility links and must never become
 a runtime dependency of the desktop app.
 
-The repository lives at `~/HC/SOURCE/Noema`; its `origin` must remain the
-literal SSH-style remote `$MY_GIT:Noema/Noema.git`.
 
 ## Environment
 
