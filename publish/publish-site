@@ -77,6 +77,8 @@ PUBLISHED_ASSET_SOURCES = (
     (RUNTIME_ROOT / "src" / "styles" / "widgets.css", Path("Noema/src/styles/widgets.css")),
     (RUNTIME_ROOT / "src" / "styles" / "theme-typora.css", Path("Noema/src/styles/theme-typora.css")),
     (RUNTIME_ROOT / "src" / "styles" / "typography.css", Path("Noema/src/styles/typography.css")),
+    (RUNTIME_ROOT / "src" / "styles" / "aaron-ui-tokens.css", Path("Noema/src/styles/aaron-ui-tokens.css")),
+    (RUNTIME_ROOT / "src" / "styles" / "aaron-ui-elegant.css", Path("Noema/src/styles/aaron-ui-elegant.css")),
     (RUNTIME_ROOT / "js" / "note-page.js", Path("js/note-page.js")),
     (ASSETS_DIR / "js" / "mac-window.js", Path("js/mac-window.js")),
     (ASSETS_DIR / "css" / "aaronnote-published.css", Path("css/aaronnote-published.css")),
@@ -744,6 +746,8 @@ def deps_for_note(note: Note, notes_by_rel: dict[str, Note] | None = None) -> se
         str(RUNTIME_ROOT / "src" / "styles" / "widgets.css"),
         str(RUNTIME_ROOT / "src" / "styles" / "theme-typora.css"),
         str(RUNTIME_ROOT / "src" / "styles" / "typography.css"),
+        str(RUNTIME_ROOT / "src" / "styles" / "aaron-ui-tokens.css"),
+        str(RUNTIME_ROOT / "src" / "styles" / "aaron-ui-elegant.css"),
         str(ASSETS_DIR / "css" / "aaronnote-published.css"),
     }
     fonts_dir = RUNTIME_ROOT / "src" / "styles" / "fonts"

@@ -321,7 +321,7 @@ Browsing candidates never mints an id (see [Stable ids](#stable-ids)).
   `matchingTodoRefCompletions` slot into the same completion-popup waterfall
   as tag/roam/path completion (`updateSnippetPopup`), triggered by the
   cursor sitting inside an `after=`/`blocks=`/`task=` attr value.
-- **Emacs**: `my/aaronnote-roam-capf` gets a matching `cond` branch that
+- **Emacs**: `my/noema-roam-capf` gets a matching `cond` branch that
   calls the `todo-refs` action through the same `/api` bridge other roam
   actions use.
 - **API**: `aaronnote:api:completions:todo-refs` (web-host.mjs), bridged as

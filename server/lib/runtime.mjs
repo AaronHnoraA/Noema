@@ -2831,9 +2831,18 @@ function rememberNoteSnapshots(rawNotes, resolvedNotes) {
   notesSnapshotFingerprint = computeNotesSnapshotFingerprint(rawNotes);
 }
 
-async function walkFiles(root, accept) {
+async function walkFiles(root, accept, options = {}) {
   const files = [];
+  const visitedDirectories = new Set();
   async function walk(dir) {
+    let identity;
+    try {
+      identity = realpathSync(dir);
+    } catch {
+      return;
+    }
+    if (visitedDirectories.has(identity)) return;
+    visitedDirectories.add(identity);
     let entries = [];
     try {
       entries = await readdir(dir, { withFileTypes: true });
@@ -2845,6 +2854,11 @@ async function walkFiles(root, accept) {
       const full = join(dir, entry.name);
       if (entry.isDirectory()) {
         if (!excludedDirs.has(entry.name)) await walk(full);
+      } else if (options.followDirectorySymlinks && entry.isSymbolicLink()) {
+        try {
+          const target = await stat(full);
+          if (target.isDirectory() && !excludedDirs.has(entry.name)) await walk(full);
+        } catch {}
       } else if (entry.isFile() && accept(full, entry.name)) {
         files.push(full);
       }
@@ -4909,7 +4923,11 @@ export async function scanSnippets(options = {}) {
   const byIdentity = new Map();
   for (let rootIndex = 0; rootIndex < roots.length; rootIndex++) {
     const root = roots[rootIndex];
-    const files = (await walkFiles(root.dir, (_file, name) => !name.startsWith(".") && !name.endsWith(".el")))
+    const files = (await walkFiles(
+      root.dir,
+      (_file, name) => !name.startsWith(".") && !name.endsWith(".el"),
+      { followDirectorySymlinks: true },
+    ))
       .sort((a, b) => relative(root.dir, a).localeCompare(relative(root.dir, b)));
     const parsed = await mapLimit(files, scanConcurrency, async (file) => {
       try {

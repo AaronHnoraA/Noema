@@ -4,6 +4,8 @@
 // available here too, via the server's `adapterScript` bridge injected into
 // this page's `<head>` (see `web-host.mjs` `serveStatic`).
 import "./style.css";
+import "../src/styles/aaron-ui-tokens.css";
+import "../src/styles/aaron-ui-elegant.css";
 import { api } from "./api-client.ts";
 import type { TodoItem } from "./api-client.ts";
 import { openAgendaView, refreshAgendaView } from "./agenda-view.ts";

@@ -151,6 +151,7 @@ export function createKernelRegistry({
   zmq,
   launchTimeoutMs = 15_000,
   stderr = process.stderr,
+  kernelHost,
 } = {}) {
   const log = makeLogger(stderr);
   /** @type {Map<string, object>} key -> record */
@@ -165,7 +166,8 @@ export function createKernelRegistry({
   /** Best-effort, serialized rewrite of the owned-kernels sidecar (used by sweepOrphanKernels after a crash). */
   function persistSidecar() {
     const owned = Array.from(records.values())
-      .filter((record) => record.owned && record.process?.pid && !record.disposed)
+      .filter((record) => record.owned && !record.hosted
+        && record.process?.pid && !record.disposed)
       .map((record) => ({ pid: record.process.pid, connectionFile: record.connectionFilePath, key: record.key }));
     sidecarChain = sidecarChain.then(async () => {
       if (owned.length === 0) {
@@ -178,22 +180,45 @@ export function createKernelRegistry({
   }
 
   async function launchOwned(key, kernelSpecEntry) {
-    const ports = await allocateKernelPorts(5);
-    const connectionInfo = makeConnectionInfo(ports, kernelSpecEntry.name);
-    const connectionFilePath = path.join(runtimeDir, `aaronnote-kernel-${crypto.randomUUID()}.json`);
-    await writeConnectionFile(connectionFilePath, connectionInfo);
+    let ports;
+    let connectionInfo;
+    let connectionFilePath;
+    let process_;
+    let hosted;
+    if (kernelHost) {
+      hosted = await kernelHost.launch({
+        key,
+        sourceFile: kernelSpecEntry.sourceFile,
+        kernelName: kernelSpecEntry.name,
+        kernelSpec: kernelSpecEntry.spec,
+      });
+      connectionInfo = hosted.connectionInfo;
+      connectionFilePath = hosted.connectionFile || "";
+      ports = [];
+      process_ = {
+        pid: hosted.pid,
+        exited: { once() {} },
+        interrupt: () => kernelHost.interrupt(hosted.runtimeId),
+        dispose: () => kernelHost.shutdown(hosted.runtimeId),
+      };
+    } else {
+      ports = await allocateKernelPorts(5);
+      connectionInfo = makeConnectionInfo(ports, kernelSpecEntry.name);
+      connectionFilePath = path.join(runtimeDir, `aaronnote-kernel-${crypto.randomUUID()}.json`);
+      await writeConnectionFile(connectionFilePath, connectionInfo);
 
-    const env = buildKernelEnv({
-      kernelSpecEnv: kernelSpecEntry.spec.env,
-      runtimeBinDir: runtimeBinDir || venvBinDir,
-    });
-    const process_ = spawnKernelProcess({
-      kernelSpec: kernelSpecEntry.spec,
-      connectionFilePath,
-      env,
-      cwd,
-      stderr,
-    });
+      const env = buildKernelEnv({
+        kernelSpecEnv: kernelSpecEntry.spec.env,
+        runtimeBinDir: runtimeBinDir || venvBinDir,
+      });
+      process_ = spawnKernelProcess({
+        kernelSpec: kernelSpecEntry.spec,
+        connectionFilePath,
+        env,
+        cwd,
+        stderr,
+      });
+    }
 
     const clientId = crypto.randomUUID();
     const username = crypto.randomUUID();
@@ -214,6 +239,10 @@ export function createKernelRegistry({
       owned: true,
       attached: false,
       process: process_,
+      hosted: Boolean(hosted),
+      hostRuntimeId: hosted?.runtimeId,
+      hostGeneration: Number(hosted?.generation || 1),
+      stateLost: Boolean(hosted?.stateLost),
       connectionInfo,
       connectionFilePath,
       ports,
@@ -244,7 +273,7 @@ export function createKernelRegistry({
       );
       record.status = "dead";
       record.lastError = stderrTail || `kernel process exited (code=${exitCode}, signal=${signal})`;
-      releaseKernelPorts(record.ports);
+      if (!record.hosted) releaseKernelPorts(record.ports);
       persistSidecar();
       try {
         record.kernel.dispose();
@@ -332,8 +361,49 @@ export function createKernelRegistry({
     }
     if (record.owned && record.process) {
       await record.process.dispose().catch(noop);
-      releaseKernelPorts(record.ports);
+      if (!record.hosted) releaseKernelPorts(record.ports);
     }
+  }
+
+  async function refreshHostedRecord(record) {
+    if (!kernelHost || !record?.hostRuntimeId || record.disposed) return record;
+    const status = await kernelHost.status(record.hostRuntimeId);
+    if (!status?.alive) {
+      await kernelHost.shutdown(record.hostRuntimeId).catch(noop);
+      record.status = "dead";
+      record.lastError = status?.message || "Remote kernel is not alive";
+      return record;
+    }
+    const generation = Number(status.generation || 1);
+    if (generation === Number(record.hostGeneration || 1)) return record;
+    try { record.kernel?.dispose(); } catch {}
+    try { record.socket?.dispose(); } catch {}
+    const clientId = crypto.randomUUID();
+    const username = crypto.randomUUID();
+    const { kernel, socket } = createRawKernelConnection({
+      connectionInfo: status.connectionInfo,
+      clientId,
+      username,
+      model: { name: record.kernelName, id: newId() },
+      zmq,
+      stderr,
+    });
+    record.kernel = kernel;
+    record.socket = socket;
+    record.connectionInfo = status.connectionInfo;
+    record.hostGeneration = generation;
+    record.widgetGeneration += 1;
+    record.stateLost = Boolean(status.stateLost);
+    record.id = newId();
+    record.status = "starting";
+    const connected = await waitForConnected(kernel, launchTimeoutMs);
+    if (!connected) {
+      record.status = "dead";
+      throw new Error(`Timed out reconnecting to hosted kernel "${record.kernelName}"`);
+    }
+    await warmupKernelInfo(kernel, launchTimeoutMs, { stderr });
+    record.status = "idle";
+    return record;
   }
 
   return {
@@ -350,10 +420,16 @@ export function createKernelRegistry({
      */
     async ensure(key, kernelSpecEntry) {
       const existing = records.get(key);
-      if (existing && existing.status !== "dead") return existing;
+      if (existing && existing.status !== "dead") {
+        await refreshHostedRecord(existing);
+        if (existing.status !== "dead") return existing;
+      }
 
       const record = await launchOwned(key, kernelSpecEntry);
-      if (existing) record.widgetGeneration = existing.widgetGeneration + 1;
+      if (existing) {
+        record.widgetGeneration = existing.widgetGeneration + 1;
+        record.stateLost = true;
+      }
       records.set(key, record);
       persistSidecar();
       return record;
@@ -396,7 +472,7 @@ export function createKernelRegistry({
       if (record.kernelSpec.interrupt_mode === "message" || !record.process) {
         await sendInterruptRequest(record.kernel, { stderr });
       } else {
-        record.process.interrupt();
+        await record.process.interrupt();
       }
       return true;
     },
@@ -423,7 +499,8 @@ export function createKernelRegistry({
     /** Synchronous snapshot of owned kernel PIDs, for a `process.on("exit")` last-resort kill. */
     listOwnedPids() {
       return Array.from(records.values())
-        .filter((record) => record.owned && record.process?.pid && !record.disposed)
+        .filter((record) => record.owned && !record.hosted
+          && record.process?.pid && !record.disposed)
         .map((record) => record.process.pid);
     },
   };

@@ -2,6 +2,8 @@ import "../src/styles/widgets.css";
 import "../src/styles/theme-typora.css";
 import "../src/styles/typography.css";
 import "./style.css";
+import "../src/styles/aaron-ui-tokens.css";
+import "../src/styles/aaron-ui-elegant.css";
 
 import {
   createEditor,
@@ -1880,7 +1882,7 @@ function setSelectOptions(select: HTMLSelectElement, values: string[], selected 
 async function loadJupyterKernelSpecs(): Promise<JupyterKernelSpec[]> {
   if (jupyterKernelSpecsCache) return jupyterKernelSpecsCache;
   try {
-    const result = await api.jupyterCell.kernels();
+    const result = await api.jupyterCell.kernels({ file: currentFile });
     jupyterKernelSpecsCache = Array.isArray(result.kernels) ? result.kernels : [];
   } catch {
     jupyterKernelSpecsCache = [];

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "@voidzero-dev/vite-plus-test";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 
@@ -74,6 +74,28 @@ describe("server snippet catalog", () => {
       weight: 2.5,
       context: "math-at",
       description: "Greek beta",
+    });
+  });
+
+  test("follows a symlinked mode directory without losing its mode identity", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aaronnote-snippet-links-"));
+    const catalog = join(root, "catalog");
+    const sharedMode = join(root, "shared", "markdown-mode");
+    await mkdir(catalog, { recursive: true });
+    await mkdir(sharedMode, { recursive: true });
+    await writeFile(
+      join(sharedMode, "proof"),
+      "# name: Proof block\n# key: proof\n# --\n#+begin proof\n$0\n#+end proof\n",
+    );
+    await symlink(sharedMode, join(catalog, "markdown-mode"), "dir");
+    process.env.AARONNOTE_SNIPPETS = catalog;
+
+    const proof = (await scanSnippets({ force: true }))
+      .find((snippet: ScannedSnippet & { mode?: string }) => snippet.key === "proof");
+    expect(proof).toMatchObject({
+      key: "proof",
+      mode: "markdown-mode",
+      browserCompatible: true,
     });
   });
 });

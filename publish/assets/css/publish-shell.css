@@ -1,3 +1,5 @@
+/* Shared structural shell for Noema's published archive.
+ * Aaron UI token and Elegant adapter styles are loaded after this file. */
 :root {
   --retro-bg: #ddd0b6;
   --retro-paper: #f7efde;

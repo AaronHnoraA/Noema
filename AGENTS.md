@@ -23,16 +23,16 @@ a runtime dependency of the desktop app.
 
 Emacs links only those shared subdirectories from its historical asset roots;
 Emacs-only snippet and template directories stay in the Emacs repository.
-Emacs uses the full-project link at `lisp/roam/Noema`; the legacy
-`lisp/roam/aaronnote` path remains as a compatibility symlink.
+Emacs uses the full-project link at `lisp/roam/Noema`; the retired
+`lisp/roam/aaronnote` compatibility path must not be reintroduced.
 
 ## Compatibility
 
 The desktop host uses standalone mode and opens source targets in a new VS Code
 window. The Emacs host keeps xwidget/Appine, buffer, gateway, and key-adapter
 behavior. Existing lowercase `aaronnote` paths, `AARONNOTE_*` environment
-variables, API channels, and `my/aaronnote-*` Lisp symbols are compatibility
-contracts unless a migration explicitly replaces both sides.
+variables and API channels remain compatibility contracts.  The Emacs Lisp
+surface has migrated to `my/noema-*`; do not add `my/aaronnote-*` aliases.
 
 ## Two host adapters
 
@@ -40,7 +40,7 @@ Noema must support both host scenes without deleting or visually replacing
 either adapter:
 
 - In Emacs, `init-aaronnote.el` owns the existing header-line, transient menus,
-  buffer integration, and every `my/aaronnote-*` entry point.
+  buffer integration, and every `my/noema-*` entry point.
 - In Noema.app, `desktop/main.mjs`, `desktop/preload.cjs`, and the
   `.noema-desktop-titlebar` renderer provide the macOS application menu,
   window title bar, drag/drop, and VS Code/new-window behavior.

@@ -1,0 +1,86 @@
+/*
+ * Aaron Elegant host adapter.
+ *
+ * This layer deliberately owns only geometry, rhythm, and interaction shape.
+ * Noema's existing CSS remains the sole owner of editor width and palette.
+ */
+
+html,
+body,
+#app {
+  text-rendering: optimizeLegibility;
+}
+
+:where(button, input, select, textarea, [role="button"]):focus-visible,
+:where(a, [tabindex]):focus-visible {
+  outline: var(--aaron-stroke-thin) solid var(--aaron-accent);
+  outline-offset: 2px;
+}
+
+button {
+  border-radius: var(--aaron-radius-2);
+  transition:
+    color var(--aaron-motion-fast) ease,
+    border-color var(--aaron-motion-fast) ease,
+    background-color var(--aaron-motion-fast) ease;
+}
+
+.noema-desktop-titlebar {
+  gap: var(--aaron-space-4);
+  padding: 0 var(--aaron-space-5) 0 82px;
+  box-shadow: none;
+}
+
+.noema-desktop-titlebar-controls {
+  gap: var(--aaron-space-1);
+}
+
+.noema-desktop-titlebar-controls button {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--aaron-radius-2);
+}
+
+.noema-desktop-titlebar-name {
+  font-family: var(--aaron-font-heading);
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.noema-desktop-drop-overlay {
+  inset: 70px var(--aaron-space-4) var(--aaron-space-4);
+  border-width: var(--aaron-stroke-thin);
+  border-radius: var(--aaron-radius-2);
+  box-shadow: var(--aaron-shadow);
+}
+
+.aaronnote-status-hud {
+  right: var(--aaron-space-4);
+  left: var(--aaron-space-4);
+  gap: var(--aaron-space-3);
+}
+
+.aaronnote-status-pill {
+  gap: var(--aaron-space-2);
+  padding: var(--aaron-space-1) var(--aaron-space-2);
+  border-radius: var(--aaron-radius-2);
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+:where(
+  .aaronnote-tools-panel,
+  .aaronnote-jupyter-panel,
+  .aaronnote-floating-toc,
+  .aaronnote-local-graph-panel,
+  .aaronnote-agenda-full-help-panel,
+  .aaronnote-snippet-popup,
+  .aaronnote-math-preview,
+  .aaronnote-graph-search-results
+) {
+  border-radius: var(--aaron-radius-2);
+}
+
+body.home-reveal :where(.thread-card, .note-card, .about-links a, .button) {
+  border-radius: var(--aaron-radius-2);
+}

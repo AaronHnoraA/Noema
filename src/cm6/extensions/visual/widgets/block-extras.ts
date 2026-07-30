@@ -491,8 +491,8 @@ const tikzPendingSourceByAsset = new Map<string, string>();
 const DEFAULT_CEIL_KERNEL = "python3";
 const DEFAULT_CEIL_SESSION = "default";
 const DEFAULT_CEIL_LANGUAGE = "python";
-let ceilKernelsCache: CeilKernelSpec[] | null = null;
-let ceilKernelsPending: Promise<CeilKernelSpec[]> | null = null;
+const ceilKernelsCache = new Map<string, { at: number; kernels: CeilKernelSpec[] }>();
+const ceilKernelsPending = new Map<string, Promise<CeilKernelSpec[]>>();
 const ceilOutputCache = new Map<string, CeilExecutionResult>();
 // Hidden-script source text keyed by file/kernel/session/cell id. Lets a widget
 // that is rebuilt on every keystroke (typing `(`, `-`, `*` … forces a full
@@ -1435,12 +1435,14 @@ function fallbackCeilKernels(current: string): CeilKernelSpec[] {
 // should not serve a stale list forever the way regular kernelspecs (which
 // rarely change within a session) can.
 const CEIL_KERNELS_CACHE_TTL_MS = 15_000;
-let ceilKernelsCacheAt = 0;
-
-function loadCeilKernels(current: string): Promise<CeilKernelSpec[]> {
-  if (ceilKernelsCache && Date.now() - ceilKernelsCacheAt < CEIL_KERNELS_CACHE_TTL_MS) return Promise.resolve(ceilKernelsCache);
-  if (ceilKernelsPending) return ceilKernelsPending;
-  ceilKernelsPending = api.jupyterCell.kernels()
+function loadCeilKernels(file: string, current: string): Promise<CeilKernelSpec[]> {
+  const cached = ceilKernelsCache.get(file);
+  if (cached && Date.now() - cached.at < CEIL_KERNELS_CACHE_TTL_MS) {
+    return Promise.resolve(cached.kernels);
+  }
+  const pending = ceilKernelsPending.get(file);
+  if (pending) return pending;
+  const request = api.jupyterCell.kernels({ file })
     .then((result) => {
       const specs = Array.isArray(result.kernels) && result.kernels.length > 0
         ? result.kernels.map((kernel) => ({
@@ -1458,13 +1460,13 @@ function loadCeilKernels(current: string): Promise<CeilKernelSpec[]> {
           })).filter((kernel) => kernel.name)
         : [];
       const kernels = [...specs, ...attachable];
-      ceilKernelsCache = kernels;
-      ceilKernelsCacheAt = Date.now();
+      ceilKernelsCache.set(file, { at: Date.now(), kernels });
       return kernels;
     })
     .catch(() => fallbackCeilKernels(current))
-    .finally(() => { ceilKernelsPending = null; });
-  return ceilKernelsPending;
+    .finally(() => { ceilKernelsPending.delete(file); });
+  ceilKernelsPending.set(file, request);
+  return request;
 }
 
 function populateCeilKernelSelect(select: HTMLSelectElement, kernels: CeilKernelSpec[], current: string): void {
@@ -1912,9 +1914,13 @@ class CeilCommandWidget extends MeasuredWidget {
     kernelSelect.className = "cm-ceil-kernel";
     kernelSelect.setAttribute("aria-label", "Kernel");
     kernelSelect.hidden = leanRuntime;
-    populateCeilKernelSelect(kernelSelect, ceilKernelsCache ?? fallbackCeilKernels(meta.kernel), meta.kernel);
+    populateCeilKernelSelect(
+      kernelSelect,
+      ceilKernelsCache.get(file)?.kernels ?? fallbackCeilKernels(meta.kernel),
+      meta.kernel,
+    );
     const loadKernels = (): void => {
-      void loadCeilKernels(meta.kernel).then((kernels) => {
+      void loadCeilKernels(file, meta.kernel).then((kernels) => {
         if (!kernelSelect.isConnected) return;
         populateCeilKernelSelect(kernelSelect, kernels, kernelSelect.value || meta.kernel);
       });

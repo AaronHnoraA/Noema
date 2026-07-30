@@ -104,7 +104,7 @@ Emacs channel 表。Session manager 通过注入合法路径和原子写策略�
 ```text
 lisp/roam/init-aaronnote.el
   进程、buffer/session、公开命令和 UI 装配
-lisp/roam/aaronnote/emacs/aaronnote-xwidget-keys.el
+lisp/roam/Noema/emacs/noema-xwidget-keys.el
   md/xwidget 输入、焦点、Undo/Redo、Shift-Tab 与 Emacs windmove 焦点修复
 ```
 

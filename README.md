@@ -94,9 +94,8 @@ only `snippets/{markdown-mode,tex-mode}` and
 `etc/katex-macros` and `etc/prose-accepted-words.txt` assets remain links
 because both hosts use them.
 
-Existing
-`AARONNOTE_*`, `aaronnote:api:*`, and `my/aaronnote-*` names are compatibility
-contracts for the Emacs integration.
+Existing `AARONNOTE_*` and `aaronnote:api:*` names remain wire compatibility
+contracts.  Emacs commands and variables use only the `my/noema-*` namespace.
 
 ## Library install
 

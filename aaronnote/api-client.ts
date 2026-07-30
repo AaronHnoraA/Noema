@@ -451,7 +451,7 @@ type NativeApi = {
     mirror?: (body?: unknown) => Promise<unknown>;
   };
   jupyterCell?: {
-    kernels?: () => Promise<unknown>;
+    kernels?: (body?: unknown) => Promise<unknown>;
     execute?: (body?: unknown) => Promise<unknown>;
     openScript?: (body?: unknown) => Promise<unknown>;
     readScriptCell?: (body?: unknown) => Promise<unknown>;
@@ -739,9 +739,9 @@ export const api = {
     },
   },
   jupyterCell: {
-    async kernels(): Promise<JupyterKernelListResult> {
+    async kernels(body: unknown = {}): Promise<JupyterKernelListResult> {
       const call = requireMethod(nativeApi().jupyterCell?.kernels, "Jupyter kernels");
-      return ensureOk(await call() as JupyterKernelListResult, "Jupyter kernels failed");
+      return ensureOk(await call(body) as JupyterKernelListResult, "Jupyter kernels failed");
     },
     async execute(body: unknown): Promise<JupyterCellExecuteResult> {
       const call = requireMethod(nativeApi().jupyterCell?.execute, "Jupyter cell");

@@ -1,5 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import {
+  mkdir as nativeMkdir,
+  readFile as nativeReadFile,
+  rename as nativeRename,
+  rm as nativeRm,
+  stat as nativeStat,
+  writeFile as nativeWriteFile,
+} from "node:fs/promises";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { createKernelRegistry, sweepOrphanKernels } from "../jupyter/kernel-registry.mjs";
 import { defaultKernelSearchDirs, findKernelSpecs, findAttachableConnectionFiles, resolveAttachToken } from "../jupyter/kernel-finder.mjs";
@@ -7,7 +14,19 @@ import { executeOnKernel, jupyterWidgetCommOpenP } from "../jupyter/execution-me
 
 export { jupyterWidgetCommOpenP };
 
+function remoteLogicalPath(value) {
+  const text = String(value || "");
+  if (text.startsWith("/fs:")) return text;
+  const match = /^fs:\/\/([^/]+)(\/.*)?$/.exec(text);
+  return match ? `/fs:${match[1]}:${match[2] || "/"}` : "";
+}
+
+export function jupyterLogicalPath(value) {
+  return remoteLogicalPath(value) || resolve(String(value || ""));
+}
+
 function inside(root, file) {
+  if (remoteLogicalPath(root) || remoteLogicalPath(file)) return false;
   const normalizedRoot = resolve(root);
   const normalizedFile = resolve(file);
   return normalizedFile === normalizedRoot
@@ -174,14 +193,14 @@ function hiddenScriptCellOrder(text) {
   return ids;
 }
 
-async function readExistingHiddenCells(scriptFile, fallbackFile = "") {
+async function readExistingHiddenCells(scriptFile, fallbackFile = "", files) {
   try {
-    return parseHiddenScriptCells(await readFile(scriptFile, "utf8"));
+    return parseHiddenScriptCells(await files.readFile(scriptFile, "utf8"));
   } catch (err) {
     if (err?.code === "ENOENT") {
       if (fallbackFile && fallbackFile !== scriptFile) {
         try {
-          return parseHiddenScriptCells(await readFile(fallbackFile, "utf8"));
+          return parseHiddenScriptCells(await files.readFile(fallbackFile, "utf8"));
         } catch (fallbackErr) {
           if (fallbackErr?.code !== "ENOENT") throw fallbackErr;
         }
@@ -192,15 +211,15 @@ async function readExistingHiddenCells(scriptFile, fallbackFile = "") {
   }
 }
 
-async function readOutputMirror(file, fallbackFile = "") {
+async function readOutputMirror(file, fallbackFile = "", files) {
   try {
-    const parsed = JSON.parse(await readFile(file, "utf8"));
+    const parsed = JSON.parse(await files.readFile(file, "utf8"));
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch (err) {
     if (err?.code === "ENOENT") {
       if (fallbackFile && fallbackFile !== file) {
         try {
-          const parsed = JSON.parse(await readFile(fallbackFile, "utf8"));
+          const parsed = JSON.parse(await files.readFile(fallbackFile, "utf8"));
           return parsed && typeof parsed === "object" ? parsed : {};
         } catch (fallbackErr) {
           if (fallbackErr?.code !== "ENOENT") throw fallbackErr;
@@ -217,23 +236,27 @@ async function readOutputMirror(file, fallbackFile = "") {
   }
 }
 
-async function writeOutputMirror(file, value) {
-  await mkdir(dirname(file), { recursive: true });
+async function writeOutputMirror(file, value, files) {
+  await files.mkdir(dirname(file), { recursive: true });
+  if (files.atomicWriteP(file)) {
+    await files.writeFile(file, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    return;
+  }
   // Atomic replace: a crash mid-write leaves the previous mirror intact instead
   // of a half-written JSON that readOutputMirror would then have to discard.
   const tmp = `${file}.${randomUUID()}.tmp`;
   try {
-    await writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-    await rename(tmp, file);
+    await files.writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    await files.rename(tmp, file);
   } catch (err) {
-    try { await rm(tmp, { force: true }); } catch {}
+    try { await files.rm(tmp, { force: true }); } catch {}
     throw err;
   }
 }
 
-async function readExistingHiddenScript(scriptFile, fallbackFile = "") {
+async function readExistingHiddenScript(scriptFile, fallbackFile = "", files) {
   try {
-    const text = await readFile(scriptFile, "utf8");
+    const text = await files.readFile(scriptFile, "utf8");
     return {
       text,
       cells: parseHiddenScriptCells(text),
@@ -243,7 +266,7 @@ async function readExistingHiddenScript(scriptFile, fallbackFile = "") {
     if (err?.code === "ENOENT") {
       if (fallbackFile && fallbackFile !== scriptFile) {
         try {
-          const text = await readFile(fallbackFile, "utf8");
+          const text = await files.readFile(fallbackFile, "utf8");
           return {
             text: "",
             cells: parseHiddenScriptCells(text),
@@ -310,6 +333,9 @@ export function createJupyterCellService({
   stdout = process.stdout,
   stderr = process.stderr,
   zmq: injectedZmq,
+  fileHost,
+  kernelHost,
+  openFile,
 } = {}) {
   const root = resolve(runtimeRoot || process.cwd());
   const notes = resolve(noteRoot || root);
@@ -328,6 +354,41 @@ export function createJupyterCellService({
     runtimeDir,
     ...(process.env.AARONNOTE_JUPYTER_ATTACH_DIRS ? process.env.AARONNOTE_JUPYTER_ATTACH_DIRS.split(":").filter(Boolean) : []),
   ];
+  const files = {
+    atomicWriteP(file) {
+      return Boolean(remoteLogicalPath(file) && fileHost);
+    },
+    readFile(file, encoding) {
+      return remoteLogicalPath(file) && fileHost
+        ? fileHost.readFile(file, encoding)
+        : nativeReadFile(file, encoding);
+    },
+    writeFile(file, data, encoding) {
+      return remoteLogicalPath(file) && fileHost
+        ? fileHost.writeFile(file, data, encoding)
+        : nativeWriteFile(file, data, encoding);
+    },
+    mkdir(file, options) {
+      return remoteLogicalPath(file) && fileHost
+        ? fileHost.mkdir(file, options)
+        : nativeMkdir(file, options);
+    },
+    rename(from, to) {
+      return remoteLogicalPath(from) && fileHost
+        ? fileHost.rename(from, to)
+        : nativeRename(from, to);
+    },
+    rm(file, options) {
+      return remoteLogicalPath(file) && fileHost
+        ? fileHost.rm(file, options)
+        : nativeRm(file, options);
+    },
+    stat(file) {
+      return remoteLogicalPath(file) && fileHost
+        ? fileHost.stat(file)
+        : nativeStat(file);
+    },
+  };
 
   let cleanupTimer = null;
   let cleanupRunning = false;
@@ -365,6 +426,7 @@ export function createJupyterCellService({
           cwd: workspace,
           zmq,
           stderr,
+          kernelHost,
         });
         registrySync = registry;
         process.on("exit", onProcessExit);
@@ -378,7 +440,10 @@ export function createJupyterCellService({
     return defaultKernelSearchDirs({ dataDir, useHomeKernels });
   }
 
-  async function listKernelSpecs() {
+  async function listKernelSpecs(file = "") {
+    if (kernelHost && file) {
+      return await kernelHost.listKernelSpecs(file);
+    }
     return await findKernelSpecs({ searchDirs: kernelSearchDirs(), allowedNames });
   }
 
@@ -432,16 +497,17 @@ export function createJupyterCellService({
   }
 
   function kernelKey({ file, kernel }) {
-    return `${resolve(file)}\0${cleanToken(kernel, "python3")}`;
+    return `${jupyterLogicalPath(file)}\0${cleanToken(kernel, "python3")}`;
   }
 
   function safeNoteFile(raw) {
     const value = String(raw || "").trim();
     if (!value) throw error("Missing note file", 400);
-    const file = resolve(value);
+    const file = jupyterLogicalPath(value);
     const ext = extname(file).toLowerCase();
     const markdownLike = ext === ".md" || ext === ".markdown" || ext === ".mdown" || ext === ".mkd";
-    if (!inside(notes, file) && !inside(workspace, file) && !markdownLike) {
+    if (!remoteLogicalPath(file)
+        && !inside(notes, file) && !inside(workspace, file) && !markdownLike) {
       throw error(`Note file is outside the allowed root: ${file}`, 403);
     }
     return file;
@@ -538,6 +604,9 @@ export function createJupyterCellService({
       lastError: record?.lastError || "",
       executedCells: record?.executedCellRevisions instanceof Map ? record.executedCellRevisions.size : 0,
       widgetGeneration: Number(record?.widgetGeneration || 1),
+      generation: Number(record?.hostGeneration || record?.widgetGeneration || 1),
+      placement: record?.hosted ? "target" : "client",
+      stateLost: Boolean(record?.stateLost),
       protected: running > 0,
       ttlMs: kernelIdleTtlMs,
     };
@@ -587,10 +656,10 @@ export function createJupyterCellService({
       if (leanRuntimeP(language, kernel)) {
         throw error("Lean cells do not use a Jupyter kernel", 400);
       }
-      const specs = await listKernelSpecs();
+      const specs = await listKernelSpecs(noteFile);
       const specEntry = specs.find((item) => item.name === kernel);
       if (!specEntry) throw error(`Unknown Jupyter kernel: ${kernel}`, 404);
-      record = await registry.ensure(key, specEntry);
+      record = await registry.ensure(key, { ...specEntry, sourceFile: noteFile });
     }
     await captureVariableBaseline(record, kernel);
     registry.touch(key);
@@ -598,8 +667,9 @@ export function createJupyterCellService({
     return { id: record.id, file: scriptFile, sourceFile: noteFile, kernel, session, language, key, record };
   }
 
-  async function kernels() {
-    const specs = await listKernelSpecs();
+  async function kernels(body = {}) {
+    const file = String(body?.file || "");
+    const specs = await listKernelSpecs(file ? safeNoteFile(file) : "");
     const list = specs.map((entry) => ({
       name: entry.name,
       displayName: entry.spec.display_name || entry.name,
@@ -677,6 +747,7 @@ export function createJupyterCellService({
           name: kernelInfo.kernel,
           generation: Number(record.widgetGeneration || 1),
         },
+        stateLost: Boolean(record.stateLost),
         ...(result.widgetMessages ? { widgetMessages: result.widgetMessages, widgetMessagesTruncated: result.widgetMessagesTruncated } : {}),
         ...(result.widgetOutputs ? { widgetOutputs: result.widgetOutputs } : {}),
       };
@@ -740,7 +811,7 @@ export function createJupyterCellService({
     if (!targetCellId) throw error("Missing Jupyter cell id", 400);
     if (cells.length === 0) throw error("No Jupyter cells to write", 400);
     const scriptFile = hiddenScriptPath(noteFile, session, language);
-    const existingScript = await readExistingHiddenScript(scriptFile);
+    const existingScript = await readExistingHiddenScript(scriptFile, "", files);
     const rendered = buildHiddenScript({
       noteFile,
       kernel,
@@ -752,13 +823,17 @@ export function createJupyterCellService({
       existingCells: existingScript.cells,
       existingOrder: existingScript.order,
     });
-    await mkdir(dirname(scriptFile), { recursive: true });
+    await files.mkdir(dirname(scriptFile), { recursive: true });
     const changed = existingScript.text !== rendered.text;
-    if (changed) await writeFile(scriptFile, rendered.text, "utf8");
-    const info = await stat(scriptFile);
+    if (changed) await files.writeFile(scriptFile, rendered.text, "utf8");
+    const info = await files.stat(scriptFile);
     const payload = { file: scriptFile, line: rendered.line, col: 0, nonce: randomUUID() };
     if (body?.open !== false) {
-      stdout.write(`aaronote-event:open:${JSON.stringify(payload)}\n`);
+      if (typeof openFile === "function") {
+        await openFile(payload);
+      } else {
+        stdout.write(`aaronote-event:open:${JSON.stringify(payload)}\n`);
+      }
     }
     return {
       ok: true,
@@ -781,11 +856,11 @@ export function createJupyterCellService({
     if (!cellId) throw error("Missing Jupyter cell id", 400);
     const scriptFile = hiddenScriptPath(noteFile, session, language);
     const outputFile = outputMirrorPath(noteFile, session, language);
-    const cells = await readExistingHiddenCells(scriptFile);
-    const outputs = await readOutputMirror(outputFile);
+    const cells = await readExistingHiddenCells(scriptFile, "", files);
+    const outputs = await readOutputMirror(outputFile, "", files);
     const savedOutput = outputs?.cells?.[cellId] ?? null;
     let info = null;
-    try { info = await stat(scriptFile); } catch {}
+    try { info = await files.stat(scriptFile); } catch {}
     return {
       ok: true,
       file: scriptFile,
@@ -806,7 +881,7 @@ export function createJupyterCellService({
     const outputFile = outputMirrorPath(noteFile, cell.session, cell.language);
     const { widgetRuntime, ...persistedResult } = result;
     await withMirrorLock(outputFile, async () => {
-      const mirror = await readOutputMirror(outputFile);
+      const mirror = await readOutputMirror(outputFile, "", files);
       const cells = mirror.cells && typeof mirror.cells === "object" ? mirror.cells : {};
       const current = cells[cell.cellId] && typeof cells[cell.cellId] === "object" ? cells[cell.cellId] : {};
       const currentUi = current.ui && typeof current.ui === "object" ? current.ui : {};
@@ -827,7 +902,7 @@ export function createJupyterCellService({
         session: cell.session,
         language: cell.language,
         cells,
-      });
+      }, files);
     });
   }
 
@@ -906,7 +981,7 @@ export function createJupyterCellService({
         open: false,
       });
       const scriptFile = hiddenScriptPath(noteFile, session, language);
-      const hiddenCells = await readExistingHiddenCells(scriptFile);
+      const hiddenCells = await readExistingHiddenCells(scriptFile, "", files);
       const selected = selectedContextIds(body, targetCellId);
       const entries = normalizeContextCells(body?.cells, hiddenCells, targetCellId, { kernel, session, language })
         .filter((entry) => entry.session === session && entry.language === language)
@@ -993,7 +1068,7 @@ export function createJupyterCellService({
     if (!cellId) throw error("Missing Jupyter cell id", 400);
     const outputFile = outputMirrorPath(noteFile, session, language);
     await withMirrorLock(outputFile, async () => {
-      const mirror = await readOutputMirror(outputFile);
+      const mirror = await readOutputMirror(outputFile, "", files);
       const cells = mirror.cells && typeof mirror.cells === "object" ? mirror.cells : {};
       delete cells[cellId];
       await writeOutputMirror(outputFile, {
@@ -1003,7 +1078,7 @@ export function createJupyterCellService({
         session,
         language,
         cells,
-      });
+      }, files);
     });
     return { ok: true, file: outputFile, cellId, kernel, session };
   }
@@ -1017,14 +1092,14 @@ export function createJupyterCellService({
     if (!cellId) throw error("Missing Jupyter cell id", 400);
     const scriptFile = hiddenScriptPath(noteFile, session, language);
     const outputFile = outputMirrorPath(noteFile, session, language);
-    const existingScript = await readExistingHiddenScript(scriptFile);
+    const existingScript = await readExistingHiddenScript(scriptFile, "", files);
     const remainingOrder = existingScript.order.filter((id) => id && id !== cellId);
     let removedScript = false;
     let changedScript = existingScript.order.includes(cellId);
 
     if (remainingOrder.length === 0) {
-      await rm(scriptFile, { force: true });
-      await rm(outputFile, { force: true });
+      await files.rm(scriptFile, { force: true });
+      await files.rm(outputFile, { force: true });
       removedScript = true;
     } else if (changedScript) {
       const cells = remainingOrder.map((id) => ({
@@ -1043,14 +1118,14 @@ export function createJupyterCellService({
         existingCells: new Map(),
         existingOrder: [],
       });
-      await mkdir(dirname(scriptFile), { recursive: true });
-      await writeFile(scriptFile, rendered.text, "utf8");
+      await files.mkdir(dirname(scriptFile), { recursive: true });
+      await files.writeFile(scriptFile, rendered.text, "utf8");
       await withMirrorLock(outputFile, async () => {
-        const mirror = await readOutputMirror(outputFile);
+        const mirror = await readOutputMirror(outputFile, "", files);
         const cellsMirror = mirror.cells && typeof mirror.cells === "object" ? mirror.cells : {};
         delete cellsMirror[cellId];
         if (Object.keys(cellsMirror).length === 0) {
-          await rm(outputFile, { force: true });
+          await files.rm(outputFile, { force: true });
         } else {
           await writeOutputMirror(outputFile, {
             version: 1,
@@ -1059,17 +1134,17 @@ export function createJupyterCellService({
             session,
             language,
             cells: cellsMirror,
-          });
+          }, files);
         }
       });
     } else {
       await withMirrorLock(outputFile, async () => {
-        const mirror = await readOutputMirror(outputFile);
+        const mirror = await readOutputMirror(outputFile, "", files);
         const cellsMirror = mirror.cells && typeof mirror.cells === "object" ? mirror.cells : {};
         if (!Object.prototype.hasOwnProperty.call(cellsMirror, cellId)) return;
         delete cellsMirror[cellId];
         if (Object.keys(cellsMirror).length === 0) {
-          await rm(outputFile, { force: true });
+          await files.rm(outputFile, { force: true });
         } else {
           await writeOutputMirror(outputFile, {
             version: 1,
@@ -1078,7 +1153,7 @@ export function createJupyterCellService({
             session,
             language,
             cells: cellsMirror,
-          });
+          }, files);
         }
       });
     }
@@ -1106,7 +1181,7 @@ export function createJupyterCellService({
     const outputFile = outputMirrorPath(noteFile, session, language);
     let savedCell = null;
     await withMirrorLock(outputFile, async () => {
-      const mirror = await readOutputMirror(outputFile);
+      const mirror = await readOutputMirror(outputFile, "", files);
       const cells = mirror.cells && typeof mirror.cells === "object" ? mirror.cells : {};
       const current = cells[cellId] && typeof cells[cellId] === "object" ? cells[cellId] : { ok: true, status: "ok", outputs: [] };
       const currentUi = current.ui && typeof current.ui === "object" ? current.ui : {};
@@ -1131,7 +1206,7 @@ export function createJupyterCellService({
         session,
         language,
         cells,
-      });
+      }, files);
     });
     return { ok: true, file: outputFile, cellId, kernel, session, language, output: savedCell };
   }
@@ -1149,7 +1224,7 @@ export function createJupyterCellService({
       session,
       language,
       cells: {},
-    }));
+    }, files));
     return { ok: true, file: outputFile, kernel, session };
   }
 
@@ -1327,15 +1402,24 @@ export function createJupyterCellService({
    * (matching a real Jupyter server's nbextensions_path). Tries the path
    * as-is, then with a `.js` suffix (RequireJS module URLs omit it).
    */
-  async function readNbextensionAsset(relativePath) {
+  async function readNbextensionAsset(relativePath, runtimeId = "") {
     const clean = String(relativePath || "").replace(/^\/+/, "");
     if (!clean || clean.includes("..")) return undefined;
+    if (kernelHost && runtimeId) {
+      const remote = await kernelHost.readNbextension(runtimeId, clean);
+      if (remote?.found) {
+        return {
+          data: Buffer.from(String(remote.content || ""), "utf8"),
+          contentType: String(remote.contentType || "application/javascript; charset=utf-8"),
+        };
+      }
+    }
     for (const dir of kernelSearchDirs()) {
       const base = join(dir, "nbextensions");
       for (const candidate of [join(base, clean), join(base, `${clean}.js`)]) {
         if (!inside(base, candidate)) continue;
         try {
-          const data = await readFile(candidate);
+          const data = await nativeReadFile(candidate);
           return { data, contentType: candidate.endsWith(".js") ? "application/javascript; charset=utf-8" : "application/octet-stream" };
         } catch {
           continue;

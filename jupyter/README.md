@@ -3,13 +3,20 @@
 This directory holds Noema's project-owned kernelspec templates and stable
 kernel launchers. Python packages live in the `aaronnote-python` Conda
 environment; Sage is resolved dynamically from the installed `sage` command.
-There is **no Jupyter server process** — the Node cell
-service (`server/lib/jupyter-cell.mjs`, orchestrating `server/jupyter/*`)
-launches and talks to kernels directly over raw ZMQ, the same approach
+There is **no Jupyter server process**. The Node cell service
+(`server/lib/jupyter-cell.mjs`, orchestrating `server/jupyter/*`) talks to
+kernels directly over raw ZMQ, the same approach
 Microsoft's VS Code Jupyter extension uses for local kernels (ported/adapted
 from `microsoft/vscode-jupyter`, MIT). The browser-side rendering of cell
 output and ipywidgets reuses the same official JupyterLab building blocks VS
 Code Jupyter uses — see "Frontend rendering" below.
+
+In Emacs host mode, the Remote broker owns kernelspec discovery, process
+placement, connection files, and the atomic five-channel forward group.
+Node retains raw-ZMQ execution and the browser bridge. The kernel, cwd,
+environment, hidden `.cell/` files, and custom widget assets therefore follow
+the note's owning Target. Target `local` uses the same broker path. Standalone
+desktop host mode keeps the direct Node launcher.
 
 The runtime provides:
 
@@ -39,14 +46,14 @@ you can also run:
 npm run jupyter:bootstrap
 ```
 
-`npm run dev` (or the built app) starts Node's own `web-host.mjs`, which
-launches kernel processes on demand — there is nothing else to start.
+`npm run dev` (or the built app) starts `web-host.mjs`; there is no Jupyter
+server or target-side Noema/Node service to start.
 
 ## Cell service behavior (`server/lib/jupyter-cell.mjs` + `server/jupyter/*`)
 
 The Node cell service owns kernel lifecycle and each cell run:
 
-- `server/jupyter/kernel-registry.mjs` launches (or attaches to) a kernel per
+- `server/jupyter/kernel-registry.mjs` obtains (or attaches to) a kernel per
   note-script-file + kernel-name key, holding one persistent raw-ZMQ
   `@jupyterlab/services` `KernelConnection` per kernel for execution,
   interrupt, and restart. A kernel that dies unexpectedly self-heals on the
@@ -75,6 +82,13 @@ The Node cell service owns kernel lifecycle and each cell run:
   `jupyter/.jupyter/runtime/`; the next instance sweeps it on first use,
   killing any orphaned kernel process it can still find and confirm (by PID +
   matching connection-file path in its command line).
+
+In Emacs host mode, transport loss closes only the five forwards. Remote
+recovery probes the target process and recreates the channel group. A surviving
+kernel keeps its variables; a dead kernel is relaunched on the next execution,
+bumps the widget generation, and reports `stateLost`. Missing target
+`python3`, `jupyter`, or the exact selected kernelspec is an explicit Doctor
+error—there is no automatic install and no client fallback.
 
 ### Frontend rendering (browser)
 

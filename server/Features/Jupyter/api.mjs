@@ -1,6 +1,6 @@
 export function createJupyterApiHandlers(service) {
   return {
-    "aaronnote:api:jupyter-cell:kernels": () => service.kernels(),
+    "aaronnote:api:jupyter-cell:kernels": (body) => service.kernels(body || {}),
     "aaronnote:api:jupyter-cell:execute": (body) => service.execute(body || {}),
     "aaronnote:api:jupyter-cell:open-script": (body) => service.openScript(body || {}),
     "aaronnote:api:jupyter-cell:read-script-cell": (body) => service.readScriptCell(body || {}),

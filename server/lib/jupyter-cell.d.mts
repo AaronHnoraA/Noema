@@ -8,11 +8,26 @@ export interface JupyterCellServiceOptions {
   stdout?: NodeJS.WritableStream;
   stderr?: NodeJS.WritableStream;
   zmq?: unknown;
+  fileHost?: {
+    readFile(file: string, encoding?: string): Promise<unknown>;
+    writeFile(file: string, data: unknown, encoding?: string): Promise<unknown>;
+    mkdir(file: string, options?: unknown): Promise<unknown>;
+    rename(from: string, to: string): Promise<unknown>;
+    rm(file: string, options?: unknown): Promise<unknown>;
+    stat(file: string): Promise<{ size: number; mtimeMs: number }>;
+  };
+  kernelHost?: unknown;
+  openFile?: (payload: {
+    file: string;
+    line: number;
+    col: number;
+    nonce: string;
+  }) => Promise<unknown> | unknown;
 }
 
 export interface JupyterCellService {
   execute(body?: Record<string, unknown>): Promise<Record<string, any>>;
-  kernels(): Promise<Record<string, any>>;
+  kernels(body?: Record<string, unknown>): Promise<Record<string, any>>;
   openScript(body?: Record<string, unknown>): Promise<Record<string, any>>;
   readScriptCell(body?: Record<string, unknown>): Promise<Record<string, any>>;
   executeScriptCell(body?: Record<string, unknown>): Promise<Record<string, any>>;

@@ -181,6 +181,74 @@ const jupyterCell = createJupyterCellService({
   stdout: process.stdout,
   stderr: process.stderr,
   zmq,
+  openFile: ({ file, line, col }) => apiOpenInEmacs(file, line, col),
+  fileHost: hostMode === "emacs" ? {
+    async readFile(file) {
+      const result = await gatewayRequest(
+        "aaronnote.jupyter.file.read", { sourceFile: file, file }, 30_000,
+      );
+      if (!result?.exists) throw Object.assign(new Error(`No such file: ${file}`), { code: "ENOENT" });
+      return String(result.content ?? "");
+    },
+    async writeFile(file, data) {
+      return await gatewayRequest(
+        "aaronnote.jupyter.file.write",
+        { sourceFile: file, file, content: String(data ?? "") },
+        30_000,
+      );
+    },
+    async mkdir() {},
+    async rename(from, to) {
+      return await gatewayRequest(
+        "aaronnote.jupyter.file.rename", { sourceFile: to, from, file: to }, 30_000,
+      );
+    },
+    async rm(file) {
+      return await gatewayRequest(
+        "aaronnote.jupyter.file.delete", { sourceFile: file, file }, 30_000,
+      );
+    },
+    async stat(file) {
+      const result = await gatewayRequest(
+        "aaronnote.jupyter.file.stat", { sourceFile: file, file }, 30_000,
+      );
+      if (!result?.exists) throw Object.assign(new Error(`No such file: ${file}`), { code: "ENOENT" });
+      return result;
+    },
+  } : undefined,
+  kernelHost: hostMode === "emacs" ? {
+    async listKernelSpecs(file) {
+      const result = await gatewayRequest(
+        "aaronnote.jupyter.kernels", { file }, 30_000,
+      );
+      return Array.isArray(result?.specs) ? result.specs : [];
+    },
+    async launch(body) {
+      return await gatewayRequest("aaronnote.jupyter.launch", body, 60_000);
+    },
+    async status(runtimeId) {
+      return await gatewayRequest(
+        "aaronnote.jupyter.status", { runtimeId }, 30_000,
+      );
+    },
+    async interrupt(runtimeId) {
+      return await gatewayRequest(
+        "aaronnote.jupyter.interrupt", { runtimeId }, 30_000,
+      );
+    },
+    async shutdown(runtimeId) {
+      return await gatewayRequest(
+        "aaronnote.jupyter.shutdown", { runtimeId }, 30_000,
+      );
+    },
+    async readNbextension(runtimeId, relativePath) {
+      return await gatewayRequest(
+        "aaronnote.jupyter.read-nbextension",
+        { runtimeId, relativePath },
+        30_000,
+      );
+    },
+  } : undefined,
 });
 let jupyterKernelWs = null;
 let gatewaySocket = null;
@@ -1751,7 +1819,10 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname.startsWith("/jupyter/nbextensions/")) {
       const relative = url.pathname.slice("/jupyter/nbextensions/".length);
-      const asset = req.method === "GET" || req.method === "HEAD" ? await jupyterCell.readNbextensionAsset(relative) : undefined;
+      const runtimeId = String(url.searchParams.get("runtime") || "");
+      const asset = req.method === "GET" || req.method === "HEAD"
+        ? await jupyterCell.readNbextensionAsset(relative, runtimeId)
+        : undefined;
       if (!asset) {
         sendText(res, 404, "Jupyter widget resource not found");
         return;

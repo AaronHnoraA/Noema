@@ -4,6 +4,8 @@ import "../src/styles/widgets.css";
 import "../src/styles/theme-typora.css";
 import "../src/styles/typography.css";
 import "./style.css";
+import "../src/styles/aaron-ui-tokens.css";
+import "../src/styles/aaron-ui-elegant.css";
 
 import { setKatexMacros } from "../src/katex-macros.ts";
 import { api } from "./api-client.ts";

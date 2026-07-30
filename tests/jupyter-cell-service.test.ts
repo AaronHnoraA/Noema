@@ -26,6 +26,95 @@ async function withService(run: (ctx: {
 }
 
 describe("jupyter cell service (no kernel)", () => {
+  test("openScript delegates opening to the configured host", async () => {
+    const opened: Array<{ file: string; line: number; col: number }> = [];
+    const root = await mkdtemp(join(tmpdir(), "aaronnote-jcell-open-"));
+    const note = join(root, "note.md");
+    await writeFile(note, "# note\n", "utf8");
+    const service = createJupyterCellService({
+      runtimeRoot: root,
+      noteRoot: root,
+      workspaceRoot: root,
+      openFile(payload: { file: string; line: number; col: number }) {
+        opened.push(payload);
+      },
+    });
+    try {
+      const result = await service.openScript({
+        file: note,
+        cellId: "cell-a",
+        kernel: "python3",
+        session: "default",
+        language: "python",
+        storage: "script",
+        cells: [{ cellId: "cell-a", id: "cell-a", code: "answer = 42" }],
+      });
+      expect(opened).toHaveLength(1);
+      expect(opened[0]).toMatchObject({ file: result.file, line: result.line, col: 0 });
+    } finally {
+      await service.shutdown().catch(() => {});
+    }
+  });
+
+  test("remote logical notes keep sidecars on the target file provider", async () => {
+    const store = new Map<string, string>();
+    const fileHost = {
+      async readFile(file: string) {
+        if (!store.has(file)) throw Object.assign(new Error("missing"), { code: "ENOENT" });
+        return store.get(file)!;
+      },
+      async writeFile(file: string, data: unknown) {
+        store.set(file, String(data));
+      },
+      async mkdir() {},
+      async rename(from: string, to: string) {
+        const value = store.get(from);
+        if (value == null) throw Object.assign(new Error("missing"), { code: "ENOENT" });
+        store.set(to, value);
+        store.delete(from);
+      },
+      async rm(file: string) {
+        store.delete(file);
+      },
+      async stat(file: string) {
+        if (!store.has(file)) throw Object.assign(new Error("missing"), { code: "ENOENT" });
+        return { size: store.get(file)!.length, mtimeMs: 1 };
+      },
+    };
+    const service = createJupyterCellService({
+      runtimeRoot: tmpdir(),
+      noteRoot: tmpdir(),
+      workspaceRoot: tmpdir(),
+      fileHost,
+    });
+    const note = "fs://lab/work/notes/remote.md";
+    try {
+      const opened = await service.openScript({
+        file: note,
+        cellId: "cell-a",
+        kernel: "python3",
+        session: "default",
+        language: "python",
+        storage: "script",
+        open: false,
+        cells: [{ cellId: "cell-a", id: "cell-a", code: "answer = 42" }],
+      });
+      expect(opened.file).toBe("/fs:lab:/work/notes/.cell/remote.python.default.py");
+      expect(store.get(opened.file)).toContain("answer = 42");
+      const read = await service.readScriptCell({
+        file: note,
+        cellId: "cell-a",
+        kernel: "python3",
+        session: "default",
+        language: "python",
+      });
+      expect(read.code).toBe("answer = 42");
+      expect(Array.from(store.keys()).every((file) => file.startsWith("/fs:lab:"))).toBe(true);
+    } finally {
+      await service.shutdown().catch(() => {});
+    }
+  });
+
   test("durationFromEnv uses defaults only when unset or invalid", () => {
     const name = "AARONNOTE_TEST_DURATION_FROM_ENV";
     const previous = process.env[name];

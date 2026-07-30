@@ -71,11 +71,11 @@ Emacs equivalents:
 | Removed subsystem | Emacs equivalent |
 |---|---|
 | Git panel (commit/diff/pull/push) | `magit` |
-| Agenda / todos panel | Server-backed Noema agenda view-model, rendered by the standalone `/agenda` page (`aaronnote/agenda.html`/`agenda-main.ts`, mounting `aaronnote/agenda-view.ts`: week/list/month/log/gantt/projects/clocktable/lints) and opened via Emacs `my/aaronnote-roam-agenda` |
+| Agenda / todos panel | Server-backed Noema agenda view-model, rendered by the standalone `/agenda` page (`aaronnote/agenda.html`/`agenda-main.ts`, mounting `aaronnote/agenda-view.ts`: week/list/month/log/gantt/projects/clocktable/lints) and opened via Emacs `my/noema-roam-agenda` |
 | Filesystem browser ranger | `dired`, roam selector |
 | Lean interactive editor (placeholders, infoview, child editors) | `lang/lean/` (Emacs LSP) |
 | Jupyter panel | Noema `@@cell` |
-| In-editor roam graph | `my/aaronnote-roam-graph` → `/graph` standalone route |
+| In-editor roam graph | `my/noema-roam-graph` → `/graph` standalone route |
 | Plugin runtime + roamlookup | removed; Copilot is a built-in |
 
 Fenced `lean` and `lean4` code blocks render as **static syntax-highlighted

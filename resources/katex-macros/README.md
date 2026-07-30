@@ -48,7 +48,7 @@ $\R^n,\quad \ket{\psi},\quad \NP \subseteq \AM,\quad \tens{A}\in \cV$
 ## 改了宏之后怎么生效
 
 - 宏经服务端读取目录实时提供;**刷新浏览器 / 重开笔记**即可看到更新。
-- 完整重载:重启 Noema web-host(`M-x my/aaronnote-restart` 或停止后重开)。
+- 完整重载:先执行 `M-x my/noema-stop`,再重新打开笔记。
 - 渲染缓存以“宏集合的哈希版本”为 key,换宏不会读到旧渲染。
 
 底层接线见 `lisp/roam/aaronnote/src/katex-macros.ts` 与 `shared/katex-macros.mjs`。

@@ -141,7 +141,11 @@ const coreWidgetModules = new Map<string, unknown>([
   ["@jupyter-widgets/output", widgetOutput],
 ]);
 
-async function loadCustomWidgetModule(moduleName: string, moduleVersion: string): Promise<unknown> {
+async function loadCustomWidgetModule(
+  moduleName: string,
+  moduleVersion: string,
+  runtimeId: string,
+): Promise<unknown> {
   if (!validWidgetModuleName(moduleName)) throw new Error(`Invalid widget module name: ${moduleName}`);
   if (!validWidgetModuleVersion(moduleVersion)) throw new Error(`Invalid widget module version: ${moduleVersion}`);
   document.body.dataset.baseUrl ??= new URL("/jupyter/", window.location.origin).toString();
@@ -152,7 +156,7 @@ async function loadCustomWidgetModule(moduleName: string, moduleVersion: string)
   if (coreModule) return coreModule;
   const requireJs = await ensureRequireJs();
   defineCoreAmdModules();
-  const localPath = `${window.location.origin}/jupyter/nbextensions/${moduleName}/index`;
+  const localPath = `${window.location.origin}/jupyter/nbextensions/${moduleName}/index?runtime=${encodeURIComponent(runtimeId)}`;
   requireJs.config({ paths: { [moduleName]: localPath } });
   try {
     return await requireModule(requireJs, moduleName);
@@ -173,18 +177,20 @@ async function loadCustomWidgetModule(moduleName: string, moduleVersion: string)
 
 class AaronnoteWidgetManager extends KernelWidgetManager {
   readonly renderMime: RenderMimeRegistry;
+  private readonly runtimeId: string;
   private restorePromise: Promise<void> | null = null;
   private replayQueue: Promise<void> = Promise.resolve();
   private readonly replayedMessages = new Set<string>();
   private readonly views = new Set<WidgetViewLike>();
   private readonly seededOutputComms = new Set<string>();
 
-  constructor(kernel: Kernel.IKernelConnection) {
+  constructor(kernel: Kernel.IKernelConnection, runtimeId: string) {
     // Same render stack as cell outputs (KaTeX LaTeX, iframe/HTML handling) so
     // content shown *inside* widgets (e.g. an @interact Output area) matches
     // the surrounding cell output exactly.
     const renderMime = createBaseRenderMime();
     super(kernel, renderMime);
+    this.runtimeId = runtimeId;
     this.renderMime = renderMime;
     this.registerCoreWidgetModules();
     this.renderMime.addFactory({
@@ -226,7 +232,9 @@ class AaronnoteWidgetManager extends KernelWidgetManager {
     try {
       return await super.loadClass(className, moduleName, moduleVersion) as never;
     } catch (registeredError) {
-      const module = await loadCustomWidgetModule(moduleName, moduleVersion);
+      const module = await loadCustomWidgetModule(
+        moduleName, moduleVersion, this.runtimeId,
+      );
       const exports = module && typeof module === "object" ? module as Record<string, unknown> : {};
       const nestedDefault = exports.default && typeof exports.default === "object" ? exports.default as Record<string, unknown> : {};
       const value = exports[className] ?? nestedDefault[className];
@@ -607,7 +615,7 @@ async function createRuntimeEntry(runtime: JupyterWidgetRuntime): Promise<Runtim
   });
   await kernel.info;
   await warmupRuntimeConnection(kernel);
-  return { kernel, manager: new AaronnoteWidgetManager(kernel) };
+  return { kernel, manager: new AaronnoteWidgetManager(kernel, runtime.id) };
 }
 
 function getRuntimeEntry(runtime: JupyterWidgetRuntime): Promise<RuntimeEntry> {
