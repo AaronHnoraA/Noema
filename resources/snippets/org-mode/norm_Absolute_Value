@@ -1,5 +1,0 @@
-# -*- mode: snippet -*-
-# name: Absolute Value
-# key: norm
-# --
-\lvert $1 \rvert $2

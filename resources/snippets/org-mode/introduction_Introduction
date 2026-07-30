@@ -1,9 +1,0 @@
-# -*- mode: snippet -*-
-# name: Introduction
-# key: introduction
-# -- Add a introduction
-# --
-\begin{introduction}
-	$1
-\end{introduction}
-$0

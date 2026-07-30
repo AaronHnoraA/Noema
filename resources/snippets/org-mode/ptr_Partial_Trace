@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Partial trace
-# key: ptr
-# -- Quantum
-# --
-\operatorname{Tr}_{${1:B}}\left(\rho_{${2:AB}}\right)$0

@@ -1,9 +1,0 @@
-# -*- mode: snippet -*-
-# name: Assumption
-# key: assumption
-# -- Add a note
-# --
-\begin{assumption}
-	$1
-\end{assumption}
-$0

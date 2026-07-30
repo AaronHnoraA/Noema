@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Pseudorandom function
-# key: PRF
-# -- Crypto
-# --
-${1:F}_{${2:k}}\left(${3:x}\right)$0

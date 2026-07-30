@@ -1,8 +1,0 @@
-# -*- mode: snippet -*-
-# name: Org property block
-# key: property
-# -- Org special block
-# --
-#+begin_property
-$0
-#+end_property

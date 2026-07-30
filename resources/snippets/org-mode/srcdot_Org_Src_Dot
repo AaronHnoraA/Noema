@@ -1,7 +1,0 @@
-# -*- mode: snippet -*-
-# name: Org DOT src block
-# key: srcdot
-# --
-#+begin_src dot${1:}
-$0
-#+end_src

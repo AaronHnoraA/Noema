@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Jupyter cell magic: capture
-# key: jcap
-# --
-%%capture
-$0

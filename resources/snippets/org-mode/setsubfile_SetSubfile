@@ -1,8 +1,0 @@
-# -*- mode: snippet -*-
-# name: SetSubfile
-# key: setsubfile
-# -- Add a subfile
-# --
-\documentclass[$1]{subfiles}
-\graphicspath{{$2}}
-$0

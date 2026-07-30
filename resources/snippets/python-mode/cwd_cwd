@@ -1,5 +1,0 @@
-# -*- mode: snippet -*-
-# name: cwd
-# key: cwd
-# --
-cwd = get_cwd(__file__)

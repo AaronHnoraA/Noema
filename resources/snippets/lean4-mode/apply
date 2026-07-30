@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: apply tactic
-# key: app
-# group: tactics
-# --
-apply ${1:lemma}$0

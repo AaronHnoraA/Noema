@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: IND-CPA
-# key: INDCPA
-# -- Crypto
-# --
-\mathsf{IND\mbox{-}CPA}$0

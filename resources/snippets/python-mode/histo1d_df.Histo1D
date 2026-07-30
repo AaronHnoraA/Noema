@@ -1,5 +1,0 @@
-# -*- mode: snippet -*-
-# name: df.Histo1D
-# key: histo1d
-# --
-df.Histo1D((${1:binning}), "${2:branch}")

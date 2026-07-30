@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Message authentication code
-# key: MAC
-# -- Crypto
-# --
-${1:t} \leftarrow \operatorname{MAC}_{${2:k}}\left(${3:m}\right)$0

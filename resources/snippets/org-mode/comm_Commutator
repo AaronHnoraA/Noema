@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Commutator
-# key: comm
-# -- Quantum
-# --
-\left[${1:A}, ${2:B}\right]$0

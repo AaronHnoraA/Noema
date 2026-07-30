@@ -1,5 +1,0 @@
-# -*- mode: snippet -*-
-# name: Text Environment
-# key: text
-# --
-\text{$1}$2

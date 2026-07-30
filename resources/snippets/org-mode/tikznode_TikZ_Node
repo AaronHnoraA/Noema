@@ -1,5 +1,0 @@
-# -*- mode: snippet -*-
-# name: TikZ node
-# key: tikznode
-# --
-\node (${1:name}) at (${2:0,0}) {${3:label}};$0

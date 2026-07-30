@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: ex
-# key: ex
-# --
-example $1 : $2 := by
-  $3

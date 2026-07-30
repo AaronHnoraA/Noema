@@ -1,9 +1,0 @@
-# -*- mode: snippet -*-
-# name: mvn-versions
-# key:  mvn-versions
-# --
-<plugin>
-    <groupId>org.codehaus.mojo</groupId>
-    <artifactId>versions-maven-plugin</artifactId>
-    <version>2.11.0</version>
-</plugin>

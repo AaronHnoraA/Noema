@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Commitment opening
-# key: Open
-# -- Crypto
-# --
-\operatorname{Open}\left(${1:c}, ${2:d}\right) = ${3:m}$0

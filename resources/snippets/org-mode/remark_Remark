@@ -1,9 +1,0 @@
-# -*- mode: snippet -*-
-# name: Remark
-# key: remark
-# -- Add a remark
-# --
-\begin{remark}
-	$1
-\end{remark}
-$0

@@ -1,7 +1,0 @@
-# -*- mode: snippet -*-
-# name: Org Rust src block
-# key: srcrs
-# --
-#+begin_src rust${1:}
-$0
-#+end_src

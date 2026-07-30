@@ -1,8 +1,0 @@
-# -*- mode: snippet -*-
-# name: schema
-# key: schema
-# --
-<select name='搜索库名'>
-SELECT schema_name FROM information_schema.schemata
-where schema_name like '%$0%'
-</select>

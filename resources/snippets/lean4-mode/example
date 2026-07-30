@@ -1,7 +1,0 @@
-# -*- mode: snippet -*-
-# name: anonymous example
-# key: exam
-# group: declarations
-# --
-example : ${1:statement} := by
-  $0

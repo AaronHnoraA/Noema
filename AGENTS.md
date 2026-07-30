@@ -15,11 +15,16 @@ a runtime dependency of the desktop app.
 
 ## Shared assets
 
-`resources/` is the source of truth for snippets, templates, TeX/KaTeX macros,
-and prose words. Emacs uses the full-project link at `lisp/roam/Noema`; the
-legacy `lisp/roam/aaronnote` path remains as a compatibility symlink.
-Historical asset paths are also symlinks into this repository. Do not move
-asset ownership back into the Emacs configuration.
+`resources/` is the source of truth for assets consumed by Noema:
+
+- `snippets/markdown-mode/` and `snippets/tex-mode/`
+- `templates/noema/`, `templates/latex/`, and `templates/tex/`
+- `katex-macros/` and `prose-accepted-words.txt`
+
+Emacs links only those shared subdirectories from its historical asset roots;
+Emacs-only snippet and template directories stay in the Emacs repository.
+Emacs uses the full-project link at `lisp/roam/Noema`; the legacy
+`lisp/roam/aaronnote` path remains as a compatibility symlink.
 
 ## Compatibility
 

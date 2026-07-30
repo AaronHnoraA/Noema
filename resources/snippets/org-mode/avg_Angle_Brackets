@@ -1,5 +1,0 @@
-# -*- mode: snippet -*-
-# name: Angle Brackets
-# key: avg
-# --
-\langle $1 \rangle $2

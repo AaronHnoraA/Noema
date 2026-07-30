@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Key derivation function
-# key: KDF
-# -- Crypto
-# --
-\operatorname{KDF}\left(${1:K}, ${2:info}\right)$0

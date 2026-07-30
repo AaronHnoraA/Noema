@@ -1,7 +1,0 @@
-# -*- mode: snippet -*-
-# name: Org Maple src block
-# key: srcmaple
-# --
-#+begin_src maple${1:}
-$0
-#+end_src

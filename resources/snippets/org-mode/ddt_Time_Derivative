@@ -1,5 +1,0 @@
-# -*- mode: snippet -*-
-# name: Time Derivative
-# key: ddt
-# --
-\frac{d}{dt}

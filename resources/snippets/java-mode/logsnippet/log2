@@ -1,5 +1,0 @@
-# -*- mode: snippet -*-
-# name: log2
-# key: log2
-# --
-log.info("==== [${1:parameter1}]: {}, [${2:parameter2}]: {}", $0$1, $2);

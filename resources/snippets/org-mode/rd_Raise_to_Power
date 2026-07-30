@@ -1,5 +1,0 @@
-# -*- mode: snippet -*-
-# name: Raise to Power
-# key: rd
-# --
-^{$1}$2

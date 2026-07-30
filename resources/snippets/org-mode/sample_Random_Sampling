@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Random sampling
-# key: sample
-# -- Crypto
-# --
-${1:x} \xleftarrow{\mathrm{R}} ${2:S}$0

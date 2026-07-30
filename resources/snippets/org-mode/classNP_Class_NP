@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Complexity class NP
-# key: classNP
-# -- TCS
-# --
-\mathsf{NP}$0

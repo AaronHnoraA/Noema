@@ -1,7 +1,0 @@
-# -*- mode: snippet -*-
-# name: @string
-# key: string
-# group: BibTeX
-# --
-@string{${1:abbr} = {${2:value}}}
-$0

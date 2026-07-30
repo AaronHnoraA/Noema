@@ -1,9 +1,0 @@
-# -*- mode: snippet -*-
-# name: Axiom (no label)
-# key: axiom
-# -- Add an axiom without label
-# --
-\begin{axiom}{$1}
-		$2
-\end{axiom}
-$0

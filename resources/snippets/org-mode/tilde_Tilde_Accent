@@ -1,5 +1,0 @@
-# -*- mode: snippet -*-
-# name: Tilde Accent
-# key: tilde
-# --
-\tilde{$1}$2

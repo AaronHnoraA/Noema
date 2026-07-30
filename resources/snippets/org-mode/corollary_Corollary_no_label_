@@ -1,8 +1,0 @@
-# -*- mode: snippet -*-
-# name: Org corollary full block
-# key: corollary
-# -- Org special block
-# --
-#+begin_corollary
-$0
-#+end_corollary

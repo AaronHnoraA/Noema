@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Big Omega
-# key: bigOmega
-# -- TCS
-# --
-\Omega\left(${1:f(n)}\right)$0

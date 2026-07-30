@@ -1,6 +1,7 @@
 # Snippet catalog and upstream synchronization
 
-Noema and Emacs share the YAS files under `snippets/`. Noema reads those
+Noema and Emacs share the YAS files under
+`resources/snippets/{markdown-mode,tex-mode}`. Noema reads those
 files through the server; it does not maintain a second JSON catalog and does
 not contact an LSP or an upstream service at runtime.
 
@@ -13,7 +14,8 @@ KaTeX-compatible math entries from:
 - Overleaf `28ad3b03b71cb4311decdcb55c36b33ec10d72db`
 
 Exact revisions, source-file hashes, licenses, generated-file hashes, and
-import counts are recorded in `snippets/tex-mode/generated/.manifest.json`.
+import counts are recorded in
+`resources/snippets/tex-mode/generated/.manifest.json`.
 Generated content is restricted to math commands, math environments, styles,
 and LaTeX Workshop's `@` shortcuts. Project-only completion such as package,
 class, section, figure, bibliography, and file-path suggestions is excluded.
@@ -47,7 +49,8 @@ node scripts/sync-math-snippets.mjs --write \
 npm run snippets:sync
 ```
 
-The writer only owns `snippets/tex-mode/generated/{latex-workshop,overleaf}`.
+The writer only owns
+`resources/snippets/tex-mode/generated/{latex-workshop,overleaf}`.
 It never rewrites personal snippets. Review the manifest count and diff before
 updating a pinned revision.
 

@@ -1,9 +1,0 @@
-# -*- mode: snippet -*-
-# name: lstlisting
-# key: plain
-# -- Add a proof
-# --
-\begin{lstlisting}
-	$1
-\end{lstlisting}
-$0

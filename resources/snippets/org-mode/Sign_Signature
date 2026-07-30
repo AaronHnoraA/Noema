@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Signature
-# key: Sign
-# -- Crypto
-# --
-${1:\sigma} \leftarrow \operatorname{Sign}_{${2:sk}}\left(${3:m}\right)$0

@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Commitment
-# key: Com
-# -- Crypto
-# --
-(${1:c}, ${2:d}) \leftarrow \operatorname{Com}\left(${3:m}; ${4:r}\right)$0

@@ -1,8 +1,0 @@
-# -*- mode: snippet -*-
-# name: Org problem block
-# key: problem
-# -- Org special block
-# --
-#+begin_problem
-$0
-#+end_problem

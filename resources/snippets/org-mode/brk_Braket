@@ -1,5 +1,0 @@
-# -*- mode: snippet -*-
-# name: Braket
-# key: bk
-# --
-\langle ${1:\phi}\rvert ${2:\psi}\rangle $0

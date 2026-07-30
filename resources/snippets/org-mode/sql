@@ -1,7 +1,0 @@
-# -*- mode: snippet -*-
-# name: org-sql
-# key: sql
-# --
-#+BEGIN_SRC sql
-select * from $0 limit 1
-#+END_SRC

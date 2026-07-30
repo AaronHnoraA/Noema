@@ -1,7 +1,0 @@
-# -*- mode: snippet -*-
-# name: Org Sage src block
-# key: srcsage
-# --
-#+begin_src sage${1:}
-$0
-#+end_src

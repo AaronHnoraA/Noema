@@ -1,5 +1,0 @@
-# -*- mode: snippet -*-
-# name: TikZ path
-# key: tikzpath
-# --
-\path (${1:A}) edge${2:[${3:->}]} node${4:[${5:above}]} {${6:label}} (${7:B});$0

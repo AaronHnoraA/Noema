@@ -9,8 +9,8 @@ import { fileURLToPath } from "node:url";
 import katex from "katex";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(scriptDir, "../../../..");
-const outputRoot = join(repoRoot, "snippets", "tex-mode", "generated");
+const repoRoot = resolve(scriptDir, "..");
+const outputRoot = join(repoRoot, "resources", "snippets", "tex-mode", "generated");
 const manifestFile = join(outputRoot, ".manifest.json");
 
 const SOURCES = {

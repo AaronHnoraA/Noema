@@ -1,5 +1,0 @@
-# -*- mode: snippet -*-
-# name: ket
-# key: ket
-# --
-\lvert ${1:\psi}\rangle $0

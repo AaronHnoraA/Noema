@@ -1,8 +1,0 @@
-# -*- mode: snippet -*-
-# name: Org question block
-# key: question
-# -- Org special block
-# --
-#+begin_question
-$0
-#+end_question

@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Jupyter cell magic: time
-# key: jtime
-# --
-%%time
-$0

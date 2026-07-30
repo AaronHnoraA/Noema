@@ -1,5 +1,0 @@
-# -*- mode: snippet -*-
-# name: lam
-# key: lam
-# --
-(fun $1 : $2 => $3)

@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Signature verification
-# key: Vrfy
-# -- Crypto
-# --
-\operatorname{Vrfy}_{${1:pk}}\left(${2:m}, ${3:\sigma}\right) = ${4:1}$0

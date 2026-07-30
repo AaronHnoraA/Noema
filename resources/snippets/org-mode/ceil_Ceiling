@@ -1,5 +1,0 @@
-# -*- mode: snippet -*-
-# name: Ceiling
-# key: ceil
-# --
-\lceil $1 \rceil $2

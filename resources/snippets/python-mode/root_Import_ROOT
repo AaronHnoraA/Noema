@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Import ROOT
-# key: root
-# --
-import ROOT
-ROOT.gROOT.SetBatch(True)

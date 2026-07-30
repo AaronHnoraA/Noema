@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Page
-# key: page
-# -- Page
-# --
-${1:page}~\pageref{$2}$0

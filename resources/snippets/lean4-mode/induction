@@ -1,8 +1,0 @@
-# -*- mode: snippet -*-
-# name: induction tactic
-# key: ind
-# group: tactics
-# --
-induction ${1:n} with
-| zero => $0
-| succ ${2:n} ${3:ih} => sorry

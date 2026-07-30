@@ -1,5 +1,0 @@
-# -*- mode: snippet -*-
-# name: matrix element
-# key: me
-# --
-\langle ${1:\phi}\rvert ${2:A}\lvert ${3:\psi}\rangle $0

@@ -1,7 +1,0 @@
-# -*- mode: snippet -*-
-# name: proof by contradiction
-# key: byc
-# group: tactics
-# --
-by_contra ${1:h}
-$0

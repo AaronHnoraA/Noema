@@ -1,5 +1,0 @@
-# -*- mode: snippet -*-
-# name: numcpu
-# key: numcpu
-# --
-ROOT.RooFit.NumCPU(${1})

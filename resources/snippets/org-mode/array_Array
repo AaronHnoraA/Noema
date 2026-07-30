@@ -1,7 +1,0 @@
-# -*- mode: snippet -*-
-# name: Array
-# key: array
-# --
-\begin{array}{${1:c}}
-$0
-\end{array}

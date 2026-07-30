@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Cite
-# key: cite
-# -- Add a cite
-# --
-\cite{$1}$0

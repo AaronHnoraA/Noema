@@ -1,8 +1,0 @@
-# -*- mode: snippet -*-
-# name: Org theorem block
-# key: theorem
-# -- Org special block
-# --
-#+begin_theorem
-$0
-#+end_theorem

@@ -1,7 +1,0 @@
-# -*- mode: snippet -*-
-# name: obtain pattern match
-# key: obt
-# group: tactics
-# --
-obtain ⟨${1:a}, ${2:b}⟩ := ${3:h}
-$0

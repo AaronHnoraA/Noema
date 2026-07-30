@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Datechange
-# key: datechange
-# -- Add a datechange
-# --
-\datechange{$1}{$2}$0

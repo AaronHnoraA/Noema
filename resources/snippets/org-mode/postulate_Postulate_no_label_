@@ -1,9 +1,0 @@
-# -*- mode: snippet -*-
-# name: Postulate (no label)
-# key: postulate
-# -- Add a postulate without label
-# --
-\begin{postulate}{$1}
-		$2
-\end{postulate}
-$0

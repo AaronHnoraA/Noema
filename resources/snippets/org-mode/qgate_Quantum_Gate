@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Quantum gate
-# key: qgate
-# -- Quantum
-# --
-\operatorname{${1:U}}$0

@@ -86,10 +86,13 @@ Desktop drag/drop follows the note workflow:
   pipeline instead.
 - Drop images, other files, links, or text to insert them at the drop cursor.
 
-Noema owns its snippets, Markdown/LaTeX templates, KaTeX macros, and prose word
-list under `resources/`. The Emacs configuration retains its historical
-`snippets`, `templates`, `etc/katex-macros`, and
-`etc/prose-accepted-words.txt` paths as symlinks into Noema.
+Noema owns the assets it consumes under `resources/`: Markdown and TeX
+snippets, Noema/LaTeX templates, KaTeX macros, and the prose word list. The
+Emacs configuration keeps its own `snippets/` and `templates/` roots, linking
+only `snippets/{markdown-mode,tex-mode}` and
+`templates/{noema,latex,tex}` into Noema. The complete
+`etc/katex-macros` and `etc/prose-accepted-words.txt` assets remain links
+because both hosts use them.
 
 Existing
 `AARONNOTE_*`, `aaronnote:api:*`, and `my/aaronnote-*` names are compatibility

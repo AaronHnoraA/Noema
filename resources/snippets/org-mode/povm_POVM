@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: POVM
-# key: povm
-# -- Quantum
-# --
-\{${1:E_m}\}_{${2:m}}$0

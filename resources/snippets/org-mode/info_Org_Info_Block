@@ -1,8 +1,0 @@
-# -*- mode: snippet -*-
-# name: Org info block
-# key: info
-# -- Org special block
-# --
-#+begin_info
-$0
-#+end_info

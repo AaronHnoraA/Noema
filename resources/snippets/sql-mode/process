@@ -1,7 +1,0 @@
-# -*- mode: snippet -*-
-# name: process
-# key: process
-# --
-<select name='process sql'>
-show full processlist;
-</select>

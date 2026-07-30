@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: EUF-CMA
-# key: EUFCMA
-# -- Crypto
-# --
-\mathsf{EUF\mbox{-}CMA}$0

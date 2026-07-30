@@ -1,8 +1,0 @@
-# -*- mode: snippet -*-
-# name: Org lemma block
-# key: lemma
-# -- Org special block
-# --
-#+begin_lemma
-$0
-#+end_lemma

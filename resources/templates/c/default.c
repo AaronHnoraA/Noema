@@ -1,6 +1,0 @@
-/* {{file}}
- * Created: {{date}}
- */
-
-{{cursor}}
-

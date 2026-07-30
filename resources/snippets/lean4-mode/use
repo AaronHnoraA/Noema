@@ -1,7 +1,0 @@
-# -*- mode: snippet -*-
-# name: use tactic
-# key: use
-# group: tactics
-# --
-use ${1:witness}
-$0

@@ -1,7 +1,0 @@
-# -*- mode: snippet -*-
-# name: calc block
-# key: calc
-# group: tactics
-# --
-calc ${1:lhs}
-  _ = ${2:rhs} := by $0

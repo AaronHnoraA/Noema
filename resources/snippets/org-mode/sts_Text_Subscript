@@ -1,5 +1,0 @@
-# -*- mode: snippet -*-
-# name: Text Subscript
-# key: sts
-# --
-_\text{$1}

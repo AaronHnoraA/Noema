@@ -1,7 +1,0 @@
-# -*- mode: snippet -*-
-# name: rcases pattern
-# key: rca
-# group: tactics
-# --
-rcases ${1:h} with ⟨${2:a}, ${3:b}⟩
-$0

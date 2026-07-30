@@ -24,7 +24,7 @@ The generated math snippet catalog includes filtered completion data derived
 from James Yu's LaTeX Workshop at commit
 57f9e8d0306ea0c7419290a2b62ee0cec3c31041, used under the MIT License. Source
 paths and content hashes are recorded in
-snippets/tex-mode/generated/.manifest.json. It also includes filtered Overleaf
+resources/snippets/tex-mode/generated/.manifest.json. It also includes filtered Overleaf
 completion weights and patterns under the AGPL-3.0 license at the revision
 listed above.
 

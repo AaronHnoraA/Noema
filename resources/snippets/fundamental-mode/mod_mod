@@ -1,9 +1,0 @@
-# -*- mode: snippet -*-
-# name: mod
-# key: mod
-# --
-import $1
-
-namespace $2
-  $3
-end $2
