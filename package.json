@@ -34,7 +34,7 @@
     "dev": "vp dev",
     "start:vite": "vp dev --config vite.aaronnote.config.ts --host 127.0.0.1",
     "build:aaronnote": "tsc && vp build --config vite.aaronnote.config.ts",
-    "build:desktop": "node --check desktop/main.mjs && node --check web-host.mjs && npm run build:aaronnote && electron-builder --mac dir",
+    "build:desktop": "node --check desktop/main.mjs && node --check desktop/preload.cjs && node --check web-host.mjs && npm run build:aaronnote && electron-builder --mac dir",
     "build": "tsc && vp build",
     "build:lib": "tsc && vp build --config vite.lib.config.ts",
     "jupyter:bootstrap": "bash jupyter/scripts/bootstrap-jupyter.sh",

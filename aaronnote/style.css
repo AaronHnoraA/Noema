@@ -180,11 +180,107 @@ button:disabled {
   opacity: 0.55;
 }
 
+.noema-desktop-titlebar[hidden],
+.noema-desktop-drop-overlay[hidden] {
+  display: none;
+}
+
+.noema-desktop-titlebar {
+  position: fixed;
+  z-index: 100;
+  top: 0;
+  right: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  height: 54px;
+  padding: 0 22px 0 82px;
+  border-bottom: 1px solid color-mix(in srgb, var(--aaronnote-border), transparent 58%);
+  background: color-mix(in srgb, var(--aaronnote-chrome), #0f1420 22%);
+  box-shadow: 0 7px 22px rgb(0 0 0 / 16%);
+  color: var(--aaron-ink);
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.noema-desktop-titlebar-controls {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  -webkit-app-region: no-drag;
+}
+
+.noema-desktop-titlebar-controls button {
+  display: grid;
+  width: 35px;
+  height: 35px;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  padding: 0 0 2px;
+  background: transparent;
+  color: #e4ebff;
+  font: 27px/1 var(--aaron-font-sans);
+}
+
+.noema-desktop-titlebar-controls button:nth-child(3) {
+  font-size: 30px;
+}
+
+.noema-desktop-titlebar-controls button:nth-child(4) {
+  font-size: 25px;
+}
+
+.noema-desktop-titlebar-controls button:nth-child(5) {
+  font-size: 23px;
+}
+
+.noema-desktop-titlebar-controls button:hover,
+.noema-desktop-titlebar-controls button:focus-visible {
+  background: rgb(126 231 255 / 11%);
+  color: var(--aaron-accent);
+  outline: 1px solid rgb(126 231 255 / 20%);
+}
+
+.noema-desktop-titlebar-name {
+  min-width: 0;
+  overflow: hidden;
+  color: #e5ebfd;
+  font: 700 20px/1.2 var(--aaron-font-mono);
+  letter-spacing: 0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.noema-desktop-drop-overlay {
+  position: fixed;
+  z-index: 150;
+  inset: 70px 24px 24px;
+  display: grid;
+  place-items: center;
+  border: 2px dashed color-mix(in srgb, var(--aaron-accent), transparent 18%);
+  border-radius: 18px;
+  background: rgb(15 20 32 / 82%);
+  box-shadow: inset 0 0 0 4px rgb(126 231 255 / 5%), 0 22px 80px rgb(0 0 0 / 35%);
+  color: var(--aaron-accent);
+  font: 700 17px/1.4 var(--aaron-font-sans);
+  letter-spacing: 0.01em;
+  pointer-events: none;
+  backdrop-filter: blur(10px);
+}
+
 .aaronnote-focused-shell {
   display: grid;
   grid-template-rows: minmax(0, 1fr);
   height: 100vh;
   background: var(--aaronnote-bg);
+}
+
+body[data-host-mode="desktop"] .aaronnote-focused-shell {
+  height: calc(100vh - 54px);
+  margin-top: 54px;
 }
 
 .aaronnote-status-hud {
@@ -200,6 +296,10 @@ button:disabled {
   color: var(--aaronnote-muted);
   font: 11px/1.35 var(--aaron-font-mono);
   pointer-events: none;
+}
+
+body[data-host-mode="desktop"] .aaronnote-status-hud {
+  top: 64px;
 }
 
 .aaronnote-status-pill {

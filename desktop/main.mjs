@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 import { spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -18,6 +18,9 @@ let quitting = false;
 let pendingFile = process.argv.slice(1).find((arg) => /\.(?:md|markdown)$/i.test(arg)) || "";
 
 const singleInstance = app.requestSingleInstanceLock();
+if (process.env.NOEMA_DESKTOP_SMOKE === "1") {
+  console.log(`[noema-desktop-smoke] singleInstance=${singleInstance}`);
+}
 if (!singleInstance) app.quit();
 
 function hostEnvironment() {
@@ -69,6 +72,9 @@ function startHost() {
     hostProcess.once("error", rejectReady);
     hostProcess.once("exit", (code, signal) => {
       hostProcess = null;
+      if (process.env.NOEMA_DESKTOP_SMOKE === "1") {
+        console.log(`[noema-desktop-smoke] hostExit=${code ?? signal} quitting=${quitting}`);
+      }
       if (!hostUrl && !quitting) {
         rejectReady(new Error(`Noema host exited (${code ?? signal}).\n${stderr}`));
       }
@@ -84,6 +90,183 @@ function urlForFile(file = "") {
   return url.toString();
 }
 
+function activeWindow() {
+  const focused = BrowserWindow.getFocusedWindow();
+  if (focused && !focused.isDestroyed()) return focused;
+  if (mainWindow && !mainWindow.isDestroyed()) return mainWindow;
+  return null;
+}
+
+function sendEditorCommand(command, detail = {}, win = activeWindow()) {
+  if (!win || win.isDestroyed()) return;
+  win.webContents.send("noema:command", { command, ...detail });
+}
+
+function commandItem(label, command, accelerator = undefined) {
+  return {
+    label,
+    ...(accelerator ? { accelerator } : {}),
+    click: (_item, win) => sendEditorCommand(command, {}, win || activeWindow()),
+  };
+}
+
+async function chooseMarkdownFiles() {
+  const options = {
+    title: "Open in Noema",
+    properties: ["openFile", "multiSelections"],
+    filters: [
+      { name: "Markdown", extensions: ["md", "markdown"] },
+      { name: "All Files", extensions: ["*"] },
+    ],
+  };
+  const owner = activeWindow();
+  const result = owner
+    ? await dialog.showOpenDialog(owner, options)
+    : await dialog.showOpenDialog(options);
+  if (result.canceled) return;
+  result.filePaths.forEach(openFile);
+}
+
+function editorActionsTemplate() {
+  return [
+    commandItem("Focus Editor", "focus"),
+    commandItem("Task Manager", "task-manager"),
+    { type: "separator" },
+    commandItem("Page Outline", "toggle-toc"),
+    commandItem("Agenda", "toggle-agenda"),
+    commandItem("Local Graph", "toggle-graph"),
+    commandItem("Tools", "toggle-tools"),
+    commandItem("Jupyter Cells", "jupyter-panel"),
+    { type: "separator" },
+    commandItem("Toggle Source", "toggle-source", "CmdOrCtrl+/"),
+    commandItem("Run Prose Check", "prose-check"),
+    commandItem("Export LaTeX…", "export-latex"),
+    { type: "separator" },
+    commandItem("Open Source in VS Code", "open-source-editor"),
+    commandItem("Reveal Note in Finder", "reveal-current-file"),
+    commandItem("Save", "save", "CmdOrCtrl+S"),
+  ];
+}
+
+function windowActionsTemplate(win = activeWindow()) {
+  return [
+    { label: "New Window", accelerator: "CmdOrCtrl+Shift+N", click: () => createWindow() },
+    { label: "Open…", accelerator: "CmdOrCtrl+O", click: () => void chooseMarkdownFiles() },
+    { type: "separator" },
+    { label: "Minimize", role: "minimize" },
+    { label: "Zoom", role: "zoom" },
+    { label: "Toggle Full Screen", role: "togglefullscreen" },
+    { type: "separator" },
+    { label: "Close", accelerator: "CmdOrCtrl+W", click: () => (win || activeWindow())?.close() },
+  ];
+}
+
+function buildApplicationMenu() {
+  return Menu.buildFromTemplate([
+    {
+      label: "Noema",
+      submenu: [
+        { role: "about" },
+        { type: "separator" },
+        { role: "services" },
+        { type: "separator" },
+        { role: "hide" },
+        { role: "hideOthers" },
+        { role: "unhide" },
+        { type: "separator" },
+        { role: "quit" },
+      ],
+    },
+    {
+      label: "File",
+      submenu: [
+        { label: "Open…", accelerator: "CmdOrCtrl+O", click: () => void chooseMarkdownFiles() },
+        { label: "New Window", accelerator: "CmdOrCtrl+Shift+N", click: () => createWindow() },
+        { type: "separator" },
+        commandItem("Save", "save", "CmdOrCtrl+S"),
+        commandItem("Open Source in VS Code", "open-source-editor", "CmdOrCtrl+Shift+O"),
+        commandItem("Reveal Note in Finder", "reveal-current-file"),
+        { type: "separator" },
+        { role: "close" },
+      ],
+    },
+    {
+      label: "Edit",
+      submenu: [
+        commandItem("Undo", "undo", "CmdOrCtrl+Z"),
+        commandItem("Redo", "redo", "Shift+CmdOrCtrl+Z"),
+        { type: "separator" },
+        { role: "cut" },
+        { role: "copy" },
+        { role: "paste" },
+        { role: "selectAll" },
+        { type: "separator" },
+        commandItem("Find…", "find", "CmdOrCtrl+F"),
+        commandItem("Find Next", "find-next", "CmdOrCtrl+G"),
+        commandItem("Find Previous", "find-previous", "Shift+CmdOrCtrl+G"),
+      ],
+    },
+    {
+      label: "Format",
+      submenu: [
+        commandItem("Bold", "bold", "CmdOrCtrl+B"),
+        commandItem("Italic", "italic", "CmdOrCtrl+I"),
+        commandItem("Inline Code", "code", "CmdOrCtrl+`"),
+        commandItem("Highlight", "highlight"),
+        commandItem("Strikethrough", "strike", "Shift+CmdOrCtrl+X"),
+        { type: "separator" },
+        commandItem("Blockquote", "blockquote"),
+        commandItem("Bullet List", "bullet-list"),
+        commandItem("Ordered List", "ordered-list"),
+        commandItem("Task List", "task-list"),
+        commandItem("Code Block", "code-block"),
+        { type: "separator" },
+        commandItem("Heading / Paragraph…", "paragraph-menu"),
+        commandItem("Insert Table", "insert-table"),
+        commandItem("Insert Math Block", "insert-math-block"),
+        commandItem("Insert TOC", "insert-toc"),
+        commandItem("Edit Properties…", "edit-properties"),
+      ],
+    },
+    {
+      label: "Navigate",
+      submenu: [
+        commandItem("Back", "back", "CmdOrCtrl+["),
+        commandItem("Forward", "forward", "CmdOrCtrl+]"),
+        commandItem("Refresh", "refresh", "CmdOrCtrl+R"),
+        { type: "separator" },
+        commandItem("Page Outline", "toggle-toc"),
+        commandItem("Agenda", "toggle-agenda"),
+        commandItem("Local Graph", "toggle-graph"),
+        commandItem("Tools", "toggle-tools"),
+        commandItem("Jupyter Cells", "jupyter-panel"),
+        commandItem("Task Manager", "task-manager"),
+      ],
+    },
+    {
+      label: "View",
+      submenu: [
+        commandItem("Toggle Source", "toggle-source", "CmdOrCtrl+/"),
+        { type: "separator" },
+        { role: "resetZoom" },
+        { role: "zoomIn" },
+        { role: "zoomOut" },
+        { type: "separator" },
+        { role: "toggleDevTools" },
+        { role: "togglefullscreen" },
+      ],
+    },
+    {
+      label: "Window",
+      submenu: [
+        { role: "minimize" },
+        { role: "zoom" },
+        { role: "front" },
+      ],
+    },
+  ]);
+}
+
 function createWindow(file = "", targetUrl = "") {
   const win = new BrowserWindow({
     width: 1320,
@@ -92,13 +275,23 @@ function createWindow(file = "", targetUrl = "") {
     minHeight: 640,
     title: "Noema",
     backgroundColor: "#eeeae1",
+    titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "hidden",
+    trafficLightPosition: { x: 18, y: 18 },
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      preload: join(desktopDir, "preload.cjs"),
     },
   });
   mainWindow = win;
+  win.on("focus", () => { mainWindow = win; });
+  if (process.env.NOEMA_DESKTOP_SMOKE === "1") {
+    win.on("closed", () => console.log("[noema-desktop-smoke] windowClosed=true"));
+    win.webContents.on("render-process-gone", (_event, details) => {
+      console.log(`[noema-desktop-smoke] rendererGone=${JSON.stringify(details)}`);
+    });
+  }
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith(hostUrl)) {
       createWindow("", url);
@@ -112,6 +305,26 @@ function createWindow(file = "", targetUrl = "") {
     event.preventDefault();
     void shell.openExternal(url);
   });
+  if (process.env.NOEMA_DESKTOP_SMOKE === "1") {
+    win.webContents.once("did-finish-load", () => {
+      void win.webContents.executeJavaScript(`(() => {
+        const titlebar = document.querySelector("[data-desktop-titlebar]");
+        const controls = Array.from(document.querySelectorAll("[data-desktop-command], [data-desktop-menu]"));
+        const bounds = titlebar?.getBoundingClientRect();
+        return {
+          hostMode: document.body.dataset.hostMode || "",
+          preload: Boolean(window.noemaDesktop),
+          titlebarVisible: Boolean(titlebar && !titlebar.hidden && bounds && bounds.height > 0),
+          titlebarHeight: bounds?.height || 0,
+          controls: controls.map((control) => control.getAttribute("aria-label")),
+        };
+      })()`).then((report) => {
+        console.log(`[noema-desktop-smoke] ${JSON.stringify(report)}`);
+      }).catch((error) => {
+        console.error("[noema-desktop-smoke]", error);
+      });
+    });
+  }
   void win.loadURL(targetUrl || urlForFile(file));
   return win;
 }
@@ -138,27 +351,37 @@ app.on("second-instance", (_event, argv) => {
   }
 });
 
+ipcMain.on("noema:open-files", (_event, files) => {
+  const paths = Array.isArray(files) ? files : [];
+  paths
+    .map((file) => String(file || "").trim())
+    .filter((file) => /\.(?:md|markdown)$/i.test(file))
+    .forEach(openFile);
+});
+
+ipcMain.handle("noema:show-menu", (event, kind, point = {}) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || win.isDestroyed()) return false;
+  const template = kind === "window"
+    ? windowActionsTemplate(win)
+    : editorActionsTemplate();
+  Menu.buildFromTemplate(template).popup({
+    window: win,
+    x: Math.max(0, Math.floor(Number(point?.x) || 0)),
+    y: Math.max(0, Math.floor(Number(point?.y) || 48)),
+  });
+  return true;
+});
+
+ipcMain.handle("noema:reveal-path", (_event, file) => {
+  const target = String(file || "").trim();
+  if (!target) return false;
+  shell.showItemInFolder(resolve(target));
+  return true;
+});
+
 app.whenReady().then(async () => {
-  Menu.setApplicationMenu(Menu.buildFromTemplate([
-    {
-      label: "Noema",
-      submenu: [
-        { role: "about" },
-        { type: "separator" },
-        { role: "services" },
-        { type: "separator" },
-        { role: "hide" },
-        { role: "hideOthers" },
-        { role: "unhide" },
-        { type: "separator" },
-        { role: "quit" },
-      ],
-    },
-    { label: "File", submenu: [{ label: "New Window", accelerator: "CmdOrCtrl+Shift+N", click: () => createWindow() }, { role: "close" }] },
-    { label: "Edit", submenu: [{ role: "undo" }, { role: "redo" }, { type: "separator" }, { role: "cut" }, { role: "copy" }, { role: "paste" }, { role: "selectAll" }] },
-    { label: "View", submenu: [{ role: "reload" }, { role: "toggleDevTools" }, { type: "separator" }, { role: "resetZoom" }, { role: "zoomIn" }, { role: "zoomOut" }, { type: "separator" }, { role: "togglefullscreen" }] },
-    { label: "Window", submenu: [{ role: "minimize" }, { role: "zoom" }, { role: "front" }] },
-  ]));
+  Menu.setApplicationMenu(buildApplicationMenu());
   try {
     await startHost();
     createWindow(pendingFile);
@@ -178,6 +401,9 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  if (process.env.NOEMA_DESKTOP_SMOKE === "1") {
+    console.log("[noema-desktop-smoke] beforeQuit=true");
+  }
   quitting = true;
   if (hostProcess && !hostProcess.killed) hostProcess.kill("SIGTERM");
 });

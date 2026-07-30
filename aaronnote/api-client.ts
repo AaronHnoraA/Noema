@@ -602,6 +602,13 @@ declare global {
   interface Window {
     aaronnoteApi?: NativeApi;
     aaronnoteOpenTaskManager?: () => void;
+    noemaDesktop?: {
+      filePath(file: File): string;
+      openFiles(files: string[]): void;
+      showMenu(kind: "actions" | "window", point?: { x: number; y: number }): Promise<boolean>;
+      revealPath(file: string): Promise<boolean>;
+      onCommand(callback: (detail: unknown) => void): () => void;
+    };
   }
 }
 

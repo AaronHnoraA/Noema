@@ -54,6 +54,7 @@ import { normalizeDateValue } from "../src/planning-values.ts";
 import { AARONNOTE_AUTHORING_SNIPPETS } from "../src/authoring-syntax.ts";
 import { patchPlanningNodeRaw, scanPlanningNodes } from "../shared/planning-dsl.mjs";
 import { latexMarkNames, latexMarkSnippetDefinitions } from "../shared/latex-marks.mjs";
+import { desktopDropDisposition } from "../shared/desktop-shell.mjs";
 import {
   buildLatexExportScopes,
   latexExportScopesContent,
@@ -130,8 +131,20 @@ const root = document.querySelector<HTMLElement>("#app");
 if (!root) throw new Error("Missing #app");
 const initialParams = new URLSearchParams(window.location.search);
 const initialReadOnly = initialParams.get("readonly") === "1" || initialParams.get("readonly") === "true";
+const desktopMode = standaloneMode() && Boolean(window.noemaDesktop);
+document.body.dataset.hostMode = desktopMode ? "desktop" : "emacs";
 
 root.innerHTML = `
+  <header class="noema-desktop-titlebar" data-desktop-titlebar ${desktopMode ? "" : "hidden"}>
+    <nav class="noema-desktop-titlebar-controls" aria-label="Note navigation">
+      <button type="button" data-desktop-command="back" title="Back" aria-label="Back">←</button>
+      <button type="button" data-desktop-command="forward" title="Forward" aria-label="Forward">→</button>
+      <button type="button" data-desktop-command="refresh" title="Refresh" aria-label="Refresh">↻</button>
+      <button type="button" data-desktop-menu="actions" title="Editor actions" aria-label="Editor actions">✎</button>
+      <button type="button" data-desktop-menu="window" title="Window actions" aria-label="Window actions">▦</button>
+    </nav>
+    <strong class="noema-desktop-titlebar-name" data-desktop-title>Noema</strong>
+  </header>
   <main class="aaronnote-focused-shell">
     <aside class="aaronnote-status-hud" aria-live="polite">
       <span class="aaronnote-status-pill aaronnote-status-pill-left" data-mode-toggle
@@ -148,10 +161,16 @@ root.innerHTML = `
     </aside>
     <section class="aaronnote-focused-editor" data-editor></section>
   </main>
+  <div class="noema-desktop-drop-overlay" data-desktop-drop-overlay hidden>
+    <span data-desktop-drop-label>Drop to insert</span>
+  </div>
 `;
 
 const host = root.querySelector<HTMLElement>("[data-editor]")!;
 const fileLabel = document.createElement("strong");
+const desktopTitleName = root.querySelector<HTMLElement>("[data-desktop-title]")!;
+const desktopDropOverlay = root.querySelector<HTMLElement>("[data-desktop-drop-overlay]")!;
+const desktopDropLabel = root.querySelector<HTMLElement>("[data-desktop-drop-label]")!;
 const modeLabel = root.querySelector<HTMLElement>("[data-vim-mode]")!;
 const readOnlyLabel = root.querySelector<HTMLElement>("[data-readonly]")!;
 const statusLabel = document.createElement("span");
@@ -683,7 +702,9 @@ let clientCloseNotified = false;
 let pendingExternalSave: { file: string; mtimeMs: number } | null = null;
 let pendingExternalSaveRefreshInFlight = false;
 let navigationBackStack: CursorPosition[] = [];
+let navigationForwardStack: CursorPosition[] = [];
 let restoringNavigationBack = false;
+let restoringNavigationForward = false;
 let snippets: SnippetSummary[] = [];
 let notes: NoteSummary[] = [];
 let pathSuggestions: string[] = [];
@@ -984,6 +1005,8 @@ snippets = withBuiltinSnippets(snippets);
 function updateTitle(): void {
   const name = currentFile.split(/[\\/]/).at(-1) || "Noema";
   fileLabel.textContent = name;
+  desktopTitleName.textContent = name;
+  desktopTitleName.title = currentFile || name;
   document.title = currentReadOnly
     ? `${name} (read-only)`
     : revision === savedRevision ? name : `* ${name}`;
@@ -3093,18 +3116,23 @@ function noteCursorPositionEvent(): void {
 }
 
 function pushNavigationBackLocation(location = trackCursorPosition()): void {
-  if (!location || restoringNavigationBack) return;
-  const key = cursorPositionKey(location);
-  const top = navigationBackStack[navigationBackStack.length - 1];
-  if (top && cursorPositionKey(top) === key) return;
-  navigationBackStack.push({ ...location, updatedAt: Date.now() });
-  if (navigationBackStack.length > NAVIGATION_BACK_STACK_MAX) {
-    navigationBackStack = navigationBackStack.slice(-NAVIGATION_BACK_STACK_MAX);
-  }
+  if (!location || restoringNavigationBack || restoringNavigationForward) return;
+  navigationForwardStack = [];
+  pushNavigationLocation(navigationBackStack, location);
   try {
     window.history.pushState({ aaronnoteNavigation: true }, "", window.location.href);
   } catch {
     // Browser history is an optional convenience; the in-memory stack remains valid.
+  }
+}
+
+function pushNavigationLocation(stack: CursorPosition[], location: CursorPosition): void {
+  const key = cursorPositionKey(location);
+  const top = stack[stack.length - 1];
+  if (top && cursorPositionKey(top) === key) return;
+  stack.push({ ...location, updatedAt: Date.now() });
+  if (stack.length > NAVIGATION_BACK_STACK_MAX) {
+    stack.splice(0, stack.length - NAVIGATION_BACK_STACK_MAX);
   }
 }
 
@@ -3124,6 +3152,8 @@ function restoreCursorPosition(location: CursorPosition): void {
 async function restoreNavigationBack(): Promise<boolean> {
   const location = navigationBackStack.pop();
   if (!location) return false;
+  const current = trackCursorPosition();
+  if (current) pushNavigationLocation(navigationForwardStack, current);
   restoringNavigationBack = true;
   try {
     if (location.file !== currentFile) await openFile(location.file);
@@ -3131,6 +3161,21 @@ async function restoreNavigationBack(): Promise<boolean> {
     return true;
   } finally {
     restoringNavigationBack = false;
+  }
+}
+
+async function restoreNavigationForward(): Promise<boolean> {
+  const location = navigationForwardStack.pop();
+  if (!location) return false;
+  const current = trackCursorPosition();
+  if (current) pushNavigationLocation(navigationBackStack, current);
+  restoringNavigationForward = true;
+  try {
+    if (location.file !== currentFile) await openFile(location.file);
+    restoreCursorPosition(location);
+    return true;
+  } finally {
+    restoringNavigationForward = false;
   }
 }
 
@@ -7996,6 +8041,22 @@ function runHostCommand(detail: unknown): boolean {
     case "navigation-back":
       void restoreNavigationBack();
       return true;
+    case "forward":
+    case "nav-forward":
+    case "navigation-forward":
+      void restoreNavigationForward();
+      return true;
+    case "find":
+      openFindPanel();
+      return true;
+    case "find-next":
+      if (findPanel.hidden) openFindPanel();
+      else gotoFindMatch(findIndex + 1);
+      return true;
+    case "find-previous":
+      if (findPanel.hidden) openFindPanel();
+      else gotoFindMatch(findIndex - 1);
+      return true;
     case "focus":
       focusEditorPreservingScroll();
       return true;
@@ -8074,6 +8135,30 @@ function runHostCommand(detail: unknown): boolean {
       return true;
     case "toggle-tools":
       toggleToolsPanel();
+      return true;
+    case "task-manager":
+      openTaskManager();
+      return true;
+    case "export-latex":
+      void exportLatexTool();
+      return true;
+    case "open-source-editor":
+      if (!currentFile) {
+        setStatus("Open a note first");
+        return true;
+      }
+      void api.emacs.open({ file: currentFile })
+        .then(() => setStatus(`Opened in ${sourceEditorName()}`))
+        .catch((error) => setStatus(`Open failed: ${String(error)}`));
+      return true;
+    case "reveal-current-file":
+      if (!currentFile || !window.noemaDesktop) {
+        setStatus("No local note to reveal");
+        return true;
+      }
+      void window.noemaDesktop.revealPath(currentFile)
+        .then(() => setStatus("Revealed note in Finder"))
+        .catch((error) => setStatus(`Reveal failed: ${String(error)}`));
       return true;
     case "undo":
       if (rejectReadOnlyAction("Read-only pane")) return true;
@@ -8512,6 +8597,24 @@ window.addEventListener("aaronnote:open-file", (event) => {
   if (detail?.file && detail.file !== currentFile) pushNavigationBackLocation();
   void openFile(detail?.file);
 });
+
+root.querySelectorAll<HTMLButtonElement>("[data-desktop-command]").forEach((button) => {
+  button.addEventListener("click", () => {
+    runHostCommand({ command: button.dataset.desktopCommand });
+  });
+});
+root.querySelectorAll<HTMLButtonElement>("[data-desktop-menu]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const kind = button.dataset.desktopMenu === "window" ? "window" : "actions";
+    const bounds = button.getBoundingClientRect();
+    void window.noemaDesktop?.showMenu(kind, { x: bounds.left, y: bounds.bottom });
+  });
+});
+
+const removeDesktopCommandListener = desktopMode
+  ? window.noemaDesktop?.onCommand((detail) => runHostCommand(detail)) ?? null
+  : null;
+
 window.addEventListener("aaronnote:command", (event) => {
   const detail = (event as CustomEvent<unknown>).detail;
   const targetClient = detail && typeof detail === "object"
@@ -8520,6 +8623,74 @@ window.addEventListener("aaronnote:command", (event) => {
   if (targetClient && targetClient !== currentClient) return;
   runHostCommand(detail);
 });
+
+function desktopExternalDrag(data: DataTransfer | null): boolean {
+  if (!desktopMode || !data) return false;
+  const types = Array.from(data.types || []);
+  if (types.some((type) => type.startsWith("text/x-aaronnote-"))) return false;
+  return data.files.length > 0 || types.includes("Files") || types.includes("text/uri-list");
+}
+
+function desktopDroppedPaths(data: DataTransfer): string[] {
+  if (!window.noemaDesktop) return [];
+  return Array.from(data.files)
+    .map((file) => window.noemaDesktop?.filePath(file) || "")
+    .filter(Boolean);
+}
+
+function updateDesktopDropOverlay(data: DataTransfer, forceAttachment: boolean): void {
+  const disposition = desktopDropDisposition(desktopDroppedPaths(data), forceAttachment);
+  desktopDropLabel.textContent = disposition.type === "open"
+    ? "Open Markdown in a new Noema window"
+    : "Insert files, links, or text at the cursor";
+  desktopDropOverlay.hidden = false;
+}
+
+let desktopDragDepth = 0;
+document.addEventListener("dragenter", (event) => {
+  if (!desktopExternalDrag(event.dataTransfer)) return;
+  desktopDragDepth += 1;
+  updateDesktopDropOverlay(event.dataTransfer!, event.altKey);
+  event.preventDefault();
+}, true);
+document.addEventListener("dragover", (event) => {
+  if (!desktopExternalDrag(event.dataTransfer)) return;
+  updateDesktopDropOverlay(event.dataTransfer!, event.altKey);
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+  event.preventDefault();
+}, true);
+document.addEventListener("dragleave", (event) => {
+  if (!desktopExternalDrag(event.dataTransfer) && desktopDropOverlay.hidden) return;
+  desktopDragDepth = Math.max(0, desktopDragDepth - 1);
+  if (desktopDragDepth === 0) desktopDropOverlay.hidden = true;
+  event.preventDefault();
+}, true);
+document.addEventListener("drop", (event) => {
+  if (!desktopExternalDrag(event.dataTransfer)) return;
+  event.preventDefault();
+  desktopDragDepth = 0;
+  desktopDropOverlay.hidden = true;
+  const data = event.dataTransfer!;
+  const disposition = desktopDropDisposition(desktopDroppedPaths(data), event.altKey);
+  if (disposition.type === "open") {
+    window.noemaDesktop?.openFiles(disposition.paths);
+    setStatus(disposition.paths.length === 1 ? "Opened note in a new window" : `Opened ${disposition.paths.length} notes`);
+    return;
+  }
+  if (rejectReadOnlyAction("Read-only pane")) return;
+  const position = editor.view.posAtCoords({ x: event.clientX, y: event.clientY });
+  if (typeof position === "number") editor.setMarkdownSelection(position);
+  editor.focus();
+  void editor.pasteFromDataTransfer(data).then((handled) => {
+    if (!handled) {
+      setStatus("This drop type could not be inserted");
+      return;
+    }
+    setStatus("Drop inserted");
+    scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true, toc: true });
+  }).catch((error) => setStatus(`Drop failed: ${String(error)}`));
+}, true);
+
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
     setPausedReason("visibility", true);
@@ -8543,6 +8714,7 @@ window.addEventListener("pagehide", () => {
   notifyClientClosedKeepalive();
 });
 window.addEventListener("beforeunload", () => {
+  removeDesktopCommandListener?.();
   coreReconnectController?.destroy();
   vim.destroy();
   imeCoalesceTimer.cancel();

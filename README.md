@@ -6,9 +6,9 @@
 
 > A Typora-style Markdown editor for the web, Emacs, and macOS.
 
-This README is package-focused. In the Emacs-vendored copy, the host bridge is
-`lisp/roam/aaronnote/web-host.mjs` and the Emacs entry point is
-`lisp/roam/init-aaronnote.el`.
+This README is package-focused. Emacs links the canonical project at
+`lisp/roam/Noema`; `lisp/roam/aaronnote` remains a compatibility link. The
+Emacs entry point is `lisp/roam/init-aaronnote.el`.
 
 Markdown looks like a finished document while you write it. Italic renders as *italic* the moment you close the asterisks. Headings appear at their final size as soon as you start typing. Source markers like `*` and `#` fade out when the cursor moves away and come back when you click in.
 
@@ -73,6 +73,18 @@ export NOEMA_ROOT="$HOME/Documents/Noema"
 export NOEMA_RESOURCES_ROOT="/path/to/Noema/resources"
 export NOEMA_VSCODE="/path/to/code"
 ```
+
+Noema.app has a native macOS application menu and a draggable system title
+bar mirroring the Emacs editor header: back, forward, refresh, editor actions,
+window actions, and the current filename. These are two maintained host
+adapters—the App controls do not remove or replace the Emacs header-line.
+
+Desktop drag/drop follows the note workflow:
+
+- Drop one or more Markdown files to open each in a new Noema window.
+- Hold Option while dropping Markdown to insert it through the attachment
+  pipeline instead.
+- Drop images, other files, links, or text to insert them at the drop cursor.
 
 Noema owns its snippets, Markdown/LaTeX templates, KaTeX macros, and prose word
 list under `resources/`. The Emacs configuration retains its historical
