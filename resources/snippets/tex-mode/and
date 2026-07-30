@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Intersection
+# key: and
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/and_Intersection
+# --
+\cap

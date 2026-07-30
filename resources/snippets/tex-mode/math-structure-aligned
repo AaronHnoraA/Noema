@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Math [aligned] — Aligned equations
+# key: aligned
+# group: Math · Structures
+# --
+\begin{aligned}
+  ${1:a} &= ${2:b} \\
+         &= ${3:c}.
+\end{aligned}$0

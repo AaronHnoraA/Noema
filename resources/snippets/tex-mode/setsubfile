@@ -1,0 +1,10 @@
+# -*- mode: snippet -*-
+# name: SetSubfile
+# key: setsubfile
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/setsubfile_SetSubfile
+# --
+# --
+\documentclass[$1]{subfiles}
+\graphicspath{{$2}}
+$0

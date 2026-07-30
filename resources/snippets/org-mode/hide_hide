@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: hide
+# key: hide
+# -- Add a hide
+# --
+\begin{hide}
+	$1
+\end{hide}
+$0

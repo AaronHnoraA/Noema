@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Nabla
+# key: nabl
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/nabl_Nabla
+# --
+\nabla

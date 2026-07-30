@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \Psi
+# key: \Psi
+# uuid: overleaf:\Psi
+# contributor: Noema provider=overleaf&priority=160&weight=0.03056589143021648&context=math-command&description=Overleaf+cmd
+# group: Math · overleaf
+# --
+\Psi$0

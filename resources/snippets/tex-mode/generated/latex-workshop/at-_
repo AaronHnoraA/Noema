@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: bar
+# key: @_
+# uuid: latex-workshop:@_
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=bar
+# group: Math · latex-workshop
+# --
+\bar{${1:`(or yas-selected-text "")`}}$0

@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [nmid] — Does not divide
+# key: nmid
+# group: Math · Relations
+# --
+\nmid$0

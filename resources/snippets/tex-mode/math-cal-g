@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [calG] — Calligraphic G
+# key: calG
+# group: Math · Calligraphic
+# --
+\mathcal{G}$0

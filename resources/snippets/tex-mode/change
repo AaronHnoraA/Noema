@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: change
+# key: change
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/change_change
+# --
+# --
+\begin{change}
+	$1
+\end{change}
+$0

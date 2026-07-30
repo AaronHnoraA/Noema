@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Lambda (uppercase)
+# key: LLLL
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/LLLL_Lambda_uppercase_
+# --
+\Lambda

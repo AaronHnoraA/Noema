@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: Remark
+# key: remark
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/remark_Remark
+# --
+# --
+\begin{remark}
+	$1
+\end{remark}
+$0

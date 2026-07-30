@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Page
+# key: page
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/page_Page
+# --
+# --
+${1:page}~\pageref{$2}$0

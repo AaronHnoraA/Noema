@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Physical Units
+# key: pu
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/pu_Physical_Units
+# --
+\pu{ $1 }

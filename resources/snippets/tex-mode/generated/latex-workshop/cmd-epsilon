@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \epsilon
+# key: \epsilon
+# uuid: latex-workshop:\epsilon
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%CF%B5%2C+shortcut+%40e
+# group: Math · latex-workshop
+# --
+\epsilon$0

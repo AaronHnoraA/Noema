@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Delta
+# key: @D
+# uuid: latex-workshop:@D
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=Delta
+# group: Math · latex-workshop
+# --
+\Delta

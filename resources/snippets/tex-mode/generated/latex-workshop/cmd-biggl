@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \biggl(
+# key: \biggl(
+# uuid: latex-workshop:\biggl(
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%5Cbiggl%28+...+%5Cbiggr%29
+# group: Math · latex-workshop
+# --
+\biggl(${1}\biggr)$0

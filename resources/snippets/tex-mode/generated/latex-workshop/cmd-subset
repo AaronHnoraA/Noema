@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \subset
+# key: \subset
+# uuid: latex-workshop:\subset
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%E2%8A%82
+# group: Math · latex-workshop
+# --
+\subset$0

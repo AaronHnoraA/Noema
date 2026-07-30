@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Signature verification
+# key: Vrfy
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/org-mode/Vrfy_Verification
+# --
+# --
+\operatorname{Vrfy}_{${1:pk}}\left(${2:m}, ${3:\sigma}\right) = ${4:1}$0

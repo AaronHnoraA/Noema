@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Cases
+# key: cas
+# -- Cases
+# --
+\begin{cases}
+${1:f(x) = x^2}, & \\text{if } ${2:x > 0} \\
+${3:0}, & \\text{otherwise}
+\end{cases}

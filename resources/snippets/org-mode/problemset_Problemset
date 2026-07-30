@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Problemset
+# key: problemset
+# -- Add a problemset
+# --
+\begin{problemset}
+	$1
+\end{problemset}
+$0

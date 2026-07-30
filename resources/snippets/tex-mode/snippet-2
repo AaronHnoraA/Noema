@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Maps To
+# key: !>
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/_Maps_To
+# --
+\mapsto

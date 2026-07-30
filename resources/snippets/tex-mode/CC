@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Complex Numbers
+# key: CC
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/CC_Complex_Numbers
+# --
+\mathbb{C}

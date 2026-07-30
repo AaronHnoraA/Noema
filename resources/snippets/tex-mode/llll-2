@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Lambda (lowercase)
+# key: llll
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/llll_Lambda_lowercase_
+# --
+\lambda

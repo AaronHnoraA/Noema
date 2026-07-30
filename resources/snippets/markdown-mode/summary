@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Summary block
+# key: sum
+# group: Noema local
+# --
+#+begin summary ${1:title}
+${2:Summary.}
+#+end summary
+$0

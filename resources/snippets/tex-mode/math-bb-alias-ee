@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [EE] — Expectation
+# key: EE
+# group: Math · Blackboard
+# --
+\mathbb{E}$0

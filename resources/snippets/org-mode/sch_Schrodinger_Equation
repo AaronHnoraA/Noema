@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Schrodinger equation
+# key: sch
+# -- Quantum
+# --
+i\hbar \frac{\partial}{\partial t}\lvert\psi(t)\rangle = H\lvert\psi(t)\rangle$0

@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \hat{}
+# key: \hat{}
+# uuid: latex-workshop:\hat{}
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%C2%A0%CC%82%2C+shortcut+%40%5E
+# group: Math · latex-workshop
+# --
+\hat{$1}$0

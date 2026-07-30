@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Double Dot Accent
+# key: ddot
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/ddot_Double_Dot_Accent
+# --
+\ddot{$1}$2

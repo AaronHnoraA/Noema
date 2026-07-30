@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Quantum ket
+# key: qket
+# group: QC symbols
+# --
+\ket{${1:\psi}}$0

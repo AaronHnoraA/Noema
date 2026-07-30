@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Lagrangian
+# key: LL
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/LL_Lagrangian
+# --
+\mathcal{L}

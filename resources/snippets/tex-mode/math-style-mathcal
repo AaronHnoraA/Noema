@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [mathcal] — Calligraphic
+# key: mathcal
+# group: Math · Styles
+# --
+\mathcal{${1:F}}$0

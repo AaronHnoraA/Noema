@@ -1,0 +1,16 @@
+# -*- mode: snippet -*-
+# name: @inproceedings
+# key: inproc
+# group: BibTeX
+# --
+@inproceedings{${1:key},
+  author = {${2:author}},
+  title = {${3:title}},
+  booktitle = {${4:booktitle}},
+  year = {${5:year}},
+  pages = {${6:pages}},
+  publisher = {${7:publisher}},
+  doi = {${8:doi}},
+  url = {${9:url}}
+}
+$0

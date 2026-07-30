@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Projector
+# key: proj
+# -- Quantum
+# --
+\lvert ${1:\psi}\rangle\langle ${1:\psi}\rvert $0

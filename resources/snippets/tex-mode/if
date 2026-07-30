@@ -1,0 +1,10 @@
+# -*- mode: snippet -*-
+# name: Algorithm:If
+# key: if
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/if_Algorithm_If
+# --
+\If{$1}
+\ElsIf{$2}
+\Else
+\EndIf

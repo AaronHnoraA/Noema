@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Del
+# key: del
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/del_Del
+# --
+\nabla

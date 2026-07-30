@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Partial trace
+# key: qptr
+# group: QC symbols
+# --
+\operatorname{Tr}_{${1:B}}\!\left(${2:\rho_{AB}}\right)$0

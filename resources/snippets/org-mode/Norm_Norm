@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Norm
+# key: Norm
+# --
+\lVert $1 \rVert $2

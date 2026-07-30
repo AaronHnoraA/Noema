@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Integral -Inf to Inf
+# key: infi
+# --
+\int_{-\infty}^{\infty} $1 \, d$2 $3

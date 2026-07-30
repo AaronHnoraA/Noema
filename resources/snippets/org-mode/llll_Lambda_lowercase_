@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Lambda (lowercase)
+# key: llll
+# --
+\lambda

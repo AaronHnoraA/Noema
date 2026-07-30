@@ -1,0 +1,6 @@
+# -*- mode: snippet; require-final-newline: nil -*-
+# name: Org ID link
+# key: idlink
+# -- Insert an Org id link
+# --
+[[id:${1:id}][$2]]$0

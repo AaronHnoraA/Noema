@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Exponential
+# key: ee
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/ee_Exponential
+# --
+e^{ $1 }$2

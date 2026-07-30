@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \varepsilon
+# key: \varepsilon
+# uuid: latex-workshop:\varepsilon
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%CE%B5%2C+shortcut+%40ve
+# group: Math · latex-workshop
+# --
+\varepsilon$0

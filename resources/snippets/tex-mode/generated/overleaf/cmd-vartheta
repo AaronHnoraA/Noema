@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \vartheta
+# key: \vartheta
+# uuid: overleaf:\vartheta
+# contributor: Noema provider=overleaf&priority=160&weight=0.0025822992078068712&context=math-command&description=Overleaf+cmd
+# group: Math · overleaf
+# --
+\vartheta$0

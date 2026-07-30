@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \div
+# key: \div
+# uuid: latex-workshop:\div
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=division
+# group: Math · latex-workshop
+# --
+\div$0

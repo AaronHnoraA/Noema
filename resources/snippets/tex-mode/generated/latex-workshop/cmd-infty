@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \infty
+# key: \infty
+# uuid: latex-workshop:\infty
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%E2%88%9E%2C+shortcut+%408
+# group: Math · latex-workshop
+# --
+\infty$0

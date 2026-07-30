@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Markdown link
+# key: link
+# group: Noema syntax
+# --
+[${1:text}](${2:url})$0

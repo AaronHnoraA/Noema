@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Section (no label)
+# key: sec
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/sec_Section_no_label_
+# --
+# --
+\section{$1}
+${0:$TM_SELECTED_TEXT}

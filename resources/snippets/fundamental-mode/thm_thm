@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: thm
+# key: thm
+# --
+theorem $1 : $2 := by
+  $3

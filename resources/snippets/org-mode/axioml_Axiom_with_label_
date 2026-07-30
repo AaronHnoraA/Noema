@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Axiom (with label)
+# key: axioml
+# -- Add an axiom with label
+# --
+\begin{axiom}{$1}\label{axi:$1}
+		$2
+\end{axiom}
+$0

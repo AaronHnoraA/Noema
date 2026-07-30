@@ -1,0 +1,10 @@
+# -*- mode: snippet -*-
+# name: Figure:ACM
+# key: figure:acm
+# -- Add a figure (ACM)
+# --
+\begin{figure}
+	\includegraphics[width=0.45\textwidth]{figures/$1}
+	\caption{$2}\label{fig:$3}
+\end{figure}
+$0

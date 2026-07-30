@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Alpha
+# key: aaaa
+# --
+\alpha $0

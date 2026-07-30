@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Kappa
+# key: kkkk
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/kkkk_Kappa
+# --
+\kappa

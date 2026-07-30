@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [lnot] — Logical not
+# key: lnot
+# group: Math · Logic
+# --
+\lnot$0

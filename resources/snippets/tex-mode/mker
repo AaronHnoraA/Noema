@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Kernel
+# key: mker
+# group: Math symbols
+# --
+\ker\!\left(${1:T}\right)$0

@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [imageop] — Image operator
+# key: imageop
+# group: Math · Linear algebra
+# --
+\operatorname{im}$0

@@ -1,0 +1,6 @@
+# -*- mode: snippet; require-final-newline: nil -*-
+# name: Org file target link
+# key: ftlink
+# -- Insert an Org file target link
+# --
+[[file:${1:path.org}::${2:target}][$3]]$0

@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Sub Paragraph (no label)
+# key: subp
+# -- Sub Paragraph without label
+# --
+\subparagraph{$1}
+${0:$TM_SELECTED_TEXT}

@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [mid] — Divides / such that
+# key: mid
+# group: Math · Relations
+# --
+\mid$0

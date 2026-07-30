@@ -1,0 +1,10 @@
+# -*- mode: snippet -*-
+# name: Identity Matrix
+# key: iden
+# --
+\begin{pmatrix}
+1 & 0 & \dots & 0 \\
+0 & 1 & \dots & 0 \\
+\vdots & \vdots & \ddots & \vdots \\
+0 & 0 & \dots & 1
+\end{pmatrix}

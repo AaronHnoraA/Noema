@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \eta
+# key: \eta
+# uuid: overleaf:\eta
+# contributor: Noema provider=overleaf&priority=160&weight=0.11088718379889091&context=math-command&description=Overleaf+cmd
+# group: Math · overleaf
+# --
+\eta$0

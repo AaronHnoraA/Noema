@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [supset] — Superset
+# key: supset
+# group: Math · Sets
+# --
+\supset$0

@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: PPT adversary
+# key: ppt
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/org-mode/ppt_PPT_Adversary
+# --
+# --
+\mathsf{PPT}$0

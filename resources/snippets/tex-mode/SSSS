@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Sigma (uppercase)
+# key: SSSS
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/SSSS_Sigma_uppercase_
+# --
+\Sigma

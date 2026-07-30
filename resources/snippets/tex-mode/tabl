@@ -1,0 +1,10 @@
+# -*- mode: snippet -*-
+# name: Tabular (with label)
+# key: tabl
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/tabl_Tabular_with_label_
+# --
+# --
+\begin{tabular}{${1:c}}\label{tab:$2}
+$0
+\end{tabular}

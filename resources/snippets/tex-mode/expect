@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Expectation
+# key: expect
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/org-mode/expect_Expectation
+# --
+# --
+\mathbb{E}_{${1:x \sim D}}\left[${2:f(x)}\right]$0

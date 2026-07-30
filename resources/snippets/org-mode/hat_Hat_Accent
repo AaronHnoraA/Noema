@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Hat Accent
+# key: hat
+# --
+\hat{$1}$2

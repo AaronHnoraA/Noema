@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \exists
+# key: \exists
+# uuid: latex-workshop:\exists
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%E2%88%83
+# group: Math · latex-workshop
+# --
+\exists$0

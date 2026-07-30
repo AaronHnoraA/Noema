@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Norm
+# key: mnorm
+# group: Math symbols
+# --
+\left\|${1:x}\right\|$0

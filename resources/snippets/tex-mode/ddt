@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Time Derivative
+# key: ddt
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/ddt_Time_Derivative
+# --
+\frac{d}{dt}

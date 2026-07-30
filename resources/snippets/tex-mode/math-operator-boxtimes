@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [boxtimes] — Boxed times
+# key: boxtimes
+# group: Math · Operators
+# --
+\boxtimes$0

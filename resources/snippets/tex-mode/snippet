@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Not Equal
+# key: !=
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/_Not_Equal
+# --
+\neq

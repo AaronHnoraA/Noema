@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Subset Equal
+# key: sub=
+# --
+\subseteq

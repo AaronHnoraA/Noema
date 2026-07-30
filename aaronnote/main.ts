@@ -1,0 +1,8570 @@
+import "../src/styles/widgets.css";
+import "../src/styles/theme-typora.css";
+import "../src/styles/typography.css";
+import "./style.css";
+
+import {
+  createEditor,
+  type EditorClipboardPayload,
+  type EditorCommand,
+  type StoredPasteAsset,
+} from "../src/lib.ts";
+import { setupCopilot } from "../src/copilot/index.ts";
+import { continueMarkdownBlock, exitEmptyMarkdownBlock, indentMarkdownBlock, indentMarkdownList, tableNavigateCell, tableEnterSameColumn } from "../src/cm6/commands/index.ts";
+import { markdownHrefAt } from "../src/cm6/editor-cm6.ts";
+import { nextGraphemePosition, previousGraphemePosition } from "../src/cm6/text-boundaries.ts";
+import { getBlockMathRanges, rangeAtPosition, rangeOverlapsAny } from "../src/cm6/math-ranges.ts";
+import { jumpStructuralDelimiter } from "../src/cm6/structural-jump.ts";
+import { equationTagsFromText, getEquationTagHits } from "../src/equation-tags.ts";
+import { INLINE_MATH_RE } from "../src/inline-math.ts";
+import { formatMathRenderError, renderMathHTML } from "../src/math-render.ts";
+import { setKatexMacros } from "../src/katex-macros.ts";
+import { renderJupyterVariablesTable } from "../src/jupyter-variables-view.ts";
+import { formatCitationLabel } from "../src/render-html.ts";
+import { hrefProtocol, safeHref } from "../src/url-safety.ts";
+import {
+  api,
+  type TodoItem,
+  type JupyterKernelSpec,
+  type JupyterKernelTask,
+  type JupyterTasksResult,
+  type LatexExportAgentStatus,
+  type LatexTemplate,
+  type CoreTask,
+  type BibliographyCitation,
+  type BibliographyDiagnostic,
+  type BibliographyDocument,
+  type BibliographyReference,
+  type LanguageToolSettings,
+} from "./api-client.ts";
+import { Epoch } from "../src/async-epoch.ts";
+import { CoalescedTimer } from "../src/coalesced-timer.ts";
+import { blobToBase64 } from "../src/paste.ts";
+import { collectFindMatches, createFindPattern, type FindMatch } from "./find.ts";
+import { AssistScheduler, type AssistUpdateFlags, type AssistUpdateOptions } from "./assist-scheduler.ts";
+import {
+  ProseCheckLifecycle,
+  type ProseCheckContext,
+  type ProseCheckOutcome,
+  type ProseCheckState,
+} from "./prose-check-lifecycle.ts";
+import { createFloatingTocPanel, inlineTagAnchorsFromText, markdownHeadingsFromText } from "./floating-toc.ts";
+import { createSlideDeckController, type SlideDeckController } from "./slide-deck.ts";
+import { normalizeDateValue } from "../src/planning-values.ts";
+import { AARONNOTE_AUTHORING_SNIPPETS } from "../src/authoring-syntax.ts";
+import { patchPlanningNodeRaw, scanPlanningNodes } from "../shared/planning-dsl.mjs";
+import { latexMarkNames, latexMarkSnippetDefinitions } from "../shared/latex-marks.mjs";
+import {
+  buildLatexExportScopes,
+  latexExportScopesContent,
+  toggleLatexExportScopeSelection,
+  type LatexExportScope,
+} from "./latex-export-scope.ts";
+import { resolveAnchorHeading } from "../src/heading-slug.ts";
+import { createLocalGraphPanel } from "./local-graph.ts";
+import { openLanguageToolSettingsTool } from "./languagetool-tool.ts";
+import { setFindHighlightRanges } from "../src/cm6/find-highlight.ts";
+import { refreshViewportDecorationsNow } from "../src/cm6/viewport-refresh.ts";
+import {
+  allProseDiagnostics,
+  proseDiagnosticsAt,
+  setProseDiagnostics,
+  type ProseDiagnostic,
+} from "../src/cm6/prose-diagnostics.ts";
+import {
+  canonicalRoamNoteId,
+  escapeMarkdownLinkText,
+  markdownRoamIdLink,
+  resolveRoamNoteSearch,
+  roamHrefForNote,
+  roamNoteSearchValue,
+} from "./roam-idlink.ts";
+import {
+  matchingSnippetsForPrefix,
+  SnippetSession,
+  SnippetUsageStore,
+  snippetDetail,
+  snippetLabel,
+  snippetPopupKeyAction,
+} from "./snippets.ts";
+import { MathSnippetIndex } from "./math-snippet-index.ts";
+import {
+  citeKeyCompletionContext,
+  citeKeyRenderPrefix,
+  citeNamespaceCompletionPrefix,
+  citeNamespaceRenderPrefix,
+} from "./bibliography-completion.ts";
+import {
+  alignBibliographyCitationRanges,
+  bibliographyChangesRequireResolution,
+  bibliographyResolutionState,
+  mapBibliographyRangesThroughChanges,
+  mapBibliographyWatchRangesThroughChanges,
+  type BibliographyCommandRange,
+  type BibliographyTextChange,
+  type BibliographyWatchRange,
+} from "./bibliography-state.ts";
+import type { CursorPosition, NoteSummary, SnippetSummary } from "./types.ts";
+import { createVimLite, type VimLiteKey, type VimLiteMode } from "./vim-lite.ts";
+import { ceilCommandGeneratedId, ceilLanguageForKernel } from "../src/cm6/extensions/visual/widgets/ceil-shared.ts";
+import {
+  handleXwidgetControlBeforeInput,
+  handleXwidgetControlKeydown,
+  handleXwidgetEmacsKeydown,
+  handleXwidgetHistoryKeydown,
+  handleXwidgetSpecialBeforeInput,
+  handleXwidgetSpecialKeydown,
+  handleXwidgetVimBeforeInput,
+  handleXwidgetVimKeydown,
+} from "./xwidget-key-guard.ts";
+import { sourceEditorName, standaloneMode } from "./host-mode.ts";
+import { createZoomController } from "./features/zoom/controller.ts";
+import {
+  createWritingStatsController,
+  type WritingStatsController,
+} from "./features/writing-stats/controller.ts";
+import { installActiveCoreReconnect } from "./active-core-reconnect.ts";
+import { noteAutoSaveEnabled } from "./save-policy.ts";
+
+const root = document.querySelector<HTMLElement>("#app");
+if (!root) throw new Error("Missing #app");
+const initialParams = new URLSearchParams(window.location.search);
+const initialReadOnly = initialParams.get("readonly") === "1" || initialParams.get("readonly") === "true";
+
+root.innerHTML = `
+  <main class="aaronnote-focused-shell">
+    <aside class="aaronnote-status-hud" aria-live="polite">
+      <span class="aaronnote-status-pill aaronnote-status-pill-left" data-mode-toggle
+            role="button" tabindex="0" title="Toggle tools" aria-label="Toggle tools"
+            aria-expanded="false">
+        <span data-vim-mode>INSERT</span>
+        <span data-readonly hidden>READ ONLY</span>
+      </span>
+      <span class="aaronnote-status-pill aaronnote-status-pill-right" data-stats-toggle
+            role="button" tabindex="0" title="Toggle page outline" aria-label="Toggle page outline"
+            aria-expanded="false">
+        <span data-writing-stats aria-live="polite"></span>
+      </span>
+    </aside>
+    <section class="aaronnote-focused-editor" data-editor></section>
+  </main>
+`;
+
+const host = root.querySelector<HTMLElement>("[data-editor]")!;
+const fileLabel = document.createElement("strong");
+const modeLabel = root.querySelector<HTMLElement>("[data-vim-mode]")!;
+const readOnlyLabel = root.querySelector<HTMLElement>("[data-readonly]")!;
+const statusLabel = document.createElement("span");
+const writingStatsLabel = root.querySelector<HTMLElement>("[data-writing-stats]")!;
+const statsToggle = root.querySelector<HTMLElement>("[data-stats-toggle]")!;
+const modeToggle = root.querySelector<HTMLElement>("[data-mode-toggle]")!;
+const shellControl = (label: string): HTMLButtonElement => {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = label;
+  return button;
+};
+const jupyterButton = shellControl("Code cells");
+const tocButton = shellControl("Page");
+const agendaButton = shellControl("Agenda");
+const graphButton = shellControl("Graph");
+const toolsButton = shellControl("Tools");
+const sourceButton = shellControl("Source");
+const saveButton = shellControl("Save");
+
+const prosePopover = document.createElement("div");
+prosePopover.className = "aaronnote-prose-popover";
+prosePopover.hidden = true;
+document.body.appendChild(prosePopover);
+
+const graphPanelRoot = document.createElement("aside");
+graphPanelRoot.className = "aaronnote-local-graph-panel is-collapsed";
+graphPanelRoot.innerHTML = `
+  <header>
+    <strong>Knowledge graph</strong>
+    <button type="button" data-graph-close>Close</button>
+  </header>
+  <div class="aaronnote-local-graph-controls">
+    <div class="aaronnote-graph-mode" role="group" aria-label="Graph scope">
+      <button type="button" data-graph-mode="local" class="is-active">Local</button>
+      <button type="button" data-graph-mode="workspace">Workspace</button>
+    </div>
+    <input type="search" data-graph-search placeholder="Search graph" aria-label="Search graph" />
+    <select data-graph-group aria-label="Filter graph group"><option value="">All groups</option></select>
+    <label>Depth <input type="range" data-graph-depth min="1" max="2" value="1" /></label>
+    <span data-graph-depth-label>1</span>
+    <label><input type="checkbox" data-graph-refs checked /> Refs</label>
+    <label><input type="checkbox" data-graph-backlinks checked /> Back</label>
+    <label><input type="checkbox" data-graph-tags checked /> Tags</label>
+  </div>
+  <div class="aaronnote-local-graph-canvas" data-graph-canvas></div>
+  <div class="aaronnote-local-graph-status" data-graph-status></div>
+  <div class="aaronnote-graph-detail" data-graph-detail hidden></div>
+`;
+document.body.appendChild(graphPanelRoot);
+const graphDepthInput = graphPanelRoot.querySelector<HTMLInputElement>("[data-graph-depth]")!;
+const graphDepthLabel = graphPanelRoot.querySelector<HTMLElement>("[data-graph-depth-label]")!;
+const graphRefsInput = graphPanelRoot.querySelector<HTMLInputElement>("[data-graph-refs]")!;
+const graphBacklinksInput = graphPanelRoot.querySelector<HTMLInputElement>("[data-graph-backlinks]")!;
+const graphTagsInput = graphPanelRoot.querySelector<HTMLInputElement>("[data-graph-tags]")!;
+const graphCanvas = graphPanelRoot.querySelector<HTMLElement>("[data-graph-canvas]")!;
+const graphStatus = graphPanelRoot.querySelector<HTMLElement>("[data-graph-status]")!;
+const graphSearch = graphPanelRoot.querySelector<HTMLInputElement>("[data-graph-search]")!;
+const graphGroup = graphPanelRoot.querySelector<HTMLSelectElement>("[data-graph-group]")!;
+const graphDetail = graphPanelRoot.querySelector<HTMLElement>("[data-graph-detail]")!;
+const graphModeButtons = Array.from(graphPanelRoot.querySelectorAll<HTMLButtonElement>("[data-graph-mode]"));
+const graphClose = graphPanelRoot.querySelector<HTMLButtonElement>("[data-graph-close]")!;
+
+const toc = document.createElement("aside");
+toc.className = "aaronnote-floating-toc is-collapsed";
+toc.innerHTML = `<nav data-toc-list aria-label="Page outline"></nav>`;
+document.body.appendChild(toc);
+const tocList = toc.querySelector<HTMLElement>("[data-toc-list]")!;
+
+const toolsPanel = document.createElement("div");
+toolsPanel.className = "aaronnote-tools-panel";
+toolsPanel.hidden = true;
+toolsPanel.innerHTML = `
+  <div class="aaronnote-tools-head">
+    <strong>Tools</strong>
+    <button type="button" data-tools-close>Close</button>
+  </div>
+  <div class="aaronnote-tools-list" data-tools-list></div>
+`;
+document.body.appendChild(toolsPanel);
+const toolsList = toolsPanel.querySelector<HTMLElement>("[data-tools-list]")!;
+const toolsClose = toolsPanel.querySelector<HTMLButtonElement>("[data-tools-close]")!;
+
+const jupyterPanel = document.createElement("aside");
+jupyterPanel.className = "aaronnote-jupyter-panel";
+jupyterPanel.hidden = true;
+jupyterPanel.innerHTML = `
+  <header>
+    <strong>Jupyter</strong>
+    <button type="button" data-jupyter-close aria-label="Close">Close</button>
+  </header>
+  <div class="aaronnote-jupyter-toolbar">
+    <button type="button" data-jupyter-action="run-all" title="Run all" aria-label="Run all">&#xf04b;</button>
+    <button type="button" data-jupyter-action="run-above" title="Run cells above cursor" aria-label="Run cells above cursor">&#xf062;</button>
+    <button type="button" data-jupyter-action="run-below" title="Run cells below cursor" aria-label="Run cells below cursor">&#xf063;</button>
+    <button type="button" data-jupyter-action="run-section" title="Run current section" aria-label="Run current section">&#xf0e8;</button>
+    <button type="button" data-jupyter-action="restart-run-all" title="Restart and run all" aria-label="Restart and run all">&#xf021;</button>
+    <button type="button" data-jupyter-action="interrupt" title="Interrupt kernel" aria-label="Interrupt kernel">&#xf04d;</button>
+    <button type="button" data-jupyter-action="clear-all" title="Clear all outputs" aria-label="Clear all outputs">&#xf1f8;</button>
+    <button type="button" data-jupyter-action="variables" title="Variables" aria-label="Variables">&#xf0ce;</button>
+    <button type="button" data-jupyter-action="toggle-kernel-tool" title="Switch kernel" aria-label="Switch kernel">&#xf085;</button>
+    <button type="button" data-jupyter-action="tasks" title="Kernel task manager" aria-label="Kernel task manager">&#xf0ae;</button>
+    <button type="button" data-jupyter-action="cleanup" title="Cleanup idle kernels" aria-label="Cleanup idle kernels">&#xf12d;</button>
+    <button type="button" data-jupyter-action="refresh" title="Refresh" aria-label="Refresh">&#xf2f1;</button>
+  </div>
+  <div class="aaronnote-jupyter-kernel-tool" data-jupyter-kernel-tool hidden>
+    <label>Lang <select data-jupyter-kernel-language></select></label>
+    <label>Session <select data-jupyter-kernel-session></select></label>
+    <label>Old <select data-jupyter-kernel-old></select></label>
+    <label>New <select data-jupyter-kernel-new></select></label>
+    <div class="aaronnote-jupyter-kernel-cells" data-jupyter-kernel-cells></div>
+    <button type="button" data-jupyter-action="switch-kernel">Switch</button>
+  </div>
+  <div class="aaronnote-jupyter-summary" data-jupyter-summary>No cells</div>
+  <div class="aaronnote-jupyter-list" data-jupyter-list></div>
+  <div class="aaronnote-jupyter-vars" data-jupyter-vars hidden></div>
+  <div class="aaronnote-jupyter-runtime" data-jupyter-runtime hidden></div>
+`;
+document.body.appendChild(jupyterPanel);
+const jupyterClose = jupyterPanel.querySelector<HTMLButtonElement>("[data-jupyter-close]")!;
+const jupyterSummary = jupyterPanel.querySelector<HTMLElement>("[data-jupyter-summary]")!;
+const jupyterList = jupyterPanel.querySelector<HTMLElement>("[data-jupyter-list]")!;
+const jupyterVars = jupyterPanel.querySelector<HTMLElement>("[data-jupyter-vars]")!;
+const jupyterRuntime = jupyterPanel.querySelector<HTMLElement>("[data-jupyter-runtime]")!;
+const jupyterKernelTool = jupyterPanel.querySelector<HTMLElement>("[data-jupyter-kernel-tool]")!;
+const jupyterKernelLanguage = jupyterPanel.querySelector<HTMLSelectElement>("[data-jupyter-kernel-language]")!;
+const jupyterKernelSession = jupyterPanel.querySelector<HTMLSelectElement>("[data-jupyter-kernel-session]")!;
+const jupyterKernelOld = jupyterPanel.querySelector<HTMLSelectElement>("[data-jupyter-kernel-old]")!;
+const jupyterKernelNew = jupyterPanel.querySelector<HTMLSelectElement>("[data-jupyter-kernel-new]")!;
+const jupyterKernelCells = jupyterPanel.querySelector<HTMLElement>("[data-jupyter-kernel-cells]")!;
+
+const roamToolsPanel = document.createElement("section");
+roamToolsPanel.className = "aaronnote-roam-tools";
+roamToolsPanel.hidden = true;
+roamToolsPanel.innerHTML = `
+  <header>
+    <strong data-roam-tools-title>Roam tools</strong>
+    <button type="button" data-roam-tools-close>Close</button>
+  </header>
+  <div class="aaronnote-roam-tools-list" data-roam-tools-list></div>
+`;
+document.body.appendChild(roamToolsPanel);
+const roamToolsTitle = roamToolsPanel.querySelector<HTMLElement>("[data-roam-tools-title]")!;
+const roamToolsList = roamToolsPanel.querySelector<HTMLElement>("[data-roam-tools-list]")!;
+const roamToolsClose = roamToolsPanel.querySelector<HTMLButtonElement>("[data-roam-tools-close]")!;
+
+const modal = document.createElement("div");
+modal.className = "aaronnote-modal";
+modal.hidden = true;
+document.body.appendChild(modal);
+
+const taskManagerModal = document.createElement("div");
+taskManagerModal.className = "aaronnote-task-manager-backdrop";
+taskManagerModal.hidden = true;
+taskManagerModal.innerHTML = `
+  <section class="aaronnote-task-manager" role="dialog" aria-modal="true" aria-labelledby="aaronnote-task-manager-title">
+    <header class="aaronnote-task-manager-head">
+      <div>
+        <strong id="aaronnote-task-manager-title">Task Manager</strong>
+        <span data-task-manager-summary>Core task pool</span>
+      </div>
+      <div class="aaronnote-task-manager-head-actions">
+        <button type="button" data-task-manager-refresh>Refresh</button>
+        <button type="button" data-task-manager-dismiss aria-label="Close task manager">Close</button>
+      </div>
+    </header>
+    <nav class="aaronnote-task-manager-tabs" role="tablist">
+      <button type="button" role="tab" data-task-tab="active" aria-selected="true">Active tasks</button>
+      <button type="button" role="tab" data-task-tab="latex" aria-selected="false">LaTeX exports</button>
+    </nav>
+    <div class="aaronnote-task-manager-status" data-task-manager-status>Open or refresh to read Core state.</div>
+    <div class="aaronnote-task-manager-list" data-task-manager-list></div>
+  </section>
+`;
+document.body.appendChild(taskManagerModal);
+const taskManagerPanel = taskManagerModal.querySelector<HTMLElement>(".aaronnote-task-manager")!;
+const taskManagerList = taskManagerModal.querySelector<HTMLElement>("[data-task-manager-list]")!;
+const taskManagerStatus = taskManagerModal.querySelector<HTMLElement>("[data-task-manager-status]")!;
+const taskManagerSummary = taskManagerModal.querySelector<HTMLElement>("[data-task-manager-summary]")!;
+const taskManagerRefresh = taskManagerModal.querySelector<HTMLButtonElement>("[data-task-manager-refresh]")!;
+const taskManagerDismiss = taskManagerModal.querySelector<HTMLButtonElement>("[data-task-manager-dismiss]")!;
+const taskManagerTabs = [...taskManagerModal.querySelectorAll<HTMLButtonElement>("[data-task-tab]")];
+let taskManagerTab: "active" | "latex" = "active";
+let taskManagerSnapshot: CoreTask[] = [];
+let taskManagerLoading = false;
+let taskManagerPollTimer: number | null = null;
+
+function taskTime(value: unknown): string {
+  const date = new Date(String(value || ""));
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleString();
+}
+
+function taskMetadataLine(task: CoreTask): string {
+  const metadata = task.metadata || {};
+  return [metadata.file, metadata.outputPath, metadata.engine].map((value) => String(value || "").trim()).filter(Boolean).join(" · ");
+}
+
+function taskResultLine(task: CoreTask): string {
+  const result = task.result || {};
+  const agent = result.agent && typeof result.agent === "object" ? result.agent as Record<string, unknown> : null;
+  const elapsed = Number(agent?.elapsedMs || 0);
+  const agentText = agent
+    ? `${String(agent.backend || "agent")} polish${elapsed > 0 ? ` ${(elapsed / 1000).toFixed(1)}s` : ""} · ${Number(agent.applied || 0)} applied / ${Number(agent.kept || 0)} kept`
+    : "";
+  return [result.title, result.pdfFile || result.file, agentText].map((value) => String(value || "").trim()).filter(Boolean).join(" · ");
+}
+
+function visibleTaskWarnings(task: CoreTask): string[] {
+  const warnings = Array.isArray(task.result?.warnings) ? task.result.warnings.map(String) : [];
+  // Older retained export tasks may contain the removed Markdown-vs-LaTeX
+  // word-bag heuristic.  It was never a hard gate and is no longer emitted by
+  // Core; do not present that obsolete cached diagnostic as a current failure.
+  return warnings.filter((warning) => !/^fidelity:\s*~\d+/i.test(warning));
+}
+
+function visibleTaskSnapshot(): CoreTask[] {
+  return taskManagerSnapshot.filter((task) => taskManagerTab === "latex"
+    ? task.kind === "latex-export"
+    : ["queued", "running", "canceling"].includes(task.status));
+}
+
+function renderTaskManager(): void {
+  for (const tab of taskManagerTabs) {
+    const selected = tab.dataset.taskTab === taskManagerTab;
+    tab.setAttribute("aria-selected", String(selected));
+    tab.classList.toggle("is-active", selected);
+  }
+  const tasks = visibleTaskSnapshot();
+  const active = taskManagerSnapshot.filter((task) => ["queued", "running", "canceling"].includes(task.status)).length;
+  taskManagerSummary.textContent = `${active} active · ${taskManagerSnapshot.length} retained`;
+  taskManagerList.replaceChildren();
+  if (tasks.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "aaronnote-task-empty";
+    empty.textContent = taskManagerTab === "active" ? "No active tasks." : "No LaTeX export tasks in the current Core session.";
+    taskManagerList.appendChild(empty);
+    return;
+  }
+  for (const task of tasks) {
+    const card = document.createElement("article");
+    card.className = `aaronnote-task-card is-${task.status}`;
+    const head = document.createElement("div");
+    head.className = "aaronnote-task-card-head";
+    const identity = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = task.title || task.kind;
+    const kind = document.createElement("span");
+    kind.textContent = task.kind;
+    identity.append(title, kind);
+    const badge = document.createElement("span");
+    badge.className = "aaronnote-task-status-badge";
+    badge.textContent = task.status;
+    head.append(identity, badge);
+
+    const description = document.createElement("p");
+    description.textContent = task.description || "Core task";
+    const phase = document.createElement("div");
+    phase.className = "aaronnote-task-phase";
+    phase.textContent = `${task.phase || task.status}${task.message && task.message !== task.phase ? ` — ${task.message}` : ""}`;
+    const meta = document.createElement("div");
+    meta.className = "aaronnote-task-meta";
+    meta.textContent = [
+      taskMetadataLine(task),
+      task.startedAt ? `Started ${taskTime(task.startedAt)}` : `Created ${taskTime(task.createdAt)}`,
+      task.finishedAt ? `Finished ${taskTime(task.finishedAt)}` : "",
+    ].filter(Boolean).join(" · ");
+    card.append(head, description, phase, meta);
+
+    const resultText = taskResultLine(task);
+    if (resultText) {
+      const result = document.createElement("div");
+      result.className = "aaronnote-task-result";
+      result.textContent = resultText;
+      card.appendChild(result);
+    }
+    const warnings = visibleTaskWarnings(task);
+    if (warnings.length > 0 || task.error) {
+      const notice = document.createElement("div");
+      notice.className = task.error ? "aaronnote-task-error" : "aaronnote-task-warning";
+      notice.textContent = task.error || warnings.map(String).join("; ");
+      card.appendChild(notice);
+    }
+    if (task.progress?.length) {
+      const details = document.createElement("details");
+      const summary = document.createElement("summary");
+      summary.textContent = `Progress (${task.progress.length})`;
+      const log = document.createElement("ol");
+      for (const entry of task.progress) {
+        const item = document.createElement("li");
+        item.textContent = `${taskTime(entry.at)}  ${String(entry.text || "")}`.trim();
+        log.appendChild(item);
+      }
+      details.append(summary, log);
+      card.appendChild(details);
+    }
+    const agent = task.result?.agent && typeof task.result.agent === "object"
+      ? task.result.agent as Record<string, unknown>
+      : null;
+    const decisions = agent && Array.isArray(agent.decisions)
+      ? agent.decisions as Array<Record<string, unknown>>
+      : [];
+    const agentSummary = String(agent?.summary || "").trim();
+    if (agentSummary || decisions.length > 0) {
+      const details = document.createElement("details");
+      details.className = "aaronnote-task-agent-audit";
+      const summary = document.createElement("summary");
+      summary.textContent = `Agent audit (${decisions.length} decisions)`;
+      details.appendChild(summary);
+      if (agentSummary) {
+        const report = document.createElement("p");
+        report.textContent = agentSummary;
+        details.appendChild(report);
+      }
+      if (decisions.length > 0) {
+        const list = document.createElement("ul");
+        for (const decision of decisions) {
+          const item = document.createElement("li");
+          const id = String(decision.id || decision.kind || "review");
+          const action = String(decision.action || "reviewed");
+          const reason = String(decision.reason || "No reason returned");
+          item.textContent = `${id}: ${action} — ${reason}`;
+          list.appendChild(item);
+        }
+        details.appendChild(list);
+      }
+      card.appendChild(details);
+    }
+    const actions = document.createElement("div");
+    actions.className = "aaronnote-task-actions";
+    if (task.cancellable) {
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.textContent = "Cancel";
+      cancel.addEventListener("click", async () => {
+        cancel.disabled = true;
+        try { await api.tasks.cancel(task.id); } catch (error) { taskManagerStatus.textContent = error instanceof Error ? error.message : String(error); }
+        await refreshTaskManager();
+      });
+      actions.appendChild(cancel);
+    }
+    if (task.retryable) {
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.textContent = task.status === "completed" ? "Run again" : "Rerun";
+      retry.addEventListener("click", async () => {
+        retry.disabled = true;
+        try {
+          await api.tasks.retry(task.id);
+          taskManagerStatus.textContent = "LaTeX export queued again with the same inputs.";
+        } catch (error) {
+          taskManagerStatus.textContent = error instanceof Error ? error.message : String(error);
+        }
+        await refreshTaskManager();
+      });
+      actions.appendChild(retry);
+    }
+    if (task.closeable) {
+      const close = document.createElement("button");
+      close.type = "button";
+      close.textContent = "Close task";
+      close.addEventListener("click", async () => {
+        close.disabled = true;
+        try { await api.tasks.close(task.id); } catch (error) { taskManagerStatus.textContent = error instanceof Error ? error.message : String(error); }
+        await refreshTaskManager();
+      });
+      actions.appendChild(close);
+    }
+    if (actions.childElementCount > 0) card.appendChild(actions);
+    taskManagerList.appendChild(card);
+  }
+}
+
+async function refreshTaskManager(silent = false): Promise<void> {
+  if (taskManagerLoading) return;
+  taskManagerLoading = true;
+  taskManagerRefresh.disabled = true;
+  if (!silent) taskManagerStatus.textContent = "Reading Core task snapshot…";
+  try {
+    const result = await api.tasks.list();
+    taskManagerSnapshot = result.tasks || [];
+    const active = taskManagerSnapshot.some((task) => ["queued", "running", "canceling"].includes(task.status));
+    taskManagerStatus.textContent = `${active ? "Live task state" : "Snapshot refreshed"} ${new Date().toLocaleTimeString()}.`;
+    renderTaskManager();
+  } catch (error) {
+    taskManagerStatus.textContent = error instanceof Error ? error.message : String(error);
+  } finally {
+    taskManagerLoading = false;
+    taskManagerRefresh.disabled = false;
+  }
+}
+
+function closeTaskManager(): void {
+  taskManagerModal.hidden = true;
+  if (taskManagerPollTimer != null) window.clearInterval(taskManagerPollTimer);
+  taskManagerPollTimer = null;
+}
+
+function openTaskManager(): void {
+  taskManagerModal.hidden = false;
+  void refreshTaskManager();
+  if (taskManagerPollTimer == null) {
+    taskManagerPollTimer = window.setInterval(() => {
+      if (!taskManagerModal.hidden) void refreshTaskManager(true);
+    }, 1500);
+  }
+  window.setTimeout(() => taskManagerRefresh.focus(), 0);
+}
+
+taskManagerRefresh.addEventListener("click", () => void refreshTaskManager());
+taskManagerDismiss.addEventListener("click", closeTaskManager);
+taskManagerTabs.forEach((tab) => tab.addEventListener("click", () => {
+  taskManagerTab = tab.dataset.taskTab === "latex" ? "latex" : "active";
+  renderTaskManager();
+}));
+taskManagerModal.addEventListener("mousedown", (event) => { if (event.target === taskManagerModal) closeTaskManager(); });
+taskManagerPanel.addEventListener("mousedown", (event) => event.stopPropagation());
+window.addEventListener("keydown", (event) => {
+  if (!taskManagerModal.hidden && event.key === "Escape") { event.preventDefault(); closeTaskManager(); }
+});
+window.aaronnoteOpenTaskManager = openTaskManager;
+const snippetPopup = document.createElement("div");
+snippetPopup.className = "aaronnote-snippet-popup";
+snippetPopup.hidden = true;
+snippetPopup.setAttribute("role", "listbox");
+document.body.appendChild(snippetPopup);
+
+const mathPreview = document.createElement("div");
+mathPreview.className = "aaronnote-math-preview";
+mathPreview.hidden = true;
+document.body.appendChild(mathPreview);
+
+const selectionTool = document.createElement("div");
+selectionTool.className = "aaronnote-selection-tool";
+selectionTool.innerHTML = `
+  <button type="button" data-selection-command="bold" title="Bold">B</button>
+  <button type="button" data-selection-command="italic" title="Italic">I</button>
+  <button type="button" data-selection-command="highlight" title="Highlight">==</button>
+  <button type="button" data-selection-command="strike" title="Strikethrough">~~</button>
+  <button type="button" data-selection-command="code" title="Inline code">&lt;&gt;</button>
+  <button type="button" data-selection-command="superscript" title="Superscript">x²</button>
+  <button type="button" data-selection-command="subscript" title="Subscript">x₂</button>
+  <button type="button" data-selection-command="insert-footnote" title="Insert footnote">Fn</button>
+  <button type="button" data-selection-command="revision-form" title="Suggest revision">Rev</button>
+  <button type="button" data-selection-command="link" title="Link">@</button>
+  <span aria-hidden="true"></span>
+  <button type="button" data-selection-command="copy" title="Copy">Copy</button>
+  <button type="button" data-selection-command="more" title="More actions">...</button>
+  <div class="aaronnote-selection-more" data-selection-more hidden>
+    <button type="button" data-selection-command="insert-roam-idlink">Insert roam idlink...</button>
+  </div>
+  <form class="aaronnote-revision-form" data-revision-form hidden>
+    <input name="advice" placeholder="Replacement" aria-label="Revision replacement" required />
+    <input name="reason" placeholder="Reason (optional)" aria-label="Revision reason" />
+    <select name="style" aria-label="Revision colour">
+      <option value="indigo">Indigo</option><option value="teal">Teal</option>
+      <option value="red">Red</option><option value="green">Green</option><option value="yellow">Yellow</option>
+    </select>
+    <button type="submit">Insert</button>
+  </form>
+`;
+selectionTool.hidden = true;
+document.body.appendChild(selectionTool);
+const selectionMore = selectionTool.querySelector<HTMLElement>("[data-selection-more]")!;
+const selectionRoamIdlink = selectionTool.querySelector<HTMLButtonElement>("[data-selection-command='insert-roam-idlink']")!;
+const selectionRevisionForm = selectionTool.querySelector<HTMLFormElement>("[data-revision-form]")!;
+
+const contextMenu = document.createElement("div");
+contextMenu.className = "aaronnote-context-menu";
+contextMenu.hidden = true;
+contextMenu.setAttribute("role", "menu");
+document.body.appendChild(contextMenu);
+
+const bibliographyPanel = document.createElement("section");
+bibliographyPanel.className = "aaronnote-bib-panel";
+bibliographyPanel.hidden = true;
+
+const findPanel = document.createElement("div");
+findPanel.className = "aaronnote-find-panel";
+findPanel.hidden = true;
+findPanel.innerHTML = `
+  <input type="search" data-find-query autocomplete="off" spellcheck="false" />
+  <span data-find-count>0/0</span>
+  <button type="button" data-find-prev title="Previous">↑</button>
+  <button type="button" data-find-next title="Next">↓</button>
+  <button type="button" data-find-close title="Close">×</button>
+`;
+document.body.appendChild(findPanel);
+const findInput = findPanel.querySelector<HTMLInputElement>("[data-find-query]")!;
+const findCount = findPanel.querySelector<HTMLElement>("[data-find-count]")!;
+const findPrevButton = findPanel.querySelector<HTMLButtonElement>("[data-find-prev]")!;
+const findNextButton = findPanel.querySelector<HTMLButtonElement>("[data-find-next]")!;
+const findCloseButton = findPanel.querySelector<HTMLButtonElement>("[data-find-close]")!;
+
+let currentFile = "";
+let currentClient = "";
+let currentKind = "";
+let currentStandalone = false;
+let currentRemote = false;
+let currentReadOnly = initialReadOnly;
+let currentMtimeMs = 0;
+let revision = 0;
+let savedRevision = 0;
+let applyingContent = false;
+let saveTimer = 0;
+let saveIdleHandle = 0;
+let proseAutoSuspendedUntil = 0;
+let languageToolSettings: LanguageToolSettings = {
+  automaticEnabled: true,
+  serverUrl: "http://10.243.90.222:8765",
+  language: "en-US",
+  level: "picky",
+  performanceProfile: "balanced",
+  manualLocalFallback: true,
+  remoteTimeoutMs: 5_000,
+  retryCooldownMs: 30_000,
+};
+let languageToolDefaults = { ...languageToolSettings };
+let languageToolHealth = "Not tested";
+let languageToolRevision = "";
+let languageToolLoadSequence = 0;
+let activeProseDiagnostic: ProseDiagnostic | null = null;
+let cursorPositionsLoaded = false;
+let cursorPositions: CursorPosition[] = [];
+let lastSavedCursorPositionKey = "";
+let lastTrackedCursorPositionKey = "";
+let cursorPositionFlushInFlight = false;
+let cursorPositionFlushQueued = false;
+let clientCloseNotified = false;
+let pendingExternalSave: { file: string; mtimeMs: number } | null = null;
+let pendingExternalSaveRefreshInFlight = false;
+let navigationBackStack: CursorPosition[] = [];
+let restoringNavigationBack = false;
+let snippets: SnippetSummary[] = [];
+let notes: NoteSummary[] = [];
+let pathSuggestions: string[] = [];
+// Tracks the index version from the last notesIndexPayload response so we can
+// detect when the server's watcher has bumped the index due to external changes.
+let lastNotesIndexVersion = 0;
+// True when a notes-index-changed event arrived while the page was hidden;
+// triggers reloadNotes on the next visibility-restore.
+let pendingNotesRefresh = false;
+const notesRefreshTimer = new CoalescedTimer(500);
+// Ephemeral request-level cache for completions — NOT a roam business cache.
+// Holds results only for the duration of the current completion session (same
+// context key). Discarded as soon as the context key changes.
+const completionEpoch = new Epoch();
+const completionTimer = new CoalescedTimer(60);
+let completionContextKey = "";
+let completionPendingItems: SnippetSummary[] | null = null;
+let pendingOpenHash = "";
+let pendingOpenDomTarget = "";
+let pendingTodoTarget: TodoTarget | null = null;
+let snippetPopupItems: SnippetSummary[] = [];
+let snippetPopupIndex = 0;
+let snippetDeleteBefore = 0;
+let snippetSuppressedPrefix = "";
+let snippetCompletionArmed = false;
+let snippetRenderKey = "";
+let snippetPopupMatchKey = "";
+const snippetUsage = new SnippetUsageStore();
+
+const BUILTIN_SNIPPET_SOURCE = "aaronnote:builtin";
+const LATEX_MARK_SNIPPETS: SnippetSummary[] = latexMarkSnippetDefinitions().map((snippet) => ({
+  ...snippet,
+  mode: "markdown-mode",
+  group: "Noema LaTeX marks",
+  kind: "",
+  source: BUILTIN_SNIPPET_SOURCE,
+}));
+const BUILTIN_SNIPPETS: SnippetSummary[] = [{
+  key: ":",
+  name: "Display math",
+  mode: "markdown-mode",
+  group: "Noema builtin",
+  kind: "",
+  body: "\\[\n$1\n\\]\n$0",
+  source: BUILTIN_SNIPPET_SOURCE,
+}, {
+  key: "cite",
+  name: "Citation",
+  mode: "markdown-mode",
+  group: "Noema builtin",
+  kind: "",
+  body: "@@cite(${1:namespace}) [${2:key}]$0",
+  source: BUILTIN_SNIPPET_SOURCE,
+}, {
+  key: "latexmk",
+  name: "LaTeX mark",
+  mode: "markdown-mode",
+  group: "Noema builtin",
+  kind: "",
+  body: `@@latexmk(\${1|${latexMarkNames().join(",")}|})$0`,
+  source: BUILTIN_SNIPPET_SOURCE,
+}, ...AARONNOTE_AUTHORING_SNIPPETS.map((snippet) => ({
+  ...snippet,
+  mode: "markdown-mode",
+  group: snippet.context === "org-meta" ? "Noema metadata" : "Noema authoring",
+  kind: "",
+  source: BUILTIN_SNIPPET_SOURCE,
+})), ...LATEX_MARK_SNIPPETS];
+let paused = false;
+const pauseReasons = new Set<string>();
+let mathPreviewKey = "";
+let mathPreviewPendingErrorKey = "";
+let mathPreviewErrorTimer = 0;
+let mathPreviewWidth = 0;
+const clientId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+const changeHandlers = new Set<() => void>();
+const MATH_PREVIEW_ERROR_IDLE_MS = 650;
+const MATH_PREVIEW_ERROR_MAX_LENGTH = 180;
+const NAVIGATION_BACK_STACK_MAX = 80;
+const PROSE_SCOPE_PADDING = 32 * 1024;
+const PROSE_SCOPE_MAX_CHARS = 180_000;
+const LANGUAGETOOL_LOCAL_DEADLINE_ALLOWANCE_MS = 17_000;
+const PROSE_PROFILES = {
+  responsive: { idleMs: 1_000, scrollMs: 500, padding: 4 * 1024, maxChars: 32 * 1024 },
+  balanced: { idleMs: 1_800, scrollMs: 700, padding: 4 * 1024, maxChars: 32 * 1024 },
+  quiet: { idleMs: 3_000, scrollMs: 1_200, padding: 2 * 1024, maxChars: 16 * 1024 },
+} as const;
+const LARGE_DOCUMENT_CHARS = 512 * 1024;
+const editorCommands = new Set<EditorCommand>([
+  "bold",
+  "italic",
+  "highlight",
+  "strike",
+  "code",
+  "link",
+  "superscript",
+  "subscript",
+  "insert-footnote",
+  "insert-revision",
+  "edit-properties",
+  "move-block-up",
+  "move-block-down",
+  "blockquote",
+  "bullet-list",
+  "ordered-list",
+  "task-list",
+  "code-block",
+  "paragraph-menu",
+  "insert-table",
+  "insert-math-block",
+  "insert-toc",
+  "insert-org-env",
+  "image-edit",
+  "table-insert-row",
+  "table-insert-column",
+  "table-delete-row",
+  "table-delete-column",
+  "heading-1",
+  "heading-2",
+  "heading-3",
+  "heading-4",
+  "heading-5",
+  "heading-6",
+  "fold-heading",
+  "unfold-heading",
+  "toggle-fold",
+  "fold-all-headings",
+  "unfold-all-headings",
+  "copy-code",
+]);
+
+window.AaronnoteCurrentFile = () => currentFile;
+
+type EditorScrollSnapshot = {
+  hostTop: number;
+  hostLeft: number;
+  scrollTop: number;
+  scrollLeft: number;
+  windowX: number;
+  windowY: number;
+};
+
+type ApplyOpenedNoteOptions = {
+  revealCursor?: boolean;
+  focusEditor?: boolean;
+  updateStatus?: boolean;
+  resetVim?: boolean;
+  reloadNotes?: boolean;
+  restoreScroll?: EditorScrollSnapshot | null;
+  preserveSelection?: CursorPosition | null;
+};
+
+async function uploadPasteBlobAsset(
+  blob: Blob,
+  meta: { file?: string; name?: string; type?: string },
+): Promise<StoredPasteAsset> {
+  return api.assets.upload({
+    file: meta.file || currentFile,
+    name: meta.name,
+    type: meta.type || blob.type,
+    data: await blobToBase64(blob),
+  });
+}
+
+async function storePasteAssetFromPath(
+  path: string,
+  meta: { file?: string; name?: string; type?: string },
+): Promise<StoredPasteAsset> {
+  return api.assets.storeFromPath({
+    file: meta.file || currentFile,
+    path,
+    name: meta.name,
+    type: meta.type,
+  });
+}
+
+async function readSystemClipboardForPaste(): Promise<EditorClipboardPayload | null> {
+  try {
+    const payload = await api.clipboard.read({ file: currentFile }) as EditorClipboardPayload;
+    return payload && typeof payload === "object" ? payload : null;
+  } catch {
+    return null;
+  }
+}
+
+function roamFeaturesEnabled(): boolean {
+  return !currentStandalone;
+}
+
+let lastEmacsStatus = "";
+let lastEmacsStatusAt = 0;
+let pendingEmacsStatusTimer: number | null = null;
+let pendingEmacsStatus: { message: string; severity: "info" | "warning" | "error" } | null = null;
+
+function statusSeverity(message: string): "warning" | "error" | null {
+  if (/\b(?:error|failed?|conflict|not found|unavailable)\b/i.test(message)) return "error";
+  if (/\b(?:warning|warn|changed in another pane)\b/i.test(message)) return "warning";
+  return null;
+}
+
+function routineStatus(message: string): boolean {
+  return /^(?:opening(?:\.\.\.)?|saved|edited|ready)$/i.test(message.trim());
+}
+
+function sendImportantStatus(message: string, severity: "info" | "warning" | "error"): void {
+  const send = (next: { message: string; severity: "info" | "warning" | "error" }) => {
+    lastEmacsStatus = next.message;
+    lastEmacsStatusAt = performance.now();
+    void api.emacs.uiState({ client: currentClient, status: next.message, severity: next.severity });
+  };
+  if (severity === "error" || performance.now() - lastEmacsStatusAt >= 450) {
+    if (pendingEmacsStatusTimer !== null) window.clearTimeout(pendingEmacsStatusTimer);
+    pendingEmacsStatusTimer = null;
+    pendingEmacsStatus = null;
+    send({ message, severity });
+    return;
+  }
+  pendingEmacsStatus = { message, severity };
+  if (pendingEmacsStatusTimer !== null) return;
+  pendingEmacsStatusTimer = window.setTimeout(() => {
+    pendingEmacsStatusTimer = null;
+    const next = pendingEmacsStatus;
+    pendingEmacsStatus = null;
+    if (next && next.message !== lastEmacsStatus) send(next);
+  }, Math.max(0, 450 - (performance.now() - lastEmacsStatusAt)));
+}
+
+function setStatus(message: string): void {
+  statusLabel.textContent = message;
+  delete statusLabel.dataset.proseOwner;
+  const severity = statusSeverity(message);
+  if (!routineStatus(message) && message !== lastEmacsStatus) {
+    sendImportantStatus(message, severity || "info");
+  }
+}
+
+let coreWasDisconnected = api.connection.status() === "disconnected";
+const coreReconnectController = api.connection.supported()
+  ? installActiveCoreReconnect({
+      connection: api.connection,
+      onStatus(status) {
+        if (status === "disconnected") {
+          coreWasDisconnected = true;
+          // Do not mirror this message through the unavailable core.
+          statusLabel.textContent = "Core disconnected — focus, click, or type to reconnect";
+          return;
+        }
+        if (status === "connecting") {
+          if (coreWasDisconnected) statusLabel.textContent = "Reconnecting to core…";
+          return;
+        }
+        if (coreWasDisconnected) {
+          coreWasDisconnected = false;
+          setStatus("Core reconnected");
+        }
+      },
+    })
+  : null;
+
+function setOwnedProseStatus(requestId: number, message: string): void {
+  setStatus(message);
+  statusLabel.dataset.proseOwner = String(requestId);
+}
+
+function applyReadOnlyUi(): void {
+  root.classList.toggle("is-readonly", currentReadOnly);
+  root.dataset.readonly = currentReadOnly ? "true" : "false";
+  document.body.dataset.readonly = currentReadOnly ? "true" : "false";
+  readOnlyLabel.hidden = !currentReadOnly;
+  saveButton.hidden = currentReadOnly;
+  saveButton.disabled = currentReadOnly;
+  if (currentReadOnly) {
+    sourceButton.title = "Toggle source view (read-only)";
+  } else {
+    sourceButton.removeAttribute("title");
+  }
+}
+
+function rejectReadOnlyAction(action = "Read-only pane"): boolean {
+  if (!currentReadOnly) return false;
+  setStatus(action);
+  return true;
+}
+
+function snippetIdentity(snippet: SnippetSummary): string {
+  return `${snippet.kind || ""}\0${snippet.mode || ""}\0${snippet.key || ""}`;
+}
+
+function withBuiltinSnippets(items: readonly SnippetSummary[] = []): SnippetSummary[] {
+  const builtins = new Map(BUILTIN_SNIPPETS.map((snippet) => [snippetIdentity(snippet), snippet]));
+  return [
+    ...items.filter((snippet) => !builtins.has(snippetIdentity(snippet))),
+    ...BUILTIN_SNIPPETS,
+  ];
+}
+snippets = withBuiltinSnippets(snippets);
+
+function updateTitle(): void {
+  const name = currentFile.split(/[\\/]/).at(-1) || "Noema";
+  fileLabel.textContent = name;
+  document.title = currentReadOnly
+    ? `${name} (read-only)`
+    : revision === savedRevision ? name : `* ${name}`;
+}
+
+function renderModeToggleLabel(mode: VimLiteMode): void {
+  if (slideDeck?.isRevealView()) {
+    const target = slideDeck.getTheme() === "dark" ? "light" : "dark";
+    modeLabel.textContent = target.toUpperCase();
+    modeToggle.title = `Switch slides to ${target} theme`;
+    modeToggle.setAttribute("aria-label", `Switch slides to ${target} theme`);
+    modeToggle.setAttribute("aria-expanded", "false");
+    modeToggle.classList.remove("is-active");
+  } else {
+    modeLabel.textContent = mode.toUpperCase();
+    modeToggle.title = "Toggle tools";
+    modeToggle.setAttribute("aria-label", "Toggle tools");
+  }
+}
+
+function updateModeLabel(mode: VimLiteMode): void {
+  renderModeToggleLabel(mode);
+  modeLabel.dataset.mode = mode;
+  root.dataset.vimMode = mode;
+  host.dataset.vimMode = mode;
+  document.body.dataset.vimMode = mode;
+  if (mode === "normal") noteCursorPositionEvent();
+  scheduleAssistUpdate({ mathPreview: true, cursor: true });
+}
+
+function subscribe<K extends keyof DocumentEventMap>(
+  type: K,
+  handler: (event: DocumentEventMap[K]) => void,
+  options?: AddEventListenerOptions,
+): () => void {
+  document.addEventListener(type, handler, options);
+  return () => document.removeEventListener(type, handler, options);
+}
+
+// Forward ref patched after vim is created (avoids TDZ while keeping reset near vim).
+let onBlurVimReset: (() => void) | undefined;
+let slideDeck: SlideDeckController | null = null;
+let writingStatsController: WritingStatsController | null = null;
+
+const editor = createEditor(host, {
+  initialContent: "",
+  readOnly: initialReadOnly,
+  getCurrentFile: () => currentFile,
+  pasteAssets: {
+    uploadBlobAsset: uploadPasteBlobAsset,
+    storeAssetFromPath: storePasteAssetFromPath,
+  },
+  readSystemClipboardFallback: readSystemClipboardForPaste,
+  onChange: () => {
+    if (!applyingContent) revision += 1;
+    updateTitle();
+    changeHandlers.forEach((handler) => handler());
+    scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true, toc: true });
+    if (bibliographyResolutionDirty) scheduleBibliographyRefresh();
+    if (!currentReadOnly) scheduleSave();
+    scheduleWritingStats(true);
+    if (!applyingContent && !currentReadOnly) {
+      proseLifecycle.invalidate("document-edited");
+      scheduleAutomaticProseCheck();
+    }
+    slideDeck?.refresh();
+  },
+  onSelectionChange: () => {
+    scheduleWritingStats(writingStatsController?.isDocumentChanged() ?? true);
+  },
+  onBlur: () => {
+    onBlurVimReset?.();
+    void flushCursorPosition();
+  },
+});
+host.appendChild(bibliographyPanel);
+slideDeck = createSlideDeckController({ root, host, editor, getCurrentFile: () => currentFile });
+writingStatsController = createWritingStatsController(editor, writingStatsLabel);
+
+let bibliographyModel: BibliographyDocument = { ok: true, entries: [], references: [], citations: [], namespaces: [] };
+let bibliographyModelKey = "";
+let bibliographyModelCommands: BibliographyCommandRange[] = [];
+let bibliographyWatchRanges: BibliographyWatchRange[] = [];
+let bibliographyResolutionDirty = false;
+let bibliographyRenderVersion = 0;
+let bibliographyRequestSeq = 0;
+let bibliographyHighlightTimer = 0;
+const bibliographyTimer = new CoalescedTimer(180);
+
+function syncBibliographyRanges(changes: readonly BibliographyTextChange[]): void {
+  // This callback runs inside the CodeMirror view update, before decorations
+  // and the public onChange callback. Keep positions synchronous for a stable
+  // label, but only mark semantic edits for the trailing full-document scan.
+  if (bibliographyChangesRequireResolution(changes, bibliographyWatchRanges)) {
+    bibliographyResolutionDirty = true;
+  }
+  mapBibliographyRangesThroughChanges(
+    bibliographyModel,
+    bibliographyModelCommands,
+    changes,
+  );
+  mapBibliographyWatchRangesThroughChanges(bibliographyWatchRanges, changes);
+}
+
+function citationAtRange(from: number, to: number): BibliographyCitation | undefined {
+  return (bibliographyModel.citations ?? []).find((cite) => cite.from === from && cite.to === to);
+}
+
+function referenceById(id: string): BibliographyReference | undefined {
+  return (bibliographyModel.references ?? []).find((ref) => ref.id === id);
+}
+
+function bibliographyDiagnosticText(diagnostic: BibliographyDiagnostic): string {
+  if (typeof diagnostic === "string") return diagnostic.trim();
+  return String(diagnostic.message || diagnostic.detail || diagnostic.code || "Bibliography issue").trim();
+}
+
+function bibliographyDiagnosticTexts(diagnostics: readonly BibliographyDiagnostic[] | undefined): string[] {
+  return (diagnostics ?? []).map(bibliographyDiagnosticText).filter(Boolean);
+}
+
+function citationDiagnosticTexts(cite: BibliographyCitation | undefined): string[] {
+  return [...new Set([
+    ...bibliographyDiagnosticTexts(cite?.diagnostics),
+    ...(cite?.items ?? []).flatMap((item) => bibliographyDiagnosticTexts(item.diagnostics)),
+  ])];
+}
+
+function renderBibliographyPanel(): void {
+  const refs = bibliographyModel.references ?? [];
+  const diagnostics = bibliographyModel.diagnostics ?? [];
+  bibliographyPanel.hidden = refs.length === 0 && diagnostics.length === 0;
+  bibliographyPanel.replaceChildren();
+  if (diagnostics.length > 0) {
+    const notice = document.createElement("section");
+    notice.className = "aaronnote-bib-diagnostics";
+    notice.setAttribute("role", "status");
+    notice.setAttribute("aria-label", "Bibliography issues");
+    const heading = document.createElement("h2");
+    heading.textContent = "Bibliography issues";
+    const issues = document.createElement("ul");
+    for (const diagnostic of diagnostics) {
+      const item = document.createElement("li");
+      item.textContent = bibliographyDiagnosticText(diagnostic);
+      if (typeof diagnostic !== "string" && diagnostic.severity) item.dataset.severity = diagnostic.severity;
+      issues.appendChild(item);
+    }
+    notice.append(heading, issues);
+    bibliographyPanel.appendChild(notice);
+  }
+  if (refs.length === 0) return;
+  const title = document.createElement("h2");
+  title.textContent = "References";
+  bibliographyPanel.appendChild(title);
+  const list = document.createElement("ol");
+  list.className = "aaronnote-bib-list";
+  for (const ref of refs) {
+    const item = document.createElement("li");
+    item.className = "aaronnote-bib-item";
+    item.id = `aaronnote-bib-ref-${ref.number}`;
+    item.dataset.bibId = ref.id || "";
+    const text = document.createElement("span");
+    text.className = "aaronnote-bib-text";
+    text.textContent = ref.text || "";
+    item.appendChild(text);
+    for (const link of ref.links ?? []) {
+      if (!link.href) continue;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "aaronnote-bib-link";
+      button.textContent = link.label || "link";
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void api.emacs.systemOpen(link.href!, currentFile).catch((err) => setStatus(err instanceof Error ? err.message : "Open link failed"));
+      });
+      item.appendChild(button);
+    }
+    item.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      showReferenceContextMenu(ref, event.clientX, event.clientY);
+    });
+    list.appendChild(item);
+  }
+  bibliographyPanel.appendChild(list);
+}
+
+function refreshBibliographyDecorations(): void {
+  bibliographyRenderVersion += 1;
+  refreshViewportDecorationsNow(editor.view);
+  renderBibliographyPanel();
+}
+
+async function refreshBibliography(force = false): Promise<void> {
+  bibliographyResolutionDirty = false;
+  const content = editor.getMarkdown();
+  const state = bibliographyResolutionState(content);
+  const key = `${currentFile}\n${state.key}`;
+  if (!state.hasCitationSyntax) {
+    bibliographyRequestSeq += 1;
+    const changed = bibliographyModelKey !== key
+      || (bibliographyModel.citations?.length ?? 0) > 0
+      || (bibliographyModel.references?.length ?? 0) > 0
+      || (bibliographyModel.diagnostics?.length ?? 0) > 0;
+    bibliographyModel = { ok: true, entries: [], references: [], citations: [], namespaces: [] };
+    bibliographyModelKey = key;
+    bibliographyModelCommands = [];
+    bibliographyWatchRanges = state.watchRanges;
+    if (changed) refreshBibliographyDecorations();
+    return;
+  }
+  if (!force && key === bibliographyModelKey) {
+    const changed = alignBibliographyCitationRanges(bibliographyModel, bibliographyModelCommands, state.commands);
+    bibliographyModelCommands = state.commands;
+    bibliographyWatchRanges = state.watchRanges;
+    if (changed) refreshBibliographyDecorations();
+    return;
+  }
+  const requestSeq = ++bibliographyRequestSeq;
+  try {
+    const nextModel = await api.bibliography.document({ file: currentFile, content });
+    const currentContent = editor.getMarkdown();
+    const currentState = bibliographyResolutionState(currentContent);
+    const currentKey = `${currentFile}\n${currentState.key}`;
+    if (requestSeq !== bibliographyRequestSeq || key !== currentKey) return;
+    alignBibliographyCitationRanges(nextModel, state.commands, currentState.commands);
+    bibliographyModel = nextModel;
+    bibliographyModelKey = key;
+    bibliographyModelCommands = currentState.commands;
+    bibliographyWatchRanges = currentState.watchRanges;
+    const diagnostics = bibliographyDiagnosticTexts(nextModel.diagnostics);
+    if (diagnostics.length > 0) {
+      const more = diagnostics.length > 1 ? ` (+${diagnostics.length - 1} more)` : "";
+      setStatus(`Bibliography: ${diagnostics[0]}${more}`);
+    }
+  } catch (error) {
+    if (requestSeq !== bibliographyRequestSeq) return;
+    const currentContent = editor.getMarkdown();
+    const currentState = bibliographyResolutionState(currentContent);
+    const currentKey = `${currentFile}\n${currentState.key}`;
+    if (key !== currentKey) return;
+    bibliographyModel = { ok: false, entries: [], references: [], citations: [], namespaces: [], message: error instanceof Error ? error.message : "Bibliography failed" };
+    // Cache failures by resolution input as well. Unrelated typing must not
+    // hammer a failing bibliography endpoint; a citation/meta edit, explicit
+    // refresh, or bibliography-index event will retry it.
+    bibliographyModelKey = key;
+    bibliographyModelCommands = currentState.commands;
+    bibliographyWatchRanges = currentState.watchRanges;
+    setStatus(bibliographyModel.message || "Bibliography failed");
+  }
+  refreshBibliographyDecorations();
+}
+
+function scheduleBibliographyRefresh(force = false): void {
+  bibliographyTimer.schedule(() => void refreshBibliography(force));
+}
+
+function citeLocator(cite: BibliographyCitation | undefined): string {
+  const args = cite?.args ?? {};
+  return String(args.locator || args.page || args.pages || "").trim();
+}
+
+function citePrefix(cite: BibliographyCitation | undefined): string {
+  return String(cite?.args?.prefix || "").trim();
+}
+
+function citeSuffix(cite: BibliographyCitation | undefined): string {
+  return String(cite?.args?.suffix || "").trim();
+}
+
+function citationKeys(cite: BibliographyCitation | undefined): string[] {
+  if (cite?.keys?.length) return cite.keys;
+  return (cite?.items ?? []).map((item) => String(item.key || "").trim()).filter(Boolean);
+}
+
+function citationItemIds(cite: BibliographyCitation | undefined): string[] {
+  if (cite?.itemIds?.length) return cite.itemIds;
+  return (cite?.items ?? []).map((item) => String(item.itemId || item.id || "").trim()).filter(Boolean);
+}
+
+function citationLabel(from: number, to: number): { label: string; title?: string; error?: boolean } | null {
+  const cite = citationAtRange(from, to);
+  if (!cite) return { label: "[?]", title: "Resolving citation", error: true };
+  const diagnostics = citationDiagnosticTexts(cite);
+  const numbers = [...new Set((cite.numbers ?? cite.items?.map((item) => item.number) ?? [])
+    .filter((number): number is number => typeof number === "number" && Number.isFinite(number)))];
+  if (diagnostics.length > 0 || numbers.length === 0) {
+    return {
+      label: "[?]",
+      title: diagnostics.join("; ") || "Citation did not resolve any references",
+      error: true,
+    };
+  }
+  const locator = citeLocator(cite);
+  const label = `[${numbers.join(", ")}${locator ? `, ${locator}` : ""}]`;
+  const prefix = citePrefix(cite);
+  const suffix = citeSuffix(cite);
+  return { label: formatCitationLabel(label, prefix, suffix), title: citationKeys(cite).join("; ") };
+}
+
+function highlightReference(ref: BibliographyReference | undefined): void {
+  if (!ref?.number) return;
+  window.clearTimeout(bibliographyHighlightTimer);
+  bibliographyPanel.hidden = false;
+  bibliographyPanel.querySelectorAll(".is-highlight").forEach((el) => el.classList.remove("is-highlight"));
+  const item = bibliographyPanel.querySelector<HTMLElement>(`#aaronnote-bib-ref-${ref.number}`);
+  if (!item) {
+    setStatus(`Reference [${ref.number}] is not rendered`);
+    return;
+  }
+  item.scrollIntoView({ block: "center", behavior: "auto" });
+  item.classList.add("is-highlight");
+  setStatus(`Reference [${ref.number}] · ${ref.entry?.key || ""}`);
+  bibliographyHighlightTimer = window.setTimeout(() => item.classList.remove("is-highlight"), 1600);
+}
+
+function zoteroHrefForEntry(entry: BibliographyReference["entry"] | undefined): string {
+  const fields = entry?.fields ?? {};
+  const keys = ["zotero", "zoteroselect", "zotero_select", "zotero-link", "zotero_link"];
+  for (const key of keys) {
+    const value = String(fields[key] || "").trim();
+    if (/^zotero:\/\//i.test(value)) return value;
+  }
+  return "";
+}
+
+function zoteroHrefForReference(ref: BibliographyReference | undefined): string {
+  const direct = zoteroHrefForEntry(ref?.entry);
+  if (direct) return direct;
+  return ref?.links?.find((link) => /^zotero:\/\//i.test(String(link.href || "")))?.href || "";
+}
+
+async function openReferenceInZotero(ref: BibliographyReference | undefined): Promise<void> {
+  const entry = ref?.entry;
+  if (!entry) {
+    setStatus("No reference to open in Zotero");
+    return;
+  }
+  const fields = entry.fields ?? {};
+  await api.emacs.zotero({
+    uri: zoteroHrefForReference(ref),
+    key: entry.key || "",
+    doi: fields.doi || fields.DOI || "",
+    title: fields.title || "",
+    bibFile: entry.file || "",
+    namespace: entry.namespace || "",
+    currentFile,
+    client: currentClient,
+  });
+  setStatus(`Sent ${entry.key || "reference"} to Emacs Zotero`);
+}
+
+function citationPrimaryReference(cite: BibliographyCitation | undefined): BibliographyReference | undefined {
+  const id = citationItemIds(cite)[0];
+  return id ? referenceById(id) : undefined;
+}
+
+function openCitationFromWidget(from: number, to: number, _rect: DOMRect, jump: boolean): void {
+  const ref = citationPrimaryReference(citationAtRange(from, to));
+  if (jump) highlightReference(ref);
+}
+
+function editCitationArgs(from: number, to: number): void {
+  if (currentReadOnly) return;
+  const source = editor.getMarkdown().slice(from, to);
+  const argsPattern = /[ \t]*\{([^{}\n]*)\}[ \t]*$/;
+  const argsMatch = source.match(argsPattern);
+  const current = argsMatch?.[1] ?? "";
+  const next = window.prompt("Edit @@cite args", current);
+  if (next == null) return;
+  const clean = next.trim();
+  const replacement = argsMatch
+    ? source.replace(argsPattern, clean ? ` {${clean}}` : "")
+    : `${source}${clean ? ` {${clean}}` : ""}`;
+  editor.replaceMarkdownRange(from, to, replacement, "end");
+  scheduleBibliographyRefresh(true);
+}
+
+async function openBibEntryInEmacs(entry: BibliographyReference["entry"] | undefined): Promise<void> {
+  if (!entry?.file) {
+    setStatus("No BibTeX file for reference");
+    return;
+  }
+  await api.emacs.open({ file: entry.file });
+  setStatus(`Opened ${entry.path || entry.file} in ${sourceEditorName()}`);
+}
+
+async function openCitationBibInEmacs(from: number, to: number): Promise<void> {
+  const cite = citationAtRange(from, to);
+  const id = citationItemIds(cite)[0];
+  const entry = id ? referenceById(id)?.entry : undefined;
+  await openBibEntryInEmacs(entry);
+}
+
+function citationReferences(cite: BibliographyCitation | undefined): BibliographyReference[] {
+  const refs: BibliographyReference[] = [];
+  const seen = new Set<string>();
+  for (const id of citationItemIds(cite)) {
+    if (!id || seen.has(id)) continue;
+    const ref = referenceById(id);
+    if (!ref) continue;
+    seen.add(id);
+    refs.push(ref);
+  }
+  return refs;
+}
+
+function bibliographyContextPreview(refs: readonly BibliographyReference[]): HTMLElement {
+  const preview = document.createElement("section");
+  preview.className = "aaronnote-bib-context-preview";
+  preview.setAttribute("aria-label", "Reference preview");
+  for (const ref of refs) {
+    const article = document.createElement("article");
+    const title = document.createElement("strong");
+    title.textContent = `[${ref.number || "?"}] ${ref.entry?.key || ""}`;
+    const text = document.createElement("p");
+    const repeatedNumber = ref.number ? new RegExp(`^\\[${ref.number}\\]\\s*`) : null;
+    text.textContent = repeatedNumber ? String(ref.text || "").replace(repeatedNumber, "") : ref.text || "";
+    article.append(title, text);
+    preview.appendChild(article);
+  }
+  if (refs.length === 0) {
+    const diagnostic = document.createElement("p");
+    diagnostic.textContent = "Reference is unresolved.";
+    preview.appendChild(diagnostic);
+  }
+  return preview;
+}
+
+function bibliographyLinkActions(refs: readonly BibliographyReference[]): AaronContextMenuItem[] {
+  const items: AaronContextMenuItem[] = [];
+  const seen = new Set<string>();
+  for (const ref of refs) {
+    for (const link of ref.links ?? []) {
+      const href = String(link.href || "").trim();
+      if (!href || /^zotero:\/\//i.test(href) || seen.has(href)) continue;
+      seen.add(href);
+      const number = refs.length > 1 ? ` [${ref.number || "?"}]` : "";
+      items.push({
+        label: `Open ${link.label || "link"}${number}`,
+        detail: href,
+        run: () => api.emacs.systemOpen(href, currentFile),
+      });
+    }
+  }
+  return items;
+}
+
+function showBibliographyContextMenu(
+  refs: readonly BibliographyReference[],
+  items: readonly AaronContextMenuItem[],
+  x: number,
+  y: number,
+): void {
+  contextMenu.classList.add("is-bibliography");
+  const nodes: HTMLElement[] = [bibliographyContextPreview(refs)];
+  if (items.length > 0) nodes.push(contextMenuItem({ separator: true, label: "" }));
+  nodes.push(...items.map(contextMenuItem));
+  contextMenu.replaceChildren(...nodes);
+  contextMenu.hidden = false;
+  const rect = contextMenu.getBoundingClientRect();
+  contextMenu.style.left = `${Math.max(6, Math.min(window.innerWidth - rect.width - 6, x))}px`;
+  contextMenu.style.top = `${Math.max(6, Math.min(window.innerHeight - rect.height - 6, y))}px`;
+}
+
+function showCitationContextMenu(from: number, to: number, x: number, y: number): void {
+  const cite = citationAtRange(from, to);
+  const refs = citationReferences(cite);
+  const keys = citationKeys(cite);
+  const items: AaronContextMenuItem[] = [
+    { label: "Edit Cite Args...", detail: "{prefix/locator/suffix}", disabled: currentReadOnly, run: () => editCitationArgs(from, to) },
+    ...refs.map((ref) => ({
+      label: refs.length > 1 ? `Jump to Reference [${ref.number || "?"}]` : "Jump to Reference",
+      detail: ref.entry?.key || "",
+      run: () => highlightReference(ref),
+    })),
+    ...bibliographyLinkActions(refs),
+    ...refs.map((ref) => ({
+      label: refs.length > 1 ? `Open [${ref.number || "?"}] in Zotero` : "Open in Zotero",
+      detail: ref.entry?.key || ref.entry?.fields?.doi || "Emacs search",
+      disabled: !ref.entry,
+      run: () => openReferenceInZotero(ref),
+    })),
+    { label: `Open Bib in ${sourceEditorName()}`, detail: refs[0]?.entry?.path || "", disabled: !refs[0]?.entry?.file, run: () => openCitationBibInEmacs(from, to) },
+    { label: "Copy Citation Key", detail: keys.join("; "), disabled: keys.length === 0, run: () => copyText(keys.join("; ")) },
+  ];
+  showBibliographyContextMenu(refs, items, x, y);
+}
+
+function showReferenceContextMenu(ref: BibliographyReference, x: number, y: number): void {
+  const items: AaronContextMenuItem[] = [
+    { label: "Jump to Reference", detail: ref.entry?.key || "", run: () => highlightReference(ref) },
+    ...bibliographyLinkActions([ref]),
+    { label: "Open in Zotero", detail: ref.entry?.key || ref.entry?.fields?.doi || "Emacs search", disabled: !ref.entry, run: () => openReferenceInZotero(ref) },
+    { label: `Open Bib in ${sourceEditorName()}`, detail: ref.entry?.path || "", disabled: !ref.entry?.file, run: () => openBibEntryInEmacs(ref.entry) },
+    { label: "Copy Citation Key", detail: ref.entry?.key || "", disabled: !ref.entry?.key, run: () => copyText(ref.entry?.key || "") },
+  ];
+  showBibliographyContextMenu([ref], items, x, y);
+}
+
+window.AaronnoteBibliography = {
+  citationLabel,
+  version: () => bibliographyRenderVersion,
+  mapChanges: syncBibliographyRanges,
+  openCitation: openCitationFromWidget,
+  contextMenu: showCitationContextMenu,
+};
+
+function captureEditorScroll(): EditorScrollSnapshot {
+  return {
+    hostTop: host.scrollTop,
+    hostLeft: host.scrollLeft,
+    scrollTop: editor.view.scrollDOM.scrollTop,
+    scrollLeft: editor.view.scrollDOM.scrollLeft,
+    windowX: window.scrollX || 0,
+    windowY: window.scrollY || 0,
+  };
+}
+
+function restoreEditorScroll(snapshot: EditorScrollSnapshot | null | undefined): void {
+  if (!snapshot) return;
+  const restore = () => {
+    host.scrollTop = snapshot.hostTop;
+    host.scrollLeft = snapshot.hostLeft;
+    editor.view.scrollDOM.scrollTop = snapshot.scrollTop;
+    editor.view.scrollDOM.scrollLeft = snapshot.scrollLeft;
+    window.scrollTo(snapshot.windowX, snapshot.windowY);
+  };
+  restore();
+  window.requestAnimationFrame(() => {
+    restore();
+    window.requestAnimationFrame(restore);
+  });
+  window.setTimeout(restore, 80);
+}
+
+function focusEditorPreservingScroll(): void {
+  const scroll = captureEditorScroll();
+  editor.focus();
+  restoreEditorScroll(scroll);
+}
+
+function revealCursorAfterLayout(): void {
+  const reveal = () => editor.revealCursor();
+  reveal();
+  window.requestAnimationFrame(reveal);
+  window.requestAnimationFrame(() => window.requestAnimationFrame(reveal));
+  for (const delay of [50, 120, 250, 500, 900]) {
+    window.setTimeout(reveal, delay);
+  }
+}
+
+function scheduleWritingStats(documentChanged: boolean): void {
+  writingStatsController?.schedule(documentChanged);
+}
+
+const zoomController = createZoomController({
+  editor,
+  host,
+  toolsPanel,
+  editorSurfaceVisible,
+  primaryModifier: primaryMod,
+  scheduleAssistUpdate: () => scheduleAssistUpdate({ mathPreview: true, cursor: true, selectionTool: true }),
+  setStatus,
+});
+const {
+  layoutZoomPercent,
+  updateLayoutZoomTool,
+  stepLayoutZoom,
+  resetLayoutZoom,
+  runLayoutZoomShortcut,
+  runVisualZoomShortcut,
+} = zoomController;
+
+let editorPointerFocusTimer = 0;
+
+function activateEditorFromPointer(event: PointerEvent | MouseEvent): void {
+  const target = event.target;
+  if (!(target instanceof Node) || !host.contains(target)) return;
+  const element = target instanceof Element ? target : target.parentElement;
+  if (element?.closest("input, textarea, select, button, a")) return;
+  const scroll = captureEditorScroll();
+  window.clearTimeout(editorPointerFocusTimer);
+  // Let CM6 process the pointer and establish its clicked selection first.
+  // Focusing synchronously here reveals the previous cursor before CM6's own
+  // mousedown handler runs, causing apparently random jumps after a long scroll.
+  // The one-tick fallback remains for xwidget focus hand-off and is deduplicated
+  // across the pointerdown + mousedown pair.
+  editorPointerFocusTimer = window.setTimeout(() => {
+    editorPointerFocusTimer = 0;
+    if (editor.view.hasFocus) return;
+    editor.view.contentDOM.focus({ preventScroll: true });
+    restoreEditorScroll(scroll);
+  }, 0);
+}
+
+host.addEventListener("pointerdown", activateEditorFromPointer, { capture: true });
+host.addEventListener("mousedown", activateEditorFromPointer, { capture: true });
+document.addEventListener("contextmenu", (event) => {
+  if (!(event.target instanceof Node) || !host.contains(event.target)) return;
+  const element = event.target instanceof Element ? event.target : event.target.parentElement;
+  if (element?.closest(".inline-cite-widget, .aaronnote-bib-item")) return;
+  event.preventDefault();
+  showContextMenu(event);
+}, { capture: true });
+document.addEventListener("aaronnote:attachment-context-menu", (event) => {
+  const custom = event as CustomEvent<{ href?: string; x?: number; y?: number }>;
+  const href = custom.detail?.href;
+  if (!href) return;
+  event.preventDefault();
+  event.stopPropagation();
+  showContextMenu(event as unknown as MouseEvent, {
+    href,
+    cell: null,
+    x: Number(custom.detail?.x) || 12,
+    y: Number(custom.detail?.y) || 12,
+  });
+}, { capture: true });
+document.addEventListener("pointerdown", (event) => {
+  const target = event.target;
+  if (!contextMenu.hidden && target instanceof Node && !contextMenu.contains(target)) hideContextMenu();
+}, { capture: true });
+window.addEventListener("resize", hideContextMenu);
+document.addEventListener("scroll", () => {
+  hideContextMenu();
+}, { capture: true, passive: true });
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    hideContextMenu();
+  }
+}, { capture: true });
+const snippetSession = new SnippetSession(editor);
+const mathSnippetIndex = new MathSnippetIndex(editor);
+host.addEventListener("aaronnote-assist-update", () => scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true, toc: true }));
+
+// IME switching for Vim mode (macOS) — fire-and-forget, never blocks keystrokes.
+// Requires macism or im-select installed; feature silently disables when absent.
+const imeCoalesceTimer = new CoalescedTimer(80);
+let imeEnabled = true;
+let imeLastSentMode: "" | "normal" | "insert" = "";
+function syncImeForVimMode(mode: import("./vim-lite.ts").VimLiteMode): void {
+  if (!imeEnabled) return;
+  const effective: "normal" | "insert" = mode === "insert" ? "insert" : "normal";
+  imeCoalesceTimer.schedule(() => {
+    if (effective === "insert" && !document.hasFocus()) return;
+    if (effective === imeLastSentMode) return;
+    imeLastSentMode = effective;
+    void api.ime.vimMode(effective)
+      .then((r) => { if (r?.enabled === false) imeEnabled = false; })
+      .catch(() => {});
+  });
+}
+
+function runVimFind(): boolean {
+  openFindPanel();
+  return true;
+}
+
+const vim = createVimLite(editor, host, {
+  onModeChange: (mode) => { updateModeLabel(mode); syncImeForVimMode(mode); },
+  onUndo: () => editor.undo(),
+  onRedo: () => editor.redo(),
+  onIndent: (dir) => indentMarkdownBlock(editor.view, dir),
+  onFind: runVimFind,
+  onFold: (action) => {
+    if (action === "close") return editor.runCommand("fold-heading");
+    if (action === "open") return editor.runCommand("unfold-heading");
+    if (action === "toggle") return editor.runCommand("toggle-fold");
+    if (action === "close-all") return editor.runCommand("fold-all-headings");
+    return editor.runCommand("unfold-all-headings");
+  },
+});
+const assistScheduler = new AssistScheduler(window, editorSurfaceVisible, runAssistUpdate);
+updateModeLabel(vim.mode());
+// Reset to normal mode when the editor loses focus (xwidget buffer switch).
+// Prevents silent insert/visual mode on return from another Emacs buffer.
+onBlurVimReset = () => {
+  if (vim.mode() !== "normal") vim.setMode("normal");
+  imeLastSentMode = "";
+  syncImeForVimMode("normal");
+};
+// Re-assert IME state when the window regains focus.
+window.addEventListener("focus", () => {
+  imeLastSentMode = "";
+  syncImeForVimMode(vim.mode());
+  void refreshPendingExternalSaveOnFocus();
+});
+host.addEventListener("focusin", () => {
+  void refreshPendingExternalSaveOnFocus();
+});
+
+const floatingTocPanel = createFloatingTocPanel({
+  toc,
+  toggleButton: tocButton,
+  list: tocList,
+  editor,
+  getNotes: () => notes,
+  getCurrentFile: () => currentFile,
+  resolveNoteRef,
+  openNote,
+  openTag: openTagFilter,
+});
+
+const localGraphPanel = createLocalGraphPanel({
+  root: graphPanelRoot,
+  toggleButton: graphButton,
+  depthInput: graphDepthInput,
+  depthLabel: graphDepthLabel,
+  refsInput: graphRefsInput,
+  backlinksInput: graphBacklinksInput,
+  tagsInput: graphTagsInput,
+  canvas: graphCanvas,
+  status: graphStatus,
+  searchInput: graphSearch,
+  groupInput: graphGroup,
+  detail: graphDetail,
+  modeButtons: graphModeButtons,
+  getWorkspaceGraph: () => api.notes.graph(),
+  getIndexVersion: () => lastNotesIndexVersion,
+  getNotes: () => notes.filter(note => note.roam !== false),
+  getCurrentNote: currentNote,
+  getMarkdown: () => editor.getMarkdown(),
+  resolveNoteRef,
+  openNote,
+  openTag: openTagFilter,
+});
+const graphOverlayTimer = new CoalescedTimer(400);
+changeHandlers.add(() => graphOverlayTimer.schedule(() => localGraphPanel.update(true)));
+
+graphClose.addEventListener("click", () => localGraphPanel.collapse());
+
+type JupyterPanelCell = {
+  id: string;
+  from: number;
+  to: number;
+  line: number;
+  language: string;
+  kernel: string;
+  session: string;
+  status: string;
+  executionCount?: number | null;
+  durationMs?: number;
+  outputCount?: number;
+};
+type JupyterPanelExecutionResult = {
+  ok?: boolean;
+  cellId?: string;
+  kernel?: string;
+  session?: string;
+  status?: string;
+  executionCount?: number | null;
+  outputs?: unknown[];
+  results?: JupyterPanelExecutionResult[];
+  stoppedAt?: string;
+  widgetMessages?: Array<Record<string, unknown>>;
+  widgetMessagesTruncated?: boolean;
+};
+
+const JUPYTER_CELL_RE = /^([ \t]*)@@cell(?:[ \t]*\(([^)\n]*)\))?(?:[ \t]+\[([^\]\n]*)\])?[ \t]*$/i;
+const jupyterTaskState = new Map<string, Partial<JupyterPanelCell>>();
+
+function cleanJupyterToken(value: string, fallback: string): string {
+  const clean = String(value || "").trim();
+  return clean || fallback;
+}
+
+type JupyterCellDefaults = {
+  language: string;
+  kernel: string;
+  session: string;
+};
+
+const HOST_JUPYTER_DEFAULTS = (window as typeof window & {
+  __aaronnoteJupyterDefaults?: Partial<JupyterCellDefaults>;
+}).__aaronnoteJupyterDefaults ?? {};
+
+const DEFAULT_JUPYTER_CELL: JupyterCellDefaults = {
+  language: cleanJupyterToken(HOST_JUPYTER_DEFAULTS.language, "python"),
+  kernel: cleanJupyterToken(HOST_JUPYTER_DEFAULTS.kernel, "python3"),
+  session: cleanJupyterToken(HOST_JUPYTER_DEFAULTS.session, "default"),
+};
+
+function jupyterLooksLikeKernelToken(value: string): boolean {
+  return /python3|sage|julia|ir|bash|zsh|node|javascript|typescript|lean4?/i.test(value);
+}
+
+function jupyterDefaultKernelForLanguage(language: string): string {
+  if (/^lean4?$/i.test(language)) return "lean4";
+  if (/^(?:bash|sh|shell|zsh)$/i.test(language)) return "bash";
+  if (/^sage/i.test(language)) return "sagemath";
+  if (/^(?:python|py)$/i.test(language)) return "python3";
+  return DEFAULT_JUPYTER_CELL.kernel;
+}
+
+function parseJupyterCellRuntime(rawArgs: string, defaults: JupyterCellDefaults = DEFAULT_JUPYTER_CELL): JupyterCellDefaults {
+  const args = rawArgs.split(",").map((item) => item.trim()).filter(Boolean);
+  let requestedLanguage = cleanJupyterToken(args[0] || "", defaults.language);
+  let kernel = args[1] || "";
+  const session = cleanJupyterToken(args[2] || "", defaults.session);
+  if (args.length === 1 && jupyterLooksLikeKernelToken(args[0]!)) {
+    kernel = args[0]!;
+    requestedLanguage = ceilLanguageForKernel(kernel);
+  } else if (!args[1] && defaults.kernel) {
+    const defaultLanguage = ceilLanguageForKernel(defaults.kernel, defaults.language);
+    const requestedLanguageLower = requestedLanguage.toLowerCase();
+    if (!args[0] || requestedLanguageLower === defaults.language.toLowerCase() || requestedLanguageLower === defaultLanguage.toLowerCase()) {
+      kernel = defaults.kernel;
+    }
+  }
+  if (!args[1] && !kernel) kernel = jupyterDefaultKernelForLanguage(requestedLanguage);
+  kernel = cleanJupyterToken(kernel, jupyterDefaultKernelForLanguage(requestedLanguage)).replace(/^\((.*)\)$/, "$1").trim()
+    || jupyterDefaultKernelForLanguage(requestedLanguage);
+  const language = ceilLanguageForKernel(kernel, requestedLanguage);
+  return { language, kernel, session };
+}
+
+function jupyterCellKey(cell: Pick<JupyterPanelCell, "id" | "language" | "kernel" | "session">): string {
+  return `${cell.language}\0${cell.kernel}\0${cell.session}\0${cell.id}`;
+}
+
+function isLeanJupyterCell(cell: Pick<JupyterPanelCell, "language" | "kernel">): boolean {
+  return /lean/i.test(cell.language) || /lean/i.test(cell.kernel);
+}
+
+function formatRuntimeDuration(ms: unknown): string {
+  const value = Number(ms);
+  if (!Number.isFinite(value) || value <= 0) return "0s";
+  if (value < 1000) return `${Math.round(value)}ms`;
+  const seconds = Math.round(value / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  if (minutes < 60) return rest ? `${minutes}m ${rest}s` : `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const minuteRest = minutes % 60;
+  return minuteRest ? `${hours}h ${minuteRest}m` : `${hours}h`;
+}
+
+type JupyterCellBase = Pick<JupyterPanelCell, "id" | "from" | "to" | "line" | "language" | "kernel" | "session" | "status">;
+
+let jupyterScanMarkdown: string | null = null;
+let jupyterScanBases: JupyterCellBase[] = [];
+let jupyterKernelSpecsCache: JupyterKernelSpec[] | null = null;
+
+function uniqueSorted(values: string[]): string[] {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+}
+
+function setSelectOptions(select: HTMLSelectElement, values: string[], selected = "", anyLabel = ""): void {
+  const options = anyLabel ? ["", ...uniqueSorted(values)] : uniqueSorted(values);
+  const current = selected || select.value;
+  select.replaceChildren(...options.map((value) => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = value || anyLabel;
+    return option;
+  }));
+  if (options.includes(current)) select.value = current;
+  else if (selected && !options.includes(selected)) {
+    const option = document.createElement("option");
+    option.value = selected;
+    option.textContent = selected;
+    select.append(option);
+    select.value = selected;
+  } else {
+    select.value = options[0] || "";
+  }
+}
+
+async function loadJupyterKernelSpecs(): Promise<JupyterKernelSpec[]> {
+  if (jupyterKernelSpecsCache) return jupyterKernelSpecsCache;
+  try {
+    const result = await api.jupyterCell.kernels();
+    jupyterKernelSpecsCache = Array.isArray(result.kernels) ? result.kernels : [];
+  } catch {
+    jupyterKernelSpecsCache = [];
+  }
+  return jupyterKernelSpecsCache;
+}
+
+function formatJupyterCellHeader(
+  leading: string,
+  rawId: string,
+  runtime: JupyterCellDefaults,
+): string {
+  const nextArgs = runtime.session && runtime.session !== DEFAULT_JUPYTER_CELL.session
+    ? [runtime.language, runtime.kernel, runtime.session]
+    : [runtime.language, runtime.kernel];
+  return `${leading}@@cell(${nextArgs.join(", ")})${rawId ? ` [${rawId.trim()}]` : ""}`;
+}
+
+function switchJupyterKernelForCells(body: {
+  language?: string;
+  session?: string;
+  kernel?: string;
+  oldKernel?: string;
+}): number {
+  if (rejectReadOnlyAction("Read-only pane")) return 0;
+  const targetLanguage = String(body.language || "").trim().toLowerCase();
+  const targetSession = String(body.session || "").trim() || "default";
+  const targetKernel = String(body.kernel || "").trim();
+  const oldKernel = String(body.oldKernel || "").trim();
+  if (!targetLanguage || !targetKernel) {
+    setStatus("Language and kernel are required");
+    return 0;
+  }
+
+  const markdown = editor.getMarkdown();
+  const replacements: Array<{ from: number; to: number; text: string }> = [];
+  let pos = 0;
+  let lastCellDefaults = DEFAULT_JUPYTER_CELL;
+  while (pos <= markdown.length) {
+    const lineEndIndex = markdown.indexOf("\n", pos);
+    const lineEnd = lineEndIndex < 0 ? markdown.length : lineEndIndex;
+    const line = markdown.slice(pos, lineEnd);
+    const match = JUPYTER_CELL_RE.exec(line);
+    if (match) {
+      const leading = match[1] ?? "";
+      const rawArgs = match[2] ?? "";
+      const rawId = match[3] ?? "";
+      const runtime = parseJupyterCellRuntime(rawArgs, lastCellDefaults);
+      lastCellDefaults = runtime;
+      if (
+        runtime.language.toLowerCase() === targetLanguage
+        && runtime.session === targetSession
+        && (!oldKernel || runtime.kernel === oldKernel)
+        && runtime.kernel !== targetKernel
+      ) {
+        replacements.push({
+          from: pos,
+          to: lineEnd,
+          text: formatJupyterCellHeader(leading, rawId, { ...runtime, kernel: targetKernel }),
+        });
+      }
+    }
+    if (lineEndIndex < 0) break;
+    pos = lineEnd + 1;
+  }
+
+  for (const replacement of replacements.reverse()) {
+    editor.replaceMarkdownRange(replacement.from, replacement.to, replacement.text);
+  }
+  if (replacements.length > 0) {
+    jupyterScanMarkdown = null;
+    renderJupyterPanel();
+  }
+  setStatus(replacements.length
+    ? `Switched ${replacements.length} ${targetLanguage}/${targetSession} cell${replacements.length === 1 ? "" : "s"} to ${targetKernel}`
+    : `No matching ${targetLanguage}/${targetSession} cells`);
+  return replacements.length;
+}
+
+function exitJupyterCellFromLean(cell: JupyterPanelCell): boolean {
+  if (rejectReadOnlyAction("Read-only pane")) return false;
+  if (!isLeanJupyterCell(cell)) {
+    setStatus("Current cell is not Lean");
+    return false;
+  }
+  const line = editor.getMarkdown().slice(cell.from, cell.to);
+  const match = JUPYTER_CELL_RE.exec(line);
+  if (!match) {
+    setStatus("Jupyter cell header not found");
+    return false;
+  }
+  const leading = match[1] ?? "";
+  const rawId = match[3] ?? "";
+  const next = formatJupyterCellHeader(leading, rawId, {
+    language: DEFAULT_JUPYTER_CELL.language,
+    kernel: DEFAULT_JUPYTER_CELL.kernel,
+    session: cell.session || DEFAULT_JUPYTER_CELL.session,
+  });
+  if (line === next) {
+    setStatus(`Cell ${cell.id} already uses python3`);
+    return false;
+  }
+  editor.replaceMarkdownRange(cell.from, cell.to, next);
+  jupyterTaskState.delete(jupyterCellKey(cell));
+  jupyterScanMarkdown = null;
+  renderJupyterPanel();
+  setStatus(`Switched ${cell.id} from Lean to python3`);
+  return true;
+}
+
+function setJupyterKernelToolFromCell(cell: JupyterPanelCell | null, specs: JupyterKernelSpec[] = jupyterKernelSpecsCache || []): void {
+  const cells = scanJupyterCells().filter((item) => !isLeanJupyterCell(item));
+  const selected = cell && !isLeanJupyterCell(cell) ? cell : null;
+  const fallback = cells[0] ?? null;
+  const language = selected?.language || jupyterKernelLanguage.value || fallback?.language || "python";
+  const sessionsForLanguage = cells.filter((item) => item.language === language).map((item) => item.session);
+  const session = selected?.session
+    || (sessionsForLanguage.includes(jupyterKernelSession.value) ? jupyterKernelSession.value : "")
+    || sessionsForLanguage[0]
+    || fallback?.session
+    || "default";
+  const kernelsForSelection = cells
+    .filter((item) => item.language === language && item.session === session)
+    .map((item) => item.kernel);
+  const oldKernel = selected?.kernel
+    || (kernelsForSelection.includes(jupyterKernelOld.value) ? jupyterKernelOld.value : "")
+    || kernelsForSelection[0]
+    || fallback?.kernel
+    || "";
+  const specKernels = specs
+    .filter((spec) => !spec.language || spec.language === language || language === "python")
+    .map((spec) => spec.name);
+
+  setSelectOptions(jupyterKernelLanguage, [...cells.map((item) => item.language), language], language);
+  setSelectOptions(jupyterKernelSession, [...sessionsForLanguage, session], session);
+  setSelectOptions(jupyterKernelOld, [...kernelsForSelection, oldKernel], oldKernel, "Any");
+  setSelectOptions(jupyterKernelNew, [...specKernels, ...kernelsForSelection, oldKernel], oldKernel || specKernels[0] || "python3");
+  renderJupyterKernelMatchPreview();
+}
+
+function renderJupyterKernelMatchPreview(): void {
+  const language = jupyterKernelLanguage.value;
+  const session = jupyterKernelSession.value || "default";
+  const oldKernel = jupyterKernelOld.value;
+  const matches = scanJupyterCells().filter((cell) => (
+    !isLeanJupyterCell(cell)
+    && cell.language === language
+    && cell.session === session
+    && (!oldKernel || cell.kernel === oldKernel)
+  ));
+  if (matches.length === 0) {
+    jupyterKernelCells.textContent = "No matching blocks";
+    return;
+  }
+  const head = document.createElement("div");
+  head.className = "aaronnote-jupyter-kernel-cells-head";
+  head.textContent = `${matches.length} matching block${matches.length === 1 ? "" : "s"}`;
+  const list = document.createElement("div");
+  list.className = "aaronnote-jupyter-kernel-cells-list";
+  for (const cell of matches) {
+    const row = document.createElement("div");
+    row.className = "aaronnote-jupyter-kernel-cell";
+    row.textContent = `:${cell.line}  ${cell.language} / ${cell.kernel} / ${cell.session}  ${cell.id}`;
+    list.append(row);
+  }
+  jupyterKernelCells.replaceChildren(head, list);
+}
+
+function switchJupyterKernelFromTool(): void {
+  switchJupyterKernelForCells({
+    language: jupyterKernelLanguage.value,
+    session: jupyterKernelSession.value,
+    kernel: jupyterKernelNew.value,
+    oldKernel: jupyterKernelOld.value,
+  });
+}
+
+async function openJupyterKernelTool(cell: JupyterPanelCell | null = selectedJupyterCell()): Promise<void> {
+  jupyterKernelTool.hidden = false;
+  setJupyterKernelToolFromCell(cell);
+  setJupyterKernelToolFromCell(cell, await loadJupyterKernelSpecs());
+}
+
+function toggleJupyterKernelTool(): void {
+  if (jupyterKernelTool.hidden) {
+    void openJupyterKernelTool();
+  } else {
+    jupyterKernelTool.hidden = true;
+  }
+}
+
+function selectJupyterCellFromHost(body: {
+  file?: string;
+  cellId?: string;
+  id?: string;
+}): JupyterPanelCell | null {
+  const cellId = String(body.cellId || body.id || "").trim();
+  if (!cellId) return null;
+  const cell = scanJupyterCells().find((item) => item.id === cellId) ?? null;
+  if (!cell) {
+    setStatus(`Jupyter cell not found: ${cellId}`);
+    return null;
+  }
+  editor.view.dispatch({ selection: { anchor: cell.from }, scrollIntoView: true });
+  setJupyterKernelToolFromCell(cell);
+  if (!jupyterPanel.hidden) renderJupyterPanel();
+  return cell;
+}
+
+async function runJupyterCellFromHost(body: {
+  file?: string;
+  cellId?: string;
+  id?: string;
+}): Promise<void> {
+  const cellId = String(body.cellId || body.id || "").trim();
+  if (cellId && await window.AaronnoteRunCeilCell?.(cellId)) return;
+  const cell = selectJupyterCellFromHost(body);
+  if (!cell) return;
+  await runJupyterCell(cell);
+}
+
+function scanJupyterCellBases(): JupyterCellBase[] {
+  const markdown = editor.getMarkdown();
+  // getMarkdown() is memoized by immutable-Text identity, so an unchanged doc
+  // returns the same string reference; skip re-scanning the whole file. A single
+  // context-menu open otherwise triggers this whole-document scan 2-3 times.
+  if (markdown === jupyterScanMarkdown) return jupyterScanBases;
+  const bases: JupyterCellBase[] = [];
+  let pos = 0;
+  let lineNumber = 1;
+  let lastCellDefaults = DEFAULT_JUPYTER_CELL;
+  while (pos <= markdown.length) {
+    const lineEndIndex = markdown.indexOf("\n", pos);
+    const lineEnd = lineEndIndex < 0 ? markdown.length : lineEndIndex;
+    const line = markdown.slice(pos, lineEnd);
+    const match = JUPYTER_CELL_RE.exec(line);
+    if (match) {
+      const leading = match[1] ?? "";
+      const rawArgs = match[2] ?? "";
+      const rawId = match[3] ?? "";
+      const runtime = parseJupyterCellRuntime(rawArgs, lastCellDefaults);
+      lastCellDefaults = runtime;
+      // Same generator the widget uses (offset after leading whitespace) so a
+      // panel run and the widget agree on an unlabeled cell's hidden-script id.
+      const id = cleanJupyterToken(rawId, ceilCommandGeneratedId(currentFile, pos + leading.length, rawArgs, rawId));
+      bases.push({ id, from: pos, to: lineEnd, line: lineNumber, ...runtime, status: "idle" });
+    }
+    if (lineEndIndex < 0) break;
+    pos = lineEnd + 1;
+    lineNumber += 1;
+  }
+  jupyterScanMarkdown = markdown;
+  jupyterScanBases = bases;
+  return bases;
+}
+
+function scanJupyterCells(): JupyterPanelCell[] {
+  return scanJupyterCellBases().map((base) => ({ ...base, ...(jupyterTaskState.get(jupyterCellKey(base)) || {}) }));
+}
+
+function jupyterCellsForContext(target: JupyterPanelCell, cells = scanJupyterCells()): Array<Record<string, string>> {
+  return cells
+    .filter((cell) => cell.language === target.language && cell.session === target.session)
+    .map((cell) => ({ cellId: cell.id, id: cell.id, kernel: cell.kernel, session: cell.session, language: cell.language, code: "" }));
+}
+
+function renderJupyterPanel(): JupyterPanelCell[] {
+  const cells = scanJupyterCells();
+  const running = cells.filter((cell) => cell.status === "running" || cell.status === "pending").length;
+  jupyterSummary.textContent = `${cells.length} cell${cells.length === 1 ? "" : "s"}${running ? `, ${running} running` : ""}`;
+  jupyterList.replaceChildren();
+  if (document.activeElement !== jupyterKernelLanguage
+    && document.activeElement !== jupyterKernelSession
+    && document.activeElement !== jupyterKernelOld
+    && document.activeElement !== jupyterKernelNew) {
+    setJupyterKernelToolFromCell(selectedJupyterCell(cells));
+  }
+  if (cells.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "aaronnote-jupyter-empty";
+    empty.textContent = "No @@cell entries";
+    jupyterList.append(empty);
+    return cells;
+  }
+  for (const cell of cells) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "aaronnote-jupyter-task";
+    row.dataset.status = cell.status;
+    row.innerHTML = `
+      <span data-jupyter-task-main></span>
+      <span data-jupyter-task-meta></span>
+      <span data-jupyter-task-status></span>
+    `;
+    row.querySelector<HTMLElement>("[data-jupyter-task-main]")!.textContent = `${cell.id}`;
+    row.querySelector<HTMLElement>("[data-jupyter-task-meta]")!.textContent = isLeanJupyterCell(cell)
+      ? `${cell.language} / ${cell.session} :${cell.line}`
+      : `${cell.language} / ${cell.kernel} / ${cell.session} :${cell.line}`;
+    row.querySelector<HTMLElement>("[data-jupyter-task-status]")!.textContent = [
+      cell.status,
+      !isLeanJupyterCell(cell) && cell.executionCount != null ? `In [${cell.executionCount}]` : "",
+      cell.durationMs != null ? `${Math.round(cell.durationMs)}ms` : "",
+      !isLeanJupyterCell(cell) && cell.outputCount != null ? `${cell.outputCount} out` : "",
+    ].filter(Boolean).join(" · ");
+    row.addEventListener("click", () => {
+      editor.view.dispatch({ selection: { anchor: cell.from }, scrollIntoView: true });
+      editor.focus();
+      setJupyterKernelToolFromCell(cell);
+    });
+    jupyterList.append(row);
+  }
+  return cells;
+}
+
+function selectedJupyterCell(cells = scanJupyterCells()): JupyterPanelCell | null {
+  const position = editor.view.state.selection.main.from;
+  let best: JupyterPanelCell | null = null;
+  for (const cell of cells) {
+    if (cell.from <= position) best = cell;
+    if (cell.from > position) break;
+  }
+  return best ?? cells[0] ?? null;
+}
+
+function filterJupyterCells(mode: string, cells = scanJupyterCells()): JupyterPanelCell[] {
+  if (mode === "all") return cells;
+  const position = editor.view.state.selection.main.from;
+  if (mode === "above") return cells.filter((cell) => cell.from <= position);
+  if (mode === "below") return cells.filter((cell) => cell.from >= position);
+  if (mode === "section") {
+    const markdown = editor.getMarkdown();
+    const headings = markdownHeadingsFromText(editor.view.state.doc);
+    const currentHeading = headings
+      .filter((heading) => heading.pos <= position)
+      .sort((a, b) => b.pos - a.pos)[0];
+    if (!currentHeading) return cells;
+    const next = headings.find((heading) => heading.pos > currentHeading.pos && heading.level <= currentHeading.level);
+    const end = next?.pos ?? markdown.length;
+    return cells.filter((cell) => cell.from >= currentHeading.pos && cell.from < end);
+  }
+  return [];
+}
+
+async function ensureJupyterScript(cell: JupyterPanelCell, allCells = scanJupyterCells()): Promise<void> {
+  await api.jupyterCell.openScript({
+    file: currentFile,
+    cellId: cell.id,
+    kernel: cell.kernel,
+    session: cell.session,
+    language: cell.language,
+    storage: "script",
+    open: false,
+    cells: jupyterCellsForContext(cell, allCells),
+  });
+}
+
+async function runJupyterCell(cell: JupyterPanelCell, allCells = scanJupyterCells()): Promise<boolean> {
+  const key = jupyterCellKey(cell);
+  jupyterTaskState.set(key, { status: "running" });
+  renderJupyterPanel();
+  const started = performance.now();
+  try {
+    await ensureJupyterScript(cell, allCells);
+    const result = await api.jupyterCell.executeScriptCell({
+      file: currentFile,
+      cellId: cell.id,
+      kernel: cell.kernel,
+      session: cell.session,
+      language: cell.language,
+      runMode: "dependencies",
+      selectedCellIds: [cell.id],
+      cells: jupyterCellsForContext(cell, allCells),
+    }) as JupyterPanelExecutionResult;
+    const published = new Set<string>();
+    if (Array.isArray(result.results)) {
+      for (const item of result.results) {
+        const itemId = String(item?.cellId || "");
+        const itemCell = allCells.find((candidate) => candidate.id === itemId && candidate.language === cell.language && candidate.session === cell.session);
+        if (!itemId || !itemCell || published.has(itemId)) continue;
+        window.AaronnotePublishJupyterCellResult?.({
+          file: currentFile,
+          cellId: itemId,
+          kernel: itemCell.kernel,
+          session: itemCell.session,
+          result: item,
+        });
+        jupyterTaskState.set(jupyterCellKey(itemCell), {
+          status: isLeanJupyterCell(itemCell) ? "synced" : item.status === "error" ? "error" : "ok",
+          executionCount: isLeanJupyterCell(itemCell) ? null : item.executionCount,
+          durationMs: performance.now() - started,
+          outputCount: isLeanJupyterCell(itemCell) ? undefined : item.outputs?.length ?? 0,
+        });
+        published.add(itemId);
+      }
+    }
+    if (!published.has(cell.id)) {
+      window.AaronnotePublishJupyterCellResult?.({
+        file: currentFile,
+        cellId: cell.id,
+        kernel: cell.kernel,
+        session: cell.session,
+        result,
+      });
+    }
+    jupyterTaskState.set(key, {
+      status: isLeanJupyterCell(cell) ? "synced" : result.status === "error" ? "error" : "ok",
+      executionCount: isLeanJupyterCell(cell) ? null : result.executionCount,
+      durationMs: performance.now() - started,
+      outputCount: isLeanJupyterCell(cell) ? undefined : result.outputs?.length ?? 0,
+    });
+    return result.status !== "error";
+  } catch (error) {
+    jupyterTaskState.set(key, {
+      status: "error",
+      durationMs: performance.now() - started,
+    });
+    setStatus(error instanceof Error ? error.message : "Jupyter run failed");
+    return false;
+  } finally {
+    renderJupyterPanel();
+  }
+}
+
+async function runJupyterCells(mode: "all" | "above" | "below" | "section"): Promise<void> {
+  if (!currentFile) {
+    setStatus("Save note first");
+    return;
+  }
+  const allCells = scanJupyterCells();
+  const cells = filterJupyterCells(mode, allCells);
+  if (cells.length === 0) {
+    setStatus("No Jupyter cells");
+    return;
+  }
+  setStatus(`Running ${cells.length} Jupyter cell${cells.length === 1 ? "" : "s"}`);
+  const groups = new Map<string, JupyterPanelCell[]>();
+  for (const cell of cells) {
+    const groupKey = `${cell.language}\0${cell.kernel}\0${cell.session}`;
+    groups.set(groupKey, [...(groups.get(groupKey) || []), cell]);
+  }
+  for (const groupCells of groups.values()) {
+    const anchor = groupCells[0];
+    if (!anchor) continue;
+    const started = performance.now();
+    for (const cell of groupCells) jupyterTaskState.set(jupyterCellKey(cell), { status: "running" });
+    renderJupyterPanel();
+    await ensureJupyterScript(anchor, allCells);
+    const result = await api.jupyterCell.executeScriptCell({
+      file: currentFile,
+      cellId: anchor.id,
+      kernel: anchor.kernel,
+      session: anchor.session,
+      language: anchor.language,
+      runMode: "selected",
+      selectedCellIds: groupCells.map((cell) => cell.id),
+      cells: jupyterCellsForContext(anchor, allCells),
+    }) as JupyterPanelExecutionResult;
+    const results = Array.isArray(result.results) && result.results.length > 0 ? result.results : [result];
+    for (const item of results) {
+      const itemId = String(item?.cellId || "");
+      const itemCell = groupCells.find((candidate) => candidate.id === itemId)
+        ?? allCells.find((candidate) => candidate.id === itemId && candidate.language === anchor.language && candidate.session === anchor.session);
+      if (!itemId || !itemCell) continue;
+      window.AaronnotePublishJupyterCellResult?.({
+        file: currentFile,
+        cellId: itemId,
+        kernel: itemCell.kernel,
+        session: itemCell.session,
+        result: item,
+      });
+      jupyterTaskState.set(jupyterCellKey(itemCell), {
+        status: isLeanJupyterCell(itemCell) ? "synced" : item.status === "error" ? "error" : "ok",
+        executionCount: isLeanJupyterCell(itemCell) ? null : item.executionCount,
+        durationMs: performance.now() - started,
+        outputCount: isLeanJupyterCell(itemCell) ? undefined : item.outputs?.length ?? 0,
+      });
+    }
+    if (result.status === "error") {
+      setStatus(`Jupyter run stopped at ${result.stoppedAt || result.cellId || anchor.id} (error)`);
+      renderJupyterPanel();
+      return;
+    }
+  }
+  setStatus("Jupyter run complete");
+  renderJupyterPanel();
+}
+
+async function restartAndRunAllJupyterCells(): Promise<void> {
+  const cells = scanJupyterCells();
+  const cell = selectedJupyterCell(cells.filter((item) => !isLeanJupyterCell(item)));
+  if (!cell) return;
+  await api.jupyterCell.restart({ file: currentFile, kernel: cell.kernel, session: cell.session });
+  await runJupyterCells("all");
+}
+
+async function interruptSelectedJupyterKernel(): Promise<void> {
+  const cell = selectedJupyterCell();
+  if (!cell) return;
+  if (isLeanJupyterCell(cell)) {
+    setStatus("Lean cells sync files; no kernel interrupt");
+    return;
+  }
+  await api.jupyterCell.interrupt({ file: currentFile, kernel: cell.kernel, session: cell.session });
+  setStatus(`Interrupted ${cell.kernel}/${cell.session}`);
+}
+
+async function clearAllJupyterOutputs(): Promise<void> {
+  const cells = scanJupyterCells();
+  const seen = new Set<string>();
+  for (const cell of cells) {
+    if (isLeanJupyterCell(cell)) continue;
+    const group = `${cell.language}\0${cell.session}`;
+    if (seen.has(group)) continue;
+    seen.add(group);
+    await api.jupyterCell.clearAllOutputs({ file: currentFile, kernel: cell.kernel, session: cell.session, language: cell.language });
+  }
+  for (const key of Array.from(jupyterTaskState.keys())) jupyterTaskState.delete(key);
+  renderJupyterPanel();
+  setStatus("Jupyter outputs cleared");
+}
+
+async function showJupyterVariables(): Promise<void> {
+  const cell = selectedJupyterCell();
+  if (!cell) return;
+  if (isLeanJupyterCell(cell)) {
+    jupyterVars.hidden = false;
+    jupyterVars.textContent = "Lean cells do not expose variables";
+    return;
+  }
+  jupyterVars.hidden = false;
+  jupyterVars.textContent = "Loading variables...";
+  try {
+    const result = await api.jupyterCell.variables({ file: currentFile, kernel: cell.kernel, session: cell.session, language: cell.language });
+    if (!result.supported) {
+      jupyterVars.textContent = `Variables unavailable for ${cell.kernel}`;
+      return;
+    }
+    renderJupyterVariablesTable(jupyterVars, result.variables || [], "No variables");
+  } catch (error) {
+    jupyterVars.textContent = error instanceof Error ? error.message : "Variable load failed";
+  }
+}
+
+function renderJupyterRuntime(result: JupyterTasksResult): void {
+  jupyterRuntime.hidden = false;
+  const server = result.server || {};
+  const cleanup = result.cleanup || {};
+  const kernels = Array.isArray(result.kernels) ? result.kernels : [];
+  const head = document.createElement("div");
+  head.className = "aaronnote-jupyter-runtime-head";
+  const active = Number(server.activeRequests || 0);
+  head.innerHTML = `
+    <strong>Runtime</strong>
+    <span data-runtime-summary></span>
+    <div data-runtime-actions></div>
+  `;
+  head.querySelector<HTMLElement>("[data-runtime-summary]")!.textContent = [
+    server.status || "not-started",
+    server.owned ? `pid ${server.pid ?? ""}` : "",
+    active ? `${active} request${active === 1 ? "" : "s"}` : "",
+    `kernel ttl ${formatRuntimeDuration(cleanup.kernelIdleTtlMs)}`,
+    `server ttl ${formatRuntimeDuration(cleanup.serverIdleTtlMs)}`,
+  ].filter(Boolean).join(" · ");
+  const actions = head.querySelector<HTMLElement>("[data-runtime-actions]")!;
+  const refresh = document.createElement("button");
+  refresh.type = "button";
+  refresh.textContent = "Refresh";
+  refresh.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void showJupyterTasks();
+  });
+  const force = document.createElement("button");
+  force.type = "button";
+  force.textContent = "Force cleanup";
+  force.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void cleanupJupyterRuntime(true);
+  });
+  actions.append(refresh, force);
+
+  const list = document.createElement("div");
+  list.className = "aaronnote-jupyter-runtime-list";
+  if (kernels.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "aaronnote-jupyter-empty";
+    empty.textContent = "No live kernels";
+    list.append(empty);
+  } else {
+    for (const task of kernels) {
+      const row = document.createElement("div");
+      row.className = "aaronnote-jupyter-runtime-task";
+      row.dataset.status = String(task.status || "");
+      const main = document.createElement("button");
+      main.type = "button";
+      main.className = "aaronnote-jupyter-runtime-main";
+      main.textContent = `${task.kernel || "kernel"} / ${task.session || "default"}`;
+      main.title = task.file || "";
+      main.addEventListener("click", (event) => {
+        event.preventDefault();
+        const cell = scanJupyterCells().find((item) =>
+          item.kernel === task.kernel && item.session === task.session && (!task.lastCellId || item.id === task.lastCellId)
+        );
+        if (cell) {
+          editor.view.dispatch({ selection: { anchor: cell.from }, scrollIntoView: true });
+          editor.focus();
+        }
+      });
+      const meta = document.createElement("span");
+      meta.textContent = [
+        task.status || "idle",
+        task.running ? `running ${formatRuntimeDuration(task.runningMs)}` : `idle ${formatRuntimeDuration(task.idleMs)}`,
+        task.totalRuns ? `${task.totalRuns} run${task.totalRuns === 1 ? "" : "s"}` : "",
+        task.executionCount != null ? `In [${task.executionCount}]` : "",
+        task.lastCellId ? `cell ${task.lastCellId}` : "",
+        task.lastError || "",
+      ].filter(Boolean).join(" · ");
+      const rowActions = document.createElement("div");
+      const interrupt = document.createElement("button");
+      interrupt.type = "button";
+      interrupt.textContent = "Interrupt";
+      interrupt.disabled = !task.kernel || !task.session || !task.file;
+      interrupt.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void api.jupyterCell.interrupt({ file: task.file, kernel: task.kernel, session: task.session })
+          .then(() => showJupyterTasks())
+          .catch((error) => setStatus(error instanceof Error ? error.message : "Jupyter interrupt failed"));
+      });
+      const kill = document.createElement("button");
+      kill.type = "button";
+      kill.textContent = "Kill";
+      kill.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void api.jupyterCell.shutdown({ key: task.key, id: task.id, file: task.file, kernel: task.kernel, session: task.session })
+          .then(() => showJupyterTasks())
+          .catch((error) => setStatus(error instanceof Error ? error.message : "Jupyter kill failed"));
+      });
+      rowActions.append(interrupt, kill);
+      row.append(main, meta, rowActions);
+      list.append(row);
+    }
+  }
+  jupyterRuntime.replaceChildren(head, list);
+}
+
+async function showJupyterTasks(): Promise<void> {
+  jupyterRuntime.hidden = false;
+  jupyterRuntime.textContent = "Loading runtime...";
+  try {
+    renderJupyterRuntime(await api.jupyterCell.tasks());
+  } catch (error) {
+    jupyterRuntime.textContent = error instanceof Error ? error.message : "Runtime load failed";
+  }
+}
+
+async function cleanupJupyterRuntime(force = false): Promise<void> {
+  jupyterRuntime.hidden = false;
+  jupyterRuntime.textContent = force ? "Force cleaning runtime..." : "Cleaning idle runtime...";
+  try {
+    const result = await api.jupyterCell.cleanup({ force });
+    renderJupyterRuntime(result);
+    const removed = result.removed?.length || 0;
+    setStatus(removed ? `Cleaned ${removed} Jupyter kernel${removed === 1 ? "" : "s"}` : "No idle Jupyter kernels");
+  } catch (error) {
+    jupyterRuntime.textContent = error instanceof Error ? error.message : "Runtime cleanup failed";
+  }
+}
+
+function jupyterCellAtCommandPosition(position: number, cells = scanJupyterCells()): JupyterPanelCell | null {
+  return cells.find((cell) => position >= cell.from && position <= cell.to) ?? null;
+}
+
+function sourceRangeFromEventTarget(event: Event): { from: number; to: number } | null {
+  let el: Element | null = event.target instanceof Element ? event.target : null;
+  while (el) {
+    const from = Number((el as HTMLElement).dataset?.cmSourceFrom);
+    const to = Number((el as HTMLElement).dataset?.cmSourceTo);
+    if (Number.isFinite(from) && Number.isFinite(to)) return { from, to };
+    el = el.parentElement;
+  }
+  return null;
+}
+
+function jupyterCellFromPointer(event: MouseEvent, fallbackToSelection = true): JupyterPanelCell | null {
+  const sourceRange = sourceRangeFromEventTarget(event);
+  if (sourceRange) {
+    const fromWidget = jupyterCellAtCommandPosition(sourceRange.from)
+      ?? scanJupyterCells().find((cell) => sourceRange.from >= cell.from && sourceRange.from <= cell.to)
+      ?? null;
+    if (fromWidget) return fromWidget;
+  }
+  const posAtCoords = editor.view.posAtCoords({ x: event.clientX, y: event.clientY });
+  if (typeof posAtCoords !== "number") return fallbackToSelection ? selectedJupyterCell() : null;
+  return jupyterCellAtCommandPosition(posAtCoords) ?? (fallbackToSelection ? selectedJupyterCell() : null);
+}
+
+async function openJupyterCellSource(cell: JupyterPanelCell): Promise<void> {
+  if (!currentFile) {
+    setStatus("Save note first");
+    return;
+  }
+  await api.jupyterCell.openScript({
+    file: currentFile,
+    cellId: cell.id,
+    kernel: cell.kernel,
+    session: cell.session,
+    language: cell.language,
+    storage: "script",
+    cells: jupyterCellsForContext(cell),
+  });
+}
+
+async function deleteJupyterCellBlock(cell: JupyterPanelCell): Promise<void> {
+  if (rejectReadOnlyAction("Read-only pane")) return;
+  try {
+    const doc = editor.view.state.doc;
+    const line = doc.lineAt(cell.from);
+    let from = line.from;
+    let to = line.to;
+    if (to < doc.length) to += 1;
+    else if (from > 0) from -= 1;
+    editor.replaceMarkdownRange(from, to, "");
+    jupyterTaskState.delete(jupyterCellKey(cell));
+    jupyterScanMarkdown = null;
+    renderJupyterPanel();
+    setStatus(`Deleted Jupyter cell ${cell.id}`);
+  } catch (error) {
+    setStatus(error instanceof Error ? `Delete failed: ${error.message}` : "Delete failed");
+    return;
+  }
+  if (!currentFile) return;
+  try {
+    const result = await api.jupyterCell.deleteScriptCell({
+      file: currentFile,
+      cellId: cell.id,
+      kernel: cell.kernel,
+      session: cell.session,
+      language: cell.language,
+    });
+    const removedScript = result.removedScript === true;
+    setStatus(removedScript
+      ? `Deleted Jupyter cell ${cell.id} and empty script`
+      : `Deleted Jupyter cell ${cell.id}`);
+  } catch (error) {
+    setStatus(error instanceof Error ? `Cell deleted; cleanup failed: ${error.message}` : "Cell deleted; cleanup failed");
+  }
+}
+
+type AaronContextMenuItem = {
+  label: string;
+  detail?: string;
+  disabled?: boolean;
+  danger?: boolean;
+  separator?: boolean;
+  run?: () => void | Promise<void>;
+};
+
+function hideContextMenu(): void {
+  contextMenu.hidden = true;
+  contextMenu.classList.remove("is-bibliography");
+  contextMenu.replaceChildren();
+}
+
+function contextMenuItem(item: AaronContextMenuItem): HTMLElement {
+  if (item.separator) {
+    const separator = document.createElement("div");
+    separator.className = "aaronnote-context-separator";
+    separator.setAttribute("role", "separator");
+    return separator;
+  }
+  const button = document.createElement("button");
+  button.type = "button";
+  button.disabled = Boolean(item.disabled);
+  button.dataset.danger = item.danger ? "true" : "false";
+  button.innerHTML = "<span></span><small></small>";
+  button.querySelector("span")!.textContent = item.label;
+  button.querySelector("small")!.textContent = item.detail || "";
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    hideContextMenu();
+    if (!item.disabled) {
+      Promise.resolve(item.run?.()).catch((error) => {
+        setStatus(error instanceof Error ? error.message : "Context action failed");
+      });
+    }
+  });
+  return button;
+}
+
+function runContextEditorCommand(command: EditorCommand, value = ""): boolean {
+  editor.focus();
+  return editor.runCommand(command, value);
+}
+
+function markdownHrefFromPointer(event: MouseEvent): string {
+  const element = event.target instanceof Element ? event.target : event.target instanceof Node ? event.target.parentElement : null;
+  const renderedHref = element?.closest<HTMLAnchorElement>("a[href]")?.getAttribute("href") || "";
+  if (renderedHref) return cleanHref(renderedHref);
+  const pos = editor.view.posAtCoords({ x: event.clientX, y: event.clientY });
+  if (typeof pos !== "number") return "";
+  return cleanHref(markdownHrefAt(editor.view.state, pos) || "");
+}
+
+type ContextMathTarget = {
+  kind: "inline" | "block";
+  from: number;
+  to: number;
+  tex: string;
+  contentFrom?: number;
+  contentTo?: number;
+};
+
+function mathTargetAtPosition(pos: number): ContextMathTarget | null {
+  const state = editor.view.state;
+  const safePos = Math.max(0, Math.min(pos, state.doc.length));
+  const blockRanges = getBlockMathRanges(state);
+  const block = rangeAtPosition(safePos, blockRanges);
+  if (block) {
+    return {
+      kind: "block",
+      from: block.from,
+      to: block.to,
+      tex: block.tex,
+      contentFrom: block.contentFrom,
+      contentTo: block.contentTo,
+    };
+  }
+
+  const line = state.doc.lineAt(safePos);
+  INLINE_MATH_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = INLINE_MATH_RE.exec(line.text)) !== null) {
+    const from = line.from + match.index;
+    const to = from + match[0].length;
+    if (safePos < from || safePos > to) continue;
+    if (rangeOverlapsAny(from, to, blockRanges)) continue;
+    return { kind: "inline", from, to, tex: match[1] || "" };
+  }
+  return null;
+}
+
+function mathTargetFromSourceElement(target: EventTarget | null): ContextMathTarget | null {
+  const element = target instanceof Element
+    ? target.closest<HTMLElement>(".cm-math-inline, .cm-math-block")
+    : null;
+  if (!element) return null;
+  const from = Number(element.dataset.cmSourceFrom);
+  const to = Number(element.dataset.cmSourceTo);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to) return null;
+  return mathTargetAtPosition(Math.min(to, from + 1));
+}
+
+function mathTargetFromPointer(event: MouseEvent): ContextMathTarget | null {
+  const elementTarget = mathTargetFromSourceElement(event.target);
+  if (elementTarget) return elementTarget;
+  const pos = editor.view.posAtCoords({ x: event.clientX, y: event.clientY });
+  return typeof pos === "number" ? mathTargetAtPosition(pos) : null;
+}
+
+function convertInlineMathToBlock(target: ContextMathTarget): boolean {
+  if (rejectReadOnlyAction("Read-only pane")) return false;
+  if (target.kind !== "inline") return false;
+  const state = editor.view.state;
+  const line = state.doc.lineAt(target.from);
+  const before = state.doc.sliceString(line.from, target.from);
+  const after = state.doc.sliceString(target.to, line.to);
+  const prefix = before.trim().length > 0 ? "\n" : "";
+  const suffix = after.trim().length > 0 ? "\n" : "";
+  const tex = target.tex.trim();
+  const replacement = `${prefix}\\[\n${tex}\n\\]${suffix}`;
+  const scroll = captureEditorScroll();
+  const replaced = editor.replaceMarkdownRange(target.from, target.to, replacement, "end");
+  const contentFrom = target.from + prefix.length + "\\[\n".length;
+  editor.setMarkdownSelection(contentFrom, contentFrom + tex.length, { scrollIntoView: false });
+  restoreEditorScroll(scroll);
+  setStatus("Converted inline math to display math");
+  scheduleAssistUpdate({ mathPreview: true, cursor: true });
+  return replaced.to > replaced.from;
+}
+
+function convertBlockMathToInline(target: ContextMathTarget): boolean {
+  if (rejectReadOnlyAction("Read-only pane")) return false;
+  if (target.kind !== "block") return false;
+  const tex = target.tex.trim().replace(/\s*\n\s*/g, " ");
+  const replacement = `\\(${tex}\\)`;
+  const scroll = captureEditorScroll();
+  editor.replaceMarkdownRange(target.from, target.to, replacement, "end");
+  restoreEditorScroll(scroll);
+  setStatus("Converted display math to inline math");
+  scheduleAssistUpdate({ mathPreview: true, cursor: true });
+  return true;
+}
+
+async function copyCurrentNotePath(): Promise<void> {
+  if (!currentFile) return;
+  await copyText(currentFile);
+  setStatus("Note path copied");
+}
+
+async function copyContextLink(href: string): Promise<void> {
+  await copyText(href);
+  setStatus("Link copied");
+}
+
+function canOpenHrefInEmacs(href: string): boolean {
+  const raw = cleanHref(href);
+  if (!raw) return false;
+  if (raw.startsWith("#")) return Boolean(currentFile);
+  return Boolean(resolveHrefTarget(raw).note?.file);
+}
+
+async function openHrefInEmacs(href: string): Promise<void> {
+  const raw = cleanHref(href);
+  if (!raw) return;
+  const target = resolveHrefTarget(raw);
+  const file = target.note?.file || (raw.startsWith("#") ? currentFile : "");
+  if (!file) {
+    setStatus("No Emacs target for link");
+    return;
+  }
+  await api.emacs.open({ file });
+}
+
+function canSystemOpenHref(href: string): boolean {
+  const raw = cleanHref(href);
+  return Boolean(raw && !raw.startsWith("#"));
+}
+
+async function systemOpenHref(href: string): Promise<void> {
+  const raw = cleanHref(href);
+  if (!raw || raw.startsWith("#")) return;
+  await api.emacs.systemOpen(raw, currentFile).catch((err) => {
+    setStatus(err instanceof Error ? err.message : `Cannot open: ${raw}`);
+  });
+}
+
+async function pasteIntoEditorFromContextMenu(): Promise<boolean> {
+  editor.focus();
+  return editor.pasteFromClipboard();
+}
+
+type AaronContextMenuTarget = {
+  x: number;
+  y: number;
+  href?: string;
+  cell?: JupyterPanelCell | null;
+};
+
+function showContextMenu(event: MouseEvent, target: Partial<AaronContextMenuTarget> = {}): void {
+  contextMenu.classList.remove("is-bibliography");
+  const selection = editor.getMarkdownSelection();
+  const hasSelection = selection.from !== selection.to;
+  const planningTarget = planningEditTargetFromPointer(event);
+  const cell = target.cell !== undefined ? target.cell : jupyterCellFromPointer(event, false);
+  const mathTarget = mathTargetFromPointer(event);
+  const href = cleanHref(target.href || markdownHrefFromPointer(event));
+  const cellDetail = cell
+    ? isLeanJupyterCell(cell) ? `${cell.language} / ${cell.session}` : `${cell.language} / ${cell.kernel} / ${cell.session}`
+    : "";
+  const items: AaronContextMenuItem[] = [];
+
+  if (planningTarget) {
+    items.push({
+      label: "Agenda...",
+      detail: planningTarget.detail,
+      disabled: currentReadOnly,
+      run: () => openAgendaEditPop(planningTarget),
+    });
+  } else if (mathTarget) {
+    items.push(
+      mathTarget.kind === "inline"
+        ? {
+            label: "Convert to Display Math",
+            detail: "\\[ ... \\]",
+            disabled: currentReadOnly,
+            run: () => convertInlineMathToBlock(mathTarget),
+          }
+        : {
+            label: "Convert to Inline Math",
+            detail: "\\( ... \\)",
+            disabled: currentReadOnly,
+            run: () => convertBlockMathToInline(mathTarget),
+          },
+    );
+  } else if (cell) {
+    items.push(
+      { label: "Run Cell", detail: cellDetail, disabled: !currentFile, run: () => runJupyterCell(cell) },
+      { label: "Edit Cell Source", detail: cell.id, disabled: !currentFile, run: () => openJupyterCellSource(cell) },
+      { label: "Run Section", detail: cell.session, disabled: !currentFile, run: () => runJupyterCells("section") },
+      ...(isLeanJupyterCell(cell) ? [{
+        label: "Convert to Python Cell",
+        detail: "Lean -> python3",
+        disabled: currentReadOnly,
+        run: () => exitJupyterCellFromLean(cell),
+      }] : []),
+      { label: "Kernel Tool", detail: "switch", disabled: isLeanJupyterCell(cell), run: () => void openJupyterKernelTool(cell) },
+      { label: "Delete Cell Block", detail: "source + output", danger: true, disabled: currentReadOnly, run: () => deleteJupyterCellBlock(cell) },
+    );
+  } else if (href) {
+    const detail = hrefPath(href) || href;
+    items.push(
+      { label: "Open", detail, run: () => openExternalUrl(href) },
+      { label: `Open in ${sourceEditorName()}`, detail: "target note", disabled: !canOpenHrefInEmacs(href), run: () => openHrefInEmacs(href) },
+      { label: "System Open", detail: "default app", disabled: !canSystemOpenHref(href), run: () => systemOpenHref(href) },
+      { label: "Copy Link", detail: "clipboard", run: () => copyContextLink(href) },
+    );
+  } else if (hasSelection) {
+    items.push(
+      { label: "Copy Selection", detail: "Cmd-C", run: () => copyEditorSelection() },
+      { label: "Bold", detail: "Cmd-B", disabled: currentReadOnly, run: () => runContextEditorCommand("bold") },
+      { label: "Italic", detail: "Cmd-I", disabled: currentReadOnly, run: () => runContextEditorCommand("italic") },
+      { label: "Inline Code", detail: "`code`", disabled: currentReadOnly, run: () => runContextEditorCommand("code") },
+      { label: "Link", detail: "Cmd-K", disabled: currentReadOnly, run: () => runContextEditorCommand("link") },
+      { label: "Superscript", detail: "^text^", disabled: currentReadOnly, run: () => runContextEditorCommand("superscript") },
+      { label: "Subscript", detail: "~text~", disabled: currentReadOnly, run: () => runContextEditorCommand("subscript") },
+      { label: "Footnote", detail: "[^1]", disabled: currentReadOnly, run: () => runContextEditorCommand("insert-footnote") },
+      { label: "Revision...", detail: "@@revision", disabled: currentReadOnly, run: () => {
+        updateSelectionTool();
+        runSelectionCommand("revision-form");
+      } },
+    );
+  } else {
+    const block = editor.getBlockContext();
+    items.push(
+      { label: "Move Block Up", detail: block.type, disabled: currentReadOnly, run: () => runContextEditorCommand("move-block-up") },
+      { label: "Move Block Down", detail: block.type, disabled: currentReadOnly, run: () => runContextEditorCommand("move-block-down") },
+      ...(block.type.includes("heading") ? [
+        { label: "Fold Heading", detail: "section", run: () => runContextEditorCommand("fold-heading") },
+        { label: "Unfold Heading", detail: "section", run: () => runContextEditorCommand("unfold-heading") },
+      ] : []),
+      ...(block.type.includes("code") ? [
+        { label: "Copy Code", detail: "block", run: () => runContextEditorCommand("copy-code") },
+      ] : []),
+      { label: "Document Properties", detail: "org-env(meta)", disabled: currentReadOnly, run: () => runContextEditorCommand("edit-properties") },
+      { label: "Paste", detail: "Cmd-V", disabled: currentReadOnly, run: () => pasteIntoEditorFromContextMenu() },
+      { label: "Find in Note", detail: "Cmd-F", run: () => openFindPanel() },
+      { label: "Save", detail: currentReadOnly ? "read-only" : "Cmd-S", disabled: currentReadOnly || !currentFile, run: () => save() },
+      { label: slideDeck?.isSlides()
+        ? (slideDeck.isRevealView() ? "Edit slides" : "Present slides")
+        : (editor.isSourceMode() ? "Markdown View" : "Source View"), detail: "Cmd-/", run: () => togglePresentationOrSource() },
+      { label: "Copy Note Path", detail: currentFile ? fileNameFromPath(currentFile) : "", disabled: !currentFile, run: () => copyCurrentNotePath() },
+    );
+  }
+
+  contextMenu.replaceChildren(...items.map(contextMenuItem));
+  contextMenu.hidden = false;
+  const rect = contextMenu.getBoundingClientRect();
+  const x = target.x ?? event.clientX;
+  const y = target.y ?? event.clientY;
+  const left = Math.max(6, Math.min(window.innerWidth - rect.width - 6, x));
+  const top = Math.max(6, Math.min(window.innerHeight - rect.height - 6, y));
+  contextMenu.style.left = `${left}px`;
+  contextMenu.style.top = `${top}px`;
+}
+
+function toggleJupyterPanel(): void {
+  jupyterPanel.hidden = !jupyterPanel.hidden;
+  jupyterButton.setAttribute("aria-expanded", jupyterPanel.hidden ? "false" : "true");
+  if (!jupyterPanel.hidden) renderJupyterPanel();
+}
+
+function closeJupyterPanel(): void {
+  jupyterPanel.hidden = true;
+  jupyterButton.setAttribute("aria-expanded", "false");
+}
+
+function saveBody() {
+  return {
+    file: currentFile,
+    content: editor.getMarkdown(),
+    mode: editor.isSourceMode() ? "source" : "markdown",
+    clientId,
+    seq: revision,
+    baseMtimeMs: currentMtimeMs,
+    refresh: "deferred",
+  };
+}
+
+async function save(): Promise<void> {
+  window.clearTimeout(saveTimer);
+  if (saveIdleHandle && "cancelIdleCallback" in window) window.cancelIdleCallback(saveIdleHandle);
+  saveIdleHandle = 0;
+  if (currentReadOnly) {
+    savedRevision = revision;
+    updateTitle();
+    setStatus("Read-only pane");
+    return;
+  }
+  if (!currentFile || revision === savedRevision) return;
+  const savingRevision = revision;
+  const savingFile = currentFile;
+  setStatus("Saving...");
+  try {
+    const result = await api.notes.save(saveBody());
+    // If the user switched notes while this save was in flight, discard the
+    // result — applying metadata to the new note would corrupt its dirty tracking.
+    if (savingFile !== currentFile) return;
+    if (result.conflict) {
+      setStatus(result.message || `Save conflict; reopen from ${sourceEditorName()}`);
+      return;
+    }
+    currentMtimeMs = Number(result.mtimeMs) || currentMtimeMs;
+    applyIndexPayload(result);
+    savedRevision = Math.max(savedRevision, savingRevision);
+    updateTitle();
+    setStatus(revision === savedRevision ? "Saved" : "Edited");
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "Save failed");
+  }
+}
+
+function scheduleSave(): void {
+  window.clearTimeout(saveTimer);
+  if (saveIdleHandle && "cancelIdleCallback" in window) window.cancelIdleCallback(saveIdleHandle);
+  saveIdleHandle = 0;
+  if (currentReadOnly) return;
+  if (!currentFile || applyingContent || revision === savedRevision) return;
+  if (!noteAutoSaveEnabled(currentRemote)) {
+    setStatus("Edited — save manually");
+    return;
+  }
+  setStatus("Edited");
+  saveTimer = window.setTimeout(() => {
+    saveTimer = 0;
+    if (editor.getMarkdownLength() < LARGE_DOCUMENT_CHARS || !("requestIdleCallback" in window)) {
+      void save();
+      return;
+    }
+    saveIdleHandle = window.requestIdleCallback(() => {
+      saveIdleHandle = 0;
+      const scheduling = navigator as Navigator & { scheduling?: { isInputPending?: () => boolean } };
+      if (scheduling.scheduling?.isInputPending?.()) {
+        scheduleSave();
+        return;
+      }
+      void save();
+    }, { timeout: 2500 });
+  }, 650);
+}
+
+function cursorPositionKey(position: Pick<CursorPosition, "file" | "mode" | "from" | "to" | "scrollY">): string {
+  return [
+    position.file,
+    position.mode,
+    Math.max(0, Math.floor(position.from)),
+    Math.max(0, Math.floor(position.to)),
+    Math.max(0, Math.floor(position.scrollY)),
+  ].join("|");
+}
+
+function currentCursorPosition(): CursorPosition | null {
+  if (!currentFile) return null;
+  const { from, to } = editor.getMarkdownSelection();
+  return {
+    file: currentFile,
+    mode: editor.isSourceMode() ? "source" : "markdown",
+    from: Math.max(0, from),
+    to: Math.max(0, to),
+    scrollY: Math.max(0, Math.floor(window.scrollY || 0)),
+    updatedAt: Date.now(),
+  };
+}
+
+function rememberCursorPosition(position: CursorPosition, positions?: CursorPosition[]): void {
+  if (Array.isArray(positions)) {
+    cursorPositions = positions;
+    return;
+  }
+  const index = cursorPositions.findIndex((entry) => entry.file === position.file);
+  if (index >= 0) cursorPositions[index] = position;
+  else cursorPositions.unshift(position);
+}
+
+async function loadCursorPositions(): Promise<CursorPosition[]> {
+  if (cursorPositionsLoaded) return cursorPositions;
+  cursorPositionsLoaded = true;
+  try {
+    const result = await api.session.getPositions();
+    cursorPositions = Array.isArray(result.positions) ? result.positions : [];
+  } catch {
+    cursorPositions = [];
+  }
+  return cursorPositions;
+}
+
+function rememberedCursorPosition(file: string, positions = cursorPositions): CursorPosition | undefined {
+  return positions.find((position) => position.file === file);
+}
+
+function trackCursorPosition(): CursorPosition | null {
+  const position = currentCursorPosition();
+  if (!position) return null;
+  const key = cursorPositionKey(position);
+  if (key !== lastTrackedCursorPositionKey) {
+    lastTrackedCursorPositionKey = key;
+    rememberCursorPosition(position);
+  }
+  return position;
+}
+
+async function persistCursorPosition(position: CursorPosition): Promise<void> {
+  const key = cursorPositionKey(position);
+  if (key === lastSavedCursorPositionKey) return;
+  if (cursorPositionFlushInFlight) {
+    cursorPositionFlushQueued = true;
+    return;
+  }
+  cursorPositionFlushInFlight = true;
+  try {
+    const result = await api.session.savePosition(position);
+    rememberCursorPosition(position, result.positions);
+    lastSavedCursorPositionKey = key;
+  } catch {
+    // Cursor position memory is best-effort and should never block editing.
+  } finally {
+    cursorPositionFlushInFlight = false;
+    if (cursorPositionFlushQueued) {
+      cursorPositionFlushQueued = false;
+      const latest = trackCursorPosition();
+      if (latest && cursorPositionKey(latest) !== lastSavedCursorPositionKey) {
+        void persistCursorPosition(latest);
+      }
+    }
+  }
+}
+
+function noteCursorPositionEvent(): void {
+  trackCursorPosition();
+}
+
+function pushNavigationBackLocation(location = trackCursorPosition()): void {
+  if (!location || restoringNavigationBack) return;
+  const key = cursorPositionKey(location);
+  const top = navigationBackStack[navigationBackStack.length - 1];
+  if (top && cursorPositionKey(top) === key) return;
+  navigationBackStack.push({ ...location, updatedAt: Date.now() });
+  if (navigationBackStack.length > NAVIGATION_BACK_STACK_MAX) {
+    navigationBackStack = navigationBackStack.slice(-NAVIGATION_BACK_STACK_MAX);
+  }
+  try {
+    window.history.pushState({ aaronnoteNavigation: true }, "", window.location.href);
+  } catch {
+    // Browser history is an optional convenience; the in-memory stack remains valid.
+  }
+}
+
+function restoreCursorPosition(location: CursorPosition): void {
+  const length = editor.getMarkdownLength();
+  const from = Math.min(Math.max(0, location.from), length);
+  const to = Math.min(Math.max(0, location.to), length);
+  if (!slideDeck?.isSlides() && (location.mode === "source") !== editor.isSourceMode()) editor.toggleSource();
+  sourceButton.classList.toggle("is-active", editor.isSourceMode());
+  editor.setMarkdownSelection(from, to);
+  editor.revealCursor();
+  editor.focus();
+  trackCursorPosition();
+  scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true, toc: true, selectionTool: true });
+}
+
+async function restoreNavigationBack(): Promise<boolean> {
+  const location = navigationBackStack.pop();
+  if (!location) return false;
+  restoringNavigationBack = true;
+  try {
+    if (location.file !== currentFile) await openFile(location.file);
+    restoreCursorPosition(location);
+    return true;
+  } finally {
+    restoringNavigationBack = false;
+  }
+}
+
+async function flushCursorPosition(): Promise<void> {
+  const position = trackCursorPosition();
+  if (position) await persistCursorPosition(position);
+}
+
+function notifyClientClosedKeepalive(): void {
+  if (clientCloseNotified) return;
+  clientCloseNotified = true;
+  api.session.closeClientKeepalive({
+    client: currentClient,
+    clientId,
+    file: currentFile,
+  });
+}
+
+function applyOpenedNote(
+  opened: Awaited<ReturnType<typeof api.notes.bootstrap>>,
+  fallbackFile?: string,
+  rememberedPositions: CursorPosition[] = cursorPositions,
+  options: ApplyOpenedNoteOptions = {},
+): void {
+  const revealCursor = options.revealCursor !== false;
+  const focusEditor = options.focusEditor !== false;
+  const updateStatus = options.updateStatus !== false;
+  const resetVim = options.resetVim !== false;
+  const reloadNoteIndex = options.reloadNotes !== false;
+  currentFile = String(opened.file || fallbackFile || "");
+  currentKind = String(opened.kind || "");
+  currentStandalone = Boolean(opened.standalone);
+  currentRemote = Boolean(opened.remote);
+  currentReadOnly = initialReadOnly;
+  applyReadOnlyUi();
+  applyIndexPayload(opened);
+  if (Array.isArray(opened.snippets)) snippets = withBuiltinSnippets(opened.snippets);
+  currentMtimeMs = Number(opened.mtimeMs) || 0;
+  const hasPendingOpenTarget = Boolean(pendingOpenHash || pendingOpenDomTarget || pendingTodoTarget);
+  const remembered = !opened.selection && !pendingOpenHash && !pendingOpenDomTarget && !pendingTodoTarget
+    ? rememberedCursorPosition(currentFile, rememberedPositions)
+    : undefined;
+  applyingContent = true;
+  editor.setMarkdown(String(opened.content || ""), { history: "reset" });
+  revision = 0;
+  savedRevision = 0;
+  const mode = remembered?.mode || opened.mode;
+  if (String(currentKind || "").trim().toLowerCase() !== "slides"
+      && (mode === "source") !== editor.isSourceMode()) editor.toggleSource();
+  sourceButton.classList.toggle("is-active", editor.isSourceMode());
+  slideDeck?.sync(currentKind);
+  renderModeToggleLabel(vim.mode());
+  // During reload, the server selection belongs to the original open/jump
+  // request and must not replace the cursor of this already-open editor.
+  const from = Number(options.preserveSelection?.from ?? opened.selection?.from ?? remembered?.from);
+  const to = Number(options.preserveSelection?.to ?? opened.selection?.to ?? remembered?.to ?? from);
+  let shouldRevealCursor = false;
+  if (Number.isFinite(from)) {
+    const length = editor.getMarkdownLength();
+    const safeFrom = Math.min(Math.max(0, from), length);
+    const safeTo = Math.min(Math.max(0, Number.isFinite(to) ? to : from), length);
+    editor.setMarkdownSelection(safeFrom, safeTo, { scrollIntoView: false });
+    if (revealCursor) {
+      shouldRevealCursor = true;
+      editor.revealCursor();
+    }
+  }
+  applyingContent = false;
+  scheduleWritingStats(true);
+  if (currentReadOnly) {
+    revision = savedRevision;
+    setProseDiagnostics(editor.view, []);
+  }
+  const restored = currentCursorPosition();
+  lastSavedCursorPositionKey = restored ? cursorPositionKey(restored) : "";
+  lastTrackedCursorPositionKey = lastSavedCursorPositionKey;
+  if (restored) rememberCursorPosition(restored);
+  snippetSession.clear();
+  hideSnippetPopup();
+  hideMathPreview();
+  proseLifecycle.invalidate("note-changed");
+  setProseDiagnostics(editor.view, []);
+  hideProsePopover();
+  selectionTool.hidden = true;
+  selectionMore.hidden = true;
+  if (resetVim) vim.setMode("insert");
+  updateTitle();
+  void api.emacs.currentFile(currentFile, currentClient);
+  if (updateStatus) {
+    setStatus(
+      currentReadOnly
+        ? "Read-only"
+        : currentFile
+          ? currentRemote ? "Ready — manual save" : "Ready"
+          : "Scratch",
+    );
+  }
+  if (focusEditor) editor.focus();
+  scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true, toc: true });
+  scheduleBibliographyRefresh(true);
+  restoreEditorScroll(options.restoreScroll);
+  if (!currentReadOnly) scheduleAutomaticProseCheck(2200);
+  if (shouldRevealCursor && !options.restoreScroll && !hasPendingOpenTarget) {
+    revealCursorAfterLayout();
+  }
+  const targetHash = pendingOpenHash;
+  const targetDom = pendingOpenDomTarget;
+  const targetTodo = pendingTodoTarget;
+  pendingOpenHash = "";
+  pendingOpenDomTarget = "";
+  pendingTodoTarget = null;
+  if (targetHash || targetDom || targetTodo) {
+    window.requestAnimationFrame(() => {
+      if (targetTodo && jumpToTodoTarget(targetTodo)) return;
+      if (targetDom && jumpToDomTarget(targetDom)) return;
+      if (targetHash && jumpToHash(targetHash)) return;
+      if (targetTodo) { setStatus("Todo location not found"); return; }
+      setStatus(targetDom ? `DOM target not found: ${targetDom}` : `Anchor not found: ${targetHash}`);
+    });
+  }
+  if (reloadNoteIndex) void reloadNotes(false);
+  if (!Array.isArray(opened.snippets) && snippets.length === 0) void reloadSnippets();
+}
+
+async function openFile(file?: string, bootstrap = false): Promise<void> {
+  const target = file || undefined;
+  try {
+    if (currentFile) await flushCursorPosition();
+    if (currentFile && revision !== savedRevision) {
+      if (!noteAutoSaveEnabled(currentRemote)) {
+        setStatus("Remote note has unsaved changes; save before switching");
+        return;
+      }
+      await save();
+      if (revision !== savedRevision) return;
+    }
+    const openPromise = target && !bootstrap
+      ? api.notes.open(target)
+      : api.notes.bootstrap(target);
+    const [opened, positions] = await Promise.all([openPromise, loadCursorPositions()]);
+    applyOpenedNote(opened, target, positions);
+  } catch (error) {
+    applyingContent = false;
+    setStatus(error instanceof Error ? error.message : "Open failed");
+  }
+}
+
+async function reloadCurrentFilePreservingCursor(options: {
+  silent?: boolean;
+  preserveScroll?: boolean;
+} = {}): Promise<void> {
+  if (!currentFile) return;
+  const position = trackCursorPosition();
+  const scroll = options.preserveScroll ? captureEditorScroll() : null;
+  if (position) rememberCursorPosition(position);
+  if (!currentReadOnly && revision !== savedRevision) {
+    if (!noteAutoSaveEnabled(currentRemote)) {
+      setStatus("Remote note has unsaved changes; save before refreshing");
+      return;
+    }
+    await save();
+    if (revision !== savedRevision) return;
+  }
+  if (!options.silent) setStatus("Refreshing...");
+  try {
+    const opened = await api.notes.open(currentFile);
+    applyOpenedNote(
+      opened,
+      currentFile,
+      position ? [position, ...cursorPositions] : cursorPositions,
+      options.silent
+        ? {
+            revealCursor: false,
+            focusEditor: false,
+            updateStatus: false,
+            resetVim: false,
+            reloadNotes: false,
+            restoreScroll: scroll,
+            preserveSelection: position,
+          }
+        : { restoreScroll: scroll, preserveSelection: position },
+    );
+    if (pendingExternalSave?.file === currentFile) pendingExternalSave = null;
+    if (!options.silent) setStatus(currentReadOnly ? "Read-only refreshed" : "Refreshed");
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "Refresh failed");
+  }
+}
+
+async function refreshPendingExternalSaveOnFocus(): Promise<void> {
+  const pending = pendingExternalSave;
+  if (!pending || pendingExternalSaveRefreshInFlight) return;
+  if (!currentFile || pending.file !== currentFile) {
+    pendingExternalSave = null;
+    return;
+  }
+  if (revision !== savedRevision) {
+    setStatus("Changed in another pane; refresh before saving");
+    return;
+  }
+  pendingExternalSaveRefreshInFlight = true;
+  try {
+    if (pending.mtimeMs) currentMtimeMs = pending.mtimeMs;
+    await reloadCurrentFilePreservingCursor({ silent: true, preserveScroll: true });
+    if (pendingExternalSave === pending) pendingExternalSave = null;
+  } finally {
+    pendingExternalSaveRefreshInFlight = false;
+  }
+}
+
+async function openInitialFile(): Promise<void> {
+  const file = initialParams.get("file") || undefined;
+  currentClient = initialParams.get("client") || "";
+  pendingOpenHash = initialParams.get("hash") || "";
+  pendingOpenDomTarget = initialParams.get("dom") || "";
+  currentReadOnly = initialReadOnly;
+  applyReadOnlyUi();
+  await openFile(file, true);
+}
+
+setupCopilot({
+  editor,
+  host,
+  currentFile: () => currentFile,
+  clientId: () => clientId,
+  vimMode: () => vim.mode(),
+  setStatus,
+  onChange: (handler) => {
+    changeHandlers.add(handler);
+    return () => changeHandlers.delete(handler);
+  },
+  onKeyDown: (handler) => {
+    const listener = (event: KeyboardEvent) => {
+      if (handler(event)) event.stopPropagation();
+    };
+    document.addEventListener("keydown", listener, true);
+    return () => document.removeEventListener("keydown", listener, true);
+  },
+  onAction: () => () => {},
+  onSettingsChange: () => () => {},
+  getSettings: () => ({ idleDelayMs: 850, largeBufferThresholdKb: 512 }),
+  isActive: () => !paused && editorSurfaceVisible(),
+  onDocumentEvent: subscribe,
+  preserveScroll: (update) => {
+    const scroll = captureEditorScroll();
+    update();
+    restoreEditorScroll(scroll);
+  },
+  jumpSnippetNext: jumpSnippetTabstop,
+  jumpSnippetPrevious: jumpSnippetTabstopBack,
+  forwardDelimiter: () => jumpStructuralDelimiter(editor.view, 1),
+  backwardDelimiter: () => jumpStructuralDelimiter(editor.view, -1),
+});
+
+function toggleSourceMode(): void {
+  // Source is an explicit pencil-tool action.  When invoked from Reveal, first
+  // return to the ordinary note so the raw source is immediately visible.
+  if (slideDeck?.isRevealView()) slideDeck.toggleView();
+  editor.toggleSource();
+  sourceButton.classList.toggle("is-active", editor.isSourceMode());
+  slideDeck?.refresh();
+  renderModeToggleLabel(vim.mode());
+  editor.focus();
+  scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
+}
+
+function togglePresentationOrSource(): void {
+  if (!slideDeck?.isSlides()) {
+    toggleSourceMode();
+    return;
+  }
+  // Cmd-/ always comes back to WYSIWYG, even if Source was used earlier.
+  if (slideDeck.isRevealView() && editor.isSourceMode()) editor.toggleSource();
+  slideDeck.toggleView();
+  if (slideDeck.isRevealView()) {
+    closeToolsPanel();
+    closeRoamToolsPanel();
+    closeJupyterPanel();
+  }
+  renderModeToggleLabel(vim.mode());
+  sourceButton.classList.toggle("is-active", editor.isSourceMode());
+}
+
+function isEditorCommand(command: string): command is EditorCommand {
+  return editorCommands.has(command as EditorCommand);
+}
+
+function primaryMod(event: KeyboardEvent): boolean {
+  return /Mac/.test(navigator.platform)
+    ? event.metaKey && !event.ctrlKey
+    : event.ctrlKey && !event.metaKey;
+}
+
+type ProseCheckInput = {
+  automatic: boolean;
+  file: string;
+  revision: number;
+  settings: LanguageToolSettings;
+};
+
+type ProseCheckApiResult = Awaited<ReturnType<typeof api.proseCheck.run>>;
+
+type ProseCheckRunResult = {
+  input: ProseCheckInput;
+  response?: ProseCheckApiResult;
+  elapsedMs: number;
+  empty?: boolean;
+  deferred?: boolean;
+};
+
+const proseRetryRequests = new Set<number>();
+let proseBusyRequestId = 0;
+let proseManualStageTimer = 0;
+let proseRetryTimer = 0;
+
+function proseProfile() {
+  return PROSE_PROFILES[languageToolSettings.performanceProfile] ?? PROSE_PROFILES.balanced;
+}
+
+function proseCheckSegments(automatic = false): Array<{ from: number; text: string }> {
+  const doc = editor.view.state.doc;
+  const selection = editor.getMarkdownSelection();
+  const profile = proseProfile();
+  const padding = automatic ? profile.padding : PROSE_SCOPE_PADDING;
+  const maxChars = automatic ? profile.maxChars : PROSE_SCOPE_MAX_CHARS;
+  const rawRanges = !automatic && selection.from !== selection.to
+    ? [{ from: selection.from, to: selection.to }]
+    : editor.view.visibleRanges.map((range) => ({
+      from: Math.max(0, range.from - padding),
+      to: Math.min(doc.length, range.to + padding),
+    }));
+  const ranges = rawRanges
+    .map((range) => ({
+      from: doc.lineAt(Math.max(0, Math.min(range.from, doc.length))).from,
+      to: doc.lineAt(Math.max(0, Math.min(range.to, doc.length))).to,
+    }))
+    .sort((a, b) => a.from - b.from || a.to - b.to);
+  const merged: Array<{ from: number; to: number }> = [];
+  for (const range of ranges) {
+    const previous = merged[merged.length - 1];
+    if (previous && range.from <= previous.to + 1) previous.to = Math.max(previous.to, range.to);
+    else merged.push({ ...range });
+  }
+  const segments: Array<{ from: number; text: string }> = [];
+  let remaining = maxChars;
+  for (const range of merged) {
+    if (remaining <= 0) break;
+    const to = Math.min(range.to, range.from + remaining);
+    const text = editor.markdownBetween(range.from, to);
+    if (text) segments.push({ from: range.from, text });
+    remaining -= text.length;
+  }
+  return segments;
+}
+
+function hideProsePopover(): void {
+  prosePopover.hidden = true;
+  prosePopover.replaceChildren();
+  activeProseDiagnostic = null;
+}
+
+function proseCheckInput(automatic: boolean): ProseCheckInput {
+  return {
+    automatic,
+    file: currentFile,
+    revision,
+    settings: { ...languageToolSettings },
+  };
+}
+
+function proseAutoSignature(): string {
+  const ranges = editor.view.visibleRanges.map((range) => `${range.from}:${range.to}`).join(",");
+  return [
+    currentFile,
+    revision,
+    editor.getMarkdownLength(),
+    languageToolSettings.performanceProfile,
+    languageToolSettings.language,
+    languageToolSettings.level,
+    ranges,
+  ].join("|");
+}
+
+function clearProseManualStageTimer(): void {
+  if (!proseManualStageTimer) return;
+  window.clearTimeout(proseManualStageTimer);
+  proseManualStageTimer = 0;
+}
+
+function clearProseRetryTimer(): void {
+  if (!proseRetryTimer) return;
+  window.clearTimeout(proseRetryTimer);
+  proseRetryTimer = 0;
+}
+
+function scheduleProseRetry(): void {
+  clearProseRetryTimer();
+  const delayMs = Math.max(0, proseAutoSuspendedUntil - Date.now());
+  proseRetryTimer = window.setTimeout(() => {
+    proseRetryTimer = 0;
+    scheduleAutomaticProseCheck(0);
+  }, delayMs);
+}
+
+function setProseBusy(busy: boolean, requestId = 0): void {
+  if (busy) {
+    proseBusyRequestId = requestId;
+    statusLabel.setAttribute("aria-busy", "true");
+    statusLabel.dataset.proseState = "checking";
+    return;
+  }
+  if (requestId && requestId !== proseBusyRequestId) return;
+  proseBusyRequestId = 0;
+  statusLabel.removeAttribute("aria-busy");
+  delete statusLabel.dataset.proseState;
+  clearProseManualStageTimer();
+}
+
+function proseErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Prose check failed";
+}
+
+async function executeProseCheck(
+  input: ProseCheckInput,
+  context: ProseCheckContext,
+): Promise<ProseCheckRunResult> {
+  if (input.file !== currentFile || input.revision !== revision) {
+    return { input, elapsedMs: 0, deferred: true };
+  }
+  if (context.kind === "auto" && Date.now() < proseAutoSuspendedUntil) {
+    return { input, elapsedMs: 0, deferred: true };
+  }
+  const segments = proseCheckSegments(input.automatic);
+  if (segments.length === 0) return { input, elapsedMs: 0, empty: true };
+  const startedAt = performance.now();
+  const response = await api.proseCheck.run({
+    requestId: `${clientId}:prose:${context.id}`,
+    file: input.file,
+    segments,
+    totalChars: editor.getMarkdownLength(),
+    allowLocalFallback: !input.automatic && input.settings.manualLocalFallback,
+    interactive: !input.automatic,
+  });
+  return { input, response, elapsedMs: Math.max(0, performance.now() - startedAt) };
+}
+
+function observeProseCheck(result: ProseCheckRunResult, context: ProseCheckContext): void {
+  if (context.kind !== "auto" || !result.response) return;
+  const failures = (result.response.tools ?? []).filter((tool) => tool.ok === false && !tool.optional);
+  if (failures.length > 0) {
+    proseAutoSuspendedUntil = Date.now() + languageToolSettings.retryCooldownMs;
+    proseRetryRequests.add(context.id);
+    languageToolHealth = failures.map((tool) => tool.message || "NAS unavailable").join("; ");
+    return;
+  }
+  proseAutoSuspendedUntil = 0;
+  clearProseRetryTimer();
+  languageToolHealth = `Online · ${Math.round(result.elapsedMs)} ms`;
+}
+
+function applyProseCheck(result: ProseCheckRunResult, context: ProseCheckContext): boolean {
+  if (result.deferred) return false;
+  if (result.input.file !== currentFile || result.input.revision !== revision) return false;
+  if (result.empty) {
+    if (context.kind === "manual" && context.id === proseBusyRequestId) {
+      setProseDiagnostics(editor.view, []);
+      setStatus("Nothing to check");
+    }
+    return true;
+  }
+  const response = result.response!;
+  const tools = response.tools ?? [];
+  const failures = tools.filter((tool) => tool.ok === false && !tool.optional);
+  const usedLocalCli = tools.some((tool) => tool.message?.includes("used local CLI"));
+  if (context.kind === "auto" && failures.length > 0) return false;
+  if (context.kind === "manual") {
+    if (failures.length === 0 && !usedLocalCli) {
+      proseAutoSuspendedUntil = 0;
+      clearProseRetryTimer();
+      languageToolHealth = `Online · ${Math.round(result.elapsedMs)} ms`;
+    } else if (usedLocalCli) {
+      proseAutoSuspendedUntil = Date.now() + languageToolSettings.retryCooldownMs;
+      scheduleProseRetry();
+      languageToolHealth = "NAS offline · local CLI used manually";
+    } else {
+      proseAutoSuspendedUntil = Date.now() + languageToolSettings.retryCooldownMs;
+      scheduleProseRetry();
+      languageToolHealth = failures.map((tool) => tool.message || "LanguageTool failed").join("; ");
+    }
+  }
+  const diagnostics = (response.diagnostics ?? []) as ProseDiagnostic[];
+  setProseDiagnostics(editor.view, diagnostics);
+  if (context.kind === "manual" && context.id === proseBusyRequestId) {
+    const partial = response.scope?.partial ? " (bounded scope)" : "";
+    const localFallback = usedLocalCli ? " (local CLI)" : "";
+    setStatus(failures.length > 0
+      ? failures.map((tool) => tool.message || `${tool.source} failed`).join("; ")
+      : `${diagnostics.length} prose issue${diagnostics.length === 1 ? "" : "s"}${partial}${localFallback}`);
+  }
+  return true;
+}
+
+function onProseCheckState(state: ProseCheckState): void {
+  if (state.kind !== "manual" || state.phase === "terminal") return;
+  setProseBusy(true, state.id);
+  setOwnedProseStatus(state.id, state.phase === "scheduled" ? "Prose check queued..." : "Checking prose on NAS...");
+  clearProseManualStageTimer();
+  if (state.phase === "running" && languageToolSettings.manualLocalFallback) {
+    proseManualStageTimer = window.setTimeout(() => {
+      if (proseBusyRequestId === state.id) setOwnedProseStatus(state.id, "Checking prose with local CLI...");
+    }, languageToolSettings.remoteTimeoutMs + 150);
+  }
+}
+
+function onProseCheckFinally(outcome: ProseCheckOutcome): void {
+  if (outcome.kind === "auto") {
+    if (outcome.terminal === "failed" || outcome.terminal === "timeout") {
+      proseAutoSuspendedUntil = Date.now() + languageToolSettings.retryCooldownMs;
+      proseRetryRequests.add(outcome.id);
+      languageToolHealth = outcome.terminal === "timeout"
+        ? "NAS check timed out"
+        : proseErrorMessage(outcome.error);
+    }
+    if (proseRetryRequests.delete(outcome.id)) {
+      scheduleProseRetry();
+    }
+    return;
+  }
+  const ownsBusyStatus = outcome.id === proseBusyRequestId;
+  const ownsStatusText = statusLabel.dataset.proseOwner === String(outcome.id);
+  setProseBusy(false, outcome.id);
+  if (!ownsBusyStatus || !ownsStatusText) return;
+  if (outcome.terminal === "failed") setStatus(proseErrorMessage(outcome.error));
+  else if (outcome.terminal === "timeout") setStatus("Prose check timed out");
+  else if (outcome.terminal === "stale" || outcome.terminal === "not-applied") setStatus("Prose check superseded");
+  else if (outcome.terminal === "cancelled") {
+    const message = outcome.reason === "document-edited"
+      ? "Prose check canceled after edit"
+      : outcome.reason === "page-hidden"
+        ? "Prose check paused"
+        : outcome.reason === "settings-changed"
+          ? "Prose check canceled after settings change"
+          : "Prose check canceled";
+    setStatus(message);
+  }
+}
+
+const proseLifecycle = new ProseCheckLifecycle<ProseCheckInput, ProseCheckRunResult>({
+  autoDebounceMs: PROSE_PROFILES.balanced.idleMs,
+  deadlineMs: (input, kind) => input.settings.remoteTimeoutMs
+    + (kind === "manual" && input.settings.manualLocalFallback ? LANGUAGETOOL_LOCAL_DEADLINE_ALLOWANCE_MS : 2_000),
+  run: executeProseCheck,
+  observe: observeProseCheck,
+  apply: applyProseCheck,
+  onState: onProseCheckState,
+  onFinally: onProseCheckFinally,
+  onCancel: ({ context }) => api.proseCheck.cancelKeepalive(`${clientId}:prose:${context.id}`),
+});
+
+function scheduleAutomaticProseCheck(delayMs: number = proseProfile().idleMs): void {
+  if (!languageToolSettings.automaticEnabled || currentReadOnly || !currentFile
+      || paused || document.hidden || !editorSurfaceVisible()) return;
+  const cooldownMs = Math.max(0, proseAutoSuspendedUntil - Date.now());
+  proseLifecycle.scheduleAuto(proseCheckInput(true), proseAutoSignature(), Math.max(delayMs, cooldownMs));
+}
+
+function runProseCheck(automatic = false): void {
+  if (automatic) {
+    scheduleAutomaticProseCheck(0);
+    return;
+  }
+  hideProsePopover();
+  void proseLifecycle.runManual(proseCheckInput(false));
+}
+
+function runProseCheckShortcut(event: KeyboardEvent): boolean {
+  if (!primaryMod(event) || !event.shiftKey || event.altKey || event.key.toLowerCase() !== "c") return false;
+  event.preventDefault();
+  void runProseCheck(false);
+  return true;
+}
+
+function removeProseDiagnostics(predicate: (diagnostic: ProseDiagnostic) => boolean): void {
+  setProseDiagnostics(editor.view, allProseDiagnostics(editor.view).filter((diagnostic) => !predicate(diagnostic)));
+  hideProsePopover();
+}
+
+function showProsePopover(diagnostic: ProseDiagnostic, x: number, y: number): void {
+  activeProseDiagnostic = diagnostic;
+  const message = document.createElement("div");
+  message.className = "aaronnote-prose-message";
+  message.textContent = `${diagnostic.source}: ${diagnostic.message}`;
+  prosePopover.replaceChildren(message);
+  for (const suggestion of (diagnostic.suggestions ?? []).slice(0, 8)) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.proseAction = "replace";
+    button.dataset.value = suggestion;
+    button.textContent = suggestion || "Remove";
+    prosePopover.append(button);
+  }
+  const ignore = document.createElement("button");
+  ignore.type = "button";
+  ignore.dataset.proseAction = "ignore";
+  ignore.textContent = "Ignore";
+  prosePopover.append(ignore);
+  if (diagnostic.word) {
+    const accept = document.createElement("button");
+    accept.type = "button";
+    accept.dataset.proseAction = "accept";
+    accept.textContent = `Add “${diagnostic.word}”`;
+    prosePopover.append(accept);
+  }
+  prosePopover.style.left = `${Math.max(8, Math.min(window.innerWidth - 320, x))}px`;
+  prosePopover.style.top = `${Math.max(8, Math.min(window.innerHeight - 160, y + 8))}px`;
+  prosePopover.hidden = false;
+}
+
+function plainEscapeKey(event: KeyboardEvent): boolean {
+  return event.key === "Escape" && !event.metaKey && !event.ctrlKey && !event.altKey && !event.isComposing;
+}
+
+function runFormattingShortcut(event: KeyboardEvent): boolean {
+  if (!primaryMod(event) || event.altKey || event.isComposing) return false;
+  const key = event.key.toLowerCase();
+  const command: EditorCommand | "" = event.shiftKey && key === "x" ? "strike"
+    : !event.shiftKey && key === "b" ? "bold"
+    : !event.shiftKey && key === "i" ? "italic"
+    : !event.shiftKey && key === "k" ? "link"
+    : "";
+  if (!command) return false;
+  event.preventDefault();
+  if (rejectReadOnlyAction("Read-only pane")) return true;
+  editor.runCommand(command);
+  editor.focus();
+  return true;
+}
+
+function runSourceToggleShortcut(event: KeyboardEvent): boolean {
+  if (!primaryMod(event) || event.shiftKey || event.altKey || event.isComposing) return false;
+  if (event.key !== "/" && event.code !== "Slash") return false;
+  event.preventDefault();
+  togglePresentationOrSource();
+  return true;
+}
+
+function fileNameFromPath(path: string): string {
+  return String(path || "").split(/[\\/]/).filter(Boolean).at(-1) || path || "";
+}
+
+function decodeNoteRef(ref: string): string {
+  try {
+    return decodeURIComponent(ref);
+  } catch {
+    return ref;
+  }
+}
+
+function encodeMarkdownHrefPath(path: string): string {
+  return String(path || "")
+    .replace(/\\/g, "/")
+    .split("/")
+    .map((part) => encodeURIComponent(decodeNoteRef(part)))
+    .join("/");
+}
+
+function applyIndexPayload(payload: { notes?: NoteSummary[]; note?: NoteSummary; kind?: string; standalone?: boolean; indexVersion?: number }): void {
+  if (typeof payload.indexVersion === "number" && payload.indexVersion > lastNotesIndexVersion) {
+    lastNotesIndexVersion = payload.indexVersion;
+  }
+  if (Array.isArray(payload.notes)) notes = payload.notes;
+  else if (payload.note?.file) {
+    const index = notes.findIndex((note) => note.file === payload.note?.file);
+    if (index >= 0) notes = notes.map((note, i) => i === index ? payload.note! : note);
+    else notes = [...notes, payload.note];
+  }
+  if (typeof payload.kind === "string") currentKind = payload.kind;
+  if (typeof payload.standalone === "boolean") currentStandalone = payload.standalone;
+  pathSuggestions = [...new Set(notes
+    .flatMap((note) => [note.path, note.file, note.link])
+    .map((value) => String(value || "").trim())
+    .filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
+  scheduleAssistUpdate({ toc: true });
+  slideDeck?.sync(currentKind);
+  renderModeToggleLabel(vim.mode());
+  localGraphPanel.invalidate();
+}
+
+async function reloadNotes(force = false): Promise<void> {
+  try {
+    const msg = await api.notes.list(force);
+    applyIndexPayload(msg);
+    void loadPathSuggestions();
+  } catch (error) {
+    if (force) setStatus(error instanceof Error ? error.message : "Note index failed");
+  }
+}
+
+async function loadPathSuggestions(): Promise<void> {
+  if (!currentFile) return;
+  try {
+    const msg = await api.notes.pathSuggestions(currentFile);
+    if (Array.isArray(msg.paths)) pathSuggestions = msg.paths;
+  } catch {
+    // Keep the coarse note-index suggestions from applyIndexPayload.
+  }
+}
+
+function currentNote(): NoteSummary | undefined {
+  return notes.find((note) => note.file === currentFile)
+    ?? notes.find((note) => note.path === currentFile || note.link === currentFile);
+}
+
+function noteSearchValues(note: NoteSummary): string[] {
+  return [
+    note.id,
+    note.key,
+    note.title,
+    note.path,
+    note.link,
+    note.source,
+    note.file,
+    ...(note.aliases ?? []),
+    ...(note.tags ?? []),
+  ].map((value) => String(value || "").trim()).filter(Boolean);
+}
+
+function resolveNoteRef(ref: string): NoteSummary | undefined {
+  const raw = decodeNoteRef(String(ref || "").replace(/^roam:\/\//i, "").split(/[?#@]/, 1)[0] || "").trim();
+  if (!raw) return undefined;
+  const key = raw.toLowerCase();
+  return notes.find((note) => noteSearchValues(note).some((value) => value.toLowerCase() === key))
+    ?? notes.find((note) => noteSearchValues(note).some((value) => value.toLowerCase().includes(key)));
+}
+
+function openNote(
+  note: NoteSummary,
+  options: { newWindow?: boolean; hash?: string; domTarget?: string; equationTag?: string; inlineTag?: string } = {},
+): void {
+  if (!note.file) return;
+  const before = trackCursorPosition();
+  noteCursorPositionEvent();
+  if (options.newWindow) {
+    const url = new URL(window.location.href);
+    url.searchParams.set("file", note.file);
+    if (options.hash) url.searchParams.set("hash", options.hash);
+    if (options.domTarget) url.searchParams.set("dom", options.domTarget);
+    window.open(url.toString(), "_blank", "noopener,noreferrer");
+    return;
+  }
+  if (note.file === currentFile) {
+    let jumped = false;
+    if (options.domTarget) {
+      jumped = jumpToDomTarget(options.domTarget);
+      if (!jumped) setStatus(`DOM target not found: ${options.domTarget}`);
+    } else if (options.hash) {
+      jumped = jumpToHash(options.hash);
+      if (!jumped) setStatus(`Anchor not found: ${options.hash}`);
+    }
+    if (jumped) pushNavigationBackLocation(before);
+    if (options.domTarget || options.hash) return;
+  }
+  pushNavigationBackLocation(before);
+  pendingOpenHash = options.hash || "";
+  pendingOpenDomTarget = options.domTarget || "";
+  void openFile(note.file);
+}
+
+function cleanHref(href: string): string {
+  return String(href || "").trim();
+}
+
+function isMarginNoteProtocol(protocol: string | null): boolean {
+  return Boolean(protocol && /^marginnote(?:\d+)?(?:app)?$/i.test(protocol));
+}
+
+function hrefPath(href: string): string {
+  const raw = cleanHref(href);
+  if (!raw) return "";
+  if (/^file:\/\//i.test(raw)) {
+    try {
+      return decodeNoteRef(new URL(raw).pathname);
+    } catch {
+      return decodeNoteRef(raw.replace(/^file:\/\//i, ""));
+    }
+  }
+  const path = raw
+    .replace(/^file:/i, "")
+    .split(/[?#]/, 1)[0]
+    .trim();
+  const fileDomMatch = path.match(/^(.+?\.(?:md|markdown|typ))@/i);
+  return decodeNoteRef(fileDomMatch?.[1] || path);
+}
+
+function hrefHash(href: string): string {
+  const raw = cleanHref(href);
+  const hashIndex = raw.indexOf("#");
+  if (hashIndex < 0) return "";
+  return decodeNoteRef(raw.slice(hashIndex + 1).split(/[?&]/, 1)[0] || "").trim();
+}
+
+function normalizeNotePath(path: string): string {
+  const normalized = String(path || "").replace(/\\/g, "/");
+  const absolute = normalized.startsWith("/");
+  const parts: string[] = [];
+  for (const part of normalized.split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      if (parts.length > 0 && parts[parts.length - 1] !== "..") parts.pop();
+      else if (!absolute) parts.push(part);
+      continue;
+    }
+    parts.push(part);
+  }
+  return `${absolute ? "/" : ""}${parts.join("/")}`;
+}
+
+function dirnamePath(path: string): string {
+  const normalized = normalizeNotePath(path);
+  const index = normalized.lastIndexOf("/");
+  if (index < 0) return "";
+  if (index === 0) return "/";
+  return normalized.slice(0, index);
+}
+
+function joinNotePath(baseDir: string, path: string): string {
+  if (!baseDir || path.startsWith("/")) return normalizeNotePath(path);
+  return normalizeNotePath(`${baseDir}/${path}`);
+}
+
+function notePathKey(value: unknown): string {
+  return normalizeNotePath(String(value || "")
+    .replace(/^file:(?:\/\/)?/i, "")
+    .replace(/^\.\/+/, ""));
+}
+
+function noteMatchesPath(note: NoteSummary, path: string): boolean {
+  const key = notePathKey(path);
+  if (!key) return false;
+  return [note.path, note.link, note.file, note.source]
+    .map(notePathKey)
+    .some((value) => value === key || value.endsWith(`/${key}`));
+}
+
+function noteHrefCandidates(href: string): string[] {
+  const path = hrefPath(href);
+  const candidates = new Set<string>();
+  const add = (value: string) => {
+    const normalized = normalizeNotePath(value);
+    if (normalized) candidates.add(normalized);
+  };
+  add(path);
+  add(path.replace(/^\.\/+/, ""));
+  if (!path.startsWith("/") && currentFile) add(joinNotePath(dirnamePath(currentFile), path));
+  const note = currentNote();
+  if (!path.startsWith("/") && note?.path) add(joinNotePath(dirnamePath(note.path), path));
+  return [...candidates];
+}
+
+function markdownNoteHref(href: string): boolean {
+  const protocol = hrefProtocol(href);
+  if (protocol && protocol !== "file") return false;
+  return /\.(?:md|markdown|typ)$/i.test(hrefPath(href));
+}
+
+function splitRoamLikeHref(href: string): { ref: string; hash: string; dom: string } | null {
+  const raw = cleanHref(href);
+  if (!raw || (hrefProtocol(raw) && !/^roam:\/\//i.test(raw))) return null;
+  // `@@parent@child` is the current-document form of the same hierarchical
+  // DOM path used by `roam://note@parent@child`.
+  if (raw.startsWith("@@")) {
+    const dom = normalizeDomTargetPath(raw.slice(2));
+    return dom ? { ref: "", hash: "", dom } : null;
+  }
+  let body = raw.replace(/^roam:\/\//i, "").split(/[?&]/, 1)[0] || "";
+  let hash = "";
+  const hashIndex = body.indexOf("#");
+  if (hashIndex >= 0) {
+    hash = decodeNoteRef(body.slice(hashIndex + 1));
+    body = body.slice(0, hashIndex);
+  }
+  let dom = "";
+  const fileDomMatch = body.match(/^(.+?\.(?:md|markdown|typ))@(.+)$/i);
+  if (fileDomMatch) {
+    body = fileDomMatch[1] || "";
+    dom = normalizeDomTargetPath(fileDomMatch[2] || "");
+  } else {
+    const atIndex = body.indexOf("@");
+    if (atIndex >= 0) {
+      dom = normalizeDomTargetPath(body.slice(atIndex + 1));
+      body = body.slice(0, atIndex);
+    }
+  }
+  const ref = decodeNoteRef(body.replace(/^\/+/, "").replace(/[.,;:]+$/, "")).trim();
+  if (!ref && !hash && !dom) return null;
+  return { ref, hash: hash.trim(), dom };
+}
+
+function resolveHrefNote(href: string): NoteSummary | undefined {
+  const raw = cleanHref(href);
+  if (!raw) return undefined;
+  const roamLike = splitRoamLikeHref(raw);
+  if (roamLike?.ref && /^roam:\/\//i.test(raw)) return resolveNoteRef(roamLike.ref);
+  const path = hrefPath(raw);
+  for (const candidate of noteHrefCandidates(raw)) {
+    const exactPath = notes.find((note) => noteMatchesPath(note, candidate));
+    if (exactPath?.file) return exactPath;
+    const byRef = resolveNoteRef(candidate);
+    if (byRef?.file) return byRef;
+  }
+  if (!hrefProtocol(raw) && path && !markdownNoteHref(raw)) return resolveNoteRef(path);
+  return undefined;
+}
+
+function resolveHrefTarget(href: string): { note?: NoteSummary; hash: string; domTarget: string } {
+  const raw = cleanHref(href);
+  if (raw.startsWith("@@")) {
+    return {
+      note: currentNote(),
+      hash: "",
+      domTarget: normalizeDomTargetPath(raw.slice(2)),
+    };
+  }
+  const roamLike = splitRoamLikeHref(raw);
+  if (roamLike) {
+    const note = roamLike.ref ? resolveNoteRef(roamLike.ref) : undefined;
+    if (note?.file || /^roam:\/\//i.test(raw)) return { note, hash: roamLike.hash, domTarget: roamLike.dom };
+  }
+  return {
+    note: resolveHrefNote(raw),
+    hash: hrefHash(raw),
+    domTarget: roamLike?.dom || "",
+  };
+}
+
+function slugifyAnchor(value: string): string {
+  return String(value || "")
+    .normalize("NFKC")
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function jumpToHash(hash: string): boolean {
+  const clean = normalizeInlineTag(hash.replace(/^#/, ""));
+  if (!clean) return false;
+  const equationTag = clean.replace(/^eq-/i, "");
+  const equation = getEquationTagHits(editor.view.state)
+    .find((hit) => hit.tag.toLowerCase() === equationTag.toLowerCase());
+  if (equation) {
+    editor.setMarkdownSelection(equation.from, equation.to);
+    editor.revealCursor();
+    editor.focus();
+    noteCursorPositionEvent();
+    return true;
+  }
+  const inline = inlineTagAnchorsFromText(editor.getMarkdown())
+    .find((anchor) => anchor.tag.toLowerCase() === clean.toLowerCase()
+      || `tag-${anchor.tag}`.toLowerCase() === clean.toLowerCase());
+  if (inline) {
+    editor.setMarkdownSelection(inline.pos, inline.to);
+    editor.revealCursor();
+    editor.focus();
+    noteCursorPositionEvent();
+    return true;
+  }
+  const allHeadings = markdownHeadingsFromText(editor.view.state.doc);
+  const heading = resolveAnchorHeading(allHeadings, clean)
+    ?? allHeadings.find((item) => item.text.toLowerCase() === clean.toLowerCase()
+      || item.slug === clean
+      || slugifyAnchor(item.text) === clean);
+  if (heading) {
+    editor.setMarkdownSelection(heading.pos);
+    editor.revealCursor();
+    editor.focus();
+    noteCursorPositionEvent();
+    return true;
+  }
+  return false;
+}
+
+function openExternalUrl(href: string, options: { newWindow?: boolean } = {}): void {
+  const raw = cleanHref(href);
+  if (!raw) return;
+  if (!safeHref(raw)) {
+    setStatus("Blocked unsafe link");
+    return;
+  }
+  const before = trackCursorPosition();
+  noteCursorPositionEvent();
+  const hash = hrefHash(raw);
+  const target = resolveHrefTarget(raw);
+  const note = target.note;
+  const targetHash = target.hash || hash;
+  const targetDom = target.domTarget;
+  if (note?.file) {
+    if (note.file === currentFile && targetDom) {
+      const jumped = jumpToDomTarget(targetDom);
+      if (jumped) pushNavigationBackLocation(before);
+      else setStatus(`DOM target not found: ${targetDom}`);
+      return;
+    }
+    if (note.file === currentFile && targetHash) {
+      const jumped = jumpToHash(targetHash);
+      if (jumped) pushNavigationBackLocation(before);
+      else setStatus(`Anchor not found: ${targetHash}`);
+      return;
+    }
+    openNote(note, { newWindow: options.newWindow, hash: targetHash, domTarget: targetDom });
+    return;
+  }
+  if (/^roam:\/\//i.test(raw)) {
+    setStatus(`Roam note not found: ${splitRoamLikeHref(raw)?.ref || raw}`);
+    return;
+  }
+  if (raw.startsWith("#")) {
+    const jumped = jumpToHash(hash || raw.slice(1));
+    if (jumped) pushNavigationBackLocation(before);
+    else setStatus(`Anchor not found: ${hash || raw.slice(1)}`);
+    return;
+  }
+  const protocol = hrefProtocol(raw);
+  if (!protocol) {
+    const targetPath = hrefPath(raw) || raw;
+    void api.emacs.systemOpen(targetPath, currentFile)
+      .catch((err) => setStatus(err instanceof Error ? err.message : `Cannot open: ${targetPath}`));
+    return;
+  }
+  if (protocol === "zotero") {
+    void api.emacs.systemOpen(raw)
+      .then(() => setStatus("Opened Zotero link"))
+      .catch((err) => setStatus(err instanceof Error ? err.message : "Failed to open Zotero link"));
+    return;
+  }
+  // MarginNote schemes are Emacs-owned routes; never hand them to the browser.
+  if (isMarginNoteProtocol(protocol)) {
+    void api.emacs.systemOpen(raw, currentFile)
+      .catch((err) => setStatus(err instanceof Error ? err.message : "Failed to open Maginnote link"));
+    return;
+  }
+  if (options.newWindow) {
+    window.open(raw, "_blank", "noopener,noreferrer");
+    return;
+  }
+  window.location.href = raw;
+}
+
+function relationTags(note: NoteSummary | undefined): string[] {
+  return [...new Set([...(note?.tags ?? []), ...(note?.inlineTags ?? [])]
+    .map((tag) => String(tag || "").trim().replace(/^#/, ""))
+    .filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
+}
+
+function openTagFilter(tag: string): void {
+  const clean = String(tag || "").trim().replace(/^#/, "");
+  if (!clean) return;
+  const rows = notes
+    .filter((note) => relationTags(note).some((item) => item.toLowerCase() === clean.toLowerCase()))
+    .map((note) => ({
+      title: note.title || note.path || note.file || canonicalRoamNoteId(note) || "Untitled",
+      detail: [note.path || note.file || "", relationTags(note).join(", ")].filter(Boolean).join(" - "),
+      kind: "TAG",
+    }));
+  showRoamToolRows(`#${clean}`, rows);
+}
+
+function normalizeInlineTag(value: string): string {
+  return String(value || "")
+    .replace(/[\r\n\[\]]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+type DomTargetEntry = {
+  label: string;
+  slug: string;
+  path: string[];
+  labelPath: string[];
+  level?: number;
+  pos?: number;
+  to?: number;
+  notePath?: string;
+};
+
+function normalizeDomTarget(value: string): string {
+  return decodeNoteRef(String(value || ""))
+    .replace(/^@/, "")
+    .replace(/[\r\n\[\]]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function domTargetPathSegments(value: string): string[] {
+  return String(value || "")
+    .trim()
+    .replace(/^@+/, "")
+    .split("@")
+    .map((segment) => normalizeDomTarget(segment))
+    .filter(Boolean);
+}
+
+function slugDomTarget(value: string): string {
+  return normalizeDomTarget(value)
+    .toLowerCase()
+    .replace(/[`*_~()[\]{}#+.!<>:;,'"@]/g, " ")
+    .trim()
+    .replace(/\s+/g, "-");
+}
+
+function normalizeDomTargetPath(value: string): string {
+  return domTargetPathSegments(value)
+    .map(slugDomTarget)
+    .filter(Boolean)
+    .join("@");
+}
+
+function domTargetPathLabel(path: readonly string[]): string {
+  return path.filter(Boolean).join(" / ");
+}
+
+function targetSegmentMatches(actual: string, wanted: string): boolean {
+  const actualNorm = normalizeDomTarget(actual).toLowerCase();
+  const wantedNorm = normalizeDomTarget(wanted).toLowerCase();
+  if (actualNorm && actualNorm === wantedNorm) return true;
+  const actualSlug = slugDomTarget(actual);
+  const wantedSlug = slugDomTarget(wanted);
+  return Boolean(actualSlug && wantedSlug && actualSlug === wantedSlug);
+}
+
+function targetPathMatches(actualPath: readonly string[], wantedPath: readonly string[], allowSuffix = true): boolean {
+  if (wantedPath.length === 0 || actualPath.length === 0) return false;
+  const pathMatchesAt = (offset: number) => wantedPath.every((segment, index) =>
+    targetSegmentMatches(actualPath[offset + index] || "", segment));
+  if (actualPath.length === wantedPath.length && pathMatchesAt(0)) return true;
+  if (!allowSuffix || actualPath.length < wantedPath.length) return false;
+  return pathMatchesAt(actualPath.length - wantedPath.length);
+}
+
+function findDomTargetEntry(entries: readonly DomTargetEntry[], rawTarget: string): DomTargetEntry | undefined {
+  const targetPath = domTargetPathSegments(rawTarget);
+  if (targetPath.length === 0) return undefined;
+  if (targetPath.length > 1) {
+    return entries.find((entry) => targetPathMatches(entry.path, targetPath, false))
+      ?? entries.find((entry) => targetPathMatches(entry.path, targetPath, true));
+  }
+  const target = targetPath[0] || "";
+  const targetSlug = slugDomTarget(target);
+  const targetNorm = normalizeDomTarget(target).toLowerCase();
+  return entries.find((entry) => {
+    const label = normalizeDomTarget(entry.label).toLowerCase();
+    return label === targetNorm || entry.slug === targetSlug || entry.slug === targetNorm;
+  });
+}
+
+function currentDomTargets(): DomTargetEntry[] {
+  const stack: string[] = [];
+  const labelStack: string[] = [];
+  return markdownHeadingsFromText(editor.view.state.doc).map((heading) => {
+    const level = Math.max(1, Number(heading.level || 1));
+    const label = normalizeDomTarget(heading.text);
+    const slug = heading.slug || slugDomTarget(label);
+    stack.length = Math.min(stack.length, level - 1);
+    labelStack.length = Math.min(labelStack.length, level - 1);
+    stack.push(slug);
+    labelStack.push(label);
+    return {
+      label,
+      slug,
+      path: [...stack],
+      labelPath: [...labelStack],
+      level,
+      pos: heading.pos,
+      to: heading.to ?? heading.pos + heading.text.length,
+    };
+  });
+}
+
+function jumpToDomTarget(rawTarget: string): boolean {
+  const target = normalizeDomTargetPath(rawTarget);
+  if (!target) return false;
+  const hit = findDomTargetEntry(currentDomTargets(), target);
+  if (!hit) return false;
+  editor.setMarkdownSelection(hit.pos ?? 0, hit.to ?? hit.pos ?? 0);
+  editor.revealCursor();
+  editor.focus();
+  setStatus(`DOM target ${target}`);
+  scheduleAssistUpdate({ toc: true });
+  noteCursorPositionEvent();
+  return true;
+}
+
+function tagSlugSegment(value: string): string {
+  return String(value || "")
+    .normalize("NFKC")
+    .trim()
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
+    .replace(/^-+|-+$/g, "")
+    .replace(/-+/g, "-")
+    .toLowerCase();
+}
+
+function activeHeadingPath(): string[] {
+  const pos = editor.getMarkdownSelection().from;
+  const stack: string[] = [];
+  for (const heading of markdownHeadingsFromText(editor.view.state.doc)) {
+    if (heading.pos > pos) break;
+    stack[heading.level - 1] = heading.text;
+    stack.length = heading.level;
+  }
+  return stack;
+}
+
+function anchorTagOccurrences(content = editor.getMarkdown()): string[] {
+  return [
+    ...equationTagsFromText(content),
+    ...inlineTagAnchorsFromText(content).map((anchor) => anchor.tag),
+  ].map(normalizeInlineTag).filter(Boolean);
+}
+
+function allAnchorTagSuggestions(content = editor.getMarkdown()): string[] {
+  return [...new Set(anchorTagOccurrences(content))].sort((a, b) => a.localeCompare(b));
+}
+
+function nextAnchorTagSuggestion(kind: "equation" | "inline"): string {
+  const headingParts = activeHeadingPath().map(tagSlugSegment).filter(Boolean);
+  const fallback = tagSlugSegment(currentNote()?.title || fileNameFromPath(currentFile || "note")) || "anchor";
+  const core = headingParts.slice(-3).join(".") || fallback;
+  const base = kind === "equation" ? `eq:${core}` : core;
+  const used = new Set(allAnchorTagSuggestions().map((tag) => tag.toLowerCase()));
+  if (!used.has(base.toLowerCase())) return base;
+  for (let i = 2; i < 1000; i++) {
+    const candidate = `${base}.${i}`;
+    if (!used.has(candidate.toLowerCase())) return candidate;
+  }
+  return `${base}.${Date.now()}`;
+}
+
+function noteAnchorHref(note: NoteSummary | undefined, hash: string): string {
+  const cleanHash = String(hash || "").replace(/^#/, "");
+  if (roamFeaturesEnabled() && note?.roam) return roamHrefForNote(note, cleanHash);
+  const target = note?.path || note?.link || currentFile || note?.file || fileNameFromPath(currentFile || "note.md");
+  return `${encodeMarkdownHrefPath(target)}${cleanHash ? `#${cleanHash}` : ""}`;
+}
+
+function inlineTagReferenceMarkdown(tag: string): string {
+  const clean = normalizeInlineTag(tag);
+  return `[${escapeMarkdownLinkText(`#${clean}`)}](${noteAnchorHref(currentNote(), encodeURIComponent(clean))})`;
+}
+
+function equationReferenceMarkdown(tag: string): string {
+  const clean = normalizeInlineTag(tag);
+  return `[${escapeMarkdownLinkText(clean)}](${noteAnchorHref(currentNote(), `eq-${encodeURIComponent(clean)}`)})`;
+}
+
+function inlineTagMarkdown(tag: string): string {
+  return `@@tag[${normalizeInlineTag(tag)}]`;
+}
+
+function inlineTagAtCursor(): string {
+  const selection = editor.getMarkdownSelection();
+  const from = Math.min(selection.from, selection.to);
+  const to = Math.max(selection.from, selection.to);
+  return inlineTagAnchorsFromText(editor.getMarkdown())
+    .find((anchor) => from === to ? from >= anchor.pos && from <= anchor.to : from < anchor.to && to > anchor.pos)
+    ?.tag ?? "";
+}
+
+function focusedEditableOutsideEditor(): boolean {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || host.contains(active)) return false;
+  return Boolean(active.closest("input, textarea, select, [contenteditable='true']"));
+}
+
+async function copyText(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const fallback = document.createElement("textarea");
+    fallback.value = text;
+    fallback.style.position = "fixed";
+    fallback.style.left = "-9999px";
+    document.body.appendChild(fallback);
+    fallback.select();
+    document.execCommand("copy");
+    fallback.remove();
+  }
+}
+
+let findMatches: FindMatch[] = [];
+let findIndex = -1;
+
+function selectedMarkdownText(): string {
+  const selection = editor.getMarkdownSelection();
+  const from = Math.min(selection.from, selection.to);
+  const to = Math.max(selection.from, selection.to);
+  return from < to ? editor.textBetween(from, to) : "";
+}
+
+function clearFindHighlights(): void {
+  findMatches = [];
+  findIndex = -1;
+  editor.view.dispatch({ effects: setFindHighlightRanges.of([]) });
+  findCount.textContent = "0/0";
+}
+
+function updateFindHighlights(): void {
+  const ranges = findMatches.map((match, index) => ({
+    from: match.from,
+    to: match.to,
+    current: index === findIndex,
+  }));
+  editor.view.dispatch({ effects: setFindHighlightRanges.of(ranges) });
+}
+
+function gotoFindMatch(index: number): void {
+  if (findMatches.length === 0) {
+    findIndex = -1;
+    updateFindHighlights();
+    findCount.textContent = "0/0";
+    return;
+  }
+  findIndex = ((index % findMatches.length) + findMatches.length) % findMatches.length;
+  const match = findMatches[findIndex]!;
+  editor.setMarkdownSelection(match.from, match.to);
+  updateFindHighlights();
+  findCount.textContent = `${findIndex + 1}/${findMatches.length}`;
+}
+
+function refreshFind(query = findInput.value, keepCurrent = true): void {
+  const result = createFindPattern(query, false);
+  if (result.error) {
+    clearFindHighlights();
+    findCount.textContent = result.error;
+    return;
+  }
+  findMatches = collectFindMatches(editor.getMarkdown(), result.pattern);
+  if (findMatches.length === 0) {
+    findIndex = -1;
+    updateFindHighlights();
+    findCount.textContent = query ? "0/0" : "0/0";
+    return;
+  }
+  if (keepCurrent && findIndex >= 0 && findIndex < findMatches.length) {
+    gotoFindMatch(findIndex);
+    return;
+  }
+  const selection = editor.getMarkdownSelection();
+  const cursor = Math.max(selection.from, selection.to);
+  const next = findMatches.findIndex((match) => match.to >= cursor);
+  gotoFindMatch(next >= 0 ? next : 0);
+}
+
+function openFindPanel(): void {
+  const selected = selectedMarkdownText();
+  if (selected && !selected.includes("\n")) findInput.value = selected;
+  findPanel.hidden = false;
+  selectionTool.hidden = true;
+  refreshFind(findInput.value, false);
+  findInput.focus();
+  findInput.select();
+}
+
+function closeFindPanel(): void {
+  findPanel.hidden = true;
+  clearFindHighlights();
+  editor.focus();
+}
+
+async function copyEditorSelection(): Promise<boolean> {
+  const active = activeEditorSelection();
+  let text = active?.text || "";
+  if (!text) {
+    const selection = editor.getMarkdownSelection();
+    const from = Math.min(selection.from, selection.to);
+    const to = Math.max(selection.from, selection.to);
+    if (from < to) text = editor.textBetween(from, to);
+  }
+  if (!text) return false;
+  await copyText(text);
+  setStatus("Selection copied");
+  selectionTool.hidden = true;
+  return true;
+}
+
+function runClipboardShortcut(event: KeyboardEvent): boolean {
+  if (!primaryMod(event) || event.shiftKey || event.altKey || event.isComposing) return false;
+  if (!modal.hidden || !toolsPanel.hidden || !roamToolsPanel.hidden || focusedEditableOutsideEditor()) return false;
+  const key = event.key.toLowerCase();
+  if (key === "c") {
+    const selection = editor.getMarkdownSelection();
+    if (selection.from === selection.to && !activeEditorSelection()) return false;
+    event.preventDefault();
+    void copyEditorSelection();
+    return true;
+  }
+  if (key === "v") {
+    event.preventDefault();
+    if (rejectReadOnlyAction("Read-only pane")) return true;
+    editor.focus();
+    void editor.pasteFromClipboard();
+    return true;
+  }
+  return false;
+}
+
+function runFindShortcut(event: KeyboardEvent): boolean {
+  if (!primaryMod(event) || event.shiftKey || event.altKey || event.isComposing) return false;
+  if (!modal.hidden || !toolsPanel.hidden || !roamToolsPanel.hidden) return false;
+  if (event.key.toLowerCase() !== "f") return false;
+  event.preventDefault();
+  openFindPanel();
+  return true;
+}
+
+function parseTagPrompt(value: string | null): string[] {
+  const byKey = new Map<string, string>();
+  for (const tag of String(value || "").split(/[, ]+/)) {
+    const clean = tag.trim().replace(/^#/, "");
+    if (!clean) continue;
+    const key = clean.toLowerCase();
+    const previous = byKey.get(key);
+    if (!previous || clean === key) byKey.set(key, clean);
+  }
+  return [...byKey.values()];
+}
+
+function tagSuggestions(): string[] {
+  const tags = new Map<string, string>();
+  for (const note of notes) {
+    if (!note.roam) continue;
+    for (const tag of relationTags(note)) {
+      const key = tag.toLowerCase();
+      const previous = tags.get(key);
+      if (!previous || tag === key) tags.set(key, tag);
+    }
+  }
+  return [...tags.values()].sort((a, b) => a.localeCompare(b));
+}
+
+type ModalField = {
+  id: string;
+  label: string;
+  value?: string;
+  type?: "text" | "tags" | "select" | "suggest";
+  suggestions?: string[];
+  options?: { value: string; label: string }[];
+  required?: boolean;
+  placeholder?: string;
+  description?: string;
+  group?: string;
+};
+
+function openFormModal(title: string, fields: ModalField[], submitLabel = "OK"): Promise<Record<string, string> | null> {
+  return new Promise((resolve) => {
+    modal.innerHTML = "";
+    const panel = document.createElement("form");
+    panel.className = fields.some((field) => field.type === "tags") ? "aaronnote-modal-panel has-tags" : "aaronnote-modal-panel";
+    const heading = document.createElement("h2");
+    heading.textContent = title;
+    panel.appendChild(heading);
+    const inputs = new Map<string, HTMLInputElement | HTMLSelectElement>();
+
+    let previousGroup = "";
+    fields.forEach((field, index) => {
+      if (field.group && field.group !== previousGroup) {
+        const group = document.createElement("div");
+        group.className = "aaronnote-modal-field-group";
+        group.textContent = field.group;
+        panel.appendChild(group);
+      }
+      previousGroup = field.group || previousGroup;
+      const label = document.createElement("label");
+      label.textContent = field.label;
+      if (field.required) label.textContent += " *";
+      if (field.type === "select") {
+        const select = document.createElement("select");
+        select.name = field.id;
+        for (const opt of field.options || []) {
+          const option = document.createElement("option");
+          option.value = opt.value;
+          option.textContent = opt.label;
+          select.appendChild(option);
+        }
+        select.value = field.value || (field.options?.[0]?.value ?? "");
+        select.required = Boolean(field.required);
+        label.appendChild(select);
+        inputs.set(field.id, select);
+        panel.appendChild(label);
+        if (field.description) {
+          const help = document.createElement("small");
+          help.className = "aaronnote-modal-field-help";
+          help.textContent = field.description;
+          panel.appendChild(help);
+        }
+        return;
+      }
+      const input = document.createElement("input");
+      input.name = field.id;
+      input.value = field.value || "";
+      input.required = Boolean(field.required);
+      input.placeholder = field.placeholder || "";
+      input.autocomplete = "off";
+      input.spellcheck = false;
+      if (field.suggestions?.length) {
+        const listId = `aaronnote-modal-list-${index}`;
+        const list = document.createElement("datalist");
+        list.id = listId;
+        for (const suggestion of field.suggestions) {
+          const option = document.createElement("option");
+          option.value = suggestion;
+          list.appendChild(option);
+        }
+        input.setAttribute("list", listId);
+        label.append(input, list);
+      } else {
+        label.appendChild(input);
+      }
+      inputs.set(field.id, input);
+      panel.appendChild(label);
+      if (field.description) {
+        const help = document.createElement("small");
+        help.className = "aaronnote-modal-field-help";
+        help.textContent = field.description;
+        panel.appendChild(help);
+      }
+
+      if ((field.type === "tags" || field.type === "suggest") && field.suggestions?.length) {
+        const picker = document.createElement("div");
+        picker.className = field.type === "tags" ? "aaronnote-modal-tag-picker" : "aaronnote-modal-suggestion-picker";
+        for (const tag of field.suggestions.slice(0, 40)) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.textContent = field.type === "tags" ? `#${tag}` : tag;
+          button.addEventListener("click", () => {
+            if (field.type === "suggest") {
+              input.value = tag;
+              input.dispatchEvent(new Event("input", { bubbles: true }));
+              return;
+            }
+            const existing = parseTagPrompt(input.value);
+            const lower = tag.toLowerCase();
+            input.value = existing.some((item) => item.toLowerCase() === lower)
+              ? existing.filter((item) => item.toLowerCase() !== lower).join(", ")
+              : [...existing, tag].join(", ");
+          });
+          picker.appendChild(button);
+        }
+        panel.appendChild(picker);
+      }
+    });
+
+    const actions = document.createElement("div");
+    actions.className = "aaronnote-modal-actions";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.textContent = "Cancel";
+    const submit = document.createElement("button");
+    submit.type = "submit";
+    submit.textContent = submitLabel;
+    actions.append(cancel, submit);
+    panel.appendChild(actions);
+
+    const close = (value: Record<string, string> | null): void => {
+      modal.hidden = true;
+      modal.innerHTML = "";
+      editor.focus();
+      resolve(value);
+    };
+    cancel.addEventListener("click", () => close(null));
+    modal.addEventListener("mousedown", (event) => {
+      if (event.target === modal) close(null);
+    }, { once: true });
+    panel.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape" || event.metaKey || event.ctrlKey || event.altKey || event.isComposing) return;
+      event.preventDefault();
+      event.stopPropagation();
+      close(null);
+    });
+    panel.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const value: Record<string, string> = {};
+      for (const [id, input] of inputs) value[id] = input.value;
+      close(value);
+    });
+    modal.appendChild(panel);
+    modal.hidden = false;
+    window.setTimeout(() => fields[0] && inputs.get(fields[0].id)?.focus(), 0);
+  });
+}
+
+function currentMarkdownText(): string {
+  return editor.view.state.doc.toString();
+}
+
+type PlanningNodeLike = {
+  kind: string;
+  status?: string;
+  title?: string;
+  attrs?: Record<string, string>;
+  raw: string;
+  shape?: string;
+  span: { from: number; to: number; line?: number; column?: number };
+};
+
+type PlanningEditTarget = {
+  from: number;
+  to: number;
+  detail: string;
+};
+
+const AGENDA_ARG_ALIASES: Record<string, string[]> = {
+  project: ["project", "proj"],
+  ddl: ["ddl", "due", "deadline"],
+  sche: ["sche", "scheduled", "start"],
+  end: ["end", "finish"],
+  prio: ["prio", "priority"],
+  repeat: ["repeat", "rep", "every"],
+  warn: ["warn", "lead"],
+  after: ["after", "dep"],
+  blocks: ["blocks"],
+  area: ["area"],
+  phase: ["phase"],
+  goal: ["goal"],
+  effort: ["effort"],
+  progress: ["progress", "pct"],
+  owner: ["owner"],
+  date: ["date", "when"],
+  context: ["context", "ctx"],
+  from: ["from"],
+  to: ["to"],
+};
+
+const AGENDA_DATE_FIELDS = new Set(["ddl", "sche", "end", "date", "from", "to"]);
+
+function agendaNodes(): PlanningNodeLike[] {
+  return scanPlanningNodes(currentMarkdownText()) as PlanningNodeLike[];
+}
+
+function agendaArgValue(attrs: Record<string, string> | undefined, canon: string): string {
+  for (const key of AGENDA_ARG_ALIASES[canon] || [canon]) {
+    const value = String(attrs?.[key] || "").trim();
+    if (value) return value;
+  }
+  return "";
+}
+
+function agendaArgWriteKey(attrs: Record<string, string> | undefined, canon: string): string {
+  for (const key of AGENDA_ARG_ALIASES[canon] || [canon]) {
+    if (Object.prototype.hasOwnProperty.call(attrs || {}, key)) return key;
+  }
+  return (AGENDA_ARG_ALIASES[canon] || [canon])[0] || canon;
+}
+
+function setAgendaPatchValue(
+  patch: Record<string, string | null>,
+  attrs: Record<string, string> | undefined,
+  canon: string,
+  rawValue: string,
+  options: { skipIfInherited?: boolean } = {},
+): void {
+  const value = normalizeAgendaFieldValue(canon, rawValue);
+  for (const key of AGENDA_ARG_ALIASES[canon] || [canon]) patch[key] = null;
+  if (!value || options.skipIfInherited) return;
+  patch[agendaArgWriteKey(attrs, canon)] = value;
+}
+
+function stripMetaQuotes(value: string): string {
+  return value.trim().replace(/^["']|["']$/g, "");
+}
+
+function projectFromMetaBody(raw: string): string {
+  for (const line of raw.split(/\r?\n/)) {
+    const match = line.match(/^\s*(project|proj)\s*:\s*(.+?)\s*$/i);
+    if (match?.[2]) return stripMetaQuotes(match[2]);
+  }
+  return "";
+}
+
+function currentFileProjectFromMarkdown(): string {
+  const md = currentMarkdownText();
+  const front = md.match(/^\s*---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/)?.[1] || "";
+  const org = md.match(/^\s*#\+begin\s+meta\s*\r?\n([\s\S]*?)\r?\n\s*#\+end\s+meta\s*$/im)?.[1] || "";
+  return projectFromMetaBody(org) || projectFromMetaBody(front);
+}
+
+function agendaProjectSlug(text: string): string {
+  return String(text || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "";
+}
+
+function inferredProjectForNode(node: PlanningNodeLike, nodes: PlanningNodeLike[]): string {
+  const own = agendaArgValue(node.attrs, "project");
+  if (own) return own;
+  const metaProject = currentFileProjectFromMarkdown();
+  if (metaProject) return metaProject;
+  const previousProject = [...nodes]
+    .reverse()
+    .find((candidate) => candidate.kind === "project" && candidate.span.from < node.span.from);
+  if (previousProject) return agendaArgValue(previousProject.attrs, "project") || agendaProjectSlug(previousProject.title || "");
+  if (node.kind === "project") return agendaProjectSlug(node.title || "");
+  return "";
+}
+
+function agendaProjectSuggestions(nodes: PlanningNodeLike[], fallback = ""): string[] {
+  const values = new Set<string>();
+  const add = (value: unknown): void => {
+    const clean = String(value || "").trim();
+    if (clean) values.add(clean);
+  };
+  add(fallback);
+  add(currentFileProjectFromMarkdown());
+  for (const node of nodes) {
+    add(agendaArgValue(node.attrs, "project"));
+    if (node.kind === "project") add(agendaProjectSlug(node.title || ""));
+  }
+  for (const todo of agendaTodos) add((todo.canon as Record<string, string> | undefined)?.project);
+  for (const note of notes) add((note as NoteSummary & { project?: string }).project);
+  return [...values].sort((a, b) => a.localeCompare(b));
+}
+
+async function agendaProjectSuggestionsWithGlobal(nodes: PlanningNodeLike[], fallback = ""): Promise<string[]> {
+  const values = new Set(agendaProjectSuggestions(nodes, fallback));
+  const add = (value: unknown): void => {
+    const clean = String(value || "").trim();
+    if (clean) values.add(clean);
+  };
+  try {
+    const agenda = await api.notes.agenda({ includePlanning: true, days: 1 });
+    for (const project of agenda.projects || []) {
+      add(project.canon?.project);
+      add(project.args?.project);
+      add(project.args?.proj);
+      if (!project.canon?.project && !project.args?.project && !project.args?.proj) add(agendaProjectSlug(project.title || project.text || ""));
+    }
+    for (const project of agenda.projectModel || []) add(project.key);
+    for (const task of agenda.gantt?.lanes || []) add(task.key);
+  } catch {
+    // Local editor suggestions should still work if the full agenda is unavailable.
+  }
+  return [...values].sort((a, b) => a.localeCompare(b));
+}
+
+function agendaDateOnly(time = Date.now()): string {
+  const d = new Date(time);
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function agendaDateTime(time = Date.now()): string {
+  const d = new Date(time);
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  return `${agendaDateOnly(time)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function normalizeAgendaFieldValue(canon: string, rawValue: string): string {
+  const value = String(rawValue || "").trim();
+  if (!value) return "";
+  if (AGENDA_DATE_FIELDS.has(canon)) return normalizeDateValue(value) || value;
+  if (canon === "prio") return value.slice(0, 1).toUpperCase();
+  if (canon === "progress") return String(Math.max(0, Math.min(100, Number(value) || 0)));
+  return value;
+}
+
+function planningWidgetFromTarget(target: EventTarget | null): HTMLElement | null {
+  const element = target instanceof Element ? target : null;
+  return element?.closest<HTMLElement>("[data-planning-kind][data-planning-source-from][data-planning-source-to]") ?? null;
+}
+
+function planningNodeAtPointer(event: MouseEvent): PlanningNodeLike | null {
+  const nodes = agendaNodes();
+  const widget = planningWidgetFromTarget(event.target);
+  if (widget) {
+    const from = Number(widget.dataset.planningSourceFrom);
+    return nodes.find((node) => node.span.from === from)
+      || nodes.find((node) => Number.isFinite(from) && node.span.from <= from && from <= node.span.to)
+      || null;
+  }
+  const pos = editor.view.posAtCoords({ x: event.clientX, y: event.clientY });
+  if (typeof pos !== "number") return null;
+  return nodes.find((node) => node.span.from <= pos && pos <= node.span.to) || null;
+}
+
+function planningEditTargetFromPointer(event: MouseEvent): PlanningEditTarget | null {
+  const node = planningNodeAtPointer(event);
+  if (!node) return null;
+  const kind = node.kind.toUpperCase();
+  const title = String(node.title || "").trim();
+  return {
+    from: node.span.from,
+    to: node.span.to,
+    detail: title ? `${kind} - ${title}` : kind,
+  };
+}
+
+function planningNodeForTarget(target: PlanningEditTarget): { node: PlanningNodeLike; nodes: PlanningNodeLike[] } | null {
+  const nodes = agendaNodes();
+  const node = nodes.find((candidate) => candidate.span.from === target.from)
+    || nodes.find((candidate) => candidate.span.from <= target.from && target.from <= candidate.span.to)
+    || nodes.find((candidate) => candidate.span.from <= target.to && target.to <= candidate.span.to)
+    || null;
+  return node ? { node, nodes } : null;
+}
+
+function agendaStatusOptions(kind: string): { value: string; label: string }[] {
+  if (kind === "project") {
+    return [
+      { value: "active", label: "Active" },
+      { value: "paused", label: "Paused" },
+      { value: "done", label: "Done" },
+      { value: "cancelled", label: "Cancelled" },
+    ];
+  }
+  return [
+    { value: "todo", label: "Todo" },
+    { value: "doing", label: "Doing" },
+    { value: "done", label: "Done" },
+    { value: "blocked", label: "Blocked" },
+    { value: "cancelled", label: "Cancelled" },
+  ];
+}
+
+function agendaEditFields(
+  node: PlanningNodeLike,
+  nodes: PlanningNodeLike[],
+  defaults: { inheritedProject?: string; projectSuggestions?: string[] } = {},
+): { fields: ModalField[]; inheritedProject: string } {
+  const kind = node.kind;
+  const attrs = node.attrs || {};
+  const inheritedProject = defaults.inheritedProject ?? inferredProjectForNode(node, nodes);
+  const projectSuggestions = defaults.projectSuggestions ?? agendaProjectSuggestions(nodes, inheritedProject);
+  const field = (id: string, label: string, value = "", suggestions?: string[], type: ModalField["type"] = "text"): ModalField => ({ id, label, value, suggestions, type });
+  const project = field("project", "Project", agendaArgValue(attrs, "project") || inheritedProject, projectSuggestions, "suggest");
+  const fields: ModalField[] = [];
+  if (kind === "todo" || kind === "itodo") {
+    fields.push({
+      id: "status",
+      label: "Status",
+      type: "select",
+      value: node.status || "todo",
+      options: agendaStatusOptions(kind),
+    });
+    fields.push(
+      project,
+      field("prio", "Priority", agendaArgValue(attrs, "prio"), ["A", "B", "C"]),
+      field("ddl", "Deadline", agendaArgValue(attrs, "ddl"), ["today", "tomorrow", "+3d", "+1w"]),
+      field("sche", "Scheduled", agendaArgValue(attrs, "sche"), ["today", "tomorrow", "+3d", "+1w"]),
+      field("end", "End", agendaArgValue(attrs, "end"), ["today", "tomorrow", "+1w"]),
+      field("effort", "Effort", agendaArgValue(attrs, "effort"), ["30m", "1h", "2h", "4h"]),
+      field("progress", "Progress", agendaArgValue(attrs, "progress"), ["0", "25", "50", "75", "100"]),
+      field("repeat", "Repeat", agendaArgValue(attrs, "repeat"), ["+1d", "+1w", "+1m"]),
+      field("after", "After", agendaArgValue(attrs, "after")),
+      field("context", "Context", agendaArgValue(attrs, "context")),
+    );
+  } else if (kind === "project") {
+    fields.push({
+      id: "status",
+      label: "Status",
+      type: "select",
+      value: node.status || "active",
+      options: agendaStatusOptions(kind),
+    });
+    fields.push(
+      project,
+      field("area", "Area", agendaArgValue(attrs, "area")),
+      field("phase", "Phase", agendaArgValue(attrs, "phase")),
+      field("owner", "Owner", agendaArgValue(attrs, "owner")),
+      field("goal", "Goal", agendaArgValue(attrs, "goal")),
+      field("progress", "Progress", agendaArgValue(attrs, "progress"), ["0", "25", "50", "75", "100"]),
+      field("sche", "Start", agendaArgValue(attrs, "sche"), ["today", "tomorrow", "+1w"]),
+      field("end", "End", agendaArgValue(attrs, "end"), ["today", "tomorrow", "+1w"]),
+      field("ddl", "Deadline", agendaArgValue(attrs, "ddl"), ["today", "tomorrow", "+1w"]),
+    );
+  } else if (kind === "milestone") {
+    fields.push(
+      project,
+      field("date", "Date", agendaArgValue(attrs, "date") || agendaDateOnly(), ["today", "tomorrow", "+1w"]),
+    );
+  } else if (kind === "clock") {
+    fields.push(
+      project,
+      field("from", "From", agendaArgValue(attrs, "from") || agendaDateTime(), ["now"]),
+      field("to", "To", agendaArgValue(attrs, "to"), ["now"]),
+    );
+  }
+  return { fields, inheritedProject };
+}
+
+function statusPatchForAgendaNode(node: PlanningNodeLike, selectedStatus: string): string | undefined {
+  const kind = node.kind;
+  if (kind !== "todo" && kind !== "itodo" && kind !== "project") return undefined;
+  const implicit = kind === "project" ? "active" : "todo";
+  const selected = String(selectedStatus || implicit).trim().toLowerCase();
+  const current = String(node.status || implicit).trim().toLowerCase();
+  if (selected === current && !node.status) return undefined;
+  if (kind !== "project" && selected === "todo") return "";
+  return selected;
+}
+
+function agendaPatchFromForm(
+  node: PlanningNodeLike,
+  values: Record<string, string>,
+  inheritedProject: string,
+): { status?: string; attrs: Record<string, string | null> } {
+  const attrs = node.attrs || {};
+  const patch: { status?: string; attrs: Record<string, string | null> } = { attrs: {} };
+  const nextStatus = statusPatchForAgendaNode(node, values.status || "");
+  if (nextStatus !== undefined) patch.status = nextStatus;
+  for (const key of Object.keys(AGENDA_ARG_ALIASES)) {
+    if (!Object.prototype.hasOwnProperty.call(values, key)) continue;
+    const value = values[key] || "";
+    const inherited = key === "project"
+      && !agendaArgValue(attrs, "project")
+      && normalizeAgendaFieldValue("project", value) === inheritedProject;
+    setAgendaPatchValue(patch.attrs, attrs, key, value, { skipIfInherited: inherited });
+  }
+  return patch;
+}
+
+async function openAgendaEditPop(target: PlanningEditTarget): Promise<void> {
+  const found = planningNodeForTarget(target);
+  if (!found) {
+    setStatus("Agenda item not found");
+    return;
+  }
+  const { node, nodes } = found;
+  const inheritedProject = inferredProjectForNode(node, nodes);
+  const projectSuggestions = await agendaProjectSuggestionsWithGlobal(nodes, inheritedProject);
+  const { fields } = agendaEditFields(node, nodes, { inheritedProject, projectSuggestions });
+  if (fields.length === 0) {
+    setStatus("No editable agenda fields");
+    return;
+  }
+  const title = `${node.kind.toUpperCase()} - ${String(node.title || "").trim() || "Agenda"}`;
+  const values = await openFormModal(title, fields, "Apply");
+  if (!values) return;
+  const patch = agendaPatchFromForm(node, values, inheritedProject);
+  const nextRaw = patchPlanningNodeRaw(node, patch);
+  if (nextRaw === node.raw) {
+    setStatus("Agenda unchanged");
+    return;
+  }
+  editor.replaceMarkdownRange(node.span.from, node.span.to, nextRaw, "end");
+  scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true, toc: true });
+  setStatus("Agenda updated");
+}
+
+function openLatexScopeModal(scopes: readonly LatexExportScope[]): Promise<LatexExportScope[] | null> {
+  return new Promise((resolve) => {
+    modal.innerHTML = "";
+    const panel = document.createElement("form");
+    panel.className = "aaronnote-modal-panel aaronnote-latex-export-panel";
+
+    const heading = document.createElement("h2");
+    heading.textContent = "Export LaTeX";
+    const help = document.createElement("p");
+    help.className = "aaronnote-latex-export-help";
+    help.textContent = "Choose exactly what goes into the .tex file. A section includes all of its nested subsections.";
+    panel.append(heading, help);
+
+    const headingScopes = scopes.filter((scope) => scope.kind === "heading");
+    const search = document.createElement("input");
+    search.type = "search";
+    search.className = "aaronnote-latex-export-search";
+    search.placeholder = "Filter sections…";
+    search.autocomplete = "off";
+    search.spellcheck = false;
+    search.setAttribute("aria-label", "Filter export sections");
+    if (headingScopes.length > 0) panel.appendChild(search);
+
+    const list = document.createElement("div");
+    list.className = "aaronnote-latex-export-scopes";
+    list.setAttribute("role", "group");
+    list.setAttribute("aria-label", "LaTeX export scopes");
+    list.setAttribute("aria-multiselectable", "true");
+    panel.appendChild(list);
+
+    let selectedIds = new Set([scopes.some((scope) => scope.kind === "selection") ? "selection" : "document"]);
+    let focusedId = [...selectedIds][0]!;
+    let visibleScopes = [...scopes];
+
+    const selectedScopes = (): LatexExportScope[] =>
+      scopes.filter((scope) => selectedIds.has(scope.id));
+
+    const close = (value: LatexExportScope[] | null): void => {
+      modal.hidden = true;
+      modal.innerHTML = "";
+      modal.removeEventListener("mousedown", onBackdrop);
+      editor.focus();
+      resolve(value);
+    };
+
+    const render = (): void => {
+      const query = search.value.trim().toLocaleLowerCase();
+      visibleScopes = query
+        ? headingScopes.filter((scope) => `${scope.title} ${scope.detail}`.toLocaleLowerCase().includes(query))
+        : [...scopes];
+      if (!visibleScopes.some((scope) => scope.id === focusedId)) {
+        focusedId = visibleScopes.find((scope) => scope.active)?.id || visibleScopes[0]?.id || "";
+      }
+
+      const fragment = document.createDocumentFragment();
+      if (visibleScopes.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "aaronnote-latex-export-empty";
+        empty.textContent = "No matching sections";
+        fragment.appendChild(empty);
+      }
+      for (const scope of visibleScopes) {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "aaronnote-latex-export-scope";
+        row.dataset.scopeId = scope.id;
+        row.setAttribute("role", "checkbox");
+        row.setAttribute("aria-checked", String(selectedIds.has(scope.id)));
+        row.tabIndex = scope.id === focusedId ? 0 : -1;
+        row.style.setProperty("--latex-scope-depth", String(scope.kind === "heading" ? Math.max(0, scope.level - 1) : 0));
+
+        const marker = document.createElement("span");
+        marker.className = "aaronnote-latex-export-radio";
+        marker.setAttribute("aria-hidden", "true");
+        const copy = document.createElement("span");
+        copy.className = "aaronnote-latex-export-scope-copy";
+        const name = document.createElement("span");
+        name.className = "aaronnote-latex-export-scope-name";
+        name.textContent = scope.title;
+        if (scope.active) {
+          const badge = document.createElement("span");
+          badge.className = "aaronnote-latex-export-current";
+          badge.textContent = "cursor";
+          name.appendChild(badge);
+        }
+        const detail = document.createElement("span");
+        detail.className = "aaronnote-latex-export-scope-detail";
+        detail.textContent = scope.detail;
+        copy.append(name, detail);
+        row.append(marker, copy);
+        const toggleScope = (): void => {
+          selectedIds = toggleLatexExportScopeSelection(scopes, selectedIds, scope.id);
+          focusedId = scope.id;
+          render();
+          list.querySelector<HTMLElement>(`[data-scope-id="${CSS.escape(scope.id)}"]`)?.focus();
+        };
+        row.addEventListener("click", toggleScope);
+        row.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter" || event.isComposing) return;
+          event.preventDefault();
+          toggleScope();
+        });
+        fragment.appendChild(row);
+      }
+      list.replaceChildren(fragment);
+      const selected = selectedScopes();
+      selectionSummary.textContent = selected.length === 0
+        ? "Select at least one section"
+        : selected.some((scope) => scope.kind !== "heading")
+          ? selected[0]!.title
+          : `${selected.length} ${selected.length === 1 ? "section" : "sections"} selected`;
+      submit.disabled = selected.length === 0;
+      submit.textContent = selected.length > 1 ? `Choose Path · ${selected.length}` : "Choose Path";
+    };
+
+    const moveSelection = (delta: number): void => {
+      if (visibleScopes.length === 0) return;
+      const current = Math.max(0, visibleScopes.findIndex((scope) => scope.id === focusedId));
+      const next = Math.max(0, Math.min(visibleScopes.length - 1, current + delta));
+      focusedId = visibleScopes[next]!.id;
+      render();
+      list.querySelector<HTMLElement>(`[data-scope-id="${CSS.escape(focusedId)}"]`)?.focus();
+    };
+
+    search.addEventListener("input", render);
+    panel.addEventListener("keydown", (event) => {
+      if (event.isComposing || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        close(null);
+      } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        moveSelection(event.key === "ArrowDown" ? 1 : -1);
+      }
+    });
+    panel.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const selected = selectedScopes();
+      if (selected.length > 0) close(selected);
+    });
+
+    const selectionSummary = document.createElement("div");
+    selectionSummary.className = "aaronnote-latex-export-selection-summary";
+    selectionSummary.setAttribute("aria-live", "polite");
+    panel.appendChild(selectionSummary);
+    const actions = document.createElement("div");
+    actions.className = "aaronnote-modal-actions";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", () => close(null));
+    const submit = document.createElement("button");
+    submit.type = "submit";
+    submit.textContent = "Choose Path";
+    actions.append(cancel, submit);
+    panel.appendChild(actions);
+
+    const onBackdrop = (event: MouseEvent): void => {
+      if (event.target === modal) close(null);
+    };
+    modal.addEventListener("mousedown", onBackdrop);
+    modal.appendChild(panel);
+    modal.hidden = false;
+    render();
+    window.setTimeout(() => {
+      if (headingScopes.length > 6) search.focus();
+      else list.querySelector<HTMLElement>(`[data-scope-id="${CSS.escape(focusedId)}"]`)?.focus();
+    }, 0);
+  });
+}
+
+async function exportLatexTool(): Promise<void> {
+  if (!currentFile) {
+    setStatus("Open a note before exporting LaTeX");
+    return;
+  }
+
+  const markdown = currentMarkdownText();
+  const selection = editor.getMarkdownSelection();
+  const allHeadings = markdownHeadingsFromText(editor.view.state.doc);
+  const scopes = buildLatexExportScopes({
+    markdown,
+    headings: allHeadings,
+    selection,
+    cursor: editor.view.state.selection.main.head,
+  });
+  const chosenScopes = await openLatexScopeModal(scopes);
+  if (!chosenScopes) {
+    setStatus("LaTeX export canceled");
+    return;
+  }
+
+  const content = latexExportScopesContent(markdown, chosenScopes);
+  const title = fileNameFromPath(currentFile).replace(/\.[^.]+$/, "") || "Noema";
+  const scope = chosenScopes.length === 1 ? chosenScopes[0]!.kind : "headings";
+
+  try {
+    const defaultInfo = await api.latex.defaults({ file: currentFile, title });
+
+    // 1. Pick a template. Defaults to the last one used for this note, else Article.
+    let templates: LatexTemplate[] = [];
+    try {
+      templates = (await api.latex.templates()).templates || [];
+    } catch {
+      templates = [];
+    }
+    let chosenTemplate: LatexTemplate | null = null;
+    if (templates.length > 0) {
+      const rememberedFile = String(defaultInfo.template || "");
+      const fallback =
+        templates.find((t) => t.key === "noema-article")
+        || templates.find((t) => t.key === "aaronnote-article")
+        || templates[0]!;
+      const preselect = templates.find((t) => t.file === rememberedFile) || fallback;
+      const picked = await openFormModal("Export LaTeX — template", [{
+        id: "template",
+        label: "Template",
+        type: "select",
+        value: preselect.key,
+        options: templates.map((t) => ({ value: t.key, label: `${t.name} (${t.engine})` })),
+      }], "Continue");
+      if (!picked) {
+        setStatus("LaTeX export canceled");
+        return;
+      }
+      chosenTemplate = templates.find((t) => t.key === picked.template) || preselect;
+    }
+
+    // 2. Collect template-declared variables (course code, student id, …).
+    const rememberedVars = (defaultInfo.vars && typeof defaultInfo.vars === "object" ? defaultInfo.vars : {}) as Record<string, string>;
+    let vars: Record<string, string> = {};
+    if (chosenTemplate && chosenTemplate.vars.length > 0) {
+      const filled = await openFormModal(
+        `${chosenTemplate.name} — fields`,
+        chosenTemplate.vars.map((v) => ({
+          id: v.id,
+          label: v.label || v.id,
+          type: v.input === "select" ? "select" as const : "text" as const,
+          options: v.options,
+          required: v.required,
+          placeholder: v.placeholder,
+          description: v.description,
+          group: v.group,
+          value: rememberedVars[v.id] ?? v.default ?? "",
+        })),
+        "Continue",
+      );
+      if (!filled) {
+        setStatus("LaTeX export canceled");
+        return;
+      }
+      vars = filled;
+    }
+
+    // 3. Choose the output path, then export.
+    setStatus("Choose LaTeX output path...");
+    const chosen = await api.latex.chooseOutputPath({
+      file: currentFile,
+      title,
+      defaultPath: defaultInfo.outputPath || "",
+    });
+    if (chosen.canceled) {
+      setStatus("LaTeX export canceled");
+      return;
+    }
+    if (chosen.ok === false || !chosen.path) {
+      setStatus(`LaTeX export failed: ${String(chosen.message || "output path was not selected")}`);
+      return;
+    }
+    setStatus("Exporting LaTeX…");
+    await api.latex.export({
+      file: currentFile,
+      content,
+      documentContent: currentMarkdownText(),
+      outputPath: String(chosen.path),
+      title,
+      scope,
+      ...(chosenTemplate ? { templatePath: chosenTemplate.file, engine: chosenTemplate.engine } : {}),
+      ...(Object.keys(vars).length > 0 ? { vars } : {}),
+    });
+    setStatus("LaTeX export added to tasks");
+  } catch (err) {
+    setStatus(`LaTeX export failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+function latexExportAgentLabel(id: string): string {
+  switch (id) {
+    case "claude": return "Claude";
+    case "opencode": return "OpenCode";
+    case "codex":
+    default: return "Codex";
+  }
+}
+
+function latexExportAgentOptions(status: LatexExportAgentStatus): { value: string; label: string }[] {
+  const agents = status.agents?.length
+    ? status.agents
+    : ["codex", "claude", "opencode"].map((id) => ({ id, label: latexExportAgentLabel(id), current: id === status.agent }));
+  return agents.map((agent) => {
+    const id = String(agent.id || "").trim();
+    const suffix = [
+      agent.current ? "current" : "",
+      agent.available === false ? "unavailable" : "",
+    ].filter(Boolean).join(", ");
+    return {
+      value: id,
+      label: `${agent.label || latexExportAgentLabel(id)}${suffix ? ` (${suffix})` : ""}`,
+    };
+  }).filter((option) => option.value);
+}
+
+async function switchLatexExportAgentTool(): Promise<void> {
+  setStatus("Loading LaTeX export agents...");
+  try {
+    const status = await api.latex.agentStatus();
+    const current = String(status.agent || "codex");
+    const picked = await openFormModal("LaTeX export agent", [{
+      id: "agent",
+      label: "Agent backend",
+      type: "select",
+      value: current,
+      options: latexExportAgentOptions(status),
+    }], "Switch");
+    if (!picked) {
+      setStatus("LaTeX export agent switch canceled");
+      return;
+    }
+    const next = await api.latex.setAgent({ agent: picked.agent });
+    setStatus(`LaTeX export agent: ${latexExportAgentLabel(String(next.agent || picked.agent))}`);
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "LaTeX export agent switch failed");
+  }
+}
+
+async function updateNoteMeta(
+  action: (body: Record<string, unknown>) => Promise<Awaited<ReturnType<typeof api.notes.bootstrap>>>,
+  body: Record<string, unknown>,
+  success: string,
+): Promise<void> {
+  if (!currentFile) {
+    setStatus("No current note");
+    return;
+  }
+  setStatus("Updating note");
+  try {
+    const msg = await action({
+      file: currentFile,
+      content: editor.getMarkdown(),
+      ...body,
+    });
+    applyOpenedNote(msg, currentFile);
+    setStatus(success);
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "Update failed");
+  }
+}
+
+async function quickAddMeta(): Promise<void> {
+  const project = currentFileProjectFromMarkdown();
+  const projectSuggestions = await agendaProjectSuggestionsWithGlobal(agendaNodes(), project);
+  const result = await openFormModal("Quick add meta", [
+    { id: "title", label: "Title", value: currentNote()?.title || fileLabel.textContent || "Untitled" },
+    { id: "project", label: "Project", type: "suggest", value: project, suggestions: projectSuggestions },
+    { id: "tags", label: "Tags", type: "tags", value: relationTags(currentNote()).join(", "), suggestions: tagSuggestions() },
+  ], "Register");
+  if (!result) return;
+  await updateNoteMeta(api.meta.add, {
+    title: result.title,
+    project: result.project,
+    tags: parseTagPrompt(result.tags),
+    kind: currentKind || "default",
+  }, "Meta registered");
+}
+
+async function unregisterMeta(): Promise<void> {
+  const result = await openFormModal("Unregister meta", [
+    { id: "confirm", label: "Type REMOVE to delete roam meta", value: "" },
+  ], "Remove");
+  if (result?.confirm !== "REMOVE") return;
+  await updateNoteMeta(api.meta.remove, {}, "Meta unregistered");
+}
+
+async function addTag(): Promise<void> {
+  const result = await openFormModal("Add tag", [
+    { id: "tags", label: "Tags", type: "tags", value: "", suggestions: tagSuggestions() },
+  ], "Add");
+  if (!result) return;
+  const tags = parseTagPrompt(result.tags);
+  if (tags.length === 0) return;
+  await updateNoteMeta(api.meta.tag, { tags }, "Tag added");
+}
+
+async function manageNoteTags(): Promise<void> {
+  const note = currentNote();
+  const project = currentFileProjectFromMarkdown();
+  const projectSuggestions = await agendaProjectSuggestionsWithGlobal(agendaNodes(), project);
+  const result = await openFormModal("Note meta", [
+    { id: "project", label: "Project", type: "suggest", value: project, suggestions: projectSuggestions },
+    { id: "tags", label: "Tags", type: "tags", value: relationTags(note).join(", "), suggestions: tagSuggestions() },
+  ], "Update");
+  if (!result) return;
+  await updateNoteMeta(api.meta.add, {
+    title: note?.title || fileLabel.textContent || "Untitled",
+    project: result.project,
+    tags: parseTagPrompt(result.tags),
+    kind: note?.kind || currentKind || "default",
+  }, "Meta updated");
+}
+
+async function insertRoamIdLink(): Promise<void> {
+  const selection = editor.getMarkdownSelection();
+  const selected = selection.from === selection.to ? "" : editor.textBetween(selection.from, selection.to).trim();
+  const result = await openFormModal("Insert roam idlink", [
+    { id: "note", label: "Roam note", value: "", suggestions: notes.filter((note) => note.roam).map(roamNoteSearchValue).sort() },
+    { id: "label", label: "Link text", value: selected },
+  ], "Insert");
+  if (!result) return;
+  const target = resolveRoamNoteSearch(notes, result.note);
+  if (!target) {
+    setStatus("Roam note not found");
+    return;
+  }
+  const markdown = markdownRoamIdLink(target, result.label || selected || target.title || canonicalRoamNoteId(target));
+  if (!markdown) {
+    setStatus("Roam note has no id");
+    return;
+  }
+  editor.replaceMarkdownRange(selection.from, selection.to, markdown, "end");
+  setStatus("Roam idlink inserted");
+  scheduleAssistUpdate({ snippets: true, toc: true });
+}
+
+function activeDisplayMathTarget(): { tex: string; replace: (nextTex: string) => void } | null {
+  const state = editor.view.state;
+  const cursor = state.selection.main.from;
+  const range = rangeAtPosition(cursor, getBlockMathRanges(state));
+  if (!range || cursor <= range.from || cursor >= range.to) return null;
+  return {
+    tex: range.tex,
+    replace: (nextTex: string) => editor.replaceMarkdownRange(range.contentFrom, range.contentTo, nextTex, "end"),
+  };
+}
+
+function existingLatexTag(tex: string): string {
+  return tex.match(/\\tag\s*\{([^{}\n]+)\}/)?.[1]?.trim() || "";
+}
+
+function upsertLatexTag(tex: string, tag: string): string {
+  const clean = tex.replace(/\s*\\tag\s*\{[^{}\n]*\}/g, "").replace(/\s+$/g, "");
+  const separator = clean.includes("\n") ? "\n" : " ";
+  return `${clean}${separator}\\tag{${tag}}`;
+}
+
+async function tagOrCopyRef(): Promise<void> {
+  const math = activeDisplayMathTarget();
+  if (math) {
+    const existing = existingLatexTag(math.tex);
+    if (existing) {
+      await copyText(equationReferenceMarkdown(existing));
+      setStatus(`Equation ref copied: ${existing}`);
+      return;
+    }
+    const result = await openFormModal("Equation tag", [
+      { id: "tag", label: "LaTeX tag", value: nextAnchorTagSuggestion("equation"), suggestions: allAnchorTagSuggestions() },
+    ], "Tag & Copy Ref");
+    if (!result?.tag) return;
+    const tag = normalizeInlineTag(result.tag);
+    math.replace(upsertLatexTag(math.tex, tag));
+    await copyText(equationReferenceMarkdown(tag));
+    setStatus(`Equation tag ${tag}; ref copied`);
+    scheduleAssistUpdate({ mathPreview: true, toc: true });
+    return;
+  }
+
+  const inline = inlineTagAtCursor();
+  if (inline) {
+    await copyText(inlineTagReferenceMarkdown(inline));
+    setStatus(`Inline anchor ref copied: ${inline}`);
+    return;
+  }
+
+  const result = await openFormModal("Inline anchor", [
+    { id: "tag", label: "Anchor tag", value: nextAnchorTagSuggestion("inline"), suggestions: allAnchorTagSuggestions() },
+  ], "Tag & Copy Ref");
+  if (!result?.tag) return;
+  const tag = normalizeInlineTag(result.tag);
+  const selection = editor.getMarkdownSelection();
+  editor.replaceMarkdownRange(selection.to, selection.to, inlineTagMarkdown(tag), "end");
+  await copyText(inlineTagReferenceMarkdown(tag));
+  setStatus(`Inline anchor ${tag}; ref copied`);
+  scheduleAssistUpdate({ snippets: true, toc: true });
+}
+
+function changedRows(changed: unknown): Array<{ title: string; detail?: string; kind?: string }> {
+  return (Array.isArray(changed) ? changed : []).slice(0, 80).map((item) => {
+    const value = item as { title?: string; path?: string; file?: string; count?: number; tags?: string[] };
+    return {
+      title: value.title || value.path || value.file || "Untitled",
+      detail: [
+        value.path || value.file || "",
+        typeof value.count === "number" ? `${value.count} refs` : "",
+        Array.isArray(value.tags) ? value.tags.join(", ") : "",
+      ].filter(Boolean).join(" - "),
+      kind: typeof value.count === "number" ? "REF" : "TAG",
+    };
+  });
+}
+
+function showRoamToolRows(title: string, rows: Array<{ title: string; detail?: string; kind?: string }>): void {
+  roamToolsTitle.textContent = title;
+  const frag = document.createDocumentFragment();
+  if (rows.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "aaronnote-empty";
+    empty.textContent = "No issues";
+    frag.appendChild(empty);
+  }
+  for (const row of rows) {
+    const item = document.createElement("div");
+    item.className = "aaronnote-roam-tool-item";
+    const kind = document.createElement("span");
+    kind.className = "aaronnote-roam-tool-kind";
+    kind.textContent = row.kind || "ROAM";
+    const body = document.createElement("div");
+    body.className = "aaronnote-roam-tool-body";
+    const titleEl = document.createElement("strong");
+    titleEl.textContent = row.title;
+    body.appendChild(titleEl);
+    if (row.detail) {
+      const detail = document.createElement("span");
+      detail.textContent = row.detail;
+      body.appendChild(detail);
+    }
+    item.append(kind, body);
+    frag.appendChild(item);
+  }
+  roamToolsList.replaceChildren(frag);
+  roamToolsPanel.classList.remove("is-agenda");
+  roamToolsPanel.hidden = false;
+}
+
+type AgendaMode = "open" | "all" | "done" | "cancelled" | "today" | "overdue";
+type TodoTarget = { index?: number; line?: number; source?: string };
+
+let agendaTodos: TodoItem[] = [];
+let agendaMode: AgendaMode = "open";
+let agendaQuery = "";
+
+function todoString(todo: TodoItem, ...keys: string[]): string {
+  for (const key of keys) {
+    const value = todo[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "number") return String(value);
+  }
+  return "";
+}
+
+function todoStatus(todo: TodoItem): string {
+  const status = todoString(todo, "status").toLowerCase();
+  if (!status || status === "open" || status === "unchecked") return "todo";
+  if (status === "cancel" || status === "canceled") return "cancelled";
+  if (status === "complete" || status === "completed") return "done";
+  return status;
+}
+
+function todoDate(todo: TodoItem): string {
+  return todoString(todo, "ddl", "deadline", "due", "date").slice(0, 10);
+}
+
+function todoClosed(todo: TodoItem): boolean {
+  return ["done", "cancelled"].includes(todoStatus(todo));
+}
+
+function todoToday(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function todoOverdue(todo: TodoItem): boolean {
+  const date = todoDate(todo);
+  return !!date && date < todoToday() && !todoClosed(todo);
+}
+
+function todoTitle(todo: TodoItem): string {
+  return todoString(todo, "title", "noteTitle", "note", "noteId", "path", "file") || "Untitled";
+}
+
+function todoText(todo: TodoItem): string {
+  return todoString(todo, "text", "context", "source") || "(empty todo)";
+}
+
+function todoTags(todo: TodoItem): string[] {
+  const tags = Array.isArray(todo.tags) ? todo.tags : [];
+  const inlineTags = Array.isArray(todo.inlineTags) ? todo.inlineTags : [];
+  return [...tags, ...inlineTags].map(String).filter(Boolean);
+}
+
+function todoHaystack(todo: TodoItem): string {
+  return [
+    todoStatus(todo),
+    todoDate(todo),
+    todoTitle(todo),
+    todoText(todo),
+    todoString(todo, "id", "noteId", "roamId", "path", "file"),
+    ...todoTags(todo),
+  ].join(" ").toLowerCase();
+}
+
+function agendaMatchesQuery(todo: TodoItem): boolean {
+  const query = agendaQuery.trim().toLowerCase();
+  if (!query) return true;
+  return query.split(/\s+/).every((term) => todoHaystack(todo).includes(term));
+}
+
+function agendaVisibleTodos(): TodoItem[] {
+  return agendaTodos.filter((todo) => {
+    if (!agendaMatchesQuery(todo)) return false;
+    switch (agendaMode) {
+      case "all": return true;
+      case "done": return todoStatus(todo) === "done";
+      case "cancelled": return todoStatus(todo) === "cancelled";
+      case "today": return !todoClosed(todo) && todoDate(todo) === todoToday();
+      case "overdue": return todoOverdue(todo);
+      case "open":
+      default: return !todoClosed(todo);
+    }
+  }).sort((a, b) => {
+    const ad = todoDate(a) || "9999-99-99";
+    const bd = todoDate(b) || "9999-99-99";
+    return ad.localeCompare(bd)
+      || todoStatus(a).localeCompare(todoStatus(b))
+      || todoTitle(a).localeCompare(todoTitle(b))
+      || todoText(a).localeCompare(todoText(b));
+  });
+}
+
+function agendaCounts(): Record<AgendaMode, number> {
+  return {
+    open: agendaTodos.filter((todo) => !todoClosed(todo)).length,
+    all: agendaTodos.length,
+    done: agendaTodos.filter((todo) => todoStatus(todo) === "done").length,
+    cancelled: agendaTodos.filter((todo) => todoStatus(todo) === "cancelled").length,
+    today: agendaTodos.filter((todo) => !todoClosed(todo) && todoDate(todo) === todoToday()).length,
+    overdue: agendaTodos.filter(todoOverdue).length,
+  };
+}
+
+function todoTargetFromItem(todo: TodoItem): TodoTarget {
+  return {
+    index: typeof todo.index === "number" ? todo.index : undefined,
+    line: typeof todo.line === "number" ? todo.line : undefined,
+    source: todoString(todo, "source"),
+  };
+}
+
+// Resolve a todo's source range in the live editor document. Prefers the
+// scanned offset, falls back to a source/line search so it survives small drifts.
+function todoRangeInEditor(target: TodoTarget): { from: number; to: number } | null {
+  const doc = editor.getMarkdown();
+  const source = target.source || "";
+  const firstLine = source.split("\n")[0] || "";
+  if (typeof target.index === "number" && target.index >= 0 && target.index <= doc.length) {
+    if (source && doc.slice(target.index, target.index + source.length) === source) {
+      return { from: target.index, to: target.index + source.length };
+    }
+    if (firstLine && doc.slice(target.index, target.index + firstLine.length) === firstLine) {
+      return { from: target.index, to: target.index + firstLine.length };
+    }
+  }
+  if (firstLine) {
+    const found = doc.indexOf(firstLine);
+    if (found >= 0) return { from: found, to: found + firstLine.length };
+  }
+  if (typeof target.line === "number" && target.line > 0) {
+    let from = 0;
+    for (let line = 1; line < target.line; line += 1) {
+      const next = doc.indexOf("\n", from);
+      if (next < 0) { from = -1; break; }
+      from = next + 1;
+    }
+    if (from >= 0 && from <= doc.length) return { from, to: from };
+  }
+  return null;
+}
+
+function jumpToTodoTarget(target: TodoTarget): boolean {
+  const range = todoRangeInEditor(target);
+  if (!range) return false;
+  editor.setMarkdownSelection(range.from, Math.min(range.to, editor.getMarkdownLength()));
+  editor.revealCursor();
+  editor.focus();
+  noteCursorPositionEvent();
+  return true;
+}
+
+function agendaOpenTodo(todo: TodoItem): void {
+  const file = todoString(todo, "file");
+  if (!file) return;
+  const target = todoTargetFromItem(todo);
+  closeRoamToolsPanel();
+  if (sameOpenFile(file)) {
+    if (!jumpToTodoTarget(target)) setStatus("Todo location not found");
+    return;
+  }
+  pendingTodoTarget = target;
+  void openFile(file);
+}
+
+function todoStatusSourcePrefix(status: string, commandName = "todo"): string {
+  const s = (status || "todo").toLowerCase();
+  const command = commandName.toLowerCase() === "itodo" ? "itodo" : "todo";
+  return s === "todo" || s === "open" || s === "unchecked" ? `@@${command} ` : `@@${command}(${s}) `;
+}
+
+type TodoUpdateResult = {
+  file?: string;
+  from?: number;
+  to?: number;
+  source?: string;
+  nextSource?: string;
+  mtimeMs?: number;
+};
+
+function fileBasename(path: string): string {
+  return String(path || "").split(/[\\/]/).pop() || String(path || "");
+}
+
+// True when two paths point at the open note. `todo.file`/`result.file` come
+// from different server normalizations than `currentFile`, so exact-string
+// comparison alone is too strict; fall back to basename equality.
+function sameOpenFile(path: string): boolean {
+  const file = String(path || "");
+  if (!file || !currentFile) return false;
+  return file === currentFile || fileBasename(file) === fileBasename(currentFile);
+}
+
+// Reflect a status change in the open editor so the CM6 page updates immediately
+// instead of going stale until the next reload. The server already wrote the same
+// change to disk, so we suppress dirty tracking and resync mtime to avoid a false
+// save conflict. The change is located by the server's exact offset+source first,
+// then by a source-text search so it survives unsaved-edit drift.
+function applyTodoStatusInEditor(todo: TodoItem, status: string, result: TodoUpdateResult): void {
+  if (!sameOpenFile(result.file || todoString(todo, "file"))) return;
+  const doc = editor.getMarkdown();
+  const docLen = doc.length;
+  const oldSource = String(result.source || todoString(todo, "source") || "");
+  let from = -1;
+  let to = -1;
+  const serverFrom = Number(result.from);
+  const serverTo = Number(result.to);
+  // 1) exact server offsets when the source still matches there
+  if (oldSource && Number.isInteger(serverFrom) && serverFrom >= 0 && serverTo > serverFrom
+    && serverTo <= docLen && doc.slice(serverFrom, serverTo) === oldSource) {
+    from = serverFrom;
+    to = serverTo;
+  }
+  // 2) scanned offset on the todo item
+  if (from < 0 && oldSource && typeof todo.index === "number"
+    && todo.index >= 0 && todo.index + oldSource.length <= docLen
+    && doc.slice(todo.index, todo.index + oldSource.length) === oldSource) {
+    from = todo.index;
+    to = todo.index + oldSource.length;
+  }
+  // 3) source-text search (survives offset drift from unsaved edits)
+  if (from < 0 && oldSource) {
+    const found = doc.indexOf(oldSource);
+    if (found >= 0) { from = found; to = found + oldSource.length; }
+  }
+  // 4) last resort: line/index range finder
+  if (from < 0) {
+    const range = todoRangeInEditor(todoTargetFromItem(todo));
+    if (!range) return;
+    from = range.from;
+    to = range.to;
+  }
+  const current = editor.markdownBetween(from, to);
+  const next = result.nextSource && current === oldSource
+    ? String(result.nextSource)
+    : current.replace(/^@@(todo|itodo)(?:\([^)\n]*\))?[ \t]+/i, (_match, command) => todoStatusSourcePrefix(status, command));
+  if (next === current) return;
+  applyingContent = true;
+  editor.replaceMarkdownRange(from, to, next);
+  applyingContent = false;
+  const mtimeMs = Number(result.mtimeMs) || 0;
+  if (mtimeMs) currentMtimeMs = mtimeMs;
+  updateTitle();
+}
+
+async function agendaUpdateTodo(todo: TodoItem, status: string): Promise<void> {
+  try {
+    const result = await api.notes.updateTodo({
+      file: todoString(todo, "file"),
+      id: todoString(todo, "id"),
+      index: todo.index,
+      source: todoString(todo, "source"),
+      text: todoText(todo),
+      status,
+    }) as TodoUpdateResult;
+    applyTodoStatusInEditor(todo, status, result);
+    const payload = await api.notes.todos(currentFile);
+    agendaTodos = Array.isArray(payload.todos) ? payload.todos : [];
+    renderAgendaTool();
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "Todo update failed");
+  }
+}
+
+function renderAgendaTool(): void {
+  roamToolsTitle.textContent = "Agenda";
+  const counts = agendaCounts();
+  const visible = agendaVisibleTodos();
+  const rootEl = document.createElement("div");
+  rootEl.className = "aaronnote-agenda-tool";
+
+  const filters = document.createElement("div");
+  filters.className = "aaronnote-agenda-filters";
+  const filterLabels: Array<[AgendaMode, string]> = [
+    ["open", "Open"],
+    ["today", "Today"],
+    ["overdue", "Overdue"],
+    ["all", "All"],
+    ["done", "Done"],
+    ["cancelled", "Cancelled"],
+  ];
+  for (const [mode, label] of filterLabels) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = mode === agendaMode ? "is-active" : "";
+    button.textContent = `${label} ${counts[mode]}`;
+    button.addEventListener("click", () => {
+      agendaMode = mode;
+      renderAgendaTool();
+    });
+    filters.appendChild(button);
+  }
+
+  const search = document.createElement("input");
+  search.type = "search";
+  search.value = agendaQuery;
+  search.placeholder = "Search status, tag, title, roam id, file, date...";
+  search.addEventListener("input", () => {
+    agendaQuery = search.value;
+    renderAgendaTool();
+  });
+  filters.appendChild(search);
+  rootEl.appendChild(filters);
+
+  const subnav = document.createElement("div");
+  subnav.className = "aaronnote-agenda-subnav";
+  const fullAgenda = document.createElement("button");
+  fullAgenda.type = "button";
+  fullAgenda.textContent = "Full Agenda";
+  fullAgenda.addEventListener("click", () => {
+    window.location.href = "/agenda?view=agenda";
+  });
+  subnav.appendChild(fullAgenda);
+  rootEl.appendChild(subnav);
+
+  const meta = document.createElement("div");
+  meta.className = "aaronnote-agenda-meta";
+  meta.textContent = `${visible.length} shown - ${todoToday()}`;
+  rootEl.appendChild(meta);
+
+  const list = document.createElement("div");
+  list.className = "aaronnote-agenda-list";
+  if (visible.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "aaronnote-empty";
+    empty.textContent = "No matching tasks";
+    list.appendChild(empty);
+  }
+  for (const todo of visible) {
+    const row = document.createElement("div");
+    row.tabIndex = 0;
+    row.setAttribute("role", "button");
+    row.className = "aaronnote-agenda-row";
+    row.dataset.status = todoStatus(todo);
+    row.addEventListener("click", () => agendaOpenTodo(todo));
+    row.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        agendaOpenTodo(todo);
+      }
+    });
+
+    const status = document.createElement("span");
+    status.className = "aaronnote-agenda-status";
+    status.textContent = todoStatus(todo).toUpperCase();
+
+    const date = document.createElement("span");
+    date.className = "aaronnote-agenda-date";
+    date.textContent = todoDate(todo) || "no date";
+
+    // Single-file agenda: the note title/file is redundant, so show only the
+    // todo text itself.
+    const body = document.createElement("span");
+    body.className = "aaronnote-agenda-body";
+    const text = document.createElement("span");
+    text.textContent = todoText(todo);
+    body.append(text);
+
+    const line = document.createElement("span");
+    line.className = "aaronnote-agenda-line";
+    const lineValue = typeof todo.line === "number" ? todo.line : "";
+    line.textContent = lineValue ? `L${lineValue}` : "";
+
+    const actions = document.createElement("span");
+    actions.className = "aaronnote-agenda-actions";
+    const closed = todoClosed(todo);
+    const actionLabels: Array<[string, string]> = closed
+      ? [["Reopen", "todo"], ["Doing", "doing"]]
+      : [["Done", "done"], ["Cancel", "cancelled"]];
+    for (const [label, nextStatus] of actionLabels) {
+      const action = document.createElement("button");
+      action.type = "button";
+      action.textContent = label;
+      action.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void agendaUpdateTodo(todo, nextStatus);
+      });
+      actions.appendChild(action);
+    }
+
+    row.append(status, date, body, line, actions);
+    list.appendChild(row);
+  }
+  rootEl.appendChild(list);
+  roamToolsList.replaceChildren(rootEl);
+  roamToolsPanel.classList.add("is-agenda");
+  roamToolsPanel.hidden = false;
+  agendaButton.setAttribute("aria-expanded", "true");
+}
+
+async function openAgendaTool(): Promise<void> {
+  try {
+    roamToolsTitle.textContent = "Agenda";
+    roamToolsList.replaceChildren();
+    const loading = document.createElement("div");
+    loading.className = "aaronnote-empty";
+    loading.textContent = "Loading agenda...";
+    roamToolsList.appendChild(loading);
+    roamToolsPanel.classList.add("is-agenda");
+    roamToolsPanel.hidden = false;
+    const payload = await api.notes.todos(currentFile);
+    agendaTodos = Array.isArray(payload.todos) ? payload.todos : [];
+    agendaMode = "open";
+    renderAgendaTool();
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "Agenda failed");
+  }
+}
+
+async function renameRoamTagTool(): Promise<void> {
+  const result = await openFormModal("Rename roam tag", [
+    { id: "from", label: "Current tag", type: "tags", value: "", suggestions: tagSuggestions() },
+    { id: "to", label: "New tag", value: "" },
+    { id: "confirm", label: "Type RENAME to update all roam notes", value: "" },
+  ], "Rename");
+  if (!result || result.confirm !== "RENAME") return;
+  setStatus("Renaming roam tag");
+  try {
+    const msg = await api.roamTools.renameTag({ from: parseTagPrompt(result.from)[0] || result.from, to: result.to });
+    applyIndexPayload(msg as { notes?: NoteSummary[] });
+    showRoamToolRows(`Renamed ${msg.changedCount ?? 0} notes`, changedRows(msg.changed));
+    setStatus(`Renamed tag in ${msg.changedCount ?? 0} notes`);
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "Roam tag rename failed");
+  }
+}
+
+async function deleteRoamTagTool(): Promise<void> {
+  const result = await openFormModal("Delete roam tag", [
+    { id: "tag", label: "Tag", type: "tags", value: "", suggestions: tagSuggestions() },
+    { id: "confirm", label: "Type DELETE to remove it from all roam notes", value: "" },
+  ], "Delete");
+  if (!result || result.confirm !== "DELETE") return;
+  setStatus("Deleting roam tag");
+  try {
+    const msg = await api.roamTools.deleteTag({ tag: parseTagPrompt(result.tag)[0] || result.tag });
+    applyIndexPayload(msg as { notes?: NoteSummary[] });
+    showRoamToolRows(`Deleted tag from ${msg.changedCount ?? 0} notes`, changedRows(msg.changed));
+    setStatus(`Deleted tag from ${msg.changedCount ?? 0} notes`);
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "Roam tag delete failed");
+  }
+}
+
+async function tagOverlapReportTool(): Promise<void> {
+  setStatus("Scanning tag overlap");
+  try {
+    const report = await api.roamTools.tagOverlap();
+    const duplicateRows = (Array.isArray(report.duplicateCase) ? report.duplicateCase : []).map((item) => {
+      const value = item as { variants?: string[] };
+      return { title: `Case variants: ${(value.variants || []).join(" / ")}`, detail: "Use Rename tag to normalize these", kind: "CASE" };
+    });
+    const overlapRows = (Array.isArray(report.overlaps) ? report.overlaps : []).map((item) => {
+      const value = item as { a?: string; b?: string; aCount?: number; bCount?: number; sharedCount?: number; containment?: number };
+      return {
+        title: `${value.a || ""} overlaps ${value.b || ""}`,
+        detail: `${value.sharedCount ?? 0} shared - ${value.aCount ?? 0}/${value.bCount ?? 0} notes - ${Math.round((value.containment ?? 0) * 100)}% containment`,
+        kind: "TAG",
+      };
+    });
+    showRoamToolRows(`Tag overlap (${report.tagCount ?? 0} tags)`, [...duplicateRows, ...overlapRows]);
+    setStatus("Tag overlap scanned");
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "Tag overlap scan failed");
+  }
+}
+
+async function rewritePathRefsTool(): Promise<void> {
+  const result = await openFormModal("Rewrite path references", [
+    { id: "oldPath", label: "Old target path", value: "", suggestions: pathSuggestions },
+    { id: "newPath", label: "New target path", value: "", suggestions: pathSuggestions },
+    { id: "confirm", label: "Type UPDATE to rewrite Markdown path links", value: "" },
+  ], "Update");
+  if (!result || result.confirm !== "UPDATE") return;
+  setStatus("Rewriting path references");
+  try {
+    const msg = await api.roamTools.rewritePathRefs({ oldPath: result.oldPath, newPath: result.newPath });
+    applyIndexPayload(msg as { notes?: NoteSummary[] });
+    showRoamToolRows(`Rewrote ${msg.referenceCount ?? 0} references`, changedRows(msg.changed));
+    setStatus(`Rewrote ${msg.referenceCount ?? 0} references`);
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "Path reference rewrite failed");
+  }
+}
+
+type ToolAction = {
+  id: string;
+  title: string;
+  detail: string;
+  run: () => void;
+};
+
+async function zoteroImportBibtexTool(): Promise<void> {
+  if (!currentFile) {
+    setStatus("Open a note before importing Zotero BibTeX");
+    return;
+  }
+  const selection = editor.getMarkdownSelection();
+  const query = selection.from !== selection.to
+    ? editor.getMarkdown().slice(selection.from, selection.to).trim().slice(0, 500)
+    : "";
+  const targetFile = (bibliographyModel.references ?? []).find((ref) => ref.entry?.file)?.entry?.file
+    || bibliographyModel.namespaces?.find((namespace) => namespace.file)?.file
+    || "";
+  await api.emacs.zoteroImport({ currentFile, targetFile, query, client: currentClient });
+  setStatus("Choose the BibTeX target and Zotero item in Emacs");
+}
+
+function applyLanguageToolConfiguration(settings: LanguageToolSettings, settingsRevision = ""): void {
+  const changed = JSON.stringify(settings) !== JSON.stringify(languageToolSettings);
+  languageToolSettings = { ...settings };
+  if (settingsRevision) languageToolRevision = settingsRevision;
+  if (!changed) return;
+  languageToolHealth = "Not tested";
+  proseAutoSuspendedUntil = 0;
+  clearProseRetryTimer();
+  proseLifecycle.invalidate("settings-changed");
+  setProseDiagnostics(editor.view, []);
+  hideProsePopover();
+  if (languageToolSettings.automaticEnabled) scheduleAutomaticProseCheck();
+}
+
+async function loadLanguageToolConfiguration(): Promise<void> {
+  const sequence = ++languageToolLoadSequence;
+  try {
+    const result = await api.proseCheck.settings();
+    if (sequence !== languageToolLoadSequence) return;
+    if (result.defaults) languageToolDefaults = { ...result.defaults };
+    if (result.settings) applyLanguageToolConfiguration(result.settings, result.revision);
+  } catch (error) {
+    if (sequence === languageToolLoadSequence) languageToolHealth = proseErrorMessage(error);
+  }
+}
+
+function languageToolActionDetail(): string {
+  let server = languageToolSettings.serverUrl;
+  try {
+    server = new URL(server).host || server;
+  } catch {
+    // Keep the configured text when it is not yet a valid URL.
+  }
+  return `${server} · ${languageToolSettings.language} · Auto ${languageToolSettings.automaticEnabled ? "on" : "off"}`;
+}
+
+async function languageToolSettingsTool(): Promise<void> {
+  const saved = await openLanguageToolSettingsTool({
+    modal,
+    api: api.proseCheck,
+    settings: languageToolSettings,
+    defaults: languageToolDefaults,
+    revision: languageToolRevision,
+    status: languageToolHealth,
+    onClose: () => toolsButton.focus(),
+  });
+  if (!saved) return;
+  languageToolLoadSequence += 1;
+  applyLanguageToolConfiguration(saved.settings, saved.revision);
+  setStatus("LanguageTool settings saved");
+}
+
+async function openStandaloneSlideView(): Promise<void> {
+  if (!currentFile || currentNoteIsSlides() || !/\.(?:md|markdown)$/i.test(currentFile)) return;
+  const url = new URL("/slides", window.location.origin);
+  url.searchParams.set("file", currentFile);
+  // Appine/xwidget cannot reliably navigate an about:blank WindowProxy after
+  // an async save. Open the final route while the click gesture is active.
+  window.open(url.toString(), "_blank", "noopener,noreferrer");
+  setStatus("Opening Slide view");
+  if (!currentReadOnly && revision !== savedRevision) {
+    if (!noteAutoSaveEnabled(currentRemote)) {
+      setStatus("Slide view opened with the last saved version");
+      return;
+    }
+    await save();
+    if (revision !== savedRevision) {
+      setStatus("Slide view opened with the last saved version");
+      return;
+    }
+  }
+}
+
+function currentNoteIsSlides(): boolean {
+  return slideDeck?.isSlides() === true || String(currentKind || "").trim().toLowerCase() === "slides";
+}
+
+function toolActions(): ToolAction[] {
+  const offerSlideView = Boolean(
+    currentFile
+    && /\.(?:md|markdown)$/i.test(currentFile)
+    && !currentNoteIsSlides(),
+  );
+  const canSetSlideTheme = Boolean(slideDeck && (offerSlideView || currentNoteIsSlides()));
+  const slideTheme = slideDeck?.getTheme() ?? "dark";
+  const common: ToolAction[] = [
+    { id: "source", title: editor.isSourceMode() ? "Markdown view" : "Source view", detail: "True Markdown source", run: () => toggleSourceMode() },
+    ...(offerSlideView ? [{
+      id: "slide-view",
+      title: "Slide view",
+      detail: "Present this ordinary Markdown in a new read-only page",
+      run: () => void openStandaloneSlideView(),
+    }] : []),
+    ...(canSetSlideTheme ? [{
+      id: "slides-theme",
+      title: `Slides theme: ${slideTheme === "dark" ? "Dark" : "Light"}`,
+      detail: `Switch presentation to ${slideTheme === "dark" ? "light" : "dark"}`,
+      run: () => {
+        const theme = slideDeck?.toggleTheme();
+        if (theme) {
+          renderModeToggleLabel(vim.mode());
+          setStatus(`Slides ${theme} theme`);
+        }
+      },
+    }] : []),
+    ...(slideDeck?.isSlides() ? [{ id: "slides-mirror", title: "Reveal mirror", detail: "Edit this note's .slides JavaScript mirror", run: () => void slideDeck?.openMirror() }] : []),
+    { id: "toc", title: "Toggle TOC", detail: "Page headings, anchors, tags, backlinks", run: () => { floatingTocPanel.toggle(); updateFloatingToc(); } },
+    { id: "tag-ref", title: "Tag / copy ref", detail: "Equation tag, inline anchor, reference copy", run: () => void tagOrCopyRef() },
+    { id: "export-latex", title: "Export LaTeX", detail: "Write selection, heading, or note to a .tex file", run: () => void exportLatexTool() },
+    { id: "latex-export-agent", title: "Switch export agent", detail: "Choose Codex, Claude, or OpenCode for LaTeX polish", run: () => void switchLatexExportAgentTool() },
+    { id: "zotero-import-bibtex", title: "Import Zotero BibTeX", detail: "Use the Zotero picker and append to a local .bib file", run: () => void zoteroImportBibtexTool() },
+    { id: "languagetool", title: "LanguageTool", detail: languageToolActionDetail(), run: () => void languageToolSettingsTool() },
+    { id: "reload-snippets", title: "Reload snippets", detail: "Refresh Emacs md/tex snippets", run: () => void reloadSnippets() },
+    {
+      id: "reset-snippet-ranking",
+      title: "Reset snippet ranking",
+      detail: "Clear local snippet frequency and recency history",
+      run: () => {
+        snippetUsage.clear();
+        hideToolsPanel();
+        setStatus("Snippet ranking reset");
+      },
+    },
+  ];
+  return [
+    ...common,
+    { id: "reload-index", title: "Reload roam index", detail: "Refresh notes, tags, links", run: () => void reloadNotes(true) },
+    { id: "add-meta", title: "Add meta", detail: "Register title/kind/tags", run: () => void quickAddMeta() },
+    { id: "remove-meta", title: "Remove meta", detail: "Delete current note meta block", run: () => void unregisterMeta() },
+    { id: "hide-roam", title: "Set roam off", detail: "Keep meta but hide from roam graph", run: () => void updateNoteMeta(api.meta.hideRoam, {}, "roam: off set") },
+    { id: "activate-roam", title: "Clear roam off", detail: "Activate current note in roam graph", run: () => void updateNoteMeta(api.meta.activateRoam, {}, "roam: off cleared") },
+    { id: "add-tag", title: "Add tag", detail: "Append tags to current note", run: () => void addTag() },
+    { id: "manage-tags", title: "Manage note meta", detail: "Project and tags", run: () => void manageNoteTags() },
+    { id: "insert-roam-idlink", title: "Insert roam idlink", detail: "Search roam note and insert id link", run: () => void insertRoamIdLink() },
+    { id: "rename-tag", title: "Rename roam tag", detail: "Bulk rename tag in roam notes", run: () => void renameRoamTagTool() },
+    { id: "delete-tag", title: "Delete roam tag", detail: "Bulk remove tag in roam notes", run: () => void deleteRoamTagTool() },
+    { id: "tag-overlap", title: "Tag overlap report", detail: "Find duplicate/overlapping tags", run: () => void tagOverlapReportTool() },
+    { id: "rewrite-paths", title: "Rewrite path refs", detail: "Bulk rewrite Markdown path links", run: () => void rewritePathRefsTool() },
+  ];
+}
+
+function renderLayoutZoomTool(): HTMLElement {
+  const panel = document.createElement("section");
+  panel.className = "aaronnote-layout-zoom-tool";
+  const head = document.createElement("div");
+  head.className = "aaronnote-layout-zoom-head";
+  const title = document.createElement("strong");
+  title.textContent = "🫴 Layout zoom";
+  const value = document.createElement("span");
+  value.dataset.layoutZoomValue = "";
+  value.textContent = layoutZoomPercent();
+  head.append(title, value);
+
+  const controls = document.createElement("div");
+  controls.className = "aaronnote-layout-zoom-controls";
+  const actions: Array<{ action: "out" | "reset" | "in"; label: string; title: string }> = [
+    { action: "out", label: "-", title: "M-- / Cmd+-" },
+    { action: "reset", label: "100%", title: "M-0 / Cmd+0" },
+    { action: "in", label: "+", title: "M-= / Cmd+=" },
+  ];
+  for (const item of actions) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.layoutZoomAction = item.action;
+    button.title = item.title;
+    button.textContent = item.label;
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (item.action === "out") stepLayoutZoom(-1, { announce: true });
+      else if (item.action === "in") stepLayoutZoom(1, { announce: true });
+      else resetLayoutZoom({ announce: true });
+      editor.focus();
+    });
+    controls.appendChild(button);
+  }
+
+  const hint = document.createElement("p");
+  hint.textContent = "M-= / M-- / M-0 reflows Markdown layout. Pinch and C-Tab use visual zoom; C-0 resets it.";
+  panel.append(head, controls, hint);
+  return panel;
+}
+
+function renderToolsPanel(): void {
+  toolsList.replaceChildren();
+  toolsList.appendChild(renderLayoutZoomTool());
+  updateLayoutZoomTool();
+  for (const action of toolActions()) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "aaronnote-tool-action";
+    button.dataset.action = action.id;
+    const title = document.createElement("strong");
+    title.textContent = action.title;
+    const detail = document.createElement("span");
+    detail.textContent = action.detail;
+    button.append(title, detail);
+    button.addEventListener("click", () => {
+      closeToolsPanel();
+      action.run();
+    });
+    toolsList.appendChild(button);
+  }
+}
+
+function toggleToolsPanel(): void {
+  if (toolsPanel.hidden) renderToolsPanel();
+  toolsPanel.hidden = !toolsPanel.hidden;
+  const expanded = !toolsPanel.hidden;
+  toolsButton.setAttribute("aria-expanded", String(expanded));
+  modeToggle.setAttribute("aria-expanded", String(expanded));
+  modeToggle.classList.toggle("is-active", expanded);
+}
+
+function closeToolsPanel(): void {
+  toolsPanel.hidden = true;
+  toolsButton.setAttribute("aria-expanded", "false");
+  modeToggle.setAttribute("aria-expanded", "false");
+  modeToggle.classList.remove("is-active");
+}
+
+function closeRoamToolsPanel(): void {
+  roamToolsPanel.hidden = true;
+  roamToolsPanel.classList.remove("is-agenda");
+  agendaButton.setAttribute("aria-expanded", "false");
+}
+
+function editorSurfaceVisible(): boolean {
+  return !host.hidden && document.body.contains(host);
+}
+
+function editorOwnsActiveSurface(): boolean {
+  const active = document.activeElement;
+  if (!active || !host.contains(active)) return false;
+  const editable = active.closest<HTMLElement>("input, textarea, select, [contenteditable='true']");
+  return !editable || editable.classList.contains("cm-content");
+}
+
+function clearMathPreviewErrorTimer(): void {
+  window.clearTimeout(mathPreviewErrorTimer);
+  mathPreviewErrorTimer = 0;
+}
+
+function hideMathPreview(): void {
+  clearMathPreviewErrorTimer();
+  mathPreview.hidden = true;
+  mathPreview.innerHTML = "";
+  mathPreview.classList.remove("is-display", "is-error", "is-overflowing");
+  mathPreview.style.left = "";
+  mathPreview.style.top = "";
+  mathPreview.style.width = "";
+  mathPreviewKey = "";
+  mathPreviewPendingErrorKey = "";
+  mathPreviewWidth = 0;
+}
+
+function hideSnippetPopup(): void {
+  snippetPopup.hidden = true;
+  snippetPopupItems = [];
+  snippetPopupIndex = 0;
+  snippetDeleteBefore = 0;
+  snippetRenderKey = "";
+  snippetPopupMatchKey = "";
+}
+
+function placeFloating(el: HTMLElement, rect: { left: number; top: number; bottom: number } | null, width = 340): void {
+  if (!rect) {
+    el.hidden = true;
+    return;
+  }
+  const margin = 8;
+  const resolvedWidth = Math.min(width, Math.max(220, window.innerWidth - margin * 2));
+  const left = Math.min(
+    Math.max(margin, rect.left),
+    Math.max(margin, window.innerWidth - resolvedWidth - margin),
+  );
+  const height = Math.min(el.offsetHeight || 180, Math.max(160, window.innerHeight - margin * 2));
+  let top = rect.bottom + 8;
+  if (top + height > window.innerHeight - margin) top = rect.top - height - 8;
+  if (top < margin) top = Math.max(margin, window.innerHeight - height - margin);
+  el.style.left = `${left}px`;
+  el.style.top = `${top}px`;
+  el.style.width = `${resolvedWidth}px`;
+}
+
+function placeFloatingAbove(
+  el: HTMLElement,
+  rect: { left: number; top: number; bottom: number } | null,
+  width = 320,
+  bottomRect?: { bottom: number } | null,
+): void {
+  if (!rect) {
+    el.hidden = true;
+    return;
+  }
+  const margin = 8;
+  const resolvedWidth = Math.min(width, Math.max(220, window.innerWidth - margin * 2));
+  const left = Math.min(
+    Math.max(margin, rect.left),
+    Math.max(margin, window.innerWidth - resolvedWidth - margin),
+  );
+  const height = Math.min(el.offsetHeight || 180, Math.max(160, window.innerHeight - margin * 2));
+  let top = rect.top - height - 8;
+  if (top < margin) top = (bottomRect ?? rect).bottom + 8;
+  if (top + height > window.innerHeight - margin) top = Math.max(margin, window.innerHeight - height - margin);
+  el.style.left = `${left}px`;
+  el.style.top = `${top}px`;
+  el.style.width = `${resolvedWidth}px`;
+}
+
+function currentSnippetKind(): string {
+  return currentKind.trim().toLowerCase();
+}
+
+function cursorInsideMetaSnippetContext(ctx: ReturnType<typeof editor.cursorContext>): boolean {
+  const before = ctx.before.toLowerCase();
+  const open = before.lastIndexOf("#+begin meta");
+  const close = before.lastIndexOf("#+end meta");
+  return open >= 0 && open > close && ctx.after.toLowerCase().includes("#+end meta");
+}
+
+function proseSnippetContext(ctx: ReturnType<typeof editor.cursorContext>, mode: string): boolean {
+  if (mode !== "markdown-mode" || cursorInsideMetaSnippetContext(ctx)) return false;
+  const type = editor.getBlockContext().type.toLowerCase();
+  return !type.includes("code") && !type.includes("html") && !type.includes("link");
+}
+
+function matchingSnippets(
+  prefix: string,
+  mode: string,
+  ctx: ReturnType<typeof editor.cursorContext>,
+): SnippetSummary[] {
+  const inMeta = cursorInsideMetaSnippetContext(ctx);
+  const inProse = proseSnippetContext(ctx, mode);
+  const mathContext = mode === "tex-mode";
+  const commandChannel = mathContext && prefix.startsWith("\\");
+  const atChannel = mathContext && prefix.startsWith("@");
+  const candidates = mathContext
+    ? [...snippets, ...mathSnippetIndex.candidates()]
+    : snippets;
+  return matchingSnippetsForPrefix(candidates, prefix, {
+    kind: currentSnippetKind(),
+    mode,
+    limit: 10,
+    allowFuzzy: commandChannel || atChannel,
+    context: mathContext ? "math" : undefined,
+    usage: snippetUsage,
+    documentFrequency: mathSnippetIndex.frequencies(),
+  })
+    .filter((snippet) => {
+      if (snippet.context === "org-meta") return inMeta;
+      if (snippet.context === "prose") return inProse;
+      if (snippet.context?.startsWith("math")) return mathContext;
+      return !inMeta || snippet.context !== "markdown";
+    });
+}
+
+function builtinDisplayMathSnippetP(snippet: SnippetSummary): boolean {
+  return snippet.source === BUILTIN_SNIPPET_SOURCE
+    && snippet.mode === "markdown-mode"
+    && snippet.key === ":";
+}
+
+function snippetWithSmartBlockBoundaries(snippet: SnippetSummary, deleteBefore: number): SnippetSummary {
+  if (!builtinDisplayMathSnippetP(snippet)) return snippet;
+  const body = String(snippet.body || "");
+  const selection = editor.getMarkdownSelection();
+  const replaceFrom = Math.max(0, selection.from - deleteBefore);
+  const replaceTo = selection.to;
+  const doc = editor.view.state.doc;
+  const line = doc.lineAt(replaceFrom);
+  const before = doc.sliceString(line.from, replaceFrom);
+  const after = doc.sliceString(replaceTo, line.to);
+  const prefix = before.trim().length > 0 ? "\n" : "";
+  const suffix = after.trim().length > 0 ? "\n" : "";
+  if (!prefix && !suffix) return snippet;
+  return { ...snippet, body: `${prefix}${body}${suffix}` };
+}
+
+function insertSnippet(snippet: SnippetSummary, deleteBefore = 0): boolean {
+  const resolvedSnippet = snippetWithSmartBlockBoundaries(snippet, deleteBefore);
+  if (!snippetSession.insert(resolvedSnippet, deleteBefore)) return false;
+  snippetUsage.record(snippet);
+  setStatus(`Inserted ${snippet.key || snippet.name || "snippet"}`);
+  scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
+  return true;
+}
+
+function jumpSnippetTabstop(): boolean {
+  const moved = snippetSession.next();
+  if (moved) {
+    setStatus("Snippet field");
+    scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
+  }
+  return moved;
+}
+
+function jumpSnippetTabstopBack(): boolean {
+  const moved = snippetSession.previous();
+  if (moved) {
+    setStatus("Snippet field");
+    scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
+  }
+  return moved;
+}
+
+function snippetPrefix(before: string): string {
+  return before.match(/([A-Za-z0-9_:/;.+\\-]{1,40})$/)?.[1] ?? "";
+}
+
+function markdownEscapedAt(text: string, index: number): boolean {
+  let slashCount = 0;
+  for (let pos = index - 1; pos >= 0 && text[pos] === "\\"; pos--) slashCount++;
+  return slashCount % 2 === 1;
+}
+
+function markdownLinkLabelEnd(line: string, openBracket: number): number {
+  for (let pos = openBracket + 1; pos < line.length; pos++) {
+    if (line[pos] === "]" && !markdownEscapedAt(line, pos)) return pos;
+  }
+  return -1;
+}
+
+function markdownLinkTargetEnd(line: string, openParen: number): number {
+  let depth = 0;
+  let quote = "";
+  for (let pos = openParen + 1; pos < line.length; pos++) {
+    const ch = line[pos] || "";
+    if (markdownEscapedAt(line, pos)) continue;
+    if (quote) {
+      if (ch === quote) quote = "";
+      continue;
+    }
+    if ((ch === "\"" || ch === "'") && /\s/.test(line[pos - 1] ?? "")) {
+      quote = ch;
+      continue;
+    }
+    if (ch === "(") {
+      depth++;
+      continue;
+    }
+    if (ch === ")") {
+      if (depth === 0) return pos;
+      depth--;
+    }
+  }
+  return -1;
+}
+
+function markdownLinkTargetBounds(rawTarget: string): { href: string; start: number; end: number } | null {
+  const leading = rawTarget.match(/^\s*/)?.[0].length ?? 0;
+  if (rawTarget[leading] === "<") {
+    for (let index = leading + 1; index < rawTarget.length; index++) {
+      if (rawTarget[index] === ">" && !markdownEscapedAt(rawTarget, index)) {
+        const href = rawTarget.slice(leading + 1, index).trim();
+        return href ? { href, start: leading + 1, end: index } : null;
+      }
+    }
+  }
+  const titleMatch = rawTarget.match(/\s+(?:"[^"]*"|'[^']*')\s*$/);
+  const beforeTitleEnd = titleMatch?.index ?? rawTarget.length;
+  const start = leading;
+  const end = rawTarget.slice(0, beforeTitleEnd).replace(/\s+$/, "").length;
+  if (start >= end) return null;
+  return { href: rawTarget.slice(start, end), start, end };
+}
+
+function markdownInlineLinkTargetAtCursor(): {
+  href: string;
+  prefix: string;
+  deleteBefore: number;
+} | null {
+  const selection = editor.getMarkdownSelection();
+  const pos = Math.max(0, Math.min(selection.from, editor.view.state.doc.length));
+  const line = editor.view.state.doc.lineAt(pos);
+  const localPos = pos - line.from;
+  for (let start = 0; start < line.text.length; start++) {
+    if (line.text[start] !== "[" || markdownEscapedAt(line.text, start)) continue;
+    if (start > 0 && line.text[start - 1] === "!" && !markdownEscapedAt(line.text, start - 1)) continue;
+    const labelEnd = markdownLinkLabelEnd(line.text, start);
+    if (labelEnd < 0 || line.text[labelEnd + 1] !== "(") continue;
+    const targetOpen = labelEnd + 1;
+    const targetEnd = markdownLinkTargetEnd(line.text, targetOpen);
+    if (targetEnd < 0) continue;
+    if (localPos < targetOpen + 1 || localPos > targetEnd + 1) {
+      start = targetEnd;
+      continue;
+    }
+    const rawTarget = line.text.slice(targetOpen + 1, targetEnd);
+    const bounds = markdownLinkTargetBounds(rawTarget);
+    if (!bounds) return null;
+    const targetLocal = Math.max(bounds.start, Math.min(localPos - (targetOpen + 1), bounds.end));
+    return {
+      href: bounds.href,
+      prefix: rawTarget.slice(bounds.start, targetLocal),
+      deleteBefore: targetLocal - bounds.start,
+    };
+  }
+  return null;
+}
+
+function completionDetail(snippet: SnippetSummary): string {
+  const group = String(snippet.group || "");
+  if (group === "path") return snippet.source || "";
+  if (group === "roam") return snippet.body ? `roam -> ${snippet.body}` : "roam";
+  if (group === "tag") return snippet.source ? `inline tag in ${snippet.source}` : "inline tag";
+  if (group === "dom") return snippet.source ? `DOM target in ${snippet.source}` : "DOM target";
+  if (group === "bib-namespace") return snippet.source || "bibliography";
+  if (group === "bib-key") return snippet.source || "BibTeX entry";
+  return snippetDetail(snippet);
+}
+
+function completionPreviewText(snippet: SnippetSummary): string {
+  const group = String(snippet.group || "");
+  if (group === "path") return "";
+  if (group === "roam" || group === "tag" || group === "dom" || group === "bib-namespace" || group === "bib-key") {
+    return String(snippet.source || snippet.body || "").replace(/\s+/g, " ").trim().slice(0, 96);
+  }
+  return String(snippet.body || "").replace(/\s+/g, " ").trim().slice(0, 96);
+}
+
+function pathCompletionPrefix(before: string): string {
+  const match = before.match(/(?:^|[\s([{"'=])([^\s\])}"'`<>#@]*\/[^\s\])}"'`<>#@]*)$/);
+  const prefix = match?.[1] ?? "";
+  if (!prefix || prefix.startsWith("//") || hrefProtocol(prefix)) return "";
+  return prefix;
+}
+
+function roamCompletionPrefix(before: string): string | null {
+  const match = before.match(/(?:^|[\s([{"'=])roam:\/\/([^\s\])}"'`<>]*)$/i);
+  return match ? match[1] ?? "" : null;
+}
+
+function inlineTagCompletionPrefix(before: string): string | null {
+  const match = before.match(/@@tag\[([^\]\n]*)$/);
+  return match ? match[1] ?? "" : null;
+}
+
+// Completion for `after:`/`blocks:`/`task:` dependency-ref values on
+// @@todo/@@itodo/@@project/@@milestone/@@clock lines — same key set
+// planning-dsl.mjs treats as dep-refs. Lightweight pattern match (no full
+// command parse), matching the other detectors in this waterfall.
+function depRefCompletionContext(before: string): { prefix: string; quoted: boolean } | null {
+  const match = before.match(/(?:^|[\s,{])(?:after|blocks|task)\s*[:=]\s*(")?([^,;{}"\n]*)$/i);
+  if (!match) return null;
+  return { prefix: match[2] ?? "", quoted: Boolean(match[1]) };
+}
+
+// `serializePlanningValue` (shared/planning-dsl.mjs) quotes any value with
+// whitespace/punctuation; mirror that here so an inserted multi-word text
+// ref round-trips instead of getting truncated by the attr parser.
+function needsPlanningValueQuotes(value: string): boolean {
+  return /[\s,;{}[\]"']/.test(value);
+}
+
+function displayPathCompletion(path: string, prefix: string): string {
+  if (prefix.startsWith("./") && !path.startsWith("./") && !path.startsWith("../") && !path.startsWith("/")) return `./${path}`;
+  return path;
+}
+
+function isPureTraversalPath(path: string): boolean {
+  const parts = path.replace(/\\/g, "/").split("/").map((part) => part.trim()).filter(Boolean);
+  return parts.length > 0 && parts.every((part) => part === "." || part === "..");
+}
+
+function pathCompletionRank(path: string, prefix: string): number {
+  const display = displayPathCompletion(path, prefix);
+  const sameDir = display.startsWith("./") ? 0 : 100;
+  const parentPenalty = (display.match(/\.\.\//g) ?? []).length * 25;
+  const dirPenalty = display.split("/").length;
+  const directoryBoost = display.endsWith("/") ? -2 : 0;
+  const exactPrefixBoost = display.toLowerCase().startsWith(prefix.toLowerCase()) ? -4 : 0;
+  return sameDir + parentPenalty + dirPenalty + directoryBoost + exactPrefixBoost;
+}
+
+function noteFromCompletionRef(ref: string): NoteSummary | undefined {
+  if (ref === "@@") return currentNote();
+  return resolveHrefNote(ref) || resolveNoteRef(ref);
+}
+
+function tagCompletionContext(before: string): { note: NoteSummary; tagPrefix: string } | null {
+  const roamMatch = before.match(/(?:^|[\s([{"'=])roam:\/\/([^\s\])}"'`<>#]*)#([^\s\])}"'`<>]*)$/i);
+  if (roamMatch) {
+    const note = noteFromCompletionRef(roamMatch[1] ?? "");
+    if (note) return { note, tagPrefix: roamMatch[2] ?? "" };
+  }
+  const pathMatch = before.match(/(?:^|[\s([{"'=])((?:\.{1,2}\/|\.|[^\s\])}"'`<>#@]+)[^\s\])}"'`<>#@]*)#([^\s\])}"'`<>]*)$/);
+  if (pathMatch) {
+    const note = noteFromCompletionRef(pathMatch[1] ?? "");
+    if (note) return { note, tagPrefix: pathMatch[2] ?? "" };
+  }
+  return null;
+}
+
+function domCompletionParts(rawHref: string): { ref: string; parentSegments: string[]; domPrefix: string } | null {
+  const clean = cleanHref(rawHref);
+  if (!clean || clean.includes("#")) return null;
+  if (clean.startsWith("@@")) {
+    const rawDom = clean.slice(2);
+    const endsAtSeparator = rawDom.length > 0 && rawDom.endsWith("@");
+    const segments = domTargetPathSegments(rawDom);
+    return {
+      ref: "@@",
+      parentSegments: endsAtSeparator ? segments : segments.slice(0, -1),
+      domPrefix: endsAtSeparator ? "" : segments[segments.length - 1] || "",
+    };
+  }
+  const roamTarget = splitRoamLikeHref(clean);
+  if (roamTarget?.dom) {
+    const endsAtSeparator = /@$/.test(clean);
+    const segments = domTargetPathSegments(roamTarget.dom);
+    return {
+      ref: roamTarget.ref,
+      parentSegments: endsAtSeparator ? segments : segments.slice(0, -1),
+      domPrefix: endsAtSeparator ? "" : segments[segments.length - 1] || "",
+    };
+  }
+  const fileDomMatch = clean.match(/^(.+?\.(?:md|markdown|typ))@(.+)$/i);
+  const plainDomMatch = fileDomMatch ? null : clean.match(/^(.+?)@([^@]*)$/);
+  const match = fileDomMatch || plainDomMatch;
+  if (!match) return null;
+  const endsAtSeparator = /@$/.test(clean);
+  const segments = domTargetPathSegments(match[2] || "");
+  return {
+    ref: match[1] || "",
+    parentSegments: endsAtSeparator ? segments : segments.slice(0, -1),
+    domPrefix: endsAtSeparator ? "" : segments[segments.length - 1] || "",
+  };
+}
+
+function domCompletionContext(before: string): { note: NoteSummary; domPrefix: string; parentSegments: string[] } | null {
+  const match = before.match(/(?:^|[\s([{"'=])((?:roam:\/\/|\.{1,2}\/|\.|[^\s()[\]{}"'`<>#]+)[^\s()[\]{}"'`<>#]*)$/i);
+  const parts = match ? domCompletionParts(match[1] ?? "") : null;
+  if (!parts) return null;
+  const note = noteFromCompletionRef(parts.ref);
+  if (!note) return null;
+  return { note, domPrefix: parts.domPrefix, parentSegments: parts.parentSegments };
+}
+
+async function matchingTagCompletions(note: NoteSummary, prefix: string): Promise<SnippetSummary[]> {
+  const query = prefix.toLowerCase().replace(/^tag-/, "");
+  let tags: string[];
+  if (note.file === currentFile) {
+    tags = [...new Set(allAnchorTagSuggestions().map((tag) => normalizeInlineTag(tag).replace(/^#/, "")).filter(Boolean))].sort();
+  } else {
+    // For roam://noteid# and ./path.md# anchor completion: show only the inline
+    // tags defined in the target note (not global roam tags from all notes).
+    tags = [...(note.inlineTags ?? [])].map((t) => normalizeInlineTag(t).replace(/^#/, "")).filter(Boolean);
+  }
+  return [...new Set(tags)]
+    .filter((tag) => !query || tag.toLowerCase().includes(query))
+    .slice(0, 12)
+    .map((tag) => ({
+      key: tag,
+      name: `#${tag}`,
+      mode: "markdown-mode",
+      group: "tag",
+      body: encodeURIComponent(tag),
+      source: note.path || note.file || canonicalRoamNoteId(note),
+    }));
+}
+
+function indexedDomTargets(note: NoteSummary): DomTargetEntry[] {
+  const indexed = (note.domTargets ?? []).map((target) => {
+    const label = normalizeDomTarget(target.label || target.slug || "");
+    const slug = slugDomTarget(target.slug || label);
+    const path = (Array.isArray(target.path) && target.path.length > 0 ? target.path : [slug])
+      .map((segment) => slugDomTarget(segment))
+      .filter(Boolean);
+    const labelPath = (Array.isArray(target.labelPath) && target.labelPath.length > 0 ? target.labelPath : [label])
+      .map(normalizeDomTarget)
+      .filter(Boolean);
+    return { label, slug, path, labelPath, level: Math.max(1, Number(target.level || 1)), notePath: target.notePath || note.path || "" };
+  }).filter((target) => target.label && target.slug && target.path.length > 0);
+  return indexed;
+}
+
+function domTargetsForCompletion(note: NoteSummary): DomTargetEntry[] {
+  if (note.file === currentFile) return currentDomTargets();
+  return indexedDomTargets(note);
+}
+
+function immediateDomCompletionTargets(entries: readonly DomTargetEntry[], parentSegments: readonly string[]): DomTargetEntry[] {
+  const parentPath = parentSegments.map(slugDomTarget).filter(Boolean);
+  const parentLength = parentPath.length;
+  return entries.filter((entry) => {
+    if (entry.path.length !== parentLength + 1) return false;
+    if (parentLength === 0) return true;
+    return targetPathMatches(entry.path.slice(0, parentLength), parentPath, false);
+  });
+}
+
+function descendantDomCompletionTargets(entries: readonly DomTargetEntry[], parentSegments: readonly string[]): DomTargetEntry[] {
+  const parentPath = parentSegments.map(slugDomTarget).filter(Boolean);
+  const parentLength = parentPath.length;
+  return entries.filter((entry) => {
+    if (entry.path.length <= parentLength) return false;
+    if (parentLength === 0) return true;
+    return targetPathMatches(entry.path.slice(0, parentLength), parentPath, false);
+  });
+}
+
+function matchingDomCompletions(note: NoteSummary, prefix: string, parentSegments: readonly string[] = []): SnippetSummary[] {
+  const query = normalizeDomTarget(prefix).toLowerCase();
+  const entries = domTargetsForCompletion(note);
+  const parentPath = parentSegments.map(slugDomTarget).filter(Boolean);
+  const candidates = query
+    ? descendantDomCompletionTargets(entries, parentSegments)
+      .filter((target) => target.slug.includes(query) || target.label.toLowerCase().includes(query))
+    : immediateDomCompletionTargets(entries, parentSegments);
+  return candidates.slice(0, 12).map((target) => {
+    // A filtered result can be a deeper descendant. Insert every path segment
+    // below the already-authored parent so local, path and roam completions all
+    // retain an unambiguous hierarchical target.
+    const relativePath = target.path.slice(parentPath.length);
+    const encodedPath = relativePath.map((segment) => encodeURIComponent(segment)).join("@");
+    return {
+      key: relativePath.join("@") || target.slug,
+      name: `@${relativePath.join("@") || target.slug}`,
+      mode: "markdown-mode",
+      group: "dom",
+      body: encodedPath || encodeURIComponent(target.slug),
+      source: domTargetPathLabel(target.labelPath) || note.path || note.file || canonicalRoamNoteId(note) || target.label,
+    };
+  });
+}
+
+async function matchingRoamCompletions(prefix: string): Promise<SnippetSummary[]> {
+  if (!roamFeaturesEnabled()) return [];
+  const needle = prefix.trim().toLowerCase();
+  try {
+    const result = await api.completions.roam(needle);
+    return (result.notes ?? []).map((note) => ({
+      key: note.title || note.id,
+      name: note.title || note.id,
+      body: `${encodeURIComponent(note.id || note.key)}`,
+      mode: "markdown-mode",
+      group: "roam",
+      source: note.path || note.id,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+async function matchingInlineTagCompletions(prefix: string): Promise<SnippetSummary[]> {
+  const needle = normalizeInlineTag(prefix).toLowerCase();
+  const localTags = allAnchorTagSuggestions().map(normalizeInlineTag).filter(Boolean);
+  let backendTags: string[] = [];
+  try {
+    const result = await api.completions.tags(needle);
+    backendTags = result.tags ?? [];
+  } catch {
+    // fall back to local tags only
+  }
+  const tags = new Map<string, string>();
+  for (const tag of [...localTags, ...backendTags]) {
+    const clean = normalizeInlineTag(tag).replace(/^#/, "");
+    if (!clean) continue;
+    const key = clean.toLowerCase();
+    if (!tags.has(key)) tags.set(key, clean);
+  }
+  return [...tags.values()]
+    .filter((tag) => !needle || tag.toLowerCase().includes(needle))
+    .sort((a, b) => a.localeCompare(b))
+    .slice(0, 12)
+    .map((tag) => ({
+      key: tag,
+      name: tag,
+      body: `${tag}]`,
+      mode: "markdown-mode",
+      group: "tag",
+      source: tag,
+    }));
+}
+
+async function matchingTodoRefCompletions(prefix: string, quoted: boolean): Promise<SnippetSummary[]> {
+  try {
+    const result = await api.completions.todoRefs({ prefix, file: currentFile });
+    return (result.items ?? []).map((item) => {
+      const ref = item.ref || "";
+      const needsQuotes = !quoted && !item.hasId && needsPlanningValueQuotes(ref);
+      return {
+        key: ref,
+        name: item.label || ref,
+        body: needsQuotes ? `"${ref}"` : ref,
+        mode: "markdown-mode",
+        group: "todo-ref",
+        source: item.file || "",
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+async function matchingBibliographyCompletions(kind: "namespaces" | "keys", prefix: string, namespace = ""): Promise<SnippetSummary[]> {
+  try {
+    const result = await api.completions.bibliography({
+      file: currentFile,
+      content: editor.getMarkdown(),
+      kind,
+      prefix,
+      namespace,
+    });
+    const diagnostics = bibliographyDiagnosticTexts(result.diagnostics);
+    if (diagnostics.length > 0) setStatus(`Bibliography completion: ${diagnostics[0]}`);
+    return (result.items ?? []).map((item) => ({
+      key: item.key || item.name || "",
+      name: item.name || item.key || "",
+      body: item.body || item.key || "",
+      mode: "markdown-mode",
+      group: kind === "namespaces" ? "bib-namespace" : "bib-key",
+      source: item.detail || item.source || "",
+    }));
+  } catch (error) {
+    setStatus(`Bibliography completion failed: ${error instanceof Error ? error.message : String(error)}`);
+    return [];
+  }
+}
+
+async function matchingPathCompletions(prefix: string): Promise<SnippetSummary[]> {
+  if (!prefix || !currentFile) return [];
+  try {
+    const result = await api.notes.pathSuggestions(currentFile, prefix);
+    const paths = result.paths ?? [];
+    return paths
+      .filter((path) => !isPureTraversalPath(displayPathCompletion(path, prefix)))
+      .sort((a, b) => {
+        const rank = pathCompletionRank(a, prefix) - pathCompletionRank(b, prefix);
+        return rank || displayPathCompletion(a, prefix).localeCompare(displayPathCompletion(b, prefix));
+      })
+      .slice(0, 8)
+      .map((path) => {
+        const displayPath = displayPathCompletion(path, prefix);
+        const note = resolveHrefNote(displayPath);
+        const roamId = roamFeaturesEnabled() && note?.roam ? canonicalRoamNoteId(note) : "";
+        return {
+          key: displayPath,
+          name: displayPath,
+          mode: "markdown-mode",
+          group: "path",
+          body: roamId ? roamHrefForNote(note) : displayPath,
+          source: note?.title && note.title !== displayPath ? note.title : "",
+        };
+      });
+  } catch {
+    return [];
+  }
+}
+
+
+function renderSnippetPopup(prefix: string, rect: { left: number; top: number; bottom: number } | null): void {
+  const nextKey = `${prefix}\n${snippetPopupIndex}\n${snippetPopupItems.map((snippet) => `${snippet.mode}:${snippet.key}:${snippet.name}`).join("\n")}`;
+  if (!snippetPopup.hidden && snippetRenderKey === nextKey) {
+    placeFloating(snippetPopup, rect);
+    snippetPopup.querySelector(".aaronnote-snippet-option.is-active")?.scrollIntoView({ block: "nearest" });
+    return;
+  }
+  snippetRenderKey = nextKey;
+  snippetPopup.innerHTML = "";
+  snippetPopupItems.forEach((snippet, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.id = `aaronnote-snippet-option-${index}`;
+    button.className = index === snippetPopupIndex
+      ? "aaronnote-snippet-option is-active"
+      : "aaronnote-snippet-option";
+    button.setAttribute("role", "option");
+    button.setAttribute("aria-selected", index === snippetPopupIndex ? "true" : "false");
+
+    const number = document.createElement("span");
+    number.className = "aaronnote-snippet-option-number";
+    number.textContent = index < 9 ? String(index + 1) : index === 9 ? "0" : "";
+
+    const key = document.createElement("span");
+    key.className = "aaronnote-snippet-option-key";
+    key.textContent = snippetLabel(snippet);
+
+    const detail = document.createElement("span");
+    detail.className = "aaronnote-snippet-option-detail";
+    detail.textContent = completionDetail(snippet);
+
+    button.append(number, key, detail);
+    const previewText = completionPreviewText(snippet);
+    if (previewText) {
+      const preview = document.createElement("span");
+      preview.className = "aaronnote-snippet-option-preview";
+      preview.textContent = previewText;
+      button.appendChild(preview);
+    }
+    button.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      snippetPopupIndex = index;
+      chooseSnippetPopupItem();
+    });
+    button.addEventListener("mouseenter", () => {
+      if (snippetPopupIndex === index) return;
+      snippetPopupIndex = index;
+      updateSnippetPopupActiveOption();
+    });
+    snippetPopup.appendChild(button);
+  });
+  snippetPopup.dataset.prefix = prefix;
+  snippetPopup.setAttribute("aria-activedescendant", `aaronnote-snippet-option-${snippetPopupIndex}`);
+  snippetPopup.hidden = false;
+  placeFloating(snippetPopup, rect);
+  snippetPopup.querySelector(".aaronnote-snippet-option.is-active")?.scrollIntoView({ block: "nearest" });
+}
+
+function updateSnippetPopupActiveOption(): void {
+  snippetPopup.querySelectorAll<HTMLButtonElement>(".aaronnote-snippet-option").forEach((button, index) => {
+    const active = index === snippetPopupIndex;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  snippetPopup.setAttribute("aria-activedescendant", `aaronnote-snippet-option-${snippetPopupIndex}`);
+  snippetPopup.querySelector(".aaronnote-snippet-option.is-active")?.scrollIntoView({ block: "nearest" });
+}
+
+function showSnippetPopup(prefix: string, items: SnippetSummary[], deleteBefore: number, rect: { left: number; top: number; bottom: number } | null): void {
+  const matchKey = `${prefix}\n${items.map((snippet) => `${snippet.kind}:${snippet.mode}:${snippet.group}:${snippet.key}:${snippet.name}`).join("\n")}`;
+  snippetDeleteBefore = deleteBefore;
+  if (matchKey !== snippetPopupMatchKey) {
+    snippetPopupIndex = 0;
+    snippetRenderKey = "";
+  } else {
+    snippetPopupIndex = Math.min(snippetPopupIndex, items.length - 1);
+  }
+  snippetPopupMatchKey = matchKey;
+  snippetPopupItems = items;
+  renderSnippetPopup(prefix, rect);
+}
+
+function mathAtCursor(ctx: ReturnType<typeof editor.cursorContext>): {
+  tex: string;
+  display: boolean;
+  rect: { left: number; top: number; bottom: number } | null;
+  rectEnd?: { left: number; top: number; bottom: number } | null;
+} | null {
+  const state = editor.view.state;
+  const cursor = state.selection.main.from;
+  const contextStart = Math.max(0, cursor - ctx.before.length);
+  const rectAtSourceOffset = (offset: number) => ctx.rectAtOffset(offset - contextStart);
+  const blockRanges = getBlockMathRanges(state);
+  const displayMath = rangeAtPosition(cursor, blockRanges);
+  if (displayMath && cursor > displayMath.from && cursor < displayMath.to) {
+    return {
+      tex: displayMath.tex,
+      display: true,
+      rect: rectAtSourceOffset(displayMath.from),
+      rectEnd: rectAtSourceOffset(displayMath.to),
+    };
+  }
+
+  const line = state.doc.lineAt(cursor);
+  INLINE_MATH_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = INLINE_MATH_RE.exec(line.text)) !== null) {
+    const from = line.from + match.index;
+    const to = from + match[0].length;
+    const tex = match[1] || "";
+    if (cursor <= from || cursor >= to) continue;
+    if (rangeOverlapsAny(from, to, blockRanges)) continue;
+    return { tex, display: false, rect: rectAtSourceOffset(from) };
+  }
+  return null;
+}
+
+function snippetContextMode(ctx: ReturnType<typeof editor.cursorContext>): string {
+  if (mathAtCursor(ctx)) return "tex-mode";
+  const state = editor.view.state;
+  const cursor = state.selection.main.from;
+  const block = editor.getBlockContext();
+  const blockType = block.type.toLowerCase();
+  if (blockType.includes("code") || blockType.includes("html")) return "markdown-mode";
+
+  // Recovery for an unfinished inline delimiter. Work is bounded to the
+  // current line, so typing never creates a document-wide recognition pass.
+  const line = state.doc.lineAt(cursor);
+  const before = line.text.slice(0, cursor - line.from);
+  let inlineOpen = -1;
+  for (let pos = 0; pos < before.length - 1; pos++) {
+    if (before[pos] !== "\\" || markdownEscapedAt(before, pos)) continue;
+    if (before[pos + 1] === "(") {
+      inlineOpen = pos;
+      pos += 1;
+    } else if (before[pos + 1] === ")" && inlineOpen >= 0) {
+      inlineOpen = -1;
+      pos += 1;
+    }
+  }
+  if (inlineOpen >= 0) return "tex-mode";
+
+  // Unfinished display math is searched only in a 16 KiB window and stops at
+  // the nearest delimiter line.
+  const windowFrom = Math.max(block.from, cursor - 16 * 1024);
+  const source = state.doc.sliceString(windowFrom, cursor);
+  const open = source.lastIndexOf("\\[");
+  const close = source.lastIndexOf("\\]");
+  return open > close ? "tex-mode" : "markdown-mode";
+}
+
+function clearCompletionCache(): void {
+  completionEpoch.cancel();
+  completionTimer.cancel();
+  completionContextKey = "";
+  completionPendingItems = null;
+}
+
+function scheduleAsyncCompletion(
+  contextKey: string,
+  renderPrefix: string,
+  deleteBefore: number,
+  rect: { left: number; top: number; bottom: number } | null,
+  fetchFn: () => Promise<SnippetSummary[]>,
+): void {
+  if (renderPrefix === snippetSuppressedPrefix) {
+    hideSnippetPopup();
+    clearCompletionCache();
+    return;
+  }
+  // Same context: show cached result immediately, no new request needed.
+  if (contextKey === completionContextKey && completionPendingItems !== null) {
+    if (completionPendingItems.length > 0) {
+      showSnippetPopup(renderPrefix, completionPendingItems, deleteBefore, rect);
+    } else {
+      hideSnippetPopup();
+    }
+    return;
+  }
+  // New context: start a fresh epoch; keep old popup visible while request is in flight.
+  completionContextKey = contextKey;
+  completionPendingItems = null;
+  const run = completionEpoch.begin();
+  completionTimer.schedule(() => {
+    void fetchFn().then((items) => {
+      if (!run.current) return;
+      completionPendingItems = items;
+      if (items.length > 0) {
+        showSnippetPopup(renderPrefix, items, deleteBefore, rect);
+      } else {
+        hideSnippetPopup();
+      }
+    }).catch(() => {
+      if (!run.current) return;
+      hideSnippetPopup();
+    });
+  });
+}
+
+function updateSnippetPopup(ctx: ReturnType<typeof editor.cursorContext>): void {
+  if (!editorOwnsActiveSurface()) {
+    hideSnippetPopup();
+    clearCompletionCache();
+    return;
+  }
+
+  const activeChoices = snippetSession.activeChoices();
+  if (activeChoices.length > 0) {
+    clearCompletionCache();
+    showSnippetPopup("choice", activeChoices.slice(0, 10).map((choice, index) => ({
+      id: `choice:${index}:${choice}`,
+      key: choice,
+      name: "Snippet choice",
+      description: "Replace the active snippet field",
+      mode: "tex-mode",
+      provider: "choice",
+      body: choice,
+      browserCompatible: true,
+    })), 0, ctx.rect);
+    return;
+  }
+
+  // Link target completion ([...](here) or inline href position)
+  const linkTarget = markdownInlineLinkTargetAtCursor();
+  if (linkTarget) {
+    const targetPrefix = cleanHref(linkTarget.prefix);
+    const target = cleanHref(linkTarget.href);
+
+    const hashIndex = targetPrefix.lastIndexOf("#");
+    if (hashIndex >= 0) {
+      const ref = targetPrefix.slice(0, hashIndex);
+      const note = noteFromCompletionRef(ref || target);
+      if (!note) { hideSnippetPopup(); clearCompletionCache(); return; }
+      const tagPrefix = targetPrefix.slice(hashIndex + 1);
+      const renderPrefix = `#${tagPrefix}`;
+      scheduleAsyncCompletion(
+        `link-tag:${note.file}:${tagPrefix}`,
+        renderPrefix,
+        tagPrefix.length,
+        ctx.rect,
+        () => matchingTagCompletions(note, tagPrefix),
+      );
+      return;
+    }
+
+    const domParts = domCompletionParts(targetPrefix);
+    if (domParts) {
+      const note = noteFromCompletionRef(domParts.ref);
+      if (!note) { hideSnippetPopup(); clearCompletionCache(); return; }
+      const renderPrefix = `@${domParts.domPrefix}`;
+      if (renderPrefix === snippetSuppressedPrefix) { hideSnippetPopup(); clearCompletionCache(); return; }
+      const matches = matchingDomCompletions(note, domParts.domPrefix, domParts.parentSegments);
+      if (matches.length === 0) { hideSnippetPopup(); clearCompletionCache(); return; }
+      clearCompletionCache();
+      showSnippetPopup(renderPrefix, matches, domParts.domPrefix.length, ctx.rect);
+      return;
+    }
+
+    const roamLinkPrefix = targetPrefix.match(/^roam:\/\/(.*)$/i)?.[1];
+    if (roamLinkPrefix != null) {
+      if (!roamFeaturesEnabled()) { hideSnippetPopup(); clearCompletionCache(); return; }
+      const renderPrefix = `roam://${roamLinkPrefix}`;
+      scheduleAsyncCompletion(
+        `link-roam:${roamLinkPrefix}`,
+        renderPrefix,
+        roamLinkPrefix.length,
+        ctx.rect,
+        () => matchingRoamCompletions(roamLinkPrefix),
+      );
+      return;
+    }
+
+    if (pathCompletionPrefix(` ${targetPrefix}`) === targetPrefix) {
+      scheduleAsyncCompletion(
+        `link-path:${currentFile}:${targetPrefix}`,
+        targetPrefix,
+        targetPrefix.length,
+        ctx.rect,
+        () => matchingPathCompletions(targetPrefix),
+      );
+      return;
+    }
+
+    hideSnippetPopup();
+    clearCompletionCache();
+    return;
+  }
+
+  const domContext = domCompletionContext(ctx.before);
+  if (domContext) {
+    const renderPrefix = `@${domContext.domPrefix}`;
+    if (renderPrefix === snippetSuppressedPrefix) { hideSnippetPopup(); clearCompletionCache(); return; }
+    const matches = matchingDomCompletions(domContext.note, domContext.domPrefix, domContext.parentSegments);
+    if (matches.length === 0) { hideSnippetPopup(); clearCompletionCache(); return; }
+    clearCompletionCache();
+    showSnippetPopup(renderPrefix, matches, domContext.domPrefix.length, ctx.rect);
+    return;
+  }
+
+  const tagContext = tagCompletionContext(ctx.before);
+  if (tagContext) {
+    const renderPrefix = `#${tagContext.tagPrefix}`;
+    scheduleAsyncCompletion(
+      `tag:${tagContext.note.file}:${tagContext.tagPrefix}`,
+      renderPrefix,
+      tagContext.tagPrefix.length,
+      ctx.rect,
+      () => matchingTagCompletions(tagContext.note, tagContext.tagPrefix),
+    );
+    return;
+  }
+
+  const inlineTagPrefix = inlineTagCompletionPrefix(ctx.before);
+  if (inlineTagPrefix !== null) {
+    const renderPrefix = `@@tag[${inlineTagPrefix}`;
+    scheduleAsyncCompletion(
+      `inline-tag:${inlineTagPrefix}`,
+      renderPrefix,
+      inlineTagPrefix.length,
+      ctx.rect,
+      () => matchingInlineTagCompletions(inlineTagPrefix),
+    );
+    return;
+  }
+
+  const citeNamespacePrefix = citeNamespaceCompletionPrefix(ctx.before);
+  if (citeNamespacePrefix !== null) {
+    const renderPrefix = citeNamespaceRenderPrefix(citeNamespacePrefix);
+    scheduleAsyncCompletion(
+      `bib-ns:${currentFile}:${citeNamespacePrefix}`,
+      renderPrefix,
+      citeNamespacePrefix.length,
+      ctx.rect,
+      () => matchingBibliographyCompletions("namespaces", citeNamespacePrefix),
+    );
+    return;
+  }
+
+  const citeKeyContext = citeKeyCompletionContext(ctx.before);
+  if (citeKeyContext) {
+    const renderPrefix = citeKeyRenderPrefix(citeKeyContext);
+    scheduleAsyncCompletion(
+      `bib-key:${currentFile}:${citeKeyContext.namespace}:${citeKeyContext.separator ?? " "}:${citeKeyContext.prefix}`,
+      renderPrefix,
+      citeKeyContext.prefix.length,
+      ctx.rect,
+      () => matchingBibliographyCompletions("keys", citeKeyContext.prefix, citeKeyContext.namespace),
+    );
+    return;
+  }
+
+  const roamPrefix = roamCompletionPrefix(ctx.before);
+  if (roamPrefix !== null) {
+    if (!roamFeaturesEnabled()) { hideSnippetPopup(); clearCompletionCache(); return; }
+    const renderPrefix = `roam://${roamPrefix}`;
+    scheduleAsyncCompletion(
+      `roam:${roamPrefix}`,
+      renderPrefix,
+      roamPrefix.length,
+      ctx.rect,
+      () => matchingRoamCompletions(roamPrefix),
+    );
+    return;
+  }
+
+  const depRefContext = depRefCompletionContext(ctx.before);
+  if (depRefContext) {
+    const { prefix: depRefPrefix, quoted } = depRefContext;
+    scheduleAsyncCompletion(
+      `todo-ref:${currentFile}:${depRefPrefix}`,
+      depRefPrefix,
+      depRefPrefix.length,
+      ctx.rect,
+      () => matchingTodoRefCompletions(depRefPrefix, quoted),
+    );
+    return;
+  }
+
+  const pathPrefix = pathCompletionPrefix(ctx.before);
+  if (pathPrefix) {
+    scheduleAsyncCompletion(
+      `path:${currentFile}:${pathPrefix}`,
+      pathPrefix,
+      pathPrefix.length,
+      ctx.rect,
+      () => matchingPathCompletions(pathPrefix),
+    );
+    return;
+  }
+
+  // Plain snippet completion — synchronous, no backend needed.
+  clearCompletionCache();
+  const prefix = snippetPrefix(ctx.before);
+  if (!prefix || prefix === snippetSuppressedPrefix) {
+    hideSnippetPopup();
+    return;
+  }
+  if (!snippetCompletionArmed && snippetPopup.hidden) return;
+  const mode = snippetContextMode(ctx);
+  const matches = matchingSnippets(prefix, mode, ctx);
+  if (matches.length === 0) {
+    hideSnippetPopup();
+    return;
+  }
+  showSnippetPopup(prefix, matches, prefix.length, ctx.rect);
+}
+
+function chooseSnippetPopupItem(): void {
+  const snippet = snippetPopupItems[snippetPopupIndex];
+  if (!snippet) return;
+  if (snippet.provider === "choice") {
+    const choice = snippet.key || "";
+    hideSnippetPopup();
+    if (snippetSession.choose(choice)) {
+      setStatus(`Snippet choice: ${choice}`);
+      scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
+    }
+    return;
+  }
+  const deleteBefore = snippetDeleteBefore;
+  hideSnippetPopup();
+  snippetSuppressedPrefix = "";
+  insertSnippet(snippet, deleteBefore);
+}
+
+function acceptSnippetPopupItem(): boolean {
+  if (snippetPopup.hidden || snippetPopupItems.length === 0) return false;
+  chooseSnippetPopupItem();
+  return true;
+}
+
+function applySnippetPopupKeyAction(action: ReturnType<typeof snippetPopupKeyAction>): boolean {
+  if (snippetPopup.hidden) return false;
+  if (snippetPopupItems.length === 0) {
+    hideSnippetPopup();
+    return false;
+  }
+  switch (action.type) {
+    case "move":
+      snippetPopupIndex = (snippetPopupIndex + action.delta + snippetPopupItems.length) % snippetPopupItems.length;
+      updateSnippetPopupActiveOption();
+      return true;
+    case "page":
+      snippetPopupIndex = ((snippetPopupIndex + action.delta) % snippetPopupItems.length + snippetPopupItems.length) % snippetPopupItems.length;
+      updateSnippetPopupActiveOption();
+      return true;
+    case "edge":
+      snippetPopupIndex = action.edge === "first" ? 0 : snippetPopupItems.length - 1;
+      updateSnippetPopupActiveOption();
+      return true;
+    case "accept":
+      return acceptSnippetPopupItem();
+    case "consume":
+      return true;
+    case "select":
+      if (action.index < 0 || action.index >= snippetPopupItems.length) return false;
+      snippetPopupIndex = action.index;
+      chooseSnippetPopupItem();
+      return true;
+    case "dismiss":
+      snippetSuppressedPrefix = snippetPopup.dataset.prefix ?? "";
+      hideSnippetPopup();
+      return true;
+    case "none":
+      return false;
+  }
+}
+
+function handleSnippetPopupKey(event: KeyboardEvent): boolean {
+  const handled = applySnippetPopupKeyAction(snippetPopupKeyAction({
+    key: event.key === "\t" ? "Tab" : event.key, // xwidget may send "\t" instead of "Tab"
+    shiftKey: event.shiftKey,
+    commandKey: event.metaKey && !event.ctrlKey,
+    ctrlKey: event.ctrlKey,
+    altKey: event.altKey,
+    isComposing: event.isComposing,
+  }));
+  if (handled) {
+    event.preventDefault();
+  }
+  return handled;
+}
+
+function handleSnippetPopupHostKey(key: VimLiteKey): boolean {
+  return applySnippetPopupKeyAction(snippetPopupKeyAction({
+    key: key.key,
+    shiftKey: key.shiftKey,
+    commandKey: key.metaKey && !key.ctrlKey,
+    ctrlKey: key.ctrlKey,
+    altKey: key.altKey,
+    isComposing: key.isComposing,
+  }));
+}
+
+function expandSnippetAtCursor(): boolean {
+  const ctx = editor.cursorContext(320);
+  const prefix = snippetPrefix(ctx.before);
+  if (!prefix) return false;
+  const mode = snippetContextMode(ctx);
+  const matches = matchingSnippets(prefix, mode, ctx);
+  const exact = matches.find((snippet) => String(snippet.key || "") === prefix)
+    ?? (matches.length === 1 ? matches[0] : undefined);
+  if (!exact) return false;
+  hideSnippetPopup();
+  snippetSuppressedPrefix = "";
+  return insertSnippet(exact, prefix.length);
+}
+
+function mathPreviewKeyFor(math: { tex: string; display: boolean }): string {
+  return `${math.display ? "display" : "inline"}\n${math.tex.trim()}`;
+}
+
+function resetMathPreviewFitState(): void {
+  const child = mathPreview.querySelector<HTMLElement>(".katex-display, .katex, math, mjx-container");
+  if (!child) return;
+  child.style.transform = "";
+  child.style.transformOrigin = "";
+  child.style.display = "";
+  child.style.maxWidth = "";
+  mathPreview.style.minHeight = "";
+  mathPreview.classList.remove("is-math-scaled");
+}
+
+function mathPreviewPreferredWidth(display: boolean): number {
+  const margin = 8;
+  const maxWidth = Math.max(220, window.innerWidth - margin * 2);
+  const minimum = display ? 220 : 120;
+  const fallback = display ? 420 : 180;
+  const previousWidth = mathPreview.style.width;
+  resetMathPreviewFitState();
+  mathPreview.style.width = "max-content";
+  const natural = Math.ceil(mathPreview.scrollWidth || mathPreview.offsetWidth || fallback);
+  mathPreview.style.width = previousWidth;
+  return Math.min(maxWidth, Math.max(minimum, natural));
+}
+
+function updateMathPreviewOverflow(): void {
+  if (mathPreview.hidden || mathPreview.classList.contains("is-error")) return;
+  const rendered = mathPreview.querySelector<Element>(".katex-display, .katex, math, mjx-container");
+  const renderedWidth = Math.ceil(rendered?.getBoundingClientRect().width || 0);
+  const measuredWidth = Math.max(renderedWidth, mathPreview.scrollWidth);
+  const overflowX = measuredWidth > mathPreview.clientWidth + 2;
+  const overflowY = mathPreview.scrollHeight > mathPreview.clientHeight + 2;
+  mathPreview.classList.toggle("is-overflowing", overflowX || overflowY);
+}
+
+function placeMathPreview(
+  anchorRect: { left: number; top: number; bottom: number } | null,
+  display: boolean,
+  bottomRect?: { bottom: number } | null,
+): void {
+  mathPreview.classList.remove("is-overflowing");
+  if (!mathPreviewWidth || mathPreviewWidth > window.innerWidth - 16) {
+    mathPreviewWidth = mathPreviewPreferredWidth(display);
+  }
+  placeFloatingAbove(mathPreview, anchorRect, mathPreviewWidth, bottomRect);
+  updateMathPreviewOverflow();
+}
+
+function scheduleMathPreviewError(nextKey: string, error: string, display: boolean): void {
+  clearMathPreviewErrorTimer();
+  mathPreviewPendingErrorKey = nextKey;
+  const message = `Math error: ${formatMathRenderError(error, MATH_PREVIEW_ERROR_MAX_LENGTH)}`;
+  mathPreviewErrorTimer = window.setTimeout(() => {
+    if (mathPreviewPendingErrorKey !== nextKey || mathPreviewKey !== nextKey) return;
+    if (paused || !editorSurfaceVisible()) return;
+    const ctx = editor.cursorContext(display ? 640 : 320);
+    const math = mathAtCursor(ctx);
+    if (!math || mathPreviewKeyFor(math) !== nextKey) return;
+    const anchorRect = math.rect ?? ctx.rect;
+    const bottomRect = math.display ? (math.rectEnd ?? anchorRect) : undefined;
+    mathPreview.innerHTML = "";
+    mathPreview.textContent = message;
+    mathPreview.classList.add("is-error");
+    mathPreview.classList.toggle("is-display", math.display);
+    mathPreview.hidden = false;
+    mathPreviewWidth = 0;
+    placeFloatingAbove(mathPreview, anchorRect, math.display ? 640 : 320, bottomRect);
+  }, MATH_PREVIEW_ERROR_IDLE_MS);
+}
+
+function updateMathPreview(ctx: ReturnType<typeof editor.cursorContext>, allowNewPreview: boolean): void {
+  const math = mathAtCursor(ctx);
+  if (!math || math.tex.trim().length === 0) {
+    if (!mathPreview.hidden || mathPreviewKey) hideMathPreview();
+    return;
+  }
+  const nextKey = mathPreviewKeyFor(math);
+  const anchorRect = math.rect ?? ctx.rect;
+  const bottomRect = math.display ? (math.rectEnd ?? anchorRect) : undefined;
+  if (mathPreview.hidden && !allowNewPreview) return;
+  if (mathPreviewKey === nextKey && !mathPreview.hidden) {
+    placeMathPreview(anchorRect, math.display, bottomRect);
+    return;
+  }
+  if (mathPreviewKey !== nextKey && !allowNewPreview) return;
+  if (mathPreviewKey !== nextKey) {
+    clearMathPreviewErrorTimer();
+    mathPreviewKey = nextKey;
+    mathPreviewWidth = 0;
+    mathPreview.innerHTML = "";
+    mathPreview.classList.remove("is-error");
+    mathPreview.classList.toggle("is-display", math.display);
+    const rendered = renderMathHTML(math.tex.trim(), {
+      displayMode: math.display,
+      strict: "ignore",
+    });
+    if (rendered.error) {
+      scheduleMathPreviewError(nextKey, rendered.error, math.display);
+      mathPreview.hidden = true;
+      return;
+    }
+    mathPreview.innerHTML = rendered.html;
+    mathPreview.scrollLeft = 0;
+    mathPreview.scrollTop = 0;
+  }
+  if (mathPreviewPendingErrorKey === nextKey && mathPreview.hidden) return;
+  clearMathPreviewErrorTimer();
+  mathPreview.classList.remove("is-error");
+  mathPreview.hidden = false;
+  placeMathPreview(anchorRect, math.display, bottomRect);
+  window.requestAnimationFrame(() => {
+    if (!paused && editorSurfaceVisible() && mathPreviewKey === nextKey && !mathPreview.hidden) {
+      placeMathPreview(anchorRect, math.display, bottomRect);
+    }
+  });
+}
+
+function activeEditorSelection(): { text: string; rect: DOMRect } | null {
+  if (editor.isSourceMode()) return null;
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null;
+  const anchor = selection.anchorNode;
+  const focus = selection.focusNode;
+  if (!anchor || !focus || !host.contains(anchor) || !host.contains(focus)) return null;
+  const logical = editor.getSelection();
+  const from = Math.min(logical.from, logical.to);
+  const to = Math.max(logical.from, logical.to);
+  const text = from < to ? editor.textBetween(from, to) : selection.toString();
+  if (!text.trim()) return null;
+  const rect = selection.getRangeAt(0).getBoundingClientRect();
+  if (rect.width === 0 && rect.height === 0) return null;
+  return { text, rect };
+}
+
+function selectionTouchesEditor(): boolean {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return false;
+  const anchor = selection.anchorNode;
+  const focus = selection.focusNode;
+  return Boolean(anchor && focus && host.contains(anchor) && host.contains(focus));
+}
+
+function updateSelectionTool(active = activeEditorSelection()): void {
+  if (!active || !modal.hidden) {
+    selectionTool.hidden = true;
+    selectionMore.hidden = true;
+    selectionRevisionForm.hidden = true;
+    return;
+  }
+  selectionRoamIdlink.hidden = currentStandalone;
+  const margin = 8;
+  const width = Math.min(520, Math.max(360, selectionTool.offsetWidth || 440));
+  const left = Math.min(
+    Math.max(margin, active.rect.left + active.rect.width / 2 - width / 2),
+    Math.max(margin, window.innerWidth - width - margin),
+  );
+  const top = Math.max(margin, active.rect.top - 46);
+  selectionTool.style.left = `${left}px`;
+  selectionTool.style.top = `${top}px`;
+  selectionTool.hidden = false;
+}
+
+async function copyActiveSelection(): Promise<void> {
+  const active = activeEditorSelection();
+  if (!active) return;
+  let copied = false;
+  try {
+    await navigator.clipboard.writeText(active.text);
+    copied = true;
+  } catch {
+    const fallback = document.createElement("textarea");
+    fallback.value = active.text;
+    fallback.style.position = "fixed";
+    fallback.style.left = "-9999px";
+    document.body.appendChild(fallback);
+    fallback.select();
+    copied = document.execCommand("copy");
+    fallback.remove();
+  }
+  setStatus(copied ? "Selection copied" : "Copy failed");
+  selectionTool.hidden = true;
+}
+
+function runSelectionCommand(command: string): void {
+  if (command === "copy") {
+    void copyActiveSelection();
+    return;
+  }
+  if (command === "more") {
+    selectionMore.hidden = !selectionMore.hidden;
+    return;
+  }
+  if (command === "revision-form") {
+    if (rejectReadOnlyAction("Read-only pane")) return;
+    selectionMore.hidden = true;
+    selectionRevisionForm.hidden = false;
+    window.setTimeout(() => selectionRevisionForm.elements.namedItem("advice") instanceof HTMLElement
+      && (selectionRevisionForm.elements.namedItem("advice") as HTMLElement).focus(), 0);
+    return;
+  }
+  if (command === "insert-roam-idlink") {
+    if (rejectReadOnlyAction("Read-only pane")) return;
+    selectionMore.hidden = true;
+    selectionTool.hidden = true;
+    void insertRoamIdLink();
+    return;
+  }
+  if (!["bold", "italic", "highlight", "strike", "code", "link", "superscript", "subscript", "insert-footnote"].includes(command)) return;
+  if (rejectReadOnlyAction("Read-only pane")) return;
+  editor.runCommand(command as EditorCommand);
+  selectionTool.hidden = true;
+  selectionMore.hidden = true;
+  selectionRevisionForm.hidden = true;
+}
+
+function runAssistUpdate(flags: AssistUpdateFlags): void {
+  const insertMode = vim.mode() === "insert";
+  const wantsSnippets = insertMode && (flags.snippets || !snippetPopup.hidden);
+  const wantsMathPreview = flags.mathPreview || !mathPreview.hidden;
+  const needsCursorContext = wantsSnippets || wantsMathPreview;
+  const ctx = needsCursorContext ? editor.cursorContext(!snippetPopup.hidden ? 640 : 320) : null;
+  if (flags.toc) updateFloatingToc();
+  if (flags.selectionTool) {
+    const activeSelection = snippetPopup.hidden && modal.hidden ? activeEditorSelection() : null;
+    updateSelectionTool(activeSelection);
+  }
+  if (!insertMode) {
+    hideSnippetPopup();
+    if (ctx && wantsMathPreview) updateMathPreview(ctx, flags.mathPreview);
+    return;
+  }
+  if (ctx) {
+    if (wantsSnippets) updateSnippetPopup(ctx);
+    if (wantsMathPreview) updateMathPreview(ctx, flags.mathPreview);
+  }
+}
+
+function cancelAssistWork(): void {
+  assistScheduler.cancel();
+  clearCompletionCache();
+  clearMathPreviewErrorTimer();
+  hideSnippetPopup();
+  hideMathPreview();
+  selectionTool.hidden = true;
+  selectionMore.hidden = true;
+}
+
+function applyPaused(next: boolean): void {
+  if (paused === next) return;
+  paused = next;
+  assistScheduler.setPaused(next);
+  proseLifecycle.setPaused(next, next ? "page-hidden" : "resumed");
+  document.documentElement.classList.toggle("aaronnote-paused", next);
+  if (next) {
+    cancelAssistWork();
+  } else {
+    scheduleAssistUpdate({ cursor: true, mathPreview: true, selectionTool: true, toc: true });
+    scheduleAutomaticProseCheck();
+  }
+}
+
+function setPausedReason(reason: string, active: boolean): void {
+  if (active) pauseReasons.add(reason);
+  else pauseReasons.delete(reason);
+  applyPaused(pauseReasons.size > 0);
+}
+
+function scheduleAssistUpdate(options: AssistUpdateOptions = {}): void {
+  assistScheduler.schedule(options);
+}
+
+function updateFloatingToc(): void {
+  floatingTocPanel.update();
+}
+
+async function reloadSnippets(): Promise<void> {
+  setStatus("Reloading snippets");
+  try {
+    const msg = await api.notes.snippets();
+    if (!Array.isArray(msg.snippets)) {
+      const message = (msg as { message?: string }).message || "Snippet reload failed";
+      throw new Error(message);
+    }
+    snippetSession.clear();
+    snippets = withBuiltinSnippets(msg.snippets);
+    hideSnippetPopup();
+    scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true, toc: true });
+    setStatus(`Reloaded ${snippets.length} snippets`);
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "Snippet reload failed");
+  }
+}
+
+function insertHostKeyText(key: string, text?: string): boolean {
+  const literal = typeof text === "string" ? text
+    : key === "Enter" ? "\n"
+      : key === "Tab" ? "\t"
+        : key.length === 1 ? key
+          : "";
+  if (!literal) return false;
+  snippetCompletionArmed = key !== "Enter" && key !== "Tab";
+  editor.insertText(literal);
+  return true;
+}
+
+function deleteHostKeyText(key: string): boolean {
+  if (key !== "Backspace" && key !== "Delete") return false;
+  const { from, to } = editor.getMarkdownSelection();
+  if (from !== to) {
+    editor.replaceMarkdownRange(from, to, "", "start");
+    return true;
+  }
+  const text = editor.view.state.doc;
+  const start = key === "Backspace" ? previousGraphemePosition(text, from) : from;
+  const end = key === "Delete" ? nextGraphemePosition(text, to) : to;
+  if (start >= end) return false;
+  editor.replaceMarkdownRange(start, end, "", "start");
+  return true;
+}
+
+function runHostKey(body: Record<string, unknown>): boolean {
+  const rawKey = String(body.key || "");
+  const shiftTabAlias = rawKey === "Backtab" || rawKey === "ISO_Left_Tab" || rawKey === "Shift-Tab";
+  const key = shiftTabAlias ? "Tab" : rawKey;
+  if (!key) return false;
+  const hostKey: VimLiteKey = {
+    key,
+    ctrlKey: Boolean(body.ctrlKey),
+    metaKey: Boolean(body.metaKey),
+    altKey: Boolean(body.altKey),
+    shiftKey: Boolean(body.shiftKey) || shiftTabAlias,
+  };
+  focusEditorPreservingScroll();
+  if (key === "Escape" || key === "Esc") snippetSession.clear();
+  if (handleSnippetPopupHostKey(hostKey)) {
+    scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
+    return true;
+  }
+  if (vim.handleKey(hostKey)) {
+    scheduleAssistUpdate({ mathPreview: true, cursor: true });
+    return true;
+  }
+  if (currentReadOnly) {
+    if (key === "Tab" || key === "Enter" || key === "Backspace" || key === "Delete" || (!hostKey.ctrlKey && !hostKey.metaKey && !hostKey.altKey && key.length === 1)) {
+      setStatus("Read-only pane");
+      return true;
+    }
+    return false;
+  }
+  if (key === "Tab") {
+    if (vim.mode() !== "insert") return false;
+    editor.focus();
+    if (snippetSession.active()) {
+      const handled = hostKey.shiftKey ? jumpSnippetTabstopBack() : jumpSnippetTabstop();
+      if (handled) {
+        scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
+        return true;
+      }
+    }
+    if (hostKey.shiftKey) {
+      const tableHandled = tableNavigateCell(editor.view, -1);
+      if (tableHandled) { scheduleAssistUpdate({ cursor: true }); return true; }
+      const handled = jumpSnippetTabstopBack();
+      if (handled) {
+        scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
+        return true;
+      }
+      if (indentMarkdownList(editor.view, -1)) {
+        scheduleAssistUpdate({ snippets: true, cursor: true });
+        return true;
+      }
+      return false;
+    }
+    const tableHandled = tableNavigateCell(editor.view, 1);
+    if (tableHandled) { scheduleAssistUpdate({ cursor: true }); return true; }
+    const snippetHandled = jumpSnippetTabstop() || expandSnippetAtCursor();
+    if (snippetHandled) {
+      scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
+      return true;
+    }
+    if (indentMarkdownList(editor.view, 1)) {
+      scheduleAssistUpdate({ snippets: true, cursor: true });
+      return true;
+    }
+    // No snippet/list match — fall through to insertHostKeyText("\t").
+  }
+  if (vim.mode() !== "insert" || hostKey.ctrlKey || hostKey.metaKey || hostKey.altKey) return false;
+  if (key === "Enter") {
+    const handled = tableEnterSameColumn(editor.view) || exitEmptyMarkdownBlock(editor.view) || continueMarkdownBlock(editor.view);
+    if (!handled) editor.insertText("\n");
+    scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
+    return true;
+  }
+  if (key === "Backspace" || key === "Delete") {
+    const handled = deleteHostKeyText(key);
+    if (handled) scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
+    return handled;
+  }
+  const inserted = insertHostKeyText(key, typeof body.text === "string" ? body.text : undefined);
+  if (inserted) scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
+  return inserted;
+}
+
+function runHostCommand(detail: unknown): boolean {
+  const body = (detail && typeof detail === "object" ? detail : {}) as {
+    command?: string;
+    key?: string;
+    value?: string;
+    text?: string;
+    file?: string;
+    mode?: VimLiteMode;
+    version?: number;
+    mtimeMs?: number;
+    clientId?: string;
+    settings?: LanguageToolSettings;
+    settingsRevision?: string;
+  };
+  const command = String(body.command || "").trim().toLowerCase();
+  if (!command) return false;
+
+  switch (command) {
+    case "notes-index-changed": {
+      const version = typeof body.version === "number" ? body.version : 0;
+      // Ignore stale broadcasts (e.g. replayed on reconnect).
+      if (version && version <= lastNotesIndexVersion) return true;
+      if (version) lastNotesIndexVersion = version;
+      if (pauseReasons.has("visibility")) {
+        pendingNotesRefresh = true;
+      } else {
+        notesRefreshTimer.schedule(() => void reloadNotes(false));
+      }
+      return true;
+    }
+    case "bibliography-index-changed":
+      hideSnippetPopup();
+      clearCompletionCache();
+      snippetSuppressedPrefix = "";
+      scheduleBibliographyRefresh(true);
+      scheduleAssistUpdate({ snippets: true });
+      return true;
+    case "server-ready":
+      void loadLanguageToolConfiguration();
+      return true;
+    case "languagetool-settings-changed":
+      languageToolLoadSequence += 1;
+      if (body.settings) applyLanguageToolConfiguration(body.settings, body.settingsRevision);
+      return true;
+    case "note-saved": {
+      const savedFile = String(body.file || "");
+      if (!savedFile || savedFile !== currentFile) return true;
+      if (String(body.clientId || "") === clientId) return true;
+      const mtimeMs = Number(body.mtimeMs) || 0;
+      pendingExternalSave = { file: savedFile, mtimeMs };
+      if (revision !== savedRevision) {
+        setStatus("Changed in another pane; refresh before saving");
+      }
+      return true;
+    }
+    case "key":
+      return runHostKey(body as Record<string, unknown>);
+    case "pause":
+      setPausedReason("host", true);
+      return true;
+    case "resume":
+      setPausedReason("host", false);
+      return true;
+    case "toggle-pause":
+      setPausedReason("host", !pauseReasons.has("host"));
+      return true;
+    case "save":
+      if (rejectReadOnlyAction("Read-only pane")) return true;
+      void save();
+      return true;
+    case "jupyter-cell-script-saved": {
+      // The hidden script was edited and saved in Emacs; force @@cell widgets to
+      // re-read their source and refresh the panel so both reflect the new code.
+      const savedFile = String(body.file || "");
+      if (!savedFile || savedFile === currentFile) {
+        window.AaronnoteReloadCeilCells?.(savedFile || currentFile);
+        if (!jupyterPanel.hidden) renderJupyterPanel();
+      }
+      setStatus("Jupyter cell script saved");
+      return true;
+    }
+    case "refresh":
+    case "reload":
+      void reloadCurrentFilePreservingCursor({ preserveScroll: true });
+      return true;
+    case "prose-check":
+    case "spell-check":
+      void runProseCheck();
+      return true;
+    case "back":
+    case "nav-back":
+    case "navigation-back":
+      void restoreNavigationBack();
+      return true;
+    case "focus":
+      focusEditorPreservingScroll();
+      return true;
+    case "paste":
+      if (rejectReadOnlyAction("Read-only pane")) return true;
+      editor.focus();
+      void editor.pasteFromClipboard();
+      return true;
+    case "escape":
+    case "normal":
+    case "vim-normal":
+      vim.setMode("normal");
+      editor.focus();
+      return true;
+    case "insert":
+    case "vim-insert":
+      vim.setMode("insert");
+      editor.focus();
+      return true;
+    case "jupyter-panel":
+      toggleJupyterPanel();
+      return true;
+    case "jupyter-run-cell":
+      void (async () => {
+        const cell = selectedJupyterCell();
+        if (cell) await runJupyterCell(cell);
+      })();
+      return true;
+    case "jupyter-run-all":
+      void runJupyterCells("all");
+      return true;
+    case "jupyter-run-section":
+      void runJupyterCells("section");
+      return true;
+    case "jupyter-select-cell":
+      selectJupyterCellFromHost(body as { file?: string; cellId?: string; id?: string });
+      return true;
+    case "jupyter-run-script-cell":
+      void runJupyterCellFromHost(body as { file?: string; cellId?: string; id?: string });
+      return true;
+    case "jupyter-restart-run-all":
+      void restartAndRunAllJupyterCells();
+      return true;
+    case "jupyter-interrupt":
+      void interruptSelectedJupyterKernel();
+      return true;
+    case "jupyter-runtime-tasks":
+      if (jupyterPanel.hidden) toggleJupyterPanel();
+      void showJupyterTasks();
+      return true;
+    case "jupyter-cleanup":
+      if (jupyterPanel.hidden) toggleJupyterPanel();
+      void cleanupJupyterRuntime(Boolean((body as { force?: unknown }).force));
+      return true;
+    case "jupyter-switch-kernel":
+      switchJupyterKernelForCells(body as {
+        language?: string;
+        session?: string;
+        kernel?: string;
+        oldKernel?: string;
+      });
+      return true;
+    case "toggle-source":
+    case "source":
+      toggleSourceMode();
+      return true;
+    case "toggle-toc":
+      togglePageOutline();
+      return true;
+    case "toggle-agenda":
+      if (!roamToolsPanel.hidden && roamToolsPanel.classList.contains("is-agenda")) closeRoamToolsPanel();
+      else void openAgendaTool();
+      return true;
+    case "toggle-graph":
+      localGraphPanel.toggle();
+      return true;
+    case "toggle-tools":
+      toggleToolsPanel();
+      return true;
+    case "undo":
+      if (rejectReadOnlyAction("Read-only pane")) return true;
+      editor.focus();
+      return editor.undo();
+    case "redo":
+      if (rejectReadOnlyAction("Read-only pane")) return true;
+      editor.focus();
+      return editor.redo();
+    default:
+      if (isEditorCommand(command)) {
+        if (rejectReadOnlyAction("Read-only pane")) return true;
+        editor.focus();
+        return editor.runCommand(command, body.value || "");
+      }
+      return false;
+  }
+}
+
+function togglePageOutline(): void {
+  floatingTocPanel.toggle();
+  updateFloatingToc();
+  const expanded = tocButton.getAttribute("aria-expanded") === "true";
+  statsToggle.setAttribute("aria-expanded", String(expanded));
+  statsToggle.classList.toggle("is-active", expanded);
+}
+
+tocButton.addEventListener("click", togglePageOutline);
+statsToggle.addEventListener("click", togglePageOutline);
+statsToggle.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  event.preventDefault();
+  togglePageOutline();
+});
+agendaButton.addEventListener("click", () => {
+  if (!roamToolsPanel.hidden && roamToolsPanel.classList.contains("is-agenda")) {
+    closeRoamToolsPanel();
+    return;
+  }
+  void openAgendaTool();
+});
+toolsButton.addEventListener("click", toggleToolsPanel);
+function activateModeToggle(): void {
+  if (slideDeck?.isRevealView()) {
+    const theme = slideDeck.toggleTheme();
+    renderModeToggleLabel(vim.mode());
+    setStatus(`Slides ${theme} theme`);
+    return;
+  }
+  toggleToolsPanel();
+}
+
+modeToggle.addEventListener("click", activateModeToggle);
+modeToggle.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  event.preventDefault();
+  activateModeToggle();
+});
+toolsClose.addEventListener("click", closeToolsPanel);
+roamToolsClose.addEventListener("click", closeRoamToolsPanel);
+jupyterButton.addEventListener("click", toggleJupyterPanel);
+jupyterClose.addEventListener("click", closeJupyterPanel);
+jupyterKernelLanguage.addEventListener("change", () => setJupyterKernelToolFromCell(null));
+jupyterKernelSession.addEventListener("change", () => setJupyterKernelToolFromCell(null));
+jupyterKernelOld.addEventListener("change", () => {
+  if (jupyterKernelNew.value === "") jupyterKernelNew.value = jupyterKernelOld.value;
+  renderJupyterKernelMatchPreview();
+});
+jupyterKernelNew.addEventListener("change", renderJupyterKernelMatchPreview);
+jupyterPanel.addEventListener("click", (event) => {
+  const button = (event.target as Element | null)?.closest<HTMLButtonElement>("[data-jupyter-action]");
+  if (!button) return;
+  event.preventDefault();
+  const action = button.dataset.jupyterAction || "";
+  if (action === "run-all") void runJupyterCells("all");
+  else if (action === "run-above") void runJupyterCells("above");
+  else if (action === "run-below") void runJupyterCells("below");
+  else if (action === "run-section") void runJupyterCells("section");
+  else if (action === "restart-run-all") void restartAndRunAllJupyterCells().catch((error) => setStatus(error instanceof Error ? error.message : "Jupyter restart failed"));
+  else if (action === "interrupt") void interruptSelectedJupyterKernel().catch((error) => setStatus(error instanceof Error ? error.message : "Jupyter interrupt failed"));
+  else if (action === "clear-all") void clearAllJupyterOutputs().catch((error) => setStatus(error instanceof Error ? error.message : "Clear outputs failed"));
+  else if (action === "variables") void showJupyterVariables();
+  else if (action === "toggle-kernel-tool") toggleJupyterKernelTool();
+  else if (action === "tasks") void showJupyterTasks();
+  else if (action === "cleanup") void cleanupJupyterRuntime(false);
+  else if (action === "switch-kernel") {
+    switchJupyterKernelFromTool();
+    jupyterKernelTool.hidden = true;
+  }
+  else if (action === "refresh") {
+    jupyterVars.hidden = true;
+    jupyterRuntime.hidden = true;
+    renderJupyterPanel();
+  }
+});
+sourceButton.addEventListener("click", toggleSourceMode);
+saveButton.addEventListener("click", () => void save());
+
+function eventTargetsNativeWidgetInput(target: EventTarget | null): boolean {
+  const element = target instanceof Element
+    ? target
+    : target instanceof Node
+      ? target.parentElement
+      : null;
+  return Boolean(element?.closest("[data-aaronnote-vim='native']"));
+}
+
+document.addEventListener("keydown", (event) => {
+  // Native widget editors are deliberately outside the document's Vim and
+  // authoring-shortcut pipeline, regardless of the current document mode.
+  if (eventTargetsNativeWidgetInput(event.target)) return;
+  if (!event.metaKey && !event.ctrlKey && !event.altKey && event.key.length !== 1 && event.key !== "Tab") {
+    snippetCompletionArmed = false;
+  }
+  // The editor's xwidget arrow-key guard runs in capture phase.  In Reveal it
+  // must yield before that guard so Reveal receives arrows, PageUp/PageDown,
+  // Home/End, Space and Escape.  Cmd-/ remains the way back to editing.
+  if (slideDeck?.isRevealView() && modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden) {
+    if (runSourceToggleShortcut(event)) event.stopPropagation();
+    return;
+  }
+  if (runFindShortcut(event)) {
+    event.stopPropagation();
+    return;
+  }
+  if (runProseCheckShortcut(event)) {
+    event.stopPropagation();
+    return;
+  }
+  if (event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "p" && modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden && !event.isComposing) {
+    event.preventDefault();
+    event.stopPropagation();
+    void exportLatexTool();
+    return;
+  }
+  if (!standaloneMode() && handleXwidgetEmacsKeydown(event, { client: () => currentClient })) return;
+  if (runVisualZoomShortcut(event)) {
+    return;
+  }
+  if (runLayoutZoomShortcut(event)) {
+    return;
+  }
+  if (handleXwidgetHistoryKeydown(event, {
+    editor,
+    editorHost: host,
+    vim,
+    enabled: modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden,
+  })) {
+    scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
+    return;
+  }
+  snippetSuppressedPrefix = event.key === "Escape" ? snippetSuppressedPrefix : "";
+  if (plainEscapeKey(event)) snippetSession.clear();
+  if (handleSnippetPopupKey(event)) {
+    event.stopPropagation();
+    return;
+  }
+  if (plainEscapeKey(event)) {
+    if (!modal.hidden) return;
+    if (!toolsPanel.hidden) {
+      event.preventDefault();
+      closeToolsPanel();
+      editor.focus();
+      return;
+    }
+    if (!roamToolsPanel.hidden) {
+      event.preventDefault();
+      closeRoamToolsPanel();
+      editor.focus();
+      return;
+    }
+  }
+  if (handleXwidgetControlKeydown(event, {
+    editor,
+    editorHost: host,
+    vim,
+    enabled: modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden,
+  })) {
+    if (plainEscapeKey(event)) noteCursorPositionEvent();
+    scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
+    return;
+  }
+  if (handleXwidgetVimKeydown(event, {
+    editor,
+    editorHost: host,
+    vim,
+    enabled: modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden,
+  })) {
+    if (plainEscapeKey(event)) noteCursorPositionEvent();
+    scheduleAssistUpdate({ mathPreview: true, cursor: true });
+    return;
+  }
+  if (vim.mode() === "insert" && (event.key === "Tab" || event.key === "\t") && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    const handled = event.shiftKey
+      ? jumpSnippetTabstopBack()
+      : jumpSnippetTabstop() || expandSnippetAtCursor();
+    if (handled) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+  }
+  if (handleXwidgetSpecialKeydown(event, {
+    editor,
+    editorHost: host,
+    vim,
+    enabled: modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden,
+  })) {
+    scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
+    return;
+  }
+  if (runClipboardShortcut(event)) {
+    scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true, selectionTool: true });
+    event.stopPropagation();
+    return;
+  }
+  if (vim.handleKeyDown(event)) {
+    if (plainEscapeKey(event)) noteCursorPositionEvent();
+    scheduleAssistUpdate({ mathPreview: true, cursor: true });
+    event.stopPropagation();
+    return;
+  }
+  if (runSourceToggleShortcut(event)) {
+    scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
+    event.stopPropagation();
+    return;
+  }
+  if (primaryMod(event) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "s") {
+    event.preventDefault();
+    void save();
+    event.stopPropagation();
+    return;
+  }
+  if (runFormattingShortcut(event)) {
+    scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
+    event.stopPropagation();
+    return;
+  }
+}, true);
+host.addEventListener("mouseup", () => {
+  if (snippetPopup.hidden) snippetCompletionArmed = false;
+});
+host.addEventListener("click", (event) => {
+  const target = event.target instanceof Element
+    ? event.target.closest(".cm-prose-diagnostic")
+    : null;
+  if (!target) {
+    if (!prosePopover.contains(event.target as Node)) hideProsePopover();
+    return;
+  }
+  const position = editor.view.posAtCoords({ x: event.clientX, y: event.clientY });
+  if (position == null) return;
+  const diagnostic = proseDiagnosticsAt(editor.view, position)[0];
+  if (!diagnostic) return;
+  event.preventDefault();
+  event.stopPropagation();
+  showProsePopover(diagnostic, event.clientX, event.clientY);
+});
+prosePopover.addEventListener("mousedown", (event) => event.preventDefault());
+prosePopover.addEventListener("click", (event) => {
+  const button = (event.target as Element | null)?.closest<HTMLButtonElement>("[data-prose-action]");
+  const diagnostic = activeProseDiagnostic;
+  if (!button || !diagnostic) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const action = button.dataset.proseAction;
+  if (action === "replace") {
+    if (rejectReadOnlyAction("Read-only pane")) return;
+    editor.replaceMarkdownRange(diagnostic.from, diagnostic.to, button.dataset.value ?? "", "end");
+    removeProseDiagnostics((entry) => entry === diagnostic);
+    editor.focus();
+    return;
+  }
+  if (action === "ignore") {
+    removeProseDiagnostics((entry) => entry === diagnostic);
+    editor.focus();
+    return;
+  }
+  if (action === "accept" && diagnostic.word) {
+    const word = diagnostic.word;
+    void api.proseCheck.acceptWord(word)
+      .then(() => {
+        removeProseDiagnostics((entry) => entry.word?.toLowerCase() === word.toLowerCase());
+        setStatus(`Added “${word}” to the Noema prose dictionary`);
+      })
+      .catch((error) => setStatus(error instanceof Error ? error.message : "Adding word failed"));
+  }
+});
+document.addEventListener("beforeinput", (event) => {
+  if (eventTargetsNativeWidgetInput(event.target)) return;
+  const ie = event as InputEvent;
+  if (ie.inputType === "insertText" && ie.data && ie.data !== "\t") {
+    snippetCompletionArmed = true;
+  }
+  // xwidget Tab: may arrive only as beforeinput(insertText, "\t") with no keydown.
+  // Try snippet popup acceptance and snippet expansion before letting CM6 insert \t.
+  if (ie.inputType === "insertText" && ie.data === "\t"
+      && vim.mode() === "insert"
+      && modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden) {
+    const accepted = applySnippetPopupKeyAction(snippetPopupKeyAction({
+      key: "Tab", shiftKey: false, commandKey: false, ctrlKey: false, altKey: false, isComposing: false,
+    }));
+    if (accepted) {
+      event.preventDefault();
+      scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
+      return;
+    }
+    if (jumpSnippetTabstop() || expandSnippetAtCursor()) {
+      event.preventDefault();
+      scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
+      return;
+    }
+    if (tableNavigateCell(editor.view, 1)) {
+      event.preventDefault();
+      scheduleAssistUpdate({ cursor: true });
+      return;
+    }
+    if (indentMarkdownList(editor.view, 1)) {
+      event.preventDefault();
+      scheduleAssistUpdate({ snippets: true, cursor: true });
+      return;
+    }
+    // No snippet/list match: fall through so CM6 inserts \t naturally.
+    return;
+  }
+  if (handleXwidgetControlBeforeInput(event as InputEvent, {
+    editor,
+    editorHost: host,
+    vim,
+    enabled: modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden,
+  })) {
+    scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
+    return;
+  }
+  if (handleXwidgetSpecialBeforeInput(event as InputEvent, {
+    editor,
+    editorHost: host,
+    vim,
+    enabled: modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden,
+  })) {
+    scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
+    return;
+  }
+  if (handleXwidgetVimBeforeInput(event as InputEvent, {
+    editor,
+    editorHost: host,
+    vim,
+    enabled: modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden,
+  })) {
+    scheduleAssistUpdate({ mathPreview: true, cursor: true });
+  }
+}, true);
+document.addEventListener("selectionchange", () => {
+  if (!editorSurfaceVisible()) return;
+  if (selectionTouchesEditor() || !selectionTool.hidden) {
+    scheduleAssistUpdate({ selectionTool: true });
+  }
+});
+document.addEventListener("mouseup", (event) => {
+  if (!editorSurfaceVisible()) return;
+  if (event.target instanceof Node && editor.view.dom.contains(event.target)) {
+    vim.syncSelectionFromEditor();
+    noteCursorPositionEvent();
+  }
+  scheduleAssistUpdate({ mathPreview: true, cursor: true, selectionTool: true });
+});
+window.addEventListener("resize", () => {
+  scheduleAssistUpdate({ mathPreview: true, cursor: true, selectionTool: !selectionTool.hidden });
+});
+window.addEventListener("scroll", (event) => {
+  scheduleAssistUpdate({ mathPreview: true, cursor: true, selectionTool: !selectionTool.hidden });
+  if (event.target instanceof Node && host.contains(event.target)) {
+    scheduleAutomaticProseCheck(proseProfile().scrollMs);
+  }
+}, { capture: true, passive: true });
+selectionTool.addEventListener("mousedown", (event) => {
+  if (!(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLSelectElement)) event.preventDefault();
+});
+selectionTool.addEventListener("click", (event) => {
+  const button = (event.target as Element | null)?.closest<HTMLButtonElement>("[data-selection-command]");
+  if (!button) return;
+  event.preventDefault();
+  event.stopPropagation();
+  runSelectionCommand(button.dataset.selectionCommand || "");
+});
+selectionRevisionForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (rejectReadOnlyAction("Read-only pane")) return;
+  const data = new FormData(selectionRevisionForm);
+  const advice = String(data.get("advice") || "").trim();
+  if (!advice) return;
+  editor.focus();
+  editor.runCommand("insert-revision", JSON.stringify({
+    advice,
+    reason: String(data.get("reason") || "").trim(),
+    style: String(data.get("style") || "indigo"),
+  }));
+  selectionRevisionForm.reset();
+  selectionRevisionForm.hidden = true;
+  selectionTool.hidden = true;
+});
+
+findInput.addEventListener("input", () => refreshFind(findInput.value, false));
+findInput.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeFindPanel();
+    return;
+  }
+  if (event.key === "Enter") {
+    event.preventDefault();
+    refreshFind(findInput.value, true);
+    gotoFindMatch(findIndex + (event.shiftKey ? -1 : 1));
+  }
+});
+findPrevButton.addEventListener("click", () => gotoFindMatch(findIndex - 1));
+findNextButton.addEventListener("click", () => gotoFindMatch(findIndex + 1));
+findCloseButton.addEventListener("click", closeFindPanel);
+document.addEventListener("aaronnote:open-url", (event) => {
+  const custom = event as CustomEvent<{ href?: string; newWindow?: boolean }>;
+  const href = custom.detail?.href;
+  if (!href) return;
+  event.preventDefault();
+  openExternalUrl(href, { newWindow: custom.detail?.newWindow === true });
+});
+document.addEventListener("aaronnote:open-attachment", (event) => {
+  const custom = event as CustomEvent<{ href?: string }>;
+  const href = custom.detail?.href;
+  if (!href) return;
+  event.preventDefault();
+  const rawPath = hrefPath(href) || href;
+  void api.emacs.systemOpen(rawPath, currentFile).catch((err) => setStatus(`Open failed: ${String(err)}`));
+});
+window.addEventListener("aaronnote:open-file", (event) => {
+  const detail = (event as CustomEvent<{ file?: string }>).detail;
+  if (detail?.file && detail.file !== currentFile) pushNavigationBackLocation();
+  void openFile(detail?.file);
+});
+window.addEventListener("aaronnote:command", (event) => {
+  const detail = (event as CustomEvent<unknown>).detail;
+  const targetClient = detail && typeof detail === "object"
+    ? String((detail as { client?: unknown }).client || "")
+    : "";
+  if (targetClient && targetClient !== currentClient) return;
+  runHostCommand(detail);
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    setPausedReason("visibility", true);
+    void flushCursorPosition();
+  } else {
+    setPausedReason("visibility", false);
+    if (pendingNotesRefresh) {
+      pendingNotesRefresh = false;
+      notesRefreshTimer.schedule(() => void reloadNotes(false));
+    }
+  }
+});
+window.addEventListener("pagehide", () => {
+  proseLifecycle.invalidate("page-hidden");
+  void flushCursorPosition();
+  if (currentFile
+      && revision !== savedRevision
+      && noteAutoSaveEnabled(currentRemote)) {
+    api.notes.saveKeepalive(saveBody());
+  }
+  notifyClientClosedKeepalive();
+});
+window.addEventListener("beforeunload", () => {
+  coreReconnectController?.destroy();
+  vim.destroy();
+  imeCoalesceTimer.cancel();
+  zoomController.destroy();
+  writingStatsController?.destroy();
+  void flushCursorPosition();
+  notifyClientClosedKeepalive();
+});
+window.addEventListener("popstate", () => {
+  void restoreNavigationBack();
+});
+
+// Install the global KaTeX macros before the first note renders so the initial
+// paint already uses them; failures degrade to plain KaTeX rather than blocking.
+void (async () => {
+  const languageToolReady = loadLanguageToolConfiguration();
+  try {
+    const result = await api.config.katexMacros();
+    if (result?.macros) setKatexMacros(result.macros);
+  } catch (_) {
+    // Macros are optional.
+  }
+  await languageToolReady;
+  await openInitialFile();
+})();

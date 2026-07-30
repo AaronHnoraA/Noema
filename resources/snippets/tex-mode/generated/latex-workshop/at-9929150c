@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: times
+# key: @*
+# uuid: latex-workshop:@*
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=times+symbol
+# group: Math · latex-workshop
+# --
+\times

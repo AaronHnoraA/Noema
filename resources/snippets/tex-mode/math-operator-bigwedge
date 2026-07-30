@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [bigwedge] — Big wedge
+# key: bigwedge
+# group: Math · Operators
+# --
+\bigwedge$0

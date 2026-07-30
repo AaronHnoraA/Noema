@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: XOR
+# key: xor
+# -- Crypto
+# --
+\oplus$0

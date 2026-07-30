@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chang He | Notes Archive</title>
+  <link rel="stylesheet" href="css/retro.css?v=20260610-cli5" />
+  <link rel="stylesheet" href="css/home-wiki.css?v=20260610-cli5" />
+  <link rel="stylesheet" href="css/mac-window.css?v=20260610-cli5" />
+  <link rel="shortcut icon"
+    href="https://raw.githubusercontent.com/AaronHnoraA/AaronHnoraA.github.io/refs/heads/master/css/cv.svg"
+    type="image/x-icon">
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+</head>
+
+<body class="site-home site-archive home-wiki">
+  <div class="site-shell">
+    <header class="hero archive-hero">
+      <p class="hero-kicker"><a href="index.html">&larr; Chang He (Aaron)</a> <span class="hero-kicker-sep">/</span> public knowledge base</p>
+      <h1>Notes</h1>
+      <p class="hero-subtitle">
+        A searchable index of published notes, topics, and relations.
+      </p>
+      <p class="hero-affil">
+        A searchable index of every note I've published, with the cross-references between them. Quantum computing and mathematics now; theoretical computer science as it grows in.
+      </p>
+    </header>
+
+    <nav class="site-nav" aria-label="Primary">
+      <a href="index.html">home</a>
+      <a href="#notes-section">archive</a>
+      <a href="index.html#/research">research</a>
+      <a href="index.html#/selected-notes">selected</a>
+      <a href="index.html#/about">about</a>
+    </nav>
+
+    <main class="site-main">
+      <section id="notes-section" class="section section-wide archive-portal">
+        <div id="notes-summary" class="notes-summary" aria-live="polite"></div>
+        <div id="notes-actions" class="notes-actions" aria-label="Knowledge tools"></div>
+
+        <h2>Archive</h2>
+        <p class="section-aside">Use the graph when you want structure; use the index when you want sequence.</p>
+        <p class="section-intro">Browse notes by relation, topic, and section.</p>
+
+        <h3>Graph</h3>
+        <p class="section-aside">
+          <button class="macwin-graph-trigger" id="open-graph-btn" type="button">
+            ⬡ Open Knowledge Graph
+          </button>
+        </p>
+
+        <h3>Index</h3>
+
+        <div class="toolbar">
+          <div class="search-wrapper">
+            <label class="sr-only" for="note-search">Search notes</label>
+            <span class="search-icon" aria-hidden="true">/</span>
+            <input type="text" id="note-search" placeholder="Search title or tags..." autocomplete="off" />
+            <button id="reset-search" type="button" style="display:none" aria-label="Clear search">
+              <span aria-hidden="true">x</span>
+            </button>
+          </div>
+
+          <div class="sort-wrapper">
+            <label for="sort-select">Sort by:</label>
+            <select id="sort-select">
+              <option value="date-desc">Newest First</option>
+              <option value="date-asc">Oldest First</option>
+              <option value="title-asc">Title A-Z</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="active-filters" class="active-filters" aria-live="polite"></div>
+        <div id="tag-cloud"></div>
+        <div id="app-tabs"></div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <span class="footer-text">&copy; 2026 Chang He (Aaron) | Built with Emacs Org Mode.</span>
+    </footer>
+  </div>
+  <script src="js/data.js?v=20260610-cli5"></script>
+  <script src="js/knowledge.js?v=20260610-cli5"></script>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="js/graph.js?v=20260610-cli5"></script>
+  <script src="js/mac-window.js?v=20260610-cli5"></script>
+  <script src="js/app.js?v=20260610-cli5"></script>
+  <script src="js/oneko.js?v=20260610-cli5"></script>
+  <script>
+    document.addEventListener("DOMContentLoaded", function () {
+      var btn = document.getElementById("open-graph-btn");
+      if (!btn) return;
+      btn.addEventListener("click", function () {
+        if (typeof window.MacWindow === "undefined") return;
+        window.MacWindow.open({
+          title: "Knowledge Graph",
+          width: Math.min(window.innerWidth * 0.88, 1100),
+          height: Math.min(window.innerHeight * 0.85, 760),
+          hasFocus: true,
+          build: function (body, focus) {
+            body.style.overflow = "hidden";
+            body.style.display  = "flex";
+            body.style.flexDirection = "column";
+            var graphEl = document.createElement("div");
+            graphEl.style.cssText = "flex:1;min-height:0;";
+            if (focus) focus.className = "macwin-focus graph-focus empty";
+            body.appendChild(graphEl);
+            setTimeout(function () {
+              if (typeof initKnowledgeGraph === "function") {
+                initKnowledgeGraph({
+                  container:           graphEl,
+                  focusPanel:          focus,
+                  knowledge:           window.KNOWLEDGE_DATA,
+                  toolbar:             true,
+                  dispatchTagEvents:   true,
+                  dispatchFocusEvents: false,
+                });
+              }
+            }, 30);
+          },
+        });
+      });
+    });
+  </script>
+</body>
+
+</html>

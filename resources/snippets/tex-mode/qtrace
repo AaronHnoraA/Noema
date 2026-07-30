@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Trace
+# key: qtr
+# group: QC symbols
+# --
+\operatorname{Tr}\!\left(${1:X}\right)$0

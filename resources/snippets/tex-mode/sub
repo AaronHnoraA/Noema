@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Sub Section (no label)
+# key: sub
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/sub_Sub_Section_no_label_
+# --
+# --
+\subsection{$1}
+${0:$TM_SELECTED_TEXT}

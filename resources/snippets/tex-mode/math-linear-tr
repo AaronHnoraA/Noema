@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [tr] — Trace operator
+# key: tr
+# group: Math · Linear algebra
+# --
+\operatorname{tr}$0

@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Ket-bra operator
+# key: qkb
+# group: QC symbols
+# --
+\ket{${1:\psi}}\!\bra{${2:\phi}}$0

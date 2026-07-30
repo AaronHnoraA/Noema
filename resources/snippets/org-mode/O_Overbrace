@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Overbrace
+# key: O
+# --
+\overbrace{ ${VISUAL} }^{ $1 }

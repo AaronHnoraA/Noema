@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Conclusion
+# key: conclusion
+# -- Add a note
+# --
+\begin{conclusion}
+	$1
+\end{conclusion}
+$0

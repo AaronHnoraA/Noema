@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \xi
+# key: \xi
+# uuid: overleaf:\xi
+# contributor: Noema provider=overleaf&priority=160&weight=0.06496042899265699&context=math-command&description=Overleaf+cmd
+# group: Math · overleaf
+# --
+\xi$0

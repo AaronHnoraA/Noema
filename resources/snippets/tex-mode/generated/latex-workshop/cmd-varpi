@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \varpi
+# key: \varpi
+# uuid: latex-workshop:\varpi
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%CF%96%2C+shortcut+%40vp
+# group: Math · latex-workshop
+# --
+\varpi$0

@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Security parameter
+# key: secpar
+# -- Crypto
+# --
+1^{${1:\lambda}}$0

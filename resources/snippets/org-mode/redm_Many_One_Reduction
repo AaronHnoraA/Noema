@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Polynomial many-one reduction
+# key: redm
+# -- TCS
+# --
+${1:A} \le_m^p ${2:B}$0

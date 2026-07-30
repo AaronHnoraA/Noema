@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Trace operator
+# key: Tr
+# -- Quantum
+# --
+\operatorname{Tr}\left(${1:A}\right)$0

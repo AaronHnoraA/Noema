@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [iota] — Iota
+# key: iota
+# group: Math · Greek
+# --
+\iota$0

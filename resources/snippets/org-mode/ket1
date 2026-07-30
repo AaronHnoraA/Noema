@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: ket1
+# key: ket1
+# --
+\lvert 1\rangle $0

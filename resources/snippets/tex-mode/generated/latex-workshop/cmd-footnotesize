@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \footnotesize
+# key: \footnotesize
+# uuid: latex-workshop:\footnotesize
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=
+# group: Math · latex-workshop
+# --
+\footnotesize$0

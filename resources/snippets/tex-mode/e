@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Varepsilon
+# key: :e
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/_e_Varepsilon
+# --
+\varepsilon

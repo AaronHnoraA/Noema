@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Times
+# key: xx
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/xx_Times
+# --
+\times

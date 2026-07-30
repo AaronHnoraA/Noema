@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Definition block
+# key: def
+# group: Noema local
+# --
+#+begin definition ${1:name}
+${2:Definition.}
+#+end definition
+$0

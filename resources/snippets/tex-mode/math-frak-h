@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [frakh] — Fraktur h
+# key: frakh
+# group: Math · Styles
+# --
+\mathfrak{h}$0

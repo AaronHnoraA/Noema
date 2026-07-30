@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: iota
+# key: @i
+# uuid: latex-workshop:@i
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=iota
+# group: Math · latex-workshop
+# --
+\iota

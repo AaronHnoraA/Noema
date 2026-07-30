@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Anticommutator
+# key: anticomm
+# -- Quantum
+# --
+\left\{${1:A}, ${2:B}\right\}$0

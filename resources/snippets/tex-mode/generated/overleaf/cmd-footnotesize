@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \footnotesize
+# key: \footnotesize
+# uuid: overleaf:\footnotesize
+# contributor: Noema provider=overleaf&priority=160&weight=0.2038592081252624&context=math-command&description=Overleaf+cmd
+# group: Math · overleaf
+# --
+\footnotesize$0

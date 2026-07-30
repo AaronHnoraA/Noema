@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Question block
+# key: question
+# group: Noema blocks
+# --
+#+begin question ${1:title}
+${2:Question.}
+#+end question
+$0

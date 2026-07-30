@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Floor
+# key: floor
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/floor_Floor
+# --
+\lfloor $1 \rfloor $2

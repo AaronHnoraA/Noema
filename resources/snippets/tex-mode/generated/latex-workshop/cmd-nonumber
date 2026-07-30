@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \nonumber
+# key: \nonumber
+# uuid: latex-workshop:\nonumber
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=Insert+nonumber%2C+shortcut+%40%2C
+# group: Math · latex-workshop
+# --
+\nonumber$0

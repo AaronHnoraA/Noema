@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \textbf{}
+# key: \textbf{}
+# uuid: latex-workshop:\textbf{}
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=
+# group: Math · latex-workshop
+# --
+\textbf{${1}}$0

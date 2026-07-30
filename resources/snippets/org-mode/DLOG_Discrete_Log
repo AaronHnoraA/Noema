@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Discrete log
+# key: DLOG
+# -- Crypto
+# --
+${1:h}=g^{${2:x}}$0

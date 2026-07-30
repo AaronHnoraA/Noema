@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Negligible
+# key: negl
+# -- Crypto
+# --
+\operatorname{negl}\left(${1:\lambda}\right)$0

@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \fbox{}
+# key: \fbox{}
+# uuid: latex-workshop:\fbox{}
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=
+# group: Math · latex-workshop
+# --
+\fbox{${1:text}}$0

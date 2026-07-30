@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Hadamard on state
+# key: had
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/org-mode/had_Hadamard_On_State
+# --
+# --
+H\lvert ${1:\psi}\rangle$0

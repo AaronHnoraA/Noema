@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \rho
+# key: \rho
+# uuid: latex-workshop:\rho
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%CF%81%2C+shortcut+%40r
+# group: Math · latex-workshop
+# --
+\rho$0

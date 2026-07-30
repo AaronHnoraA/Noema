@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Array
+# key: array
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/array_Array
+# --
+\begin{array}
+$1
+\end{array}

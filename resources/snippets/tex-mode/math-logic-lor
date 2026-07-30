@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [lor] — Logical or
+# key: lor
+# group: Math · Logic
+# --
+\lor$0

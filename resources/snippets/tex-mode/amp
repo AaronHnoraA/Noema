@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Transition amplitude
+# key: amp
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/org-mode/amp_Transition_Amplitude
+# --
+# --
+\langle ${1:\phi}\rvert ${2:A}\lvert ${3:\psi}\rangle $0

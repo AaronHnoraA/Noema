@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Braket
+# key: brk
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/brk_Braket
+# --
+\braket{ $1 | $2 } $3

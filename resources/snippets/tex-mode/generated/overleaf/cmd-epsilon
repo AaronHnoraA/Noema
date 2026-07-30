@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \epsilon
+# key: \epsilon
+# uuid: overleaf:\epsilon
+# contributor: Noema provider=overleaf&priority=160&weight=0.2005136761359043&context=math-command&description=Overleaf+cmd
+# group: Math · overleaf
+# --
+\epsilon$0

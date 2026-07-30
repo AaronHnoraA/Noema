@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Section:Ref
+# key: section:ref
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/section_ref_Section_Ref
+# --
+# --
+${1:Section}~\ref{sec:$2}$0

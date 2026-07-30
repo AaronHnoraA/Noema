@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Omega (uppercase)
+# key: OOOO
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/OOOO_Omega_uppercase_
+# --
+\Omega

@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [thinspace] — Thin math space
+# key: thinspace
+# group: Math · Misc
+# --
+\,$0

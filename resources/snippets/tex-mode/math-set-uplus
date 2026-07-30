@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [uplus] — Disjoint union
+# key: uplus
+# group: Math · Sets
+# --
+\uplus$0

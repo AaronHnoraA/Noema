@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Description
+# key: desc
+# -- Description
+# --
+\begin{description}
+\item[$1] $0
+\end{description}

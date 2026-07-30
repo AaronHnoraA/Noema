@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: Split
+# key: spl
+# -- Split
+# --
+\begin{equation*}
+\begin{split}
+$1 &= $2 \\
+$3 &= $0
+\end{split}
+\end{equation*}

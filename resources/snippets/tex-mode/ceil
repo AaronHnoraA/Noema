@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Ceiling
+# key: ceil
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/ceil_Ceiling
+# --
+\lceil $1 \rceil $2

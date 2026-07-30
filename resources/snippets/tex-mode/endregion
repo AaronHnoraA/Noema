@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Region End
+# key: #endregion
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/_endregion_Region_End
+# --
+# --
+%#Endregion

@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Hash function
+# key: hash
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/org-mode/hash_Hash_Function
+# --
+# --
+${1:H}: \{0,1\}^* \to \{0,1\}^{${2:\lambda}}$0

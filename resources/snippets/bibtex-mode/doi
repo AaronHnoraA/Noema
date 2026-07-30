@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: doi field
+# key: doi
+# group: BibTeX fields
+# --
+doi = {${1:10.}},
+$0

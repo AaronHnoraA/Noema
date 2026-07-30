@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Big O
+# key: bigO
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/org-mode/bigO_Big_O
+# --
+# --
+O\left(${1:f(n)}\right)$0

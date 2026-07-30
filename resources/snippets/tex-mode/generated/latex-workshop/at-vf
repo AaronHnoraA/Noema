@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: varphi
+# key: @vf
+# uuid: latex-workshop:@vf
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=varphi
+# group: Math · latex-workshop
+# --
+\varphi

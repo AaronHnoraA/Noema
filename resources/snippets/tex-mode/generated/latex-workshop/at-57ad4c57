@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: nonumber
+# key: @,
+# uuid: latex-workshop:@,
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=nonumber
+# group: Math · latex-workshop
+# --
+\nonumber

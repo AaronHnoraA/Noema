@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Iota
+# key: iiii
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/iiii_Iota
+# --
+\iota

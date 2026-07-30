@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: change
+# key: change
+# -- Add a change
+# --
+\begin{change}
+	$1
+\end{change}
+$0

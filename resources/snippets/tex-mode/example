@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: Example
+# key: example
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/example_Example
+# --
+# --
+\begin{example}
+	$1
+\end{example}
+$0

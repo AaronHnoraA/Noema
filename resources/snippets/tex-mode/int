@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Integral
+# key: int
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/int_Integral
+# --
+\int $1 \, d$2 $3

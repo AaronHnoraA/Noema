@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \kappa
+# key: \kappa
+# uuid: overleaf:\kappa
+# contributor: Noema provider=overleaf&priority=160&weight=0.04887876299369008&context=math-command&description=Overleaf+cmd
+# group: Math · overleaf
+# --
+\kappa$0

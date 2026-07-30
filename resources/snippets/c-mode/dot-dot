@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: .. => -> (eat spaces, no newline)
+# key: ..
+# type: command
+# condition: (not (nth 8 (syntax-ppss))) ;; 不在注释/字符串
+# --
+(progn
+  ;; 如果是 "p .." 这种情况，吃掉光标前空格，得到 "p->"
+  (when (looking-back "[ \t]+" (line-beginning-position))
+    (delete-region (match-beginning 0) (match-end 0)))
+  (insert "->"))

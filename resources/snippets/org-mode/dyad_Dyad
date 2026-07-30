@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Dyad
+# key: dyad
+# -- Quantum
+# --
+\lvert ${1:\phi}\rangle\langle ${2:\psi}\rvert $0

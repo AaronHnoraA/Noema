@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \newline
+# key: \newline
+# uuid: latex-workshop:\newline
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=
+# group: Math · latex-workshop
+# --
+\newline$0

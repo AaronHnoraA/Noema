@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \upsilon
+# key: \upsilon
+# uuid: latex-workshop:\upsilon
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%CF%85%2C+shortcut+%40u
+# group: Math · latex-workshop
+# --
+\upsilon$0

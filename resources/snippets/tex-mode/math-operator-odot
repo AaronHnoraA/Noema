@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [odot] — Circled dot
+# key: odot
+# group: Math · Operators
+# --
+\odot$0

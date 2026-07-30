@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Noema planning project
+# key: approject
+# group: Noema planning DSL
+# --
+@@project(${1:active}) ${2:Project name} {}$0

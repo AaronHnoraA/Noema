@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Generic org-env block
+# key: org
+# group: Noema blocks
+# --
+#+begin ${1:note} ${2:title}
+${3:Content.}
+#+end ${1:note}
+$0

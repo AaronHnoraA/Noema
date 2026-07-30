@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: Proposition (no label)
+# key: proposition
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/proposition_Proposition_no_label_
+# --
+# --
+\begin{proposition}{$1}
+		$2
+\end{proposition}
+$0

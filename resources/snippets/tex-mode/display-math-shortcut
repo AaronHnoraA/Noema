@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Display math
+# key: :
+# group: LaTeX local
+# --
+$$
+${1:}
+$$
+$0

@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \Delta
+# key: \Delta
+# uuid: overleaf:\Delta
+# contributor: Noema provider=overleaf&priority=160&weight=0.21386475063892618&context=math-command&description=Overleaf+cmd
+# group: Math · overleaf
+# --
+\Delta$0

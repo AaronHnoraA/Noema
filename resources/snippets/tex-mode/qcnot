@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: CNOT gate
+# key: qcx
+# group: QC symbols
+# --
+\operatorname{CNOT}$0

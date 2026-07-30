@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Org GeoGebra raw TikZ block
+# key: ggbraw
+# --
+#+name: ggb-raw-`(format-time-string "%Y%m%dT%H%M%S")`
+#+begin_src latex :eval never :exports none :results none
+$0
+#+end_src

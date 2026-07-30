@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [rank] — Rank operator
+# key: rank
+# group: Math · Linear algebra
+# --
+\operatorname{rank}$0

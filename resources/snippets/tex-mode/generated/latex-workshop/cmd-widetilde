@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \widetilde{}
+# key: \widetilde{}
+# uuid: latex-workshop:\widetilde{}
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%C2%A0%CC%83
+# group: Math · latex-workshop
+# --
+\widetilde{$1}$0

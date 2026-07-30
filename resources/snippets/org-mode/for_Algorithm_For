@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Algorithm:For
+# key: for
+# --
+\For{i=0:$1}
+	\State $0
+\EndFor

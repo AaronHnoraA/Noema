@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Dagger
+# key: dag
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/dag_Dagger
+# --
+^{\dagger}

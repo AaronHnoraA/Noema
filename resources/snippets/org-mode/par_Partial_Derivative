@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Partial Derivative
+# key: par
+# --
+\frac{ \partial $1 }{ \partial $2 } $3

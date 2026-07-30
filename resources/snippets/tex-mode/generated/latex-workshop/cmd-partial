@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \partial
+# key: \partial
+# uuid: latex-workshop:\partial
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%E2%88%82%2C+shortcut+%406
+# group: Math · latex-workshop
+# --
+\partial$0

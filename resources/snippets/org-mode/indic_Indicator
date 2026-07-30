@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Indicator
+# key: indic
+# -- TCS
+# --
+\mathbf{1}\left\{${1:E}\right\}$0

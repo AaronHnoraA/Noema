@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [bot] — False / bottom
+# key: bot
+# group: Math · Logic
+# --
+\bot$0

@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Assumption block
+# key: assume
+# group: Noema blocks
+# --
+#+begin assumption ${1:name}
+${2:Assumption.}
+#+end assumption
+$0

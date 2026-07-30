@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Org shell src block
+# key: srcsh
+# --
+#+begin_src sh${1:}
+$0
+#+end_src

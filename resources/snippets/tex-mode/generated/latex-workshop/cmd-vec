@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \vec{}
+# key: \vec{}
+# uuid: latex-workshop:\vec{}
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=
+# group: Math · latex-workshop
+# --
+\vec{$1}$0

@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Set Minus
+# key: \\\
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/_Set_Minus
+# --
+\setminus

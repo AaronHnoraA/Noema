@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Delta (uppercase)
+# key: DDDD
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/DDDD_Delta_uppercase_
+# --
+\Delta

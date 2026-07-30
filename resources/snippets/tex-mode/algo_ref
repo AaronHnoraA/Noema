@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Algorithm:Ref
+# key: algo:ref
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/algo_ref_Algorithm_Ref
+# --
+${1:Algorithm}~\ref{algo:$2}$0

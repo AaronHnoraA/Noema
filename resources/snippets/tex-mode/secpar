@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Security parameter
+# key: secpar
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/org-mode/secpar_Security_Parameter
+# --
+# --
+1^{${1:\lambda}}$0

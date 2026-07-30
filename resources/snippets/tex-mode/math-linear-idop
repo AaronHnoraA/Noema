@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [idop] — Identity operator
+# key: idop
+# group: Math · Linear algebra
+# --
+\operatorname{id}$0

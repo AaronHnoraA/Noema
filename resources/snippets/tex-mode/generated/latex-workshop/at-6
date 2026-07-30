@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: partial
+# key: @6
+# uuid: latex-workshop:@6
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=partial+derivative+symbol
+# group: Math · latex-workshop
+# --
+\partial

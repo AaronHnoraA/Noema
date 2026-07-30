@@ -1,0 +1,10 @@
+# -*- mode: snippet -*-
+# name: Org attention block
+# key: attention
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/org-mode/attention_Org_Attention_Block
+# --
+# --
+#+begin_attention
+$0
+#+end_attention

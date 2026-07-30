@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Read Yaml
+# key: ryaml
+# --
+with open(${1:yamlfile}, 'r') as f:
+	${2:content} = yaml.safe_load(f)
+	${0}

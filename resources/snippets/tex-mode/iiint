@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Triple Integral
+# key: iiint
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/iiint_Triple_Integral
+# --
+\iiint

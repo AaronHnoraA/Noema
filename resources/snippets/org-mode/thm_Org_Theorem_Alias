@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Org theorem alias block
+# key: thm
+# -- Org special block alias
+# --
+#+begin_thm
+$0
+#+end_thm

@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \sum
+# key: \sum
+# uuid: latex-workshop:\sum
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%E2%88%91
+# group: Math · latex-workshop
+# --
+\sum$0

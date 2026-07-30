@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \check{}
+# key: \check{}
+# uuid: latex-workshop:\check{}
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%C2%A0%CC%8C
+# group: Math · latex-workshop
+# --
+\check{$1}$0

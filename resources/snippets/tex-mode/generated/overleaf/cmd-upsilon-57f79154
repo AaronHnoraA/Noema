@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \Upsilon
+# key: \Upsilon
+# uuid: overleaf:\Upsilon
+# contributor: Noema provider=overleaf&priority=160&weight=0.00032875192955749566&context=math-command&description=Overleaf+cmd
+# group: Math · overleaf
+# --
+\Upsilon$0

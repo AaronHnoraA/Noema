@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [restrict] — Restriction
+# key: restrict
+# group: Math · Recent notes
+# --
+\left.${1:A}\right|_{${2:S}}$0

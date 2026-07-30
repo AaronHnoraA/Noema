@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [vdots] — Vertical dots
+# key: vdots
+# group: Math · Misc
+# --
+\vdots$0

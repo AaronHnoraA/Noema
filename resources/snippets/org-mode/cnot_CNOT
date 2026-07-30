@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: CNOT
+# key: cnot
+# -- Quantum
+# --
+\operatorname{CNOT}$0

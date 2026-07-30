@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [bbC] — Complex numbers
+# key: bbC
+# group: Math · Blackboard
+# --
+\mathbb{C}$0

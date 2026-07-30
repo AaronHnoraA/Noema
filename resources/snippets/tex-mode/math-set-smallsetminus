@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [smallsetminus] — Small set difference
+# key: smallsetminus
+# group: Math · Sets
+# --
+\smallsetminus$0

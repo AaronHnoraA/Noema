@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [ker] — Kernel operator
+# key: ker
+# group: Math · Linear algebra
+# --
+\ker$0

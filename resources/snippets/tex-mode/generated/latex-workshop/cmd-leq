@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \leq
+# key: \leq
+# uuid: latex-workshop:\leq
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%E2%89%A4%2C+shortcut+%40%3C
+# group: Math · latex-workshop
+# --
+\leq$0

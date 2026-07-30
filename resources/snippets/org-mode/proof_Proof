@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Org proof block
+# key: proof
+# -- Org special block
+# --
+#+begin_proof
+$0
+#+end_proof

@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Region End
+# key: #endregion
+# -- Folding Region End
+# --
+%#Endregion

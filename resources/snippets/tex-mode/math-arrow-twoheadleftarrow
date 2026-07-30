@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [twoheadleftarrow] — Surjective left arrow
+# key: twoheadleftarrow
+# group: Math · Arrows
+# --
+\twoheadleftarrow$0

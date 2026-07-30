@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Variance
+# key: var
+# -- TCS
+# --
+\operatorname{Var}\left[${1:X}\right]$0

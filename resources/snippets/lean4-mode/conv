@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: conv tactic
+# key: conv
+# group: tactics
+# --
+conv in ${1:expr} => $0

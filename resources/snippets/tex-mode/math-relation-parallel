@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [parallel] — Parallel
+# key: parallel
+# group: Math · Relations
+# --
+\parallel$0

@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: mathtt
+# key: MTT
+# uuid: latex-workshop:MTT
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math&description=math+typewriter+font
+# group: Math · latex-workshop
+# --
+\mathtt{${1:`(or yas-selected-text "text")`}}

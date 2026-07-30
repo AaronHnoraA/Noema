@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [powerset] — Power set
+# key: powerset
+# group: Math · Sets
+# --
+\mathcal{P}\!\left(${1:S}\right)$0

@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [bbQ] — Rationals
+# key: bbQ
+# group: Math · Blackboard
+# --
+\mathbb{Q}$0

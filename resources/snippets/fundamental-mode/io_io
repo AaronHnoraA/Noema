@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: io
+# key: io
+# --
+def main : IO Unit := do
+  $1
+  return ()

@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \Sigma
+# key: \Sigma
+# uuid: overleaf:\Sigma
+# contributor: Noema provider=overleaf&priority=160&weight=0.05769642802079917&context=math-command&description=Overleaf+cmd
+# group: Math · overleaf
+# --
+\Sigma$0

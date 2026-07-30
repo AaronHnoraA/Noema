@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Bar Accent
+# key: bar
+# --
+\bar{$1}$2

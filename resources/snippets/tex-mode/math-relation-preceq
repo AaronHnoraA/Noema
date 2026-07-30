@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [preceq] — Precedes or equal
+# key: preceq
+# group: Math · Relations
+# --
+\preceq$0

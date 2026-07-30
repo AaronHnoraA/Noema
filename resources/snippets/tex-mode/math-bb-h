@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [bbH] — Quaternions / Hilbert space
+# key: bbH
+# group: Math · Blackboard
+# --
+\mathbb{H}$0

@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Cube
+# key: cb
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/cb_Cube
+# --
+^{3}

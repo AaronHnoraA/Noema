@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \Bigl(
+# key: \Bigl(
+# uuid: latex-workshop:\Bigl(
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%5CBigl%28+...+%5CBigr%29
+# group: Math · latex-workshop
+# --
+\Bigl(${1}\Bigr)$0

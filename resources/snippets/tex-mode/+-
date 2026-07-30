@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Plus-Minus
+# key: +-
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/+-_Plus-Minus
+# --
+\pm

@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \displaystyle
+# key: \displaystyle
+# uuid: latex-workshop:\displaystyle
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=
+# group: Math · latex-workshop
+# --
+\displaystyle$0

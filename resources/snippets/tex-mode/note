@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: Note
+# key: note
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/note_Note
+# --
+# --
+\begin{note}
+	$1
+\end{note}
+$0

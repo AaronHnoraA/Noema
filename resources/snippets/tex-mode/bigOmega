@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Big Omega
+# key: bigOmega
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/org-mode/bigOmega_Big_Omega
+# --
+# --
+\Omega\left(${1:f(n)}\right)$0

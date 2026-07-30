@@ -1,0 +1,17 @@
+# -*- mode: snippet -*-
+# name: Table:ACM
+# key: table:acm
+# -- Add a table (ACM)
+# --
+\begin{table}
+	\caption{$1}\label{tab:$2}
+	\begin{tabular}{${3:ccl}}
+		\toprule
+		$4
+		a & b & c \\\\
+		\midrule
+		d & e & f \\\\
+		\bottomrule
+	\end{tabular}
+\end{table}
+$0

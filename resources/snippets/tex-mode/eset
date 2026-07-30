@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Empty Set
+# key: eset
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/eset_Empty_Set
+# --
+\emptyset

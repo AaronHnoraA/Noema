@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \times
+# key: \times
+# uuid: latex-workshop:\times
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%C3%97%2C+shortcut+%40*
+# group: Math · latex-workshop
+# --
+\times$0

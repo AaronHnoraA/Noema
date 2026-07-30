@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: omega
+# key: @o
+# uuid: latex-workshop:@o
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=omega
+# group: Math · latex-workshop
+# --
+\omega

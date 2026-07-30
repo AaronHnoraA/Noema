@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: Introduction
+# key: introduction
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/introduction_Introduction
+# --
+# --
+\begin{introduction}
+	$1
+\end{introduction}
+$0

@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Tabular (no label)
+# key: tab
+# -- Tabular without label
+# --
+\begin{tabular}{${1:c}}
+$0
+\end{tabular}

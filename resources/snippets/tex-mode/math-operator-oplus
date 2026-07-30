@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [oplus] — Direct sum
+# key: oplus
+# group: Math · Operators
+# --
+\oplus$0

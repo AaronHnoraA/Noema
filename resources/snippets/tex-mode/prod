@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Product
+# key: prod
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/prod_Product
+# --
+\prod

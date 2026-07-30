@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [leq] — Less than or equal
+# key: leq
+# group: Math · Relations
+# --
+\leq$0

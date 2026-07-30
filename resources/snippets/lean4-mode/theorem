@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: theorem declaration
+# key: thm
+# group: declarations
+# --
+theorem ${1:name} ${2:(${3:args} : ${4:Type})} : ${5:statement} := by
+  $0

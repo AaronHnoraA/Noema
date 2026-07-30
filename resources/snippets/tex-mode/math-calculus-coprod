@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [coprod] — Coproduct operator
+# key: coprod
+# group: Math · Calculus
+# --
+\coprod$0

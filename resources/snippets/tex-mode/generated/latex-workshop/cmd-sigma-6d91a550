@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \Sigma
+# key: \Sigma
+# uuid: latex-workshop:\Sigma
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%CE%A3%2C+shortcut+%40S
+# group: Math · latex-workshop
+# --
+\Sigma$0

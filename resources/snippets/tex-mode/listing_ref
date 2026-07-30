@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Listing:Ref
+# key: listing:ref
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/listing_ref_Listing_Ref
+# --
+# --
+${1:Listing}~\ref{lst:$2}$0

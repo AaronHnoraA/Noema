@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Square Root
+# key: sq
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/sq_Square_Root
+# --
+\sqrt{ $1 }$2

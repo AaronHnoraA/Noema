@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Set
+# key: set
+# --
+\{ $1 \}$2

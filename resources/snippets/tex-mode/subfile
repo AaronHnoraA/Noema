@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Subfile
+# key: subfile
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/subfile_Subfile
+# --
+# --
+\subfile{$1}
+$0

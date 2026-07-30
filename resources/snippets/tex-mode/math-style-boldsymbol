@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [boldsymbol] — Bold symbol
+# key: boldsymbol
+# group: Math · Styles
+# --
+\boldsymbol{${1:\alpha}}$0

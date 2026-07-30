@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: tau
+# key: @t
+# uuid: latex-workshop:@t
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=tau
+# group: Math · latex-workshop
+# --
+\tau

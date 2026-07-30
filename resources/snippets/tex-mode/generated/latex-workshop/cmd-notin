@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \notin
+# key: \notin
+# uuid: latex-workshop:\notin
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%E2%88%89
+# group: Math · latex-workshop
+# --
+\notin$0

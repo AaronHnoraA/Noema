@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Observation block
+# key: obs
+# group: Noema blocks
+# --
+#+begin observation ${1:title}
+${2:Observation.}
+#+end observation
+$0

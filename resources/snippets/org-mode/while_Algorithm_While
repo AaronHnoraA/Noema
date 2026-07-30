@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Algorithm:While
+# key: while
+# --
+\While{$1}
+	\State $0
+\EndWhile

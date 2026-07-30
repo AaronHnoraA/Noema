@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: [
+# key: @[
+# uuid: latex-workshop:@[
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=left%5B+...+right%5D
+# group: Math · latex-workshop
+# --
+\left[ ${1:`(or yas-selected-text "")`} \right]

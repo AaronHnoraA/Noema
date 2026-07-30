@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Pauli matrices
+# key: qpauli
+# group: QC symbols
+# --
+\sigma_{${1:x}}$0

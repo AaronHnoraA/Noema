@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Definition (with label)
+# key: defl
+# -- Add a definition with label
+# --
+\begin{definition}{$1}\label{def:$1}
+	$2
+\end{definition}
+$0

@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Sum
+# key: sum
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/sum_Sum
+# --
+\sum

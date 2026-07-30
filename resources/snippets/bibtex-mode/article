@@ -1,0 +1,17 @@
+# -*- mode: snippet -*-
+# name: @article
+# key: article
+# group: BibTeX
+# --
+@article{${1:key},
+  author = {${2:author}},
+  title = {${3:title}},
+  journal = {${4:journal}},
+  year = {${5:year}},
+  volume = {${6:volume}},
+  number = {${7:number}},
+  pages = {${8:pages}},
+  doi = {${9:doi}},
+  url = {${10:url}}
+}
+$0

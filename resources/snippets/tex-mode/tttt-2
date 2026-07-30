@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Theta (lowercase)
+# key: tttt
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/tttt_Theta_lowercase_
+# --
+\theta

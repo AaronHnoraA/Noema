@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Chapter (no label)
+# key: cha
+# -- Chapter without label
+# --
+\chapter{$1}
+${0:$TM_SELECTED_TEXT}

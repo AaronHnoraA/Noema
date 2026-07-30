@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: Theorem (with label)
+# key: thml
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/thml_Theorem_with_label_
+# --
+# --
+\begin{theorem}{$1}\label{thm:$1}
+	$2
+\end{theorem}
+$0

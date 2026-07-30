@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \beta
+# key: \beta
+# uuid: latex-workshop:\beta
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%CE%B2%2C+shortcut+%40b
+# group: Math · latex-workshop
+# --
+\beta$0

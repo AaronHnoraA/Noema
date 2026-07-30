@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Rank
+# key: mrank
+# group: Math symbols
+# --
+\operatorname{rank}\!\left(${1:A}\right)$0

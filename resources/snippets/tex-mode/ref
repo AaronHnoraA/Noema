@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Reference
+# key: ref
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/ref_Reference
+# --
+# --
+\ref{$1: $2}$0

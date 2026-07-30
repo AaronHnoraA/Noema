@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Polynomial Turing reduction
+# key: redT
+# -- TCS
+# --
+${1:A} \le_T^p ${2:B}$0

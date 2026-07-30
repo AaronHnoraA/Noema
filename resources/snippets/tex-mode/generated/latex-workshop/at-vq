@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: vartheta
+# key: @vq
+# uuid: latex-workshop:@vq
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=vartheta
+# group: Math · latex-workshop
+# --
+\vartheta

@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Lemma block
+# key: lem
+# group: Noema local
+# --
+#+begin lemma ${1:name}
+${2:Statement.}
+#+end lemma
+$0

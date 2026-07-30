@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: varepsilon
+# key: @ve
+# uuid: latex-workshop:@ve
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=varepsilon
+# group: Math · latex-workshop
+# --
+\varepsilon

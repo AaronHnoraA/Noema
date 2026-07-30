@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Section (no label)
+# key: sec
+# -- Section without label
+# --
+\section{$1}
+${0:$TM_SELECTED_TEXT}

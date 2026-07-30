@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Noema planning local todo
+# key: aptodo
+# group: Noema planning DSL
+# --
+@@todo(${1:todo}) [${2:Task}]$0

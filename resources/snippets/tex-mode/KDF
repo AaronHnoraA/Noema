@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Key derivation function
+# key: KDF
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/org-mode/KDF_Key_Derivation
+# --
+# --
+\operatorname{KDF}\left(${1:K}, ${2:info}\right)$0

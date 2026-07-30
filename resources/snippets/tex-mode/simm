@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Similar To
+# key: simm
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/simm_Similar_To
+# --
+\sim

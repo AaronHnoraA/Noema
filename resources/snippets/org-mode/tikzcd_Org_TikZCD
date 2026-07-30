@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: Org tikz-cd block
+# key: tikzcd
+# --
+#+begin_display_latex
+\begin{tikzcd}
+${1:A} \arrow[r, "${2:f}"] \arrow[d, "${3:g}"'] & ${4:B} \arrow[d, "${5:h}"] \\
+${6:C} \arrow[r, "${7:k}"'] & ${8:D}
+\end{tikzcd}
+#+end_display_latex
+$0

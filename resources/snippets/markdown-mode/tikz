@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: TikZ diagram
+# key: tikz
+# group: Noema blocks
+# --
+#+ begin tikz ${1:diagram-id} ${2:20260525-120000}
+\draw[->] (0,0) -- (2,0) node[right] {$x$};
+\draw[->] (0,0) -- (0,2) node[above] {$y$};
+\draw[domain=0:1.4, smooth, variable=\x, blue] plot ({\x},{\x*\x});
+$0
+#+ end tikz

@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: eta
+# key: @h
+# uuid: latex-workshop:@h
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=eta
+# group: Math · latex-workshop
+# --
+\eta

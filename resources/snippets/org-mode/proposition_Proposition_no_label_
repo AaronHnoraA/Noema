@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Org proposition full block
+# key: proposition
+# -- Org special block
+# --
+#+begin_proposition
+$0
+#+end_proposition

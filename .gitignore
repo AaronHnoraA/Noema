@@ -1,0 +1,50 @@
+# Dependencies and generated output
+node_modules/
+build/
+dist/
+release/
+coverage/
+dist-ssr/
+*.tsbuildinfo
+
+# Logs and runtime state
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+var/
+tmp/
+*.pid
+*.local
+.env
+.env.*
+!.env.example
+
+# Noema-owned Jupyter runtime state
+jupyter/.venv/
+jupyter/.jupyter/
+jupyter/labextension/lib/
+jupyter/labextension/node_modules/
+jupyter/labextension/style/aaronnote-embedded.css
+.ipynb_checkpoints/
+.virtual_documents/
+.yarn/
+.yarnrc.yml
+yarn.lock
+.pnp.cjs
+.pnp.loader.mjs
+
+# Editor and operating-system files
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Icon?
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

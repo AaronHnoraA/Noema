@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: varsigma
+# key: @vs
+# uuid: latex-workshop:@vs
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=varsigma
+# group: Math · latex-workshop
+# --
+\varsigma

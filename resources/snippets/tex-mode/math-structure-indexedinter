@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [indexedinter] — Indexed intersection
+# key: indexedinter
+# group: Math · Recent notes
+# --
+\bigcap_{${1:i\in I}} ${2:S_i}$0

@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Subscript
+# key: _
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/_Subscript
+# --
+_{$1}$2

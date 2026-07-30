@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Sub Section (with label)
+# key: subl
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/subl_Sub_Section_with_label_
+# --
+# --
+\subsection{$1}\label{sub:$1}
+${0:$TM_SELECTED_TEXT}

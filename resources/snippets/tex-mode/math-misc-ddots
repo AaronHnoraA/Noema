@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [ddots] — Diagonal dots
+# key: ddots
+# group: Math · Misc
+# --
+\ddots$0

@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: item
+# key: item
+# -- Add a lemma
+# --
+\item $1

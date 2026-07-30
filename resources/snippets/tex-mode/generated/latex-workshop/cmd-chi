@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \chi
+# key: \chi
+# uuid: latex-workshop:\chi
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%CF%87%2C+shortcut+%40c
+# group: Math · latex-workshop
+# --
+\chi$0

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Academic Typesetting"
+  short_description: "Audit restrained academic LaTeX typography and layout"
+  default_prompt: "Use $academic-typesetting to audit and refine this LaTeX body layout."

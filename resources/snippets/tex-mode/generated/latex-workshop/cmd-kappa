@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \kappa
+# key: \kappa
+# uuid: latex-workshop:\kappa
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%CE%BA%2C+shortcut+%40k
+# group: Math · latex-workshop
+# --
+\kappa$0

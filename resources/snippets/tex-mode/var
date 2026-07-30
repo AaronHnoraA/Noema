@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Variance
+# key: var
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/org-mode/var_Variance
+# --
+# --
+\operatorname{Var}\left[${1:X}\right]$0

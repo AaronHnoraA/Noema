@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: Solution
+# key: solution
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/solution_Solution
+# --
+# --
+\begin{solution}
+	$1
+\end{solution}
+$0

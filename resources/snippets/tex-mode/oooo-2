@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Omega (lowercase)
+# key: oooo
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/oooo_Omega_lowercase_
+# --
+\omega

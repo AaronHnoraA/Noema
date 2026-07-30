@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Ket
+# key: ket
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/ket_Ket
+# --
+\ket{$1} $2

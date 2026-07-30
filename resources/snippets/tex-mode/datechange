@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Datechange
+# key: datechange
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/datechange_Datechange
+# --
+# --
+\datechange{$1}{$2}$0

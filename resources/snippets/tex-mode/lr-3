@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Left-Right Braces
+# key: lr{
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/lr_Left-Right_Braces
+# --
+\left\{ $1 \right\} $2

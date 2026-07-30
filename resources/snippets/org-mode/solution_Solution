@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Org solution block
+# key: solution
+# -- Org special block
+# --
+#+begin_solution
+$0
+#+end_solution

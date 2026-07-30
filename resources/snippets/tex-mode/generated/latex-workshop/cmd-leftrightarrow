@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \Leftrightarrow
+# key: \Leftrightarrow
+# uuid: latex-workshop:\Leftrightarrow
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%E2%87%94
+# group: Math · latex-workshop
+# --
+\Leftrightarrow$0

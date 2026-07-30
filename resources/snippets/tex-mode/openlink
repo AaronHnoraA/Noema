@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: NasOpenlink
+# key: openlink
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/openlink_NasOpenlink
+# --
+# --
+http://10.31.2.53/openlink.html?link=$0

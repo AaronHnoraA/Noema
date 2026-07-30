@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [bigodot] — Big circled dot
+# key: bigodot
+# group: Math · Operators
+# --
+\bigodot$0

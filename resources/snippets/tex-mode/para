@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Parallel
+# key: para
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/para_Parallel
+# --
+\parallel

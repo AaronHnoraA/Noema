@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: Equation
+# key: equation
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/equation_Equation
+# --
+# --
+\begin{equation}
+	$0
+	\label{eq:$1}
+\end{equation}

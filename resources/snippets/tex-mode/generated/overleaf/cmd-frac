@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \frac{}{}
+# key: \frac
+# uuid: overleaf:\frac
+# contributor: Noema provider=overleaf&priority=160&weight=1.4341091141105058&context=math-command&description=Overleaf+cmd
+# group: Math · overleaf
+# --
+\frac{$1}{$2}$0

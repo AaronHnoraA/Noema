@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: canvas
+# key: canvas
+# --
+c = ROOT.TCanvas("c", "c", 800, 600)
+${2}
+c.SaveAs("${1:test.pdf}")

@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Double Dot Accent
+# key: ddot
+# --
+\ddot{$1}$2

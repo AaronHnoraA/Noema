@@ -1,0 +1,6 @@
+# -*- mode: snippet; require-final-newline: nil -*-
+# name: Org target link
+# key: tlink
+# -- Insert an Org target link
+# --
+[[${1:target}][$2]]$0

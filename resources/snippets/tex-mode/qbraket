@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Bra-ket inner product
+# key: qbr
+# group: QC symbols
+# --
+\braket{${1:\phi}|${2:\psi}}$0

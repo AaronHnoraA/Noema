@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: yearpol
+# key: year
+# --
+ps.add_argument("--year", choices=["16", "17", "18"])
+ps.add_argument("--pol", choices=["Down", "Up"])
+year = args.year
+pol = args.pol

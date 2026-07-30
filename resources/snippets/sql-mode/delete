@@ -1,0 +1,10 @@
+# -*- mode: snippet -*-
+# name: delete
+# key: delete
+# --
+
+<select name='delete $0`(yank)`'>
+ DELETE FROM $0`(yank)`
+ WHERE id=$1
+ LIMIT 1
+</select>

@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \acute{}
+# key: \acute{}
+# uuid: latex-workshop:\acute{}
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%C2%A0%CC%81
+# group: Math · latex-workshop
+# --
+\acute{$1}$0

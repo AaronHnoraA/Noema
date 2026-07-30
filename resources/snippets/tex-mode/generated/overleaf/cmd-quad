@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \quad
+# key: \quad
+# uuid: overleaf:\quad
+# contributor: Noema provider=overleaf&priority=160&weight=0.15242755832392743&context=math-command&description=Overleaf+cmd
+# group: Math · overleaf
+# --
+\quad$0

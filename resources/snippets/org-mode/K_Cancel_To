@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Cancel To
+# key: K
+# --
+\cancelto{ $1 }{ ${VISUAL} }

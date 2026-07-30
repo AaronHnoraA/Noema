@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: mathsf
+# key: MSF
+# uuid: latex-workshop:MSF
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math&description=math+sans+serif+font
+# group: Math · latex-workshop
+# --
+\mathsf{${1:`(or yas-selected-text "text")`}}

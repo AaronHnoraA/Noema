@@ -1,0 +1,12 @@
+# -*- mode: snippet -*-
+# name: Figure:ACM
+# key: figure:acm
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/figure_acm_Figure_ACM
+# --
+# --
+\begin{figure}
+	\includegraphics[width=0.45\textwidth]{figures/$1}
+	\caption{$2}\label{fig:$3}
+\end{figure}
+$0

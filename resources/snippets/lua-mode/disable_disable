@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: disable
+# key: disable
+# --
+enabled = false,

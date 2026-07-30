@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: constructor + focus
+# key: con
+# group: tactics
+# --
+constructor
+· $0
+· sorry

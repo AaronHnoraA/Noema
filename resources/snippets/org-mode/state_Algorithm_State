@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Algorithm:State
+# key: state
+# --
+\State $1

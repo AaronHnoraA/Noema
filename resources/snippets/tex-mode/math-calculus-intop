@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [intop] — Integral operator
+# key: intop
+# group: Math · Calculus
+# --
+\int$0

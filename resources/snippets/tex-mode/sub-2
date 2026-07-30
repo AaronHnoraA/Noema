@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Subset Equal
+# key: sub=
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/sub_Subset_Equal
+# --
+\subseteq

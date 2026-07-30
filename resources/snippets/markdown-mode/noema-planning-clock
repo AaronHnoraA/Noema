@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Noema planning clock
+# key: apclock
+# group: Noema planning DSL
+# --
+@@clock ${1:Task} {}$0

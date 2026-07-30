@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Less or Equal
+# key: <=
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/_Less_or_Equal
+# --
+\leq

@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \supset
+# key: \supset
+# uuid: latex-workshop:\supset
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%E2%8A%83
+# group: Math · latex-workshop
+# --
+\supset$0

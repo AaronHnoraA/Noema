@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: Problemset
+# key: problemset
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/problemset_Problemset
+# --
+# --
+\begin{problemset}
+	$1
+\end{problemset}
+$0

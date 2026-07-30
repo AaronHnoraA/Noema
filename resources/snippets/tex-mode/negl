@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Negligible
+# key: negl
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/org-mode/negl_Negligible
+# --
+# --
+\operatorname{negl}\left(${1:\lambda}\right)$0

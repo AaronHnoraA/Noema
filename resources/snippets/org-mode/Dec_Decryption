@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Decryption
+# key: Dec
+# -- Crypto
+# --
+${1:m} := \operatorname{Dec}_{${2:sk}}\left(${3:c}\right)$0

@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \begin{}…\end{}
+# key: begin
+# -- Begin - End
+# --
+\begin{${1:env}}
+$2
+\end{${1:env}}

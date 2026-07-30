@@ -1,0 +1,14 @@
+{
+  "argv": [
+    "@AARONNOTE_JUPYTER_ROOT@/bin/python-jupyter-kernel",
+    "-m",
+    "bash_kernel",
+    "-f",
+    "{connection_file}"
+  ],
+  "display_name": "Bash",
+  "language": "bash",
+  "metadata": {
+    "debugger": false
+  }
+}

@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \tilde{}
+# key: \tilde{}
+# uuid: latex-workshop:\tilde{}
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%C2%A0%CC%83
+# group: Math · latex-workshop
+# --
+\tilde{$1}$0

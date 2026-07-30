@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Org answer block
+# key: answer
+# -- Org special block
+# --
+#+begin_answer
+$0
+#+end_answer

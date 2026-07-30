@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \zeta
+# key: \zeta
+# uuid: overleaf:\zeta
+# contributor: Noema provider=overleaf&priority=160&weight=0.023330249803752954&context=math-command&description=Overleaf+cmd
+# group: Math · overleaf
+# --
+\zeta$0

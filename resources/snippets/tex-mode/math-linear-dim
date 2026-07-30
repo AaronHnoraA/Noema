@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [dim] — Dimension operator
+# key: dim
+# group: Math · Linear algebra
+# --
+\dim$0

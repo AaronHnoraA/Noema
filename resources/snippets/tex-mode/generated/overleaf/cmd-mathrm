@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \mathrm{}
+# key: \mathrm
+# uuid: overleaf:\mathrm
+# contributor: Noema provider=overleaf&priority=160&weight=0.19117752976172653&context=math-command&description=Overleaf+cmd
+# group: Math · overleaf
+# --
+\mathrm{$1}$0

@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Bra
+# key: bra
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/bra_Bra
+# --
+\bra{$1} $2

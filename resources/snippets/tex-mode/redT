@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Polynomial Turing reduction
+# key: redT
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/org-mode/redT_Turing_Reduction
+# --
+# --
+${1:A} \le_T^p ${2:B}$0

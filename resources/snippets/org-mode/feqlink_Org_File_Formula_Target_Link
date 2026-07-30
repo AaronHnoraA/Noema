@@ -1,0 +1,6 @@
+# -*- mode: snippet; require-final-newline: nil -*-
+# name: Org file formula target link
+# key: feqlink
+# -- Insert an Org cross-file formula target link
+# --
+[[file:${1:path.org}::<<eq-${2:id}>>][$3]]$0

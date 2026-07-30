@@ -1,0 +1,137 @@
+{
+  "name": "noema",
+  "version": "0.3.1",
+  "description": "Noema: a roam-centered Typora-style Markdown editor.",
+  "license": "AGPL-3.0-only",
+  "author": "Yanzhen Yu",
+  "engines": {
+    "node": "26.5.0",
+    "npm": "11.17.0"
+  },
+  "packageManager": "npm@11.17.0",
+  "repository": {
+    "type": "git",
+    "url": "Noema/Noema.git"
+  },
+  "type": "module",
+  "main": "./desktop/main.mjs",
+  "module": "./dist/lib/typora-web.js",
+  "exports": {
+    ".": {
+      "import": "./dist/lib/typora-web.js"
+    },
+    "./widgets.css": "./src/styles/widgets.css",
+    "./theme-typora.css": "./src/styles/theme-typora.css"
+  },
+  "files": [
+    "dist/lib",
+    "src/styles",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "scripts": {
+    "dev": "vp dev",
+    "start:vite": "vp dev --config vite.aaronnote.config.ts --host 127.0.0.1",
+    "build:aaronnote": "tsc && vp build --config vite.aaronnote.config.ts",
+    "build:desktop": "node --check desktop/main.mjs && node --check web-host.mjs && npm run build:aaronnote && electron-builder --mac dir",
+    "build": "tsc && vp build",
+    "build:lib": "tsc && vp build --config vite.lib.config.ts",
+    "jupyter:bootstrap": "bash jupyter/scripts/bootstrap-jupyter.sh",
+    "preview": "vp preview",
+    "snippets:migrate-nvim": "node scripts/migrate-yas-to-nvim-snippets.mjs",
+    "snippets:sync": "node scripts/sync-math-snippets.mjs --check",
+    "test": "vp test --run",
+    "prepublishOnly": "npm run build:lib"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "^14.1.2",
+    "@types/requirejs": "2.1.37",
+    "@types/turndown": "^5.0.6",
+    "@types/ws": "8.18.1",
+    "electron": "^37.8.0",
+    "electron-builder": "^26.0.12",
+    "happy-dom": "^20.9.0",
+    "postcss": "^8.5.15",
+    "typescript": "~6.0.2",
+    "vite": "npm:@voidzero-dev/vite-plus-core@latest",
+    "vite-plus": "latest"
+  },
+  "overrides": {
+    "vite": "npm:@voidzero-dev/vite-plus-core@latest",
+    "vitest": "npm:@voidzero-dev/vite-plus-test@latest"
+  },
+  "dependencies": {
+    "@codemirror/autocomplete": "^6.20.2",
+    "@codemirror/commands": "^6.10.3",
+    "@codemirror/lang-markdown": "^6.5.0",
+    "@codemirror/language": "^6.12.3",
+    "@codemirror/state": "^6.6.0",
+    "@codemirror/view": "^6.43.0",
+    "@jupyter-widgets/base": "6.0.11",
+    "@jupyter-widgets/controls": "5.0.12",
+    "@jupyter-widgets/jupyterlab-manager": "5.0.15",
+    "@jupyter-widgets/output": "6.0.11",
+    "@jupyterlab/services": "7.6.1",
+    "@lezer/markdown": "^1.6.3",
+    "dompurify": "^3.4.4",
+    "highlight.js": "^11.11.1",
+    "katex": "^0.16.47",
+    "markdown-it": "^14.1.1",
+    "markdown-it-emoji": "^3.0.0",
+    "mermaid": "^11.15.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "requirejs": "2.3.8",
+    "reveal.js": "^6.0.1",
+    "turndown": "^7.2.4",
+    "turndown-plugin-gfm": "^1.0.2",
+    "ws": "8.21.0",
+    "zeromq": "^6.5.0"
+  },
+  "build": {
+    "appId": "com.noema.desktop",
+    "productName": "Noema",
+    "asar": false,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "desktop/**/*",
+      "server/**/*",
+      "shared/**/*",
+      "dist/aaronnote/**/*",
+      "js/**/*",
+      "agents/**/*",
+      "resources/**/*",
+      "package.json",
+      "node_modules/**/*",
+      "web-host.mjs"
+    ],
+    "mac": {
+      "identity": null,
+      "icon": "build/Noema.png",
+      "category": "public.app-category.productivity",
+      "target": [
+        "dir"
+      ],
+      "extendInfo": {
+        "CFBundleDocumentTypes": [
+          {
+            "CFBundleTypeName": "Markdown Document",
+            "CFBundleTypeRole": "Editor",
+            "LSHandlerRank": "Alternate",
+            "CFBundleTypeExtensions": [
+              "md",
+              "markdown"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "allowScripts": {
+    "electron@37.10.3": true,
+    "zeromq@6.5.0": true
+  }
+}

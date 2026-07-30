@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Hamiltonian
+# key: HH
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/HH_Hamiltonian
+# --
+\mathcal{H}

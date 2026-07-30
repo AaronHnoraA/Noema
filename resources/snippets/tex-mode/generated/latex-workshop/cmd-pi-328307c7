@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \Pi
+# key: \Pi
+# uuid: latex-workshop:\Pi
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%CE%A0%2C+shortcut+%40P
+# group: Math · latex-workshop
+# --
+\Pi$0

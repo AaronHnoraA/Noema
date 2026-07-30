@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \chi
+# key: \chi
+# uuid: overleaf:\chi
+# contributor: Noema provider=overleaf&priority=160&weight=0.043373492287805675&context=math-command&description=Overleaf+cmd
+# group: Math · overleaf
+# --
+\chi$0

@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \cdot
+# key: \cdot
+# uuid: latex-workshop:\cdot
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%C2%B7%2C+shortcut+%40.
+# group: Math · latex-workshop
+# --
+\cdot$0

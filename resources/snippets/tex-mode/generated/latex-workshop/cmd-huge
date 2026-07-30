@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \huge
+# key: \huge
+# uuid: latex-workshop:\huge
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=
+# group: Math · latex-workshop
+# --
+\huge$0

@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Noema planning block todo
+# key: apblock
+# group: Noema planning DSL
+# --
+@@todo(${1:doing}) [${2:Task}] {
+}
+$0

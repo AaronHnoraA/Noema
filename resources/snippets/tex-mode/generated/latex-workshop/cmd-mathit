@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \mathit{}
+# key: \mathit{}
+# uuid: latex-workshop:\mathit{}
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=
+# group: Math · latex-workshop
+# --
+\mathit{${1:text}}$0

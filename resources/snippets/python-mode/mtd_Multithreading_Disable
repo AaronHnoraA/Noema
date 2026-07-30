@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Multithreading Disable
+# key: mtd
+# --
+ROOT.DisableImplicitMT()

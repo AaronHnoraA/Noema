@@ -1,0 +1,14 @@
+# -*- mode: snippet -*-
+# name: Figure
+# key: figure
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/figure_Figure
+# --
+# --
+\begin{figure}
+	\begin{center}
+		\includegraphics[width=0.95\textwidth]{figures/$1}
+	\end{center}
+	\caption{$3}\label{fig:$4}
+\end{figure}
+$0

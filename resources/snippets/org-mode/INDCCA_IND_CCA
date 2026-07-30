@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: IND-CCA
+# key: INDCCA
+# -- Crypto
+# --
+\mathsf{IND\mbox{-}CCA}$0

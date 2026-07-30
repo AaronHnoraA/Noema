@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: refine tactic
+# key: ref
+# group: tactics
+# --
+refine ${1:?_}$0

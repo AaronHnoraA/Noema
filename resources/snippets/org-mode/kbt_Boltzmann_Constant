@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Boltzmann Constant
+# key: kbt
+# --
+k_{B}T

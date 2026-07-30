@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [intfrom] — Definite integral
+# key: intfrom
+# group: Math · Calculus
+# --
+\int_{${1:a}}^{${2:b}} ${3:f(x)}\,d${4:x}$0

@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: Postulate (with label)
+# key: postl
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/postl_Postulate_with_label_
+# --
+# --
+\begin{postulate}{$1}\label{pos:$1}
+		$2
+\end{postulate}
+$0

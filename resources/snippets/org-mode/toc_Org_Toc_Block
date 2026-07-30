@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Org toc block
+# key: toc
+# -- Org special block
+# --
+#+begin_toc
+$0
+#+end_toc

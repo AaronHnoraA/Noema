@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [tensor] — Tensor product expression
+# key: tensor
+# group: Math · Recent notes
+# --
+${1:A}\otimes ${2:B}$0

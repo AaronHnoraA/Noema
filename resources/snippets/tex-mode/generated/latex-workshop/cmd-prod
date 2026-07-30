@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \prod
+# key: \prod
+# uuid: latex-workshop:\prod
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%E2%88%8F
+# group: Math · latex-workshop
+# --
+\prod$0

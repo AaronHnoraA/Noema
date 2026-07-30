@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Jupytext cell split
+# key: jcell
+# --
+# %%
+$0

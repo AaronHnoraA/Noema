@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \Pi
+# key: \Pi
+# uuid: overleaf:\Pi
+# contributor: Noema provider=overleaf&priority=160&weight=0.021264671817473237&context=math-command&description=Overleaf+cmd
+# group: Math · overleaf
+# --
+\Pi$0

@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [overset] — Overset
+# key: overset
+# group: Math · Structures
+# --
+\overset{${1:*}}{${2:=}}$0

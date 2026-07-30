@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \infty
+# key: \infty
+# uuid: overleaf:\infty
+# contributor: Noema provider=overleaf&priority=160&weight=0.17837290019711305&context=math-command&description=Overleaf+cmd
+# group: Math · overleaf
+# --
+\infty$0

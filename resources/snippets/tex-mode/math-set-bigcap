@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [bigcap] — Big intersection
+# key: bigcap
+# group: Math · Sets
+# --
+\bigcap$0

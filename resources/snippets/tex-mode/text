@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Text Environment
+# key: text
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/text_Text_Environment
+# --
+\text{$1}$2

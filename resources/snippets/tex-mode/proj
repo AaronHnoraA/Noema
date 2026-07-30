@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Projector
+# key: proj
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/org-mode/proj_Projector
+# --
+# --
+\lvert ${1:\psi}\rangle\langle ${1:\psi}\rvert $0

@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [operatorname] — Named operator
+# key: operatorname
+# group: Math · Styles
+# --
+\operatorname{${1:rank}}$0

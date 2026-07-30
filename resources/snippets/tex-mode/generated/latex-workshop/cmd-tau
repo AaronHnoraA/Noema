@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \tau
+# key: \tau
+# uuid: latex-workshop:\tau
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%CF%84%2C+shortcut+%40t
+# group: Math · latex-workshop
+# --
+\tau$0

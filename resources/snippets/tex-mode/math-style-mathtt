@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [mathtt] — Monospace math
+# key: mathtt
+# group: Math · Styles
+# --
+\mathtt{${1:X}}$0

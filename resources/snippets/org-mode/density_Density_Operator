@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Density operator
+# key: density
+# -- Quantum
+# --
+\rho = \sum_${1:i} ${2:p_i}\lvert ${3:\psi_i}\rangle\langle ${3:\psi_i}\rvert$0

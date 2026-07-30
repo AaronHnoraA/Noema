@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [complement] — Set complement
+# key: complement
+# group: Math · Sets
+# --
+${1:S}^{\complement}$0

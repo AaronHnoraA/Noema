@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Postulate (with label)
+# key: postl
+# -- Add a postulate with label
+# --
+\begin{postulate}{$1}\label{pos:$1}
+		$2
+\end{postulate}
+$0

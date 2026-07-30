@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \textup{}
+# key: \textup{}
+# uuid: latex-workshop:\textup{}
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=
+# group: Math · latex-workshop
+# --
+\textup{${1}}$0

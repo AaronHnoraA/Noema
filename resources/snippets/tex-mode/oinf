@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Integral 0 to Infinity
+# key: oinf
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/oinf_Integral_0_to_Infinity
+# --
+\int_{0}^{\infty} $1 \, d$2 $3

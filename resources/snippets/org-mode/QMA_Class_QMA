@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Complexity class QMA
+# key: QMA
+# -- TCS
+# --
+\mathsf{QMA}$0

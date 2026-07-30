@@ -1,0 +1,12 @@
+# -*- mode: snippet -*-
+# name: Interactive mind map
+# key: mind
+# group: Noema syntax
+# --
+```marmind
+mindmap
+  root((${1:Topic}))
+    ${2:Branch}
+      ${3:Detail}
+```
+$0

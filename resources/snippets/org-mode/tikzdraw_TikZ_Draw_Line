@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: TikZ draw line
+# key: tikzdraw
+# --
+\draw${1:[${2:thick}]} (${3:A}) -- (${4:B});$0

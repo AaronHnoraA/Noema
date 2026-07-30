@@ -1,0 +1,9 @@
+# -*- mode: snippet; require-final-newline: nil -*-
+# name: Org ID property drawer
+# key: orgid
+# -- Insert an Org ID property drawer
+# --
+:PROPERTIES:
+:ID: `(format-time-string "%Y%m%dT%H%M%S")`${1:-slug}
+:END:
+$0

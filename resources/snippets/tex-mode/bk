@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Braket
+# key: bk
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/org-mode/brk_Braket
+# --
+\langle ${1:\phi}\rvert ${2:\psi}\rangle $0

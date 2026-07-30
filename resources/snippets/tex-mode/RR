@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Real Numbers
+# key: RR
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/RR_Real_Numbers
+# --
+\mathbb{R}

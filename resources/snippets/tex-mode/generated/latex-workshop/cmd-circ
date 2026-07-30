@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \circ
+# key: \circ
+# uuid: latex-workshop:\circ
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%C2%B0%2C+shortcut+%40%40
+# group: Math · latex-workshop
+# --
+\circ$0

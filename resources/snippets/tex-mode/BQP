@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Complexity class BQP
+# key: BQP
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/org-mode/BQP_Class_BQP
+# --
+# --
+\mathsf{BQP}$0

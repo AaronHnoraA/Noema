@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \mu
+# key: \mu
+# uuid: latex-workshop:\mu
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%CE%BC%2C+shortcut+%40m
+# group: Math · latex-workshop
+# --
+\mu$0

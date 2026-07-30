@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Encryption
+# key: Enc
+# -- Crypto
+# --
+${1:c} \leftarrow \operatorname{Enc}_{${2:pk}}\left(${3:m}; ${4:r}\right)$0

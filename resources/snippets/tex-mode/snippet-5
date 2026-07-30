@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Much Less
+# key: <<
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/_Much_Less
+# --
+\ll

@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Complexity class BQP
+# key: BQP
+# -- TCS
+# --
+\mathsf{BQP}$0

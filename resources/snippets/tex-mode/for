@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Algorithm:For
+# key: for
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/for_Algorithm_For
+# --
+\For{i=0:$1}
+	\State $0
+\EndFor

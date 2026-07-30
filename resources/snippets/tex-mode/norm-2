@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Absolute Value
+# key: norm
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/norm_Absolute_Value
+# --
+\lvert $1 \rvert $2

@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [bigsqcup] — Big square union
+# key: bigsqcup
+# group: Math · Sets
+# --
+\bigsqcup$0

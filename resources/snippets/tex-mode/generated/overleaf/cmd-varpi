@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \varpi
+# key: \varpi
+# uuid: overleaf:\varpi
+# contributor: Noema provider=overleaf&priority=160&weight=0.0007039358167790341&context=math-command&description=Overleaf+cmd
+# group: Math · overleaf
+# --
+\varpi$0

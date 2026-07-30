@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \color{}
+# key: \color
+# uuid: overleaf:\color
+# contributor: Noema provider=overleaf&priority=160&weight=0.2864294797053033&context=math-command&description=Overleaf+cmd
+# group: Math · overleaf
+# --
+\color{$1}$0

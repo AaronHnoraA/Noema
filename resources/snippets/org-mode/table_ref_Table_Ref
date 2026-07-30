@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Table:Ref
+# key: table:ref
+# -- Table Reference
+# --
+${1:Table}~\ref{tab:$2}$0

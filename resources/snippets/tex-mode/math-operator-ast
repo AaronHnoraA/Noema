@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [ast] — Asterisk operator
+# key: ast
+# group: Math · Operators
+# --
+\ast$0

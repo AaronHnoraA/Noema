@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \vee
+# key: \vee
+# uuid: latex-workshop:\vee
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%E2%88%A8
+# group: Math · latex-workshop
+# --
+\vee$0

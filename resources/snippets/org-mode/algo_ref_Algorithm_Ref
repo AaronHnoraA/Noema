@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Algorithm:Ref
+# key: algo:ref
+# --
+${1:Algorithm}~\ref{algo:$2}$0

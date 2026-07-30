@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Delta (lowercase)
+# key: dddd
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/dddd_Delta_lowercase_
+# --
+\delta

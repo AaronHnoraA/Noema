@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \textrm{}
+# key: \textrm{}
+# uuid: latex-workshop:\textrm{}
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=
+# group: Math · latex-workshop
+# --
+\textrm{${1}}$0

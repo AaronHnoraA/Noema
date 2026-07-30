@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Language over bits
+# key: lang
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/org-mode/lang_Language
+# --
+# --
+${1:L} \subseteq \{0,1\}^{${2:*}}$0

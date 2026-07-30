@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [card] — Cardinality
+# key: card
+# group: Math · Recent notes
+# --
+\left|${1:S}\right|$0

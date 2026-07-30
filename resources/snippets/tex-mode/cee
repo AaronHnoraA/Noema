@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Chemical Equation
+# key: cee
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/cee_Chemical_Equation
+# --
+\ce{ $1 }

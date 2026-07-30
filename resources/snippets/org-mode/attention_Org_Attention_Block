@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Org attention block
+# key: attention
+# -- Org special block
+# --
+#+begin_attention
+$0
+#+end_attention

@@ -1,0 +1,10 @@
+# -*- mode: snippet -*-
+# name: Org corollary block
+# key: cor
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/org-mode/cor_Org_Corollary_Block
+# --
+# --
+#+begin_cor
+$0
+#+end_cor

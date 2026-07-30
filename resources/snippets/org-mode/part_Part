@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Part
+# key: part
+# -- Part
+# --
+\begin{part}
+	$0
+\end{part}

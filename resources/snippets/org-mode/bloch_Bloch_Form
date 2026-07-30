@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Bloch form
+# key: bloch
+# -- Quantum
+# --
+\rho = \frac{1}{2}\left(I + \vec{${1:r}}\cdot\vec{\sigma}\right)$0

@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: NP-complete
+# key: npcomplete
+# -- TCS
+# --
+\mathsf{NP}\text{-complete}$0

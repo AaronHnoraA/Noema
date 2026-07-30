@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Corollary block
+# key: cor
+# group: Noema blocks
+# --
+#+begin corollary ${1:name}
+${2:Statement.}
+#+end corollary
+$0

@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \renewcommand{}{}
+# key: \renewcommand{}{}
+# uuid: latex-workshop:\renewcommand{}{}
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=
+# group: Math · latex-workshop
+# --
+\renewcommand{${1:cmd}}{${2:def}}$0

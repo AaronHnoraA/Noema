@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Org Lean src block
+# key: srclean
+# --
+#+begin_src lean${1:}
+$0
+#+end_src

@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \phi
+# key: \phi
+# uuid: overleaf:\phi
+# contributor: Noema provider=overleaf&priority=160&weight=0.17405809173097808&context=math-command&description=Overleaf+cmd
+# group: Math · overleaf
+# --
+\phi$0

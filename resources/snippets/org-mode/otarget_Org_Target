@@ -1,0 +1,7 @@
+# -*- mode: snippet; require-final-newline: nil -*-
+# name: Org dedicated target
+# key: otarget
+# -- Insert an Org dedicated target
+# --
+<<eq-`(format-time-string "%Y%m%dT%H%M%S")`${1:-slug}>>
+$0

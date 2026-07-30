@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: sqrt
+# key: @2
+# uuid: latex-workshop:@2
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=sqrt+command
+# group: Math · latex-workshop
+# --
+\sqrt{${1:`(or yas-selected-text "")`}}$0

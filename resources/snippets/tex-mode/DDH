@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Decisional Diffie-Hellman
+# key: DDH
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/org-mode/DDH_Decisional_Diffie_Hellman
+# --
+# --
+\left(g^{${1:a}}, g^{${2:b}}, g^{${1:a}${2:b}}\right) \approx_c \left(g^{${1:a}}, g^{${2:b}}, g^{${3:c}}\right)$0

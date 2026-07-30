@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: variable declaration
+# key: var
+# group: declarations
+# --
+variable (${1:n : ℕ})$0

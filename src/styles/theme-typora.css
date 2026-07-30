@@ -1,0 +1,1025 @@
+/*
+ * Dark paper-flavored minimal theme.
+ *
+ * Aesthetic only. Thin, restrained, and manuscript-like, but tuned
+ * for Aaron's dark Wave palette instead of a bright paper surface.
+ *
+ * All rules scope to `.cm-editor` — the theme only styles the
+ * editor body, never the surrounding website chrome.
+ */
+
+.cm-editor {
+  color: var(--aaron-ink, #24201a);
+  word-wrap: break-word;
+  font-kerning: normal;
+  --note-image-max: 420px;
+  --note-table-image-max: 180px;
+  --note-table-image-max-height: 160px;
+  --note-diagram-max: 480px;
+  --orgenv-pad-left: 0.88rem;
+  --orgenv-head-size: 0.9em;
+}
+
+.cm-editor:not(.aaronnote-visual-typography) {
+  font-family: var(--aaron-font-body, var(--aaron-font-english, serif), var(--aaron-font-chinese, serif), serif);
+  font-size: calc(20px * var(--aaronnote-layout-zoom, 1));
+  line-height: 1.46;
+  font-feature-settings: "kern" 1, "liga" 1, "onum" 1;
+}
+
+/* ─── headings ───────────────────────────────────────────────────── */
+.cm-editor h1,
+.cm-editor h2,
+.cm-editor h3,
+.cm-editor h4,
+.cm-editor h5,
+.cm-editor h6 {
+  margin: 1em 0 0.45em;
+  font-family: var(--aaron-font-heading);
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--aaron-heading-4, #8effa8);
+}
+.cm-editor > :first-child { margin-top: 0; }
+.cm-editor h1 {
+  margin-bottom: 0.58em;
+  font-size: 1.56em;
+  letter-spacing: 0;
+  text-align: center;
+  color: var(--aaron-heading-1, #ff9bad);
+}
+.cm-editor h1::after {
+  content: "";
+  display: block;
+  width: 72px;
+  height: 1px;
+  margin: 0.34em auto 0;
+  background: var(--aaron-heading-1, #ff9bad);
+}
+.cm-editor h2 {
+  font-size: 1.16em;
+  padding-bottom: 0.12em;
+  color: var(--aaron-heading-2, #7ee7ff);
+  border-bottom: 1px solid color-mix(in srgb, var(--aaron-heading-2, #7ee7ff), transparent 56%);
+}
+.cm-editor h3 {
+  font-size: 1.06em;
+  font-style: italic;
+  color: var(--aaron-heading-3, #d2a8ff);
+}
+.cm-editor h4 {
+  font-size: 1.02em;
+  color: var(--aaron-heading-4, #8effa8);
+}
+.cm-editor h5 {
+  font-size: 0.92em;
+  color: var(--aaron-heading-5, #ffd86a);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.cm-editor h6 {
+  font-size: 0.84em;
+  color: var(--aaron-heading-6, #9fb7ff);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.cm-editor .aaronnote-section-heading {
+  position: relative;
+  display: block;
+  box-sizing: border-box;
+  contain: layout paint;
+  overflow-wrap: anywhere;
+  margin: 0;
+  padding: var(--section-margin-before, 4.2em) 0 var(--section-margin-after, 2.3em);
+  --section-heading-color: var(--aaron-heading-2, #7ee7ff);
+  color: var(--section-heading-color);
+}
+
+.cm-editor .aaronnote-section-heading-inner {
+  position: relative;
+  display: grid;
+  gap: 0.5em;
+  box-sizing: border-box;
+  min-height: var(--section-min-height, 8.2rem);
+  align-content: center;
+  padding: var(--section-padding-y, 2.1em) var(--section-padding-x, 1.6em);
+  border-top: 1px solid color-mix(in srgb, var(--section-heading-color), transparent 54%);
+  border-bottom: 1px solid color-mix(in srgb, var(--section-heading-color), transparent 72%);
+  background: color-mix(in srgb, var(--section-heading-color), transparent 94%);
+}
+
+.cm-editor .aaronnote-section-heading-inner::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 18%;
+  bottom: 18%;
+  width: 3px;
+  background: var(--section-heading-color);
+}
+
+.cm-editor .aaronnote-section-label {
+  color: var(--section-heading-color);
+  font: 900 var(--section-label-size, 0.76em)/1 var(--aaron-font-sans, sans-serif);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.cm-editor .aaronnote-section-title {
+  font-family: var(--aaron-font-heading);
+  font-weight: 800;
+  font-size: var(--section-title-size, 2.05em);
+  line-height: 1.12;
+  letter-spacing: 0;
+  color: var(--section-heading-color);
+}
+
+.cm-editor .aaronnote-section-heading[data-outline-level="1"] {
+  --section-heading-color: var(--aaron-heading-1, #ff9bad);
+  --section-margin-before: 6.2em;
+  --section-margin-after: 4.4em;
+  --section-padding-y: 4.2em;
+  --section-padding-x: 2em;
+  --section-title-size: 3.45em;
+  --section-label-size: 0.86em;
+  --section-min-height: 18rem;
+}
+
+.cm-editor .aaronnote-section-heading[data-outline-level="1"] .aaronnote-section-heading-inner {
+  place-items: center;
+  text-align: center;
+  border-bottom-color: color-mix(in srgb, var(--section-heading-color), transparent 54%);
+}
+
+.cm-editor .aaronnote-section-heading[data-outline-level="1"] .aaronnote-section-heading-inner::before {
+  left: 50%;
+  top: auto;
+  bottom: 2.6em;
+  width: 128px;
+  height: 2px;
+  transform: translateX(-50%);
+}
+
+.cm-editor .aaronnote-section-heading[data-outline-level="3"] {
+  --section-heading-color: var(--aaron-heading-3, #d2a8ff);
+  --section-margin-before: 3.1em;
+  --section-margin-after: 1.7em;
+  --section-padding-y: 1.55em;
+  --section-title-size: 1.55em;
+  --section-label-size: 0.68em;
+  --section-min-height: 6.4rem;
+}
+
+.cm-editor .aaronnote-section-heading[data-outline-level="4"] {
+  --section-heading-color: var(--aaron-heading-4, #8effa8);
+  --section-margin-before: 2.35em;
+  --section-margin-after: 1.25em;
+  --section-padding-y: 1.1em;
+  --section-title-size: 1.28em;
+  --section-label-size: 0.62em;
+  --section-min-height: 4.8rem;
+}
+
+.cm-editor .aaronnote-section-heading[data-outline-level="5"] {
+  --section-heading-color: var(--aaron-heading-5, #ffd86a);
+  --section-margin-before: 1.75em;
+  --section-margin-after: 0.95em;
+  --section-padding-y: 0.82em;
+  --section-title-size: 1.08em;
+  --section-label-size: 0.58em;
+  --section-min-height: 3.6rem;
+}
+
+/* ─── paragraphs ─────────────────────────────────────────────────── */
+.cm-editor p {
+  margin: 0;
+  text-align: left;
+  white-space: pre-wrap;
+}
+.cm-editor p:last-child { margin-bottom: 0; }
+
+/* ─── links ──────────────────────────────────────────────────────── */
+.cm-editor a {
+  color: var(--aaron-link, #2368a2);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--aaron-link, #2368a2), transparent 70%);
+}
+.cm-editor a:hover {
+  color: var(--aaron-link, #184b76);
+  border-bottom-color: currentColor;
+}
+
+.cm-editor a.aaronnote-roam-link,
+.aaronnote-roam-link {
+  color: var(--aaron-link, #7ee7ff);
+  border-bottom-color: color-mix(in srgb, var(--aaron-link, #7ee7ff), transparent 38%);
+  background: color-mix(in srgb, var(--aaron-link, #7ee7ff), transparent 91%);
+  border-radius: 0.28em;
+  padding: 0 0.12em;
+  transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease;
+}
+.cm-editor a.aaronnote-roam-link:hover,
+.aaronnote-roam-link:hover {
+  color: var(--aaron-ink, #f5f7fa);
+  background: color-mix(in srgb, var(--aaron-link, #7ee7ff), transparent 78%);
+  border-bottom-color: var(--aaron-link, #7ee7ff);
+}
+
+/* ─── inline code / pre ──────────────────────────────────────────── */
+.cm-editor code {
+  font-family: var(--aaron-font-mono);
+  font-size: 0.86em;
+  padding: 0.12em 0.34em;
+  margin: 0;
+  color: var(--aaron-ink, #25362e);
+  background: var(--aaron-code-bg, #1e2638);
+  border: 1px solid var(--aaron-paper-line, #d8e4da);
+  border-radius: 2px;
+  white-space: break-spaces;
+}
+.cm-editor pre {
+  font-family: var(--aaron-font-mono);
+  font-size: 0.88em;
+  line-height: 1.5;
+  tab-size: 2;
+  background: var(--aaron-code-bg, #1e2638);
+  padding: 9px 12px;
+  margin: 0 0 0.72em;
+  border-radius: 2px;
+  overflow: auto;
+  border: 1px solid var(--aaron-paper-line, #d9d8cf);
+  border-left: 3px solid var(--aaron-red, #b31b1b);
+}
+.cm-editor pre code {
+  display: inline;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  font-size: 100%;
+  white-space: pre;
+}
+
+/* ─── blockquote ─────────────────────────────────────────────────── */
+.cm-editor blockquote {
+  margin: 0 0 0.72em;
+  padding: 0.26em 0 0.26em 0.82em;
+  color: var(--aaron-muted, #4e554f);
+  background: transparent;
+  border-left: 3px solid var(--aaron-paper-line, #b7ad9e);
+  border-radius: 0;
+  font-size: 0.97em;
+}
+.cm-editor blockquote > :first-child { margin-top: 0; }
+.cm-editor blockquote > :last-child { margin-bottom: 0; }
+
+/* ─── lists ──────────────────────────────────────────────────────── */
+.cm-editor ul,
+.cm-editor ol {
+  margin: 0 0 0.68em;
+  padding-left: 1.38em;
+}
+.cm-editor ul ul,
+.cm-editor ul ol,
+.cm-editor ol ul,
+.cm-editor ol ol { margin-bottom: 0; }
+.cm-editor li > p { margin-bottom: 0; }
+
+/* ─── horizontal rule ────────────────────────────────────────────── */
+.cm-editor .cm-horizontal-rule {
+  min-height: 1px;
+  padding: 2em 0;
+  margin: 0;
+  background: none;
+  border: 0;
+  border-top: 1px solid var(--aaron-paper-line, #b8aa90);
+}
+
+/* ─── tables (cells; layout from widgets.css) ────────────────────── */
+.cm-editor table th,
+.cm-editor table td {
+  padding: 4px 8px;
+  border: 1px solid var(--aaron-paper-line, #d4d1c7);
+  vertical-align: top;
+  line-height: 1.42;
+}
+.cm-editor table th {
+  font-weight: 600;
+  background: var(--aaron-panel, #232b3d);
+}
+.cm-editor table tr:nth-child(2n) { background: color-mix(in srgb, var(--aaron-paper-soft, #1e2536), transparent 55%); }
+
+/* ─── extension marks ────────────────────────────────────────────── */
+.cm-editor mark {
+  background: var(--aaron-highlight, rgb(249 226 175 / 22%));
+  color: inherit;
+  padding: 0 0.12em;
+  border-radius: 2px;
+}
+.cm-editor del { color: inherit; }
+
+/* ─── org-style theorem/proof blocks ─────────────────────────────── */
+.cm-editor org-env-block {
+  --block-c: var(--c-env-default, #a7b0c4);
+  --block-l: attr(data-label);
+  display: block;
+  margin: 0;
+  overflow: visible;
+  border: 0;
+  border-left: 3px solid color-mix(in srgb, var(--block-c), transparent 22%);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0 0 0 var(--orgenv-pad-left);
+  white-space: pre-wrap;
+  color: var(--aaron-ink, #24201a);
+  font-family: inherit;
+}
+
+.cm-editor org-env-block .org-env-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0 0 0.34rem;
+  padding: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--block-c), var(--aaron-ink, #e4ecff) 20%);
+  font-family: var(--aaron-font-title, var(--aaron-font-heading, serif));
+  font-size: var(--orgenv-head-size);
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  text-transform: none;
+}
+
+.cm-editor org-env-block .org-env-heading-title {
+  display: inline-block;
+  min-width: 9ch;
+  width: min(32ch, 58vw);
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--block-c), transparent 45%);
+  padding: 0 0 0.08rem;
+  background: transparent;
+  color: color-mix(in srgb, var(--block-c), var(--aaron-ink, #e4ecff) 20%);
+  font: inherit;
+  font-family: var(--aaron-font-title, var(--aaron-font-heading, serif));
+  font-weight: 650;
+  outline: none;
+  cursor: text;
+}
+
+.cm-editor org-env-block .org-env-heading-title[data-empty="true"]::after {
+  content: none;
+}
+
+.cm-editor org-env-block .org-env-content {
+  display: block;
+  min-height: 1.35em;
+  white-space: pre-wrap;
+}
+
+.cm-editor org-env-block .org-env-content > :first-child {
+  margin-top: 0;
+}
+
+.cm-editor org-env-block .org-env-content > :last-child {
+  margin-bottom: 0;
+}
+
+.cm-editor org-env-block .org-env-content a {
+  cursor: pointer;
+  color: color-mix(in srgb, var(--aaron-link, #2368a2), var(--aaron-ink, #24201a) 12%);
+  border-bottom-color: color-mix(in srgb, var(--aaron-link, #2368a2), transparent 48%);
+}
+
+.cm-editor org-env-block .org-env-content a[href^="zotero:"] {
+  color: color-mix(in srgb, var(--aaron-green, #bbf7b8), var(--aaron-ink, #e4ecff) 20%);
+  border-bottom-color: color-mix(in srgb, var(--aaron-green, #bbf7b8), transparent 42%);
+}
+
+.cm-editor a.aaronnote-zotero-link,
+.aaronnote-zotero-link {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35em;
+  max-width: 100%;
+  padding: 0.02em 0.42em 0.05em;
+  border: 1px solid color-mix(in srgb, var(--aaron-green, #bbf7b8), transparent 58%);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--aaron-green, #bbf7b8), transparent 91%);
+  color: color-mix(in srgb, var(--aaron-green, #bbf7b8), var(--aaron-ink, #e4ecff) 18%);
+  font-weight: 650;
+  text-decoration: none;
+  vertical-align: baseline;
+}
+
+.cm-editor a.aaronnote-zotero-link::before,
+.aaronnote-zotero-link::before {
+  content: "Z";
+  flex: 0 0 auto;
+  font: 800 0.72em/1 var(--aaron-font-sans, system-ui, sans-serif);
+  color: var(--aaron-green, #bbf7b8);
+}
+
+.cm-editor a.aaronnote-zotero-link:hover,
+.aaronnote-zotero-link:hover {
+  border-color: color-mix(in srgb, var(--aaron-green, #bbf7b8), transparent 30%);
+  background: color-mix(in srgb, var(--aaron-green, #bbf7b8), transparent 86%);
+}
+
+.cm-editor org-env-block .org-env-content a:hover {
+  border-bottom-color: currentColor;
+}
+
+.cm-editor org-env-block[data-kind="definition"] { --block-c: var(--c-def); }
+.cm-editor org-env-block[data-kind="defn"] { --block-c: var(--c-def); }
+.cm-editor org-env-block[data-kind="define"] { --block-c: var(--c-def); }
+.cm-editor org-env-block[data-kind="theorem"] { --block-c: var(--c-thm); }
+.cm-editor org-env-block[data-kind="thm"] { --block-c: var(--c-thm); }
+.cm-editor org-env-block[data-kind="lemma"] { --block-c: var(--c-lemma); }
+.cm-editor org-env-block[data-kind="corollary"] { --block-c: var(--c-cor); }
+.cm-editor org-env-block[data-kind="cor"] { --block-c: var(--c-cor); }
+.cm-editor org-env-block[data-kind="proposition"] { --block-c: var(--c-prop); }
+.cm-editor org-env-block[data-kind="prop"] { --block-c: var(--c-prop); }
+.cm-editor org-env-block[data-kind="property"] { --block-c: var(--c-prop); }
+.cm-editor org-env-block[data-kind="proof"] { --block-c: var(--c-proof); }
+.cm-editor org-env-block[data-kind="example"] { --block-c: var(--c-example); }
+.cm-editor org-env-block[data-kind="attention"] { --block-c: var(--c-attend); }
+.cm-editor org-env-block[data-kind="warning"] { --block-c: var(--c-warning, #ffb86b); }
+.cm-editor org-env-block[data-kind="note"] { --block-c: var(--c-note); }
+.cm-editor org-env-block[data-kind="info"] { --block-c: var(--c-info, #64d2ff); }
+.cm-editor org-env-block[data-kind="summary"] { --block-c: var(--c-summary, #c6a0f6); }
+.cm-editor org-env-block[data-kind="fold"] { --block-c: var(--c-fold, #b7c6e8); }
+.cm-editor org-env-block[data-kind="comment"] { --block-c: var(--c-comment, #f2a272); }
+.cm-editor org-env-block[data-kind="convention"] { --block-c: var(--c-convention, #f0a6ca); }
+.cm-editor org-env-block[data-kind="axiom"] { --block-c: var(--c-axiom, #ffcf70); }
+.cm-editor org-env-block[data-kind="assumption"] { --block-c: var(--c-assumption, #e6b86a); }
+.cm-editor org-env-block[data-kind="conjecture"] { --block-c: var(--c-conjecture, #ff9f80); }
+.cm-editor org-env-block[data-kind="claim"] { --block-c: var(--c-claim, #b8c0ff); }
+.cm-editor org-env-block[data-kind="remark"] { --block-c: var(--c-remark, #9ccfd8); }
+.cm-editor org-env-block[data-kind="notation"] { --block-c: var(--c-notation, #7dcfff); }
+.cm-editor org-env-block[data-kind="observation"] { --block-c: var(--c-observation, #a6da95); }
+.cm-editor org-env-block[data-kind="exercise"] { --block-c: var(--c-exercise, #c099ff); }
+.cm-editor org-env-block[data-kind="solution"] { --block-c: var(--c-solution, #8bd5ca); }
+.cm-editor org-env-block[data-kind="algorithm"] { --block-c: var(--c-algorithm, #73daca); }
+.cm-editor org-env-block[data-kind="question"] { --block-c: var(--c-question, #f5bde6); }
+.cm-editor org-env-block[data-kind="definition"],
+.cm-editor org-env-block[data-kind="defn"],
+.cm-editor org-env-block[data-kind="define"] { --orgenv-end: "◇"; }
+.cm-editor org-env-block[data-kind="theorem"],
+.cm-editor org-env-block[data-kind="thm"] { --orgenv-end: "∎"; }
+.cm-editor org-env-block[data-kind="lemma"] { --orgenv-end: "△"; }
+.cm-editor org-env-block[data-kind="corollary"],
+.cm-editor org-env-block[data-kind="cor"] { --orgenv-end: "▽"; }
+.cm-editor org-env-block[data-kind="proposition"],
+.cm-editor org-env-block[data-kind="prop"],
+.cm-editor org-env-block[data-kind="property"] { --orgenv-end: "◆"; }
+.cm-editor org-env-block[data-kind="proof"] { --orgenv-end: "□"; }
+.cm-editor org-env-block[data-kind="example"] { --orgenv-end: "※"; }
+.cm-editor org-env-block[data-kind="attention"],
+.cm-editor org-env-block[data-kind="warning"] { --orgenv-end: "!"; }
+.cm-editor org-env-block[data-kind="note"],
+.cm-editor org-env-block[data-kind="info"] { --orgenv-end: "·"; }
+.cm-editor org-env-block[data-kind="summary"] { --orgenv-end: "§"; }
+.cm-editor org-env-block:not([data-kind="comment"]):not([data-kind="fold"]):not([data-kind="meta"])::after {
+  content: var(--orgenv-end, "•");
+  display: block;
+  color: color-mix(in srgb, var(--block-c), transparent 36%);
+  line-height: 1;
+  text-align: right;
+}
+
+.cm-editor org-env-block[data-kind="fold"] {
+  position: relative;
+  display: block;
+  width: min(100%, 720px);
+  margin: 0;
+  padding: 0.45rem 0;
+  border-left: 0;
+  overflow: visible;
+}
+
+.cm-editor org-env-block[data-kind="fold"] .org-env-fold-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 0.25rem 0.55rem;
+  border: 1px solid color-mix(in srgb, var(--block-c), transparent 30%);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--block-c), var(--aaron-paper, #171b28) 86%);
+  color: color-mix(in srgb, var(--block-c), var(--aaron-ink, #e4ecff) 22%);
+  cursor: pointer;
+  font: 700 0.92em/1.35 var(--aaron-font-title, var(--aaron-font-heading, serif));
+  letter-spacing: 0;
+  text-align: left;
+}
+
+.cm-editor org-env-block[data-kind="fold"] .org-env-fold-marker::before {
+  content: "▶";
+  font-size: 0.72em;
+}
+
+.cm-editor org-env-block[data-kind="fold"].org-env-fold-open .org-env-fold-marker::before {
+  content: "▼";
+}
+
+.cm-editor org-env-block[data-kind="fold"] .org-env-fold-title {
+  min-width: 0;
+}
+
+.cm-editor org-env-block[data-kind="fold"] .org-env-fold-title > p {
+  display: inline;
+  margin: 0;
+}
+
+.cm-editor org-env-block[data-kind="fold"] .org-env-fold-content {
+  width: min(100%, 720px);
+  box-sizing: border-box;
+  margin-top: 0.45rem;
+  padding: 0.5rem 0 0.45rem 0.85rem;
+  border-left: 3px solid color-mix(in srgb, var(--block-c), transparent 22%);
+}
+
+.cm-editor org-env-block[data-kind="fold"] .org-env-fold-content[hidden] {
+  display: none !important;
+}
+.cm-editor org-env-block[data-kind="comment"] {
+  --block-c: var(--c-comment, #f2a272);
+  position: relative;
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 1.6em;
+  margin: 0.45rem 0;
+  padding: 0;
+  border-left: 0;
+  overflow: visible;
+}
+
+.cm-editor org-env-block[data-kind="comment"] .org-env-comment-button {
+  display: inline-flex;
+  position: relative;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  z-index: 13;
+  min-width: 82px;
+  min-height: 24px;
+  box-sizing: border-box;
+  padding: 0 8px 0 10px;
+  border: 1px solid color-mix(in srgb, var(--block-c), transparent 24%);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--block-c), var(--aaron-paper-soft, #1e2536) 87%);
+  color: color-mix(in srgb, var(--block-c), var(--aaron-ink, #e4ecff) 18%);
+  cursor: pointer;
+  font: 800 11px/1 var(--aaron-font-sans, system-ui, sans-serif);
+  letter-spacing: 0;
+  user-select: none;
+}
+
+.cm-editor org-env-block[data-kind="comment"] .org-env-comment-label {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cm-editor org-env-block[data-kind="comment"] .org-env-comment-state {
+  border-radius: 999px;
+  padding: 3px 6px;
+  background: rgb(255 255 255 / 8%);
+  color: color-mix(in srgb, var(--block-c), var(--aaron-ink, #e4ecff) 24%);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.cm-editor org-env-block[data-kind="comment"] .org-env-comment-button:hover {
+  border-color: color-mix(in srgb, var(--block-c), transparent 12%);
+  background: color-mix(in srgb, var(--block-c), var(--aaron-paper-soft, #1e2536) 82%);
+}
+
+.cm-editor org-env-block[data-kind="comment"] .org-env-heading,
+.cm-editor org-env-block[data-kind="comment"] .org-env-meta {
+  display: none !important;
+}
+
+.cm-editor org-env-block[data-kind="comment"] .org-env-content {
+  position: absolute;
+  left: calc(100% + 12px);
+  top: -0.35rem;
+  z-index: 12;
+  width: min(320px, 34vw);
+  min-height: 1.4em;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--block-c), transparent 42%);
+  border-left: 3px solid var(--block-c);
+  border-radius: 10px;
+  background: var(--aaron-panel, #232b3d);
+  box-shadow: var(--aaron-shadow, 0 18px 46px rgb(0 0 0 / 38%));
+  font-family: var(--aaron-font-prose, var(--aaron-font-body, serif));
+}
+
+.cm-editor org-env-block[data-kind="comment"] .org-env-content[hidden] {
+  display: none !important;
+}
+
+.cm-editor org-env-block[data-kind="comment"] .org-env-content::before {
+  content: "";
+  position: absolute;
+  right: 100%;
+  top: 15px;
+  width: 12px;
+  border-top: 2px solid color-mix(in srgb, var(--block-c), transparent 25%);
+}
+
+.cm-editor org-env-block[data-kind="comment"].org-env-active .org-env-comment-button,
+.cm-editor org-env-block[data-kind="comment"].org-env-comment-open .org-env-comment-button {
+  background: color-mix(in srgb, var(--block-c), var(--aaron-paper-soft, #1e2536) 82%);
+}
+
+@media (max-width: 900px) {
+  .cm-editor org-env-block[data-kind="comment"] .org-env-content {
+    position: static;
+    width: min(100%, 420px);
+    margin-top: 0.45rem;
+  }
+
+  .cm-editor org-env-block[data-kind="comment"] .org-env-content::before {
+    display: none;
+  }
+}
+
+/* ─── Inline `@@comment [text]` chip — same dimmed collapsible UI as the
+   org-env block comment, adapted for an inline (non-block:true) widget. ─── */
+.cm-editor .inline-comment-widget {
+  --block-c: #ffc69c;
+  position: relative;
+  display: inline-flex;
+  vertical-align: baseline;
+  margin: 0 0.15em;
+}
+
+.cm-editor .inline-comment-widget .org-env-comment-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 20px;
+  box-sizing: border-box;
+  padding: 0 7px 0 9px;
+  border: 1px solid color-mix(in srgb, var(--block-c), transparent 24%);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--block-c), var(--aaron-paper-soft, #1e2536) 87%);
+  color: color-mix(in srgb, var(--block-c), var(--aaron-ink, #e4ecff) 18%);
+  cursor: pointer;
+  font: 800 10px/1 var(--aaron-font-sans, system-ui, sans-serif);
+  letter-spacing: 0;
+  user-select: none;
+}
+
+.cm-editor .inline-comment-widget .org-env-comment-button:hover {
+  border-color: color-mix(in srgb, var(--block-c), transparent 12%);
+  background: color-mix(in srgb, var(--block-c), var(--aaron-paper-soft, #1e2536) 82%);
+}
+
+.cm-editor .inline-comment-widget.inline-comment-open .org-env-comment-button {
+  background: color-mix(in srgb, var(--block-c), var(--aaron-paper-soft, #1e2536) 82%);
+}
+
+.cm-editor .inline-comment-widget .org-env-comment-state {
+  border-radius: 999px;
+  padding: 2px 5px;
+  background: rgb(255 255 255 / 8%);
+  color: color-mix(in srgb, var(--block-c), var(--aaron-ink, #e4ecff) 24%);
+  font-size: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.cm-editor .inline-comment-widget .org-env-content {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 6px);
+  z-index: 12;
+  width: max-content;
+  max-width: min(320px, 34vw);
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--block-c), transparent 42%);
+  border-left: 3px solid var(--block-c);
+  border-radius: 8px;
+  background: var(--aaron-panel, #232b3d);
+  box-shadow: var(--aaron-shadow, 0 18px 46px rgb(0 0 0 / 38%));
+  font: 400 0.86em/1.4 var(--aaron-font-prose, var(--aaron-font-body, serif));
+  white-space: normal;
+}
+
+.cm-editor .inline-comment-widget .org-env-content[hidden] {
+  display: none !important;
+}
+
+/* `@@comment(true) [...]` is deliberately public: keep it in normal flow and
+   give it the unmistakable review-annotation treatment used in marked PDFs. */
+.inline-comment-widget.inline-comment-display {
+  --display-comment-c: #ec008c;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.42em;
+  max-width: 100%;
+  box-sizing: border-box;
+  margin: 0 0.18em;
+  padding: 0.1em 0.38em 0.13em;
+  border-left: 3px solid var(--display-comment-c);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--display-comment-c), transparent 91%);
+  color: var(--display-comment-c);
+  font-family: var(--aaron-font-prose, var(--aaron-font-body, serif));
+  font-weight: 650;
+  line-height: 1.35;
+  vertical-align: baseline;
+}
+
+.inline-comment-display-label {
+  flex: 0 0 auto;
+  font-family: var(--aaron-font-sans, system-ui, sans-serif);
+  font-size: 0.78em;
+  font-weight: 900;
+  letter-spacing: 0.045em;
+}
+
+.inline-comment-display-content {
+  min-width: 0;
+}
+
+.inline-comment-display-content > :first-child {
+  margin-top: 0;
+}
+
+.inline-comment-display-content > :last-child {
+  margin-bottom: 0;
+}
+
+/* ─── Inline `@@scomment [text]` — an opaque side card anchored to the
+   command position. The wide layout is deliberately out-of-flow so it does
+   not perturb CodeMirror's height map. ─── */
+.cm-editor .inline-side-comment-widget {
+  --side-comment-c: var(--c-comment, #f2a272);
+  --side-comment-bg: #a94700;
+  --side-comment-card-left: clamp(20rem, calc(100vw - 38rem), 90rem);
+  --side-comment-connector-width: calc(var(--side-comment-card-left) - 0.5em);
+  position: relative;
+  display: inline-block;
+  width: 0.72em;
+  height: 1em;
+  vertical-align: baseline;
+  font-style: normal;
+  white-space: nowrap;
+}
+
+.cm-editor .inline-side-comment-widget:hover,
+.cm-editor .inline-side-comment-widget:focus-within {
+  --side-comment-z: 18;
+}
+
+.cm-editor .inline-side-comment-anchor {
+  position: relative;
+  display: inline-block;
+  width: 0.72em;
+  height: 1em;
+  border-bottom: 3px solid var(--side-comment-c);
+}
+
+.cm-editor .inline-side-comment-connector {
+  position: absolute;
+  left: 0.5em;
+  top: 0.72em;
+  width: var(--side-comment-connector-width);
+  border-top: 2px solid color-mix(in srgb, var(--side-comment-c), transparent 18%);
+  pointer-events: none;
+}
+
+.cm-editor .inline-side-comment-card {
+  position: absolute;
+  left: var(--side-comment-card-left);
+  top: -1.1em;
+  z-index: var(--side-comment-z, 14);
+  width: min(22rem, 36vw);
+  max-height: min(30rem, 70vh);
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 0.72rem 0.9rem;
+  border: 2px solid color-mix(in srgb, white, transparent 18%);
+  border-radius: 0.7rem;
+  background: var(--side-comment-bg);
+  box-shadow: 0 18px 46px rgb(0 0 0 / 44%);
+  color: #f5eee9;
+  font: 400 0.92em/1.45 var(--aaron-font-body, var(--aaron-font-english, serif), var(--aaron-font-chinese, serif), serif);
+  white-space: normal;
+  text-align: left;
+}
+
+.cm-editor .inline-side-comment-card p {
+  display: inline;
+  margin: 0;
+}
+
+.cm-editor .inline-side-comment-card .katex {
+  color: inherit;
+}
+
+@media (max-width: 900px) {
+  .cm-editor .inline-side-comment-widget {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: stretch;
+    width: min(100%, 28rem);
+    height: auto;
+    margin: 0.35rem 0;
+    vertical-align: top;
+  }
+
+  .cm-editor .inline-side-comment-anchor {
+    position: static;
+    width: 2.4rem;
+    height: 0;
+    margin-bottom: 0.35rem;
+  }
+
+  .cm-editor .inline-side-comment-connector {
+    display: none;
+  }
+
+  .cm-editor .inline-side-comment-card {
+    position: static;
+    width: 100%;
+    max-height: none;
+    overflow: visible;
+  }
+}
+
+.cm-editor org-env-block[data-kind="meta"] {
+  --block-c: var(--aaron-muted, #6f6a61);
+  font-size: 0.86em;
+  line-height: 1.45;
+  border-left: 0;
+  margin: 0.28rem 0 1.25rem;
+  padding: 0.22rem 0;
+}
+
+.cm-editor org-env-block[data-kind="meta"] .org-env-heading,
+.cm-editor org-env-block[data-kind="meta"] .org-env-content {
+  display: none;
+}
+
+.cm-editor org-env-block .org-env-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.46rem;
+  align-items: center;
+  white-space: normal;
+}
+
+.cm-editor org-env-block .org-env-meta-pill {
+  display: inline-flex;
+  align-items: baseline;
+  max-width: 100%;
+  border: 1px solid color-mix(in srgb, var(--aaron-paper-line, #d8d0c2), var(--aaron-muted, #6f6a61) 10%);
+  border-radius: 999px;
+  background: var(--aaron-paper-soft, #1e2536);
+  box-shadow: none;
+  overflow: hidden;
+}
+
+.cm-editor org-env-block .org-env-meta-key {
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  padding: 0.12rem 0.42rem 0.12rem 0.52rem;
+  background: color-mix(in srgb, var(--aaron-paper-line, #d8d0c2), transparent 52%);
+  color: color-mix(in srgb, var(--aaron-muted, #a9bed3), var(--aaron-ink, #e4ecff) 18%);
+  font: 650 0.72em/1.2 var(--aaron-font-sans, system-ui);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.cm-editor org-env-block .org-env-meta-value {
+  min-width: 1ch;
+  max-width: min(58ch, 72vw);
+  padding: 0.18rem 0.7rem 0.18rem 0.5rem;
+  outline: none;
+  color: var(--aaron-ink, #24201a);
+  overflow-wrap: anywhere;
+}
+
+.cm-editor org-env-block .org-env-meta-value:focus {
+  background: color-mix(in srgb, var(--c-note), transparent 78%);
+}
+
+.cm-editor org-env-block .org-env-meta-empty {
+  color: var(--aaron-muted, #6f6a61);
+  font-style: italic;
+}
+
+.cm-editor org-env-block > br:first-child {
+  display: none;
+}
+
+.cm-editor .katex,
+.cm-editor .katex * {
+  font-family: var(--aaron-font-math), var(--aaron-font-chinese) !important;
+}
+
+.cm-editor .katex .mord.mathnormal {
+  font-family: var(--aaron-font-math) !important;
+}
+
+/* ─── CM6 kernel: Paper-theme equivalents ────────────────────────── */
+/* Heading refinements beyond the size scale in widgets.css */
+.cm-editor .cm-md-h1 {
+  font-family: var(--aaron-font-heading);
+  font-size: 1.56em;
+  letter-spacing: 0;
+  text-align: center;
+  color: var(--aaron-heading-1, #ff9bad);
+}
+.cm-editor .cm-md-h1::after {
+  content: "";
+  display: block;
+  width: 72px;
+  height: 1px;
+  margin: 0.34em auto 0;
+  background: var(--aaron-heading-1, #ff9bad);
+}
+.cm-editor .cm-md-h2 {
+  font-family: var(--aaron-font-heading);
+  font-size: 1.16em;
+  padding-bottom: 0.12em;
+  color: var(--aaron-heading-2, #7ee7ff);
+  border-bottom: 1px solid color-mix(in srgb, var(--aaron-heading-2, #7ee7ff), transparent 56%);
+}
+.cm-editor .cm-md-h3 {
+  font-family: var(--aaron-font-heading);
+  font-size: 1.06em;
+  font-style: italic;
+  color: var(--aaron-heading-3, #d2a8ff);
+}
+.cm-editor .cm-md-h4 {
+  font-family: var(--aaron-font-heading);
+  font-size: 1.02em;
+  color: var(--aaron-heading-4, #8effa8);
+}
+.cm-editor .cm-md-h5 {
+  font-family: var(--aaron-font-heading);
+  font-size: 0.92em;
+  color: var(--aaron-heading-5, #ffd86a);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.cm-editor .cm-md-h6 {
+  font-family: var(--aaron-font-heading);
+  font-size: 0.84em;
+  color: var(--aaron-heading-6, #9fb7ff);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+/* Link styling — .cm-link-text is set by live-preview.ts on Link nodes */
+.cm-editor .cm-link-text {
+  color: var(--aaron-link, #2368a2);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--aaron-link, #2368a2), transparent 70%);
+}
+
+.cm-editor .cm-roam-link-text {
+  color: var(--aaron-link, #7ee7ff);
+  border-bottom-color: color-mix(in srgb, var(--aaron-link, #7ee7ff), transparent 38%);
+  background: color-mix(in srgb, var(--aaron-link, #7ee7ff), transparent 91%);
+  border-radius: 0.28em;
+  padding: 0 0.12em;
+  transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease;
+}
+.cm-editor .cm-roam-link-text:hover {
+  color: var(--aaron-ink, #f5f7fa);
+  background: color-mix(in srgb, var(--aaron-link, #7ee7ff), transparent 78%);
+  border-bottom-color: var(--aaron-link, #7ee7ff);
+}
+
+/* Blockquote line refinements */
+.cm-editor .cm-md-blockquote {
+  border-left-color: var(--aaron-paper-line, #b7ad9e);
+  color: var(--aaron-muted, #4e554f);
+}
+
+/* KaTeX fonts */
+.cm-editor .katex,
+.cm-editor .katex * {
+  font-family: var(--aaron-font-math), var(--aaron-font-chinese) !important;
+}
+.cm-editor .katex .mord.mathnormal {
+  font-family: var(--aaron-font-math) !important;
+}

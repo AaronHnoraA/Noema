@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: Lemma (no label)
+# key: lemma
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/lemma_Lemma_no_label_
+# --
+# --
+\begin{lemma}{$1}
+	$2
+\end{lemma}
+$0

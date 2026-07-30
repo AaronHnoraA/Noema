@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Projector
+# key: qproj
+# group: QC symbols
+# --
+\ket{${1:\psi}}\!\bra{${1:\psi}}$0

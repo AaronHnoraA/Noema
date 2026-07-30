@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \approx
+# key: \approx
+# uuid: latex-workshop:\approx
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%E2%89%88
+# group: Math · latex-workshop
+# --
+\approx$0

@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [mathit] — Italic math
+# key: mathit
+# group: Math · Styles
+# --
+\mathit{${1:X}}$0

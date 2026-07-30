@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Solar Mass
+# key: msun
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/msun_Solar_Mass
+# --
+M_{\odot}

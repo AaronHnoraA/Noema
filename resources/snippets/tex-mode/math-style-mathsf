@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [mathsf] — Sans serif math
+# key: mathsf
+# group: Math · Styles
+# --
+\mathsf{${1:X}}$0

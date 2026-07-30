@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Oracle
+# key: oracle
+# -- Crypto
+# --
+\mathcal{${1:O}}\left(${2:x}\right)$0

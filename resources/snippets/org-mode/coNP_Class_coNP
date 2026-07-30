@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Complexity class coNP
+# key: coNP
+# -- TCS
+# --
+\mathsf{coNP}$0

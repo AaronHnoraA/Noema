@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \cap
+# key: \cap
+# uuid: latex-workshop:\cap
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%E2%88%A9
+# group: Math · latex-workshop
+# --
+\cap$0

@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \pm
+# key: \pm
+# uuid: latex-workshop:\pm
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%C2%B1
+# group: Math · latex-workshop
+# --
+\pm$0

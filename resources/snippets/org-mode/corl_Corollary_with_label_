@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Corollary (with label)
+# key: corl
+# -- Add a corollary with label
+# --
+\begin{corollary}{$1}\label{cor:$1}
+	$2
+\end{corollary}
+$0

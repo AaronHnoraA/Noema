@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Imaginary Part
+# key: Im
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/Im_Imaginary_Part
+# --
+\mathrm{Im}

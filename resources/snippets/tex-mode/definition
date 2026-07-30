@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: Definition (no label)
+# key: definition
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/definition_Definition_no_label_
+# --
+# --
+\begin{definition}{$1}
+	$2
+\end{definition}
+$0

@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: hat
+# key: @^
+# uuid: latex-workshop:@^
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=hat
+# group: Math · latex-workshop
+# --
+\hat{${1:`(or yas-selected-text "")`}}$0

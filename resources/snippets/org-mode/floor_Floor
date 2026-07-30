@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Floor
+# key: floor
+# --
+\lfloor $1 \rfloor $2

@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \Gamma
+# key: \Gamma
+# uuid: overleaf:\Gamma
+# contributor: Noema provider=overleaf&priority=160&weight=0.04801549269801977&context=math-command&description=Overleaf+cmd
+# group: Math · overleaf
+# --
+\Gamma$0

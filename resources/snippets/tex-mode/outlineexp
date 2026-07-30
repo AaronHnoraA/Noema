@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: OutlineExp
+# key: outlineexp
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/outlineexp_OutlineExp
+# --
+# --
+\\[
+	$1
+\\]
+$0

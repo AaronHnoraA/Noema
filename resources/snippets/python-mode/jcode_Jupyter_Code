@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Jupytext code cell
+# key: jcode
+# --
+# %%
+$0

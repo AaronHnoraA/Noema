@@ -1,0 +1,63 @@
+# name: Mathematics / QC / TCS slides demo
+# kind: slides
+# group: Noema slides
+# --
+# {{title}}
+
+An Noema slide deck: Markdown source, live math, HTML, and the normal note editor.
+
+\[
+  \ket{\psi} = \alpha\ket{0} + \beta\ket{1},
+  \qquad |\alpha|^2 + |\beta|^2 = 1.
+\]
+
+# Quantum states are vectors
+
+- A pure state is a ray in a Hilbert space.
+- Measurement probabilities come from the Born rule.
+- The same KaTeX macros and live preview used by ordinary notes are available here.
+
+\[
+  p(i) = \lvert\langle i \mid \psi\rangle\rvert^2.
+\]
+
+# A computational viewpoint
+
+For a language $L \subseteq \{0,1\}^*$, a verifier accepts $x$ when
+
+\[
+  \Pr[V(x, w; r) = 1] \geq \frac{2}{3}.
+\]
+
+## A detail stays on this slide
+
+Only a new level-one heading creates a new page.
+
+## A vertical follow-up
+
+This H2 is below its parent H1. Use ↑ / ↓ to move within the stack;
+ordinary H1 slides continue with ← / →.
+
+# Hand-written HTML is still welcome
+
+<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;text-align:left">
+  <div><strong>Source</strong><br>One Markdown document.</div>
+  <div><strong>Preview</strong><br>Existing Noema widgets.</div>
+  <div><strong>Slides</strong><br>A small navigation shell.</div>
+</div>
+
+# Native Reveal page
+
+@@slides(reveal) []
+
+<section data-auto-animate data-background-color="#181327">
+  <h2 data-id="title">Reveal controls this section</h2>
+  <p class="fragment">The marker is hidden in Noema's editable preview.</p>
+  <p class="fragment">Use the note-local <code>.slides/*.js</code> mirror for JavaScript.</p>
+</section>
+
+# Next steps
+
+Use this deck to settle the template, typography, colours, and page rhythm.
+
+$0

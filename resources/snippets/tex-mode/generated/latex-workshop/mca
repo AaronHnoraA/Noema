@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: mathcal
+# key: MCA
+# uuid: latex-workshop:MCA
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math&description=math+caligraphic+font
+# group: Math · latex-workshop
+# --
+\mathcal{${1:`(or yas-selected-text "text")`}}

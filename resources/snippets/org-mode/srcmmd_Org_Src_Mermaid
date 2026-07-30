@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Org Mermaid src block
+# key: srcmmd
+# --
+#+begin_src mermaid${1:}
+$0
+#+end_src

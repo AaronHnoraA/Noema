@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [wp] — Weierstrass p
+# key: wp
+# group: Math · Misc
+# --
+\wp$0

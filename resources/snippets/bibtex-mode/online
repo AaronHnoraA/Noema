@@ -1,0 +1,13 @@
+# -*- mode: snippet -*-
+# name: @online
+# key: online
+# group: BibTeX
+# --
+@online{${1:key},
+  author = {${2:author}},
+  title = {${3:title}},
+  year = {${4:year}},
+  url = {${5:url}},
+  urldate = {${6:YYYY-MM-DD}}
+}
+$0

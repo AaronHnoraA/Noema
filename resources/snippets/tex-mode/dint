@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Definite Integral
+# key: dint
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/dint_Definite_Integral
+# --
+\int_{$1}^{$2} $3 \, d$4 $5

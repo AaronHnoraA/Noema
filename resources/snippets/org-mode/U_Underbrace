@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Underbrace
+# key: U
+# --
+\underbrace{ ${VISUAL} }_{ $1 }

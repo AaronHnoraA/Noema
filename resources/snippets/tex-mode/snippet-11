@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Much Greater
+# key: >>
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/_Much_Greater
+# --
+\gg

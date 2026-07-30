@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Compactitem
+# key: compactitem
+# -- Add a compactitem (from package paralist)
+# --
+\begin{compactitem}
+	\item $1
+\end{compactitem}
+$0

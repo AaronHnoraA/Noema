@@ -1,0 +1,10 @@
+# -*- mode: snippet -*-
+# name: Split
+# key: spl
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/spl_Split
+# --
+# --
+\begin{split}
+	$0
+\end{split}

@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [div] — Division
+# key: div
+# group: Math · Operators
+# --
+\div$0

@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Tensor product
+# key: ox
+# group: Noema local
+# --
+\otimes

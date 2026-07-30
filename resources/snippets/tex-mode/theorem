@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: Theorem (no label)
+# key: theorem
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/theorem_Theorem_no_label_
+# --
+# --
+\begin{theorem}{$1}
+	$2
+\end{theorem}
+$0

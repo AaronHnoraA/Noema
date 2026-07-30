@@ -1,0 +1,10 @@
+# -*- mode: snippet -*-
+# name: obs
+# key: obs
+# -- ObsLink
+# --
+%${1}
+@article{obs-concept-${2},
+    title = {{OBS:$3}},
+    url = {http://10.31.2.53/openlink.html?link=$1},
+}$0

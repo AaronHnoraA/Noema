@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: POVM
+# key: povm
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/org-mode/povm_POVM
+# --
+# --
+\{${1:E_m}\}_{${2:m}}$0

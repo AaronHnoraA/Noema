@@ -1,0 +1,19 @@
+# -*- mode: snippet -*-
+# name: Table:ACM:*
+# key: table:acm:*
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/table_acm_Table_ACM_
+# --
+# --
+\begin{table*}
+	\caption{$1}\label{tab:$2}
+	\begin{tabular}{${3:ccl}}
+		\toprule
+		$4
+		a & b & c \\\\
+		\midrule
+		d & e & f \\\\
+		\bottomrule
+	\end{tabular}
+\end{table*}
+$0

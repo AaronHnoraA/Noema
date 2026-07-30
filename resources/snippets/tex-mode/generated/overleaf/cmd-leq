@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \leq
+# key: \leq
+# uuid: overleaf:\leq
+# contributor: Noema provider=overleaf&priority=160&weight=0.20498894440637172&context=math-command&description=Overleaf+cmd
+# group: Math · overleaf
+# --
+\leq$0

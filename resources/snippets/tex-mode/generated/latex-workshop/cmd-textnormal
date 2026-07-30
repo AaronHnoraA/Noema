@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \textnormal{}
+# key: \textnormal{}
+# uuid: latex-workshop:\textnormal{}
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=
+# group: Math · latex-workshop
+# --
+\textnormal{${1}}$0

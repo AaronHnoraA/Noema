@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [perp] — Perpendicular / bottom
+# key: perp
+# group: Math · Relations
+# --
+\perp$0

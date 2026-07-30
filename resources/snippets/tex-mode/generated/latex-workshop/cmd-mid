@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \mid
+# key: \mid
+# uuid: latex-workshop:\mid
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%E2%88%A3
+# group: Math · latex-workshop
+# --
+\mid$0

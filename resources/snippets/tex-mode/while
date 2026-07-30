@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Algorithm:While
+# key: while
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/while_Algorithm_While
+# --
+\While{$1}
+	\State $0
+\EndWhile

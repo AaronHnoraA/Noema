@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Jupyter cell magic: timeit
+# key: jtimeit
+# --
+%%timeit
+$0

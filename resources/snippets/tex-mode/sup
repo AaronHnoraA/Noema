@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Superset Equal
+# key: sup=
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/sup_Superset_Equal
+# --
+\supseteq

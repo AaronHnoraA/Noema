@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: varrho
+# key: @vr
+# uuid: latex-workshop:@vr
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=varrho
+# group: Math · latex-workshop
+# --
+\varrho

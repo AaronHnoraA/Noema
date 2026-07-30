@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \sum
+# key: \sum
+# uuid: overleaf:\sum
+# contributor: Noema provider=overleaf&priority=160&weight=0.42607994509619934&context=math-command&description=Overleaf+cmd
+# group: Math · overleaf
+# --
+\sum$0

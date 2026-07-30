@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Chapter (no label)
+# key: cha
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/cha_Chapter_no_label_
+# --
+# --
+\chapter{$1}
+${0:$TM_SELECTED_TEXT}

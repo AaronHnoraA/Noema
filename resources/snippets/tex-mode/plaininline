@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: lstinline
+# key: plaininline
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/plaininline_lstinline
+# --
+# --
+\lstinline{$1}$0

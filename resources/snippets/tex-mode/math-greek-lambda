@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [lambda] — Lambda
+# key: lambda
+# group: Math · Greek
+# --
+\lambda$0

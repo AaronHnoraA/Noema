@@ -1,0 +1,8 @@
+# -*- mode: snippet; require-final-newline: nil -*-
+# name: Org formula target
+# key: eqtarget
+# -- Insert a target after a display formula
+# --
+\[
+$0
+\]     <<eq-`(format-time-string "%Y%m%dT%H%M%S")`${1:-slug}>>

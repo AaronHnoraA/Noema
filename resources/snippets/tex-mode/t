@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Vartheta
+# key: :t
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/_t_Vartheta
+# --
+\vartheta

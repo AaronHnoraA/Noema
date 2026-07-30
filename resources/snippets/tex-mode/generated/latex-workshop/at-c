@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: chi
+# key: @c
+# uuid: latex-workshop:@c
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=chi
+# group: Math · latex-workshop
+# --
+\chi

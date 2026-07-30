@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Raise to Power
+# key: rd
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/rd_Raise_to_Power
+# --
+^{$1}$2

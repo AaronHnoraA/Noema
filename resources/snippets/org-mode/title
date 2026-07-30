@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: title
+# key: tt
+# --
+#+title: `(file-name-sans-extension (buffer-name))`
+#+subtitle: this is subtitle
+#+author: `(getenv "USER")`
+#+date: `(format-time-string "<%Y-%m-%d %H:%M>")`
+#+SETUPFILE: ~/.doom.d/org-classic-head.setup

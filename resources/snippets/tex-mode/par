@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Paragraph (no label)
+# key: par
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/par_Paragraph_no_label_
+# --
+# --
+\paragraph{$1}
+${0:$TM_SELECTED_TEXT}

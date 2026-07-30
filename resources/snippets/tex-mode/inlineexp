@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: InlineExp
+# key: inlineexp
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/inlineexp_InlineExp
+# --
+# --
+\\($1\\)$0

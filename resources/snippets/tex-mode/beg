@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Begin-End Environment
+# key: beg
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/beg_Begin-End_Environment
+# --
+\begin{$1}
+$2
+\end{$1}

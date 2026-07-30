@@ -1,0 +1,10 @@
+# -*- mode: snippet -*-
+# name: Tabular (no label)
+# key: tab
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/tab_Tabular_no_label_
+# --
+# --
+\begin{tabular}{${1:c}}
+$0
+\end{tabular}

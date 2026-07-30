@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \begin{bmatrix}…\end{bmatirx}
+# key: bmatrix
+# --
+# --
+\begin{bmatrix}
+$1
+\end{bmatrix}

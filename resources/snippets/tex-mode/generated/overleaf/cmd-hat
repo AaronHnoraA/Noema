@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \hat{}
+# key: \hat
+# uuid: overleaf:\hat
+# contributor: Noema provider=overleaf&priority=160&weight=0.25264309033778715&context=math-command&description=Overleaf+cmd
+# group: Math · overleaf
+# --
+\hat{$1}$0

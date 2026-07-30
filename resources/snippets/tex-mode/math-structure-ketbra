@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [ketbra] — Ket-bra projector
+# key: ketbra
+# group: Math · Recent notes
+# --
+\left|${1:\psi}\right\rangle\!\left\langle${1}\right|$0

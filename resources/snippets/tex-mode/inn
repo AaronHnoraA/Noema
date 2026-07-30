@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Element Of
+# key: inn
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/inn_Element_Of
+# --
+\in

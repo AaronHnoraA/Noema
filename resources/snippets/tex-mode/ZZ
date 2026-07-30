@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Integers
+# key: ZZ
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/ZZ_Integers
+# --
+\mathbb{Z}

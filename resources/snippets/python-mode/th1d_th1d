@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: th1d
+# key: th1d
+# --
+ROOT.TH1D("${1:h}", "${2:h}", ${3:binning})

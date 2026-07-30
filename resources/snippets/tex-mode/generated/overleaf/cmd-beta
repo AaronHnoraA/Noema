@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \beta
+# key: \beta
+# uuid: overleaf:\beta
+# contributor: Noema provider=overleaf&priority=160&weight=0.3061799530337638&context=math-command&description=Overleaf+cmd
+# group: Math · overleaf
+# --
+\beta$0

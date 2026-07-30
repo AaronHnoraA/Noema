@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \Omega
+# key: \Omega
+# uuid: latex-workshop:\Omega
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%CE%A9%2C+shortcut+%40W
+# group: Math · latex-workshop
+# --
+\Omega$0

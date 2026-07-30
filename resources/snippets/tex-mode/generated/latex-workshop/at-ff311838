@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: ddot
+# key: @:
+# uuid: latex-workshop:@:
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=ddot
+# group: Math · latex-workshop
+# --
+\ddot{${1:`(or yas-selected-text "")`}}$0

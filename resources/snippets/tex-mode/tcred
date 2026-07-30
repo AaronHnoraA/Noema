@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Many-one reduction
+# key: tcred
+# group: TCS symbols
+# --
+\leq_m^p$0

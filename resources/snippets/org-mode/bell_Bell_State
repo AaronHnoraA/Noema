@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Bell state
+# key: bell
+# -- Quantum
+# --
+\frac{1}{\sqrt{2}}\left(\lvert 00\rangle + \lvert 11\rangle\right)$0

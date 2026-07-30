@@ -1,0 +1,7 @@
+{
+  "$schema-note": "Agent-maintained rules merged into the Noema→Pandoc preprocessor. Edit only during an explicit maintenance pass and add regression tests. envMap maps #+begin <kind> to a template-defined LaTeX environment; commentBlocks lists visible remark-like kinds.",
+  "envMap": {},
+  "commentBlocks": [],
+  "hiddenBlocks": [],
+  "pandocExtensions": []
+}

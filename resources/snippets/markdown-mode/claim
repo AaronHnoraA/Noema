@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Claim block
+# key: claim
+# group: Noema blocks
+# --
+#+begin claim ${1:name}
+${2:Claim.}
+#+end claim
+$0

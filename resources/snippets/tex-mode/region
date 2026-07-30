@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Region Start
+# key: #region
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/_region_Region_Start
+# --
+# --
+%#Region $0

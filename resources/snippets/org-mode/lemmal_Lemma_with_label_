@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Lemma (with label)
+# key: lemmal
+# -- Add a lemma with label
+# --
+\begin{lemma}{$1}\label{lem:$1}
+	$2
+\end{lemma}
+$0

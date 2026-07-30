@@ -1,0 +1,10 @@
+# -*- mode: snippet -*-
+# name: define snippet
+# key: snip
+# --
+"${1:name}": {
+	"prefix": "${2:prefix}",
+	"body": [
+		"${3:body}"
+	]
+}

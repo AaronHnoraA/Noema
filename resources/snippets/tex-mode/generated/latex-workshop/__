@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: subscript
+# key: __
+# uuid: latex-workshop:__
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math&description=subscript
+# group: Math · latex-workshop
+# --
+_{${1:`(or yas-selected-text "")`}}

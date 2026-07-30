@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: definition
+# key: def
+# group: declarations
+# --
+def ${1:name} : ${2:Type} :=
+  $0

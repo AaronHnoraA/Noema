@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: import matplotlib
+# key: mpl
+# --
+import matplotlib as mpl
+mpl.use("Agg")

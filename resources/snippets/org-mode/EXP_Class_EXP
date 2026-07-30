@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Complexity class EXP
+# key: EXP
+# -- TCS
+# --
+\mathsf{EXP}$0

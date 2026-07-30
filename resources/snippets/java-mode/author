@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: author
+# key: aut
+# --
+
+/**
+ * @author `(getenv "USER")`
+ * @since `(format-time-string "%Y-%m-%d")`
+ **/

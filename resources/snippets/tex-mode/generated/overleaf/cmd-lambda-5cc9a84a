@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \Lambda
+# key: \Lambda
+# uuid: overleaf:\Lambda
+# contributor: Noema provider=overleaf&priority=160&weight=0.032206594305977686&context=math-command&description=Overleaf+cmd
+# group: Math · overleaf
+# --
+\Lambda$0

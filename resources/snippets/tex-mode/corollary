@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: Corollary (no label)
+# key: corollary
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/corollary_Corollary_no_label_
+# --
+# --
+\begin{corollary}{$1}
+	$2
+\end{corollary}
+$0

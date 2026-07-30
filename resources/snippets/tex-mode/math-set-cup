@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [cup] — Union
+# key: cup
+# group: Math · Sets
+# --
+\cup$0

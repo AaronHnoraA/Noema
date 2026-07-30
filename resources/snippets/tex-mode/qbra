@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Quantum bra
+# key: qbra
+# group: QC symbols
+# --
+\bra{${1:\psi}}$0

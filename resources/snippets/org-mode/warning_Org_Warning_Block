@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Org warning block
+# key: warning
+# -- Org special block
+# --
+#+begin_warning
+$0
+#+end_warning

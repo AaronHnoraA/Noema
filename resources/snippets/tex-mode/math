@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: Math
+# key: math
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/math_Math
+# --
+# --
+\begin{math}
+	$1
+\end{math}
+$0

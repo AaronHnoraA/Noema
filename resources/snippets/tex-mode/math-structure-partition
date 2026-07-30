@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [partition] — Indexed disjoint union
+# key: partition
+# group: Math · Recent notes
+# --
+\bigsqcup_{${1:i=1}}^{${2:s}} ${3:P_i}$0

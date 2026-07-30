@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Sigma (lowercase)
+# key: ssss
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/ssss_Sigma_lowercase_
+# --
+\sigma

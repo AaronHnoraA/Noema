@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: NasOpenlink
+# key: openlink
+# -- Add a empty page
+# --
+http://10.31.2.53/openlink.html?link=$0

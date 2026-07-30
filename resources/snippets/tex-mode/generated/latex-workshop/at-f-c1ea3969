@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Phi
+# key: @F
+# uuid: latex-workshop:@F
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=Phi
+# group: Math · latex-workshop
+# --
+\Phi

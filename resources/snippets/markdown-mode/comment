@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Comment block
+# key: comment
+# group: Noema blocks
+# --
+#+begin comment ${1:title}
+${2:Comment.}
+#+end comment
+$0

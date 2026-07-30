@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Org exercise block
+# key: exercise
+# -- Org special block
+# --
+#+begin_exercise
+$0
+#+end_exercise

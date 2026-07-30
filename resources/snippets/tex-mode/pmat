@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Pmatrix
+# key: pmat
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/pmat_Pmatrix
+# --
+\begin{pmatrix}
+$1
+\end{pmatrix}

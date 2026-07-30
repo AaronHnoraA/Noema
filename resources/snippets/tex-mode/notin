@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Not Element Of
+# key: notin
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/notin_Not_Element_Of
+# --
+\not\in

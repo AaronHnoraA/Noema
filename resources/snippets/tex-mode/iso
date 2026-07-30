@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Isotope
+# key: iso
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/iso_Isotope
+# --
+{}^{$1}_{$2}$3

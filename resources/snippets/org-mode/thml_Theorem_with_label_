@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Theorem (with label)
+# key: thml
+# -- Add a theorem with label
+# --
+\begin{theorem}{$1}\label{thm:$1}
+	$2
+\end{theorem}
+$0

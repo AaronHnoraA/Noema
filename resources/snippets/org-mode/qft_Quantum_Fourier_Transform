@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Quantum Fourier transform
+# key: qft
+# -- Quantum
+# --
+\operatorname{QFT}_{${1:n}}\lvert ${2:x}\rangle =
+\frac{1}{\sqrt{${3:2^n}}}\sum_{${4:y}=0}^{${3:2^n}-1}
+e^{2\pi i ${2:x}${4:y}/${3:2^n}}\lvert ${4:y}\rangle$0

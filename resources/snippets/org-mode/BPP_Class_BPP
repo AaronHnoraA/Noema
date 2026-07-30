@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Complexity class BPP
+# key: BPP
+# -- TCS
+# --
+\mathsf{BPP}$0

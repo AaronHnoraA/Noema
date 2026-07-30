@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Cryptographic game
+# key: game
+# -- Crypto
+# --
+\mathsf{Game}^{${1:ind-cpa}}_{${2:\Pi},\mathcal{${3:A}}}\left(${4:\lambda}\right)$0

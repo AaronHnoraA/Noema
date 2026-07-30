@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Probability
+# key: mPr
+# group: Math symbols
+# --
+\Pr\!\left[${1:E}\right]$0

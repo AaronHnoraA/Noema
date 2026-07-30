@@ -1,0 +1,245 @@
+/*
+ * Noema's canonical prose typography.
+ *
+ * Component colour/chrome stays in theme-typora.css and widgets.css.  This
+ * file alone owns prose fonts and vertical rhythm for Visual mode and rendered
+ * documents, so hosts do not need a second corrective layout pass.
+ */
+
+@font-face {
+  font-family: "AaronLatinModernRoman";
+  src: url("./fonts/aaron-latin-modern-roman-regular.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  unicode-range: U+0000-024F, U+02B0-02FF, U+1E00-1EFF, U+2000-206F, U+20A0-20CF, U+2100-214F;
+}
+
+@font-face {
+  font-family: "AaronLatinModernRoman";
+  src: url("./fonts/aaron-latin-modern-roman-italic.woff2") format("woff2");
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  unicode-range: U+0000-024F, U+02B0-02FF, U+1E00-1EFF, U+2000-206F, U+20A0-20CF, U+2100-214F;
+}
+
+@font-face {
+  font-family: "AaronLatinModernRoman";
+  src: url("./fonts/aaron-latin-modern-roman-bold.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  unicode-range: U+0000-024F, U+02B0-02FF, U+1E00-1EFF, U+2000-206F, U+20A0-20CF, U+2100-214F;
+}
+
+@font-face {
+  font-family: "AaronLatinModernRoman";
+  src: url("./fonts/aaron-latin-modern-roman-bolditalic.woff2") format("woff2");
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+  unicode-range: U+0000-024F, U+02B0-02FF, U+1E00-1EFF, U+2000-206F, U+20A0-20CF, U+2100-214F;
+}
+
+:root {
+  --aaron-font-prose: "AaronLatinModernRoman", var(--aaron-font-chinese), "Latin Modern Roman", "Computer Modern", Georgia, serif;
+  --aaron-font-academic-title: "AaronLatinModernRoman", "Latin Modern Roman", "Computer Modern", "Songti SC", "STSong", "Source Han Serif SC", "Noto Serif CJK SC", Georgia, serif;
+  /* 116% of the previous 20px prose measure.  This remains the body-text
+   * scale; heading, code and KaTeX faces keep their dedicated rules below. */
+  --aaron-prose-size: 23.2px;
+  --aaron-structural-size: calc(20px * var(--aaronnote-layout-zoom, 1));
+  --aaron-prose-leading: 1.5;
+  --aaron-prose-paragraph-gap: 0.55em;
+  --aaron-prose-list-item-gap: 0.22em;
+  --aaron-prose-block-gap: 0.85em;
+  --aaron-prose-display-gap: 0.75em;
+  --aaron-prose-gutter-floor: 32px;
+  --aaron-prose-layout-floor: 800px;
+  --aaron-org-env-rail-gap: 1.5rem;
+  --aaron-prose-page-top: clamp(28px, 4vh, 48px);
+  --aaron-prose-page-bottom: clamp(72px, 10vh, 120px);
+}
+
+.cm-editor.aaronnote-visual-typography,
+.published-note-page .cm-editor {
+  font-family: var(--aaron-font-prose);
+  font-size: calc(var(--aaron-prose-size) * var(--aaronnote-layout-zoom, 1));
+  line-height: var(--aaron-prose-leading);
+  font-kerning: normal;
+  font-variant-ligatures: common-ligatures contextual;
+  font-feature-settings: "kern" 1, "liga" 1;
+}
+
+.cm-editor.aaronnote-visual-typography .cm-content {
+  font-family: var(--aaron-font-prose);
+  line-height: var(--aaron-prose-leading);
+}
+
+/* Rails retain their original overlay implementation.  Visual typography
+ * translates the overlay to the prose edge and owns the text-to-rail gap. */
+.cm-editor.aaronnote-visual-typography .cm-org-env-rail {
+  transform: translateX(var(--visual-inline-gutter));
+}
+
+.cm-editor.aaronnote-visual-typography :where(.cm-org-env-heading-widget, .cm-org-env-line, .cm-math-block[data-org-env-kind], .cm-org-env-end-widget) {
+  padding-left: calc(var(--org-env-depth, 0) * 1.1rem + var(--aaron-org-env-rail-gap) + 3px);
+}
+
+.cm-editor.aaronnote-visual-typography :where(.cm-line, .org-env-content, .cm-org-env-content),
+.published-note-page .cm-editor :where(p, li, blockquote, .org-env-content, .cm-org-env-content),
+.aaronnote-reveal-view .reveal .slides :where(p, li, blockquote) {
+  font-family: var(--aaron-font-prose);
+}
+
+/* Headings, code and mathematics keep their existing dedicated faces. */
+.cm-editor.aaronnote-visual-typography :where(h1, h2, h3, h4, h5, h6, .cm-md-h1, .cm-md-h2, .cm-md-h3, .cm-md-h4, .cm-md-h5, .cm-md-h6, .aaronnote-section-heading, .aaronnote-section-heading-inner, .org-env-heading, .org-env-heading-title, .cm-org-env-heading-widget),
+.published-note-page .cm-editor :where(h1, h2, h3, h4, h5, h6, .aaronnote-section-heading, .aaronnote-section-heading-inner, .org-env-heading, .org-env-heading-title) {
+  font-family: var(--aaron-font-heading);
+}
+
+.cm-editor.aaronnote-visual-typography :where(code, pre, .cm-inline-code, .cm-monospace, .cm-md-code-block, .math-block-source, .math-block-fence),
+.published-note-page .cm-editor :where(code, pre, .cm-inline-code, .cm-monospace) {
+  font-family: var(--aaron-font-mono);
+}
+
+/* The 116% change is prose-only.  These roots establish the old 20px scale
+ * before their existing relative title/code/math rules run. */
+.cm-editor.aaronnote-visual-typography :where(.aaronnote-section-heading, .cm-org-env-heading-widget),
+.published-note-page .cm-editor .aaronnote-section-heading {
+  font-size: var(--aaron-structural-size);
+}
+
+.cm-editor.aaronnote-visual-typography .cm-md-h1 { font-size: calc(var(--aaron-structural-size) * 1.75); }
+.cm-editor.aaronnote-visual-typography .cm-md-h2 { font-size: calc(var(--aaron-structural-size) * 1.45); }
+.cm-editor.aaronnote-visual-typography .cm-md-h3 { font-size: calc(var(--aaron-structural-size) * 1.2); }
+.cm-editor.aaronnote-visual-typography .cm-md-h4 { font-size: calc(var(--aaron-structural-size) * 1.05); }
+.cm-editor.aaronnote-visual-typography .cm-md-h5 { font-size: calc(var(--aaron-structural-size) * 0.95); }
+.cm-editor.aaronnote-visual-typography .cm-md-h6 { font-size: calc(var(--aaron-structural-size) * 0.9); }
+
+.cm-editor.aaronnote-visual-typography :where(.cm-inline-code, .cm-monospace, .cm-md-code-block, .math-block-source, .math-block-fence, .cm-math-source-line, .cm-math-inline, .aaronnote-math-inline, .cm-math-block, .cm-math-block-preview, .aaronnote-math-block, math-block),
+.published-note-page .cm-editor :where(code, pre, .cm-inline-code, .cm-monospace, .cm-math-inline, .aaronnote-math-inline, .cm-math-block, .cm-math-block-preview, .aaronnote-math-block, math-block) {
+  font-size: var(--aaron-structural-size);
+}
+
+.cm-editor.aaronnote-visual-typography p,
+.published-note-page .cm-editor p,
+.aaronnote-reveal-view .reveal .slides p {
+  margin-block: 0 var(--aaron-prose-paragraph-gap);
+  text-indent: 0;
+}
+
+.cm-editor.aaronnote-visual-typography p:last-child,
+.published-note-page .cm-editor p:last-child,
+.aaronnote-reveal-view .reveal .slides p:last-child {
+  margin-bottom: 0;
+}
+
+.cm-editor.aaronnote-visual-typography :where(ol, ul),
+.published-note-page .cm-editor :where(ol, ul),
+.aaronnote-reveal-view .reveal .slides :where(ol, ul) {
+  margin-block: 0.35em 0.65em;
+}
+
+.cm-editor.aaronnote-visual-typography li + li,
+.published-note-page .cm-editor li + li,
+.aaronnote-reveal-view .reveal .slides li + li {
+  margin-top: var(--aaron-prose-list-item-gap);
+}
+
+/* Visual Markdown has bare CM lines rather than paragraph elements. */
+.cm-editor.aaronnote-visual-typography .cm-line.cm-prose-blank-line {
+  min-height: 0;
+  margin: 0;
+  padding-block: 0;
+}
+
+.cm-editor.aaronnote-visual-typography .cm-line.cm-prose-paragraph-gap {
+  height: var(--aaron-prose-paragraph-gap);
+  line-height: var(--aaron-prose-paragraph-gap);
+}
+
+.cm-editor.aaronnote-visual-typography .cm-line.cm-prose-blank-collapsed,
+.cm-editor.aaronnote-visual-typography .cm-line.cm-prose-blank-absorbed {
+  height: 0;
+  min-height: 0;
+  overflow: hidden;
+  font-size: 0;
+  line-height: 0;
+}
+
+.cm-editor.aaronnote-visual-typography .cm-line.cm-prose-blank-active {
+  height: auto;
+  min-height: 1em;
+  overflow: visible;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+/* Semantic blocks own their external rhythm; measured roots never use margin. */
+.cm-editor.aaronnote-visual-typography :where(.cm-org-env-block, org-env-block) {
+  margin-block: 0;
+  padding-top: var(--aaron-prose-block-gap);
+  padding-bottom: var(--aaron-prose-block-gap);
+  font-family: var(--aaron-font-prose);
+  font-size: 1em;
+  line-height: inherit;
+}
+
+.published-note-page .cm-editor org-env-block {
+  margin-block: 0;
+  padding-top: var(--aaron-prose-block-gap);
+  padding-bottom: var(--aaron-prose-block-gap);
+  font-family: var(--aaron-font-prose);
+  font-size: 1em;
+  line-height: inherit;
+}
+
+.cm-editor.aaronnote-visual-typography :where(.cm-org-env-content, .org-env-content) p,
+.published-note-page .cm-editor :where(.cm-org-env-content, .org-env-content) p {
+  margin-block: 0 var(--aaron-prose-paragraph-gap);
+}
+
+/* Inline math participates in the prose baseline without changing KaTeX. */
+.cm-editor.aaronnote-visual-typography :where(.cm-math-inline, .aaronnote-math-inline),
+.published-note-page .cm-editor :where(.cm-math-inline, .aaronnote-math-inline) {
+  display: inline-block;
+  margin: 0;
+  line-height: 1;
+  vertical-align: -0.08em;
+}
+
+.cm-editor.aaronnote-visual-typography :where(math-block, .cm-math-block, .cm-math-block-preview, .aaronnote-math-block),
+.published-note-page .cm-editor :where(math-block, .cm-math-block, .cm-math-block-preview, .aaronnote-math-block) {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  padding-block: var(--aaron-prose-display-gap);
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-align: center;
+}
+
+.cm-editor.aaronnote-visual-typography :where(.cm-math-block, .aaronnote-math-block) + :where(.cm-math-block, .aaronnote-math-block),
+.published-note-page .cm-editor :where(.cm-math-block, .aaronnote-math-block) + :where(.cm-math-block, .aaronnote-math-block) {
+  padding-top: 0.35em;
+}
+
+.cm-editor.aaronnote-visual-typography :where(.cm-math-block, .aaronnote-math-block, math-block) > .katex-display,
+.published-note-page .cm-editor :where(.cm-math-block, .aaronnote-math-block, math-block) > .katex-display {
+  display: inline-block;
+  width: auto;
+  max-width: 100%;
+  margin: 0;
+  overflow: visible;
+}
+
+@media print {
+  :root {
+    --aaron-prose-size: 10pt;
+    --aaron-prose-leading: 1.2;
+    --aaron-prose-paragraph-gap: 0.45em;
+  }
+}

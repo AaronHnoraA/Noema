@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Chapter (with label)
+# key: chal
+# -- Chapter with label
+# --
+\chapter{$1}\label{chap:$1}
+${0:$TM_SELECTED_TEXT}

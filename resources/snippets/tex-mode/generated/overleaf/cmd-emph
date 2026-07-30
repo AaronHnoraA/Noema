@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \emph{}
+# key: \emph
+# uuid: overleaf:\emph
+# contributor: Noema provider=overleaf&priority=160&weight=0.7060308784832261&context=math-command&description=Overleaf+cmd
+# group: Math · overleaf
+# --
+\emph{$1}$0

@@ -1,0 +1,16 @@
+{
+  "argv": [
+    "@AARONNOTE_JUPYTER_ROOT@/bin/sage-jupyter-kernel",
+    "-f",
+    "{connection_file}"
+  ],
+  "display_name": "SageMath @SAGE_VERSION@",
+  "language": "sage",
+  "env": {
+    "PYTHONNOUSERSITE": "",
+    "SAGE_JUPYTER_LOG": "@AARONNOTE_JUPYTER_ROOT@/.jupyter/logs/sagemath-kernel.log"
+  },
+  "metadata": {
+    "debugger": false
+  }
+}

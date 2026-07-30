@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: have tactic
+# key: hav
+# group: tactics
+# --
+have ${1:h} : ${2:type} := by
+  $0

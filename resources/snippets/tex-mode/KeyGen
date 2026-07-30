@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Key generation
+# key: KeyGen
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/org-mode/KeyGen_Key_Generation
+# --
+# --
+(${1:pk}, ${2:sk}) \leftarrow \operatorname{KeyGen}\left(1^{${3:\lambda}}\right)$0

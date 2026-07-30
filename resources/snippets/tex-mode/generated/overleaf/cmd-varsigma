@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \varsigma
+# key: \varsigma
+# uuid: overleaf:\varsigma
+# contributor: Noema provider=overleaf&priority=160&weight=0.0010424880711234978&context=math-command&description=Overleaf+cmd
+# group: Math · overleaf
+# --
+\varsigma$0

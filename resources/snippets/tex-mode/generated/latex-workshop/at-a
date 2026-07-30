@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: alpha
+# key: @a
+# uuid: latex-workshop:@a
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=alpha
+# group: Math · latex-workshop
+# --
+\alpha

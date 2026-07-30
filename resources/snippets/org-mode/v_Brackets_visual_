@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Brackets (visual)
+# key: v[
+# --
+[${VISUAL}]

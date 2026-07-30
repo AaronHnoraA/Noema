@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Inline Code fence
+# key: icode
+# group: Noema syntax
+# --
+`$1` $0

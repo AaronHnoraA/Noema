@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Commitment
+# key: Com
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/org-mode/Com_Commitment
+# --
+# --
+(${1:c}, ${2:d}) \leftarrow \operatorname{Com}\left(${3:m}; ${4:r}\right)$0

@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Approx Equal
+# key: sim=
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/sim_Approx_Equal
+# --
+\simeq

@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Omega (alt)
+# key: ome
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/ome_Omega_alt_
+# --
+\omega

@@ -1,0 +1,6 @@
+# -*- mode: snippet; require-final-newline: nil -*-
+# name: Org headline link
+# key: hlink
+# -- Insert an Org headline fuzzy link
+# --
+[[*${1:headline}][$2]]$0

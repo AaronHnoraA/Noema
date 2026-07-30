@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Warning block
+# key: warn
+# group: Noema blocks
+# --
+#+begin warning ${1:title}
+${2:Warning.}
+#+end warning
+$0

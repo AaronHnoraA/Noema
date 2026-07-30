@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Upsilon
+# key: @U
+# uuid: latex-workshop:@U
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=Upsilon
+# group: Math · latex-workshop
+# --
+\Upsilon

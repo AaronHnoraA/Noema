@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [Aut] — Automorphism group
+# key: Aut
+# group: Math · Linear algebra
+# --
+\operatorname{Aut}$0

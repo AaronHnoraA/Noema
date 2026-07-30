@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Dagger
+# key: dag
+# --
+^{\dagger}

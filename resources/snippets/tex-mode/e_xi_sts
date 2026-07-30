@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Exists
+# key: e\xi sts
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/e_xi_sts_Exists
+# --
+\exists

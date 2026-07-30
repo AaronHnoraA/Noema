@@ -1,0 +1,10 @@
+# -*- mode: snippet -*-
+# name: Meta block
+# key: meta
+# group: Noema blocks
+# --
+#+begin meta
+tags: ${1:tag}
+id: ${2:id}
+#+end meta
+$0

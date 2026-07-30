@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Org overview block
+# key: overview
+# -- Org special block
+# --
+#+begin_overview
+$0
+#+end_overview

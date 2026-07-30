@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Gamma (lowercase)
+# key: gggg
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/gggg_Gamma_lowercase_
+# --
+\gamma

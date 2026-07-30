@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [sqrt] — Square root
+# key: sqrt
+# group: Math · Calculus
+# --
+\sqrt{${1:x}}$0

@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [sim] — Similar
+# key: sim
+# group: Math · Relations
+# --
+\sim$0

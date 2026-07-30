@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Implies
+# key: =>
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/_Implies
+# --
+\implies

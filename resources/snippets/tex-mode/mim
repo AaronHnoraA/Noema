@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Image
+# key: mim
+# group: Math symbols
+# --
+\operatorname{im}\!\left(${1:T}\right)$0

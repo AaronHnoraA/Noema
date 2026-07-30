@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [epsilon] — Epsilon
+# key: epsilon
+# group: Math · Greek
+# --
+\epsilon$0

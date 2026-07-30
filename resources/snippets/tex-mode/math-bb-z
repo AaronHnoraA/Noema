@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [bbZ] — Integers
+# key: bbZ
+# group: Math · Blackboard
+# --
+\mathbb{Z}$0

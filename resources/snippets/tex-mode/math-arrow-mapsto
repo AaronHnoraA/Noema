@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [mapsto] — Maps to
+# key: mapsto
+# group: Math · Arrows
+# --
+\mapsto$0

@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \underline{}
+# key: \underline{}
+# uuid: latex-workshop:\underline{}
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%C2%A0%CC%B2
+# group: Math · latex-workshop
+# --
+\underline{${1}}$0

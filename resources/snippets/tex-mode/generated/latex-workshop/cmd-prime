@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \prime
+# key: \prime
+# uuid: latex-workshop:\prime
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%E2%80%B2
+# group: Math · latex-workshop
+# --
+\prime$0

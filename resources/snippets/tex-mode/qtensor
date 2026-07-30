@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Tensor product
+# key: qten
+# group: QC symbols
+# --
+${1:A}\otimes ${2:B}$0

@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \textmd{}
+# key: \textmd{}
+# uuid: latex-workshop:\textmd{}
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=
+# group: Math · latex-workshop
+# --
+\textmd{${1}}$0

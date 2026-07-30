@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Cryptographic advantage
+# key: adv
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/org-mode/adv_Advantage
+# --
+# --
+\operatorname{Adv}^{${1:ind-cpa}}_{${2:\Pi},\mathcal{${3:A}}}\left(${4:\lambda}\right)$0

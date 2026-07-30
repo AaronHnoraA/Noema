@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Algorithm:If
+# key: if
+# --
+\If{$1}
+\ElsIf{$2}
+\Else
+\EndIf

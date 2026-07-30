@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: paras
+# key: paras
+# --
+import os
+import sys
+sys.path.append(os.environ["MAJORANA"])
+from paras import *

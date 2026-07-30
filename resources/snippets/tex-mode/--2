@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Left-Right Arrow
+# key: <->
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/_-_Left-Right_Arrow
+# --
+\leftrightarrow

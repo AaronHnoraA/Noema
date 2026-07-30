@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Polynomial
+# key: poly
+# -- TCS
+# --
+\operatorname{poly}\left(${1:n}\right)$0

@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Bar Accent
+# key: bar
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/bar_Bar_Accent
+# --
+\bar{$1}$2

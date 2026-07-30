@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Polylogarithmic bound
+# key: tclog
+# group: TCS symbols
+# --
+\operatorname{polylog}\!\left(${1:n}\right)$0

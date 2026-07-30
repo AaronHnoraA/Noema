@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \Xi
+# key: \Xi
+# uuid: latex-workshop:\Xi
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%CE%9E%2C+shortcut+%40X
+# group: Math · latex-workshop
+# --
+\Xi$0

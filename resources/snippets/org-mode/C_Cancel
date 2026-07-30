@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Cancel
+# key: C
+# --
+\cancel{ ${VISUAL} }

@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Jupyter cell magic: bash
+# key: jbash
+# --
+%%bash
+$0

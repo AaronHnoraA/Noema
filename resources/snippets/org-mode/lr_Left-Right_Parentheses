@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Left-Right Parentheses
+# key: lr(
+# --
+\left( $1 \right) $2

@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: Exercise
+# key: exercise
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/exercise_Exercise
+# --
+# --
+\begin{exercise}
+	$1
+\end{exercise}
+$0

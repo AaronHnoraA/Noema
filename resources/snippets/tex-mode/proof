@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: Proof
+# key: proof
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/proof_Proof
+# --
+# --
+\begin{proof}
+	$1
+\end{proof}
+$0

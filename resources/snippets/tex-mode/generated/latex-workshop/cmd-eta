@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \eta
+# key: \eta
+# uuid: latex-workshop:\eta
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%CE%B7%2C+shortcut+%40h
+# group: Math · latex-workshop
+# --
+\eta$0

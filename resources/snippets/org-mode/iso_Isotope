@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Isotope
+# key: iso
+# --
+{}^{$1}_{$2}$3

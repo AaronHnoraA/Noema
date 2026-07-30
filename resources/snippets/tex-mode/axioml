@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: Axiom (with label)
+# key: axioml
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/axioml_Axiom_with_label_
+# --
+# --
+\begin{axiom}{$1}\label{axi:$1}
+		$2
+\end{axiom}
+$0

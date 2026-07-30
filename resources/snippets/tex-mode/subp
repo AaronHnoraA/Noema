@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Sub Paragraph (no label)
+# key: subp
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/subp_Sub_Paragraph_no_label_
+# --
+# --
+\subparagraph{$1}
+${0:$TM_SELECTED_TEXT}

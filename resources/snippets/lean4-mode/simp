@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: simp with lemmas
+# key: smp
+# group: tactics
+# --
+simp only [${1:lemmas}]$0

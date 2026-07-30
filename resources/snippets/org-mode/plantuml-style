@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: plantuml-style
+# key: ps
+# --
+#DARKORANGE/LIGHTORANGE/DARKBLUE/LIGHTBLUE/DARKRED/LIGHTRED/DARKGREEN/LIGHTGREEN
+!define DARKBLUE

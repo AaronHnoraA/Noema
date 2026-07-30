@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Polylogarithmic
+# key: polylog
+# -- TCS
+# --
+\operatorname{polylog}\left(${1:n}\right)$0

@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Complexity class PSPACE
+# key: PSPACE
+# -- TCS
+# --
+\mathsf{PSPACE}$0

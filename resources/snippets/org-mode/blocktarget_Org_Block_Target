@@ -1,0 +1,9 @@
+# -*- mode: snippet; require-final-newline: nil -*-
+# name: Org block target
+# key: blocktarget
+# -- Insert an Org block with a target above it
+# --
+<<${1:src}-`(format-time-string "%Y%m%dT%H%M%S")`>>
+#+begin_$1
+$0
+#+end_$1

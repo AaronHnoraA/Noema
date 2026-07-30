@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: psi
+# key: @y
+# uuid: latex-workshop:@y
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=psi
+# group: Math · latex-workshop
+# --
+\psi

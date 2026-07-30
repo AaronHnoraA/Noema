@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Superset Equal
+# key: sup=
+# --
+\supseteq

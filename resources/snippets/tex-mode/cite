@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Cite
+# key: cite
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/cite_Cite
+# --
+# --
+\cite{$1}$0

@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Direct sum
+# key: o+
+# group: Noema local
+# --
+\oplus

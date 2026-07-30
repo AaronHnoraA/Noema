@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \forall
+# key: \forall
+# uuid: latex-workshop:\forall
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%E2%88%80
+# group: Math · latex-workshop
+# --
+\forall$0

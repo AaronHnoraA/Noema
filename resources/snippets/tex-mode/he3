@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Helium-3
+# key: he3
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/he3_Helium-3
+# --
+{}^{3}_{2}He

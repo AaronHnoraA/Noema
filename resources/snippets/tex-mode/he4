@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Helium-4
+# key: he4
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/he4_Helium-4
+# --
+{}^{4}_{2}He

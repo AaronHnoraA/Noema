@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \in
+# key: \in
+# uuid: latex-workshop:\in
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%E2%88%88
+# group: Math · latex-workshop
+# --
+\in$0

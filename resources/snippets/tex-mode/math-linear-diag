@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [diag] — Diagonal operator
+# key: diag
+# group: Math · Linear algebra
+# --
+\operatorname{diag}$0

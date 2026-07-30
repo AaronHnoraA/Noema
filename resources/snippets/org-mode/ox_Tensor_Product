@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Tensor Product
+# key: ox
+# --
+\otimes

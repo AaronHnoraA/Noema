@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Hadamard on state
+# key: had
+# -- Quantum
+# --
+H\lvert ${1:\psi}\rangle$0

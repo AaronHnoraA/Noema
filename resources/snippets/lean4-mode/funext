@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: funext
+# key: fext
+# group: tactics
+# --
+funext ${1:x}
+$0

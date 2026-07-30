@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Marginpar
+# key: marginpar
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/marginpar_Marginpar
+# --
+# --
+\marginpar{$1}
+$0

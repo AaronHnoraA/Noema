@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: lstlisting
+# key: plain
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/plain_lstlisting
+# --
+# --
+\begin{lstlisting}
+	$1
+\end{lstlisting}
+$0

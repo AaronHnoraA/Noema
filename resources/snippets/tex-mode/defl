@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: Definition (with label)
+# key: defl
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/defl_Definition_with_label_
+# --
+# --
+\begin{definition}{$1}\label{def:$1}
+	$2
+\end{definition}
+$0

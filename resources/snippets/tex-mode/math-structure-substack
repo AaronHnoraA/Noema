@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [substack] — Stacked subscript
+# key: substack
+# group: Math · Structures
+# --
+\substack{${1:i\in I} \\ ${2:j\in J}}$0

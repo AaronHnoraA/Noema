@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Omega uppercase (alt)
+# key: Ome
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/Ome_Omega_uppercase_alt_
+# --
+\Omega

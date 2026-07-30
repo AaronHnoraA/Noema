@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Square
+# key: sr
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/sr_Square
+# --
+^{2}

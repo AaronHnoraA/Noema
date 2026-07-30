@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Theta
+# key: @Q
+# uuid: latex-workshop:@Q
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=Theta
+# group: Math · latex-workshop
+# --
+\Theta

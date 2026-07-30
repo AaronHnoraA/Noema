@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \iota
+# key: \iota
+# uuid: overleaf:\iota
+# contributor: Noema provider=overleaf&priority=160&weight=0.0024774003791525486&context=math-command&description=Overleaf+cmd
+# group: Math · overleaf
+# --
+\iota$0

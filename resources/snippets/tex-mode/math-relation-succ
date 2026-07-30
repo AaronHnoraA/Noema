@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [succ] — Succeeds
+# key: succ
+# group: Math · Relations
+# --
+\succ$0

@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Contour Integral
+# key: oint
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/oint_Contour_Integral
+# --
+\oint

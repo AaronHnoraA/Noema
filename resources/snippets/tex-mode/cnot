@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: CNOT
+# key: cnot
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/org-mode/cnot_CNOT
+# --
+# --
+\operatorname{CNOT}$0

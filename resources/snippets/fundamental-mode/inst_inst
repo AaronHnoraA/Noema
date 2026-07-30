@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: inst
+# key: inst
+# --
+instance : $1 $2 := $3

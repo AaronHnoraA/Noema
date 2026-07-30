@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \bigl[
+# key: \bigl[
+# uuid: latex-workshop:\bigl[
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%5Cbigl%5B+...+%5Cbigr%5D
+# group: Math · latex-workshop
+# --
+\bigl[${1}\bigr]$0

@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Section:Ref
+# key: section:ref
+# -- Section Reference
+# --
+${1:Section}~\ref{sec:$2}$0

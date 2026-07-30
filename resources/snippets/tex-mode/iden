@@ -1,0 +1,12 @@
+# -*- mode: snippet -*-
+# name: Identity Matrix
+# key: iden
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/iden_Identity_Matrix
+# --
+\begin{pmatrix}
+1 & 0 & \dots & 0 \\
+0 & 1 & \dots & 0 \\
+\vdots & \vdots & \ddots & \vdots \\
+0 & 0 & \dots & 1
+\end{pmatrix}

@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [nu] — Nu
+# key: nu
+# group: Math · Greek
+# --
+\nu$0

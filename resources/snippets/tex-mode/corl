@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: Corollary (with label)
+# key: corl
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/corl_Corollary_with_label_
+# --
+# --
+\begin{corollary}{$1}\label{cor:$1}
+	$2
+\end{corollary}
+$0

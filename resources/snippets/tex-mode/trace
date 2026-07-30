@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Trace
+# key: trace
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/trace_Trace
+# --
+\mathrm{Tr}

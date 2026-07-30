@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Listing:Ref
+# key: listing:ref
+# -- Listing
+# --
+${1:Listing}~\ref{lst:$2}$0

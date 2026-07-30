@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [propto] — Proportional to
+# key: propto
+# group: Math · Relations
+# --
+\propto$0

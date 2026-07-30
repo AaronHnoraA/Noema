@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [supseteq] — Superset or equal
+# key: supseteq
+# group: Math · Sets
+# --
+\supseteq$0

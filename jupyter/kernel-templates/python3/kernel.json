@@ -1,0 +1,14 @@
+{
+  "argv": [
+    "@AARONNOTE_JUPYTER_ROOT@/bin/python-jupyter-kernel",
+    "-m",
+    "ipykernel_launcher",
+    "-f",
+    "{connection_file}"
+  ],
+  "display_name": "Noema Python (Conda)",
+  "language": "python",
+  "metadata": {
+    "debugger": true
+  }
+}

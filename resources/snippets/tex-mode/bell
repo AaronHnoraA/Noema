@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Bell state
+# key: bell
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/org-mode/bell_Bell_State
+# --
+# --
+\frac{1}{\sqrt{2}}\left(\lvert 00\rangle + \lvert 11\rangle\right)$0

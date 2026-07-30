@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: infinity
+# key: @8
+# uuid: latex-workshop:@8
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=infinity+symbol
+# group: Math · latex-workshop
+# --
+\infty

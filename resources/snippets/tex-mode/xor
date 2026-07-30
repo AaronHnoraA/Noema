@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: XOR
+# key: xor
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/org-mode/xor_Xor
+# --
+# --
+\oplus$0

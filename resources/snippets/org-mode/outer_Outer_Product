@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Outer Product
+# key: outer
+# --
+\ket{$1} \bra{$1} $2

@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Soft O
+# key: tildeO
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/org-mode/tildeO_Soft_O
+# --
+# --
+\widetilde{O}\left(${1:f(n)}\right)$0

@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Modulus
+# key: mod
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/mod_Modulus
+# --
+|$1|$2

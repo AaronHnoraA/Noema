@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: Cases
+# key: cas
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/cas_Cases
+# --
+# --
+\begin{cases}
+	${1:equation}, &\text{ if }${2:case}\\\\
+	$0
+\end{cases}

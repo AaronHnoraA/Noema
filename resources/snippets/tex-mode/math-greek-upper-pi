@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [Pi] — Pi
+# key: Pi
+# group: Math · Greek
+# --
+\Pi$0

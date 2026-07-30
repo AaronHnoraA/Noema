@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: argg
+# key: argg
+# --
+from argparse import ArgumentParser as AP
+from argparse import ArgumentDefaultsHelpFormatter as ADHF
+ps = AP(formatter_class=ADHF)
+ps.add_argument("--test", action="store_true")
+args = ps.parse_args()

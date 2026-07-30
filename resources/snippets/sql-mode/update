@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: update
+# key: update
+# --
+<select name='update $0`(yank)`'>
+ UPDATE $0`(yank)` SET id=$1 WHERE id=$2;
+</select>

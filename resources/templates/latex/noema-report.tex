@@ -1,0 +1,53 @@
+% aaronnote-template: {"name":"Report","engine":"pdflatex","documentRole":"report","vars":[{"id":"author","label":"Author","default":"","input":"text","required":false,"placeholder":"Author name","description":"Displayed below the report title.","group":"identity","escape":"text"},{"id":"subtitle","label":"Subtitle","default":"","input":"text","required":false,"placeholder":"Optional short subtitle","description":"Keep concise enough for the title block.","group":"document","escape":"text"}]}
+% Noema export: long-form report style with title block and table of contents.
+\documentclass[11pt]{article}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{CJKutf8}
+\usepackage{graphicx}
+\usepackage{microtype}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage[dvipsnames]{xcolor}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=BrickRed,citecolor=BrickRed,urlcolor=BrickRed,linktoc=all}
+\AtBeginDocument{\begin{CJK*}{UTF8}{gbsn}}
+\AtEndDocument{\end{CJK*}}
+
+\setlist{topsep=.35em,itemsep=.2em,parsep=0pt}
+\titleformat{\section}{\normalfont\LARGE\bfseries\color{BrickRed}}{\thesection}{0.6em}{}
+\titleformat{\subsection}{\normalfont\Large\bfseries}{\thesubsection}{0.5em}{}
+\titlespacing*{\section}{0pt}{1.6ex plus .4ex minus .2ex}{0.8ex}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small {{title}}}
+\fancyhead[R]{\small\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}{Lemma}
+\newtheorem{proposition}{Proposition}
+\newtheorem{corollary}{Corollary}
+\newtheorem{definition}{Definition}
+\theoremstyle{remark}
+\newtheorem{remark}{Remark}
+\newtheorem{example}{Example}
+
+\usepackage{aaronnote-macros}
+
+\title{ {{title}} \\[0.3em] \large {{subtitle}} }
+\author{ {{author}} }
+\date{ {{date}} }
+
+\begin{document}
+\maketitle
+\thispagestyle{empty}
+\tableofcontents
+\newpage
+
+{{body}}
+
+\end{document}

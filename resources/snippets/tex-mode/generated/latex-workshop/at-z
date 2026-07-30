@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: zeta
+# key: @z
+# uuid: latex-workshop:@z
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=zeta
+# group: Math · latex-workshop
+# --
+\zeta

@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Algorithm:State
+# key: state
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/state_Algorithm_State
+# --
+\State $1

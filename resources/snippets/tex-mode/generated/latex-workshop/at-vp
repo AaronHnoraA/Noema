@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: varpi
+# key: @vp
+# uuid: latex-workshop:@vp
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=varpi
+# group: Math · latex-workshop
+# --
+\varpi

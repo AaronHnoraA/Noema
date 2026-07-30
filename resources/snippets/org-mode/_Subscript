@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Subscript
+# key: _
+# --
+_{$1}$2

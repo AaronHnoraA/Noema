@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Org src block
+# key: src
+# --
+#+begin_src ${1:python}${2:}
+$0
+#+end_src

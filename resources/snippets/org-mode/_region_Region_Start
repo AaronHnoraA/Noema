@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Region Start
+# key: #region
+# -- Folding Region Start
+# --
+%#Region $0

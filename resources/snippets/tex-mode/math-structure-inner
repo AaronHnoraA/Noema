@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [inner] — Inner product
+# key: inner
+# group: Math · Recent notes
+# --
+\left\langle ${1:u}, ${2:v}\right\rangle$0

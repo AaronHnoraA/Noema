@@ -1,0 +1,10 @@
+# -*- mode: snippet -*-
+# name: Mermaid diagram
+# key: mer
+# group: Noema syntax
+# --
+```mermaid
+${1:graph TD
+  A --> B}
+```
+$0

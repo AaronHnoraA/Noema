@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: gitc
+# key: gitc
+# --
+[user]
+	name = user
+	email = user@qq.com

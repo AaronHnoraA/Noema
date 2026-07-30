@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Paragraph (with label)
+# key: parl
+# -- Paragraph with label
+# --
+\paragraph{$1}\label{par:$1}
+${0:$TM_SELECTED_TEXT}

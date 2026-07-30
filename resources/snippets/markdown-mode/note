@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Note block
+# key: note
+# group: Noema blocks
+# --
+#+begin note ${1:title}
+${2:Note.}
+#+end note
+$0

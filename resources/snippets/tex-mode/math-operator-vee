@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [vee] — Vee / join
+# key: vee
+# group: Math · Operators
+# --
+\vee$0

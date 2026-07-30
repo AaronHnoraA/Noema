@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [top] — Truth / top
+# key: top
+# group: Math · Logic
+# --
+\top$0

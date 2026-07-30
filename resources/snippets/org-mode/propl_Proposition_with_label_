@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Proposition (with label)
+# key: propl
+# -- Add a proposition with label
+# --
+\begin{proposition}{$1}\label{pro:$1}
+		$2
+\end{proposition}
+$0

@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: org special block (definition/theorem/...)
+# key: ;bb
+# --
+#+begin_${1:block}
+$0
+#+end_${1}

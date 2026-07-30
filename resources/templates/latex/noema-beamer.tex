@@ -1,0 +1,35 @@
+% aaronnote-template: {"name":"Beamer Slides","engine":"xelatex","documentRole":"presentation","vars":[{"id":"author","label":"Author","default":"Chang He (Aaron)","input":"text","required":false,"group":"identity","escape":"text"},{"id":"institute","label":"Institute","default":"UNSW","input":"text","required":false,"group":"identity","escape":"text"},{"id":"subtitle","label":"Subtitle","default":"","input":"text","required":false,"placeholder":"Optional short subtitle","group":"document","escape":"text"}]}
+% Noema export: restrained 16:9 Beamer slides for mathematical material.
+\documentclass[aspectratio=169,11pt]{beamer}
+\usepackage[UTF8,fontset=fandol]{ctex}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{booktabs}
+\usepackage{quantikz}
+\usepackage{hyperref}
+\usepackage{aaronnote-macros}
+
+\usetheme{default}
+\usecolortheme{default}
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{footline}[frame number]
+\setbeamertemplate{blocks}[rounded][shadow=false]
+\setbeamerfont{frametitle}{series=\bfseries}
+\setbeamercolor{structure}{fg=blue!55!black}
+\setbeamercolor{alerted text}{fg=red!70!black}
+\hypersetup{colorlinks=true,linkcolor=blue!55!black,urlcolor=blue!55!black}
+
+\title{ {{title}} }
+\subtitle{ {{subtitle}} }
+\author{ {{author}} }
+\institute{ {{institute}} }
+\date{ {{date}} }
+
+\begin{document}
+
+\begin{frame}
+  \titlepage
+\end{frame}
+
+{{body}}
+
+\end{document}

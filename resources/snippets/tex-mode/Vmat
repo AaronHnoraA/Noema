@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Vmatrix (double)
+# key: Vmat
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/Vmat_Vmatrix_double_
+# --
+\begin{Vmatrix}
+$1
+\end{Vmatrix}

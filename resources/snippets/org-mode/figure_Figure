@@ -1,0 +1,12 @@
+# -*- mode: snippet -*-
+# name: Figure
+# key: figure
+# -- Add a figure
+# --
+\begin{figure}
+	\begin{center}
+		\includegraphics[width=0.95\textwidth]{figures/$1}
+	\end{center}
+	\caption{$3}\label{fig:$4}
+\end{figure}
+$0

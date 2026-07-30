@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Org important block
+# key: important
+# -- Org special block
+# --
+#+begin_important
+$0
+#+end_important

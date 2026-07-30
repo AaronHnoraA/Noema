@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Expectation value
+# key: expval
+# -- Quantum
+# --
+\langle ${1:\psi}\rvert ${2:A}\lvert ${1:\psi}\rangle $0

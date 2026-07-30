@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Braces (visual)
+# key: v{
+# --
+{${VISUAL}}

@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Transition amplitude
+# key: amp
+# -- Quantum
+# --
+\langle ${1:\phi}\rvert ${2:A}\lvert ${3:\psi}\rangle $0

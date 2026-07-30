@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Paragraph (with label)
+# key: parl
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/parl_Paragraph_with_label_
+# --
+# --
+\paragraph{$1}\label{par:$1}
+${0:$TM_SELECTED_TEXT}

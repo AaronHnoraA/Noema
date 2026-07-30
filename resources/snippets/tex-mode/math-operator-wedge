@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [wedge] — Wedge / exterior product
+# key: wedge
+# group: Math · Operators
+# --
+\wedge$0

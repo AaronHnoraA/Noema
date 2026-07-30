@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Parentheses (visual)
+# key: v(
+# --
+(${VISUAL})

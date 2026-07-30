@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Bold Face
+# key: bf
+# --
+\mathbf{$1}

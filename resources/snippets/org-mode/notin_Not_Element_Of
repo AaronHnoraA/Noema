@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Not Element Of
+# key: notin
+# --
+\not\in

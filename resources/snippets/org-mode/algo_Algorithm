@@ -1,0 +1,19 @@
+# -*- mode: snippet -*-
+# name: Algorithm
+# key: algo
+# -- Add an algorithm
+# --
+% \usepackage{algorithm,algorithmicx,algpseudocode}
+\begin{algorithm}
+	\floatname{algorithm}{${1:Algorithm}}
+	\algrenewcommand\algorithmicrequire{\textbf{${2:Input: }}}
+	\algrenewcommand\algorithmicensure{\textbf{${3:Output: }}}
+	\caption{$4}\label{alg:$5}
+	\begin{algorithmic}[1]
+		\Require \$input\$
+		\Ensure \$output\$
+		$6
+		\State \textbf{return} \$state\$
+	\end{algorithmic}
+\end{algorithm}
+$0

@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Hadamard gate
+# key: qH
+# group: QC symbols
+# --
+H$0

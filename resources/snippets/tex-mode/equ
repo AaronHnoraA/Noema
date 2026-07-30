@@ -1,0 +1,10 @@
+# -*- mode: snippet -*-
+# name: Equ
+# key: equ
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/equ_Equ
+# --
+# --
+\begin{equation*}
+	$1
+\end{equation*}

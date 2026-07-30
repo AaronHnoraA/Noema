@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Imaginary Part
+# key: Im
+# --
+\mathrm{Im}

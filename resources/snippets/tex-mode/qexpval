@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Expectation value
+# key: qexp
+# group: QC symbols
+# --
+\langle ${1:A} \rangle_{${2:\rho}}$0

@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Inverse
+# key: invs
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/invs_Inverse
+# --
+^{-1}

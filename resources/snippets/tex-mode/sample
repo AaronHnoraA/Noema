@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Random sampling
+# key: sample
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/org-mode/sample_Random_Sampling
+# --
+# --
+${1:x} \xleftarrow{\mathrm{R}} ${2:S}$0

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Noema LaTeX Polish"
+  short_description: "Polish Noema exports without changing source text"
+  default_prompt: "Use $aaronnote-latex-polish to structurally polish this Noema LaTeX export."

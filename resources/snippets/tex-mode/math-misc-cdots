@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [cdots] — Centered dots
+# key: cdots
+# group: Math · Misc
+# --
+\cdots$0

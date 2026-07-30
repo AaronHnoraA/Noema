@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \bigcup
+# key: \bigcup
+# uuid: latex-workshop:\bigcup
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%E2%88%AA%2C+shortcut+%40%2B
+# group: Math · latex-workshop
+# --
+\bigcup$0

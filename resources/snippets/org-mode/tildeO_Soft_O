@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Soft O
+# key: tildeO
+# -- TCS
+# --
+\widetilde{O}\left(${1:f(n)}\right)$0

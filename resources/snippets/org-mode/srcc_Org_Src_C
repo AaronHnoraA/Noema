@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Org C src block
+# key: srcc
+# --
+#+begin_src C${1:}
+$0
+#+end_src

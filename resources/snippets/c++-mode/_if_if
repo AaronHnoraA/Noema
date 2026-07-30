@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: #if
+# key: #if
+# --
+#ifdef USE_DD4HEP
+${1}
+#endif

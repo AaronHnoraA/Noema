@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Key generation
+# key: KeyGen
+# -- Crypto
+# --
+(${1:pk}, ${2:sk}) \leftarrow \operatorname{KeyGen}\left(1^{${3:\lambda}}\right)$0

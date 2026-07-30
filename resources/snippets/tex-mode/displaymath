@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: DisplayMath
+# key: displaymath
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/displaymath_DisplayMath
+# --
+# --
+\begin{displaymath}
+	$1
+\end{displaymath}
+$0

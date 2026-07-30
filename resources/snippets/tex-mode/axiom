@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: Axiom (no label)
+# key: axiom
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/axiom_Axiom_no_label_
+# --
+# --
+\begin{axiom}{$1}
+		$2
+\end{axiom}
+$0

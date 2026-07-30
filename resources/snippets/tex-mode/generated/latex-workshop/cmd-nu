@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \nu
+# key: \nu
+# uuid: latex-workshop:\nu
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%CE%BD%2C+shortcut+%40n
+# group: Math · latex-workshop
+# --
+\nu$0

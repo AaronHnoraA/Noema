@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Integral -Inf to Inf
+# key: infi
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/infi_Integral_-Inf_to_Inf
+# --
+\int_{-\infty}^{\infty} $1 \, d$2 $3

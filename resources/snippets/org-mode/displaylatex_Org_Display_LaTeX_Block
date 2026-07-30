@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Org Display LaTeX Block
+# key: displaylatex
+# --
+#+begin_display_latex
+$0
+
+
+#+end_display_latex

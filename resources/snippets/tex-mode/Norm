@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Norm
+# key: Norm
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/Norm_Norm
+# --
+\lVert $1 \rVert $2

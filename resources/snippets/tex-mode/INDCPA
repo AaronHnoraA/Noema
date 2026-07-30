@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: IND-CPA
+# key: INDCPA
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/org-mode/INDCPA_IND_CPA
+# --
+# --
+\mathsf{IND\mbox{-}CPA}$0

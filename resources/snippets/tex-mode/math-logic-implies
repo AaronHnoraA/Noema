@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [implies] — Implies
+# key: implies
+# group: Math · Logic
+# --
+\implies$0

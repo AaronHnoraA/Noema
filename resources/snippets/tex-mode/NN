@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Natural Numbers
+# key: NN
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/NN_Natural_Numbers
+# --
+\mathbb{N}

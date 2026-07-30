@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Lambda
+# key: @L
+# uuid: latex-workshop:@L
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=Lambda
+# group: Math · latex-workshop
+# --
+\Lambda

@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: Postulate (no label)
+# key: postulate
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/postulate_Postulate_no_label_
+# --
+# --
+\begin{postulate}{$1}
+		$2
+\end{postulate}
+$0

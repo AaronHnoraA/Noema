@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: url field
+# key: url
+# group: BibTeX fields
+# --
+url = {${1:https://}},
+$0

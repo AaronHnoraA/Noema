@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: int
+# key: @I
+# uuid: latex-workshop:@I
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=integral
+# group: Math · latex-workshop
+# --
+\int_{$1}^{$2}$0

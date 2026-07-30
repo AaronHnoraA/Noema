@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \providecommand{}{}
+# key: \providecommand{}{}
+# uuid: latex-workshop:\providecommand{}{}
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=
+# group: Math · latex-workshop
+# --
+\providecommand{${1:cmd}}{${2:def}}$0

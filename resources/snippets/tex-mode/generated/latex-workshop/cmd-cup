@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \cup
+# key: \cup
+# uuid: latex-workshop:\cup
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%E2%88%AA
+# group: Math · latex-workshop
+# --
+\cup$0

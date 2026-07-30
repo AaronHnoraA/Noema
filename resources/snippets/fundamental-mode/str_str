@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: str
+# key: str
+# --
+structure $1 where
+  $2 : $3

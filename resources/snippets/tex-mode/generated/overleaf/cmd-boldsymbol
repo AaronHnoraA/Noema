@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \boldsymbol{}
+# key: \boldsymbol
+# uuid: overleaf:\boldsymbol
+# contributor: Noema provider=overleaf&priority=160&weight=0.18137737738638837&context=math-command&description=Overleaf+cmd
+# group: Math · overleaf
+# --
+\boldsymbol{$1}$0

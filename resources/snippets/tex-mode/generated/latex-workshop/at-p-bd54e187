@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Pi
+# key: @P
+# uuid: latex-workshop:@P
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=Pi
+# group: Math · latex-workshop
+# --
+\Pi

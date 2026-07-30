@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \stackrel{}{}
+# key: \stackrel{}{}
+# uuid: latex-workshop:\stackrel{}{}
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=
+# group: Math · latex-workshop
+# --
+\stackrel{${1:above}}{${2:under}}$0

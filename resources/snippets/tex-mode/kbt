@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Boltzmann Constant
+# key: kbt
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/kbt_Boltzmann_Constant
+# --
+k_{B}T

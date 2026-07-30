@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Underline
+# key: und
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/und_Underline
+# --
+\underline{$1}$2

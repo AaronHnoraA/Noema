@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \grave{}
+# key: \grave{}
+# uuid: latex-workshop:\grave{}
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%C2%A0%CC%80
+# group: Math · latex-workshop
+# --
+\grave{$1}$0

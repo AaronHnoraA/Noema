@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [sumop] — Summation operator
+# key: sumop
+# group: Math · Calculus
+# --
+\sum$0

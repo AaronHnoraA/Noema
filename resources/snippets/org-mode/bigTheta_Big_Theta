@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Big Theta
+# key: bigTheta
+# -- TCS
+# --
+\Theta\left(${1:f(n)}\right)$0

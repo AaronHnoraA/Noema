@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Alpha
+# key: aaaa
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/aaaa_Alpha
+# --
+\alpha

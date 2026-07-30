@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Big O
+# key: bigO
+# -- TCS
+# --
+O\left(${1:f(n)}\right)$0

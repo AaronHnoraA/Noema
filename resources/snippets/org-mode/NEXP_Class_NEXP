@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Complexity class NEXP
+# key: NEXP
+# -- TCS
+# --
+\mathsf{NEXP}$0

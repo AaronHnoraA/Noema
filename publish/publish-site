@@ -1,0 +1,1525 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+from collections.abc import Iterator
+from dataclasses import dataclass, field
+import filecmp
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+from urllib.parse import unquote
+
+
+def _env_path(name: str, default: Path) -> Path:
+    v = os.environ.get(name, "")
+    return Path(v) if v else default
+
+
+_SCRIPT_DIR = Path(__file__).resolve().parent
+
+# Publish output root (the publish git repo root; output lands here directly, no /public subdir).
+ROOT = _env_path("AARONNOTE_PUBLISH_OUTPUT", _SCRIPT_DIR.parents[3] / "publish")
+
+# Noema runtime root (render-html.mjs, aaronnote/style.css, src/).
+RUNTIME_ROOT = _env_path("AARONNOTE_RUNTIME_ROOT", _SCRIPT_DIR.parent)
+
+# Publish source assets (css/, kinds/, homepage.html, notes.html, sensitive-tags.json).
+ASSETS_DIR = _env_path("AARONNOTE_PUBLISH_ASSETS", _SCRIPT_DIR / "assets")
+
+# Cache / state directory (deps/, state.json).
+STATE_DIR = _env_path("AARONNOTE_PUBLISH_STATE_DIR", _SCRIPT_DIR.parents[3] / "var" / "aaronnote" / "publish")
+
+# Note vault root (symlinked at ROOT/roam, or overridden).
+ROAM_ROOT = _env_path("AARONNOTE_ROAM_ROOT", ROOT / "roam")
+
+# Output root IS the publish root (no /public subdir).
+PUBLIC = ROOT
+
+PUBLISH_STATE = STATE_DIR / "state.json"
+ASSET_VERSION = "20260719-reveal-home"
+NOTE_THEME_VERSION = "20260716-typography-core"
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".avif"}
+VISUAL_ATTACHMENT_EXTENSIONS = {".drawio", ".dio", ".html", ".htm"}
+STATIC_EXTENSIONS = IMAGE_EXTENSIONS | {".css", ".js", ".pdf", ".drawio", ".dio"}
+NOTE_STATIC_EXTENSIONS = STATIC_EXTENSIONS | VISUAL_ATTACHMENT_EXTENSIONS
+SKIP_DIRS = {".git", ".git-rewrite", ".cache", ".direnv", ".lake", ".venv", "node_modules", "public", "release", "ltximg", "_typst", "__pycache__"}
+SENSITIVE_TAGS_FILE = ASSETS_DIR / "sensitive-tags.json"
+PRIVATE_PATH_PREFIXES = (
+    Path("roam/daily"),
+    Path("roam/project"),
+)
+
+FRONT_MATTER_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n?", re.S)
+ORG_META_RE = re.compile(r"\A[ \t]*#\+begin(?:_|\s+)meta\s*\n(.*?)^[ \t]*#\+end(?:_|\s+)meta\s*\n?", re.S | re.M)
+ORG_ENV_RE = re.compile(r"(?ms)^#\+begin(?:_|\s+)([A-Za-z][\w-]*)(?:\s+([^\n]+?))?\s*\n(.*?)^\s*#\+end(?:_|\s+)\1\s*$")
+MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
+MD_LINK_RE = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
+HTML_MD_LINK_RE = re.compile(r'href="([^"#?:]+)\.md((?:#[^"]*)?)"')
+HTML_SHELL_ASSET_RE = re.compile(
+    r'<(?:script|link)\b[^>]*(?:src|href)=["\']([^"\']+)["\']',
+    re.I,
+)
+MARKDOWN_LEAN_TAG_RE = re.compile(r"(?m)^[ \t]*@@lean4[ \t]+\[([^\]\n]+)\]")
+LEAN_REGION_MARKER_RE = re.compile(r"(?m)^--[ \t]*@aaronnote[ \t]+([A-Za-z0-9_.:-]+)[ \t]*$")
+KIND_NAME_RE = re.compile(r"^[a-z0-9_-]+$")
+DEFAULT_NOTE_KIND = "default"
+DEFAULT_NOTE_KIND_ALIASES = {"", "default", "note"}
+
+PUBLISHED_ASSET_SOURCES = (
+    (RUNTIME_ROOT / "aaronnote" / "style.css", Path("Noema/aaronnote/style.css")),
+    (RUNTIME_ROOT / "aaronnote" / "published-toc.js", Path("Noema/aaronnote/published-toc.js")),
+    (RUNTIME_ROOT / "aaronnote" / "published-local-graph.js", Path("Noema/aaronnote/published-local-graph.js")),
+    (RUNTIME_ROOT / "src" / "styles" / "widgets.css", Path("Noema/src/styles/widgets.css")),
+    (RUNTIME_ROOT / "src" / "styles" / "theme-typora.css", Path("Noema/src/styles/theme-typora.css")),
+    (RUNTIME_ROOT / "src" / "styles" / "typography.css", Path("Noema/src/styles/typography.css")),
+    (RUNTIME_ROOT / "js" / "note-page.js", Path("js/note-page.js")),
+    (ASSETS_DIR / "js" / "mac-window.js", Path("js/mac-window.js")),
+    (ASSETS_DIR / "css" / "aaronnote-published.css", Path("css/aaronnote-published.css")),
+)
+
+REVEAL_ASSET_SOURCES = (
+    (RUNTIME_ROOT / "node_modules" / "reveal.js" / "dist" / "reveal.css", Path("vendor/reveal/reveal.css")),
+    (RUNTIME_ROOT / "node_modules" / "reveal.js" / "dist" / "reveal.js", Path("vendor/reveal/reveal.js")),
+)
+
+
+def sealed_mask(value: str) -> str:
+    digest = hashlib.blake2s(value.encode("utf-8"), digest_size=6, person=b"sealed").hexdigest()
+    return f"sealed-{digest}"
+
+
+def sealed_tag_mask(value: str) -> str:
+    digest = hashlib.blake2s(value.encode("utf-8"), digest_size=6, person=b"tagmask").hexdigest()
+    return f"sealed-tag-{digest}"
+
+
+def sealed_group_mask(value: str) -> str:
+    digest = hashlib.blake2s(value.encode("utf-8"), digest_size=6, person=b"group").hexdigest()
+    return f"sealed-group-{digest}"
+
+
+@dataclass
+class Note:
+    path: Path
+    rel_path: str
+    id: str
+    title: str
+    date: str = "Undated"
+    tags: list[str] = field(default_factory=list)
+    aliases: list[str] = field(default_factory=list)
+    kind: str = DEFAULT_NOTE_KIND
+    summary: str = ""
+    search_text: str = ""
+    refs: list[str] = field(default_factory=list)
+    backlinks: list[str] = field(default_factory=list)
+    private: bool = False
+    @property
+    def link(self) -> str:
+        if self.private:
+            return (Path("roam") / "sealed" / f"{self.public_title}.html").as_posix()
+        path = Path(self.rel_path).with_suffix(".html")
+        return path.as_posix()
+
+    @property
+    def public_title(self) -> str:
+        return sealed_mask(self.rel_path) if self.private else self.title
+
+    @property
+    def public_id(self) -> str:
+        return self.public_title if self.private else self.id
+
+    @property
+    def public_path(self) -> str:
+        if self.private:
+            return Path(self.link).with_suffix(".md").as_posix()
+        return self.rel_path
+
+    @property
+    def group_key(self) -> str:
+        if self.private:
+            parent = Path(self.rel_path).parent.as_posix()
+            return (Path("roam") / "sealed" / sealed_group_mask(parent)).as_posix()
+        parent = Path(self.rel_path).parent.as_posix()
+        return "Root" if parent == "." else parent
+
+    @property
+    def group_label(self) -> str:
+        if self.private:
+            parent = Path(self.rel_path).parent.as_posix()
+            return sealed_group_mask(parent)
+        leaf = self.group_key.rsplit("/", 1)[-1]
+        if leaf == "Root":
+            return "Root"
+        return leaf if leaf.isupper() else leaf.replace("-", " ").replace("_", " ").title()
+
+    @property
+    def section(self) -> str:
+        return self.group_key.split("/", 1)[0]
+
+
+@dataclass
+class PendingNoteRender:
+    note: Note
+    output_file: Path
+    deps_file: Path
+    payload: dict[str, object]
+
+
+def should_skip(path: Path) -> bool:
+    return any(part in SKIP_DIRS for part in path.parts)
+
+
+def project_rel_path(path: Path) -> Path:
+    try:
+        return path.relative_to(ROOT)
+    except ValueError:
+        pass
+    try:
+        return Path("roam") / path.resolve().relative_to(ROAM_ROOT.resolve())
+    except ValueError as err:
+        raise ValueError(f"path is outside publish root: {path}") from err
+
+
+def iter_project_files() -> Iterator[Path]:
+    seen_dirs: set[tuple[int, int]] = set()
+
+    def _walk(walk_root: Path, rel_base: Path | None = None) -> Iterator[Path]:
+        for dirpath, dirnames, filenames in os.walk(walk_root, followlinks=True, onerror=lambda _err: None):
+            current = Path(dirpath)
+            try:
+                stat = current.stat()
+            except OSError:
+                dirnames[:] = []
+                continue
+            key = (stat.st_dev, stat.st_ino)
+            if key in seen_dirs:
+                dirnames[:] = []
+                continue
+            seen_dirs.add(key)
+            if rel_base is not None:
+                rel_dir = rel_base / current.relative_to(walk_root)
+            else:
+                try:
+                    rel_dir = current.relative_to(ROOT)
+                except ValueError:
+                    dirnames[:] = []
+                    continue
+            dirnames[:] = [d for d in dirnames if not should_skip(rel_dir / d)]
+            for filename in filenames:
+                yield current / filename
+
+    yield from _walk(ROOT)
+    # Walk ROAM_ROOT directly when ROOT/roam is not a live symlink to it.
+    roam_link = ROOT / "roam"
+    if not (roam_link.is_symlink() and roam_link.resolve() == ROAM_ROOT.resolve()):
+        if ROAM_ROOT.exists():
+            yield from _walk(ROAM_ROOT, rel_base=Path("roam"))
+
+
+def parse_metadata_block(text: str) -> tuple[dict[str, object], str]:
+    match = ORG_META_RE.match(text)
+    if match:
+        return parse_meta_lines(match.group(1), org_style=True), text[match.end():]
+    match = FRONT_MATTER_RE.match(text)
+    if not match:
+        return {}, text
+    return parse_meta_lines(match.group(1), org_style=False), text[match.end():]
+
+
+def parse_meta_lines(raw: str, org_style: bool) -> dict[str, object]:
+    metadata: dict[str, object] = {}
+    current_list: str | None = None
+    for raw_line in raw.splitlines():
+        line = raw_line.rstrip()
+        item = re.match(r"^\s*-\s*(.+?)\s*$", line)
+        if item and current_list:
+            metadata.setdefault(current_list, [])
+            assert isinstance(metadata[current_list], list)
+            metadata[current_list].append(parse_yaml_scalar(item.group(1)))
+            continue
+        pair = re.match(r"^([A-Za-z0-9_-]+):(?:\s*(.*))?$", line)
+        if not pair:
+            continue
+        key, value = pair.group(1), (pair.group(2) or "").strip()
+        if value == "":
+            metadata[key] = []
+            current_list = key
+        else:
+            if org_style and key in {"tags", "aliases", "refs"}:
+                metadata[key] = [normalize_meta_string(part) for part in value.split(",") if part.strip()]
+            else:
+                metadata[key] = parse_yaml_scalar(value)
+            current_list = None
+    return metadata
+
+
+def normalize_meta_string(value: object) -> str:
+    return str(value).strip().strip('"').replace("\\_", "_")
+
+
+def normalize_note_kind(value: object) -> str:
+    if isinstance(value, list):
+        value = value[0] if value else ""
+    kind = normalize_meta_string(value).lower()
+    if kind in DEFAULT_NOTE_KIND_ALIASES:
+        return DEFAULT_NOTE_KIND
+    if not KIND_NAME_RE.fullmatch(kind):
+        return DEFAULT_NOTE_KIND
+    return kind
+
+
+def note_kind_from_metadata(metadata: dict[str, object]) -> str:
+    return normalize_note_kind(metadata.get("kind") or metadata.get("kinds") or DEFAULT_NOTE_KIND)
+
+
+def active_note_kind(note: Note) -> str:
+    return "" if note.kind == DEFAULT_NOTE_KIND else note.kind
+
+
+def script_json(value: object) -> str:
+    return (
+        json.dumps(value, ensure_ascii=False)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+    )
+
+
+def parse_yaml_scalar(value: str) -> object:
+    value = value.strip()
+    if value in {"true", "false"}:
+        return value == "true"
+    if value.startswith('"') and value.endswith('"'):
+        return value[1:-1].replace('\\"', '"').replace("\\\\", "\\").replace("\\_", "_")
+    return value.replace("\\_", "_")
+
+
+def truthy(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"true", "yes", "private", "hidden", "sealed", "no-export"}
+
+
+def private_metadata_p(metadata: dict[str, object], tags: list[str]) -> bool:
+    normalized_tags = {tag.lower() for tag in tags}
+    visibility = str(metadata.get("visibility") or metadata.get("access") or "").strip().lower()
+    return (
+        truthy(metadata.get("private"))
+        or truthy(metadata.get("hidden"))
+        or truthy(metadata.get("sealed"))
+        or metadata.get("publish") is False
+        or visibility in {"private", "hidden", "sealed"}
+        or bool(normalized_tags & {"private", "hidden", "sealed", "no-export", "noexport"})
+    )
+
+
+def private_path_p(rel_path: Path) -> bool:
+    return any(rel_path == prefix or prefix in rel_path.parents for prefix in PRIVATE_PATH_PREFIXES)
+
+
+def _load_sensitive_tags() -> frozenset[str]:
+    if not SENSITIVE_TAGS_FILE.exists():
+        return frozenset()
+    try:
+        data = json.loads(SENSITIVE_TAGS_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return frozenset()
+    items = data if isinstance(data, list) else data.get("tags", []) if isinstance(data, dict) else []
+    return frozenset(str(t).strip().lower() for t in items if t)
+
+
+SENSITIVE_TAGS: frozenset[str] = _load_sensitive_tags()
+
+
+def filter_sensitive_tags(tags: list[str]) -> list[str]:
+    """Mask tags that match sensitive-tags.json while preserving tag graph edges."""
+    if not SENSITIVE_TAGS:
+        return tags
+    return [
+        sealed_tag_mask(t.strip().lower()) if t.strip().lower() in SENSITIVE_TAGS else t
+        for t in tags
+    ]
+
+
+def sanitize_published_metadata_tags(text: str) -> str:
+    if not SENSITIVE_TAGS:
+        return text
+
+    def mask_csv(value: str) -> str:
+        return ", ".join(filter_sensitive_tags([part.strip() for part in value.split(",") if part.strip()]))
+
+    org_match = ORG_META_RE.match(text)
+    if org_match:
+        body = org_match.group(1)
+
+        def replace_org_tags(match: re.Match[str]) -> str:
+            return f"{match.group(1)}{mask_csv(match.group(2))}"
+
+        masked = re.sub(r"(?im)^([ \t]*tags:[ \t]*)(.*?)$", replace_org_tags, body)
+        return text[:org_match.start(1)] + masked + text[org_match.end(1):]
+
+    yaml_match = FRONT_MATTER_RE.match(text)
+    if yaml_match:
+        body = yaml_match.group(1)
+        lines = body.splitlines()
+        out: list[str] = []
+        in_tags_list = False
+        tag_indent = ""
+        for line in lines:
+            tag_line = re.match(r"^([ \t]*tags:[ \t]*)(.*?)$", line, flags=re.I)
+            if tag_line:
+                value = tag_line.group(2)
+                if value:
+                    out.append(f"{tag_line.group(1)}{mask_csv(value)}")
+                    in_tags_list = False
+                else:
+                    out.append(line)
+                    in_tags_list = True
+                    tag_indent = tag_line.group(1).split("tags:", 1)[0]
+                continue
+            item = re.match(r"^([ \t]*)-[ \t]*(.*?)[ \t]*$", line)
+            if in_tags_list and item and item.group(1).startswith(tag_indent):
+                tag = item.group(2)
+                out.append(f"{item.group(1)}- {filter_sensitive_tags([tag])[0] if tag else tag}")
+                continue
+            if in_tags_list and line.strip() and not line.startswith((" ", "\t")):
+                in_tags_list = False
+            out.append(line)
+        masked = "\n".join(out)
+        return text[:yaml_match.start(1)] + masked + text[yaml_match.end(1):]
+
+    return text
+
+
+def clean_markdown_text(text: str) -> str:
+    _metadata, body = parse_metadata_block(text)
+    body = re.sub(r"```.*?```", " ", body, flags=re.S)
+    body = re.sub(r"<!--.*?-->", " ", body, flags=re.S)
+    previous = None
+    while previous != body:
+        previous = body
+        body = ORG_ENV_RE.sub(lambda match: match.group(3), body)
+    body = re.sub(r"(?m)^#\+(?:begin|end)(?:_|\s+)[^\n]*", " ", body)
+    body = re.sub(r"!\[[^\]]*\]\([^)]+\)", " ", body)
+    body = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", body)
+    body = re.sub(r"#+|[*_`$>|-]", " ", body)
+    return " ".join(body.split())
+
+
+def private_asset_paths(note: Note) -> set[Path]:
+    if not note.private:
+        return set()
+    try:
+        text = note.path.read_text(encoding="utf-8")
+    except OSError:
+        return set()
+    paths: set[Path] = set()
+    for raw_path in MD_IMAGE_RE.findall(text):
+        asset_path = Path(raw_path.split("#", 1)[0])
+        if asset_path.is_absolute():
+            paths.add(asset_path.resolve())
+        else:
+            paths.add((note.path.parent / asset_path).resolve())
+    for rel_dir in (
+        Path("img") / note.path.stem,
+        Path("assets") / "img" / note.path.stem,
+    ):
+        directory = note.path.parent / rel_dir
+        if directory.exists():
+            paths.update(path.resolve() for path in directory.rglob("*") if path.is_file())
+    return paths
+
+
+def private_static_asset_paths(notes: list[Note]) -> set[Path]:
+    paths: set[Path] = set()
+    for note in notes:
+        paths.update(private_asset_paths(note))
+    for prefix in PRIVATE_PATH_PREFIXES:
+        parts = Path(prefix).parts
+        if parts and parts[0] == "roam":
+            directory = ROAM_ROOT / Path(*parts[1:]) if len(parts) > 1 else ROAM_ROOT
+        else:
+            directory = ROOT / prefix
+        if directory.exists():
+            paths.update(
+                path.resolve()
+                for path in directory.rglob("*")
+                if path.is_file() and path.suffix.lower() in NOTE_STATIC_EXTENSIONS
+            )
+    return paths
+
+
+def parse_note(path: Path) -> Note | None:
+    text = path.read_text(encoding="utf-8")
+    metadata, _body = parse_metadata_block(text)
+    note_id = metadata.get("id") or ""
+    if not note_id:
+        return None
+    rel = project_rel_path(path)
+    rel_path = rel.as_posix()
+    tags = [str(tag) for tag in metadata.get("tags", [])] if isinstance(metadata.get("tags"), list) else []
+    aliases = [str(alias) for alias in metadata.get("aliases", [])] if isinstance(metadata.get("aliases"), list) else []
+    private = private_path_p(rel) or private_metadata_p(metadata, tags)
+    refs = sorted(set(MD_LINK_RE.findall(text)))
+    search_text = "This note has been sealed by the administrator." if private else clean_markdown_text(text)
+    return Note(
+        path=path,
+        rel_path=rel_path,
+        id=str(note_id),
+        title=str(metadata.get("title") or path.stem),
+        date=str(metadata.get("date") or "Undated"),
+        tags=tags,
+        aliases=aliases,
+        kind=note_kind_from_metadata(metadata),
+        summary=search_text[:180],
+        search_text=search_text,
+        refs=refs,
+        private=private,
+    )
+
+
+def first_markdown_heading(text: str) -> str | None:
+    for line in text.splitlines():
+        match = re.match(r"^\s*#\s+(.+?)\s*$", line)
+        if match:
+            return match.group(1).strip()
+    return None
+
+
+def parse_note_for_export(path: Path) -> Note:
+    note = parse_note(path)
+    if note:
+        return note
+
+    text = path.read_text(encoding="utf-8")
+    metadata, body = parse_metadata_block(text)
+    rel = project_rel_path(path)
+    rel_path = rel.as_posix()
+    tags = [str(tag) for tag in metadata.get("tags", [])] if isinstance(metadata.get("tags"), list) else []
+    aliases = [str(alias) for alias in metadata.get("aliases", [])] if isinstance(metadata.get("aliases"), list) else []
+    private = private_path_p(rel) or private_metadata_p(metadata, tags)
+    note_id = str(metadata.get("id") or path.stem)
+    return Note(
+        path=path,
+        rel_path=rel_path,
+        id=note_id,
+        title=str(metadata.get("title") or first_markdown_heading(body) or path.stem),
+        date=str(metadata.get("date") or "Undated"),
+        tags=tags,
+        aliases=aliases,
+        kind=note_kind_from_metadata(metadata),
+        summary=clean_markdown_text(text)[:180],
+        search_text=clean_markdown_text(text),
+        refs=sorted(set(MD_LINK_RE.findall(text))),
+        private=private,
+    )
+
+
+def find_notes() -> list[Note]:
+    notes: list[Note] = []
+    for path in iter_project_files():
+        if path.suffix != ".md":
+            continue
+        try:
+            rel = project_rel_path(path)
+        except ValueError:
+            continue
+        if should_skip(rel) or path.name.endswith("~"):
+            continue
+        if not rel.parts or rel.parts[0] != "roam":
+            continue
+        note = parse_note(path)
+        if note:
+            notes.append(note)
+    return sorted(notes, key=lambda note: (note.date, note.title), reverse=True)
+
+
+def deps_file_for(output_file: Path, output_root: Path = PUBLIC) -> Path:
+    rel = output_file.relative_to(output_root)
+    return STATE_DIR / "deps" / rel.with_suffix(".json")
+
+
+def publish_forced() -> bool:
+    return os.environ.get("PUBLISH_FORCE") == "1"
+
+
+def git_head(cwd: Path = ROOT) -> str | None:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=cwd,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
+
+def roam_git_head() -> str | None:
+    """HEAD of the Noema roam repo (separate git repo, symlinked at ROOT/roam)."""
+    return git_head(ROAM_ROOT)
+
+
+def roam_inputs_dirty() -> bool:
+    try:
+        output = subprocess.check_output(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            cwd=ROAM_ROOT,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return True
+    return bool(output.strip())
+
+
+def runtime_git_head() -> str | None:
+    """HEAD of the Emacs repository that owns the Noema runtime."""
+    return git_head(RUNTIME_ROOT)
+
+
+def runtime_inputs_dirty() -> bool:
+    """Return True when any Noema runtime or publish input is uncommitted."""
+    try:
+        output = subprocess.check_output(
+            ["git", "status", "--porcelain", "--untracked-files=all", "."],
+            cwd=RUNTIME_ROOT,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+        return bool(output.strip())
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return True
+
+
+def static_publish_pairs() -> list[tuple[Path, Path]]:
+    pairs = [*PUBLISHED_ASSET_SOURCES, *REVEAL_ASSET_SOURCES]
+    for source in ASSETS_DIR.rglob("*"):
+        if not source.is_file():
+            continue
+        rel = source.relative_to(ASSETS_DIR)
+        if source.name.startswith(".") or source.name.endswith("~") or should_skip(rel):
+            continue
+        if source.suffix.lower() in STATIC_EXTENSIONS:
+            pairs.append((source, rel))
+    pairs.extend(
+        (ASSETS_DIR / template, Path(output))
+        for template, output in (("homepage.html", "index.html"), ("notes.html", "notes.html"))
+    )
+    return pairs
+
+
+def publish_outputs_exist(notes: list[Note]) -> bool:
+    required = [PUBLIC / "js" / "data.js", PUBLIC / "index.html", PUBLIC / "notes.html"]
+    required.extend(PUBLIC / note.link for note in notes)
+    required.extend(PUBLIC / target for _source, target in static_publish_pairs())
+    return all(path.exists() for path in required) and not missing_site_shell_assets()
+
+
+def missing_site_shell_assets() -> list[str]:
+    missing: list[str] = []
+    for page in (PUBLIC / "index.html", PUBLIC / "notes.html"):
+        if not page.exists():
+            missing.append(page.relative_to(PUBLIC).as_posix())
+            continue
+        try:
+            html = page.read_text(encoding="utf-8")
+        except OSError:
+            missing.append(page.relative_to(PUBLIC).as_posix())
+            continue
+        for raw_url in HTML_SHELL_ASSET_RE.findall(html):
+            url = unquote(raw_url.split("#", 1)[0].split("?", 1)[0]).strip()
+            if not url or url.startswith("//") or re.match(r"^[a-z][a-z0-9+.-]*:", url, flags=re.I):
+                continue
+            target = PUBLIC / url.lstrip("/") if url.startswith("/") else page.parent / url
+            if not target.exists():
+                missing.append(f"{page.name}: {raw_url}")
+    return sorted(set(missing))
+
+
+def validate_site_shell_assets() -> None:
+    missing = missing_site_shell_assets()
+    if missing:
+        raise RuntimeError("Published site references missing assets:\n  " + "\n  ".join(missing))
+
+
+def published_assets_current() -> bool:
+    for source, target in static_publish_pairs():
+        output = PUBLIC / target
+        if not source.exists() or not output.exists():
+            return False
+        try:
+            if not filecmp.cmp(source, output, shallow=False):
+                return False
+        except OSError:
+            return False
+    return True
+
+
+def publish_state_current(
+    notes: list[Note],
+    head: str | None,
+    roam_head: str | None,
+    runtime_head: str | None,
+) -> bool:
+    if (
+        publish_forced()
+        or not head
+        or not runtime_head
+        or roam_inputs_dirty()
+        or runtime_inputs_dirty()
+        or not PUBLISH_STATE.exists()
+    ):
+        return False
+    try:
+        state = json.loads(PUBLISH_STATE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return (
+        state.get("gitHead") == head
+        and state.get("roamGitHead") == roam_head
+        and state.get("runtimeGitHead") == runtime_head
+        and state.get("dirty") is False
+        and state.get("noteCount") == len(notes)
+        and publish_outputs_exist(notes)
+        and published_assets_current()
+    )
+
+
+def write_publish_state(
+    notes: list[Note],
+    rendered: int,
+    skipped: int,
+    head: str | None,
+    roam_head: str | None,
+    runtime_head: str | None,
+) -> None:
+    state = {
+        "gitHead": head,
+        "roamGitHead": roam_head,
+        "runtimeGitHead": runtime_head,
+        "dirty": runtime_inputs_dirty() or roam_inputs_dirty(),
+        "noteCount": len(notes),
+        "rendered": rendered,
+        "skipped": skipped,
+    }
+    PUBLISH_STATE.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def path_from_dep(dep: str) -> Path:
+    path = Path(dep)
+    return path if path.is_absolute() else ROOT / path
+
+
+def output_is_current(output_file: Path, deps_file: Path) -> bool:
+    if publish_forced():
+        return False
+    if not output_file.exists() or not deps_file.exists():
+        return False
+    try:
+        deps = json.loads(deps_file.read_text(encoding="utf-8")).get("inputs", [])
+    except (OSError, json.JSONDecodeError):
+        return False
+    output_mtime = output_file.stat().st_mtime
+    for dep in deps:
+        dep_path = path_from_dep(str(dep))
+        if not dep_path.exists() or dep_path.stat().st_mtime > output_mtime:
+            return False
+    return True
+
+
+def deps_for_note(note: Note, notes_by_rel: dict[str, Note] | None = None) -> set[str]:
+    deps = {
+        note.public_path if note.private else project_rel_path(note.path).as_posix(),
+        str(RUNTIME_ROOT / "scripts" / "render-html.mjs"),
+        str(RUNTIME_ROOT / "aaronnote" / "style.css"),
+        str(RUNTIME_ROOT / "aaronnote" / "published-toc.js"),
+        str(RUNTIME_ROOT / "aaronnote" / "published-local-graph.js"),
+        str(RUNTIME_ROOT / "js" / "note-page.js"),
+        str(RUNTIME_ROOT / "src" / "styles" / "widgets.css"),
+        str(RUNTIME_ROOT / "src" / "styles" / "theme-typora.css"),
+        str(RUNTIME_ROOT / "src" / "styles" / "typography.css"),
+        str(ASSETS_DIR / "css" / "aaronnote-published.css"),
+    }
+    fonts_dir = RUNTIME_ROOT / "src" / "styles" / "fonts"
+    if fonts_dir.exists():
+        deps.update(str(path) for path in fonts_dir.iterdir() if path.is_file())
+    src_dir = RUNTIME_ROOT / "src"
+    if src_dir.exists():
+        deps.update(str(path) for path in src_dir.glob("**/*.ts"))
+    lean_path = lean_mirror_path(note.path)
+    try:
+        note_has_lean_regions = bool(MARKDOWN_LEAN_TAG_RE.search(note.path.read_text(encoding="utf-8")))
+    except OSError:
+        note_has_lean_regions = False
+    if lean_path.exists() or note_has_lean_regions:
+        deps.add(project_rel_path(lean_path).as_posix())
+    deps.update(str(path) for path in note_kind_asset_paths(note))
+    return deps
+
+
+def executable_from_path(value: str) -> str | None:
+    value = value.strip()
+    if not value:
+        return None
+    if os.sep in value:
+        return value if Path(value).exists() else None
+    return shutil.which(value)
+
+
+def node_executable() -> str:
+    for value in (
+        os.environ.get("AARONNOTE_NODE", ""),
+        os.environ.get("NODE_BINARY", ""),
+        "node",
+        "/opt/homebrew/bin/node",
+        "/usr/local/bin/node",
+        str(Path.home() / ".nix-profile" / "bin" / "node"),
+        "/run/current-system/sw/bin/node",
+    ):
+        resolved = executable_from_path(value)
+        if resolved:
+            return resolved
+
+    try:
+        resolved = subprocess.check_output(
+            ["/bin/zsh", "-lc", "command -v node"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        resolved = ""
+    if resolved:
+        return resolved
+    raise RuntimeError("Noema renderer failed: node executable not found")
+
+
+def render_aaronnote_payload(payload: dict[str, object]) -> str:
+    try:
+        result = subprocess.run(
+            [node_executable(), str(RUNTIME_ROOT / "scripts" / "render-html.mjs")],
+            cwd=str(RUNTIME_ROOT),
+            input=json.dumps(payload, ensure_ascii=False),
+            text=True,
+            check=True,
+            capture_output=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as err:
+        stderr = err.stderr if isinstance(err, subprocess.CalledProcessError) else str(err)
+        raise RuntimeError(f"Noema renderer failed: {stderr}") from err
+    try:
+        return str(json.loads(result.stdout)["html"])
+    except (json.JSONDecodeError, KeyError) as err:
+        raise RuntimeError(f"Noema renderer returned invalid JSON: {result.stdout[:500]}") from err
+
+
+def render_aaronnote_payloads(payloads: list[dict[str, object]]) -> list[str]:
+    if not payloads:
+        return []
+    try:
+        result = subprocess.run(
+            [node_executable(), str(RUNTIME_ROOT / "scripts" / "render-html.mjs")],
+            cwd=str(RUNTIME_ROOT),
+            input=json.dumps({"batch": payloads}, ensure_ascii=False),
+            text=True,
+            check=True,
+            capture_output=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as err:
+        stderr = err.stderr if isinstance(err, subprocess.CalledProcessError) else str(err)
+        raise RuntimeError(f"Noema renderer failed: {stderr}") from err
+    try:
+        html = json.loads(result.stdout)["html"]
+    except (json.JSONDecodeError, KeyError) as err:
+        raise RuntimeError(f"Noema renderer returned invalid JSON: {result.stdout[:500]}") from err
+    if not isinstance(html, list) or len(html) != len(payloads):
+        raise RuntimeError(f"Noema renderer returned {len(html) if isinstance(html, list) else 'invalid'} batch items for {len(payloads)} inputs")
+    return [str(item) for item in html]
+
+
+def render_aaronnote_markdown(text: str) -> str:
+    return render_aaronnote_payload({"markdown": text})
+
+
+def normalize_lean_tag(value: object) -> str:
+    tag = re.sub(r"[^A-Za-z0-9_.:-]+", "-", str(value or "").strip().strip("[]"))
+    return tag.strip("-")[:80]
+
+
+def lean_mirror_path(note_path: Path) -> Path:
+    rel = project_rel_path(note_path)
+    if rel.parts and rel.parts[0] == "roam":
+        rel = Path(*rel.parts[1:])
+    if rel.suffix.lower() in {".md", ".markdown"}:
+        rel = rel.with_suffix(".lean")
+    else:
+        rel = Path(f"{rel.as_posix()}.lean")
+    return ROAM_ROOT / ".lean" / rel
+
+
+def scan_lean_regions(text: str) -> dict[str, str]:
+    matches = list(LEAN_REGION_MARKER_RE.finditer(text))
+    regions: dict[str, str] = {}
+    for index, match in enumerate(matches):
+        tag = normalize_lean_tag(match.group(1))
+        if not tag:
+            continue
+        body_from = match.end()
+        if body_from < len(text) and text[body_from] == "\n":
+            body_from += 1
+        body_to = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        regions[tag] = text[body_from:body_to].rstrip("\n")
+    return regions
+
+
+def lean_regions_for_note(note: Note, markdown_text: str) -> dict[str, str]:
+    tags = [normalize_lean_tag(match.group(1)) for match in MARKDOWN_LEAN_TAG_RE.finditer(markdown_text)]
+    tags = [tag for tag in tags if tag]
+    if not tags:
+        return {}
+    path = lean_mirror_path(note.path)
+    try:
+        regions = scan_lean_regions(path.read_text(encoding="utf-8"))
+    except OSError:
+        return {}
+    wanted = set(tags)
+    return {tag: body for tag, body in regions.items() if tag in wanted}
+
+
+def site_root_for(note_link: str) -> str:
+    depth = len(Path(note_link).parent.parts)
+    return "../" * depth or "./"
+
+
+def pdf_export_p() -> bool:
+    return os.environ.get("AARONNOTE_EXPORT_FORMAT") == "pdf"
+
+
+def note_output_link(note: Note) -> str:
+    if pdf_export_p():
+        return Path(note.rel_path).with_suffix(".html").as_posix()
+    return note.link
+
+
+def note_render_payload(
+    note: Note,
+    markdown_text: str,
+    *,
+    include_private_content: bool = False,
+    lean_regions: dict[str, str] | None = None,
+    notes_by_rel: dict[str, Note] | None = None,
+) -> dict[str, object]:
+    root = site_root_for(note_output_link(note))
+    kind = active_note_kind(note)
+    export_format = "pdf" if pdf_export_p() else "html"
+    title = note.title if pdf_export_p() else note.public_title
+    return {
+        "mode": "published-note",
+        "markdown": markdown_text,
+        "note": {
+            "title": title,
+            "group": note.group_label,
+            "date": note.date,
+            "root": root,
+            "kind": kind or DEFAULT_NOTE_KIND,
+            "format": export_format,
+            "noteThemeVersion": NOTE_THEME_VERSION,
+            "kindAssetsHtml": note_kind_assets_html(note, root),
+            "private": note.private,
+            "includePrivateContent": include_private_content,
+            "leanRegions": lean_regions or {},
+        },
+    }
+
+
+def note_page_html(
+    note: Note,
+    markdown_text: str,
+    *,
+    include_private_content: bool = False,
+    lean_regions: dict[str, str] | None = None,
+    notes_by_rel: dict[str, Note] | None = None,
+) -> str:
+    rendered = render_aaronnote_payload(note_render_payload(
+        note,
+        markdown_text,
+        include_private_content=include_private_content,
+        lean_regions=lean_regions,
+        notes_by_rel=notes_by_rel,
+    ))
+    return HTML_MD_LINK_RE.sub(r'href="\1.html\2"', rendered)
+
+
+def prepare_note_render(
+    note: Note,
+    *,
+    output_root: Path = PUBLIC,
+    include_private_content: bool = False,
+    force: bool = False,
+    notes_by_rel: dict[str, Note] | None = None,
+) -> PendingNoteRender | None:
+    output_file = output_root / note_output_link(note)
+    deps_file = deps_file_for(output_file, output_root)
+    if not force and not include_private_content and output_is_current(output_file, deps_file):
+        return None
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    deps_file.parent.mkdir(parents=True, exist_ok=True)
+    markdown_text = note.path.read_text(encoding="utf-8")
+    if not include_private_content:
+        markdown_text = sanitize_published_metadata_tags(markdown_text)
+    lean_regions = lean_regions_for_note(note, markdown_text)
+    return PendingNoteRender(
+        note=note,
+        output_file=output_file,
+        deps_file=deps_file,
+        payload=note_render_payload(
+            note,
+            markdown_text,
+            include_private_content=include_private_content,
+            lean_regions=lean_regions,
+            notes_by_rel=notes_by_rel,
+        ),
+    )
+
+
+def write_rendered_note_html(render: PendingNoteRender, html: str, notes_by_rel: dict[str, Note] | None = None) -> None:
+    render.output_file.write_text(HTML_MD_LINK_RE.sub(r'href="\1.html\2"', html), encoding="utf-8")
+    render.deps_file.write_text(
+        json.dumps({"inputs": sorted(deps_for_note(render.note, notes_by_rel))}, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def render_note_html(
+    note: Note,
+    *,
+    output_root: Path = PUBLIC,
+    include_private_content: bool = False,
+    force: bool = False,
+    notes_by_rel: dict[str, Note] | None = None,
+) -> str:
+    pending = prepare_note_render(
+        note,
+        output_root=output_root,
+        include_private_content=include_private_content,
+        force=force,
+        notes_by_rel=notes_by_rel,
+    )
+    if pending is None:
+        return "skipped"
+    write_rendered_note_html(pending, render_aaronnote_payload(pending.payload), notes_by_rel)
+    return "rendered"
+
+
+def public_ref_keys(refs: list[str], public_ids: dict[str, str]) -> list[str]:
+    return [public_ids.get(ref, ref) for ref in refs]
+
+
+def note_json(note: Note, public_ids: dict[str, str]) -> dict[str, object]:
+    private_summary = "This note has been sealed by the administrator."
+    return {
+        "key": note.public_id,
+        "id": note.public_id,
+        "title": note.public_title,
+        "link": note.link,
+        "path": note.public_path,
+        "date": note.date,
+        "summary": private_summary if note.private else note.summary,
+        "searchText": private_summary if note.private else note.search_text,
+        "groupKey": note.group_key,
+        "groupLabel": note.group_label,
+        "section": note.section,
+        "hidden": note.private,
+        "private": note.private,
+        "tags": filter_sensitive_tags(note.tags),
+        "aliases": [] if note.private else note.aliases,
+        "refs": public_ref_keys(note.refs, public_ids),
+        "backlinks": public_ref_keys(note.backlinks, public_ids),
+    }
+
+
+def write_data(notes: list[Note]) -> None:
+    js_dir = PUBLIC / "js"
+    js_dir.mkdir(parents=True, exist_ok=True)
+    public_note_items = list(notes)
+    tags = sorted({tag for note in public_note_items if not note.private for tag in filter_sensitive_tags(note.tags)})
+    public_ids = {note.id: note.public_id for note in notes}
+    data = {
+        "meta": {
+            "generatedAt": subprocess.check_output(["date", "+%Y-%m-%d %H:%M:%S %z"], text=True).strip(),
+            "noteCount": len(public_note_items),
+            "tagCount": len(tags),
+        },
+        "notes": [note_json(note, public_ids) for note in public_note_items],
+    }
+    (js_dir / "data.js").write_text(f"const SITE_DATA = {json.dumps(data, ensure_ascii=False, separators=(',', ':'))};\n", encoding="utf-8")
+
+
+def _copy_into_public(source: Path, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists() and not target.is_symlink():
+        try:
+            source_stat = source.stat()
+            target_stat = target.stat()
+            if (
+                source_stat.st_size == target_stat.st_size
+                and source_stat.st_mtime_ns == target_stat.st_mtime_ns
+            ):
+                return
+        except OSError:
+            pass
+    if target.is_symlink() or target.exists():
+        target.unlink()
+    shutil.copy2(source, target)
+
+
+def copy_published_assets(output_root: Path) -> None:
+    required_sources = [*PUBLISHED_ASSET_SOURCES, *REVEAL_ASSET_SOURCES]
+    missing = [str(src_path) for src_path, _dst_rel in required_sources if not src_path.exists()]
+    if missing:
+        raise RuntimeError("Missing required publish assets:\n  " + "\n  ".join(missing))
+    for src_path, dst_rel in required_sources:
+        _copy_into_public(src_path, output_root / dst_rel)
+    fonts_dir = RUNTIME_ROOT / "src" / "styles" / "fonts"
+    if fonts_dir.exists():
+        for src_path in fonts_dir.iterdir():
+            if src_path.is_file():
+                _copy_into_public(src_path, output_root / "Noema" / "src" / "styles" / "fonts" / src_path.name)
+
+
+def markdown_asset_target(note: Note, raw_path: str) -> Path | None:
+    path_text = unquote(raw_path.split("#", 1)[0].split("?", 1)[0]).strip()
+    if not path_text or re.match(r"^[a-z][a-z0-9+.-]*:", path_text, flags=re.I):
+        return None
+    asset_path = Path(path_text)
+    return asset_path if asset_path.is_absolute() else note.path.parent / asset_path
+
+
+def note_static_asset_paths(note: Note) -> set[Path]:
+    try:
+        text = note.path.read_text(encoding="utf-8")
+    except OSError:
+        return set()
+
+    paths: set[Path] = set()
+    for raw_path in [*MD_IMAGE_RE.findall(text), *MD_LINK_RE.findall(text)]:
+        asset_path = markdown_asset_target(note, raw_path)
+        if not asset_path:
+            continue
+        if asset_path.exists() and asset_path.is_file() and asset_path.suffix.lower() in NOTE_STATIC_EXTENSIONS:
+            paths.add(asset_path.resolve())
+
+    for rel_dir in (
+        Path("img") / note.path.stem,
+        Path("images") / note.path.stem,
+        Path("assets") / "img" / note.path.stem,
+    ):
+        directory = note.path.parent / rel_dir
+        if directory.exists():
+            paths.update(
+                path.resolve()
+                for path in directory.rglob("*")
+                if path.is_file() and path.suffix.lower() in NOTE_STATIC_EXTENSIONS
+            )
+    return paths
+
+
+def copy_note_static_assets(
+    note: Note,
+    output_root: Path,
+    notes_by_rel: dict[str, Note] | None = None,
+    *,
+    include_private_content: bool = False,
+) -> None:
+    if note.private and not include_private_content:
+        return
+    sources = set(note_static_asset_paths(note))
+    _ = notes_by_rel
+    for source in sources:
+        try:
+            rel = project_rel_path(source)
+        except ValueError:
+            continue
+        _copy_into_public(source, output_root / rel)
+
+
+def note_kind_asset_paths(note: Note) -> set[Path]:
+    kind = active_note_kind(note)
+    if not kind:
+        return set()
+    root = ASSETS_DIR / "kinds" / kind
+    return {
+        path
+        for path in (root / "index.css", root / "index.js")
+        if path.exists() and path.is_file()
+    }
+
+
+def copy_note_kind_assets(note: Note, output_root: Path) -> None:
+    for source in note_kind_asset_paths(note):
+        _copy_into_public(source, output_root / "kinds" / source.relative_to(ASSETS_DIR / "kinds"))
+
+
+def note_kind_assets_html(note: Note, root: str) -> str:
+    kind = active_note_kind(note)
+    if not kind:
+        return ""
+    asset_root = ASSETS_DIR / "kinds" / kind
+    css = asset_root / "index.css"
+    js = asset_root / "index.js"
+    lines: list[str] = []
+    if css.exists():
+        lines.append(f'  <link rel="stylesheet" href="{root}kinds/{kind}/index.css?v={NOTE_THEME_VERSION}" />')
+    if js.exists():
+        context = {
+            "kind": kind,
+            "title": note.public_title,
+            "path": note.public_path,
+            "articleId": "content",
+        }
+        lines.append(
+            "  <script type=\"module\">\n"
+            f"    const context = {{ ...{script_json(context)}, article: document.getElementById('content') }};\n"
+            f"    const mod = await import('{root}kinds/{kind}/index.js?v={NOTE_THEME_VERSION}');\n"
+            "    const setup = typeof mod.default === 'function' ? mod.default : typeof mod.setup === 'function' ? mod.setup : null;\n"
+            "    const cleanup = setup ? setup(context) : null;\n"
+            "    window.addEventListener('pagehide', () => {\n"
+            "      if (typeof cleanup === 'function') cleanup();\n"
+            "      else if (typeof mod.teardown === 'function') mod.teardown(context);\n"
+            "    }, { once: true });\n"
+            "    window.dispatchEvent(new CustomEvent('aaronnote:kind-ready', { detail: context }));\n"
+            "  </script>"
+        )
+    return "\n".join(lines)
+
+
+def copy_static(notes: list[Note]) -> None:
+    private_assets = private_static_asset_paths(notes)
+
+    # Copy roam static assets (images, visual attachments) from project files walk.
+    for path in iter_project_files():
+        if not path.is_file() or path.resolve() in private_assets:
+            continue
+        try:
+            rel = project_rel_path(path)
+        except ValueError:
+            continue
+        if should_skip(rel) or path.name.startswith(".") or path.name.endswith("~"):
+            continue
+        suffix = path.suffix.lower()
+        # Only copy roam files (images + visual attachments).
+        if not (rel.parts and rel.parts[0] == "roam"):
+            continue
+        if suffix not in (IMAGE_EXTENSIONS | VISUAL_ATTACHMENT_EXTENSIONS):
+            continue
+        _copy_into_public(path, PUBLIC / rel)
+
+    # Copy site static assets (css/, js/, kinds/, etc.) from ASSETS_DIR.
+    for path in ASSETS_DIR.rglob("*"):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(ASSETS_DIR)
+        if path.name.startswith(".") or path.name.endswith("~") or should_skip(rel):
+            continue
+        if path.suffix.lower() not in STATIC_EXTENSIONS:
+            continue
+        _copy_into_public(path, PUBLIC / rel)
+
+    for template, output in (("homepage.html", "index.html"), ("notes.html", "notes.html")):
+        source = ASSETS_DIR / template
+        if source.exists():
+            _copy_into_public(source, PUBLIC / output)
+
+
+def clean_stale_outputs(notes: list[Note]) -> None:
+    expected_html = {note.link for note in notes}
+    private_assets = private_static_asset_paths(notes)
+    roam_public = PUBLIC / "roam"
+    if roam_public.exists():
+        for dirpath, dirnames, _filenames in os.walk(roam_public, topdown=True, followlinks=False):
+            current = Path(dirpath)
+            for dirname in list(dirnames):
+                if dirname not in SKIP_DIRS:
+                    continue
+                stale_dir = current / dirname
+                if stale_dir.is_symlink():
+                    stale_dir.unlink()
+                else:
+                    shutil.rmtree(stale_dir)
+                dirnames.remove(dirname)
+        for prefix in PRIVATE_PATH_PREFIXES:
+            public_prefix = PUBLIC / prefix
+            if public_prefix.exists():
+                for public_file in public_prefix.rglob("*"):
+                    if public_file.is_file() or public_file.is_symlink():
+                        public_file.unlink()
+        for source_asset in private_assets:
+            try:
+                rel = project_rel_path(source_asset)
+            except ValueError:
+                continue
+            public_asset = PUBLIC / rel
+            if public_asset.exists() or public_asset.is_symlink():
+                public_asset.unlink()
+        for html_file in roam_public.glob("**/*.html"):
+            rel = html_file.relative_to(PUBLIC).as_posix()
+            if rel not in expected_html:
+                html_file.unlink()
+                deps_file_for(html_file).unlink(missing_ok=True)
+        for pdf_file in roam_public.glob("**/*.pdf"):
+            pdf_file.unlink()
+            deps_file_for(pdf_file).unlink(missing_ok=True)
+    for rel in ("diary.html", "sitemap-log.html", "CV/main.pdf"):
+        (PUBLIC / rel).unlink(missing_ok=True)
+
+
+def collect_notes() -> tuple[list[Note], dict[str, Note]]:
+    PUBLIC.mkdir(parents=True, exist_ok=True)
+    notes = find_notes()
+    notes_by_id = {note.id: note for note in notes}
+    notes_by_rel = {note.rel_path: note for note in notes}
+    backlinks: dict[str, list[str]] = {note.id: [] for note in notes}
+
+    for note in notes:
+        resolved_refs: set[str] = set()
+        for ref in note.refs:
+            if re.match(r"^[a-z][a-z0-9+.-]*:", ref, flags=re.I):
+                continue
+            ref_path_text = unquote(ref.split("#", 1)[0].split("?", 1)[0]).strip()
+            if not ref_path_text:
+                continue
+            ref_path = (note.path.parent / ref_path_text).resolve()
+            try:
+                rel = project_rel_path(ref_path).as_posix()
+            except ValueError:
+                continue
+            target = notes_by_rel.get(rel)
+            if target and target.id != note.id:
+                resolved_refs.add(target.id)
+        note.refs = sorted(resolved_refs)
+        for ref in note.refs:
+            backlinks.setdefault(ref, []).append(note.id)
+
+    for note in notes:
+        note.backlinks = sorted(set(backlinks.get(note.id, [])))
+    return notes, notes_by_id
+
+
+def publish_mask_stats(notes: list[Note]) -> tuple[int, int]:
+    masks: list[str] = []
+    for note in notes:
+        for tag in note.tags:
+            normalized = tag.strip().lower()
+            if normalized in SENSITIVE_TAGS:
+                masks.append(sealed_tag_mask(normalized))
+    return len(masks), len(set(masks))
+
+
+def publish_summary(
+    notes: list[Note],
+    *,
+    rendered: int,
+    skipped: int,
+    head: str | None,
+    roam_head: str | None,
+    runtime_head: str | None,
+    unchanged: bool = False,
+) -> None:
+    public_count = sum(not note.private for note in notes)
+    sealed_count = len(notes) - public_count
+    reference_edges = sum(len(note.refs) for note in notes)
+    connected_notes = sum(1 for note in notes if note.refs or note.backlinks)
+    masked_tags, distinct_masked_tags = publish_mask_stats(notes)
+    sealed_groups = len({note.group_key for note in notes if note.private})
+    private_assets = len(private_static_asset_paths(notes))
+    public_tags = {
+        tag
+        for note in notes
+        if not note.private
+        for tag in filter_sensitive_tags(note.tags)
+    }
+    state = "unchanged" if unchanged else "updated"
+
+    print(f"Publish summary: {state}")
+    print(f"  Output: {PUBLIC}")
+    print(f"  Notes: {len(notes)} total, {public_count} public, {sealed_count} sealed")
+    print(f"  Pages: {rendered} rendered, {skipped} skipped")
+    print(f"  Graph: {reference_edges} reference edges, {connected_notes} connected notes")
+    print(f"  Tags: {len(public_tags)} public tags, {masked_tags} masked occurrences, {distinct_masked_tags} masked tags")
+    print(f"  Privacy: {sealed_groups} sealed groups, {private_assets} private static assets excluded")
+    print(
+        "  Git: "
+        f"publish {head[:12] if head else 'unknown'}, "
+        f"roam {roam_head[:12] if roam_head else 'unknown'}, "
+        f"runtime {runtime_head[:12] if runtime_head else 'unknown'}"
+    )
+
+
+def arg_value(args: list[str], name: str) -> str | None:
+    if name not in args:
+        return None
+    index = args.index(name)
+    if index + 1 >= len(args):
+        raise SystemExit(f"{name} requires a value")
+    return args[index + 1]
+
+
+def resolve_root_path(raw_path: str) -> Path:
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = ROOT / path
+    return path.resolve()
+
+
+def publish_single_note(args: list[str]) -> bool:
+    raw_note = arg_value(args, "--note")
+    if not raw_note:
+        return False
+
+    note_path = resolve_root_path(raw_note)
+    try:
+        rel = project_rel_path(note_path)
+    except ValueError as err:
+        raise SystemExit(f"Note is outside publish root: {note_path}") from err
+    if not note_path.exists() or note_path.suffix.lower() not in {".md", ".markdown"}:
+        raise SystemExit(f"Not a Markdown note: {note_path}")
+    if should_skip(rel):
+        raise SystemExit(f"Skipped path cannot be published: {note_path}")
+
+    output_root = PUBLIC
+    raw_output_root = arg_value(args, "--output-root")
+    if raw_output_root:
+        output_root = resolve_root_path(raw_output_root)
+
+    include_private = "--include-private" in args
+    export_format = arg_value(args, "--format")
+    previous_export_format = os.environ.get("AARONNOTE_EXPORT_FORMAT")
+    if export_format:
+        if export_format not in {"html", "pdf"}:
+            raise SystemExit(f"Unsupported export format: {export_format}")
+        os.environ["AARONNOTE_EXPORT_FORMAT"] = export_format
+    note = parse_note_for_export(note_path)
+    all_notes = find_notes()
+    notes_by_rel = {item.rel_path: item for item in all_notes}
+    note = notes_by_rel.get(note.rel_path, note)
+    output_root.mkdir(parents=True, exist_ok=True)
+    copy_published_assets(output_root)
+    copy_note_static_assets(
+        note,
+        output_root,
+        notes_by_rel,
+        include_private_content=include_private,
+    )
+    copy_note_kind_assets(note, output_root)
+    output_file = output_root / note_output_link(note)
+    try:
+        status = render_note_html(
+            note,
+            output_root=output_root,
+            include_private_content=include_private,
+            force=True,
+            notes_by_rel=notes_by_rel,
+        )
+    finally:
+        if export_format:
+            if previous_export_format is None:
+                os.environ.pop("AARONNOTE_EXPORT_FORMAT", None)
+            else:
+                os.environ["AARONNOTE_EXPORT_FORMAT"] = previous_export_format
+    print(f"Published {note.rel_path} to {output_file} ({status})")
+    return True
+
+
+def _migrate_roam_symlink() -> None:
+    """Detach a legacy ROOT/roam source symlink before creating output there.
+
+    HTML is a supported note attachment, so migration must never delete HTML
+    files from the source vault.
+    """
+    global ROAM_ROOT
+    roam_link = ROOT / "roam"
+    if roam_link.is_symlink():
+        try:
+            source_root = roam_link.resolve()
+            if source_root == ROAM_ROOT.resolve():
+                if ROAM_ROOT.absolute() == roam_link.absolute():
+                    ROAM_ROOT = source_root
+                roam_link.unlink()
+        except OSError:
+            pass
+
+
+def main() -> None:
+    args = sys.argv[1:]
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    _migrate_roam_symlink()
+    if publish_single_note(args):
+        return
+
+    notes, _notes_by_id = collect_notes()
+    notes_by_rel = {note.rel_path: note for note in notes}
+
+    head = git_head()
+    roam_head = roam_git_head()
+    runtime_head = runtime_git_head()
+
+    if "--record-state" in args:
+        write_publish_state(notes, 0, len(notes), head, roam_head, runtime_head)
+        print(
+            "Recorded publish state for "
+            f"publish {head[:12] if head else 'unknown'} / "
+            f"roam {roam_head[:12] if roam_head else 'unknown'} / "
+            f"runtime {runtime_head[:12] if runtime_head else 'unknown'}"
+        )
+        return
+
+    if publish_state_current(notes, head, roam_head, runtime_head):
+        print(f"Published {len(notes)} Markdown notes to {PUBLIC} (unchanged, skipped)")
+        publish_summary(
+            notes,
+            rendered=0,
+            skipped=len(notes),
+            head=head,
+            roam_head=roam_head,
+            runtime_head=runtime_head,
+            unchanged=True,
+        )
+        return
+
+    clean_stale_outputs(notes)
+    copy_published_assets(PUBLIC)
+    copy_static(notes)
+    skipped = 0
+    pending_renders: list[PendingNoteRender] = []
+    for note in notes:
+        copy_note_static_assets(note, PUBLIC, notes_by_rel)
+        pending = prepare_note_render(note, notes_by_rel=notes_by_rel)
+        if pending is None:
+            skipped += 1
+        else:
+            pending_renders.append(pending)
+    rendered_html = render_aaronnote_payloads([item.payload for item in pending_renders])
+    for pending, html in zip(pending_renders, rendered_html, strict=True):
+        write_rendered_note_html(pending, html, notes_by_rel)
+    rendered = len(pending_renders)
+    write_data(notes)
+    validate_site_shell_assets()
+    write_publish_state(notes, rendered, skipped, head, roam_head, runtime_head)
+    print(f"Published {len(notes)} Markdown notes to {PUBLIC} ({rendered} rendered, {skipped} skipped)")
+    publish_summary(
+        notes,
+        rendered=rendered,
+        skipped=skipped,
+        head=head,
+        roam_head=roam_head,
+        runtime_head=runtime_head,
+    )
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Equiv
+# key: ===
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/_Equiv
+# --
+\equiv

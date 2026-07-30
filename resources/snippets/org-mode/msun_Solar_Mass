@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Solar Mass
+# key: msun
+# --
+M_{\odot}

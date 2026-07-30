@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Attention block
+# key: att
+# group: Noema blocks
+# --
+#+begin attention ${1:title}
+${2:Pay attention to this point.}
+#+end attention
+$0

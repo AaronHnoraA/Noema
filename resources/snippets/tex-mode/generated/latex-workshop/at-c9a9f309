@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: geq
+# key: @>
+# uuid: latex-workshop:@>
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=geq+symbol
+# group: Math · latex-workshop
+# --
+\geq

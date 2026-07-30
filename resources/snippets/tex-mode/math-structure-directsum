@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [directsum] — Direct sum expression
+# key: directsum
+# group: Math · Recent notes
+# --
+${1:U}\oplus ${2:V}$0

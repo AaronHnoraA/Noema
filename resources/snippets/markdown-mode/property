@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Property block
+# key: propb
+# group: Noema blocks
+# --
+#+begin property ${1:name}
+${2:Property.}
+#+end property
+$0

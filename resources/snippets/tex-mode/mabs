@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Absolute value
+# key: mabs
+# group: Math symbols
+# --
+\left|${1:x}\right|$0

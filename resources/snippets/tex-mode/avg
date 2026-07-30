@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Angle Brackets
+# key: avg
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/avg_Angle_Brackets
+# --
+\langle $1 \rangle $2

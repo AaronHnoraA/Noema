@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Fold block
+# key: fold
+# group: Noema local
+# --
+#+begin fold ${1:**Details**}
+${2:Hidden content.}
+#+end fold
+$0

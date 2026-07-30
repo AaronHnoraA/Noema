@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Concatenation
+# key: concat
+# -- Crypto
+# --
+\mathbin{\Vert}$0

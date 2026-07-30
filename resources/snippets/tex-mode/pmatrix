@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \begin{pmatrix}…\end{pmatirx}
+# key: pmatrix
+# --
+# --
+\begin{pmatrix}
+$1
+\end{pmatrix}

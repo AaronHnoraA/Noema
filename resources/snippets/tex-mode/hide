@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: hide
+# key: hide
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/hide_hide
+# --
+# --
+\begin{hide}
+	$1
+\end{hide}
+$0

@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: Conclusion
+# key: conclusion
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/conclusion_Conclusion
+# --
+# --
+\begin{conclusion}
+	$1
+\end{conclusion}
+$0

@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Math [GL] — General linear group
+# key: GL
+# group: Math · Linear algebra
+# --
+\operatorname{GL}$0

@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Roman
+# key: rm
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/rm_Roman
+# --
+\mathrm{$1}$2

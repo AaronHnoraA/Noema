@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Dot
+# key: **
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/_Dot
+# --
+\cdot

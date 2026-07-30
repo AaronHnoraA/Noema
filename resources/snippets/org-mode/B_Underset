@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Underset
+# key: B
+# --
+\underset{ $1 }{ ${VISUAL} }

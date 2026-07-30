@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \emph{}
+# key: \emph{}
+# uuid: latex-workshop:\emph{}
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=
+# group: Math · latex-workshop
+# --
+\emph{${1}}$0

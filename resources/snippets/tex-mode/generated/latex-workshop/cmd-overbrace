@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \overbrace{}
+# key: \overbrace{}
+# uuid: latex-workshop:\overbrace{}
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%E2%8F%9E
+# group: Math · latex-workshop
+# --
+\overbrace{${1:text}}$0

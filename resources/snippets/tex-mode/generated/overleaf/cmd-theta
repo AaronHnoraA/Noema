@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \Theta
+# key: \Theta
+# uuid: overleaf:\Theta
+# contributor: Noema provider=overleaf&priority=160&weight=0.038090902146599444&context=math-command&description=Overleaf+cmd
+# group: Math · overleaf
+# --
+\Theta$0

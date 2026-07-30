@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Hash function
+# key: hash
+# -- Crypto
+# --
+${1:H}: \{0,1\}^* \to \{0,1\}^{${2:\lambda}}$0

@@ -1,0 +1,35 @@
+Aaronnote
+Copyright (c) 2026 Yanzhen Yu
+
+This Aaronnote subtree is licensed under the GNU Affero General Public
+License, version 3 only. See LICENSE.
+
+Portions of the CodeMirror source-editor infrastructure are adapted from
+Overleaf, copyright Overleaf and its contributors, licensed under the GNU
+Affero General Public License version 3. The reviewed upstream revision is:
+
+  https://github.com/overleaf/overleaf
+  commit 28ad3b03b71cb4311decdcb55c36b33ec10d72db
+
+Each directly adapted source file also records its upstream path and revision.
+The architecture review and migration matrix are in:
+
+  docs/architecture/overleaf-source-editor-study.md
+
+The raw-ZMQ Jupyter transport includes code ported from microsoft/vscode-jupyter
+under the MIT License; its existing source notices remain in the relevant
+files.
+
+The generated math snippet catalog includes filtered completion data derived
+from James Yu's LaTeX Workshop at commit
+57f9e8d0306ea0c7419290a2b62ee0cec3c31041, used under the MIT License. Source
+paths and content hashes are recorded in
+snippets/tex-mode/generated/.manifest.json. It also includes filtered Overleaf
+completion weights and patterns under the AGPL-3.0 license at the revision
+listed above.
+
+The bundled AaronLatinModernRoman prose webfonts are Latin-only subsets of
+Latin Modern Roman version 2.005, copyright 2003--2021 B. Jackowski and
+J.M. Nowacki (on behalf of TeX Users Groups), based on Donald E. Knuth's
+Computer Modern family. They are distributed under the GUST Font License; see
+src/styles/fonts/GUST-FONT-LICENSE.txt and src/styles/fonts/README.md.

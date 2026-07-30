@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: HTML block
+# key: html
+# group: Noema blocks
+# --
+#+begin html
+$1
+#+end html
+$0

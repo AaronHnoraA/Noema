@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: \texttt{}
+# key: \texttt{}
+# uuid: latex-workshop:\texttt{}
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=
+# group: Math · latex-workshop
+# --
+\texttt{${1}}$0

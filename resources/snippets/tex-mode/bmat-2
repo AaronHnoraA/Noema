@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Bmatrix
+# key: bmat
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/bmat_Bmatrix
+# --
+\begin{bmatrix}
+$1
+\end{bmatrix}

@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Implied By
+# key: =<
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/_Implied_By
+# --
+\impliedby

@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Infinity
+# key: ooo
+# group: Emacs migrated
+# source: /Users/hc/.config/emacs/snippets/tex-mode/ooo_Infinity
+# --
+\infty

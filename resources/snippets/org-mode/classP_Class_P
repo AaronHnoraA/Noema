@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Complexity class P
+# key: classP
+# -- TCS
+# --
+\mathsf{P}$0

@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Gamma
+# key: @G
+# uuid: latex-workshop:@G
+# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=Gamma
+# group: Math · latex-workshop
+# --
+\Gamma
