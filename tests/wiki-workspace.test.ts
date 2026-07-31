@@ -20,6 +20,7 @@ import {
   resolveWikiLink,
   searchWikiDatabase,
   updateWikiTag,
+  updateWikiNamespace,
   wikiDatabaseFile,
   wikiPageDiff,
   wikiPageHistory,
@@ -127,8 +128,43 @@ describe("Wiki workspace", () => {
       candidates: [expect.objectContaining({ file: join(math, "tensor.md") })],
     });
     expect(index.reports.wanted[0]).toMatchObject({ title: "Missing Page" });
-    expect(index.reports.duplicates.length).toBeGreaterThan(0);
+    expect(index.reports.duplicates).toHaveLength(0);
     expect(wikiDatabaseFile(root)).toBe(join(root, ".noema", "wiki.db"));
+  });
+
+  test("resolves repository, page, and fully qualified namespaces", async () => {
+    const root = await tempRoot();
+    const math = await gitRepository(root, "public", "Math");
+    const physics = await gitRepository(root, "private", "Physics");
+    await writeFile(join(math, "tensor.md"), note("math-tensor", "Tensor", "[[Quantum:Tensor]]"));
+    await writeFile(join(physics, "tensor.md"), note("physics-tensor", "Tensor")
+      .replace("title: Tensor", "title: Tensor\nnamespace: Quantum"));
+
+    const index = await buildWikiIndex(root, { layout: "wiki" });
+    expect(index.notes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "math-tensor", namespace: "Math", qualifiedTitle: "Math:Tensor", fullTitle: "public/Math:Tensor" }),
+      expect.objectContaining({ id: "physics-tensor", namespace: "Quantum", qualifiedTitle: "Quantum:Tensor", fullTitle: "private/Quantum:Tensor" }),
+    ]));
+    expect(resolveWikiLink(index, "Tensor")).toMatchObject({ status: "ambiguous" });
+    expect(resolveWikiLink(index, "Math:Tensor")).toMatchObject({
+      status: "resolved", candidates: [expect.objectContaining({ id: "math-tensor" })],
+    });
+    expect(resolveWikiLink(index, "private/Quantum:Tensor")).toMatchObject({
+      status: "resolved", candidates: [expect.objectContaining({ id: "physics-tensor" })],
+    });
+    expect(resolveWikiLink(index, "Tensor", { sourceFile: join(math, "tensor.md") })).toMatchObject({
+      status: "resolved", candidates: [expect.objectContaining({ id: "math-tensor" })],
+    });
+    expect(searchWikiDatabase(root, { namespace: "Quantum" })).toMatchObject({
+      total: 1, items: [expect.objectContaining({ id: "physics-tensor", namespace: "Quantum" })],
+    });
+
+    await updateWikiNamespace(root, { from: "Quantum", to: "Physics/Quantum", partition: "private" });
+    const renamed = await buildWikiIndex(root, { layout: "wiki" });
+    expect(resolveWikiLink(renamed, "Physics/Quantum:Tensor")).toMatchObject({ status: "resolved" });
+    expect(resolveWikiLink(renamed, "Quantum:Tensor")).toMatchObject({ status: "resolved" });
+    expect(resolveWikiLink(renamed, "private/Quantum:Tensor")).toMatchObject({ status: "resolved" });
+    expect(await readFile(join(physics, "tensor.md"), "utf8")).toContain("namespace_aliases: Quantum");
   });
 
   test("persists searchable Markdown content, excludes Typst pages, and keeps a stable generation", async () => {
@@ -189,10 +225,12 @@ describe("Wiki workspace", () => {
       repositoryId: "private/project",
       directory: "architecture",
       filename: "new-design.md",
+      namespace: "Research/Architecture",
       tags: "wiki, design",
     });
     expect(result.file).toBe(join(root, "private", "project", "architecture", "new-design.md"));
     expect(await readFile(result.file, "utf8")).toContain("title: New Design");
+    expect(await readFile(result.file, "utf8")).toContain("namespace: Research/Architecture");
     expect(await readFile(result.file, "utf8")).toContain("private: true");
   });
 

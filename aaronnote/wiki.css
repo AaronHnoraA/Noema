@@ -250,6 +250,18 @@ button.is-primary { border-color: var(--aaron-accent); background: var(--aaron-a
 .noema-wiki-page-history pre { grid-column: 1 / -1; max-height: 260px; overflow: auto; margin: 0; padding: 10px; background: var(--aaron-code-bg); color: var(--aaron-muted); font: 9px/1.5 var(--aaron-font-mono, monospace); white-space: pre-wrap; }
 
 .noema-wiki-folder-list, .noema-wiki-file-list, .noema-wiki-tag-list, .noema-wiki-dependency-list { display: grid; gap: 7px; }
+.noema-wiki-namespace-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 18px; }
+.noema-wiki-namespace-list > section { min-width: 0; border: 1px solid var(--aaron-paper-line); background: var(--aaron-paper); }
+.noema-wiki-namespace-list > section > header { display: flex; align-items: start; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--aaron-paper-line); padding: 16px; }
+.noema-wiki-namespace-list h2 { margin: 0; font: 700 17px var(--aaron-font-serif, Georgia, serif); }
+.noema-wiki-namespace-list p { margin: 5px 0 0; color: var(--aaron-muted); font-size: 10px; }
+.noema-wiki-namespace-list header button { border: 0; background: transparent; color: var(--aaron-link); cursor: pointer; }
+.noema-wiki-namespace-list header > div:last-child { display: flex; gap: 8px; }
+.noema-wiki-namespace-list section > div { display: grid; }
+.noema-wiki-namespace-list section > div button { min-height: 48px; display: grid; border: 0; border-bottom: 1px solid var(--aaron-paper-line); padding: 8px 16px; background: transparent; color: var(--aaron-link); text-align: left; cursor: pointer; }
+.noema-wiki-namespace-list section > div button:last-child { border-bottom: 0; }
+.noema-wiki-namespace-list section > div button:hover { background: var(--aaron-accent-soft); }
+.noema-wiki-namespace-list small { overflow: hidden; color: var(--aaron-muted); font: 9px var(--aaron-font-mono, monospace); text-overflow: ellipsis; white-space: nowrap; }
 .noema-wiki-folder, .noema-wiki-file-list article, .noema-wiki-tag-list article, .noema-wiki-dependency-list article {
   display: flex; align-items: center; gap: 12px; min-height: 54px; border: 1px solid var(--aaron-paper-line); border-radius: 8px; padding: 11px 14px; background: var(--aaron-paper);
 }

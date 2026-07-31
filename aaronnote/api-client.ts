@@ -598,6 +598,7 @@ type NativeApi = {
     mergePages?: (body: Record<string, unknown>) => Promise<unknown>;
     tags?: () => Promise<unknown>;
     updateTag?: (body: Record<string, unknown>) => Promise<unknown>;
+    updateNamespace?: (body: Record<string, unknown>) => Promise<unknown>;
     export?: (body: Record<string, unknown>) => Promise<unknown>;
     pageHistory?: (body: Record<string, unknown>) => Promise<unknown>;
     pageDiff?: (body: Record<string, unknown>) => Promise<unknown>;
@@ -617,6 +618,9 @@ export type WikiRepository = {
   uid?: string;
   identityStatus?: "managed" | "legacy" | "provisional";
   name: string;
+  namespace?: string;
+  qualifiedNamespace?: string;
+  namespaceAliases?: string[];
   partition: "public" | "private";
   path: string;
   public?: boolean;
@@ -624,6 +628,12 @@ export type WikiRepository = {
 export type WikiNote = {
   id: string;
   title: string;
+  namespace?: string;
+  qualifiedNamespace?: string;
+  qualifiedTitle?: string;
+  fullTitle?: string;
+  namespaceSource?: "page" | "repository";
+  namespaceAliases?: string[];
   kind?: string;
   redirectTo?: string;
   identityStatus?: "managed" | "legacy" | "provisional" | "duplicate";
@@ -688,7 +698,7 @@ export type WikiIndex = {
   directories: WikiDirectory[];
   diagnostics: Array<{ code: string; severity: string; message: string; path?: string }>;
   reports: {
-    wanted: Array<{ title: string; references: Array<{ sourceId: string; sourceTitle: string; sourceFile: string }> }>;
+    wanted: Array<{ title: string; namespace?: string; qualifiedTitle?: string; references: Array<{ sourceId: string; sourceTitle: string; sourceFile: string }> }>;
     ambiguous: Array<Record<string, unknown>>;
     duplicates: Array<Record<string, unknown>>;
     duplicateIds?: Array<Record<string, unknown>>;
@@ -1278,18 +1288,18 @@ export const api = {
       const call = requireMethod(nativeApi().wiki?.refresh, "Wiki refresh");
       return ensureOk(await call() as WikiIndex, "Refreshing Wiki failed");
     },
-    async search(body: { query?: string; repositoryId?: string; partition?: string; sort?: "title" | "recent"; cursor?: number; limit?: number }): Promise<WikiSearchResult> {
+    async search(body: { query?: string; repositoryId?: string; partition?: string; namespace?: string; sort?: "title" | "recent"; cursor?: number; limit?: number }): Promise<WikiSearchResult> {
       const call = requireMethod(nativeApi().wiki?.search, "Wiki search");
       return ensureOk(await call(body) as WikiSearchResult, "Searching Wiki failed");
     },
     async resolveLink(target: string, sourceFile = ""): Promise<{
       status: "resolved" | "ambiguous" | "missing";
-      candidates: Array<{ id: string; title: string; file: string; path: string }>;
+      candidates: Array<{ id: string; title: string; namespace: string; qualifiedNamespace: string; qualifiedTitle: string; fullTitle: string; file: string; path: string }>;
     }> {
       const call = requireMethod(nativeApi().wiki?.resolveLink, "Wiki link");
       return ensureOk(await call({ target, sourceFile }) as {
         status: "resolved" | "ambiguous" | "missing";
-        candidates: Array<{ id: string; title: string; file: string; path: string }>;
+        candidates: Array<{ id: string; title: string; namespace: string; qualifiedNamespace: string; qualifiedTitle: string; fullTitle: string; file: string; path: string }>;
       }, "Resolving Wiki link failed");
     },
     async initWorkspace(): Promise<Record<string, unknown>> {
@@ -1343,6 +1353,10 @@ export const api = {
     async updateTag(body: Record<string, unknown>): Promise<Record<string, unknown>> {
       const call = requireMethod(nativeApi().wiki?.updateTag, "Update Wiki tag");
       return ensureOk(await call(body) as Record<string, unknown>, "Updating Wiki tag failed");
+    },
+    async updateNamespace(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().wiki?.updateNamespace, "Update Wiki namespace");
+      return ensureOk(await call(body) as Record<string, unknown>, "Updating Wiki namespace failed");
     },
     async export(body: Record<string, unknown>): Promise<Record<string, unknown>> {
       const call = requireMethod(nativeApi().wiki?.export, "Export Wiki");

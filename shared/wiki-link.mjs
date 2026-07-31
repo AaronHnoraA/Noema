@@ -60,3 +60,28 @@ export function formatStableWikiLink(pageId, label) {
   if (!target || !text) return "";
   return `[[${target}|${text}]]`;
 }
+
+export function normalizeWikiNamespace(value) {
+  return String(value || "").normalize("NFKC").trim().split("/")
+    .map((part) => part.trim().replace(/\s+/g, " "))
+    .filter(Boolean)
+    .join("/");
+}
+
+export function qualifiedWikiTitle(namespace, title) {
+  const scope = normalizeWikiNamespace(namespace);
+  const name = String(title || "").normalize("NFKC").trim();
+  return scope && name ? `${scope}:${name}` : name;
+}
+
+export function splitQualifiedWikiTarget(value, knownNamespaces = []) {
+  const target = String(value || "").normalize("NFKC").trim();
+  const colon = target.indexOf(":");
+  if (colon <= 0 || /^roam:\/\//i.test(target)) return { target, namespace: "", title: target, qualified: false };
+  const namespace = normalizeWikiNamespace(target.slice(0, colon));
+  const title = target.slice(colon + 1).trim();
+  void knownNamespaces;
+  return namespace && title
+    ? { target, namespace, title, qualified: true }
+    : { target, namespace: "", title: target, qualified: false };
+}

@@ -1,6 +1,6 @@
 import type { WikiNote } from "./api-client.ts";
 import type { SnippetSummary } from "./types.ts";
-import { stableWikiTarget } from "../shared/wiki-link.mjs";
+import { qualifiedWikiTitle, stableWikiTarget } from "../shared/wiki-link.mjs";
 
 export type WikiLinkCompletionContext = {
   prefix: string;
@@ -33,7 +33,8 @@ function rank(note: WikiNote, needle: string): number {
   if (title.startsWith(needle) || aliases.some((alias) => alias.startsWith(needle))) return 2;
   if (title.includes(needle) || aliases.some((alias) => alias.includes(needle))) return 3;
   const path = folded(`${note.repositoryId}/${note.repositoryPath}`);
-  return path.includes(needle) ? 4 : 99;
+  const qualified = folded(`${note.qualifiedTitle || qualifiedWikiTitle(note.namespace, note.title)} ${note.fullTitle || ""}`);
+  return path.includes(needle) || qualified.includes(needle) ? 4 : 99;
 }
 
 export function wikiCompletionSnippets(
@@ -52,14 +53,14 @@ export function wikiCompletionSnippets(
     .slice(0, limit)
     .map(({ note }): SnippetSummary => ({
       id: `wiki:${note.repositoryId}:${note.id}`,
-      key: note.title,
+      key: note.qualifiedTitle || qualifiedWikiTitle(note.namespace, note.title) || note.title,
       name: note.title,
-      description: `${note.repositoryId} · ${note.repositoryPath}`,
+      description: `${note.namespace || note.repository} · ${note.repositoryId} · ${note.repositoryPath}`,
       mode: "markdown-mode",
       group: "Wiki pages",
       kind: note.kind || "page",
       body: `${note.identityStatus === "provisional" ? note.title : `${stableWikiTarget(note.id)}|${note.title}`}${closing}`,
-      source: `${note.repositoryId} · ${note.repositoryPath}`,
+      source: `${note.fullTitle || note.qualifiedTitle || note.title} · ${note.repositoryPath}`,
       provider: "wiki",
       browserCompatible: true,
     }));

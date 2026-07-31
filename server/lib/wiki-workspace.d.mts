@@ -5,6 +5,9 @@ export type WikiRepository = {
   uid?: string;
   identityStatus?: "managed" | "provisional" | "legacy";
   name: string;
+  namespace: string;
+  qualifiedNamespace: string;
+  namespaceAliases: string[];
   partition: WikiPartition;
   path: string;
   public?: boolean;
@@ -22,6 +25,12 @@ export type WikiNote = {
   pageKey?: string;
   id: string;
   title: string;
+  namespace: string;
+  qualifiedNamespace: string;
+  qualifiedTitle: string;
+  fullTitle: string;
+  namespaceSource: "page" | "repository";
+  namespaceAliases: string[];
   kind?: string;
   redirectTo?: string;
   identityStatus?: "managed" | "provisional" | "legacy" | "duplicate";
@@ -75,7 +84,7 @@ export type WikiIndex = {
   files: WikiFile[];
   directories: WikiDirectory[];
   reports: {
-    wanted: Array<{ title: string; references: Array<{ sourceId: string; sourceTitle: string; sourceFile: string }> }>;
+    wanted: Array<{ title: string; namespace?: string; qualifiedTitle?: string; references: Array<{ sourceId: string; sourceTitle: string; sourceFile: string }> }>;
     ambiguous: Array<Record<string, unknown>>;
     duplicates: Array<Record<string, unknown>>;
     duplicateIds?: Array<Record<string, unknown>>;
@@ -93,7 +102,8 @@ export function resolveWikiLink(index: WikiIndex, target: string, options?: { so
   target: string;
   status: "resolved" | "ambiguous" | "missing";
   candidates: Array<{
-    id: string; title: string; file: string; path: string; repositoryId: string; partition: WikiPartition;
+    id: string; title: string; namespace: string; qualifiedNamespace: string; qualifiedTitle: string; fullTitle: string;
+    file: string; path: string; repositoryId: string; partition: WikiPartition;
   }>;
 };
 export function wikiDatabaseFile(root: string): string;
@@ -103,6 +113,7 @@ export function searchWikiDatabase(root: string, body?: {
   q?: string;
   repositoryId?: string;
   partition?: WikiPartition;
+  namespace?: string;
   cursor?: number;
   limit?: number;
 }): {
@@ -129,7 +140,7 @@ export function adoptWikiRepository(root: string, repositoryId: string): Promise
 export function wikiRepositoryStatus(root: string, repositoryId: string): Promise<Record<string, unknown>>;
 export function runWikiGitAction(root: string, action: string, body?: Record<string, unknown>): Promise<Record<string, unknown>>;
 export function createWikiPage(root: string, layout: WikiLayout, body?: Record<string, unknown>): Promise<{
-  ok: true; file: string; id: string; title: string; repositoryId: string; partition: WikiPartition;
+  ok: true; file: string; id: string; title: string; namespace: string; qualifiedTitle: string; repositoryId: string; partition: WikiPartition;
 }>;
 export function publicWikiNotes(index: WikiIndex): WikiNote[];
 export function moveWikiPage(root: string, body?: Record<string, unknown>): Promise<Record<string, any>>;
@@ -143,6 +154,7 @@ export function wikiTagIndex(index: WikiIndex): Array<{
   variants: string[];
 }>;
 export function updateWikiTag(root: string, body?: Record<string, unknown>): Promise<Record<string, any>>;
+export function updateWikiNamespace(root: string, body?: Record<string, unknown>): Promise<Record<string, any>>;
 export function exportWiki(root: string, body?: Record<string, unknown>): Promise<Record<string, any>>;
 export function wikiPageHistory(root: string, body?: Record<string, unknown>): Promise<Record<string, any>>;
 export function wikiPageDiff(root: string, body?: Record<string, unknown>): Promise<Record<string, any>>;

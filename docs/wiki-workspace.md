@@ -58,6 +58,48 @@ workbench. `roam://id` remains the stable exact-link form.
 File location is not identity. New page profiles configure partition,
 repository, directory, filename pattern, and note kind.
 
+## Namespaces
+
+Namespaces are logical knowledge domains and are independent of physical
+folders. Every repository provides a default namespace using its directory
+name. A repository can declare a durable display name and aliases in
+`noema.toml`:
+
+```toml
+schema = 1
+repository_id = "019…"
+namespace = "Mathematics"
+namespace_aliases = ["Math", "数学"]
+```
+
+A page can override the repository default without moving the Markdown file:
+
+```text
+#+begin meta
+id: 019…
+title: Tensor Product
+namespace: Research/Quantum
+#+end meta
+```
+
+Wiki targets have four precision levels:
+
+- `[[Tensor Product]]` prefers one match in the source repository, then the
+  global index.
+- `[[Mathematics:Tensor Product]]` selects a logical namespace or alias.
+- `[[public/Mathematics:Tensor Product]]` includes the privacy partition and
+  is fully qualified.
+- `[[roam://019…|Tensor Product]]` is the exact stable page identity emitted
+  by completion.
+
+Colon is reserved as the namespace separator. Slash forms nested namespaces;
+it does not imply a physical folder. SQLite stores the namespace,
+fully-qualified namespace, and source (`repository` or `page`) separately and
+can filter large indexes without scanning Markdown. Moving a page preserves
+its logical namespace, while copying may choose a new one in the workbench.
+The Namespaces view can rename a whole domain in place; Noema records the old
+name in `namespace_aliases`, so existing qualified links continue to resolve.
+
 ## Git collaboration cadence
 
 Noema creates a device work branch and performs the checkpoint/fetch/merge/push

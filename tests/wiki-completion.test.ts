@@ -2,10 +2,15 @@ import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
 import { wikiCompletionSnippets, wikiLinkCompletionContext } from "../aaronnote/wiki-completion.ts";
 import type { WikiNote } from "../aaronnote/api-client.ts";
+import { qualifiedWikiTitle, splitQualifiedWikiTarget } from "../shared/wiki-link.mjs";
 
 const note: WikiNote = {
   id: "page-id",
   title: "Emacs",
+  namespace: "Tools",
+  qualifiedNamespace: "public/Tools",
+  qualifiedTitle: "Tools:Emacs",
+  fullTitle: "public/Tools:Emacs",
   aliases: ["GNU Emacs"],
   tags: [],
   private: false,
@@ -22,6 +27,14 @@ const note: WikiNote = {
 };
 
 describe("Wiki editor completion", () => {
+  test("parses logical and fully qualified Wiki targets", () => {
+    expect(splitQualifiedWikiTarget("Math:Tensor")).toEqual({
+      target: "Math:Tensor", namespace: "Math", title: "Tensor", qualified: true,
+    });
+    expect(splitQualifiedWikiTarget("public/Math:Tensor").namespace).toBe("public/Math");
+    expect(qualifiedWikiTitle("Research / Physics", "Hilbert Space")).toBe("Research/Physics:Hilbert Space");
+  });
+
   test("recognizes an unfinished Wiki link", () => {
     expect(wikiLinkCompletionContext("See [[E", "")).toEqual({ prefix: "E", hasClosingDelimiter: false });
   });
@@ -38,6 +51,15 @@ describe("Wiki editor completion", () => {
     const context = wikiLinkCompletionContext("[[E", "]]")!;
     expect(wikiCompletionSnippets([note], context)[0]).toMatchObject({
       provider: "wiki",
+      body: "roam://page-id|Emacs",
+    });
+  });
+
+  test("matches qualified namespace titles and exposes namespace context", () => {
+    const context = wikiLinkCompletionContext("[[Tools:E", "]]" )!;
+    expect(wikiCompletionSnippets([note], context)[0]).toMatchObject({
+      key: "Tools:Emacs",
+      description: expect.stringContaining("Tools · public/tools"),
       body: "roam://page-id|Emacs",
     });
   });

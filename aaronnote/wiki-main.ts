@@ -6,6 +6,7 @@ import "@mismerge/core/web";
 
 import { api, type WikiIndex, type WikiNote, type WikiRepository, type WikiSyncState } from "./api-client.ts";
 import { installNoemaThemeRuntime } from "./theme-runtime.ts";
+import { splitQualifiedWikiTarget } from "../shared/wiki-link.mjs";
 
 const root = document.querySelector<HTMLElement>("#wiki-app");
 if (!root) throw new Error("Missing #wiki-app");
@@ -51,6 +52,7 @@ root.innerHTML = `
         <button type="button" data-view="pages">All pages <b data-count-pages>0</b></button>
         <button type="button" data-view="recent">Recent</button>
         <button type="button" data-view="folders">Folders <b data-count-folders>0</b></button>
+        <button type="button" data-view="namespaces">Namespaces <b data-count-namespaces>0</b></button>
         <button type="button" data-view="files">Files <b data-count-files>0</b></button>
         <button type="button" data-view="tags">Tags</button>
         <button type="button" data-view="dependencies">Dependencies</button>
@@ -135,6 +137,7 @@ root.innerHTML = `
       <label><span>Title</span><input name="title" required autofocus></label>
       <div class="noema-wiki-form-grid">
         <label><span>Repository</span><select name="repositoryId" required></select></label>
+        <label><span>Namespace</span><input name="namespace" required placeholder="Math or Research/Physics"></label>
         <label><span>Directory</span><span class="noema-wiki-path-input"><input name="directory" list="noema-wiki-directories" placeholder="repository root"><button type="button" data-choose-directory>Choose…</button></span></label>
         <label><span>Filename</span><input name="filename" placeholder="generated-from-title.md"></label>
         <label><span>Kind</span><input name="kind" value="page"></label>
@@ -164,6 +167,7 @@ root.innerHTML = `
       <section data-page-destination>
         <div class="noema-wiki-form-grid">
           <label><span>Repository</span><select name="repositoryId" required></select></label>
+          <label><span>Namespace</span><input name="namespace" required></label>
           <label><span>Directory</span><span class="noema-wiki-path-input"><input name="directory" list="noema-page-directories" placeholder="repository root"><button type="button" data-page-choose-directory>Choose…</button></span></label>
           <label><span>Filename</span><input name="filename" required></label>
           <label data-copy-title hidden><span>Copy title</span><input name="copyTitle"></label>
@@ -403,7 +407,7 @@ function noteCard(note: WikiNote): HTMLElement {
   const title = document.createElement("h2");
   title.textContent = note.title;
   const path = document.createElement("p");
-  path.textContent = `${note.repositoryId} · ${note.repositoryPath}`;
+  path.textContent = `${note.qualifiedTitle || `${note.namespace || note.repository}:${note.title}`} · ${note.repositoryId} · ${note.repositoryPath}`;
   const meta = document.createElement("small");
   meta.textContent = [
     note.kind || "page",
@@ -438,6 +442,7 @@ function managePage(note: WikiNote): void {
     return option;
   }));
   repository.value = note.repositoryId;
+  (pageForm.elements.namedItem("namespace") as HTMLInputElement).value = note.namespace || note.repository;
   (pageForm.elements.namedItem("directory") as HTMLInputElement).value = note.repositoryPath.includes("/")
     ? note.repositoryPath.slice(0, note.repositoryPath.lastIndexOf("/"))
     : "";
@@ -585,6 +590,66 @@ function renderFiles(): void {
   viewEl.append(list);
 }
 
+function renderNamespaces(): void {
+  const groups = new Map<string, WikiNote[]>();
+  for (const note of index?.notes || []) {
+    const namespace = note.qualifiedNamespace || `${note.partition}/${note.namespace || note.repository}`;
+    const pages = groups.get(namespace) || [];
+    pages.push(note);
+    groups.set(namespace, pages);
+  }
+  if (!groups.size) {
+    viewEl.append(emptyState("No namespaces yet", "Create a page to establish the first logical knowledge domain."));
+    return;
+  }
+  const list = document.createElement("div");
+  list.className = "noema-wiki-namespace-list";
+  for (const [namespace, notes] of [...groups].sort(([a], [b]) => a.localeCompare(b))) {
+    const card = document.createElement("section");
+    const header = document.createElement("header");
+    const copy = document.createElement("div");
+    const heading = document.createElement("h2");
+    heading.textContent = namespace;
+    const detail = document.createElement("p");
+    const explicit = notes.filter((note) => note.namespaceSource === "page").length;
+    detail.textContent = `${notes.length} page${notes.length === 1 ? "" : "s"} · ${explicit ? `${explicit} explicit override${explicit === 1 ? "" : "s"}` : "repository default"}`;
+    copy.append(heading, detail);
+    const create = button("New page");
+    create.addEventListener("click", () => showNewPage("", notes[0].namespace || notes[0].repository));
+    const rename = button("Rename");
+    rename.addEventListener("click", async () => {
+      const from = notes[0].namespace || notes[0].repository;
+      const to = window.prompt(`Rename namespace “${from}” for ${notes[0].partition} pages. Existing qualified links remain valid as aliases.`, from);
+      if (!to?.trim() || to.trim() === from) return;
+      rename.disabled = true;
+      try {
+        const result = await api.wiki.updateNamespace({ from, to: to.trim(), partition: notes[0].partition }) as { changed?: unknown[] };
+        await load(true);
+        setStatus(`Renamed ${result.changed?.length || 0} page namespace${result.changed?.length === 1 ? "" : "s"} to ${to.trim()}`);
+      } catch (error) {
+        setStatus(error instanceof Error ? error.message : String(error), true);
+      } finally {
+        rename.disabled = false;
+      }
+    });
+    const actions = document.createElement("div");
+    actions.append(create, rename);
+    header.append(copy, actions);
+    const pages = document.createElement("div");
+    for (const note of notes.sort((a, b) => a.title.localeCompare(b.title)).slice(0, 12)) {
+      const page = button(note.title);
+      const path = document.createElement("small");
+      path.textContent = note.repositoryPath;
+      page.append(path);
+      page.addEventListener("click", () => openNote(note));
+      pages.append(page);
+    }
+    card.append(header, pages);
+    list.append(card);
+  }
+  viewEl.append(list);
+}
+
 async function renderTags(): Promise<void> {
   const marker = activeView;
   try {
@@ -700,12 +765,13 @@ function renderWanted(): void {
     const row = document.createElement("article");
     const copy = document.createElement("div");
     const heading = document.createElement("h2");
-    heading.textContent = `[[${item.title}]]`;
+    const qualifiedTitle = String((item as { qualifiedTitle?: string }).qualifiedTitle || item.title);
+    heading.textContent = `[[${qualifiedTitle}]]`;
     const detail = document.createElement("p");
     detail.textContent = `${item.references.length} unresolved reference${item.references.length === 1 ? "" : "s"}`;
     copy.append(heading, detail);
     const create = button("Open workbench", "is-primary");
-    create.addEventListener("click", () => showNewPage(item.title));
+    create.addEventListener("click", () => showNewPage(qualifiedTitle));
     row.append(copy, create);
     list.append(row);
   }
@@ -940,6 +1006,7 @@ function render(): void {
     : `${index.root} · ${index.dbFile}`;
   root.querySelector<HTMLElement>("[data-count-pages]")!.textContent = String(index.notes.length);
   root.querySelector<HTMLElement>("[data-count-folders]")!.textContent = String(index.directories.length);
+  root.querySelector<HTMLElement>("[data-count-namespaces]")!.textContent = String(new Set(index.notes.map((note) => note.qualifiedNamespace || `${note.partition}/${note.namespace || note.repository}`)).size);
   root.querySelector<HTMLElement>("[data-count-files]")!.textContent = String(index.files.length);
   root.querySelector<HTMLElement>("[data-count-wanted]")!.textContent = String(index.reports.wanted.length);
   root.querySelector<HTMLElement>("[data-count-reports]")!.textContent = String(index.reports.ambiguous.length + index.reports.duplicates.length + index.diagnostics.length);
@@ -955,6 +1022,7 @@ function render(): void {
     pages: "All pages",
     recent: "Recent pages",
     folders: "Physical folders",
+    namespaces: "Namespaces",
     files: "All files",
     tags: "Tag management",
     dependencies: "Dependencies",
@@ -971,6 +1039,7 @@ function render(): void {
   else if (activeView === "reports") renderReports();
   else if (activeView === "repositories" || activeView === "sync") void renderRepositories();
   else if (activeView === "folders") renderFolders();
+  else if (activeView === "namespaces") renderNamespaces();
   else if (activeView === "files") renderFiles();
   else if (activeView === "tags") void renderTags();
   else if (activeView === "dependencies") renderDependencies();
@@ -1012,6 +1081,7 @@ async function load(refresh = false, options: { silent?: boolean } = {}): Promis
       (newForm.elements.namedItem("filename") as HTMLInputElement).placeholder = profile.filenamePattern;
       (newForm.elements.namedItem("kind") as HTMLInputElement).value = profile.kind;
     }
+    updateNewPageNamespace(false);
     render();
     await runPageSearch();
   } catch (error) {
@@ -1022,24 +1092,44 @@ async function load(refresh = false, options: { silent?: boolean } = {}): Promis
   }
 }
 
-function showNewPage(title = ""): void {
+function showNewPage(title = "", requestedNamespace = ""): void {
   if (!index?.repositories.length) {
     activeView = "repositories";
     render();
     setStatus("Create or clone a repository before creating a page", true);
     return;
   }
-  (newForm.elements.namedItem("title") as HTMLInputElement).value = title;
+  const namespaces = index.notes.flatMap((note) => [note.namespace || "", note.qualifiedNamespace || ""]);
+  const parsed = splitQualifiedWikiTarget(title, namespaces);
+  (newForm.elements.namedItem("title") as HTMLInputElement).value = parsed.qualified ? parsed.title : title;
+  const requested = requestedNamespace || (parsed.qualified ? parsed.namespace : "");
+  if (requested) {
+    const repository = index.repositories.find((item) => [item.namespace, item.qualifiedNamespace, item.name, item.id]
+      .filter(Boolean).some((value) => String(value).toLocaleLowerCase() === requested.toLocaleLowerCase()));
+    if (repository) (newForm.elements.namedItem("repositoryId") as HTMLSelectElement).value = repository.id;
+    const parts = requested.split("/");
+    (newForm.elements.namedItem("namespace") as HTMLInputElement).value = ["public", "private"].includes(parts[0]?.toLocaleLowerCase())
+      ? parts.slice(1).join("/")
+      : requested;
+  } else updateNewPageNamespace(false);
   const sourceFile = new URLSearchParams(location.search).get("source") || "";
   const source = index.notes.find((note) => note.file === sourceFile);
-  if (source) {
+  if (source && !requested) {
     (newForm.elements.namedItem("repositoryId") as HTMLSelectElement).value = source.repositoryId;
     (newForm.elements.namedItem("directory") as HTMLInputElement).value = source.repositoryPath.includes("/")
       ? source.repositoryPath.slice(0, source.repositoryPath.lastIndexOf("/"))
       : "";
+    (newForm.elements.namedItem("namespace") as HTMLInputElement).value = source.namespace || source.repository;
   }
   updateNewPageDirectories();
   newDialog.showModal();
+}
+
+function updateNewPageNamespace(force: boolean): void {
+  const repositoryId = (newForm.elements.namedItem("repositoryId") as HTMLSelectElement).value;
+  const repository = index?.repositories.find((item) => item.id === repositoryId);
+  const input = newForm.elements.namedItem("namespace") as HTMLInputElement;
+  if (repository && (force || !input.value.trim())) input.value = repository.namespace || repository.name;
 }
 
 function updateNewPageDirectories(): void {
@@ -1174,16 +1264,18 @@ async function applyPageOperation(): Promise<void> {
       const repositoryId = String(values.get("repositoryId") || "");
       const directory = String(values.get("directory") || "");
       const filename = String(values.get("filename") || "");
+      const namespace = String(values.get("namespace") || "");
       if (action === "move") {
         const target = index?.repositories.find((repository) => repository.id === repositoryId);
         const confirm = note.partition === "private" && target?.partition === "public"
           ? window.prompt("This crosses the privacy boundary. Type MOVE PRIVATE TO PUBLIC")
           : "";
-        await api.wiki.movePage({ pageId: note.id, repositoryId, directory, filename, confirm });
+        await api.wiki.movePage({ pageId: note.id, repositoryId, namespace, directory, filename, confirm });
       } else {
         await api.wiki.copyPage({
           pageId: note.id,
           repositoryId,
+          namespace,
           directory,
           filename,
           title: String(values.get("copyTitle") || ""),
@@ -1241,6 +1333,7 @@ pageForm.addEventListener("submit", (event) => {
 });
 (newForm.elements.namedItem("repositoryId") as HTMLSelectElement).addEventListener("change", () => {
   (newForm.elements.namedItem("directory") as HTMLInputElement).value = "";
+  updateNewPageNamespace(true);
   updateNewPageDirectories();
 });
 root.querySelector<HTMLButtonElement>("[data-choose-directory]")?.addEventListener("click", async () => {
@@ -1343,6 +1436,7 @@ newForm.addEventListener("submit", (event) => {
   const values = new FormData(newForm);
   void api.wiki.createPage({
     title: values.get("title"),
+    namespace: values.get("namespace"),
     repositoryId: values.get("repositoryId"),
     directory: values.get("directory"),
     filename: values.get("filename"),
