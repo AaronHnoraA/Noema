@@ -7,8 +7,9 @@
 > A Typora-style Markdown editor for the web, Emacs, and macOS.
 
 This README is package-focused. Emacs links the canonical project at
-`lisp/roam/Noema`; `lisp/roam/aaronnote` remains a compatibility link. The
-Emacs entry point is `lisp/roam/init-aaronnote.el`.
+`lisp/roam/Noema`; the retired `lisp/roam/aaronnote` project link must not be
+reintroduced. The Emacs entry point remains `lisp/roam/init-aaronnote.el` as a
+wire/file compatibility contract.
 
 Markdown looks like a finished document while you write it. Italic renders as *italic* the moment you close the asterisks. Headings appear at their final size as soon as you start typing. Source markers like `*` and `#` fade out when the cursor moves away and come back when you click in.
 

@@ -1,9 +1,9 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 import { spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { getNoemaAppConfig } from "../server/lib/app-config.mjs";
 import { noemaAppTheme } from "../shared/app-themes.mjs";
 
@@ -11,6 +11,8 @@ const desktopDir = dirname(fileURLToPath(import.meta.url));
 const projectDir = resolve(desktopDir, "..");
 const appRoot = app.isPackaged ? app.getAppPath() : projectDir;
 const defaultNoteRoot = join(homedir(), "Documents", "Noema");
+const desktopSmoke = process.env.NOEMA_DESKTOP_SMOKE === "1";
+if (desktopSmoke) app.setPath("userData", join(tmpdir(), `noema-desktop-smoke-${process.pid}`));
 const stateRoot = join(app.getPath("userData"), "state");
 
 let hostProcess = null;
@@ -21,7 +23,7 @@ let pendingFile = process.argv.slice(1).find((arg) => /\.(?:md|markdown)$/i.test
 let windowBackgroundColor = noemaAppTheme("").backgroundColor;
 
 const singleInstance = app.requestSingleInstanceLock();
-if (process.env.NOEMA_DESKTOP_SMOKE === "1") {
+if (desktopSmoke) {
   console.log(`[noema-desktop-smoke] singleInstance=${singleInstance}`);
 }
 if (!singleInstance) app.quit();
@@ -343,6 +345,7 @@ function createWindow(file = "", targetUrl = "") {
         };
       })()`).then((report) => {
         console.log(`[noema-desktop-smoke] ${JSON.stringify(report)}`);
+        setTimeout(() => app.quit(), 100);
       }).catch((error) => {
         console.error("[noema-desktop-smoke]", error);
       });
@@ -406,6 +409,31 @@ ipcMain.handle("noema:reveal-path", (_event, file) => {
   if (!target) return false;
   shell.showItemInFolder(resolve(target));
   return true;
+});
+
+ipcMain.handle("noema:choose-directory", async (event, options = {}) => {
+  const root = resolve(String(options.root || defaultNoteRoot));
+  const requested = resolve(String(options.defaultPath || root));
+  const initial = (() => {
+    const rel = relative(root, requested);
+    return !rel.startsWith("..") && !isAbsolute(rel) ? requested : root;
+  })();
+  const owner = BrowserWindow.fromWebContents(event.sender);
+  const settings = {
+    title: String(options.title || "Choose Wiki folder"),
+    defaultPath: initial,
+    properties: ["openDirectory", "createDirectory"],
+  };
+  const result = owner
+    ? await dialog.showOpenDialog(owner, settings)
+    : await dialog.showOpenDialog(settings);
+  if (result.canceled || !result.filePaths[0]) return { canceled: true, path: "" };
+  const selected = resolve(result.filePaths[0]);
+  const rel = relative(root, selected);
+  if (rel.startsWith("..") || isAbsolute(rel)) {
+    return { canceled: true, path: "", message: "Choose a folder inside the selected Wiki repository" };
+  }
+  return { canceled: false, path: selected, relativePath: rel === "." ? "" : rel };
 });
 
 app.whenReady().then(async () => {

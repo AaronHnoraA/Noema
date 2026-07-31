@@ -32,6 +32,34 @@
 (declare-function xwidget-webkit-edit-mode "xwidget" (&optional arg))
 (declare-function xwidget-webkit-pass-command-event "xwidget" (event))
 
+(defun my/noema--identity-random-hex ()
+  "Return 20 hexadecimal random digits for a Noema UUIDv7."
+  (let* ((seed (if (fboundp 'gnutls-random)
+                   (gnutls-random 32)
+                 (format "%s:%s:%s:%s"
+                         (float-time) (emacs-pid) (random) (recent-keys))))
+         (digest (secure-hash 'sha256 seed)))
+    (substring digest 0 20)))
+
+(defun my/noema-new-id (&optional kind)
+  "Return a UUIDv7 for Noema identity KIND.
+KIND is one of page, block, or repository and documents the caller; the UUID
+wire format intentionally remains standard and kind-neutral."
+  (let* ((kind-name (if (symbolp kind) (symbol-name kind) (or kind "page")))
+         (_ (unless (member kind-name '("page" "block" "repository"))
+              (error "Unsupported Noema identity kind: %s" kind-name)))
+         (millis (floor (* 1000 (float-time))))
+         (time-hex (format "%012x" millis))
+         (random-hex (my/noema--identity-random-hex))
+         (variant (+ 8 (% (string-to-number (substring random-hex 3 4) 16) 4))))
+    (format "%s-%s-7%s-%x%s-%s"
+            (substring time-hex 0 8)
+            (substring time-hex 8 12)
+            (substring random-hex 0 3)
+            variant
+            (substring random-hex 4 7)
+            (substring random-hex 7 19))))
+
 (defun my/noema--select-emacs-window (&optional window)
   "Select WINDOW and ask the window system to focus its frame."
   (let ((window (or window (selected-window))))

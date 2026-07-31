@@ -22,9 +22,11 @@ export function startNoteWatcher({
   root,
   debounceMs = 250,
   isRelevant,     // (relPath: string) => boolean
+  isDirectoryRelevant = isRelevant, // (relPath: string) => boolean
   isSelfWrite,    // (absPath: string) => boolean
   onBatch,        // (files: string[]) => void
   onFullRescan,   // () => void
+  watchImplementation = watch,
 }) {
   let closed = false;
   let watcher = null;
@@ -58,18 +60,19 @@ export function startNoteWatcher({
     }
 
     const abs = `${root}/${filename}`.replace(/\\/g, "/");
+    const relPath = relative(root, abs);
 
     // Extension-less rename event = directory structural change (created/renamed/deleted).
     const slash = Math.max(filename.lastIndexOf("/"), filename.lastIndexOf("\\"));
     const basename = filename.slice(slash + 1);
     if (eventType === "rename" && basename.indexOf(".") === -1) {
+      if (!isDirectoryRelevant(relPath)) return;
       if (timer) { clearTimeout(timer); timer = null; }
       pending.clear();
       onFullRescan();
       return;
     }
 
-    const relPath = relative(root, abs);
     if (!isRelevant(relPath)) return;
     if (isSelfWrite(abs)) return;
 
@@ -78,7 +81,7 @@ export function startNoteWatcher({
   }
 
   try {
-    watcher = watch(root, { recursive: true, persistent: false }, handleEvent);
+    watcher = watchImplementation(root, { recursive: true, persistent: false }, handleEvent);
     watcher.on("error", (err) => {
       process.stderr.write(`[aaronnote-watch] watcher error: ${err.message}\n`);
     });

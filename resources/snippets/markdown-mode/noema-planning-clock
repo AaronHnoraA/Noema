@@ -3,4 +3,4 @@
 # key: apclock
 # group: Noema planning DSL
 # --
-@@clock ${1:Task} {}$0
+@@clock ${1:Task} {id: `(my/noema-new-id "block")`}$0

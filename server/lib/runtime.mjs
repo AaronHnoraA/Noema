@@ -4890,7 +4890,11 @@ function snippetContributorMetadata(headers) {
 function snippetBrowserCompatibility(body) {
   const safeSelected = /`\(or\s+yas-selected-text\s+(?:"[^"]*"|'[^']*'|nil)\)`/g;
   const safeChoice = /\$\{\d+:\$\$\(yas-choose-value\s+'\([^)]*\)\)\}/g;
-  const stripped = String(body || "").replace(safeSelected, "").replace(safeChoice, "");
+  const safeNoemaId = /`\(my\/noema-new-id\s+(?:"(?:repository|page|block)"|'(?:repository|page|block))\)`/g;
+  const stripped = String(body || "")
+    .replace(safeSelected, "")
+    .replace(safeChoice, "")
+    .replace(safeNoemaId, "");
   const dynamicBacktick = [...stripped.matchAll(/`([^`]*)`/g)]
     .some((match) => !/\$(?:\d+|\{\d+(?::[^}]*)?\})/.test(match[1] || ""));
   if (dynamicBacktick || /\$\$?\([^)]*\)/.test(stripped)) {

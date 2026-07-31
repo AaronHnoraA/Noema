@@ -30,7 +30,7 @@ const DEFAULT_CONFIG = Object.freeze({
           repository: "",
           directory: "",
           filenamePattern: "{slug}.md",
-          kind: "note",
+          kind: "page",
         }),
       ]),
     }),
@@ -130,7 +130,7 @@ function normalizeParsedConfig(raw) {
       repository: String(value.repository || "").trim(),
       directory: String(value.directory || "").trim().replaceAll("\\", "/").replace(/^\/+|\/+$/g, ""),
       filenamePattern: String(value.filenamePattern || "{slug}.md").trim() || "{slug}.md",
-      kind: String(value.kind || "note").trim() || "note",
+      kind: String(value.kind || "page").trim() || "page",
     };
   });
   if (!profiles.length) profiles.push({ ...DEFAULT_CONFIG.wiki.creation.profiles[0] });

@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, statSync, watch } from "node:fs";
 import { readFile, rm, stat } from "node:fs/promises";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
-import { basename, dirname, extname, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import WebSocket from "ws";
@@ -120,17 +120,36 @@ import {
   updateNoemaAppConfig,
 } from "./server/lib/app-config.mjs";
 import {
+  adoptWikiRepository,
   buildWikiIndex,
   cloneWikiRepository,
+  copyWikiPage,
   createWikiPage,
+  deleteWikiPage,
+  discoverWikiRepositories,
+  exportWiki,
   initWikiRepository,
   initWikiWorkspace,
+  mergeWikiPages,
+  moveWikiPage,
   resolveWikiLink,
   runWikiGitAction,
+  updateWikiTag,
+  wikiTagIndex,
   wikiDatabaseFile,
   wikiLayout,
   wikiRepositoryStatus,
 } from "./server/lib/wiki-workspace.mjs";
+import {
+  abortWikiConflict,
+  checkpointWikiRepository,
+  defaultWikiSyncIntervalMs,
+  readWikiConflict,
+  readWikiSyncState,
+  resolveWikiConflict,
+  syncWikiRepository,
+} from "./server/lib/wiki-sync.mjs";
+import { openWikiGitUi, stopAllWikiGitUis } from "./server/lib/wiki-git-ui.mjs";
 import { createImeSwitcher } from "./server/lib/ime.mjs";
 import { ApiRouter } from "./server/infrastructure/api-router.mjs";
 import { createAssetsApiHandlers } from "./server/Features/Assets/api.mjs";
@@ -211,7 +230,7 @@ async function wikiCreatePage(body = {}) {
     ...body,
     directory: String(body.directory || profile.directory || ""),
     filenamePattern: String(body.filenamePattern || profile.filenamePattern || "{slug}.md"),
-    kind: String(body.kind || profile.kind || "note"),
+    kind: String(body.kind || profile.kind || "page"),
     repositoryId,
   });
 }
@@ -393,13 +412,66 @@ function scheduleWikiRefresh() {
   }, 350);
   wikiRefreshTimer.unref?.();
 }
+
+const wikiCheckpointTimers = new Map();
+const wikiIgnoredWatchParts = new Set([
+  ".git", ".noema", ".direnv", ".lake", ".mypy_cache", ".pytest_cache",
+  ".ruff_cache", ".sage", ".venv", "__pycache__", ".ipynb_checkpoints", "node_modules",
+]);
+function wikiRepositoryIdForFile(file) {
+  const absoluteFile = isAbsolute(file) ? resolve(file) : resolve(noteRoot, file);
+  const rel = relative(noteRoot, absoluteFile).split(sep);
+  if (!["public", "private"].includes(rel[0]) || !rel[1]) return "";
+  if (rel.slice(2).some((part) => wikiIgnoredWatchParts.has(part))) return "";
+  return `${rel[0]}/${rel[1]}`;
+}
+
+function scheduleWikiCheckpointForFile(file) {
+  if (workspaceLayout !== "wiki") return;
+  const repositoryId = wikiRepositoryIdForFile(file);
+  if (!repositoryId) return;
+  const previous = wikiCheckpointTimers.get(repositoryId);
+  if (previous) clearTimeout(previous);
+  const timer = setTimeout(() => {
+    wikiCheckpointTimers.delete(repositoryId);
+    void checkpointWikiRepository(noteRoot, repositoryId)
+      .then(() => broadcast("command", { command: "wiki-sync-changed", repositoryId }))
+      .catch((error) => process.stderr.write(`[noema-wiki] checkpoint failed for ${repositoryId}: ${error?.message || error}\n`));
+  }, 90_000);
+  timer.unref?.();
+  wikiCheckpointTimers.set(repositoryId, timer);
+}
+
+async function syncAllWikiRepositories() {
+  if (workspaceLayout !== "wiki") return;
+  const discovered = await discoverWikiRepositories(noteRoot);
+  for (const repository of discovered.repositories) {
+    void syncWikiRepository(noteRoot, repository.id)
+      .then(() => broadcast("command", { command: "wiki-sync-changed", repositoryId: repository.id }))
+      .catch((error) => process.stderr.write(`[noema-wiki] sync failed for ${repository.id}: ${error?.message || error}\n`));
+  }
+}
+
+const wikiStartupSyncTimer = workspaceLayout === "wiki"
+  ? setTimeout(() => void syncAllWikiRepositories().catch((error) => reportServerError("wiki-startup-sync", error)), 2_000)
+  : null;
+wikiStartupSyncTimer?.unref?.();
+const wikiPeriodicSyncTimer = workspaceLayout === "wiki"
+  ? setInterval(() => void syncAllWikiRepositories().catch((error) => reportServerError("wiki-periodic-sync", error)), defaultWikiSyncIntervalMs())
+  : null;
+wikiPeriodicSyncTimer?.unref?.();
+
 const noteWatcher = process.env.AARONNOTE_WATCH !== "0"
   ? startNoteWatcher({
       root: noteRoot,
       isRelevant: (file) =>
         notePathWatchRelevant(file)
         || bibliographyPathWatchRelevant(file)
-        || (workspaceLayout === "wiki" && /\.(?:md|markdown|typ)$/i.test(file)),
+        || (workspaceLayout === "wiki" && Boolean(wikiRepositoryIdForFile(file))),
+      isDirectoryRelevant: (file) =>
+        notePathWatchRelevant(file)
+        || bibliographyPathWatchRelevant(file)
+        || (workspaceLayout === "wiki" && Boolean(wikiRepositoryIdForFile(file))),
       isSelfWrite: (file) => noteSelfWriteRecently(file),
       onBatch(files) {
         const noteFiles = files.filter((file) => notePathWatchRelevant(file));
@@ -408,8 +480,9 @@ const noteWatcher = process.env.AARONNOTE_WATCH !== "0"
         if (noteFiles.length > 0) {
           broadcast("command", { command: "notes-index-changed", version: notesIndexVersionValue() });
         }
-        if (workspaceLayout === "wiki" && files.some((file) => /\.(?:md|markdown|typ)$/i.test(file))) {
+        if (workspaceLayout === "wiki" && files.length > 0) {
           scheduleWikiRefresh();
+          for (const file of files) scheduleWikiCheckpointForFile(file);
         }
         if (bibFiles.length > 0) {
           clearBibliographyCache();
@@ -526,6 +599,10 @@ async function beginShutdown({ reason = "shutdown", exitCode = 0, deadlineMs = 3
     try {
       clearInterval(sseHeartbeatInterval);
       if (wikiRefreshTimer) clearTimeout(wikiRefreshTimer);
+      if (wikiStartupSyncTimer) clearTimeout(wikiStartupSyncTimer);
+      if (wikiPeriodicSyncTimer) clearInterval(wikiPeriodicSyncTimer);
+      for (const timer of wikiCheckpointTimers.values()) clearTimeout(timer);
+      wikiCheckpointTimers.clear();
       broadcast("command", { command: "server-shutdown", reason, at: Date.now() });
       for (const res of eventClients) {
         try { res.end(); } catch {}
@@ -539,6 +616,7 @@ async function beginShutdown({ reason = "shutdown", exitCode = 0, deadlineMs = 3
         Promise.resolve().then(() => jupyterKernelWs?.close()),
         jupyterCell.shutdown(),
         shutdownCopilot(),
+        stopAllWikiGitUis(),
       ]);
     } finally {
       clearTimeout(deadline);
@@ -932,9 +1010,24 @@ const apiRouter = new ApiRouter().register({
   "aaronnote:api:wiki:init-workspace": () => initWikiWorkspace(noteRoot),
   "aaronnote:api:wiki:init-repository": (body) => initWikiRepository(noteRoot, body?.partition, body?.name),
   "aaronnote:api:wiki:clone-repository": (body) => cloneWikiRepository(noteRoot, body || {}),
+  "aaronnote:api:wiki:adopt-repository": (body) => adoptWikiRepository(noteRoot, body?.repositoryId),
   "aaronnote:api:wiki:repository-status": (body) => wikiRepositoryStatus(noteRoot, body?.repositoryId ?? body),
   "aaronnote:api:wiki:git": (body) => runWikiGitAction(noteRoot, body?.action, body || {}),
   "aaronnote:api:wiki:create-page": (body) => wikiCreatePage(body || {}),
+  "aaronnote:api:wiki:move-page": (body) => moveWikiPage(noteRoot, body || {}),
+  "aaronnote:api:wiki:delete-page": (body) => deleteWikiPage(noteRoot, body || {}),
+  "aaronnote:api:wiki:copy-page": (body) => copyWikiPage(noteRoot, body || {}),
+  "aaronnote:api:wiki:merge-pages": (body) => mergeWikiPages(noteRoot, body || {}),
+  "aaronnote:api:wiki:tags": async () => ({ ok: true, type: "wiki-tags", tags: wikiTagIndex(await wikiIndexPayload()) }),
+  "aaronnote:api:wiki:update-tag": (body) => updateWikiTag(noteRoot, body || {}),
+  "aaronnote:api:wiki:export": (body) => exportWiki(noteRoot, body || {}),
+  "aaronnote:api:wiki:sync-status": (body) => readWikiSyncState(noteRoot, body?.repositoryId || ""),
+  "aaronnote:api:wiki:checkpoint": (body) => checkpointWikiRepository(noteRoot, body?.repositoryId, body || {}),
+  "aaronnote:api:wiki:sync": (body) => syncWikiRepository(noteRoot, body?.repositoryId, body || {}),
+  "aaronnote:api:wiki:conflict": (body) => readWikiConflict(noteRoot, body || {}),
+  "aaronnote:api:wiki:resolve-conflict": (body) => resolveWikiConflict(noteRoot, body || {}),
+  "aaronnote:api:wiki:abort-conflict": (body) => abortWikiConflict(noteRoot, body?.repositoryId),
+  "aaronnote:api:wiki:git-ui": (body) => openWikiGitUi(noteRoot, body?.repositoryId),
   "aaronnote:api:notes:bootstrap": (file) => bootstrapNote(file || undefined),
   "aaronnote:api:notes:open": (file) => readNote(file),
   "aaronnote:api:notes:list": (force) => notesListPayload(force === true),
@@ -952,6 +1045,7 @@ const apiRouter = new ApiRouter().register({
         clientId: String((body && typeof body === "object" ? body.clientId : "") || ""),
       });
       scheduleWikiRefresh();
+      scheduleWikiCheckpointForFile(String(result.file));
     }
     return result;
   },
@@ -1748,9 +1842,24 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
       initWorkspace: function() { return call("aaronnote:api:wiki:init-workspace", []); },
       initRepository: function(body) { return call("aaronnote:api:wiki:init-repository", [body || {}]); },
       cloneRepository: function(body) { return call("aaronnote:api:wiki:clone-repository", [body || {}]); },
+      adoptRepository: function(body) { return call("aaronnote:api:wiki:adopt-repository", [body || {}]); },
       repositoryStatus: function(body) { return call("aaronnote:api:wiki:repository-status", [body || {}]); },
       git: function(body) { return call("aaronnote:api:wiki:git", [body || {}]); },
-      createPage: function(body) { return call("aaronnote:api:wiki:create-page", [body || {}]); }
+      createPage: function(body) { return call("aaronnote:api:wiki:create-page", [body || {}]); },
+      movePage: function(body) { return call("aaronnote:api:wiki:move-page", [body || {}]); },
+      deletePage: function(body) { return call("aaronnote:api:wiki:delete-page", [body || {}]); },
+      copyPage: function(body) { return call("aaronnote:api:wiki:copy-page", [body || {}]); },
+      mergePages: function(body) { return call("aaronnote:api:wiki:merge-pages", [body || {}]); },
+      tags: function() { return call("aaronnote:api:wiki:tags", []); },
+      updateTag: function(body) { return call("aaronnote:api:wiki:update-tag", [body || {}]); },
+      export: function(body) { return call("aaronnote:api:wiki:export", [body || {}]); },
+      syncStatus: function(body) { return call("aaronnote:api:wiki:sync-status", [body || {}]); },
+      checkpoint: function(body) { return call("aaronnote:api:wiki:checkpoint", [body || {}]); },
+      sync: function(body) { return call("aaronnote:api:wiki:sync", [body || {}]); },
+      conflict: function(body) { return call("aaronnote:api:wiki:conflict", [body || {}]); },
+      resolveConflict: function(body) { return call("aaronnote:api:wiki:resolve-conflict", [body || {}]); },
+      abortConflict: function(body) { return call("aaronnote:api:wiki:abort-conflict", [body || {}]); },
+      gitUi: function(body) { return call("aaronnote:api:wiki:git-ui", [body || {}]); }
     }
   };
 }());

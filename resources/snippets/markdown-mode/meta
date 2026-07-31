@@ -4,7 +4,9 @@
 # group: Noema blocks
 # --
 #+begin meta
-tags: ${1:tag}
-id: ${2:id}
+id: `(my/noema-new-id "page")`
+title: ${1:title}
+kind: ${2:page}
+tags: ${3:tag}
 #+end meta
 $0

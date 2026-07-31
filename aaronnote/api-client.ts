@@ -587,14 +587,31 @@ type NativeApi = {
     initWorkspace?: () => Promise<unknown>;
     initRepository?: (body: Record<string, unknown>) => Promise<unknown>;
     cloneRepository?: (body: Record<string, unknown>) => Promise<unknown>;
+    adoptRepository?: (body: Record<string, unknown>) => Promise<unknown>;
     repositoryStatus?: (body: Record<string, unknown>) => Promise<unknown>;
     git?: (body: Record<string, unknown>) => Promise<unknown>;
     createPage?: (body: Record<string, unknown>) => Promise<unknown>;
+    movePage?: (body: Record<string, unknown>) => Promise<unknown>;
+    deletePage?: (body: Record<string, unknown>) => Promise<unknown>;
+    copyPage?: (body: Record<string, unknown>) => Promise<unknown>;
+    mergePages?: (body: Record<string, unknown>) => Promise<unknown>;
+    tags?: () => Promise<unknown>;
+    updateTag?: (body: Record<string, unknown>) => Promise<unknown>;
+    export?: (body: Record<string, unknown>) => Promise<unknown>;
+    syncStatus?: (body: Record<string, unknown>) => Promise<unknown>;
+    checkpoint?: (body: Record<string, unknown>) => Promise<unknown>;
+    sync?: (body: Record<string, unknown>) => Promise<unknown>;
+    conflict?: (body: Record<string, unknown>) => Promise<unknown>;
+    resolveConflict?: (body: Record<string, unknown>) => Promise<unknown>;
+    abortConflict?: (body: Record<string, unknown>) => Promise<unknown>;
+    gitUi?: (body: Record<string, unknown>) => Promise<unknown>;
   };
 };
 
 export type WikiRepository = {
   id: string;
+  uid?: string;
+  identityStatus?: "managed" | "legacy" | "provisional";
   name: string;
   partition: "public" | "private";
   path: string;
@@ -603,6 +620,9 @@ export type WikiRepository = {
 export type WikiNote = {
   id: string;
   title: string;
+  kind?: string;
+  redirectTo?: string;
+  identityStatus?: "managed" | "legacy" | "provisional" | "duplicate";
   aliases: string[];
   tags: string[];
   private: boolean;
@@ -616,6 +636,41 @@ export type WikiNote = {
   refs: string[];
   backlinks: string[];
   unresolvedLinks: string[];
+  blocks?: Array<{ id: string; kind: string; offset: number }>;
+  dependencies?: Array<{ kind: string; raw: string; path: string; status: string }>;
+};
+export type WikiFile = {
+  repositoryId: string;
+  partition: "public" | "private";
+  file: string;
+  path: string;
+  repositoryPath: string;
+  name: string;
+  ext: string;
+  kind: "note" | "file";
+  size: number;
+  mtimeMs: number;
+  gitStatus: string;
+};
+export type WikiDirectory = {
+  repositoryId: string;
+  partition: "public" | "private";
+  path: string;
+  name: string;
+  fileCount: number;
+};
+export type WikiSyncPhase = "idle" | "checkpointing" | "fetching" | "merging" | "conflicted" | "pushing" | "error";
+export type WikiSyncState = {
+  repositoryId: string;
+  repositoryUid?: string;
+  phase: WikiSyncPhase;
+  updatedAt?: string;
+  lastSyncedAt?: string;
+  branch?: string;
+  localOnly?: boolean;
+  error?: string;
+  message?: string;
+  conflicts?: Array<{ path: string; kind: string; stages: number[] }>;
 };
 export type WikiIndex = {
   type: "wiki-index";
@@ -624,11 +679,14 @@ export type WikiIndex = {
   dbFile: string;
   repositories: WikiRepository[];
   notes: WikiNote[];
+  files: WikiFile[];
+  directories: WikiDirectory[];
   diagnostics: Array<{ code: string; severity: string; message: string; path?: string }>;
   reports: {
     wanted: Array<{ title: string; references: Array<{ sourceId: string; sourceTitle: string; sourceFile: string }> }>;
     ambiguous: Array<Record<string, unknown>>;
     duplicates: Array<Record<string, unknown>>;
+    duplicateIds?: Array<Record<string, unknown>>;
   };
 };
 
@@ -705,6 +763,12 @@ declare global {
       openFiles(files: string[]): void;
       showMenu(kind: "actions" | "window", point?: { x: number; y: number }): Promise<boolean>;
       revealPath(file: string): Promise<boolean>;
+      chooseDirectory(options: { root: string; defaultPath?: string; title?: string }): Promise<{
+        canceled: boolean;
+        path: string;
+        relativePath?: string;
+        message?: string;
+      }>;
       onCommand(callback: (detail: unknown) => void): () => void;
     };
   }
@@ -1223,6 +1287,10 @@ export const api = {
       const call = requireMethod(nativeApi().wiki?.cloneRepository, "Wiki repository clone");
       return ensureOk(await call(body) as Record<string, unknown>, "Cloning Wiki repository failed");
     },
+    async adoptRepository(repositoryId: string): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().wiki?.adoptRepository, "Wiki repository identity");
+      return ensureOk(await call({ repositoryId }) as Record<string, unknown>, "Establishing repository identity failed");
+    },
     async repositoryStatus(repositoryId: string): Promise<Record<string, unknown>> {
       const call = requireMethod(nativeApi().wiki?.repositoryStatus, "Wiki repository status");
       return ensureOk(await call({ repositoryId }) as Record<string, unknown>, "Loading repository status failed");
@@ -1234,6 +1302,62 @@ export const api = {
     async createPage(body: Record<string, unknown>): Promise<{ ok?: boolean; file?: string; title?: string }> {
       const call = requireMethod(nativeApi().wiki?.createPage, "New Wiki page");
       return ensureOk(await call(body) as { ok?: boolean; file?: string; title?: string }, "Creating Wiki page failed");
+    },
+    async movePage(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().wiki?.movePage, "Move Wiki page");
+      return ensureOk(await call(body) as Record<string, unknown>, "Moving Wiki page failed");
+    },
+    async deletePage(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().wiki?.deletePage, "Delete Wiki page");
+      return ensureOk(await call(body) as Record<string, unknown>, "Deleting Wiki page failed");
+    },
+    async copyPage(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().wiki?.copyPage, "Copy Wiki page");
+      return ensureOk(await call(body) as Record<string, unknown>, "Copying Wiki page failed");
+    },
+    async mergePages(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().wiki?.mergePages, "Merge Wiki pages");
+      return ensureOk(await call(body) as Record<string, unknown>, "Merging Wiki pages failed");
+    },
+    async tags(): Promise<{ tags?: Array<Record<string, unknown>> }> {
+      const call = requireMethod(nativeApi().wiki?.tags, "Wiki tags");
+      return ensureOk(await call() as { tags?: Array<Record<string, unknown>> }, "Loading Wiki tags failed");
+    },
+    async updateTag(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().wiki?.updateTag, "Update Wiki tag");
+      return ensureOk(await call(body) as Record<string, unknown>, "Updating Wiki tag failed");
+    },
+    async export(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().wiki?.export, "Export Wiki");
+      return ensureOk(await call(body) as Record<string, unknown>, "Exporting Wiki failed");
+    },
+    async syncStatus(repositoryId = ""): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().wiki?.syncStatus, "Wiki sync status");
+      return ensureOk(await call({ repositoryId }) as Record<string, unknown>, "Loading sync status failed");
+    },
+    async checkpoint(repositoryId: string): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().wiki?.checkpoint, "Wiki checkpoint");
+      return ensureOk(await call({ repositoryId }) as Record<string, unknown>, "Checkpoint failed");
+    },
+    async sync(repositoryId: string): Promise<WikiSyncState> {
+      const call = requireMethod(nativeApi().wiki?.sync, "Wiki sync");
+      return ensureOk(await call({ repositoryId }) as WikiSyncState, "Wiki sync failed");
+    },
+    async conflict(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().wiki?.conflict, "Wiki conflict");
+      return ensureOk(await call(body) as Record<string, unknown>, "Loading conflict failed");
+    },
+    async resolveConflict(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().wiki?.resolveConflict, "Wiki conflict resolution");
+      return ensureOk(await call(body) as Record<string, unknown>, "Resolving conflict failed");
+    },
+    async abortConflict(repositoryId: string): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().wiki?.abortConflict, "Abort Wiki conflict");
+      return ensureOk(await call({ repositoryId }) as Record<string, unknown>, "Aborting conflict failed");
+    },
+    async gitUi(repositoryId: string): Promise<{ ok?: boolean; repositoryId?: string; url?: string }> {
+      const call = requireMethod(nativeApi().wiki?.gitUi, "Advanced Git");
+      return ensureOk(await call({ repositoryId }) as { ok?: boolean; repositoryId?: string; url?: string }, "Starting Advanced Git failed");
     },
   },
 };

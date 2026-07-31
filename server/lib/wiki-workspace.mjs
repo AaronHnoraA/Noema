@@ -1,18 +1,40 @@
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import {
+  copyFile, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile,
+} from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
+import { isUuidV7, newNoemaId } from "../../shared/identity.mjs";
+
 const execFileAsync = promisify(execFile);
 const PARTITIONS = Object.freeze(["public", "private"]);
 const NOTE_EXTENSIONS = new Set([".md", ".markdown", ".typ"]);
+const REPOSITORY_MANIFEST = "noema.toml";
+const WIKI_SCHEMA_VERSION = 3;
+const REPOSITORY_GITIGNORE = [
+  ".DS_Store",
+  ".direnv/",
+  ".noema/",
+  ".lake/",
+  ".mypy_cache/",
+  ".pytest_cache/",
+  ".ruff_cache/",
+  ".sage/",
+  ".venv/",
+  "__pycache__/",
+  ".ipynb_checkpoints/",
+  "node_modules/",
+  "",
+].join("\n");
 const IGNORED_DIRECTORIES = new Set([
   ".git", ".direnv", ".lake", ".noema", ".venv", "node_modules",
   "__pycache__", ".ipynb_checkpoints", ".pytest_cache", ".mypy_cache", ".ruff_cache",
 ]);
+const IGNORED_FILES = new Set([".DS_Store"]);
 
 function apiError(message, statusCode = 400, code = "ERR_WIKI") {
   return Object.assign(new Error(message), { statusCode, code });
@@ -41,7 +63,7 @@ function cleanRelativePath(value) {
   const raw = String(value || "").trim().replaceAll("\\", "/").replace(/^\/+/, "");
   if (!raw) return "";
   const parts = raw.split("/");
-  if (parts.some((part) => !part || part === "." || part === ".." || part.startsWith("."))) {
+  if (parts.some((part) => !part || part === "." || part === ".." || IGNORED_DIRECTORIES.has(part))) {
     throw apiError("Invalid repository-relative path");
   }
   return parts.join("/");
@@ -68,6 +90,55 @@ async function isDirectory(path) {
 
 function hasGitMetadata(path) {
   return existsSync(join(path, ".git"));
+}
+
+function provisionalKey(...values) {
+  return `provisional:${createHash("sha256").update(values.join("\0")).digest("hex").slice(0, 24)}`;
+}
+
+function parseRepositoryManifest(text) {
+  const schema = Number(String(text || "").match(/^\s*schema\s*=\s*(\d+)\s*$/m)?.[1] || 0);
+  const repositoryId = String(text || "").match(/^\s*repository_id\s*=\s*["']([^"']+)["']\s*$/m)?.[1]?.trim() || "";
+  return { schema, repositoryId };
+}
+
+async function repositoryManifest(path) {
+  const file = join(path, REPOSITORY_MANIFEST);
+  try {
+    const parsed = parseRepositoryManifest(await readFile(file, "utf8"));
+    return {
+      file,
+      exists: true,
+      schema: parsed.schema,
+      repositoryId: parsed.repositoryId,
+      managed: parsed.schema === 1 && isUuidV7(parsed.repositoryId),
+    };
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+    return { file, exists: false, schema: 0, repositoryId: "", managed: false };
+  }
+}
+
+async function ensureRepositoryManifest(path) {
+  const current = await repositoryManifest(path);
+  if (current.managed) return current;
+  if (current.exists) {
+    throw apiError(`${REPOSITORY_MANIFEST} must contain schema = 1 and a UUIDv7 repository_id`, 409, "ERR_WIKI_REPOSITORY_IDENTITY");
+  }
+  const repositoryId = newNoemaId("repository");
+  await writeFile(
+    current.file,
+    `schema = 1\nrepository_id = "${repositoryId}"\n`,
+    { encoding: "utf8", flag: "wx" },
+  );
+  return { ...current, schema: 1, repositoryId, managed: true };
+}
+
+async function ensureRepositoryGitIgnore(path) {
+  const file = join(path, ".gitignore");
+  if (existsSync(file)) return file;
+  await writeFile(file, REPOSITORY_GITIGNORE, { encoding: "utf8", flag: "wx" });
+  return file;
 }
 
 export async function discoverWikiRepositories(rootValue) {
@@ -101,8 +172,22 @@ export async function discoverWikiRepositories(rootValue) {
         });
         continue;
       }
+      const manifest = await repositoryManifest(path);
+      const repositoryUid = manifest.repositoryId || provisionalKey("repository", partition, entry.name);
+      if (!manifest.managed) {
+        diagnostics.push({
+          code: "missing-repository-manifest",
+          severity: "warning",
+          partition,
+          path: manifest.file,
+          name: entry.name,
+          message: `${partition}/${entry.name} needs a committed ${REPOSITORY_MANIFEST} before its repository identity can be shared`,
+        });
+      }
       repositories.push({
         id: `${partition}/${entry.name}`,
+        uid: repositoryUid,
+        identityStatus: manifest.managed ? "managed" : "provisional",
         name: entry.name,
         partition,
         path,
@@ -113,7 +198,7 @@ export async function discoverWikiRepositories(rootValue) {
   return { root, layout: "wiki", repositories, diagnostics };
 }
 
-async function walkNotes(root) {
+async function walkFiles(root) {
   const files = [];
   async function walk(dir) {
     let entries = [];
@@ -123,14 +208,19 @@ async function walkNotes(root) {
       return;
     }
     for (const entry of entries) {
-      if (entry.name.startsWith(".") || (entry.isDirectory() && IGNORED_DIRECTORIES.has(entry.name))) continue;
+      if (entry.isDirectory() && IGNORED_DIRECTORIES.has(entry.name)) continue;
+      if (entry.isFile() && IGNORED_FILES.has(entry.name)) continue;
       const file = join(dir, entry.name);
       if (entry.isDirectory()) await walk(file);
-      else if (entry.isFile() && NOTE_EXTENSIONS.has(extname(entry.name).toLowerCase())) files.push(file);
+      else if (entry.isFile()) files.push(file);
     }
   }
   await walk(root);
   return files;
+}
+
+async function walkNotes(root) {
+  return (await walkFiles(root)).filter((file) => NOTE_EXTENSIONS.has(extname(file).toLowerCase()));
 }
 
 function parseList(value) {
@@ -154,6 +244,16 @@ function metadata(content) {
   return fields;
 }
 
+function replaceMetaField(content, key, value) {
+  const block = content.match(/^\s*#\+begin\s+meta\s*\r?\n([\s\S]*?)\r?\n\s*#\+end\s+meta/im);
+  if (!block || block.index == null) return content;
+  const field = new RegExp(`^(\\s*${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*:\\s*).*$`, "im");
+  let nextBlock;
+  if (field.test(block[0])) nextBlock = block[0].replace(field, `$1${value}`);
+  else nextBlock = block[0].replace(/\r?\n\s*#\+end\s+meta/i, `\n${key}: ${value}\n#+end meta`);
+  return `${content.slice(0, block.index)}${nextBlock}${content.slice(block.index + block[0].length)}`;
+}
+
 function titleFor(file, content, meta) {
   return String(meta.title || content.match(/^#+\s+(.+)$/m)?.[1] || content.match(/^=+\s+(.+)$/m)?.[1]
     || basename(file, extname(file))).trim();
@@ -166,7 +266,43 @@ function wikiLinks(content) {
     const target = String(match[1] || "").trim();
     if (target) links.push({ target, label: String(match[2] || "").trim() });
   }
+  for (const match of source.matchAll(/\[[^\]\n]*\]\((roam:\/\/[^)\s]+)\)/gi)) {
+    links.push({ target: String(match[1] || "").trim(), label: "" });
+  }
   return links;
+}
+
+function blockIds(content) {
+  const ids = [];
+  for (const match of String(content).matchAll(/\{#([A-Za-z0-9][A-Za-z0-9._:-]{2,127})\}/g)) {
+    ids.push({ id: match[1], kind: "anchor", offset: match.index || 0 });
+  }
+  for (const match of String(content).matchAll(/\{[^{}\n]*\bid\s*[:=]\s*["']?([A-Za-z0-9][A-Za-z0-9._:-]{2,127})["']?[^{}\n]*\}/g)) {
+    ids.push({ id: match[1], kind: "planning", offset: match.index || 0 });
+  }
+  return [...new Map(ids.map((item) => [item.id, item])).values()];
+}
+
+function dependencyRefs(content, noteFile, repository) {
+  const refs = [];
+  const add = (raw, kind) => {
+    const value = String(raw || "").trim().replace(/^["<]|[">]$/g, "");
+    if (!value || /^(?:[a-z][a-z0-9+.-]*:|#|@@)/i.test(value)) return;
+    const file = resolve(dirname(noteFile), value.split(/[?#]/, 1)[0]);
+    if (!inside(repository.path, file)) {
+      refs.push({ kind, raw: value, status: "outside-repository", path: "" });
+      return;
+    }
+    refs.push({
+      kind,
+      raw: value,
+      status: existsSync(file) ? "resolved" : "missing",
+      path: relative(repository.path, file).split(sep).join("/"),
+    });
+  };
+  for (const match of String(content).matchAll(/!?\[[^\]\n]*\]\(([^)\n]+)\)/g)) add(match[1], "asset");
+  for (const match of String(content).matchAll(/^\s*#\+include:\s+([^\n]+)$/gim)) add(match[1], "include");
+  return refs;
 }
 
 function canonicalTitle(value) {
@@ -180,8 +316,19 @@ function disambiguation(note) {
 function resolveWikiRelationships(notes) {
   const byTitle = new Map();
   const byId = new Map();
+  const duplicateIds = [];
   for (const note of notes) {
-    if (note.id) byId.set(canonicalTitle(note.id), note);
+    if (note.id && note.identityStatus !== "provisional") {
+      const key = canonicalTitle(note.id);
+      const previous = byId.get(key);
+      if (previous) duplicateIds.push({
+        id: note.id,
+        candidates: [previous, note].map((item) => ({
+          id: item.id, title: item.title, file: item.file, location: disambiguation(item),
+        })),
+      });
+      else byId.set(key, note);
+    }
     for (const value of [note.title, ...note.aliases]) {
       const key = canonicalTitle(value);
       if (!key) continue;
@@ -242,6 +389,7 @@ function resolveWikiRelationships(notes) {
       wanted: [...wanted.values()].sort((a, b) => a.title.localeCompare(b.title)),
       ambiguous,
       duplicates,
+      duplicateIds,
     },
   };
 }
@@ -253,11 +401,18 @@ async function noteForFile(file, repository, workspaceRoot) {
   const workspacePath = relative(workspaceRoot, file).split(sep).join("/");
   const repositoryPath = relative(repository.path, file).split(sep).join("/");
   const title = titleFor(file, content, meta);
-  const id = String(meta.id || `path:${workspacePath}`);
+  const persistedId = String(meta.id || "").trim();
+  const id = persistedId || provisionalKey(repository.uid || repository.id, repositoryPath);
+  const blocks = blockIds(content);
+  const dependencies = dependencyRefs(content, file, repository);
   return {
     key: id,
+    pageKey: `${repository.uid || repository.id}:${repositoryPath}`,
     id,
     title,
+    kind: String(meta.kind || "page"),
+    redirectTo: String(meta.redirect_to || meta.redirect || ""),
+    identityStatus: persistedId ? (/^\d{14}-/.test(persistedId) || !/^[0-9a-f-]{36}$/i.test(persistedId) ? "legacy" : "managed") : "provisional",
     aliases: parseList(meta.aliases),
     tags: parseList(meta.tags),
     private: repository.partition === "private" || String(meta.private).toLowerCase() === "true",
@@ -270,19 +425,63 @@ async function noteForFile(file, repository, workspaceRoot) {
     partition: repository.partition,
     mtimeMs: info.mtimeMs,
     size: info.size,
+    blocks,
+    dependencies,
     wikiLinks: wikiLinks(content),
     refs: [],
     backlinks: [],
   };
 }
 
+async function repositoryFileInventory(repository) {
+  const paths = await walkFiles(repository.path);
+  let statusText = "";
+  try {
+    statusText = (await execFileAsync(
+      "git", ["-C", repository.path, "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+      { maxBuffer: 1024 * 1024 * 16 },
+    )).stdout;
+  } catch {}
+  const statuses = new Map();
+  const entries = String(statusText).split("\0").filter(Boolean);
+  for (let index = 0; index < entries.length; index++) {
+    const entry = entries[index];
+    const code = entry.slice(0, 2);
+    const path = entry.slice(3);
+    statuses.set(path, code.trim() || "clean");
+    if ((code.includes("R") || code.includes("C")) && entries[index + 1]) index++;
+  }
+  return await Promise.all(paths.map(async (file) => {
+    const info = await stat(file);
+    const repositoryPath = relative(repository.path, file).split(sep).join("/");
+    return {
+      repositoryId: repository.id,
+      repositoryUid: repository.uid,
+      partition: repository.partition,
+      file,
+      path: `${repository.id}/${repositoryPath}`,
+      repositoryPath,
+      name: basename(file),
+      ext: extname(file).replace(/^\./, "").toLowerCase(),
+      size: info.size,
+      mtimeMs: info.mtimeMs,
+      kind: NOTE_EXTENSIONS.has(extname(file).toLowerCase()) ? "note" : "file",
+      gitStatus: statuses.get(repositoryPath) || "clean",
+    };
+  }));
+}
+
 export async function buildWikiIndex(rootValue, options = {}) {
   const root = expandNoemaPath(rootValue);
   const layout = wikiLayout(options.layout);
   if (layout === "legacy") {
-    const repository = { id: "legacy", name: "Legacy", partition: "private", path: root, public: false };
+    const repository = {
+      id: "legacy", uid: "legacy", identityStatus: "legacy",
+      name: "Legacy", partition: "private", path: root, public: false,
+    };
     const files = await walkNotes(root);
     const notes = await Promise.all(files.map((file) => noteForFile(file, repository, root)));
+    const inventory = await repositoryFileInventory(repository);
     const related = resolveWikiRelationships(notes);
     const index = {
       type: "wiki-index",
@@ -295,6 +494,8 @@ export async function buildWikiIndex(rootValue, options = {}) {
         path: root,
         message: "Legacy single-repository layout is active; no files are moved automatically",
       }],
+      files: inventory,
+      directories: directoryInventory(inventory),
       ...related,
     };
     await persistWikiIndex(index);
@@ -305,13 +506,45 @@ export async function buildWikiIndex(rootValue, options = {}) {
     const files = await walkNotes(repository.path);
     return await Promise.all(files.map((file) => noteForFile(file, repository, root)));
   }));
+  const inventories = (await Promise.all(discovered.repositories.map(repositoryFileInventory))).flat();
+  const related = resolveWikiRelationships(noteGroups.flat());
+  for (const duplicate of related.reports.duplicateIds) {
+    discovered.diagnostics.push({
+      code: "duplicate-page-id",
+      severity: "error",
+      message: `Page id ${duplicate.id} is present in multiple files`,
+    });
+  }
   const index = {
     type: "wiki-index",
     ...discovered,
-    ...resolveWikiRelationships(noteGroups.flat()),
+    files: inventories,
+    directories: directoryInventory(inventories),
+    ...related,
   };
   await persistWikiIndex(index);
   return index;
+}
+
+function directoryInventory(files) {
+  const paths = new Map();
+  for (const file of files) {
+    const parts = String(file.repositoryPath || "").split("/").filter(Boolean);
+    for (let index = 0; index < Math.max(1, parts.length); index++) {
+      const relativePath = parts.slice(0, index).join("/");
+      const key = `${file.repositoryId}:${relativePath}`;
+      const entry = paths.get(key) || {
+        repositoryId: file.repositoryId,
+        partition: file.partition,
+        path: relativePath,
+        name: relativePath.split("/").at(-1) || file.repositoryId.split("/").at(-1),
+        fileCount: 0,
+      };
+      entry.fileCount++;
+      paths.set(key, entry);
+    }
+  }
+  return [...paths.values()].sort((a, b) => `${a.repositoryId}/${a.path}`.localeCompare(`${b.repositoryId}/${b.path}`));
 }
 
 function sql(value) {
@@ -325,39 +558,73 @@ export function wikiDatabaseFile(rootValue) {
 export async function persistWikiIndex(index) {
   const dbFile = wikiDatabaseFile(index.root);
   const dbDir = dirname(dbFile);
-  const temp = join(dbDir, `.wiki.db.tmp-${process.pid}-${Date.now()}`);
+  const temp = join(dbDir, `.wiki.db.tmp-${process.pid}-${newNoemaId("block")}`);
   await mkdir(dbDir, { recursive: true });
   const statements = [
     "PRAGMA journal_mode=DELETE;",
     "BEGIN;",
-    "CREATE TABLE IF NOT EXISTS repositories (id text primary key, partition text not null, name text not null, path text not null);",
-    "CREATE TABLE IF NOT EXISTS pages (id text primary key, title text not null, file text not null unique, workspace_path text not null, repository_id text not null, partition text not null, private integer not null, mtime real not null);",
-    "CREATE TABLE IF NOT EXISTS aliases (page_id text not null, alias text not null);",
-    "CREATE TABLE IF NOT EXISTS links (source_id text not null, target_id text, target_title text not null, status text not null);",
-    "CREATE INDEX IF NOT EXISTS wiki_pages_title_idx ON pages(title);",
+    `PRAGMA user_version=${WIKI_SCHEMA_VERSION};`,
+    "CREATE TABLE repositories (location_id text primary key, repository_id text not null, identity_status text not null, partition text not null, name text not null, path text not null);",
+    "CREATE TABLE files (repository_id text not null, path text not null, file text not null unique, kind text not null, extension text not null, size integer not null, mtime real not null, git_status text not null, primary key(repository_id, path));",
+    "CREATE TABLE pages (page_key text primary key, page_id text not null, identity_status text not null, title text not null, kind text not null, file text not null unique, workspace_path text not null, repository_id text not null, partition text not null, private integer not null, redirect_to text not null, mtime real not null);",
+    "CREATE TABLE blocks (block_id text not null, page_key text not null, kind text not null, source_offset integer not null, primary key(page_key, block_id));",
+    "CREATE TABLE aliases (page_key text not null, alias text not null);",
+    "CREATE TABLE tags (page_key text not null, tag text not null);",
+    "CREATE TABLE links (source_key text not null, target_id text, target_title text not null, status text not null);",
+    "CREATE TABLE dependencies (source_key text not null, kind text not null, raw_target text not null, target_path text not null, status text not null);",
+    "CREATE TABLE diagnostics (code text not null, severity text not null, message text not null, path text not null);",
+    "CREATE INDEX wiki_pages_id_idx ON pages(page_id);",
+    "CREATE INDEX wiki_pages_title_idx ON pages(title);",
     "CREATE INDEX IF NOT EXISTS wiki_aliases_alias_idx ON aliases(alias);",
     "CREATE INDEX IF NOT EXISTS wiki_links_target_idx ON links(target_id);",
-    "DELETE FROM links;", "DELETE FROM aliases;", "DELETE FROM pages;", "DELETE FROM repositories;",
   ];
   for (const repository of index.repositories) {
-    statements.push(`INSERT INTO repositories VALUES (${sql(repository.id)}, ${sql(repository.partition)}, ${sql(repository.name)}, ${sql(repository.path)});`);
+    statements.push(`INSERT INTO repositories VALUES (${[
+      sql(repository.id), sql(repository.uid || repository.id), sql(repository.identityStatus || "legacy"),
+      sql(repository.partition), sql(repository.name), sql(repository.path),
+    ].join(", ")});`);
+  }
+  for (const file of index.files || []) {
+    statements.push(`INSERT INTO files VALUES (${[
+      sql(file.repositoryId), sql(file.repositoryPath), sql(file.file), sql(file.kind),
+      sql(file.ext), Number(file.size) || 0, Number(file.mtimeMs) || 0, sql(file.gitStatus || "clean"),
+    ].join(", ")});`);
   }
   const noteById = new Map(index.notes.map((note) => [note.id, note]));
   for (const note of index.notes) {
-    statements.push(`INSERT OR REPLACE INTO pages VALUES (${[
-      sql(note.id), sql(note.title), sql(note.file), sql(note.path), sql(note.repositoryId),
-      sql(note.partition), note.private ? "1" : "0", Number(note.mtimeMs) || 0,
+    statements.push(`INSERT INTO pages VALUES (${[
+      sql(note.pageKey || note.key), sql(note.id), sql(note.identityStatus), sql(note.title), sql(note.kind || "page"),
+      sql(note.file), sql(note.path), sql(note.repositoryId), sql(note.partition),
+      note.private ? "1" : "0", sql(note.redirectTo || ""), Number(note.mtimeMs) || 0,
     ].join(", ")});`);
     for (const alias of note.aliases) {
-      statements.push(`INSERT INTO aliases VALUES (${sql(note.id)}, ${sql(alias)});`);
+      statements.push(`INSERT INTO aliases VALUES (${sql(note.pageKey || note.key)}, ${sql(alias)});`);
+    }
+    for (const tag of note.tags || []) {
+      statements.push(`INSERT INTO tags VALUES (${sql(note.pageKey || note.key)}, ${sql(tag)});`);
+    }
+    for (const block of note.blocks || []) {
+      statements.push(`INSERT OR REPLACE INTO blocks VALUES (${[
+        sql(block.id), sql(note.pageKey || note.key), sql(block.kind), Number(block.offset) || 0,
+      ].join(", ")});`);
     }
     for (const targetId of note.refs) {
       const target = noteById.get(targetId);
-      statements.push(`INSERT INTO links VALUES (${sql(note.id)}, ${sql(targetId)}, ${sql(target?.title || "")}, 'resolved');`);
+      statements.push(`INSERT INTO links VALUES (${sql(note.pageKey || note.key)}, ${sql(targetId)}, ${sql(target?.title || "")}, 'resolved');`);
     }
     for (const target of note.unresolvedLinks) {
-      statements.push(`INSERT INTO links VALUES (${sql(note.id)}, NULL, ${sql(target)}, 'missing');`);
+      statements.push(`INSERT INTO links VALUES (${sql(note.pageKey || note.key)}, NULL, ${sql(target)}, 'missing');`);
     }
+    for (const dependency of note.dependencies || []) {
+      statements.push(`INSERT INTO dependencies VALUES (${[
+        sql(note.pageKey || note.key), sql(dependency.kind), sql(dependency.raw), sql(dependency.path || ""), sql(dependency.status),
+      ].join(", ")});`);
+    }
+  }
+  for (const diagnostic of index.diagnostics || []) {
+    statements.push(`INSERT INTO diagnostics VALUES (${[
+      sql(diagnostic.code), sql(diagnostic.severity), sql(diagnostic.message), sql(diagnostic.path || ""),
+    ].join(", ")});`);
   }
   statements.push("COMMIT;");
   try {
@@ -410,8 +677,20 @@ export async function initWikiRepository(rootValue, partitionValue, nameValue) {
   await mkdir(partitionRoot, { recursive: true });
   if (existsSync(path)) throw apiError(`Repository destination already exists: ${partition}/${name}`, 409);
   await mkdir(path);
-  await execFileAsync("git", ["init", path], { cwd: root });
-  return { ok: true, repository: { id: `${partition}/${name}`, name, partition, path } };
+  await execFileAsync("git", ["init", "--initial-branch=main", path], { cwd: root });
+  const manifest = await ensureRepositoryManifest(path);
+  await ensureRepositoryGitIgnore(path);
+  await execFileAsync("git", ["-C", path, "add", "--", REPOSITORY_MANIFEST, ".gitignore"]);
+  await execFileAsync("git", [
+    "-C", path,
+    "-c", "user.name=Noema",
+    "-c", "user.email=noema@local",
+    "commit", "-m", "noema: initialize repository",
+  ]);
+  return {
+    ok: true,
+    repository: { id: `${partition}/${name}`, uid: manifest.repositoryId, name, partition, path },
+  };
 }
 
 export async function cloneWikiRepository(rootValue, body = {}) {
@@ -425,10 +704,15 @@ export async function cloneWikiRepository(rootValue, body = {}) {
   await mkdir(partitionRoot, { recursive: true });
   if (existsSync(path)) throw apiError(`Repository destination already exists: ${partition}/${name}`, 409);
   await execFileAsync("git", ["clone", "--", remote, path], { cwd: root, maxBuffer: 1024 * 1024 * 8 });
-  return { ok: true, repository: { id: `${partition}/${name}`, name, partition, path } };
+  const manifest = await ensureRepositoryManifest(path);
+  await ensureRepositoryGitIgnore(path);
+  return {
+    ok: true,
+    repository: { id: `${partition}/${name}`, uid: manifest.repositoryId, name, partition, path },
+  };
 }
 
-async function repositoryFromId(root, id) {
+export async function repositoryFromId(root, id) {
   const [partitionValue, nameValue, ...extra] = String(id || "").split("/");
   if (extra.length) throw apiError("Invalid repository id");
   const partition = cleanPartition(partitionValue);
@@ -437,7 +721,32 @@ async function repositoryFromId(root, id) {
   if (!inside(root, path) || !(await isDirectory(path)) || !hasGitMetadata(path)) {
     throw apiError(`Unknown Wiki repository: ${partition}/${name}`, 404);
   }
-  return { id: `${partition}/${name}`, name, partition, path };
+  const manifest = await repositoryManifest(path);
+  return {
+    id: `${partition}/${name}`,
+    uid: manifest.repositoryId || provisionalKey("repository", partition, name),
+    identityStatus: manifest.managed ? "managed" : "provisional",
+    name,
+    partition,
+    path,
+  };
+}
+
+export async function adoptWikiRepository(rootValue, repositoryId) {
+  const root = expandNoemaPath(rootValue);
+  const repository = await repositoryFromId(root, repositoryId);
+  const manifest = await ensureRepositoryManifest(repository.path);
+  await ensureRepositoryGitIgnore(repository.path);
+  return {
+    ok: true,
+    type: "wiki-repository-adopted",
+    repository: {
+      ...repository,
+      uid: manifest.repositoryId,
+      identityStatus: "managed",
+    },
+    manifest: manifest.file,
+  };
 }
 
 async function git(repository, args) {
@@ -513,14 +822,14 @@ export async function createWikiPage(rootValue, layoutValue, body = {}) {
   const file = resolve(repository.path, directory, filename);
   if (!inside(repository.path, file)) throw apiError("New page must stay inside its repository");
   if (existsSync(file)) throw apiError("A page already exists at that location", 409);
-  const id = String(body.id || `${timestamp}-${randomUUID().slice(0, 8)}`);
+  const id = String(body.id || newNoemaId("page"));
   const tags = Array.isArray(body.tags) ? body.tags.map(String).filter(Boolean) : parseList(body.tags);
   const content = [
     "#+begin meta",
     `id: ${id}`,
     `title: ${title}`,
     `date: ${new Date().toISOString().slice(0, 10)}`,
-    `kind: ${String(body.kind || "note").trim() || "note"}`,
+    `kind: ${String(body.kind || "page").trim() || "page"}`,
     `tags: ${tags.join(", ")}`,
     "refs: ",
     ...(repository.partition === "private" ? ["private: true"] : []),
@@ -538,4 +847,337 @@ export function publicWikiNotes(index) {
   return index.layout === "wiki"
     ? index.notes.filter((note) => note.partition === "public" && note.private !== true)
     : [];
+}
+
+async function wikiNoteById(root, pageId) {
+  const index = await buildWikiIndex(root, { layout: "wiki" });
+  const matches = index.notes.filter((note) => note.id === String(pageId || ""));
+  if (matches.length === 0) throw apiError(`Unknown Wiki page: ${String(pageId || "")}`, 404);
+  if (matches.length > 1) throw apiError(`Duplicate page id must be resolved first: ${String(pageId || "")}`, 409);
+  return { index, note: matches[0] };
+}
+
+function destinationFile(repository, body, fallbackName) {
+  const directory = cleanRelativePath(body.directory || "");
+  const filename = cleanRelativePath(body.filename || fallbackName);
+  const target = resolve(repository.path, directory, filename);
+  if (!inside(repository.path, target)) throw apiError("Destination must stay inside its repository");
+  if (existsSync(target)) throw apiError(`Destination already exists: ${relative(repository.path, target)}`, 409);
+  return target;
+}
+
+function ownedAssetDirectories(note, pageId = note.id) {
+  return ["images", "attachments"].map((kind) => ({
+    kind,
+    path: join(dirname(note.file), kind, pageId),
+  })).filter((entry) => existsSync(entry.path));
+}
+
+async function writeOperationJournal(root, operation) {
+  const dir = join(root, ".noema", "operations");
+  await mkdir(dir, { recursive: true });
+  const file = join(dir, `${operation.id}.json`);
+  await writeFile(file, `${JSON.stringify(operation, null, 2)}\n`, "utf8");
+  return file;
+}
+
+async function copyOwnedAssets(note, targetFile, sourceId, targetId) {
+  const copied = [];
+  for (const source of ownedAssetDirectories(note, sourceId)) {
+    const target = join(dirname(targetFile), source.kind, targetId);
+    await mkdir(dirname(target), { recursive: true });
+    await cp(source.path, target, { recursive: true, errorOnExist: true });
+    copied.push({ source: source.path, target });
+  }
+  return copied;
+}
+
+export async function moveWikiPage(rootValue, body = {}) {
+  const root = expandNoemaPath(rootValue);
+  const { note } = await wikiNoteById(root, body.pageId);
+  const sourceRepository = await repositoryFromId(root, note.repositoryId);
+  const targetRepository = await repositoryFromId(root, body.repositoryId || note.repositoryId);
+  if (
+    sourceRepository.partition === "private"
+    && targetRepository.partition === "public"
+    && body.confirm !== "MOVE PRIVATE TO PUBLIC"
+  ) {
+    throw apiError("Type MOVE PRIVATE TO PUBLIC after reviewing the page and dependency list", 409, "ERR_WIKI_PRIVACY_CONFIRM");
+  }
+  const target = destinationFile(targetRepository, body, basename(note.file));
+  const operation = {
+    id: newNoemaId("block"),
+    type: "move-page",
+    phase: "prepared",
+    pageId: note.id,
+    source: note.file,
+    target,
+    sourceRepositoryId: sourceRepository.id,
+    targetRepositoryId: targetRepository.id,
+    dependencies: note.dependencies,
+    createdAt: new Date().toISOString(),
+  };
+  const journal = await writeOperationJournal(root, operation);
+  const movedAssets = [];
+  try {
+    await mkdir(dirname(target), { recursive: true });
+    if (sourceRepository.id === targetRepository.id) {
+      await rename(note.file, target);
+      for (const asset of ownedAssetDirectories(note)) {
+        const destination = join(dirname(target), asset.kind, note.id);
+        await mkdir(dirname(destination), { recursive: true });
+        await rename(asset.path, destination);
+        movedAssets.push({ source: asset.path, target: destination });
+      }
+    } else {
+      await copyFile(note.file, target);
+      movedAssets.push(...await copyOwnedAssets(note, target, note.id, note.id));
+      await rm(note.file);
+      for (const asset of ownedAssetDirectories(note)) await rm(asset.path, { recursive: true });
+    }
+    await rm(journal, { force: true });
+    return {
+      ok: true,
+      type: "wiki-page-moved",
+      pageId: note.id,
+      source: note.file,
+      file: target,
+      assets: movedAssets,
+      repositoryId: targetRepository.id,
+    };
+  } catch (error) {
+    await writeFile(journal, `${JSON.stringify({ ...operation, phase: "failed", error: String(error?.message || error) }, null, 2)}\n`, "utf8").catch(() => {});
+    throw error;
+  }
+}
+
+export async function deleteWikiPage(rootValue, body = {}, options = {}) {
+  const root = expandNoemaPath(rootValue);
+  const { note } = await wikiNoteById(root, body.pageId);
+  if (note.backlinks.length > 0 && body.confirm !== "DELETE") {
+    throw apiError(
+      `${note.backlinks.length} page${note.backlinks.length === 1 ? "" : "s"} link to this page. Type DELETE to move it to Trash.`,
+      409,
+      "ERR_WIKI_BACKLINK_CONFIRM",
+    );
+  }
+  const trashRoot = options.trashRoot ? resolve(String(options.trashRoot)) : join(homedir(), ".Trash");
+  await mkdir(trashRoot, { recursive: true });
+  const base = `Noema-${slugify(note.title)}-${String(note.id).slice(0, 8)}`;
+  let bundle = join(trashRoot, base);
+  for (let suffix = 2; existsSync(bundle); suffix++) bundle = join(trashRoot, `${base}-${suffix}`);
+  await mkdir(bundle, { recursive: false });
+  const operation = {
+    id: newNoemaId("block"),
+    type: "trash-page",
+    phase: "prepared",
+    pageId: note.id,
+    source: note.file,
+    target: bundle,
+    backlinks: note.backlinks,
+    createdAt: new Date().toISOString(),
+  };
+  const journal = await writeOperationJournal(root, operation);
+  try {
+    const trashedFile = join(bundle, basename(note.file));
+    await rename(note.file, trashedFile);
+    const assets = [];
+    for (const asset of ownedAssetDirectories(note)) {
+      const target = join(bundle, `${asset.kind}-${note.id}`);
+      await rename(asset.path, target);
+      assets.push({ source: asset.path, target });
+    }
+    await rm(journal, { force: true });
+    return {
+      ok: true,
+      type: "wiki-page-trashed",
+      pageId: note.id,
+      file: note.file,
+      trashedFile,
+      trashedTo: bundle,
+      backlinks: note.backlinks,
+      assets,
+    };
+  } catch (error) {
+    await writeFile(journal, `${JSON.stringify({ ...operation, phase: "failed", error: String(error?.message || error) }, null, 2)}\n`, "utf8").catch(() => {});
+    throw error;
+  }
+}
+
+export async function copyWikiPage(rootValue, body = {}) {
+  const root = expandNoemaPath(rootValue);
+  const { note } = await wikiNoteById(root, body.pageId);
+  const targetRepository = await repositoryFromId(root, body.repositoryId || note.repositoryId);
+  const target = destinationFile(targetRepository, body, basename(note.file));
+  const id = newNoemaId("page");
+  const title = String(body.title || `${note.title} copy`).trim();
+  let content = await readFile(note.file, "utf8");
+  content = replaceMetaField(replaceMetaField(content, "id", id), "title", title);
+  content = content
+    .replaceAll(`images/${note.id}/`, `images/${id}/`)
+    .replaceAll(`attachments/${note.id}/`, `attachments/${id}/`);
+  await mkdir(dirname(target), { recursive: true });
+  await writeFile(target, content, { encoding: "utf8", flag: "wx" });
+  let assets = [];
+  try {
+    assets = await copyOwnedAssets(note, target, note.id, id);
+  } catch (error) {
+    await rm(target, { force: true });
+    throw error;
+  }
+  return { ok: true, type: "wiki-page-copied", sourceId: note.id, id, title, file: target, assets };
+}
+
+export async function mergeWikiPages(rootValue, body = {}) {
+  const root = expandNoemaPath(rootValue);
+  const survivor = (await wikiNoteById(root, body.survivorId)).note;
+  const duplicate = (await wikiNoteById(root, body.duplicateId)).note;
+  if (survivor.id === duplicate.id) throw apiError("Survivor and duplicate must be different pages");
+  if (body.confirm !== "MERGE") throw apiError("Type MERGE to preserve the duplicate as a redirect", 409);
+  let survivorContent = typeof body.content === "string" ? body.content : await readFile(survivor.file, "utf8");
+  const survivorMeta = metadata(survivorContent);
+  const aliases = [...new Set([...parseList(survivorMeta.aliases), duplicate.title])];
+  survivorContent = replaceMetaField(survivorContent, "aliases", aliases.join(", "));
+  const redirect = [
+    "#+begin meta",
+    `id: ${duplicate.id}`,
+    `title: ${duplicate.title}`,
+    "kind: redirect",
+    `redirect_to: roam://${survivor.id}`,
+    "#+end meta",
+    "",
+    `# ${duplicate.title}`,
+    "",
+    `Redirected to [${survivor.title}](roam://${survivor.id}).`,
+    "",
+  ].join("\n");
+  await writeFile(survivor.file, survivorContent, "utf8");
+  await writeFile(duplicate.file, redirect, "utf8");
+  return {
+    ok: true,
+    type: "wiki-pages-merged",
+    survivorId: survivor.id,
+    redirectId: duplicate.id,
+    survivorFile: survivor.file,
+    redirectFile: duplicate.file,
+  };
+}
+
+export function wikiTagIndex(index) {
+  const tags = new Map();
+  for (const note of index.notes || []) {
+    for (const raw of note.tags || []) {
+      const name = String(raw).trim().replace(/^#/, "");
+      if (!name) continue;
+      const key = canonicalTitle(name);
+      const entry = tags.get(key) || { name, count: 0, pages: [], variants: new Set() };
+      entry.count++;
+      entry.pages.push({ id: note.id, title: note.title, repositoryId: note.repositoryId, path: note.repositoryPath });
+      entry.variants.add(name);
+      tags.set(key, entry);
+    }
+  }
+  return [...tags.values()]
+    .map((entry) => ({ ...entry, variants: [...entry.variants].sort() }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+}
+
+export async function updateWikiTag(rootValue, body = {}) {
+  const root = expandNoemaPath(rootValue);
+  const action = String(body.action || "");
+  const from = String(body.from || body.tag || "").trim().replace(/^#/, "");
+  const to = String(body.to || "").trim().replace(/^#/, "");
+  if (!from || (action === "rename" && !to)) throw apiError("Tag values are required");
+  const index = await buildWikiIndex(root, { layout: "wiki" });
+  const changed = [];
+  for (const note of index.notes) {
+    const current = note.tags || [];
+    const next = action === "delete"
+      ? current.filter((tag) => canonicalTitle(tag) !== canonicalTitle(from))
+      : current.map((tag) => canonicalTitle(tag) === canonicalTitle(from) ? to : tag);
+    if (current.join("\0") === next.join("\0")) continue;
+    const content = await readFile(note.file, "utf8");
+    await writeFile(note.file, replaceMetaField(content, "tags", [...new Set(next)].join(", ")), "utf8");
+    changed.push({ id: note.id, file: note.file, tags: next });
+  }
+  return { ok: true, type: "wiki-tags-updated", action, changed };
+}
+
+function exportRelativePath(noteOrFile) {
+  return join(
+    String(noteOrFile.partition || "private"),
+    String(noteOrFile.repositoryId || "").split("/").at(-1) || "repository",
+    String(noteOrFile.repositoryPath || ""),
+  );
+}
+
+async function copyExportFile(staging, source, target) {
+  const file = join(staging, target);
+  await mkdir(dirname(file), { recursive: true });
+  await copyFile(source, file);
+  return target.split(sep).join("/");
+}
+
+async function archiveExport(staging, outputPath) {
+  await mkdir(dirname(outputPath), { recursive: true });
+  await rm(outputPath, { force: true });
+  if (process.platform === "darwin") {
+    await execFileAsync("ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", staging, outputPath]);
+  } else {
+    await execFileAsync("zip", ["-q", "-r", outputPath, "."], { cwd: staging });
+  }
+}
+
+export async function exportWiki(rootValue, body = {}) {
+  const root = expandNoemaPath(rootValue);
+  const outputPath = resolve(String(body.outputPath || ""));
+  if (!body.outputPath || !outputPath.toLowerCase().endsWith(".zip")) throw apiError("A .zip outputPath is required");
+  const index = await buildWikiIndex(root, { layout: "wiki" });
+  const staging = join(root, ".noema", "export-staging", newNoemaId("block"));
+  await mkdir(staging, { recursive: true });
+  const copied = new Set();
+  const selectedPages = [];
+  try {
+    if (body.mode === "physical") {
+      const repositoryId = String(body.repositoryId || "");
+      const prefix = cleanRelativePath(body.path || "");
+      for (const file of index.files.filter((entry) =>
+        entry.repositoryId === repositoryId
+        && (!prefix || entry.repositoryPath === prefix || entry.repositoryPath.startsWith(`${prefix}/`)))) {
+        copied.add(await copyExportFile(staging, file.file, exportRelativePath(file)));
+      }
+    } else {
+      const ids = new Set(Array.isArray(body.pageIds) ? body.pageIds.map(String) : []);
+      const tags = new Set(Array.isArray(body.tags) ? body.tags.map(canonicalTitle) : []);
+      for (const note of index.notes.filter((item) =>
+        ids.has(item.id) || (tags.size > 0 && item.tags.some((tag) => tags.has(canonicalTitle(tag)))))) {
+        selectedPages.push(note);
+        copied.add(await copyExportFile(staging, note.file, exportRelativePath(note)));
+        for (const dependency of note.dependencies.filter((item) => item.status === "resolved" && item.path)) {
+          const repository = index.repositories.find((item) => item.id === note.repositoryId);
+          if (!repository) continue;
+          const source = join(repository.path, dependency.path);
+          copied.add(await copyExportFile(staging, source, join(note.partition, repository.name, dependency.path)));
+        }
+      }
+    }
+    const manifest = {
+      schema: 1,
+      exportedAt: new Date().toISOString(),
+      mode: body.mode === "physical" ? "physical" : "wiki-selection",
+      files: [...copied].sort(),
+      pages: selectedPages.map((note) => ({
+        id: note.id,
+        title: note.title,
+        repositoryId: note.repositoryId,
+        path: note.repositoryPath,
+        links: note.refs,
+      })),
+    };
+    await writeFile(join(staging, "noema-export.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    await archiveExport(staging, outputPath);
+    return { ok: true, type: "wiki-export", outputPath, fileCount: copied.size, pageCount: selectedPages.length };
+  } finally {
+    await rm(staging, { recursive: true, force: true }).catch(() => {});
+  }
 }

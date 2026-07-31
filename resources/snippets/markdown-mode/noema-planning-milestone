@@ -3,4 +3,4 @@
 # key: apmile
 # group: Noema planning DSL
 # --
-@@milestone ${1:Milestone} {}$0
+@@milestone ${1:Milestone} {id: `(my/noema-new-id "block")`}$0

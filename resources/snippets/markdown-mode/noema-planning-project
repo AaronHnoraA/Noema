@@ -3,4 +3,4 @@
 # key: approject
 # group: Noema planning DSL
 # --
-@@project(${1:active}) ${2:Project name} {}$0
+@@project(${1:active}) ${2:Project name} {id: `(my/noema-new-id "block")`}$0

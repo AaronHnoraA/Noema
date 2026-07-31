@@ -139,6 +139,17 @@ describe("aaronnote snippets", () => {
     expect(snippetBrowserCompatibility("`$1` $0").compatible).toBe(true);
   });
 
+  test("expands the shared Noema UUID primitive without enabling arbitrary Lisp", () => {
+    const expanded = expandSnippetBody({
+      key: "anchor",
+      mode: "markdown-mode",
+      body: "{#`(my/noema-new-id \"block\")`}$0",
+    }, { newId: () => "0198fbac-0780-7c99-85e6-333333333333" });
+    expect(expanded.text).toBe("{#0198fbac-0780-7c99-85e6-333333333333}");
+    expect(snippetBrowserCompatibility("`(my/noema-new-id \"page\")`").compatible).toBe(true);
+    expect(snippetBrowserCompatibility("`(shell-command \"uuidgen\")`").compatible).toBe(false);
+  });
+
   test("local usage affects only equal match tiers and can be cleared", () => {
     const values = new Map<string, string>();
     const storage = {

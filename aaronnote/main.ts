@@ -38,6 +38,7 @@ import {
   type BibliographyDocument,
   type BibliographyReference,
   type LanguageToolSettings,
+  type WikiIndex,
 } from "./api-client.ts";
 import { Epoch } from "../src/async-epoch.ts";
 import { CoalescedTimer } from "../src/coalesced-timer.ts";
@@ -132,6 +133,7 @@ import {
   installNoemaThemeRuntime,
   loadNoemaAppConfig,
 } from "./theme-runtime.ts";
+import { wikiCompletionSnippets, wikiLinkCompletionContext } from "./wiki-completion.ts";
 
 const removeNoemaThemeRuntime = installNoemaThemeRuntime();
 const root = document.querySelector<HTMLElement>("#app");
@@ -721,6 +723,8 @@ let lastNotesIndexVersion = 0;
 // True when a notes-index-changed event arrived while the page was hidden;
 // triggers reloadNotes on the next visibility-restore.
 let pendingNotesRefresh = false;
+let wikiIndexCache: WikiIndex | null = null;
+let wikiIndexPromise: Promise<WikiIndex> | null = null;
 const notesRefreshTimer = new CoalescedTimer(500);
 // Ephemeral request-level cache for completions — NOT a roam business cache.
 // Holds results only for the duration of the current completion session (same
@@ -740,6 +744,27 @@ let snippetCompletionArmed = false;
 let snippetRenderKey = "";
 let snippetPopupMatchKey = "";
 const snippetUsage = new SnippetUsageStore();
+
+function loadWikiCompletionIndex(force = false): Promise<WikiIndex> {
+  if (!force && wikiIndexCache) return Promise.resolve(wikiIndexCache);
+  if (!force && wikiIndexPromise) return wikiIndexPromise;
+  const request = force ? api.wiki.refresh() : api.wiki.bootstrap();
+  wikiIndexPromise = request.then((value) => {
+    wikiIndexCache = value;
+    return value;
+  }).finally(() => {
+    wikiIndexPromise = null;
+  });
+  return wikiIndexPromise;
+}
+
+function openWikiPageCreation(title: string): void {
+  const url = new URL("/wiki", location.origin);
+  url.searchParams.set("new", "1");
+  url.searchParams.set("title", title);
+  if (currentFile) url.searchParams.set("source", currentFile);
+  window.open(url, "_blank", "noopener");
+}
 
 const BUILTIN_SNIPPET_SOURCE = "aaronnote:builtin";
 const LATEX_MARK_SNIPPETS: SnippetSummary[] = latexMarkSnippetDefinitions().map((snippet) => ({
@@ -4191,6 +4216,7 @@ function openExternalUrl(href: string, options: { newWindow?: boolean } = {}): v
       if (result.status === "missing") {
         url.searchParams.set("new", "1");
         url.searchParams.set("title", missingTitle);
+        if (currentFile) url.searchParams.set("source", currentFile);
       } else {
         url.searchParams.set("q", missingTitle);
       }
@@ -7303,6 +7329,19 @@ function updateSnippetPopup(ctx: ReturnType<typeof editor.cursorContext>): void 
     return;
   }
 
+  const wikiContext = wikiLinkCompletionContext(ctx.before, ctx.after);
+  if (wikiContext) {
+    const renderPrefix = `[[${wikiContext.prefix}`;
+    scheduleAsyncCompletion(
+      `wiki:${wikiContext.hasClosingDelimiter ? "closed" : "open"}:${wikiContext.prefix}`,
+      renderPrefix,
+      wikiContext.prefix.length,
+      ctx.rect,
+      async () => wikiCompletionSnippets((await loadWikiCompletionIndex()).notes, wikiContext),
+    );
+    return;
+  }
+
   // Link target completion ([...](here) or inline href position)
   const linkTarget = markdownInlineLinkTargetAtCursor();
   if (linkTarget) {
@@ -7504,6 +7543,9 @@ function chooseSnippetPopupItem(): void {
   hideSnippetPopup();
   snippetSuppressedPrefix = "";
   insertSnippet(snippet, deleteBefore);
+  if (snippet.provider === "wiki-create") {
+    openWikiPageCreation(String(snippet.source || snippet.key || "").trim());
+  }
 }
 
 function acceptSnippetPopupItem(): boolean {
@@ -8023,6 +8065,14 @@ function runHostCommand(detail: unknown): boolean {
       } else {
         notesRefreshTimer.schedule(() => void reloadNotes(false));
       }
+      return true;
+    }
+    case "wiki-index-changed": {
+      wikiIndexCache = null;
+      wikiIndexPromise = null;
+      hideSnippetPopup();
+      clearCompletionCache();
+      scheduleAssistUpdate({ snippets: true });
       return true;
     }
     case "bibliography-index-changed":

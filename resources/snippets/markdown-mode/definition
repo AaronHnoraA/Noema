@@ -3,7 +3,7 @@
 # key: def
 # group: Noema local
 # --
-#+begin definition ${1:name}
+#+begin definition ${1:name} {#`(my/noema-new-id "block")`}
 ${2:Definition.}
 #+end definition
 $0

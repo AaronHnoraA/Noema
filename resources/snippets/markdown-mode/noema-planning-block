@@ -4,5 +4,6 @@
 # group: Noema planning DSL
 # --
 @@todo(${1:doing}) [${2:Task}] {
+id: `(my/noema-new-id "block")`
 }
 $0

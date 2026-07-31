@@ -3,4 +3,4 @@
 # key: aptodo
 # group: Noema planning DSL
 # --
-@@todo(${1:todo}) [${2:Task}]$0
+@@todo(${1:todo}) [${2:Task}] {id: `(my/noema-new-id "block")`}$0

@@ -1,6 +1,7 @@
 import type { Editor } from "../src/lib.ts";
 import type { ViewUpdate } from "@codemirror/view";
 import type { SnippetSummary } from "./types.ts";
+import { newNoemaId, type NoemaIdKind } from "../shared/identity.mjs";
 
 export type SnippetTabstop = {
   index: number;
@@ -25,10 +26,12 @@ type SnippetFrame = {
 
 export type SnippetExpansionOptions = {
   selectedText?: string;
+  newId?: (kind: NoemaIdKind) => string;
 };
 
 const SAFE_SELECTED_TEXT_RE = /`\(or\s+yas-selected-text\s+(?:"([^"]*)"|'([^']*)|nil)\)`/g;
 const SAFE_CHOICE_RE = /\$\{(\d+):\$\$\(yas-choose-value\s+'\(([^)]*)\)\)\}/g;
+const SAFE_NOEMA_ID_RE = /`\(my\/noema-new-id\s+(?:"(repository|page|block)"|'(repository|page|block))\)`/g;
 const YAS_TABSTOP_RE = /\$(?:\d+|\{\d+(?::[^}]*)?\})/;
 
 function hasDynamicBacktickExpression(body: string): boolean {
@@ -50,7 +53,11 @@ function decodeYasQuotedList(source: string): string[] {
   return values;
 }
 
-function portableSnippetBody(body: string, selectedText: string): string {
+function portableSnippetBody(
+  body: string,
+  selectedText: string,
+  idFactory: (kind: NoemaIdKind) => string,
+): string {
   return body
     .replace(SAFE_SELECTED_TEXT_RE, (_whole, doubleFallback: string, singleFallback: string) => (
       selectedText || doubleFallback || singleFallback || ""
@@ -58,13 +65,17 @@ function portableSnippetBody(body: string, selectedText: string): string {
     .replace(SAFE_CHOICE_RE, (_whole, index: string, raw: string) => {
       const choices = decodeYasQuotedList(raw);
       return choices.length > 0 ? `\${${index}|${choices.join(",")}|}` : `\${${index}}`;
-    });
+    })
+    .replace(SAFE_NOEMA_ID_RE, (_whole, doubleKind: string, quotedKind: string) => (
+      idFactory((doubleKind || quotedKind) as NoemaIdKind)
+    ));
 }
 
 export function snippetBrowserCompatibility(body: string): { compatible: boolean; diagnostic?: string } {
   const stripped = String(body || "")
     .replace(SAFE_SELECTED_TEXT_RE, "")
-    .replace(SAFE_CHOICE_RE, "");
+    .replace(SAFE_CHOICE_RE, "")
+    .replace(SAFE_NOEMA_ID_RE, "");
   if (hasDynamicBacktickExpression(stripped) || /\$\$?\([^)]*\)/.test(stripped)) {
     return { compatible: false, diagnostic: "dynamic Emacs Lisp is not executed in Noema" };
   }
@@ -107,7 +118,11 @@ function mapSelectionThroughReplacement(
 }
 
 export function expandSnippetBody(snippet: SnippetSummary, options: SnippetExpansionOptions = {}): ParsedSnippet {
-  const body = normalizeSnippetBody(portableSnippetBody(snippet.body ?? "", options.selectedText ?? ""));
+  const body = normalizeSnippetBody(portableSnippetBody(
+    snippet.body ?? "",
+    options.selectedText ?? "",
+    options.newId ?? newNoemaId,
+  ));
   const values = new Map<number, string>();
   const tabstops: SnippetTabstop[] = [];
   let text = "";

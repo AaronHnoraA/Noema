@@ -54,7 +54,7 @@ describe("Noema app config", () => {
             repository: "",
             directory: "",
             filenamePattern: "{slug}.md",
-            kind: "note",
+            kind: "page",
           }],
         },
       },

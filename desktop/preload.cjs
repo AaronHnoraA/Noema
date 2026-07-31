@@ -17,6 +17,9 @@ contextBridge.exposeInMainWorld("noemaDesktop", {
   revealPath(file) {
     return ipcRenderer.invoke("noema:reveal-path", file);
   },
+  chooseDirectory(options = {}) {
+    return ipcRenderer.invoke("noema:choose-directory", options);
+  },
   onCommand(callback) {
     if (typeof callback !== "function") return () => {};
     const listener = (_event, detail) => callback(detail);
