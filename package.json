@@ -21,7 +21,8 @@
       "import": "./dist/lib/typora-web.js"
     },
     "./widgets.css": "./src/styles/widgets.css",
-    "./theme-typora.css": "./src/styles/theme-typora.css"
+    "./theme-typora.css": "./src/styles/themes/theme-typora.css",
+    "./themes/*": "./src/styles/themes/*"
   },
   "files": [
     "dist/lib",
@@ -104,6 +105,7 @@
       "js/**/*",
       "agents/**/*",
       "resources/**/*",
+      "src/styles/themes/**/*",
       "package.json",
       "node_modules/**/*",
       "web-host.mjs"

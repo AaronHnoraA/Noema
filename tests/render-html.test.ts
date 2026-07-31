@@ -9,6 +9,14 @@ import {
 } from "../src/render-html.ts";
 
 describe("shared markdown HTML renderer", () => {
+  test("renders Wiki links with optional labels while leaving code untouched", () => {
+    const html = renderMarkdownHTML("[[Tensor]] and [[Daily Note|today]] and `[[code]]`");
+    expect(html).toContain('href="roam://wiki/Tensor"');
+    expect(html).toContain('data-wiki-target="Tensor"');
+    expect(html).toContain(">today</a>");
+    expect(html).toContain("<code>[[code]]</code>");
+  });
+
   test("keeps Jupyter commands hidden by default and emits slide hydration slots on request", () => {
     const markdown = "Before\n\n@@cell(python, python3) [demo-cell]\n\nAfter";
     expect(renderMarkdownHTML(markdown)).not.toContain("demo-cell");

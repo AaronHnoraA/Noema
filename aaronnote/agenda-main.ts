@@ -6,9 +6,16 @@
 import "./style.css";
 import "../src/styles/aaron-ui-tokens.css";
 import "../src/styles/aaron-ui-elegant.css";
+import "../src/styles/theme-loader.ts";
 import { api } from "./api-client.ts";
 import type { TodoItem } from "./api-client.ts";
 import { openAgendaView, refreshAgendaView } from "./agenda-view.ts";
+import { installNoemaThemeRuntime, loadNoemaAppConfig } from "./theme-runtime.ts";
+
+const removeNoemaThemeRuntime = installNoemaThemeRuntime();
+void loadNoemaAppConfig().catch((error) => {
+  console.error("[noema-theme] unable to load settings", error);
+});
 
 let statusEl: HTMLElement | null = null;
 
@@ -43,3 +50,4 @@ window.addEventListener("aaronnote:command", (event) => {
     void refreshAgendaView();
   }
 });
+window.addEventListener("beforeunload", removeNoemaThemeRuntime, { once: true });

@@ -50,95 +50,9 @@
 }
 
 :root {
-  color-scheme: dark;
   font-family: var(--aaron-font-body);
-  --aaronnote-bg: #141a27;
-  --aaronnote-chrome: #161d2c;
-  --aaronnote-border: #435574;
-  --aaronnote-muted: #a9bad6;
-  --aaronnote-vim-accent: #7ee7ff;
-  --aaronnote-vim-visual: #d2a8ff;
   --aaronnote-layout-zoom: 1;
   --aaronnote-visual-zoom: 1;
-  --aaronnote-panel-bg: rgb(22 29 44 / 96%);
-  --aaronnote-surface: rgb(36 46 67 / 94%);
-  --aaron-ink: #e2eaff;
-  --aaron-muted: #a9bad6;
-  --aaron-faint: #7081a0;
-  --aaron-paper: #171f2f;
-  --aaron-paper-soft: #1e273a;
-  --aaron-paper-line: #435574;
-  --aaron-panel: #242e43;
-  --aaron-panel-strong: #2c3852;
-  --aaron-red: #ff8fa3;
-  --aaron-red-dark: #ffb2bf;
-  --aaron-link: #7ee7ff;
-  --aaron-link-soft: #1d3b48;
-  --aaron-accent: #7ee7ff;
-  --aaron-accent-sand: #ffd86a;
-  --aaron-accent-soft: #1d3b48;
-  --aaron-accent-2: #d2a8ff;
-  --aaron-green: #8effa8;
-  --aaron-green-soft: #79cf8f;
-  --aaron-code-bg: #182238;
-  --aaron-danger-bg: #382431;
-  --aaron-title: #ff9bad;
-  --aaron-heading-1: #ff9bad;
-  --aaron-heading-2: #7ee7ff;
-  --aaron-heading-3: #d2a8ff;
-  --aaron-heading-4: #8effa8;
-  --aaron-heading-5: #ffd86a;
-  --aaron-heading-6: #9fb7ff;
-  --aaron-cursor: #7ee7ff;
-  --aaron-cursor-glow: rgb(126 231 255 / 32%);
-  --aaron-math-ink: #d7defb;
-  --aaron-math-accent: #aebfff;
-  --aaron-math-muted: #9aa8c8;
-  --aaron-selection: rgb(49 70 94 / 48%);
-  --aaron-highlight: rgb(255 216 106 / 22%);
-  --aaron-shadow: 0 18px 46px rgb(0 0 0 / 38%);
-  --aaron-callout-note: #95c7ff;
-  --aaron-callout-tip: #8effa8;
-  --aaron-callout-info: #7ee7ff;
-  --aaron-callout-warning: #ffd86a;
-  --aaron-callout-danger: #ff8fa3;
-  --aaron-callout-quote: #d2a8ff;
-  --c-def: #ffd86a;
-  --c-thm: #8effa8;
-  --c-lemma: #95c7ff;
-  --c-cor: #d2a8ff;
-  --c-prop: #ffc5cf;
-  --c-proof: #7ee7ff;
-  --c-example: #e8b85f;
-  --c-attend: #ff8fa3;
-  --c-warning: #ffb86b;
-  --c-note: #86f6e4;
-  --c-info: #64d2ff;
-  --c-summary: #c6a0f6;
-  --c-fold: #b7c6e8;
-  --c-comment: #f2a272;
-  --c-convention: #f0a6ca;
-  --c-axiom: #ffcf70;
-  --c-assumption: #e6b86a;
-  --c-conjecture: #ff9f80;
-  --c-claim: #b8c0ff;
-  --c-remark: #9ccfd8;
-  --c-notation: #7dcfff;
-  --c-observation: #a6da95;
-  --c-exercise: #c099ff;
-  --c-solution: #8bd5ca;
-  --c-algorithm: #73daca;
-  --c-question: #f5bde6;
-  --c-env-default: #a7b0c4;
-  --aaron-font-latin: "AaronLatinSystem";
-  --aaron-font-english-fallback: -apple-system, BlinkMacSystemFont, "SF Pro Text";
-  --aaron-font-chinese: "FZLiuGongQuanKaiShuJF";
-  --aaron-font-body: var(--aaron-font-latin), var(--aaron-font-chinese), var(--aaron-font-english-fallback), Georgia, serif;
-  --aaron-font-heading: "ExcalifontLocal", "Excalifont", var(--aaron-font-latin), var(--aaron-font-chinese), var(--aaron-font-english-fallback), Georgia, serif;
-  --aaron-font-title: var(--aaron-font-heading);
-  --aaron-font-mono: "Fira Code", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --aaron-font-math: "GFS Neohellenic Math", "Libertinus Math", "STIX Two Math", "Times New Roman", serif;
-  --aaron-font-sans: system-ui, sans-serif;
 }
 
 * {
@@ -197,8 +111,8 @@ button:disabled {
   height: 54px;
   padding: 0 22px 0 82px;
   border-bottom: 1px solid color-mix(in srgb, var(--aaronnote-border), transparent 58%);
-  background: color-mix(in srgb, var(--aaronnote-chrome), #0f1420 22%);
-  box-shadow: 0 7px 22px rgb(0 0 0 / 16%);
+  background: color-mix(in srgb, var(--aaronnote-chrome), var(--aaron-paper) 22%);
+  box-shadow: 0 7px 22px color-mix(in srgb, var(--aaron-ink), transparent 84%);
   color: var(--aaron-ink);
   -webkit-app-region: drag;
   user-select: none;
@@ -221,7 +135,7 @@ button:disabled {
   border-radius: 8px;
   padding: 0 0 2px;
   background: transparent;
-  color: #e4ebff;
+  color: var(--aaron-ink);
   font: 27px/1 var(--aaron-font-sans);
 }
 
@@ -239,15 +153,15 @@ button:disabled {
 
 .noema-desktop-titlebar-controls button:hover,
 .noema-desktop-titlebar-controls button:focus-visible {
-  background: rgb(126 231 255 / 11%);
+  background: color-mix(in srgb, var(--aaron-accent), transparent 89%);
   color: var(--aaron-accent);
-  outline: 1px solid rgb(126 231 255 / 20%);
+  outline: 1px solid color-mix(in srgb, var(--aaron-accent), transparent 80%);
 }
 
 .noema-desktop-titlebar-name {
   min-width: 0;
   overflow: hidden;
-  color: #e5ebfd;
+  color: var(--aaron-ink);
   font: 700 20px/1.2 var(--aaron-font-mono);
   letter-spacing: 0.01em;
   text-overflow: ellipsis;
@@ -262,8 +176,8 @@ button:disabled {
   place-items: center;
   border: 2px dashed color-mix(in srgb, var(--aaron-accent), transparent 18%);
   border-radius: 18px;
-  background: rgb(15 20 32 / 82%);
-  box-shadow: inset 0 0 0 4px rgb(126 231 255 / 5%), 0 22px 80px rgb(0 0 0 / 35%);
+  background: color-mix(in srgb, var(--aaronnote-bg), transparent 18%);
+  box-shadow: inset 0 0 0 4px color-mix(in srgb, var(--aaron-accent), transparent 95%), var(--aaron-shadow);
   color: var(--aaron-accent);
   font: 700 17px/1.4 var(--aaron-font-sans);
   letter-spacing: 0.01em;
@@ -397,8 +311,8 @@ body[data-host-mode="desktop"] .aaronnote-status-hud {
 .aaronnote-jupyter-stealth-button:hover,
 .aaronnote-jupyter-stealth-button:focus-visible,
 .aaronnote-jupyter-stealth-button[aria-expanded="true"] {
-  border-color: rgb(126 231 255 / 35%);
-  background: rgb(126 231 255 / 8%);
+  border-color: color-mix(in srgb, var(--aaron-accent), transparent 65%);
+  background: color-mix(in srgb, var(--aaron-accent), transparent 92%);
   opacity: 1;
 }
 
@@ -1069,8 +983,8 @@ body[data-host-mode="desktop"] .aaronnote-status-hud {
 }
 
 .aaronnote-jupyter-toolbar button:hover {
-  border-color: rgb(126 231 255 / 38%);
-  background: rgb(126 231 255 / 8%);
+  border-color: color-mix(in srgb, var(--aaron-accent), transparent 62%);
+  background: color-mix(in srgb, var(--aaron-accent), transparent 92%);
 }
 
 .aaronnote-jupyter-kernel-tool {
@@ -1148,7 +1062,7 @@ body[data-host-mode="desktop"] .aaronnote-status-hud {
 
 .aaronnote-jupyter-kernel-tool button:hover,
 .aaronnote-jupyter-kernel-tool select:focus {
-  border-color: rgb(126 231 255 / 38%);
+  border-color: color-mix(in srgb, var(--aaron-accent), transparent 62%);
   outline: none;
 }
 
@@ -1285,8 +1199,8 @@ body[data-host-mode="desktop"] .aaronnote-status-hud {
 }
 
 .aaronnote-jupyter-runtime button:hover {
-  border-color: rgb(126 231 255 / 38%);
-  background: rgb(126 231 255 / 8%);
+  border-color: color-mix(in srgb, var(--aaron-accent), transparent 62%);
+  background: color-mix(in srgb, var(--aaron-accent), transparent 92%);
 }
 
 .aaronnote-jupyter-runtime-list {
@@ -1383,7 +1297,7 @@ body[data-host-mode="desktop"] .aaronnote-status-hud {
 .aaronnote-bib-context-preview strong {
   display: block;
   margin-bottom: 4px;
-  color: #b7abff;
+  color: var(--aaron-accent-2);
   font: 700 0.82rem/1.3 var(--aaron-font-sans);
 }
 
@@ -1517,7 +1431,7 @@ body[data-host-mode="desktop"] .aaronnote-status-hud {
 .aaronnote-layout-zoom-controls button {
   min-height: 30px;
   border-color: color-mix(in srgb, var(--aaron-heading-2), transparent 58%);
-  background: rgb(22 32 50 / 74%);
+  background: color-mix(in srgb, var(--aaron-paper), var(--aaron-accent) 4%);
   color: var(--aaron-ink);
   font: 760 12px/1 var(--aaron-font-mono);
 }
@@ -4001,21 +3915,21 @@ html.aaronnote-paused *::after {
   align-items: baseline;
   padding: 0 0.18em;
   border-radius: 4px;
-  color: #9d8cff;
-  background: color-mix(in srgb, #9d8cff 14%, transparent);
+  color: var(--aaron-accent-2);
+  background: color-mix(in srgb, var(--aaron-accent-2) 14%, transparent);
   box-decoration-break: clone;
   cursor: pointer;
   font-variant-numeric: tabular-nums;
 }
 
 .inline-cite-widget:hover {
-  background: color-mix(in srgb, #9d8cff 24%, transparent);
-  color: #b7abff;
+  background: color-mix(in srgb, var(--aaron-accent-2) 24%, transparent);
+  color: color-mix(in srgb, var(--aaron-accent-2), var(--aaron-ink) 22%);
 }
 
 .inline-cite-widget.is-error {
-  color: #ff6b8a;
-  background: color-mix(in srgb, #ff6b8a 16%, transparent);
+  color: var(--aaron-danger);
+  background: color-mix(in srgb, var(--aaron-danger) 16%, transparent);
 }
 
 .aaronnote-bib-panel {
@@ -4053,16 +3967,16 @@ html.aaronnote-paused *::after {
 
 .aaronnote-bib-item:hover,
 .aaronnote-bib-item.is-highlight {
-  background: color-mix(in srgb, #9d8cff 12%, transparent);
-  box-shadow: inset 3px 0 0 #9d8cff;
+  background: color-mix(in srgb, var(--aaron-accent-2) 12%, transparent);
+  box-shadow: inset 3px 0 0 var(--aaron-accent-2);
 }
 
 .aaronnote-bib-link {
   margin-left: 7px;
   padding: 1px 6px;
-  border: 1px solid color-mix(in srgb, #9d8cff 45%, transparent);
+  border: 1px solid color-mix(in srgb, var(--aaron-accent-2) 45%, transparent);
   border-radius: 4px;
   background: transparent;
-  color: #b7abff;
+  color: color-mix(in srgb, var(--aaron-accent-2), var(--aaron-ink) 22%);
   font: 0.78rem/1.4 var(--aaron-font-sans);
 }

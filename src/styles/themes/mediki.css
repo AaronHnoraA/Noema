@@ -1,0 +1,121 @@
+/*
+ * Mediki — a cool, information-dense medical Wiki theme.
+ */
+:root[data-noema-theme="mediki"] {
+  color-scheme: light;
+  --noema-window-background: #f5f9f8;
+  --aaronnote-bg: #f5f9f8;
+  --aaronnote-chrome: #e8f0ef;
+  --aaronnote-border: #aebfbd;
+  --aaronnote-muted: #5e7175;
+  --aaronnote-vim-accent: #087f78;
+  --aaronnote-vim-visual: #4969a2;
+  --aaronnote-panel-bg: rgb(247 252 251 / 97%);
+  --aaronnote-surface: rgb(255 255 255 / 96%);
+  --aaron-ink: #17313b;
+  --aaron-muted: #5e7175;
+  --aaron-faint: #829398;
+  --aaron-paper: #ffffff;
+  --aaron-paper-soft: #e8f0ef;
+  --aaron-paper-line: #b7c8c6;
+  --aaron-panel: #f7fbfa;
+  --aaron-panel-strong: #dce9e7;
+  --aaron-red: #b13d54;
+  --aaron-red-dark: #8f3044;
+  --aaron-link: #146d86;
+  --aaron-link-soft: #dceef1;
+  --aaron-accent: #087f78;
+  --aaron-accent-sand: #8a6a22;
+  --aaron-accent-soft: #d8efec;
+  --aaron-accent-2: #4969a2;
+  --aaron-green: #28744d;
+  --aaron-green-soft: #478565;
+  --aaron-code-bg: #e7efef;
+  --aaron-danger: #b13d54;
+  --aaron-danger-bg: #f5dfe4;
+  --aaron-title: #173f59;
+  --aaron-heading-1: #173f59;
+  --aaron-heading-2: #087f78;
+  --aaron-heading-3: #4969a2;
+  --aaron-heading-4: #28744d;
+  --aaron-heading-5: #7b671f;
+  --aaron-heading-6: #536b78;
+  --aaron-cursor: #087f78;
+  --aaron-cursor-glow: rgb(8 127 120 / 22%);
+  --aaron-math-ink: #17313b;
+  --aaron-math-accent: #28566a;
+  --aaron-math-muted: #5e7175;
+  --aaron-selection: rgb(8 127 120 / 18%);
+  --aaron-highlight: rgb(217 192 80 / 25%);
+  --aaron-shadow: 0 14px 36px rgb(32 63 68 / 16%);
+  --aaron-callout-note: #3d6f91;
+  --aaron-callout-tip: #28744d;
+  --aaron-callout-info: #087f78;
+  --aaron-callout-warning: #8a6a22;
+  --aaron-callout-danger: #b13d54;
+  --aaron-callout-quote: #4969a2;
+  --c-def: #8a6a22;
+  --c-thm: #28744d;
+  --c-lemma: #3d6f91;
+  --c-cor: #4969a2;
+  --c-prop: #9f4660;
+  --c-proof: #087f78;
+  --c-example: #7b671f;
+  --c-attend: #b13d54;
+  --c-warning: #9a5c2b;
+  --c-note: #087f78;
+  --c-info: #146d86;
+  --c-summary: #4969a2;
+  --c-fold: #5e7175;
+  --c-comment: #8d6039;
+  --c-convention: #8c536e;
+  --c-axiom: #8a6a22;
+  --c-assumption: #7d6730;
+  --c-conjecture: #9a5c2b;
+  --c-claim: #4969a2;
+  --c-remark: #39716d;
+  --c-notation: #146d86;
+  --c-observation: #28744d;
+  --c-exercise: #5d5d9a;
+  --c-solution: #39716d;
+  --c-algorithm: #16766f;
+  --c-question: #8c536e;
+  --c-env-default: #5e7175;
+  --aaron-font-body: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", var(--aaron-font-chinese), sans-serif;
+  --aaron-font-heading: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", var(--aaron-font-chinese), sans-serif;
+  --aaron-font-title: var(--aaron-font-heading);
+  --aaron-font-prose: "AaronLatinModernRoman", Georgia, var(--aaron-font-chinese), serif;
+  --aaron-role-critical: #b13d54;
+  --aaron-role-popout: #087f78;
+  --aaron-role-strong: #17313b;
+  --aaron-role-salient: #28566a;
+  --aaron-role-faded: #5e7175;
+  --aaron-role-subtle: #b7c8c6;
+  --aaron-surface-base: #f5f9f8;
+  --aaron-surface-raised: #f7fbfa;
+  --aaron-surface-overlay: #ffffff;
+  --aaron-surface-panel: #e8f0ef;
+  --aaron-surface-selected: #d8efec;
+  --aaron-state-focus: #087f78;
+  --aaron-state-hover: #e8f0ef;
+  --aaron-state-active: #d8e8e6;
+  --aaron-state-disabled: #91a19f;
+  --aaron-status-success: #28744d;
+  --aaron-status-warning: #8a6a22;
+  --aaron-status-error: #b13d54;
+  --aaron-status-info: #146d86;
+  --aaron-radius-2: 3px;
+}
+
+:root[data-noema-theme="mediki"] .cm-editor h1 {
+  text-align: left;
+}
+
+:root[data-noema-theme="mediki"] .cm-editor h1::after {
+  width: 100%;
+  margin-left: 0;
+}
+
+:root[data-noema-theme="mediki"] .aaronnote-section-heading-inner {
+  border-radius: 0;
+}

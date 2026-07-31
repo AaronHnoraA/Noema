@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "defaultTheme": "aaronnote",
+  "themes": [
+    {
+      "id": "aaronnote",
+      "name": "Aaronnote",
+      "file": "aaronnote.css",
+      "colorScheme": "dark",
+      "backgroundColor": "#141a27",
+      "description": "Noema's original dark Wave theme"
+    },
+    {
+      "id": "claude",
+      "name": "Claude",
+      "file": "claude.css",
+      "colorScheme": "light",
+      "backgroundColor": "#f4f0e8",
+      "description": "Warm paper, charcoal ink, and terracotta accents"
+    },
+    {
+      "id": "mediki",
+      "name": "Mediki",
+      "file": "mediki.css",
+      "colorScheme": "light",
+      "backgroundColor": "#f5f9f8",
+      "description": "Cool clinical paper with ink-blue and teal accents"
+    }
+  ]
+}

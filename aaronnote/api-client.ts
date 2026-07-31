@@ -61,6 +61,50 @@ export type LanguageToolProbeMsg = {
   version?: string;
   message?: string;
 };
+export type NoemaAppTheme = {
+  id: string;
+  name: string;
+  file: string;
+  colorScheme: "dark" | "light";
+  backgroundColor: string;
+  description: string;
+};
+export type NoemaAppConfig = {
+  schemaVersion: 2;
+  appearance: { theme: string };
+  workspace: { root: string; layout: "legacy" | "wiki" };
+  wiki: {
+    creation: {
+      activeProfile: string;
+      profiles: Array<{
+        id: string;
+        name: string;
+        partition: "public" | "private";
+        repository: string;
+        directory: string;
+        filenamePattern: string;
+        kind: string;
+      }>;
+    };
+  };
+};
+export type NoemaAppConfigMsg = {
+  ok?: boolean;
+  configFile: string;
+  config: NoemaAppConfig;
+  defaults: NoemaAppConfig;
+  themes: NoemaAppTheme[];
+  activeTheme: NoemaAppTheme;
+  revision: string;
+  diagnostics: Array<{ code: string; message: string }>;
+  message?: string;
+};
+export type NoemaAppConfigUpdate = {
+  appearance?: { theme?: string };
+  workspace?: { root?: string; layout?: "legacy" | "wiki" };
+  wiki?: { creation?: NoemaAppConfig["wiki"]["creation"] };
+  revision?: string;
+};
 type ProseCheckMsg = {
   ok?: boolean;
   diagnostics?: Array<{
@@ -532,6 +576,59 @@ type NativeApi = {
   };
   config?: {
     katexMacros?: () => Promise<unknown>;
+    app?: () => Promise<unknown>;
+    updateApp?: (body: NoemaAppConfigUpdate) => Promise<unknown>;
+  };
+  wiki?: {
+    bootstrap?: () => Promise<unknown>;
+    environment?: () => Promise<unknown>;
+    refresh?: () => Promise<unknown>;
+    resolveLink?: (body: Record<string, unknown>) => Promise<unknown>;
+    initWorkspace?: () => Promise<unknown>;
+    initRepository?: (body: Record<string, unknown>) => Promise<unknown>;
+    cloneRepository?: (body: Record<string, unknown>) => Promise<unknown>;
+    repositoryStatus?: (body: Record<string, unknown>) => Promise<unknown>;
+    git?: (body: Record<string, unknown>) => Promise<unknown>;
+    createPage?: (body: Record<string, unknown>) => Promise<unknown>;
+  };
+};
+
+export type WikiRepository = {
+  id: string;
+  name: string;
+  partition: "public" | "private";
+  path: string;
+  public?: boolean;
+};
+export type WikiNote = {
+  id: string;
+  title: string;
+  aliases: string[];
+  tags: string[];
+  private: boolean;
+  file: string;
+  path: string;
+  repositoryPath: string;
+  repository: string;
+  repositoryId: string;
+  partition: "public" | "private";
+  mtimeMs: number;
+  refs: string[];
+  backlinks: string[];
+  unresolvedLinks: string[];
+};
+export type WikiIndex = {
+  type: "wiki-index";
+  root: string;
+  layout: "legacy" | "wiki";
+  dbFile: string;
+  repositories: WikiRepository[];
+  notes: WikiNote[];
+  diagnostics: Array<{ code: string; severity: string; message: string; path?: string }>;
+  reports: {
+    wanted: Array<{ title: string; references: Array<{ sourceId: string; sourceTitle: string; sourceFile: string }> }>;
+    ambiguous: Array<Record<string, unknown>>;
+    duplicates: Array<Record<string, unknown>>;
   };
 };
 
@@ -602,6 +699,7 @@ declare global {
   interface Window {
     aaronnoteApi?: NativeApi;
     aaronnoteOpenTaskManager?: () => void;
+    __noemaAppConfig?: NoemaAppConfigMsg;
     noemaDesktop?: {
       filePath(file: File): string;
       openFiles(files: string[]): void;
@@ -1084,6 +1182,58 @@ export const api = {
       const call = nativeApi().config?.katexMacros;
       if (!call) return {};
       return (await call()) as KatexMacrosResult;
+    },
+    async app(): Promise<NoemaAppConfigMsg> {
+      const call = requireMethod(nativeApi().config?.app, "Noema settings");
+      return ensureOk(await call() as NoemaAppConfigMsg, "Loading Noema settings failed");
+    },
+    async updateApp(body: NoemaAppConfigUpdate): Promise<NoemaAppConfigMsg> {
+      const call = requireMethod(nativeApi().config?.updateApp, "Noema settings");
+      return ensureOk(await call(body) as NoemaAppConfigMsg, "Saving Noema settings failed");
+    },
+  },
+  wiki: {
+    async bootstrap(): Promise<WikiIndex> {
+      const call = requireMethod(nativeApi().wiki?.bootstrap, "Wiki");
+      return ensureOk(await call() as WikiIndex, "Loading Wiki failed");
+    },
+    async refresh(): Promise<WikiIndex> {
+      const call = requireMethod(nativeApi().wiki?.refresh, "Wiki refresh");
+      return ensureOk(await call() as WikiIndex, "Refreshing Wiki failed");
+    },
+    async resolveLink(target: string): Promise<{
+      status: "resolved" | "ambiguous" | "missing";
+      candidates: Array<{ id: string; title: string; file: string; path: string }>;
+    }> {
+      const call = requireMethod(nativeApi().wiki?.resolveLink, "Wiki link");
+      return ensureOk(await call({ target }) as {
+        status: "resolved" | "ambiguous" | "missing";
+        candidates: Array<{ id: string; title: string; file: string; path: string }>;
+      }, "Resolving Wiki link failed");
+    },
+    async initWorkspace(): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().wiki?.initWorkspace, "Wiki workspace setup");
+      return ensureOk(await call() as Record<string, unknown>, "Creating Wiki workspace failed");
+    },
+    async initRepository(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().wiki?.initRepository, "Wiki repository setup");
+      return ensureOk(await call(body) as Record<string, unknown>, "Creating Wiki repository failed");
+    },
+    async cloneRepository(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().wiki?.cloneRepository, "Wiki repository clone");
+      return ensureOk(await call(body) as Record<string, unknown>, "Cloning Wiki repository failed");
+    },
+    async repositoryStatus(repositoryId: string): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().wiki?.repositoryStatus, "Wiki repository status");
+      return ensureOk(await call({ repositoryId }) as Record<string, unknown>, "Loading repository status failed");
+    },
+    async git(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().wiki?.git, "Wiki Git action");
+      return ensureOk(await call(body) as Record<string, unknown>, "Git action failed");
+    },
+    async createPage(body: Record<string, unknown>): Promise<{ ok?: boolean; file?: string; title?: string }> {
+      const call = requireMethod(nativeApi().wiki?.createPage, "New Wiki page");
+      return ensureOk(await call(body) as { ok?: boolean; file?: string; title?: string }, "Creating Wiki page failed");
     },
   },
 };

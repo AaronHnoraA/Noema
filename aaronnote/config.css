@@ -1,0 +1,468 @@
+:root {
+  font-family: var(--aaron-font-sans, system-ui, sans-serif);
+  color: var(--aaron-ink);
+  background: var(--noema-window-background, var(--aaronnote-bg));
+  font-synthesis: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#config-app {
+  min-width: 0;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 90% 5%, color-mix(in srgb, var(--aaron-accent), transparent 91%), transparent 34rem),
+    var(--noema-window-background, var(--aaronnote-bg));
+  color: var(--aaron-ink);
+}
+
+button,
+a {
+  font: inherit;
+}
+
+button {
+  border: 0;
+}
+
+input,
+select {
+  font: inherit;
+}
+
+.noema-config-titlebar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 0 24px 0 88px;
+  border-bottom: 1px solid var(--aaron-paper-line);
+  background: color-mix(in srgb, var(--aaronnote-chrome), transparent 3%);
+  backdrop-filter: blur(18px);
+  -webkit-app-region: drag;
+}
+
+body[data-host-mode="browser"] .noema-config-titlebar {
+  padding-left: 24px;
+}
+
+.noema-config-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.noema-config-title > span:last-child {
+  display: grid;
+  gap: 1px;
+}
+
+.noema-config-title strong {
+  font-size: 13px;
+  letter-spacing: 0.01em;
+}
+
+.noema-config-title small {
+  color: var(--aaron-muted);
+  font-size: 10px;
+}
+
+.noema-config-mark {
+  width: 27px;
+  height: 27px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--aaron-accent);
+  color: var(--aaron-paper);
+  font: 850 15px/1 var(--aaron-font-heading, Georgia, serif);
+}
+
+.noema-config-titlebar button {
+  min-height: 30px;
+  border: 1px solid var(--aaron-paper-line);
+  border-radius: var(--aaron-radius-2, 6px);
+  padding: 0 13px;
+  background: var(--aaron-paper);
+  color: var(--aaron-ink);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.noema-config-titlebar button:hover {
+  border-color: var(--aaron-accent);
+  background: var(--aaron-accent-soft);
+}
+
+.noema-config-layout {
+  width: min(1120px, 100%);
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 46px;
+  margin: 0 auto;
+  padding: 42px 42px 80px;
+}
+
+.noema-config-nav {
+  position: sticky;
+  top: 96px;
+  align-self: start;
+  display: grid;
+  gap: 4px;
+}
+
+.noema-config-nav > span {
+  margin: 0 10px 8px;
+  color: var(--aaron-faint);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.noema-config-nav a {
+  border-radius: var(--aaron-radius-2, 6px);
+  padding: 9px 10px;
+  color: var(--aaron-muted);
+  font-size: 13px;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.noema-config-nav a:hover,
+.noema-config-nav a.is-active {
+  background: var(--aaron-accent-soft);
+  color: var(--aaron-accent);
+}
+
+.noema-config-main {
+  min-width: 0;
+  display: grid;
+  gap: 24px;
+}
+
+.noema-config-intro {
+  padding: 4px 2px 10px;
+}
+
+.noema-config-eyebrow {
+  margin: 0 0 7px;
+  color: var(--aaron-accent);
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.noema-config-intro h1,
+.noema-config-section h2 {
+  margin: 0;
+  color: var(--aaron-ink);
+  font-family: var(--aaron-font-heading, system-ui, sans-serif);
+}
+
+.noema-config-intro h1 {
+  font-size: clamp(28px, 4vw, 42px);
+  letter-spacing: -0.025em;
+}
+
+.noema-config-intro > p:last-child {
+  max-width: 620px;
+  margin: 12px 0 0;
+  color: var(--aaron-muted);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.noema-config-section {
+  min-width: 0;
+  border: 1px solid var(--aaron-paper-line);
+  border-radius: calc(var(--aaron-radius-2, 6px) + 4px);
+  padding: 24px;
+  background: color-mix(in srgb, var(--aaron-paper), transparent 3%);
+  box-shadow: 0 14px 42px color-mix(in srgb, var(--aaron-ink), transparent 88%);
+}
+
+.noema-config-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 20px;
+}
+
+.noema-config-section h2 {
+  font-size: 19px;
+}
+
+[data-config-status] {
+  min-height: 18px;
+  color: var(--aaron-green);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+[data-config-status][data-kind="error"] {
+  color: var(--aaron-danger);
+}
+
+.noema-config-themes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.noema-config-theme {
+  position: relative;
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--aaron-paper-line);
+  border-radius: var(--aaron-radius-2, 7px);
+  padding: 10px;
+  background: var(--aaron-paper-soft);
+  color: var(--aaron-ink);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 140ms ease, transform 140ms ease, box-shadow 140ms ease;
+}
+
+.noema-config-theme:hover:not(:disabled) {
+  border-color: var(--aaron-accent);
+  transform: translateY(-2px);
+}
+
+.noema-config-theme.is-active {
+  border-color: var(--aaron-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--aaron-accent), transparent 72%);
+}
+
+.noema-config-theme:disabled {
+  cursor: wait;
+  opacity: 0.68;
+}
+
+.noema-config-theme-preview {
+  --theme-preview-bg: #141a27;
+  aspect-ratio: 16 / 10;
+  display: grid;
+  grid-template-columns: 24% 1fr;
+  grid-template-rows: 18% repeat(3, 1fr);
+  gap: 6px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--aaron-paper-line), transparent 30%);
+  border-radius: max(3px, calc(var(--aaron-radius-2, 7px) - 2px));
+  padding: 9px;
+  background: var(--theme-preview-bg);
+}
+
+.noema-config-theme-preview::before {
+  content: "";
+  grid-column: 1 / -1;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--aaron-accent), transparent 20%);
+}
+
+.noema-config-theme-preview i {
+  grid-column: 1;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--aaron-muted), transparent 28%);
+}
+
+.noema-config-theme-preview b {
+  grid-column: 2;
+  grid-row: 2 / 5;
+  border-radius: 3px;
+  background:
+    linear-gradient(to bottom,
+      color-mix(in srgb, var(--aaron-accent), transparent 14%) 0 10%,
+      transparent 10% 24%,
+      color-mix(in srgb, var(--aaron-ink), transparent 68%) 24% 29%,
+      transparent 29% 42%,
+      color-mix(in srgb, var(--aaron-ink), transparent 74%) 42% 47%,
+      transparent 47%);
+}
+
+.noema-config-theme-copy {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px 8px;
+}
+
+.noema-config-theme-copy strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+}
+
+.noema-config-theme-copy small {
+  color: var(--aaron-muted);
+  font: 9px/1.4 var(--aaron-font-mono, monospace);
+  text-transform: uppercase;
+}
+
+.noema-config-theme-copy > span {
+  grid-column: 1 / -1;
+  min-height: 34px;
+  color: var(--aaron-muted);
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.noema-config-theme-check {
+  color: var(--aaron-faint);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.noema-config-theme.is-active .noema-config-theme-check {
+  color: var(--aaron-accent);
+}
+
+.noema-config-copy {
+  margin: -4px 0 14px;
+  color: var(--aaron-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.noema-config-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.noema-config-field {
+  display: grid;
+  gap: 7px;
+  margin: 0 0 14px;
+  color: var(--aaron-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.noema-config-field input,
+.noema-config-field select {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid var(--aaron-paper-line);
+  border-radius: var(--aaron-radius-2, 6px);
+  padding: 0 11px;
+  background: var(--aaron-paper);
+  color: var(--aaron-ink);
+  outline: none;
+}
+
+.noema-config-field input:focus,
+.noema-config-field select:focus {
+  border-color: var(--aaron-accent);
+  box-shadow: 0 0 0 3px var(--aaron-accent-soft);
+}
+
+.noema-config-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.noema-config-actions button {
+  min-height: 38px;
+  border-radius: var(--aaron-radius-2, 6px);
+  padding: 0 16px;
+  background: var(--aaron-accent);
+  color: var(--aaron-paper);
+  cursor: pointer;
+  font-weight: 750;
+}
+
+.noema-config-actions button:disabled {
+  opacity: 0.55;
+}
+
+.noema-config-path {
+  display: block;
+  overflow: auto;
+  border: 1px solid var(--aaron-paper-line);
+  border-radius: var(--aaron-radius-2, 6px);
+  padding: 12px 14px;
+  background: var(--aaron-code-bg);
+  color: var(--aaron-ink);
+  font: 11px/1.4 var(--aaron-font-mono, monospace);
+  white-space: nowrap;
+}
+
+.noema-config-diagnostics {
+  margin-top: 12px;
+  border-left: 3px solid var(--aaron-danger);
+  padding: 8px 12px;
+  background: var(--aaron-danger-bg);
+  color: var(--aaron-danger);
+}
+
+.noema-config-diagnostics[hidden] {
+  display: none;
+}
+
+.noema-config-diagnostics p {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+@media (max-width: 820px) {
+  .noema-config-layout {
+    grid-template-columns: 1fr;
+    gap: 24px;
+    padding: 28px 22px 60px;
+  }
+
+  .noema-config-nav {
+    position: static;
+    display: flex;
+    flex-wrap: wrap;
+  }
+
+  .noema-config-nav > span {
+    width: 100%;
+  }
+}
+
+@media (max-width: 620px) {
+  .noema-config-titlebar {
+    padding-left: 16px;
+  }
+
+  .noema-config-themes {
+    grid-template-columns: 1fr;
+  }
+
+  .noema-config-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .noema-config-section {
+    padding: 18px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .noema-config-theme {
+    transition: none;
+  }
+}

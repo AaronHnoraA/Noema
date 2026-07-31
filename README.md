@@ -74,6 +74,12 @@ export NOEMA_RESOURCES_ROOT="/path/to/Noema/resources"
 export NOEMA_VSCODE="/path/to/code"
 ```
 
+The default Legacy layout can be switched explicitly to a global
+multi-repository Wiki from Noema Configuration. Wiki layout indexes only
+direct Git repository children of `public/` and `private/`; it never migrates
+or initializes existing directories automatically. See
+[the Wiki workspace guide](docs/wiki-workspace.md).
+
 Noema.app has a native macOS application menu and a draggable system title
 bar mirroring the Emacs editor header: back, forward, refresh, editor actions,
 window actions, and the current filename. These are two maintained host
@@ -96,6 +102,31 @@ because both hosts use them.
 
 Existing `AARONNOTE_*` and `aaronnote:api:*` names remain wire compatibility
 contracts.  Emacs commands and variables use only the `my/noema-*` namespace.
+
+## App configuration and themes
+
+Noema stores user settings in `~/.config/noema/config.json`. The current
+schema keeps the selected packaged theme:
+
+```json
+{
+  "schemaVersion": 1,
+  "appearance": {
+    "theme": "aaronnote"
+  }
+}
+```
+
+Open **Tools → Configuration** (or **Noema → Settings…** in the desktop app)
+to manage these settings on the dedicated configuration page. Changes are
+remembered globally and propagated to open Noema windows.
+
+Themes are bundled with the application rather than copied into the config
+directory. Theme metadata is registered in
+`src/styles/themes/themes.json`, and the build discovers CSS files in that
+directory automatically. Adding a packaged theme means adding its CSS file
+and manifest entry; the config API and Tools picker do not need a new
+hard-coded theme branch.
 
 ## Library install
 

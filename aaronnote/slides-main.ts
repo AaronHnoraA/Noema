@@ -1,11 +1,11 @@
 // Standalone, read-only slides page. This entry intentionally does not import
 // main.ts, slide-deck.ts, Editor, Jupyter, cursor state, or mirror APIs.
 import "../src/styles/widgets.css";
-import "../src/styles/theme-typora.css";
 import "../src/styles/typography.css";
 import "./style.css";
 import "../src/styles/aaron-ui-tokens.css";
 import "../src/styles/aaron-ui-elegant.css";
+import "../src/styles/theme-loader.ts";
 
 import { setKatexMacros } from "../src/katex-macros.ts";
 import { api } from "./api-client.ts";
@@ -14,7 +14,9 @@ import {
   initialSlideTheme,
   type SlidePresentationController,
 } from "./slide-presentation.ts";
+import { installNoemaThemeRuntime, loadNoemaAppConfig } from "./theme-runtime.ts";
 
+const removeNoemaThemeRuntime = installNoemaThemeRuntime();
 const root = document.querySelector<HTMLElement>("#app");
 if (!root) throw new Error("Missing #app");
 const file = new URLSearchParams(window.location.search).get("file") || "";
@@ -100,6 +102,7 @@ function destroy(): void {
   presentation = null;
   viewer?.remove();
   viewer = null;
+  removeNoemaThemeRuntime();
 }
 
 window.addEventListener("pagehide", (event) => {
@@ -113,6 +116,11 @@ window.addEventListener("pageshow", (event) => {
 window.addEventListener("beforeunload", destroy, { once: true });
 
 void (async () => {
+  try {
+    await loadNoemaAppConfig();
+  } catch {
+    // The bootstrapped/default theme remains usable without config refresh.
+  }
   try {
     const macros = await api.config.katexMacros();
     if (macros.macros) setKatexMacros(macros.macros);

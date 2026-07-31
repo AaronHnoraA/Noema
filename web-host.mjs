@@ -8,7 +8,7 @@
  */
 
 import { createServer } from "node:http";
-import { existsSync, mkdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, statSync, watch } from "node:fs";
 import { readFile, rm, stat } from "node:fs/promises";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
@@ -113,6 +113,24 @@ import {
   languageToolSettingsRevision,
   updateLanguageToolSettings,
 } from "./server/lib/languagetool-config.mjs";
+import {
+  ensureNoemaAppConfig,
+  getNoemaAppConfig,
+  noemaAppConfigDir,
+  updateNoemaAppConfig,
+} from "./server/lib/app-config.mjs";
+import {
+  buildWikiIndex,
+  cloneWikiRepository,
+  createWikiPage,
+  initWikiRepository,
+  initWikiWorkspace,
+  resolveWikiLink,
+  runWikiGitAction,
+  wikiDatabaseFile,
+  wikiLayout,
+  wikiRepositoryStatus,
+} from "./server/lib/wiki-workspace.mjs";
 import { createImeSwitcher } from "./server/lib/ime.mjs";
 import { ApiRouter } from "./server/infrastructure/api-router.mjs";
 import { createAssetsApiHandlers } from "./server/Features/Assets/api.mjs";
@@ -128,6 +146,7 @@ const ime = createImeSwitcher();
 import { runtimeMkdtemp, sweepRuntimeTmp } from "./server/lib/tmp.mjs";
 import { loadKatexMacros } from "./server/lib/katex-macros.mjs";
 import { createJupyterCellService } from "./server/lib/jupyter-cell.mjs";
+import { authorizedWorkspaceEnvironment } from "./server/lib/workspace-env.mjs";
 import { jupyterDefaultsFromEnv } from "./server/lib/jupyter-defaults.mjs";
 import { sweepGlobalOrphanKernels } from "./server/jupyter/kernel-registry.mjs";
 import { installJupyterKernelWebSocket } from "./server/lib/jupyter-kernel-ws.mjs";
@@ -140,6 +159,7 @@ const webDir = resolve(process.env.AARONNOTE_WEB_DIR || join(scriptDir, "dist", 
 const runtimeRoot = resolve(process.env.AARONNOTE_RUNTIME_ROOT || scriptDir);
 const workspaceRoot = resolve(process.env.NOEMA_WORKSPACE_ROOT || process.env.AARONNOTE_WORKSPACE_ROOT || resolve(scriptDir, "..", "..", ".."));
 const noteRoot = resolve(process.env.NOEMA_ROOT || process.env.AARONNOTE_ROOT || join(workspaceRoot, ".roam"));
+const workspaceLayout = wikiLayout(process.env.NOEMA_WORKSPACE_LAYOUT);
 const publishJsDir = resolve(process.env.AARONNOTE_PUBLISH_JS_DIR || join(runtimeRoot, "js"));
 const stateRoot = resolve(process.env.AARONNOTE_STATE_DIR || join(workspaceRoot, "var", "aaronnote"));
 const tmpRoot = resolve(process.env.AARONNOTE_TMP_DIR || join(stateRoot, "tmp"));
@@ -163,6 +183,38 @@ const liuGongQuanFontCandidates = [
 
 mkdirSync(noteRoot, { recursive: true });
 mkdirSync(tmpRoot, { recursive: true });
+const initialAppConfig = await ensureNoemaAppConfig({ env: process.env });
+const workspaceEnvironment = await authorizedWorkspaceEnvironment(noteRoot, process.env);
+
+async function wikiIndexPayload() {
+  const index = await buildWikiIndex(noteRoot, { layout: workspaceLayout });
+  return {
+    ...index,
+    dbFile: wikiDatabaseFile(noteRoot),
+    environment: {
+      active: workspaceEnvironment.active,
+      authorized: workspaceEnvironment.authorized,
+      variables: workspaceEnvironment.variables,
+      message: workspaceEnvironment.message,
+    },
+  };
+}
+
+async function wikiCreatePage(body = {}) {
+  const config = (await getNoemaAppConfig({ env: process.env })).config;
+  const profiles = config?.wiki?.creation?.profiles || [];
+  const profile = profiles.find((item) => item.id === config?.wiki?.creation?.activeProfile) || profiles[0] || {};
+  const repositoryId = String(body.repositoryId || (
+    profile.repository ? `${profile.partition || "private"}/${profile.repository}` : ""
+  ));
+  return await createWikiPage(noteRoot, workspaceLayout, {
+    ...body,
+    directory: String(body.directory || profile.directory || ""),
+    filenamePattern: String(body.filenamePattern || profile.filenamePattern || "{slug}.md"),
+    kind: String(body.kind || profile.kind || "note"),
+    repositoryId,
+  });
+}
 
 configure({
   root: noteRoot,
@@ -172,6 +224,8 @@ configure({
   tmpRoot,
   snippetsRoot,
   templatesRoot,
+  toolEnvironment: workspaceEnvironment.environment,
+  workspaceLayout,
 });
 
 const jupyterCell = createJupyterCellService({
@@ -182,6 +236,7 @@ const jupyterCell = createJupyterCellService({
   stderr: process.stderr,
   zmq,
   openFile: ({ file, line, col }) => apiOpenInEmacs(file, line, col),
+  toolEnvironment: workspaceEnvironment.environment,
   fileHost: hostMode === "emacs" ? {
     async readFile(file) {
       const result = await gatewayRequest(
@@ -326,10 +381,25 @@ void sweepGlobalOrphanKernels({ stderr: process.stderr }).then(({ reaped }) => {
 // Self-writes (the server's own atomic saves/renames) are suppressed within a
 // 2-second window to avoid redundant index re-reads.
 // Set AARONNOTE_WATCH=0 to disable (useful in test environments).
+let wikiRefreshTimer = null;
+function scheduleWikiRefresh() {
+  if (workspaceLayout !== "wiki") return;
+  if (wikiRefreshTimer) clearTimeout(wikiRefreshTimer);
+  wikiRefreshTimer = setTimeout(() => {
+    wikiRefreshTimer = null;
+    void wikiIndexPayload()
+      .then((payload) => broadcast("command", { command: "wiki-index-changed", noteCount: payload.notes.length }))
+      .catch((error) => process.stderr.write(`[noema-wiki] refresh failed: ${error?.message || error}\n`));
+  }, 350);
+  wikiRefreshTimer.unref?.();
+}
 const noteWatcher = process.env.AARONNOTE_WATCH !== "0"
   ? startNoteWatcher({
       root: noteRoot,
-      isRelevant: (file) => notePathWatchRelevant(file) || bibliographyPathWatchRelevant(file),
+      isRelevant: (file) =>
+        notePathWatchRelevant(file)
+        || bibliographyPathWatchRelevant(file)
+        || (workspaceLayout === "wiki" && /\.(?:md|markdown|typ)$/i.test(file)),
       isSelfWrite: (file) => noteSelfWriteRecently(file),
       onBatch(files) {
         const noteFiles = files.filter((file) => notePathWatchRelevant(file));
@@ -337,6 +407,9 @@ const noteWatcher = process.env.AARONNOTE_WATCH !== "0"
         for (const file of noteFiles) markNotesDirty(file);
         if (noteFiles.length > 0) {
           broadcast("command", { command: "notes-index-changed", version: notesIndexVersionValue() });
+        }
+        if (workspaceLayout === "wiki" && files.some((file) => /\.(?:md|markdown|typ)$/i.test(file))) {
+          scheduleWikiRefresh();
         }
         if (bibFiles.length > 0) {
           clearBibliographyCache();
@@ -348,6 +421,7 @@ const noteWatcher = process.env.AARONNOTE_WATCH !== "0"
         clearBibliographyCache();
         broadcast("command", { command: "notes-index-changed", version: notesIndexVersionValue() });
         broadcast("command", { command: "bibliography-index-changed", version: bibliographyVersion() });
+        scheduleWikiRefresh();
       },
     })
   : { close() {} };
@@ -365,6 +439,30 @@ const editorClients = new Map();
 let shuttingDown = false;
 let shutdownPromise = null;
 let fatalReported = false;
+let appConfigSignature = JSON.stringify({
+  revision: initialAppConfig.revision,
+  diagnostics: initialAppConfig.diagnostics,
+});
+let appConfigWatchTimer = null;
+const appConfigWatcher = watch(noemaAppConfigDir({ env: process.env }), (_event, filename) => {
+  if (filename && String(filename) !== "config.json") return;
+  if (appConfigWatchTimer) clearTimeout(appConfigWatchTimer);
+  appConfigWatchTimer = setTimeout(() => {
+    appConfigWatchTimer = null;
+    void getNoemaAppConfig({ env: process.env }).then((payload) => {
+      const signature = JSON.stringify({
+        revision: payload.revision,
+        diagnostics: payload.diagnostics,
+      });
+      if (signature === appConfigSignature) return;
+      appConfigSignature = signature;
+      broadcast("command", {
+        command: "app-config-changed",
+        revision: payload.revision,
+      });
+    }).catch((error) => reportServerError("app-config-watch", error));
+  }, 80);
+});
 
 // SSE keepalive heartbeat — prevents hung-client memory leak and keeps
 // connections alive through idle-timeout proxies.
@@ -427,6 +525,7 @@ async function beginShutdown({ reason = "shutdown", exitCode = 0, deadlineMs = 3
     deadline.unref();
     try {
       clearInterval(sseHeartbeatInterval);
+      if (wikiRefreshTimer) clearTimeout(wikiRefreshTimer);
       broadcast("command", { command: "server-shutdown", reason, at: Date.now() });
       for (const res of eventClients) {
         try { res.end(); } catch {}
@@ -435,6 +534,7 @@ async function beginShutdown({ reason = "shutdown", exitCode = 0, deadlineMs = 3
       cancelAllExternalProseChecks("server-shutdown");
       await Promise.allSettled([
         closeHttpServer(),
+        Promise.resolve().then(() => appConfigWatcher.close()),
         Promise.resolve().then(() => noteWatcher.close()),
         Promise.resolve().then(() => jupyterKernelWs?.close()),
         jupyterCell.shutdown(),
@@ -818,6 +918,23 @@ async function apiEmacsZotero(body, eventName = "zotero") {
 }
 
 const apiRouter = new ApiRouter().register({
+  "aaronnote:api:wiki:bootstrap": () => wikiIndexPayload(),
+  "aaronnote:api:wiki:environment": () => ({
+    ok: true,
+    active: workspaceEnvironment.active,
+    authorized: workspaceEnvironment.authorized,
+    root: workspaceEnvironment.root,
+    variables: workspaceEnvironment.variables,
+    message: workspaceEnvironment.message,
+  }),
+  "aaronnote:api:wiki:refresh": () => wikiIndexPayload(),
+  "aaronnote:api:wiki:resolve-link": async (body) => resolveWikiLink(await wikiIndexPayload(), body?.target ?? body),
+  "aaronnote:api:wiki:init-workspace": () => initWikiWorkspace(noteRoot),
+  "aaronnote:api:wiki:init-repository": (body) => initWikiRepository(noteRoot, body?.partition, body?.name),
+  "aaronnote:api:wiki:clone-repository": (body) => cloneWikiRepository(noteRoot, body || {}),
+  "aaronnote:api:wiki:repository-status": (body) => wikiRepositoryStatus(noteRoot, body?.repositoryId ?? body),
+  "aaronnote:api:wiki:git": (body) => runWikiGitAction(noteRoot, body?.action, body || {}),
+  "aaronnote:api:wiki:create-page": (body) => wikiCreatePage(body || {}),
   "aaronnote:api:notes:bootstrap": (file) => bootstrapNote(file || undefined),
   "aaronnote:api:notes:open": (file) => readNote(file),
   "aaronnote:api:notes:list": (force) => notesListPayload(force === true),
@@ -834,6 +951,7 @@ const apiRouter = new ApiRouter().register({
         mtimeMs: Number(result.mtimeMs) || 0,
         clientId: String((body && typeof body === "object" ? body.clientId : "") || ""),
       });
+      scheduleWikiRefresh();
     }
     return result;
   },
@@ -1046,6 +1164,22 @@ const apiRouter = new ApiRouter().register({
     apiEmacsZotero,
   }),
   "aaronnote:api:config:katex-macros": () => katexMacrosPayload(),
+  "aaronnote:api:config:app": () => getNoemaAppConfig({ env: process.env }),
+  "aaronnote:api:config:update-app": async (body) => {
+    const payload = await updateNoemaAppConfig(body || {}, {
+      env: process.env,
+      expectedRevision: String(body?.revision || ""),
+    });
+    appConfigSignature = JSON.stringify({
+      revision: payload.revision,
+      diagnostics: payload.diagnostics,
+    });
+    broadcast("command", {
+      command: "app-config-changed",
+      revision: payload.revision,
+    });
+    return payload;
+  },
 }, "web-host");
 
 // Read + parse the global KaTeX macro folder on every request (few small files),
@@ -1221,9 +1355,19 @@ function connectGateway(port) {
   });
 }
 
-function adapterScript(origin) {
+function adapterScript(origin, appConfigPayload = initialAppConfig) {
+  const appConfigJson = JSON.stringify(appConfigPayload).replace(/</g, "\\u003c");
+  const fallbackThemeId = String(
+    appConfigPayload?.defaults?.appearance?.theme
+      || appConfigPayload?.themes?.[0]?.id
+      || "",
+  );
   return `<script>
 (function() {
+  var APP_CONFIG = ${appConfigJson};
+  window.__noemaAppConfig = APP_CONFIG;
+  document.documentElement.dataset.noemaTheme =
+    String(APP_CONFIG && APP_CONFIG.config && APP_CONFIG.config.appearance && APP_CONFIG.config.appearance.theme || ${JSON.stringify(fallbackThemeId)});
   var BASE = ${JSON.stringify(origin)};
   window.__aaronnoteNotesRoot = ${JSON.stringify(noteRoot)};
   window.__aaronnoteJupyterDefaults = ${JSON.stringify(jupyterDefaults)};
@@ -1592,7 +1736,21 @@ function adapterScript(origin) {
       vimMode: function(mode) { return call("aaronnote:api:ime:vim-mode", [{ mode: String(mode || "") }]); }
     },
     config: {
-      katexMacros: function() { return call("aaronnote:api:config:katex-macros", []); }
+      katexMacros: function() { return call("aaronnote:api:config:katex-macros", []); },
+      app: function() { return call("aaronnote:api:config:app", []); },
+      updateApp: function(body) { return call("aaronnote:api:config:update-app", [body || {}]); }
+    },
+    wiki: {
+      bootstrap: function() { return call("aaronnote:api:wiki:bootstrap", []); },
+      environment: function() { return call("aaronnote:api:wiki:environment", []); },
+      refresh: function() { return call("aaronnote:api:wiki:refresh", []); },
+      resolveLink: function(body) { return call("aaronnote:api:wiki:resolve-link", [body || {}]); },
+      initWorkspace: function() { return call("aaronnote:api:wiki:init-workspace", []); },
+      initRepository: function(body) { return call("aaronnote:api:wiki:init-repository", [body || {}]); },
+      cloneRepository: function(body) { return call("aaronnote:api:wiki:clone-repository", [body || {}]); },
+      repositoryStatus: function(body) { return call("aaronnote:api:wiki:repository-status", [body || {}]); },
+      git: function(body) { return call("aaronnote:api:wiki:git", [body || {}]); },
+      createPage: function(body) { return call("aaronnote:api:wiki:create-page", [body || {}]); }
     }
   };
 }());
@@ -1791,8 +1949,9 @@ async function serveStatic(urlPath, res, origin) {
     res.end(transformJavaScript(data.toString("utf8")));
     return;
   }
-  if (["index.html", "agenda.html", "slides.html"].some((name) => file.endsWith(name))) {
-    const html = data.toString("utf8").replace("</head>", `${adapterScript(origin)}\n</head>`);
+  if (["index.html", "agenda.html", "config.html", "slides.html", "wiki.html"].some((name) => file.endsWith(name))) {
+    const appConfig = await getNoemaAppConfig({ env: process.env });
+    const html = data.toString("utf8").replace("</head>", `${adapterScript(origin, appConfig)}\n</head>`);
     res.writeHead(200, {
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-cache",
@@ -1932,6 +2091,16 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    if (url.pathname === "/config") {
+      await serveStatic("/config.html", res, origin);
+      return;
+    }
+
+    if (url.pathname === "/wiki") {
+      await serveStatic("/wiki.html", res, origin);
+      return;
+    }
+
     if (url.pathname === "/slides") {
       await serveStatic("/slides.html", res, origin);
       return;
@@ -1962,10 +2131,11 @@ const server = createServer(async (req, res) => {
           backlinks: backlinksMap[n.key] ?? [],
         })),
       };
+      const appConfig = await getNoemaAppConfig({ env: process.env });
       sendHtmlNoStore(res, `<!doctype html>
 <html>
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-${adapterScript(origin)}
+${adapterScript(origin, appConfig)}
 <style>
 *{box-sizing:border-box}
 html,body{margin:0;padding:0;width:100vw;height:100vh;overflow:hidden;display:flex}

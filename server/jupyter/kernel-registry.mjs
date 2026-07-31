@@ -142,6 +142,7 @@ function makeConnectionInfo(ports, kernelName) {
  * @param {object} options.zmq - the `zeromq` module (injected so tests can stub it)
  * @param {number} [options.launchTimeoutMs]
  * @param {NodeJS.WritableStream} [options.stderr]
+ * @param {Record<string, string>} [options.baseEnvironment]
  */
 export function createKernelRegistry({
   runtimeDir,
@@ -152,6 +153,7 @@ export function createKernelRegistry({
   launchTimeoutMs = 15_000,
   stderr = process.stderr,
   kernelHost,
+  baseEnvironment,
 } = {}) {
   const log = makeLogger(stderr);
   /** @type {Map<string, object>} key -> record */
@@ -210,6 +212,7 @@ export function createKernelRegistry({
       const env = buildKernelEnv({
         kernelSpecEnv: kernelSpecEntry.spec.env,
         runtimeBinDir: runtimeBinDir || venvBinDir,
+        baseEnvironment,
       });
       process_ = spawnKernelProcess({
         kernelSpec: kernelSpecEntry.spec,

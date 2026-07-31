@@ -336,6 +336,7 @@ export function createJupyterCellService({
   fileHost,
   kernelHost,
   openFile,
+  toolEnvironment,
 } = {}) {
   const root = resolve(runtimeRoot || process.cwd());
   const notes = resolve(noteRoot || root);
@@ -427,6 +428,7 @@ export function createJupyterCellService({
           zmq,
           stderr,
           kernelHost,
+          baseEnvironment: toolEnvironment,
         });
         registrySync = registry;
         process.on("exit", onProcessExit);

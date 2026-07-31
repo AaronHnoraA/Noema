@@ -922,6 +922,27 @@ function jupyterLinkRule(state: StateInline, silent: boolean): boolean {
   return true;
 }
 
+function wikiLinkRule(state: StateInline, silent: boolean): boolean {
+  const start = state.pos;
+  if (state.src.slice(start, start + 2) !== "[[") return false;
+  const close = state.src.indexOf("]]", start + 2);
+  if (close < 0) return false;
+  const raw = state.src.slice(start + 2, close);
+  if (!raw || raw.includes("\n")) return false;
+  const separator = raw.indexOf("|");
+  const target = (separator >= 0 ? raw.slice(0, separator) : raw).trim();
+  const label = (separator >= 0 ? raw.slice(separator + 1) : target).trim();
+  if (!target || !label) return false;
+  if (silent) return true;
+  const open = state.push("link_open", "a", 1);
+  open.attrs = [["href", `roam://wiki/${encodeURIComponent(target)}`], ["class", "noema-wiki-link"], ["data-wiki-target", target]];
+  const text = state.push("text", "", 0);
+  text.content = label;
+  state.push("link_close", "a", -1);
+  state.pos = close + 2;
+  return true;
+}
+
 function applyLayoutToToken(token: Token, kind: string, layout: LayoutAttrs): void {
   token.attrJoin("class", layoutClasses(kind, layout));
   token.attrSet("data-aaronnote-layout", kind);
@@ -1148,6 +1169,7 @@ function createMarkdownIt(options: RenderMarkdownHTMLOptions): MarkdownIt {
   md.inline.ruler.before("link", "empty_html_link_embed", emptyHtmlLinkEmbedRule);
   md.inline.ruler.before("link", "spaced_fragment_link", spacedFragmentLinkRule);
   md.inline.ruler.before("link", "jupyter_link", jupyterLinkRule);
+  md.inline.ruler.before("link", "wiki_link", wikiLinkRule);
   md.inline.ruler.before("link", "footnote_reference", footnoteReferenceRule);
   // Must run before `escape`: otherwise the backslash escape rule consumes the
   // `\(` opener as a literal `(` and inline math is never recognized.
@@ -1340,7 +1362,7 @@ export function renderPublishedNoteHTML(
   <title>${escapeHtml(title)} | Aaron He</title>
   <link rel="stylesheet" href="${assetRoot}Noema/aaronnote/style.css?v=${escapeAttr(version)}" />
   <link rel="stylesheet" href="${assetRoot}Noema/src/styles/widgets.css?v=${escapeAttr(version)}" />
-  <link rel="stylesheet" href="${assetRoot}Noema/src/styles/theme-typora.css?v=${escapeAttr(version)}" />
+  <link rel="stylesheet" href="${assetRoot}Noema/src/styles/themes/theme-typora.css?v=${escapeAttr(version)}" />
   <link rel="stylesheet" href="${assetRoot}Noema/src/styles/typography.css?v=${escapeAttr(version)}" />
   <link rel="stylesheet" href="${assetRoot}Noema/src/styles/aaron-ui-tokens.css?v=${escapeAttr(version)}" />
   <link rel="stylesheet" href="${assetRoot}Noema/src/styles/aaron-ui-elegant.css?v=${escapeAttr(version)}" />

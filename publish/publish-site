@@ -36,6 +36,8 @@ STATE_DIR = _env_path("AARONNOTE_PUBLISH_STATE_DIR", _SCRIPT_DIR.parents[3] / "v
 
 # Note vault root (symlinked at ROOT/roam, or overridden).
 ROAM_ROOT = _env_path("AARONNOTE_ROAM_ROOT", ROOT / "roam")
+WIKI_WORKSPACE_ROOT = _env_path("NOEMA_WORKSPACE_ROOT", ROAM_ROOT)
+WIKI_LAYOUT = os.environ.get("NOEMA_WORKSPACE_LAYOUT", "").strip().lower() == "wiki"
 
 # Output root IS the publish root (no /public subdir).
 PUBLIC = ROOT
@@ -75,7 +77,8 @@ PUBLISHED_ASSET_SOURCES = (
     (RUNTIME_ROOT / "aaronnote" / "published-toc.js", Path("Noema/aaronnote/published-toc.js")),
     (RUNTIME_ROOT / "aaronnote" / "published-local-graph.js", Path("Noema/aaronnote/published-local-graph.js")),
     (RUNTIME_ROOT / "src" / "styles" / "widgets.css", Path("Noema/src/styles/widgets.css")),
-    (RUNTIME_ROOT / "src" / "styles" / "theme-typora.css", Path("Noema/src/styles/theme-typora.css")),
+    (RUNTIME_ROOT / "src" / "styles" / "themes" / "theme-typora.css", Path("Noema/src/styles/themes/theme-typora.css")),
+    (RUNTIME_ROOT / "src" / "styles" / "themes" / "aaronnote.css", Path("Noema/src/styles/themes/aaronnote.css")),
     (RUNTIME_ROOT / "src" / "styles" / "typography.css", Path("Noema/src/styles/typography.css")),
     (RUNTIME_ROOT / "src" / "styles" / "aaron-ui-tokens.css", Path("Noema/src/styles/aaron-ui-tokens.css")),
     (RUNTIME_ROOT / "src" / "styles" / "aaron-ui-elegant.css", Path("Noema/src/styles/aaron-ui-elegant.css")),
@@ -181,6 +184,18 @@ def project_rel_path(path: Path) -> Path:
         return path.relative_to(ROOT)
     except ValueError:
         pass
+    if WIKI_LAYOUT:
+        public_root = (WIKI_WORKSPACE_ROOT / "public").resolve()
+        try:
+            rel = path.resolve().relative_to(public_root)
+        except ValueError as err:
+            raise ValueError(f"path is outside the public Wiki partition: {path}") from err
+        if len(rel.parts) < 2:
+            raise ValueError(f"path is outside a public Wiki repository: {path}")
+        repository = public_root / rel.parts[0]
+        if not (repository / ".git").exists():
+            raise ValueError(f"path is outside an indexed public Git repository: {path}")
+        return Path("roam") / rel
     try:
         return Path("roam") / path.resolve().relative_to(ROAM_ROOT.resolve())
     except ValueError as err:
@@ -216,6 +231,13 @@ def iter_project_files() -> Iterator[Path]:
                 yield current / filename
 
     yield from _walk(ROOT)
+    if WIKI_LAYOUT:
+        public_root = WIKI_WORKSPACE_ROOT / "public"
+        if public_root.is_dir():
+            for repository in sorted(public_root.iterdir()):
+                if repository.is_dir() and (repository / ".git").exists():
+                    yield from _walk(repository, rel_base=Path("roam") / repository.name)
+        return
     # Walk ROAM_ROOT directly when ROOT/roam is not a live symlink to it.
     roam_link = ROOT / "roam"
     if not (roam_link.is_symlink() and roam_link.resolve() == ROAM_ROOT.resolve()):
@@ -536,7 +558,7 @@ def find_notes() -> list[Note]:
         if not rel.parts or rel.parts[0] != "roam":
             continue
         note = parse_note(path)
-        if note:
+        if note and not (WIKI_LAYOUT and note.private):
             notes.append(note)
     return sorted(notes, key=lambda note: (note.date, note.title), reverse=True)
 
@@ -744,7 +766,8 @@ def deps_for_note(note: Note, notes_by_rel: dict[str, Note] | None = None) -> se
         str(RUNTIME_ROOT / "aaronnote" / "published-local-graph.js"),
         str(RUNTIME_ROOT / "js" / "note-page.js"),
         str(RUNTIME_ROOT / "src" / "styles" / "widgets.css"),
-        str(RUNTIME_ROOT / "src" / "styles" / "theme-typora.css"),
+        str(RUNTIME_ROOT / "src" / "styles" / "themes" / "theme-typora.css"),
+        str(RUNTIME_ROOT / "src" / "styles" / "themes" / "aaronnote.css"),
         str(RUNTIME_ROOT / "src" / "styles" / "typography.css"),
         str(RUNTIME_ROOT / "src" / "styles" / "aaron-ui-tokens.css"),
         str(RUNTIME_ROOT / "src" / "styles" / "aaron-ui-elegant.css"),

@@ -22,8 +22,8 @@ function substituteEnvVars(value, vars) {
  * merged on top (kernel vars win), substituting any `${VAR}` references
  * against the merged result.
  */
-export function buildKernelEnv({ kernelSpecEnv, runtimeBinDir, venvBinDir, pythonNoUserSite = true } = {}) {
-  const merged = { ...process.env };
+export function buildKernelEnv({ kernelSpecEnv, runtimeBinDir, venvBinDir, pythonNoUserSite = true, baseEnvironment } = {}) {
+  const merged = { ...(baseEnvironment || process.env) };
   const binDir = runtimeBinDir || venvBinDir;
   if (binDir) {
     merged.PATH = [binDir, merged.PATH].filter(Boolean).join(path.delimiter);

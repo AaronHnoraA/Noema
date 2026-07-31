@@ -91,6 +91,8 @@ const LATEX_EXPORT_ENGINES = ["codex", "mechanical"];
 const execFileAsync = promisify(execFile);
 
 let noteRoot = resolveUserPath(process.env.AARONNOTE_ROOT || join(appDir, "..", "roam"));
+let toolEnvironment = { ...process.env };
+let workspaceLayout = "legacy";
 configureBibliography({ root: noteRoot });
 let noteScanRoot = noteRoot;
 const excludedDirs = new Set([
@@ -5429,7 +5431,7 @@ async function compileLatexExportPdf({ latex, outputPath, engine, sourceDir, sup
   const finalTexFile = normalizedLatexOutputFile(outputPath);
   const buildDir = await runtimeMkdtemp("latex-pdf", finalTexFile);
   const texFile = join(buildDir, basename(finalTexFile));
-  const env = { ...process.env };
+  const env = { ...toolEnvironment };
   const searchDirs = [sourceDir, dirname(finalTexFile)].filter(Boolean).join("//:");
   if (searchDirs) env.TEXINPUTS = `${searchDirs}//:${env.TEXINPUTS || ""}`;
   const args = [
@@ -7221,6 +7223,7 @@ export async function syncRoamDb(notes = null, options = {}) {
   const optionFiles = Array.isArray(options.changedFiles) ? options.changedFiles : [];
   const pendingFiles = [...new Set([...optionFiles, ...queuedFiles])];
   const scanned = notes ?? queuedNotes ?? await scanNotes();
+  if (workspaceLayout === "wiki") return scanned;
   const previous = roamSyncInFlight ?? Promise.resolve();
   const current = previous.catch(() => {}).then(async () => {
     const dbFile = roamDbFile();
@@ -7288,6 +7291,7 @@ export async function syncRoamDb(notes = null, options = {}) {
 
 // Exported for desktop/main.mjs weekly full-sync check
 export async function maybeScheduleWeeklyFullSync() {
+  if (workspaceLayout === "wiki") return false;
   const state = await readSyncState();
   if (!state.lastFullAt) return false; // no state yet — first full sync will happen on next manual sync
   const age = Date.now() - new Date(state.lastFullAt).getTime();
@@ -7472,6 +7476,7 @@ async function moveToTrash(file) {
 }
 
 export function queueRoamDbSync(notes = null, changedFiles = []) {
+  if (workspaceLayout === "wiki") return;
   if (notes) queuedRoamSyncNotes = notes;
   const files = Array.isArray(changedFiles) ? changedFiles : [changedFiles];
   for (const file of files) {
@@ -8050,6 +8055,12 @@ async function enqueueSaveWrite(file, task) {
 export function configure(options = {}) {
   noteRoot = resolveUserPath(options.root || process.env.AARONNOTE_ROOT || join(appDir, "..", "roam"));
   noteScanRoot = noteRoot;
+  workspaceLayout = String(options.workspaceLayout || process.env.NOEMA_WORKSPACE_LAYOUT || "").toLowerCase() === "wiki"
+    ? "wiki"
+    : "legacy";
+  toolEnvironment = options.toolEnvironment && typeof options.toolEnvironment === "object"
+    ? { ...process.env, ...options.toolEnvironment }
+    : { ...process.env };
   workspaceRoot = resolve(String(options.workspaceRoot || process.env.AARONNOTE_WORKSPACE_ROOT || resolve(appDir, "..")));
   publishJsDir = resolve(String(options.publishJsDir || process.env.AARONNOTE_PUBLISH_JS_DIR || join(workspaceRoot, "js")));
   stateRoot = resolve(String(options.stateRoot || process.env.AARONNOTE_STATE_DIR || join(workspaceRoot, "var", "aaronnote")));

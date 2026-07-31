@@ -1,9 +1,9 @@
 import "../src/styles/widgets.css";
-import "../src/styles/theme-typora.css";
 import "../src/styles/typography.css";
 import "./style.css";
 import "../src/styles/aaron-ui-tokens.css";
 import "../src/styles/aaron-ui-elegant.css";
+import "../src/styles/theme-loader.ts";
 
 import {
   createEditor,
@@ -128,7 +128,12 @@ import {
 } from "./features/writing-stats/controller.ts";
 import { installActiveCoreReconnect } from "./active-core-reconnect.ts";
 import { noteAutoSaveEnabled } from "./save-policy.ts";
+import {
+  installNoemaThemeRuntime,
+  loadNoemaAppConfig,
+} from "./theme-runtime.ts";
 
+const removeNoemaThemeRuntime = installNoemaThemeRuntime();
 const root = document.querySelector<HTMLElement>("#app");
 if (!root) throw new Error("Missing #app");
 const initialParams = new URLSearchParams(window.location.search);
@@ -4164,6 +4169,35 @@ function jumpToHash(hash: string): boolean {
 function openExternalUrl(href: string, options: { newWindow?: boolean } = {}): void {
   const raw = cleanHref(href);
   if (!raw) return;
+  const wikiTarget = raw.match(/^roam:\/\/wiki\/(.+)$/i)?.[1];
+  const stableWikiTarget = window.__noemaAppConfig?.config.workspace.layout === "wiki"
+    ? raw.match(/^roam:\/\/(?!wiki\/)([^@#/?]+)$/i)?.[1]
+    : "";
+  if (wikiTarget || stableWikiTarget) {
+    const target = wikiTarget ? decodeURIComponent(wikiTarget) : raw;
+    const missingTitle = wikiTarget ? decodeURIComponent(wikiTarget) : stableWikiTarget || raw;
+    void api.wiki.resolveLink(target).then((result) => {
+      if (result.status === "resolved" && result.candidates[0]?.file) {
+        if (options.newWindow) {
+          const url = new URL("/", location.origin);
+          url.searchParams.set("file", result.candidates[0].file);
+          window.open(url, "_blank", "noopener");
+        } else {
+          void openFile(result.candidates[0].file);
+        }
+        return;
+      }
+      const url = new URL("/wiki", location.origin);
+      if (result.status === "missing") {
+        url.searchParams.set("new", "1");
+        url.searchParams.set("title", missingTitle);
+      } else {
+        url.searchParams.set("q", missingTitle);
+      }
+      window.open(url, "_blank", "noopener");
+    }).catch((error) => setStatus(error instanceof Error ? error.message : String(error)));
+    return;
+  }
   if (!safeHref(raw)) {
     setStatus("Blocked unsafe link");
     return;
@@ -6269,6 +6303,12 @@ function toolActions(): ToolAction[] {
   const canSetSlideTheme = Boolean(slideDeck && (offerSlideView || currentNoteIsSlides()));
   const slideTheme = slideDeck?.getTheme() ?? "dark";
   const common: ToolAction[] = [
+    {
+      id: "configuration",
+      title: "Configuration",
+      detail: "Themes and application settings",
+      run: openConfigurationPage,
+    },
     { id: "source", title: editor.isSourceMode() ? "Markdown view" : "Source view", detail: "True Markdown source", run: () => toggleSourceMode() },
     ...(offerSlideView ? [{
       id: "slide-view",
@@ -6364,6 +6404,12 @@ function renderLayoutZoomTool(): HTMLElement {
   hint.textContent = "M-= / M-- / M-0 reflows Markdown layout. Pinch and C-Tab use visual zoom; C-0 resets it.";
   panel.append(head, controls, hint);
   return panel;
+}
+
+function openConfigurationPage(): void {
+  const url = new URL("/config", window.location.origin);
+  window.open(url.toString(), "_blank", "noopener,noreferrer");
+  setStatus("Opening configuration");
 }
 
 function renderToolsPanel(): void {
@@ -7988,6 +8034,7 @@ function runHostCommand(detail: unknown): boolean {
       return true;
     case "server-ready":
       void loadLanguageToolConfiguration();
+      void loadNoemaAppConfig();
       return true;
     case "languagetool-settings-changed":
       languageToolLoadSequence += 1;
@@ -8137,6 +8184,11 @@ function runHostCommand(detail: unknown): boolean {
       return true;
     case "toggle-tools":
       toggleToolsPanel();
+      return true;
+    case "open-config":
+    case "configuration":
+    case "settings":
+      openConfigurationPage();
       return true;
     case "task-manager":
       openTaskManager();
@@ -8716,6 +8768,7 @@ window.addEventListener("pagehide", () => {
   notifyClientClosedKeepalive();
 });
 window.addEventListener("beforeunload", () => {
+  removeNoemaThemeRuntime();
   removeDesktopCommandListener?.();
   coreReconnectController?.destroy();
   vim.destroy();
@@ -8732,6 +8785,12 @@ window.addEventListener("popstate", () => {
 // Install the global KaTeX macros before the first note renders so the initial
 // paint already uses them; failures degrade to plain KaTeX rather than blocking.
 void (async () => {
+  try {
+    const config = await loadNoemaAppConfig();
+    if (config.diagnostics[0]) setStatus(config.diagnostics[0].message);
+  } catch (error) {
+    setStatus(`Settings failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
   const languageToolReady = loadLanguageToolConfiguration();
   try {
     const result = await api.config.katexMacros();

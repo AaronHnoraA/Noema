@@ -6,7 +6,7 @@
  */
 
 import "../../src/styles/widgets.css";
-import "../../src/styles/theme-typora.css";
+import "../../src/styles/themes/theme-typora.css";
 import "../../src/styles/typography.css";
 
 import { createEditor, type Editor } from "../../src/editor-api.ts";

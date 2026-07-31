@@ -1,7 +1,7 @@
 /*
  * Noema's canonical prose typography.
  *
- * Component colour/chrome stays in theme-typora.css and widgets.css.  This
+ * Component colour/chrome stays in themes/theme-typora.css and widgets.css. This
  * file alone owns prose fonts and vertical rhythm for Visual mode and rendered
  * documents, so hosts do not need a second corrective layout pass.
  */

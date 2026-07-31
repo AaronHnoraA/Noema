@@ -8,7 +8,7 @@
  * Not in this file:
  *   - Markdown content typography (h1-h6 sizes, link colors,
  *     blockquote border, etc.) — that's a swappable theme; see
- *     ./theme-typora.css.
+ *     ./themes/theme-typora.css.
  *   - Website-only chrome (nav, page, etc.) — see
  *     website/style.css.
  *

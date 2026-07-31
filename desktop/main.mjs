@@ -4,6 +4,8 @@ import { mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
+import { getNoemaAppConfig } from "../server/lib/app-config.mjs";
+import { noemaAppTheme } from "../shared/app-themes.mjs";
 
 const desktopDir = dirname(fileURLToPath(import.meta.url));
 const projectDir = resolve(desktopDir, "..");
@@ -16,6 +18,7 @@ let hostUrl = "";
 let mainWindow = null;
 let quitting = false;
 let pendingFile = process.argv.slice(1).find((arg) => /\.(?:md|markdown)$/i.test(arg)) || "";
+let windowBackgroundColor = noemaAppTheme("").backgroundColor;
 
 const singleInstance = app.requestSingleInstanceLock();
 if (process.env.NOEMA_DESKTOP_SMOKE === "1") {
@@ -23,8 +26,14 @@ if (process.env.NOEMA_DESKTOP_SMOKE === "1") {
 }
 if (!singleInstance) app.quit();
 
-function hostEnvironment() {
-  const noteRoot = resolve(process.env.NOEMA_ROOT || process.env.AARONNOTE_ROOT || defaultNoteRoot);
+function hostEnvironment(appConfig = null) {
+  const configuredRoot = String(appConfig?.config?.workspace?.root || "").trim();
+  const expandedConfiguredRoot = configuredRoot === "~"
+    ? homedir()
+    : configuredRoot.startsWith("~/")
+      ? join(homedir(), configuredRoot.slice(2))
+      : configuredRoot;
+  const noteRoot = resolve(process.env.NOEMA_ROOT || process.env.AARONNOTE_ROOT || expandedConfiguredRoot || defaultNoteRoot);
   const resourcesRoot = resolve(process.env.NOEMA_RESOURCES_ROOT || join(appRoot, "resources"));
   const tmpRoot = join(stateRoot, "tmp");
   mkdirSync(noteRoot, { recursive: true });
@@ -39,6 +48,7 @@ function hostEnvironment() {
     AARONNOTE_RUNTIME_ROOT: appRoot,
     AARONNOTE_ROOT: noteRoot,
     AARONNOTE_WORKSPACE_ROOT: noteRoot,
+    NOEMA_WORKSPACE_LAYOUT: String(appConfig?.config?.workspace?.layout || "legacy"),
     AARONNOTE_STATE_DIR: stateRoot,
     AARONNOTE_TMP_DIR: tmpRoot,
     AARONNOTE_PUBLISH_JS_DIR: join(appRoot, "js"),
@@ -50,12 +60,12 @@ function hostEnvironment() {
   };
 }
 
-function startHost() {
+function startHost(appConfig = null) {
   return new Promise((resolveReady, rejectReady) => {
     const hostScript = join(appRoot, "web-host.mjs");
     let stderr = "";
     hostProcess = spawn(process.execPath, [hostScript], {
-      env: hostEnvironment(),
+      env: hostEnvironment(appConfig),
       stdio: ["ignore", "pipe", "pipe"],
     });
     const inspect = (chunk) => {
@@ -85,6 +95,7 @@ function startHost() {
 
 function urlForFile(file = "") {
   const url = new URL(hostUrl);
+  if (!file) url.pathname = "/wiki";
   url.searchParams.set("host", "desktop");
   if (file) url.searchParams.set("file", resolve(file));
   return url.toString();
@@ -167,6 +178,7 @@ function buildApplicationMenu() {
       label: "Noema",
       submenu: [
         { role: "about" },
+        { label: "Settings…", accelerator: "CmdOrCtrl+,", click: () => openConfigurationWindow() },
         { type: "separator" },
         { role: "services" },
         { type: "separator" },
@@ -180,6 +192,9 @@ function buildApplicationMenu() {
     {
       label: "File",
       submenu: [
+        { label: "Wiki Home", accelerator: "CmdOrCtrl+Shift+H", click: () => createWindow() },
+        { label: "New Wiki Page…", accelerator: "CmdOrCtrl+N", click: () => createWindow("", new URL("/wiki?new=1&host=desktop", hostUrl).toString()) },
+        { type: "separator" },
         { label: "Open…", accelerator: "CmdOrCtrl+O", click: () => void chooseMarkdownFiles() },
         { label: "New Window", accelerator: "CmdOrCtrl+Shift+N", click: () => createWindow() },
         { type: "separator" },
@@ -268,13 +283,20 @@ function buildApplicationMenu() {
 }
 
 function createWindow(file = "", targetUrl = "") {
+  const configurationWindow = (() => {
+    try {
+      return Boolean(targetUrl) && new URL(targetUrl).pathname === "/config";
+    } catch {
+      return false;
+    }
+  })();
   const win = new BrowserWindow({
-    width: 1320,
-    height: 920,
-    minWidth: 920,
-    minHeight: 640,
-    title: "Noema",
-    backgroundColor: "#eeeae1",
+    width: configurationWindow ? 960 : 1320,
+    height: configurationWindow ? 760 : 920,
+    minWidth: configurationWindow ? 720 : 920,
+    minHeight: configurationWindow ? 560 : 640,
+    title: configurationWindow ? "Noema Configuration" : "Noema",
+    backgroundColor: windowBackgroundColor,
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "hidden",
     trafficLightPosition: { x: 18, y: 18 },
     webPreferences: {
@@ -313,6 +335,7 @@ function createWindow(file = "", targetUrl = "") {
         const bounds = titlebar?.getBoundingClientRect();
         return {
           hostMode: document.body.dataset.hostMode || "",
+          theme: document.documentElement.dataset.noemaTheme || "",
           preload: Boolean(window.noemaDesktop),
           titlebarVisible: Boolean(titlebar && !titlebar.hidden && bounds && bounds.height > 0),
           titlebarHeight: bounds?.height || 0,
@@ -327,6 +350,11 @@ function createWindow(file = "", targetUrl = "") {
   }
   void win.loadURL(targetUrl || urlForFile(file));
   return win;
+}
+
+function openConfigurationWindow() {
+  if (!hostUrl) return;
+  createWindow("", new URL("/config", hostUrl).toString());
 }
 
 function openFile(file) {
@@ -383,7 +411,9 @@ ipcMain.handle("noema:reveal-path", (_event, file) => {
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(buildApplicationMenu());
   try {
-    await startHost();
+    const appConfig = await getNoemaAppConfig({ env: process.env });
+    windowBackgroundColor = appConfig.activeTheme.backgroundColor;
+    await startHost(appConfig);
     createWindow(pendingFile);
     pendingFile = "";
   } catch (error) {
