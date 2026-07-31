@@ -73,6 +73,7 @@ import {
   isPointerSelecting,
   updateHasPointerSelectionEffect,
 } from "./extensions/visual/selection.ts";
+import { scanWikiLinks } from "../../shared/wiki-link.mjs";
 
 // ---------------------------------------------------------------------------
 // Asset URL helpers for raw HTML embedded in the live preview.
@@ -399,10 +400,39 @@ function collectLivePreviewTokens(
   }
   const allExcluded = combineRanges(excludedRanges, codeRanges);
   addCjkTextTokens(tokens, doc, ranges, allExcluded, cjkLineCache);
+  addWikiLinkTokens(tokens, doc, ranges, allExcluded);
   addJupyterLinkTokens(tokens, doc, ranges, allExcluded);
   addHighlightTokens(tokens, doc, ranges, allExcluded, codeRanges);
 
   return tokens;
+}
+
+function addWikiLinkTokens(
+  tokens: LivePreviewToken[],
+  doc: Text,
+  ranges: readonly { from: number; to: number }[],
+  excludedRanges: readonly { from: number; to: number }[],
+): void {
+  const visited = new Set<number>();
+  for (const range of ranges) {
+    const first = doc.lineAt(range.from).number;
+    const last = doc.lineAt(Math.min(range.to, doc.length)).number;
+    for (let lineNumber = first; lineNumber <= last; lineNumber++) {
+      if (visited.has(lineNumber)) continue;
+      visited.add(lineNumber);
+      const line = doc.line(lineNumber);
+      for (const link of scanWikiLinks(line.text, line.from)) {
+        if (rangeOverlapsAny(link.from, link.to, excludedRanges)) continue;
+        const linkClass = "cm-link-text cm-internal-link-text cm-roam-link-text";
+        tokens.push({ kind: "span", from: link.labelFrom, to: link.labelTo, spanFrom: link.from, spanTo: link.to, cls: linkClass });
+        tokens.push({ kind: "delimiter", from: link.from, to: link.from + 2, spanFrom: link.from, spanTo: link.to });
+        tokens.push({ kind: "delimiter", from: link.to - 2, to: link.to, spanFrom: link.from, spanTo: link.to });
+        if (link.explicitLabel) {
+          tokens.push({ kind: "delimiter", from: link.from + 2, to: link.labelFrom, spanFrom: link.from, spanTo: link.to });
+        }
+      }
+    }
+  }
 }
 
 function buildDecorations(view: EditorView, tokens = collectLivePreviewTokens(view)): DecorationSet {

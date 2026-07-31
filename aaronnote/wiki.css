@@ -11,6 +11,46 @@ body { min-height: 100vh; background: var(--noema-window-background, var(--aaron
 button, input, select { font: inherit; }
 button { color: inherit; }
 
+.noema-wiki-site-header {
+  position: sticky;
+  top: 54px;
+  z-index: 19;
+  min-height: 86px;
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(340px, 760px) minmax(180px, 1fr);
+  align-items: center;
+  gap: 28px;
+  padding: 14px 32px;
+  border-bottom: 1px solid var(--aaron-paper-line);
+  background: color-mix(in srgb, var(--aaronnote-bg), transparent 2%);
+}
+.noema-wiki-site-brand {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.noema-wiki-site-brand > span:last-child { min-width: 0; display: grid; gap: 2px; }
+.noema-wiki-site-brand strong { font: 800 24px/1 var(--aaron-font-heading, system-ui); letter-spacing: -.02em; }
+.noema-wiki-site-brand small { overflow: hidden; color: var(--aaron-muted); font-size: 9px; letter-spacing: .055em; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
+.noema-wiki-site-mark { position: relative; width: 46px; height: 46px; flex: 0 0 auto; display: grid; place-items: center; }
+.noema-wiki-site-mark::before, .noema-wiki-site-mark::after, .noema-wiki-site-mark i {
+  content: ""; position: absolute; inset: 5px; border: 3px solid var(--aaron-accent); transform: rotate(45deg);
+}
+.noema-wiki-site-mark::after { inset: 10px; border-color: color-mix(in srgb, var(--aaron-accent), var(--aaron-link) 55%); transform: rotate(22.5deg); }
+.noema-wiki-site-mark i { inset: 2px; border-width: 1px; border-color: color-mix(in srgb, var(--aaron-accent), transparent 55%); transform: rotate(67.5deg); }
+.noema-wiki-site-mark b { position: relative; z-index: 1; width: 27px; height: 27px; display: grid; place-items: center; border-radius: 50%; background: var(--aaronnote-bg); font: 900 13px var(--aaron-font-heading, system-ui); }
+.noema-wiki-site-actions { justify-self: end; display: flex; align-items: center; gap: 10px; }
+.noema-wiki-site-actions a { color: var(--aaron-link); font-size: 11px; text-decoration: none; }
+.noema-wiki-site-actions button, .noema-wiki-search button {
+  min-height: 38px; border: 1px solid var(--aaron-paper-line); border-radius: 3px; padding: 0 14px; background: var(--aaron-paper); cursor: pointer;
+}
+
 .noema-wiki-titlebar {
   position: sticky;
   top: 0;
@@ -38,22 +78,24 @@ body[data-host-mode="browser"] .noema-wiki-titlebar { padding-left: 18px; }
   cursor: pointer;
 }
 
-.noema-wiki-shell { min-height: calc(100vh - 54px); display: grid; grid-template-columns: 220px minmax(0, 1fr); }
+.noema-wiki-shell {
+  min-height: calc(100vh - 140px);
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr) 232px;
+  align-items: start;
+}
 .noema-wiki-sidebar {
   position: sticky;
-  top: 54px;
-  height: calc(100vh - 54px);
+  top: 140px;
+  height: calc(100vh - 140px);
   display: flex;
   flex-direction: column;
-  padding: 26px 18px;
+  padding: 28px 18px;
   border-right: 1px solid var(--aaron-paper-line);
   background: color-mix(in srgb, var(--aaronnote-chrome), transparent 5%);
   overflow-y: auto;
 }
-.noema-wiki-brand { display: flex; align-items: center; gap: 10px; margin: 0 7px 30px; }
-.noema-wiki-brand > span { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 9px; background: var(--aaron-accent); color: var(--aaron-paper); font-weight: 900; }
-.noema-wiki-brand > div { display: grid; gap: 2px; }
-.noema-wiki-brand small { color: var(--aaron-muted); font-size: 10px; text-transform: capitalize; }
+.noema-wiki-nav-label { margin: 0 10px 10px; color: var(--aaron-muted); font-size: 9px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
 .noema-wiki-sidebar nav { display: grid; gap: 4px; }
 .noema-wiki-sidebar nav button {
   display: flex;
@@ -68,29 +110,38 @@ body[data-host-mode="browser"] .noema-wiki-titlebar { padding-left: 18px; }
 .noema-wiki-sidebar nav button:hover, .noema-wiki-sidebar nav button.is-active { background: var(--aaron-accent-soft); color: var(--aaron-accent); }
 .noema-wiki-sidebar nav b { font-size: 10px; }
 .noema-wiki-settings { margin-top: auto; border-radius: 7px; padding: 10px; color: var(--aaron-muted); text-decoration: none; }
+.noema-wiki-layout-note { margin: 26px 10px 12px; color: var(--aaron-faint); font-size: 9px; line-height: 1.55; }
 
-.noema-wiki-content { width: min(1080px, 100%); margin: 0 auto; padding: 48px 46px 90px; }
+.noema-wiki-content { width: min(1120px, 100%); margin: 0 auto; padding: 48px 48px 90px; font-size: var(--noema-wiki-text-size, 16px); }
+#wiki-app[data-wiki-text="small"] { --noema-wiki-text-size: 14px; }
+#wiki-app[data-wiki-text="large"] { --noema-wiki-text-size: 18px; }
+#wiki-app[data-wiki-width="wide"] .noema-wiki-content { width: min(1440px, 100%); }
 .noema-wiki-hero { display: flex; justify-content: space-between; align-items: end; gap: 24px; }
 .noema-wiki-hero p { margin: 0 0 6px; color: var(--aaron-accent); font-size: 10px; font-weight: 850; letter-spacing: .11em; text-transform: uppercase; }
-.noema-wiki-hero h1 { margin: 0; font: 750 clamp(30px, 5vw, 48px)/1.05 var(--aaron-font-heading, system-ui); letter-spacing: -.03em; }
+.noema-wiki-hero h1 { max-width: 900px; margin: 0; font: 650 clamp(30px, 4.5vw, 48px)/1.1 var(--aaron-font-serif, Georgia, serif); letter-spacing: -.025em; }
 .noema-wiki-hero small { display: block; max-width: 680px; overflow: hidden; margin-top: 10px; color: var(--aaron-muted); text-overflow: ellipsis; white-space: nowrap; }
 .noema-wiki-hero-actions, .noema-wiki-repository-toolbar { display: flex; gap: 8px; }
 .noema-wiki-hero button, .noema-wiki-repository-toolbar button, .noema-wiki-report-list button, .noema-wiki-dialog button {
   min-height: 38px; border: 1px solid var(--aaron-paper-line); border-radius: 7px; padding: 0 14px; background: var(--aaron-paper); cursor: pointer;
 }
 button.is-primary { border-color: var(--aaron-accent); background: var(--aaron-accent); color: var(--aaron-paper); }
-.noema-wiki-search { height: 48px; display: flex; align-items: center; gap: 10px; margin: 34px 0 10px; border: 1px solid var(--aaron-paper-line); border-radius: 10px; padding: 0 14px; background: var(--aaron-paper); }
+.noema-wiki-search { height: 46px; min-width: 0; display: flex; align-items: center; gap: 10px; border: 1px solid var(--aaron-paper-line); border-radius: 3px; padding: 0 4px 0 14px; background: var(--aaron-paper); }
 .noema-wiki-search:focus-within { border-color: var(--aaron-accent); box-shadow: 0 0 0 3px var(--aaron-accent-soft); }
 .noema-wiki-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--aaron-ink); }
 .noema-wiki-search kbd { color: var(--aaron-muted); font-size: 10px; }
-.noema-wiki-status { min-height: 30px; color: var(--aaron-muted); font-size: 11px; }
+.noema-wiki-search button { min-height: 36px; font-weight: 750; }
+.noema-wiki-page-tabs { min-height: 42px; display: flex; align-items: end; justify-content: space-between; gap: 20px; margin-top: 10px; border-bottom: 1px solid var(--aaron-paper-line); }
+.noema-wiki-page-tabs > div { display: flex; gap: 4px; }
+.noema-wiki-page-tabs button { min-height: 38px; border: 0; border-bottom: 2px solid transparent; padding: 0 8px; background: transparent; color: var(--aaron-link); cursor: pointer; }
+.noema-wiki-page-tabs button:hover, .noema-wiki-page-tabs button.is-active, .noema-wiki-page-tabs button.is-current { border-bottom-color: var(--aaron-accent); color: var(--aaron-ink); }
+.noema-wiki-status { min-height: 38px; padding-top: 9px; color: var(--aaron-muted); font-size: 10px; }
 .noema-wiki-status.is-error { color: var(--aaron-danger); }
 
-.noema-wiki-page-list, .noema-wiki-report-list, .noema-wiki-repository-list { display: grid; gap: 8px; }
+.noema-wiki-page-list, .noema-wiki-report-list, .noema-wiki-repository-list { display: grid; gap: 0; border-top: 1px solid var(--aaron-paper-line); }
 .noema-wiki-page {
-  display: grid; grid-template-columns: 62px 1fr auto; gap: 14px; align-items: start; border: 1px solid var(--aaron-paper-line); border-radius: 9px; padding: 17px; background: var(--aaron-paper); cursor: pointer;
+  display: grid; grid-template-columns: 62px 1fr auto; gap: 14px; align-items: start; border: 0; border-bottom: 1px solid var(--aaron-paper-line); border-radius: 0; padding: 17px 8px; background: transparent; cursor: pointer;
 }
-.noema-wiki-page:hover { border-color: var(--aaron-accent); transform: translateY(-1px); }
+.noema-wiki-page:hover { background: color-mix(in srgb, var(--aaron-accent-soft), transparent 28%); }
 .noema-wiki-page .partition { border-radius: 999px; padding: 4px 7px; background: var(--aaron-accent-soft); color: var(--aaron-accent); font-size: 9px; font-weight: 850; text-align: center; text-transform: uppercase; }
 .noema-wiki-page .partition.is-private { background: color-mix(in srgb, var(--aaron-danger), transparent 88%); color: var(--aaron-danger); }
 .noema-wiki-page h2, .noema-wiki-report-list h2, .noema-wiki-repository h2 { margin: 0; font-size: 16px; }
@@ -98,6 +149,10 @@ button.is-primary { border-color: var(--aaron-accent); background: var(--aaron-a
 .noema-wiki-page small { color: var(--aaron-faint); }
 .noema-wiki-page-actions { min-width: 34px; min-height: 30px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; }
 .noema-wiki-page-actions:hover { background: var(--aaron-accent-soft); }
+.noema-wiki-load-more {
+  width: 100%; min-height: 42px; margin-top: 14px; border: 1px solid var(--aaron-paper-line); border-radius: 4px;
+  background: var(--aaron-paper); color: var(--aaron-link); cursor: pointer;
+}
 .noema-wiki-empty { border: 1px dashed var(--aaron-paper-line); border-radius: 10px; padding: 52px 24px; text-align: center; }
 .noema-wiki-empty h2 { margin: 0 0 8px; }
 .noema-wiki-empty p { margin: 0; color: var(--aaron-muted); }
@@ -117,6 +172,63 @@ button.is-primary { border-color: var(--aaron-accent); background: var(--aaron-a
 .noema-wiki-repository button { min-height: 32px; border: 1px solid var(--aaron-paper-line); border-radius: 6px; background: var(--aaronnote-chrome); cursor: pointer; }
 .noema-wiki-repository pre { overflow: auto; margin: 0; border-radius: 6px; padding: 10px; background: var(--aaron-code-bg); color: var(--aaron-muted); font-size: 10px; white-space: pre-wrap; }
 
+.noema-wiki-tools {
+  position: sticky;
+  top: 140px;
+  height: calc(100vh - 140px);
+  overflow-y: auto;
+  padding: 32px 22px;
+  border-left: 1px solid var(--aaron-paper-line);
+  background: color-mix(in srgb, var(--aaronnote-chrome), transparent 7%);
+}
+.noema-wiki-tools section { padding: 0 0 22px; margin: 0 0 22px; border-bottom: 1px solid var(--aaron-paper-line); }
+.noema-wiki-tools section:last-child { border-bottom: 0; }
+.noema-wiki-tools h2 { margin: 0 0 10px; font-size: 11px; letter-spacing: .035em; }
+.noema-wiki-tools p { margin: 0; color: var(--aaron-muted); font-size: 10px; line-height: 1.65; overflow-wrap: anywhere; }
+.noema-wiki-tools dl { display: grid; gap: 7px; margin: 0; }
+.noema-wiki-tools dl div { display: flex; justify-content: space-between; gap: 12px; color: var(--aaron-muted); font-size: 10px; }
+.noema-wiki-tools dd { margin: 0; color: var(--aaron-ink); font-weight: 750; }
+.noema-wiki-tools button {
+  width: 100%; min-height: 32px; display: block; border: 0; border-radius: 4px; padding: 5px 7px;
+  background: transparent; color: var(--aaron-link); text-align: left; cursor: pointer;
+}
+.noema-wiki-tools button:hover { background: var(--aaron-accent-soft); }
+.noema-wiki-tools kbd { font: 9px var(--aaron-font-mono, monospace); }
+.noema-wiki-appearance fieldset { display: grid; gap: 1px; margin: 0 0 14px; border: 0; padding: 0; }
+.noema-wiki-appearance legend { width: 100%; margin-bottom: 5px; border-bottom: 1px solid var(--aaron-paper-line); padding: 0 0 6px; color: var(--aaron-muted); font: 700 10px var(--aaron-font-serif, Georgia, serif); }
+.noema-wiki-appearance button { display: flex; align-items: center; gap: 8px; color: var(--aaron-muted); }
+.noema-wiki-appearance button > span { width: 14px; height: 14px; flex: 0 0 auto; border: 1px solid var(--aaron-paper-line); border-radius: 50%; }
+.noema-wiki-appearance button.is-active { color: var(--aaron-ink); font-weight: 750; }
+.noema-wiki-appearance button.is-active > span { border: 4px solid var(--aaron-accent); }
+.noema-wiki-panel-toggle { display: none; }
+
+.noema-wiki-home-intro { border-bottom: 1px solid var(--aaron-paper-line); padding: 4px 0 28px; }
+.noema-wiki-home-intro > p { max-width: 980px; margin: 0; font: 1.2em/1.65 var(--aaron-font-serif, Georgia, serif); }
+.noema-wiki-home-intro > div { display: flex; flex-wrap: wrap; gap: 8px 24px; margin-top: 20px; color: var(--aaron-muted); font-size: .72em; }
+.noema-wiki-home-intro > div strong { color: var(--aaron-ink); font-size: 1.45em; }
+.noema-wiki-home-columns { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(260px, .8fr); gap: 38px; margin-top: 34px; }
+.noema-wiki-home-section { min-width: 0; }
+.noema-wiki-home-section > header { min-height: 38px; display: flex; align-items: start; justify-content: space-between; gap: 14px; border-bottom: 1px solid var(--aaron-paper-line); }
+.noema-wiki-home-section h2, .noema-wiki-home-portals h2 { margin: 0; font: 700 1.15em/1.3 var(--aaron-font-serif, Georgia, serif); }
+.noema-wiki-home-section > header button { border: 0; padding: 2px 0; background: transparent; color: var(--aaron-link); font-size: .7em; cursor: pointer; }
+.noema-wiki-home-recent, .noema-wiki-home-repositories { display: grid; }
+.noema-wiki-home-recent > button, .noema-wiki-home-repositories > button {
+  min-width: 0; min-height: 58px; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 0 9px;
+  border: 0; border-bottom: 1px solid var(--aaron-paper-line); padding: 8px 4px; background: transparent; color: var(--aaron-link); text-align: left; cursor: pointer;
+}
+.noema-wiki-home-recent > button > span { grid-row: 1 / span 2; color: var(--aaron-accent); font-size: .65em; }
+.noema-wiki-home-recent small, .noema-wiki-home-repositories small { grid-column: 2; overflow: hidden; color: var(--aaron-muted); font: .62em/1.4 var(--aaron-font-mono, monospace); text-overflow: ellipsis; white-space: nowrap; }
+.noema-wiki-home-repositories > button { grid-template-columns: minmax(0, 1fr); }
+.noema-wiki-home-repositories small { grid-column: 1; }
+.noema-wiki-home-recent > button:hover, .noema-wiki-home-repositories > button:hover { background: color-mix(in srgb, var(--aaron-accent-soft), transparent 40%); }
+.noema-wiki-home-portals { margin-top: 42px; border-top: 1px solid var(--aaron-paper-line); padding-top: 20px; }
+.noema-wiki-home-portals > div { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; margin-top: 15px; border: 1px solid var(--aaron-paper-line); }
+.noema-wiki-home-portals button { min-height: 108px; display: flex; flex-direction: column; align-items: start; justify-content: center; gap: 8px; border: 0; border-right: 1px solid var(--aaron-paper-line); padding: 18px; background: transparent; color: var(--aaron-link); text-align: left; cursor: pointer; }
+.noema-wiki-home-portals button:last-child { border-right: 0; }
+.noema-wiki-home-portals button:hover { background: var(--aaron-accent-soft); }
+.noema-wiki-home-portals small { color: var(--aaron-muted); font-size: .66em; line-height: 1.5; }
+#wiki-app[data-wiki-view="home"] .noema-wiki-hero-actions [data-export], #wiki-app[data-wiki-view="home"] .noema-wiki-hero-actions [data-refresh] { display: none; }
+
 .noema-wiki-dialog { width: min(620px, calc(100vw - 28px)); border: 1px solid var(--aaron-paper-line); border-radius: 12px; padding: 0; background: var(--aaron-paper); color: var(--aaron-ink); box-shadow: 0 24px 90px color-mix(in srgb, #000, transparent 55%); }
 .noema-wiki-dialog::backdrop { background: color-mix(in srgb, #07101e, transparent 35%); backdrop-filter: blur(3px); }
 .noema-wiki-dialog form { display: grid; gap: 14px; padding: 22px; }
@@ -129,6 +241,13 @@ button.is-primary { border-color: var(--aaron-accent); background: var(--aaron-a
 .noema-wiki-dialog footer { justify-content: flex-end; margin-top: 8px; }
 .noema-wiki-dialog > form > p { margin: 0; color: var(--aaron-muted); font-size: 11px; }
 .noema-wiki-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.noema-wiki-page-history { max-height: min(520px, 60vh); display: grid; gap: 0; overflow: auto; border-block: 1px solid var(--aaron-paper-line); }
+.noema-wiki-page-history[hidden] { display: none; }
+.noema-wiki-page-history article { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; padding: 12px 2px; border-bottom: 1px solid var(--aaron-paper-line); }
+.noema-wiki-page-history article > div:first-child { min-width: 0; display: grid; gap: 4px; }
+.noema-wiki-page-history small { color: var(--aaron-muted); font: 9px var(--aaron-font-mono, monospace); }
+.noema-wiki-page-history article > div:nth-child(2) { display: flex; gap: 5px; }
+.noema-wiki-page-history pre { grid-column: 1 / -1; max-height: 260px; overflow: auto; margin: 0; padding: 10px; background: var(--aaron-code-bg); color: var(--aaron-muted); font: 9px/1.5 var(--aaron-font-mono, monospace); white-space: pre-wrap; }
 
 .noema-wiki-folder-list, .noema-wiki-file-list, .noema-wiki-tag-list, .noema-wiki-dependency-list { display: grid; gap: 7px; }
 .noema-wiki-folder, .noema-wiki-file-list article, .noema-wiki-tag-list article, .noema-wiki-dependency-list article {
@@ -165,15 +284,55 @@ button.is-danger { border-color: var(--aaron-danger) !important; color: var(--aa
 .noema-wiki-git-dialog { width: calc(100vw - 24px); height: calc(100vh - 24px); max-width: none; max-height: none; border: 1px solid var(--aaron-paper-line); border-radius: 10px; padding: 0; background: var(--aaron-paper); color: var(--aaron-ink); }
 .noema-wiki-git-dialog::backdrop { background: color-mix(in srgb, #07101e, transparent 25%); }
 .noema-wiki-git-dialog header { height: 48px; padding: 0 14px; border-bottom: 1px solid var(--aaron-paper-line); }
+.noema-wiki-git-dialog header small { margin-left: auto; color: var(--aaron-muted); font: 10px/1.4 var(--aaron-font-mono, monospace); }
 .noema-wiki-git-dialog iframe { width: 100%; height: calc(100% - 48px); border: 0; background: #fff; }
 
-@media (max-width: 760px) {
+@media (max-width: 1439px) {
+  .noema-wiki-site-header { grid-template-columns: minmax(200px, 250px) minmax(300px, 1fr) auto; gap: 20px; }
+  .noema-wiki-shell { grid-template-columns: 230px minmax(0, 1fr); }
+  .noema-wiki-tools {
+    display: none; position: fixed; z-index: 35; top: 140px; right: 0; width: min(300px, 88vw);
+    box-shadow: -12px 0 40px color-mix(in srgb, #000, transparent 78%);
+  }
+  #wiki-app.is-tools-open .noema-wiki-tools { display: block; }
+  [data-toggle-tools].noema-wiki-panel-toggle { display: inline-flex; }
+}
+
+@media (max-width: 1023px) {
+  .noema-wiki-site-header { grid-template-columns: minmax(190px, 230px) minmax(260px, 1fr); padding-inline: 22px; }
+  .noema-wiki-site-actions { display: none; }
   .noema-wiki-shell { grid-template-columns: 1fr; }
-  .noema-wiki-sidebar { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--aaron-paper-line); }
-  .noema-wiki-sidebar nav { grid-template-columns: repeat(2, 1fr); }
-  .noema-wiki-settings { margin-top: 12px; }
+  .noema-wiki-sidebar {
+    display: none; position: fixed; z-index: 35; top: 140px; left: 0; width: min(300px, 88vw);
+    height: calc(100vh - 140px); border-right: 1px solid var(--aaron-paper-line); border-bottom: 0;
+    box-shadow: 12px 0 40px color-mix(in srgb, #000, transparent 78%);
+  }
+  #wiki-app.is-nav-open .noema-wiki-sidebar { display: flex; }
+  [data-toggle-nav].noema-wiki-panel-toggle { display: inline-flex; }
+  .noema-wiki-titlebar { padding-left: 18px; }
+}
+
+@media (max-width: 760px) {
+  .noema-wiki-titlebar { grid-template-columns: 1fr auto; }
+  .noema-wiki-titlebar > strong { display: none; }
+  .noema-wiki-title-actions > button:not(.noema-wiki-panel-toggle) { display: none; }
+  .noema-wiki-site-header { min-height: 76px; grid-template-columns: 1fr; top: 54px; gap: 10px; padding: 10px 16px; }
+  .noema-wiki-site-brand { display: none; }
+  .noema-wiki-shell { min-height: calc(100vh - 130px); }
+  .noema-wiki-sidebar, .noema-wiki-tools { top: 130px; height: calc(100vh - 130px); }
   .noema-wiki-content { padding: 30px 20px 70px; }
   .noema-wiki-hero { align-items: start; flex-direction: column; }
+  .noema-wiki-hero-actions { width: 100%; overflow-x: auto; }
+  .noema-wiki-search kbd { display: none; }
+  .noema-wiki-page-tabs { overflow-x: auto; }
+  .noema-wiki-page-tabs > div { flex: 0 0 auto; }
+  .noema-wiki-home-columns, .noema-wiki-home-portals > div { grid-template-columns: 1fr; }
+  .noema-wiki-home-portals button { border-right: 0; border-bottom: 1px solid var(--aaron-paper-line); }
+  .noema-wiki-home-portals button:last-child { border-bottom: 0; }
+  .noema-wiki-page { grid-template-columns: 1fr auto; }
+  .noema-wiki-page .partition { grid-column: 1; width: max-content; }
+  .noema-wiki-page > div { grid-column: 1 / -1; }
+  .noema-wiki-page-actions { grid-column: 2; grid-row: 1; }
   .noema-wiki-report-cards, .noema-wiki-form-grid { grid-template-columns: 1fr; }
   .noema-wiki-tag-list article { align-items: stretch; flex-direction: column; }
 }

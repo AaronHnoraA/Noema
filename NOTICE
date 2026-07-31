@@ -20,6 +20,14 @@ The raw-ZMQ Jupyter transport includes code ported from microsoft/vscode-jupyter
 under the MIT License; its existing source notices remain in the relevant
 files.
 
+The Noema Wiki product and storage architecture was reviewed against Wiki.js
+(requarks/wiki) at commit 6f042e97cc2d3acda6b6ff611de8e0faacce91c1,
+licensed under AGPL-3.0. Its responsive information architecture was reviewed
+against Wikimedia's Vector skin at commit
+5c9955d51100fbe72d38dc04f632faf94791263c, licensed under GPL-2.0-or-later.
+No upstream runtime is vendored; directly used Git and merge interfaces are the
+declared ungit and @mismerge/core package dependencies.
+
 The generated math snippet catalog includes filtered completion data derived
 from James Yu's LaTeX Workshop at commit
 57f9e8d0306ea0c7419290a2b62ee0cec3c31041, used under the MIT License. Source

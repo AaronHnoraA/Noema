@@ -102,11 +102,15 @@ describe("Wiki Git synchronization", () => {
 
   test("checkpoints a device branch and integrates it into origin/main", async () => {
     const item = await fixture();
+    await git(item.repositoryPath, "config", "user.name", "Researcher");
+    await git(item.repositoryPath, "config", "user.email", "researcher@example.test");
     const file = join(item.repositoryPath, "sync.md");
     await writeFile(file, (await readFile(file, "utf8")).replace("# Common", "# Local edit"));
     const state = await syncWikiRepository(item.root, "private/research", { configDir: item.configDir });
     expect(state).toMatchObject({ phase: "idle", localOnly: false });
     expect(await git(item.repositoryPath, "branch", "--show-current")).toMatch(/^noema\//);
+    expect(await git(item.repositoryPath, "log", "-1", "--format=%an <%ae>")).toBe("Researcher <researcher@example.test>");
+    expect(await git(item.repositoryPath, "log", "-1", "--format=%s")).toMatch(/^noema: checkpoint 1 file/);
 
     const checkout = join(item.suite, "verification");
     await execFileAsync("git", ["clone", item.remote, checkout]);

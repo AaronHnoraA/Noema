@@ -18,8 +18,12 @@ import {
   publicWikiNotes,
   repositoryFromId,
   resolveWikiLink,
+  searchWikiDatabase,
   updateWikiTag,
   wikiDatabaseFile,
+  wikiPageDiff,
+  wikiPageHistory,
+  restoreWikiPageVersion,
   wikiTagIndex,
 } from "../server/lib/wiki-workspace.mjs";
 import { isUuidV7 } from "../shared/identity.mjs";
@@ -86,6 +90,21 @@ describe("Wiki workspace", () => {
     });
   });
 
+  test("rekeys an existing page index when a repository gains a stable identity", async () => {
+    const root = await tempRoot();
+    const repository = await gitRepository(root, "private", "legacy-notes");
+    await writeFile(join(repository, "existing.md"), note("existing-id", "Existing page"));
+    const before = await buildWikiIndex(root, { layout: "wiki" });
+    expect(before.notes[0].pageKey).toMatch(/^provisional:[^:]+:existing\.md$/);
+
+    const adopted = await adoptWikiRepository(root, "private/legacy-notes");
+    const after = await buildWikiIndex(root, { layout: "wiki" });
+    expect(after.notes[0]).toMatchObject({ id: "existing-id", file: join(repository, "existing.md") });
+    expect(after.notes[0].pageKey).toBe(`${adopted.repository.uid}:existing.md`);
+    expect(after.notes[0].pageKey).not.toBe(before.notes[0].pageKey);
+    expect(searchWikiDatabase(root, { query: "Existing" })).toMatchObject({ total: 1 });
+  });
+
   test("builds a global title/alias Wiki index with wanted and ambiguous reports", async () => {
     const root = await tempRoot();
     const math = await gitRepository(root, "public", "math");
@@ -103,9 +122,63 @@ describe("Wiki workspace", () => {
       candidates: [expect.objectContaining({ id: "daily-id" })],
     });
     expect(resolveWikiLink(index, "Tensor")).toMatchObject({ status: "ambiguous" });
+    expect(resolveWikiLink(index, "Tensor", { sourceFile: join(math, "tensor.md") })).toMatchObject({
+      status: "resolved",
+      candidates: [expect.objectContaining({ file: join(math, "tensor.md") })],
+    });
     expect(index.reports.wanted[0]).toMatchObject({ title: "Missing Page" });
     expect(index.reports.duplicates.length).toBeGreaterThan(0);
     expect(wikiDatabaseFile(root)).toBe(join(root, ".noema", "wiki.db"));
+  });
+
+  test("persists searchable Markdown content, excludes Typst pages, and keeps a stable generation", async () => {
+    const root = await tempRoot();
+    const repository = await gitRepository(root, "public", "physics");
+    await writeFile(join(repository, "entanglement.md"), note(
+      "0198fbac-0780-7c99-85e6-333333333333",
+      "Quantum Entanglement",
+      "Entanglement correlations and 量子纠缠实验.",
+    ));
+    await writeFile(join(repository, "ignored.typ"), "= Typst should stay outside the Wiki\n");
+    await writeFile(join(repository, "paper.pdf"), "attachment metadata only");
+
+    const first = await buildWikiIndex(root, { layout: "wiki" });
+    const second = await buildWikiIndex(root, { layout: "wiki" });
+    expect(first.notes.map((item) => item.title)).toEqual(["Quantum Entanglement"]);
+    expect(first.files).toEqual(expect.arrayContaining([
+      expect.objectContaining({ repositoryPath: "ignored.typ", kind: "file" }),
+      expect.objectContaining({ repositoryPath: "paper.pdf", kind: "file" }),
+    ]));
+    expect(second.generation).toBe(first.generation);
+    expect(searchWikiDatabase(root, { query: "Entanglement correlations" })).toMatchObject({
+      total: 1,
+      items: [expect.objectContaining({ title: "Quantum Entanglement" })],
+    });
+    expect(searchWikiDatabase(root, { query: "Entang" })).toMatchObject({ total: 1 });
+    expect(searchWikiDatabase(root, { query: "量子纠" })).toMatchObject({ total: 1 });
+    expect(searchWikiDatabase(root, { query: "attachment metadata only" })).toMatchObject({ total: 0 });
+  });
+
+  test("uses Git commits as page history and restores an old version into the working tree", async () => {
+    const root = await tempRoot();
+    const created = await initWikiRepository(root, "private", "history");
+    const page = await createWikiPage(root, "wiki", {
+      title: "Versioned page",
+      repositoryId: "private/history",
+      filename: "versioned.md",
+    });
+    await execFileAsync("git", ["-C", created.repository.path, "add", "versioned.md"]);
+    await execFileAsync("git", ["-C", created.repository.path, "-c", "user.name=Historian", "-c", "user.email=history@example.test", "commit", "-m", "first version"]);
+    const firstSha = (await execFileAsync("git", ["-C", created.repository.path, "rev-parse", "HEAD"])).stdout.trim();
+    await writeFile(page.file, (await readFile(page.file, "utf8")).replace("# Versioned page", "# Version two"));
+    await execFileAsync("git", ["-C", created.repository.path, "add", "versioned.md"]);
+    await execFileAsync("git", ["-C", created.repository.path, "-c", "user.name=Historian", "-c", "user.email=history@example.test", "commit", "-m", "second version"]);
+
+    const history = await wikiPageHistory(root, { pageId: page.id });
+    expect(history.commits[0]).toMatchObject({ subject: "second version", author: "Historian" });
+    expect((await wikiPageDiff(root, { pageId: page.id, sha: history.commits[0].sha })).diff).toContain("Version two");
+    await restoreWikiPageVersion(root, { pageId: page.id, sha: firstSha });
+    expect(await readFile(page.file, "utf8")).toContain("# Versioned page");
   });
 
   test("uses a workbench request to create a page at an explicit repository destination", async () => {

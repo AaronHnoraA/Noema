@@ -583,6 +583,7 @@ type NativeApi = {
     bootstrap?: () => Promise<unknown>;
     environment?: () => Promise<unknown>;
     refresh?: () => Promise<unknown>;
+    search?: (body: Record<string, unknown>) => Promise<unknown>;
     resolveLink?: (body: Record<string, unknown>) => Promise<unknown>;
     initWorkspace?: () => Promise<unknown>;
     initRepository?: (body: Record<string, unknown>) => Promise<unknown>;
@@ -598,6 +599,9 @@ type NativeApi = {
     tags?: () => Promise<unknown>;
     updateTag?: (body: Record<string, unknown>) => Promise<unknown>;
     export?: (body: Record<string, unknown>) => Promise<unknown>;
+    pageHistory?: (body: Record<string, unknown>) => Promise<unknown>;
+    pageDiff?: (body: Record<string, unknown>) => Promise<unknown>;
+    restorePage?: (body: Record<string, unknown>) => Promise<unknown>;
     syncStatus?: (body: Record<string, unknown>) => Promise<unknown>;
     checkpoint?: (body: Record<string, unknown>) => Promise<unknown>;
     sync?: (body: Record<string, unknown>) => Promise<unknown>;
@@ -674,6 +678,7 @@ export type WikiSyncState = {
 };
 export type WikiIndex = {
   type: "wiki-index";
+  generation?: string;
   root: string;
   layout: "legacy" | "wiki";
   dbFile: string;
@@ -688,6 +693,14 @@ export type WikiIndex = {
     duplicates: Array<Record<string, unknown>>;
     duplicateIds?: Array<Record<string, unknown>>;
   };
+};
+
+export type WikiSearchResult = {
+  type: "wiki-search";
+  generation: string;
+  items: WikiNote[];
+  total: number;
+  nextCursor: number | null;
 };
 
 export type LatexTemplateVar = {
@@ -1265,12 +1278,16 @@ export const api = {
       const call = requireMethod(nativeApi().wiki?.refresh, "Wiki refresh");
       return ensureOk(await call() as WikiIndex, "Refreshing Wiki failed");
     },
-    async resolveLink(target: string): Promise<{
+    async search(body: { query?: string; repositoryId?: string; partition?: string; sort?: "title" | "recent"; cursor?: number; limit?: number }): Promise<WikiSearchResult> {
+      const call = requireMethod(nativeApi().wiki?.search, "Wiki search");
+      return ensureOk(await call(body) as WikiSearchResult, "Searching Wiki failed");
+    },
+    async resolveLink(target: string, sourceFile = ""): Promise<{
       status: "resolved" | "ambiguous" | "missing";
       candidates: Array<{ id: string; title: string; file: string; path: string }>;
     }> {
       const call = requireMethod(nativeApi().wiki?.resolveLink, "Wiki link");
-      return ensureOk(await call({ target }) as {
+      return ensureOk(await call({ target, sourceFile }) as {
         status: "resolved" | "ambiguous" | "missing";
         candidates: Array<{ id: string; title: string; file: string; path: string }>;
       }, "Resolving Wiki link failed");
@@ -1331,13 +1348,25 @@ export const api = {
       const call = requireMethod(nativeApi().wiki?.export, "Export Wiki");
       return ensureOk(await call(body) as Record<string, unknown>, "Exporting Wiki failed");
     },
+    async pageHistory(pageId: string, limit = 50): Promise<{ commits: Array<{ sha: string; date: string; author?: string; email?: string; subject: string }> }> {
+      const call = requireMethod(nativeApi().wiki?.pageHistory, "Wiki page history");
+      return ensureOk(await call({ pageId, limit }) as { commits: Array<{ sha: string; date: string; author?: string; email?: string; subject: string }> }, "Loading page history failed");
+    },
+    async pageDiff(pageId: string, sha: string): Promise<{ diff?: string }> {
+      const call = requireMethod(nativeApi().wiki?.pageDiff, "Wiki page diff");
+      return ensureOk(await call({ pageId, sha }) as { diff?: string }, "Loading page diff failed");
+    },
+    async restorePage(pageId: string, sha: string): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().wiki?.restorePage, "Restore Wiki page");
+      return ensureOk(await call({ pageId, sha }) as Record<string, unknown>, "Restoring page failed");
+    },
     async syncStatus(repositoryId = ""): Promise<Record<string, unknown>> {
       const call = requireMethod(nativeApi().wiki?.syncStatus, "Wiki sync status");
       return ensureOk(await call({ repositoryId }) as Record<string, unknown>, "Loading sync status failed");
     },
-    async checkpoint(repositoryId: string): Promise<Record<string, unknown>> {
+    async checkpoint(repositoryId: string, message = ""): Promise<Record<string, unknown>> {
       const call = requireMethod(nativeApi().wiki?.checkpoint, "Wiki checkpoint");
-      return ensureOk(await call({ repositoryId }) as Record<string, unknown>, "Checkpoint failed");
+      return ensureOk(await call({ repositoryId, message }) as Record<string, unknown>, "Checkpoint failed");
     },
     async sync(repositoryId: string): Promise<WikiSyncState> {
       const call = requireMethod(nativeApi().wiki?.sync, "Wiki sync");

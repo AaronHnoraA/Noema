@@ -134,6 +134,7 @@ import {
   loadNoemaAppConfig,
 } from "./theme-runtime.ts";
 import { wikiCompletionSnippets, wikiLinkCompletionContext } from "./wiki-completion.ts";
+import { createLinkPreviewController } from "./link-preview.ts";
 
 const removeNoemaThemeRuntime = installNoemaThemeRuntime();
 const root = document.querySelector<HTMLElement>("#app");
@@ -1115,8 +1116,71 @@ const editor = createEditor(host, {
   },
 });
 host.appendChild(bibliographyPanel);
+
+const linkPreview = createLinkPreviewController({
+  resolveTarget(href) {
+    const raw = cleanHref(href);
+    const wikiTarget = raw.match(/^roam:\/\/wiki\/(.+)$/i)?.[1];
+    const target = resolveHrefTarget(raw);
+    const note = target.note ?? (wikiTarget ? resolveNoteRef(decodeURIComponent(wikiTarget)) : undefined);
+    return {
+      href: raw,
+      note,
+      hash: target.hash,
+      domTarget: target.domTarget,
+      external: !note && !/^roam:\/\//i.test(raw),
+    };
+  },
+  openNoteContent: (file) => api.notes.open(file),
+  openNote: (note, options = {}) => openNote(note, options),
+  openExternalUrl,
+  isSafeHref: safeHref,
+  noteTitle: (note) => note.title || note.path || note.file || "Untitled",
+  resolveAssetUrl(src, file) {
+    const raw = String(src || "").trim();
+    if (!raw || /^(?:data:|https?:|blob:|#)/i.test(raw)) return raw;
+    const url = new URL("/note-asset", location.origin);
+    url.searchParams.set("src", raw);
+    if (file) url.searchParams.set("base", file);
+    return url.toString();
+  },
+  beforeShow: () => {
+    contextMenu.hidden = true;
+    selectionTool.hidden = true;
+  },
+  setStatus,
+});
 slideDeck = createSlideDeckController({ root, host, editor, getCurrentFile: () => currentFile });
 writingStatsController = createWritingStatsController(editor, writingStatsLabel);
+
+let hoveredInternalHref = "";
+let linkHoverTimer = 0;
+editor.view.dom.addEventListener("pointermove", (event) => {
+  const link = (event.target as Element | null)?.closest(".cm-internal-link-text, .cm-roam-link-text");
+  if (!link || !editor.view.dom.contains(link)) {
+    window.clearTimeout(linkHoverTimer);
+    linkHoverTimer = 0;
+    hoveredInternalHref = "";
+    linkPreview.dismissTransient();
+    return;
+  }
+  const pos = editor.view.posAtCoords({ x: event.clientX, y: event.clientY });
+  const href = typeof pos === "number" ? markdownHrefAt(editor.view.state, pos) || "" : "";
+  if (!href || href === hoveredInternalHref) return;
+  window.clearTimeout(linkHoverTimer);
+  hoveredInternalHref = href;
+  const { clientX, clientY } = event;
+  linkHoverTimer = window.setTimeout(() => {
+    linkHoverTimer = 0;
+    if (hoveredInternalHref === href) linkPreview.show(href, clientX, clientY);
+  }, 420);
+});
+editor.view.dom.addEventListener("pointerleave", () => {
+  window.clearTimeout(linkHoverTimer);
+  linkHoverTimer = 0;
+  hoveredInternalHref = "";
+  window.setTimeout(() => linkPreview.dismissTransient(), 120);
+});
 
 let bibliographyModel: BibliographyDocument = { ok: true, entries: [], references: [], citations: [], namespaces: [] };
 let bibliographyModelKey = "";
@@ -4201,7 +4265,7 @@ function openExternalUrl(href: string, options: { newWindow?: boolean } = {}): v
   if (wikiTarget || stableWikiTarget) {
     const target = wikiTarget ? decodeURIComponent(wikiTarget) : raw;
     const missingTitle = wikiTarget ? decodeURIComponent(wikiTarget) : stableWikiTarget || raw;
-    void api.wiki.resolveLink(target).then((result) => {
+    void api.wiki.resolveLink(target, currentFile).then((result) => {
       if (result.status === "resolved" && result.candidates[0]?.file) {
         if (options.newWindow) {
           const url = new URL("/", location.origin);
@@ -6375,7 +6439,7 @@ function toolActions(): ToolAction[] {
   ];
   return [
     ...common,
-    { id: "reload-index", title: "Reload roam index", detail: "Refresh notes, tags, links", run: () => void reloadNotes(true) },
+    { id: "reload-index", title: "Reload note index", detail: "Refresh notes, tags, links", run: () => void reloadNotes(true) },
     { id: "add-meta", title: "Add meta", detail: "Register title/kind/tags", run: () => void quickAddMeta() },
     { id: "remove-meta", title: "Remove meta", detail: "Delete current note meta block", run: () => void unregisterMeta() },
     { id: "hide-roam", title: "Set roam off", detail: "Keep meta but hide from roam graph", run: () => void updateNoteMeta(api.meta.hideRoam, {}, "roam: off set") },
@@ -8687,6 +8751,15 @@ document.addEventListener("aaronnote:open-url", (event) => {
   if (!href) return;
   event.preventDefault();
   openExternalUrl(href, { newWindow: custom.detail?.newWindow === true });
+});
+document.addEventListener("aaronnote:preview-url", (event) => {
+  const custom = event as CustomEvent<{ href?: string; x?: number; y?: number; persistent?: boolean }>;
+  const href = custom.detail?.href;
+  if (!href) return;
+  event.preventDefault();
+  linkPreview.show(href, Number(custom.detail?.x || 0), Number(custom.detail?.y || 0), {
+    persistent: custom.detail?.persistent === true,
+  });
 });
 document.addEventListener("aaronnote:open-attachment", (event) => {
   const custom = event as CustomEvent<{ href?: string }>;

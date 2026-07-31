@@ -11,8 +11,8 @@ import { blockMathRangesOverlapping, mergeOverlappingRanges, rangeOverlapsAny } 
 import { scanCodeRanges } from "./code-ranges.ts";
 import { scanInlineMathRanges } from "../inline-math.ts";
 import { hasViewportDecorationRefresh } from "./viewport-refresh.ts";
+import { scanWikiLinks } from "../../shared/wiki-link.mjs";
 
-const WIKILINK_RE = /\[\[([^\]\n]+)\]\]/g;
 const BARE_ROAM_RE = /\broam:\/\/[^\s<>)\]]+/gi;
 
 export const setKnownRoamRefs = StateEffect.define<readonly string[] | null>();
@@ -72,13 +72,10 @@ function buildBrokenLinkDecorations(view: EditorView): DecorationSet {
 
   for (const { from: visibleFrom, to: visibleTo } of visibleRanges) {
     const text = view.state.doc.sliceString(visibleFrom, visibleTo);
-    WIKILINK_RE.lastIndex = 0;
-    let wiki: RegExpExecArray | null;
-    while ((wiki = WIKILINK_RE.exec(text)) !== null) {
-      const ref = wiki[1]?.trim() ?? "";
-      if (knownRefMatches(known, ref)) continue;
-      const from = visibleFrom + wiki.index + 2;
-      const to = visibleFrom + wiki.index + wiki[0].length - 2;
+    for (const wiki of scanWikiLinks(text, visibleFrom)) {
+      if (knownRefMatches(known, wiki.target)) continue;
+      const from = wiki.labelFrom;
+      const to = wiki.labelTo;
       if (rangeOverlapsAny(from, to, excludedRanges)) continue;
       if (from < to) decos.push(mark.range(from, to));
     }

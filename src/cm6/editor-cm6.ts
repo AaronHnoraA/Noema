@@ -31,6 +31,7 @@ import {
   markdownLinkOpensNewWindow,
   markdownLinkPrimaryModifier,
 } from "./markdown-link-events.ts";
+import { wikiLinkAt } from "../../shared/wiki-link.mjs";
 import { vscodeCloseBrackets, vscodeDeleteBracketPairKeymap } from "./close-brackets-vscode.ts";
 import { foldEffect, syntaxTree, unfoldEffect } from "@codemirror/language";
 import { disposeHighlightWorker } from "../code-highlight-async.ts";
@@ -272,6 +273,14 @@ export function markdownHrefAt(state: EditorState, pos: number): string | null {
   const line = state.doc.lineAt(clamped);
   if (positionInsideAnyRange(clamped, scanInlineMathRanges(line.text, line.from))) return null;
 
+  let codeNode: SyntaxNode | null = syntaxTree(state).resolveInner(clamped, -1);
+  while (codeNode) {
+    if (["InlineCode", "FencedCode", "CodeBlock", "IndentedCode"].includes(codeNode.name)) return null;
+    codeNode = codeNode.parent;
+  }
+  const wiki = wikiLinkAt(line.text, clamped, line.from);
+  if (wiki?.href) return wiki.href;
+
   const positions = clamped > 0 ? [clamped, clamped - 1] : [clamped];
 
   for (const targetPos of positions) {
@@ -343,7 +352,7 @@ function previewMarkdownLinkFromEvent(view: EditorView, event: MouseEvent): bool
   event.stopPropagation();
   view.dom.dispatchEvent(new CustomEvent("aaronnote:preview-url", {
     bubbles: true,
-    detail: { href, x: event.clientX, y: event.clientY },
+    detail: { href, x: event.clientX, y: event.clientY, persistent: true },
   }));
   return true;
 }

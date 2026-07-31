@@ -1,5 +1,6 @@
 import type { WikiNote } from "./api-client.ts";
 import type { SnippetSummary } from "./types.ts";
+import { stableWikiTarget } from "../shared/wiki-link.mjs";
 
 export type WikiLinkCompletionContext = {
   prefix: string;
@@ -57,7 +58,7 @@ export function wikiCompletionSnippets(
       mode: "markdown-mode",
       group: "Wiki pages",
       kind: note.kind || "page",
-      body: `${note.title}${closing}`,
+      body: `${note.identityStatus === "provisional" ? note.title : `${stableWikiTarget(note.id)}|${note.title}`}${closing}`,
       source: `${note.repositoryId} · ${note.repositoryPath}`,
       provider: "wiki",
       browserCompatible: true,

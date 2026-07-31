@@ -66,6 +66,7 @@ export type WikiDirectory = {
 };
 export type WikiIndex = {
   type: "wiki-index";
+  generation?: string;
   root: string;
   layout: WikiLayout;
   repositories: WikiRepository[];
@@ -87,7 +88,7 @@ export function discoverWikiRepositories(root: string): Promise<{
   root: string; layout: "wiki"; repositories: WikiRepository[]; diagnostics: WikiDiagnostic[];
 }>;
 export function buildWikiIndex(root: string, options?: { layout?: WikiLayout }): Promise<WikiIndex>;
-export function resolveWikiLink(index: WikiIndex, target: string): {
+export function resolveWikiLink(index: WikiIndex, target: string, options?: { sourceFile?: string }): {
   type: "wiki-link";
   target: string;
   status: "resolved" | "ambiguous" | "missing";
@@ -97,6 +98,21 @@ export function resolveWikiLink(index: WikiIndex, target: string): {
 };
 export function wikiDatabaseFile(root: string): string;
 export function persistWikiIndex(index: WikiIndex): Promise<{ ok: boolean; dbFile: string; message?: string }>;
+export function searchWikiDatabase(root: string, body?: {
+  query?: string;
+  q?: string;
+  repositoryId?: string;
+  partition?: WikiPartition;
+  cursor?: number;
+  limit?: number;
+}): {
+  ok: true;
+  type: "wiki-search";
+  generation: string;
+  items: WikiNote[];
+  total: number;
+  nextCursor: number | null;
+};
 export function initWikiWorkspace(root: string): Promise<unknown>;
 export function initWikiRepository(root: string, partition: WikiPartition, name: string): Promise<{
   ok: true;
@@ -128,3 +144,6 @@ export function wikiTagIndex(index: WikiIndex): Array<{
 }>;
 export function updateWikiTag(root: string, body?: Record<string, unknown>): Promise<Record<string, any>>;
 export function exportWiki(root: string, body?: Record<string, unknown>): Promise<Record<string, any>>;
+export function wikiPageHistory(root: string, body?: Record<string, unknown>): Promise<Record<string, any>>;
+export function wikiPageDiff(root: string, body?: Record<string, unknown>): Promise<Record<string, any>>;
+export function restoreWikiPageVersion(root: string, body?: Record<string, unknown>): Promise<Record<string, any>>;

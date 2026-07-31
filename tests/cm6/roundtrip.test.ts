@@ -210,15 +210,48 @@ maybeDescribe("cm6 kernel: getMarkdown / setMarkdown", () => {
     cleanup();
   });
 
-  test("keeps double-bracket text literal and non-clickable", () => {
+  test("renders double-bracket Wiki links and resolves them as internal URLs", () => {
     const md = "see [[Note Title]] ref";
     const { editor, cleanup } = mountCM6(md);
     editor.setMarkdownSelection(md.length);
-    expect(document.querySelector(".cm-roam-link-text")).toBeNull();
-    expect(document.querySelector(".cm-link-text")).toBeNull();
-    expect(markdownHrefAt(editor.view.state, md.indexOf("Note"))).toBeNull();
-    expect((editor.view as unknown as { contentDOM: HTMLElement }).contentDOM.textContent)
-      .toContain("[[Note Title]]");
+    expect(document.querySelector(".cm-internal-link-text")?.textContent).toBe("Note Title");
+    expect(markdownHrefAt(editor.view.state, md.indexOf("Note"))).toBe("roam://wiki/Note%20Title");
+    expect(Array.from(document.querySelectorAll<HTMLElement>(".syntax-hidden"))
+      .map((element) => element.textContent)).toEqual(expect.arrayContaining(["[[", "]]" ]));
+    cleanup();
+  });
+
+  test("cmd-click on a Wiki link dispatches the unified open-url event", () => {
+    const md = "see [[roam://page-id|Note Title]] ref";
+    const { editor, cleanup } = mountCM6(md);
+    const events: CustomEvent[] = [];
+    const listener = (event: Event) => events.push(event as CustomEvent);
+    const view = editor.view as typeof editor.view & {
+      contentDOM: HTMLElement;
+      posAtCoords: (coords: { x: number; y: number }) => number | null;
+    };
+    const originalDescriptor = Object.getOwnPropertyDescriptor(view, "posAtCoords");
+    document.addEventListener("aaronnote:open-url", listener);
+    Object.defineProperty(view, "posAtCoords", {
+      configurable: true,
+      value: () => md.indexOf("Note Title"),
+    });
+
+    const event = new MouseEvent("mousedown", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      clientX: 1,
+      clientY: 1,
+      metaKey: true,
+    });
+    view.contentDOM.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(events[0]?.detail).toEqual({ href: "roam://wiki/roam%3A%2F%2Fpage-id", newWindow: false });
+    document.removeEventListener("aaronnote:open-url", listener);
+    if (originalDescriptor) Object.defineProperty(view, "posAtCoords", originalDescriptor);
+    else delete (view as { posAtCoords?: unknown }).posAtCoords;
     cleanup();
   });
 

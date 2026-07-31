@@ -5,6 +5,7 @@ import { Epoch } from "../src/async-epoch.ts";
 export type LinkPreviewTarget = {
   href: string;
   note?: NoteSummary;
+  hash?: string;
   equationTag?: string;
   inlineTag?: string;
   domTarget?: string;
@@ -12,6 +13,7 @@ export type LinkPreviewTarget = {
 };
 
 type OpenNoteOptions = {
+  hash?: string;
   equationTag?: string;
   inlineTag?: string;
   domTarget?: string;
@@ -32,7 +34,7 @@ type LinkPreviewOptions = {
 
 export type LinkPreviewController = {
   element: HTMLElement;
-  show: (href: string, x: number, y: number) => void;
+  show: (href: string, x: number, y: number, options?: { persistent?: boolean }) => void;
   hide: () => void;
   dismissTransient: () => void;
   isOpen: () => boolean;
@@ -146,21 +148,23 @@ export function createLinkPreviewController(options: LinkPreviewOptions): LinkPr
     element.append(head, content, actions);
   }
 
-  function show(href: string, x: number, y: number): void {
+  function show(href: string, x: number, y: number, showOptions: { persistent?: boolean } = {}): void {
     const target = options.resolveTarget(href);
     const run = showEpoch.begin();
     moved = false;
-    setPersistent(false);
+    setPersistent(showOptions.persistent === true);
     options.beforeShow?.();
     element.hidden = false;
     renderChrome("Loading", href, "Loading preview...", () => options.openExternalUrl(href, { newWindow: false }));
     place(x, y);
 
     if (!target.note?.file) {
+      const internal = /^roam:\/\//i.test(href);
       const safe = options.isSafeHref(href);
-      setPersistent(false);
-      renderChrome(safe ? "External link" : "Blocked link", href, safe ? href : "Unsafe URL", () => {
-        if (safe) options.openExternalUrl(href, { newWindow: true });
+      setPersistent(showOptions.persistent === true);
+      renderChrome(internal ? "Wiki page" : safe ? "External link" : "Blocked link", href, internal ? "Open or create this page" : safe ? href : "Unsafe URL", () => {
+        if (internal) options.openExternalUrl(href, { newWindow: false });
+        else if (safe) options.openExternalUrl(href, { newWindow: true });
         else options.setStatus?.("Blocked unsafe link");
       });
       place(x, y);
@@ -176,9 +180,10 @@ export function createLinkPreviewController(options: LinkPreviewOptions): LinkPr
         const html = renderMarkdownHTML(msg.content ?? "", {
           assetResolver: (src) => options.resolveAssetUrl(src, note.file || ""),
         });
-        setPersistent(true);
+        setPersistent(showOptions.persistent === true);
         renderChrome(title, subtitle, html, () => {
           options.openNote(note, {
+            hash: target.hash,
             equationTag: target.equationTag,
             inlineTag: target.inlineTag,
             domTarget: target.domTarget,
@@ -190,9 +195,10 @@ export function createLinkPreviewController(options: LinkPreviewOptions): LinkPr
       })
       .catch((err) => {
         if (!run.current) return;
-        setPersistent(false);
+        setPersistent(showOptions.persistent === true);
         renderChrome(title, subtitle, err instanceof Error ? err.message : "Preview failed", () => {
           options.openNote(note, {
+            hash: target.hash,
             equationTag: target.equationTag,
             inlineTag: target.inlineTag,
             domTarget: target.domTarget,
@@ -205,6 +211,9 @@ export function createLinkPreviewController(options: LinkPreviewOptions): LinkPr
   }
 
   element.addEventListener("mousedown", (event) => event.stopPropagation());
+  element.addEventListener("pointerenter", () => {
+    if (!element.hidden) setPersistent(true);
+  });
 
   return {
     element,

@@ -3980,3 +3980,92 @@ html.aaronnote-paused *::after {
   color: color-mix(in srgb, var(--aaron-accent-2), var(--aaron-ink) 22%);
   font: 0.78rem/1.4 var(--aaron-font-sans);
 }
+.aaronnote-link-preview {
+  position: fixed;
+  z-index: 90;
+  max-height: min(72vh, 680px);
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--aaron-ui-border, #a2b4b1) 82%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--aaron-ui-surface, #fff) 97%, transparent);
+  color: var(--aaron-ui-text, #202122);
+  box-shadow: 0 12px 38px rgb(0 0 0 / 18%);
+  backdrop-filter: blur(14px);
+}
+
+.aaronnote-link-preview[hidden] {
+  display: none;
+}
+
+.aaronnote-link-preview-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 16px;
+  align-items: baseline;
+  padding: 13px 16px 11px;
+  border-bottom: 1px solid var(--aaron-ui-border, #c8ccd1);
+  cursor: move;
+  user-select: none;
+}
+
+.aaronnote-link-preview-head strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--aaron-ui-link, #36c);
+  font-family: var(--aaron-ui-sans, system-ui, sans-serif);
+  font-size: 1rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aaronnote-link-preview-head span {
+  max-width: 32ch;
+  overflow: hidden;
+  color: var(--aaron-ui-muted, #72777d);
+  font: 0.72rem/1.3 var(--aaron-ui-mono, ui-monospace, monospace);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aaronnote-link-preview-body {
+  max-height: min(54vh, 520px);
+  overflow: auto;
+  padding: 18px 20px;
+  font: 0.94rem/1.62 var(--aaron-ui-serif, Georgia, serif);
+}
+
+.aaronnote-link-preview-body > :first-child { margin-top: 0; }
+.aaronnote-link-preview-body > :last-child { margin-bottom: 0; }
+
+.aaronnote-link-preview-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 9px 12px;
+  border-top: 1px solid var(--aaron-ui-border, #c8ccd1);
+  background: color-mix(in srgb, var(--aaron-ui-surface, #fff) 90%, var(--aaron-ui-bg, #f8f9fa));
+}
+
+.aaronnote-link-preview-actions button {
+  min-height: 30px;
+  padding: 4px 12px;
+  border: 1px solid var(--aaron-ui-border, #a2a9b1);
+  border-radius: 4px;
+  background: var(--aaron-ui-surface, #fff);
+  color: inherit;
+  font: 600 0.78rem var(--aaron-ui-sans, system-ui, sans-serif);
+}
+
+.aaronnote-link-preview-actions button:first-child {
+  border-color: var(--aaron-ui-link, #36c);
+  background: var(--aaron-ui-link, #36c);
+  color: #fff;
+}
+
+@media (max-width: 700px) {
+  .aaronnote-link-preview {
+    right: 8px !important;
+    left: 8px !important;
+    width: auto !important;
+  }
+}

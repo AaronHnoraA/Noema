@@ -126,6 +126,27 @@ async function stagedChanges(repository) {
   return Boolean(result.error);
 }
 
+async function stagedFileCount(repository) {
+  const result = await git(repository, ["diff", "--cached", "--name-only", "-z"], { allowFailure: true });
+  if (result.error) return 0;
+  return String(result.stdout || "").split("\0").filter(Boolean).length;
+}
+
+async function commitIdentity(repository, device) {
+  const [name, email] = await Promise.all([
+    git(repository, ["config", "--get", "user.name"], { allowFailure: true }),
+    git(repository, ["config", "--get", "user.email"], { allowFailure: true }),
+  ]);
+  const configuredName = String(name.stdout || "").trim();
+  const configuredEmail = String(email.stdout || "").trim();
+  if (configuredName && configuredEmail) return { name: configuredName, email: configuredEmail, fallback: false };
+  return {
+    name: `Noema (${device.name})`,
+    email: `noema-${String(device.id).slice(0, 8)}@local`,
+    fallback: true,
+  };
+}
+
 export async function checkpointWikiRepository(rootValue, repositoryId, options = {}) {
   const root = expandNoemaPath(rootValue);
   const repository = await repositoryFromId(root, repositoryId);
@@ -134,12 +155,17 @@ export async function checkpointWikiRepository(rootValue, repositoryId, options 
   const branch = await ensureWorkBranch(repository, device);
   await git(repository, ["add", "-A", "--", "."]);
   let committed = false;
+  let changedFiles = 0;
+  let identityFallback = false;
   if (await stagedChanges(repository)) {
+    changedFiles = await stagedFileCount(repository);
     const at = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+    const identity = await commitIdentity(repository, device);
+    identityFallback = identity.fallback;
     await git(repository, [
-      "-c", `user.name=Noema (${device.name})`,
-      "-c", `user.email=noema-${String(device.id).slice(0, 8)}@local`,
-      "commit", "-m", String(options.message || `noema: checkpoint ${at}`),
+      "-c", `user.name=${identity.name}`,
+      "-c", `user.email=${identity.email}`,
+      "commit", "-m", String(options.message || `noema: checkpoint ${changedFiles} file${changedFiles === 1 ? "" : "s"} · ${at}`),
     ]);
     committed = true;
   }
@@ -150,6 +176,8 @@ export async function checkpointWikiRepository(rootValue, repositoryId, options 
     head: head.stdout.trim(),
     checkpointedAt: new Date().toISOString(),
     committed,
+    changedFiles,
+    identityFallback,
   });
   return { ok: true, type: "wiki-checkpoint", repository, ...state };
 }
@@ -241,6 +269,7 @@ async function prepareIntegrationWorktree(root, repository, device) {
 
 async function runSync(root, repository, options = {}) {
   const device = await ensureNoemaDeviceIdentity(options);
+  const identity = await commitIdentity(repository, device);
   const checkpoint = await checkpointWikiRepository(root, repository.id, options);
   if (!(await remoteUrl(repository))) {
     return await writeSyncState(root, repository, {
@@ -281,7 +310,7 @@ async function runSync(root, repository, options = {}) {
   await writeSyncState(root, repository, { phase: "merging", branch: checkpoint.branch });
   const merge = await execFileAsync(
     "git",
-    ["-C", integration.path, "-c", "user.name=Noema", "-c", "user.email=noema@local", "merge", "--no-edit", checkpoint.branch],
+    ["-C", integration.path, "-c", `user.name=${identity.name}`, "-c", `user.email=${identity.email}`, "merge", "--no-edit", checkpoint.branch],
     { maxBuffer: 1024 * 1024 * 32 },
   ).catch((error) => ({ error, stdout: error.stdout || "", stderr: error.stderr || "" }));
   if (merge.error) {
@@ -328,7 +357,7 @@ async function runSync(root, repository, options = {}) {
     await execFileAsync("git", ["-C", integration.path, "reset", "--hard", "origin/main"]);
     const retryMerge = await execFileAsync(
       "git",
-      ["-C", integration.path, "-c", "user.name=Noema", "-c", "user.email=noema@local", "merge", "--no-edit", checkpoint.branch],
+      ["-C", integration.path, "-c", `user.name=${identity.name}`, "-c", `user.email=${identity.email}`, "merge", "--no-edit", checkpoint.branch],
       { maxBuffer: 1024 * 1024 * 32 },
     ).catch((error) => ({ error }));
     if (retryMerge.error) {
@@ -398,6 +427,8 @@ export async function readWikiConflict(rootValue, body = {}) {
 export async function resolveWikiConflict(rootValue, body = {}) {
   const root = expandNoemaPath(rootValue);
   const repository = await repositoryFromId(root, body.repositoryId);
+  const device = await ensureNoemaDeviceIdentity(body);
+  const identity = await commitIdentity(repository, device);
   const worktree = integrationPath(root, repository);
   const path = String(body.path || "");
   const target = resolve(worktree, path);
@@ -433,7 +464,7 @@ export async function resolveWikiConflict(rootValue, body = {}) {
   }
   await execFileAsync(
     "git",
-    ["-C", worktree, "-c", "user.name=Noema", "-c", "user.email=noema@local", "commit", "--no-edit"],
+    ["-C", worktree, "-c", `user.name=${identity.name}`, "-c", `user.email=${identity.email}`, "commit", "--no-edit"],
     { maxBuffer: 1024 * 1024 * 32 },
   );
   const integrationBranchName = (await execFileAsync("git", ["-C", worktree, "branch", "--show-current"])).stdout.trim();

@@ -36,7 +36,10 @@ describe("Wiki editor completion", () => {
 
   test("reuses an existing closing delimiter", () => {
     const context = wikiLinkCompletionContext("[[E", "]]")!;
-    expect(wikiCompletionSnippets([note], context)[0]).toMatchObject({ provider: "wiki", body: "Emacs" });
+    expect(wikiCompletionSnippets([note], context)[0]).toMatchObject({
+      provider: "wiki",
+      body: "roam://page-id|Emacs",
+    });
   });
 
   test("offers page creation when the title is not indexed", () => {

@@ -133,12 +133,16 @@ import {
   mergeWikiPages,
   moveWikiPage,
   resolveWikiLink,
+  searchWikiDatabase,
   runWikiGitAction,
   updateWikiTag,
   wikiTagIndex,
   wikiDatabaseFile,
   wikiLayout,
+  wikiPageDiff,
+  wikiPageHistory,
   wikiRepositoryStatus,
+  restoreWikiPageVersion,
 } from "./server/lib/wiki-workspace.mjs";
 import {
   abortWikiConflict,
@@ -205,18 +209,44 @@ mkdirSync(tmpRoot, { recursive: true });
 const initialAppConfig = await ensureNoemaAppConfig({ env: process.env });
 const workspaceEnvironment = await authorizedWorkspaceEnvironment(noteRoot, process.env);
 
-async function wikiIndexPayload() {
-  const index = await buildWikiIndex(noteRoot, { layout: workspaceLayout });
-  return {
-    ...index,
-    dbFile: wikiDatabaseFile(noteRoot),
-    environment: {
-      active: workspaceEnvironment.active,
-      authorized: workspaceEnvironment.authorized,
-      variables: workspaceEnvironment.variables,
-      message: workspaceEnvironment.message,
-    },
-  };
+let wikiIndexCache = null;
+let wikiIndexBuildPromise = null;
+let wikiIndexDirty = true;
+
+function invalidateWikiIndex() {
+  wikiIndexDirty = true;
+}
+
+async function wikiIndexPayload({ force = false } = {}) {
+  if (!force && !wikiIndexDirty && wikiIndexCache) return wikiIndexCache;
+  if (wikiIndexBuildPromise) {
+    const current = await wikiIndexBuildPromise;
+    if (!force && !wikiIndexDirty) return current;
+  }
+  wikiIndexDirty = false;
+  wikiIndexBuildPromise = buildWikiIndex(noteRoot, { layout: workspaceLayout })
+    .then((index) => ({
+      ...index,
+      dbFile: wikiDatabaseFile(noteRoot),
+      environment: {
+        active: workspaceEnvironment.active,
+        authorized: workspaceEnvironment.authorized,
+        variables: workspaceEnvironment.variables,
+        message: workspaceEnvironment.message,
+      },
+    }))
+    .then((payload) => {
+      wikiIndexCache = payload;
+      return payload;
+    })
+    .catch((error) => {
+      wikiIndexDirty = true;
+      throw error;
+    })
+    .finally(() => {
+      wikiIndexBuildPromise = null;
+    });
+  return await wikiIndexBuildPromise;
 }
 
 async function wikiCreatePage(body = {}) {
@@ -403,6 +433,7 @@ void sweepGlobalOrphanKernels({ stderr: process.stderr }).then(({ reaped }) => {
 let wikiRefreshTimer = null;
 function scheduleWikiRefresh() {
   if (workspaceLayout !== "wiki") return;
+  invalidateWikiIndex();
   if (wikiRefreshTimer) clearTimeout(wikiRefreshTimer);
   wikiRefreshTimer = setTimeout(() => {
     wikiRefreshTimer = null;
@@ -413,7 +444,6 @@ function scheduleWikiRefresh() {
   wikiRefreshTimer.unref?.();
 }
 
-const wikiCheckpointTimers = new Map();
 const wikiIgnoredWatchParts = new Set([
   ".git", ".noema", ".direnv", ".lake", ".mypy_cache", ".pytest_cache",
   ".ruff_cache", ".sage", ".venv", "__pycache__", ".ipynb_checkpoints", "node_modules",
@@ -426,39 +456,77 @@ function wikiRepositoryIdForFile(file) {
   return `${rel[0]}/${rel[1]}`;
 }
 
-function scheduleWikiCheckpointForFile(file) {
-  if (workspaceLayout !== "wiki") return;
-  const repositoryId = wikiRepositoryIdForFile(file);
-  if (!repositoryId) return;
-  const previous = wikiCheckpointTimers.get(repositoryId);
-  if (previous) clearTimeout(previous);
-  const timer = setTimeout(() => {
-    wikiCheckpointTimers.delete(repositoryId);
-    void checkpointWikiRepository(noteRoot, repositoryId)
-      .then(() => broadcast("command", { command: "wiki-sync-changed", repositoryId }))
-      .catch((error) => process.stderr.write(`[noema-wiki] checkpoint failed for ${repositoryId}: ${error?.message || error}\n`));
-  }, 90_000);
-  timer.unref?.();
-  wikiCheckpointTimers.set(repositoryId, timer);
-}
-
 async function syncAllWikiRepositories() {
   if (workspaceLayout !== "wiki") return;
   const discovered = await discoverWikiRepositories(noteRoot);
-  for (const repository of discovered.repositories) {
-    void syncWikiRepository(noteRoot, repository.id)
-      .then(() => broadcast("command", { command: "wiki-sync-changed", repositoryId: repository.id }))
-      .catch((error) => process.stderr.write(`[noema-wiki] sync failed for ${repository.id}: ${error?.message || error}\n`));
-  }
+  const pending = [...discovered.repositories];
+  const workers = Array.from({ length: Math.min(2, pending.length) }, async () => {
+    while (pending.length) {
+      const repository = pending.shift();
+      if (!repository) return;
+      try {
+        const result = await syncWikiRepository(noteRoot, repository.id);
+        if (result?.phase !== "error" && result?.phase !== "conflicted") {
+          wikiDirtyRepositories.delete(repository.id);
+        }
+        broadcast("command", { command: "wiki-sync-changed", repositoryId: repository.id });
+      } catch (error) {
+        process.stderr.write(`[noema-wiki] sync failed for ${repository.id}: ${error?.message || error}\n`);
+      }
+    }
+  });
+  await Promise.all(workers);
+}
+
+const wikiDirtyRepositories = new Set();
+
+function markWikiRepositoryDirty(file) {
+  const repositoryId = wikiRepositoryIdForFile(file);
+  if (repositoryId) wikiDirtyRepositories.add(repositoryId);
+  return repositoryId;
+}
+
+async function checkpointDirtyWikiRepositories(reason = "shutdown") {
+  const repositories = [...wikiDirtyRepositories];
+  await Promise.allSettled(repositories.map(async (repositoryId) => {
+    const result = await checkpointWikiRepository(noteRoot, repositoryId, {
+      message: `noema: ${reason} checkpoint`,
+    });
+    wikiDirtyRepositories.delete(repositoryId);
+    return result;
+  }));
+}
+
+async function checkpointWikiRepositoryFromApi(body = {}) {
+  const repositoryId = String(body.repositoryId || "");
+  const result = await checkpointWikiRepository(noteRoot, repositoryId, body);
+  wikiDirtyRepositories.delete(repositoryId);
+  return result;
+}
+
+async function syncWikiRepositoryFromApi(body = {}) {
+  const repositoryId = String(body.repositoryId || "");
+  const result = await syncWikiRepository(noteRoot, repositoryId, body);
+  if (result?.phase !== "error" && result?.phase !== "conflicted") wikiDirtyRepositories.delete(repositoryId);
+  return result;
+}
+
+function scheduleNextPeriodicWikiSync() {
+  if (workspaceLayout !== "wiki") return null;
+  const jitter = Math.round((Math.random() - 0.5) * 20 * 60 * 1000);
+  const timer = setTimeout(async () => {
+    await syncAllWikiRepositories().catch((error) => reportServerError("wiki-periodic-sync", error));
+    wikiPeriodicSyncTimer = scheduleNextPeriodicWikiSync();
+  }, defaultWikiSyncIntervalMs() + jitter);
+  timer.unref?.();
+  return timer;
 }
 
 const wikiStartupSyncTimer = workspaceLayout === "wiki"
   ? setTimeout(() => void syncAllWikiRepositories().catch((error) => reportServerError("wiki-startup-sync", error)), 2_000)
   : null;
 wikiStartupSyncTimer?.unref?.();
-const wikiPeriodicSyncTimer = workspaceLayout === "wiki"
-  ? setInterval(() => void syncAllWikiRepositories().catch((error) => reportServerError("wiki-periodic-sync", error)), defaultWikiSyncIntervalMs())
-  : null;
+let wikiPeriodicSyncTimer = scheduleNextPeriodicWikiSync();
 wikiPeriodicSyncTimer?.unref?.();
 
 const noteWatcher = process.env.AARONNOTE_WATCH !== "0"
@@ -482,7 +550,7 @@ const noteWatcher = process.env.AARONNOTE_WATCH !== "0"
         }
         if (workspaceLayout === "wiki" && files.length > 0) {
           scheduleWikiRefresh();
-          for (const file of files) scheduleWikiCheckpointForFile(file);
+          for (const file of files) markWikiRepositoryDirty(file);
         }
         if (bibFiles.length > 0) {
           clearBibliographyCache();
@@ -600,9 +668,10 @@ async function beginShutdown({ reason = "shutdown", exitCode = 0, deadlineMs = 3
       clearInterval(sseHeartbeatInterval);
       if (wikiRefreshTimer) clearTimeout(wikiRefreshTimer);
       if (wikiStartupSyncTimer) clearTimeout(wikiStartupSyncTimer);
-      if (wikiPeriodicSyncTimer) clearInterval(wikiPeriodicSyncTimer);
-      for (const timer of wikiCheckpointTimers.values()) clearTimeout(timer);
-      wikiCheckpointTimers.clear();
+      if (wikiPeriodicSyncTimer) clearTimeout(wikiPeriodicSyncTimer);
+      if (workspaceLayout === "wiki" && reason === "SIGTERM") {
+        await checkpointDirtyWikiRepositories("session");
+      }
       broadcast("command", { command: "server-shutdown", reason, at: Date.now() });
       for (const res of eventClients) {
         try { res.end(); } catch {}
@@ -625,7 +694,7 @@ async function beginShutdown({ reason = "shutdown", exitCode = 0, deadlineMs = 3
   })();
   return shutdownPromise;
 }
-process.on("SIGTERM", () => beginShutdown({ reason: "SIGTERM", exitCode: 0 }));
+process.on("SIGTERM", () => beginShutdown({ reason: "SIGTERM", exitCode: 0, deadlineMs: 30_000 }));
 process.on("SIGINT", () => beginShutdown({ reason: "SIGINT", exitCode: 0 }));
 
 const MIME = {
@@ -794,13 +863,42 @@ function readJson(req, maxBytes = 64 * 1024 * 1024) {
 }
 
 async function notesListPayload(force = false) {
+  if (workspaceLayout === "wiki") {
+    const index = await wikiIndexPayload({ force });
+    return {
+      type: "notes",
+      notes: index.notes,
+      directories: index.directories,
+      files: index.files,
+      root: noteRoot,
+      generation: index.generation,
+    };
+  }
   if (force) markNotesDirty();
   return { type: "notes", ...await notesIndexPayload(), root: noteRoot };
+}
+
+async function bootstrapNotePayload(file) {
+  const opened = await bootstrapNote(file || undefined);
+  if (workspaceLayout !== "wiki") return opened;
+  const index = await wikiIndexPayload();
+  return {
+    ...opened,
+    notes: index.notes,
+    directories: index.directories,
+    files: index.files,
+    generation: index.generation,
+  };
 }
 
 let cachedCompletionTags = null;
 let cachedCompletionTagsVersion = -1;
 async function getCachedCompletionTags() {
+  if (workspaceLayout === "wiki") {
+    const index = await wikiIndexPayload();
+    const names = [...new Set(index.notes.flatMap((note) => note.tags || []))].sort((a, b) => a.localeCompare(b));
+    return { names, lowerNames: names.map((name) => name.toLowerCase()) };
+  }
   const version = notesIndexVersionValue();
   if (cachedCompletionTags && cachedCompletionTagsVersion === version) return cachedCompletionTags;
   const payload = tagIndexPayload(await scanNotes());
@@ -816,6 +914,18 @@ async function getCachedCompletionTags() {
 let cachedCompletionRoamNotes = null;
 let cachedCompletionRoamVersion = -1;
 async function getCachedCompletionRoamNotes() {
+  if (workspaceLayout === "wiki") {
+    const index = await wikiIndexPayload();
+    return index.notes.map((note) => ({
+      id: note.id || note.key || "",
+      key: note.key || note.id || "",
+      title: note.title || "",
+      path: note.path || note.file || "",
+      search: [note.id, note.key, note.title, ...(note.aliases || [])]
+        .map((value) => String(value || "").toLowerCase())
+        .join(" "),
+    }));
+  }
   const version = notesIndexVersionValue();
   if (cachedCompletionRoamNotes && cachedCompletionRoamVersion === version) return cachedCompletionRoamNotes;
   cachedCompletionRoamNotes = (await scanRoamNotes())
@@ -844,6 +954,10 @@ function roamSyncStats(index) {
 }
 
 async function roamSyncPayload(reload = false) {
+  if (workspaceLayout === "wiki") {
+    const index = await wikiIndexPayload({ force: reload });
+    return { type: "notes", ...index, stats: roamSyncStats(index), root: noteRoot, db: wikiDatabaseFile(noteRoot) };
+  }
   if (reload) markNotesDirty();
   const notes = await syncRoamDb();
   const index = await notesIndexPayload(notes);
@@ -851,6 +965,10 @@ async function roamSyncPayload(reload = false) {
 }
 
 async function roamSyncFullPayload() {
+  if (workspaceLayout === "wiki") {
+    const index = await wikiIndexPayload({ force: true });
+    return { type: "notes", ...index, stats: roamSyncStats(index), root: noteRoot, db: wikiDatabaseFile(noteRoot) };
+  }
   markNotesDirty();
   const notes = await syncRoamDb(null, { mode: "full" });
   const index = await notesIndexPayload(notes);
@@ -1005,8 +1123,9 @@ const apiRouter = new ApiRouter().register({
     variables: workspaceEnvironment.variables,
     message: workspaceEnvironment.message,
   }),
-  "aaronnote:api:wiki:refresh": () => wikiIndexPayload(),
-  "aaronnote:api:wiki:resolve-link": async (body) => resolveWikiLink(await wikiIndexPayload(), body?.target ?? body),
+  "aaronnote:api:wiki:refresh": () => wikiIndexPayload({ force: true }),
+  "aaronnote:api:wiki:search": (body) => searchWikiDatabase(noteRoot, body || {}),
+  "aaronnote:api:wiki:resolve-link": async (body) => resolveWikiLink(await wikiIndexPayload(), body?.target ?? body, { sourceFile: body?.sourceFile || "" }),
   "aaronnote:api:wiki:init-workspace": () => initWikiWorkspace(noteRoot),
   "aaronnote:api:wiki:init-repository": (body) => initWikiRepository(noteRoot, body?.partition, body?.name),
   "aaronnote:api:wiki:clone-repository": (body) => cloneWikiRepository(noteRoot, body || {}),
@@ -1021,14 +1140,22 @@ const apiRouter = new ApiRouter().register({
   "aaronnote:api:wiki:tags": async () => ({ ok: true, type: "wiki-tags", tags: wikiTagIndex(await wikiIndexPayload()) }),
   "aaronnote:api:wiki:update-tag": (body) => updateWikiTag(noteRoot, body || {}),
   "aaronnote:api:wiki:export": (body) => exportWiki(noteRoot, body || {}),
+  "aaronnote:api:wiki:page-history": (body) => wikiPageHistory(noteRoot, body || {}),
+  "aaronnote:api:wiki:page-diff": (body) => wikiPageDiff(noteRoot, body || {}),
+  "aaronnote:api:wiki:restore-page": async (body) => {
+    const result = await restoreWikiPageVersion(noteRoot, body || {});
+    markWikiRepositoryDirty(result.file);
+    scheduleWikiRefresh();
+    return result;
+  },
   "aaronnote:api:wiki:sync-status": (body) => readWikiSyncState(noteRoot, body?.repositoryId || ""),
-  "aaronnote:api:wiki:checkpoint": (body) => checkpointWikiRepository(noteRoot, body?.repositoryId, body || {}),
-  "aaronnote:api:wiki:sync": (body) => syncWikiRepository(noteRoot, body?.repositoryId, body || {}),
+  "aaronnote:api:wiki:checkpoint": (body) => checkpointWikiRepositoryFromApi(body || {}),
+  "aaronnote:api:wiki:sync": (body) => syncWikiRepositoryFromApi(body || {}),
   "aaronnote:api:wiki:conflict": (body) => readWikiConflict(noteRoot, body || {}),
   "aaronnote:api:wiki:resolve-conflict": (body) => resolveWikiConflict(noteRoot, body || {}),
   "aaronnote:api:wiki:abort-conflict": (body) => abortWikiConflict(noteRoot, body?.repositoryId),
   "aaronnote:api:wiki:git-ui": (body) => openWikiGitUi(noteRoot, body?.repositoryId),
-  "aaronnote:api:notes:bootstrap": (file) => bootstrapNote(file || undefined),
+  "aaronnote:api:notes:bootstrap": (file) => bootstrapNotePayload(file),
   "aaronnote:api:notes:open": (file) => readNote(file),
   "aaronnote:api:notes:list": (force) => notesListPayload(force === true),
   "aaronnote:api:notes:save": async (body) => {
@@ -1045,7 +1172,7 @@ const apiRouter = new ApiRouter().register({
         clientId: String((body && typeof body === "object" ? body.clientId : "") || ""),
       });
       scheduleWikiRefresh();
-      scheduleWikiCheckpointForFile(String(result.file));
+      markWikiRepositoryDirty(String(result.file));
     }
     return result;
   },

@@ -15,21 +15,40 @@ document.body.dataset.hostMode = window.noemaDesktop ? "desktop" : "browser";
 root.innerHTML = `
   <header class="noema-desktop-titlebar noema-wiki-titlebar" data-desktop-titlebar>
     <div class="noema-wiki-history">
+      <button type="button" class="noema-wiki-panel-toggle" aria-label="Toggle navigation" aria-expanded="false" data-toggle-nav>☰</button>
       <button type="button" aria-label="Back" title="Back" data-desktop-command="back">←</button>
       <button type="button" aria-label="Forward" title="Forward" data-desktop-command="forward">→</button>
       <button type="button" aria-label="Refresh" title="Refresh" data-desktop-command="refresh">↻</button>
     </div>
     <strong>Noema Wiki</strong>
     <div class="noema-wiki-title-actions">
+      <button type="button" class="noema-wiki-panel-toggle" aria-label="Toggle tools" aria-expanded="false" data-toggle-tools>Tools</button>
       <button type="button" aria-label="Editor actions" data-desktop-menu="actions">Editor actions</button>
       <button type="button" aria-label="Window actions" data-desktop-menu="window">Window actions</button>
     </div>
   </header>
+  <header class="noema-wiki-site-header">
+    <button type="button" class="noema-wiki-site-brand" data-view="home" aria-label="Open the Noema Wiki main page">
+      <span class="noema-wiki-site-mark" aria-hidden="true"><i></i><b>N</b></span>
+      <span><strong>Noema</strong><small>Private knowledge commons</small></span>
+    </button>
+    <div class="noema-wiki-search">
+      <span aria-hidden="true">⌕</span>
+      <input type="search" data-search placeholder="Search Noema Wiki" aria-label="Search Noema Wiki" autocomplete="off">
+      <button type="button" data-search-submit>Search</button>
+      <kbd>⌘ K</kbd>
+    </div>
+    <div class="noema-wiki-site-actions">
+      <a href="/config">Settings</a>
+      <button type="button" class="is-primary" data-new-page>Create page</button>
+    </div>
+  </header>
   <main class="noema-wiki-shell">
     <aside class="noema-wiki-sidebar">
-      <div class="noema-wiki-brand"><span>N</span><div><strong>Wiki</strong><small data-wiki-layout>Loading…</small></div></div>
+      <p class="noema-wiki-nav-label">Navigation</p>
       <nav>
-        <button type="button" class="is-active" data-view="pages">All pages <b data-count-pages>0</b></button>
+        <button type="button" class="is-active" data-view="home">Main page</button>
+        <button type="button" data-view="pages">All pages <b data-count-pages>0</b></button>
         <button type="button" data-view="recent">Recent</button>
         <button type="button" data-view="folders">Folders <b data-count-folders>0</b></button>
         <button type="button" data-view="files">Files <b data-count-files>0</b></button>
@@ -40,13 +59,14 @@ root.innerHTML = `
         <button type="button" data-view="reports">Reports <b data-count-reports>0</b></button>
         <button type="button" data-view="repositories">Repositories <b data-count-repos>0</b></button>
       </nav>
+      <p class="noema-wiki-layout-note"><span data-wiki-layout>Loading…</span><br>Physical files, virtual knowledge graph.</p>
       <a href="/config" class="noema-wiki-settings">Configuration</a>
     </aside>
     <section class="noema-wiki-content">
       <header class="noema-wiki-hero">
         <div>
-          <p>Workspace knowledge</p>
-          <h1 data-view-title>All pages</h1>
+          <p data-view-kicker>Noema Wiki</p>
+          <h1 data-view-title>A private, Git-backed knowledge commons.</h1>
           <small data-wiki-root></small>
         </div>
         <div class="noema-wiki-hero-actions">
@@ -55,14 +75,59 @@ root.innerHTML = `
           <button type="button" class="is-primary" data-new-page>New page</button>
         </div>
       </header>
-      <div class="noema-wiki-search">
-        <span>⌕</span>
-        <input type="search" data-search placeholder="Search titles, aliases, tags, repositories…" autocomplete="off">
-        <kbd>⌘ K</kbd>
-      </div>
+      <nav class="noema-wiki-page-tabs" aria-label="Page views">
+        <div>
+          <button type="button" class="is-active" data-view="home">Main page</button>
+          <button type="button" data-view="pages">Discussion</button>
+        </div>
+        <div>
+          <button type="button" class="is-current" data-view="home">Read</button>
+          <button type="button" data-new-page>Edit</button>
+          <button type="button" data-view="recent">View history</button>
+        </div>
+      </nav>
       <div class="noema-wiki-status" data-status role="status" aria-live="polite"></div>
       <section data-wiki-view></section>
     </section>
+    <aside class="noema-wiki-tools" aria-label="Wiki tools">
+      <section class="noema-wiki-appearance">
+        <h2>Appearance</h2>
+        <fieldset>
+          <legend>Text</legend>
+          <button type="button" data-appearance-text="small"><span></span>Small</button>
+          <button type="button" data-appearance-text="standard"><span></span>Standard</button>
+          <button type="button" data-appearance-text="large"><span></span>Large</button>
+        </fieldset>
+        <fieldset>
+          <legend>Width</legend>
+          <button type="button" data-appearance-width="standard"><span></span>Standard</button>
+          <button type="button" data-appearance-width="wide"><span></span>Wide</button>
+        </fieldset>
+      </section>
+      <section>
+        <h2>On this wiki</h2>
+        <dl>
+          <div><dt>Pages</dt><dd data-tool-pages>0</dd></div>
+          <div><dt>Repositories</dt><dd data-tool-repositories>0</dd></div>
+          <div><dt>Wanted</dt><dd data-tool-wanted>0</dd></div>
+        </dl>
+      </section>
+      <section>
+        <h2>Page tools</h2>
+        <button type="button" data-new-page>New page</button>
+        <button type="button" data-view="recent">Recent changes</button>
+        <button type="button" data-view="reports">Special reports</button>
+      </section>
+      <section>
+        <h2>Index</h2>
+        <p data-index-generation>Waiting for the local index…</p>
+        <button type="button" data-refresh>Refresh index</button>
+      </section>
+      <section>
+        <h2>Shortcuts</h2>
+        <p><kbd>⌘ K</kbd> Search<br><kbd>⌘ N</kbd> New page</p>
+      </section>
+    </aside>
   </main>
   <dialog class="noema-wiki-dialog" data-new-dialog>
     <form method="dialog" data-new-form>
@@ -95,7 +160,7 @@ root.innerHTML = `
   <dialog class="noema-wiki-dialog" data-page-dialog>
     <form data-page-form>
       <header><div><p>Page management</p><h2 data-page-title>Manage page</h2></div><button type="button" data-page-cancel aria-label="Close">×</button></header>
-      <label><span>Operation</span><select name="action"><option value="move">Move or rename</option><option value="copy">Create independent copy</option><option value="merge">Merge duplicate</option><option value="delete">Move to Trash</option></select></label>
+      <label><span>Operation</span><select name="action"><option value="move">Move or rename</option><option value="copy">Create independent copy</option><option value="merge">Merge duplicate</option><option value="history">Page history</option><option value="delete">Move to Trash</option></select></label>
       <section data-page-destination>
         <div class="noema-wiki-form-grid">
           <label><span>Repository</span><select name="repositoryId" required></select></label>
@@ -106,6 +171,7 @@ root.innerHTML = `
         <datalist id="noema-page-directories"></datalist>
       </section>
       <label data-merge-target hidden><span>Duplicate page</span><select name="duplicateId"></select></label>
+      <section class="noema-wiki-page-history" data-page-history hidden></section>
       <p data-page-warning></p>
       <footer><button type="button" data-page-cancel>Cancel</button><button type="submit" class="is-primary" data-page-apply>Move page</button></footer>
     </form>
@@ -129,13 +195,14 @@ root.innerHTML = `
     </section>
   </dialog>
   <dialog class="noema-wiki-git-dialog" data-git-dialog>
-    <header><strong>Advanced Git · ungit</strong><button type="button" data-git-close aria-label="Close">×</button></header>
+    <header><strong>Advanced Git · ungit</strong><small data-git-status>Starting visual repository…</small><button type="button" data-git-close aria-label="Close">×</button></header>
     <iframe title="Advanced Git" data-git-frame></iframe>
   </dialog>
 `;
 
 const viewEl = root.querySelector<HTMLElement>("[data-wiki-view]")!;
 const titleEl = root.querySelector<HTMLElement>("[data-view-title]")!;
+const kickerEl = root.querySelector<HTMLElement>("[data-view-kicker]")!;
 const searchEl = root.querySelector<HTMLInputElement>("[data-search]")!;
 const statusEl = root.querySelector<HTMLElement>("[data-status]")!;
 const newDialog = root.querySelector<HTMLDialogElement>("[data-new-dialog]")!;
@@ -149,11 +216,43 @@ const conflictEditor = root.querySelector<HTMLElement>("[data-conflict-editor]")
 const conflictMessage = root.querySelector<HTMLElement>("[data-conflict-message]")!;
 const gitDialog = root.querySelector<HTMLDialogElement>("[data-git-dialog]")!;
 const gitFrame = root.querySelector<HTMLIFrameElement>("[data-git-frame]")!;
+const gitStatus = root.querySelector<HTMLElement>("[data-git-status]")!;
 let index: WikiIndex | null = null;
-let activeView = "pages";
+let activeView = "home";
 let busy = false;
 let activeConflict: { repositoryId: string; path: string; kind: string; editor?: HTMLElement & { ctr?: string } } | null = null;
 let activeManagedNote: WikiNote | null = null;
+let pageSearch: { query: string; items: WikiNote[]; total: number; nextCursor: number | null; generation: string } = {
+  query: "", items: [], total: 0, nextCursor: null, generation: "",
+};
+let pageSearchRun = 0;
+let pageSearchTimer = 0;
+type WikiAppearance = { text: "small" | "standard" | "large"; width: "standard" | "wide" };
+const appearanceKey = "noema-wiki-appearance-v1";
+let appearance: WikiAppearance = { text: "standard", width: "standard" };
+
+try {
+  appearance = { ...appearance, ...JSON.parse(localStorage.getItem(appearanceKey) || "{}") };
+} catch {
+  // A corrupt preference should never prevent the Wiki from opening.
+}
+
+function applyAppearance(): void {
+  root.dataset.wikiText = appearance.text;
+  root.dataset.wikiWidth = appearance.width;
+  root.querySelectorAll<HTMLButtonElement>("[data-appearance-text]").forEach((control) => {
+    const selected = control.dataset.appearanceText === appearance.text;
+    control.classList.toggle("is-active", selected);
+    control.setAttribute("aria-pressed", String(selected));
+  });
+  root.querySelectorAll<HTMLButtonElement>("[data-appearance-width]").forEach((control) => {
+    const selected = control.dataset.appearanceWidth === appearance.width;
+    control.classList.toggle("is-active", selected);
+    control.setAttribute("aria-pressed", String(selected));
+  });
+}
+
+applyAppearance();
 
 function setStatus(message: string, error = false): void {
   statusEl.textContent = message;
@@ -186,6 +285,113 @@ function emptyState(title: string, copy: string): HTMLElement {
   return el;
 }
 
+function navigateTo(view: string, query = ""): void {
+  activeView = view;
+  if (view === "home") searchEl.value = "";
+  else if (query) searchEl.value = query;
+  closePanels();
+  selectActiveNav();
+  render();
+  if (activeView === "pages" || activeView === "recent") void runPageSearch();
+}
+
+function homeAction(label: string, view: string, copy: string): HTMLElement {
+  const action = button(label);
+  const detail = document.createElement("small");
+  detail.textContent = copy;
+  action.append(detail);
+  action.addEventListener("click", () => navigateTo(view));
+  return action;
+}
+
+function renderHome(): void {
+  if (!index) return;
+  const intro = document.createElement("section");
+  intro.className = "noema-wiki-home-intro";
+  const statement = document.createElement("p");
+  statement.append(
+    "Noema turns the Markdown in your ",
+    Object.assign(document.createElement("strong"), { textContent: "public and private Git repositories" }),
+    " into a durable, shared Wiki. Files stay portable; links, backlinks, tags, and dependencies become one navigable knowledge graph.",
+  );
+  const facts = document.createElement("div");
+  const publicPages = index.notes.filter((note) => note.partition === "public").length;
+  const privatePages = index.notes.length - publicPages;
+  for (const [value, label] of [
+    [index.notes.length, "pages"],
+    [publicPages, "public"],
+    [privatePages, "private"],
+    [index.repositories.length, "repositories"],
+  ] as Array<[number, string]>) {
+    const fact = document.createElement("span");
+    const number = document.createElement("strong");
+    number.textContent = String(value);
+    fact.append(number, ` ${label}`);
+    facts.append(fact);
+  }
+  intro.append(statement, facts);
+
+  const columns = document.createElement("div");
+  columns.className = "noema-wiki-home-columns";
+  const recent = document.createElement("section");
+  recent.className = "noema-wiki-home-section";
+  const recentHead = document.createElement("header");
+  const recentTitle = document.createElement("h2");
+  recentTitle.textContent = "Recently updated";
+  const allRecent = button("View history");
+  allRecent.addEventListener("click", () => navigateTo("recent"));
+  recentHead.append(recentTitle, allRecent);
+  const recentList = document.createElement("div");
+  recentList.className = "noema-wiki-home-recent";
+  const recentNotes = [...index.notes].sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, 6);
+  for (const note of recentNotes) {
+    const row = button(note.title);
+    const meta = document.createElement("small");
+    meta.textContent = `${note.repositoryId} · ${new Date(note.mtimeMs).toLocaleDateString()}`;
+    row.prepend(Object.assign(document.createElement("span"), { textContent: note.partition === "public" ? "◉" : "◐" }));
+    row.append(meta);
+    row.addEventListener("click", () => openNote(note));
+    recentList.append(row);
+  }
+  if (!recentNotes.length) recentList.append(emptyState("Your Wiki is ready", "Create the first page to begin the knowledge graph."));
+  recent.append(recentHead, recentList);
+
+  const browse = document.createElement("section");
+  browse.className = "noema-wiki-home-section";
+  const browseHead = document.createElement("header");
+  const browseTitle = document.createElement("h2");
+  browseTitle.textContent = "Browse the collection";
+  const allPages = button("All pages");
+  allPages.addEventListener("click", () => navigateTo("pages"));
+  browseHead.append(browseTitle, allPages);
+  const repositories = document.createElement("div");
+  repositories.className = "noema-wiki-home-repositories";
+  for (const repository of index.repositories.slice(0, 8)) {
+    const repo = button(repository.name);
+    const count = index.notes.filter((note) => note.repositoryId === repository.id).length;
+    const meta = document.createElement("small");
+    meta.textContent = `${repository.partition} · ${count} page${count === 1 ? "" : "s"}`;
+    repo.append(meta);
+    repo.addEventListener("click", () => navigateTo("pages", repository.id));
+    repositories.append(repo);
+  }
+  browse.append(browseHead, repositories);
+  columns.append(recent, browse);
+
+  const portals = document.createElement("section");
+  portals.className = "noema-wiki-home-portals";
+  const portalTitle = document.createElement("h2");
+  portalTitle.textContent = "Explore and maintain Noema";
+  const portalGrid = document.createElement("div");
+  portalGrid.append(
+    homeAction("Browse knowledge", "folders", "Move through the physical repository and folder hierarchy."),
+    homeAction("Follow connections", "dependencies", "Inspect links, backlinks, and unresolved Wiki references."),
+    homeAction("Maintain the Wiki", "reports", "Review duplicates, diagnostics, indexing, and repository health."),
+  );
+  portals.append(portalTitle, portalGrid);
+  viewEl.append(intro, columns, portals);
+}
+
 function noteCard(note: WikiNote): HTMLElement {
   const card = document.createElement("article");
   card.className = "noema-wiki-page";
@@ -211,7 +417,7 @@ function noteCard(note: WikiNote): HTMLElement {
   actions.title = "Move, copy, or merge page";
   actions.addEventListener("click", (event) => {
     event.stopPropagation();
-    void managePage(note);
+    void managePage(index?.notes.find((item) => item.id === note.id) || note);
   });
   card.append(partition, copy, actions);
   card.addEventListener("click", () => openNote(note));
@@ -262,8 +468,38 @@ function filteredNotes(): WikiNote[] {
   ].join(" ").toLocaleLowerCase().includes(query));
 }
 
+async function runPageSearch(append = false): Promise<void> {
+  if (!index || (activeView !== "pages" && activeView !== "recent")) return;
+  const query = searchEl.value.trim();
+  const run = ++pageSearchRun;
+  try {
+    const result = await api.wiki.search({
+      query,
+      sort: activeView === "recent" ? "recent" : "title",
+      cursor: append ? pageSearch.nextCursor || 0 : 0,
+      limit: activeView === "recent" ? 40 : 80,
+    });
+    if (run !== pageSearchRun) return;
+    const items = append ? [...pageSearch.items, ...result.items] : result.items;
+    if (activeView === "recent") items.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    pageSearch = {
+      query,
+      items,
+      total: result.total,
+      nextCursor: result.nextCursor,
+      generation: result.generation,
+    };
+    render();
+  } catch (error) {
+    if (run === pageSearchRun) setStatus(error instanceof Error ? error.message : String(error), true);
+  }
+}
+
 function renderPages(): void {
-  const notes = filteredNotes();
+  const query = searchEl.value.trim();
+  const notes = pageSearch.query === query && pageSearch.generation === index?.generation
+    ? pageSearch.items
+    : filteredNotes().slice(0, 80);
   if (!notes.length) {
     viewEl.append(emptyState("No matching pages", "Try another search or create a page from the workbench."));
     return;
@@ -272,6 +508,12 @@ function renderPages(): void {
   grid.className = "noema-wiki-page-list";
   notes.forEach((note) => grid.append(noteCard(note)));
   viewEl.append(grid);
+  if (pageSearch.query === query && pageSearch.total > notes.length) {
+    const more = button(`Load more · ${notes.length} of ${pageSearch.total}`);
+    more.className = "noema-wiki-load-more";
+    more.addEventListener("click", () => void runPageSearch(true));
+    viewEl.append(more);
+  }
 }
 
 function renderFolders(): void {
@@ -525,9 +767,11 @@ async function repositoryCard(repository: WikiRepository): Promise<HTMLElement> 
     }
   });
   checkpoint.addEventListener("click", async () => {
+    const message = window.prompt("Checkpoint message (optional)", "");
+    if (message == null) return;
     checkpoint.disabled = true;
     try {
-      const result = await api.wiki.checkpoint(repository.id);
+      const result = await api.wiki.checkpoint(repository.id, message.trim());
       status.textContent = JSON.stringify(result, null, 2);
     } catch (error) {
       status.textContent = error instanceof Error ? error.message : String(error);
@@ -552,6 +796,7 @@ async function repositoryCard(repository: WikiRepository): Promise<HTMLElement> 
     try {
       const result = await api.wiki.gitUi(repository.id);
       if (!result.url) throw new Error("ungit did not return an embedded URL");
+      gitStatus.textContent = `Loading ${repository.id}…`;
       gitFrame.src = result.url;
       gitDialog.showModal();
     } catch (error) {
@@ -688,15 +933,25 @@ async function renderRepositories(): Promise<void> {
 
 function render(): void {
   if (!index) return;
+  root.dataset.wikiView = activeView;
   root.querySelector<HTMLElement>("[data-wiki-layout]")!.textContent = `${index.layout} layout`;
-  root.querySelector<HTMLElement>("[data-wiki-root]")!.textContent = `${index.root} · ${index.dbFile}`;
+  root.querySelector<HTMLElement>("[data-wiki-root]")!.textContent = activeView === "home"
+    ? "A local-first Wiki built from your physical files and shared Git history."
+    : `${index.root} · ${index.dbFile}`;
   root.querySelector<HTMLElement>("[data-count-pages]")!.textContent = String(index.notes.length);
   root.querySelector<HTMLElement>("[data-count-folders]")!.textContent = String(index.directories.length);
   root.querySelector<HTMLElement>("[data-count-files]")!.textContent = String(index.files.length);
   root.querySelector<HTMLElement>("[data-count-wanted]")!.textContent = String(index.reports.wanted.length);
   root.querySelector<HTMLElement>("[data-count-reports]")!.textContent = String(index.reports.ambiguous.length + index.reports.duplicates.length + index.diagnostics.length);
   root.querySelector<HTMLElement>("[data-count-repos]")!.textContent = String(index.repositories.length);
+  root.querySelector<HTMLElement>("[data-tool-pages]")!.textContent = String(index.notes.length);
+  root.querySelector<HTMLElement>("[data-tool-repositories]")!.textContent = String(index.repositories.length);
+  root.querySelector<HTMLElement>("[data-tool-wanted]")!.textContent = String(index.reports.wanted.length);
+  root.querySelector<HTMLElement>("[data-index-generation]")!.textContent = index.generation
+    ? `Generation ${index.generation.slice(0, 10)} · SQLite WAL`
+    : "Local SQLite index";
   const labels: Record<string, string> = {
+    home: "A private, Git-backed knowledge commons.",
     pages: "All pages",
     recent: "Recent pages",
     folders: "Physical folders",
@@ -709,8 +964,10 @@ function render(): void {
     repositories: "Repositories",
   };
   titleEl.textContent = labels[activeView] || "Wiki";
+  kickerEl.textContent = activeView === "home" ? "Noema Wiki" : "Workspace knowledge";
   viewEl.replaceChildren();
-  if (activeView === "wanted") renderWanted();
+  if (activeView === "home") renderHome();
+  else if (activeView === "wanted") renderWanted();
   else if (activeView === "reports") renderReports();
   else if (activeView === "repositories" || activeView === "sync") void renderRepositories();
   else if (activeView === "folders") renderFolders();
@@ -726,12 +983,14 @@ function selectActiveNav(): void {
   });
 }
 
-async function load(refresh = false): Promise<void> {
+async function load(refresh = false, options: { silent?: boolean } = {}): Promise<void> {
   if (busy) return;
   busy = true;
-  setStatus(refresh ? "Refreshing the global Wiki index…" : "Loading Wiki…");
+  if (!options.silent) setStatus(refresh ? "Refreshing the global Wiki index…" : "Loading Wiki…");
   try {
-    index = refresh ? await api.wiki.refresh() : await api.wiki.bootstrap();
+    const next = refresh ? await api.wiki.refresh() : await api.wiki.bootstrap();
+    if (options.silent && index?.generation && next.generation === index.generation) return;
+    index = next;
     setStatus(`${index.notes.length} pages across ${index.repositories.length} repositories`);
     const select = newForm.elements.namedItem("repositoryId") as HTMLSelectElement;
     select.replaceChildren();
@@ -754,6 +1013,7 @@ async function load(refresh = false): Promise<void> {
       (newForm.elements.namedItem("kind") as HTMLInputElement).value = profile.kind;
     }
     render();
+    await runPageSearch();
   } catch (error) {
     setStatus(error instanceof Error ? error.message : String(error), true);
     viewEl.replaceChildren(emptyState("Wiki unavailable", "Check the workspace root and layout in Configuration."));
@@ -812,13 +1072,15 @@ function updatePageDirectories(): void {
 
 function updatePageOperation(): void {
   const action = (pageForm.elements.namedItem("action") as HTMLSelectElement).value;
-  root.querySelector<HTMLElement>("[data-page-destination]")!.hidden = action === "merge" || action === "delete";
+  root.querySelector<HTMLElement>("[data-page-destination]")!.hidden = action === "merge" || action === "delete" || action === "history";
   root.querySelector<HTMLElement>("[data-copy-title]")!.hidden = action !== "copy";
   root.querySelector<HTMLElement>("[data-merge-target]")!.hidden = action !== "merge";
+  root.querySelector<HTMLElement>("[data-page-history]")!.hidden = action !== "history";
   const warning = root.querySelector<HTMLElement>("[data-page-warning]")!;
   const apply = root.querySelector<HTMLButtonElement>("[data-page-apply]")!;
-  const verbs: Record<string, string> = { move: "Move page", copy: "Create copy", merge: "Merge pages", delete: "Move to Trash" };
+  const verbs: Record<string, string> = { move: "Move page", copy: "Create copy", merge: "Merge pages", history: "Close", delete: "Move to Trash" };
   apply.textContent = verbs[action] || "Apply";
+  apply.hidden = action === "history";
   apply.classList.toggle("is-danger", action === "delete");
   warning.textContent = action === "delete"
     ? `${activeManagedNote?.backlinks.length || 0} backlinks will become wanted links. The page and its owned assets remain recoverable from Trash.`
@@ -827,6 +1089,54 @@ function updatePageOperation(): void {
       : action === "move"
         ? "The stable page ID is preserved. Title-based Wiki links continue to resolve after reindexing."
         : "The copy receives a new stable page ID.";
+  if (action === "history") {
+    warning.textContent = "Git commits are the page version history. Restoring creates a working-tree change for review before the next checkpoint.";
+    void renderPageHistory();
+  }
+}
+
+async function renderPageHistory(): Promise<void> {
+  const note = activeManagedNote;
+  const container = root.querySelector<HTMLElement>("[data-page-history]")!;
+  if (!note) return;
+  container.replaceChildren(emptyState("Loading history…", "Reading commits that touched this physical page."));
+  try {
+    const result = await api.wiki.pageHistory(note.id);
+    container.replaceChildren();
+    if (!result.commits.length) {
+      container.append(emptyState("No committed versions", "Create a checkpoint to add the first Git version."));
+      return;
+    }
+    for (const commit of result.commits) {
+      const row = document.createElement("article");
+      const copy = document.createElement("div");
+      const subject = document.createElement("strong");
+      subject.textContent = commit.subject || commit.sha.slice(0, 8);
+      const meta = document.createElement("small");
+      meta.textContent = `${commit.author || "Unknown author"} · ${new Date(commit.date).toLocaleString()} · ${commit.sha.slice(0, 8)}`;
+      copy.append(subject, meta);
+      const actions = document.createElement("div");
+      const diff = button("Diff");
+      const restore = button("Restore");
+      diff.addEventListener("click", async () => {
+        const result = await api.wiki.pageDiff(note.id, commit.sha);
+        let pre = row.querySelector<HTMLPreElement>("pre");
+        if (!pre) { pre = document.createElement("pre"); row.append(pre); }
+        pre.textContent = result.diff || "No textual diff for this commit.";
+      });
+      restore.addEventListener("click", async () => {
+        if (!window.confirm(`Restore “${note.title}” from ${commit.sha.slice(0, 8)} as an uncommitted change?`)) return;
+        await api.wiki.restorePage(note.id, commit.sha);
+        pageDialog.close();
+        openNote(note);
+      });
+      actions.append(diff, restore);
+      row.append(copy, actions);
+      container.append(row);
+    }
+  } catch (error) {
+    container.replaceChildren(emptyState("History unavailable", error instanceof Error ? error.message : String(error)));
+  }
 }
 
 async function choosePageDirectory(): Promise<void> {
@@ -848,6 +1158,7 @@ async function applyPageOperation(): Promise<void> {
   if (!note) return;
   const values = new FormData(pageForm);
   const action = String(values.get("action") || "");
+  if (action === "history") { pageDialog.close(); return; }
   try {
     if (action === "delete") {
       if (!window.confirm(`Move “${note.title}” and its page-owned assets to the macOS Trash?`)) return;
@@ -889,13 +1200,25 @@ async function applyPageOperation(): Promise<void> {
 
 root.querySelectorAll<HTMLButtonElement>("[data-view]").forEach((control) => {
   control.addEventListener("click", () => {
-    activeView = control.dataset.view || "pages";
-    selectActiveNav();
-    render();
+    navigateTo(control.dataset.view || "pages");
   });
 });
-root.querySelector("[data-refresh]")?.addEventListener("click", () => void load(true));
-root.querySelector("[data-new-page]")?.addEventListener("click", () => showNewPage());
+root.querySelectorAll<HTMLButtonElement>("[data-appearance-text]").forEach((control) => {
+  control.addEventListener("click", () => {
+    appearance.text = (control.dataset.appearanceText || "standard") as WikiAppearance["text"];
+    localStorage.setItem(appearanceKey, JSON.stringify(appearance));
+    applyAppearance();
+  });
+});
+root.querySelectorAll<HTMLButtonElement>("[data-appearance-width]").forEach((control) => {
+  control.addEventListener("click", () => {
+    appearance.width = (control.dataset.appearanceWidth || "standard") as WikiAppearance["width"];
+    localStorage.setItem(appearanceKey, JSON.stringify(appearance));
+    applyAppearance();
+  });
+});
+root.querySelectorAll("[data-refresh]").forEach((control) => control.addEventListener("click", () => void load(true)));
+root.querySelectorAll("[data-new-page]").forEach((control) => control.addEventListener("click", () => showNewPage()));
 root.querySelector("[data-export]")?.addEventListener("click", () => void exportCurrentView());
 root.querySelectorAll<HTMLButtonElement>("[data-new-cancel]").forEach((control) => {
   control.addEventListener("click", () => newDialog.close("cancel"));
@@ -938,16 +1261,57 @@ root.querySelector<HTMLButtonElement>("[data-choose-directory]")?.addEventListen
   if (result.message) setStatus(result.message, true);
   if (!result.canceled) (newForm.elements.namedItem("directory") as HTMLInputElement).value = result.relativePath || "";
 });
-searchEl.addEventListener("input", render);
+searchEl.addEventListener("input", () => {
+  window.clearTimeout(pageSearchTimer);
+  if (activeView === "home" && searchEl.value.trim()) {
+    activeView = "pages";
+    selectActiveNav();
+    render();
+  }
+  if (activeView === "pages" || activeView === "recent") {
+    pageSearchTimer = window.setTimeout(() => void runPageSearch(), 120);
+  } else {
+    render();
+  }
+});
+root.querySelector("[data-search-submit]")?.addEventListener("click", () => {
+  navigateTo("pages");
+  searchEl.focus();
+});
 window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && (root.classList.contains("is-nav-open") || root.classList.contains("is-tools-open"))) {
+    event.preventDefault();
+    closePanels();
+    return;
+  }
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
     event.preventDefault();
     searchEl.focus();
   }
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") {
+    event.preventDefault();
+    showNewPage();
+  }
 });
+
+function togglePanel(kind: "nav" | "tools"): void {
+  const className = kind === "nav" ? "is-nav-open" : "is-tools-open";
+  root.classList.toggle(className);
+  const button = root.querySelector<HTMLButtonElement>(kind === "nav" ? "[data-toggle-nav]" : "[data-toggle-tools]");
+  button?.setAttribute("aria-expanded", root.classList.contains(className) ? "true" : "false");
+}
+
+function closePanels(): void {
+  root.classList.remove("is-nav-open", "is-tools-open");
+  root.querySelector<HTMLButtonElement>("[data-toggle-nav]")?.setAttribute("aria-expanded", "false");
+  root.querySelector<HTMLButtonElement>("[data-toggle-tools]")?.setAttribute("aria-expanded", "false");
+}
+
+root.querySelector("[data-toggle-nav]")?.addEventListener("click", () => togglePanel("nav"));
+root.querySelector("[data-toggle-tools]")?.addEventListener("click", () => togglePanel("tools"));
 window.addEventListener("aaronnote:command", (event) => {
   const detail = (event as CustomEvent<{ command?: string }>).detail;
-  if (detail?.command === "wiki-index-changed") void load(true);
+  if (detail?.command === "wiki-index-changed") void load(true, { silent: true });
 });
 
 root.querySelector("[data-conflict-close]")?.addEventListener("click", () => conflictDialog.close());
@@ -966,6 +1330,9 @@ root.querySelector("[data-conflict-abort]")?.addEventListener("click", () => {
   });
 });
 root.querySelector("[data-git-close]")?.addEventListener("click", () => gitDialog.close());
+gitFrame.addEventListener("load", () => {
+  if (gitFrame.src !== "about:blank") gitStatus.textContent = "Visual repository ready";
+});
 gitDialog.addEventListener("close", () => {
   gitFrame.src = "about:blank";
 });

@@ -227,8 +227,9 @@ y^2
   test("marks roam core links for special rendering", () => {
     const html = renderMarkdownHTML("[section](roam://node-id@main-heading) and [tag](node-id#anchor)");
 
-    expect(html).toContain('class="aaronnote-roam-link"');
+    expect(html).toContain('class="aaronnote-roam-link noema-internal-link"');
     expect(html).toContain('data-roam-link="true"');
+    expect(html).toContain('data-internal-link="true"');
   });
 
   test("renders a local heading fragment containing spaces as one link", () => {

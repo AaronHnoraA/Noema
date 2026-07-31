@@ -222,19 +222,21 @@
   font-style: italic;
 }
 
-.cm-editor .cm-roam-link-text {
-  color: var(--aaron-link, #7ee7ff);
-  text-decoration: none;
-  border-bottom: 1px solid color-mix(in srgb, var(--aaron-link, #7ee7ff), transparent 38%);
-  background: color-mix(in srgb, var(--aaron-link, #7ee7ff), transparent 91%);
-  border-radius: 0.28em;
-  padding: 0 0.12em;
-  transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease;
+.cm-editor .cm-roam-link-text,
+.cm-editor .cm-internal-link-text {
+  color: var(--aaron-link, #2563eb);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-decoration-color: color-mix(in srgb, currentColor, transparent 52%);
+  text-underline-offset: 0.18em;
+  border-radius: 0.18em;
+  transition: color 120ms ease, background-color 120ms ease, text-decoration-color 120ms ease;
 }
-.cm-editor .cm-roam-link-text:hover {
-  color: var(--aaron-ink, #f5f7fa);
-  background: color-mix(in srgb, var(--aaron-link, #7ee7ff), transparent 78%);
-  border-bottom-color: var(--aaron-link, #7ee7ff);
+.cm-editor .cm-roam-link-text:hover,
+.cm-editor .cm-internal-link-text:hover {
+  color: color-mix(in srgb, var(--aaron-link, #2563eb), var(--aaron-ink, #111827) 24%);
+  background: color-mix(in srgb, var(--aaron-link, #2563eb), transparent 91%);
+  text-decoration-color: currentColor;
 }
 
 .cm-editor .cm-jupyter-link-text {

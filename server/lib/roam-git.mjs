@@ -359,12 +359,12 @@ export async function fileHistory(noteRoot, absFile, limit = 20) {
   if (!rel || rel.startsWith("..")) return [];
   try {
     const out = await git(noteRoot, [
-      "log", `--format=%H\t%cI\t%s`, `-n`, String(limit), "--", rel,
+      "log", "--follow", `--format=%H\t%aI\t%an\t%ae\t%s`, `-n`, String(limit), "--", rel,
     ]);
     if (!out) return [];
     return out.split("\n").filter(Boolean).map((line) => {
-      const [sha, date, ...rest] = line.split("\t");
-      return { sha, date, subject: rest.join("\t") };
+      const [sha, date, author, email, ...rest] = line.split("\t");
+      return { sha, date, author, email, subject: rest.join("\t") };
     });
   } catch {
     return [];
@@ -374,13 +374,14 @@ export async function fileHistory(noteRoot, absFile, limit = 20) {
 // Restores the file at absFile to its contents at the given commit sha.
 // Writes directly to the working tree; does NOT modify the git index.
 export async function restoreFileFromCommit(noteRoot, absFile, sha) {
-  const rel = relative(noteRoot, absFile);
+  const [noteRootAbs, fileAbs] = await Promise.all([realResolve(noteRoot), realResolve(absFile)]);
+  const rel = relative(noteRootAbs, fileAbs);
   if (!rel || rel.startsWith("..")) throw new Error(`File outside noteRoot: ${absFile}`);
   // git show <sha>:<path> — path must be relative to git root.
   const root = await gitRoot(noteRoot);
-  const gitRel = relative(root, absFile);
+  const gitRel = relative(root, fileAbs);
   const content = await git(noteRoot, ["show", `${sha}:${gitRel}`]);
-  await writeFile(absFile, content, "utf8");
+  await writeFile(fileAbs, content, "utf8");
 }
 
 export async function discardFileChanges(noteRoot, pathValue) {

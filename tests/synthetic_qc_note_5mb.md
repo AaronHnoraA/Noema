@@ -48,7 +48,7 @@ best understood by moving between several levels of description:
 5. reductions between computational problems.
 
 The purpose of this document is not to prove a new theorem, but to provide
-a large, dense, structured Markdown file that resembles real mathematical
+a large, dense, structured Markdown file that resembles real mathematical ssssss tus this this this
 notes.
 
 ---
@@ -17504,7 +17504,7 @@ invertible. This identifies one matching pair of summands. Removing that
 pair and applying induction proves the result.
 #+end proof
 
-中文直觉：如果整体分解成不可再拆的小块，那么同构不能把“小���类�����”凭空改变，只能重排。
+中文直觉：如果整体分解成不可再拆的小块，那么同构不能把“小����类�����”凭空改变，只能重排。
 
 ## 32.7. Measurement statistics
 
@@ -250725,7 +250725,7 @@ self-adjointness. However, listing Hermitian symmetry explicitly is often
 pedagogically useful because it reminds us that observables and density
 operators belong to the real vector space of Hermitian operators.
 
-中文直觉：正半定保证测量概率非负；迹为一保证总概���为一。
+中文直觉：正半定保证测量概率非负；迹为��保证总概���为一。
 #+end note
 
 The expectation value of an observable \(A\) in state \(\rho\) is

@@ -935,7 +935,7 @@ function wikiLinkRule(state: StateInline, silent: boolean): boolean {
   if (!target || !label) return false;
   if (silent) return true;
   const open = state.push("link_open", "a", 1);
-  open.attrs = [["href", `roam://wiki/${encodeURIComponent(target)}`], ["class", "noema-wiki-link"], ["data-wiki-target", target]];
+  open.attrs = [["href", `roam://wiki/${encodeURIComponent(target)}`], ["class", "noema-wiki-link noema-internal-link"], ["data-wiki-target", target], ["data-internal-link", "true"]];
   const text = state.push("text", "", 0);
   text.content = label;
   state.push("link_close", "a", -1);
@@ -1226,8 +1226,9 @@ function createMarkdownIt(options: RenderMarkdownHTMLOptions): MarkdownIt {
       const attrIndex = token.attrIndex("href");
       if (attrIndex >= 0) token.attrs?.splice(attrIndex, 1);
     } else if (href && isRoamCoreHref(href)) {
-      token.attrJoin("class", "aaronnote-roam-link");
+      token.attrJoin("class", "aaronnote-roam-link noema-internal-link");
       token.attrSet("data-roam-link", "true");
+      token.attrSet("data-internal-link", "true");
     } else if (href && isJupyterHref(href)) {
       token.attrJoin("class", "aaronnote-jupyter-link");
       token.attrSet("data-jupyter-link", "true");

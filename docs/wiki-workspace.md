@@ -38,15 +38,52 @@ subprocesses, including local Jupyter kernels and LaTeX compilation.
 A direct child directory without `.git` metadata is reported but never indexed
 or initialized automatically.
 
+`wiki.db` is a disposable, local SQLite/WAL projection of Git-owned Markdown.
+It stores page identity, titles, aliases, tags, links, backlinks, dependencies,
+diagnostics, and Unicode/trigram full-text indexes. It is never committed. The
+legacy `roam.db` is neither read nor written in Wiki layout and can be removed.
+Attachments remain physical files and only their metadata is inventoried; their
+contents are not copied into SQLite. Typst files remain editable in Noema but
+are ordinary files rather than Wiki pages.
+
 ## Links and identity
 
-Wiki pages support `[[Page]]` and `[[Page|Label]]`. Titles and aliases resolve
-globally. A unique match opens directly; duplicate matches are shown with
-partition, repository, and repository-relative path. Missing targets open the
-New Page workbench. `roam://id` remains the stable exact-link form.
+Wiki pages support `[[Page]]` and `[[Page|Label]]`. Completion rewrites a known
+page to `[[roam://id|Label]]`, so moves and renames do not break the link. A
+title-only link first prefers a unique page in the source repository, then
+falls back to the global index. Duplicate matches are shown with partition,
+repository, and repository-relative path. Missing targets open the New Page
+workbench. `roam://id` remains the stable exact-link form.
 
 File location is not identity. New page profiles configure partition,
 repository, directory, filename pattern, and note kind.
+
+## Git collaboration cadence
+
+Noema creates a device work branch and performs the checkpoint/fetch/merge/push
+cycle at startup, on explicit **Sync now**, and approximately every six hours
+with jitter. Editing a note does not create a Git commit. A normal application
+shutdown creates one best-effort checkpoint for dirty repositories. Git author
+configuration is preserved; Noema uses a local fallback identity only when the
+repository has no configured author.
+
+Conflicts are isolated in a disposable integration worktree and resolved in
+the embedded three-way merge editor. The user's primary working tree stays on
+the device branch and is never left in a partially merged state.
+The embedded ungit sidecar provides the full visual staging, commit, branch,
+and history workflow for advanced maintenance without sending users to a
+terminal or another application.
+
+## Upstream design references
+
+The workspace boundaries, page lifecycle, tags, assets, navigation, search,
+history, and storage-adapter separation were reviewed against Wiki.js. The wide
+two-sidebar information architecture and responsive drawer behavior were
+reviewed against MediaWiki's Vector skin. Noema keeps its existing CM6 editor
+and physical Git repositories rather than importing either upstream runtime.
+Exact third-party components used by the product are declared dependencies,
+including ungit for visual Git maintenance and MisMerge for three-way conflict
+resolution.
 
 ## Publishing boundary
 
