@@ -14,6 +14,7 @@ import { aaronnoteMarkdownToLatexPandoc, extractAaronnoteMetadata } from "./late
 import { agentAvailable, loadAgentRules, normalizeAgentTitle, polishBodyWithAgent } from "./latex-export-codex.mjs";
 import { loadKatexMacros } from "./katex-macros.mjs";
 import { durationFromEnv } from "./jupyter-cell.mjs";
+import { moveWindowsPathToRecycleBin } from "./windows-shell.mjs";
 import { maskMetaSummaryContent } from "../../shared/meta-summary.mjs";
 import { SessionManager } from "../Features/Session/manager.mjs";
 import {
@@ -692,9 +693,14 @@ function executablePath(command) {
     "/usr/bin",
     "/bin",
   ].filter(Boolean);
+  const extensions = process.platform === "win32"
+    ? String(process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)
+    : [""];
   for (const dir of paths) {
-    const candidate = join(dir, command);
-    if (existsSync(candidate)) return candidate;
+    for (const extension of ["", ...extensions]) {
+      const candidate = join(dir, `${command}${extension}`);
+      if (existsSync(candidate)) return candidate;
+    }
   }
   return command;
 }
@@ -6254,7 +6260,7 @@ function copilotDiagnostics() {
 function openExternalUri(uri) {
   if (!/^https?:\/\//i.test(String(uri || ""))) return;
   pushCopilotLog("open-uri", { uri });
-  if (process.platform === "darwin") {
+  if (process.platform === "darwin" && process.env.AARONNOTE_HOST_MODE !== "desktop") {
     execFile("open", [uri], () => {});
   }
   return uri;
@@ -7295,6 +7301,10 @@ async function uniqueTrashPath(file) {
 }
 
 async function moveToTrash(file) {
+  if (process.platform === "win32") {
+    await moveWindowsPathToRecycleBin(file);
+    return "system-recycle-bin";
+  }
   if (process.platform === "darwin") {
     try {
       await execFileAsync("osascript", [

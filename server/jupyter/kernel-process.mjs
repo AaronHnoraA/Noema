@@ -1,9 +1,8 @@
 // Kernel process launch/teardown.
 // Ported concept from microsoft/vscode-jupyter (MIT)
-// src/kernels/raw/launcher/kernelProcess.node.ts, trimmed to macOS/Node: no
-// Windows interrupt-daemon, no VS Code telemetry/progress ceremony, no
-// `pidtree` dependency (we spawn our own process group and signal it as a
-// whole, same net effect as vscode's child-tree walk for our use case).
+// src/kernels/raw/launcher/kernelProcess.node.ts, trimmed to Node: no VS Code
+// telemetry/progress ceremony and no `pidtree` dependency. Unix kernels use
+// their own process group; Windows falls back to the direct child process.
 
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
@@ -35,8 +34,8 @@ export async function writeConnectionFile(filePath, connectionInfo) {
  * substituted), in its own process group. Returns a handle:
  * - `.pid`
  * - `.exited` — EventEmitter firing `"exit"` with `{ exitCode, signal, stderrTail }` exactly once
- * - `.interrupt()` — SIGINT the process group (only meaningful for `interrupt_mode !== "message"` kernels)
- * - `.dispose()` — SIGTERM then SIGKILL the process group, and best-effort delete the connection file
+ * - `.interrupt()` — interrupt the process/group (only meaningful for `interrupt_mode !== "message"` kernels)
+ * - `.dispose()` — terminate the process/group and best-effort delete the connection file
  */
 export function spawnKernelProcess({ kernelSpec, connectionFilePath, env, cwd, stderr }) {
   const log = makeLogger(stderr);

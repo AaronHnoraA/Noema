@@ -5,7 +5,7 @@ import {
   copyFile, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile,
 } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { DatabaseSync } from "node:sqlite";
 
@@ -15,6 +15,7 @@ import {
   normalizeWikiNamespace, qualifiedWikiTitle, scanWikiLinks, splitQualifiedWikiTarget,
 } from "../../shared/wiki-link.mjs";
 import { diffRoamFile, fileHistory, restoreFileFromCommit } from "./roam-git.mjs";
+import { createWindowsZip, moveWindowsPathToRecycleBin } from "./windows-shell.mjs";
 
 const execFileAsync = promisify(execFile);
 const PARTITIONS = Object.freeze(["public", "private"]);
@@ -49,7 +50,7 @@ function apiError(message, statusCode = 400, code = "ERR_WIKI") {
 
 function inside(root, target) {
   const rel = relative(resolve(root), resolve(target));
-  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`));
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
 function cleanPartition(value) {
@@ -1581,7 +1582,12 @@ export async function deleteWikiPage(rootValue, body = {}, options = {}) {
       "ERR_WIKI_BACKLINK_CONFIRM",
     );
   }
-  const trashRoot = options.trashRoot ? resolve(String(options.trashRoot)) : join(homedir(), ".Trash");
+  const useSystemRecycleBin = process.platform === "win32" && !options.trashRoot;
+  const trashRoot = options.trashRoot
+    ? resolve(String(options.trashRoot))
+    : useSystemRecycleBin
+      ? join(root, ".noema", "trash-staging")
+      : join(homedir(), ".Trash");
   await mkdir(trashRoot, { recursive: true });
   const base = `Noema-${slugify(note.title)}-${String(note.id).slice(0, 8)}`;
   let bundle = join(trashRoot, base);
@@ -1607,6 +1613,7 @@ export async function deleteWikiPage(rootValue, body = {}, options = {}) {
       await rename(asset.path, target);
       assets.push({ source: asset.path, target });
     }
+    if (useSystemRecycleBin) await moveWindowsPathToRecycleBin(bundle, { kind: "directory" });
     await rm(journal, { force: true });
     return {
       ok: true,
@@ -1614,7 +1621,7 @@ export async function deleteWikiPage(rootValue, body = {}, options = {}) {
       pageId: note.id,
       file: note.file,
       trashedFile,
-      trashedTo: bundle,
+      trashedTo: useSystemRecycleBin ? "system-recycle-bin" : bundle,
       backlinks: note.backlinks,
       assets,
     };
@@ -1771,6 +1778,8 @@ async function archiveExport(staging, outputPath) {
   await rm(outputPath, { force: true });
   if (process.platform === "darwin") {
     await execFileAsync("ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", staging, outputPath]);
+  } else if (process.platform === "win32") {
+    await createWindowsZip(staging, outputPath);
   } else {
     await execFileAsync("zip", ["-q", "-r", outputPath, "."], { cwd: staging });
   }

@@ -802,12 +802,21 @@ declare global {
     aaronnoteOpenTaskManager?: () => void;
     __noemaAppConfig?: NoemaAppConfigMsg;
     noemaDesktop?: {
+      platform: string;
       filePath(file: File): string;
       openFiles(files: string[]): void;
       openTarget(target: { file?: string; url?: string; source?: string; disposition?: "" | "new" | "split-right" | "split-down" }): Promise<boolean>;
       updateWindowState(state: { kind?: string; file?: string; title?: string; dirty?: boolean; saveInFlight?: boolean; conflict?: boolean; busy?: boolean }): void;
       showMenu(kind: "actions" | "window", point?: { x: number; y: number }): Promise<boolean>;
       revealPath(file: string): Promise<boolean>;
+      openPath(file: string): Promise<{ ok: boolean; message?: string }>;
+      openExternal(url: string): Promise<{ ok: boolean; message?: string }>;
+      chooseSavePath(options: { title?: string; defaultPath?: string; extension?: string }): Promise<{ canceled: boolean; path: string }>;
+      readClipboard(): Promise<
+        | { kind: "empty" }
+        | { kind: "text"; text: string; html?: string }
+        | { kind: "image"; type: "image/png"; data: string }
+      >;
       chooseDirectory(options: { root: string; defaultPath?: string; title?: string }): Promise<{
         canceled: boolean;
         path: string;
@@ -892,11 +901,11 @@ export const api = {
     async trash(file: string): Promise<NotesMsg & { file?: string; trashedTo?: string }> {
       const call = requireMethod(
         nativeApi().notes?.deleteNote ?? nativeApi().notes?.deleteNode,
-        "Move note to Trash",
+        "Move note to system trash",
       );
       return ensureOk(
         await call(file) as NotesMsg & { file?: string; trashedTo?: string },
-        "Move note to Trash failed",
+        "Move note to system trash failed",
       );
     },
     async snippets(): Promise<SnippetsMsg & { snippets?: SnippetSummary[] }> {
@@ -1122,14 +1131,13 @@ export const api = {
       const body = client ? { key: keyString, client } : keyString;
       await call(body).catch(() => {});
     },
-    async systemOpen(target: string, base?: string): Promise<void> {
+    async systemOpen(target: string, base?: string): Promise<{ ok?: boolean; target?: string } | void> {
       const call = window.aaronnoteApi?.emacs?.systemOpen;
       if (!call) {
         const body = base ? { target, base } : target;
-        await callHttpApi("aaronnote:api:emacs:system-open", [body], "System open failed");
-        return;
+        return await callHttpApi("aaronnote:api:emacs:system-open", [body], "System open failed") as { ok?: boolean; target?: string };
       }
-      ensureOk(await call(target, base), "System open failed");
+      return ensureOk(await call(target, base), "System open failed") as { ok?: boolean; target?: string };
     },
     async zotero(body: Record<string, unknown>): Promise<void> {
       const call = window.aaronnoteApi?.emacs?.zotero;

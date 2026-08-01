@@ -2,6 +2,32 @@ export function isMarkdownFilePath(file) {
   return /\.(?:md|markdown)$/i.test(String(file || "").trim());
 }
 
+export function desktopPlatformLabels(platform = "") {
+  if (platform === "win32") {
+    return {
+      primaryModifier: "Ctrl",
+      alternateModifier: "Alt",
+      fileManager: "File Explorer",
+      trash: "Recycle Bin",
+    };
+  }
+  return {
+    primaryModifier: "⌘",
+    alternateModifier: "Option",
+    fileManager: platform === "darwin" ? "Finder" : "file manager",
+    trash: "Trash",
+  };
+}
+
+export function desktopTitleBarOverlay(platform, theme = {}) {
+  if (platform !== "win32") return undefined;
+  return {
+    color: String(theme.backgroundColor || "#111318"),
+    symbolColor: theme.colorScheme === "light" ? "#20242b" : "#f4f6fb",
+    height: 54,
+  };
+}
+
 export function desktopDropDisposition(files, forceAttachment = false) {
   const paths = Array.from(files || [])
     .map((file) => String(file || "").trim())

@@ -33,6 +33,12 @@ export interface KernelRecord {
 export function sweepOrphanKernels(options: {
   sidecarPath: string;
   stderr?: NodeJS.WritableStream;
+  platform?: NodeJS.Platform;
+}): Promise<{ reaped: number }>;
+
+export function sweepGlobalOrphanKernels(options?: {
+  stderr?: NodeJS.WritableStream;
+  platform?: NodeJS.Platform;
 }): Promise<{ reaped: number }>;
 
 export function createKernelRegistry(options: {

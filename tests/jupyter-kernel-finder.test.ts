@@ -2,7 +2,7 @@ import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { findKernelSpecs } from "../server/jupyter/kernel-finder.mjs";
+import { defaultKernelSearchDirs, findKernelSpecs } from "../server/jupyter/kernel-finder.mjs";
 
 async function writeKernel(root: string, name: string, displayName: string): Promise<void> {
   const directory = join(root, "kernels", name);
@@ -15,6 +15,18 @@ async function writeKernel(root: string, name: string, displayName: string): Pro
 }
 
 describe("Jupyter kernelspec discovery", () => {
+  test("uses Windows Jupyter data roots without Unix or macOS directories", () => {
+    expect(defaultKernelSearchDirs({
+      dataDir: "C:\\Noema\\jupyter",
+      platform: "win32",
+      env: { APPDATA: "C:\\Users\\me\\AppData\\Roaming", PROGRAMDATA: "C:\\ProgramData" },
+    })).toEqual([
+      "C:\\Noema\\jupyter",
+      join("C:\\Users\\me\\AppData\\Roaming", "jupyter"),
+      join("C:\\ProgramData", "jupyter"),
+    ]);
+  });
+
   test("stable project Sage hides versioned duplicates but keeps remote Sage", async () => {
     const project = await mkdtemp(join(tmpdir(), "aaronnote-kernels-project-"));
     const system = await mkdtemp(join(tmpdir(), "aaronnote-kernels-system-"));

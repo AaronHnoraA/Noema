@@ -3,7 +3,7 @@ import { constants } from "node:fs";
 import { access } from "node:fs/promises";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 
 import {
   AARONNOTE_ACCEPTED_WORDS,
@@ -25,6 +25,7 @@ const WORKSPACE_ROOT = process.env.AARONNOTE_WORKSPACE_ROOT || join(homedir(), "
 const USER_WORDS_FILE = process.env.AARONNOTE_PROSE_WORDS
   || join(WORKSPACE_ROOT, "etc", "prose-accepted-words.txt");
 const GUI_TOOL_PATHS = [
+  process.env.LOCALAPPDATA && join(process.env.LOCALAPPDATA, "Programs"),
   join(homedir(), ".local", "bin"),
   join(homedir(), ".nix-profile", "bin"),
   "/opt/homebrew/bin",
@@ -38,10 +39,10 @@ const GUI_TOOL_PATHS = [
   "/bin",
   "/usr/sbin",
   "/sbin",
-];
+].filter(Boolean);
 const TOOL_ENV = {
   ...process.env,
-  PATH: [...new Set([...GUI_TOOL_PATHS, ...String(process.env.PATH || "").split(":").filter(Boolean)])].join(":"),
+  PATH: [...new Set([...GUI_TOOL_PATHS, ...String(process.env.PATH || "").split(delimiter).filter(Boolean)])].join(delimiter),
 };
 const activeChecks = new Map();
 let userWordsCache = { expiresAt: 0, words: new Set() };

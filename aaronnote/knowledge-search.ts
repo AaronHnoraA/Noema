@@ -1,4 +1,5 @@
 import type { WikiNote, WikiSearchResult } from "./api-client.ts";
+import { markdownLinkPrimaryModifier } from "../src/cm6/markdown-link-events.ts";
 
 export type KnowledgeSearchController = { refresh: () => void; close: () => void; destroy: () => void };
 
@@ -58,7 +59,7 @@ export function createKnowledgeSearch(options: {
         popup.querySelectorAll<HTMLElement>("[role='option']").forEach((item, itemIndex) => item.setAttribute("aria-selected", String(itemIndex === active)));
       });
       button.addEventListener("mousedown", (event) => event.preventDefault());
-      button.addEventListener("click", (event) => openItem(note, event.metaKey || event.altKey));
+      button.addEventListener("click", (event) => openItem(note, markdownLinkPrimaryModifier(event) || event.altKey));
       popup.appendChild(button);
     });
     popup.hidden = false;
@@ -87,7 +88,7 @@ export function createKnowledgeSearch(options: {
       popup.querySelector<HTMLElement>(`[role='option']:nth-child(${active + 1})`)?.scrollIntoView({ block: "nearest" });
     } else if (event.key === "Enter" && items[active]) {
       event.preventDefault();
-      openItem(items[active], event.metaKey || event.altKey);
+      openItem(items[active], markdownLinkPrimaryModifier(event) || event.altKey);
     } else if (event.key === "Escape") {
       event.preventDefault();
       if (options.input.value) { options.input.value = ""; refresh(); } else { close(); options.input.blur(); }

@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 contextBridge.exposeInMainWorld("noemaDesktop", {
+  platform: process.platform,
   filePath(file) {
     try {
       return webUtils.getPathForFile(file);
@@ -22,6 +23,18 @@ contextBridge.exposeInMainWorld("noemaDesktop", {
   },
   revealPath(file) {
     return ipcRenderer.invoke("noema:reveal-path", file);
+  },
+  openPath(file) {
+    return ipcRenderer.invoke("noema:open-path", file);
+  },
+  openExternal(url) {
+    return ipcRenderer.invoke("noema:open-external", url);
+  },
+  chooseSavePath(options = {}) {
+    return ipcRenderer.invoke("noema:choose-save-path", options);
+  },
+  readClipboard() {
+    return ipcRenderer.invoke("noema:read-clipboard");
   },
   chooseDirectory(options = {}) {
     return ipcRenderer.invoke("noema:choose-directory", options);

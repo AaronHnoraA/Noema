@@ -21,6 +21,20 @@ describe("standalone VS Code adapter", () => {
     });
   });
 
+  test("launches the Windows code.cmd shim through ComSpec", () => {
+    expect(vscodeOpenCommand({
+      cli: "C:\\Tools\\code.cmd",
+      file: "C:\\Notes\\example.md",
+      line: 2,
+      col: 0,
+      platform: "win32",
+      comspec: "C:\\Windows\\System32\\cmd.exe",
+    })).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: ["/d", "/s", "/c", "call", "C:\\Tools\\code.cmd", "--new-window", "--goto", "C:\\Notes\\example.md:2:1"],
+    });
+  });
+
   test("resolves note-code tags before launching", async () => {
     const root = await mkdtemp(join(tmpdir(), "noema-editor-"));
     const file = join(root, "source.lean");

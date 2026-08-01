@@ -3,6 +3,7 @@
 
 export interface JupyterCellServiceOptions {
   runtimeRoot?: string;
+  stateRoot?: string;
   noteRoot?: string;
   workspaceRoot?: string;
   stdout?: NodeJS.WritableStream;

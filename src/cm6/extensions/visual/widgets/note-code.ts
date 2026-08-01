@@ -12,6 +12,7 @@ import { highlightCodeForEditor, onCodeHighlightReady } from "../../../../code-h
 import { hasViewportDecorationRefresh, scheduleViewportDecorationRefresh } from "../../../viewport-refresh.ts";
 import { parseNoteCodeLine } from "../../../../../shared/note-code.mjs";
 import { sourceEditorName } from "../../../../../aaronnote/host-mode.ts";
+import { desktopPlatformLabels } from "../../../../../shared/desktop-shell.mjs";
 
 type NoteCodeLine = {
   commandFrom: number;
@@ -175,9 +176,10 @@ class NoteCodeWidget extends MeasuredWidget {
     openBtn.type = "button";
     openBtn.className = "cm-note-code-open-btn";
     const sourceEditor = sourceEditorName();
+    const primaryModifier = desktopPlatformLabels(window.noemaDesktop?.platform || (/Mac/.test(navigator.platform) ? "darwin" : "")).primaryModifier;
     openBtn.textContent = `Open in ${sourceEditor}`;
-    openBtn.title = `Cmd-click to open in ${sourceEditor}`;
-    openBtn.setAttribute("aria-label", `Cmd-click to open in ${sourceEditor}`);
+    openBtn.title = `${primaryModifier}-click to open in ${sourceEditor}`;
+    openBtn.setAttribute("aria-label", `${primaryModifier}-click to open in ${sourceEditor}`);
     openBtn.disabled = true;
     openBtn.addEventListener("mousedown", (event) => {
       event.preventDefault();

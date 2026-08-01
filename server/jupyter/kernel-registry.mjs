@@ -44,7 +44,7 @@ function processCommandLine(pid) {
  * Always removes stale connection files for entries that are no longer
  * running. Safe to call with no prior sidecar (no-op).
  */
-export async function sweepOrphanKernels({ sidecarPath, stderr = process.stderr } = {}) {
+export async function sweepOrphanKernels({ sidecarPath, stderr = process.stderr, platform = process.platform } = {}) {
   const log = makeLogger(stderr);
   let entries = [];
   try {
@@ -57,7 +57,7 @@ export async function sweepOrphanKernels({ sidecarPath, stderr = process.stderr 
   for (const entry of entries) {
     const { pid, connectionFile } = entry || {};
     if (!pid || !connectionFile) continue;
-    if (isProcessAlive(pid)) {
+    if (platform !== "win32" && isProcessAlive(pid)) {
       const commandLine = await processCommandLine(pid);
       if (commandLine.includes(connectionFile)) {
         log.warn(`reaping orphaned kernel process ${pid} from a previous run`);
@@ -91,7 +91,8 @@ export async function sweepOrphanKernels({ sidecarPath, stderr = process.stderr 
  * ppid 1 is unowned by construction and safe to kill regardless of which
  * runtimeDir spawned it.
  */
-export async function sweepGlobalOrphanKernels({ stderr = process.stderr } = {}) {
+export async function sweepGlobalOrphanKernels({ stderr = process.stderr, platform = process.platform } = {}) {
+  if (platform === "win32") return { reaped: 0 };
   const log = makeLogger(stderr);
   const listing = await new Promise((resolve) => {
     execFile("ps", ["-axo", "pid=,ppid=,args="], { maxBuffer: 8 * 1024 * 1024 }, (err, stdout) =>

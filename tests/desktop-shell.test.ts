@@ -3,12 +3,28 @@ import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 import {
   desktopOpenDecision,
   desktopDropDisposition,
+  desktopPlatformLabels,
+  desktopTitleBarOverlay,
   desktopWindowRisk,
   isMarkdownFilePath,
   sanitizeDesktopSession,
 } from "../shared/desktop-shell.mjs";
 
 describe("Noema desktop shell adapter", () => {
+  test("uses Windows-native labels and reserves a 54px overlay", () => {
+    expect(desktopPlatformLabels("win32")).toEqual({
+      primaryModifier: "Ctrl",
+      alternateModifier: "Alt",
+      fileManager: "File Explorer",
+      trash: "Recycle Bin",
+    });
+    expect(desktopTitleBarOverlay("win32", {
+      backgroundColor: "#101214",
+      colorScheme: "dark",
+    })).toEqual({ color: "#101214", symbolColor: "#f4f6fb", height: 54 });
+    expect(desktopTitleBarOverlay("darwin")).toBeUndefined();
+  });
+
   test("recognizes Markdown documents case-insensitively", () => {
     expect(isMarkdownFilePath("/notes/one.md")).toBe(true);
     expect(isMarkdownFilePath("/notes/TWO.MARKDOWN")).toBe(true);

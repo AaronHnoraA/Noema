@@ -96,12 +96,13 @@ describe("aaronnote snippets", () => {
     expect(matches.map((snippet) => snippet.key)).toEqual(["fc", "fc-block", "prefix-fc", "for-const"]);
   });
 
-  test("snippet popup accepts tab and cmd-number but not enter", () => {
+  test("snippet popup accepts tab and primary-modifier number but not enter", () => {
     expect(snippetPopupKeyAction({ key: "Enter" })).toEqual({ type: "consume" });
     expect(snippetPopupKeyAction({ key: "Tab" })).toEqual({ type: "accept" });
     expect(snippetPopupKeyAction({ key: "2", commandKey: true })).toEqual({ type: "select", index: 1 });
     expect(snippetPopupKeyAction({ key: "3", altKey: true })).toEqual({ type: "select", index: 2 });
     expect(snippetPopupKeyAction({ key: "0", commandKey: true })).toEqual({ type: "select", index: 9 });
+    expect(snippetPopupKeyAction({ key: "4", commandKey: true, ctrlKey: true })).toEqual({ type: "select", index: 3 });
     expect(snippetPopupKeyAction({ key: "Tab", isComposing: true })).toEqual({ type: "none" });
   });
 

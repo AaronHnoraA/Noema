@@ -18,6 +18,8 @@ export function defaultKernelSearchDirs(options: {
   venvPrefix?: string;
   useHomeKernels?: boolean;
   extraJupyterPath?: string;
+  platform?: NodeJS.Platform;
+  env?: NodeJS.ProcessEnv;
 }): string[];
 
 export function findKernelSpecs(options: {

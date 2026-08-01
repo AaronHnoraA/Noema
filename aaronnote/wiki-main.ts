@@ -11,12 +11,16 @@ import { splitQualifiedWikiTarget } from "../shared/wiki-link.mjs";
 import { createWorkspaceGraph, type WorkspaceGraph, type WorkspaceGraphSettings } from "./workspace-graph.ts";
 import type { GraphNode, GraphPayload } from "./types.ts";
 import { createKnowledgeSearch } from "./knowledge-search.ts";
+import { desktopPlatformLabels } from "../shared/desktop-shell.mjs";
 
 const root = document.querySelector<HTMLElement>("#wiki-app");
 if (!root) throw new Error("Missing #wiki-app");
 
 const serverReaderMode = serverMode();
+const desktopPlatform = window.noemaDesktop?.platform || (/Mac/.test(navigator.platform) ? "darwin" : "");
+const platformLabels = desktopPlatformLabels(desktopPlatform);
 document.body.dataset.hostMode = serverReaderMode ? "server" : (window.noemaDesktop ? "desktop" : "browser");
+if (window.noemaDesktop) document.body.dataset.desktopPlatform = desktopPlatform;
 
 root.innerHTML = `
   <header class="noema-desktop-titlebar noema-wiki-titlebar" data-desktop-titlebar>
@@ -42,7 +46,7 @@ root.innerHTML = `
       <span aria-hidden="true">⌕</span>
       <input type="search" data-search placeholder="Search Noema Wiki" aria-label="Search Noema Wiki" autocomplete="off">
       <button type="button" data-search-submit>Search</button>
-      <kbd>⌘ K</kbd>
+      <kbd>${platformLabels.primaryModifier} K</kbd>
     </div>
     <div class="noema-wiki-site-actions">
       <a href="/config">Settings</a>
@@ -134,7 +138,7 @@ root.innerHTML = `
       </section>
       <section>
         <h2>Shortcuts</h2>
-        <p><kbd>⌘ K</kbd> Search<br><kbd>⌘ N</kbd> New page</p>
+        <p><kbd>${platformLabels.primaryModifier} K</kbd> Search<br><kbd>${platformLabels.primaryModifier} N</kbd> New page</p>
       </section>
     </aside>
   </main>
@@ -170,7 +174,7 @@ root.innerHTML = `
   <dialog class="noema-wiki-dialog" data-page-dialog>
     <form data-page-form>
       <header><div><p>Page management</p><h2 data-page-title>Manage page</h2></div><button type="button" data-page-cancel aria-label="Close">×</button></header>
-      <label><span>Operation</span><select name="action"><option value="move">Move or rename</option><option value="copy">Create independent copy</option><option value="merge">Merge duplicate</option><option value="history">Page history</option><option value="delete">Move to Trash</option></select></label>
+      <label><span>Operation</span><select name="action"><option value="move">Move or rename</option><option value="copy">Create independent copy</option><option value="merge">Merge duplicate</option><option value="history">Page history</option><option value="delete">Move to ${platformLabels.trash}</option></select></label>
       <section data-page-destination>
         <div class="noema-wiki-form-grid">
           <label><span>Repository</span><select name="repositoryId" required></select></label>
@@ -1356,12 +1360,12 @@ function updatePageOperation(): void {
   root.querySelector<HTMLElement>("[data-page-history]")!.hidden = action !== "history";
   const warning = root.querySelector<HTMLElement>("[data-page-warning]")!;
   const apply = root.querySelector<HTMLButtonElement>("[data-page-apply]")!;
-  const verbs: Record<string, string> = { move: "Move page", copy: "Create copy", merge: "Merge pages", history: "Close", delete: "Move to Trash" };
+  const verbs: Record<string, string> = { move: "Move page", copy: "Create copy", merge: "Merge pages", history: "Close", delete: `Move to ${platformLabels.trash}` };
   apply.textContent = verbs[action] || "Apply";
   apply.hidden = action === "history";
   apply.classList.toggle("is-danger", action === "delete");
   warning.textContent = action === "delete"
-    ? `${activeManagedNote?.backlinks.length || 0} backlinks will become wanted links. The page and its owned assets remain recoverable from Trash.`
+    ? `${activeManagedNote?.backlinks.length || 0} backlinks will become wanted links. The page and its owned assets remain recoverable from ${platformLabels.trash}.`
     : action === "merge"
       ? "The selected duplicate remains at its path as a redirect, so existing links keep working."
       : action === "move"
@@ -1439,11 +1443,11 @@ async function applyPageOperation(): Promise<void> {
   if (action === "history") { pageDialog.close(); return; }
   try {
     if (action === "delete") {
-      if (!window.confirm(`Move “${note.title}” and its page-owned assets to the macOS Trash?`)) return;
+      if (!window.confirm(`Move “${note.title}” and its page-owned assets to the ${platformLabels.trash}?`)) return;
       const confirm = note.backlinks.length ? window.prompt("Type DELETE to confirm after reviewing the backlinks") : "";
       if (note.backlinks.length && confirm !== "DELETE") return;
       const result = await api.wiki.deletePage({ pageId: note.id, confirm });
-      setStatus(`Moved ${note.title} to Trash · ${String(result.trashedTo || "recoverable")}`);
+      setStatus(`Moved ${note.title} to ${platformLabels.trash} · ${String(result.trashedTo || "recoverable")}`);
     } else if (action === "merge") {
       const duplicateId = String(values.get("duplicateId") || "");
       if (!duplicateId || window.prompt("Type MERGE to preserve the duplicate as a redirect") !== "MERGE") return;

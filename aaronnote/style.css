@@ -220,6 +220,7 @@ button:disabled {
 .noema-global-search .noema-knowledge-search-results { right: 0; left: 0; }
 
 .noema-desktop-titlebar {
+  box-sizing: border-box;
   position: fixed;
   z-index: 100;
   top: 0;
@@ -236,6 +237,13 @@ button:disabled {
   color: var(--aaron-ink);
   -webkit-app-region: drag;
   user-select: none;
+}
+
+body[data-desktop-platform="win32"] .noema-desktop-titlebar {
+  right: auto;
+  width: env(titlebar-area-width, calc(100% - 138px));
+  padding-right: 18px;
+  padding-left: 18px;
 }
 
 .noema-desktop-titlebar-controls {

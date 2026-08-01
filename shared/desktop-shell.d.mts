@@ -3,6 +3,16 @@ export type DesktopDropDisposition =
   | { type: "insert"; paths: string[] };
 
 export function isMarkdownFilePath(file: unknown): boolean;
+export function desktopPlatformLabels(platform?: string): {
+  primaryModifier: string;
+  alternateModifier: string;
+  fileManager: string;
+  trash: string;
+};
+export function desktopTitleBarOverlay(platform: string, theme?: {
+  backgroundColor?: string;
+  colorScheme?: "dark" | "light" | string;
+}): { color: string; symbolColor: string; height: number } | undefined;
 export function desktopDropDisposition(
   files: Iterable<unknown> | ArrayLike<unknown>,
   forceAttachment?: boolean,

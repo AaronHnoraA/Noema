@@ -13,7 +13,15 @@ import os from "node:os";
 import path from "node:path";
 
 /** Search directories to scan for `<dir>/kernels/<name>/kernel.json`, in priority order (first match per name wins). */
-export function defaultKernelSearchDirs({ dataDir, environmentPrefix, venvPrefix, useHomeKernels = true, extraJupyterPath }) {
+export function defaultKernelSearchDirs({
+  dataDir,
+  environmentPrefix,
+  venvPrefix,
+  useHomeKernels = true,
+  extraJupyterPath,
+  platform = process.platform,
+  env = process.env,
+}) {
   const dirs = [];
   if (extraJupyterPath) {
     dirs.push(...String(extraJupyterPath).split(path.delimiter).map((p) => p.trim()).filter(Boolean));
@@ -21,11 +29,14 @@ export function defaultKernelSearchDirs({ dataDir, environmentPrefix, venvPrefix
   if (dataDir) dirs.push(dataDir);
   if (useHomeKernels) {
     const home = os.homedir();
-    if (home) {
+    if (platform === "win32") {
+      if (env.APPDATA) dirs.push(path.join(env.APPDATA, "jupyter"));
+      if (env.PROGRAMDATA) dirs.push(path.join(env.PROGRAMDATA, "jupyter"));
+    } else if (home) {
       dirs.push(path.join(home, "Library", "Jupyter"));
       dirs.push(path.join(home, ".local", "share", "jupyter"));
     }
-    dirs.push("/usr/local/share/jupyter", "/usr/share/jupyter");
+    if (platform !== "win32") dirs.push("/usr/local/share/jupyter", "/usr/share/jupyter");
   }
   const prefix = environmentPrefix || venvPrefix;
   if (prefix) dirs.push(path.join(prefix, "share", "jupyter"));

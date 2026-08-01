@@ -14,6 +14,7 @@ const root = document.querySelector<HTMLElement>("#config-app");
 if (!root) throw new Error("Missing #config-app");
 
 document.body.dataset.hostMode = window.noemaDesktop ? "desktop" : "browser";
+if (window.noemaDesktop) document.body.dataset.desktopPlatform = window.noemaDesktop.platform;
 
 root.innerHTML = `
   <header class="noema-config-titlebar">

@@ -1,12 +1,21 @@
 import { accessSync, constants, existsSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
+import { delimiter, dirname, isAbsolute, join, resolve, win32 } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 const macVSCodeCli = "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code";
 const macVSCodeInsidersCli = "/Applications/Visual Studio Code - Insiders.app/Contents/Resources/app/bin/code";
+
+function windowsVSCodeCandidates(env) {
+  return [
+    env.LOCALAPPDATA && join(env.LOCALAPPDATA, "Programs", "Microsoft VS Code", "Code.exe"),
+    env.LOCALAPPDATA && join(env.LOCALAPPDATA, "Programs", "Microsoft VS Code Insiders", "Code - Insiders.exe"),
+    env.ProgramFiles && join(env.ProgramFiles, "Microsoft VS Code", "Code.exe"),
+    env["ProgramFiles(x86)"] && join(env["ProgramFiles(x86)"], "Microsoft VS Code", "Code.exe"),
+  ].filter(Boolean);
+}
 
 function executable(file) {
   try {
@@ -17,21 +26,29 @@ function executable(file) {
   }
 }
 
-function pathExecutable(name, pathValue = process.env.PATH || "") {
+function pathExecutable(name, pathValue = process.env.PATH || "", extensions = [""]) {
   for (const directory of String(pathValue).split(delimiter)) {
     if (!directory) continue;
-    const candidate = join(directory, name);
-    if (executable(candidate)) return candidate;
+    for (const extension of extensions) {
+      const candidate = join(directory, `${name}${extension}`);
+      if (executable(candidate)) return candidate;
+    }
   }
   return "";
 }
 
-export function findVSCodeCli(env = process.env) {
+export function findVSCodeCli(env = process.env, platform = process.platform) {
   const explicit = String(env.NOEMA_VSCODE || env.AARONNOTE_VSCODE || "").trim();
   if (explicit && executable(explicit)) return explicit;
+  if (platform === "win32") {
+    const extensions = String(env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
+    return pathExecutable("code", env.PATH, ["", ...extensions])
+      || windowsVSCodeCandidates(env).find(executable)
+      || "";
+  }
   return pathExecutable("code", env.PATH)
-    || (executable(macVSCodeCli) ? macVSCodeCli : "")
-    || (executable(macVSCodeInsidersCli) ? macVSCodeInsidersCli : "");
+    || (platform === "darwin" && executable(macVSCodeCli) ? macVSCodeCli : "")
+    || (platform === "darwin" && executable(macVSCodeInsidersCli) ? macVSCodeInsidersCli : "");
 }
 
 export function vscodeOpenCommand({
@@ -40,12 +57,16 @@ export function vscodeOpenCommand({
   col = 0,
   cli = "",
   platform = process.platform,
+  comspec = process.env.ComSpec || "cmd.exe",
 } = {}) {
-  const safeFile = resolve(String(file || ""));
+  const safeFile = platform === "win32" ? win32.resolve(String(file || "")) : resolve(String(file || ""));
   const safeLine = Math.max(1, Math.floor(Number(line) || 1));
   const safeColumn = Math.max(1, Math.floor(Number(col) || 0) + 1);
   const target = `${safeFile}:${safeLine}:${safeColumn}`;
   if (cli) {
+    if (platform === "win32" && /\.(?:cmd|bat)$/i.test(cli)) {
+      return { command: comspec, args: ["/d", "/s", "/c", "call", cli, "--new-window", "--goto", target] };
+    }
     return { command: cli, args: ["--new-window", "--goto", target] };
   }
   if (platform === "darwin") {
@@ -91,7 +112,9 @@ export async function openInVSCode(body = {}, {
     file,
     line: position.line,
     col: position.col,
-    cli: findVSCodeCli(env),
+    cli: findVSCodeCli(env, process.platform),
+    platform: process.platform,
+    comspec: env.ComSpec || "cmd.exe",
   });
   if (!spec.command) {
     return { ok: false, file, message: "VS Code command not found. Set NOEMA_VSCODE to the code executable." };

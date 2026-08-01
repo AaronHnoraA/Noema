@@ -58,6 +58,13 @@ button { color: inherit; }
   background: color-mix(in srgb, var(--aaronnote-chrome), transparent 2%);
   -webkit-app-region: drag;
 }
+
+body[data-host-mode="desktop"][data-desktop-platform="win32"] .noema-wiki-titlebar {
+  right: auto;
+  width: env(titlebar-area-width, calc(100% - 138px));
+  padding-right: 18px;
+  padding-left: 18px;
+}
 .noema-wiki-title-brand { display: inline-flex; align-items: center; gap: 8px; }
 .noema-wiki-title-brand img { width: 24px; height: 24px; object-fit: contain; }
 

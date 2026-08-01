@@ -59,6 +59,11 @@ body[data-host-mode="browser"] .noema-config-titlebar {
   padding-left: 24px;
 }
 
+body[data-host-mode="desktop"][data-desktop-platform="win32"] .noema-config-titlebar {
+  width: env(titlebar-area-width, calc(100% - 138px));
+  padding-left: 24px;
+}
+
 .noema-config-title {
   display: flex;
   align-items: center;

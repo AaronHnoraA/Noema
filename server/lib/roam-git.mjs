@@ -7,6 +7,11 @@ const execFileAsync = promisify(execFile);
 
 const MAX_BUFFER = 1024 * 1024 * 4;
 
+function inside(root, target) {
+  const rel = relative(resolve(root), resolve(target));
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
 async function git(noteRoot, args) {
   const { stdout } = await execFileAsync("git", ["-C", noteRoot, ...args], {
     maxBuffer: MAX_BUFFER,
@@ -82,7 +87,7 @@ async function resolveNotePathInfo(noteRoot, pathValue) {
   if (!raw) throw new Error("Missing path");
   const requestedAbs = isAbsolute(raw) ? resolve(raw) : resolve(noteRootAbs, raw);
   const abs = await realResolve(requestedAbs);
-  if (abs !== noteRootAbs && !abs.startsWith(noteRootAbs + sep)) {
+  if (!inside(noteRootAbs, abs)) {
     throw new Error("File outside noteRoot: " + pathValue);
   }
   return {
@@ -122,7 +127,7 @@ async function noteRootPathspec(noteRoot) {
   const rootReal = await realResolve(await gitRoot(noteRoot));
   const noteRootReal = await realResolve(noteRoot);
   if (noteRootReal === rootReal) return ".";
-  if (!noteRootReal.startsWith(rootReal + sep)) return ".";
+  if (!inside(rootReal, noteRootReal)) return ".";
   return `:(top)${slashPath(relative(rootReal, noteRootReal))}`;
 }
 
@@ -133,7 +138,7 @@ async function resolveGitPath(noteRoot, gitRelPath) {
   const abs = await realResolve(resolve(root, gitRelPath));
   // Must be inside noteRoot (which may be a symlink; git resolves real paths)
   const noteRootReal = await realResolve(noteRoot);
-  return (abs === noteRootReal || abs.startsWith(noteRootReal + sep)) ? abs : null;
+  return inside(noteRootReal, abs) ? abs : null;
 }
 
 // Returns current HEAD sha, or null if not in a git repo / no commits yet.
@@ -326,7 +331,7 @@ export async function fileHistory(noteRoot, absFile, limit = 20) {
   // git log path args are relative to cwd (-C noteRoot), which git converts
   // to git-root-relative internally — this works correctly.
   const rel = relative(noteRoot, absFile);
-  if (!rel || rel.startsWith("..")) return [];
+  if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return [];
   try {
     const out = await git(noteRoot, [
       "log", "--follow", `--format=%H\t%aI\t%an\t%ae\t%s`, `-n`, String(limit), "--", rel,
@@ -346,7 +351,7 @@ export async function fileHistory(noteRoot, absFile, limit = 20) {
 export async function restoreFileFromCommit(noteRoot, absFile, sha) {
   const [noteRootAbs, fileAbs] = await Promise.all([realResolve(noteRoot), realResolve(absFile)]);
   const rel = relative(noteRootAbs, fileAbs);
-  if (!rel || rel.startsWith("..")) throw new Error(`File outside noteRoot: ${absFile}`);
+  if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new Error(`File outside noteRoot: ${absFile}`);
   // git show <sha>:<path> — path must be relative to git root.
   const root = await gitRoot(noteRoot);
   const gitRel = relative(root, fileAbs);

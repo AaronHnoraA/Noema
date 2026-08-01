@@ -58,7 +58,7 @@ import { normalizeDateValue } from "../src/planning-values.ts";
 import { AARONNOTE_AUTHORING_SNIPPETS } from "../src/authoring-syntax.ts";
 import { patchPlanningNodeRaw, scanPlanningNodes } from "../shared/planning-dsl.mjs";
 import { latexMarkNames, latexMarkSnippetDefinitions } from "../shared/latex-marks.mjs";
-import { desktopDropDisposition } from "../shared/desktop-shell.mjs";
+import { desktopDropDisposition, desktopPlatformLabels } from "../shared/desktop-shell.mjs";
 import {
   buildLatexExportScopes,
   latexExportScopesContent,
@@ -174,7 +174,10 @@ const serverReader = { ...serverReaderDefaults, ...(injectedServerReader || {}) 
 const passiveServerReader = serverReaderMode && !serverReader.editingAids;
 const initialReadOnly = serverReaderMode || initialParams.get("readonly") === "1" || initialParams.get("readonly") === "true";
 const desktopMode = standaloneMode() && Boolean(window.noemaDesktop);
+const desktopPlatform = window.noemaDesktop?.platform || (/Mac/.test(navigator.platform) ? "darwin" : "");
+const platformLabels = desktopPlatformLabels(desktopPlatform);
 document.body.dataset.hostMode = serverReaderMode ? "server" : desktopMode ? "desktop" : "emacs";
+if (desktopMode) document.body.dataset.desktopPlatform = desktopPlatform;
 if (serverReaderMode) {
   document.body.dataset.serverReaderEditingAids = String(serverReader.editingAids);
 }
@@ -980,11 +983,39 @@ async function storePasteAssetFromPath(
 
 async function readSystemClipboardForPaste(): Promise<EditorClipboardPayload | null> {
   try {
+    if (desktopMode && window.noemaDesktop?.readClipboard) {
+      const clipboard = await window.noemaDesktop.readClipboard();
+      if (clipboard.kind === "image") {
+        const asset = await api.assets.upload({
+          file: currentFile,
+          name: "clipboard.png",
+          type: clipboard.type,
+          data: clipboard.data,
+        });
+        return { kind: "asset", asset };
+      }
+      if (clipboard.kind === "text") return clipboard;
+      return { kind: "empty" };
+    }
     const payload = await api.clipboard.read({ file: currentFile }) as EditorClipboardPayload;
     return payload && typeof payload === "object" ? payload : null;
   } catch {
     return null;
   }
+}
+
+async function openSystemTarget(target: string, base = ""): Promise<void> {
+  const result = await api.emacs.systemOpen(target, base || undefined);
+  if (!desktopMode || !window.noemaDesktop || !result?.target) return;
+  const protocol = hrefProtocol(result.target);
+  const opened = protocol
+    ? await window.noemaDesktop.openExternal(result.target)
+    : await window.noemaDesktop.openPath(result.target);
+  if (!opened.ok) throw new Error(opened.message || `Unable to open ${result.target}`);
+}
+
+function primaryShortcut(key: string): string {
+  return `${platformLabels.primaryModifier}-${key}`;
 }
 
 function roamFeaturesEnabled(): boolean {
@@ -1354,7 +1385,7 @@ function renderBibliographyPanel(): void {
       button.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        void api.emacs.systemOpen(link.href!, currentFile).catch((err) => setStatus(err instanceof Error ? err.message : "Open link failed"));
+        void openSystemTarget(link.href!, currentFile).catch((err) => setStatus(err instanceof Error ? err.message : "Open link failed"));
       });
       item.appendChild(button);
     }
@@ -1623,7 +1654,7 @@ function bibliographyLinkActions(refs: readonly BibliographyReference[]): AaronC
       items.push({
         label: `Open ${link.label || "link"}${number}`,
         detail: href,
-        run: () => api.emacs.systemOpen(href, currentFile),
+        run: () => openSystemTarget(href, currentFile),
       });
     }
   }
@@ -3062,7 +3093,7 @@ function canSystemOpenHref(href: string): boolean {
 async function systemOpenHref(href: string): Promise<void> {
   const raw = cleanHref(href);
   if (!raw || raw.startsWith("#")) return;
-  await api.emacs.systemOpen(raw, currentFile).catch((err) => {
+  await openSystemTarget(raw, currentFile).catch((err) => {
     setStatus(err instanceof Error ? err.message : `Cannot open: ${raw}`);
   });
 }
@@ -3100,7 +3131,7 @@ function showContextMenu(event: MouseEvent, target: Partial<AaronContextMenuTarg
         { label: "Copy Link", detail: "clipboard", run: () => copyContextLink(href) },
       );
     } else if (hasSelection) {
-      items.push({ label: "Copy Selection", detail: "Cmd-C", run: () => copyEditorSelection() });
+      items.push({ label: "Copy Selection", detail: primaryShortcut("C"), run: () => copyEditorSelection() });
     } else {
       const block = editor.getBlockContext();
       if (block.type.includes("heading")) {
@@ -3112,9 +3143,9 @@ function showContextMenu(event: MouseEvent, target: Partial<AaronContextMenuTarg
       if (block.type.includes("code")) {
         items.push({ label: "Copy Code", detail: "block", run: () => runContextEditorCommand("copy-code") });
       }
-      items.push({ label: "Find in Note", detail: "Cmd-F", run: () => openFindPanel() });
+      items.push({ label: "Find in Note", detail: primaryShortcut("F"), run: () => openFindPanel() });
       if (serverReader.showSource) {
-        items.push({ label: editor.isSourceMode() ? "Markdown View" : "Source View", detail: "Cmd-/", run: () => togglePresentationOrSource() });
+        items.push({ label: editor.isSourceMode() ? "Markdown View" : "Source View", detail: primaryShortcut("/"), run: () => togglePresentationOrSource() });
       }
       items.push({ label: "Copy Page Path", detail: currentFile ? fileNameFromPath(currentFile) : "", disabled: !currentFile, run: () => copyCurrentNotePath() });
     }
@@ -3165,11 +3196,11 @@ function showContextMenu(event: MouseEvent, target: Partial<AaronContextMenuTarg
     );
   } else if (hasSelection) {
     items.push(
-      { label: "Copy Selection", detail: "Cmd-C", run: () => copyEditorSelection() },
-      { label: "Bold", detail: "Cmd-B", disabled: currentReadOnly, run: () => runContextEditorCommand("bold") },
-      { label: "Italic", detail: "Cmd-I", disabled: currentReadOnly, run: () => runContextEditorCommand("italic") },
+      { label: "Copy Selection", detail: primaryShortcut("C"), run: () => copyEditorSelection() },
+      { label: "Bold", detail: primaryShortcut("B"), disabled: currentReadOnly, run: () => runContextEditorCommand("bold") },
+      { label: "Italic", detail: primaryShortcut("I"), disabled: currentReadOnly, run: () => runContextEditorCommand("italic") },
       { label: "Inline Code", detail: "`code`", disabled: currentReadOnly, run: () => runContextEditorCommand("code") },
-      { label: "Link", detail: "Cmd-K", disabled: currentReadOnly, run: () => runContextEditorCommand("link") },
+      { label: "Link", detail: primaryShortcut("K"), disabled: currentReadOnly, run: () => runContextEditorCommand("link") },
       { label: "Superscript", detail: "^text^", disabled: currentReadOnly, run: () => runContextEditorCommand("superscript") },
       { label: "Subscript", detail: "~text~", disabled: currentReadOnly, run: () => runContextEditorCommand("subscript") },
       { label: "Footnote", detail: "[^1]", disabled: currentReadOnly, run: () => runContextEditorCommand("insert-footnote") },
@@ -3191,12 +3222,12 @@ function showContextMenu(event: MouseEvent, target: Partial<AaronContextMenuTarg
         { label: "Copy Code", detail: "block", run: () => runContextEditorCommand("copy-code") },
       ] : []),
       { label: "Document Properties", detail: "org-env(meta)", disabled: currentReadOnly, run: () => runContextEditorCommand("edit-properties") },
-      { label: "Paste", detail: "Cmd-V", disabled: currentReadOnly, run: () => pasteIntoEditorFromContextMenu() },
-      { label: "Find in Note", detail: "Cmd-F", run: () => openFindPanel() },
-      { label: "Save", detail: currentReadOnly ? "read-only" : "Cmd-S", disabled: currentReadOnly || !currentFile, run: () => save() },
+      { label: "Paste", detail: primaryShortcut("V"), disabled: currentReadOnly, run: () => pasteIntoEditorFromContextMenu() },
+      { label: "Find in Note", detail: primaryShortcut("F"), run: () => openFindPanel() },
+      { label: "Save", detail: currentReadOnly ? "read-only" : primaryShortcut("S"), disabled: currentReadOnly || !currentFile, run: () => save() },
       { label: slideDeck?.isSlides()
         ? (slideDeck.isRevealView() ? "Edit slides" : "Present slides")
-        : (editor.isSourceMode() ? "Markdown View" : "Source View"), detail: "Cmd-/", run: () => togglePresentationOrSource() },
+        : (editor.isSourceMode() ? "Markdown View" : "Source View"), detail: primaryShortcut("/"), run: () => togglePresentationOrSource() },
       { label: "Copy Note Path", detail: currentFile ? fileNameFromPath(currentFile) : "", disabled: !currentFile, run: () => copyCurrentNotePath() },
     );
   }
@@ -4524,20 +4555,25 @@ function openExternalUrl(href: string, options: { newWindow?: boolean } = {}): v
   const protocol = hrefProtocol(raw);
   if (!protocol) {
     const targetPath = hrefPath(raw) || raw;
-    void api.emacs.systemOpen(targetPath, currentFile)
+    void openSystemTarget(targetPath, currentFile)
       .catch((err) => setStatus(err instanceof Error ? err.message : `Cannot open: ${targetPath}`));
     return;
   }
   if (protocol === "zotero") {
-    void api.emacs.systemOpen(raw)
+    void openSystemTarget(raw)
       .then(() => setStatus("Opened Zotero link"))
       .catch((err) => setStatus(err instanceof Error ? err.message : "Failed to open Zotero link"));
     return;
   }
   // MarginNote schemes are Emacs-owned routes; never hand them to the browser.
   if (isMarginNoteProtocol(protocol)) {
-    void api.emacs.systemOpen(raw, currentFile)
+    void openSystemTarget(raw, currentFile)
       .catch((err) => setStatus(err instanceof Error ? err.message : "Failed to open Maginnote link"));
+    return;
+  }
+  if (desktopMode && ["http", "https", "mailto"].includes(protocol)) {
+    void openSystemTarget(raw, currentFile)
+      .catch((err) => setStatus(err instanceof Error ? err.message : `Cannot open: ${raw}`));
     return;
   }
   if (options.newWindow) {
@@ -5707,11 +5743,17 @@ async function exportLatexTool(): Promise<void> {
 
     // 3. Choose the output path, then export.
     setStatus("Choose LaTeX output path...");
-    const chosen = await api.latex.chooseOutputPath({
-      file: currentFile,
-      title,
-      defaultPath: defaultInfo.outputPath || "",
-    });
+    const chosen = desktopPlatform === "win32" && window.noemaDesktop?.chooseSavePath
+      ? await window.noemaDesktop.chooseSavePath({
+        title: "Export LaTeX as",
+        defaultPath: String(defaultInfo.outputPath || ""),
+        extension: "tex",
+      })
+      : await api.latex.chooseOutputPath({
+        file: currentFile,
+        title,
+        defaultPath: defaultInfo.outputPath || "",
+      });
     if (chosen.canceled) {
       setStatus("LaTeX export canceled");
       return;
@@ -6491,21 +6533,21 @@ async function trashCurrentNoteTool(): Promise<void> {
   }
   const deletingFile = currentFile;
   const name = fileNameFromPath(deletingFile);
-  const result = await openFormModal("Move document to Trash", [{
+  const result = await openFormModal(`Move document to ${platformLabels.trash}`, [{
     id: "confirm",
-    label: `Type TRASH to move ${name} to the system Trash`,
+    label: `Type TRASH to move ${name} to the ${platformLabels.trash}`,
     required: true,
     placeholder: "TRASH",
     description: revision !== savedRevision
       ? "This document has unsaved changes. They will not be saved before it is moved."
-      : "The document remains recoverable from the system Trash.",
-  }], "Move to Trash");
+      : `The document remains recoverable from the ${platformLabels.trash}.`,
+  }], `Move to ${platformLabels.trash}`);
   if (!result) return;
   if (result.confirm.trim() !== "TRASH") {
     setStatus("Type TRASH exactly to move the document");
     return;
   }
-  setStatus(`Moving ${name} to Trash...`);
+  setStatus(`Moving ${name} to ${platformLabels.trash}...`);
   try {
     const deleted = await api.notes.trash(deletingFile);
     const remaining = (deleted.notes ?? []).find((note) => note.file && note.file !== deletingFile);
@@ -6515,7 +6557,7 @@ async function trashCurrentNoteTool(): Promise<void> {
     currentFile = "";
     if (remaining?.file) {
       await openFile(remaining.file);
-      setStatus(`${name} moved to Trash`);
+      setStatus(`${name} moved to ${platformLabels.trash}`);
       return;
     }
     const wikiUrl = new URL("/wiki", window.location.origin);
@@ -6651,15 +6693,15 @@ function toolActions(): ToolAction[] {
     ...(desktopMode ? [{
       id: "reveal-current-file",
       group: "document" as const,
-      title: "Reveal in Finder",
+      title: `Reveal in ${platformLabels.fileManager}`,
       detail: "Show this document in its folder",
       disabled: !currentFile,
       run: () => void window.noemaDesktop?.revealPath(currentFile)
-        .then(() => setStatus("Revealed document in Finder"))
+        .then(() => setStatus(`Revealed document in ${platformLabels.fileManager}`))
         .catch((error) => setStatus(`Reveal failed: ${String(error)}`)),
     }] : []),
     { id: "copy-note-path", group: "document", title: "Copy document path", detail: currentFile ? fileNameFromPath(currentFile) : "No document open", disabled: !currentFile, run: () => void copyCurrentNotePath() },
-    { id: "trash-note", group: "document", title: "Move document to Trash", detail: "Recoverable deletion from the note root", disabled: currentReadOnly || !currentFile, danger: true, run: () => { runHostCommand({ command: "trash-current-note" }); } },
+    { id: "trash-note", group: "document", title: `Move document to ${platformLabels.trash}`, detail: "Recoverable deletion from the note root", disabled: currentReadOnly || !currentFile, danger: true, run: () => { runHostCommand({ command: "trash-current-note" }); } },
     ...(offerSlideView ? [{
       id: "slide-view",
       group: "publish" as const,
@@ -7938,7 +7980,7 @@ function handleSnippetPopupKey(event: KeyboardEvent): boolean {
   const handled = applySnippetPopupKeyAction(snippetPopupKeyAction({
     key: event.key === "\t" ? "Tab" : event.key, // xwidget may send "\t" instead of "Tab"
     shiftKey: event.shiftKey,
-    commandKey: event.metaKey && !event.ctrlKey,
+    commandKey: primaryMod(event),
     ctrlKey: event.ctrlKey,
     altKey: event.altKey,
     isComposing: event.isComposing,
@@ -8633,7 +8675,7 @@ function runHostCommand(detail: unknown): boolean {
         return true;
       }
       void window.noemaDesktop.revealPath(currentFile)
-        .then(() => setStatus("Revealed note in Finder"))
+        .then(() => setStatus(`Revealed note in ${platformLabels.fileManager}`))
         .catch((error) => setStatus(`Reveal failed: ${String(error)}`));
       return true;
     case "undo":
@@ -8764,7 +8806,7 @@ document.addEventListener("keydown", (event) => {
     event.stopPropagation();
     return;
   }
-  if (event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "p" && modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden && !event.isComposing) {
+  if (primaryMod(event) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "p" && modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden && !event.isComposing) {
     event.preventDefault();
     event.stopPropagation();
     void exportLatexTool();
@@ -9075,7 +9117,7 @@ document.addEventListener("aaronnote:open-attachment", (event) => {
   if (!href) return;
   event.preventDefault();
   const rawPath = hrefPath(href) || href;
-  void api.emacs.systemOpen(rawPath, currentFile).catch((err) => setStatus(`Open failed: ${String(err)}`));
+  void openSystemTarget(rawPath, currentFile).catch((err) => setStatus(`Open failed: ${String(err)}`));
 });
 window.addEventListener("aaronnote:open-file", (event) => {
   const detail = (event as CustomEvent<{ file?: string }>).detail;

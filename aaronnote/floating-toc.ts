@@ -8,6 +8,7 @@ import {
   type MarkdownHeading,
 } from "../src/cm6/toc-index.ts";
 import type { NoteSummary } from "./types.ts";
+import { markdownLinkPrimaryModifier } from "../src/cm6/markdown-link-events.ts";
 
 type OpenNoteOptions = { newWindow?: boolean; equationTag?: string; inlineTag?: string };
 
@@ -281,7 +282,7 @@ export function createFloatingTocPanel(options: {
         button.style.setProperty("--toc-depth", "0");
         button.textContent = note.title || note.id || note.file || "Untitled";
         button.title = note.file || note.title || "";
-        button.addEventListener("click", (event) => options.openNote(note, { newWindow: event.altKey || event.metaKey }));
+        button.addEventListener("click", (event) => options.openNote(note, { newWindow: event.altKey || markdownLinkPrimaryModifier(event) }));
         button.addEventListener("auxclick", (event) => {
           if (event.button !== 1) return;
           event.preventDefault();

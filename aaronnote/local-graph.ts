@@ -2,6 +2,7 @@ import type { GraphNode, GraphPayload, NoteSummary } from "./types.ts";
 import type { WorkspaceGraph } from "./workspace-graph.ts";
 import { parseSimpleFrontmatter, simpleFrontmatterStrings } from "../src/simple-frontmatter.ts";
 import { CoalescedTimer } from "../src/coalesced-timer.ts";
+import { markdownLinkPrimaryModifier } from "../src/cm6/markdown-link-events.ts";
 
 type OpenNoteOptions = { newWindow?: boolean };
 
@@ -717,7 +718,7 @@ export function createLocalGraphPanel(options: LocalGraphPanelOptions): LocalGra
           options.openTag(node.tag);
           return;
         }
-        if (node.note?.file) options.openNote(node.note, { newWindow: event.metaKey || event.altKey });
+        if (node.note?.file) options.openNote(node.note, { newWindow: markdownLinkPrimaryModifier(event) || event.altKey });
       });
       group.addEventListener("keydown", (event) => {
         if (event.key !== "Enter" && event.key !== " ") return;

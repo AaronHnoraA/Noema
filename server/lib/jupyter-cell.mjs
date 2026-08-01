@@ -7,7 +7,7 @@ import {
   stat as nativeStat,
   writeFile as nativeWriteFile,
 } from "node:fs/promises";
-import { basename, dirname, extname, join, resolve, sep } from "node:path";
+import { basename, delimiter, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createKernelRegistry, sweepOrphanKernels } from "../jupyter/kernel-registry.mjs";
 import { defaultKernelSearchDirs, findKernelSpecs, findAttachableConnectionFiles, resolveAttachToken } from "../jupyter/kernel-finder.mjs";
 import { executeOnKernel, jupyterWidgetCommOpenP } from "../jupyter/execution-message-handler.mjs";
@@ -27,10 +27,8 @@ export function jupyterLogicalPath(value) {
 
 function inside(root, file) {
   if (remoteLogicalPath(root) || remoteLogicalPath(file)) return false;
-  const normalizedRoot = resolve(root);
-  const normalizedFile = resolve(file);
-  return normalizedFile === normalizedRoot
-    || normalizedFile.startsWith(normalizedRoot + sep);
+  const rel = relative(resolve(root), resolve(file));
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
 function error(message, statusCode = 500) {
@@ -328,6 +326,7 @@ function buildHiddenScript({ noteFile, kernel, session, language, cells, targetC
 
 export function createJupyterCellService({
   runtimeRoot,
+  stateRoot,
   noteRoot,
   workspaceRoot,
   stdout = process.stdout,
@@ -343,7 +342,9 @@ export function createJupyterCellService({
   const workspace = resolve(workspaceRoot || notes);
   const jupyterRoot = join(root, "jupyter");
   const dataDir = join(jupyterRoot, ".jupyter", "data");
-  const runtimeDir = join(jupyterRoot, ".jupyter", "runtime");
+  const runtimeDir = stateRoot
+    ? join(resolve(stateRoot), "jupyter", "runtime")
+    : join(jupyterRoot, ".jupyter", "runtime");
   const kernelIdleTtlMs = durationFromEnv("AARONNOTE_JUPYTER_KERNEL_IDLE_TTL_MS", 10 * 60 * 1000);
   const cleanupIntervalMs = durationFromEnv("AARONNOTE_JUPYTER_CLEANUP_INTERVAL_MS", 30 * 1000);
   const execTimeoutMs = durationFromEnv("AARONNOTE_JUPYTER_EXEC_TIMEOUT_MS", 0);
@@ -353,7 +354,7 @@ export function createJupyterCellService({
   const allowedNames = allowedKernelsRaw ? allowedKernelsRaw.split(",").map((v) => v.trim()).filter(Boolean) : undefined;
   const attachDirs = [
     runtimeDir,
-    ...(process.env.AARONNOTE_JUPYTER_ATTACH_DIRS ? process.env.AARONNOTE_JUPYTER_ATTACH_DIRS.split(":").filter(Boolean) : []),
+    ...(process.env.AARONNOTE_JUPYTER_ATTACH_DIRS ? process.env.AARONNOTE_JUPYTER_ATTACH_DIRS.split(delimiter).filter(Boolean) : []),
   ];
   const files = {
     atomicWriteP(file) {

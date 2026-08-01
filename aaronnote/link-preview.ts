@@ -1,6 +1,7 @@
 import { renderMarkdownHTML } from "../src/render-html.ts";
 import type { Inbound, NoteSummary } from "./types.ts";
 import { Epoch } from "../src/async-epoch.ts";
+import { markdownLinkPrimaryModifier } from "../src/cm6/markdown-link-events.ts";
 
 export type LinkPreviewTarget = {
   href: string;
@@ -130,7 +131,7 @@ export function createLinkPreviewController(options: LinkPreviewOptions): LinkPr
       if (!anchor || !content.contains(anchor)) return;
       event.preventDefault();
       options.openExternalUrl(anchor.getAttribute("href") || anchor.href, {
-        newWindow: (event as MouseEvent).metaKey || (event as MouseEvent).altKey,
+        newWindow: markdownLinkPrimaryModifier(event as MouseEvent) || (event as MouseEvent).altKey,
       });
     });
 

@@ -3,7 +3,7 @@ export type VSCodeOpenCommand = {
   args: string[];
 };
 
-export function findVSCodeCli(env?: NodeJS.ProcessEnv): string;
+export function findVSCodeCli(env?: NodeJS.ProcessEnv, platform?: NodeJS.Platform): string;
 
 export function vscodeOpenCommand(options?: {
   file?: string;
@@ -11,6 +11,7 @@ export function vscodeOpenCommand(options?: {
   col?: number;
   cli?: string;
   platform?: NodeJS.Platform;
+  comspec?: string;
 }): VSCodeOpenCommand;
 
 export function taggedSourceLocation(

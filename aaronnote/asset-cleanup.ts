@@ -1,6 +1,7 @@
 import type { UnusedAsset } from "./types.ts";
 import { formatBytes, formatShortDateTime } from "./ui-format.ts";
 import { api } from "./api-client.ts";
+import { desktopPlatformLabels } from "../shared/desktop-shell.mjs";
 
 type ModalField = {
   id: string;
@@ -25,6 +26,7 @@ export function createUnusedAssetsManager(options: {
   setStatus: (text: string) => void;
   openFormModal: (title: string, fields: ModalField[], submitLabel?: string) => Promise<Record<string, string> | null>;
 }): UnusedAssetsManager {
+  const trashLabel = desktopPlatformLabels(window.noemaDesktop?.platform || (/Mac/.test(navigator.platform) ? "darwin" : "")).trash;
   let assets: UnusedAsset[] = [];
   let selected = new Set<string>();
   let loading = false;
@@ -33,7 +35,7 @@ export function createUnusedAssetsManager(options: {
   function updateActions(): void {
     const selectedCount = selected.size;
     options.trashButton.disabled = loading || selectedCount === 0;
-    options.trashButton.textContent = selectedCount > 0 ? `Move ${selectedCount} to Trash` : "Move selected to Trash";
+    options.trashButton.textContent = selectedCount > 0 ? `Move ${selectedCount} to ${trashLabel}` : `Move selected to ${trashLabel}`;
     options.scanButton.disabled = loading;
     const selectable = assets.length;
     options.selectAll.checked = selectable > 0 && selectedCount === selectable;
@@ -128,19 +130,19 @@ export function createUnusedAssetsManager(options: {
     const files = [...selected];
     if (files.length === 0 || loading) return;
     const confirmed = await options.openFormModal("Move unused assets", [
-      { id: "confirm", label: `Type TRASH to move ${files.length} selected unused assets to Trash`, value: "" },
-    ], "Move to Trash");
+      { id: "confirm", label: `Type TRASH to move ${files.length} selected unused assets to ${trashLabel}`, value: "" },
+    ], `Move to ${trashLabel}`);
     if (confirmed?.confirm !== "TRASH") return;
     loading = true;
     error = "";
     render();
-    options.setStatus("Moving unused assets to Trash");
+    options.setStatus(`Moving unused assets to ${trashLabel}`);
     try {
       const msg = await api.assets.trashOrphans(files);
       if (!Array.isArray(msg.assets)) throw new Error(msg.message || "Move to Trash failed");
       assets = msg.assets;
       selected = new Set();
-      options.setStatus(`Moved ${(msg.trashed ?? []).length} assets to Trash`);
+      options.setStatus(`Moved ${(msg.trashed ?? []).length} assets to ${trashLabel}`);
     } catch (err) {
       error = err instanceof Error ? err.message : "Move to Trash failed";
       options.setStatus(error);

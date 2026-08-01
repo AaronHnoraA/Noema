@@ -885,7 +885,9 @@ function snippetPopupDigitIndex(key: string): number | null {
 export function snippetPopupKeyAction(input: SnippetPopupKeyInput): SnippetPopupKeyAction {
   if (input.isComposing) return { type: "none" };
   const key = snippetPopupKeyName(input.key);
-  const selectorModOnly = Boolean(input.commandKey || input.altKey) && !input.ctrlKey && !input.shiftKey;
+  const selectorModOnly = Boolean(input.commandKey || input.altKey)
+    && (!input.ctrlKey || Boolean(input.commandKey))
+    && !input.shiftKey;
   if (selectorModOnly) {
     const index = snippetPopupDigitIndex(key);
     return index == null ? { type: "none" } : { type: "select", index };

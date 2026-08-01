@@ -1,5 +1,6 @@
 import type { GraphEdge, GraphNode, GraphPayload } from "./types.ts";
 import { knowledgeEntityMatches, parseKnowledgeQuery } from "../shared/knowledge-query.mjs";
+import { markdownLinkPrimaryModifier } from "../src/cm6/markdown-link-events.ts";
 
 export type WorkspaceGraphOptions = {
   root: HTMLElement;
@@ -467,7 +468,7 @@ export function createWorkspaceGraph(options: WorkspaceGraphOptions): WorkspaceG
   });
   canvas.addEventListener("dblclick", (event) => {
     const node = hitNode(event);
-    if (node) options.openNode(node, { newWindow: event.metaKey || event.altKey });
+    if (node) options.openNode(node, { newWindow: markdownLinkPrimaryModifier(event) || event.altKey });
   });
 
   const onSearch = (): void => { renderSearch(); applyGroupFilter(); };

@@ -137,8 +137,13 @@ function targetInHost(host: HTMLElement, target: EventTarget | null): boolean {
   return root instanceof ShadowRoot && (root.host === host || host.contains(root.host));
 }
 
-function cmdOnly(event: KeyboardEvent): boolean {
-  return event.metaKey && !event.ctrlKey && !event.altKey;
+function primaryOnly(event: KeyboardEvent): boolean {
+  const windowsDesktop = window.noemaDesktop?.platform === "win32";
+  const primary = windowsDesktop
+    ? event.ctrlKey && !event.metaKey
+    : (event.metaKey && !event.ctrlKey)
+      || (!/Mac/.test(navigator.platform) && event.ctrlKey && !event.metaKey);
+  return primary && !event.altKey;
 }
 
 function toCharShortcut(event: KeyboardEvent): boolean {
@@ -580,7 +585,7 @@ export function setupCopilot(context: Context): () => void {
       event.preventDefault();
       return acceptToChar(ch);
     }
-    if (context.vimMode() !== "insert" || !cmdOnly(event)) return false;
+    if (context.vimMode() !== "insert" || !primaryOnly(event)) return false;
     if (!event.shiftKey && forwardKeys.has(event.key)) {
       const handled = visible ? acceptAll() : context.jumpSnippetNext() || context.forwardDelimiter();
       if (handled) event.preventDefault();
@@ -615,6 +620,12 @@ export function setupCopilot(context: Context): () => void {
       try {
         if (action === "sign-in") {
           const res = await requestCopilot<unknown>("sign-in");
+          const openedUri = res && typeof res === "object" && "openedUri" in res
+            ? String((res as { openedUri?: unknown }).openedUri || "")
+            : "";
+          if (openedUri && window.noemaDesktop?.openExternal) {
+            await window.noemaDesktop.openExternal(openedUri);
+          }
           const code = res && typeof res === "object" && "userCode" in res ? String((res as { userCode?: unknown }).userCode || "") : "";
           if (code) {
             await navigator.clipboard?.writeText(code);

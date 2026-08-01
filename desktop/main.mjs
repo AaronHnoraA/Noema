@@ -1,19 +1,30 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, screen, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, screen, shell } from "electron";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir, tmpdir } from "node:os";
 import { getNoemaAppConfig } from "../server/lib/app-config.mjs";
 import { noemaAppTheme } from "../shared/app-themes.mjs";
-import { desktopOpenDecision, desktopWindowKind, desktopWindowRisk, sanitizeDesktopSession } from "../shared/desktop-shell.mjs";
+import {
+  desktopOpenDecision,
+  desktopPlatformLabels,
+  desktopTitleBarOverlay,
+  desktopWindowKind,
+  desktopWindowRisk,
+  sanitizeDesktopSession,
+} from "../shared/desktop-shell.mjs";
 
 const desktopDir = dirname(fileURLToPath(import.meta.url));
 const projectDir = resolve(desktopDir, "..");
 const appRoot = app.isPackaged ? app.getAppPath() : projectDir;
-const defaultNoteRoot = join(homedir(), "Documents", "Noema");
+const desktopPlatform = process.platform;
+const platformLabels = desktopPlatformLabels(desktopPlatform);
 const desktopSmoke = process.env.NOEMA_DESKTOP_SMOKE === "1";
 if (desktopSmoke) app.setPath("userData", join(tmpdir(), `noema-desktop-smoke-${process.pid}`));
+const defaultNoteRoot = join(app.getPath("documents"), "Noema");
+const desktopConfigDir = process.env.NOEMA_CONFIG_DIR
+  || (desktopPlatform === "win32" ? join(app.getPath("userData"), "config") : "");
 const stateRoot = join(app.getPath("userData"), "state");
 const sessionFile = join(stateRoot, "desktop-session.json");
 
@@ -33,6 +44,17 @@ const windowStates = new Map();
 const bypassClose = new Set();
 let pendingFile = process.argv.slice(1).find((arg) => /\.(?:md|markdown)$/i.test(arg)) || "";
 let windowBackgroundColor = noemaAppTheme("").backgroundColor;
+let windowColorScheme = noemaAppTheme("").colorScheme;
+
+function expandedWorkspaceRoot(appConfig = null) {
+  const configuredRoot = String(appConfig?.config?.workspace?.root || "").trim();
+  if (desktopPlatform === "win32" && (!configuredRoot || configuredRoot === "~/Documents/Noema")) {
+    return defaultNoteRoot;
+  }
+  if (configuredRoot === "~") return homedir();
+  if (/^~[\\/]/.test(configuredRoot)) return join(homedir(), configuredRoot.slice(2));
+  return configuredRoot;
+}
 
 function routeFromUrl(urlValue = "") {
   try {
@@ -93,19 +115,23 @@ if (desktopSmoke) {
 if (!singleInstance) app.quit();
 
 function hostEnvironment(appConfig = null, requestedPort = 0) {
-  const configuredRoot = String(appConfig?.config?.workspace?.root || "").trim();
-  const expandedConfiguredRoot = configuredRoot === "~"
-    ? homedir()
-    : configuredRoot.startsWith("~/")
-      ? join(homedir(), configuredRoot.slice(2))
-      : configuredRoot;
+  const expandedConfiguredRoot = expandedWorkspaceRoot(appConfig);
   const noteRoot = resolve(process.env.NOEMA_ROOT || process.env.AARONNOTE_ROOT || expandedConfiguredRoot || defaultNoteRoot);
   const resourcesRoot = resolve(process.env.NOEMA_RESOURCES_ROOT || join(appRoot, "resources"));
   const tmpRoot = join(stateRoot, "tmp");
   mkdirSync(noteRoot, { recursive: true });
   mkdirSync(tmpRoot, { recursive: true });
+  const windowsToolDirs = desktopPlatform === "win32" ? [
+    process.env.LOCALAPPDATA && join(process.env.LOCALAPPDATA, "Programs", "Git", "cmd"),
+    process.env.LOCALAPPDATA && join(process.env.LOCALAPPDATA, "Programs", "Microsoft VS Code", "bin"),
+    process.env.ProgramFiles && join(process.env.ProgramFiles, "Git", "cmd"),
+    process.env.ProgramFiles && join(process.env.ProgramFiles, "Microsoft VS Code", "bin"),
+    process.env["ProgramFiles(x86)"] && join(process.env["ProgramFiles(x86)"], "Git", "cmd"),
+    process.env["ProgramFiles(x86)"] && join(process.env["ProgramFiles(x86)"], "Microsoft VS Code", "bin"),
+  ].filter((path) => path && existsSync(path)) : [];
   return {
     ...process.env,
+    PATH: [...windowsToolDirs, ...String(process.env.PATH || "").split(delimiter).filter(Boolean)].join(delimiter),
     ELECTRON_RUN_AS_NODE: "1",
     AARONNOTE_HOST_MODE: "desktop",
     AARONNOTE_WEB_HOST: "127.0.0.1",
@@ -115,6 +141,7 @@ function hostEnvironment(appConfig = null, requestedPort = 0) {
     AARONNOTE_ROOT: noteRoot,
     AARONNOTE_WORKSPACE_ROOT: noteRoot,
     NOEMA_WORKSPACE_LAYOUT: String(appConfig?.config?.workspace?.layout || "legacy"),
+    ...(desktopConfigDir ? { NOEMA_CONFIG_DIR: desktopConfigDir } : {}),
     AARONNOTE_STATE_DIR: stateRoot,
     AARONNOTE_TMP_DIR: tmpRoot,
     AARONNOTE_PUBLISH_JS_DIR: join(appRoot, "js"),
@@ -394,13 +421,23 @@ function editorActionsTemplate() {
     commandItem("Export LaTeX…", "export-latex"),
     { type: "separator" },
     commandItem("Open Source in VS Code", "open-source-editor"),
-    commandItem("Reveal Note in Finder", "reveal-current-file"),
+    commandItem(`Reveal Note in ${platformLabels.fileManager}`, "reveal-current-file"),
     commandItem("Save", "save", "CmdOrCtrl+S"),
-    commandItem("Move Document to Trash", "trash-current-note"),
+    commandItem(`Move Document to ${platformLabels.trash}`, "trash-current-note"),
   ];
 }
 
 function windowActionsTemplate(win = activeWindow()) {
+  const zoomItem = desktopPlatform === "win32"
+    ? {
+      label: win?.isMaximized() ? "Restore" : "Maximize",
+      click: () => {
+        if (!win || win.isDestroyed()) return;
+        if (win.isMaximized()) win.unmaximize();
+        else win.maximize();
+      },
+    }
+    : { label: "Zoom", role: "zoom" };
   return [
     { label: "New Window", accelerator: "CmdOrCtrl+Shift+N", click: () => createWindow() },
     { label: "Open…", accelerator: "CmdOrCtrl+O", click: () => void chooseMarkdownFiles() },
@@ -408,7 +445,7 @@ function windowActionsTemplate(win = activeWindow()) {
     { label: "Split Below", accelerator: "Shift+CmdOrCtrl+\\", click: () => openTarget({ url: win?.webContents.getURL(), source: "window", disposition: "split-down" }, win || activeWindow()) },
     { type: "separator" },
     { label: "Minimize", role: "minimize" },
-    { label: "Zoom", role: "zoom" },
+    zoomItem,
     { label: "Toggle Full Screen", role: "togglefullscreen" },
     { type: "separator" },
     { label: "Close", accelerator: "CmdOrCtrl+W", click: () => closeWindowSafely(win || activeWindow()) },
@@ -416,22 +453,22 @@ function windowActionsTemplate(win = activeWindow()) {
 }
 
 function buildApplicationMenu() {
-  return Menu.buildFromTemplate([
-    {
-      label: "Noema",
-      submenu: [
-        { role: "about" },
-        { label: "Settings…", accelerator: "CmdOrCtrl+,", click: () => openConfigurationWindow() },
-        { type: "separator" },
-        { role: "services" },
-        { type: "separator" },
-        { role: "hide" },
-        { role: "hideOthers" },
-        { role: "unhide" },
-        { type: "separator" },
-        { label: "Quit Noema", accelerator: "CmdOrCtrl+Q", click: () => app.quit() },
-      ],
-    },
+  const appMenu = desktopPlatform === "darwin" ? {
+    label: "Noema",
+    submenu: [
+      { role: "about" },
+      { label: "Settings…", accelerator: "CmdOrCtrl+,", click: () => openConfigurationWindow() },
+      { type: "separator" },
+      { role: "services" },
+      { type: "separator" },
+      { role: "hide" },
+      { role: "hideOthers" },
+      { role: "unhide" },
+      { type: "separator" },
+      { label: "Quit Noema", accelerator: "CmdOrCtrl+Q", click: () => app.quit() },
+    ],
+  } : null;
+  const template = [
     {
       label: "File",
       submenu: [
@@ -444,9 +481,17 @@ function buildApplicationMenu() {
         { type: "separator" },
         commandItem("Save", "save", "CmdOrCtrl+S"),
         commandItem("Open Source in VS Code", "open-source-editor", "CmdOrCtrl+Shift+O"),
-        commandItem("Reveal Note in Finder", "reveal-current-file"),
+        commandItem(`Reveal Note in ${platformLabels.fileManager}`, "reveal-current-file"),
         { type: "separator" },
+        ...(desktopPlatform === "win32" ? [
+          { label: "Settings…", accelerator: "CmdOrCtrl+,", click: () => openConfigurationWindow() },
+          { type: "separator" },
+        ] : []),
         { label: "Close", accelerator: "CmdOrCtrl+W", click: () => closeWindowSafely(activeWindow()) },
+        ...(desktopPlatform === "win32" ? [
+          { type: "separator" },
+          { label: "Exit", role: "quit" },
+        ] : []),
       ],
     },
     {
@@ -526,11 +571,23 @@ function buildApplicationMenu() {
         { label: "Split Below", accelerator: "Shift+CmdOrCtrl+\\", click: () => openTarget({ url: activeWindow()?.webContents.getURL(), source: "window", disposition: "split-down" }) },
         { type: "separator" },
         { role: "minimize" },
-        { role: "zoom" },
-        { role: "front" },
+        ...(desktopPlatform === "darwin"
+          ? [{ role: "zoom" }, { role: "front" }]
+          : [{ label: "Maximize or Restore", click: () => {
+            const win = activeWindow();
+            if (!win) return;
+            if (win.isMaximized()) win.unmaximize();
+            else win.maximize();
+          } }]),
       ],
     },
-  ]);
+    ...(desktopPlatform === "win32" ? [{
+      label: "Help",
+      submenu: [{ role: "about" }],
+    }] : []),
+  ];
+  if (appMenu) template.unshift(appMenu);
+  return Menu.buildFromTemplate(template);
 }
 
 function createWindow(file = "", targetUrl = "", restore = {}) {
@@ -541,6 +598,10 @@ function createWindow(file = "", targetUrl = "", restore = {}) {
       return false;
     }
   })();
+  const titleBarOverlay = desktopTitleBarOverlay(desktopPlatform, {
+    backgroundColor: windowBackgroundColor,
+    colorScheme: windowColorScheme,
+  });
   const win = new BrowserWindow({
     width: restore.bounds?.width || (isConfigurationWindow ? 960 : 1320),
     height: restore.bounds?.height || (isConfigurationWindow ? 760 : 920),
@@ -551,7 +612,9 @@ function createWindow(file = "", targetUrl = "", restore = {}) {
     title: isConfigurationWindow ? "Noema Configuration" : "Noema",
     backgroundColor: windowBackgroundColor,
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "hidden",
-    trafficLightPosition: { x: 18, y: 18 },
+    ...(titleBarOverlay ? { titleBarOverlay } : {}),
+    autoHideMenuBar: desktopPlatform === "win32",
+    ...(desktopPlatform === "darwin" ? { trafficLightPosition: { x: 18, y: 18 } } : {}),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -723,6 +786,49 @@ ipcMain.handle("noema:reveal-path", (_event, file) => {
   return true;
 });
 
+ipcMain.handle("noema:open-path", async (_event, file) => {
+  const target = String(file || "").trim();
+  if (!target) return { ok: false, message: "Missing path" };
+  const message = await shell.openPath(resolve(target));
+  return { ok: !message, message };
+});
+
+ipcMain.handle("noema:open-external", async (_event, value) => {
+  const target = String(value || "").trim();
+  let protocol = "";
+  try { protocol = new URL(target).protocol.toLowerCase(); } catch {}
+  if (!new Set(["http:", "https:", "mailto:", "zotero:", "marginnote:", "marginnote3:"]).has(protocol)) {
+    return { ok: false, message: `Unsupported external protocol: ${protocol || "unknown"}` };
+  }
+  await shell.openExternal(target);
+  return { ok: true };
+});
+
+ipcMain.handle("noema:choose-save-path", async (event, options = {}) => {
+  const owner = BrowserWindow.fromWebContents(event.sender);
+  const defaultPath = String(options.defaultPath || "").trim();
+  const extension = String(options.extension || "").replace(/^\.+/, "").replace(/[^A-Za-z0-9]/g, "");
+  const settings = {
+    title: String(options.title || "Save from Noema"),
+    ...(defaultPath ? { defaultPath: resolve(defaultPath) } : {}),
+    ...(extension ? { filters: [{ name: extension.toUpperCase(), extensions: [extension] }] } : {}),
+  };
+  const result = owner
+    ? await dialog.showSaveDialog(owner, settings)
+    : await dialog.showSaveDialog(settings);
+  return { canceled: result.canceled, path: result.filePath || "" };
+});
+
+ipcMain.handle("noema:read-clipboard", () => {
+  const image = clipboard.readImage();
+  if (!image.isEmpty()) {
+    return { kind: "image", type: "image/png", data: image.toPNG().toString("base64") };
+  }
+  const text = clipboard.readText();
+  const html = clipboard.readHTML();
+  return text || html ? { kind: "text", text, html } : { kind: "empty" };
+});
+
 ipcMain.handle("noema:choose-directory", async (event, options = {}) => {
   const root = resolve(String(options.root || defaultNoteRoot));
   const requested = resolve(String(options.defaultPath || root));
@@ -751,9 +857,13 @@ ipcMain.handle("noema:choose-directory", async (event, options = {}) => {
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(buildApplicationMenu());
   try {
-    const appConfig = await getNoemaAppConfig({ env: process.env });
+    const configEnvironment = desktopConfigDir
+      ? { ...process.env, NOEMA_CONFIG_DIR: desktopConfigDir }
+      : process.env;
+    const appConfig = await getNoemaAppConfig({ env: configEnvironment });
     activeAppConfig = appConfig;
     windowBackgroundColor = appConfig.activeTheme.backgroundColor;
+    windowColorScheme = appConfig.activeTheme.colorScheme;
     await startHost(appConfig);
     if (pendingFile) {
       createWindow(pendingFile);

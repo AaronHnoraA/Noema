@@ -389,6 +389,7 @@ async function rebuildServerPublicCatalog({ sync = false } = {}) {
 
 const jupyterCell = hostMode === "server" ? null : createJupyterCellService({
   runtimeRoot,
+  ...(hostMode === "desktop" && process.platform === "win32" ? { stateRoot } : {}),
   noteRoot,
   workspaceRoot,
   stdout: process.stdout,
@@ -816,10 +817,8 @@ function mimeFor(file) {
 }
 
 function isWithin(root, file) {
-  const normalizedRoot = resolve(root);
-  const normalizedFile = resolve(file);
-  return normalizedFile === normalizedRoot
-    || normalizedFile.startsWith(normalizedRoot + sep);
+  const rel = relative(resolve(root), resolve(file));
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
 async function isFile(file) {
