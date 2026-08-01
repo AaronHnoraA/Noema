@@ -14,7 +14,8 @@ ICON_PNG := build/Noema.png
 .DEFAULT_GOAL := build
 
 .PHONY: all bootstrap build build-web check-env clean dev help icon init-data \
-	install install-app jupyter-bootstrap nvm-install run setup test
+	install install-app jupyter-bootstrap nvm-install run server-build \
+	server-config-init server-deploy server-start setup test
 
 all: build
 
@@ -46,6 +47,20 @@ install: build install-app
 
 build-web: check-env
 	npm run build:aaronnote
+
+server-config-init: check-env
+	node scripts/init-server-config.mjs
+
+server-build: check-env build-web
+	node scripts/build-server-release.mjs
+
+server-start: check-env
+	@test -f "$(CURDIR)/server-config/runtime.json" || \
+		(echo "Missing server-config/runtime.json; run 'make server-config-init'" && exit 1)
+	AARONNOTE_HOST_MODE=server NOEMA_SERVER_CONFIG="$(CURDIR)/server-config/runtime.json" node web-host.mjs
+
+server-deploy: server-build
+	node scripts/deploy-server.mjs
 
 dev: check-env init-data
 	npm run start:vite
@@ -87,5 +102,9 @@ help:
 	@echo "  make run           Build and launch the local app bundle"
 	@echo "  make build-web     Build only the web assets"
 	@echo "  make dev           Run the Vite development server"
+	@echo "  make server-config-init  Create ignored Server mode config files"
+	@echo "  make server-build  Build the rsync-ready Server mode release"
+	@echo "  make server-start  Run Server mode from server-config/runtime.json"
+	@echo "  make server-deploy Build, rsync, and restart the configured user service"
 	@echo "  make test          Run the test suite"
 	@echo "  make clean         Remove generated build, dist, and release output"

@@ -38,13 +38,7 @@ button { color: inherit; }
 .noema-wiki-site-brand > span:last-child { min-width: 0; display: grid; gap: 2px; }
 .noema-wiki-site-brand strong { font: 800 24px/1 var(--aaron-font-heading, system-ui); letter-spacing: -.02em; }
 .noema-wiki-site-brand small { overflow: hidden; color: var(--aaron-muted); font-size: 9px; letter-spacing: .055em; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
-.noema-wiki-site-mark { position: relative; width: 46px; height: 46px; flex: 0 0 auto; display: grid; place-items: center; }
-.noema-wiki-site-mark::before, .noema-wiki-site-mark::after, .noema-wiki-site-mark i {
-  content: ""; position: absolute; inset: 5px; border: 3px solid var(--aaron-accent); transform: rotate(45deg);
-}
-.noema-wiki-site-mark::after { inset: 10px; border-color: color-mix(in srgb, var(--aaron-accent), var(--aaron-link) 55%); transform: rotate(22.5deg); }
-.noema-wiki-site-mark i { inset: 2px; border-width: 1px; border-color: color-mix(in srgb, var(--aaron-accent), transparent 55%); transform: rotate(67.5deg); }
-.noema-wiki-site-mark b { position: relative; z-index: 1; width: 27px; height: 27px; display: grid; place-items: center; border-radius: 50%; background: var(--aaronnote-bg); font: 900 13px var(--aaron-font-heading, system-ui); }
+.noema-wiki-site-mark { width: 42px; height: 42px; flex: 0 0 auto; object-fit: contain; }
 .noema-wiki-site-actions { justify-self: end; display: flex; align-items: center; gap: 10px; }
 .noema-wiki-site-actions a { color: var(--aaron-link); font-size: 11px; text-decoration: none; }
 .noema-wiki-site-actions button, .noema-wiki-search button {
@@ -64,8 +58,25 @@ button { color: inherit; }
   background: color-mix(in srgb, var(--aaronnote-chrome), transparent 2%);
   -webkit-app-region: drag;
 }
+.noema-wiki-title-brand { display: inline-flex; align-items: center; gap: 8px; }
+.noema-wiki-title-brand img { width: 24px; height: 24px; object-fit: contain; }
 
 body[data-host-mode="browser"] .noema-wiki-titlebar { padding-left: 18px; }
+body[data-host-mode="server"] .noema-wiki-titlebar { padding-left: 18px; }
+.is-server-reader [data-new-page],
+.is-server-reader [data-export],
+.is-server-reader [href="/config"],
+.is-server-reader [data-view="sync"],
+.is-server-reader [data-view="repositories"],
+.is-server-reader [data-view="wanted"],
+.is-server-reader [data-view="reports"],
+.is-server-reader [data-refresh],
+.is-server-reader [data-desktop-menu],
+.is-server-reader [data-new-dialog],
+.is-server-reader [data-repo-dialog],
+.is-server-reader [data-page-dialog],
+.is-server-reader [data-conflict-dialog],
+.is-server-reader [data-git-dialog] { display: none !important; }
 .noema-wiki-titlebar button { -webkit-app-region: no-drag; }
 .noema-wiki-history, .noema-wiki-title-actions { display: flex; gap: 6px; }
 .noema-wiki-title-actions { justify-self: end; }
@@ -347,6 +358,24 @@ button.is-danger { border-color: var(--aaron-danger) !important; color: var(--aa
   .noema-wiki-page-actions { grid-column: 2; grid-row: 1; }
   .noema-wiki-report-cards, .noema-wiki-form-grid { grid-template-columns: 1fr; }
   .noema-wiki-tag-list article { align-items: stretch; flex-direction: column; }
+}
+
+/* A browser Server already has site navigation; the App system-titlebar
+   adapter is only meaningful inside Noema.app. */
+body[data-host-mode="server"] .noema-wiki-titlebar { display: none; }
+body[data-host-mode="server"] .noema-wiki-site-header { top: 0; }
+body[data-host-mode="server"] .noema-wiki-shell { min-height: calc(100vh - 86px); }
+body[data-host-mode="server"] :is(.noema-wiki-sidebar, .noema-wiki-tools) {
+  top: 86px;
+  height: calc(100vh - 86px);
+}
+
+@media (max-width: 760px) {
+  body[data-host-mode="server"] .noema-wiki-shell { min-height: calc(100vh - 76px); }
+  body[data-host-mode="server"] :is(.noema-wiki-sidebar, .noema-wiki-tools) {
+    top: 76px;
+    height: calc(100vh - 76px);
+  }
 }
 .noema-wiki-path-input {
   display: grid;

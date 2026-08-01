@@ -872,9 +872,11 @@ export function createInteractiveCiteElement(cmd: InlineCommand): HTMLElement {
     window.AaronnoteBibliography?.openCitation?.(cmd.fullFrom, cmd.fullTo, wrap.getBoundingClientRect(), true);
   });
   wrap.addEventListener("contextmenu", (event) => {
+    const handler = window.AaronnoteBibliography?.contextMenu;
+    if (!handler) return;
     event.preventDefault();
     event.stopPropagation();
-    window.AaronnoteBibliography?.contextMenu?.(cmd.fullFrom, cmd.fullTo, event.clientX, event.clientY);
+    handler(cmd.fullFrom, cmd.fullTo, event.clientX, event.clientY);
   });
   return wrap;
 }

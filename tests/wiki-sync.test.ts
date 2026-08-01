@@ -107,7 +107,7 @@ describe("Wiki Git synchronization", () => {
     const file = join(item.repositoryPath, "sync.md");
     await writeFile(file, (await readFile(file, "utf8")).replace("# Common", "# Local edit"));
     const state = await syncWikiRepository(item.root, "private/research", { configDir: item.configDir });
-    expect(state).toMatchObject({ phase: "idle", localOnly: false });
+    expect(state).toMatchObject({ phase: "idle", localOnly: false, committed: true, changedFiles: 1 });
     expect(await git(item.repositoryPath, "branch", "--show-current")).toMatch(/^noema\//);
     expect(await git(item.repositoryPath, "log", "-1", "--format=%an <%ae>")).toBe("Researcher <researcher@example.test>");
     expect(await git(item.repositoryPath, "log", "-1", "--format=%s")).toMatch(/^noema: checkpoint 1 file/);
@@ -115,6 +115,15 @@ describe("Wiki Git synchronization", () => {
     const checkout = join(item.suite, "verification");
     await execFileAsync("git", ["clone", item.remote, checkout]);
     expect(await readFile(join(checkout, "sync.md"), "utf8")).toContain("# Local edit");
+  });
+
+  test("coalesces repeated manual sync clicks for the same repository", async () => {
+    const item = await fixture();
+    const first = syncWikiRepository(item.root, "private/research", { configDir: item.configDir });
+    const second = syncWikiRepository(item.root, "private/research", { configDir: item.configDir });
+
+    expect(second).toBe(first);
+    await expect(first).resolves.toMatchObject({ phase: "idle", localOnly: false });
   });
 
   test("captures three stages outside the working repository and resolves with product-side semantics", async () => {

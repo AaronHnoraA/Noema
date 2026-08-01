@@ -8,8 +8,12 @@ export type WikiSyncState = {
   phase: "idle" | "checkpointing" | "fetching" | "merging" | "conflicted" | "pushing" | "error";
   updatedAt?: string;
   lastSyncedAt?: string;
+  checkpointedAt?: string;
+  failedAt?: string;
   branch?: string;
   localOnly?: boolean;
+  committed?: boolean;
+  changedFiles?: number;
   error?: string;
   message?: string;
   conflicts?: WikiSyncConflict[];
@@ -33,4 +37,3 @@ export function readWikiConflict(root: string, body?: Record<string, unknown>): 
 }>;
 export function resolveWikiConflict(root: string, body?: Record<string, unknown>): Promise<WikiSyncState>;
 export function abortWikiConflict(root: string, repositoryId: string): Promise<WikiSyncState>;
-export function defaultWikiSyncIntervalMs(): number;

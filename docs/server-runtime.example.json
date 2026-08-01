@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "listen": {
+    "host": "127.0.0.1",
+    "port": 5179
+  },
+  "appearance": {
+    "theme": "claude"
+  },
+  "reader": {
+    "showSource": false,
+    "showGraph": true,
+    "showStatus": false,
+    "selectionToolbar": false,
+    "customContextMenu": false,
+    "editingAids": false
+  },
+  "pullIntervalMinutes": 360,
+  "repositories": [
+    {
+      "name": "notes",
+      "url": "https://github.com/example/notes.git",
+      "partition": "public",
+      "branch": "auto"
+    }
+  ]
+}

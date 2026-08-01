@@ -148,7 +148,6 @@ import {
 import {
   abortWikiConflict,
   checkpointWikiRepository,
-  defaultWikiSyncIntervalMs,
   readWikiConflict,
   readWikiSyncState,
   resolveWikiConflict,
@@ -174,30 +173,55 @@ import { authorizedWorkspaceEnvironment } from "./server/lib/workspace-env.mjs";
 import { jupyterDefaultsFromEnv } from "./server/lib/jupyter-defaults.mjs";
 import { sweepGlobalOrphanKernels } from "./server/jupyter/kernel-registry.mjs";
 import { installJupyterKernelWebSocket } from "./server/lib/jupyter-kernel-ws.mjs";
+import { readServerRuntimeConfig } from "./server/lib/server-config.mjs";
+import {
+  readServerRepositoryState,
+  syncServerRepositories,
+} from "./server/lib/server-repositories.mjs";
+import {
+  buildServerPublicCatalog,
+  publicOpenedNote,
+} from "./server/lib/server-public-catalog.mjs";
+import {
+  assertServerApiChannel,
+  serverApiCompatibilityResult,
+} from "./server/lib/server-policy.mjs";
+import {
+  NOEMA_APP_THEMES,
+  noemaAppTheme,
+} from "./shared/app-themes.mjs";
 import * as zmq from "zeromq";
 
 const execFileAsync = promisify(execFile);
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
+const requestedHostMode = String(process.env.AARONNOTE_HOST_MODE || "emacs").trim().toLowerCase();
+const hostMode = requestedHostMode === "desktop" || requestedHostMode === "server"
+  ? requestedHostMode
+  : "emacs";
+const serverConfig = hostMode === "server"
+  ? await readServerRuntimeConfig(process.env.NOEMA_SERVER_CONFIG)
+  : null;
 const webDir = resolve(process.env.AARONNOTE_WEB_DIR || join(scriptDir, "dist", "aaronnote"));
 const runtimeRoot = resolve(process.env.AARONNOTE_RUNTIME_ROOT || scriptDir);
-const workspaceRoot = resolve(process.env.NOEMA_WORKSPACE_ROOT || process.env.AARONNOTE_WORKSPACE_ROOT || resolve(scriptDir, "..", "..", ".."));
-const noteRoot = resolve(process.env.NOEMA_ROOT || process.env.AARONNOTE_ROOT || join(workspaceRoot, ".roam"));
-const workspaceLayout = wikiLayout(process.env.NOEMA_WORKSPACE_LAYOUT);
+const workspaceRoot = serverConfig?.noteRoot
+  || resolve(process.env.NOEMA_WORKSPACE_ROOT || process.env.AARONNOTE_WORKSPACE_ROOT || resolve(scriptDir, "..", "..", ".."));
+const noteRoot = serverConfig?.noteRoot
+  || resolve(process.env.NOEMA_ROOT || process.env.AARONNOTE_ROOT || join(workspaceRoot, ".roam"));
+const workspaceLayout = serverConfig ? "wiki" : wikiLayout(process.env.NOEMA_WORKSPACE_LAYOUT);
 const publishJsDir = resolve(process.env.AARONNOTE_PUBLISH_JS_DIR || join(runtimeRoot, "js"));
-const stateRoot = resolve(process.env.AARONNOTE_STATE_DIR || join(workspaceRoot, "var", "aaronnote"));
+const stateRoot = serverConfig
+  ? resolve(serverConfig.stateRoot, "runtime")
+  : resolve(process.env.AARONNOTE_STATE_DIR || join(workspaceRoot, "var", "aaronnote"));
 const tmpRoot = resolve(process.env.AARONNOTE_TMP_DIR || join(stateRoot, "tmp"));
-const snippetsRoot = resolve(process.env.AARONNOTE_SNIPPETS_ROOT || join(workspaceRoot, "snippets"));
-const templatesRoot = resolve(process.env.AARONNOTE_TEMPLATES_ROOT || join(workspaceRoot, "templates", "noema"));
-const katexMacrosDir = resolve(process.env.AARONNOTE_KATEX_MACROS_DIR || join(workspaceRoot, "etc", "katex-macros"));
-const bindHost = process.env.AARONNOTE_WEB_HOST || "127.0.0.1";
-const bindPort = Number(process.env.AARONNOTE_WEB_PORT || 0);
+const snippetsRoot = resolve(process.env.AARONNOTE_SNIPPETS_ROOT || (serverConfig ? join(runtimeRoot, "resources", "snippets") : join(workspaceRoot, "snippets")));
+const templatesRoot = resolve(process.env.AARONNOTE_TEMPLATES_ROOT || (serverConfig ? join(runtimeRoot, "resources", "templates", "noema") : join(workspaceRoot, "templates", "noema")));
+const katexMacrosDir = resolve(process.env.AARONNOTE_KATEX_MACROS_DIR || (serverConfig ? join(runtimeRoot, "resources", "katex-macros") : join(workspaceRoot, "etc", "katex-macros")));
+const bindHost = serverConfig?.listen.host || process.env.AARONNOTE_WEB_HOST || "127.0.0.1";
+const bindPort = serverConfig?.listen.port || Number(process.env.AARONNOTE_WEB_PORT || 0);
 const gatewayUrl = String(process.env.AARONNOTE_EMACS_GATEWAY_URL || "").trim();
 const gatewayBinding = String(process.env.AARONNOTE_EMACS_GATEWAY_BINDING || "").trim();
 const gatewayClientId = String(process.env.AARONNOTE_EMACS_GATEWAY_CLIENT_ID || "aaronnote").trim();
-const hostMode = String(process.env.AARONNOTE_HOST_MODE || "emacs").trim().toLowerCase() === "desktop"
-  ? "desktop"
-  : "emacs";
 const jupyterDefaults = jupyterDefaultsFromEnv(process.env);
 const liuGongQuanFontCandidates = [
   process.env.AARONNOTE_LIUGONGQUAN_FONT,
@@ -207,8 +231,34 @@ const liuGongQuanFontCandidates = [
 
 mkdirSync(noteRoot, { recursive: true });
 mkdirSync(tmpRoot, { recursive: true });
-const initialAppConfig = await ensureNoemaAppConfig({ env: process.env });
-const workspaceEnvironment = await authorizedWorkspaceEnvironment(noteRoot, process.env);
+const serverTheme = serverConfig ? noemaAppTheme(serverConfig.appearance.theme) : null;
+const serverAppConfig = serverConfig ? {
+  ok: true,
+  configFile: "",
+  config: {
+    schemaVersion: 2,
+    appearance: { theme: serverTheme.id },
+    workspace: { root: "", layout: "wiki" },
+    wiki: { creation: { activeProfile: "", profiles: [] } },
+  },
+  defaults: {
+    schemaVersion: 2,
+    appearance: { theme: serverTheme.id },
+    workspace: { root: "", layout: "wiki" },
+    wiki: { creation: { activeProfile: "", profiles: [] } },
+  },
+  themes: NOEMA_APP_THEMES,
+  activeTheme: serverTheme,
+  revision: `server-${serverTheme.id}`,
+  diagnostics: [],
+} : null;
+const initialAppConfig = serverAppConfig || await ensureNoemaAppConfig({ env: process.env });
+async function currentAppConfigPayload() {
+  return serverAppConfig || await getNoemaAppConfig({ env: process.env });
+}
+const workspaceEnvironment = hostMode === "server"
+  ? { active: false, authorized: false, root: noteRoot, variables: [], message: "Server reader mode", environment: process.env }
+  : await authorizedWorkspaceEnvironment(noteRoot, process.env);
 
 let wikiIndexCache = null;
 let wikiIndexBuildPromise = null;
@@ -251,7 +301,7 @@ async function wikiIndexPayload({ force = false } = {}) {
 }
 
 async function wikiCreatePage(body = {}) {
-  const config = (await getNoemaAppConfig({ env: process.env })).config;
+  const config = (await currentAppConfigPayload()).config;
   const profiles = config?.wiki?.creation?.profiles || [];
   const profile = profiles.find((item) => item.id === config?.wiki?.creation?.activeProfile) || profiles[0] || {};
   const repositoryId = String(body.repositoryId || (
@@ -278,7 +328,36 @@ configure({
   workspaceLayout,
 });
 
-const jupyterCell = createJupyterCellService({
+let serverRepositoryState = serverConfig
+  ? await syncServerRepositories(serverConfig)
+  : null;
+let serverPublicCatalog = serverConfig
+  ? await buildServerPublicCatalog(await wikiIndexPayload({ force: true }), serverConfig)
+  : null;
+
+async function rebuildServerPublicCatalog({ sync = false } = {}) {
+  if (!serverConfig) return null;
+  if (sync) {
+    serverRepositoryState = await syncServerRepositories(serverConfig, {
+      previousState: serverRepositoryState,
+    });
+    if (serverRepositoryState.contentChanged === false && serverPublicCatalog) {
+      return serverPublicCatalog;
+    }
+  }
+  invalidateWikiIndex();
+  serverPublicCatalog = await buildServerPublicCatalog(
+    await wikiIndexPayload({ force: true }),
+    serverConfig,
+  );
+  broadcast("command", {
+    command: "wiki-index-changed",
+    generation: serverPublicCatalog.index.generation,
+  });
+  return serverPublicCatalog;
+}
+
+const jupyterCell = hostMode === "server" ? null : createJupyterCellService({
   runtimeRoot,
   noteRoot,
   workspaceRoot,
@@ -457,45 +536,12 @@ function wikiRepositoryIdForFile(file) {
   return `${rel[0]}/${rel[1]}`;
 }
 
-async function syncAllWikiRepositories() {
-  if (workspaceLayout !== "wiki") return;
-  const discovered = await discoverWikiRepositories(noteRoot);
-  const pending = [...discovered.repositories];
-  const workers = Array.from({ length: Math.min(2, pending.length) }, async () => {
-    while (pending.length) {
-      const repository = pending.shift();
-      if (!repository) return;
-      try {
-        const result = await syncWikiRepository(noteRoot, repository.id);
-        if (result?.phase !== "error" && result?.phase !== "conflicted") {
-          wikiDirtyRepositories.delete(repository.id);
-        }
-        broadcast("command", { command: "wiki-sync-changed", repositoryId: repository.id });
-      } catch (error) {
-        process.stderr.write(`[noema-wiki] sync failed for ${repository.id}: ${error?.message || error}\n`);
-      }
-    }
-  });
-  await Promise.all(workers);
-}
-
 const wikiDirtyRepositories = new Set();
 
 function markWikiRepositoryDirty(file) {
   const repositoryId = wikiRepositoryIdForFile(file);
   if (repositoryId) wikiDirtyRepositories.add(repositoryId);
   return repositoryId;
-}
-
-async function checkpointDirtyWikiRepositories(reason = "shutdown") {
-  const repositories = [...wikiDirtyRepositories];
-  await Promise.allSettled(repositories.map(async (repositoryId) => {
-    const result = await checkpointWikiRepository(noteRoot, repositoryId, {
-      message: `noema: ${reason} checkpoint`,
-    });
-    wikiDirtyRepositories.delete(repositoryId);
-    return result;
-  }));
 }
 
 async function checkpointWikiRepositoryFromApi(body = {}) {
@@ -508,29 +554,37 @@ async function checkpointWikiRepositoryFromApi(body = {}) {
 async function syncWikiRepositoryFromApi(body = {}) {
   const repositoryId = String(body.repositoryId || "");
   const result = await syncWikiRepository(noteRoot, repositoryId, body);
-  if (result?.phase !== "error" && result?.phase !== "conflicted") wikiDirtyRepositories.delete(repositoryId);
+  if (result?.phase !== "error" && result?.phase !== "conflicted") {
+    wikiDirtyRepositories.delete(repositoryId);
+    markNotesDirty();
+    broadcast("command", { command: "notes-index-changed", version: notesIndexVersionValue() });
+    scheduleWikiRefresh();
+  }
   return result;
 }
 
-function scheduleNextPeriodicWikiSync() {
-  if (workspaceLayout !== "wiki") return null;
-  const jitter = Math.round((Math.random() - 0.5) * 20 * 60 * 1000);
+// App/Emacs Git is deliberately user-driven: editing, startup, timers, and
+// shutdown never create commits or push. Server mirrors are different: they
+// are disposable read-only checkouts and refresh on the configured cadence.
+// Recursive timeouts schedule the next pull only after the previous one has
+// settled, so a slow/offline sync can never overlap another run.
+function scheduleNextServerRepositorySync() {
+  if (!serverConfig) return null;
   const timer = setTimeout(async () => {
-    await syncAllWikiRepositories().catch((error) => reportServerError("wiki-periodic-sync", error));
-    wikiPeriodicSyncTimer = scheduleNextPeriodicWikiSync();
-  }, defaultWikiSyncIntervalMs() + jitter);
+    try {
+      await rebuildServerPublicCatalog({ sync: true });
+    } catch (error) {
+      process.stderr.write(`[noema-server] repository sync failed: ${error?.message || error}\n`);
+    } finally {
+      serverRepositorySyncTimer = scheduleNextServerRepositorySync();
+    }
+  }, serverConfig.pullIntervalMinutes * 60 * 1000);
   timer.unref?.();
   return timer;
 }
+let serverRepositorySyncTimer = scheduleNextServerRepositorySync();
 
-const wikiStartupSyncTimer = workspaceLayout === "wiki"
-  ? setTimeout(() => void syncAllWikiRepositories().catch((error) => reportServerError("wiki-startup-sync", error)), 2_000)
-  : null;
-wikiStartupSyncTimer?.unref?.();
-let wikiPeriodicSyncTimer = scheduleNextPeriodicWikiSync();
-wikiPeriodicSyncTimer?.unref?.();
-
-const noteWatcher = process.env.AARONNOTE_WATCH !== "0"
+const noteWatcher = hostMode !== "server" && process.env.AARONNOTE_WATCH !== "0"
   ? startNoteWatcher({
       root: noteRoot,
       isRelevant: (file) =>
@@ -586,7 +640,7 @@ let appConfigSignature = JSON.stringify({
   diagnostics: initialAppConfig.diagnostics,
 });
 let appConfigWatchTimer = null;
-const appConfigWatcher = watch(noemaAppConfigDir({ env: process.env }), (_event, filename) => {
+const appConfigWatcher = hostMode === "server" ? { close() {} } : watch(noemaAppConfigDir({ env: process.env }), (_event, filename) => {
   if (filename && String(filename) !== "config.json") return;
   if (appConfigWatchTimer) clearTimeout(appConfigWatchTimer);
   appConfigWatchTimer = setTimeout(() => {
@@ -630,7 +684,9 @@ function reportServerError(kind, detail) {
     broadcast("command", {
       command: "server-error",
       kind,
-      message: (detail instanceof Error ? detail.message : String(detail ?? "")).slice(0, 500),
+      message: hostMode === "server"
+        ? "Server reader unavailable"
+        : (detail instanceof Error ? detail.message : String(detail ?? "")).slice(0, 500),
       at: Date.now(),
     });
   } catch {
@@ -668,11 +724,7 @@ async function beginShutdown({ reason = "shutdown", exitCode = 0, deadlineMs = 3
     try {
       clearInterval(sseHeartbeatInterval);
       if (wikiRefreshTimer) clearTimeout(wikiRefreshTimer);
-      if (wikiStartupSyncTimer) clearTimeout(wikiStartupSyncTimer);
-      if (wikiPeriodicSyncTimer) clearTimeout(wikiPeriodicSyncTimer);
-      if (workspaceLayout === "wiki" && reason === "SIGTERM") {
-        await checkpointDirtyWikiRepositories("session");
-      }
+      if (serverRepositorySyncTimer) clearTimeout(serverRepositorySyncTimer);
       broadcast("command", { command: "server-shutdown", reason, at: Date.now() });
       for (const res of eventClients) {
         try { res.end(); } catch {}
@@ -684,7 +736,7 @@ async function beginShutdown({ reason = "shutdown", exitCode = 0, deadlineMs = 3
         Promise.resolve().then(() => appConfigWatcher.close()),
         Promise.resolve().then(() => noteWatcher.close()),
         Promise.resolve().then(() => jupyterKernelWs?.close()),
-        jupyterCell.shutdown(),
+        jupyterCell?.shutdown(),
         shutdownCopilot(),
         stopAllWikiGitUis(),
       ]);
@@ -1114,19 +1166,55 @@ async function apiEmacsZotero(body, eventName = "zotero") {
   return { ok: true, queued: true };
 }
 
+function currentServerCatalog() {
+  if (!serverPublicCatalog) {
+    throw Object.assign(new Error("Public catalog is unavailable"), { statusCode: 503 });
+  }
+  return serverPublicCatalog;
+}
+
+async function serverOpenedPayload(file, includeIndex = false) {
+  const catalog = currentServerCatalog();
+  const indexPayload = includeIndex ? {
+    notes: catalog.index.notes,
+    files: catalog.index.files,
+    directories: catalog.index.directories,
+    repositories: catalog.index.repositories,
+    reports: catalog.index.reports,
+    generation: catalog.index.generation,
+    root: "",
+  } : {};
+  if (!file) {
+    return {
+      type: "open",
+      file: "",
+      title: "Noema",
+      mode: "markdown",
+      content: "# Noema\n\nChoose a public page from the Wiki.",
+      kind: "page",
+      remote: true,
+      ...indexPayload,
+    };
+  }
+  const opened = await publicOpenedNote(catalog, file);
+  return includeIndex ? { ...opened, ...indexPayload } : opened;
+}
+
 const apiRouter = new ApiRouter().register({
-  "aaronnote:api:wiki:bootstrap": () => wikiIndexPayload(),
+  "aaronnote:api:wiki:bootstrap": () => hostMode === "server" ? currentServerCatalog().index : wikiIndexPayload(),
   "aaronnote:api:wiki:environment": () => ({
     ok: true,
     active: workspaceEnvironment.active,
     authorized: workspaceEnvironment.authorized,
-    root: workspaceEnvironment.root,
-    variables: workspaceEnvironment.variables,
+    root: hostMode === "server" ? "" : workspaceEnvironment.root,
+    variables: hostMode === "server" ? [] : workspaceEnvironment.variables,
     message: workspaceEnvironment.message,
   }),
-  "aaronnote:api:wiki:refresh": () => wikiIndexPayload({ force: true }),
-  "aaronnote:api:wiki:search": (body) => searchWikiDatabase(noteRoot, body || {}),
-  "aaronnote:api:wiki:resolve-link": async (body) => resolveWikiLink(await wikiIndexPayload(), body?.target ?? body, { sourceFile: body?.sourceFile || "" }),
+  "aaronnote:api:wiki:refresh": () => hostMode === "server" ? currentServerCatalog().index : wikiIndexPayload({ force: true }),
+  "aaronnote:api:wiki:search": (body) => hostMode === "server" ? currentServerCatalog().search(body || {}) : searchWikiDatabase(noteRoot, body || {}),
+  "aaronnote:api:wiki:resolve-link": async (body) => hostMode === "server"
+    ? currentServerCatalog().resolveLink(body?.target ?? body, body?.sourceFile || "")
+    : resolveWikiLink(await wikiIndexPayload(), body?.target ?? body, { sourceFile: body?.sourceFile || "" }),
   "aaronnote:api:wiki:init-workspace": () => initWikiWorkspace(noteRoot),
   "aaronnote:api:wiki:init-repository": (body) => initWikiRepository(noteRoot, body?.partition, body?.name),
   "aaronnote:api:wiki:clone-repository": (body) => cloneWikiRepository(noteRoot, body || {}),
@@ -1138,7 +1226,11 @@ const apiRouter = new ApiRouter().register({
   "aaronnote:api:wiki:delete-page": (body) => deleteWikiPage(noteRoot, body || {}),
   "aaronnote:api:wiki:copy-page": (body) => copyWikiPage(noteRoot, body || {}),
   "aaronnote:api:wiki:merge-pages": (body) => mergeWikiPages(noteRoot, body || {}),
-  "aaronnote:api:wiki:tags": async () => ({ ok: true, type: "wiki-tags", tags: wikiTagIndex(await wikiIndexPayload()) }),
+  "aaronnote:api:wiki:tags": async () => ({
+    ok: true,
+    type: "wiki-tags",
+    tags: wikiTagIndex(hostMode === "server" ? currentServerCatalog().index : await wikiIndexPayload()),
+  }),
   "aaronnote:api:wiki:update-tag": (body) => updateWikiTag(noteRoot, body || {}),
   "aaronnote:api:wiki:update-namespace": (body) => updateWikiNamespace(noteRoot, body || {}),
   "aaronnote:api:wiki:export": (body) => exportWiki(noteRoot, body || {}),
@@ -1157,9 +1249,9 @@ const apiRouter = new ApiRouter().register({
   "aaronnote:api:wiki:resolve-conflict": (body) => resolveWikiConflict(noteRoot, body || {}),
   "aaronnote:api:wiki:abort-conflict": (body) => abortWikiConflict(noteRoot, body?.repositoryId),
   "aaronnote:api:wiki:git-ui": (body) => openWikiGitUi(noteRoot, body?.repositoryId),
-  "aaronnote:api:notes:bootstrap": (file) => bootstrapNotePayload(file),
-  "aaronnote:api:notes:open": (file) => readNote(file),
-  "aaronnote:api:notes:list": (force) => notesListPayload(force === true),
+  "aaronnote:api:notes:bootstrap": (file) => hostMode === "server" ? serverOpenedPayload(file, true) : bootstrapNotePayload(file),
+  "aaronnote:api:notes:open": (file) => hostMode === "server" ? serverOpenedPayload(file, false) : readNote(file),
+  "aaronnote:api:notes:list": (force) => hostMode === "server" ? currentServerCatalog().index : notesListPayload(force === true),
   "aaronnote:api:notes:save": async (body) => {
     const result = await saveNote(body || {});
     if (result?.ok && !result?.conflict && !result?.stale && result?.file) {
@@ -1271,10 +1363,12 @@ const apiRouter = new ApiRouter().register({
     return { type: "todo-dep-ref", ref: idResult.id };
   },
   "aaronnote:api:notes:index": async () => {
-    return { type: "notes", ...await notesIndexPayload(), root: noteRoot };
+    return hostMode === "server"
+      ? { type: "notes", ...currentServerCatalog().index, root: "" }
+      : { type: "notes", ...await notesIndexPayload(), root: noteRoot };
   },
   "aaronnote:api:notes:graph": async () => {
-    const payload = graphPayload(await scanRoamNotes());
+    const payload = graphPayload(hostMode === "server" ? currentServerCatalog().index.notes : await scanRoamNotes());
     return { ...payload, indexVersion: notesIndexVersionValue() };
   },
   "aaronnote:api:notes:roam-index": async () => {
@@ -1283,7 +1377,7 @@ const apiRouter = new ApiRouter().register({
   "aaronnote:api:runtime:debug": async () => ({ type: "runtime-debug", ...runtimeDebugSnapshot() }),
   "aaronnote:api:note-code:read-region": (body) => readNoteCodeRegion(body || {}),
   "aaronnote:api:slides:mirror": (body) => slidesMirror(body || {}),
-  ...createJupyterApiHandlers(jupyterCell),
+  ...(jupyterCell ? createJupyterApiHandlers(jupyterCell) : {}),
   "aaronnote:api:notes:wanted": async () => {
     const notes = await scanRoamNotes();
     return wantedPages(notes);
@@ -1386,8 +1480,11 @@ const apiRouter = new ApiRouter().register({
     apiSystemOpen,
     apiEmacsZotero,
   }),
-  "aaronnote:api:config:katex-macros": () => katexMacrosPayload(),
-  "aaronnote:api:config:app": () => getNoemaAppConfig({ env: process.env }),
+  "aaronnote:api:config:katex-macros": () => {
+    const payload = katexMacrosPayload();
+    return hostMode === "server" ? { ...payload, dir: "" } : payload;
+  },
+  "aaronnote:api:config:app": () => currentAppConfigPayload(),
   "aaronnote:api:config:update-app": async (body) => {
     const payload = await updateNoemaAppConfig(body || {}, {
       env: process.env,
@@ -1445,6 +1542,11 @@ async function readSystemClipboard(body) {
 }
 
 async function callApi(channel, args = []) {
+  if (hostMode === "server") {
+    assertServerApiChannel(channel);
+    const compatibility = serverApiCompatibilityResult(channel);
+    if (compatibility !== undefined) return compatibility;
+  }
   return await apiRouter.call(channel, args);
 }
 
@@ -1580,6 +1682,7 @@ function connectGateway(port) {
 
 function adapterScript(origin, appConfigPayload = initialAppConfig) {
   const appConfigJson = JSON.stringify(appConfigPayload).replace(/</g, "\\u003c");
+  const serverReaderJson = JSON.stringify(serverConfig?.reader || null);
   const fallbackThemeId = String(
     appConfigPayload?.defaults?.appearance?.theme
       || appConfigPayload?.themes?.[0]?.id
@@ -1591,10 +1694,12 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
   window.__noemaAppConfig = APP_CONFIG;
   document.documentElement.dataset.noemaTheme =
     String(APP_CONFIG && APP_CONFIG.config && APP_CONFIG.config.appearance && APP_CONFIG.config.appearance.theme || ${JSON.stringify(fallbackThemeId)});
-  var BASE = ${JSON.stringify(origin)};
-  window.__aaronnoteNotesRoot = ${JSON.stringify(noteRoot)};
-  window.__aaronnoteJupyterDefaults = ${JSON.stringify(jupyterDefaults)};
+  var BASE = ${JSON.stringify(hostMode === "server" ? "" : origin)};
+  window.__aaronnoteNotesRoot = ${JSON.stringify(hostMode === "server" ? "" : noteRoot)};
+  window.__aaronnoteJupyterDefaults = ${JSON.stringify(hostMode === "server" ? {} : jupyterDefaults)};
   window.__aaronnoteHostMode = ${JSON.stringify(hostMode)};
+  window.__noemaServerReadOnly = ${JSON.stringify(hostMode === "server")};
+  window.__noemaServerReader = ${serverReaderJson};
   function call(channel, args) {
     return fetch(BASE + "/api", {
       method: "POST",
@@ -2136,6 +2241,24 @@ async function serveAaronnoteAsset(url, res) {
   try {
     parsedRaw = new URL(raw);
   } catch {}
+  if (hostMode === "server") {
+    if (parsedRaw?.hostname !== "media") {
+      sendText(res, 404, "Asset not found");
+      return;
+    }
+    const file = currentServerCatalog().asset(
+      parsedRaw.searchParams.get("file") || "",
+      parsedRaw.searchParams.get("base") || "",
+    );
+    if (!file || !(await isFile(file))) {
+      sendText(res, 404, "Asset not found");
+      return;
+    }
+    const data = await readFile(file);
+    res.writeHead(200, { "Content-Type": mimeFor(file), "Cache-Control": "public, max-age=300" });
+    res.end(data);
+    return;
+  }
   if (parsedRaw?.hostname === "visual-frame") {
     await serveVisualFrame(raw, res);
     return;
@@ -2156,6 +2279,17 @@ async function serveAaronnoteAsset(url, res) {
 async function serveNoteAsset(url, res) {
   const source = cleanAssetSource(url.searchParams.get("src"));
   const base = url.searchParams.get("base") || "";
+  if (hostMode === "server") {
+    const file = currentServerCatalog().asset(source, base);
+    if (!file || !(await isFile(file))) {
+      sendText(res, 404, "Asset not found");
+      return;
+    }
+    const data = await readFile(file);
+    res.writeHead(200, { "Content-Type": mimeFor(file), "Cache-Control": "public, max-age=300" });
+    res.end(data);
+    return;
+  }
   const assetUrl = new URL("aaronnote-asset://media");
   assetUrl.searchParams.set("file", source);
   if (base) assetUrl.searchParams.set("base", base);
@@ -2174,6 +2308,10 @@ async function serveNoteAsset(url, res) {
 
 async function serveStatic(urlPath, res, origin) {
   const requested = decodeURIComponent(urlPath).replace(/^\/+/, "") || "index.html";
+  if (hostMode === "server" && ["agenda.html", "config.html"].includes(requested)) {
+    sendText(res, 404, "Not found");
+    return;
+  }
   const file = resolve(webDir, requested);
   if (!isWithin(webDir, file) || !(await isFile(file))) {
     sendText(res, 404, "Not found");
@@ -2189,7 +2327,7 @@ async function serveStatic(urlPath, res, origin) {
     return;
   }
   if (["index.html", "agenda.html", "config.html", "slides.html", "wiki.html"].some((name) => file.endsWith(name))) {
-    const appConfig = await getNoemaAppConfig({ env: process.env });
+    const appConfig = await currentAppConfigPayload();
     const html = data.toString("utf8").replace("</head>", `${adapterScript(origin, appConfig)}\n</head>`);
     res.writeHead(200, {
       "Content-Type": "text/html; charset=utf-8",
@@ -2216,6 +2354,10 @@ const server = createServer(async (req, res) => {
     }
 
     if (url.pathname.startsWith("/jupyter/nbextensions/")) {
+      if (hostMode === "server" || !jupyterCell) {
+        sendText(res, 404, "Not found");
+        return;
+      }
       const relative = url.pathname.slice("/jupyter/nbextensions/".length);
       const runtimeId = String(url.searchParams.get("runtime") || "");
       const asset = req.method === "GET" || req.method === "HEAD"
@@ -2249,6 +2391,10 @@ const server = createServer(async (req, res) => {
     }
 
     if (url.pathname === "/api/clipboard") {
+      if (hostMode === "server") {
+        sendText(res, 404, "Not found");
+        return;
+      }
       if (req.method === "GET") {
         try {
           const { stdout } = await execFileAsync("pbpaste");
@@ -2285,6 +2431,10 @@ const server = createServer(async (req, res) => {
     }
 
     if (url.pathname === "/emacs/event" && req.method === "POST") {
+      if (hostMode === "server") {
+        sendText(res, 404, "Not found");
+        return;
+      }
       const body = await readJson(req, 1024 * 1024);
       if (body.type === "open" || body.type === "goto") {
         sendJson(res, 200, await apiOpenInEmacs(body.file, body.line, body.col, body.tag));
@@ -2326,11 +2476,13 @@ const server = createServer(async (req, res) => {
     }
 
     if (url.pathname === "/agenda") {
+      if (hostMode === "server") { sendText(res, 404, "Not found"); return; }
       await serveStatic("/agenda.html", res, origin);
       return;
     }
 
     if (url.pathname === "/config") {
+      if (hostMode === "server") { sendText(res, 404, "Not found"); return; }
       await serveStatic("/config.html", res, origin);
       return;
     }
@@ -2346,7 +2498,7 @@ const server = createServer(async (req, res) => {
     }
 
     if (url.pathname === "/graph") {
-      const notes = await scanRoamNotes();
+      const notes = hostMode === "server" ? currentServerCatalog().index.notes : await scanRoamNotes();
       const raw = graphPayload(notes);
       // Build SITE_DATA in the format knowledge.js expects:
       // { notes: [{ key, title, link, path, tags, aliases, refs, backlinks, groupKey, groupLabel }] }
@@ -2370,7 +2522,7 @@ const server = createServer(async (req, res) => {
           backlinks: backlinksMap[n.key] ?? [],
         })),
       };
-      const appConfig = await getNoemaAppConfig({ env: process.env });
+      const appConfig = await currentAppConfigPayload();
       sendHtmlNoStore(res, `<!doctype html>
 <html>
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -2398,6 +2550,10 @@ document.addEventListener("DOMContentLoaded", function () {
     onNoteOpen: function (note) {
       var path = (note && (note.path || note.link)) || "";
       if (!path) return;
+      if (window.__aaronnoteHostMode === "server") {
+        window.open("/?file=" + encodeURIComponent(path), "_blank", "noopener");
+        return;
+      }
       var abs = path;
       if (root) {
         var r = root;
@@ -2420,17 +2576,34 @@ document.addEventListener("DOMContentLoaded", function () {
     }
 
     if (url.pathname === "/health") {
-      sendJson(res, 200, {
-        ok: true,
-        hostMode,
-        root: noteRoot,
-        web: webDir,
-        runtime: runtimeRoot,
-        state: stateRoot,
-        tmp: tmpRoot,
-        snippets: snippetsRoot,
-        templates: templatesRoot,
-      });
+      if (hostMode === "server") {
+        const repositoryState = serverRepositoryState || await readServerRepositoryState(serverConfig);
+        sendJson(res, serverPublicCatalog ? 200 : 503, {
+          ok: Boolean(serverPublicCatalog),
+          hostMode,
+          generation: serverPublicCatalog?.index.generation || "",
+          lastPullAt: repositoryState.updatedAt || "",
+          degraded: Boolean(repositoryState.degraded),
+        });
+      } else {
+        sendJson(res, 200, {
+          ok: true,
+          hostMode,
+          root: noteRoot,
+          web: webDir,
+          runtime: runtimeRoot,
+          state: stateRoot,
+          tmp: tmpRoot,
+          snippets: snippetsRoot,
+          templates: templatesRoot,
+        });
+      }
+      return;
+    }
+
+    if (hostMode === "server" && url.pathname === "/" && !url.searchParams.get("file")) {
+      res.writeHead(302, { Location: "/wiki" });
+      res.end();
       return;
     }
 
@@ -2442,13 +2615,13 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 });
 
-jupyterKernelWs = installJupyterKernelWebSocket({
+jupyterKernelWs = jupyterCell ? installJupyterKernelWebSocket({
   server,
   resolveConnectionInfo: (id) => jupyterCell.resolveConnectionInfoById(id),
   touchKernel: (id) => jupyterCell.touchKernelById(id),
   zmq,
   stderr: process.stderr,
-});
+}) : null;
 
 server.on("error", (err) => {
   process.stderr.write(`[aaronnote-web] Failed to start server: ${err.message}\n`);

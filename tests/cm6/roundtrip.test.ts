@@ -1941,6 +1941,23 @@ First draft.
     cleanup();
   });
 
+  test("passive reader keeps rendered display math closed on click", () => {
+    const md = "before\n\n\\[\na+b\n\\]\n\nafter";
+    const { editor, cleanup } = mountCM6(md, { readOnly: true, passiveReader: true });
+    editor.setMarkdownSelection(0);
+    const block = document.querySelector<HTMLElement>(".cm-math-block");
+    expect(block).toBeTruthy();
+
+    const event = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    block!.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(editor.getMarkdownSelection().from).toBe(0);
+    expect(document.querySelector(".cm-math-block")).toBeTruthy();
+    expect(document.querySelectorAll(".cm-math-source-line")).toHaveLength(0);
+    cleanup();
+  });
+
   test("expanded org-env display math is source-only", () => {
     const md = String.raw`#+begin proof
 \[

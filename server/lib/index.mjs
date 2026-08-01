@@ -5,6 +5,7 @@ export {
   notesIndexPayload,
   roamNotesIndexPayload,
   scanNotes,
+  assetRefsFromContent,
   graphPayload,
   wantedPages,
   tagIndexPayload,

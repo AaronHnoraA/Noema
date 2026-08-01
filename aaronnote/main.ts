@@ -20,6 +20,7 @@ import { jumpStructuralDelimiter } from "../src/cm6/structural-jump.ts";
 import { equationTagsFromText, getEquationTagHits } from "../src/equation-tags.ts";
 import { INLINE_MATH_RE } from "../src/inline-math.ts";
 import { formatMathRenderError, renderMathHTML } from "../src/math-render.ts";
+import { mathPreviewFitScale } from "./math-preview-fit.ts";
 import { setKatexMacros } from "../src/katex-macros.ts";
 import { renderJupyterVariablesTable } from "../src/jupyter-variables-view.ts";
 import { formatCitationLabel } from "../src/render-html.ts";
@@ -121,7 +122,7 @@ import {
   handleXwidgetVimBeforeInput,
   handleXwidgetVimKeydown,
 } from "./xwidget-key-guard.ts";
-import { sourceEditorName, standaloneMode } from "./host-mode.ts";
+import { serverMode, sourceEditorName, standaloneMode } from "./host-mode.ts";
 import { createZoomController } from "./features/zoom/controller.ts";
 import {
   createWritingStatsController,
@@ -140,9 +141,38 @@ const removeNoemaThemeRuntime = installNoemaThemeRuntime();
 const root = document.querySelector<HTMLElement>("#app");
 if (!root) throw new Error("Missing #app");
 const initialParams = new URLSearchParams(window.location.search);
-const initialReadOnly = initialParams.get("readonly") === "1" || initialParams.get("readonly") === "true";
+const serverReaderMode = serverMode();
+if (serverReaderMode && initialParams.has("host")) {
+  const cleanUrl = new URL(window.location.href);
+  cleanUrl.searchParams.delete("host");
+  window.history.replaceState(window.history.state, "", cleanUrl);
+  initialParams.delete("host");
+}
+type ServerReaderSettings = {
+  showSource: boolean;
+  showGraph: boolean;
+  showStatus: boolean;
+  selectionToolbar: boolean;
+  customContextMenu: boolean;
+  editingAids: boolean;
+};
+const serverReaderDefaults: ServerReaderSettings = {
+  showSource: false,
+  showGraph: true,
+  showStatus: false,
+  selectionToolbar: false,
+  customContextMenu: false,
+  editingAids: false,
+};
+const injectedServerReader = (window as Window & { __noemaServerReader?: Partial<ServerReaderSettings> }).__noemaServerReader;
+const serverReader = { ...serverReaderDefaults, ...(injectedServerReader || {}) };
+const passiveServerReader = serverReaderMode && !serverReader.editingAids;
+const initialReadOnly = serverReaderMode || initialParams.get("readonly") === "1" || initialParams.get("readonly") === "true";
 const desktopMode = standaloneMode() && Boolean(window.noemaDesktop);
-document.body.dataset.hostMode = desktopMode ? "desktop" : "emacs";
+document.body.dataset.hostMode = serverReaderMode ? "server" : desktopMode ? "desktop" : "emacs";
+if (serverReaderMode) {
+  document.body.dataset.serverReaderEditingAids = String(serverReader.editingAids);
+}
 
 root.innerHTML = `
   <header class="noema-desktop-titlebar" data-desktop-titlebar ${desktopMode ? "" : "hidden"}>
@@ -155,8 +185,22 @@ root.innerHTML = `
     </nav>
     <strong class="noema-desktop-titlebar-name" data-desktop-title>Noema</strong>
   </header>
+  <header class="noema-server-header" data-server-header ${serverReaderMode ? "" : "hidden"}>
+    <a href="/wiki" class="noema-server-brand" aria-label="Open Noema Public Wiki">
+      <img class="noema-server-brand-icon" src="./Noema.svg" alt="">
+      <span><b>Noema</b><small>Public Wiki</small></span>
+    </a>
+    <nav aria-label="Reader navigation">
+      <button type="button" data-server-command="back" title="Back" aria-label="Back">←</button>
+      <button type="button" data-server-command="forward" title="Forward" aria-label="Forward">→</button>
+      <button type="button" data-server-command="refresh" title="Refresh" aria-label="Refresh">↻</button>
+      <button type="button" data-server-command="toggle-source" aria-label="Toggle source" ${serverReader.showSource ? "" : "hidden"}>Source</button>
+      <button type="button" data-server-command="toggle-graph" aria-label="Knowledge graph" ${serverReader.showGraph ? "" : "hidden"}>Graph</button>
+    </nav>
+    <strong class="noema-server-page"><small>Reading</small><span data-server-title>Noema</span></strong>
+  </header>
   <main class="aaronnote-focused-shell">
-    <aside class="aaronnote-status-hud" aria-live="polite">
+    <aside class="aaronnote-status-hud" aria-live="polite" ${serverReaderMode && !serverReader.showStatus ? "hidden" : ""}>
       <span class="aaronnote-status-pill aaronnote-status-pill-left" data-mode-toggle
             role="button" tabindex="0" title="Toggle tools" aria-label="Toggle tools"
             aria-expanded="false">
@@ -179,6 +223,7 @@ root.innerHTML = `
 const host = root.querySelector<HTMLElement>("[data-editor]")!;
 const fileLabel = document.createElement("strong");
 const desktopTitleName = root.querySelector<HTMLElement>("[data-desktop-title]")!;
+const serverTitleName = root.querySelector<HTMLElement>("[data-server-title]")!;
 const desktopDropOverlay = root.querySelector<HTMLElement>("[data-desktop-drop-overlay]")!;
 const desktopDropLabel = root.querySelector<HTMLElement>("[data-desktop-drop-label]")!;
 const modeLabel = root.querySelector<HTMLElement>("[data-vim-mode]")!;
@@ -675,6 +720,7 @@ const findNextButton = findPanel.querySelector<HTMLButtonElement>("[data-find-ne
 const findCloseButton = findPanel.querySelector<HTMLButtonElement>("[data-find-close]")!;
 
 let currentFile = "";
+let currentTitle = "";
 let currentClient = "";
 let currentKind = "";
 let currentStandalone = false;
@@ -1037,11 +1083,14 @@ snippets = withBuiltinSnippets(snippets);
 
 function updateTitle(): void {
   const name = currentFile.split(/[\\/]/).at(-1) || "Noema";
+  const displayName = serverReaderMode && currentTitle ? currentTitle : name;
   fileLabel.textContent = name;
   desktopTitleName.textContent = name;
   desktopTitleName.title = currentFile || name;
+  serverTitleName.textContent = displayName;
+  serverTitleName.title = currentFile || displayName;
   document.title = currentReadOnly
-    ? `${name} (read-only)`
+    ? serverReaderMode ? `${displayName} · Noema Wiki` : `${name} (read-only)`
     : revision === savedRevision ? name : `* ${name}`;
 }
 
@@ -1087,6 +1136,7 @@ let writingStatsController: WritingStatsController | null = null;
 const editor = createEditor(host, {
   initialContent: "",
   readOnly: initialReadOnly,
+  passiveReader: passiveServerReader,
   getCurrentFile: () => currentFile,
   pasteAssets: {
     uploadBlobAsset: uploadPasteBlobAsset,
@@ -1282,6 +1332,7 @@ function renderBibliographyPanel(): void {
       item.appendChild(button);
     }
     item.addEventListener("contextmenu", (event) => {
+      if (serverReaderMode && !serverReader.customContextMenu) return;
       event.preventDefault();
       event.stopPropagation();
       showReferenceContextMenu(ref, event.clientX, event.clientY);
@@ -1573,7 +1624,14 @@ function showCitationContextMenu(from: number, to: number, x: number, y: number)
   const cite = citationAtRange(from, to);
   const refs = citationReferences(cite);
   const keys = citationKeys(cite);
-  const items: AaronContextMenuItem[] = [
+  const items: AaronContextMenuItem[] = serverReaderMode ? [
+    ...refs.map((ref) => ({
+      label: refs.length > 1 ? `Jump to Reference [${ref.number || "?"}]` : "Jump to Reference",
+      detail: ref.entry?.key || "",
+      run: () => highlightReference(ref),
+    })),
+    { label: "Copy Citation Key", detail: keys.join("; "), disabled: keys.length === 0, run: () => copyText(keys.join("; ")) },
+  ] : [
     { label: "Edit Cite Args...", detail: "{prefix/locator/suffix}", disabled: currentReadOnly, run: () => editCitationArgs(from, to) },
     ...refs.map((ref) => ({
       label: refs.length > 1 ? `Jump to Reference [${ref.number || "?"}]` : "Jump to Reference",
@@ -1587,18 +1645,21 @@ function showCitationContextMenu(from: number, to: number, x: number, y: number)
       disabled: !ref.entry,
       run: () => openReferenceInZotero(ref),
     })),
-    { label: `Open Bib in ${sourceEditorName()}`, detail: refs[0]?.entry?.path || "", disabled: !refs[0]?.entry?.file, run: () => openCitationBibInEmacs(from, to) },
+    { label: `Open Bib in ${sourceEditorName()}`, detail: refs[0]?.entry?.path || "", disabled: serverReaderMode || !refs[0]?.entry?.file, run: () => openCitationBibInEmacs(from, to) },
     { label: "Copy Citation Key", detail: keys.join("; "), disabled: keys.length === 0, run: () => copyText(keys.join("; ")) },
   ];
   showBibliographyContextMenu(refs, items, x, y);
 }
 
 function showReferenceContextMenu(ref: BibliographyReference, x: number, y: number): void {
-  const items: AaronContextMenuItem[] = [
+  const items: AaronContextMenuItem[] = serverReaderMode ? [
+    { label: "Jump to Reference", detail: ref.entry?.key || "", run: () => highlightReference(ref) },
+    { label: "Copy Citation Key", detail: ref.entry?.key || "", disabled: !ref.entry?.key, run: () => copyText(ref.entry?.key || "") },
+  ] : [
     { label: "Jump to Reference", detail: ref.entry?.key || "", run: () => highlightReference(ref) },
     ...bibliographyLinkActions([ref]),
     { label: "Open in Zotero", detail: ref.entry?.key || ref.entry?.fields?.doi || "Emacs search", disabled: !ref.entry, run: () => openReferenceInZotero(ref) },
-    { label: `Open Bib in ${sourceEditorName()}`, detail: ref.entry?.path || "", disabled: !ref.entry?.file, run: () => openBibEntryInEmacs(ref.entry) },
+    { label: `Open Bib in ${sourceEditorName()}`, detail: ref.entry?.path || "", disabled: serverReaderMode || !ref.entry?.file, run: () => openBibEntryInEmacs(ref.entry) },
     { label: "Copy Citation Key", detail: ref.entry?.key || "", disabled: !ref.entry?.key, run: () => copyText(ref.entry?.key || "") },
   ];
   showBibliographyContextMenu([ref], items, x, y);
@@ -1609,7 +1670,7 @@ window.AaronnoteBibliography = {
   version: () => bibliographyRenderVersion,
   mapChanges: syncBibliographyRanges,
   openCitation: openCitationFromWidget,
-  contextMenu: showCitationContextMenu,
+  contextMenu: serverReaderMode && !serverReader.customContextMenu ? undefined : showCitationContextMenu,
 };
 
 function captureEditorScroll(): EditorScrollSnapshot {
@@ -1681,6 +1742,7 @@ const {
 let editorPointerFocusTimer = 0;
 
 function activateEditorFromPointer(event: PointerEvent | MouseEvent): void {
+  if (passiveServerReader) return;
   const target = event.target;
   if (!(target instanceof Node) || !host.contains(target)) return;
   const element = target instanceof Element ? target : target.parentElement;
@@ -1704,6 +1766,7 @@ host.addEventListener("pointerdown", activateEditorFromPointer, { capture: true 
 host.addEventListener("mousedown", activateEditorFromPointer, { capture: true });
 document.addEventListener("contextmenu", (event) => {
   if (!(event.target instanceof Node) || !host.contains(event.target)) return;
+  if (serverReaderMode && !serverReader.customContextMenu) return;
   const element = event.target instanceof Element ? event.target : event.target.parentElement;
   if (element?.closest(".inline-cite-widget, .aaronnote-bib-item")) return;
   event.preventDefault();
@@ -2942,7 +3005,33 @@ function showContextMenu(event: MouseEvent, target: Partial<AaronContextMenuTarg
     : "";
   const items: AaronContextMenuItem[] = [];
 
-  if (planningTarget) {
+  if (serverReaderMode) {
+    if (href) {
+      const detail = hrefPath(href) || href;
+      items.push(
+        { label: "Open", detail, run: () => openExternalUrl(href) },
+        { label: "Copy Link", detail: "clipboard", run: () => copyContextLink(href) },
+      );
+    } else if (hasSelection) {
+      items.push({ label: "Copy Selection", detail: "Cmd-C", run: () => copyEditorSelection() });
+    } else {
+      const block = editor.getBlockContext();
+      if (block.type.includes("heading")) {
+        items.push(
+          { label: "Fold Heading", detail: "section", run: () => runContextEditorCommand("fold-heading") },
+          { label: "Unfold Heading", detail: "section", run: () => runContextEditorCommand("unfold-heading") },
+        );
+      }
+      if (block.type.includes("code")) {
+        items.push({ label: "Copy Code", detail: "block", run: () => runContextEditorCommand("copy-code") });
+      }
+      items.push({ label: "Find in Note", detail: "Cmd-F", run: () => openFindPanel() });
+      if (serverReader.showSource) {
+        items.push({ label: editor.isSourceMode() ? "Markdown View" : "Source View", detail: "Cmd-/", run: () => togglePresentationOrSource() });
+      }
+      items.push({ label: "Copy Page Path", detail: currentFile ? fileNameFromPath(currentFile) : "", disabled: !currentFile, run: () => copyCurrentNotePath() });
+    }
+  } else if (planningTarget) {
     items.push({
       label: "Agenda...",
       detail: planningTarget.detail,
@@ -2983,7 +3072,7 @@ function showContextMenu(event: MouseEvent, target: Partial<AaronContextMenuTarg
     const detail = hrefPath(href) || href;
     items.push(
       { label: "Open", detail, run: () => openExternalUrl(href) },
-      { label: `Open in ${sourceEditorName()}`, detail: "target note", disabled: !canOpenHrefInEmacs(href), run: () => openHrefInEmacs(href) },
+      { label: `Open in ${sourceEditorName()}`, detail: "target note", disabled: serverReaderMode || !canOpenHrefInEmacs(href), run: () => openHrefInEmacs(href) },
       { label: "System Open", detail: "default app", disabled: !canSystemOpenHref(href), run: () => systemOpenHref(href) },
       { label: "Copy Link", detail: "clipboard", run: () => copyContextLink(href) },
     );
@@ -3236,11 +3325,14 @@ function restoreCursorPosition(location: CursorPosition): void {
   const length = editor.getMarkdownLength();
   const from = Math.min(Math.max(0, location.from), length);
   const to = Math.min(Math.max(0, location.to), length);
-  if (!slideDeck?.isSlides() && (location.mode === "source") !== editor.isSourceMode()) editor.toggleSource();
+  if ((!serverReaderMode || serverReader.showSource)
+      && !slideDeck?.isSlides() && (location.mode === "source") !== editor.isSourceMode()) editor.toggleSource();
   sourceButton.classList.toggle("is-active", editor.isSourceMode());
   editor.setMarkdownSelection(from, to);
-  editor.revealCursor();
-  editor.focus();
+  if (!passiveServerReader) {
+    editor.revealCursor();
+    editor.focus();
+  }
   trackCursorPosition();
   scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true, toc: true, selectionTool: true });
 }
@@ -3296,12 +3388,13 @@ function applyOpenedNote(
   rememberedPositions: CursorPosition[] = cursorPositions,
   options: ApplyOpenedNoteOptions = {},
 ): void {
-  const revealCursor = options.revealCursor !== false;
-  const focusEditor = options.focusEditor !== false;
+  const revealCursor = options.revealCursor !== false && !passiveServerReader;
+  const focusEditor = options.focusEditor !== false && !passiveServerReader;
   const updateStatus = options.updateStatus !== false;
   const resetVim = options.resetVim !== false;
   const reloadNoteIndex = options.reloadNotes !== false;
   currentFile = String(opened.file || fallbackFile || "");
+  currentTitle = String(opened.title || "").trim();
   currentKind = String(opened.kind || "");
   currentStandalone = Boolean(opened.standalone);
   currentRemote = Boolean(opened.remote);
@@ -3319,7 +3412,8 @@ function applyOpenedNote(
   revision = 0;
   savedRevision = 0;
   const mode = remembered?.mode || opened.mode;
-  if (String(currentKind || "").trim().toLowerCase() !== "slides"
+  if ((!serverReaderMode || serverReader.showSource)
+      && String(currentKind || "").trim().toLowerCase() !== "slides"
       && (mode === "source") !== editor.isSourceMode()) editor.toggleSource();
   sourceButton.classList.toggle("is-active", editor.isSourceMode());
   slideDeck?.sync(currentKind);
@@ -3329,7 +3423,7 @@ function applyOpenedNote(
   const from = Number(options.preserveSelection?.from ?? opened.selection?.from ?? remembered?.from);
   const to = Number(options.preserveSelection?.to ?? opened.selection?.to ?? remembered?.to ?? from);
   let shouldRevealCursor = false;
-  if (Number.isFinite(from)) {
+  if (Number.isFinite(from) && !passiveServerReader) {
     const length = editor.getMarkdownLength();
     const safeFrom = Math.min(Math.max(0, from), length);
     const safeTo = Math.min(Math.max(0, Number.isFinite(to) ? to : from), length);
@@ -3513,7 +3607,7 @@ setupCopilot({
   onAction: () => () => {},
   onSettingsChange: () => () => {},
   getSettings: () => ({ idleDelayMs: 850, largeBufferThresholdKb: 512 }),
-  isActive: () => !paused && editorSurfaceVisible(),
+  isActive: () => !serverReaderMode && !paused && editorSurfaceVisible(),
   onDocumentEvent: subscribe,
   preserveScroll: (update) => {
     const scroll = captureEditorScroll();
@@ -3527,6 +3621,7 @@ setupCopilot({
 });
 
 function toggleSourceMode(): void {
+  if (serverReaderMode && !serverReader.showSource) return;
   // Source is an explicit pencil-tool action.  When invoked from Reveal, first
   // return to the ordinary note so the raw source is immediately visible.
   if (slideDeck?.isRevealView()) slideDeck.toggleView();
@@ -3911,6 +4006,7 @@ function runFormattingShortcut(event: KeyboardEvent): boolean {
 }
 
 function runSourceToggleShortcut(event: KeyboardEvent): boolean {
+  if (serverReaderMode && !serverReader.showSource) return false;
   if (!primaryMod(event) || event.shiftKey || event.altKey || event.isComposing) return false;
   if (event.key !== "/" && event.code !== "Slash") return false;
   event.preventDefault();
@@ -4278,9 +4374,13 @@ function openExternalUrl(href: string, options: { newWindow?: boolean } = {}): v
       }
       const url = new URL("/wiki", location.origin);
       if (result.status === "missing") {
-        url.searchParams.set("new", "1");
-        url.searchParams.set("title", missingTitle);
-        if (currentFile) url.searchParams.set("source", currentFile);
+        if (serverReaderMode) {
+          url.searchParams.set("q", missingTitle);
+        } else {
+          url.searchParams.set("new", "1");
+          url.searchParams.set("title", missingTitle);
+          if (currentFile) url.searchParams.set("source", currentFile);
+        }
       } else {
         url.searchParams.set("q", missingTitle);
       }
@@ -6286,10 +6386,64 @@ async function rewritePathRefsTool(): Promise<void> {
 
 type ToolAction = {
   id: string;
+  group: "document" | "view" | "writing" | "publish" | "knowledge" | "maintenance";
   title: string;
   detail: string;
   run: () => void;
+  disabled?: boolean;
+  danger?: boolean;
 };
+
+const TOOL_GROUPS: Array<{ id: ToolAction["group"]; label: string }> = [
+  { id: "document", label: "Document" },
+  { id: "view", label: "View & layout" },
+  { id: "writing", label: "Writing & review" },
+  { id: "publish", label: "Present & export" },
+  { id: "knowledge", label: "Knowledge base" },
+  { id: "maintenance", label: "Maintenance & settings" },
+];
+
+async function trashCurrentNoteTool(): Promise<void> {
+  if (!currentFile || currentReadOnly || serverReaderMode) {
+    setStatus(currentReadOnly ? "Read-only pane" : "Open a note first");
+    return;
+  }
+  const deletingFile = currentFile;
+  const name = fileNameFromPath(deletingFile);
+  const result = await openFormModal("Move document to Trash", [{
+    id: "confirm",
+    label: `Type TRASH to move ${name} to the system Trash`,
+    required: true,
+    placeholder: "TRASH",
+    description: revision !== savedRevision
+      ? "This document has unsaved changes. They will not be saved before it is moved."
+      : "The document remains recoverable from the system Trash.",
+  }], "Move to Trash");
+  if (!result) return;
+  if (result.confirm.trim() !== "TRASH") {
+    setStatus("Type TRASH exactly to move the document");
+    return;
+  }
+  setStatus(`Moving ${name} to Trash...`);
+  try {
+    const deleted = await api.notes.trash(deletingFile);
+    const remaining = (deleted.notes ?? []).find((note) => note.file && note.file !== deletingFile);
+    applyIndexPayload(deleted);
+    revision = 0;
+    savedRevision = 0;
+    currentFile = "";
+    if (remaining?.file) {
+      await openFile(remaining.file);
+      setStatus(`${name} moved to Trash`);
+      return;
+    }
+    const wikiUrl = new URL("/wiki", window.location.origin);
+    if (desktopMode) wikiUrl.searchParams.set("host", "desktop");
+    window.location.assign(wikiUrl);
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "Move to Trash failed");
+  }
+}
 
 async function zoteroImportBibtexTool(): Promise<void> {
   if (!currentFile) {
@@ -6395,19 +6549,46 @@ function toolActions(): ToolAction[] {
   const common: ToolAction[] = [
     {
       id: "configuration",
+      group: "maintenance",
       title: "Configuration",
       detail: "Themes and application settings",
       run: openConfigurationPage,
     },
-    { id: "source", title: editor.isSourceMode() ? "Markdown view" : "Source view", detail: "True Markdown source", run: () => toggleSourceMode() },
+    { id: "save", group: "document", title: "Save document", detail: "Write current changes to disk", disabled: currentReadOnly || !currentFile, run: () => void save() },
+    { id: "refresh", group: "document", title: "Refresh from disk", detail: "Reload the current document", disabled: !currentFile, run: () => void reloadCurrentFilePreservingCursor({ preserveScroll: true }) },
+    { id: "source", group: "view", title: editor.isSourceMode() ? "Markdown view" : "Source view", detail: "Switch between rendered Markdown and source", run: () => toggleSourceMode() },
+    {
+      id: "open-source-editor",
+      group: "document",
+      title: `Open in ${sourceEditorName()}`,
+      detail: "Open this document in the host source editor",
+      disabled: !currentFile,
+      run: () => void api.emacs.open({ file: currentFile })
+        .then(() => setStatus(`Opened in ${sourceEditorName()}`))
+        .catch((error) => setStatus(`Open failed: ${String(error)}`)),
+    },
+    ...(desktopMode ? [{
+      id: "reveal-current-file",
+      group: "document" as const,
+      title: "Reveal in Finder",
+      detail: "Show this document in its folder",
+      disabled: !currentFile,
+      run: () => void window.noemaDesktop?.revealPath(currentFile)
+        .then(() => setStatus("Revealed document in Finder"))
+        .catch((error) => setStatus(`Reveal failed: ${String(error)}`)),
+    }] : []),
+    { id: "copy-note-path", group: "document", title: "Copy document path", detail: currentFile ? fileNameFromPath(currentFile) : "No document open", disabled: !currentFile, run: () => void copyCurrentNotePath() },
+    { id: "trash-note", group: "document", title: "Move document to Trash", detail: "Recoverable deletion from the note root", disabled: currentReadOnly || !currentFile, danger: true, run: () => { runHostCommand({ command: "trash-current-note" }); } },
     ...(offerSlideView ? [{
       id: "slide-view",
+      group: "publish" as const,
       title: "Slide view",
       detail: "Present this ordinary Markdown in a new read-only page",
       run: () => void openStandaloneSlideView(),
     }] : []),
     ...(canSetSlideTheme ? [{
       id: "slides-theme",
+      group: "publish" as const,
       title: `Slides theme: ${slideTheme === "dark" ? "Dark" : "Light"}`,
       detail: `Switch presentation to ${slideTheme === "dark" ? "light" : "dark"}`,
       run: () => {
@@ -6418,16 +6599,17 @@ function toolActions(): ToolAction[] {
         }
       },
     }] : []),
-    ...(slideDeck?.isSlides() ? [{ id: "slides-mirror", title: "Reveal mirror", detail: "Edit this note's .slides JavaScript mirror", run: () => void slideDeck?.openMirror() }] : []),
-    { id: "toc", title: "Toggle TOC", detail: "Page headings, anchors, tags, backlinks", run: () => { floatingTocPanel.toggle(); updateFloatingToc(); } },
-    { id: "tag-ref", title: "Tag / copy ref", detail: "Equation tag, inline anchor, reference copy", run: () => void tagOrCopyRef() },
-    { id: "export-latex", title: "Export LaTeX", detail: "Write selection, heading, or note to a .tex file", run: () => void exportLatexTool() },
-    { id: "latex-export-agent", title: "Switch export agent", detail: "Choose Codex, Claude, or OpenCode for LaTeX polish", run: () => void switchLatexExportAgentTool() },
-    { id: "zotero-import-bibtex", title: "Import Zotero BibTeX", detail: "Use the Zotero picker and append to a local .bib file", run: () => void zoteroImportBibtexTool() },
-    { id: "languagetool", title: "LanguageTool", detail: languageToolActionDetail(), run: () => void languageToolSettingsTool() },
-    { id: "reload-snippets", title: "Reload snippets", detail: "Refresh Emacs md/tex snippets", run: () => void reloadSnippets() },
+    ...(slideDeck?.isSlides() ? [{ id: "slides-mirror", group: "publish" as const, title: "Reveal mirror", detail: "Edit this note's .slides JavaScript mirror", run: () => void slideDeck?.openMirror() }] : []),
+    { id: "toc", group: "view", title: "Page outline", detail: "Headings, anchors, tags, and backlinks", run: () => { floatingTocPanel.toggle(); updateFloatingToc(); } },
+    { id: "tag-ref", group: "writing", title: "Tag / copy reference", detail: "Equation tag, inline anchor, and reference copy", run: () => void tagOrCopyRef() },
+    { id: "export-latex", group: "publish", title: "Export LaTeX", detail: "Write selection, heading, or document to a .tex file", run: () => void exportLatexTool() },
+    { id: "latex-export-agent", group: "publish", title: "Switch export agent", detail: "Choose Codex, Claude, or OpenCode for LaTeX polish", run: () => void switchLatexExportAgentTool() },
+    { id: "zotero-import-bibtex", group: "writing", title: "Import Zotero BibTeX", detail: "Use the Zotero picker and append to a local .bib file", run: () => void zoteroImportBibtexTool() },
+    { id: "languagetool", group: "writing", title: "LanguageTool", detail: languageToolActionDetail(), run: () => void languageToolSettingsTool() },
+    { id: "reload-snippets", group: "maintenance", title: "Reload snippets", detail: "Refresh shared Markdown and TeX snippets", run: () => void reloadSnippets() },
     {
       id: "reset-snippet-ranking",
+      group: "maintenance",
       title: "Reset snippet ranking",
       detail: "Clear local snippet frequency and recency history",
       run: () => {
@@ -6439,18 +6621,18 @@ function toolActions(): ToolAction[] {
   ];
   return [
     ...common,
-    { id: "reload-index", title: "Reload note index", detail: "Refresh notes, tags, links", run: () => void reloadNotes(true) },
-    { id: "add-meta", title: "Add meta", detail: "Register title/kind/tags", run: () => void quickAddMeta() },
-    { id: "remove-meta", title: "Remove meta", detail: "Delete current note meta block", run: () => void unregisterMeta() },
-    { id: "hide-roam", title: "Set roam off", detail: "Keep meta but hide from roam graph", run: () => void updateNoteMeta(api.meta.hideRoam, {}, "roam: off set") },
-    { id: "activate-roam", title: "Clear roam off", detail: "Activate current note in roam graph", run: () => void updateNoteMeta(api.meta.activateRoam, {}, "roam: off cleared") },
-    { id: "add-tag", title: "Add tag", detail: "Append tags to current note", run: () => void addTag() },
-    { id: "manage-tags", title: "Manage note meta", detail: "Project and tags", run: () => void manageNoteTags() },
-    { id: "insert-roam-idlink", title: "Insert roam idlink", detail: "Search roam note and insert id link", run: () => void insertRoamIdLink() },
-    { id: "rename-tag", title: "Rename roam tag", detail: "Bulk rename tag in roam notes", run: () => void renameRoamTagTool() },
-    { id: "delete-tag", title: "Delete roam tag", detail: "Bulk remove tag in roam notes", run: () => void deleteRoamTagTool() },
-    { id: "tag-overlap", title: "Tag overlap report", detail: "Find duplicate/overlapping tags", run: () => void tagOverlapReportTool() },
-    { id: "rewrite-paths", title: "Rewrite path refs", detail: "Bulk rewrite Markdown path links", run: () => void rewritePathRefsTool() },
+    { id: "reload-index", group: "maintenance", title: "Reload note index", detail: "Refresh documents, tags, and links", run: () => void reloadNotes(true) },
+    { id: "add-meta", group: "knowledge", title: "Add document metadata", detail: "Register title, kind, and tags", run: () => void quickAddMeta() },
+    { id: "remove-meta", group: "knowledge", title: "Remove document metadata", detail: "Delete the current document meta block", run: () => void unregisterMeta() },
+    { id: "hide-roam", group: "knowledge", title: "Hide from knowledge graph", detail: "Keep metadata but set roam off", run: () => void updateNoteMeta(api.meta.hideRoam, {}, "roam: off set") },
+    { id: "activate-roam", group: "knowledge", title: "Show in knowledge graph", detail: "Clear roam off for the current document", run: () => void updateNoteMeta(api.meta.activateRoam, {}, "roam: off cleared") },
+    { id: "add-tag", group: "knowledge", title: "Add tags", detail: "Append tags to the current document", run: () => void addTag() },
+    { id: "manage-tags", group: "knowledge", title: "Manage metadata", detail: "Edit project and tags", run: () => void manageNoteTags() },
+    { id: "insert-roam-idlink", group: "knowledge", title: "Insert knowledge link", detail: "Search notes and insert an ID link", run: () => void insertRoamIdLink() },
+    { id: "rename-tag", group: "knowledge", title: "Rename tag across notes", detail: "Bulk rename a knowledge-base tag", run: () => void renameRoamTagTool() },
+    { id: "delete-tag", group: "knowledge", title: "Delete tag across notes", detail: "Bulk remove a knowledge-base tag", run: () => void deleteRoamTagTool() },
+    { id: "tag-overlap", group: "knowledge", title: "Tag overlap report", detail: "Find duplicate and overlapping tags", run: () => void tagOverlapReportTool() },
+    { id: "rewrite-paths", group: "maintenance", title: "Rewrite path references", detail: "Bulk update Markdown path links", run: () => void rewritePathRefsTool() },
   ];
 }
 
@@ -6504,27 +6686,42 @@ function openConfigurationPage(): void {
 
 function renderToolsPanel(): void {
   toolsList.replaceChildren();
-  toolsList.appendChild(renderLayoutZoomTool());
-  updateLayoutZoomTool();
-  for (const action of toolActions()) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "aaronnote-tool-action";
-    button.dataset.action = action.id;
-    const title = document.createElement("strong");
-    title.textContent = action.title;
-    const detail = document.createElement("span");
-    detail.textContent = action.detail;
-    button.append(title, detail);
-    button.addEventListener("click", () => {
-      closeToolsPanel();
-      action.run();
-    });
-    toolsList.appendChild(button);
+  const actions = toolActions();
+  for (const group of TOOL_GROUPS) {
+    const groupActions = actions.filter((action) => action.group === group.id);
+    if (group.id !== "view" && groupActions.length === 0) continue;
+    const section = document.createElement("section");
+    section.className = "aaronnote-tool-group";
+    section.dataset.toolGroup = group.id;
+    const heading = document.createElement("h2");
+    heading.textContent = group.label;
+    section.appendChild(heading);
+    if (group.id === "view") section.appendChild(renderLayoutZoomTool());
+    for (const action of groupActions) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "aaronnote-tool-action";
+      button.dataset.action = action.id;
+      if (action.danger) button.dataset.danger = "true";
+      button.disabled = Boolean(action.disabled);
+      const title = document.createElement("strong");
+      title.textContent = action.title;
+      const detail = document.createElement("span");
+      detail.textContent = action.detail;
+      button.append(title, detail);
+      button.addEventListener("click", () => {
+        closeToolsPanel();
+        action.run();
+      });
+      section.appendChild(button);
+    }
+    toolsList.appendChild(section);
   }
+  updateLayoutZoomTool();
 }
 
 function toggleToolsPanel(): void {
+  if (serverReaderMode) return;
   if (toolsPanel.hidden) renderToolsPanel();
   toolsPanel.hidden = !toolsPanel.hidden;
   const expanded = !toolsPanel.hidden;
@@ -6570,6 +6767,7 @@ function hideMathPreview(): void {
   mathPreview.style.left = "";
   mathPreview.style.top = "";
   mathPreview.style.width = "";
+  mathPreview.style.height = "";
   mathPreviewKey = "";
   mathPreviewPendingErrorKey = "";
   mathPreviewWidth = 0;
@@ -7701,11 +7899,13 @@ function mathPreviewKeyFor(math: { tex: string; display: boolean }): string {
 
 function resetMathPreviewFitState(): void {
   const child = mathPreview.querySelector<HTMLElement>(".katex-display, .katex, math, mjx-container");
-  if (!child) return;
-  child.style.transform = "";
-  child.style.transformOrigin = "";
-  child.style.display = "";
-  child.style.maxWidth = "";
+  if (child) {
+    child.style.transform = "";
+    child.style.transformOrigin = "";
+    child.style.display = "";
+    child.style.maxWidth = "";
+  }
+  mathPreview.style.height = "";
   mathPreview.style.minHeight = "";
   mathPreview.classList.remove("is-math-scaled");
 }
@@ -7725,12 +7925,28 @@ function mathPreviewPreferredWidth(display: boolean): number {
 
 function updateMathPreviewOverflow(): void {
   if (mathPreview.hidden || mathPreview.classList.contains("is-error")) return;
-  const rendered = mathPreview.querySelector<Element>(".katex-display, .katex, math, mjx-container");
-  const renderedWidth = Math.ceil(rendered?.getBoundingClientRect().width || 0);
-  const measuredWidth = Math.max(renderedWidth, mathPreview.scrollWidth);
-  const overflowX = measuredWidth > mathPreview.clientWidth + 2;
-  const overflowY = mathPreview.scrollHeight > mathPreview.clientHeight + 2;
-  mathPreview.classList.toggle("is-overflowing", overflowX || overflowY);
+  resetMathPreviewFitState();
+  const rendered = mathPreview.querySelector<HTMLElement>(".katex-display, .katex, math, mjx-container");
+  if (!rendered) return;
+  const style = window.getComputedStyle(mathPreview);
+  const paddingX = Number.parseFloat(style.paddingLeft) + Number.parseFloat(style.paddingRight);
+  const paddingY = Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom);
+  const borderY = Number.parseFloat(style.borderTopWidth) + Number.parseFloat(style.borderBottomWidth);
+  const rect = rendered.getBoundingClientRect();
+  const naturalWidth = Math.max(rect.width, rendered.scrollWidth, mathPreview.scrollWidth - paddingX);
+  const naturalHeight = Math.max(rect.height, rendered.scrollHeight, mathPreview.scrollHeight - paddingY);
+  const availableWidth = Math.max(1, mathPreview.clientWidth - paddingX);
+  const availableHeight = Math.max(1, Math.min(420, window.innerHeight - 24) - paddingY - borderY);
+  const scale = mathPreviewFitScale(availableWidth, availableHeight, naturalWidth, naturalHeight);
+  const scaled = scale < 0.995;
+  mathPreview.classList.toggle("is-overflowing", scaled);
+  mathPreview.classList.toggle("is-math-scaled", scaled);
+  if (!scaled) return;
+  rendered.style.display = "block";
+  rendered.style.maxWidth = "none";
+  rendered.style.transformOrigin = "top left";
+  rendered.style.transform = `scale(${scale})`;
+  mathPreview.style.height = `${Math.ceil(naturalHeight * scale + paddingY + borderY)}px`;
 }
 
 function placeMathPreview(
@@ -7744,6 +7960,7 @@ function placeMathPreview(
   }
   placeFloatingAbove(mathPreview, anchorRect, mathPreviewWidth, bottomRect);
   updateMathPreviewOverflow();
+  placeFloatingAbove(mathPreview, anchorRect, mathPreviewWidth, bottomRect);
 }
 
 function scheduleMathPreviewError(nextKey: string, error: string, display: boolean): void {
@@ -7841,7 +8058,7 @@ function selectionTouchesEditor(): boolean {
 }
 
 function updateSelectionTool(active = activeEditorSelection()): void {
-  if (!active || !modal.hidden) {
+  if ((serverReaderMode && !serverReader.selectionToolbar) || !active || !modal.hidden) {
     selectionTool.hidden = true;
     selectionMore.hidden = true;
     selectionRevisionForm.hidden = true;
@@ -7916,11 +8133,12 @@ function runSelectionCommand(command: string): void {
 function runAssistUpdate(flags: AssistUpdateFlags): void {
   const insertMode = vim.mode() === "insert";
   const wantsSnippets = insertMode && (flags.snippets || !snippetPopup.hidden);
-  const wantsMathPreview = flags.mathPreview || !mathPreview.hidden;
+  const wantsMathPreview = !passiveServerReader && (flags.mathPreview || !mathPreview.hidden);
+  if (passiveServerReader) hideMathPreview();
   const needsCursorContext = wantsSnippets || wantsMathPreview;
   const ctx = needsCursorContext ? editor.cursorContext(!snippetPopup.hidden ? 640 : 320) : null;
   if (flags.toc) updateFloatingToc();
-  if (flags.selectionTool) {
+  if (flags.selectionTool && (!serverReaderMode || serverReader.selectionToolbar)) {
     const activeSelection = snippetPopup.hidden && modal.hidden ? activeEditorSelection() : null;
     updateSelectionTool(activeSelection);
   }
@@ -8180,6 +8398,11 @@ function runHostCommand(detail: unknown): boolean {
       if (rejectReadOnlyAction("Read-only pane")) return true;
       void save();
       return true;
+    case "trash-current-note":
+    case "delete-current-note":
+      if (rejectReadOnlyAction("Read-only pane")) return true;
+      void trashCurrentNoteTool();
+      return true;
     case "jupyter-cell-script-saved": {
       // The hidden script was edited and saved in Emacs; force @@cell widgets to
       // re-read their source and refresh the panel so both reflect the new code.
@@ -8376,7 +8599,7 @@ function activateModeToggle(): void {
     setStatus(`Slides ${theme} theme`);
     return;
   }
-  toggleToolsPanel();
+  if (!serverReaderMode) toggleToolsPanel();
 }
 
 modeToggle.addEventListener("click", activateModeToggle);
@@ -8462,7 +8685,7 @@ document.addEventListener("keydown", (event) => {
     void exportLatexTool();
     return;
   }
-  if (!standaloneMode() && handleXwidgetEmacsKeydown(event, { client: () => currentClient })) return;
+  if (!standaloneMode() && !serverReaderMode && handleXwidgetEmacsKeydown(event, { client: () => currentClient })) return;
   if (runVisualZoomShortcut(event)) {
     return;
   }
@@ -8778,6 +9001,14 @@ window.addEventListener("aaronnote:open-file", (event) => {
 root.querySelectorAll<HTMLButtonElement>("[data-desktop-command]").forEach((button) => {
   button.addEventListener("click", () => {
     runHostCommand({ command: button.dataset.desktopCommand });
+  });
+});
+root.querySelectorAll<HTMLButtonElement>("[data-server-command]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const command = String(button.dataset.serverCommand || "");
+    if (command === "back") history.back();
+    else if (command === "forward") history.forward();
+    else runHostCommand({ command });
   });
 });
 root.querySelectorAll<HTMLButtonElement>("[data-desktop-menu]").forEach((button) => {

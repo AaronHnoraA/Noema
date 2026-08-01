@@ -463,6 +463,8 @@ type NativeApi = {
     pathSuggestions?: (file: string, prefix?: string) => Promise<unknown>;
     save?: (body: SaveBody) => Promise<unknown>;
     saveKeepalive?: (body: SaveBody) => void;
+    deleteNote?: (file: string) => Promise<unknown>;
+    deleteNode?: (file: string) => Promise<unknown>;
     snippets?: () => Promise<unknown>;
     metaAdd?: (body: Record<string, unknown>) => Promise<unknown>;
     notesIndex?: () => Promise<unknown>;
@@ -680,8 +682,12 @@ export type WikiSyncState = {
   phase: WikiSyncPhase;
   updatedAt?: string;
   lastSyncedAt?: string;
+  checkpointedAt?: string;
+  failedAt?: string;
   branch?: string;
   localOnly?: boolean;
+  committed?: boolean;
+  changedFiles?: number;
   error?: string;
   message?: string;
   conflicts?: Array<{ path: string; kind: string; stages: number[] }>;
@@ -866,6 +872,16 @@ export const api = {
     async save(body: SaveBody): Promise<SavedMsg> {
       const call = requireMethod(nativeApi().notes?.save, "Save");
       return ensureOk(await call(body) as SavedMsg, "Save failed", true);
+    },
+    async trash(file: string): Promise<NotesMsg & { file?: string; trashedTo?: string }> {
+      const call = requireMethod(
+        nativeApi().notes?.deleteNote ?? nativeApi().notes?.deleteNode,
+        "Move note to Trash",
+      );
+      return ensureOk(
+        await call(file) as NotesMsg & { file?: string; trashedTo?: string },
+        "Move note to Trash failed",
+      );
     },
     async snippets(): Promise<SnippetsMsg & { snippets?: SnippetSummary[] }> {
       const call = requireMethod(nativeApi().notes?.snippets, "Snippet reload");

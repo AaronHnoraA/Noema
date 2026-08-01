@@ -93,6 +93,60 @@ Desktop drag/drop follows the note workflow:
   pipeline instead.
 - Drop images, other files, links, or text to insert them at the drop cursor.
 
+## Server reader
+
+Server mode publishes the existing CM6 renderer directly: Markdown stays the
+source of truth and is not converted to a second HTML tree. The editor is
+forced read-only, and authoring, configuration, Git, task, Jupyter, Copilot,
+clipboard, and local-host APIs are denied by the server even if called outside
+the UI. Search, Wiki navigation, graph, themes, and slides reuse the local
+implementation. Server mode defaults to the Wiki's warm light `claude` palette;
+`appearance.theme` can select any packaged theme.
+
+`runtime.json.reader` controls reader-only interaction chrome without changing
+Markdown parsing, CM6 rendering, or the App's content layout: `showSource`,
+`showGraph`, `showStatus`, `selectionToolbar`, `customContextMenu`, and
+`editingAids` are booleans. Defaults hide Source, status, selection and
+authoring controls while leaving the rendered document identical to the App;
+the graph remains available.
+
+Create the local, ignored configuration directory and edit both files:
+
+```sh
+make server-config-init
+$EDITOR server-config/runtime.json
+$EDITOR server-config/deploy.json
+```
+
+`runtime.json` declares each repository URL as `public` or `private`. Only
+pages in public repositories without `private: true` are projected into the
+browser index, search, graph, backlinks, reports, and asset routes. Private
+repositories may still be mirrored so the internal index can resolve the full
+workspace, but none of their paths or content are returned to clients. Public
+URLs are stable repository-relative references such as
+`/?file=public/math/tensor.md`.
+
+At startup and every `pullIntervalMinutes` (360 / six hours by default), Server mode detects
+the remote HEAD with a `main`, then `master`, fallback and makes each checkout
+an exact remote mirror using fetch, reset, and clean. Local changes inside
+`server-config/repos/` are therefore disposable. Git credentials belong in the
+server's SSH agent or credential helper; embedded credentials in repository
+URLs are rejected.
+
+Run locally or deploy the versioned release over SSH/rsync:
+
+```sh
+make server-start
+make server-build
+make server-deploy
+```
+
+Deployment installs production dependencies, switches the remote `current`
+symlink, links and restarts a systemd user service, verifies `/health`, and
+rolls the symlink back if verification fails. The remote account needs a
+working systemd user manager (and lingering when it must run after logout).
+TLS/reverse-proxy setup such as Nginx is intentionally outside Noema.
+
 Noema owns the assets it consumes under `resources/`: Markdown and TeX
 snippets, Noema/LaTeX templates, KaTeX macros, and the prose word list. The
 Emacs configuration keeps its own `snippets/` and `templates/` roots, linking

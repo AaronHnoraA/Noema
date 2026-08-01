@@ -39,6 +39,8 @@ export interface EditorOptions {
   readSystemClipboardFallback?: () => Promise<EditorClipboardPayload | null>;
   /** When non-nil, the editor renders and navigates normally but rejects edits. */
   readOnly?: boolean;
+  /** Read-only website surface: keep rendered widgets passive instead of revealing authoring source. */
+  passiveReader?: boolean;
 }
 
 export type EditorCommand =

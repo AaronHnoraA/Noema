@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "sshTarget": "noema@example.org",
+  "remoteRoot": "/srv/noema",
+  "serviceName": "noema-server.service",
+  "nodeBin": "/usr/local/bin/node",
+  "npmBin": "/usr/local/bin/npm"
+}

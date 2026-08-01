@@ -152,34 +152,43 @@ export async function checkpointWikiRepository(rootValue, repositoryId, options 
   const repository = await repositoryFromId(root, repositoryId);
   const device = await ensureNoemaDeviceIdentity(options);
   await writeSyncState(root, repository, { phase: "checkpointing" });
-  const branch = await ensureWorkBranch(repository, device);
-  await git(repository, ["add", "-A", "--", "."]);
-  let committed = false;
-  let changedFiles = 0;
-  let identityFallback = false;
-  if (await stagedChanges(repository)) {
-    changedFiles = await stagedFileCount(repository);
-    const at = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
-    const identity = await commitIdentity(repository, device);
-    identityFallback = identity.fallback;
-    await git(repository, [
-      "-c", `user.name=${identity.name}`,
-      "-c", `user.email=${identity.email}`,
-      "commit", "-m", String(options.message || `noema: checkpoint ${changedFiles} file${changedFiles === 1 ? "" : "s"} · ${at}`),
-    ]);
-    committed = true;
+  try {
+    const branch = await ensureWorkBranch(repository, device);
+    await git(repository, ["add", "-A", "--", "."]);
+    let committed = false;
+    let changedFiles = 0;
+    let identityFallback = false;
+    if (await stagedChanges(repository)) {
+      changedFiles = await stagedFileCount(repository);
+      const at = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+      const identity = await commitIdentity(repository, device);
+      identityFallback = identity.fallback;
+      await git(repository, [
+        "-c", `user.name=${identity.name}`,
+        "-c", `user.email=${identity.email}`,
+        "commit", "-m", String(options.message || `noema: checkpoint ${changedFiles} file${changedFiles === 1 ? "" : "s"} · ${at}`),
+      ]);
+      committed = true;
+    }
+    const head = await git(repository, ["rev-parse", "HEAD"], { allowFailure: true });
+    const state = await writeSyncState(root, repository, {
+      phase: "idle",
+      branch,
+      head: head.stdout.trim(),
+      checkpointedAt: new Date().toISOString(),
+      committed,
+      changedFiles,
+      identityFallback,
+    });
+    return { ok: true, type: "wiki-checkpoint", repository, ...state };
+  } catch (error) {
+    await writeSyncState(root, repository, {
+      phase: "error",
+      failedAt: new Date().toISOString(),
+      error: String(error?.message || error),
+    }).catch(() => {});
+    throw error;
   }
-  const head = await git(repository, ["rev-parse", "HEAD"], { allowFailure: true });
-  const state = await writeSyncState(root, repository, {
-    phase: "idle",
-    branch,
-    head: head.stdout.trim(),
-    checkpointedAt: new Date().toISOString(),
-    committed,
-    changedFiles,
-    identityFallback,
-  });
-  return { ok: true, type: "wiki-checkpoint", repository, ...state };
 }
 
 async function remoteUrl(repository) {
@@ -271,8 +280,14 @@ async function runSync(root, repository, options = {}) {
   const device = await ensureNoemaDeviceIdentity(options);
   const identity = await commitIdentity(repository, device);
   const checkpoint = await checkpointWikiRepository(root, repository.id, options);
+  const checkpointState = {
+    checkpointedAt: checkpoint.checkpointedAt,
+    committed: checkpoint.committed,
+    changedFiles: checkpoint.changedFiles,
+  };
   if (!(await remoteUrl(repository))) {
     return await writeSyncState(root, repository, {
+      ...checkpointState,
       phase: "idle",
       branch: checkpoint.branch,
       head: checkpoint.head,
@@ -283,6 +298,7 @@ async function runSync(root, repository, options = {}) {
   const bootstrap = await ensureOriginMain(repository, checkpoint.head);
   if (bootstrap.error) {
     return await writeSyncState(root, repository, {
+      ...checkpointState,
       phase: "error",
       branch: checkpoint.branch,
       error: bootstrap.error,
@@ -292,6 +308,7 @@ async function runSync(root, repository, options = {}) {
   const fetch = await git(repository, ["fetch", "--prune", "origin", "main"], { allowFailure: true });
   if (fetch.error) {
     return await writeSyncState(root, repository, {
+      ...checkpointState,
       phase: "error",
       branch: checkpoint.branch,
       error: String(fetch.stderr || fetch.error.message).trim(),
@@ -300,6 +317,7 @@ async function runSync(root, repository, options = {}) {
   const integration = await prepareIntegrationWorktree(root, repository, device);
   if (integration.conflicted) {
     return await writeSyncState(root, repository, {
+      ...checkpointState,
       phase: "conflicted",
       branch: checkpoint.branch,
       integrationBranch: integration.branch,
@@ -317,6 +335,7 @@ async function runSync(root, repository, options = {}) {
     const conflicts = await conflictFiles(integration.path);
     if (conflicts.length) {
       return await writeSyncState(root, repository, {
+        ...checkpointState,
         phase: "conflicted",
         branch: checkpoint.branch,
         integrationBranch: integration.branch,
@@ -325,6 +344,7 @@ async function runSync(root, repository, options = {}) {
       });
     }
     return await writeSyncState(root, repository, {
+      ...checkpointState,
       phase: "error",
       branch: checkpoint.branch,
       error: String(merge.stderr || merge.error.message).trim(),
@@ -338,6 +358,7 @@ async function runSync(root, repository, options = {}) {
     if (!push.error) {
       await git(repository, ["merge", "--ff-only", integration.branch]);
       return await writeSyncState(root, repository, {
+        ...checkpointState,
         phase: "idle",
         branch: checkpoint.branch,
         integrationBranch: integration.branch,
@@ -348,6 +369,7 @@ async function runSync(root, repository, options = {}) {
     }
     if (attempt === 3) {
       return await writeSyncState(root, repository, {
+        ...checkpointState,
         phase: "error",
         branch: checkpoint.branch,
         error: String(push.stderr || push.error.message).trim(),
@@ -362,6 +384,7 @@ async function runSync(root, repository, options = {}) {
     ).catch((error) => ({ error }));
     if (retryMerge.error) {
       return await writeSyncState(root, repository, {
+        ...checkpointState,
         phase: "conflicted",
         branch: checkpoint.branch,
         integrationBranch: integration.branch,
@@ -375,11 +398,20 @@ async function runSync(root, repository, options = {}) {
 export function syncWikiRepository(rootValue, repositoryId, options = {}) {
   const root = expandNoemaPath(rootValue);
   const key = `${root}\0${repositoryId}`;
-  const previous = repositoryQueues.get(key) || Promise.resolve();
-  const next = previous.catch(() => {}).then(async () => {
+  const active = repositoryQueues.get(key);
+  if (active) return active;
+  const next = (async () => {
     const repository = await repositoryFromId(root, repositoryId);
-    return await runSync(root, repository, options);
-  });
+    try {
+      return await runSync(root, repository, options);
+    } catch (error) {
+      return await writeSyncState(root, repository, {
+        phase: "error",
+        failedAt: new Date().toISOString(),
+        error: String(error?.message || error),
+      });
+    }
+  })();
   const tracked = next.finally(() => {
     if (repositoryQueues.get(key) === tracked) repositoryQueues.delete(key);
   });
@@ -497,8 +529,4 @@ export async function abortWikiConflict(rootValue, repositoryId) {
     await execFileAsync("git", ["-C", worktree, "merge", "--abort"]);
   }
   return await writeSyncState(root, repository, { phase: "idle", conflicts: [], message: "Merge aborted" });
-}
-
-export function defaultWikiSyncIntervalMs() {
-  return 6 * 60 * 60 * 1000;
 }

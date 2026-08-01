@@ -103,11 +103,11 @@ name in `namespace_aliases`, so existing qualified links continue to resolve.
 ## Git collaboration cadence
 
 Noema creates a device work branch and performs the checkpoint/fetch/merge/push
-cycle at startup, on explicit **Sync now**, and approximately every six hours
-with jitter. Editing a note does not create a Git commit. A normal application
-shutdown creates one best-effort checkpoint for dirty repositories. Git author
-configuration is preserved; Noema uses a local fallback identity only when the
-repository has no configured author.
+cycle only when the user explicitly chooses **Commit & sync**. Editing, App
+startup, background idle time, and shutdown never create Git commits or push.
+**Local commit** remains available when the user wants a checkpoint without
+network synchronization. Git author configuration is preserved; Noema uses a
+local fallback identity only when the repository has no configured author.
 
 Conflicts are isolated in a disposable integration worktree and resolved in
 the embedded three-way merge editor. The user's primary working tree stays on

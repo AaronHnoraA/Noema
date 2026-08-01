@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 
 export default defineConfig(({ command }) => ({
   root: "aaronnote",
+  publicDir: resolve("public"),
   base: command === "build" ? "./" : "/",
   server: {
     host: "127.0.0.1",

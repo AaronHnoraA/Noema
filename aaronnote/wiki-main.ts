@@ -5,13 +5,15 @@ import "@mismerge/core/light.css";
 import "@mismerge/core/web";
 
 import { api, type WikiIndex, type WikiNote, type WikiRepository, type WikiSyncState } from "./api-client.ts";
+import { serverMode } from "./host-mode.ts";
 import { installNoemaThemeRuntime } from "./theme-runtime.ts";
 import { splitQualifiedWikiTarget } from "../shared/wiki-link.mjs";
 
 const root = document.querySelector<HTMLElement>("#wiki-app");
 if (!root) throw new Error("Missing #wiki-app");
 
-document.body.dataset.hostMode = window.noemaDesktop ? "desktop" : "browser";
+const serverReaderMode = serverMode();
+document.body.dataset.hostMode = serverReaderMode ? "server" : (window.noemaDesktop ? "desktop" : "browser");
 
 root.innerHTML = `
   <header class="noema-desktop-titlebar noema-wiki-titlebar" data-desktop-titlebar>
@@ -21,7 +23,7 @@ root.innerHTML = `
       <button type="button" aria-label="Forward" title="Forward" data-desktop-command="forward">→</button>
       <button type="button" aria-label="Refresh" title="Refresh" data-desktop-command="refresh">↻</button>
     </div>
-    <strong>Noema Wiki</strong>
+    <strong class="noema-wiki-title-brand"><img src="/Noema.svg" alt="">Noema Wiki</strong>
     <div class="noema-wiki-title-actions">
       <button type="button" class="noema-wiki-panel-toggle" aria-label="Toggle tools" aria-expanded="false" data-toggle-tools>Tools</button>
       <button type="button" aria-label="Editor actions" data-desktop-menu="actions">Editor actions</button>
@@ -30,8 +32,8 @@ root.innerHTML = `
   </header>
   <header class="noema-wiki-site-header">
     <button type="button" class="noema-wiki-site-brand" data-view="home" aria-label="Open the Noema Wiki main page">
-      <span class="noema-wiki-site-mark" aria-hidden="true"><i></i><b>N</b></span>
-      <span><strong>Noema</strong><small>Private knowledge commons</small></span>
+      <img class="noema-wiki-site-mark" src="/Noema.svg" alt="">
+      <span><strong>Noema</strong><small>${serverReaderMode ? "Public knowledge commons" : "Private knowledge commons"}</small></span>
     </button>
     <div class="noema-wiki-search">
       <span aria-hidden="true">⌕</span>
@@ -204,6 +206,8 @@ root.innerHTML = `
   </dialog>
 `;
 
+root.classList.toggle("is-server-reader", serverReaderMode);
+
 const viewEl = root.querySelector<HTMLElement>("[data-wiki-view]")!;
 const titleEl = root.querySelector<HTMLElement>("[data-view-title]")!;
 const kickerEl = root.querySelector<HTMLElement>("[data-view-kicker]")!;
@@ -266,7 +270,7 @@ function setStatus(message: string, error = false): void {
 function openNote(note: Pick<WikiNote, "file">): void {
   const url = new URL("/", location.origin);
   url.searchParams.set("file", note.file);
-  url.searchParams.set("host", window.noemaDesktop ? "desktop" : "browser");
+  if (!serverReaderMode) url.searchParams.set("host", window.noemaDesktop ? "desktop" : "browser");
   window.open(url.toString(), "_blank", "noopener");
 }
 
@@ -313,20 +317,16 @@ function renderHome(): void {
   const intro = document.createElement("section");
   intro.className = "noema-wiki-home-intro";
   const statement = document.createElement("p");
-  statement.append(
-    "Noema turns the Markdown in your ",
-    Object.assign(document.createElement("strong"), { textContent: "public and private Git repositories" }),
-    " into a durable, shared Wiki. Files stay portable; links, backlinks, tags, and dependencies become one navigable knowledge graph.",
-  );
+  statement.append(serverReaderMode
+    ? "Read the public Markdown repositories published through Noema. Links, backlinks, tags, and dependencies remain one navigable knowledge graph."
+    : "Noema turns the Markdown in your public and private Git repositories into a durable, shared Wiki. Files stay portable; links, backlinks, tags, and dependencies become one navigable knowledge graph.");
   const facts = document.createElement("div");
   const publicPages = index.notes.filter((note) => note.partition === "public").length;
   const privatePages = index.notes.length - publicPages;
-  for (const [value, label] of [
-    [index.notes.length, "pages"],
-    [publicPages, "public"],
-    [privatePages, "private"],
-    [index.repositories.length, "repositories"],
-  ] as Array<[number, string]>) {
+  const homeFacts: Array<[number, string]> = serverReaderMode
+    ? [[publicPages, "public pages"], [index.repositories.length, "repositories"]]
+    : [[index.notes.length, "pages"], [publicPages, "public"], [privatePages, "private"], [index.repositories.length, "repositories"]];
+  for (const [value, label] of homeFacts) {
     const fact = document.createElement("span");
     const number = document.createElement("strong");
     number.textContent = String(value);
@@ -357,7 +357,10 @@ function renderHome(): void {
     row.addEventListener("click", () => openNote(note));
     recentList.append(row);
   }
-  if (!recentNotes.length) recentList.append(emptyState("Your Wiki is ready", "Create the first page to begin the knowledge graph."));
+  if (!recentNotes.length) recentList.append(emptyState(
+    serverReaderMode ? "No public pages" : "Your Wiki is ready",
+    serverReaderMode ? "No public repository pages are available yet." : "Create the first page to begin the knowledge graph.",
+  ));
   recent.append(recentHead, recentList);
 
   const browse = document.createElement("section");
@@ -385,12 +388,12 @@ function renderHome(): void {
   const portals = document.createElement("section");
   portals.className = "noema-wiki-home-portals";
   const portalTitle = document.createElement("h2");
-  portalTitle.textContent = "Explore and maintain Noema";
+  portalTitle.textContent = serverReaderMode ? "Explore Noema" : "Explore and maintain Noema";
   const portalGrid = document.createElement("div");
   portalGrid.append(
     homeAction("Browse knowledge", "folders", "Move through the physical repository and folder hierarchy."),
     homeAction("Follow connections", "dependencies", "Inspect links, backlinks, and unresolved Wiki references."),
-    homeAction("Maintain the Wiki", "reports", "Review duplicates, diagnostics, indexing, and repository health."),
+    homeAction(serverReaderMode ? "Review the Wiki" : "Maintain the Wiki", "reports", "Review links, diagnostics, and indexing health."),
   );
   portals.append(portalTitle, portalGrid);
   viewEl.append(intro, columns, portals);
@@ -423,7 +426,8 @@ function noteCard(note: WikiNote): HTMLElement {
     event.stopPropagation();
     void managePage(index?.notes.find((item) => item.id === note.id) || note);
   });
-  card.append(partition, copy, actions);
+  card.append(partition, copy);
+  if (!serverReaderMode) card.append(actions);
   card.addEventListener("click", () => openNote(note));
   card.addEventListener("keydown", (event) => {
     if (event.key === "Enter") openNote(note);
@@ -633,7 +637,7 @@ function renderNamespaces(): void {
       }
     });
     const actions = document.createElement("div");
-    actions.append(create, rename);
+    if (!serverReaderMode) actions.append(create, rename);
     header.append(copy, actions);
     const pages = document.createElement("div");
     for (const note of notes.sort((a, b) => a.title.localeCompare(b.title)).slice(0, 12)) {
@@ -696,7 +700,8 @@ async function renderTags(): Promise<void> {
         await api.wiki.updateTag({ action: "delete", from: tag.name });
         await load(true);
       });
-      actions.append(filter, rename, remove);
+      actions.append(filter);
+      if (!serverReaderMode) actions.append(rename, remove);
       row.append(copy, actions);
       list.append(row);
     }
@@ -770,9 +775,12 @@ function renderWanted(): void {
     const detail = document.createElement("p");
     detail.textContent = `${item.references.length} unresolved reference${item.references.length === 1 ? "" : "s"}`;
     copy.append(heading, detail);
-    const create = button("Open workbench", "is-primary");
-    create.addEventListener("click", () => showNewPage(qualifiedTitle));
-    row.append(copy, create);
+    row.append(copy);
+    if (!serverReaderMode) {
+      const create = button("Open workbench", "is-primary");
+      create.addEventListener("click", () => showNewPage(qualifiedTitle));
+      row.append(create);
+    }
     list.append(row);
   }
   viewEl.append(list);
@@ -819,8 +827,8 @@ async function repositoryCard(repository: WikiRepository): Promise<HTMLElement> 
   status.textContent = "Loading sync state…";
   const actions = document.createElement("div");
   const statusButton = button("Status");
-  const checkpoint = button("Checkpoint");
-  const sync = button("Sync now", "is-primary");
+  const checkpoint = button("Local commit");
+  const sync = button("Commit & sync", "is-primary");
   const advanced = button("Advanced Git");
   const adopt = repository.identityStatus === "managed" ? null : button("Establish shared identity");
   statusButton.addEventListener("click", async () => {
@@ -833,7 +841,7 @@ async function repositoryCard(repository: WikiRepository): Promise<HTMLElement> 
     }
   });
   checkpoint.addEventListener("click", async () => {
-    const message = window.prompt("Checkpoint message (optional)", "");
+    const message = window.prompt("Local commit message (optional)", "");
     if (message == null) return;
     checkpoint.disabled = true;
     try {
@@ -847,7 +855,7 @@ async function repositoryCard(repository: WikiRepository): Promise<HTMLElement> 
   });
   sync.addEventListener("click", async () => {
     sync.disabled = true;
-    status.textContent = "Checkpointing, fetching, merging, and pushing…";
+    status.textContent = "Committing local changes, fetching, merging, and pushing…";
     try {
       const result = await api.wiki.sync(repository.id);
       renderSyncState(result, status, actions, repository);
@@ -901,7 +909,12 @@ function renderSyncState(
 ): void {
   status.textContent = [
     `${state.phase || "idle"} · ${state.branch || "branch pending"}`,
-    state.localOnly ? "Local checkpoint only (no origin remote)" : "",
+    state.checkpointedAt
+      ? state.committed
+        ? `Committed ${state.changedFiles || 0} changed file${state.changedFiles === 1 ? "" : "s"}`
+        : "No local changes to commit"
+      : "",
+    state.localOnly ? "Local commit only (no origin remote)" : "",
     state.lastSyncedAt ? `Last synced ${state.lastSyncedAt}` : "",
     state.message || "",
     state.error || "",
@@ -1002,8 +1015,8 @@ function render(): void {
   root.dataset.wikiView = activeView;
   root.querySelector<HTMLElement>("[data-wiki-layout]")!.textContent = `${index.layout} layout`;
   root.querySelector<HTMLElement>("[data-wiki-root]")!.textContent = activeView === "home"
-    ? "A local-first Wiki built from your physical files and shared Git history."
-    : `${index.root} · ${index.dbFile}`;
+    ? (serverReaderMode ? "A read-only Wiki published directly from Markdown repositories." : "A local-first Wiki built from your physical files and shared Git history.")
+    : (serverReaderMode ? "Public, read-only repository view" : `${index.root} · ${index.dbFile}`);
   root.querySelector<HTMLElement>("[data-count-pages]")!.textContent = String(index.notes.length);
   root.querySelector<HTMLElement>("[data-count-folders]")!.textContent = String(index.directories.length);
   root.querySelector<HTMLElement>("[data-count-namespaces]")!.textContent = String(new Set(index.notes.map((note) => note.qualifiedNamespace || `${note.partition}/${note.namespace || note.repository}`)).size);
@@ -1024,7 +1037,7 @@ function render(): void {
     folders: "Physical folders",
     namespaces: "Namespaces",
     files: "All files",
-    tags: "Tag management",
+    tags: serverReaderMode ? "Tags" : "Tag management",
     dependencies: "Dependencies",
     sync: "Local and Git sync",
     wanted: "Wanted pages",
@@ -1032,7 +1045,7 @@ function render(): void {
     repositories: "Repositories",
   };
   titleEl.textContent = labels[activeView] || "Wiki";
-  kickerEl.textContent = activeView === "home" ? "Noema Wiki" : "Workspace knowledge";
+  kickerEl.textContent = activeView === "home" ? "Noema Wiki" : (serverReaderMode ? "Public knowledge" : "Workspace knowledge");
   viewEl.replaceChildren();
   if (activeView === "home") renderHome();
   else if (activeView === "wanted") renderWanted();
@@ -1093,6 +1106,7 @@ async function load(refresh = false, options: { silent?: boolean } = {}): Promis
 }
 
 function showNewPage(title = "", requestedNamespace = ""): void {
+  if (serverReaderMode) return;
   if (!index?.repositories.length) {
     activeView = "repositories";
     render();
@@ -1382,6 +1396,7 @@ window.addEventListener("keydown", (event) => {
     searchEl.focus();
   }
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") {
+    if (serverReaderMode) return;
     event.preventDefault();
     showNewPage();
   }
@@ -1488,7 +1503,7 @@ const removeThemeRuntime = installNoemaThemeRuntime();
 window.addEventListener("beforeunload", removeThemeRuntime, { once: true });
 const initialQuery = new URLSearchParams(location.search);
 searchEl.value = initialQuery.get("q") || "";
-if (initialQuery.get("new") === "1") {
+if (!serverReaderMode && initialQuery.get("new") === "1") {
   void load().then(() => showNewPage(initialQuery.get("title") || ""));
 } else {
   void load();

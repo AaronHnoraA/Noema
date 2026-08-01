@@ -504,9 +504,7 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
   };
 
   const onSourceWidgetMouseDown = (event: MouseEvent): void => {
-    if (event.button !== 0 || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) {
-      return;
-    }
+    if (event.button !== 0) return;
     const target = event.target;
     if (
       target instanceof Element
@@ -525,6 +523,17 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
     const openSource = source.dataset.cmOpenSource === "true";
     const mathBlock = source.dataset.cmMathBlock === "true";
     if (!openSource && !mathBlock) return;
+    if (options.passiveReader) {
+      // CM6 otherwise maps the pointer into the hidden source range, which
+      // replaces the visual widget with authoring source even in read-only
+      // mode. Reader mode keeps the same widget rendering but makes that
+      // source-reveal interaction inert.
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      return;
+    }
+    if (event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return;
     const from = Number(source.dataset.cmSourceFrom);
     const to = Number(source.dataset.cmSourceTo);
     if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to) return;

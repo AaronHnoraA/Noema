@@ -356,7 +356,7 @@ function titleCandidates(notes, byTitle, targetValue, source = null) {
   return candidates;
 }
 
-function resolveWikiRelationships(notes) {
+export function resolveWikiRelationships(notes) {
   const byTitle = new Map();
   const byId = new Map();
   const duplicateIds = [];

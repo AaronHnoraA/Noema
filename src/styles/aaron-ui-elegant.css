@@ -25,10 +25,14 @@ button {
     background-color var(--aaron-motion-fast) ease;
 }
 
-.noema-desktop-titlebar {
+.noema-desktop-titlebar,
+.noema-server-header {
   gap: var(--aaron-space-4);
-  padding: 0 var(--aaron-space-5) 0 82px;
   box-shadow: none;
+}
+
+.noema-desktop-titlebar {
+  padding: 0 var(--aaron-space-5) 0 82px;
 }
 
 .noema-desktop-titlebar-controls {
