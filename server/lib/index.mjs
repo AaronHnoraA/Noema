@@ -43,8 +43,6 @@ export {
   clearBibliographyCache,
   readNoteCodeRegion,
   syncRoamDb,
-  queueRoamDbSync,
-  saveSamplesRoamDbSync,
   runtimeDebugSnapshot,
   maybeScheduleWeeklyFullSync,
   fileHistory,

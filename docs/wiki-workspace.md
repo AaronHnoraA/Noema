@@ -41,10 +41,26 @@ or initialized automatically.
 `wiki.db` is a disposable, local SQLite/WAL projection of Git-owned Markdown.
 It stores page identity, titles, aliases, tags, links, backlinks, dependencies,
 diagnostics, and Unicode/trigram full-text indexes. It is never committed. The
-legacy `roam.db` is neither read nor written in Wiki layout and can be removed.
+legacy `roam.db` and `roam-db.json` are neither read nor written in either
+layout and can be removed. Both the desktop and Emacs adapters use the same
+`wiki.db`; Emacs does not maintain a second database.
 Attachments remain physical files and only their metadata is inventoried; their
 contents are not copied into SQLite. Typst files remain editable in Noema but
 are ordinary files rather than Wiki pages.
+
+## Index maintenance
+
+The first index, a schema change, repository topology or identity changes, an
+unreachable Git HEAD watermark, and the weekly self-heal use an atomic full
+rebuild. Ordinary file changes are coalesced and applied incrementally. Link
+resolution is recomputed from the complete page snapshot, so adding or moving a
+target also repairs links in otherwise unchanged source notes.
+
+The database records each repository identity, last indexed HEAD, scan time,
+last full and incremental runs, and the reason for the selected maintenance
+mode. No index operation creates commits, tags, branches, or other Git refs.
+Git history changes only through explicit **Local commit** or **Commit & sync**
+actions.
 
 ## Links and identity
 

@@ -190,36 +190,6 @@ export async function changedRoamFilesSince(noteRoot, commit) {
   return [...paths];
 }
 
-// Stages all changes in noteRoot and commits if there are staged changes.
-// Scoped to noteRoot via "." pathspec — never touches unrelated staged changes.
-// .gitignore handles exclusions (roam.db, .aaronnote-sync-state.json, etc.).
-// Returns the new HEAD sha (or current HEAD if nothing was committed).
-export async function commitRoam(noteRoot, message) {
-  try {
-    await git(noteRoot, ["add", "--", "."]);
-  } catch {
-    // not fatal if nothing to stage
-  }
-
-  // Check staged changes scoped to noteRoot ("." = cwd = noteRoot with -C)
-  try {
-    await git(noteRoot, ["diff", "--cached", "--quiet", "--", "."]);
-    // exit 0 → nothing staged → nothing to commit
-    return headSha(noteRoot);
-  } catch {
-    // Non-zero exit = staged changes exist
-    try {
-      // Commit scoped to noteRoot so unrelated staged changes in parent repo are left alone
-      await git(noteRoot, ["commit", "-m", message, "--", "."]);
-    } catch (err) {
-      // Non-fatal: git user not configured, nothing to commit after scope filter, etc.
-      console.warn("[roam-git] commit failed:", err?.message);
-    }
-  }
-
-  return headSha(noteRoot);
-}
-
 // Returns { branch, ahead, behind, uncommitted, remoteUrl } for the roam repo.
 export async function roamRepoStatus(noteRoot) {
   let branch = "", ahead = 0, behind = 0, uncommitted = false, remoteUrl = "";

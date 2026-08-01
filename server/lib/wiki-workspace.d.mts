@@ -11,6 +11,7 @@ export type WikiRepository = {
   partition: WikiPartition;
   path: string;
   public?: boolean;
+  headSha?: string;
 };
 export type WikiDiagnostic = {
   code: string;
@@ -89,6 +90,16 @@ export type WikiIndex = {
     duplicates: Array<Record<string, unknown>>;
     duplicateIds?: Array<Record<string, unknown>>;
   };
+  maintenance?: WikiIndexMaintenance;
+};
+
+export type WikiIndexMaintenance = {
+  ok: boolean;
+  dbFile: string;
+  mode: "incremental" | "full";
+  reason: string;
+  changedFiles: string[];
+  changes: { repositories: number; files: number; pages: number; relationships: number; removed: number };
 };
 
 export function expandNoemaPath(value?: string, fallback?: string): string;
@@ -96,7 +107,12 @@ export function wikiLayout(value?: string): WikiLayout;
 export function discoverWikiRepositories(root: string): Promise<{
   root: string; layout: "wiki"; repositories: WikiRepository[]; diagnostics: WikiDiagnostic[];
 }>;
-export function buildWikiIndex(root: string, options?: { layout?: WikiLayout }): Promise<WikiIndex>;
+export function buildWikiIndex(root: string, options?: {
+  layout?: WikiLayout;
+  mode?: "auto" | "incremental" | "full";
+  force?: boolean;
+  changedFiles?: string[];
+}): Promise<WikiIndex>;
 export function resolveWikiLink(index: WikiIndex, target: string, options?: { sourceFile?: string }): {
   type: "wiki-link";
   target: string;
@@ -107,7 +123,26 @@ export function resolveWikiLink(index: WikiIndex, target: string, options?: { so
   }>;
 };
 export function wikiDatabaseFile(root: string): string;
-export function persistWikiIndex(index: WikiIndex): Promise<{ ok: boolean; dbFile: string; message?: string }>;
+export function persistWikiIndex(index: WikiIndex, options?: {
+  mode?: "auto" | "incremental" | "full";
+  force?: boolean;
+  changedFiles?: string[];
+}): Promise<WikiIndexMaintenance>;
+export function wikiIndexStatus(root: string): {
+  ok: boolean;
+  dbFile: string;
+  schemaVersion: number;
+  generation: string;
+  updatedAt?: string;
+  lastMode?: string;
+  lastReason?: string;
+  lastIncrementalAt?: string;
+  lastFullAt?: string;
+  lastError?: string;
+  changedFiles?: string[];
+  repositories: Array<{ repositoryId: string; repositoryUid: string; headSha: string; scannedAt: string }>;
+  message?: string;
+};
 export function searchWikiDatabase(root: string, body?: {
   query?: string;
   q?: string;

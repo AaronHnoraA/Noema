@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
+import { afterEach, describe, expect, test } from "@voidzero-dev/vite-plus-test";
 import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 // @ts-ignore The server is a Node ESM module outside the TS app graph.
 import { configure } from "../server/lib/state.mjs";
 // @ts-ignore The server is a Node ESM module outside the TS app graph.
-import { getTodos, notesIndexPayload, queueRoamDbSync, readNote, roamNotesIndexPayload, runtimeDebugSnapshot, saveSamplesRoamDbSync } from "../server/lib/index.mjs";
+import { getTodos, notesIndexPayload, readNote, roamNotesIndexPayload } from "../server/lib/index.mjs";
 // @ts-ignore The server is a Node ESM module outside the TS app graph.
 import { saveNote } from "../server/lib/save.mjs";
 // @ts-ignore The server is a Node ESM module outside the TS app graph.
@@ -40,13 +40,6 @@ async function setupRoot() {
 }
 
 describe("server save API", () => {
-  test("save DB-sync sampling uses the calibrated one-in-50000 boundary", () => {
-    expect(saveSamplesRoamDbSync(0)).toBe(true);
-    expect(saveSamplesRoamDbSync((1 / 50_000) - Number.EPSILON)).toBe(true);
-    expect(saveSamplesRoamDbSync(1 / 50_000)).toBe(false);
-    expect(saveSamplesRoamDbSync(1)).toBe(false);
-  });
-
   test("deferred save returns the current note summary without a full notes list", async () => {
     const { notes } = await setupRoot();
     const file = join(notes, "a.md");
@@ -190,7 +183,7 @@ describe("server save API", () => {
       .toEqual([["done", "second"]]);
   });
 
-  test("a deferred save that misses the sample only queues roam db work", async () => {
+  test("a deferred save never creates a Git commit", async () => {
     const { root, notes } = await setupRoot();
     await git(root, ["init"]);
     await git(root, ["config", "user.email", "test@example.com"]);
@@ -201,27 +194,20 @@ describe("server save API", () => {
     await git(root, ["commit", "-m", "initial"]);
     const base = await stat(file);
 
-    const random = vi.spyOn(Math, "random").mockReturnValue(0.5);
-    try {
-      const saved = await saveNote({
-        file,
-        content: "# A\n\nNo auto commit\n",
-        clientId: "test",
-        seq: 1,
-        baseMtimeMs: base.mtimeMs,
-        refresh: "deferred",
-      }) as { ok?: boolean };
-      expect(saved.ok).toBe(true);
-
-      await new Promise((resolve) => setTimeout(resolve, 2100));
-      expect(await git(root, ["rev-list", "--count", "HEAD"])).toBe("1");
-      expect(await git(root, ["status", "--porcelain", "--", "."])).toContain("roam/a.md");
-    } finally {
-      random.mockRestore();
-    }
+    const saved = await saveNote({
+      file,
+      content: "# A\n\nNo auto commit\n",
+      clientId: "test",
+      seq: 1,
+      baseMtimeMs: base.mtimeMs,
+      refresh: "deferred",
+    }) as { ok?: boolean };
+    expect(saved.ok).toBe(true);
+    expect(await git(root, ["rev-list", "--count", "HEAD"])).toBe("1");
+    expect(await git(root, ["status", "--porcelain", "--", "."])).toContain("roam/a.md");
   });
 
-  test("creating a roam node queues db sync without committing immediately", async () => {
+  test("creating a legacy node does not commit it", async () => {
     const { root, notes } = await setupRoot();
     await git(root, ["init"]);
     await git(root, ["config", "user.email", "test@example.com"]);
@@ -288,37 +274,6 @@ describe("server save API", () => {
       expect(content.match(/#\+begin summary/g)).toHaveLength(1);
       expect(content).toContain("#+begin summary\n\n#+end summary");
     }
-  });
-
-  test("runtime debug reports deduplicated queued roam sync files", async () => {
-    const { notes } = await setupRoot();
-    const file = join(notes, "a.md");
-    await writeFile(file, "# A\n", "utf8");
-
-    queueRoamDbSync(null, [file, file, join(notes, ".", "a.md")]);
-    const debug = runtimeDebugSnapshot() as {
-      roamDbSync?: { queued?: boolean; changedFiles?: number; inFlight?: boolean };
-      paths?: { stateRoot?: string; tmpRoot?: string };
-      saveWrites?: { queuedFiles?: number };
-    };
-
-    expect(debug.roamDbSync?.queued).toBe(true);
-    expect(debug.roamDbSync?.changedFiles).toBe(1);
-    expect(debug.roamDbSync?.inFlight).toBe(false);
-    expect(debug.paths?.stateRoot).toBeTruthy();
-    expect(debug.paths?.tmpRoot).toBeTruthy();
-    expect(debug.saveWrites?.queuedFiles).toBe(0);
-  });
-
-  test("configure clears stale queued roam sync state", async () => {
-    const { notes } = await setupRoot();
-    const file = join(notes, "a.md");
-    queueRoamDbSync(null, [file]);
-    expect((runtimeDebugSnapshot() as { roamDbSync?: { queued?: boolean } }).roamDbSync?.queued).toBe(true);
-
-    await setupRoot();
-    expect((runtimeDebugSnapshot() as { roamDbSync?: { queued?: boolean; changedFiles?: number } }).roamDbSync)
-      .toMatchObject({ queued: false, changedFiles: 0 });
   });
 
 });

@@ -6,7 +6,8 @@ import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
-import { changedRoamFilesSince, commitRoam, fileHistory, restoreFileFromCommit, discardFileChanges, roamRepoStatus, roamRepoChanges, diffRoamFile, diffRoamCommit, pullRoam, pushRoam, repoHistory, headSha } from "./roam-git.mjs";
+import { changedRoamFilesSince, fileHistory, restoreFileFromCommit, discardFileChanges, roamRepoStatus, roamRepoChanges, diffRoamFile, diffRoamCommit, pullRoam, pushRoam, repoHistory, headSha } from "./roam-git.mjs";
+import { buildWikiIndex, wikiIndexStatus } from "./wiki-workspace.mjs";
 import { configureTmpRoot, aaronnoteTmpRoot, runtimeMkdtemp, runtimeTmpFile } from "./tmp.mjs";
 import { applyLatexTemplate, bibliographyReferencesToLatex, defaultLatexOutputPath, escapeLatexText, escapeLatexTitle, escapeLatexUrl, latexMacrosPackage, readLatexTemplate, writeLatexExport } from "./latex-export.mjs";
 import { aaronnoteMarkdownToLatexPandoc, extractAaronnoteMetadata } from "./latex-export-pandoc.mjs";
@@ -155,10 +156,6 @@ let templateCache = { key: "", scannedAt: 0, templates: [] };
 let copilotClient = null;
 let copilotLog = [];
 let copilotLogRecording = false;
-let roamSyncTimer = null;
-let roamSyncInFlight = null;
-let queuedRoamSyncNotes = null;
-let queuedRoamSyncChangedFiles = new Set();
 let agendaPersistentCache = null;
 let agendaPersistentCacheKey = "";
 let agendaPersistentCacheDirty = false;
@@ -172,14 +169,8 @@ const pathSuggestionDirListingCache = new Map();
 const contentRootCache = new Map();
 const AGENDA_CACHE_SCHEMA = 1;
 const AGENDA_PAYLOAD_CACHE_LIMIT = 32;
-const CURRENT_DB_SCHEMA = 1;
 const ASSET_CLEANUP_SCHEMA = 2;
 const ROAM_FULL_SYNC_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
-// Autosave is debounced at 650 ms in the client.  Even at the impossible
-// ceiling of one successful write every 650 ms for 24 hours, this sample rate
-// yields 2.66 automatic drains/day in expectation.  Real writing produces far
-// fewer saves.  A miss only leaves the already-deduplicated Set queue intact.
-const ROAM_SAVE_SYNC_SAMPLE_RATE = 1 / 50_000;
 const scanConcurrency = Math.max(1, Math.min(64, Number(process.env.AARONNOTE_SCAN_CONCURRENCY) || 16));
 const saveRequestVersions = new Map();
 const saveWriteQueues = new Map();
@@ -3402,7 +3393,6 @@ async function updateTodoStatusInFile(file, body) {
 
   await atomicWriteFile(file, content.slice(0, from) + nextSource + content.slice(to), "utf8");
   markNotesDirty(file);
-  scheduleRoamDbSync(null, file);
   let mtimeMs = 0;
   try { mtimeMs = (await stat(file)).mtimeMs; } catch {}
   return { type: "todo-updated", ok: true, file, status: status || normalizeTodoStatus(body.status || ""), changed: true, from, to, source: oldSource, nextSource, mtimeMs };
@@ -4580,7 +4570,6 @@ export async function createTodo(body = {}) {
     const index = base.length + prefix.length;
     await atomicWriteFile(file, nextContent, "utf8");
     markNotesDirty(file);
-    scheduleRoamDbSync(null, file);
     let mtimeMs = 0;
     try { mtimeMs = (await stat(file)).mtimeMs; } catch {}
     const meta = noteMetadata(nextContent);
@@ -4676,7 +4665,6 @@ async function patchTodoInFile(file, body) {
 
   await atomicWriteFile(file, content.slice(0, from) + next + content.slice(to), "utf8");
   markNotesDirty(file);
-  scheduleRoamDbSync(null, file);
   let mtimeMs = 0;
   try { mtimeMs = (await stat(file)).mtimeMs; } catch {}
   return { type: "todo-patched", ok: true, file, changed: true, from, to, source: oldSource, nextSource: next, mtimeMs };
@@ -4755,7 +4743,6 @@ async function closeClockInFileUnlocked(file, locator, toIso) {
   if (patched === node.raw) return false;
   await atomicWriteFile(file, content.slice(0, node.span.from) + patched + content.slice(node.span.to), "utf8");
   markNotesDirty(file);
-  scheduleRoamDbSync(null, file);
   return true;
 }
 
@@ -4825,7 +4812,6 @@ async function clockInUnlocked(body = {}) {
 
     await atomicWriteFile(file, content.slice(0, insertAt) + clockLine + content.slice(insertAt), "utf8");
     markNotesDirty(file);
-    scheduleRoamDbSync(null, file);
     return { type: "clock-in", ok: true, file, from: insertAt, to: insertAt + clockLine.length, source: clockLine, todoId: idResult.id };
   });
 }
@@ -7131,300 +7117,23 @@ async function noteSummaryForFile(file, content = null) {
   return note;
 }
 
-function roamDbFile() {
-  return join(noteRoot, "roam.db");
-}
-
-function roamSyncStateFile() {
-  return join(stateRoot, "sync", "state.json");
-}
-
-async function readSyncState() {
-  try {
-    const raw = await readFile(roamSyncStateFile(), "utf8");
-    return JSON.parse(raw);
-  } catch {
-    return {};
-  }
-}
-
-async function writeSyncState(patch) {
-  let current = {};
-  try {
-    const raw = await readFile(roamSyncStateFile(), "utf8");
-    current = JSON.parse(raw);
-  } catch {}
-  const next = { ...current, ...patch };
-  delete next.todoDbSchemaVersion;
-  await atomicWriteFile(roamSyncStateFile(), JSON.stringify(next, null, 2), "utf8");
-}
-
-function sqlString(value) {
-  return `'${String(value ?? "").replace(/'/g, "''")}'`;
-}
-
-function sqlNumber(value) {
-  return Number.isFinite(value) ? String(value) : "0";
-}
-
-function sqlNullableString(value) {
-  return value === undefined || value === null || value === "" ? "NULL" : sqlString(value);
-}
-
-function notePosition(content) {
-  const range = metaBlockRange(content);
-  if (!range) return 1;
-  return range.to + 1;
-}
-
-function roamDbSchemaStatements() {
-  return [
-    `CREATE TABLE IF NOT EXISTS files (
-      path text primary key,
-      mtime real not null,
-      title text,
-      node_id text,
-      size integer not null default 0
-    );`,
-    `CREATE TABLE IF NOT EXISTS nodes (
-      id text primary key,
-      file text not null,
-      title text not null,
-      date text,
-      position integer not null,
-      summary text not null default ''
-    );`,
-    "CREATE TABLE IF NOT EXISTS tags (node_id text not null, tag text not null);",
-    "CREATE TABLE IF NOT EXISTS aliases (node_id text not null, alias text not null);",
-    "CREATE TABLE IF NOT EXISTS links (source_id text not null, target_id text not null, file text not null, line integer not null, label text);",
-    "CREATE INDEX IF NOT EXISTS note_nodes_file_idx on nodes(file);",
-    "CREATE INDEX IF NOT EXISTS note_tags_node_idx on tags(node_id);",
-    "CREATE INDEX IF NOT EXISTS note_aliases_node_idx on aliases(node_id);",
-    "CREATE INDEX IF NOT EXISTS note_links_target_idx on links(target_id);",
-    "CREATE INDEX IF NOT EXISTS note_links_source_idx on links(source_id);",
-  ];
-}
-
-async function appendRoamNodeStatements(statements, note, roamIds, refIndex, options = {}) {
-  let info = null;
-  let content = "";
-  try {
-    info = await stat(note.file);
-    content = await readFile(note.file, "utf8");
-  } catch {
-    return;
-  }
-  if (options.includeNode !== false) {
-    statements.push(
-      `INSERT OR REPLACE INTO files(path, mtime, title, node_id, size) VALUES (${[
-        sqlString(note.file),
-        sqlNumber(info.mtimeMs / 1000),
-        sqlString(note.title || ""),
-        sqlString(note.id || ""),
-        sqlNumber(info.size),
-      ].join(", ")});`,
-      `INSERT OR REPLACE INTO nodes(id, file, title, date, position, summary) VALUES (${[
-        sqlString(note.id || ""),
-        sqlString(note.file),
-        sqlString(note.title || "Untitled"),
-        sqlString(note.date || ""),
-        sqlNumber(notePosition(content)),
-        sqlString(note.summary || ""),
-      ].join(", ")});`,
-    );
-    for (const tag of note.tags || []) {
-      statements.push(`INSERT INTO tags(node_id, tag) VALUES (${sqlString(note.id)}, ${sqlString(tag)});`);
-    }
-    for (const alias of note.aliases || []) {
-      statements.push(`INSERT INTO aliases(node_id, alias) VALUES (${sqlString(note.id)}, ${sqlString(alias)});`);
-    }
-  }
-  for (const ref of [...new Set(roamDbRefsFromContent(content))]) {
-    const target = refIndex.get(canonicalServerNoteRef(ref));
-    const targetId = target?.id || "";
-    if (!roamIds.has(targetId) || targetId === note.id) continue;
-    statements.push(`INSERT INTO links(source_id, target_id, file, line, label) VALUES (${[
-      sqlString(note.id),
-      sqlString(targetId),
-      sqlString(note.file),
-      "1",
-      sqlString(""),
-    ].join(", ")});`);
-  }
-}
-
-async function incrementalRoamDbStatements(scanned, changedFiles) {
-  const files = [...new Set((changedFiles || []).map((file) => resolveUserPath(file)).filter((file) => inside(file, noteRoot)))];
-  if (files.length === 0) return null;
-  const fileKeySet = new Set(files.map(canonicalExistingPath));
-  const noteFileChanged = (note) => Boolean(note.file && fileKeySet.has(canonicalExistingPath(note.file)));
-  const changedNotes = scanned.filter(noteFileChanged);
-  const changedIds = [...new Set(changedNotes.map((note) => note.id).filter(Boolean))];
-  if (changedIds.length === 0) return null;
-  const roamNotes = scanned.filter((note) => note.roam && note.file);
-  const roamIds = new Set(roamNotes.map((note) => note.id));
-  const refIndex = serverNoteReferenceIndex(roamNotes);
-  const affectedSources = roamNotes.filter((note) =>
-    noteFileChanged(note) || (note.refs || []).some((ref) => changedIds.includes(ref)));
-  const linkRefreshFiles = [...new Set([...files, ...affectedSources.map((note) => note.file).filter(Boolean)])];
-  const changedDbFiles = [...new Set([...files, ...changedNotes.map((note) => note.file).filter(Boolean)])];
-  const statements = [
-    "PRAGMA foreign_keys = OFF;",
-    "BEGIN;",
-    ...roamDbSchemaStatements(),
-    `DELETE FROM links WHERE file IN (${linkRefreshFiles.map(sqlString).join(", ")}) OR source_id IN (${changedIds.map(sqlString).join(", ")}) OR target_id IN (${changedIds.map(sqlString).join(", ")});`,
-    `DELETE FROM tags WHERE node_id IN (${changedIds.map(sqlString).join(", ")});`,
-    `DELETE FROM aliases WHERE node_id IN (${changedIds.map(sqlString).join(", ")});`,
-    `DELETE FROM nodes WHERE id IN (${changedIds.map(sqlString).join(", ")}) OR file IN (${changedDbFiles.map(sqlString).join(", ")});`,
-    `DELETE FROM files WHERE path IN (${changedDbFiles.map(sqlString).join(", ")});`,
-  ];
-  for (const note of changedNotes.filter((note) => note.roam && note.file)) {
-    await appendRoamNodeStatements(statements, note, roamIds, refIndex, { includeNode: true });
-  }
-  for (const note of affectedSources.filter((note) => !noteFileChanged(note))) {
-    await appendRoamNodeStatements(statements, note, roamIds, refIndex, { includeNode: false });
-  }
-  statements.push("COMMIT;");
-  return statements;
-}
-
-async function runFullRoamSync(scanned, dbFile) {
-  const roamNotes = scanned.filter((note) => note.roam && note.file);
-  const roamIds = new Set(roamNotes.map((note) => note.id));
-  const refIndex = serverNoteReferenceIndex(roamNotes);
-  const tmpDb = await runtimeTmpFile("db", dbFile, `.tmp-${process.pid}-${Date.now()}-${++atomicWriteCounter}`);
-  const statements = [
-    "PRAGMA foreign_keys = OFF;",
-    "BEGIN;",
-    ...roamDbSchemaStatements(),
-    "DELETE FROM links;",
-    "DELETE FROM tags;",
-    "DELETE FROM aliases;",
-    "DELETE FROM nodes;",
-    "DELETE FROM files;",
-  ];
-  for (const note of roamNotes) {
-    await appendRoamNodeStatements(statements, note, roamIds, refIndex, { includeNode: true });
-  }
-  statements.push("COMMIT;");
-  await mkdir(dirname(dbFile), { recursive: true });
-  try {
-    await execFileAsync("sqlite3", [tmpDb, statements.join("\n")], {
-      cwd: noteRoot,
-      maxBuffer: 1024 * 1024 * 8,
-    });
-    try {
-      await rename(tmpDb, dbFile);
-    } catch (err) {
-      if (err?.code !== "EXDEV") throw err;
-      await copyFile(tmpDb, dbFile);
-      await rm(tmpDb, { force: true }).catch(() => {});
-    }
-  } finally {
-    await rm(tmpDb, { force: true }).catch(() => {});
-  }
-}
-
-async function runIncrementalRoamSync(scanned, dbFile, changedFiles) {
-  const statements = await incrementalRoamDbStatements(scanned, changedFiles);
-  if (!statements) return false;
-  await execFileAsync("sqlite3", [dbFile, statements.join("\n")], {
-    cwd: noteRoot,
-    maxBuffer: 1024 * 1024 * 8,
-  });
-  return true;
-}
-
-// options.mode: "auto" (default) | "full"
-// options.changedFiles: string[] — caller-supplied explicit changed file list (skip git detection)
+// Deprecated internal bridge for callers that have not yet moved to the Wiki API.
+// It never creates roam.db, writes sync state, or mutates Git.
 export async function syncRoamDb(notes = null, options = {}) {
-  if (roamSyncTimer) {
-    clearTimeout(roamSyncTimer);
-    roamSyncTimer = null;
-  }
-  const queuedNotes = notes ? null : queuedRoamSyncNotes;
-  const queuedFiles = [...queuedRoamSyncChangedFiles];
-  queuedRoamSyncChangedFiles.clear();
-  queuedRoamSyncNotes = null;
-  const optionFiles = Array.isArray(options.changedFiles) ? options.changedFiles : [];
-  const pendingFiles = [...new Set([...optionFiles, ...queuedFiles])];
-  const scanned = notes ?? queuedNotes ?? await scanNotes();
-  if (workspaceLayout === "wiki") return scanned;
-  const previous = roamSyncInFlight ?? Promise.resolve();
-  const current = previous.catch(() => {}).then(async () => {
-    const dbFile = roamDbFile();
-    const forceMode = options.mode === "full";
-    const explicitFiles = pendingFiles.length > 0 ? pendingFiles : null;
-
-    const state = await readSyncState();
-    const schemaOk = state.dbSchemaVersion === CURRENT_DB_SCHEMA;
-    const dbExists = existsSync(dbFile);
-    const now = new Date().toISOString();
-
-    // Determine whether we must do a full rebuild.
-    // Use a deterministic time-based policy instead of random sampling so the
-    // save path has predictable latency.  Weekly rebuild provides self-healing.
-    const stale = state.lastFullAt
-      ? (Date.now() - new Date(state.lastFullAt).getTime()) > ROAM_FULL_SYNC_INTERVAL_MS
-      : false;
-    const needFull = forceMode || !dbExists || !schemaOk || !state.lastSyncedCommit || stale;
-
-    if (needFull) {
-      const reason = forceMode ? "forced" : !dbExists ? "no-db" : !schemaOk ? "schema" : !state.lastSyncedCommit ? "no-state" : "stale";
-      console.log(`[roam-sync] full rebuild (${reason})`);
-      await runFullRoamSync(scanned, dbFile);
-      const sha = await commitRoam(noteRoot, `roam sync: ${now}`);
-      await writeSyncState({ lastSyncedCommit: sha, lastSyncedAt: now, lastFullAt: now, dbSchemaVersion: CURRENT_DB_SCHEMA });
-      return;
-    }
-
-    // Resolve changed files: explicit > git detection
-    let changedFiles = explicitFiles;
-    if (!changedFiles) {
-      changedFiles = await changedRoamFilesSince(noteRoot, state.lastSyncedCommit);
-      if (changedFiles === null) {
-        // commit no longer reachable (rebase/squash) — fallback to full
-        console.log("[roam-sync] full rebuild (stale commit ref)");
-        await runFullRoamSync(scanned, dbFile);
-        const sha = await commitRoam(noteRoot, `roam sync: ${now}`);
-        await writeSyncState({ lastSyncedCommit: sha, lastSyncedAt: now, lastFullAt: state.lastFullAt, dbSchemaVersion: CURRENT_DB_SCHEMA });
-        return;
-      }
-    }
-
-    if (changedFiles.length === 0) {
-      console.log("[roam-sync] incremental: no changes detected");
-      return;
-    }
-
-    console.log(`[roam-sync] incremental: ${changedFiles.length} file(s)`);
-    const roamOk = await runIncrementalRoamSync(scanned, dbFile, changedFiles);
-    if (!roamOk) {
-      // Incremental builder found no indexable note changes.
-      return;
-    }
-    const sha = await commitRoam(noteRoot, `roam sync: ${now}`);
-    await writeSyncState({ lastSyncedCommit: sha, lastSyncedAt: now, lastFullAt: state.lastFullAt, dbSchemaVersion: CURRENT_DB_SCHEMA });
+  const index = await buildWikiIndex(noteRoot, {
+    layout: workspaceLayout,
+    mode: options.mode === "full" ? "full" : "auto",
+    changedFiles: Array.isArray(options.changedFiles) ? options.changedFiles : [],
   });
-  roamSyncInFlight = current;
-  try {
-    await current;
-  } finally {
-    if (roamSyncInFlight === current) roamSyncInFlight = null;
-  }
-  return scanned;
+  return notes || index.notes;
 }
 
-// Exported for desktop/main.mjs weekly full-sync check
 export async function maybeScheduleWeeklyFullSync() {
-  if (workspaceLayout === "wiki") return false;
-  const state = await readSyncState();
-  if (!state.lastFullAt) return false; // no state yet — first full sync will happen on next manual sync
-  const age = Date.now() - new Date(state.lastFullAt).getTime();
-  if (age < 7 * 24 * 60 * 60 * 1000) return false;
-  console.log("[roam-sync] weekly full rebuild triggered");
-  void syncRoamDb(null, { mode: "full" }).catch((err) => {
-    console.error("[roam-sync] weekly full rebuild failed:", err?.message || err);
+  const status = wikiIndexStatus(noteRoot);
+  const lastFull = Date.parse(status.lastFullAt || "");
+  if (Number.isFinite(lastFull) && Date.now() - lastFull < ROAM_FULL_SYNC_INTERVAL_MS) return false;
+  void buildWikiIndex(noteRoot, { layout: workspaceLayout, mode: "auto" }).catch((error) => {
+    console.error("[noema-wiki] weekly full rebuild failed:", error?.message || error);
   });
   return true;
 }
@@ -7547,7 +7256,6 @@ export async function createNode(body) {
   markNotesDirty(file);
   const opened = await readNote(file, { includeIndex: true });
   if (selection) opened.selection = selection;
-  if (roam) queueRoamDbSync(opened.notes, [file]);
   return opened;
 }
 
@@ -7601,63 +7309,19 @@ async function moveToTrash(file) {
   return target;
 }
 
-export function queueRoamDbSync(notes = null, changedFiles = []) {
-  if (workspaceLayout === "wiki") return;
-  if (notes) queuedRoamSyncNotes = notes;
-  const files = Array.isArray(changedFiles) ? changedFiles : [changedFiles];
-  for (const file of files) {
-    if (!file) continue;
-    // Set dedupe keeps a burst of external changes (e.g. a git checkout of many
-    // notes) from accumulating in O(n^2) via repeated Array.includes scans.
-    queuedRoamSyncChangedFiles.add(resolveUserPath(file));
-  }
-  if (roamSyncTimer) {
-    clearTimeout(roamSyncTimer);
-    roamSyncTimer = null;
-  }
-}
-
 export function runtimeDebugSnapshot() {
   return {
-    roamDbSync: {
-      queued: Boolean(queuedRoamSyncNotes) || queuedRoamSyncChangedFiles.size > 0,
-      changedFiles: queuedRoamSyncChangedFiles.size,
-      inFlight: Boolean(roamSyncInFlight),
-    },
     paths: {
       stateRoot,
       tmpRoot: runtimeTmpRoot || aaronnoteTmpRoot(),
     },
-    saveWrites: {
-      queuedFiles: saveWriteQueues.size,
-    },
+    saveWrites: { queuedFiles: saveWriteQueues.size },
     copilot: {
       started: Boolean(copilotClient),
       busy: Boolean(copilotClient?.status?.busy),
       status: copilotClient?.status?.message || "Not started",
     },
   };
-}
-
-// Historical name kept for existing call sites. Writes only accumulate changed
-// files here; explicit/manual sync and the very-low-rate save sampler below are
-// the only paths that drain the queue.
-function scheduleRoamDbSync(notes, changedFile) {
-  queueRoamDbSync(notes, changedFile ? [changedFile] : []);
-}
-
-export function saveSamplesRoamDbSync(sample = Math.random()) {
-  return Number.isFinite(sample) && sample >= 0 && sample < ROAM_SAVE_SYNC_SAMPLE_RATE;
-}
-
-function maybeSyncRoamDbAfterSave() {
-  if (!saveSamplesRoamDbSync()) return;
-  // syncRoamDb atomically drains the queued Set and serializes with an existing
-  // sync.  Do not await it: the rare maintenance branch must not add latency to
-  // the save response.
-  void syncRoamDb().catch((err) => {
-    console.error("[roam-sync] sampled save sync failed:", err?.message || err);
-  });
 }
 
 export async function deleteNote(body) {
@@ -7675,7 +7339,6 @@ export async function deleteNote(body) {
   }
   markNotesDirty(file);
   const index = await notesIndexPayload();
-  if (!standaloneFile(file)) queueRoamDbSync(index.notes, [file]);
   return { type: "deleted", ok: true, file, trashedTo, ...index };
 }
 
@@ -7922,7 +7585,6 @@ export async function updateCurrentNoteMeta(body, action) {
     markNotesDirty(file);
   }
   const opened = await readNote(file, { includeIndex: true });
-  if (next !== content) queueRoamDbSync(opened.notes, [file]);
   return opened;
 }
 
@@ -7948,7 +7610,6 @@ async function rewriteRoamMetaTags(updateTags) {
     changed.push({ file: note.file, path: note.path || "", title: note.title || "", tags: after });
   }
   const index = await notesIndexPayload();
-  if (changedFiles.length > 0) queueRoamDbSync(index.notes, changedFiles);
   return { ok: true, changed, changedCount: changed.length, ...index };
 }
 
@@ -8145,7 +7806,6 @@ export async function rewriteMarkdownPathReferences(body) {
     changed.push({ file: note.file, path: note.path || "", title: note.title || "", count: result.count });
   }
   const index = dryRun ? await notesIndexPayload(scanned) : await notesIndexPayload();
-  if (!dryRun && changedFiles.length > 0) queueRoamDbSync(index.notes, changedFiles);
   return { ok: true, dryRun, changed, changedCount: changed.length, referenceCount: changed.reduce((sum, item) => sum + item.count, 0), ...index };
 }
 
@@ -8217,13 +7877,6 @@ export function configure(options = {}) {
   reservedPlanningIds.clear();
   planningIdCache = { version: -1, ids: null };
   planningIdFallbackCounter = 0;
-  if (roamSyncTimer) {
-    clearTimeout(roamSyncTimer);
-    roamSyncTimer = null;
-  }
-  roamSyncInFlight = null;
-  queuedRoamSyncNotes = null;
-  queuedRoamSyncChangedFiles = new Set();
   agendaPersistentCache = null;
   agendaPersistentCacheKey = "";
   agendaPersistentCacheDirty = false;
@@ -8322,13 +7975,9 @@ export async function saveNote(body) {
   const refresh = body.refresh === "deferred" ? "deferred" : "full";
   if (refresh === "deferred") {
     markNotesDirty(file);
-    scheduleRoamDbSync(null, file);
-    maybeSyncRoamDbAfterSave();
     return { type: "saved", ok: true, file, message: "Saved", note: await noteSummaryForFile(file, content), kind: kindFromContent(content), notesRefresh: "deferred", standalone: false, mtimeMs: wrote.mtimeMs, size: wrote.size };
   }
   const notes = await scanNotes();
-  scheduleRoamDbSync(notes, file);
-  maybeSyncRoamDbAfterSave();
   return { type: "saved", ok: true, file, message: "Saved", notes, notesRefresh: "full", standalone: false, mtimeMs: wrote.mtimeMs, size: wrote.size };
 }
 

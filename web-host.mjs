@@ -38,7 +38,6 @@ import {
   bibliographyCompletions,
   bibliographyForDocument,
   readNoteCodeRegion,
-  syncRoamDb,
   scanSnippets,
   scanTemplates,
   renameRoamTag,
@@ -139,6 +138,7 @@ import {
   updateWikiNamespace,
   wikiTagIndex,
   wikiDatabaseFile,
+  wikiIndexStatus,
   wikiLayout,
   wikiPageDiff,
   wikiPageHistory,
@@ -264,19 +264,33 @@ const workspaceEnvironment = hostMode === "server"
 let wikiIndexCache = null;
 let wikiIndexBuildPromise = null;
 let wikiIndexDirty = true;
+const wikiIndexPendingFiles = new Set();
+let wikiIndexActive = null;
+let wikiIndexLastError = "";
 
-function invalidateWikiIndex() {
+function invalidateWikiIndex(files = []) {
   wikiIndexDirty = true;
+  for (const file of files) if (file) wikiIndexPendingFiles.add(resolve(file));
 }
 
-async function wikiIndexPayload({ force = false } = {}) {
-  if (!force && !wikiIndexDirty && wikiIndexCache) return wikiIndexCache;
+async function wikiIndexPayload({ force = false, mode = "auto", changedFiles = [], refresh = false } = {}) {
+  const requestedMode = force ? "full" : (["auto", "incremental", "full"].includes(mode) ? mode : "auto");
+  if (changedFiles.length > 0) invalidateWikiIndex(changedFiles);
+  if (force || refresh || requestedMode !== "auto") wikiIndexDirty = true;
+  if (!refresh && !force && requestedMode === "auto" && !wikiIndexDirty && wikiIndexCache) return wikiIndexCache;
   if (wikiIndexBuildPromise) {
     const current = await wikiIndexBuildPromise;
-    if (!force && !wikiIndexDirty) return current;
+    if (!force && !wikiIndexDirty && wikiIndexPendingFiles.size === 0) return current;
   }
+  const pendingFiles = [...wikiIndexPendingFiles];
+  wikiIndexPendingFiles.clear();
   wikiIndexDirty = false;
-  wikiIndexBuildPromise = buildWikiIndex(noteRoot, { layout: workspaceLayout })
+  wikiIndexActive = { mode: requestedMode, startedAt: new Date().toISOString(), changedFiles: pendingFiles };
+  wikiIndexBuildPromise = buildWikiIndex(noteRoot, {
+    layout: workspaceLayout,
+    mode: requestedMode,
+    changedFiles: pendingFiles,
+  })
     .then((index) => ({
       ...index,
       dbFile: wikiDatabaseFile(noteRoot),
@@ -289,16 +303,31 @@ async function wikiIndexPayload({ force = false } = {}) {
     }))
     .then((payload) => {
       wikiIndexCache = payload;
+      wikiIndexLastError = "";
       return payload;
     })
     .catch((error) => {
       wikiIndexDirty = true;
+      wikiIndexLastError = error?.message || String(error);
       throw error;
     })
     .finally(() => {
       wikiIndexBuildPromise = null;
+      wikiIndexActive = null;
     });
   return await wikiIndexBuildPromise;
+}
+
+function wikiIndexStatusPayload() {
+  const persisted = wikiIndexStatus(noteRoot);
+  return {
+    ...persisted,
+    inFlight: Boolean(wikiIndexBuildPromise),
+    active: wikiIndexActive,
+    queued: wikiIndexPendingFiles.size,
+    dirty: wikiIndexDirty,
+    lastError: wikiIndexLastError || persisted.lastError || "",
+  };
 }
 
 async function wikiCreatePage(body = {}) {
@@ -512,13 +541,12 @@ void sweepGlobalOrphanKernels({ stderr: process.stderr }).then(({ reaped }) => {
 // 2-second window to avoid redundant index re-reads.
 // Set AARONNOTE_WATCH=0 to disable (useful in test environments).
 let wikiRefreshTimer = null;
-function scheduleWikiRefresh() {
-  if (workspaceLayout !== "wiki") return;
-  invalidateWikiIndex();
+function scheduleWikiRefresh(files = []) {
+  invalidateWikiIndex(files);
   if (wikiRefreshTimer) clearTimeout(wikiRefreshTimer);
   wikiRefreshTimer = setTimeout(() => {
     wikiRefreshTimer = null;
-    void wikiIndexPayload()
+    void wikiIndexPayload({ mode: "auto" })
       .then((payload) => broadcast("command", { command: "wiki-index-changed", noteCount: payload.notes.length }))
       .catch((error) => process.stderr.write(`[noema-wiki] refresh failed: ${error?.message || error}\n`));
   }, 350);
@@ -604,8 +632,8 @@ const noteWatcher = hostMode !== "server" && process.env.AARONNOTE_WATCH !== "0"
         if (noteFiles.length > 0) {
           broadcast("command", { command: "notes-index-changed", version: notesIndexVersionValue() });
         }
-        if (workspaceLayout === "wiki" && files.length > 0) {
-          scheduleWikiRefresh();
+        if (files.length > 0) {
+          scheduleWikiRefresh(files);
           for (const file of files) markWikiRepositoryDirty(file);
         }
         if (bibFiles.length > 0) {
@@ -622,6 +650,17 @@ const noteWatcher = hostMode !== "server" && process.env.AARONNOTE_WATCH !== "0"
       },
     })
   : { close() {} };
+
+const wikiMaintenanceTimer = hostMode !== "server" ? setInterval(() => {
+  if (wikiIndexBuildPromise) return;
+  const status = wikiIndexStatus(noteRoot);
+  const lastFull = Date.parse(status.lastFullAt || "");
+  if (!Number.isFinite(lastFull) || Date.now() - lastFull >= 7 * 24 * 60 * 60 * 1000) {
+    void wikiIndexPayload({ mode: "auto", refresh: true })
+      .catch((error) => process.stderr.write(`[noema-wiki] weekly self-heal failed: ${error?.message || error}\n`));
+  }
+}, 6 * 60 * 60 * 1000) : null;
+wikiMaintenanceTimer?.unref?.();
 
 if (!existsSync(webDir)) {
   process.stderr.write(
@@ -724,6 +763,7 @@ async function beginShutdown({ reason = "shutdown", exitCode = 0, deadlineMs = 3
     deadline.unref();
     try {
       clearInterval(sseHeartbeatInterval);
+      if (wikiMaintenanceTimer) clearInterval(wikiMaintenanceTimer);
       if (wikiRefreshTimer) clearTimeout(wikiRefreshTimer);
       if (serverRepositorySyncTimer) clearTimeout(serverRepositorySyncTimer);
       broadcast("command", { command: "server-shutdown", reason, at: Date.now() });
@@ -1008,25 +1048,14 @@ function roamSyncStats(index) {
 }
 
 async function roamSyncPayload(reload = false) {
-  if (workspaceLayout === "wiki") {
-    const index = await wikiIndexPayload({ force: reload });
-    return { type: "notes", ...index, stats: roamSyncStats(index), root: noteRoot, db: wikiDatabaseFile(noteRoot) };
-  }
-  if (reload) markNotesDirty();
-  const notes = await syncRoamDb();
-  const index = await notesIndexPayload(notes);
-  return { type: "notes", ...index, stats: roamSyncStats(index), root: noteRoot, db: join(noteRoot, "roam.db") };
+  const index = await wikiIndexPayload({ mode: reload ? "full" : "auto", refresh: true });
+  return { type: "notes", ...index, stats: roamSyncStats(index), root: noteRoot, db: wikiDatabaseFile(noteRoot) };
 }
 
 async function roamSyncFullPayload() {
-  if (workspaceLayout === "wiki") {
-    const index = await wikiIndexPayload({ force: true });
-    return { type: "notes", ...index, stats: roamSyncStats(index), root: noteRoot, db: wikiDatabaseFile(noteRoot) };
-  }
   markNotesDirty();
-  const notes = await syncRoamDb(null, { mode: "full" });
-  const index = await notesIndexPayload(notes);
-  return { type: "notes", ...index, stats: roamSyncStats(index), root: noteRoot, db: join(noteRoot, "roam.db") };
+  const index = await wikiIndexPayload({ mode: "full", refresh: true });
+  return { type: "notes", ...index, stats: roamSyncStats(index), root: noteRoot, db: wikiDatabaseFile(noteRoot) };
 }
 
 async function templatesPayload(force = false) {
@@ -1211,7 +1240,12 @@ const apiRouter = new ApiRouter().register({
     variables: hostMode === "server" ? [] : workspaceEnvironment.variables,
     message: workspaceEnvironment.message,
   }),
-  "aaronnote:api:wiki:refresh": () => hostMode === "server" ? currentServerCatalog().index : wikiIndexPayload({ force: true }),
+  "aaronnote:api:wiki:refresh": (body) => hostMode === "server"
+    ? currentServerCatalog().index
+    : wikiIndexPayload({ mode: body?.mode || "auto", refresh: true }),
+  "aaronnote:api:wiki:index-status": () => hostMode === "server"
+    ? { ok: true, mode: "server", generation: currentServerCatalog().index.generation, inFlight: false, queued: 0 }
+    : wikiIndexStatusPayload(),
   "aaronnote:api:wiki:search": async (body) => hostMode === "server"
     ? currentServerCatalog().search(body || {})
     : knowledgeSearchResponse(await wikiIndexPayload(), body || {}, searchWikiDatabase(noteRoot, body || {})),
@@ -2087,7 +2121,8 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
     wiki: {
       bootstrap: function() { return call("aaronnote:api:wiki:bootstrap", []); },
       environment: function() { return call("aaronnote:api:wiki:environment", []); },
-      refresh: function() { return call("aaronnote:api:wiki:refresh", []); },
+      refresh: function(body) { return call("aaronnote:api:wiki:refresh", [body || {}]); },
+      indexStatus: function() { return call("aaronnote:api:wiki:index-status", []); },
       search: function(body) { return call("aaronnote:api:wiki:search", [body || {}]); },
       resolveLink: function(body) { return call("aaronnote:api:wiki:resolve-link", [body || {}]); },
       initWorkspace: function() { return call("aaronnote:api:wiki:init-workspace", []); },

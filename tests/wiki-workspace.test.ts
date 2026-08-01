@@ -1,8 +1,10 @@
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
 import {
@@ -22,6 +24,7 @@ import {
   updateWikiTag,
   updateWikiNamespace,
   wikiDatabaseFile,
+  wikiIndexStatus,
   wikiPageDiff,
   wikiPageHistory,
   restoreWikiPageVersion,
@@ -193,6 +196,93 @@ describe("Wiki workspace", () => {
     expect(searchWikiDatabase(root, { query: "Entang" })).toMatchObject({ total: 1 });
     expect(searchWikiDatabase(root, { query: "量子纠" })).toMatchObject({ total: 1 });
     expect(searchWikiDatabase(root, { query: "attachment metadata only" })).toMatchObject({ total: 0 });
+  });
+
+  test("updates wiki.db incrementally without mutating Git", async () => {
+    const root = await tempRoot();
+    const repository = await gitRepository(root, "private", "research");
+    await execFileAsync("git", ["-C", repository, "config", "user.email", "test@example.com"]);
+    await execFileAsync("git", ["-C", repository, "config", "user.name", "Noema Test"]);
+    const file = join(repository, "page.md");
+    await writeFile(file, note("page-id", "Page", "First body"));
+    await execFileAsync("git", ["-C", repository, "add", "."]);
+    await execFileAsync("git", ["-C", repository, "commit", "-m", "initial"]);
+
+    const first = await buildWikiIndex(root, { layout: "wiki", mode: "auto" });
+    expect(first.maintenance).toMatchObject({ mode: "full", reason: "no-db" });
+    await writeFile(file, note("page-id", "Page", "Second body"));
+    const headBefore = (await execFileAsync("git", ["-C", repository, "rev-parse", "HEAD"])).stdout.trim();
+    const statusBefore = (await execFileAsync("git", ["-C", repository, "status", "--porcelain"])).stdout;
+
+    const second = await buildWikiIndex(root, { layout: "wiki", mode: "auto", changedFiles: [file, file] });
+    expect(second.maintenance).toMatchObject({ mode: "incremental", changedFiles: [file] });
+    expect(second.maintenance?.changes.pages).toBe(1);
+    expect(searchWikiDatabase(root, { query: "Second body" })).toMatchObject({ total: 1 });
+    expect((await execFileAsync("git", ["-C", repository, "rev-parse", "HEAD"])).stdout.trim()).toBe(headBefore);
+    expect((await execFileAsync("git", ["-C", repository, "status", "--porcelain"])).stdout).toBe(statusBefore);
+    expect(existsSync(join(root, "roam.db"))).toBe(false);
+    expect(wikiIndexStatus(root)).toMatchObject({
+      ok: true,
+      schemaVersion: 7,
+      lastMode: "incremental",
+      repositories: [expect.objectContaining({ repositoryId: "private/research", headSha: headBefore })],
+    });
+  });
+
+  test("incremental relationship persistence re-resolves unchanged source pages", async () => {
+    const root = await tempRoot();
+    const repository = await gitRepository(root, "private", "research");
+    const source = join(repository, "source.md");
+    await writeFile(source, note("source-id", "Source", "[[Target]]"));
+    await buildWikiIndex(root, { layout: "wiki" });
+    const target = join(repository, "target.md");
+    await writeFile(target, note("target-id", "Target"));
+    const next = await buildWikiIndex(root, { layout: "wiki", mode: "incremental", changedFiles: [target] });
+    expect(next.maintenance?.mode).toBe("incremental");
+    const db = new DatabaseSync(wikiDatabaseFile(root), { readOnly: true });
+    try {
+      const sourceKey = next.notes.find((item) => item.id === "source-id")?.pageKey;
+      expect(sourceKey).toBeTruthy();
+      expect(db.prepare("SELECT raw_target, target_id, status FROM links WHERE source_key=?").get(sourceKey!))
+        .toMatchObject({ raw_target: "Target", target_id: "target-id", status: "resolved" });
+    } finally {
+      db.close();
+    }
+  });
+
+  test("incremental metadata repair preserves cached full-text content", async () => {
+    const root = await tempRoot();
+    const repository = await gitRepository(root, "private", "research");
+    await writeFile(join(repository, "cached.md"), note("cached-id", "Cached", "RareSearchNeedle"));
+    await buildWikiIndex(root, { layout: "wiki" });
+    const db = new DatabaseSync(wikiDatabaseFile(root));
+    try {
+      db.prepare("UPDATE pages SET title='stale' WHERE page_id='cached-id'").run();
+    } finally {
+      db.close();
+    }
+    const next = await buildWikiIndex(root, { layout: "wiki", mode: "incremental" });
+    expect(next.maintenance?.changes.pages).toBe(1);
+    expect(searchWikiDatabase(root, { query: "RareSearchNeedle" })).toMatchObject({ total: 1 });
+  });
+
+  test("falls back to an atomic full rebuild when the HEAD watermark is rewritten", async () => {
+    const root = await tempRoot();
+    const repository = await gitRepository(root, "private", "research");
+    await execFileAsync("git", ["-C", repository, "config", "user.email", "test@example.com"]);
+    await execFileAsync("git", ["-C", repository, "config", "user.name", "Noema Test"]);
+    const file = join(repository, "page.md");
+    await writeFile(file, note("page-id", "Page", "Before"));
+    await execFileAsync("git", ["-C", repository, "add", "."]);
+    await execFileAsync("git", ["-C", repository, "commit", "-m", "initial"]);
+    await buildWikiIndex(root, { layout: "wiki" });
+    await writeFile(file, note("page-id", "Page", "Rewritten"));
+    await execFileAsync("git", ["-C", repository, "add", "."]);
+    await execFileAsync("git", ["-C", repository, "commit", "--amend", "--no-edit"]);
+
+    const rebuilt = await buildWikiIndex(root, { layout: "wiki", mode: "auto" });
+    expect(rebuilt.maintenance).toMatchObject({ mode: "full", reason: "head-watermark-unreachable" });
+    expect(searchWikiDatabase(root, { query: "Rewritten" })).toMatchObject({ total: 1 });
   });
 
   test("uses Git commits as page history and restores an old version into the working tree", async () => {

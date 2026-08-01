@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 // @ts-ignore The server is a Node ESM module outside the TS app graph.
-import { commitRoam, diffRoamCommit, diffRoamFile, roamRepoChanges, roamRepoStatus } from "../server/lib/roam-git.mjs";
+import { diffRoamCommit, diffRoamFile, roamRepoChanges, roamRepoStatus } from "../server/lib/roam-git.mjs";
 
 const execFileAsync = promisify(execFile);
 const roots: string[] = [];
@@ -69,11 +69,12 @@ describe("roam git tools", () => {
     });
   });
 
-  test("commits scoped roam changes and exposes commit diff", async () => {
-    const { notes } = await setupRepo();
+  test("exposes diffs for an explicitly created Git commit", async () => {
+    const { root, notes } = await setupRepo();
     await writeFile(join(notes, "a.md"), "# A\n\nCommitted\n", "utf8");
-
-    const sha = await commitRoam(notes, "notes update");
+    await git(root, ["add", "roam/a.md"]);
+    await git(root, ["commit", "-m", "notes update"]);
+    const sha = await git(root, ["rev-parse", "HEAD"]);
     expect(sha).toMatch(/^[a-f0-9]{40}$/);
     expect(await readFile(join(notes, "a.md"), "utf8")).toContain("Committed");
     expect(await roamRepoChanges(notes)).toEqual([]);
