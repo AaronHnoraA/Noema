@@ -10,6 +10,7 @@ import { promisify } from "node:util";
 import { DatabaseSync } from "node:sqlite";
 
 import { isUuidV7, newNoemaId } from "../../shared/identity.mjs";
+import { knowledgeQueryTextTerms, parseKnowledgeQuery } from "../../shared/knowledge-query.mjs";
 import {
   normalizeWikiNamespace, qualifiedWikiTitle, scanWikiLinks, splitQualifiedWikiTarget,
 } from "../../shared/wiki-link.mjs";
@@ -818,38 +819,90 @@ export async function persistWikiIndex(index) {
 }
 
 function ftsQuery(value) {
-  const tokens = String(value || "").normalize("NFKC").trim().split(/\s+/).filter(Boolean).slice(0, 12);
+  const tokens = Array.isArray(value)
+    ? value.map((token) => String(token || "")).filter(Boolean)
+    : String(value || "").normalize("NFKC").trim().split(/\s+/).filter(Boolean).slice(0, 12);
   return tokens.map((token) => `"${token.replaceAll('"', '""')}"*`).join(" AND ");
+}
+
+function knowledgeSqlFilters(parsed, filters, parameters) {
+  for (const clause of parsed.clauses) {
+    if (!clause.field || !clause.value) continue;
+    let expression = "";
+    let values = [];
+    const like = `%${clause.value}%`;
+    if (clause.field === "title") {
+      expression = "(lower(p.title) LIKE ? OR EXISTS (SELECT 1 FROM aliases a WHERE a.page_key=p.page_key AND lower(a.alias) LIKE ?))";
+      values = [like, like];
+    } else if (clause.field === "tag") {
+      expression = "EXISTS (SELECT 1 FROM tags t WHERE t.page_key=p.page_key AND lower(t.tag) LIKE ?)";
+      values = [like];
+    } else if (clause.field === "repo") {
+      expression = "lower(p.repository_id) LIKE ?";
+      values = [like];
+    } else if (clause.field === "namespace") {
+      expression = "(lower(p.namespace) LIKE ? OR lower(p.qualified_namespace) LIKE ?)";
+      values = [like, like];
+    } else if (clause.field === "path") {
+      expression = "(lower(p.workspace_path) LIKE ? OR lower(p.repository_path) LIKE ?)";
+      values = [like, like];
+    } else if (clause.field === "kind") {
+      expression = "lower(p.kind) LIKE ?";
+      values = [like];
+    } else if (clause.field === "linksto") {
+      expression = "EXISTS (SELECT 1 FROM links l WHERE l.source_key=p.page_key AND (lower(l.target_id) LIKE ? OR lower(l.target_title) LIKE ?))";
+      values = [like, like];
+    } else if (clause.field === "is" && clause.value === "orphan") {
+      expression = "(NOT EXISTS (SELECT 1 FROM links l WHERE l.source_key=p.page_key AND l.status='resolved') AND NOT EXISTS (SELECT 1 FROM links l WHERE l.target_id=p.page_id AND l.status='resolved'))";
+    } else if (clause.field === "is" && clause.value === "missing") {
+      expression = "EXISTS (SELECT 1 FROM links l WHERE l.source_key=p.page_key AND l.status='missing')";
+    } else if (clause.field === "is" && clause.value === "attachment") {
+      expression = "0";
+    }
+    if (!expression) continue;
+    filters.push(clause.negative ? `NOT (${expression})` : expression);
+    parameters.push(...values);
+  }
 }
 
 export function searchWikiDatabase(rootValue, body = {}) {
   const dbFile = wikiDatabaseFile(rootValue);
   if (!existsSync(dbFile)) return { ok: true, type: "wiki-search", generation: "", items: [], total: 0, nextCursor: null };
   const query = String(body.query || body.q || "").normalize("NFKC").trim();
+  const parsed = parseKnowledgeQuery(query);
+  const textTerms = knowledgeQueryTextTerms(parsed);
   const limit = Math.max(1, Math.min(100, Number(body.limit) || 40));
   const offset = Math.max(0, Number(body.cursor) || 0);
   const repositoryId = String(body.repositoryId || "").trim();
   const partition = String(body.partition || "").trim();
   const namespace = normalizeWikiNamespace(body.namespace || "");
   const sort = String(body.sort || "").trim() === "recent" ? "recent" : "title";
+  const allowedRepositoryIds = [...new Set((Array.isArray(body.allowedRepositoryIds) ? body.allowedRepositoryIds : [])
+    .map((value) => String(value || "").trim()).filter(Boolean))].slice(0, 128);
   const db = new DatabaseSync(dbFile, { readOnly: true, timeout: 3000 });
   try {
     const generation = String(db.prepare("SELECT value FROM wiki_meta WHERE key='generation'").get()?.value || "");
     const filters = [];
     const parameters = [];
     if (repositoryId) { filters.push("p.repository_id = ?"); parameters.push(repositoryId); }
+    if (allowedRepositoryIds.length) {
+      filters.push(`p.repository_id IN (${allowedRepositoryIds.map(() => "?").join(",")})`);
+      parameters.push(...allowedRepositoryIds);
+    }
     if (partition === "public" || partition === "private") { filters.push("p.partition = ?"); parameters.push(partition); }
     if (namespace) {
       filters.push("(lower(p.namespace) = lower(?) OR lower(p.qualified_namespace) = lower(?))");
       parameters.push(namespace, namespace);
     }
+    knowledgeSqlFilters(parsed, filters, parameters);
     const where = filters.length ? ` AND ${filters.join(" AND ")}` : "";
     let rows;
     let total;
-    if (query) {
-      const match = ftsQuery(query);
-      const source = /[\u2e80-\u9fff\uf900-\ufaff]/u.test(query) ? "pages_fts_trigram" : "pages_fts";
-      rows = db.prepare(`SELECT p.*, bm25(${source}, 0, 12, 5, 4, 3, 1) AS rank FROM ${source} JOIN pages p ON p.page_key = ${source}.page_key WHERE ${source} MATCH ?${where} ORDER BY rank, p.mtime DESC LIMIT ? OFFSET ?`).all(match, ...parameters, limit, offset);
+    if (textTerms.length) {
+      const match = ftsQuery(textTerms);
+      const source = /[\u2e80-\u9fff\uf900-\ufaff]/u.test(textTerms.join("")) ? "pages_fts_trigram" : "pages_fts";
+      const first = textTerms.join(" ").toLocaleLowerCase();
+      rows = db.prepare(`SELECT p.*, bm25(${source}, 0, 12, 5, 4, 3, 1) AS rank, snippet(${source}, 5, '[[', ']]', ' … ', 24) AS excerpt FROM ${source} JOIN pages p ON p.page_key = ${source}.page_key WHERE ${source} MATCH ?${where} ORDER BY CASE WHEN lower(p.title)=? THEN 0 WHEN lower(p.title) LIKE ? THEN 1 ELSE 2 END, rank, p.mtime DESC LIMIT ? OFFSET ?`).all(match, ...parameters, first, `${first}%`, limit, offset);
       total = Number(db.prepare(`SELECT count(*) AS count FROM ${source} JOIN pages p ON p.page_key = ${source}.page_key WHERE ${source} MATCH ?${where}`).get(match, ...parameters)?.count || 0);
     } else {
       const baseWhere = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
@@ -883,6 +936,7 @@ export function searchWikiDatabase(rootValue, body = {}) {
       redirectTo: row.redirect_to,
       mtimeMs: Number(row.mtime) || 0,
       rank: Number(row.rank) || 0,
+      excerpt: String(row.excerpt || ""),
       aliases: aliasStatement.all(row.page_key).map((item) => item.alias),
       tags: tagStatement.all(row.page_key).map((item) => item.tag),
       refs: refsStatement.all(row.page_key).map((item) => item.target_id),

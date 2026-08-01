@@ -4,7 +4,8 @@ import { readFile, stat } from "node:fs/promises";
 import { dirname, extname, isAbsolute, relative, resolve, sep } from "node:path";
 
 import { assetRefsFromContent } from "./runtime.mjs";
-import { resolveWikiLink, resolveWikiRelationships } from "./wiki-workspace.mjs";
+import { knowledgeSearchResponse } from "./knowledge-search.mjs";
+import { resolveWikiLink, resolveWikiRelationships, searchWikiDatabase } from "./wiki-workspace.mjs";
 
 function inside(root, target) {
   const rel = relative(resolve(root), resolve(target));
@@ -203,6 +204,8 @@ export async function buildServerPublicCatalog(fullIndex, config) {
     diagnostics: [],
     reports: cleanReportValue(related.reports, absoluteToPublic),
   };
+  const publicByPageKey = new Map(notes.map((note) => [note.pageKey || note.key, note]));
+  const allowedRepositoryIds = repositories.map((repository) => repository.id);
   return Object.freeze({
     index,
     noteByRef,
@@ -213,7 +216,16 @@ export async function buildServerPublicCatalog(fullIndex, config) {
       return noteByRef.get(String(ref || "")) || "";
     },
     search(body) {
-      return publicSearch(index, body);
+      const lexical = searchWikiDatabase(config.noteRoot || fullIndex.root, {
+        ...(body || {}),
+        partition: "public",
+        allowedRepositoryIds,
+      });
+      lexical.items = lexical.items.map((item) => {
+        const clean = publicByPageKey.get(item.pageKey || item.key);
+        return clean ? { ...clean, rank: item.rank, excerpt: item.excerpt } : null;
+      }).filter(Boolean);
+      return knowledgeSearchResponse(index, body || {}, lexical);
     },
     resolveLink(target, sourceFile = "") {
       return resolveWikiLink(index, target, { sourceFile });

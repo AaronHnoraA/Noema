@@ -154,6 +154,7 @@ import {
   syncWikiRepository,
 } from "./server/lib/wiki-sync.mjs";
 import { openWikiGitUi, stopAllWikiGitUis } from "./server/lib/wiki-git-ui.mjs";
+import { knowledgeSearchResponse } from "./server/lib/knowledge-search.mjs";
 import { createImeSwitcher } from "./server/lib/ime.mjs";
 import { ApiRouter } from "./server/infrastructure/api-router.mjs";
 import { createAssetsApiHandlers } from "./server/Features/Assets/api.mjs";
@@ -1211,7 +1212,12 @@ const apiRouter = new ApiRouter().register({
     message: workspaceEnvironment.message,
   }),
   "aaronnote:api:wiki:refresh": () => hostMode === "server" ? currentServerCatalog().index : wikiIndexPayload({ force: true }),
-  "aaronnote:api:wiki:search": (body) => hostMode === "server" ? currentServerCatalog().search(body || {}) : searchWikiDatabase(noteRoot, body || {}),
+  "aaronnote:api:wiki:search": async (body) => hostMode === "server"
+    ? currentServerCatalog().search(body || {})
+    : knowledgeSearchResponse(await wikiIndexPayload(), body || {}, searchWikiDatabase(noteRoot, body || {})),
+  "aaronnote:api:knowledge:search": async (body) => hostMode === "server"
+    ? currentServerCatalog().search(body || {})
+    : knowledgeSearchResponse(await wikiIndexPayload(), body || {}, searchWikiDatabase(noteRoot, body || {})),
   "aaronnote:api:wiki:resolve-link": async (body) => hostMode === "server"
     ? currentServerCatalog().resolveLink(body?.target ?? body, body?.sourceFile || "")
     : resolveWikiLink(await wikiIndexPayload(), body?.target ?? body, { sourceFile: body?.sourceFile || "" }),
@@ -1368,7 +1374,17 @@ const apiRouter = new ApiRouter().register({
       : { type: "notes", ...await notesIndexPayload(), root: noteRoot };
   },
   "aaronnote:api:notes:graph": async () => {
-    const payload = graphPayload(hostMode === "server" ? currentServerCatalog().index.notes : await scanRoamNotes());
+    const wikiGraph = hostMode === "server" || workspaceLayout === "wiki";
+    const graphIndex = wikiGraph
+      ? (hostMode === "server" ? currentServerCatalog().index : await wikiIndexPayload())
+      : null;
+    const payload = graphPayload(
+      graphIndex ? graphIndex.notes : await scanRoamNotes(),
+      {
+        scope: hostMode === "server" ? "server" : wikiGraph ? "wiki" : "legacy",
+        generation: graphIndex?.generation || "",
+      },
+    );
     return { ...payload, indexVersion: notesIndexVersionValue() };
   },
   "aaronnote:api:notes:roam-index": async () => {
@@ -2072,6 +2088,7 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
       bootstrap: function() { return call("aaronnote:api:wiki:bootstrap", []); },
       environment: function() { return call("aaronnote:api:wiki:environment", []); },
       refresh: function() { return call("aaronnote:api:wiki:refresh", []); },
+      search: function(body) { return call("aaronnote:api:wiki:search", [body || {}]); },
       resolveLink: function(body) { return call("aaronnote:api:wiki:resolve-link", [body || {}]); },
       initWorkspace: function() { return call("aaronnote:api:wiki:init-workspace", []); },
       initRepository: function(body) { return call("aaronnote:api:wiki:init-repository", [body || {}]); },
@@ -2095,6 +2112,9 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
       resolveConflict: function(body) { return call("aaronnote:api:wiki:resolve-conflict", [body || {}]); },
       abortConflict: function(body) { return call("aaronnote:api:wiki:abort-conflict", [body || {}]); },
       gitUi: function(body) { return call("aaronnote:api:wiki:git-ui", [body || {}]); }
+    },
+    knowledge: {
+      search: function(body) { return call("aaronnote:api:knowledge:search", [body || {}]); }
     }
   };
 }());
@@ -2498,6 +2518,10 @@ const server = createServer(async (req, res) => {
     }
 
     if (url.pathname === "/graph") {
+      res.writeHead(302, { Location: "/wiki?view=graph", "Cache-Control": "no-store" });
+      res.end();
+      return;
+      /* Legacy graph document retained below temporarily for published asset compatibility.
       const notes = hostMode === "server" ? currentServerCatalog().index.notes : await scanRoamNotes();
       const raw = graphPayload(notes);
       // Build SITE_DATA in the format knowledge.js expects:
@@ -2572,6 +2596,7 @@ document.addEventListener("DOMContentLoaded", function () {
 </script>
 </body>
 </html>`);
+      */
       return;
     }
 

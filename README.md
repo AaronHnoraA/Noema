@@ -105,7 +105,7 @@ implementation. Server mode defaults to the Wiki's warm light `claude` palette;
 
 `runtime.json.reader` controls reader-only interaction chrome without changing
 Markdown parsing, CM6 rendering, or the App's content layout: `showSource`,
-`showGraph`, `showStatus`, `selectionToolbar`, `customContextMenu`, and
+`showGraph`, `showSearch`, `showToc`, `showStatus`, `selectionToolbar`, `customContextMenu`, and
 `editingAids` are booleans. Defaults hide Source, status, selection and
 authoring controls while leaving the rendered document identical to the App;
 the graph remains available.
@@ -143,7 +143,9 @@ make server-deploy
 
 Deployment installs production dependencies, switches the remote `current`
 symlink, links and restarts a systemd user service, verifies `/health`, and
-rolls the symlink back if verification fails. The remote account needs a
+rolls the symlink back if verification fails. After a successful health check,
+it keeps `retainReleases` releases in total (3 by default, including the active
+release) and removes older version directories. The remote account needs a
 working systemd user manager (and lingering when it must run after logout).
 TLS/reverse-proxy setup such as Nginx is intentionally outside Noema.
 

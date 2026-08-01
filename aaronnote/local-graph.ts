@@ -255,7 +255,7 @@ export function createLocalGraphPanel(options: LocalGraphPanelOptions): LocalGra
   }
 
   function settings(): { depth: number; refs: boolean; backlinks: boolean; tags: boolean } {
-    const depth = Math.max(1, Math.min(2, Number(options.depthInput.value) || 1));
+    const depth = Math.max(1, Math.min(3, Number(options.depthInput.value) || 1));
     return {
       depth,
       refs: options.refsInput.checked,

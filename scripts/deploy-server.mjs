@@ -30,6 +30,33 @@ function remoteCommand(command, args = []) {
   return [command, ...args.map(shellQuote)].join(" ");
 }
 
+function releaseCleanupProgram(remoteRoot, retainReleases) {
+  const releasesDir = join(remoteRoot, "releases");
+  const currentLink = join(remoteRoot, "current");
+  return `(async()=>{
+    const {readdir,readlink,rm}=require('node:fs/promises');
+    const {basename,resolve}=require('node:path');
+    const releasesDir=${JSON.stringify(releasesDir)};
+    const currentLink=${JSON.stringify(currentLink)};
+    const retain=${retainReleases};
+    const current=basename(await readlink(currentLink));
+    const entries=(await readdir(releasesDir,{withFileTypes:true}))
+      .filter((entry)=>entry.isDirectory()&&/^\\d{8}T\\d{6}Z-\\d+$/.test(entry.name))
+      .map((entry)=>entry.name).sort().reverse();
+    const keep=new Set([current]);
+    for(const name of entries){if(keep.size>=retain)break;keep.add(name)}
+    const pruned=[];
+    for(const name of entries){
+      if(keep.has(name))continue;
+      const target=resolve(releasesDir,name);
+      if(!target.startsWith(resolve(releasesDir)+'/'))throw new Error('unsafe release path');
+      await rm(target,{recursive:true,force:false});
+      pruned.push(name);
+    }
+    console.log(JSON.stringify({retained:entries.filter((name)=>keep.has(name)),pruned}));
+  })()`;
+}
+
 const deploy = normalizeServerDeployConfig(JSON.parse(await readFile(deployFile, "utf8")));
 const runtimeRaw = JSON.parse(await readFile(runtimeFile, "utf8"));
 const runtime = normalizeServerRuntimeConfig(runtimeRaw, { configFile: runtimeFile });
@@ -84,6 +111,11 @@ try {
     : runtime.listen.host;
   const healthProgram = `(async()=>{let last;for(let i=0;i<20;i++){try{const r=await fetch('http://${healthHost}:${runtime.listen.port}/health');const j=await r.json();if(r.ok&&j.hostMode==='server'&&j.ok){console.log(JSON.stringify(j));return}last=new Error(JSON.stringify(j))}catch(e){last=e}await new Promise(r=>setTimeout(r,500))}throw last||new Error('health timeout')})()`;
   await ssh(deploy, `${remoteCommand(deploy.nodeBin, ["-e", healthProgram])}`, { timeout: 30_000 });
+  const cleanup = await ssh(deploy, remoteCommand(deploy.nodeBin, [
+    "-e",
+    releaseCleanupProgram(deploy.remoteRoot, deploy.retainReleases),
+  ]));
+  process.stdout.write(`Release retention: ${String(cleanup.stdout || "").trim()}\n`);
   process.stdout.write(`Deployed ${releaseId} and verified Server mode health.\n`);
 } catch (error) {
   if (previousRelease) {

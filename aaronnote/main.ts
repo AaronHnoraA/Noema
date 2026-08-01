@@ -136,6 +136,7 @@ import {
 } from "./theme-runtime.ts";
 import { wikiCompletionSnippets, wikiLinkCompletionContext } from "./wiki-completion.ts";
 import { createLinkPreviewController } from "./link-preview.ts";
+import { createKnowledgeSearch } from "./knowledge-search.ts";
 
 const removeNoemaThemeRuntime = installNoemaThemeRuntime();
 const root = document.querySelector<HTMLElement>("#app");
@@ -151,6 +152,8 @@ if (serverReaderMode && initialParams.has("host")) {
 type ServerReaderSettings = {
   showSource: boolean;
   showGraph: boolean;
+  showSearch: boolean;
+  showToc: boolean;
   showStatus: boolean;
   selectionToolbar: boolean;
   customContextMenu: boolean;
@@ -159,6 +162,8 @@ type ServerReaderSettings = {
 const serverReaderDefaults: ServerReaderSettings = {
   showSource: false,
   showGraph: true,
+  showSearch: true,
+  showToc: true,
   showStatus: false,
   selectionToolbar: false,
   customContextMenu: false,
@@ -186,18 +191,26 @@ root.innerHTML = `
     <strong class="noema-desktop-titlebar-name" data-desktop-title>Noema</strong>
   </header>
   <header class="noema-server-header" data-server-header ${serverReaderMode ? "" : "hidden"}>
-    <a href="/wiki" class="noema-server-brand" aria-label="Open Noema Public Wiki">
-      <img class="noema-server-brand-icon" src="./Noema.svg" alt="">
-      <span><b>Noema</b><small>Public Wiki</small></span>
-    </a>
-    <nav aria-label="Reader navigation">
-      <button type="button" data-server-command="back" title="Back" aria-label="Back">←</button>
-      <button type="button" data-server-command="forward" title="Forward" aria-label="Forward">→</button>
+    <div class="noema-server-leading">
+      <a href="/wiki" class="noema-server-brand" aria-label="Open Noema Public Wiki">
+        <img class="noema-server-brand-icon" src="./Noema.svg" alt="">
+        <span><b>Noema</b><small>Public Wiki</small></span>
+      </a>
+      <nav aria-label="Reader history">
+        <button type="button" data-server-command="back" title="Back" aria-label="Back">←</button>
+        <button type="button" data-server-command="forward" title="Forward" aria-label="Forward">→</button>
+      </nav>
+    </div>
+    <strong class="noema-server-page"><span data-server-title>Noema</span></strong>
+    <div class="noema-server-actions">
+      <label class="noema-server-search" ${serverReader.showSearch ? "" : "hidden"}>
+        <span aria-hidden="true">⌕</span><input type="search" data-server-search placeholder="Search Wiki" aria-label="Search Noema Wiki" autocomplete="off">
+      </label>
+      <button type="button" data-server-command="toggle-toc" title="Page outline" aria-label="Page outline" ${serverReader.showToc ? "" : "hidden"}>Contents</button>
+      <button type="button" data-server-command="toggle-graph" title="Local graph" aria-label="Local graph" ${serverReader.showGraph ? "" : "hidden"}>Graph</button>
       <button type="button" data-server-command="refresh" title="Refresh" aria-label="Refresh">↻</button>
       <button type="button" data-server-command="toggle-source" aria-label="Toggle source" ${serverReader.showSource ? "" : "hidden"}>Source</button>
-      <button type="button" data-server-command="toggle-graph" aria-label="Knowledge graph" ${serverReader.showGraph ? "" : "hidden"}>Graph</button>
-    </nav>
-    <strong class="noema-server-page"><small>Reading</small><span data-server-title>Noema</span></strong>
+    </div>
   </header>
   <main class="aaronnote-focused-shell">
     <aside class="aaronnote-status-hud" aria-live="polite" ${serverReaderMode && !serverReader.showStatus ? "hidden" : ""}>
@@ -217,6 +230,9 @@ root.innerHTML = `
   </main>
   <div class="noema-desktop-drop-overlay" data-desktop-drop-overlay hidden>
     <span data-desktop-drop-label>Drop to insert</span>
+  </div>
+  <div class="noema-global-search" data-global-search hidden>
+    <label><span aria-hidden="true">⌕</span><input type="search" data-global-search-input placeholder="Search notes, tags, namespaces…" aria-label="Search knowledge" autocomplete="off"></label>
   </div>
 `;
 
@@ -265,7 +281,7 @@ graphPanelRoot.innerHTML = `
     </div>
     <input type="search" data-graph-search placeholder="Search graph" aria-label="Search graph" />
     <select data-graph-group aria-label="Filter graph group"><option value="">All groups</option></select>
-    <label>Depth <input type="range" data-graph-depth min="1" max="2" value="1" /></label>
+    <label>Depth <input type="range" data-graph-depth min="1" max="3" value="1" /></label>
     <span data-graph-depth-label>1</span>
     <label><input type="checkbox" data-graph-refs checked /> Refs</label>
     <label><input type="checkbox" data-graph-backlinks checked /> Back</label>
@@ -729,6 +745,8 @@ let currentReadOnly = initialReadOnly;
 let currentMtimeMs = 0;
 let revision = 0;
 let savedRevision = 0;
+let desktopSaveInFlight = false;
+let desktopSaveConflict = false;
 let applyingContent = false;
 let saveTimer = 0;
 let saveIdleHandle = 0;
@@ -1092,6 +1110,15 @@ function updateTitle(): void {
   document.title = currentReadOnly
     ? serverReaderMode ? `${displayName} · Noema Wiki` : `${name} (read-only)`
     : revision === savedRevision ? name : `* ${name}`;
+  window.noemaDesktop?.updateWindowState({
+    kind: "note",
+    file: currentFile,
+    title: name,
+    dirty: !currentReadOnly && revision !== savedRevision,
+    saveInFlight: desktopSaveInFlight,
+    conflict: desktopSaveConflict,
+    busy: false,
+  });
 }
 
 function renderModeToggleLabel(mode: VimLiteMode): void {
@@ -1868,7 +1895,67 @@ const floatingTocPanel = createFloatingTocPanel({
   resolveNoteRef,
   openNote,
   openTag: openTagFilter,
+  getActivePosition: serverReaderMode ? () => editor.view.viewport.from : undefined,
 });
+
+const serverSearchInput = root.querySelector<HTMLInputElement>("[data-server-search]");
+if (serverReaderMode && serverSearchInput) {
+  const anchor = serverSearchInput.closest<HTMLElement>(".noema-server-search")!;
+  createKnowledgeSearch({
+    input: serverSearchInput,
+    anchor,
+    search: (body) => api.knowledge.search(body),
+    context: () => ({ file: currentFile, id: currentNote()?.id || "" }),
+    open: (note, options) => openNote(note, options),
+    limit: 8,
+  });
+  window.addEventListener("keydown", (event) => {
+    if (!(event.metaKey || event.ctrlKey) || event.key.toLocaleLowerCase() !== "k") return;
+    event.preventDefault();
+    event.stopPropagation();
+    serverSearchInput.focus();
+    serverSearchInput.select();
+  }, { capture: true });
+}
+
+const globalSearchRoot = root.querySelector<HTMLElement>("[data-global-search]")!;
+const globalSearchInput = root.querySelector<HTMLInputElement>("[data-global-search-input]")!;
+let pendingKnowledgeInsert: { from: number; to: number; selected: string } | null = null;
+const hideKnowledgeSearch = (): void => { globalSearchRoot.hidden = true; globalSearchInput.value = ""; pendingKnowledgeInsert = null; editor.focus(); };
+const showKnowledgeSearch = (): void => {
+  if (serverReaderMode) { serverSearchInput?.focus(); return; }
+  globalSearchRoot.hidden = false;
+  globalSearchInput.focus();
+  globalSearchInput.select();
+};
+if (!serverReaderMode) {
+  createKnowledgeSearch({
+    input: globalSearchInput,
+    anchor: globalSearchInput.closest<HTMLElement>("label")!,
+    search: (body) => api.knowledge.search(body),
+    context: () => ({ file: currentFile, id: currentNote()?.id || "" }),
+    open: (note, options) => {
+      const insertion = pendingKnowledgeInsert;
+      pendingKnowledgeInsert = null;
+      hideKnowledgeSearch();
+      if (!insertion) { openNote(note, options); return; }
+      const markdown = markdownRoamIdLink(note, insertion.selected || note.title || canonicalRoamNoteId(note));
+      if (!markdown) { setStatus("Selected note has no stable id"); return; }
+      editor.replaceMarkdownRange(insertion.from, insertion.to, markdown, "end");
+      setStatus("Knowledge link inserted");
+      scheduleAssistUpdate({ snippets: true, toc: true });
+    },
+    limit: 10,
+  });
+  globalSearchRoot.addEventListener("mousedown", (event) => { if (event.target === globalSearchRoot) hideKnowledgeSearch(); });
+  globalSearchInput.addEventListener("keydown", (event) => { if (event.key === "Escape" && !globalSearchInput.value) hideKnowledgeSearch(); });
+  window.addEventListener("keydown", (event) => {
+    if (!(event.metaKey || event.ctrlKey) || !event.shiftKey || event.key.toLocaleLowerCase() !== "k") return;
+    event.preventDefault();
+    event.stopPropagation();
+    showKnowledgeSearch();
+  }, { capture: true });
+}
 
 const localGraphPanel = createLocalGraphPanel({
   root: graphPanelRoot,
@@ -3161,6 +3248,9 @@ async function save(): Promise<void> {
   if (!currentFile || revision === savedRevision) return;
   const savingRevision = revision;
   const savingFile = currentFile;
+  desktopSaveInFlight = true;
+  desktopSaveConflict = false;
+  updateTitle();
   setStatus("Saving...");
   try {
     const result = await api.notes.save(saveBody());
@@ -3168,6 +3258,7 @@ async function save(): Promise<void> {
     // result — applying metadata to the new note would corrupt its dirty tracking.
     if (savingFile !== currentFile) return;
     if (result.conflict) {
+      desktopSaveConflict = true;
       setStatus(result.message || `Save conflict; reopen from ${sourceEditorName()}`);
       return;
     }
@@ -3178,6 +3269,9 @@ async function save(): Promise<void> {
     setStatus(revision === savedRevision ? "Saved" : "Edited");
   } catch (error) {
     setStatus(error instanceof Error ? error.message : "Save failed");
+  } finally {
+    desktopSaveInFlight = false;
+    updateTitle();
   }
 }
 
@@ -3411,6 +3505,7 @@ function applyOpenedNote(
   editor.setMarkdown(String(opened.content || ""), { history: "reset" });
   revision = 0;
   savedRevision = 0;
+  desktopSaveConflict = false;
   const mode = remembered?.mode || opened.mode;
   if ((!serverReaderMode || serverReader.showSource)
       && String(currentKind || "").trim().toLowerCase() !== "slides"
@@ -4384,7 +4479,8 @@ function openExternalUrl(href: string, options: { newWindow?: boolean } = {}): v
       } else {
         url.searchParams.set("q", missingTitle);
       }
-      window.open(url, "_blank", "noopener");
+      if (options.newWindow) window.open(url, "_blank", "noopener");
+      else window.location.assign(url);
     }).catch((error) => setStatus(error instanceof Error ? error.message : String(error)));
     return;
   }
@@ -5768,24 +5864,9 @@ async function manageNoteTags(): Promise<void> {
 async function insertRoamIdLink(): Promise<void> {
   const selection = editor.getMarkdownSelection();
   const selected = selection.from === selection.to ? "" : editor.textBetween(selection.from, selection.to).trim();
-  const result = await openFormModal("Insert roam idlink", [
-    { id: "note", label: "Roam note", value: "", suggestions: notes.filter((note) => note.roam).map(roamNoteSearchValue).sort() },
-    { id: "label", label: "Link text", value: selected },
-  ], "Insert");
-  if (!result) return;
-  const target = resolveRoamNoteSearch(notes, result.note);
-  if (!target) {
-    setStatus("Roam note not found");
-    return;
-  }
-  const markdown = markdownRoamIdLink(target, result.label || selected || target.title || canonicalRoamNoteId(target));
-  if (!markdown) {
-    setStatus("Roam note has no id");
-    return;
-  }
-  editor.replaceMarkdownRange(selection.from, selection.to, markdown, "end");
-  setStatus("Roam idlink inserted");
-  scheduleAssistUpdate({ snippets: true, toc: true });
+  pendingKnowledgeInsert = { from: selection.from, to: selection.to, selected };
+  showKnowledgeSearch();
+  setStatus("Search for a note to insert");
 }
 
 function activeDisplayMathTarget(): { tex: string; replace: (nextTex: string) => void } | null {
@@ -8435,6 +8516,10 @@ function runHostCommand(detail: unknown): boolean {
     case "find":
       openFindPanel();
       return true;
+    case "knowledge-search":
+    case "search-notes":
+      showKnowledgeSearch();
+      return true;
     case "find-next":
       if (findPanel.hidden) openFindPanel();
       else gotoFindMatch(findIndex + 1);
@@ -8920,7 +9005,7 @@ window.addEventListener("resize", () => {
   scheduleAssistUpdate({ mathPreview: true, cursor: true, selectionTool: !selectionTool.hidden });
 });
 window.addEventListener("scroll", (event) => {
-  scheduleAssistUpdate({ mathPreview: true, cursor: true, selectionTool: !selectionTool.hidden });
+  scheduleAssistUpdate({ mathPreview: true, cursor: true, selectionTool: !selectionTool.hidden, toc: serverReaderMode });
   if (event.target instanceof Node && host.contains(event.target)) {
     scheduleAutomaticProseCheck(proseProfile().scrollMs);
   }

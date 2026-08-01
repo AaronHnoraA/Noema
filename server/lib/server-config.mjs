@@ -105,6 +105,8 @@ export function normalizeServerRuntimeConfig(raw, options = {}) {
     reader: Object.freeze({
       showSource: optionalBoolean(reader.showSource, false, "reader.showSource"),
       showGraph: optionalBoolean(reader.showGraph, true, "reader.showGraph"),
+      showSearch: optionalBoolean(reader.showSearch, true, "reader.showSearch"),
+      showToc: optionalBoolean(reader.showToc, true, "reader.showToc"),
       showStatus: optionalBoolean(reader.showStatus, false, "reader.showStatus"),
       selectionToolbar: optionalBoolean(reader.selectionToolbar, false, "reader.selectionToolbar"),
       customContextMenu: optionalBoolean(reader.customContextMenu, false, "reader.customContextMenu"),
@@ -136,6 +138,10 @@ export function normalizeServerDeployConfig(raw) {
   if (!SAFE_SSH_TARGET.test(sshTarget)) throw configError("sshTarget is invalid; use an SSH host or user@host");
   const serviceName = requiredString(raw.serviceName || "noema-server.service", "serviceName");
   if (!SAFE_SERVICE.test(serviceName)) throw configError("serviceName is invalid");
+  const retainReleases = Number(raw.retainReleases ?? 3);
+  if (!Number.isInteger(retainReleases) || retainReleases < 2 || retainReleases > 20) {
+    throw configError("retainReleases must be an integer from 2 to 20");
+  }
   return Object.freeze({
     schemaVersion: 1,
     sshTarget,
@@ -143,6 +149,7 @@ export function normalizeServerDeployConfig(raw) {
     serviceName: serviceName.endsWith(".service") ? serviceName : `${serviceName}.service`,
     nodeBin: safeAbsolutePath(raw.nodeBin, "nodeBin"),
     npmBin: safeAbsolutePath(raw.npmBin, "npmBin"),
+    retainReleases,
   });
 }
 

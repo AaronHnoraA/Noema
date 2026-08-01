@@ -11,6 +11,17 @@ import {
 } from "../server/lib/server-policy.mjs";
 
 describe("Server configuration and read-only policy", () => {
+  test("keeps three deploy releases by default", () => {
+    const config = normalizeServerDeployConfig({
+      schemaVersion: 1,
+      sshTarget: "server",
+      remoteRoot: "/srv/noema",
+      nodeBin: "/usr/bin/node",
+      npmBin: "/usr/bin/npm",
+    });
+    expect(config.retainReleases).toBe(3);
+  });
+
   test("normalizes explicit public/private repositories and runtime paths", () => {
     const config = normalizeServerRuntimeConfig({
       schemaVersion: 1,
@@ -30,6 +41,8 @@ describe("Server configuration and read-only policy", () => {
     expect(config.reader).toMatchObject({
       showSource: false,
       showGraph: false,
+      showSearch: true,
+      showToc: true,
       showStatus: false,
       selectionToolbar: false,
       customContextMenu: false,
@@ -58,10 +71,19 @@ describe("Server configuration and read-only policy", () => {
     })).toThrow(/sshTarget/);
     expect(() => normalizeServerRuntimeConfig({ schemaVersion: 1, reader: { showSource: "yes" } }))
       .toThrow(/true or false/);
+    expect(() => normalizeServerDeployConfig({
+      schemaVersion: 1,
+      sshTarget: "server",
+      remoteRoot: "/srv/noema",
+      nodeBin: "/usr/bin/node",
+      npmBin: "/usr/bin/npm",
+      retainReleases: 1,
+    })).toThrow(/retainReleases/);
   });
 
   test("allows reader APIs, supplies compatibility no-ops, and rejects mutation", () => {
     expect(serverApiChannelAllowed("aaronnote:api:wiki:search")).toBe(true);
+    expect(serverApiChannelAllowed("aaronnote:api:knowledge:search")).toBe(true);
     expect(serverApiCompatibilityResult("aaronnote:api:session:save-position"))
       .toEqual({ ok: true, stored: false });
     expect(() => assertServerApiChannel("aaronnote:api:wiki:create-page"))

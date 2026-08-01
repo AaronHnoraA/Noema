@@ -613,6 +613,9 @@ type NativeApi = {
     abortConflict?: (body: Record<string, unknown>) => Promise<unknown>;
     gitUi?: (body: Record<string, unknown>) => Promise<unknown>;
   };
+  knowledge?: {
+    search?: (body: Record<string, unknown>) => Promise<unknown>;
+  };
 };
 
 export type WikiRepository = {
@@ -654,6 +657,10 @@ export type WikiNote = {
   unresolvedLinks: string[];
   blocks?: Array<{ id: string; kind: string; offset: number }>;
   dependencies?: Array<{ kind: string; raw: string; path: string; status: string }>;
+  excerpt?: string;
+  score?: number;
+  reasons?: string[];
+  resultKind?: "note" | "tag" | "missing" | "attachment";
 };
 export type WikiFile = {
   repositoryId: string;
@@ -712,11 +719,18 @@ export type WikiIndex = {
 };
 
 export type WikiSearchResult = {
-  type: "wiki-search";
+  type: "wiki-search" | "knowledge-search";
   generation: string;
   items: WikiNote[];
   total: number;
   nextCursor: number | null;
+  query?: string;
+  mode?: "suggest" | "results" | "related";
+  facets?: {
+    tags: Array<{ name: string; count: number }>;
+    namespaces: Array<{ name: string; count: number }>;
+    repositories: Array<{ name: string; count: number }>;
+  };
 };
 
 export type LatexTemplateVar = {
@@ -790,6 +804,8 @@ declare global {
     noemaDesktop?: {
       filePath(file: File): string;
       openFiles(files: string[]): void;
+      openTarget(target: { file?: string; url?: string; source?: string; disposition?: "" | "new" | "split-right" | "split-down" }): Promise<boolean>;
+      updateWindowState(state: { kind?: string; file?: string; title?: string; dirty?: boolean; saveInFlight?: boolean; conflict?: boolean; busy?: boolean }): void;
       showMenu(kind: "actions" | "window", point?: { x: number; y: number }): Promise<boolean>;
       revealPath(file: string): Promise<boolean>;
       chooseDirectory(options: { root: string; defaultPath?: string; title?: string }): Promise<{
@@ -1304,7 +1320,7 @@ export const api = {
       const call = requireMethod(nativeApi().wiki?.refresh, "Wiki refresh");
       return ensureOk(await call() as WikiIndex, "Refreshing Wiki failed");
     },
-    async search(body: { query?: string; repositoryId?: string; partition?: string; namespace?: string; sort?: "title" | "recent"; cursor?: number; limit?: number }): Promise<WikiSearchResult> {
+    async search(body: { query?: string; mode?: "suggest" | "results" | "related"; context?: Record<string, string>; repositoryId?: string; partition?: string; namespace?: string; sort?: "title" | "recent"; cursor?: number; limit?: number }): Promise<WikiSearchResult> {
       const call = requireMethod(nativeApi().wiki?.search, "Wiki search");
       return ensureOk(await call(body) as WikiSearchResult, "Searching Wiki failed");
     },
@@ -1417,6 +1433,12 @@ export const api = {
     async gitUi(repositoryId: string): Promise<{ ok?: boolean; repositoryId?: string; url?: string }> {
       const call = requireMethod(nativeApi().wiki?.gitUi, "Advanced Git");
       return ensureOk(await call({ repositoryId }) as { ok?: boolean; repositoryId?: string; url?: string }, "Starting Advanced Git failed");
+    },
+  },
+  knowledge: {
+    async search(body: { query?: string; mode?: "suggest" | "results" | "related"; context?: Record<string, string>; entityKinds?: string[]; cursor?: number; limit?: number }): Promise<WikiSearchResult> {
+      const call = requireMethod(nativeApi().knowledge?.search || nativeApi().wiki?.search, "Knowledge search");
+      return ensureOk(await call(body) as WikiSearchResult, "Knowledge search failed");
     },
   },
 };

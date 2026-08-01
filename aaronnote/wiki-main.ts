@@ -8,6 +8,9 @@ import { api, type WikiIndex, type WikiNote, type WikiRepository, type WikiSyncS
 import { serverMode } from "./host-mode.ts";
 import { installNoemaThemeRuntime } from "./theme-runtime.ts";
 import { splitQualifiedWikiTarget } from "../shared/wiki-link.mjs";
+import { createWorkspaceGraph, type WorkspaceGraph, type WorkspaceGraphSettings } from "./workspace-graph.ts";
+import type { GraphNode, GraphPayload } from "./types.ts";
+import { createKnowledgeSearch } from "./knowledge-search.ts";
 
 const root = document.querySelector<HTMLElement>("#wiki-app");
 if (!root) throw new Error("Missing #wiki-app");
@@ -53,6 +56,7 @@ root.innerHTML = `
         <button type="button" class="is-active" data-view="home">Main page</button>
         <button type="button" data-view="pages">All pages <b data-count-pages>0</b></button>
         <button type="button" data-view="recent">Recent</button>
+        <button type="button" data-view="graph">Graph</button>
         <button type="button" data-view="folders">Folders <b data-count-folders>0</b></button>
         <button type="button" data-view="namespaces">Namespaces <b data-count-namespaces>0</b></button>
         <button type="button" data-view="files">Files <b data-count-files>0</b></button>
@@ -83,6 +87,7 @@ root.innerHTML = `
         <div>
           <button type="button" class="is-active" data-view="home">Main page</button>
           <button type="button" data-view="pages">Discussion</button>
+          <button type="button" data-view="graph">Graph</button>
         </div>
         <div>
           <button type="button" class="is-current" data-view="home">Read</button>
@@ -212,6 +217,7 @@ const viewEl = root.querySelector<HTMLElement>("[data-wiki-view]")!;
 const titleEl = root.querySelector<HTMLElement>("[data-view-title]")!;
 const kickerEl = root.querySelector<HTMLElement>("[data-view-kicker]")!;
 const searchEl = root.querySelector<HTMLInputElement>("[data-search]")!;
+const searchAnchor = searchEl.closest<HTMLElement>(".noema-wiki-search")!;
 const statusEl = root.querySelector<HTMLElement>("[data-status]")!;
 const newDialog = root.querySelector<HTMLDialogElement>("[data-new-dialog]")!;
 const newForm = root.querySelector<HTMLFormElement>("[data-new-form]")!;
@@ -227,6 +233,8 @@ const gitFrame = root.querySelector<HTMLIFrameElement>("[data-git-frame]")!;
 const gitStatus = root.querySelector<HTMLElement>("[data-git-status]")!;
 let index: WikiIndex | null = null;
 let activeView = "home";
+let activeGraph: WorkspaceGraph | null = null;
+let graphPayloadCache: GraphPayload | null = null;
 let busy = false;
 let activeConflict: { repositoryId: string; path: string; kind: string; editor?: HTMLElement & { ctr?: string } } | null = null;
 let activeManagedNote: WikiNote | null = null;
@@ -238,6 +246,17 @@ let pageSearchTimer = 0;
 type WikiAppearance = { text: "small" | "standard" | "large"; width: "standard" | "wide" };
 const appearanceKey = "noema-wiki-appearance-v1";
 let appearance: WikiAppearance = { text: "standard", width: "standard" };
+
+function reportWikiWindowState(): void {
+  window.noemaDesktop?.updateWindowState({
+    kind: activeView === "graph" ? "graph" : "wiki",
+    title: activeView === "graph" ? "Knowledge Graph" : "Noema Wiki",
+    dirty: false,
+    saveInFlight: false,
+    conflict: Boolean(activeConflict),
+    busy,
+  });
+}
 
 try {
   appearance = { ...appearance, ...JSON.parse(localStorage.getItem(appearanceKey) || "{}") };
@@ -267,12 +286,21 @@ function setStatus(message: string, error = false): void {
   statusEl.classList.toggle("is-error", error);
 }
 
-function openNote(note: Pick<WikiNote, "file">): void {
+function openNote(note: Pick<WikiNote, "file">, options: { newWindow?: boolean } = {}): void {
   const url = new URL("/", location.origin);
   url.searchParams.set("file", note.file);
   if (!serverReaderMode) url.searchParams.set("host", window.noemaDesktop ? "desktop" : "browser");
-  window.open(url.toString(), "_blank", "noopener");
+  if (options.newWindow) window.open(url.toString(), "_blank", "noopener");
+  else location.assign(url.toString());
 }
+
+createKnowledgeSearch({
+  input: searchEl,
+  anchor: searchAnchor,
+  search: (body) => api.knowledge.search(body),
+  open: openNote,
+  limit: 8,
+});
 
 function button(label: string, className = ""): HTMLButtonElement {
   const element = document.createElement("button");
@@ -293,14 +321,140 @@ function emptyState(title: string, copy: string): HTMLElement {
   return el;
 }
 
-function navigateTo(view: string, query = ""): void {
+function routeForView(view: string): string {
+  const url = new URL(location.href);
+  if (view === "home") url.searchParams.delete("view");
+  else url.searchParams.set("view", view);
+  url.searchParams.delete("q");
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+function navigateTo(view: string, query = "", options: { history?: boolean } = {}): void {
+  const previous = activeView;
   activeView = view;
   if (view === "home") searchEl.value = "";
   else if (query) searchEl.value = query;
   closePanels();
   selectActiveNav();
   render();
+  if (options.history !== false && previous !== view) history.pushState({ view }, "", routeForView(view));
   if (activeView === "pages" || activeView === "recent") void runPageSearch();
+}
+
+const graphSettingsKey = "noema-wiki-graph-settings-v1";
+function savedGraphSettings(): WorkspaceGraphSettings {
+  const defaults: WorkspaceGraphSettings = {
+    showTags: true,
+    showMissing: false,
+    showAttachments: false,
+    showOrphans: false,
+    showArrows: false,
+    showContext: false,
+    colorBy: "repository",
+  };
+  try { return { ...defaults, ...JSON.parse(localStorage.getItem(graphSettingsKey) || "{}") }; }
+  catch { return defaults; }
+}
+
+async function graphPayload(): Promise<GraphPayload> {
+  if (!graphPayloadCache || (index?.generation && graphPayloadCache.generation !== index.generation)) {
+    graphPayloadCache = await api.notes.graph();
+  }
+  return graphPayloadCache;
+}
+
+function graphOpenNode(node: GraphNode, options: { newWindow?: boolean } = {}): void {
+  if ((node.kind && node.kind !== "note") || node.exists === false) return;
+  const note = index?.notes.find((item) => item.id === node.id || item.file === node.path || item.path === node.path);
+  if (note) openNote(note, options);
+}
+
+function graphSurface(preview: boolean): HTMLElement {
+  const section = document.createElement("section");
+  section.className = preview ? "noema-wiki-home-graph" : "noema-wiki-graph-workspace";
+  const header = document.createElement("header");
+  const heading = document.createElement("div");
+  const title = document.createElement("h2");
+  title.textContent = preview ? "Knowledge graph" : "Workspace graph";
+  const copy = document.createElement("p");
+  copy.textContent = preview ? "Explore the connections across this Wiki." : "Filter, group, and inspect the complete Wiki graph.";
+  heading.append(title, copy);
+  const explore = button(preview ? "Explore full graph" : "Center graph");
+  header.append(heading, explore);
+  const toolbar = document.createElement("div");
+  toolbar.className = "noema-wiki-graph-toolbar";
+  const search = document.createElement("input");
+  search.type = "search";
+  search.placeholder = "Search, tag:, title:, repo:, namespace:, is:orphan";
+  search.setAttribute("aria-label", "Filter graph");
+  const group = document.createElement("select");
+  group.setAttribute("aria-label", "Graph repository group");
+  toolbar.append(search, group);
+  const settings = savedGraphSettings();
+  if (!preview) {
+    const color = document.createElement("select");
+    color.setAttribute("aria-label", "Color graph by");
+    color.append(
+      new Option("Color · repository", "repository"),
+      new Option("Color · namespace", "namespace"),
+      new Option("Color · group", "group"),
+    );
+    color.value = settings.colorBy;
+    color.addEventListener("change", () => {
+      settings.colorBy = color.value as WorkspaceGraphSettings["colorBy"];
+      localStorage.setItem(graphSettingsKey, JSON.stringify(settings));
+      mount();
+    });
+    toolbar.append(color);
+    for (const [key, label] of [
+      ["showTags", "Tags"], ["showAttachments", "Attachments"], ["showMissing", "Missing"], ["showOrphans", "Orphans"], ["showContext", "1-hop context"], ["showArrows", "Arrows"],
+    ] as Array<[keyof WorkspaceGraphSettings, string]>) {
+      const control = button(label);
+      control.classList.toggle("is-active", Boolean(settings[key]));
+      control.setAttribute("aria-pressed", String(Boolean(settings[key])));
+      control.addEventListener("click", () => {
+        (settings[key] as boolean) = !settings[key];
+        localStorage.setItem(graphSettingsKey, JSON.stringify(settings));
+        mount();
+      });
+      toolbar.append(control);
+    }
+  }
+  const canvas = document.createElement("div");
+  canvas.className = "noema-wiki-graph-canvas";
+  const footer = document.createElement("footer");
+  const status = document.createElement("span");
+  const detail = document.createElement("div");
+  detail.className = "aaronnote-graph-detail";
+  detail.hidden = true;
+  footer.append(status, detail);
+  section.append(header, toolbar, canvas, footer);
+  const marker = activeView;
+  const mount = (): void => {
+    activeGraph?.destroy();
+    activeGraph = null;
+    canvas.replaceChildren();
+    status.textContent = "Loading graph…";
+    void graphPayload().then((payload) => {
+      if (activeView !== marker || !section.isConnected) return;
+      activeGraph = createWorkspaceGraph({
+        root: canvas,
+        status,
+        detail,
+        searchInput: search,
+        groupInput: group,
+        payload,
+        currentKey: "",
+        openNode: graphOpenNode,
+        mode: preview ? "preview" : "full",
+        maxNodes: preview ? 500 : undefined,
+        settings,
+      });
+    }).catch((error) => { status.textContent = error instanceof Error ? error.message : "Graph unavailable"; });
+  };
+  explore.addEventListener("click", () => preview ? navigateTo("graph") : mount());
+  queueMicrotask(mount);
+  return section;
 }
 
 function homeAction(label: string, view: string, copy: string): HTMLElement {
@@ -334,6 +488,8 @@ function renderHome(): void {
     facts.append(fact);
   }
   intro.append(statement, facts);
+
+  const graph = graphSurface(true);
 
   const columns = document.createElement("div");
   columns.className = "noema-wiki-home-columns";
@@ -396,7 +552,11 @@ function renderHome(): void {
     homeAction(serverReaderMode ? "Review the Wiki" : "Maintain the Wiki", "reports", "Review links, diagnostics, and indexing health."),
   );
   portals.append(portalTitle, portalGrid);
-  viewEl.append(intro, columns, portals);
+  viewEl.append(intro, graph, columns, portals);
+}
+
+function renderGraph(): void {
+  viewEl.append(graphSurface(false));
 }
 
 function noteCard(note: WikiNote): HTMLElement {
@@ -419,6 +579,12 @@ function noteCard(note: WikiNote): HTMLElement {
     note.tags.slice(0, 4).join(" · "),
   ].filter(Boolean).join(" · ") || "No metadata";
   copy.append(title, path, meta);
+  if (note.excerpt) {
+    const excerpt = document.createElement("p");
+    excerpt.className = "noema-wiki-search-excerpt";
+    excerpt.textContent = note.excerpt.replaceAll("[[", "").replaceAll("]]", "");
+    copy.appendChild(excerpt);
+  }
   const actions = button("•••");
   actions.className = "noema-wiki-page-actions";
   actions.title = "Move, copy, or merge page";
@@ -1012,6 +1178,8 @@ async function renderRepositories(): Promise<void> {
 
 function render(): void {
   if (!index) return;
+  activeGraph?.destroy();
+  activeGraph = null;
   root.dataset.wikiView = activeView;
   root.querySelector<HTMLElement>("[data-wiki-layout]")!.textContent = `${index.layout} layout`;
   root.querySelector<HTMLElement>("[data-wiki-root]")!.textContent = activeView === "home"
@@ -1039,6 +1207,7 @@ function render(): void {
     files: "All files",
     tags: serverReaderMode ? "Tags" : "Tag management",
     dependencies: "Dependencies",
+    graph: "Knowledge graph",
     sync: "Local and Git sync",
     wanted: "Wanted pages",
     reports: "Reports",
@@ -1048,6 +1217,7 @@ function render(): void {
   kickerEl.textContent = activeView === "home" ? "Noema Wiki" : (serverReaderMode ? "Public knowledge" : "Workspace knowledge");
   viewEl.replaceChildren();
   if (activeView === "home") renderHome();
+  else if (activeView === "graph") renderGraph();
   else if (activeView === "wanted") renderWanted();
   else if (activeView === "reports") renderReports();
   else if (activeView === "repositories" || activeView === "sync") void renderRepositories();
@@ -1057,6 +1227,7 @@ function render(): void {
   else if (activeView === "tags") void renderTags();
   else if (activeView === "dependencies") renderDependencies();
   else renderPages();
+  reportWikiWindowState();
 }
 
 function selectActiveNav(): void {
@@ -1068,11 +1239,13 @@ function selectActiveNav(): void {
 async function load(refresh = false, options: { silent?: boolean } = {}): Promise<void> {
   if (busy) return;
   busy = true;
+  reportWikiWindowState();
   if (!options.silent) setStatus(refresh ? "Refreshing the global Wiki index…" : "Loading Wiki…");
   try {
     const next = refresh ? await api.wiki.refresh() : await api.wiki.bootstrap();
     if (options.silent && index?.generation && next.generation === index.generation) return;
     index = next;
+    if (graphPayloadCache && graphPayloadCache.generation !== index.generation) graphPayloadCache = null;
     setStatus(`${index.notes.length} pages across ${index.repositories.length} repositories`);
     const select = newForm.elements.namedItem("repositoryId") as HTMLSelectElement;
     select.replaceChildren();
@@ -1102,6 +1275,7 @@ async function load(refresh = false, options: { silent?: boolean } = {}): Promis
     viewEl.replaceChildren(emptyState("Wiki unavailable", "Check the workspace root and layout in Configuration."));
   } finally {
     busy = false;
+    reportWikiWindowState();
   }
 }
 
@@ -1503,6 +1677,14 @@ const removeThemeRuntime = installNoemaThemeRuntime();
 window.addEventListener("beforeunload", removeThemeRuntime, { once: true });
 const initialQuery = new URLSearchParams(location.search);
 searchEl.value = initialQuery.get("q") || "";
+const initialView = initialQuery.get("view") || "home";
+if (["home", "pages", "recent", "folders", "namespaces", "files", "tags", "dependencies", "graph", "sync", "wanted", "reports", "repositories"].includes(initialView)) {
+  activeView = initialView;
+}
+window.addEventListener("popstate", () => {
+  const view = new URLSearchParams(location.search).get("view") || "home";
+  navigateTo(view, "", { history: false });
+});
 if (!serverReaderMode && initialQuery.get("new") === "1") {
   void load().then(() => showNewPage(initialQuery.get("title") || ""));
 } else {

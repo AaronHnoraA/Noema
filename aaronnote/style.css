@@ -117,14 +117,14 @@ button:disabled {
   right: 0;
   left: 0;
   display: grid;
-  grid-template-columns: minmax(120px, 1fr) auto minmax(120px, 1fr);
+  grid-template-columns: minmax(230px, 1fr) minmax(160px, auto) minmax(330px, 1fr);
   align-items: center;
-  gap: 24px;
-  height: 62px;
-  padding: 0 clamp(16px, 2.2vw, 36px);
-  border-bottom: 1px solid color-mix(in srgb, var(--aaronnote-border), transparent 62%);
-  background: color-mix(in srgb, var(--aaron-paper), var(--aaronnote-chrome) 26%);
-  box-shadow: 0 8px 28px color-mix(in srgb, var(--aaron-ink), transparent 94%);
+  gap: 16px;
+  height: 56px;
+  padding: 0 clamp(12px, 1.8vw, 28px);
+  border-bottom: 1px solid color-mix(in srgb, var(--aaronnote-border), transparent 72%);
+  background: color-mix(in srgb, var(--aaron-paper), transparent 4%);
+  backdrop-filter: blur(14px);
   font-family: var(--aaron-font-sans);
 }
 
@@ -137,9 +137,9 @@ button:disabled {
   text-decoration: none;
 }
 
-.noema-server-brand img { width: 30px; height: 30px; object-fit: contain; }
+.noema-server-brand img { width: 27px; height: 27px; object-fit: contain; }
 .noema-server-brand span { min-width: 0; display: grid; gap: 2px; }
-.noema-server-brand b { font: 780 16px/1 var(--aaron-font-heading); letter-spacing: -0.015em; }
+.noema-server-brand b { font: 780 15px/1 var(--aaron-font-heading); letter-spacing: -0.015em; }
 .noema-server-brand small,
 .noema-server-page small {
   color: var(--aaronnote-muted);
@@ -148,23 +148,21 @@ button:disabled {
   text-transform: uppercase;
 }
 
-.noema-server-header nav {
+.noema-server-leading, .noema-server-actions, .noema-server-header nav {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 3px;
-  border: 1px solid color-mix(in srgb, var(--aaronnote-border), transparent 64%);
-  border-radius: 10px;
-  padding: 3px;
-  background: color-mix(in srgb, var(--aaronnote-chrome), transparent 34%);
+  gap: 4px;
 }
+.noema-server-leading { min-width: 0; gap: 14px; }
+.noema-server-actions { min-width: 0; justify-content: flex-end; }
 
 .noema-server-header button {
-  min-width: 34px;
-  height: 34px;
-  border-radius: 7px;
+  min-width: 32px;
+  height: 32px;
+  border-radius: 6px;
   border-color: transparent;
   background: transparent;
+  font-size: 11px;
 }
 
 .noema-server-header button[hidden] { display: none; }
@@ -179,18 +177,47 @@ button:disabled {
 .noema-server-page {
   min-width: 0;
   display: grid;
-  justify-items: end;
-  gap: 4px;
-  text-align: right;
+  justify-items: center;
+  text-align: center;
 }
 
 .noema-server-page span {
-  max-width: min(34vw, 520px);
+  max-width: min(30vw, 520px);
   overflow: hidden;
   font: 720 15px/1.15 var(--aaron-font-heading);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.noema-server-search {
+  position: relative; width: clamp(150px, 16vw, 240px); height: 32px; display: flex; align-items: center; gap: 6px;
+  border: 1px solid color-mix(in srgb, var(--aaronnote-border), transparent 66%); border-radius: 7px; padding: 0 9px; background: color-mix(in srgb, var(--aaronnote-bg), transparent 30%);
+}
+.noema-server-search[hidden] { display: none; }
+.noema-server-search input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--aaron-ink); font-size: 11px; }
+.noema-server-search:focus-within { border-color: color-mix(in srgb, var(--aaron-accent), transparent 42%); box-shadow: 0 0 0 3px color-mix(in srgb, var(--aaron-accent), transparent 91%); }
+.noema-server-search .noema-knowledge-search-results { right: 0; left: auto; width: min(520px, calc(100vw - 24px)); }
+.noema-knowledge-search-results {
+  position: absolute; z-index: 160; top: calc(100% + 8px); max-height: min(520px, calc(100vh - 80px)); overflow: auto;
+  border: 1px solid var(--aaronnote-border); border-radius: 10px; padding: 6px; background: var(--aaron-paper); box-shadow: 0 18px 48px color-mix(in srgb, var(--aaron-ink), transparent 80%);
+}
+.noema-knowledge-search-results[hidden] { display: none; }
+.noema-knowledge-search-results > button { width: 100%; min-height: 0; display: grid; gap: 3px; border: 0; border-radius: 7px; padding: 10px 12px; background: transparent; text-align: left; }
+.noema-knowledge-search-results > button[aria-selected="true"] { background: color-mix(in srgb, var(--aaron-accent), transparent 91%); }
+.noema-knowledge-search-results strong { font: 750 14px/1.25 var(--aaron-font-sans); }
+.noema-knowledge-search-results small, .noema-knowledge-search-results span { overflow: hidden; color: var(--aaronnote-muted); font-size: 10px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.noema-knowledge-search-results > p { margin: 0; padding: 16px; color: var(--aaronnote-muted); font-size: 12px; }
+.noema-global-search {
+  position: fixed; z-index: 220; inset: 0; display: grid; place-items: start center; padding-top: max(82px, 11vh);
+  background: color-mix(in srgb, var(--aaron-ink), transparent 76%); backdrop-filter: blur(3px);
+}
+.noema-global-search[hidden] { display: none; }
+.noema-global-search > label {
+  position: relative; width: min(660px, calc(100vw - 32px)); min-height: 48px; display: flex; align-items: center; gap: 10px;
+  border: 1px solid var(--aaronnote-border); border-radius: 12px; padding: 0 15px; background: var(--aaron-paper); box-shadow: 0 24px 70px color-mix(in srgb, var(--aaron-ink), transparent 60%);
+}
+.noema-global-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--aaron-ink); font-size: 15px; }
+.noema-global-search .noema-knowledge-search-results { right: 0; left: 0; }
 
 .noema-desktop-titlebar {
   position: fixed;
@@ -292,12 +319,12 @@ body[data-host-mode="desktop"] .aaronnote-focused-shell {
 }
 
 body[data-host-mode="server"] .aaronnote-focused-shell {
-  height: calc(100vh - 62px);
-  margin-top: 62px;
+  height: calc(100vh - 56px);
+  margin-top: 56px;
 }
 
 body[data-host-mode="desktop"] { --noema-floating-panel-top: 66px; }
-body[data-host-mode="server"] { --noema-floating-panel-top: 74px; }
+body[data-host-mode="server"] { --noema-floating-panel-top: 68px; }
 
 body[data-host-mode="desktop"] :is(.aaronnote-tools-panel, .aaronnote-jupyter-panel, .aaronnote-floating-toc, .aaronnote-local-graph-panel, .aaronnote-find-panel),
 body[data-host-mode="server"] :is(.aaronnote-tools-panel, .aaronnote-jupyter-panel, .aaronnote-floating-toc, .aaronnote-local-graph-panel, .aaronnote-find-panel) {
@@ -325,7 +352,7 @@ body[data-host-mode="desktop"] .aaronnote-status-hud {
 }
 
 body[data-host-mode="server"] .aaronnote-status-hud {
-  top: 72px;
+  top: 66px;
 }
 
 body[data-host-mode="server"] .aaronnote-status-hud[hidden] { display: none; }
@@ -336,13 +363,12 @@ body[data-host-mode="server"] .aaronnote-status-pill-left {
 
 @media (max-width: 720px) {
   .noema-server-header {
-    grid-template-columns: auto 1fr;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     padding: 0 12px;
   }
-
-  .noema-server-page {
-    display: none;
-  }
+  .noema-server-brand span, .noema-server-leading nav, .noema-server-search, .noema-server-actions button:last-child { display: none; }
+  .noema-server-page span { max-width: 42vw; }
+  .noema-server-actions button { padding-inline: 7px; }
 }
 
 /* Server mode keeps the App's CM6 layout and rendering intact. Only authoring

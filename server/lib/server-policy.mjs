@@ -3,6 +3,7 @@ const SERVER_READ_CHANNELS = new Set([
   "aaronnote:api:wiki:environment",
   "aaronnote:api:wiki:refresh",
   "aaronnote:api:wiki:search",
+  "aaronnote:api:knowledge:search",
   "aaronnote:api:wiki:resolve-link",
   "aaronnote:api:wiki:tags",
   "aaronnote:api:notes:bootstrap",

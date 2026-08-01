@@ -1,4 +1,5 @@
 import type { GraphEdge, GraphNode, GraphPayload } from "./types.ts";
+import { knowledgeEntityMatches, parseKnowledgeQuery } from "../shared/knowledge-query.mjs";
 
 export type WorkspaceGraphOptions = {
   root: HTMLElement;
@@ -9,17 +10,39 @@ export type WorkspaceGraphOptions = {
   payload: GraphPayload;
   currentKey: string;
   openNode: (node: GraphNode, options?: { newWindow?: boolean }) => void;
+  mode?: "panel" | "preview" | "full";
+  maxNodes?: number;
+  settings?: Partial<WorkspaceGraphSettings>;
 };
 
 export type WorkspaceGraph = { destroy: () => void };
 
-type DrawNode = GraphNode & { x: number; y: number; degree: number; current: boolean };
+export type WorkspaceGraphSettings = {
+  showTags: boolean;
+  showMissing: boolean;
+  showAttachments: boolean;
+  showOrphans: boolean;
+  showArrows: boolean;
+  showContext: boolean;
+  colorBy: "repository" | "namespace" | "group";
+};
+
+type DrawNode = GraphNode & { x: number; y: number; degree: number; current: boolean; matched: boolean; context: boolean };
 type DrawEdge = GraphEdge & { sourceNode: DrawNode; targetNode: DrawNode };
 
 const MAX_DRAW_NODES = 10_000;
 const MAX_DRAW_EDGES = 25_000;
 const SEARCH_LIMIT = 50;
 const DPR_LIMIT = 2;
+const DEFAULT_SETTINGS: WorkspaceGraphSettings = {
+  showTags: true,
+  showMissing: false,
+  showAttachments: false,
+  showOrphans: true,
+  showArrows: false,
+  showContext: false,
+  colorBy: "repository",
+};
 
 function hash(value: string): number {
   let result = 2166136261;
@@ -29,6 +52,22 @@ function hash(value: string): number {
 
 function label(node: GraphNode): string {
   return node.title || node.id || node.path || node.key;
+}
+
+const GRAPH_PALETTE = ["#9b3827", "#6c5a8c", "#39736d", "#9a6a24", "#3f668f", "#86604e", "#65733f", "#8b4868"];
+
+function colorGroup(node: GraphNode, colorBy: WorkspaceGraphSettings["colorBy"]): string {
+  if (colorBy === "namespace") return node.namespace || node.repositoryId || node.groupKey || "Root";
+  if (colorBy === "group") return node.groupKey || node.groupLabel || "Root";
+  return node.repositoryId || node.groupKey || node.groupLabel || "Root";
+}
+
+export function workspaceGraphNodeColor(node: GraphNode, colorBy: WorkspaceGraphSettings["colorBy"]): string {
+  return GRAPH_PALETTE[hash(colorGroup(node, colorBy)) % GRAPH_PALETTE.length] || GRAPH_PALETTE[0];
+}
+
+export function workspaceGraphNodeMatches(node: GraphNode, query: string, degree = 0): boolean {
+  return knowledgeEntityMatches(node as unknown as Record<string, unknown>, parseKnowledgeQuery(query), { degree });
 }
 
 function clusterLayout(nodes: DrawNode[], width: number, height: number): void {
@@ -56,26 +95,54 @@ function clusterLayout(nodes: DrawNode[], width: number, height: number): void {
   });
 }
 
-export function workspaceGraphDrawPlan(payload: GraphPayload, currentKey: string, query: string): { nodes: DrawNode[]; edges: DrawEdge[]; truncated: boolean } {
+export function workspaceGraphDrawPlan(
+  payload: GraphPayload,
+  currentKey: string,
+  query: string,
+  options: { maxNodes?: number; settings?: Partial<WorkspaceGraphSettings>; filterQuery?: boolean } = {},
+): { nodes: DrawNode[]; edges: DrawEdge[]; truncated: boolean } {
+  const settings = { ...DEFAULT_SETTINGS, ...(options.settings ?? {}) };
+  const maxNodes = Math.max(1, Math.min(MAX_DRAW_NODES, options.maxNodes ?? MAX_DRAW_NODES));
   const degrees = new Map<string, number>();
   for (const edge of payload.edges) {
     degrees.set(edge.source, (degrees.get(edge.source) ?? 0) + 1);
     degrees.set(edge.target, (degrees.get(edge.target) ?? 0) + 1);
   }
   const needle = query.trim().toLowerCase();
-  const ranked = payload.nodes.map((node) => ({
+  const eligible = payload.nodes.filter((node) => {
+    const kind = node.kind || "note";
+    const degree = degrees.get(node.key) ?? 0;
+    if (!settings.showTags && kind === "tag") return false;
+    if (!settings.showMissing && (kind === "missing" || node.exists === false)) return false;
+    if (!settings.showAttachments && kind === "dependency") return false;
+    if (!settings.showOrphans && degree === 0 && node.key !== currentKey) return false;
+    return true;
+  });
+  const matchedKeys = new Set(eligible
+    .filter((node) => !needle || workspaceGraphNodeMatches(node, query, degrees.get(node.key) ?? 0))
+    .map((node) => node.key));
+  const visibleKeys = new Set(matchedKeys);
+  if (needle && options.filterQuery === true && settings.showContext) {
+    for (const edge of payload.edges) {
+      if (matchedKeys.has(edge.source)) visibleKeys.add(edge.target);
+      if (matchedKeys.has(edge.target)) visibleKeys.add(edge.source);
+    }
+  }
+  const ranked = eligible.filter((node) => options.filterQuery !== true || !needle || visibleKeys.has(node.key)).map((node) => ({
     node,
     tier: node.key === currentKey ? 0
-      : needle && [label(node), node.path, ...(node.aliases ?? []), ...(node.tags ?? [])].join(" ").toLowerCase().includes(needle) ? 1
+      : needle && matchedKeys.has(node.key) ? 1
         : 2,
     degree: degrees.get(node.key) ?? 0,
-  })).sort((a, b) => a.tier - b.tier || b.degree - a.degree || a.node.key.localeCompare(b.node.key));
-  const chosen = ranked.slice(0, MAX_DRAW_NODES).map(({ node }) => ({
+  })).sort((a, b) => a.tier - b.tier || b.degree - a.degree || Number(b.node.mtimeMs || 0) - Number(a.node.mtimeMs || 0) || a.node.key.localeCompare(b.node.key));
+  const chosen = ranked.slice(0, maxNodes).map(({ node }) => ({
     ...node,
     x: 0,
     y: 0,
     degree: degrees.get(node.key) ?? 0,
     current: node.key === currentKey,
+    matched: !needle || matchedKeys.has(node.key),
+    context: Boolean(needle && !matchedKeys.has(node.key)),
   }));
   const byKey = new Map(chosen.map((node) => [node.key, node]));
   const edges: DrawEdge[] = [];
@@ -86,7 +153,7 @@ export function workspaceGraphDrawPlan(payload: GraphPayload, currentKey: string
     edges.push({ ...edge, sourceNode, targetNode });
     if (edges.length >= MAX_DRAW_EDGES) break;
   }
-  return { nodes: chosen, edges, truncated: payload.nodes.length > chosen.length || payload.edges.length > edges.length };
+  return { nodes: chosen, edges, truncated: ranked.length > chosen.length || payload.edges.length > edges.length };
 }
 
 function safeContext(canvas: HTMLCanvasElement): CanvasRenderingContext2D | null {
@@ -102,6 +169,8 @@ export function createWorkspaceGraph(options: WorkspaceGraphOptions): WorkspaceG
   let transform = { x: 0, y: 0, k: 1 };
   let pointer: { id: number; x: number; y: number; node: DrawNode | null; moved: boolean } | null = null;
   let spatial = new Map<string, DrawNode[]>();
+  const settings = { ...DEFAULT_SETTINGS, ...(options.settings ?? {}) };
+  let resizeObserver: ResizeObserver | null = null;
 
   const canvas = document.createElement("canvas");
   canvas.className = "aaronnote-workspace-graph-canvas";
@@ -118,17 +187,24 @@ export function createWorkspaceGraph(options: WorkspaceGraphOptions): WorkspaceG
   options.root.replaceChildren(canvas, searchResults, accessible);
 
   const rect = options.root.getBoundingClientRect();
-  const width = Math.max(320, Math.round(rect.width || options.root.clientWidth || 520));
-  const height = Math.max(260, Math.round(rect.height || options.root.clientHeight || 360));
-  const dpr = Math.min(DPR_LIMIT, Math.max(1, window.devicePixelRatio || 1));
-  canvas.width = Math.round(width * dpr);
-  canvas.height = Math.round(height * dpr);
-  canvas.style.width = `${width}px`;
-  canvas.style.height = `${height}px`;
+  let width = Math.max(320, Math.round(rect.width || options.root.clientWidth || 520));
+  let height = Math.max(260, Math.round(rect.height || options.root.clientHeight || 360));
+  let dpr = Math.min(DPR_LIMIT, Math.max(1, window.devicePixelRatio || 1));
+  function sizeCanvas(): void {
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+  }
+  sizeCanvas();
   const ctx = safeContext(canvas);
 
   const query = options.searchInput.value;
-  const graph = workspaceGraphDrawPlan(options.payload, options.currentKey, query);
+  const graph = workspaceGraphDrawPlan(options.payload, options.currentKey, query, {
+    maxNodes: options.maxNodes ?? (options.mode === "preview" ? 500 : MAX_DRAW_NODES),
+    settings,
+    filterQuery: true,
+  });
   let nodes = graph.nodes;
   let edges = graph.edges;
   clusterLayout(nodes, width, height);
@@ -153,7 +229,11 @@ export function createWorkspaceGraph(options: WorkspaceGraphOptions): WorkspaceG
 
   function applyGroupFilter(): void {
     const group = options.groupInput.value;
-    const next = workspaceGraphDrawPlan(options.payload, options.currentKey, options.searchInput.value);
+    const next = workspaceGraphDrawPlan(options.payload, options.currentKey, options.searchInput.value, {
+      maxNodes: options.maxNodes ?? (options.mode === "preview" ? 500 : MAX_DRAW_NODES),
+      settings,
+      filterQuery: true,
+    });
     nodes = group ? next.nodes.filter((node) => (node.groupKey || node.groupLabel || "Root") === group) : next.nodes;
     const byKey = new Set(nodes.map((node) => node.key));
     edges = next.edges.filter((edge) => byKey.has(edge.source) && byKey.has(edge.target));
@@ -162,6 +242,7 @@ export function createWorkspaceGraph(options: WorkspaceGraphOptions): WorkspaceG
     selected = selected && byKey.has(selected.key) ? nodes.find((node) => node.key === selected!.key) ?? null : null;
     updateStatus(next.truncated);
     renderAccessibleNodes();
+    startSimulation();
     requestDraw();
   }
 
@@ -190,27 +271,66 @@ export function createWorkspaceGraph(options: WorkspaceGraphOptions): WorkspaceG
     ctx.translate(transform.x, transform.y);
     ctx.scale(transform.k, transform.k);
     const active = neighbors(selected);
+    const style = getComputedStyle(options.root);
+    const ink = style.getPropertyValue("--aaron-ink").trim() || "#24201c";
+    const muted = style.getPropertyValue("--aaron-muted").trim() || "#71809d";
+    const accent = style.getPropertyValue("--aaron-accent").trim() || "#9b3827";
+    const tagColor = style.getPropertyValue("--aaron-green-soft").trim() || "#8fbc8f";
     for (const edge of edges) {
       const related = !selected || active.has(edge.source) && active.has(edge.target);
       ctx.globalAlpha = related ? 0.36 : 0.055;
-      ctx.strokeStyle = edge.type === "tag" ? "#d4b34f" : "#71809d";
+      ctx.strokeStyle = edge.type === "tag" ? tagColor : edge.type === "dependency" ? accent : muted;
       ctx.lineWidth = related ? 0.8 : 0.45;
       ctx.beginPath();
       ctx.moveTo(edge.sourceNode.x, edge.sourceNode.y);
       ctx.lineTo(edge.targetNode.x, edge.targetNode.y);
       ctx.stroke();
+      if (settings.showArrows && edge.directed !== false && related) {
+        const angle = Math.atan2(edge.targetNode.y - edge.sourceNode.y, edge.targetNode.x - edge.sourceNode.x);
+        const tx = edge.targetNode.x - Math.cos(angle) * 6;
+        const ty = edge.targetNode.y - Math.sin(angle) * 6;
+        ctx.beginPath();
+        ctx.moveTo(tx, ty);
+        ctx.lineTo(tx - Math.cos(angle - 0.55) * 5, ty - Math.sin(angle - 0.55) * 5);
+        ctx.lineTo(tx - Math.cos(angle + 0.55) * 5, ty - Math.sin(angle + 0.55) * 5);
+        ctx.closePath();
+        ctx.fillStyle = ctx.strokeStyle;
+        ctx.fill();
+      }
     }
-    for (const node of nodes) {
+    const labelCells = new Set<string>();
+    const reserveLabel = (node: DrawNode, text: string): boolean => {
+      const screenX = transform.x + (node.x + 7) * transform.k;
+      const screenY = transform.y + (node.y - 8) * transform.k;
+      const widthCells = Math.max(1, Math.ceil(text.length * 6.2 / 72));
+      const cellX = Math.floor(screenX / 72);
+      const cellY = Math.floor(screenY / 20);
+      const keys = Array.from({ length: widthCells }, (_, index) => `${cellX + index}:${cellY}`);
+      const forced = node.current || node === selected || node === hovered;
+      if (!forced && keys.some((key) => labelCells.has(key))) return false;
+      keys.forEach((key) => labelCells.add(key));
+      return true;
+    };
+    const drawNodes = [...nodes].sort((a, b) => Number(a.context) - Number(b.context) || Number(b.current) - Number(a.current) || b.degree - a.degree);
+    for (const node of drawNodes) {
       const related = !selected || active.has(node.key);
-      ctx.globalAlpha = related ? 1 : 0.12;
-      ctx.fillStyle = node.current ? "#ff9bad" : node === selected ? "#9de7ff" : "#8e98b2";
+      ctx.globalAlpha = related ? node.context ? 0.34 : 1 : 0.1;
+      ctx.fillStyle = node.current ? accent
+        : node === selected ? tagColor
+          : node.kind === "tag" ? tagColor
+            : node.kind === "missing" ? "#b06b63" : workspaceGraphNodeColor(node, settings.colorBy) || muted;
       ctx.beginPath();
-      ctx.arc(node.x, node.y, node.current ? 5.5 : node === selected ? 5 : 3.2, 0, Math.PI * 2);
+      const radius = node.current ? 6 : node === selected ? 5.5 : Math.min(6, 2.7 + Math.sqrt(Math.max(0, node.degree)) * 0.62);
+      ctx.arc(node.x, node.y, radius, 0, Math.PI * 2);
       ctx.fill();
-      if (node.current || node === selected || node === hovered || transform.k >= 1.2) {
-        ctx.fillStyle = "#d9dfeb";
+      const showLabel = node.current || node === selected || node === hovered || node.matched && (
+        transform.k >= 2 || transform.k >= 1.25 && node.degree >= 2 || nodes.length <= 80 && transform.k >= 1.05
+      );
+      const nodeLabel = label(node).slice(0, 42);
+      if (showLabel && reserveLabel(node, nodeLabel)) {
+        ctx.fillStyle = ink;
         ctx.font = `${Math.max(9, 11 / transform.k)}px system-ui`;
-        ctx.fillText(label(node).slice(0, 36), node.x + 7, node.y + 4);
+        ctx.fillText(nodeLabel, node.x + 7, node.y + 4);
       }
     }
     ctx.restore();
@@ -265,11 +385,17 @@ export function createWorkspaceGraph(options: WorkspaceGraphOptions): WorkspaceG
   }
 
   function renderSearch(): void {
-    const needle = options.searchInput.value.trim().toLowerCase();
+    const needle = options.searchInput.value.trim();
     searchResults.replaceChildren();
     if (!needle) { searchResults.hidden = true; return; }
-    const matches = options.payload.nodes.filter((node) =>
-      [label(node), node.path, ...(node.aliases ?? []), ...(node.tags ?? [])].join(" ").toLowerCase().includes(needle)).slice(0, SEARCH_LIMIT);
+    const degree = new Map<string, number>();
+    for (const edge of options.payload.edges) {
+      degree.set(edge.source, (degree.get(edge.source) ?? 0) + 1);
+      degree.set(edge.target, (degree.get(edge.target) ?? 0) + 1);
+    }
+    const matches = options.payload.nodes
+      .filter((node) => workspaceGraphNodeMatches(node, needle, degree.get(node.key) ?? 0))
+      .slice(0, SEARCH_LIMIT);
     for (const node of matches) {
       const button = document.createElement("button");
       button.type = "button";
@@ -336,7 +462,7 @@ export function createWorkspaceGraph(options: WorkspaceGraphOptions): WorkspaceG
     if (!pointer) return;
     canvas.releasePointerCapture?.(pointer.id);
     if (!pointer.moved) showDetail(pointer.node ?? hitNode(event));
-    else if (pointer.node) rebuildSpatial();
+    else if (pointer.node) { rebuildSpatial(); startSimulation(); }
     pointer = null;
   });
   canvas.addEventListener("dblclick", (event) => {
@@ -349,23 +475,33 @@ export function createWorkspaceGraph(options: WorkspaceGraphOptions): WorkspaceG
   options.searchInput.addEventListener("input", onSearch);
   options.groupInput.addEventListener("change", onGroup);
 
-  if (nodes.length <= 1_500 && typeof Worker !== "undefined") {
+  function startSimulation(): void {
+    worker?.terminate();
+    worker = null;
+    if (nodes.length > 1_500 || typeof Worker === "undefined") return;
     try {
-      worker = new Worker(new URL("./workspace-graph-layout.worker.ts", import.meta.url), { type: "module" });
-      const timer = window.setTimeout(() => { worker?.terminate(); worker = null; }, 2_000);
-      worker.addEventListener("message", (event: MessageEvent<{ positions?: Array<{ key: string; x: number; y: number }> }>) => {
-        window.clearTimeout(timer);
+      const instance = new Worker(new URL("./workspace-graph-layout.worker.ts", import.meta.url), { type: "module" });
+      worker = instance;
+      const timer = window.setTimeout(() => {
+        instance.terminate();
+        if (worker === instance) worker = null;
+      }, 2_000);
+      instance.addEventListener("message", (event: MessageEvent<{ done?: boolean; positions?: Array<{ key: string; x: number; y: number }> }>) => {
+        if (worker !== instance) return;
         const positions = new Map((event.data.positions ?? []).map((position) => [position.key, position]));
         for (const node of nodes) {
           const position = positions.get(node.key);
           if (position) { node.x = position.x; node.y = position.y; }
         }
         rebuildSpatial();
-        worker?.terminate();
-        worker = null;
+        if (event.data.done) {
+          window.clearTimeout(timer);
+          instance.terminate();
+          worker = null;
+        }
         requestDraw();
       });
-      worker.postMessage({
+      instance.postMessage({
         width,
         height,
         nodes: nodes.map((node) => ({ key: node.key, x: node.x, y: node.y, current: node.current })),
@@ -374,10 +510,33 @@ export function createWorkspaceGraph(options: WorkspaceGraphOptions): WorkspaceG
       });
     } catch { worker?.terminate(); worker = null; }
   }
+  startSimulation();
 
   updateStatus();
   renderAccessibleNodes();
   requestDraw();
+
+  if (typeof ResizeObserver !== "undefined") {
+    resizeObserver = new ResizeObserver(() => {
+      const next = options.root.getBoundingClientRect();
+      const nextWidth = Math.max(320, Math.round(next.width || options.root.clientWidth || width));
+      const nextHeight = Math.max(260, Math.round(next.height || options.root.clientHeight || height));
+      if (nextWidth === width && nextHeight === height) return;
+      const sx = nextWidth / width;
+      const sy = nextHeight / height;
+      width = nextWidth;
+      height = nextHeight;
+      dpr = Math.min(DPR_LIMIT, Math.max(1, window.devicePixelRatio || 1));
+      for (const node of nodes) { node.x *= sx; node.y *= sy; }
+      transform.x *= sx;
+      transform.y *= sy;
+      sizeCanvas();
+      rebuildSpatial();
+      startSimulation();
+      requestDraw();
+    });
+    resizeObserver.observe(options.root);
+  }
 
   return {
     destroy() {
@@ -385,6 +544,8 @@ export function createWorkspaceGraph(options: WorkspaceGraphOptions): WorkspaceG
       if (frame) window.cancelAnimationFrame(frame);
       worker?.terminate();
       worker = null;
+      resizeObserver?.disconnect();
+      resizeObserver = null;
       options.searchInput.removeEventListener("input", onSearch);
       options.groupInput.removeEventListener("change", onGroup);
       options.detail.replaceChildren();

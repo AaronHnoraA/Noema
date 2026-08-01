@@ -37,6 +37,45 @@ async function setupRoot(prefix: string) {
 }
 
 describe("server note refs", () => {
+  test("wiki graph includes tag, missing, and file dependency nodes without changing legacy scope", () => {
+    const notes = [{
+      key: "page-a",
+      id: "page-a",
+      title: "Page A",
+      path: "public/repo/page-a.md",
+      repositoryPath: "page-a.md",
+      repositoryId: "public/repo",
+      repository: "repo",
+      partition: "public",
+      tags: ["shared"],
+      refs: [],
+      unresolvedLinks: ["Wanted Page"],
+      dependencies: [{ kind: "asset", raw: "image.png", path: "image.png", status: "resolved" }],
+      roam: false,
+    }, {
+      key: "page-b",
+      id: "page-b",
+      title: "Page B",
+      path: "public/repo/page-b.md",
+      repositoryPath: "page-b.md",
+      repositoryId: "public/repo",
+      repository: "repo",
+      partition: "public",
+      tags: ["shared"], refs: [], unresolvedLinks: [], dependencies: [], roam: false,
+    }];
+    expect(graphPayload(notes).nodes).toEqual([]);
+    const payload = graphPayload(notes, { scope: "server", generation: "g1" });
+    expect(payload.generation).toBe("g1");
+    expect(payload.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "tag", title: "#shared" }),
+      expect.objectContaining({ kind: "missing", title: "Wanted Page", exists: false }),
+      expect.objectContaining({ kind: "dependency", path: "image.png", exists: true }),
+    ]));
+    expect(payload.edges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: "page-a", type: "dependency" }),
+    ]));
+  });
+
   test("extracts markdown note refs whose paths contain balanced parentheses", () => {
     expect(
       refsFromContent("[eq:1](roam/project/UNSW/ISO(202603)/meeting.md#eq-eq%3A1)"),

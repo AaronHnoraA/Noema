@@ -126,6 +126,7 @@ export function createFloatingTocPanel(options: {
   resolveNoteRef: (ref: string) => NoteSummary | undefined;
   openNote: (note: NoteSummary, options?: OpenNoteOptions) => void;
   openTag?: (tag: string) => void;
+  getActivePosition?: () => number;
 }): FloatingTocPanel {
   let renderKey = "";
   const floatingFoldState = new Set<string>();
@@ -342,7 +343,7 @@ export function createFloatingTocPanel(options: {
     const orgEnvState = orgEnvActive ? editorOrgEnvAnchors() : { items: [], signature: "" };
     const headings = headingState.items.filter((h) => !h.omit);
     const anchors = anchorState.items;
-    const selectionPos = options.editor.view.state.selection.main.from;
+    const selectionPos = options.getActivePosition?.() ?? options.editor.view.state.selection.main.from;
     const activeIndex = headings.reduce((active, heading, index) => heading.pos <= selectionPos ? index : active, -1);
     const currentNote = notes.find((note) => note.file === options.getCurrentFile());
     const relatedIds = [...(currentNote?.refs ?? []), ...(currentNote?.backlinks ?? [])];

@@ -40,7 +40,7 @@ describe("Server public projection", () => {
     await writeFile(join(privateRepo, "images", "secret.png"), "secret image");
     await writeFile(join(publicRepo, "visible.md"), note("visible", "Visible", "[[Secret]]\n![Plot](images/plot.png)", "aliases: Shown\n"));
     await writeFile(join(publicRepo, "hidden.md"), note("hidden", "Hidden", "", "private: true\n"));
-    await writeFile(join(privateRepo, "secret.md"), note("secret", "Secret", "![Secret](images/secret.png)"));
+    await writeFile(join(privateRepo, "secret.md"), note("secret", "Secret", "classified journal phrase\n![Secret](images/secret.png)"));
 
     configure({ root, workspaceRoot: root, workspaceLayout: "wiki", stateRoot: join(root, "state") });
     const full = await buildWikiIndex(root, { layout: "wiki" });
@@ -64,7 +64,9 @@ describe("Server public projection", () => {
       tags: localVisible?.tags,
     });
     expect(catalog.index.repositories.map((item) => item.id)).toEqual(["public/knowledge"]);
-    expect(catalog.search({ query: "Secret" }).total).toBe(0);
+    expect(catalog.search({ query: "Secret" }).items.map((item) => item.title)).toEqual(["Visible"]);
+    expect(catalog.search({ query: "classified journal phrase" }).total).toBe(0);
+    expect(catalog.search({ query: "Plot" }).items.map((item) => item.title)).toEqual(["Visible"]);
     expect(catalog.index.reports.wanted).toEqual(expect.arrayContaining([
       expect.objectContaining({ title: "Secret" }),
     ]));

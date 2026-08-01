@@ -11,6 +11,12 @@ contextBridge.exposeInMainWorld("noemaDesktop", {
   openFiles(files) {
     ipcRenderer.send("noema:open-files", Array.isArray(files) ? files : []);
   },
+  openTarget(target = {}) {
+    return ipcRenderer.invoke("noema:open-target", target);
+  },
+  updateWindowState(state = {}) {
+    ipcRenderer.send("noema:update-window-state", state);
+  },
   showMenu(kind, point = {}) {
     return ipcRenderer.invoke("noema:show-menu", kind, point);
   },

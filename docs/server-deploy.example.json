@@ -4,5 +4,6 @@
   "remoteRoot": "/srv/noema",
   "serviceName": "noema-server.service",
   "nodeBin": "/usr/local/bin/node",
-  "npmBin": "/usr/local/bin/npm"
+  "npmBin": "/usr/local/bin/npm",
+  "retainReleases": 3
 }

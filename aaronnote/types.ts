@@ -36,16 +36,36 @@ export type GraphNode = {
   groupLabel?: string;
   tags?: string[];
   aliases?: string[];
+  kind?: "note" | "tag" | "missing" | "dependency";
+  exists?: boolean;
+  repositoryId?: string;
+  namespace?: string;
+  partition?: "public" | "private";
+  mtimeMs?: number;
 };
 
-export type GraphEdge = { source: string; target: string; type?: "ref" | "backlink" | "tag" };
+export type GraphEdge = {
+  source: string;
+  target: string;
+  type?: "ref" | "backlink" | "tag" | "dependency";
+  directed?: boolean;
+};
 
 export type GraphPayload = {
   type?: string;
   indexVersion: number;
+  generation?: string;
+  scope?: "legacy" | "wiki" | "server";
   nodes: GraphNode[];
   edges: GraphEdge[];
-  meta: { generatedAt?: string; noteCount?: number; edgeCount?: number; tagCount?: number };
+  meta: {
+    generatedAt?: string;
+    noteCount?: number;
+    edgeCount?: number;
+    tagCount?: number;
+    missingCount?: number;
+    dependencyCount?: number;
+  };
 };
 
 export type DirectorySummary = {

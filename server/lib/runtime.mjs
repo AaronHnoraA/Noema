@@ -2004,8 +2004,10 @@ function graphNoteKey(note) {
   return String(note.key || note.id || note.path || note.file || "").trim();
 }
 
-export function graphPayload(notes) {
-  const graphNotes = notes.filter((note) => note.roam);
+export function graphPayload(notes, options = {}) {
+  const scope = String(options.scope || "legacy");
+  const wikiScope = scope === "wiki" || scope === "server";
+  const graphNotes = notes.filter((note) => wikiScope || note.roam);
   const byId = new Map();
   for (const note of graphNotes) {
     const key = graphNoteKey(note);
@@ -2015,24 +2017,138 @@ export function graphPayload(notes) {
     }
   }
   const edges = [];
+  const edgeKeys = new Set();
+  const pushEdge = (source, target, type = "ref", directed = true) => {
+    if (!source || !target || source === target) return;
+    const key = `${source}\0${target}\0${type}`;
+    if (edgeKeys.has(key)) return;
+    edgeKeys.add(key);
+    edges.push(!wikiScope && type === "ref"
+      ? { source, target }
+      : { source, target, type, directed });
+  };
   for (const note of graphNotes) {
     const source = graphNoteKey(note);
     if (!source) continue;
     for (const ref of note.refs || []) {
       const target = byId.get(String(ref));
-      if (target && target !== source) edges.push({ source, target });
+      if (target) pushEdge(source, target, "ref", true);
     }
   }
-  const tags = [...new Set(graphNotes.flatMap((note) => note.tags || []))].sort();
+  const tagCounts = new Map();
+  for (const note of graphNotes) {
+    for (const rawTag of note.tags || []) {
+      const tag = String(rawTag || "").trim().replace(/^#/, "");
+      if (tag) tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
+    }
+  }
+  const tags = [...tagCounts.keys()].sort();
+  const tagNodes = tags.filter((tag) => (tagCounts.get(tag) || 0) >= 2).map((tag) => ({
+    key: `tag:${tag.toLowerCase()}`,
+    title: `#${tag}`,
+    kind: "tag",
+    exists: true,
+    groupKey: "tags",
+    groupLabel: "Tags",
+    tags: [tag],
+    aliases: [],
+  }));
+  const tagKeys = new Map(tagNodes.map((node) => [node.tags[0].toLowerCase(), node.key]));
+  for (const note of graphNotes) {
+    const source = graphNoteKey(note);
+    for (const rawTag of note.tags || []) {
+      const target = tagKeys.get(String(rawTag || "").trim().replace(/^#/, "").toLowerCase());
+      if (target) pushEdge(source, target, "tag", false);
+    }
+  }
+
+  const missingNodes = [];
+  const missingByLabel = new Map();
+  if (wikiScope) {
+    for (const note of graphNotes) {
+      const source = graphNoteKey(note);
+      for (const rawTarget of note.unresolvedLinks || []) {
+        const label = String(rawTarget || "").trim();
+        if (!label) continue;
+        const lookup = label.toLocaleLowerCase();
+        let target = missingByLabel.get(lookup);
+        if (!target) {
+          target = `missing:${lookup}`;
+          missingByLabel.set(lookup, target);
+          missingNodes.push({
+            key: target,
+            title: label,
+            kind: "missing",
+            exists: false,
+            groupKey: "missing",
+            groupLabel: "Missing",
+            tags: [],
+            aliases: [],
+          });
+        }
+        pushEdge(source, target, "ref", true);
+      }
+    }
+  }
+  const dependencyNodes = [];
+  if (wikiScope) {
+    const dependencyByKey = new Map();
+    const noteByDependencyPath = new Map();
+    for (const note of graphNotes) {
+      const key = graphNoteKey(note);
+      for (const candidate of [
+        note.repositoryPath && `${note.repositoryId || note.repository}/${note.repositoryPath}`,
+        note.path,
+        note.file,
+      ].filter(Boolean)) noteByDependencyPath.set(String(candidate).replace(/^\/+/, ""), key);
+    }
+    for (const note of graphNotes) {
+      const source = graphNoteKey(note);
+      for (const dependency of note.dependencies || []) {
+        const dependencyPath = String(dependency.path || "").replace(/^\/+/, "");
+        const qualifiedPath = dependencyPath && `${note.repositoryId || note.repository}/${dependencyPath}`.replace(/^\/+/, "");
+        const existingNote = noteByDependencyPath.get(qualifiedPath) || noteByDependencyPath.get(dependencyPath);
+        if (existingNote) {
+          pushEdge(source, existingNote, "dependency", true);
+          continue;
+        }
+        const identity = qualifiedPath || `${note.repositoryId || note.repository}/${dependency.raw || "unknown"}`;
+        let target = dependencyByKey.get(identity);
+        if (!target) {
+          target = `dependency:${identity.toLocaleLowerCase()}`;
+          dependencyByKey.set(identity, target);
+          dependencyNodes.push({
+            key: target,
+            title: String(dependency.raw || dependencyPath || "Dependency"),
+            path: dependencyPath,
+            kind: "dependency",
+            exists: dependency.status === "resolved",
+            repositoryId: note.repositoryId || "",
+            namespace: note.qualifiedNamespace || note.namespace || "",
+            partition: note.partition,
+            groupKey: note.repositoryId || note.groupKey || "dependencies",
+            groupLabel: note.repositoryId || note.groupLabel || "Dependencies",
+            tags: [],
+            aliases: [],
+          });
+        }
+        pushEdge(source, target, "dependency", true);
+      }
+    }
+  }
   return {
     type: "graph",
+    scope,
+    generation: String(options.generation || ""),
     meta: {
       generatedAt: new Date().toISOString(),
       noteCount: graphNotes.length,
       edgeCount: edges.length,
       tagCount: tags.length,
+      missingCount: missingNodes.length,
+      dependencyCount: dependencyNodes.length,
     },
-    nodes: graphNotes.map((note) => ({
+    nodes: [...graphNotes.map((note) => ({
       key: graphNoteKey(note),
       id: note.id || "",
       title: note.title || "",
@@ -2042,7 +2158,13 @@ export function graphPayload(notes) {
       groupLabel: note.groupLabel || "",
       tags: note.tags || [],
       aliases: note.aliases || [],
-    })),
+      kind: "note",
+      exists: true,
+      repositoryId: note.repositoryId || "",
+      namespace: note.qualifiedNamespace || note.namespace || "",
+      partition: note.partition,
+      mtimeMs: Number(note.mtimeMs) || 0,
+    })), ...tagNodes, ...missingNodes, ...dependencyNodes],
     edges,
   };
 }

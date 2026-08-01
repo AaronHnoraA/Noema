@@ -15,6 +15,8 @@ export type ServerRuntimeConfig = Readonly<{
   reader: Readonly<{
     showSource: boolean;
     showGraph: boolean;
+    showSearch: boolean;
+    showToc: boolean;
     showStatus: boolean;
     selectionToolbar: boolean;
     customContextMenu: boolean;
@@ -34,6 +36,7 @@ export type ServerDeployConfig = Readonly<{
   serviceName: string;
   nodeBin: string;
   npmBin: string;
+  retainReleases: number;
 }>;
 
 export function normalizeServerRuntimeConfig(raw: unknown, options?: { configFile?: string }): ServerRuntimeConfig;

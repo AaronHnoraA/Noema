@@ -16,9 +16,39 @@ self.addEventListener("message", (event: MessageEvent<{
     .filter((edge): edge is { source: LayoutNode; target: LayoutNode } => Boolean(edge.source && edge.target));
   const started = performance.now();
   const ticks = Math.min(240, Math.max(1, event.data.maxTicks ?? 240));
+  const emit = (done: boolean): void => {
+    self.postMessage({ done, positions: nodes.map(({ key, x, y }) => ({ key, x, y })) });
+  };
 
   for (let tick = 0; tick < ticks && performance.now() - started < 1_900; tick += 1) {
     const alpha = 0.08 * (1 - tick / ticks) + 0.005;
+    const cells = new Map<string, LayoutNode[]>();
+    for (const node of nodes) {
+      const key = `${Math.floor(node.x / 42)}:${Math.floor(node.y / 42)}`;
+      const bucket = cells.get(key) ?? [];
+      bucket.push(node);
+      cells.set(key, bucket);
+    }
+    for (const node of nodes) {
+      const cx = Math.floor(node.x / 42);
+      const cy = Math.floor(node.y / 42);
+      for (let ox = -1; ox <= 1; ox += 1) {
+        for (let oy = -1; oy <= 1; oy += 1) {
+          for (const other of cells.get(`${cx + ox}:${cy + oy}`) ?? []) {
+            if (other === node || other.key < node.key) continue;
+            const dx = other.x - node.x || 0.01;
+            const dy = other.y - node.y || 0.01;
+            const distance = Math.max(2, Math.hypot(dx, dy));
+            if (distance > 52) continue;
+            const force = (52 - distance) / distance * alpha * 0.2;
+            node.vx! -= dx * force;
+            node.vy! -= dy * force;
+            other.vx! += dx * force;
+            other.vy! += dy * force;
+          }
+        }
+      }
+    }
     for (const edge of edges) {
       const dx = edge.target.x - edge.source.x || 0.01;
       const dy = edge.target.y - edge.source.y || 0.01;
@@ -38,8 +68,9 @@ self.addEventListener("message", (event: MessageEvent<{
       node.vx! *= 0.84;
       node.vy! *= 0.84;
     }
+    if (tick > 0 && tick % 12 === 0) emit(false);
   }
-  self.postMessage({ positions: nodes.map(({ key, x, y }) => ({ key, x, y })) });
+  emit(true);
 });
 
 export {};
