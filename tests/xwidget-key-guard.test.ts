@@ -9,6 +9,8 @@ import {
   guardXwidgetControlKeydown,
   handleXwidgetControlKeydown,
   handleXwidgetHistoryKeydown,
+  handleXwidgetMathBeforeInput,
+  handleXwidgetMathKeydown,
   handleXwidgetSpecialBeforeInput,
   handleXwidgetSpecialKeydown,
   handleXwidgetVimBeforeInput,
@@ -132,9 +134,11 @@ describe("xwidget key guard", () => {
     const input = withMounted(document.createElement("input"));
     const textarea = withMounted(document.createElement("textarea"));
     const editable = withMounted(document.createElement("div"));
+    const nativeWidget = withMounted(document.createElement("div"));
     editable.contentEditable = "true";
+    nativeWidget.dataset.aaronnoteVim = "native";
     try {
-      for (const target of [input, textarea, editable]) {
+      for (const target of [input, textarea, editable, nativeWidget]) {
         expect(runGuard(target, "Delete", host)).toEqual({ guarded: false, defaultPrevented: false });
         expect(runGuard(target, "Backspace", host)).toEqual({ guarded: false, defaultPrevented: false });
       }
@@ -142,6 +146,80 @@ describe("xwidget key guard", () => {
       input.remove();
       textarea.remove();
       editable.remove();
+      nativeWidget.remove();
+      host.remove();
+    }
+  });
+
+  test("routes xwidget Delete and its control-byte beforeinput through LiveTeX once", () => {
+    const host = withMounted(document.createElement("section"));
+    const editor = createEditor(host, { initialContent: "\\[x\\]" });
+    const vim = createVimLite(editor, host);
+    const visual = document.createElement("div");
+    visual.dataset.cmVisualMath = "active";
+    visual.dataset.aaronnoteVim = "native";
+    const target = document.createElement("span");
+    visual.append(target);
+    host.append(visual);
+    const routed: string[] = [];
+    const listener = (event: Event): void => {
+      const custom = event as CustomEvent<{ key?: string }>;
+      routed.push(String(custom.detail?.key || ""));
+      custom.preventDefault();
+    };
+    document.addEventListener("aaronnote:math-host-key", listener);
+    try {
+      const keydown = new KeyboardEvent("keydown", { key: "Delete", bubbles: true, cancelable: true });
+      Object.defineProperty(keydown, "target", { value: target });
+      expect(handleXwidgetMathKeydown(keydown, { editor, editorHost: host, vim })).toBe(true);
+      expect(keydown.defaultPrevented).toBe(true);
+
+      const beforeinput = new InputEvent("beforeinput", {
+        bubbles: true,
+        cancelable: true,
+        data: "\u007f",
+        inputType: "insertText",
+      });
+      Object.defineProperty(beforeinput, "target", { value: target });
+      expect(handleXwidgetMathBeforeInput(beforeinput, { editor, editorHost: host, vim })).toBe(true);
+      expect(beforeinput.defaultPrevented).toBe(true);
+      expect(routed).toEqual(["Delete"]);
+    } finally {
+      document.removeEventListener("aaronnote:math-host-key", listener);
+      editor.destroy();
+      host.remove();
+    }
+  });
+
+  test("maps a control-byte-only LiveTeX beforeinput to Delete", () => {
+    const host = withMounted(document.createElement("section"));
+    const editor = createEditor(host, { initialContent: "\\[x\\]" });
+    const vim = createVimLite(editor, host);
+    const visual = document.createElement("div");
+    visual.dataset.cmVisualMath = "active";
+    const target = document.createElement("span");
+    visual.append(target);
+    host.append(visual);
+    let routed = "";
+    const listener = (event: Event): void => {
+      const custom = event as CustomEvent<{ key?: string }>;
+      routed = String(custom.detail?.key || "");
+      custom.preventDefault();
+    };
+    document.addEventListener("aaronnote:math-host-key", listener);
+    try {
+      const event = new InputEvent("beforeinput", {
+        bubbles: true,
+        cancelable: true,
+        data: "\u007f",
+        inputType: "insertText",
+      });
+      Object.defineProperty(event, "target", { value: target });
+      expect(handleXwidgetMathBeforeInput(event, { editor, editorHost: host, vim })).toBe(true);
+      expect(routed).toBe("Delete");
+    } finally {
+      document.removeEventListener("aaronnote:math-host-key", listener);
+      editor.destroy();
       host.remove();
     }
   });
@@ -394,6 +472,26 @@ describe("xwidget key guard", () => {
       expect(handleXwidgetSpecialKeydown(event, { editor, editorHost: host, vim })).toBe(true);
       expect(event.defaultPrevented).toBe(true);
       expect(editor.getMarkdownSelection().from).toBe(1);
+    } finally {
+      editor.destroy();
+      host.remove();
+    }
+  });
+
+  test("routes insert-mode ArrowLeft into the adjacent inline formula editor", () => {
+    const host = withMounted(document.createElement("section"));
+    const markdown = "before \\(x\\) after";
+    const editor = createEditor(host, { initialContent: markdown });
+    const vim = createVimLite(editor, host);
+    vim.setMode("insert");
+    editor.setMarkdownSelection(markdown.indexOf("\\(x\\)") + "\\(x\\)".length);
+    try {
+      expect(host.querySelector(".cm-math-inline")).toBeTruthy();
+      const event = new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true, cancelable: true });
+      Object.defineProperty(event, "target", { value: document.body });
+      expect(handleXwidgetSpecialKeydown(event, { editor, editorHost: host, vim })).toBe(true);
+      expect(event.defaultPrevented).toBe(true);
+      expect(host.querySelector(".cm-math-inline-editor")).toBeTruthy();
     } finally {
       editor.destroy();
       host.remove();

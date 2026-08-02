@@ -778,6 +778,18 @@ function providerPriority(snippet: SnippetSummary): number {
   }
 }
 
+function snippetCompletionIdentity(snippet: SnippetSummary): string {
+  // A manual Noema snippet commonly uses the ergonomic key `cup`, while
+  // company/current-note providers expose the same expansion as `\cup`.
+  // Treat byte-equivalent expansions as one completion without collapsing
+  // genuinely different templates that happen to share a key.
+  const body = String(snippet.body || "")
+    .replace(/\$0\b/g, "")
+    .replace(/[ \t]+/g, " ")
+    .trim();
+  return body ? `${snippet.mode || ""}\0${body}` : snippetStableId(snippet);
+}
+
 export type SnippetMatchOptions = {
   mode?: string;
   kind?: string;
@@ -830,6 +842,19 @@ export function matchingSnippetsForPrefix(
         + Math.max(0, Number(snippet.weight) || 0)
         + adaptive,
     };
+
+    // Keep only the highest-ranked provider for a byte-equivalent expansion.
+    // This makes the popup one coherent Noema snippet/company surface instead
+    // of showing personal, current-note and imported copies of `\cup` as
+    // separate rows.
+    const identity = snippetCompletionIdentity(snippet);
+    const duplicate = best.findIndex((candidate) => (
+      snippetCompletionIdentity(candidate.snippet) === identity
+    ));
+    if (duplicate >= 0) {
+      if (compare(item, best[duplicate]!) >= 0) continue;
+      best.splice(duplicate, 1);
+    }
 
     // The popup consumes only a small fixed number of results. Maintain that
     // ordered top-k directly instead of allocating and sorting every match.

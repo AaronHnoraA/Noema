@@ -5,7 +5,7 @@
 
 import type { InlineContext, MarkdownConfig } from "@lezer/markdown";
 
-export const INLINE_MATH_RE = /\\\(([^\n]+?)\\\)/g;
+export const INLINE_MATH_RE = /\\\(([^\n]*?)\\\)/g;
 
 export interface InlineMathRange {
   from: number;
@@ -42,8 +42,8 @@ function inlineMathEnds(cx: InlineContext): Map<number, number> {
       }
       continue;
     }
-    // Match INLINE_MATH_RE's non-empty body and first closing delimiter.
-    if (pos > open + 2 && ch === 92 /* \\ */ && cx.char(pos + 1) === 41 /* ) */) {
+    // Match INLINE_MATH_RE's optional body and first closing delimiter.
+    if (pos >= open + 2 && ch === 92 /* \\ */ && cx.char(pos + 1) === 41 /* ) */) {
       ends.set(open, pos + 2);
       open = -1;
       pos++;

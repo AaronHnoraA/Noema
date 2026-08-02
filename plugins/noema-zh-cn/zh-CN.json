@@ -1,0 +1,1686 @@
+{
+  "meta": {
+    "syncedCommit": "ead7cbfe66a473cc59e516a8769e6cf3a63eac47",
+    "syncedDate": "2026-08-02"
+  },
+  "exact": {
+    "Open in Noema": "在 Noema 中打开",
+    "Markdown": "Markdown",
+    "All Files": "所有文件",
+    "Focus Editor": "聚焦编辑器",
+    "Task Manager": "任务管理器",
+    "Page Outline": "页面大纲",
+    "Agenda": "日程",
+    "Local Graph": "局部图谱",
+    "Tools": "工具",
+    "Jupyter Cells": "Jupyter 单元",
+    "Toggle Source": "切换源码",
+    "Run Prose Check": "运行行文检查",
+    "Export LaTeX…": "导出 LaTeX…",
+    "Open Source in VS Code": "在 VS Code 中打开源码",
+    "Reveal Note in Finder": "在文件管理器中显示笔记",
+    "Save": "保存",
+    "New Window": "新建窗口",
+    "Open…": "打开…",
+    "Minimize": "最小化",
+    "Zoom": "缩放",
+    "Toggle Full Screen": "切换全屏",
+    "Close": "关闭",
+    "Settings…": "设置…",
+    "File": "文件",
+    "Wiki Home": "Wiki 主页",
+    "New Wiki Page…": "新建 Wiki 页面…",
+    "Edit": "编辑",
+    "Undo": "撤销",
+    "Redo": "重做",
+    "Find…": "查找…",
+    "Find Next": "查找下一个",
+    "Find Previous": "查找上一个",
+    "Format": "格式",
+    "Bold": "粗体",
+    "Italic": "斜体",
+    "Inline Code": "行内代码",
+    "Highlight": "高亮",
+    "Strikethrough": "删除线",
+    "Blockquote": "引用块",
+    "Bullet List": "无序列表",
+    "Ordered List": "有序列表",
+    "Task List": "任务列表",
+    "Code Block": "代码块",
+    "Heading / Paragraph…": "标题 / 段落…",
+    "Insert Table": "插入表格",
+    "Insert Math Block": "插入数学块",
+    "Insert TOC": "插入目录",
+    "Edit Properties…": "编辑属性…",
+    "Navigate": "导航",
+    "Back": "后退",
+    "Forward": "前进",
+    "Refresh": "刷新",
+    "View": "视图",
+    "Window": "窗口",
+    "Noema Configuration": "Noema 配置",
+    "Learn More": "了解更多",
+    "Documentation": "文档",
+    "Community Discussions": "社区讨论",
+    "Search Issues": "搜索问题",
+    "Choose Wiki folder": "选择 Wiki 文件夹",
+    "Choose a folder inside the selected Wiki repository": "请选择所选 Wiki 仓库内的文件夹",
+    "Note navigation": "笔记导航",
+    "Editor actions": "编辑器操作",
+    "Window actions": "窗口操作",
+    "Toggle tools": "切换工具",
+    "Toggle page outline": "切换页面大纲",
+    "READ ONLY": "只读",
+    "INSERT": "插入",
+    "NORMAL": "普通",
+    "VISUAL": "可视",
+    "Drop to insert": "拖放以插入",
+    "Drag heading": "拖拽标题",
+    "Drag paragraph": "拖拽段落",
+    "Open Markdown in a new Noema window": "在新 Noema 窗口中打开 Markdown",
+    "Insert files, links, or text at the cursor": "在光标处插入文件、链接或文本",
+    "Code cells": "代码单元",
+    "Page": "页面",
+    "Graph": "图谱",
+    "Source": "源码",
+    "Knowledge graph": "知识图谱",
+    "Graph scope": "图谱范围",
+    "Local": "局部",
+    "Workspace": "工作区",
+    "Search graph": "搜索图谱",
+    "Filter graph group": "筛选图谱分组",
+    "All groups": "所有分组",
+    "Depth ": "深度 ",
+    " Refs": " 引用",
+    " Back": " 反链",
+    " Tags": " 标签",
+    "Page outline": "页面大纲",
+    "Run all": "运行全部",
+    "Run cells above cursor": "运行光标上方的单元",
+    "Run cells below cursor": "运行光标下方的单元",
+    "Run current section": "运行当前章节",
+    "Restart and run all": "重启并运行全部",
+    "Interrupt kernel": "中断内核",
+    "Clear all outputs": "清除所有输出",
+    "Variables": "变量",
+    "Switch kernel": "切换内核",
+    "Kernel task manager": "内核任务管理器",
+    "Cleanup idle kernels": "清理空闲内核",
+    "Lang ": "语言 ",
+    "Session ": "会话 ",
+    "Old ": "旧内核 ",
+    "New ": "新内核 ",
+    "Switch": "切换",
+    "Any": "全部",
+    "No cells": "无单元",
+    "No @@cell entries": "没有 @@cell 条目",
+    "No matching blocks": "没有匹配的块",
+    "Roam tools": "Roam 工具",
+    "Core task pool": "Core 任务池",
+    "Close task manager": "关闭任务管理器",
+    "Active tasks": "活动任务",
+    "LaTeX exports": "LaTeX 导出",
+    "Open or refresh to read Core state.": "打开或刷新以读取 Core 状态。",
+    "No active tasks.": "没有活动任务。",
+    "No LaTeX export tasks in the current Core session.": "当前 Core 会话中没有 LaTeX 导出任务。",
+    "Core task": "Core 任务",
+    "Cancel": "取消",
+    "Run again": "再次运行",
+    "Rerun": "重新运行",
+    "LaTeX export queued again with the same inputs.": "已使用相同输入再次排队 LaTeX 导出。",
+    "Close task": "关闭任务",
+    "Reading Core task snapshot…": "正在读取 Core 任务快照…",
+    "No reason returned": "未返回原因",
+    "Inline code": "行内代码",
+    "Superscript": "上标",
+    "Subscript": "下标",
+    "Insert footnote": "插入脚注",
+    "Suggest revision": "建议修改",
+    "Link": "链接",
+    "Copy": "复制",
+    "More actions": "更多操作",
+    "Insert roam idlink...": "插入 Roam id 链接...",
+    "Replacement": "替换为",
+    "Revision replacement": "修改替换文本",
+    "Reason (optional)": "原因（可选）",
+    "Revision reason": "修改原因",
+    "Revision colour": "修改颜色",
+    "Indigo": "靛蓝",
+    "Teal": "青绿",
+    "Red": "红",
+    "Green": "绿",
+    "Yellow": "黄",
+    "Insert": "插入",
+    "Previous": "上一个",
+    "Next": "下一个",
+    "Core disconnected — focus, click, or type to reconnect": "Core 已断开——聚焦、点击或输入以重新连接",
+    "Reconnecting to core…": "正在重新连接 Core…",
+    "Core reconnected": "Core 已重新连接",
+    "Toggle source view (read-only)": "切换源码视图（只读）",
+    "Read-only pane": "只读面板",
+    "Saving...": "正在保存...",
+    "Saved": "已保存",
+    "Edited": "已编辑",
+    "Save failed": "保存失败",
+    "Edited — save manually": "已编辑——请手动保存",
+    "Read-only": "只读",
+    "Ready — manual save": "就绪——手动保存",
+    "Ready": "就绪",
+    "Scratch": "草稿",
+    "Todo location not found": "未找到待办位置",
+    "Remote note has unsaved changes; save before switching": "远程笔记有未保存的更改；切换前请先保存",
+    "Open failed": "打开失败",
+    "Remote note has unsaved changes; save before refreshing": "远程笔记有未保存的更改；刷新前请先保存",
+    "Refreshing...": "正在刷新...",
+    "Read-only refreshed": "只读视图已刷新",
+    "Refreshed": "已刷新",
+    "Refresh failed": "刷新失败",
+    "Changed in another pane; refresh before saving": "已在另一个窗格中更改；保存前请先刷新",
+    "Language and kernel are required": "语言和内核为必填项",
+    "Current cell is not Lean": "当前单元不是 Lean",
+    "Jupyter cell header not found": "未找到 Jupyter 单元头",
+    "Jupyter run failed": "Jupyter 运行失败",
+    "Save note first": "请先保存笔记",
+    "No Jupyter cells": "没有 Jupyter 单元",
+    "Jupyter run complete": "Jupyter 运行完成",
+    "Lean cells sync files; no kernel interrupt": "Lean 单元同步文件；无法中断内核",
+    "Jupyter outputs cleared": "Jupyter 输出已清除",
+    "Lean cells do not expose variables": "Lean 单元不暴露变量",
+    "Loading variables...": "正在加载变量...",
+    "No variables": "无变量",
+    "Variable load failed": "变量加载失败",
+    "Runtime": "运行时",
+    "Force cleanup": "强制清理",
+    "No live kernels": "没有活动内核",
+    "Interrupt": "中断",
+    "Kill": "终止",
+    "Jupyter interrupt failed": "Jupyter 中断失败",
+    "Jupyter kill failed": "Jupyter 终止失败",
+    "Loading runtime...": "正在加载运行时...",
+    "Runtime load failed": "运行时加载失败",
+    "Force cleaning runtime...": "正在强制清理运行时...",
+    "Cleaning idle runtime...": "正在清理空闲运行时...",
+    "No idle Jupyter kernels": "没有空闲的 Jupyter 内核",
+    "Runtime cleanup failed": "运行时清理失败",
+    "Delete failed": "删除失败",
+    "Cell deleted; cleanup failed": "单元已删除；清理失败",
+    "Context action failed": "上下文操作失败",
+    "Converted inline math to display math": "已将行内数学转换为展示数学",
+    "Converted display math to inline math": "已将展示数学转换为行内数学",
+    "Note path copied": "笔记路径已复制",
+    "Link copied": "链接已复制",
+    "No Emacs target for link": "链接没有 Emacs 目标",
+    "Opened Zotero link": "已打开 Zotero 链接",
+    "Failed to open Zotero link": "打开 Zotero 链接失败",
+    "Failed to open Maginnote link": "打开 MarginNote 链接失败",
+    "Blocked unsafe link": "已拦截不安全的链接",
+    "Selection copied": "选区已复制",
+    "Copy failed": "复制失败",
+    "Agenda...": "日程...",
+    "Convert to Display Math": "转换为展示数学",
+    "Convert to Inline Math": "转换为行内数学",
+    "Run Cell": "运行单元",
+    "Edit Cell Source": "编辑单元源码",
+    "Run Section": "运行章节",
+    "Convert to Python Cell": "转换为 Python 单元",
+    "Kernel Tool": "内核工具",
+    "Delete Cell Block": "删除单元块",
+    "source + output": "源码 + 输出",
+    "switch": "切换",
+    "Open": "打开",
+    "target note": "目标笔记",
+    "System Open": "系统打开",
+    "default app": "默认应用",
+    "Copy Link": "复制链接",
+    "clipboard": "剪贴板",
+    "Copy Selection": "复制选区",
+    "Footnote": "脚注",
+    "Revision...": "修改建议...",
+    "Move Block Up": "上移块",
+    "Move Block Down": "下移块",
+    "Fold Heading": "折叠标题",
+    "Unfold Heading": "展开标题",
+    "section": "章节",
+    "Copy Code": "复制代码",
+    "block": "块",
+    "Document Properties": "文档属性",
+    "Paste": "粘贴",
+    "Find in Note": "在笔记中查找",
+    "read-only": "只读",
+    "Edit slides": "编辑幻灯片",
+    "Present slides": "放映幻灯片",
+    "Markdown View": "Markdown 视图",
+    "Source View": "源码视图",
+    "Copy Note Path": "复制笔记路径",
+    "Bibliography issue": "参考文献问题",
+    "Bibliography issues": "参考文献问题",
+    "References": "参考文献",
+    "link": "链接",
+    "Open link failed": "打开链接失败",
+    "Bibliography failed": "参考文献加载失败",
+    "Resolving citation": "正在解析引用",
+    "Citation did not resolve any references": "引用未解析到任何参考文献",
+    "No reference to open in Zotero": "没有可在 Zotero 中打开的参考文献",
+    "Edit @@cite args": "编辑 @@cite 参数",
+    "No BibTeX file for reference": "该参考文献没有 BibTeX 文件",
+    "Reference is unresolved.": "参考文献未解析。",
+    "Reference preview": "参考文献预览",
+    "Edit Cite Args...": "编辑引用参数...",
+    "Jump to Reference": "跳转到参考文献",
+    "Open in Zotero": "在 Zotero 中打开",
+    "Emacs search": "Emacs 搜索",
+    "Copy Citation Key": "复制引用键",
+    "Agenda item not found": "未找到日程项",
+    "No editable agenda fields": "没有可编辑的日程字段",
+    "Apply": "应用",
+    "Agenda unchanged": "日程未更改",
+    "Agenda updated": "日程已更新",
+    "Status": "状态",
+    "Project": "项目",
+    "Priority": "优先级",
+    "Deadline": "截止时间",
+    "Scheduled": "计划时间",
+    "End": "结束",
+    "Effort": "工作量",
+    "Progress": "进度",
+    "Repeat": "重复",
+    "After": "前置任务",
+    "Context": "上下文",
+    "Area": "领域",
+    "Phase": "阶段",
+    "Owner": "负责人",
+    "Goal": "目标",
+    "Start": "开始",
+    "Date": "日期",
+    "From": "从",
+    "To": "到",
+    "Active": "进行中",
+    "Paused": "已暂停",
+    "Done": "已完成",
+    "Cancelled": "已取消",
+    "Todo": "待办",
+    "Doing": "进行中",
+    "Blocked": "已阻塞",
+    "Export LaTeX": "导出 LaTeX",
+    "Choose exactly what goes into the .tex file. A section includes all of its nested subsections.": "精确选择要写入 .tex 文件的内容。章节包含其所有嵌套子章节。",
+    "Filter sections…": "筛选章节…",
+    "Filter export sections": "筛选导出章节",
+    "LaTeX export scopes": "LaTeX 导出范围",
+    "No matching sections": "没有匹配的章节",
+    "Select at least one section": "请至少选择一个章节",
+    "Choose Path": "选择路径",
+    "cursor": "光标",
+    "Open a note before exporting LaTeX": "导出 LaTeX 前请先打开笔记",
+    "LaTeX export canceled": "LaTeX 导出已取消",
+    "Export LaTeX — template": "导出 LaTeX — 模板",
+    "Template": "模板",
+    "Continue": "继续",
+    "Choose LaTeX output path...": "请选择 LaTeX 输出路径...",
+    "output path was not selected": "未选择输出路径",
+    "Exporting LaTeX…": "正在导出 LaTeX…",
+    "LaTeX export added to tasks": "LaTeX 导出已添加到任务",
+    "Loading LaTeX export agents...": "正在加载 LaTeX 导出代理...",
+    "LaTeX export agent": "LaTeX 导出代理",
+    "Agent backend": "代理后端",
+    "LaTeX export agent switch canceled": "LaTeX 导出代理切换已取消",
+    "LaTeX export agent switch failed": "LaTeX 导出代理切换失败",
+    "No current note": "没有当前笔记",
+    "Updating note": "正在更新笔记",
+    "Update failed": "更新失败",
+    "Quick add meta": "快速添加元数据",
+    "Title": "标题",
+    "Tags": "标签",
+    "Register": "注册",
+    "Meta registered": "元数据已注册",
+    "Unregister meta": "注销元数据",
+    "Type REMOVE to delete roam meta": "输入 REMOVE 以删除 Roam 元数据",
+    "Remove": "移除",
+    "Meta unregistered": "元数据已注销",
+    "Add tag": "添加标签",
+    "Add": "添加",
+    "Tag added": "标签已添加",
+    "Note meta": "笔记元数据",
+    "Update": "更新",
+    "Meta updated": "元数据已更新",
+    "Insert roam idlink": "插入 Roam id 链接",
+    "Roam note": "Roam 笔记",
+    "Link text": "链接文本",
+    "Roam note not found": "未找到 Roam 笔记",
+    "Roam note has no id": "Roam 笔记没有 id",
+    "Roam idlink inserted": "Roam id 链接已插入",
+    "roam: off set": "roam: off 已设置",
+    "roam: off cleared": "roam: off 已清除",
+    "Equation tag": "公式标签",
+    "LaTeX tag": "LaTeX 标签",
+    "Tag & Copy Ref": "打标签并复制引用",
+    "Inline anchor": "行内锚点",
+    "Anchor tag": "锚点标签",
+    "Untitled": "未命名",
+    "No issues": "没有问题",
+    "Search status, tag, title, roam id, file, date...": "搜索状态、标签、标题、Roam id、文件、日期...",
+    "Full Agenda": "完整日程",
+    "No matching tasks": "没有匹配的任务",
+    "no date": "无日期",
+    "(empty todo)": "（空待办）",
+    "Reopen": "重新打开",
+    "Loading agenda...": "正在加载日程…",
+    "Agenda failed": "日程加载失败",
+    "Todo update failed": "待办更新失败",
+    "Rename roam tag": "重命名 Roam 标签",
+    "Current tag": "当前标签",
+    "New tag": "新标签",
+    "Type RENAME to update all roam notes": "输入 RENAME 以更新所有 Roam 笔记",
+    "Rename": "重命名",
+    "Renaming roam tag": "正在重命名 Roam 标签",
+    "Roam tag rename failed": "Roam 标签重命名失败",
+    "Delete roam tag": "删除 Roam 标签",
+    "Tag": "标签",
+    "Type DELETE to remove it from all roam notes": "输入 DELETE 以将其从所有 Roam 笔记中移除",
+    "Delete": "删除",
+    "Deleting roam tag": "正在删除 Roam 标签",
+    "Roam tag delete failed": "Roam 标签删除失败",
+    "Scanning tag overlap": "正在扫描标签重叠",
+    "Use Rename tag to normalize these": "使用“重命名标签”来规范化这些标签",
+    "Tag overlap scanned": "标签重叠扫描完成",
+    "Tag overlap scan failed": "标签重叠扫描失败",
+    "Rewrite path references": "重写路径引用",
+    "Old target path": "旧目标路径",
+    "New target path": "新目标路径",
+    "Type UPDATE to rewrite Markdown path links": "输入 UPDATE 以重写 Markdown 路径链接",
+    "Rewriting path references": "正在重写路径引用",
+    "Path reference rewrite failed": "路径引用重写失败",
+    "Open a note before importing Zotero BibTeX": "导入 Zotero BibTeX 前请先打开笔记",
+    "Choose the BibTeX target and Zotero item in Emacs": "请在 Emacs 中选择 BibTeX 目标和 Zotero 条目",
+    "LanguageTool settings saved": "LanguageTool 设置已保存",
+    "Opening Slide view": "正在打开幻灯片视图",
+    "Slide view opened with the last saved version": "幻灯片视图已以最后保存的版本打开",
+    "Opening configuration": "正在打开配置",
+    "Configuration": "配置",
+    "Themes and application settings": "主题与应用设置",
+    "Markdown view": "Markdown 视图",
+    "Source view": "源码视图",
+    "True Markdown source": "真正的 Markdown 源码",
+    "Slide view": "幻灯片视图",
+    "Present this ordinary Markdown in a new read-only page": "在新的只读页面中放映此普通 Markdown",
+    "Dark": "深色",
+    "Light": "浅色",
+    "Reveal mirror": "Reveal 镜像",
+    "Edit this note's .slides JavaScript mirror": "编辑此笔记的 .slides JavaScript 镜像",
+    "Toggle TOC": "切换目录",
+    "Page headings, anchors, tags, backlinks": "页面标题、锚点、标签、反向链接",
+    "Tag / copy ref": "标签 / 复制引用",
+    "Equation tag, inline anchor, reference copy": "公式标签、行内锚点、引用复制",
+    "Write selection, heading, or note to a .tex file": "将选区、章节或整篇笔记写入 .tex 文件",
+    "Switch export agent": "切换导出代理",
+    "Choose Codex, Claude, or OpenCode for LaTeX polish": "选择 Codex、Claude 或 OpenCode 进行 LaTeX 润色",
+    "Import Zotero BibTeX": "导入 Zotero BibTeX",
+    "Use the Zotero picker and append to a local .bib file": "使用 Zotero 选择器并追加到本地 .bib 文件",
+    "Reload snippets": "重新加载代码片段",
+    "Refresh Emacs md/tex snippets": "刷新 Emacs md/tex 代码片段",
+    "Reset snippet ranking": "重置代码片段排序",
+    "Clear local snippet frequency and recency history": "清除本地代码片段的使用频率与最近使用记录",
+    "Snippet ranking reset": "代码片段排序已重置",
+    "Reload note index": "重新加载笔记索引",
+    "Refresh notes, tags, links": "刷新笔记、标签、链接",
+    "Add meta": "添加元数据",
+    "Register title/kind/tags": "注册标题/类型/标签",
+    "Remove meta": "移除元数据",
+    "Delete current note meta block": "删除当前笔记的元数据块",
+    "Set roam off": "设置 roam off",
+    "Keep meta but hide from roam graph": "保留元数据但从 Roam 图谱中隐藏",
+    "Clear roam off": "清除 roam off",
+    "Activate current note in roam graph": "在 Roam 图谱中激活当前笔记",
+    "Append tags to current note": "向当前笔记追加标签",
+    "Manage note meta": "管理笔记元数据",
+    "Project and tags": "项目与标签",
+    "Search roam note and insert id link": "搜索 Roam 笔记并插入 id 链接",
+    "Bulk rename tag in roam notes": "在 Roam 笔记中批量重命名标签",
+    "Bulk remove tag in roam notes": "在 Roam 笔记中批量移除标签",
+    "Tag overlap report": "标签重叠报告",
+    "Find duplicate/overlapping tags": "查找重复/重叠的标签",
+    "Rewrite path refs": "重写路径引用",
+    "Bulk rewrite Markdown path links": "批量重写 Markdown 路径链接",
+    "🫴 Layout zoom": "🫴 布局缩放",
+    "M-= / M-- / M-0 reflows Markdown layout. Pinch and C-Tab use visual zoom; C-0 resets it.": "M-= / M-- / M-0 重排 Markdown 布局。双指捏合与 C-Tab 使用视觉缩放；C-0 重置。",
+    "Prose check failed": "行文检查失败",
+    "Nothing to check": "没有可检查的内容",
+    "NAS unavailable": "NAS 不可用",
+    "NAS offline · local CLI used manually": "NAS 离线 · 已手动使用本地 CLI",
+    "NAS check timed out": "NAS 检查超时",
+    "LanguageTool failed": "LanguageTool 失败",
+    "Prose check queued...": "行文检查已排队...",
+    "Checking prose on NAS...": "正在 NAS 上检查行文...",
+    "Checking prose with local CLI...": "正在用本地 CLI 检查行文...",
+    "Prose check timed out": "行文检查超时",
+    "Prose check superseded": "行文检查已被取代",
+    "Prose check canceled after edit": "行文检查因编辑而取消",
+    "Prose check paused": "行文检查已暂停",
+    "Prose check canceled after settings change": "行文检查因设置更改而取消",
+    "Prose check canceled": "行文检查已取消",
+    "Not tested": "未测试",
+    "Ignore": "忽略",
+    "Adding word failed": "添加单词失败",
+    "Snippet field": "代码片段字段",
+    "Snippet choice": "代码片段选项",
+    "Replace the active snippet field": "替换当前代码片段字段",
+    "Reloading snippets": "正在重新加载代码片段",
+    "Snippet reload failed": "代码片段重新加载失败",
+    "inline tag": "行内标签",
+    "DOM target": "DOM 目标",
+    "bibliography": "参考文献",
+    "BibTeX entry": "BibTeX 条目",
+    "Display math": "展示数学",
+    "Citation": "引用",
+    "LaTeX mark": "LaTeX 标记",
+    "Noema builtin": "Noema 内置",
+    "Noema metadata": "Noema 元数据",
+    "Noema authoring": "Noema 编写",
+    "Noema LaTeX marks": "Noema LaTeX 标记",
+    "Jupyter cell script saved": "Jupyter 单元脚本已保存",
+    "Open a note first": "请先打开笔记",
+    "No local note to reveal": "没有可在文件管理器中显示的本地笔记",
+    "Revealed note in Finder": "已在文件管理器中显示笔记",
+    "Jupyter restart failed": "Jupyter 重启失败",
+    "Clear outputs failed": "清除输出失败",
+    "Opened note in a new window": "已在新窗口中打开笔记",
+    "This drop type could not be inserted": "无法插入此拖放类型",
+    "Drop inserted": "拖放内容已插入",
+    "Note index failed": "笔记索引加载失败",
+    "OK": "确定",
+    "Configuration sections": "配置分区",
+    "Settings": "设置",
+    "Appearance": "外观",
+    "New pages": "新建页面",
+    "Configuration file": "配置文件",
+    "Application settings": "应用设置",
+    "Choose how Noema looks. Changes are saved globally and applied to every open window.": "选择 Noema 的外观。更改会全局保存，并应用到每个已打开的窗口。",
+    "Wiki storage": "Wiki 存储",
+    "Root directory": "根目录",
+    "Layout": "布局",
+    "Legacy · current single repository": "Legacy · 当前单一仓库",
+    "Wiki · public/private repository collections": "Wiki · 公开/私有仓库集合",
+    "Wiki creation": "Wiki 创建",
+    "Default destination": "默认目标位置",
+    "Partition": "分区",
+    "Repository": "仓库",
+    "Directory": "目录",
+    "Filename pattern": "文件名模式",
+    "Save workspace settings": "保存工作区设置",
+    "Theme": "主题",
+    "Noema theme": "Noema 主题",
+    "Advanced": "高级",
+    "Noema stores settings here. Manual edits are watched and reloaded automatically.": "Noema 将设置保存在此处。手动编辑会被监听并自动重新加载。",
+    "Packaged theme files stay inside the application.": "打包的主题文件保留在应用内部。",
+    "Selected": "已选中",
+    "Select": "选择",
+    "Saving workspace settings…": "正在保存工作区设置…",
+    "Saved · restart Noema to apply workspace changes": "已保存 · 重启 Noema 以应用工作区更改",
+    "Toggle navigation": "切换导航",
+    "Open the Noema Wiki main page": "打开 Noema Wiki 主页",
+    "Private knowledge commons": "私有知识库",
+    "Search Noema Wiki": "搜索 Noema Wiki",
+    "Search": "搜索",
+    "Create page": "创建页面",
+    "Navigation": "导航",
+    "Main page": "主页",
+    "All pages": "所有页面",
+    "Recent": "最近更新",
+    "Folders": "文件夹",
+    "Namespaces": "命名空间",
+    "Files": "文件",
+    "Dependencies": "依赖",
+    "Sync": "同步",
+    "Wanted": "待建",
+    "Reports": "报告",
+    "Repositories": "仓库",
+    "Loading…": "正在加载…",
+    "Physical files, virtual knowledge graph.": "物理文件，虚拟知识图谱。",
+    "A private, Git-backed knowledge commons.": "一个由 Git 支撑的私有知识库。",
+    "Export": "导出",
+    "Refresh index": "刷新索引",
+    "New page": "新建页面",
+    "Page views": "页面视图",
+    "Discussion": "讨论",
+    "Read": "阅读",
+    "View history": "查看历史",
+    "Wiki tools": "Wiki 工具",
+    "Text": "文字",
+    "Small": "小",
+    "Standard": "标准",
+    "Large": "大",
+    "Width": "宽度",
+    "Wide": "宽",
+    "On this wiki": "本 Wiki 概况",
+    "Pages": "页面",
+    "Page tools": "页面工具",
+    "Recent changes": "最近更改",
+    "Special reports": "特殊报告",
+    "Index": "索引",
+    "Waiting for the local index…": "正在等待本地索引…",
+    "Shortcuts": "快捷键",
+    "Wiki workbench": "Wiki 工作台",
+    "Namespace": "命名空间",
+    "Math or Research/Physics": "Math 或 Research/Physics",
+    "repository root": "仓库根目录",
+    "Repository root": "仓库根目录",
+    "Choose…": "选择…",
+    "Filename": "文件名",
+    "generated-from-title.md": "由标题生成.md",
+    "Kind": "类型",
+    "wiki, subject": "wiki, 主题",
+    "Create and open": "创建并打开",
+    "Explicit repository action": "显式仓库操作",
+    "Add repository": "添加仓库",
+    "Action": "操作",
+    "Initialize empty repository": "初始化空仓库",
+    "Clone remote": "克隆远程仓库",
+    "Repository name": "仓库名称",
+    "Git remote": "Git 远程地址",
+    "Noema never initializes, stages, commits, pulls, or pushes without this explicit action.": "没有此显式操作，Noema 绝不会初始化、暂存、提交、拉取或推送。",
+    "Page management": "页面管理",
+    "Manage page": "管理页面",
+    "Operation": "操作",
+    "Move or rename": "移动或重命名",
+    "Create independent copy": "创建独立副本",
+    "Merge duplicate": "合并重复页面",
+    "Page history": "页面历史",
+    "Move to Trash": "移到废纸篓",
+    "Copy title": "副本标题",
+    "Duplicate page": "重复页面",
+    "Move page": "移动页面",
+    "Git merge conflict": "Git 合并冲突",
+    "Resolve conflict": "解决冲突",
+    "Your branch": "你的分支",
+    "Merge result": "合并结果",
+    "Remote main": "远程 main",
+    "Abort this merge": "中止此次合并",
+    "Delete file": "删除文件",
+    "Keep yours": "保留你的版本",
+    "Use remote": "使用远程版本",
+    "Save merge result": "保存合并结果",
+    "Advanced Git · ungit": "高级 Git · ungit",
+    "Starting visual repository…": "正在启动可视化仓库…",
+    "Advanced Git": "高级 Git",
+    "public and private Git repositories": "公开和私有的 Git 仓库",
+    "Noema turns the Markdown in your ": "Noema 将你的 ",
+    " into a durable, shared Wiki. Files stay portable; links, backlinks, tags, and dependencies become one navigable knowledge graph.": " 中的 Markdown 变成一个持久、共享的 Wiki。文件保持可移植；链接、反向链接、标签和依赖将汇成一个可导航的知识图谱。",
+    "pages": "页面",
+    "public": "公开",
+    "private": "私有",
+    "repositories": "仓库",
+    "Recently updated": "最近更新",
+    "Your Wiki is ready": "你的 Wiki 已就绪",
+    "Create the first page to begin the knowledge graph.": "创建第一个页面，开始构建知识图谱。",
+    "Browse the collection": "浏览合集",
+    "Explore and maintain Noema": "探索和维护 Noema",
+    "Browse knowledge": "浏览知识",
+    "Move through the physical repository and folder hierarchy.": "在物理仓库与文件夹层级中穿梭浏览。",
+    "Follow connections": "追踪连接",
+    "Inspect links, backlinks, and unresolved Wiki references.": "检查链接、反向链接和未解析的 Wiki 引用。",
+    "Maintain the Wiki": "维护 Wiki",
+    "Review duplicates, diagnostics, indexing, and repository health.": "查看重复项、诊断、索引和仓库健康状况。",
+    "No metadata": "无元数据",
+    "Move, copy, or merge page": "移动、复制或合并页面",
+    "No matching pages": "没有匹配的页面",
+    "Try another search or create a page from the workbench.": "试试其他搜索，或从工作台创建页面。",
+    "repository identity needs migration": "仓库标识需要迁移",
+    "No folders": "没有文件夹",
+    "Repositories retain their physical folder layout.": "仓库保留其物理文件夹结构。",
+    "No matching files": "没有匹配的文件",
+    "Every tracked research asset remains visible here, not only Wiki pages.": "所有被跟踪的研究资料都显示在这里，而不仅仅是 Wiki 页面。",
+    "No namespaces yet": "暂无命名空间",
+    "Create a page to establish the first logical knowledge domain.": "创建一个页面，以建立第一个逻辑知识领域。",
+    "No tags": "没有标签",
+    "Tags declared in page metadata appear here.": "页面元数据中声明的标签会显示在这里。",
+    "Show pages": "显示页面",
+    "No hard dependencies": "没有硬依赖",
+    "Markdown assets and include directives appear here once referenced.": "被引用过的 Markdown 资源和 include 指令会显示在这里。",
+    "Absolute .zip output path": "绝对 .zip 输出路径",
+    "Repository to export physically": "要物理导出的仓库",
+    "Folder within repository (empty exports all)": "仓库内的文件夹（留空则导出全部）",
+    "No wanted pages": "没有待建页面",
+    "Every Wiki link currently resolves to a page.": "当前所有 Wiki 链接都能解析到页面。",
+    "Open workbench": "打开工作台",
+    "Ambiguous links": "歧义链接",
+    "A title or alias matches more than one page.": "一个标题或别名匹配了多个页面。",
+    "Duplicate titles / aliases": "重复标题 / 别名",
+    "Use partition, repository, and path to disambiguate.": "使用分区、仓库和路径来消除歧义。",
+    "Workspace diagnostics": "工作区诊断",
+    "Non-Git directories are reported and never initialized automatically.": "非 Git 目录会被报告，且绝不会被自动初始化。",
+    "Loading sync state…": "正在加载同步状态…",
+    "Checkpoint": "检查点",
+    "Sync now": "立即同步",
+    "Establish shared identity": "建立共享标识",
+    "Checkpoint message (optional)": "检查点消息（可选）",
+    "Checkpointing, fetching, merging, and pushing…": "正在创建检查点、拉取、合并并推送…",
+    "ungit did not return an embedded URL": "ungit 未返回内嵌 URL",
+    "Local checkpoint only (no origin remote)": "仅本地检查点（无 origin 远程）",
+    "Loading Base / your branch / remote main…": "正在加载 Base / 你的分支 / 远程 main…",
+    "Use the arrows inside the merge editor, then review the center result before saving.": "使用合并编辑器内的箭头，然后在保存前检查中间的合并结果。",
+    "Binary conflict": "二进制冲突",
+    "Choose your file, the remote file, or delete it. Binary content cannot be merged by blocks.": "选择你的文件、远程文件，或将其删除。二进制内容无法按块合并。",
+    "No content is uploaded; the choice is applied inside the local integration worktree.": "不会上传任何内容；该选择在本地集成工作树中应用。",
+    "Conflict resolved": "冲突已解决",
+    "No indexed repositories": "没有已索引的仓库",
+    "Add a Git repository or switch to Legacy layout in Configuration.": "添加一个 Git 仓库，或在配置中切换到 Legacy 布局。",
+    "A local-first Wiki built from your physical files and shared Git history.": "一个本地优先的 Wiki，由你的物理文件和共享的 Git 历史构建而成。",
+    "Local SQLite index": "本地 SQLite 索引",
+    "Recent pages": "最近页面",
+    "Physical folders": "物理文件夹",
+    "All files": "所有文件",
+    "Tag management": "标签管理",
+    "Local and Git sync": "本地与 Git 同步",
+    "Wanted pages": "待建页面",
+    "Workspace knowledge": "工作区知识",
+    "Refreshing the global Wiki index…": "正在刷新全局 Wiki 索引…",
+    "Loading Wiki…": "正在加载 Wiki…",
+    "Current Legacy repository": "当前 Legacy 仓库",
+    "Wiki unavailable": "Wiki 不可用",
+    "Check the workspace root and layout in Configuration.": "请在配置中检查工作区根目录和布局。",
+    "Create or clone a repository before creating a page": "请先创建或克隆一个仓库，再创建页面",
+    "Create copy": "创建副本",
+    "Merge pages": "合并页面",
+    "The selected duplicate remains at its path as a redirect, so existing links keep working.": "所选重复页面将作为重定向保留在原路径，现有链接继续有效。",
+    "The stable page ID is preserved. Title-based Wiki links continue to resolve after reindexing.": "稳定的页面 ID 会被保留。基于标题的 Wiki 链接在重新索引后仍能解析。",
+    "The copy receives a new stable page ID.": "副本将获得一个新的稳定页面 ID。",
+    "Git commits are the page version history. Restoring creates a working-tree change for review before the next checkpoint.": "Git 提交即页面版本历史。恢复会创建一个工作树更改，供你在下次检查点前审查。",
+    "Loading history…": "正在加载历史…",
+    "Reading commits that touched this physical page.": "正在读取涉及此物理页面的提交。",
+    "No committed versions": "没有已提交的版本",
+    "Create a checkpoint to add the first Git version.": "创建一个检查点，以添加第一个 Git 版本。",
+    "Unknown author": "未知作者",
+    "Diff": "差异对比",
+    "Restore": "恢复",
+    "No textual diff for this commit.": "此提交没有文本差异。",
+    "History unavailable": "历史不可用",
+    "Choose an indexed folder from the Directory field, or type a new subfolder": "请在“目录”字段中选择一个已索引的文件夹，或输入新的子文件夹",
+    "Type DELETE to confirm after reviewing the backlinks": "检查反向链接后，输入 DELETE 以确认",
+    "Type MERGE to preserve the duplicate as a redirect": "输入 MERGE 以将重复页面保留为重定向",
+    "This crosses the privacy boundary. Type MOVE PRIVATE TO PUBLIC": "此操作跨越隐私边界。请输入 MOVE PRIVATE TO PUBLIC",
+    "Visual repository ready": "可视化仓库已就绪",
+    "Abort the integration merge and keep your local branch unchanged?": "中止集成合并并保持本地分支不变？",
+    "Switching layout never moves files and never initializes a Git repository. Wiki layout indexes only direct Git repository children of ": "切换布局不会移动文件，也不会初始化 Git 仓库。Wiki 布局仅索引 ",
+    ". Restart Noema after changing this section.": " 的直接 Git 仓库子项。更改此部分后请重启 Noema。",
+    "Manage": "管理",
+    "Next item": "下一项",
+    "Previous item": "上一项",
+    "Jump to item": "跳转到该项",
+    "Next / previous range": "下一个 / 上一个范围",
+    "Today": "今天",
+    "Next view": "下一个视图",
+    "New todo": "新建待办",
+    "Cycle status": "循环切换状态",
+    "Set priority": "设置优先级",
+    "Set deadline": "设置截止日期",
+    "Set scheduled": "设置计划日期",
+    "Set repeat": "设置重复周期",
+    "Add dependency": "添加依赖",
+    "Clock in / out": "开始 / 结束计时",
+    "Mark / unmark": "标记 / 取消标记",
+    "Bulk status": "批量设置状态",
+    "Show shortcuts": "显示快捷键",
+    "(untitled)": "（无标题）",
+    "Agenda refreshed": "日程已刷新",
+    "Agenda unavailable": "日程不可用",
+    "Todo create failed": "待办创建失败",
+    "Dependency link failed": "依赖关联失败",
+    "Clock in failed": "开始计时失败",
+    "Clock out failed": "结束计时失败",
+    "Calendar move failed": "日历拖拽移动失败",
+    "Progress update failed": "进度更新失败",
+    "Reschedule failed": "重新排期失败",
+    "Could not build a dependency reference": "无法构建依赖引用",
+    "No matching todo number": "没有匹配的待办编号",
+    "New todo: task | project=paper | ddl=today | sche=+1d | prio=A | file=inbox.md": "新建待办：任务 | project=paper | ddl=today | sche=+1d | prio=A | file=inbox.md",
+    "Priority (A-F, blank to clear):": "优先级（A-F，留空则清除）：",
+    "Deadline (e.g. 2026-07-10, +1w, today; blank to clear):": "截止日期（如 2026-07-10、+1w、today；留空则清除）：",
+    "Scheduled (e.g. 2026-07-10, +1w, today; blank to clear):": "计划日期（如 2026-07-10、+1w、today；留空则清除）：",
+    "Repeat (+1w / ++1w / .+3d; blank to clear):": "重复周期（+1w / ++1w / .+3d；留空则清除）：",
+    "Bulk set status (todo/doing/done/blocked/cancelled):": "批量设置状态（todo/doing/done/blocked/cancelled）：",
+    "Agenda keyboard shortcuts": "日程键盘快捷键",
+    "Agenda shortcuts": "日程快捷键",
+    "Close help (Esc)": "关闭帮助（Esc）",
+    "Project: Any": "项目：全部",
+    "Filter agenda by project": "按项目筛选日程",
+    "Filter by project": "按项目筛选",
+    "No projects": "没有项目",
+    "No project": "无项目",
+    "Clock in": "开始计时",
+    "Clock out": "结束计时",
+    "No matching Gantt items": "没有匹配的甘特图条目",
+    "No matching projects": "没有匹配的项目",
+    "No @@project entries yet": "还没有 @@project 条目",
+    "No clock data": "没有计时数据",
+    "No matching clock entries": "没有匹配的计时记录",
+    "No lints": "没有问题",
+    "Sun": "日",
+    "Mon": "一",
+    "Tue": "二",
+    "Wed": "三",
+    "Thu": "四",
+    "Fri": "五",
+    "Sat": "六",
+    "Day": "日",
+    "Week": "周",
+    "Month": "月",
+    "List": "列表",
+    "Log": "日志",
+    "Gantt": "甘特图",
+    "Projects": "项目",
+    "Clock": "计时",
+    "Lints": "问题",
+    "Click to step progress": "点击按步进调整进度",
+    "Resize start": "调整开始日期",
+    "Resize end": "调整结束日期",
+    "Drag progress": "拖拽设置进度",
+    "Task / project": "任务 / 项目",
+    "Scroll timeline to today": "滚动时间线到今天",
+    "Expand all": "全部展开",
+    "Collapse all": "全部折叠",
+    "Other": "其他",
+    "Milestone": "里程碑",
+    "Milestones": "里程碑",
+    "Backlog (unscheduled)": "待办池（未排期）",
+    "unscheduled": "未排期",
+    "Click to filter": "点击筛选",
+    "By task": "按任务",
+    "By project": "按项目",
+    "By day": "按日期",
+    "Search status, priority, note, text, tag...": "搜索状态、优先级、笔记、文本、标签…",
+    "New": "新建",
+    "Create todo (n)": "新建待办（n）",
+    "Refresh agenda (g)": "刷新日程（g）",
+    "Keyboard shortcuts (?)": "键盘快捷键（?）",
+    "Bad regex": "无效的正则表达式",
+    "Resize TOC": "调整大纲面板大小",
+    "Filter headings…": "筛选标题…",
+    "Filter table of contents": "筛选目录",
+    "Org blocks ▶": "Org 块 ▶",
+    "Org blocks ▼": "Org 块 ▼",
+    "Links": "链接",
+    "Backlinks": "反向链接",
+    "Inline anchors": "行内锚点",
+    "Expand": "展开",
+    "Collapse": "折叠",
+    "No roam context": "无关联上下文",
+    "No matches": "无匹配项",
+    "snippet": "代码片段",
+    "dynamic Emacs Lisp is not executed in Noema": "Noema 不会执行动态 Emacs Lisp",
+    "unsupported TextMate variable": "不支持的 TextMate 变量",
+    "No preview text": "无预览内容",
+    "Loading": "加载中",
+    "Loading preview...": "正在加载预览…",
+    "Wiki page": "Wiki 页面",
+    "External link": "外部链接",
+    "Blocked link": "已拦截的链接",
+    "Open or create this page": "打开或创建此页面",
+    "Unsafe URL": "不安全的 URL",
+    "Preview failed": "预览失败",
+    "Workspace Graph": "工作区图谱",
+    "Knowledge Graph": "知识图谱",
+    "Search Knowledge…": "搜索知识…",
+    "Split Right": "向右拆分",
+    "Split Below": "向下拆分",
+    "Maximize or Restore": "最大化或还原",
+    "Exit": "退出",
+    "Quit Noema": "退出 Noema",
+    "Help": "帮助",
+    "Noema core stopped": "Noema 核心已停止",
+    "Close Noema window?": "关闭 Noema 窗口？",
+    "Quit Noema?": "退出 Noema？",
+    "No related pages yet": "暂无相关页面",
+    "Knowledge link inserted": "知识链接已插入",
+    "Selected note has no stable id": "所选笔记没有稳定的 id",
+    "Search notes, tags, namespaces…": "搜索笔记、标签、命名空间…",
+    "Search knowledge": "搜索知识",
+    "Search for a note to insert": "搜索要插入的笔记",
+    "Workspace knowledge graph": "工作区知识图谱",
+    "Visible graph nodes": "可见图谱节点",
+    "Root": "根",
+    "Loading workspace graph…": "正在加载工作区图谱…",
+    "No local graph": "无局部图谱",
+    "Workspace graph API unavailable": "工作区图谱 API 不可用",
+    "Local graph": "局部图谱",
+    "Document": "文档",
+    "View & layout": "视图与布局",
+    "Writing & review": "写作与审阅",
+    "Present & export": "演示与导出",
+    "Knowledge base": "知识库",
+    "Maintenance & settings": "维护与设置",
+    "Add document metadata": "添加文档元数据",
+    "Register title, kind, and tags": "注册标题、类型和标签",
+    "Remove document metadata": "移除文档元数据",
+    "Delete the current document meta block": "删除当前文档的 meta 块",
+    "Hide from knowledge graph": "在知识图谱中隐藏",
+    "Keep metadata but set roam off": "保留元数据但设置 roam off",
+    "Show in knowledge graph": "在知识图谱中显示",
+    "Clear roam off for the current document": "清除当前文档的 roam off 标记",
+    "Add tags": "添加标签",
+    "Append tags to the current document": "为当前文档追加标签",
+    "Manage metadata": "管理元数据",
+    "Edit project and tags": "编辑项目和标签",
+    "Insert knowledge link": "插入知识链接",
+    "Search notes and insert an ID link": "搜索笔记并插入 ID 链接",
+    "Rename tag across notes": "跨笔记重命名标签",
+    "Bulk rename a knowledge-base tag": "批量重命名知识库标签",
+    "Delete tag across notes": "跨笔记删除标签",
+    "Bulk remove a knowledge-base tag": "批量移除知识库标签",
+    "Find duplicate and overlapping tags": "查找重复和重叠的标签",
+    "Bulk update Markdown path links": "批量更新 Markdown 路径链接",
+    "Refresh documents, tags, and links": "刷新文档、标签和链接",
+    "Refresh shared Markdown and TeX snippets": "刷新共享的 Markdown 和 TeX 代码片段",
+    "Headings, anchors, tags, and backlinks": "标题、锚点、标签和反向链接",
+    "Tag / copy reference": "标记 / 复制引用",
+    "Equation tag, inline anchor, and reference copy": "公式编号、行内锚点与引用复制",
+    "Write selection, heading, or document to a .tex file": "将选中内容、标题或文档写入 .tex 文件",
+    "Export LaTeX as": "LaTeX 导出为",
+    "Copy Page Path": "复制页面路径",
+    "Copy document path": "复制文档路径",
+    "Save document": "保存文档",
+    "Write current changes to disk": "将当前更改写入磁盘",
+    "Refresh from disk": "从磁盘刷新",
+    "Reload the current document": "重新加载当前文档",
+    "Toggle source": "切换源码",
+    "Switch between rendered Markdown and source": "在渲染的 Markdown 与源码之间切换",
+    "Show this document in its folder": "在所在文件夹中显示此文档",
+    "Open this document in the host source editor": "在宿主源码编辑器中打开此文档",
+    "Open Noema Public Wiki": "打开 Noema 公共 Wiki",
+    "Search Wiki": "搜索 Wiki",
+    "Reader history": "阅读历史",
+    "Type TRASH exactly to move the document": "请输入 TRASH 以移动该文档",
+    "Recoverable deletion from the note root": "从笔记根目录删除（可恢复）",
+    "Committing local changes, fetching, merging, and pushing…": "正在提交本地更改、抓取、合并并推送…",
+    "Reveal Note in File Explorer": "在文件资源管理器中显示笔记",
+    "Move Document to Recycle Bin": "将文档移至回收站",
+    "Move document to Recycle Bin": "将文档移至回收站",
+    "Move to Recycle Bin": "移至回收站",
+    "The document remains recoverable from the Recycle Bin.": "文档仍可从回收站恢复。",
+    "This document has unsaved changes. They will not be saved before it is moved.": "此文档有未保存的更改，移动前不会被保存。",
+    "Explore full graph": "探索完整图谱",
+    "Center graph": "居中图谱",
+    "Explore the connections across this Wiki.": "探索这个 Wiki 中的关联。",
+    "Filter, group, and inspect the complete Wiki graph.": "筛选、分组并查看完整的 Wiki 图谱。",
+    "Filter graph": "筛选图谱",
+    "Graph repository group": "图谱仓库分组",
+    "Review links, diagnostics, and indexing health.": "检查链接、诊断与索引健康度。",
+    "Search, tag:, title:, repo:, namespace:, is:orphan": "搜索，tag:、title:、repo:、namespace:、is:orphan",
+    "Noema turns the Markdown in your public and private Git repositories into a durable, shared Wiki. Files stay portable; links, backlinks, tags, and dependencies become one navigable knowledge graph.": "Noema 把你的公开和私有 Git 仓库里的 Markdown 变成持久、共享的 Wiki。文件始终可携带；链接、反链、标签和依赖汇成一张可导航的知识图谱。",
+    "Read the public Markdown repositories published through Noema. Links, backlinks, tags, and dependencies remain one navigable knowledge graph.": "阅读通过 Noema 发布的公开 Markdown 仓库。链接、反链、标签和依赖仍构成一张可导航的知识图谱。",
+    "Contents": "目录",
+    "Public Wiki": "公开 Wiki",
+    "Switching layout never moves files and never initializes a Git repository. Wiki layout indexes only direct\n          Git repository children of": "切换布局不会移动文件，也不会初始化 Git 仓库。Wiki 布局仅索引",
+    "Noema stores settings here. Manual edits are watched and reloaded automatically.\n          Packaged theme files stay inside the application.": "Noema 将设置保存在此处。手动编辑会被自动监听并重载。打包的主题文件保留在应用内部。",
+    "Cool clinical paper with ink-blue and teal accents": "冷峻临床纸感，墨蓝与青绿点缀",
+    "Warm paper, charcoal ink, and terracotta accents": "暖纸底色，炭墨与赤陶点缀",
+    "Noema's original dark Wave theme": "Noema 原版深色 Wave 主题",
+    "and": "和",
+    "Local commit": "本地提交",
+    "Commit & sync": "提交并同步",
+    "Local commit message (optional)": "本地提交说明（可选）",
+    "No local changes to commit": "没有可提交的本地更改",
+    "Local commit only (no origin remote)": "仅本地提交（无 origin 远程）",
+    "partition must be public or private": "partition 必须是 public 或 private",
+    "Namespace partition must be public or private": "命名空间的 partition 必须是 public 或 private"
+  },
+  "roles": {
+    "About": "关于",
+    "Services": "服务",
+    "Hide": "隐藏",
+    "Hide Others": "隐藏其他",
+    "Show All": "全部显示",
+    "Quit": "退出",
+    "Close": "关闭窗口",
+    "Cut": "剪切",
+    "Copy": "复制",
+    "Paste": "粘贴",
+    "Select All": "全选",
+    "Actual Size": "实际大小",
+    "Zoom In": "放大",
+    "Zoom Out": "缩小",
+    "Toggle Developer Tools": "切换开发者工具",
+    "Toggle Full Screen": "切换全屏",
+    "Minimize": "最小化",
+    "Zoom": "缩放",
+    "Bring All to Front": "全部置于顶层",
+    "File": "文件",
+    "Edit": "编辑",
+    "View": "视图",
+    "Window": "窗口",
+    "Help": "帮助",
+    "Undo": "撤销",
+    "Redo": "重做",
+    "Delete": "删除",
+    "Reload": "重新加载",
+    "Force Reload": "强制重新加载"
+  },
+  "regex": [
+    {
+      "pattern": "^(.*) \\(read-only\\)$",
+      "replace": "$1（只读）"
+    },
+    {
+      "pattern": "^Switch slides to (light|dark) theme$",
+      "replace": "将幻灯片切换为 $1 主题"
+    },
+    {
+      "pattern": "^(\\d+) active · (\\d+) retained$",
+      "replace": "$1 个活动任务 · 共保留 $2 个"
+    },
+    {
+      "pattern": "^Started (.+)$",
+      "replace": "开始 $1"
+    },
+    {
+      "pattern": "^Created (.+)$",
+      "replace": "创建 $1"
+    },
+    {
+      "pattern": "^Finished (.+)$",
+      "replace": "完成 $1"
+    },
+    {
+      "pattern": "^Live task state (.+)\\.$",
+      "replace": "实时任务状态 $1。"
+    },
+    {
+      "pattern": "^Snapshot refreshed (.+)\\.$",
+      "replace": "快照已刷新 $1。"
+    },
+    {
+      "pattern": "^Progress \\((\\d+)\\)$",
+      "replace": "进度（$1）"
+    },
+    {
+      "pattern": "^Agent audit \\((\\d+) decisions\\)$",
+      "replace": "代理审计（$1 项决定）"
+    },
+    {
+      "pattern": "^(.+) polish( [\\d.]+s)? · (\\d+) applied / (\\d+) kept$",
+      "replace": "$1 润色$2 · 已应用 $3 / 已保留 $4"
+    },
+    {
+      "pattern": "^Save conflict; reopen from (.+)$",
+      "replace": "保存冲突；请从 $1 重新打开"
+    },
+    {
+      "pattern": "^DOM target not found: (.+)$",
+      "replace": "未找到 DOM 目标：$1"
+    },
+    {
+      "pattern": "^Anchor not found: (.+)$",
+      "replace": "未找到锚点：$1"
+    },
+    {
+      "pattern": "^DOM target (.+)$",
+      "replace": "DOM 目标 $1"
+    },
+    {
+      "pattern": "^Switched (\\d+) (\\S+) cells? to (.+)$",
+      "replace": "已将 $1 个 $2 单元切换到 $3"
+    },
+    {
+      "pattern": "^No matching (\\S+) cells$",
+      "replace": "没有匹配的 $1 单元"
+    },
+    {
+      "pattern": "^Cell (.+) already uses python3$",
+      "replace": "单元 $1 已使用 python3"
+    },
+    {
+      "pattern": "^Switched (.+) from Lean to python3$",
+      "replace": "已将 $1 从 Lean 切换为 python3"
+    },
+    {
+      "pattern": "^(\\d+) matching blocks?$",
+      "replace": "$1 个匹配的块"
+    },
+    {
+      "pattern": "^Jupyter cell not found: (.+)$",
+      "replace": "未找到 Jupyter 单元：$1"
+    },
+    {
+      "pattern": "^(\\d+) cells?, (\\d+) running$",
+      "replace": "$1 个单元，$2 个正在运行"
+    },
+    {
+      "pattern": "^(\\d+) cells?$",
+      "replace": "$1 个单元"
+    },
+    {
+      "pattern": "^(\\d+) out$",
+      "replace": "$1 个输出"
+    },
+    {
+      "pattern": "^Running (\\d+) Jupyter cells?$",
+      "replace": "正在运行 $1 个 Jupyter 单元"
+    },
+    {
+      "pattern": "^Jupyter run stopped at (.+) \\(error\\)$",
+      "replace": "Jupyter 运行在 $1 处停止（错误）"
+    },
+    {
+      "pattern": "^Interrupted (.+)$",
+      "replace": "已中断 $1"
+    },
+    {
+      "pattern": "^Variables unavailable for (.+)$",
+      "replace": "$1 不支持变量"
+    },
+    {
+      "pattern": "^(\\d+) requests?$",
+      "replace": "$1 个请求"
+    },
+    {
+      "pattern": "^kernel ttl (.+)$",
+      "replace": "内核空闲 TTL $1"
+    },
+    {
+      "pattern": "^server ttl (.+)$",
+      "replace": "服务器空闲 TTL $1"
+    },
+    {
+      "pattern": "^running (.+)$",
+      "replace": "运行中 $1"
+    },
+    {
+      "pattern": "^idle (.+)$",
+      "replace": "空闲 $1"
+    },
+    {
+      "pattern": "^(\\d+) runs?$",
+      "replace": "$1 次运行"
+    },
+    {
+      "pattern": "^cell (.+)$",
+      "replace": "单元 $1"
+    },
+    {
+      "pattern": "^Cleaned (\\d+) Jupyter kernels?$",
+      "replace": "已清理 $1 个 Jupyter 内核"
+    },
+    {
+      "pattern": "^Deleted Jupyter cell (.+) and empty script$",
+      "replace": "已删除 Jupyter 单元 $1 及空脚本"
+    },
+    {
+      "pattern": "^Deleted Jupyter cell (.+)$",
+      "replace": "已删除 Jupyter 单元 $1"
+    },
+    {
+      "pattern": "^Delete failed: (.+)$",
+      "replace": "删除失败：$1"
+    },
+    {
+      "pattern": "^Cell deleted; cleanup failed: (.+)$",
+      "replace": "单元已删除；清理失败：$1"
+    },
+    {
+      "pattern": "^Cannot open: (.+)$",
+      "replace": "无法打开：$1"
+    },
+    {
+      "pattern": "^Roam note not found: (.+)$",
+      "replace": "未找到 Roam 笔记：$1"
+    },
+    {
+      "pattern": "^Open in (.+)$",
+      "replace": "在 $1 中打开"
+    },
+    {
+      "pattern": "^Open (.+)$",
+      "replace": "打开 $1"
+    },
+    {
+      "pattern": "^Jump to Reference \\[(.+)\\]$",
+      "replace": "跳转到参考文献 [$1]"
+    },
+    {
+      "pattern": "^Open \\[(.+)\\] in Zotero$",
+      "replace": "在 Zotero 中打开 [$1]"
+    },
+    {
+      "pattern": "^Open Bib in (.+)$",
+      "replace": "在 $1 中打开 Bib"
+    },
+    {
+      "pattern": "^Bibliography: (.+) \\(\\+(\\d+) more\\)$",
+      "replace": "参考文献：$1（另有 $2 条）"
+    },
+    {
+      "pattern": "^Bibliography: (.+)$",
+      "replace": "参考文献：$1"
+    },
+    {
+      "pattern": "^Reference \\[(.+)\\] is not rendered$",
+      "replace": "参考文献 [$1] 未渲染"
+    },
+    {
+      "pattern": "^Reference \\[(.+)\\] · (.*)$",
+      "replace": "参考文献 [$1] · $2"
+    },
+    {
+      "pattern": "^Sent (.+) to Emacs Zotero$",
+      "replace": "已将 $1 发送到 Emacs Zotero"
+    },
+    {
+      "pattern": "^Opened (.+) in (.+)$",
+      "replace": "已在 $2 中打开 $1"
+    },
+    {
+      "pattern": "^(\\d+) sections? selected$",
+      "replace": "已选择 $1 个章节"
+    },
+    {
+      "pattern": "^Choose Path · (\\d+)$",
+      "replace": "选择路径 · $1"
+    },
+    {
+      "pattern": "^(.+) — fields$",
+      "replace": "$1 — 字段"
+    },
+    {
+      "pattern": "^LaTeX export failed: (.+)$",
+      "replace": "LaTeX 导出失败：$1"
+    },
+    {
+      "pattern": "^LaTeX export agent: (.+)$",
+      "replace": "LaTeX 导出代理：$1"
+    },
+    {
+      "pattern": "^Equation ref copied: (.+)$",
+      "replace": "公式引用已复制：$1"
+    },
+    {
+      "pattern": "^Equation tag (.+); ref copied$",
+      "replace": "公式标签 $1；引用已复制"
+    },
+    {
+      "pattern": "^Inline anchor ref copied: (.+)$",
+      "replace": "行内锚点引用已复制：$1"
+    },
+    {
+      "pattern": "^Inline anchor (.+); ref copied$",
+      "replace": "行内锚点 $1；引用已复制"
+    },
+    {
+      "pattern": "^(\\d+) refs$",
+      "replace": "$1 个引用"
+    },
+    {
+      "pattern": "^Open (\\d+)$",
+      "replace": "待办 $1"
+    },
+    {
+      "pattern": "^Today (\\d+)$",
+      "replace": "今天 $1"
+    },
+    {
+      "pattern": "^Overdue (\\d+)$",
+      "replace": "已逾期 $1"
+    },
+    {
+      "pattern": "^All (\\d+)$",
+      "replace": "全部 $1"
+    },
+    {
+      "pattern": "^Done (\\d+)$",
+      "replace": "已完成 $1"
+    },
+    {
+      "pattern": "^Cancelled (\\d+)$",
+      "replace": "已取消 $1"
+    },
+    {
+      "pattern": "^(\\d+) shown - (.+)$",
+      "replace": "显示 $1 条 - $2"
+    },
+    {
+      "pattern": "^Renamed (\\d+) notes$",
+      "replace": "已重命名 $1 篇笔记"
+    },
+    {
+      "pattern": "^Renamed tag in (\\d+) notes$",
+      "replace": "已在 $1 篇笔记中重命名标签"
+    },
+    {
+      "pattern": "^Deleted tag from (\\d+) notes$",
+      "replace": "已从 $1 篇笔记中删除标签"
+    },
+    {
+      "pattern": "^Case variants: (.+)$",
+      "replace": "大小写变体：$1"
+    },
+    {
+      "pattern": "^(.+) overlaps (.+)$",
+      "replace": "$1 与 $2 重叠"
+    },
+    {
+      "pattern": "^(\\d+) shared - (\\d+)/(\\d+) notes - (\\d+)% containment$",
+      "replace": "共享 $1 篇 - $2/$3 篇笔记 - 包含率 $4%"
+    },
+    {
+      "pattern": "^Tag overlap \\((\\d+) tags\\)$",
+      "replace": "标签重叠（$1 个标签）"
+    },
+    {
+      "pattern": "^Rewrote (\\d+) references$",
+      "replace": "已重写 $1 个引用"
+    },
+    {
+      "pattern": "^Slides theme: (.+)$",
+      "replace": "幻灯片主题：$1"
+    },
+    {
+      "pattern": "^Switch presentation to (.+)$",
+      "replace": "将放映切换为 $1"
+    },
+    {
+      "pattern": "^Slides (.+) theme$",
+      "replace": "幻灯片 $1 主题"
+    },
+    {
+      "pattern": "^(.+) · (.+) · Auto (on|off)$",
+      "replace": "$1 · $2 · 自动 $3"
+    },
+    {
+      "pattern": "^Online · (\\d+) ms$",
+      "replace": "在线 · $1 毫秒"
+    },
+    {
+      "pattern": "^(\\d+) prose issues? \\(bounded scope\\) \\(local CLI\\)$",
+      "replace": "$1 个行文问题（限定范围）（本地 CLI）"
+    },
+    {
+      "pattern": "^(\\d+) prose issues? \\(bounded scope\\)$",
+      "replace": "$1 个行文问题（限定范围）"
+    },
+    {
+      "pattern": "^(\\d+) prose issues? \\(local CLI\\)$",
+      "replace": "$1 个行文问题（本地 CLI）"
+    },
+    {
+      "pattern": "^(\\d+) prose issues?$",
+      "replace": "$1 个行文问题"
+    },
+    {
+      "pattern": "^Add “(.+)”$",
+      "replace": "添加“$1”"
+    },
+    {
+      "pattern": "^Added “(.+)” to the Noema prose dictionary$",
+      "replace": "已将“$1”添加到 Noema 行文词典"
+    },
+    {
+      "pattern": "^Inserted (.+)$",
+      "replace": "已插入 $1"
+    },
+    {
+      "pattern": "^Snippet choice: (.+)$",
+      "replace": "代码片段选项：$1"
+    },
+    {
+      "pattern": "^Reloaded (\\d+) snippets$",
+      "replace": "已重新加载 $1 个代码片段"
+    },
+    {
+      "pattern": "^inline tag in (.+)$",
+      "replace": "$1 中的行内标签"
+    },
+    {
+      "pattern": "^DOM target in (.+)$",
+      "replace": "$1 中的 DOM 目标"
+    },
+    {
+      "pattern": "^Bibliography completion failed: (.+)$",
+      "replace": "参考文献补全失败：$1"
+    },
+    {
+      "pattern": "^Bibliography completion: (.+)$",
+      "replace": "参考文献补全：$1"
+    },
+    {
+      "pattern": "^Math error: (.+)$",
+      "replace": "数学错误：$1"
+    },
+    {
+      "pattern": "^Opened in (.+)$",
+      "replace": "已在 $1 中打开"
+    },
+    {
+      "pattern": "^Open failed: (.+)$",
+      "replace": "打开失败：$1"
+    },
+    {
+      "pattern": "^Reveal failed: (.+)$",
+      "replace": "在文件管理器中显示失败：$1"
+    },
+    {
+      "pattern": "^Opened (\\d+) notes$",
+      "replace": "已打开 $1 篇笔记"
+    },
+    {
+      "pattern": "^Drop failed: (.+)$",
+      "replace": "拖放失败：$1"
+    },
+    {
+      "pattern": "^Settings failed: (.+)$",
+      "replace": "设置加载失败：$1"
+    },
+    {
+      "pattern": "^(.+), (.+) theme$",
+      "replace": "$1,$2 主题"
+    },
+    {
+      "pattern": "^Applying (.+)…$",
+      "replace": "正在应用 $1…"
+    },
+    {
+      "pattern": "^(.+) applied$",
+      "replace": "已应用 $1"
+    },
+    {
+      "pattern": "^(.+) · (\\d+) pages?$",
+      "replace": "$1 · $2 个页面"
+    },
+    {
+      "pattern": "^(\\d+) aliases$",
+      "replace": "$1 个别名"
+    },
+    {
+      "pattern": "^(\\d+) backlinks$",
+      "replace": "$1 个反向链接"
+    },
+    {
+      "pattern": "^(.+) copy$",
+      "replace": "$1 副本"
+    },
+    {
+      "pattern": "^Load more · (\\d+) of (\\d+)$",
+      "replace": "加载更多 · 共 $2 条，已显示 $1 条"
+    },
+    {
+      "pattern": "^repository (.+)$",
+      "replace": "仓库 $1"
+    },
+    {
+      "pattern": "^(\\d+) pages? · (\\d+) explicit overrides?$",
+      "replace": "$1 个页面 · $2 个显式覆盖"
+    },
+    {
+      "pattern": "^(\\d+) pages? · repository default$",
+      "replace": "$1 个页面 · 仓库默认"
+    },
+    {
+      "pattern": "^Rename namespace “(.+)” for (.+) pages\\. Existing qualified links remain valid as aliases\\.$",
+      "replace": "将命名空间 “$1” 重命名（适用于 $2 分区的页面）。现有的限定链接将作为别名保持有效。"
+    },
+    {
+      "pattern": "^Renamed (\\d+) page namespaces? to (.+)$",
+      "replace": "已将 $1 个页面命名空间重命名为 $2"
+    },
+    {
+      "pattern": "^(\\d+) pages · (.*)$",
+      "replace": "$1 个页面 · $2"
+    },
+    {
+      "pattern": "^Rename #(.+) to$",
+      "replace": "将 #$1 重命名为"
+    },
+    {
+      "pattern": "^Remove #(.+) from (\\d+) pages\\?$",
+      "replace": "将 #$1 从 $2 个页面中移除？"
+    },
+    {
+      "pattern": "^Exported (\\d+) files to (.+)$",
+      "replace": "已导出 $1 个文件到 $2"
+    },
+    {
+      "pattern": "^(\\d+) unresolved references?$",
+      "replace": "$1 个未解析的引用"
+    },
+    {
+      "pattern": "^Loading (.+)…$",
+      "replace": "正在加载 $1…"
+    },
+    {
+      "pattern": "^Last synced (.+)$",
+      "replace": "上次同步于 $1"
+    },
+    {
+      "pattern": "^Resolve (.+)$",
+      "replace": "解决 $1"
+    },
+    {
+      "pattern": "^(\\w+) layout$",
+      "replace": "$1 布局"
+    },
+    {
+      "pattern": "^Generation (.+) · SQLite WAL$",
+      "replace": "世代 $1 · SQLite WAL"
+    },
+    {
+      "pattern": "^(\\d+) pages across (\\d+) repositories$",
+      "replace": "$2 个仓库共 $1 个页面"
+    },
+    {
+      "pattern": "^(\\d+) files?$",
+      "replace": "$1 个文件"
+    },
+    {
+      "pattern": "^(\\d+) backlinks will become wanted links\\. The page and its owned assets remain recoverable from Trash\\.$",
+      "replace": "$1 个反向链接将变为待建链接。该页面及其所属资源仍可从废纸篓恢复。"
+    },
+    {
+      "pattern": "^Restore “(.+)” from (.+) as an uncommitted change\\?$",
+      "replace": "将 “$1” 从 $2 恢复为未提交的更改？"
+    },
+    {
+      "pattern": "^Choose a folder in (.+)$",
+      "replace": "在 $1 中选择一个文件夹"
+    },
+    {
+      "pattern": "^Move “(.+)” and its page-owned assets to the macOS Trash\\?$",
+      "replace": "将 “$1” 及其页面所属资源移到 macOS 废纸篓？"
+    },
+    {
+      "pattern": "^Moved (.+) to Trash · (.+)$",
+      "replace": "已将 $1 移到废纸篓 · $2"
+    },
+    {
+      "pattern": "^(.*) · clean$",
+      "replace": "$1 · 无更改"
+    },
+    {
+      "pattern": "^(.*) · changes$",
+      "replace": "$1 · 有更改"
+    },
+    {
+      "pattern": "^Project filter: (.*)$",
+      "replace": "项目筛选：$1"
+    },
+    {
+      "pattern": "^Project: (.+)$",
+      "replace": "项目：$1"
+    },
+    {
+      "pattern": "^Projects: (\\d+)$",
+      "replace": "$1 个项目"
+    },
+    {
+      "pattern": "^Depends on which # \\(from below\\)\\?\\n\\n([\\s\\S]*)$",
+      "replace": "依赖下面哪一项？（输入序号）\\n\\n$1"
+    },
+    {
+      "pattern": "^Bulk update: (\\d+)/(\\d+) succeeded$",
+      "replace": "批量更新：$1/$2 成功"
+    },
+    {
+      "pattern": "^Bulk update: (\\d+) todos? updated$",
+      "replace": "批量更新：已更新 $1 个待办"
+    },
+    {
+      "pattern": "^Bulk \\((\\d+)\\)$",
+      "replace": "批量（$1）"
+    },
+    {
+      "pattern": "^([0-9]+) issues?: (.*)$",
+      "replace": "$1 个问题：$2"
+    },
+    {
+      "pattern": "^([0-9]+) events?$",
+      "replace": "$1 个事件"
+    },
+    {
+      "pattern": "^\\+([0-9]+) more$",
+      "replace": "+$1 更多"
+    },
+    {
+      "pattern": "^(.+) — ([0-9]+) closed$",
+      "replace": "$1 — $2 项已完成"
+    },
+    {
+      "pattern": "^Deadline set to (.+)$",
+      "replace": "截止日期已设为 $1"
+    },
+    {
+      "pattern": "^Scheduled set to (.+)$",
+      "replace": "计划日期已设为 $1"
+    },
+    {
+      "pattern": "^([0-9]+) tasks · ([0-9]+) milestones$",
+      "replace": "$1 个任务 · $2 个里程碑"
+    },
+    {
+      "pattern": "([0-9]+) dep",
+      "replace": "$1 个依赖"
+    },
+    {
+      "pattern": "^Filter by (.+)$",
+      "replace": "按 $1 筛选"
+    },
+    {
+      "pattern": "^● Running: (.*) \\(([0-9]+)m\\)$",
+      "replace": "● 计时中：$1（$2 分钟）"
+    },
+    {
+      "pattern": "^⏱ (.*) \\(([0-9]+)m\\)$",
+      "replace": "⏱ $1（$2 分钟）"
+    },
+    {
+      "pattern": "^⏱ ([0-9]+)m$",
+      "replace": "⏱ $1 分钟"
+    },
+    {
+      "pattern": "^([0-9]+) projects? · ([0-9]+) open · ([0-9]+) doing · ([0-9]+) blocked · ([0-9]+) overdue$",
+      "replace": "$1 个项目 · $2 待办 · $3 进行中 · $4 阻塞 · $5 逾期"
+    },
+    {
+      "pattern": "^([0-9]+) open · ([0-9]+) doing · ([0-9]+) blocked · ([0-9]+) overdue$",
+      "replace": "$1 待办 · $2 进行中 · $3 阻塞 · $4 逾期"
+    },
+    {
+      "pattern": "^([0-9]+)% done · ([0-9]+) open · ([0-9]+) doing · ([0-9]+) blocked · ([0-9]+)h effort · ([0-9]+)h clocked$",
+      "replace": "$1% 完成 · $2 待办 · $3 进行中 · $4 阻塞 · $5 小时预估 · $6 小时计时"
+    },
+    {
+      "pattern": "^([0-9]+)% done · ([0-9]+) open · ([0-9]+) doing · ([0-9]+) blocked · ([0-9]+)h effort$",
+      "replace": "$1% 完成 · $2 待办 · $3 进行中 · $4 阻塞 · $5 小时预估"
+    },
+    {
+      "pattern": "^([0-9]+)% done · ([0-9]+) open · ([0-9]+) doing · ([0-9]+) blocked · ([0-9]+)h clocked$",
+      "replace": "$1% 完成 · $2 待办 · $3 进行中 · $4 阻塞 · $5 小时计时"
+    },
+    {
+      "pattern": "^([0-9]+)% done · ([0-9]+) open · ([0-9]+) doing · ([0-9]+) blocked$",
+      "replace": "$1% 完成 · $2 待办 · $3 进行中 · $4 阻塞"
+    },
+    {
+      "pattern": "^([\\d.]+)h / ([\\d.]+)h effort$",
+      "replace": "$1 小时 / $2 小时预估"
+    },
+    {
+      "pattern": "^(.+) — ([\\d.]+)h$",
+      "replace": "$1 — $2 小时"
+    },
+    {
+      "pattern": "^([\\d.]+)h$",
+      "replace": "$1 小时"
+    },
+    {
+      "pattern": "^Page ([0-9]+)$",
+      "replace": "页面 $1"
+    },
+    {
+      "pattern": "^tag:(.*)$",
+      "replace": "标签：$1"
+    },
+    {
+      "pattern": "^([0-9]+)/([0-9]+) headings · ([0-9]+) anchors$",
+      "replace": "$1/$2 个标题 · $3 个锚点"
+    },
+    {
+      "pattern": "^([0-9]+)/([0-9]+) headings$",
+      "replace": "$1/$2 个标题"
+    },
+    {
+      "pattern": "([0-9]+) headings",
+      "replace": "$1 个标题"
+    },
+    {
+      "pattern": "([0-9]+) org blocks",
+      "replace": "$1 个 Org 块"
+    },
+    {
+      "pattern": "([0-9]+) anchors",
+      "replace": "$1 个锚点"
+    },
+    {
+      "pattern": "([0-9]+) tags",
+      "replace": "$1 个标签"
+    },
+    {
+      "pattern": "([0-9]+) links",
+      "replace": "$1 个链接"
+    },
+    {
+      "pattern": "Drag to move; use edges to resize; drag dot to set progress\\.",
+      "replace": "拖拽移动；拖动边缘调整起止日期；拖动圆点设置进度。"
+    },
+    {
+      "pattern": "^after: (.+)$",
+      "replace": "前置依赖：$1"
+    },
+    {
+      "pattern": "^Type TRASH to move (.+) to the Recycle Bin$",
+      "replace": "输入 TRASH 将 $1 移至回收站"
+    },
+    {
+      "pattern": "^Moving (.+) to Recycle Bin\\.\\.\\.$",
+      "replace": "正在将 $1 移至回收站..."
+    },
+    {
+      "pattern": "^repositories[(d+)].partition must be public or private$",
+      "replace": "repositories[$1].partition 必须是 public 或 private"
+    },
+    {
+      "pattern": "^(.+) · clean$",
+      "replace": "$1 · 干净"
+    },
+    {
+      "pattern": "^(.+) · changes$",
+      "replace": "$1 · 有更改"
+    },
+    {
+      "pattern": "^(.+) · branch pending$",
+      "replace": "$1 · 分支待定"
+    },
+    {
+      "pattern": "^idle · (.+)$",
+      "replace": "空闲 · $1"
+    },
+    {
+      "pattern": "^Committed (d+) changed files?$",
+      "replace": "已提交 $1 个更改的文件"
+    }
+  ]
+}

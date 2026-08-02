@@ -58,6 +58,12 @@ export function createVisualMarkdownEditingExtensions(): Extension {
 
 export { orgEnvExitTarget } from "./widgets/block-extras.ts";
 export {
+  activateBlockMath,
+  activateInlineMath,
+  activateInlineMathFromArrow,
+  finishInlineMathEditing,
+} from "./widgets/math.ts";
+export {
   hasVisualMode,
   isVisualMode,
   setVisualMode,

@@ -823,10 +823,24 @@ declare global {
         relativePath?: string;
         message?: string;
       }>;
+      listPlugins(): Promise<NoemaDesktopPlugin[]>;
+      setPluginEnabled(id: string, enabled: boolean): Promise<NoemaDesktopPlugin[]>;
       onCommand(callback: (detail: unknown) => void): () => void;
     };
   }
 }
+
+export type NoemaDesktopPlugin = {
+  id: string;
+  name: string;
+  description: string;
+  version: string;
+  enabled: boolean;
+  active: boolean;
+  builtIn: boolean;
+  configurable: boolean;
+  locked: boolean;
+};
 
 function requireMethod<T extends (...args: any[]) => unknown>(method: T | undefined, feature: string): T {
   if (!method) throw new Error(`${feature} is unavailable`);

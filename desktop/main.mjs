@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, screen, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, net, screen, session, shell } from "electron";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { homedir, tmpdir } from "node:os";
 import { getNoemaAppConfig } from "../server/lib/app-config.mjs";
 import { noemaAppTheme } from "../shared/app-themes.mjs";
+import { createDesktopPluginHost } from "./plugin-host.mjs";
 import {
   desktopOpenDecision,
   desktopPlatformLabels,
@@ -27,6 +28,13 @@ const desktopConfigDir = process.env.NOEMA_CONFIG_DIR
   || (desktopPlatform === "win32" ? join(app.getPath("userData"), "config") : "");
 const stateRoot = join(app.getPath("userData"), "state");
 const sessionFile = join(stateRoot, "desktop-session.json");
+const desktopPlugins = createDesktopPluginHost({
+  app,
+  session,
+  net,
+  appRoot,
+  userData: app.getPath("userData"),
+});
 
 let hostProcess = null;
 let hostUrl = "";
@@ -129,7 +137,7 @@ function hostEnvironment(appConfig = null, requestedPort = 0) {
     process.env["ProgramFiles(x86)"] && join(process.env["ProgramFiles(x86)"], "Git", "cmd"),
     process.env["ProgramFiles(x86)"] && join(process.env["ProgramFiles(x86)"], "Microsoft VS Code", "bin"),
   ].filter((path) => path && existsSync(path)) : [];
-  return {
+  return desktopPlugins.transformHostEnvironment({
     ...process.env,
     PATH: [...windowsToolDirs, ...String(process.env.PATH || "").split(delimiter).filter(Boolean)].join(delimiter),
     ELECTRON_RUN_AS_NODE: "1",
@@ -150,7 +158,7 @@ function hostEnvironment(appConfig = null, requestedPort = 0) {
     AARONNOTE_LATEX_TEMPLATES_ROOT: join(resourcesRoot, "templates"),
     AARONNOTE_KATEX_MACROS_DIR: join(resourcesRoot, "katex-macros"),
     AARONNOTE_PROSE_WORDS: join(resourcesRoot, "prose-accepted-words.txt"),
-  };
+  }, { hostMode: "desktop" });
 }
 
 function hostPort() {
@@ -255,7 +263,8 @@ function activeWindow() {
 
 function showMessageBoxForActive(options) {
   const owner = activeWindow();
-  return owner ? dialog.showMessageBox(owner, options) : dialog.showMessageBox(options);
+  const localized = desktopPlugins.transformDialogOptions("messageBox", options);
+  return owner ? dialog.showMessageBox(owner, localized) : dialog.showMessageBox(localized);
 }
 
 function sendEditorCommand(command, detail = {}, win = activeWindow()) {
@@ -352,7 +361,7 @@ async function confirmWindowClose(win) {
   const state = windowStates.get(win.id) || {};
   if (!desktopWindowRisk(state)) return true;
   const dirty = Boolean(state.dirty || state.saveInFlight || state.conflict);
-  const result = await dialog.showMessageBox(win, {
+  const result = await dialog.showMessageBox(win, desktopPlugins.transformDialogOptions("messageBox", {
     type: "warning",
     title: "Close Noema window?",
     message: dirty ? "This document has changes that are not safely stored." : "A task is still running in this window.",
@@ -361,7 +370,7 @@ async function confirmWindowClose(win) {
     defaultId: 0,
     cancelId: dirty ? 1 : 0,
     noLink: true,
-  });
+  }));
   if (dirty && result.response === 0) {
     sendEditorCommand("save", {}, win);
     return await waitForSafeWindows([win]);
@@ -396,9 +405,10 @@ async function chooseMarkdownFiles() {
     ],
   };
   const owner = activeWindow();
+  const localized = desktopPlugins.transformDialogOptions("openDialog", options);
   const result = owner
-    ? await dialog.showOpenDialog(owner, options)
-    : await dialog.showOpenDialog(options);
+    ? await dialog.showOpenDialog(owner, localized)
+    : await dialog.showOpenDialog(localized);
   if (result.canceled) return;
   result.filePaths.forEach((file, index) => openFile(file, { source: index === 0 ? "dialog" : "drop" }));
 }
@@ -587,7 +597,7 @@ function buildApplicationMenu() {
     }] : []),
   ];
   if (appMenu) template.unshift(appMenu);
-  return Menu.buildFromTemplate(template);
+  return Menu.buildFromTemplate(desktopPlugins.transformMenuTemplate(template, { kind: "application" }));
 }
 
 function createWindow(file = "", targetUrl = "", restore = {}) {
@@ -771,7 +781,7 @@ ipcMain.handle("noema:show-menu", (event, kind, point = {}) => {
   const template = kind === "window"
     ? windowActionsTemplate(win)
     : editorActionsTemplate();
-  Menu.buildFromTemplate(template).popup({
+  Menu.buildFromTemplate(desktopPlugins.transformMenuTemplate(template, { kind })).popup({
     window: win,
     x: Math.max(0, Math.floor(Number(point?.x) || 0)),
     y: Math.max(0, Math.floor(Number(point?.y) || 48)),
@@ -813,9 +823,10 @@ ipcMain.handle("noema:choose-save-path", async (event, options = {}) => {
     ...(defaultPath ? { defaultPath: resolve(defaultPath) } : {}),
     ...(extension ? { filters: [{ name: extension.toUpperCase(), extensions: [extension] }] } : {}),
   };
+  const localized = desktopPlugins.transformDialogOptions("saveDialog", settings);
   const result = owner
-    ? await dialog.showSaveDialog(owner, settings)
-    : await dialog.showSaveDialog(settings);
+    ? await dialog.showSaveDialog(owner, localized)
+    : await dialog.showSaveDialog(localized);
   return { canceled: result.canceled, path: result.filePath || "" };
 });
 
@@ -828,6 +839,11 @@ ipcMain.handle("noema:read-clipboard", () => {
   const html = clipboard.readHTML();
   return text || html ? { kind: "text", text, html } : { kind: "empty" };
 });
+
+ipcMain.handle("noema:list-plugins", () => desktopPlugins.availablePlugins());
+
+ipcMain.handle("noema:set-plugin-enabled", (_event, id, enabled) =>
+  desktopPlugins.setPluginEnabled(String(id || ""), enabled === true));
 
 ipcMain.handle("noema:choose-directory", async (event, options = {}) => {
   const root = resolve(String(options.root || defaultNoteRoot));
@@ -842,9 +858,10 @@ ipcMain.handle("noema:choose-directory", async (event, options = {}) => {
     defaultPath: initial,
     properties: ["openDirectory", "createDirectory"],
   };
+  const localized = desktopPlugins.transformDialogOptions("openDialog", settings);
   const result = owner
-    ? await dialog.showOpenDialog(owner, settings)
-    : await dialog.showOpenDialog(settings);
+    ? await dialog.showOpenDialog(owner, localized)
+    : await dialog.showOpenDialog(localized);
   if (result.canceled || !result.filePaths[0]) return { canceled: true, path: "" };
   const selected = resolve(result.filePaths[0]);
   const rel = relative(root, selected);
@@ -855,6 +872,7 @@ ipcMain.handle("noema:choose-directory", async (event, options = {}) => {
 });
 
 app.whenReady().then(async () => {
+  await desktopPlugins.load();
   Menu.setApplicationMenu(buildApplicationMenu());
   try {
     const configEnvironment = desktopConfigDir

@@ -23,6 +23,7 @@ import { insertNewlineContinueMarkup } from "@codemirror/lang-markdown";
 import { continueMarkdownBlock, exitEmptyMarkdownBlock, indentMarkdownList } from "../src/cm6/commands/index.ts";
 import { nextGraphemePosition, previousGraphemePosition } from "../src/cm6/text-boundaries.ts";
 import { historyChordKind } from "../src/keymap/shortcut-router.ts";
+import { activateInlineMathFromArrow } from "../src/cm6/extensions/visual/index.ts";
 
 type XwidgetControlKey = "Escape" | "Delete" | "Backspace";
 type XwidgetSpecialKey =
@@ -44,6 +45,15 @@ type XwidgetKeyContext = {
 };
 type EmacsKeyForwardOptions = {
   client?: () => string | null | undefined;
+};
+
+type MathHostKeyDetail = {
+  key: string;
+  text?: string;
+  ctrlKey?: boolean;
+  metaKey?: boolean;
+  altKey?: boolean;
+  shiftKey?: boolean;
 };
 
 const XWIDGET_CONTROL_KEYS = new Set<XwidgetControlKey>(["Escape", "Delete", "Backspace"]);
@@ -69,9 +79,30 @@ function targetElement(target: EventTarget | null): Element | null {
   return null;
 }
 
+function visualMathEditingTarget(target: EventTarget | null): boolean {
+  let element = targetElement(target);
+  if (element?.closest("input, textarea, select, button")) return false;
+  while (element) {
+    if (element.closest("[data-cm-visual-math='active']")) return true;
+    const root = element.getRootNode();
+    element = root instanceof ShadowRoot ? root.host : null;
+  }
+  return false;
+}
+
+function dispatchMathHostKey(detail: MathHostKeyDetail): boolean {
+  const routed = new CustomEvent<MathHostKeyDetail>("aaronnote:math-host-key", {
+    cancelable: true,
+    detail,
+  });
+  document.dispatchEvent(routed);
+  return routed.defaultPrevented;
+}
+
 function isTextEditingTarget(target: EventTarget | null, editorHost: HTMLElement): boolean {
   const element = targetElement(target);
   if (!element) return false;
+  if (element.closest("[data-aaronnote-vim='native']")) return true;
   if (element.closest("input, textarea, select")) return true;
   const editable = element.closest<HTMLElement>("[contenteditable]");
   if (!editable || editable.contentEditable === "false") return false;
@@ -208,6 +239,9 @@ function runEditorSpecialKey(key: XwidgetSpecialKey, context: XwidgetKeyContext,
     if (handled) context.editor.focus();
     return handled;
   }
+  if (!shiftKey && (key === "ArrowLeft" || key === "ArrowRight")) {
+    if (activateInlineMathFromArrow(context.editor.view, key)) return true;
+  }
   if (!shiftKey && /^Arrow(?:Left|Right|Up|Down)$/.test(key)) {
     const handled = context.vim.handleKey({ key });
     if (handled) {
@@ -277,6 +311,40 @@ export function handleXwidgetHistoryKeydown(event: KeyboardEvent, context: Xwidg
   if (kind === "undo") context.editor.undo();
   else context.editor.redo();
   context.editor.focus();
+  return true;
+}
+
+/** Route native/xwidget events through the same adapter as host-injected keys. */
+export function handleXwidgetMathKeydown(event: KeyboardEvent, context: XwidgetKeyContext): boolean {
+  if (context.enabled === false || event.defaultPrevented || event.isComposing) return false;
+  if (!visualMathEditingTarget(event.target) && !visualMathEditingTarget(document.activeElement)) return false;
+  const control = controlKeyFromKeyboardEvent(event);
+  const special = specialKeyFromKeyboardEvent(event);
+  const shiftTab = XWIDGET_SHIFT_TAB_KEYS.has(event.key);
+  const key = control ?? special ?? event.key;
+  if (!dispatchMathHostKey({
+    key,
+    ctrlKey: event.ctrlKey,
+    metaKey: event.metaKey,
+    altKey: event.altKey,
+    shiftKey: event.shiftKey || shiftTab,
+  })) return false;
+  hardStop(event);
+  noteHandledKeydown(context.editor, key);
+  return true;
+}
+
+export function handleXwidgetMathBeforeInput(event: InputEvent, context: XwidgetKeyContext): boolean {
+  if (context.enabled === false || event.defaultPrevented || event.isComposing) return false;
+  if (!visualMathEditingTarget(event.target) && !visualMathEditingTarget(document.activeElement)) return false;
+  const key = controlKeyFromInputEvent(event) ?? specialKeyFromInputEvent(event);
+  if (!key) return false;
+  // A handled keydown can still be followed by WebKit's synthetic beforeinput.
+  // Always suppress its control byte, but never execute the operation twice.
+  hardStop(event);
+  if (!recentlyHandledKeydown(context.editor, key)) {
+    dispatchMathHostKey({ key, text: event.data ?? undefined });
+  }
   return true;
 }
 

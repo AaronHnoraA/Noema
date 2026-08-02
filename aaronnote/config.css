@@ -340,6 +340,58 @@ body[data-host-mode="desktop"][data-desktop-platform="win32"] .noema-config-titl
   color: var(--aaron-accent);
 }
 
+.noema-config-plugins {
+  display: grid;
+  gap: 10px;
+}
+
+.noema-config-plugin {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  border: 1px solid var(--aaron-paper-line);
+  border-radius: var(--aaron-radius-2, 7px);
+  padding: 14px;
+  background: var(--aaron-paper-soft);
+}
+
+.noema-config-plugin-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.noema-config-plugin-copy strong {
+  font-size: 13px;
+}
+
+.noema-config-plugin-copy small {
+  color: var(--aaron-faint);
+  font: 9px/1.4 var(--aaron-font-mono, monospace);
+}
+
+.noema-config-plugin-copy > span {
+  color: var(--aaron-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.noema-config-plugin-copy em {
+  color: var(--aaron-accent);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 750;
+}
+
+.noema-config-plugin > input {
+  width: 36px;
+  height: 20px;
+  flex: 0 0 auto;
+  accent-color: var(--aaron-accent);
+  cursor: pointer;
+}
+
 .noema-config-copy {
   margin: -4px 0 14px;
   color: var(--aaron-muted);

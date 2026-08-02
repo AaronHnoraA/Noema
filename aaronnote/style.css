@@ -973,6 +973,9 @@ body[data-host-mode="server"][data-server-reader-editing-aids="false"] :is(
 }
 
 .aaronnote-snippet-popup {
+  /* The same Noema completion surface is shared by the editor and the
+   * body-mounted LiveTeX studio (z-index 1450). */
+  z-index: 1520;
   max-height: 240px;
   overflow: auto;
   padding: 4px;
@@ -1057,9 +1060,12 @@ body[data-host-mode="server"][data-server-reader-editing-aids="false"] :is(
   padding: 10px 12px;
 }
 
+.aaronnote-math-preview .katex {
+  color: inherit;
+}
+
 .aaronnote-math-preview .katex,
 .aaronnote-math-preview .katex * {
-  color: var(--aaron-math-ink, #d7defb);
   font-family: var(--aaron-font-math), var(--aaron-font-chinese), "Times New Roman", serif !important;
 }
 
@@ -1478,6 +1484,410 @@ body[data-host-mode="server"][data-server-reader-editing-aids="false"] :is(
   width: min(500px, calc(100vw - 12px));
 }
 
+.aaronnote-context-menu.is-math {
+  width: min(400px, calc(100vw - 12px));
+}
+
+.aaronnote-livetex-backdrop {
+  position: fixed;
+  z-index: 1450;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: clamp(10px, 2vw, 28px);
+  background: rgb(3 6 12 / 58%);
+  backdrop-filter: blur(10px);
+}
+
+.aaronnote-livetex-backdrop[hidden] {
+  display: none;
+}
+
+.aaronnote-livetex-studio {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-rows: 54px 56px minmax(0, 1fr);
+  width: min(1480px, calc(100vw - 20px));
+  height: min(900px, calc(100vh - 20px));
+  min-height: 430px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--aaron-paper-line), var(--aaron-accent) 18%);
+  border-radius: 14px;
+  background: var(--aaron-paper);
+  color: var(--aaron-ink);
+  box-shadow: 0 28px 90px rgb(0 0 0 / 48%);
+}
+
+.aaronnote-livetex-head {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 1fr minmax(220px, 0.75fr) 1fr;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--aaron-paper-line);
+  background: color-mix(in srgb, var(--aaron-paper-soft), var(--aaron-paper) 44%);
+  font-family: var(--aaron-font-sans);
+}
+
+.aaronnote-livetex-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.aaronnote-livetex-brand > span {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid color-mix(in srgb, var(--aaron-accent), transparent 58%);
+  border-radius: 8px;
+  color: var(--aaron-accent);
+  background: color-mix(in srgb, var(--aaron-accent), transparent 90%);
+  font: 700 11px/1 var(--aaron-font-serif);
+}
+
+.aaronnote-livetex-brand strong {
+  color: var(--aaron-accent);
+  font: 800 17px/1 var(--aaron-font-sans);
+  letter-spacing: 0.015em;
+}
+
+.aaronnote-livetex-document-title {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 0;
+  height: 34px;
+  border: 1px solid var(--aaron-paper-line);
+  border-radius: 7px;
+  padding: 0 9px 0 14px;
+  background: var(--aaron-paper);
+  color: var(--aaron-ink);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 7%);
+  font: 650 12px/1 var(--aaron-font-sans);
+}
+
+.aaronnote-livetex-document-title > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aaronnote-livetex-head-actions {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.aaronnote-livetex-toolbar {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 8px 14px;
+  overflow: hidden;
+  border-bottom: 1px solid var(--aaron-paper-line);
+  background: var(--aaron-paper);
+  font-family: var(--aaron-font-sans);
+}
+
+.aaronnote-livetex-mode {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding-right: 3px;
+}
+
+.aaronnote-livetex-mode > span {
+  color: var(--aaron-accent);
+  font: 700 12px/1 var(--aaron-font-mono);
+}
+
+.aaronnote-livetex-mode > strong {
+  font: 730 13px/1 var(--aaron-font-sans);
+}
+
+.aaronnote-livetex-toolbar > i {
+  flex: 0 0 1px;
+  width: 1px;
+  height: 26px;
+  margin: 0 3px;
+  background: var(--aaron-paper-line);
+}
+
+.aaronnote-livetex-view-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.aaronnote-livetex-editor-tools {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.aaronnote-livetex-zoom {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+}
+
+.aaronnote-livetex-view-actions button,
+.aaronnote-livetex-zoom button,
+.aaronnote-livetex-head button,
+.aaronnote-livetex-toolbar button,
+.aaronnote-livetex-toolbar select {
+  box-sizing: border-box;
+  min-height: 30px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 4px 9px;
+  background: transparent;
+  color: var(--aaron-ink);
+  font: 650 12px/1.2 var(--aaron-font-sans);
+}
+
+.aaronnote-livetex-view-actions button:hover,
+.aaronnote-livetex-view-actions button:focus-visible,
+.aaronnote-livetex-zoom button:hover,
+.aaronnote-livetex-zoom button:focus-visible,
+.aaronnote-livetex-head button:hover,
+.aaronnote-livetex-head button:focus-visible,
+.aaronnote-livetex-toolbar button:hover,
+.aaronnote-livetex-toolbar button:focus-visible,
+.aaronnote-livetex-toolbar select:focus-visible {
+  border-color: color-mix(in srgb, var(--aaron-accent), transparent 52%);
+  background: color-mix(in srgb, var(--aaron-accent), transparent 88%);
+  outline: none;
+}
+
+.aaronnote-livetex-view-actions button:nth-child(2) {
+  text-align: center;
+}
+
+.aaronnote-livetex-view-actions button:nth-child(3) {
+  text-align: right;
+}
+
+.aaronnote-livetex-toolbar button:disabled {
+  opacity: 0.38;
+  pointer-events: none;
+}
+
+.aaronnote-livetex-document-title [data-livetex-apply] {
+  min-width: 28px;
+  margin-left: auto;
+  color: #47b881;
+  font-size: 16px;
+}
+
+.aaronnote-livetex-head-actions [data-livetex-close] {
+  min-width: 32px;
+  font-size: 17px;
+}
+
+.aaronnote-livetex-zoom output {
+  min-width: 42px;
+  color: var(--aaron-muted);
+  font: 12px/1 var(--aaron-font-mono);
+  text-align: center;
+}
+
+.aaronnote-livetex-stage {
+  position: relative;
+  box-sizing: border-box;
+  display: block;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+  padding: clamp(18px, 3vh, 34px) clamp(18px, 2.5vw, 38px);
+  background: color-mix(in srgb, var(--aaron-paper-soft), var(--aaron-paper) 58%);
+}
+
+.aaronnote-livetex-stage::-webkit-scrollbar {
+  display: none;
+}
+
+.aaronnote-livetex-editor .noema-visualtex-formula-rows {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(14px, 2vh, 24px);
+  width: 100%;
+  min-width: 0;
+}
+
+.aaronnote-livetex-formula-row,
+.aaronnote-livetex-editor .noema-visualtex-formula-row {
+  position: relative;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  min-height: clamp(170px, 28vh, 260px);
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--aaron-paper-line);
+  border-left: 3px solid transparent;
+  border-radius: 8px;
+  padding: clamp(28px, 4vh, 52px) clamp(58px, 6vw, 92px);
+  background: var(--aaron-paper);
+  box-shadow: 0 8px 28px rgb(0 0 0 / 8%);
+}
+
+.aaronnote-livetex-formula-row:focus-within,
+.aaronnote-livetex-editor .noema-visualtex-formula-row:focus-within {
+  border-left-color: var(--aaron-accent);
+  background: color-mix(in srgb, var(--aaron-accent), var(--aaron-paper) 97%);
+}
+
+.aaronnote-livetex-stage[data-align="left"] .aaronnote-livetex-formula-row,
+.aaronnote-livetex-stage[data-align="left"] .noema-visualtex-formula-row {
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.aaronnote-livetex-stage[data-align="center"] .aaronnote-livetex-formula-row,
+.aaronnote-livetex-stage[data-align="center"] .noema-visualtex-formula-row {
+  justify-content: center;
+  text-align: center;
+}
+
+.aaronnote-livetex-stage[data-align="right"] .aaronnote-livetex-formula-row,
+.aaronnote-livetex-stage[data-align="right"] .noema-visualtex-formula-row {
+  justify-content: flex-end;
+  text-align: right;
+}
+
+.aaronnote-livetex-row-number,
+.aaronnote-livetex-editor .noema-visualtex-row-number {
+  position: absolute;
+  top: 18px;
+  left: 16px;
+  border-radius: 6px;
+  padding: 5px 7px;
+  background: var(--aaron-paper-soft);
+  color: var(--aaron-muted);
+  font: 700 11px/1 var(--aaron-font-mono);
+  pointer-events: none;
+}
+
+.aaronnote-livetex-editor {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  color: inherit;
+}
+
+.aaronnote-livetex-editor .noema-visualtex-live {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  gap: 0;
+}
+
+.aaronnote-livetex-editor-tools .noema-visualtex-toolbar {
+  position: static;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 30px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.aaronnote-livetex-editor .noema-visualtex-brand {
+  margin-right: 6px;
+  color: var(--aaron-accent);
+  font: 750 12px/1 var(--aaron-font-sans);
+}
+
+.aaronnote-livetex-editor-tools .noema-visualtex-layout {
+  max-width: 180px;
+  margin-right: auto;
+}
+
+.aaronnote-livetex-editor .noema-visualtex-mathfield {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  overflow: visible;
+  border: 0 !important;
+  padding: 0 !important;
+  background: transparent !important;
+  color: inherit;
+  font-size: calc(2.45rem * var(--noema-livetex-zoom, 1));
+  text-align: inherit;
+  --caret-color: var(--aaron-accent);
+  --selection-background-color: color-mix(in srgb, var(--aaron-accent), transparent 68%);
+  --contains-highlight-background-color: color-mix(in srgb, var(--aaron-accent), transparent 86%);
+}
+
+.aaronnote-livetex-editor .noema-visualtex-mathfield::part(container),
+.aaronnote-livetex-editor .noema-visualtex-mathfield::part(content) {
+  width: 100%;
+  overflow: visible;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  text-align: inherit;
+}
+
+.aaronnote-livetex-editor .noema-visualtex-mathfield::part(menu-toggle),
+.aaronnote-livetex-editor .noema-visualtex-mathfield::part(virtual-keyboard-toggle) {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  .aaronnote-livetex-studio {
+    min-height: 360px;
+  }
+
+  .aaronnote-livetex-head {
+    grid-template-columns: auto 1fr auto;
+  }
+
+  .aaronnote-livetex-brand strong,
+  .aaronnote-livetex-mode > strong,
+  .aaronnote-livetex-toolbar > i,
+  .aaronnote-livetex-view-actions {
+    display: none;
+  }
+
+  .aaronnote-livetex-stage {
+    padding: 10px;
+  }
+
+  .aaronnote-livetex-formula-row,
+  .aaronnote-livetex-editor .noema-visualtex-formula-row {
+    min-height: 160px;
+    padding-inline: 44px;
+  }
+
+  .aaronnote-livetex-editor .noema-visualtex-mathfield {
+    font-size: calc(1.8rem * var(--noema-livetex-zoom, 1));
+  }
+}
+
 .aaronnote-bib-context-preview {
   padding: 7px 9px 9px;
 }
@@ -1506,7 +1916,7 @@ body[data-host-mode="server"][data-server-reader-editing-aids="false"] :is(
   width: 100%;
   min-height: 28px;
   display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) max-content;
   align-items: center;
   gap: 10px;
   border: 1px solid transparent;

@@ -96,6 +96,17 @@ describe("aaronnote snippets", () => {
     expect(matches.map((snippet) => snippet.key)).toEqual(["fc", "fc-block", "prefix-fc", "for-const"]);
   });
 
+  test("shows one Noema completion when snippet and company providers expand identically", () => {
+    const matches = matchingSnippetsForPrefix([
+      { id: "personal:cup", key: "cup", mode: "tex-mode", body: "\\cup$0", provider: "personal" },
+      { id: "document:cup", key: "\\cup", mode: "tex-mode", body: "\\cup$0", provider: "document" },
+      { id: "latex-workshop:cup", key: "\\cup", mode: "tex-mode", body: "\\cup$0", provider: "latex-workshop" },
+      { id: "personal:bigcup", key: "bigcup", mode: "tex-mode", body: "\\bigcup$0", provider: "personal" },
+    ], "\\cup", { mode: "tex-mode", context: "math", limit: 10 });
+
+    expect(matches.map((snippet) => snippet.id)).toEqual(["personal:cup", "personal:bigcup"]);
+  });
+
   test("snippet popup accepts tab and primary-modifier number but not enter", () => {
     expect(snippetPopupKeyAction({ key: "Enter" })).toEqual({ type: "consume" });
     expect(snippetPopupKeyAction({ key: "Tab" })).toEqual({ type: "accept" });
@@ -487,6 +498,28 @@ describe("aaronnote snippets", () => {
 
       editor.insertText("\n");
       expect(editor.getMarkdown()).toBe("\\[\na\n\n\\]");
+    } finally {
+      editor.destroy();
+      mount.remove();
+    }
+  });
+
+  test("inline-math shortcut opens an empty formula directly without an x placeholder", () => {
+    const mount = document.createElement("div");
+    document.body.appendChild(mount);
+    const editor = createEditor(mount);
+    try {
+      const session = new SnippetSession(editor);
+      expect(session.insert({
+        key: ";",
+        name: "Inline math",
+        mode: "markdown-mode",
+        body: "\\($1\\) $0",
+      })).toBe(true);
+
+      expect(editor.getMarkdown()).toBe("\\(\\) ");
+      expect(editor.getSelection()).toEqual({ from: 2, to: 2 });
+      expect(mount.querySelector(".cm-math-inline-editor")).toBeTruthy();
     } finally {
       editor.destroy();
       mount.remove();

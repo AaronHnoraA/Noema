@@ -134,7 +134,7 @@ export class MathSnippetIndex {
     for (const [command] of [...this.counts.entries()]
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
       .slice(0, DOCUMENT_COMMAND_LIMIT)) commands.add(command);
-    this.candidateCache = [...commands].sort().map((command) => {
+    const generated = [...commands].sort().map((command) => {
       const expansion = macros[command];
       const arity = expansion
         ? Math.max(0, ...[...expansion.matchAll(/#([1-9])/g)].map((match) => Number(match[1])))
@@ -155,6 +155,7 @@ export class MathSnippetIndex {
         browserCompatible: true,
       } satisfies SnippetSummary;
     });
+    this.candidateCache = generated;
     this.candidateCacheKey = cacheKey;
     return this.candidateCache;
   }

@@ -64,6 +64,9 @@ import { scheduleViewportDecorationRefresh } from "./viewport-refresh.ts";
 import { createMarkdownFeatureExtensions } from "./extensions/index.ts";
 import { beforeChangeDocumentEffect } from "./extensions/document-lifecycle.ts";
 import {
+  activateBlockMath,
+  activateInlineMath,
+  finishInlineMathEditing,
   hasVisualMode,
   isVisualMode,
   orgEnvExitTarget,
@@ -91,15 +94,6 @@ function sourceRangeElement(target: EventTarget | null): HTMLElement | null {
     return target.parentElement?.closest<HTMLElement>("[data-cm-source-from][data-cm-source-to]") ?? null;
   }
   return null;
-}
-
-function mathBlockSourceAnchor(docText: string, from: number, to: number): number {
-  const raw = docText.slice(from, to);
-  const open = raw.indexOf("\\[");
-  if (open < 0) return Math.min(to - 1, from + 1);
-  const firstNewline = raw.indexOf("\n", open + 2);
-  if (firstNewline < 0) return Math.min(to - 1, from + 2);
-  return Math.min(to - 1, from + firstNewline + 1);
 }
 
 function sourceAnchorForClick(source: HTMLElement, event: MouseEvent, from: number, to: number): number {
@@ -522,6 +516,7 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
     if (!source) return;
     const openSource = source.dataset.cmOpenSource === "true";
     const mathBlock = source.dataset.cmMathBlock === "true";
+    const inlineMath = source.dataset.cmInlineMath === "static";
     if (!openSource && !mathBlock) return;
     if (options.passiveReader) {
       // CM6 otherwise maps the pointer into the hidden source range, which
@@ -542,13 +537,28 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
     event.stopImmediatePropagation();
     const scroll = capturePointerScroll();
     const anchor = mathBlock
-      ? mathBlockSourceAnchor(view.state.doc.toString(), from, to)
+      ? from
       : sourceAnchorForClick(source, event, from, to);
     // The pointer already identifies visible content.  Asking CM6 to reveal
     // the new source cursor scrolls the old viewport while the replacement
     // widget is expanding, which is both unnecessary and disorienting.
-    view.dispatch({ selection: { anchor } });
-    view.contentDOM.focus({ preventScroll: true });
+    if (mathBlock) {
+      activateBlockMath(view, from, to, {
+        kind: "point",
+        x: event.clientX,
+        y: event.clientY,
+      });
+    } else if (inlineMath) {
+      activateInlineMath(view, from, to, {
+        kind: "point",
+        x: event.clientX,
+        y: event.clientY,
+      });
+      view.contentDOM.focus({ preventScroll: true });
+    } else {
+      view.dispatch({ selection: { anchor } });
+      view.contentDOM.focus({ preventScroll: true });
+    }
     preservePointerScrollThroughLayout(scroll);
     flashCaret();
   };
@@ -685,6 +695,7 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
     },
 
     setMarkdown(md: string, setOptions: SetMarkdownOptions = {}): void {
+      finishInlineMathEditing(view);
       if (setOptions.history === "reset") {
         rememberHeadingFolds();
         activeDocumentKey = currentDocumentKey();
@@ -879,6 +890,7 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
     },
 
     toggleSource(): void {
+      finishInlineMathEditing(view);
       const { head } = view.state.selection.main;
       const beforeTop = coordsTopAt(head);
       const enteringPreview = !isVisualMode(view);
@@ -902,6 +914,7 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
     },
 
     destroy(): void {
+      finishInlineMathEditing(view);
       externalUpdateListeners.clear();
       documentResetListeners.clear();
       view.contentDOM.removeEventListener("mousedown", onSourceWidgetMouseDown, { capture: true });

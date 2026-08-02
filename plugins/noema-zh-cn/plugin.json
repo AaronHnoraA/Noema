@@ -1,0 +1,9 @@
+{
+  "id": "noema.zh-cn",
+  "name": "Noema 简体中文",
+  "description": "将 Noema 桌面菜单、配置页、面板与状态文案翻译为简体中文。",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "main": "main.mjs",
+  "enabledByDefault": false
+}

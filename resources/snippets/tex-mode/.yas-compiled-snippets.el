@@ -2224,7 +2224,7 @@
 			"InlineExp" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/inlineexp"
 			nil nil)
-		       (";" "$${1:x}$ $0\n" "Inline math" nil
+		       (";" "$$1$ $0\n" "Inline math" nil
 			("LaTeX local") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/inline-math"
 			nil nil)

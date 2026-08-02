@@ -6161,6 +6161,18 @@ function rawCopilotServerCommands() {
   if (COPILOT_DISABLE_LOCAL) return [];
   const configured = process.env.AARONNOTE_COPILOT_LANGUAGE_SERVER;
   if (configured) return [{ command: configured, args: ["--stdio"] }];
+  const configuredModule = process.env.AARONNOTE_COPILOT_LANGUAGE_SERVER_MODULE;
+  if (configuredModule) {
+    const env = {
+      ...(process.env.AARONNOTE_COPILOT_HOME ? { COPILOT_HOME: process.env.AARONNOTE_COPILOT_HOME } : {}),
+      ...(process.env.AARONNOTE_COPILOT_CACHE_HOME ? { COPILOT_CACHE_HOME: process.env.AARONNOTE_COPILOT_CACHE_HOME } : {}),
+      ...(process.env.AARONNOTE_COPILOT_XDG_CONFIG_HOME ? { XDG_CONFIG_HOME: process.env.AARONNOTE_COPILOT_XDG_CONFIG_HOME } : {}),
+      ...(process.env.AARONNOTE_COPILOT_XDG_DATA_HOME ? { XDG_DATA_HOME: process.env.AARONNOTE_COPILOT_XDG_DATA_HOME } : {}),
+      ...(process.env.AARONNOTE_COPILOT_XDG_STATE_HOME ? { XDG_STATE_HOME: process.env.AARONNOTE_COPILOT_XDG_STATE_HOME } : {}),
+      ...(process.env.AARONNOTE_COPILOT_XDG_CACHE_HOME ? { XDG_CACHE_HOME: process.env.AARONNOTE_COPILOT_XDG_CACHE_HOME } : {}),
+    };
+    return [{ command: nodeCommand(), args: [configuredModule, "--stdio"], env, mustExist: configuredModule }];
+  }
   const binFile = join(appDir, "node_modules", ".bin", "copilot-language-server");
   const serverFile = join(appDir, "node_modules", "@github", "copilot-language-server", "dist", "language-server.js");
   const unpackedBin = unpackedAsarPath(binFile);
@@ -6216,6 +6228,10 @@ function copilotDiagnostics() {
       AARONNOTE_EMACS_GATEWAY: COPILOT_BRIDGE_REQUEST ? "connected" : "",
       AARONNOTE_COPILOT_DISABLE_LOCAL: process.env.AARONNOTE_COPILOT_DISABLE_LOCAL || "",
       AARONNOTE_COPILOT_LANGUAGE_SERVER: process.env.AARONNOTE_COPILOT_LANGUAGE_SERVER || "",
+      AARONNOTE_COPILOT_LANGUAGE_SERVER_MODULE: process.env.AARONNOTE_COPILOT_LANGUAGE_SERVER_MODULE || "",
+      AARONNOTE_COPILOT_HOME: process.env.AARONNOTE_COPILOT_HOME || "",
+      AARONNOTE_COPILOT_CACHE_HOME: process.env.AARONNOTE_COPILOT_CACHE_HOME || "",
+      NOEMA_COPILOT_PLUGIN: process.env.NOEMA_COPILOT_PLUGIN || "",
       AARONNOTE_NODE: process.env.AARONNOTE_NODE || "",
       ELECTRON_RUN_AS_NODE: process.env.ELECTRON_RUN_AS_NODE || "",
       PATH: process.env.PATH || "",
@@ -6387,6 +6403,7 @@ class CopilotLspClient {
     this.lastAuthMessage = "";
     this.lastActivity = Date.now();
     this.idleTimer = null;
+    this.stopping = false;
   }
 
   touchActivity() {
@@ -6447,6 +6464,7 @@ class CopilotLspClient {
   }
 
   async startCommand(cmd) {
+    this.stopping = false;
     const env = { ...process.env, ...(cmd.env || {}) };
     if (COPILOT_MAX_HEAP_MB > 0) {
       env.NODE_OPTIONS = [env.NODE_OPTIONS, `--max-old-space-size=${COPILOT_MAX_HEAP_MB}`]
@@ -6547,6 +6565,7 @@ class CopilotLspClient {
   }
 
   receive(chunk) {
+    if (this.stopping) return;
     this.buffer = Buffer.concat([this.buffer, Buffer.from(chunk)]);
     while (true) {
       const headerEnd = this.buffer.indexOf("\r\n\r\n");
@@ -6912,6 +6931,7 @@ class CopilotLspClient {
   }
 
   stop() {
+    this.stopping = true;
     clearInterval(this.idleTimer);
     this.idleTimer = null;
     this.documents.clear();
@@ -6923,6 +6943,8 @@ class CopilotLspClient {
     this.proc = null;
     this.ready = null;
     if (!proc) return;
+    proc.stdout.removeAllListeners("data");
+    proc.stderr.removeAllListeners("data");
     proc.kill(); // SIGTERM
     // Escalate to SIGKILL after 2 s if the language server ignores SIGTERM.
     const fallback = setTimeout(() => {

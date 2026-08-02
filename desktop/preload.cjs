@@ -39,6 +39,12 @@ contextBridge.exposeInMainWorld("noemaDesktop", {
   chooseDirectory(options = {}) {
     return ipcRenderer.invoke("noema:choose-directory", options);
   },
+  listPlugins() {
+    return ipcRenderer.invoke("noema:list-plugins");
+  },
+  setPluginEnabled(id, enabled) {
+    return ipcRenderer.invoke("noema:set-plugin-enabled", id, enabled === true);
+  },
   onCommand(callback) {
     if (typeof callback !== "function") return () => {};
     const listener = (_event, detail) => callback(detail);

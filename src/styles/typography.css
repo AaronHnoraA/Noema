@@ -201,23 +201,23 @@
 }
 
 /* Inline math participates in the prose baseline without changing KaTeX. */
-.cm-editor.aaronnote-visual-typography :where(.cm-math-inline, .aaronnote-math-inline),
-.published-note-page .cm-editor :where(.cm-math-inline, .aaronnote-math-inline) {
+.cm-editor.aaronnote-visual-typography :where(.cm-math-inline, .cm-math-inline-active-placeholder, .cm-math-inline-editor, .aaronnote-math-inline),
+.published-note-page .cm-editor :where(.cm-math-inline, .cm-math-inline-active-placeholder, .cm-math-inline-editor, .aaronnote-math-inline) {
   display: inline-block;
   margin: 0;
   line-height: 1;
   vertical-align: -0.08em;
 }
 
-.cm-editor.aaronnote-visual-typography :where(math-block, .cm-math-block, .cm-math-block-preview, .aaronnote-math-block),
-.published-note-page .cm-editor :where(math-block, .cm-math-block, .cm-math-block-preview, .aaronnote-math-block) {
+.cm-editor.aaronnote-visual-typography :where(math-block, .cm-math-block, .cm-math-block-preview, .cm-math-block-editor, .aaronnote-math-block),
+.published-note-page .cm-editor :where(math-block, .cm-math-block, .cm-math-block-preview, .cm-math-block-editor, .aaronnote-math-block) {
   box-sizing: border-box;
   display: block;
   width: 100%;
   max-width: 100%;
   margin: 0;
   padding-block: var(--aaron-prose-display-gap);
-  overflow-x: auto;
+  overflow-x: hidden;
   overflow-y: hidden;
   text-align: center;
 }
@@ -229,8 +229,8 @@
 
 .cm-editor.aaronnote-visual-typography :where(.cm-math-block, .aaronnote-math-block, math-block) > .katex-display,
 .published-note-page .cm-editor :where(.cm-math-block, .aaronnote-math-block, math-block) > .katex-display {
-  display: inline-block;
-  width: auto;
+  display: block;
+  width: 100%;
   max-width: 100%;
   margin: 0;
   overflow: visible;

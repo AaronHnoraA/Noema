@@ -1,6 +1,7 @@
 import katex from "katex";
 import katexCssText from "katex/dist/katex.min.css?inline";
 import { getKatexMacros, getKatexMacrosVersion, type KatexMacroMap } from "./katex-macros.ts";
+import { katexCompatibleLatex } from "./tex-compat.ts";
 
 type KatexRenderOptions = {
   displayMode?: boolean;
@@ -17,6 +18,13 @@ const MATH_HTML_CACHE_LIMIT = 512;
 const MATH_HTML_CACHE_BYTES = 4_000_000; // 4 MB
 export const MATH_RENDER_ERROR_MAX_LENGTH = 320;
 let mathHtmlCacheBytes = 0;
+
+// Plain TeX/amsmath compatibility commands that have direct KaTeX
+// environment equivalents. Keep these at render time so the note's TeX source
+// remains unchanged and round-trips through the visual editor verbatim.
+const KATEX_COMPAT_MACROS: KatexMacroMap = {
+  "\\displaylines": "\\begin{gathered}#1\\end{gathered}",
+};
 
 export function formatMathRenderError(error: unknown, maxLength = MATH_RENDER_ERROR_MAX_LENGTH): string {
   const raw = error instanceof Error ? error.message : String(error ?? "");
@@ -70,7 +78,12 @@ export function disposeMathRuntime(): void {
 // The active macro set is part of the rendered output, so it must be part of the
 // cache key — otherwise changing macros would serve stale HTML.
 function mathOutputMode(options: KatexRenderOptions): "html" | "mathml" | "htmlAndMathml" {
-  return options.output ?? "mathml";
+  // Chromium's native MathML table layout is not reliable enough for display
+  // environments such as align/gather: equation tags can collapse to a
+  // zero-width column and the rows expand to hundreds of pixels.  KaTeX's
+  // HTML layer owns the visual layout; the paired MathML remains available to
+  // assistive technology.
+  return options.output ?? "htmlAndMathml";
 }
 
 function mathCacheKey(tex: string, options: KatexRenderOptions): string {
@@ -89,7 +102,7 @@ export function renderMathHTML(
   }
   try {
     const resolved = katexOptions(options);
-    const html = katex.renderToString(tex, resolved);
+    const html = katex.renderToString(katexCompatibleLatex(tex), resolved);
     ensureKatexCss(katexCssText);
     const rendered = { html };
     rememberMathHtml(key, rendered);
@@ -154,7 +167,10 @@ function katexOptions(options: KatexRenderOptions): KatexRenderOptions {
     strict: options.strict,
     trust: options.trust,
     output: mathOutputMode(options),
-    macros: { ...(options.macros ?? getKatexMacros()) },
+    macros: {
+      ...KATEX_COMPAT_MACROS,
+      ...(options.macros ?? getKatexMacros()),
+    },
   };
 }
 

@@ -5,7 +5,9 @@ import {
   graphemeEndPosition,
   previousGraphemePosition,
 } from "../src/cm6/text-boundaries.ts";
-import { getBlockMathRanges } from "../src/cm6/math-ranges.ts";
+import { scanCodeRanges } from "../src/cm6/code-ranges.ts";
+import { getBlockMathRanges, rangeOverlapsAny } from "../src/cm6/math-ranges.ts";
+import { scanInlineMathRanges } from "../src/inline-math.ts";
 import { getOrgEnvHeadingRanges } from "../src/cm6/extensions/visual/widgets/block-extras.ts";
 import {
   applyVimJump,
@@ -171,6 +173,43 @@ function visualCharEndPosition(text: Text, pos: number): number {
   return end;
 }
 
+function staticMathObjectAtPosition(
+  editor: Editor,
+  pos: number,
+): { from: number; to: number } | null {
+  if (!editor.view.dom.classList.contains("aaronnote-visual-typography")) return null;
+  const state = editor.view.state;
+  const safePos = clamp(pos, 0, state.doc.length);
+  const blockRanges = getBlockMathRanges(state);
+  const block = blockRanges.find((range) => safePos >= range.from && safePos < range.to);
+  if (block) return block;
+  const line = state.doc.lineAt(safePos);
+  const codeRanges = scanCodeRanges(state, [{ from: line.from, to: line.to }]);
+  return scanInlineMathRanges(line.text, line.from).find((range) => (
+    safePos >= range.from
+      && safePos < range.to
+      && !rangeOverlapsAny(range.from, range.to, blockRanges)
+      && !rangeOverlapsAny(range.from, range.to, codeRanges)
+  )) ?? null;
+}
+
+function visualObjectEndPosition(editor: Editor, pos: number): number {
+  const object = staticMathObjectAtPosition(editor, pos);
+  return object?.from === pos ? object.to : visualCharEndPosition(doc(editor), pos);
+}
+
+function snapStaticMathMotion(
+  editor: Editor,
+  start: number,
+  target: number,
+  dir: -1 | 1,
+): number {
+  const object = staticMathObjectAtPosition(editor, target);
+  if (!object) return target;
+  if (dir > 0 && start < object.from) return object.from;
+  return dir > 0 ? object.to : object.from;
+}
+
 function docCluster(text: Text, pos: number): string {
   if (pos < 0 || pos >= text.length) return "";
   const end = graphemeEndPosition(text, pos);
@@ -277,7 +316,8 @@ function setNormalPos(editor: Editor, pos: number): void {
 function moveChar(editor: Editor, dir: -1 | 1): void {
   const text = doc(editor);
   const pos = currentHead(editor);
-  setPos(editor, moveNormalCharPosition(text, pos, dir));
+  const target = moveNormalCharPosition(text, pos, dir);
+  setPos(editor, snapStaticMathMotion(editor, pos, target, dir));
 }
 
 function moveDocumentLine(
@@ -338,7 +378,6 @@ function crossedVisualEntry(
   start: number,
   target: number,
   dir: -1 | 1,
-  column: number,
 ): number | null {
   // Source mode has no collapsed block widgets.  Besides avoiding unnecessary
   // work, this guard ensures the cached Visual fields never fall back to a
@@ -351,14 +390,10 @@ function crossedVisualEntry(
 
   const mathRange = nearestCrossedRange(mathRanges, start, target, dir);
   if (mathRange) {
-    const contentPos = dir > 0
-      ? mathRange.contentFrom
-      : Math.max(mathRange.contentFrom, mathRange.contentTo - 1);
-    const line = state.doc.lineAt(clamp(contentPos, mathRange.from, mathRange.to));
     entries.push({
       from: mathRange.from,
       to: mathRange.to,
-      target: Math.min(line.from + column, line.to),
+      target: mathRange.from,
     });
   }
 
@@ -426,7 +461,7 @@ function moveScreenLine(editor: Editor, dir: -1 | 1, goal: VerticalGoal | null):
     pixelGoal,
   );
   const moved = editor.view.moveVertically(range, dir > 0);
-  const entry = crossedVisualEntry(editor, start, moved.head, dir, docLineInfo(text, start).column);
+  const entry = crossedVisualEntry(editor, start, moved.head, dir);
   setNormalPos(editor, entry ?? moved.head);
   return { kind: "pixel", value: moved.goalColumn ?? pixelGoal };
 }
@@ -457,7 +492,9 @@ function docBoundary(editor: Editor, which: "start" | "end"): void {
 
 function moveWord(editor: Editor, dir: -1 | 1, bigWord = false): void {
   const text = doc(editor);
-  setNormalPos(editor, wordMotionPosition(text, currentHead(editor), dir, bigWord));
+  const start = currentHead(editor);
+  const target = wordMotionPosition(text, start, dir, bigWord);
+  setNormalPos(editor, snapStaticMathMotion(editor, start, target, dir));
 }
 
 function deleteChar(editor: Editor): string {
@@ -729,9 +766,9 @@ export function createVimLite(
     if (visualAnchor == null) visualAnchor = normalCharPosition(text, currentHead(editor));
     visualHead = normalCharPosition(text, head);
     if (visualHead >= visualAnchor) {
-      setSelection(editor, visualAnchor, visualCharEndPosition(text, visualHead));
+      setSelection(editor, visualAnchor, visualObjectEndPosition(editor, visualHead));
     } else {
-      setSelection(editor, visualCharEndPosition(text, visualAnchor), visualHead);
+      setSelection(editor, visualObjectEndPosition(editor, visualAnchor), visualHead);
     }
   }
 
@@ -785,7 +822,9 @@ export function createVimLite(
 
   function visualMoveChar(dir: -1 | 1): void {
     resetMotionMemory();
-    setVisualHead(moveNormalCharPosition(doc(editor), headPos(), dir));
+    const start = headPos();
+    const target = moveNormalCharPosition(doc(editor), start, dir);
+    setVisualHead(snapStaticMathMotion(editor, start, target, dir));
   }
 
   function visualMoveLine(dir: -1 | 1): void {
@@ -810,7 +849,7 @@ export function createVimLite(
     );
     const moved = editor.view.moveVertically(range, dir > 0);
     goalColumn = { kind: "pixel", value: moved.goalColumn ?? pixelGoal };
-    const entry = crossedVisualEntry(editor, start, moved.head, dir, docLineInfo(text, start).column);
+    const entry = crossedVisualEntry(editor, start, moved.head, dir);
     setVisualHead(entry ?? moved.head);
   }
 
@@ -835,7 +874,9 @@ export function createVimLite(
   function visualMoveWord(dir: -1 | 1, bigWord = false): void {
     resetMotionMemory();
     const text = doc(editor);
-    setVisualHead(normalCharPosition(text, wordMotionPosition(text, headPos(), dir, bigWord)));
+    const start = headPos();
+    const target = wordMotionPosition(text, start, dir, bigWord);
+    setVisualHead(normalCharPosition(text, snapStaticMathMotion(editor, start, target, dir)));
   }
 
   function syncSelectionFromEditor(): void {

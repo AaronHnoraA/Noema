@@ -93,6 +93,17 @@ Desktop drag/drop follows the note workflow:
   pipeline instead.
 - Drop images, other files, links, or text to insert them at the drop cursor.
 
+Desktop plugins are managed from **Noema → Settings… → Plugins** and apply
+after restart. Noema ships the Simplified Chinese UI translation as its first
+built-in, opt-in plugin. Personal plugin packages can be installed under the
+Noema user-data `plugins/` directory; see [Desktop plugins](docs/plugins.md) for
+the manifest, lifecycle API, and launch overrides.
+
+GitHub Copilot is an always-active built-in plugin. Noema.app starts its
+packaged language server lazily; Emacs-started Noema continues using Emacs's
+existing `copilot.el` connection through the gateway and never launches a
+second Copilot server.
+
 ## Server reader
 
 Server mode publishes the existing CM6 renderer directly: Markdown stays the

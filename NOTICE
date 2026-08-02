@@ -36,6 +36,23 @@ resources/snippets/tex-mode/generated/.manifest.json. It also includes filtered 
 completion weights and patterns under the AGPL-3.0 license at the revision
 listed above.
 
+The inline visual formula editor adapts Mathfield initialization and interaction
+code from VisualTeX, copyright paulhe666, licensed under the MIT License. The
+reviewed upstream revision is:
+
+  https://github.com/paulhe666/visualtex
+  commit 5e3ed2a56ba53643a463c6ea4c2cf1a5675e691c
+
+The editor bundles the MathLive mathfield runtime, copyright 2017--present
+Arno Gourdol, licensed under the MIT License:
+
+  https://github.com/arnog/mathlive
+
+The desktop Copilot plugin bundles GitHub's Copilot Language Server, licensed
+under the MIT License:
+
+  https://github.com/github/copilot-language-server-release
+
 The bundled AaronLatinModernRoman prose webfonts are Latin-only subsets of
 Latin Modern Roman version 2.005, copyright 2003--2021 B. Jackowski and
 J.M. Nowacki (on behalf of TeX Users Groups), based on Donald E. Knuth's

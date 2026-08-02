@@ -11,17 +11,27 @@ import {
   type EditorCommand,
   type StoredPasteAsset,
 } from "../src/lib.ts";
-import { setupCopilot } from "../src/copilot/index.ts";
+import { setupCopilot } from "../plugins/noema-copilot/renderer.ts";
 import { continueMarkdownBlock, exitEmptyMarkdownBlock, indentMarkdownBlock, indentMarkdownList, tableNavigateCell, tableEnterSameColumn } from "../src/cm6/commands/index.ts";
 import { markdownHrefAt } from "../src/cm6/editor-cm6.ts";
+import { finishInlineMathEditing } from "../src/cm6/extensions/visual/widgets/math.ts";
 import { nextGraphemePosition, previousGraphemePosition } from "../src/cm6/text-boundaries.ts";
 import { getBlockMathRanges, rangeAtPosition, rangeOverlapsAny } from "../src/cm6/math-ranges.ts";
+import {
+  mountVisualTexDisplayEditor,
+  normalizeVisualTexLatex,
+  setVisualTexDisplayLayout,
+  visualTexDisplayLayout,
+  visualTexOuterDisplayLayout,
+  type VisualTexInlineEditor,
+  type VisualTexDisplayLayout,
+} from "../src/cm6/extensions/visual/widgets/visualtex-inline.ts";
 import { jumpStructuralDelimiter } from "../src/cm6/structural-jump.ts";
 import { equationTagsFromText, getEquationTagHits } from "../src/equation-tags.ts";
 import { INLINE_MATH_RE } from "../src/inline-math.ts";
 import { formatMathRenderError, renderMathHTML } from "../src/math-render.ts";
 import { mathPreviewFitScale } from "./math-preview-fit.ts";
-import { setKatexMacros } from "../src/katex-macros.ts";
+import { getKatexMacros, setKatexMacros } from "../src/katex-macros.ts";
 import { renderJupyterVariablesTable } from "../src/jupyter-variables-view.ts";
 import { formatCitationLabel } from "../src/render-html.ts";
 import { hrefProtocol, safeHref } from "../src/url-safety.ts";
@@ -85,6 +95,7 @@ import {
   roamNoteSearchValue,
 } from "./roam-idlink.ts";
 import {
+  expandSnippetBody,
   matchingSnippetsForPrefix,
   SnippetSession,
   SnippetUsageStore,
@@ -117,6 +128,8 @@ import {
   handleXwidgetControlKeydown,
   handleXwidgetEmacsKeydown,
   handleXwidgetHistoryKeydown,
+  handleXwidgetMathBeforeInput,
+  handleXwidgetMathKeydown,
   handleXwidgetSpecialBeforeInput,
   handleXwidgetSpecialKeydown,
   handleXwidgetVimBeforeInput,
@@ -717,6 +730,59 @@ contextMenu.hidden = true;
 contextMenu.setAttribute("role", "menu");
 document.body.appendChild(contextMenu);
 
+const liveTexStudio = document.createElement("div");
+liveTexStudio.className = "aaronnote-livetex-backdrop";
+liveTexStudio.hidden = true;
+liveTexStudio.innerHTML = `
+  <section class="aaronnote-livetex-studio cm-editor" role="dialog" aria-modal="true" aria-labelledby="aaronnote-livetex-title">
+    <header class="aaronnote-livetex-head">
+      <div class="aaronnote-livetex-brand">
+        <span aria-hidden="true">TeX</span>
+        <strong id="aaronnote-livetex-title">LiveTeX</strong>
+      </div>
+      <div class="aaronnote-livetex-document-title">
+        <span>当前公式</span>
+        <button type="button" data-livetex-apply title="Apply formula" aria-label="Apply formula">✓</button>
+      </div>
+      <div class="aaronnote-livetex-head-actions">
+        <button type="button" data-livetex-close aria-label="Close LiveTeX">×</button>
+      </div>
+    </header>
+    <nav class="aaronnote-livetex-toolbar" aria-label="Visual formula tools">
+      <div class="aaronnote-livetex-mode">
+        <span aria-hidden="true">{ }</span>
+        <strong>可视化编辑</strong>
+      </div>
+      <i aria-hidden="true"></i>
+      <div class="aaronnote-livetex-view-actions" role="group" aria-label="Formula alignment">
+        <button type="button" data-livetex-align="left" title="Align left">≡</button>
+        <button type="button" data-livetex-align="center" title="Align center">≡</button>
+        <button type="button" data-livetex-align="right" title="Align right">≡</button>
+      </div>
+      <i aria-hidden="true"></i>
+      <div class="aaronnote-livetex-editor-tools" data-livetex-editor-tools></div>
+      <div class="aaronnote-livetex-zoom" role="group" aria-label="Formula zoom">
+        <button type="button" data-livetex-zoom="out" title="Zoom out">−</button>
+        <output data-livetex-zoom-label>100%</output>
+        <button type="button" data-livetex-zoom="in" title="Zoom in">+</button>
+      </div>
+    </nav>
+    <main class="aaronnote-livetex-stage" data-livetex-stage data-align="center">
+      <div class="aaronnote-livetex-editor" data-livetex-editor data-aaronnote-vim="native" data-cm-visual-math="active"></div>
+    </main>
+  </section>
+`;
+document.body.appendChild(liveTexStudio);
+const liveTexStudioPanel = liveTexStudio.querySelector<HTMLElement>(".aaronnote-livetex-studio")!;
+const liveTexStage = liveTexStudio.querySelector<HTMLElement>("[data-livetex-stage]")!;
+const liveTexEditorHost = liveTexStudio.querySelector<HTMLElement>("[data-livetex-editor]")!;
+const liveTexEditorTools = liveTexStudio.querySelector<HTMLElement>("[data-livetex-editor-tools]")!;
+const liveTexZoomLabel = liveTexStudio.querySelector<HTMLOutputElement>("[data-livetex-zoom-label]")!;
+let liveTexEditor: VisualTexInlineEditor | null = null;
+let liveTexTarget: ContextMathTarget | null = null;
+let liveTexDraft = "";
+let liveTexZoom = 1;
+
 const bibliographyPanel = document.createElement("section");
 bibliographyPanel.className = "aaronnote-bib-panel";
 bibliographyPanel.hidden = true;
@@ -811,6 +877,7 @@ let snippetSuppressedPrefix = "";
 let snippetCompletionArmed = false;
 let snippetRenderKey = "";
 let snippetPopupMatchKey = "";
+let snippetPopupChooseHandler: ((snippet: SnippetSummary) => boolean) | null = null;
 const snippetUsage = new SnippetUsageStore();
 
 function loadWikiCompletionIndex(force = false): Promise<WikiIndex> {
@@ -1188,6 +1255,8 @@ function subscribe<K extends keyof DocumentEventMap>(
 
 // Forward ref patched after vim is created (avoids TDZ while keeping reset near vim).
 let onBlurVimReset: (() => void) | undefined;
+let visualMathEditorActive = false;
+let visualMathReturnMode: VimLiteMode | null = null;
 let slideDeck: SlideDeckController | null = null;
 let writingStatsController: WritingStatsController | null = null;
 
@@ -1219,7 +1288,11 @@ const editor = createEditor(host, {
     scheduleWritingStats(writingStatsController?.isDocumentChanged() ?? true);
   },
   onBlur: () => {
-    onBlurVimReset?.();
+    // Moving focus from CM6 into the in-place MathLive field is still part of
+    // the same editing gesture. Preserve insert mode so committing the formula
+    // returns to ordinary prose input instead of silently switching to normal.
+    if (!visualMathEditorActive
+        && !document.activeElement?.closest("[data-aaronnote-vim='native']")) onBlurVimReset?.();
     void flushCursorPosition();
   },
 });
@@ -1804,7 +1877,7 @@ function activateEditorFromPointer(event: PointerEvent | MouseEvent): void {
   const target = event.target;
   if (!(target instanceof Node) || !host.contains(target)) return;
   const element = target instanceof Element ? target : target.parentElement;
-  if (element?.closest("input, textarea, select, button, a")) return;
+  if (element?.closest("input, textarea, select, button, a, [data-aaronnote-vim='native']")) return;
   const scroll = captureEditorScroll();
   window.clearTimeout(editorPointerFocusTimer);
   // Let CM6 process the pointer and establish its clicked selection first.
@@ -1858,7 +1931,94 @@ document.addEventListener("keydown", (event) => {
 }, { capture: true });
 const snippetSession = new SnippetSession(editor);
 const mathSnippetIndex = new MathSnippetIndex(editor);
+document.addEventListener("aaronnote:math-completion-request", (event) => {
+  const detail = (event as CustomEvent<{
+    prefix?: string;
+    rect?: { left: number; top: number; bottom: number };
+    apply?: (template: string, deleteBefore: number) => boolean;
+    applyLayout?: (layout: VisualTexDisplayLayout, deleteBefore: number) => boolean;
+  }>).detail;
+  const prefix = String(detail?.prefix || "");
+  if (!detail?.apply || !prefix) {
+    if (snippetPopupChooseHandler) hideSnippetPopup();
+    return;
+  }
+  const matches = matchingMathEditorSnippets(prefix);
+  if (matches.length === 0) {
+    if (snippetPopupChooseHandler) hideSnippetPopup();
+    return;
+  }
+  showSnippetPopup(prefix, matches, prefix.length, detail.rect ?? null, (snippet) => {
+    const expanded = expandSnippetBody(snippet);
+    const outerLayout = visualTexOuterDisplayLayout(expanded.text);
+    if (outerLayout && detail.applyLayout) {
+      return detail.applyLayout(outerLayout, prefix.length);
+    }
+    return detail.apply!(mathLiveSnippetTemplate(snippet), prefix.length);
+  });
+});
+document.addEventListener("aaronnote:math-completion-key", (event) => {
+  if (!snippetPopupChooseHandler) return;
+  const detail = (event as CustomEvent<{
+    key?: string;
+    ctrlKey?: boolean;
+    metaKey?: boolean;
+    altKey?: boolean;
+    shiftKey?: boolean;
+  }>).detail ?? {};
+  if (detail.key === " ") {
+    const prefix = snippetPopup.dataset.prefix || "";
+    const exact = snippetPopupItems.findIndex((snippet) => String(snippet.key || "") === prefix);
+    if (exact < 0) return;
+    snippetPopupIndex = exact;
+    chooseSnippetPopupItem();
+    event.preventDefault();
+    event.stopPropagation();
+    return;
+  }
+  const handled = applySnippetPopupKeyAction(snippetPopupKeyAction({
+    key: detail.key === "\t" ? "Tab" : String(detail.key || ""),
+    shiftKey: Boolean(detail.shiftKey),
+    commandKey: Boolean(detail.metaKey && !detail.ctrlKey),
+    ctrlKey: Boolean(detail.ctrlKey),
+    altKey: Boolean(detail.altKey),
+    isComposing: false,
+  }));
+  if (!handled) return;
+  event.preventDefault();
+  event.stopPropagation();
+});
+document.addEventListener("aaronnote:math-completion-close", () => {
+  if (snippetPopupChooseHandler) hideSnippetPopup();
+});
 host.addEventListener("aaronnote-assist-update", () => scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true, toc: true }));
+host.addEventListener("aaronnote:inline-math-edit-state", (event) => {
+  const active = Boolean((event as CustomEvent<{ active?: boolean }>).detail?.active);
+  if (active && !visualMathEditorActive && visualMathReturnMode == null) {
+    visualMathReturnMode = vim.mode();
+  }
+  visualMathEditorActive = active;
+  if (!active) {
+    const returnMode = visualMathReturnMode;
+    visualMathReturnMode = null;
+    if (returnMode != null && vim.mode() !== returnMode) vim.setMode(returnMode);
+    scheduleAssistUpdate({ mathPreview: true, cursor: true });
+    return;
+  }
+  snippetSession.clear();
+  hideSnippetPopup();
+  hideMathPreview();
+  selectionTool.hidden = true;
+  selectionMore.hidden = true;
+});
+document.addEventListener("aaronnote:visualtex-save-request", () => {
+  void save(false);
+});
+host.addEventListener("aaronnote:inline-math-edit-error", (event) => {
+  const message = (event as CustomEvent<{ message?: unknown }>).detail?.message;
+  setStatus(typeof message === "string" ? `${message}; 已回退到 TeX 源码编辑` : "Visual formula editor unavailable");
+  scheduleAssistUpdate({ mathPreview: true, cursor: true });
+});
 
 // IME switching for Vim mode (macOS) — fire-and-forget, never blocks keystrokes.
 // Requires macism or im-select installed; feature silently disables when absent.
@@ -2920,7 +3080,7 @@ type AaronContextMenuItem = {
 
 function hideContextMenu(): void {
   contextMenu.hidden = true;
-  contextMenu.classList.remove("is-bibliography");
+  contextMenu.classList.remove("is-bibliography", "is-math");
   contextMenu.replaceChildren();
 }
 
@@ -3005,7 +3165,7 @@ function mathTargetAtPosition(pos: number): ContextMathTarget | null {
 
 function mathTargetFromSourceElement(target: EventTarget | null): ContextMathTarget | null {
   const element = target instanceof Element
-    ? target.closest<HTMLElement>(".cm-math-inline, .cm-math-block")
+    ? target.closest<HTMLElement>(".cm-math-inline, .cm-math-inline-editor, .cm-math-block, .cm-math-block-editor")
     : null;
   if (!element) return null;
   const from = Number(element.dataset.cmSourceFrom);
@@ -3021,7 +3181,7 @@ function mathTargetFromPointer(event: MouseEvent): ContextMathTarget | null {
   return typeof pos === "number" ? mathTargetAtPosition(pos) : null;
 }
 
-function convertInlineMathToBlock(target: ContextMathTarget): boolean {
+function convertInlineMathToBlock(target: ContextMathTarget, sourceTex = target.tex): boolean {
   if (rejectReadOnlyAction("Read-only pane")) return false;
   if (target.kind !== "inline") return false;
   const state = editor.view.state;
@@ -3030,22 +3190,20 @@ function convertInlineMathToBlock(target: ContextMathTarget): boolean {
   const after = state.doc.sliceString(target.to, line.to);
   const prefix = before.trim().length > 0 ? "\n" : "";
   const suffix = after.trim().length > 0 ? "\n" : "";
-  const tex = target.tex.trim();
+  const tex = normalizeVisualTexLatex(sourceTex).trim();
   const replacement = `${prefix}\\[\n${tex}\n\\]${suffix}`;
   const scroll = captureEditorScroll();
   const replaced = editor.replaceMarkdownRange(target.from, target.to, replacement, "end");
-  const contentFrom = target.from + prefix.length + "\\[\n".length;
-  editor.setMarkdownSelection(contentFrom, contentFrom + tex.length, { scrollIntoView: false });
   restoreEditorScroll(scroll);
   setStatus("Converted inline math to display math");
   scheduleAssistUpdate({ mathPreview: true, cursor: true });
   return replaced.to > replaced.from;
 }
 
-function convertBlockMathToInline(target: ContextMathTarget): boolean {
+function convertBlockMathToInline(target: ContextMathTarget, sourceTex = target.tex): boolean {
   if (rejectReadOnlyAction("Read-only pane")) return false;
   if (target.kind !== "block") return false;
-  const tex = target.tex.trim().replace(/\s*\n\s*/g, " ");
+  const tex = normalizeVisualTexLatex(sourceTex).trim().replace(/\s*\n\s*/g, " ");
   const replacement = `\\(${tex}\\)`;
   const scroll = captureEditorScroll();
   editor.replaceMarkdownRange(target.from, target.to, replacement, "end");
@@ -3053,6 +3211,350 @@ function convertBlockMathToInline(target: ContextMathTarget): boolean {
   setStatus("Converted display math to inline math");
   scheduleAssistUpdate({ mathPreview: true, cursor: true });
   return true;
+}
+
+type ManagedFormulaStyle = {
+  body: string;
+  color: string;
+  background: string;
+  variant: string;
+  size: string;
+};
+
+const formulaVariantCommands = new Set(["mathbf", "mathrm", "mathsf", "mathtt", "mathcal", "mathbb", "mathfrak"]);
+const formulaSizeCommands = new Set(["small", "normalsize", "large", "Large", "LARGE", "huge"]);
+
+function readBracedFormulaArgument(source: string, from: number): { value: string; end: number } | null {
+  let start = from;
+  while (/\s/.test(source[start] ?? "")) start++;
+  if (source[start] !== "{") return null;
+  let depth = 1;
+  for (let index = start + 1; index < source.length; index++) {
+    if (source[index] === "\\") {
+      index++;
+      continue;
+    }
+    if (source[index] === "{") depth++;
+    else if (source[index] === "}" && --depth === 0) {
+      return { value: source.slice(start + 1, index), end: index + 1 };
+    }
+  }
+  return null;
+}
+
+function outerFormulaCommand(source: string, command: string, argumentCount: number): string[] | null {
+  const prefix = `\\${command}`;
+  if (!source.startsWith(prefix)) return null;
+  const args: string[] = [];
+  let offset = prefix.length;
+  for (let index = 0; index < argumentCount; index++) {
+    const argument = readBracedFormulaArgument(source, offset);
+    if (!argument) return null;
+    args.push(argument.value);
+    offset = argument.end;
+  }
+  return source.slice(offset).trim() ? null : args;
+}
+
+function managedFormulaStyle(tex: string): ManagedFormulaStyle {
+  const style: ManagedFormulaStyle = { body: tex.trim(), color: "", background: "", variant: "", size: "" };
+  for (;;) {
+    const before = style.body;
+    const color = outerFormulaCommand(style.body, "textcolor", 2);
+    if (color) {
+      style.color = color[0]!.trim();
+      style.body = color[1]!.trim();
+      continue;
+    }
+    const background = outerFormulaCommand(style.body, "colorbox", 2);
+    if (background) {
+      style.background = background[0]!.trim();
+      style.body = background[1]!.trim();
+      continue;
+    }
+    const variant = style.body.match(/^\\([A-Za-z]+)\b/)?.[1] ?? "";
+    if (formulaVariantCommands.has(variant)) {
+      const args = outerFormulaCommand(style.body, variant, 1);
+      if (args) {
+        style.variant = variant;
+        style.body = args[0]!.trim();
+        continue;
+      }
+    }
+    if (style.body.startsWith("{") && style.body.endsWith("}")) {
+      const inner = style.body.slice(1, -1).trim();
+      const size = inner.match(/^\\([A-Za-z]+)\s+/)?.[1] ?? "";
+      if (formulaSizeCommands.has(size)) {
+        style.size = size === "normalsize" ? "" : size;
+        style.body = inner.replace(/^\\[A-Za-z]+\s+/, "").trim();
+        continue;
+      }
+    }
+    if (style.body === before) return style;
+  }
+}
+
+function wrapManagedFormulaStyle(body: string, style: Omit<ManagedFormulaStyle, "body">): string {
+  let result = body.trim();
+  if (style.variant) result = `\\${style.variant}{${result}}`;
+  if (style.size) result = `{\\${style.size} ${result}}`;
+  if (style.background) result = `\\colorbox{${style.background}}{${result}}`;
+  if (style.color) result = `\\textcolor{${style.color}}{${result}}`;
+  return result;
+}
+
+function replaceContextMathTex(target: ContextMathTarget, tex: string, status: string): boolean {
+  if (rejectReadOnlyAction("Read-only pane")) return false;
+  const live = mathTargetAtPosition(Math.min(editor.view.state.doc.length, target.from + 1));
+  if (!live || live.kind !== target.kind) return false;
+  const state = editor.view.state;
+  const compatibleTex = normalizeVisualTexLatex(tex);
+  if (live.kind === "inline") {
+    const from = live.from + 2;
+    const to = live.to - 2;
+    const nextFormulaTo = live.to + compatibleTex.length - (to - from);
+    editor.view.dispatch({
+      changes: { from, to, insert: compatibleTex },
+      selection: { anchor: nextFormulaTo },
+    });
+  } else {
+    const rawContent = state.doc.sliceString(live.contentFrom!, live.contentTo!);
+    const indent = rawContent.match(/^[ \t]*/)?.[0]
+      || state.doc.lineAt(live.from).text.match(/^[ \t]*/)?.[0]
+      || "";
+    const insert = `${compatibleTex.trim().split("\n").map((line) => `${indent}${line.trim()}`).join("\n")}\n`;
+    const nextFormulaTo = live.to + insert.length - (live.contentTo! - live.contentFrom!);
+    editor.view.dispatch({
+      changes: { from: live.contentFrom!, to: live.contentTo!, insert },
+      selection: { anchor: nextFormulaTo },
+    });
+  }
+  setStatus(status);
+  scheduleAssistUpdate({ mathPreview: true, cursor: true });
+  return true;
+}
+
+function applyFormulaStyle(
+  target: ContextMathTarget,
+  patch: Partial<Omit<ManagedFormulaStyle, "body">>,
+  status: string,
+): boolean {
+  const current = managedFormulaStyle(target.tex);
+  const next = wrapManagedFormulaStyle(current.body, {
+    color: patch.color ?? current.color,
+    background: patch.background ?? current.background,
+    variant: patch.variant ?? current.variant,
+    size: patch.size ?? current.size,
+  });
+  return replaceContextMathTex(target, next, status);
+}
+
+function applyFormulaLayout(target: ContextMathTarget, layout: VisualTexDisplayLayout): boolean {
+  const current = managedFormulaStyle(target.tex);
+  const body = setVisualTexDisplayLayout(current.body, layout);
+  const next = wrapManagedFormulaStyle(body, current);
+  if (target.kind === "inline") return convertInlineMathToBlock(target, next);
+  return replaceContextMathTex(target, next, `Formula layout: ${layout}`);
+}
+
+function dismissLiveTexStudio(): void {
+  const wasOpen = !liveTexStudio.hidden;
+  liveTexEditor?.destroy();
+  liveTexEditor = null;
+  liveTexTarget = null;
+  liveTexDraft = "";
+  liveTexEditorHost.replaceChildren();
+  liveTexEditorTools.replaceChildren();
+  liveTexStudio.hidden = true;
+  if (wasOpen) {
+    host.dispatchEvent(new CustomEvent("aaronnote:inline-math-edit-state", {
+      bubbles: true,
+      detail: { active: false, kind: "studio" },
+    }));
+  }
+}
+
+function fallbackLiveTexStudio(target: ContextMathTarget, error: unknown): void {
+  dismissLiveTexStudio();
+  const live = mathTargetAtPosition(Math.min(editor.view.state.doc.length, target.from + 1));
+  if (live?.kind === "inline") {
+    editor.setMarkdownSelection(live.from + 2, live.to - 2);
+  } else if (live?.kind === "block") {
+    editor.setMarkdownSelection(live.contentFrom!, live.contentTo!);
+  }
+  editor.focus();
+  setStatus(`${error instanceof Error ? error.message : "LiveTeX unavailable"}; 已回退到 TeX 源码与预览`);
+  scheduleAssistUpdate({ mathPreview: true, cursor: true });
+}
+
+function applyLiveTexStudio(focusEditor = true): boolean {
+  const target = liveTexTarget;
+  if (!target) return false;
+  const latex = normalizeVisualTexLatex(liveTexEditor?.value() ?? liveTexDraft).trim();
+  const live = mathTargetAtPosition(Math.min(editor.view.state.doc.length, target.from + 1));
+  if (!live || live.kind !== target.kind) {
+    setStatus("The original formula is no longer available; LiveTeX remains open");
+    return false;
+  }
+  if (!latex) {
+    editor.replaceMarkdownRange(live.from, live.to, "", "end");
+    dismissLiveTexStudio();
+    if (focusEditor) editor.focus();
+    setStatus("Empty formula removed");
+    scheduleAssistUpdate({ mathPreview: true, cursor: true });
+    return true;
+  }
+  if (live.kind === "inline" && visualTexDisplayLayout(latex) !== "equation") {
+    const changed = convertInlineMathToBlock(live, latex);
+    if (changed) {
+      dismissLiveTexStudio();
+      if (focusEditor) editor.focus();
+    }
+    return changed;
+  }
+  const changed = replaceContextMathTex(live, latex, "Formula updated in LiveTeX; save queued");
+  if (changed) {
+    dismissLiveTexStudio();
+    if (focusEditor) editor.focus();
+  }
+  return changed;
+}
+
+function closeLiveTexStudioWithApply(): void {
+  if (liveTexStudio.hidden) return;
+  applyLiveTexStudio();
+}
+
+function openContextLiveTex(target: ContextMathTarget, returnMode?: VimLiteMode): boolean {
+  if (rejectReadOnlyAction("Read-only pane")) return false;
+  finishInlineMathEditing(editor.view);
+  const live = mathTargetAtPosition(Math.min(editor.view.state.doc.length, target.from + 1)) ?? target;
+  dismissLiveTexStudio();
+  // Context-menu buttons receive focus before their action runs. Preserve the
+  // mode captured when the menu opened instead of the blur-reset mode.
+  visualMathReturnMode = returnMode ?? vim.mode();
+  liveTexTarget = { ...live };
+  liveTexDraft = normalizeVisualTexLatex(live.tex);
+  liveTexZoom = 1;
+  liveTexZoomLabel.value = "100%";
+  liveTexStage.style.setProperty("--noema-livetex-zoom", "1");
+  liveTexStage.dataset.align = "center";
+  liveTexStudio.hidden = false;
+  host.dispatchEvent(new CustomEvent("aaronnote:inline-math-edit-state", {
+    bubbles: true,
+    detail: { active: true, kind: "studio" },
+  }));
+  liveTexEditor = mountVisualTexDisplayEditor(liveTexEditorHost, {
+    latex: liveTexDraft,
+    macros: getKatexMacros(),
+    entry: { kind: "all" },
+    advanced: true,
+    commitOnBlur: false,
+    toolbarHost: liveTexEditorTools,
+    onInput: (latex) => { liveTexDraft = normalizeVisualTexLatex(latex); },
+    // The studio owns its Apply/Close lifecycle. MathLive emits move-out while
+    // the pointer travels from the field to the header Apply button; closing
+    // here used to clear the target before the ensuing click could write back.
+    onCommit: (direction) => {
+      if (direction === "submit" || direction === "save") applyLiveTexStudio();
+    },
+    onUnavailable: (error) => fallbackLiveTexStudio(live, error),
+  });
+  return true;
+}
+
+function commitActiveLiveTexForBoundary(focusEditor = false): boolean {
+  if (!visualMathEditorActive) return true;
+  if (!liveTexStudio.hidden) return applyLiveTexStudio(focusEditor);
+  return finishInlineMathEditing(editor.view);
+}
+
+liveTexStudio.querySelectorAll<HTMLButtonElement>("[data-livetex-align]").forEach((button) => {
+  button.addEventListener("click", () => {
+    liveTexStage.dataset.align = button.dataset.livetexAlign || "center";
+    liveTexEditor?.focus();
+  });
+});
+liveTexStudio.querySelectorAll<HTMLButtonElement>("[data-livetex-zoom]").forEach((button) => {
+  button.addEventListener("click", () => {
+    liveTexZoom = Math.max(0.7, Math.min(1.6, liveTexZoom + (button.dataset.livetexZoom === "in" ? 0.1 : -0.1)));
+    liveTexStage.style.setProperty("--noema-livetex-zoom", liveTexZoom.toFixed(2));
+    liveTexZoomLabel.value = `${Math.round(liveTexZoom * 100)}%`;
+    liveTexEditor?.focus();
+  });
+});
+liveTexStudio.querySelector<HTMLButtonElement>("[data-livetex-close]")!
+  .addEventListener("mousedown", (event) => event.preventDefault());
+liveTexStudio.querySelector<HTMLButtonElement>("[data-livetex-close]")!
+  .addEventListener("click", closeLiveTexStudioWithApply);
+liveTexStudio.querySelector<HTMLButtonElement>("[data-livetex-apply]")!
+  .addEventListener("mousedown", (event) => event.preventDefault());
+liveTexStudio.querySelector<HTMLButtonElement>("[data-livetex-apply]")!
+  .addEventListener("click", applyLiveTexStudio);
+liveTexStudio.addEventListener("mousedown", (event) => {
+  if (event.target === liveTexStudio) closeLiveTexStudioWithApply();
+});
+liveTexStudioPanel.addEventListener("mousedown", (event) => event.stopPropagation());
+window.addEventListener("keydown", (event) => {
+  if (liveTexStudio.hidden || event.key !== "Escape") return;
+  event.preventDefault();
+  event.stopPropagation();
+  closeLiveTexStudioWithApply();
+}, { capture: true });
+
+const formulaColorOptions = ["", "red", "orange", "yellow", "lime", "green", "teal", "blue", "indigo", "purple", "magenta", "black", "white"];
+const formulaLayoutOptions: Array<{ value: string; label: string }> = [
+  { value: "inline", label: "Inline" },
+  { value: "equation", label: "Equation" },
+  { value: "align", label: "Align (numbered)" },
+  { value: "align*", label: "Align (unnumbered)" },
+  { value: "aligned", label: "Aligned" },
+  { value: "gather", label: "Gather (numbered)" },
+  { value: "gather*", label: "Gather (unnumbered)" },
+  { value: "gathered", label: "Gathered" },
+  { value: "split", label: "Split" },
+  { value: "multline", label: "Multline (numbered)" },
+  { value: "multline*", label: "Multline (unnumbered)" },
+  { value: "cases", label: "Cases" },
+  { value: "matrix", label: "Matrix" },
+  { value: "pmatrix", label: "Parenthesized matrix" },
+  { value: "bmatrix", label: "Bracketed matrix" },
+];
+
+async function openFormulaManager(target: ContextMathTarget): Promise<void> {
+  const current = managedFormulaStyle(target.tex);
+  const currentLayout = target.kind === "inline" ? "inline" : visualTexDisplayLayout(current.body);
+  const result = await openFormModal("Formula options", [
+    { id: "layout", label: "Layout", type: "select", value: currentLayout, options: formulaLayoutOptions, group: "Structure" },
+    { id: "color", label: "Text color", type: "select", value: current.color, options: formulaColorOptions.map((value) => ({ value, label: value || "Default" })), group: "Appearance" },
+    { id: "background", label: "Highlight", type: "select", value: current.background, options: formulaColorOptions.map((value) => ({ value, label: value || "None" })) },
+    { id: "variant", label: "Math alphabet", type: "select", value: current.variant, options: [
+      { value: "", label: "Normal" }, { value: "mathbf", label: "Bold" },
+      { value: "mathrm", label: "Roman" }, { value: "mathsf", label: "Sans serif" },
+      { value: "mathtt", label: "Monospace" }, { value: "mathcal", label: "Calligraphic" },
+      { value: "mathbb", label: "Blackboard" }, { value: "mathfrak", label: "Fraktur" },
+    ] },
+    { id: "size", label: "Size", type: "select", value: current.size, options: [
+      { value: "", label: "Normal" }, { value: "small", label: "Small" },
+      { value: "large", label: "Large" }, { value: "Large", label: "Larger" },
+      { value: "LARGE", label: "Very large" }, { value: "huge", label: "Huge" },
+    ] },
+  ], "Apply");
+  if (!result) return;
+  const live = mathTargetAtPosition(Math.min(editor.view.state.doc.length, target.from + 1));
+  if (!live) return;
+  const latest = managedFormulaStyle(live.tex);
+  const layout = result.layout as VisualTexDisplayLayout | "inline";
+  const body = layout === "inline" ? latest.body : setVisualTexDisplayLayout(latest.body, layout);
+  const styled = wrapManagedFormulaStyle(body, {
+    color: result.color || "",
+    background: result.background || "",
+    variant: result.variant || "",
+    size: result.size || "",
+  });
+  if (layout === "inline" && live.kind === "block") convertBlockMathToInline(live, styled);
+  else if (layout !== "inline" && live.kind === "inline") convertInlineMathToBlock(live, styled);
+  else replaceContextMathTex(live, styled, "Formula options applied");
 }
 
 async function copyCurrentNotePath(): Promise<void> {
@@ -3111,12 +3613,14 @@ type AaronContextMenuTarget = {
 };
 
 function showContextMenu(event: MouseEvent, target: Partial<AaronContextMenuTarget> = {}): void {
-  contextMenu.classList.remove("is-bibliography");
+  contextMenu.classList.remove("is-bibliography", "is-math");
   const selection = editor.getMarkdownSelection();
   const hasSelection = selection.from !== selection.to;
   const planningTarget = planningEditTargetFromPointer(event);
   const cell = target.cell !== undefined ? target.cell : jupyterCellFromPointer(event, false);
   const mathTarget = mathTargetFromPointer(event);
+  const contextVimMode = vim.mode();
+  contextMenu.classList.toggle("is-math", Boolean(mathTarget));
   const href = cleanHref(target.href || markdownHrefFromPointer(event));
   const cellDetail = cell
     ? isLeanJupyterCell(cell) ? `${cell.language} / ${cell.session}` : `${cell.language} / ${cell.kernel} / ${cell.session}`
@@ -3157,20 +3661,38 @@ function showContextMenu(event: MouseEvent, target: Partial<AaronContextMenuTarg
       run: () => openAgendaEditPop(planningTarget),
     });
   } else if (mathTarget) {
+    const styled = managedFormulaStyle(mathTarget.tex);
+    const currentLayout = mathTarget.kind === "block" ? visualTexDisplayLayout(styled.body) : "inline";
+    items.push({
+      label: "Open LiveTeX",
+      detail: "visual editor",
+      disabled: currentReadOnly,
+      run: () => openContextLiveTex(mathTarget, contextVimMode),
+    });
+    if (mathTarget.kind === "inline") {
+      items.push({
+        label: "Convert to Display Math",
+        detail: "equation",
+        disabled: currentReadOnly,
+        run: () => convertInlineMathToBlock(mathTarget),
+      });
+    } else {
+      items.push(
+        { label: "Equation", detail: currentLayout === "equation" ? "current" : "plain", disabled: currentReadOnly || currentLayout === "equation", run: () => applyFormulaLayout(mathTarget, "equation") },
+        { label: "Align", detail: currentLayout === "align*" ? "current" : "unnumbered rows", disabled: currentReadOnly || currentLayout === "align*", run: () => applyFormulaLayout(mathTarget, "align*") },
+        { label: "Aligned", detail: currentLayout === "aligned" ? "current" : "align at relations", disabled: currentReadOnly || currentLayout === "aligned", run: () => applyFormulaLayout(mathTarget, "aligned") },
+        { label: "Gathered", detail: currentLayout === "gathered" ? "current" : "center rows", disabled: currentReadOnly || currentLayout === "gathered", run: () => applyFormulaLayout(mathTarget, "gathered") },
+        { label: "Split", detail: currentLayout === "split" ? "current" : "single equation", disabled: currentReadOnly || currentLayout === "split", run: () => applyFormulaLayout(mathTarget, "split") },
+        { label: "Convert to Inline Math", detail: "\\( ... \\)", disabled: currentReadOnly, run: () => convertBlockMathToInline(mathTarget) },
+      );
+    }
     items.push(
-      mathTarget.kind === "inline"
-        ? {
-            label: "Convert to Display Math",
-            detail: "\\[ ... \\]",
-            disabled: currentReadOnly,
-            run: () => convertInlineMathToBlock(mathTarget),
-          }
-        : {
-            label: "Convert to Inline Math",
-            detail: "\\( ... \\)",
-            disabled: currentReadOnly,
-            run: () => convertBlockMathToInline(mathTarget),
-          },
+      { separator: true, label: "" },
+      { label: "Highlight Yellow", detail: "background", disabled: currentReadOnly, run: () => applyFormulaStyle(mathTarget, { background: "yellow" }, "Formula highlighted") },
+      { label: "Color Indigo", detail: "foreground", disabled: currentReadOnly, run: () => applyFormulaStyle(mathTarget, { color: "indigo" }, "Formula color applied") },
+      { label: "Clear Color & Highlight", detail: "keep structure", disabled: currentReadOnly || (!styled.color && !styled.background), run: () => applyFormulaStyle(mathTarget, { color: "", background: "" }, "Formula styling cleared") },
+      { label: "Formula Options...", detail: "advanced", disabled: currentReadOnly, run: () => openFormulaManager(mathTarget) },
+      { label: "Copy TeX", detail: "clipboard", run: () => copyText(mathTarget.tex) },
     );
   } else if (cell) {
     items.push(
@@ -3266,7 +3788,19 @@ function saveBody() {
   };
 }
 
-async function save(): Promise<void> {
+let keepaliveSaveKey = "";
+
+function savePendingNoteKeepalive(): void {
+  if (!commitActiveLiveTexForBoundary(false)) return;
+  if (!currentFile || revision === savedRevision || !noteAutoSaveEnabled(currentRemote)) return;
+  const key = `${currentFile}:${revision}`;
+  if (key === keepaliveSaveKey) return;
+  keepaliveSaveKey = key;
+  api.notes.saveKeepalive(saveBody());
+}
+
+async function save(commitLiveTex = true): Promise<void> {
+  if (commitLiveTex && !commitActiveLiveTexForBoundary(true)) return;
   window.clearTimeout(saveTimer);
   if (saveIdleHandle && "cancelIdleCallback" in window) window.cancelIdleCallback(saveIdleHandle);
   saveIdleHandle = 0;
@@ -3320,7 +3854,7 @@ function scheduleSave(): void {
   saveTimer = window.setTimeout(() => {
     saveTimer = 0;
     if (editor.getMarkdownLength() < LARGE_DOCUMENT_CHARS || !("requestIdleCallback" in window)) {
-      void save();
+      void save(false);
       return;
     }
     saveIdleHandle = window.requestIdleCallback(() => {
@@ -3330,7 +3864,7 @@ function scheduleSave(): void {
         scheduleSave();
         return;
       }
-      void save();
+      void save(false);
     }, { timeout: 2500 });
   }, 650);
 }
@@ -3619,6 +4153,7 @@ function applyOpenedNote(
 async function openFile(file?: string, bootstrap = false): Promise<void> {
   const target = file || undefined;
   try {
+    if (!commitActiveLiveTexForBoundary(false)) return;
     if (currentFile) await flushCursorPosition();
     if (currentFile && revision !== savedRevision) {
       if (!noteAutoSaveEnabled(currentRemote)) {
@@ -3644,6 +4179,7 @@ async function reloadCurrentFilePreservingCursor(options: {
   preserveScroll?: boolean;
 } = {}): Promise<void> {
   if (!currentFile) return;
+  if (!commitActiveLiveTexForBoundary(false)) return;
   const position = trackCursorPosition();
   const scroll = options.preserveScroll ? captureEditorScroll() : null;
   if (position) rememberCursorPosition(position);
@@ -6638,6 +7174,7 @@ async function languageToolSettingsTool(): Promise<void> {
 
 async function openStandaloneSlideView(): Promise<void> {
   if (!currentFile || currentNoteIsSlides() || !/\.(?:md|markdown)$/i.test(currentFile)) return;
+  if (!commitActiveLiveTexForBoundary(false)) return;
   const url = new URL("/slides", window.location.origin);
   url.searchParams.set("file", currentFile);
   // Appine/xwidget cannot reliably navigate an about:blank WindowProxy after
@@ -6873,6 +7410,7 @@ function editorSurfaceVisible(): boolean {
 function editorOwnsActiveSurface(): boolean {
   const active = document.activeElement;
   if (!active || !host.contains(active)) return false;
+  if (active.closest("[data-aaronnote-vim='native']")) return false;
   const editable = active.closest<HTMLElement>("input, textarea, select, [contenteditable='true']");
   return !editable || editable.classList.contains("cm-content");
 }
@@ -6903,6 +7441,7 @@ function hideSnippetPopup(): void {
   snippetDeleteBefore = 0;
   snippetRenderKey = "";
   snippetPopupMatchKey = "";
+  snippetPopupChooseHandler = null;
 }
 
 function placeFloating(el: HTMLElement, rect: { left: number; top: number; bottom: number } | null, width = 340): void {
@@ -6978,7 +7517,7 @@ function matchingSnippets(
   const commandChannel = mathContext && prefix.startsWith("\\");
   const atChannel = mathContext && prefix.startsWith("@");
   const candidates = mathContext
-    ? [...snippets, ...mathSnippetIndex.candidates()]
+    ? mathSnippetCandidates()
     : snippets;
   return matchingSnippetsForPrefix(candidates, prefix, {
     kind: currentSnippetKind(),
@@ -6995,6 +7534,45 @@ function matchingSnippets(
       if (snippet.context?.startsWith("math")) return mathContext;
       return !inMeta || snippet.context !== "markdown";
     });
+}
+
+function mathSnippetCandidates(): SnippetSummary[] {
+  return [...snippets, ...mathSnippetIndex.candidates()];
+}
+
+function matchingMathEditorSnippets(prefix: string): SnippetSummary[] {
+  const layoutAliases: Record<string, string> = {
+    alig: "ali",
+    align: "ali",
+    gather: "gat",
+    split: "spl",
+    cases: "cas",
+  };
+  const query = layoutAliases[prefix.toLowerCase()] ?? prefix;
+  return matchingSnippetsForPrefix(mathSnippetCandidates(), query, {
+    kind: currentSnippetKind(),
+    mode: "tex-mode",
+    limit: 10,
+    allowFuzzy: prefix.startsWith("\\") || prefix.startsWith("@"),
+    context: "math",
+    usage: snippetUsage,
+    documentFrequency: mathSnippetIndex.frequencies(),
+  }).filter((snippet) => !snippet.context || snippet.context.startsWith("math"));
+}
+
+function mathLiveSnippetTemplate(snippet: SnippetSummary): string {
+  const expanded = expandSnippetBody(snippet);
+  const stops = expanded.tabstops
+    .filter((stop) => stop.primary && stop.index !== 0)
+    .sort((a, b) => b.from - a.from || b.to - a.to);
+  let template = expanded.text;
+  let coveredFrom = Number.POSITIVE_INFINITY;
+  for (const stop of stops) {
+    if (stop.to > coveredFrom) continue;
+    template = `${template.slice(0, stop.from)}#?${template.slice(stop.to)}`;
+    coveredFrom = stop.from;
+  }
+  return template;
 }
 
 function builtinDisplayMathSnippetP(snippet: SnippetSummary): boolean {
@@ -7560,7 +8138,13 @@ function updateSnippetPopupActiveOption(): void {
   snippetPopup.querySelector(".aaronnote-snippet-option.is-active")?.scrollIntoView({ block: "nearest" });
 }
 
-function showSnippetPopup(prefix: string, items: SnippetSummary[], deleteBefore: number, rect: { left: number; top: number; bottom: number } | null): void {
+function showSnippetPopup(
+  prefix: string,
+  items: SnippetSummary[],
+  deleteBefore: number,
+  rect: { left: number; top: number; bottom: number } | null,
+  chooseHandler: ((snippet: SnippetSummary) => boolean) | null = null,
+): void {
   const matchKey = `${prefix}\n${items.map((snippet) => `${snippet.kind}:${snippet.mode}:${snippet.group}:${snippet.key}:${snippet.name}`).join("\n")}`;
   snippetDeleteBefore = deleteBefore;
   if (matchKey !== snippetPopupMatchKey) {
@@ -7571,6 +8155,7 @@ function showSnippetPopup(prefix: string, items: SnippetSummary[], deleteBefore:
   }
   snippetPopupMatchKey = matchKey;
   snippetPopupItems = items;
+  snippetPopupChooseHandler = chooseHandler;
   renderSnippetPopup(prefix, rect);
 }
 
@@ -7915,6 +8500,17 @@ function updateSnippetPopup(ctx: ReturnType<typeof editor.cursorContext>): void 
 function chooseSnippetPopupItem(): void {
   const snippet = snippetPopupItems[snippetPopupIndex];
   if (!snippet) return;
+  const chooseHandler = snippetPopupChooseHandler;
+  if (chooseHandler) {
+    hideSnippetPopup();
+    const inserted = chooseHandler(snippet);
+    if (snippetPopupChooseHandler) hideSnippetPopup();
+    if (inserted) {
+      snippetUsage.record(snippet);
+      setStatus(`Inserted ${snippet.key || snippet.name || "formula snippet"}`);
+    }
+    return;
+  }
   if (snippet.provider === "choice") {
     const choice = snippet.key || "";
     hideSnippetPopup();
@@ -8109,6 +8705,10 @@ function scheduleMathPreviewError(nextKey: string, error: string, display: boole
 }
 
 function updateMathPreview(ctx: ReturnType<typeof editor.cursorContext>, allowNewPreview: boolean): void {
+  if (visualMathEditorActive) {
+    if (!mathPreview.hidden || mathPreviewKey) hideMathPreview();
+    return;
+  }
   const math = mathAtCursor(ctx);
   if (!math || math.tex.trim().length === 0) {
     if (!mathPreview.hidden || mathPreviewKey) hideMathPreview();
@@ -8157,6 +8757,7 @@ function updateMathPreview(ctx: ReturnType<typeof editor.cursorContext>, allowNe
 
 function activeEditorSelection(): { text: string; rect: DOMRect } | null {
   if (editor.isSourceMode()) return null;
+  if (host.querySelector("[data-cm-visual-math='active']")) return null;
   const selection = window.getSelection();
   if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null;
   const anchor = selection.anchorNode;
@@ -8255,9 +8856,11 @@ function runSelectionCommand(command: string): void {
 
 function runAssistUpdate(flags: AssistUpdateFlags): void {
   const insertMode = vim.mode() === "insert";
-  const wantsSnippets = insertMode && (flags.snippets || !snippetPopup.hidden);
-  const wantsMathPreview = !passiveServerReader && (flags.mathPreview || !mathPreview.hidden);
-  if (passiveServerReader) hideMathPreview();
+  const wantsSnippets = !visualMathEditorActive && insertMode && (flags.snippets || !snippetPopup.hidden);
+  const wantsMathPreview = !passiveServerReader
+    && !visualMathEditorActive
+    && (flags.mathPreview || !mathPreview.hidden);
+  if (passiveServerReader || visualMathEditorActive) hideMathPreview();
   const needsCursorContext = wantsSnippets || wantsMathPreview;
   const ctx = needsCursorContext ? editor.cursorContext(!snippetPopup.hidden ? 640 : 320) : null;
   if (flags.toc) updateFloatingToc();
@@ -8265,6 +8868,10 @@ function runAssistUpdate(flags: AssistUpdateFlags): void {
     const activeSelection = snippetPopup.hidden && modal.hidden ? activeEditorSelection() : null;
     updateSelectionTool(activeSelection);
   }
+  // MathLive drives the shared snippet popup with its own cursor and prefix.
+  // A scheduled CM6 assist pass must not replace or hide that popup using the
+  // source cursor sitting behind the visual formula widget.
+  if (visualMathEditorActive) return;
   if (!insertMode) {
     hideSnippetPopup();
     if (ctx && wantsMathPreview) updateMathPreview(ctx, flags.mathPreview);
@@ -8359,6 +8966,23 @@ function deleteHostKeyText(key: string): boolean {
   return true;
 }
 
+function routeHostKeyToMathEditor(key: VimLiteKey, text?: string): boolean {
+  if (!visualMathEditorActive) return false;
+  const event = new CustomEvent("aaronnote:math-host-key", {
+    cancelable: true,
+    detail: {
+      key: key.key,
+      text,
+      ctrlKey: key.ctrlKey,
+      metaKey: key.metaKey,
+      altKey: key.altKey,
+      shiftKey: key.shiftKey,
+    },
+  });
+  document.dispatchEvent(event);
+  return event.defaultPrevented;
+}
+
 function runHostKey(body: Record<string, unknown>): boolean {
   const rawKey = String(body.key || "");
   const shiftTabAlias = rawKey === "Backtab" || rawKey === "ISO_Left_Tab" || rawKey === "Shift-Tab";
@@ -8371,6 +8995,7 @@ function runHostKey(body: Record<string, unknown>): boolean {
     altKey: Boolean(body.altKey),
     shiftKey: Boolean(body.shiftKey) || shiftTabAlias,
   };
+  if (routeHostKeyToMathEditor(hostKey, typeof body.text === "string" ? body.text : undefined)) return true;
   focusEditorPreservingScroll();
   if (key === "Escape" || key === "Esc") snippetSession.clear();
   if (handleSnippetPopupHostKey(hostKey)) {
@@ -8785,6 +9410,12 @@ function eventTargetsNativeWidgetInput(target: EventTarget | null): boolean {
 }
 
 document.addEventListener("keydown", (event) => {
+  if (handleXwidgetMathKeydown(event, {
+    editor,
+    editorHost: host,
+    vim,
+    enabled: modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden,
+  })) return;
   // Native widget editors are deliberately outside the document's Vim and
   // authoring-shortcut pipeline, regardless of the current document mode.
   if (eventTargetsNativeWidgetInput(event.target)) return;
@@ -8966,6 +9597,12 @@ prosePopover.addEventListener("click", (event) => {
   }
 });
 document.addEventListener("beforeinput", (event) => {
+  if (handleXwidgetMathBeforeInput(event as InputEvent, {
+    editor,
+    editorHost: host,
+    vim,
+    enabled: modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden,
+  })) return;
   if (eventTargetsNativeWidgetInput(event.target)) return;
   const ie = event as InputEvent;
   if (ie.inputType === "insertText" && ie.data && ie.data !== "\t") {
@@ -9241,14 +9878,11 @@ document.addEventListener("visibilitychange", () => {
 window.addEventListener("pagehide", () => {
   proseLifecycle.invalidate("page-hidden");
   void flushCursorPosition();
-  if (currentFile
-      && revision !== savedRevision
-      && noteAutoSaveEnabled(currentRemote)) {
-    api.notes.saveKeepalive(saveBody());
-  }
+  savePendingNoteKeepalive();
   notifyClientClosedKeepalive();
 });
 window.addEventListener("beforeunload", () => {
+  savePendingNoteKeepalive();
   removeNoemaThemeRuntime();
   removeDesktopCommandListener?.();
   coreReconnectController?.destroy();

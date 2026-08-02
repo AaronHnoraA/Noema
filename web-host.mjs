@@ -520,8 +520,9 @@ configureExternalFileProvider({
   },
 });
 
-configureCopilotBridgeRequest((method, params) =>
-  gatewayRequest(method, params, 30_000));
+configureCopilotBridgeRequest(hostMode === "emacs"
+  ? (method, params) => gatewayRequest(method, params, 30_000)
+  : null);
 
 // One-shot orphan sweep: remove staging/clipboard/db temp files older than 24h.
 void sweepRuntimeTmp().then(({ removed }) => {

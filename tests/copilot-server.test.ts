@@ -1,7 +1,7 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
 // @ts-ignore The server is a Node ESM module outside the TS app graph.
-import { handleCopilotRequest, offsetToPosition, positionToOffset, shutdownCopilot } from "../server/lib/copilot.mjs";
+import { configureCopilotBridgeRequest, handleCopilotRequest, offsetToPosition, positionToOffset, shutdownCopilot } from "../server/lib/copilot.mjs";
 
 describe("copilot server helpers", () => {
   test("maps markdown offsets to LSP positions and back", () => {
@@ -13,6 +13,7 @@ describe("copilot server helpers", () => {
   });
 
   test("tracks pane focus without starting a local language server", async () => {
+    configureCopilotBridgeRequest(null);
     await shutdownCopilot();
 
     await handleCopilotRequest("focus", { file: "/tmp/a.md", clientId: "pane-a" });
@@ -40,6 +41,23 @@ describe("copilot server helpers", () => {
     expect(log.client?.documents).toBe(0);
 
     await shutdownCopilot();
+  });
+
+  test("reuses the configured Emacs Copilot bridge without starting a local server", async () => {
+    await shutdownCopilot();
+    const calls: Array<{ method: string; action?: string }> = [];
+    configureCopilotBridgeRequest(async (method: string, params: { action?: string } = {}) => {
+      calls.push({ method, action: params.action });
+      return { ok: true, status: { message: "Emacs Copilot", kind: "Normal", busy: false } };
+    });
+    try {
+      const result = await handleCopilotRequest("status") as { status?: { message?: string } };
+      expect(result.status?.message).toBe("Emacs Copilot");
+      expect(calls).toEqual([{ method: "copilot.request", action: "status" }]);
+    } finally {
+      await shutdownCopilot();
+      configureCopilotBridgeRequest(null);
+    }
   });
 
 });

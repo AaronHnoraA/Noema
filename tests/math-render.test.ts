@@ -38,7 +38,29 @@ describe("math render source handling", () => {
     const el = document.createElement("span");
     const tex = "dathrm{GA} e_p athrm{GI}";
     renderMathLazy(tex, el, { displayMode: false, throwOnError: false }, () => {});
-    expect(el.getAttribute("data-math-render-key")).toBe(`${getKatexMacrosVersion()}\ninline\nmathml\n${tex}`);
+    expect(el.getAttribute("data-math-render-key")).toBe(`${getKatexMacrosVersion()}\ninline\nhtmlAndMathml\n${tex}`);
+  });
+
+  test("uses KaTeX HTML layout for numbered display environments by default", () => {
+    const tex = String.raw`\begin{align}a&=b \\ c&=d\end{align}`;
+    const rendered = renderMathHTML(tex, { displayMode: true, strict: false });
+
+    expect(rendered.error).toBeUndefined();
+    expect(rendered.html).toContain("katex-display");
+    expect(rendered.html).toContain("katex-html");
+    expect(rendered.html.match(/class="eqn-num"/g)).toHaveLength(2);
+  });
+
+  test("renders Plain TeX displaylines through a gathered compatibility environment", () => {
+    const rendered = renderMathHTML(String.raw`\displaylines{a=b\\c=d}`, {
+      displayMode: true,
+      strict: false,
+    });
+
+    expect(rendered.error).toBeUndefined();
+    expect(rendered.html).toContain("katex-display");
+    expect(rendered.html).toContain(">a</span>");
+    expect(rendered.html).toContain(">c</span>");
   });
 
   test("keeps output modes separate in the render cache", () => {

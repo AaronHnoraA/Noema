@@ -313,6 +313,279 @@
   display: inline;
   cursor: pointer;
 }
+.cm-editor .cm-math-inline-editor {
+  display: inline-block;
+  min-inline-size: var(--noema-inline-math-width, 0);
+  min-block-size: var(--noema-inline-math-height, 0);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: inherit;
+  line-height: 1;
+  vertical-align: -0.08em;
+}
+.cm-editor .cm-math-inline-editor-fallback {
+  display: inline-block;
+  margin: 0;
+  padding: 0;
+  color: inherit;
+  line-height: 1;
+}
+.cm-editor .noema-visualtex-inline-shell {
+  position: relative;
+  display: inline-flex;
+  align-items: baseline;
+  min-width: var(--noema-inline-math-width, 0);
+  min-height: var(--noema-inline-math-height, 0);
+  line-height: 1;
+  vertical-align: baseline;
+}
+.cm-editor .noema-visualtex-quickbar {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  width: max-content;
+  max-width: min(560px, calc(100vw - 24px));
+  min-height: 28px;
+  border: 1px solid color-mix(in srgb, var(--aaron-paper-line, #414b61), transparent 10%);
+  border-radius: 7px;
+  padding: 3px 5px;
+  background: color-mix(in srgb, var(--aaron-paper, #151b28), transparent 2%);
+  color: var(--aaron-ink, #e6ebff);
+  box-shadow: 0 7px 24px rgb(0 0 0 / 24%);
+  font: 650 11px/1.1 var(--aaron-font-sans, system-ui, sans-serif);
+  white-space: nowrap;
+}
+.cm-editor .noema-visualtex-inline-shell > .noema-visualtex-quickbar {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 7px);
+  z-index: 80;
+}
+.cm-editor .noema-visualtex-live.is-simple > .noema-visualtex-quickbar {
+  position: relative;
+  z-index: 2;
+  align-self: center;
+  margin-bottom: 6px;
+}
+.cm-editor .noema-visualtex-quickbar strong {
+  margin-inline: 3px 2px;
+  color: var(--aaron-accent, #6da8ff);
+  letter-spacing: 0.02em;
+}
+.cm-editor .noema-visualtex-quick-status {
+  margin-right: 3px;
+  color: var(--aaron-muted, #9da8c3);
+  font-family: var(--aaron-font-mono, ui-monospace, monospace);
+}
+.cm-editor .noema-visualtex-quickbar button {
+  box-sizing: border-box;
+  min-width: 25px;
+  min-height: 21px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 2px 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.cm-editor .noema-visualtex-quickbar button:hover,
+.cm-editor .noema-visualtex-quickbar button:focus-visible {
+  border-color: color-mix(in srgb, var(--aaron-accent, #6da8ff), transparent 52%);
+  background: color-mix(in srgb, var(--aaron-accent, #6da8ff), transparent 86%);
+  outline: none;
+}
+.cm-editor .noema-visualtex-mathfield {
+  display: inline-block;
+  width: auto;
+  min-width: var(--noema-inline-math-width, 0);
+  min-height: var(--noema-inline-math-height, 0);
+  margin: 0;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0;
+  outline: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  overflow: visible !important;
+  color: inherit;
+  font-size: 1em;
+  line-height: 1;
+  vertical-align: baseline;
+  --caret-color: var(--aaron-accent, #6da8ff);
+  --selection-background-color: color-mix(in srgb, var(--aaron-accent, #6da8ff), transparent 72%);
+  --contains-highlight-background-color: color-mix(in srgb, var(--aaron-accent, #6da8ff), transparent 88%);
+}
+.cm-editor .noema-visualtex-mathfield::part(container),
+.cm-editor .noema-visualtex-mathfield::part(content) {
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  overflow: visible !important;
+  scrollbar-width: none;
+}
+.cm-editor .noema-visualtex-mathfield::part(menu-toggle),
+.cm-editor .noema-visualtex-mathfield::part(virtual-keyboard-toggle) {
+  display: none;
+}
+.cm-editor .cm-math-block-editor {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  min-height: 48px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: inherit;
+  text-align: center;
+}
+.cm-editor .cm-math-block-editor-fallback {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  color: inherit;
+  text-align: center;
+}
+.cm-editor .noema-visualtex-live {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+  min-height: 48px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.cm-editor .noema-visualtex-toolbar {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-height: 34px;
+  margin: 0 0 0.4em;
+  padding: 4px 6px;
+  border: 1px solid color-mix(in srgb, var(--aaron-paper-line, #414b61), transparent 20%);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--aaron-paper-soft, #1e2536), transparent 12%);
+  font: 600 11px/1.2 var(--aaron-font-sans, system-ui, sans-serif);
+}
+
+.cm-editor .noema-visualtex-brand {
+  margin-right: 4px;
+  color: var(--aaron-accent, #6da8ff);
+  letter-spacing: 0.03em;
+}
+
+.cm-editor .noema-visualtex-toolbar button,
+.cm-editor .noema-visualtex-toolbar select {
+  min-height: 24px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 2px 7px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+.cm-editor .noema-visualtex-toolbar button:hover,
+.cm-editor .noema-visualtex-toolbar button:focus-visible,
+.cm-editor .noema-visualtex-toolbar select:focus-visible {
+  border-color: var(--aaron-paper-line, #414b61);
+  background: color-mix(in srgb, var(--aaron-accent, #6da8ff), transparent 88%);
+  outline: none;
+}
+
+.noema-visualtex-color-button {
+  position: relative;
+  width: 30px;
+  min-width: 30px;
+  cursor: pointer;
+  font-weight: 750;
+}
+
+.noema-visualtex-color-button::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  right: 5px;
+  bottom: 2px;
+  width: 20px;
+  height: 4px;
+  border-radius: 3px;
+  background: var(--noema-visualtex-tool-color, currentColor);
+}
+
+.noema-visualtex-color-palette {
+  position: fixed;
+  z-index: 1600;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: repeat(7, 24px);
+  gap: 5px;
+  width: 220px;
+  border: 1px solid var(--aaron-paper-line, #414b61);
+  border-radius: 9px;
+  padding: 9px;
+  background: var(--aaron-paper, #151b28);
+  box-shadow: 0 12px 36px rgb(0 0 0 / 38%);
+}
+
+.noema-visualtex-color-swatch {
+  position: relative;
+  box-sizing: border-box;
+  width: 24px;
+  height: 24px;
+  border: 1px solid color-mix(in srgb, var(--aaron-ink, #e6ebff), transparent 62%);
+  border-radius: 6px;
+  padding: 0;
+  background: var(--noema-visualtex-swatch);
+  cursor: pointer;
+}
+
+.noema-visualtex-color-swatch:hover,
+.noema-visualtex-color-swatch:focus-visible {
+  border-color: var(--aaron-accent, #6da8ff);
+  outline: 2px solid color-mix(in srgb, var(--aaron-accent, #6da8ff), transparent 64%);
+  outline-offset: 1px;
+}
+
+.noema-visualtex-color-swatch[data-color="none"] {
+  background:
+    linear-gradient(135deg, transparent 44%, #ef5350 45% 55%, transparent 56%),
+    repeating-conic-gradient(#d9dce5 0 25%, #fff 0 50%) 0 / 10px 10px;
+}
+
+.cm-editor .noema-visualtex-toolbar select {
+  margin-right: auto;
+}
+.cm-editor .noema-visualtex-display-mathfield {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  min-height: 2.2em;
+  font-size: 1.08em;
+  text-align: center;
+}
+.cm-editor .noema-visualtex-display-mathfield::part(container),
+.cm-editor .noema-visualtex-display-mathfield::part(content) {
+  width: 100%;
+  text-align: center;
+}
 .cm-editor .cm-math-block,
 .cm-editor .cm-math-block-preview {
   display: block;
@@ -1890,20 +2163,11 @@
   font-family: var(--aaron-font-math, KaTeX_Main, "Times New Roman", serif) !important;
 }
 .cm-editor .katex {
-  color: var(--aaron-math-ink, #d7defb);
-}
-.cm-editor .katex .mathnormal,
-.cm-editor .katex .mord.mathnormal {
-  color: var(--aaron-math-accent, #aebfff);
-}
-.cm-editor .katex .mrel,
-.cm-editor .katex .mbin,
-.cm-editor .katex .mpunct {
-  color: color-mix(in srgb, var(--aaron-math-ink, #d7defb), var(--aaron-ink, #e2eaff) 18%);
+  color: inherit;
 }
 .cm-editor .katex .frac-line,
 .cm-editor .katex .sqrt-line {
-  border-color: color-mix(in srgb, var(--aaron-math-muted, #9aa8c8), var(--aaron-ink, #e2eaff) 12%);
+  border-color: currentColor;
 }
 .cm-editor .katex .mord.mathnormal {
   font-family: var(--aaron-font-math, KaTeX_Math, "Times New Roman", serif) !important;
@@ -1915,7 +2179,7 @@
   display: block;
   box-sizing: border-box;
   margin: 0;
-  color: var(--aaron-math-ink, #d7defb);
+  color: inherit;
   font: 14px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   white-space: pre-wrap;
 }
@@ -1957,7 +2221,7 @@
 /* ─── Math preview widgets ───────────────────────────────────────── */
 .cm-editor .aaronnote-math-inline {
   display: inline-block;
-  color: var(--aaron-math-ink, #d7defb);
+  color: inherit;
   vertical-align: -0.08em;
   cursor: text;
 }
@@ -1966,15 +2230,15 @@
   width: fit-content;
   max-width: 100%;
   margin: 0;
-  color: var(--aaron-math-ink, #d7defb);
+  color: inherit;
   overflow: visible;
   text-align: center;
   cursor: text;
 }
 .cm-editor .cm-math-block > .katex-display,
 .cm-editor .aaronnote-math-block > .katex-display {
-  display: inline-block;
-  width: auto;
+  display: block;
+  width: 100%;
   max-width: 100%;
   margin: 0;
   overflow: visible;

@@ -1,0 +1,10 @@
+{
+  "id": "noema.copilot",
+  "name": "GitHub Copilot",
+  "description": "提供内联补全；桌面端按需启动自带 server，Emacs 端复用现有 copilot.el 连接。",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "main": "main.mjs",
+  "enabledByDefault": true,
+  "configurable": false
+}

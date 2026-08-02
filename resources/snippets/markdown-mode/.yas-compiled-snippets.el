@@ -95,7 +95,7 @@
 			"Lemma block" nil ("Noema local") nil
 			"/Users/hc/.config/emacs/snippets/markdown-mode/lemma"
 			nil nil)
-		       (";" "$${1:x}$ $0\n" "Inline math" nil
+		       (";" "$$1$ $0\n" "Inline math" nil
 			("Noema local") nil
 			"/Users/hc/.config/emacs/snippets/markdown-mode/inline-math"
 			nil nil)
