@@ -36,11 +36,17 @@ import {
   splitVisualTexDisplayRows,
   visualTexCompletionPrefix,
   visualTexCompletionRect,
+  visualTexBracketDirection,
   visualTexDisplayLayout,
   visualTexExplicitCommitDirection,
+  visualTexMacroArgumentCount,
   visualTexMathLiveMacros,
   visualTexMathfieldLatex,
+  visualTexMathfieldDeletionCommand,
+  visualTexMathfieldMovementCommand,
   visualTexOuterDisplayLayout,
+  resolveVisualTexMathfieldSerialization,
+  stripVisualTexPlaceholders,
   visualTexSupportsRows,
 } from "../../src/cm6/extensions/visual/widgets/visualtex-inline.ts";
 
@@ -379,7 +385,10 @@ maybeDescribe("cm6 kernel: getMarkdown / setMarkdown", () => {
         commands.push(command);
         return true;
       },
-      setValue(next: string) { value = next; },
+      insert(next: string) {
+        value = next;
+        return true;
+      },
     } as unknown as Parameters<typeof insertVisualTexInlineRow>[0];
 
     expect(insertVisualTexInlineRow(field))
@@ -423,6 +432,54 @@ maybeDescribe("cm6 kernel: getMarkdown / setMarkdown", () => {
     expect(visualTexExplicitCommitDirection({ key: "Enter", metaKey: true, altKey: true })).toBeNull();
   });
 
+  test("routes Cmd-brackets by physical direction across keyboard-layout text", () => {
+    expect(visualTexBracketDirection({
+      key: "\\",
+      code: "BracketRight",
+      metaKey: true,
+      text: "\\",
+    })).toBe("forward");
+    expect(visualTexBracketDirection({
+      key: "]",
+      code: "Unidentified",
+      metaKey: true,
+    })).toBe("forward");
+    expect(visualTexBracketDirection({ key: "BracketLeft", metaKey: true })).toBe("backward");
+    expect(visualTexBracketDirection({ key: "]", ctrlKey: true })).toBe("forward");
+    expect(visualTexBracketDirection({ key: "]", metaKey: true, altKey: true })).toBeNull();
+  });
+
+  test("preserves MathLive selection semantics for shifted movement keys", () => {
+    expect(visualTexMathfieldMovementCommand({ key: "ArrowLeft" })).toBe("moveToPreviousChar");
+    expect(visualTexMathfieldMovementCommand({ key: "ArrowLeft", shiftKey: true }))
+      .toBe("extendSelectionBackward");
+    expect(visualTexMathfieldMovementCommand({ key: "ArrowDown", shiftKey: true }))
+      .toBe("extendSelectionDownward");
+    expect(visualTexMathfieldMovementCommand({ key: "Home", shiftKey: true }))
+      .toBe("extendToMathFieldStart");
+    expect(visualTexMathfieldMovementCommand({ key: "End", shiftKey: true }))
+      .toBe("extendToMathFieldEnd");
+    expect(visualTexMathfieldMovementCommand({ key: "ArrowRight", metaKey: true }))
+      .toBe("moveToMathfieldEnd");
+    expect(visualTexMathfieldMovementCommand({ key: "ArrowLeft", ctrlKey: true, shiftKey: true }))
+      .toBe("extendToGroupStart");
+    expect(visualTexMathfieldMovementCommand({ key: "ArrowRight", altKey: true }))
+      .toBe("moveToNextWord");
+    expect(visualTexMathfieldMovementCommand({ key: "PageDown" })).toBe("moveToGroupEnd");
+    expect(visualTexMathfieldMovementCommand({ key: "PageUp", shiftKey: true }))
+      .toBe("extendToGroupStart");
+  });
+
+  test("keeps modified deletion inside the active MathLive field", () => {
+    expect(visualTexMathfieldDeletionCommand({ key: "Backspace" })).toBe("deleteBackward");
+    expect(visualTexMathfieldDeletionCommand({ key: "Backspace", altKey: true }))
+      .toBe("deletePreviousWord");
+    expect(visualTexMathfieldDeletionCommand({ key: "Delete", ctrlKey: true }))
+      .toBe("deleteToGroupEnd");
+    expect(visualTexMathfieldDeletionCommand({ key: "Backspace", metaKey: true }))
+      .toBe("deleteToMathFieldStart");
+  });
+
   test("snapshots the live MathLive value before submitting", () => {
     const onInput = vi.fn();
     const field = { getValue: vi.fn(() => String.raw`\frac{a}{b}`) };
@@ -456,10 +513,55 @@ maybeDescribe("cm6 kernel: getMarkdown / setMarkdown", () => {
     expect(visualTexMathLiveMacros({
       "\\R": String.raw`\mathbb{R}`,
       "rank": String.raw`\operatorname{rank}`,
+      "\\ket": String.raw`\left|#1\right\rangle`,
+      "\\braket": String.raw`\left\langle#1\middle|#2\right\rangle`,
     })).toEqual({
-      R: { def: String.raw`\mathbb{R}`, captureSelection: false },
-      rank: { def: String.raw`\operatorname{rank}`, captureSelection: false },
+      R: { def: String.raw`\mathbb{R}`, args: 0, captureSelection: false, expand: true },
+      rank: { def: String.raw`\operatorname{rank}`, args: 0, captureSelection: false, expand: true },
+      ket: { def: String.raw`\left|#1\right\rangle`, args: 1, captureSelection: false, expand: true },
+      braket: {
+        def: String.raw`\left\langle#1\middle|#2\right\rangle`,
+        args: 2,
+        captureSelection: false,
+        expand: true,
+      },
     });
+    expect(visualTexMacroArgumentCount(String.raw`\#1 + #2 + #4`)).toBe(4);
+  });
+
+  test("writes the live expanded macro tree after an argument edit", () => {
+    const compact = String.raw`\ket{sad}\,asd`;
+    const expanded = String.raw`\left|sad\right\rangle\,asd`;
+    const initial = resolveVisualTexMathfieldSerialization(null, compact, expanded);
+    expect(initial).toEqual({
+      value: compact,
+      state: { compact, expanded, expandedWriteback: false },
+    });
+
+    const editedExpanded = String.raw`\left|said\right\rangle\,asd`;
+    const edited = resolveVisualTexMathfieldSerialization(initial.state, compact, editedExpanded);
+    expect(edited.value).toBe(editedExpanded);
+    expect(edited.state.expandedWriteback).toBe(true);
+
+    const laterCompact = String.raw`\ket{sad}\,asdf`;
+    const laterExpanded = String.raw`\left|said\right\rangle\,asdf`;
+    expect(resolveVisualTexMathfieldSerialization(
+      edited.state,
+      laterCompact,
+      laterExpanded,
+    ).value).toBe(laterExpanded);
+  });
+
+  test("never writes MathLive insertion placeholders into note source", () => {
+    expect(stripVisualTexPlaceholders(
+      String.raw`\left|\placeholder[arg][correct]{a_{\placeholder{}}}\right\rangle#?`,
+    )).toBe(String.raw`\left|a_{}\right\rangle`);
+
+    const compact = String.raw`\ket{#?}\,asd`;
+    const expanded = String.raw`\left|\placeholder{}\right\rangle\,asd`;
+    const resolved = resolveVisualTexMathfieldSerialization(null, compact, expanded);
+    expect(resolved.value).toBe(String.raw`\left|\right\rangle\,asd`);
+    expect(resolved.state.expandedWriteback).toBe(true);
   });
 
   test("installs Noema macros before MathLive parses the initial formula", () => {

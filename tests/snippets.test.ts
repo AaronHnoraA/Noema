@@ -5,11 +5,14 @@ import { createEditor } from "../src/lib.ts";
 import {
   expandSnippetBody,
   insertExpandedSnippetIntoContentEditable,
+  mathLiveSnippetTemplate,
   matchingSnippetsForPrefix,
+  matchingSnippetsAtTokenBoundary,
   SnippetSession,
   SnippetUsageStore,
   snippetBrowserCompatibility,
   snippetPopupKeyAction,
+  snippetScore,
 } from "../aaronnote/snippets.ts";
 
 class TextEditor {
@@ -107,14 +110,109 @@ describe("aaronnote snippets", () => {
     expect(matches.map((snippet) => snippet.id)).toEqual(["personal:cup", "personal:bigcup"]);
   });
 
-  test("snippet popup accepts tab and primary-modifier number but not enter", () => {
+  test("treats a plain pi snippet as an exact backslash-command completion", () => {
+    const snippet = {
+      key: "pi",
+      mode: "tex-mode",
+      body: "\\pi$0",
+    };
+    expect(snippetScore(snippet, "\\pi", false)).toBe(0);
+    expect(matchingSnippetsForPrefix([snippet], "\\pi", {
+      mode: "tex-mode",
+      context: "math",
+      allowFuzzy: false,
+    })).toEqual([snippet]);
+
+    const implies = {
+      key: "implies",
+      mode: "tex-mode",
+      body: "\\implies$0",
+    };
+    const upperPi = {
+      key: "Pi",
+      mode: "tex-mode",
+      body: "\\Pi$0",
+    };
+    expect(snippetScore(upperPi, "\\pi", false)).toBeGreaterThan(0);
+    expect(matchingSnippetsForPrefix([upperPi, implies, snippet], "\\pi", {
+      mode: "tex-mode",
+      context: "math",
+      allowFuzzy: true,
+    }).map((candidate) => candidate.key)).toEqual(["pi", "Pi", "implies"]);
+  });
+
+  test("recovers a math snippet token after MathLive discards ignored source whitespace", () => {
+    const snippets = [
+      { key: "frac", name: "Fraction", mode: "tex-mode", body: "\\frac{$1}{$2}$0" },
+      { key: "frame", name: "Frame", mode: "tex-mode", body: "\\boxed{$1}$0" },
+    ];
+    const resolved = matchingSnippetsAtTokenBoundary(snippets, "xfrac", {
+      mode: "tex-mode",
+      context: "math",
+      allowFuzzy: false,
+    });
+
+    expect(resolved.prefix).toBe("frac");
+    expect(resolved.deleteBefore).toBe(4);
+    expect(resolved.matches.map((snippet) => snippet.key)).toEqual(["frac"]);
+    expect(matchingSnippetsAtTokenBoundary(snippets, String.raw`\frac`, {
+      mode: "tex-mode",
+      context: "math",
+    }).prefix).toBe(String.raw`\frac`);
+  });
+
+  test("snippet popup accepts Enter only for the math company surface", () => {
     expect(snippetPopupKeyAction({ key: "Enter" })).toEqual({ type: "consume" });
+    expect(snippetPopupKeyAction({ key: "Enter", acceptEnter: true })).toEqual({ type: "accept" });
     expect(snippetPopupKeyAction({ key: "Tab" })).toEqual({ type: "accept" });
     expect(snippetPopupKeyAction({ key: "2", commandKey: true })).toEqual({ type: "select", index: 1 });
     expect(snippetPopupKeyAction({ key: "3", altKey: true })).toEqual({ type: "select", index: 2 });
     expect(snippetPopupKeyAction({ key: "0", commandKey: true })).toEqual({ type: "select", index: 9 });
     expect(snippetPopupKeyAction({ key: "4", commandKey: true, ctrlKey: true })).toEqual({ type: "select", index: 3 });
     expect(snippetPopupKeyAction({ key: "Tab", isComposing: true })).toEqual({ type: "none" });
+    expect(snippetPopupKeyAction({ key: " " })).toEqual({ type: "none" });
+    expect(snippetPopupKeyAction({ key: "ArrowDown", shiftKey: true })).toEqual({ type: "none" });
+    expect(snippetPopupKeyAction({ key: "Home", shiftKey: true })).toEqual({ type: "none" });
+  });
+
+  test("preserves MathLive tabstop defaults, nesting, numeric order, and mirrors", () => {
+    const template = mathLiveSnippetTemplate({
+      key: "styled",
+      mode: "tex-mode",
+      body: "\\mathcal{${1:F}}+${3:${2:x}}+${1}$0",
+    }, "test");
+
+    expect(template.latex).toBe(
+      String.raw`\mathcal{\placeholder[test-t1-o0]{F}}+\placeholder[test-t3-o0]{\placeholder[test-t2-o0]{x}}+\placeholder[test-t1-o1]{F}`,
+    );
+    expect(template.tabstops).toEqual([
+      { index: 1, primaryId: "test-t1-o0", promptIds: ["test-t1-o0", "test-t1-o1"] },
+      { index: 2, primaryId: "test-t2-o0", promptIds: ["test-t2-o0"] },
+      { index: 3, primaryId: "test-t3-o0", promptIds: ["test-t3-o0"] },
+    ]);
+  });
+
+  test("marks only terminal TeX control-word snippets for a source separator", () => {
+    expect(mathLiveSnippetTemplate({
+      key: "otimes",
+      mode: "tex-mode",
+      body: "\\otimes$0",
+    }, "operator-boundary").needsFinalSourceBoundary).toBe(true);
+    expect(mathLiveSnippetTemplate({
+      key: "frac",
+      mode: "tex-mode",
+      body: "\\frac{$1}{$2}$0",
+    }, "group-boundary").needsFinalSourceBoundary).toBeUndefined();
+    expect(mathLiveSnippetTemplate({
+      key: "linebreak",
+      mode: "tex-mode",
+      body: "\\\\$0",
+    }, "control-symbol-boundary").needsFinalSourceBoundary).toBeUndefined();
+    expect(mathLiveSnippetTemplate({
+      key: "prompt-after-command",
+      mode: "tex-mode",
+      body: "\\pi${1:x}$0",
+    }, "prompt-boundary").needsFinalSourceBoundary).toBeUndefined();
   });
 
   test("expands nested tabstops inside placeholder defaults", () => {

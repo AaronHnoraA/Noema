@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "@voidzero-dev/vite-plus-test";
-import { mkdtemp, mkdir, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 
@@ -28,6 +28,24 @@ describe("server snippet catalog", () => {
   test("preserves intentional body whitespace", () => {
     const parsed = parseSnippetBody("# key: x\n# --\nbody  \n\n");
     expect(parsed.body).toBe("body  \n");
+  });
+
+  test("keeps two-argument quantum macro snippets arity-correct", async () => {
+    const root = join(process.cwd(), "resources", "snippets", "tex-mode");
+    const qbraket = parseSnippetBody(await readFile(join(root, "qbraket"), "utf8"));
+    const brk = parseSnippetBody(await readFile(join(root, "brk"), "utf8"));
+
+    expect(qbraket.body).toBe("\\braket{${1:\\phi}}{${2:\\psi}}$0");
+    expect(brk.body).toBe("\\braket{ $1 }{ $2 } $3");
+  });
+
+  test("uses an invisible final stop for both Noema text snippets", async () => {
+    const root = join(process.cwd(), "resources", "snippets", "tex-mode");
+    const text = parseSnippetBody(await readFile(join(root, "text"), "utf8"));
+    const shortText = parseSnippetBody(await readFile(join(root, "snippet-3"), "utf8"));
+
+    expect(text.body).toBe("\\text{$1}$0");
+    expect(shortText.body).toBe("\\text{$1}$0");
   });
 
   test("uses explicit priority, merges upstream weight, and classifies backtick snippets", async () => {

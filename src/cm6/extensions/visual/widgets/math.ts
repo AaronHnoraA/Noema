@@ -1154,11 +1154,7 @@ class MathInlinePlugin {
     this.active = null;
     session.editor?.destroy();
     session.editor = null;
-    const following = view.state.doc.sliceString(session.to, Math.min(view.state.doc.length, session.to + 1));
-    const advanceThroughExistingSpace = direction === "space-forward" && /^\s$/u.test(following);
-    const addTrailingSpace = direction === "space-forward" && !empty && !advanceThroughExistingSpace;
     const bodyChanged = empty || insert !== session.original;
-    const changed = bodyChanged || addTrailingSpace;
     const nextTo = empty ? session.from : session.from + 4 + insert.length;
     const anchor = direction == null
       ? null
@@ -1166,18 +1162,13 @@ class MathInlinePlugin {
         ? session.from
         : direction === "backward"
           ? session.from
-          : direction === "space-forward"
-            ? nextTo + 1
-            : nextTo;
+          : nextTo;
     dispatchMathEditState(view, false, "inline");
     view.dispatch({
-      ...(changed ? {
+      ...(bodyChanged ? {
         changes: empty
           ? { from: session.from, to: session.to, insert: "" }
-          : [
-              ...(bodyChanged ? [{ from: session.from + 2, to: session.to - 2, insert }] : []),
-              ...(addTrailingSpace ? [{ from: session.to, to: session.to, insert: " " }] : []),
-            ],
+          : { from: session.from + 2, to: session.to - 2, insert },
       } : {}),
       ...(anchor == null ? {} : { selection: { anchor } }),
     });

@@ -109,7 +109,7 @@
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/theorem"
 			nil nil)
-		       ("text" "\\text{$1}$2\n" "Text Environment" nil
+		       ("text" "\\text{$1}$0\n" "Text Environment" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/text"
 			nil nil)
@@ -300,7 +300,7 @@
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/snippet-4"
 			nil nil)
-		       ("\"" "\\text{$1}$2\n"
+		       ("\"" "\\text{$1}$0\n"
 			"Text Environment (short)" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/snippet-3"

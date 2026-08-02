@@ -1736,15 +1736,22 @@ body[data-host-mode="server"][data-server-reader-editing-aids="false"] :is(
   box-sizing: border-box;
   display: flex;
   align-items: center;
-  min-height: clamp(170px, 28vh, 260px);
+  min-height: clamp(128px, 21vh, 196px);
   width: 100%;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
   border: 1px solid var(--aaron-paper-line);
   border-left: 3px solid transparent;
   border-radius: 8px;
-  padding: clamp(28px, 4vh, 52px) clamp(58px, 6vw, 92px);
+  padding: clamp(20px, 3vh, 38px) clamp(32px, 4vw, 62px);
   background: var(--aaron-paper);
   box-shadow: 0 8px 28px rgb(0 0 0 / 8%);
+}
+
+.aaronnote-livetex-formula-row::-webkit-scrollbar,
+.aaronnote-livetex-editor .noema-visualtex-formula-row::-webkit-scrollbar {
+  display: none;
 }
 
 .aaronnote-livetex-formula-row:focus-within,
@@ -1830,12 +1837,13 @@ body[data-host-mode="server"][data-server-reader-editing-aids="false"] :is(
   display: block;
   width: 100%;
   min-width: 0;
-  overflow: visible;
+  overflow-x: auto;
+  overflow-y: hidden;
   border: 0 !important;
   padding: 0 !important;
   background: transparent !important;
   color: inherit;
-  font-size: calc(2.45rem * var(--noema-livetex-zoom, 1));
+  font-size: calc(2.05rem * var(--noema-livetex-zoom, 1));
   text-align: inherit;
   --caret-color: var(--aaron-accent);
   --selection-background-color: color-mix(in srgb, var(--aaron-accent), transparent 68%);
@@ -1845,11 +1853,25 @@ body[data-host-mode="server"][data-server-reader-editing-aids="false"] :is(
 .aaronnote-livetex-editor .noema-visualtex-mathfield::part(container),
 .aaronnote-livetex-editor .noema-visualtex-mathfield::part(content) {
   width: 100%;
-  overflow: visible;
   border: 0;
   padding: 0;
   background: transparent;
   text-align: inherit;
+}
+
+.aaronnote-livetex-editor .noema-visualtex-mathfield::part(container) {
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.aaronnote-livetex-editor .noema-visualtex-mathfield::part(content) {
+  width: max-content;
+  min-width: 100%;
+}
+
+.aaronnote-livetex-editor .noema-visualtex-mathfield::-webkit-scrollbar {
+  display: none;
 }
 
 .aaronnote-livetex-editor .noema-visualtex-mathfield::part(menu-toggle),

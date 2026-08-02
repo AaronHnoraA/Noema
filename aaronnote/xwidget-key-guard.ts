@@ -49,6 +49,7 @@ type EmacsKeyForwardOptions = {
 
 type MathHostKeyDetail = {
   key: string;
+  code?: string;
   text?: string;
   ctrlKey?: boolean;
   metaKey?: boolean;
@@ -72,6 +73,15 @@ const XWIDGET_SPECIAL_KEYS = new Set<XwidgetSpecialKey>([
 const XWIDGET_SHIFT_TAB_KEYS = new Set(["Backtab", "ISO_Left_Tab", "Shift-Tab"]);
 const DUPLICATE_BEFOREINPUT_MS = 80;
 let lastHandledKeydown: { editor: Editor; key: string; at: number } | null = null;
+type MathBeforeInputExpectation = {
+  editor: Editor;
+  at: number;
+  kind: "key" | "text" | "modifier-leak";
+  key?: string;
+  data?: string;
+  leakedData?: string[];
+};
+let lastHandledMathKeydown: MathBeforeInputExpectation | null = null;
 
 function targetElement(target: EventTarget | null): Element | null {
   if (target instanceof Element) return target;
@@ -144,9 +154,21 @@ function controlKeyFromInputEvent(event: InputEvent): XwidgetControlKey | null {
 
 function specialKeyFromKeyboardEvent(event: KeyboardEvent): XwidgetSpecialKey | null {
   if (XWIDGET_SHIFT_TAB_KEYS.has(event.key)) return "Tab";
+  if (event.code === "NumpadEnter" || /^(?:Return|RET|CR|NumpadEnter)$/i.test(event.key)) {
+    return "Enter";
+  }
   return XWIDGET_SPECIAL_KEYS.has(event.key as XwidgetSpecialKey)
     ? event.key as XwidgetSpecialKey
     : null;
+}
+
+function printableMathKeyFromKeyboardEvent(event: KeyboardEvent): string {
+  // Older xwidget WebKit reports physical Space as "Spacebar" (and some host
+  // adapters use "Space"/"SPC") instead of the modern single-space key.
+  if (event.code === "Space" || event.key === "Spacebar" || event.key === "Space" || event.key === "SPC") {
+    return " ";
+  }
+  return event.key;
 }
 
 function shiftForSpecialKeyboardEvent(event: KeyboardEvent): boolean {
@@ -214,6 +236,66 @@ function recentlyHandledKeydown(editor: Editor, key: string): boolean {
       && lastHandledKeydown.key === key
       && nowMs() - lastHandledKeydown.at < DUPLICATE_BEFOREINPUT_MS,
   );
+}
+
+function recentMathBeforeInputExpectation(editor: Editor): MathBeforeInputExpectation | null {
+  if (!lastHandledMathKeydown
+      || lastHandledMathKeydown.editor !== editor
+      || nowMs() - lastHandledMathKeydown.at >= DUPLICATE_BEFOREINPUT_MS) {
+    lastHandledMathKeydown = null;
+    return null;
+  }
+  return lastHandledMathKeydown;
+}
+
+function modifierLeakExpectation(event: KeyboardEvent): Omit<MathBeforeInputExpectation, "editor" | "at"> | null {
+  if (!(event.metaKey || event.ctrlKey) || event.altKey) return null;
+  const tokens = [event.code, event.key];
+  const physical = tokens.some((token) => token === "BracketLeft" || token === "[")
+    ? ["[", "{"]
+    : tokens.some((token) => token === "BracketRight" || token === "]")
+      ? ["]", "}", "\\"]
+      : tokens.some((token) => token === "Slash" || token === "/")
+        ? ["/", "?"]
+        : null;
+  if (!physical) return null;
+  if (event.key.length === 1) physical.push(event.key);
+  return { kind: "modifier-leak", leakedData: [...new Set(physical)] };
+}
+
+function handledMathKeyExpectation(
+  event: KeyboardEvent,
+  key: string,
+): Omit<MathBeforeInputExpectation, "editor" | "at"> | null {
+  const modifierLeak = modifierLeakExpectation(event);
+  if (modifierLeak) return modifierLeak;
+  const control = controlKeyFromKeyboardEvent(event);
+  if (control) {
+    const forwardBackspace = control === "Backspace"
+      && ((event.shiftKey && !event.altKey && !event.metaKey) || (event.ctrlKey && event.shiftKey));
+    return { kind: "key", key: forwardBackspace ? "Delete" : control };
+  }
+  const special = specialKeyFromKeyboardEvent(event);
+  if (special === "Enter" || special === "Tab") return { kind: "key", key: special };
+  if (!event.metaKey && !event.ctrlKey && !event.altKey && key.length === 1) {
+    return { kind: "text", data: key };
+  }
+  return null;
+}
+
+function mathBeforeInputMatches(expectation: MathBeforeInputExpectation, event: InputEvent): boolean {
+  if (expectation.kind === "modifier-leak") {
+    return event.inputType === "insertText"
+      && typeof event.data === "string"
+      && Boolean(expectation.leakedData?.includes(event.data));
+  }
+  if (expectation.kind === "text") {
+    return event.inputType === "insertText" && event.data === expectation.data;
+  }
+  if (expectation.key === "Backspace" && /^delete.*Backward$/u.test(event.inputType)) return true;
+  if (expectation.key === "Delete" && /^delete.*Forward$/u.test(event.inputType)) return true;
+  return controlKeyFromInputEvent(event) === expectation.key
+    || specialKeyFromInputEvent(event) === expectation.key;
 }
 
 function runEditorControlKey(key: XwidgetControlKey, context: XwidgetKeyContext): void {
@@ -317,27 +399,78 @@ export function handleXwidgetHistoryKeydown(event: KeyboardEvent, context: Xwidg
 /** Route native/xwidget events through the same adapter as host-injected keys. */
 export function handleXwidgetMathKeydown(event: KeyboardEvent, context: XwidgetKeyContext): boolean {
   if (context.enabled === false || event.defaultPrevented || event.isComposing) return false;
-  if (!visualMathEditingTarget(event.target) && !visualMathEditingTarget(document.activeElement)) return false;
+  if (!visualMathEditingTarget(event.target) && !visualMathEditingTarget(document.activeElement)) {
+    // A genuinely new key outside LiveTeX must not be mistaken for the delayed
+    // beforeinput paired with the previous consumed math chord.
+    lastHandledMathKeydown = null;
+    return false;
+  }
   const control = controlKeyFromKeyboardEvent(event);
   const special = specialKeyFromKeyboardEvent(event);
   const shiftTab = XWIDGET_SHIFT_TAB_KEYS.has(event.key);
-  const key = control ?? special ?? event.key;
-  if (!dispatchMathHostKey({
+  const key = control ?? special ?? printableMathKeyFromKeyboardEvent(event);
+  // Any new key supersedes an unmatched paired-input expectation. Only keys
+  // that can actually emit beforeinput below install a fresh one.
+  lastHandledMathKeydown = null;
+  const routed = dispatchMathHostKey({
     key,
+    code: event.code,
     ctrlKey: event.ctrlKey,
     metaKey: event.metaKey,
     altKey: event.altKey,
     shiftKey: event.shiftKey || shiftTab,
-  })) return false;
+  });
+  if (!routed) {
+    // The document layer may own this chord (notably Cmd-/). Remember that it
+    // originated inside LiveTeX so a synthetic printable beforeinput cannot
+    // leak into the formula or the just-restored Markdown editor.
+    const expectation = modifierLeakExpectation(event);
+    if (expectation) {
+      lastHandledMathKeydown = {
+        editor: context.editor,
+        at: nowMs(),
+        ...expectation,
+      };
+    }
+    return false;
+  }
   hardStop(event);
   noteHandledKeydown(context.editor, key);
+  const expectation = handledMathKeyExpectation(event, key);
+  if (expectation) {
+    lastHandledMathKeydown = {
+      editor: context.editor,
+      at: nowMs(),
+      ...expectation,
+    };
+  }
   return true;
 }
 
 export function handleXwidgetMathBeforeInput(event: InputEvent, context: XwidgetKeyContext): boolean {
   if (context.enabled === false || event.defaultPrevented || event.isComposing) return false;
+  // WebKit/xwidget can emit printable input after a consumed modifier chord
+  // (Cmd-], Cmd-/, keyboard-layout variants, etc.). The LiveTeX host may have
+  // synchronously closed already, so deduplicate before checking its DOM target.
+  const expectation = recentMathBeforeInputExpectation(context.editor);
+  if (expectation) {
+    if (mathBeforeInputMatches(expectation, event)) {
+      hardStop(event);
+      lastHandledMathKeydown = null;
+      lastHandledKeydown = null;
+      return true;
+    }
+    // Do not let a different input (notably paste, or beforeinput-only Space
+    // after navigation) pay for the previous key's deduplication window.
+    lastHandledMathKeydown = null;
+  }
   if (!visualMathEditingTarget(event.target) && !visualMathEditingTarget(document.activeElement)) return false;
-  const key = controlKeyFromInputEvent(event) ?? specialKeyFromInputEvent(event);
+  const key = controlKeyFromInputEvent(event)
+    ?? specialKeyFromInputEvent(event)
+    // xwidget sometimes omits Space keydown entirely and emits only this
+    // beforeinput. Route it through Noema's three-state math Space adapter so
+    // Emacs and Noema.app cannot drift into different serialization.
+    ?? (event.inputType === "insertText" && event.data === " " ? " " : null);
   if (!key) return false;
   // A handled keydown can still be followed by WebKit's synthetic beforeinput.
   // Always suppress its control byte, but never execute the operation twice.

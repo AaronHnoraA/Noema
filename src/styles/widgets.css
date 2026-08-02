@@ -578,6 +578,9 @@
   width: 100%;
   min-width: 0;
   min-height: 2.2em;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  scrollbar-width: none;
   font-size: 1.08em;
   text-align: center;
 }
@@ -585,6 +588,18 @@
 .cm-editor .noema-visualtex-display-mathfield::part(content) {
   width: 100%;
   text-align: center;
+}
+.cm-editor .noema-visualtex-display-mathfield::part(container) {
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  scrollbar-width: none;
+}
+.cm-editor .noema-visualtex-display-mathfield::part(content) {
+  width: max-content;
+  min-width: 100%;
+}
+.cm-editor .noema-visualtex-display-mathfield::-webkit-scrollbar {
+  display: none;
 }
 .cm-editor .cm-math-block,
 .cm-editor .cm-math-block-preview {

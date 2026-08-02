@@ -3,4 +3,4 @@
 # key: qbr
 # group: QC symbols
 # --
-\braket{${1:\phi}|${2:\psi}}$0
+\braket{${1:\phi}}{${2:\psi}}$0

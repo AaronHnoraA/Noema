@@ -24,6 +24,7 @@ import {
   visualTexDisplayLayout,
   visualTexOuterDisplayLayout,
   type VisualTexInlineEditor,
+  type VisualTexCompletionTemplate,
   type VisualTexDisplayLayout,
 } from "../src/cm6/extensions/visual/widgets/visualtex-inline.ts";
 import { jumpStructuralDelimiter } from "../src/cm6/structural-jump.ts";
@@ -96,12 +97,15 @@ import {
 } from "./roam-idlink.ts";
 import {
   expandSnippetBody,
+  mathLiveSnippetTemplate,
+  matchingSnippetsAtTokenBoundary,
   matchingSnippetsForPrefix,
   SnippetSession,
   SnippetUsageStore,
   snippetDetail,
   snippetLabel,
   snippetPopupKeyAction,
+  snippetScore,
 } from "./snippets.ts";
 import { MathSnippetIndex } from "./math-snippet-index.ts";
 import {
@@ -782,6 +786,7 @@ let liveTexEditor: VisualTexInlineEditor | null = null;
 let liveTexTarget: ContextMathTarget | null = null;
 let liveTexDraft = "";
 let liveTexZoom = 1;
+let liveTexReturnScroll: EditorScrollSnapshot | null = null;
 
 const bibliographyPanel = document.createElement("section");
 bibliographyPanel.className = "aaronnote-bib-panel";
@@ -1815,28 +1820,50 @@ function captureEditorScroll(): EditorScrollSnapshot {
   };
 }
 
+let editorScrollRestoreGeneration = 0;
+
+function cancelPendingEditorScrollRestore(): void {
+  editorScrollRestoreGeneration += 1;
+}
+
 function restoreEditorScroll(snapshot: EditorScrollSnapshot | null | undefined): void {
   if (!snapshot) return;
+  const generation = ++editorScrollRestoreGeneration;
   const restore = () => {
-    host.scrollTop = snapshot.hostTop;
-    host.scrollLeft = snapshot.hostLeft;
-    editor.view.scrollDOM.scrollTop = snapshot.scrollTop;
-    editor.view.scrollDOM.scrollLeft = snapshot.scrollLeft;
-    window.scrollTo(snapshot.windowX, snapshot.windowY);
+    if (host.scrollTop !== snapshot.hostTop) host.scrollTop = snapshot.hostTop;
+    if (host.scrollLeft !== snapshot.hostLeft) host.scrollLeft = snapshot.hostLeft;
+    if (editor.view.scrollDOM.scrollTop !== snapshot.scrollTop) {
+      editor.view.scrollDOM.scrollTop = snapshot.scrollTop;
+    }
+    if (editor.view.scrollDOM.scrollLeft !== snapshot.scrollLeft) {
+      editor.view.scrollDOM.scrollLeft = snapshot.scrollLeft;
+    }
+    if ((window.scrollX || 0) !== snapshot.windowX || (window.scrollY || 0) !== snapshot.windowY) {
+      window.scrollTo(snapshot.windowX, snapshot.windowY);
+    }
   };
   restore();
   window.requestAnimationFrame(() => {
-    restore();
-    window.requestAnimationFrame(restore);
+    if (generation === editorScrollRestoreGeneration) restore();
   });
-  window.setTimeout(restore, 80);
 }
 
-function focusEditorPreservingScroll(): void {
-  const scroll = captureEditorScroll();
-  editor.focus();
+function focusEditorPreservingScroll(scroll = captureEditorScroll()): void {
+  try {
+    editor.view.contentDOM.focus({ preventScroll: true });
+  } catch (_) {
+    editor.focus();
+  }
   restoreEditorScroll(scroll);
 }
+
+// A delayed scroll repair must never overwrite a newer human action. The old
+// multi-frame + 80ms retry was the source of LiveTeX's apparent page rollback:
+// users could already be scrolling or clicking when a stale snapshot landed.
+document.addEventListener("pointerdown", cancelPendingEditorScrollRestore, { capture: true, passive: true });
+document.addEventListener("wheel", cancelPendingEditorScrollRestore, { capture: true, passive: true });
+document.addEventListener("touchmove", cancelPendingEditorScrollRestore, { capture: true, passive: true });
+document.addEventListener("keydown", cancelPendingEditorScrollRestore, { capture: true });
 
 function revealCursorAfterLayout(): void {
   const reveal = () => editor.revealCursor();
@@ -1931,11 +1958,18 @@ document.addEventListener("keydown", (event) => {
 }, { capture: true });
 const snippetSession = new SnippetSession(editor);
 const mathSnippetIndex = new MathSnippetIndex(editor);
+const MATH_EDITOR_LAYOUT_ALIASES: Record<string, string> = {
+  alig: "ali",
+  align: "ali",
+  gather: "gat",
+  split: "spl",
+  cases: "cas",
+};
 document.addEventListener("aaronnote:math-completion-request", (event) => {
   const detail = (event as CustomEvent<{
     prefix?: string;
     rect?: { left: number; top: number; bottom: number };
-    apply?: (template: string, deleteBefore: number) => boolean;
+    apply?: (template: string | VisualTexCompletionTemplate, deleteBefore: number) => boolean;
     applyLayout?: (layout: VisualTexDisplayLayout, deleteBefore: number) => boolean;
   }>).detail;
   const prefix = String(detail?.prefix || "");
@@ -1943,19 +1977,25 @@ document.addEventListener("aaronnote:math-completion-request", (event) => {
     if (snippetPopupChooseHandler) hideSnippetPopup();
     return;
   }
-  const matches = matchingMathEditorSnippets(prefix);
-  if (matches.length === 0) {
+  const completion = matchingMathEditorSnippetCompletion(prefix);
+  if (completion.matches.length === 0) {
     if (snippetPopupChooseHandler) hideSnippetPopup();
     return;
   }
-  showSnippetPopup(prefix, matches, prefix.length, detail.rect ?? null, (snippet) => {
-    const expanded = expandSnippetBody(snippet);
-    const outerLayout = visualTexOuterDisplayLayout(expanded.text);
-    if (outerLayout && detail.applyLayout) {
-      return detail.applyLayout(outerLayout, prefix.length);
-    }
-    return detail.apply!(mathLiveSnippetTemplate(snippet), prefix.length);
-  });
+  showSnippetPopup(
+    completion.prefix,
+    completion.matches,
+    completion.deleteBefore,
+    detail.rect ?? null,
+    (snippet) => {
+      const expanded = expandSnippetBody(snippet);
+      const outerLayout = visualTexOuterDisplayLayout(expanded.text);
+      if (outerLayout && detail.applyLayout) {
+        return detail.applyLayout(outerLayout, completion.deleteBefore);
+      }
+      return detail.apply!(mathLiveSnippetTemplate(snippet), completion.deleteBefore);
+    },
+  );
 });
 document.addEventListener("aaronnote:math-completion-key", (event) => {
   if (!snippetPopupChooseHandler) return;
@@ -1968,10 +2008,13 @@ document.addEventListener("aaronnote:math-completion-key", (event) => {
   }>).detail ?? {};
   if (detail.key === " ") {
     const prefix = snippetPopup.dataset.prefix || "";
-    const exact = snippetPopupItems.findIndex((snippet) => String(snippet.key || "") === prefix);
+    const query = MATH_EDITOR_LAYOUT_ALIASES[prefix.toLowerCase()] ?? prefix;
+    const exact = snippetPopupItems.findIndex((snippet) => (
+      snippetScore(snippet, query, false) === 0
+    ));
     if (exact < 0) return;
     snippetPopupIndex = exact;
-    chooseSnippetPopupItem();
+    if (!chooseSnippetPopupItem()) return;
     event.preventDefault();
     event.stopPropagation();
     return;
@@ -1983,6 +2026,7 @@ document.addEventListener("aaronnote:math-completion-key", (event) => {
     ctrlKey: Boolean(detail.ctrlKey),
     altKey: Boolean(detail.altKey),
     isComposing: false,
+    acceptEnter: true,
   }));
   if (!handled) return;
   event.preventDefault();
@@ -3357,8 +3401,9 @@ function applyFormulaLayout(target: ContextMathTarget, layout: VisualTexDisplayL
   return replaceContextMathTex(target, next, `Formula layout: ${layout}`);
 }
 
-function dismissLiveTexStudio(): void {
+function dismissLiveTexStudio(): EditorScrollSnapshot | null {
   const wasOpen = !liveTexStudio.hidden;
+  const returnScroll = liveTexReturnScroll;
   liveTexEditor?.destroy();
   liveTexEditor = null;
   liveTexTarget = null;
@@ -3366,23 +3411,25 @@ function dismissLiveTexStudio(): void {
   liveTexEditorHost.replaceChildren();
   liveTexEditorTools.replaceChildren();
   liveTexStudio.hidden = true;
+  liveTexReturnScroll = null;
   if (wasOpen) {
     host.dispatchEvent(new CustomEvent("aaronnote:inline-math-edit-state", {
       bubbles: true,
       detail: { active: false, kind: "studio" },
     }));
   }
+  return returnScroll;
 }
 
 function fallbackLiveTexStudio(target: ContextMathTarget, error: unknown): void {
-  dismissLiveTexStudio();
+  const returnScroll = dismissLiveTexStudio();
   const live = mathTargetAtPosition(Math.min(editor.view.state.doc.length, target.from + 1));
   if (live?.kind === "inline") {
-    editor.setMarkdownSelection(live.from + 2, live.to - 2);
+    editor.setMarkdownSelection(live.from + 2, live.to - 2, { scrollIntoView: false });
   } else if (live?.kind === "block") {
-    editor.setMarkdownSelection(live.contentFrom!, live.contentTo!);
+    editor.setMarkdownSelection(live.contentFrom!, live.contentTo!, { scrollIntoView: false });
   }
-  editor.focus();
+  focusEditorPreservingScroll(returnScroll ?? captureEditorScroll());
   setStatus(`${error instanceof Error ? error.message : "LiveTeX unavailable"}; 已回退到 TeX 源码与预览`);
   scheduleAssistUpdate({ mathPreview: true, cursor: true });
 }
@@ -3398,8 +3445,9 @@ function applyLiveTexStudio(focusEditor = true): boolean {
   }
   if (!latex) {
     editor.replaceMarkdownRange(live.from, live.to, "", "end");
-    dismissLiveTexStudio();
-    if (focusEditor) editor.focus();
+    const returnScroll = dismissLiveTexStudio();
+    if (focusEditor) focusEditorPreservingScroll(returnScroll ?? captureEditorScroll());
+    else restoreEditorScroll(returnScroll);
     setStatus("Empty formula removed");
     scheduleAssistUpdate({ mathPreview: true, cursor: true });
     return true;
@@ -3407,15 +3455,17 @@ function applyLiveTexStudio(focusEditor = true): boolean {
   if (live.kind === "inline" && visualTexDisplayLayout(latex) !== "equation") {
     const changed = convertInlineMathToBlock(live, latex);
     if (changed) {
-      dismissLiveTexStudio();
-      if (focusEditor) editor.focus();
+      const returnScroll = dismissLiveTexStudio();
+      if (focusEditor) focusEditorPreservingScroll(returnScroll ?? captureEditorScroll());
+      else restoreEditorScroll(returnScroll);
     }
     return changed;
   }
   const changed = replaceContextMathTex(live, latex, "Formula updated in LiveTeX; save queued");
   if (changed) {
-    dismissLiveTexStudio();
-    if (focusEditor) editor.focus();
+    const returnScroll = dismissLiveTexStudio();
+    if (focusEditor) focusEditorPreservingScroll(returnScroll ?? captureEditorScroll());
+    else restoreEditorScroll(returnScroll);
   }
   return changed;
 }
@@ -3427,12 +3477,14 @@ function closeLiveTexStudioWithApply(): void {
 
 function openContextLiveTex(target: ContextMathTarget, returnMode?: VimLiteMode): boolean {
   if (rejectReadOnlyAction("Read-only pane")) return false;
+  const returnScroll = captureEditorScroll();
   finishInlineMathEditing(editor.view);
   const live = mathTargetAtPosition(Math.min(editor.view.state.doc.length, target.from + 1)) ?? target;
   dismissLiveTexStudio();
   // Context-menu buttons receive focus before their action runs. Preserve the
   // mode captured when the menu opened instead of the blur-reset mode.
   visualMathReturnMode = returnMode ?? vim.mode();
+  liveTexReturnScroll = returnScroll;
   liveTexTarget = { ...live };
   liveTexDraft = normalizeVisualTexLatex(live.tex);
   liveTexZoom = 1;
@@ -3460,6 +3512,7 @@ function openContextLiveTex(target: ContextMathTarget, returnMode?: VimLiteMode)
     },
     onUnavailable: (error) => fallbackLiveTexStudio(live, error),
   });
+  restoreEditorScroll(returnScroll);
   return true;
 }
 
@@ -4672,6 +4725,7 @@ function runSourceToggleShortcut(event: KeyboardEvent): boolean {
   if (!primaryMod(event) || event.shiftKey || event.altKey || event.isComposing) return false;
   if (event.key !== "/" && event.code !== "Slash") return false;
   event.preventDefault();
+  if (!commitActiveLiveTexForBoundary(true)) return true;
   togglePresentationOrSource();
   return true;
 }
@@ -7540,16 +7594,15 @@ function mathSnippetCandidates(): SnippetSummary[] {
   return [...snippets, ...mathSnippetIndex.candidates()];
 }
 
-function matchingMathEditorSnippets(prefix: string): SnippetSummary[] {
-  const layoutAliases: Record<string, string> = {
-    alig: "ali",
-    align: "ali",
-    gather: "gat",
-    split: "spl",
-    cases: "cas",
-  };
-  const query = layoutAliases[prefix.toLowerCase()] ?? prefix;
-  return matchingSnippetsForPrefix(mathSnippetCandidates(), query, {
+function matchingMathEditorSnippetCompletion(prefix: string): {
+  prefix: string;
+  deleteBefore: number;
+  matches: SnippetSummary[];
+} {
+  const query = MATH_EDITOR_LAYOUT_ALIASES[prefix.toLowerCase()];
+  const candidates = mathSnippetCandidates()
+    .filter((snippet) => !snippet.context || snippet.context.startsWith("math"));
+  const options = {
     kind: currentSnippetKind(),
     mode: "tex-mode",
     limit: 10,
@@ -7557,22 +7610,15 @@ function matchingMathEditorSnippets(prefix: string): SnippetSummary[] {
     context: "math",
     usage: snippetUsage,
     documentFrequency: mathSnippetIndex.frequencies(),
-  }).filter((snippet) => !snippet.context || snippet.context.startsWith("math"));
-}
-
-function mathLiveSnippetTemplate(snippet: SnippetSummary): string {
-  const expanded = expandSnippetBody(snippet);
-  const stops = expanded.tabstops
-    .filter((stop) => stop.primary && stop.index !== 0)
-    .sort((a, b) => b.from - a.from || b.to - a.to);
-  let template = expanded.text;
-  let coveredFrom = Number.POSITIVE_INFINITY;
-  for (const stop of stops) {
-    if (stop.to > coveredFrom) continue;
-    template = `${template.slice(0, stop.from)}#?${template.slice(stop.to)}`;
-    coveredFrom = stop.from;
+  } as const;
+  if (query) {
+    return {
+      prefix,
+      deleteBefore: prefix.length,
+      matches: matchingSnippetsForPrefix(candidates, query, options),
+    };
   }
-  return template;
+  return matchingSnippetsAtTokenBoundary(candidates, prefix, options);
 }
 
 function builtinDisplayMathSnippetP(snippet: SnippetSummary): boolean {
@@ -8074,7 +8120,7 @@ function renderSnippetPopup(prefix: string, rect: { left: number; top: number; b
   const nextKey = `${prefix}\n${snippetPopupIndex}\n${snippetPopupItems.map((snippet) => `${snippet.mode}:${snippet.key}:${snippet.name}`).join("\n")}`;
   if (!snippetPopup.hidden && snippetRenderKey === nextKey) {
     placeFloating(snippetPopup, rect);
-    snippetPopup.querySelector(".aaronnote-snippet-option.is-active")?.scrollIntoView({ block: "nearest" });
+    revealSnippetPopupActiveOption();
     return;
   }
   snippetRenderKey = nextKey;
@@ -8114,7 +8160,9 @@ function renderSnippetPopup(prefix: string, rect: { left: number; top: number; b
       snippetPopupIndex = index;
       chooseSnippetPopupItem();
     });
-    button.addEventListener("mouseenter", () => {
+    // Do not let a popup appearing under a stationary pointer steal the
+    // keyboard selection. A real pointer movement still selects the row.
+    button.addEventListener("pointermove", () => {
       if (snippetPopupIndex === index) return;
       snippetPopupIndex = index;
       updateSnippetPopupActiveOption();
@@ -8125,7 +8173,18 @@ function renderSnippetPopup(prefix: string, rect: { left: number; top: number; b
   snippetPopup.setAttribute("aria-activedescendant", `aaronnote-snippet-option-${snippetPopupIndex}`);
   snippetPopup.hidden = false;
   placeFloating(snippetPopup, rect);
-  snippetPopup.querySelector(".aaronnote-snippet-option.is-active")?.scrollIntoView({ block: "nearest" });
+  revealSnippetPopupActiveOption();
+}
+
+function revealSnippetPopupActiveOption(): void {
+  const option = snippetPopup.querySelector<HTMLElement>(".aaronnote-snippet-option.is-active");
+  if (!option || snippetPopup.clientHeight <= 0) return;
+  const top = option.offsetTop;
+  const bottom = top + option.offsetHeight;
+  if (top < snippetPopup.scrollTop) snippetPopup.scrollTop = top;
+  else if (bottom > snippetPopup.scrollTop + snippetPopup.clientHeight) {
+    snippetPopup.scrollTop = bottom - snippetPopup.clientHeight;
+  }
 }
 
 function updateSnippetPopupActiveOption(): void {
@@ -8135,7 +8194,7 @@ function updateSnippetPopupActiveOption(): void {
     button.setAttribute("aria-selected", active ? "true" : "false");
   });
   snippetPopup.setAttribute("aria-activedescendant", `aaronnote-snippet-option-${snippetPopupIndex}`);
-  snippetPopup.querySelector(".aaronnote-snippet-option.is-active")?.scrollIntoView({ block: "nearest" });
+  revealSnippetPopupActiveOption();
 }
 
 function showSnippetPopup(
@@ -8497,9 +8556,9 @@ function updateSnippetPopup(ctx: ReturnType<typeof editor.cursorContext>): void 
   showSnippetPopup(prefix, matches, prefix.length, ctx.rect);
 }
 
-function chooseSnippetPopupItem(): void {
+function chooseSnippetPopupItem(): boolean {
   const snippet = snippetPopupItems[snippetPopupIndex];
-  if (!snippet) return;
+  if (!snippet) return false;
   const chooseHandler = snippetPopupChooseHandler;
   if (chooseHandler) {
     hideSnippetPopup();
@@ -8509,30 +8568,31 @@ function chooseSnippetPopupItem(): void {
       snippetUsage.record(snippet);
       setStatus(`Inserted ${snippet.key || snippet.name || "formula snippet"}`);
     }
-    return;
+    return inserted;
   }
   if (snippet.provider === "choice") {
     const choice = snippet.key || "";
     hideSnippetPopup();
-    if (snippetSession.choose(choice)) {
+    const chosen = snippetSession.choose(choice);
+    if (chosen) {
       setStatus(`Snippet choice: ${choice}`);
       scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
     }
-    return;
+    return chosen;
   }
   const deleteBefore = snippetDeleteBefore;
   hideSnippetPopup();
   snippetSuppressedPrefix = "";
-  insertSnippet(snippet, deleteBefore);
-  if (snippet.provider === "wiki-create") {
+  const inserted = insertSnippet(snippet, deleteBefore);
+  if (inserted && snippet.provider === "wiki-create") {
     openWikiPageCreation(String(snippet.source || snippet.key || "").trim());
   }
+  return inserted;
 }
 
 function acceptSnippetPopupItem(): boolean {
   if (snippetPopup.hidden || snippetPopupItems.length === 0) return false;
-  chooseSnippetPopupItem();
-  return true;
+  return chooseSnippetPopupItem();
 }
 
 function applySnippetPopupKeyAction(action: ReturnType<typeof snippetPopupKeyAction>): boolean {
@@ -8561,8 +8621,7 @@ function applySnippetPopupKeyAction(action: ReturnType<typeof snippetPopupKeyAct
     case "select":
       if (action.index < 0 || action.index >= snippetPopupItems.length) return false;
       snippetPopupIndex = action.index;
-      chooseSnippetPopupItem();
-      return true;
+      return chooseSnippetPopupItem();
     case "dismiss":
       snippetSuppressedPrefix = snippetPopup.dataset.prefix ?? "";
       hideSnippetPopup();
@@ -8966,12 +9025,13 @@ function deleteHostKeyText(key: string): boolean {
   return true;
 }
 
-function routeHostKeyToMathEditor(key: VimLiteKey, text?: string): boolean {
+function routeHostKeyToMathEditor(key: VimLiteKey, text?: string, code?: string): boolean {
   if (!visualMathEditorActive) return false;
   const event = new CustomEvent("aaronnote:math-host-key", {
     cancelable: true,
     detail: {
       key: key.key,
+      code,
       text,
       ctrlKey: key.ctrlKey,
       metaKey: key.metaKey,
@@ -8986,7 +9046,9 @@ function routeHostKeyToMathEditor(key: VimLiteKey, text?: string): boolean {
 function runHostKey(body: Record<string, unknown>): boolean {
   const rawKey = String(body.key || "");
   const shiftTabAlias = rawKey === "Backtab" || rawKey === "ISO_Left_Tab" || rawKey === "Shift-Tab";
-  const key = shiftTabAlias ? "Tab" : rawKey;
+  const spaceAlias = rawKey === "Spacebar" || rawKey === "Space" || rawKey === "SPC" || body.code === "Space";
+  const enterAlias = body.code === "NumpadEnter" || /^(?:Return|RET|CR|NumpadEnter)$/i.test(rawKey);
+  const key = shiftTabAlias ? "Tab" : spaceAlias ? " " : enterAlias ? "Enter" : rawKey;
   if (!key) return false;
   const hostKey: VimLiteKey = {
     key,
@@ -8995,7 +9057,11 @@ function runHostKey(body: Record<string, unknown>): boolean {
     altKey: Boolean(body.altKey),
     shiftKey: Boolean(body.shiftKey) || shiftTabAlias,
   };
-  if (routeHostKeyToMathEditor(hostKey, typeof body.text === "string" ? body.text : undefined)) return true;
+  if (routeHostKeyToMathEditor(
+    hostKey,
+    typeof body.text === "string" ? body.text : undefined,
+    typeof body.code === "string" ? body.code : undefined,
+  )) return true;
   focusEditorPreservingScroll();
   if (key === "Escape" || key === "Esc") snippetSession.clear();
   if (handleSnippetPopupHostKey(hostKey)) {
@@ -9416,6 +9482,14 @@ document.addEventListener("keydown", (event) => {
     vim,
     enabled: modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden,
   })) return;
+  // Cmd-/ is a document-surface boundary even while MathLive owns focus: first
+  // commit the current draft, then toggle Source/WYSIWYG. Run it before the
+  // generic native-widget guard, which intentionally ignores other shortcuts.
+  if (runSourceToggleShortcut(event)) {
+    scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
+    event.stopPropagation();
+    return;
+  }
   // Native widget editors are deliberately outside the document's Vim and
   // authoring-shortcut pipeline, regardless of the current document mode.
   if (eventTargetsNativeWidgetInput(event.target)) return;
@@ -9527,11 +9601,6 @@ document.addEventListener("keydown", (event) => {
   if (vim.handleKeyDown(event)) {
     if (plainEscapeKey(event)) noteCursorPositionEvent();
     scheduleAssistUpdate({ mathPreview: true, cursor: true });
-    event.stopPropagation();
-    return;
-  }
-  if (runSourceToggleShortcut(event)) {
-    scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
     event.stopPropagation();
     return;
   }

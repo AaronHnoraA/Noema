@@ -8,7 +8,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-import type { MathfieldElement } from "mathlive";
+import type { MathfieldElement, Selector } from "mathlive";
 import "mathlive/fonts.css";
 import { normalizeVisualTexLatex } from "../../../../tex-compat.ts";
 
@@ -25,7 +25,6 @@ export type VisualTexInlineMoveDirection =
   | "backward"
   | "upward"
   | "downward"
-  | "space-forward"
   | "submit"
   | "save";
 
@@ -51,18 +50,39 @@ export type VisualTexInlineEditor = {
 export type VisualTexMathCompletionRequest = {
   prefix: string;
   rect: { left: number; top: number; bottom: number };
-  apply: (template: string, deleteBefore: number) => boolean;
+  apply: (template: string | VisualTexCompletionTemplate, deleteBefore: number) => boolean;
   applyLayout?: (layout: VisualTexDisplayLayout, deleteBefore: number) => boolean;
+};
+
+export type VisualTexCompletionTemplate = {
+  latex: string;
+  needsFinalSourceBoundary?: boolean;
+  tabstops: Array<{
+    index: number;
+    primaryId: string;
+    promptIds: string[];
+  }>;
 };
 
 export type VisualTexMathHostKey = {
   key: string;
+  code?: string;
   text?: string;
   ctrlKey?: boolean;
   metaKey?: boolean;
   altKey?: boolean;
   shiftKey?: boolean;
 };
+
+export function visualTexBracketDirection(
+  key: VisualTexMathHostKey,
+): "forward" | "backward" | null {
+  if (!(key.metaKey || key.ctrlKey) || key.altKey) return null;
+  const tokens = [key.code, key.key].filter((token): token is string => Boolean(token));
+  if (tokens.some((token) => token === "]" || /^bracketright$/i.test(token))) return "forward";
+  if (tokens.some((token) => token === "[" || /^bracketleft$/i.test(token))) return "backward";
+  return null;
+}
 
 type VisualTexStyleTarget = Pick<MathfieldElement, "selection" | "lastOffset" | "applyStyle">;
 
@@ -81,7 +101,9 @@ export function applyVisualTexStyle(
 ): [number, number] {
   const patch = style === "color" ? { color } : { backgroundColor: color };
   field.applyStyle(patch, { range, operation: "set" });
-  field.selection = { ranges: [[range[0], range[1]]], direction: "forward" };
+  withVisualTexUndoRecordingSuspended(field as object, () => {
+    field.selection = { ranges: [[range[0], range[1]]], direction: "forward" };
+  });
   return range;
 }
 
@@ -427,19 +449,22 @@ export function preloadVisualTexInlineEditor(): void {
 }
 
 function placeInitialSelection(field: MathfieldElement, entry: VisualTexInlineEntry): void {
-  if (entry.kind === "all") {
-    field.executeCommand("selectAll");
-    return;
-  }
-  if (entry.kind === "start") {
-    field.position = 0;
-    return;
-  }
-  if (entry.kind === "end") {
-    field.position = field.lastOffset;
-    return;
-  }
-  field.position = field.getOffsetFromPoint(entry.x, entry.y);
+  withVisualTexUndoRecordingSuspended(field, () => {
+    if (entry.kind === "all") {
+      field.executeCommand("selectAll");
+      return;
+    }
+    if (entry.kind === "start") {
+      field.position = 0;
+      return;
+    }
+    if (entry.kind === "end") {
+      field.position = field.lastOffset;
+      return;
+    }
+    field.position = field.getOffsetFromPoint(entry.x, entry.y);
+  });
+  stopVisualTexUndoCoalescing(field);
 }
 
 function configureNoemaMathfield(field: MathfieldElement): void {
@@ -447,33 +472,172 @@ function configureNoemaMathfield(field: MathfieldElement): void {
   field.smartFence = false;
   field.smartSuperscript = false;
   field.removeExtraneousParentheses = false;
-  // MathLive's default Space command navigates out of the current parent and
-  // serializes no whitespace. Noema gives Space an explicit TeX meaning.
-  field.mathModeSpace = "\\,";
+  // Disable MathLive's own math-space rewrite. The shared Noema key adapter
+  // below distinguishes command termination and real text spaces; ignored TeX
+  // source whitespace must never be turned into a visible spacing command.
+  field.mathModeSpace = "";
   field.maxMatrixCols = 10;
   field.mathVirtualKeyboardPolicy = "manual";
 }
 
-function createNoemaMathfield(Constructor: MathLiveModule["MathfieldElement"]): MathfieldElement {
-  // Disable MathLive's completion stack at construction time. No mount-time
-  // listener or secondary shortcut dictionary is kept alive: Noema owns the
-  // only snippet index, popup, ranking and key handling used by LiveTeX.
-  // Scientific-notation rewriting is another MathLive text shortcut. Noema
-  // keeps typed TeX stable and offers structural changes through its own
-  // snippet/company completion pipeline instead.
+const visualTexCaretRevealPending = new WeakSet<object>();
+
+function composedParentElement(node: Node): HTMLElement | null {
+  const parent = node.parentNode;
+  if (parent instanceof HTMLElement) return parent;
+  if (parent instanceof ShadowRoot && parent.host instanceof HTMLElement) return parent.host;
+  return null;
+}
+
+/**
+ * Reveal the MathLive caret only inside the formula's own horizontal
+ * viewports. DOM `scrollIntoView()` is deliberately forbidden here: it walks
+ * every scrollable ancestor and used to pull the entire CM6 page back to the
+ * formula after a selection/focus event.
+ */
+export function revealVisualTexCaretHorizontally(
+  field: MathfieldElement,
+  caret: HTMLElement,
+): void {
+  const visualHost = field.closest<HTMLElement>("[data-cm-visual-math='active']");
+  const viewports: HTMLElement[] = [];
+  let current: HTMLElement | null = caret;
+  while (current) {
+    if (!viewports.includes(current)
+        && current.clientWidth > 0
+        && current.scrollWidth > current.clientWidth + 1) {
+      viewports.push(current);
+    }
+    if (current === visualHost) break;
+    current = composedParentElement(current);
+  }
+
+  for (const viewport of viewports) {
+    const caretRect = caret.getBoundingClientRect();
+    const viewportRect = viewport.getBoundingClientRect();
+    if (![caretRect.left, caretRect.right, viewportRect.left, viewportRect.right]
+      .every(Number.isFinite)) continue;
+    const padding = Math.min(16, Math.max(4, viewport.clientWidth / 8));
+    if (caretRect.left < viewportRect.left + padding) {
+      viewport.scrollLeft -= viewportRect.left + padding - caretRect.left;
+    } else if (caretRect.right > viewportRect.right - padding) {
+      viewport.scrollLeft += caretRect.right - (viewportRect.right - padding);
+    }
+  }
+}
+
+export function revealVisualTexCaret(field: MathfieldElement): void {
+  if (visualTexCaretRevealPending.has(field)) return;
+  visualTexCaretRevealPending.add(field);
+  requestAnimationFrame(() => {
+    visualTexCaretRevealPending.delete(field);
+    if (!field.isConnected) return;
+    const caret = field.shadowRoot?.querySelector<HTMLElement>(
+      ".ML__caret, .ML__text-caret, .ML__latex-caret",
+    );
+    if (caret) revealVisualTexCaretHorizontally(field, caret);
+  });
+}
+
+function focusVisualTexField(field: MathfieldElement | null | undefined): void {
+  if (!field) return;
+  const focus = (field as unknown as { focus?: (options?: FocusOptions) => void }).focus;
+  if (typeof focus !== "function") return;
+  try {
+    focus.call(field, { preventScroll: true });
+  } catch (_) {
+    // Older WebKit builds may reject FocusOptions. This fallback is retained
+    // for compatibility; current Noema and xwidget WebKit both support it.
+    focus.call(field);
+  }
+}
+
+export function createNoemaMathfield(
+  Constructor: MathLiveModule["MathfieldElement"],
+): MathfieldElement {
+  // Noema owns the only snippet index, popup, ranking and key handling used by
+  // LiveTeX. MathLive warns when these are passed as public constructor
+  // options, but its internal deferred option path is precisely what all
+  // property setters use before mount. Install the empty shortcut dictionary
+  // there so no native provider exists even during the mount microtask.
   Constructor.scientificNotationTemplate = null;
-  const field = new Constructor({
+  const field = new Constructor();
+  const nativeSnippetOptions = {
     inlineShortcuts: {},
+    onInlineShortcut: () => "",
     popoverPolicy: "off",
     environmentPopoverPolicy: "off",
-  });
+  };
+  const deferred = field as unknown as {
+    _setOptions?: (options: typeof nativeSnippetOptions) => void;
+  };
+  deferred._setOptions?.(nativeSnippetOptions);
+  field.addEventListener("mount", () => {
+    // Reassert the boundary against future MathLive deferred-state changes.
+    field.inlineShortcuts = {};
+    field.onInlineShortcut = () => "";
+    field.popoverPolicy = "off";
+    field.environmentPopoverPolicy = "off";
+  }, { once: true });
+  field.addEventListener("input", () => revealVisualTexCaret(field));
+  field.addEventListener("selection-change", () => revealVisualTexCaret(field));
+  field.addEventListener("focusin", () => revealVisualTexCaret(field));
+  // Every MathLive selection command calls Mathfield.scrollIntoView(). Its
+  // default first calls host.scrollIntoView({ inline: "nearest" }), which can
+  // drag a wide display formula and the entire CM6 page back to the formula's
+  // left edge. Supplying this callback disables that page-level branch while
+  // retaining MathLive's own internal caret scrolling below it.
+  field.onScrollIntoView = () => revealVisualTexCaret(field);
   configureNoemaMathfield(field);
   return field;
 }
 
 /** Read only standard TeX from MathLive; editor prompts never enter the note. */
 export function visualTexMathfieldLatex(field: Pick<MathfieldElement, "getValue">): string {
-  return normalizeVisualTexLatex(field.getValue("latex-without-placeholders"));
+  synchronizeVisualTexSnippetMirrors(field as object);
+  synchronizeVisualTexMacroPromptArguments(field as object);
+  const rawCompact = normalizeVisualTexLatex(field.getValue("latex-without-placeholders"));
+  if (!rawCompact.includes(`\\${VISUAL_TEX_SOURCE_SPACE_MACRO_NAME}`)) {
+    visualTexLastSourceSpaceBoundary.delete(field as object);
+  }
+  const compact = normalizeVisualTexMathLiveOutput(
+    rawCompact,
+  );
+  const previous = visualTexMathfieldSerializationStates.get(field as object);
+  if (!previous) return compact;
+
+  const expanded = normalizeVisualTexMathLiveOutput(
+    stripVisualTexPlaceholders(normalizeVisualTexLatex(field.getValue("latex-expanded"))),
+  );
+  const resolved = resolveVisualTexMathfieldSerialization(previous, compact, expanded);
+  visualTexMathfieldSerializationStates.set(field as object, resolved.state);
+  return resolved.value;
+}
+
+/**
+ * Return a prompt-preserving source string suitable for reparsing MathLive's
+ * atom tree. The same compact-vs-expanded decision used for note writeback is
+ * essential here: reparsing stale compact macro arguments would silently undo
+ * an earlier edit made inside an existing custom macro.
+ */
+function visualTexMathfieldReparseSource(field: Pick<MathfieldElement, "getValue">): string {
+  synchronizeVisualTexSnippetMirrors(field as object);
+  synchronizeVisualTexMacroPromptArguments(field as object);
+  const rawCompact = normalizeVisualTexLatex(field.getValue("latex"));
+  const rawExpanded = normalizeVisualTexLatex(field.getValue("latex-expanded"));
+  const compact = normalizeVisualTexMathLiveOutput(
+    normalizeVisualTexLatex(field.getValue("latex-without-placeholders")),
+  );
+  const expanded = normalizeVisualTexMathLiveOutput(
+    stripVisualTexPlaceholders(rawExpanded),
+  );
+  const resolved = resolveVisualTexMathfieldSerialization(
+    visualTexMathfieldSerializationStates.get(field as object) ?? null,
+    compact,
+    expanded,
+  );
+  visualTexMathfieldSerializationStates.set(field as object, resolved.state);
+  return resolved.state.expandedWriteback ? rawExpanded : rawCompact;
 }
 
 export function syncVisualTexMathfieldDraft(
@@ -490,7 +654,966 @@ function visualTexMathfieldRangeLatex(
   from: number,
   to: number,
 ): string {
-  return normalizeVisualTexLatex(field.getValue(from, to, "latex-without-placeholders"));
+  // A custom MacroAtom keeps its invocation arguments as an immutable source
+  // string. Its expanded body is the only range representation that follows
+  // edits made inside the macro, so completion/caret operations must read the
+  // live tree rather than those cached arguments.
+  return stripVisualTexPlaceholders(
+    normalizeVisualTexMathLiveOutput(
+      normalizeVisualTexLatex(field.getValue(from, to, "latex-expanded")),
+    ),
+  );
+}
+
+export type VisualTexMathLiveMacro = {
+  def: string;
+  args: number;
+  captureSelection: false;
+  expand: boolean;
+};
+
+export type VisualTexMathfieldSerializationState = {
+  compact: string;
+  expanded: string;
+  expandedWriteback: boolean;
+};
+
+const visualTexMathfieldSerializationStates = new WeakMap<object, VisualTexMathfieldSerializationState>();
+// MathLive intentionally drops ordinary math whitespace. Keep an explicit
+// Space boundary in its transient atom model as a reserved empty macro; the
+// serializer below turns this editor-only atom back into one ordinary source
+// space before any draft reaches the note. `expand: false` keeps the atom in
+// both compact and expanded range serialization, including around user macros.
+const VISUAL_TEX_SOURCE_SPACE_MACRO_NAME = "noemaMathSpaceBoundary";
+const VISUAL_TEX_SOURCE_SPACE_MARKER = String.raw`\noemaMathSpaceBoundary `;
+const VISUAL_TEX_SOURCE_SPACE_MARKER_RE =
+  /(?:[ \t]*\\noemaMathSpaceBoundary(?![A-Za-z])[ \t]*)+/g;
+const VISUAL_TEX_CARET_MARKER_MACRO_NAME = "noemaMathCaretBoundary";
+const VISUAL_TEX_CARET_MARKER = String.raw`\noemaMathCaretBoundary{}`;
+const VISUAL_TEX_CARET_MARKER_RE = /\\noemaMathCaretBoundary(?![A-Za-z])(?:\{\})?[ \t]*/g;
+const VISUAL_TEX_SOURCE_SPACE_MACRO: VisualTexMathLiveMacro = {
+  def: "",
+  args: 0,
+  captureSelection: false,
+  expand: false,
+};
+const VISUAL_TEX_CARET_MARKER_MACRO: VisualTexMathLiveMacro = {
+  def: "",
+  args: 1,
+  captureSelection: false,
+  expand: false,
+};
+const visualTexLastSourceSpaceBoundary = new WeakMap<object, number>();
+
+type VisualTexSnippetPromptSession = {
+  groups: VisualTexCompletionTemplate["tabstops"];
+  /** MathLive offset immediately after the inserted snippet (`$0`). */
+  finalPosition: number;
+  /** Root size when the anchor was recorded; prompt edits map it by this delta. */
+  lastOffset: number;
+};
+type VisualTexPromptField = Pick<
+  MathfieldElement,
+  | "position"
+  | "lastOffset"
+  | "selection"
+  | "getPrompts"
+  | "getPromptRange"
+  | "getPromptValue"
+  | "setPromptValue"
+>;
+
+const visualTexSnippetPromptSessions = new WeakMap<object, VisualTexSnippetPromptSession[]>();
+const visualTexSnippetMirrorSync = new WeakSet<object>();
+const visualTexNoemaPromptIds = new WeakMap<object, Set<string>>();
+const visualTexCompletedPromptIds = new WeakMap<object, Set<string>>();
+const visualTexCompletedPromptGroups = new WeakMap<
+  object,
+  VisualTexSnippetPromptSession["groups"]
+>();
+const visualTexMacroArgumentTemplates = new WeakMap<object, string>();
+const visualTexUndoSanitizers = new WeakSet<object>();
+const visualTexUndoPromptSanitizing = new WeakSet<object>();
+const visualTexHistoryRecordingSuspended = new WeakSet<object>();
+
+type VisualTexUndoController = {
+  undoManager?: { recording?: boolean };
+  stopRecording?: () => void;
+  startRecording?: () => void;
+  stopCoalescingUndo?: () => void;
+  snapshot?: (operation?: string) => void;
+};
+
+function withVisualTexUndoRecordingSuspended<T>(field: object, action: () => T): T {
+  const controller = (field as { _mathfield?: VisualTexUndoController })._mathfield;
+  const wasRecording = controller?.undoManager?.recording !== false;
+  if (!controller?.stopRecording || !controller.startRecording || !wasRecording) return action();
+  controller.stopRecording();
+  try {
+    return action();
+  } finally {
+    controller.startRecording();
+  }
+}
+
+function stopVisualTexUndoCoalescing(field: object): void {
+  (field as { _mathfield?: VisualTexUndoController })
+    ._mathfield?.stopCoalescingUndo?.();
+}
+
+function snapshotVisualTexUndoState(field: object, operation: string): void {
+  (field as { _mathfield?: VisualTexUndoController })
+    ._mathfield?.snapshot?.(operation);
+}
+
+function rememberCompletedVisualTexPrompts(
+  field: object,
+  groups: VisualTexSnippetPromptSession["groups"],
+): void {
+  const completedGroups = visualTexCompletedPromptGroups.get(field) ?? [];
+  completedGroups.push(...groups.map((group) => ({
+    ...group,
+    promptIds: [...group.promptIds],
+  })));
+  // MathLive retains at most 1,000 undo states. This comfortably covers that
+  // history even for snippets with several mirrored tabstops, while keeping a
+  // long-lived editor from accumulating an unbounded registry.
+  let promptCount = completedGroups.reduce((count, group) => count + group.promptIds.length, 0);
+  while (promptCount > 4096 && completedGroups.length > 0) {
+    promptCount -= completedGroups.shift()!.promptIds.length;
+  }
+  const completed = new Set(completedGroups.flatMap((group) => group.promptIds));
+  visualTexCompletedPromptGroups.set(field, completedGroups);
+  visualTexCompletedPromptIds.set(field, completed);
+}
+
+function visualTexPromptField(field: object): VisualTexPromptField | null {
+  const candidate = field as Partial<VisualTexPromptField>;
+  return typeof candidate.getPrompts === "function"
+    && typeof candidate.getPromptRange === "function"
+    && typeof candidate.getPromptValue === "function"
+    && typeof candidate.setPromptValue === "function"
+    ? candidate as VisualTexPromptField
+    : null;
+}
+
+function registerVisualTexSnippetPrompts(
+  field: MathfieldElement,
+  tabstops: VisualTexCompletionTemplate["tabstops"],
+): void {
+  if (tabstops.length === 0) return;
+  const sessions = visualTexSnippetPromptSessions.get(field) ?? [];
+  sessions.push({
+    groups: tabstops.map((group) => ({
+      ...group,
+      promptIds: [...group.promptIds],
+    })),
+    finalPosition: field.position,
+    lastOffset: field.lastOffset,
+  });
+  visualTexSnippetPromptSessions.set(field, sessions.slice(-32));
+}
+
+type VisualTexActivePrompt = {
+  session: VisualTexSnippetPromptSession;
+  groupIndex: number;
+  promptId: string;
+  range: [number, number];
+};
+
+function activeVisualTexSnippetPrompt(field: object): VisualTexActivePrompt | null {
+  const promptField = visualTexPromptField(field);
+  const sessions = visualTexSnippetPromptSessions.get(field);
+  if (!promptField || !sessions?.length) return null;
+  const available = new Set(promptField.getPrompts());
+  const selection = promptField.selection.ranges[0];
+  if (!selection) return null;
+  const selectedFrom = Math.min(selection[0], selection[1]);
+  const selectedTo = Math.max(selection[0], selection[1]);
+  const candidates: VisualTexActivePrompt[] = [];
+  for (const session of [...sessions].reverse()) {
+    for (let groupIndex = 0; groupIndex < session.groups.length; groupIndex++) {
+      const group = session.groups[groupIndex]!;
+      for (const promptId of group.promptIds) {
+        if (!available.has(promptId)) continue;
+        const range = promptField.getPromptRange(promptId);
+        if (!range) continue;
+        const from = Math.min(range[0], range[1]);
+        const to = Math.max(range[0], range[1]);
+        const exact = selectedFrom === from && selectedTo === to;
+        const containsCaret = selectedFrom === selectedTo
+          && promptField.position >= from
+          && promptField.position <= to;
+        if (exact || containsCaret) {
+          candidates.push({ session, groupIndex, promptId, range: [from, to] });
+        }
+      }
+    }
+    if (candidates.length > 0) break;
+  }
+  return candidates.sort((a, b) => {
+    const aExact = a.range[0] === selectedFrom && a.range[1] === selectedTo ? 0 : 1;
+    const bExact = b.range[0] === selectedFrom && b.range[1] === selectedTo ? 0 : 1;
+    return aExact - bExact || (a.range[1] - a.range[0]) - (b.range[1] - b.range[0]);
+  })[0] ?? null;
+}
+
+function selectVisualTexPrompt(field: object, id: string): boolean {
+  const promptField = visualTexPromptField(field);
+  if (!promptField || !promptField.getPrompts().includes(id)) return false;
+  const range = promptField.getPromptRange(id);
+  if (!range) return false;
+  const promptMode = (field as {
+    _mathfield?: { getPrompt?: (promptId: string) => { mode?: MathfieldElement["mode"] } | undefined };
+  })._mathfield?.getPrompt?.(id)?.mode;
+  withVisualTexUndoRecordingSuspended(field, () => {
+    promptField.selection = { ranges: [[range[0], range[1]]], direction: "forward" };
+    // A non-collapsed prompt selection does not reliably make MathLive switch
+    // its model mode. Without this, a text prompt followed by math receives
+    // `$ x $` instead of a real text `x` even though it is visibly inside
+    // `\\text{...}`.
+    const modeField = field as Partial<Pick<MathfieldElement, "mode">>;
+    if (promptMode && modeField.mode !== promptMode) modeField.mode = promptMode;
+  });
+  // Assigning MathfieldElement.selection directly does not call MathLive's
+  // command-layer coalescing barrier. A structural tabstop move should split
+  // the surrounding typing into distinct, predictable undo steps.
+  stopVisualTexUndoCoalescing(field);
+  return true;
+}
+
+function joinVisualTexLexicalBoundary(left: string, right: string): string {
+  if (!/^[A-Za-z]/.test(right)) return left + right;
+  const controlWord = left.match(/\\[A-Za-z]+$/);
+  if (!controlWord) return left + right;
+  const slash = left.length - controlWord[0].length;
+  // A doubled backslash is a control symbol/row separator, not the start of a
+  // control word. Only a real TeX control word needs a lexical delimiter
+  // before an alphabetic prompt value.
+  return isEscaped(left, slash) ? left + right : `${left} ${right}`;
+}
+
+function unwrapVisualTexPromptIds(source: string, promptIds: ReadonlySet<string>): string {
+  let result = "";
+  for (let index = 0; index < source.length;) {
+    if (source.startsWith("\\placeholder", index)
+      && !/[A-Za-z]/.test(source[index + "\\placeholder".length] ?? "")) {
+      let cursor = index + "\\placeholder".length;
+      const options: Array<{ body: string; end: number }> = [];
+      while (source[cursor] === "[") {
+        const option = readDelimitedGroup(source, cursor, "[", "]");
+        if (!option) break;
+        options.push(option);
+        cursor = option.end;
+      }
+      const body = readDelimitedGroup(source, cursor, "{", "}");
+      if (body) {
+        const content = unwrapVisualTexPromptIds(body.body, promptIds);
+        if (promptIds.has(options[0]?.body ?? "")) {
+          result = joinVisualTexLexicalBoundary(result, content);
+        } else {
+          result += `${source.slice(index, cursor + 1)}${content}}`;
+        }
+        index = body.end;
+        continue;
+      }
+    }
+    result += source[index]!;
+    index++;
+  }
+  return result;
+}
+
+function finishVisualTexSnippetPromptSession(
+  field: VisualTexPromptField,
+  session: VisualTexSnippetPromptSession,
+  mappedFinal: number,
+): number {
+  const sessions = visualTexSnippetPromptSessions.get(field as object) ?? [];
+  const live = field as VisualTexPromptField & Partial<Pick<
+    MathfieldElement,
+    "getValue" | "setValue" | "insert"
+  >>;
+
+  // A completed Noema session must stop being a MathLive prompt provider.
+  // Keeping those atoms alive makes the native placeholder command wrap back
+  // to the first field (the apparent Cmd-] jump to line/formula start) and
+  // leaves an empty prompt box where users expect the invisible `$0` caret.
+  synchronizeVisualTexSnippetMirrors(field as object);
+  synchronizeVisualTexMacroPromptArguments(field as object);
+  const completedIds = new Set(session.groups.flatMap((group) => group.promptIds));
+  visualTexSnippetPromptSessions.set(
+    field as object,
+    sessions.filter((candidate) => candidate !== session),
+  );
+  if (typeof live.getValue !== "function"
+      || (typeof live.insert !== "function" && typeof live.setValue !== "function")) return mappedFinal;
+  const source = visualTexMathfieldReparseSource(live as MathfieldElement);
+  const flattened = unwrapVisualTexPromptIds(source, completedIds).replace(
+    VISUAL_TEX_SOURCE_SPACE_MARKER_RE,
+    VISUAL_TEX_SOURCE_SPACE_MARKER,
+  );
+  const distanceFromEnd = Math.max(0, field.lastOffset - mappedFinal);
+  const stillMounted = field.getPrompts().some((id) => completedIds.has(id));
+  if (flattened !== source || stillMounted) {
+    // MathfieldElement.setValue() intentionally short-circuits when its
+    // placeholder-free serialization equals VALUE, even if prompt atoms are
+    // still mounted. replaceAll forces a fresh parse. Empty boundary macros
+    // sit outside MathLive's replaceable range, so detach their old atoms
+    // first and let the flattened source recreate each boundary exactly once.
+    reparseVisualTexMathfield(field as object, live, flattened, completedIds);
+  }
+  rememberCompletedVisualTexPrompts(field as object, session.groups);
+  const registeredIds = visualTexNoemaPromptIds.get(field as object);
+  if (registeredIds) {
+    for (const id of completedIds) registeredIds.delete(id);
+  }
+  return Math.max(0, Math.min(field.lastOffset - distanceFromEnd, field.lastOffset));
+}
+
+/**
+ * A mouse click or ordinary arrow can leave every registered prompt without
+ * traversing Noema's explicit tabstop command. Flatten those abandoned prompt
+ * wrappers before the next structural action; otherwise their visible boxes
+ * survive while Cmd-] treats the formula as already being at its root edge.
+ */
+function finishInactiveVisualTexSnippetPromptSessions(field: object): boolean {
+  if (activeVisualTexSnippetPrompt(field)) return false;
+  const promptField = visualTexPromptField(field);
+  const sessions = visualTexSnippetPromptSessions.get(field);
+  const selection = promptField?.selection.ranges[0];
+  if (!promptField || !sessions?.length || !selection
+      || promptField.selection.ranges.length !== 1 || selection[0] !== selection[1]) return false;
+
+  let mappedPosition = promptField.position;
+  for (const session of [...sessions].reverse()) {
+    mappedPosition = finishVisualTexSnippetPromptSession(
+      promptField,
+      session,
+      mappedPosition,
+    );
+  }
+  withVisualTexUndoRecordingSuspended(field, () => {
+    promptField.selection = {
+      ranges: [[mappedPosition, mappedPosition]],
+      direction: "forward",
+    };
+  });
+  stopVisualTexUndoCoalescing(field);
+  return true;
+}
+
+function finishAllVisualTexSnippetPromptSessions(field: object): boolean {
+  const promptField = visualTexPromptField(field);
+  const sessions = visualTexSnippetPromptSessions.get(field);
+  if (!promptField || !sessions?.length) return false;
+  let mappedPosition = promptField.position;
+  for (const session of [...sessions].reverse()) {
+    mappedPosition = finishVisualTexSnippetPromptSession(promptField, session, mappedPosition);
+  }
+  withVisualTexUndoRecordingSuspended(field, () => {
+    promptField.selection = {
+      ranges: [[mappedPosition, mappedPosition]],
+      direction: "forward",
+    };
+  });
+  stopVisualTexUndoCoalescing(field);
+  return true;
+}
+
+export function selectAllVisualTexMathfield(field: MathfieldElement): void {
+  // Selecting the whole formula explicitly leaves snippet-entry mode. Keeping
+  // prompt wrappers mounted here makes the selection contain editor scaffolding
+  // and can resurrect its tab cycle after the selection is replaced.
+  finishAllVisualTexSnippetPromptSessions(field);
+  withVisualTexUndoRecordingSuspended(field, () => {
+    field.executeCommand("selectAll");
+  });
+}
+
+function moveVisualTexSnippetPrompt(
+  field: object,
+  backward: boolean,
+): "moved" | "final" | "exhausted" | "none" {
+  const active = activeVisualTexSnippetPrompt(field);
+  if (!active) return "none";
+  const step = backward ? -1 : 1;
+  for (let index = active.groupIndex + step;
+    index >= 0 && index < active.session.groups.length;
+    index += step) {
+    if (selectVisualTexPrompt(field, active.session.groups[index]!.primaryId)) return "moved";
+  }
+  if (!backward) {
+    const promptField = visualTexPromptField(field);
+    if (!promptField) return "exhausted";
+    const mappedFinal = Math.max(0, Math.min(
+      active.session.finalPosition + (promptField.lastOffset - active.session.lastOffset),
+      promptField.lastOffset,
+    ));
+    const finalPosition = finishVisualTexSnippetPromptSession(
+      promptField,
+      active.session,
+      mappedFinal,
+    );
+    withVisualTexUndoRecordingSuspended(field, () => {
+      promptField.selection = { ranges: [[finalPosition, finalPosition]], direction: "forward" };
+    });
+    stopVisualTexUndoCoalescing(field);
+    return "final";
+  }
+  return "exhausted";
+}
+
+function synchronizeVisualTexSnippetMirrors(field: object): void {
+  const promptField = visualTexPromptField(field);
+  const active = activeVisualTexSnippetPrompt(field);
+  if (!promptField || !active || visualTexSnippetMirrorSync.has(field)) return;
+  const group = active.session.groups[active.groupIndex]!;
+  if (group.promptIds.length < 2) return;
+  const value = promptField.getPromptValue(active.promptId, "latex-without-placeholders");
+  const savedSelection = {
+    ranges: promptField.selection.ranges.map(([from, to]) => [from, to] as [number, number]),
+    direction: promptField.selection.direction,
+  };
+  visualTexSnippetMirrorSync.add(field);
+  try {
+    // Mirrors are one logical user edit. Updating their auxiliary PromptAtoms
+    // must not add extra undo entries or make the first Cmd-Z appear to change
+    // only an invisible duplicate field.
+    withVisualTexUndoRecordingSuspended(field, () => {
+      for (const id of group.promptIds) {
+        if (id === active.promptId || !promptField.getPrompts().includes(id)) continue;
+        if (promptField.getPromptValue(id, "latex-without-placeholders") === value) continue;
+        promptField.setPromptValue(id, value, {
+          format: "latex",
+          selectionMode: "after",
+          focus: false,
+          feedback: false,
+          silenceNotifications: true,
+        });
+      }
+    });
+    withVisualTexUndoRecordingSuspended(field, () => {
+      promptField.selection = savedSelection;
+    });
+  } finally {
+    visualTexSnippetMirrorSync.delete(field);
+  }
+}
+
+function readDelimitedGroup(
+  source: string,
+  from: number,
+  open: string,
+  close: string,
+): { body: string; end: number } | null {
+  if (source[from] !== open) return null;
+  let depth = 0;
+  for (let index = from; index < source.length; index++) {
+    const character = source[index]!;
+    if (character === open && !isEscaped(source, index)) depth++;
+    else if (character === close && !isEscaped(source, index)) {
+      depth--;
+      if (depth === 0) return { body: source.slice(from + 1, index), end: index + 1 };
+    }
+  }
+  return null;
+}
+
+type VisualTexInternalMacroAtom = {
+  type?: string;
+  command?: string;
+  macroArgs?: string;
+  placeholderId?: string;
+  parent?: VisualTexInternalMacroAtom;
+  parentBranch?: string | [number, number];
+  isDirty?: boolean;
+  branches?: string[];
+  branch?: (name: string) => VisualTexInternalMacroAtom[] | undefined;
+};
+
+function detachVisualTexMacroAtoms(field: object, macroName: string): number {
+  const root = (field as {
+    _mathfield?: { model?: { root?: VisualTexInternalMacroAtom } };
+  })._mathfield?.model?.root;
+  if (!root) return 0;
+  let removed = 0;
+  const visit = (atom: VisualTexInternalMacroAtom): void => {
+    for (const branch of atom.branches ?? []) {
+      const children = atom.branch?.(branch);
+      if (!children) continue;
+      for (let index = children.length - 1; index >= 0; index--) {
+        const child = children[index]!;
+        if (child.type === "macro"
+            && child.command === `\\${macroName}`) {
+          children.splice(index, 1);
+          removed++;
+        } else {
+          visit(child);
+        }
+      }
+    }
+  };
+  visit(root);
+  return removed;
+}
+
+function detachVisualTexSourceSpaceAtoms(field: object): number {
+  return detachVisualTexMacroAtoms(field, VISUAL_TEX_SOURCE_SPACE_MACRO_NAME);
+}
+
+function detachVisualTexCaretMarkerAtoms(field: object): number {
+  return detachVisualTexMacroAtoms(field, VISUAL_TEX_CARET_MARKER_MACRO_NAME);
+}
+
+/**
+ * MathLive compares replacement TeX after stripping placeholders. For an
+ * empty prompt (notably `\\text{\\placeholder{}}`) that makes replaceAll a
+ * semantic no-op and leaves the visible PromptAtom mounted. Unwrap only the
+ * completed Noema prompts in the live tree when that happens; this preserves
+ * the current undo snapshot instead of reparsing through setValue().
+ */
+function unwrapMountedVisualTexPromptAtoms(
+  field: object,
+  promptIds: ReadonlySet<string>,
+): number {
+  const root = (field as {
+    _mathfield?: { model?: { root?: VisualTexInternalMacroAtom } };
+  })._mathfield?.model?.root;
+  if (!root || promptIds.size === 0) return 0;
+
+  let unwrapped = 0;
+  const visit = (parent: VisualTexInternalMacroAtom): void => {
+    for (const branchName of parent.branches ?? []) {
+      const children = parent.branch?.(branchName);
+      if (!children) continue;
+      for (let index = children.length - 1; index >= 0; index--) {
+        const child = children[index]!;
+        visit(child);
+        if (child.type !== "prompt"
+            || !child.placeholderId
+            || !promptIds.has(child.placeholderId)) continue;
+
+        const body = child.branch?.("body") ?? [];
+        const moved = body.splice(0).filter((atom) => atom.type !== "first");
+        children.splice(index, 1, ...moved);
+        for (const atom of moved) {
+          atom.parent = parent;
+          atom.parentBranch = branchName;
+        }
+        child.parent = undefined;
+        child.parentBranch = undefined;
+        child.isDirty = true;
+        parent.isDirty = true;
+        unwrapped++;
+      }
+    }
+  };
+  visit(root);
+  return unwrapped;
+}
+
+function reparseVisualTexMathfield(
+  field: object,
+  live: Partial<Pick<MathfieldElement, "getValue" | "setValue" | "insert">>,
+  source: string,
+  promptIds?: ReadonlySet<string>,
+): void {
+  const model = (field as { _mathfield?: { model?: { mode?: string } } })._mathfield?.model;
+  const previousMode = model?.mode;
+  const insertOptions = {
+    format: "latex" as const,
+    mode: "math" as const,
+    insertionMode: "replaceAll" as const,
+    selectionMode: "after" as const,
+    focus: false,
+    feedback: false,
+    scrollIntoView: false,
+    silenceNotifications: true,
+  };
+  const setValueOptions = {
+    format: "latex" as const,
+    mode: "math" as const,
+    insertionMode: "replaceAll" as const,
+    selectionMode: "after" as const,
+    focus: false,
+    silenceNotifications: true,
+  };
+  const resetSelectionBeforeDetach = (): void => {
+    const target = field as Partial<Pick<MathfieldElement, "position">>;
+    if (typeof target.position === "number") target.position = 0;
+  };
+
+  // Prompt wrappers and caret/source markers are editor scaffolding, not user
+  // edits. `insert(..., replaceAll)` respects a suspended undo manager; unlike
+  // setValue(), it does not reset MathLive's undo/redo history.
+  withVisualTexUndoRecordingSuspended(field, () => {
+    resetSelectionBeforeDetach();
+    // Empty macros can sit outside MathLive's replaceable model range. Remove
+    // their old atoms first so the requested source recreates each one once.
+    detachVisualTexSourceSpaceAtoms(field);
+    detachVisualTexCaretMarkerAtoms(field);
+    if (typeof live.insert === "function") live.insert(source, insertOptions);
+    else live.setValue?.(source, setValueOptions);
+    if (promptIds) unwrapMountedVisualTexPromptAtoms(field, promptIds);
+    // Whole-field LaTeX must be parsed in math mode, but the editing mode is
+    // caret state. Preserve it so setting the mapped caret does not make
+    // MathLive record a mode-only undo step (especially after `\\text{...}`).
+    if (model && previousMode) model.mode = previousMode;
+  });
+  if (typeof live.getValue === "function") {
+    primeVisualTexMathfieldSerialization(live as Pick<MathfieldElement, "getValue">);
+  }
+}
+
+function visualTexMacroAtomOffset(field: object, command: string): number | null {
+  const model = (field as {
+    _mathfield?: {
+      model?: {
+        root?: VisualTexInternalMacroAtom;
+        offsetOf?: (atom: VisualTexInternalMacroAtom) => number;
+      };
+    };
+  })._mathfield?.model;
+  if (!model?.root || typeof model.offsetOf !== "function") return null;
+  let result: number | null = null;
+  const visit = (atom: VisualTexInternalMacroAtom): void => {
+    if (result !== null) return;
+    if (atom.type === "macro" && atom.command === command) {
+      const offset = model.offsetOf!(atom);
+      if (Number.isFinite(offset)) result = offset;
+      return;
+    }
+    for (const branch of atom.branches ?? []) {
+      for (const child of atom.branch?.(branch) ?? []) visit(child);
+    }
+  };
+  visit(model.root);
+  return result;
+}
+
+function resolveVisualTexPromptArgumentTemplate(
+  source: string,
+  field: VisualTexPromptField,
+  available: ReadonlySet<string>,
+): string {
+  let result = "";
+  for (let index = 0; index < source.length;) {
+    if (!source.startsWith("\\placeholder", index)
+      || /[A-Za-z]/.test(source[index + "\\placeholder".length] ?? "")) {
+      result += source[index]!;
+      index++;
+      continue;
+    }
+
+    let cursor = index + "\\placeholder".length;
+    const options: string[] = [];
+    while (source[cursor] === "[") {
+      const option = readDelimitedGroup(source, cursor, "[", "]");
+      if (!option) break;
+      options.push(option.body);
+      cursor = option.end;
+    }
+    const body = readDelimitedGroup(source, cursor, "{", "}");
+    if (!body) {
+      result += source[index]!;
+      index++;
+      continue;
+    }
+
+    const id = options[0] ?? "";
+    result += id && available.has(id)
+      ? field.getPromptValue(id, "latex-without-placeholders")
+      : resolveVisualTexPromptArgumentTemplate(body.body, field, available);
+    index = body.end;
+  }
+  return result;
+}
+
+/**
+ * MathLive keeps a MacroAtom's original argument source immutable even while
+ * its rendered prompt body changes. Noema snippets carry stable prompt IDs, so
+ * refresh that private source string from the live prompt values before asking
+ * MathLive for compact TeX. This keeps `\\bra{...}`/`\\braket{...}` intact and
+ * avoids falling back to a `\\left...\\middle...` expansion on save.
+ */
+function synchronizeVisualTexMacroPromptArguments(field: object): void {
+  const promptField = visualTexPromptField(field);
+  const root = (field as {
+    _mathfield?: { model?: { root?: VisualTexInternalMacroAtom } };
+  })._mathfield?.model?.root;
+  const noemaIds = new Set([
+    ...(visualTexNoemaPromptIds.get(field) ?? []),
+    ...(visualTexCompletedPromptIds.get(field) ?? []),
+  ]);
+  if (!promptField || !root || !noemaIds.size) return;
+  const available = new Set(promptField.getPrompts());
+
+  const visit = (atom: VisualTexInternalMacroAtom): void => {
+    if (atom.type === "macro" && typeof atom.macroArgs === "string") {
+      let template = visualTexMacroArgumentTemplates.get(atom);
+      if (!template && atom.macroArgs.includes("\\placeholder")
+        && [...noemaIds].some((id) => atom.macroArgs!.includes(`[${id}]`))) {
+        template = atom.macroArgs;
+        visualTexMacroArgumentTemplates.set(atom, template);
+      }
+      if (template) {
+        atom.macroArgs = resolveVisualTexPromptArgumentTemplate(
+          template,
+          promptField,
+          new Set([...available].filter((id) => noemaIds.has(id))),
+        );
+      }
+    }
+    for (const branch of atom.branches ?? []) {
+      for (const child of atom.branch?.(branch) ?? []) visit(child);
+    }
+  };
+  visit(root);
+}
+
+function synchronizeRestoredVisualTexPromptMirrors(
+  field: object,
+  restored: ReadonlySet<string>,
+): void {
+  const promptField = visualTexPromptField(field);
+  const groups = visualTexCompletedPromptGroups.get(field);
+  if (!promptField || !groups?.length) return;
+  const savedSelection = {
+    ranges: promptField.selection.ranges.map(([from, to]) => [from, to] as [number, number]),
+    direction: promptField.selection.direction,
+  };
+  withVisualTexUndoRecordingSuspended(field, () => {
+    for (const group of groups) {
+      const available = group.promptIds.filter((id) => restored.has(id));
+      if (available.length < 2) continue;
+      const sourceId = available.includes(group.primaryId) ? group.primaryId : available[0]!;
+      const value = promptField.getPromptValue(sourceId, "latex-without-placeholders");
+      for (const id of available) {
+        if (id === sourceId
+            || promptField.getPromptValue(id, "latex-without-placeholders") === value) continue;
+        promptField.setPromptValue(id, value, {
+          format: "latex",
+          selectionMode: "after",
+          focus: false,
+          feedback: false,
+          silenceNotifications: true,
+        });
+      }
+    }
+  });
+  withVisualTexUndoRecordingSuspended(field, () => {
+    promptField.selection = savedSelection;
+  });
+}
+
+/**
+ * Undo states captured while a snippet was active contain MathLive PromptAtom
+ * wrappers. Once that snippet has completed, undo/redo may restore its value
+ * but must never restore its editor-only boxes or tab cycle.
+ */
+function flattenRestoredVisualTexPromptAtoms(
+  field: object,
+  historyType?: "undo" | "redo",
+): boolean {
+  if (visualTexUndoPromptSanitizing.has(field)) return false;
+  const promptField = visualTexPromptField(field);
+  const completed = visualTexCompletedPromptIds.get(field);
+  const live = field as Partial<Pick<MathfieldElement, "getValue" | "setValue" | "insert">>;
+  if (!promptField || !completed?.size || typeof live.getValue !== "function"
+      || (typeof live.insert !== "function" && typeof live.setValue !== "function")) return false;
+  const restored = new Set(promptField.getPrompts().filter((id) => completed.has(id)));
+  if (restored.size === 0) return false;
+
+  visualTexUndoPromptSanitizing.add(field);
+  try {
+    synchronizeRestoredVisualTexPromptMirrors(field, restored);
+    synchronizeVisualTexMacroPromptArguments(field);
+    const selection = promptField.selection.ranges[0];
+    const distanceFromEnd = Math.max(0, promptField.lastOffset - promptField.position);
+    let caretMarkerInserted = false;
+    if (selection && promptField.selection.ranges.length === 1
+        && selection[0] === selection[1]
+        && (field as Partial<Pick<MathfieldElement, "mode">>).mode !== "text"
+        && typeof live.insert === "function") {
+      caretMarkerInserted = withVisualTexUndoRecordingSuspended(field, () => live.insert!(
+        VISUAL_TEX_CARET_MARKER,
+        {
+          format: "latex",
+          mode: "math",
+          insertionMode: "insertAfter",
+          selectionMode: "after",
+          focus: false,
+          feedback: false,
+          scrollIntoView: false,
+          silenceNotifications: true,
+        },
+      ));
+    }
+    const source = visualTexMathfieldReparseSource(live as MathfieldElement);
+    const flattened = unwrapVisualTexPromptIds(source, restored).replace(
+      VISUAL_TEX_SOURCE_SPACE_MARKER_RE,
+      VISUAL_TEX_SOURCE_SPACE_MARKER,
+    );
+    reparseVisualTexMathfield(field, live, flattened, restored);
+    let position = Math.max(0, Math.min(
+      promptField.lastOffset - distanceFromEnd,
+      promptField.lastOffset,
+    ));
+    const caretOffset = caretMarkerInserted
+      ? visualTexMacroAtomOffset(field, `\\${VISUAL_TEX_CARET_MARKER_MACRO_NAME}`)
+      : null;
+    if (caretOffset !== null && typeof live.insert === "function") {
+      const markerFree = visualTexMathfieldReparseSource(live as MathfieldElement)
+        .replace(VISUAL_TEX_CARET_MARKER_RE, "");
+      reparseVisualTexMathfield(field, live, markerFree);
+      position = Math.max(0, Math.min(caretOffset - 1, promptField.lastOffset));
+    }
+    // Restoring a caret can cross text/math mode. MathLive snapshots that mode
+    // switch even when no content changes, which would consume redo with an
+    // invisible step. Caret restoration is part of sanitizing the history
+    // state, so keep it outside the user's undo timeline too.
+    withVisualTexUndoRecordingSuspended(field, () => {
+      promptField.selection = { ranges: [[position, position]], direction: "forward" };
+    });
+    stopVisualTexUndoCoalescing(field);
+    if (historyType && typeof (field as Partial<EventTarget>).dispatchEvent === "function") {
+      // MathLive emitted its history input before the undo-state-change event,
+      // while restored mirror prompts could still disagree. Publish the final,
+      // sanitized value so previews and host drafts observe the same state that
+      // will be committed.
+      (field as EventTarget).dispatchEvent(new InputEvent("input", {
+        bubbles: true,
+        composed: true,
+        inputType: historyType === "undo" ? "historyUndo" : "historyRedo",
+      }));
+    }
+    return true;
+  } finally {
+    visualTexUndoPromptSanitizing.delete(field);
+  }
+}
+
+function installVisualTexUndoSanitizer(field: object): void {
+  if (visualTexUndoSanitizers.has(field)) return;
+  const target = field as Partial<Pick<HTMLElement, "addEventListener">>;
+  if (typeof target.addEventListener !== "function") return;
+  target.addEventListener("beforeinput", ((event: InputEvent) => {
+    if (event.inputType !== "historyUndo" && event.inputType !== "historyRedo") return;
+    const controller = (field as { _mathfield?: VisualTexUndoController })._mathfield;
+    if (!controller?.stopRecording || controller.undoManager?.recording === false) return;
+    // MathLive restores both content and selection, then may call switchMode()
+    // for the restored caret. switchMode snapshots directly, which otherwise
+    // truncates redo with a mode-only state before `undo-state-change` fires.
+    controller.stopRecording();
+    visualTexHistoryRecordingSuspended.add(field);
+  }) as EventListener, { capture: true });
+  target.addEventListener("undo-state-change", ((event: CustomEvent<{ type?: string }>) => {
+    if (event.detail?.type === "undo" || event.detail?.type === "redo") {
+      try {
+        flattenRestoredVisualTexPromptAtoms(field, event.detail.type);
+      } finally {
+        if (visualTexHistoryRecordingSuspended.delete(field)) {
+          (field as { _mathfield?: VisualTexUndoController })._mathfield?.startRecording?.();
+        }
+      }
+    }
+  }) as EventListener);
+  visualTexUndoSanitizers.add(field);
+}
+
+/** Remove both MathLive prompt commands and its insertion-only `#?` marker. */
+export function stripVisualTexPlaceholders(source: string): string {
+  let result = "";
+  for (let index = 0; index < source.length;) {
+    if (source[index] === "#" && source[index + 1] === "?" && !isEscaped(source, index)) {
+      index += 2;
+      continue;
+    }
+    if (source.startsWith("\\placeholder", index)
+      && !/[A-Za-z]/.test(source[index + "\\placeholder".length] ?? "")) {
+      let cursor = index + "\\placeholder".length;
+      while (source[cursor] === "[") {
+        const option = readDelimitedGroup(source, cursor, "[", "]");
+        if (!option) break;
+        cursor = option.end;
+      }
+      const body = readDelimitedGroup(source, cursor, "{", "}");
+      if (body) {
+        result += stripVisualTexPlaceholders(body.body);
+        index = body.end;
+        continue;
+      }
+    }
+    result += source[index]!;
+    index++;
+  }
+  return result;
+}
+
+/**
+ * MathLive's expanded/placeholder-free serializer wraps `\\middle` delimiters
+ * in an ordinary group (`\\middle{|}`). TeX and KaTeX require a delimiter
+ * token (`\\middle|`), so repair that serializer boundary before any draft is
+ * compared or written back.
+ */
+export function normalizeVisualTexMathLiveOutput(source: string): string {
+  return source
+    .replace(VISUAL_TEX_CARET_MARKER_RE, "")
+    .replace(VISUAL_TEX_SOURCE_SPACE_MARKER_RE, " ")
+    .replace(/\\middle\s*\{([^{}\s]+)\}/g, (_whole, delimiter: string) => (
+      `\\middle${delimiter}`
+    ));
+}
+
+/**
+ * MathLive deliberately serializes an editable MacroAtom as the original
+ * command plus its original argument string. When a user changes the rendered
+ * macro body, only `latex-expanded` contains those edits. Preserve compact
+ * commands while they remain truthful; permanently switch this field to its
+ * live expanded tree as soon as compact and expanded serialization diverge.
+ */
+export function resolveVisualTexMathfieldSerialization(
+  previous: VisualTexMathfieldSerializationState | null,
+  compact: string,
+  expanded: string,
+): { value: string; state: VisualTexMathfieldSerializationState } {
+  const safeCompact = normalizeVisualTexMathLiveOutput(compact);
+  const safeExpanded = normalizeVisualTexMathLiveOutput(stripVisualTexPlaceholders(expanded));
+  const compactContainsInsertionState = stripVisualTexPlaceholders(safeCompact) !== safeCompact;
+  const editedInsideMacro = previous !== null
+    && safeCompact === previous.compact
+    && safeExpanded !== previous.expanded;
+  const expandedWriteback = Boolean(previous?.expandedWriteback)
+    || compactContainsInsertionState
+    || editedInsideMacro;
+  const state = { compact: safeCompact, expanded: safeExpanded, expandedWriteback };
+  return { value: expandedWriteback ? safeExpanded : safeCompact, state };
+}
+
+function primeVisualTexMathfieldSerialization(field: Pick<MathfieldElement, "getValue">): void {
+  const previous = visualTexMathfieldSerializationStates.get(field as object);
+  const compact = normalizeVisualTexMathLiveOutput(
+    normalizeVisualTexLatex(field.getValue("latex-without-placeholders")),
+  );
+  const expanded = normalizeVisualTexMathLiveOutput(
+    stripVisualTexPlaceholders(normalizeVisualTexLatex(field.getValue("latex-expanded"))),
+  );
+  visualTexMathfieldSerializationStates.set(field as object, {
+    compact,
+    expanded,
+    expandedWriteback: Boolean(previous?.expandedWriteback)
+      || stripVisualTexPlaceholders(compact) !== compact,
+  });
+}
+
+/** Match MathLive's own string-macro arity inference for object definitions. */
+export function visualTexMacroArgumentCount(expansion: string): number {
+  let count = 0;
+  for (let candidate = 1; candidate <= 9; candidate++) {
+    if (new RegExp(`(^|[^\\\\])#${candidate}`).test(expansion)) count = candidate;
+  }
+  return count;
 }
 
 /**
@@ -500,14 +1623,23 @@ function visualTexMathfieldRangeLatex(
  */
 export function visualTexMathLiveMacros(
   macros: Record<string, string>,
-): Record<string, { def: string; captureSelection: false }> {
-  const result: Record<string, { def: string; captureSelection: false }> = {};
+): Record<string, VisualTexMathLiveMacro> {
+  const result: Record<string, VisualTexMathLiveMacro> = {};
   for (const [command, expansion] of Object.entries(macros)) {
     const name = command.replace(/^\\+/, "");
-    // MathLive defaults custom macros to captureSelection=true, which makes the
-    // rendered expansion atomic. Keep the macro's standard TeX serialization,
-    // but let arrows and pointer hit-testing enter its argument/body atoms.
-    if (name) result[name] = { def: expansion, captureSelection: false };
+    // Object macro definitions default to zero arguments: unlike string
+    // definitions, MathLive does not infer #1..#9. Supplying the exact arity is
+    // what keeps `\ket{sad}` from becoming `\ket` plus an external `{sad}`.
+    // Expanded serialization must stay enabled because it is MathLive's only
+    // truthful representation after editing inside the macro body.
+    if (name) {
+      result[name] = {
+        def: expansion,
+        args: visualTexMacroArgumentCount(expansion),
+        captureSelection: false,
+        expand: true,
+      };
+    }
   }
   return result;
 }
@@ -527,9 +1659,27 @@ export function initializeNoemaMathfield(
   latex: string,
   macros: Record<string, string>,
 ): void {
-  field.macros = visualTexMathLiveMacros(macros);
+  visualTexLastSourceSpaceBoundary.delete(field as object);
+  visualTexSnippetPromptSessions.delete(field as object);
+  visualTexNoemaPromptIds.delete(field as object);
+  visualTexCompletedPromptIds.delete(field as object);
+  visualTexCompletedPromptGroups.delete(field as object);
+  visualTexMathfieldSerializationStates.delete(field as object);
+  installVisualTexUndoSanitizer(field as object);
+  field.macros = {
+    ...visualTexMathLiveMacros(macros),
+    [VISUAL_TEX_SOURCE_SPACE_MACRO_NAME]: VISUAL_TEX_SOURCE_SPACE_MACRO,
+    [VISUAL_TEX_CARET_MARKER_MACRO_NAME]: VISUAL_TEX_CARET_MARKER_MACRO,
+  };
   field.setValue(normalizeVisualTexLatex(latex), { selectionMode: "after" });
   field.resetUndo();
+  // resetUndo() removes MathLive's setValue snapshot as well as stale history.
+  // Seed the clean parsed value again so the very first user edit can undo to
+  // the note as opened instead of becoming an un-revertible index-zero state.
+  snapshotVisualTexUndoState(field as object, "set-value");
+  if (typeof (field as Partial<Pick<MathfieldElement, "getValue">>).getValue === "function") {
+    primeVisualTexMathfieldSerialization(field as NoemaMathfieldInitializationTarget & Pick<MathfieldElement, "getValue">);
+  }
 }
 
 export function visualTexCompletionPrefix(before: string): string {
@@ -557,39 +1707,96 @@ function suffixRange(field: MathfieldElement, suffix: string): [number, number] 
   return null;
 }
 
-function applyCompletionTemplate(
+export function applyVisualTexCompletionTemplate(
   field: MathfieldElement,
   prefix: string,
-  template: string,
+  template: string | VisualTexCompletionTemplate,
   deleteBefore: number,
 ): boolean {
+  finishInactiveVisualTexSnippetPromptSessions(field);
+  // MathLive keeps an unfinished backslash command in a transient editor.
+  // Replacing that range directly reports success but leaves the completion
+  // inside command mode, so neither Enter nor Space visibly accepts it.
+  // Materialize the command as a normal math atom before replacing its range.
+  if (field.mode === "latex") {
+    withVisualTexUndoRecordingSuspended(field, () => {
+      field.executeCommand(["complete", "accept-all"]);
+    });
+  }
   const suffix = prefix.slice(Math.max(0, prefix.length - deleteBefore));
   const range = suffixRange(field, suffix);
   if (!range) return false;
-  field.selection = { ranges: [range] };
-  return field.insert(template, {
+  withVisualTexUndoRecordingSuspended(field, () => {
+    field.selection = { ranges: [range] };
+  });
+  const registeredPromptIds: string[] = [];
+  if (typeof template !== "string") {
+    const ids = visualTexNoemaPromptIds.get(field) ?? new Set<string>();
+    for (const group of template.tabstops) {
+      for (const id of group.promptIds) {
+        ids.add(id);
+        registeredPromptIds.push(id);
+      }
+    }
+    visualTexNoemaPromptIds.set(field, ids);
+  }
+  let templateLatex = typeof template === "string" ? template : template.latex;
+  if (typeof template !== "string" && template.needsFinalSourceBoundary) {
+    templateLatex += VISUAL_TEX_SOURCE_SPACE_MARKER;
+  }
+  const inserted = field.insert(templateLatex, {
     format: "latex",
     insertionMode: "replaceSelection",
-    selectionMode: "placeholder",
-    focus: true,
+    selectionMode: typeof template === "string" ? "placeholder" : "after",
+    focus: false,
     feedback: false,
     scrollIntoView: false,
   });
+  if (!inserted) {
+    const ids = visualTexNoemaPromptIds.get(field);
+    for (const id of registeredPromptIds) ids?.delete(id);
+    return false;
+  }
+  // Snippet expansion is one edit; text typed at its final caret is the next
+  // edit even when both operations happen to create the same MathLive atom
+  // type and would otherwise be coalesced.
+  stopVisualTexUndoCoalescing(field);
+  if (typeof template === "string") {
+    focusVisualTexField(field);
+    return true;
+  }
+  if (template.needsFinalSourceBoundary) {
+    visualTexLastSourceSpaceBoundary.set(field, field.position);
+  }
+  registerVisualTexSnippetPrompts(field, template.tabstops);
+  const first = [...template.tabstops].sort((a, b) => a.index - b.index)[0];
+  if (first) selectVisualTexPrompt(field, first.primaryId);
+  focusVisualTexField(field);
+  return true;
 }
 
 function removeCompletionPrefix(field: MathfieldElement, prefix: string, deleteBefore: number): boolean {
+  if (field.mode === "latex") {
+    withVisualTexUndoRecordingSuspended(field, () => {
+      field.executeCommand(["complete", "accept-all"]);
+    });
+  }
   const suffix = prefix.slice(Math.max(0, prefix.length - deleteBefore));
   const range = suffixRange(field, suffix);
   if (!range) return false;
-  field.selection = { ranges: [range] };
-  return field.insert("", {
+  withVisualTexUndoRecordingSuspended(field, () => {
+    field.selection = { ranges: [range] };
+  });
+  const inserted = field.insert("", {
     format: "latex",
     insertionMode: "replaceSelection",
     selectionMode: "after",
-    focus: true,
+    focus: false,
     feedback: false,
     scrollIntoView: false,
   });
+  if (inserted) focusVisualTexField(field);
+  return inserted;
 }
 
 function requestCompletion(
@@ -604,7 +1811,7 @@ function requestCompletion(
     detail: {
       prefix,
       rect: { left: rect.left, top: rect.top, bottom: rect.bottom },
-      apply: (template, deleteBefore) => applyCompletionTemplate(field, prefix, template, deleteBefore),
+      apply: (template, deleteBefore) => applyVisualTexCompletionTemplate(field, prefix, template, deleteBefore),
       ...(applyLayout ? {
         applyLayout: (layout, deleteBefore) => applyLayout(layout, prefix, deleteBefore),
       } : {}),
@@ -651,26 +1858,89 @@ function completionConsumesKey(host: HTMLElement, key: VisualTexMathHostKey): bo
 }
 
 function typedText(field: MathfieldElement, text: string): boolean {
+  focusVisualTexField(field);
   return field.executeCommand(["typedText", text, {
-    focus: true,
+    focus: false,
     feedback: false,
     simulateKeystroke: true,
   }]);
 }
 
-function insertMathSpace(field: MathfieldElement): boolean {
-  return field.insert("\\,", {
+export type VisualTexSpaceAction = "command" | "space" | "navigate" | "boundary" | "none";
+
+/**
+ * Apply one physical Space key without delegating it to MathLive's shortcut
+ * stack.
+ *
+ * MathLive has three genuinely different space states:
+ *
+ * - in LaTeX command mode, Space terminates `\\command` and must not append a
+ *   spacing command;
+ * - in `\\text{...}`, it is an ordinary text character;
+ * - in math mode, it first performs MathLive's natural `moveAfterParent`
+ *   transition; at the root it records one ignored source-space boundary.
+ *   Neither path inserts a visible `\\ ` or `\\,` spacing command, and repeated
+ *   Space does not accumulate duplicate boundaries.
+ *
+ * Keeping this transition in one adapter prevents the inline, display and
+ * studio editors from drifting into different Space behaviours.
+ */
+export function insertVisualTexNaturalSpace(field: MathfieldElement): VisualTexSpaceAction {
+  finishInactiveVisualTexSnippetPromptSessions(field);
+  if (field.mode === "latex") {
+    // This is MathLive's native `[Space]` transition for an unfinished
+    // backslash command. It also removes the transient command/suggestion box.
+    return field.executeCommand(["complete", "accept-all"]) ? "command" : "none";
+  }
+  if (field.mode === "text") {
+    focusVisualTexField(field);
+    return field.executeCommand(["typedText", " ", {
+      focus: false,
+      feedback: false,
+      simulateKeystroke: true,
+    }]) ? "space" : "none";
+  }
+  const before = visualTexSelectionKey(field);
+  withVisualTexUndoRecordingSuspended(field, () => {
+    field.executeCommand("moveAfterParent");
+  });
+  if (visualTexSelectionKey(field) !== before) return "navigate";
+
+  const range = field.selection.ranges[0];
+  if (!range || field.selection.ranges.length !== 1 || range[0] !== range[1]) return "none";
+  if (visualTexLastSourceSpaceBoundary.get(field) === field.position) return "boundary";
+  const sourceBefore = visualTexMathfieldRangeLatex(field, 0, field.position);
+  if (/\s$/u.test(sourceBefore)) return "boundary";
+  const inserted = field.insert(VISUAL_TEX_SOURCE_SPACE_MARKER, {
     format: "latex",
+    insertionMode: "insertAfter",
     selectionMode: "after",
-    focus: true,
+    focus: false,
     feedback: false,
     scrollIntoView: false,
   });
+  if (inserted) visualTexLastSourceSpaceBoundary.set(field, field.position);
+  return inserted ? "boundary" : "none";
 }
 
-function collapsedAtMathfieldEnd(field: MathfieldElement): boolean {
+type VisualTexNavigationField = Pick<
+  MathfieldElement,
+  "position" | "lastOffset" | "selection" | "executeCommand"
+>;
+
+function visualTexSelectionKey(field: Pick<MathfieldElement, "position" | "selection">): string {
+  return `${field.position}:${field.selection.ranges
+    .map(([from, to]) => `${from}-${to}`)
+    .join(",")}`;
+}
+
+function collapsedAtMathfieldBoundary(
+  field: Pick<MathfieldElement, "position" | "lastOffset" | "selection">,
+  backward: boolean,
+): boolean {
   const range = field.selection.ranges[0];
-  return Boolean(range && range[0] === range[1] && field.position >= field.lastOffset);
+  if (!range || field.selection.ranges.length !== 1 || range[0] !== range[1]) return false;
+  return backward ? field.position <= 0 : field.position >= field.lastOffset;
 }
 
 export function visualTexExplicitCommitDirection(
@@ -689,6 +1959,87 @@ function requestVisualTexSave(): void {
   queueMicrotask(() => document.dispatchEvent(new CustomEvent("aaronnote:visualtex-save-request")));
 }
 
+export function visualTexMathfieldMovementCommand(
+  key: VisualTexMathHostKey,
+): Selector | null {
+  const normalized = key.key === "Esc" ? "Escape" : key.key;
+  const modifierCount = Number(Boolean(key.metaKey)) + Number(Boolean(key.ctrlKey)) + Number(Boolean(key.altKey));
+  if (modifierCount > 1) return null;
+  if (key.metaKey) {
+    if (normalized === "ArrowLeft") {
+      return key.shiftKey ? "extendToMathFieldStart" : "moveToMathfieldStart";
+    }
+    if (normalized === "ArrowRight") {
+      return key.shiftKey ? "extendToMathFieldEnd" : "moveToMathfieldEnd";
+    }
+    return null;
+  }
+  if (key.ctrlKey) {
+    if (normalized === "ArrowLeft") {
+      return key.shiftKey ? "extendToGroupStart" : "moveToGroupStart";
+    }
+    if (normalized === "ArrowRight") {
+      return key.shiftKey ? "extendToGroupEnd" : "moveToGroupEnd";
+    }
+    return null;
+  }
+  if (key.altKey) {
+    if (normalized === "ArrowLeft") {
+      return key.shiftKey ? "extendToPreviousWord" : "moveToPreviousWord";
+    }
+    if (normalized === "ArrowRight") {
+      return key.shiftKey ? "extendToNextWord" : "moveToNextWord";
+    }
+    return null;
+  }
+  if (normalized === "ArrowLeft") {
+    return key.shiftKey ? "extendSelectionBackward" : "moveToPreviousChar";
+  }
+  if (normalized === "ArrowRight") {
+    return key.shiftKey ? "extendSelectionForward" : "moveToNextChar";
+  }
+  if (normalized === "ArrowUp") {
+    return key.shiftKey ? "extendSelectionUpward" : "moveUp";
+  }
+  if (normalized === "ArrowDown") {
+    return key.shiftKey ? "extendSelectionDownward" : "moveDown";
+  }
+  if (normalized === "Home") {
+    return key.shiftKey ? "extendToMathFieldStart" : "moveToMathfieldStart";
+  }
+  if (normalized === "End") {
+    return key.shiftKey ? "extendToMathFieldEnd" : "moveToMathfieldEnd";
+  }
+  if (normalized === "PageUp") {
+    return key.shiftKey ? "extendToGroupStart" : "moveToGroupStart";
+  }
+  if (normalized === "PageDown") {
+    return key.shiftKey ? "extendToGroupEnd" : "moveToGroupEnd";
+  }
+  return null;
+}
+
+export function visualTexMathfieldDeletionCommand(
+  key: VisualTexMathHostKey,
+): Selector | null {
+  const normalized = key.key;
+  if (normalized !== "Backspace" && normalized !== "Delete") return null;
+  if (key.metaKey && !key.ctrlKey && !key.altKey) {
+    return normalized === "Backspace" ? "deleteToMathFieldStart" : "deleteToMathFieldEnd";
+  }
+  if (key.ctrlKey && !key.metaKey && !key.altKey) {
+    if (key.shiftKey && normalized === "Backspace") return "deleteToGroupEnd";
+    return normalized === "Backspace" ? "deleteToGroupStart" : "deleteToGroupEnd";
+  }
+  if (key.altKey && !key.metaKey && !key.ctrlKey) {
+    return normalized === "Backspace" ? "deletePreviousWord" : "deleteNextWord";
+  }
+  if (key.metaKey || key.ctrlKey || key.altKey) return null;
+  return normalized === "Backspace" && key.shiftKey ? "deleteForward"
+    : normalized === "Backspace" ? "deleteBackward"
+      : "deleteForward";
+}
+
 function runCommonMathfieldKey(
   host: HTMLElement,
   field: MathfieldElement,
@@ -701,7 +2052,7 @@ function runCommonMathfieldKey(
   if (primary && !key.altKey) {
     const lower = normalized.toLowerCase();
     if (lower === "a") {
-      field.executeCommand("selectAll");
+      selectAllVisualTexMathfield(field);
       return "handled";
     }
     if (lower === "z") {
@@ -710,32 +2061,32 @@ function runCommonMathfieldKey(
       return "handled";
     }
   }
-  if (primary || key.altKey) return "continue";
-  if (normalized === "Escape") return "commit";
-  if (normalized === "Backspace" || normalized === "Delete") {
-    field.executeCommand(normalized === "Backspace" ? "deleteBackward" : "deleteForward");
-    refreshCompletion(host, field);
-    return "handled";
-  }
-  if (normalized === " ") {
-    insertMathSpace(field);
-    refreshCompletion(host, field);
-    return "handled";
-  }
-  const command = normalized === "ArrowLeft" ? "moveToPreviousChar"
-    : normalized === "ArrowRight" ? "moveToNextChar"
-      : normalized === "ArrowUp" ? "moveUp"
-        : normalized === "ArrowDown" ? "moveDown"
-          : normalized === "Home" ? "moveToMathfieldStart"
-            : normalized === "End" ? "moveToMathfieldEnd"
-              : "";
-  if (command) {
-    field.executeCommand(command);
+  const movement = visualTexMathfieldMovementCommand(key);
+  if (movement) {
+    withVisualTexUndoRecordingSuspended(field, () => {
+      field.executeCommand(movement);
+    });
+    finishInactiveVisualTexSnippetPromptSessions(field);
     closeCompletion(host);
     return "handled";
   }
+  const deletion = visualTexMathfieldDeletionCommand(key);
+  if (deletion) {
+    finishInactiveVisualTexSnippetPromptSessions(field);
+    field.executeCommand(deletion);
+    // MathLive snapshots deletion commands before mutating the tree. Reusing
+    // the same operation key replaces that provisional entry with the actual
+    // post-delete state: immediate undo still restores the deletion, while a
+    // following insertion can undo back to the genuinely deleted value.
+    snapshotVisualTexUndoState(field, String(deletion));
+    refreshCompletion(host, field);
+    return "handled";
+  }
+  if (primary || key.altKey) return "continue";
+  if (normalized === "Escape") return "commit";
   const text = typeof key.text === "string" ? key.text : normalized.length === 1 ? normalized : "";
   if (text) {
+    finishInactiveVisualTexSnippetPromptSessions(field);
     typedText(field, text);
     refreshCompletion(host, field);
     return "handled";
@@ -746,20 +2097,139 @@ function runCommonMathfieldKey(
 type VisualTexTabstopMove = "placeholder" | "edge" | "boundary";
 
 function moveVisualTexTabstop(field: MathfieldElement, backward: boolean): VisualTexTabstopMove {
-  const before = `${field.position}:${field.selection.ranges
-    .map(([from, to]) => `${from}-${to}`)
-    .join(",")}`;
-  field.executeCommand(backward ? "moveToPreviousPlaceholder" : "moveToNextPlaceholder");
-  const after = `${field.position}:${field.selection.ranges
-    .map(([from, to]) => `${from}-${to}`)
-    .join(",")}`;
-  if (after !== before) return "placeholder";
+  const registered = moveVisualTexSnippetPrompt(field, backward);
+  if (registered === "moved") return "placeholder";
+  if (registered === "final") return "edge";
+  if (registered === "exhausted") {
+    const edge = backward ? 0 : field.lastOffset;
+    if (field.position !== edge) {
+      withVisualTexUndoRecordingSuspended(field, () => {
+        field.executeCommand(backward ? "moveToMathfieldStart" : "moveToMathfieldEnd");
+      });
+      return "edge";
+    }
+    return "boundary";
+  }
+  finishInactiveVisualTexSnippetPromptSessions(field);
+  // MathLive's native placeholder traversal is intentionally not a fallback:
+  // Noema prompts are the sole snippet state, and the native command wraps at
+  // the root, which makes Tab/Cmd-] jump back to the first formula atom.
   const edge = backward ? 0 : field.lastOffset;
   if (field.position !== edge) {
-    field.executeCommand(backward ? "moveToMathfieldStart" : "moveToMathfieldEnd");
+    withVisualTexUndoRecordingSuspended(field, () => {
+      field.executeCommand(backward ? "moveToMathfieldStart" : "moveToMathfieldEnd");
+    });
     return "edge";
   }
   return "boundary";
+}
+
+/**
+ * One explicit Cmd-[ / Cmd-] transition.
+ *
+ * The order is intentional and does not require an external "armed" flag:
+ *   1. a command that starts at the root edge exits immediately;
+ *   2. otherwise visit the next/previous unresolved MathLive slot;
+ *   3. with no slot, leave the nearest enclosing TeX parent (`}` boundary);
+ *   4. with no enclosing parent, move to the root edge;
+ *   5. the following command starts at that edge and exits.
+ */
+export type VisualTexNavigationStep = "placeholder" | "final" | "parent" | "edge" | "exit";
+
+function keepVisualTexNavigationDirectional(
+  field: VisualTexNavigationField,
+  backward: boolean,
+  origin: number,
+  step: VisualTexNavigationStep,
+): VisualTexNavigationStep {
+  // Finishing a snippet reparses the formula without prompt wrapper atoms.
+  // Offsets before and after that reparse are different coordinate spaces;
+  // its `$0` position is mapped explicitly by finishVisualTexSnippetPromptSession.
+  if (step === "exit" || step === "final") return step;
+  const wrapped = backward ? field.position > origin : field.position < origin;
+  if (!wrapped) return step;
+
+  // MathLive models nested branches in one offset space, so leaving a real
+  // parent is directional. A smaller offset after Cmd-] (or a larger one after
+  // Cmd-[) can only be provider/selection wraparound. Collapse that illegal
+  // transition to the requested root edge; never expose the formula-start
+  // jump to the user.
+  withVisualTexUndoRecordingSuspended(field as object, () => {
+    field.executeCommand(backward ? "moveToMathfieldStart" : "moveToMathfieldEnd");
+  });
+  return "edge";
+}
+
+function moveVisualTexPastTextRun(
+  field: VisualTexNavigationField,
+  backward: boolean,
+): boolean {
+  const modeField = field as VisualTexNavigationField & Partial<Pick<MathfieldElement, "mode" | "getValue">>;
+  if (modeField.mode !== "text") return false;
+  let moved = false;
+  // `\\text{...}` is represented as a run of text atoms at the root rather
+  // than an addressable group, so moveAfterParent alone cannot leave it.
+  for (let count = 0; count <= field.lastOffset + 1; count++) {
+    if (modeField.getValue) {
+      const from = backward ? Math.max(0, field.position - 1) : field.position;
+      const to = backward ? field.position : Math.min(field.lastOffset, field.position + 1);
+      if (!/^\\text\{/.test(modeField.getValue(from, to, "latex"))) break;
+    }
+    const before = visualTexSelectionKey(field);
+    withVisualTexUndoRecordingSuspended(field as object, () => {
+      field.executeCommand(backward ? "moveToPreviousChar" : "moveToNextChar");
+    });
+    if (visualTexSelectionKey(field) === before) break;
+    moved = true;
+    if (modeField.mode !== "text") break;
+  }
+  return moved;
+}
+
+export function advanceVisualTexNavigation(
+  field: VisualTexNavigationField,
+  backward: boolean,
+): VisualTexNavigationStep {
+  const origin = field.position;
+  const finish = (step: VisualTexNavigationStep): VisualTexNavigationStep => (
+    keepVisualTexNavigationDirectional(field, backward, origin, step)
+  );
+  const registered = moveVisualTexSnippetPrompt(field as object, backward);
+  if (registered === "moved") return finish("placeholder");
+  if (registered === "final") return finish("final");
+  if (registered === "none") finishInactiveVisualTexSnippetPromptSessions(field as object);
+  if (collapsedAtMathfieldBoundary(field, backward)) {
+    // A trailing `\\text{...}` reports text mode even though its caret is
+    // already at the root edge. Switching mode here changes no visible state
+    // and used to make the first Cmd-] look broken; an edge command exits.
+    return "exit";
+  }
+
+  if (registered === "exhausted") {
+    // Prompts are editor-only wrappers. Leave one without spending a visible
+    // structural Cmd-bracket transition on that artificial parent.
+    withVisualTexUndoRecordingSuspended(field as object, () => {
+      field.executeCommand(backward ? "moveBeforeParent" : "moveAfterParent");
+    });
+    if (collapsedAtMathfieldBoundary(field, backward)) return finish("edge");
+  }
+
+  if (moveVisualTexPastTextRun(field, backward)) {
+    return finish(collapsedAtMathfieldBoundary(field, backward) ? "edge" : "parent");
+  }
+
+  const beforeParent = visualTexSelectionKey(field);
+  withVisualTexUndoRecordingSuspended(field as object, () => {
+    field.executeCommand(backward ? "moveBeforeParent" : "moveAfterParent");
+  });
+  if (visualTexSelectionKey(field) !== beforeParent) {
+    return finish(collapsedAtMathfieldBoundary(field, backward) ? "edge" : "parent");
+  }
+
+  withVisualTexUndoRecordingSuspended(field as object, () => {
+    field.executeCommand(backward ? "moveToMathfieldStart" : "moveToMathfieldEnd");
+  });
+  return finish("edge");
 }
 
 function addHostKeyBridge(
@@ -780,21 +2250,41 @@ function addHostKeyBridge(
 }
 
 export function insertVisualTexInlineRow(field: MathfieldElement): string {
+  // Enter is a structural edit, not another way to leave a live snippet
+  // prompt behind. Flatten its editor-only wrappers before taking the source
+  // split so the resulting row never serializes prompt atoms.
+  finishAllVisualTexSnippetPromptSessions(field);
   // MathLive currently reports `addRowAfter` as handled even at the ordinary
   // root, where there is no array row to add. Only accept the command when it
   // actually changed the TeX; otherwise promote the formula to `aligned`.
   const before = visualTexMathfieldLatex(field);
-  field.executeCommand("addRowAfter");
-  const after = visualTexMathfieldLatex(field);
-  if (after !== before) return after;
   const selection = field.selection.ranges[0] ?? [field.position, field.position];
   const from = Math.min(selection[0], selection[1]);
   const to = Math.max(selection[0], selection[1]);
   const left = visualTexMathfieldRangeLatex(field, 0, from);
   const right = visualTexMathfieldRangeLatex(field, to, field.lastOffset);
+  field.executeCommand("addRowAfter");
+  const after = visualTexMathfieldLatex(field);
+  if (after !== before && visualTexSupportsRows(after)) return after;
   const next = `\\begin{aligned}${left}\\\\${right || "{}"}\\end{aligned}`;
-  field.setValue(next, { selectionMode: "after", focus: true });
-  field.executeCommand("moveToMathfieldEnd");
+  // setValue() resets MathLive's undo manager. A user-visible Enter must be a
+  // normal replace-all edit so the scalar equation remains one Cmd-Z away and
+  // redo can restore the promoted row layout.
+  stopVisualTexUndoCoalescing(field);
+  field.insert(next, {
+    format: "latex",
+    mode: "math",
+    insertionMode: "replaceAll",
+    selectionMode: "after",
+    focus: false,
+    feedback: false,
+    scrollIntoView: false,
+  });
+  stopVisualTexUndoCoalescing(field);
+  withVisualTexUndoRecordingSuspended(field, () => {
+    field.executeCommand("moveToMathfieldEnd");
+  });
+  focusVisualTexField(field);
   return visualTexMathfieldLatex(field);
 }
 
@@ -826,7 +2316,7 @@ function createVisualTexQuickbar(
     control.addEventListener("click", () => {
       action();
       if (changes) onChange();
-      field.focus();
+      focusVisualTexField(field);
       closeCompletion(host);
     });
     bar.append(control);
@@ -834,7 +2324,7 @@ function createVisualTexQuickbar(
   button("B", "粗体", () => field.applyStyle({ variantStyle: "bold" }, { operation: "toggle" }));
   button("I", "斜体", () => field.applyStyle({ variantStyle: "italic" }, { operation: "toggle" }));
   button("↹", "下一个占位符", () => { moveVisualTexTabstop(field, false); }, false);
-  button("全选", "选择整个公式", () => { field.executeCommand("selectAll"); }, false);
+  button("全选", "选择整个公式", () => { selectAllVisualTexMathfield(field); }, false);
 
   return {
     element: bar,
@@ -850,8 +2340,6 @@ export function mountVisualTexInlineEditor(
   let field: MathfieldElement | null = null;
   let draft = normalizeVisualTexLatex(options.latex);
   let removeHostKeyBridge = (): void => {};
-  let boundarySpaceArmed = false;
-  let commandBoundaryArmed: "forward" | "backward" | null = null;
   let suppressMoveOutCommit = false;
 
   const syncDraft = (): void => {
@@ -859,29 +2347,43 @@ export function mountVisualTexInlineEditor(
     draft = syncVisualTexMathfieldDraft(field, options.onInput);
   };
 
-  const moveWithinOrOut = (
-    active: MathfieldElement,
-    backward: boolean,
-    allowExit: boolean,
-  ): void => {
-    const direction = backward ? "backward" : "forward";
-    const wasArmed = commandBoundaryArmed === direction;
+  const moveTabstop = (active: MathfieldElement, backward: boolean): void => {
     suppressMoveOutCommit = true;
-    let result: VisualTexTabstopMove;
     try {
-      result = moveVisualTexTabstop(active, backward);
+      moveVisualTexTabstop(active, backward);
     } finally {
       suppressMoveOutCommit = false;
     }
-    if (allowExit && result === "boundary" && wasArmed) {
-      commandBoundaryArmed = null;
-      syncDraft();
-      options.onCommit(direction);
-      return;
+  };
+
+  const moveWithinOrOut = (
+    active: MathfieldElement,
+    backward: boolean,
+    exitDirection: VisualTexInlineMoveDirection,
+  ): void => {
+    suppressMoveOutCommit = true;
+    let result: VisualTexNavigationStep;
+    try {
+      result = advanceVisualTexNavigation(active, backward);
+    } finally {
+      suppressMoveOutCommit = false;
     }
-    commandBoundaryArmed = allowExit && (result === "edge" || result === "boundary")
-      ? direction
-      : null;
+    closeCompletion(host);
+    if (result === "exit") {
+      syncDraft();
+      options.onCommit(exitDirection);
+    }
+  };
+
+  const handleSpace = (active: MathfieldElement, key: VisualTexMathHostKey): void => {
+    // Text spaces are content, never a company-accept shortcut. In command and
+    // math mode an exact Noema snippet keeps the historical Space-to-accept
+    // gesture before the structural MathLive fallback runs.
+    if (active.mode !== "text" && completionConsumesKey(host, key)) return;
+    insertVisualTexNaturalSpace(active);
+    // Completing a `\\command` emits an input event synchronously and can
+    // otherwise reopen company for the just-finished prefix.
+    closeCompletion(host);
   };
 
   const ready = loadMathLive()
@@ -911,6 +2413,40 @@ export function mountVisualTexInlineEditor(
         syncDraft();
       });
 
+      const handleInlineKey = (active: MathfieldElement, key: VisualTexMathHostKey): boolean => {
+        if (commitFromKey(key)) return true;
+        const normalized = key.key === "Esc" ? "Escape" : key.key;
+        if (normalized === " ") {
+          handleSpace(active, key);
+          return true;
+        }
+        const common = runCommonMathfieldKey(host, active, key);
+        if (common === "commit") {
+          syncDraft();
+          options.onCommit("forward");
+          return true;
+        }
+        if (common === "handled") return true;
+        if (normalized === "Enter") {
+          // Inline formulae are single-line editing surfaces. Plain Enter
+          // accepts; display editors use it to create a structural row.
+          syncDraft();
+          options.onCommit("forward");
+          return true;
+        }
+        if (normalized === "Tab") {
+          requestCompletion(host, active);
+          if (!completionConsumesKey(host, key)) moveTabstop(active, Boolean(key.shiftKey));
+          return true;
+        }
+        const bracketDirection = visualTexBracketDirection(key);
+        if (bracketDirection) {
+          moveWithinOrOut(active, bracketDirection === "backward", bracketDirection);
+          return true;
+        }
+        return false;
+      };
+
       next.addEventListener("input", () => {
         syncDraft();
         requestCompletion(host, next);
@@ -919,81 +2455,15 @@ export function mountVisualTexInlineEditor(
         if (event.isComposing) return;
         const key = {
           key: event.key,
+          code: event.code,
           ctrlKey: event.ctrlKey,
           metaKey: event.metaKey,
           altKey: event.altKey,
           shiftKey: event.shiftKey,
         };
-        if (event.key !== " ") boundarySpaceArmed = false;
-        if (!((event.metaKey || event.ctrlKey) && !event.altKey && (event.key === "[" || event.key === "]"))) {
-          commandBoundaryArmed = null;
-        }
-        if (commitFromKey(key)) {
-          event.preventDefault();
-          event.stopPropagation();
-          return;
-        }
-        if (event.key === " ") {
-          if (completionConsumesKey(host, key)) {
-            event.preventDefault();
-            event.stopPropagation();
-            boundarySpaceArmed = false;
-            return;
-          }
-          if (collapsedAtMathfieldEnd(next)) {
-            event.preventDefault();
-            event.stopPropagation();
-            if (boundarySpaceArmed) {
-              next.executeCommand("deleteBackward");
-              draft = visualTexMathfieldLatex(next);
-              options.onInput(draft);
-              boundarySpaceArmed = false;
-              options.onCommit("space-forward");
-            } else {
-              insertMathSpace(next);
-              draft = visualTexMathfieldLatex(next);
-              options.onInput(draft);
-              boundarySpaceArmed = true;
-              refreshCompletion(host, next);
-            }
-            return;
-          }
-        }
-        const common = runCommonMathfieldKey(host, next, key, event.key !== " ");
-        if (common === "commit") {
-          event.preventDefault();
-          event.stopPropagation();
-          syncDraft();
-          options.onCommit("forward");
-          return;
-        }
-        if (common === "handled") {
-          event.preventDefault();
-          event.stopPropagation();
-          return;
-        }
-        if (event.key === "Enter") {
-          event.preventDefault();
-          event.stopPropagation();
-          if (visualTexSupportsRows(visualTexMathfieldLatex(next))) {
-            draft = insertVisualTexInlineRow(next);
-            options.onInput(draft);
-            requestCompletion(host, next);
-          }
-          return;
-        }
-        if (event.key === "Tab") {
-          event.preventDefault();
-          event.stopPropagation();
-          requestCompletion(host, next);
-          if (!completionConsumesKey(host, key)) moveWithinOrOut(next, event.shiftKey, false);
-          return;
-        }
-        if ((event.metaKey || event.ctrlKey) && !event.altKey && (event.key === "[" || event.key === "]")) {
-          event.preventDefault();
-          event.stopPropagation();
-          moveWithinOrOut(next, event.key === "[", true);
-        }
+        if (!handleInlineKey(next, key)) return;
+        event.preventDefault();
+        event.stopPropagation();
       }, { capture: true });
       next.addEventListener("move-out", (event) => {
         event.preventDefault();
@@ -1015,64 +2485,11 @@ export function mountVisualTexInlineEditor(
       shell.dataset.aaronnoteVim = "native";
       shell.append(quickbar.element, next);
       host.replaceChildren(shell);
-      removeHostKeyBridge = addHostKeyBridge(host, () => field, (active, key) => {
-        if (key.key !== " ") boundarySpaceArmed = false;
-        if (!((key.metaKey || key.ctrlKey) && !key.altKey && (key.key === "[" || key.key === "]"))) {
-          commandBoundaryArmed = null;
-        }
-        if (commitFromKey(key)) return true;
-        if (key.key === " ") {
-          if (completionConsumesKey(host, key)) {
-            boundarySpaceArmed = false;
-            return true;
-          }
-          if (collapsedAtMathfieldEnd(active)) {
-            if (boundarySpaceArmed) {
-              active.executeCommand("deleteBackward");
-              draft = visualTexMathfieldLatex(active);
-              options.onInput(draft);
-              boundarySpaceArmed = false;
-              options.onCommit("space-forward");
-            } else {
-              insertMathSpace(active);
-              draft = visualTexMathfieldLatex(active);
-              options.onInput(draft);
-              boundarySpaceArmed = true;
-              refreshCompletion(host, active);
-            }
-            return true;
-          }
-        }
-        const common = runCommonMathfieldKey(host, active, key, key.key !== " ");
-        if (common === "commit") {
-          syncDraft();
-          options.onCommit("forward");
-          return true;
-        }
-        if (common === "handled") return true;
-        if (key.key === "Enter") {
-          if (visualTexSupportsRows(visualTexMathfieldLatex(active))) {
-            draft = insertVisualTexInlineRow(active);
-            options.onInput(draft);
-            requestCompletion(host, active);
-          }
-          return true;
-        }
-        if (key.key === "Tab") {
-          requestCompletion(host, active);
-          if (!completionConsumesKey(host, key)) moveWithinOrOut(active, Boolean(key.shiftKey), false);
-          return true;
-        }
-        if ((key.metaKey || key.ctrlKey) && !key.altKey && (key.key === "[" || key.key === "]")) {
-          moveWithinOrOut(active, key.key === "[", true);
-          return true;
-        }
-        return false;
-      });
+      removeHostKeyBridge = addHostKeyBridge(host, () => field, handleInlineKey);
       window.requestAnimationFrame(() => {
         if (destroyed || field !== next || !next.isConnected) return;
-        next.focus();
         placeInitialSelection(next, options.entry);
+        focusVisualTexField(next);
         closeCompletion(host);
       });
     })
@@ -1083,7 +2500,7 @@ export function mountVisualTexInlineEditor(
   return {
     ready,
     value: () => field ? visualTexMathfieldLatex(field) : draft,
-    focus: () => field?.focus(),
+    focus: () => focusVisualTexField(field),
     destroy: () => {
       destroyed = true;
       closeCompletion(host);
@@ -1106,7 +2523,6 @@ function mountVisualTexSingleDisplayEditor(
   let mountedToolbar: HTMLElement | null = null;
   let mountedPalette: HTMLElement | null = null;
   let removePaletteDismissListener = (): void => {};
-  let commandBoundaryArmed: "forward" | "backward" | null = null;
   let suppressMoveOutCommit = false;
 
   const closeColorPalette = (): void => {
@@ -1181,7 +2597,19 @@ function mountVisualTexSingleDisplayEditor(
       ): boolean => {
         if (deleteBefore > 0 && !removeCompletionPrefix(next, prefix, deleteBefore)) return false;
         const converted = setVisualTexDisplayLayout(visualTexMathfieldLatex(next), nextLayout);
-        next.setValue(converted, { selectionMode: "after", focus: true });
+        finishAllVisualTexSnippetPromptSessions(next);
+        stopVisualTexUndoCoalescing(next);
+        next.insert(converted, {
+          format: "latex",
+          mode: "math",
+          insertionMode: "replaceAll",
+          selectionMode: "after",
+          focus: false,
+          feedback: false,
+          scrollIntoView: false,
+        });
+        stopVisualTexUndoCoalescing(next);
+        focusVisualTexField(next);
         emitDraft();
         return true;
       };
@@ -1214,7 +2642,7 @@ function mountVisualTexSingleDisplayEditor(
         button.addEventListener("click", () => {
           action();
           emitDraft();
-          next.focus();
+          focusVisualTexField(next);
           refreshDisplayCompletion();
         });
         toolbar.append(button);
@@ -1244,7 +2672,7 @@ function mountVisualTexSingleDisplayEditor(
         control.addEventListener("click", () => {
           if (mountedPalette?.dataset.style === style) {
             closeColorPalette();
-            next.focus();
+            focusVisualTexField(next);
             return;
           }
           closeColorPalette();
@@ -1287,7 +2715,7 @@ function mountVisualTexSingleDisplayEditor(
               emitDraft();
               refreshDisplayCompletion();
               closeColorPalette();
-              next.focus();
+              focusVisualTexField(next);
             });
             palette.append(option);
           }
@@ -1317,7 +2745,9 @@ function mountVisualTexSingleDisplayEditor(
 
       function updateRowControls(): void {
         const enabled = visualTexSupportsRows(visualTexMathfieldLatex(next));
-        addRow.disabled = !enabled;
+        // Adding the first row promotes an equation to `aligned`; it should
+        // never be a mysteriously disabled operation.
+        addRow.disabled = false;
         removeRow.disabled = !enabled;
       }
       updateRowControls();
@@ -1327,25 +2757,25 @@ function mountVisualTexSingleDisplayEditor(
       });
 
       const handleDisplayKey = (active: MathfieldElement, key: VisualTexMathHostKey): boolean => {
-        const boundaryCommand = (key.metaKey || key.ctrlKey)
-          && !key.altKey
-          && (key.key === "[" || key.key === "]");
-        if (!boundaryCommand) commandBoundaryArmed = null;
         if (commitFromKey(key)) return true;
-        if (completionConsumesKey(host, key)) return true;
         const normalized = key.key === "Esc" ? "Escape" : key.key;
+        if (normalized === " ") {
+          if (active.mode !== "text" && completionConsumesKey(host, key)) return true;
+          insertVisualTexNaturalSpace(active);
+          closeCompletion(host);
+          return true;
+        }
+        if (completionConsumesKey(host, key)) return true;
         if (normalized === "Escape") {
           emitDraft();
           options.onCommit("forward");
           return true;
         }
         if (normalized === "Enter") {
-          if (visualTexSupportsRows(visualTexMathfieldLatex(active))) {
-            draft = insertVisualTexInlineRow(active);
-            options.onInput(draft);
-            layout.value = visualTexDisplayLayout(draft);
-            refreshCompletion(host, active, applyDisplayLayoutSnippet);
-          }
+          draft = insertVisualTexInlineRow(active);
+          options.onInput(draft);
+          layout.value = visualTexDisplayLayout(draft);
+          refreshCompletion(host, active, applyDisplayLayoutSnippet);
           return true;
         }
         if (normalized === "Tab") {
@@ -1360,23 +2790,23 @@ function mountVisualTexSingleDisplayEditor(
           }
           return true;
         }
-        if ((key.metaKey || key.ctrlKey) && !key.altKey && (normalized === "[" || normalized === "]")) {
-          const backward = normalized === "[";
-          const direction = backward ? "backward" : "forward";
-          const wasArmed = commandBoundaryArmed === direction;
+        const bracketDirection = visualTexBracketDirection(key);
+        if (bracketDirection) {
+          const backward = bracketDirection === "backward";
           suppressMoveOutCommit = true;
-          let result: VisualTexTabstopMove;
+          let result: VisualTexNavigationStep;
           try {
-            result = moveVisualTexTabstop(active, backward);
+            result = advanceVisualTexNavigation(active, backward);
           } finally {
             suppressMoveOutCommit = false;
           }
-          if (result === "boundary" && wasArmed) {
-            commandBoundaryArmed = null;
+          closeCompletion(host);
+          // Reaching the root edge only positions the caret. A second explicit
+          // Cmd-] from that edge exits to the Markdown line below, matching the
+          // inline editor and preventing a mid-formula command from closing it.
+          if (result === "exit") {
             emitDraft();
-            options.onCommit(direction);
-          } else {
-            commandBoundaryArmed = result === "edge" || result === "boundary" ? direction : null;
+            options.onCommit(bracketDirection);
           }
           return true;
         }
@@ -1391,6 +2821,7 @@ function mountVisualTexSingleDisplayEditor(
         if (event.isComposing) return;
         const handled = handleDisplayKey(next, {
           key: event.key,
+          code: event.code,
           ctrlKey: event.ctrlKey,
           metaKey: event.metaKey,
           altKey: event.altKey,
@@ -1432,8 +2863,8 @@ function mountVisualTexSingleDisplayEditor(
       if (draft !== initial) options.onInput(draft);
       window.requestAnimationFrame(() => {
         if (destroyed || field !== next || !next.isConnected) return;
-        next.focus();
         placeInitialSelection(next, options.entry);
+        focusVisualTexField(next);
         closeCompletion(host);
       });
     })
@@ -1444,7 +2875,7 @@ function mountVisualTexSingleDisplayEditor(
   return {
     ready,
     value: () => field ? visualTexMathfieldLatex(field) : draft,
-    focus: () => field?.focus(),
+    focus: () => focusVisualTexField(field),
     destroy: () => {
       destroyed = true;
       closeCompletion(host);
@@ -1478,7 +2909,6 @@ function mountVisualTexAdvancedDisplayEditor(
   let mountedToolbar: HTMLElement | null = null;
   let mountedPalette: HTMLElement | null = null;
   let removePaletteDismissListener = (): void => {};
-  let commandBoundaryArmed: "forward" | "backward" | null = null;
   let suppressMoveOutCommit = false;
 
   const closeColorPalette = (): void => {
@@ -1549,8 +2979,13 @@ function mountVisualTexAdvancedDisplayEditor(
         const row = rows[Math.max(0, Math.min(index, rows.length - 1))];
         if (!row) return;
         activeField = row.field;
-        row.field.focus();
-        row.field.position = atEnd ? row.field.lastOffset : 0;
+        // Crossing studio rows is caret navigation. Do not let MathLive turn
+        // that programmatic selection/mode switch into an invisible undo step.
+        withVisualTexUndoRecordingSuspended(row.field, () => {
+          row.field.position = atEnd ? row.field.lastOffset : 0;
+        });
+        stopVisualTexUndoCoalescing(row.field);
+        focusVisualTexField(row.field);
         closeCompletion(host);
       };
       const renumberRows = (): void => {
@@ -1565,7 +3000,7 @@ function mountVisualTexAdvancedDisplayEditor(
       let removeRowButton: HTMLButtonElement;
       function updateRowControls(): void {
         const enabled = currentLayout !== "equation";
-        if (addRowButton) addRowButton.disabled = !enabled;
+        if (addRowButton) addRowButton.disabled = false;
         if (removeRowButton) removeRowButton.disabled = !enabled || rows.length <= 1;
       }
 
@@ -1580,7 +3015,12 @@ function mountVisualTexAdvancedDisplayEditor(
         if (nextLayout === "equation" && rows.length > 1) {
           const [first, ...rest] = rows;
           const merged = rowValues().filter(Boolean).join(" \\qquad ");
-          first!.field.setValue(merged, { selectionMode: "after", focus: true });
+          // This conversion removes the other MathfieldElement instances, so
+          // their independent undo stacks can no longer represent the prior
+          // multi-row document. Reset the surviving field at this deliberate
+          // structural boundary instead of exposing a partial undo that drops
+          // every removed row's content.
+          first!.field.setValue(merged, { selectionMode: "after", focus: false });
           rest.forEach((row) => {
             row.field.blur();
             row.element.remove();
@@ -1592,7 +3032,7 @@ function mountVisualTexAdvancedDisplayEditor(
         layout.value = nextLayout;
         renumberRows();
         emitDraft();
-        activeField?.focus();
+        focusVisualTexField(activeField);
         closeCompletion(host);
         return true;
       };
@@ -1617,7 +3057,6 @@ function mountVisualTexAdvancedDisplayEditor(
 
         next.addEventListener("focusin", () => {
           activeField = next;
-          commandBoundaryArmed = null;
         });
         next.addEventListener("input", () => {
           activeField = next;
@@ -1628,6 +3067,7 @@ function mountVisualTexAdvancedDisplayEditor(
           if (event.isComposing) return;
           const handled = handleDisplayKey(next, {
             key: event.key,
+            code: event.code,
             ctrlKey: event.ctrlKey,
             metaKey: event.metaKey,
             altKey: event.altKey,
@@ -1656,7 +3096,12 @@ function mountVisualTexAdvancedDisplayEditor(
       };
 
       const insertIndependentRow = (afterIndex = activeRowIndex()): void => {
-        if (currentLayout === "equation") return;
+        if (currentLayout === "equation") {
+          // The first row gesture promotes a scalar display to a real row
+          // layout, matching the simple display editor and its Enter key.
+          currentLayout = "aligned";
+          layout.value = currentLayout;
+        }
         const row = createRow("");
         const index = Math.max(0, Math.min(afterIndex + 1, rows.length));
         rows.splice(index, 0, row);
@@ -1678,16 +3123,20 @@ function mountVisualTexAdvancedDisplayEditor(
 
       const handleDisplayKey = (active: MathfieldElement, key: VisualTexMathHostKey): boolean => {
         activeField = active;
-        const boundaryCommand = (key.metaKey || key.ctrlKey)
-          && !key.altKey
-          && (key.key === "[" || key.key === "]");
-        if (!boundaryCommand) commandBoundaryArmed = null;
         if (commitFromKey(key)) return true;
-        if (completionConsumesKey(host, key)) return true;
         const normalized = key.key === "Esc" ? "Escape" : key.key;
+        if (normalized === " ") {
+          if (active.mode !== "text" && completionConsumesKey(host, key)) return true;
+          insertVisualTexNaturalSpace(active);
+          closeCompletion(host);
+          return true;
+        }
+        if (completionConsumesKey(host, key)) return true;
         if (normalized === "Escape") {
           emitDraft();
-          options.onCommit("forward");
+          // Advanced mode is a modal studio; Escape must apply and close just
+          // like its explicit edge command, not emit an ignored move direction.
+          options.onCommit("submit");
           return true;
         }
         if (normalized === "Enter") {
@@ -1711,31 +3160,31 @@ function mountVisualTexAdvancedDisplayEditor(
           }
           return true;
         }
-        if ((key.metaKey || key.ctrlKey) && !key.altKey && (normalized === "[" || normalized === "]")) {
-          const backward = normalized === "[";
-          const direction = backward ? "backward" : "forward";
-          const wasArmed = commandBoundaryArmed === direction;
+        const bracketDirection = visualTexBracketDirection(key);
+        if (bracketDirection) {
+          const backward = bracketDirection === "backward";
           suppressMoveOutCommit = true;
-          let result: VisualTexTabstopMove;
+          let result: VisualTexNavigationStep;
           try {
-            result = moveVisualTexTabstop(active, backward);
+            result = advanceVisualTexNavigation(active, backward);
           } finally {
             suppressMoveOutCommit = false;
           }
-          if (result === "boundary") {
+          closeCompletion(host);
+          if (result === "exit") {
             const index = activeRowIndex();
             if (backward && index > 0) {
-              commandBoundaryArmed = null;
               focusRow(index - 1, true);
             } else if (!backward && index < rows.length - 1) {
-              commandBoundaryArmed = null;
               focusRow(index + 1);
-            } else if (wasArmed) {
-              commandBoundaryArmed = null;
+            } else {
               emitDraft();
-              options.onCommit(direction);
-            } else commandBoundaryArmed = direction;
-          } else commandBoundaryArmed = result === "edge" ? direction : null;
+              // Advanced mode is the standalone studio. Its host deliberately
+              // ignores passive MathLive move-out events; this explicit edge
+              // command is a real apply-and-close request.
+              options.onCommit("submit");
+            }
+          }
           return true;
         }
         return runCommonMathfieldKey(host, active, key, false) === "handled";
@@ -1750,7 +3199,7 @@ function mountVisualTexAdvancedDisplayEditor(
         button.addEventListener("mousedown", (event) => event.preventDefault());
         button.addEventListener("click", () => {
           action();
-          activeField?.focus();
+          focusVisualTexField(activeField);
           closeCompletion(host);
         });
         toolbar.append(button);
@@ -1788,7 +3237,7 @@ function mountVisualTexAdvancedDisplayEditor(
           if (!target) return;
           if (mountedPalette?.dataset.style === style) {
             closeColorPalette();
-            target.focus();
+            focusVisualTexField(target);
             return;
           }
           closeColorPalette();
@@ -1823,7 +3272,7 @@ function mountVisualTexAdvancedDisplayEditor(
               emitDraft();
               closeColorPalette();
               closeCompletion(host);
-              target.focus();
+              focusVisualTexField(target);
             });
             palette.append(option);
           }
@@ -1884,8 +3333,8 @@ function mountVisualTexAdvancedDisplayEditor(
         const first = rows[0]?.field;
         if (destroyed || !first?.isConnected) return;
         activeField = first;
-        first.focus();
         placeInitialSelection(first, options.entry);
+        focusVisualTexField(first);
         closeCompletion(host);
       });
     })
@@ -1898,7 +3347,7 @@ function mountVisualTexAdvancedDisplayEditor(
     value: () => rows.length
       ? serializeVisualTexDisplayRows(currentLayout, rows.map(({ field }) => visualTexMathfieldLatex(field)))
       : draft,
-    focus: () => (activeField ?? rows[0]?.field)?.focus(),
+    focus: () => focusVisualTexField(activeField ?? rows[0]?.field),
     destroy: () => {
       destroyed = true;
       closeCompletion(host);

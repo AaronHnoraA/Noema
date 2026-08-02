@@ -297,6 +297,154 @@ export function expandSnippetBody(snippet: SnippetSummary, options: SnippetExpan
   return { text, tabstops };
 }
 
+export type MathLiveSnippetTemplate = {
+  latex: string;
+  /**
+   * The insertion caret lands immediately after a TeX control word. MathLive
+   * usually adds a separator once another letter is typed, but that implicit
+   * repair is not stable across completion/save/reparse boundaries.
+   */
+  needsFinalSourceBoundary?: boolean;
+  tabstops: Array<{
+    index: number;
+    primaryId: string;
+    promptIds: string[];
+  }>;
+};
+
+let mathLiveSnippetSerial = 0;
+
+/**
+ * Translate Noema/YAS tabstops into editable MathLive prompts without throwing
+ * away their defaults. Prompt IDs retain tabstop groups so the MathLive adapter
+ * can preserve numeric navigation order and mirror repeated fields.
+ */
+export function mathLiveSnippetTemplate(
+  snippet: SnippetSummary,
+  namespace = `noema-${++mathLiveSnippetSerial}`,
+): MathLiveSnippetTemplate {
+  const expanded = expandSnippetBody(snippet);
+  type PromptNode = {
+    stop: SnippetTabstop;
+    id: string;
+    order: number;
+    children: PromptNode[];
+    parent: PromptNode | null;
+  };
+
+  const occurrenceByIndex = new Map<number, number>();
+  const nodes = expanded.tabstops
+    .filter((stop) => stop.index !== 0)
+    .map((stop, order): PromptNode => {
+      const occurrence = occurrenceByIndex.get(stop.index) ?? 0;
+      occurrenceByIndex.set(stop.index, occurrence + 1);
+      return {
+        stop,
+        id: `${namespace}-t${stop.index}-o${occurrence}`,
+        order,
+        children: [],
+        parent: null,
+      };
+    });
+
+  // expandSnippetBody records an outer default after the nested fields it
+  // parsed. That ordering disambiguates a zero-width nested stop at the outer
+  // field's end from a separate stop immediately following the outer field.
+  for (const node of nodes) {
+    const parents = nodes.filter((candidate) => (
+      candidate !== node
+      && candidate.order > node.order
+      && candidate.stop.from <= node.stop.from
+      && node.stop.to <= candidate.stop.to
+    ));
+    const parent = parents.sort((a, b) => (
+      (a.stop.to - a.stop.from) - (b.stop.to - b.stop.from)
+    ))[0] ?? null;
+    node.parent = parent;
+    parent?.children.push(node);
+  }
+
+  const renderRange = (from: number, to: number, children: PromptNode[]): string => {
+    let cursor = from;
+    let result = "";
+    const ordered = [...children].sort((a, b) => (
+      a.stop.from - b.stop.from || b.stop.to - a.stop.to || a.order - b.order
+    ));
+    for (const child of ordered) {
+      if (child.stop.from < cursor || child.stop.to > to) continue;
+      result += expanded.text.slice(cursor, child.stop.from);
+      result += `\\placeholder[${child.id}]{${renderRange(
+        child.stop.from,
+        child.stop.to,
+        child.children,
+      )}}`;
+      cursor = child.stop.to;
+    }
+    result += expanded.text.slice(cursor, to);
+    return result;
+  };
+
+  const joinLexicalBoundary = (left: string, right: string): string => {
+    if (!/^[A-Za-z]/.test(right)) return left + right;
+    const controlWord = left.match(/\\[A-Za-z]+$/);
+    if (!controlWord) return left + right;
+    const slash = left.length - controlWord[0].length;
+    let precedingSlashes = 0;
+    for (let cursor = slash - 1; cursor >= 0 && left[cursor] === "\\"; cursor--) {
+      precedingSlashes++;
+    }
+    return precedingSlashes % 2 === 1 ? left + right : `${left} ${right}`;
+  };
+
+  const flattenRange = (from: number, to: number, children: PromptNode[]): string => {
+    let cursor = from;
+    let result = "";
+    const ordered = [...children].sort((a, b) => (
+      a.stop.from - b.stop.from || b.stop.to - a.stop.to || a.order - b.order
+    ));
+    for (const child of ordered) {
+      if (child.stop.from < cursor || child.stop.to > to) continue;
+      result += expanded.text.slice(cursor, child.stop.from);
+      result = joinLexicalBoundary(result, flattenRange(
+        child.stop.from,
+        child.stop.to,
+        child.children,
+      ));
+      cursor = child.stop.to;
+    }
+    return result + expanded.text.slice(cursor, to);
+  };
+
+  const roots = nodes.filter((node) => !node.parent);
+  const groups = new Map<number, MathLiveSnippetTemplate["tabstops"][number]>();
+  for (const node of nodes) {
+    const group = groups.get(node.stop.index) ?? {
+      index: node.stop.index,
+      primaryId: node.id,
+      promptIds: [],
+    };
+    group.promptIds.push(node.id);
+    if (node.stop.primary) group.primaryId = node.id;
+    groups.set(node.stop.index, group);
+  }
+
+  const latex = renderRange(0, expanded.text.length, roots);
+  const semanticEnd = expanded.text.trimEnd().length;
+  const lexicalText = flattenRange(0, expanded.text.length, roots).trimEnd();
+  const trailing = lexicalText.match(/(\\+)[A-Za-z]+$/);
+  const finalStop = expanded.tabstops.find((stop) => stop.index === 0);
+  const needsFinalSourceBoundary = Boolean(
+    trailing
+    && trailing[1]!.length % 2 === 1
+    && (finalStop?.from ?? semanticEnd) >= semanticEnd,
+  );
+  return {
+    latex,
+    ...(needsFinalSourceBoundary ? { needsFinalSourceBoundary: true } : {}),
+    tabstops: [...groups.values()].sort((a, b) => a.index - b.index),
+  };
+}
+
 function nodeContains(root: HTMLElement, node: Node): boolean {
   return node === root || root.contains(node);
 }
@@ -695,15 +843,19 @@ export function snippetScore(snippet: SnippetSummary, query: string, allowFuzzy 
     && String(snippet.body || "").trimStart().startsWith(`\\${key}`)
     ? `\\${key}`
     : "";
-  const candidates = [key, commandAlias, ...(snippet.aliases ?? [])]
-    .map((value) => value.toLowerCase())
-    .filter(Boolean);
+  const candidates = [key, commandAlias, ...(snippet.aliases ?? [])].filter(Boolean);
   if (candidates.length === 0 || !query) return Number.POSITIVE_INFINITY;
   if (candidates.some((candidate) => candidate === query)) return 0;
+  const normalizedQuery = query.toLowerCase();
+  const normalizedCandidates = candidates.map((candidate) => candidate.toLowerCase());
+  // TeX control words are case-sensitive. Keep case-insensitive discovery,
+  // but never let `\\Pi` outrank the exact `\\pi` that the user typed.
+  if (normalizedCandidates.some((candidate) => candidate === normalizedQuery)) return 0.25;
   if (candidates.some((candidate) => candidate.startsWith(query))) return 1;
+  if (normalizedCandidates.some((candidate) => candidate.startsWith(normalizedQuery))) return 1.25;
   if (!allowFuzzy) return Number.POSITIVE_INFINITY;
-  if (candidates.some((candidate) => candidate.includes(query))) return 2;
-  if (candidates.some((candidate) => fuzzyPrefixMatch(candidate, query))) return 3;
+  if (normalizedCandidates.some((candidate) => candidate.includes(normalizedQuery))) return 2;
+  if (normalizedCandidates.some((candidate) => fuzzyPrefixMatch(candidate, normalizedQuery))) return 3;
   return Number.POSITIVE_INFINITY;
 }
 
@@ -806,7 +958,7 @@ export function matchingSnippetsForPrefix(
   prefix: string,
   options: SnippetMatchOptions = {},
 ): SnippetSummary[] {
-  const query = prefix.toLowerCase();
+  const query = prefix;
   const mode = options.mode || "";
   const activeKind = (options.kind || "").toLowerCase();
   const limit = Math.max(1, options.limit ?? 10);
@@ -872,6 +1024,44 @@ export function matchingSnippetsForPrefix(
   return best.map((item) => item.snippet);
 }
 
+export type SnippetTokenBoundaryMatch = {
+  /** The logical token shown by company and removed when the item is applied. */
+  prefix: string;
+  deleteBefore: number;
+  matches: SnippetSummary[];
+};
+
+/**
+ * Resolve a completion token even when a math renderer has discarded the
+ * ignored whitespace that separated it from the preceding atom.
+ *
+ * TeX whitespace in math mode is not data, so MathLive legitimately turns
+ * `x frac` into `xfrac`. Only fall back to a suffix when the whole identifier
+ * has no match; command (`\\...`) and provider (`@...`) channels remain exact
+ * and are never split heuristically.
+ */
+export function matchingSnippetsAtTokenBoundary(
+  snippets: readonly SnippetSummary[],
+  prefix: string,
+  options: SnippetMatchOptions = {},
+): SnippetTokenBoundaryMatch {
+  const direct = matchingSnippetsForPrefix(snippets, prefix, options);
+  if (direct.length > 0 || !/^[A-Za-z][A-Za-z0-9_]*$/.test(prefix)) {
+    return { prefix, deleteBefore: prefix.length, matches: direct };
+  }
+
+  // A one-character suffix is too ambiguous to infer as a lost boundary.
+  // Trying offsets from left to right keeps the longest viable token.
+  for (let offset = 1; offset <= prefix.length - 2; offset++) {
+    const suffix = prefix.slice(offset);
+    const matches = matchingSnippetsForPrefix(snippets, suffix, options);
+    if (matches.length > 0) {
+      return { prefix: suffix, deleteBefore: suffix.length, matches };
+    }
+  }
+  return { prefix, deleteBefore: prefix.length, matches: [] };
+}
+
 export type SnippetPopupKeyAction =
   | { type: "none" }
   | { type: "consume" }
@@ -889,6 +1079,8 @@ export type SnippetPopupKeyInput = {
   ctrlKey?: boolean;
   altKey?: boolean;
   isComposing?: boolean;
+  /** Inline math has no newline action while company completion is visible. */
+  acceptEnter?: boolean;
 };
 
 export function snippetPopupKeyName(key: string): string {
@@ -910,6 +1102,11 @@ function snippetPopupDigitIndex(key: string): number | null {
 export function snippetPopupKeyAction(input: SnippetPopupKeyInput): SnippetPopupKeyAction {
   if (input.isComposing) return { type: "none" };
   const key = snippetPopupKeyName(input.key);
+  // A visible company menu must not steal MathLive's range-extension keys.
+  // Shift-Tab remains the deliberate backward-tabstop gesture below.
+  if (input.shiftKey && /^(?:Arrow(?:Up|Down)|Page(?:Up|Down)|Home|End)$/.test(key)) {
+    return { type: "none" };
+  }
   const selectorModOnly = Boolean(input.commandKey || input.altKey)
     && (!input.ctrlKey || Boolean(input.commandKey))
     && !input.shiftKey;
@@ -924,7 +1121,7 @@ export function snippetPopupKeyAction(input: SnippetPopupKeyInput): SnippetPopup
   if (key === "PageUp") return { type: "page", delta: -6 };
   if (key === "Home") return { type: "edge", edge: "first" };
   if (key === "End") return { type: "edge", edge: "last" };
-  if (key === "Enter") return { type: "consume" };
+  if (key === "Enter") return { type: input.acceptEnter ? "accept" : "consume" };
   if (key === "Tab" && !input.shiftKey) return { type: "accept" };
   if (key === "Escape") return { type: "dismiss" };
   return { type: "none" };
