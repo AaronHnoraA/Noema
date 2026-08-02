@@ -153,18 +153,13 @@ class InlineMathEditorWidget extends MeasuredWidget {
     return this.session.id === other.session.id;
   }
 
-  toDOM(): HTMLElement {
+  toDOM(view: EditorView): HTMLElement {
     const span = document.createElement("span");
     span.className = "cm-math-inline-editor";
     span.dataset.aaronnoteVim = "native";
     span.dataset.cmInlineMath = "active";
     span.dataset.cmVisualMath = "active";
     setSourceRange(span, this.session.from, this.session.to);
-    if (this.session.metrics) {
-      span.style.setProperty("--noema-inline-math-width", `${this.session.metrics.width}px`);
-      span.style.setProperty("--noema-inline-math-height", `${this.session.metrics.height}px`);
-    }
-
     const fallback = document.createElement("span");
     fallback.className = "cm-math-inline-editor-fallback";
     const rendered = renderMathHTML(this.session.original, { displayMode: false });
@@ -184,6 +179,12 @@ class InlineMathEditorWidget extends MeasuredWidget {
     span.addEventListener("aaronnote:inline-math-commit", () => this.session.onCommit("forward"));
     span.addEventListener("aaronnote:inline-math-unavailable", () => {
       this.session.onUnavailable(new Error("Visual formula editor unavailable"));
+    });
+    span.addEventListener("aaronnote:inline-math-resize", () => {
+      // MathLive renders inside a shadow tree, so CM6's mutation observer does
+      // not see a taller fraction/root. The outer widget has already received
+      // its new stable size; explicitly refresh the line height map.
+      if (span.isConnected && view.dom.isConnected) view.requestMeasure();
     });
 
     this.session.host = span;

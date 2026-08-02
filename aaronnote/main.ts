@@ -9048,7 +9048,9 @@ function runHostKey(body: Record<string, unknown>): boolean {
   const shiftTabAlias = rawKey === "Backtab" || rawKey === "ISO_Left_Tab" || rawKey === "Shift-Tab";
   const spaceAlias = rawKey === "Spacebar" || rawKey === "Space" || rawKey === "SPC" || body.code === "Space";
   const enterAlias = body.code === "NumpadEnter" || /^(?:Return|RET|CR|NumpadEnter)$/i.test(rawKey);
-  const key = shiftTabAlias ? "Tab" : spaceAlias ? " " : enterAlias ? "Enter" : rawKey;
+  const backslashAlias = rawKey === "\\" || /^backslash$/i.test(rawKey)
+    || (body.code === "Backslash" && !body.shiftKey && (!rawKey || rawKey === "Unidentified"));
+  const key = shiftTabAlias ? "Tab" : spaceAlias ? " " : enterAlias ? "Enter" : backslashAlias ? "\\" : rawKey;
   if (!key) return false;
   const hostKey: VimLiteKey = {
     key,

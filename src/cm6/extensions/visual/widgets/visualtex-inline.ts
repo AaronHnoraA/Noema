@@ -2040,6 +2040,33 @@ export function visualTexMathfieldDeletionCommand(
       : "deleteForward";
 }
 
+/** Normalize host/browser key aliases before MathLive sees printable input. */
+export function visualTexMathfieldTypedText(key: VisualTexMathHostKey): string {
+  // Backslash is TeX's command introducer. Some xwidget/host paths report the
+  // physical key name instead of its text; letting that fall through makes
+  // MathLive insert a visible backslash atom and leaves commands untypeable.
+  if (key.key === "\\" || /^backslash$/i.test(key.key)
+    || (key.code === "Backslash" && !key.shiftKey && (!key.key || key.key === "Unidentified"))) {
+    return "\\";
+  }
+  if (typeof key.text === "string") return key.text;
+  return key.key.length === 1 ? key.key : "";
+}
+
+export function visualTexMathBottomLeftInsets(
+  field: { top: number; bottom: number },
+  visual: { top: number; bottom: number },
+): { top: number; bottom: number } {
+  // The lower-left corner is the stable origin. MathLive's own box already
+  // includes TeX depth, so the lower edge must never be recomputed from prompt
+  // overlays. Additional prompt/root ascent is absorbed above the field only.
+  const overflowTop = Math.max(0, field.top - visual.top);
+  return {
+    top: Math.ceil(overflowTop) + 2,
+    bottom: 2,
+  };
+}
+
 function runCommonMathfieldKey(
   host: HTMLElement,
   field: MathfieldElement,
@@ -2084,7 +2111,7 @@ function runCommonMathfieldKey(
   }
   if (primary || key.altKey) return "continue";
   if (normalized === "Escape") return "commit";
-  const text = typeof key.text === "string" ? key.text : normalized.length === 1 ? normalized : "";
+  const text = visualTexMathfieldTypedText({ ...key, key: normalized });
   if (text) {
     finishInactiveVisualTexSnippetPromptSessions(field);
     typedText(field, text);
@@ -2128,13 +2155,13 @@ function moveVisualTexTabstop(field: MathfieldElement, backward: boolean): Visua
  * One explicit Cmd-[ / Cmd-] transition.
  *
  * The order is intentional and does not require an external "armed" flag:
- *   1. a command that starts at the root edge exits immediately;
+ *   1. a command that starts at the root edge stays at that edge;
  *   2. otherwise visit the next/previous unresolved MathLive slot;
  *   3. with no slot, leave the nearest enclosing TeX parent (`}` boundary);
  *   4. with no enclosing parent, move to the root edge;
- *   5. the following command starts at that edge and exits.
+ *   5. later commands remain clamped there; Cmd-brackets never close LiveTeX.
  */
-export type VisualTexNavigationStep = "placeholder" | "final" | "parent" | "edge" | "exit";
+export type VisualTexNavigationStep = "placeholder" | "final" | "parent" | "edge" | "boundary";
 
 function keepVisualTexNavigationDirectional(
   field: VisualTexNavigationField,
@@ -2145,7 +2172,7 @@ function keepVisualTexNavigationDirectional(
   // Finishing a snippet reparses the formula without prompt wrapper atoms.
   // Offsets before and after that reparse are different coordinate spaces;
   // its `$0` position is mapped explicitly by finishVisualTexSnippetPromptSession.
-  if (step === "exit" || step === "final") return step;
+  if (step === "boundary" || step === "final") return step;
   const wrapped = backward ? field.position > origin : field.position < origin;
   if (!wrapped) return step;
 
@@ -2200,9 +2227,9 @@ export function advanceVisualTexNavigation(
   if (registered === "none") finishInactiveVisualTexSnippetPromptSessions(field as object);
   if (collapsedAtMathfieldBoundary(field, backward)) {
     // A trailing `\\text{...}` reports text mode even though its caret is
-    // already at the root edge. Switching mode here changes no visible state
-    // and used to make the first Cmd-] look broken; an edge command exits.
-    return "exit";
+    // already at the root edge. Cmd-brackets are structural navigation only:
+    // keep the caret clamped here instead of closing the formula.
+    return "boundary";
   }
 
   if (registered === "exhausted") {
@@ -2341,6 +2368,53 @@ export function mountVisualTexInlineEditor(
   let draft = normalizeVisualTexLatex(options.latex);
   let removeHostKeyBridge = (): void => {};
   let suppressMoveOutCommit = false;
+  let inlineResizeObserver: ResizeObserver | null = null;
+  let inlineResizeFrame = 0;
+
+  const scheduleInlineResize = (active: MathfieldElement): void => {
+    if (inlineResizeFrame || destroyed) return;
+    inlineResizeFrame = window.requestAnimationFrame(() => {
+      inlineResizeFrame = 0;
+      if (destroyed || field !== active || !active.isConnected) return;
+      const content = active.shadowRoot?.querySelector<HTMLElement>("[part='content']") ?? null;
+      const latex = content?.querySelector<HTMLElement>(".ML__latex") ?? null;
+      if (content && latex) {
+        let visualTop = latex.getBoundingClientRect().top;
+        let visualBottom = latex.getBoundingClientRect().bottom;
+        for (const element of latex.querySelectorAll<HTMLElement>(
+          ".ML__prompt-atom, [data-atom-id], svg",
+        )) {
+          const candidate = element.getBoundingClientRect();
+          if (!Number.isFinite(candidate.top) || !Number.isFinite(candidate.bottom)
+            || candidate.height <= 0) continue;
+          visualTop = Math.min(visualTop, candidate.top);
+          visualBottom = Math.max(visualBottom, candidate.bottom);
+        }
+        const fieldRect = active.getBoundingClientRect();
+        const style = getComputedStyle(host);
+        const current = {
+          top: Number.parseFloat(style.getPropertyValue("--noema-inline-math-shell-top")) || 0,
+          bottom: Number.parseFloat(style.getPropertyValue("--noema-inline-math-shell-bottom")) || 0,
+        };
+        const insets = visualTexMathBottomLeftInsets(
+          { top: fieldRect.top, bottom: fieldRect.bottom },
+          { top: visualTop, bottom: visualBottom },
+        );
+        if (Math.abs(insets.top - current.top) >= 0.5
+          || Math.abs(insets.bottom - current.bottom) >= 0.5) {
+          host.style.setProperty("--noema-inline-math-shell-top", `${insets.top}px`);
+          host.style.setProperty("--noema-inline-math-shell-bottom", `${insets.bottom}px`);
+        }
+      }
+      const rect = active.getBoundingClientRect();
+      // MathLive already encodes TeX ascent/depth with struts. Its own border
+      // box is the only reliable geometry; interpreting nested vlist offsets
+      // as host padding double-counts them and creates enormous blank space.
+      host.dispatchEvent(new CustomEvent("aaronnote:inline-math-resize", {
+        detail: { width: rect.width, height: rect.height },
+      }));
+    });
+  };
 
   const syncDraft = (): void => {
     if (!field) return;
@@ -2356,10 +2430,9 @@ export function mountVisualTexInlineEditor(
     }
   };
 
-  const moveWithinOrOut = (
+  const moveWithinFormula = (
     active: MathfieldElement,
     backward: boolean,
-    exitDirection: VisualTexInlineMoveDirection,
   ): void => {
     suppressMoveOutCommit = true;
     let result: VisualTexNavigationStep;
@@ -2369,10 +2442,7 @@ export function mountVisualTexInlineEditor(
       suppressMoveOutCommit = false;
     }
     closeCompletion(host);
-    if (result === "exit") {
-      syncDraft();
-      options.onCommit(exitDirection);
-    }
+    void result;
   };
 
   const handleSpace = (active: MathfieldElement, key: VisualTexMathHostKey): void => {
@@ -2441,7 +2511,7 @@ export function mountVisualTexInlineEditor(
         }
         const bracketDirection = visualTexBracketDirection(key);
         if (bracketDirection) {
-          moveWithinOrOut(active, bracketDirection === "backward", bracketDirection);
+          moveWithinFormula(active, bracketDirection === "backward");
           return true;
         }
         return false;
@@ -2450,6 +2520,7 @@ export function mountVisualTexInlineEditor(
       next.addEventListener("input", () => {
         syncDraft();
         requestCompletion(host, next);
+        scheduleInlineResize(next);
       });
       next.addEventListener("keydown", (event) => {
         if (event.isComposing) return;
@@ -2485,9 +2556,14 @@ export function mountVisualTexInlineEditor(
       shell.dataset.aaronnoteVim = "native";
       shell.append(quickbar.element, next);
       host.replaceChildren(shell);
+      if (typeof ResizeObserver !== "undefined") {
+        inlineResizeObserver = new ResizeObserver(() => scheduleInlineResize(next));
+        inlineResizeObserver.observe(next);
+      }
       removeHostKeyBridge = addHostKeyBridge(host, () => field, handleInlineKey);
       window.requestAnimationFrame(() => {
         if (destroyed || field !== next || !next.isConnected) return;
+        scheduleInlineResize(next);
         placeInitialSelection(next, options.entry);
         focusVisualTexField(next);
         closeCompletion(host);
@@ -2505,6 +2581,10 @@ export function mountVisualTexInlineEditor(
       destroyed = true;
       closeCompletion(host);
       removeHostKeyBridge();
+      inlineResizeObserver?.disconnect();
+      inlineResizeObserver = null;
+      if (inlineResizeFrame) window.cancelAnimationFrame(inlineResizeFrame);
+      inlineResizeFrame = 0;
       field?.blur();
       field = null;
     },
@@ -2801,13 +2881,9 @@ function mountVisualTexSingleDisplayEditor(
             suppressMoveOutCommit = false;
           }
           closeCompletion(host);
-          // Reaching the root edge only positions the caret. A second explicit
-          // Cmd-] from that edge exits to the Markdown line below, matching the
-          // inline editor and preventing a mid-formula command from closing it.
-          if (result === "exit") {
-            emitDraft();
-            options.onCommit(bracketDirection);
-          }
+          // Cmd-brackets navigate structure and clamp at the root boundary;
+          // Escape/explicit apply commands are the only ways out.
+          void result;
           return true;
         }
         return runCommonMathfieldKey(host, active, key, false) === "handled";
@@ -3171,18 +3247,12 @@ function mountVisualTexAdvancedDisplayEditor(
             suppressMoveOutCommit = false;
           }
           closeCompletion(host);
-          if (result === "exit") {
+          if (result === "boundary") {
             const index = activeRowIndex();
             if (backward && index > 0) {
               focusRow(index - 1, true);
             } else if (!backward && index < rows.length - 1) {
               focusRow(index + 1);
-            } else {
-              emitDraft();
-              // Advanced mode is the standalone studio. Its host deliberately
-              // ignores passive MathLive move-out events; this explicit edge
-              // command is a real apply-and-close request.
-              options.onCommit("submit");
             }
           }
           return true;

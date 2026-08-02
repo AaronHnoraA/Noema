@@ -314,9 +314,13 @@
   cursor: pointer;
 }
 .cm-editor .cm-math-inline-editor {
+  box-sizing: border-box;
   display: inline-block;
-  min-inline-size: var(--noema-inline-math-width, 0);
-  min-block-size: var(--noema-inline-math-height, 0);
+  inline-size: auto;
+  block-size: auto;
+  min-inline-size: 0;
+  min-block-size: 0;
+  max-inline-size: calc(100vw - 32px);
   margin: 0;
   padding: 0;
   border: 0;
@@ -324,7 +328,8 @@
   background: transparent;
   color: inherit;
   line-height: 1;
-  vertical-align: -0.08em;
+  vertical-align: bottom;
+  transform-origin: left bottom;
 }
 .cm-editor .cm-math-inline-editor-fallback {
   display: inline-block;
@@ -334,13 +339,21 @@
   line-height: 1;
 }
 .cm-editor .noema-visualtex-inline-shell {
+  box-sizing: border-box;
   position: relative;
   display: inline-flex;
-  align-items: baseline;
-  min-width: var(--noema-inline-math-width, 0);
-  min-height: var(--noema-inline-math-height, 0);
+  align-items: flex-end;
+  width: max-content;
+  height: auto;
+  max-width: calc(100vw - 32px);
+  min-width: 0;
+  min-height: 0;
+  padding-block: var(--noema-inline-math-shell-top, 0)
+    var(--noema-inline-math-shell-bottom, 0);
+  padding-inline: 0;
   line-height: 1;
-  vertical-align: baseline;
+  vertical-align: bottom;
+  transform-origin: left bottom;
 }
 .cm-editor .noema-visualtex-quickbar {
   box-sizing: border-box;
@@ -400,10 +413,13 @@
   outline: none;
 }
 .cm-editor .noema-visualtex-mathfield {
+  box-sizing: border-box;
   display: inline-block;
-  width: auto;
-  min-width: var(--noema-inline-math-width, 0);
-  min-height: var(--noema-inline-math-height, 0);
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  height: auto;
+  min-width: 0;
+  min-height: 0;
   margin: 0;
   padding: 0 !important;
   border: 0 !important;
@@ -412,24 +428,53 @@
   box-shadow: none !important;
   background: transparent !important;
   overflow: visible !important;
+  scrollbar-width: none;
   color: inherit;
   font-size: 1em;
   line-height: 1;
-  vertical-align: baseline;
+  align-self: flex-end;
+  vertical-align: bottom;
+  transform-origin: left bottom;
   --caret-color: var(--aaron-accent, #6da8ff);
   --selection-background-color: color-mix(in srgb, var(--aaron-accent, #6da8ff), transparent 72%);
-  --contains-highlight-background-color: color-mix(in srgb, var(--aaron-accent, #6da8ff), transparent 88%);
+  --contains-highlight-color: currentColor;
+  --contains-highlight-background-color: transparent;
+}
+.cm-editor .noema-visualtex-mathfield::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 .cm-editor .noema-visualtex-mathfield::part(container),
 .cm-editor .noema-visualtex-mathfield::part(content) {
+  box-sizing: border-box;
+  width: max-content;
+  max-width: 100%;
   min-width: 0;
   min-height: 0;
   margin: 0;
   padding: 0;
   border: 0;
   background: transparent;
-  overflow: visible !important;
   scrollbar-width: none;
+}
+.cm-editor .noema-visualtex-mathfield::part(content) {
+  /* The outer shell absorbs prompt overflow and moves MathLive as one unit,
+     preserving the coordinate system of prompt and selection overlays. */
+  overflow: visible !important;
+}
+.cm-editor .noema-visualtex-mathfield::part(prompt) {
+  /* MathLive computes nested prompt overlay dimensions recursively. Deep
+     snippets can therefore produce a 3,000px absolute frame around a 300px
+     atom. The atom is the authoritative layout box: pin its visual frame to
+     that box so every outline shares the same lower-left coordinate space. */
+  box-sizing: border-box;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  margin: 0 !important;
+  transform: none !important;
 }
 .cm-editor .noema-visualtex-mathfield::part(menu-toggle),
 .cm-editor .noema-visualtex-mathfield::part(virtual-keyboard-toggle) {

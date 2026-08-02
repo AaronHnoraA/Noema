@@ -191,7 +191,7 @@ describe("xwidget key guard", () => {
     }
   });
 
-  test("routes both legacy-keydown and beforeinput-only xwidget Space through LiveTeX", () => {
+  test("routes legacy and beforeinput-only Space/Backslash through LiveTeX", () => {
     const host = withMounted(document.createElement("section"));
     const editor = createEditor(host, { initialContent: "\\[x\\]" });
     const vim = createVimLite(editor, host);
@@ -249,6 +249,35 @@ describe("xwidget key guard", () => {
       Object.defineProperty(legacyReturn, "target", { value: target });
       expect(handleXwidgetMathKeydown(legacyReturn, { editor, editorHost: host, vim })).toBe(true);
       expect(routed.at(-1)).toEqual({ key: "Enter", text: "" });
+
+      const backslashKeydown = new KeyboardEvent("keydown", {
+        key: "Backslash",
+        code: "Backslash",
+        bubbles: true,
+        cancelable: true,
+      });
+      Object.defineProperty(backslashKeydown, "target", { value: target });
+      expect(handleXwidgetMathKeydown(backslashKeydown, { editor, editorHost: host, vim })).toBe(true);
+      expect(routed.at(-1)).toEqual({ key: "\\", text: "" });
+
+      const pairedBackslash = new InputEvent("beforeinput", {
+        bubbles: true,
+        cancelable: true,
+        data: "\\",
+        inputType: "insertText",
+      });
+      Object.defineProperty(pairedBackslash, "target", { value: target });
+      expect(handleXwidgetMathBeforeInput(pairedBackslash, { editor, editorHost: host, vim })).toBe(true);
+
+      const inputOnlyBackslash = new InputEvent("beforeinput", {
+        bubbles: true,
+        cancelable: true,
+        data: "\\",
+        inputType: "insertText",
+      });
+      Object.defineProperty(inputOnlyBackslash, "target", { value: target });
+      expect(handleXwidgetMathBeforeInput(inputOnlyBackslash, { editor, editorHost: host, vim })).toBe(true);
+      expect(routed.at(-1)).toEqual({ key: "\\", text: "\\" });
     } finally {
       document.removeEventListener("aaronnote:math-host-key", listener);
       editor.destroy();

@@ -168,6 +168,10 @@ function printableMathKeyFromKeyboardEvent(event: KeyboardEvent): string {
   if (event.code === "Space" || event.key === "Spacebar" || event.key === "Space" || event.key === "SPC") {
     return " ";
   }
+  if (event.key === "\\" || /^backslash$/i.test(event.key)
+    || (event.code === "Backslash" && !event.shiftKey && (!event.key || event.key === "Unidentified"))) {
+    return "\\";
+  }
   return event.key;
 }
 
@@ -470,7 +474,11 @@ export function handleXwidgetMathBeforeInput(event: InputEvent, context: Xwidget
     // xwidget sometimes omits Space keydown entirely and emits only this
     // beforeinput. Route it through Noema's three-state math Space adapter so
     // Emacs and Noema.app cannot drift into different serialization.
-    ?? (event.inputType === "insertText" && event.data === " " ? " " : null);
+    ?? (event.inputType === "insertText" && event.data === " " ? " " : null)
+    // As with beforeinput-only Space, legacy xwidget may omit the physical
+    // keydown. Route TeX's command introducer explicitly so it cannot become a
+    // literal MathLive backslash atom.
+    ?? (event.inputType === "insertText" && event.data === "\\" ? "\\" : null);
   if (!key) return false;
   // A handled keydown can still be followed by WebKit's synthetic beforeinput.
   // Always suppress its control byte, but never execute the operation twice.

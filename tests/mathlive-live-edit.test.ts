@@ -15,6 +15,8 @@ import {
   selectAllVisualTexMathfield,
   visualTexCompletionPrefix,
   visualTexMathfieldLatex,
+  visualTexMathBottomLeftInsets,
+  visualTexMathfieldTypedText,
 } from "../src/cm6/extensions/visual/widgets/visualtex-inline.ts";
 import { mathLiveSnippetTemplate } from "../aaronnote/snippets.ts";
 
@@ -303,7 +305,7 @@ describe("LiveTeX custom macro writeback", () => {
     expect(observedDrafts.at(-1)).toBe(String.raw`\mathcal{V}+\mathsf{V}`);
   });
 
-  test("navigates snippet fields, then the invisible $0 stop, then exits", () => {
+  test("navigates snippet fields, then the invisible $0 stop, then clamps at the end", () => {
     const field = createMathfield("frac");
     field.addEventListener("move-out", (event: Event) => event.preventDefault());
     const template = mathLiveSnippetTemplate({
@@ -318,7 +320,7 @@ describe("LiveTeX custom macro writeback", () => {
     expect(advanceVisualTexNavigation(field, false)).toBe("final");
     expect(field.position).toBe(field.lastOffset);
     expect(field.getPrompts()).toEqual([]);
-    expect(advanceVisualTexNavigation(field, false)).toBe("exit");
+    expect(advanceVisualTexNavigation(field, false)).toBe("boundary");
   });
 
   test("removes stale prompt atoms when the caret leaves a snippet before Cmd-]", () => {
@@ -334,7 +336,7 @@ describe("LiveTeX custom macro writeback", () => {
 
     field.executeCommand("moveToMathfieldEnd");
     expect(field.position).toBe(field.lastOffset);
-    expect(advanceVisualTexNavigation(field, false)).toBe("exit");
+    expect(advanceVisualTexNavigation(field, false)).toBe("boundary");
     expect(field.getPrompts()).toEqual([]);
     expect(visualTexMathfieldLatex(field)).toBe("\\frac{}{}");
   });
@@ -530,7 +532,7 @@ describe("LiveTeX custom macro writeback", () => {
       .toContain("+z");
     expect(advanceVisualTexNavigation(field, false)).toBe("edge");
     expect(field.position).toBe(field.lastOffset);
-    expect(advanceVisualTexNavigation(field, false)).toBe("exit");
+    expect(advanceVisualTexNavigation(field, false)).toBe("boundary");
   });
 
   test("round-trips a two-argument braket snippet as valid KaTeX input", () => {
@@ -588,19 +590,19 @@ describe("LiveTeX custom macro writeback", () => {
     expect(advanceVisualTexNavigation(field, false)).toBe("parent");
     expect(field.position).toBeLessThan(field.lastOffset);
     expect(advanceVisualTexNavigation(field, false)).toBe("edge");
-    expect(advanceVisualTexNavigation(field, false)).toBe("exit");
+    expect(advanceVisualTexNavigation(field, false)).toBe("boundary");
     expect(normalizeVisualTexMathLiveOutput(
       String.raw`\left\langle a\middle{|}b\right\rangle`,
     )).toBe(String.raw`\left\langle a\middle|b\right\rangle`);
   });
 
-  test("leaves a trailing text run before exiting the formula", () => {
+  test("keeps a trailing text run clamped inside the formula", () => {
     const field = createMathfield(String.raw`\text{thin}`);
     field.addEventListener("move-out", (event: Event) => event.preventDefault());
     expect(field.position).toBe(field.lastOffset);
     expect(field.mode).toBe("text");
 
-    expect(advanceVisualTexNavigation(field, false)).toBe("exit");
+    expect(advanceVisualTexNavigation(field, false)).toBe("boundary");
     expect(field.position).toBe(field.lastOffset);
     expect(field.mode).toBe("text");
   });
@@ -958,6 +960,40 @@ describe("LiveTeX custom macro writeback", () => {
     expect(saved).not.toContain(String.raw`\asdasa`);
     expect(saved).not.toContain(String.raw`\,`);
     expect(field.getPrompts()).toEqual([]);
+  });
+});
+
+describe("LiveTeX host key normalization", () => {
+  test("always treats the physical Backslash key as TeX command input", () => {
+    expect(visualTexMathfieldTypedText({ key: "Backslash", code: "Backslash" })).toBe("\\");
+    expect(visualTexMathfieldTypedText({ key: "\\" })).toBe("\\");
+    expect(visualTexMathfieldTypedText({ key: "Backslash", text: "\\" })).toBe("\\");
+    expect(visualTexMathfieldTypedText({ key: "|", code: "Backslash", shiftKey: true })).toBe("|");
+  });
+});
+
+describe("LiveTeX prompt geometry", () => {
+  test("moves the whole MathLive box so prompt frames stay aligned", () => {
+    const insets = visualTexMathBottomLeftInsets(
+      { top: 149, bottom: 330 },
+      { top: 62, bottom: 330 },
+    );
+    expect(insets).toEqual({ top: 89, bottom: 2 });
+
+    // Padding the shell shifts the field and every overlay together, so their
+    // relative overflow remains unchanged and the measurement is stable.
+    expect(visualTexMathBottomLeftInsets(
+      { top: 238, bottom: 419 },
+      { top: 151, bottom: 419 },
+    )).toEqual(insets);
+
+    // Prompt overlays are not allowed to move the lower origin. Even a bad
+    // descendant bound below MathLive's natural TeX depth grows upward rather
+    // than shifting the field and every already-rendered frame.
+    expect(visualTexMathBottomLeftInsets(
+      { top: 238, bottom: 419 },
+      { top: 151, bottom: 460 },
+    )).toEqual(insets);
   });
 });
 
