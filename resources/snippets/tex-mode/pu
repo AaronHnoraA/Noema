@@ -4,4 +4,4 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/pu_Physical_Units
 # --
-\pu{ $1 }
+\pu{ ${1:a} }$0

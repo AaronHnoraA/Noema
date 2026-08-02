@@ -5,4 +5,4 @@
 # contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=
 # group: Math · latex-workshop
 # --
-\textmd{${1}}$0
+\textmd{${1:a}}$0

@@ -4,4 +4,4 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/Re_Real_Part
 # --
-\mathrm{Re}
+\mathrm{Re}$0

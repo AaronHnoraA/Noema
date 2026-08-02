@@ -7,6 +7,7 @@ import { mkdir, readFile, readdir, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import katex from "katex";
+import { normalizeTexSnippetBody } from "./tex-snippet-format.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "..");
@@ -90,7 +91,7 @@ function katexCompatible(body) {
 }
 
 function normalizeSnippet({ key, name, description, body, provider, weight = 0, context = "math" }) {
-  const yasBody = textmateToYas(body);
+  const yasBody = normalizeTexSnippetBody(textmateToYas(body));
   if (!key || !yasBody || !katexCompatible(yasBody)) return null;
   return {
     id: `${provider}:${key}`,

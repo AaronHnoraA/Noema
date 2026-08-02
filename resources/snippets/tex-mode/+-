@@ -4,4 +4,4 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/+-_Plus-Minus
 # --
-\pm
+\pm$0

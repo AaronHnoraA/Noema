@@ -4,4 +4,4 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/ZZ_Integers
 # --
-\mathbb{Z}
+\mathbb{Z}$0

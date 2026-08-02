@@ -4,5 +4,4 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/plaininline_lstinline
 # --
-# --
-\lstinline{$1}$0
+\lstinline{${1:a}}$0

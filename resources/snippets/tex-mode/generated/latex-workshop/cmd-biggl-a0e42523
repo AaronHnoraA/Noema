@@ -5,4 +5,4 @@
 # contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%5Cbiggl%5B+...+%5Cbiggr%5D
 # group: Math · latex-workshop
 # --
-\biggl[${1}\biggr]$0
+\biggl[${1:a}\biggr]$0

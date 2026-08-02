@@ -4,4 +4,4 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/sts_Text_Subscript
 # --
-_\text{$1}
+_\text{${1:a}}$0

@@ -4,4 +4,4 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/RR_Real_Numbers
 # --
-\mathbb{R}
+\mathbb{R}$0

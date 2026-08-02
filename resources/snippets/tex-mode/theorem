@@ -4,8 +4,7 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/theorem_Theorem_no_label_
 # --
-# --
-\begin{theorem}{$1}
-	$2
+\begin{theorem}{${1:a}}
+	${2:b}
 \end{theorem}
 $0

@@ -42,6 +42,7 @@
     "jupyter:bootstrap": "bash jupyter/scripts/bootstrap-jupyter.sh",
     "preview": "vp preview",
     "snippets:migrate-nvim": "node scripts/migrate-yas-to-nvim-snippets.mjs",
+    "snippets:audit": "node scripts/audit-tex-snippets.mjs",
     "snippets:sync": "node scripts/sync-math-snippets.mjs --check",
     "test": "vp test --run",
     "prepublishOnly": "npm run build:lib"

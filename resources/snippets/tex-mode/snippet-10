@@ -4,4 +4,4 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/_Greater_or_Equal
 # --
-\geq
+\geq$0

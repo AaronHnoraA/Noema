@@ -4,4 +4,4 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/dot_Dot_Accent
 # --
-\dot{$1}$2
+\dot{${1:a}}$0

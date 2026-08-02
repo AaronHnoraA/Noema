@@ -5,4 +5,4 @@
 # contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=
 # group: Math · latex-workshop
 # --
-\textsf{${1}}$0
+\textsf{${1:a}}$0

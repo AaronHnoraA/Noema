@@ -5,5 +5,5 @@
 # source: /Users/hc/.config/emacs/snippets/tex-mode/Vmat_Vmatrix_double_
 # --
 \begin{Vmatrix}
-$1
-\end{Vmatrix}
+${1:a}
+\end{Vmatrix}$0

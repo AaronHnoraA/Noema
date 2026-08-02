@@ -4,6 +4,5 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/par_Paragraph_no_label_
 # --
-# --
-\paragraph{$1}
+\paragraph{${1:a}}
 ${0:$TM_SELECTED_TEXT}

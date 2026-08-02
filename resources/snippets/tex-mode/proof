@@ -4,8 +4,7 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/proof_Proof
 # --
-# --
 \begin{proof}
-	$1
+	${1:a}
 \end{proof}
 $0

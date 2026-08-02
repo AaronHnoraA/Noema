@@ -27,6 +27,8 @@ type SnippetFrame = {
 export type SnippetExpansionOptions = {
   selectedText?: string;
   newId?: (kind: NoemaIdKind) => string;
+  /** Used only when a non-final tabstop has no content of its own. */
+  emptyTabstopFallback?: (index: number) => string;
 };
 
 const SAFE_SELECTED_TEXT_RE = /`\(or\s+yas-selected-text\s+(?:"([^"]*)"|'([^']*)|nil)\)`/g;
@@ -132,6 +134,11 @@ export function expandSnippetBody(snippet: SnippetSummary, options: SnippetExpan
     return values.get(index) ?? "";
   }
 
+  function initialValue(index: number, value: string): string {
+    if (index === 0 || value.length > 0) return value;
+    return options.emptyTabstopFallback?.(index) ?? "";
+  }
+
   function pushTabstop(index: number, value: string, choices?: string[]): void {
     const from = text.length;
     text += value;
@@ -163,10 +170,22 @@ export function expandSnippetBody(snippet: SnippetSummary, options: SnippetExpan
     return -1;
   }
 
+  function escapedAt(source: string, index: number): boolean {
+    let slashes = 0;
+    for (let cursor = index - 1; cursor >= 0 && source[cursor] === "\\"; cursor--) slashes++;
+    return slashes % 2 === 1;
+  }
+
   function skipTemplate(source: string, start = 0, endChar = ""): number {
     let i = start;
+    let braceDepth = 0;
     while (i < source.length) {
-      if (endChar && source[i] === endChar) return i + 1;
+      if (endChar && source[i] === endChar && !escapedAt(source, i)) {
+        if (braceDepth === 0) return i + 1;
+        braceDepth--;
+        i++;
+        continue;
+      }
       if (source[i] === "$" && source[i + 1] === "{") {
         let pos = i + 2;
         let digits = "";
@@ -195,6 +214,7 @@ export function expandSnippetBody(snippet: SnippetSummary, options: SnippetExpan
           continue;
         }
       }
+      if (endChar && source[i] === "{" && !escapedAt(source, i)) braceDepth++;
       i++;
     }
     return i;
@@ -202,15 +222,28 @@ export function expandSnippetBody(snippet: SnippetSummary, options: SnippetExpan
 
   function parseTemplate(source: string, start = 0, endChar = ""): number {
     let i = start;
+    let braceDepth = 0;
     while (i < source.length) {
-      if (endChar && source[i] === endChar) return i + 1;
+      if (endChar && source[i] === endChar && !escapedAt(source, i)) {
+        if (braceDepth === 0) return i + 1;
+        braceDepth--;
+        text += source[i];
+        i++;
+        continue;
+      }
 
       if (source[i] !== "$") {
         if (source[i] === "\\" && source[i + 1] === "$") {
-          text += "$";
-          i += 2;
-          continue;
+          // YAS escapes `$` only after an odd run of backslashes. A TeX row
+          // break immediately followed by `$1` has two backslashes and must
+          // preserve both before parsing the tabstop.
+          if (escapedAt(source, i + 1)) {
+            text += "$";
+            i += 2;
+            continue;
+          }
         }
+        if (endChar && source[i] === "{" && !escapedAt(source, i)) braceDepth++;
         text += source[i];
         i++;
         continue;
@@ -232,7 +265,7 @@ export function expandSnippetBody(snippet: SnippetSummary, options: SnippetExpan
         const index = Number(digits);
         const marker = source[pos];
         if (marker === "}") {
-          pushTabstop(index, index === 0 ? "" : valueFor(index, ""));
+          pushTabstop(index, valueFor(index, initialValue(index, "")));
           i = pos + 1;
           continue;
         }
@@ -240,7 +273,7 @@ export function expandSnippetBody(snippet: SnippetSummary, options: SnippetExpan
           const end = findChoiceEnd(source, pos + 1);
           if (end >= 0) {
             const options = parseChoiceOptions(source.slice(pos + 1, end));
-            pushTabstop(index, valueFor(index, options[0] ?? ""), options);
+            pushTabstop(index, valueFor(index, initialValue(index, options[0] ?? "")), options);
             i = end + 2;
             continue;
           }
@@ -254,7 +287,11 @@ export function expandSnippetBody(snippet: SnippetSummary, options: SnippetExpan
           }
           const from = text.length;
           const end = parseTemplate(source, pos + 1, "}");
-          const value = text.slice(from);
+          let value = text.slice(from);
+          if (value.length === 0) {
+            value = initialValue(index, value);
+            text += value;
+          }
           values.set(index, value);
           tabstops.push({ index, from, to: text.length, primary: false, text: value });
           i = end;
@@ -273,7 +310,7 @@ export function expandSnippetBody(snippet: SnippetSummary, options: SnippetExpan
       }
       if (digits) {
         const index = Number(digits);
-        pushTabstop(index, index === 0 ? "" : valueFor(index, ""));
+        pushTabstop(index, valueFor(index, initialValue(index, "")));
         i = pos;
         continue;
       }
@@ -308,34 +345,38 @@ export type MathLiveSnippetTemplate = {
   tabstops: Array<{
     index: number;
     primaryId: string;
-    promptIds: string[];
+    occurrenceIds: string[];
   }>;
 };
 
 let mathLiveSnippetSerial = 0;
 
 /**
- * Translate Noema/YAS tabstops into editable MathLive prompts without throwing
- * away their defaults. Prompt IDs retain tabstop groups so the MathLive adapter
- * can preserve numeric navigation order and mirror repeated fields.
+ * Translate Noema/YAS tabstops into a marked MathLive insertion template.
+ * Occurrence IDs retain numeric groups so LiveTeX can navigate and mirror
+ * fields after removing every transient marker from the rendered atom tree.
  */
 export function mathLiveSnippetTemplate(
   snippet: SnippetSummary,
   namespace = `noema-${++mathLiveSnippetSerial}`,
 ): MathLiveSnippetTemplate {
-  const expanded = expandSnippetBody(snippet);
-  type PromptNode = {
+  // A real selected glyph gives an otherwise empty field stable geometry
+  // without mounting MathLive PromptAtoms or any overlay placeholder UI.
+  const expanded = expandSnippetBody(snippet, {
+    emptyTabstopFallback: () => "□",
+  });
+  type TabstopNode = {
     stop: SnippetTabstop;
     id: string;
     order: number;
-    children: PromptNode[];
-    parent: PromptNode | null;
+    children: TabstopNode[];
+    parent: TabstopNode | null;
   };
 
   const occurrenceByIndex = new Map<number, number>();
   const nodes = expanded.tabstops
     .filter((stop) => stop.index !== 0)
-    .map((stop, order): PromptNode => {
+    .map((stop, order): TabstopNode => {
       const occurrence = occurrenceByIndex.get(stop.index) ?? 0;
       occurrenceByIndex.set(stop.index, occurrence + 1);
       return {
@@ -364,7 +405,7 @@ export function mathLiveSnippetTemplate(
     parent?.children.push(node);
   }
 
-  const renderRange = (from: number, to: number, children: PromptNode[]): string => {
+  const renderRange = (from: number, to: number, children: TabstopNode[]): string => {
     let cursor = from;
     let result = "";
     const ordered = [...children].sort((a, b) => (
@@ -396,7 +437,7 @@ export function mathLiveSnippetTemplate(
     return precedingSlashes % 2 === 1 ? left + right : `${left} ${right}`;
   };
 
-  const flattenRange = (from: number, to: number, children: PromptNode[]): string => {
+  const flattenRange = (from: number, to: number, children: TabstopNode[]): string => {
     let cursor = from;
     let result = "";
     const ordered = [...children].sort((a, b) => (
@@ -421,9 +462,9 @@ export function mathLiveSnippetTemplate(
     const group = groups.get(node.stop.index) ?? {
       index: node.stop.index,
       primaryId: node.id,
-      promptIds: [],
+      occurrenceIds: [],
     };
-    group.promptIds.push(node.id);
+    group.occurrenceIds.push(node.id);
     if (node.stop.primary) group.primaryId = node.id;
     groups.set(node.stop.index, group);
   }

@@ -4,6 +4,5 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/subsl_Sub_Sub_Section_with_label_
 # --
-# --
-\subsubsection{$1}\label{sec:$1}
+\subsubsection{${1:a}}\label{sec:$1}
 ${0:$TM_SELECTED_TEXT}

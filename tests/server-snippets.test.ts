@@ -5,6 +5,8 @@ import { delimiter, join } from "node:path";
 
 // @ts-ignore The server is a Node ESM module outside the TS app graph.
 import { parseSnippetBody, scanSnippets } from "../server/lib/runtime.mjs";
+// @ts-ignore Node-side maintenance helper intentionally lives outside the TS app graph.
+import { inspectTexSnippetBody, normalizeTexSnippetBody } from "../scripts/tex-snippet-format.mjs";
 
 type ScannedSnippet = {
   id?: string;
@@ -15,6 +17,8 @@ type ScannedSnippet = {
   context?: string;
   description?: string;
   browserCompatible?: boolean;
+  body?: string;
+  mode?: string;
 };
 
 const originalRoots = process.env.AARONNOTE_SNIPPETS;
@@ -36,16 +40,37 @@ describe("server snippet catalog", () => {
     const brk = parseSnippetBody(await readFile(join(root, "brk"), "utf8"));
 
     expect(qbraket.body).toBe("\\braket{${1:\\phi}}{${2:\\psi}}$0");
-    expect(brk.body).toBe("\\braket{ $1 }{ $2 } $3");
+    expect(brk.body).toBe("\\braket{ ${1:a} }{ ${2:b} } $0");
   });
 
-  test("uses an invisible final stop for both Noema text snippets", async () => {
+  test("uses a default text field and an invisible final stop for both Noema text snippets", async () => {
     const root = join(process.cwd(), "resources", "snippets", "tex-mode");
     const text = parseSnippetBody(await readFile(join(root, "text"), "utf8"));
     const shortText = parseSnippetBody(await readFile(join(root, "snippet-3"), "utf8"));
 
-    expect(text.body).toBe("\\text{$1}$0");
-    expect(shortText.body).toBe("\\text{$1}$0");
+    expect(text.body).toBe("\\text{${1:a}}$0");
+    expect(shortText.body).toBe("\\text{${1:a}}$0");
+  });
+
+  test("keeps the full shared TeX catalog in canonical tabstop form", async () => {
+    process.env.AARONNOTE_SNIPPETS = join(process.cwd(), "resources", "snippets");
+    const snippets = (await scanSnippets({ force: true }))
+      .filter((snippet: ScannedSnippet) => snippet.mode === "tex-mode");
+
+    expect(snippets.length).toBeGreaterThan(800);
+    for (const snippet of snippets) {
+      expect(normalizeTexSnippetBody(snippet.body)).toBe(snippet.body);
+      expect(inspectTexSnippetBody(snippet.body).diagnostics).toEqual([]);
+    }
+  });
+
+  test("canonicalizes nested repeated defaults as bare mirrors without overlapping edits", () => {
+    const source = "${1:${2:a}}+${1:${2:b}}+$2";
+    const normalized = "${1:${2:a}}+$1+$2$0";
+
+    expect(normalizeTexSnippetBody(source)).toBe(normalized);
+    expect(inspectTexSnippetBody(source).diagnostics).toContain("tabstop $1 has a non-bare mirror");
+    expect(inspectTexSnippetBody(normalized).diagnostics).toEqual([]);
   });
 
   test("uses explicit priority, merges upstream weight, and classifies backtick snippets", async () => {

@@ -5,4 +5,4 @@
 # contributor: Noema provider=overleaf&priority=160&weight=0.20240160977404634&context=math-command&description=Overleaf+cmd
 # group: Math · overleaf
 # --
-\sqrt{$1}$0
+\sqrt{${1:a}}$0

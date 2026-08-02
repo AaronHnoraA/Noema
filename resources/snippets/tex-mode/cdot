@@ -4,4 +4,4 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/cdot_Dot_Product
 # --
-\cdot
+\cdot$0

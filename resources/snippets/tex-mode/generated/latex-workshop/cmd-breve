@@ -5,4 +5,4 @@
 # contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%C2%A0%CC%86
 # group: Math · latex-workshop
 # --
-\breve{$1}$0
+\breve{${1:a}}$0

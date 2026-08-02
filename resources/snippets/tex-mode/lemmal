@@ -4,8 +4,7 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/lemmal_Lemma_with_label_
 # --
-# --
-\begin{lemma}{$1}\label{lem:$1}
-	$2
+\begin{lemma}{${1:a}}\label{lem:$1}
+	${2:b}
 \end{lemma}
 $0

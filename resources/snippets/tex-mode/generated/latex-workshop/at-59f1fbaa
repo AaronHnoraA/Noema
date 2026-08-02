@@ -5,4 +5,4 @@
 # contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=Big+%7C
 # group: Math · latex-workshop
 # --
-\Big|
+\Big|$0

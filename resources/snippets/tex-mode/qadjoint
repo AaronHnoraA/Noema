@@ -3,4 +3,4 @@
 # key: qad
 # group: QC symbols
 # --
-${1:U}\,${2:\rho}\,${1:U}^{\dagger}$0
+${1:U}\,${2:\rho}\,$1^{\dagger}$0

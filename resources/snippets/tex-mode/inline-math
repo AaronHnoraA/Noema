@@ -3,4 +3,4 @@
 # key: ;
 # group: LaTeX local
 # --
-$$1$ $0
+$${1:a}$ $0

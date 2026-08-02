@@ -4,4 +4,4 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/outer_Outer_Product
 # --
-\ket{$1} \bra{$1} $2
+\ket{${1:a}} \bra{$1} $0

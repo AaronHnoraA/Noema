@@ -4,6 +4,5 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/subpl_Sub_Paragraph_with_label_
 # --
-# --
-\subparagraph{$1}\label{subp:$1}
+\subparagraph{${1:a}}\label{subp:$1}
 ${0:$TM_SELECTED_TEXT}

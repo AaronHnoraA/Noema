@@ -4,18 +4,17 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/table_Table
 # --
-# --
 \begin{table}
-	\caption{$1}\label{tab:$2}
+	\caption{${1:a}}\label{tab:${2:b}}
 	\begin{center}
 		\begin{tabular}[c]{l|l}
 			\hline
-			\multicolumn{1}{c|}{\textbf{$3}} & 
-			\multicolumn{1}{c}{\textbf{$4}} \\\\
+			\multicolumn{1}{c|}{\textbf{${3:c}}} &
+			\multicolumn{1}{c}{\textbf{${4:d}}} \\\\
 			\hline
 			a & b \\\\
 			c & d \\\\
-			$5
+			${5:e}
 			\hline
 		\end{tabular}
 	\end{center}

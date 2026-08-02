@@ -4,5 +4,4 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/datechange_Datechange
 # --
-# --
-\datechange{$1}{$2}$0
+\datechange{${1:a}}{${2:b}}$0

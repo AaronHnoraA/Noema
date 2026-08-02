@@ -5,5 +5,5 @@
 # source: /Users/hc/.config/emacs/snippets/tex-mode/Bmat_Bmatrix_curly_
 # --
 \begin{Bmatrix}
-$1
-\end{Bmatrix}
+${1:a}
+\end{Bmatrix}$0

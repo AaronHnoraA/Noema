@@ -4,7 +4,6 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/enumerate_Enumerate
 # --
-# --
 \\begin{enumerate}
 	\item $0
 \\end{enumerate}

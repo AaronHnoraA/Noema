@@ -5,5 +5,5 @@
 # source: /Users/hc/.config/emacs/snippets/tex-mode/array_Array
 # --
 \begin{array}
-$1
-\end{array}
+${1:a}
+\end{array}$0

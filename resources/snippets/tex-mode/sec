@@ -4,6 +4,5 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/sec_Section_no_label_
 # --
-# --
-\section{$1}
+\section{${1:a}}
 ${0:$TM_SELECTED_TEXT}

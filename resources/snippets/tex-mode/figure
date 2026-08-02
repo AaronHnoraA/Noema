@@ -4,11 +4,10 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/figure_Figure
 # --
-# --
 \begin{figure}
 	\begin{center}
-		\includegraphics[width=0.95\textwidth]{figures/$1}
+		\includegraphics[width=0.95\textwidth]{figures/${1:a}}
 	\end{center}
-	\caption{$3}\label{fig:$4}
+	\caption{${3:c}}\label{fig:${4:d}}
 \end{figure}
 $0

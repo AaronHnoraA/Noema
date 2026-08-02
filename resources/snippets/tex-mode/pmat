@@ -5,5 +5,5 @@
 # source: /Users/hc/.config/emacs/snippets/tex-mode/pmat_Pmatrix
 # --
 \begin{pmatrix}
-$1
-\end{pmatrix}
+${1:a}
+\end{pmatrix}$0

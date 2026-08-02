@@ -4,8 +4,7 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/solution_Solution
 # --
-# --
 \begin{solution}
-	$1
+	${1:a}
 \end{solution}
 $0

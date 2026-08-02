@@ -4,4 +4,4 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/tilde_Tilde_Accent
 # --
-\tilde{$1}$2
+\tilde{${1:a}}$0

@@ -4,4 +4,4 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/cee_Chemical_Equation
 # --
-\ce{ $1 }
+\ce{ ${1:a} }$0

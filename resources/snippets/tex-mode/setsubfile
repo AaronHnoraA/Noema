@@ -4,7 +4,6 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/setsubfile_SetSubfile
 # --
-# --
-\documentclass[$1]{subfiles}
-\graphicspath{{$2}}
+\documentclass[${1:a}]{subfiles}
+\graphicspath{{${2:b}}}
 $0

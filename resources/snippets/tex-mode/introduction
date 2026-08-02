@@ -4,8 +4,7 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/introduction_Introduction
 # --
-# --
 \begin{introduction}
-	$1
+	${1:a}
 \end{introduction}
 $0

@@ -4,6 +4,6 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/for_Algorithm_For
 # --
-\For{i=0:$1}
+\For{i=0:${1:a}}
 	\State $0
 \EndFor

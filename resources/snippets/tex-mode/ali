@@ -5,5 +5,5 @@
 # source: /Users/hc/.config/emacs/snippets/tex-mode/ali_Align
 # --
 \begin{align}
-$1
-\end{align}
+${1:a}
+\end{align}$0

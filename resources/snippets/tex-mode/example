@@ -4,8 +4,7 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/example_Example
 # --
-# --
 \begin{example}
-	$1
+	${1:a}
 \end{example}
 $0

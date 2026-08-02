@@ -60,7 +60,7 @@ export type VisualTexCompletionTemplate = {
   tabstops: Array<{
     index: number;
     primaryId: string;
-    promptIds: string[];
+    occurrenceIds: string[];
   }>;
 };
 
@@ -592,10 +592,10 @@ export function createNoemaMathfield(
   return field;
 }
 
-/** Read only standard TeX from MathLive; editor prompts never enter the note. */
+/** Read only standard TeX; transient snippet boundaries never enter the note. */
 export function visualTexMathfieldLatex(field: Pick<MathfieldElement, "getValue">): string {
   synchronizeVisualTexSnippetMirrors(field as object);
-  synchronizeVisualTexMacroPromptArguments(field as object);
+  synchronizeVisualTexMacroTabstopArguments(field as object);
   const rawCompact = normalizeVisualTexLatex(field.getValue("latex-without-placeholders"));
   if (!rawCompact.includes(`\\${VISUAL_TEX_SOURCE_SPACE_MACRO_NAME}`)) {
     visualTexLastSourceSpaceBoundary.delete(field as object);
@@ -612,32 +612,6 @@ export function visualTexMathfieldLatex(field: Pick<MathfieldElement, "getValue"
   const resolved = resolveVisualTexMathfieldSerialization(previous, compact, expanded);
   visualTexMathfieldSerializationStates.set(field as object, resolved.state);
   return resolved.value;
-}
-
-/**
- * Return a prompt-preserving source string suitable for reparsing MathLive's
- * atom tree. The same compact-vs-expanded decision used for note writeback is
- * essential here: reparsing stale compact macro arguments would silently undo
- * an earlier edit made inside an existing custom macro.
- */
-function visualTexMathfieldReparseSource(field: Pick<MathfieldElement, "getValue">): string {
-  synchronizeVisualTexSnippetMirrors(field as object);
-  synchronizeVisualTexMacroPromptArguments(field as object);
-  const rawCompact = normalizeVisualTexLatex(field.getValue("latex"));
-  const rawExpanded = normalizeVisualTexLatex(field.getValue("latex-expanded"));
-  const compact = normalizeVisualTexMathLiveOutput(
-    normalizeVisualTexLatex(field.getValue("latex-without-placeholders")),
-  );
-  const expanded = normalizeVisualTexMathLiveOutput(
-    stripVisualTexPlaceholders(rawExpanded),
-  );
-  const resolved = resolveVisualTexMathfieldSerialization(
-    visualTexMathfieldSerializationStates.get(field as object) ?? null,
-    compact,
-    expanded,
-  );
-  visualTexMathfieldSerializationStates.set(field as object, resolved.state);
-  return resolved.state.expandedWriteback ? rawExpanded : rawCompact;
 }
 
 export function syncVisualTexMathfieldDraft(
@@ -665,6 +639,36 @@ function visualTexMathfieldRangeLatex(
   );
 }
 
+function visualTexSnippetRangeValue(
+  field: MathfieldElement,
+  marker: VisualTexSnippetMarkerRange,
+): string {
+  let result = stripVisualTexPlaceholders(normalizeVisualTexMathLiveOutput(
+    normalizeVisualTexLatex(
+      field.getValue(marker.range[0], marker.range[1], "latex-expanded"),
+    ),
+  ));
+  const wrappers: string[] = [];
+  if (marker.mode === "text") wrappers.push("text");
+  const variant = marker.style?.variant;
+  if (variant === "calligraphic") wrappers.push("mathcal");
+  else if (variant === "sans-serif") wrappers.push("mathsf");
+  else if (variant === "monospace") wrappers.push("mathtt");
+  else if (variant === "double-struck") wrappers.push("mathbb");
+  else if (variant === "fraktur") wrappers.push("mathfrak");
+  if (marker.style?.fontSeries === "b") wrappers.push("mathbf");
+  if (marker.style?.fontShape === "it") wrappers.push("mathit");
+
+  for (let pass = 0; pass < wrappers.length; pass++) {
+    const command = wrappers.find((candidate) => result.startsWith(`\\${candidate}{`));
+    if (!command) break;
+    const body = readDelimitedGroup(result, command.length + 1, "{", "}");
+    if (!body || body.end !== result.length) break;
+    result = body.body;
+  }
+  return result;
+}
+
 export type VisualTexMathLiveMacro = {
   def: string;
   args: number;
@@ -688,16 +692,17 @@ const VISUAL_TEX_SOURCE_SPACE_MACRO_NAME = "noemaMathSpaceBoundary";
 const VISUAL_TEX_SOURCE_SPACE_MARKER = String.raw`\noemaMathSpaceBoundary `;
 const VISUAL_TEX_SOURCE_SPACE_MARKER_RE =
   /(?:[ \t]*\\noemaMathSpaceBoundary(?![A-Za-z])[ \t]*)+/g;
-const VISUAL_TEX_CARET_MARKER_MACRO_NAME = "noemaMathCaretBoundary";
-const VISUAL_TEX_CARET_MARKER = String.raw`\noemaMathCaretBoundary{}`;
-const VISUAL_TEX_CARET_MARKER_RE = /\\noemaMathCaretBoundary(?![A-Za-z])(?:\{\})?[ \t]*/g;
+const VISUAL_TEX_SNIPPET_START_MACRO_NAME = "noemaMathSnippetStart";
+const VISUAL_TEX_SNIPPET_END_MACRO_NAME = "noemaMathSnippetEnd";
+const VISUAL_TEX_SNIPPET_MARKER_RE =
+  /\\noemaMathSnippet(?:Start|End)(?![A-Za-z])[ \t]*\{[^{}]*\}[ \t]*/g;
 const VISUAL_TEX_SOURCE_SPACE_MACRO: VisualTexMathLiveMacro = {
   def: "",
   args: 0,
   captureSelection: false,
   expand: false,
 };
-const VISUAL_TEX_CARET_MARKER_MACRO: VisualTexMathLiveMacro = {
+const VISUAL_TEX_SNIPPET_MARKER_MACRO: VisualTexMathLiveMacro = {
   def: "",
   args: 1,
   captureSelection: false,
@@ -705,36 +710,30 @@ const VISUAL_TEX_CARET_MARKER_MACRO: VisualTexMathLiveMacro = {
 };
 const visualTexLastSourceSpaceBoundary = new WeakMap<object, number>();
 
-type VisualTexSnippetPromptSession = {
+type VisualTexSnippetSession = {
   groups: VisualTexCompletionTemplate["tabstops"];
+  anchors: Map<string, VisualTexSnippetAnchor>;
   /** MathLive offset immediately after the inserted snippet (`$0`). */
   finalPosition: number;
-  /** Root size when the anchor was recorded; prompt edits map it by this delta. */
+  /** Root size when the anchor was recorded; tabstop edits map it by this delta. */
   lastOffset: number;
 };
-type VisualTexPromptField = Pick<
+type VisualTexSnippetAnchor = {
+  left: VisualTexInternalMacroAtom;
+  right: VisualTexInternalMacroAtom | null;
+  mode?: MathfieldElement["mode"];
+  style?: Record<string, unknown>;
+};
+type VisualTexSnippetField = Pick<
   MathfieldElement,
-  | "position"
-  | "lastOffset"
-  | "selection"
-  | "getPrompts"
-  | "getPromptRange"
-  | "getPromptValue"
-  | "setPromptValue"
+  "position" | "lastOffset" | "selection" | "getValue" | "insert"
 >;
 
-const visualTexSnippetPromptSessions = new WeakMap<object, VisualTexSnippetPromptSession[]>();
+const visualTexSnippetSessions = new WeakMap<object, VisualTexSnippetSession[]>();
 const visualTexSnippetMirrorSync = new WeakSet<object>();
-const visualTexNoemaPromptIds = new WeakMap<object, Set<string>>();
-const visualTexCompletedPromptIds = new WeakMap<object, Set<string>>();
-const visualTexCompletedPromptGroups = new WeakMap<
-  object,
-  VisualTexSnippetPromptSession["groups"]
->();
 const visualTexMacroArgumentTemplates = new WeakMap<object, string>();
-const visualTexUndoSanitizers = new WeakSet<object>();
-const visualTexUndoPromptSanitizing = new WeakSet<object>();
-const visualTexHistoryRecordingSuspended = new WeakSet<object>();
+const visualTexSnippetInsertAdapters = new WeakSet<object>();
+const visualTexHistoryInputBridges = new WeakSet<object>();
 
 type VisualTexUndoController = {
   undoManager?: { recording?: boolean };
@@ -766,86 +765,255 @@ function snapshotVisualTexUndoState(field: object, operation: string): void {
     ._mathfield?.snapshot?.(operation);
 }
 
-function rememberCompletedVisualTexPrompts(
-  field: object,
-  groups: VisualTexSnippetPromptSession["groups"],
-): void {
-  const completedGroups = visualTexCompletedPromptGroups.get(field) ?? [];
-  completedGroups.push(...groups.map((group) => ({
-    ...group,
-    promptIds: [...group.promptIds],
-  })));
-  // MathLive retains at most 1,000 undo states. This comfortably covers that
-  // history even for snippets with several mirrored tabstops, while keeping a
-  // long-lived editor from accumulating an unbounded registry.
-  let promptCount = completedGroups.reduce((count, group) => count + group.promptIds.length, 0);
-  while (promptCount > 4096 && completedGroups.length > 0) {
-    promptCount -= completedGroups.shift()!.promptIds.length;
-  }
-  const completed = new Set(completedGroups.flatMap((group) => group.promptIds));
-  visualTexCompletedPromptGroups.set(field, completedGroups);
-  visualTexCompletedPromptIds.set(field, completed);
+function installVisualTexSnippetInsertAdapter(field: MathfieldElement): void {
+  if (visualTexSnippetInsertAdapters.has(field) || typeof field.insert !== "function") return;
+  const original = field.insert.bind(field);
+  field.insert = ((value, options) => {
+    const active = activeVisualTexTabstop(field);
+    const style = active?.session.anchors.get(active.tabstopId)?.style;
+    const inserted = original(value, !style || options?.style
+      ? options
+      : { ...options, style });
+    const operation = (field as unknown as {
+      _mathfield?: { undoManager?: { lastOp?: string } };
+    })._mathfield?.undoManager?.lastOp;
+    if (inserted && synchronizeVisualTexSnippetMirrors(field)) {
+      replaceVisualTexLatestUndoSnapshot(field, operation);
+    }
+    return inserted;
+  }) as MathfieldElement["insert"];
+  visualTexSnippetInsertAdapters.add(field);
 }
 
-function visualTexPromptField(field: object): VisualTexPromptField | null {
-  const candidate = field as Partial<VisualTexPromptField>;
-  return typeof candidate.getPrompts === "function"
-    && typeof candidate.getPromptRange === "function"
-    && typeof candidate.getPromptValue === "function"
-    && typeof candidate.setPromptValue === "function"
-    ? candidate as VisualTexPromptField
-    : null;
+function installVisualTexHistoryInputBridge(field: MathfieldElement): void {
+  if (visualTexHistoryInputBridges.has(field) || typeof field.addEventListener !== "function") return;
+  field.addEventListener("undo-state-change", ((event: CustomEvent<{ type?: string }>) => {
+    const type = event.detail?.type;
+    if (type !== "undo" && type !== "redo") return;
+    // Undo replaces MathLive's atom tree, invalidating object anchors. History
+    // navigation therefore exits snippet mode; the restored content remains
+    // ordinary TeX and the next completion starts a fresh session.
+    visualTexSnippetSessions.delete(field);
+    field.dispatchEvent(new InputEvent("input", {
+      bubbles: true,
+      composed: true,
+      inputType: type === "undo" ? "historyUndo" : "historyRedo",
+    }));
+  }) as EventListener);
+  visualTexHistoryInputBridges.add(field);
 }
 
-function registerVisualTexSnippetPrompts(
+function replaceVisualTexLatestUndoSnapshot(field: object, operation?: string): void {
+  const controller = (field as {
+    _mathfield?: VisualTexUndoController & {
+      undoManager?: { lastOp?: string };
+      popUndoStack?: () => void;
+    };
+  })._mathfield;
+  const resolved = operation || controller?.undoManager?.lastOp;
+  if (!resolved) return;
+  controller?.popUndoStack?.();
+  controller?.snapshot?.(resolved);
+}
+
+function registerVisualTexSnippetSession(
   field: MathfieldElement,
   tabstops: VisualTexCompletionTemplate["tabstops"],
 ): void {
   if (tabstops.length === 0) return;
-  const sessions = visualTexSnippetPromptSessions.get(field) ?? [];
+  const beforeLastOffset = field.lastOffset;
+  const beforeFinalPosition = field.position;
+  const anchors = captureVisualTexSnippetAnchors(
+    field,
+    new Set(tabstops.flatMap((group) => group.occurrenceIds)),
+  );
+  const distanceFromEnd = Math.max(0, beforeLastOffset - beforeFinalPosition);
+  const sessions = visualTexSnippetSessions.get(field) ?? [];
   sessions.push({
     groups: tabstops.map((group) => ({
       ...group,
-      promptIds: [...group.promptIds],
+      occurrenceIds: [...group.occurrenceIds],
     })),
-    finalPosition: field.position,
+    anchors,
+    finalPosition: Math.max(0, field.lastOffset - distanceFromEnd),
     lastOffset: field.lastOffset,
   });
-  visualTexSnippetPromptSessions.set(field, sessions.slice(-32));
+  visualTexSnippetSessions.set(field, sessions);
 }
 
-type VisualTexActivePrompt = {
-  session: VisualTexSnippetPromptSession;
+type VisualTexSnippetMarkerRange = {
+  range: [number, number];
+  mode?: MathfieldElement["mode"];
+  style?: Record<string, unknown>;
+};
+
+function visualTexSnippetMarkerId(atom: VisualTexInternalMacroAtom): string | null {
+  const source = atom.macroArgs ?? "";
+  const open = source.indexOf("{");
+  const argument = open >= 0 ? readDelimitedGroup(source, open, "{", "}") : null;
+  const id = argument?.body ?? source;
+  return id || null;
+}
+
+function visualTexSnippetAnchorRange(
+  field: object,
+  anchor: VisualTexSnippetAnchor,
+): VisualTexSnippetMarkerRange | null {
+  const model = (field as {
+    _mathfield?: {
+      model?: {
+        lastOffset?: number;
+        offsetOf?: (atom: VisualTexInternalMacroAtom) => number;
+      };
+    };
+  })._mathfield?.model;
+  if (!model || typeof model.offsetOf !== "function"
+    || typeof model.lastOffset !== "number") return null;
+  const from = model.offsetOf(anchor.left);
+  const right = anchor.right ? model.offsetOf(anchor.right) : model.lastOffset + 1;
+  if (!Number.isFinite(from) || !Number.isFinite(right) || from < 0 || right <= from) return null;
+  return {
+    range: [from, Math.max(from, right - 1)],
+    mode: anchor.mode,
+    style: anchor.style,
+  };
+}
+
+function visualTexSnippetSessionRanges(field: object): Map<string, VisualTexSnippetMarkerRange> {
+  const result = new Map<string, VisualTexSnippetMarkerRange>();
+  for (const session of visualTexSnippetSessions.get(field) ?? []) {
+    for (const [id, anchor] of session.anchors) {
+      const range = visualTexSnippetAnchorRange(field, anchor);
+      if (range) result.set(id, range);
+    }
+  }
+  return result;
+}
+
+function captureVisualTexSnippetAnchors(
+  field: object,
+  ids: ReadonlySet<string>,
+): Map<string, VisualTexSnippetAnchor> {
+  const model = (field as {
+    _mathfield?: {
+      model?: {
+        root?: VisualTexInternalMacroAtom;
+        atoms?: VisualTexInternalMacroAtom[];
+        offsetOf?: (atom: VisualTexInternalMacroAtom) => number;
+      };
+    };
+  })._mathfield?.model;
+  if (!model?.root || !model.atoms || typeof model.offsetOf !== "function") return new Map();
+
+  const starts = new Map<string, VisualTexInternalMacroAtom>();
+  const ends = new Map<string, VisualTexInternalMacroAtom>();
+  const markerAtoms = new Set<VisualTexInternalMacroAtom>();
+  const collectMarkerTree = (atom: VisualTexInternalMacroAtom): void => {
+    markerAtoms.add(atom);
+    for (const child of atom.children ?? []) markerAtoms.add(child);
+  };
+  for (const atom of model.atoms) {
+    if (atom.type === "macro") {
+      const id = visualTexSnippetMarkerId(atom);
+      if (id && ids.has(id)
+        && (atom.command === `\\${VISUAL_TEX_SNIPPET_START_MACRO_NAME}`
+          || atom.command === `\\${VISUAL_TEX_SNIPPET_END_MACRO_NAME}`)) {
+        collectMarkerTree(atom);
+        if (atom.command === `\\${VISUAL_TEX_SNIPPET_START_MACRO_NAME}`) starts.set(id, atom);
+        else ends.set(id, atom);
+      }
+    }
+  }
+
+  const atoms = model.atoms;
+  const result = new Map<string, VisualTexSnippetAnchor>();
+  for (const id of ids) {
+    const start = starts.get(id);
+    const end = ends.get(id);
+    if (!start || !end) continue;
+    const startOffset = model.offsetOf(start);
+    const endOffset = model.offsetOf(end);
+    const contentAtom = atoms.slice(startOffset + 1, endOffset)
+      .find((atom) => !markerAtoms.has(atom) && atom.type !== "first");
+    let left: VisualTexInternalMacroAtom | undefined;
+    let right: VisualTexInternalMacroAtom | null = null;
+    for (let offset = startOffset - 1; offset >= 0; offset--) {
+      if (!markerAtoms.has(atoms[offset]!)) {
+        left = atoms[offset]!;
+        break;
+      }
+    }
+    for (let offset = endOffset + 1; offset < atoms.length; offset++) {
+      if (!markerAtoms.has(atoms[offset]!)) {
+        right = atoms[offset]!;
+        break;
+      }
+    }
+    if (left) {
+      const style = { ...contentAtom?.style, ...start.style };
+      result.set(id, {
+        left,
+        right,
+        mode: (contentAtom?.mode ?? start.mode) as MathfieldElement["mode"],
+        // Symbols such as the empty-field square can carry an empty local
+        // style even when their containing tabstop is calligraphic/bold/etc.
+        // Preserve that inherited marker style when replacement text arrives.
+        style: Object.keys(style).length > 0 ? style : undefined,
+      });
+    }
+  }
+
+  rememberVisualTexMacroMarkerTemplates(field, ids);
+  withVisualTexUndoRecordingSuspended(field, () => {
+    detachVisualTexSnippetMarkerAtoms(field);
+    stripMountedVisualTexSnippetMacroArguments(field);
+  });
+  return result;
+}
+
+type VisualTexActiveTabstop = {
+  session: VisualTexSnippetSession;
   groupIndex: number;
-  promptId: string;
+  tabstopId: string;
   range: [number, number];
 };
 
-function activeVisualTexSnippetPrompt(field: object): VisualTexActivePrompt | null {
-  const promptField = visualTexPromptField(field);
-  const sessions = visualTexSnippetPromptSessions.get(field);
-  if (!promptField || !sessions?.length) return null;
-  const available = new Set(promptField.getPrompts());
-  const selection = promptField.selection.ranges[0];
+function visualTexSnippetField(field: object): VisualTexSnippetField | null {
+  const candidate = field as Partial<VisualTexSnippetField>;
+  return typeof candidate.position === "number"
+    && typeof candidate.lastOffset === "number"
+    && Boolean(candidate.selection)
+    && typeof candidate.getValue === "function"
+    && typeof candidate.insert === "function"
+    ? candidate as VisualTexSnippetField
+    : null;
+}
+
+function activeVisualTexTabstop(field: object): VisualTexActiveTabstop | null {
+  const snippetField = visualTexSnippetField(field);
+  const sessions = visualTexSnippetSessions.get(field);
+  if (!snippetField || !sessions?.length) return null;
+  const markerRanges = visualTexSnippetSessionRanges(field);
+  const selection = snippetField.selection.ranges[0];
   if (!selection) return null;
   const selectedFrom = Math.min(selection[0], selection[1]);
   const selectedTo = Math.max(selection[0], selection[1]);
-  const candidates: VisualTexActivePrompt[] = [];
+  const candidates: VisualTexActiveTabstop[] = [];
   for (const session of [...sessions].reverse()) {
     for (let groupIndex = 0; groupIndex < session.groups.length; groupIndex++) {
       const group = session.groups[groupIndex]!;
-      for (const promptId of group.promptIds) {
-        if (!available.has(promptId)) continue;
-        const range = promptField.getPromptRange(promptId);
+      for (const tabstopId of group.occurrenceIds) {
+        const marker = markerRanges.get(tabstopId);
+        const range = marker?.range;
         if (!range) continue;
         const from = Math.min(range[0], range[1]);
         const to = Math.max(range[0], range[1]);
         const exact = selectedFrom === from && selectedTo === to;
         const containsCaret = selectedFrom === selectedTo
-          && promptField.position >= from
-          && promptField.position <= to;
+          && snippetField.position >= from
+          && snippetField.position <= to;
         if (exact || containsCaret) {
-          candidates.push({ session, groupIndex, promptId, range: [from, to] });
+          candidates.push({ session, groupIndex, tabstopId, range: [from, to] });
         }
       }
     }
@@ -858,22 +1026,21 @@ function activeVisualTexSnippetPrompt(field: object): VisualTexActivePrompt | nu
   })[0] ?? null;
 }
 
-function selectVisualTexPrompt(field: object, id: string): boolean {
-  const promptField = visualTexPromptField(field);
-  if (!promptField || !promptField.getPrompts().includes(id)) return false;
-  const range = promptField.getPromptRange(id);
+function selectVisualTexTabstop(field: object, id: string): boolean {
+  const snippetField = visualTexSnippetField(field);
+  if (!snippetField) return false;
+  const marker = visualTexSnippetSessionRanges(field).get(id);
+  const range = marker?.range;
   if (!range) return false;
-  const promptMode = (field as {
-    _mathfield?: { getPrompt?: (promptId: string) => { mode?: MathfieldElement["mode"] } | undefined };
-  })._mathfield?.getPrompt?.(id)?.mode;
+  const tabstopMode = marker.mode;
   withVisualTexUndoRecordingSuspended(field, () => {
-    promptField.selection = { ranges: [[range[0], range[1]]], direction: "forward" };
-    // A non-collapsed prompt selection does not reliably make MathLive switch
-    // its model mode. Without this, a text prompt followed by math receives
+    snippetField.selection = { ranges: [[range[0], range[1]]], direction: "forward" };
+    // A non-collapsed selection does not reliably make MathLive switch its
+    // model mode. Without this, a text tabstop followed by math receives
     // `$ x $` instead of a real text `x` even though it is visibly inside
     // `\\text{...}`.
     const modeField = field as Partial<Pick<MathfieldElement, "mode">>;
-    if (promptMode && modeField.mode !== promptMode) modeField.mode = promptMode;
+    if (tabstopMode && modeField.mode !== tabstopMode) modeField.mode = tabstopMode;
   });
   // Assigning MathfieldElement.selection directly does not call MathLive's
   // command-layer coalescing barrier. A structural tabstop move should split
@@ -882,18 +1049,18 @@ function selectVisualTexPrompt(field: object, id: string): boolean {
   return true;
 }
 
-function joinVisualTexLexicalBoundary(left: string, right: string): string {
-  if (!/^[A-Za-z]/.test(right)) return left + right;
-  const controlWord = left.match(/\\[A-Za-z]+$/);
-  if (!controlWord) return left + right;
-  const slash = left.length - controlWord[0].length;
-  // A doubled backslash is a control symbol/row separator, not the start of a
-  // control word. Only a real TeX control word needs a lexical delimiter
-  // before an alphabetic prompt value.
-  return isEscaped(left, slash) ? left + right : `${left} ${right}`;
+function visualTexSnippetMarker(command: "start" | "end", id: string): string {
+  const name = command === "start"
+    ? VISUAL_TEX_SNIPPET_START_MACRO_NAME
+    : VISUAL_TEX_SNIPPET_END_MACRO_NAME;
+  return `\\${name}{${id}}`;
 }
 
-function unwrapVisualTexPromptIds(source: string, promptIds: ReadonlySet<string>): string {
+/** Convert the template's transient placeholder notation to zero-width boundaries. */
+function visualTexSnippetTemplateMarkers(
+  source: string,
+  occurrenceIds: ReadonlySet<string>,
+): string {
   let result = "";
   for (let index = 0; index < source.length;) {
     if (source.startsWith("\\placeholder", index)
@@ -908,9 +1075,11 @@ function unwrapVisualTexPromptIds(source: string, promptIds: ReadonlySet<string>
       }
       const body = readDelimitedGroup(source, cursor, "{", "}");
       if (body) {
-        const content = unwrapVisualTexPromptIds(body.body, promptIds);
-        if (promptIds.has(options[0]?.body ?? "")) {
-          result = joinVisualTexLexicalBoundary(result, content);
+        const id = options[0]?.body ?? "";
+        const content = visualTexSnippetTemplateMarkers(body.body, occurrenceIds);
+        if (id && occurrenceIds.has(id)) {
+          result += `${visualTexSnippetMarker("start", id)}${content}`
+            + visualTexSnippetMarker("end", id);
         } else {
           result += `${source.slice(index, cursor + 1)}${content}}`;
         }
@@ -924,77 +1093,58 @@ function unwrapVisualTexPromptIds(source: string, promptIds: ReadonlySet<string>
   return result;
 }
 
-function finishVisualTexSnippetPromptSession(
-  field: VisualTexPromptField,
-  session: VisualTexSnippetPromptSession,
+function stripVisualTexSnippetMarkers(
+  source: string,
+  occurrenceIds?: ReadonlySet<string>,
+): string {
+  return source.replace(VISUAL_TEX_SNIPPET_MARKER_RE, (marker) => {
+    if (!occurrenceIds) return "";
+    const open = marker.indexOf("{");
+    const argument = open >= 0 ? readDelimitedGroup(marker, open, "{", "}") : null;
+    return argument && occurrenceIds.has(argument.body) ? "" : marker;
+  });
+}
+
+function finishVisualTexSnippetSession(
+  field: VisualTexSnippetField,
+  session: VisualTexSnippetSession,
   mappedFinal: number,
 ): number {
-  const sessions = visualTexSnippetPromptSessions.get(field as object) ?? [];
-  const live = field as VisualTexPromptField & Partial<Pick<
-    MathfieldElement,
-    "getValue" | "setValue" | "insert"
-  >>;
-
-  // A completed Noema session must stop being a MathLive prompt provider.
-  // Keeping those atoms alive makes the native placeholder command wrap back
-  // to the first field (the apparent Cmd-] jump to line/formula start) and
-  // leaves an empty prompt box where users expect the invisible `$0` caret.
+  const sessions = visualTexSnippetSessions.get(field as object) ?? [];
   synchronizeVisualTexSnippetMirrors(field as object);
-  synchronizeVisualTexMacroPromptArguments(field as object);
-  const completedIds = new Set(session.groups.flatMap((group) => group.promptIds));
-  visualTexSnippetPromptSessions.set(
+  synchronizeVisualTexMacroTabstopArguments(field as object);
+  const completedIds = new Set(session.groups.flatMap((group) => group.occurrenceIds));
+  retireVisualTexMacroMarkerTemplates(field as object, completedIds);
+  visualTexSnippetSessions.set(
     field as object,
     sessions.filter((candidate) => candidate !== session),
   );
-  if (typeof live.getValue !== "function"
-      || (typeof live.insert !== "function" && typeof live.setValue !== "function")) return mappedFinal;
-  const source = visualTexMathfieldReparseSource(live as MathfieldElement);
-  const flattened = unwrapVisualTexPromptIds(source, completedIds).replace(
-    VISUAL_TEX_SOURCE_SPACE_MARKER_RE,
-    VISUAL_TEX_SOURCE_SPACE_MARKER,
-  );
-  const distanceFromEnd = Math.max(0, field.lastOffset - mappedFinal);
-  const stillMounted = field.getPrompts().some((id) => completedIds.has(id));
-  if (flattened !== source || stillMounted) {
-    // MathfieldElement.setValue() intentionally short-circuits when its
-    // placeholder-free serialization equals VALUE, even if prompt atoms are
-    // still mounted. replaceAll forces a fresh parse. Empty boundary macros
-    // sit outside MathLive's replaceable range, so detach their old atoms
-    // first and let the flattened source recreate each boundary exactly once.
-    reparseVisualTexMathfield(field as object, live, flattened, completedIds);
-  }
-  rememberCompletedVisualTexPrompts(field as object, session.groups);
-  const registeredIds = visualTexNoemaPromptIds.get(field as object);
-  if (registeredIds) {
-    for (const id of completedIds) registeredIds.delete(id);
-  }
-  return Math.max(0, Math.min(field.lastOffset - distanceFromEnd, field.lastOffset));
+  return Math.max(0, Math.min(mappedFinal, field.lastOffset));
 }
 
 /**
- * A mouse click or ordinary arrow can leave every registered prompt without
- * traversing Noema's explicit tabstop command. Flatten those abandoned prompt
- * wrappers before the next structural action; otherwise their visible boxes
- * survive while Cmd-] treats the formula as already being at its root edge.
+ * A mouse click or ordinary arrow can leave every registered tabstop without
+ * traversing Noema's explicit navigation command. Retire those abandoned
+ * sessions before the next structural action.
  */
-function finishInactiveVisualTexSnippetPromptSessions(field: object): boolean {
-  if (activeVisualTexSnippetPrompt(field)) return false;
-  const promptField = visualTexPromptField(field);
-  const sessions = visualTexSnippetPromptSessions.get(field);
-  const selection = promptField?.selection.ranges[0];
-  if (!promptField || !sessions?.length || !selection
-      || promptField.selection.ranges.length !== 1 || selection[0] !== selection[1]) return false;
+function finishInactiveVisualTexTabstopSessions(field: object): boolean {
+  if (activeVisualTexTabstop(field)) return false;
+  const snippetField = visualTexSnippetField(field);
+  const sessions = visualTexSnippetSessions.get(field);
+  const selection = snippetField?.selection.ranges[0];
+  if (!snippetField || !sessions?.length || !selection
+      || snippetField.selection.ranges.length !== 1 || selection[0] !== selection[1]) return false;
 
-  let mappedPosition = promptField.position;
+  let mappedPosition = snippetField.position;
   for (const session of [...sessions].reverse()) {
-    mappedPosition = finishVisualTexSnippetPromptSession(
-      promptField,
+    mappedPosition = finishVisualTexSnippetSession(
+      snippetField,
       session,
       mappedPosition,
     );
   }
   withVisualTexUndoRecordingSuspended(field, () => {
-    promptField.selection = {
+    snippetField.selection = {
       ranges: [[mappedPosition, mappedPosition]],
       direction: "forward",
     };
@@ -1003,16 +1153,16 @@ function finishInactiveVisualTexSnippetPromptSessions(field: object): boolean {
   return true;
 }
 
-function finishAllVisualTexSnippetPromptSessions(field: object): boolean {
-  const promptField = visualTexPromptField(field);
-  const sessions = visualTexSnippetPromptSessions.get(field);
-  if (!promptField || !sessions?.length) return false;
-  let mappedPosition = promptField.position;
+function finishAllVisualTexSnippetSessions(field: object): boolean {
+  const snippetField = visualTexSnippetField(field);
+  const sessions = visualTexSnippetSessions.get(field);
+  if (!snippetField || !sessions?.length) return false;
+  let mappedPosition = snippetField.position;
   for (const session of [...sessions].reverse()) {
-    mappedPosition = finishVisualTexSnippetPromptSession(promptField, session, mappedPosition);
+    mappedPosition = finishVisualTexSnippetSession(snippetField, session, mappedPosition);
   }
   withVisualTexUndoRecordingSuspended(field, () => {
-    promptField.selection = {
+    snippetField.selection = {
       ranges: [[mappedPosition, mappedPosition]],
       direction: "forward",
     };
@@ -1022,41 +1172,39 @@ function finishAllVisualTexSnippetPromptSessions(field: object): boolean {
 }
 
 export function selectAllVisualTexMathfield(field: MathfieldElement): void {
-  // Selecting the whole formula explicitly leaves snippet-entry mode. Keeping
-  // prompt wrappers mounted here makes the selection contain editor scaffolding
-  // and can resurrect its tab cycle after the selection is replaced.
-  finishAllVisualTexSnippetPromptSessions(field);
+  // Selecting the whole formula explicitly leaves snippet-entry mode.
+  finishAllVisualTexSnippetSessions(field);
   withVisualTexUndoRecordingSuspended(field, () => {
     field.executeCommand("selectAll");
   });
 }
 
-function moveVisualTexSnippetPrompt(
+function moveVisualTexTabstopSession(
   field: object,
   backward: boolean,
 ): "moved" | "final" | "exhausted" | "none" {
-  const active = activeVisualTexSnippetPrompt(field);
+  const active = activeVisualTexTabstop(field);
   if (!active) return "none";
   const step = backward ? -1 : 1;
   for (let index = active.groupIndex + step;
     index >= 0 && index < active.session.groups.length;
     index += step) {
-    if (selectVisualTexPrompt(field, active.session.groups[index]!.primaryId)) return "moved";
+    if (selectVisualTexTabstop(field, active.session.groups[index]!.primaryId)) return "moved";
   }
   if (!backward) {
-    const promptField = visualTexPromptField(field);
-    if (!promptField) return "exhausted";
+    const snippetField = visualTexSnippetField(field);
+    if (!snippetField) return "exhausted";
     const mappedFinal = Math.max(0, Math.min(
-      active.session.finalPosition + (promptField.lastOffset - active.session.lastOffset),
-      promptField.lastOffset,
+      active.session.finalPosition + (snippetField.lastOffset - active.session.lastOffset),
+      snippetField.lastOffset,
     ));
-    const finalPosition = finishVisualTexSnippetPromptSession(
-      promptField,
+    const finalPosition = finishVisualTexSnippetSession(
+      snippetField,
       active.session,
       mappedFinal,
     );
     withVisualTexUndoRecordingSuspended(field, () => {
-      promptField.selection = { ranges: [[finalPosition, finalPosition]], direction: "forward" };
+      snippetField.selection = { ranges: [[finalPosition, finalPosition]], direction: "forward" };
     });
     stopVisualTexUndoCoalescing(field);
     return "final";
@@ -1064,41 +1212,53 @@ function moveVisualTexSnippetPrompt(
   return "exhausted";
 }
 
-function synchronizeVisualTexSnippetMirrors(field: object): void {
-  const promptField = visualTexPromptField(field);
-  const active = activeVisualTexSnippetPrompt(field);
-  if (!promptField || !active || visualTexSnippetMirrorSync.has(field)) return;
+function synchronizeVisualTexSnippetMirrors(field: object): boolean {
+  const snippetField = visualTexSnippetField(field);
+  const active = activeVisualTexTabstop(field);
+  if (!snippetField || !active || visualTexSnippetMirrorSync.has(field)) return false;
   const group = active.session.groups[active.groupIndex]!;
-  if (group.promptIds.length < 2) return;
-  const value = promptField.getPromptValue(active.promptId, "latex-without-placeholders");
+  if (group.occurrenceIds.length < 2) return false;
+  const markerRanges = visualTexSnippetSessionRanges(field);
+  const activeMarker = markerRanges.get(active.tabstopId);
+  if (!activeMarker) return false;
+  const value = visualTexSnippetRangeValue(snippetField as MathfieldElement, activeMarker);
   const savedSelection = {
-    ranges: promptField.selection.ranges.map(([from, to]) => [from, to] as [number, number]),
-    direction: promptField.selection.direction,
+    ranges: snippetField.selection.ranges.map(([from, to]) => [from, to] as [number, number]),
+    direction: snippetField.selection.direction,
   };
+  let changed = false;
   visualTexSnippetMirrorSync.add(field);
   try {
-    // Mirrors are one logical user edit. Updating their auxiliary PromptAtoms
-    // must not add extra undo entries or make the first Cmd-Z appear to change
-    // only an invisible duplicate field.
+    // Mirrors are one logical user edit. Updating duplicate occurrences must
+    // not add extra undo entries or make the first Cmd-Z change only a mirror.
     withVisualTexUndoRecordingSuspended(field, () => {
-      for (const id of group.promptIds) {
-        if (id === active.promptId || !promptField.getPrompts().includes(id)) continue;
-        if (promptField.getPromptValue(id, "latex-without-placeholders") === value) continue;
-        promptField.setPromptValue(id, value, {
-          format: "latex",
-          selectionMode: "after",
-          focus: false,
-          feedback: false,
-          silenceNotifications: true,
-        });
+      for (const id of group.occurrenceIds) {
+        if (id === active.tabstopId) continue;
+        const marker = visualTexSnippetSessionRanges(field).get(id);
+        if (marker) {
+          const mirrorValue = visualTexSnippetRangeValue(snippetField as MathfieldElement, marker);
+          if (mirrorValue === value) continue;
+          selectVisualTexTabstop(field, id);
+          snippetField.insert(value, {
+            format: "latex",
+            insertionMode: "replaceSelection",
+            selectionMode: "after",
+            focus: false,
+            feedback: false,
+            scrollIntoView: false,
+            silenceNotifications: true,
+          });
+          changed = true;
+        }
       }
     });
-    withVisualTexUndoRecordingSuspended(field, () => {
-      promptField.selection = savedSelection;
-    });
+    if (!selectVisualTexTabstop(field, active.tabstopId)) {
+      withVisualTexUndoRecordingSuspended(field, () => { snippetField.selection = savedSelection; });
+    }
   } finally {
     visualTexSnippetMirrorSync.delete(field);
   }
+  return changed;
 }
 
 function readDelimitedGroup(
@@ -1122,407 +1282,198 @@ function readDelimitedGroup(
 
 type VisualTexInternalMacroAtom = {
   type?: string;
+  value?: string;
+  mode?: string;
+  style?: Record<string, unknown>;
   command?: string;
   macroArgs?: string;
-  placeholderId?: string;
   parent?: VisualTexInternalMacroAtom;
   parentBranch?: string | [number, number];
   isDirty?: boolean;
+  children?: VisualTexInternalMacroAtom[];
   branches?: string[];
-  branch?: (name: string) => VisualTexInternalMacroAtom[] | undefined;
+  branch?: (name: string | [number, number]) => VisualTexInternalMacroAtom[] | undefined;
 };
 
 function detachVisualTexMacroAtoms(field: object, macroName: string): number {
-  const root = (field as {
-    _mathfield?: { model?: { root?: VisualTexInternalMacroAtom } };
-  })._mathfield?.model?.root;
-  if (!root) return 0;
+  const atoms = (field as {
+    _mathfield?: { model?: { atoms?: VisualTexInternalMacroAtom[] } };
+  })._mathfield?.model?.atoms;
+  if (!atoms) return 0;
   let removed = 0;
-  const visit = (atom: VisualTexInternalMacroAtom): void => {
-    for (const branch of atom.branches ?? []) {
-      const children = atom.branch?.(branch);
-      if (!children) continue;
-      for (let index = children.length - 1; index >= 0; index--) {
-        const child = children[index]!;
-        if (child.type === "macro"
-            && child.command === `\\${macroName}`) {
-          children.splice(index, 1);
-          removed++;
-        } else {
-          visit(child);
-        }
-      }
-    }
-  };
-  visit(root);
+  for (const atom of [...atoms].reverse()) {
+    if (atom.type !== "macro" || atom.command !== `\\${macroName}`) continue;
+    const parent = atom.parent;
+    const branch = atom.parentBranch;
+    const siblings = parent && branch !== undefined ? parent.branch?.(branch) : undefined;
+    const index = siblings?.indexOf(atom) ?? -1;
+    if (!siblings || index < 0) continue;
+    siblings.splice(index, 1);
+    atom.parent = undefined;
+    atom.parentBranch = undefined;
+    atom.isDirty = true;
+    parent!.isDirty = true;
+    removed++;
+  }
   return removed;
 }
 
-function detachVisualTexSourceSpaceAtoms(field: object): number {
-  return detachVisualTexMacroAtoms(field, VISUAL_TEX_SOURCE_SPACE_MACRO_NAME);
+function detachVisualTexSnippetMarkerAtoms(field: object): number {
+  return detachVisualTexMacroAtoms(field, VISUAL_TEX_SNIPPET_START_MACRO_NAME)
+    + detachVisualTexMacroAtoms(field, VISUAL_TEX_SNIPPET_END_MACRO_NAME);
 }
 
-function detachVisualTexCaretMarkerAtoms(field: object): number {
-  return detachVisualTexMacroAtoms(field, VISUAL_TEX_CARET_MARKER_MACRO_NAME);
-}
-
-/**
- * MathLive compares replacement TeX after stripping placeholders. For an
- * empty prompt (notably `\\text{\\placeholder{}}`) that makes replaceAll a
- * semantic no-op and leaves the visible PromptAtom mounted. Unwrap only the
- * completed Noema prompts in the live tree when that happens; this preserves
- * the current undo snapshot instead of reparsing through setValue().
- */
-function unwrapMountedVisualTexPromptAtoms(
+function rememberVisualTexMacroMarkerTemplates(
   field: object,
-  promptIds: ReadonlySet<string>,
-): number {
-  const root = (field as {
-    _mathfield?: { model?: { root?: VisualTexInternalMacroAtom } };
-  })._mathfield?.model?.root;
-  if (!root || promptIds.size === 0) return 0;
-
-  let unwrapped = 0;
-  const visit = (parent: VisualTexInternalMacroAtom): void => {
-    for (const branchName of parent.branches ?? []) {
-      const children = parent.branch?.(branchName);
-      if (!children) continue;
-      for (let index = children.length - 1; index >= 0; index--) {
-        const child = children[index]!;
-        visit(child);
-        if (child.type !== "prompt"
-            || !child.placeholderId
-            || !promptIds.has(child.placeholderId)) continue;
-
-        const body = child.branch?.("body") ?? [];
-        const moved = body.splice(0).filter((atom) => atom.type !== "first");
-        children.splice(index, 1, ...moved);
-        for (const atom of moved) {
-          atom.parent = parent;
-          atom.parentBranch = branchName;
-        }
-        child.parent = undefined;
-        child.parentBranch = undefined;
-        child.isDirty = true;
-        parent.isDirty = true;
-        unwrapped++;
-      }
-    }
-  };
-  visit(root);
-  return unwrapped;
-}
-
-function reparseVisualTexMathfield(
-  field: object,
-  live: Partial<Pick<MathfieldElement, "getValue" | "setValue" | "insert">>,
-  source: string,
-  promptIds?: ReadonlySet<string>,
+  ids: ReadonlySet<string>,
 ): void {
-  const model = (field as { _mathfield?: { model?: { mode?: string } } })._mathfield?.model;
-  const previousMode = model?.mode;
-  const insertOptions = {
-    format: "latex" as const,
-    mode: "math" as const,
-    insertionMode: "replaceAll" as const,
-    selectionMode: "after" as const,
-    focus: false,
-    feedback: false,
-    scrollIntoView: false,
-    silenceNotifications: true,
-  };
-  const setValueOptions = {
-    format: "latex" as const,
-    mode: "math" as const,
-    insertionMode: "replaceAll" as const,
-    selectionMode: "after" as const,
-    focus: false,
-    silenceNotifications: true,
-  };
-  const resetSelectionBeforeDetach = (): void => {
-    const target = field as Partial<Pick<MathfieldElement, "position">>;
-    if (typeof target.position === "number") target.position = 0;
-  };
-
-  // Prompt wrappers and caret/source markers are editor scaffolding, not user
-  // edits. `insert(..., replaceAll)` respects a suspended undo manager; unlike
-  // setValue(), it does not reset MathLive's undo/redo history.
-  withVisualTexUndoRecordingSuspended(field, () => {
-    resetSelectionBeforeDetach();
-    // Empty macros can sit outside MathLive's replaceable model range. Remove
-    // their old atoms first so the requested source recreates each one once.
-    detachVisualTexSourceSpaceAtoms(field);
-    detachVisualTexCaretMarkerAtoms(field);
-    if (typeof live.insert === "function") live.insert(source, insertOptions);
-    else live.setValue?.(source, setValueOptions);
-    if (promptIds) unwrapMountedVisualTexPromptAtoms(field, promptIds);
-    // Whole-field LaTeX must be parsed in math mode, but the editing mode is
-    // caret state. Preserve it so setting the mapped caret does not make
-    // MathLive record a mode-only undo step (especially after `\\text{...}`).
-    if (model && previousMode) model.mode = previousMode;
-  });
-  if (typeof live.getValue === "function") {
-    primeVisualTexMathfieldSerialization(live as Pick<MathfieldElement, "getValue">);
+  const atoms = (field as {
+    _mathfield?: { model?: { atoms?: VisualTexInternalMacroAtom[] } };
+  })._mathfield?.model?.atoms;
+  if (!atoms) return;
+  for (const atom of atoms) {
+    if (atom.type === "macro"
+      && typeof atom.macroArgs === "string"
+      && atom.macroArgs.includes(`\\${VISUAL_TEX_SNIPPET_START_MACRO_NAME}`)
+      && [...ids].some((id) => atom.macroArgs!.includes(`{${id}}`))) {
+      visualTexMacroArgumentTemplates.set(atom, atom.macroArgs);
+    }
   }
 }
 
-function visualTexMacroAtomOffset(field: object, command: string): number | null {
-  const model = (field as {
-    _mathfield?: {
-      model?: {
-        root?: VisualTexInternalMacroAtom;
-        offsetOf?: (atom: VisualTexInternalMacroAtom) => number;
-      };
-    };
-  })._mathfield?.model;
-  if (!model?.root || typeof model.offsetOf !== "function") return null;
-  let result: number | null = null;
-  const visit = (atom: VisualTexInternalMacroAtom): void => {
-    if (result !== null) return;
-    if (atom.type === "macro" && atom.command === command) {
-      const offset = model.offsetOf!(atom);
-      if (Number.isFinite(offset)) result = offset;
-      return;
+function stripMountedVisualTexSnippetMacroArguments(field: object): void {
+  const atoms = (field as {
+    _mathfield?: { model?: { atoms?: VisualTexInternalMacroAtom[] } };
+  })._mathfield?.model?.atoms;
+  if (!atoms) return;
+  for (const atom of atoms) {
+    if (atom.type === "macro"
+      && typeof atom.macroArgs === "string"
+      && atom.macroArgs.includes("\\noemaMathSnippet")) {
+      atom.macroArgs = stripVisualTexSnippetMarkers(atom.macroArgs);
+      atom.isDirty = true;
     }
-    for (const branch of atom.branches ?? []) {
-      for (const child of atom.branch?.(branch) ?? []) visit(child);
-    }
-  };
-  visit(model.root);
-  return result;
+  }
 }
 
-function resolveVisualTexPromptArgumentTemplate(
+function retireVisualTexMacroMarkerTemplates(
+  field: object,
+  ids: ReadonlySet<string>,
+): void {
+  const atoms = (field as {
+    _mathfield?: { model?: { atoms?: VisualTexInternalMacroAtom[] } };
+  })._mathfield?.model?.atoms;
+  if (!atoms) return;
+  for (const atom of atoms) {
+    const template = visualTexMacroArgumentTemplates.get(atom);
+    if (template && [...ids].some((id) => template.includes(`{${id}}`))) {
+      visualTexMacroArgumentTemplates.delete(atom);
+    }
+  }
+}
+
+type VisualTexSnippetSourceMarker = {
+  kind: "start" | "end";
+  id: string;
+  start: number;
+  end: number;
+};
+
+function readVisualTexSnippetSourceMarker(
   source: string,
-  field: VisualTexPromptField,
-  available: ReadonlySet<string>,
+  index: number,
+): VisualTexSnippetSourceMarker | null {
+  const commands: Array<["start" | "end", string]> = [
+    ["start", `\\${VISUAL_TEX_SNIPPET_START_MACRO_NAME}`],
+    ["end", `\\${VISUAL_TEX_SNIPPET_END_MACRO_NAME}`],
+  ];
+  for (const [kind, command] of commands) {
+    if (!source.startsWith(command, index)
+      || /[A-Za-z]/.test(source[index + command.length] ?? "")) continue;
+    let cursor = index + command.length;
+    while (source[cursor] === " " || source[cursor] === "\t") cursor++;
+    const argument = readDelimitedGroup(source, cursor, "{", "}");
+    if (argument) return { kind, id: argument.body, start: index, end: argument.end };
+  }
+  return null;
+}
+
+function resolveVisualTexSnippetMarkerArgumentTemplate(
+  source: string,
+  field: MathfieldElement,
+  ranges: ReadonlyMap<string, VisualTexSnippetMarkerRange>,
 ): string {
   let result = "";
   for (let index = 0; index < source.length;) {
-    if (!source.startsWith("\\placeholder", index)
-      || /[A-Za-z]/.test(source[index + "\\placeholder".length] ?? "")) {
+    const marker = readVisualTexSnippetSourceMarker(source, index);
+    if (!marker || marker.kind !== "start") {
       result += source[index]!;
       index++;
       continue;
     }
 
-    let cursor = index + "\\placeholder".length;
-    const options: string[] = [];
-    while (source[cursor] === "[") {
-      const option = readDelimitedGroup(source, cursor, "[", "]");
-      if (!option) break;
-      options.push(option.body);
-      cursor = option.end;
+    let cursor = marker.end;
+    let endMarker: VisualTexSnippetSourceMarker | null = null;
+    while (cursor < source.length) {
+      const candidate = readVisualTexSnippetSourceMarker(source, cursor);
+      if (candidate?.kind === "end" && candidate.id === marker.id) {
+        endMarker = candidate;
+        break;
+      }
+      cursor = candidate?.end ?? cursor + 1;
     }
-    const body = readDelimitedGroup(source, cursor, "{", "}");
-    if (!body) {
-      result += source[index]!;
-      index++;
+    if (!endMarker) {
+      result += source.slice(marker.start, marker.end);
+      index = marker.end;
       continue;
     }
 
-    const id = options[0] ?? "";
-    result += id && available.has(id)
-      ? field.getPromptValue(id, "latex-without-placeholders")
-      : resolveVisualTexPromptArgumentTemplate(body.body, field, available);
-    index = body.end;
+    const range = ranges.get(marker.id)?.range;
+    const content = range
+      ? normalizeVisualTexLatex(field.getValue(range[0], range[1], "latex-expanded"))
+      : resolveVisualTexSnippetMarkerArgumentTemplate(
+        source.slice(marker.end, endMarker.start),
+        field,
+        ranges,
+      );
+    result += source.slice(marker.start, marker.end)
+      + content
+      + source.slice(endMarker.start, endMarker.end);
+    index = endMarker.end;
   }
   return result;
 }
 
 /**
- * MathLive keeps a MacroAtom's original argument source immutable even while
- * its rendered prompt body changes. Noema snippets carry stable prompt IDs, so
- * refresh that private source string from the live prompt values before asking
- * MathLive for compact TeX. This keeps `\\bra{...}`/`\\braket{...}` intact and
- * avoids falling back to a `\\left...\\middle...` expansion on save.
+ * MathLive keeps a MacroAtom's original argument source immutable while its
+ * expanded atoms are edited. Refresh that source from logical tabstop ranges
+ * so `\\bra{...}`/`\\braket{...}` remain compact instead of falling back to
+ * their `\\left...\\middle...` expansion.
  */
-function synchronizeVisualTexMacroPromptArguments(field: object): void {
-  const promptField = visualTexPromptField(field);
-  const root = (field as {
-    _mathfield?: { model?: { root?: VisualTexInternalMacroAtom } };
-  })._mathfield?.model?.root;
-  const noemaIds = new Set([
-    ...(visualTexNoemaPromptIds.get(field) ?? []),
-    ...(visualTexCompletedPromptIds.get(field) ?? []),
-  ]);
-  if (!promptField || !root || !noemaIds.size) return;
-  const available = new Set(promptField.getPrompts());
+function synchronizeVisualTexMacroTabstopArguments(field: object): void {
+  const atoms = (field as {
+    _mathfield?: { model?: { atoms?: VisualTexInternalMacroAtom[] } };
+  })._mathfield?.model?.atoms;
+  if (!atoms) return;
+  const markerRanges = visualTexSnippetSessionRanges(field);
 
-  const visit = (atom: VisualTexInternalMacroAtom): void => {
+  for (const atom of atoms) {
     if (atom.type === "macro" && typeof atom.macroArgs === "string") {
-      let template = visualTexMacroArgumentTemplates.get(atom);
-      if (!template && atom.macroArgs.includes("\\placeholder")
-        && [...noemaIds].some((id) => atom.macroArgs!.includes(`[${id}]`))) {
-        template = atom.macroArgs;
-        visualTexMacroArgumentTemplates.set(atom, template);
-      }
+      const template = visualTexMacroArgumentTemplates.get(atom);
       if (template) {
-        atom.macroArgs = resolveVisualTexPromptArgumentTemplate(
-          template,
-          promptField,
-          new Set([...available].filter((id) => noemaIds.has(id))),
+        atom.macroArgs = stripVisualTexSnippetMarkers(
+          resolveVisualTexSnippetMarkerArgumentTemplate(
+            template,
+            field as MathfieldElement,
+            markerRanges,
+          ),
         );
       }
     }
-    for (const branch of atom.branches ?? []) {
-      for (const child of atom.branch?.(branch) ?? []) visit(child);
-    }
-  };
-  visit(root);
-}
-
-function synchronizeRestoredVisualTexPromptMirrors(
-  field: object,
-  restored: ReadonlySet<string>,
-): void {
-  const promptField = visualTexPromptField(field);
-  const groups = visualTexCompletedPromptGroups.get(field);
-  if (!promptField || !groups?.length) return;
-  const savedSelection = {
-    ranges: promptField.selection.ranges.map(([from, to]) => [from, to] as [number, number]),
-    direction: promptField.selection.direction,
-  };
-  withVisualTexUndoRecordingSuspended(field, () => {
-    for (const group of groups) {
-      const available = group.promptIds.filter((id) => restored.has(id));
-      if (available.length < 2) continue;
-      const sourceId = available.includes(group.primaryId) ? group.primaryId : available[0]!;
-      const value = promptField.getPromptValue(sourceId, "latex-without-placeholders");
-      for (const id of available) {
-        if (id === sourceId
-            || promptField.getPromptValue(id, "latex-without-placeholders") === value) continue;
-        promptField.setPromptValue(id, value, {
-          format: "latex",
-          selectionMode: "after",
-          focus: false,
-          feedback: false,
-          silenceNotifications: true,
-        });
-      }
-    }
-  });
-  withVisualTexUndoRecordingSuspended(field, () => {
-    promptField.selection = savedSelection;
-  });
-}
-
-/**
- * Undo states captured while a snippet was active contain MathLive PromptAtom
- * wrappers. Once that snippet has completed, undo/redo may restore its value
- * but must never restore its editor-only boxes or tab cycle.
- */
-function flattenRestoredVisualTexPromptAtoms(
-  field: object,
-  historyType?: "undo" | "redo",
-): boolean {
-  if (visualTexUndoPromptSanitizing.has(field)) return false;
-  const promptField = visualTexPromptField(field);
-  const completed = visualTexCompletedPromptIds.get(field);
-  const live = field as Partial<Pick<MathfieldElement, "getValue" | "setValue" | "insert">>;
-  if (!promptField || !completed?.size || typeof live.getValue !== "function"
-      || (typeof live.insert !== "function" && typeof live.setValue !== "function")) return false;
-  const restored = new Set(promptField.getPrompts().filter((id) => completed.has(id)));
-  if (restored.size === 0) return false;
-
-  visualTexUndoPromptSanitizing.add(field);
-  try {
-    synchronizeRestoredVisualTexPromptMirrors(field, restored);
-    synchronizeVisualTexMacroPromptArguments(field);
-    const selection = promptField.selection.ranges[0];
-    const distanceFromEnd = Math.max(0, promptField.lastOffset - promptField.position);
-    let caretMarkerInserted = false;
-    if (selection && promptField.selection.ranges.length === 1
-        && selection[0] === selection[1]
-        && (field as Partial<Pick<MathfieldElement, "mode">>).mode !== "text"
-        && typeof live.insert === "function") {
-      caretMarkerInserted = withVisualTexUndoRecordingSuspended(field, () => live.insert!(
-        VISUAL_TEX_CARET_MARKER,
-        {
-          format: "latex",
-          mode: "math",
-          insertionMode: "insertAfter",
-          selectionMode: "after",
-          focus: false,
-          feedback: false,
-          scrollIntoView: false,
-          silenceNotifications: true,
-        },
-      ));
-    }
-    const source = visualTexMathfieldReparseSource(live as MathfieldElement);
-    const flattened = unwrapVisualTexPromptIds(source, restored).replace(
-      VISUAL_TEX_SOURCE_SPACE_MARKER_RE,
-      VISUAL_TEX_SOURCE_SPACE_MARKER,
-    );
-    reparseVisualTexMathfield(field, live, flattened, restored);
-    let position = Math.max(0, Math.min(
-      promptField.lastOffset - distanceFromEnd,
-      promptField.lastOffset,
-    ));
-    const caretOffset = caretMarkerInserted
-      ? visualTexMacroAtomOffset(field, `\\${VISUAL_TEX_CARET_MARKER_MACRO_NAME}`)
-      : null;
-    if (caretOffset !== null && typeof live.insert === "function") {
-      const markerFree = visualTexMathfieldReparseSource(live as MathfieldElement)
-        .replace(VISUAL_TEX_CARET_MARKER_RE, "");
-      reparseVisualTexMathfield(field, live, markerFree);
-      position = Math.max(0, Math.min(caretOffset - 1, promptField.lastOffset));
-    }
-    // Restoring a caret can cross text/math mode. MathLive snapshots that mode
-    // switch even when no content changes, which would consume redo with an
-    // invisible step. Caret restoration is part of sanitizing the history
-    // state, so keep it outside the user's undo timeline too.
-    withVisualTexUndoRecordingSuspended(field, () => {
-      promptField.selection = { ranges: [[position, position]], direction: "forward" };
-    });
-    stopVisualTexUndoCoalescing(field);
-    if (historyType && typeof (field as Partial<EventTarget>).dispatchEvent === "function") {
-      // MathLive emitted its history input before the undo-state-change event,
-      // while restored mirror prompts could still disagree. Publish the final,
-      // sanitized value so previews and host drafts observe the same state that
-      // will be committed.
-      (field as EventTarget).dispatchEvent(new InputEvent("input", {
-        bubbles: true,
-        composed: true,
-        inputType: historyType === "undo" ? "historyUndo" : "historyRedo",
-      }));
-    }
-    return true;
-  } finally {
-    visualTexUndoPromptSanitizing.delete(field);
   }
 }
 
-function installVisualTexUndoSanitizer(field: object): void {
-  if (visualTexUndoSanitizers.has(field)) return;
-  const target = field as Partial<Pick<HTMLElement, "addEventListener">>;
-  if (typeof target.addEventListener !== "function") return;
-  target.addEventListener("beforeinput", ((event: InputEvent) => {
-    if (event.inputType !== "historyUndo" && event.inputType !== "historyRedo") return;
-    const controller = (field as { _mathfield?: VisualTexUndoController })._mathfield;
-    if (!controller?.stopRecording || controller.undoManager?.recording === false) return;
-    // MathLive restores both content and selection, then may call switchMode()
-    // for the restored caret. switchMode snapshots directly, which otherwise
-    // truncates redo with a mode-only state before `undo-state-change` fires.
-    controller.stopRecording();
-    visualTexHistoryRecordingSuspended.add(field);
-  }) as EventListener, { capture: true });
-  target.addEventListener("undo-state-change", ((event: CustomEvent<{ type?: string }>) => {
-    if (event.detail?.type === "undo" || event.detail?.type === "redo") {
-      try {
-        flattenRestoredVisualTexPromptAtoms(field, event.detail.type);
-      } finally {
-        if (visualTexHistoryRecordingSuspended.delete(field)) {
-          (field as { _mathfield?: VisualTexUndoController })._mathfield?.startRecording?.();
-        }
-      }
-    }
-  }) as EventListener);
-  visualTexUndoSanitizers.add(field);
-}
-
-/** Remove both MathLive prompt commands and its insertion-only `#?` marker. */
+/** Remove imported MathLive placeholder commands and its insertion-only `#?` marker. */
 export function stripVisualTexPlaceholders(source: string): string {
   let result = "";
   for (let index = 0; index < source.length;) {
@@ -1559,7 +1510,7 @@ export function stripVisualTexPlaceholders(source: string): string {
  */
 export function normalizeVisualTexMathLiveOutput(source: string): string {
   return source
-    .replace(VISUAL_TEX_CARET_MARKER_RE, "")
+    .replace(VISUAL_TEX_SNIPPET_MARKER_RE, "")
     .replace(VISUAL_TEX_SOURCE_SPACE_MARKER_RE, " ")
     .replace(/\\middle\s*\{([^{}\s]+)\}/g, (_whole, delimiter: string) => (
       `\\middle${delimiter}`
@@ -1660,16 +1611,15 @@ export function initializeNoemaMathfield(
   macros: Record<string, string>,
 ): void {
   visualTexLastSourceSpaceBoundary.delete(field as object);
-  visualTexSnippetPromptSessions.delete(field as object);
-  visualTexNoemaPromptIds.delete(field as object);
-  visualTexCompletedPromptIds.delete(field as object);
-  visualTexCompletedPromptGroups.delete(field as object);
+  visualTexSnippetSessions.delete(field as object);
   visualTexMathfieldSerializationStates.delete(field as object);
-  installVisualTexUndoSanitizer(field as object);
+  installVisualTexSnippetInsertAdapter(field as MathfieldElement);
+  installVisualTexHistoryInputBridge(field as MathfieldElement);
   field.macros = {
     ...visualTexMathLiveMacros(macros),
     [VISUAL_TEX_SOURCE_SPACE_MACRO_NAME]: VISUAL_TEX_SOURCE_SPACE_MACRO,
-    [VISUAL_TEX_CARET_MARKER_MACRO_NAME]: VISUAL_TEX_CARET_MARKER_MACRO,
+    [VISUAL_TEX_SNIPPET_START_MACRO_NAME]: VISUAL_TEX_SNIPPET_MARKER_MACRO,
+    [VISUAL_TEX_SNIPPET_END_MACRO_NAME]: VISUAL_TEX_SNIPPET_MARKER_MACRO,
   };
   field.setValue(normalizeVisualTexLatex(latex), { selectionMode: "after" });
   field.resetUndo();
@@ -1713,15 +1663,17 @@ export function applyVisualTexCompletionTemplate(
   template: string | VisualTexCompletionTemplate,
   deleteBefore: number,
 ): boolean {
-  finishInactiveVisualTexSnippetPromptSessions(field);
+  finishInactiveVisualTexTabstopSessions(field);
   // MathLive keeps an unfinished backslash command in a transient editor.
   // Replacing that range directly reports success but leaves the completion
   // inside command mode, so neither Enter nor Space visibly accepts it.
   // Materialize the command as a normal math atom before replacing its range.
+  let acceptedCommand = false;
   if (field.mode === "latex") {
     withVisualTexUndoRecordingSuspended(field, () => {
-      field.executeCommand(["complete", "accept-all"]);
+      acceptedCommand = field.executeCommand(["complete", "accept-all"]);
     });
+    if (acceptedCommand) snapshotVisualTexUndoState(field, "complete-command");
   }
   const suffix = prefix.slice(Math.max(0, prefix.length - deleteBefore));
   const range = suffixRange(field, suffix);
@@ -1729,34 +1681,32 @@ export function applyVisualTexCompletionTemplate(
   withVisualTexUndoRecordingSuspended(field, () => {
     field.selection = { ranges: [range] };
   });
-  const registeredPromptIds: string[] = [];
-  if (typeof template !== "string") {
-    const ids = visualTexNoemaPromptIds.get(field) ?? new Set<string>();
-    for (const group of template.tabstops) {
-      for (const id of group.promptIds) {
-        ids.add(id);
-        registeredPromptIds.push(id);
-      }
-    }
-    visualTexNoemaPromptIds.set(field, ids);
-  }
-  let templateLatex = typeof template === "string" ? template : template.latex;
+  const registeredOccurrenceIds = typeof template === "string"
+    ? []
+    : template.tabstops.flatMap((group) => group.occurrenceIds);
+  let templateLatex = typeof template === "string"
+    ? template
+    : visualTexSnippetTemplateMarkers(template.latex, new Set(registeredOccurrenceIds));
   if (typeof template !== "string" && template.needsFinalSourceBoundary) {
     templateLatex += VISUAL_TEX_SOURCE_SPACE_MARKER;
   }
-  const inserted = field.insert(templateLatex, {
-    format: "latex",
-    insertionMode: "replaceSelection",
-    selectionMode: typeof template === "string" ? "placeholder" : "after",
-    focus: false,
-    feedback: false,
-    scrollIntoView: false,
-  });
-  if (!inserted) {
-    const ids = visualTexNoemaPromptIds.get(field);
-    for (const id of registeredPromptIds) ids?.delete(id);
-    return false;
-  }
+  let inserted = false;
+  const insertTemplate = (): void => {
+    inserted = field.insert(templateLatex, {
+      format: "latex",
+      insertionMode: "replaceSelection",
+      selectionMode: typeof template === "string" ? "placeholder" : "after",
+      focus: false,
+      feedback: false,
+      scrollIntoView: false,
+    });
+    if (inserted && typeof template !== "string") {
+      registerVisualTexSnippetSession(field, template.tabstops);
+    }
+  };
+  if (typeof template === "string") insertTemplate();
+  else withVisualTexUndoRecordingSuspended(field, insertTemplate);
+  if (!inserted) return false;
   // Snippet expansion is one edit; text typed at its final caret is the next
   // edit even when both operations happen to create the same MathLive atom
   // type and would otherwise be coalesced.
@@ -1768,9 +1718,9 @@ export function applyVisualTexCompletionTemplate(
   if (template.needsFinalSourceBoundary) {
     visualTexLastSourceSpaceBoundary.set(field, field.position);
   }
-  registerVisualTexSnippetPrompts(field, template.tabstops);
+  snapshotVisualTexUndoState(field, "insert-snippet");
   const first = [...template.tabstops].sort((a, b) => a.index - b.index)[0];
-  if (first) selectVisualTexPrompt(field, first.primaryId);
+  if (first) selectVisualTexTabstop(field, first.primaryId);
   focusVisualTexField(field);
   return true;
 }
@@ -1859,11 +1809,18 @@ function completionConsumesKey(host: HTMLElement, key: VisualTexMathHostKey): bo
 
 function typedText(field: MathfieldElement, text: string): boolean {
   focusVisualTexField(field);
-  return field.executeCommand(["typedText", text, {
+  const inserted = field.executeCommand(["typedText", text, {
     focus: false,
     feedback: false,
     simulateKeystroke: true,
   }]);
+  const operation = (field as unknown as {
+    _mathfield?: { undoManager?: { lastOp?: string } };
+  })._mathfield?.undoManager?.lastOp;
+  if (inserted && synchronizeVisualTexSnippetMirrors(field)) {
+    replaceVisualTexLatestUndoSnapshot(field, operation);
+  }
+  return inserted;
 }
 
 export type VisualTexSpaceAction = "command" | "space" | "navigate" | "boundary" | "none";
@@ -1886,7 +1843,7 @@ export type VisualTexSpaceAction = "command" | "space" | "navigate" | "boundary"
  * studio editors from drifting into different Space behaviours.
  */
 export function insertVisualTexNaturalSpace(field: MathfieldElement): VisualTexSpaceAction {
-  finishInactiveVisualTexSnippetPromptSessions(field);
+  finishInactiveVisualTexTabstopSessions(field);
   if (field.mode === "latex") {
     // This is MathLive's native `[Space]` transition for an unfinished
     // backslash command. It also removes the transient command/suggestion box.
@@ -1927,6 +1884,101 @@ type VisualTexNavigationField = Pick<
   MathfieldElement,
   "position" | "lastOffset" | "selection" | "executeCommand"
 >;
+
+type VisualTexAtomScope = {
+  parent: VisualTexInternalMacroAtom;
+  branch: string | [number, number] | undefined;
+};
+
+function sameVisualTexAtomBranch(
+  left: VisualTexAtomScope["branch"],
+  right: VisualTexAtomScope["branch"],
+): boolean {
+  if (!Array.isArray(left) || !Array.isArray(right)) return left === right;
+  return left[0] === right[0] && left[1] === right[1];
+}
+
+function visualTexAtomScopePath(atom: VisualTexInternalMacroAtom | undefined): VisualTexAtomScope[] {
+  const path: VisualTexAtomScope[] = [];
+  let child = atom;
+  while (child?.parent) {
+    path.push({ parent: child.parent, branch: child.parentBranch });
+    child = child.parent;
+  }
+  return path.reverse();
+}
+
+function visualTexCommonScopeDepth(
+  left: readonly VisualTexAtomScope[],
+  right: readonly VisualTexAtomScope[],
+): number {
+  let depth = 0;
+  while (depth < left.length && depth < right.length
+      && left[depth]!.parent === right[depth]!.parent
+      && sameVisualTexAtomBranch(left[depth]!.branch, right[depth]!.branch)) depth++;
+  return depth;
+}
+
+/**
+ * Recover an empty snippet field after its stronger object anchors are gone.
+ * The square is ordinary formula content, so rank candidates by their shared
+ * parent/branch path before distance; matrix cells and nested TeX branches do
+ * not collapse into one flat search order. There is deliberately no wrapping.
+ */
+function selectVisualTexEmptyTabstopFallback(
+  field: VisualTexNavigationField,
+  backward: boolean,
+): boolean {
+  const model = (field as unknown as {
+    _mathfield?: { model?: { atoms?: VisualTexInternalMacroAtom[] } };
+  })._mathfield?.model;
+  const atoms = model?.atoms;
+  const selection = field.selection.ranges[0];
+  if (!atoms || !selection || field.selection.ranges.length !== 1) return false;
+
+  const selectedFrom = Math.min(selection[0], selection[1]);
+  const selectedTo = Math.max(selection[0], selection[1]);
+  const origin = backward ? selectedFrom : selectedTo;
+  const selected = selectedFrom !== selectedTo;
+  const originOffset = Math.max(0, Math.min(
+    atoms.length - 1,
+    selected && backward ? selectedFrom + 1 : field.position,
+  ));
+  const originPath = visualTexAtomScopePath(atoms[originOffset]);
+  const candidates = atoms.flatMap((atom, offset) => {
+    if (offset <= 0 || (atom.value !== "□" && atom.command !== "\\square")) return [];
+    const from = offset - 1;
+    const to = offset;
+    if (from === selectedFrom && to === selectedTo) return [];
+    if (backward ? to > origin : from < origin) return [];
+    return [{
+      atom,
+      from,
+      to,
+      scopeDepth: visualTexCommonScopeDepth(originPath, visualTexAtomScopePath(atom)),
+      distance: backward ? origin - to : from - origin,
+    }];
+  }).sort((left, right) => (
+    right.scopeDepth - left.scopeDepth
+    || left.distance - right.distance
+    || (backward ? right.from - left.from : left.from - right.from)
+  ));
+  const target = candidates[0];
+  if (!target) return false;
+
+  withVisualTexUndoRecordingSuspended(field as object, () => {
+    field.selection = {
+      ranges: [[target.from, target.to]],
+      direction: backward ? "backward" : "forward",
+    };
+    const modeField = field as VisualTexNavigationField & Partial<Pick<MathfieldElement, "mode">>;
+    if (target.atom.mode && modeField.mode !== target.atom.mode) {
+      modeField.mode = target.atom.mode as MathfieldElement["mode"];
+    }
+  });
+  stopVisualTexUndoCoalescing(field as object);
+  return true;
+}
 
 function visualTexSelectionKey(field: Pick<MathfieldElement, "position" | "selection">): string {
   return `${field.position}:${field.selection.ranges
@@ -2058,8 +2110,8 @@ export function visualTexMathBottomLeftInsets(
   visual: { top: number; bottom: number },
 ): { top: number; bottom: number } {
   // The lower-left corner is the stable origin. MathLive's own box already
-  // includes TeX depth, so the lower edge must never be recomputed from prompt
-  // overlays. Additional prompt/root ascent is absorbed above the field only.
+  // includes TeX depth, so the lower edge must never be recomputed from child
+  // boxes. Additional formula ascent is absorbed above the field only.
   const overflowTop = Math.max(0, field.top - visual.top);
   return {
     top: Math.ceil(overflowTop) + 2,
@@ -2093,13 +2145,13 @@ function runCommonMathfieldKey(
     withVisualTexUndoRecordingSuspended(field, () => {
       field.executeCommand(movement);
     });
-    finishInactiveVisualTexSnippetPromptSessions(field);
+    finishInactiveVisualTexTabstopSessions(field);
     closeCompletion(host);
     return "handled";
   }
   const deletion = visualTexMathfieldDeletionCommand(key);
   if (deletion) {
-    finishInactiveVisualTexSnippetPromptSessions(field);
+    finishInactiveVisualTexTabstopSessions(field);
     field.executeCommand(deletion);
     // MathLive snapshots deletion commands before mutating the tree. Reusing
     // the same operation key replaces that provisional entry with the actual
@@ -2113,7 +2165,7 @@ function runCommonMathfieldKey(
   if (normalized === "Escape") return "commit";
   const text = visualTexMathfieldTypedText({ ...key, key: normalized });
   if (text) {
-    finishInactiveVisualTexSnippetPromptSessions(field);
+    finishInactiveVisualTexTabstopSessions(field);
     typedText(field, text);
     refreshCompletion(host, field);
     return "handled";
@@ -2124,7 +2176,7 @@ function runCommonMathfieldKey(
 type VisualTexTabstopMove = "placeholder" | "edge" | "boundary";
 
 function moveVisualTexTabstop(field: MathfieldElement, backward: boolean): VisualTexTabstopMove {
-  const registered = moveVisualTexSnippetPrompt(field, backward);
+  const registered = moveVisualTexTabstopSession(field, backward);
   if (registered === "moved") return "placeholder";
   if (registered === "final") return "edge";
   if (registered === "exhausted") {
@@ -2137,10 +2189,10 @@ function moveVisualTexTabstop(field: MathfieldElement, backward: boolean): Visua
     }
     return "boundary";
   }
-  finishInactiveVisualTexSnippetPromptSessions(field);
+  finishInactiveVisualTexTabstopSessions(field);
   // MathLive's native placeholder traversal is intentionally not a fallback:
-  // Noema prompts are the sole snippet state, and the native command wraps at
-  // the root, which makes Tab/Cmd-] jump back to the first formula atom.
+  // Noema's logical tabstops are the sole snippet state, and the native command
+  // wraps at the root, making Tab/Cmd-] jump back to the first formula atom.
   const edge = backward ? 0 : field.lastOffset;
   if (field.position !== edge) {
     withVisualTexUndoRecordingSuspended(field, () => {
@@ -2169,9 +2221,8 @@ function keepVisualTexNavigationDirectional(
   origin: number,
   step: VisualTexNavigationStep,
 ): VisualTexNavigationStep {
-  // Finishing a snippet reparses the formula without prompt wrapper atoms.
-  // Offsets before and after that reparse are different coordinate spaces;
-  // its `$0` position is mapped explicitly by finishVisualTexSnippetPromptSession.
+  // Completing a logical tabstop session may remap its `$0` as edits change
+  // the atom count. Keep the requested direction stable across that move.
   if (step === "boundary" || step === "final") return step;
   const wrapped = backward ? field.position > origin : field.position < origin;
   if (!wrapped) return step;
@@ -2221,10 +2272,20 @@ export function advanceVisualTexNavigation(
   const finish = (step: VisualTexNavigationStep): VisualTexNavigationStep => (
     keepVisualTexNavigationDirectional(field, backward, origin, step)
   );
-  const registered = moveVisualTexSnippetPrompt(field as object, backward);
-  if (registered === "moved") return finish("placeholder");
+  const registered = moveVisualTexTabstopSession(field as object, backward);
+  // Numeric tabstop order is semantic, not monotonic in MathLive's flattened
+  // atom offsets: an outer default can intentionally precede its nested child.
+  if (registered === "moved") return "placeholder";
   if (registered === "final") return finish("final");
-  if (registered === "none") finishInactiveVisualTexSnippetPromptSessions(field as object);
+  if (registered === "none") {
+    const sessions = visualTexSnippetSessions.get(field as object);
+    const hasUsableAnchor = visualTexSnippetSessionRanges(field as object).size > 0;
+    // A live logical session always wins. Only formulas with no session, or a
+    // session whose atom identities have all gone stale, may use glyph recovery.
+    if ((!sessions?.length || !hasUsableAnchor)
+      && selectVisualTexEmptyTabstopFallback(field, backward)) return "placeholder";
+    finishInactiveVisualTexTabstopSessions(field as object);
+  }
   if (collapsedAtMathfieldBoundary(field, backward)) {
     // A trailing `\\text{...}` reports text mode even though its caret is
     // already at the root edge. Cmd-brackets are structural navigation only:
@@ -2233,8 +2294,8 @@ export function advanceVisualTexNavigation(
   }
 
   if (registered === "exhausted") {
-    // Prompts are editor-only wrappers. Leave one without spending a visible
-    // structural Cmd-bracket transition on that artificial parent.
+    // Leave the selected tabstop's real TeX parent before continuing ordinary
+    // structural navigation.
     withVisualTexUndoRecordingSuspended(field as object, () => {
       field.executeCommand(backward ? "moveBeforeParent" : "moveAfterParent");
     });
@@ -2277,10 +2338,9 @@ function addHostKeyBridge(
 }
 
 export function insertVisualTexInlineRow(field: MathfieldElement): string {
-  // Enter is a structural edit, not another way to leave a live snippet
-  // prompt behind. Flatten its editor-only wrappers before taking the source
-  // split so the resulting row never serializes prompt atoms.
-  finishAllVisualTexSnippetPromptSessions(field);
+  // Enter is a structural edit and explicitly ends live snippet navigation
+  // before taking the source split.
+  finishAllVisualTexSnippetSessions(field);
   // MathLive currently reports `addRowAfter` as handled even at the ordinary
   // root, where there is no array row to add. Only accept the command when it
   // actually changed the TeX; otherwise promote the formula to `aligned`.
@@ -2382,7 +2442,7 @@ export function mountVisualTexInlineEditor(
         let visualTop = latex.getBoundingClientRect().top;
         let visualBottom = latex.getBoundingClientRect().bottom;
         for (const element of latex.querySelectorAll<HTMLElement>(
-          ".ML__prompt-atom, [data-atom-id], svg",
+          "[data-atom-id], svg",
         )) {
           const candidate = element.getBoundingClientRect();
           if (!Number.isFinite(candidate.top) || !Number.isFinite(candidate.bottom)
@@ -2677,7 +2737,7 @@ function mountVisualTexSingleDisplayEditor(
       ): boolean => {
         if (deleteBefore > 0 && !removeCompletionPrefix(next, prefix, deleteBefore)) return false;
         const converted = setVisualTexDisplayLayout(visualTexMathfieldLatex(next), nextLayout);
-        finishAllVisualTexSnippetPromptSessions(next);
+        finishAllVisualTexSnippetSessions(next);
         stopVisualTexUndoCoalescing(next);
         next.insert(converted, {
           format: "latex",

@@ -5,4 +5,4 @@
 # contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math&description=math+roman+font
 # group: Math · latex-workshop
 # --
-\mathrm{${1:`(or yas-selected-text "text")`}}
+\mathrm{${1:`(or yas-selected-text "text")`}}$0

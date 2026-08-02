@@ -2,7 +2,6 @@
 # name: \begin{vmatrix}…\end{vmatirx}
 # key: vmatrix
 # --
-# --
 \begin{vmatrix}
-$1
-\end{vmatrix}
+${1:a}
+\end{vmatrix}$0

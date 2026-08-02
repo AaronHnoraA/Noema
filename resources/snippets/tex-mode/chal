@@ -4,6 +4,5 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/chal_Chapter_with_label_
 # --
-# --
-\chapter{$1}\label{chap:$1}
+\chapter{${1:a}}\label{chap:$1}
 ${0:$TM_SELECTED_TEXT}

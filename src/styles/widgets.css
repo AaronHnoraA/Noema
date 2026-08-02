@@ -459,22 +459,8 @@
   scrollbar-width: none;
 }
 .cm-editor .noema-visualtex-mathfield::part(content) {
-  /* The outer shell absorbs prompt overflow and moves MathLive as one unit,
-     preserving the coordinate system of prompt and selection overlays. */
+  /* The outer shell absorbs tall TeX ascent while MathLive remains one unit. */
   overflow: visible !important;
-}
-.cm-editor .noema-visualtex-mathfield::part(prompt) {
-  /* MathLive computes nested prompt overlay dimensions recursively. Deep
-     snippets can therefore produce a 3,000px absolute frame around a 300px
-     atom. The atom is the authoritative layout box: pin its visual frame to
-     that box so every outline shares the same lower-left coordinate space. */
-  box-sizing: border-box;
-  top: 0 !important;
-  left: 0 !important;
-  width: 100% !important;
-  height: 100% !important;
-  margin: 0 !important;
-  transform: none !important;
 }
 .cm-editor .noema-visualtex-mathfield::part(menu-toggle),
 .cm-editor .noema-visualtex-mathfield::part(virtual-keyboard-toggle) {

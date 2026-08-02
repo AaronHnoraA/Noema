@@ -5,4 +5,4 @@
 # contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=left%28+...+right%29
 # group: Math · latex-workshop
 # --
-\left( ${1:`(or yas-selected-text "")`} \right)
+\left( ${1:`(or yas-selected-text "")`} \right)$0

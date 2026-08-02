@@ -186,10 +186,51 @@ describe("aaronnote snippets", () => {
       String.raw`\mathcal{\placeholder[test-t1-o0]{F}}+\placeholder[test-t3-o0]{\placeholder[test-t2-o0]{x}}+\placeholder[test-t1-o1]{F}`,
     );
     expect(template.tabstops).toEqual([
-      { index: 1, primaryId: "test-t1-o0", promptIds: ["test-t1-o0", "test-t1-o1"] },
-      { index: 2, primaryId: "test-t2-o0", promptIds: ["test-t2-o0"] },
-      { index: 3, primaryId: "test-t3-o0", promptIds: ["test-t3-o0"] },
+      { index: 1, primaryId: "test-t1-o0", occurrenceIds: ["test-t1-o0", "test-t1-o1"] },
+      { index: 2, primaryId: "test-t2-o0", occurrenceIds: ["test-t2-o0"] },
+      { index: 3, primaryId: "test-t3-o0", occurrenceIds: ["test-t3-o0"] },
     ]);
+  });
+
+  test("uses a selected square for empty LiveTeX fields without changing source expansion", () => {
+    const snippet = {
+      key: "sqrt",
+      mode: "tex-mode",
+      body: "\\sqrt{$1}+${2:}$0",
+    };
+
+    expect(expandSnippetBody(snippet).text).toBe("\\sqrt{}+");
+    const template = mathLiveSnippetTemplate(snippet, "empty-field");
+    expect(template.latex).toBe(
+      String.raw`\sqrt{\placeholder[empty-field-t1-o0]{□}}+\placeholder[empty-field-t2-o0]{□}`,
+    );
+    expect(template.latex).not.toContain("t0");
+  });
+
+  test("parses a tabstop immediately after a TeX row break", () => {
+    const expanded = expandSnippetBody({
+      key: "matrix",
+      mode: "tex-mode",
+      body: "\\begin{matrix}${1:a}\\\\${2:b}\\end{matrix}$0",
+    });
+
+    expect(expanded.text).toBe("\\begin{matrix}a\\\\b\\end{matrix}");
+    expect(expanded.tabstops.filter((stop) => stop.index !== 0).map((stop) => stop.text))
+      .toEqual(["a", "b"]);
+  });
+
+  test("keeps balanced TeX groups inside nested tabstop defaults", () => {
+    const expanded = expandSnippetBody({
+      key: "nested-default",
+      mode: "tex-mode",
+      body: "${1:\\frac{${2:a}}{${3:b}}}+$0",
+    });
+
+    expect(expanded.text).toBe("\\frac{a}{b}+");
+    const outer = expanded.tabstops.find((stop) => stop.index === 1);
+    expect(outer && expanded.text.slice(outer.from, outer.to)).toBe("\\frac{a}{b}");
+    expect(expanded.tabstops.find((stop) => stop.index === 2)?.text).toBe("a");
+    expect(expanded.tabstops.find((stop) => stop.index === 3)?.text).toBe("b");
   });
 
   test("marks only terminal TeX control-word snippets for a source separator", () => {

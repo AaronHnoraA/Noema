@@ -5,4 +5,4 @@
 # contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math&description=superscript
 # group: Math · latex-workshop
 # --
-^{${1:`(or yas-selected-text "")`}}
+^{${1:`(or yas-selected-text "")`}}$0

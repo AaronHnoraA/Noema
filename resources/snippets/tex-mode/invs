@@ -4,4 +4,4 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/invs_Inverse
 # --
-^{-1}
+^{-1}$0

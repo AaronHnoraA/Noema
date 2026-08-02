@@ -5,4 +5,4 @@
 # contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%C2%AF%2C+shortcut+%40_
 # group: Math · latex-workshop
 # --
-\bar{$1}$0
+\bar{${1:a}}$0

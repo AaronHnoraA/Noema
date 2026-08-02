@@ -4,8 +4,7 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/math_Math
 # --
-# --
 \begin{math}
-	$1
+	${1:a}
 \end{math}
 $0

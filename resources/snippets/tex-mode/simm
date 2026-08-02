@@ -4,4 +4,4 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/simm_Similar_To
 # --
-\sim
+\sim$0

@@ -4,7 +4,6 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/begin_begin_end_
 # --
-# --
-\begin{$1}
-$2
-\end{$1}
+\begin{${1:a}}
+${2:b}
+\end{$1}$0

@@ -4,8 +4,7 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/problemset_Problemset
 # --
-# --
 \begin{problemset}
-	$1
+	${1:a}
 \end{problemset}
 $0

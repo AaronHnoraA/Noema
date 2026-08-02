@@ -4,4 +4,4 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/para_Parallel
 # --
-\parallel
+\parallel$0

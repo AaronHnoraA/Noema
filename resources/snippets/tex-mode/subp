@@ -4,6 +4,5 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/subp_Sub_Paragraph_no_label_
 # --
-# --
-\subparagraph{$1}
+\subparagraph{${1:a}}
 ${0:$TM_SELECTED_TEXT}

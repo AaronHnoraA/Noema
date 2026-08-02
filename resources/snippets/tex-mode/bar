@@ -4,4 +4,4 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/bar_Bar_Accent
 # --
-\bar{$1}$2
+\bar{${1:a}}$0

@@ -4,6 +4,6 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/while_Algorithm_While
 # --
-\While{$1}
+\While{${1:a}}
 	\State $0
 \EndWhile

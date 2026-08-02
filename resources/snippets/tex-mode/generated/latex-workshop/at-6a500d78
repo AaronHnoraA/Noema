@@ -5,4 +5,4 @@
 # contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=bigcup
 # group: Math · latex-workshop
 # --
-\bigcup
+\bigcup$0

@@ -4,4 +4,4 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/kbt_Boltzmann_Constant
 # --
-k_{B}T
+k_{B}T$0

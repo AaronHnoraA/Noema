@@ -2,79 +2,78 @@
 ;;; Snippet definitions:
 ;;;
 (yas-define-snippets 'tex-mode
-		     '(("zzzz" "\\zeta\n" "Zeta" nil
+		     '(("zzzz" "\\zeta$0\n" "Zeta" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/zzzz"
 			nil nil)
-		       ("xx" "\\times\n" "Times" nil
+		       ("xx" "\\times$0\n" "Times" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/xx" nil
 			nil)
-		       ("xor" "# --\n\\oplus$0\n" "XOR" nil
+		       ("xor" "\\oplus$0\n" "XOR" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/xor" nil
 			nil)
-		       ("xelatex"
-			"# --\n%! TeX program = xelatex\n$0\n"
+		       ("xelatex" "%! TeX program = xelatex\n$0\n"
 			"Xelatex" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/xelatex"
 			nil nil)
 		       ("while"
-			"\\While{$1}\n	\\State $0\n\\EndWhile\n"
+			"\\While{${1:a}}\n	\\State $0\n\\EndWhile\n"
 			"Algorithm:While" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/while"
 			nil nil)
 		       ("warning"
-			"# --\n#+begin_warning\n$0\n#+end_warning\n"
+			"#+begin_warning\n$0\n#+end_warning\n"
 			"Org warning block" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/warning"
 			nil nil)
 		       ("vvmatrix"
-			"# --\n\\begin{Vmatrix}\n$1\n\\end{Vmatrix}\n"
+			"\\begin{Vmatrix}\n${1:a}\n\\end{Vmatrix}$0\n"
 			"\\begin{Vmatrix}…\\end{Vmatirx}" nil nil nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/vvmatrix"
 			nil nil)
 		       ("vmatrix"
-			"# --\n\\begin{vmatrix}\n$1\n\\end{vmatrix}\n"
+			"\\begin{vmatrix}\n${1:a}\n\\end{vmatrix}$0\n"
 			"\\begin{vmatrix}…\\end{vmatirx}" nil nil nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/vmatrix"
 			nil nil)
 		       ("vmat"
-			"\\begin{vmatrix}\n$1\n\\end{vmatrix}\n"
+			"\\begin{vmatrix}\n${1:a}\n\\end{vmatrix}$0\n"
 			"Vmatrix" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/vmat-2"
 			nil nil)
-		       ("vec" "\\vec{$1}$2\n" "Vector" nil
+		       ("vec" "\\vec{${1:a}}$0\n" "Vector" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/vec" nil
 			nil)
-		       ("uuuu" "\\upsilon\n" "Upsilon (lowercase)" nil
-			("Emacs migrated") nil
+		       ("uuuu" "\\upsilon$0\n" "Upsilon (lowercase)"
+			nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/uuuu-2"
 			nil nil)
-		       ("und" "\\underline{$1}$2\n" "Underline" nil
-			("Emacs migrated") nil
+		       ("und" "\\underline{${1:a}}$0\n" "Underline"
+			nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/und" nil
 			nil)
-		       ("tttt" "\\theta\n" "Theta (lowercase)" nil
+		       ("tttt" "\\theta$0\n" "Theta (lowercase)" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/tttt-2"
 			nil nil)
-		       ("toc" "# --\n#+begin_toc\n$0\n#+end_toc\n"
+		       ("toc" "#+begin_toc\n$0\n#+end_toc\n"
 			"Org toc block" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/toc" nil
 			nil)
-		       ("tip" "# --\n#+begin_tip\n$0\n#+end_tip\n"
+		       ("tip" "#+begin_tip\n$0\n#+end_tip\n"
 			"Org tip block" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/tip" nil
 			nil)
 		       ("tildeO"
-			"# --\n\\widetilde{O}\\left(${1:f(n)}\\right)$0\n"
+			"\\widetilde{O}\\left(${1:f(n)}\\right)$0\n"
 			"Soft O" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/tildeO"
 			nil nil)
-		       ("tilde" "\\tilde{$1}$2\n" "Tilde Accent" nil
-			("Emacs migrated") nil
+		       ("tilde" "\\tilde{${1:a}}$0\n" "Tilde Accent"
+			nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/tilde"
 			nil nil)
 		       ("tikzpath"
@@ -93,24 +92,24 @@
 			"/Users/hc/.emacs.d/snippets/tex-mode/tikzdraw"
 			nil nil)
 		       ("thml"
-			"# --\n\\begin{theorem}{$1}\\label{thm:$1}\n	$2\n\\end{theorem}\n$0\n"
+			"\\begin{theorem}{${1:a}}\\label{thm:$1}\n	${2:b}\n\\end{theorem}\n$0\n"
 			"Theorem (with label)" nil ("Emacs migrated")
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/thml"
 			nil nil)
-		       ("thm" "# --\n#+begin_thm\n$0\n#+end_thm\n"
+		       ("thm" "#+begin_thm\n$0\n#+end_thm\n"
 			"Org theorem alias block" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/thm" nil
 			nil)
 		       ("theorem"
-			"# --\n\\begin{theorem}{$1}\n	$2\n\\end{theorem}\n$0\n"
+			"\\begin{theorem}{${1:a}}\n	${2:b}\n\\end{theorem}\n$0\n"
 			"Theorem (no label)" nil ("Emacs migrated")
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/theorem"
 			nil nil)
-		       ("text" "\\text{$1}$0\n" "Text Environment" nil
-			("Emacs migrated") nil
+		       ("text" "\\text{${1:a}}$0\n" "Text Environment"
+			nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/text"
 			nil nil)
 		       ("tcOt"
@@ -152,259 +151,258 @@
 			"/Users/hc/.emacs.d/snippets/tex-mode/tcbigo"
 			nil nil)
 		       ("tayl"
-			"$1($2 + $3) = $1($2) + $1'($2)$3 + $1''($2) \\frac{$3^{2}}{2!} + \\dots$4\n"
+			"${1:a}(${2:b} + ${3:c}) = $1($2) + $1'($2)$3 + $1''($2) \\frac{$3^{2}}{2!} + \\dots$0\n"
 			"Taylor Expansion" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/tayl"
 			nil nil)
-		       ("table:ref"
-			"# --\n${1:Table}~\\ref{tab:$2}$0\n"
+		       ("table:ref" "${1:Table}~\\ref{tab:${2:b}}$0\n"
 			"Table:Ref" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/table_ref"
 			nil nil)
 		       ("table:acm:*"
-			"# --\n\\begin{table*}\n	\\caption{$1}\\label{tab:$2}\n	\\begin{tabular}{${3:ccl}}\n		\\toprule\n		$4\n		a & b & c \\\\\\\\\n		\\midrule\n		d & e & f \\\\\\\\\n		\\bottomrule\n	\\end{tabular}\n\\end{table*}\n$0\n"
+			"\\begin{table*}\n	\\caption{${1:a}}\\label{tab:${2:b}}\n	\\begin{tabular}{${3:ccl}}\n		\\toprule\n		${4:d}\n		a & b & c \\\\\\\\\n		\\midrule\n		d & e & f \\\\\\\\\n		\\bottomrule\n	\\end{tabular}\n\\end{table*}\n$0\n"
 			"Table:ACM:*" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/table_acm-2"
 			nil nil)
 		       ("table:acm"
-			"# --\n\\begin{table}\n	\\caption{$1}\\label{tab:$2}\n	\\begin{tabular}{${3:ccl}}\n		\\toprule\n		$4\n		a & b & c \\\\\\\\\n		\\midrule\n		d & e & f \\\\\\\\\n		\\bottomrule\n	\\end{tabular}\n\\end{table}\n$0\n"
+			"\\begin{table}\n	\\caption{${1:a}}\\label{tab:${2:b}}\n	\\begin{tabular}{${3:ccl}}\n		\\toprule\n		${4:d}\n		a & b & c \\\\\\\\\n		\\midrule\n		d & e & f \\\\\\\\\n		\\bottomrule\n	\\end{tabular}\n\\end{table}\n$0\n"
 			"Table:ACM" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/table_acm"
 			nil nil)
 		       ("table"
-			"# --\n\\begin{table}\n	\\caption{$1}\\label{tab:$2}\n	\\begin{center}\n		\\begin{tabular}[c]{l|l}\n			\\hline\n			\\multicolumn{1}{c|}{\\textbf{$3}} & \n			\\multicolumn{1}{c}{\\textbf{$4}} \\\\\\\\\n			\\hline\n			a & b \\\\\\\\\n			c & d \\\\\\\\\n			$5\n			\\hline\n		\\end{tabular}\n	\\end{center}\n\\end{table}\n$0\n"
+			"\\begin{table}\n	\\caption{${1:a}}\\label{tab:${2:b}}\n	\\begin{center}\n		\\begin{tabular}[c]{l|l}\n			\\hline\n			\\multicolumn{1}{c|}{\\textbf{${3:c}}} &\n			\\multicolumn{1}{c}{\\textbf{${4:d}}} \\\\\\\\\n			\\hline\n			a & b \\\\\\\\\n			c & d \\\\\\\\\n			${5:e}\n			\\hline\n		\\end{tabular}\n	\\end{center}\n\\end{table}\n$0\n"
 			"Table" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/table"
 			nil nil)
 		       ("tabl"
-			"# --\n\\begin{tabular}{${1:c}}\\label{tab:$2}\n$0\n\\end{tabular}\n"
+			"\\begin{tabular}{${1:c}}\\label{tab:${2:b}}\n$0\n\\end{tabular}\n"
 			"Tabular (with label)" nil ("Emacs migrated")
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/tabl"
 			nil nil)
 		       ("tab"
-			"# --\n\\begin{tabular}{${1:c}}\n$0\n\\end{tabular}\n"
+			"\\begin{tabular}{${1:c}}\n$0\n\\end{tabular}\n"
 			"Tabular (no label)" nil ("Emacs migrated")
 			nil "/Users/hc/.emacs.d/snippets/tex-mode/tab"
 			nil nil)
-		       (":t" "\\vartheta\n" "Vartheta" nil
+		       (":t" "\\vartheta$0\n" "Vartheta" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/t" nil
 			nil)
-		       ("sup=" "\\supseteq\n" "Superset Equal" nil
+		       ("sup=" "\\supseteq$0\n" "Superset Equal" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/sup" nil
 			nil)
 		       ("summary"
-			"# --\n#+begin_summary\n$0\n#+end_summary\n"
+			"#+begin_summary\n$0\n#+end_summary\n"
 			"Org summary block" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/summary"
 			nil nil)
-		       ("sum" "\\sum\n" "Sum" nil ("Emacs migrated")
+		       ("sum" "\\sum$0\n" "Sum" nil ("Emacs migrated")
 			nil "/Users/hc/.emacs.d/snippets/tex-mode/sum"
 			nil nil)
 		       ("subsl"
-			"# --\n\\subsubsection{$1}\\label{sec:$1}\n${0:$TM_SELECTED_TEXT}\n"
+			"\\subsubsection{${1:a}}\\label{sec:$1}\n${0:$TM_SELECTED_TEXT}\n"
 			"Sub Sub Section (with label)" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/subsl"
 			nil nil)
 		       ("subs"
-			"# --\n\\subsubsection{$1}\n${0:$TM_SELECTED_TEXT}\n"
+			"\\subsubsection{${1:a}}\n${0:$TM_SELECTED_TEXT}\n"
 			"Sub Sub Section (no label)" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/subs"
 			nil nil)
 		       ("subpl"
-			"# --\n\\subparagraph{$1}\\label{subp:$1}\n${0:$TM_SELECTED_TEXT}\n"
+			"\\subparagraph{${1:a}}\\label{subp:$1}\n${0:$TM_SELECTED_TEXT}\n"
 			"Sub Paragraph (with label)" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/subpl"
 			nil nil)
 		       ("subp"
-			"# --\n\\subparagraph{$1}\n${0:$TM_SELECTED_TEXT}\n"
+			"\\subparagraph{${1:a}}\n${0:$TM_SELECTED_TEXT}\n"
 			"Sub Paragraph (no label)" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/subp"
 			nil nil)
 		       ("subl"
-			"# --\n\\subsection{$1}\\label{sub:$1}\n${0:$TM_SELECTED_TEXT}\n"
+			"\\subsection{${1:a}}\\label{sub:$1}\n${0:$TM_SELECTED_TEXT}\n"
 			"Sub Section (with label)" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/subl"
 			nil nil)
-		       ("subfile" "# --\n\\subfile{$1}\n$0\n"
-			"Subfile" nil ("Emacs migrated") nil
+		       ("subfile" "\\subfile{${1:a}}\n$0\n" "Subfile"
+			nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/subfile"
 			nil nil)
-		       ("sub=" "\\subseteq\n" "Subset Equal" nil
+		       ("sub=" "\\subseteq$0\n" "Subset Equal" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/sub-2"
 			nil nil)
 		       ("sub"
-			"# --\n\\subsection{$1}\n${0:$TM_SELECTED_TEXT}\n"
+			"\\subsection{${1:a}}\n${0:$TM_SELECTED_TEXT}\n"
 			"Sub Section (no label)" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/sub" nil
 			nil)
-		       ("sts" "_\\text{$1}\n" "Text Subscript" nil
-			("Emacs migrated") nil
+		       ("sts" "_\\text{${1:a}}$0\n" "Text Subscript"
+			nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/sts" nil
 			nil)
-		       ("state" "\\State $1\n" "Algorithm:State" nil
-			("Emacs migrated") nil
+		       ("state" "\\State ${1:a}$0\n" "Algorithm:State"
+			nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/state"
 			nil nil)
-		       ("ssss" "\\sigma\n" "Sigma (lowercase)" nil
+		       ("ssss" "\\sigma$0\n" "Sigma (lowercase)" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/ssss-2"
 			nil nil)
-		       ("sr" "^{2}\n" "Square" nil ("Emacs migrated")
-			nil "/Users/hc/.emacs.d/snippets/tex-mode/sr"
-			nil nil)
-		       ("sq" "\\sqrt{ $1 }$2\n" "Square Root" nil
+		       ("sr" "^{2}$0\n" "Square" nil
+			("Emacs migrated") nil
+			"/Users/hc/.emacs.d/snippets/tex-mode/sr" nil
+			nil)
+		       ("sq" "\\sqrt{ ${1:a} }$0\n" "Square Root" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/sq" nil
 			nil)
-		       ("spl"
-			"# --\n\\begin{split}\n	$0\n\\end{split}\n"
+		       ("spl" "\\begin{split}\n	$0\n\\end{split}\n"
 			"Split" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/spl" nil
 			nil)
 		       ("solution"
-			"# --\n\\begin{solution}\n	$1\n\\end{solution}\n$0\n"
+			"\\begin{solution}\n	${1:a}\n\\end{solution}\n$0\n"
 			"Solution" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/solution"
 			nil nil)
-		       ("=>" "\\implies\n" "Implies" nil
+		       ("=>" "\\implies$0\n" "Implies" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/snippet-9"
 			nil nil)
-		       ("===" "\\equiv\n" "Equiv" nil
+		       ("===" "\\equiv$0\n" "Equiv" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/snippet-8"
 			nil nil)
-		       ("=<" "\\impliedby\n" "Implied By" nil
+		       ("=<" "\\impliedby$0\n" "Implied By" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/snippet-7"
 			nil nil)
-		       ("<=" "\\leq\n" "Less or Equal" nil
+		       ("<=" "\\leq$0\n" "Less or Equal" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/snippet-6"
 			nil nil)
-		       ("<<" "\\ll\n" "Much Less" nil
+		       ("<<" "\\ll$0\n" "Much Less" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/snippet-5"
 			nil nil)
-		       ("**" "\\cdot\n" "Dot" nil ("Emacs migrated")
+		       ("**" "\\cdot$0\n" "Dot" nil ("Emacs migrated")
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/snippet-4"
 			nil nil)
-		       ("\"" "\\text{$1}$0\n"
+		       ("\"" "\\text{${1:a}}$0\n"
 			"Text Environment (short)" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/snippet-3"
 			nil nil)
-		       ("!>" "\\mapsto\n" "Maps To" nil
+		       ("!>" "\\mapsto$0\n" "Maps To" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/snippet-2"
 			nil nil)
-		       ("_" "_{$1}$2\n" "Subscript" nil
+		       ("_" "_{${1:a}}$0\n" "Subscript" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/snippet-13"
 			nil nil)
-		       ("\\\\\\" "\\setminus\n" "Set Minus" nil
+		       ("\\\\\\" "\\setminus$0\n" "Set Minus" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/snippet-12"
 			nil nil)
-		       (">>" "\\gg\n" "Much Greater" nil
+		       (">>" "\\gg$0\n" "Much Greater" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/snippet-11"
 			nil nil)
-		       (">=" "\\geq\n" "Greater or Equal" nil
+		       (">=" "\\geq$0\n" "Greater or Equal" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/snippet-10"
 			nil nil)
-		       ("!=" "\\neq\n" "Not Equal" nil
+		       ("!=" "\\neq$0\n" "Not Equal" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/snippet"
 			nil nil)
-		       ("simm" "\\sim\n" "Similar To" nil
+		       ("simm" "\\sim$0\n" "Similar To" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/simm"
 			nil nil)
-		       ("sim=" "\\simeq\n" "Approx Equal" nil
+		       ("sim=" "\\simeq$0\n" "Approx Equal" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/sim" nil
 			nil)
 		       ("setsubfile"
-			"# --\n\\documentclass[$1]{subfiles}\n\\graphicspath{{$2}}\n$0\n"
+			"\\documentclass[${1:a}]{subfiles}\n\\graphicspath{{${2:b}}}\n$0\n"
 			"SetSubfile" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/setsubfile"
 			nil nil)
-		       ("set" "\\{ $1 \\}$2\n" "Set" nil
+		       ("set" "\\{ ${1:a} \\}$0\n" "Set" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/set" nil
 			nil)
 		       ("section:ref"
-			"# --\n${1:Section}~\\ref{sec:$2}$0\n"
+			"${1:Section}~\\ref{sec:${2:b}}$0\n"
 			"Section:Ref" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/section_ref"
 			nil nil)
-		       ("secpar" "# --\n1^{${1:\\lambda}}$0\n"
+		       ("secpar" "1^{${1:\\lambda}}$0\n"
 			"Security parameter" nil ("Emacs migrated")
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/secpar"
 			nil nil)
 		       ("secl"
-			"# --\n\\section{$1}\\label{sec:$1}\n${0:$TM_SELECTED_TEXT}\n"
+			"\\section{${1:a}}\\label{sec:$1}\n${0:$TM_SELECTED_TEXT}\n"
 			"Section (with label)" nil ("Emacs migrated")
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/secl"
 			nil nil)
 		       ("sec"
-			"# --\n\\section{$1}\n${0:$TM_SELECTED_TEXT}\n"
+			"\\section{${1:a}}\n${0:$TM_SELECTED_TEXT}\n"
 			"Section (no label)" nil ("Emacs migrated")
 			nil "/Users/hc/.emacs.d/snippets/tex-mode/sec"
 			nil nil)
 		       ("sch"
-			"# --\ni\\hbar \\frac{\\partial}{\\partial t}\\lvert\\psi(t)\\rangle = H\\lvert\\psi(t)\\rangle$0\n"
+			"i\\hbar \\frac{\\partial}{\\partial t}\\lvert\\psi(t)\\rangle = H\\lvert\\psi(t)\\rangle$0\n"
 			"Schrodinger equation" nil ("Emacs migrated")
 			nil "/Users/hc/.emacs.d/snippets/tex-mode/sch"
 			nil nil)
 		       ("sample"
-			"# --\n${1:x} \\xleftarrow{\\mathrm{R}} ${2:S}$0\n"
+			"${1:x} \\xleftarrow{\\mathrm{R}} ${2:S}$0\n"
 			"Random sampling" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/sample"
 			nil nil)
-		       ("rm" "\\mathrm{$1}$2\n" "Roman" nil
+		       ("rm" "\\mathrm{${1:a}}$0\n" "Roman" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/rm" nil
 			nil)
 		       ("remark"
-			"# --\n\\begin{remark}\n	$1\n\\end{remark}\n$0\n"
+			"\\begin{remark}\n	${1:a}\n\\end{remark}\n$0\n"
 			"Remark" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/remark"
 			nil nil)
-		       ("#region" "# --\n%#Region $0\n" "Region Start"
-			nil ("Emacs migrated") nil
+		       ("#region" "%#Region $0\n" "Region Start" nil
+			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/region"
 			nil nil)
-		       ("ref" "# --\n\\ref{$1: $2}$0\n" "Reference"
+		       ("ref" "\\ref{${1:a}: ${2:b}}$0\n" "Reference"
 			nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/ref" nil
 			nil)
-		       ("redm" "# --\n${1:A} \\le_m^p ${2:B}$0\n"
+		       ("redm" "${1:A} \\le_m^p ${2:B}$0\n"
 			"Polynomial many-one reduction" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/redm"
 			nil nil)
-		       ("redT" "# --\n${1:A} \\le_T^p ${2:B}$0\n"
+		       ("redT" "${1:A} \\le_T^p ${2:B}$0\n"
 			"Polynomial Turing reduction" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/redT"
 			nil nil)
-		       ("rd" "^{$1}$2\n" "Raise to Power" nil
+		       ("rd" "^{${1:a}}$0\n" "Raise to Power" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/rd" nil
 			nil)
@@ -414,7 +412,7 @@
 			"/Users/hc/.emacs.d/snippets/tex-mode/qvar"
 			nil nil)
 		       ("question"
-			"# --\n#+begin_question\n$0\n#+end_question\n"
+			"#+begin_question\n$0\n#+end_question\n"
 			"Org question block" nil ("Emacs migrated")
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/question"
@@ -437,8 +435,7 @@
 			"Partial trace" nil ("QC symbols") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/qptrace"
 			nil nil)
-		       ("qproj"
-			"\\ket{${1:\\psi}}\\!\\bra{${1:\\psi}}$0\n"
+		       ("qproj" "\\ket{${1:\\psi}}\\!\\bra{$1}$0\n"
 			"Projector" nil ("QC symbols") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/qproj"
 			nil nil)
@@ -451,7 +448,7 @@
 			"/Users/hc/.emacs.d/snippets/tex-mode/qpauli"
 			nil nil)
 		       ("qkraus"
-			"\\sum_{${1:i}} ${2:K_i}\\,${3:\\rho}\\,${2:K_i}^{\\dagger}$0\n"
+			"\\sum_{${1:i}} ${2:K_i}\\,${3:\\rho}\\,$2^{\\dagger}$0\n"
 			"Kraus decomposition" nil ("QC symbols") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/qkraus"
 			nil nil)
@@ -468,12 +465,12 @@
 			("QC symbols") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/qhadamard"
 			nil nil)
-		       ("qgate" "# --\n\\operatorname{${1:U}}$0\n"
+		       ("qgate" "\\operatorname{${1:U}}$0\n"
 			"Quantum gate" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/qgate"
 			nil nil)
 		       ("qft"
-			"# --\n\\operatorname{QFT}_{${1:n}}\\lvert ${2:x}\\rangle =\n\\frac{1}{\\sqrt{${3:2^n}}}\\sum_{${4:y}=0}^{${3:2^n}-1}\ne^{2\\pi i ${2:x}${4:y}/${3:2^n}}\\lvert ${4:y}\\rangle$0\n"
+			"\\operatorname{QFT}_{${1:n}}\\lvert ${2:x}\\rangle =\n\\frac{1}{\\sqrt{${3:2^n}}}\\sum_{${4:y}=0}^{$3-1}\ne^{2\\pi i $2$4/$3}\\lvert $4\\rangle$0\n"
 			"Quantum Fourier transform" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/qft" nil
@@ -496,7 +493,7 @@
 			"/Users/hc/.emacs.d/snippets/tex-mode/qcnot"
 			nil nil)
 		       ("qcirc"
-			"# --\n\\begin{quantikz}\n\\lstick{\\ket{0}} & \\gate{H} & \\ctrl{1} & \\qw \\\\\n\\lstick{\\ket{0}} & \\qw      & \\targ{}  & \\qw\n\\end{quantikz}\n$0\n"
+			"\\begin{quantikz}\n\\lstick{\\ket{0}} & \\gate{H} & \\ctrl{1} & \\qw \\\\\n\\lstick{\\ket{0}} & \\qw      & \\targ{}  & \\qw\n\\end{quantikz}\n$0\n"
 			"Quantikz circuit" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/qcirc"
 			nil nil)
@@ -505,7 +502,7 @@
 			"Quantum channel" nil ("QC symbols") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/qchannel"
 			nil nil)
-		       ("qbr" "\\braket{${1:\\phi}|${2:\\psi}}$0\n"
+		       ("qbr" "\\braket{${1:\\phi}}{${2:\\psi}}$0\n"
 			"Bra-ket inner product" nil ("QC symbols") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/qbraket"
 			nil nil)
@@ -523,213 +520,213 @@
 			"/Users/hc/.emacs.d/snippets/tex-mode/qanticomm"
 			nil nil)
 		       ("qad"
-			"${1:U}\\,${2:\\rho}\\,${1:U}^{\\dagger}$0\n"
+			"${1:U}\\,${2:\\rho}\\,$1^{\\dagger}$0\n"
 			"Adjoint action" nil ("QC symbols") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/qadjoint"
 			nil nil)
-		       ("pu" "\\pu{ $1 }\n" "Physical Units" nil
+		       ("pu" "\\pu{ ${1:a} }$0\n" "Physical Units" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/pu" nil
 			nil)
 		       ("proposition"
-			"# --\n\\begin{proposition}{$1}\n		$2\n\\end{proposition}\n$0\n"
+			"\\begin{proposition}{${1:a}}\n		${2:b}\n\\end{proposition}\n$0\n"
 			"Proposition (no label)" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/proposition"
 			nil nil)
 		       ("propl"
-			"# --\n\\begin{proposition}{$1}\\label{pro:$1}\n		$2\n\\end{proposition}\n$0\n"
+			"\\begin{proposition}{${1:a}}\\label{pro:$1}\n		${2:b}\n\\end{proposition}\n$0\n"
 			"Proposition (with label)" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/propl"
 			nil nil)
 		       ("property"
-			"# --\n#+begin_property\n$0\n#+end_property\n"
+			"#+begin_property\n$0\n#+end_property\n"
 			"Org property block" nil ("Emacs migrated")
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/property"
 			nil nil)
-		       ("prop" "\\propto\n" "Proportional To" nil
+		       ("prop" "\\propto$0\n" "Proportional To" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/prop"
 			nil nil)
 		       ("proof"
-			"# --\n\\begin{proof}\n	$1\n\\end{proof}\n$0\n"
+			"\\begin{proof}\n	${1:a}\n\\end{proof}\n$0\n"
 			"Proof" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/proof"
 			nil nil)
-		       ("prod" "\\prod\n" "Product" nil
+		       ("prod" "\\prod$0\n" "Product" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/prod"
 			nil nil)
 		       ("problemset"
-			"# --\n\\begin{problemset}\n	$1\n\\end{problemset}\n$0\n"
+			"\\begin{problemset}\n	${1:a}\n\\end{problemset}\n$0\n"
 			"Problemset" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/problemset"
 			nil nil)
 		       ("problem"
-			"# --\n\\begin{problem}\n	$1\n\\end{problem}\n$0\n"
+			"\\begin{problem}\n	${1:a}\n\\end{problem}\n$0\n"
 			"Problem" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/problem"
 			nil nil)
-		       ("ppt" "# --\n\\mathsf{PPT}$0\n"
-			"PPT adversary" nil ("Emacs migrated") nil
+		       ("ppt" "\\mathsf{PPT}$0\n" "PPT adversary" nil
+			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/ppt" nil
 			nil)
-		       ("povm" "# --\n\\{${1:E_m}\\}_{${2:m}}$0\n"
-			"POVM" nil ("Emacs migrated") nil
+		       ("povm" "\\{${1:E_m}\\}_{${2:m}}$0\n" "POVM"
+			nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/povm"
 			nil nil)
 		       ("postulate"
-			"# --\n\\begin{postulate}{$1}\n		$2\n\\end{postulate}\n$0\n"
+			"\\begin{postulate}{${1:a}}\n		${2:b}\n\\end{postulate}\n$0\n"
 			"Postulate (no label)" nil ("Emacs migrated")
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/postulate"
 			nil nil)
 		       ("postl"
-			"# --\n\\begin{postulate}{$1}\\label{pos:$1}\n		$2\n\\end{postulate}\n$0\n"
+			"\\begin{postulate}{${1:a}}\\label{pos:$1}\n		${2:b}\n\\end{postulate}\n$0\n"
 			"Postulate (with label)" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/postl"
 			nil nil)
 		       ("polylog"
-			"# --\n\\operatorname{polylog}\\left(${1:n}\\right)$0\n"
+			"\\operatorname{polylog}\\left(${1:n}\\right)$0\n"
 			"Polylogarithmic" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/polylog"
 			nil nil)
 		       ("poly"
-			"# --\n\\operatorname{poly}\\left(${1:n}\\right)$0\n"
+			"\\operatorname{poly}\\left(${1:n}\\right)$0\n"
 			"Polynomial" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/poly"
 			nil nil)
 		       ("pmatrix"
-			"# --\n\\begin{pmatrix}\n$1\n\\end{pmatrix}\n"
+			"\\begin{pmatrix}\n${1:a}\n\\end{pmatrix}$0\n"
 			"\\begin{pmatrix}…\\end{pmatirx}" nil nil nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/pmatrix"
 			nil nil)
 		       ("pmat"
-			"\\begin{pmatrix}\n$1\n\\end{pmatrix}\n"
+			"\\begin{pmatrix}\n${1:a}\n\\end{pmatrix}$0\n"
 			"Pmatrix" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/pmat"
 			nil nil)
-		       ("plaininline" "# --\n\\lstinline{$1}$0\n"
+		       ("plaininline" "\\lstinline{${1:a}}$0\n"
 			"lstinline" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/plaininline"
 			nil nil)
 		       ("plain"
-			"# --\n\\begin{lstlisting}\n	$1\n\\end{lstlisting}\n$0\n"
+			"\\begin{lstlisting}\n	${1:a}\n\\end{lstlisting}\n$0\n"
 			"lstlisting" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/plain"
 			nil nil)
-		       ("part"
-			"# --\n\\begin{part}\n	$0\n\\end{part}\n"
+		       ("part" "\\begin{part}\n	$0\n\\end{part}\n"
 			"Part" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/part"
 			nil nil)
 		       ("parl"
-			"# --\n\\paragraph{$1}\\label{par:$1}\n${0:$TM_SELECTED_TEXT}\n"
+			"\\paragraph{${1:a}}\\label{par:$1}\n${0:$TM_SELECTED_TEXT}\n"
 			"Paragraph (with label)" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/parl"
 			nil nil)
-		       ("para" "\\parallel\n" "Parallel" nil
+		       ("para" "\\parallel$0\n" "Parallel" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/para"
 			nil nil)
 		       ("par"
-			"# --\n\\paragraph{$1}\n${0:$TM_SELECTED_TEXT}\n"
+			"\\paragraph{${1:a}}\n${0:$TM_SELECTED_TEXT}\n"
 			"Paragraph (no label)" nil ("Emacs migrated")
 			nil "/Users/hc/.emacs.d/snippets/tex-mode/par"
 			nil nil)
-		       ("page" "# --\n${1:page}~\\pageref{$2}$0\n"
+		       ("page" "${1:page}~\\pageref{${2:b}}$0\n"
 			"Page" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/page"
 			nil nil)
 		       ("overview"
-			"# --\n#+begin_overview\n$0\n#+end_overview\n"
+			"#+begin_overview\n$0\n#+end_overview\n"
 			"Org overview block" nil ("Emacs migrated")
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/overview"
 			nil nil)
-		       ("outlineexp"
-			"# --\n\\\\[\n	$1\n\\\\]\n$0\n" "OutlineExp"
-			nil ("Emacs migrated") nil
+		       ("outlineexp" "\\\\[\n	${1:a}\n\\\\]\n$0\n"
+			"OutlineExp" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/outlineexp"
 			nil nil)
-		       ("outer" "\\ket{$1} \\bra{$1} $2\n"
+		       ("outer" "\\ket{${1:a}} \\bra{$1} $0\n"
 			"Outer Product" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/outer"
 			nil nil)
-		       ("ox" "\\otimes\n" "Tensor product operator"
+		       ("ox" "\\otimes$0\n" "Tensor product operator"
 			nil ("Noema local") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/otimes"
 			nil nil)
-		       ("orr" "\\cup\n" "Union" nil ("Emacs migrated")
-			nil "/Users/hc/.emacs.d/snippets/tex-mode/orr"
-			nil nil)
+		       ("orr" "\\cup$0\n" "Union" nil
+			("Emacs migrated") nil
+			"/Users/hc/.emacs.d/snippets/tex-mode/orr" nil
+			nil)
 		       ("oracle"
-			"# --\n\\mathcal{${1:O}}\\left(${2:x}\\right)$0\n"
+			"\\mathcal{${1:O}}\\left(${2:x}\\right)$0\n"
 			"Oracle" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/oracle"
 			nil nil)
-		       ("o+" "\\oplus\n" "Direct sum" nil
+		       ("o+" "\\oplus$0\n" "Direct sum" nil
 			("Noema local") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/oplus"
 			nil nil)
 		       ("openlink"
-			"# --\nhttp://10.31.2.53/openlink.html?link=$0\n"
+			"http://10.31.2.53/openlink.html?link=$0\n"
 			"NasOpenlink" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/openlink"
 			nil nil)
-		       ("oooo" "\\omega\n" "Omega (lowercase)" nil
+		       ("oooo" "\\omega$0\n" "Omega (lowercase)" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/oooo-2"
 			nil nil)
-		       ("ooo" "\\infty\n" "Infinity" nil
+		       ("ooo" "\\infty$0\n" "Infinity" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/ooo" nil
 			nil)
-		       ("ome" "\\omega\n" "Omega (alt)" nil
+		       ("ome" "\\omega$0\n" "Omega (alt)" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/ome-2"
 			nil nil)
-		       ("oint" "\\oint\n" "Contour Integral" nil
+		       ("oint" "\\oint$0\n" "Contour Integral" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/oint"
 			nil nil)
-		       ("oinf" "\\int_{0}^{\\infty} $1 \\, d$2 $3\n"
+		       ("oinf"
+			"\\int_{0}^{\\infty} ${1:a} \\, d${2:b} $0\n"
 			"Integral 0 to Infinity" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/oinf"
 			nil nil)
 		       ("npcomplete"
-			"# --\n\\mathsf{NP}\\text{-complete}$0\n"
+			"\\mathsf{NP}\\text{-complete}$0\n"
 			"NP-complete" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/npcomplete"
 			nil nil)
-		       ("notin" "\\not\\in\n" "Not Element Of" nil
+		       ("notin" "\\not\\in$0\n" "Not Element Of" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/notin"
 			nil nil)
 		       ("note"
-			"# --\n\\begin{note}\n	$1\n\\end{note}\n$0\n"
+			"\\begin{note}\n	${1:a}\n\\end{note}\n$0\n"
 			"Note" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/note"
 			nil nil)
-		       ("norm" "\\lvert $1 \\rvert $2\n"
+		       ("norm" "\\lvert ${1:a} \\rvert $0\n"
 			"Absolute Value" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/norm-2"
 			nil nil)
 		       ("negl"
-			"# --\n\\operatorname{negl}\\left(${1:\\lambda}\\right)$0\n"
+			"\\operatorname{negl}\\left(${1:\\lambda}\\right)$0\n"
 			"Negligible" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/negl"
 			nil nil)
-		       ("nabl" "\\nabla\n" "Nabla" nil
+		       ("nabl" "\\nabla$0\n" "Nabla" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/nabl"
 			nil nil)
-		       ("msun" "M_{\\odot}\n" "Solar Mass" nil
+		       ("msun" "M_{\\odot}$0\n" "Solar Mass" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/msun"
 			nil nil)
@@ -752,7 +749,7 @@
 			"Probability" nil ("Math symbols") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/mprob"
 			nil nil)
-		       ("mod" "|$1|$2\n" "Modulus" nil
+		       ("mod" "|${1:a}|$0\n" "Modulus" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/mod" nil
 			nil)
@@ -795,7 +792,7 @@
 			"/Users/hc/.emacs.d/snippets/tex-mode/mceil"
 			nil nil)
 		       ("matrix"
-			"# --\n\\begin{matrix}\n$1\n\\end{matrix}\n"
+			"\\begin{matrix}\n${1:a}\n\\end{matrix}$0\n"
 			"\\begin{matrix}…\\end{matirx}" nil nil nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/matrix"
 			nil nil)
@@ -2094,16 +2091,16 @@
 			"/Users/hc/.emacs.d/snippets/tex-mode/math-arrow-downarrow"
 			nil nil)
 		       ("math"
-			"# --\n\\begin{math}\n	$1\n\\end{math}\n$0\n"
+			"\\begin{math}\n	${1:a}\n\\end{math}\n$0\n"
 			"Math" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/math"
 			nil nil)
 		       ("mat"
-			"# --\n\\begin{${1:p/b/v/V/B/small}matrix}\n	$0\n\\end{${1:p/b/v/V/B/small}matrix}\n"
+			"\\begin{${1:p/b/v/V/B/small}matrix}\n	$0\n\\end{$1matrix}\n"
 			"Matrix" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/mat" nil
 			nil)
-		       ("marginpar" "# --\n\\marginpar{$1}\n$0\n"
+		       ("marginpar" "\\marginpar{${1:a}}\n$0\n"
 			"Marginpar" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/marginpar"
 			nil nil)
@@ -2111,70 +2108,70 @@
 			"Absolute value" nil ("Math symbols") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/mabs"
 			nil nil)
-		       ("lra" "\\left< $1 \\right> $2\n"
+		       ("lra" "\\left< ${1:a} \\right> $0\n"
 			"Left-Right Angle" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/lra" nil
 			nil)
-		       ("lr|" "\\left| $1 \\right| $2\n"
+		       ("lr|" "\\left| ${1:a} \\right| $0\n"
 			"Left-Right Absolute" nil ("Emacs migrated")
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/lr-4"
 			nil nil)
-		       ("lr{" "\\left\\{ $1 \\right\\} $2\n"
+		       ("lr{" "\\left\\{ ${1:a} \\right\\} $0\n"
 			"Left-Right Braces" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/lr-3"
 			nil nil)
-		       ("lr[" "\\left[ $1 \\right] $2\n"
+		       ("lr[" "\\left[ ${1:a} \\right] $0\n"
 			"Left-Right Brackets" nil ("Emacs migrated")
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/lr-2"
 			nil nil)
-		       ("lr(" "\\left( $1 \\right) $2\n"
+		       ("lr(" "\\left( ${1:a} \\right) $0\n"
 			"Left-Right Parentheses" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/lr" nil
 			nil)
-		       ("llll" "\\lambda\n" "Lambda (lowercase)" nil
+		       ("llll" "\\lambda$0\n" "Lambda (lowercase)" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/llll-2"
 			nil nil)
 		       ("listing:ref"
-			"# --\n${1:Listing}~\\ref{lst:$2}$0\n"
+			"${1:Listing}~\\ref{lst:${2:b}}$0\n"
 			"Listing:Ref" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/listing_ref"
 			nil nil)
-		       ("lim" "\\lim_{ $1 \\to $2 } $3\n" "Limit" nil
-			("Emacs migrated") nil
+		       ("lim" "\\lim_{ ${1:a} \\to ${2:b} } $0\n"
+			"Limit" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/lim" nil
 			nil)
 		       ("lemmal"
-			"# --\n\\begin{lemma}{$1}\\label{lem:$1}\n	$2\n\\end{lemma}\n$0\n"
+			"\\begin{lemma}{${1:a}}\\label{lem:$1}\n	${2:b}\n\\end{lemma}\n$0\n"
 			"Lemma (with label)" nil ("Emacs migrated")
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/lemmal"
 			nil nil)
 		       ("lemma"
-			"# --\n\\begin{lemma}{$1}\n	$2\n\\end{lemma}\n$0\n"
+			"\\begin{lemma}{${1:a}}\n	${2:b}\n\\end{lemma}\n$0\n"
 			"Lemma (no label)" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/lemma"
 			nil nil)
 		       ("lax"
-			"\\begin{align*}\n$1 &= $2 \\\\\n$3 &= $0\n\\end{align*}\n"
+			"\\begin{align*}\n${1:a} &= ${2:b} \\\\\n${3:c} &= $0\n\\end{align*}\n"
 			"latex" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/lax" nil
 			nil)
 		       ("lang"
-			"# --\n${1:L} \\subseteq \\{0,1\\}^{${2:*}}$0\n"
+			"${1:L} \\subseteq \\{0,1\\}^{${2:*}}$0\n"
 			"Language over bits" nil ("Emacs migrated")
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/lang"
 			nil nil)
 		       ("kraus"
-			"# --\n\\mathcal{${1:E}}(\\rho)=\\sum_${2:k} ${3:E_k}\\rho ${3:E_k}^{\\dagger}$0\n"
+			"\\mathcal{${1:E}}(\\rho)=\\sum_${2:k} ${3:E_k}\\rho $3^{\\dagger}$0\n"
 			"Kraus map" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/kraus"
 			nil nil)
-		       ("kkkk" "\\kappa\n" "Kappa" nil
+		       ("kkkk" "\\kappa$0\n" "Kappa" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/kkkk"
 			nil nil)
@@ -2186,132 +2183,132 @@
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/ket0"
 			nil nil)
-		       ("ket" "\\ket{$1} $2\n" "Ket" nil
+		       ("ket" "\\ket{${1:a}} $0\n" "Ket" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/ket" nil
 			nil)
-		       ("kbt" "k_{B}T\n" "Boltzmann Constant" nil
+		       ("kbt" "k_{B}T$0\n" "Boltzmann Constant" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/kbt" nil
 			nil)
 		       ("item"
-			"# --\n\\\\begin{itemize}\n	\\item $0\n\\\\end{itemize}\n"
+			"\\\\begin{itemize}\n	\\item $0\n\\\\end{itemize}\n"
 			"Itemize" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/item"
 			nil nil)
-		       ("iso" "{}^{$1}_{$2}$3\n" "Isotope" nil
+		       ("iso" "{}^{${1:a}}_{${2:b}}$0\n" "Isotope" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/iso" nil
 			nil)
-		       ("invs" "^{-1}\n" "Inverse" nil
+		       ("invs" "^{-1}$0\n" "Inverse" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/invs"
 			nil nil)
 		       ("introduction"
-			"# --\n\\begin{introduction}\n	$1\n\\end{introduction}\n$0\n"
+			"\\begin{introduction}\n	${1:a}\n\\end{introduction}\n$0\n"
 			"Introduction" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/introduction"
 			nil nil)
-		       ("int" "\\int $1 \\, d$2 $3\n" "Integral" nil
-			("Emacs migrated") nil
+		       ("int" "\\int ${1:a} \\, d${2:b} $0\n"
+			"Integral" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/int" nil
 			nil)
-		       ("inn" "\\in\n" "Element Of" nil
+		       ("inn" "\\in$0\n" "Element Of" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/inn" nil
 			nil)
-		       ("inlineexp" "# --\n\\\\($1\\\\)$0\n"
-			"InlineExp" nil ("Emacs migrated") nil
+		       ("inlineexp" "\\\\(${1:a}\\\\)$0\n" "InlineExp"
+			nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/inlineexp"
 			nil nil)
-		       (";" "$$1$ $0\n" "Inline math" nil
+		       (";" "$${1:a}$ $0\n" "Inline math" nil
 			("LaTeX local") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/inline-math"
 			nil nil)
-		       ("info" "# --\n#+begin_info\n$0\n#+end_info\n"
+		       ("info" "#+begin_info\n$0\n#+end_info\n"
 			"Org info block" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/info"
 			nil nil)
 		       ("infi"
-			"\\int_{-\\infty}^{\\infty} $1 \\, d$2 $3\n"
+			"\\int_{-\\infty}^{\\infty} ${1:a} \\, d${2:b} $0\n"
 			"Integral -Inf to Inf" nil ("Emacs migrated")
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/infi"
 			nil nil)
 		       ("indic"
-			"# --\n\\mathbf{1}\\left\\{${1:E}\\right\\}$0\n"
+			"\\mathbf{1}\\left\\{${1:E}\\right\\}$0\n"
 			"Indicator" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/indic"
 			nil nil)
 		       ("important"
-			"# --\n#+begin_important\n$0\n#+end_important\n"
+			"#+begin_important\n$0\n#+end_important\n"
 			"Org important block" nil ("Emacs migrated")
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/important"
 			nil nil)
-		       ("iint" "\\iint\n" "Double Integral" nil
+		       ("iint" "\\iint$0\n" "Double Integral" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/iint"
 			nil nil)
-		       ("iiint" "\\iiint\n" "Triple Integral" nil
+		       ("iiint" "\\iiint$0\n" "Triple Integral" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/iiint"
 			nil nil)
-		       ("iiii" "\\iota\n" "Iota" nil
+		       ("iiii" "\\iota$0\n" "Iota" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/iiii"
 			nil nil)
 		       ("if"
-			"\\If{$1}\n\\ElsIf{$2}\n\\Else\n\\EndIf\n"
+			"\\If{${1:a}}\n\\ElsIf{${2:b}}\n\\Else\n\\EndIf$0\n"
 			"Algorithm:If" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/if" nil
 			nil)
 		       ("iden"
-			"\\begin{pmatrix}\n1 & 0 & \\dots & 0 \\\\\n0 & 1 & \\dots & 0 \\\\\n\\vdots & \\vdots & \\ddots & \\vdots \\\\\n0 & 0 & \\dots & 1\n\\end{pmatrix}\n"
+			"\\begin{pmatrix}\n1 & 0 & \\dots & 0 \\\\\n0 & 1 & \\dots & 0 \\\\\n\\vdots & \\vdots & \\ddots & \\vdots \\\\\n0 & 0 & \\dots & 1\n\\end{pmatrix}$0\n"
 			"Identity Matrix" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/iden"
 			nil nil)
-		       ("hybrid" "# --\nH_${1:i}: ${2:...}$0\n"
+		       ("hybrid" "H_${1:i}: ${2:...}$0\n"
 			"Hybrid game" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/hybrid"
 			nil nil)
 		       ("hide"
-			"# --\n\\begin{hide}\n	$1\n\\end{hide}\n$0\n"
+			"\\begin{hide}\n	${1:a}\n\\end{hide}\n$0\n"
 			"hide" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/hide"
 			nil nil)
-		       ("he4" "{}^{4}_{2}He\n" "Helium-4" nil
+		       ("he4" "{}^{4}_{2}He$0\n" "Helium-4" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/he4" nil
 			nil)
-		       ("he3" "{}^{3}_{2}He\n" "Helium-3" nil
+		       ("he3" "{}^{3}_{2}He$0\n" "Helium-3" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/he3" nil
 			nil)
-		       ("hat" "\\hat{$1}$2\n" "Hat Accent" nil
+		       ("hat" "\\hat{${1:a}}$0\n" "Hat Accent" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/hat" nil
 			nil)
 		       ("hash"
-			"# --\n${1:H}: \\{0,1\\}^* \\to \\{0,1\\}^{${2:\\lambda}}$0\n"
+			"${1:H}: \\{0,1\\}^* \\to \\{0,1\\}^{${2:\\lambda}}$0\n"
 			"Hash function" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/hash"
 			nil nil)
-		       ("had" "# --\nH\\lvert ${1:\\psi}\\rangle$0\n"
+		       ("had" "H\\lvert ${1:\\psi}\\rangle$0\n"
 			"Hadamard on state" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/had" nil
 			nil)
-		       ("gggg" "\\gamma\n" "Gamma (lowercase)" nil
+		       ("gggg" "\\gamma$0\n" "Gamma (lowercase)" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/gggg-2"
 			nil nil)
 		       ("gat"
-			"# --\n\\begin{gather}\n	$0\n\\end{gather}\n"
+			"\\begin{gather}\n	$0\n\\end{gather}\n"
 			"Gather(ed)" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/gat" nil
 			nil)
 		       ("game"
-			"# --\n\\mathsf{Game}^{${1:ind-cpa}}_{${2:\\Pi},\\mathcal{${3:A}}}\\left(${4:\\lambda}\\right)$0\n"
+			"\\mathsf{Game}^{${1:ind-cpa}}_{${2:\\Pi},\\mathcal{${3:A}}}\\left(${4:\\lambda}\\right)$0\n"
 			"Cryptographic game" nil ("Emacs migrated")
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/game"
@@ -2321,287 +2318,291 @@
 			"/Users/hc/.emacs.d/snippets/tex-mode/frac"
 			nil nil)
 		       ("for"
-			"\\For{i=0:$1}\n	\\State $0\n\\EndFor\n"
+			"\\For{i=0:${1:a}}\n	\\State $0\n\\EndFor\n"
 			"Algorithm:For" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/for" nil
 			nil)
 		       ("figure:ref"
-			"# --\n${1:Figure}~\\ref{fig:$2}$0\n"
+			"${1:Figure}~\\ref{fig:${2:b}}$0\n"
 			"Figure:Ref" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/figure_ref"
 			nil nil)
 		       ("figure:acm:*"
-			"# --\n\\begin{figure*}\n	\\includegraphics[width=0.45\\textwidth]{figures/$1}\n	\\caption{$2}\\label{fig:$3}\n\\end{figure*}\n$0\n"
+			"\\begin{figure*}\n	\\includegraphics[width=0.45\\textwidth]{figures/${1:a}}\n	\\caption{${2:b}}\\label{fig:${3:c}}\n\\end{figure*}\n$0\n"
 			"Figure:ACM:*" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/figure_acm-2"
 			nil nil)
 		       ("figure:acm"
-			"# --\n\\begin{figure}\n	\\includegraphics[width=0.45\\textwidth]{figures/$1}\n	\\caption{$2}\\label{fig:$3}\n\\end{figure}\n$0\n"
+			"\\begin{figure}\n	\\includegraphics[width=0.45\\textwidth]{figures/${1:a}}\n	\\caption{${2:b}}\\label{fig:${3:c}}\n\\end{figure}\n$0\n"
 			"Figure:ACM" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/figure_acm"
 			nil nil)
 		       ("figure"
-			"# --\n\\begin{figure}\n	\\begin{center}\n		\\includegraphics[width=0.95\\textwidth]{figures/$1}\n	\\end{center}\n	\\caption{$3}\\label{fig:$4}\n\\end{figure}\n$0\n"
+			"\\begin{figure}\n	\\begin{center}\n		\\includegraphics[width=0.95\\textwidth]{figures/${1:a}}\n	\\end{center}\n	\\caption{${3:c}}\\label{fig:${4:d}}\n\\end{figure}\n$0\n"
 			"Figure" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/figure"
 			nil nil)
 		       ("exercise"
-			"# --\n\\begin{exercise}\n	$1\n\\end{exercise}\n$0\n"
+			"\\begin{exercise}\n	${1:a}\n\\end{exercise}\n$0\n"
 			"Exercise" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/exercise"
 			nil nil)
 		       ("example"
-			"# --\n\\begin{example}\n	$1\n\\end{example}\n$0\n"
+			"\\begin{example}\n	${1:a}\n\\end{example}\n$0\n"
 			"Example" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/example"
 			nil nil)
-		       ("eset" "\\emptyset\n" "Empty Set" nil
+		       ("eset" "\\emptyset$0\n" "Empty Set" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/eset"
 			nil nil)
 		       ("equation"
-			"# --\n\\begin{equation}\n	$0\n	\\label{eq:$1}\n\\end{equation}\n"
+			"\\begin{equation}\n	$0\n	\\label{eq:${1:a}}\n\\end{equation}\n"
 			"Equation" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/equation"
 			nil nil)
 		       ("equ"
-			"# --\n\\begin{equation*}\n	$1\n\\end{equation*}\n"
+			"\\begin{equation*}\n	${1:a}\n\\end{equation*}$0\n"
 			"Equ" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/equ" nil
 			nil)
 		       ("enumerate"
-			"# --\n\\\\begin{enumerate}\n	\\item $0\n\\\\end{enumerate}\n"
+			"\\\\begin{enumerate}\n	\\item $0\n\\\\end{enumerate}\n"
 			"Enumerate" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/enumerate"
 			nil nil)
-		       ("#endregion" "# --\n%#Endregion\n"
-			"Region End" nil ("Emacs migrated") nil
+		       ("#endregion" "%#Endregion$0\n" "Region End"
+			nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/endregion"
 			nil nil)
 		       ("empty"
-			"# --\n\\null\\thispagestyle{empty}\n\\newpage\n$0\n"
+			"\\null\\thispagestyle{empty}\n\\newpage\n$0\n"
 			"EmptyPage" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/empty"
 			nil nil)
-		       ("eeee" "\\epsilon\n" "Epsilon" nil
+		       ("eeee" "\\epsilon$0\n" "Epsilon" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/eeee"
 			nil nil)
-		       ("ee" "e^{ $1 }$2\n" "Exponential" nil
+		       ("ee" "e^{ ${1:a} }$0\n" "Exponential" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/ee" nil
 			nil)
-		       ("e\\xi sts" "\\exists\n" "Exists" nil
+		       ("e\\xi sts" "\\exists$0\n" "Exists" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/e_xi_sts"
 			nil nil)
-		       (":e" "\\varepsilon\n" "Varepsilon" nil
+		       (":e" "\\varepsilon$0\n" "Varepsilon" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/e" nil
 			nil)
 		       ("dyad"
-			"# --\n\\lvert ${1:\\phi}\\rangle\\langle ${2:\\psi}\\rvert $0\n"
+			"\\lvert ${1:\\phi}\\rangle\\langle ${2:\\psi}\\rvert $0\n"
 			"Dyad" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/dyad"
 			nil nil)
-		       ("dot" "\\dot{$1}$2\n" "Dot Accent" nil
+		       ("dot" "\\dot{${1:a}}$0\n" "Dot Accent" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/dot" nil
 			nil)
 		       ("displaymath"
-			"# --\n\\begin{displaymath}\n	$1\n\\end{displaymath}\n$0\n"
+			"\\begin{displaymath}\n	${1:a}\n\\end{displaymath}\n$0\n"
 			"DisplayMath" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/displaymath"
 			nil nil)
-		       (":" "$$\n${1:}\n$$\n$0\n" "Display math" nil
+		       (":" "$$\n${1:a}\n$$\n$0\n" "Display math" nil
 			("LaTeX local") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/display-math-shortcut"
 			nil nil)
-		       ("dint" "\\int_{$1}^{$2} $3 \\, d$4 $5\n"
+		       ("dint"
+			"\\int_{${1:a}}^{${2:b}} ${3:c} \\, d${4:d} $0\n"
 			"Definite Integral" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/dint"
 			nil nil)
 		       ("desc"
-			"# --\n\\\\begin{description}\n	\\item[$1] $0\n\\\\end{description}\n"
+			"\\\\begin{description}\n	\\item[${1:a}] $0\n\\\\end{description}\n"
 			"Description" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/desc"
 			nil nil)
-		       ("del" "\\nabla\n" "Del" nil ("Emacs migrated")
-			nil "/Users/hc/.emacs.d/snippets/tex-mode/del"
-			nil nil)
-		       ("defn" "# --\n#+begin_defn\n$0\n#+end_defn\n"
+		       ("del" "\\nabla$0\n" "Del" nil
+			("Emacs migrated") nil
+			"/Users/hc/.emacs.d/snippets/tex-mode/del" nil
+			nil)
+		       ("defn" "#+begin_defn\n$0\n#+end_defn\n"
 			"Org definition alias block" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/defn"
 			nil nil)
 		       ("defl"
-			"# --\n\\begin{definition}{$1}\\label{def:$1}\n	$2\n\\end{definition}\n$0\n"
+			"\\begin{definition}{${1:a}}\\label{def:$1}\n	${2:b}\n\\end{definition}\n$0\n"
 			"Definition (with label)" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/defl"
 			nil nil)
 		       ("definition"
-			"# --\n\\begin{definition}{$1}\n	$2\n\\end{definition}\n$0\n"
+			"\\begin{definition}{${1:a}}\n	${2:b}\n\\end{definition}\n$0\n"
 			"Definition (no label)" nil ("Emacs migrated")
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/definition"
 			nil nil)
-		       ("ddt" "\\frac{d}{dt}\n" "Time Derivative" nil
-			("Emacs migrated") nil
+		       ("ddt" "\\frac{d}{dt}$0\n" "Time Derivative"
+			nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/ddt" nil
 			nil)
-		       ("ddot" "\\ddot{$1}$2\n" "Double Dot Accent"
-			nil ("Emacs migrated") nil
+		       ("ddot" "\\ddot{${1:a}}$0\n"
+			"Double Dot Accent" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/ddot"
 			nil nil)
-		       ("dddd" "\\delta\n" "Delta (lowercase)" nil
+		       ("dddd" "\\delta$0\n" "Delta (lowercase)" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/dddd-2"
 			nil nil)
-		       ("datechange" "# --\n\\datechange{$1}{$2}$0\n"
+		       ("datechange"
+			"\\datechange{${1:a}}{${2:b}}$0\n"
 			"Datechange" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/datechange"
 			nil nil)
 		       ("corollary"
-			"# --\n\\begin{corollary}{$1}\n	$2\n\\end{corollary}\n$0\n"
+			"\\begin{corollary}{${1:a}}\n	${2:b}\n\\end{corollary}\n$0\n"
 			"Corollary (no label)" nil ("Emacs migrated")
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/corollary"
 			nil nil)
 		       ("corl"
-			"# --\n\\begin{corollary}{$1}\\label{cor:$1}\n	$2\n\\end{corollary}\n$0\n"
+			"\\begin{corollary}{${1:a}}\\label{cor:$1}\n	${2:b}\n\\end{corollary}\n$0\n"
 			"Corollary (with label)" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/corl"
 			nil nil)
-		       ("cor" "# --\n#+begin_cor\n$0\n#+end_cor\n"
+		       ("cor" "#+begin_cor\n$0\n#+end_cor\n"
 			"Org corollary block" nil ("Emacs migrated")
 			nil "/Users/hc/.emacs.d/snippets/tex-mode/cor"
 			nil nil)
 		       ("conclusion"
-			"# --\n\\begin{conclusion}\n	$1\n\\end{conclusion}\n$0\n"
+			"\\begin{conclusion}\n	${1:a}\n\\end{conclusion}\n$0\n"
 			"Conclusion" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/conclusion"
 			nil nil)
-		       ("concat" "# --\n\\mathbin{\\Vert}$0\n"
+		       ("concat" "\\mathbin{\\Vert}$0\n"
 			"Concatenation" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/concat"
 			nil nil)
 		       ("compactitem"
-			"# --\n\\begin{compactitem}\n	\\item $1\n\\end{compactitem}\n$0\n"
+			"\\begin{compactitem}\n	\\item ${1:a}\n\\end{compactitem}\n$0\n"
 			"Compactitem" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/compactitem"
 			nil nil)
-		       ("coNP" "# --\n\\mathsf{coNP}$0\n"
+		       ("coNP" "\\mathsf{coNP}$0\n"
 			"Complexity class coNP" nil ("Emacs migrated")
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/coNP"
 			nil nil)
-		       ("cnot" "# --\n\\operatorname{CNOT}$0\n" "CNOT"
-			nil ("Emacs migrated") nil
+		       ("cnot" "\\operatorname{CNOT}$0\n" "CNOT" nil
+			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/cnot"
 			nil nil)
-		       ("classP" "# --\n\\mathsf{P}$0\n"
+		       ("classP" "\\mathsf{P}$0\n"
 			"Complexity class P" nil ("Emacs migrated")
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/classP"
 			nil nil)
-		       ("classNP" "# --\n\\mathsf{NP}$0\n"
+		       ("classNP" "\\mathsf{NP}$0\n"
 			"Complexity class NP" nil ("Emacs migrated")
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/classNP"
 			nil nil)
-		       ("cite" "# --\n\\cite{$1}$0\n" "Cite" nil
+		       ("cite" "\\cite{${1:a}}$0\n" "Cite" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/cite"
 			nil nil)
 		       ("change"
-			"# --\n\\begin{change}\n	$1\n\\end{change}\n$0\n"
+			"\\begin{change}\n	${1:a}\n\\end{change}\n$0\n"
 			"change" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/change"
 			nil nil)
 		       ("chal"
-			"# --\n\\chapter{$1}\\label{chap:$1}\n${0:$TM_SELECTED_TEXT}\n"
+			"\\chapter{${1:a}}\\label{chap:$1}\n${0:$TM_SELECTED_TEXT}\n"
 			"Chapter (with label)" nil ("Emacs migrated")
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/chal"
 			nil nil)
 		       ("cha"
-			"# --\n\\chapter{$1}\n${0:$TM_SELECTED_TEXT}\n"
+			"\\chapter{${1:a}}\n${0:$TM_SELECTED_TEXT}\n"
 			"Chapter (no label)" nil ("Emacs migrated")
 			nil "/Users/hc/.emacs.d/snippets/tex-mode/cha"
 			nil nil)
-		       ("cee" "\\ce{ $1 }\n" "Chemical Equation" nil
-			("Emacs migrated") nil
+		       ("cee" "\\ce{ ${1:a} }$0\n" "Chemical Equation"
+			nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/cee" nil
 			nil)
-		       ("cdot" "\\cdot\n" "Dot Product" nil
+		       ("cdot" "\\cdot$0\n" "Dot Product" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/cdot"
 			nil nil)
-		       ("cb" "^{3}\n" "Cube" nil ("Emacs migrated")
+		       ("cb" "^{3}$0\n" "Cube" nil ("Emacs migrated")
 			nil "/Users/hc/.emacs.d/snippets/tex-mode/cb"
 			nil nil)
 		       ("cas"
-			"# --\n\\begin{cases}\n	${1:equation}, &\\text{ if }${2:case}\\\\\\\\\n	$0\n\\end{cases}\n"
+			"\\begin{cases}\n	${1:equation}, &\\text{ if }${2:case}\\\\\\\\\n	$0\n\\end{cases}\n"
 			"Cases" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/cas" nil
 			nil)
-		       ("brk" "\\braket{ $1 | $2 } $3\n" "Braket" nil
-			("Emacs migrated") nil
+		       ("brk" "\\braket{ ${1:a} }{ ${2:b} } $0\n"
+			"Braket" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/brk" nil
 			nil)
-		       ("bra" "\\bra{$1} $2\n" "Bra" nil
+		       ("bra" "\\bra{${1:a}} $0\n" "Bra" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/bra" nil
 			nil)
 		       ("bmatrix"
-			"# --\n\\begin{bmatrix}\n$1\n\\end{bmatrix}\n"
+			"\\begin{bmatrix}\n${1:a}\n\\end{bmatrix}$0\n"
 			"\\begin{bmatrix}…\\end{bmatirx}" nil nil nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/bmatrix"
 			nil nil)
 		       ("bmat"
-			"\\begin{bmatrix}\n$1\n\\end{bmatrix}\n"
+			"\\begin{bmatrix}\n${1:a}\n\\end{bmatrix}$0\n"
 			"Bmatrix" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/bmat-2"
 			nil nil)
 		       ("bloch"
-			"# --\n\\rho = \\frac{1}{2}\\left(I + \\vec{${1:r}}\\cdot\\vec{\\sigma}\\right)$0\n"
+			"\\rho = \\frac{1}{2}\\left(I + \\vec{${1:r}}\\cdot\\vec{\\sigma}\\right)$0\n"
 			"Bloch form" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/bloch"
 			nil nil)
 		       ("bigTheta"
-			"# --\n\\Theta\\left(${1:f(n)}\\right)$0\n"
+			"\\Theta\\left(${1:f(n)}\\right)$0\n"
 			"Big Theta" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/bigTheta"
 			nil nil)
 		       ("bigOmega"
-			"# --\n\\Omega\\left(${1:f(n)}\\right)$0\n"
+			"\\Omega\\left(${1:f(n)}\\right)$0\n"
 			"Big Omega" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/bigOmega"
 			nil nil)
-		       ("bigO" "# --\nO\\left(${1:f(n)}\\right)$0\n"
-			"Big O" nil ("Emacs migrated") nil
+		       ("bigO" "O\\left(${1:f(n)}\\right)$0\n" "Big O"
+			nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/bigO"
 			nil nil)
-		       ("bf" "\\mathbf{$1}\n" "Bold Face" nil
+		       ("bf" "\\mathbf{${1:a}}$0\n" "Bold Face" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/bf" nil
 			nil)
-		       ("begin" "# --\n\\begin{$1}\n$2\n\\end{$1}\n"
+		       ("begin"
+			"\\begin{${1:a}}\n${2:b}\n\\end{$1}$0\n"
 			"\\begin{}…\\end{}" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/begin"
 			nil nil)
-		       ("beg" "\\begin{$1}\n$2\n\\end{$1}\n"
+		       ("beg" "\\begin{${1:a}}\n${2:b}\n\\end{$1}$0\n"
 			"Begin-End Environment" nil ("Emacs migrated")
 			nil "/Users/hc/.emacs.d/snippets/tex-mode/beg"
 			nil nil)
 		       ("bbmatrix"
-			"# --\n\\begin{Bmatrix}\n$1\n\\end{Bmatrix}\n"
+			"\\begin{Bmatrix}\n${1:a}\n\\end{Bmatrix}$0\n"
 			"\\begin{Bmatrix}…\\end{Bmatirx}" nil nil nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/bbmatrix"
 			nil nil)
-		       ("bbbb" "\\beta\n" "Beta" nil
+		       ("bbbb" "\\beta$0\n" "Beta" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/bbbb"
 			nil nil)
@@ -2609,275 +2610,277 @@
 			"Blackboard symbol" nil ("Noema local") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/bb" nil
 			nil)
-		       ("bar" "\\bar{$1}$2\n" "Bar Accent" nil
+		       ("bar" "\\bar{${1:a}}$0\n" "Bar Accent" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/bar" nil
 			nil)
 		       ("axioml"
-			"# --\n\\begin{axiom}{$1}\\label{axi:$1}\n		$2\n\\end{axiom}\n$0\n"
+			"\\begin{axiom}{${1:a}}\\label{axi:$1}\n		${2:b}\n\\end{axiom}\n$0\n"
 			"Axiom (with label)" nil ("Emacs migrated")
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/axioml"
 			nil nil)
 		       ("axiom"
-			"# --\n\\begin{axiom}{$1}\n		$2\n\\end{axiom}\n$0\n"
+			"\\begin{axiom}{${1:a}}\n		${2:b}\n\\end{axiom}\n$0\n"
 			"Axiom (no label)" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/axiom"
 			nil nil)
-		       ("avg" "\\langle $1 \\rangle $2\n"
+		       ("avg" "\\langle ${1:a} \\rangle $0\n"
 			"Angle Brackets" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/avg" nil
 			nil)
 		       ("attention"
-			"# --\n#+begin_attention\n$0\n#+end_attention\n"
+			"#+begin_attention\n$0\n#+end_attention\n"
 			"Org attention block" nil ("Emacs migrated")
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/attention"
 			nil nil)
 		       ("assumption"
-			"# --\n\\begin{assumption}\n	$1\n\\end{assumption}\n$0\n"
+			"\\begin{assumption}\n	${1:a}\n\\end{assumption}\n$0\n"
 			"Assumption" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/assumption"
 			nil nil)
-		       ("array" "\\begin{array}\n$1\n\\end{array}\n"
+		       ("array"
+			"\\begin{array}\n${1:a}\n\\end{array}$0\n"
 			"Array" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/array"
 			nil nil)
-		       ("answer"
-			"# --\n#+begin_answer\n$0\n#+end_answer\n"
+		       ("answer" "#+begin_answer\n$0\n#+end_answer\n"
 			"Org answer block" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/answer"
 			nil nil)
-		       ("and" "\\cap\n" "Intersection" nil
+		       ("and" "\\cap$0\n" "Intersection" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/and" nil
 			nil)
 		       ("amp"
-			"# --\n\\langle ${1:\\phi}\\rvert ${2:A}\\lvert ${3:\\psi}\\rangle $0\n"
+			"\\langle ${1:\\phi}\\rvert ${2:A}\\lvert ${3:\\psi}\\rangle $0\n"
 			"Transition amplitude" nil ("Emacs migrated")
 			nil "/Users/hc/.emacs.d/snippets/tex-mode/amp"
 			nil nil)
-		       ("ali" "\\begin{align}\n$1\n\\end{align}\n"
+		       ("ali"
+			"\\begin{align}\n${1:a}\n\\end{align}$0\n"
 			"Align" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/ali" nil
 			nil)
-		       ("algo:ref" "${1:Algorithm}~\\ref{algo:$2}$0\n"
+		       ("algo:ref"
+			"${1:Algorithm}~\\ref{algo:${2:b}}$0\n"
 			"Algorithm:Ref" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/algo_ref"
 			nil nil)
 		       ("algo"
-			"# --\n% \\usepackage{algorithm,algorithmicx,algpseudocode}\n\\begin{algorithm}\n	\\floatname{algorithm}{${1:Algorithm}}\n	\\algrenewcommand\\algorithmicrequire{\\textbf{${2:Input: }}}\n	\\algrenewcommand\\algorithmicensure{\\textbf{${3:Output: }}}\n	\\caption{$4}\\label{alg:$5}\n	\\begin{algorithmic}[1]\n		\\Require \\$input\\$\n		\\Ensure \\$output\\$\n		$6\n		\\State \\textbf{return} \\$state\\$\n	\\end{algorithmic}\n\\end{algorithm}\n$0\n"
+			"% \\usepackage{algorithm,algorithmicx,algpseudocode}\n\\begin{algorithm}\n	\\floatname{algorithm}{${1:Algorithm}}\n	\\algrenewcommand\\algorithmicrequire{\\textbf{${2:Input: }}}\n	\\algrenewcommand\\algorithmicensure{\\textbf{${3:Output: }}}\n	\\caption{${4:d}}\\label{alg:${5:e}}\n	\\begin{algorithmic}[1]\n		\\Require \\$input\\$\n		\\Ensure \\$output\\$\n		${6:f}\n		\\State \\textbf{return} \\$state\\$\n	\\end{algorithmic}\n\\end{algorithm}\n$0\n"
 			"Algorithm" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/algo"
 			nil nil)
 		       ("adv"
-			"# --\n\\operatorname{Adv}^{${1:ind-cpa}}_{${2:\\Pi},\\mathcal{${3:A}}}\\left(${4:\\lambda}\\right)$0\n"
+			"\\operatorname{Adv}^{${1:ind-cpa}}_{${2:\\Pi},\\mathcal{${3:A}}}\\left(${4:\\lambda}\\right)$0\n"
 			"Cryptographic advantage" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/adv" nil
 			nil)
-		       ("aaaa" "\\alpha\n" "Alpha" nil
+		       ("aaaa" "\\alpha$0\n" "Alpha" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/aaaa"
 			nil nil)
-		       ("ZZ" "\\mathbb{Z}\n" "Integers" nil
+		       ("ZZ" "\\mathbb{Z}$0\n" "Integers" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/ZZ" nil
 			nil)
 		       ("Vrfy"
-			"# --\n\\operatorname{Vrfy}_{${1:pk}}\\left(${2:m}, ${3:\\sigma}\\right) = ${4:1}$0\n"
+			"\\operatorname{Vrfy}_{${1:pk}}\\left(${2:m}, ${3:\\sigma}\\right) = ${4:1}$0\n"
 			"Signature verification" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/Vrfy"
 			nil nil)
 		       ("Vmat"
-			"\\begin{Vmatrix}\n$1\n\\end{Vmatrix}\n"
+			"\\begin{Vmatrix}\n${1:a}\n\\end{Vmatrix}$0\n"
 			"Vmatrix (double)" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/Vmat"
 			nil nil)
-		       ("UUUU" "\\Upsilon\n" "Upsilon (uppercase)" nil
-			("Emacs migrated") nil
+		       ("UUUU" "\\Upsilon$0\n" "Upsilon (uppercase)"
+			nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/UUUU"
 			nil nil)
 		       ("Tr"
-			"# --\n\\operatorname{Tr}\\left(${1:A}\\right)$0\n"
+			"\\operatorname{Tr}\\left(${1:A}\\right)$0\n"
 			"Trace operator" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/Tr" nil
 			nil)
-		       ("TTTT" "\\Theta\n" "Theta (uppercase)" nil
+		       ("TTTT" "\\Theta$0\n" "Theta (uppercase)" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/TTTT"
 			nil nil)
 		       ("Sign"
-			"# --\n${1:\\sigma} \\leftarrow \\operatorname{Sign}_{${2:sk}}\\left(${3:m}\\right)$0\n"
+			"${1:\\sigma} \\leftarrow \\operatorname{Sign}_{${2:sk}}\\left(${3:m}\\right)$0\n"
 			"Signature" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/Sign"
 			nil nil)
-		       ("SSSS" "\\Sigma\n" "Sigma (uppercase)" nil
+		       ("SSSS" "\\Sigma$0\n" "Sigma (uppercase)" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/SSSS"
 			nil nil)
-		       ("Re" "\\mathrm{Re}\n" "Real Part" nil
+		       ("Re" "\\mathrm{Re}$0\n" "Real Part" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/Re" nil
 			nil)
-		       ("RR" "\\mathbb{R}\n" "Real Numbers" nil
+		       ("RR" "\\mathbb{R}$0\n" "Real Numbers" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/RR" nil
 			nil)
-		       ("QMA" "# --\n\\mathsf{QMA}$0\n"
+		       ("QMA" "\\mathsf{QMA}$0\n"
 			"Complexity class QMA" nil ("Emacs migrated")
 			nil "/Users/hc/.emacs.d/snippets/tex-mode/QMA"
 			nil nil)
-		       ("PSPACE" "# --\n\\mathsf{PSPACE}$0\n"
+		       ("PSPACE" "\\mathsf{PSPACE}$0\n"
 			"Complexity class PSPACE" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/PSPACE"
 			nil nil)
-		       ("PRG" "# --\n${1:G}\\left(${2:s}\\right)$0\n"
+		       ("PRG" "${1:G}\\left(${2:s}\\right)$0\n"
 			"Pseudorandom generator" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/PRG" nil
 			nil)
 		       ("PRF"
-			"# --\n${1:F}_{${2:k}}\\left(${3:x}\\right)$0\n"
+			"${1:F}_{${2:k}}\\left(${3:x}\\right)$0\n"
 			"Pseudorandom function" nil ("Emacs migrated")
 			nil "/Users/hc/.emacs.d/snippets/tex-mode/PRF"
 			nil nil)
 		       ("Open"
-			"# --\n\\operatorname{Open}\\left(${1:c}, ${2:d}\\right) = ${3:m}$0\n"
+			"\\operatorname{Open}\\left(${1:c}, ${2:d}\\right) = ${3:m}$0\n"
 			"Commitment opening" nil ("Emacs migrated")
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/Open"
 			nil nil)
-		       ("Ome" "\\Omega\n" "Omega uppercase (alt)" nil
-			("Emacs migrated") nil
+		       ("Ome" "\\Omega$0\n" "Omega uppercase (alt)"
+			nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/Ome" nil
 			nil)
-		       ("OOOO" "\\Omega\n" "Omega (uppercase)" nil
+		       ("OOOO" "\\Omega$0\n" "Omega (uppercase)" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/OOOO"
 			nil nil)
-		       ("NN" "\\mathbb{N}\n" "Natural Numbers" nil
+		       ("NN" "\\mathbb{N}$0\n" "Natural Numbers" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/NN" nil
 			nil)
-		       ("NEXP" "# --\n\\mathsf{NEXP}$0\n"
+		       ("NEXP" "\\mathsf{NEXP}$0\n"
 			"Complexity class NEXP" nil ("Emacs migrated")
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/NEXP"
 			nil nil)
 		       ("MAC"
-			"# --\n${1:t} \\leftarrow \\operatorname{MAC}_{${2:k}}\\left(${3:m}\\right)$0\n"
+			"${1:t} \\leftarrow \\operatorname{MAC}_{${2:k}}\\left(${3:m}\\right)$0\n"
 			"Message authentication code" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/MAC" nil
 			nil)
-		       ("LLLL" "\\Lambda\n" "Lambda (uppercase)" nil
+		       ("LLLL" "\\Lambda$0\n" "Lambda (uppercase)" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/LLLL"
 			nil nil)
-		       ("LL" "\\mathcal{L}\n" "Lagrangian" nil
+		       ("LL" "\\mathcal{L}$0\n" "Lagrangian" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/LL" nil
 			nil)
 		       ("KeyGen"
-			"# --\n(${1:pk}, ${2:sk}) \\leftarrow \\operatorname{KeyGen}\\left(1^{${3:\\lambda}}\\right)$0\n"
+			"(${1:pk}, ${2:sk}) \\leftarrow \\operatorname{KeyGen}\\left(1^{${3:\\lambda}}\\right)$0\n"
 			"Key generation" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/KeyGen"
 			nil nil)
 		       ("KDF"
-			"# --\n\\operatorname{KDF}\\left(${1:K}, ${2:info}\\right)$0\n"
+			"\\operatorname{KDF}\\left(${1:K}, ${2:info}\\right)$0\n"
 			"Key derivation function" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/KDF" nil
 			nil)
-		       ("Im" "\\mathrm{Im}\n" "Imaginary Part" nil
+		       ("Im" "\\mathrm{Im}$0\n" "Imaginary Part" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/Im" nil
 			nil)
-		       ("INDCPA" "# --\n\\mathsf{IND\\mbox{-}CPA}$0\n"
+		       ("INDCPA" "\\mathsf{IND\\mbox{-}CPA}$0\n"
 			"IND-CPA" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/INDCPA"
 			nil nil)
-		       ("INDCCA" "# --\n\\mathsf{IND\\mbox{-}CCA}$0\n"
+		       ("INDCCA" "\\mathsf{IND\\mbox{-}CCA}$0\n"
 			"IND-CCA" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/INDCCA"
 			nil nil)
-		       ("HH" "\\mathcal{H}\n" "Hamiltonian" nil
+		       ("HH" "\\mathcal{H}$0\n" "Hamiltonian" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/HH" nil
 			nil)
-		       ("GGGG" "\\Gamma\n" "Gamma (uppercase)" nil
+		       ("GGGG" "\\Gamma$0\n" "Gamma (uppercase)" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/GGGG"
 			nil nil)
 		       ("Enc"
-			"# --\n${1:c} \\leftarrow \\operatorname{Enc}_{${2:pk}}\\left(${3:m}; ${4:r}\\right)$0\n"
+			"${1:c} \\leftarrow \\operatorname{Enc}_{${2:pk}}\\left(${3:m}; ${4:r}\\right)$0\n"
 			"Encryption" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/Enc" nil
 			nil)
-		       ("EXP" "# --\n\\mathsf{EXP}$0\n"
+		       ("EXP" "\\mathsf{EXP}$0\n"
 			"Complexity class EXP" nil ("Emacs migrated")
 			nil "/Users/hc/.emacs.d/snippets/tex-mode/EXP"
 			nil nil)
-		       ("EUFCMA" "# --\n\\mathsf{EUF\\mbox{-}CMA}$0\n"
+		       ("EUFCMA" "\\mathsf{EUF\\mbox{-}CMA}$0\n"
 			"EUF-CMA" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/EUFCMA"
 			nil nil)
 		       ("Dec"
-			"# --\n${1:m} := \\operatorname{Dec}_{${2:sk}}\\left(${3:c}\\right)$0\n"
+			"${1:m} := \\operatorname{Dec}_{${2:sk}}\\left(${3:c}\\right)$0\n"
 			"Decryption" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/Dec" nil
 			nil)
-		       ("DLOG" "# --\n${1:h}=g^{${2:x}}$0\n"
-			"Discrete log" nil ("Emacs migrated") nil
+		       ("DLOG" "${1:h}=g^{${2:x}}$0\n" "Discrete log"
+			nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/DLOG"
 			nil nil)
 		       ("DDH"
-			"# --\n\\left(g^{${1:a}}, g^{${2:b}}, g^{${1:a}${2:b}}\\right) \\approx_c \\left(g^{${1:a}}, g^{${2:b}}, g^{${3:c}}\\right)$0\n"
+			"\\left(g^{${1:a}}, g^{${2:b}}, g^{$1$2}\\right) \\approx_c \\left(g^{$1}, g^{$2}, g^{${3:c}}\\right)$0\n"
 			"Decisional Diffie-Hellman" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/DDH" nil
 			nil)
-		       ("DDDD" "\\Delta\n" "Delta (uppercase)" nil
+		       ("DDDD" "\\Delta$0\n" "Delta (uppercase)" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/DDDD"
 			nil nil)
 		       ("Com"
-			"# --\n(${1:c}, ${2:d}) \\leftarrow \\operatorname{Com}\\left(${3:m}; ${4:r}\\right)$0\n"
+			"(${1:c}, ${2:d}) \\leftarrow \\operatorname{Com}\\left(${3:m}; ${4:r}\\right)$0\n"
 			"Commitment" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/Com" nil
 			nil)
-		       ("CC" "\\mathbb{C}\n" "Complex Numbers" nil
+		       ("CC" "\\mathbb{C}$0\n" "Complex Numbers" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/CC" nil
 			nil)
 		       ("Bmat"
-			"\\begin{Bmatrix}\n$1\n\\end{Bmatrix}\n"
+			"\\begin{Bmatrix}\n${1:a}\n\\end{Bmatrix}$0\n"
 			"Bmatrix (curly)" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/Bmat"
 			nil nil)
-		       ("BQP" "# --\n\\mathsf{BQP}$0\n"
+		       ("BQP" "\\mathsf{BQP}$0\n"
 			"Complexity class BQP" nil ("Emacs migrated")
 			nil "/Users/hc/.emacs.d/snippets/tex-mode/BQP"
 			nil nil)
-		       ("BPP" "# --\n\\mathsf{BPP}$0\n"
+		       ("BPP" "\\mathsf{BPP}$0\n"
 			"Complexity class BPP" nil ("Emacs migrated")
 			nil "/Users/hc/.emacs.d/snippets/tex-mode/BPP"
 			nil nil)
-		       ("<->" "\\leftrightarrow\n" "Left-Right Arrow"
-			nil ("Emacs migrated") nil
+		       ("<->" "\\leftrightarrow$0\n"
+			"Left-Right Arrow" nil ("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/--2" nil
 			nil)
-		       ("-+" "\\mp\n" "Minus-Plus" nil
+		       ("-+" "\\mp$0\n" "Minus-Plus" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/-+" nil
 			nil)
-		       ("->" "\\to\n" "To" nil ("Emacs migrated") nil
-			"/Users/hc/.emacs.d/snippets/tex-mode/-" nil
-			nil)
-		       ("+-" "\\pm\n" "Plus-Minus" nil
+		       ("->" "\\to$0\n" "To" nil ("Emacs migrated")
+			nil "/Users/hc/.emacs.d/snippets/tex-mode/-"
+			nil nil)
+		       ("+-" "\\pm$0\n" "Plus-Minus" nil
 			("Emacs migrated") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/+-" nil
 			nil)))
@@ -2886,43 +2889,44 @@
 ;;; Snippet definitions:
 ;;;
 (yas-define-snippets 'tex-mode
-		     '(("**" "^{${1:`(or yas-selected-text \"\")`}}\n"
+		     '(("**"
+			"^{${1:`(or yas-selected-text \"\")`}}$0\n"
 			"superscript" nil ("Math · latex-workshop")
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/snippet-3bd3a0d549"
 			nil "latex-workshop:**")
 		       ("MTT"
-			"\\mathtt{${1:`(or yas-selected-text \"text\")`}}\n"
+			"\\mathtt{${1:`(or yas-selected-text \"text\")`}}$0\n"
 			"mathtt" nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/mtt"
 			nil "latex-workshop:MTT")
 		       ("MSF"
-			"\\mathsf{${1:`(or yas-selected-text \"text\")`}}\n"
+			"\\mathsf{${1:`(or yas-selected-text \"text\")`}}$0\n"
 			"mathsf" nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/msf"
 			nil "latex-workshop:MSF")
 		       ("MRM"
-			"\\mathrm{${1:`(or yas-selected-text \"text\")`}}\n"
+			"\\mathrm{${1:`(or yas-selected-text \"text\")`}}$0\n"
 			"mathrm" nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/mrm"
 			nil "latex-workshop:MRM")
 		       ("MIT"
-			"\\mathit{${1:`(or yas-selected-text \"text\")`}}\n"
+			"\\mathit{${1:`(or yas-selected-text \"text\")`}}$0\n"
 			"mathit" nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/mit"
 			nil "latex-workshop:MIT")
 		       ("MCA"
-			"\\mathcal{${1:`(or yas-selected-text \"text\")`}}\n"
+			"\\mathcal{${1:`(or yas-selected-text \"text\")`}}$0\n"
 			"mathcal" nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/mca"
 			nil "latex-workshop:MCA")
 		       ("MBF"
-			"\\mathbf{${1:`(or yas-selected-text \"text\")`}}\n"
+			"\\mathbf{${1:`(or yas-selected-text \"text\")`}}$0\n"
 			"mathbf" nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/mbf"
 			nil "latex-workshop:MBF")
 		       ("MBB"
-			"\\mathbb{${1:`(or yas-selected-text \"text\")`}}\n"
+			"\\mathbb{${1:`(or yas-selected-text \"text\")`}}$0\n"
 			"mathbb" nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/mbb"
 			nil "latex-workshop:MBB")
@@ -2938,12 +2942,12 @@
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-xi"
 			nil "latex-workshop:\\xi")
-		       ("\\widetilde{}" "\\widetilde{$1}$0\n"
+		       ("\\widetilde{}" "\\widetilde{${1:a}}$0\n"
 			"\\widetilde{}" nil ("Math · latex-workshop")
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-widetilde"
 			nil "latex-workshop:\\widetilde{}")
-		       ("\\widehat{}" "\\widehat{$1}$0\n"
+		       ("\\widehat{}" "\\widehat{${1:a}}$0\n"
 			"\\widehat{}" nil ("Math · latex-workshop")
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-widehat"
@@ -2956,7 +2960,7 @@
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-vee"
 			nil "latex-workshop:\\vee")
-		       ("\\vec{}" "\\vec{$1}$0\n" "\\vec{}" nil
+		       ("\\vec{}" "\\vec{${1:a}}$0\n" "\\vec{}" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-vec"
 			nil "latex-workshop:\\vec{}")
@@ -2993,7 +2997,7 @@
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-upsilon"
 			nil "latex-workshop:\\upsilon")
-		       ("\\underline{}" "\\underline{${1}}$0\n"
+		       ("\\underline{}" "\\underline{${1:a}}$0\n"
 			"\\underline{}" nil ("Math · latex-workshop")
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-underline"
@@ -3011,8 +3015,8 @@
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-times"
 			nil "latex-workshop:\\times")
-		       ("\\tilde{}" "\\tilde{$1}$0\n" "\\tilde{}" nil
-			("Math · latex-workshop") nil
+		       ("\\tilde{}" "\\tilde{${1:a}}$0\n" "\\tilde{}"
+			nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-tilde"
 			nil "latex-workshop:\\tilde{}")
 		       ("\\Theta" "\\Theta$0\n" "\\Theta" nil
@@ -3023,40 +3027,40 @@
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-theta"
 			nil "latex-workshop:\\theta")
-		       ("\\textup{}" "\\textup{${1}}$0\n" "\\textup{}"
-			nil ("Math · latex-workshop") nil
+		       ("\\textup{}" "\\textup{${1:a}}$0\n"
+			"\\textup{}" nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-textup"
 			nil "latex-workshop:\\textup{}")
-		       ("\\texttt{}" "\\texttt{${1}}$0\n" "\\texttt{}"
-			nil ("Math · latex-workshop") nil
+		       ("\\texttt{}" "\\texttt{${1:a}}$0\n"
+			"\\texttt{}" nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-texttt"
 			nil "latex-workshop:\\texttt{}")
-		       ("\\textsf{}" "\\textsf{${1}}$0\n" "\\textsf{}"
-			nil ("Math · latex-workshop") nil
+		       ("\\textsf{}" "\\textsf{${1:a}}$0\n"
+			"\\textsf{}" nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-textsf"
 			nil "latex-workshop:\\textsf{}")
-		       ("\\textrm{}" "\\textrm{${1}}$0\n" "\\textrm{}"
-			nil ("Math · latex-workshop") nil
+		       ("\\textrm{}" "\\textrm{${1:a}}$0\n"
+			"\\textrm{}" nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-textrm"
 			nil "latex-workshop:\\textrm{}")
-		       ("\\textnormal{}" "\\textnormal{${1}}$0\n"
+		       ("\\textnormal{}" "\\textnormal{${1:a}}$0\n"
 			"\\textnormal{}" nil ("Math · latex-workshop")
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-textnormal"
 			nil "latex-workshop:\\textnormal{}")
-		       ("\\textmd{}" "\\textmd{${1}}$0\n" "\\textmd{}"
-			nil ("Math · latex-workshop") nil
+		       ("\\textmd{}" "\\textmd{${1:a}}$0\n"
+			"\\textmd{}" nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-textmd"
 			nil "latex-workshop:\\textmd{}")
-		       ("\\textit{}" "\\textit{${1}}$0\n" "\\textit{}"
-			nil ("Math · latex-workshop") nil
+		       ("\\textit{}" "\\textit{${1:a}}$0\n"
+			"\\textit{}" nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-textit"
 			nil "latex-workshop:\\textit{}")
-		       ("\\textbf{}" "\\textbf{${1}}$0\n" "\\textbf{}"
-			nil ("Math · latex-workshop") nil
+		       ("\\textbf{}" "\\textbf{${1:a}}$0\n"
+			"\\textbf{}" nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-textbf"
 			nil "latex-workshop:\\textbf{}")
-		       ("\\text{}" "\\text{$1}$0\n" "\\text{}" nil
+		       ("\\text{}" "\\text{${1:a}}$0\n" "\\text{}" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-text"
 			nil "latex-workshop:\\text{}")
@@ -3082,7 +3086,7 @@
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-stackrel"
 			nil "latex-workshop:\\stackrel{}{}")
-		       ("\\sqrt{}" "\\sqrt{$1}$0\n" "\\sqrt{}" nil
+		       ("\\sqrt{}" "\\sqrt{${1:a}}$0\n" "\\sqrt{}" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-sqrt"
 			nil "latex-workshop:\\sqrt{}")
@@ -3284,12 +3288,12 @@
 			nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-leftarrow"
 			nil "latex-workshop:\\leftarrow")
-		       ("\\left[" "\\left[${1}\\right]$0\n" "\\left["
-			nil ("Math · latex-workshop") nil
+		       ("\\left[" "\\left[${1:a}\\right]$0\n"
+			"\\left[" nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-left-429a2222"
 			nil "latex-workshop:\\left[")
-		       ("\\left(" "\\left(${1}\\right)$0\n" "\\left("
-			nil ("Math · latex-workshop") nil
+		       ("\\left(" "\\left(${1:a}\\right)$0\n"
+			"\\left(" nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-left"
 			nil "latex-workshop:\\left(")
 		       ("\\ldots" "\\ldots$0\n" "\\ldots" nil
@@ -3344,12 +3348,12 @@
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-huge"
 			nil "latex-workshop:\\huge")
-		       ("\\hat{}" "\\hat{$1}$0\n" "\\hat{}" nil
+		       ("\\hat{}" "\\hat{${1:a}}$0\n" "\\hat{}" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-hat"
 			nil "latex-workshop:\\hat{}")
-		       ("\\grave{}" "\\grave{$1}$0\n" "\\grave{}" nil
-			("Math · latex-workshop") nil
+		       ("\\grave{}" "\\grave{${1:a}}$0\n" "\\grave{}"
+			nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-grave"
 			nil "latex-workshop:\\grave{}")
 		       ("\\geq" "\\geq$0\n" "\\geq" nil
@@ -3364,8 +3368,8 @@
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-gamma"
 			nil "latex-workshop:\\gamma")
-		       ("\\frac{}{}" "\\frac{$1}{$2}$0\n" "\\frac{}{}"
-			nil ("Math · latex-workshop") nil
+		       ("\\frac{}{}" "\\frac{${1:a}}{${2:b}}$0\n"
+			"\\frac{}{}" nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-frac"
 			nil "latex-workshop:\\frac{}{}")
 		       ("\\forall" "\\forall$0\n" "\\forall" nil
@@ -3397,11 +3401,11 @@
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-epsilon"
 			nil "latex-workshop:\\epsilon")
-		       ("\\emph{}" "\\emph{${1}}$0\n" "\\emph{}" nil
+		       ("\\emph{}" "\\emph{${1:a}}$0\n" "\\emph{}" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-emph"
 			nil "latex-workshop:\\emph{}")
-		       ("\\dot{}" "\\dot{$1}$0\n" "\\dot{}" nil
+		       ("\\dot{}" "\\dot{${1:a}}$0\n" "\\dot{}" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-dot"
 			nil "latex-workshop:\\dot{}")
@@ -3426,7 +3430,7 @@
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-ddots"
 			nil "latex-workshop:\\ddots")
-		       ("\\ddot{}" "\\ddot{$1}$0\n" "\\ddot{}" nil
+		       ("\\ddot{}" "\\ddot{${1:a}}$0\n" "\\ddot{}" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-ddot"
 			nil "latex-workshop:\\ddot{}")
@@ -3442,8 +3446,8 @@
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-chi"
 			nil "latex-workshop:\\chi")
-		       ("\\check{}" "\\check{$1}$0\n" "\\check{}" nil
-			("Math · latex-workshop") nil
+		       ("\\check{}" "\\check{${1:a}}$0\n" "\\check{}"
+			nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-check"
 			nil "latex-workshop:\\check{}")
 		       ("\\cdots" "\\cdots$0\n" "\\cdots" nil
@@ -3458,39 +3462,39 @@
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-cap"
 			nil "latex-workshop:\\cap")
-		       ("\\breve{}" "\\breve{$1}$0\n" "\\breve{}" nil
-			("Math · latex-workshop") nil
+		       ("\\breve{}" "\\breve{${1:a}}$0\n" "\\breve{}"
+			nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-breve"
 			nil "latex-workshop:\\breve{}")
-		       ("\\Bigl(" "\\Bigl(${1}\\Bigr)$0\n" "\\Bigl("
+		       ("\\Bigl(" "\\Bigl(${1:a}\\Bigr)$0\n" "\\Bigl("
 			nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-bigl-e68f6cdb"
 			nil "latex-workshop:\\Bigl(")
-		       ("\\Bigl[" "\\Bigl[${1}\\Bigr]$0\n" "\\Bigl["
+		       ("\\Bigl[" "\\Bigl[${1:a}\\Bigr]$0\n" "\\Bigl["
 			nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-bigl-d1feb8fb"
 			nil "latex-workshop:\\Bigl[")
-		       ("\\bigl[" "\\bigl[${1}\\bigr]$0\n" "\\bigl["
+		       ("\\bigl[" "\\bigl[${1:a}\\bigr]$0\n" "\\bigl["
 			nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-bigl-746e76d9"
 			nil "latex-workshop:\\bigl[")
-		       ("\\bigl(" "\\bigl(${1}\\bigr)$0\n" "\\bigl("
+		       ("\\bigl(" "\\bigl(${1:a}\\bigr)$0\n" "\\bigl("
 			nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-bigl"
 			nil "latex-workshop:\\bigl(")
-		       ("\\biggl[" "\\biggl[${1}\\biggr]$0\n"
+		       ("\\biggl[" "\\biggl[${1:a}\\biggr]$0\n"
 			"\\biggl[" nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-biggl-a0e42523"
 			nil "latex-workshop:\\biggl[")
-		       ("\\Biggl[" "\\Biggl[${1}\\Biggr]$0\n"
+		       ("\\Biggl[" "\\Biggl[${1:a}\\Biggr]$0\n"
 			"\\Biggl[" nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-biggl-929e2519"
 			nil "latex-workshop:\\Biggl[")
-		       ("\\Biggl(" "\\Biggl(${1}\\Biggr)$0\n"
+		       ("\\Biggl(" "\\Biggl(${1:a}\\Biggr)$0\n"
 			"\\Biggl(" nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-biggl-24e92f1f"
 			nil "latex-workshop:\\Biggl(")
-		       ("\\biggl(" "\\biggl(${1}\\biggr)$0\n"
+		       ("\\biggl(" "\\biggl(${1:a}\\biggr)$0\n"
 			"\\biggl(" nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-biggl"
 			nil "latex-workshop:\\biggl(")
@@ -3506,7 +3510,7 @@
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-beta"
 			nil "latex-workshop:\\beta")
-		       ("\\bar{}" "\\bar{$1}$0\n" "\\bar{}" nil
+		       ("\\bar{}" "\\bar{${1:a}}$0\n" "\\bar{}" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-bar"
 			nil "latex-workshop:\\bar{}")
@@ -3518,139 +3522,139 @@
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-alpha"
 			nil "latex-workshop:\\alpha")
-		       ("\\acute{}" "\\acute{$1}$0\n" "\\acute{}" nil
-			("Math · latex-workshop") nil
+		       ("\\acute{}" "\\acute{${1:a}}$0\n" "\\acute{}"
+			nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/cmd-acute"
 			nil "latex-workshop:\\acute{}")
-		       ("@z" "\\zeta\n" "zeta" nil
+		       ("@z" "\\zeta$0\n" "zeta" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-z"
 			nil "latex-workshop:@z")
-		       ("@Y" "\\Psi\n" "Psi" nil
+		       ("@Y" "\\Psi$0\n" "Psi" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-y-78e2dad9"
 			nil "latex-workshop:@Y")
-		       ("@y" "\\psi\n" "psi" nil
+		       ("@y" "\\psi$0\n" "psi" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-y"
 			nil "latex-workshop:@y")
-		       ("@X" "\\Xi\n" "Xi" nil
+		       ("@X" "\\Xi$0\n" "Xi" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-x-376b2608"
 			nil "latex-workshop:@X")
-		       ("@x" "\\xi\n" "xi" nil
+		       ("@x" "\\xi$0\n" "xi" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-x"
 			nil "latex-workshop:@x")
-		       ("@W" "\\Omega\n" "Omega" nil
+		       ("@W" "\\Omega$0\n" "Omega" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-w"
 			nil "latex-workshop:@W")
-		       ("@vs" "\\varsigma\n" "varsigma" nil
+		       ("@vs" "\\varsigma$0\n" "varsigma" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-vs"
 			nil "latex-workshop:@vs")
-		       ("@vr" "\\varrho\n" "varrho" nil
+		       ("@vr" "\\varrho$0\n" "varrho" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-vr"
 			nil "latex-workshop:@vr")
-		       ("@vq" "\\vartheta\n" "vartheta" nil
+		       ("@vq" "\\vartheta$0\n" "vartheta" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-vq"
 			nil "latex-workshop:@vq")
-		       ("@vp" "\\varpi\n" "varpi" nil
+		       ("@vp" "\\varpi$0\n" "varpi" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-vp"
 			nil "latex-workshop:@vp")
-		       ("@vf" "\\varphi\n" "varphi" nil
+		       ("@vf" "\\varphi$0\n" "varphi" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-vf"
 			nil "latex-workshop:@vf")
-		       ("@ve" "\\varepsilon\n" "varepsilon" nil
+		       ("@ve" "\\varepsilon$0\n" "varepsilon" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-ve"
 			nil "latex-workshop:@ve")
-		       ("@U" "\\Upsilon\n" "Upsilon" nil
+		       ("@U" "\\Upsilon$0\n" "Upsilon" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-u-27c873d8"
 			nil "latex-workshop:@U")
-		       ("@u" "\\upsilon\n" "upsilon" nil
+		       ("@u" "\\upsilon$0\n" "upsilon" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-u"
 			nil "latex-workshop:@u")
-		       ("@t" "\\tau\n" "tau" nil
+		       ("@t" "\\tau$0\n" "tau" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-t"
 			nil "latex-workshop:@t")
-		       ("@S" "\\Sigma\n" "Sigma" nil
+		       ("@S" "\\Sigma$0\n" "Sigma" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-s-db94c9b6"
 			nil "latex-workshop:@S")
-		       ("@s" "\\sigma\n" "sigma" nil
+		       ("@s" "\\sigma$0\n" "sigma" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-s"
 			nil "latex-workshop:@s")
-		       ("@r" "\\rho\n" "rho" nil
+		       ("@r" "\\rho$0\n" "rho" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-r"
 			nil "latex-workshop:@r")
-		       ("@Q" "\\Theta\n" "Theta" nil
+		       ("@Q" "\\Theta$0\n" "Theta" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-q-fc53d425"
 			nil "latex-workshop:@Q")
-		       ("@q" "\\theta\n" "theta" nil
+		       ("@q" "\\theta$0\n" "theta" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-q"
 			nil "latex-workshop:@q")
-		       ("@P" "\\Pi\n" "Pi" nil
+		       ("@P" "\\Pi$0\n" "Pi" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-p-bd54e187"
 			nil "latex-workshop:@P")
-		       ("@p" "\\pi\n" "pi" nil
+		       ("@p" "\\pi$0\n" "pi" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-p"
 			nil "latex-workshop:@p")
-		       ("@o" "\\omega\n" "omega" nil
+		       ("@o" "\\omega$0\n" "omega" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-o"
 			nil "latex-workshop:@o")
-		       ("@n" "\\nu\n" "nu" nil
+		       ("@n" "\\nu$0\n" "nu" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-n"
 			nil "latex-workshop:@n")
-		       ("@m" "\\mu\n" "mu" nil
+		       ("@m" "\\mu$0\n" "mu" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-m"
 			nil "latex-workshop:@m")
-		       ("@L" "\\Lambda\n" "Lambda" nil
+		       ("@L" "\\Lambda$0\n" "Lambda" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-l-151fc5b6"
 			nil "latex-workshop:@L")
-		       ("@l" "\\lambda\n" "lambda" nil
+		       ("@l" "\\lambda$0\n" "lambda" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-l"
 			nil "latex-workshop:@l")
-		       ("@k" "\\kappa\n" "kappa" nil
+		       ("@k" "\\kappa$0\n" "kappa" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-k"
 			nil "latex-workshop:@k")
-		       ("@I" "\\int_{$1}^{$2}$0\n" "int" nil
+		       ("@I" "\\int_{${1:a}}^{${2:b}}$0\n" "int" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-i-b295c2fc"
 			nil "latex-workshop:@I")
-		       ("@i" "\\iota\n" "iota" nil
+		       ("@i" "\\iota$0\n" "iota" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-i"
 			nil "latex-workshop:@i")
-		       ("@h" "\\eta\n" "eta" nil
+		       ("@h" "\\eta$0\n" "eta" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-h"
 			nil "latex-workshop:@h")
-		       ("@G" "\\Gamma\n" "Gamma" nil
+		       ("@G" "\\Gamma$0\n" "Gamma" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-g-2d264aba"
 			nil "latex-workshop:@G")
-		       ("@g" "\\gamma\n" "gamma" nil
+		       ("@g" "\\gamma$0\n" "gamma" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-g"
 			nil "latex-workshop:@g")
@@ -3659,56 +3663,56 @@
 			"ddot" nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-ff311838"
 			nil "latex-workshop:@:")
-		       ("@F" "\\Phi\n" "Phi" nil
+		       ("@F" "\\Phi$0\n" "Phi" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-f-c1ea3969"
 			nil "latex-workshop:@F")
-		       ("@f" "\\phi\n" "phi" nil
+		       ("@f" "\\phi$0\n" "phi" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-f"
 			nil "latex-workshop:@f")
-		       ("@e" "\\epsilon\n" "epsilon" nil
+		       ("@e" "\\epsilon$0\n" "epsilon" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-e"
 			nil "latex-workshop:@e")
-		       ("@<" "\\leq\n" "leq" nil
+		       ("@<" "\\leq$0\n" "leq" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-d1812ccf"
 			nil "latex-workshop:@<")
-		       ("@D" "\\Delta\n" "Delta" nil
+		       ("@D" "\\Delta$0\n" "Delta" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-d-446de28b"
 			nil "latex-workshop:@D")
-		       ("@d" "\\delta\n" "delta" nil
+		       ("@d" "\\delta$0\n" "delta" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-d"
 			nil "latex-workshop:@d")
-		       ("@&" "\\wedge\n" "wedge" nil
+		       ("@&" "\\wedge$0\n" "wedge" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-cfe96d46"
 			nil "latex-workshop:@&")
-		       ("@>" "\\geq\n" "geq" nil
+		       ("@>" "\\geq$0\n" "geq" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-c9a9f309"
 			nil "latex-workshop:@>")
-		       ("@c" "\\chi\n" "chi" nil
+		       ("@c" "\\chi$0\n" "chi" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-c"
 			nil "latex-workshop:@c")
 		       ("@("
-			"\\left( ${1:`(or yas-selected-text \"\")`} \\right)\n"
+			"\\left( ${1:`(or yas-selected-text \"\")`} \\right)$0\n"
 			"(" nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-bd48de2d"
 			nil "latex-workshop:@(")
-		       ("@b" "\\beta\n" "beta" nil
+		       ("@b" "\\beta$0\n" "beta" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-b"
 			nil "latex-workshop:@b")
-		       ("@%" "\\frac{$1}{$2}$0\n" "fraction2" nil
-			("Math · latex-workshop") nil
+		       ("@%" "\\frac{${1:a}}{${2:b}}$0\n" "fraction2"
+			nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-a0812591"
 			nil "latex-workshop:@%")
-		       ("@a" "\\alpha\n" "alpha" nil
+		       ("@a" "\\alpha$0\n" "alpha" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-a"
 			nil "latex-workshop:@a")
@@ -3722,32 +3726,32 @@
 			"hat" nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-9e311693"
 			nil "latex-workshop:@^")
-		       ("@*" "\\times\n" "times" nil
+		       ("@*" "\\times$0\n" "times" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-9929150c"
 			nil "latex-workshop:@*")
 		       ("@["
-			"\\left[ ${1:`(or yas-selected-text \"\")`} \\right]\n"
+			"\\left[ ${1:`(or yas-selected-text \"\")`} \\right]$0\n"
 			"[" nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-9276da6f"
 			nil "latex-workshop:@[")
-		       ("@8" "\\infty\n" "infinity" nil
+		       ("@8" "\\infty$0\n" "infinity" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-8"
 			nil "latex-workshop:@8")
-		       ("@+" "\\bigcup\n" "bigcup" nil
+		       ("@+" "\\bigcup$0\n" "bigcup" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-6a500d78"
 			nil "latex-workshop:@+")
-		       ("@6" "\\partial\n" "partial" nil
+		       ("@6" "\\partial$0\n" "partial" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-6"
 			nil "latex-workshop:@6")
-		       ("@|" "\\Big|\n" "Big|" nil
+		       ("@|" "\\Big|$0\n" "Big|" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-59f1fbaa"
 			nil "latex-workshop:@|")
-		       ("@," "\\nonumber\n" "nonumber" nil
+		       ("@," "\\nonumber$0\n" "nonumber" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-57ad4c57"
 			nil "latex-workshop:@,")
@@ -3756,8 +3760,8 @@
 			"dot" nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-525b6f2f"
 			nil "latex-workshop:@;")
-		       ("@/" "\\frac{$1}{$2}$0\n" "fraction" nil
-			("Math · latex-workshop") nil
+		       ("@/" "\\frac{${1:a}}{${2:b}}$0\n" "fraction"
+			nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-2d06e6c4"
 			nil "latex-workshop:@/")
 		       ("@2"
@@ -3765,27 +3769,28 @@
 			"sqrt" nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-2"
 			nil "latex-workshop:@2")
-		       ("@@" "\\circ\n" "circ" nil
+		       ("@@" "\\circ$0\n" "circ" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-1f890aff"
 			nil "latex-workshop:@@")
-		       ("@=" "\\equiv\n" "equiv" nil
+		       ("@=" "\\equiv$0\n" "equiv" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-0551732e"
 			nil "latex-workshop:@=")
-		       ("@0" "^\\circ\n" "supcirc" nil
+		       ("@0" "^\\circ$0\n" "supcirc" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-0"
 			nil "latex-workshop:@0")
-		       ("@." "\\cdot\n" "cdot" nil
+		       ("@." "\\cdot$0\n" "cdot" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at-."
 			nil "latex-workshop:@.")
-		       ("@-" "\\bigcap\n" "bigcap" nil
+		       ("@-" "\\bigcap$0\n" "bigcap" nil
 			("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/at"
 			nil "latex-workshop:@-")
-		       ("__" "_{${1:`(or yas-selected-text \"\")`}}\n"
+		       ("__"
+			"_{${1:`(or yas-selected-text \"\")`}}$0\n"
 			"subscript" nil ("Math · latex-workshop") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/latex-workshop/__"
 			nil "latex-workshop:__")))
@@ -3846,7 +3851,7 @@
 			("Math · overleaf") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/overleaf/cmd-sum"
 			nil "overleaf:\\sum")
-		       ("\\sqrt" "\\sqrt{$1}$0\n" "\\sqrt{}" nil
+		       ("\\sqrt" "\\sqrt{${1:a}}$0\n" "\\sqrt{}" nil
 			("Math · overleaf") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/overleaf/cmd-sqrt"
 			nil "overleaf:\\sqrt")
@@ -3866,7 +3871,8 @@
 			("Math · overleaf") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/overleaf/cmd-rho"
 			nil "overleaf:\\rho")
-		       ("\\renewcommand" "\\renewcommand{$1}{$2}$0\n"
+		       ("\\renewcommand"
+			"\\renewcommand{${1:a}}{${2:b}}$0\n"
 			"\\renewcommand{}{}" nil ("Math · overleaf")
 			nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/overleaf/cmd-renewcommand"
@@ -3915,16 +3921,16 @@
 			("Math · overleaf") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/overleaf/cmd-mu"
 			nil "overleaf:\\mu")
-		       ("\\mathrm" "\\mathrm{$1}$0\n" "\\mathrm{}" nil
-			("Math · overleaf") nil
+		       ("\\mathrm" "\\mathrm{${1:a}}$0\n" "\\mathrm{}"
+			nil ("Math · overleaf") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/overleaf/cmd-mathrm"
 			nil "overleaf:\\mathrm")
-		       ("\\mathcal" "\\mathcal{$1}$0\n" "\\mathcal{}"
-			nil ("Math · overleaf") nil
+		       ("\\mathcal" "\\mathcal{${1:a}}$0\n"
+			"\\mathcal{}" nil ("Math · overleaf") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/overleaf/cmd-mathcal"
 			nil "overleaf:\\mathcal")
-		       ("\\mathbf" "\\mathbf{$1}$0\n" "\\mathbf{}" nil
-			("Math · overleaf") nil
+		       ("\\mathbf" "\\mathbf{${1:a}}$0\n" "\\mathbf{}"
+			nil ("Math · overleaf") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/overleaf/cmd-mathbf"
 			nil "overleaf:\\mathbf")
 		       ("\\leq" "\\leq$0\n" "\\leq" nil
@@ -3967,7 +3973,7 @@
 			("Math · overleaf") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/overleaf/cmd-in"
 			nil "overleaf:\\in")
-		       ("\\hat" "\\hat{$1}$0\n" "\\hat{}" nil
+		       ("\\hat" "\\hat{${1:a}}$0\n" "\\hat{}" nil
 			("Math · overleaf") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/overleaf/cmd-hat"
 			nil "overleaf:\\hat")
@@ -3979,8 +3985,8 @@
 			("Math · overleaf") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/overleaf/cmd-gamma"
 			nil "overleaf:\\gamma")
-		       ("\\frac" "\\frac{$1}{$2}$0\n" "\\frac{}{}" nil
-			("Math · overleaf") nil
+		       ("\\frac" "\\frac{${1:a}}{${2:b}}$0\n"
+			"\\frac{}{}" nil ("Math · overleaf") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/overleaf/cmd-frac"
 			nil "overleaf:\\frac")
 		       ("\\footnotesize" "\\footnotesize$0\n"
@@ -3995,7 +4001,7 @@
 			("Math · overleaf") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/overleaf/cmd-epsilon"
 			nil "overleaf:\\epsilon")
-		       ("\\emph" "\\emph{$1}$0\n" "\\emph{}" nil
+		       ("\\emph" "\\emph{${1:a}}$0\n" "\\emph{}" nil
 			("Math · overleaf") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/overleaf/cmd-emph"
 			nil "overleaf:\\emph")
@@ -4007,8 +4013,8 @@
 			("Math · overleaf") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/overleaf/cmd-delta"
 			nil "overleaf:\\delta")
-		       ("\\color" "\\color{$1}$0\n" "\\color{}" nil
-			("Math · overleaf") nil
+		       ("\\color" "\\color{${1:a}}$0\n" "\\color{}"
+			nil ("Math · overleaf") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/overleaf/cmd-color"
 			nil "overleaf:\\color")
 		       ("\\chi" "\\chi$0\n" "\\chi" nil
@@ -4019,7 +4025,7 @@
 			("Math · overleaf") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/overleaf/cmd-cdot"
 			nil "overleaf:\\cdot")
-		       ("\\boldsymbol" "\\boldsymbol{$1}$0\n"
+		       ("\\boldsymbol" "\\boldsymbol{${1:a}}$0\n"
 			"\\boldsymbol{}" nil ("Math · overleaf") nil
 			"/Users/hc/.emacs.d/snippets/tex-mode/generated/overleaf/cmd-boldsymbol"
 			nil "overleaf:\\boldsymbol")
@@ -4033,4 +4039,4 @@
 			nil "overleaf:\\alpha")))
 
 
-;;; Do not edit! File generated at Fri Jul 31 00:31:46 2026
+;;; Do not edit! File generated at Mon Aug  3 00:44:25 2026

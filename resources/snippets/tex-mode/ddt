@@ -4,4 +4,4 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/ddt_Time_Derivative
 # --
-\frac{d}{dt}
+\frac{d}{dt}$0

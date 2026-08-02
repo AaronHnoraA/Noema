@@ -4,4 +4,4 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/eset_Empty_Set
 # --
-\emptyset
+\emptyset$0

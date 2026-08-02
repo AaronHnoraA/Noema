@@ -5,4 +5,4 @@
 # contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=fraction
 # group: Math · latex-workshop
 # --
-\frac{$1}{$2}$0
+\frac{${1:a}}{${2:b}}$0

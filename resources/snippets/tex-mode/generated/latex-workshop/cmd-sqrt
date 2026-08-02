@@ -5,4 +5,4 @@
 # contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%E2%88%9A%2C+shortcut+%402
 # group: Math · latex-workshop
 # --
-\sqrt{$1}$0
+\sqrt{${1:a}}$0

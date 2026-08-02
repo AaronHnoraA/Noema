@@ -4,4 +4,4 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/iiint_Triple_Integral
 # --
-\iiint
+\iiint$0

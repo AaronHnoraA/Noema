@@ -4,4 +4,4 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/_-_Left-Right_Arrow
 # --
-\leftrightarrow
+\leftrightarrow$0

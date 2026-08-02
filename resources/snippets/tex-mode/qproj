@@ -3,4 +3,4 @@
 # key: qproj
 # group: QC symbols
 # --
-\ket{${1:\psi}}\!\bra{${1:\psi}}$0
+\ket{${1:\psi}}\!\bra{$1}$0

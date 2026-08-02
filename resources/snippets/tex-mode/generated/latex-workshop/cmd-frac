@@ -5,4 +5,4 @@
 # contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=Insert+fraction%2C+shortcuts+%40%2F+or+%40%25
 # group: Math · latex-workshop
 # --
-\frac{$1}{$2}$0
+\frac{${1:a}}{${2:b}}$0

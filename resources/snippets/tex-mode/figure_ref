@@ -4,5 +4,4 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/figure_ref_Figure_Ref
 # --
-# --
-${1:Figure}~\ref{fig:$2}$0
+${1:Figure}~\ref{fig:${2:b}}$0

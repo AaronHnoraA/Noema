@@ -4,7 +4,6 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/tabl_Tabular_with_label_
 # --
-# --
-\begin{tabular}{${1:c}}\label{tab:$2}
+\begin{tabular}{${1:c}}\label{tab:${2:b}}
 $0
 \end{tabular}

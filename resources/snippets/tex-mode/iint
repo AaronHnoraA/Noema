@@ -4,4 +4,4 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/iint_Double_Integral
 # --
-\iint
+\iint$0

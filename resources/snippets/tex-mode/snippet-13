@@ -4,4 +4,4 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/_Subscript
 # --
-_{$1}$2
+_{${1:a}}$0

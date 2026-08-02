@@ -4,6 +4,5 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/marginpar_Marginpar
 # --
-# --
-\marginpar{$1}
+\marginpar{${1:a}}
 $0

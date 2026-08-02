@@ -5,5 +5,5 @@
 # source: /Users/hc/.config/emacs/snippets/tex-mode/bmat_Bmatrix
 # --
 \begin{bmatrix}
-$1
-\end{bmatrix}
+${1:a}
+\end{bmatrix}$0

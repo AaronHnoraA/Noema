@@ -4,8 +4,7 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/corollary_Corollary_no_label_
 # --
-# --
-\begin{corollary}{$1}
-	$2
+\begin{corollary}{${1:a}}
+	${2:b}
 \end{corollary}
 $0

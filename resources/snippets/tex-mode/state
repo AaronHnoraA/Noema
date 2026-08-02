@@ -4,4 +4,4 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/state_Algorithm_State
 # --
-\State $1
+\State ${1:a}$0

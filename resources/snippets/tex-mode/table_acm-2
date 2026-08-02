@@ -4,12 +4,11 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/table_acm_Table_ACM_
 # --
-# --
 \begin{table*}
-	\caption{$1}\label{tab:$2}
+	\caption{${1:a}}\label{tab:${2:b}}
 	\begin{tabular}{${3:ccl}}
 		\toprule
-		$4
+		${4:d}
 		a & b & c \\\\
 		\midrule
 		d & e & f \\\\

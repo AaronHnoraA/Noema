@@ -4,4 +4,4 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/brk_Braket
 # --
-\braket{ $1 }{ $2 } $3
+\braket{ ${1:a} }{ ${2:b} } $0

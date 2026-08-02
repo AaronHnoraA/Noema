@@ -233,7 +233,7 @@ describe("LiveTeX custom macro writeback", () => {
     expect(field.getPrompts()).toEqual([]);
   });
 
-  test("keeps a default snippet field editable instead of replacing it with an empty box", () => {
+  test("keeps a default snippet field editable without mounting a prompt atom", () => {
     const field = createMathfield("mathcal");
     const template = mathLiveSnippetTemplate({
       key: "mathcal",
@@ -242,9 +242,8 @@ describe("LiveTeX custom macro writeback", () => {
     }, "mathcal-test");
 
     expect(applyVisualTexCompletionTemplate(field, "mathcal", template, "mathcal".length)).toBe(true);
-    expect(field.getPromptValue("mathcal-test-t1-o0", "latex-without-placeholders")).toBe("F");
-    expect(field.getPrompts()).toEqual(["mathcal-test-t1-o0"]);
-    expect(field.selection.ranges[0]).toEqual(field.getPromptRange("mathcal-test-t1-o0"));
+    expectNoSnippetScaffolding(field);
+    expect(selectedMathfieldLatex(field)).toContain("F");
     expect(visualTexMathfieldLatex(field)).toBe(String.raw`\mathcal{F}`);
 
     field.insert("V", {
@@ -254,6 +253,46 @@ describe("LiveTeX custom macro writeback", () => {
       feedback: false,
     });
     expect(visualTexMathfieldLatex(field)).toBe(String.raw`\mathcal{V}`);
+  });
+
+  test("turns a bare LiveTeX tabstop into selected content without mounting placeholder UI", () => {
+    const field = createMathfield("sqrt");
+    const template = mathLiveSnippetTemplate({
+      key: "sqrt",
+      mode: "tex-mode",
+      body: "\\sqrt{$1}$0",
+    }, "empty-sqrt-test");
+
+    expect(applyVisualTexCompletionTemplate(field, "sqrt", template, 4)).toBe(true);
+    expectNoSnippetScaffolding(field);
+    expect(selectedMathfieldLatex(field)).toMatch(/□|\\square/);
+    expect(visualTexMathfieldLatex(field)).toContain(String.raw`\sqrt`);
+
+    field.insert("x", {
+      format: "latex",
+      insertionMode: "replaceSelection",
+      selectionMode: "after",
+      feedback: false,
+    });
+    expect(visualTexMathfieldLatex(field)).toBe(String.raw`\sqrt{x}`);
+    expect(advanceVisualTexNavigation(field, false)).toBe("final");
+  });
+
+  test("uses branch-aware square navigation only when logical snippet anchors are absent", () => {
+    const field = createMathfield(String.raw`\frac{□+□}{□}+□`);
+    field.position = 0;
+
+    for (let index = 0; index < 4; index++) {
+      expect(advanceVisualTexNavigation(field, false)).toBe("placeholder");
+      expect(selectedMathfieldLatex(field)).toMatch(/□|\\square/);
+    }
+    expect(advanceVisualTexNavigation(field, false)).toBe("edge");
+
+    field.position = field.lastOffset;
+    for (let index = 0; index < 4; index++) {
+      expect(advanceVisualTexNavigation(field, true)).toBe("placeholder");
+      expect(selectedMathfieldLatex(field)).toMatch(/□|\\square/);
+    }
   });
 
   test("keeps repeated snippet fields mirrored", () => {
@@ -314,31 +353,161 @@ describe("LiveTeX custom macro writeback", () => {
       body: "\\frac{${1:a}}{${2:b}}$0",
     }, "frac-test");
     expect(applyVisualTexCompletionTemplate(field, "frac", template, 4)).toBe(true);
+    expectNoSnippetScaffolding(field);
 
     expect(advanceVisualTexNavigation(field, false)).toBe("placeholder");
-    expect(field.selection.ranges[0]).toEqual(field.getPromptRange("frac-test-t2-o0"));
+    expect(selectedMathfieldLatex(field)).toContain("b");
     expect(advanceVisualTexNavigation(field, false)).toBe("final");
     expect(field.position).toBe(field.lastOffset);
     expect(field.getPrompts()).toEqual([]);
     expect(advanceVisualTexNavigation(field, false)).toBe("boundary");
   });
 
-  test("removes stale prompt atoms when the caret leaves a snippet before Cmd-]", () => {
+  test("finishes a nested child before returning to the parent Cmd-bracket order", () => {
+    const field = createMathfield("frac");
+    const fraction = mathLiveSnippetTemplate({
+      key: "frac",
+      mode: "tex-mode",
+      body: "\\frac{${1:a}}{${2:b}}$0",
+    }, "nested-frac-test");
+    const radical = mathLiveSnippetTemplate({
+      key: "sqrt",
+      mode: "tex-mode",
+      body: "\\sqrt{${1:x}}$0",
+    }, "nested-sqrt-test");
+
+    expect(applyVisualTexCompletionTemplate(field, "frac", fraction, 4)).toBe(true);
+    expect(field.insert("sqrt", {
+      format: "latex",
+      insertionMode: "replaceSelection",
+      selectionMode: "after",
+      feedback: false,
+    })).toBe(true);
+    expect(applyVisualTexCompletionTemplate(field, "sqrt", radical, 4)).toBe(true);
+    expectNoSnippetScaffolding(field);
+
+    expect(field.insert("z", {
+      format: "latex",
+      insertionMode: "replaceSelection",
+      selectionMode: "after",
+      feedback: false,
+    })).toBe(true);
+    expect(advanceVisualTexNavigation(field, false)).toBe("final");
+    expect(advanceVisualTexNavigation(field, false)).toBe("placeholder");
+    expect(selectedMathfieldLatex(field)).toContain("b");
+    expect(advanceVisualTexNavigation(field, true)).toBe("placeholder");
+    expect(selectedMathfieldLatex(field)).toContain(String.raw`\sqrt{z}`);
+    expect(advanceVisualTexNavigation(field, false)).toBe("placeholder");
+
+    expect(field.insert("q", {
+      format: "latex",
+      insertionMode: "replaceSelection",
+      selectionMode: "after",
+      feedback: false,
+    })).toBe(true);
+    expect(advanceVisualTexNavigation(field, false)).toBe("final");
+    expect(visualTexMathfieldLatex(field)).toBe(String.raw`\frac{\sqrt{z}}{q}`);
+    expectNoSnippetScaffolding(field);
+  });
+
+  test("navigates nested fields in one snippet and skips children replaced with their parent", () => {
+    const field = createMathfield("nested");
+    const template = mathLiveSnippetTemplate({
+      key: "nested",
+      mode: "tex-mode",
+      body: "${1:\\frac{${2:a}}{${3:b}}}$0",
+    }, "nested-fields-test");
+
+    expect(applyVisualTexCompletionTemplate(field, "nested", template, 6)).toBe(true);
+    expect(selectedMathfieldLatex(field)).toContain(String.raw`\frac{a}{b}`);
+    expect(advanceVisualTexNavigation(field, false)).toBe("placeholder");
+    expect(selectedMathfieldLatex(field)).toContain("a");
+    expect(advanceVisualTexNavigation(field, false)).toBe("placeholder");
+    expect(selectedMathfieldLatex(field)).toContain("b");
+    expect(advanceVisualTexNavigation(field, true)).toBe("placeholder");
+    expect(selectedMathfieldLatex(field)).toContain("a");
+    expect(advanceVisualTexNavigation(field, true)).toBe("placeholder");
+    expect(selectedMathfieldLatex(field)).toContain(String.raw`\frac{a}{b}`);
+
+    expect(field.insert("x", {
+      format: "latex",
+      insertionMode: "replaceSelection",
+      selectionMode: "after",
+      feedback: false,
+    })).toBe(true);
+    expect(advanceVisualTexNavigation(field, false)).toBe("final");
+    expect(visualTexMathfieldLatex(field)).toBe("x");
+    expectNoSnippetScaffolding(field);
+  });
+
+  test("keeps deep heterogeneous snippet layout free of placeholder atoms", () => {
+    const field = createMathfield("layout");
+    const template = mathLiveSnippetTemplate({
+      key: "layout",
+      mode: "tex-mode",
+      body: "\\frac{\\sqrt{${1:x}^{${2:n}}}}{\\begin{matrix}${3:a}&${4:b}\\\\${5:c}&${6:d}\\end{matrix}}+\\text{${7:t}}$0",
+    }, "heterogeneous-layout-test");
+
+    expect(applyVisualTexCompletionTemplate(field, "layout", template, 6)).toBe(true);
+    expectNoSnippetScaffolding(field);
+    expect(field.shadowRoot?.querySelector(".ML__prompt-atom")).toBeNull();
+    expect(visualTexMathfieldLatex(field)).toContain(String.raw`\frac{\sqrt{x^{n}}}`);
+    expect(visualTexMathfieldLatex(field)).toContain(String.raw`\begin{matrix}`);
+    expect(visualTexMathfieldLatex(field)).toContain(String.raw`\text{t}`);
+  });
+
+  test("supports deeply nested snippets without retaining layout-bearing UI nodes", () => {
+    const field = createMathfield("seed");
+    for (let depth = 0; depth < 8; depth++) {
+      const trigger = depth === 0 ? "seed" : "sqrt";
+      if (depth > 0) {
+        expect(field.insert(trigger, {
+          format: "latex",
+          insertionMode: "replaceSelection",
+          selectionMode: "after",
+          feedback: false,
+        })).toBe(true);
+      }
+      const template = mathLiveSnippetTemplate({
+        key: trigger,
+        mode: "tex-mode",
+        body: "\\sqrt{${1:x}}$0",
+      }, `deep-sqrt-${depth}`);
+      expect(applyVisualTexCompletionTemplate(field, trigger, template, trigger.length)).toBe(true);
+      expectNoSnippetScaffolding(field);
+    }
+
+    expect(field.insert("z", {
+      format: "latex",
+      insertionMode: "replaceSelection",
+      selectionMode: "after",
+      feedback: false,
+    })).toBe(true);
+    for (let depth = 0; depth < 8; depth++) {
+      expect(advanceVisualTexNavigation(field, false)).toBe("final");
+    }
+    expect(visualTexMathfieldLatex(field)).toBe(
+      `${String.raw`\sqrt{`.repeat(8)}z${"}".repeat(8)}`,
+    );
+    expectNoSnippetScaffolding(field);
+  });
+
+  test("retires logical tabstops when the caret leaves a snippet before Cmd-]", () => {
     const field = createMathfield("frac");
     field.addEventListener("move-out", (event: Event) => event.preventDefault());
     const template = mathLiveSnippetTemplate({
       key: "frac",
       mode: "tex-mode",
-      body: "\\frac{$1}{$2}$0",
+      body: "\\frac{${1:a}}{${2:b}}$0",
     }, "abandoned-frac-test");
     expect(applyVisualTexCompletionTemplate(field, "frac", template, 4)).toBe(true);
-    expect(field.getPrompts()).toHaveLength(2);
+    expectNoSnippetScaffolding(field);
 
     field.executeCommand("moveToMathfieldEnd");
     expect(field.position).toBe(field.lastOffset);
     expect(advanceVisualTexNavigation(field, false)).toBe("boundary");
-    expect(field.getPrompts()).toEqual([]);
-    expect(visualTexMathfieldLatex(field)).toBe("\\frac{}{}");
+    expectNoSnippetScaffolding(field);
+    expect(visualTexMathfieldLatex(field)).toBe("\\frac{a}{b}");
   });
 
   test("select all leaves snippet mode before selecting the formula", () => {
@@ -349,7 +518,7 @@ describe("LiveTeX custom macro writeback", () => {
       body: "\\frac{${1:a}}{${2:b}}$0",
     }, "select-all-frac-test");
     expect(applyVisualTexCompletionTemplate(field, "frac", template, 4)).toBe(true);
-    expect(field.getPrompts()).toHaveLength(2);
+    expectNoSnippetScaffolding(field);
 
     selectAllVisualTexMathfield(field);
 
@@ -358,12 +527,12 @@ describe("LiveTeX custom macro writeback", () => {
     expect(visualTexMathfieldLatex(field)).toBe("\\frac{a}{b}");
   });
 
-  test("undo after snippet completion never resurrects editor prompt atoms", () => {
+  test("undo after snippet completion never resurrects editor scaffolding", () => {
     const field = createMathfield("frac");
     const template = mathLiveSnippetTemplate({
       key: "frac",
       mode: "tex-mode",
-      body: "\\frac{$1}{$2}$0",
+      body: "\\frac{${1:a}}{${2:b}}$0",
     }, "undo-frac-test");
     expect(applyVisualTexCompletionTemplate(field, "frac", template, 4)).toBe(true);
     field.insert("x", {
@@ -383,15 +552,11 @@ describe("LiveTeX custom macro writeback", () => {
     expect(visualTexMathfieldLatex(field)).toBe("\\frac{x}{y}");
 
     expect(field.executeCommand("undo")).toBe(true);
-    expect(field.getPrompts()).toEqual([]);
-    expect(field.getValue("latex")).not.toContain("placeholder");
-    expect(field.getValue("latex")).not.toContain("noemaMathCaretBoundary");
-    expect(visualTexMathfieldLatex(field)).toBe("\\frac{x}{}");
+    expectNoSnippetScaffolding(field);
+    expect(visualTexMathfieldLatex(field)).toBe("\\frac{x}{b}");
 
     expect(field.executeCommand("redo")).toBe(true);
-    expect(field.getPrompts()).toEqual([]);
-    expect(field.getValue("latex")).not.toContain("placeholder");
-    expect(field.getValue("latex")).not.toContain("noemaMathCaretBoundary");
+    expectNoSnippetScaffolding(field);
     expect(visualTexMathfieldLatex(field)).toBe("\\frac{x}{y}");
 
     expect(field.executeCommand("undo")).toBe(true);
@@ -401,20 +566,20 @@ describe("LiveTeX custom macro writeback", () => {
       selectionMode: "after",
       feedback: false,
     })).toBe(true);
-    expect(visualTexMathfieldLatex(field)).toBe("\\frac{x}{z}");
+    expect(visualTexMathfieldLatex(field)).toBe("\\frac{x}{bz}");
   });
 
-  test("keeps the real Noema text snippet to one prompt and an invisible $0", () => {
+  test("keeps the real Noema text snippet editable with an invisible $0", () => {
     const field = createMathfield("text");
     field.addEventListener("move-out", (event: Event) => event.preventDefault());
     const template = mathLiveSnippetTemplate({
       key: "text",
       mode: "tex-mode",
-      body: "\\text{$1}$0",
+      body: "\\text{${1:a}}$0",
     }, "text-test");
 
     expect(applyVisualTexCompletionTemplate(field, "text", template, 4)).toBe(true);
-    expect(field.getPrompts()).toEqual(["text-test-t1-o0"]);
+    expectNoSnippetScaffolding(field);
     field.insert("addsdd", {
       format: "latex",
       insertionMode: "replaceSelection",
@@ -424,7 +589,7 @@ describe("LiveTeX custom macro writeback", () => {
     expect(visualTexMathfieldLatex(field)).toBe(String.raw`\text{addsdd}`);
 
     expect(advanceVisualTexNavigation(field, false)).toBe("final");
-    expect(field.getPrompts()).toEqual([]);
+    expectNoSnippetScaffolding(field);
     expect(field.position).toBe(field.lastOffset);
     expect(visualTexMathfieldLatex(field)).toBe(String.raw`\text{addsdd}`);
   });
@@ -434,7 +599,7 @@ describe("LiveTeX custom macro writeback", () => {
     const template = mathLiveSnippetTemplate({
       key: "text",
       mode: "tex-mode",
-      body: "\\text{$1}$0",
+      body: "\\text{${1:a}}$0",
     }, "text-undo-test");
     expect(applyVisualTexCompletionTemplate(field, "text", template, 4)).toBe(true);
     field.insert("abc", {
@@ -446,15 +611,11 @@ describe("LiveTeX custom macro writeback", () => {
     expect(advanceVisualTexNavigation(field, false)).toBe("final");
 
     expect(field.executeCommand("undo")).toBe(true);
-    expect(field.getPrompts()).toEqual([]);
-    expect(field.getValue("latex")).not.toContain("noemaMathCaretBoundary");
-    // MathLive canonicalizes an empty text run away, which is preferable to
-    // retaining an uneditable empty command or a visible prompt box.
-    expect(visualTexMathfieldLatex(field)).toBe("");
+    expectNoSnippetScaffolding(field);
+    expect(visualTexMathfieldLatex(field)).toBe(String.raw`\text{a}`);
 
     expect(field.executeCommand("redo")).toBe(true);
-    expect(field.getPrompts()).toEqual([]);
-    expect(field.getValue("latex")).not.toContain("noemaMathCaretBoundary");
+    expectNoSnippetScaffolding(field);
     expect(visualTexMathfieldLatex(field)).toBe(String.raw`\text{abc}`);
   });
 
@@ -972,22 +1133,22 @@ describe("LiveTeX host key normalization", () => {
   });
 });
 
-describe("LiveTeX prompt geometry", () => {
-  test("moves the whole MathLive box so prompt frames stay aligned", () => {
+describe("LiveTeX inline geometry", () => {
+  test("moves the whole MathLive box while keeping its lower origin stable", () => {
     const insets = visualTexMathBottomLeftInsets(
       { top: 149, bottom: 330 },
       { top: 62, bottom: 330 },
     );
     expect(insets).toEqual({ top: 89, bottom: 2 });
 
-    // Padding the shell shifts the field and every overlay together, so their
+    // Padding the shell shifts the field and every descendant together, so their
     // relative overflow remains unchanged and the measurement is stable.
     expect(visualTexMathBottomLeftInsets(
       { top: 238, bottom: 419 },
       { top: 151, bottom: 419 },
     )).toEqual(insets);
 
-    // Prompt overlays are not allowed to move the lower origin. Even a bad
+    // Descendant bounds are not allowed to move the lower origin. Even a bad
     // descendant bound below MathLive's natural TeX depth grows upward rather
     // than shifting the field and every already-rendered frame.
     expect(visualTexMathBottomLeftInsets(
@@ -1004,6 +1165,18 @@ function createMathfield(latex: string): InstanceType<typeof MathfieldElement> {
   initializeNoemaMathfield(field, latex, {});
   field.position = field.lastOffset;
   return field;
+}
+
+function selectedMathfieldLatex(field: InstanceType<typeof MathfieldElement>): string {
+  const [from, to] = field.selection.ranges[0] ?? [field.position, field.position];
+  return field.getValue(Math.min(from, to), Math.max(from, to), "latex-expanded");
+}
+
+function expectNoSnippetScaffolding(field: InstanceType<typeof MathfieldElement>): void {
+  const latex = field.getValue("latex");
+  expect(field.getPrompts()).toEqual([]);
+  expect(latex).not.toContain("placeholder");
+  expect(latex).not.toContain("noemaMathSnippet");
 }
 
 function patchHappyDomMathfieldHostSelector(field: InstanceType<typeof MathfieldElement>): void {

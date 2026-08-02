@@ -4,5 +4,4 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/inlineexp_InlineExp
 # --
-# --
-\\($1\\)$0
+\\(${1:a}\\)$0

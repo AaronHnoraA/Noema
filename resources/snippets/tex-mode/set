@@ -4,4 +4,4 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/set_Set
 # --
-\{ $1 \}$2
+\{ ${1:a} \}$0

@@ -4,4 +4,4 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/bf_Bold_Face
 # --
-\mathbf{$1}
+\mathbf{${1:a}}$0

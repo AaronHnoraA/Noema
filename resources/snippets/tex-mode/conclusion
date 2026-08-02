@@ -4,8 +4,7 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/conclusion_Conclusion
 # --
-# --
 \begin{conclusion}
-	$1
+	${1:a}
 \end{conclusion}
 $0

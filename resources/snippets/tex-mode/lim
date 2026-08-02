@@ -4,4 +4,4 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/lim_Limit
 # --
-\lim_{ $1 \to $2 } $3
+\lim_{ ${1:a} \to ${2:b} } $0

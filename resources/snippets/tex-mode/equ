@@ -4,7 +4,6 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/equ_Equ
 # --
-# --
 \begin{equation*}
-	$1
-\end{equation*}
+	${1:a}
+\end{equation*}$0
