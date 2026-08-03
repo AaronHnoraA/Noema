@@ -359,6 +359,7 @@ button.is-danger { border-color: var(--aaron-danger) !important; color: var(--aa
 .noema-wiki-git-dialog::backdrop { background: color-mix(in srgb, #07101e, transparent 25%); }
 .noema-wiki-git-dialog header { height: 48px; padding: 0 14px; border-bottom: 1px solid var(--aaron-paper-line); }
 .noema-wiki-git-dialog header small { margin-left: auto; color: var(--aaron-muted); font: 10px/1.4 var(--aaron-font-mono, monospace); }
+.noema-wiki-git-dialog header [data-git-browser] { min-width: auto; padding: 0 10px; font-size: 11px; }
 .noema-wiki-git-dialog iframe { width: 100%; height: calc(100% - 48px); border: 0; background: #fff; }
 
 @media (max-width: 1439px) {

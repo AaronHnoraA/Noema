@@ -170,6 +170,14 @@ describe("Wiki Git synchronization", () => {
     expect(response.status).toBe(200);
     expect(response.text).toContain("ungit");
 
+    const socketUrl = new URL(result.url);
+    socketUrl.hash = "";
+    socketUrl.search = `?EIO=4&transport=polling&t=${Date.now()}`;
+    socketUrl.pathname = `${socketUrl.pathname}socket.io/`;
+    const handshake = await httpText(socketUrl.toString());
+    expect(handshake.status).toBe(200);
+    expect(handshake.text).toMatch(/^0\{"sid":/);
+
     const statusUrl = new URL(result.url);
     statusUrl.hash = "";
     statusUrl.search = `?path=${encodeURIComponent(item.repositoryPath)}`;

@@ -215,7 +215,7 @@ root.innerHTML = `
     </section>
   </dialog>
   <dialog class="noema-wiki-git-dialog" data-git-dialog>
-    <header><strong>Advanced Git · ungit</strong><small data-git-status>Starting visual repository…</small><button type="button" data-git-close aria-label="Close">×</button></header>
+    <header><strong>Advanced Git · ungit</strong><small data-git-status>Starting visual repository…</small><button type="button" data-git-reload aria-label="Reload Advanced Git">↻</button><button type="button" data-git-browser>Open in browser</button><button type="button" data-git-close aria-label="Close">×</button></header>
     <iframe title="Advanced Git" data-git-frame></iframe>
   </dialog>
 `;
@@ -240,6 +240,7 @@ const conflictMessage = root.querySelector<HTMLElement>("[data-conflict-message]
 const gitDialog = root.querySelector<HTMLDialogElement>("[data-git-dialog]")!;
 const gitFrame = root.querySelector<HTMLIFrameElement>("[data-git-frame]")!;
 const gitStatus = root.querySelector<HTMLElement>("[data-git-status]")!;
+let gitUrl = "";
 let index: WikiIndex | null = null;
 let activeView = "home";
 let activeGraph: WorkspaceGraph | null = null;
@@ -1053,6 +1054,7 @@ async function repositoryCard(repository: WikiRepository): Promise<HTMLElement> 
     try {
       const result = await api.wiki.gitUi(repository.id);
       if (!result.url) throw new Error("ungit did not return an embedded URL");
+      gitUrl = result.url;
       gitStatus.textContent = `Loading ${repository.id}…`;
       gitFrame.src = result.url;
       gitDialog.showModal();
@@ -1629,6 +1631,17 @@ root.querySelector("[data-conflict-abort]")?.addEventListener("click", () => {
   });
 });
 root.querySelector("[data-git-close]")?.addEventListener("click", () => gitDialog.close());
+root.querySelector("[data-git-reload]")?.addEventListener("click", () => {
+  if (!gitUrl) return;
+  gitStatus.textContent = "Reconnecting visual repository…";
+  gitFrame.src = "about:blank";
+  requestAnimationFrame(() => { gitFrame.src = gitUrl; });
+});
+root.querySelector("[data-git-browser]")?.addEventListener("click", () => {
+  if (!gitUrl) return;
+  if (window.noemaDesktop) void window.noemaDesktop.openExternal(gitUrl);
+  else window.open(gitUrl, "_blank", "noopener,noreferrer");
+});
 gitFrame.addEventListener("load", () => {
   if (gitFrame.src !== "about:blank") gitStatus.textContent = "Visual repository ready";
 });

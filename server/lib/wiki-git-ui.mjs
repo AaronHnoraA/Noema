@@ -27,20 +27,37 @@ function availablePort() {
   });
 }
 
-async function waitUntilReady(url, child) {
+function requestText(url, timeoutMs = 700) {
+  return new Promise((resolve, reject) => {
+    const request = get(url, (response) => {
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => { body = `${body}${chunk}`.slice(0, 4096); });
+      response.on("end", () => resolve({ status: response.statusCode || 0, body }));
+    });
+    request.once("error", reject);
+    request.setTimeout(timeoutMs, () => request.destroy(new Error("probe timeout")));
+  });
+}
+
+async function probeUngit(baseUrl, child, { socket = false } = {}) {
+  if (child.exitCode !== null) throw new Error("ungit process exited");
+  const ping = await requestText(`${baseUrl}/api/ping`);
+  if (ping.status !== 200) throw new Error(`ungit ping returned HTTP ${ping.status}`);
+  if (!socket) return;
+  const handshake = await requestText(`${baseUrl}/socket.io/?EIO=4&transport=polling&t=${Date.now()}`);
+  if (handshake.status !== 200 || !handshake.body.startsWith("0{")) {
+    throw new Error(`ungit realtime channel returned HTTP ${handshake.status}`);
+  }
+}
+
+async function waitUntilReady(baseUrl, child) {
   const deadline = Date.now() + 12_000;
   while (Date.now() < deadline) {
     if (child.exitCode !== null) throw new Error("ungit exited before its embedded interface was ready");
     try {
-      const status = await new Promise((resolve, reject) => {
-        const request = get(url, (response) => {
-          response.resume();
-          resolve(response.statusCode || 0);
-        });
-        request.once("error", reject);
-        request.setTimeout(500, () => request.destroy(new Error("probe timeout")));
-      });
-      if (status >= 200 && status < 500) return;
+      await probeUngit(baseUrl, child, { socket: true });
+      return;
     } catch {}
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
@@ -51,7 +68,13 @@ export async function openWikiGitUi(root, repositoryId) {
   const repository = await repositoryFromId(root, repositoryId);
   const previous = sessions.get(repository.id);
   if (previous?.child?.exitCode === null) {
-    return { ok: true, type: "wiki-git-ui", repositoryId: repository.id, url: previous.url };
+    try {
+      await probeUngit(previous.baseUrl, previous.child);
+      return { ok: true, type: "wiki-git-ui", repositoryId: repository.id, url: previous.url };
+    } catch {
+      previous.child.kill("SIGTERM");
+      sessions.delete(repository.id);
+    }
   }
 
   const port = await availablePort();
@@ -84,13 +107,13 @@ export async function openWikiGitUi(root, repositoryId) {
   child.stderr?.on("data", (chunk) => {
     errorOutput = `${errorOutput}${chunk}`.slice(-4000);
   });
-  const session = { child, url, repositoryId: repository.id };
+  const session = { child, url, baseUrl, repositoryId: repository.id };
   sessions.set(repository.id, session);
   child.once("exit", () => {
     if (sessions.get(repository.id) === session) sessions.delete(repository.id);
   });
   try {
-    await waitUntilReady(`${baseUrl}/`, child);
+    await waitUntilReady(baseUrl, child);
   } catch (error) {
     child.kill("SIGTERM");
     sessions.delete(repository.id);
