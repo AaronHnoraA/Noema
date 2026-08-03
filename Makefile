@@ -93,7 +93,7 @@ help:
 	@echo "  make bootstrap     Reproducibly install dependencies with npm ci"
 	@echo "  make nvm-install   Install/use pinned Node and npm through nvm"
 	@echo "  make init-data     Create the Noema notes directory"
-	@echo "  make install       Link /Applications/Noema.app to the existing local build"
+	@echo "  make install       Install the local App shell with linked runtime dependencies"
 	@echo "  make run           Build and launch the local app bundle"
 	@echo "  make build-web     Build only the web assets"
 	@echo "  make dev           Run the Vite development server"

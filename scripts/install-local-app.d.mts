@@ -1,1 +1,1 @@
-export function installLinkedApp(sourcePath: string, destinationPath: string): Promise<void>;
+export function installLocalApp(sourcePath: string, destinationPath: string): Promise<void>;

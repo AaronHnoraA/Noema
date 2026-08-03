@@ -1,4 +1,4 @@
-import { lstat, mkdir, mkdtemp, readlink, realpath, rename, rm, stat, symlink } from "node:fs/promises";
+import { cp, lstat, mkdir, mkdtemp, rename, rm, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -20,29 +20,12 @@ async function validateApp(bundle) {
   }
 }
 
-async function alreadyLinked(destination, source) {
-  try {
-    const info = await lstat(destination);
-    if (!info.isSymbolicLink()) return false;
-    const target = resolve(dirname(destination), await readlink(destination));
-    return await realpath(target) === await realpath(source);
-  } catch (error) {
-    if (error?.code === "ENOENT") return false;
-    throw error;
-  }
-}
-
-export async function installLinkedApp(sourcePath, destinationPath) {
+export async function installLocalApp(sourcePath, destinationPath) {
   const source = resolve(sourcePath);
   const destination = resolve(destinationPath);
   if (source === destination) throw new Error("Source and destination app paths must differ");
   await validateApp(source);
   await mkdir(dirname(destination), { recursive: true });
-
-  if (await alreadyLinked(destination, source)) {
-    console.log(`[noema-install] already linked ${destination} -> ${source}`);
-    return;
-  }
 
   const transaction = await mkdtemp(join(dirname(destination), `.${basename(destination)}.install-`));
   const pending = join(transaction, basename(destination));
@@ -50,7 +33,12 @@ export async function installLinkedApp(sourcePath, destinationPath) {
   let movedPrevious = false;
   let installed = false;
   try {
-    await symlink(source, pending, process.platform === "win32" ? "junction" : "dir");
+    await cp(source, pending, {
+      recursive: true,
+      force: false,
+      preserveTimestamps: true,
+      verbatimSymlinks: true,
+    });
     await validateApp(pending);
     if (await pathExists(destination)) {
       await rename(destination, previous);
@@ -70,7 +58,9 @@ export async function installLinkedApp(sourcePath, destinationPath) {
     }
     await rm(transaction, { recursive: true, force: true });
   }
-  console.log(`[noema-install] linked ${destination} -> ${source}`);
+  const runtime = await lstat(join(destination, "Contents", "Resources", "node_modules"));
+  const detail = runtime.isSymbolicLink() ? "; runtime dependencies remain linked" : "";
+  console.log(`[noema-install] installed ${destination} from ${source}${detail}`);
 }
 
 const invokedAsScript = process.argv[1]
@@ -80,5 +70,5 @@ if (invokedAsScript) {
   if (!source || !destination) {
     throw new Error("Usage: node scripts/install-local-app.mjs SOURCE_APP DESTINATION_APP");
   }
-  await installLinkedApp(source, destination);
+  await installLocalApp(source, destination);
 }

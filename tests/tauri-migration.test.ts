@@ -1,11 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
-import { lstat, mkdir, mkdtemp, readlink, realpath, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readlink, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
-import { installLinkedApp } from "../scripts/install-local-app.mjs";
+import { installLocalApp } from "../scripts/install-local-app.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const readJson = (path: string) => JSON.parse(readFileSync(resolve(root, path), "utf8"));
@@ -79,7 +79,7 @@ describe("Tauri desktop migration", () => {
     expect(makefile).toContain("scripts/install-local-app.mjs");
   });
 
-  test("replaces an installed copy with an idempotent local app link", async () => {
+  test("transactionally installs a local app shell while preserving its dependency link", async () => {
     const suite = await mkdtemp(join(tmpdir(), "noema-linked-install-"));
     const source = join(suite, "build", "Noema.app");
     const destination = join(suite, "Applications", "Noema.app");
@@ -87,16 +87,22 @@ describe("Tauri desktop migration", () => {
       await mkdir(join(source, "Contents", "MacOS"), { recursive: true });
       await writeFile(join(source, "Contents", "Info.plist"), "plist");
       await writeFile(join(source, "Contents", "MacOS", "Noema"), "binary");
+      const modules = join(suite, "node_modules");
+      await mkdir(modules);
+      await mkdir(join(source, "Contents", "Resources"), { recursive: true });
+      await symlink(modules, join(source, "Contents", "Resources", "node_modules"), "dir");
       await mkdir(destination, { recursive: true });
       await writeFile(join(destination, "old-copy"), "old");
 
-      await installLinkedApp(source, destination);
-      expect((await lstat(destination)).isSymbolicLink()).toBe(true);
-      expect(await realpath(resolve(dirname(destination), await readlink(destination)))).toBe(await realpath(source));
+      await installLocalApp(source, destination);
+      expect((await lstat(destination)).isDirectory()).toBe(true);
+      const installedModules = join(destination, "Contents", "Resources", "node_modules");
+      expect((await lstat(installedModules)).isSymbolicLink()).toBe(true);
+      expect(await realpath(resolve(dirname(installedModules), await readlink(installedModules)))).toBe(await realpath(modules));
       expect(existsSync(join(destination, "old-copy"))).toBe(false);
 
-      await installLinkedApp(source, destination);
-      expect((await lstat(destination)).isSymbolicLink()).toBe(true);
+      await installLocalApp(source, destination);
+      expect((await lstat(destination)).isDirectory()).toBe(true);
     } finally {
       await rm(suite, { recursive: true, force: true });
     }
