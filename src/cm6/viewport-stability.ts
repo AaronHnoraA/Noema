@@ -211,15 +211,26 @@ export class EditorViewportStabilizer {
     this.scheduleBaselineCapture();
   }
 
-  update(transactions: readonly Transaction[]): void {
+  /**
+   * Repair the outer viewport after CM6 has atomically applied transactions.
+   *
+   * This must never run before EditorView.update(). Geometry reads can be
+   * re-entrant in WebKit/xwidget (for example, they may flush a pending focus
+   * transaction). If that advances the view first, CM6 correctly rejects the
+   * original transaction as starting from an older EditorState.
+   */
+  afterUpdate(transactions: readonly Transaction[]): void {
     const forced = this.forcedSnapshot;
     const automatic = !forced
       && transactions.some(transactionMayRelayout)
       && !transactions.some(transactionMovesViewport);
-    const snapshot = forced ?? (automatic ? this.capture() : null);
+    // Explicit preserve() calls own a fresh pre-update snapshot. Automatic
+    // stabilization uses the last asynchronously captured baseline so this
+    // post-update hook never has to read layout before applying a transaction.
+    const snapshot = forced ?? (automatic && this.stableSnapshot
+      ? { ...this.stableSnapshot }
+      : null);
     if (snapshot) this.mapSnapshot(snapshot, transactions);
-
-    this.view.update(transactions);
 
     if (forced) return;
     if (snapshot) this.scheduleRestore(snapshot);

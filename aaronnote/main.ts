@@ -841,6 +841,7 @@ let languageToolRevision = "";
 let languageToolLoadSequence = 0;
 let activeProseDiagnostic: ProseDiagnostic | null = null;
 let cursorPositionsLoaded = false;
+let cursorPositionsLoadPromise: Promise<CursorPosition[]> | null = null;
 let cursorPositions: CursorPosition[] = [];
 let lastSavedCursorPositionKey = "";
 let lastTrackedCursorPositionKey = "";
@@ -3927,14 +3928,24 @@ function rememberCursorPosition(position: CursorPosition, positions?: CursorPosi
 
 async function loadCursorPositions(): Promise<CursorPosition[]> {
   if (cursorPositionsLoaded) return cursorPositions;
-  cursorPositionsLoaded = true;
+  if (cursorPositionsLoadPromise) return cursorPositionsLoadPromise;
+  const loading = (async (): Promise<CursorPosition[]> => {
+    try {
+      const result = await api.session.getPositions();
+      cursorPositions = Array.isArray(result.positions) ? result.positions : [];
+    } catch {
+      cursorPositions = [];
+    } finally {
+      cursorPositionsLoaded = true;
+    }
+    return cursorPositions;
+  })();
+  cursorPositionsLoadPromise = loading;
   try {
-    const result = await api.session.getPositions();
-    cursorPositions = Array.isArray(result.positions) ? result.positions : [];
-  } catch {
-    cursorPositions = [];
+    return await loading;
+  } finally {
+    if (cursorPositionsLoadPromise === loading) cursorPositionsLoadPromise = null;
   }
-  return cursorPositions;
 }
 
 function rememberedCursorPosition(file: string, positions = cursorPositions): CursorPosition | undefined {

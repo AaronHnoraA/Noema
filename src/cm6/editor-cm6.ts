@@ -466,8 +466,11 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
     state: createState(initialDoc),
     parent: editorHost,
     dispatchTransactions: (transactions, transactionView) => {
-      if (viewportStabilizer) viewportStabilizer.update(transactions);
-      else transactionView.update(transactions);
+      // A transaction must be applied before any viewport/layout work. In an
+      // xwidget, reading layout may synchronously deliver a focus/DOM update;
+      // doing that first advances EditorState and makes this transaction stale.
+      transactionView.update(transactions);
+      viewportStabilizer?.afterUpdate(transactions);
     },
   });
   viewportStabilizer = new EditorViewportStabilizer(view, host);

@@ -148,6 +148,44 @@ describe("editor api source preservation", () => {
     }
   });
 
+  test("applies a selection transaction before re-entrant viewport work", async () => {
+    const mount = document.createElement("div");
+    document.body.appendChild(mount);
+    const editor = createEditor(mount, { initialContent: "Alpha beta gamma" });
+    // Let the stabilizer capture its normal pre-update baseline, then emulate
+    // WebKit flushing a harmless state update while scroll geometry is used.
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
+    let scrollTop = mount.scrollTop;
+    let reentered = false;
+    Object.defineProperty(mount, "scrollTop", {
+      configurable: true,
+      get() {
+        if (!reentered) {
+          reentered = true;
+          editor.view.dispatch({});
+        }
+        return scrollTop;
+      },
+      set(value: number) {
+        scrollTop = value;
+        if (!reentered) {
+          reentered = true;
+          editor.view.dispatch({});
+        }
+      },
+    });
+    try {
+      expect(() => editor.setMarkdownSelection(6, 10, { scrollIntoView: false })).not.toThrow();
+      expect(editor.getMarkdownSelection()).toEqual({ from: 6, to: 10 });
+      expect(reentered).toBe(true);
+    } finally {
+      editor.destroy();
+      mount.remove();
+    }
+  });
+
   test("reports markdown selection offsets in preview and source mode", () => {
     const source = "Alpha beta move";
     const mount = document.createElement("div");
