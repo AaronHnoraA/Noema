@@ -8,6 +8,7 @@ import { repositoryFromId } from "./wiki-workspace.mjs";
 
 const require = createRequire(import.meta.url);
 const ungitBin = require.resolve("ungit/bin/ungit");
+const ungitSupervisor = require.resolve("./ungit-supervisor.mjs");
 const sessions = new Map();
 
 function encodeUngitPath(path) {
@@ -82,6 +83,7 @@ export async function openWikiGitUi(root, repositoryId) {
   const baseUrl = `http://127.0.0.1:${port}${capabilityPath}`;
   const url = `${baseUrl}/?noheader=true#/repository?path=${encodeUngitPath(repository.path)}`;
   const child = spawn(process.execPath, [
+    ungitSupervisor,
     ungitBin,
     "--cliconfigonly",
     "--no-launchBrowser",
@@ -101,8 +103,9 @@ export async function openWikiGitUi(root, repositoryId) {
   ], {
     cwd: repository.path,
     env: { ...process.env, NO_UPDATE_NOTIFIER: "1" },
-    stdio: ["ignore", "ignore", "pipe"],
+    stdio: ["pipe", "ignore", "pipe"],
   });
+  child.stdin?.on("error", () => {});
   let errorOutput = "";
   child.stderr?.on("data", (chunk) => {
     errorOutput = `${errorOutput}${chunk}`.slice(-4000);

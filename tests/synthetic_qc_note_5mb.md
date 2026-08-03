@@ -128,7 +128,7 @@ such that
 #+end define
 
 #+begin note Positivity and Hermitian structure
-In finite-dimensional quantum theory, positivity already implies
+In finite-dimensional quantum theory, positivity already implies tshi this this this \(asdas^{asdasd} sad+sada\)Is my fa 
 self-adjointness. However, listing Hermitian symmetry explicitly is often
 pedagogically useful because it reminds us that observables and density
 operators belong to the real vector space of Hermitian operators.
