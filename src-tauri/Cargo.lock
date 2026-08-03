@@ -2212,6 +2212,8 @@ dependencies = [
  "base64 0.22.1",
  "dirs",
  "mime_guess",
+ "objc2",
+ "objc2-foundation",
  "open",
  "png 0.18.1",
  "rfd",

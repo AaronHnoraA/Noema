@@ -25,6 +25,19 @@ use tauri_plugin_shell::{
 };
 use url::Url;
 
+#[cfg(target_os = "macos")]
+use objc2::{
+    runtime::{AnyClass, AnyObject, Imp, Sel},
+    sel,
+};
+#[cfg(target_os = "macos")]
+use objc2_foundation::{NSArray, NSURL};
+#[cfg(target_os = "macos")]
+use std::{ffi::CStr, panic::AssertUnwindSafe, sync::OnceLock};
+
+#[cfg(target_os = "macos")]
+static MACOS_OPEN_APP: OnceLock<tauri::AppHandle> = OnceLock::new();
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WindowState {
@@ -831,6 +844,65 @@ fn handle_opened_files(app: &tauri::AppHandle, paths: Vec<PathBuf>) {
             eprintln!("[noema-tauri] system open failed: {error}");
         }
     }
+}
+
+/// Tao 0.35.3 unwraps `NSURL.absoluteString` inside an Objective-C callback.
+/// macOS 26 can supply a transient document URL for which that value is nil,
+/// turning a recoverable open event into an abort at the FFI boundary. Replace
+/// only that delegate method and consume file paths without an unwrap.
+#[cfg(target_os = "macos")]
+unsafe extern "C-unwind" fn noema_application_open_urls(
+    _: &AnyObject,
+    _: Sel,
+    _: &AnyObject,
+    urls: &NSArray<NSURL>,
+) {
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        let mut paths = Vec::new();
+        let mut seen = HashSet::new();
+        for index in 0..urls.count() {
+            let url = urls.objectAtIndex(index);
+            let path = url
+                .path()
+                .map(|value| PathBuf::from(value.to_string()))
+                .or_else(|| {
+                    url.absoluteString()
+                        .and_then(|value| Url::parse(&value.to_string()).ok())
+                        .and_then(|value| value.to_file_path().ok())
+                });
+            if let Some(path) = path.filter(|path| markdown_path(&path.to_string_lossy())) {
+                if seen.insert(path.clone()) {
+                    paths.push(path);
+                }
+            }
+        }
+        if let Some(app) = MACOS_OPEN_APP.get() {
+            handle_opened_files(app, paths);
+        }
+    }));
+    if result.is_err() {
+        eprintln!("[noema-tauri] ignored a malformed macOS open-file event");
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn install_macos_open_handler(app: &tauri::AppHandle) -> Result<(), String> {
+    let _ = MACOS_OPEN_APP.set(app.clone());
+    let class_name = CStr::from_bytes_with_nul(b"TaoAppDelegateParent\0").map_err(io_error)?;
+    let class = AnyClass::get(class_name).ok_or("Tao app delegate class is unavailable")?;
+    let method = class
+        .instance_method(sel!(application:openURLs:))
+        .ok_or("Tao open-URLs method is unavailable")?;
+    let implementation: Imp = unsafe {
+        std::mem::transmute(
+            noema_application_open_urls
+                as unsafe extern "C-unwind" fn(&AnyObject, Sel, &AnyObject, &NSArray<NSURL>),
+        )
+    };
+    unsafe {
+        method.set_implementation(implementation);
+    }
+    Ok(())
 }
 
 fn restore_windows(app: &tauri::AppHandle) -> Result<(), String> {
@@ -2045,6 +2117,10 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("failed to build Noema Tauri host");
+
+    #[cfg(target_os = "macos")]
+    install_macos_open_handler(app.handle())
+        .expect("failed to install safe macOS file-open handler");
 
     app.run(|handle, event| match event {
         #[cfg(target_os = "macos")]

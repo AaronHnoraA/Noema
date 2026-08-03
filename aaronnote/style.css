@@ -323,7 +323,7 @@ body[data-desktop-platform="win32"] .noema-desktop-titlebar {
 body[data-host-mode="desktop"] .aaronnote-focused-shell {
   height: calc(100vh - 54px);
   margin-top: 54px;
-  --noema-floating-panel-top: 66px;
+  --noema-floating-panel-top: 112px;
 }
 
 body[data-host-mode="server"] .aaronnote-focused-shell {
@@ -331,7 +331,7 @@ body[data-host-mode="server"] .aaronnote-focused-shell {
   margin-top: 56px;
 }
 
-body[data-host-mode="desktop"] { --noema-floating-panel-top: 66px; }
+body[data-host-mode="desktop"] { --noema-floating-panel-top: 112px; }
 body[data-host-mode="server"] { --noema-floating-panel-top: 68px; }
 
 body[data-host-mode="desktop"] :is(.aaronnote-tools-panel, .aaronnote-jupyter-panel, .aaronnote-floating-toc, .aaronnote-local-graph-panel, .aaronnote-find-panel),
@@ -2009,6 +2009,7 @@ body[data-host-mode="server"][data-server-reader-editing-aids="false"] :is(
   color: var(--aaron-red-dark);
   font-size: 12px;
 }
+
 
 .aaronnote-tools-list {
   max-height: calc(min(620px, 100vh - 56px) - 38px);
@@ -4008,6 +4009,7 @@ body[data-host-mode="server"][data-server-reader-editing-aids="false"] :is(
   padding: 6px;
   scrollbar-gutter: stable;
 }
+
 
 .aaronnote-toc-resize-handle {
   position: absolute;

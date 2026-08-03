@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import zhRendererSource from "../plugins/noema-zh-cn/renderer.js?raw";
 import zhDictionary from "../plugins/noema-zh-cn/zh-CN.json";
 
@@ -30,6 +31,9 @@ if (tauriRuntime && !window.noemaDesktop) {
     },
     closeWindow() {
       return invoke("close_window");
+    },
+    startWindowDrag() {
+      return getCurrentWindow().startDragging();
     },
     openTarget(target = {}) {
       return invoke<boolean>("open_target", { target });
@@ -111,6 +115,15 @@ if (tauriRuntime && !window.noemaDesktop) {
 
   void listen("noema:app-config-changed", (event) => {
     window.dispatchEvent(new CustomEvent("aaronnote:command", { detail: event.payload }));
+  });
+
+  document.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    const target = event.target as HTMLElement;
+    const dragRegion = target.closest<HTMLElement>("[data-tauri-drag-region]");
+    if (!dragRegion || target.closest("button, input, select, textarea, a, [role='button']")) return;
+    event.preventDefault();
+    void window.noemaDesktop?.startWindowDrag();
   });
 
   void window.noemaDesktop.listPlugins().then((plugins) => {
