@@ -186,7 +186,12 @@ export function createZoomController(options: ZoomControllerOptions): ZoomContro
   function shouldHandleVisualZoomTarget(target: EventTarget | null): boolean {
     if (!editorSurfaceVisible()) return false;
     const element = target instanceof Element ? target : target instanceof Node ? target.parentElement : null;
-    return !element?.closest(".aaronnote-local-graph-panel, .aaronnote-modal");
+    return !element?.closest([
+      ".aaronnote-local-graph-panel",
+      ".aaronnote-modal",
+      ".cm-diagram-interactive",
+      "[data-noema-gesture-scope='diagram']",
+    ].join(", "));
   }
 
   function handleVisualZoomWheel(event: WheelEvent): void {

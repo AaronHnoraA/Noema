@@ -68,4 +68,40 @@ describe("zoom feature controller", () => {
     document.dispatchEvent(wheel());
     expect(document.documentElement.style.getPropertyValue("--aaronnote-visual-zoom")).toBe("");
   });
+
+  test("yields wheel and native pinch gestures to interactive diagrams", () => {
+    const { controller } = setup();
+    const diagram = document.createElement("div");
+    diagram.className = "cm-diagram-interactive";
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    diagram.append(svg);
+    document.body.append(diagram);
+    const diagramWheel = vi.fn((event: Event) => event.preventDefault());
+    const diagramGesture = vi.fn((event: Event) => event.preventDefault());
+    diagram.addEventListener("wheel", diagramWheel);
+    diagram.addEventListener("gesturestart", diagramGesture);
+    diagram.addEventListener("gesturechange", diagramGesture);
+
+    const wheel = new Event("wheel", { bubbles: true, cancelable: true }) as WheelEvent;
+    Object.defineProperties(wheel, {
+      ctrlKey: { value: true },
+      metaKey: { value: false },
+      deltaY: { value: -100 },
+      deltaMode: { value: 0 },
+      clientX: { value: 20 },
+      clientY: { value: 20 },
+    });
+    svg.dispatchEvent(wheel);
+
+    const gestureStart = new Event("gesturestart", { bubbles: true, cancelable: true });
+    const gestureChange = new Event("gesturechange", { bubbles: true, cancelable: true });
+    Object.defineProperty(gestureChange, "scale", { value: 1.4 });
+    svg.dispatchEvent(gestureStart);
+    svg.dispatchEvent(gestureChange);
+
+    expect(diagramWheel).toHaveBeenCalledOnce();
+    expect(diagramGesture).toHaveBeenCalledTimes(2);
+    expect(document.documentElement.style.getPropertyValue("--aaronnote-visual-zoom")).toBe("");
+    controller.destroy();
+  });
 });

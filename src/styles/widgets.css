@@ -2039,6 +2039,10 @@
 .cm-editor .cm-diagram-interactive.is-long-pressing {
   cursor: progress;
 }
+.cm-editor .cm-diagram-interactive:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--aaron-accent, #9de7ff), transparent 18%);
+  outline-offset: 2px;
+}
 .cm-editor .cm-diagram-toolbar {
   position: absolute;
   z-index: 3;
@@ -2196,13 +2200,38 @@
 body.has-diagram-fullscreen {
   overflow: hidden !important;
 }
+.cm-diagram-fullscreen-portal {
+  position: fixed !important;
+  z-index: 2147482999 !important;
+  inset: 0 !important;
+  display: block !important;
+  width: 100vw !important;
+  width: 100dvw !important;
+  max-width: none !important;
+  height: 100vh !important;
+  height: 100dvh !important;
+  max-height: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  overscroll-behavior: none;
+  touch-action: none;
+  background: var(--aaron-paper, #171b28);
+  isolation: isolate;
+}
+.cm-diagram-fullscreen-placeholder {
+  display: block;
+  visibility: hidden;
+  pointer-events: none;
+}
 .cm-editor .cm-diagram-interactive.is-diagram-fullscreen {
   position: fixed !important;
   z-index: 2147483000 !important;
   inset: 0 !important;
-  width: 100vw !important;
+  box-sizing: border-box !important;
+  width: 100% !important;
   max-width: none !important;
-  height: 100vh !important;
+  height: 100% !important;
   max-height: none !important;
   margin: 0 !important;
   border-radius: 0 !important;

@@ -22,6 +22,25 @@ let renderSeq = 0;
 
 type DiagramDragState = { x: number; y: number; panX: number; panY: number; moved: boolean };
 
+type DiagramTouchPoint = { x: number; y: number };
+
+type DiagramTouchGesture = {
+  pointerIds: [number, number];
+  distance: number;
+  centerX: number;
+  centerY: number;
+  scale: number;
+  panX: number;
+  panY: number;
+};
+
+type DiagramFullscreenDom = {
+  portal: HTMLDivElement;
+  placeholder: HTMLDivElement;
+  parent: Node;
+  nextSibling: ChildNode | null;
+};
+
 type DiagramInteractionState = {
   scale: number;
   panX: number;
@@ -34,6 +53,8 @@ type DiagramInteractionState = {
   zoomLabel: HTMLButtonElement | null;
   fullscreenButton: HTMLButtonElement | null;
   fullscreenSnapshot: { scale: number; panX: number; panY: number; autoFit: boolean } | null;
+  fullscreenDom: DiagramFullscreenDom | null;
+  resizeObserver: ResizeObserver | null;
   applyTransform: () => void;
   applyScale: (next: number, originX?: number, originY?: number) => void;
   reset: () => void;
@@ -81,14 +102,48 @@ export function disposeDiagramRuntime(): void {
   clearDiagramRenderCache();
 }
 
-function sanitizeSvg(svg: string): string {
-  return DOMPurify.sanitize(svg, {
+const FOREIGN_OBJECT_HTML_ATTR = "data-noema-foreign-html";
+
+function sanitizeForeignObjectHtml(html: string): string {
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  template.content.querySelectorAll("script, iframe, object, embed, link, meta, base, style").forEach((node) => node.remove());
+  template.content.querySelectorAll("*").forEach((node) => {
+    Array.from(node.attributes).forEach((attribute) => {
+      if (/^on/i.test(attribute.name) || attribute.name.toLowerCase() === "srcdoc") {
+        node.removeAttribute(attribute.name);
+      }
+    });
+  });
+  return DOMPurify.sanitize(template.innerHTML, {
+    USE_PROFILES: { html: true, mathMl: true },
+    FORBID_TAGS: ["script", "iframe", "object", "embed", "link", "meta", "base", "style"],
+    FORBID_ATTR: ["srcdoc"],
+  });
+}
+
+export function sanitizeDiagramSvg(svg: string): string {
+  const template = document.createElement("template");
+  template.innerHTML = svg;
+  template.content.querySelectorAll<SVGForeignObjectElement>("foreignObject").forEach((foreignObject) => {
+    const safeHtml = sanitizeForeignObjectHtml(foreignObject.innerHTML);
+    foreignObject.replaceChildren();
+    foreignObject.setAttribute(FOREIGN_OBJECT_HTML_ATTR, safeHtml);
+  });
+
+  return DOMPurify.sanitize(template.innerHTML, {
     USE_PROFILES: { svg: true, svgFilters: true, mathMl: true },
-    // foreignObject is needed for Mermaid mindmap node labels (div.nodeLabel inside foreignObject).
-    // DOMPurify sanitizes the HTML content inside foreignObject using its HTML rules,
-    // so scripts/iframes/event-handlers are still stripped.
+    // foreignObject is needed for Mermaid mindmap labels. Its HTML was sanitized
+    // separately and is carried through this SVG-only pass in an inert data attr.
     ADD_TAGS: ["foreignObject"],
     ADD_ATTR: ["href", "xlink:href", "target", "title", "requiredExtensions", "xmlns", "style"],
+  });
+}
+
+function hydrateDiagramForeignObjects(element: HTMLElement): void {
+  element.querySelectorAll<SVGForeignObjectElement>(`foreignObject[${FOREIGN_OBJECT_HTML_ATTR}]`).forEach((foreignObject) => {
+    foreignObject.innerHTML = foreignObject.getAttribute(FOREIGN_OBJECT_HTML_ATTR) ?? "";
+    foreignObject.removeAttribute(FOREIGN_OBJECT_HTML_ATTR);
   });
 }
 
@@ -374,6 +429,8 @@ function bindDiagramInteraction(element: HTMLElement): DiagramInteractionState {
     zoomLabel: null,
     fullscreenButton: null,
     fullscreenSnapshot: null,
+    fullscreenDom: null,
+    resizeObserver: null,
     applyTransform: () => {
       const activeSvg = currentDiagramSvg(element);
       if (!activeSvg) return;
@@ -440,6 +497,19 @@ function bindDiagramInteraction(element: HTMLElement): DiagramInteractionState {
       if (expanded) {
         element.classList.remove("is-diagram-fullscreen");
         document.body.classList.remove("has-diagram-fullscreen");
+        const fullscreenDom = state.fullscreenDom;
+        state.fullscreenDom = null;
+        if (fullscreenDom) {
+          if (fullscreenDom.placeholder.isConnected) {
+            fullscreenDom.placeholder.replaceWith(element);
+          } else if (fullscreenDom.parent.isConnected) {
+            const nextSibling = fullscreenDom.nextSibling?.parentNode === fullscreenDom.parent
+              ? fullscreenDom.nextSibling
+              : null;
+            fullscreenDom.parent.insertBefore(element, nextSibling);
+          }
+          fullscreenDom.portal.remove();
+        }
         const snapshot = state.fullscreenSnapshot;
         state.fullscreenSnapshot = null;
         if (snapshot) {
@@ -452,6 +522,33 @@ function bindDiagramInteraction(element: HTMLElement): DiagramInteractionState {
         return;
       }
 
+      const parent = element.parentNode;
+      if (!parent) return;
+      const rect = element.getBoundingClientRect();
+      const computed = window.getComputedStyle(element);
+      const placeholder = document.createElement("div");
+      placeholder.className = "cm-diagram-fullscreen-placeholder";
+      placeholder.setAttribute("aria-hidden", "true");
+      if (rect.width > 0) placeholder.style.width = `${rect.width}px`;
+      if (rect.height > 0) placeholder.style.height = `${rect.height}px`;
+      placeholder.style.maxWidth = "100%";
+      placeholder.style.marginTop = computed.marginTop;
+      placeholder.style.marginRight = computed.marginRight;
+      placeholder.style.marginBottom = computed.marginBottom;
+      placeholder.style.marginLeft = computed.marginLeft;
+
+      const portal = document.createElement("div");
+      portal.className = "cm-editor cm-diagram-fullscreen-portal";
+      portal.setAttribute("role", "dialog");
+      portal.setAttribute("aria-modal", "true");
+      portal.setAttribute("aria-label", "Expanded diagram");
+      portal.setAttribute("data-aaronnote-vim", "native");
+      portal.setAttribute("data-noema-gesture-scope", "diagram");
+      const nextSibling = element.nextSibling;
+      element.replaceWith(placeholder);
+      document.body.append(portal);
+      portal.append(element);
+      state.fullscreenDom = { portal, placeholder, parent, nextSibling };
       state.fullscreenSnapshot = {
         scale: state.scale,
         panX: state.panX,
@@ -460,7 +557,7 @@ function bindDiagramInteraction(element: HTMLElement): DiagramInteractionState {
       };
       element.classList.add("is-diagram-fullscreen");
       document.body.classList.add("has-diagram-fullscreen");
-      element.tabIndex = -1;
+      element.tabIndex = 0;
       element.focus({ preventScroll: true });
       state.applyTransform();
       const schedule = window.requestAnimationFrame?.bind(window)
@@ -470,6 +567,26 @@ function bindDiagramInteraction(element: HTMLElement): DiagramInteractionState {
       });
     },
   };
+
+  if (typeof ResizeObserver !== "undefined") {
+    let previousWidth = 0;
+    let previousHeight = 0;
+    state.resizeObserver = new ResizeObserver((entries) => {
+      if (!element.isConnected) {
+        state.resizeObserver?.disconnect();
+        state.resizeObserver = null;
+        return;
+      }
+      const rect = entries[0]?.contentRect;
+      const width = rect?.width ?? element.clientWidth;
+      const height = rect?.height ?? element.clientHeight;
+      if (width <= 1 || height <= 1 || (width === previousWidth && height === previousHeight)) return;
+      previousWidth = width;
+      previousHeight = height;
+      if (state.autoFit) state.fit();
+    });
+    state.resizeObserver.observe(element);
+  }
 
   const clearLongPress = (): void => {
     if (state.longPressTimer != null) {
@@ -486,6 +603,30 @@ function bindDiagramInteraction(element: HTMLElement): DiagramInteractionState {
     if (Number.isFinite(pointerId)) element.setPointerCapture?.(pointerId);
     element.classList.add("is-panning");
   };
+  const touchPointers = new Map<number, DiagramTouchPoint>();
+  let touchGesture: DiagramTouchGesture | null = null;
+  const beginTouchGesture = (): boolean => {
+    const pair = Array.from(touchPointers.entries()).slice(0, 2);
+    if (pair.length < 2) return false;
+    const [[firstId, first], [secondId, second]] = pair;
+    const rect = element.getBoundingClientRect();
+    clearLongPress();
+    state.drag = null;
+    state.autoFit = false;
+    touchGesture = {
+      pointerIds: [firstId, secondId],
+      distance: Math.max(1, Math.hypot(second.x - first.x, second.y - first.y)),
+      centerX: (first.x + second.x) / 2 - rect.left,
+      centerY: (first.y + second.y) / 2 - rect.top,
+      scale: state.scale,
+      panX: state.panX,
+      panY: state.panY,
+    };
+    element.setPointerCapture?.(firstId);
+    element.setPointerCapture?.(secondId);
+    element.classList.add("is-panning");
+    return true;
+  };
 
   element.addEventListener("mousedown", (event) => {
     const target = event.target;
@@ -500,9 +641,27 @@ function bindDiagramInteraction(element: HTMLElement): DiagramInteractionState {
     if (target instanceof Element && target.closest(".cm-diagram-toolbar")) return;
     event.preventDefault();
     event.stopPropagation();
+    element.focus({ preventScroll: true });
     const start = { x: event.clientX, y: event.clientY, panX: state.panX, panY: state.panY, moved: false };
     const pointerType = event.pointerType || "mouse";
-    if (pointerType === "touch" || pointerType === "pen") {
+    if (pointerType === "touch") {
+      touchPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (beginTouchGesture()) return;
+      if (element.classList.contains("is-diagram-fullscreen")) {
+        beginDrag(start, event.pointerId);
+        return;
+      }
+      clearLongPress();
+      state.pendingDrag = start;
+      element.classList.add("is-long-pressing");
+      const pointerId = event.pointerId;
+      state.longPressTimer = window.setTimeout(() => {
+        if (!state.pendingDrag) return;
+        beginDrag(state.pendingDrag, pointerId);
+      }, DIAGRAM_LONG_PRESS_MS);
+      return;
+    }
+    if (pointerType === "pen") {
       clearLongPress();
       state.pendingDrag = start;
       element.classList.add("is-long-pressing");
@@ -516,6 +675,30 @@ function bindDiagramInteraction(element: HTMLElement): DiagramInteractionState {
     beginDrag(start, event.pointerId);
   });
   element.addEventListener("pointermove", (event) => {
+    if (touchPointers.has(event.pointerId)) {
+      touchPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    }
+    if (touchGesture) {
+      const [firstId, secondId] = touchGesture.pointerIds;
+      const first = touchPointers.get(firstId);
+      const second = touchPointers.get(secondId);
+      if (first && second) {
+        event.preventDefault();
+        event.stopPropagation();
+        const rect = element.getBoundingClientRect();
+        const distance = Math.max(1, Math.hypot(second.x - first.x, second.y - first.y));
+        const centerX = (first.x + second.x) / 2 - rect.left;
+        const centerY = (first.y + second.y) / 2 - rect.top;
+        const nextScale = clampScale(touchGesture.scale * distance / touchGesture.distance);
+        const factor = nextScale / touchGesture.scale;
+        state.scale = nextScale;
+        state.panX = centerX - (touchGesture.centerX - touchGesture.panX) * factor;
+        state.panY = centerY - (touchGesture.centerY - touchGesture.panY) * factor;
+        state.autoFit = false;
+        state.applyTransform();
+      }
+      return;
+    }
     if (state.pendingDrag && !state.drag) {
       const dx = event.clientX - state.pendingDrag.x;
       const dy = event.clientY - state.pendingDrag.y;
@@ -540,8 +723,28 @@ function bindDiagramInteraction(element: HTMLElement): DiagramInteractionState {
     if (event && Number.isFinite(event.pointerId)) element.releasePointerCapture?.(event.pointerId);
     if (state.suppressNextClick) window.setTimeout(() => { state.suppressNextClick = false; }, 0);
   };
-  element.addEventListener("pointerup", endDrag);
-  element.addEventListener("pointercancel", endDrag);
+  const endPointer = (event: PointerEvent): void => {
+    const wasTouch = touchPointers.delete(event.pointerId);
+    if (wasTouch && touchGesture) {
+      touchGesture = null;
+      state.suppressNextClick = true;
+      state.drag = null;
+      clearLongPress();
+      element.releasePointerCapture?.(event.pointerId);
+      const remaining = touchPointers.entries().next().value as [number, DiagramTouchPoint] | undefined;
+      if (remaining && element.classList.contains("is-diagram-fullscreen")) {
+        const [pointerId, point] = remaining;
+        beginDrag({ x: point.x, y: point.y, panX: state.panX, panY: state.panY, moved: true }, pointerId);
+      } else {
+        element.classList.remove("is-panning");
+      }
+      window.setTimeout(() => { state.suppressNextClick = false; }, 0);
+      return;
+    }
+    endDrag(event);
+  };
+  element.addEventListener("pointerup", endPointer);
+  element.addEventListener("pointercancel", endPointer);
   element.addEventListener("click", (event) => {
     if (state.suppressNextClick) {
       event.preventDefault();
@@ -651,10 +854,12 @@ function bindDiagramInteraction(element: HTMLElement): DiagramInteractionState {
 }
 
 export function enableDiagramInteraction(element: HTMLElement): void {
+  hydrateDiagramForeignObjects(element);
   const svg = currentDiagramSvg(element);
   if (!svg) return;
 
   element.classList.add("cm-diagram-interactive");
+  if (element.tabIndex < 0) element.tabIndex = 0;
   element.style.overflow = "hidden";
   element.style.touchAction = "none";
   configureDiagramSvg(svg, element);
@@ -736,7 +941,7 @@ export function renderMermaidLazy(
       const id = `aaronnote-mermaid-${Date.now()}-${seq}`;
       const result = await mermaid.render(id, renderSource);
       if (element.getAttribute("data-diagram-render-key") !== key || !element.isConnected) return;
-      const html = sanitizeSvg(result.svg);
+      const html = sanitizeDiagramSvg(result.svg);
       rememberMermaid(key, { html });
       element.innerHTML = html;
       enableDiagramInteraction(element);

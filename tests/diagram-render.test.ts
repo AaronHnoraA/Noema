@@ -1,6 +1,12 @@
 import { describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
 
-import { enableDiagramInteraction, normalizeMermaidSource, staticAaronMindmap } from "../src/diagram-render.ts";
+import {
+  enableDiagramInteraction,
+  normalizeMermaidSource,
+  sanitizeDiagramSvg,
+  staticAaronMindmap,
+} from "../src/diagram-render.ts";
+import { setKatexMacros } from "../src/katex-macros.ts";
 
 function pointerEvent(type: string, init: MouseEventInit & { pointerId?: number; pointerType?: string }): MouseEvent {
   const event = new MouseEvent(type, init);
@@ -39,6 +45,16 @@ describe("diagram render helpers", () => {
       ].join("\n"));
   });
 
+  test("carries the active Noema KaTeX macros into marmind formulas", () => {
+    setKatexMacros({ "\\R": "\\mathbb{R}" });
+    try {
+      expect(normalizeMermaidSource("Space \\(x\\in\\R^n\\)", "marmind"))
+        .toContain('$$\\gdef\\R{\\mathbb{R}}x\\in\\R^n$$');
+    } finally {
+      setKatexMacros({});
+    }
+  });
+
   test("keeps ordered list markers in marmind labels", () => {
     expect(normalizeMermaidSource("1. Root\n  2) Branch", "markmind"))
       .toBe("mindmap\n  1. Root\n    2) Branch");
@@ -49,6 +65,28 @@ describe("diagram render helpers", () => {
     expect(staticAaronMindmap("markmind")).toBe(true);
     expect(staticAaronMindmap("mindmap")).toBe(false);
     expect(staticAaronMindmap("mermaid")).toBe(false);
+  });
+
+  test("preserves sanitized HTML and MathML labels inside Mermaid foreignObject nodes", () => {
+    const sanitized = sanitizeDiagramSvg([
+      '<svg xmlns="http://www.w3.org/2000/svg">',
+      "<foreignObject>",
+      '<div xmlns="http://www.w3.org/1999/xhtml"><span class="katex">x</span><math><mi>x</mi></math>',
+      '<script>alert(1)</script><img src="x" onerror="alert(2)"></div>',
+      "</foreignObject>",
+      "</svg>",
+    ].join(""));
+    const div = document.createElement("div");
+    div.innerHTML = sanitized;
+
+    enableDiagramInteraction(div);
+
+    expect(div.querySelector("foreignObject .katex")?.textContent).toBe("x");
+    // Mermaid's legacy math output includes a KaTeX HTML layer, while browsers
+    // that retain MathML also keep its accessibility layer.
+    expect(div.querySelector("foreignObject")?.textContent).toContain("x");
+    expect(div.querySelector("script")).toBeNull();
+    expect(div.querySelector("img")?.hasAttribute("onerror") ?? false).toBe(false);
   });
 
   test("enables diagram interaction with toolbar chrome and lets nodes be selected", () => {
@@ -114,8 +152,11 @@ describe("diagram render helpers", () => {
   });
 
   test("pseudo-fullscreen expands inside the web view and Escape restores the view", () => {
+    const host = document.createElement("section");
     const div = document.createElement("div");
-    document.body.append(div);
+    const after = document.createElement("span");
+    host.append(div, after);
+    document.body.append(host);
     div.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"><g><text>Root</text></g></svg>';
     const svg = div.querySelector<SVGSVGElement>("svg")!;
 
@@ -126,12 +167,105 @@ describe("diagram render helpers", () => {
 
     expect(div.classList.contains("is-diagram-fullscreen")).toBe(true);
     expect(document.body.classList.contains("has-diagram-fullscreen")).toBe(true);
+    expect(div.parentElement?.classList.contains("cm-diagram-fullscreen-portal")).toBe(true);
+    expect(div.parentElement?.parentElement).toBe(document.body);
+    expect(div.parentElement?.dataset.aaronnoteVim).toBe("native");
+    expect(div.parentElement?.dataset.noemaGestureScope).toBe("diagram");
+    expect(host.querySelector(".cm-diagram-fullscreen-placeholder")).not.toBeNull();
     expect(div.querySelector<HTMLButtonElement>(".cm-diagram-control-fullscreen")!.textContent).toBe("Exit");
 
     div.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }));
     expect(div.classList.contains("is-diagram-fullscreen")).toBe(false);
     expect(document.body.classList.contains("has-diagram-fullscreen")).toBe(false);
+    expect(div.parentElement).toBe(host);
+    expect(host.children[0]).toBe(div);
+    expect(host.children[1]).toBe(after);
+    expect(document.querySelector(".cm-diagram-fullscreen-portal")).toBeNull();
+    expect(host.querySelector(".cm-diagram-fullscreen-placeholder")).toBeNull();
+    expect(div.tabIndex).toBe(0);
     expect(svg.style.transform).toBe(before);
+    host.remove();
+  });
+
+  test("fullscreen keeps trackpad pan, native pinch, and touchscreen pinch local to the diagram", () => {
+    const div = document.createElement("div");
+    div.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"><g><text>Root</text></g></svg>';
+    document.body.append(div);
+    const svg = div.querySelector<SVGSVGElement>("svg")!;
+    enableDiagramInteraction(div);
+    div.querySelector<HTMLButtonElement>(".cm-diagram-control-fullscreen")!.click();
+
+    const pan = new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      deltaX: 14,
+      deltaY: 20,
+      clientX: 50,
+      clientY: 40,
+    });
+    svg.dispatchEvent(pan);
+    expect(pan.defaultPrevented).toBe(true);
+    expect(svg.style.transform).toContain("translate(-14px, -20px)");
+
+    const gestureStart = new Event("gesturestart", { bubbles: true, cancelable: true });
+    const gestureChange = new Event("gesturechange", { bubbles: true, cancelable: true });
+    Object.defineProperties(gestureChange, {
+      scale: { value: 1.5 },
+      clientX: { value: 60 },
+      clientY: { value: 40 },
+    });
+    svg.dispatchEvent(gestureStart);
+    svg.dispatchEvent(gestureChange);
+    expect(Number(div.dataset.diagramScale)).toBeCloseTo(1.5);
+
+    svg.dispatchEvent(pointerEvent("pointerdown", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      clientX: 30,
+      clientY: 40,
+      pointerId: 11,
+      pointerType: "touch",
+    }));
+    svg.dispatchEvent(pointerEvent("pointerdown", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      clientX: 90,
+      clientY: 40,
+      pointerId: 12,
+      pointerType: "touch",
+    }));
+    div.dispatchEvent(pointerEvent("pointermove", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      clientX: 120,
+      clientY: 50,
+      pointerId: 12,
+      pointerType: "touch",
+    }));
+    expect(Number(div.dataset.diagramScale)).toBeGreaterThan(1.5);
+
+    div.dispatchEvent(pointerEvent("pointerup", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      clientX: 120,
+      clientY: 50,
+      pointerId: 12,
+      pointerType: "touch",
+    }));
+    div.dispatchEvent(pointerEvent("pointerup", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      clientX: 30,
+      clientY: 40,
+      pointerId: 11,
+      pointerType: "touch",
+    }));
+    div.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }));
     div.remove();
   });
 
