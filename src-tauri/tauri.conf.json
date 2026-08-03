@@ -29,7 +29,6 @@
       "../plugins/": "plugins/",
       "../resources/": "resources/",
       "../src/styles/themes/": "src/styles/themes/",
-      "../node_modules/": "node_modules/",
       "../package.json": "package.json"
     },
     "macOS": {

@@ -1,7 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { lstat, mkdir, mkdtemp, readlink, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
+
+import { installLinkedApp } from "../scripts/install-local-app.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const readJson = (path: string) => JSON.parse(readFileSync(resolve(root, path), "utf8"));
@@ -36,6 +40,7 @@ describe("Tauri desktop migration", () => {
     expect(config.mainBinaryName).toBe("Noema");
     expect(config.bundle.externalBin).toContain("binaries/noema-node");
     expect(config.bundle.resources["../web-host.mjs"]).toBe("web-host.mjs");
+    expect(config.bundle.resources["../node_modules/"]).toBeUndefined();
     expect(config.bundle.icon).toEqual(expect.arrayContaining([
       "icons/icon.icns",
       "icons/icon.ico",
@@ -61,5 +66,39 @@ describe("Tauri desktop migration", () => {
     expect(buildScript).toContain('darwin: "app"');
     expect(sidecarScript).toContain('"win32-x64"');
     expect(sidecarScript).toContain('"win32-arm64"');
+  });
+
+  test("links local runtime dependencies instead of copying them into every macOS build", () => {
+    const buildScript = readFileSync(resolve(root, "scripts/build-tauri.mjs"), "utf8");
+    const makefile = readFileSync(resolve(root, "Makefile"), "utf8");
+
+    expect(buildScript).toContain("linkedRuntime");
+    expect(buildScript).toContain("NOEMA_PORTABLE");
+    expect(buildScript).toContain("symlinkSync(modules, destination");
+    expect(makefile).not.toContain("/private/tmp/noema-install");
+    expect(makefile).toContain("scripts/install-local-app.mjs");
+  });
+
+  test("replaces an installed copy with an idempotent local app link", async () => {
+    const suite = await mkdtemp(join(tmpdir(), "noema-linked-install-"));
+    const source = join(suite, "build", "Noema.app");
+    const destination = join(suite, "Applications", "Noema.app");
+    try {
+      await mkdir(join(source, "Contents", "MacOS"), { recursive: true });
+      await writeFile(join(source, "Contents", "Info.plist"), "plist");
+      await writeFile(join(source, "Contents", "MacOS", "Noema"), "binary");
+      await mkdir(destination, { recursive: true });
+      await writeFile(join(destination, "old-copy"), "old");
+
+      await installLinkedApp(source, destination);
+      expect((await lstat(destination)).isSymbolicLink()).toBe(true);
+      expect(await realpath(resolve(dirname(destination), await readlink(destination)))).toBe(await realpath(source));
+      expect(existsSync(join(destination, "old-copy"))).toBe(false);
+
+      await installLinkedApp(source, destination);
+      expect((await lstat(destination)).isSymbolicLink()).toBe(true);
+    } finally {
+      await rm(suite, { recursive: true, force: true });
+    }
   });
 });

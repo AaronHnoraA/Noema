@@ -9,6 +9,7 @@ APP_NAME := Noema
 APP_DEST := /Applications/$(APP_NAME).app
 APP_BUNDLE := $(firstword $(wildcard src-tauri/target/*/release/bundle/macos/$(APP_NAME).app src-tauri/target/release/bundle/macos/$(APP_NAME).app))
 ICON_SVG := public/Noema.svg
+ICON_ICNS := src-tauri/icons/icon.icns
 
 .DEFAULT_GOAL := build
 
@@ -64,18 +65,14 @@ server-deploy: server-build
 dev: check-env init-data
 	npm run start:vite
 
-icon:
+icon: $(ICON_ICNS)
+
+$(ICON_ICNS): $(ICON_SVG)
 	node_modules/.bin/tauri icon "$(ICON_SVG)" --output src-tauri/icons
 
 install-app:
 	@test -n "$(APP_BUNDLE)" || (echo "Noema.app was not generated under release" && exit 1)
-	@if [ -e "$(APP_DEST)" ]; then \
-		backup_dir=$$(mktemp -d /private/tmp/noema-install.XXXXXX); \
-		mv "$(APP_DEST)" "$$backup_dir/$(APP_NAME).app"; \
-		echo "Previous app preserved at $$backup_dir/$(APP_NAME).app"; \
-	fi
-	cp -R "$(CURDIR)/$(APP_BUNDLE)" "$(APP_DEST)"
-	@echo "Copied $(CURDIR)/$(APP_BUNDLE) -> $(APP_DEST)"
+	node scripts/install-local-app.mjs "$(CURDIR)/$(APP_BUNDLE)" "$(APP_DEST)"
 
 run: build
 	open "$(CURDIR)/$(APP_BUNDLE)"
@@ -84,7 +81,7 @@ test: check-env
 	npm test
 
 clean:
-	rm -rf build dist release src-tauri/target src-tauri/binaries
+	rm -rf build dist release src-tauri/target src-tauri/binaries src-tauri/gen/runtime
 
 jupyter-bootstrap:
 	npm run jupyter:bootstrap
@@ -96,7 +93,7 @@ help:
 	@echo "  make bootstrap     Reproducibly install dependencies with npm ci"
 	@echo "  make nvm-install   Install/use pinned Node and npm through nvm"
 	@echo "  make init-data     Create the Noema notes directory"
-	@echo "  make install       Copy the existing build to /Applications/Noema.app"
+	@echo "  make install       Link /Applications/Noema.app to the existing local build"
 	@echo "  make run           Build and launch the local app bundle"
 	@echo "  make build-web     Build only the web assets"
 	@echo "  make dev           Run the Vite development server"
