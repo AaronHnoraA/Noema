@@ -28,6 +28,9 @@ if (tauriRuntime && !window.noemaDesktop) {
     openFiles(paths) {
       void invoke("open_files", { paths });
     },
+    closeWindow() {
+      return invoke("close_window");
+    },
     openTarget(target = {}) {
       return invoke<boolean>("open_target", { target });
     },
@@ -60,6 +63,9 @@ if (tauriRuntime && !window.noemaDesktop) {
     },
     setPluginEnabled(id, enabled) {
       return invoke("set_plugin_enabled", { id, enabled });
+    },
+    notifyAppConfigChanged(revision) {
+      void invoke("broadcast_app_config", { revision });
     },
     onCommand(callback) {
       let disposed = false;
@@ -102,6 +108,10 @@ if (tauriRuntime && !window.noemaDesktop) {
       });
     },
   };
+
+  void listen("noema:app-config-changed", (event) => {
+    window.dispatchEvent(new CustomEvent("aaronnote:command", { detail: event.payload }));
+  });
 
   void window.noemaDesktop.listPlugins().then((plugins) => {
     if (!plugins.some((plugin) => plugin.id === "noema.zh-cn" && plugin.active)) return;

@@ -289,6 +289,10 @@ function render(): void {
 }
 
 function closeConfiguration(): void {
+  if (window.noemaDesktop?.closeWindow) {
+    void window.noemaDesktop.closeWindow();
+    return;
+  }
   window.close();
   window.setTimeout(() => {
     if (history.length > 1) history.back();
@@ -343,7 +347,26 @@ window.addEventListener("noema:theme-changed", () => {
   payload = noemaAppConfigState();
   render();
 });
-window.addEventListener("beforeunload", removeThemeRuntime, { once: true });
+const removeDesktopCommandListener = window.noemaDesktop?.onCommand((detail) => {
+  const command = detail && typeof detail === "object"
+    ? String((detail as { command?: unknown }).command || "")
+    : String(detail || "");
+  if (command === "back" || command === "close") closeConfiguration();
+  else if (command === "refresh") location.reload();
+  else if (command === "wiki-home") {
+    void window.noemaDesktop?.openTarget({ url: "/wiki", source: "config" });
+  }
+}) ?? null;
+const removeDesktopDropListener = window.noemaDesktop?.onFileDrop?.((event) => {
+  if (event.type !== "drop") return;
+  const paths = event.paths.filter((path) => /\.(?:md|markdown)$/i.test(path));
+  if (paths.length) window.noemaDesktop?.openFiles(paths);
+}) ?? null;
+window.addEventListener("beforeunload", () => {
+  removeThemeRuntime();
+  removeDesktopCommandListener?.();
+  removeDesktopDropListener?.();
+}, { once: true });
 
 void loadNoemaAppConfig().then((next) => {
   payload = next;

@@ -96,6 +96,26 @@ body[data-host-mode="server"] .noema-wiki-titlebar { padding-left: 18px; }
   cursor: pointer;
 }
 
+.noema-wiki-drop-overlay {
+  position: fixed;
+  inset: 72px 24px 24px;
+  z-index: 1000;
+  display: grid;
+  place-content: center;
+  gap: 8px;
+  border: 2px dashed var(--aaron-accent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--aaronnote-bg), transparent 8%);
+  color: var(--aaron-ink);
+  text-align: center;
+  pointer-events: none;
+  backdrop-filter: blur(12px);
+}
+
+.noema-wiki-drop-overlay[hidden] { display: none; }
+.noema-wiki-drop-overlay strong { color: var(--aaron-accent); font-size: 20px; }
+.noema-wiki-drop-overlay span { color: var(--aaron-muted); font-size: 12px; }
+
 .noema-wiki-shell {
   min-height: calc(100vh - 140px);
   display: grid;

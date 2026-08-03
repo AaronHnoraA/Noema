@@ -17,6 +17,16 @@
   "bundle": {
     "active": true,
     "category": "Productivity",
+    "fileAssociations": [
+      {
+        "ext": ["md", "markdown"],
+        "name": "Markdown Document",
+        "description": "Markdown document",
+        "role": "Editor",
+        "rank": "Alternate",
+        "mimeType": "text/markdown"
+      }
+    ],
     "icon": ["icons/icon.icns", "icons/icon.ico", "icons/icon.png"],
     "externalBin": ["binaries/noema-node"],
     "resources": {

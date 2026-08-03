@@ -38,6 +38,10 @@ root.innerHTML = `
       <button type="button" aria-label="Window actions" data-desktop-menu="window">Window actions</button>
     </div>
   </header>
+  <div class="noema-wiki-drop-overlay" data-desktop-drop-overlay hidden>
+    <strong>Open Markdown in Noema</strong>
+    <span>Drop to open each document in a managed window</span>
+  </div>
   <header class="noema-wiki-site-header">
     <button type="button" class="noema-wiki-site-brand" data-view="home" aria-label="Open the Noema Wiki main page">
       <img class="noema-wiki-site-mark" src="/Noema.svg" alt="">
@@ -1677,6 +1681,46 @@ root.querySelectorAll<HTMLElement>("[data-desktop-command]").forEach((control) =
     else if (command === "refresh") void load(true);
   });
 });
+
+function runDesktopCommand(detail: unknown): void {
+  const command = detail && typeof detail === "object"
+    ? String((detail as { command?: unknown }).command || "")
+    : String(detail || "");
+  if (command === "back") history.back();
+  else if (command === "forward") history.forward();
+  else if (command === "refresh") void load(true);
+  else if (command === "knowledge-search" || command === "focus") {
+    searchEl.focus();
+    searchEl.select();
+  } else if (command === "toggle-graph" || command === "workspace-graph") {
+    navigateTo("graph");
+  } else if (command === "wiki-home") {
+    navigateTo("home");
+  } else if (command === "new-page") {
+    showNewPage();
+  }
+}
+
+const removeDesktopCommandListener = window.noemaDesktop?.onCommand(runDesktopCommand) ?? null;
+const desktopDropOverlay = root.querySelector<HTMLElement>("[data-desktop-drop-overlay]")!;
+const removeDesktopDropListener = window.noemaDesktop?.onFileDrop?.((event) => {
+  if (event.type === "leave") {
+    desktopDropOverlay.hidden = true;
+    return;
+  }
+  if (event.type === "enter" || event.type === "over") {
+    desktopDropOverlay.hidden = false;
+    return;
+  }
+  desktopDropOverlay.hidden = true;
+  const paths = event.paths.filter((path) => /\.(?:md|markdown)$/i.test(path));
+  if (!paths.length) {
+    setStatus("Only Markdown documents can be opened from the Wiki", true);
+    return;
+  }
+  window.noemaDesktop?.openFiles(paths);
+  setStatus(paths.length === 1 ? "Opened document" : `Opened ${paths.length} documents`);
+}) ?? null;
 root.querySelectorAll<HTMLElement>("[data-desktop-menu]").forEach((control) => {
   control.addEventListener("click", () => {
     void window.noemaDesktop?.showMenu(control.dataset.desktopMenu === "window" ? "window" : "actions", {
@@ -1687,7 +1731,11 @@ root.querySelectorAll<HTMLElement>("[data-desktop-menu]").forEach((control) => {
 });
 
 const removeThemeRuntime = installNoemaThemeRuntime();
-window.addEventListener("beforeunload", removeThemeRuntime, { once: true });
+window.addEventListener("beforeunload", () => {
+  removeThemeRuntime();
+  removeDesktopCommandListener?.();
+  removeDesktopDropListener?.();
+}, { once: true });
 const initialQuery = new URLSearchParams(location.search);
 searchEl.value = initialQuery.get("q") || "";
 const initialView = initialQuery.get("view") || "home";

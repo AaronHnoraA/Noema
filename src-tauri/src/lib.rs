@@ -83,12 +83,15 @@ fn session_version() -> u8 {
 struct DesktopState {
     host_url: Mutex<String>,
     host_child: Mutex<Option<CommandChild>>,
+    pending_files: Mutex<Vec<String>>,
     windows: Mutex<HashMap<String, WindowState>>,
+    approved_closes: Mutex<HashSet<String>>,
     next_window: AtomicU64,
     resource_root: PathBuf,
     data_root: PathBuf,
     note_root: PathBuf,
     quitting: AtomicBool,
+    quit_approved: AtomicBool,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -374,13 +377,15 @@ fn expanded_path(value: &str) -> PathBuf {
     PathBuf::from(value)
 }
 
-fn app_config() -> Value {
-    let path = std::env::var_os("NOEMA_CONFIG_DIR")
+fn app_config_dir() -> PathBuf {
+    std::env::var_os("NOEMA_CONFIG_DIR")
         .map(PathBuf::from)
-        .or_else(|| dirs::config_dir().map(|path| path.join("noema")))
+        .or_else(|| dirs::home_dir().map(|path| path.join(".config/noema")))
         .unwrap_or_else(|| PathBuf::from(".noema"))
-        .join("config.json");
-    fs::read_to_string(path)
+}
+
+fn app_config() -> Value {
+    fs::read_to_string(app_config_dir().join("config.json"))
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or(Value::Null)
@@ -404,12 +409,34 @@ fn configured_note_root(default_root: &Path) -> PathBuf {
     }
 }
 
-fn workspace_layout() -> String {
-    app_config()
+fn workspace_layout(note_root: &Path) -> String {
+    if let Some(layout) = std::env::var_os("NOEMA_WORKSPACE_LAYOUT") {
+        let layout = layout.to_string_lossy().trim().to_ascii_lowercase();
+        if matches!(layout.as_str(), "wiki" | "legacy") {
+            return layout;
+        }
+    }
+    if let Some(layout) = app_config()
         .pointer("/workspace/layout")
         .and_then(Value::as_str)
-        .unwrap_or("legacy")
-        .to_string()
+        .map(|layout| layout.trim().to_ascii_lowercase())
+        .filter(|layout| matches!(layout.as_str(), "wiki" | "legacy"))
+    {
+        return layout;
+    }
+    if note_root.join("public").is_dir() || note_root.join("private").is_dir() {
+        "wiki".into()
+    } else {
+        "legacy".into()
+    }
+}
+
+fn default_route_path(file: &str) -> &'static str {
+    if file.is_empty() {
+        "/wiki"
+    } else {
+        "/"
+    }
 }
 
 fn url_for(state: &DesktopState, file: &str, route: &str, client: &str) -> Result<String, String> {
@@ -423,7 +450,7 @@ fn url_for(state: &DesktopState, file: &str, route: &str, client: &str) -> Resul
             .map_err(io_error)?
     };
     if route.is_empty() {
-        url.set_path("/wiki");
+        url.set_path(default_route_path(file));
     }
     url.query_pairs_mut().append_pair("host", "desktop");
     if !file.is_empty() {
@@ -598,6 +625,52 @@ fn create_window(
     let app_for_events = app.clone();
     let label_for_events = label.clone();
     window.on_window_event(move |event| match event {
+        tauri::WindowEvent::CloseRequested { api, .. } => {
+            let desktop = app_for_events.state::<DesktopState>();
+            let approved = desktop
+                .approved_closes
+                .lock()
+                .map(|mut labels| labels.remove(&label_for_events))
+                .unwrap_or(false);
+            let risky = desktop
+                .windows
+                .lock()
+                .ok()
+                .and_then(|windows| windows.get(&label_for_events).cloned())
+                .map(|state| state.risky())
+                .unwrap_or(false);
+            if risky && !approved {
+                api.prevent_close();
+                let app = app_for_events.clone();
+                let label = label_for_events.clone();
+                tauri::async_runtime::spawn(async move {
+                    let result = rfd::AsyncMessageDialog::new()
+                        .set_level(rfd::MessageLevel::Warning)
+                        .set_title("Close Noema window?")
+                        .set_description("This document has unsaved, conflicted, or active work.")
+                        .set_buttons(rfd::MessageButtons::OkCancelCustom(
+                            "Close Without Saving".into(),
+                            "Cancel".into(),
+                        ))
+                        .show()
+                        .await;
+                    if matches!(result, rfd::MessageDialogResult::Ok)
+                        || matches!(
+                            result,
+                            rfd::MessageDialogResult::Custom(ref value)
+                                if value == "Close Without Saving"
+                        )
+                    {
+                        if let Ok(mut labels) = app.state::<DesktopState>().approved_closes.lock() {
+                            labels.insert(label.clone());
+                        }
+                        if let Some(window) = app.get_webview_window(&label) {
+                            let _ = window.close();
+                        }
+                    }
+                });
+            }
+        }
         tauri::WindowEvent::Destroyed => {
             if let Ok(mut windows) = app_for_events.state::<DesktopState>().windows.lock() {
                 windows.remove(&label_for_events);
@@ -612,19 +685,169 @@ fn create_window(
     Ok(window)
 }
 
+fn canonical_markdown_path(path: impl AsRef<Path>) -> Option<String> {
+    let path = path.as_ref();
+    let text = path.to_string_lossy();
+    if !markdown_path(&text) {
+        return None;
+    }
+    Some(
+        fs::canonicalize(path)
+            .unwrap_or_else(|_| path.to_path_buf())
+            .to_string_lossy()
+            .into_owned(),
+    )
+}
+
+fn replace_window_with_file(
+    app: &tauri::AppHandle,
+    window: &WebviewWindow,
+    file: String,
+) -> Result<(), String> {
+    let desktop = app.state::<DesktopState>();
+    let previous = desktop
+        .windows
+        .lock()
+        .map_err(io_error)?
+        .get(window.label())
+        .cloned()
+        .unwrap_or_default();
+    let client = if previous.client.is_empty() {
+        new_window_client(window.label())
+    } else {
+        previous.client.clone()
+    };
+    let url = url_for(&desktop, &file, "", &client)?;
+    window
+        .navigate(url.parse().map_err(io_error)?)
+        .map_err(io_error)?;
+    let _ = window.show();
+    let _ = window.set_focus();
+    desktop.windows.lock().map_err(io_error)?.insert(
+        window.label().into(),
+        WindowState {
+            client,
+            kind: "note".into(),
+            file,
+            route: route_from_url(&url),
+            dirty: false,
+            save_in_flight: false,
+            conflict: false,
+            busy: false,
+            ..previous
+        },
+    );
+    Ok(())
+}
+
+fn open_system_file(
+    app: &tauri::AppHandle,
+    path: impl AsRef<Path>,
+    force_new: bool,
+) -> Result<(), String> {
+    let Some(file) = canonical_markdown_path(path) else {
+        return Ok(());
+    };
+    let desktop = app.state::<DesktopState>();
+    if let Some(label) = desktop
+        .windows
+        .lock()
+        .map_err(io_error)?
+        .iter()
+        .find(|(_, item)| item.kind == "note" && item.file == file)
+        .map(|(label, _)| label.clone())
+    {
+        if let Some(existing) = app.get_webview_window(&label) {
+            let _ = existing.show();
+            let _ = existing.set_focus();
+            return Ok(());
+        }
+    }
+    if !force_new {
+        let reusable = desktop
+            .windows
+            .lock()
+            .map_err(io_error)?
+            .iter()
+            .find(|(_, item)| item.kind == "wiki" && !item.risky())
+            .map(|(label, _)| label.clone());
+        if let Some(window) = reusable.and_then(|label| app.get_webview_window(&label)) {
+            return replace_window_with_file(app, &window, file);
+        }
+    }
+    create_window(app, file, String::new(), None).map(|_| ())
+}
+
+fn opened_file_paths(urls: &[Url]) -> Vec<PathBuf> {
+    let mut seen = HashSet::new();
+    urls.iter()
+        .filter_map(|url| url.to_file_path().ok())
+        .filter(|path| markdown_path(&path.to_string_lossy()))
+        .filter(|path| seen.insert(path.clone()))
+        .collect()
+}
+
+fn argument_file_paths(args: &[String], cwd: &str) -> Vec<PathBuf> {
+    let cwd = PathBuf::from(cwd);
+    let mut seen = HashSet::new();
+    args.iter()
+        .map(PathBuf::from)
+        .map(|path| {
+            if path.is_absolute() {
+                path
+            } else {
+                cwd.join(path)
+            }
+        })
+        .filter(|path| markdown_path(&path.to_string_lossy()))
+        .filter(|path| seen.insert(path.clone()))
+        .collect()
+}
+
+fn handle_opened_files(app: &tauri::AppHandle, paths: Vec<PathBuf>) {
+    if paths.is_empty() {
+        return;
+    }
+    let desktop = app.state::<DesktopState>();
+    let host_ready = desktop
+        .host_url
+        .lock()
+        .map(|host| !host.is_empty())
+        .unwrap_or(false);
+    if !host_ready {
+        if let Ok(mut pending) = desktop.pending_files.lock() {
+            for path in paths {
+                if let Some(path) = canonical_markdown_path(path) {
+                    if !pending.contains(&path) {
+                        pending.push(path);
+                    }
+                }
+            }
+        }
+        return;
+    }
+    for (index, path) in paths.into_iter().enumerate() {
+        if let Err(error) = open_system_file(app, path, index > 0) {
+            eprintln!("[noema-tauri] system open failed: {error}");
+        }
+    }
+}
+
 fn restore_windows(app: &tauri::AppHandle) -> Result<(), String> {
     let state = app.state::<DesktopState>();
-    let pending = std::env::args().skip(1).find(|arg| markdown_path(arg));
-    if let Some(file) = pending {
-        create_window(
-            app,
-            fs::canonicalize(&file)
-                .unwrap_or_else(|_| PathBuf::from(&file))
-                .to_string_lossy()
-                .into(),
-            String::new(),
-            None,
-        )?;
+    let mut pending: Vec<String> = std::env::args()
+        .skip(1)
+        .filter_map(canonical_markdown_path)
+        .collect();
+    if let Ok(mut queued) = state.pending_files.lock() {
+        pending.extend(queued.drain(..));
+    }
+    let mut seen = HashSet::new();
+    pending.retain(|file| seen.insert(file.clone()));
+    if !pending.is_empty() {
+        for file in pending {
+            create_window(app, file, String::new(), None)?;
+        }
         return Ok(());
     }
     let session = read_session(&state);
@@ -681,7 +904,14 @@ fn host_environment(state: &DesktopState) -> HashMap<String, String> {
         "AARONNOTE_WORKSPACE_ROOT".into(),
         state.note_root.to_string_lossy().into(),
     );
-    env.insert("NOEMA_WORKSPACE_LAYOUT".into(), workspace_layout());
+    env.insert(
+        "NOEMA_CONFIG_DIR".into(),
+        app_config_dir().to_string_lossy().into(),
+    );
+    env.insert(
+        "NOEMA_WORKSPACE_LAYOUT".into(),
+        workspace_layout(&state.note_root),
+    );
     env.insert(
         "AARONNOTE_STATE_DIR".into(),
         state_root.to_string_lossy().into(),
@@ -811,9 +1041,24 @@ fn start_host(app: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn open_files(app: tauri::AppHandle, paths: Vec<String>) {
-    for path in paths.into_iter().filter(|path| markdown_path(path)) {
-        let _ = create_window(&app, path, String::new(), None);
+    for path in paths {
+        if let Err(error) = open_system_file(&app, path, true) {
+            eprintln!("[noema-tauri] dropped file open failed: {error}");
+        }
     }
+}
+
+#[tauri::command]
+fn close_window(window: WebviewWindow) -> Result<(), String> {
+    window.close().map_err(io_error)
+}
+
+#[tauri::command]
+fn broadcast_app_config(app: tauri::AppHandle, revision: String) {
+    let _ = app.emit(
+        "noema:app-config-changed",
+        json!({ "command": "app-config-changed", "revision": revision }),
+    );
 }
 
 #[tauri::command]
@@ -915,13 +1160,26 @@ fn open_target(
     let created = create_window(&app, file, route, None)?;
     if target.disposition.starts_with("split-") {
         if let (Ok(position), Ok(size)) = (window.outer_position(), window.outer_size()) {
-            let half_width = (size.width / 2).max(720);
-            let _ = window.set_size(PhysicalSize::new(half_width, size.height));
-            let _ = created.set_position(PhysicalPosition::new(
-                position.x + half_width as i32,
-                position.y,
-            ));
-            let _ = created.set_size(PhysicalSize::new(half_width, size.height));
+            if target.disposition == "split-down" && size.height >= 1120 {
+                let half_height = size.height / 2;
+                let _ = window.set_size(PhysicalSize::new(size.width, half_height));
+                let _ = created.set_position(PhysicalPosition::new(
+                    position.x,
+                    position.y + half_height as i32,
+                ));
+                let _ = created.set_size(PhysicalSize::new(size.width, half_height));
+            } else if target.disposition == "split-right" && size.width >= 1440 {
+                let half_width = size.width / 2;
+                let _ = window.set_size(PhysicalSize::new(half_width, size.height));
+                let _ = created.set_position(PhysicalPosition::new(
+                    position.x + half_width as i32,
+                    position.y,
+                ));
+                let _ = created.set_size(PhysicalSize::new(half_width, size.height));
+            } else {
+                let _ =
+                    created.set_position(PhysicalPosition::new(position.x + 36, position.y + 36));
+            }
         }
     }
     Ok(true)
@@ -1382,6 +1640,12 @@ fn application_menu(app: &tauri::AppHandle) -> Result<Menu<tauri::Wry>, tauri::E
             "Knowledge Graph",
             Some("CmdOrCtrl+Shift+G"),
         )?)
+        .item(&menu_item(
+            app,
+            "nav:new-page",
+            "New Wiki Page…",
+            Some("CmdOrCtrl+N"),
+        )?)
         .separator()
         .item(&menu_item(
             app,
@@ -1405,6 +1669,12 @@ fn application_menu(app: &tauri::AppHandle) -> Result<Menu<tauri::Wry>, tauri::E
         )?)
         .item(&menu_item(
             app,
+            "cmd:reveal-current-file",
+            "Reveal Note",
+            None,
+        )?)
+        .item(&menu_item(
+            app,
             "window:close",
             "Close",
             Some("CmdOrCtrl+W"),
@@ -1425,6 +1695,18 @@ fn application_menu(app: &tauri::AppHandle) -> Result<Menu<tauri::Wry>, tauri::E
         .select_all()
         .separator()
         .item(&menu_item(app, "cmd:find", "Find…", Some("CmdOrCtrl+F"))?)
+        .item(&menu_item(
+            app,
+            "cmd:find-next",
+            "Find Next",
+            Some("CmdOrCtrl+G"),
+        )?)
+        .item(&menu_item(
+            app,
+            "cmd:find-previous",
+            "Find Previous",
+            Some("Shift+CmdOrCtrl+G"),
+        )?)
         .build()?;
     let format = SubmenuBuilder::new(app, "Format")
         .item(&menu_item(app, "cmd:bold", "Bold", Some("CmdOrCtrl+B"))?)
@@ -1440,16 +1722,37 @@ fn application_menu(app: &tauri::AppHandle) -> Result<Menu<tauri::Wry>, tauri::E
             "Inline Code",
             Some("CmdOrCtrl+`"),
         )?)
+        .item(&menu_item(app, "cmd:highlight", "Highlight", None)?)
+        .item(&menu_item(
+            app,
+            "cmd:strike",
+            "Strikethrough",
+            Some("Shift+CmdOrCtrl+X"),
+        )?)
         .separator()
         .item(&menu_item(app, "cmd:blockquote", "Blockquote", None)?)
         .item(&menu_item(app, "cmd:bullet-list", "Bullet List", None)?)
         .item(&menu_item(app, "cmd:ordered-list", "Ordered List", None)?)
         .item(&menu_item(app, "cmd:task-list", "Task List", None)?)
+        .item(&menu_item(app, "cmd:code-block", "Code Block", None)?)
+        .item(&menu_item(
+            app,
+            "cmd:paragraph-menu",
+            "Heading / Paragraph…",
+            None,
+        )?)
         .item(&menu_item(app, "cmd:insert-table", "Insert Table", None)?)
         .item(&menu_item(
             app,
             "cmd:insert-math-block",
             "Insert Math Block",
+            None,
+        )?)
+        .item(&menu_item(app, "cmd:insert-toc", "Insert TOC", None)?)
+        .item(&menu_item(
+            app,
+            "cmd:edit-properties",
+            "Edit Properties…",
             None,
         )?)
         .build()?;
@@ -1478,7 +1781,10 @@ fn application_menu(app: &tauri::AppHandle) -> Result<Menu<tauri::Wry>, tauri::E
         .item(&menu_item(app, "cmd:toggle-toc", "Page Outline", None)?)
         .item(&menu_item(app, "cmd:toggle-agenda", "Agenda", None)?)
         .item(&menu_item(app, "cmd:toggle-graph", "Local Graph", None)?)
+        .item(&menu_item(app, "nav:graph", "Workspace Graph", None)?)
         .item(&menu_item(app, "cmd:toggle-tools", "Tools", None)?)
+        .item(&menu_item(app, "cmd:jupyter-panel", "Jupyter Cells", None)?)
+        .item(&menu_item(app, "cmd:task-manager", "Task Manager", None)?)
         .build()?;
     let view = SubmenuBuilder::new(app, "View")
         .item(&menu_item(
@@ -1515,6 +1821,7 @@ fn application_menu(app: &tauri::AppHandle) -> Result<Menu<tauri::Wry>, tauri::E
         .separator()
         .minimize()
         .maximize()
+        .bring_all_to_front()
         .build()?;
     let mut menu = MenuBuilder::new(app);
     #[cfg(target_os = "macos")]
@@ -1552,24 +1859,82 @@ fn handle_menu(app: &tauri::AppHandle, id: &str) {
     }
     match id {
         "nav:wiki" => {
-            let _ = create_window(app, String::new(), "/wiki".into(), None);
+            if let Some(window) = current {
+                let _ = open_target(
+                    app.clone(),
+                    window,
+                    OpenTarget {
+                        url: "/wiki".into(),
+                        source: "wiki".into(),
+                        ..Default::default()
+                    },
+                );
+            } else {
+                let _ = create_window(app, String::new(), "/wiki".into(), None);
+            }
         }
         "nav:graph" => {
-            let _ = create_window(app, String::new(), "/wiki?view=graph".into(), None);
+            if let Some(window) = current {
+                let _ = open_target(
+                    app.clone(),
+                    window,
+                    OpenTarget {
+                        url: "/wiki?view=graph".into(),
+                        source: "graph".into(),
+                        ..Default::default()
+                    },
+                );
+            } else {
+                let _ = create_window(app, String::new(), "/wiki?view=graph".into(), None);
+            }
+        }
+        "nav:new-page" => {
+            if let Some(window) = current {
+                let _ = open_target(
+                    app.clone(),
+                    window,
+                    OpenTarget {
+                        url: "/wiki?new=1".into(),
+                        source: "wiki".into(),
+                        disposition: "new".into(),
+                        ..Default::default()
+                    },
+                );
+            } else {
+                let _ = create_window(app, String::new(), "/wiki?new=1".into(), None);
+            }
         }
         "window:new" => {
             let _ = create_window(app, String::new(), "/wiki".into(), None);
         }
         "window:settings" => {
-            let _ = create_window(app, String::new(), "/config".into(), None);
+            let label = app
+                .state::<DesktopState>()
+                .windows
+                .lock()
+                .ok()
+                .and_then(|windows| {
+                    windows
+                        .iter()
+                        .find(|(_, state)| state.kind == "config")
+                        .map(|(label, _)| label.clone())
+                });
+            if let Some(window) = label.and_then(|label| app.get_webview_window(&label)) {
+                let _ = window.show();
+                let _ = window.set_focus();
+            } else {
+                let _ = create_window(app, String::new(), "/config".into(), None);
+            }
         }
         "window:open" => {
             if let Some(paths) = rfd::FileDialog::new()
                 .add_filter("Markdown", &["md", "markdown"])
                 .pick_files()
             {
-                for path in paths {
-                    let _ = create_window(app, path.to_string_lossy().into(), String::new(), None);
+                for (index, path) in paths.into_iter().enumerate() {
+                    if let Err(error) = open_system_file(app, path, index > 0) {
+                        eprintln!("[noema-tauri] open dialog failed: {error}");
+                    }
                 }
             }
         }
@@ -1619,11 +1984,23 @@ fn handle_menu(app: &tauri::AppHandle, id: &str) {
 
 pub fn run() {
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+            let paths = argument_file_paths(&args, &cwd);
+            if paths.is_empty() {
+                if let Some(window) = active_window(app) {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            } else {
+                handle_opened_files(app, paths);
+            }
+        }))
         .plugin(tauri_plugin_shell::init())
         .menu(application_menu)
         .on_menu_event(|app, event| handle_menu(app, event.id().as_ref()))
         .invoke_handler(tauri::generate_handler![
             open_files,
+            close_window,
             open_target,
             update_window_state,
             show_menu,
@@ -1636,6 +2013,7 @@ pub fn run() {
             list_plugins,
             set_plugin_enabled,
             read_dropped_files,
+            broadcast_app_config,
             desktop_smoke_report,
         ])
         .setup(|app| {
@@ -1652,12 +2030,15 @@ pub fn run() {
             app.manage(DesktopState {
                 host_url: Mutex::new(String::new()),
                 host_child: Mutex::new(None),
+                pending_files: Mutex::new(Vec::new()),
                 windows: Mutex::new(HashMap::new()),
+                approved_closes: Mutex::new(HashSet::new()),
                 next_window: AtomicU64::new(1),
                 resource_root,
                 data_root,
                 note_root,
                 quitting: AtomicBool::new(false),
+                quit_approved: AtomicBool::new(false),
             });
             start_host(app.handle().clone()).map_err(|error| io::Error::other(error))?;
             Ok(())
@@ -1666,6 +2047,24 @@ pub fn run() {
         .expect("failed to build Noema Tauri host");
 
     app.run(|handle, event| match event {
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Opened { urls } => {
+            handle_opened_files(handle, opened_file_paths(&urls));
+        }
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Reopen {
+            has_visible_windows,
+            ..
+        } => {
+            if !has_visible_windows {
+                if handle.webview_windows().is_empty() {
+                    let _ = create_window(handle, String::new(), "/wiki".into(), None);
+                } else if let Some(window) = active_window(handle) {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+        }
         tauri::RunEvent::Exit => {
             let state = handle.state::<DesktopState>();
             state.quitting.store(true, Ordering::Relaxed);
@@ -1675,6 +2074,47 @@ pub fn run() {
                     let _ = child.kill();
                 }
             };
+        }
+        tauri::RunEvent::ExitRequested { api, .. } => {
+            let state = handle.state::<DesktopState>();
+            if state.quit_approved.load(Ordering::Relaxed) {
+                return;
+            }
+            let risky = state
+                .windows
+                .lock()
+                .map(|windows| windows.values().any(WindowState::risky))
+                .unwrap_or(false);
+            if risky {
+                api.prevent_exit();
+                let app = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    let result = rfd::AsyncMessageDialog::new()
+                        .set_level(rfd::MessageLevel::Warning)
+                        .set_title("Quit Noema?")
+                        .set_description(
+                            "One or more windows have unsaved, conflicted, or active work.",
+                        )
+                        .set_buttons(rfd::MessageButtons::OkCancelCustom(
+                            "Quit Without Saving".into(),
+                            "Cancel".into(),
+                        ))
+                        .show()
+                        .await;
+                    if matches!(result, rfd::MessageDialogResult::Ok)
+                        || matches!(
+                            result,
+                            rfd::MessageDialogResult::Custom(ref value)
+                                if value == "Quit Without Saving"
+                        )
+                    {
+                        app.state::<DesktopState>()
+                            .quit_approved
+                            .store(true, Ordering::Relaxed);
+                        app.exit(0);
+                    }
+                });
+            }
         }
         _ => {}
     });
@@ -1692,6 +2132,47 @@ mod tests {
             .map(|duration| duration.as_nanos())
             .unwrap_or_default();
         std::env::temp_dir().join(format!("noema-{name}-{}-{stamp}", std::process::id()))
+    }
+
+    #[test]
+    fn routes_file_targets_to_the_editor_and_empty_targets_to_the_wiki() {
+        assert_eq!(default_route_path(""), "/wiki");
+        assert_eq!(default_route_path("/notes/GraphTensor.md"), "/");
+    }
+
+    #[test]
+    fn system_open_accepts_markdown_file_urls_and_ignores_other_resources() {
+        let urls = vec![
+            Url::parse("file:///tmp/one.md").unwrap(),
+            Url::parse("file:///tmp/two.MARKDOWN").unwrap(),
+            Url::parse("file:///tmp/image.png").unwrap(),
+            Url::parse("https://example.com/note.md").unwrap(),
+            Url::parse("file:///tmp/one.md").unwrap(),
+        ];
+        assert_eq!(
+            opened_file_paths(&urls),
+            vec![
+                PathBuf::from("/tmp/one.md"),
+                PathBuf::from("/tmp/two.MARKDOWN")
+            ]
+        );
+    }
+
+    #[test]
+    fn second_instance_resolves_relative_markdown_arguments() {
+        let args = vec![
+            "Noema".into(),
+            "notes/one.md".into(),
+            "/tmp/two.markdown".into(),
+            "image.png".into(),
+        ];
+        assert_eq!(
+            argument_file_paths(&args, "/workspace"),
+            vec![
+                PathBuf::from("/workspace/notes/one.md"),
+                PathBuf::from("/tmp/two.markdown")
+            ]
+        );
     }
 
     #[test]

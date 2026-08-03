@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-broadcast-app-config"
+description = "Enables the broadcast_app_config command without any pre-configured scope."
+commands.allow = ["broadcast_app_config"]
+
+[[permission]]
+identifier = "deny-broadcast-app-config"
+description = "Denies the broadcast_app_config command without any pre-configured scope."
+commands.deny = ["broadcast_app_config"]

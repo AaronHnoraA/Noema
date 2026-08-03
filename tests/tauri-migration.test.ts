@@ -41,6 +41,9 @@ describe("Tauri desktop migration", () => {
     expect(config.bundle.externalBin).toContain("binaries/noema-node");
     expect(config.bundle.resources["../web-host.mjs"]).toBe("web-host.mjs");
     expect(config.bundle.resources["../node_modules/"]).toBeUndefined();
+    expect(config.bundle.fileAssociations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ ext: ["md", "markdown"], role: "Editor" }),
+    ]));
     expect(config.bundle.icon).toEqual(expect.arrayContaining([
       "icons/icon.icns",
       "icons/icon.ico",
@@ -51,8 +54,14 @@ describe("Tauri desktop migration", () => {
     expect(host).toContain("client: String");
     expect(host).toContain("migrate_legacy_desktop_state");
     expect(host).toContain("merge_legacy_cursor_positions");
+    expect(host).toContain("tauri::RunEvent::Opened");
+    expect(host).toContain("handle_opened_files");
+    expect(host).toContain("tauri_plugin_single_instance::init");
+    expect(host).toContain('path.join(".config/noema")');
     expect(wiki).toContain("window.noemaDesktop.openTarget");
     expect(wiki).toContain('source: "wiki"');
+    expect(wiki).toContain("window.noemaDesktop?.onFileDrop");
+    expect(wiki).toContain("window.noemaDesktop?.onCommand");
     expect(editor).toContain("flushCursorPositionKeepalive");
     expect(webHost).toContain("savePositionKeepalive");
   });

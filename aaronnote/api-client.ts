@@ -806,6 +806,7 @@ declare global {
       platform: string;
       filePath(file: File): string;
       openFiles(files: string[]): void;
+      closeWindow(): Promise<void>;
       openTarget(target: { file?: string; url?: string; source?: string; disposition?: "" | "new" | "split-right" | "split-down" }): Promise<boolean>;
       updateWindowState(state: { kind?: string; file?: string; title?: string; dirty?: boolean; saveInFlight?: boolean; conflict?: boolean; busy?: boolean }): void;
       showMenu(kind: "actions" | "window", point?: { x: number; y: number }): Promise<boolean>;
@@ -826,6 +827,7 @@ declare global {
       }>;
       listPlugins(): Promise<NoemaDesktopPlugin[]>;
       setPluginEnabled(id: string, enabled: boolean): Promise<NoemaDesktopPlugin[]>;
+      notifyAppConfigChanged(revision: string): void;
       onCommand(callback: (detail: unknown) => void): () => void;
       onFileDrop?(callback: (event: {
         type: "enter" | "over" | "drop" | "leave";
