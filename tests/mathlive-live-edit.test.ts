@@ -11,6 +11,7 @@ import {
   insertVisualTexNaturalSpace,
   insertVisualTexInlineRow,
   normalizeVisualTexMathLiveOutput,
+  requestVisualTexSnippetBoundaryHandoff,
   revealVisualTexCaretHorizontally,
   selectAllVisualTexMathfield,
   visualTexCompletionPrefix,
@@ -355,6 +356,9 @@ describe("LiveTeX custom macro writeback", () => {
     expect(applyVisualTexCompletionTemplate(field, "frac", template, 4)).toBe(true);
     expectNoSnippetScaffolding(field);
 
+    const first = [...field.selection.ranges[0]!];
+    expect(advanceVisualTexNavigation(field, true)).toBe("snippet-boundary");
+    expect(field.selection.ranges[0]).toEqual(first);
     expect(advanceVisualTexNavigation(field, false)).toBe("placeholder");
     expect(selectedMathfieldLatex(field)).toContain("b");
     expect(advanceVisualTexNavigation(field, false)).toBe("final");
@@ -594,6 +598,24 @@ describe("LiveTeX custom macro writeback", () => {
     expect(visualTexMathfieldLatex(field)).toBe(String.raw`\text{addsdd}`);
   });
 
+  test("hands a root boundary to an outer snippet only when it explicitly accepts", () => {
+    const owner = document.createElement("div");
+    const host = document.createElement("div");
+    owner.append(host);
+    document.body.append(owner);
+    let direction = "";
+    const accept = (event: Event): void => {
+      direction = (event as CustomEvent<{ direction: string }>).detail.direction;
+      event.preventDefault();
+    };
+    owner.addEventListener("aaronnote:math-snippet-boundary", accept);
+    expect(requestVisualTexSnippetBoundaryHandoff(host, false)).toBe(true);
+    expect(direction).toBe("forward");
+
+    owner.removeEventListener("aaronnote:math-snippet-boundary", accept);
+    expect(requestVisualTexSnippetBoundaryHandoff(host, true)).toBe(false);
+  });
+
   test("undoes and redoes a completed text snippet without restoring editor atoms", () => {
     const field = createMathfield("text");
     const template = mathLiveSnippetTemplate({
@@ -757,15 +779,93 @@ describe("LiveTeX custom macro writeback", () => {
     )).toBe(String.raw`\left\langle a\middle|b\right\rangle`);
   });
 
-  test("keeps a trailing text run clamped inside the formula", () => {
+  test("leaves a trailing text parent before clamping at the formula root", () => {
     const field = createMathfield(String.raw`\text{thin}`);
     field.addEventListener("move-out", (event: Event) => event.preventDefault());
     expect(field.position).toBe(field.lastOffset);
     expect(field.mode).toBe("text");
 
-    expect(advanceVisualTexNavigation(field, false)).toBe("boundary");
+    expect(advanceVisualTexNavigation(field, false)).toBe("parent");
     expect(field.position).toBe(field.lastOffset);
-    expect(field.mode).toBe("text");
+    expect(field.mode).toBe("math");
+    expect(advanceVisualTexNavigation(field, false)).toBe("boundary");
+  });
+
+  test("special-cases operator and natural-text parents as one navigation family", () => {
+    for (const latex of [
+      String.raw`\text{plain}`,
+      String.raw`\textrm{plain}`,
+      String.raw`\textsf{sans}`,
+      String.raw`\texttt{mono}`,
+      String.raw`\textbf{bold}`,
+      String.raw`\textmd{medium}`,
+      String.raw`\textit{italic}`,
+      String.raw`\textup{up}`,
+      String.raw`\textnormal{normal}`,
+      String.raw`\mbox{box}`,
+    ]) {
+      const field = createMathfield(`${latex}+z`);
+      field.addEventListener("move-out", (event: Event) => event.preventDefault());
+      const textPosition = Array.from({ length: field.lastOffset + 1 }, (_, position) => position)
+        .find((position) => {
+          field.position = position;
+          return field.mode === "text" && position > 0;
+        });
+      expect(textPosition, latex).toBeTypeOf("number");
+      field.position = textPosition!;
+      expect(advanceVisualTexNavigation(field, false), latex).toBe("parent");
+      expect(field.mode, latex).toBe("math");
+      expect(field.position, latex).toBeLessThan(field.lastOffset);
+      const exited = visualTexMathfieldLatex(field);
+      expect(field.insert("q", {
+        format: "latex",
+        insertionMode: "insertAfter",
+        selectionMode: "after",
+        feedback: false,
+      }), latex).toBe(true);
+      expect(visualTexMathfieldLatex(field), latex).toBe(exited.replace(/\+z$/, "q+z"));
+    }
+
+    for (const latex of [
+      String.raw`\operatorname{rank}`,
+      String.raw`\operatorname*{argmax}`,
+      String.raw`\hbox{box}`,
+    ]) {
+      const field = createMathfield(`${latex}+z`);
+      field.addEventListener("move-out", (event: Event) => event.preventDefault());
+      const operatorPosition = Array.from({ length: field.lastOffset + 1 }, (_, position) => position)
+        .find((position) => (field.getElementInfo(position)?.depth ?? 0) > 0);
+      expect(operatorPosition, latex).toBeTypeOf("number");
+      field.position = operatorPosition!;
+      expect(advanceVisualTexNavigation(field, false), latex).toBe("parent");
+      expect(field.position, latex).toBeLessThan(field.lastOffset);
+      expect(field.getElementInfo(field.position)?.depth ?? 0, latex).toBe(0);
+      const exited = visualTexMathfieldLatex(field);
+      expect(field.insert("q", {
+        format: "latex",
+        insertionMode: "insertAfter",
+        selectionMode: "after",
+        feedback: false,
+      }), latex).toBe(true);
+      expect(visualTexMathfieldLatex(field), latex).toBe(exited.replace(/\+z$/, "q+z"));
+    }
+
+    for (const latex of [String.raw`\text{plain}`, String.raw`\operatorname{rank}`]) {
+      const field = createMathfield(`${latex}+z`);
+      field.addEventListener("move-out", (event: Event) => event.preventDefault());
+      const nestedPosition = Array.from({ length: field.lastOffset + 1 }, (_, position) => position)
+        .reverse()
+        .find((position) => {
+          if (position <= 0) return false;
+          field.position = position;
+          return (field.getElementInfo(position)?.depth ?? 0) > 0 || field.mode === "text";
+        });
+      expect(nestedPosition, latex).toBeTypeOf("number");
+      field.position = nestedPosition!;
+      expect(advanceVisualTexNavigation(field, true), latex).toBe("parent");
+      expect(field.position, latex).toBe(0);
+      expect(field.mode, latex).toBe("math");
+    }
   });
 
   test("never lets forward Cmd-] navigation wrap toward the formula start", () => {
@@ -1134,12 +1234,17 @@ describe("LiveTeX host key normalization", () => {
 });
 
 describe("LiveTeX inline geometry", () => {
-  test("moves the whole MathLive box while keeping its lower origin stable", () => {
+  test("moves the whole MathLive box without making ordinary KaTeX lines taller", () => {
+    expect(visualTexMathBottomLeftInsets(
+      { top: 100, bottom: 120 },
+      { top: 100, bottom: 120 },
+    )).toEqual({ top: 0, bottom: 0 });
+
     const insets = visualTexMathBottomLeftInsets(
       { top: 149, bottom: 330 },
       { top: 62, bottom: 330 },
     );
-    expect(insets).toEqual({ top: 89, bottom: 2 });
+    expect(insets).toEqual({ top: 87, bottom: 0 });
 
     // Padding the shell shifts the field and every descendant together, so their
     // relative overflow remains unchanged and the measurement is stable.

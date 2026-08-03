@@ -14,7 +14,6 @@
     "url": "Noema/Noema.git"
   },
   "type": "module",
-  "main": "./desktop/main.mjs",
   "module": "./dist/lib/typora-web.js",
   "exports": {
     ".": {
@@ -36,7 +35,9 @@
     "start:vite": "vp dev --config vite.aaronnote.config.ts --host 127.0.0.1",
     "start:server": "AARONNOTE_HOST_MODE=server node web-host.mjs",
     "build:aaronnote": "tsc && vp build --config vite.aaronnote.config.ts",
-    "build:desktop": "node --check desktop/main.mjs && node --check desktop/preload.cjs && node --check web-host.mjs && npm run build:aaronnote && electron-builder --mac dir",
+    "prepare:tauri": "node scripts/prepare-tauri-sidecar.mjs",
+    "build:desktop": "node --check web-host.mjs && npm run build:aaronnote && npm run prepare:tauri && node scripts/build-tauri.mjs",
+    "tauri": "tauri",
     "build": "tsc && vp build",
     "build:lib": "tsc && vp build --config vite.lib.config.ts",
     "jupyter:bootstrap": "bash jupyter/scripts/bootstrap-jupyter.sh",
@@ -48,12 +49,11 @@
     "prepublishOnly": "npm run build:lib"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "2.11.4",
     "@types/markdown-it": "^14.1.2",
     "@types/requirejs": "2.1.37",
     "@types/turndown": "^5.0.6",
     "@types/ws": "8.18.1",
-    "electron": "^37.8.0",
-    "electron-builder": "^26.0.12",
     "happy-dom": "^20.9.0",
     "postcss": "^8.5.15",
     "typescript": "~6.0.2",
@@ -79,6 +79,7 @@
     "@jupyterlab/services": "7.6.1",
     "@lezer/markdown": "^1.6.3",
     "@mismerge/core": "1.2.1",
+    "@tauri-apps/api": "2.11.1",
     "dompurify": "^3.4.4",
     "highlight.js": "^11.11.1",
     "katex": "^0.16.47",
@@ -97,51 +98,7 @@
     "ws": "8.21.0",
     "zeromq": "^6.5.0"
   },
-  "build": {
-    "appId": "com.noema.desktop",
-    "productName": "Noema",
-    "asar": false,
-    "directories": {
-      "output": "release"
-    },
-    "files": [
-      "desktop/**/*",
-      "server/**/*",
-      "shared/**/*",
-      "dist/aaronnote/**/*",
-      "js/**/*",
-      "agents/**/*",
-      "plugins/**/*",
-      "resources/**/*",
-      "src/styles/themes/**/*",
-      "package.json",
-      "node_modules/**/*",
-      "web-host.mjs"
-    ],
-    "mac": {
-      "identity": null,
-      "icon": "build/Noema.png",
-      "category": "public.app-category.productivity",
-      "target": [
-        "dir"
-      ],
-      "extendInfo": {
-        "CFBundleDocumentTypes": [
-          {
-            "CFBundleTypeName": "Markdown Document",
-            "CFBundleTypeRole": "Editor",
-            "LSHandlerRank": "Alternate",
-            "CFBundleTypeExtensions": [
-              "md",
-              "markdown"
-            ]
-          }
-        ]
-      }
-    }
-  },
   "allowScripts": {
-    "electron@37.10.3": true,
     "zeromq@6.5.0": true
   }
 }

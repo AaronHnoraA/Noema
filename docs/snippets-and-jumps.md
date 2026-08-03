@@ -28,6 +28,9 @@ ranking** to clear it.
 - Fields do not wrap at either end.
 - Mirrors are synchronized when leaving their source field.
 - Nested snippets complete before returning to the parent snippet.
+- LiveTeX fields are a nested snippet layer. They complete first, then hand off
+  to the next outer source-snippet field. If no such field exists, the formula
+  boundary remains a strict no-op.
 - Selecting text before inserting a wrapping snippet supplies
   `yas-selected-text`.
 - Clicking or moving the selection outside the active field cancels the entire

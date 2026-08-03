@@ -157,6 +157,7 @@ import { openWikiGitUi, stopAllWikiGitUis } from "./server/lib/wiki-git-ui.mjs";
 import { knowledgeSearchResponse } from "./server/lib/knowledge-search.mjs";
 import { createImeSwitcher } from "./server/lib/ime.mjs";
 import { ApiRouter } from "./server/infrastructure/api-router.mjs";
+import { readJson, readText } from "./server/infrastructure/http-body.mjs";
 import { createAssetsApiHandlers } from "./server/Features/Assets/api.mjs";
 import { createEmacsApiHandlers } from "./server/Features/Emacs/api.mjs";
 import { openInVSCode } from "./server/lib/external-editor.mjs";
@@ -917,43 +918,6 @@ function transformJavaScript(text) {
 function cleanStatusCode(err, fallback = 500) {
   const code = Number(err?.statusCode || err?.status);
   return Number.isFinite(code) && code >= 400 && code < 600 ? code : fallback;
-}
-
-function readText(req, maxBytes = 4 * 1024 * 1024) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    let size = 0;
-    req.on("data", (chunk) => {
-      size += chunk.length;
-      if (size > maxBytes) {
-        reject(Object.assign(new Error("Request body too large"), { statusCode: 413 }));
-      } else {
-        chunks.push(chunk);
-      }
-    });
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-    req.on("error", reject);
-  });
-}
-
-function readJson(req, maxBytes = 64 * 1024 * 1024) {
-  return new Promise((resolveBody, reject) => {
-    let body = "";
-    req.on("data", (chunk) => {
-      body += chunk;
-      if (body.length > maxBytes) {
-        reject(Object.assign(new Error("Request body too large"), { statusCode: 413 }));
-      }
-    });
-    req.on("end", () => {
-      try {
-        resolveBody(body ? JSON.parse(body) : {});
-      } catch (err) {
-        reject(Object.assign(err, { statusCode: 400 }));
-      }
-    });
-    req.on("error", reject);
-  });
 }
 
 async function notesListPayload(force = false) {
@@ -2048,6 +2012,7 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
       touchRecent: function(file, openedAt) { return call("aaronnote:api:session:touch-recent", [String(file || ""), Number(openedAt) || Date.now()]); },
       getPositions: function() { return call("aaronnote:api:session:positions", []); },
       savePosition: function(position) { return call("aaronnote:api:session:save-position", [position || {}]); },
+      savePositionKeepalive: function(position) { callKeepalive("aaronnote:api:session:save-position", [position || {}]); },
       closeClient: function(body) { return call("aaronnote:api:session:client-close", [body || {}]); },
       closeClientKeepalive: function(body) { callKeepalive("aaronnote:api:session:client-close", [body || {}]); }
     },
@@ -2476,6 +2441,17 @@ const server = createServer(async (req, res) => {
         res.end();
         return;
       }
+    }
+
+    if (url.pathname === "/api/desktop-smoke" && req.method === "POST") {
+      if (hostMode !== "desktop" || process.env.NOEMA_DESKTOP_SMOKE !== "1") {
+        sendText(res, 404, "Not found");
+        return;
+      }
+      const report = await readJson(req, 64 * 1024);
+      process.stdout.write(`[noema-desktop-smoke] ${JSON.stringify(report)}\n`);
+      sendJson(res, 200, { ok: true });
+      return;
     }
 
     if (url.pathname === "/api" && req.method === "POST") {

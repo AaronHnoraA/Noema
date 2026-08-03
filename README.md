@@ -196,6 +196,18 @@ directory automatically. Adding a packaged theme means adding its CSS file
 and manifest entry; the config API and Tools picker do not need a new
 hard-coded theme branch.
 
+## Desktop builds
+
+After `npm ci`, `npm run build:desktop` builds the native Tauri package for the
+current platform: a macOS `.app`, a Windows NSIS installer, or a Linux
+AppImage. Windows x64 and arm64 builds bundle the matching checksummed official
+Node 26.5.0 sidecar and use the system WebView2 runtime; they do not bundle
+Chromium.
+
+On macOS, `make build` is the convenience entry point. Run `make install`
+afterward to copy the already-built app into `/Applications`; installation
+does not rebuild it.
+
 ## Library install
 
 ```sh

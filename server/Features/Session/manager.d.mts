@@ -1,6 +1,7 @@
 export type RecentNote = { file: string; openedAt: number };
 export type CursorPosition = {
   file: string;
+  client?: string;
   mode: "source" | "markdown";
   from: number;
   to: number;

@@ -10,7 +10,7 @@
  * CM6 doc positions are the markdown source offsets used by the public API.
  */
 
-import { EditorSelection, EditorState, Transaction, type Extension, type Text as CMText } from "@codemirror/state";
+import { Compartment, EditorSelection, EditorState, Transaction, type Extension, type Text as CMText } from "@codemirror/state";
 import {
   EditorView,
   keymap,
@@ -62,7 +62,15 @@ import { skipOrderedListRenumber } from "./ordered-list-renumber.ts";
 import { captureHeadingFoldKeys, restoreHeadingFoldKeys } from "./heading-fold.ts";
 import { scheduleViewportDecorationRefresh } from "./viewport-refresh.ts";
 import { createMarkdownFeatureExtensions } from "./extensions/index.ts";
-import { beforeChangeDocumentEffect } from "./extensions/document-lifecycle.ts";
+import {
+  beforeChangeDocumentEffect,
+  hasBeforeChangeDocumentEffect,
+} from "./extensions/document-lifecycle.ts";
+import {
+  EditorViewportStabilizer,
+  mapPositionAcrossText,
+  minimalDocumentChange,
+} from "./viewport-stability.ts";
 import {
   activateBlockMath,
   activateInlineMath,
@@ -438,6 +446,8 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
   host.append(wrap);
   const initialDoc = options.initialContent ?? "";
   const headingFoldMemory = new Map<string, string[]>();
+  const historyCompartment = new Compartment();
+  const historyExtension = history({ minDepth: 200, newGroupDelay: 500 });
   let activeDocumentKey = currentDocumentKey();
   const createState = (doc: string, visual = true): EditorState => EditorState.create({
     doc,
@@ -447,55 +457,24 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
       rememberHeadingFolds,
       "standalone",
       (update) => externalUpdateListeners.forEach((listener) => listener(update)),
+      historyCompartment.of(historyExtension),
     ),
   });
 
+  let viewportStabilizer: EditorViewportStabilizer | null = null;
   const view = new EditorView({
     state: createState(initialDoc),
     parent: editorHost,
+    dispatchTransactions: (transactions, transactionView) => {
+      if (viewportStabilizer) viewportStabilizer.update(transactions);
+      else transactionView.update(transactions);
+    },
   });
+  viewportStabilizer = new EditorViewportStabilizer(view, host);
   scheduleViewportDecorationRefresh(view);
   void document.fonts?.ready.then(() => {
     if (view.dom.isConnected) view.requestMeasure();
   });
-
-  type PointerScrollSnapshot = {
-    hostTop: number;
-    hostLeft: number;
-    editorTop: number;
-    editorLeft: number;
-    windowX: number;
-    windowY: number;
-  };
-
-  const capturePointerScroll = (): PointerScrollSnapshot => ({
-    hostTop: host.scrollTop,
-    hostLeft: host.scrollLeft,
-    editorTop: view.scrollDOM.scrollTop,
-    editorLeft: view.scrollDOM.scrollLeft,
-    windowX: window.scrollX || 0,
-    windowY: window.scrollY || 0,
-  });
-
-  const restorePointerScroll = (snapshot: PointerScrollSnapshot): void => {
-    if (!view.dom.isConnected) return;
-    host.scrollTop = snapshot.hostTop;
-    host.scrollLeft = snapshot.hostLeft;
-    view.scrollDOM.scrollTop = snapshot.editorTop;
-    view.scrollDOM.scrollLeft = snapshot.editorLeft;
-    window.scrollTo(snapshot.windowX, snapshot.windowY);
-  };
-
-  const preservePointerScrollThroughLayout = (snapshot: PointerScrollSnapshot): void => {
-    // Opening a replacement widget changes CM6's height map.  Restore only
-    // across the two layout frames belonging to this click; no scroll listener
-    // or polling remains active afterwards.
-    restorePointerScroll(snapshot);
-    window.requestAnimationFrame(() => {
-      restorePointerScroll(snapshot);
-      window.requestAnimationFrame(() => restorePointerScroll(snapshot));
-    });
-  };
 
   const onSourceWidgetMouseDown = (event: MouseEvent): void => {
     if (event.button !== 0) return;
@@ -535,7 +514,6 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation();
-    const scroll = capturePointerScroll();
     const anchor = mathBlock
       ? from
       : sourceAnchorForClick(source, event, from, to);
@@ -559,7 +537,6 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
       view.dispatch({ selection: { anchor } });
       view.contentDOM.focus({ preventScroll: true });
     }
-    preservePointerScrollThroughLayout(scroll);
     flashCaret();
   };
   view.contentDOM.addEventListener("mousedown", onSourceWidgetMouseDown, { capture: true });
@@ -697,11 +674,59 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
     setMarkdown(md: string, setOptions: SetMarkdownOptions = {}): void {
       finishInlineMathEditing(view);
       if (setOptions.history === "reset") {
+        const source = getMarkdown();
+        const nextDocumentKey = currentDocumentKey();
+        if (setOptions.preserveView && nextDocumentKey === activeDocumentKey) {
+          const selection = EditorSelection.create(
+            view.state.selection.ranges.map((range) => {
+              const anchorAssoc = range.empty ? range.assoc : range.anchor <= range.head ? -1 : 1;
+              const headAssoc = range.empty ? range.assoc : -anchorAssoc;
+              const anchor = mapPositionAcrossText(source, md, range.anchor, anchorAssoc);
+              const head = mapPositionAcrossText(source, md, range.head, headAssoc);
+              return range.empty
+                ? EditorSelection.cursor(
+                    anchor,
+                    range.assoc,
+                    range.bidiLevel ?? undefined,
+                    range.goalColumn,
+                  )
+                : EditorSelection.range(
+                    anchor,
+                    head,
+                    range.goalColumn,
+                    range.bidiLevel ?? undefined,
+                    range.assoc,
+                  );
+            }),
+            view.state.selection.mainIndex,
+          );
+          const change = minimalDocumentChange(source, md);
+          viewportStabilizer!.preserve(() => {
+            view.dispatch({
+              ...(change ? { changes: change } : {}),
+              selection,
+              effects: beforeChangeDocumentEffect.of(undefined),
+              annotations: [
+                Transaction.addToHistory.of(false),
+                skipOrderedListRenumber.of(true),
+              ],
+            });
+            // Removing and re-adding the history compartment clears stale
+            // local undo events without calling setState (which tears down the
+            // document DOM and collapses the outer scroll host).
+            view.dispatch({ effects: historyCompartment.reconfigure([]) });
+            view.dispatch({ effects: historyCompartment.reconfigure(historyExtension) });
+          }, (position) => mapPositionAcrossText(source, md, position, 1));
+          documentResetListeners.forEach((listener) => listener());
+          scheduleViewportDecorationRefresh(view);
+          return;
+        }
         rememberHeadingFolds();
-        activeDocumentKey = currentDocumentKey();
+        activeDocumentKey = nextDocumentKey;
         const visual = isVisualMode(view);
         view.dispatch({ effects: beforeChangeDocumentEffect.of(undefined) });
         view.setState(createState(md, visual));
+        viewportStabilizer!.resetBaseline();
         documentResetListeners.forEach((listener) => listener());
         restoreHeadingFolds();
         scheduleViewportDecorationRefresh(view);
@@ -795,6 +820,10 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
       select?: "start" | "end" | "all",
     ): { from: number; to: number } {
       return dispatchWithSelect(from, to, text, select);
+    },
+
+    preserveViewport<T>(update: () => T): T {
+      return viewportStabilizer!.preserve(update);
     },
 
     textBetween(from: number, to: number): string {
@@ -918,6 +947,7 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
       externalUpdateListeners.clear();
       documentResetListeners.clear();
       view.contentDOM.removeEventListener("mousedown", onSourceWidgetMouseDown, { capture: true });
+      viewportStabilizer!.destroy();
       view.destroy();
       wrap.remove();
       disposeHighlightWorker();
@@ -1068,6 +1098,7 @@ function buildExtensions(
   onFoldStateChanged: () => void,
   mode: AaronnoteMarkdownExtensionMode,
   notifyExternalUpdate?: (update: import("@codemirror/view").ViewUpdate) => void,
+  standaloneHistory: Extension = history({ minDepth: 200, newGroupDelay: 500 }),
 ): Extension[] {
   const standalone = mode === "standalone";
   return [
@@ -1079,7 +1110,7 @@ function buildExtensions(
     EditorView.clickAddsSelectionRange.of((event) => event.altKey || event.metaKey || event.ctrlKey),
     ...(standalone ? [
       drawSelection({ cursorBlinkRate: -1 }),
-      history({ minDepth: 200, newGroupDelay: 500 }),
+      standaloneHistory,
     ] : []),
     vscodeCloseBrackets(),
     closeBrackets(),
@@ -1101,8 +1132,9 @@ function buildExtensions(
     highlightActiveLine(),
     EditorView.lineWrapping,
     EditorView.updateListener.of((update) => {
-      notifyExternalUpdate?.(update);
-      if (update.docChanged && options.onChange) {
+      const documentReset = hasBeforeChangeDocumentEffect(update);
+      if (!documentReset) notifyExternalUpdate?.(update);
+      if (update.docChanged && options.onChange && !documentReset) {
         if (options.onChange.length === 0) {
           (options.onChange as () => void)();
         } else {
@@ -1110,7 +1142,7 @@ function buildExtensions(
           options.onChange(md);
         }
       }
-      if ((update.selectionSet || update.docChanged) && options.onSelectionChange) {
+      if ((update.selectionSet || update.docChanged) && options.onSelectionChange && !documentReset) {
         const { from, to } = update.state.selection.main;
         options.onSelectionChange({ from, to });
       }

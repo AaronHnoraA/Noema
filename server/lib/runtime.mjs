@@ -6127,13 +6127,8 @@ function uniqueExistingCommands(commands) {
   return out;
 }
 
-function unpackedAsarPath(file) {
-  return String(file || "").replace(/\.asar(?=$|[\\/])/, ".asar.unpacked");
-}
-
 function nodeCommand() {
   if (process.env.AARONNOTE_NODE) return process.env.AARONNOTE_NODE;
-  if (process.versions?.electron) return "node";
   return process.execPath;
 }
 
@@ -6175,32 +6170,11 @@ function rawCopilotServerCommands() {
   }
   const binFile = join(appDir, "node_modules", ".bin", "copilot-language-server");
   const serverFile = join(appDir, "node_modules", "@github", "copilot-language-server", "dist", "language-server.js");
-  const unpackedBin = unpackedAsarPath(binFile);
-  const unpackedServer = unpackedAsarPath(serverFile);
-  const resourceServer = process.resourcesPath
-    ? join(process.resourcesPath, "app.asar.unpacked", "node_modules", "@github", "copilot-language-server", "dist", "language-server.js")
-    : "";
   const commands = [];
-  if (!appDir.includes(".asar")) {
-    commands.push(
-      { command: binFile, args: ["--stdio"], mustExist: binFile },
-      { command: nodeCommand(), args: [serverFile, "--stdio"], mustExist: serverFile },
-    );
-  }
-  for (const file of [unpackedBin, unpackedServer, resourceServer]) {
-    if (!file) continue;
-    if (process.versions?.electron) {
-      commands.push({
-        command: process.execPath,
-        args: [file, "--stdio"],
-        env: { ELECTRON_RUN_AS_NODE: "1" },
-        mustExist: file,
-      });
-    } else {
-      commands.push({ command: file, args: ["--stdio"], mustExist: file });
-      commands.push({ command: nodeCommand(), args: [file, "--stdio"], mustExist: file });
-    }
-  }
+  commands.push(
+    { command: binFile, args: ["--stdio"], mustExist: binFile },
+    { command: nodeCommand(), args: [serverFile, "--stdio"], mustExist: serverFile },
+  );
   return commands;
 }
 
@@ -6217,7 +6191,6 @@ function copilotDiagnostics() {
     pid: process.pid,
     execPath: process.execPath,
     nodeCommand: nodeCommand(),
-    electron: process.versions?.electron || "",
     appDir,
     childProcessCwd: copilotProcessCwd(),
     workspaceRoot,
@@ -6233,7 +6206,6 @@ function copilotDiagnostics() {
       AARONNOTE_COPILOT_CACHE_HOME: process.env.AARONNOTE_COPILOT_CACHE_HOME || "",
       NOEMA_COPILOT_PLUGIN: process.env.NOEMA_COPILOT_PLUGIN || "",
       AARONNOTE_NODE: process.env.AARONNOTE_NODE || "",
-      ELECTRON_RUN_AS_NODE: process.env.ELECTRON_RUN_AS_NODE || "",
       PATH: process.env.PATH || "",
     },
     rawCommands: rawCopilotServerCommands().map((cmd) => ({

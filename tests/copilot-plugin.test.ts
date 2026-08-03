@@ -250,6 +250,61 @@ describe("copilot plugin insertion", () => {
     }
   });
 
+  test("does not capture Cmd-brackets while the host marks Copilot inactive", () => {
+    const host = document.createElement("div");
+    const target = document.createElement("button");
+    host.append(target);
+    document.body.append(host);
+    const editor = new FakeEditor("math");
+    let keyHandler: ((event: KeyboardEvent) => boolean) | undefined;
+    let snippetJumps = 0;
+    let delimiterJumps = 0;
+    const restoreApi = installNativeCopilot(async () => ({ ok: true }));
+
+    const cleanup = setupCopilot({
+      editor,
+      host,
+      currentFile: () => "/tmp/copilot.md",
+      vimMode: () => "insert",
+      setStatus: () => {},
+      onChange: () => () => {},
+      onKeyDown: (handler: (event: KeyboardEvent) => boolean) => {
+        keyHandler = handler;
+        return () => { keyHandler = undefined; };
+      },
+      onAction: () => () => {},
+      onSettingsChange: () => () => {},
+      getSettings: () => ({ idleDelayMs: 999_999, largeBufferThresholdKb: 512 }),
+      isActive: () => false,
+      onDocumentEvent: () => () => {},
+      jumpSnippetNext: () => { snippetJumps += 1; return true; },
+      jumpSnippetPrevious: () => false,
+      forwardDelimiter: () => { delimiterJumps += 1; return true; },
+      backwardDelimiter: () => false,
+    });
+
+    try {
+      target.addEventListener("keydown", (event) => { keyHandler?.(event); });
+      target.focus();
+      const event = new KeyboardEvent("keydown", {
+        key: "]",
+        code: "BracketRight",
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      target.dispatchEvent(event);
+
+      expect(event.defaultPrevented).toBe(false);
+      expect(snippetJumps).toBe(0);
+      expect(delimiterJumps).toBe(0);
+    } finally {
+      cleanup();
+      restoreApi();
+      host.remove();
+    }
+  });
+
   test("cmd-right-bracket accepts visible copilot text inside preserveScroll", async () => {
     const host = document.createElement("div");
     const target = document.createElement("button");

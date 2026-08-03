@@ -44,7 +44,9 @@ separate editor implementation.
 | `shared/planning-dsl.mjs` | Structural parser for the `@@todo`/`@@itodo`/`@@project`/`@@milestone`/`@@clock` planning DSL — inline/block shapes, bracket-less titles, parse-time diagnostics, patch/serialize helpers. See `docs/agenda.md`. |
 | `shared/planning-values.mjs` | Value-grammar layer for the planning DSL: dates, repeaters, lead-time, dep-refs, durations, canonical-key aliasing, status normalization. Shared by the server and `src/planning-values.ts` (browser facade) so both validate identically. |
 | `src/styles/*.css` | CM6 editor chrome and swappable Markdown themes. |
-| `aaronnote/main.ts` | Emacs-embedded app composition shell; feature controllers live under `aaronnote/features/`. |
+| `aaronnote/main.ts` | Shared editor composition shell used by both Emacs and Noema.app. |
+| `aaronnote/tauri-bridge.ts` | Tauri renderer adapter exposing the compatibility `window.noemaDesktop` surface without Node or Electron globals. |
+| `src-tauri/src/lib.rs` | Native Tauri desktop host: system WebView windows and menus, local Node sidecar lifecycle, dialogs, clipboard, drag/drop, sessions, and desktop commands. |
 | `aaronnote/agenda.html`/`aaronnote/agenda-main.ts` | Vite entry for the standalone `/agenda` page — mounts `agenda-view.ts` in page mode using the same `api-client.ts` facade the embedded editor uses (`window.aaronnoteApi` is bridged in via `web-host.mjs`'s `adapterScript` for this page too). |
 | `aaronnote/agenda-view.ts` | Full-screen, vault-wide agenda renderer: week/list/month/log/gantt/projects/clocktable/lints views over `api.notes.agenda`. All edits round-trip through `patchTodo`/`clockIn`/`clockOut` — holds no state that isn't re-derivable from markdown. See `docs/agenda.md`. |
 | `aaronnote/latex-export-scope.ts` | Pure whole-note/selection/heading-subtree range model used by the LaTeX scope picker. |
@@ -65,7 +67,7 @@ separate editor implementation.
 ## Emacs handoff
 
 This editor is embedded in Emacs via xwidget/Appine. Panels and subsystems that
-were part of the original standalone Electron app are now delegated to native
+were part of the original desktop app are now delegated to native
 Emacs equivalents:
 
 | Removed subsystem | Emacs equivalent |

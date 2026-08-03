@@ -84,6 +84,27 @@ export function visualTexBracketDirection(
   return null;
 }
 
+/**
+ * Ask the owning document snippet to accept a move beyond LiveTeX's root.
+ * Preventing this event is an explicit acknowledgement; without one the math
+ * editor remains clamped at its boundary.
+ */
+export function requestVisualTexSnippetBoundaryHandoff(
+  host: HTMLElement,
+  backward: boolean,
+): boolean {
+  const event = new CustomEvent<{ direction: "forward" | "backward" }>(
+    "aaronnote:math-snippet-boundary",
+    {
+      bubbles: true,
+      cancelable: true,
+      detail: { direction: backward ? "backward" : "forward" },
+    },
+  );
+  host.dispatchEvent(event);
+  return event.defaultPrevented;
+}
+
 type VisualTexStyleTarget = Pick<MathfieldElement, "selection" | "lastOffset" | "applyStyle">;
 
 export function visualTexStyleRange(field: VisualTexStyleTarget): [number, number] {
@@ -2111,11 +2132,13 @@ export function visualTexMathBottomLeftInsets(
 ): { top: number; bottom: number } {
   // The lower-left corner is the stable origin. MathLive's own box already
   // includes TeX depth, so the lower edge must never be recomputed from child
-  // boxes. Additional formula ascent is absorbed above the field only.
+  // boxes. Additional formula ascent is absorbed above the field only. Do not
+  // add permanent "safety" pixels: they made every active inline formula's
+  // line box taller than the equivalent static KaTeX span.
   const overflowTop = Math.max(0, field.top - visual.top);
   return {
-    top: Math.ceil(overflowTop) + 2,
-    bottom: 2,
+    top: Math.ceil(overflowTop),
+    bottom: 0,
   };
 }
 
@@ -2173,22 +2196,16 @@ function runCommonMathfieldKey(
   return "continue";
 }
 
-type VisualTexTabstopMove = "placeholder" | "edge" | "boundary";
+type VisualTexTabstopMove = "placeholder" | "snippet-boundary" | "edge" | "boundary";
 
 function moveVisualTexTabstop(field: MathfieldElement, backward: boolean): VisualTexTabstopMove {
   const registered = moveVisualTexTabstopSession(field, backward);
   if (registered === "moved") return "placeholder";
   if (registered === "final") return "edge";
-  if (registered === "exhausted") {
-    const edge = backward ? 0 : field.lastOffset;
-    if (field.position !== edge) {
-      withVisualTexUndoRecordingSuspended(field, () => {
-        field.executeCommand(backward ? "moveToMathfieldStart" : "moveToMathfieldEnd");
-      });
-      return "edge";
-    }
-    return "boundary";
-  }
+  // A live snippet never wraps and never falls through into TeX structure.
+  // In particular, Cmd-[ at its first field is a consumed no-op that keeps the
+  // session alive for the following forward move.
+  if (registered === "exhausted") return "snippet-boundary";
   finishInactiveVisualTexTabstopSessions(field);
   // MathLive's native placeholder traversal is intentionally not a fallback:
   // Noema's logical tabstops are the sole snippet state, and the native command
@@ -2211,9 +2228,16 @@ function moveVisualTexTabstop(field: MathfieldElement, backward: boolean): Visua
  *   2. otherwise visit the next/previous unresolved MathLive slot;
  *   3. with no slot, leave the nearest enclosing TeX parent (`}` boundary);
  *   4. with no enclosing parent, move to the root edge;
- *   5. later commands remain clamped there; Cmd-brackets never close LiveTeX.
+ *   5. later commands remain clamped there unless an outer source snippet
+ *      explicitly accepts a boundary handoff.
  */
-export type VisualTexNavigationStep = "placeholder" | "final" | "parent" | "edge" | "boundary";
+export type VisualTexNavigationStep =
+  | "placeholder"
+  | "snippet-boundary"
+  | "final"
+  | "parent"
+  | "edge"
+  | "boundary";
 
 function keepVisualTexNavigationDirectional(
   field: VisualTexNavigationField,
@@ -2223,7 +2247,7 @@ function keepVisualTexNavigationDirectional(
 ): VisualTexNavigationStep {
   // Completing a logical tabstop session may remap its `$0` as edits change
   // the atom count. Keep the requested direction stable across that move.
-  if (step === "boundary" || step === "final") return step;
+  if (step === "boundary" || step === "snippet-boundary" || step === "final") return step;
   const wrapped = backward ? field.position > origin : field.position < origin;
   if (!wrapped) return step;
 
@@ -2245,13 +2269,15 @@ function moveVisualTexPastTextRun(
   const modeField = field as VisualTexNavigationField & Partial<Pick<MathfieldElement, "mode" | "getValue">>;
   if (modeField.mode !== "text") return false;
   let moved = false;
-  // `\\text{...}` is represented as a run of text atoms at the root rather
-  // than an addressable group, so moveAfterParent alone cannot leave it.
+  // MathLive represents natural-text parents (`\text`, `\operatorname`,
+  // `\textrm`, `\textsf`, and their siblings) as text-atom runs rather than
+  // addressable groups, so moveAfterParent alone cannot leave them reliably.
   for (let count = 0; count <= field.lastOffset + 1; count++) {
     if (modeField.getValue) {
       const from = backward ? Math.max(0, field.position - 1) : field.position;
       const to = backward ? field.position : Math.min(field.lastOffset, field.position + 1);
-      if (!/^\\text\{/.test(modeField.getValue(from, to, "latex"))) break;
+      const atom = modeField.getValue(from, to, "latex");
+      if (!visualTexNaturalTextParentPattern.test(atom)) break;
     }
     const before = visualTexSelectionKey(field);
     withVisualTexUndoRecordingSuspended(field as object, () => {
@@ -2261,7 +2287,63 @@ function moveVisualTexPastTextRun(
     moved = true;
     if (modeField.mode !== "text") break;
   }
+  if (moved && modeField.mode === "text") {
+    withVisualTexUndoRecordingSuspended(field as object, () => {
+      field.executeCommand(backward ? "moveBeforeParent" : "moveAfterParent");
+    });
+    if (modeField.mode === "text") modeField.mode = "math";
+  }
   return moved;
+}
+
+const visualTexNaturalTextParentPattern =
+  /^\\(?:operatorname\*?|text(?:bf|md|it|up|normal|rm|sf|tt)?|[hm]box)\{/;
+
+function moveVisualTexPastNaturalTextParent(
+  field: VisualTexNavigationField,
+  backward: boolean,
+): boolean {
+  const inspectable = field as VisualTexNavigationField & Pick<
+    MathfieldElement,
+    "getElementInfo" | "getValue"
+  >;
+  const depth = inspectable.getElementInfo(field.position)?.depth ?? 0;
+  if (depth <= 0) return false;
+
+  let from = field.position;
+  while (from > 0 && (inspectable.getElementInfo(from)?.depth ?? 0) >= depth) from--;
+  let to = field.position;
+  while (to < field.lastOffset
+    && (inspectable.getElementInfo(to)?.depth ?? 0) >= depth) to++;
+  if (from === to) return false;
+  const latex = inspectable.getValue(from, to, "latex").trimStart();
+  if (!visualTexNaturalTextParentPattern.test(latex)) return false;
+
+  withVisualTexUndoRecordingSuspended(field as object, () => {
+    field.position = backward ? from : to;
+  });
+  return true;
+}
+
+function leaveVisualTexTextParentAtRootBoundary(
+  field: VisualTexNavigationField,
+  backward: boolean,
+): boolean {
+  const modeField = field as VisualTexNavigationField & Pick<MathfieldElement, "mode">;
+  if (modeField.mode !== "text" || !collapsedAtMathfieldBoundary(field, backward)) return false;
+  const before = visualTexSelectionKey(field);
+  withVisualTexUndoRecordingSuspended(field as object, () => {
+    field.executeCommand(backward ? "moveBeforeParent" : "moveAfterParent");
+  });
+  if (modeField.mode !== "text" || visualTexSelectionKey(field) !== before) return true;
+
+  // MathLive flattens a trailing natural-text run onto the root's final offset.
+  // At that exact address moveAfterParent can report success without changing
+  // the selection path. Switching the insertion mode is the missing structural
+  // transition: subsequent math atoms are then created outside the text parent
+  // while the caret remains at the same visual edge.
+  modeField.mode = "math";
+  return String(modeField.mode) !== "text";
 }
 
 export function advanceVisualTexNavigation(
@@ -2277,6 +2359,7 @@ export function advanceVisualTexNavigation(
   // atom offsets: an outer default can intentionally precede its nested child.
   if (registered === "moved") return "placeholder";
   if (registered === "final") return finish("final");
+  if (registered === "exhausted") return "snippet-boundary";
   if (registered === "none") {
     const sessions = visualTexSnippetSessions.get(field as object);
     const hasUsableAnchor = visualTexSnippetSessionRanges(field as object).size > 0;
@@ -2287,23 +2370,15 @@ export function advanceVisualTexNavigation(
     finishInactiveVisualTexTabstopSessions(field as object);
   }
   if (collapsedAtMathfieldBoundary(field, backward)) {
-    // A trailing `\\text{...}` reports text mode even though its caret is
-    // already at the root edge. Cmd-brackets are structural navigation only:
-    // keep the caret clamped here instead of closing the formula.
+    if (leaveVisualTexTextParentAtRootBoundary(field, backward)) return "parent";
     return "boundary";
   }
 
-  if (registered === "exhausted") {
-    // Leave the selected tabstop's real TeX parent before continuing ordinary
-    // structural navigation.
-    withVisualTexUndoRecordingSuspended(field as object, () => {
-      field.executeCommand(backward ? "moveBeforeParent" : "moveAfterParent");
-    });
-    if (collapsedAtMathfieldBoundary(field, backward)) return finish("edge");
-  }
-
   if (moveVisualTexPastTextRun(field, backward)) {
-    return finish(collapsedAtMathfieldBoundary(field, backward) ? "edge" : "parent");
+    return finish("parent");
+  }
+  if (moveVisualTexPastNaturalTextParent(field, backward)) {
+    return finish("parent");
   }
 
   const beforeParent = visualTexSelectionKey(field);
@@ -2481,10 +2556,10 @@ export function mountVisualTexInlineEditor(
     draft = syncVisualTexMathfieldDraft(field, options.onInput);
   };
 
-  const moveTabstop = (active: MathfieldElement, backward: boolean): void => {
+  const moveTabstop = (active: MathfieldElement, backward: boolean): VisualTexTabstopMove => {
     suppressMoveOutCommit = true;
     try {
-      moveVisualTexTabstop(active, backward);
+      return moveVisualTexTabstop(active, backward);
     } finally {
       suppressMoveOutCommit = false;
     }
@@ -2493,16 +2568,14 @@ export function mountVisualTexInlineEditor(
   const moveWithinFormula = (
     active: MathfieldElement,
     backward: boolean,
-  ): void => {
+  ): VisualTexNavigationStep => {
     suppressMoveOutCommit = true;
-    let result: VisualTexNavigationStep;
     try {
-      result = advanceVisualTexNavigation(active, backward);
+      return advanceVisualTexNavigation(active, backward);
     } finally {
       suppressMoveOutCommit = false;
+      closeCompletion(host);
     }
-    closeCompletion(host);
-    void result;
   };
 
   const handleSpace = (active: MathfieldElement, key: VisualTexMathHostKey): void => {
@@ -2566,12 +2639,26 @@ export function mountVisualTexInlineEditor(
         }
         if (normalized === "Tab") {
           requestCompletion(host, active);
-          if (!completionConsumesKey(host, key)) moveTabstop(active, Boolean(key.shiftKey));
+          if (!completionConsumesKey(host, key)) {
+            const backward = Boolean(key.shiftKey);
+            const result = moveTabstop(active, backward);
+            if (result === "boundary"
+              && requestVisualTexSnippetBoundaryHandoff(host, backward)) {
+              syncDraft();
+              options.onCommit(backward ? "backward" : "forward");
+            }
+          }
           return true;
         }
         const bracketDirection = visualTexBracketDirection(key);
         if (bracketDirection) {
-          moveWithinFormula(active, bracketDirection === "backward");
+          const backward = bracketDirection === "backward";
+          const result = moveWithinFormula(active, backward);
+          if (result === "boundary"
+            && requestVisualTexSnippetBoundaryHandoff(host, backward)) {
+            syncDraft();
+            options.onCommit(backward ? "backward" : "forward");
+          }
           return true;
         }
         return false;
@@ -2921,11 +3008,18 @@ function mountVisualTexSingleDisplayEditor(
         if (normalized === "Tab") {
           requestCompletion(host, active, applyDisplayLayoutSnippet);
           if (!completionConsumesKey(host, key)) {
+            const backward = Boolean(key.shiftKey);
             suppressMoveOutCommit = true;
+            let result: VisualTexTabstopMove;
             try {
-              moveVisualTexTabstop(active, Boolean(key.shiftKey));
+              result = moveVisualTexTabstop(active, backward);
             } finally {
               suppressMoveOutCommit = false;
+            }
+            if (result === "boundary"
+              && requestVisualTexSnippetBoundaryHandoff(host, backward)) {
+              emitDraft();
+              options.onCommit(backward ? "backward" : "forward");
             }
           }
           return true;
@@ -2941,9 +3035,11 @@ function mountVisualTexSingleDisplayEditor(
             suppressMoveOutCommit = false;
           }
           closeCompletion(host);
-          // Cmd-brackets navigate structure and clamp at the root boundary;
-          // Escape/explicit apply commands are the only ways out.
-          void result;
+          if (result === "boundary"
+            && requestVisualTexSnippetBoundaryHandoff(host, backward)) {
+            emitDraft();
+            options.onCommit(backward ? "backward" : "forward");
+          }
           return true;
         }
         return runCommonMathfieldKey(host, active, key, false) === "handled";

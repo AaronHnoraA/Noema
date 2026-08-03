@@ -36,6 +36,39 @@ describe("region-bounded structural jumps", () => {
     }
   });
 
+  test("does not turn a closed TeX group into an implicit formula exit", () => {
+    const mount = document.createElement("div");
+    document.body.appendChild(mount);
+    const markdown = String.raw`before \(\text{words}\) after`;
+    const editor = createEditor(mount, { initialContent: markdown });
+    try {
+      const afterText = markdown.indexOf("}") + 1;
+      editor.setSelection(afterText, undefined, { scrollIntoView: false });
+
+      expect(structuralJumpTarget(editor.view, 1)).toBeNull();
+      expect(jumpStructuralDelimiter(editor.view, 1)).toBe(false);
+      expect(editor.getSelection().from).toBe(afterText);
+    } finally {
+      editor.destroy();
+      mount.remove();
+    }
+  });
+
+  test("clamps inside an inline formula with no bracket pair", () => {
+    const mount = document.createElement("div");
+    document.body.appendChild(mount);
+    const markdown = String.raw`before \(x\) after`;
+    const editor = createEditor(mount, { initialContent: markdown });
+    try {
+      const body = markdown.indexOf("x");
+      editor.setSelection(body, undefined, { scrollIntoView: false });
+      expect(structuralJumpTarget(editor.view, 1)).toBeNull();
+    } finally {
+      editor.destroy();
+      mount.remove();
+    }
+  });
+
   test("ignores escaped brackets and inline-code pairs", () => {
     expect(structuralPairs("\\(escaped\\) `code(x)` [real]")).toEqual([{ open: 22, close: 27 }]);
   });

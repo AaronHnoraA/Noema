@@ -51,7 +51,12 @@ function jumpScope(view: EditorView, cursor: number): Scope {
     : boundedScope(line.from, line.to, cursor, false);
 }
 
-function boundedScope(from: number, to: number, cursor: number, math: boolean): Scope {
+function boundedScope(
+  from: number,
+  to: number,
+  cursor: number,
+  math: boolean,
+): Scope {
   if (to - from <= MAX_SCOPE_CHARS) return { from, to, math };
   const half = MAX_SCOPE_CHARS >> 1;
   const boundedFrom = Math.max(from, Math.min(cursor - half, to - MAX_SCOPE_CHARS));
@@ -92,25 +97,23 @@ export function structuralJumpTarget(view: EditorView, direction: 1 | -1): numbe
   const cursor = view.state.selection.main.head;
   const scope = jumpScope(view, cursor);
   const pairs = structuralPairs(view.state.doc.sliceString(scope.from, scope.to), scope.from, scope.math);
-  if (pairs.length === 0) return null;
 
   if (direction > 0) {
     const containing = pairs
-      .filter((pair) => pair.open < cursor && pair.close + 1 >= cursor)
+      .filter((pair) => pair.open < cursor && pair.close + 1 > cursor)
       .sort((a, b) => a.close - b.close || b.open - a.open);
     const following = pairs
-      .filter((pair) => pair.open >= cursor)
+      .filter((pair) => pair.open >= cursor && pair.close + 1 > cursor)
       .sort((a, b) => a.open - b.open || a.close - b.close);
-    return (containing[0] ?? following[0])?.close == null
-      ? null
-      : (containing[0] ?? following[0])!.close + 1;
+    const pair = containing[0] ?? following[0];
+    return pair ? pair.close + 1 : null;
   }
 
   const containing = pairs
-    .filter((pair) => pair.open + 1 <= cursor && pair.close + 1 >= cursor)
+    .filter((pair) => pair.open + 1 < cursor && pair.close + 1 >= cursor)
     .sort((a, b) => b.open - a.open || a.close - b.close);
   const preceding = pairs
-    .filter((pair) => pair.close < cursor)
+    .filter((pair) => pair.close < cursor && pair.open + 1 < cursor)
     .sort((a, b) => b.close - a.close || b.open - a.open);
   const target = containing[0] ?? preceding[0];
   return target ? target.open + 1 : null;
@@ -118,9 +121,7 @@ export function structuralJumpTarget(view: EditorView, direction: 1 | -1): numbe
 
 export function jumpStructuralDelimiter(view: EditorView, direction: 1 | -1): boolean {
   const target = structuralJumpTarget(view, direction);
-  if (target == null) return false;
-  if (target !== view.state.selection.main.head) {
-    view.dispatch({ selection: { anchor: target }, scrollIntoView: true });
-  }
+  if (target == null || target === view.state.selection.main.head) return false;
+  view.dispatch({ selection: { anchor: target }, scrollIntoView: true });
   return true;
 }

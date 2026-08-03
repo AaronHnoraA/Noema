@@ -9,8 +9,8 @@ import {
   pluginIdList,
   validatePluginManifest,
 } from "../shared/plugin-system.mjs";
-// @ts-expect-error The desktop host is a Node ESM module outside the TS app graph.
-import { createDesktopPluginHost } from "../desktop/plugin-host.mjs";
+// @ts-expect-error Built-in plugin entry points are Node ESM modules outside the TS app graph.
+import { activate as activateCopilotPlugin } from "../plugins/noema-copilot/main.mjs";
 
 const chineseManifest = validatePluginManifest(JSON.parse(readFileSync(
   resolve(process.cwd(), "plugins/noema-zh-cn/plugin.json"),
@@ -61,30 +61,29 @@ describe("Noema desktop plugin system", () => {
 
   test("keeps Copilot active and points desktop hosts at the packaged server", async () => {
     const userData = mkdtempSync(resolve(tmpdir(), "noema-plugin-test-"));
-    const host = createDesktopPluginHost({
-      app: { on: () => {} },
-      session: {},
-      net: {},
+    const storageDir = join(userData, "plugin-state/noema.copilot");
+    let transformEnvironment = (
+      environment: Record<string, string>,
+      _context: { hostMode: string },
+    ) => environment;
+    const api = {
       appRoot: process.cwd(),
-      userData,
-      env: { NOEMA_DISABLED_PLUGINS: "noema.copilot" },
-    });
+      storageDir,
+      manifest: copilotManifest,
+      registerHostEnvironmentTransformer(transformer: typeof transformEnvironment) {
+        transformEnvironment = transformer;
+      },
+      log() {},
+    };
     try {
-      await host.load();
-      expect(host.availablePlugins()).toContainEqual(expect.objectContaining({
-        id: "noema.copilot",
-        enabled: true,
-        active: true,
-        configurable: false,
-        locked: true,
-      }));
-      const environment = host.transformHostEnvironment({}, { hostMode: "desktop" });
+      await activateCopilotPlugin(api);
+      const environment = transformEnvironment({}, { hostMode: "desktop" });
       expect(environment.NOEMA_COPILOT_PLUGIN).toBe("noema.copilot");
       expect(environment.AARONNOTE_COPILOT_LANGUAGE_SERVER_MODULE)
         .toBe(resolve(process.cwd(), "node_modules/@github/copilot-language-server/dist/language-server.js"));
-      expect(environment.AARONNOTE_COPILOT_HOME).toBe(join(userData, "plugin-state/noema.copilot/home"));
-      expect(environment.AARONNOTE_COPILOT_XDG_CONFIG_HOME).toBe(join(userData, "plugin-state/noema.copilot/xdg/config"));
-      await expect(host.setPluginEnabled("noema.copilot", false)).rejects.toThrow(/always-active/);
+      expect(environment.AARONNOTE_COPILOT_HOME).toBe(join(storageDir, "home"));
+      expect(environment.AARONNOTE_COPILOT_XDG_CONFIG_HOME).toBe(join(storageDir, "xdg/config"));
+      expect(copilotManifest).toMatchObject({ enabledByDefault: true, configurable: false });
     } finally {
       rmSync(userData, { recursive: true, force: true });
     }

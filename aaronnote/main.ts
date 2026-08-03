@@ -1,3 +1,4 @@
+import "./tauri-bridge.ts";
 import "../src/styles/widgets.css";
 import "../src/styles/typography.css";
 import "./style.css";
@@ -200,7 +201,7 @@ if (serverReaderMode) {
 }
 
 root.innerHTML = `
-  <header class="noema-desktop-titlebar" data-desktop-titlebar ${desktopMode ? "" : "hidden"}>
+  <header class="noema-desktop-titlebar" data-desktop-titlebar data-tauri-drag-region ${desktopMode ? "" : "hidden"}>
     <nav class="noema-desktop-titlebar-controls" aria-label="Note navigation">
       <button type="button" data-desktop-command="back" title="Back" aria-label="Back">←</button>
       <button type="button" data-desktop-command="forward" title="Forward" aria-label="Forward">→</button>
@@ -786,7 +787,6 @@ let liveTexEditor: VisualTexInlineEditor | null = null;
 let liveTexTarget: ContextMathTarget | null = null;
 let liveTexDraft = "";
 let liveTexZoom = 1;
-let liveTexReturnScroll: EditorScrollSnapshot | null = null;
 
 const bibliographyPanel = document.createElement("section");
 bibliographyPanel.className = "aaronnote-bib-panel";
@@ -844,8 +844,7 @@ let cursorPositionsLoaded = false;
 let cursorPositions: CursorPosition[] = [];
 let lastSavedCursorPositionKey = "";
 let lastTrackedCursorPositionKey = "";
-let cursorPositionFlushInFlight = false;
-let cursorPositionFlushQueued = false;
+let cursorPositionFlushTail: Promise<void> = Promise.resolve();
 let clientCloseNotified = false;
 let pendingExternalSave: { file: string; mtimeMs: number } | null = null;
 let pendingExternalSaveRefreshInFlight = false;
@@ -1010,23 +1009,13 @@ const editorCommands = new Set<EditorCommand>([
 
 window.AaronnoteCurrentFile = () => currentFile;
 
-type EditorScrollSnapshot = {
-  hostTop: number;
-  hostLeft: number;
-  scrollTop: number;
-  scrollLeft: number;
-  windowX: number;
-  windowY: number;
-};
-
 type ApplyOpenedNoteOptions = {
   revealCursor?: boolean;
   focusEditor?: boolean;
   updateStatus?: boolean;
   resetVim?: boolean;
   reloadNotes?: boolean;
-  restoreScroll?: EditorScrollSnapshot | null;
-  preserveSelection?: CursorPosition | null;
+  preserveView?: boolean;
 };
 
 async function uploadPasteBlobAsset(
@@ -1159,6 +1148,11 @@ const coreReconnectController = api.connection.supported()
         if (coreWasDisconnected) {
           coreWasDisconnected = false;
           setStatus("Core reconnected");
+          // SSE has no replay. A pane that was suspended while another split
+          // saved may have missed note-saved entirely, so reconcile once from
+          // the authoritative file after reconnect. The same-document CM6
+          // path preserves its logical cursor and viewport.
+          void reconcileCurrentFileAfterCoreReconnect();
         }
       },
     })
@@ -1809,62 +1803,6 @@ window.AaronnoteBibliography = {
   contextMenu: serverReaderMode && !serverReader.customContextMenu ? undefined : showCitationContextMenu,
 };
 
-function captureEditorScroll(): EditorScrollSnapshot {
-  return {
-    hostTop: host.scrollTop,
-    hostLeft: host.scrollLeft,
-    scrollTop: editor.view.scrollDOM.scrollTop,
-    scrollLeft: editor.view.scrollDOM.scrollLeft,
-    windowX: window.scrollX || 0,
-    windowY: window.scrollY || 0,
-  };
-}
-
-let editorScrollRestoreGeneration = 0;
-
-function cancelPendingEditorScrollRestore(): void {
-  editorScrollRestoreGeneration += 1;
-}
-
-function restoreEditorScroll(snapshot: EditorScrollSnapshot | null | undefined): void {
-  if (!snapshot) return;
-  const generation = ++editorScrollRestoreGeneration;
-  const restore = () => {
-    if (host.scrollTop !== snapshot.hostTop) host.scrollTop = snapshot.hostTop;
-    if (host.scrollLeft !== snapshot.hostLeft) host.scrollLeft = snapshot.hostLeft;
-    if (editor.view.scrollDOM.scrollTop !== snapshot.scrollTop) {
-      editor.view.scrollDOM.scrollTop = snapshot.scrollTop;
-    }
-    if (editor.view.scrollDOM.scrollLeft !== snapshot.scrollLeft) {
-      editor.view.scrollDOM.scrollLeft = snapshot.scrollLeft;
-    }
-    if ((window.scrollX || 0) !== snapshot.windowX || (window.scrollY || 0) !== snapshot.windowY) {
-      window.scrollTo(snapshot.windowX, snapshot.windowY);
-    }
-  };
-  restore();
-  window.requestAnimationFrame(() => {
-    if (generation === editorScrollRestoreGeneration) restore();
-  });
-}
-
-function focusEditorPreservingScroll(scroll = captureEditorScroll()): void {
-  try {
-    editor.view.contentDOM.focus({ preventScroll: true });
-  } catch (_) {
-    editor.focus();
-  }
-  restoreEditorScroll(scroll);
-}
-
-// A delayed scroll repair must never overwrite a newer human action. The old
-// multi-frame + 80ms retry was the source of LiveTeX's apparent page rollback:
-// users could already be scrolling or clicking when a stale snapshot landed.
-document.addEventListener("pointerdown", cancelPendingEditorScrollRestore, { capture: true, passive: true });
-document.addEventListener("wheel", cancelPendingEditorScrollRestore, { capture: true, passive: true });
-document.addEventListener("touchmove", cancelPendingEditorScrollRestore, { capture: true, passive: true });
-document.addEventListener("keydown", cancelPendingEditorScrollRestore, { capture: true });
-
 function revealCursorAfterLayout(): void {
   const reveal = () => editor.revealCursor();
   reveal();
@@ -1905,7 +1843,6 @@ function activateEditorFromPointer(event: PointerEvent | MouseEvent): void {
   if (!(target instanceof Node) || !host.contains(target)) return;
   const element = target instanceof Element ? target : target.parentElement;
   if (element?.closest("input, textarea, select, button, a, [data-aaronnote-vim='native']")) return;
-  const scroll = captureEditorScroll();
   window.clearTimeout(editorPointerFocusTimer);
   // Let CM6 process the pointer and establish its clicked selection first.
   // Focusing synchronously here reveals the previous cursor before CM6's own
@@ -1916,7 +1853,6 @@ function activateEditorFromPointer(event: PointerEvent | MouseEvent): void {
     editorPointerFocusTimer = 0;
     if (editor.view.hasFocus) return;
     editor.view.contentDOM.focus({ preventScroll: true });
-    restoreEditorScroll(scroll);
   }, 0);
 }
 
@@ -2036,6 +1972,17 @@ document.addEventListener("aaronnote:math-completion-close", () => {
   if (snippetPopupChooseHandler) hideSnippetPopup();
 });
 host.addEventListener("aaronnote-assist-update", () => scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true, toc: true }));
+let pendingMathSnippetHandoff: "forward" | "backward" | null = null;
+host.addEventListener("aaronnote:math-snippet-boundary", (event) => {
+  const direction = (event as CustomEvent<{ direction?: unknown }>).detail?.direction;
+  if ((direction !== "forward" && direction !== "backward")
+    || !visualMathEditorActive
+    || !snippetSession.isSuspended()
+    || !snippetSession.canMove(direction === "backward")) return;
+  pendingMathSnippetHandoff = direction;
+  event.preventDefault();
+  event.stopPropagation();
+});
 host.addEventListener("aaronnote:inline-math-edit-state", (event) => {
   const active = Boolean((event as CustomEvent<{ active?: boolean }>).detail?.active);
   if (active && !visualMathEditorActive && visualMathReturnMode == null) {
@@ -2043,13 +1990,28 @@ host.addEventListener("aaronnote:inline-math-edit-state", (event) => {
   }
   visualMathEditorActive = active;
   if (!active) {
+    const handoff = pendingMathSnippetHandoff;
+    pendingMathSnippetHandoff = null;
     const returnMode = visualMathReturnMode;
     visualMathReturnMode = null;
     if (returnMode != null && vim.mode() !== returnMode) vim.setMode(returnMode);
     scheduleAssistUpdate({ mathPreview: true, cursor: true });
+    // Inline math dispatches this state event immediately before its CM6
+    // commit, while display math dispatches it during that update. Resume in a
+    // microtask so both adapters map the final source transaction first.
+    queueMicrotask(() => {
+      const moved = handoff != null
+        && snippetSession.resumeAndMove(handoff === "backward");
+      if (!moved) snippetSession.resume();
+      if (moved) {
+        setStatus("Snippet field");
+        scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
+      }
+    });
     return;
   }
-  snippetSession.clear();
+  pendingMathSnippetHandoff = null;
+  snippetSession.suspend();
   hideSnippetPopup();
   hideMathPreview();
   selectionTool.hidden = true;
@@ -3236,9 +3198,9 @@ function convertInlineMathToBlock(target: ContextMathTarget, sourceTex = target.
   const suffix = after.trim().length > 0 ? "\n" : "";
   const tex = normalizeVisualTexLatex(sourceTex).trim();
   const replacement = `${prefix}\\[\n${tex}\n\\]${suffix}`;
-  const scroll = captureEditorScroll();
-  const replaced = editor.replaceMarkdownRange(target.from, target.to, replacement, "end");
-  restoreEditorScroll(scroll);
+  const replaced = editor.preserveViewport(() => (
+    editor.replaceMarkdownRange(target.from, target.to, replacement, "end")
+  ));
   setStatus("Converted inline math to display math");
   scheduleAssistUpdate({ mathPreview: true, cursor: true });
   return replaced.to > replaced.from;
@@ -3249,9 +3211,9 @@ function convertBlockMathToInline(target: ContextMathTarget, sourceTex = target.
   if (target.kind !== "block") return false;
   const tex = normalizeVisualTexLatex(sourceTex).trim().replace(/\s*\n\s*/g, " ");
   const replacement = `\\(${tex}\\)`;
-  const scroll = captureEditorScroll();
-  editor.replaceMarkdownRange(target.from, target.to, replacement, "end");
-  restoreEditorScroll(scroll);
+  editor.preserveViewport(() => {
+    editor.replaceMarkdownRange(target.from, target.to, replacement, "end");
+  });
   setStatus("Converted display math to inline math");
   scheduleAssistUpdate({ mathPreview: true, cursor: true });
   return true;
@@ -3353,26 +3315,28 @@ function replaceContextMathTex(target: ContextMathTarget, tex: string, status: s
   if (!live || live.kind !== target.kind) return false;
   const state = editor.view.state;
   const compatibleTex = normalizeVisualTexLatex(tex);
-  if (live.kind === "inline") {
-    const from = live.from + 2;
-    const to = live.to - 2;
-    const nextFormulaTo = live.to + compatibleTex.length - (to - from);
-    editor.view.dispatch({
-      changes: { from, to, insert: compatibleTex },
-      selection: { anchor: nextFormulaTo },
-    });
-  } else {
-    const rawContent = state.doc.sliceString(live.contentFrom!, live.contentTo!);
-    const indent = rawContent.match(/^[ \t]*/)?.[0]
-      || state.doc.lineAt(live.from).text.match(/^[ \t]*/)?.[0]
-      || "";
-    const insert = `${compatibleTex.trim().split("\n").map((line) => `${indent}${line.trim()}`).join("\n")}\n`;
-    const nextFormulaTo = live.to + insert.length - (live.contentTo! - live.contentFrom!);
-    editor.view.dispatch({
-      changes: { from: live.contentFrom!, to: live.contentTo!, insert },
-      selection: { anchor: nextFormulaTo },
-    });
-  }
+  editor.preserveViewport(() => {
+    if (live.kind === "inline") {
+      const from = live.from + 2;
+      const to = live.to - 2;
+      const nextFormulaTo = live.to + compatibleTex.length - (to - from);
+      editor.view.dispatch({
+        changes: { from, to, insert: compatibleTex },
+        selection: { anchor: nextFormulaTo },
+      });
+    } else {
+      const rawContent = state.doc.sliceString(live.contentFrom!, live.contentTo!);
+      const indent = rawContent.match(/^[ \t]*/)?.[0]
+        || state.doc.lineAt(live.from).text.match(/^[ \t]*/)?.[0]
+        || "";
+      const insert = `${compatibleTex.trim().split("\n").map((line) => `${indent}${line.trim()}`).join("\n")}\n`;
+      const nextFormulaTo = live.to + insert.length - (live.contentTo! - live.contentFrom!);
+      editor.view.dispatch({
+        changes: { from: live.contentFrom!, to: live.contentTo!, insert },
+        selection: { anchor: nextFormulaTo },
+      });
+    }
+  });
   setStatus(status);
   scheduleAssistUpdate({ mathPreview: true, cursor: true });
   return true;
@@ -3401,9 +3365,8 @@ function applyFormulaLayout(target: ContextMathTarget, layout: VisualTexDisplayL
   return replaceContextMathTex(target, next, `Formula layout: ${layout}`);
 }
 
-function dismissLiveTexStudio(): EditorScrollSnapshot | null {
+function dismissLiveTexStudio(): void {
   const wasOpen = !liveTexStudio.hidden;
-  const returnScroll = liveTexReturnScroll;
   liveTexEditor?.destroy();
   liveTexEditor = null;
   liveTexTarget = null;
@@ -3411,25 +3374,25 @@ function dismissLiveTexStudio(): EditorScrollSnapshot | null {
   liveTexEditorHost.replaceChildren();
   liveTexEditorTools.replaceChildren();
   liveTexStudio.hidden = true;
-  liveTexReturnScroll = null;
   if (wasOpen) {
     host.dispatchEvent(new CustomEvent("aaronnote:inline-math-edit-state", {
       bubbles: true,
       detail: { active: false, kind: "studio" },
     }));
   }
-  return returnScroll;
 }
 
 function fallbackLiveTexStudio(target: ContextMathTarget, error: unknown): void {
-  const returnScroll = dismissLiveTexStudio();
-  const live = mathTargetAtPosition(Math.min(editor.view.state.doc.length, target.from + 1));
-  if (live?.kind === "inline") {
-    editor.setMarkdownSelection(live.from + 2, live.to - 2, { scrollIntoView: false });
-  } else if (live?.kind === "block") {
-    editor.setMarkdownSelection(live.contentFrom!, live.contentTo!, { scrollIntoView: false });
-  }
-  focusEditorPreservingScroll(returnScroll ?? captureEditorScroll());
+  editor.preserveViewport(() => {
+    dismissLiveTexStudio();
+    const live = mathTargetAtPosition(Math.min(editor.view.state.doc.length, target.from + 1));
+    if (live?.kind === "inline") {
+      editor.setMarkdownSelection(live.from + 2, live.to - 2, { scrollIntoView: false });
+    } else if (live?.kind === "block") {
+      editor.setMarkdownSelection(live.contentFrom!, live.contentTo!, { scrollIntoView: false });
+    }
+    editor.focus();
+  });
   setStatus(`${error instanceof Error ? error.message : "LiveTeX unavailable"}; 已回退到 TeX 源码与预览`);
   scheduleAssistUpdate({ mathPreview: true, cursor: true });
 }
@@ -3444,29 +3407,34 @@ function applyLiveTexStudio(focusEditor = true): boolean {
     return false;
   }
   if (!latex) {
-    editor.replaceMarkdownRange(live.from, live.to, "", "end");
-    const returnScroll = dismissLiveTexStudio();
-    if (focusEditor) focusEditorPreservingScroll(returnScroll ?? captureEditorScroll());
-    else restoreEditorScroll(returnScroll);
+    editor.preserveViewport(() => {
+      editor.replaceMarkdownRange(live.from, live.to, "", "end");
+      dismissLiveTexStudio();
+      if (focusEditor) editor.focus();
+    });
     setStatus("Empty formula removed");
     scheduleAssistUpdate({ mathPreview: true, cursor: true });
     return true;
   }
   if (live.kind === "inline" && visualTexDisplayLayout(latex) !== "equation") {
-    const changed = convertInlineMathToBlock(live, latex);
-    if (changed) {
-      const returnScroll = dismissLiveTexStudio();
-      if (focusEditor) focusEditorPreservingScroll(returnScroll ?? captureEditorScroll());
-      else restoreEditorScroll(returnScroll);
-    }
+    const changed = editor.preserveViewport(() => {
+      const converted = convertInlineMathToBlock(live, latex);
+      if (converted) {
+        dismissLiveTexStudio();
+        if (focusEditor) editor.focus();
+      }
+      return converted;
+    });
     return changed;
   }
-  const changed = replaceContextMathTex(live, latex, "Formula updated in LiveTeX; save queued");
-  if (changed) {
-    const returnScroll = dismissLiveTexStudio();
-    if (focusEditor) focusEditorPreservingScroll(returnScroll ?? captureEditorScroll());
-    else restoreEditorScroll(returnScroll);
-  }
+  const changed = editor.preserveViewport(() => {
+    const replaced = replaceContextMathTex(live, latex, "Formula updated in LiveTeX; save queued");
+    if (replaced) {
+      dismissLiveTexStudio();
+      if (focusEditor) editor.focus();
+    }
+    return replaced;
+  });
   return changed;
 }
 
@@ -3477,14 +3445,12 @@ function closeLiveTexStudioWithApply(): void {
 
 function openContextLiveTex(target: ContextMathTarget, returnMode?: VimLiteMode): boolean {
   if (rejectReadOnlyAction("Read-only pane")) return false;
-  const returnScroll = captureEditorScroll();
   finishInlineMathEditing(editor.view);
   const live = mathTargetAtPosition(Math.min(editor.view.state.doc.length, target.from + 1)) ?? target;
   dismissLiveTexStudio();
   // Context-menu buttons receive focus before their action runs. Preserve the
   // mode captured when the menu opened instead of the blur-reset mode.
   visualMathReturnMode = returnMode ?? vim.mode();
-  liveTexReturnScroll = returnScroll;
   liveTexTarget = { ...live };
   liveTexDraft = normalizeVisualTexLatex(live.tex);
   liveTexZoom = 1;
@@ -3512,7 +3478,6 @@ function openContextLiveTex(target: ContextMathTarget, returnMode?: VimLiteMode)
     },
     onUnavailable: (error) => fallbackLiveTexStudio(live, error),
   });
-  restoreEditorScroll(returnScroll);
   return true;
 }
 
@@ -3922,9 +3887,10 @@ function scheduleSave(): void {
   }, 650);
 }
 
-function cursorPositionKey(position: Pick<CursorPosition, "file" | "mode" | "from" | "to" | "scrollY">): string {
+function cursorPositionKey(position: Pick<CursorPosition, "file" | "client" | "mode" | "from" | "to" | "scrollY">): string {
   return [
     position.file,
+    position.client || "",
     position.mode,
     Math.max(0, Math.floor(position.from)),
     Math.max(0, Math.floor(position.to)),
@@ -3937,10 +3903,11 @@ function currentCursorPosition(): CursorPosition | null {
   const { from, to } = editor.getMarkdownSelection();
   return {
     file: currentFile,
+    ...(currentClient ? { client: currentClient } : {}),
     mode: editor.isSourceMode() ? "source" : "markdown",
     from: Math.max(0, from),
     to: Math.max(0, to),
-    scrollY: Math.max(0, Math.floor(window.scrollY || 0)),
+    scrollY: Math.max(0, Math.floor(host.scrollTop || 0)),
     updatedAt: Date.now(),
   };
 }
@@ -3950,7 +3917,10 @@ function rememberCursorPosition(position: CursorPosition, positions?: CursorPosi
     cursorPositions = positions;
     return;
   }
-  const index = cursorPositions.findIndex((entry) => entry.file === position.file);
+  const client = position.client || "";
+  const index = cursorPositions.findIndex((entry) => (
+    entry.file === position.file && (entry.client || "") === client
+  ));
   if (index >= 0) cursorPositions[index] = position;
   else cursorPositions.unshift(position);
 }
@@ -3968,7 +3938,16 @@ async function loadCursorPositions(): Promise<CursorPosition[]> {
 }
 
 function rememberedCursorPosition(file: string, positions = cursorPositions): CursorPosition | undefined {
-  return positions.find((position) => position.file === file);
+  if (currentClient) {
+    const scoped = positions.find((position) => (
+      position.file === file && position.client === currentClient
+    ));
+    if (scoped) return scoped;
+  }
+  // The unscoped slot is a backwards-compatible "last used" fallback for a
+  // newly-created pane/window that does not have its own cursor history yet.
+  return positions.find((position) => position.file === file && !position.client)
+    ?? positions.find((position) => position.file === file);
 }
 
 function trackCursorPosition(): CursorPosition | null {
@@ -3985,27 +3964,22 @@ function trackCursorPosition(): CursorPosition | null {
 async function persistCursorPosition(position: CursorPosition): Promise<void> {
   const key = cursorPositionKey(position);
   if (key === lastSavedCursorPositionKey) return;
-  if (cursorPositionFlushInFlight) {
-    cursorPositionFlushQueued = true;
-    return;
-  }
-  cursorPositionFlushInFlight = true;
-  try {
-    const result = await api.session.savePosition(position);
-    rememberCursorPosition(position, result.positions);
-    lastSavedCursorPositionKey = key;
-  } catch {
-    // Cursor position memory is best-effort and should never block editing.
-  } finally {
-    cursorPositionFlushInFlight = false;
-    if (cursorPositionFlushQueued) {
-      cursorPositionFlushQueued = false;
-      const latest = trackCursorPosition();
-      if (latest && cursorPositionKey(latest) !== lastSavedCursorPositionKey) {
-        void persistCursorPosition(latest);
-      }
+  // Queue the captured position itself. Re-reading currentCursorPosition()
+  // after an in-flight request completes can observe a different note and
+  // silently drop the cursor belonging to the note we just left.
+  const snapshot = { ...position };
+  const flush = cursorPositionFlushTail.then(async () => {
+    if (key === lastSavedCursorPositionKey) return;
+    try {
+      const result = await api.session.savePosition(snapshot);
+      rememberCursorPosition(snapshot, result.positions);
+      lastSavedCursorPositionKey = key;
+    } catch {
+      // Cursor position memory is best-effort and should never block editing.
     }
-  }
+  });
+  cursorPositionFlushTail = flush;
+  await flush;
 }
 
 function noteCursorPositionEvent(): void {
@@ -4084,6 +4058,13 @@ async function flushCursorPosition(): Promise<void> {
   if (position) await persistCursorPosition(position);
 }
 
+function flushCursorPositionKeepalive(): void {
+  const position = trackCursorPosition();
+  if (!position) return;
+  rememberCursorPosition(position);
+  api.session.savePositionKeepalive(position);
+}
+
 function notifyClientClosedKeepalive(): void {
   if (clientCloseNotified) return;
   clientCloseNotified = true;
@@ -4120,11 +4101,16 @@ function applyOpenedNote(
     ? rememberedCursorPosition(currentFile, rememberedPositions)
     : undefined;
   applyingContent = true;
-  editor.setMarkdown(String(opened.content || ""), { history: "reset" });
+  editor.setMarkdown(String(opened.content || ""), {
+    history: "reset",
+    preserveView: options.preserveView === true,
+  });
   revision = 0;
   savedRevision = 0;
   desktopSaveConflict = false;
-  const mode = remembered?.mode || opened.mode;
+  const mode = options.preserveView
+    ? (editor.isSourceMode() ? "source" : "markdown")
+    : remembered?.mode || opened.mode;
   if ((!serverReaderMode || serverReader.showSource)
       && String(currentKind || "").trim().toLowerCase() !== "slides"
       && (mode === "source") !== editor.isSourceMode()) editor.toggleSource();
@@ -4133,10 +4119,10 @@ function applyOpenedNote(
   renderModeToggleLabel(vim.mode());
   // During reload, the server selection belongs to the original open/jump
   // request and must not replace the cursor of this already-open editor.
-  const from = Number(options.preserveSelection?.from ?? opened.selection?.from ?? remembered?.from);
-  const to = Number(options.preserveSelection?.to ?? opened.selection?.to ?? remembered?.to ?? from);
+  const from = Number(opened.selection?.from ?? remembered?.from);
+  const to = Number(opened.selection?.to ?? remembered?.to ?? from);
   let shouldRevealCursor = false;
-  if (Number.isFinite(from) && !passiveServerReader) {
+  if (!options.preserveView && Number.isFinite(from) && !passiveServerReader) {
     const length = editor.getMarkdownLength();
     const safeFrom = Math.min(Math.max(0, from), length);
     const safeTo = Math.min(Math.max(0, Number.isFinite(to) ? to : from), length);
@@ -4179,9 +4165,8 @@ function applyOpenedNote(
   if (focusEditor) editor.focus();
   scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true, toc: true });
   scheduleBibliographyRefresh(true);
-  restoreEditorScroll(options.restoreScroll);
   if (!currentReadOnly) scheduleAutomaticProseCheck(2200);
-  if (shouldRevealCursor && !options.restoreScroll && !hasPendingOpenTarget) {
+  if (shouldRevealCursor && !options.preserveView && !hasPendingOpenTarget) {
     revealCursorAfterLayout();
   }
   const targetHash = pendingOpenHash;
@@ -4229,12 +4214,11 @@ async function openFile(file?: string, bootstrap = false): Promise<void> {
 
 async function reloadCurrentFilePreservingCursor(options: {
   silent?: boolean;
-  preserveScroll?: boolean;
+  preserveView?: boolean;
 } = {}): Promise<void> {
   if (!currentFile) return;
   if (!commitActiveLiveTexForBoundary(false)) return;
   const position = trackCursorPosition();
-  const scroll = options.preserveScroll ? captureEditorScroll() : null;
   if (position) rememberCursorPosition(position);
   if (!currentReadOnly && revision !== savedRevision) {
     if (!noteAutoSaveEnabled(currentRemote)) {
@@ -4258,16 +4242,27 @@ async function reloadCurrentFilePreservingCursor(options: {
             updateStatus: false,
             resetVim: false,
             reloadNotes: false,
-            restoreScroll: scroll,
-            preserveSelection: position,
+            preserveView: options.preserveView,
           }
-        : { restoreScroll: scroll, preserveSelection: position },
+        : { preserveView: options.preserveView },
     );
     if (pendingExternalSave?.file === currentFile) pendingExternalSave = null;
     if (!options.silent) setStatus(currentReadOnly ? "Read-only refreshed" : "Refreshed");
   } catch (error) {
     setStatus(error instanceof Error ? error.message : "Refresh failed");
   }
+}
+
+async function reconcileCurrentFileAfterCoreReconnect(): Promise<void> {
+  if (!currentFile || pendingExternalSaveRefreshInFlight) return;
+  if (pendingExternalSave?.file === currentFile) {
+    await refreshPendingExternalSaveOnFocus();
+    return;
+  }
+  // Never overwrite a genuine local draft merely because the event stream
+  // was interrupted. Its next save will use the normal mtime conflict guard.
+  if (revision !== savedRevision) return;
+  await reloadCurrentFilePreservingCursor({ silent: true, preserveView: true });
 }
 
 async function refreshPendingExternalSaveOnFocus(): Promise<void> {
@@ -4284,7 +4279,7 @@ async function refreshPendingExternalSaveOnFocus(): Promise<void> {
   pendingExternalSaveRefreshInFlight = true;
   try {
     if (pending.mtimeMs) currentMtimeMs = pending.mtimeMs;
-    await reloadCurrentFilePreservingCursor({ silent: true, preserveScroll: true });
+    await reloadCurrentFilePreservingCursor({ silent: true, preserveView: true });
     if (pendingExternalSave === pending) pendingExternalSave = null;
   } finally {
     pendingExternalSaveRefreshInFlight = false;
@@ -4322,13 +4317,9 @@ setupCopilot({
   onAction: () => () => {},
   onSettingsChange: () => () => {},
   getSettings: () => ({ idleDelayMs: 850, largeBufferThresholdKb: 512 }),
-  isActive: () => !serverReaderMode && !paused && editorSurfaceVisible(),
+  isActive: () => !serverReaderMode && !paused && !visualMathEditorActive && editorSurfaceVisible(),
   onDocumentEvent: subscribe,
-  preserveScroll: (update) => {
-    const scroll = captureEditorScroll();
-    update();
-    restoreEditorScroll(scroll);
-  },
+  preserveScroll: (update) => editor.preserveViewport(update),
   jumpSnippetNext: jumpSnippetTabstop,
   jumpSnippetPrevious: jumpSnippetTabstopBack,
   forwardDelimiter: () => jumpStructuralDelimiter(editor.view, 1),
@@ -7269,7 +7260,7 @@ function toolActions(): ToolAction[] {
       run: openConfigurationPage,
     },
     { id: "save", group: "document", title: "Save document", detail: "Write current changes to disk", disabled: currentReadOnly || !currentFile, run: () => void save() },
-    { id: "refresh", group: "document", title: "Refresh from disk", detail: "Reload the current document", disabled: !currentFile, run: () => void reloadCurrentFilePreservingCursor({ preserveScroll: true }) },
+    { id: "refresh", group: "document", title: "Refresh from disk", detail: "Reload the current document", disabled: !currentFile, run: () => void reloadCurrentFilePreservingCursor({ preserveView: true }) },
     { id: "source", group: "view", title: editor.isSourceMode() ? "Markdown view" : "Source view", detail: "Switch between rendered Markdown and source", run: () => toggleSourceMode() },
     {
       id: "open-source-editor",
@@ -9064,7 +9055,7 @@ function runHostKey(body: Record<string, unknown>): boolean {
     typeof body.text === "string" ? body.text : undefined,
     typeof body.code === "string" ? body.code : undefined,
   )) return true;
-  focusEditorPreservingScroll();
+  editor.focus();
   if (key === "Escape" || key === "Esc") snippetSession.clear();
   if (handleSnippetPopupHostKey(hostKey)) {
     scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
@@ -9073,6 +9064,19 @@ function runHostKey(body: Record<string, unknown>): boolean {
   if (vim.handleKey(hostKey)) {
     scheduleAssistUpdate({ mathPreview: true, cursor: true });
     return true;
+  }
+  const primaryBracket = !hostKey.altKey && !hostKey.shiftKey
+    && hostKey.metaKey !== hostKey.ctrlKey;
+  const bracketRight = body.code === "BracketRight" || key === "]";
+  const bracketLeft = body.code === "BracketLeft" || key === "[";
+  if (vim.mode() === "insert" && primaryBracket && (bracketRight || bracketLeft)) {
+    const handled = bracketRight
+      ? jumpSnippetTabstop() || jumpStructuralDelimiter(editor.view, 1)
+      : jumpSnippetTabstopBack() || jumpStructuralDelimiter(editor.view, -1);
+    if (handled) {
+      scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
+      return true;
+    }
   }
   if (currentReadOnly) {
     if (key === "Tab" || key === "Enter" || key === "Backspace" || key === "Delete" || (!hostKey.ctrlKey && !hostKey.metaKey && !hostKey.altKey && key.length === 1)) {
@@ -9232,7 +9236,7 @@ function runHostCommand(detail: unknown): boolean {
     }
     case "refresh":
     case "reload":
-      void reloadCurrentFilePreservingCursor({ preserveScroll: true });
+      void reloadCurrentFilePreservingCursor({ preserveView: true });
       return true;
     case "prose-check":
     case "spell-check":
@@ -9264,7 +9268,7 @@ function runHostCommand(detail: unknown): boolean {
       else gotoFindMatch(findIndex - 1);
       return true;
     case "focus":
-      focusEditorPreservingScroll();
+      editor.focus();
       return true;
     case "paste":
       if (rejectReadOnlyAction("Read-only pane")) return true;
@@ -9934,6 +9938,49 @@ document.addEventListener("drop", (event) => {
   }).catch((error) => setStatus(`Drop failed: ${String(error)}`));
 }, true);
 
+let desktopOptionHeld = false;
+window.addEventListener("keydown", (event) => { desktopOptionHeld = event.altKey; }, true);
+window.addEventListener("keyup", (event) => { desktopOptionHeld = event.altKey; }, true);
+window.addEventListener("blur", () => { desktopOptionHeld = false; });
+
+const removeNativeDropListener = desktopMode && window.noemaDesktop?.onFileDrop
+  ? window.noemaDesktop.onFileDrop((event) => {
+    const disposition = desktopDropDisposition(event.paths, desktopOptionHeld);
+    if (event.type === "leave") {
+      desktopDropOverlay.hidden = true;
+      return;
+    }
+    if (event.type === "enter" || event.type === "over") {
+      desktopDropLabel.textContent = disposition.type === "open"
+        ? "Open Markdown in a new Noema window"
+        : "Insert files at the cursor";
+      desktopDropOverlay.hidden = false;
+      return;
+    }
+    desktopDropOverlay.hidden = true;
+    if (disposition.type === "open") {
+      window.noemaDesktop?.openFiles(disposition.paths);
+      setStatus(disposition.paths.length === 1 ? "Opened note in a new window" : `Opened ${disposition.paths.length} notes`);
+      return;
+    }
+    if (rejectReadOnlyAction("Read-only pane") || !window.noemaDesktop?.readDroppedFiles) return;
+    void window.noemaDesktop.readDroppedFiles(disposition.paths).then((files) => {
+      const transfer = new DataTransfer();
+      files.forEach((file) => transfer.items.add(file));
+      const position = event.position && editor.view.posAtCoords(event.position);
+      if (typeof position === "number") editor.setMarkdownSelection(position);
+      editor.focus();
+      return editor.pasteFromDataTransfer(transfer);
+    }).then((handled) => {
+      if (!handled) setStatus("This drop type could not be inserted");
+      else {
+        setStatus("Drop inserted");
+        scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true, toc: true });
+      }
+    }).catch((error) => setStatus(`Drop failed: ${String(error)}`));
+  })
+  : null;
+
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
     setPausedReason("visibility", true);
@@ -9948,7 +9995,7 @@ document.addEventListener("visibilitychange", () => {
 });
 window.addEventListener("pagehide", () => {
   proseLifecycle.invalidate("page-hidden");
-  void flushCursorPosition();
+  flushCursorPositionKeepalive();
   savePendingNoteKeepalive();
   notifyClientClosedKeepalive();
 });
@@ -9956,12 +10003,13 @@ window.addEventListener("beforeunload", () => {
   savePendingNoteKeepalive();
   removeNoemaThemeRuntime();
   removeDesktopCommandListener?.();
+  removeNativeDropListener?.();
   coreReconnectController?.destroy();
   vim.destroy();
   imeCoalesceTimer.cancel();
   zoomController.destroy();
   writingStatsController?.destroy();
-  void flushCursorPosition();
+  flushCursorPositionKeepalive();
   notifyClientClosedKeepalive();
 });
 window.addEventListener("popstate", () => {

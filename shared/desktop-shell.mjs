@@ -74,6 +74,7 @@ export function sanitizeDesktopSession(value, limit = 20) {
       .slice(-Math.max(1, limit))
       .map((item) => ({
         kind: item.kind,
+        client: typeof item.client === "string" ? item.client.trim().slice(0, 256) : "",
         file: item.kind === "note" ? String(item.file || "") : "",
         route: item.kind === "note" ? "" : String(item.route || "/wiki"),
         bounds: item.bounds && Number.isFinite(item.bounds.x) && Number.isFinite(item.bounds.y)

@@ -41,9 +41,10 @@ either adapter:
 
 - In Emacs, `init-aaronnote.el` owns the existing header-line, transient menus,
   buffer integration, and every `my/noema-*` entry point.
-- In Noema.app, `desktop/main.mjs`, `desktop/preload.cjs`, and the
+- In Noema.app, `src-tauri/src/lib.rs`, `aaronnote/tauri-bridge.ts`, and the
   `.noema-desktop-titlebar` renderer provide the macOS application menu,
-  window title bar, drag/drop, and VS Code/new-window behavior.
+  window title bar, drag/drop, and VS Code/new-window behavior. The local Node
+  core runs as a bundled Tauri sidecar; Electron and Chromium are forbidden.
 
 The Emacs header-line is the functional reference for the App title bar:
 

@@ -13,6 +13,7 @@ export class SessionManager {
     this.stateRoot = stateRoot;
     this.resolveFile = resolveFile;
     this.writeFile = writeFile;
+    this.cursorWriteTail = Promise.resolve();
   }
 
   normalizeRecentNotes(entries) {
@@ -57,7 +58,7 @@ export class SessionManager {
 
   normalizeCursorPositions(entries) {
     if (!Array.isArray(entries)) return [];
-    const byFile = new Map();
+    const bySlot = new Map();
     for (const item of entries) {
       const file = item && typeof item.file === "string" ? item.file : "";
       if (!file) continue;
@@ -72,12 +73,28 @@ export class SessionManager {
       const scrollY = item && typeof item.scrollY === "number" && Number.isFinite(item.scrollY) ? Math.max(0, item.scrollY) : 0;
       const updatedAt = item && typeof item.updatedAt === "number" && Number.isFinite(item.updatedAt) ? item.updatedAt : 0;
       const mode = item && item.mode === "source" ? "source" : "markdown";
-      const current = byFile.get(safe);
+      // Emacs split panes have stable client ids. Keep their cursor slots
+      // independent so focusing/saving one pane cannot replace the other
+      // pane's remembered location. Entries without a client remain the
+      // legacy/global desktop slot and preserve backwards compatibility.
+      const client = item && typeof item.client === "string"
+        ? item.client.trim().slice(0, 256)
+        : "";
+      const slot = `${safe}\0${client}`;
+      const current = bySlot.get(slot);
       if (!current || updatedAt > current.updatedAt) {
-        byFile.set(safe, { file: safe, mode, from, to, scrollY, updatedAt });
+        bySlot.set(slot, {
+          file: safe,
+          ...(client ? { client } : {}),
+          mode,
+          from,
+          to,
+          scrollY,
+          updatedAt,
+        });
       }
     }
-    return [...byFile.values()].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 240);
+    return [...bySlot.values()].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 240);
   }
 
   async readCursorPositions() {
@@ -90,18 +107,30 @@ export class SessionManager {
   }
 
   async touchCursorPosition(body) {
-    const safe = this.resolveFile(body.file);
-    const current = await this.readCursorPositions();
-    const next = this.normalizeCursorPositions([{
-      ...body,
-      file: safe,
-      updatedAt: Number(body.updatedAt) || Date.now(),
-    }, ...current]);
-    await this.writeFile(
-      join(this.stateRoot, "positions.json"),
-      `${JSON.stringify(next, null, 2)}\n`,
-      "utf8",
-    );
-    return next;
+    const operation = this.cursorWriteTail.then(async () => {
+      const safe = this.resolveFile(body.file);
+      const updatedAt = Number(body.updatedAt) || Date.now();
+      const scoped = { ...body, file: safe, updatedAt };
+      const current = await this.readCursorPositions();
+      // Keep an unscoped last-used slot as a migration/new-window fallback.
+      // Exact client slots still win when the same pane is restored.
+      const fallback = scoped.client
+        ? { ...scoped, client: undefined }
+        : null;
+      const next = this.normalizeCursorPositions([
+        scoped,
+        ...(fallback ? [fallback] : []),
+        ...current,
+      ]);
+      await this.writeFile(
+        join(this.stateRoot, "positions.json"),
+        `${JSON.stringify(next, null, 2)}\n`,
+        "utf8",
+      );
+      return next;
+    });
+    // A failed filesystem write must not poison every later cursor save.
+    this.cursorWriteTail = operation.catch(() => undefined);
+    return operation;
   }
 }

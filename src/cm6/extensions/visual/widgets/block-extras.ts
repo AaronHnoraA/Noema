@@ -68,6 +68,7 @@ import {
   markdownLinkOpensNewWindow,
 } from "../../../markdown-link-events.ts";
 import { refreshViewportDecorations } from "../../../viewport-refresh.ts";
+import { preserveEditorViewport } from "../../../viewport-stability.ts";
 
 // ---------------------------------------------------------------------------
 // TOC fold state (session-level, not editor history)
@@ -1585,84 +1586,8 @@ function loadJupyterRender(): Promise<typeof import("../../../../jupyter-renderm
 // Expand toggle) before the render module finished loading.
 const ceilRenderTokens = new WeakMap<HTMLElement, number>();
 
-type CeilScrollSnapshot = {
-  top: number;
-  left: number;
-  windowX: number;
-  windowY: number;
-  interactionVersion: number;
-};
-
-let ceilScrollInteractionVersion = 0;
-let ceilScrollInteractionListenersInstalled = false;
-
-function markCeilScrollInteraction(): void {
-  ceilScrollInteractionVersion += 1;
-}
-
-function markCeilKeyboardScrollInteraction(event: KeyboardEvent): void {
-  if (
-    event.key === "ArrowDown"
-    || event.key === "ArrowUp"
-    || event.key === "PageDown"
-    || event.key === "PageUp"
-    || event.key === "Home"
-    || event.key === "End"
-    || event.key === " "
-  ) {
-    markCeilScrollInteraction();
-  }
-}
-
-function ensureCeilScrollInteractionListeners(): void {
-  if (ceilScrollInteractionListenersInstalled) return;
-  ceilScrollInteractionListenersInstalled = true;
-  window.addEventListener("wheel", markCeilScrollInteraction, { capture: true, passive: true });
-  window.addEventListener("touchmove", markCeilScrollInteraction, { capture: true, passive: true });
-  window.addEventListener("pointerdown", markCeilScrollInteraction, { capture: true, passive: true });
-  window.addEventListener("keydown", markCeilKeyboardScrollInteraction, { capture: true });
-}
-
-function captureCeilScroll(view?: EditorView): CeilScrollSnapshot | null {
-  if (!view?.dom.isConnected) return null;
-  ensureCeilScrollInteractionListeners();
-  return {
-    top: view.scrollDOM.scrollTop,
-    left: view.scrollDOM.scrollLeft,
-    windowX: window.scrollX || 0,
-    windowY: window.scrollY || 0,
-    interactionVersion: ceilScrollInteractionVersion,
-  };
-}
-
-function restoreCeilScroll(view: EditorView | undefined, snapshot: CeilScrollSnapshot | null): void {
-  if (!view?.dom.isConnected || !snapshot) return;
-  if (snapshot.interactionVersion !== ceilScrollInteractionVersion) return;
-  view.scrollDOM.scrollTop = snapshot.top;
-  view.scrollDOM.scrollLeft = snapshot.left;
-  window.scrollTo(snapshot.windowX, snapshot.windowY);
-}
-
-function scheduleCeilScrollRestore(view: EditorView | undefined, snapshot: CeilScrollSnapshot | null): void {
-  if (!view?.dom.isConnected || !snapshot) return;
-  const restore = () => restoreCeilScroll(view, snapshot);
-  restore();
-  window.requestAnimationFrame(() => {
-    restore();
-    window.requestAnimationFrame(restore);
-  });
-  for (const delay of [40, 120, 260]) {
-    window.setTimeout(restore, delay);
-  }
-}
-
 function preserveCeilScroll<T>(view: EditorView | undefined, update: () => T): T {
-  const snapshot = captureCeilScroll(view);
-  try {
-    return update();
-  } finally {
-    scheduleCeilScrollRestore(view, snapshot);
-  }
+  return view ? preserveEditorViewport(view, update) : update();
 }
 
 function runCeilDomUpdate<T>(view: EditorView | undefined, preserveScroll: boolean, update: () => T): T {
@@ -1670,9 +1595,7 @@ function runCeilDomUpdate<T>(view: EditorView | undefined, preserveScroll: boole
 }
 
 function requestMeasurePreservingCeilScroll(view: EditorView | undefined): void {
-  const snapshot = captureCeilScroll(view);
-  view?.requestMeasure();
-  scheduleCeilScrollRestore(view, snapshot);
+  if (view) preserveEditorViewport(view, () => view.requestMeasure());
 }
 
 type CeilRenderOptions = {

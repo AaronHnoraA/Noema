@@ -572,6 +572,8 @@ export class SnippetSession {
   private readonly editor: Editor;
   private observesTransactions = false;
   private internalUpdateDepth = 0;
+  private suspended = false;
+  private allowDetachedSelection = false;
 
   constructor(editor: Editor) {
     this.editor = editor;
@@ -584,10 +586,69 @@ export class SnippetSession {
 
   clear(): void {
     this.frames = [];
+    this.suspended = false;
+    this.allowDetachedSelection = false;
   }
 
   active(): boolean {
     return this.validateActiveSelection();
+  }
+
+  /**
+   * Keep the source snippet alive while a nested editor (currently LiveTeX)
+   * owns the DOM selection. Document changes continue to map every stop, but
+   * the temporarily detached CodeMirror selection must not cancel the frame.
+   */
+  suspend(): boolean {
+    if (this.suspended) return this.frames.length > 0;
+    if (!this.validateActiveSelection()) return false;
+    this.suspended = true;
+    return true;
+  }
+
+  isSuspended(): boolean {
+    return this.suspended && this.frames.length > 0;
+  }
+
+  /** Return whether a move would select a real field, without consuming it. */
+  canMove(backward: boolean): boolean {
+    if (!this.validateActiveSelection()) return false;
+    if (backward) {
+      const frame = this.topFrame();
+      if (!frame) return false;
+      return this.frameHasTarget(frame, frame.cursor - 1, -1);
+    }
+    // `next()` completes a nested child before continuing its parent, so scan
+    // the frame stack in the same top-to-bottom order.
+    for (let index = this.frames.length - 1; index >= 0; index--) {
+      const frame = this.frames[index]!;
+      if (this.frameHasTarget(frame, frame.cursor + 1, 1)) return true;
+    }
+    return false;
+  }
+
+  /** Resume after a nested editor closes without advancing the snippet. */
+  resume(): boolean {
+    if (!this.suspended) return this.validateActiveSelection();
+    this.suspended = false;
+    return this.validateActiveSelection();
+  }
+
+  /**
+   * Resume and perform the boundary move accepted by the nested editor. The
+   * commit transaction may leave CodeMirror just outside the active field, so
+   * allow that one synchronization before selecting the destination stop.
+   */
+  resumeAndMove(backward: boolean): boolean {
+    if (!this.suspended || !this.canMove(backward)) return false;
+    this.suspended = false;
+    this.allowDetachedSelection = true;
+    try {
+      return backward ? this.previous() : this.next();
+    } finally {
+      this.allowDetachedSelection = false;
+      if (this.frames.length > 0) this.validateActiveSelection();
+    }
   }
 
   activeChoices(): readonly string[] {
@@ -695,13 +756,24 @@ export class SnippetSession {
     return this.frames[this.frames.length - 1] ?? null;
   }
 
+  private frameHasTarget(frame: SnippetFrame, start: number, step: 1 | -1): boolean {
+    for (let cursor = start; cursor >= 0 && cursor < frame.order.length; cursor += step) {
+      const index = frame.order[cursor]!;
+      if (frame.stops.some((stop) => stop.index === index)) return true;
+    }
+    return false;
+  }
+
   private syncActive(frame: SnippetFrame): boolean {
     if (frame.activeIndex == null) return true;
     const primary = frame.stops.find((stop) => stop.index === frame.activeIndex && stop.primary);
     if (!primary) return true;
 
     const selection = this.editor.getSelection();
-    if (this.observesTransactions && !this.selectionInsideStop(selection, primary)) {
+    if (this.observesTransactions
+      && !this.suspended
+      && !this.allowDetachedSelection
+      && !this.selectionInsideStop(selection, primary)) {
       this.clear();
       return false;
     }
@@ -825,6 +897,7 @@ export class SnippetSession {
   private validateActiveSelection(): boolean {
     const frame = this.topFrame();
     if (!frame) return false;
+    if (this.suspended || this.allowDetachedSelection) return true;
     // Minimal editor doubles used by non-CM integrations cannot expose
     // transactions. Production Noema always takes the strict CM6 path.
     if (!this.observesTransactions) return true;

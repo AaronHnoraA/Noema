@@ -63,8 +63,20 @@ describe("Noema desktop shell adapter", () => {
       { kind: "config", route: "/config" },
       { kind: "graph", route: "/wiki?view=graph", bounds: { x: 1, y: 2, width: 100, height: 100 } },
     ] })).toEqual({ version: 1, windows: [{
-      kind: "graph", file: "", route: "/wiki?view=graph",
+      kind: "graph", client: "", file: "", route: "/wiki?view=graph",
       bounds: { x: 1, y: 2, width: 720, height: 560 }, maximized: false, fullScreen: false,
     }] });
+  });
+
+  test("preserves a stable per-window cursor client in desktop sessions", () => {
+    expect(sanitizeDesktopSession({ windows: [{
+      kind: "note",
+      client: "window-7",
+      file: "/notes/a.md",
+    }] }).windows[0]).toMatchObject({
+      kind: "note",
+      client: "window-7",
+      file: "/notes/a.md",
+    });
   });
 });

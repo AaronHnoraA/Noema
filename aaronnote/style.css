@@ -73,7 +73,7 @@ body,
 }
 
 /* The editor host owns document scrolling. Keeping the application root
-   non-scrollable prevents a second browser/Electron scrollbar around it. */
+   non-scrollable prevents a second browser/system-WebView scrollbar around it. */
 html,
 body,
 #app {

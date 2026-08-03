@@ -434,6 +434,8 @@ export function builtInQuickInsertProvider(context: QuickInsertContext): QuickIn
 export type SetMarkdownOptions = {
   /** How replacing the whole document should interact with the editor undo stack. */
   history?: "record" | "skip" | "reset";
+  /** Keep the current logical viewport and selection while syncing the same document. */
+  preserveView?: boolean;
 };
 
 export type SelectionOptions = {
@@ -480,6 +482,8 @@ export interface Editor {
   markdownBetween(from: number, to: number): string;
   /** Replace active-surface text between offsets. */
   replaceRange(from: number, to: number, text: string, select?: SelectionMode): { from: number; to: number };
+  /** Keep the first visible document block stationary while an update changes layout. */
+  preserveViewport<T>(update: () => T): T;
   /** Undo the active surface if possible. */
   undo(): boolean;
   /** Redo the active surface if possible. */

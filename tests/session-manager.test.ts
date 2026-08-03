@@ -64,4 +64,87 @@ describe("SessionManager", () => {
       updatedAt: 10,
     }]);
   });
+
+  test("keeps independent cursor slots for Emacs split clients", async () => {
+    const { root, manager } = await setup();
+    const note = join(root, "split.md");
+    await manager.touchCursorPosition({
+      file: note,
+      client: "left-pane",
+      mode: "markdown",
+      from: 12,
+      to: 12,
+      scrollY: 120,
+      updatedAt: 10,
+    });
+    await manager.touchCursorPosition({
+      file: note,
+      client: "right-pane",
+      mode: "source",
+      from: 84,
+      to: 86,
+      scrollY: 900,
+      updatedAt: 20,
+    });
+
+    expect(await manager.readCursorPositions()).toEqual([
+      {
+        file: note,
+        client: "right-pane",
+        mode: "source",
+        from: 84,
+        to: 86,
+        scrollY: 900,
+        updatedAt: 20,
+      },
+      {
+        file: note,
+        mode: "source",
+        from: 84,
+        to: 86,
+        scrollY: 900,
+        updatedAt: 20,
+      },
+      {
+        file: note,
+        client: "left-pane",
+        mode: "markdown",
+        from: 12,
+        to: 12,
+        scrollY: 120,
+        updatedAt: 10,
+      },
+    ]);
+  });
+
+  test("serializes simultaneous split cursor writes without losing either pane", async () => {
+    const { root, manager } = await setup();
+    const note = join(root, "concurrent.md");
+
+    await Promise.all([
+      manager.touchCursorPosition({
+        file: note,
+        client: "left-pane",
+        mode: "markdown",
+        from: 10,
+        to: 10,
+        scrollY: 100,
+        updatedAt: 10,
+      }),
+      manager.touchCursorPosition({
+        file: note,
+        client: "right-pane",
+        mode: "markdown",
+        from: 90,
+        to: 90,
+        scrollY: 900,
+        updatedAt: 20,
+      }),
+    ]);
+
+    const positions = await manager.readCursorPositions();
+    expect(positions.find((position) => position.client === "left-pane")?.from).toBe(10);
+    expect(positions.find((position) => position.client === "right-pane")?.from).toBe(90);
+    expect(positions.find((position) => !position.client)?.from).toBe(90);
+  });
 });

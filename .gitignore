@@ -3,6 +3,9 @@ node_modules/
 build/
 dist/
 release/
+src-tauri/binaries/
+src-tauri/gen/
+src-tauri/target/
 server-config/
 coverage/
 dist-ssr/

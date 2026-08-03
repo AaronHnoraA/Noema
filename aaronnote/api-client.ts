@@ -554,6 +554,7 @@ type NativeApi = {
   session?: {
     getPositions?: () => Promise<unknown>;
     savePosition?: (position: Partial<CursorPosition> & { file: string }) => Promise<unknown>;
+    savePositionKeepalive?: (position: Partial<CursorPosition> & { file: string }) => void;
     closeClient?: (body: { clientId?: string; client?: string; file?: string }) => Promise<unknown>;
     closeClientKeepalive?: (body: { clientId?: string; client?: string; file?: string }) => void;
   };
@@ -826,6 +827,12 @@ declare global {
       listPlugins(): Promise<NoemaDesktopPlugin[]>;
       setPluginEnabled(id: string, enabled: boolean): Promise<NoemaDesktopPlugin[]>;
       onCommand(callback: (detail: unknown) => void): () => void;
+      onFileDrop?(callback: (event: {
+        type: "enter" | "over" | "drop" | "leave";
+        paths: string[];
+        position?: { x: number; y: number };
+      }) => void): () => void;
+      readDroppedFiles?(paths: string[]): Promise<File[]>;
     };
   }
 }
@@ -1196,6 +1203,14 @@ export const api = {
       const call = window.aaronnoteApi?.session?.savePosition;
       if (!call) return { type: "positions", positions: [] };
       return ensureOk(await call(position) as PositionsMsg, "Cursor position save failed");
+    },
+    savePositionKeepalive(position: Partial<CursorPosition> & { file: string }): void {
+      const session = window.aaronnoteApi?.session;
+      if (session?.savePositionKeepalive) {
+        session.savePositionKeepalive(position);
+        return;
+      }
+      if (session?.savePosition) void session.savePosition(position).catch(() => {});
     },
     async closeClient(body: { clientId?: string; client?: string; file?: string }): Promise<void> {
       const call = window.aaronnoteApi?.session?.closeClient;

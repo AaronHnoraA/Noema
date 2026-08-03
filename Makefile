@@ -7,9 +7,8 @@ NPM_VERSION := 11.17.0
 NVM_SH ?= $(HOME)/.nvm/nvm.sh
 APP_NAME := Noema
 APP_DEST := /Applications/$(APP_NAME).app
-APP_BUNDLE := $(firstword $(wildcard release/mac*/$(APP_NAME).app release/mac/$(APP_NAME).app))
+APP_BUNDLE := $(firstword $(wildcard src-tauri/target/*/release/bundle/macos/$(APP_NAME).app src-tauri/target/release/bundle/macos/$(APP_NAME).app))
 ICON_SVG := public/Noema.svg
-ICON_PNG := build/Noema.png
 
 .DEFAULT_GOAL := build
 
@@ -43,7 +42,7 @@ setup: bootstrap init-data
 build: check-env icon
 	npm run build:desktop
 
-install: build install-app
+install: install-app
 
 build-web: check-env
 	npm run build:aaronnote
@@ -66,8 +65,7 @@ dev: check-env init-data
 	npm run start:vite
 
 icon:
-	mkdir -p build
-	rsvg-convert -w 1024 -h 1024 "$(ICON_SVG)" -o "$(ICON_PNG)"
+	node_modules/.bin/tauri icon "$(ICON_SVG)" --output src-tauri/icons
 
 install-app:
 	@test -n "$(APP_BUNDLE)" || (echo "Noema.app was not generated under release" && exit 1)
@@ -86,7 +84,7 @@ test: check-env
 	npm test
 
 clean:
-	rm -rf build dist release
+	rm -rf build dist release src-tauri/target src-tauri/binaries
 
 jupyter-bootstrap:
 	npm run jupyter:bootstrap
@@ -98,7 +96,7 @@ help:
 	@echo "  make bootstrap     Reproducibly install dependencies with npm ci"
 	@echo "  make nvm-install   Install/use pinned Node and npm through nvm"
 	@echo "  make init-data     Create the Noema notes directory"
-	@echo "  make install       Build and install /Applications/Noema.app"
+	@echo "  make install       Copy the existing build to /Applications/Noema.app"
 	@echo "  make run           Build and launch the local app bundle"
 	@echo "  make build-web     Build only the web assets"
 	@echo "  make dev           Run the Vite development server"

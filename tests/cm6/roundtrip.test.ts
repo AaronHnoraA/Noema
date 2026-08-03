@@ -100,6 +100,64 @@ maybeDescribe("cm6 kernel: getMarkdown / setMarkdown", () => {
     cleanup();
   });
 
+  test("same-document resets preserve the logical view without rebuilding CM6", () => {
+    const file = "/notes/split-view.md";
+    const onChange = vi.fn();
+    const source = [
+      "old heading",
+      "",
+      "the uniquely visible paragraph remains exactly where the reader left it",
+      "",
+      "old footer",
+    ].join("\n");
+    const { editor, host, cleanup } = mountCM6(source, {
+      getCurrentFile: () => file,
+      onChange,
+    });
+    editor.replaceMarkdownRange(0, 0, "local draft\n", "end");
+    const current = editor.getMarkdown();
+    const target = current
+      .replace("old heading", "a longer heading saved by the other pane")
+      .replace("old footer", "a different footer saved by the other pane");
+    const visibleOffset = current.indexOf("visible paragraph") + 9;
+    editor.setMarkdownSelection(visibleOffset, undefined, { scrollIntoView: false });
+    host.scrollTop = 420;
+    host.scrollLeft = 17;
+    onChange.mockClear();
+    const setState = vi.spyOn(editor.view, "setState");
+    let resets = 0;
+    const stopResetListener = editor.onDocumentReset(() => { resets += 1; });
+
+    editor.setMarkdown(target, { history: "reset", preserveView: true });
+
+    expect(setState).not.toHaveBeenCalled();
+    expect(editor.getMarkdown()).toBe(target);
+    expect(editor.getMarkdownSelection().from).toBe(target.indexOf("visible paragraph") + 9);
+    expect(host.scrollTop).toBe(420);
+    expect(host.scrollLeft).toBe(17);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(resets).toBe(1);
+    expect(editor.undo()).toBe(false);
+    stopResetListener();
+    cleanup();
+  });
+
+  test("same-document refresh replaces stale UTF-8 replacement text losslessly", () => {
+    const file = "/notes/unicode-split.md";
+    const stale = "- 若最终需要特征 \\(2\\) ���，应改用 alternating multilinear maps";
+    const authoritative = "- 若最终需要特征 \\(2\\) 或，应改用 alternating multilinear maps";
+    const { editor, cleanup } = mountCM6(stale, { getCurrentFile: () => file });
+    const cursor = stale.indexOf("alternating");
+    editor.setMarkdownSelection(cursor, undefined, { scrollIntoView: false });
+
+    editor.setMarkdown(authoritative, { history: "reset", preserveView: true });
+
+    expect(editor.getMarkdown()).toBe(authoritative);
+    expect(editor.getMarkdown()).not.toContain("�");
+    expect(editor.getMarkdownSelection().from).toBe(authoritative.indexOf("alternating"));
+    cleanup();
+  });
+
   test("preserves plain paragraph", () => {
     const md = "Hello world";
     const { editor, cleanup } = mountCM6(md);

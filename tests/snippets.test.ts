@@ -452,6 +452,45 @@ describe("aaronnote snippets", () => {
     }
   });
 
+  test("suspends an outer source snippet while LiveTeX edits its active field", () => {
+    const mount = document.createElement("div");
+    document.body.appendChild(mount);
+    const editor = createEditor(mount);
+    try {
+      const session = new SnippetSession(editor);
+      expect(session.insert({
+        key: ";",
+        mode: "markdown-mode",
+        body: "\\(${1:x}\\) $0",
+      })).toBe(true);
+      expect(editor.textBetween(editor.getSelection().from, editor.getSelection().to)).toBe("x");
+
+      expect(session.suspend()).toBe(true);
+      expect(session.isSuspended()).toBe(true);
+      expect(session.canMove(true)).toBe(false);
+      expect(session.canMove(false)).toBe(true);
+
+      const field = editor.getSelection();
+      const latex = String.raw`\frac{a}{b}`;
+      editor.view.dispatch({
+        changes: { from: field.from, to: field.to, insert: latex },
+        selection: { anchor: editor.getMarkdownLength() - (field.to - field.from) + latex.length },
+      });
+      expect(session.active()).toBe(true);
+
+      expect(session.resumeAndMove(false)).toBe(true);
+      expect(session.isSuspended()).toBe(false);
+      expect(editor.getSelection()).toEqual({
+        from: editor.getMarkdownLength(),
+        to: editor.getMarkdownLength(),
+      });
+      expect(session.active()).toBe(true);
+    } finally {
+      editor.destroy();
+      mount.remove();
+    }
+  });
+
   test("replacing an outer nested placeholder skips stale inner fields", () => {
     const editor = new TextEditor();
     const session = new SnippetSession(editor.asEditor());

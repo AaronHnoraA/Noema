@@ -572,6 +572,10 @@ export function setupCopilot(context: Context): () => void {
   }
 
   function handleKey(event: KeyboardEvent): boolean {
+    // Native sub-editors (notably LiveTeX) share the document capture phase.
+    // When the host marks Copilot inactive, its shortcuts must pass through to
+    // that editor instead of invoking source-snippet or delimiter callbacks.
+    if (context.isActive && !context.isActive()) return false;
     if (!targetInHost(context.host, event.target)) return false;
     if (pendingToChar) {
       if (event.key === "Escape") {
