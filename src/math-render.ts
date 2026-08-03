@@ -184,6 +184,10 @@ function ensureKatexCss(css: string): void {
   document.head.appendChild(link);
 }
 
+export function ensureMathStyles(): void {
+  ensureKatexCss(katexCssText);
+}
+
 function fitRenderedMath(element: HTMLElement): void {
   const schedule = window.requestAnimationFrame?.bind(window) ?? ((callback: FrameRequestCallback) => window.setTimeout(() => callback(performance.now()), 0));
   schedule(() => {

@@ -29,6 +29,16 @@ describe("diagram render helpers", () => {
       .toBe("mindmap\n  Root\n    Branch\n      Detail");
   });
 
+  test("supports Noema inline LaTeX in plain marmind nodes", () => {
+    expect(normalizeMermaidSource("Math\n  Energy \\(E=mc^2\\)\n  Half \\(\\frac{1}{2}\\)", "marmind"))
+      .toBe([
+        "mindmap",
+        "  Math",
+        '    noema_math_1["`Energy $$E=mc^2$$`"]',
+        '    noema_math_2["`Half $$\\frac{1}{2}$$`"]',
+      ].join("\n"));
+  });
+
   test("keeps ordered list markers in marmind labels", () => {
     expect(normalizeMermaidSource("1. Root\n  2) Branch", "markmind"))
       .toBe("mindmap\n  1. Root\n    2) Branch");
@@ -50,7 +60,7 @@ describe("diagram render helpers", () => {
 
     expect(div.classList.contains("cm-diagram-interactive")).toBe(true);
     expect(div.querySelector(".cm-diagram-toolbar")).toBeTruthy();
-    expect(div.querySelectorAll(".cm-diagram-control")).toHaveLength(4);
+    expect(div.querySelectorAll(".cm-diagram-control")).toHaveLength(5);
     expect(div.querySelector("#node-a")?.classList.contains("cm-diagram-selected")).toBe(true);
   });
 
@@ -62,24 +72,67 @@ describe("diagram render helpers", () => {
     enableDiagramInteraction(div);
     div.querySelector<HTMLButtonElement>(".cm-diagram-control-zoom-in")!
       .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    expect(svg.style.transform).toContain("scale(1.12)");
+    expect(svg.style.transform).toContain("scale(1.18)");
 
     div.querySelector<HTMLButtonElement>(".cm-diagram-control-reset")!
       .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     expect(svg.style.transform).toContain("translate(0px, 0px) scale(1)");
   });
 
-  test("mouse wheel over the svg zooms the diagram", () => {
+  test("wheel and trackpad scrolling pan the diagram", () => {
     const div = document.createElement("div");
     div.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg"><g id="node-a"><text>Root</text></g></svg>';
     const svg = div.querySelector<SVGSVGElement>("svg")!;
 
     enableDiagramInteraction(div);
-    const event = new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -24, clientX: 8, clientY: 8 });
+    const event = new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaX: 12, deltaY: 24, clientX: 8, clientY: 8 });
     svg.dispatchEvent(event);
 
     expect(event.defaultPrevented).toBe(true);
-    expect(svg.style.transform).toContain("scale(1.12)");
+    expect(svg.style.transform).toContain("translate(-12px, -24px) scale(1)");
+  });
+
+  test("ctrl-wheel trackpad pinch zooms around the gesture point", () => {
+    const div = document.createElement("div");
+    div.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg"><g id="node-a"><text>Root</text></g></svg>';
+    const svg = div.querySelector<SVGSVGElement>("svg")!;
+
+    enableDiagramInteraction(div);
+    const event = new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      deltaY: -40,
+      clientX: 8,
+      clientY: 8,
+    });
+    Object.defineProperty(event, "ctrlKey", { value: true });
+    svg.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(Number(div.dataset.diagramScale)).toBeGreaterThan(1);
+    expect(svg.style.transform).not.toContain("scale(1)");
+  });
+
+  test("pseudo-fullscreen expands inside the web view and Escape restores the view", () => {
+    const div = document.createElement("div");
+    document.body.append(div);
+    div.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"><g><text>Root</text></g></svg>';
+    const svg = div.querySelector<SVGSVGElement>("svg")!;
+
+    enableDiagramInteraction(div);
+    div.querySelector<HTMLButtonElement>(".cm-diagram-control-zoom-in")!.click();
+    const before = svg.style.transform;
+    div.querySelector<HTMLButtonElement>(".cm-diagram-control-fullscreen")!.click();
+
+    expect(div.classList.contains("is-diagram-fullscreen")).toBe(true);
+    expect(document.body.classList.contains("has-diagram-fullscreen")).toBe(true);
+    expect(div.querySelector<HTMLButtonElement>(".cm-diagram-control-fullscreen")!.textContent).toBe("Exit");
+
+    div.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }));
+    expect(div.classList.contains("is-diagram-fullscreen")).toBe(false);
+    expect(document.body.classList.contains("has-diagram-fullscreen")).toBe(false);
+    expect(svg.style.transform).toBe(before);
+    div.remove();
   });
 
   test("touch input starts dragging after a long press", () => {

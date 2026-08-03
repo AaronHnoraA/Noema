@@ -1,4 +1,7 @@
 import DOMPurify from "dompurify";
+import { getKatexMacros } from "./katex-macros.ts";
+import { ensureMathStyles } from "./math-render.ts";
+import { katexCompatibleLatex } from "./tex-compat.ts";
 import { safeHref } from "./url-safety.ts";
 export { supportedDiagramLang } from "./diagram-langs.ts";
 
@@ -7,11 +10,12 @@ type DiagramCacheValue = { html: string; error?: string };
 const MERMAID_CACHE_LIMIT = 96;
 const MERMAID_CACHE_BYTES = 8_000_000; // 8 MB
 const MAX_MERMAID_SOURCE_CHARS = 80_000;
-const MIN_DIAGRAM_SCALE = 0.55;
-const MAX_DIAGRAM_SCALE = 2.4;
-const DIAGRAM_ZOOM_STEP = 0.12;
+const MIN_DIAGRAM_SCALE = 0.25;
+const MAX_DIAGRAM_SCALE = 4;
+const DIAGRAM_ZOOM_FACTOR = 1.18;
 const DIAGRAM_LONG_PRESS_MS = 260;
 const DIAGRAM_LONG_PRESS_CANCEL_PX = 8;
+const DIAGRAM_KEYBOARD_PAN_PX = 48;
 const mermaidCache = new Map<string, DiagramCacheValue>();
 let mermaidCacheBytes = 0;
 let renderSeq = 0;
@@ -22,14 +26,19 @@ type DiagramInteractionState = {
   scale: number;
   panX: number;
   panY: number;
+  autoFit: boolean;
   drag: DiagramDragState | null;
   pendingDrag: DiagramDragState | null;
   longPressTimer: number | null;
   suppressNextClick: boolean;
+  zoomLabel: HTMLButtonElement | null;
+  fullscreenButton: HTMLButtonElement | null;
+  fullscreenSnapshot: { scale: number; panX: number; panY: number; autoFit: boolean } | null;
   applyTransform: () => void;
   applyScale: (next: number, originX?: number, originY?: number) => void;
   reset: () => void;
   fit: () => void;
+  toggleFullscreen: () => void;
 };
 
 const diagramInteractions = new WeakMap<HTMLElement, DiagramInteractionState>();
@@ -74,7 +83,7 @@ export function disposeDiagramRuntime(): void {
 
 function sanitizeSvg(svg: string): string {
   return DOMPurify.sanitize(svg, {
-    USE_PROFILES: { svg: true, svgFilters: true },
+    USE_PROFILES: { svg: true, svgFilters: true, mathMl: true },
     // foreignObject is needed for Mermaid mindmap node labels (div.nodeLabel inside foreignObject).
     // DOMPurify sanitizes the HTML content inside foreignObject using its HTML rules,
     // so scripts/iframes/event-handlers are still stripped.
@@ -117,11 +126,47 @@ function cleanMindmapText(value: string): string {
     .trim();
 }
 
+function macroDefinitionsFor(tex: string): string {
+  const macros = getKatexMacros();
+  const needed = new Set<string>();
+  const pending = Array.from(tex.matchAll(/\\[A-Za-z]+|\\./g), (match) => match[0]);
+
+  while (pending.length > 0) {
+    const name = pending.pop()!;
+    if (needed.has(name) || macros[name] == null) continue;
+    needed.add(name);
+    pending.push(...Array.from(macros[name]!.matchAll(/\\[A-Za-z]+|\\./g), (match) => match[0]));
+  }
+
+  return Object.entries(macros)
+    .filter(([name]) => needed.has(name))
+    .map(([name, body]) => {
+      const arity = Math.max(0, ...Array.from(body.matchAll(/#([1-9])/g), (match) => Number(match[1])));
+      const params = Array.from({ length: arity }, (_, index) => `#${index + 1}`).join("");
+      return `\\gdef${name}${params}{${body}}`;
+    })
+    .join("");
+}
+
+function normalizeMindmapLatex(value: string): string {
+  const delimited = value.replace(/\\\(([^\n]*?)\\\)/g, (_match, tex: string) => `$$${tex}$$`);
+  return delimited.replace(/\$\$([^\n]*?)\$\$/g, (_match, tex: string) => {
+    const compatible = katexCompatibleLatex(tex.trim());
+    return `$$${macroDefinitionsFor(compatible)}${compatible}$$`;
+  });
+}
+
+function markdownMindmapMathNode(text: string, index: number): string {
+  if (!text.includes("$$")) return text;
+  const escaped = text.replace(/`/g, "&#96;").replace(/"/g, "&quot;");
+  return `noema_math_${index}[\"\`${escaped}\`\"]`;
+}
+
 function normalizeMindmapSource(source: string): string {
   const lines = String(source || "").replace(/\t/g, "  ").split(/\r?\n/);
   const meaningful = lines.filter((line) => line.trim());
   if (meaningful.length === 0) return "";
-  if (MERMAID_START_RE.test(meaningful[0]!.trim())) return source.trim();
+  if (MERMAID_START_RE.test(meaningful[0]!.trim())) return normalizeMindmapLatex(source.trim());
 
   const normalized = meaningful.map((line, index) => {
     const rawIndent = line.match(/^\s*/)?.[0].length ?? 0;
@@ -135,8 +180,9 @@ function normalizeMindmapSource(source: string): string {
     const listText = bullet && /^\d/.test(bullet[2]!)
       ? `${bullet[2]} ${bullet[3]}`
       : bullet?.[3];
-    const text = cleanMindmapText(heading?.[2] ?? listText ?? line);
-    return `${"  ".repeat(Math.max(1, level + 1))}${text || `Node ${index + 1}`}`;
+    const text = normalizeMindmapLatex(cleanMindmapText(heading?.[2] ?? listText ?? line));
+    const node = markdownMindmapMathNode(text || `Node ${index + 1}`, index);
+    return `${"  ".repeat(Math.max(1, level + 1))}${node}`;
   });
   return ["mindmap", ...normalized].join("\n");
 }
@@ -210,11 +256,18 @@ function currentDiagramSvg(element: HTMLElement): SVGSVGElement | null {
   return element.querySelector<SVGSVGElement>("svg");
 }
 
-function configureDiagramSvg(svg: SVGSVGElement): void {
+function configureDiagramSvg(svg: SVGSVGElement, element?: HTMLElement): void {
   svg.style.maxWidth = "none";
   svg.style.maxHeight = "none";
   svg.style.transformOrigin = "0 0";
   svg.style.touchAction = "none";
+  if (element?.classList.contains("cm-aaron-mindmap")) {
+    const size = diagramSvgSize(svg);
+    svg.style.display = "block";
+    svg.style.width = `${size.width}px`;
+    svg.style.height = `${size.height}px`;
+    svg.style.margin = "0";
+  }
 }
 
 function clampScale(value: number): number {
@@ -258,6 +311,16 @@ function stopDiagramControlEvent(event: Event): void {
   event.stopPropagation();
 }
 
+function wheelDeltaPixels(event: WheelEvent, viewport: { width: number; height: number }): { x: number; y: number } {
+  if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) {
+    return { x: event.deltaX * 16, y: event.deltaY * 16 };
+  }
+  if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
+    return { x: event.deltaX * viewport.width, y: event.deltaY * viewport.height };
+  }
+  return { x: event.deltaX, y: event.deltaY };
+}
+
 function diagramControlButton(label: string, action: string, title: string, onClick: () => void): HTMLButtonElement {
   const button = document.createElement("button");
   button.type = "button";
@@ -286,13 +349,16 @@ function installDiagramToolbar(element: HTMLElement, state: DiagramInteractionSt
   toolbar.addEventListener("mousedown", stopDiagramControlEvent);
   toolbar.addEventListener("pointerdown", stopDiagramControlEvent);
   toolbar.addEventListener("click", (event) => event.stopPropagation());
-  toolbar.append(
-    diagramControlButton("-", "zoom-out", "Zoom out", () => state.applyScale(state.scale - DIAGRAM_ZOOM_STEP)),
-    diagramControlButton("+", "zoom-in", "Zoom in", () => state.applyScale(state.scale + DIAGRAM_ZOOM_STEP)),
-    diagramControlButton("1:1", "reset", "Reset zoom", () => state.reset()),
-    diagramControlButton("Fit", "fit", "Fit to view", () => state.fit()),
-  );
+  const zoomOut = diagramControlButton("−", "zoom-out", "Zoom out", () => state.applyScale(state.scale / DIAGRAM_ZOOM_FACTOR));
+  const zoomLabel = diagramControlButton("100%", "reset", "Reset to 100%", () => state.reset());
+  const zoomIn = diagramControlButton("+", "zoom-in", "Zoom in", () => state.applyScale(state.scale * DIAGRAM_ZOOM_FACTOR));
+  const fit = diagramControlButton("Fit", "fit", "Fit mind map to view", () => state.fit());
+  const fullscreen = diagramControlButton("Expand", "fullscreen", "Expand in Noema window", () => state.toggleFullscreen());
+  state.zoomLabel = zoomLabel;
+  state.fullscreenButton = fullscreen;
+  toolbar.append(zoomOut, zoomLabel, zoomIn, fit, fullscreen);
   element.append(toolbar);
+  state.applyTransform();
 }
 
 function bindDiagramInteraction(element: HTMLElement): DiagramInteractionState {
@@ -300,19 +366,33 @@ function bindDiagramInteraction(element: HTMLElement): DiagramInteractionState {
     scale: 1,
     panX: 0,
     panY: 0,
+    autoFit: element.classList.contains("cm-aaron-mindmap"),
     drag: null,
     pendingDrag: null,
     longPressTimer: null,
     suppressNextClick: false,
+    zoomLabel: null,
+    fullscreenButton: null,
+    fullscreenSnapshot: null,
     applyTransform: () => {
       const activeSvg = currentDiagramSvg(element);
       if (!activeSvg) return;
-      configureDiagramSvg(activeSvg);
+      configureDiagramSvg(activeSvg, element);
       activeSvg.style.transform = `translate(${state.panX}px, ${state.panY}px) scale(${state.scale})`;
+      element.dataset.diagramScale = String(state.scale);
+      if (state.zoomLabel) state.zoomLabel.textContent = `${Math.round(state.scale * 100)}%`;
+      if (state.fullscreenButton) {
+        const expanded = element.classList.contains("is-diagram-fullscreen");
+        state.fullscreenButton.textContent = expanded ? "Exit" : "Expand";
+        state.fullscreenButton.title = expanded ? "Exit full screen" : "Expand in Noema window";
+        state.fullscreenButton.setAttribute("aria-label", state.fullscreenButton.title);
+        state.fullscreenButton.setAttribute("aria-pressed", expanded ? "true" : "false");
+      }
     },
     applyScale: (next: number, originX = element.clientWidth / 2, originY = element.clientHeight / 2) => {
       const prev = state.scale;
       state.scale = clampScale(next);
+      state.autoFit = false;
       if (prev > 0 && prev !== state.scale) {
         const factor = state.scale / prev;
         state.panX = originX - (originX - state.panX) * factor;
@@ -322,8 +402,19 @@ function bindDiagramInteraction(element: HTMLElement): DiagramInteractionState {
     },
     reset: () => {
       state.scale = 1;
-      state.panX = 0;
-      state.panY = 0;
+      state.autoFit = false;
+      const activeSvg = currentDiagramSvg(element);
+      const rect = element.getBoundingClientRect();
+      const hasViewport = (element.clientWidth || rect.width) > 1 && (element.clientHeight || rect.height) > 1;
+      if (activeSvg && hasViewport) {
+        const viewport = diagramViewportSize(element);
+        const content = diagramSvgSize(activeSvg);
+        state.panX = (viewport.width - content.width) / 2;
+        state.panY = (viewport.height - content.height) / 2;
+      } else {
+        state.panX = 0;
+        state.panY = 0;
+      }
       state.applyTransform();
     },
     fit: () => {
@@ -331,7 +422,7 @@ function bindDiagramInteraction(element: HTMLElement): DiagramInteractionState {
       if (!activeSvg) return;
       const viewport = diagramViewportSize(element);
       const content = diagramSvgSize(activeSvg);
-      const inset = 28;
+      const inset = 48;
       const fitWidth = Math.max(1, viewport.width - inset);
       const fitHeight = Math.max(1, viewport.height - inset);
       const nextScale = Math.min(
@@ -339,9 +430,44 @@ function bindDiagramInteraction(element: HTMLElement): DiagramInteractionState {
         clampScale(Math.min(fitWidth / content.width, fitHeight / content.height)),
       );
       state.scale = nextScale;
-      state.panX = Math.max(0, (viewport.width - content.width * nextScale) / 2);
-      state.panY = Math.max(0, (viewport.height - content.height * nextScale) / 2);
+      state.panX = (viewport.width - content.width * nextScale) / 2;
+      state.panY = (viewport.height - content.height * nextScale) / 2;
+      state.autoFit = true;
       state.applyTransform();
+    },
+    toggleFullscreen: () => {
+      const expanded = element.classList.contains("is-diagram-fullscreen");
+      if (expanded) {
+        element.classList.remove("is-diagram-fullscreen");
+        document.body.classList.remove("has-diagram-fullscreen");
+        const snapshot = state.fullscreenSnapshot;
+        state.fullscreenSnapshot = null;
+        if (snapshot) {
+          state.scale = snapshot.scale;
+          state.panX = snapshot.panX;
+          state.panY = snapshot.panY;
+          state.autoFit = snapshot.autoFit;
+        }
+        state.applyTransform();
+        return;
+      }
+
+      state.fullscreenSnapshot = {
+        scale: state.scale,
+        panX: state.panX,
+        panY: state.panY,
+        autoFit: state.autoFit,
+      };
+      element.classList.add("is-diagram-fullscreen");
+      document.body.classList.add("has-diagram-fullscreen");
+      element.tabIndex = -1;
+      element.focus({ preventScroll: true });
+      state.applyTransform();
+      const schedule = window.requestAnimationFrame?.bind(window)
+        ?? ((callback: FrameRequestCallback) => window.setTimeout(() => callback(performance.now()), 0));
+      schedule(() => {
+        if (element.classList.contains("is-diagram-fullscreen")) state.fit();
+      });
     },
   };
 
@@ -356,25 +482,22 @@ function bindDiagramInteraction(element: HTMLElement): DiagramInteractionState {
   const beginDrag = (start: DiagramDragState, pointerId: number): void => {
     clearLongPress();
     state.drag = start;
+    state.autoFit = false;
     if (Number.isFinite(pointerId)) element.setPointerCapture?.(pointerId);
     element.classList.add("is-panning");
   };
 
   element.addEventListener("mousedown", (event) => {
     const target = event.target;
-    if (
-      target instanceof Element
-      && target.closest("svg")
-    ) {
-      event.preventDefault();
-      event.stopPropagation();
-    }
+    if (target instanceof Element && target.closest(".cm-diagram-toolbar")) return;
+    event.preventDefault();
+    event.stopPropagation();
   });
 
   element.addEventListener("pointerdown", (event) => {
     if (event.button !== 0) return;
     const target = event.target;
-    if (!(target instanceof Element) || !target.closest("svg")) return;
+    if (target instanceof Element && target.closest(".cm-diagram-toolbar")) return;
     event.preventDefault();
     event.stopPropagation();
     const start = { x: event.clientX, y: event.clientY, panX: state.panX, panY: state.panY, moved: false };
@@ -444,18 +567,85 @@ function bindDiagramInteraction(element: HTMLElement): DiagramInteractionState {
     event.stopPropagation();
     state.reset();
   });
-  element.addEventListener("wheel", (event) => {
-    const target = event.target;
-    const overDiagram = target instanceof Element && Boolean(target.closest("svg"));
-    if (!overDiagram && !event.ctrlKey && !event.metaKey) return;
-    event.preventDefault();
+  let webkitGestureActive = false;
+  let webkitGestureStartScale = 1;
+  element.addEventListener("gesturestart", (event: Event) => {
+    stopDiagramControlEvent(event);
+    webkitGestureActive = true;
+    webkitGestureStartScale = state.scale;
+  });
+  element.addEventListener("gesturechange", (event: Event) => {
+    stopDiagramControlEvent(event);
+    const gesture = event as Event & { scale?: number; clientX?: number; clientY?: number };
     const rect = element.getBoundingClientRect();
     state.applyScale(
-      state.scale + (event.deltaY < 0 ? DIAGRAM_ZOOM_STEP : -DIAGRAM_ZOOM_STEP),
-      event.clientX - rect.left,
-      event.clientY - rect.top,
+      webkitGestureStartScale * Math.max(0.01, gesture.scale ?? 1),
+      (gesture.clientX ?? rect.left + rect.width / 2) - rect.left,
+      (gesture.clientY ?? rect.top + rect.height / 2) - rect.top,
     );
+  });
+  element.addEventListener("gestureend", (event: Event) => {
+    stopDiagramControlEvent(event);
+    webkitGestureActive = false;
+  });
+  element.addEventListener("wheel", (event) => {
+    const target = event.target;
+    if (target instanceof Element && target.closest(".cm-diagram-toolbar")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (webkitGestureActive) return;
+    const rect = element.getBoundingClientRect();
+    const delta = wheelDeltaPixels(event, diagramViewportSize(element));
+    if (event.ctrlKey || event.metaKey) {
+      const factor = Math.exp(-delta.y * 0.0025);
+      state.applyScale(
+        state.scale * factor,
+        event.clientX - rect.left,
+        event.clientY - rect.top,
+      );
+      return;
+    }
+
+    const horizontal = event.shiftKey && Math.abs(delta.x) < Math.abs(delta.y)
+      ? delta.y
+      : delta.x;
+    const vertical = event.shiftKey && Math.abs(delta.x) < Math.abs(delta.y)
+      ? 0
+      : delta.y;
+    state.autoFit = false;
+    state.panX -= horizontal;
+    state.panY -= vertical;
+    state.applyTransform();
   }, { passive: false });
+  element.addEventListener("keydown", (event) => {
+    if (event.target instanceof HTMLButtonElement && event.key !== "Escape") return;
+    if (event.key === "Escape" && element.classList.contains("is-diagram-fullscreen")) {
+      stopDiagramControlEvent(event);
+      state.toggleFullscreen();
+      return;
+    }
+    const pan = (x: number, y: number): void => {
+      stopDiagramControlEvent(event);
+      state.autoFit = false;
+      state.panX += x;
+      state.panY += y;
+      state.applyTransform();
+    };
+    if (event.key === "ArrowLeft") pan(DIAGRAM_KEYBOARD_PAN_PX, 0);
+    else if (event.key === "ArrowRight") pan(-DIAGRAM_KEYBOARD_PAN_PX, 0);
+    else if (event.key === "ArrowUp") pan(0, DIAGRAM_KEYBOARD_PAN_PX);
+    else if (event.key === "ArrowDown") pan(0, -DIAGRAM_KEYBOARD_PAN_PX);
+    else if (["+", "="].includes(event.key)) {
+      stopDiagramControlEvent(event);
+      state.applyScale(state.scale * DIAGRAM_ZOOM_FACTOR);
+    } else if (event.key === "-") {
+      stopDiagramControlEvent(event);
+      state.applyScale(state.scale / DIAGRAM_ZOOM_FACTOR);
+    } else if (event.key === "0") {
+      stopDiagramControlEvent(event);
+      state.reset();
+    }
+  });
 
   return state;
 }
@@ -466,7 +656,8 @@ export function enableDiagramInteraction(element: HTMLElement): void {
 
   element.classList.add("cm-diagram-interactive");
   element.style.overflow = "hidden";
-  configureDiagramSvg(svg);
+  element.style.touchAction = "none";
+  configureDiagramSvg(svg, element);
   sanitizeDiagramLinks(element);
 
   let state = diagramInteractions.get(element);
@@ -477,6 +668,13 @@ export function enableDiagramInteraction(element: HTMLElement): void {
   }
   installDiagramToolbar(element, state);
   state.applyTransform();
+  if (element.classList.contains("cm-aaron-mindmap") && state.autoFit) {
+    const schedule = window.requestAnimationFrame?.bind(window)
+      ?? ((callback: FrameRequestCallback) => window.setTimeout(() => callback(performance.now()), 0));
+    schedule(() => {
+      if (element.isConnected && state?.autoFit) state.fit();
+    });
+  }
 }
 
 export function renderMermaidLazy(
@@ -526,13 +724,14 @@ export function renderMermaidLazy(
     if (element.getAttribute("data-diagram-render-key") !== key || !element.isConnected) return;
     try {
       const mermaid = (await import("mermaid")).default;
+      if (trimmed.includes("$$")) ensureMathStyles();
       // Aaron mindmap (marmind/markmind): antiscript lets the per-diagram frontmatter
       // ---config--- block take effect (strict blocks it). DOMPurify is our sanitizer anyway.
       // Interactive diagrams keep strict for defence-in-depth.
       if (staticMindmap) {
-        mermaid.initialize({ startOnLoad: false, securityLevel: "antiscript" });
+        mermaid.initialize({ startOnLoad: false, securityLevel: "antiscript", legacyMathML: true });
       } else {
-        mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: "default" });
+        mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: "default", legacyMathML: true });
       }
       const id = `aaronnote-mermaid-${Date.now()}-${seq}`;
       const result = await mermaid.render(id, renderSource);
