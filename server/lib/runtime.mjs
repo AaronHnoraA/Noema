@@ -174,6 +174,7 @@ const ASSET_CLEANUP_SCHEMA = 2;
 const ROAM_FULL_SYNC_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const scanConcurrency = Math.max(1, Math.min(64, Number(process.env.AARONNOTE_SCAN_CONCURRENCY) || 16));
 const saveRequestVersions = new Map();
+const successfulClientSaves = new Map();
 const saveWriteQueues = new Map();
 let clockMutationQueue = Promise.resolve();
 let sessionManager = null;
@@ -2033,23 +2034,34 @@ export function graphPayload(notes, options = {}) {
     }
   }
   const tagCounts = new Map();
+  const tagLabels = new Map();
   for (const note of graphNotes) {
     for (const rawTag of note.tags || []) {
       const tag = String(rawTag || "").trim().replace(/^#/, "");
-      if (tag) tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
+      if (!tag) continue;
+      const key = tag.toLocaleLowerCase();
+      tagCounts.set(key, (tagCounts.get(key) || 0) + 1);
+      const previous = tagLabels.get(key);
+      if (!previous || tag === key) tagLabels.set(key, tag);
     }
   }
   const tags = [...tagCounts.keys()].sort();
-  const tagNodes = tags.filter((tag) => (tagCounts.get(tag) || 0) >= 2).map((tag) => ({
-    key: `tag:${tag.toLowerCase()}`,
-    title: `#${tag}`,
-    kind: "tag",
-    exists: true,
-    groupKey: "tags",
-    groupLabel: "Tags",
-    tags: [tag],
-    aliases: [],
-  }));
+  // The payload is an index projection, not a visual-clutter policy. Keep
+  // singleton tags and let each graph surface decide whether to display them.
+  // Otherwise a real relation (for example IP-PCP -> #tcs) silently vanishes.
+  const tagNodes = tags.map((tagKey) => {
+    const tag = tagLabels.get(tagKey) || tagKey;
+    return {
+      key: `tag:${tagKey}`,
+      title: `#${tag}`,
+      kind: "tag",
+      exists: true,
+      groupKey: "tags",
+      groupLabel: "Tags",
+      tags: [tag],
+      aliases: [],
+    };
+  });
   const tagKeys = new Map(tagNodes.map((node) => [node.tags[0].toLowerCase(), node.key]));
   for (const note of graphNotes) {
     const source = graphNoteKey(note);
@@ -6991,6 +7003,7 @@ export async function readNote(file, options = {}) {
       kind: kindFromContent(content),
       mtimeMs: Number(opened?.mtimeMs) || 0,
       size: Number(opened?.size) || Buffer.byteLength(content, "utf8"),
+      version: String(opened?.version || ""),
       standalone: true,
       remote: true,
     };
@@ -7025,6 +7038,7 @@ export async function readNote(file, options = {}) {
     kind: kindFromContent(content),
     mtimeMs: info.mtimeMs,
     size: info.size,
+    version: contentDigest(content),
     standalone,
   };
   if (options.includeIndex === true) {
@@ -7067,10 +7081,13 @@ const defaultSlidesMirrorCss = `/* Noema Reveal mirror for this note. */
  */
 export async function slidesMirror(body = {}) {
   const paths = slidesMirrorPaths(body.file);
-  if (!existsSync(paths.jsFile)) await atomicWriteFile(paths.jsFile, defaultSlidesMirrorJs, "utf8");
-  if (!existsSync(paths.cssFile)) await atomicWriteFile(paths.cssFile, defaultSlidesMirrorCss, "utf8");
+  const createJs = !existsSync(paths.jsFile);
+  const createCss = !existsSync(paths.cssFile);
+  if (createJs) await atomicWriteFile(paths.jsFile, defaultSlidesMirrorJs, "utf8");
+  if (createCss) await atomicWriteFile(paths.cssFile, defaultSlidesMirrorCss, "utf8");
   return {
     ok: true,
+    changed: createJs || createCss,
     file: paths.file,
     jsFile: paths.jsFile,
     cssFile: paths.cssFile,
@@ -7589,7 +7606,7 @@ export async function updateCurrentNoteMeta(body, action) {
     markNotesDirty(file);
   }
   const opened = await readNote(file, { includeIndex: true });
-  return opened;
+  return { ...opened, changed: next !== content };
 }
 
 async function rewriteRoamMetaTags(updateTags) {
@@ -7830,6 +7847,45 @@ function acceptSaveRequest(file, body) {
   return true;
 }
 
+function clientSaveIdentity(file, body) {
+  const clientId = typeof body?.clientId === "string" ? body.clientId : "";
+  const seq = Number(body?.seq);
+  if (!clientId || !Number.isSafeInteger(seq) || seq <= 0) return null;
+  return { key: `${clientId}\0${file}`, seq };
+}
+
+function contentDigest(content) {
+  return createHash("sha256").update(String(content ?? "")).digest("hex");
+}
+
+async function followsSuccessfulClientSave(file, body, currentContent = null) {
+  const identity = clientSaveIdentity(file, body);
+  if (!identity) return false;
+  const previous = successfulClientSaves.get(identity.key);
+  if (!previous || identity.seq <= previous.seq) return false;
+  const diskContent = currentContent == null
+    ? await readFile(file, "utf8").catch(() => null)
+    : currentContent;
+  return diskContent != null && contentDigest(diskContent) === previous.digest;
+}
+
+function rememberSuccessfulClientSave(file, body, content, info) {
+  const identity = clientSaveIdentity(file, body);
+  if (!identity) return;
+  successfulClientSaves.set(identity.key, {
+    seq: identity.seq,
+    digest: contentDigest(content),
+    mtimeMs: Number(info?.mtimeMs) || 0,
+    size: Number(info?.size) || Buffer.byteLength(String(content ?? ""), "utf8"),
+  });
+  if (successfulClientSaves.size > 2000) {
+    for (const oldKey of successfulClientSaves.keys()) {
+      successfulClientSaves.delete(oldKey);
+      if (successfulClientSaves.size <= 1000) break;
+    }
+  }
+}
+
 async function enqueueSaveWrite(file, task) {
   const key = canonicalExistingPath(file);
   const previous = saveWriteQueues.get(key) ?? Promise.resolve();
@@ -7886,6 +7942,8 @@ export function configure(options = {}) {
   agendaPersistentCacheDirty = false;
   agendaPersistentCacheLoad = null;
   notesSnapshotFingerprint = "";
+  saveRequestVersions.clear();
+  successfulClientSaves.clear();
   markNotesDirty();
 }
 
@@ -7912,6 +7970,7 @@ export async function saveNote(body) {
         content,
         force: body.force === true,
         baseMtimeMs: Number(body.baseMtimeMs) || 0,
+        baseVersion: String(body.baseVersion || ""),
       }),
     );
     if (wrote?.conflict || wrote?.ok === false) {
@@ -7923,6 +7982,7 @@ export async function saveNote(body) {
         message: String(wrote?.message || "Remote save failed"),
         mtimeMs: Number(wrote?.mtimeMs) || 0,
         size: Number(wrote?.size) || 0,
+        version: String(wrote?.version || ""),
         standalone: true,
       };
     }
@@ -7937,6 +7997,7 @@ export async function saveNote(body) {
       remote: true,
       mtimeMs: Number(wrote?.mtimeMs) || 0,
       size: Number(wrote?.size) || Buffer.byteLength(content, "utf8"),
+      version: String(wrote?.version || ""),
     };
   }
   const file = safeOpenFile(body.file);
@@ -7950,23 +8011,39 @@ export async function saveNote(body) {
   }
   const force = body.force === true;
   const baseMtimeMs = Number(body.baseMtimeMs);
+  const baseVersion = String(body.baseVersion || "");
   const wrote = await enqueueSaveWrite(file, async () => {
     if (!acceptSaveRequest(file, body)) return false;
-    if (!force && Number.isFinite(baseMtimeMs) && baseMtimeMs > 0) {
+    if (!force && (baseVersion || (Number.isFinite(baseMtimeMs) && baseMtimeMs > 0))) {
       try {
-        const current = await stat(file);
-        if (Math.abs(current.mtimeMs - baseMtimeMs) > 1) {
-          return { conflict: true, mtimeMs: current.mtimeMs, size: current.size };
+        const [current, currentContent] = await Promise.all([stat(file), readFile(file, "utf8")]);
+        const versionChanged = Boolean(baseVersion) && contentDigest(currentContent) !== baseVersion;
+        const mtimeChanged = !baseVersion && current.mtimeMs !== baseMtimeMs;
+        if (versionChanged || mtimeChanged) {
+          // A newer edit can be captured before the previous save response
+          // reaches the renderer, so it may legitimately carry the older
+          // base mtime. Accept that chain only when the file still contains
+          // the exact bytes last written by this same client. Any intervening
+          // write from another pane or process remains a real conflict.
+          if (!await followsSuccessfulClientSave(file, body, currentContent)) {
+            return {
+              conflict: true,
+              mtimeMs: current.mtimeMs,
+              size: current.size,
+              version: contentDigest(currentContent),
+            };
+          }
         }
       } catch {}
     }
     await atomicWriteFile(file, content, "utf8");
     const info = await stat(file);
+    rememberSuccessfulClientSave(file, body, content, info);
     markNotesDirty(file);
-    return { wrote: true, mtimeMs: info.mtimeMs, size: info.size };
+    return { wrote: true, mtimeMs: info.mtimeMs, size: info.size, version: contentDigest(content) };
   });
   if (wrote && typeof wrote === "object" && wrote.conflict) {
-    return { type: "saved", ok: false, file, conflict: true, message: "File changed on disk. Review before overwriting.", mtimeMs: wrote.mtimeMs, size: wrote.size };
+    return { type: "saved", ok: false, file, conflict: true, message: "File changed on disk. Review before overwriting.", mtimeMs: wrote.mtimeMs, size: wrote.size, version: wrote.version };
   }
   if (!wrote) {
     return { type: "saved", ok: true, file, stale: true, message: "Skipped stale save" };
@@ -7974,15 +8051,15 @@ export async function saveNote(body) {
   if (standaloneFile(file)) {
     noteScanRoot = scanRootForOpenFile(file);
     markNotesDirty(file);
-    return { type: "saved", ok: true, file, kind: kindFromContent(content), message: "Saved", note: await noteSummaryForFile(file, content), notesRefresh: "deferred", standalone: true, mtimeMs: wrote.mtimeMs, size: wrote.size };
+    return { type: "saved", ok: true, file, kind: kindFromContent(content), message: "Saved", note: await noteSummaryForFile(file, content), notesRefresh: "deferred", standalone: true, mtimeMs: wrote.mtimeMs, size: wrote.size, version: wrote.version };
   }
   const refresh = body.refresh === "deferred" ? "deferred" : "full";
   if (refresh === "deferred") {
     markNotesDirty(file);
-    return { type: "saved", ok: true, file, message: "Saved", note: await noteSummaryForFile(file, content), kind: kindFromContent(content), notesRefresh: "deferred", standalone: false, mtimeMs: wrote.mtimeMs, size: wrote.size };
+    return { type: "saved", ok: true, file, message: "Saved", note: await noteSummaryForFile(file, content), kind: kindFromContent(content), notesRefresh: "deferred", standalone: false, mtimeMs: wrote.mtimeMs, size: wrote.size, version: wrote.version };
   }
   const notes = await scanNotes();
-  return { type: "saved", ok: true, file, message: "Saved", notes, notesRefresh: "full", standalone: false, mtimeMs: wrote.mtimeMs, size: wrote.size };
+  return { type: "saved", ok: true, file, message: "Saved", notes, notesRefresh: "full", standalone: false, mtimeMs: wrote.mtimeMs, size: wrote.size, version: wrote.version };
 }
 
 export async function bootstrapNote(file) {

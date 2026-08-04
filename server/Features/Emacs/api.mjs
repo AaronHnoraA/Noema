@@ -5,6 +5,7 @@ export function createEmacsApiHandlers({
   apiEmacsKey,
   apiSystemOpen,
   apiEmacsZotero,
+  apiChooseNotePath,
 }) {
   return {
     "aaronnote:api:emacs:open": (body) => apiOpenInEmacs(body?.file ?? body, body?.line, body?.col, body?.tag),
@@ -14,5 +15,6 @@ export function createEmacsApiHandlers({
     "aaronnote:api:emacs:system-open": (target) => apiSystemOpen(target),
     "aaronnote:api:emacs:zotero": (body) => apiEmacsZotero(body),
     "aaronnote:api:emacs:zotero-import": (body) => apiEmacsZotero(body, "zotero-import"),
+    "aaronnote:api:emacs:choose-note-path": (body) => apiChooseNotePath(body),
   };
 }

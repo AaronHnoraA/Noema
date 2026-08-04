@@ -64,6 +64,27 @@ describe("Tauri desktop migration", () => {
     expect(wiki).toContain("window.noemaDesktop?.onCommand");
     expect(editor).toContain("flushCursorPositionKeepalive");
     expect(webHost).toContain("savePositionKeepalive");
+    for (const command of [
+      "cmd:add-meta",
+      "cmd:remove-meta",
+      "cmd:manage-tags",
+      "cmd:tag-manager",
+      "cmd:add-tag",
+      "cmd:rename-tag",
+      "cmd:delete-tag",
+      "cmd:tag-overlap",
+      "cmd:rewrite-paths",
+      "cmd:reload-index",
+    ]) {
+      expect(host).toContain(`"${command}"`);
+    }
+    expect(editor).toContain('case "manage-tags"');
+    expect(editor).toContain('case "tag-manager"');
+    expect(editor).toContain('case "rename-tag"');
+    expect(editor).toContain('case "rewrite-paths"');
+    expect(wiki).toContain('"add-tag", "manage-tags", "rename-tag", "delete-tag"');
+    expect(webHost).toContain('gatewayRequest("aaronnote.note.choose-path"');
+    expect(webHost).not.toContain('chooseNotePath: function() { return Promise.resolve(""); }');
   });
 
   test("selects native bundle formats for macOS, Windows, and Linux", () => {

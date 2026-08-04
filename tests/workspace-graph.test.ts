@@ -1,5 +1,12 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
-import { workspaceGraphDrawPlan, workspaceGraphNodeColor, workspaceGraphNodeMatches } from "../aaronnote/workspace-graph.ts";
+import { workspaceGraphDrawPlan, workspaceGraphNeighborKeys, workspaceGraphNodeColor, workspaceGraphNodeMatches } from "../aaronnote/workspace-graph.ts";
+import {
+  createWorkspaceGraphRuntime,
+  type WorkspaceForceNode,
+  type WorkspaceGraphAdapter,
+  type WorkspaceGraphEvents,
+  type WorkspaceGraphVisualState,
+} from "../aaronnote/workspace-graph-runtime.ts";
 import type { GraphPayload } from "../aaronnote/types.ts";
 
 describe("workspace graph performance boundaries", () => {
@@ -71,5 +78,94 @@ describe("workspace graph performance boundaries", () => {
     const node = { key: "note", repositoryId: "Public-QC", namespace: "quantum" };
     expect(workspaceGraphNodeColor(node, "repository")).toBe(workspaceGraphNodeColor(node, "repository"));
     expect(workspaceGraphNodeColor(node, "repository")).not.toBe(workspaceGraphNodeColor(node, "namespace"));
+  });
+
+  test("builds the org-roam style N-hop local scope without leaking other components", () => {
+    const payload: GraphPayload = {
+      indexVersion: 1,
+      nodes: ["a", "b", "c", "d", "other"].map((key) => ({ key, title: key })),
+      edges: [
+        { source: "a", target: "b" },
+        { source: "b", target: "c" },
+        { source: "c", target: "d" },
+      ],
+      meta: {},
+    };
+    expect([...workspaceGraphNeighborKeys(payload, ["a"], 2)].sort()).toEqual(["a", "b", "c"]);
+    expect(workspaceGraphDrawPlan(payload, "", "", {
+      settings: { scope: "local", localRoot: "a", neighborDepth: 2 },
+    }).nodes.map((node) => node.key).sort()).toEqual(["a", "b", "c"]);
+  });
+
+  test("shares right-click local scope, hover highlight, and double-click open semantics", () => {
+    const payload: GraphPayload = {
+      indexVersion: 1,
+      nodes: ["a", "b", "c", "other"].map((key) => ({ key, id: key, title: key, kind: "note" as const })),
+      edges: [
+        { source: "a", target: "b" },
+        { source: "b", target: "c" },
+      ],
+      meta: {},
+    };
+    const root = document.createElement("div");
+    const status = document.createElement("div");
+    const detail = document.createElement("div");
+    const searchInput = document.createElement("input");
+    const groupInput = document.createElement("select");
+    document.body.append(root, status, detail, searchInput, groupInput);
+    let events: WorkspaceGraphEvents | null = null;
+    let nodes: WorkspaceForceNode[] = [];
+    let visual!: WorkspaceGraphVisualState;
+    const settings: Array<{ scope: string; localRoot: string }> = [];
+    const opened: string[] = [];
+    const adapter: WorkspaceGraphAdapter = {
+      setData(next) { nodes = next; },
+      updateVisuals(next) { visual = next; },
+      focus() {},
+      center() {},
+      resize() {},
+      destroy() {},
+    };
+    const graph = createWorkspaceGraphRuntime({
+      root,
+      status,
+      detail,
+      searchInput,
+      groupInput,
+      payload,
+      currentKey: "",
+      openNode: (node) => opened.push(node.key),
+      settings: { showOrphans: true, neighborDepth: 1 },
+      onSettingsChange: (next) => settings.push({ scope: next.scope, localRoot: next.localRoot }),
+    }, (_stage, _size, handlers) => {
+      events = handlers;
+      return adapter;
+    });
+
+    const b = nodes.find((node) => node.key === "b")!;
+    events!.nodeHover(b);
+    expect(visual.activeKey).toBe("b");
+    expect([...visual.relatedKeys].sort()).toEqual(["a", "b", "c"]);
+
+    events!.nodeRightClick(b, { preventDefault() {} } as MouseEvent);
+    expect(settings.at(-1)).toEqual({ scope: "local", localRoot: "b" });
+    expect(nodes.map((node) => node.key).sort()).toEqual(["a", "b", "c"]);
+
+    const click = (timeStamp: number): MouseEvent => ({
+      timeStamp,
+      metaKey: false,
+      ctrlKey: false,
+      altKey: false,
+      shiftKey: false,
+    } as MouseEvent);
+    events!.nodeClick(nodes.find((node) => node.key === "b")!, click(1_000));
+    events!.nodeClick(nodes.find((node) => node.key === "b")!, click(1_100));
+    expect(opened).toEqual(["b"]);
+    graph.destroy();
+    root.remove();
+    status.remove();
+    detail.remove();
+    searchInput.remove();
+    groupInput.remove();
   });
 });

@@ -44,6 +44,15 @@ diagnostics, and Unicode/trigram full-text indexes. It is never committed. The
 legacy `roam.db` and `roam-db.json` are neither read nor written in either
 layout and can be removed. Both the desktop and Emacs adapters use the same
 `wiki.db`; Emacs does not maintain a second database.
+
+The database, completion, and graph boundaries were also reviewed against
+org-roam and org-roam-ui. Noema adopts stable node identity, normalized
+relationship tables, content-aware incremental indexing, and completion items
+that keep identity separate from display text. Its 2D home graph and 3D graph
+page use the same scope/search/follow/selection runtime and differ only in their
+force-graph renderer. The detailed adoption and rejection matrix is in
+`docs/architecture/org-roam-study.md`.
+
 Attachments remain physical files and only their metadata is inventoried; their
 contents are not copied into SQLite. Typst files remain editable in Noema but
 are ordinary files rather than Wiki pages.
@@ -59,8 +68,19 @@ target also repairs links in otherwise unchanged source notes.
 The database records each repository identity, last indexed HEAD, scan time,
 last full and incremental runs, and the reason for the selected maintenance
 mode. No index operation creates commits, tags, branches, or other Git refs.
-Git history changes only through explicit **Local commit** or **Commit & sync**
-actions.
+Git maintenance is a separate service: physical file changes only mark a Wiki
+repository dirty, and the startup/periodic service later checkpoints and
+synchronizes that batch.
+
+Every first-party mutation that can affect the projection—note saves and
+creation, page move/copy/merge/delete/restore, metadata and tag edits, managed
+filesystem actions, assets, slide mirrors, and persisted Jupyter cell
+artifacts—invalidates the affected paths and schedules an incremental DB
+refresh. A successful Git refresh supplies its changed paths to the same
+incremental pipeline. Ten percent of successful Git refreshes select a full
+atomic rebuild instead, providing probabilistic self-healing for missed
+external changes; set `NOEMA_WIKI_FULL_REFRESH_PROBABILITY` to a value from `0`
+to `1` to tune that diagnostic policy.
 
 ## Links and identity
 
@@ -118,16 +138,27 @@ name in `namespace_aliases`, so existing qualified links continue to resolve.
 
 ## Git collaboration cadence
 
-Noema creates a device work branch and performs the checkpoint/fetch/merge/push
-cycle only when the user explicitly chooses **Commit & sync**. Editing, App
-startup, background idle time, and shutdown never create Git commits or push.
-**Local commit** remains available when the user wants a checkpoint without
-network synchronization. Git author configuration is preserved; Noema uses a
-local fallback identity only when the repository has no configured author.
+Noema creates a device work branch and automatically performs the
+checkpoint/fetch/merge/push cycle in Wiki layout. Saving only marks the affected
+repository dirty; it does not create a Git commit per edit. All repositories
+synchronize shortly after startup and then roughly every six hours, with up to
+ten minutes of jitter so multiple devices do not all contact the remote at the
+same instant. Work is serialized per repository and an offline/error result is
+retried after one minute. During an orderly App shutdown, dirty repositories
+receive a local checkpoint; the next startup/periodic pass performs the network
+sync. `NOEMA_WIKI_AUTO_SYNC=0` is the diagnostic override for disabling this
+policy.
+
+**Local commit** and **Commit & sync** remain available for an immediate manual
+checkpoint or synchronization. Git author configuration is preserved; Noema
+uses a local fallback identity only when the repository has no configured
+author. Legacy layout does not opt into the multi-repository automatic policy.
 
 Conflicts are isolated in a disposable integration worktree and resolved in
 the embedded three-way merge editor. The user's primary working tree stays on
-the device branch and is never left in a partially merged state.
+the device branch and is never left in a partially merged state. Automatic
+retry pauses for a conflicted repository until the user resolves or aborts the
+merge from the repository view.
 The embedded ungit sidecar provides the full visual staging, commit, branch,
 and history workflow for advanced maintenance without sending users to a
 terminal or another application.

@@ -28,6 +28,14 @@ against Wikimedia's Vector skin at commit
 No upstream runtime is vendored; directly used Git and merge interfaces are the
 declared ungit and @mismerge/core package dependencies.
 
+The Wiki graph scope, N-hop neighborhood, follow/focus, and 2D/3D interaction
+model includes code adapted from org-roam-ui, copyright its contributors,
+licensed under GNU GPL version 3. The reviewed upstream revision is recorded in
+the adapted source file:
+
+  https://github.com/org-roam/org-roam-ui
+  commit 2894dcbf56d2eca8d3cae2b1ae183f51724b5db6
+
 The generated math snippet catalog includes filtered completion data derived
 from James Yu's LaTeX Workshop at commit
 57f9e8d0306ea0c7419290a2b62ee0cec3c31041, used under the MIT License. Source

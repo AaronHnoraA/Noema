@@ -1354,7 +1354,16 @@ export async function runWikiGitAction(rootValue, actionValue, body = {}) {
   const root = expandNoemaPath(rootValue);
   const repository = await repositoryFromId(root, body.repositoryId);
   const action = String(actionValue || "");
-  if (action === "pull") await git(repository, ["pull", "--ff-only"]);
+  let changedPaths = [];
+  if (action === "pull") {
+    const before = (await git(repository, ["rev-parse", "HEAD"])).stdout.trim();
+    await git(repository, ["pull", "--ff-only"]);
+    const after = (await git(repository, ["rev-parse", "HEAD"])).stdout.trim();
+    if (before !== after) {
+      const { stdout } = await git(repository, ["diff", "--name-only", "-z", before, after, "--"]);
+      changedPaths = stdout.split("\0").filter(Boolean).map((path) => join(repository.path, path));
+    }
+  }
   else if (action === "push") await git(repository, ["push"]);
   else if (action === "commit") {
     const message = String(body.message || "").trim();
@@ -1366,7 +1375,13 @@ export async function runWikiGitAction(rootValue, actionValue, body = {}) {
   } else {
     throw apiError(`Unsupported Git action: ${action}`);
   }
-  return await wikiRepositoryStatus(root, repository.id);
+  return {
+    ...await wikiRepositoryStatus(root, repository.id),
+    action,
+    phase: "idle",
+    changedPaths,
+    message: action === "pull" ? "Repository refreshed" : `Git ${action} completed`,
+  };
 }
 
 function slugify(value) {

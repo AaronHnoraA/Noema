@@ -184,6 +184,11 @@ button.is-primary { border-color: var(--aaron-accent); background: var(--aaron-a
 .noema-wiki-page-tabs button:hover, .noema-wiki-page-tabs button.is-active, .noema-wiki-page-tabs button.is-current { border-bottom-color: var(--aaron-accent); color: var(--aaron-ink); }
 .noema-wiki-status { min-height: 38px; padding-top: 9px; color: var(--aaron-muted); font-size: 10px; }
 .noema-wiki-status.is-error { color: var(--aaron-danger); }
+.noema-wiki-conflict-alert { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 0 0 14px; padding: 11px 13px; border: 1px solid color-mix(in srgb, var(--aaron-danger) 42%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--aaron-danger) 10%, var(--aaron-surface)); box-shadow: 0 8px 24px color-mix(in srgb, var(--aaron-danger) 10%, transparent); }
+.noema-wiki-conflict-alert[hidden] { display: none; }
+.noema-wiki-conflict-alert div { display: grid; gap: 3px; min-width: 0; }
+.noema-wiki-conflict-alert strong { color: var(--aaron-danger); font-size: 12px; }
+.noema-wiki-conflict-alert span { overflow: hidden; color: var(--aaron-muted); font: 10px/1.4 var(--aaron-font-mono, monospace); text-overflow: ellipsis; white-space: nowrap; }
 
 .noema-wiki-page-list, .noema-wiki-report-list, .noema-wiki-repository-list { display: grid; gap: 0; border-top: 1px solid var(--aaron-paper-line); }
 .noema-wiki-page {
@@ -216,6 +221,24 @@ button.is-primary { border-color: var(--aaron-accent); background: var(--aaron-a
 .noema-wiki-report-cards p, .noema-wiki-diagnostic { color: var(--aaron-muted); font-size: 11px; line-height: 1.5; }
 .noema-wiki-diagnostic { border-left: 3px solid var(--aaron-accent); padding: 8px 12px; background: var(--aaron-accent-soft); }
 .noema-wiki-repository-toolbar { justify-content: flex-end; margin-bottom: 12px; }
+.noema-wiki-tag-toolbar {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.noema-wiki-tag-toolbar input {
+  min-width: 0;
+  height: 36px;
+  border: 1px solid var(--aaron-paper-line);
+  border-radius: 6px;
+  padding: 0 11px;
+  background: var(--aaronnote-chrome);
+  color: var(--aaron-ink);
+  font: 12px/1 var(--aaron-font-sans);
+}
+.noema-wiki-tag-toolbar span { color: var(--aaron-muted); font: 11px/1.2 var(--aaron-font-sans); }
 .noema-wiki-repository > div:first-child { display: flex; align-items: baseline; justify-content: space-between; }
 .noema-wiki-repository > div:nth-child(2) { display: flex; gap: 7px; margin: 12px 0; }
 .noema-wiki-repository button { min-height: 32px; border: 1px solid var(--aaron-paper-line); border-radius: 6px; background: var(--aaronnote-chrome); cursor: pointer; }
@@ -261,11 +284,23 @@ button.is-primary { border-color: var(--aaron-accent); background: var(--aaron-a
 .noema-wiki-home-graph h2, .noema-wiki-graph-workspace h2 { margin: 0; font: 700 1.15em/1.2 var(--aaron-font-serif, Georgia, serif); }
 .noema-wiki-home-graph header p, .noema-wiki-graph-workspace header p { margin: 4px 0 0; color: var(--aaron-muted); font-size: .68em; }
 .noema-wiki-home-graph header button, .noema-wiki-graph-workspace header button, .noema-wiki-graph-toolbar button { min-height: 32px; border: 1px solid var(--aaron-paper-line); border-radius: 6px; padding: 0 10px; background: var(--aaronnote-chrome); cursor: pointer; }
-.noema-wiki-graph-toolbar { display: flex; gap: 7px; padding: 10px 12px; border-bottom: 1px solid var(--aaron-paper-line); }
+.noema-wiki-graph-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; padding: 10px 12px; border-bottom: 1px solid var(--aaron-paper-line); }
 .noema-wiki-graph-toolbar input { min-width: 180px; flex: 1; border: 1px solid var(--aaron-paper-line); border-radius: 6px; padding: 7px 10px; background: var(--aaronnote-bg); color: var(--aaron-ink); }
 .noema-wiki-graph-toolbar select { max-width: 220px; border: 1px solid var(--aaron-paper-line); border-radius: 6px; background: var(--aaronnote-bg); color: var(--aaron-ink); }
 .noema-wiki-graph-toolbar button.is-active { border-color: var(--aaron-accent); color: var(--aaron-accent); }
+.noema-wiki-graph-scope { display: inline-flex; }
+.noema-wiki-graph-scope button { border-radius: 0; }
+.noema-wiki-graph-scope button:first-child { border-radius: 6px 0 0 6px; }
+.noema-wiki-graph-scope button:last-child { margin-left: -1px; border-radius: 0 6px 6px 0; }
+.noema-wiki-graph-depth { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; border: 1px solid var(--aaron-paper-line); border-radius: 6px; padding: 0 8px; color: var(--aaron-muted); font-size: 10px; }
+.noema-wiki-graph-depth input { width: 76px; min-width: 76px; padding: 0; }
 .noema-wiki-graph-canvas { position: relative; width: 100%; height: clamp(380px, 50vh, 620px); overflow: hidden; background: radial-gradient(circle at 18px 18px, color-mix(in srgb, var(--aaron-muted), transparent 88%) 1px, transparent 1.5px); background-size: 36px 36px; }
+.noema-wiki-graph-workspace .noema-wiki-graph-canvas { height: clamp(540px, 68vh, 900px); background: var(--aaron-paper); }
+.aaronnote-workspace-force-graph { position: absolute; inset: 0; }
+.aaronnote-workspace-force-graph canvas { display: block; }
+.aaronnote-graph-search-results.is-3d { z-index: 3; }
+.aaronnote-graph-detail-actions { display: inline-flex; gap: 6px; margin-left: auto; }
+.aaronnote-graph-detail-actions button { min-height: 26px; border: 1px solid var(--aaron-paper-line); border-radius: 5px; background: var(--aaronnote-chrome); color: var(--aaron-ink); cursor: pointer; }
 .noema-wiki-home-graph .noema-wiki-graph-canvas { height: clamp(330px, 42vh, 500px); }
 .noema-wiki-home-graph > footer, .noema-wiki-graph-workspace > footer { min-height: 42px; display: flex; align-items: center; gap: 18px; padding: 8px 14px; border-top: 1px solid var(--aaron-paper-line); color: var(--aaron-muted); font-size: 10px; }
 .noema-wiki-home-graph .aaronnote-workspace-graph-canvas, .noema-wiki-graph-workspace .aaronnote-workspace-graph-canvas { max-width: none; }

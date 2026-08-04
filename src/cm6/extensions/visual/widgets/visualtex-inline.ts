@@ -18,6 +18,7 @@ export type VisualTexInlineEntry =
   | { kind: "all" }
   | { kind: "start" }
   | { kind: "end" }
+  | { kind: "source"; offset: number }
   | { kind: "point"; x: number; y: number };
 
 export type VisualTexInlineMoveDirection =
@@ -43,6 +44,8 @@ export type VisualTexInlineEditorOptions = {
 export type VisualTexInlineEditor = {
   readonly ready: Promise<void>;
   value(): string;
+  /** TeX-source offset corresponding to the current MathLive caret. */
+  sourceOffset(): number;
   focus(): void;
   destroy(): void;
 };
@@ -483,6 +486,10 @@ function placeInitialSelection(field: MathfieldElement, entry: VisualTexInlineEn
       field.position = field.lastOffset;
       return;
     }
+    if (entry.kind === "source") {
+      field.position = visualTexMathfieldPositionFromSourceOffset(field, entry.offset);
+      return;
+    }
     field.position = field.getOffsetFromPoint(entry.x, entry.y);
   });
   stopVisualTexUndoCoalescing(field);
@@ -658,6 +665,28 @@ function visualTexMathfieldRangeLatex(
       normalizeVisualTexLatex(field.getValue(from, to, "latex-expanded")),
     ),
   );
+}
+
+function visualTexMathfieldSourceOffset(field: MathfieldElement): number {
+  return visualTexMathfieldRangeLatex(field, 0, field.position).length;
+}
+
+function visualTexMathfieldPositionFromSourceOffset(
+  field: MathfieldElement,
+  sourceOffset: number,
+): number {
+  const target = Math.max(0, sourceOffset);
+  let closest = 0;
+  let distance = Number.POSITIVE_INFINITY;
+  for (let position = 0; position <= field.lastOffset; position += 1) {
+    const nextDistance = Math.abs(visualTexMathfieldRangeLatex(field, 0, position).length - target);
+    if (nextDistance < distance) {
+      closest = position;
+      distance = nextDistance;
+    }
+    if (nextDistance === 0) break;
+  }
+  return closest;
 }
 
 function visualTexSnippetRangeValue(
@@ -2723,6 +2752,7 @@ export function mountVisualTexInlineEditor(
   return {
     ready,
     value: () => field ? visualTexMathfieldLatex(field) : draft,
+    sourceOffset: () => field ? visualTexMathfieldSourceOffset(field) : 0,
     focus: () => focusVisualTexField(field),
     destroy: () => {
       destroyed = true;
@@ -3107,6 +3137,7 @@ function mountVisualTexSingleDisplayEditor(
   return {
     ready,
     value: () => field ? visualTexMathfieldLatex(field) : draft,
+    sourceOffset: () => field ? visualTexMathfieldSourceOffset(field) : 0,
     focus: () => focusVisualTexField(field),
     destroy: () => {
       destroyed = true;
@@ -3573,6 +3604,15 @@ function mountVisualTexAdvancedDisplayEditor(
     value: () => rows.length
       ? serializeVisualTexDisplayRows(currentLayout, rows.map(({ field }) => visualTexMathfieldLatex(field)))
       : draft,
+    sourceOffset: () => {
+      const active = activeField ?? rows[0]?.field;
+      if (!active) return 0;
+      const rowIndex = Math.max(0, rows.findIndex(({ field }) => field === active));
+      const values = rows.map(({ field }) => visualTexMathfieldLatex(field));
+      const prefix = values.slice(0, rowIndex);
+      prefix.push(visualTexMathfieldRangeLatex(active, 0, active.position));
+      return serializeVisualTexDisplayRows(currentLayout, prefix).length;
+    },
     focus: () => focusVisualTexField(activeField ?? rows[0]?.field),
     destroy: () => {
       destroyed = true;

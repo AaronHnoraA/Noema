@@ -1325,6 +1325,19 @@ fn command_menu(app: &tauri::AppHandle, kind: &str) -> Result<Menu<tauri::Wry>, 
             ("cmd:toggle-agenda", "Agenda"),
             ("cmd:toggle-graph", "Local Graph"),
             ("cmd:toggle-tools", "Tools"),
+            ("cmd:add-meta", "Add Document Metadata…"),
+            ("cmd:remove-meta", "Remove Document Metadata…"),
+            ("cmd:hide-roam", "Hide from Knowledge Graph"),
+            ("cmd:activate-roam", "Show in Knowledge Graph"),
+            ("cmd:tag-manager", "Tag Management…"),
+            ("cmd:manage-tags", "Manage Document Metadata…"),
+            ("cmd:add-tag", "Add Tags…"),
+            ("cmd:insert-roam-idlink", "Insert Knowledge Link…"),
+            ("cmd:rename-tag", "Rename Tag Across Notes…"),
+            ("cmd:delete-tag", "Delete Tag Across Notes…"),
+            ("cmd:tag-overlap", "Tag Overlap Report"),
+            ("cmd:rewrite-paths", "Rewrite Path References…"),
+            ("cmd:reload-index", "Reload Note Index"),
             ("cmd:jupyter-panel", "Jupyter Cells"),
             ("cmd:toggle-source", "Toggle Source"),
             ("cmd:prose-check", "Run Prose Check"),
@@ -1858,6 +1871,79 @@ fn application_menu(app: &tauri::AppHandle) -> Result<Menu<tauri::Wry>, tauri::E
         .item(&menu_item(app, "cmd:jupyter-panel", "Jupyter Cells", None)?)
         .item(&menu_item(app, "cmd:task-manager", "Task Manager", None)?)
         .build()?;
+    let tools = SubmenuBuilder::new(app, "Tools")
+        .item(&menu_item(
+            app,
+            "cmd:add-meta",
+            "Add Document Metadata…",
+            None,
+        )?)
+        .item(&menu_item(
+            app,
+            "cmd:manage-tags",
+            "Manage Document Metadata…",
+            None,
+        )?)
+        .item(&menu_item(
+            app,
+            "cmd:remove-meta",
+            "Remove Document Metadata…",
+            None,
+        )?)
+        .item(&menu_item(
+            app,
+            "cmd:hide-roam",
+            "Hide from Knowledge Graph",
+            None,
+        )?)
+        .item(&menu_item(
+            app,
+            "cmd:activate-roam",
+            "Show in Knowledge Graph",
+            None,
+        )?)
+        .item(&menu_item(app, "cmd:tag-manager", "Tag Management…", None)?)
+        .item(&menu_item(app, "cmd:add-tag", "Add Tags…", None)?)
+        .item(&menu_item(
+            app,
+            "cmd:insert-roam-idlink",
+            "Insert Knowledge Link…",
+            None,
+        )?)
+        .separator()
+        .item(&menu_item(
+            app,
+            "cmd:rename-tag",
+            "Rename Tag Across Notes…",
+            None,
+        )?)
+        .item(&menu_item(
+            app,
+            "cmd:delete-tag",
+            "Delete Tag Across Notes…",
+            None,
+        )?)
+        .item(&menu_item(
+            app,
+            "cmd:tag-overlap",
+            "Tag Overlap Report",
+            None,
+        )?)
+        .item(&menu_item(
+            app,
+            "cmd:rewrite-paths",
+            "Rewrite Path References…",
+            None,
+        )?)
+        .separator()
+        .item(&menu_item(
+            app,
+            "cmd:reload-index",
+            "Reload Note Index",
+            None,
+        )?)
+        .item(&menu_item(app, "cmd:toggle-tools", "All Tools", None)?)
+        .build()?;
     let view = SubmenuBuilder::new(app, "View")
         .item(&menu_item(
             app,
@@ -1917,7 +2003,7 @@ fn application_menu(app: &tauri::AppHandle) -> Result<Menu<tauri::Wry>, tauri::E
             .build()?;
         menu = menu.item(&noema);
     }
-    menu.items(&[&file, &edit, &format, &navigate, &view, &window])
+    menu.items(&[&file, &edit, &format, &navigate, &tools, &view, &window])
         .build()
 }
 

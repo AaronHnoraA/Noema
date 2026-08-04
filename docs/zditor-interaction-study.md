@@ -18,8 +18,8 @@ behaviour and UX reference. No Zditor source code is copied.
 - Native review suggestions through `@@revision`, with accept/keep/edit and
   visible HTML/LaTeX export.
 - Block drag/reorder and object-aware controls.
-- Local/workspace graph scope, Canvas rendering, search, group filtering,
-  selection-neighbour emphasis, scale caps, and lazy graph loading.
+- Local/workspace graph scope, shared 2D/3D force-graph behavior, search, group
+  filtering, selection-neighbour emphasis, scale caps, and lazy 3D loading.
 - Matching authoring snippets for metadata, review, superscript, subscript and
   footnotes.
 

@@ -1,7 +1,8 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
-import { createLocalGraphPanel } from "../aaronnote/local-graph.ts";
-import type { NoteSummary } from "../aaronnote/types.ts";
+import { createLocalGraphPanel, workspaceGraphWithCurrentMarkdown } from "../aaronnote/local-graph.ts";
+import type { WorkspaceGraphOptions } from "../aaronnote/workspace-graph.ts";
+import type { GraphPayload, NoteSummary } from "../aaronnote/types.ts";
 
 function note(partial: Partial<NoteSummary> & Pick<NoteSummary, "id" | "title">): NoteSummary {
   return {
@@ -25,6 +26,41 @@ function input(type: string, checked = false, value = ""): HTMLInputElement {
 }
 
 describe("local graph", () => {
+  test("replaces stale current-note DB edges with live Markdown edges", () => {
+    const current = note({ id: "current", title: "Current", tags: ["stale"] });
+    const fresh = note({ id: "fresh", title: "Fresh" });
+    const stale = note({ id: "stale-note", title: "Stale" });
+    const payload: GraphPayload = {
+      indexVersion: 1,
+      nodes: [
+        { key: "current", title: "Current", tags: ["stale"] },
+        { key: "fresh", title: "Fresh" },
+        { key: "stale-note", title: "Stale" },
+        { key: "tag:stale", title: "#stale", kind: "tag" },
+      ],
+      edges: [
+        { source: "current", target: "stale-note", type: "ref" },
+        { source: "current", target: "tag:stale", type: "tag" },
+      ],
+      meta: {},
+    };
+    const next = workspaceGraphWithCurrentMarkdown(
+      payload,
+      current,
+      "#+begin meta\ntags: FreshTag\n#+end meta\n\n[[fresh]]\n",
+      (ref) => ref === "fresh" ? fresh : ref === "stale-note" ? stale : undefined,
+    );
+    expect(next.edges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: "current", target: "fresh", type: "ref" }),
+      expect.objectContaining({ source: "current", target: "tag:freshtag", type: "tag" }),
+    ]));
+    expect(next.edges).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: "current", target: "stale-note" }),
+      expect.objectContaining({ source: "current", target: "tag:stale" }),
+    ]));
+    expect(next.nodes.find((node) => node.key === "current")?.tags).toEqual(["FreshTag"]);
+  });
+
   test("uses roam meta tags and renders tag-tag plus tag-file edges", () => {
     const root = document.createElement("aside");
     root.className = "aaronnote-local-graph-panel is-collapsed";
@@ -36,6 +72,7 @@ describe("local graph", () => {
     const tagsInput = input("checkbox", true);
     const canvas = document.createElement("div");
     const status = document.createElement("div");
+    let rendered!: GraphPayload;
     document.body.append(root, toggleButton, canvas);
 
     const current = note({ id: "current", title: "Current", tags: ["old-index-tag"], inlineTags: ["inline-index-tag"] });
@@ -66,17 +103,21 @@ describe("local graph", () => {
       resolveNoteRef: (ref) => [current, related].find((item) => item.id === ref || item.path === ref),
       openNote: () => {},
       openTag: () => {},
+      createWorkspaceGraph: (options: WorkspaceGraphOptions) => {
+        rendered = options.payload;
+        return { center() {}, destroy() {} };
+      },
     });
 
     try {
       panel.toggle();
-      const labels = Array.from(canvas.querySelectorAll("text")).map((el) => el.textContent || "");
+      const labels = rendered.nodes.map((node) => node.title || "");
       expect(labels).toEqual(expect.arrayContaining(["Current", "Related", "#alpha", "#beta", "#gamma"]));
       expect(labels).not.toContain("#old-index-tag");
       expect(labels).not.toContain("#inline-index-tag");
       expect(labels).not.toContain("#inline-anchor");
       expect(labels).not.toContain("#hash-anchor");
-      expect(canvas.querySelectorAll(".aaronnote-local-graph-link.is-tag").length).toBeGreaterThanOrEqual(4);
+      expect(rendered.edges.filter((edge) => edge.type === "tag").length).toBeGreaterThanOrEqual(4);
     } finally {
       panel.collapse();
       root.remove();

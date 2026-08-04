@@ -381,6 +381,11 @@ type BlockMathFieldValue = {
 
 const finishBlockMathSessionEffect = StateEffect.define<number>();
 const fallbackBlockMathSessionEffect = StateEffect.define<number>();
+const revealBlockMathSourceEffect = StateEffect.define<{
+  id: number;
+  from: number;
+  to: number;
+}>();
 const startBlockMathSessionEffect = StateEffect.define<{
   from: number;
   to: number;
@@ -567,6 +572,11 @@ const mathBlockField = StateField.define<BlockMathFieldValue>({
         finishedByEffect = true;
       } else if (effect.is(fallbackBlockMathSessionEffect) && active?.id === effect.value) {
         suppressedKey = blockMathKey(active);
+        active = null;
+        fallbackByEffect = true;
+      } else if (effect.is(revealBlockMathSourceEffect)
+        && (!active || effect.value.id === 0 || active.id === effect.value.id)) {
+        suppressedKey = blockMathKey(effect.value);
         active = null;
         fallbackByEffect = true;
       }
@@ -756,6 +766,22 @@ function formattedBlockMathDraft(state: EditorState, range: BlockMathRange, draf
   return `${body}\n`;
 }
 
+function formattedBlockMathSourceOffset(
+  state: EditorState,
+  range: BlockMathRange,
+  draft: string,
+  sourceOffset: number,
+): number {
+  const normalized = normalizeVisualTexLatex(draft).trim();
+  const clamped = Math.max(0, Math.min(normalized.length, sourceOffset));
+  const rawContent = state.doc.sliceString(range.contentFrom, range.contentTo);
+  const contentIndent = rawContent.match(/^[ \t]*/)?.[0];
+  const openIndent = state.doc.lineAt(range.from).text.match(/^[ \t]*/)?.[0] ?? "";
+  const indent = contentIndent && contentIndent.length > 0 ? contentIndent : openIndent;
+  const before = normalized.slice(0, clamped).split("\n");
+  return indent.length + before.map((line) => line.trim()).join(`\n${indent}`).length;
+}
+
 function commitBlockMathSession(
   view: EditorView,
   session: BlockMathEditSession,
@@ -828,6 +854,43 @@ function fallbackBlockMathSession(
   }));
 }
 
+function revealBlockMathSessionSource(
+  view: EditorView,
+  session: BlockMathEditSession,
+): boolean {
+  const range = getBlockMathRanges(view.state)
+    .find((candidate) => candidate.from === session.from && candidate.to === session.to);
+  if (!range) return false;
+  snapshotBlockMathDraft(session);
+  if (!session.draft.trim()) return commitBlockMathSession(view, session, "forward");
+
+  const sourceOffset = session.editor?.sourceOffset() ?? 0;
+  const insert = formattedBlockMathDraft(view.state, range, session.draft);
+  const originalContent = view.state.doc.sliceString(range.contentFrom, range.contentTo);
+  const changed = insert !== originalContent;
+  const contentOffset = formattedBlockMathSourceOffset(
+    view.state,
+    range,
+    session.draft,
+    sourceOffset,
+  );
+  session.editor?.destroy();
+  session.editor = null;
+  view.dispatch({
+    ...(changed ? {
+      changes: { from: range.contentFrom, to: range.contentTo, insert },
+    } : {}),
+    selection: {
+      anchor: Math.min(range.contentFrom + Math.max(0, insert.length - 1), range.contentFrom + contentOffset),
+    },
+    effects: revealBlockMathSourceEffect.of({ id: session.id, from: range.from, to: range.to }),
+  });
+  window.setTimeout(() => {
+    if (view.dom.isConnected) view.focus();
+  }, 0);
+  return true;
+}
+
 class MathBlockPlugin {
   private active: BlockMathEditSession | null;
   private pendingActivation = false;
@@ -846,9 +909,11 @@ class MathBlockPlugin {
       return;
     }
     const previous = this.active;
-    const finished = update.transactions.some((transaction) => transaction.effects.some((effect) =>
-      (effect.is(finishBlockMathSessionEffect) || effect.is(fallbackBlockMathSessionEffect))
-      && effect.value === previous?.id));
+    const finished = update.transactions.some((transaction) => transaction.effects.some((effect) => (
+      (effect.is(revealBlockMathSourceEffect) && effect.value.id === previous?.id)
+      || ((effect.is(finishBlockMathSessionEffect) || effect.is(fallbackBlockMathSessionEffect))
+        && effect.value === previous?.id)
+    )));
     this.active = next;
     if (previous && !next) {
       dispatchMathEditState(update.view, false, "display");
@@ -882,6 +947,39 @@ class MathBlockPlugin {
     if (!active) return false;
     snapshotBlockMathDraft(active);
     return commitBlockMathSession(view, active, "forward", false);
+  }
+
+  revealSource(view: EditorView): boolean {
+    const active = view.state.field(mathBlockField, false)?.active;
+    return active ? revealBlockMathSessionSource(view, active) : false;
+  }
+
+  activateRevealedSource(view: EditorView): boolean {
+    const field = view.state.field(mathBlockField, false);
+    const range = blockMathAtSelection(view.state);
+    if (!range || field?.suppressedKey !== blockMathKey(range)) return false;
+    const offset = Math.max(0, Math.min(range.tex.length, view.state.selection.main.head - range.contentFrom));
+    return activateBlockMath(view, range.from, range.to, { kind: "source", offset });
+  }
+
+  revealSelectedSource(view: EditorView): boolean {
+    const range = blockMathAtSelection(view.state);
+    if (!range) return false;
+    view.dispatch({
+      selection: view.state.selection,
+      effects: revealBlockMathSourceEffect.of({ id: 0, from: range.from, to: range.to }),
+    });
+    return true;
+  }
+
+  revealRangeSource(view: EditorView, range: BlockMathRange, sourceOffset: number): boolean {
+    view.dispatch({
+      selection: {
+        anchor: Math.min(range.contentTo, range.contentFrom + Math.max(0, sourceOffset)),
+      },
+      effects: revealBlockMathSourceEffect.of({ id: 0, from: range.from, to: range.to }),
+    });
+    return true;
   }
 
   destroy(): void {
@@ -1055,6 +1153,12 @@ class MathInlinePlugin {
         if (session.host) setSourceRange(session.host, session.from, session.to);
       }
     }
+    if (update.docChanged && this.suppressedKey) {
+      const source = rangeFromKey(this.suppressedKey);
+      if (source) {
+        this.suppressedKey = `${update.changes.mapPos(source.from, -1)}:${update.changes.mapPos(source.to, 1)}`;
+      }
+    }
 
     const selected = inlineMathAtSelection(update.view.state);
     const nextSelectionKey = selected ? `${selected.from}:${selected.to}` : "";
@@ -1185,6 +1289,68 @@ class MathInlinePlugin {
     return this.commit(view, "forward", false);
   }
 
+  revealSource(view: EditorView): boolean {
+    const session = this.active;
+    if (!session) return false;
+    snapshotInlineMathDraft(session);
+    if (!session.draft.trim()) return this.commit(view, "forward");
+    const insert = normalizeVisualTexLatex(session.draft);
+    const sourceOffset = session.editor?.sourceOffset() ?? 0;
+    const bodyChanged = insert !== session.original;
+    const nextTo = session.from + 4 + insert.length;
+    this.active = null;
+    this.suppressedKey = `${session.from}:${nextTo}`;
+    this.forceRebuild = true;
+    session.editor?.destroy();
+    session.editor = null;
+    dispatchMathEditState(view, false, "inline");
+    view.dispatch({
+      ...(bodyChanged ? {
+        changes: { from: session.from + 2, to: session.to - 2, insert },
+      } : {}),
+      selection: { anchor: session.from + 2 + Math.min(insert.length, Math.max(0, sourceOffset)) },
+    });
+    window.setTimeout(() => {
+      if (view.dom.isConnected) view.focus();
+    }, 0);
+    return true;
+  }
+
+  activateRevealedSource(view: EditorView): boolean {
+    const range = inlineMathAtSelection(view.state);
+    if (!range || this.suppressedKey !== `${range.from}:${range.to}`) return false;
+    const offset = Math.max(0, Math.min(range.tex.length, view.state.selection.main.head - range.from - 2));
+    this.suppressedKey = "";
+    this.forceRebuild = true;
+    return this.activate(view, range, { kind: "source", offset });
+  }
+
+  revealedSourceRange(): { from: number; to: number } | null {
+    return rangeFromKey(this.suppressedKey);
+  }
+
+  isRevealedSource(range: { from: number; to: number }): boolean {
+    return this.suppressedKey === `${range.from}:${range.to}`;
+  }
+
+  revealSelectedSource(view: EditorView): boolean {
+    const range = inlineMathAtSelection(view.state);
+    if (!range) return false;
+    this.suppressedKey = `${range.from}:${range.to}`;
+    this.forceRebuild = true;
+    view.dispatch({ selection: view.state.selection });
+    return true;
+  }
+
+  revealRangeSource(view: EditorView, range: InlineMathRange, sourceOffset: number): boolean {
+    this.suppressedKey = `${range.from}:${range.to}`;
+    this.forceRebuild = true;
+    view.dispatch({
+      selection: { anchor: range.from + 2 + Math.min(range.tex.length, Math.max(0, sourceOffset)) },
+    });
+    return true;
+  }
+
   private abort(view: EditorView, message: string, dispatch: boolean): void {
     const session = this.active;
     if (!session) return;
@@ -1225,6 +1391,8 @@ function activateAdjacentInlineMath(view: EditorView, direction: "forward" | "ba
       ? position >= candidate.from && position < candidate.to
       : position > candidate.from && position <= candidate.to);
   if (!range) return false;
+  const plugin = view.plugin(mathInlineExtension);
+  if (plugin?.isRevealedSource(range)) return false;
   view.dispatch({
     selection: { anchor: direction === "forward" ? range.from + 2 : range.to - 2 },
   });
@@ -1253,6 +1421,48 @@ export function finishInlineMathEditing(view: EditorView): boolean {
   return view.plugin(mathBlockSessionExtension)?.finish(view)
     || view.plugin(mathInlineExtension)?.finish(view)
     || false;
+}
+
+/** The locally revealed TeX source range, if POSITION belongs to it. */
+export function formulaSourceRangeAtPosition(
+  view: EditorView,
+  position: number,
+): { from: number; to: number } | null {
+  const block = rangeFromKey(view.state.field(mathBlockField, false)?.suppressedKey || "");
+  if (block && position >= block.from && position <= block.to) return block;
+  const inline = view.plugin(mathInlineExtension)?.revealedSourceRange() ?? null;
+  if (inline && position >= inline.from && position <= inline.to) return inline;
+  return null;
+}
+
+/** Toggle only the formula at the caret between MathLive and TeX source. */
+export function toggleFormulaSourceAtSelection(view: EditorView): boolean {
+  const block = view.plugin(mathBlockSessionExtension);
+  const inline = view.plugin(mathInlineExtension);
+  if (block?.revealSource(view) || inline?.revealSource(view)) return true;
+  if (block?.activateRevealedSource(view) || inline?.activateRevealedSource(view)) return true;
+  return Boolean(block?.revealSelectedSource(view) || inline?.revealSelectedSource(view));
+}
+
+/** Reveal a known formula as source without first activating its CM6 editor. */
+export function revealFormulaSource(
+  view: EditorView,
+  from: number,
+  to: number,
+  sourceOffset = 0,
+): boolean {
+  const blockRange = getBlockMathRanges(view.state)
+    .find((range) => range.from === from && range.to === to);
+  if (blockRange) {
+    return view.plugin(mathBlockSessionExtension)?.revealRangeSource(view, blockRange, sourceOffset) ?? false;
+  }
+  const raw = view.state.doc.sliceString(from, to);
+  if (!raw.startsWith("\\(") || !raw.endsWith("\\)")) return false;
+  return view.plugin(mathInlineExtension)?.revealRangeSource(
+    view,
+    { from, to, tex: raw.slice(2, -2) },
+    sourceOffset,
+  ) ?? false;
 }
 
 // ---------------------------------------------------------------------------

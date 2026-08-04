@@ -112,6 +112,22 @@ async function hasHead(repository) {
   return !result.error;
 }
 
+async function currentHeadSha(repository) {
+  const result = await git(repository, ["rev-parse", "--verify", "HEAD"], { allowFailure: true });
+  return result.error ? "" : String(result.stdout || "").trim();
+}
+
+async function changedPathsBetween(repository, before, after) {
+  if (!after || before === after) return [];
+  const args = before
+    ? ["diff", "--name-only", "-z", before, after, "--"]
+    : ["ls-tree", "-r", "--name-only", "-z", after];
+  const result = await git(repository, args, { allowFailure: true });
+  if (result.error) return [];
+  return String(result.stdout || "").split("\0").filter(Boolean)
+    .map((path) => join(repository.path, path));
+}
+
 async function ensureWorkBranch(repository, device) {
   const branch = `noema/${safeDeviceName(device.name)}-${String(device.id).slice(0, 8)}`;
   if (await currentBranch(repository) === branch) return branch;
@@ -279,6 +295,7 @@ async function prepareIntegrationWorktree(root, repository, device) {
 async function runSync(root, repository, options = {}) {
   const device = await ensureNoemaDeviceIdentity(options);
   const identity = await commitIdentity(repository, device);
+  const headBefore = await currentHeadSha(repository);
   const checkpoint = await checkpointWikiRepository(root, repository.id, options);
   const checkpointState = {
     checkpointedAt: checkpoint.checkpointedAt,
@@ -286,11 +303,13 @@ async function runSync(root, repository, options = {}) {
     changedFiles: checkpoint.changedFiles,
   };
   if (!(await remoteUrl(repository))) {
+    const changedPaths = await changedPathsBetween(repository, headBefore, checkpoint.head);
     return await writeSyncState(root, repository, {
       ...checkpointState,
       phase: "idle",
       branch: checkpoint.branch,
       head: checkpoint.head,
+      changedPaths,
       localOnly: true,
       message: "No origin remote; local checkpoint completed",
     });
@@ -357,10 +376,14 @@ async function runSync(root, repository, options = {}) {
     }).catch((error) => ({ error, stderr: error.stderr || "" }));
     if (!push.error) {
       await git(repository, ["merge", "--ff-only", integration.branch]);
+      const head = await currentHeadSha(repository);
+      const changedPaths = await changedPathsBetween(repository, headBefore, head);
       return await writeSyncState(root, repository, {
         ...checkpointState,
         phase: "idle",
         branch: checkpoint.branch,
+        head,
+        changedPaths,
         integrationBranch: integration.branch,
         lastSyncedAt: new Date().toISOString(),
         localOnly: false,
@@ -462,6 +485,7 @@ export async function resolveWikiConflict(rootValue, body = {}) {
   const device = await ensureNoemaDeviceIdentity(body);
   const identity = await commitIdentity(repository, device);
   const worktree = integrationPath(root, repository);
+  const headBefore = await currentHeadSha(repository);
   const path = String(body.path || "");
   const target = resolve(worktree, path);
   const targetRelative = relative(resolve(worktree), target);
@@ -512,8 +536,15 @@ export async function resolveWikiConflict(rootValue, body = {}) {
     });
   }
   await git(repository, ["merge", "--ff-only", integrationBranchName]);
+  const head = await currentHeadSha(repository);
+  const changedPaths = [...new Set([
+    ...await changedPathsBetween(repository, headBefore, head),
+    join(repository.path, path),
+  ])];
   return await writeSyncState(root, repository, {
     phase: "idle",
+    head,
+    changedPaths,
     integrationPath: worktree,
     conflicts: [],
     lastSyncedAt: new Date().toISOString(),
@@ -529,4 +560,10 @@ export async function abortWikiConflict(rootValue, repositoryId) {
     await execFileAsync("git", ["-C", worktree, "merge", "--abort"]);
   }
   return await writeSyncState(root, repository, { phase: "idle", conflicts: [], message: "Merge aborted" });
+}
+
+// Preserve the established desktop cadence: repositories synchronize on
+// startup and roughly every six hours, not after each editor autosave.
+export function defaultWikiSyncIntervalMs() {
+  return 6 * 60 * 60 * 1000;
 }

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "@voidzero-dev/vite-plus-test";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, readFile, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { promisify } from "node:util";
@@ -150,6 +150,29 @@ describe("server save API", () => {
       clientId: "test",
       seq: 1,
       baseMtimeMs: base.mtimeMs - 10_000,
+      refresh: "deferred",
+    }) as { conflict?: boolean };
+
+    expect(msg.conflict).toBe(true);
+    expect(await readFile(file, "utf8")).toBe("# External\n");
+  });
+
+  test("content version detects an external edit even when mtime is preserved", async () => {
+    const { notes } = await setupRoot();
+    const file = join(notes, "a.md");
+    await writeFile(file, "# A\n", "utf8");
+    const opened = await readNote(file) as { version?: string; mtimeMs?: number };
+    await writeFile(file, "# External\n", "utf8");
+    const fixedTime = new Date(Number(opened.mtimeMs));
+    await utimes(file, fixedTime, fixedTime);
+
+    const msg = await saveNote({
+      file,
+      content: "# Local\n",
+      clientId: "version-test",
+      seq: 1,
+      baseMtimeMs: opened.mtimeMs,
+      baseVersion: opened.version,
       refresh: "deferred",
     }) as { conflict?: boolean };
 

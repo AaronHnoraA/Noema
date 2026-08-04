@@ -1,8 +1,7 @@
 import type { GraphNode, GraphPayload, NoteSummary } from "./types.ts";
-import type { WorkspaceGraph } from "./workspace-graph.ts";
-import { parseSimpleFrontmatter, simpleFrontmatterStrings } from "../src/simple-frontmatter.ts";
+import type { WorkspaceGraph, WorkspaceGraphOptions } from "./workspace-graph.ts";
 import { CoalescedTimer } from "../src/coalesced-timer.ts";
-import { markdownLinkPrimaryModifier } from "../src/cm6/markdown-link-events.ts";
+import { metadataTagsFromMarkdown } from "./note-tag-transaction.ts";
 
 type OpenNoteOptions = { newWindow?: boolean };
 
@@ -28,6 +27,7 @@ type LocalGraphPanelOptions = {
   resolveNoteRef: (ref: string) => NoteSummary | undefined;
   openNote: (note: NoteSummary, options?: OpenNoteOptions) => void;
   openTag: (tag: string) => void;
+  createWorkspaceGraph?: (options: WorkspaceGraphOptions) => WorkspaceGraph;
 };
 
 export type LocalGraphPanel = {
@@ -61,13 +61,6 @@ type LocalLink = {
 
 const MAX_LOCAL_GRAPH_NODES = 72;
 const MAX_LOCAL_GRAPH_LINKS = 160;
-const LOCAL_GRAPH_MIN_ZOOM = 0.45;
-const LOCAL_GRAPH_MAX_ZOOM = 2.8;
-
-function clampNumber(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
-}
-
 function noteKey(note: NoteSummary | undefined): string {
   return note?.key || note?.id || note?.path || note?.file || note?.title || "";
 }
@@ -116,55 +109,8 @@ function roamTags(note: NoteSummary | undefined): string[] {
   return cleanTags(note?.tags ?? []);
 }
 
-function parseMetaListValue(value: string): string[] {
-  const trimmed = String(value || "").trim();
-  if (!trimmed) return [];
-  if (trimmed.startsWith("(")) {
-    return [...trimmed.matchAll(/"((?:[^"\\]|\\.)*)"/g)]
-      .map((match) => String(match[1] || "").replace(/\\"/g, "\"").replace(/\\\\/g, "\\"))
-      .filter(Boolean);
-  }
-  return trimmed.split(/[, ]+/).map((item) => item.trim()).filter(Boolean);
-}
-
-function tagsFromMetaLines(raw: string): string[] | null {
-  const tags: string[] = [];
-  let sawTags = false;
-  let currentList = "";
-  for (const rawLine of String(raw || "").split(/\r?\n/)) {
-    const item = rawLine.match(/^\s*-\s*(.+?)\s*$/);
-    if (item && currentList === "tags") {
-      tags.push(item[1] || "");
-      continue;
-    }
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) continue;
-    const pair = line.match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
-    if (!pair) {
-      if (currentList === "tags") break;
-      continue;
-    }
-    const key = String(pair[1] || "").toLowerCase();
-    const value = String(pair[2] || "").trim();
-    currentList = value ? "" : key;
-    if (key !== "tags") continue;
-    sawTags = true;
-    tags.push(...parseMetaListValue(value));
-  }
-  return sawTags ? cleanTags(tags) : null;
-}
-
-function markdownRoamTags(markdown: string): string[] | null {
-  const text = String(markdown || "");
-  const metaBlock = text.match(/^\s*#\+begin\s+meta\s*\r?\n([\s\S]*?)\r?\n\s*#\+end\s+meta\s*$/im);
-  if (metaBlock) return tagsFromMetaLines(metaBlock[1] || "");
-  const frontMatter = parseSimpleFrontmatter(text);
-  return frontMatter ? cleanTags(simpleFrontmatterStrings(frontMatter, "tags")) : null;
-}
-
-function currentRoamTags(note: NoteSummary | undefined, markdown: string): string[] {
-  const tags = markdownRoamTags(markdown);
-  return tags ?? roamTags(note);
+function currentRoamTags(_note: NoteSummary | undefined, markdown: string): string[] {
+  return metadataTagsFromMarkdown(markdown) ?? [];
 }
 
 function tagKey(tag: string): string {
@@ -195,12 +141,6 @@ function markdownRefs(markdown: string): string[] {
     if (ref) refs.push(ref);
   }
   return unique(refs, normalizeLookup);
-}
-
-function labelFit(label: string, max = 22): string {
-  const text = String(label || "").trim();
-  if (text.length <= max) return text;
-  return `${text.slice(0, Math.max(4, max - 1))}…`;
 }
 
 function seededPosition(index: number, depth: number, width: number, height: number): { x: number; y: number } {
@@ -237,6 +177,50 @@ function buildLookup(notes: NoteSummary[]): Map<string, NoteSummary> {
     }
   }
   return lookup;
+}
+
+export function workspaceGraphWithCurrentMarkdown(
+  payload: GraphPayload,
+  current: NoteSummary | undefined,
+  markdown: string,
+  resolveNoteRef: (ref: string) => NoteSummary | undefined,
+): GraphPayload {
+  const key = noteKey(current);
+  if (!current || !key) return payload;
+  const currentTags = currentRoamTags(current, markdown);
+  const nodes = payload.nodes.map((node) => node.key === key
+    ? { ...node, tags: currentTags }
+    : { ...node });
+  const knownNodeKeys = new Set(nodes.map((node) => node.key));
+  for (const tag of currentTags) {
+    const tagNode = tagNodeId(tag);
+    if (knownNodeKeys.has(tagNode)) continue;
+    knownNodeKeys.add(tagNode);
+    nodes.push({ key: tagNode, title: `#${tag}`, kind: "tag", exists: true });
+  }
+  const edges = payload.edges
+    .map((edge) => ({ ...edge, type: edge.type ?? "ref" as const }))
+    .filter((edge) => !(
+      (edge.type === "ref" && edge.source === key)
+      || (edge.type === "tag" && (edge.source === key || edge.target === key))
+    ));
+  const seen = new Set(edges.map((edge) => `${edge.source}\0${edge.target}\0${edge.type || "ref"}`));
+  for (const ref of markdownRefs(markdown)) {
+    const target = resolveNoteRef(ref);
+    const targetKey = noteKey(target);
+    const edgeKey = `${key}\0${targetKey}\0ref`;
+    if (!targetKey || targetKey === key || seen.has(edgeKey)) continue;
+    edges.push({ source: key, target: targetKey, type: "ref" });
+    seen.add(edgeKey);
+  }
+  for (const tag of currentTags) {
+    const target = tagNodeId(tag);
+    const edgeKey = `${key}\0${target}\0tag`;
+    if (seen.has(edgeKey)) continue;
+    edges.push({ source: key, target, type: "tag", directed: false });
+    seen.add(edgeKey);
+  }
+  return { ...payload, nodes, edges };
 }
 
 export function createLocalGraphPanel(options: LocalGraphPanelOptions): LocalGraphPanel {
@@ -278,23 +262,12 @@ export function createLocalGraphPanel(options: LocalGraphPanelOptions): LocalGra
   }
 
   function withCurrentOverlay(payload: GraphPayload): GraphPayload {
-    const current = options.getCurrentNote();
-    const key = noteKey(current);
-    if (!current || !key) return payload;
-    const nodes = payload.nodes.map((node) => node.key === key
-      ? { ...node, tags: currentRoamTags(current, options.getMarkdown()) }
-      : { ...node });
-    const edges = payload.edges.map((edge) => ({ ...edge, type: edge.type ?? "ref" as const }));
-    const seen = new Set(edges.map((edge) => `${edge.source}\0${edge.target}\0${edge.type || "ref"}`));
-    for (const ref of markdownRefs(options.getMarkdown())) {
-      const target = options.resolveNoteRef(ref);
-      const targetKey = noteKey(target);
-      const edgeKey = `${key}\0${targetKey}\0ref`;
-      if (!targetKey || targetKey === key || seen.has(edgeKey)) continue;
-      edges.push({ source: key, target: targetKey, type: "ref" });
-      seen.add(edgeKey);
-    }
-    return { ...payload, nodes, edges };
+    return workspaceGraphWithCurrentMarkdown(
+      payload,
+      options.getCurrentNote(),
+      options.getMarkdown(),
+      options.resolveNoteRef,
+    );
   }
 
   async function renderWorkspaceGraph(): Promise<void> {
@@ -563,18 +536,13 @@ export function createLocalGraphPanel(options: LocalGraphPanelOptions): LocalGra
     return { nodes: [...nodes.values()], links: [...links.values()], truncated };
   }
 
-  function renderGraph(): void {
-    clearGraph();
-    if (mode === "workspace") {
-      void renderWorkspaceGraph();
-      return;
-    }
+  async function renderLocalForceGraph(): Promise<void> {
+    const request = ++workspaceRequest;
     const rect = options.canvas.getBoundingClientRect();
     const width = Math.max(300, Math.round(rect.width || options.canvas.clientWidth || 360));
     const height = Math.max(240, Math.round(rect.height || options.canvas.clientHeight || 260));
-    const graph = buildGraph(width, height);
-    const { nodes, links } = graph;
-    if (nodes.length === 0) {
+    const local = buildGraph(width, height);
+    if (local.nodes.length === 0) {
       const empty = document.createElement("div");
       empty.className = "aaronnote-local-graph-empty";
       empty.textContent = "No local graph";
@@ -582,248 +550,81 @@ export function createLocalGraphPanel(options: LocalGraphPanelOptions): LocalGra
       options.status.textContent = "";
       return;
     }
-
-    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg") as SVGSVGElement;
-    svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
-    svg.setAttribute("role", "img");
-    svg.setAttribute("aria-label", "Local graph");
-    svg.classList.add("aaronnote-local-graph-svg");
-
-    const viewportLayer = document.createElementNS(svg.namespaceURI, "g") as SVGGElement;
-    viewportLayer.classList.add("aaronnote-local-graph-viewport");
-    const linkLayer = document.createElementNS(svg.namespaceURI, "g") as SVGGElement;
-    linkLayer.classList.add("aaronnote-local-graph-links");
-    const nodeLayer = document.createElementNS(svg.namespaceURI, "g") as SVGGElement;
-    nodeLayer.classList.add("aaronnote-local-graph-nodes");
-    viewportLayer.append(linkLayer, nodeLayer);
-    svg.append(viewportLayer);
-    options.canvas.replaceChildren(svg);
-
-    let zoom = { x: 0, y: 0, k: 1 };
-
-    function pointIn(element: SVGGraphicsElement, event: MouseEvent | PointerEvent | WheelEvent): DOMPoint | null {
-      const point = svg.createSVGPoint();
-      point.x = event.clientX;
-      point.y = event.clientY;
-      const matrix = element.getScreenCTM();
-      return matrix ? point.matrixTransform(matrix.inverse()) : null;
-    }
-
-    function applyViewportTransform(): void {
-      viewportLayer.setAttribute(
-        "transform",
-        `translate(${zoom.x.toFixed(2)} ${zoom.y.toFixed(2)}) scale(${zoom.k.toFixed(3)})`,
-      );
-    }
-
-    function wheelDeltaPixels(event: WheelEvent): number {
-      if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) return event.deltaY * 16;
-      if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) return event.deltaY * 320;
-      return event.deltaY;
-    }
-
-    svg.addEventListener("wheel", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      const svgPoint = pointIn(svg, event);
-      const graphPoint = pointIn(viewportLayer, event);
-      if (!svgPoint || !graphPoint) return;
-      const factor = Math.exp(-wheelDeltaPixels(event) * 0.0015);
-      const nextK = clampNumber(zoom.k * factor, LOCAL_GRAPH_MIN_ZOOM, LOCAL_GRAPH_MAX_ZOOM);
-      zoom = {
-        k: nextK,
-        x: svgPoint.x - graphPoint.x * nextK,
-        y: svgPoint.y - graphPoint.y * nextK,
-      };
-      applyViewportTransform();
-    }, { passive: false });
-
-    const nodeMap = new Map(nodes.map((node) => [node.id, node]));
-    const linkEls = links.map((link) => {
-      const line = document.createElementNS(svg.namespaceURI, "line") as SVGLineElement;
-      line.classList.add("aaronnote-local-graph-link", `is-${link.type}`);
-      line.dataset.linkType = link.type;
-      line.setAttribute("stroke-linecap", "round");
-      linkLayer.appendChild(line);
-      return { link, line };
-    });
-
-    let dragNode: LocalNode | null = null;
-    let dragMoved = false;
-    let selectedNodeId = "";
-
-    function selectNode(node: LocalNode): void {
-      selectedNodeId = node.id;
-      const neighborIds = new Set<string>([node.id]);
-      for (const { link } of linkEls) {
-        if (link.source === node.id) neighborIds.add(link.target);
-        if (link.target === node.id) neighborIds.add(link.source);
-      }
-      for (const { node: candidate, group } of nodeEls) {
-        group.classList.toggle("is-selected", candidate.id === node.id);
-        group.classList.toggle("is-dimmed", !neighborIds.has(candidate.id));
-      }
-      for (const { link, line } of linkEls) {
-        const related = link.source === node.id || link.target === node.id;
-        line.classList.toggle("is-selected", related);
-        line.classList.toggle("is-dimmed", !related);
-      }
-      options.status.textContent = `${nodes.length} nodes · ${links.length} links · ${node.label}${graph.truncated ? " · capped" : ""}`;
-    }
-
-    const nodeEls = nodes.map((node) => {
-      const group = document.createElementNS(svg.namespaceURI, "g") as SVGGElement;
-      group.classList.add("aaronnote-local-graph-node", `is-${node.type}`, `depth-${Math.min(2, node.depth)}`);
-      group.setAttribute("tabindex", "0");
-      group.setAttribute("role", "button");
-      group.setAttribute("aria-label", node.label);
-      const circle = document.createElementNS(svg.namespaceURI, "circle") as SVGCircleElement;
-      circle.setAttribute("r", node.type === "current" ? "9" : node.type === "tag" ? "5.5" : "7");
-      const text = document.createElementNS(svg.namespaceURI, "text") as SVGTextElement;
-      text.textContent = labelFit(node.label);
-      text.setAttribute("y", node.type === "tag" ? "17" : "20");
-      group.append(circle, text);
-      group.addEventListener("pointerdown", (event) => {
-        event.preventDefault();
-        dragNode = node;
-        dragMoved = false;
-        node.fx = node.x;
-        node.fy = node.y;
-        group.setPointerCapture(event.pointerId);
+    const nodeByKey = new Map(local.nodes.map((node) => [node.id, node]));
+    const payload: GraphPayload = {
+      indexVersion: options.getIndexVersion?.() ?? 0,
+      scope: "legacy",
+      nodes: local.nodes.map((node) => ({
+        key: node.id,
+        id: node.note?.id,
+        title: node.label,
+        path: node.note?.file || node.note?.path,
+        groupKey: node.note?.groupKey,
+        groupLabel: node.note?.groupLabel,
+        tags: node.type === "tag" ? [node.tag || node.label.replace(/^#/, "")] : roamTags(node.note),
+        kind: node.type === "tag" ? "tag" : "note",
+        exists: true,
+      })),
+      edges: local.links.map((link) => ({
+        source: link.source,
+        target: link.target,
+        type: link.type,
+        directed: link.type !== "tag",
+      })),
+      meta: {
+        noteCount: local.nodes.filter((node) => node.type !== "tag").length,
+        tagCount: local.nodes.filter((node) => node.type === "tag").length,
+        edgeCount: local.links.length,
+      },
+    };
+    try {
+      const createGraph = options.createWorkspaceGraph
+        ?? (await import("./workspace-graph.ts")).createWorkspaceGraph;
+      if (request !== workspaceRequest || isCollapsed() || mode !== "local") return;
+      workspaceGraph = createGraph({
+        root: options.canvas,
+        status: options.status,
+        detail,
+        searchInput,
+        groupInput,
+        payload,
+        currentKey: currentKey(),
+        openNode: (node, openOptions) => {
+          const localNode = nodeByKey.get(node.key);
+          if (localNode?.type === "tag" && localNode.tag) options.openTag(localNode.tag);
+          else if (localNode?.note?.file) options.openNote(localNode.note, openOptions);
+        },
+        mode: "panel",
+        maxNodes: MAX_LOCAL_GRAPH_NODES,
+        settings: {
+          showTags: true,
+          showMissing: false,
+          showAttachments: false,
+          showOrphans: true,
+          showArrows: true,
+          showContext: false,
+          colorBy: "group",
+          scope: "global",
+          neighborDepth: settings().depth,
+          follow: true,
+          localRoot: currentKey(),
+        },
       });
-      group.addEventListener("pointermove", (event) => {
-        if (dragNode !== node) return;
-        const local = pointIn(viewportLayer, event);
-        if (!local) return;
-        if (Math.abs(local.x - node.x) + Math.abs(local.y - node.y) > 3) dragMoved = true;
-        node.fx = Math.max(14, Math.min(width - 14, local.x));
-        node.fy = Math.max(14, Math.min(height - 22, local.y));
-        node.x = node.fx;
-        node.y = node.fy;
-        applyPositions();
-      });
-      group.addEventListener("pointerup", (event) => {
-        if (dragNode !== node) return;
-        group.releasePointerCapture(event.pointerId);
-        dragNode = null;
-        if (!dragMoved) { node.fx = undefined; node.fy = undefined; }
-      });
-      group.addEventListener("click", (event) => {
-        if (dragMoved) return;
-        event.preventDefault();
-        selectNode(node);
-      });
-      group.addEventListener("dblclick", (event) => {
-        if (node.type === "tag" && node.tag) {
-          options.openTag(node.tag);
-          return;
-        }
-        if (node.note?.file) options.openNote(node.note, { newWindow: markdownLinkPrimaryModifier(event) || event.altKey });
-      });
-      group.addEventListener("keydown", (event) => {
-        if (event.key !== "Enter" && event.key !== " ") return;
-        event.preventDefault();
-        if (selectedNodeId !== node.id) { selectNode(node); return; }
-        if (node.type === "tag" && node.tag) options.openTag(node.tag);
-        else if (node.note?.file) options.openNote(node.note);
-      });
-      group.addEventListener("auxclick", (event) => {
-        if (event.button !== 1 || !node.note?.file) return;
-        event.preventDefault();
-        options.openNote(node.note, { newWindow: true });
-      });
-      nodeLayer.appendChild(group);
-      return { node, group };
-    });
-
-    function applyPositions(): void {
-      for (const { link, line } of linkEls) {
-        const source = nodeMap.get(link.source);
-        const target = nodeMap.get(link.target);
-        if (!source || !target) continue;
-        line.setAttribute("x1", String(source.x));
-        line.setAttribute("y1", String(source.y));
-        line.setAttribute("x2", String(target.x));
-        line.setAttribute("y2", String(target.y));
-      }
-      for (const { node, group } of nodeEls) {
-        group.setAttribute("transform", `translate(${node.x.toFixed(1)} ${node.y.toFixed(1)})`);
+      if (local.truncated) options.status.textContent += " · capped";
+    } catch (error) {
+      if (request === workspaceRequest) {
+        options.status.textContent = error instanceof Error ? error.message : "Local graph failed";
       }
     }
+  }
 
-    function runSimulation(ticks: number): void {
-      for (let tick = 0; tick < ticks; tick += 1) {
-        if (isCollapsed()) return;
-        const alpha = Math.max(0.018, 0.13 * (1 - tick / 120));
-        for (const { link } of linkEls) {
-          const source = nodeMap.get(link.source);
-          const target = nodeMap.get(link.target);
-          if (!source || !target) continue;
-          const dx = target.x - source.x;
-          const dy = target.y - source.y;
-          const distance = Math.max(1, Math.hypot(dx, dy));
-          const desired = link.type === "tag" ? 64 : 92;
-          const strength = (distance - desired) / distance * (link.type === "tag" ? 0.018 : 0.024) * alpha;
-          const fx = dx * strength;
-          const fy = dy * strength;
-          if (source.fx == null) {
-            source.vx += fx;
-            source.vy += fy;
-          }
-          if (target.fx == null) {
-            target.vx -= fx;
-            target.vy -= fy;
-          }
-        }
-        for (let i = 0; i < nodes.length; i += 1) {
-          const a = nodes[i]!;
-          for (let j = i + 1; j < nodes.length; j += 1) {
-            const b = nodes[j]!;
-            const dx = b.x - a.x || 0.01;
-            const dy = b.y - a.y || 0.01;
-            const distance = Math.max(12, Math.hypot(dx, dy));
-            const strength = (a.type === "tag" || b.type === "tag" ? 44 : 66) / (distance * distance) * alpha;
-            const fx = dx * strength;
-            const fy = dy * strength;
-            if (a.fx == null) {
-              a.vx -= fx;
-              a.vy -= fy;
-            }
-            if (b.fx == null) {
-              b.vx += fx;
-              b.vy += fy;
-            }
-          }
-        }
-        for (const node of nodes) {
-          const targetRadius = Math.min(width, height) * (node.depth === 0 ? 0 : node.depth === 1 ? 0.24 : 0.39);
-          const dx = node.x - width / 2;
-          const dy = node.y - height / 2;
-          const distance = Math.max(1, Math.hypot(dx, dy));
-          const tx = width / 2 + dx / distance * targetRadius;
-          const ty = height / 2 + dy / distance * targetRadius;
-          if (node.fx == null) {
-            node.vx += (tx - node.x) * 0.006 * alpha;
-            node.vy += (ty - node.y) * 0.006 * alpha;
-            if (node.type === "current") {
-              node.vx += (width / 2 - node.x) * 0.03 * alpha;
-              node.vy += (height / 2 - node.y) * 0.03 * alpha;
-            }
-            node.x = Math.max(18, Math.min(width - 18, node.x + node.vx));
-            node.y = Math.max(20, Math.min(height - 26, node.y + node.vy));
-            node.vx *= 0.82;
-            node.vy *= 0.82;
-          } else {
-            node.x = node.fx;
-            node.y = node.fy ?? node.y;
-          }
-        }
-      }
+  function renderGraph(): void {
+    clearGraph();
+    if (mode === "workspace") {
+      void renderWorkspaceGraph();
+      return;
     }
-
-    runSimulation(150);
-    applyPositions();
-    options.status.textContent = `${nodes.length} nodes · ${links.length} links${graph.truncated ? " · capped" : ""}`;
+    void renderLocalForceGraph();
   }
 
   function update(force = false): void {
@@ -880,14 +681,14 @@ export function createLocalGraphPanel(options: LocalGraphPanelOptions): LocalGra
       for (const candidate of options.modeButtons ?? []) candidate.classList.toggle("is-active", candidate === button);
       options.depthInput.disabled = mode === "workspace";
       options.depthLabel.hidden = mode === "workspace";
-      searchInput.disabled = mode === "local";
+      searchInput.disabled = false;
       groupInput.disabled = mode === "local";
       detail.hidden = true;
       renderKey = "";
       update(true);
     });
   }
-  searchInput.disabled = true;
+  searchInput.disabled = false;
   groupInput.disabled = true;
   window.addEventListener("resize", () => scheduleUpdate(120));
 

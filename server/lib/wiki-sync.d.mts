@@ -14,6 +14,7 @@ export type WikiSyncState = {
   localOnly?: boolean;
   committed?: boolean;
   changedFiles?: number;
+  changedPaths?: string[];
   error?: string;
   message?: string;
   conflicts?: WikiSyncConflict[];
@@ -25,6 +26,7 @@ export function checkpointWikiRepository(root: string, repositoryId: string, opt
   WikiSyncState & { ok: true; type: "wiki-checkpoint"; repository: WikiRepository }
 >;
 export function syncWikiRepository(root: string, repositoryId: string, options?: Record<string, unknown>): Promise<WikiSyncState>;
+export function defaultWikiSyncIntervalMs(): number;
 export function readWikiConflict(root: string, body?: Record<string, unknown>): Promise<{
   ok: true;
   type: "wiki-conflict-file";

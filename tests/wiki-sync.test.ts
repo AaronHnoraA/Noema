@@ -8,6 +8,7 @@ import { afterEach, describe, expect, test } from "@voidzero-dev/vite-plus-test"
 
 import { createWikiPage, initWikiRepository } from "../server/lib/wiki-workspace.mjs";
 import {
+  defaultWikiSyncIntervalMs,
   readWikiConflict,
   resolveWikiConflict,
   syncWikiRepository,
@@ -75,6 +76,10 @@ afterEach(async () => {
 });
 
 describe("Wiki Git synchronization", () => {
+  test("keeps the established six-hour automatic sync cadence", () => {
+    expect(defaultWikiSyncIntervalMs()).toBe(6 * 60 * 60 * 1000);
+  });
+
   test("bootstraps main when an attached origin has no branches", async () => {
     const suite = await mkdtemp(join(tmpdir(), "noema-sync-empty-"));
     roots.push(suite);
@@ -108,6 +113,7 @@ describe("Wiki Git synchronization", () => {
     await writeFile(file, (await readFile(file, "utf8")).replace("# Common", "# Local edit"));
     const state = await syncWikiRepository(item.root, "private/research", { configDir: item.configDir });
     expect(state).toMatchObject({ phase: "idle", localOnly: false, committed: true, changedFiles: 1 });
+    expect(state.changedPaths).toEqual([file]);
     expect(await git(item.repositoryPath, "branch", "--show-current")).toMatch(/^noema\//);
     expect(await git(item.repositoryPath, "log", "-1", "--format=%an <%ae>")).toBe("Researcher <researcher@example.test>");
     expect(await git(item.repositoryPath, "log", "-1", "--format=%s")).toMatch(/^noema: checkpoint 1 file/);
@@ -157,6 +163,7 @@ describe("Wiki Git synchronization", () => {
       choice: "ours",
     });
     expect(resolved).toMatchObject({ phase: "idle", conflicts: [] });
+    expect(resolved.changedPaths).toEqual([localFile]);
     await git(collaborator, "pull", "--ff-only");
     expect(await readFile(remoteFile, "utf8")).toContain("# Local edit");
   });

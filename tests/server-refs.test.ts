@@ -76,6 +76,16 @@ describe("server note refs", () => {
     ]));
   });
 
+  test("canonicalizes graph tag identity case-insensitively", () => {
+    const payload = graphPayload([
+      { key: "a", title: "A", tags: ["TCS"], refs: [], roam: true },
+      { key: "b", title: "B", tags: ["tcs"], refs: [], roam: true },
+    ]);
+    expect(payload.nodes.filter((node: { kind?: string }) => node.kind === "tag"))
+      .toEqual([expect.objectContaining({ key: "tag:tcs", title: "#tcs" })]);
+    expect(payload.edges.filter((edge: { type?: string }) => edge.type === "tag")).toHaveLength(2);
+  });
+
   test("extracts markdown note refs whose paths contain balanced parentheses", () => {
     expect(
       refsFromContent("[eq:1](roam/project/UNSW/ISO(202603)/meeting.md#eq-eq%3A1)"),
@@ -326,12 +336,14 @@ describe("server note refs", () => {
       expect(payload.nodes).toEqual(expect.arrayContaining([
         expect.objectContaining({ key: "target-id", title: "Target", aliases: ["Alias A"], tags: ["graph"] }),
         expect.objectContaining({ key: "source-id", title: "Source" }),
+        expect.objectContaining({ key: "tag:graph", title: "#graph", kind: "tag" }),
       ]));
       expect(payload.edges).toEqual([
         { source: "source-id", target: "target-id" },
+        { source: "target-id", target: "tag:graph", type: "tag", directed: false },
       ]);
       expect(payload.nodes[0]).not.toHaveProperty("summary");
-      expect(payload.meta).toMatchObject({ noteCount: 2, edgeCount: 1, tagCount: 1 });
+      expect(payload.meta).toMatchObject({ noteCount: 2, edgeCount: 2, tagCount: 1 });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -426,9 +438,13 @@ describe("server note refs", () => {
         expect.objectContaining({ id: "hidden-id", roam: false, tags: expect.arrayContaining(["graph"]) }),
         expect.objectContaining({ path: "metadata-only.md", roam: false, tags: expect.arrayContaining(["graph"]) }),
       ]));
-      expect(graphPayload(notes).nodes).toEqual([
+      expect(graphPayload(notes).nodes).toEqual(expect.arrayContaining([
         expect.objectContaining({ key: "visible-id" }),
-      ]);
+        expect.objectContaining({ key: "tag:graph", kind: "tag" }),
+      ]));
+      expect(graphPayload(notes).nodes).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ key: "hidden-id" }),
+      ]));
       expect(tagIndexPayload(notes).tags).toEqual([
         expect.objectContaining({ name: "graph", count: 1 }),
       ]);

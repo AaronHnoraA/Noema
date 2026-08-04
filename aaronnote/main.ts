@@ -15,7 +15,11 @@ import {
 import { setupCopilot } from "../plugins/noema-copilot/renderer.ts";
 import { continueMarkdownBlock, exitEmptyMarkdownBlock, indentMarkdownBlock, indentMarkdownList, tableNavigateCell, tableEnterSameColumn } from "../src/cm6/commands/index.ts";
 import { markdownHrefAt } from "../src/cm6/editor-cm6.ts";
-import { finishInlineMathEditing } from "../src/cm6/extensions/visual/widgets/math.ts";
+import {
+  finishInlineMathEditing,
+  revealFormulaSource,
+  toggleFormulaSourceAtSelection,
+} from "../src/cm6/extensions/visual/widgets/math.ts";
 import { nextGraphemePosition, previousGraphemePosition } from "../src/cm6/text-boundaries.ts";
 import { getBlockMathRanges, rangeAtPosition, rangeOverlapsAny } from "../src/cm6/math-ranges.ts";
 import {
@@ -109,6 +113,13 @@ import {
   snippetScore,
 } from "./snippets.ts";
 import { MathSnippetIndex } from "./math-snippet-index.ts";
+import { collectTagSuggestions, createTagPicker } from "./tag-picker.ts";
+import {
+  metadataTagsFromMarkdown,
+  planMarkdownMetadataChanges,
+  planMarkdownTagChanges,
+  type TagChangeSet,
+} from "./note-tag-transaction.ts";
 import {
   citeKeyCompletionContext,
   citeKeyRenderPrefix,
@@ -148,6 +159,7 @@ import {
 } from "./features/writing-stats/controller.ts";
 import { installActiveCoreReconnect } from "./active-core-reconnect.ts";
 import { noteAutoSaveEnabled } from "./save-policy.ts";
+import { SaveDrain } from "./save-drain.ts";
 import {
   installNoemaThemeRuntime,
   loadNoemaAppConfig,
@@ -817,8 +829,13 @@ let currentStandalone = false;
 let currentRemote = false;
 let currentReadOnly = initialReadOnly;
 let currentMtimeMs = 0;
+let currentVersion = "";
 let revision = 0;
 let savedRevision = 0;
+// Unlike the document-local revision, this must never reset when a note is
+// reopened. The host uses it to reject genuinely out-of-order writes from the
+// same browser client.
+let saveSequence = 0;
 let desktopSaveInFlight = false;
 let desktopSaveConflict = false;
 let applyingContent = false;
@@ -3488,6 +3505,18 @@ function commitActiveLiveTexForBoundary(focusEditor = false): boolean {
   return finishInlineMathEditing(editor.view);
 }
 
+function revealLiveTexStudioSource(): boolean {
+  const target = liveTexTarget;
+  if (!target) return false;
+  const sourceOffset = liveTexEditor?.sourceOffset() ?? 0;
+  if (!applyLiveTexStudio(false)) return false;
+  const live = mathTargetAtPosition(Math.min(editor.view.state.doc.length, target.from + 1));
+  if (!live) return false;
+  const revealed = revealFormulaSource(editor.view, live.from, live.to, sourceOffset);
+  if (revealed) editor.focus();
+  return revealed;
+}
+
 liveTexStudio.querySelectorAll<HTMLButtonElement>("[data-livetex-align]").forEach((button) => {
   button.addEventListener("click", () => {
     liveTexStage.dataset.align = button.dataset.livetexAlign || "center";
@@ -3801,11 +3830,64 @@ function saveBody() {
     content: editor.getMarkdown(),
     mode: editor.isSourceMode() ? "source" : "markdown",
     clientId,
-    seq: revision,
+    seq: ++saveSequence,
     baseMtimeMs: currentMtimeMs,
+    baseVersion: currentVersion,
     refresh: "deferred",
   };
 }
+
+type EditorSaveSnapshot = {
+  file: string;
+  revision: number;
+  body: ReturnType<typeof saveBody>;
+};
+
+const saveDrain = new SaveDrain<EditorSaveSnapshot, Awaited<ReturnType<typeof api.notes.save>>>({
+  capture() {
+    if (currentReadOnly || !currentFile || revision === savedRevision) return null;
+    desktopSaveConflict = false;
+    updateTitle();
+    setStatus("Saving...");
+    return {
+      file: currentFile,
+      revision,
+      body: saveBody(),
+    };
+  },
+  write(snapshot) {
+    return api.notes.save(snapshot.body);
+  },
+  apply(snapshot, result) {
+    // Applying a response to a newly opened note would corrupt its dirty and
+    // mtime tracking. Navigation normally awaits the drain, but retain this
+    // guard for host-driven opens.
+    if (snapshot.file !== currentFile) return false;
+    if (result.stale) {
+      setStatus("Saving newer edit...");
+      return true;
+    }
+    if (result.conflict) {
+      desktopSaveConflict = true;
+      setStatus(result.message || `Save conflict; reopen from ${sourceEditorName()}`);
+      return false;
+    }
+    currentMtimeMs = Number(result.mtimeMs) || currentMtimeMs;
+    currentVersion = String(result.version || currentVersion);
+    applyIndexPayload(result);
+    savedRevision = Math.max(savedRevision, snapshot.revision);
+    updateTitle();
+    setStatus(revision === savedRevision ? "Saved" : "Saving newer edit...");
+    return true;
+  },
+  fail(error) {
+    setStatus(error instanceof Error ? error.message : "Save failed");
+  },
+  active(value) {
+    desktopSaveInFlight = value;
+    updateTitle();
+  },
+});
 
 let keepaliveSaveKey = "";
 
@@ -3830,33 +3912,7 @@ async function save(commitLiveTex = true): Promise<void> {
     return;
   }
   if (!currentFile || revision === savedRevision) return;
-  const savingRevision = revision;
-  const savingFile = currentFile;
-  desktopSaveInFlight = true;
-  desktopSaveConflict = false;
-  updateTitle();
-  setStatus("Saving...");
-  try {
-    const result = await api.notes.save(saveBody());
-    // If the user switched notes while this save was in flight, discard the
-    // result — applying metadata to the new note would corrupt its dirty tracking.
-    if (savingFile !== currentFile) return;
-    if (result.conflict) {
-      desktopSaveConflict = true;
-      setStatus(result.message || `Save conflict; reopen from ${sourceEditorName()}`);
-      return;
-    }
-    currentMtimeMs = Number(result.mtimeMs) || currentMtimeMs;
-    applyIndexPayload(result);
-    savedRevision = Math.max(savedRevision, savingRevision);
-    updateTitle();
-    setStatus(revision === savedRevision ? "Saved" : "Edited");
-  } catch (error) {
-    setStatus(error instanceof Error ? error.message : "Save failed");
-  } finally {
-    desktopSaveInFlight = false;
-    updateTitle();
-  }
+  await saveDrain.request();
 }
 
 function scheduleSave(): void {
@@ -4098,6 +4154,9 @@ function applyOpenedNote(
   const resetVim = options.resetVim !== false;
   const reloadNoteIndex = options.reloadNotes !== false;
   currentFile = String(opened.file || fallbackFile || "");
+  // The same file can be reopened with its document revision reset to zero.
+  // Let that new editing session emit its own pagehide keepalive.
+  keepaliveSaveKey = "";
   currentTitle = String(opened.title || "").trim();
   currentKind = String(opened.kind || "");
   currentStandalone = Boolean(opened.standalone);
@@ -4107,6 +4166,7 @@ function applyOpenedNote(
   applyIndexPayload(opened);
   if (Array.isArray(opened.snippets)) snippets = withBuiltinSnippets(opened.snippets);
   currentMtimeMs = Number(opened.mtimeMs) || 0;
+  currentVersion = String(opened.version || "");
   const hasPendingOpenTarget = Boolean(pendingOpenHash || pendingOpenDomTarget || pendingTodoTarget);
   const remembered = !opened.selection && !pendingOpenHash && !pendingOpenDomTarget && !pendingTodoTarget
     ? rememberedCursorPosition(currentFile, rememberedPositions)
@@ -4727,6 +4787,17 @@ function runSourceToggleShortcut(event: KeyboardEvent): boolean {
   if (!primaryMod(event) || event.shiftKey || event.altKey || event.isComposing) return false;
   if (event.key !== "/" && event.code !== "Slash") return false;
   event.preventDefault();
+  if (!liveTexStudio.hidden) {
+    revealLiveTexStudioSource();
+    scheduleAssistUpdate({ mathPreview: true, cursor: true });
+    return true;
+  }
+  if (!editor.isSourceMode()
+    && !slideDeck?.isRevealView()
+    && toggleFormulaSourceAtSelection(editor.view)) {
+    scheduleAssistUpdate({ mathPreview: true, cursor: true });
+    return true;
+  }
   if (!commitActiveLiveTexForBoundary(true)) return true;
   togglePresentationOrSource();
   return true;
@@ -5556,40 +5627,48 @@ function parseTagPrompt(value: string | null): string[] {
 }
 
 function tagSuggestions(): string[] {
-  const tags = new Map<string, string>();
-  for (const note of notes) {
-    if (!note.roam) continue;
-    for (const tag of relationTags(note)) {
-      const key = tag.toLowerCase();
-      const previous = tags.get(key);
-      if (!previous || tag === key) tags.set(key, tag);
-    }
+  return collectTagSuggestions(notes);
+}
+
+async function databaseTagSuggestions(): Promise<string[]> {
+  const local = tagSuggestions();
+  try {
+    const result = await api.completions.tags("");
+    return collectTagSuggestions([
+      { tags: local },
+      { tags: Array.isArray(result.tags) ? result.tags : [] },
+    ]);
+  } catch {
+    return local;
   }
-  return [...tags.values()].sort((a, b) => a.localeCompare(b));
 }
 
 type ModalField = {
   id: string;
   label: string;
   value?: string;
-  type?: "text" | "tags" | "select" | "suggest";
+  type?: "text" | "tag" | "tags" | "select" | "suggest";
   suggestions?: string[];
   options?: { value: string; label: string }[];
   required?: boolean;
   placeholder?: string;
   description?: string;
   group?: string;
+  tagValues?: readonly string[];
+  onTagChanges?: (changes: TagChangeSet) => void;
 };
 
 function openFormModal(title: string, fields: ModalField[], submitLabel = "OK"): Promise<Record<string, string> | null> {
   return new Promise((resolve) => {
     modal.innerHTML = "";
     const panel = document.createElement("form");
-    panel.className = fields.some((field) => field.type === "tags") ? "aaronnote-modal-panel has-tags" : "aaronnote-modal-panel";
+    panel.className = fields.some((field) => field.type === "tag" || field.type === "tags") ? "aaronnote-modal-panel has-tags" : "aaronnote-modal-panel";
     const heading = document.createElement("h2");
     heading.textContent = title;
     panel.appendChild(heading);
     const inputs = new Map<string, HTMLInputElement | HTMLSelectElement>();
+    const focusTargets = new Map<string, HTMLInputElement | HTMLSelectElement>();
+    const tagPickers = new Map<string, ReturnType<typeof createTagPicker>>();
 
     let previousGroup = "";
     fields.forEach((field, index) => {
@@ -5616,6 +5695,29 @@ function openFormModal(title: string, fields: ModalField[], submitLabel = "OK"):
         select.required = Boolean(field.required);
         label.appendChild(select);
         inputs.set(field.id, select);
+        focusTargets.set(field.id, select);
+        panel.appendChild(label);
+        if (field.description) {
+          const help = document.createElement("small");
+          help.className = "aaronnote-modal-field-help";
+          help.textContent = field.description;
+          panel.appendChild(help);
+        }
+        return;
+      }
+      if (field.type === "tag" || field.type === "tags") {
+        const picker = createTagPicker({
+          name: field.id,
+          value: field.tagValues ?? field.value ?? "",
+          suggestions: field.suggestions || [],
+          multiple: field.type === "tags",
+          allowCreate: field.type === "tags",
+          placeholder: field.placeholder,
+        });
+        label.appendChild(picker.root);
+        inputs.set(field.id, picker.input);
+        focusTargets.set(field.id, picker.search);
+        tagPickers.set(field.id, picker);
         panel.appendChild(label);
         if (field.description) {
           const help = document.createElement("small");
@@ -5647,6 +5749,7 @@ function openFormModal(title: string, fields: ModalField[], submitLabel = "OK"):
         label.appendChild(input);
       }
       inputs.set(field.id, input);
+      focusTargets.set(field.id, input);
       panel.appendChild(label);
       if (field.description) {
         const help = document.createElement("small");
@@ -5655,24 +5758,16 @@ function openFormModal(title: string, fields: ModalField[], submitLabel = "OK"):
         panel.appendChild(help);
       }
 
-      if ((field.type === "tags" || field.type === "suggest") && field.suggestions?.length) {
+      if (field.type === "suggest" && field.suggestions?.length) {
         const picker = document.createElement("div");
-        picker.className = field.type === "tags" ? "aaronnote-modal-tag-picker" : "aaronnote-modal-suggestion-picker";
+        picker.className = "aaronnote-modal-suggestion-picker";
         for (const tag of field.suggestions.slice(0, 40)) {
           const button = document.createElement("button");
           button.type = "button";
-          button.textContent = field.type === "tags" ? `#${tag}` : tag;
+          button.textContent = tag;
           button.addEventListener("click", () => {
-            if (field.type === "suggest") {
-              input.value = tag;
-              input.dispatchEvent(new Event("input", { bubbles: true }));
-              return;
-            }
-            const existing = parseTagPrompt(input.value);
-            const lower = tag.toLowerCase();
-            input.value = existing.some((item) => item.toLowerCase() === lower)
-              ? existing.filter((item) => item.toLowerCase() !== lower).join(", ")
-              : [...existing, tag].join(", ");
+            input.value = tag;
+            input.dispatchEvent(new Event("input", { bubbles: true }));
           });
           picker.appendChild(button);
         }
@@ -5711,11 +5806,15 @@ function openFormModal(title: string, fields: ModalField[], submitLabel = "OK"):
       event.preventDefault();
       const value: Record<string, string> = {};
       for (const [id, input] of inputs) value[id] = input.value;
+      for (const field of fields) {
+        const picker = tagPickers.get(field.id);
+        if (picker && field.onTagChanges) field.onTagChanges(picker.changes());
+      }
       close(value);
     });
     modal.appendChild(panel);
     modal.hidden = false;
-    window.setTimeout(() => fields[0] && inputs.get(fields[0].id)?.focus(), 0);
+    window.setTimeout(() => fields[0] && focusTargets.get(fields[0].id)?.focus(), 0);
   });
 }
 
@@ -6446,10 +6545,11 @@ async function updateNoteMeta(
 async function quickAddMeta(): Promise<void> {
   const project = currentFileProjectFromMarkdown();
   const projectSuggestions = await agendaProjectSuggestionsWithGlobal(agendaNodes(), project);
+  const tags = await databaseTagSuggestions();
   const result = await openFormModal("Quick add meta", [
     { id: "title", label: "Title", value: currentNote()?.title || fileLabel.textContent || "Untitled" },
     { id: "project", label: "Project", type: "suggest", value: project, suggestions: projectSuggestions },
-    { id: "tags", label: "Tags", type: "tags", value: relationTags(currentNote()).join(", "), suggestions: tagSuggestions() },
+    { id: "tags", label: "Tags", type: "tags", value: (currentNote()?.tags || []).join(", "), suggestions: tags },
   ], "Register");
   if (!result) return;
   await updateNoteMeta(api.meta.add, {
@@ -6468,31 +6568,96 @@ async function unregisterMeta(): Promise<void> {
   await updateNoteMeta(api.meta.remove, {}, "Meta unregistered");
 }
 
+async function commitCurrentMetadataEdit(
+  edit: ReturnType<typeof planMarkdownTagChanges>,
+  success: string,
+  unchanged: string,
+): Promise<void> {
+  if (!edit.changed) {
+    setStatus(unchanged);
+    return;
+  }
+  editor.preserveViewport(() => {
+    editor.view.dispatch({ changes: { from: edit.from, to: edit.to, insert: edit.insert } });
+  });
+  setStatus(success);
+  await save();
+}
+
 async function addTag(): Promise<void> {
+  if (!currentFile) {
+    setStatus("No current note");
+    return;
+  }
+  const suggestions = await databaseTagSuggestions();
+  let changes: TagChangeSet = { add: [], remove: [] };
   const result = await openFormModal("Add tag", [
-    { id: "tags", label: "Tags", type: "tags", value: "", suggestions: tagSuggestions() },
+    {
+      id: "tags",
+      label: "Tags",
+      type: "tags",
+      tagValues: [],
+      suggestions,
+      onTagChanges: (next) => { changes = next; },
+    },
   ], "Add");
   if (!result) return;
-  const tags = parseTagPrompt(result.tags);
-  if (tags.length === 0) return;
-  await updateNoteMeta(api.meta.tag, { tags }, "Tag added");
+  const edit = planMarkdownTagChanges(currentMarkdownText(), changes);
+  await commitCurrentMetadataEdit(edit, "Tags added to document", "No tags added");
 }
 
 async function manageNoteTags(): Promise<void> {
-  const note = currentNote();
+  if (!currentFile) {
+    setStatus("No current note");
+    return;
+  }
+  const fileTags = metadataTagsFromMarkdown(currentMarkdownText()) ?? [];
   const project = currentFileProjectFromMarkdown();
   const projectSuggestions = await agendaProjectSuggestionsWithGlobal(agendaNodes(), project);
+  const tags = await databaseTagSuggestions();
+  let tagChanges: TagChangeSet = { add: [], remove: [] };
   const result = await openFormModal("Note meta", [
     { id: "project", label: "Project", type: "suggest", value: project, suggestions: projectSuggestions },
-    { id: "tags", label: "Tags", type: "tags", value: relationTags(note).join(", "), suggestions: tagSuggestions() },
+    {
+      id: "tags",
+      label: "Tags",
+      type: "tags",
+      tagValues: fileTags,
+      suggestions: tags,
+      onTagChanges: (next) => { tagChanges = next; },
+    },
   ], "Update");
   if (!result) return;
-  await updateNoteMeta(api.meta.add, {
-    title: note?.title || fileLabel.textContent || "Untitled",
+  const edit = planMarkdownMetadataChanges(currentMarkdownText(), {
+    tags: tagChanges,
     project: result.project,
-    tags: parseTagPrompt(result.tags),
-    kind: note?.kind || currentKind || "default",
-  }, "Meta updated");
+  });
+  await commitCurrentMetadataEdit(edit, "Metadata updated in document", "Metadata unchanged");
+}
+
+async function manageCurrentNoteTags(): Promise<void> {
+  if (!currentFile) {
+    setStatus("No current note");
+    return;
+  }
+  const note = currentNote();
+  const fileTags = metadataTagsFromMarkdown(currentMarkdownText()) ?? [];
+  const title = note?.title || fileLabel.textContent || fileNameFromPath(currentFile) || "Untitled";
+  const suggestions = await databaseTagSuggestions();
+  let changes: TagChangeSet = { add: [], remove: [] };
+  const result = await openFormModal(`Tags — ${title}`, [{
+    id: "tags",
+    label: "File tags",
+    type: "tags",
+    tagValues: fileTags,
+    suggestions,
+    placeholder: "Search or type a new tag…",
+    description: "Type a new tag and press Enter to create it; use ↑/↓ for existing tags, or click × to remove.",
+    onTagChanges: (next) => { changes = next; },
+  }], "Save tags");
+  if (!result) return;
+  const edit = planMarkdownTagChanges(currentMarkdownText(), changes);
+  await commitCurrentMetadataEdit(edit, "Tags updated in document", "File tags unchanged");
 }
 
 async function insertRoamIdLink(): Promise<void> {
@@ -6854,7 +7019,13 @@ function applyTodoStatusInEditor(todo: TodoItem, status: string, result: TodoUpd
   editor.replaceMarkdownRange(from, to, next);
   applyingContent = false;
   const mtimeMs = Number(result.mtimeMs) || 0;
-  if (mtimeMs) currentMtimeMs = mtimeMs;
+  if (mtimeMs) {
+    currentMtimeMs = mtimeMs;
+    // The patch API returns an mtime but no content fingerprint. The editor
+    // applied the same patch locally, so use that exact mtime as the next
+    // conflict baseline instead of retaining the pre-patch fingerprint.
+    currentVersion = "";
+  }
   updateTitle();
 }
 
@@ -7024,8 +7195,9 @@ async function openAgendaTool(): Promise<void> {
 }
 
 async function renameRoamTagTool(): Promise<void> {
+  const suggestions = await databaseTagSuggestions();
   const result = await openFormModal("Rename roam tag", [
-    { id: "from", label: "Current tag", type: "tags", value: "", suggestions: tagSuggestions() },
+    { id: "from", label: "Current tag", type: "tag", value: "", suggestions },
     { id: "to", label: "New tag", value: "" },
     { id: "confirm", label: "Type RENAME to update all roam notes", value: "" },
   ], "Rename");
@@ -7042,8 +7214,9 @@ async function renameRoamTagTool(): Promise<void> {
 }
 
 async function deleteRoamTagTool(): Promise<void> {
+  const suggestions = await databaseTagSuggestions();
   const result = await openFormModal("Delete roam tag", [
-    { id: "tag", label: "Tag", type: "tags", value: "", suggestions: tagSuggestions() },
+    { id: "tag", label: "Tag", type: "tag", value: "", suggestions },
     { id: "confirm", label: "Type DELETE to remove it from all roam notes", value: "" },
   ], "Delete");
   if (!result || result.confirm !== "DELETE") return;
@@ -7342,6 +7515,7 @@ function toolActions(): ToolAction[] {
     { id: "remove-meta", group: "knowledge", title: "Remove document metadata", detail: "Delete the current document meta block", run: () => void unregisterMeta() },
     { id: "hide-roam", group: "knowledge", title: "Hide from knowledge graph", detail: "Keep metadata but set roam off", run: () => void updateNoteMeta(api.meta.hideRoam, {}, "roam: off set") },
     { id: "activate-roam", group: "knowledge", title: "Show in knowledge graph", detail: "Clear roam off for the current document", run: () => void updateNoteMeta(api.meta.activateRoam, {}, "roam: off cleared") },
+    { id: "tag-manager", group: "knowledge", title: "Tag management", detail: "Search, create, and remove tags on the current note", run: () => void manageCurrentNoteTags() },
     { id: "add-tag", group: "knowledge", title: "Add tags", detail: "Append tags to the current document", run: () => void addTag() },
     { id: "manage-tags", group: "knowledge", title: "Manage metadata", detail: "Edit project and tags", run: () => void manageNoteTags() },
     { id: "insert-roam-idlink", group: "knowledge", title: "Insert knowledge link", detail: "Search notes and insert an ID link", run: () => void insertRoamIdLink() },
@@ -9163,6 +9337,9 @@ function runHostCommand(detail: unknown): boolean {
     clientId?: string;
     settings?: LanguageToolSettings;
     settingsRevision?: string;
+    repositoryId?: string;
+    phase?: string;
+    error?: string;
   };
   const command = String(body.command || "").trim().toLowerCase();
   if (!command) return false;
@@ -9186,6 +9363,16 @@ function runHostCommand(detail: unknown): boolean {
       hideSnippetPopup();
       clearCompletionCache();
       scheduleAssistUpdate({ snippets: true });
+      return true;
+    }
+    case "wiki-sync-state-changed": {
+      const repositoryId = String(body.repositoryId || "Wiki repository");
+      const phase = String(body.phase || "");
+      if (phase === "conflicted") {
+        setStatus(`${repositoryId} has a Git conflict; open Wiki repositories to resolve it`);
+      } else if (phase === "error") {
+        setStatus(`${repositoryId} sync failed: ${String(body.error || "retry scheduled")}`);
+      }
       return true;
     }
     case "bibliography-index-changed":
@@ -9356,6 +9543,45 @@ function runHostCommand(detail: unknown): boolean {
       return true;
     case "toggle-tools":
       toggleToolsPanel();
+      return true;
+    case "reload-index":
+      void reloadNotes(true);
+      return true;
+    case "add-meta":
+      void quickAddMeta();
+      return true;
+    case "remove-meta":
+      void unregisterMeta();
+      return true;
+    case "hide-roam":
+      void updateNoteMeta(api.meta.hideRoam, {}, "roam: off set");
+      return true;
+    case "activate-roam":
+      void updateNoteMeta(api.meta.activateRoam, {}, "roam: off cleared");
+      return true;
+    case "tag-manager":
+      void manageCurrentNoteTags();
+      return true;
+    case "add-tag":
+      void addTag();
+      return true;
+    case "manage-tags":
+      void manageNoteTags();
+      return true;
+    case "insert-roam-idlink":
+      void insertRoamIdLink();
+      return true;
+    case "rename-tag":
+      void renameRoamTagTool();
+      return true;
+    case "delete-tag":
+      void deleteRoamTagTool();
+      return true;
+    case "tag-overlap":
+      void tagOverlapReportTool();
+      return true;
+    case "rewrite-paths":
+      void rewritePathRefsTool();
       return true;
     case "open-config":
     case "configuration":

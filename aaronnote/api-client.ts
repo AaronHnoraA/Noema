@@ -13,6 +13,7 @@ type SaveBody = {
   clientId: string;
   seq: number;
   baseMtimeMs?: number;
+  baseVersion?: string;
   refresh?: string;
 };
 type AssetStoreMsg = {
@@ -544,6 +545,7 @@ type NativeApi = {
     systemOpen?: (target: string, base?: string) => Promise<unknown>;
     zotero?: (body: Record<string, unknown>) => Promise<unknown>;
     zoteroImport?: (body: Record<string, unknown>) => Promise<unknown>;
+    chooseNotePath?: (body: Record<string, unknown>) => Promise<unknown>;
   };
   roamTools?: {
     renameTag?: (body: Record<string, unknown>) => Promise<unknown>;
@@ -694,8 +696,10 @@ export type WikiSyncState = {
   failedAt?: string;
   branch?: string;
   localOnly?: boolean;
+  automatic?: boolean;
   committed?: boolean;
   changedFiles?: number;
+  changedPaths?: string[];
   error?: string;
   message?: string;
   conflicts?: Array<{ path: string; kind: string; stages: number[] }>;
@@ -1131,6 +1135,25 @@ export const api = {
     },
   },
   emacs: {
+    async chooseNotePath(body: Record<string, unknown>): Promise<{
+      ok?: boolean;
+      canceled: boolean;
+      path: string;
+      relativePath: string;
+      message?: string;
+    }> {
+      const call = window.aaronnoteApi?.emacs?.chooseNotePath;
+      const result = call
+        ? await call(body)
+        : await callHttpApi("aaronnote:api:emacs:choose-note-path", [body], "Choose note path failed");
+      return result as {
+        ok?: boolean;
+        canceled: boolean;
+        path: string;
+        relativePath: string;
+        message?: string;
+      };
+    },
     async open(body: { file: string; tag?: string; line?: number; col?: number }): Promise<void> {
       const call = window.aaronnoteApi?.emacs?.open;
       const result = call

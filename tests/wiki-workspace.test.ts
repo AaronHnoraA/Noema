@@ -20,6 +20,7 @@ import {
   publicWikiNotes,
   repositoryFromId,
   resolveWikiLink,
+  runWikiGitAction,
   searchWikiDatabase,
   updateWikiTag,
   updateWikiNamespace,
@@ -226,6 +227,38 @@ describe("Wiki workspace", () => {
       schemaVersion: 7,
       lastMode: "incremental",
       repositories: [expect.objectContaining({ repositoryId: "private/research", headSha: headBefore })],
+    });
+  });
+
+  test("reports exact changed files for the legacy direct Git pull tool", async () => {
+    const root = await tempRoot();
+    const seed = join(root, "seed");
+    const remote = join(root, "remote.git");
+    const collaborator = join(root, "collaborator");
+    const repository = join(root, "public", "notes");
+    await mkdir(seed, { recursive: true });
+    await execFileAsync("git", ["init", seed]);
+    await execFileAsync("git", ["-C", seed, "config", "user.email", "test@example.com"]);
+    await execFileAsync("git", ["-C", seed, "config", "user.name", "Noema Test"]);
+    await writeFile(join(seed, "initial.md"), note("initial-id", "Initial"));
+    await execFileAsync("git", ["-C", seed, "add", "."]);
+    await execFileAsync("git", ["-C", seed, "commit", "-m", "initial"]);
+    await execFileAsync("git", ["clone", "--bare", seed, remote]);
+    await mkdir(join(root, "public"), { recursive: true });
+    await execFileAsync("git", ["clone", remote, repository]);
+    await execFileAsync("git", ["clone", remote, collaborator]);
+    await execFileAsync("git", ["-C", collaborator, "config", "user.email", "collaborator@example.com"]);
+    await execFileAsync("git", ["-C", collaborator, "config", "user.name", "Collaborator"]);
+    const incoming = join(collaborator, "incoming.md");
+    await writeFile(incoming, note("incoming-id", "Incoming"));
+    await execFileAsync("git", ["-C", collaborator, "add", "."]);
+    await execFileAsync("git", ["-C", collaborator, "commit", "-m", "incoming"]);
+    await execFileAsync("git", ["-C", collaborator, "push"]);
+
+    await expect(runWikiGitAction(root, "pull", { repositoryId: "public/notes" })).resolves.toMatchObject({
+      action: "pull",
+      phase: "idle",
+      changedPaths: [join(repository, "incoming.md")],
     });
   });
 

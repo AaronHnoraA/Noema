@@ -105,6 +105,10 @@ root.innerHTML = `
         </div>
       </nav>
       <div class="noema-wiki-status" data-status role="status" aria-live="polite"></div>
+      <section class="noema-wiki-conflict-alert" data-conflict-alert role="alert" hidden>
+        <div><strong data-conflict-alert-title>Git conflict needs attention</strong><span data-conflict-alert-detail></span></div>
+        <button type="button" class="is-danger" data-conflict-alert-open>Resolve now</button>
+      </section>
       <section data-wiki-view></section>
     </section>
     <aside class="noema-wiki-tools" aria-label="Wiki tools">
@@ -208,6 +212,8 @@ root.innerHTML = `
       <footer>
         <button type="button" data-conflict-abort>Abort this merge</button>
         <button type="button" data-conflict-delete>Delete file</button>
+        <button type="button" data-conflict-all-ours>Keep yours for all</button>
+        <button type="button" data-conflict-all-theirs>Use remote for all</button>
         <button type="button" data-conflict-ours>Keep yours</button>
         <button type="button" data-conflict-theirs>Use remote</button>
         <button type="button" class="is-primary" data-conflict-save>Save merge result</button>
@@ -228,6 +234,9 @@ const kickerEl = root.querySelector<HTMLElement>("[data-view-kicker]")!;
 const searchEl = root.querySelector<HTMLInputElement>("[data-search]")!;
 const searchAnchor = searchEl.closest<HTMLElement>(".noema-wiki-search")!;
 const statusEl = root.querySelector<HTMLElement>("[data-status]")!;
+const conflictAlert = root.querySelector<HTMLElement>("[data-conflict-alert]")!;
+const conflictAlertTitle = root.querySelector<HTMLElement>("[data-conflict-alert-title]")!;
+const conflictAlertDetail = root.querySelector<HTMLElement>("[data-conflict-alert-detail]")!;
 const newDialog = root.querySelector<HTMLDialogElement>("[data-new-dialog]")!;
 const newForm = root.querySelector<HTMLFormElement>("[data-new-form]")!;
 const repoDialog = root.querySelector<HTMLDialogElement>("[data-repo-dialog]")!;
@@ -247,6 +256,8 @@ let activeGraph: WorkspaceGraph | null = null;
 let graphPayloadCache: GraphPayload | null = null;
 let busy = false;
 let activeConflict: { repositoryId: string; path: string; kind: string; editor?: HTMLElement & { ctr?: string } } | null = null;
+type WikiConflictSummary = { path: string; kind: string; stages: number[] };
+const pendingConflicts = new Map<string, WikiConflictSummary[]>();
 let activeManagedNote: WikiNote | null = null;
 let pageSearch: { query: string; items: WikiNote[]; total: number; nextCursor: number | null; generation: string } = {
   query: "", items: [], total: 0, nextCursor: null, generation: "",
@@ -263,9 +274,49 @@ function reportWikiWindowState(): void {
     title: activeView === "graph" ? "Knowledge Graph" : "Noema Wiki",
     dirty: false,
     saveInFlight: false,
-    conflict: Boolean(activeConflict),
+    conflict: Boolean(activeConflict || pendingConflicts.size),
     busy,
   });
+}
+
+function updateConflictAlert(): void {
+  const entries = [...pendingConflicts.entries()].filter(([, conflicts]) => conflicts.length > 0);
+  const count = entries.reduce((total, [, conflicts]) => total + conflicts.length, 0);
+  conflictAlert.hidden = count === 0;
+  root.classList.toggle("has-git-conflict", count > 0);
+  if (!count) {
+    reportWikiWindowState();
+    return;
+  }
+  const [repositoryId, conflicts] = entries[0]!;
+  conflictAlertTitle.textContent = `${count} unresolved Git conflict${count === 1 ? "" : "s"}`;
+  conflictAlertDetail.textContent = `${repositoryId} · ${conflicts[0]!.path}${count > 1 ? ` · ${count - 1} more` : ""}`;
+  reportWikiWindowState();
+}
+
+function rememberSyncState(repositoryId: string, state: Partial<WikiSyncState>): void {
+  const hasConflictPayload = Array.isArray(state.conflicts);
+  const conflicts = hasConflictPayload ? state.conflicts! : [];
+  if (state.phase === "conflicted" && conflicts.length) pendingConflicts.set(repositoryId, conflicts);
+  else if (state.phase === "idle" || (hasConflictPayload && conflicts.length === 0)) pendingConflicts.delete(repositoryId);
+  updateConflictAlert();
+}
+
+async function refreshConflictAlerts(): Promise<void> {
+  if (!index || serverReaderMode) return;
+  const repositoryIds = new Set(index.repositories.map((repository) => repository.id));
+  for (const repositoryId of pendingConflicts.keys()) {
+    if (!repositoryIds.has(repositoryId)) pendingConflicts.delete(repositoryId);
+  }
+  await Promise.all(index.repositories.map(async (repository) => {
+    try {
+      rememberSyncState(repository.id, await api.wiki.syncStatus(repository.id));
+    } catch {
+      // Repository cards expose status errors; a failed status probe should not
+      // erase a conflict alert restored by another event.
+    }
+  }));
+  updateConflictAlert();
 }
 
 try {
@@ -369,6 +420,10 @@ function savedGraphSettings(): WorkspaceGraphSettings {
     showArrows: false,
     showContext: false,
     colorBy: "repository",
+    scope: "global",
+    neighborDepth: 1,
+    follow: true,
+    localRoot: "",
   };
   try { return { ...defaults, ...JSON.parse(localStorage.getItem(graphSettingsKey) || "{}") }; }
   catch { return defaults; }
@@ -393,9 +448,11 @@ function graphSurface(preview: boolean): HTMLElement {
   const header = document.createElement("header");
   const heading = document.createElement("div");
   const title = document.createElement("h2");
-  title.textContent = preview ? "Knowledge graph" : "Workspace graph";
+  title.textContent = preview ? "Knowledge graph · 2D" : "Knowledge graph · 3D";
   const copy = document.createElement("p");
-  copy.textContent = preview ? "Explore the connections across this Wiki." : "Filter, group, and inspect the complete Wiki graph.";
+  copy.textContent = preview
+    ? "Explore the same Global/Local graph model in a 2D force layout."
+    : "Orbit the same graph model in 3D, or focus a node's N-hop local neighborhood.";
   heading.append(title, copy);
   const explore = button(preview ? "Explore full graph" : "Center graph");
   header.append(heading, explore);
@@ -409,34 +466,83 @@ function graphSurface(preview: boolean): HTMLElement {
   group.setAttribute("aria-label", "Graph repository group");
   toolbar.append(search, group);
   const settings = savedGraphSettings();
-  if (!preview) {
-    const color = document.createElement("select");
-    color.setAttribute("aria-label", "Color graph by");
-    color.append(
-      new Option("Color · repository", "repository"),
-      new Option("Color · namespace", "namespace"),
-      new Option("Color · group", "group"),
-    );
-    color.value = settings.colorBy;
-    color.addEventListener("change", () => {
-      settings.colorBy = color.value as WorkspaceGraphSettings["colorBy"];
-      localStorage.setItem(graphSettingsKey, JSON.stringify(settings));
-      mount();
-    });
-    toolbar.append(color);
-    for (const [key, label] of [
-      ["showTags", "Tags"], ["showAttachments", "Attachments"], ["showMissing", "Missing"], ["showOrphans", "Orphans"], ["showContext", "1-hop context"], ["showArrows", "Arrows"],
-    ] as Array<[keyof WorkspaceGraphSettings, string]>) {
-      const control = button(label);
+  const persistSettings = (): void => localStorage.setItem(graphSettingsKey, JSON.stringify(settings));
+  let syncSettingsControls = (): void => {};
+  const scopeControls = document.createElement("div");
+  scopeControls.className = "noema-wiki-graph-scope";
+  scopeControls.setAttribute("role", "group");
+  scopeControls.setAttribute("aria-label", "Graph scope");
+  const globalScope = button("Global");
+  const localScope = button("Local");
+  const syncScope = (): void => {
+    globalScope.classList.toggle("is-active", settings.scope === "global");
+    localScope.classList.toggle("is-active", settings.scope === "local");
+    globalScope.setAttribute("aria-pressed", String(settings.scope === "global"));
+    localScope.setAttribute("aria-pressed", String(settings.scope === "local"));
+  };
+  globalScope.addEventListener("click", () => { settings.scope = "global"; persistSettings(); syncScope(); mount(); });
+  localScope.addEventListener("click", () => { settings.scope = "local"; persistSettings(); syncScope(); mount(); });
+  scopeControls.append(globalScope, localScope);
+  syncScope();
+  const depth = document.createElement("label");
+  depth.className = "noema-wiki-graph-depth";
+  const depthText = document.createElement("span");
+  depthText.textContent = `${settings.neighborDepth}-hop`;
+  const depthInput = document.createElement("input");
+  depthInput.type = "range";
+  depthInput.min = "1";
+  depthInput.max = "3";
+  depthInput.value = String(settings.neighborDepth);
+  depthInput.setAttribute("aria-label", "Local graph neighbor depth");
+  depthInput.addEventListener("input", () => {
+    settings.neighborDepth = Math.max(1, Math.min(3, Number(depthInput.value) || 1));
+    depthText.textContent = `${settings.neighborDepth}-hop`;
+    persistSettings();
+    mount();
+  });
+  depth.append(depthText, depthInput);
+  const follow = button("Follow");
+  const syncFollow = (): void => {
+    follow.classList.toggle("is-active", settings.follow);
+    follow.setAttribute("aria-pressed", String(settings.follow));
+  };
+  follow.addEventListener("click", () => { settings.follow = !settings.follow; persistSettings(); syncFollow(); mount(); });
+  syncFollow();
+  syncSettingsControls = () => {
+    syncScope();
+    syncFollow();
+    depthInput.value = String(settings.neighborDepth);
+    depthText.textContent = `${settings.neighborDepth}-hop`;
+  };
+  toolbar.append(scopeControls, depth, follow);
+  const color = document.createElement("select");
+  color.setAttribute("aria-label", "Color graph by");
+  color.append(
+    new Option("Color · repository", "repository"),
+    new Option("Color · namespace", "namespace"),
+    new Option("Color · group", "group"),
+  );
+  color.value = settings.colorBy;
+  color.addEventListener("change", () => {
+    settings.colorBy = color.value as WorkspaceGraphSettings["colorBy"];
+    persistSettings();
+    mount();
+  });
+  toolbar.append(color);
+  for (const [key, label] of [
+    ["showTags", "Tags"], ["showAttachments", "Attachments"], ["showMissing", "Missing"], ["showOrphans", "Orphans"], ["showContext", "1-hop context"], ["showArrows", "Arrows"],
+  ] as Array<[keyof WorkspaceGraphSettings, string]>) {
+    const control = button(label);
+    control.classList.toggle("is-active", Boolean(settings[key]));
+    control.setAttribute("aria-pressed", String(Boolean(settings[key])));
+    control.addEventListener("click", () => {
+      (settings[key] as boolean) = !settings[key];
       control.classList.toggle("is-active", Boolean(settings[key]));
       control.setAttribute("aria-pressed", String(Boolean(settings[key])));
-      control.addEventListener("click", () => {
-        (settings[key] as boolean) = !settings[key];
-        localStorage.setItem(graphSettingsKey, JSON.stringify(settings));
-        mount();
-      });
-      toolbar.append(control);
-    }
+      persistSettings();
+      mount();
+    });
+    toolbar.append(control);
   }
   const canvas = document.createElement("div");
   canvas.className = "noema-wiki-graph-canvas";
@@ -453,9 +559,13 @@ function graphSurface(preview: boolean): HTMLElement {
     activeGraph = null;
     canvas.replaceChildren();
     status.textContent = "Loading graph…";
-    void graphPayload().then((payload) => {
+    void graphPayload().then(async (payload) => {
       if (activeView !== marker || !section.isConnected) return;
-      activeGraph = createWorkspaceGraph({
+      const createGraph = preview
+        ? createWorkspaceGraph
+        : (await import("./workspace-graph-3d.ts")).createWorkspaceGraph3D;
+      if (activeView !== marker || !section.isConnected) return;
+      activeGraph = createGraph({
         root: canvas,
         status,
         detail,
@@ -467,10 +577,15 @@ function graphSurface(preview: boolean): HTMLElement {
         mode: preview ? "preview" : "full",
         maxNodes: preview ? 500 : undefined,
         settings,
+        onSettingsChange: (next) => {
+          Object.assign(settings, next);
+          persistSettings();
+          syncSettingsControls();
+        },
       });
     }).catch((error) => { status.textContent = error instanceof Error ? error.message : "Graph unavailable"; });
   };
-  explore.addEventListener("click", () => preview ? navigateTo("graph") : mount());
+  explore.addEventListener("click", () => preview ? navigateTo("graph") : activeGraph?.center());
   queueMicrotask(mount);
   return section;
 }
@@ -853,43 +968,80 @@ async function renderTags(): Promise<void> {
       viewEl.append(emptyState("No tags", "Tags declared in page metadata appear here."));
       return;
     }
+    const toolbar = document.createElement("div");
+    toolbar.className = "noema-wiki-tag-toolbar";
+    const search = document.createElement("input");
+    search.type = "search";
+    search.placeholder = "Filter tags, variants, or page titles…";
+    search.autocomplete = "off";
+    search.spellcheck = false;
+    search.setAttribute("aria-label", "Filter workspace tags");
+    const suggestions = document.createElement("datalist");
+    suggestions.id = "noema-wiki-tag-suggestions";
+    for (const tag of tags) {
+      const option = document.createElement("option");
+      option.value = String(tag.name || "");
+      suggestions.appendChild(option);
+    }
+    search.setAttribute("list", suggestions.id);
+    const count = document.createElement("span");
+    count.setAttribute("aria-live", "polite");
+    toolbar.append(search, suggestions, count);
     const list = document.createElement("div");
     list.className = "noema-wiki-tag-list";
-    for (const tag of tags) {
-      const row = document.createElement("article");
-      const copy = document.createElement("div");
-      const name = document.createElement("h2");
-      name.textContent = `#${tag.name || ""}`;
-      const detail = document.createElement("p");
-      detail.textContent = `${tag.count || 0} pages · ${(tag.variants || []).join(", ")}`;
-      copy.append(name, detail);
-      const actions = document.createElement("div");
-      const filter = button("Show pages");
-      const rename = button("Rename");
-      const remove = button("Delete");
-      filter.addEventListener("click", () => {
-        activeView = "pages";
-        searchEl.value = String(tag.name || "");
-        selectActiveNav();
-        render();
-      });
-      rename.addEventListener("click", async () => {
-        const to = window.prompt(`Rename #${tag.name} to`);
-        if (!to) return;
-        await api.wiki.updateTag({ action: "rename", from: tag.name, to });
-        await load(true);
-      });
-      remove.addEventListener("click", async () => {
-        if (!window.confirm(`Remove #${tag.name} from ${tag.count || 0} pages?`)) return;
-        await api.wiki.updateTag({ action: "delete", from: tag.name });
-        await load(true);
-      });
-      actions.append(filter);
-      if (!serverReaderMode) actions.append(rename, remove);
-      row.append(copy, actions);
-      list.append(row);
-    }
-    viewEl.append(list);
+
+    const renderList = (): void => {
+      const query = search.value.trim().replace(/^#/, "").toLocaleLowerCase();
+      const visible = tags.filter((tag) => !query || [
+        tag.name,
+        ...(tag.variants || []),
+        ...(tag.pages || []).map((page) => page.title),
+      ].some((value) => String(value || "").toLocaleLowerCase().includes(query)));
+      count.textContent = `${visible.length} of ${tags.length} tags`;
+      list.replaceChildren();
+      if (!visible.length) {
+        list.append(emptyState("No matching tags", `No workspace tag matches “${search.value.trim()}”.`));
+        return;
+      }
+      for (const tag of visible) {
+        const row = document.createElement("article");
+        const copy = document.createElement("div");
+        const name = document.createElement("h2");
+        name.textContent = `#${tag.name || ""}`;
+        const detail = document.createElement("p");
+        detail.textContent = `${tag.count || 0} pages · ${(tag.variants || []).join(", ")}`;
+        copy.append(name, detail);
+        const actions = document.createElement("div");
+        const filter = button("Show pages");
+        const rename = button("Rename");
+        const remove = button("Delete");
+        filter.addEventListener("click", () => {
+          activeView = "pages";
+          searchEl.value = String(tag.name || "");
+          selectActiveNav();
+          render();
+        });
+        rename.addEventListener("click", async () => {
+          const to = window.prompt(`Rename #${tag.name} to`);
+          if (!to) return;
+          await api.wiki.updateTag({ action: "rename", from: tag.name, to });
+          await load(true);
+        });
+        remove.addEventListener("click", async () => {
+          if (!window.confirm(`Remove #${tag.name} from ${tag.count || 0} pages?`)) return;
+          await api.wiki.updateTag({ action: "delete", from: tag.name });
+          await load(true);
+        });
+        actions.append(filter);
+        if (!serverReaderMode) actions.append(rename, remove);
+        row.append(copy, actions);
+        list.append(row);
+      }
+    };
+    search.addEventListener("input", renderList);
+    viewEl.append(toolbar, list);
+    renderList();
+    search.focus();
   } catch (error) {
     setStatus(error instanceof Error ? error.message : String(error), true);
   }
@@ -1092,6 +1244,7 @@ function renderSyncState(
   actions: HTMLElement,
   repository: WikiRepository,
 ): void {
+  rememberSyncState(repository.id, state);
   status.textContent = [
     `${state.phase || "idle"} · ${state.branch || "branch pending"}`,
     state.checkpointedAt
@@ -1100,6 +1253,7 @@ function renderSyncState(
         : "No local changes to commit"
       : "",
     state.localOnly ? "Local commit only (no origin remote)" : "",
+    state.automatic ? "Automatic startup and six-hour batch sync enabled" : "",
     state.lastSyncedAt ? `Last synced ${state.lastSyncedAt}` : "",
     state.message || "",
     state.error || "",
@@ -1168,6 +1322,7 @@ async function finishConflict(choice: "result" | "ours" | "theirs" | "delete"): 
     };
     if (choice === "result") body.result = activeConflict.editor?.ctr || "";
     const state = await api.wiki.resolveConflict(body) as WikiSyncState;
+    rememberSyncState(activeConflict.repositoryId, state);
     if (state.phase === "conflicted" && state.conflicts?.length) {
       await openConflict(activeConflict.repositoryId, state.conflicts[0].path);
     } else {
@@ -1176,6 +1331,37 @@ async function finishConflict(choice: "result" | "ours" | "theirs" | "delete"): 
       await load(true);
       setStatus(state.message || "Conflict resolved");
     }
+  } catch (error) {
+    conflictMessage.textContent = error instanceof Error ? error.message : String(error);
+  }
+}
+
+async function finishAllConflicts(choice: "ours" | "theirs"): Promise<void> {
+  if (!activeConflict) return;
+  const repositoryId = activeConflict.repositoryId;
+  const label = choice === "ours" ? "your local files" : "the remote files";
+  if (!window.confirm(`Use ${label} for every remaining conflict in ${repositoryId}?`)) return;
+  conflictMessage.textContent = `Resolving every remaining conflict with ${label}…`;
+  try {
+    let state = await api.wiki.syncStatus(repositoryId) as WikiSyncState;
+    const attempted = new Set<string>();
+    while (state.phase === "conflicted" && state.conflicts?.length) {
+      const path = state.conflicts[0]!.path;
+      if (attempted.has(path)) {
+        throw new Error(`Conflict resolver made no progress on ${path}`);
+      }
+      attempted.add(path);
+      state = await api.wiki.resolveConflict({
+        repositoryId,
+        path,
+        choice,
+      }) as WikiSyncState;
+      rememberSyncState(repositoryId, state);
+    }
+    conflictDialog.close();
+    activeConflict = null;
+    await load(true);
+    setStatus(state.message || `Resolved all conflicts with ${label}`);
   } catch (error) {
     conflictMessage.textContent = error instanceof Error ? error.message : String(error);
   }
@@ -1288,6 +1474,7 @@ async function load(refresh = false, options: { silent?: boolean } = {}): Promis
     }
     updateNewPageNamespace(false);
     render();
+    void refreshConflictAlerts();
     await runPageSearch();
   } catch (error) {
     setStatus(error instanceof Error ? error.message : String(error), true);
@@ -1436,18 +1623,34 @@ async function renderPageHistory(): Promise<void> {
   }
 }
 
-async function choosePageDirectory(): Promise<void> {
-  const repositoryId = (pageForm.elements.namedItem("repositoryId") as HTMLSelectElement).value;
-  const repository = index?.repositories.find((item) => item.id === repositoryId);
-  if (!repository || !window.noemaDesktop?.chooseDirectory) return;
-  const input = pageForm.elements.namedItem("directory") as HTMLInputElement;
-  const result = await window.noemaDesktop.chooseDirectory({
+async function chooseRepositoryDirectory(
+  repository: WikiRepository,
+  input: HTMLInputElement,
+): Promise<void> {
+  const options = {
     root: repository.path,
     defaultPath: input.value ? `${repository.path}/${input.value}` : repository.path,
     title: `Choose a folder in ${repository.id}`,
-  });
-  if (result.message) setStatus(result.message, true);
-  if (!result.canceled) input.value = result.relativePath || "";
+  };
+  try {
+    const result = window.noemaDesktop?.chooseDirectory
+      ? await window.noemaDesktop.chooseDirectory(options)
+      : await api.emacs.chooseNotePath({ ...options, kind: "directory" });
+    if (result.message) setStatus(result.message, true);
+    if (!result.canceled) input.value = result.relativePath || "";
+  } catch (error) {
+    input.focus();
+    setStatus(error instanceof Error
+      ? error.message
+      : "Path chooser unavailable; choose an indexed folder or type a subfolder", true);
+  }
+}
+
+async function choosePageDirectory(): Promise<void> {
+  const repositoryId = (pageForm.elements.namedItem("repositoryId") as HTMLSelectElement).value;
+  const repository = index?.repositories.find((item) => item.id === repositoryId);
+  if (!repository) return;
+  await chooseRepositoryDirectory(repository, pageForm.elements.namedItem("directory") as HTMLInputElement);
 }
 
 async function applyPageOperation(): Promise<void> {
@@ -1547,19 +1750,7 @@ root.querySelector<HTMLButtonElement>("[data-choose-directory]")?.addEventListen
   const repositoryId = (newForm.elements.namedItem("repositoryId") as HTMLSelectElement).value;
   const repository = index?.repositories.find((item) => item.id === repositoryId);
   if (!repository) return;
-  if (!window.noemaDesktop?.chooseDirectory) {
-    (newForm.elements.namedItem("directory") as HTMLInputElement).focus();
-    setStatus("Choose an indexed folder from the Directory field, or type a new subfolder");
-    return;
-  }
-  const directory = (newForm.elements.namedItem("directory") as HTMLInputElement).value.trim();
-  const result = await window.noemaDesktop.chooseDirectory({
-    root: repository.path,
-    defaultPath: directory ? `${repository.path}/${directory}` : repository.path,
-    title: `Choose a folder in ${repository.id}`,
-  });
-  if (result.message) setStatus(result.message, true);
-  if (!result.canceled) (newForm.elements.namedItem("directory") as HTMLInputElement).value = result.relativePath || "";
+  await chooseRepositoryDirectory(repository, newForm.elements.namedItem("directory") as HTMLInputElement);
 });
 searchEl.addEventListener("input", () => {
   window.clearTimeout(pageSearchTimer);
@@ -1611,18 +1802,42 @@ function closePanels(): void {
 root.querySelector("[data-toggle-nav]")?.addEventListener("click", () => togglePanel("nav"));
 root.querySelector("[data-toggle-tools]")?.addEventListener("click", () => togglePanel("tools"));
 window.addEventListener("aaronnote:command", (event) => {
-  const detail = (event as CustomEvent<{ command?: string }>).detail;
+  const detail = (event as CustomEvent<{
+    command?: string;
+    repositoryId?: string;
+    phase?: string;
+    error?: string;
+    conflicts?: WikiConflictSummary[];
+  }>).detail;
   if (detail?.command === "wiki-index-changed") void load(true, { silent: true });
+  else if (detail?.command === "wiki-sync-state-changed") {
+    rememberSyncState(detail.repositoryId || "Repository", detail as Partial<WikiSyncState>);
+    if (detail.phase === "error") {
+      setStatus(`${detail.repositoryId || "Repository"} sync failed: ${detail.error || "retry scheduled"}`, true);
+    } else if (detail.phase === "conflicted") {
+      setStatus(`${detail.repositoryId || "Repository"} needs conflict resolution`, true);
+    }
+    if (activeView === "repositories" || activeView === "sync") render();
+  }
 });
 
+root.querySelector("[data-conflict-alert-open]")?.addEventListener("click", () => {
+  const first = [...pendingConflicts.entries()].find(([, conflicts]) => conflicts.length > 0);
+  if (first) void openConflict(first[0], first[1][0]!.path);
+});
 root.querySelector("[data-conflict-close]")?.addEventListener("click", () => conflictDialog.close());
 root.querySelector("[data-conflict-save]")?.addEventListener("click", () => void finishConflict("result"));
 root.querySelector("[data-conflict-ours]")?.addEventListener("click", () => void finishConflict("ours"));
 root.querySelector("[data-conflict-theirs]")?.addEventListener("click", () => void finishConflict("theirs"));
+root.querySelector("[data-conflict-all-ours]")?.addEventListener("click", () => void finishAllConflicts("ours"));
+root.querySelector("[data-conflict-all-theirs]")?.addEventListener("click", () => void finishAllConflicts("theirs"));
 root.querySelector("[data-conflict-delete]")?.addEventListener("click", () => void finishConflict("delete"));
 root.querySelector("[data-conflict-abort]")?.addEventListener("click", () => {
   if (!activeConflict || !window.confirm("Abort the integration merge and keep your local branch unchanged?")) return;
-  void api.wiki.abortConflict(activeConflict.repositoryId).then(() => {
+  const repositoryId = activeConflict.repositoryId;
+  void api.wiki.abortConflict(repositoryId).then(() => {
+    pendingConflicts.delete(repositoryId);
+    updateConflictAlert();
     activeConflict = null;
     conflictDialog.close();
     void load(true);
@@ -1711,6 +1926,19 @@ function runDesktopCommand(detail: unknown): void {
     navigateTo("home");
   } else if (command === "new-page") {
     showNewPage();
+  } else if (command === "tag-manager") {
+    navigateTo("tags");
+  } else if ([
+    "add-meta", "remove-meta", "hide-roam", "activate-roam",
+    "add-tag", "manage-tags", "rename-tag", "delete-tag",
+  ].includes(command)) {
+    navigateTo("tags");
+  } else if (command === "tag-overlap") {
+    navigateTo("reports");
+  } else if (command === "reload-index") {
+    void load(true);
+  } else if (command === "toggle-tools") {
+    togglePanel("tools");
   }
 }
 

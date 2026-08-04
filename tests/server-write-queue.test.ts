@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -8,7 +8,7 @@ import { configure } from "../server/lib/state.mjs";
 // @ts-ignore The server is a Node ESM module outside the TS app graph.
 import { saveNote } from "../server/lib/save.mjs";
 // @ts-ignore The server is a Node ESM module outside the TS app graph.
-import { buildAgenda, clockIn, ensureTodoId, markNotesDirty, patchTodo, scanNotes, syncRoamDb } from "../server/lib/index.mjs";
+import { buildAgenda, clockIn, ensureTodoId, markNotesDirty, patchTodo, readNote, scanNotes, syncRoamDb } from "../server/lib/index.mjs";
 
 async function withVault(fn: (root: string) => Promise<void>) {
   const root = await mkdtemp(join(tmpdir(), "aaronnote-write-queue-"));
@@ -23,6 +23,71 @@ async function withVault(fn: (root: string) => Promise<void>) {
 }
 
 describe("per-file write serialization", () => {
+  test("newer saves from one editor chain across an in-flight base mtime", async () => {
+    await withVault(async (notes) => {
+      const file = join(notes, "a.md");
+      await writeFile(file, "# A\n", "utf8");
+      await utimes(file, new Date(1_000), new Date(1_000));
+      const base = await stat(file);
+      const opened = await readNote(file) as { version?: string };
+
+      const [first, second] = await Promise.all([
+        saveNote({
+          file,
+          content: "# A\n\nFirst edit\n",
+          clientId: "same-editor",
+          seq: 1,
+          baseMtimeMs: base.mtimeMs,
+          baseVersion: opened.version,
+        }),
+        saveNote({
+          file,
+          content: "# A\n\nLatest edit\n",
+          clientId: "same-editor",
+          seq: 2,
+          baseMtimeMs: base.mtimeMs,
+          baseVersion: opened.version,
+        }),
+      ]) as Array<{ ok?: boolean; conflict?: boolean }>;
+
+      expect(first).toMatchObject({ ok: true });
+      expect(second).toMatchObject({ ok: true });
+      expect(second.conflict).not.toBe(true);
+      expect(await readFile(file, "utf8")).toBe("# A\n\nLatest edit\n");
+    });
+  });
+
+  test("the same stale mtime from another pane remains a conflict", async () => {
+    await withVault(async (notes) => {
+      const file = join(notes, "a.md");
+      await writeFile(file, "# A\n", "utf8");
+      await utimes(file, new Date(1_000), new Date(1_000));
+      const base = await stat(file);
+      const opened = await readNote(file) as { version?: string };
+
+      const first = await saveNote({
+        file,
+        content: "# A\n\nFirst pane\n",
+        clientId: "first-pane",
+        seq: 1,
+        baseMtimeMs: base.mtimeMs,
+        baseVersion: opened.version,
+      }) as { ok?: boolean };
+      const second = await saveNote({
+        file,
+        content: "# A\n\nSecond pane\n",
+        clientId: "second-pane",
+        seq: 1,
+        baseMtimeMs: base.mtimeMs,
+        baseVersion: opened.version,
+      }) as { conflict?: boolean };
+
+      expect(first.ok).toBe(true);
+      expect(second.conflict).toBe(true);
+      expect(await readFile(file, "utf8")).toBe("# A\n\nFirst pane\n");
+    });
+  });
+
   test("concurrent patchTodo calls on two todos in the same file both land", async () => {
     await withVault(async (notes) => {
       const file = join(notes, "a.md");

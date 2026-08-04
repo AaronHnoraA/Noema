@@ -10,6 +10,12 @@ import { getBlockMathRanges, rangeOverlapsAny } from "../src/cm6/math-ranges.ts"
 import { scanInlineMathRanges } from "../src/inline-math.ts";
 import { getOrgEnvHeadingRanges } from "../src/cm6/extensions/visual/widgets/block-extras.ts";
 import {
+  activateBlockMath,
+  formulaSourceRangeAtPosition,
+  activateInlineMath,
+  activateInlineMathFromArrow,
+} from "../src/cm6/extensions/visual/widgets/math.ts";
+import {
   applyVimJump,
   beginVimJump,
   clearVimJump,
@@ -180,6 +186,7 @@ function staticMathObjectAtPosition(
   if (!editor.view.dom.classList.contains("aaronnote-visual-typography")) return null;
   const state = editor.view.state;
   const safePos = clamp(pos, 0, state.doc.length);
+  if (formulaSourceRangeAtPosition(editor.view, safePos)) return null;
   const blockRanges = getBlockMathRanges(state);
   const block = blockRanges.find((range) => safePos >= range.from && safePos < range.to);
   if (block) return block;
@@ -196,6 +203,20 @@ function staticMathObjectAtPosition(
 function visualObjectEndPosition(editor: Editor, pos: number): number {
   const object = staticMathObjectAtPosition(editor, pos);
   return object?.from === pos ? object.to : visualCharEndPosition(doc(editor), pos);
+}
+
+function enterStaticMathObject(
+  editor: Editor,
+  entry: "start" | "end",
+): boolean {
+  const object = staticMathObjectAtPosition(editor, currentHead(editor));
+  if (!object) return false;
+  const visualEntry = { kind: entry } as const;
+  const block = getBlockMathRanges(editor.view.state)
+    .find((range) => range.from === object.from && range.to === object.to);
+  return block
+    ? activateBlockMath(editor.view, block.from, block.to, visualEntry)
+    : activateInlineMath(editor.view, object.from, object.to, visualEntry);
 }
 
 function snapStaticMathMotion(
@@ -386,7 +407,9 @@ function crossedVisualEntry(
 
   const state = editor.view.state;
   const entries: Array<{ from: number; to: number; target: number }> = [];
-  const mathRanges = getBlockMathRanges(state);
+  const mathRanges = getBlockMathRanges(state).filter((range) => (
+    !formulaSourceRangeAtPosition(editor.view, range.from)
+  ));
 
   const mathRange = nearestCrossedRange(mathRanges, start, target, dir);
   if (mathRange) {
@@ -502,7 +525,10 @@ function deleteChar(editor: Editor): string {
   const { from, to } = editor.getMarkdownSelection();
   const start = from === to ? normalCharPosition(text, from) : from;
   const line = text.lineAt(start);
-  const end = from === to ? Math.min(graphemeEndPosition(text, start), line.to) : to;
+  const object = from === to ? staticMathObjectAtPosition(editor, start) : null;
+  const end = object?.from === start
+    ? object.to
+    : from === to ? Math.min(graphemeEndPosition(text, start), line.to) : to;
   if (start >= end) return "";
   const deleted = text.sliceString(start, end);
   editor.replaceMarkdownRange(start, end, "", "start");
@@ -516,7 +542,10 @@ function deleteCharBackward(editor: Editor): string {
   const pos = normalCharPosition(text, from);
   const line = text.lineAt(pos);
   if (pos <= line.from) return "";
-  const start = previousGraphemePosition(text, pos);
+  const previousObject = staticMathObjectAtPosition(editor, Math.max(line.from, pos - 1));
+  const start = previousObject?.to === pos
+    ? previousObject.from
+    : previousGraphemePosition(text, pos);
   const deleted = text.sliceString(start, pos);
   editor.replaceMarkdownRange(start, pos, "", "start");
   return deleted;
@@ -544,9 +573,18 @@ function replaceChar(editor: Editor, ch: string): number | null {
   const { from, to } = editor.getMarkdownSelection();
   const start = from === to ? normalCharPosition(text, from) : from;
   const line = text.lineAt(start);
-  const end = from === to ? Math.min(graphemeEndPosition(text, start), line.to) : to;
+  const object = staticMathObjectAtPosition(editor, start);
+  const replacingObject = Boolean(object?.from === start && (from === to || to === object.to));
+  const end = replacingObject
+    ? object!.to
+    : from === to ? Math.min(graphemeEndPosition(text, start), line.to) : to;
   if (start >= end) return null;
-  editor.replaceMarkdownRange(start, end, ch.repeat(Math.max(1, selectionClusterCount(text, start, end))), "end");
+  editor.replaceMarkdownRange(
+    start,
+    end,
+    ch.repeat(replacingObject ? 1 : Math.max(1, selectionClusterCount(text, start, end))),
+    "end",
+  );
   return start;
 }
 
@@ -1174,6 +1212,7 @@ export function createVimLite(
         return true;
       case "i":
         enterInsert(normalCharPosition(doc(editor), currentHead(editor)));
+        enterStaticMathObject(editor, "start");
         return true;
       case "v":
         enterVisual();
@@ -1182,7 +1221,10 @@ export function createVimLite(
         enterVisualLine();
         return true;
       case "a":
-        appendChar();
+        if (staticMathObjectAtPosition(editor, currentHead(editor))) {
+          enterInsert(normalCharPosition(doc(editor), currentHead(editor)));
+          enterStaticMathObject(editor, "end");
+        } else appendChar();
         return true;
       case "I":
         resetMotionMemory();
@@ -1393,6 +1435,11 @@ export function createVimLite(
       if (mode === "insert") {
         // Let CM6's native cursor commands own insert-mode movement. They use
         // visual wrapped lines and preserve the pixel goal column.
+        if (!hasCommandModifier(event)
+          && !event.shiftKey
+          && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+          return activateInlineMathFromArrow(editor.view, event.key);
+        }
         return false;
       }
       if (event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "r") {

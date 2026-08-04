@@ -973,7 +973,7 @@ export function createJupyterCellService({
 
     const runtime = runtimeForBody({ ...(body || {}), file: noteFile, kernel, session, language });
     return await withKernelExecutionQueue(runtime.key, async () => {
-      await openScript({
+      const opened = await openScript({
         ...(body || {}),
         file: noteFile,
         cellId: targetCellId,
@@ -984,6 +984,7 @@ export function createJupyterCellService({
         open: false,
       });
       const scriptFile = hiddenScriptPath(noteFile, session, language);
+      const outputFile = outputMirrorPath(noteFile, session, language);
       const hiddenCells = await readExistingHiddenCells(scriptFile, "", files);
       const selected = selectedContextIds(body, targetCellId);
       const entries = normalizeContextCells(body?.cells, hiddenCells, targetCellId, { kernel, session, language })
@@ -994,7 +995,7 @@ export function createJupyterCellService({
       const recordBefore = registry.get(runtime.key);
       const plan = planContextExecution({ mode, entries, targetCellId, record: recordBefore });
       if (plan.length === 0) {
-        return { ok: true, cellId: targetCellId, kernel, session, status: "ok", executionCount: null, outputs: [], results: [], plan: [] };
+        return { ok: true, changed: opened.changed, file: scriptFile, outputFile, cellId: targetCellId, kernel, session, status: "ok", executionCount: null, outputs: [], results: [], plan: [] };
       }
       const results = [];
       let targetResult = null;
@@ -1039,6 +1040,9 @@ export function createJupyterCellService({
         results,
         plan: plan.map((entry) => ({ cellId: entry.cellId, mode, selected: entry.selected })),
         autoRan: mode === "dependencies" && plan.some((entry) => entry.cellId !== targetCellId),
+        file: scriptFile,
+        outputFile,
+        changed: true,
       };
     });
   }
@@ -1057,9 +1061,19 @@ export function createJupyterCellService({
       cellId: read.cellId,
       code: read.code,
     });
-    if (leanRuntimeP(read.language, read.kernel)) return result;
+    if (leanRuntimeP(read.language, read.kernel)) {
+      return {
+        ...result,
+        changed: false,
+      };
+    }
     await persistScriptCellResult(noteFile, read, result);
-    return { ...result, live: true };
+    return {
+      ...result,
+      live: true,
+      file: hiddenScriptPath(noteFile, read.session, read.language),
+      outputFile: outputMirrorPath(noteFile, read.session, read.language),
+    };
   }
 
   async function clearScriptCellOutput(body) {

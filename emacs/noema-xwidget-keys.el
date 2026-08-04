@@ -31,6 +31,7 @@
 (declare-function xwidget-buffer "xwidget" (xwidget))
 (declare-function xwidget-webkit-edit-mode "xwidget" (&optional arg))
 (declare-function xwidget-webkit-pass-command-event "xwidget" (event))
+(declare-function remote-gateway-register-method "remote-gateway" (method handler))
 
 (defun my/noema--identity-random-hex ()
   "Return 20 hexadecimal random digits for a Noema UUIDv7."
@@ -73,6 +74,43 @@ wire format intentionally remains standard and kind-neutral."
   "Move focus to the active minibuffer after a forwarded Noema key."
   (when-let* ((window (active-minibuffer-window)))
     (my/noema--select-emacs-window window)))
+
+(defun noema-xwidget--choose-note-path (params _client)
+  "Choose a note path requested by Noema using Emacs PARAMS.
+The gateway response contains both the absolute path and its path relative to
+the authorized repository root.  Cancelling the minibuffer is reported as a
+normal result rather than a gateway error."
+  (let* ((root (file-name-as-directory
+                (expand-file-name
+                 (format "%s" (or (alist-get 'root params) default-directory)))))
+         (default-path (expand-file-name
+                        (format "%s" (or (alist-get 'defaultPath params) root))))
+         (title (format "%s" (or (alist-get 'title params) "Choose note path")))
+         (kind (format "%s" (or (alist-get 'kind params) "directory"))))
+    (condition-case nil
+        (let* ((chosen
+                (minibuffer-with-setup-hook
+                    #'my/noema--focus-minibuffer-if-active
+                  (if (string= kind "file")
+                      (read-file-name (concat title ": ") root default-path nil)
+                    (read-directory-name (concat title ": ") root default-path nil))))
+               (absolute (expand-file-name chosen))
+               (comparison (if (string= kind "file")
+                               (file-name-directory absolute)
+                             (file-name-as-directory absolute))))
+          (unless (string-prefix-p root comparison)
+            (user-error "Noema path must stay inside %s" root))
+          (let ((relative (file-relative-name absolute root)))
+            `((ok . t)
+              (canceled . :json-false)
+              (path . ,absolute)
+              (relativePath . ,(if (string= relative ".") ""
+                                 (directory-file-name relative))))))
+      (quit '((ok . t) (canceled . t) (path . "") (relativePath . ""))))))
+
+(when (fboundp 'remote-gateway-register-method)
+  (remote-gateway-register-method
+   "aaronnote.note.choose-path" #'noema-xwidget--choose-note-path))
 
 (defun my/noema--release-xwidget-input-buffer (&optional buffer)
   "Exit xwidget edit mode in BUFFER when it is an Noema xwidget."

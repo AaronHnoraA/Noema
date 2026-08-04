@@ -21,6 +21,7 @@ import { setKnownRoamRefs } from "../../src/cm6/roam-link-status.ts";
 import { MATH_RENDER_ERROR_MAX_LENGTH, renderMathHTML } from "../../src/math-render.ts";
 import { createVimLite } from "../../aaronnote/vim-lite.ts";
 import { indentMarkdownBlock } from "../../src/cm6/commands/index.ts";
+import { toggleFormulaSourceAtSelection } from "../../src/cm6/extensions/visual/widgets/math.ts";
 import {
   joinVisualTexDisplayRows,
   initializeNoemaMathfield,
@@ -2342,6 +2343,46 @@ First draft.
     cleanup();
   });
 
+  test("toggles only the selected display formula source and restores LiveTeX", () => {
+    const md = "before\n\n\\[\na=b\n\\]\n\nafter";
+    const { editor, cleanup } = mountCM6(md);
+    document.querySelector<HTMLElement>(".cm-math-block")!
+      .dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+    expect(document.querySelector(".cm-math-block-editor")).toBeTruthy();
+
+    expect(toggleFormulaSourceAtSelection(editor.view)).toBe(true);
+    expect(editor.getMarkdown()).toBe(md);
+    expect(document.querySelector(".cm-math-block-editor")).toBeNull();
+    expect(document.querySelector(".cm-math-block")).toBeNull();
+    expect(editor.view.contentDOM.textContent).toContain("a=b");
+
+    expect(toggleFormulaSourceAtSelection(editor.view)).toBe(true);
+    expect(document.querySelector(".cm-math-block-editor")).toBeTruthy();
+    expect(editor.getMarkdown()).toBe(md);
+    cleanup();
+  });
+
+  test("keeps display TeX source active while its text and caret change", () => {
+    const md = "before\n\n\\[\na=b\n\\]\n\nafter";
+    const { editor, cleanup } = mountCM6(md);
+    editor.setMarkdownSelection(md.indexOf("a=b") + 1);
+    expect(toggleFormulaSourceAtSelection(editor.view)).toBe(true);
+    expect(document.querySelector(".cm-math-block")).toBeNull();
+
+    editor.setMarkdownSelection(md.indexOf("a=b") + 2);
+    const insertion = editor.getMarkdownSelection().from;
+    editor.replaceMarkdownRange(insertion, insertion, "c", "end");
+    expect(editor.getMarkdown()).toContain("a=cb");
+    expect(document.querySelector(".cm-math-block")).toBeNull();
+    expect(document.querySelector(".cm-math-block-editor")).toBeNull();
+
+    editor.setMarkdownSelection(editor.getMarkdownSelection().from - 1);
+    expect(document.querySelector(".cm-math-block")).toBeNull();
+    expect(toggleFormulaSourceAtSelection(editor.view)).toBe(true);
+    expect(document.querySelector(".cm-math-block-editor")).toBeTruthy();
+    cleanup();
+  });
+
   test("writes the latest display draft when focus moves to another source position", async () => {
     const md = "before\n\n\\[\na=b\n\\]\n\nafter";
     const { editor, cleanup } = mountCM6(md);
@@ -2770,6 +2811,49 @@ after
 
     editor.undo();
     expect(editor.getMarkdown()).toBe(md);
+    cleanup();
+  });
+
+  test("toggles only the selected inline formula source and restores LiveTeX", () => {
+    const md = "before \\(x+1\\) after";
+    const { editor, cleanup } = mountCM6(md);
+    editor.setMarkdownSelection(md.indexOf("x+1") + 1);
+    expect(document.querySelector(".cm-math-inline-editor")).toBeTruthy();
+
+    expect(toggleFormulaSourceAtSelection(editor.view)).toBe(true);
+    expect(editor.getMarkdown()).toBe(md);
+    expect(document.querySelector(".cm-math-inline-editor")).toBeNull();
+    expect(document.querySelector(".cm-math-inline")).toBeNull();
+    expect(editor.view.contentDOM.textContent).toContain("\\(x+1\\)");
+
+    expect(toggleFormulaSourceAtSelection(editor.view)).toBe(true);
+    expect(document.querySelector(".cm-math-inline-editor")).toBeTruthy();
+    expect(editor.getMarkdown()).toBe(md);
+    cleanup();
+  });
+
+  test("keeps inline TeX source active across typing and native horizontal movement", () => {
+    const md = "before \\(x+1\\) after";
+    const { editor, host, cleanup } = mountCM6(md);
+    editor.setMarkdownSelection(md.indexOf("x+1") + 1);
+    expect(toggleFormulaSourceAtSelection(editor.view)).toBe(true);
+    expect(document.querySelector(".cm-math-inline-editor")).toBeNull();
+
+    editor.setMarkdownSelection(md.indexOf("x+1") + 1);
+    const insertion = editor.getMarkdownSelection().from;
+    editor.replaceMarkdownRange(insertion, insertion, "y", "end");
+    expect(editor.getMarkdown()).toContain("\\(xy+1\\)");
+    expect(document.querySelector(".cm-math-inline")).toBeNull();
+    expect(document.querySelector(".cm-math-inline-editor")).toBeNull();
+
+    const vim = createVimLite(editor, host);
+    expect(vim.handleKey({ key: "ArrowLeft" })).toBe(false);
+    expect(document.querySelector(".cm-math-inline-editor")).toBeNull();
+    editor.setMarkdownSelection(editor.getMarkdownSelection().from - 1);
+    expect(document.querySelector(".cm-math-inline")).toBeNull();
+    expect(toggleFormulaSourceAtSelection(editor.view)).toBe(true);
+    expect(document.querySelector(".cm-math-inline-editor")).toBeTruthy();
+    vim.destroy();
     cleanup();
   });
 
@@ -3440,6 +3524,49 @@ After`;
     expect(editor.getMarkdownSelection()).toEqual({ from: formulaFrom, to: formulaTo });
     expect(document.querySelector(".cm-math-inline-editor")).toBeNull();
     expect(document.querySelector(".cm-math-inline")).toBeTruthy();
+    cleanup();
+  });
+
+  test("vim normal mode treats rendered inline math as one object", () => {
+    const md = "a \\(x+y\\) b";
+    const formulaFrom = md.indexOf("\\(");
+    const formulaTo = md.indexOf("\\)") + 2;
+    const { editor, cleanup } = mountCM6(md);
+    const vim = createVimLite(editor, document.body);
+
+    editor.setMarkdownSelection(formulaFrom);
+    vim.setMode("normal");
+    expect(vim.handleKey({ key: "l" })).toBe(true);
+    expect(editor.getMarkdownSelection()).toEqual({ from: formulaTo, to: formulaTo });
+    expect(vim.handleKey({ key: "h" })).toBe(true);
+    expect(editor.getMarkdownSelection()).toEqual({ from: formulaFrom, to: formulaFrom });
+
+    expect(vim.handleKey({ key: "x" })).toBe(true);
+    expect(editor.getMarkdown()).toBe("a  b");
+    cleanup();
+  });
+
+  test("vim insert entry opens editable rendered math from i, a, and arrows", () => {
+    const md = "a \\(x+y\\) b";
+    const formulaFrom = md.indexOf("\\(");
+
+    for (const key of ["i", "a"] as const) {
+      const { editor, cleanup } = mountCM6(md);
+      const vim = createVimLite(editor, document.body);
+      editor.setMarkdownSelection(formulaFrom);
+      vim.setMode("normal");
+      expect(vim.handleKey({ key })).toBe(true);
+      expect(vim.mode()).toBe("insert");
+      expect(document.querySelector(".cm-math-inline-editor")).toBeTruthy();
+      cleanup();
+    }
+
+    const { editor, cleanup } = mountCM6(md);
+    const vim = createVimLite(editor, document.body);
+    editor.setMarkdownSelection(formulaFrom);
+    vim.setMode("insert");
+    expect(vim.handleKey({ key: "ArrowRight" })).toBe(true);
+    expect(document.querySelector(".cm-math-inline-editor")).toBeTruthy();
     cleanup();
   });
 
