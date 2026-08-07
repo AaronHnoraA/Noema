@@ -13,7 +13,6 @@ import {
   snippetBrowserCompatibility,
   snippetPopupKeyAction,
   snippetScore,
-  stabilizeSnippetPopupRefresh,
 } from "../aaronnote/snippets.ts";
 
 class TextEditor {
@@ -174,20 +173,6 @@ describe("aaronnote snippets", () => {
     expect(snippetPopupKeyAction({ key: " " })).toEqual({ type: "none" });
     expect(snippetPopupKeyAction({ key: "ArrowDown", shiftKey: true })).toEqual({ type: "none" });
     expect(snippetPopupKeyAction({ key: "Home", shiftKey: true })).toEqual({ type: "none" });
-  });
-
-  test("keeps popup order and the intentional selection when a provider refresh arrives", () => {
-    const alpha = { id: "alpha", key: "alpha", name: "Alpha", mode: "tex-mode", body: "a" };
-    const beta = { id: "beta", key: "beta", name: "Beta", mode: "tex-mode", body: "b" };
-    const gamma = { id: "gamma", key: "gamma", name: "Gamma", mode: "tex-mode", body: "g" };
-    const refreshed = stabilizeSnippetPopupRefresh(
-      [alpha, beta],
-      [gamma, beta, alpha],
-      1,
-    );
-
-    expect(refreshed.items.map((snippet) => snippet.id)).toEqual(["alpha", "beta", "gamma"]);
-    expect(refreshed.selectedIndex).toBe(1);
   });
 
   test("preserves MathLive tabstop defaults, nesting, numeric order, and mirrors", () => {

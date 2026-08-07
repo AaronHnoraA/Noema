@@ -979,47 +979,6 @@ export function snippetStableId(snippet: SnippetSummary): string {
   return snippet.id || [snippet.provider, snippet.kind, snippet.mode, snippet.key].filter(Boolean).join(":");
 }
 
-function snippetPopupIdentity(snippet: SnippetSummary): string {
-  return [snippetStableId(snippet), snippet.name, snippet.body, snippet.source].join("\0");
-}
-
-/**
- * Keep an open popup visually stable while the same query is refreshed.
- * Providers may finish asynchronously; existing rows retain their order and
- * the intentional keyboard selection, while genuinely new rows append.
- */
-export function stabilizeSnippetPopupRefresh(
-  previous: readonly SnippetSummary[],
-  next: readonly SnippetSummary[],
-  selectedIndex: number,
-): { items: SnippetSummary[]; selectedIndex: number } {
-  const selectedId = previous[selectedIndex] ? snippetPopupIdentity(previous[selectedIndex]!) : "";
-  const remaining = new Map(next.map((snippet) => [snippetPopupIdentity(snippet), snippet]));
-  const items: SnippetSummary[] = [];
-  for (const snippet of previous) {
-    const id = snippetPopupIdentity(snippet);
-    const refreshed = remaining.get(id);
-    if (!refreshed) continue;
-    items.push(refreshed);
-    remaining.delete(id);
-  }
-  for (const snippet of next) {
-    const id = snippetPopupIdentity(snippet);
-    if (!remaining.has(id)) continue;
-    items.push(snippet);
-    remaining.delete(id);
-  }
-  const retainedSelection = selectedId
-    ? items.findIndex((snippet) => snippetPopupIdentity(snippet) === selectedId)
-    : -1;
-  return {
-    items,
-    selectedIndex: retainedSelection >= 0
-      ? retainedSelection
-      : Math.max(0, Math.min(selectedIndex, items.length - 1)),
-  };
-}
-
 export class SnippetUsageStore {
   private static readonly storageKey = "aaronnote.snippet-ranking.v1";
   private readonly entries = new Map<string, SnippetUsage>();
