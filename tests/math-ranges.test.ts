@@ -11,6 +11,7 @@ import {
   rangeInsideAny,
   rangeOverlapsAny,
   scanBlockMathRanges,
+  scanBlockMathRangesInDoc,
 } from "../src/cm6/math-ranges.ts";
 
 describe("block math range queries", () => {
@@ -64,6 +65,63 @@ describe("block math range queries", () => {
     expect(after[1]).not.toBe(before[1]);
     expect(after[1]!.tex).toBe(before[1]!.tex);
     expect(blockMathRangesOverlapping(next, [{ from: after[1]!.from, to: after[1]!.to }])).toEqual([after[1]]);
+  });
+
+  test("recognizes fences assembled one character at a time", () => {
+    const state = EditorState.create({
+      doc: "before\n\\\nx\n\\]\nafter",
+      extensions: [blockMathRangesExtension],
+    });
+    expect(getBlockMathRanges(state)).toHaveLength(0);
+
+    const slash = state.doc.toString().indexOf("\\\n");
+    const next = state.update({ changes: { from: slash + 1, insert: "[" } }).state;
+    expect(getBlockMathRanges(next)).toMatchObject([{ tex: "x" }]);
+  });
+
+  test("pairs a new closing fence with an existing unmatched opener", () => {
+    const state = EditorState.create({
+      doc: "before\n\\[\nx\nafter",
+      extensions: [blockMathRangesExtension],
+    });
+    expect(getBlockMathRanges(state)).toHaveLength(0);
+
+    const next = state.update({ changes: { from: state.doc.length, insert: "\n\\]" } }).state;
+    expect(getBlockMathRanges(next)).toMatchObject([{ tex: "x\nafter" }]);
+  });
+
+  test("repairs downstream pairing after deleting a fence", () => {
+    const state = EditorState.create({
+      doc: "\\[\na\n\\]\n\\[\nb\n\\]",
+      extensions: [blockMathRangesExtension],
+    });
+    const bracket = state.doc.toString().indexOf("[");
+    const next = state.update({ changes: { from: bracket, to: bracket + 1 } }).state;
+
+    expect(getBlockMathRanges(next)).toMatchObject([{ tex: "b" }]);
+  });
+
+  test("keeps the incremental fence index equivalent to a full scan", () => {
+    let state = EditorState.create({
+      doc: "head\n\\[\na\n\\]\nmid\n\\[\nunclosed\ntail",
+      extensions: [blockMathRangesExtension],
+    });
+    let seed = 0x6e6f656d;
+    const fragments = ["x", " ", "\n", "\\", "[", "]", "\\[", "\\]", "\n\\[\n", "\n\\]\n"];
+    const random = (): number => {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      return seed;
+    };
+
+    for (let index = 0; index < 160; index++) {
+      const from = random() % (state.doc.length + 1);
+      const remove = Math.min(random() % 4, state.doc.length - from);
+      const insert = fragments[random() % fragments.length]!;
+      state = state.update({ changes: { from, to: from + remove, insert } }).state;
+      const expected = scanBlockMathRanges(state.doc.toString());
+      expect(scanBlockMathRangesInDoc(state.doc)).toEqual(expected);
+      expect(getBlockMathRanges(state)).toEqual(expected);
+    }
   });
 
   test("merges nested protection ranges before binary-search range queries", () => {

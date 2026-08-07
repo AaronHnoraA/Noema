@@ -23,6 +23,10 @@ import { createVimLite } from "../../aaronnote/vim-lite.ts";
 import { indentMarkdownBlock } from "../../src/cm6/commands/index.ts";
 import { toggleFormulaSourceAtSelection } from "../../src/cm6/extensions/visual/widgets/math.ts";
 import {
+  isPointerSelecting,
+  pointerSelectionEffect,
+} from "../../src/cm6/extensions/visual/selection.ts";
+import {
   joinVisualTexDisplayRows,
   initializeNoemaMathfield,
   insertVisualTexInlineRow,
@@ -2313,6 +2317,19 @@ First draft.
     cleanup();
   });
 
+  test("renders a display formula when its opening fence is completed character by character", () => {
+    const md = "before\n\n\\\na+b\n\\]\n\nafter";
+    const { editor, cleanup } = mountCM6(md);
+    expect(document.querySelector(".cm-math-block")).toBeNull();
+
+    const insertion = md.indexOf("\\\n") + 1;
+    editor.replaceMarkdownRange(insertion, insertion, "[", "end");
+
+    expect(editor.getMarkdown()).toBe("before\n\n\\[\na+b\n\\]\n\nafter");
+    expect(document.querySelector(".cm-math-block")).toBeTruthy();
+    cleanup();
+  });
+
   test("buffers display editor input and commits it at the formula end", async () => {
     const md = "before\n\n\\[\na=b\n\\]\n\nafter";
     const { editor, cleanup } = mountCM6(md);
@@ -4153,6 +4170,23 @@ After`;
     vim.syncSelectionFromEditor();
     expect(vim.mode()).toBe("normal");
     expect(editor.getMarkdownSelection()).toEqual({ from: 2, to: 2 });
+    cleanup();
+  });
+
+  test("vim-lite Escape recovers a pointer selection missed by visual-mode sync", () => {
+    const { editor, cleanup } = mountCM6("abcdef");
+    const vim = createVimLite(editor, document.body);
+
+    vim.setMode("normal");
+    editor.setMarkdownSelection(1, 4);
+    editor.view.dispatch({ effects: pointerSelectionEffect.of(true) });
+    expect(vim.mode()).toBe("normal");
+    expect(isPointerSelecting(editor.view.state)).toBe(true);
+
+    expect(vim.handleKey({ key: "Escape" })).toBe(true);
+    expect(editor.getMarkdownSelectionRange()).toEqual({ anchor: 4, head: 4 });
+    expect(isPointerSelecting(editor.view.state)).toBe(false);
+
     cleanup();
   });
 

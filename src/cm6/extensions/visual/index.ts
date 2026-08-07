@@ -62,6 +62,7 @@ export {
   activateInlineMath,
   activateInlineMathFromArrow,
   finishInlineMathEditing,
+  moveInsertLineWithDisplayMathEntry,
 } from "./widgets/math.ts";
 export {
   hasVisualMode,

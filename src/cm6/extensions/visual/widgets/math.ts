@@ -5,7 +5,7 @@
  * they must be provided by a StateField via EditorView.decorations facet.
  *
  * Split strategy:
- *   mathBlockField   — StateField, processes full doc for \[…\]
+ *   mathBlockField   — StateField, incrementally indexes \[…\] fence lines
  *   MathInlinePlugin — ViewPlugin (viewport-only), processes \(…\) inline
  *
  * Both are bundled into `mathExtension = [mathBlockField, mathInlineExtension]`.
@@ -20,7 +20,7 @@ import {
 } from "@codemirror/view";
 import { MeasuredWidget } from "./measured-widget.ts";
 import { shortHash } from "./measured-observer.ts";
-import { StateEffect, StateField, type ChangeSet, type EditorState } from "@codemirror/state";
+import { EditorSelection, StateEffect, StateField, type ChangeSet, type EditorState } from "@codemirror/state";
 import type { Range } from "@codemirror/state";
 import { scanInlineMathRanges } from "../../../../inline-math.ts";
 import { renderMathHTML } from "../../../../math-render.ts";
@@ -278,8 +278,10 @@ class BlockMathEditorWidget extends MeasuredWidget {
         this.session.draft = normalizeVisualTexLatex(latex);
       }
     });
-    div.addEventListener("aaronnote:display-math-commit", () => {
-      commitBlockMathSession(view, this.session, "forward");
+    div.addEventListener("aaronnote:display-math-commit", (event) => {
+      const direction = (event as CustomEvent<{ direction?: VisualTexInlineMoveDirection }>)
+        .detail?.direction;
+      commitBlockMathSession(view, this.session, direction ?? "forward");
     });
     div.addEventListener("aaronnote:display-math-unavailable", () => {
       fallbackBlockMathSession(view, this.session, new Error("Visual formula editor unavailable"));
@@ -370,7 +372,7 @@ class BlockMathWidget extends MeasuredWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Block math — StateField (full-doc scan, allows block:true decorations)
+// Block math — StateField (incremental fence index, allows block:true decorations)
 // ---------------------------------------------------------------------------
 
 type BlockMathFieldValue = {
@@ -619,7 +621,8 @@ const mathBlockField = StateField.define<BlockMathFieldValue>({
       || fallbackByEffect;
     if (tr.docChanged && previousActive && !active && !fallbackByEffect) {
       const ranges = getBlockMathRanges(tr.startState);
-      const decorations = canPatchBlockMathDecorations(tr.startState, ranges, tr.changes)
+      const nextRanges = getBlockMathRanges(tr.state);
+      const decorations = canPatchBlockMathDecorations(ranges, nextRanges, tr.changes)
         ? patchBlockMathDecosNearChanges(
           tr.state,
           value.decorations.map(tr.changes),
@@ -640,9 +643,10 @@ const mathBlockField = StateField.define<BlockMathFieldValue>({
     let decorations = value.decorations;
     if (tr.docChanged) {
       const ranges = getBlockMathRanges(tr.startState);
-      if (canMapBlockMathDecorations(tr.startState, ranges, tr.changes)) {
+      const nextRanges = getBlockMathRanges(tr.state);
+      if (canMapBlockMathDecorations(ranges, nextRanges, tr.changes)) {
         decorations = decorations.map(tr.changes);
-      } else if (canPatchBlockMathDecorations(tr.startState, ranges, tr.changes)) {
+      } else if (canPatchBlockMathDecorations(ranges, nextRanges, tr.changes)) {
         decorations = patchBlockMathDecosNearChanges(
           tr.state,
           decorations.map(tr.changes),
@@ -678,50 +682,40 @@ const mathBlockAtomicExtension = EditorView.atomicRanges.of((view) => {
 });
 
 function canMapBlockMathDecorations(
-  state: EditorState,
   ranges: readonly { from: number; to: number }[],
+  nextRanges: readonly { from: number; to: number }[],
   changes: ChangeSet,
 ): boolean {
-  let canMap = true;
-  changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
-    if (!canMap) return;
-    const removed = state.doc.sliceString(fromA, toA);
-    const added = inserted.toString();
-    if (
-      removed.includes("\\[") || added.includes("\\[") ||
-      removed.includes("\\]") || added.includes("\\]")
-    ) {
-      canMap = false;
-      return;
-    }
-    if (ranges.some((range) => fromA <= range.to && toA >= range.from)) {
-      canMap = false;
-    }
+  if (ranges.length !== nextRanges.length) return false;
+  for (let index = 0; index < ranges.length; index++) {
+    const before = ranges[index]!;
+    const after = nextRanges[index]!;
+    if (changes.mapPos(before.from, -1) !== after.from
+      || changes.mapPos(before.to, 1) !== after.to) return false;
+  }
+  let touchesMath = false;
+  changes.iterChanges((fromA, toA) => {
+    if (ranges.some((range) => fromA <= range.to && toA >= range.from)) touchesMath = true;
   });
-  return canMap;
+  return !touchesMath;
 }
 
 function canPatchBlockMathDecorations(
-  state: EditorState,
   ranges: readonly { from: number; to: number }[],
+  nextRanges: readonly { from: number; to: number }[],
   changes: ChangeSet,
 ): boolean {
-  let canPatch = true;
   let touchedBlock = false;
-  changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
-    if (!canPatch) return;
-    const removed = state.doc.sliceString(fromA, toA);
-    const added = inserted.toString();
-    if (
-      removed.includes("\\[") || added.includes("\\[") ||
-      removed.includes("\\]") || added.includes("\\]")
-    ) {
-      canPatch = false;
-      return;
-    }
+  changes.iterChanges((fromA, toA) => {
     if (ranges.some((range) => fromA <= range.to && toA >= range.from)) touchedBlock = true;
   });
-  return canPatch && touchedBlock;
+  if (!touchedBlock) return false;
+  if (ranges.length !== nextRanges.length) return false;
+  return ranges.every((range, index) => {
+    const next = nextRanges[index]!;
+    return changes.mapPos(range.from, -1) === next.from
+      && changes.mapPos(range.to, 1) === next.to;
+  });
 }
 
 function patchBlockMathDecosNearChanges(
@@ -811,7 +805,7 @@ function commitBlockMathSession(
     ? null
     : empty
       ? range.from
-      : direction === "backward"
+      : direction === "backward" || direction === "upward"
         ? range.from
         : forwardAnchor;
 
@@ -1265,7 +1259,7 @@ class MathInlinePlugin {
       ? null
       : empty
         ? session.from
-        : direction === "backward"
+        : direction === "backward" || direction === "upward"
           ? session.from
           : nextTo;
     dispatchMathEditState(view, false, "inline");
@@ -1401,6 +1395,61 @@ function activateAdjacentInlineMath(view: EditorView, direction: "forward" | "ba
 
 export function activateInlineMathFromArrow(view: EditorView, key: "ArrowLeft" | "ArrowRight"): boolean {
   return activateAdjacentInlineMath(view, key === "ArrowRight" ? "forward" : "backward");
+}
+
+function displayMathCrossedByVerticalMove(
+  view: EditorView,
+  start: number,
+  target: number,
+  forward: boolean,
+): BlockMathRange | null {
+  const ranges = getBlockMathRanges(view.state);
+  let low = 0;
+  let high = ranges.length;
+  if (forward) {
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      if (ranges[middle]!.from <= start) low = middle + 1;
+      else high = middle;
+    }
+    const range = ranges[low];
+    return range && target >= range.to && !formulaSourceRangeAtPosition(view, range.from)
+      ? range
+      : null;
+  }
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (ranges[middle]!.to < start) low = middle + 1;
+    else high = middle;
+  }
+  const range = ranges[low - 1];
+  return range && target <= range.from && !formulaSourceRangeAtPosition(view, range.from)
+    ? range
+    : null;
+}
+
+export type InsertDisplayLineMoveResult = false | "cursor" | "formula";
+
+/** CM6-native vertical motion, treating only display math as an editable row. */
+export function moveInsertLineWithDisplayMathEntry(
+  view: EditorView,
+  forward: boolean,
+): InsertDisplayLineMoveResult {
+  const selection = view.state.selection;
+  if (view.state.readOnly || selection.ranges.length !== 1 || !selection.main.empty) return false;
+  const start = selection.main.head;
+  let moved = view.moveVertically(selection.main, forward);
+  if (moved.head === start) moved = view.moveToLineBoundary(selection.main, forward);
+
+  const display = displayMathCrossedByVerticalMove(view, start, moved.head, forward);
+  if (display && activateBlockMath(view, display.from, display.to, { kind: forward ? "start" : "end" })) {
+    return "formula";
+  }
+
+  const next = EditorSelection.create([moved]);
+  if (next.eq(selection, true)) return false;
+  view.dispatch(view.state.update({ selection: next, scrollIntoView: true, userEvent: "select" }));
+  return "cursor";
 }
 
 export function activateInlineMath(

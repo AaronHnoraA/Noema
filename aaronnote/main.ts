@@ -87,6 +87,10 @@ import { openLanguageToolSettingsTool } from "./languagetool-tool.ts";
 import { setFindHighlightRanges } from "../src/cm6/find-highlight.ts";
 import { refreshViewportDecorationsNow } from "../src/cm6/viewport-refresh.ts";
 import {
+  cancelPointerSelection,
+  isPointerSelecting,
+} from "../src/cm6/extensions/visual/selection.ts";
+import {
   allProseDiagnostics,
   proseDiagnosticsAt,
   setProseDiagnostics,
@@ -2087,6 +2091,7 @@ updateModeLabel(vim.mode());
 // Prevents silent insert/visual mode on return from another Emacs buffer.
 onBlurVimReset = () => {
   if (vim.mode() !== "normal") vim.setMode("normal");
+  cancelPointerSelection(editor.view, editor.view.state.selection.main.head);
   imeLastSentMode = "";
   syncImeForVimMode("normal");
 };
@@ -9984,9 +9989,22 @@ document.addEventListener("selectionchange", () => {
     scheduleAssistUpdate({ selectionTool: true });
   }
 });
+document.addEventListener("mousedown", (event) => {
+  if (!editorSurfaceVisible() || event.defaultPrevented) return;
+  if (!(event.target instanceof Node) || editor.view.dom.contains(event.target)) return;
+  if (editor.view.state.selection.ranges.every((range) => range.empty)) return;
+  // Selection-owned controls prevent their own mousedown default, so they
+  // retain the range until their command runs. An ordinary click elsewhere
+  // is an explicit cancellation even when the clicked surface is not focusable
+  // and therefore would not produce a CM6 blur event.
+  vim.handleKey({ key: "Escape" });
+  selectionTool.hidden = true;
+  selectionMore.hidden = true;
+});
 document.addEventListener("mouseup", (event) => {
   if (!editorSurfaceVisible()) return;
-  if (event.target instanceof Node && editor.view.dom.contains(event.target)) {
+  if (isPointerSelecting(editor.view.state)
+      || (event.target instanceof Node && editor.view.dom.contains(event.target))) {
     vim.syncSelectionFromEditor();
     noteCursorPositionEvent();
   }

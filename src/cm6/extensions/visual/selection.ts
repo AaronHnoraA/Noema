@@ -13,7 +13,7 @@ import {
   type Line,
   type Text,
 } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import { EditorView, ViewPlugin } from "@codemirror/view";
 import { updateHasEffect } from "../../utils/effects.ts";
 
 export const selectionIntersects = (
@@ -80,19 +80,92 @@ const mousedownSelectionField = StateField.define<EditorSelection | undefined>({
   },
 });
 
-function finishPointerSelection(view: EditorView): void {
-  window.setTimeout(() => {
-    if (view.dom.isConnected) view.dispatch({ effects: pointerSelectionEffect.of(false) });
+const pointerSelectionGeneration = new WeakMap<EditorView, number>();
+const pointerSelectionEndCleanup = new WeakMap<EditorView, () => void>();
+
+function stopWatchingPointerSelectionEnd(view: EditorView): void {
+  const cleanup = pointerSelectionEndCleanup.get(view);
+  if (!cleanup) return;
+  pointerSelectionEndCleanup.delete(view);
+  cleanup();
+}
+
+function invalidatePointerSelectionLifecycle(view: EditorView): number {
+  stopWatchingPointerSelectionEnd(view);
+  const generation = (pointerSelectionGeneration.get(view) ?? 0) + 1;
+  pointerSelectionGeneration.set(view, generation);
+  return generation;
+}
+
+function watchPointerSelectionEnd(view: EditorView): void {
+  const ownerDocument = view.dom.ownerDocument;
+  const ownerWindow = ownerDocument.defaultView;
+  const finish = (): void => finishPointerSelection(view);
+  const finishFromKey = (event: KeyboardEvent): void => {
+    if (event.key === "Escape" || (event.ctrlKey && event.key === "[")) finish();
+  };
+
+  ownerDocument.addEventListener("mouseup", finish, true);
+  ownerDocument.addEventListener("pointercancel", finish, true);
+  ownerDocument.addEventListener("keydown", finishFromKey, true);
+  ownerWindow?.addEventListener("blur", finish, true);
+  pointerSelectionEndCleanup.set(view, () => {
+    ownerDocument.removeEventListener("mouseup", finish, true);
+    ownerDocument.removeEventListener("pointercancel", finish, true);
+    ownerDocument.removeEventListener("keydown", finishFromKey, true);
+    ownerWindow?.removeEventListener("blur", finish, true);
   });
+}
+
+function finishPointerSelection(view: EditorView): void {
+  const generation = pointerSelectionGeneration.get(view) ?? 0;
+  stopWatchingPointerSelectionEnd(view);
+  globalThis.setTimeout(() => {
+    if (pointerSelectionGeneration.get(view) !== generation) return;
+    if (view.dom.isConnected && isPointerSelecting(view.state)) {
+      const selection = view.state.selection;
+      // A click that replaces a drag can leave CM6 with an empty main cursor
+      // plus a non-empty secondary range. Vim correctly follows the main
+      // cursor, but drawSelection would keep painting the orphaned range as a
+      // full-line highlight. Normalize only this inconsistent shape; ordinary
+      // drag selections and multiple empty cursors remain intact.
+      const hasOrphanedRange = selection.main.empty
+        && selection.ranges.some((range) => !range.empty);
+      view.dispatch({
+        effects: pointerSelectionEffect.of(false),
+        ...(hasOrphanedRange ? { selection: { anchor: selection.main.head } } : {}),
+      });
+    }
+  });
+}
+
+export function cancelPointerSelection(view: EditorView, collapseAt?: number): void {
+  invalidatePointerSelectionLifecycle(view);
+  const pointerSelecting = isPointerSelecting(view.state);
+  const position = collapseAt == null
+    ? null
+    : Math.max(0, Math.min(view.state.doc.length, collapseAt));
+  const selectionNeedsCollapse = position != null && (
+    view.state.selection.ranges.length !== 1
+    || !view.state.selection.main.empty
+    || view.state.selection.main.head !== position
+  );
+  if (!pointerSelecting && !selectionNeedsCollapse) return;
+  view.dispatch({
+    ...(pointerSelecting ? { effects: pointerSelectionEffect.of(false) } : {}),
+    ...(position != null ? { selection: { anchor: position } } : {}),
+  });
+}
+
+function beginPointerSelection(view: EditorView): void {
+  invalidatePointerSelectionLifecycle(view);
+  view.dispatch({ effects: pointerSelectionEffect.of(true) });
+  watchPointerSelectionEnd(view);
 }
 
 const pointerSelectionListener = EditorView.domEventHandlers({
   mousedown: (_event, view) => {
-    view.dispatch({ effects: pointerSelectionEffect.of(true) });
-    return false;
-  },
-  mouseup: (_event, view) => {
-    finishPointerSelection(view);
+    beginPointerSelection(view);
     return false;
   },
   contextmenu: (_event, view) => {
@@ -105,6 +178,12 @@ const pointerSelectionListener = EditorView.domEventHandlers({
   },
 });
 
+const pointerSelectionLifecycle = ViewPlugin.define((view) => ({
+  destroy(): void {
+    invalidatePointerSelectionLifecycle(view);
+  },
+}));
+
 export function isPointerSelecting(state: EditorState): boolean {
   return state.field(pointerSelectionField, false) ?? false;
 }
@@ -115,6 +194,7 @@ export function getMousedownSelection(state: EditorState): EditorSelection | und
 
 export const pointerSelectionExtension = [
   pointerSelectionListener,
+  pointerSelectionLifecycle,
   pointerSelectionField,
   mousedownSelectionField,
 ];

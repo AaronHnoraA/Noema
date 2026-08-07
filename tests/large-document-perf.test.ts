@@ -17,10 +17,9 @@ const BOUNDED_CEILING_MS = 480;
 // tighter Enter-specific ceiling still rejects the previous 610-650 ms
 // full-document block-extra scan while allowing the measured 480-500 ms path.
 const NEWLINE_CEILING_MS = 520;
-// KNOWN-SCAN: opening a math/diagram fence currently triggers a full-document
-// rescan in blockMathRangesField / mermaid fenced-code collection (a pre-existing
-// design trade-off, see docs/audit-2026-06.md). We only guard against a runaway
-// (e.g. an accidental second full pass), not against the scan itself.
+// KNOWN-SCAN: diagram fences still trigger a full-document collection. We only
+// guard against a runaway (e.g. an accidental second full pass), not against
+// that pre-existing scan itself.
 const KNOWN_SCAN_CEILING_MS = 2000;
 
 function medianEditLatency(content: string, insert: string): number {
@@ -55,6 +54,7 @@ describe("large-document bounded editing", () => {
     ["newline (Enter)", "\n", NEWLINE_CEILING_MS],
     ["table pipe", "|"],
     ["heading marker", "#"],
+    ["block math fence", "\\["],
   ];
   for (const [name, insert, ceiling = BOUNDED_CEILING_MS] of boundedCases) {
     test(`bounded latency for ${name} edits in the 5 MB fixture`, () => {
@@ -63,7 +63,6 @@ describe("large-document bounded editing", () => {
   }
 
   const knownScanCases: Array<[name: string, insert: string]> = [
-    ["block math fence", "\\["],
     ["code fence", "```"],
     // "(" forces a full block-extra redecoration (canMapBlockExtraDecos bails on
     // it), which rebuilds every @@cell decoration in the doc. The fixture now

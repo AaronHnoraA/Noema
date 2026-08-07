@@ -23,7 +23,10 @@ import { insertNewlineContinueMarkup } from "@codemirror/lang-markdown";
 import { continueMarkdownBlock, exitEmptyMarkdownBlock, indentMarkdownList } from "../src/cm6/commands/index.ts";
 import { nextGraphemePosition, previousGraphemePosition } from "../src/cm6/text-boundaries.ts";
 import { historyChordKind } from "../src/keymap/shortcut-router.ts";
-import { activateInlineMathFromArrow } from "../src/cm6/extensions/visual/index.ts";
+import {
+  activateInlineMathFromArrow,
+  moveInsertLineWithDisplayMathEntry,
+} from "../src/cm6/extensions/visual/index.ts";
 
 type XwidgetControlKey = "Escape" | "Delete" | "Backspace";
 type XwidgetSpecialKey =
@@ -336,6 +339,15 @@ function runEditorSpecialKey(key: XwidgetSpecialKey, context: XwidgetKeyContext,
     }
   }
   const view = context.editor.view;
+  if (!shiftKey && (key === "ArrowUp" || key === "ArrowDown")) {
+    const moved = moveInsertLineWithDisplayMathEntry(view, key === "ArrowDown");
+    if (moved) {
+      // Refocusing CM6 after display activation would immediately blur and
+      // commit MathLive. Plain cursor movement remains focused as usual.
+      if (moved === "cursor") context.editor.focus();
+      return true;
+    }
+  }
   const command = (() => {
     switch (key) {
       case "Enter":

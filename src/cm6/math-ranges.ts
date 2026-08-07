@@ -11,6 +11,17 @@ export interface BlockMathRange {
   tex: string;
 }
 
+type BlockMathFence = {
+  from: number;
+  to: number;
+  kind: "open" | "close";
+};
+
+type BlockMathIndex = {
+  fences: readonly BlockMathFence[];
+  ranges: readonly BlockMathRange[];
+};
+
 export function scanBlockMathRanges(text: string, baseOffset = 0): BlockMathRange[] {
   const ranges: BlockMathRange[] = [];
   let lineFrom = 0;
@@ -47,117 +58,173 @@ export function scanBlockMathRanges(text: string, baseOffset = 0): BlockMathRang
 }
 
 export function scanBlockMathRangesInDoc(doc: Text): BlockMathRange[] {
-  const ranges: BlockMathRange[] = [];
-  let openFrom = -1;
-  let contentFrom = -1;
+  return scanBlockMathIndexInDoc(doc).ranges.slice();
+}
 
-  for (let lineNum = 1; lineNum <= doc.lines; lineNum++) {
-    const line = doc.line(lineNum);
-    if (openFrom < 0) {
+function scanBlockMathFencesInLines(
+  doc: Text,
+  windows: readonly { from: number; to: number }[],
+): BlockMathFence[] {
+  const fences: BlockMathFence[] = [];
+  for (const window of windows) {
+    const firstLine = doc.lineAt(Math.max(0, Math.min(window.from, doc.length))).number;
+    const lastLine = doc.lineAt(Math.max(0, Math.min(window.to, doc.length))).number;
+    for (let lineNumber = firstLine; lineNumber <= lastLine; lineNumber++) {
+      const line = doc.line(lineNumber);
       if (BLOCK_MATH_OPEN_RE.test(line.text)) {
-        openFrom = line.from;
-        contentFrom = line.to < doc.length ? line.to + 1 : line.to;
+        fences.push({ from: line.from, to: line.to, kind: "open" });
+      } else if (BLOCK_MATH_CLOSE_RE.test(line.text)) {
+        fences.push({ from: line.from, to: line.to, kind: "close" });
       }
-      continue;
     }
-    if (!BLOCK_MATH_CLOSE_RE.test(line.text)) continue;
-    ranges.push({
-      from: openFrom,
-      to: line.to,
-      contentFrom,
-      contentTo: line.from,
-      tex: doc.sliceString(contentFrom, line.from).trim(),
-    });
-    openFrom = -1;
-    contentFrom = -1;
+  }
+  return fences;
+}
+
+function rangesFromFences(
+  doc: Text,
+  fences: readonly BlockMathFence[],
+  previous: readonly BlockMathRange[] = [],
+  changes?: ChangeSet,
+): BlockMathRange[] {
+  const ranges: BlockMathRange[] = [];
+  const reusable = new Map<string, { range: BlockMathRange; contentChanged: boolean }>();
+  if (changes) {
+    for (const range of previous) {
+      const mapped = {
+        from: changes.mapPos(range.from, -1),
+        to: changes.mapPos(range.to, 1),
+        contentFrom: changes.mapPos(range.contentFrom, -1),
+        contentTo: changes.mapPos(range.contentTo, 1),
+      };
+      reusable.set(
+        `${mapped.from}:${mapped.to}:${mapped.contentFrom}:${mapped.contentTo}`,
+        { range, contentChanged: changes.touchesRange(range.contentFrom, range.contentTo) !== false },
+      );
+    }
   }
 
+  let open: BlockMathFence | null = null;
+  for (const fence of fences) {
+    if (!open) {
+      if (fence.kind === "open") open = fence;
+      continue;
+    }
+    if (fence.kind !== "close") continue;
+    const contentFrom = open.to < doc.length ? open.to + 1 : open.to;
+    const candidate = {
+      from: open.from,
+      to: fence.to,
+      contentFrom,
+      contentTo: fence.from,
+    };
+    const cached = reusable.get(
+      `${candidate.from}:${candidate.to}:${candidate.contentFrom}:${candidate.contentTo}`,
+    );
+    if (cached && !cached.contentChanged
+      && cached.range.from === candidate.from && cached.range.to === candidate.to
+      && cached.range.contentFrom === candidate.contentFrom
+      && cached.range.contentTo === candidate.contentTo) {
+      ranges.push(cached.range);
+    } else {
+      ranges.push({
+        ...candidate,
+        tex: cached && !cached.contentChanged
+          ? cached.range.tex
+          : doc.sliceString(contentFrom, fence.from).trim(),
+      });
+    }
+    open = null;
+  }
   return ranges;
 }
 
-function canMapBlockMathRanges(
-  state: EditorState,
-  ranges: readonly BlockMathRange[],
+function scanBlockMathIndexInDoc(doc: Text): BlockMathIndex {
+  const fences = scanBlockMathFencesInLines(doc, [{ from: 0, to: doc.length }]);
+  return { fences, ranges: rangesFromFences(doc, fences) };
+}
+
+function mergeLineWindows(
+  windows: Array<{ from: number; to: number }>,
+): Array<{ from: number; to: number }> {
+  windows.sort((a, b) => a.from - b.from || a.to - b.to);
+  const merged: Array<{ from: number; to: number }> = [];
+  for (const window of windows) {
+    const previous = merged[merged.length - 1];
+    if (previous && window.from <= previous.to + 1) {
+      previous.to = Math.max(previous.to, window.to);
+    } else {
+      merged.push({ ...window });
+    }
+  }
+  return merged;
+}
+
+function changedLineWindows(
+  oldDoc: Text,
+  newDoc: Text,
   changes: ChangeSet,
+): {
+  oldWindows: Array<{ from: number; to: number }>;
+  newWindows: Array<{ from: number; to: number }>;
+} {
+  const oldWindows: Array<{ from: number; to: number }> = [];
+  const newWindows: Array<{ from: number; to: number }> = [];
+  changes.iterChanges((fromA, toA, fromB, toB) => {
+    const oldStart = oldDoc.lineAt(Math.min(fromA, oldDoc.length));
+    const oldEnd = oldDoc.lineAt(Math.min(toA, oldDoc.length));
+    oldWindows.push({ from: oldStart.from, to: oldEnd.to });
+    const newStart = newDoc.lineAt(Math.min(fromB, newDoc.length));
+    const newEnd = newDoc.lineAt(Math.min(toB, newDoc.length));
+    newWindows.push({ from: newStart.from, to: newEnd.to });
+  });
+  return {
+    oldWindows: mergeLineWindows(oldWindows),
+    newWindows: mergeLineWindows(newWindows),
+  };
+}
+
+function overlapsAnyLineWindow(
+  fence: BlockMathFence,
+  windows: readonly { from: number; to: number }[],
 ): boolean {
-  let canMap = true;
-  changes.iterChanges((fromA, toA, fromB, toB, inserted) => {
-    if (!canMap) return;
-    const removed = state.doc.sliceString(fromA, toA);
-    const added = inserted.toString();
-    if (
-      removed.includes("\\[") || added.includes("\\[") ||
-      removed.includes("\\]") || added.includes("\\]")
-    ) {
-      canMap = false;
-      return;
-    }
-    const touched = ranges.find((range) => fromA <= range.to && toA >= range.from);
-    if (touched && (fromA < touched.contentFrom || toA > touched.contentTo)) {
-      canMap = false;
-      return;
-    }
-    if (!touched && fromA !== toA && fromB !== toB) {
-      canMap = false;
-    }
-  });
-  return canMap;
+  return windows.some((window) => fence.from <= window.to && fence.to >= window.from);
 }
 
-function firstChangedPosition(changes: ChangeSet): number {
-  let first = Number.POSITIVE_INFINITY;
-  changes.iterChanges((fromA) => {
-    first = Math.min(first, fromA);
-  });
-  return first;
+function updateBlockMathIndex(
+  index: BlockMathIndex,
+  oldDoc: Text,
+  newDoc: Text,
+  changes: ChangeSet,
+): BlockMathIndex {
+  const { oldWindows, newWindows } = changedLineWindows(oldDoc, newDoc, changes);
+  const fences = index.fences
+    .filter((fence) => !overlapsAnyLineWindow(fence, oldWindows))
+    .map((fence) => ({
+      ...fence,
+      from: changes.mapPos(fence.from, -1),
+      to: changes.mapPos(fence.to, 1),
+    }));
+  fences.push(...scanBlockMathFencesInLines(newDoc, newWindows));
+  fences.sort((a, b) => a.from - b.from || a.to - b.to);
+  return {
+    fences,
+    ranges: rangesFromFences(newDoc, fences, index.ranges, changes),
+  };
 }
 
-function changedLinesMightOpenMathFence(state: EditorState, changes: ChangeSet): boolean {
-  let found = false;
-  changes.iterChanges((_fromA, _toA, fromB, toB) => {
-    if (found) return;
-    const lineFrom = state.doc.lineAt(fromB).number;
-    const lineTo = state.doc.lineAt(Math.min(toB, state.doc.length)).number;
-    for (let ln = lineFrom; ln <= lineTo && !found; ln++) {
-      const lineText = state.doc.line(ln).text;
-      if (BLOCK_MATH_OPEN_RE.test(lineText) || BLOCK_MATH_CLOSE_RE.test(lineText)) found = true;
-    }
-  });
-  return found;
-}
-
-export const blockMathRangesField = StateField.define<readonly BlockMathRange[]>({
-  create: (state) => scanBlockMathRangesInDoc(state.doc),
-  update(ranges, tr) {
-    if (!tr.docChanged) return ranges;
-    if (!canMapBlockMathRanges(tr.startState, ranges, tr.changes)) {
-      if (ranges.length === 0 && !changedLinesMightOpenMathFence(tr.state, tr.changes)) return ranges;
-      return scanBlockMathRangesInDoc(tr.state.doc);
-    }
-    const firstChanged = firstChangedPosition(tr.changes);
-    return ranges.map((range) => {
-      if (range.to < firstChanged) return range;
-      const from = tr.changes.mapPos(range.from, -1);
-      const to = tr.changes.mapPos(range.to, 1);
-      const contentFrom = tr.changes.mapPos(range.contentFrom, -1);
-      const contentTo = tr.changes.mapPos(range.contentTo, 1);
-      const contentChanged = tr.changes.touchesRange(range.contentFrom, range.contentTo);
-      return {
-        ...range,
-        from,
-        to,
-        contentFrom,
-        contentTo,
-        tex: contentChanged ? tr.state.doc.sliceString(contentFrom, contentTo).trim() : range.tex,
-      };
-    });
+export const blockMathRangesField = StateField.define<BlockMathIndex>({
+  create: (state) => scanBlockMathIndexInDoc(state.doc),
+  update(index, tr) {
+    if (!tr.docChanged) return index;
+    return updateBlockMathIndex(index, tr.startState.doc, tr.state.doc, tr.changes);
   },
 });
 
 export const blockMathRangesExtension: Extension = blockMathRangesField;
 
 export function getBlockMathRanges(state: EditorState): readonly BlockMathRange[] {
-  return state.field(blockMathRangesField, false) ?? scanBlockMathRangesInDoc(state.doc);
+  return state.field(blockMathRangesField, false)?.ranges ?? scanBlockMathRangesInDoc(state.doc);
 }
 
 export function blockMathRangesOverlapping(

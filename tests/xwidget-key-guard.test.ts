@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
+import { EditorSelection } from "@codemirror/state";
 
 import { createEditor } from "../src/lib.ts";
 import { createVimLite } from "../aaronnote/vim-lite.ts";
@@ -739,6 +740,89 @@ describe("xwidget key guard", () => {
       expect(vim.handleKey({ key: "j" })).toBe(true);
       expect(editor.getMarkdownSelection().from).toBe(4);
     } finally {
+      editor.destroy();
+      host.remove();
+    }
+  });
+
+  test("insert vertical arrows enter display math as an editable row", () => {
+    const host = withMounted(document.createElement("section"));
+    const markdown = "Before\n\\[\nx + y\n\\]\nAfter";
+    const editor = createEditor(host, { initialContent: markdown });
+    const vim = createVimLite(editor, host);
+    const before = markdown.indexOf("Before");
+    const formula = markdown.indexOf("\\[");
+    const after = markdown.indexOf("After");
+    const move = vi.spyOn(editor.view, "moveVertically")
+      .mockReturnValue(EditorSelection.cursor(after));
+    vim.setMode("insert");
+    try {
+      editor.setMarkdownSelection(before);
+      const down = new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true });
+      Object.defineProperty(down, "target", { value: document.body });
+      expect(handleXwidgetSpecialKeydown(down, { editor, editorHost: host, vim })).toBe(true);
+      expect(down.defaultPrevented).toBe(true);
+      expect(move).toHaveBeenCalledTimes(1);
+      expect(editor.getMarkdownSelection()).toEqual({ from: formula, to: formula });
+      expect(document.querySelector(".cm-math-block-editor")).toBeTruthy();
+    } finally {
+      move.mockRestore();
+      editor.destroy();
+      host.remove();
+    }
+  });
+
+  test("insert ArrowUp enters display math from below and native upward exits above", () => {
+    const host = withMounted(document.createElement("section"));
+    const markdown = "Before\n\\[\nx + y\n\\]\nAfter";
+    const editor = createEditor(host, { initialContent: markdown });
+    const vim = createVimLite(editor, host);
+    const before = markdown.indexOf("Before");
+    const formula = markdown.indexOf("\\[");
+    const after = markdown.indexOf("After");
+    const move = vi.spyOn(editor.view, "moveVertically")
+      .mockReturnValue(EditorSelection.cursor(before));
+    vim.setMode("insert");
+    editor.setMarkdownSelection(after);
+    try {
+      const up = new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true });
+      Object.defineProperty(up, "target", { value: document.body });
+      expect(handleXwidgetSpecialKeydown(up, { editor, editorHost: host, vim })).toBe(true);
+      expect(editor.getMarkdownSelection()).toEqual({ from: formula, to: formula });
+      expect(document.querySelector(".cm-math-block-editor")).toBeTruthy();
+
+      document.querySelector<HTMLElement>(".cm-math-block-editor")!
+        .dispatchEvent(new CustomEvent("aaronnote:display-math-commit", {
+          detail: { direction: "upward" },
+        }));
+      expect(document.querySelector(".cm-math-block-editor")).toBeNull();
+      expect(editor.getMarkdownSelection()).toEqual({ from: formula, to: formula });
+    } finally {
+      move.mockRestore();
+      editor.destroy();
+      host.remove();
+    }
+  });
+
+  test("insert vertical arrows do not match or activate inline formulae", () => {
+    const host = withMounted(document.createElement("section"));
+    const markdown = "Before\ntext \\(x + y\\) here\nAfter";
+    const editor = createEditor(host, { initialContent: markdown });
+    const vim = createVimLite(editor, host);
+    const before = markdown.indexOf("Before");
+    const after = markdown.indexOf("After");
+    const move = vi.spyOn(editor.view, "moveVertically")
+      .mockReturnValue(EditorSelection.cursor(after));
+    vim.setMode("insert");
+    editor.setMarkdownSelection(before);
+    try {
+      const down = new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true });
+      Object.defineProperty(down, "target", { value: document.body });
+      expect(handleXwidgetSpecialKeydown(down, { editor, editorHost: host, vim })).toBe(true);
+      expect(editor.getMarkdownSelection()).toEqual({ from: after, to: after });
+      expect(document.querySelector(".cm-math-block-editor, .cm-inline-math-editor")).toBeNull();
+    } finally {
+      move.mockRestore();
       editor.destroy();
       host.remove();
     }

@@ -1,6 +1,8 @@
 import { EditorSelection, EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 import {
+  cancelPointerSelection,
   extendBackwardsOverEmptyLines,
   extendForwardsOverEmptyLines,
   getMousedownSelection,
@@ -28,6 +30,101 @@ describe("visual pointer selection state", () => {
     state = state.update({ effects: pointerSelectionEffect.of(false) }).state;
     expect(isPointerSelecting(state)).toBe(false);
     expect(getMousedownSelection(state)).toBeUndefined();
+  });
+
+  test("finishes a drag when mouseup occurs outside the editor", async () => {
+    const host = document.createElement("div");
+    const outside = document.createElement("button");
+    document.body.append(host, outside);
+    const view = new EditorView({
+      state: EditorState.create({ doc: "alpha beta", extensions: [pointerSelectionExtension] }),
+      parent: host,
+    });
+    // happy-dom has no layout engine. Keep CodeMirror's native mousedown path
+    // active while supplying the one coordinate lookup that path requires.
+    Object.defineProperty(view, "posAndSideAtCoords", {
+      configurable: true,
+      value: () => ({ pos: 0, assoc: 1 }),
+    });
+
+    try {
+      view.contentDOM.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+      expect(isPointerSelecting(view.state)).toBe(true);
+
+      outside.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 0 }));
+      await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
+
+      expect(isPointerSelecting(view.state)).toBe(false);
+      expect(getMousedownSelection(view.state)).toBeUndefined();
+    } finally {
+      view.destroy();
+      host.remove();
+      outside.remove();
+    }
+  });
+
+  test("pointer cancellation can atomically collapse a stale line selection", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const view = new EditorView({
+      state: EditorState.create({ doc: "alpha\nbeta", extensions: [pointerSelectionExtension] }),
+      parent: host,
+    });
+    try {
+      view.dispatch({
+        selection: { anchor: 0, head: 6 },
+        effects: pointerSelectionEffect.of(true),
+      });
+      cancelPointerSelection(view, 6);
+      expect(isPointerSelecting(view.state)).toBe(false);
+      expect(view.state.selection.main).toMatchObject({ anchor: 6, head: 6 });
+      expect(getMousedownSelection(view.state)).toBeUndefined();
+    } finally {
+      view.destroy();
+      host.remove();
+    }
+  });
+
+  test("pointer end drops an orphaned secondary highlight behind the main cursor", async () => {
+    const host = document.createElement("div");
+    const outside = document.createElement("button");
+    document.body.append(host, outside);
+    const selection = EditorSelection.create([
+      EditorSelection.range(7, 16),
+      EditorSelection.cursor(0),
+    ], 1);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: "cursor\nstale row",
+        selection,
+        extensions: [EditorState.allowMultipleSelections.of(true), pointerSelectionExtension],
+      }),
+      parent: host,
+    });
+    Object.defineProperty(view, "posAndSideAtCoords", {
+      configurable: true,
+      value: () => ({ pos: 0, assoc: 1 }),
+    });
+
+    try {
+      expect(view.state.selection.main.empty).toBe(true);
+      expect(view.state.selection.ranges.some((range) => !range.empty)).toBe(true);
+
+      // A secondary-button press starts our lifecycle listener without asking
+      // happy-dom to synthesize a native primary-button selection update.
+      view.contentDOM.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 2 }));
+      expect(isPointerSelecting(view.state)).toBe(true);
+      outside.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 2 }));
+      await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
+
+      expect(isPointerSelecting(view.state)).toBe(false);
+      expect(view.state.selection.ranges).toHaveLength(1);
+      expect(view.state.selection.main).toMatchObject({ anchor: 0, head: 0 });
+    } finally {
+      view.destroy();
+      host.remove();
+      outside.remove();
+    }
   });
 
   test("keeps Overleaf range and empty-line helpers", () => {

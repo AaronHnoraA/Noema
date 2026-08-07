@@ -9,6 +9,7 @@ import { scanCodeRanges } from "../src/cm6/code-ranges.ts";
 import { getBlockMathRanges, rangeOverlapsAny } from "../src/cm6/math-ranges.ts";
 import { scanInlineMathRanges } from "../src/inline-math.ts";
 import { getOrgEnvHeadingRanges } from "../src/cm6/extensions/visual/widgets/block-extras.ts";
+import { cancelPointerSelection } from "../src/cm6/extensions/visual/selection.ts";
 import {
   activateBlockMath,
   formulaSourceRangeAtPosition,
@@ -780,16 +781,20 @@ export function createVimLite(
   }
 
   function escapeToNormal(): void {
-    if (mode !== "insert") {
-      setMode("normal");
-      return;
+    let target = currentHead(editor);
+    if (mode === "insert") {
+      const text = doc(editor);
+      target = insertEntry?.doc === text && insertEntry.boundary === currentHead(editor)
+        ? insertEntry.returnPos
+        : insertExitPosition(text, currentHead(editor));
+    } else if (mode === "visual" || mode === "visual-line") {
+      target = visualHead ?? target;
     }
-    const text = doc(editor);
-    const target = insertEntry?.doc === text && insertEntry.boundary === currentHead(editor)
-      ? insertEntry.returnPos
-      : insertExitPosition(text, currentHead(editor));
     setMode("normal");
-    setNormalPos(editor, target);
+    // End the pointer lifecycle and enforce the collapsed CM6 selection in
+    // one final transaction. This remains correct when a host mouseup missed
+    // Vim-mode synchronization or when a linewise selection owns a newline.
+    cancelPointerSelection(editor.view, normalCharPosition(doc(editor), target));
   }
 
   // The tracked moving end of the visual selection. Prefer the local
