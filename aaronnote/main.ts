@@ -115,6 +115,7 @@ import {
   snippetLabel,
   snippetPopupKeyAction,
   snippetScore,
+  stabilizeSnippetPopupRefresh,
 } from "./snippets.ts";
 import { MathSnippetIndex } from "./math-snippet-index.ts";
 import { collectTagSuggestions, createTagPicker } from "./tag-picker.ts";
@@ -8306,6 +8307,7 @@ function renderSnippetPopup(prefix: string, rect: { left: number; top: number; b
   }
   snippetRenderKey = nextKey;
   snippetPopup.innerHTML = "";
+  let pointerPosition: { x: number; y: number } | null = null;
   snippetPopupItems.forEach((snippet, index) => {
     const button = document.createElement("button");
     button.type = "button";
@@ -8343,7 +8345,13 @@ function renderSnippetPopup(prefix: string, rect: { left: number; top: number; b
     });
     // Do not let a popup appearing under a stationary pointer steal the
     // keyboard selection. A real pointer movement still selects the row.
-    button.addEventListener("pointermove", () => {
+    button.addEventListener("pointermove", (event) => {
+      if (!pointerPosition) {
+        pointerPosition = { x: event.clientX, y: event.clientY };
+        return;
+      }
+      if (pointerPosition.x === event.clientX && pointerPosition.y === event.clientY) return;
+      pointerPosition = { x: event.clientX, y: event.clientY };
       if (snippetPopupIndex === index) return;
       snippetPopupIndex = index;
       updateSnippetPopupActiveOption();
@@ -8385,14 +8393,20 @@ function showSnippetPopup(
   rect: { left: number; top: number; bottom: number } | null,
   chooseHandler: ((snippet: SnippetSummary) => boolean) | null = null,
 ): void {
+  const sameQuery = !snippetPopup.hidden
+    && snippetPopup.dataset.prefix === prefix
+    && Boolean(snippetPopupChooseHandler) === Boolean(chooseHandler);
+  if (sameQuery) {
+    const stable = stabilizeSnippetPopupRefresh(snippetPopupItems, items, snippetPopupIndex);
+    items = stable.items;
+    snippetPopupIndex = stable.selectedIndex;
+  } else {
+    snippetPopupIndex = 0;
+  }
   const matchKey = `${prefix}\n${items.map((snippet) => `${snippet.kind}:${snippet.mode}:${snippet.group}:${snippet.key}:${snippet.name}`).join("\n")}`;
   snippetDeleteBefore = deleteBefore;
-  if (matchKey !== snippetPopupMatchKey) {
-    snippetPopupIndex = 0;
-    snippetRenderKey = "";
-  } else {
-    snippetPopupIndex = Math.min(snippetPopupIndex, items.length - 1);
-  }
+  if (matchKey !== snippetPopupMatchKey) snippetRenderKey = "";
+  snippetPopupIndex = Math.max(0, Math.min(snippetPopupIndex, items.length - 1));
   snippetPopupMatchKey = matchKey;
   snippetPopupItems = items;
   snippetPopupChooseHandler = chooseHandler;

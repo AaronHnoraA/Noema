@@ -391,7 +391,7 @@ describe("copilot plugin insertion", () => {
     }
   });
 
-  test("cmd-shift-right-bracket enters accept-to-char mode on bracket-key layouts", async () => {
+  test("cmd-shift-right-bracket starts an s-jump inside the visible suggestion", async () => {
     const host = document.createElement("div");
     const target = document.createElement("button");
     host.appendChild(target);
@@ -461,11 +461,17 @@ describe("copilot plugin insertion", () => {
         bubbles: true,
         cancelable: true,
       }));
-      target.dispatchEvent(new KeyboardEvent("keydown", {
-        key: "B",
-        bubbles: true,
-        cancelable: true,
-      }));
+
+      const beta = [...document.querySelectorAll<HTMLElement>(".aaronnote-copilot-jump-target")]
+        .find((candidate) => candidate.textContent === "B");
+      expect(beta?.dataset.copilotJumpLabel).toBeTruthy();
+      for (const key of beta!.dataset.copilotJumpLabel!) {
+        target.dispatchEvent(new KeyboardEvent("keydown", {
+          key,
+          bubbles: true,
+          cancelable: true,
+        }));
+      }
 
       expect(editor.insertions).toEqual(["AlphaB"]);
       expect(editor.markdown).toBe("prefixAlphaB");
@@ -774,6 +780,78 @@ describe("copilot plugin insertion", () => {
       handlers.selectionchange?.();
       handlers.selectionchange?.();
       expect(editor.cursorContextCalls - before).toBe(1);
+    } finally {
+      cleanup();
+      restoreApi();
+      host.remove();
+    }
+  });
+
+  test("selectionchange and keyup keep a visible suggestion at the same editor cursor", async () => {
+    const host = document.createElement("div");
+    const target = document.createElement("button");
+    host.appendChild(target);
+    document.body.appendChild(host);
+
+    const editor = new FakeEditor("prefix");
+    const handlers: {
+      action?: (action: string) => void;
+      selectionchange?: () => void;
+      keyup?: () => void;
+    } = {};
+    let inlineRequests = 0;
+    const restoreApi = installNativeCopilot(async (action) => {
+      if (action === "inline") {
+        inlineRequests += 1;
+        return {
+          items: [{
+            insertText: "prefixStable",
+            range: { from: 0, to: editor.markdown.length },
+            item: { insertText: "prefixStable" },
+          }],
+        };
+      }
+      return { ok: true };
+    });
+    const cleanup = setupCopilot({
+      editor,
+      host,
+      currentFile: () => "/tmp/copilot.md",
+      vimMode: () => "insert",
+      setStatus: () => {},
+      onChange: () => () => {},
+      onKeyDown: () => () => {},
+      onAction: (handler: (action: string) => void) => {
+        handlers.action = handler;
+        return () => { delete handlers.action; };
+      },
+      onSettingsChange: () => () => {},
+      getSettings: () => ({ idleDelayMs: 999_999, largeBufferThresholdKb: 512 }),
+      onDocumentEvent: <K extends keyof DocumentEventMap>(type: K, handler: (event: DocumentEventMap[K]) => void) => {
+        if (type === "selectionchange") handlers.selectionchange = handler as () => void;
+        if (type === "keyup") handlers.keyup = handler as () => void;
+        return () => {};
+      },
+      jumpSnippetNext: () => false,
+      jumpSnippetPrevious: () => false,
+      forwardDelimiter: () => false,
+      backwardDelimiter: () => false,
+    });
+
+    try {
+      target.focus();
+      handlers.action?.("trigger");
+      await waitForMicrotasks();
+      await waitForMicrotasks();
+      expect(document.querySelector(".aaronnote-copilot-ghost")?.textContent).toBe("Stable");
+
+      handlers.selectionchange?.();
+      handlers.keyup?.();
+      handlers.selectionchange?.();
+
+      expect(document.querySelector(".aaronnote-copilot-ghost")?.textContent).toBe("Stable");
+      expect((document.querySelector(".aaronnote-copilot-ghost") as HTMLElement).hidden).toBe(false);
+      expect(inlineRequests).toBe(1);
     } finally {
       cleanup();
       restoreApi();

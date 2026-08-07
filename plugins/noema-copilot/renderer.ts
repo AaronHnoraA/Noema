@@ -1,3 +1,5 @@
+import { buildVimJumpLabels, VIM_JUMP_LABELS } from "../../src/cm6/vim-jump.ts";
+
 type Rect = { left: number; top: number; bottom: number };
 type EditorLike = {
   getMarkdown(): string;
@@ -56,6 +58,11 @@ type InlineResponse = {
 type VisibleCompletion = InlineChoice & {
   acceptedLength: number;
   acceptedBaseLength: number;
+};
+type CompletionJumpCandidate = {
+  length: number;
+  label: string;
+  text: string;
 };
 type PluginSettings = Record<string, string | number | boolean>;
 let logRecording = false;
@@ -157,6 +164,22 @@ function printableKey(event: KeyboardEvent): string {
   if (event.metaKey || event.ctrlKey || event.altKey) return "";
   if (event.key.length !== 1) return "";
   return event.key;
+}
+
+/** Character boundaries shown by the one-line ghost, bounded against huge LS responses. */
+function completionJumpCandidates(text: string, limit = 256): CompletionJumpCandidate[] {
+  const newline = text.indexOf("\n");
+  const line = text.slice(0, newline < 0 ? text.length : newline);
+  const parts = [...line].slice(0, Math.max(0, limit));
+  if (parts.length === 0 && newline === 0) {
+    return [{ length: 1, label: buildVimJumpLabels(1)[0] ?? "a", text: "↵" }];
+  }
+  const labels = buildVimJumpLabels(parts.length);
+  let length = 0;
+  return parts.map((part, index) => {
+    length += part.length;
+    return { length, label: labels[index]!, text: part };
+  });
 }
 
 function nextWordLength(text: string): number {
@@ -314,13 +337,33 @@ export function setupCopilot(context: Context): () => void {
   color: rgb(156 199 255 / 68%);
   text-shadow: 0 1px 2px rgb(0 0 0 / 46%);
 }
+.aaronnote-copilot-jump-target {
+  position: relative;
+}
+.aaronnote-copilot-jump-target[data-copilot-jump-label]::after {
+  content: attr(data-copilot-jump-label);
+  position: absolute;
+  inset: -0.18em auto auto 0;
+  z-index: 1;
+  min-width: 1ch;
+  padding: 0 0.08em;
+  border-radius: 0.18em;
+  color: #111827;
+  background: #f7d774;
+  font-size: 0.72em;
+  font-weight: 800;
+  line-height: 1.05;
+  text-align: center;
+  text-shadow: none;
+}
 `;
   document.head.appendChild(style);
 
   let timer = 0;
   let seq = 0;
   let accepting = false;
-  let pendingToChar = false;
+  let jumpCandidates: CompletionJumpCandidate[] | null = null;
+  let jumpPrefix = "";
   let visible: VisibleCompletion | null = null;
   let settings = normalizeSettings(context.getSettings());
   let lastScheduleKey = "";
@@ -329,8 +372,10 @@ export function setupCopilot(context: Context): () => void {
   const cleanups: Array<() => void> = [];
 
   function clearCompletion(): void {
+    seq += 1;
     visible = null;
-    pendingToChar = false;
+    jumpCandidates = null;
+    jumpPrefix = "";
     ghost.hidden = true;
   }
 
@@ -359,7 +404,24 @@ export function setupCopilot(context: Context): () => void {
     const top = viewportHeight > 0
       ? Math.min(Math.max(0, rect.top), Math.max(0, viewportHeight - 32))
       : Math.max(0, rect.top);
-    ghost.textContent = text.split("\n", 1)[0] || " ";
+    const line = text.split("\n", 1)[0] || " ";
+    if (!jumpCandidates) {
+      ghost.textContent = line;
+    } else {
+      ghost.replaceChildren();
+      for (const candidate of jumpCandidates) {
+        const part = document.createElement("span");
+        part.className = "aaronnote-copilot-jump-target";
+        part.textContent = candidate.text;
+        if (candidate.label.startsWith(jumpPrefix)) {
+          part.dataset.copilotJumpLabel = candidate.label.slice(jumpPrefix.length) || candidate.label;
+        }
+        ghost.appendChild(part);
+      }
+      if (line.length > jumpCandidates.at(-1)!.length) {
+        ghost.append(line.slice(jumpCandidates.at(-1)!.length));
+      }
+    }
     ghost.style.left = `${left}px`;
     ghost.style.top = `${top}px`;
     ghost.style.maxWidth = viewportWidth > 0 ? `${Math.max(80, viewportWidth - left - margin)}px` : "";
@@ -458,16 +520,25 @@ export function setupCopilot(context: Context): () => void {
     if (!eligibleShell()) {
       window.clearTimeout(timer);
       clearCompletion();
+      lastScheduleKey = "";
+      if (focusState === "focused") notifyBlur("inactive");
       return;
     }
     const key = scheduleKey();
-    if (key === lastScheduleKey && !visible) return;
+    if (key === lastScheduleKey) {
+      // Browser selectionchange/keyup may fire without an editor movement.
+      // Preserve the already rendered suggestion and avoid another LS request.
+      if (visible) renderCompletion();
+      return;
+    }
+    clearCompletion();
     lastScheduleKey = key;
     schedule();
   }
 
   async function requestCompletion(): Promise<void> {
     if (!eligible()) return;
+    lastScheduleKey = scheduleKey();
     await notifyFocus("inline");
     if (!eligible()) return;
     const fullOffset = completionOffset(context.editor);
@@ -558,17 +629,56 @@ export function setupCopilot(context: Context): () => void {
     return acceptLength(nextWordLength(visibleText(visible)));
   }
 
-  function acceptToChar(ch: string): boolean {
+  function beginCompletionJump(): boolean {
     if (!visible) return false;
-    const remaining = visibleText(visible);
-    const index = remaining.indexOf(ch);
-    if (index < 0) {
-      context.setStatus(`Copilot: ${ch} not in completion`);
-      pendingToChar = false;
+    const candidates = completionJumpCandidates(visibleText(visible));
+    if (candidates.length === 0) return false;
+    jumpCandidates = candidates;
+    jumpPrefix = "";
+    context.setStatus("Copilot jump: type a label, Esc cancels");
+    renderCompletion();
+    return true;
+  }
+
+  function handleCompletionJump(event: KeyboardEvent): boolean {
+    if (!jumpCandidates) return false;
+    if (event.key === "Escape") {
+      jumpCandidates = null;
+      jumpPrefix = "";
+      context.setStatus("Copilot jump canceled");
+      renderCompletion();
+      event.preventDefault();
       return true;
     }
-    pendingToChar = false;
-    return acceptLength(index + ch.length);
+    const key = printableKey(event).toLowerCase();
+    if (!key) return false;
+    event.preventDefault();
+    if (!VIM_JUMP_LABELS.includes(key)) {
+      jumpCandidates = null;
+      jumpPrefix = "";
+      context.setStatus("Copilot jump canceled: invalid label");
+      renderCompletion();
+      return true;
+    }
+    const prefix = `${jumpPrefix}${key}`;
+    const matches = jumpCandidates.filter((candidate) => candidate.label.startsWith(prefix));
+    if (matches.length === 0) {
+      jumpCandidates = null;
+      jumpPrefix = "";
+      context.setStatus("Copilot jump canceled: no label");
+      renderCompletion();
+      return true;
+    }
+    const exact = matches.find((candidate) => candidate.label === prefix);
+    if (exact) {
+      jumpCandidates = null;
+      jumpPrefix = "";
+      return acceptLength(exact.length);
+    }
+    jumpPrefix = prefix;
+    context.setStatus(`Copilot jump: ${matches.length} targets`);
+    renderCompletion();
+    return true;
   }
 
   function handleKey(event: KeyboardEvent): boolean {
@@ -577,18 +687,7 @@ export function setupCopilot(context: Context): () => void {
     // that editor instead of invoking source-snippet or delimiter callbacks.
     if (context.isActive && !context.isActive()) return false;
     if (!targetInHost(context.host, event.target)) return false;
-    if (pendingToChar) {
-      if (event.key === "Escape") {
-        pendingToChar = false;
-        context.setStatus("Copilot to-char canceled");
-        event.preventDefault();
-        return true;
-      }
-      const ch = printableKey(event);
-      if (!ch) return false;
-      event.preventDefault();
-      return acceptToChar(ch);
-    }
+    if (jumpCandidates) return handleCompletionJump(event);
     if (context.vimMode() !== "insert" || !primaryOnly(event)) return false;
     if (!event.shiftKey && forwardKeys.has(event.key)) {
       const handled = visible ? acceptAll() : context.jumpSnippetNext() || context.forwardDelimiter();
@@ -607,10 +706,9 @@ export function setupCopilot(context: Context): () => void {
     }
     if (toCharShortcut(event)) {
       if (visible) {
-        pendingToChar = true;
-        context.setStatus("Copilot to char");
-        event.preventDefault();
-        return true;
+        const handled = beginCompletionJump();
+        if (handled) event.preventDefault();
+        return handled;
       }
       const handled = context.jumpSnippetNext() || context.forwardDelimiter();
       if (handled) event.preventDefault();
@@ -694,7 +792,6 @@ export function setupCopilot(context: Context): () => void {
   }));
   cleanups.push(context.onDocumentEvent("selectionchange", () => {
     if (accepting) return;
-    clearCompletion();
     scheduleIfChanged();
   }));
   cleanups.push(context.onDocumentEvent("mouseup", scheduleIfChanged));
