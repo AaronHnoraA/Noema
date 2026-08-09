@@ -3,7 +3,7 @@
 # key: thm
 # group: Noema local
 # --
-#+begin theorem ${1:name} {#`(my/noema-new-id "block")`}
+#+begin theorem ${1:name}
 ${2:Statement.}
 #+end theorem
 $0
