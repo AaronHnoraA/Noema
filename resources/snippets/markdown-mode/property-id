@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Property block with ID
+# key: propbb
+# group: Noema blocks
+# --
+#+begin property ${1:name} {#`(my/noema-new-id "block")`}
+${2:Property.}
+#+end property
+$0

@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Claim block with ID
+# key: claimm
+# group: Noema blocks
+# --
+#+begin claim ${1:name} {#`(my/noema-new-id "block")`}
+${2:Claim.}
+#+end claim
+$0

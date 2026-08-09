@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Axiom block with ID
+# key: axiomm
+# group: Noema blocks
+# --
+#+begin axiom ${1:name} {#`(my/noema-new-id "block")`}
+${2:Statement.}
+#+end axiom
+$0

@@ -57,6 +57,7 @@ import { tocIndexFromState, type MarkdownHeading } from "../../../toc-index.ts";
 import { scanInlineCommands } from "../../../../command-syntax.ts";
 import { semanticOutlineFromCommand, type SemanticOutline } from "../../../../semantic-outline.ts";
 import { highlightCodeForEditor } from "../../../../code-highlight-async.ts";
+import { parseOrgEnvIdentityTitle, shortBlockId } from "../../../../../shared/block-identity.mjs";
 import type { JupyterWidgetKernelMessage } from "../../../../jupyter-widget-runtime.ts";
 import type { JupyterMarkdownParser, WidgetMountFn } from "../../../../jupyter-rendermime.ts";
 import { ceilCommandGeneratedId as sharedCeilCommandGeneratedId, ceilLanguageForKernel } from "./ceil-shared.ts";
@@ -113,6 +114,8 @@ export interface OrgEnvBlock {
   closeTo: number;
   kind: string;
   title: string;
+  blockId: string;
+  blockIdFrom: number;
   body: string;
   titleAnchor: number;
   depth: number;
@@ -126,6 +129,8 @@ export interface OrgEnvContext {
 interface OrgEnvOpenLineInfo {
   kind: string;
   title: string;
+  blockId: string;
+  blockIdFrom: number;
   titleAnchor: number;
 }
 
@@ -138,6 +143,8 @@ declare global {
   interface Window {
     AaronnoteCurrentFile?: () => string;
     AaronnoteResolveAssetUrl?: (src: string) => string;
+    AaronnoteCopyBlockTarget?: (blockId: string) => Promise<string>;
+    AaronnoteBlockTarget?: (blockId: string) => string;
     // Set by the block-extras ViewPlugin so the app shell can force @@cell
     // widgets to re-read their hidden source after an out-of-band edit (e.g.
     // the user saved the script buffer in Emacs). See notifyCeilScriptSaved.
@@ -235,7 +242,9 @@ function scanOrgEnvBlocks(
       i = lineEndPos + 1;
       continue;
     }
-    const title = (openMatch[2] ?? "").trim();
+    const rawTitle = (openMatch[2] ?? "").trim();
+    const identity = parseOrgEnvIdentityTitle(kind, rawTitle);
+    const title = identity.title;
     const blockFrom = i;
     const bodyStart = lineEndPos + 1;
 
@@ -257,6 +266,7 @@ function scanOrgEnvBlocks(
     if (closeFrom < 0) { i = lineEndPos + 1; continue; }
 
     const titleIndex = openMatch[2] ? line.indexOf(openMatch[2]) : -1;
+    const blockIdIndex = identity.blockId ? line.lastIndexOf(identity.blockId) : -1;
     const body = text.slice(bodyStart, closeFrom);
     results.push({
       from: blockFrom,
@@ -269,6 +279,8 @@ function scanOrgEnvBlocks(
       closeTo,
       kind,
       title,
+      blockId: identity.blockId,
+      blockIdFrom: blockIdIndex >= 0 ? blockFrom + blockIdIndex : -1,
       body,
       titleAnchor: titleIndex >= 0 ? blockFrom + titleIndex : lineEndPos,
       depth: depthLevel,
@@ -286,6 +298,7 @@ function scanOrgEnvBlocks(
           closeFrom: bodyStart + nested.closeFrom,
           closeTo: bodyStart + nested.closeTo,
           titleAnchor: bodyStart + nested.titleAnchor,
+          blockIdFrom: nested.blockIdFrom >= 0 ? bodyStart + nested.blockIdFrom : -1,
         });
       }
     }
@@ -334,13 +347,17 @@ function parseOrgEnvOpenLine(line: string): OrgEnvOpenLineInfo | null {
   const match = ORG_ENV_OPEN_LINE_RE.exec(line);
   if (!match) return null;
   const rawTitle = match[4] ?? "";
-  const title = rawTitle.trim();
+  const identity = parseOrgEnvIdentityTitle(match[2], rawTitle);
+  const title = identity.title;
+  const blockIdIndex = identity.blockId ? line.lastIndexOf(identity.blockId) : -1;
   const titleAnchor = title.length > 0
     ? match[1].length + match[2].length + (match[3] ?? "").length + Math.max(0, rawTitle.search(/\S/))
     : line.length;
   return {
     kind: match[2].toLowerCase(),
     title,
+    blockId: identity.blockId,
+    blockIdFrom: blockIdIndex,
     titleAnchor,
   };
 }
@@ -1306,18 +1323,20 @@ function patchBlockExtraRangesNearChanges(
 class OrgEnvOpenWidget extends MeasuredWidget {
   kind: string;
   title: string;
+  blockId: string;
   anchor: number;
   depth: number;
 
-  constructor(kind: string, title: string, anchor: number, depth: number) {
+  constructor(kind: string, title: string, blockId: string, anchor: number, depth: number) {
     super();
     this.kind = kind;
     this.title = title;
+    this.blockId = blockId;
     this.anchor = anchor;
     this.depth = depth;
   }
 
-  protected measureKey(): string { return "oopen:" + this.kind + ":" + this.title; }
+  protected measureKey(): string { return "oopen:" + this.kind + ":" + this.title + ":" + this.blockId; }
 
   protected measureGroupKey(): string { return "oopen:" + this.kind; }
 
@@ -1326,6 +1345,7 @@ class OrgEnvOpenWidget extends MeasuredWidget {
   eq(other: OrgEnvOpenWidget): boolean {
     return this.kind === other.kind
       && this.title === other.title
+      && this.blockId === other.blockId
       && this.anchor === other.anchor
       && this.depth === other.depth;
   }
@@ -1344,6 +1364,26 @@ class OrgEnvOpenWidget extends MeasuredWidget {
     title.dataset.empty = this.title ? "false" : "true";
     title.innerHTML = renderMarkdownInlineHTML(this.title);
     div.append(label, title);
+    if (this.blockId) {
+      const badge = document.createElement("button");
+      badge.type = "button";
+      badge.className = "org-env-block-id";
+      badge.textContent = `#${shortBlockId(this.blockId)}`;
+      badge.title = window.AaronnoteBlockTarget?.(this.blockId) || this.blockId;
+      badge.setAttribute("aria-label", `Copy block reference ${this.blockId}`);
+      badge.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      });
+      badge.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void window.AaronnoteCopyBlockTarget?.(this.blockId).then((target) => {
+          if (target) badge.title = target;
+        });
+      });
+      div.append(badge);
+    }
     div.addEventListener("mousedown", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -3191,7 +3231,7 @@ function addOrgEnvBoundaryDecos(
   if (!openActive) {
     decos.push(
       Decoration.replace({
-        widget: new OrgEnvOpenWidget(block.kind, block.title, block.titleAnchor, block.depth),
+        widget: new OrgEnvOpenWidget(block.kind, block.title, block.blockId, block.titleAnchor, block.depth),
         block: true,
       }).range(block.openFrom, block.openTo),
     );
@@ -3256,6 +3296,40 @@ const dirtyTikzBlocksField = StateField.define<ReadonlySet<string>>({
 
 function orgEnvBlocksFromState(state: EditorState): readonly OrgEnvBlock[] {
   return state.field(orgEnvBlocksField, false) ?? scanOrgEnvBlocks(state.doc.toString(), 0, 0, blockExtraExcludedRanges(state));
+}
+
+export type OrgEnvBlockIdentity = {
+  id: string;
+  kind: string;
+  title: string;
+  from: number;
+  to: number;
+};
+
+const orgEnvBlockIdentityCache = new WeakMap<readonly OrgEnvBlock[], readonly OrgEnvBlockIdentity[]>();
+
+/** Block identities already maintained by the incremental org-environment state field. */
+export function getOrgEnvBlockIdentities(state: EditorState): readonly OrgEnvBlockIdentity[] {
+  const blocks = orgEnvBlocksFromState(state);
+  const cached = orgEnvBlockIdentityCache.get(blocks);
+  if (cached) return cached;
+  const identities = blocks
+    .filter((block) => Boolean(block.blockId))
+    .map((block) => ({ id: block.blockId, kind: block.kind, title: block.title, from: block.openFrom, to: block.to }));
+  orgEnvBlockIdentityCache.set(blocks, identities);
+  return identities;
+}
+
+export function orgEnvBlockIdentityAtPosition(state: EditorState, position: number): OrgEnvBlockIdentity | null {
+  return getOrgEnvBlockIdentities(state)
+    .filter((block) => block.from <= position && position <= block.to)
+    .sort((a, b) => (a.to - a.from) - (b.to - b.from))[0] ?? null;
+}
+
+export function orgEnvBlockIdentityPosition(state: EditorState, blockId: string): number | null {
+  const clean = String(blockId || "").trim().toLowerCase();
+  if (!clean) return null;
+  return getOrgEnvBlockIdentities(state).find((block) => block.id.toLowerCase() === clean)?.from ?? null;
 }
 
 export interface OrgEnvHeadingRange {
@@ -3325,6 +3399,7 @@ function mapOrgEnvBlock(block: OrgEnvBlock, changes: ChangeSet, doc: Text): OrgE
       ? doc.sliceString(bodyFrom, bodyTo)
       : block.body,
     titleAnchor: changes.mapPos(block.titleAnchor),
+    blockIdFrom: block.blockIdFrom >= 0 ? changes.mapPos(block.blockIdFrom) : -1,
   };
 }
 
@@ -3403,6 +3478,8 @@ function patchOrgEnvBlocksForTitleChange(
     bodyFrom: Math.min(newLine.to + 1, newDoc.length),
     kind: newInfo.kind,
     title: newInfo.title,
+    blockId: newInfo.blockId,
+    blockIdFrom: newInfo.blockIdFrom >= 0 ? newLine.from + newInfo.blockIdFrom : -1,
     titleAnchor: newLine.from + newInfo.titleAnchor,
   };
   const nextBlocks = mappedBlocks.map((block, index) => index === touchedIndex ? newBlock : block);

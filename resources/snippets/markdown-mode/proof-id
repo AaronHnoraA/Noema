@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Proof block with ID
+# key: prooff
+# group: Noema local
+# --
+#+begin proof {#`(my/noema-new-id "block")`}
+${1:Proof.}
+#+end proof
+$0

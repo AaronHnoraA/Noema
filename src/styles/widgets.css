@@ -1112,6 +1112,30 @@
 .cm-editor .cm-org-env-heading-widget .org-env-heading-title[data-empty="true"] {
   display: none;
 }
+.cm-editor .org-env-block-id {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--block-c, var(--aaron-muted, #8b8175)), transparent 72%);
+  border-radius: 999px;
+  padding: 0.08rem 0.34rem;
+  background: color-mix(in srgb, var(--block-c, var(--aaron-muted, #8b8175)), transparent 92%);
+  color: color-mix(in srgb, var(--block-c, var(--aaron-muted, #8b8175)), transparent 35%);
+  font: 500 9px/1.3 var(--aaron-font-mono, ui-monospace, monospace);
+  letter-spacing: 0.015em;
+  opacity: 0.72;
+  user-select: none;
+}
+.cm-editor button.org-env-block-id {
+  appearance: none;
+  cursor: copy;
+}
+.cm-editor button.org-env-block-id:hover,
+.cm-editor button.org-env-block-id:focus-visible {
+  border-color: color-mix(in srgb, var(--block-c, var(--aaron-muted, #8b8175)), transparent 48%);
+  opacity: 1;
+  outline: none;
+}
 .cm-editor .cm-org-env-line {
   position: relative;
   box-sizing: border-box;

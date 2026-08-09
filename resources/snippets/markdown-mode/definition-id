@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Definition block with ID
+# key: deff
+# group: Noema local
+# --
+#+begin definition ${1:name} {#`(my/noema-new-id "block")`}
+${2:Definition.}
+#+end definition
+$0

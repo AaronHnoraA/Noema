@@ -14,6 +14,7 @@ import { markdownLinkDestination } from "./markdown-link.ts";
 import { safeHref } from "./url-safety.ts";
 import { scanInlineCommands } from "./command-syntax.ts";
 import { semanticOutlineFromCommand } from "./semantic-outline.ts";
+import { parseOrgEnvIdentityTitle, shortBlockId } from "../shared/block-identity.mjs";
 import { renderTikzIframe } from "./tikz-render.ts";
 import {
   metaEntryMap,
@@ -74,6 +75,7 @@ export {
 type OrgEnvTokenMeta = {
   kind: string;
   title: string;
+  blockId: string;
   body: string;
 };
 
@@ -283,9 +285,11 @@ function orgEnvBlockRule(state: StateBlock, startLine: number, endLine: number, 
   const token = state.push("org_env_block", "org-env-block", 0);
   token.block = true;
   token.map = [startLine, closeLine + 1];
+  const identity = parseOrgEnvIdentityTitle(kind, open[2]?.trim() ?? "");
   token.meta = {
     kind,
-    title: open[2]?.trim() ?? "",
+    title: identity.title,
+    blockId: identity.blockId,
     body: state.src.slice(bodyStart, bodyEnd).replace(/\n$/, ""),
   } satisfies OrgEnvTokenMeta;
   state.line = closeLine + 1;
@@ -1050,6 +1054,7 @@ function renderOrgEnv(md: MarkdownIt, tokens: Token[], idx: number): string {
       : "";
   }
   const title = meta.title;
+  const blockId = meta.blockId;
   const label = envLabel(kind);
   const body = meta.body.trim() ? md.render(meta.body) : "";
   if (kind.toLowerCase() === "fold") {
@@ -1061,8 +1066,8 @@ function renderOrgEnv(md: MarkdownIt, tokens: Token[], idx: number): string {
     ].join("");
   }
   return [
-    `<org-env-block data-kind="${escapeAttr(kind)}" data-title="${escapeAttr(title)}" data-label="${escapeAttr(label)}" data-comment-open="false">`,
-    `<span class="org-env-heading"><span class="org-env-heading-label">${escapeHtml(label)}</span><span class="org-env-heading-title" data-empty="${title ? "false" : "true"}">${md.renderInline(title)}</span></span>`,
+    `<org-env-block data-kind="${escapeAttr(kind)}" data-title="${escapeAttr(title)}" data-label="${escapeAttr(label)}"${blockId ? ` data-block-id="${escapeAttr(blockId)}"` : ""} data-comment-open="false">`,
+    `<span class="org-env-heading"><span class="org-env-heading-label">${escapeHtml(label)}</span><span class="org-env-heading-title" data-empty="${title ? "false" : "true"}">${md.renderInline(title)}</span>${blockId ? `<span class="org-env-block-id" title="${escapeAttr(blockId)}" aria-label="Block ID ${escapeAttr(blockId)}">#${escapeHtml(shortBlockId(blockId))}</span>` : ""}</span>`,
     `<div class="org-env-content">${body}</div>`,
     "</org-env-block>",
   ].join("");

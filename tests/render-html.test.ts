@@ -54,6 +54,16 @@ y^2
     expect(html).not.toContain("<h1");
   });
 
+  test("renders a trailing org-env identity as a separate quiet badge", () => {
+    const id = "0198fbac-0780-7c99-85e6-333333333333";
+    const html = renderMarkdownHTML(`#+begin theorem Spectral {#${id}}\nBody.\n#+end theorem`);
+    expect(html).toContain('data-title="Spectral"');
+    expect(html).toContain(`data-block-id="${id}"`);
+    expect(html).toContain(`class="org-env-block-id" title="${id}"`);
+    expect(html).toContain("#…333333");
+    expect(html).not.toContain(`org-env-heading-title\" data-empty=\"false\">Spectral {#${id}}`);
+  });
+
   test("renders fold org env as details with markdown summary", () => {
     const html = renderMarkdownHTML([
       "#+begin fold **Details**",

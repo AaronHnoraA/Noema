@@ -658,7 +658,7 @@ export type WikiNote = {
   refs: string[];
   backlinks: string[];
   unresolvedLinks: string[];
-  blocks?: Array<{ id: string; kind: string; offset: number }>;
+  blocks?: Array<{ id: string; kind: string; envKind?: string; label?: string; offset: number }>;
   dependencies?: Array<{ kind: string; raw: string; path: string; status: string }>;
   excerpt?: string;
   score?: number;
@@ -720,6 +720,7 @@ export type WikiIndex = {
     ambiguous: Array<Record<string, unknown>>;
     duplicates: Array<Record<string, unknown>>;
     duplicateIds?: Array<Record<string, unknown>>;
+    missingFragments?: Array<Record<string, unknown>>;
   };
 };
 
@@ -1388,12 +1389,16 @@ export const api = {
       return ensureOk(await call(body) as WikiSearchResult, "Searching Wiki failed");
     },
     async resolveLink(target: string, sourceFile = ""): Promise<{
-      status: "resolved" | "ambiguous" | "missing";
+      status: "resolved" | "ambiguous" | "missing" | "missing-fragment";
+      fragment: string;
+      targetBlockId: string;
       candidates: Array<{ id: string; title: string; namespace: string; qualifiedNamespace: string; qualifiedTitle: string; fullTitle: string; file: string; path: string }>;
     }> {
       const call = requireMethod(nativeApi().wiki?.resolveLink, "Wiki link");
       return ensureOk(await call({ target, sourceFile }) as {
-        status: "resolved" | "ambiguous" | "missing";
+        status: "resolved" | "ambiguous" | "missing" | "missing-fragment";
+        fragment: string;
+        targetBlockId: string;
         candidates: Array<{ id: string; title: string; namespace: string; qualifiedNamespace: string; qualifiedTitle: string; fullTitle: string; file: string; path: string }>;
       }, "Resolving Wiki link failed");
     },

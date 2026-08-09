@@ -10,9 +10,10 @@ import { promisify } from "node:util";
 import { DatabaseSync } from "node:sqlite";
 
 import { isUuidV7, newNoemaId } from "../../shared/identity.mjs";
+import { BLOCK_ID_SOURCE, parseOrgEnvIdentityTitle } from "../../shared/block-identity.mjs";
 import { knowledgeQueryTextTerms, parseKnowledgeQuery } from "../../shared/knowledge-query.mjs";
 import {
-  normalizeWikiNamespace, qualifiedWikiTitle, scanWikiLinks, splitQualifiedWikiTarget,
+  normalizeWikiNamespace, qualifiedWikiTitle, scanWikiLinks, splitQualifiedWikiTarget, splitWikiFragmentTarget,
 } from "../../shared/wiki-link.mjs";
 import { diffRoamFile, fileHistory, restoreFileFromCommit } from "./roam-git.mjs";
 import { createWindowsZip, moveWindowsPathToRecycleBin } from "./windows-shell.mjs";
@@ -21,7 +22,7 @@ const execFileAsync = promisify(execFile);
 const PARTITIONS = Object.freeze(["public", "private"]);
 const NOTE_EXTENSIONS = new Set([".md", ".markdown"]);
 const REPOSITORY_MANIFEST = "noema.toml";
-const WIKI_SCHEMA_VERSION = 7;
+const WIKI_SCHEMA_VERSION = 8;
 const WIKI_FULL_REBUILD_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
 const REPOSITORY_GITIGNORE = [
   ".DS_Store",
@@ -278,25 +279,81 @@ function titleFor(file, content, meta) {
     || basename(file, extname(file))).trim();
 }
 
+function maskMarkdownCode(content) {
+  const source = String(content);
+  let fenceChar = "";
+  let fenceLength = 0;
+  return source.split(/(?<=\n)/).map((rawLine) => {
+    const line = rawLine.replace(/\r?\n$/, "");
+    const newline = rawLine.slice(line.length);
+    const fence = line.match(/^[ \t]{0,3}(`{3,}|~{3,})(.*)$/);
+    if (fence) {
+      const marker = fence[1];
+      const closing = fenceChar && marker[0] === fenceChar && marker.length >= fenceLength && !String(fence[2] || "").trim();
+      if (!fenceChar) {
+        fenceChar = marker[0];
+        fenceLength = marker.length;
+      } else if (closing) {
+        fenceChar = "";
+        fenceLength = 0;
+      }
+      return " ".repeat(line.length) + newline;
+    }
+    if (fenceChar) return " ".repeat(line.length) + newline;
+    return line.replace(/`[^`\n]*`/g, (value) => " ".repeat(value.length)) + newline;
+  }).join("");
+}
+
 function wikiLinks(content) {
   const links = [];
-  const source = String(content).replace(/```[\s\S]*?```/g, "").replace(/`[^`\n]*`/g, "");
+  const source = maskMarkdownCode(content);
   for (const match of scanWikiLinks(source)) links.push({ target: match.target, label: match.label });
-  for (const match of source.matchAll(/\[[^\]\n]*\]\((roam:\/\/[^)\s]+)\)/gi)) {
-    links.push({ target: String(match[1] || "").trim(), label: "" });
+  for (const match of source.matchAll(/\[[^\]\n]*\]\(([^)\n]+)\)/g)) {
+    const target = String(match[1] || "").trim();
+    if (/^(?:roam:\/\/|#|\.\/?#)/i.test(target) || /\.(?:md|markdown)#/i.test(target)) {
+      links.push({ target, label: "" });
+    }
   }
   return links;
 }
 
 function blockIds(content) {
+  const source = String(content);
+  const visible = maskMarkdownCode(source);
   const ids = [];
-  for (const match of String(content).matchAll(/\{#([A-Za-z0-9][A-Za-z0-9._:-]{2,127})\}/g)) {
-    ids.push({ id: match[1], kind: "anchor", offset: match.index || 0 });
+  const orgAnchors = new Map();
+  const orgOpenRe = new RegExp(`^[ \\t]*#\\+\\s*begin\\s+(\\S+)(?:[ \\t]+([^\\n]*))?[ \\t]*$`, "gim");
+  for (const match of visible.matchAll(orgOpenRe)) {
+    const envKind = String(match[1] || "").toLowerCase();
+    const identity = parseOrgEnvIdentityTitle(envKind, match[2] || "");
+    if (!identity.blockId) continue;
+    const offset = (match.index || 0) + String(match[0] || "").lastIndexOf(identity.blockId);
+    const label = `${envKind}${identity.title ? ` · ${identity.title}` : ""}`;
+    const item = { id: identity.blockId, kind: "org-env", envKind, label, offset };
+    ids.push(item);
+    orgAnchors.set(`${identity.blockId}\0${offset}`, true);
   }
-  for (const match of String(content).matchAll(/\{[^{}\n]*\bid\s*[:=]\s*["']?([A-Za-z0-9][A-Za-z0-9._:-]{2,127})["']?[^{}\n]*\}/g)) {
-    ids.push({ id: match[1], kind: "planning", offset: match.index || 0 });
+  const explicitAnchorRe = new RegExp(`\\{#(${BLOCK_ID_SOURCE})\\}`, "g");
+  for (const match of visible.matchAll(explicitAnchorRe)) {
+    const id = String(match[1] || "");
+    const offset = match.index || 0;
+    if (orgAnchors.has(`${id}\0${offset + 2}`)) continue;
+    ids.push({ id, kind: "anchor", envKind: "", label: id, offset });
   }
-  return [...new Map(ids.map((item) => [item.id, item])).values()];
+  const planningRe = new RegExp(`\\{[^{}\\n]*\\bid\\s*[:=]\\s*["']?(${BLOCK_ID_SOURCE})["']?[^{}\\n]*\\}`, "g");
+  for (const match of visible.matchAll(planningRe)) {
+    const id = String(match[1] || "");
+    const lineStart = visible.lastIndexOf("\n", match.index || 0) + 1;
+    const label = visible.slice(lineStart, visible.indexOf("\n", match.index || 0) < 0 ? visible.length : visible.indexOf("\n", match.index || 0))
+      .replace(/\{[^{}]*\}\s*$/, "").trim() || id;
+    ids.push({ id, kind: "planning", envKind: "", label, offset: match.index || 0 });
+  }
+  const counts = new Map();
+  for (const item of ids) counts.set(item.id, (counts.get(item.id) || 0) + 1);
+  return {
+    blocks: [...new Map(ids.map((item) => [item.id, item])).values()],
+    duplicateIds: [...counts.entries()].filter(([, count]) => count > 1).map(([id]) => id),
+  };
 }
 
 function dependencyRefs(content, noteFile, repository) {
@@ -342,7 +399,14 @@ function namespaceKeys(note) {
 }
 
 function titleCandidates(notes, byTitle, targetValue, source = null) {
-  const target = String(targetValue || "").trim();
+  const target = splitWikiFragmentTarget(targetValue).pageTarget;
+  if ((!target || target === "." || target === "./") && source) return [source];
+  if (source && /\.(?:md|markdown)$/i.test(target)) {
+    let decoded = target;
+    try { decoded = decodeURIComponent(target); } catch {}
+    const file = resolve(dirname(source.file), decoded);
+    return notes.filter((note) => resolve(note.file) === file);
+  }
   const stable = target.match(/^roam:\/\/(?:id\/)?(.+)$/i)?.[1];
   if (stable) return notes.filter((note) => canonicalTitle(note.id) === canonicalTitle(stable));
   const knownNamespaces = notes.flatMap((note) => [note.namespace, note.qualifiedNamespace, ...(note.namespaceAliases || [])]);
@@ -357,6 +421,19 @@ function titleCandidates(notes, byTitle, targetValue, source = null) {
     if (local.length === 1) return local;
   }
   return candidates;
+}
+
+function resolvedWikiTarget(notes, byTitle, targetValue, source = null) {
+  const { fragment } = splitWikiFragmentTarget(targetValue);
+  const candidates = titleCandidates(notes, byTitle, targetValue, source);
+  let targetBlockId = "";
+  let status = candidates.length === 1 ? "resolved" : candidates.length > 1 ? "ambiguous" : "missing";
+  if (candidates.length === 1 && fragment) {
+    const block = (candidates[0].blocks || []).find((item) => canonicalTitle(item.id) === canonicalTitle(fragment));
+    if (block) targetBlockId = block.id;
+    else if (isUuidV7(fragment)) status = "missing-fragment";
+  }
+  return { candidates, fragment, targetBlockId, status };
 }
 
 export function resolveWikiRelationships(notes) {
@@ -385,13 +462,20 @@ export function resolveWikiRelationships(notes) {
   }
   const wanted = new Map();
   const ambiguous = [];
+  const missingFragments = [];
   for (const note of notes) {
     note.refs = [];
     note.unresolvedLinks = [];
     for (const link of note.wikiLinks) {
-      const candidates = titleCandidates(notes, byTitle, link.target, note);
+      const resolved = resolvedWikiTarget(notes, byTitle, link.target, note);
+      const { candidates } = resolved;
       if (candidates.length === 1) {
         const target = candidates[0];
+        if (resolved.status === "missing-fragment") {
+          note.unresolvedLinks.push(link.target);
+          missingFragments.push({ sourceId: note.id, sourceFile: note.file, target: link.target, fragment: resolved.fragment });
+          continue;
+        }
         if (target.file !== note.file) {
           note.refs.push(target.id);
           target.backlinks.push(note.id);
@@ -449,8 +533,28 @@ export function resolveWikiRelationships(notes) {
       ambiguous,
       duplicates,
       duplicateIds,
+      missingFragments,
     },
   };
+}
+
+function blockRelationshipDiagnostics(notes, reports) {
+  const diagnostics = [];
+  for (const note of notes) {
+    for (const id of note.duplicateBlockIds || []) diagnostics.push({
+      code: "duplicate-block-id",
+      severity: "error",
+      path: note.path || note.file,
+      message: `Block id ${id} occurs more than once in ${note.title}`,
+    });
+  }
+  for (const missing of reports.missingFragments || []) diagnostics.push({
+    code: "missing-block-id",
+    severity: "warning",
+    path: missing.sourceFile,
+    message: `Block target ${missing.fragment} was not found`,
+  });
+  return diagnostics;
 }
 
 function openWikiNoteCache(rootValue) {
@@ -490,7 +594,8 @@ async function noteForFile(file, repository, workspaceRoot, cache = null, infoVa
   const pageNamespaceAliases = parseList(meta.namespace_aliases).map(normalizeWikiNamespace).filter(Boolean);
   const persistedId = String(meta.id || "").trim();
   const id = persistedId || provisionalKey(repository.uid || repository.id, repositoryPath);
-  const blocks = blockIds(content);
+  const parsedBlocks = blockIds(content);
+  const blocks = parsedBlocks.blocks;
   const dependencies = dependencyRefs(content, file, repository);
   return {
     key: id,
@@ -528,6 +633,7 @@ async function noteForFile(file, repository, workspaceRoot, cache = null, infoVa
     mtimeMs: info.mtimeMs,
     size: info.size,
     blocks,
+    duplicateBlockIds: parsedBlocks.duplicateIds,
     dependencies,
     wikiLinks: wikiLinks(content),
     searchText: content,
@@ -617,7 +723,7 @@ export async function buildWikiIndex(rootValue, options = {}) {
         severity: "info",
         path: root,
         message: "Legacy single-repository layout is active; no files are moved automatically",
-      }],
+      }, ...blockRelationshipDiagnostics(notes, related.reports)],
       files: inventory,
       directories: directoryInventory(inventory),
       ...related,
@@ -646,6 +752,7 @@ export async function buildWikiIndex(rootValue, options = {}) {
   const noteGroups = indexedRepositories.map((item) => item.notes);
   const inventories = indexedRepositories.flatMap((item) => item.inventory);
   const related = resolveWikiRelationships(noteGroups.flat());
+  discovered.diagnostics.push(...blockRelationshipDiagnostics(noteGroups.flat(), related.reports));
   for (const duplicate of related.reports.duplicateIds) {
     discovered.diagnostics.push({
       code: "duplicate-page-id",
@@ -721,10 +828,10 @@ function createWikiSchema(db) {
     CREATE TABLE repositories (location_id text primary key, repository_id text not null, identity_status text not null, partition text not null, name text not null, namespace text not null, qualified_namespace text not null, namespace_aliases text not null, path text not null);
     CREATE TABLE files (repository_id text not null, path text not null, file text not null unique, kind text not null, extension text not null, size integer not null, mtime real not null, git_status text not null, primary key(repository_id, path));
     CREATE TABLE pages (page_key text primary key, page_id text not null, identity_status text not null, title text not null, namespace text not null, qualified_namespace text not null, namespace_source text not null, kind text not null, file text not null unique, workspace_path text not null, repository_path text not null, repository_id text not null, partition text not null, private integer not null, redirect_to text not null, mtime real not null);
-    CREATE TABLE blocks (block_id text not null, page_key text not null, kind text not null, source_offset integer not null, primary key(page_key, block_id));
+    CREATE TABLE blocks (block_id text not null, page_key text not null, kind text not null, env_kind text not null, label text not null, source_offset integer not null, primary key(page_key, block_id));
     CREATE TABLE aliases (page_key text not null, alias text not null);
     CREATE TABLE tags (page_key text not null, tag text not null);
-    CREATE TABLE links (source_key text not null, raw_target text not null, target_id text, target_title text not null, status text not null);
+    CREATE TABLE links (source_key text not null, raw_target text not null, target_id text, target_block_id text, target_title text not null, status text not null);
     CREATE TABLE dependencies (source_key text not null, kind text not null, raw_target text not null, target_path text not null, status text not null);
     CREATE TABLE diagnostics (code text not null, severity text not null, message text not null, path text not null);
     CREATE TABLE wiki_meta (key text primary key, value text not null);
@@ -738,7 +845,10 @@ function createWikiSchema(db) {
     CREATE INDEX wiki_pages_repository_idx ON pages(repository_id, repository_path);
     CREATE INDEX wiki_aliases_alias_idx ON aliases(alias);
     CREATE INDEX wiki_tags_tag_idx ON tags(tag);
+    CREATE INDEX wiki_blocks_id_idx ON blocks(block_id);
+    CREATE INDEX wiki_blocks_label_idx ON blocks(label);
     CREATE INDEX wiki_links_target_idx ON links(target_id);
+    CREATE INDEX wiki_links_block_target_idx ON links(target_id, target_block_id);
     CREATE INDEX wiki_links_raw_target_idx ON links(raw_target);
     CREATE INDEX wiki_files_kind_idx ON files(kind, repository_id, path);
     PRAGMA user_version=${WIKI_SCHEMA_VERSION};
@@ -773,17 +883,19 @@ function linkRowsForNote(index, note) {
     }
   }
   for (const link of note.wikiLinks || []) {
-    const candidates = titleCandidates(allNotes, byTitle, link.target, note);
+    const resolved = resolvedWikiTarget(allNotes, byTitle, link.target, note);
+    const { candidates } = resolved;
     if (candidates.length === 1) {
       const target = candidates[0];
-      if (target.file !== note.file) rows.push({
+      if (target.file !== note.file || resolved.fragment) rows.push({
         source_key: note.pageKey || note.key, raw_target: link.target,
-        target_id: target.id, target_title: target.title, status: "resolved",
+        target_id: target.id, target_block_id: resolved.targetBlockId || null,
+        target_title: target.title, status: resolved.status,
       });
     } else {
       rows.push({
         source_key: note.pageKey || note.key, raw_target: link.target,
-        target_id: null, target_title: link.target,
+        target_id: null, target_block_id: null, target_title: link.target,
         status: candidates.length > 1 ? "ambiguous" : "missing",
       });
     }
@@ -928,14 +1040,14 @@ function applyWikiIndex(db, index, { full, reason, changedFiles = [] }) {
         changes.pages++;
       }
       const scopes = [
-        ["SELECT block_id, page_key, kind, source_offset FROM blocks WHERE page_key=?", "DELETE FROM blocks WHERE page_key=?", "INSERT INTO blocks VALUES (?, ?, ?, ?)",
-          (note.blocks || []).map((item) => ({ block_id: item.id, page_key: pageKey, kind: item.kind, source_offset: Number(item.offset) || 0 })), ["block_id", "page_key", "kind", "source_offset"]],
+        ["SELECT block_id, page_key, kind, env_kind, label, source_offset FROM blocks WHERE page_key=?", "DELETE FROM blocks WHERE page_key=?", "INSERT INTO blocks VALUES (?, ?, ?, ?, ?, ?)",
+          (note.blocks || []).map((item) => ({ block_id: item.id, page_key: pageKey, kind: item.kind, env_kind: item.envKind || "", label: item.label || item.id, source_offset: Number(item.offset) || 0 })), ["block_id", "page_key", "kind", "env_kind", "label", "source_offset"]],
         ["SELECT page_key, alias FROM aliases WHERE page_key=?", "DELETE FROM aliases WHERE page_key=?", "INSERT INTO aliases VALUES (?, ?)",
           (note.aliases || []).map((alias) => ({ page_key: pageKey, alias })), ["page_key", "alias"]],
         ["SELECT page_key, tag FROM tags WHERE page_key=?", "DELETE FROM tags WHERE page_key=?", "INSERT INTO tags VALUES (?, ?)",
           (note.tags || []).map((tag) => ({ page_key: pageKey, tag })), ["page_key", "tag"]],
-        ["SELECT source_key, raw_target, target_id, target_title, status FROM links WHERE source_key=?", "DELETE FROM links WHERE source_key=?", "INSERT INTO links VALUES (?, ?, ?, ?, ?)",
-          linkRowsForNote(index, note), ["source_key", "raw_target", "target_id", "target_title", "status"]],
+        ["SELECT source_key, raw_target, target_id, target_block_id, target_title, status FROM links WHERE source_key=?", "DELETE FROM links WHERE source_key=?", "INSERT INTO links VALUES (?, ?, ?, ?, ?, ?)",
+          linkRowsForNote(index, note), ["source_key", "raw_target", "target_id", "target_block_id", "target_title", "status"]],
         ["SELECT source_key, kind, raw_target, target_path, status FROM dependencies WHERE source_key=?", "DELETE FROM dependencies WHERE source_key=?", "INSERT INTO dependencies VALUES (?, ?, ?, ?, ?)",
           (note.dependencies || []).map((item) => ({ source_key: pageKey, kind: item.kind, raw_target: item.raw, target_path: item.path || "", status: item.status })),
           ["source_key", "kind", "raw_target", "target_path", "status"]],
@@ -1102,7 +1214,7 @@ function knowledgeSqlFilters(parsed, filters, parameters) {
     } else if (clause.field === "is" && clause.value === "orphan") {
       expression = "(NOT EXISTS (SELECT 1 FROM links l WHERE l.source_key=p.page_key AND l.status='resolved') AND NOT EXISTS (SELECT 1 FROM links l WHERE l.target_id=p.page_id AND l.status='resolved'))";
     } else if (clause.field === "is" && clause.value === "missing") {
-      expression = "EXISTS (SELECT 1 FROM links l WHERE l.source_key=p.page_key AND l.status='missing')";
+      expression = "EXISTS (SELECT 1 FROM links l WHERE l.source_key=p.page_key AND l.status IN ('missing', 'missing-fragment'))";
     } else if (clause.field === "is" && clause.value === "attachment") {
       expression = "0";
     }
@@ -1159,9 +1271,10 @@ export function searchWikiDatabase(rootValue, body = {}) {
     }
     const aliasStatement = db.prepare("SELECT alias FROM aliases WHERE page_key=? ORDER BY alias");
     const tagStatement = db.prepare("SELECT tag FROM tags WHERE page_key=? ORDER BY tag");
+    const blockStatement = db.prepare("SELECT block_id, kind, env_kind, label, source_offset FROM blocks WHERE page_key=? ORDER BY source_offset");
     const refsStatement = db.prepare("SELECT target_id FROM links WHERE source_key=? AND status='resolved' AND target_id IS NOT NULL");
     const backlinksStatement = db.prepare("SELECT p.page_id FROM links l JOIN pages p ON p.page_key=l.source_key WHERE l.target_id=?");
-    const missingStatement = db.prepare("SELECT target_title FROM links WHERE source_key=? AND status='missing'");
+    const missingStatement = db.prepare("SELECT raw_target FROM links WHERE source_key=? AND status IN ('missing', 'missing-fragment')");
     const items = rows.map((row) => ({
       id: row.page_id,
       pageKey: row.page_key,
@@ -1186,9 +1299,16 @@ export function searchWikiDatabase(rootValue, body = {}) {
       excerpt: String(row.excerpt || ""),
       aliases: aliasStatement.all(row.page_key).map((item) => item.alias),
       tags: tagStatement.all(row.page_key).map((item) => item.tag),
+      blocks: blockStatement.all(row.page_key).map((item) => ({
+        id: item.block_id,
+        kind: item.kind,
+        envKind: item.env_kind,
+        label: item.label,
+        offset: Number(item.source_offset) || 0,
+      })),
       refs: refsStatement.all(row.page_key).map((item) => item.target_id),
       backlinks: backlinksStatement.all(row.page_id).map((item) => item.page_id),
-      unresolvedLinks: missingStatement.all(row.page_key).map((item) => item.target_title),
+      unresolvedLinks: missingStatement.all(row.page_key).map((item) => item.raw_target),
     }));
     return { ok: true, type: "wiki-search", generation, items, total, nextCursor: offset + items.length < total ? offset + items.length : null };
   } finally {
@@ -1208,11 +1328,14 @@ export function resolveWikiLink(index, targetValue, options = {}) {
       byTitle.set(key, bucket);
     }
   }
-  const candidates = titleCandidates(index.notes, byTitle, target, source);
+  const resolved = resolvedWikiTarget(index.notes, byTitle, target, source);
+  const { candidates } = resolved;
   return {
     type: "wiki-link",
     target,
-    status: candidates.length === 1 ? "resolved" : candidates.length > 1 ? "ambiguous" : "missing",
+    fragment: resolved.fragment,
+    targetBlockId: resolved.targetBlockId,
+    status: resolved.status,
     candidates: candidates.map((note) => ({
       id: note.id, title: note.title, file: note.file, path: note.path,
       namespace: note.namespace, qualifiedNamespace: note.qualifiedNamespace,

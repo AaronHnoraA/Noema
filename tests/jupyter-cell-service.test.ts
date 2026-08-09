@@ -28,6 +28,7 @@ async function withService(run: (ctx: {
 describe("jupyter cell service (no kernel)", () => {
   test("openScript delegates opening to the configured host", async () => {
     const opened: Array<{ file: string; line: number; col: number }> = [];
+    let kernelspecCalls = 0;
     const root = await mkdtemp(join(tmpdir(), "aaronnote-jcell-open-"));
     const note = join(root, "note.md");
     await writeFile(note, "# note\n", "utf8");
@@ -35,11 +36,22 @@ describe("jupyter cell service (no kernel)", () => {
       runtimeRoot: root,
       noteRoot: root,
       workspaceRoot: root,
+      kernelHost: {
+        async listKernelSpecs() {
+          kernelspecCalls += 1;
+          return [{
+            name: "python3",
+            spec: { argv: ["/runtime/python", "-m", "ipykernel_launcher", "-f", "{connection_file}"] },
+            resourceDir: "/runtime/kernels/python3",
+          }];
+        },
+      },
       openFile(payload: { file: string; line: number; col: number }) {
         opened.push(payload);
       },
     });
     try {
+      await service.kernels({ file: note });
       const result = await service.openScript({
         file: note,
         cellId: "cell-a",
@@ -50,7 +62,16 @@ describe("jupyter cell service (no kernel)", () => {
         cells: [{ cellId: "cell-a", id: "cell-a", code: "answer = 42" }],
       });
       expect(opened).toHaveLength(1);
+      expect(kernelspecCalls).toBe(1);
       expect(opened[0]).toMatchObject({ file: result.file, line: result.line, col: 0 });
+      expect(opened[0]).toMatchObject({
+        sourceFile: note,
+        kernel: "python3",
+        session: "default",
+        language: "python",
+        storage: "script",
+        kernelSpec: { name: "python3", resourceDir: "/runtime/kernels/python3" },
+      });
     } finally {
       await service.shutdown().catch(() => {});
     }

@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Observation block with ID
+# key: obss
+# group: Noema blocks
+# --
+#+begin observation ${1:title} {#`(my/noema-new-id "block")`}
+${2:Observation.}
+#+end observation
+$0

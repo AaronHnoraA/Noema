@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Remark block with ID
+# key: remarkk
+# group: Noema blocks
+# --
+#+begin remark ${1:title} {#`(my/noema-new-id "block")`}
+${2:Remark.}
+#+end remark
+$0

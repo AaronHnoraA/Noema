@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Warning block with ID
+# key: warnn
+# group: Noema blocks
+# --
+#+begin warning ${1:title} {#`(my/noema-new-id "block")`}
+${2:Warning.}
+#+end warning
+$0

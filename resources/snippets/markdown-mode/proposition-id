@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Proposition block with ID
+# key: propp
+# group: Noema local
+# --
+#+begin proposition ${1:name} {#`(my/noema-new-id "block")`}
+${2:Statement.}
+#+end proposition
+$0

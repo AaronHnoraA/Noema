@@ -50,4 +50,9 @@ fi
 
 export PATH="$(dirname "$SAGE_BIN"):/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
+if [[ "${1:-}" == "--runtime-probe" ]]; then
+  shift
+  exec "$SAGE_BIN" --python "$@"
+fi
+
 exec "$SAGE_BIN" --python -m sage.repl.ipython_kernel "$@" 2>>"$LOG"

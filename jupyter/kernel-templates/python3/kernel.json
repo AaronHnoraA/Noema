@@ -9,6 +9,14 @@
   "display_name": "Noema Python (Conda)",
   "language": "python",
   "metadata": {
-    "debugger": true
+    "debugger": true,
+    "aaron": {
+      "runtime": {
+        "family": "python",
+        "probe_argv": [
+          "@AARONNOTE_JUPYTER_ROOT@/bin/python-jupyter-kernel"
+        ]
+      }
+    }
   }
 }

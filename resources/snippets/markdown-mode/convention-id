@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Convention block with ID
+# key: convv
+# group: Noema blocks
+# --
+#+begin convention ${1:title} {#`(my/noema-new-id "block")`}
+${2:Convention.}
+#+end convention
+$0

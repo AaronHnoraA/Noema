@@ -16,6 +16,7 @@ export type NoteSummary = {
   summary?: string;
   tags?: string[];
   inlineTags?: string[];
+  blocks?: Array<{ id: string; kind: string; envKind?: string; label?: string; offset: number }>;
   refs?: string[];
   backlinks?: string[];
   roam?: boolean;

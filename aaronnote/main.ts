@@ -144,6 +144,11 @@ import type { CursorPosition, NoteSummary, SnippetSummary } from "./types.ts";
 import { createVimLite, type VimLiteKey, type VimLiteMode } from "./vim-lite.ts";
 import { ceilCommandGeneratedId, ceilLanguageForKernel } from "../src/cm6/extensions/visual/widgets/ceil-shared.ts";
 import {
+  getOrgEnvBlockIdentities,
+  orgEnvBlockIdentityAtPosition,
+  orgEnvBlockIdentityPosition,
+} from "../src/cm6/extensions/visual/widgets/block-extras.ts";
+import {
   handleXwidgetControlBeforeInput,
   handleXwidgetControlKeydown,
   handleXwidgetEmacsKeydown,
@@ -1030,6 +1035,7 @@ const editorCommands = new Set<EditorCommand>([
 ]);
 
 window.AaronnoteCurrentFile = () => currentFile;
+window.AaronnoteBlockTarget = (blockId: string) => noteAnchorHref(currentNote(), encodeURIComponent(blockId));
 
 type ApplyOpenedNoteOptions = {
   revealCursor?: boolean;
@@ -5110,6 +5116,27 @@ function slugifyAnchor(value: string): string {
 function jumpToHash(hash: string): boolean {
   const clean = normalizeInlineTag(hash.replace(/^#/, ""));
   if (!clean) return false;
+  const blockPosition = orgEnvBlockIdentityPosition(editor.view.state, clean);
+  if (blockPosition !== null) {
+    editor.setMarkdownSelection(blockPosition);
+    editor.revealCursor();
+    editor.focus();
+    noteCursorPositionEvent();
+    return true;
+  }
+  const markdown = editor.getMarkdown();
+  const explicitAnchor = markdown.indexOf(`{#${clean}}`);
+  const planningId = explicitAnchor < 0
+    ? new RegExp(`\\{[^{}\\n]*\\bid\\s*[:=]\\s*["']?${clean.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:["']|(?=\\s|[,}]))`, "i").exec(markdown)?.index ?? -1
+    : -1;
+  const genericBlockPosition = explicitAnchor >= 0 ? explicitAnchor : planningId;
+  if (genericBlockPosition >= 0) {
+    editor.setMarkdownSelection(genericBlockPosition);
+    editor.revealCursor();
+    editor.focus();
+    noteCursorPositionEvent();
+    return true;
+  }
   const equationTag = clean.replace(/^eq-/i, "");
   const equation = getEquationTagHits(editor.view.state)
     .find((hit) => hit.tag.toLowerCase() === equationTag.toLowerCase());
@@ -5150,20 +5177,24 @@ function openExternalUrl(href: string, options: { newWindow?: boolean } = {}): v
   if (!raw) return;
   const wikiTarget = raw.match(/^roam:\/\/wiki\/(.+)$/i)?.[1];
   const stableWikiTarget = window.__noemaAppConfig?.config.workspace.layout === "wiki"
-    ? raw.match(/^roam:\/\/(?!wiki\/)([^@#/?]+)$/i)?.[1]
+    ? raw.match(/^roam:\/\/(?!wiki\/)([^@#/?]+)(?:#[^?]*)?$/i)?.[1]
     : "";
   if (wikiTarget || stableWikiTarget) {
     const target = wikiTarget ? decodeURIComponent(wikiTarget) : raw;
     const missingTitle = wikiTarget ? decodeURIComponent(wikiTarget) : stableWikiTarget || raw;
     void api.wiki.resolveLink(target, currentFile).then((result) => {
       if (result.status === "resolved" && result.candidates[0]?.file) {
-        if (options.newWindow) {
-          const url = new URL("/", location.origin);
-          url.searchParams.set("file", result.candidates[0].file);
-          window.open(url, "_blank", "noopener");
-        } else {
-          void openFile(result.candidates[0].file);
-        }
+        openNote({
+          id: result.candidates[0].id,
+          title: result.candidates[0].title,
+          file: result.candidates[0].file,
+          path: result.candidates[0].path,
+          roam: true,
+        }, { newWindow: options.newWindow, hash: result.fragment });
+        return;
+      }
+      if (result.status === "missing-fragment") {
+        setStatus(`Block target not found: ${result.fragment}`);
         return;
       }
       const url = new URL("/wiki", location.origin);
@@ -5459,6 +5490,12 @@ function equationReferenceMarkdown(tag: string): string {
   return `[${escapeMarkdownLinkText(clean)}](${noteAnchorHref(currentNote(), `eq-${encodeURIComponent(clean)}`)})`;
 }
 
+function blockReferenceMarkdown(block: { id: string; kind: string; title: string }): string {
+  const fallback = block.kind ? block.kind[0]!.toUpperCase() + block.kind.slice(1) : `#${block.id.slice(-6)}`;
+  const label = block.title || fallback;
+  return `[${escapeMarkdownLinkText(label)}](${noteAnchorHref(currentNote(), encodeURIComponent(block.id))})`;
+}
+
 function inlineTagMarkdown(tag: string): string {
   return `@@tag[${normalizeInlineTag(tag)}]`;
 }
@@ -5492,6 +5529,13 @@ async function copyText(text: string): Promise<void> {
     fallback.remove();
   }
 }
+
+window.AaronnoteCopyBlockTarget = async (blockId: string): Promise<string> => {
+  const target = noteAnchorHref(currentNote(), encodeURIComponent(blockId));
+  await copyText(target);
+  setStatus(`Block target copied: #${blockId.slice(-6)}`);
+  return target;
+};
 
 let findMatches: FindMatch[] = [];
 let findIndex = -1;
@@ -6712,6 +6756,13 @@ async function tagOrCopyRef(): Promise<void> {
     await copyText(equationReferenceMarkdown(tag));
     setStatus(`Equation tag ${tag}; ref copied`);
     scheduleAssistUpdate({ mathPreview: true, toc: true });
+    return;
+  }
+
+  const block = orgEnvBlockIdentityAtPosition(editor.view.state, editor.getMarkdownSelection().from);
+  if (block) {
+    await copyText(blockReferenceMarkdown(block));
+    setStatus(`Block ref copied: #${block.id.slice(-6)}`);
     return;
   }
 
@@ -8021,6 +8072,7 @@ function pathCompletionRank(path: string, prefix: string): number {
 }
 
 function noteFromCompletionRef(ref: string): NoteSummary | undefined {
+  if (!String(ref || "").trim() || ref === "." || ref === "./") return currentNote();
   if (ref === "@@") return currentNote();
   return resolveHrefNote(ref) || resolveNoteRef(ref);
 }
@@ -8087,22 +8139,33 @@ function domCompletionContext(before: string): { note: NoteSummary; domPrefix: s
 async function matchingTagCompletions(note: NoteSummary, prefix: string): Promise<SnippetSummary[]> {
   const query = prefix.toLowerCase().replace(/^tag-/, "");
   let tags: string[];
+  let blocks: Array<{ id: string; kind: string; label: string }>;
   if (note.file === currentFile) {
     tags = [...new Set(allAnchorTagSuggestions().map((tag) => normalizeInlineTag(tag).replace(/^#/, "")).filter(Boolean))].sort();
+    const live = getOrgEnvBlockIdentities(editor.view.state)
+      .map((block) => ({ id: block.id, kind: block.kind, label: block.title || block.kind }));
+    const indexed = (note.blocks || []).map((block) => ({ id: block.id, kind: block.envKind || block.kind, label: block.label || block.id }));
+    blocks = [...new Map([...live, ...indexed].map((block) => [block.id, block])).values()];
   } else {
-    // For roam://noteid# and ./path.md# anchor completion: show only the inline
-    // tags defined in the target note (not global roam tags from all notes).
+    // Cross-note fragments come only from the target note's cached index.
     tags = [...(note.inlineTags ?? [])].map((t) => normalizeInlineTag(t).replace(/^#/, "")).filter(Boolean);
+    blocks = (note.blocks || []).map((block) => ({ id: block.id, kind: block.envKind || block.kind, label: block.label || block.id }));
   }
-  return [...new Set(tags)]
-    .filter((tag) => !query || tag.toLowerCase().includes(query))
+  const candidates = [
+    ...[...new Set(tags)].map((tag) => ({ id: tag, kind: "tag", label: `#${tag}` })),
+    ...blocks,
+  ];
+  return [...new Map(candidates.map((item) => [item.id.toLowerCase(), item])).values()]
+    .filter((item) => !query || item.id.toLowerCase().includes(query) || item.label.toLowerCase().includes(query))
+    .sort((a, b) => Number(a.kind !== "tag") - Number(b.kind !== "tag") || a.label.localeCompare(b.label))
     .slice(0, 12)
-    .map((tag) => ({
-      key: tag,
-      name: `#${tag}`,
+    .map((item) => ({
+      key: item.id,
+      name: item.kind === "tag" ? item.label : `${item.label} · #${item.id.slice(-6)}`,
       mode: "markdown-mode",
-      group: "tag",
-      body: encodeURIComponent(tag),
+      group: item.kind === "tag" ? "tag" : "block",
+      kind: item.kind,
+      body: encodeURIComponent(item.id),
       source: note.path || note.file || canonicalRoamNoteId(note),
     }));
 }

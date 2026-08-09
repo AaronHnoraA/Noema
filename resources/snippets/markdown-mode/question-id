@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Question block with ID
+# key: questionn
+# group: Noema blocks
+# --
+#+begin question ${1:title} {#`(my/noema-new-id "block")`}
+${2:Question.}
+#+end question
+$0

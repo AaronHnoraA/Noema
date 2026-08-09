@@ -11,6 +11,7 @@ import { latexMarkNames, latexMarkSnippetDefinitions } from "../shared/latex-mar
 
 const {
   canonicalTodoArgs,
+  blockAnchorsFromContent,
   configure,
   extractTodos,
   getTodos,
@@ -195,6 +196,24 @@ describe("server todo scan", () => {
     ].join("\n");
     expect(tagsFromContent(content)).toEqual(["paper", "quantum"]);
     expect(inlineTagsFromContent(content)).toEqual(["local-anchor"]);
+  });
+
+  test("indexes semantic block anchors but ignores fenced examples", () => {
+    const id = "0198fbac-0780-7c99-85e6-333333333333";
+    const content = [
+      `#+begin theorem Spectral {#${id}}`,
+      "Statement.",
+      "#+end theorem",
+      "```md",
+      "{#0198fbac-0780-7c99-85e6-444444444444}",
+      "```",
+    ].join("\n");
+    expect(blockAnchorsFromContent(content)).toEqual([expect.objectContaining({
+      id,
+      kind: "org-env",
+      envKind: "theorem",
+      label: "theorem · Spectral",
+    })]);
   });
 
   test("keeps planning commands and inline anchors inside meta summary out of indexes", () => {

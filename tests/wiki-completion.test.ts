@@ -24,6 +24,13 @@ const note: WikiNote = {
   refs: [],
   backlinks: [],
   unresolvedLinks: [],
+  blocks: [{
+    id: "0198fbac-0780-7c99-85e6-333333333333",
+    kind: "org-env",
+    envKind: "theorem",
+    label: "theorem · Fixed point",
+    offset: 120,
+  }],
 };
 
 describe("Wiki editor completion", () => {
@@ -69,5 +76,14 @@ describe("Wiki editor completion", () => {
     expect(wikiCompletionSnippets([note], context)).toEqual(expect.arrayContaining([
       expect.objectContaining({ provider: "wiki-create", source: "New idea", body: "New idea" }),
     ]));
+  });
+
+  test("offers stable page-scoped block wikicites", () => {
+    const context = wikiLinkCompletionContext("See [[Fixed", "]]" )!;
+    expect(wikiCompletionSnippets([note], context)[0]).toMatchObject({
+      group: "Wiki blocks",
+      kind: "theorem",
+      body: "roam://page-id#0198fbac-0780-7c99-85e6-333333333333|theorem · Fixed point",
+    });
   });
 });

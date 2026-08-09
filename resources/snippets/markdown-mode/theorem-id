@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Theorem block with ID
+# key: thmm
+# group: Noema local
+# --
+#+begin theorem ${1:name} {#`(my/noema-new-id "block")`}
+${2:Statement.}
+#+end theorem
+$0

@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Note block with ID
+# key: notee
+# group: Noema blocks
+# --
+#+begin note ${1:title} {#`(my/noema-new-id "block")`}
+${2:Note.}
+#+end note
+$0

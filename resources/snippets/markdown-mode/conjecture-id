@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Conjecture block with ID
+# key: conjj
+# group: Noema blocks
+# --
+#+begin conjecture ${1:name} {#`(my/noema-new-id "block")`}
+${2:Statement.}
+#+end conjecture
+$0

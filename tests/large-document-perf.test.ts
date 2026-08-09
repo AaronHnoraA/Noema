@@ -22,11 +22,11 @@ const NEWLINE_CEILING_MS = 520;
 // that pre-existing scan itself.
 const KNOWN_SCAN_CEILING_MS = 2000;
 
-function medianEditLatency(content: string, insert: string): number {
+function medianEditLatency(content: string, insert: string, positionValue?: number): number {
   const host = document.createElement("div");
   document.body.append(host);
   const editor = createEditor(host, { kernel: "cm6", initialContent: content });
-  const position = Math.floor(editor.getMarkdownLength() / 2);
+  const position = positionValue ?? Math.floor(editor.getMarkdownLength() / 2);
   const latencies: number[] = [];
 
   for (let index = 0; index < 7; index++) {
@@ -61,6 +61,13 @@ describe("large-document bounded editing", () => {
       expect(medianEditLatency(content, insert)).toBeLessThan(ceiling);
     }, 20_000);
   }
+
+  test("org-env identity title patches remain bounded in the 5 MB fixture", () => {
+    const prefix = "#+begin theorem Spectral {#0198fbac-0780-7c99-85e6-333333333333}\nBody.\n#+end theorem\n\n";
+    const identityContent = prefix + content;
+    const position = identityContent.indexOf("Spectral") + "Spectral".length;
+    expect(medianEditLatency(identityContent, "x", position)).toBeLessThan(BOUNDED_CEILING_MS);
+  }, 20_000);
 
   const knownScanCases: Array<[name: string, insert: string]> = [
     ["code fence", "```"],

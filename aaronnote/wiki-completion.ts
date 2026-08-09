@@ -37,6 +37,16 @@ function rank(note: WikiNote, needle: string): number {
   return path.includes(needle) || qualified.includes(needle) ? 4 : 99;
 }
 
+function blockRank(note: WikiNote, block: NonNullable<WikiNote["blocks"]>[number], needle: string): number {
+  if (!needle) return 6;
+  const label = folded(block.label || block.id);
+  const id = folded(block.id);
+  if (label === needle || id === needle) return 0;
+  if (label.startsWith(needle) || id.startsWith(needle)) return 2;
+  if (label.includes(needle) || id.includes(needle)) return 3;
+  return folded(`${note.title} ${note.qualifiedTitle || ""}`).includes(needle) ? 5 : 99;
+}
+
 export function wikiCompletionSnippets(
   notes: WikiNote[],
   context: WikiLinkCompletionContext,
@@ -44,14 +54,14 @@ export function wikiCompletionSnippets(
 ): SnippetSummary[] {
   const needle = folded(context.prefix);
   const closing = context.hasClosingDelimiter ? "" : "]]";
-  const matches = notes
-    .map((note) => ({ note, rank: rank(note, needle) }))
+  const pageMatches = notes
+    .map((note) => ({ note, rank: rank(note, needle), candidateKind: 0 as const }))
     .filter((item) => item.rank < 99)
-    .sort((a, b) => a.rank - b.rank
-      || b.note.mtimeMs - a.note.mtimeMs
-      || a.note.title.localeCompare(b.note.title))
-    .slice(0, limit)
-    .map(({ note }): SnippetSummary => ({
+    .map(({ note, rank, candidateKind }) => ({
+      note,
+      rank,
+      candidateKind,
+      snippet: {
       id: `wiki:${note.repositoryId}:${note.id}`,
       key: note.qualifiedTitle || qualifiedWikiTitle(note.namespace, note.title) || note.title,
       name: note.title,
@@ -63,7 +73,41 @@ export function wikiCompletionSnippets(
       source: `${note.fullTitle || note.qualifiedTitle || note.title} · ${note.repositoryPath}`,
       provider: "wiki",
       browserCompatible: true,
+      } satisfies SnippetSummary,
     }));
+
+  const blockMatches = notes.flatMap((note) => note.identityStatus === "provisional" ? [] : (note.blocks || [])
+    .map((block) => ({ note, block, rank: blockRank(note, block, needle), candidateKind: 1 as const })))
+    .filter((item) => item.rank < 99)
+    .map(({ note, block, rank, candidateKind }) => {
+      const label = String(block.label || block.id).trim();
+      return {
+        note,
+        rank,
+        candidateKind,
+        snippet: {
+          id: `wiki-block:${note.repositoryId}:${note.id}:${block.id}`,
+          key: label,
+          name: label,
+          description: `${block.envKind || block.kind} · ${note.title} · ${note.repositoryPath}`,
+          mode: "markdown-mode",
+          group: "Wiki blocks",
+          kind: block.envKind || block.kind || "block",
+          body: `${stableWikiTarget(note.id, block.id)}|${label}${closing}`,
+          source: `${note.fullTitle || note.qualifiedTitle || note.title} · #${block.id}`,
+          provider: "wiki",
+          browserCompatible: true,
+        } satisfies SnippetSummary,
+      };
+    });
+
+  const matches = [...pageMatches, ...blockMatches]
+    .sort((a, b) => a.rank - b.rank
+      || a.candidateKind - b.candidateKind
+      || b.note.mtimeMs - a.note.mtimeMs
+      || a.snippet.name.localeCompare(b.snippet.name))
+    .slice(0, limit)
+    .map((item) => item.snippet);
 
   const exact = needle && notes.some((note) => folded(note.title) === needle
     || note.aliases.some((alias) => folded(alias) === needle));

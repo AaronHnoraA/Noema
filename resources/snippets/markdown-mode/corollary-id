@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Corollary block with ID
+# key: corr
+# group: Noema blocks
+# --
+#+begin corollary ${1:name} {#`(my/noema-new-id "block")`}
+${2:Statement.}
+#+end corollary
+$0

@@ -16,6 +16,7 @@ import { loadKatexMacros } from "./katex-macros.mjs";
 import { durationFromEnv } from "./jupyter-cell.mjs";
 import { moveWindowsPathToRecycleBin } from "./windows-shell.mjs";
 import { maskMetaSummaryContent } from "../../shared/meta-summary.mjs";
+import { BLOCK_ID_SOURCE, parseOrgEnvIdentityTitle } from "../../shared/block-identity.mjs";
 import { SessionManager } from "../Features/Session/manager.mjs";
 import {
   bibliographyCompletions,
@@ -1758,6 +1759,56 @@ export function inlineTagsFromContent(content) {
   return tags;
 }
 
+export function blockAnchorsFromContent(content) {
+  const blocks = [];
+  const seen = new Set();
+  const source = maskMetaSummaryContent(content);
+  let offset = 0;
+  let inFence = false;
+  const anchorRe = new RegExp(`\\{#(${BLOCK_ID_SOURCE})\\}`, "g");
+  const planningRe = new RegExp(`\\{[^{}\\n]*\\bid\\s*[:=]\\s*["']?(${BLOCK_ID_SOURCE})["']?[^{}\\n]*\\}`, "g");
+  for (const rawLine of source.split(/(?<=\n)/)) {
+    const line = rawLine.replace(/\r?\n$/, "");
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence;
+      offset += rawLine.length;
+      continue;
+    }
+    if (inFence) {
+      offset += rawLine.length;
+      continue;
+    }
+    const visible = line.replace(/`[^`\n]*`/g, (value) => " ".repeat(value.length));
+    const open = visible.match(/^\s*#\+\s*begin\s+(\S+)(?:\s+([^\n]*))?\s*$/i);
+    const identity = open ? parseOrgEnvIdentityTitle(open[1], open[2] || "") : { title: "", blockId: "" };
+    if (identity.blockId) {
+      const at = visible.lastIndexOf(identity.blockId);
+      blocks.push({
+        id: identity.blockId,
+        kind: "org-env",
+        envKind: String(open[1] || "").toLowerCase(),
+        label: `${String(open[1] || "").toLowerCase()}${identity.title ? ` · ${identity.title}` : ""}`,
+        offset: offset + at,
+      });
+      seen.add(`${identity.blockId}\0${offset + at - 2}`);
+    }
+    anchorRe.lastIndex = 0;
+    for (const match of visible.matchAll(anchorRe)) {
+      const id = String(match[1] || "");
+      if (!seen.has(`${id}\0${offset + (match.index || 0)}`)) {
+        blocks.push({ id, kind: "anchor", envKind: "", label: id, offset: offset + (match.index || 0) });
+      }
+    }
+    planningRe.lastIndex = 0;
+    for (const match of visible.matchAll(planningRe)) {
+      const id = String(match[1] || "");
+      blocks.push({ id, kind: "planning", envKind: "", label: visible.replace(/\{[^{}]*\}\s*$/, "").trim() || id, offset: offset + (match.index || 0) });
+    }
+    offset += rawLine.length;
+  }
+  return [...new Map(blocks.map((item) => [item.id, item])).values()];
+}
+
 function decodeRef(ref) {
   let decoded = String(ref || "");
   try {
@@ -2507,6 +2558,7 @@ function cloneNote(note) {
     aliases: [...(note.aliases || [])],
     tags: [...(note.tags || [])],
     inlineTags: [...(note.inlineTags || [])],
+    blocks: (note.blocks || []).map((block) => ({ ...block })),
     refs: [...(note.refs || [])],
     backlinks: [...(note.backlinks || [])],
     leanBlocks: [...(note.leanBlocks || [])],
@@ -2806,6 +2858,7 @@ async function noteFromFileForIndex(file) {
     const id = idFromContent(file, noteScanRoot, content);
     const roam = hasRoamMeta(content);
     const inlineTags = inlineTagsFromContent(content);
+    const blocks = blockAnchorsFromContent(content);
     const leanBlocks = [];
     const note = {
       key: id,
@@ -2826,6 +2879,7 @@ async function noteFromFileForIndex(file) {
       summary: summaryFromContent(content),
       tags: tagsFromContent(content),
       inlineTags,
+      blocks,
       refs: refsFromContent(content),
       backlinks: [],
       roam,
@@ -7122,6 +7176,7 @@ async function noteSummaryForFile(file, content = null) {
     summary: summaryFromContent(text),
     tags: tagsFromContent(text),
     inlineTags: inlineTagsFromContent(text),
+    blocks: blockAnchorsFromContent(text),
     refs: refsFromContent(text),
     backlinks: [],
     roam,

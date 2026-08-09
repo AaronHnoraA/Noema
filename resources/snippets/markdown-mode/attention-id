@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Attention block with ID
+# key: attt
+# group: Noema blocks
+# --
+#+begin attention ${1:title} {#`(my/noema-new-id "block")`}
+${2:Pay attention to this point.}
+#+end attention
+$0

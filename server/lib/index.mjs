@@ -77,6 +77,7 @@ export {
   roamDbRefsFromContent,
   tagsFromContent,
   inlineTagsFromContent,
+  blockAnchorsFromContent,
   renameRoamTag,
   deleteRoamTag,
   roamTagOverlapReport,

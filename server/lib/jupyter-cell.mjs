@@ -349,6 +349,7 @@ export function createJupyterCellService({
   const cleanupIntervalMs = durationFromEnv("AARONNOTE_JUPYTER_CLEANUP_INTERVAL_MS", 30 * 1000);
   const execTimeoutMs = durationFromEnv("AARONNOTE_JUPYTER_EXEC_TIMEOUT_MS", 0);
   const interruptGraceMs = durationFromEnv("AARONNOTE_JUPYTER_INTERRUPT_GRACE_MS", 5000);
+  const kernelspecCacheTtlMs = durationFromEnv("AARONNOTE_JUPYTER_KERNELSPEC_CACHE_TTL_MS", 15 * 1000);
   const useHomeKernels = process.env.AARONNOTE_JUPYTER_USE_HOME_KERNELS !== "0";
   const allowedKernelsRaw = String(process.env.AARONNOTE_JUPYTER_ALLOWED_KERNELS || "").trim();
   const allowedNames = allowedKernelsRaw ? allowedKernelsRaw.split(",").map((v) => v.trim()).filter(Boolean) : undefined;
@@ -356,6 +357,7 @@ export function createJupyterCellService({
     runtimeDir,
     ...(process.env.AARONNOTE_JUPYTER_ATTACH_DIRS ? process.env.AARONNOTE_JUPYTER_ATTACH_DIRS.split(delimiter).filter(Boolean) : []),
   ];
+  const kernelspecCache = new Map();
   const files = {
     atomicWriteP(file) {
       return Boolean(remoteLogicalPath(file) && fileHost);
@@ -444,10 +446,14 @@ export function createJupyterCellService({
   }
 
   async function listKernelSpecs(file = "") {
-    if (kernelHost && file) {
-      return await kernelHost.listKernelSpecs(file);
-    }
-    return await findKernelSpecs({ searchDirs: kernelSearchDirs(), allowedNames });
+    const key = String(file || "local");
+    const cached = kernelspecCache.get(key);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
+    const value = kernelHost && file
+      ? await kernelHost.listKernelSpecs(file)
+      : await findKernelSpecs({ searchDirs: kernelSearchDirs(), allowedNames });
+    kernelspecCache.set(key, { value, expiresAt: Date.now() + kernelspecCacheTtlMs });
+    return value;
   }
 
   function withMirrorLock(file, run) {
@@ -830,7 +836,31 @@ export function createJupyterCellService({
     const changed = existingScript.text !== rendered.text;
     if (changed) await files.writeFile(scriptFile, rendered.text, "utf8");
     const info = await files.stat(scriptFile);
-    const payload = { file: scriptFile, line: rendered.line, col: 0, nonce: randomUUID() };
+    let kernelSpec = null;
+    let kernelSpecError = "";
+    if (!kernel.startsWith("attach:")) {
+      try {
+        kernelSpec = (await listKernelSpecs(noteFile)).find((entry) => entry?.name === kernel) || null;
+      } catch (err) {
+        // Editing the generated source remains useful even when discovery is
+        // temporarily unavailable.  Emacs exposes this as an explicit LSP
+        // fallback reason instead of failing the open operation.
+        kernelSpecError = String(err?.message || err || "Kernelspec discovery failed");
+      }
+    }
+    const payload = {
+      file: scriptFile,
+      line: rendered.line,
+      col: 0,
+      nonce: randomUUID(),
+      sourceFile: noteFile,
+      kernel,
+      session,
+      language,
+      storage,
+      kernelSpec,
+      kernelSpecError,
+    };
     if (body?.open !== false) {
       if (typeof openFile === "function") {
         await openFile(payload);
@@ -841,9 +871,6 @@ export function createJupyterCellService({
     return {
       ok: true,
       ...payload,
-      kernel,
-      session,
-      language,
       changed,
       mtimeMs: info.mtimeMs,
       size: info.size,

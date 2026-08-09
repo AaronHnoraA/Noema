@@ -51,7 +51,7 @@ export type WikiNote = {
   backlinks: string[];
   unresolvedLinks: string[];
   wikiLinks: Array<{ target: string; label: string }>;
-  blocks: Array<{ id: string; kind: string; offset: number }>;
+  blocks: Array<{ id: string; kind: string; envKind?: string; label: string; offset: number }>;
   dependencies: Array<{ kind: string; raw: string; path: string; status: string }>;
 };
 export type WikiFile = {
@@ -89,6 +89,7 @@ export type WikiIndex = {
     ambiguous: Array<Record<string, unknown>>;
     duplicates: Array<Record<string, unknown>>;
     duplicateIds?: Array<Record<string, unknown>>;
+    missingFragments?: Array<Record<string, unknown>>;
   };
   maintenance?: WikiIndexMaintenance;
 };
@@ -116,7 +117,9 @@ export function buildWikiIndex(root: string, options?: {
 export function resolveWikiLink(index: WikiIndex, target: string, options?: { sourceFile?: string }): {
   type: "wiki-link";
   target: string;
-  status: "resolved" | "ambiguous" | "missing";
+  status: "resolved" | "ambiguous" | "missing" | "missing-fragment";
+  fragment: string;
+  targetBlockId: string;
   candidates: Array<{
     id: string; title: string; namespace: string; qualifiedNamespace: string; qualifiedTitle: string; fullTitle: string;
     file: string; path: string; repositoryId: string; partition: WikiPartition;

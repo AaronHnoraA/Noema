@@ -1,0 +1,9 @@
+# -*- mode: snippet -*-
+# name: Algorithm block with ID
+# key: algoo
+# group: Noema blocks
+# --
+#+begin algorithm ${1:name} {#`(my/noema-new-id "block")`}
+${2:Steps.}
+#+end algorithm
+$0

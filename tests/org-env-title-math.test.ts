@@ -56,4 +56,32 @@ describe("org-env title math", () => {
       cleanup();
     }
   });
+
+  test("block IDs render separately and copy their page-scoped target", async () => {
+    const id = "0198fbac-0780-7c99-85e6-333333333333";
+    const md = `#+begin theorem Spectral {#${id}}\nBody.\n#+end theorem\n\nAfter.`;
+    const copied: string[] = [];
+    window.AaronnoteBlockTarget = (blockId) => `roam://page-id#${blockId}`;
+    window.AaronnoteCopyBlockTarget = async (blockId) => {
+      const target = `roam://page-id#${blockId}`;
+      copied.push(target);
+      return target;
+    };
+    const { editor, cleanup } = mountCM6(md);
+    try {
+      editor.setMarkdownSelection(md.length);
+      const title = document.querySelector<HTMLElement>(".org-env-heading-title");
+      const badge = document.querySelector<HTMLButtonElement>("button.org-env-block-id");
+      expect(title?.textContent).toBe("Spectral");
+      expect(badge?.textContent).toBe("#…333333");
+      expect(badge?.title).toBe(`roam://page-id#${id}`);
+      badge?.click();
+      await Promise.resolve();
+      expect(copied).toEqual([`roam://page-id#${id}`]);
+    } finally {
+      window.AaronnoteBlockTarget = undefined;
+      window.AaronnoteCopyBlockTarget = undefined;
+      cleanup();
+    }
+  });
 });

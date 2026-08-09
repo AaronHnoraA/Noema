@@ -224,10 +224,67 @@ describe("Wiki workspace", () => {
     expect(existsSync(join(root, "roam.db"))).toBe(false);
     expect(wikiIndexStatus(root)).toMatchObject({
       ok: true,
-      schemaVersion: 7,
+      schemaVersion: 8,
       lastMode: "incremental",
       repositories: [expect.objectContaining({ repositoryId: "private/research", headSha: headBefore })],
     });
+  });
+
+  test("indexes and resolves page-scoped block fragments", async () => {
+    const root = await tempRoot();
+    const repository = await gitRepository(root, "private", "research");
+    const blockId = "0198fbac-0780-7c99-85e6-333333333333";
+    const missingId = "0198fbac-0780-7c99-85e6-444444444444";
+    const targetFile = join(repository, "target.md");
+    await writeFile(targetFile, note("target-id", "Target", [
+      `#+begin theorem Spectral theorem {#${blockId}}`,
+      "Statement.",
+      "#+end theorem",
+      "```md",
+      "{#0198fbac-0780-7c99-85e6-555555555555}",
+      "```",
+      "~~~md",
+      "{#0198fbac-0780-7c99-85e6-666666666666}",
+      "~~~",
+    ].join("\n")));
+    await writeFile(join(repository, "source.md"), note("source-id", "Source", [
+      `[cite](roam://target-id#${blockId})`,
+      `[[roam://target-id#${blockId}|Spectral theorem]]`,
+    ].join("\n")));
+
+    const index = await buildWikiIndex(root, { layout: "wiki" });
+    const target = index.notes.find((item) => item.id === "target-id")!;
+    expect(target.blocks).toEqual([expect.objectContaining({
+      id: blockId,
+      kind: "org-env",
+      envKind: "theorem",
+      label: "theorem · Spectral theorem",
+    })]);
+    expect(resolveWikiLink(index, `roam://target-id#${blockId}`)).toMatchObject({
+      status: "resolved",
+      fragment: blockId,
+      targetBlockId: blockId,
+      candidates: [expect.objectContaining({ id: "target-id" })],
+    });
+    expect(resolveWikiLink(index, `#${blockId}`, { sourceFile: targetFile })).toMatchObject({
+      status: "resolved",
+      targetBlockId: blockId,
+    });
+    expect(resolveWikiLink(index, `roam://target-id#${missingId}`)).toMatchObject({
+      status: "missing-fragment",
+      fragment: missingId,
+    });
+    expect(searchWikiDatabase(root, { query: "Target" }).items[0]).toMatchObject({
+      blocks: [expect.objectContaining({ id: blockId, label: "theorem · Spectral theorem" })],
+    });
+
+    const db = new DatabaseSync(wikiDatabaseFile(root), { readOnly: true });
+    try {
+      expect(db.prepare("SELECT target_id, target_block_id, status FROM links WHERE target_block_id=?").all(blockId))
+        .toEqual(expect.arrayContaining([expect.objectContaining({ target_id: "target-id", target_block_id: blockId, status: "resolved" })]));
+    } finally {
+      db.close();
+    }
   });
 
   test("reports exact changed files for the legacy direct Git pull tool", async () => {

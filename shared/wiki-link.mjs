@@ -49,16 +49,27 @@ export function wikiLinkAt(value, position, offset = 0) {
   return scanWikiLinks(value, offset).find((link) => pos >= link.from && pos <= link.to) || null;
 }
 
-export function stableWikiTarget(pageId) {
+export function stableWikiTarget(pageId, fragmentValue = "") {
   const id = String(pageId || "").trim();
-  return id ? `roam://${id}` : "";
+  const fragment = String(fragmentValue || "").trim().replace(/^#/, "");
+  return id ? `roam://${id}${fragment ? `#${encodeURIComponent(fragment)}` : ""}` : "";
 }
 
-export function formatStableWikiLink(pageId, label) {
-  const target = stableWikiTarget(pageId);
+export function formatStableWikiLink(pageId, label, fragment = "") {
+  const target = stableWikiTarget(pageId, fragment);
   const text = String(label || "").trim();
   if (!target || !text) return "";
   return `[[${target}|${text}]]`;
+}
+
+/** Split the page part and optional `#fragment` without changing either grammar. */
+export function splitWikiFragmentTarget(value) {
+  const target = String(value || "").trim();
+  const hash = target.indexOf("#");
+  if (hash < 0) return { pageTarget: target, fragment: "" };
+  let fragment = target.slice(hash + 1).trim();
+  try { fragment = decodeURIComponent(fragment); } catch {}
+  return { pageTarget: target.slice(0, hash).trim(), fragment };
 }
 
 export function normalizeWikiNamespace(value) {
