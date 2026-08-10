@@ -1,6 +1,6 @@
-const DEFAULT_DEBOUNCE_MS = 6 * 60 * 60_000;
+const DEFAULT_DEBOUNCE_MS = 24 * 60 * 60_000;
 const DEFAULT_STARTUP_MS = 2_000;
-const DEFAULT_PERIODIC_MS = 6 * 60 * 60_000;
+const DEFAULT_PERIODIC_MS = 24 * 60 * 60_000;
 const DEFAULT_PERIODIC_JITTER_MS = 10 * 60_000;
 
 function timerDelay(value, fallback) {

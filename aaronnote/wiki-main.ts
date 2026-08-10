@@ -1253,7 +1253,7 @@ function renderSyncState(
         : "No local changes to commit"
       : "",
     state.localOnly ? "Local commit only (no origin remote)" : "",
-    state.automatic ? "Automatic startup and six-hour batch sync enabled" : "",
+    state.automatic ? "Automatic startup and daily batch sync enabled" : "",
     state.lastSyncedAt ? `Last synced ${state.lastSyncedAt}` : "",
     state.message || "",
     state.error || "",

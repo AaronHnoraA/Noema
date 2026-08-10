@@ -10,6 +10,7 @@ import { expandNoemaPath, repositoryFromId } from "./wiki-workspace.mjs";
 
 const execFileAsync = promisify(execFile);
 const repositoryQueues = new Map();
+const DEFAULT_GIT_MAINTENANCE_BYTES = 2 * 1024 * 1024 * 1024;
 
 function apiError(message, statusCode = 400, code = "ERR_WIKI_SYNC") {
   return Object.assign(new Error(message), { statusCode, code });
@@ -115,6 +116,65 @@ async function hasHead(repository) {
 async function currentHeadSha(repository) {
   const result = await git(repository, ["rev-parse", "--verify", "HEAD"], { allowFailure: true });
   return result.error ? "" : String(result.stdout || "").trim();
+}
+
+function gitMaintenanceThresholdBytes(options = {}) {
+  const configured = Number(options.gitMaintenanceThresholdBytes);
+  return Number.isFinite(configured) && configured >= 0
+    ? configured
+    : DEFAULT_GIT_MAINTENANCE_BYTES;
+}
+
+async function gitObjectBytes(repository) {
+  const result = await git(repository, ["count-objects", "-v"], { allowFailure: true });
+  if (result.error) return 0;
+  const sizes = new Map(String(result.stdout || "").split(/\r?\n/).map((line) => {
+    const separator = line.indexOf(":");
+    return separator < 0 ? ["", 0] : [line.slice(0, separator), Number(line.slice(separator + 1).trim()) || 0];
+  }));
+  return 1024 * ((sizes.get("size") || 0) + (sizes.get("size-pack") || 0) + (sizes.get("size-garbage") || 0));
+}
+
+async function checkedOutBranches(repository) {
+  const result = await git(repository, ["worktree", "list", "--porcelain"], { allowFailure: true });
+  if (result.error) return new Set();
+  return new Set(Array.from(String(result.stdout || "").matchAll(/^branch refs\/heads\/(.+)$/gm), (match) => match[1]));
+}
+
+async function maintenanceBaseRef(repository) {
+  for (const ref of ["refs/remotes/origin/main", "refs/heads/main", "refs/heads/master"]) {
+    const result = await git(repository, ["show-ref", "--verify", "--quiet", ref], { allowFailure: true });
+    if (!result.error) return ref;
+  }
+  return "";
+}
+
+async function maintainWikiRepositoryGit(repository, options = {}) {
+  const beforeBytes = await gitObjectBytes(repository);
+  if (beforeBytes < gitMaintenanceThresholdBytes(options)) return { checked: true, beforeBytes, cleanedBranches: [] };
+  await git(repository, ["worktree", "prune"], { allowFailure: true });
+  const [baseRef, protectedBranches, candidatesResult] = await Promise.all([
+    maintenanceBaseRef(repository),
+    checkedOutBranches(repository),
+    git(repository, [
+      "for-each-ref",
+      "--format=%(refname:short)",
+      "refs/heads/noema",
+      "refs/heads/noema-integration",
+    ], { allowFailure: true }),
+  ]);
+  if (!baseRef || candidatesResult.error) return { checked: true, beforeBytes, cleanedBranches: [] };
+  const candidates = String(candidatesResult.stdout || "").split(/\r?\n/).map((branch) => branch.trim()).filter(Boolean);
+  const cleanedBranches = [];
+  for (const branch of candidates) {
+    if (branch === "main" || branch === "master" || protectedBranches.has(branch)) continue;
+    const merged = await git(repository, ["merge-base", "--is-ancestor", `refs/heads/${branch}`, baseRef], { allowFailure: true });
+    if (merged.error) continue;
+    const deleted = await git(repository, ["branch", "-D", "--", branch], { allowFailure: true });
+    if (!deleted.error) cleanedBranches.push(branch);
+  }
+  if (cleanedBranches.length > 0) await git(repository, ["gc"], { allowFailure: true });
+  return { checked: true, beforeBytes, cleanedBranches };
 }
 
 async function changedPathsBetween(repository, before, after) {
@@ -425,15 +485,18 @@ export function syncWikiRepository(rootValue, repositoryId, options = {}) {
   if (active) return active;
   const next = (async () => {
     const repository = await repositoryFromId(root, repositoryId);
+    let result;
     try {
-      return await runSync(root, repository, options);
+      result = await runSync(root, repository, options);
     } catch (error) {
-      return await writeSyncState(root, repository, {
+      result = await writeSyncState(root, repository, {
         phase: "error",
         failedAt: new Date().toISOString(),
         error: String(error?.message || error),
       });
     }
+    await maintainWikiRepositoryGit(repository, options).catch(() => {});
+    return result;
   })();
   const tracked = next.finally(() => {
     if (repositoryQueues.get(key) === tracked) repositoryQueues.delete(key);
@@ -562,8 +625,12 @@ export async function abortWikiConflict(rootValue, repositoryId) {
   return await writeSyncState(root, repository, { phase: "idle", conflicts: [], message: "Merge aborted" });
 }
 
-// Preserve the established desktop cadence: repositories synchronize on
-// startup and roughly every six hours, not after each editor autosave.
+// Repositories synchronize on startup and roughly once per day, not after
+// each editor autosave.
 export function defaultWikiSyncIntervalMs() {
-  return 6 * 60 * 60 * 1000;
+  return 24 * 60 * 60 * 1000;
+}
+
+export function defaultWikiGitMaintenanceBytes() {
+  return DEFAULT_GIT_MAINTENANCE_BYTES;
 }

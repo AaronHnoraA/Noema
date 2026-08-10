@@ -27,6 +27,7 @@ export function checkpointWikiRepository(root: string, repositoryId: string, opt
 >;
 export function syncWikiRepository(root: string, repositoryId: string, options?: Record<string, unknown>): Promise<WikiSyncState>;
 export function defaultWikiSyncIntervalMs(): number;
+export function defaultWikiGitMaintenanceBytes(): number;
 export function readWikiConflict(root: string, body?: Record<string, unknown>): Promise<{
   ok: true;
   type: "wiki-conflict-file";

@@ -81,7 +81,7 @@ direct Git repository children of `public/` and `private/`; it never migrates
 or initializes existing directories automatically. Once enabled, edits are
 saved to Markdown first and each affected repository is automatically
 checkpointed locally on shutdown and batch-synchronized at startup and roughly
-every six hours. File and metadata mutations refresh `wiki.db` incrementally;
+once per day. File and metadata mutations refresh `wiki.db` incrementally;
 successful Git refreshes use their changed paths and occasionally run a full
 self-healing rebuild. Conflicts remain isolated for explicit resolution. See
 [the Wiki workspace guide](docs/wiki-workspace.md).

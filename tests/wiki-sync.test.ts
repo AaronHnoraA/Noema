@@ -8,6 +8,7 @@ import { afterEach, describe, expect, test } from "@voidzero-dev/vite-plus-test"
 
 import { createWikiPage, initWikiRepository } from "../server/lib/wiki-workspace.mjs";
 import {
+  defaultWikiGitMaintenanceBytes,
   defaultWikiSyncIntervalMs,
   readWikiConflict,
   resolveWikiConflict,
@@ -76,8 +77,39 @@ afterEach(async () => {
 });
 
 describe("Wiki Git synchronization", () => {
-  test("keeps the established six-hour automatic sync cadence", () => {
-    expect(defaultWikiSyncIntervalMs()).toBe(6 * 60 * 60 * 1000);
+  test("uses a once-daily automatic sync cadence", () => {
+    expect(defaultWikiSyncIntervalMs()).toBe(24 * 60 * 60 * 1000);
+    expect(defaultWikiGitMaintenanceBytes()).toBe(2 * 1024 * 1024 * 1024);
+  });
+
+  test("cleans only merged, unused Noema branches after the Git object store crosses the threshold", async () => {
+    const item = await fixture();
+    await git(item.repositoryPath, "branch", "noema/merged-stale", "main");
+    await git(item.repositoryPath, "branch", "noema-integration/merged-stale", "main");
+    await git(item.repositoryPath, "branch", "user/merged-stale", "main");
+    await git(item.repositoryPath, "switch", "-c", "noema/unmerged-stale");
+    await writeFile(join(item.repositoryPath, "unmerged.md"), "# Preserve me\n");
+    await git(item.repositoryPath, "add", "unmerged.md");
+    await git(item.repositoryPath, "-c", "user.name=Fixture", "-c", "user.email=fixture@local", "commit", "-m", "unmerged local work");
+    await git(item.repositoryPath, "switch", "main");
+
+    await syncWikiRepository(item.root, "private/research", {
+      configDir: item.configDir,
+      gitMaintenanceThresholdBytes: Number.MAX_SAFE_INTEGER,
+    });
+    expect(await git(item.repositoryPath, "branch", "--list", "noema/merged-stale")).toContain("noema/merged-stale");
+
+    await syncWikiRepository(item.root, "private/research", {
+      configDir: item.configDir,
+      gitMaintenanceThresholdBytes: 0,
+    });
+    const branches = await git(item.repositoryPath, "for-each-ref", "--format=%(refname:short)", "refs/heads");
+    expect(branches).not.toContain("noema/merged-stale");
+    expect(branches).not.toContain("noema-integration/merged-stale");
+    expect(branches).toContain("user/merged-stale");
+    expect(branches).toContain("noema/unmerged-stale");
+    expect(branches).toMatch(/^noema\//m);
+    expect(branches).toMatch(/^noema-integration\//m);
   });
 
   test("bootstraps main when an attached origin has no branches", async () => {

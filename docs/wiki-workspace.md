@@ -141,10 +141,10 @@ name in `namespace_aliases`, so existing qualified links continue to resolve.
 Noema creates a device work branch and automatically performs the
 checkpoint/fetch/merge/push cycle in Wiki layout. Saving only marks the affected
 repository dirty; it does not create a Git commit per edit. All repositories
-synchronize shortly after startup and then roughly every six hours, with up to
+synchronize shortly after startup and then roughly once per day, with up to
 ten minutes of jitter so multiple devices do not all contact the remote at the
 same instant. Work is serialized per repository and an offline/error result is
-retried after one minute. During an orderly App shutdown, dirty repositories
+reported once for the batch, then waits for the next scheduled push. During an orderly App shutdown, dirty repositories
 receive a local checkpoint; the next startup/periodic pass performs the network
 sync. `NOEMA_WIKI_AUTO_SYNC=0` is the diagnostic override for disabling this
 policy.
