@@ -43,12 +43,12 @@ describe("server snippet catalog", () => {
     expect(brk.body).toBe("\\braket{ ${1:a} }{ ${2:b} } $0");
   });
 
-  test("uses a default text field and an invisible final stop for both Noema text snippets", async () => {
+  test("uses a spaced default field for text and keeps the short text snippet compact", async () => {
     const root = join(process.cwd(), "resources", "snippets", "tex-mode");
     const text = parseSnippetBody(await readFile(join(root, "text"), "utf8"));
     const shortText = parseSnippetBody(await readFile(join(root, "snippet-3"), "utf8"));
 
-    expect(text.body).toBe("\\text{${1:a}}$0");
+    expect(text.body).toBe("\\text{ ${1:a}}$0");
     expect(shortText.body).toBe("\\text{${1:a}}$0");
   });
 

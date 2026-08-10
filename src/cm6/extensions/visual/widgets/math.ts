@@ -609,7 +609,13 @@ const mathBlockField = StateField.define<BlockMathFieldValue>({
 
     const selected = blockMathAtSelection(tr.state);
     const selectedKey = selected ? blockMathKey(selected) : "";
-    if (suppressedKey && selectedKey !== suppressedKey) suppressedKey = "";
+    if (suppressedKey && selectedKey !== suppressedKey) {
+      const suppressedRange = getBlockMathRanges(tr.state)
+        .find((range) => blockMathKey(range) === suppressedKey);
+      if (!suppressedRange || !rangeContainsWholeSelection(tr.state, suppressedRange)) {
+        suppressedKey = "";
+      }
+    }
     if (active && !startedByEffect && tr.selection != null) {
       const selection = tr.state.selection.main;
       if (!selection.empty || selection.head !== active.from) active = null;
@@ -1037,6 +1043,12 @@ function rangeContainsSelection(state: EditorState, range: { from: number; to: n
   return selection.from < range.to && selection.to > range.from;
 }
 
+function rangeContainsWholeSelection(state: EditorState, range: { from: number; to: number }): boolean {
+  if (state.selection.ranges.length !== 1) return false;
+  const selection = state.selection.main;
+  return selection.from > range.from && selection.to < range.to;
+}
+
 function inlineMathAtSelection(state: EditorState): InlineMathRange | null {
   if (state.selection.ranges.length !== 1 || !state.selection.main.empty) return null;
   return inlineMathRangesOnSelectionLines(state)
@@ -1156,7 +1168,13 @@ class MathInlinePlugin {
 
     const selected = inlineMathAtSelection(update.view.state);
     const nextSelectionKey = selected ? `${selected.from}:${selected.to}` : "";
-    if (this.suppressedKey && nextSelectionKey !== this.suppressedKey) this.suppressedKey = "";
+    if (this.suppressedKey && nextSelectionKey !== this.suppressedKey) {
+      const suppressedRange = inlineMathRangesOnSelectionLines(update.view.state)
+        .find((range) => `${range.from}:${range.to}` === this.suppressedKey);
+      if (!suppressedRange || !rangeContainsWholeSelection(update.view.state, suppressedRange)) {
+        this.suppressedKey = "";
+      }
+    }
 
     if (!aborted && this.active) {
       if (!selected || selected.from !== this.active.from || selected.to !== this.active.to) {

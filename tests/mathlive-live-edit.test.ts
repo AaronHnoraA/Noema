@@ -579,7 +579,7 @@ describe("LiveTeX custom macro writeback", () => {
     const template = mathLiveSnippetTemplate({
       key: "text",
       mode: "tex-mode",
-      body: "\\text{${1:a}}$0",
+      body: "\\text{ ${1:a}}$0",
     }, "text-test");
 
     expect(applyVisualTexCompletionTemplate(field, "text", template, 4)).toBe(true);
@@ -590,12 +590,12 @@ describe("LiveTeX custom macro writeback", () => {
       selectionMode: "after",
       feedback: false,
     });
-    expect(visualTexMathfieldLatex(field)).toBe(String.raw`\text{addsdd}`);
+    expect(visualTexMathfieldLatex(field)).toBe(String.raw`\text{ addsdd}`);
 
     expect(advanceVisualTexNavigation(field, false)).toBe("final");
     expectNoSnippetScaffolding(field);
     expect(field.position).toBe(field.lastOffset);
-    expect(visualTexMathfieldLatex(field)).toBe(String.raw`\text{addsdd}`);
+    expect(visualTexMathfieldLatex(field)).toBe(String.raw`\text{ addsdd}`);
   });
 
   test("hands a root boundary to an outer snippet only when it explicitly accepts", () => {
@@ -621,7 +621,7 @@ describe("LiveTeX custom macro writeback", () => {
     const template = mathLiveSnippetTemplate({
       key: "text",
       mode: "tex-mode",
-      body: "\\text{${1:a}}$0",
+      body: "\\text{ ${1:a}}$0",
     }, "text-undo-test");
     expect(applyVisualTexCompletionTemplate(field, "text", template, 4)).toBe(true);
     field.insert("abc", {
@@ -634,11 +634,11 @@ describe("LiveTeX custom macro writeback", () => {
 
     expect(field.executeCommand("undo")).toBe(true);
     expectNoSnippetScaffolding(field);
-    expect(visualTexMathfieldLatex(field)).toBe(String.raw`\text{a}`);
+    expect(visualTexMathfieldLatex(field)).toBe(String.raw`\text{ a}`);
 
     expect(field.executeCommand("redo")).toBe(true);
     expectNoSnippetScaffolding(field);
-    expect(visualTexMathfieldLatex(field)).toBe(String.raw`\text{abc}`);
+    expect(visualTexMathfieldLatex(field)).toBe(String.raw`\text{ abc}`);
   });
 
   test("keeps mixed text/math tabstop navigation out of the content undo history", () => {

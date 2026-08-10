@@ -20,8 +20,12 @@ import { calibrateWrappedLayoutClick, markdownHrefAt } from "../../src/cm6/edito
 import { setKnownRoamRefs } from "../../src/cm6/roam-link-status.ts";
 import { MATH_RENDER_ERROR_MAX_LENGTH, renderMathHTML } from "../../src/math-render.ts";
 import { createVimLite } from "../../aaronnote/vim-lite.ts";
+import { SnippetSession } from "../../aaronnote/snippets.ts";
 import { indentMarkdownBlock } from "../../src/cm6/commands/index.ts";
-import { toggleFormulaSourceAtSelection } from "../../src/cm6/extensions/visual/widgets/math.ts";
+import {
+  revealFormulaSource,
+  toggleFormulaSourceAtSelection,
+} from "../../src/cm6/extensions/visual/widgets/math.ts";
 import {
   isPointerSelecting,
   pointerSelectionEffect,
@@ -2400,6 +2404,30 @@ First draft.
     cleanup();
   });
 
+  test("keeps display TeX source active while a snippet selects its field", async () => {
+    const md = "before\n\n\\[\ntext\n\\]\n\nafter";
+    const { editor, cleanup } = mountCM6(md);
+    editor.setMarkdownSelection(md.indexOf("text") + "text".length);
+    expect(toggleFormulaSourceAtSelection(editor.view)).toBe(true);
+
+    const session = new SnippetSession(editor);
+    expect(session.insert({
+      key: "text",
+      mode: "tex-mode",
+      body: "\\text{ ${1:a}}$0",
+    }, "text".length)).toBe(true);
+
+    expect(editor.getMarkdown()).toContain("\\text{ a}");
+    expect(editor.textBetween(editor.getSelection().from, editor.getSelection().to)).toBe("a");
+    expect(document.querySelector(".cm-math-block-editor")).toBeNull();
+    expect(document.querySelector(".cm-math-block")).toBeNull();
+    expect(document.querySelectorAll(".cm-math-source-line")).toHaveLength(3);
+
+    await nextTick();
+    expect(document.querySelector(".cm-math-block-editor")).toBeNull();
+    cleanup();
+  });
+
   test("writes the latest display draft when focus moves to another source position", async () => {
     const md = "before\n\n\\[\na=b\n\\]\n\nafter";
     const { editor, cleanup } = mountCM6(md);
@@ -2871,6 +2899,30 @@ after
     expect(toggleFormulaSourceAtSelection(editor.view)).toBe(true);
     expect(document.querySelector(".cm-math-inline-editor")).toBeTruthy();
     vim.destroy();
+    cleanup();
+  });
+
+  test("keeps inline TeX source active while a snippet selects its field", async () => {
+    const md = "before \\(text\\) after";
+    const { editor, cleanup } = mountCM6(md);
+    const formulaFrom = md.indexOf("\\(");
+    const formulaTo = md.indexOf("\\)") + 2;
+    expect(revealFormulaSource(editor.view, formulaFrom, formulaTo, "text".length)).toBe(true);
+
+    const session = new SnippetSession(editor);
+    expect(session.insert({
+      key: "text",
+      mode: "tex-mode",
+      body: "\\text{ ${1:a}}$0",
+    }, "text".length)).toBe(true);
+
+    expect(editor.getMarkdown()).toBe("before \\(\\text{ a}\\) after");
+    expect(editor.textBetween(editor.getSelection().from, editor.getSelection().to)).toBe("a");
+    expect(document.querySelector(".cm-math-inline-editor")).toBeNull();
+    expect(document.querySelector(".cm-math-inline")).toBeNull();
+
+    await nextTick();
+    expect(document.querySelector(".cm-math-inline-editor")).toBeNull();
     cleanup();
   });
 

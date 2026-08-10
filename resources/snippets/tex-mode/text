@@ -4,4 +4,4 @@
 # group: Emacs migrated
 # source: /Users/hc/.config/emacs/snippets/tex-mode/text_Text_Environment
 # --
-\text{${1:a}}$0
+\text{ ${1:a}}$0
