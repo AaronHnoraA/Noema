@@ -1,5 +1,4 @@
 const DEFAULT_DEBOUNCE_MS = 6 * 60 * 60_000;
-const DEFAULT_RETRY_MS = 60_000;
 const DEFAULT_STARTUP_MS = 2_000;
 const DEFAULT_PERIODIC_MS = 6 * 60 * 60_000;
 const DEFAULT_PERIODIC_JITTER_MS = 10 * 60_000;
@@ -12,12 +11,13 @@ function timerDelay(value, fallback) {
 /**
  * Repository-scoped automatic synchronization. Each repository gets its own
  * debounce timer and at most one active sync. Changes arriving during a sync
- * schedule one follow-up pass instead of overlapping Git processes.
+ * schedule one follow-up pass instead of overlapping Git processes. Failed
+ * Git attempts wait for the next ordinary sync window. Failures from a
+ * concurrent batch are collected so the host can emit one complete report.
  */
 export function createWikiAutoSync(options = {}) {
   if (typeof options.sync !== "function") throw new TypeError("Wiki auto sync requires a sync function");
   const debounceMs = timerDelay(options.debounceMs, DEFAULT_DEBOUNCE_MS);
-  const retryMs = timerDelay(options.retryMs, DEFAULT_RETRY_MS);
   const startupMs = timerDelay(options.startupMs, DEFAULT_STARTUP_MS);
   const periodicMs = timerDelay(options.periodicMs, DEFAULT_PERIODIC_MS);
   const periodicJitterMs = timerDelay(options.periodicJitterMs, DEFAULT_PERIODIC_JITTER_MS);
@@ -27,8 +27,36 @@ export function createWikiAutoSync(options = {}) {
   const active = new Map();
   const waiting = new Set();
   const rerun = new Set();
+  const batchFailures = new Map();
   let periodicTimer = null;
+  let batchReportTimer = null;
   let accepting = true;
+
+  function recordBatchFailure(repositoryId, error) {
+    batchFailures.set(repositoryId, String(error?.message || error || "Git synchronization failed"));
+  }
+
+  function cancelBatchFailureReport() {
+    if (batchReportTimer) clearTimeout(batchReportTimer);
+    batchReportTimer = null;
+  }
+
+  function reportBatchFailures() {
+    cancelBatchFailureReport();
+    if (batchFailures.size === 0) return;
+    const failures = [...batchFailures].map(([repositoryId, error]) => ({ repositoryId, error }));
+    batchFailures.clear();
+    options.onBatchError?.(failures);
+  }
+
+  function scheduleBatchFailureReport() {
+    if (batchFailures.size === 0 || batchReportTimer) return;
+    batchReportTimer = setTimeout(() => {
+      batchReportTimer = null;
+      if (active.size === 0 && waiting.size === 0) reportBatchFailures();
+    }, 0);
+    batchReportTimer.unref?.();
+  }
 
   function scheduleNextPeriodicSync() {
     if (!accepting || periodicMs <= 0 || periodicTimer) return;
@@ -68,6 +96,7 @@ export function createWikiAutoSync(options = {}) {
 
   async function run(repositoryId) {
     if (!accepting || !repositoryId) return null;
+    cancelBatchFailureReport();
     const current = active.get(repositoryId);
     if (current) {
       rerun.add(repositoryId);
@@ -79,27 +108,26 @@ export function createWikiAutoSync(options = {}) {
     }
     waiting.delete(repositoryId);
     clearPending(repositoryId);
-    let retryDelay = null;
     const task = Promise.resolve()
       .then(() => options.sync(repositoryId))
       .then((result) => {
         options.onResult?.(repositoryId, result);
-        if (result?.phase === "error") retryDelay = retryMs;
+        if (result?.phase === "error") recordBatchFailure(repositoryId, result.error);
         return result;
       })
       .catch((error) => {
         options.onError?.(repositoryId, error);
-        retryDelay = retryMs;
+        recordBatchFailure(repositoryId, error);
         return null;
       });
     const tracked = task.finally(() => {
       if (active.get(repositoryId) === tracked) active.delete(repositoryId);
       if (rerun.delete(repositoryId)) schedule(repositoryId, debounceMs, true);
-      else if (retryDelay != null) schedule(repositoryId, retryDelay, true);
       if (accepting && waiting.size > 0) {
         const next = waiting.values().next().value;
         if (next) void run(next);
       }
+      if (active.size === 0 && waiting.size === 0) scheduleBatchFailureReport();
     });
     active.set(repositoryId, tracked);
     return tracked;
@@ -144,13 +172,21 @@ export function createWikiAutoSync(options = {}) {
     rerun.clear();
     waiting.clear();
     await Promise.allSettled([...active.values()]);
+    cancelBatchFailureReport();
     if (flush) {
       for (const repositoryId of rerun) queued.add(repositoryId);
       const flush = typeof options.flush === "function" ? options.flush : options.sync;
       await Promise.allSettled([...queued].map((repositoryId) => flush(repositoryId)
-        .then((result) => options.onResult?.(repositoryId, result))
-        .catch((error) => options.onError?.(repositoryId, error))));
+        .then((result) => {
+          options.onResult?.(repositoryId, result);
+          if (result?.phase === "error") recordBatchFailure(repositoryId, result.error);
+        })
+        .catch((error) => {
+          options.onError?.(repositoryId, error);
+          recordBatchFailure(repositoryId, error);
+        })));
     }
+    reportBatchFailures();
   }
 
   return {

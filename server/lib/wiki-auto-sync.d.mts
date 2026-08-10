@@ -1,4 +1,5 @@
 export type WikiAutoSyncState = { phase?: string; [key: string]: unknown };
+export type WikiAutoSyncFailure = { repositoryId: string; error: string };
 
 export type WikiAutoSync = {
   mark(repositoryId: string): void;
@@ -14,8 +15,8 @@ export function createWikiAutoSync(options: {
   flush?(repositoryId: string): Promise<WikiAutoSyncState>;
   onResult?(repositoryId: string, result: WikiAutoSyncState): void;
   onError?(repositoryId: string, error: unknown): void;
+  onBatchError?(failures: WikiAutoSyncFailure[]): void;
   debounceMs?: number;
-  retryMs?: number;
   startupMs?: number;
   periodicMs?: number;
   periodicJitterMs?: number;

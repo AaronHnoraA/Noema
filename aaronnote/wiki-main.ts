@@ -1807,17 +1807,21 @@ window.addEventListener("aaronnote:command", (event) => {
     repositoryId?: string;
     phase?: string;
     error?: string;
+    message?: string;
+    notifyError?: boolean;
     conflicts?: WikiConflictSummary[];
   }>).detail;
   if (detail?.command === "wiki-index-changed") void load(true, { silent: true });
   else if (detail?.command === "wiki-sync-state-changed") {
     rememberSyncState(detail.repositoryId || "Repository", detail as Partial<WikiSyncState>);
-    if (detail.phase === "error") {
-      setStatus(`${detail.repositoryId || "Repository"} sync failed: ${detail.error || "retry scheduled"}`, true);
+    if (detail.phase === "error" && detail.notifyError !== false) {
+      setStatus(`${detail.repositoryId || "Repository"} sync failed: ${detail.error || "will retry at the next scheduled push"}`, true);
     } else if (detail.phase === "conflicted") {
       setStatus(`${detail.repositoryId || "Repository"} needs conflict resolution`, true);
     }
     if (activeView === "repositories" || activeView === "sync") render();
+  } else if (detail?.command === "wiki-sync-batch-failed") {
+    setStatus(detail.message || "Git sync failed; Noema will retry at the next scheduled push.", true);
   }
 });
 

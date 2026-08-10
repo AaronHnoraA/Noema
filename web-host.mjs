@@ -618,11 +618,12 @@ function withWikiMutationHooks(handlers, { full = [], only = null } = {}) {
   ]));
 }
 
-function applyWikiSyncResult(repositoryId, result) {
+function applyWikiSyncResult(repositoryId, result, { notifyError = true } = {}) {
   broadcast("command", {
     command: "wiki-sync-state-changed",
     repositoryId,
     ...result,
+    notifyError,
   });
   const refresh = wikiSyncIndexRefreshPlan(result, {
     fullProbability: wikiFullRefreshChance,
@@ -633,6 +634,12 @@ function applyWikiSyncResult(repositoryId, result) {
     scheduleWikiRefresh(refresh.changedFiles, { mode: refresh.mode });
   }
   return result;
+}
+
+function wikiAutoSyncFailureMessage(failures) {
+  const repositories = [...new Set(failures.map((failure) => String(failure.repositoryId || "")).filter(Boolean))];
+  const noun = repositories.length === 1 ? "repository" : "repositories";
+  return `Git sync failed for ${repositories.length} ${noun}: ${repositories.join(", ")}. Noema will retry at the next scheduled push.`;
 }
 
 const wikiAutoSync = wikiAutoSyncEnabled
@@ -646,7 +653,7 @@ const wikiAutoSync = wikiAutoSyncEnabled
       flush: (repositoryId) => checkpointWikiRepository(noteRoot, repositoryId, {
         message: "noema: session checkpoint",
       }),
-      onResult: applyWikiSyncResult,
+      onResult: (repositoryId, result) => applyWikiSyncResult(repositoryId, result, { notifyError: false }),
       onError(repositoryId, error) {
         const message = String(error?.message || error);
         process.stderr.write(`[noema-wiki] automatic sync failed for ${repositoryId}: ${message}\n`);
@@ -655,6 +662,14 @@ const wikiAutoSync = wikiAutoSyncEnabled
           repositoryId,
           phase: "error",
           error: message,
+          notifyError: false,
+        });
+      },
+      onBatchError(failures) {
+        broadcast("command", {
+          command: "wiki-sync-batch-failed",
+          failures,
+          message: wikiAutoSyncFailureMessage(failures),
         });
       },
     })

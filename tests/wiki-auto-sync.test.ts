@@ -119,12 +119,45 @@ describe("Wiki automatic synchronization", () => {
     await scheduler.close();
   });
 
-  test("retries an error state and flushes a pending repository on close", async () => {
+  test("collects repository failures into one report per automatic push batch", async () => {
+    vi.useFakeTimers();
+    const reports: Array<Array<{ repositoryId: string; error: string }>> = [];
+    const scheduler = createWikiAutoSync({
+      startupMs: 10,
+      debounceMs: 100,
+      periodicMs: 0,
+      maxConcurrency: 2,
+      async sync(repositoryId) {
+        return { phase: "error", error: `offline:${repositoryId}` };
+      },
+      onBatchError(failures) {
+        reports.push(failures);
+      },
+    });
+
+    scheduler.start(["public/AI", "public/Bio", "private/research"]);
+    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.map((failure) => failure.repositoryId).sort()).toEqual([
+      "private/research",
+      "public/AI",
+      "public/Bio",
+    ]);
+
+    scheduler.mark("public/AI");
+    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(reports).toHaveLength(2);
+    expect(reports[1]).toEqual([{ repositoryId: "public/AI", error: "offline:public/AI" }]);
+    await scheduler.close();
+  });
+
+  test("waits for the next normal sync window after an error and flushes a pending repository on close", async () => {
     vi.useFakeTimers();
     let calls = 0;
     const scheduler = createWikiAutoSync({
       debounceMs: 100,
-      retryMs: 500,
       periodicMs: 0,
       async sync() {
         calls += 1;
@@ -135,7 +168,12 @@ describe("Wiki automatic synchronization", () => {
     scheduler.mark("public/AI");
     await vi.advanceTimersByTimeAsync(100);
     expect(calls).toBe(1);
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(calls).toBe(1);
+    expect(scheduler.snapshot().pending).toEqual([]);
+
+    scheduler.mark("public/AI");
+    await vi.advanceTimersByTimeAsync(100);
     expect(calls).toBe(2);
 
     scheduler.mark("public/Bio");

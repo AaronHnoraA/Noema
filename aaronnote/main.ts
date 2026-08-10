@@ -9408,6 +9408,8 @@ function runHostCommand(detail: unknown): boolean {
     repositoryId?: string;
     phase?: string;
     error?: string;
+    message?: string;
+    notifyError?: boolean;
   };
   const command = String(body.command || "").trim().toLowerCase();
   if (!command) return false;
@@ -9438,11 +9440,14 @@ function runHostCommand(detail: unknown): boolean {
       const phase = String(body.phase || "");
       if (phase === "conflicted") {
         setStatus(`${repositoryId} has a Git conflict; open Wiki repositories to resolve it`);
-      } else if (phase === "error") {
-        setStatus(`${repositoryId} sync failed: ${String(body.error || "retry scheduled")}`);
+      } else if (phase === "error" && body.notifyError !== false) {
+        setStatus(`${repositoryId} sync failed: ${String(body.error || "will retry at the next scheduled push")}`);
       }
       return true;
     }
+    case "wiki-sync-batch-failed":
+      setStatus(String(body.message || "Git sync failed; Noema will retry at the next scheduled push."));
+      return true;
     case "bibliography-index-changed":
       hideSnippetPopup();
       clearCompletionCache();
