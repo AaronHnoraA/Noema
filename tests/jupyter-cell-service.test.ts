@@ -1,5 +1,5 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createJupyterCellService, durationFromEnv, jupyterWidgetCommOpenP } from "../server/lib/jupyter-cell.mjs";
@@ -26,6 +26,23 @@ async function withService(run: (ctx: {
 }
 
 describe("jupyter cell service (no kernel)", () => {
+  test("creates a fresh packaged-state runtime directory before registry use", async () => {
+    const root = await mkdtemp(join(tmpdir(), "noema-jcell-runtime-root-"));
+    const stateRoot = await mkdtemp(join(tmpdir(), "noema-jcell-state-root-"));
+    const service = createJupyterCellService({
+      runtimeRoot: root,
+      stateRoot,
+      noteRoot: root,
+      workspaceRoot: root,
+    });
+    try {
+      await service.listTasks();
+      expect((await stat(join(stateRoot, "jupyter", "runtime"))).isDirectory()).toBe(true);
+    } finally {
+      await service.shutdown().catch(() => {});
+    }
+  });
+
   test("openScript delegates opening to the configured host", async () => {
     const opened: Array<{ file: string; line: number; col: number }> = [];
     let kernelspecCalls = 0;

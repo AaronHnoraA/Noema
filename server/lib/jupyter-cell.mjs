@@ -7,6 +7,7 @@ import {
   stat as nativeStat,
   writeFile as nativeWriteFile,
 } from "node:fs/promises";
+import { homedir } from "node:os";
 import { basename, delimiter, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createKernelRegistry, sweepOrphanKernels } from "../jupyter/kernel-registry.mjs";
 import { defaultKernelSearchDirs, findKernelSpecs, findAttachableConnectionFiles, resolveAttachToken } from "../jupyter/kernel-finder.mjs";
@@ -342,9 +343,11 @@ export function createJupyterCellService({
   const workspace = resolve(workspaceRoot || notes);
   const jupyterRoot = join(root, "jupyter");
   const dataDir = join(jupyterRoot, ".jupyter", "data");
-  const runtimeDir = stateRoot
-    ? join(resolve(stateRoot), "jupyter", "runtime")
-    : join(jupyterRoot, ".jupyter", "runtime");
+  const bundledKernelTemplates = join(jupyterRoot, "kernel-templates");
+  const jupyterStateRoot = stateRoot
+    ? join(resolve(stateRoot), "jupyter")
+    : join(jupyterRoot, ".jupyter");
+  const runtimeDir = join(jupyterStateRoot, "runtime");
   const kernelIdleTtlMs = durationFromEnv("AARONNOTE_JUPYTER_KERNEL_IDLE_TTL_MS", 10 * 60 * 1000);
   const cleanupIntervalMs = durationFromEnv("AARONNOTE_JUPYTER_CLEANUP_INTERVAL_MS", 30 * 1000);
   const execTimeoutMs = durationFromEnv("AARONNOTE_JUPYTER_EXEC_TIMEOUT_MS", 0);
@@ -422,6 +425,10 @@ export function createJupyterCellService({
   async function getRegistry() {
     if (!registryPromise) {
       registryPromise = (async () => {
+        // Packaged desktop state starts empty. The connection file and owned
+        // kernel sidecar are the first Jupyter writes, so the registry cannot
+        // assume its runtime directory was created by an earlier bootstrap.
+        await nativeMkdir(runtimeDir, { recursive: true });
         const sidecarPath = join(runtimeDir, "aaronnote-owned.json");
         await sweepOrphanKernels({ sidecarPath, stderr }).catch(() => {});
         const zmq = injectedZmq || (await import("zeromq"));
@@ -451,7 +458,17 @@ export function createJupyterCellService({
     if (cached && cached.expiresAt > Date.now()) return cached.value;
     const value = kernelHost && file
       ? await kernelHost.listKernelSpecs(file)
-      : await findKernelSpecs({ searchDirs: kernelSearchDirs(), allowedNames });
+      : await findKernelSpecs({
+          searchDirs: kernelSearchDirs(),
+          allowedNames,
+          fallbackKernelDirs: [bundledKernelTemplates],
+          templateVariables: {
+            AARONNOTE_JUPYTER_ROOT: jupyterRoot,
+            AARONNOTE_JUPYTER_STATE_ROOT: jupyterStateRoot,
+            NOEMA_USER_HOME: homedir(),
+            SAGE_VERSION: String(process.env.AARONNOTE_SAGE_VERSION || "current"),
+          },
+        });
     kernelspecCache.set(key, { value, expiresAt: Date.now() + kernelspecCacheTtlMs });
     return value;
   }

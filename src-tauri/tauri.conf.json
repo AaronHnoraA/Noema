@@ -37,6 +37,8 @@
       "../js/": "js/",
       "../agents/": "agents/",
       "../plugins/": "plugins/",
+      "../jupyter/bin/": "jupyter/bin/",
+      "../jupyter/kernel-templates/": "jupyter/kernel-templates/",
       "../resources/": "resources/",
       "../src/styles/themes/": "src/styles/themes/",
       "../package.json": "package.json"

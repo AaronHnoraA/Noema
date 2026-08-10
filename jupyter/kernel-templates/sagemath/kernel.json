@@ -7,8 +7,12 @@
   "display_name": "SageMath @SAGE_VERSION@",
   "language": "sage",
   "env": {
+    "HOME": "@NOEMA_USER_HOME@",
     "PYTHONNOUSERSITE": "",
-    "SAGE_JUPYTER_LOG": "@AARONNOTE_JUPYTER_ROOT@/.jupyter/logs/sagemath-kernel.log"
+    "SAGE_JUPYTER_LOG": "@AARONNOTE_JUPYTER_STATE_ROOT@/logs/sagemath-kernel.log",
+    "DOT_SAGE": "@AARONNOTE_JUPYTER_STATE_ROOT@/sage",
+    "IPYTHONDIR": "@AARONNOTE_JUPYTER_STATE_ROOT@/ipython",
+    "TMPDIR": "@AARONNOTE_JUPYTER_STATE_ROOT@/tmp/"
   },
   "metadata": {
     "debugger": false,

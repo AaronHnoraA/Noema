@@ -16,8 +16,33 @@ PYTHON_BIN="${AARONNOTE_PYTHON:-}"
 if [[ -z "$PYTHON_BIN" || ! -x "$PYTHON_BIN" ]]; then
   CONDA_BIN="${AARONNOTE_CONDA_EXE:-${CONDA_EXE:-}}"
   if [[ -z "$CONDA_BIN" ]]; then CONDA_BIN="$(command -v conda || true)"; fi
-  [[ -n "$CONDA_BIN" ]] || { printf 'Noema Conda runtime metadata is missing; run make python-env.\n' >&2; exit 127; }
-  exec "$CONDA_BIN" run --no-capture-output -n "${AARONNOTE_CONDA_ENV:-aaronnote-python}" python "$@"
+  if [[ -z "$CONDA_BIN" ]]; then
+    USER_ROOT="${HOME:-}"
+    for candidate in \
+      "${USER_ROOT:+${USER_ROOT}/miniconda3/bin/conda}" \
+      "${USER_ROOT:+${USER_ROOT}/anaconda3/bin/conda}" \
+      "${USER_ROOT:+${USER_ROOT}/miniforge3/bin/conda}" \
+      /opt/homebrew/anaconda3/condabin/conda \
+      /opt/homebrew/Caskroom/miniconda/base/bin/conda \
+      /opt/homebrew/Caskroom/miniforge/base/bin/conda \
+      /usr/local/anaconda3/bin/conda \
+      /usr/local/miniconda3/bin/conda; do
+      if [[ -n "$candidate" && -x "$candidate" ]]; then
+        CONDA_BIN="$candidate"
+        break
+      fi
+    done
+  fi
+  if [[ -n "$CONDA_BIN" && -x "$CONDA_BIN" ]]; then
+    exec "$CONDA_BIN" run --no-capture-output -n "${AARONNOTE_CONDA_ENV:-aaronnote-python}" python "$@"
+  fi
+  for candidate in "$(command -v python3 || true)" /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
+    if [[ -n "$candidate" && -x "$candidate" ]] && "$candidate" -c 'import ipykernel' >/dev/null 2>&1; then
+      exec "$candidate" "$@"
+    fi
+  done
+  printf 'Noema Python kernel is unavailable: install the aaronnote-python Conda environment or a Python 3 with ipykernel.\n' >&2
+  exit 127
 fi
 
 exec "$PYTHON_BIN" "$@"

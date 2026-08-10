@@ -398,7 +398,7 @@ async function rebuildServerPublicCatalog({ sync = false } = {}) {
 
 const jupyterCell = hostMode === "server" ? null : createJupyterCellService({
   runtimeRoot,
-  ...(hostMode === "desktop" && process.platform === "win32" ? { stateRoot } : {}),
+  ...(hostMode === "desktop" ? { stateRoot } : {}),
   noteRoot,
   workspaceRoot,
   stdout: process.stdout,

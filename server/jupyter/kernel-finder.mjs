@@ -48,10 +48,28 @@ export function defaultKernelSearchDirs({
  * `{ name, spec, resourceDir }`, `spec` being the parsed `kernel.json`.
  * Directories earlier in `searchDirs` take priority for a given kernel name.
  */
-export async function findKernelSpecs({ searchDirs, allowedNames }) {
+function substituteKernelTemplate(value, variables) {
+  if (typeof value === "string") {
+    let result = value;
+    for (const [name, replacement] of Object.entries(variables || {})) {
+      result = result.split(`@${name}@`).join(String(replacement));
+    }
+    return result;
+  }
+  if (Array.isArray(value)) return value.map((item) => substituteKernelTemplate(item, variables));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, substituteKernelTemplate(item, variables)]));
+  }
+  return value;
+}
+
+export async function findKernelSpecs({ searchDirs, allowedNames, fallbackKernelDirs = [], templateVariables = {} }) {
   const seen = new Map();
-  for (const dir of searchDirs) {
-    const kernelsDir = path.join(dir, "kernels");
+  const kernelDirs = [
+    ...searchDirs.map((dir) => path.join(dir, "kernels")),
+    ...fallbackKernelDirs,
+  ];
+  for (const kernelsDir of kernelDirs) {
     let entries;
     try {
       entries = await fs.readdir(kernelsDir, { withFileTypes: true });
@@ -63,7 +81,7 @@ export async function findKernelSpecs({ searchDirs, allowedNames }) {
       const resourceDir = path.join(kernelsDir, entry.name);
       try {
         const raw = await fs.readFile(path.join(resourceDir, "kernel.json"), "utf8");
-        const spec = JSON.parse(raw);
+        const spec = substituteKernelTemplate(JSON.parse(raw), templateVariables);
         if (!Array.isArray(spec.argv) || spec.argv.length === 0) continue;
         seen.set(entry.name, { name: entry.name, spec, resourceDir });
       } catch {

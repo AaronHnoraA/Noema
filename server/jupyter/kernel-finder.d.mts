@@ -25,6 +25,10 @@ export function defaultKernelSearchDirs(options: {
 export function findKernelSpecs(options: {
   searchDirs: string[];
   allowedNames?: string[];
+  /** Direct kernelspec directories scanned after normal Jupyter data roots. */
+  fallbackKernelDirs?: string[];
+  /** Values for @NAME@ placeholders in fallback kernelspec templates. */
+  templateVariables?: Record<string, string>;
 }): Promise<KernelSpecEntry[]>;
 
 export interface AttachableConnectionFile {

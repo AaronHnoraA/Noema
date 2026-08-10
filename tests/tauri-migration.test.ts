@@ -40,6 +40,8 @@ describe("Tauri desktop migration", () => {
     expect(config.mainBinaryName).toBe("Noema");
     expect(config.bundle.externalBin).toContain("binaries/noema-node");
     expect(config.bundle.resources["../web-host.mjs"]).toBe("web-host.mjs");
+    expect(config.bundle.resources["../jupyter/bin/"]).toBe("jupyter/bin/");
+    expect(config.bundle.resources["../jupyter/kernel-templates/"]).toBe("jupyter/kernel-templates/");
     expect(config.bundle.resources["../node_modules/"]).toBeUndefined();
     expect(config.bundle.fileAssociations).toEqual(expect.arrayContaining([
       expect.objectContaining({ ext: ["md", "markdown"], role: "Editor" }),

@@ -1226,6 +1226,50 @@ y^2
     cleanup();
   });
 
+  test("jupyter cell Run sends the complete context and displays host errors", async () => {
+    const originalApi = window.aaronnoteApi;
+    const originalCurrentFile = window.AaronnoteCurrentFile;
+    const file = "/tmp/noema-jupyter-run-error.md";
+    const executeScriptCell = vi.fn(async () => {
+      throw new Error("Unknown Jupyter kernel: python3");
+    });
+    window.AaronnoteCurrentFile = () => file;
+    window.aaronnoteApi = {
+      jupyterCell: {
+        readScriptCell: async () => ({ ok: true, code: 'print("sada")', exists: true }),
+        executeScriptCell,
+      },
+    };
+    const { cleanup } = mountCM6("@@cell(python, python3, default) [run-error]");
+    try {
+      await nextTick();
+      await nextTick();
+      const run = Array.from(document.querySelectorAll<HTMLButtonElement>(".cm-ceil-actions button"))
+        .find((button) => button.textContent === "Run");
+      expect(run).toBeTruthy();
+      run!.click();
+      await nextTick();
+      await nextTick();
+
+      expect(executeScriptCell).toHaveBeenCalledWith(expect.objectContaining({
+        file,
+        cellId: "run-error",
+        kernel: "python3",
+        session: "default",
+        selectedCellIds: ["run-error"],
+        // Source remains server-owned in the hidden script; the renderer sends
+        // the complete ordered cell metadata without overwriting edited code.
+        cells: [expect.objectContaining({ cellId: "run-error", code: "" })],
+      }));
+      expect(document.querySelector(".cm-ceil-status")?.textContent).toBe("Unknown Jupyter kernel: python3");
+      expect(document.querySelector(".cm-ceil-output-empty")?.textContent).toBe("Unknown Jupyter kernel: python3");
+    } finally {
+      cleanup();
+      window.aaronnoteApi = originalApi;
+      window.AaronnoteCurrentFile = originalCurrentFile;
+    }
+  });
+
   test("html env stays previewed until source mode", () => {
     const md = [
       "before",

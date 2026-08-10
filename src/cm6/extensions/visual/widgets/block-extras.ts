@@ -2195,15 +2195,19 @@ class CeilCommandWidget extends MeasuredWidget {
       });
     };
     const renderCurrentError = (err: unknown): void => {
+      const message = err instanceof Error ? err.message : String(err);
       lastResult = preserveCurrentOutputUi({
         ok: false,
         status: "error",
         live: true,
-        message: err instanceof Error ? err.message : String(err),
-        outputs: [{ output_type: "error", traceback: [err instanceof Error ? err.message : String(err)] }],
+        message,
+        // Transport/host errors are not kernel error messages. Keeping this
+        // empty makes renderCeilOutputs show the actionable message directly
+        // instead of handing an incomplete error record to JupyterLab.
+        outputs: [],
       });
       if (!leanRuntime) renderCeilOutputs(output, lastResult, outputWrap.classList.contains("is-expanded"), view, { preserveScroll: true });
-      setStatus("Error");
+      setStatus(message || "Error");
     };
     const runEntries = async (entriesToRun: CeilCellContextEntry[], emptyMessage: string): Promise<void> => {
       if (!file) {

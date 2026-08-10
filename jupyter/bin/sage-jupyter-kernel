@@ -13,10 +13,13 @@ if [[ -r "$RUNTIME_ENV" ]]; then
 fi
 
 LOG="${SAGE_JUPYTER_LOG:-${JUPYTER_ROOT}/.jupyter/logs/sagemath-kernel.log}"
+SAGE_STATE_DIR="${DOT_SAGE:-${JUPYTER_ROOT}/.jupyter/sage}"
+IPYTHON_STATE_DIR="${IPYTHONDIR:-${JUPYTER_ROOT}/.jupyter/ipython}"
+JUPYTER_TMP_DIR="${TMPDIR:-${JUPYTER_ROOT}/.jupyter/tmp/}"
 mkdir -p "$(dirname "$LOG")" \
-  "${JUPYTER_ROOT}/.jupyter/sage" \
-  "${JUPYTER_ROOT}/.jupyter/ipython" \
-  "${JUPYTER_ROOT}/.jupyter/tmp"
+  "$SAGE_STATE_DIR" \
+  "$IPYTHON_STATE_DIR" \
+  "$JUPYTER_TMP_DIR"
 
 {
   printf '\n[%s] starting SageMath kernel\n' "$(date '+%F %T')"
@@ -31,18 +34,30 @@ export HOME="${HOME:-/Users/hc}"
 export USER="${USER:-hc}"
 export LOGNAME="${LOGNAME:-hc}"
 export SHELL="${SHELL:-/bin/zsh}"
-export DOT_SAGE="${DOT_SAGE:-${JUPYTER_ROOT}/.jupyter/sage}"
-export IPYTHONDIR="${IPYTHONDIR:-${JUPYTER_ROOT}/.jupyter/ipython}"
-export TMPDIR="${TMPDIR:-${JUPYTER_ROOT}/.jupyter/tmp/}"
+export DOT_SAGE="$SAGE_STATE_DIR"
+export IPYTHONDIR="$IPYTHON_STATE_DIR"
+export TMPDIR="$JUPYTER_TMP_DIR"
 # Sage extensions are deliberately installed with `pip --user`.  Python
 # treats any non-empty PYTHONNOUSERSITE value (including "0") as disabled.
 unset PYTHONNOUSERSITE
 
 SAGE_BIN="${AARONNOTE_SAGE:-}"
 if [ -z "$SAGE_BIN" ] || [ ! -x "$SAGE_BIN" ]; then
-  if command -v sage >/dev/null 2>&1; then
-    SAGE_BIN="$(command -v sage)"
-  else
+  SAGE_BIN="$(command -v sage 2>/dev/null || true)"
+  if [ -z "$SAGE_BIN" ]; then
+    USER_ROOT="${HOME:-}"
+    for candidate in \
+      "${USER_ROOT:+${USER_ROOT}/sage/sage}" \
+      /opt/homebrew/bin/sage \
+      /usr/local/bin/sage \
+      /Applications/SageMath.app/Contents/MacOS/sage; do
+      if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+        SAGE_BIN="$candidate"
+        break
+      fi
+    done
+  fi
+  if [ -z "$SAGE_BIN" ] || [ ! -x "$SAGE_BIN" ]; then
     printf 'Sage executable not found; run make sage-refresh after installing SageMath.\n' >>"$LOG"
     exit 127
   fi
