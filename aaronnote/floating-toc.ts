@@ -369,10 +369,26 @@ export function createFloatingTocPanel(options: {
     options.toggleButton.textContent = headings.length > 0 ? `Page ${headings.length}` : "Page";
 
     const keys = floatingTocFoldKeys(headings);
+    const boundaries = new Array<number>(headings.length).fill(Number.POSITIVE_INFINITY);
+    const boundaryStack: number[] = [];
+    for (let index = headings.length - 1; index >= 0; index -= 1) {
+      const heading = headings[index]!;
+      while (boundaryStack.length > 0
+          && headings[boundaryStack[boundaryStack.length - 1]!]!.level > heading.level) {
+        boundaryStack.pop();
+      }
+      const boundaryIndex = boundaryStack[boundaryStack.length - 1];
+      if (boundaryIndex != null) boundaries[index] = headings[boundaryIndex]!.pos;
+      boundaryStack.push(index);
+    }
+    let nextOrgIndex = 0;
     const headingHasChildren = headings.map((heading, index) => {
-      const boundary = headings.slice(index + 1).find((next) => next.level <= heading.level)?.pos ?? Number.POSITIVE_INFINITY;
+      while (nextOrgIndex < orgEnvState.items.length
+          && orgEnvState.items[nextOrgIndex]!.pos <= heading.pos) nextOrgIndex++;
       const deeperHeading = index < headings.length - 1 && headings[index + 1]!.level > heading.level;
-      const orgChild = orgEnvActive && orgEnvState.items.some((item) => item.pos > heading.pos && item.pos < boundary);
+      const orgChild = orgEnvActive
+        && nextOrgIndex < orgEnvState.items.length
+        && orgEnvState.items[nextOrgIndex]!.pos < boundaries[index]!;
       return deeperHeading || orgChild;
     });
 

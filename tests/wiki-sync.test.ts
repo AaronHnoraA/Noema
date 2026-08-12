@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import { hostname, tmpdir } from "node:os";
 import { get } from "node:http";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -8,6 +8,7 @@ import { afterEach, describe, expect, test } from "@voidzero-dev/vite-plus-test"
 
 import { createWikiPage, initWikiRepository } from "../server/lib/wiki-workspace.mjs";
 import {
+  checkpointWikiRepository,
   defaultWikiGitMaintenanceBytes,
   defaultWikiSyncIntervalMs,
   readWikiConflict,
@@ -44,6 +45,7 @@ async function fixture(): Promise<{
   repositoryPath: string;
   remote: string;
   configDir: string;
+  repositoryUid: string;
 }> {
   const suite = await mkdtemp(join(tmpdir(), "noema-sync-"));
   roots.push(suite);
@@ -68,6 +70,7 @@ async function fixture(): Promise<{
     repositoryPath: created.repository.path,
     remote,
     configDir: join(suite, "config"),
+    repositoryUid: created.repository.uid,
   };
 }
 
@@ -162,6 +165,98 @@ describe("Wiki Git synchronization", () => {
 
     expect(second).toBe(first);
     await expect(first).resolves.toMatchObject({ phase: "idle", localOnly: false });
+  });
+
+  test("preserves and recovers an old empty orphaned Git index lock", async () => {
+    const item = await fixture();
+    const gitDir = await git(item.repositoryPath, "rev-parse", "--absolute-git-dir");
+    const lock = join(gitDir, "index.lock");
+    await writeFile(lock, "");
+    const old = new Date(Date.now() - 60_000);
+    await utimes(lock, old, old);
+
+    const state = await checkpointWikiRepository(item.root, "private/research", {
+      configDir: item.configDir,
+      gitLockStaleMs: 1_000,
+    });
+
+    expect(state).toMatchObject({
+      phase: "idle",
+      recoveredGitLock: { kind: "orphan-index-lock", size: 0 },
+    });
+    await expect(readFile(lock)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(join(item.root, state.recoveredGitLock!.backup), "utf8")).toBe("");
+  });
+
+  test("never recovers a non-empty index lock that may belong to external Git", async () => {
+    const item = await fixture();
+    const gitDir = await git(item.repositoryPath, "rev-parse", "--absolute-git-dir");
+    const lock = join(gitDir, "index.lock");
+    await writeFile(lock, "active-index-data");
+
+    const state = await syncWikiRepository(item.root, "private/research", {
+      configDir: item.configDir,
+      gitLockStaleMs: 0,
+      repositoryLeaseWaitMs: 0,
+      repositoryBusyRetryMs: 25,
+    });
+
+    expect(state).toMatchObject({ phase: "waiting", retryable: true, retryAfterMs: 25 });
+    expect(await readFile(lock, "utf8")).toBe("active-index-data");
+  });
+
+  test("recovers a fresh empty lock when a dead Noema lease identifies its owner", async () => {
+    const item = await fixture();
+    const leaseDirectory = join(item.root, ".noema", "git-leases");
+    await mkdir(leaseDirectory, { recursive: true });
+    await writeFile(join(leaseDirectory, `${item.repositoryUid}.json`), `${JSON.stringify({
+      schema: 1,
+      token: "dead-host",
+      pid: 2_147_483_647,
+      host: hostname(),
+      operation: "sync",
+      repositoryId: "private/research",
+    })}\n`);
+    const gitDir = await git(item.repositoryPath, "rev-parse", "--absolute-git-dir");
+    const lock = join(gitDir, "index.lock");
+    await writeFile(lock, "");
+
+    const state = await checkpointWikiRepository(item.root, "private/research", {
+      configDir: item.configDir,
+      gitLockStaleMs: 60 * 60_000,
+      repositoryLeaseWaitMs: 0,
+      repositoryLeaseDeadGraceMs: 0,
+    });
+
+    expect(state.recoveredGitLock).toMatchObject({
+      kind: "orphan-index-lock",
+      size: 0,
+      previousOwnerPid: 2_147_483_647,
+    });
+    await expect(readFile(lock)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  test("returns a transient waiting state while another live Noema host owns the repository", async () => {
+    const item = await fixture();
+    const leaseDirectory = join(item.root, ".noema", "git-leases");
+    const lease = join(leaseDirectory, `${item.repositoryUid}.json`);
+    await mkdir(leaseDirectory, { recursive: true });
+    await writeFile(lease, `${JSON.stringify({
+      schema: 1,
+      token: "live-host",
+      pid: process.pid,
+      operation: "sync",
+      repositoryId: "private/research",
+    })}\n`);
+
+    const state = await syncWikiRepository(item.root, "private/research", {
+      configDir: item.configDir,
+      repositoryLeaseWaitMs: 0,
+      repositoryBusyRetryMs: 25,
+    });
+
+    expect(state).toMatchObject({ phase: "waiting", retryable: true, retryAfterMs: 25 });
+    expect(JSON.parse(await readFile(lease, "utf8"))).toMatchObject({ token: "live-host" });
   });
 
   test("captures three stages outside the working repository and resolves with product-side semantics", async () => {

@@ -1,11 +1,19 @@
 import type { WikiRepository } from "./wiki-workspace.mjs";
 
 export type WikiSyncConflict = { path: string; kind: string; stages: number[] };
+export type WikiRecoveredGitLock = {
+  kind: "orphan-index-lock";
+  recoveredAt: string;
+  ageMs: number;
+  size: number;
+  backup: string;
+  previousOwnerPid?: number;
+};
 export type WikiSyncState = {
   schema?: number;
   repositoryId: string;
   repositoryUid?: string;
-  phase: "idle" | "checkpointing" | "fetching" | "merging" | "conflicted" | "pushing" | "error";
+  phase: "idle" | "waiting" | "checkpointing" | "fetching" | "merging" | "conflicted" | "pushing" | "error";
   updatedAt?: string;
   lastSyncedAt?: string;
   checkpointedAt?: string;
@@ -17,6 +25,9 @@ export type WikiSyncState = {
   changedPaths?: string[];
   error?: string;
   message?: string;
+  retryable?: boolean;
+  retryAfterMs?: number;
+  recoveredGitLock?: WikiRecoveredGitLock;
   conflicts?: WikiSyncConflict[];
 };
 

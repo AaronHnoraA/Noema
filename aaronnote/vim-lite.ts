@@ -1,6 +1,5 @@
 import type { Editor } from "../src/lib.ts";
 import { EditorSelection, findClusterBreak, type Text } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
 import {
   selectCharLeft,
   selectCharRight,
@@ -20,8 +19,10 @@ import {
   activateBlockMath,
   formulaRangeAtWidgetPosition,
   formulaSourceRangeAtPosition,
+  revealFormulaSource,
   activateInlineMath,
   activateInlineMathFromArrow,
+  type FormulaWidgetRange,
 } from "../src/cm6/extensions/visual/widgets/math.ts";
 import {
   applyVimJump,
@@ -73,6 +74,7 @@ type VimRegisterKind = "linewise" | "characterwise";
 type VimRegister = {
   text: string;
   kind: VimRegisterKind;
+  fragments: readonly string[];
 };
 
 type LineInfo = {
@@ -90,6 +92,21 @@ type VimJumpInput = {
 type VerticalGoal = {
   kind: "pixel" | "column";
   value: number;
+};
+
+type VimLogicalLine = {
+  /** Text owned by the logical line, excluding its terminating newline. */
+  from: number;
+  to: number;
+  /** Half-open range used by Visual-line/yank. */
+  selectionFrom: number;
+  selectionTo: number;
+  /** Range removed by a linewise delete. May borrow the preceding newline. */
+  deleteFrom: number;
+  deleteTo: number;
+  cursor: number;
+  registerText: string;
+  formulaScope: { from: number; to: number } | null;
 };
 
 const AVY_TIMEOUT_MS = 500;
@@ -167,18 +184,122 @@ function docLineInfo(text: Text, pos: number): LineInfo {
   return { start: line.from, end: line.to, column: clamp(pos, line.from, line.to) - line.from };
 }
 
-function docLineRange(text: Text, pos: number): { from: number; to: number; cursor: number } {
-  const line = text.lineAt(clamp(pos, 0, text.length));
-  const to = line.to < text.length ? line.to + 1 : line.to;
-  return { from: line.from, to, cursor: line.from };
+function revealedFormulaAt(editor: Editor, pos: number): FormulaWidgetRange | null {
+  const source = formulaSourceRangeAtPosition(editor.view, pos);
+  if (!source) return null;
+  return formulaRangeAtWidgetPosition(editor.view.state, pos)
+    ?? formulaRangeAtWidgetPosition(editor.view.state, source.from);
 }
 
-function docLineSelectionRange(text: Text, anchor: number, head: number): { from: number; to: number } {
-  const a = docLineRange(text, anchor);
-  const h = docLineRange(text, head);
+function restoreRevealedFormula(editor: Editor, previous: FormulaWidgetRange | null): void {
+  if (!previous || editor.view.state.selection.ranges.length !== 1) return;
+  const head = currentHead(editor);
+  const current = formulaRangeAtWidgetPosition(editor.view.state, head);
+  if (!current || current.display !== previous.display) return;
+  revealFormulaSource(
+    editor.view,
+    current.from,
+    current.to,
+    clamp(head - current.contentFrom, 0, Math.max(0, current.contentTo - current.contentFrom)),
+  );
+}
+
+function boundedLogicalLine(
+  text: Text,
+  pos: number,
+  boundaryFrom: number,
+  boundaryTo: number,
+  formulaScope: { from: number; to: number } | null,
+): VimLogicalLine {
+  const empty = boundaryFrom >= boundaryTo;
+  const safePos = empty
+    ? boundaryFrom
+    : clamp(pos, boundaryFrom, Math.max(boundaryFrom, boundaryTo - 1));
+  const line = text.lineAt(safePos);
+  const from = Math.max(boundaryFrom, line.from);
+  const to = Math.min(boundaryTo, line.to);
+  const hasFollowingNewline = to < boundaryTo && text.sliceString(to, to + 1) === "\n";
+  const selectionTo = hasFollowingNewline ? to + 1 : to;
+  const deleteFrom = !hasFollowingNewline && from > boundaryFrom
+    && text.sliceString(from - 1, from) === "\n"
+    ? from - 1
+    : from;
+  const raw = text.sliceString(from, to);
   return {
-    from: Math.min(a.from, h.from),
-    to: Math.max(a.to, h.to),
+    from,
+    to,
+    selectionFrom: from,
+    selectionTo,
+    deleteFrom,
+    deleteTo: selectionTo,
+    cursor: from,
+    registerText: `${raw}\n`,
+    formulaScope,
+  };
+}
+
+/**
+ * Vim's line is a visual/logical object, not always a raw Markdown source line.
+ * A collapsed display formula is one line; a revealed formula owns only its
+ * TeX body lines, so linewise commands can never eat `\(`/`\)` or `\[`/`\]`.
+ */
+function logicalLineAt(editor: Editor, pos: number): VimLogicalLine {
+  const text = doc(editor);
+  const revealed = revealedFormulaAt(editor, pos);
+  if (revealed) {
+    return boundedLogicalLine(
+      text,
+      pos,
+      revealed.contentFrom,
+      revealed.contentTo,
+      { from: revealed.contentFrom, to: revealed.contentTo },
+    );
+  }
+
+  const object = staticMathObjectAtPosition(editor, pos);
+  const formula = object
+    ? formulaRangeAtWidgetPosition(editor.view.state, object.from)
+    : null;
+  if (object && formula?.display) {
+    const hasFollowingNewline = object.to < text.length
+      && text.sliceString(object.to, object.to + 1) === "\n";
+    const selectionTo = hasFollowingNewline ? object.to + 1 : object.to;
+    const deleteFrom = !hasFollowingNewline && object.from > 0
+      && text.sliceString(object.from - 1, object.from) === "\n"
+      ? object.from - 1
+      : object.from;
+    return {
+      from: object.from,
+      to: object.to,
+      selectionFrom: object.from,
+      selectionTo,
+      deleteFrom,
+      deleteTo: selectionTo,
+      cursor: object.from,
+      registerText: `${text.sliceString(object.from, object.to)}\n`,
+      formulaScope: null,
+    };
+  }
+
+  return boundedLogicalLine(text, pos, 0, text.length, null);
+}
+
+function logicalLineSelectionRange(
+  editor: Editor,
+  anchor: number,
+  head: number,
+  scope: { from: number; to: number } | null = null,
+): { from: number; to: number } {
+  const text = doc(editor);
+  const a = scope
+    ? boundedLogicalLine(text, anchor, scope.from, scope.to, scope)
+    : logicalLineAt(editor, anchor);
+  const h = scope
+    ? boundedLogicalLine(text, head, scope.from, scope.to, scope)
+    : logicalLineAt(editor, head);
+  return {
+    from: Math.min(a.selectionFrom, h.selectionFrom),
+    to: Math.max(a.selectionTo, h.selectionTo),
   };
 }
 
@@ -308,14 +429,6 @@ function setPos(editor: Editor, pos: number): void {
   editor.setMarkdownSelection(clamp(pos, 0, doc(editor).length));
 }
 
-function setSelection(editor: Editor, anchor: number, head: number): void {
-  // Preserve direction: anchor stays fixed, head is the moving end. The
-  // highlighted span is [min,max] either way, but keeping head distinct lets
-  // subsequent motions pivot on the correct end.
-  const length = doc(editor).length;
-  editor.setMarkdownSelection(clamp(anchor, 0, length), clamp(head, 0, length));
-}
-
 function normalCharPosition(text: Text, pos: number): number {
   const line = text.lineAt(clamp(pos, 0, text.length));
   if (line.from === line.to) return line.from;
@@ -332,6 +445,21 @@ function normalCharPosition(text: Text, pos: number): number {
   return line.from + (previousEnd > relative ? previous : relative);
 }
 
+function normalEditorPosition(editor: Editor, pos: number): number {
+  const text = doc(editor);
+  const revealed = revealedFormulaAt(editor, pos);
+  if (revealed) {
+    if (revealed.contentFrom >= revealed.contentTo) return revealed.contentFrom;
+    const bounded = clamp(pos, revealed.contentFrom, revealed.contentTo);
+    const contentPos = bounded >= revealed.contentTo
+      ? previousGraphemePosition(text, revealed.contentTo)
+      : bounded;
+    return normalCharPosition(text, Math.max(revealed.contentFrom, contentPos));
+  }
+  const normalized = normalCharPosition(text, pos);
+  return staticMathObjectAtPosition(editor, normalized)?.from ?? normalized;
+}
+
 function moveNormalCharPosition(text: Text, pos: number, dir: -1 | 1): number {
   const current = normalCharPosition(text, pos);
   const line = text.lineAt(current);
@@ -342,38 +470,58 @@ function moveNormalCharPosition(text: Text, pos: number, dir: -1 | 1): number {
   return moved;
 }
 
-function setNormalPos(editor: Editor, pos: number): void {
-  const normalized = normalCharPosition(doc(editor), pos);
-  const object = staticMathObjectAtPosition(editor, normalized);
-  setPos(editor, object?.from ?? normalized);
+function setNormalCursorPositions(
+  editor: Editor,
+  positions: readonly number[],
+  sourceMainIndex = editor.view.state.selection.mainIndex,
+): void {
+  const candidates = positions.map((position, index) => ({
+    position: normalEditorPosition(editor, position),
+    main: index === sourceMainIndex,
+  })).sort((left, right) => left.position - right.position);
+  const unique = candidates.filter((candidate, index) => (
+    index === 0 || candidate.position !== candidates[index - 1]!.position
+  ));
+  if (unique.length === 0) return;
+  let mainIndex = unique.findIndex((candidate) => candidate.main);
+  if (mainIndex < 0) mainIndex = Math.min(sourceMainIndex, unique.length - 1);
+  editor.view.dispatch({
+    selection: EditorSelection.create(
+      unique.map((candidate) => EditorSelection.cursor(candidate.position)),
+      mainIndex,
+    ),
+    scrollIntoView: true,
+  });
+}
+
+function setCursorPositions(editor: Editor, positions: readonly number[]): void {
+  const state = editor.view.state;
+  const candidates = positions.map((position, index) => ({
+    position: clamp(position, 0, state.doc.length),
+    main: index === state.selection.mainIndex,
+  })).sort((left, right) => left.position - right.position);
+  const unique = candidates.filter((candidate, index) => (
+    index === 0 || candidate.position !== candidates[index - 1]!.position
+  ));
+  if (unique.length === 0) return;
+  let mainIndex = unique.findIndex((candidate) => candidate.main);
+  if (mainIndex < 0) mainIndex = Math.min(state.selection.mainIndex, unique.length - 1);
+  editor.view.dispatch({
+    selection: EditorSelection.create(
+      unique.map((candidate) => EditorSelection.cursor(candidate.position)),
+      mainIndex,
+    ),
+    scrollIntoView: true,
+  });
 }
 
 function moveChar(editor: Editor, dir: -1 | 1): void {
   const text = doc(editor);
-  const pos = currentHead(editor);
-  const target = moveNormalCharPosition(text, pos, dir);
-  setPos(editor, snapStaticMathMotion(editor, pos, target, dir));
-}
-
-function moveDocumentLine(
-  editor: Editor,
-  dir: -1 | 1,
-  goal: VerticalGoal | null,
-  setTarget: (pos: number) => void = (pos) => setNormalPos(editor, pos),
-  startPos = currentHead(editor),
-): VerticalGoal {
-  const text = doc(editor);
-  const pos = normalCharPosition(text, startPos);
-  const line = docLineInfo(text, pos);
-  const desired = goal?.kind === "column" ? goal.value : line.column;
-  if (dir < 0 && line.start > 0) {
-    const previous = docLineInfo(text, line.start - 1);
-    setTarget(Math.min(previous.start + desired, previous.end));
-  } else if (dir > 0 && line.end < text.length) {
-    const next = docLineInfo(text, line.end + 1);
-    setTarget(Math.min(next.start + desired, next.end));
-  }
-  return { kind: "column", value: desired };
+  setNormalCursorPositions(editor, editor.view.state.selection.ranges.map((range) => {
+    const pos = range.head;
+    const target = moveNormalCharPosition(text, pos, dir);
+    return snapStaticMathMotion(editor, pos, target, dir);
+  }));
 }
 
 function nearestCrossedRange<T extends { from: number; to: number }>(
@@ -477,138 +625,288 @@ function crossedVisualEntry(
   return entries[0]!.target;
 }
 
-function moveScreenLine(editor: Editor, dir: -1 | 1, goal: VerticalGoal | null): VerticalGoal {
+function moveScreenLine(
+  editor: Editor,
+  dir: -1 | 1,
+  goals: readonly (VerticalGoal | null)[] | null,
+): VerticalGoal[] {
+  const selections = editor.view.state.selection.ranges;
   const rect = editor.view.contentDOM.getBoundingClientRect();
   // A detached/hidden editor has no usable layout. Preserve keyboard access
   // with a logical-line fallback until CM6 can measure real screen rows.
-  if (rect.width <= 0 || rect.height <= 0) return moveDocumentLine(editor, dir, goal);
+  if (rect.width <= 0 || rect.height <= 0) {
+    const text = doc(editor);
+    const nextGoals: VerticalGoal[] = [];
+    const targets = selections.map((range, index) => {
+      const line = docLineInfo(text, normalCharPosition(text, range.head));
+      const goal = goals?.[index];
+      const desired = goal?.kind === "column" ? goal.value : line.column;
+      nextGoals.push({ kind: "column", value: desired });
+      if (dir < 0 && line.start > 0) {
+        const previous = docLineInfo(text, line.start - 1);
+        return Math.min(previous.start + desired, previous.end);
+      }
+      if (dir > 0 && line.end < text.length) {
+        const next = docLineInfo(text, line.end + 1);
+        return Math.min(next.start + desired, next.end);
+      }
+      return range.head;
+    });
+    setNormalCursorPositions(editor, targets);
+    return nextGoals;
+  }
 
   const text = doc(editor);
-  const start = normalCharPosition(text, currentHead(editor));
-  const coords = editor.view.coordsAtPos(start);
-  const pixelGoal = goal?.kind === "pixel"
-    ? goal.value
-    : coords
-      ? coords.left - rect.left
-      : editor.view.defaultCharacterWidth * docLineInfo(text, start).column;
-  const range = EditorSelection.cursor(
-    start,
-    0,
-    undefined,
-    pixelGoal,
-  );
-  const moved = editor.view.moveVertically(range, dir > 0);
-  const entry = crossedVisualEntry(editor, start, moved.head, dir);
-  setNormalPos(editor, entry ?? moved.head);
-  return { kind: "pixel", value: moved.goalColumn ?? pixelGoal };
+  const nextGoals: VerticalGoal[] = [];
+  const targets = selections.map((selection, index) => {
+    const start = normalCharPosition(text, selection.head);
+    const coords = editor.view.coordsAtPos(start);
+    const goal = goals?.[index];
+    const pixelGoal = goal?.kind === "pixel"
+      ? goal.value
+      : coords
+        ? coords.left - rect.left
+        : editor.view.defaultCharacterWidth * docLineInfo(text, start).column;
+    const moved = editor.view.moveVertically(
+      EditorSelection.cursor(start, 0, undefined, pixelGoal),
+      dir > 0,
+    );
+    nextGoals.push({ kind: "pixel", value: moved.goalColumn ?? pixelGoal });
+    return crossedVisualEntry(editor, start, moved.head, dir) ?? moved.head;
+  });
+  setNormalCursorPositions(editor, targets);
+  return nextGoals;
 }
 
 function lineBoundary(editor: Editor, which: "start" | "end"): void {
   const text = doc(editor);
-  const pos = normalCharPosition(text, currentHead(editor));
-  const line = docLineInfo(text, pos);
-  setNormalPos(editor, which === "start" ? line.start : line.end);
+  setNormalCursorPositions(editor, editor.view.state.selection.ranges.map((range) => {
+    const line = docLineInfo(text, normalCharPosition(text, range.head));
+    return which === "start" ? line.start : line.end;
+  }));
 }
 
 function lineEndInsertBoundary(editor: Editor): void {
   const text = doc(editor);
-  const line = text.lineAt(clamp(currentHead(editor), 0, text.length));
-  setPos(editor, line.to);
+  setCursorPositions(editor, editor.view.state.selection.ranges.map((range) => (
+    text.lineAt(clamp(range.head, 0, text.length)).to
+  )));
 }
 
-function lineFirstNonBlank(editor: Editor): number {
+function lineFirstNonBlankPositions(editor: Editor): number[] {
   const text = doc(editor);
-  const line = text.lineAt(clamp(currentHead(editor), 0, text.length));
-  const first = line.text.search(/\S/u);
-  return first < 0 ? line.from : line.from + first;
+  return editor.view.state.selection.ranges.map((range) => {
+    const line = text.lineAt(clamp(range.head, 0, text.length));
+    const first = line.text.search(/\S/u);
+    return first < 0 ? line.from : line.from + first;
+  });
 }
 
 function docBoundary(editor: Editor, which: "start" | "end"): void {
-  setNormalPos(editor, which === "start" ? 0 : doc(editor).length);
+  const target = which === "start" ? 0 : doc(editor).length;
+  setNormalCursorPositions(editor, editor.view.state.selection.ranges.map(() => target));
 }
 
 function moveWord(editor: Editor, dir: -1 | 1, bigWord = false): void {
   const text = doc(editor);
-  const start = currentHead(editor);
-  const target = wordMotionPosition(text, start, dir, bigWord);
-  setNormalPos(editor, snapStaticMathMotion(editor, start, target, dir));
+  setNormalCursorPositions(editor, editor.view.state.selection.ranges.map((range) => {
+    const start = range.head;
+    const target = wordMotionPosition(text, start, dir, bigWord);
+    return snapStaticMathMotion(editor, start, target, dir);
+  }));
 }
 
-function deleteChar(editor: Editor): string {
+function characterRangeAt(
+  editor: Editor,
+  from: number,
+  to: number,
+  backward = false,
+): { from: number; to: number } | null {
   const text = doc(editor);
-  const { from, to } = editor.getMarkdownSelection();
+  if (from !== to) return { from, to };
   const start = from === to ? normalCharPosition(text, from) : from;
   const line = text.lineAt(start);
-  const object = from === to ? staticMathObjectAtPosition(editor, start) : null;
-  const end = object?.from === start
-    ? object.to
-    : from === to ? Math.min(graphemeEndPosition(text, start), line.to) : to;
-  if (start >= end) return "";
-  const deleted = text.sliceString(start, end);
-  editor.replaceMarkdownRange(start, end, "", "start");
-  return deleted;
-}
-
-function deleteCharBackward(editor: Editor): string {
-  const text = doc(editor);
-  const { from, to } = editor.getMarkdownSelection();
-  if (from !== to) return deleteChar(editor);
-  const pos = normalCharPosition(text, from);
-  const line = text.lineAt(pos);
-  if (pos <= line.from) return "";
-  const previousObject = staticMathObjectAtPosition(editor, Math.max(line.from, pos - 1));
-  const start = previousObject?.to === pos
-    ? previousObject.from
-    : previousGraphemePosition(text, pos);
-  const deleted = text.sliceString(start, pos);
-  editor.replaceMarkdownRange(start, pos, "", "start");
-  return deleted;
-}
-
-function deleteLine(editor: Editor): string {
-  const text = doc(editor);
-  const { from, to } = editor.getMarkdownSelection();
-  const range = to > from ? { from, to } : docLineRange(text, from);
-  if (range.from >= range.to) return "";
-  const deleted = text.sliceString(range.from, range.to);
-  const fallbackPos = range.from > 0 && range.to >= text.length ? range.from - 1 : range.from;
-  editor.replaceMarkdownRange(range.from, range.to, "", "start");
-  setPos(editor, fallbackPos);
-  return deleted;
-}
-
-function currentSelectionText(editor: Editor): string {
-  const { from, to } = editor.getMarkdownSelection();
-  return from < to ? doc(editor).sliceString(from, to) : "";
-}
-
-function replaceChar(editor: Editor, ch: string): number | null {
-  const text = doc(editor);
-  const { from, to } = editor.getMarkdownSelection();
-  const start = from === to ? normalCharPosition(text, from) : from;
-  const line = text.lineAt(start);
+  if (backward) {
+    if (start <= line.from) return null;
+    const previousObject = staticMathObjectAtPosition(editor, Math.max(line.from, start - 1));
+    return {
+      from: previousObject?.to === start
+        ? previousObject.from
+        : previousGraphemePosition(text, start),
+      to: start,
+    };
+  }
   const object = staticMathObjectAtPosition(editor, start);
-  const replacingObject = Boolean(object?.from === start && (from === to || to === object.to));
-  const end = replacingObject
-    ? object!.to
-    : from === to ? Math.min(graphemeEndPosition(text, start), line.to) : to;
-  if (start >= end) return null;
-  editor.replaceMarkdownRange(
-    start,
-    end,
-    ch.repeat(replacingObject ? 1 : Math.max(1, selectionClusterCount(text, start, end))),
-    "end",
-  );
-  return start;
+  const end = object?.from === start ? object.to : Math.min(graphemeEndPosition(text, start), line.to);
+  return start < end ? { from: start, to: end } : null;
+}
+
+function uniqueRanges(ranges: readonly { from: number; to: number }[]): Array<{ from: number; to: number }> {
+  const sorted = [...ranges]
+    .filter((range) => range.from < range.to)
+    .sort((left, right) => left.from - right.from || left.to - right.to);
+  const merged: Array<{ from: number; to: number }> = [];
+  for (const range of sorted) {
+    const previous = merged[merged.length - 1];
+    if (previous && range.from <= previous.to) previous.to = Math.max(previous.to, range.to);
+    else merged.push({ ...range });
+  }
+  return merged;
+}
+
+function deleteChars(editor: Editor, backward = false): string[] {
+  const state = editor.view.state;
+  const text = doc(editor);
+  const revealed = state.selection.ranges.length === 1
+    ? revealedFormulaAt(editor, state.selection.main.head)
+    : null;
+  const ranges = uniqueRanges(state.selection.ranges.flatMap((selection) => {
+    const range = characterRangeAt(editor, selection.from, selection.to, backward);
+    return range ? [range] : [];
+  }));
+  if (ranges.length === 0) return [];
+  const fragments = ranges.map((range) => text.sliceString(range.from, range.to));
+  const changes = state.changes(ranges.map(({ from, to }) => ({ from, to })));
+  const cursors = ranges.map((range) => EditorSelection.cursor(changes.mapPos(range.from, -1)));
+  editor.view.dispatch(state.update({
+    changes,
+    selection: EditorSelection.create(cursors, Math.min(state.selection.mainIndex, cursors.length - 1)),
+    scrollIntoView: true,
+  }));
+  restoreRevealedFormula(editor, revealed);
+  return fragments;
+}
+
+function selectedLogicalLine(
+  editor: Editor,
+  from: number,
+  to: number,
+): VimLogicalLine {
+  const text = doc(editor);
+  const line = logicalLineAt(editor, from);
+  if (to <= from) return line;
+  let deleteFrom = line.deleteFrom;
+  let deleteTo = line.deleteTo;
+  let registerText = line.registerText;
+  registerText = text.sliceString(from, to);
+  if (!registerText.endsWith("\n")) registerText += "\n";
+  deleteFrom = from;
+  deleteTo = to;
+  // A final whole-line selection has no trailing newline to own. Borrow its
+  // preceding newline for deletion while keeping the register linewise.
+  if (to >= text.length && from > 0 && text.sliceString(from - 1, from) === "\n") {
+    deleteFrom = from - 1;
+  } else if (line.formulaScope && to >= line.formulaScope.to
+      && from > line.formulaScope.from
+      && text.sliceString(from - 1, from) === "\n") {
+    deleteFrom = from - 1;
+  }
+  return { ...line, deleteFrom, deleteTo, registerText };
+}
+
+function deleteLines(editor: Editor): string[] {
+  const state = editor.view.state;
+  const revealed = state.selection.ranges.length === 1
+    ? revealedFormulaAt(editor, state.selection.main.head)
+    : null;
+  const logical = state.selection.ranges.map((range) => (
+    selectedLogicalLine(editor, range.from, range.to)
+  ));
+  const keyed = new Map<string, VimLogicalLine>();
+  for (const line of logical) keyed.set(`${line.deleteFrom}:${line.deleteTo}`, line);
+  const lines = [...keyed.values()].sort((left, right) => left.deleteFrom - right.deleteFrom);
+  const ranges = uniqueRanges(lines.map((line) => ({ from: line.deleteFrom, to: line.deleteTo })));
+  if (ranges.length === 0) return [];
+  const changes = state.changes(ranges.map(({ from, to }) => ({ from, to })));
+  const cursors = ranges.map((range) => EditorSelection.cursor(changes.mapPos(range.from, -1)));
+  editor.view.dispatch(state.update({
+    changes,
+    selection: EditorSelection.create(cursors, Math.min(state.selection.mainIndex, cursors.length - 1)),
+    scrollIntoView: true,
+  }));
+  restoreRevealedFormula(editor, revealed);
+  return lines.map((line) => line.registerText);
+}
+
+function currentSelectionTexts(editor: Editor): string[] {
+  const text = doc(editor);
+  return editor.view.state.selection.ranges
+    .filter((range) => range.from < range.to)
+    .map((range) => text.sliceString(range.from, range.to));
+}
+
+function replaceChars(editor: Editor, ch: string): number | null {
+  const state = editor.view.state;
+  const text = doc(editor);
+  const revealed = state.selection.ranges.length === 1
+    ? revealedFormulaAt(editor, state.selection.main.head)
+    : null;
+  const ranges = uniqueRanges(state.selection.ranges.flatMap((selection) => {
+    const range = characterRangeAt(editor, selection.from, selection.to);
+    return range ? [range] : [];
+  }));
+  if (ranges.length === 0) return null;
+  const specs = ranges.map((range) => {
+    const object = staticMathObjectAtPosition(editor, range.from);
+    const replacingObject = Boolean(object?.from === range.from && object.to === range.to);
+    return {
+      from: range.from,
+      to: range.to,
+      insert: ch.repeat(replacingObject ? 1 : Math.max(1, selectionClusterCount(text, range.from, range.to))),
+    };
+  });
+  const changes = state.changes(specs);
+  // Vim leaves Normal cursors on the replaced character, not after it. Use
+  // the leading association for every range so secondary cursors behave like
+  // the main cursor even when earlier replacements shift their offsets.
+  const replacedPositions = specs.map((range) => changes.mapPos(range.from, -1));
+  const cursors = replacedPositions.map((position) => EditorSelection.cursor(position));
+  editor.view.dispatch(state.update({
+    changes,
+    selection: EditorSelection.create(cursors, Math.min(state.selection.mainIndex, cursors.length - 1)),
+    scrollIntoView: true,
+  }));
+  restoreRevealedFormula(editor, revealed);
+  return replacedPositions[Math.min(state.selection.mainIndex, replacedPositions.length - 1)]
+    ?? replacedPositions[0]!;
 }
 
 function openLine(editor: Editor, where: "above" | "below"): void {
-  const text = doc(editor);
-  const pos = editor.getMarkdownSelection().from;
-  const line = docLineInfo(text, pos);
-  const insertAt = where === "above" ? line.start : line.end;
-  editor.replaceMarkdownRange(insertAt, insertAt, "\n", "end");
-  setPos(editor, where === "above" ? insertAt : insertAt + 1);
+  const state = editor.view.state;
+  const text = state.doc;
+  const revealed = state.selection.ranges.length === 1
+    ? revealedFormulaAt(editor, state.selection.main.head)
+    : null;
+  const candidates = state.selection.ranges.map((selection, index) => {
+    const line = logicalLineAt(editor, selection.head);
+    const raw = text.sliceString(line.from, line.to);
+    const indent = raw.match(/^[ \t]*/u)?.[0] ?? "";
+    return {
+      from: where === "above" ? line.from : line.to,
+      insert: where === "above" ? `${indent}\n` : `\n${indent}`,
+      indentLength: indent.length,
+      main: index === state.selection.mainIndex,
+    };
+  }).sort((left, right) => left.from - right.from);
+  const unique = candidates.filter((candidate, index) => (
+    index === 0 || candidate.from !== candidates[index - 1]!.from
+  ));
+  if (unique.length === 0) return;
+  const changes = state.changes(unique.map(({ from, insert }) => ({ from, insert })));
+  const ranges = unique.map((candidate) => {
+    const mapped = changes.mapPos(candidate.from, where === "above" ? -1 : 1);
+    return EditorSelection.cursor(
+      where === "above" ? mapped + candidate.indentLength : mapped,
+    );
+  });
+  let mainIndex = unique.findIndex((candidate) => candidate.main);
+  if (mainIndex < 0) mainIndex = Math.min(state.selection.mainIndex, unique.length - 1);
+  editor.view.dispatch(state.update({
+    changes,
+    selection: EditorSelection.create(ranges, mainIndex),
+    scrollIntoView: true,
+  }));
+  restoreRevealedFormula(editor, revealed);
 }
 
 export function createVimLite(
@@ -617,15 +915,17 @@ export function createVimLite(
   options: VimLiteOptions = {},
 ): VimLiteController {
   let mode: VimLiteMode = "insert";
-  let goalColumn: VerticalGoal | null = null;
+  let normalGoalColumns: VerticalGoal[] | null = null;
+  let visualGoalColumns: VerticalGoal[] | null = null;
   let pending = "";
   let jumpInput: VimJumpInput | null = null;
   let jumpSession: VimJumpSession | null = null;
   let jumpLabelPrefix = "";
   let visualAnchor: number | null = null;
   let visualHead: number | null = null;
+  let visualLineStates: VisualLineState[] | null = null;
   let insertEntry: { doc: Text; boundary: number; returnPos: number } | null = null;
-  let register: VimRegister = { text: "", kind: "characterwise" };
+  let register: VimRegister = { text: "", kind: "characterwise", fragments: [] };
   let destroyed = false;
   let asyncEpoch = 0;
   const jumpTimeoutMs = Math.max(0, options.jumpTimeoutMs ?? AVY_TIMEOUT_MS);
@@ -655,16 +955,22 @@ export function createVimLite(
     return writeHostClipboard();
   }
 
-  function yank(text: string, kind: VimRegisterKind = "characterwise"): void {
-    if (!text) return;
-    const registerText = kind === "linewise" && !text.endsWith("\n") ? `${text}\n` : text;
-    register = { text: registerText, kind };
+  function yank(text: string | readonly string[], kind: VimRegisterKind = "characterwise"): void {
+    const values = (Array.isArray(text) ? text : [text])
+      .filter((value): value is string => Boolean(value));
+    if (values.length === 0) return;
+    const fragments = values.map((value) => (
+      kind === "linewise" && !value.endsWith("\n") ? `${value}\n` : value
+    ));
+    const registerText = fragments.join(kind === "linewise" ? "" : "\n");
+    register = { text: registerText, kind, fragments };
     (window as unknown as Record<string, unknown>).__aaronoteVimRegister = register;
     pendingClipboardWrite = writeSystemClipboard(registerText);
   }
 
   function resetMotionMemory(): void {
-    goalColumn = null;
+    normalGoalColumns = null;
+    visualGoalColumns = null;
   }
 
   function clearJumpInputTimer(): void {
@@ -755,6 +1061,49 @@ export function createVimLite(
     return true;
   }
 
+  function normalizeNormalSelections(
+    collapse: boolean,
+    mainOverride: number | null = null,
+    fromInsert = false,
+  ): void {
+    const state = editor.view.state;
+    const candidates = state.selection.ranges.map((range, index) => {
+      const overridden = index === state.selection.mainIndex && mainOverride != null;
+      let position = overridden
+        ? mainOverride
+        : range.head;
+      if (collapse && !range.empty) {
+        position = range.head > range.anchor
+          ? previousGraphemePosition(state.doc, range.head)
+          : range.head;
+      } else if (fromInsert && range.empty && !overridden) {
+        position = insertExitPosition(state.doc, range.head);
+      }
+      return {
+        position: normalEditorPosition(editor, position),
+        main: index === state.selection.mainIndex,
+      };
+    }).sort((left, right) => left.position - right.position);
+    const unique = candidates.filter((candidate, index) => (
+      index === 0 || candidate.position !== candidates[index - 1]!.position
+    ));
+    if (unique.length === 0) return;
+    let mainIndex = unique.findIndex((candidate) => candidate.main);
+    if (mainIndex < 0) mainIndex = Math.min(state.selection.mainIndex, unique.length - 1);
+    const selection = EditorSelection.create(
+      unique.map((candidate) => EditorSelection.cursor(candidate.position)),
+      mainIndex,
+    );
+    const current = state.selection;
+    const same = current.ranges.length === selection.ranges.length
+      && current.mainIndex === selection.mainIndex
+      && current.ranges.every((range, index) => (
+        range.anchor === selection.ranges[index]?.anchor
+        && range.head === selection.ranges[index]?.head
+      ));
+    if (!same) editor.view.dispatch({ selection, scrollIntoView: true });
+  }
+
   function setMode(next: VimLiteMode): void {
     const previous = mode;
     const changed = mode !== next;
@@ -764,13 +1113,17 @@ export function createVimLite(
     cancelJump();
     visualAnchor = null;
     visualHead = null;
+    visualLineStates = null;
     if (next !== "insert" || previous !== "insert") insertEntry = null;
     resetMotionMemory();
     if (leavingVisual && next !== "visual" && next !== "visual-line") {
-      if (next === "normal") setNormalPos(editor, exitHead);
+      if (next === "normal") normalizeNormalSelections(true, exitHead);
       else setPos(editor, exitHead);
     } else if (previous === "insert" && next === "normal") {
-      setNormalPos(editor, exitHead);
+      // Programmatic mode changes only reinterpret the existing cursor.  The
+      // Vim one-character-left Escape rule is applied by escapeToNormal(),
+      // where we can also preserve a revealed formula's content boundary.
+      normalizeNormalSelections(false);
     }
     if (changed) options.onModeChange?.(mode);
   }
@@ -794,6 +1147,13 @@ export function createVimLite(
   }
 
   function escapeToNormal(): void {
+    const leavingInsert = mode === "insert";
+    const visualExitPositions = mode === "visual-line"
+      ? visualLineStates?.map((state) => state.head) ?? null
+      : mode === "visual"
+        ? currentVisualCharStates().map((state) => state.head)
+        : null;
+    const visualExitMainIndex = editor.view.state.selection.mainIndex;
     let target = currentHead(editor);
     if (mode === "insert") {
       const text = doc(editor);
@@ -823,146 +1183,280 @@ export function createVimLite(
     // End the pointer lifecycle and enforce the collapsed CM6 selection in
     // one final transaction. This remains correct when a host mouseup missed
     // Vim-mode synchronization or when a linewise selection owns a newline.
-    cancelPointerSelection(editor.view, normalCharPosition(doc(editor), target));
-  }
-
-  // The tracked moving end of the visual selection. Prefer the local
-  // visualHead (authoritative once visual mode is driving the selection) and
-  // fall back to the editor's live head when first entering visual mode.
-  function headPos(): number {
-    return visualHead ?? currentHead(editor);
-  }
-
-  function setVisualHead(head: number): void {
-    const text = doc(editor);
-    if (visualAnchor == null) visualAnchor = normalCharPosition(text, currentHead(editor));
-    const normalized = normalCharPosition(text, head);
-    visualHead = staticMathObjectAtPosition(editor, normalized)?.from ?? normalized;
-    if (visualHead >= visualAnchor) {
-      setSelection(editor, visualAnchor, visualObjectEndPosition(editor, visualHead));
+    cancelPointerSelection(editor.view);
+    if (visualExitPositions) {
+      setNormalCursorPositions(editor, visualExitPositions, visualExitMainIndex);
     } else {
-      setSelection(editor, visualObjectEndPosition(editor, visualAnchor), visualHead);
+      normalizeNormalSelections(false, target, leavingInsert);
     }
   }
 
+  type VisualCharState = { anchor: number; head: number };
+  type VisualLineState = VisualCharState & {
+    scope: { from: number; to: number } | null;
+  };
+
+  function currentVisualCharStates(): VisualCharState[] {
+    const text = doc(editor);
+    return editor.view.state.selection.ranges.map((range) => {
+      if (range.empty) {
+        const pos = normalEditorPosition(editor, range.head);
+        return { anchor: pos, head: pos };
+      }
+      const forward = range.head > range.anchor;
+      const rawAnchor = normalCharPosition(
+        text,
+        forward ? range.anchor : previousGraphemePosition(text, range.anchor),
+      );
+      const rawHead = normalCharPosition(
+        text,
+        forward ? previousGraphemePosition(text, range.head) : range.head,
+      );
+      return {
+        anchor: staticMathObjectAtPosition(editor, rawAnchor)?.from ?? rawAnchor,
+        head: staticMathObjectAtPosition(editor, rawHead)?.from ?? rawHead,
+      };
+    });
+  }
+
+  function renderVisualCharStates(states: readonly VisualCharState[]): void {
+    if (states.length === 0) return;
+    const mainIndex = Math.min(editor.view.state.selection.mainIndex, states.length - 1);
+    const main = states[mainIndex]!;
+    visualAnchor = main.anchor;
+    visualHead = main.head;
+    editor.view.dispatch({
+      selection: EditorSelection.create(states.map((state) => (
+        state.head >= state.anchor
+          ? EditorSelection.range(state.anchor, visualObjectEndPosition(editor, state.head))
+          : EditorSelection.range(visualObjectEndPosition(editor, state.anchor), state.head)
+      )), mainIndex),
+      scrollIntoView: true,
+    });
+  }
+
+  function setVisualHead(head: number): void {
+    const states = currentVisualCharStates();
+    const mainIndex = Math.min(editor.view.state.selection.mainIndex, states.length - 1);
+    const normalized = normalCharPosition(doc(editor), head);
+    states[mainIndex] = {
+      anchor: states[mainIndex]?.anchor ?? normalized,
+      head: staticMathObjectAtPosition(editor, normalized)?.from ?? normalized,
+    };
+    renderVisualCharStates(states);
+  }
+
   function swapVisualEnds(): void {
-    if (visualAnchor == null || visualHead == null) return;
-    const previousAnchor = visualAnchor;
-    visualAnchor = visualHead;
-    setVisualHead(previousAnchor);
+    renderVisualCharStates(currentVisualCharStates().map((state) => ({
+      anchor: state.head,
+      head: state.anchor,
+    })));
+  }
+
+  function renderVisualLineStates(states: readonly VisualLineState[]): void {
+    if (states.length === 0) return;
+    const mainIndex = Math.min(editor.view.state.selection.mainIndex, states.length - 1);
+    const selection = EditorSelection.create(states.map((state) => {
+      const range = logicalLineSelectionRange(editor, state.anchor, state.head, state.scope);
+      return state.head >= state.anchor
+        ? EditorSelection.range(range.from, range.to)
+        : EditorSelection.range(range.to, range.from);
+    }), mainIndex);
+    const text = doc(editor);
+    // CM6 merges overlapping ranges. Rebuild our motion state from that
+    // normalized selection so cursors that meet stay merged instead of
+    // mysteriously reappearing on the next j/k.
+    visualLineStates = selection.ranges.map((range) => {
+      const forward = range.head >= range.anchor;
+      const anchorPos = forward
+        ? range.from
+        : previousGraphemePosition(text, range.to);
+      const headPos = forward
+        ? previousGraphemePosition(text, range.to)
+        : range.from;
+      const anchor = logicalLineAt(editor, anchorPos).cursor;
+      const headLine = logicalLineAt(editor, headPos);
+      return { anchor, head: headLine.cursor, scope: headLine.formulaScope };
+    });
+    const normalizedMainIndex = selection.mainIndex;
+    const main = visualLineStates[normalizedMainIndex]!;
+    visualAnchor = main.anchor;
+    visualHead = main.head;
+    editor.view.dispatch({
+      selection,
+      scrollIntoView: true,
+    });
+  }
+
+  function lineStatesFromCharStates(states: readonly VisualCharState[]): VisualLineState[] {
+    return states.map((state) => ({
+      ...state,
+      scope: logicalLineAt(editor, state.head).formulaScope,
+    }));
   }
 
   function switchToVisualLine(): void {
-    const anchor = visualAnchor ?? currentHead(editor);
-    const head = visualHead ?? currentHead(editor);
+    const states = lineStatesFromCharStates(currentVisualCharStates());
     const changed = mode !== "visual-line";
     mode = "visual-line";
-    visualAnchor = anchor;
-    visualHead = head;
     resetMotionMemory();
-    const range = docLineSelectionRange(doc(editor), anchor, head);
-    setSelection(editor, range.from, range.to);
+    renderVisualLineStates(states);
     if (changed) options.onModeChange?.(mode);
   }
 
   function switchToVisualChar(): void {
-    const anchor = normalCharPosition(doc(editor), visualAnchor ?? currentHead(editor));
-    const head = normalCharPosition(doc(editor), visualHead ?? currentHead(editor));
+    const states = visualLineStates?.map(({ anchor, head }) => ({
+      anchor: normalCharPosition(doc(editor), anchor),
+      head: normalCharPosition(doc(editor), head),
+    })) ?? currentVisualCharStates();
     const changed = mode !== "visual";
     mode = "visual";
-    visualAnchor = anchor;
-    visualHead = head;
+    visualLineStates = null;
     resetMotionMemory();
-    setVisualHead(head);
+    renderVisualCharStates(states);
     if (changed) options.onModeChange?.(mode);
   }
 
   function enterVisual(): void {
-    const head = normalCharPosition(doc(editor), currentHead(editor));
+    const states = currentVisualCharStates();
+    const mainIndex = Math.min(editor.view.state.selection.mainIndex, states.length - 1);
+    const formula = revealedFormulaAt(editor, states[mainIndex]?.head ?? currentHead(editor));
+    // There is no character to own in an empty formula. Selecting the closing
+    // fence made `v` look active while a later delete corrupted the formula.
+    if (formula && formula.contentFrom >= formula.contentTo) return;
     setMode("visual");
-    visualAnchor = head;
-    setVisualHead(head);
+    renderVisualCharStates(states);
   }
 
   function enterVisualLine(): void {
-    const head = currentHead(editor);
+    const states = currentVisualCharStates().map((state) => {
+      const line = logicalLineAt(editor, state.head);
+      return { anchor: line.cursor, head: line.cursor, scope: line.formulaScope };
+    });
     setMode("visual-line");
-    visualAnchor = head;
-    visualHead = head;
-    const range = docLineSelectionRange(doc(editor), visualAnchor, visualHead);
-    setSelection(editor, range.from, range.to);
+    renderVisualLineStates(states);
   }
 
   function visualMoveChar(dir: -1 | 1): void {
     resetMotionMemory();
-    const start = headPos();
-    const target = moveNormalCharPosition(doc(editor), start, dir);
-    setVisualHead(snapStaticMathMotion(editor, start, target, dir));
+    const text = doc(editor);
+    renderVisualCharStates(currentVisualCharStates().map((state) => {
+      const target = moveNormalCharPosition(text, state.head, dir);
+      return { ...state, head: snapStaticMathMotion(editor, state.head, target, dir) };
+    }));
   }
 
   function visualMoveLine(dir: -1 | 1): void {
     const text = doc(editor);
-    const start = normalCharPosition(text, headPos());
+    const states = currentVisualCharStates();
     const rect = editor.view.contentDOM.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) {
-      goalColumn = moveDocumentLine(editor, dir, goalColumn, setVisualHead, start);
+      const nextGoals: VerticalGoal[] = [];
+      const next = states.map((state, index) => {
+        const line = docLineInfo(text, normalCharPosition(text, state.head));
+        const goal = visualGoalColumns?.[index];
+        const desired = goal?.kind === "column" ? goal.value : line.column;
+        nextGoals.push({ kind: "column", value: desired });
+        if (dir < 0 && line.start > 0) {
+          const previous = docLineInfo(text, line.start - 1);
+          return { ...state, head: Math.min(previous.start + desired, previous.end) };
+        }
+        if (dir > 0 && line.end < text.length) {
+          const following = docLineInfo(text, line.end + 1);
+          return { ...state, head: Math.min(following.start + desired, following.end) };
+        }
+        return state;
+      });
+      visualGoalColumns = nextGoals;
+      renderVisualCharStates(next);
       return;
     }
-    const coords = editor.view.coordsAtPos(start);
-    const pixelGoal = goalColumn?.kind === "pixel"
-      ? goalColumn.value
-      : coords
-        ? coords.left - rect.left
-        : editor.view.defaultCharacterWidth * docLineInfo(text, start).column;
-    const range = EditorSelection.cursor(
-      start,
-      0,
-      undefined,
-      pixelGoal,
-    );
-    const moved = editor.view.moveVertically(range, dir > 0);
-    goalColumn = { kind: "pixel", value: moved.goalColumn ?? pixelGoal };
-    const entry = crossedVisualEntry(editor, start, moved.head, dir);
-    setVisualHead(entry ?? moved.head);
+    const nextGoals: VerticalGoal[] = [];
+    const next = states.map((state, index) => {
+      const start = normalCharPosition(text, state.head);
+      const coords = editor.view.coordsAtPos(start);
+      const goal = visualGoalColumns?.[index];
+      const pixelGoal = goal?.kind === "pixel"
+        ? goal.value
+        : coords
+          ? coords.left - rect.left
+          : editor.view.defaultCharacterWidth * docLineInfo(text, start).column;
+      const moved = editor.view.moveVertically(
+        EditorSelection.cursor(start, 0, undefined, pixelGoal),
+        dir > 0,
+      );
+      nextGoals.push({ kind: "pixel", value: moved.goalColumn ?? pixelGoal });
+      return { ...state, head: crossedVisualEntry(editor, start, moved.head, dir) ?? moved.head };
+    });
+    visualGoalColumns = nextGoals;
+    renderVisualCharStates(next);
   }
 
   function visualLineMove(dir: -1 | 1): void {
     const text = doc(editor);
-    const current = docLineRange(text, headPos());
-    let nextPos = dir > 0 ? current.to : Math.max(0, current.from - 1);
-    if (dir > 0 && current.to >= text.length) nextPos = current.cursor;
-    const next = docLineRange(text, nextPos);
-    visualHead = next.cursor;
-    const range = docLineSelectionRange(text, visualAnchor ?? next.cursor, visualHead);
-    setSelection(editor, range.from, range.to);
-    editor.view.dispatch({ effects: EditorView.scrollIntoView(visualHead, { y: "nearest" }) });
+    const states = visualLineStates ?? lineStatesFromCharStates(currentVisualCharStates());
+    renderVisualLineStates(states.map((state) => {
+      const current = state.scope
+        ? boundedLogicalLine(text, state.head, state.scope.from, state.scope.to, state.scope)
+        : logicalLineAt(editor, state.head);
+      let nextPos = dir > 0 ? current.selectionTo : current.selectionFrom - 1;
+      if (state.scope) {
+        if (dir > 0 && nextPos >= state.scope.to) return state;
+        if (dir < 0 && nextPos < state.scope.from) return state;
+      } else if ((dir > 0 && nextPos >= text.length) || (dir < 0 && nextPos < 0)) {
+        return state;
+      }
+      nextPos = clamp(nextPos, state.scope?.from ?? 0, state.scope?.to ?? text.length);
+      const next = state.scope
+        ? boundedLogicalLine(text, nextPos, state.scope.from, state.scope.to, state.scope)
+        : logicalLineAt(editor, nextPos);
+      return { ...state, head: next.cursor };
+    }));
   }
 
   function visualLineBoundary(which: "start" | "end"): void {
     resetMotionMemory();
-    const line = docLineInfo(doc(editor), headPos());
-    setVisualHead(which === "start" ? line.start : normalCharPosition(doc(editor), line.end));
+    const text = doc(editor);
+    renderVisualCharStates(currentVisualCharStates().map((state) => {
+      const line = docLineInfo(text, state.head);
+      return { ...state, head: which === "start" ? line.start : normalCharPosition(text, line.end) };
+    }));
   }
 
   function visualDocumentBoundary(which: "start" | "end"): void {
     resetMotionMemory();
-    setVisualHead(which === "start" ? 0 : doc(editor).length);
+    const target = which === "start" ? 0 : doc(editor).length;
+    renderVisualCharStates(currentVisualCharStates().map((state) => ({ ...state, head: target })));
   }
 
   function visualLineDocumentBoundary(which: "start" | "end"): void {
     resetMotionMemory();
     const text = doc(editor);
-    visualHead = docLineRange(text, which === "start" ? 0 : text.length).cursor;
-    const range = docLineSelectionRange(text, visualAnchor ?? visualHead, visualHead);
-    setSelection(editor, range.from, range.to);
+    const states = visualLineStates ?? lineStatesFromCharStates(currentVisualCharStates());
+    renderVisualLineStates(states.map((state) => {
+      const boundary = state.scope
+        ? which === "start" ? state.scope.from : state.scope.to
+        : which === "start" ? 0 : text.length;
+      const target = state.scope && which === "end" && boundary > state.scope.from
+        ? boundary - 1
+        : boundary;
+      const head = (state.scope
+        ? boundedLogicalLine(text, target, state.scope.from, state.scope.to, state.scope)
+        : logicalLineAt(editor, target)).cursor;
+      return { ...state, head };
+    }));
   }
 
   function visualMoveWord(dir: -1 | 1, bigWord = false): void {
     resetMotionMemory();
     const text = doc(editor);
-    const start = headPos();
-    const target = wordMotionPosition(text, start, dir, bigWord);
-    setVisualHead(normalCharPosition(text, snapStaticMathMotion(editor, start, target, dir)));
+    renderVisualCharStates(currentVisualCharStates().map((state) => {
+      const target = wordMotionPosition(text, state.head, dir, bigWord);
+      return {
+        ...state,
+        head: normalCharPosition(text, snapStaticMathMotion(editor, state.head, target, dir)),
+      };
+    }));
   }
 
   function syncSelectionFromEditor(): void {
@@ -972,6 +1466,8 @@ export function createVimLite(
       if (mode === "visual" || mode === "visual-line") {
         visualHead = head;
         setMode("normal");
+      } else if (mode === "normal") {
+        normalizeNormalSelections(false);
       }
       return;
     }
@@ -991,31 +1487,51 @@ export function createVimLite(
 
   function deleteLineCommand(): void {
     resetMotionMemory();
-    yank(deleteLine(editor), "linewise");
+    const revealed = editor.view.state.selection.ranges.length === 1
+      ? revealedFormulaAt(editor, currentHead(editor))
+      : null;
+    yank(deleteLines(editor), "linewise");
     if (mode === "visual" || mode === "visual-line") visualHead = currentHead(editor);
     setMode("normal");
+    restoreRevealedFormula(editor, revealed);
   }
 
   function yankSelection(kind: VimRegisterKind = "characterwise"): void {
     resetMotionMemory();
     const start = editor.getMarkdownSelection().from;
-    yank(currentSelectionText(editor), kind);
+    yank(currentSelectionTexts(editor), kind);
     visualHead = start;
     setMode("normal");
   }
 
   function yankLine(): void {
     resetMotionMemory();
-    const text = doc(editor);
-    const range = docLineRange(text, editor.getMarkdownSelection().from);
-    if (range.from < range.to) yank(text.sliceString(range.from, range.to), "linewise");
+    const ranges = new Map<string, VimLogicalLine>();
+    for (const selection of editor.view.state.selection.ranges) {
+      const range = logicalLineAt(editor, selection.from);
+      ranges.set(`${range.selectionFrom}:${range.selectionTo}`, range);
+    }
+    yank(
+      [...ranges.values()]
+        .sort((left, right) => left.selectionFrom - right.selectionFrom)
+        .map((range) => range.registerText),
+      "linewise",
+    );
     setMode("normal");
   }
 
   function paste(where: "before" | "after"): void {
     resetMotionMemory();
     const replacingVisual = mode === "visual" || mode === "visual-line";
-    const selectedRange = replacingVisual ? editor.getMarkdownSelection() : undefined;
+    const selectedRanges = editor.view.state.selection.ranges.map((range) => {
+      if (replacingVisual || register.kind === "linewise") {
+        return { from: range.from, to: range.to };
+      }
+      return {
+        from: range.from,
+        to: range.empty ? visualObjectEndPosition(editor, range.from) : range.to,
+      };
+    });
     const placement = replacingVisual
       ? { kind: "selection" as const }
       : register.kind === "linewise"
@@ -1024,7 +1540,10 @@ export function createVimLite(
     // Visual paste is a command completion, so leave Visual immediately.  The
     // captured range remains mapped while the clipboard read is pending.
     if (replacingVisual) setMode("normal");
-    const target = captureEditorPasteTarget(editor.view, selectedRange);
+    const target = captureEditorPasteTarget(editor.view, selectedRanges, {
+      fragments: register.fragments.length > 0 ? register.fragments : [register.text],
+      clipboardText: register.text,
+    });
     // Capture the current register in case it changes before the async path runs.
     const localRegister = register;
     const pending = pendingClipboardWrite;
@@ -1040,6 +1559,11 @@ export function createVimLite(
         if (!handled && localRegister.text) {
           editor.pastePlainText(localRegister.text, { placement, target });
         }
+        // Paste APIs naturally leave insertion-boundary carets. If the user
+        // has not switched modes while the clipboard was pending, restore
+        // legal Normal positions for every cursor without stealing a later
+        // Insert-mode selection.
+        if (mode === "normal") normalizeNormalSelections(false);
       })().finally(() => {
         if (!destroyed && epoch === asyncEpoch) releaseEditorPasteTarget(editor.view, target);
       });
@@ -1053,9 +1577,13 @@ export function createVimLite(
 
   function appendChar(): void {
     const text = doc(editor);
-    const pos = normalCharPosition(text, currentHead(editor));
-    const line = docLineInfo(text, pos);
-    setPos(editor, Math.min(line.end, graphemeEndPosition(text, pos)));
+    setCursorPositions(editor, editor.view.state.selection.ranges.map((range) => {
+      const pos = normalCharPosition(text, range.head);
+      const object = staticMathObjectAtPosition(editor, pos);
+      if (object?.from === pos) return object.to;
+      const line = docLineInfo(text, pos);
+      return Math.min(line.end, graphemeEndPosition(text, pos));
+    }));
     enterInsert();
   }
 
@@ -1165,8 +1693,7 @@ export function createVimLite(
       pending = "";
       if (key.length === 1) {
         resetMotionMemory();
-        const replacedFrom = replaceChar(editor, key);
-        if (replacedFrom != null) setNormalPos(editor, replacedFrom);
+        replaceChars(editor, key);
         setMode("normal");
       }
       return true;
@@ -1227,11 +1754,11 @@ export function createVimLite(
         return true;
       case "j":
       case "ArrowDown":
-        goalColumn = moveScreenLine(editor, 1, goalColumn);
+        normalGoalColumns = moveScreenLine(editor, 1, normalGoalColumns);
         return true;
       case "k":
       case "ArrowUp":
-        goalColumn = moveScreenLine(editor, -1, goalColumn);
+        normalGoalColumns = moveScreenLine(editor, -1, normalGoalColumns);
         return true;
       case "0":
         resetMotionMemory();
@@ -1301,7 +1828,7 @@ export function createVimLite(
         return true;
       case "I":
         resetMotionMemory();
-        setPos(editor, lineFirstNonBlank(editor));
+        setCursorPositions(editor, lineFirstNonBlankPositions(editor));
         enterInsert(normalCharPosition(doc(editor), currentHead(editor)));
         return true;
       case "A":
@@ -1322,13 +1849,13 @@ export function createVimLite(
       case "x":
       case "Delete":
         resetMotionMemory();
-        yank(deleteChar(editor));
-        setNormalPos(editor, currentHead(editor));
+        yank(deleteChars(editor));
+        normalizeNormalSelections(false);
         return true;
       case "X":
         resetMotionMemory();
-        yank(deleteCharBackward(editor));
-        setNormalPos(editor, currentHead(editor));
+        yank(deleteChars(editor, true));
+        normalizeNormalSelections(false);
         return true;
       case "p":
         paste("after");
@@ -1381,7 +1908,7 @@ export function createVimLite(
       pending = "";
       if (key.length === 1) {
         resetMotionMemory();
-        const replacedFrom = replaceChar(editor, key);
+        const replacedFrom = replaceChars(editor, key);
         if (replacedFrom != null) visualHead = replacedFrom;
       }
       setMode("normal");
@@ -1440,7 +1967,7 @@ export function createVimLite(
       case "Delete":
       case "d":
         resetMotionMemory();
-        yank(deleteChar(editor));
+        yank(deleteChars(editor));
         visualHead = currentHead(editor);
         setMode("normal");
         return true;
@@ -1483,6 +2010,17 @@ export function createVimLite(
       return true;
     }
     switch (key) {
+      case "h":
+      case "l":
+      case "ArrowLeft":
+      case "ArrowRight":
+      case "Backspace":
+      case " ":
+      case "0":
+      case "$":
+        // Visual-line owns whole logical rows. Horizontal input must not fall
+        // through to CM6 and collapse the selection behind Vim's back.
+        return true;
       case "j":
       case "ArrowDown":
         visualLineMove(1);
@@ -1511,6 +2049,13 @@ export function createVimLite(
         return true;
       case "G":
         visualLineDocumentBoundary("end");
+        return true;
+      case "o":
+        renderVisualLineStates((visualLineStates ?? []).map((state) => ({
+          ...state,
+          anchor: state.head,
+          head: state.anchor,
+        })));
         return true;
       case "v":
         switchToVisualChar();

@@ -28,7 +28,9 @@ import { EditorView } from "@codemirror/view";
 import {
   continueMarkdownBlock,
   exitEmptyMarkdownBlock,
+  indentMarkdownBlock,
   tableEnterSameColumn,
+  tableNavigateCell,
 } from "./commands/index.ts";
 import {
   deleteTexSourceAutoPair,
@@ -171,4 +173,11 @@ export function runEditorEnter(view: EditorView): boolean {
     || continueMarkdownBlock(view)
     || insertNewlineContinueMarkup(view)
     || insertNewlineAndIndent(view);
+}
+
+/** Canonical Tab behavior shared by native CM6, desktop and xwidget input. */
+export function runEditorTab(view: EditorView, shift = false): boolean {
+  if (view.state.readOnly) return true;
+  const direction = shift ? -1 : 1;
+  return tableNavigateCell(view, direction) || indentMarkdownBlock(view, direction);
 }

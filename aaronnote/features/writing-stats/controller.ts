@@ -1,7 +1,9 @@
 import type { Editor } from "../../../src/editor-api.ts";
 import { CoalescedTimer } from "../../../src/coalesced-timer.ts";
 import {
+  accumulateWritingStatsRange,
   countWritingStats,
+  createWritingStatsCounter,
   headingSubtreeRange,
   type WritingStats,
 } from "../../writing-stats.ts";
@@ -41,6 +43,23 @@ export function createWritingStatsController(
   const setBrowserTimeout = (callback: () => void, delay: number): number => window.setTimeout(callback, delay);
   const clearBrowserTimeout = (handle: number): void => window.clearTimeout(handle);
   let destroyed = false;
+  let workEpoch = 0;
+
+  function render(
+    primary: WritingStats,
+    hasSelection: boolean,
+    subtree: { from: number; to: number } | null,
+    subtreeStats: WritingStats | null,
+    selection: { from: number; to: number },
+  ): void {
+    const scope = hasSelection ? "选区" : "全文";
+    const parts = [`${scope} ${numberFormat.format(primary.words)} 字`];
+    if (subtree && subtreeStats && (!hasSelection || subtree.from !== selection.from || subtree.to !== selection.to)) {
+      parts.push(`本节 ${numberFormat.format(subtreeStats.words)} 字`);
+    }
+    label.textContent = parts.join(" · ");
+    label.title = "字数按中日韩字符和其他语言单词统计";
+  }
 
   function updateNow(): void {
     if (destroyed) return;
@@ -71,13 +90,7 @@ export function createWritingStatsController(
         subtreeCache = { doc: state.doc, ...subtree, stats: subtreeStats };
       }
     }
-    const scope = hasSelection ? "选区" : "全文";
-    const parts = [`${scope} ${numberFormat.format(primary.words)} 字`];
-    if (subtree && subtreeStats && (!hasSelection || subtree.from !== selection.from || subtree.to !== selection.to)) {
-      parts.push(`本节 ${numberFormat.format(subtreeStats.words)} 字`);
-    }
-    label.textContent = parts.join(" · ");
-    label.title = "字数按中日韩字符和其他语言单词统计";
+    render(primary, hasSelection, subtree, subtreeStats, selection);
   }
 
   function cancelIdle(): void {
@@ -87,24 +100,109 @@ export function createWritingStatsController(
     idleHandle = null;
   }
 
-  function queueIdle(): void {
+  function requestIdle(callback: (deadline: IdleDeadline | null) => void): void {
     cancelIdle();
     if (typeof window.requestIdleCallback === "function") {
-      idleHandle = window.requestIdleCallback(() => {
+      idleHandle = window.requestIdleCallback((deadline) => {
         idleHandle = null;
-        updateNow();
-      });
+        callback(deadline);
+      }, { timeout: 200 });
     } else {
       idleHandle = setBrowserTimeout(() => {
         idleHandle = null;
-        updateNow();
+        callback(null);
       }, 50);
     }
+  }
+
+  function scanRange(
+    epoch: number,
+    scanDoc: typeof editor.view.state.doc,
+    from: number,
+    to: number,
+    metaRange: MetaSummarySourceRange | null,
+    done: (stats: WritingStats) => void,
+  ): void {
+    let nextPosition = from;
+    const counter = createWritingStatsCounter();
+    const step = (deadline: IdleDeadline | null): void => {
+      if (destroyed || epoch !== workEpoch || editor.view.state.doc !== scanDoc) return;
+      const started = performance.now();
+      let chunks = 0;
+      while (nextPosition < to) {
+        let batchTo = Math.min(to, nextPosition + 32 * 1024);
+        if (batchTo < to && /[\uD800-\uDBFF]/u.test(scanDoc.sliceString(batchTo - 1, batchTo))) batchTo--;
+        accumulateWritingStatsRange(counter, scanDoc, nextPosition, batchTo, metaRange);
+        nextPosition = batchTo;
+        chunks += 1;
+        const inputPending = (navigator as Navigator & {
+          scheduling?: { isInputPending?: () => boolean };
+        }).scheduling?.isInputPending?.() ?? false;
+        if (inputPending || chunks >= 4 || performance.now() - started >= 6
+            || (deadline && deadline.timeRemaining() <= 1)) break;
+      }
+      if (nextPosition < to) requestIdle(step);
+      else done(counter.value());
+    };
+    requestIdle(step);
+  }
+
+  function renderLargeDocumentScopes(epoch: number, scanDoc: typeof editor.view.state.doc): void {
+    if (destroyed || epoch !== workEpoch || editor.view.state.doc !== scanDoc) return;
+    const state = editor.view.state;
+    const selection = state.selection.main;
+    const hasSelection = selection.from !== selection.to;
+    const subtree = headingSubtreeRange(state, selection.head);
+
+    const finish = (primary: WritingStats, subtreeStats: WritingStats | null): void => {
+      if (destroyed || epoch !== workEpoch || editor.view.state.doc !== scanDoc) return;
+      render(primary, hasSelection, subtree, subtreeStats, selection);
+    };
+    const resolveSubtree = (primary: WritingStats): void => {
+      if (!subtree) return finish(primary, null);
+      if (subtree.from === 0 && subtree.to === scanDoc.length) return finish(primary, full);
+      if (subtree.to - subtree.from < LARGE_DOCUMENT_CHARS) {
+        const stats = countWritingStats(scanDoc, subtree.from, subtree.to, metaSummaryRange);
+        subtreeCache = { doc: scanDoc, ...subtree, stats };
+        return finish(primary, stats);
+      }
+      scanRange(epoch, scanDoc, subtree.from, subtree.to, metaSummaryRange, (stats) => {
+        subtreeCache = { doc: scanDoc, ...subtree, stats };
+        finish(primary, stats);
+      });
+    };
+
+    if (!hasSelection) return resolveSubtree(full);
+    if (selection.to - selection.from < LARGE_DOCUMENT_CHARS) {
+      return resolveSubtree(countWritingStats(scanDoc, selection.from, selection.to, metaSummaryRange));
+    }
+    scanRange(epoch, scanDoc, selection.from, selection.to, metaSummaryRange, resolveSubtree);
+  }
+
+  function queueIdle(): void {
+    const epoch = ++workEpoch;
+    const state = editor.view.state;
+    if (state.doc === cachedDoc || state.doc.length < LARGE_DOCUMENT_CHARS) {
+      requestIdle(() => {
+        if (!destroyed && epoch === workEpoch) updateNow();
+      });
+      return;
+    }
+    const scanDoc = state.doc;
+    metaSummaryRange = orgMetaSummaryRangeFromLines(scanDoc);
+    scanRange(epoch, scanDoc, 0, scanDoc.length, metaSummaryRange, (stats) => {
+      if (destroyed || epoch !== workEpoch || editor.view.state.doc !== scanDoc) return;
+      full = stats;
+      cachedDoc = scanDoc;
+      subtreeCache = null;
+      renderLargeDocumentScopes(epoch, scanDoc);
+    });
   }
 
   function schedule(documentChanged: boolean): void {
     if (destroyed) return;
     cancelIdle();
+    workEpoch++;
     const delay = documentChanged
       ? (editor.getMarkdownLength() >= LARGE_DOCUMENT_CHARS ? LARGE_UPDATE_DELAY_MS : UPDATE_DELAY_MS)
       : SELECTION_DELAY_MS;
@@ -114,6 +212,7 @@ export function createWritingStatsController(
   function destroy(): void {
     if (destroyed) return;
     destroyed = true;
+    workEpoch++;
     timer.cancel();
     cancelIdle();
     cachedDoc = null;

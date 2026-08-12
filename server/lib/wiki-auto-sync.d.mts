@@ -4,6 +4,7 @@ export type WikiAutoSyncFailure = { repositoryId: string; error: string };
 export type WikiAutoSync = {
   mark(repositoryId: string): void;
   cancel(repositoryId: string): void;
+  retry(repositoryId: string, delayMs?: number): void;
   start(repositoryIds?: string[]): void;
   syncNow(repositoryId: string): Promise<WikiAutoSyncState | null>;
   close(options?: { flush?: boolean }): Promise<void>;
@@ -20,5 +21,6 @@ export function createWikiAutoSync(options: {
   startupMs?: number;
   periodicMs?: number;
   periodicJitterMs?: number;
+  busyRetryMs?: number;
   maxConcurrency?: number;
 }): WikiAutoSync;

@@ -1721,7 +1721,13 @@ const mathInlineAtomicExtension = EditorView.atomicRanges.of((view) => (
 ));
 
 function activateAdjacentInlineMath(view: EditorView, direction: "forward" | "backward"): boolean {
-  if (view.state.readOnly || !view.state.selection.main.empty) return false;
+  // Opening one formula source is a single-caret interaction. With multiple
+  // cursors, let CM6 move every range atomically; collapsing the selection to
+  // the main formula made an ordinary arrow key silently delete all secondary
+  // cursors.
+  if (view.state.readOnly
+      || view.state.selection.ranges.length !== 1
+      || !view.state.selection.main.empty) return false;
   const position = view.state.selection.main.head;
   const range = inlineMathRangesOnSelectionLines(view.state).find((candidate) =>
     direction === "forward"

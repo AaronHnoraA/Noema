@@ -1,10 +1,10 @@
 import type { Editor } from "../src/lib.ts";
 import type { VimLiteController } from "./vim-lite.ts";
-import { indentMarkdownList } from "../src/cm6/commands/index.ts";
 import {
   runEditorDelete,
   runEditorEnter,
   runEditorMovement,
+  runEditorTab,
   type EditorMovementKey,
 } from "../src/cm6/input-commands.ts";
 import { historyChordKind } from "../src/keymap/shortcut-router.ts";
@@ -344,10 +344,7 @@ function runEditorSpecialKey(key: XwidgetSpecialKey, context: XwidgetKeyContext,
 }
 
 function runXwidgetTabKey(editor: Editor, shiftKey: boolean): boolean {
-  if (indentMarkdownList(editor.view, shiftKey ? -1 : 1)) return true;
-  // Shift-Tab must not escape the embedded editor even when there is no list
-  // level to lift. Plain Tab is left to CM6/snippet handling.
-  return shiftKey;
+  return runEditorTab(editor.view, shiftKey);
 }
 
 function shouldHandleXwidgetVimKey(event: KeyboardEvent | InputEvent, context: XwidgetKeyContext): boolean {

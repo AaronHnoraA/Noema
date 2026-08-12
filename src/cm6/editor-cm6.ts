@@ -10,7 +10,7 @@
  * CM6 doc positions are the markdown source offsets used by the public API.
  */
 
-import { Compartment, EditorSelection, EditorState, Transaction, type Extension, type Text as CMText } from "@codemirror/state";
+import { Compartment, EditorSelection, EditorState, findClusterBreak, Transaction, type Extension, type Text as CMText } from "@codemirror/state";
 import {
   EditorView,
   keymap,
@@ -34,7 +34,7 @@ import {
 import { wikiLinkAt } from "../../shared/wiki-link.mjs";
 import { vscodeCloseBrackets } from "./close-brackets-vscode.ts";
 import { texSourceInput } from "./tex-source-input.ts";
-import { runEditorDelete, runEditorEnter } from "./input-commands.ts";
+import { runEditorDelete, runEditorEnter, runEditorTab } from "./input-commands.ts";
 import {
   pasteTargetExtension,
   resolveEditorPasteTarget,
@@ -46,8 +46,6 @@ import {
   runCommandCM6,
   getBlockContextCM6,
   createQuickInsertRegistry,
-  indentMarkdownBlock,
-  tableNavigateCell,
 } from "./commands/index.ts";
 import {
   pasteDataTransfer,
@@ -627,62 +625,99 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
     return { from: anchor, to: head };
   }
 
-  function pasteInsertRange(options: EditorPasteOptions | undefined, text: string): { from: number; to: number; text: string; ownsSelection: boolean } | null {
+  function pasteInsertRanges(options: EditorPasteOptions | undefined, text: string): {
+    ranges: Array<{ from: number; to: number; text: string }>;
+    ownsSelection: boolean;
+    mainIndex: number;
+    vimRegister: boolean;
+  } | null {
     const placement = options?.placement;
     const target = options?.target
       ? resolveEditorPasteTarget(view, options.target)
       : null;
     if (options?.target && !target) return null;
-    const selection = target ?? view.state.selection.main;
+    const selections = target?.ranges ?? view.state.selection.ranges;
     const ownsSelection = target?.ownsSelection ?? true;
-    if (!placement || placement.kind == null || placement.kind === "selection") {
-      return { from: selection.from, to: selection.to, text, ownsSelection };
-    }
-
-    if (placement.kind === "character") {
-      const line = view.state.doc.lineAt(Math.max(0, Math.min(selection.from, view.state.doc.length)));
-      const from = placement.where === "after"
-        ? Math.min(line.to, selection.to)
-        : selection.from;
-      return { from, to: from, text, ownsSelection };
-    }
-    if (placement.kind !== "line") {
-      return { from: selection.from, to: selection.to, text, ownsSelection };
-    }
-
-    if (!text.includes("\n")) {
-      const line = view.state.doc.lineAt(Math.max(0, Math.min(selection.from, view.state.doc.length)));
-      const from = placement.where === "after"
-        ? Math.min(line.to, selection.to)
-        : selection.from;
-      return { from, to: from, text, ownsSelection };
-    }
-
-    const docLength = view.state.doc.length;
-    const line = view.state.doc.lineAt(Math.max(0, Math.min(selection.from, docLength)));
-    let insert = text.endsWith("\n") ? text : `${text}\n`;
-    let from = line.from;
-    if (placement.where === "after") {
-      if (line.to < docLength) {
-        from = line.to + 1;
-      } else {
-        from = line.to;
-        if (docLength > 0) insert = `\n${insert}`;
+    const useFragments = target?.fragments?.length === selections.length
+      && target.clipboardText === text;
+    const inserts = selections.map((selection, index) => {
+      let insert = useFragments ? target.fragments![index]! : text;
+      const rangePlacement = placement;
+      if (!rangePlacement || !("where" in rangePlacement)) {
+        return { from: selection.from, to: selection.to, text: insert };
       }
-    }
-    return { from, to: from, text: insert, ownsSelection };
+
+      if (rangePlacement.kind === "character") {
+        const line = view.state.doc.lineAt(Math.max(0, Math.min(selection.from, view.state.doc.length)));
+        const from = rangePlacement.where === "after"
+          ? Math.min(line.to, selection.to)
+          : selection.from;
+        return { from, to: from, text: insert };
+      }
+
+      if (!insert.includes("\n")) {
+        const line = view.state.doc.lineAt(Math.max(0, Math.min(selection.from, view.state.doc.length)));
+        const from = rangePlacement.where === "after"
+          ? Math.min(line.to, selection.to)
+          : selection.from;
+        return { from, to: from, text: insert };
+      }
+
+      const docLength = view.state.doc.length;
+      const line = view.state.doc.lineAt(Math.max(0, Math.min(selection.from, docLength)));
+      insert = insert.endsWith("\n") ? insert : `${insert}\n`;
+      let from = line.from;
+      if (rangePlacement.where === "after") {
+        if (line.to < docLength) {
+          from = line.to + 1;
+        } else {
+          from = line.to;
+          if (docLength > 0) insert = `\n${insert}`;
+        }
+      }
+      return { from, to: from, text: insert };
+    });
+    const unique = [...new Map(inserts.map((range) => [`${range.from}:${range.to}`, range])).values()]
+      .sort((left, right) => left.from - right.from || left.to - right.to);
+    return {
+      ranges: unique,
+      ownsSelection,
+      mainIndex: Math.min(view.state.selection.mainIndex, Math.max(0, unique.length - 1)),
+      vimRegister: Boolean(target?.fragments),
+    };
   }
 
   function insertPastedMarkdown(text: string, pasteOptions?: EditorPasteOptions): boolean {
     if (options.readOnly) return false;
     if (!text) return false;
-    const range = pasteInsertRange(pasteOptions, text);
-    if (!range) return false;
-    view.dispatch({
-      changes: { from: range.from, to: range.to, insert: range.text },
-      ...(range.ownsSelection ? { selection: { anchor: range.from + range.text.length } } : {}),
-      scrollIntoView: range.ownsSelection,
+    const insertion = pasteInsertRanges(pasteOptions, text);
+    if (!insertion || insertion.ranges.length === 0) return false;
+    const changeSet = view.state.changes(insertion.ranges.map((range) => ({
+      from: range.from,
+      to: range.to,
+      insert: range.text,
+    })));
+    const nextRanges = insertion.ranges.map((range) => {
+      if (!insertion.vimRegister) {
+        return EditorSelection.cursor(changeSet.mapPos(range.from, 1));
+      }
+      const start = changeSet.mapPos(range.from, -1);
+      if (pasteOptions?.placement?.kind === "line" && range.text.includes("\n")) {
+        const contentStart = range.text.startsWith("\n") ? 1 : 0;
+        const indent = range.text.slice(contentStart).match(/^[ \t]*/u)?.[0].length ?? 0;
+        return EditorSelection.cursor(start + contentStart + indent);
+      }
+      return EditorSelection.cursor(
+        start + findClusterBreak(range.text, range.text.length, false),
+      );
     });
+    view.dispatch(view.state.update({
+      changes: changeSet,
+      ...(insertion.ownsSelection ? {
+        selection: EditorSelection.create(nextRanges, insertion.mainIndex),
+      } : {}),
+      scrollIntoView: insertion.ownsSelection,
+    }));
     return true;
   }
 
@@ -1157,8 +1192,8 @@ function buildExtensions(
       { key: "Delete", run: (view) => runEditorDelete(view, "forward") },
       { key: "Enter", run: runEditorEnter },
       { key: "Mod-Enter", run: exitCurrentOrgEnv },
-      { key: "Tab", run: (view) => tableNavigateCell(view, 1) || indentMarkdownBlock(view, 1) },
-      { key: "Shift-Tab", run: (view) => tableNavigateCell(view, -1) || indentMarkdownBlock(view, -1) },
+      { key: "Tab", run: (view) => runEditorTab(view) },
+      { key: "Shift-Tab", run: (view) => runEditorTab(view, true) },
       { key: "Mod-d", run: selectNextMarkdownOccurrence },
       { key: "Mod-Shift-z", run: cmRedo },
       { key: "Meta-Shift-z", run: cmRedo },
@@ -1243,7 +1278,30 @@ function wordRangeAt(state: EditorState, pos: number): { from: number; to: numbe
   return { from: line.from + from, to: line.from + to };
 }
 
-function selectNextMarkdownOccurrence(view: EditorView): boolean {
+function findMarkdownText(
+  doc: CMText,
+  query: string,
+  from: number,
+  to: number = doc.length,
+): number {
+  if (!query || from >= to) return -1;
+  const iterator = doc.iterRange(from, to);
+  const overlap = Math.max(0, query.length - 1);
+  let carry = "";
+  let consumed = from;
+  for (;;) {
+    iterator.next();
+    if (iterator.done) return -1;
+    const chunk = iterator.value;
+    const combined = carry + chunk;
+    const index = combined.indexOf(query);
+    if (index >= 0) return consumed - carry.length + index;
+    consumed += chunk.length;
+    carry = overlap > 0 ? combined.slice(-overlap) : "";
+  }
+}
+
+export function selectNextMarkdownOccurrence(view: EditorView): boolean {
   const state = view.state;
   const main = state.selection.main;
   let query = main.empty ? "" : state.doc.sliceString(main.from, main.to);
@@ -1258,14 +1316,10 @@ function selectNextMarkdownOccurrence(view: EditorView): boolean {
   }
   if (!query) return false;
   const start = main.to;
-  const after = state.doc.sliceString(start);
-  let index = after.indexOf(query);
-  let from = index >= 0 ? start + index : -1;
+  let from = findMarkdownText(state.doc, query, start);
   if (from < 0) {
-    const before = state.doc.sliceString(0, Math.max(0, firstFrom));
-    index = before.indexOf(query);
-    if (index < 0) return false;
-    from = index;
+    from = findMarkdownText(state.doc, query, 0, Math.max(0, firstFrom));
+    if (from < 0) return false;
   }
   const range = EditorSelection.range(from, from + query.length);
   const ranges = [

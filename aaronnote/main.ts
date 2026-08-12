@@ -13,17 +13,20 @@ import {
   type StoredPasteAsset,
 } from "../src/lib.ts";
 import { setupCopilot } from "../plugins/noema-copilot/renderer.ts";
-import { indentMarkdownBlock, indentMarkdownList, tableNavigateCell } from "../src/cm6/commands/index.ts";
+import { indentMarkdownBlock } from "../src/cm6/commands/index.ts";
 import {
   runEditorDelete,
   runEditorEnter,
   runEditorMovement,
+  runEditorTab,
   runEditorTextInput,
   type EditorMovementKey,
 } from "../src/cm6/input-commands.ts";
 import { markdownHrefAt } from "../src/cm6/editor-cm6.ts";
 import {
   finishInlineMathEditing,
+  formulaRangeAtWidgetPosition,
+  formulaSourceRangeAtPosition,
   revealFormulaSource,
 } from "../src/cm6/extensions/visual/widgets/math.ts";
 import { getBlockMathRanges, rangeAtPosition, rangeOverlapsAny } from "../src/cm6/math-ranges.ts";
@@ -1006,6 +1009,10 @@ let liveTexPreview: VisualTexPreview | null = null;
 let mathPreviewGeometryEpoch = 0;
 const clientId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 const changeHandlers = new Set<() => void>();
+const selectionChangeHandlers = new Set<() => void>();
+const vimModeChangeHandlers = new Set<() => void>();
+const copilotActiveChangeHandlers = new Set<() => void>();
+const copilotFileChangeHandlers = new Set<() => void>();
 const MATH_PREVIEW_ERROR_MAX_LENGTH = 180;
 const NAVIGATION_BACK_STACK_MAX = 80;
 const PROSE_SCOPE_PADDING = 32 * 1024;
@@ -1294,6 +1301,7 @@ function updateModeLabel(mode: VimLiteMode): void {
   host.dataset.vimMode = mode;
   document.body.dataset.vimMode = mode;
   if (mode === "normal") noteCursorPositionEvent();
+  vimModeChangeHandlers.forEach((handler) => handler());
   scheduleAssistUpdate({ mathPreview: true, cursor: true });
 }
 
@@ -1338,6 +1346,7 @@ const editor = createEditor(host, {
   },
   onSelectionChange: () => {
     reconcileVimSelection?.();
+    selectionChangeHandlers.forEach((handler) => handler());
     scheduleWritingStats(writingStatsController?.isDocumentChanged() ?? true);
     scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
   },
@@ -2041,6 +2050,7 @@ host.addEventListener("aaronnote:inline-math-edit-state", (event) => {
     visualMathReturnMode = vim.mode();
   }
   visualMathEditorActive = active;
+  copilotActiveChangeHandlers.forEach((handler) => handler());
   if (!active) {
     const handoff = pendingMathSnippetHandoff;
     pendingMathSnippetHandoff = null;
@@ -2233,12 +2243,33 @@ const localGraphPanel = createLocalGraphPanel({
   getNotes: () => notes.filter(note => note.roam !== false),
   getCurrentNote: currentNote,
   getMarkdown: () => editor.getMarkdown(),
+  getMarkdownLength: () => editor.getMarkdownLength(),
   resolveNoteRef,
   openNote,
   openTag: openTagFilter,
 });
 const graphOverlayTimer = new CoalescedTimer(400);
-changeHandlers.add(() => graphOverlayTimer.schedule(() => localGraphPanel.update(true)));
+let graphOverlayIdleHandle = 0;
+function scheduleGraphOverlayUpdate(): void {
+  graphOverlayTimer.schedule(() => {
+    const scheduling = navigator as Navigator & { scheduling?: { isInputPending?: () => boolean } };
+    if (scheduling.scheduling?.isInputPending?.()) {
+      scheduleGraphOverlayUpdate();
+      return;
+    }
+    if ("requestIdleCallback" in window) {
+      if (graphOverlayIdleHandle) window.cancelIdleCallback(graphOverlayIdleHandle);
+      graphOverlayIdleHandle = window.requestIdleCallback(() => {
+        graphOverlayIdleHandle = 0;
+        if (scheduling.scheduling?.isInputPending?.()) scheduleGraphOverlayUpdate();
+        else localGraphPanel.update(true);
+      }, { timeout: 1200 });
+      return;
+    }
+    localGraphPanel.update(true);
+  });
+}
+changeHandlers.add(scheduleGraphOverlayUpdate);
 
 graphClose.addEventListener("click", () => localGraphPanel.collapse());
 
@@ -4204,6 +4235,7 @@ function applyOpenedNote(
   rememberedPositions: CursorPosition[] = cursorPositions,
   options: ApplyOpenedNoteOptions = {},
 ): void {
+  const previousFile = currentFile;
   const revealCursor = options.revealCursor !== false && !passiveServerReader;
   const focusEditor = options.focusEditor !== false && !passiveServerReader;
   const updateStatus = options.updateStatus !== false;
@@ -4235,9 +4267,14 @@ function applyOpenedNote(
   revision = 0;
   savedRevision = 0;
   desktopSaveConflict = false;
+  // Cursor memory restores position, not the transient Source/Markdown tool
+  // view. A regular note open should use the file's natural mode (Markdown
+  // for notes), otherwise leaving a note in Source makes every later open of
+  // that note feel permanently stuck there. Explicit reload preservation and
+  // back/forward navigation still restore their view modes separately.
   const mode = options.preserveView
     ? (editor.isSourceMode() ? "source" : "markdown")
-    : remembered?.mode || opened.mode;
+    : opened.mode;
   if ((!serverReaderMode || serverReader.showSource)
       && String(currentKind || "").trim().toLowerCase() !== "slides"
       && (mode === "source") !== editor.isSourceMode()) editor.toggleSource();
@@ -4260,6 +4297,7 @@ function applyOpenedNote(
     }
   }
   applyingContent = false;
+  if (currentFile !== previousFile) copilotFileChangeHandlers.forEach((handler) => handler());
   scheduleWritingStats(true);
   if (currentReadOnly) {
     revision = savedRevision;
@@ -4423,6 +4461,31 @@ async function openInitialFile(): Promise<void> {
   await openFile(file, true);
 }
 
+let copilotTexContextCache: {
+  doc: object;
+  position: number;
+  range: { from: number; to: number } | null;
+} | null = null;
+
+function copilotTexSourceRange(): { from: number; to: number } | null {
+  const doc = editor.view.state.doc;
+  const position = editor.getMarkdownSelection().to;
+  if (copilotTexContextCache?.doc === doc && copilotTexContextCache.position === position) {
+    return copilotTexContextCache.range;
+  }
+  const formula = formulaRangeAtWidgetPosition(editor.view.state, position);
+  const revealed = formulaSourceRangeAtPosition(editor.view, position);
+  const range = formula && position >= formula.contentFrom && position <= formula.contentTo
+    ? { from: formula.contentFrom, to: formula.contentTo }
+    : revealed;
+  copilotTexContextCache = { doc, position, range };
+  return range;
+}
+
+function isCopilotTexContext(): boolean {
+  return Boolean(copilotTexSourceRange());
+}
+
 setupCopilot({
   editor,
   host,
@@ -4434,9 +4497,25 @@ setupCopilot({
     changeHandlers.add(handler);
     return () => changeHandlers.delete(handler);
   },
+  onSelectionChange: (handler) => {
+    selectionChangeHandlers.add(handler);
+    return () => selectionChangeHandlers.delete(handler);
+  },
+  onVimModeChange: (handler) => {
+    vimModeChangeHandlers.add(handler);
+    return () => vimModeChangeHandlers.delete(handler);
+  },
+  onActiveChange: (handler) => {
+    copilotActiveChangeHandlers.add(handler);
+    return () => copilotActiveChangeHandlers.delete(handler);
+  },
+  onFileChange: (handler) => {
+    copilotFileChangeHandlers.add(handler);
+    return () => copilotFileChangeHandlers.delete(handler);
+  },
   onKeyDown: (handler) => {
     const listener = (event: KeyboardEvent) => {
-      if (handler(event)) event.stopPropagation();
+      if (handler(event)) event.stopImmediatePropagation();
     };
     document.addEventListener("keydown", listener, true);
     return () => document.removeEventListener("keydown", listener, true);
@@ -4445,6 +4524,8 @@ setupCopilot({
   onSettingsChange: () => () => {},
   getSettings: () => ({ idleDelayMs: 850, largeBufferThresholdKb: 512 }),
   isActive: () => !serverReaderMode && !paused && !visualMathEditorActive && editorSurfaceVisible(),
+  isCursorInTexSource: isCopilotTexContext,
+  texSourceRangeAtCursor: copilotTexSourceRange,
   onDocumentEvent: subscribe,
   preserveScroll: (update) => editor.preserveViewport(update),
   jumpSnippetNext: jumpSnippetTabstop,
@@ -7427,6 +7508,7 @@ async function trashCurrentNoteTool(): Promise<void> {
     revision = 0;
     savedRevision = 0;
     currentFile = "";
+    copilotFileChangeHandlers.forEach((handler) => handler());
     if (remaining?.file) {
       await openFile(remaining.file);
       setStatus(`${name} moved to ${platformLabels.trash}`);
@@ -9414,6 +9496,7 @@ function cancelAssistWork(): void {
 function applyPaused(next: boolean): void {
   if (paused === next) return;
   paused = next;
+  copilotActiveChangeHandlers.forEach((handler) => handler());
   assistScheduler.setPaused(next);
   proseLifecycle.setPaused(next, next ? "page-hidden" : "resumed");
   document.documentElement.classList.toggle("aaronnote-paused", next);
@@ -9512,6 +9595,17 @@ function runHostKey(body: Record<string, unknown>): boolean {
     typeof body.text === "string" ? body.text : undefined,
     typeof body.code === "string" ? body.code : undefined,
   )) return true;
+  const copilotKey = new CustomEvent("aaronnote:copilot-host-key", {
+    cancelable: true,
+    detail: {
+      ...hostKey,
+      code: typeof body.code === "string" ? body.code : undefined,
+      text: typeof body.text === "string" ? body.text : undefined,
+      isComposing: Boolean(body.isComposing),
+    },
+  });
+  host.dispatchEvent(copilotKey);
+  if (copilotKey.defaultPrevented) return true;
   editor.focus();
   if (key === "Escape" || key === "Esc") snippetSession.clear();
   if (handleSnippetPopupHostKey(hostKey)) {
@@ -9556,31 +9650,23 @@ function runHostKey(body: Record<string, unknown>): boolean {
       }
     }
     if (hostKey.shiftKey) {
-      const tableHandled = tableNavigateCell(editor.view, -1);
-      if (tableHandled) { scheduleAssistUpdate({ cursor: true }); return true; }
       const handled = jumpSnippetTabstopBack();
       if (handled) {
         scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
         return true;
       }
-      if (indentMarkdownList(editor.view, -1)) {
-        scheduleAssistUpdate({ snippets: true, cursor: true });
-        return true;
-      }
-      return false;
+      runEditorTab(editor.view, true);
+      scheduleAssistUpdate({ snippets: true, cursor: true });
+      return true;
     }
-    const tableHandled = tableNavigateCell(editor.view, 1);
-    if (tableHandled) { scheduleAssistUpdate({ cursor: true }); return true; }
     const snippetHandled = jumpSnippetTabstop() || expandSnippetAtCursor();
     if (snippetHandled) {
       scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
       return true;
     }
-    if (indentMarkdownList(editor.view, 1)) {
-      scheduleAssistUpdate({ snippets: true, cursor: true });
-      return true;
-    }
-    // No snippet/list match — fall through to insertHostKeyText("\t").
+    runEditorTab(editor.view);
+    scheduleAssistUpdate({ snippets: true, cursor: true });
+    return true;
   }
   if (vim.mode() !== "insert" || hostKey.ctrlKey || hostKey.metaKey || hostKey.altKey) return false;
   if (/^(?:Arrow(?:Left|Right|Up|Down)|Home|End|PageUp|PageDown)$/u.test(key)) {
@@ -10250,17 +10336,9 @@ document.addEventListener("beforeinput", (event) => {
       scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
       return;
     }
-    if (tableNavigateCell(editor.view, 1)) {
-      event.preventDefault();
-      scheduleAssistUpdate({ cursor: true });
-      return;
-    }
-    if (indentMarkdownList(editor.view, 1)) {
-      event.preventDefault();
-      scheduleAssistUpdate({ snippets: true, cursor: true });
-      return;
-    }
-    // No snippet/list match: fall through so CM6 inserts \t naturally.
+    runEditorTab(editor.view);
+    event.preventDefault();
+    scheduleAssistUpdate({ snippets: true, cursor: true });
     return;
   }
   if (handleXwidgetControlBeforeInput(event as InputEvent, {

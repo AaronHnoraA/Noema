@@ -685,7 +685,7 @@ export type WikiDirectory = {
   name: string;
   fileCount: number;
 };
-export type WikiSyncPhase = "idle" | "checkpointing" | "fetching" | "merging" | "conflicted" | "pushing" | "error";
+export type WikiSyncPhase = "idle" | "waiting" | "checkpointing" | "fetching" | "merging" | "conflicted" | "pushing" | "error";
 export type WikiSyncState = {
   repositoryId: string;
   repositoryUid?: string;
@@ -702,6 +702,16 @@ export type WikiSyncState = {
   changedPaths?: string[];
   error?: string;
   message?: string;
+  retryable?: boolean;
+  retryAfterMs?: number;
+  recoveredGitLock?: {
+    kind: "orphan-index-lock";
+    recoveredAt: string;
+    ageMs: number;
+    size: number;
+    backup: string;
+    previousOwnerPid?: number;
+  };
   conflicts?: Array<{ path: string; kind: string; stages: number[] }>;
 };
 export type WikiIndex = {

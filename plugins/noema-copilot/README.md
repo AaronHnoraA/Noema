@@ -18,3 +18,26 @@ language-server selection.
 Copilot is part of the built-in authoring surface and is loaded automatically;
 the configuration page reports it as active but does not require an enable
 switch.
+
+## Inline completion controls
+
+In Insert mode, Copilot keeps matching ghost text visible while you type and
+refreshes the suggestion after the normal idle delay. The primary modifier is
+Command on macOS and Ctrl on Windows/Linux.
+
+- `Command/Ctrl+]` accepts the complete suggestion.
+- `Command/Ctrl+\` accepts the next word or structural unit.
+- `Command/Ctrl+}` (`Shift+]`) starts a Vim `s`-style jump. Type a target
+  character first; Noema then labels matching occurrences in the visible
+  ghost. Type a label to accept exactly through that occurrence. Backspace
+  edits the label prefix and Escape leaves the suggestion unaccepted. A small
+  armed-state hint stays visible while S-jump owns input. Each target/label
+  stage expires after 1.5 seconds; navigation, paste, drop, and other
+  non-character input cancel the jump and pass through unchanged.
+
+Multiline suggestions render through the visible viewport. When no Copilot
+suggestion is present, the same navigation keys retain their snippet-tabstop
+and structural-delimiter behavior. Formula requests are bounded to the active
+formula and sent as a virtual LaTeX document, while accepted text is still
+inserted into the original Markdown source; existing `}`, `\)`, and `\]`
+closers are preserved rather than duplicated.

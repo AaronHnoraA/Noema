@@ -46,6 +46,7 @@ describe("Wiki DB refresh planning", () => {
     )).toMatchObject({ mode: "full", changedFiles: ["/notes/a.md"] });
     expect(wikiSyncIndexRefreshPlan({ phase: "conflicted" })).toBeNull();
     expect(wikiSyncIndexRefreshPlan({ phase: "error" })).toBeNull();
+    expect(wikiSyncIndexRefreshPlan({ phase: "waiting" })).toBeNull();
   });
 
   test("clamps configuration and lets full refresh win coalescing", () => {

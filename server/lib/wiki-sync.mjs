@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
@@ -11,6 +11,13 @@ import { expandNoemaPath, repositoryFromId } from "./wiki-workspace.mjs";
 const execFileAsync = promisify(execFile);
 const repositoryQueues = new Map();
 const DEFAULT_GIT_MAINTENANCE_BYTES = 2 * 1024 * 1024 * 1024;
+const DEFAULT_GIT_LOCK_STALE_MS = 10 * 60 * 1000;
+const DEFAULT_REPOSITORY_LEASE_STALE_MS = 10 * 60 * 1000;
+const DEFAULT_REPOSITORY_LEASE_HEARTBEAT_MS = 5_000;
+const DEFAULT_REPOSITORY_LEASE_DEAD_GRACE_MS = 5_000;
+const DEFAULT_REPOSITORY_LEASE_WAIT_MS = 250;
+const DEFAULT_REPOSITORY_LEASE_POLL_MS = 40;
+const DEFAULT_REPOSITORY_BUSY_RETRY_MS = 5_000;
 
 function apiError(message, statusCode = 400, code = "ERR_WIKI_SYNC") {
   return Object.assign(new Error(message), { statusCode, code });
@@ -55,6 +62,207 @@ function stateFile(root, repository) {
   return join(root, ".noema", "sync", `${repository.uid || repository.id.replaceAll("/", "-")}.json`);
 }
 
+function repositoryToken(repository) {
+  return String(repository.uid || repository.id).replaceAll("/", "-");
+}
+
+function repositoryLeaseFile(root, repository) {
+  return join(root, ".noema", "git-leases", `${repositoryToken(repository)}.json`);
+}
+
+function recoveredGitLockDirectory(root, repository) {
+  return join(root, ".noema", "recovered-git-locks", repositoryToken(repository));
+}
+
+function timestampToken(value = new Date()) {
+  return value.toISOString().replace(/[^0-9A-Za-z]+/g, "-").replace(/-+$/g, "");
+}
+
+function numericOption(options, key, fallback) {
+  const value = Number(options?.[key]);
+  return Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+
+function processIsAlive(pid) {
+  const value = Number(pid);
+  if (!Number.isInteger(value) || value <= 0) return false;
+  try {
+    process.kill(value, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+function wait(delayMs) {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, delayMs));
+}
+
+async function readJsonFile(file) {
+  try {
+    return JSON.parse(await readFile(file, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+async function preserveRecoveryArtifact(root, repository, source, name) {
+  const directory = recoveredGitLockDirectory(root, repository);
+  await mkdir(directory, { recursive: true });
+  const nonce = Math.random().toString(16).slice(2);
+  const target = join(directory, `${timestampToken()}-${process.pid}-${nonce}-${name}`);
+  await rename(source, target);
+  return target;
+}
+
+async function inspectRepositoryLease(file, staleMs, deadGraceMs) {
+  let info;
+  try {
+    info = await stat(file);
+  } catch (error) {
+    if (error?.code === "ENOENT") return { stale: false, owner: null, ageMs: 0 };
+    throw error;
+  }
+  const owner = await readJsonFile(file);
+  const ageMs = Math.max(0, Date.now() - info.mtimeMs);
+  const ownerPid = Number(owner?.pid);
+  const sameHost = owner?.host && owner.host === hostname();
+  const stale = sameHost && Number.isInteger(ownerPid) && ownerPid > 0
+    ? !processIsAlive(ownerPid) && ageMs >= deadGraceMs
+    : ageMs >= staleMs;
+  return { stale, owner, ageMs };
+}
+
+async function acquireRepositoryLease(root, repository, operation, options = {}) {
+  const file = repositoryLeaseFile(root, repository);
+  const waitMs = numericOption(options, "repositoryLeaseWaitMs", DEFAULT_REPOSITORY_LEASE_WAIT_MS);
+  const pollMs = Math.max(10, numericOption(options, "repositoryLeasePollMs", DEFAULT_REPOSITORY_LEASE_POLL_MS));
+  const staleMs = numericOption(options, "repositoryLeaseStaleMs", DEFAULT_REPOSITORY_LEASE_STALE_MS);
+  const deadGraceMs = numericOption(
+    options,
+    "repositoryLeaseDeadGraceMs",
+    DEFAULT_REPOSITORY_LEASE_DEAD_GRACE_MS,
+  );
+  const deadline = Date.now() + waitMs;
+  const token = `${process.pid}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+  let recoveredOwner = null;
+  await mkdir(dirname(file), { recursive: true });
+  for (;;) {
+    try {
+      const handle = await open(file, "wx", 0o600);
+      try {
+        await handle.writeFile(`${JSON.stringify({
+          schema: 1,
+          token,
+          pid: process.pid,
+          host: hostname(),
+          operation,
+          repositoryId: repository.id,
+          startedAt: new Date().toISOString(),
+        }, null, 2)}\n`);
+      } catch (error) {
+        await handle.close();
+        await rm(file, { force: true }).catch(() => {});
+        throw error;
+      }
+      return { file, token, recoveredOwner, handle };
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      const lease = await inspectRepositoryLease(file, staleMs, deadGraceMs);
+      if (lease.stale) {
+        try {
+          const backup = await preserveRecoveryArtifact(root, repository, file, "repository-lease.json");
+          recoveredOwner = { ...lease, backup };
+          continue;
+        } catch (recoveryError) {
+          if (recoveryError?.code === "ENOENT") continue;
+          throw recoveryError;
+        }
+      }
+      if (Date.now() >= deadline) {
+        const ownerOperation = String(lease.owner?.operation || "Git maintenance");
+        throw apiError(
+          `${ownerOperation} is already active for ${repository.id}; Noema will retry shortly`,
+          409,
+          "ERR_WIKI_SYNC_BUSY",
+        );
+      }
+      await wait(Math.min(pollMs, Math.max(1, deadline - Date.now())));
+    }
+  }
+}
+
+async function releaseRepositoryLease(lease) {
+  if (!lease) return;
+  await lease.handle?.close().catch(() => {});
+  const current = await readJsonFile(lease.file);
+  if (current?.token !== lease.token) return;
+  await rm(lease.file, { force: true });
+}
+
+async function recoverOrphanIndexLockAtPath(root, repository, worktreePath, lease, options = {}, label = "primary") {
+  const gitDirResult = await execFileAsync(
+    "git",
+    ["-C", worktreePath, "rev-parse", "--absolute-git-dir"],
+    { maxBuffer: 1024 * 1024 },
+  ).catch((error) => ({ error, stdout: "" }));
+  if (gitDirResult.error) return null;
+  const lock = join(String(gitDirResult.stdout || "").trim(), "index.lock");
+  let info;
+  try {
+    info = await stat(lock);
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+  const ageMs = Math.max(0, Date.now() - info.mtimeMs);
+  const staleMs = numericOption(options, "gitLockStaleMs", DEFAULT_GIT_LOCK_STALE_MS);
+  const ownedByDeadNoema = Boolean(lease?.recoveredOwner?.owner?.pid);
+  // Noema's lease cannot exclude an external Git client. A non-empty lock may
+  // still be receiving index data, so it is never eligible for recovery.
+  if (info.size !== 0 || (!ownedByDeadNoema && ageMs < staleMs)) {
+    throw apiError(
+      `Git index is actively locked for ${repository.id}; Noema will retry shortly`,
+      409,
+      "ERR_WIKI_SYNC_BUSY",
+    );
+  }
+  const backup = await preserveRecoveryArtifact(root, repository, lock, `${label}-index.lock`);
+  return {
+    kind: "orphan-index-lock",
+    recoveredAt: new Date().toISOString(),
+    ageMs,
+    size: info.size,
+    backup: relative(root, backup),
+    previousOwnerPid: Number(lease?.recoveredOwner?.owner?.pid) || undefined,
+  };
+}
+
+async function recoverOrphanIndexLock(root, repository, lease, options = {}) {
+  return await recoverOrphanIndexLockAtPath(root, repository, repository.path, lease, options);
+}
+
+async function withRepositoryLease(root, repository, operation, options, task) {
+  const lease = await acquireRepositoryLease(root, repository, operation, options);
+  const heartbeatMs = Math.max(250, numericOption(
+    options,
+    "repositoryLeaseHeartbeatMs",
+    DEFAULT_REPOSITORY_LEASE_HEARTBEAT_MS,
+  ));
+  const heartbeat = setInterval(() => {
+    const now = new Date();
+    void lease.handle.utimes(now, now).catch(() => {});
+  }, heartbeatMs);
+  heartbeat.unref?.();
+  try {
+    const recoveredGitLock = await recoverOrphanIndexLock(root, repository, lease, options);
+    return await task(recoveredGitLock, lease);
+  } finally {
+    clearInterval(heartbeat);
+    await releaseRepositoryLease(lease).catch(() => {});
+  }
+}
+
 async function writeSyncState(root, repository, state) {
   const file = stateFile(root, repository);
   await mkdir(dirname(file), { recursive: true });
@@ -65,8 +273,20 @@ async function writeSyncState(root, repository, state) {
     updatedAt: new Date().toISOString(),
     ...state,
   };
-  await writeFile(file, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  const temporary = `${file}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
+  await writeFile(temporary, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  await rename(temporary, file);
   return payload;
+}
+
+function transientSyncState(repository, state) {
+  return {
+    schema: 1,
+    repositoryId: repository.id,
+    repositoryUid: repository.uid,
+    updatedAt: new Date().toISOString(),
+    ...state,
+  };
 }
 
 export async function readWikiSyncState(rootValue, repositoryId = "") {
@@ -223,11 +443,12 @@ async function commitIdentity(repository, device) {
   };
 }
 
-export async function checkpointWikiRepository(rootValue, repositoryId, options = {}) {
-  const root = expandNoemaPath(rootValue);
-  const repository = await repositoryFromId(root, repositoryId);
+async function checkpointWikiRepositoryUnlocked(root, repository, options = {}, recoveredGitLock = null) {
   const device = await ensureNoemaDeviceIdentity(options);
-  await writeSyncState(root, repository, { phase: "checkpointing" });
+  await writeSyncState(root, repository, {
+    phase: "checkpointing",
+    ...(recoveredGitLock ? { recoveredGitLock } : {}),
+  });
   try {
     const branch = await ensureWorkBranch(repository, device);
     await git(repository, ["add", "-A", "--", "."]);
@@ -255,6 +476,10 @@ export async function checkpointWikiRepository(rootValue, repositoryId, options 
       committed,
       changedFiles,
       identityFallback,
+      ...(recoveredGitLock ? {
+        recoveredGitLock,
+        message: "Recovered an orphaned Git index lock before checkpointing",
+      } : {}),
     });
     return { ok: true, type: "wiki-checkpoint", repository, ...state };
   } catch (error) {
@@ -265,6 +490,14 @@ export async function checkpointWikiRepository(rootValue, repositoryId, options 
     }).catch(() => {});
     throw error;
   }
+}
+
+export async function checkpointWikiRepository(rootValue, repositoryId, options = {}) {
+  const root = expandNoemaPath(rootValue);
+  const repository = await repositoryFromId(root, repositoryId);
+  return await withRepositoryLease(root, repository, "checkpoint", options, (recoveredGitLock) => (
+    checkpointWikiRepositoryUnlocked(root, repository, options, recoveredGitLock)
+  ));
 }
 
 async function remoteUrl(repository) {
@@ -338,10 +571,11 @@ async function conflictFiles(path) {
   }));
 }
 
-async function prepareIntegrationWorktree(root, repository, device) {
+async function prepareIntegrationWorktree(root, repository, device, lease, options = {}) {
   const path = integrationPath(root, repository);
   const branch = integrationBranch(device, repository);
   if (existsSync(path)) {
+    await recoverOrphanIndexLockAtPath(root, repository, path, lease, options, "integration");
     if (await mergeInProgress(path)) return { path, branch, conflicted: true };
     await execFileAsync("git", ["-C", path, "reset", "--hard", "origin/main"]);
     return { path, branch, conflicted: false };
@@ -352,15 +586,19 @@ async function prepareIntegrationWorktree(root, repository, device) {
   return { path, branch, conflicted: false };
 }
 
-async function runSync(root, repository, options = {}) {
+async function runSync(root, repository, options = {}, recoveredGitLock = null, lease = null) {
   const device = await ensureNoemaDeviceIdentity(options);
   const identity = await commitIdentity(repository, device);
   const headBefore = await currentHeadSha(repository);
-  const checkpoint = await checkpointWikiRepository(root, repository.id, options);
+  const checkpoint = await checkpointWikiRepositoryUnlocked(root, repository, options, recoveredGitLock);
   const checkpointState = {
     checkpointedAt: checkpoint.checkpointedAt,
     committed: checkpoint.committed,
     changedFiles: checkpoint.changedFiles,
+    ...(checkpoint.recoveredGitLock ? {
+      recoveredGitLock: checkpoint.recoveredGitLock,
+      message: checkpoint.message,
+    } : {}),
   };
   if (!(await remoteUrl(repository))) {
     const changedPaths = await changedPathsBetween(repository, headBefore, checkpoint.head);
@@ -393,7 +631,7 @@ async function runSync(root, repository, options = {}) {
       error: String(fetch.stderr || fetch.error.message).trim(),
     });
   }
-  const integration = await prepareIntegrationWorktree(root, repository, device);
+  const integration = await prepareIntegrationWorktree(root, repository, device, lease, options);
   if (integration.conflicted) {
     return await writeSyncState(root, repository, {
       ...checkpointState,
@@ -487,15 +725,29 @@ export function syncWikiRepository(rootValue, repositoryId, options = {}) {
     const repository = await repositoryFromId(root, repositoryId);
     let result;
     try {
-      result = await runSync(root, repository, options);
-    } catch (error) {
-      result = await writeSyncState(root, repository, {
-        phase: "error",
-        failedAt: new Date().toISOString(),
-        error: String(error?.message || error),
+      result = await withRepositoryLease(root, repository, "sync", options, async (recoveredGitLock, lease) => {
+        const synced = await runSync(root, repository, options, recoveredGitLock, lease);
+        if (synced?.phase === "idle") await maintainWikiRepositoryGit(repository, options).catch(() => {});
+        return synced;
       });
+    } catch (error) {
+      if (error?.code === "ERR_WIKI_SYNC_BUSY") {
+        // Do not overwrite the durable state while its owning host is still
+        // updating it. Waiting is a transient scheduler result.
+        result = transientSyncState(repository, {
+          phase: "waiting",
+          retryable: true,
+          retryAfterMs: numericOption(options, "repositoryBusyRetryMs", DEFAULT_REPOSITORY_BUSY_RETRY_MS),
+          error: String(error?.message || error),
+        });
+      } else {
+        result = await writeSyncState(root, repository, {
+          phase: "error",
+          failedAt: new Date().toISOString(),
+          error: String(error?.message || error),
+        });
+      }
     }
-    await maintainWikiRepositoryGit(repository, options).catch(() => {});
     return result;
   })();
   const tracked = next.finally(() => {
@@ -542,12 +794,19 @@ export async function readWikiConflict(rootValue, body = {}) {
   };
 }
 
-export async function resolveWikiConflict(rootValue, body = {}) {
-  const root = expandNoemaPath(rootValue);
-  const repository = await repositoryFromId(root, body.repositoryId);
+async function resolveWikiConflictUnlocked(root, repository, body = {}, recoveredGitLock = null, lease = null) {
   const device = await ensureNoemaDeviceIdentity(body);
   const identity = await commitIdentity(repository, device);
   const worktree = integrationPath(root, repository);
+  const recoveredIntegrationLock = await recoverOrphanIndexLockAtPath(
+    root,
+    repository,
+    worktree,
+    lease,
+    body,
+    "integration",
+  );
+  const recovery = recoveredGitLock || recoveredIntegrationLock;
   const headBefore = await currentHeadSha(repository);
   const path = String(body.path || "");
   const target = resolve(worktree, path);
@@ -611,18 +870,49 @@ export async function resolveWikiConflict(rootValue, body = {}) {
     integrationPath: worktree,
     conflicts: [],
     lastSyncedAt: new Date().toISOString(),
-    message: "Conflict resolved and pushed",
+    message: recovery
+      ? "Recovered an orphaned Git index lock; conflict resolved and pushed"
+      : "Conflict resolved and pushed",
+    ...(recovery ? { recoveredGitLock: recovery } : {}),
+  });
+}
+
+export async function resolveWikiConflict(rootValue, body = {}) {
+  const root = expandNoemaPath(rootValue);
+  const repository = await repositoryFromId(root, body.repositoryId);
+  return await withRepositoryLease(root, repository, "resolve-conflict", body, (recoveredGitLock, lease) => (
+    resolveWikiConflictUnlocked(root, repository, body, recoveredGitLock, lease)
+  ));
+}
+
+async function abortWikiConflictUnlocked(root, repository, options = {}, recoveredGitLock = null, lease = null) {
+  const worktree = integrationPath(root, repository);
+  const recoveredIntegrationLock = await recoverOrphanIndexLockAtPath(
+    root,
+    repository,
+    worktree,
+    lease,
+    options,
+    "integration",
+  );
+  const recovery = recoveredGitLock || recoveredIntegrationLock;
+  if (await mergeInProgress(worktree)) {
+    await execFileAsync("git", ["-C", worktree, "merge", "--abort"]);
+  }
+  return await writeSyncState(root, repository, {
+    phase: "idle",
+    conflicts: [],
+    message: recovery ? "Recovered an orphaned Git index lock; merge aborted" : "Merge aborted",
+    ...(recovery ? { recoveredGitLock: recovery } : {}),
   });
 }
 
 export async function abortWikiConflict(rootValue, repositoryId) {
   const root = expandNoemaPath(rootValue);
   const repository = await repositoryFromId(root, repositoryId);
-  const worktree = integrationPath(root, repository);
-  if (await mergeInProgress(worktree)) {
-    await execFileAsync("git", ["-C", worktree, "merge", "--abort"]);
-  }
-  return await writeSyncState(root, repository, { phase: "idle", conflicts: [], message: "Merge aborted" });
+  return await withRepositoryLease(root, repository, "abort-conflict", {}, (recoveredGitLock, lease) => (
+    abortWikiConflictUnlocked(root, repository, {}, recoveredGitLock, lease)
+  ));
 }
 
 // Repositories synchronize on startup and roughly once per day, not after

@@ -3,7 +3,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering},
         Mutex,
     },
     time::{SystemTime, UNIX_EPOCH},
@@ -105,6 +105,7 @@ struct DesktopState {
     note_root: PathBuf,
     quitting: AtomicBool,
     quit_approved: AtomicBool,
+    host_exit_code: AtomicI32,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1070,8 +1071,17 @@ fn start_host(app: tauri::AppHandle) -> Result<(), String> {
                     Some(text)
                 }
                 CommandEvent::Terminated(payload) => {
-                    if !app.state::<DesktopState>().quitting.load(Ordering::Relaxed) {
+                    let state = app.state::<DesktopState>();
+                    if state.quitting.load(Ordering::Relaxed) {
+                        if let Ok(mut child) = state.host_child.lock() {
+                            child.take();
+                        }
+                        let exit_code = state.host_exit_code.load(Ordering::Relaxed);
+                        state.quit_approved.store(true, Ordering::Relaxed);
+                        app.exit(exit_code);
+                    } else {
                         eprintln!("[noema-tauri] core stopped: {:?}", payload.code);
+                        state.quit_approved.store(true, Ordering::Relaxed);
                         app.exit(1);
                     }
                     break;
@@ -1094,7 +1104,7 @@ fn start_host(app: tauri::AppHandle) -> Result<(), String> {
                             drop(host);
                             if let Err(error) = restore_windows(&app) {
                                 eprintln!("[noema-tauri] window startup failed: {error}");
-                                app.exit(1);
+                                request_host_shutdown(app.clone(), 1);
                             }
                         }
                     }
@@ -1109,6 +1119,55 @@ fn start_host(app: tauri::AppHandle) -> Result<(), String> {
         }
     });
     Ok(())
+}
+
+fn force_host_exit(app: &tauri::AppHandle) {
+    let state = app.state::<DesktopState>();
+    if let Ok(mut child) = state.host_child.lock() {
+        if let Some(child) = child.take() {
+            let _ = child.kill();
+        }
+    }
+    let exit_code = state.host_exit_code.load(Ordering::Relaxed);
+    state.quit_approved.store(true, Ordering::Relaxed);
+    app.exit(exit_code);
+}
+
+fn request_host_shutdown(app: tauri::AppHandle, exit_code: i32) {
+    let state = app.state::<DesktopState>();
+    if state.quitting.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    state.host_exit_code.store(exit_code, Ordering::Relaxed);
+    write_session(&app);
+
+    let sent = state
+        .host_child
+        .lock()
+        .ok()
+        .and_then(|mut child| child.as_mut().map(|child| child.write(b"shutdown\n")))
+        .transpose();
+    match sent {
+        Ok(Some(())) => {
+            let watchdog_app = app.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(35));
+                if !watchdog_app
+                    .state::<DesktopState>()
+                    .quit_approved
+                    .load(Ordering::Relaxed)
+                {
+                    eprintln!("[noema-tauri] graceful core shutdown timed out; forcing exit");
+                    force_host_exit(&watchdog_app);
+                }
+            });
+        }
+        Ok(None) => force_host_exit(&app),
+        Err(error) => {
+            eprintln!("[noema-tauri] graceful core shutdown request failed: {error}");
+            force_host_exit(&app);
+        }
+    }
 }
 
 #[tauri::command]
@@ -2197,6 +2256,7 @@ pub fn run() {
                 note_root,
                 quitting: AtomicBool::new(false),
                 quit_approved: AtomicBool::new(false),
+                host_exit_code: AtomicI32::new(0),
             });
             start_host(app.handle().clone()).map_err(|error| io::Error::other(error))?;
             Ok(())
@@ -2242,13 +2302,16 @@ pub fn run() {
             if state.quit_approved.load(Ordering::Relaxed) {
                 return;
             }
+            api.prevent_exit();
+            if state.quitting.load(Ordering::Relaxed) {
+                return;
+            }
             let risky = state
                 .windows
                 .lock()
                 .map(|windows| windows.values().any(WindowState::risky))
                 .unwrap_or(false);
             if risky {
-                api.prevent_exit();
                 let app = handle.clone();
                 tauri::async_runtime::spawn(async move {
                     let result = rfd::AsyncMessageDialog::new()
@@ -2270,12 +2333,11 @@ pub fn run() {
                                 if value == "Quit Without Saving"
                         )
                     {
-                        app.state::<DesktopState>()
-                            .quit_approved
-                            .store(true, Ordering::Relaxed);
-                        app.exit(0);
+                        request_host_shutdown(app, 0);
                     }
                 });
+            } else {
+                request_host_shutdown(handle.clone(), 0);
             }
         }
         _ => {}

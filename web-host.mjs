@@ -639,7 +639,9 @@ function applyWikiSyncResult(repositoryId, result, { notifyError = true } = {}) 
 function wikiAutoSyncFailureMessage(failures) {
   const repositories = [...new Set(failures.map((failure) => String(failure.repositoryId || "")).filter(Boolean))];
   const noun = repositories.length === 1 ? "repository" : "repositories";
-  return `Git sync failed for ${repositories.length} ${noun}: ${repositories.join(", ")}. Noema will retry at the next scheduled push.`;
+  const reasons = [...new Set(failures.map((failure) => String(failure.error || "").trim()).filter(Boolean))];
+  const reason = reasons.length === 1 ? ` Reason: ${reasons[0].slice(0, 240)}.` : "";
+  return `Git sync failed for ${repositories.length} ${noun}: ${repositories.join(", ")}.${reason} Noema will retry at the next scheduled push.`;
 }
 
 const wikiAutoSync = wikiAutoSyncEnabled
@@ -692,7 +694,8 @@ async function syncWikiRepositoryFromApi(body = {}) {
   const repositoryId = String(body.repositoryId || "");
   wikiAutoSync?.cancel(repositoryId);
   const result = await syncWikiRepository(noteRoot, repositoryId, body);
-  if (result?.phase === "error") wikiAutoSync?.mark(repositoryId);
+  if (result?.phase === "waiting") wikiAutoSync?.retry(repositoryId, result.retryAfterMs);
+  else if (result?.phase === "error") wikiAutoSync?.mark(repositoryId);
   return { ...applyWikiSyncResult(repositoryId, result), automatic: wikiAutoSyncEnabled };
 }
 
@@ -899,6 +902,27 @@ async function beginShutdown({ reason = "shutdown", exitCode = 0, deadlineMs = 3
 }
 process.on("SIGTERM", () => beginShutdown({ reason: "SIGTERM", exitCode: 0, deadlineMs: 30_000 }));
 process.on("SIGINT", () => beginShutdown({ reason: "SIGINT", exitCode: 0 }));
+
+// Tauri's shell sidecar API does not provide a portable SIGTERM operation.
+// The desktop adapter therefore requests the same graceful path over the
+// sidecar's private stdin pipe and only force-kills after its own watchdog.
+if (hostMode === "desktop") {
+  let desktopControlBuffer = "";
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (chunk) => {
+    desktopControlBuffer = `${desktopControlBuffer}${chunk}`.slice(-1024);
+    for (;;) {
+      const newline = desktopControlBuffer.indexOf("\n");
+      if (newline < 0) break;
+      const command = desktopControlBuffer.slice(0, newline).trim();
+      desktopControlBuffer = desktopControlBuffer.slice(newline + 1);
+      if (command === "shutdown") {
+        void beginShutdown({ reason: "desktop-shutdown", exitCode: 0, deadlineMs: 30_000 });
+      }
+    }
+  });
+  process.stdin.resume();
+}
 
 const MIME = {
   ".css": "text/css; charset=utf-8",

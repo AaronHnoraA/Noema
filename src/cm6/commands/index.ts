@@ -10,6 +10,7 @@
  */
 
 import { EditorView } from "@codemirror/view";
+import type { Text } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
 import { parseTableModel, formatTableLines, tableTooLarge, type TableAlign } from "../table-model.ts";
 import type {
@@ -227,6 +228,41 @@ function renumberOrderedListLines(lines: readonly string[]): string[] {
   return output;
 }
 
+type MarkdownListRegion = { startLine: number; endLine: number };
+let markdownListVisitedLines = 0;
+
+export function markdownListCommandLineVisitCount(): number {
+  return markdownListVisitedLines;
+}
+
+function listLineText(doc: Text, lineNumber: number): string {
+  markdownListVisitedLines += 1;
+  return doc.line(lineNumber).text;
+}
+
+function listContinuationLine(text: string): boolean {
+  if (!text.trim()) return true;
+  if (markdownListLine(text)) return true;
+  return lineIndentWidth(text) > 0;
+}
+
+/**
+ * Bound list rewrites to the contiguous list block around the edit.  The old
+ * implementation materialized every line in the document for each Enter or
+ * Tab, which made a one-character edit scale with the entire note.
+ */
+function markdownListRegion(doc: Text, aroundLine: number): MarkdownListRegion {
+  let startLine = Math.max(1, Math.min(aroundLine, doc.lines));
+  let endLine = startLine;
+  while (startLine > 1 && listContinuationLine(listLineText(doc, startLine - 1))) startLine--;
+  while (endLine < doc.lines && listContinuationLine(listLineText(doc, endLine + 1))) endLine++;
+  // Blank separator lines belong to neither neighbouring block. Keeping them
+  // out also prevents a list beside a long blank tail from becoming O(doc).
+  while (startLine < aroundLine && !listLineText(doc, startLine).trim()) startLine++;
+  while (endLine > aroundLine && !listLineText(doc, endLine).trim()) endLine--;
+  return { startLine, endLine };
+}
+
 // ---------------------------------------------------------------------------
 // Block insert (inserts below current line when it is non-empty)
 // ---------------------------------------------------------------------------
@@ -350,13 +386,21 @@ export function continueMarkdownBlock(view: EditorView): boolean {
   return continueMarkdownMarkup(view) || continueMarkdownQuote(view);
 }
 
-export function renumberMarkdownOrderedLists(view: EditorView): boolean {
+export function renumberMarkdownOrderedLists(
+  view: EditorView,
+  around = view.state.selection.main.from,
+): boolean {
   const doc = view.state.doc;
-  const oldLines = Array.from({ length: doc.lines }, (_, index) => doc.line(index + 1).text);
+  const aroundLine = doc.lineAt(Math.max(0, Math.min(around, doc.length))).number;
+  const { startLine, endLine } = markdownListRegion(doc, aroundLine);
+  const oldLines = Array.from(
+    { length: endLine - startLine + 1 },
+    (_, index) => listLineText(doc, startLine + index),
+  );
   const newLines = renumberOrderedListLines(oldLines);
   const changes = oldLines.flatMap((text, index) => {
     if (text === newLines[index]) return [];
-    const line = doc.line(index + 1);
+    const line = doc.line(startLine + index);
     return [{ from: line.from, to: line.to, insert: newLines[index]! }];
   });
   if (changes.length === 0) return false;
@@ -411,22 +455,28 @@ export function indentMarkdownList(view: EditorView, direction: 1 | -1): boolean
     blockEndLine = lineNum;
   }
 
-  const oldLines = Array.from({ length: doc.lines }, (_, index) => doc.line(index + 1).text);
+  const region = markdownListRegion(doc, startLine);
+  const oldLines = Array.from(
+    { length: region.endLine - region.startLine + 1 },
+    (_, index) => listLineText(doc, region.startLine + index),
+  );
   const indentedLines = [...oldLines];
   for (let lineNum = startLine; lineNum <= blockEndLine; lineNum += 1) {
-    const text = indentedLines[lineNum - 1]!;
+    const localIndex = lineNum - region.startLine;
+    const text = indentedLines[localIndex]!;
     if (!text.trim()) continue;
-    indentedLines[lineNum - 1] = direction > 0
+    indentedLines[localIndex] = direction > 0
       ? `    ${text}`
       : text.replace(/^ {1,4}/, "").replace(/^\t/, "");
   }
   if (direction > 0 && root.orderedNumber != null) {
-    indentedLines[startLine - 1] = withOrderedNumber(indentedLines[startLine - 1]!, 1);
+    const rootIndex = startLine - region.startLine;
+    indentedLines[rootIndex] = withOrderedNumber(indentedLines[rootIndex]!, 1);
   }
   const newLines = renumberOrderedListLines(indentedLines);
   const changes = oldLines.flatMap((text, index) => {
     if (text === newLines[index]) return [];
-    const line = doc.line(index + 1);
+    const line = doc.line(region.startLine + index);
     return [{ from: line.from, to: line.to, insert: newLines[index]! }];
   });
   if (changes.length === 0) return false;
@@ -859,15 +909,16 @@ export function tableEnterSameColumn(view: EditorView): boolean {
     if (isEmpty) {
       const newLines = lines.slice(0, currentRowIdx);
       const newText = newLines.join("\n");
-      const afterTable = doc.line(startLineNum + lines.length - 1).to + 1;
+      // At EOF the removed row owned the document's final line, so create the
+      // blank line we are moving into. With following content, the existing
+      // newline after endPos already provides that boundary. Selection
+      // coordinates must be expressed in the post-change document.
+      const replacement = endPos === doc.length ? `${newText}\n` : newText;
       view.dispatch({
-        changes: [
-          { from: startPos, to: endPos, insert: newText },
-        ],
-        selection: { anchor: Math.min(startPos + newText.length + 1, doc.length) },
+        changes: { from: startPos, to: endPos, insert: replacement },
+        selection: { anchor: startPos + newText.length + 1 },
         scrollIntoView: true,
       });
-      void afterTable;
       return true;
     }
   }

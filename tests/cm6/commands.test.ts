@@ -234,6 +234,25 @@ maybeDescribe("CM6 markdown typing affordances", () => {
     ed.destroy();
   });
 
+  it("ordered-list Enter only visits the nearby list block", async () => {
+    const { createEditorCM6 } = await import("../../src/cm6/editor-cm6.ts");
+    const {
+      continueMarkdownMarkup,
+      markdownListCommandLineVisitCount,
+    } = await import("../../src/cm6/commands/index.ts");
+    const host = document.createElement("div");
+    const prefix = Array.from({ length: 10_000 }, (_, index) => `paragraph ${index}`).join("\n");
+    const source = `${prefix}\n\n1. item`;
+    const ed = createEditorCM6(host, { initialContent: source });
+    ed.setSelection(source.length);
+    const before = markdownListCommandLineVisitCount();
+
+    expect(continueMarkdownMarkup(ed.view)).toBe(true);
+    expect(markdownListCommandLineVisitCount() - before).toBeLessThan(20);
+    expect(ed.getMarkdown().endsWith("1. item\n2. ")).toBe(true);
+    ed.destroy();
+  });
+
   it("Enter exits an empty blockquote list item to quote continuation", async () => {
     const { createEditorCM6 } = await import("../../src/cm6/editor-cm6.ts");
     const { exitEmptyMarkdownBlock } = await import("../../src/cm6/commands/index.ts");
@@ -286,6 +305,34 @@ maybeDescribe("CM6 markdown typing affordances", () => {
     ed.setSelection(2);
     expect(indentMarkdownList(ed.view, 1)).toBe(false);
     expect(ed.getMarkdown()).toBe("- first\n- second");
+    ed.destroy();
+  });
+
+  it("Enter on an empty final table row exits safely at EOF", async () => {
+    const { createEditorCM6 } = await import("../../src/cm6/editor-cm6.ts");
+    const { tableEnterSameColumn } = await import("../../src/cm6/commands/index.ts");
+    const host = document.createElement("div");
+    const source = "| A |\n| --- |\n|   |";
+    const ed = createEditorCM6(host, { initialContent: source });
+    ed.setSelection(source.lastIndexOf("|   |") + 2);
+
+    expect(tableEnterSameColumn(ed.view)).toBe(true);
+    expect(ed.getMarkdown()).toBe("| A |\n| --- |\n");
+    expect(ed.getMarkdownSelection()).toEqual({ from: ed.getMarkdown().length, to: ed.getMarkdown().length });
+    ed.destroy();
+  });
+
+  it("Enter on an empty final table row moves to following content", async () => {
+    const { createEditorCM6 } = await import("../../src/cm6/editor-cm6.ts");
+    const { tableEnterSameColumn } = await import("../../src/cm6/commands/index.ts");
+    const host = document.createElement("div");
+    const source = "| A |\n| --- |\n|   |\nafter";
+    const ed = createEditorCM6(host, { initialContent: source });
+    ed.setSelection(source.lastIndexOf("|   |") + 2);
+
+    expect(tableEnterSameColumn(ed.view)).toBe(true);
+    expect(ed.getMarkdown()).toBe("| A |\n| --- |\nafter");
+    expect(ed.getMarkdownSelection().from).toBe(ed.getMarkdown().indexOf("after"));
     ed.destroy();
   });
 });

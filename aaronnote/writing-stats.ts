@@ -13,33 +13,69 @@ export type WritingStats = {
   nonCjkWords: number;
 };
 
-const CJK_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu;
-const NON_CJK_WORD_RE = /[\p{L}\p{N}]+(?:['’_-][\p{L}\p{N}]+)*/gu;
-const NON_SPACE_RE = /\S/gu;
+const CJK_CHAR_RE = /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]$/u;
+const WORD_CHAR_RE = /^[\p{L}\p{N}]$/u;
+const WORD_CONNECTOR_RE = /^['’_-]$/u;
 
-function countText(text: string): Omit<WritingStats, "words"> {
-  const characters = [...text.matchAll(NON_SPACE_RE)].length;
-  const cjkCharacters = [...text.matchAll(CJK_RE)].length;
-  // Remove CJK characters so adjacent Latin runs remain ordinary words.
-  const nonCjkWords = [...text.replace(CJK_RE, " ").matchAll(NON_CJK_WORD_RE)].length;
-  return { characters, cjkCharacters, nonCjkWords };
-}
+export type WritingStatsCounter = {
+  add: (text: string) => void;
+  boundary: () => void;
+  value: () => WritingStats;
+};
 
-/** Count a source range without materializing the whole CM6 document. */
-export function countWritingStats(
-  doc: Text,
-  from = 0,
-  to = doc.length,
-  metaSummaryRange: MetaSummarySourceRange | null = orgMetaSummaryRangeFromLines(doc),
-): WritingStats {
-  const safeFrom = Math.max(0, Math.min(from, doc.length));
-  const safeTo = Math.max(safeFrom, Math.min(to, doc.length));
+/** Streaming counter used by both synchronous ranges and idle-frame scans. */
+export function createWritingStatsCounter(): WritingStatsCounter {
   let characters = 0;
   let cjkCharacters = 0;
   let nonCjkWords = 0;
+  let inWord = false;
+  let pendingConnector = false;
+  return {
+    add(text) {
+      for (const char of text) {
+        if (/\S/u.test(char)) characters += 1;
+        if (CJK_CHAR_RE.test(char)) {
+          cjkCharacters += 1;
+          inWord = false;
+          pendingConnector = false;
+        } else if (WORD_CHAR_RE.test(char)) {
+          if (!inWord) nonCjkWords += 1;
+          inWord = true;
+          pendingConnector = false;
+        } else if (WORD_CONNECTOR_RE.test(char) && inWord && !pendingConnector) {
+          pendingConnector = true;
+        } else {
+          inWord = false;
+          pendingConnector = false;
+        }
+      }
+    },
+    boundary() {
+      inWord = false;
+      pendingConnector = false;
+    },
+    value() {
+      return {
+        words: cjkCharacters + nonCjkWords,
+        characters,
+        cjkCharacters,
+        nonCjkWords,
+      };
+    },
+  };
+}
+
+export function accumulateWritingStatsRange(
+  counter: WritingStatsCounter,
+  doc: Text,
+  from: number,
+  to: number,
+  metaSummaryRange: MetaSummarySourceRange | null,
+): void {
+  const safeFrom = Math.max(0, Math.min(from, doc.length));
+  const safeTo = Math.max(safeFrom, Math.min(to, doc.length));
   const firstLine = doc.lineAt(safeFrom).number;
   const lastLine = doc.lineAt(safeTo).number;
-
   for (let lineNo = firstLine; lineNo <= lastLine; lineNo += 1) {
     const line = doc.line(lineNo);
     const segmentFrom = lineNo === firstLine ? safeFrom : line.from;
@@ -52,15 +88,29 @@ export function countWritingStats(
           [segmentFrom, Math.min(segmentTo, metaSummaryRange.from)] as const,
           [Math.max(segmentFrom, metaSummaryRange.to), segmentTo] as const,
         ];
+    let wroteVisibleSegment = false;
     for (const [visibleFrom, visibleTo] of visibleSegments) {
       if (visibleTo <= visibleFrom) continue;
-      const stats = countText(line.text.slice(visibleFrom - line.from, visibleTo - line.from));
-      characters += stats.characters;
-      cjkCharacters += stats.cjkCharacters;
-      nonCjkWords += stats.nonCjkWords;
+      if (wroteVisibleSegment) counter.boundary();
+      counter.add(line.text.slice(visibleFrom - line.from, visibleTo - line.from));
+      wroteVisibleSegment = true;
     }
+    if (segmentTo >= line.to && lineNo < doc.lines) counter.boundary();
   }
-  return { words: cjkCharacters + nonCjkWords, characters, cjkCharacters, nonCjkWords };
+}
+
+/** Count a source range without materializing the whole CM6 document. */
+export function countWritingStats(
+  doc: Text,
+  from = 0,
+  to = doc.length,
+  metaSummaryRange: MetaSummarySourceRange | null = orgMetaSummaryRangeFromLines(doc),
+): WritingStats {
+  const safeFrom = Math.max(0, Math.min(from, doc.length));
+  const safeTo = Math.max(safeFrom, Math.min(to, doc.length));
+  const counter = createWritingStatsCounter();
+  accumulateWritingStatsRange(counter, doc, safeFrom, safeTo, metaSummaryRange);
+  return counter.value();
 }
 
 export function readingMinutes(stats: WritingStats): number {

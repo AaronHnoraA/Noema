@@ -24,6 +24,7 @@ type LocalGraphPanelOptions = {
   getNotes: () => NoteSummary[];
   getCurrentNote: () => NoteSummary | undefined;
   getMarkdown: () => string;
+  getMarkdownLength?: () => number;
   resolveNoteRef: (ref: string) => NoteSummary | undefined;
   openNote: (note: NoteSummary, options?: OpenNoteOptions) => void;
   openTag: (tag: string) => void;
@@ -330,7 +331,7 @@ export function createLocalGraphPanel(options: LocalGraphPanelOptions): LocalGra
       config.tags ? "tags" : "",
       noteSignature(current),
       options.getNotes().map(noteSignature).join("\n"),
-      expandedOnce ? options.getMarkdown().length : "",
+      expandedOnce ? (options.getMarkdownLength?.() ?? options.getMarkdown().length) : "",
     ].join("\n");
   }
 

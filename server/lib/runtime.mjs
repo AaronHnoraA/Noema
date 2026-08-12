@@ -6157,10 +6157,16 @@ function languageIdForFile(file) {
   return "plaintext";
 }
 
-function copilotUriForFile(file) {
+function copilotUriForFile(file, sourceFile = file) {
   if (typeof file === "string" && file.trim()) {
     try {
-      return pathToFileURL(safeOpenFile(file)).href;
+      const source = safeOpenFile(sourceFile);
+      // Formula completions use a virtual `.tex` document so Copilot parses
+      // the bounded formula as LaTeX. Authorize the real Markdown source, then
+      // derive the never-written sibling URI; validating the synthetic `.tex`
+      // path itself would reject standalone Markdown outside NOEMA_ROOT.
+      const target = file === sourceFile ? source : `${source}.noema-copilot.tex`;
+      return pathToFileURL(target).href;
     } catch {}
   }
   return pathToFileURL(join(runtimeTmpRoot || aaronnoteTmpRoot(), "copilot", "aaronnote-copilot.md")).href;
@@ -6845,8 +6851,9 @@ class CopilotLspClient {
     this.touchActivity();
     const content = String(body.content || "");
     const file = String(body.file || "");
+    const sourceFile = String(body.sourceFile || file);
     const offset = Math.max(0, Math.min(Number(body.offset) || 0, content.length));
-    const uri = copilotUriForFile(file);
+    const uri = copilotUriForFile(file, sourceFile);
     const clientId = copilotClientId(body);
     if (!this.clientMayRequestInline(body, uri)) {
       pushCopilotLog("inline-skipped", { uri, file, clientId, reason: "inactive-client" });

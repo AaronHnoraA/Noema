@@ -16,12 +16,17 @@ import { describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
 import { foldedRanges, syntaxTree } from "@codemirror/language";
 import { EditorSelection, type EditorState } from "@codemirror/state";
 import { createEditor } from "../../src/editor-api.ts";
-import { calibrateWrappedLayoutClick, markdownHrefAt } from "../../src/cm6/editor-cm6.ts";
+import {
+  calibrateWrappedLayoutClick,
+  markdownHrefAt,
+  selectNextMarkdownOccurrence,
+} from "../../src/cm6/editor-cm6.ts";
 import { setKnownRoamRefs } from "../../src/cm6/roam-link-status.ts";
 import { MATH_RENDER_ERROR_MAX_LENGTH, renderMathHTML } from "../../src/math-render.ts";
 import { createVimLite } from "../../aaronnote/vim-lite.ts";
 import { SnippetSession } from "../../aaronnote/snippets.ts";
 import { indentMarkdownBlock } from "../../src/cm6/commands/index.ts";
+import { runEditorMovement } from "../../src/cm6/input-commands.ts";
 import {
   revealFormulaSource,
   texHighlightScanCount,
@@ -3597,6 +3602,18 @@ maybeDescribe("cm6 kernel: selection", () => {
     cleanup();
   });
 
+  test("Cmd-D finds multiline occurrences without materializing the document tail", () => {
+    const md = "aa\nbb middle aa\nbb end";
+    const { editor, cleanup } = mountCM6(md);
+    editor.setMarkdownSelection(0, "aa\nbb".length);
+
+    expect(selectNextMarkdownOccurrence(editor.view)).toBe(true);
+    expect(editor.view.state.selection.ranges.map((range) => (
+      editor.view.state.doc.sliceString(range.from, range.to)
+    ))).toEqual(["aa\nbb", "aa\nbb"]);
+    cleanup();
+  });
+
   test("vim-lite moves CM6 cursor with ArrowUp/ArrowDown and j/k", () => {
     const { editor, cleanup } = mountCM6("aa\nbbbb\ncc");
     const target = (editor.view as unknown as { contentDOM: HTMLElement }).contentDOM;
@@ -3619,6 +3636,167 @@ maybeDescribe("cm6 kernel: selection", () => {
     expect(editor.getMarkdownSelection().from).toBe(9);
     press("k");
     expect(editor.getMarkdownSelection().from).toBe(4);
+    cleanup();
+  });
+
+  test("vim j/k preserve each Normal-mode cursor's own desired column", () => {
+    const md = "abcd\nx\nwxyz\npq\nq\nrstu";
+    const { editor, cleanup } = mountCM6(md);
+    const vim = createVimLite(editor, document.body);
+    const line1 = editor.view.state.doc.line(1);
+    const line2 = editor.view.state.doc.line(2);
+    const line3 = editor.view.state.doc.line(3);
+    const line4 = editor.view.state.doc.line(4);
+    const line5 = editor.view.state.doc.line(5);
+    const line6 = editor.view.state.doc.line(6);
+    editor.view.dispatch({
+      selection: EditorSelection.create([
+        EditorSelection.cursor(line1.from + 3),
+        EditorSelection.cursor(line4.from + 1),
+      ]),
+    });
+    vim.setMode("normal");
+
+    expect(vim.handleKey({ key: "j" })).toBe(true);
+    expect(editor.view.state.selection.ranges.map((range) => range.head)).toEqual([
+      line2.from,
+      line5.from,
+    ]);
+    expect(vim.handleKey({ key: "ArrowDown" })).toBe(true);
+    expect(editor.view.state.selection.ranges.map((range) => range.head)).toEqual([
+      line3.from + 3,
+      line6.from + 1,
+    ]);
+    cleanup();
+  });
+
+  test("vim visual h/l extend every selection instead of dropping secondary cursors", () => {
+    const { editor, cleanup } = mountCM6("abc\ndef");
+    const vim = createVimLite(editor, document.body);
+    editor.view.dispatch({
+      selection: EditorSelection.create([
+        EditorSelection.cursor(0),
+        EditorSelection.cursor(4),
+      ]),
+    });
+    vim.setMode("normal");
+
+    expect(vim.handleKey({ key: "v" })).toBe(true);
+    expect(editor.view.state.selection.ranges.map((range) => [range.from, range.to])).toEqual([
+      [0, 1],
+      [4, 5],
+    ]);
+    expect(vim.handleKey({ key: "l" })).toBe(true);
+    expect(editor.view.state.selection.ranges.map((range) => [range.from, range.to])).toEqual([
+      [0, 2],
+      [4, 6],
+    ]);
+    expect(vim.handleKey({ key: "h" })).toBe(true);
+    expect(editor.view.state.selection.ranges.map((range) => [range.from, range.to])).toEqual([
+      [0, 1],
+      [4, 5],
+    ]);
+    expect(vim.handleKey({ key: "Escape" })).toBe(true);
+    expect(editor.view.state.selection.ranges.map((range) => range.head)).toEqual([0, 4]);
+    cleanup();
+  });
+
+  test("vim h/l and arrow aliases move by grapheme without crossing a line", () => {
+    const md = "a👩‍👩‍👧‍👦b\nnext";
+    const emojiFrom = md.indexOf("👩");
+    const b = md.indexOf("b");
+    const { editor, cleanup } = mountCM6(md);
+    const vim = createVimLite(editor, document.body);
+    editor.setMarkdownSelection(emojiFrom);
+    vim.setMode("normal");
+
+    expect(vim.handleKey({ key: "l" })).toBe(true);
+    expect(editor.getMarkdownSelection().from).toBe(b);
+    expect(vim.handleKey({ key: "ArrowRight" })).toBe(true);
+    expect(editor.getMarkdownSelection().from).toBe(b);
+    expect(vim.handleKey({ key: "ArrowLeft" })).toBe(true);
+    expect(editor.getMarkdownSelection().from).toBe(emojiFrom);
+    expect(vim.handleKey({ key: "h" })).toBe(true);
+    expect(editor.getMarkdownSelection().from).toBe(0);
+    expect(vim.handleKey({ key: "h" })).toBe(true);
+    expect(editor.getMarkdownSelection().from).toBe(0);
+    cleanup();
+  });
+
+  test("vim visual j/k retain every selection and each desired column", () => {
+    const md = "abcd\nx\nwxyz\npq\nq\nrstu";
+    const { editor, cleanup } = mountCM6(md);
+    const vim = createVimLite(editor, document.body);
+    const lines = Array.from({ length: 6 }, (_, index) => editor.view.state.doc.line(index + 1));
+    editor.view.dispatch({
+      selection: EditorSelection.create([
+        EditorSelection.cursor(lines[0]!.from + 3),
+        EditorSelection.cursor(lines[3]!.from + 1),
+      ]),
+    });
+    vim.setMode("normal");
+
+    expect(vim.handleKey({ key: "v" })).toBe(true);
+    expect(vim.handleKey({ key: "j" })).toBe(true);
+    expect(vim.handleKey({ key: "ArrowDown" })).toBe(true);
+    expect(editor.view.state.selection.ranges.map((range) => range.head)).toEqual([
+      lines[2]!.from + 4,
+      lines[5]!.from + 2,
+    ]);
+    cleanup();
+  });
+
+  test("vim visual-line arrows preserve and extend all selections", () => {
+    const md = "a1\na2\na3\nb1\nb2\nb3";
+    const { editor, cleanup } = mountCM6(md);
+    const vim = createVimLite(editor, document.body);
+    const lines = Array.from({ length: 6 }, (_, index) => editor.view.state.doc.line(index + 1));
+    editor.view.dispatch({
+      selection: EditorSelection.create([
+        EditorSelection.cursor(lines[0]!.from + 1),
+        EditorSelection.cursor(lines[3]!.from + 1),
+      ]),
+    });
+    vim.setMode("normal");
+
+    expect(vim.handleKey({ key: "V" })).toBe(true);
+    expect(editor.view.state.selection.ranges).toHaveLength(2);
+    expect(vim.handleKey({ key: "j" })).toBe(true);
+    const afterDown = editor.view.state.selection.ranges.map((range) => [range.from, range.to]);
+    expect(afterDown).toEqual([
+      [lines[0]!.from, lines[1]!.to + 1],
+      [lines[3]!.from, lines[4]!.to + 1],
+    ]);
+    expect(vim.handleKey({ key: "ArrowLeft" })).toBe(true);
+    expect(editor.view.state.selection.ranges.map((range) => [range.from, range.to])).toEqual(afterDown);
+    expect(vim.handleKey({ key: "ArrowDown" })).toBe(true);
+    expect(editor.view.state.selection.ranges.map((range) => [range.from, range.to])).toEqual([
+      [lines[0]!.from, lines[2]!.to + 1],
+      [lines[3]!.from, lines[5]!.to],
+    ]);
+    expect(vim.handleKey({ key: "Escape" })).toBe(true);
+    expect(editor.view.state.selection.ranges.map((range) => range.head)).toEqual([
+      lines[2]!.from,
+      lines[5]!.from,
+    ]);
+    cleanup();
+  });
+
+  test("insert-mode arrows beside math keep every cursor", () => {
+    const md = "a \\(x\\) b\nzz";
+    const formulaFrom = md.indexOf("\\(");
+    const secondLine = md.indexOf("zz");
+    const { editor, cleanup } = mountCM6(md);
+    editor.view.dispatch({
+      selection: EditorSelection.create([
+        EditorSelection.cursor(formulaFrom),
+        EditorSelection.cursor(secondLine),
+      ]),
+    });
+
+    expect(runEditorMovement(editor.view, "ArrowRight")).toBe("cursor");
+    expect(editor.view.state.selection.ranges).toHaveLength(2);
+    expect(editor.view.state.selection.ranges[1]!.head).toBe(secondLine + 1);
     cleanup();
   });
 
@@ -3777,6 +3955,58 @@ After`;
     cleanup();
   });
 
+  test("vim Escape, v, V, dd, and o keep revealed display-TeX fences intact", () => {
+    const md = "before\n\\[\na\nb\n\\]\nafter";
+    const formulaFrom = md.indexOf("\\[");
+    const formulaTo = md.indexOf("\\]") + 2;
+    const contentFrom = md.indexOf("a\nb");
+    const { editor, cleanup } = mountCM6(md);
+    const vim = createVimLite(editor, document.body);
+
+    expect(revealFormulaSource(editor.view, formulaFrom, formulaTo, 0)).toBe(true);
+    editor.setMarkdownSelection(contentFrom);
+    vim.setMode("normal");
+    expect(vim.handleKey({ key: "Escape" })).toBe(true);
+    expect(document.querySelector(".cm-math-block")).toBeNull();
+
+    expect(vim.handleKey({ key: "v" })).toBe(true);
+    expect(editor.getMarkdownSelection()).toEqual({ from: contentFrom, to: contentFrom + 1 });
+    expect(vim.handleKey({ key: "Escape" })).toBe(true);
+    expect(document.querySelector(".cm-math-block")).toBeNull();
+
+    expect(vim.handleKey({ key: "V" })).toBe(true);
+    expect(editor.getMarkdownSelection()).toEqual({ from: contentFrom, to: contentFrom + 2 });
+    expect(vim.handleKey({ key: "d" })).toBe(true);
+    expect(editor.getMarkdown()).toBe("before\n\\[\nb\n\\]\nafter");
+    expect(editor.getMarkdown()).toContain("\\[\n");
+    expect(editor.getMarkdown()).toContain("\n\\]");
+    expect(document.querySelector(".cm-math-block")).toBeNull();
+
+    const b = editor.getMarkdown().indexOf("b", formulaFrom);
+    editor.setMarkdownSelection(b);
+    expect(document.querySelector(".cm-math-block")).toBeNull();
+    expect(vim.handleKey({ key: "o" })).toBe(true);
+    expect(editor.getMarkdown()).toBe("before\n\\[\nb\n\n\\]\nafter");
+    expect(document.querySelector(".cm-math-block")).toBeNull();
+    cleanup();
+  });
+
+  test("vim treats a collapsed display formula as one linewise object", () => {
+    const md = "before\n\\[\nx+y\n\\]\nafter";
+    const formulaFrom = md.indexOf("\\[");
+    const formulaTo = md.indexOf("\\]") + 2;
+    const { editor, cleanup } = mountCM6(md);
+    const vim = createVimLite(editor, document.body);
+
+    editor.setMarkdownSelection(formulaFrom);
+    vim.setMode("normal");
+    expect(vim.handleKey({ key: "V" })).toBe(true);
+    expect(editor.getMarkdownSelection()).toEqual({ from: formulaFrom, to: formulaTo + 1 });
+    expect(vim.handleKey({ key: "d" })).toBe(true);
+    expect(editor.getMarkdown()).toBe("before\nafter");
+    cleanup();
+  });
+
   test("vim Escape keeps display formula source open across Normal and Visual", () => {
     const md = ["Before", "", "\\[", "x+y", "\\]", "", "After"].join("\n");
     const formulaFrom = md.indexOf("\\[");
@@ -3922,7 +4152,7 @@ After`;
     await nextTick();
     press("p");
     await settlePaste();
-    expect(editor.getMarkdown()).toBe("abc\ndef\nghi");
+    expect(editor.getMarkdown()).toBe("acb\ndef\nghi");
 
     editor.setMarkdown("one\ntwo\nthree");
     editor.setMarkdownSelection(5);
@@ -3943,6 +4173,118 @@ After`;
     press("p");
     await settlePaste();
     expect(editor.getMarkdown()).toBe("abcdabc");
+    cleanup();
+  });
+
+  test("vim x and p apply to every Normal-mode cursor with per-cursor registers", async () => {
+    let clipboardText = "";
+    const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        readText: async () => clipboardText,
+        writeText: async (text: string) => { clipboardText = text; },
+      },
+    });
+    const { editor, cleanup } = mountCM6("ab\ncd");
+    const vim = createVimLite(editor, document.body);
+    try {
+      editor.view.dispatch({
+        selection: EditorSelection.create([
+          EditorSelection.cursor(0),
+          EditorSelection.cursor(3),
+        ], 1),
+      });
+      vim.setMode("normal");
+      expect(vim.handleKey({ key: "x" })).toBe(true);
+      expect(editor.getMarkdown()).toBe("b\nd");
+      expect(editor.view.state.selection.ranges).toHaveLength(2);
+
+      expect(vim.handleKey({ key: "p" })).toBe(true);
+      await settlePaste();
+      expect(editor.getMarkdown()).toBe("ba\ndc");
+      expect(editor.view.state.selection.ranges).toHaveLength(2);
+    } finally {
+      cleanup();
+      if (originalClipboard) Object.defineProperty(navigator, "clipboard", originalClipboard);
+      else delete (navigator as { clipboard?: unknown }).clipboard;
+    }
+  });
+
+  test("vim p and P differ at Unicode grapheme boundaries and leave legal Normal cursors", async () => {
+    let clipboardText = "";
+    const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        readText: async () => clipboardText,
+        writeText: async (text: string) => { clipboardText = text; },
+      },
+    });
+    const { editor, cleanup } = mountCM6("A👍🏽B");
+    const vim = createVimLite(editor, document.body);
+    try {
+      editor.setMarkdownSelection(1);
+      vim.setMode("normal");
+      vim.handleKey({ key: "x" });
+      vim.handleKey({ key: "P" });
+      await settlePaste();
+      expect(editor.getMarkdown()).toBe("A👍🏽B");
+      expect(editor.getMarkdownSelection().from).toBe(1);
+
+      editor.setMarkdown("A👍🏽B", { history: "reset" });
+      editor.setMarkdownSelection(1);
+      vim.setMode("normal");
+      vim.handleKey({ key: "x" });
+      vim.handleKey({ key: "p" });
+      await settlePaste();
+      expect(editor.getMarkdown()).toBe("AB👍🏽");
+      expect(editor.getMarkdownSelection().from).toBe(2);
+      expect(editor.getMarkdownSelection().from).toBeLessThan(editor.getMarkdownLength());
+    } finally {
+      cleanup();
+      if (originalClipboard) Object.defineProperty(navigator, "clipboard", originalClipboard);
+      else delete (navigator as { clipboard?: unknown }).clipboard;
+    }
+  });
+
+  test("vim r, dd, I, A, and o preserve all Normal-mode cursors", () => {
+    const { editor, cleanup } = mountCM6("one\ntwo\nthree");
+    const vim = createVimLite(editor, document.body);
+    const cursors = (positions: number[]): void => editor.view.dispatch({
+      selection: EditorSelection.create(positions.map((pos) => EditorSelection.cursor(pos))),
+    });
+
+    cursors([0, 4]);
+    vim.setMode("normal");
+    expect(vim.handleKey({ key: "r" })).toBe(true);
+    expect(vim.handleKey({ key: "X" })).toBe(true);
+    expect(editor.getMarkdown()).toBe("Xne\nXwo\nthree");
+    expect(editor.view.state.selection.ranges).toHaveLength(2);
+    expect(editor.view.state.selection.ranges.map((range) => range.head)).toEqual([0, 4]);
+
+    cursors([1, 5]);
+    expect(vim.handleKey({ key: "I" })).toBe(true);
+    expect(editor.view.state.selection.ranges.map((range) => range.head)).toEqual([0, 4]);
+    expect(vim.handleKey({ key: "Escape" })).toBe(true);
+
+    cursors([0, 4]);
+    expect(vim.handleKey({ key: "A" })).toBe(true);
+    expect(editor.view.state.selection.ranges.map((range) => range.head)).toEqual([3, 7]);
+    expect(vim.handleKey({ key: "Escape" })).toBe(true);
+
+    cursors([0, 4]);
+    expect(vim.handleKey({ key: "o" })).toBe(true);
+    expect(editor.getMarkdown()).toBe("Xne\n\nXwo\n\nthree");
+    expect(editor.view.state.selection.ranges).toHaveLength(2);
+    expect(vim.handleKey({ key: "Escape" })).toBe(true);
+
+    editor.setMarkdown("one\ntwo\nthree", { history: "reset" });
+    cursors([0, 8]);
+    vim.setMode("normal");
+    expect(vim.handleKey({ key: "d" })).toBe(true);
+    expect(vim.handleKey({ key: "d" })).toBe(true);
+    expect(editor.getMarkdown()).toBe("two");
     cleanup();
   });
 
@@ -4199,7 +4541,7 @@ After`;
       vim.setMode("normal");
       press("d");
       press("d");
-      expect(editor.getMarkdown()).toBe("alpha\n");
+      expect(editor.getMarkdown()).toBe("alpha");
 
       clipboardText = "X";
       editor.setMarkdown("alpha beta", { history: "reset" });
@@ -4238,7 +4580,7 @@ After`;
       resolveClipboard!("X");
       await settlePaste();
 
-      expect(editor.getMarkdown()).toBe("aXbcd");
+      expect(editor.getMarkdown()).toBe("abXcd");
       expect(vim.mode()).toBe("insert");
       expect(editor.getMarkdownSelection()).toEqual({ from: 5, to: 5 });
     } finally {

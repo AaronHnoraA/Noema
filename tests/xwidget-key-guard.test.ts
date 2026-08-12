@@ -797,6 +797,31 @@ describe("xwidget key guard", () => {
     }
   });
 
+  test("routes xwidget Shift-Tab through table navigation before outdent", () => {
+    const host = withMounted(document.createElement("section"));
+    const markdown = "| A | B |\n| --- | --- |\n| x | y |";
+    const editor = createEditor(host, { initialContent: markdown });
+    const vim = createVimLite(editor, host);
+    vim.setMode("insert");
+    editor.setMarkdownSelection(markdown.indexOf("y"));
+    try {
+      const event = new KeyboardEvent("keydown", {
+        key: "Tab", shiftKey: true, bubbles: true, cancelable: true,
+      });
+      Object.defineProperty(event, "target", { value: document.body });
+      expect(handleXwidgetSpecialKeydown(event, { editor, editorHost: host, vim })).toBe(true);
+      expect(event.defaultPrevented).toBe(true);
+      const row = editor.view.state.doc.lineAt(editor.getMarkdownSelection().from);
+      expect(editor.getMarkdown().split("\n")).toHaveLength(3);
+      expect(row.number).toBe(3);
+      expect(row.text).toContain("x");
+      expect(editor.getMarkdown()).toContain("| x   | y   |");
+    } finally {
+      editor.destroy();
+      host.remove();
+    }
+  });
+
   test("insert arrows stay native while normal j uses Vim screen-line motion", () => {
     const host = withMounted(document.createElement("section"));
     const editor = createEditor(host, { initialContent: "aa\nbbbb\ncc" });

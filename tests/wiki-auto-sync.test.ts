@@ -181,6 +181,37 @@ describe("Wiki automatic synchronization", () => {
     expect(calls).toBe(3);
   });
 
+  test("retries a cross-host busy repository shortly without reporting a batch failure", async () => {
+    vi.useFakeTimers();
+    let calls = 0;
+    const reports: unknown[] = [];
+    const scheduler = createWikiAutoSync({
+      debounceMs: 10_000,
+      busyRetryMs: 20,
+      periodicMs: 0,
+      async sync() {
+        calls += 1;
+        return calls === 1
+          ? { phase: "waiting", retryable: true, retryAfterMs: 25 }
+          : { phase: "idle" };
+      },
+      onBatchError(failures) {
+        reports.push(failures);
+      },
+    });
+
+    scheduler.mark("public/AI");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(calls).toBe(1);
+    expect(scheduler.snapshot().pending).toEqual(["public/AI"]);
+    await vi.advanceTimersByTimeAsync(24);
+    expect(calls).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toBe(2);
+    expect(reports).toEqual([]);
+    await scheduler.close();
+  });
+
   test("uses a local checkpoint callback rather than network sync when closing", async () => {
     vi.useFakeTimers();
     const actions: string[] = [];

@@ -52,7 +52,7 @@ export function coalesceWikiRefreshMode(current = "auto", requested = "auto") {
 
 /** Plan the DB refresh only after a Git operation reached a stable worktree. */
 export function wikiSyncIndexRefreshPlan(result, options = {}) {
-  if (!result || result.phase === "error" || result.phase === "conflicted") return null;
+  if (!result || result.phase !== "idle") return null;
   const probability = finiteProbability(options.fullProbability);
   const random = typeof options.random === "function" ? options.random : Math.random;
   return {

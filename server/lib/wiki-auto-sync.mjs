@@ -2,6 +2,7 @@ const DEFAULT_DEBOUNCE_MS = 24 * 60 * 60_000;
 const DEFAULT_STARTUP_MS = 2_000;
 const DEFAULT_PERIODIC_MS = 24 * 60 * 60_000;
 const DEFAULT_PERIODIC_JITTER_MS = 10 * 60_000;
+const DEFAULT_BUSY_RETRY_MS = 5_000;
 
 function timerDelay(value, fallback) {
   const number = Number(value);
@@ -12,8 +13,9 @@ function timerDelay(value, fallback) {
  * Repository-scoped automatic synchronization. Each repository gets its own
  * debounce timer and at most one active sync. Changes arriving during a sync
  * schedule one follow-up pass instead of overlapping Git processes. Failed
- * Git attempts wait for the next ordinary sync window. Failures from a
- * concurrent batch are collected so the host can emit one complete report.
+ * Git failures wait for the next ordinary sync window. A repository held by
+ * another Noema host uses a short retry and is not reported as a failure.
+ * Failures from a concurrent batch are collected into one complete report.
  */
 export function createWikiAutoSync(options = {}) {
   if (typeof options.sync !== "function") throw new TypeError("Wiki auto sync requires a sync function");
@@ -21,6 +23,7 @@ export function createWikiAutoSync(options = {}) {
   const startupMs = timerDelay(options.startupMs, DEFAULT_STARTUP_MS);
   const periodicMs = timerDelay(options.periodicMs, DEFAULT_PERIODIC_MS);
   const periodicJitterMs = timerDelay(options.periodicJitterMs, DEFAULT_PERIODIC_JITTER_MS);
+  const busyRetryMs = timerDelay(options.busyRetryMs, DEFAULT_BUSY_RETRY_MS);
   const maxConcurrency = Math.max(1, Math.floor(Number(options.maxConcurrency) || 2));
   const known = new Set();
   const pending = new Map();
@@ -108,11 +111,16 @@ export function createWikiAutoSync(options = {}) {
     }
     waiting.delete(repositoryId);
     clearPending(repositoryId);
+    let retryDelayMs = null;
     const task = Promise.resolve()
       .then(() => options.sync(repositoryId))
       .then((result) => {
         options.onResult?.(repositoryId, result);
-        if (result?.phase === "error") recordBatchFailure(repositoryId, result.error);
+        if (result?.phase === "waiting" && result?.retryable !== false) {
+          retryDelayMs = timerDelay(result.retryAfterMs, busyRetryMs);
+        } else if (result?.phase === "error") {
+          recordBatchFailure(repositoryId, result.error);
+        }
         return result;
       })
       .catch((error) => {
@@ -122,7 +130,9 @@ export function createWikiAutoSync(options = {}) {
       });
     const tracked = task.finally(() => {
       if (active.get(repositoryId) === tracked) active.delete(repositoryId);
-      if (rerun.delete(repositoryId)) schedule(repositoryId, debounceMs, true);
+      const rerunRequested = rerun.delete(repositoryId);
+      if (retryDelayMs !== null) schedule(repositoryId, retryDelayMs, true);
+      else if (rerunRequested) schedule(repositoryId, debounceMs, true);
       if (accepting && waiting.size > 0) {
         const next = waiting.values().next().value;
         if (next) void run(next);
@@ -142,6 +152,10 @@ export function createWikiAutoSync(options = {}) {
     clearPending(id);
     rerun.delete(id);
     waiting.delete(id);
+  }
+
+  function retry(repositoryId, delayMs = busyRetryMs) {
+    schedule(String(repositoryId || ""), timerDelay(delayMs, busyRetryMs), true);
   }
 
   function start(repositoryIds = []) {
@@ -192,6 +206,7 @@ export function createWikiAutoSync(options = {}) {
   return {
     mark,
     cancel,
+    retry,
     start,
     syncNow,
     close,

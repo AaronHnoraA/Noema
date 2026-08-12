@@ -1,3 +1,5 @@
+import { buildVimJumpLabels, VIM_JUMP_LABELS } from "../../src/cm6/vim-jump.ts";
+
 type Rect = { left: number; top: number; bottom: number };
 type EditorLike = {
   getMarkdown(): string;
@@ -6,7 +8,12 @@ type EditorLike = {
   getMarkdownSelection(): { from: number; to: number };
   getSelection?: () => { from: number; to: number };
   insertText(text: string, deleteBefore?: number): { from: number; to: number };
-  cursorContext(maxChars?: number): { before?: string; after?: string; rect: Rect | null };
+  cursorContext(maxChars?: number): {
+    before?: string;
+    after?: string;
+    rect: Rect | null;
+    rectAtOffset?: (offset: number) => Rect | null;
+  };
   revealCursor(): void;
 };
 type VimMode = "insert" | "normal" | "visual" | "visual-line";
@@ -18,11 +25,17 @@ type Context = {
   vimMode: () => VimMode;
   setStatus: (message: string) => void;
   onChange: (handler: () => void) => () => void;
+  onSelectionChange?: (handler: () => void) => () => void;
+  onVimModeChange?: (handler: () => void) => () => void;
+  onActiveChange?: (handler: () => void) => () => void;
+  onFileChange?: (handler: () => void) => () => void;
   onKeyDown: (handler: (event: KeyboardEvent) => boolean) => () => void;
   onAction: (handler: (action: string) => void) => () => void;
   onSettingsChange: (handler: (settings: PluginSettings) => void) => () => void;
   getSettings: () => PluginSettings;
   isActive?: () => boolean;
+  isCursorInTexSource?: () => boolean;
+  texSourceRangeAtCursor?: () => { from: number; to: number } | null;
   onDocumentEvent: <K extends keyof DocumentEventMap>(
     type: K,
     handler: (event: DocumentEventMap[K]) => void,
@@ -56,7 +69,32 @@ type InlineResponse = {
 type VisibleCompletion = InlineChoice & {
   acceptedLength: number;
   acceptedBaseLength: number;
+  cursor: number;
+  documentLength: number;
+  beforeFingerprint: string;
+  afterFingerprint: string;
 };
+type CompletionJumpCandidate = {
+  length: number;
+  label: string;
+};
+type GraphemePart = {
+  from: number;
+  to: number;
+  text: string;
+};
+type KeyInput = {
+  key: string;
+  code?: string;
+  text?: string;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  altKey: boolean;
+  shiftKey: boolean;
+  isComposing?: boolean;
+  preventDefault(): void;
+};
+type CopilotHostKeyDetail = Omit<KeyInput, "preventDefault">;
 type PluginSettings = Record<string, string | number | boolean>;
 let logRecording = false;
 type RuntimeSettings = {
@@ -72,6 +110,14 @@ const forwardKeys = new Set(["]", "】", "］", "」", "〕"]);
 const backwardKeys = new Set(["[", "【", "［", "「", "〔"]);
 const wordKeys = new Set(["\\", "、", "＼"]);
 const toCharKeys = new Set(["}", "｝", "〗", "』"]);
+const maxJumpCandidates = 4096;
+const maxRenderedGraphemes = 2048;
+const fingerprintLength = 96;
+const duplicateBeforeInputMs = 80;
+const jumpInputTimeoutMs = 1500;
+const graphemeSegmenter = typeof Intl.Segmenter === "function"
+  ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+  : null;
 
 function nativeCopilotApi(): NativeCopilotApi | undefined {
   return (globalThis as typeof globalThis & {
@@ -137,7 +183,7 @@ function targetInHost(host: HTMLElement, target: EventTarget | null): boolean {
   return root instanceof ShadowRoot && (root.host === host || host.contains(root.host));
 }
 
-function primaryOnly(event: KeyboardEvent): boolean {
+function primaryOnly(event: KeyInput): boolean {
   const windowsDesktop = window.noemaDesktop?.platform === "win32";
   const primary = windowsDesktop
     ? event.ctrlKey && !event.metaKey
@@ -146,17 +192,54 @@ function primaryOnly(event: KeyboardEvent): boolean {
   return primary && !event.altKey;
 }
 
-function toCharShortcut(event: KeyboardEvent): boolean {
+function toCharShortcut(event: KeyInput): boolean {
   if (!event.shiftKey) return false;
   return toCharKeys.has(event.key)
     || event.key === "]"
     || event.code === "BracketRight";
 }
 
-function printableKey(event: KeyboardEvent): string {
+function printableKey(event: KeyInput, allowComposing = false): string {
+  if (event.isComposing && !allowComposing) return "";
   if (event.metaKey || event.ctrlKey || event.altKey) return "";
-  if (event.key.length !== 1) return "";
-  return event.key;
+  const value = event.text && event.text.length === 1 ? event.text : event.key;
+  return value.length === 1 ? value : "";
+}
+
+function* graphemes(text: string): Generator<GraphemePart> {
+  if (!text) return;
+  if (graphemeSegmenter) {
+    for (const segment of graphemeSegmenter.segment(text)) {
+      yield {
+        from: segment.index,
+        to: segment.index + segment.segment.length,
+        text: segment.segment,
+      };
+    }
+    return;
+  }
+  let from = 0;
+  for (const part of text) {
+    yield { from, to: from + part.length, text: part };
+    from += part.length;
+  }
+}
+
+function printableTarget(event: KeyInput): string {
+  if (event.metaKey || event.ctrlKey || event.altKey) return "";
+  const value = event.text || event.key;
+  const iterator = graphemes(value);
+  if (iterator.next().done) return "";
+  return iterator.next().done ? value : "";
+}
+
+function graphemeBoundary(text: string, length: number): boolean {
+  if (length === 0) return true;
+  for (const part of graphemes(text)) {
+    if (part.to === length) return true;
+    if (part.to > length) return false;
+  }
+  return false;
 }
 
 function nextWordLength(text: string): number {
@@ -165,11 +248,20 @@ function nextWordLength(text: string): number {
     const match = text.match(/^\n[ \t]*/);
     return match?.[0].length ?? 1;
   }
-  let i = 0;
-  while (i < text.length && /[ \t]/.test(text[i] ?? "")) i++;
-  if (i > 0) return i;
-  while (i < text.length && /[A-Za-z0-9_$-]/.test(text[i] ?? "")) i++;
-  return i > 0 ? i : 1;
+  let length = 0;
+  let inWord = false;
+  for (const part of graphemes(text)) {
+    if (!inWord && /^[ \t]$/u.test(part.text)) {
+      length = part.to;
+      continue;
+    }
+    if (!/^[\p{L}\p{N}\p{M}_$-]+$/u.test(part.text)) {
+      return inWord ? length : part.to;
+    }
+    inWord = true;
+    length = part.to;
+  }
+  return length;
 }
 
 function visibleText(visible: VisibleCompletion): string {
@@ -182,6 +274,28 @@ function hasBlockingTextAfterCursorOnLine(after: string | undefined): boolean {
   const activeLineTail = after.slice(0, lineEnd < 0 ? after.length : lineEnd);
   const trimmed = activeLineTail.trimStart();
   return /^[\p{L}\p{N}_$]/u.test(trimmed);
+}
+
+function isIgnorableTexClosingTail(text: string): boolean {
+  if (!text) return false;
+  let remaining = text;
+  let found = false;
+  while (remaining) {
+    remaining = remaining.replace(/^[ \t]+/, "");
+    if (!remaining) return found;
+    if (remaining.startsWith("}")) {
+      remaining = remaining.slice(1);
+      found = true;
+      continue;
+    }
+    if (remaining.startsWith("\\)") || remaining.startsWith("\\]")) {
+      remaining = remaining.slice(2);
+      found = true;
+      continue;
+    }
+    return false;
+  }
+  return found;
 }
 
 function clampedOffset(markdown: string, offset: number): number {
@@ -252,6 +366,30 @@ function completionRequestDocumentFromEditor(
   };
 }
 
+function completionRequestDocumentForRange(
+  editor: EditorLike,
+  offset: number,
+  range: { from: number; to: number } | null | undefined,
+): { content: string; offset: number; from: number; to: number; clipped: boolean } | null {
+  if (!range || !editor.markdownBetween) return null;
+  const length = editor.getMarkdownLength?.() ?? editor.getMarkdown().length;
+  const from = Math.max(0, Math.min(range.from, length));
+  const to = Math.max(from, Math.min(range.to, length));
+  if (offset < from || offset > to) return null;
+  return {
+    content: editor.markdownBetween(from, to),
+    offset: offset - from,
+    from,
+    to,
+    clipped: from > 0 || to < length,
+  };
+}
+
+function completionRequestFile(file: string, texContext: boolean): string {
+  if (!texContext) return file;
+  return file ? `${file}.noema-copilot.tex` : "aaronnote-copilot.noema-copilot.tex";
+}
+
 function trimmedCompletionInsertText(
   choice: InlineChoice,
   markdown: string,
@@ -295,6 +433,10 @@ export function setupCopilot(context: Context): () => void {
   ghost.className = "aaronnote-copilot-ghost";
   ghost.hidden = true;
   document.body.appendChild(ghost);
+  const jumpHint = document.createElement("div");
+  jumpHint.className = "aaronnote-copilot-jump-hint";
+  jumpHint.hidden = true;
+  document.body.appendChild(jumpHint);
 
   const style = document.createElement("style");
   style.textContent = `
@@ -303,24 +445,76 @@ export function setupCopilot(context: Context): () => void {
   z-index: 80;
   pointer-events: none;
   color: color-mix(in srgb, currentColor 38%, transparent);
+  max-width: calc(100vw - 24px);
+  overflow: hidden;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
-  max-width: calc(100vw - 24px);
-  overflow: hidden;
-  font: 15px/1.6 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font: inherit;
+  line-height: inherit;
+}
+.aaronnote-copilot-ghost-line {
+  min-height: 1em;
+  white-space: pre-wrap;
+}
+.aaronnote-copilot-ghost[data-truncated="true"]::after {
+  content: "…";
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  padding-left: 0.4em;
+  background: linear-gradient(90deg, transparent, var(--aaronnote-bg, Canvas) 38%);
 }
 .aaronnote-copilot-ghost--lean {
   color: rgb(156 199 255 / 68%);
   text-shadow: 0 1px 2px rgb(0 0 0 / 46%);
 }
+.aaronnote-copilot-jump-hint {
+  position: fixed;
+  z-index: 81;
+  pointer-events: none;
+  padding: 2px 6px;
+  border: 1px solid color-mix(in srgb, #f7d774 72%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--aaronnote-bg, Canvas) 88%, transparent);
+  color: #f7d774;
+  font: 600 11px/1.35 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 28%);
+  white-space: nowrap;
+}
+.aaronnote-copilot-jump-target {
+  position: relative;
+}
+.aaronnote-copilot-jump-newline {
+  opacity: 0.78;
+}
+.aaronnote-copilot-jump-target[data-copilot-jump-label]::after {
+  content: attr(data-copilot-jump-label);
+  position: absolute;
+  inset: -0.18em auto auto 0;
+  z-index: 1;
+  min-width: 1ch;
+  padding: 0 0.08em;
+  border-radius: 0.18em;
+  color: #111827;
+  background: #f7d774;
+  font-size: 0.72em;
+  font-weight: 800;
+  line-height: 1.05;
+  text-align: center;
+  text-shadow: none;
+}
 `;
   document.head.appendChild(style);
 
   let timer = 0;
+  let jumpTimer = 0;
   let seq = 0;
   let accepting = false;
-  let pendingToChar = false;
+  let jumpWaitingForTarget = false;
+  let jumpCandidates: CompletionJumpCandidate[] | null = null;
+  let jumpPrefix = "";
+  let recentJumpKeydown: { texts: readonly string[]; at: number } | null = null;
   let visible: VisibleCompletion | null = null;
   let settings = normalizeSettings(context.getSettings());
   let lastScheduleKey = "";
@@ -328,15 +522,134 @@ export function setupCopilot(context: Context): () => void {
   let focusedFile = "";
   const cleanups: Array<() => void> = [];
 
-  function clearCompletion(): void {
+  function clearJump(): void {
+    window.clearTimeout(jumpTimer);
+    jumpTimer = 0;
+    jumpWaitingForTarget = false;
+    jumpCandidates = null;
+    jumpPrefix = "";
+    jumpHint.hidden = true;
+  }
+
+  function armJumpTimeout(): void {
+    window.clearTimeout(jumpTimer);
+    jumpTimer = window.setTimeout(() => {
+      jumpTimer = 0;
+      if (!jumpWaitingForTarget && !jumpCandidates) return;
+      clearJump();
+      context.setStatus("Copilot jump timed out");
+      renderCompletion();
+    }, jumpInputTimeoutMs);
+  }
+
+  function noteJumpKeydown(...texts: string[]): void {
+    recentJumpKeydown = {
+      texts: texts.filter(Boolean),
+      at: typeof performance !== "undefined" ? performance.now() : Date.now(),
+    };
+  }
+
+  function consumePairedBeforeInput(text: string): boolean {
+    const recent = recentJumpKeydown;
+    if (!recent) return false;
+    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+    recentJumpKeydown = null;
+    return now - recent.at <= duplicateBeforeInputMs && recent.texts.includes(text);
+  }
+
+  function clearCompletion(invalidate = true): void {
+    if (invalidate) seq += 1;
     visible = null;
-    pendingToChar = false;
+    clearJump();
     ghost.hidden = true;
+    delete ghost.dataset.truncated;
+  }
+
+  function copyEditorTypography(): number {
+    const active = document.activeElement instanceof HTMLElement
+      && context.host.contains(document.activeElement)
+      ? document.activeElement
+      : context.host;
+    const computed = getComputedStyle(active);
+    for (const property of ["fontFamily", "fontSize", "fontStyle", "fontWeight", "fontVariant", "letterSpacing"] as const) {
+      const value = computed[property];
+      if (value) ghost.style[property] = value;
+    }
+    if (computed.lineHeight) ghost.style.lineHeight = computed.lineHeight;
+    const parsed = Number.parseFloat(computed.lineHeight);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  }
+
+  function jumpCandidateMap(): Map<number, string> {
+    return new Map((jumpCandidates ?? []).map((candidate) => [candidate.length, candidate.label]));
+  }
+
+  function renderGhostText(text: string, visibleLineCount: number): void {
+    ghost.replaceChildren();
+    const candidateLabels = jumpCandidateMap();
+    let lineIndex = 0;
+    let line = document.createElement("div");
+    line.className = "aaronnote-copilot-ghost-line";
+    ghost.appendChild(line);
+    let plainText = "";
+    const flushPlainText = () => {
+      if (!plainText) return;
+      line.append(plainText);
+      plainText = "";
+    };
+    let renderedTo = 0;
+    let renderedGraphemes = 0;
+    for (const part of graphemes(text)) {
+      if (lineIndex >= visibleLineCount) break;
+      if (renderedGraphemes >= maxRenderedGraphemes) break;
+      renderedGraphemes += 1;
+      if (part.text === "\n") {
+        flushPlainText();
+        const label = candidateLabels.get(part.to);
+        if (label?.startsWith(jumpPrefix)) {
+          const marker = document.createElement("span");
+          marker.className = "aaronnote-copilot-jump-target aaronnote-copilot-jump-newline";
+          marker.textContent = "↵";
+          marker.dataset.copilotJumpLength = String(part.to);
+          marker.dataset.copilotJumpLabel = label.slice(jumpPrefix.length) || label;
+          line.appendChild(marker);
+        }
+        renderedTo = part.to;
+        lineIndex += 1;
+        if (lineIndex >= visibleLineCount) break;
+        line = document.createElement("div");
+        line.className = "aaronnote-copilot-ghost-line";
+        ghost.appendChild(line);
+        continue;
+      }
+      if (!jumpCandidates) {
+        plainText += part.text;
+        renderedTo = part.to;
+        continue;
+      }
+      const label = candidateLabels.get(part.to);
+      if (!label?.startsWith(jumpPrefix)) {
+        plainText += part.text;
+        renderedTo = part.to;
+        continue;
+      }
+      flushPlainText();
+      const span = document.createElement("span");
+      span.className = "aaronnote-copilot-jump-target";
+      span.textContent = part.text;
+      span.dataset.copilotJumpLength = String(part.to);
+      span.dataset.copilotJumpLabel = label.slice(jumpPrefix.length) || label;
+      line.appendChild(span);
+      renderedTo = part.to;
+    }
+    flushPlainText();
+    ghost.dataset.truncated = String(renderedTo < text.length);
   }
 
   function renderCompletion(): void {
     if (!visible) {
       ghost.hidden = true;
+      jumpHint.hidden = true;
       return;
     }
     const text = visibleText(visible);
@@ -344,38 +657,72 @@ export function setupCopilot(context: Context): () => void {
       clearCompletion();
       return;
     }
-    const rect = context.editor.cursorContext(1600).rect;
+    const cursor = context.editor.cursorContext(1600);
+    const rect = cursor.rect;
     if (!rect) {
       ghost.hidden = true;
+      jumpHint.hidden = true;
       return;
     }
     const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
     const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
     const margin = 12;
+    const lineStartOffset = (cursor.before?.lastIndexOf("\n") ?? -1) + 1;
+    const lineStartRect = cursor.rectAtOffset?.(lineStartOffset);
+    const contentLeft = Math.min(rect.left, lineStartRect?.left ?? rect.left);
     const minWidth = Math.min(160, Math.max(80, viewportWidth - margin * 2));
     const left = viewportWidth > 0
-      ? Math.min(Math.max(margin, rect.left), Math.max(margin, viewportWidth - minWidth - margin))
-      : Math.max(0, rect.left);
+      ? Math.min(Math.max(margin, contentLeft), Math.max(margin, viewportWidth - minWidth - margin))
+      : Math.max(0, contentLeft);
     const top = viewportHeight > 0
       ? Math.min(Math.max(0, rect.top), Math.max(0, viewportHeight - 32))
       : Math.max(0, rect.top);
-    ghost.textContent = text.split("\n", 1)[0] || " ";
+    const computedLineHeight = copyEditorTypography();
+    const lineHeight = Math.max(1, computedLineHeight || rect.bottom - rect.top || 24);
+    const availableHeight = viewportHeight > 0 ? Math.max(lineHeight, viewportHeight - top - margin) : Number.POSITIVE_INFINITY;
+    const visibleLineCount = Number.isFinite(availableHeight)
+      ? Math.max(1, Math.floor(availableHeight / lineHeight))
+      : maxRenderedGraphemes;
+    renderGhostText(text, visibleLineCount);
+    const firstLine = ghost.firstElementChild as HTMLElement | null;
+    if (firstLine) firstLine.style.paddingLeft = `${Math.max(0, rect.left - left)}px`;
     ghost.style.left = `${left}px`;
     ghost.style.top = `${top}px`;
     ghost.style.maxWidth = viewportWidth > 0 ? `${Math.max(80, viewportWidth - left - margin)}px` : "";
     ghost.style.maxHeight = viewportHeight > 0 ? `${Math.max(32, viewportHeight - top - margin)}px` : "";
     ghost.hidden = false;
+    if (jumpWaitingForTarget || jumpCandidates) {
+      jumpHint.textContent = jumpWaitingForTarget ? "S · target" : "S · label";
+      jumpHint.style.left = `${left}px`;
+      jumpHint.style.top = `${Math.max(4, top - 22)}px`;
+      jumpHint.hidden = false;
+    } else {
+      jumpHint.hidden = true;
+    }
   }
 
-  function requestKey(): string {
+  function editorStateKey(): string {
     const selection = activeSelection(context.editor);
     const cursor = context.editor.cursorContext(160);
     return [
       context.currentFile(),
+      context.vimMode(),
       selection.from,
       selection.to,
+      context.editor.getMarkdownLength?.() ?? context.editor.getMarkdown().length,
       cursor.before?.slice(-80) ?? "",
       cursor.after?.slice(0, 80) ?? "",
+    ].join("\0");
+  }
+
+  function scheduleStateKey(): string {
+    const selection = activeSelection(context.editor);
+    return [
+      context.currentFile(),
+      context.vimMode(),
+      selection.from,
+      selection.to,
+      context.editor.getMarkdownLength?.() ?? context.editor.getMarkdown().length,
     ].join("\0");
   }
 
@@ -406,6 +753,8 @@ export function setupCopilot(context: Context): () => void {
     const file = focusedFile || context.currentFile();
     focusState = "blurred";
     focusedFile = "";
+    window.clearTimeout(timer);
+    lastScheduleKey = "";
     clearCompletion();
     void requestCopilot("blur", clientBody({ file, reason, active: false })).catch(() => {});
   }
@@ -415,25 +764,18 @@ export function setupCopilot(context: Context): () => void {
     const file = focusedFile || context.currentFile();
     focusState = "closed";
     focusedFile = "";
+    window.clearTimeout(timer);
+    lastScheduleKey = "";
     clearCompletion();
     void requestCopilot("close", clientBody({ file, reason, active: false })).catch(() => {});
-  }
-
-  function scheduleKey(): string {
-    const selection = activeSelection(context.editor);
-    return [
-      context.currentFile(),
-      context.vimMode(),
-      selection.from,
-      selection.to,
-    ].join("\0");
   }
 
   function eligible(): boolean {
     if (!eligibleShell()) return false;
     const selection = activeSelection(context.editor);
     if (selection.from !== selection.to) return false;
-    return !hasBlockingTextAfterCursorOnLine(context.editor.cursorContext(512).after);
+    return context.isCursorInTexSource?.()
+      || !hasBlockingTextAfterCursorOnLine(context.editor.cursorContext(512).after);
   }
 
   function eligibleShell(): boolean {
@@ -457,13 +799,87 @@ export function setupCopilot(context: Context): () => void {
   function scheduleIfChanged(): void {
     if (!eligibleShell()) {
       window.clearTimeout(timer);
-      clearCompletion();
+      lastScheduleKey = "";
+      if (visible) clearCompletion();
+      if (context.isActive && !context.isActive()) notifyBlur("inactive");
       return;
     }
-    const key = scheduleKey();
-    if (key === lastScheduleKey && !visible) return;
+    const key = scheduleStateKey();
+    if (key === lastScheduleKey) {
+      if (visible) renderCompletion();
+      return;
+    }
+    if (visible) clearCompletion();
     lastScheduleKey = key;
     schedule();
+  }
+
+  function completionFingerprints(): {
+    cursor: number;
+    documentLength: number;
+    beforeFingerprint: string;
+    afterFingerprint: string;
+  } {
+    const selection = activeSelection(context.editor);
+    const cursor = context.editor.cursorContext(fingerprintLength * 2);
+    return {
+      cursor: selection.to,
+      documentLength: context.editor.getMarkdownLength?.() ?? context.editor.getMarkdown().length,
+      beforeFingerprint: cursor.before?.slice(-fingerprintLength) ?? "",
+      afterFingerprint: cursor.after?.slice(0, fingerprintLength) ?? "",
+    };
+  }
+
+  function consumeTypedPrefix(): boolean {
+    if (!visible || !context.editor.markdownBetween) return false;
+    const selection = activeSelection(context.editor);
+    const documentLength = context.editor.getMarkdownLength?.() ?? context.editor.getMarkdown().length;
+    const cursorDelta = selection.to - visible.cursor;
+    const documentDelta = documentLength - visible.documentLength;
+    if (selection.from !== selection.to || cursorDelta <= 0 || cursorDelta !== documentDelta) return false;
+    const typed = context.editor.markdownBetween(visible.cursor, selection.to);
+    if (!typed || typed.length !== cursorDelta) return false;
+    const remaining = visibleText(visible);
+    if (!remaining.startsWith(typed) || !graphemeBoundary(remaining, typed.length)) return false;
+    const fingerprint = completionFingerprints();
+    if (fingerprint.afterFingerprint !== visible.afterFingerprint) return false;
+
+    seq += 1;
+    clearJump();
+    visible.acceptedLength += typed.length;
+    Object.assign(visible, fingerprint);
+    if (!visibleText(visible)) clearCompletion(false);
+    else renderCompletion();
+    return true;
+  }
+
+  function handleDocumentChange(): void {
+    if (accepting) return;
+    const followed = consumeTypedPrefix();
+    if (followed) {
+      lastScheduleKey = scheduleStateKey();
+      schedule();
+      return;
+    }
+    clearCompletion();
+    lastScheduleKey = "";
+    scheduleIfChanged();
+  }
+
+  function handleEditorStateChange(): void {
+    if (accepting) return;
+    scheduleIfChanged();
+  }
+
+  function handleFileChange(): void {
+    const previousFile = focusedFile;
+    window.clearTimeout(timer);
+    lastScheduleKey = "";
+    clearCompletion();
+    if (focusState === "focused" && previousFile !== context.currentFile()) {
+      notifyBlur("file-change");
+    }
+    scheduleIfChanged();
   }
 
   async function requestCompletion(): Promise<void> {
@@ -471,19 +887,25 @@ export function setupCopilot(context: Context): () => void {
     await notifyFocus("inline");
     if (!eligible()) return;
     const fullOffset = completionOffset(context.editor);
-    const requestDoc = completionRequestDocumentFromEditor(context.editor, fullOffset, settings.largeBufferThreshold);
+    const texContext = Boolean(context.isCursorInTexSource?.());
+    const requestDoc = completionRequestDocumentForRange(
+      context.editor,
+      fullOffset,
+      texContext ? context.texSourceRangeAtCursor?.() : null,
+    ) ?? completionRequestDocumentFromEditor(context.editor, fullOffset, settings.largeBufferThreshold);
     if (!eligible()) return;
-    const key = requestKey();
+    const key = editorStateKey();
     const currentSeq = ++seq;
     try {
       const response = await requestCopilot<InlineResponse>("inline", {
         ...clientBody(),
-        file: context.currentFile(),
+        file: completionRequestFile(context.currentFile(), texContext),
+        sourceFile: context.currentFile(),
         content: requestDoc.content,
         offset: requestDoc.offset,
         window: requestDoc.clipped ? { from: requestDoc.from, to: requestDoc.to } : undefined,
       });
-      if (currentSeq !== seq || key !== requestKey()) return;
+      if (currentSeq !== seq || key !== editorStateKey() || !eligible()) return;
       const choice = response.items?.[0];
       if (!choice?.insertText) {
         clearCompletion();
@@ -492,20 +914,46 @@ export function setupCopilot(context: Context): () => void {
         }
         return;
       }
-      if (hasBlockingTextAfterCursorOnLine(context.editor.cursorContext(512).after)) {
+      if (!context.isCursorInTexSource?.()
+        && hasBlockingTextAfterCursorOnLine(context.editor.cursorContext(512).after)) {
+        clearCompletion();
+        return;
+      }
+      if (!Number.isFinite(choice.range.from)
+        || !Number.isFinite(choice.range.to)
+        || choice.range.from < 0
+        || choice.range.from > requestDoc.offset
+        || choice.range.to < requestDoc.offset
+        || choice.range.to > requestDoc.content.length
+        || choice.range.from > choice.range.to
+        || (choice.range.to > requestDoc.offset
+          && (!texContext || !isIgnorableTexClosingTail(
+            requestDoc.content.slice(requestDoc.offset, choice.range.to),
+          )))) {
         clearCompletion();
         return;
       }
       const trimmed = trimmedCompletionInsertText(choice, requestDoc.content, requestDoc.offset);
+      if (texContext && choice.range.to > requestDoc.offset) {
+        const closingTail = requestDoc.content.slice(requestDoc.offset, choice.range.to);
+        if (trimmed.insertText.endsWith(closingTail)) {
+          trimmed.insertText = trimmed.insertText.slice(0, -closingTail.length);
+        }
+      }
       if (!trimmed.insertText) {
         clearCompletion();
         return;
       }
-      visible = { ...choice, ...trimmed, acceptedLength: 0 };
+      visible = {
+        ...choice,
+        ...trimmed,
+        ...completionFingerprints(),
+        acceptedLength: 0,
+      };
       renderCompletion();
       void requestCopilot("shown", { item: choice.item }).catch(() => {});
     } catch (err) {
-      if (currentSeq !== seq || key !== requestKey()) return;
+      if (currentSeq !== seq || key !== editorStateKey()) return;
       if (isSupersededCopilotError(err)) return;
       clearCompletion();
       context.setStatus(err instanceof Error ? `Copilot: ${err.message}` : "Copilot failed");
@@ -515,7 +963,14 @@ export function setupCopilot(context: Context): () => void {
   function acceptLength(length: number): boolean {
     if (!visible) return false;
     const remaining = visibleText(visible);
-    const count = Math.max(0, Math.min(length, remaining.length));
+    const requested = Math.max(0, Math.min(length, remaining.length));
+    let count = requested >= remaining.length ? remaining.length : 0;
+    if (requested < remaining.length) {
+      for (const part of graphemes(remaining)) {
+        if (part.to > requested) break;
+        count = part.to;
+      }
+    }
     if (count <= 0) return false;
     const text = remaining.slice(0, count);
     const selection = activeSelection(context.editor);
@@ -524,19 +979,20 @@ export function setupCopilot(context: Context): () => void {
       return false;
     }
     accepting = true;
+    seq += 1;
+    window.clearTimeout(timer);
     const insertAndReveal = () => {
       context.editor.insertText(text);
       context.editor.revealCursor();
     };
     if (context.preserveScroll) context.preserveScroll(insertAndReveal);
     else insertAndReveal();
-    window.setTimeout(() => {
-      accepting = false;
-    }, 0);
     visible.acceptedLength += text.length;
+    Object.assign(visible, completionFingerprints());
+    lastScheduleKey = scheduleStateKey();
     if (visible.acceptedLength >= visible.insertText.length) {
       const item = visible.item;
-      clearCompletion();
+      clearCompletion(false);
       void requestCopilot("accept", { item }).catch(() => {});
     } else {
       renderCompletion();
@@ -545,6 +1001,12 @@ export function setupCopilot(context: Context): () => void {
         acceptedLength: visible.acceptedBaseLength + visible.acceptedLength,
       }).catch(() => {});
     }
+    // CodeMirror callbacks are synchronous today, but retaining the guard
+    // through this task also covers adapters that publish their change and
+    // selection notifications in a microtask.
+    window.setTimeout(() => {
+      accepting = false;
+    }, 0);
     return true;
   }
 
@@ -558,37 +1020,159 @@ export function setupCopilot(context: Context): () => void {
     return acceptLength(nextWordLength(visibleText(visible)));
   }
 
-  function acceptToChar(ch: string): boolean {
-    if (!visible) return false;
-    const remaining = visibleText(visible);
-    const index = remaining.indexOf(ch);
-    if (index < 0) {
-      context.setStatus(`Copilot: ${ch} not in completion`);
-      pendingToChar = false;
-      return true;
+  function visibleJumpLengths(text: string, target: string): number[] {
+    const rect = context.editor.cursorContext(1600).rect;
+    if (!rect) return [];
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+    const margin = 12;
+    const computedLineHeight = copyEditorTypography();
+    const lineHeight = Math.max(1, computedLineHeight || rect.bottom - rect.top || 24);
+    const maxLines = viewportHeight > 0
+      ? Math.max(1, Math.floor(Math.max(lineHeight, viewportHeight - rect.top - margin) / lineHeight))
+      : Number.POSITIVE_INFINITY;
+    const lengths: number[] = [];
+    const foldedTarget = target.toLocaleLowerCase();
+    let line = 0;
+    let scanned = 0;
+    for (const part of graphemes(text)) {
+      if (line >= maxLines || lengths.length >= maxJumpCandidates) break;
+      if (scanned >= maxRenderedGraphemes) break;
+      scanned += 1;
+      if (part.text.toLocaleLowerCase() === foldedTarget) lengths.push(part.to);
+      if (part.text === "\n") line += 1;
     }
-    pendingToChar = false;
-    return acceptLength(index + ch.length);
+    return lengths;
   }
 
-  function handleKey(event: KeyboardEvent): boolean {
+  function beginCompletionJump(): boolean {
+    if (!visible) return false;
+    jumpWaitingForTarget = true;
+    jumpCandidates = null;
+    jumpPrefix = "";
+    context.setStatus("Copilot jump: type a target character, Esc cancels");
+    armJumpTimeout();
+    renderCompletion();
+    return true;
+  }
+
+  function labelCompletionJumpTargets(target: string): boolean {
+    if (!visible) return false;
+    const lengths = visibleJumpLengths(visibleText(visible), target);
+    if (lengths.length === 0) {
+      return cancelCompletionJump(`Copilot jump: ${target} not found`);
+    }
+    const labels = buildVimJumpLabels(lengths.length);
+    jumpCandidates = lengths.map((length, index) => ({ length, label: labels[index]! }));
+    jumpWaitingForTarget = false;
+    jumpPrefix = "";
+    armJumpTimeout();
+    renderCompletion();
+    const elements = [...ghost.querySelectorAll<HTMLElement>(".aaronnote-copilot-jump-target")];
+    const measured = elements.some((element) => {
+      const rect = element.getBoundingClientRect();
+      return rect.width > 0 || rect.height > 0 || rect.top !== 0 || rect.bottom !== 0;
+    });
+    if (measured) {
+      const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+      const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+      const visibleLengths = elements
+        .filter((element) => {
+          const rect = element.getBoundingClientRect();
+          return rect.bottom > 0
+            && (!viewportHeight || rect.top < viewportHeight)
+            && rect.right > 0
+            && (!viewportWidth || rect.left < viewportWidth);
+        })
+        .map((element) => Number(element.dataset.copilotJumpLength))
+        .filter((length) => Number.isFinite(length) && length > 0);
+      if (visibleLengths.length > 0 && visibleLengths.length !== jumpCandidates.length) {
+        const visibleLabels = buildVimJumpLabels(visibleLengths.length);
+        jumpCandidates = visibleLengths.map((length, index) => ({ length, label: visibleLabels[index]! }));
+        renderCompletion();
+      }
+    }
+    context.setStatus(`Copilot jump: ${jumpCandidates.length} ${target} target${jumpCandidates.length === 1 ? "" : "s"}; type a label`);
+    return true;
+  }
+
+  function cancelCompletionJump(message = "Copilot jump canceled"): boolean {
+    clearJump();
+    context.setStatus(message);
+    renderCompletion();
+    return true;
+  }
+
+  function handleCompletionJump(event: KeyInput): boolean {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      return cancelCompletionJump();
+    }
+    if (jumpWaitingForTarget) {
+      if (event.key === "Backspace" || event.key === "Delete") {
+        event.preventDefault();
+        return cancelCompletionJump();
+      }
+      const target = printableTarget(event);
+      if (!target) {
+        if (["Alt", "AltGraph", "Control", "Meta", "Shift"].includes(event.key)) return false;
+        clearJump();
+        context.setStatus("Copilot jump canceled");
+        renderCompletion();
+        return false;
+      }
+      event.preventDefault();
+      if (event instanceof KeyboardEvent) noteJumpKeydown(target);
+      return labelCompletionJumpTargets(target);
+    }
+    if (!jumpCandidates) return false;
+    if (event.key === "Backspace" || event.key === "Delete") {
+      event.preventDefault();
+      if (!jumpPrefix) {
+        jumpWaitingForTarget = true;
+        jumpCandidates = null;
+        context.setStatus("Copilot jump: type a target character, Esc cancels");
+        armJumpTimeout();
+        renderCompletion();
+        return true;
+      }
+      jumpPrefix = jumpPrefix.slice(0, -1);
+      context.setStatus(jumpPrefix ? `Copilot jump: ${jumpPrefix}` : "Copilot jump: type a label, Esc cancels");
+      armJumpTimeout();
+      renderCompletion();
+      return true;
+    }
+    const key = printableKey(event, true).toLowerCase();
+    if (!key) {
+      if (["Alt", "AltGraph", "Control", "Meta", "Shift"].includes(event.key)) return false;
+      clearJump();
+      context.setStatus("Copilot jump canceled");
+      renderCompletion();
+      return false;
+    }
+    event.preventDefault();
+    if (event instanceof KeyboardEvent) noteJumpKeydown(key);
+    if (!VIM_JUMP_LABELS.includes(key)) return cancelCompletionJump("Copilot jump canceled: invalid label");
+    const prefix = `${jumpPrefix}${key}`;
+    const matches = jumpCandidates.filter((candidate) => candidate.label.startsWith(prefix));
+    if (matches.length === 0) return cancelCompletionJump("Copilot jump canceled: no label");
+    const exact = matches.find((candidate) => candidate.label === prefix);
+    if (exact) {
+      clearJump();
+      return acceptLength(exact.length);
+    }
+    jumpPrefix = prefix;
+    context.setStatus(`Copilot jump: ${matches.length} targets`);
+    armJumpTimeout();
+    renderCompletion();
+    return true;
+  }
+
+  function handleKeyInput(event: KeyInput): boolean {
     // Native sub-editors (notably LiveTeX) share the document capture phase.
     // When the host marks Copilot inactive, its shortcuts must pass through to
     // that editor instead of invoking source-snippet or delimiter callbacks.
     if (context.isActive && !context.isActive()) return false;
-    if (!targetInHost(context.host, event.target)) return false;
-    if (pendingToChar) {
-      if (event.key === "Escape") {
-        pendingToChar = false;
-        context.setStatus("Copilot to-char canceled");
-        event.preventDefault();
-        return true;
-      }
-      const ch = printableKey(event);
-      if (!ch) return false;
-      event.preventDefault();
-      return acceptToChar(ch);
-    }
+    if (jumpWaitingForTarget || jumpCandidates) return handleCompletionJump(event);
     if (context.vimMode() !== "insert" || !primaryOnly(event)) return false;
     if (!event.shiftKey && forwardKeys.has(event.key)) {
       const handled = visible ? acceptAll() : context.jumpSnippetNext() || context.forwardDelimiter();
@@ -607,16 +1191,97 @@ export function setupCopilot(context: Context): () => void {
     }
     if (toCharShortcut(event)) {
       if (visible) {
-        pendingToChar = true;
-        context.setStatus("Copilot to char");
-        event.preventDefault();
-        return true;
+        const handled = beginCompletionJump();
+        if (handled) {
+          event.preventDefault();
+          if (event instanceof KeyboardEvent) {
+            noteJumpKeydown(event.key, event.shiftKey && (event.key === "]" || event.code === "BracketRight") ? "}" : "");
+          }
+        }
+        return handled;
       }
       const handled = context.jumpSnippetNext() || context.forwardDelimiter();
       if (handled) event.preventDefault();
       return handled;
     }
     return false;
+  }
+
+  function handleKey(event: KeyboardEvent): boolean {
+    if (!targetInHost(context.host, event.target)) return false;
+    // Any new physical key supersedes the one-shot paired-beforeinput
+    // expectation from the preceding keydown. This keeps the 80ms WebKit
+    // dedupe guard from consuming a fast, genuinely new keystroke.
+    recentJumpKeydown = null;
+    return handleKeyInput(event);
+  }
+
+  function consumeJumpBeforeInput(event: InputEvent): boolean {
+    if (!jumpWaitingForTarget && !jumpCandidates && !recentJumpKeydown) return false;
+    const deleting = event.inputType === "deleteContentBackward" || event.inputType === "deleteContentForward";
+    const singleTextInput = event.inputType === "insertText" || event.inputType === "insertCompositionText";
+    const text = event.data || "";
+    if (!deleting && !singleTextInput) {
+      recentJumpKeydown = null;
+      if (jumpWaitingForTarget || jumpCandidates) cancelCompletionJump();
+      return false;
+    }
+    if (text && consumePairedBeforeInput(text)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return true;
+    }
+    if (!jumpWaitingForTarget && !jumpCandidates) return false;
+    if (!deleting && !printableTarget({
+      key: text,
+      text,
+      metaKey: false,
+      ctrlKey: false,
+      altKey: false,
+      shiftKey: false,
+      isComposing: event.isComposing,
+      preventDefault: () => {},
+    })) {
+      cancelCompletionJump();
+      return false;
+    }
+    const key = deleting
+      ? event.inputType === "deleteContentBackward" ? "Backspace" : "Delete"
+      : text;
+    const handled = key
+      ? handleKeyInput({
+          key,
+          text: text || undefined,
+          metaKey: false,
+          ctrlKey: false,
+          altKey: false,
+          shiftKey: false,
+          isComposing: event.isComposing,
+          preventDefault: () => event.preventDefault(),
+        })
+      : false;
+    if (!handled && (jumpWaitingForTarget || jumpCandidates)) cancelCompletionJump();
+    if (event.defaultPrevented) event.stopImmediatePropagation();
+    return event.defaultPrevented;
+  }
+
+  function handleHostKeyEvent(event: Event): void {
+    const custom = event as CustomEvent<CopilotHostKeyDetail>;
+    const detail = custom.detail;
+    if (!detail?.key) return;
+    recentJumpKeydown = null;
+    const handled = handleKeyInput({
+      key: detail.key,
+      code: detail.code,
+      text: detail.text,
+      metaKey: Boolean(detail.metaKey),
+      ctrlKey: Boolean(detail.ctrlKey),
+      altKey: Boolean(detail.altKey),
+      shiftKey: Boolean(detail.shiftKey),
+      isComposing: Boolean(detail.isComposing),
+      preventDefault: () => custom.preventDefault(),
+    });
+    if (handled) custom.stopImmediatePropagation();
   }
 
   function runAction(action: string): void {
@@ -684,25 +1349,31 @@ export function setupCopilot(context: Context): () => void {
   cleanups.push(context.onSettingsChange((next) => {
     settings = normalizeSettings(next);
     clearCompletion();
-    scheduleIfChanged();
-  }));
-  cleanups.push(context.onChange(() => {
-    if (accepting) return;
-    clearCompletion();
     lastScheduleKey = "";
     scheduleIfChanged();
   }));
-  cleanups.push(context.onDocumentEvent("selectionchange", () => {
-    if (accepting) return;
-    clearCompletion();
-    scheduleIfChanged();
-  }));
-  cleanups.push(context.onDocumentEvent("mouseup", scheduleIfChanged));
-  cleanups.push(context.onDocumentEvent("keyup", scheduleIfChanged));
+  cleanups.push(context.onChange(handleDocumentChange));
+  cleanups.push(context.onDocumentEvent("beforeinput", consumeJumpBeforeInput, { capture: true }));
+  context.host.addEventListener("aaronnote:copilot-host-key", handleHostKeyEvent);
+  cleanups.push(() => context.host.removeEventListener("aaronnote:copilot-host-key", handleHostKeyEvent));
+  if (context.onSelectionChange) cleanups.push(context.onSelectionChange(handleEditorStateChange));
+  else cleanups.push(context.onDocumentEvent("selectionchange", handleEditorStateChange));
+  if (context.onVimModeChange) cleanups.push(context.onVimModeChange(handleEditorStateChange));
+  if (context.onActiveChange) cleanups.push(context.onActiveChange(handleEditorStateChange));
+  if (context.onFileChange) cleanups.push(context.onFileChange(handleFileChange));
   cleanups.push(context.onDocumentEvent("scroll", () => renderCompletion(), { capture: true }));
-  const handleHostFocusIn = () => { void notifyFocus("focusin"); };
-  const handleHostFocusOut = () => notifyBlur("focusout");
-  const handleWindowFocus = () => { void notifyFocus("window-focus"); };
+  const handleHostFocusIn = () => {
+    void notifyFocus("focusin");
+    scheduleIfChanged();
+  };
+  const handleHostFocusOut = (event: FocusEvent) => {
+    if (event.relatedTarget instanceof Node && context.host.contains(event.relatedTarget)) return;
+    notifyBlur("focusout");
+  };
+  const handleWindowFocus = () => {
+    void notifyFocus("window-focus");
+    scheduleIfChanged();
+  };
   const handleWindowBlur = () => notifyBlur("window-blur");
   const handlePageHide = () => notifyClose("pagehide");
   context.host.addEventListener("focusin", handleHostFocusIn);
@@ -716,7 +1387,10 @@ export function setupCopilot(context: Context): () => void {
   window.addEventListener("pagehide", handlePageHide);
   cleanups.push(context.onDocumentEvent("visibilitychange", () => {
     if (document.hidden) notifyBlur("visibility-hidden");
-    else void notifyFocus("visibility-visible");
+    else {
+      void notifyFocus("visibility-visible");
+      scheduleIfChanged();
+    }
   }));
   window.addEventListener("resize", renderCompletion);
   cleanups.push(() => {
@@ -726,12 +1400,14 @@ export function setupCopilot(context: Context): () => void {
     window.removeEventListener("pagehide", handlePageHide);
   });
 
-  schedule();
+  scheduleIfChanged();
 
   return () => {
     window.clearTimeout(timer);
+    window.clearTimeout(jumpTimer);
     notifyClose("dispose");
     cleanups.splice(0).forEach((cleanup) => cleanup());
+    jumpHint.remove();
     ghost.remove();
     style.remove();
   };
