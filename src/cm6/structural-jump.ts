@@ -3,7 +3,7 @@ import type { EditorView } from "@codemirror/view";
 import type { SyntaxNode } from "@lezer/common";
 
 import { scanInlineMathRanges } from "../inline-math.ts";
-import { getBlockMathRanges, rangeAtPosition } from "./math-ranges.ts";
+import { blockMathRangeAt } from "./math-ranges.ts";
 
 const MAX_SCOPE_CHARS = 16 * 1024;
 const BLOCK_NODE_NAMES = new Set([
@@ -31,7 +31,7 @@ function escapedAt(text: string, index: number): boolean {
 
 function jumpScope(view: EditorView, cursor: number): Scope {
   const state = view.state;
-  const display = rangeAtPosition(cursor, getBlockMathRanges(state));
+  const display = blockMathRangeAt(state, cursor);
   if (display) return boundedScope(display.contentFrom, display.contentTo, cursor, true);
 
   const line = state.doc.lineAt(cursor);
@@ -123,5 +123,69 @@ export function jumpStructuralDelimiter(view: EditorView, direction: 1 | -1): bo
   const target = structuralJumpTarget(view, direction);
   if (target == null || target === view.state.selection.main.head) return false;
   view.dispatch({ selection: { anchor: target }, scrollIntoView: true });
+  return true;
+}
+
+function texIdentifierCharacter(character: string): boolean {
+  return /[\p{L}\p{N}]/u.test(character);
+}
+
+/** Source-safe boundaries for the same command/group units MathLive displays. */
+export function texUnitBoundaries(source: string, baseOffset = 0): number[] {
+  const boundaries = new Set<number>([baseOffset, baseOffset + source.length]);
+  for (let position = 0; position < source.length;) {
+    const start = position;
+    const character = source[position]!;
+    if (/\s/.test(character)) {
+      while (position < source.length && /\s/.test(source[position]!)) position++;
+    } else if (character === "%" && !escapedAt(source, position)) {
+      const newline = source.indexOf("\n", position);
+      position = newline < 0 ? source.length : newline;
+    } else if (character === "\\") {
+      position++;
+      if (/[A-Za-z@]/.test(source[position] ?? "")) {
+        while (position < source.length && /[A-Za-z@]/.test(source[position]!)) position++;
+      } else if (position < source.length) {
+        position += Array.from(source.slice(position))[0]?.length ?? 1;
+      }
+    } else {
+      const codePoint = String.fromCodePoint(source.codePointAt(position)!);
+      if (texIdentifierCharacter(codePoint)) {
+        position += codePoint.length;
+        while (position < source.length) {
+          const next = String.fromCodePoint(source.codePointAt(position)!);
+          if (!texIdentifierCharacter(next)) break;
+          position += next.length;
+        }
+      } else {
+        position += codePoint.length;
+      }
+    }
+    boundaries.add(baseOffset + start);
+    boundaries.add(baseOffset + position);
+  }
+  return [...boundaries].sort((a, b) => a - b);
+}
+
+export function texUnitJumpTarget(view: EditorView, direction: 1 | -1): number | null {
+  const selection = view.state.selection.main;
+  const cursor = direction > 0 ? selection.to : selection.from;
+  const scope = jumpScope(view, cursor);
+  if (!scope.math) return null;
+  const boundaries = texUnitBoundaries(
+    view.state.doc.sliceString(scope.from, scope.to),
+    scope.from,
+  );
+  if (direction > 0) return boundaries.find((boundary) => boundary > cursor) ?? null;
+  for (let index = boundaries.length - 1; index >= 0; index--) {
+    if (boundaries[index]! < cursor) return boundaries[index]!;
+  }
+  return null;
+}
+
+export function jumpTexUnit(view: EditorView, direction: 1 | -1): boolean {
+  const target = texUnitJumpTarget(view, direction);
+  if (target == null || target === view.state.selection.main.head) return false;
+  view.dispatch({ selection: { anchor: target }, scrollIntoView: true, userEvent: "select" });
   return true;
 }

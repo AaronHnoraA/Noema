@@ -25,11 +25,13 @@ import type { Range } from "@codemirror/state";
 import { scanInlineMathRanges } from "../../../../inline-math.ts";
 import { renderMathHTML } from "../../../../math-render.ts";
 import {
+  blockMathRangeSpanning,
   getBlockMathRanges,
   rangeOverlapsAny,
   type BlockMathRange,
 } from "../../../math-ranges.ts";
 import { scanCodeRanges } from "../../../code-ranges.ts";
+import { scanTexSource, texTokenClass } from "../../../tex-highlight.ts";
 import { orgEnvContextForRange, type OrgEnvContext } from "./block-extras.ts";
 import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
 import { getKatexMacros } from "../../../../katex-macros.ts";
@@ -37,7 +39,6 @@ import {
   mountVisualTexDisplayEditor,
   mountVisualTexInlineEditor,
   normalizeVisualTexLatex,
-  preloadVisualTexInlineEditor,
   type VisualTexInlineEditor,
   type VisualTexInlineEntry,
   type VisualTexInlineMoveDirection,
@@ -114,8 +115,6 @@ class InlineMathWidget extends MeasuredWidget {
   ignoreEvent(): boolean { return false; }
 }
 
-type InlineMathMetrics = { width: number; height: number };
-
 type InlineMathEditSession = {
   id: number;
   from: number;
@@ -124,7 +123,6 @@ type InlineMathEditSession = {
   draft: string;
   externalDraft: boolean;
   entry: VisualTexInlineEntry;
-  metrics: InlineMathMetrics | null;
   editor: VisualTexInlineEditor | null;
   host: HTMLElement | null;
   onDraft: (latex: string) => void;
@@ -345,9 +343,11 @@ class BlockMathWidget extends MeasuredWidget {
   }
 
   eq(other: BlockMathWidget): boolean {
+    // `from`/`to` are deliberately excluded. They only feed the widget's
+    // debugging dataset — clicks resolve the live decoration position instead —
+    // and including them meant any edit earlier in the note made every visible
+    // formula unequal, so CodeMirror destroyed and re-rendered all of them.
     return this.tex === other.tex
-      && this.from === other.from
-      && this.to === other.to
       && this.orgEnv?.kind === other.orgEnv?.kind
       && this.orgEnv?.depth === other.orgEnv?.depth;
   }
@@ -403,7 +403,9 @@ function blockMathAtSelection(state: EditorState): BlockMathRange | null {
   // object, not asking to open MathLive and expose its source character by
   // character. Explicit clicks and cursor entry still use an empty selection.
   if (state.selection.ranges.length !== 1 || !state.selection.main.empty) return null;
-  return getBlockMathRanges(state).find((range) => rangeContainsSelection(state, range)) ?? null;
+  // Binary search, not a linear scan: this runs on every selection change.
+  const range = blockMathRangeSpanning(state, state.selection.main.from);
+  return range && rangeContainsSelection(state, range) ? range : null;
 }
 
 function blockSelectionEntry(state: EditorState, range: BlockMathRange): VisualTexInlineEntry {
@@ -429,6 +431,48 @@ function createBlockMathSession(state: EditorState, range: BlockMathRange): Bloc
   };
 }
 
+let texHighlightScans = 0;
+
+/**
+ * How many formulas have been tokenized for highlighting. Only the one formula
+ * currently revealed as source is ever scanned, and tests assert that the count
+ * does not grow with the number of formulas in the note.
+ */
+export function texHighlightScanCount(): number {
+  return texHighlightScans;
+}
+
+/**
+ * Syntax highlighting and rainbow brackets for the formula being edited.
+ *
+ * Deliberately attached here rather than as its own view plugin: this branch is
+ * the one place that already knows a formula is showing its TeX source, so the
+ * work is bounded to that formula and collapsed formulas never pay for it.
+ */
+function addTexHighlightDecos(
+  decos: Range<Decoration>[],
+  state: EditorState,
+  from: number,
+  to: number,
+): void {
+  if (to <= from) return;
+  texHighlightScans++;
+  for (const token of scanTexSource(state.doc.sliceString(from, to), from)) {
+    decos.push(Decoration.mark({ class: texTokenClass(token) }).range(token.from, token.to));
+  }
+}
+
+let blockMathDecoRangeVisits = 0;
+
+/**
+ * How many display formulas the decoration builder has looked at. Exposed so
+ * tests can assert that a windowed patch stays proportional to the window, not
+ * to the number of formulas in the note.
+ */
+export function blockMathDecoRangeVisitCount(): number {
+  return blockMathDecoRangeVisits;
+}
+
 function buildBlockMathDecoRanges(
   state: EditorState,
   from = 0,
@@ -437,9 +481,25 @@ function buildBlockMathDecoRanges(
   suppressedKey = "",
 ): Range<Decoration>[] {
   const decos: Range<Decoration>[] = [];
+  const ranges = getBlockMathRanges(state);
 
-  for (const range of getBlockMathRanges(state)) {
-    if (range.to < from || range.from > to) continue;
+  // Binary search to the first formula that can intersect the window. Scanning
+  // from index 0 made a one-formula patch cost one iteration per formula in the
+  // document, on every caret move.
+  let low = 0;
+  let high = ranges.length;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (ranges[mid]!.to < from) low = mid + 1;
+    else high = mid;
+  }
+
+  for (let index = low; index < ranges.length; index++) {
+    const range = ranges[index]!;
+    // Counted before the window test so the metric reflects scan work, not
+    // matches: a reintroduced full scan must show up here.
+    blockMathDecoRangeVisits++;
+    if (range.from > to) break;
     const tex = range.tex;
     const key = blockMathKey(range);
     const cursorInside = rangeContainsSelection(state, range);
@@ -467,6 +527,7 @@ function buildBlockMathDecoRanges(
       continue;
     }
     addActiveBlockSourceLineDecos(decos, state, range.from, range.to);
+    addTexHighlightDecos(decos, state, range.contentFrom, range.contentTo);
     // Visual editor fallback: reveal source with \[ \] syntax hints so the
     // existing floating KaTeX preview can take over.
     const raw = state.doc.sliceString(range.from, range.to);
@@ -484,17 +545,40 @@ function buildBlockMathDecoRanges(
   return decos;
 }
 
+let blockMathFullRebuilds = 0;
+
+/**
+ * How many times the whole document's display-math decorations were rebuilt.
+ * Exposed so tests can assert that ordinary editing and caret movement stay
+ * incremental instead of relying on wall-clock thresholds.
+ */
+export function blockMathFullRebuildCount(): number {
+  return blockMathFullRebuilds;
+}
+
 function buildBlockMathDecos(
   state: EditorState,
   active: BlockMathEditSession | null = null,
   suppressedKey = "",
 ): DecorationSet {
+  blockMathFullRebuilds++;
   return Decoration.set(buildBlockMathDecoRanges(state, 0, state.doc.length, active, suppressedKey), true);
 }
 
 function activeBlockMathKey(state: EditorState): string {
+  // Hot path: a single caret can only touch the formula that spans it, so this
+  // stays a binary search. A *range* selection touches every formula it
+  // overlaps — including ones it fully encloses, whose endpoints are outside
+  // any formula — so it has to scan. Range selections are not on the typing
+  // path, unlike caret movement.
+  if (state.selection.ranges.length === 1 && state.selection.main.empty) {
+    const range = blockMathRangeSpanning(state, state.selection.main.from);
+    return range && selectionTouchesRange(state, range.from, range.to)
+      ? blockMathKey(range)
+      : "";
+  }
   for (const range of getBlockMathRanges(state)) {
-    if (selectionTouchesRange(state, range.from, range.to)) return `${range.from}:${range.to}`;
+    if (selectionTouchesRange(state, range.from, range.to)) return blockMathKey(range);
   }
   return "";
 }
@@ -529,10 +613,12 @@ function mergeWindows(windows: Array<{ from: number; to: number }>): Array<{ fro
 function patchBlockMathDecosForSelectionChange(
   state: EditorState,
   current: DecorationSet,
-  oldKey: string,
-  newKey: string,
+  keys: readonly string[],
+  active: BlockMathEditSession | null = null,
+  suppressedKey = "",
 ): DecorationSet {
-  const windows = mergeWindows([oldKey, newKey]
+  const windows = mergeWindows(keys
+    .filter((key, index) => key && keys.indexOf(key) === index)
     .map(rangeFromKey)
     .filter((range): range is { from: number; to: number } => Boolean(range))
     .map((range) => blockMathWindow(state, range.from, range.to)));
@@ -542,7 +628,7 @@ function patchBlockMathDecosForSelectionChange(
   const add: Range<Decoration>[] = [];
   for (const range of windows) {
     next = next.update({ filterFrom: range.from, filterTo: range.to, filter: () => false });
-    add.push(...buildBlockMathDecoRanges(state, range.from, range.to));
+    add.push(...buildBlockMathDecoRanges(state, range.from, range.to, active, suppressedKey));
   }
   return next.update({ add, sort: true });
 }
@@ -638,7 +724,33 @@ const mathBlockField = StateField.define<BlockMathFieldValue>({
         : buildBlockMathDecos(tr.state, active, suppressedKey);
       return { decorations, active, suppressedKey };
     }
-    if (sessionTransition || value.suppressedKey || active) {
+    if (tr.docChanged && suppressedKey && !active) {
+      const ranges = getBlockMathRanges(tr.startState);
+      const nextRanges = getBlockMathRanges(tr.state);
+      // Source editing changes the suppressed range's numeric key on every
+      // keystroke. That is not a real session transition and must never rebuild
+      // every display-math widget in the document. Map all unaffected widgets
+      // and recreate only the formula window touched by this transaction.
+      const decorations = canMapBlockMathDecorations(ranges, nextRanges, tr.changes)
+        ? value.decorations.map(tr.changes)
+        : canPatchBlockMathDecorations(ranges, nextRanges, tr.changes)
+          ? patchBlockMathDecosNearChanges(
+            tr.state,
+            value.decorations.map(tr.changes),
+            ranges,
+            tr.changes,
+            active,
+            suppressedKey,
+          )
+          : buildBlockMathDecos(tr.state, active, suppressedKey);
+      return { decorations, active, suppressedKey };
+    }
+    // A session start/finish genuinely swaps a widget for an editor, so a full
+    // rebuild is proportionate there. `value.suppressedKey` used to be part of
+    // this condition, which meant that while any formula was revealed as source
+    // *every* caret movement rebuilt the decorations for every display formula
+    // in the note — the dominant source of typing lag in long documents.
+    if (active !== previousActive || finishedByEffect || fallbackByEffect || active !== null) {
       return {
         decorations: buildBlockMathDecos(tr.state, active, suppressedKey),
         active,
@@ -658,15 +770,28 @@ const mathBlockField = StateField.define<BlockMathFieldValue>({
           decorations.map(tr.changes),
           ranges,
           tr.changes,
+          active,
+          suppressedKey,
         );
       } else {
-        decorations = buildBlockMathDecos(tr.state);
+        decorations = buildBlockMathDecos(tr.state, active, suppressedKey);
       }
-    } else if (tr.selection != null) {
+    } else if (tr.selection != null || sessionTransition) {
+      // Only the formulas whose rendering actually changed: the one the caret
+      // left, the one it entered, and either side of a suppression change. When
+      // none of those keys moved there is nothing to repaint — a caret moving
+      // within one formula, or anywhere outside every formula, must not cost a
+      // filter-and-rebuild pass.
       const oldKey = activeBlockMathKey(tr.startState);
       const newKey = activeBlockMathKey(tr.state);
-      if (oldKey !== newKey) {
-        decorations = patchBlockMathDecosForSelectionChange(tr.state, decorations, oldKey, newKey);
+      if (oldKey !== newKey || value.suppressedKey !== suppressedKey) {
+        decorations = patchBlockMathDecosForSelectionChange(
+          tr.state,
+          decorations,
+          [oldKey, newKey, value.suppressedKey, suppressedKey],
+          active,
+          suppressedKey,
+        );
       }
     }
     return { decorations, active, suppressedKey };
@@ -674,9 +799,16 @@ const mathBlockField = StateField.define<BlockMathFieldValue>({
   provide: (f) => EditorView.decorations.from(f, (value) => value.decorations),
 });
 
+// CodeMirror reads the atomicRanges facet several times per cursor movement.
+// Rebuilding a set covering every display formula on each of those reads was a
+// per-keystroke O(formulas) allocation; one build per state is enough.
+const blockMathAtomicCache = new WeakMap<BlockMathFieldValue, DecorationSet>();
+
 const mathBlockAtomicExtension = EditorView.atomicRanges.of((view) => {
   const value = view.state.field(mathBlockField, false);
   if (!value) return Decoration.none;
+  const cached = blockMathAtomicCache.get(value);
+  if (cached) return cached;
   const ranges: Range<Decoration>[] = [];
   for (const range of getBlockMathRanges(view.state)) {
     const key = blockMathKey(range);
@@ -684,7 +816,9 @@ const mathBlockAtomicExtension = EditorView.atomicRanges.of((view) => {
     if (value.suppressedKey === key) continue;
     ranges.push(Decoration.mark({}).range(range.from, range.to));
   }
-  return Decoration.set(ranges, true);
+  const built = Decoration.set(ranges, true);
+  blockMathAtomicCache.set(value, built);
+  return built;
 });
 
 function canMapBlockMathDecorations(
@@ -729,6 +863,8 @@ function patchBlockMathDecosNearChanges(
   mapped: DecorationSet,
   oldRanges: readonly { from: number; to: number }[],
   changes: ChangeSet,
+  active: BlockMathEditSession | null = null,
+  suppressedKey = "",
 ): DecorationSet {
   let from = Number.POSITIVE_INFINITY;
   let to = 0;
@@ -747,7 +883,7 @@ function patchBlockMathDecosNearChanges(
   }
   return mapped
     .update({ filterFrom: from, filterTo: to, filter: () => false })
-    .update({ add: buildBlockMathDecoRanges(state, from, to), sort: true });
+    .update({ add: buildBlockMathDecoRanges(state, from, to, active, suppressedKey), sort: true });
 }
 
 function dispatchMathEditState(view: EditorView, active: boolean, kind: "inline" | "display"): void {
@@ -896,7 +1032,6 @@ class MathBlockPlugin {
   private pendingActivation = false;
 
   constructor(view: EditorView) {
-    preloadVisualTexInlineEditor();
     this.active = view.state.field(mathBlockField).active;
     if (this.active) dispatchMathEditState(view, true, "display");
     else this.scheduleSelectionActivation(view);
@@ -923,6 +1058,12 @@ class MathBlockPlugin {
     if (!next) this.scheduleSelectionActivation(update.view);
   }
 
+  /**
+   * Entering a display formula reveals its TeX source, exactly like clicking it
+   * and exactly like inline math. It used to mount a full MathLive editor here
+   * instead, so arrow-key entry and click entry ran two different lifecycles
+   * against the same formula.
+   */
   private scheduleSelectionActivation(view: EditorView): void {
     if (this.pendingActivation || view.state.readOnly) return;
     const field = view.state.field(mathBlockField, false);
@@ -933,7 +1074,14 @@ class MathBlockPlugin {
       this.pendingActivation = false;
       if (!view.dom.isConnected || view.state.field(mathBlockField, false)?.active) return;
       const current = blockMathAtSelection(view.state);
-      if (current) activateBlockMath(view, current.from, current.to, blockSelectionEntry(view.state, current));
+      if (!current) return;
+      if (view.state.field(mathBlockField, false)?.suppressedKey === blockMathKey(current)) return;
+      const cursor = view.state.selection.main.head;
+      this.revealRangeSource(
+        view,
+        current,
+        Math.max(0, Math.min(current.contentTo, cursor) - current.contentFrom),
+      );
     });
   }
 
@@ -1000,11 +1148,12 @@ export function activateBlockMath(
   const range = getBlockMathRanges(view.state)
     .find((candidate) => candidate.from === from && candidate.to === to);
   if (!range) return false;
-  view.dispatch({
-    selection: { anchor: range.from },
-    effects: startBlockMathSessionEffect.of({ from: range.from, to: range.to, entry }),
-  });
-  return true;
+  const sourceOffset = entry.kind === "end"
+    ? range.contentTo - range.contentFrom
+    : entry.kind === "source"
+      ? entry.offset
+      : 0;
+  return view.plugin(mathBlockSessionExtension)?.revealRangeSource(view, range, sourceOffset) ?? false;
 }
 
 // ---------------------------------------------------------------------------
@@ -1012,8 +1161,6 @@ export function activateBlockMath(
 // ---------------------------------------------------------------------------
 
 type InlineMathRange = { from: number; to: number; tex: string };
-
-let nextInlineMathSessionId = 1;
 
 function inlineMathRangesOnSelectionLines(state: EditorState): InlineMathRange[] {
   const selection = state.selection.main;
@@ -1055,23 +1202,6 @@ function inlineMathAtSelection(state: EditorState): InlineMathRange | null {
     .find((range) => rangeContainsSelection(state, range)) ?? null;
 }
 
-function selectionEntry(state: EditorState, range: InlineMathRange): VisualTexInlineEntry {
-  const selection = state.selection.main;
-  if (!selection.empty) return { kind: "all" };
-  if (selection.from <= range.from + 2) return { kind: "start" };
-  return { kind: "end" };
-}
-
-function staticInlineMathRect(view: EditorView, from: number, to: number): InlineMathMetrics | null {
-  const widgets = view.contentDOM.querySelectorAll<HTMLElement>(".cm-math-inline[data-cm-inline-math='static']");
-  for (const widget of widgets) {
-    if (Number(widget.dataset.cmSourceFrom) !== from || Number(widget.dataset.cmSourceTo) !== to) continue;
-    const rect = widget.getBoundingClientRect();
-    if (rect.width > 0 && rect.height > 0) return { width: rect.width, height: rect.height };
-  }
-  return null;
-}
-
 function buildInlineMathDecos(
   view: EditorView,
   active: InlineMathEditSession | null,
@@ -1093,7 +1223,11 @@ function buildInlineMathDecos(
 
       const selected = rangeContainsSelection(view.state, { from, to });
       const key = `${from}:${to}`;
-      if (selected && suppressedKey === key) continue;
+      if (selected && suppressedKey === key) {
+        decos.push(Decoration.mark({ class: "cm-math-inline-source" }).range(from, to));
+        addTexHighlightDecos(decos, view.state, from + 2, to - 2);
+        continue;
+      }
       const editing = active?.from === from
         && active.to === to
         && selected;
@@ -1120,13 +1254,11 @@ class MathInlinePlugin {
   private suppressedKey = "";
   private pendingCommit = false;
   private forceRebuild = false;
-  private pendingEntry: { key: string; entry: VisualTexInlineEntry } | null = null;
 
   constructor(view: EditorView) {
-    preloadVisualTexInlineEditor();
     const selected = inlineMathAtSelection(view.state);
     this.selectionKey = selected ? `${selected.from}:${selected.to}` : "";
-    if (selected && !view.state.readOnly) this.start(view, selected);
+    if (selected && !view.state.readOnly) this.suppressedKey = this.selectionKey;
     ({ decorations: this.decorations, atomicRanges: this.atomicRanges } = buildInlineMathDecos(
       view,
       this.active,
@@ -1183,7 +1315,7 @@ class MathInlinePlugin {
         rebuild = true;
       }
     } else if (!aborted && selected && !update.view.state.readOnly && nextSelectionKey !== this.suppressedKey) {
-      this.start(update.view, selected);
+      this.suppressedKey = nextSelectionKey;
       rebuild = true;
     }
 
@@ -1198,50 +1330,18 @@ class MathInlinePlugin {
     }
   }
 
-  private start(view: EditorView, range: InlineMathRange): void {
-    if (this.active) return;
-    const raw = view.state.doc.sliceString(range.from, range.to);
-    if (!raw.startsWith("\\(") || !raw.endsWith("\\)")) return;
-    const key = `${range.from}:${range.to}`;
-    const pendingEntry = this.pendingEntry?.key === key ? this.pendingEntry.entry : null;
-    this.pendingEntry = null;
-    const session: InlineMathEditSession = {
-      id: nextInlineMathSessionId++,
-      from: range.from,
-      to: range.to,
-      original: raw.slice(2, -2),
-      draft: normalizeVisualTexLatex(raw.slice(2, -2)),
-      externalDraft: false,
-      entry: pendingEntry ?? selectionEntry(view.state, range),
-      metrics: staticInlineMathRect(view, range.from, range.to),
-      editor: null,
-      host: null,
-      onDraft: (latex) => {
-        if (this.active === session) {
-          session.externalDraft = false;
-          session.draft = normalizeVisualTexLatex(latex);
-        }
-      },
-      onCommit: (direction) => this.commit(view, direction),
-      onUnavailable: (error) => this.abort(
-        view,
-        error instanceof Error ? error.message : "Visual formula editor unavailable",
-        true,
-      ),
-    };
-    this.active = session;
-    dispatchMathEditState(view, true, "inline");
-  }
-
   activate(
     view: EditorView,
     range: InlineMathRange,
     entry: VisualTexInlineEntry,
   ): boolean {
     if (this.active || view.state.readOnly) return false;
-    this.pendingEntry = { key: `${range.from}:${range.to}`, entry };
-    view.dispatch({ selection: { anchor: range.from + 2 } });
-    return true;
+    const sourceOffset = entry.kind === "end"
+      ? range.tex.length
+      : entry.kind === "source"
+        ? entry.offset
+        : 0;
+    return this.revealRangeSource(view, range, sourceOffset);
   }
 
   private scheduleCommit(view: EditorView): void {
@@ -1502,16 +1602,60 @@ export function formulaSourceRangeAtPosition(
   return null;
 }
 
-/** Toggle only the formula at the caret between MathLive and TeX source. */
+/** Reveal only the formula at the caret as TeX source. */
 export function toggleFormulaSourceAtSelection(view: EditorView): boolean {
   const block = view.plugin(mathBlockSessionExtension);
   const inline = view.plugin(mathInlineExtension);
   if (block?.revealSource(view) || inline?.revealSource(view)) return true;
-  if (block?.activateRevealedSource(view) || inline?.activateRevealedSource(view)) return true;
   return Boolean(block?.revealSelectedSource(view) || inline?.revealSelectedSource(view));
 }
 
 /** Reveal a known formula as source without first activating its CM6 editor. */
+export type FormulaWidgetRange = {
+  display: boolean;
+  from: number;
+  to: number;
+  contentFrom: number;
+  contentTo: number;
+};
+
+/**
+ * Resolve the formula a math widget currently stands for from its live document
+ * position.
+ *
+ * Widgets cache `data-cm-source-from/to` at `toDOM()` time, but the decoration
+ * set is deliberately *mapped* rather than rebuilt when an edit does not touch
+ * math — so those attributes go stale after any edit earlier in the note, and
+ * looking a formula up by them silently found nothing, making clicks on it do
+ * nothing at all.
+ */
+export function formulaRangeAtWidgetPosition(
+  state: EditorState,
+  position: number,
+): FormulaWidgetRange | null {
+  const block = blockMathRangeSpanning(state, position);
+  if (block) {
+    return {
+      display: true,
+      from: block.from,
+      to: block.to,
+      contentFrom: block.contentFrom,
+      contentTo: block.contentTo,
+    };
+  }
+  const line = state.doc.lineAt(Math.max(0, Math.min(position, state.doc.length)));
+  const inline = scanInlineMathRanges(line.text, line.from)
+    .find((range) => position >= range.from && position <= range.to);
+  if (!inline) return null;
+  return {
+    display: false,
+    from: inline.from,
+    to: inline.to,
+    contentFrom: inline.from + 2,
+    contentTo: inline.to - 2,
+  };
+}
+
 export function revealFormulaSource(
   view: EditorView,
   from: number,

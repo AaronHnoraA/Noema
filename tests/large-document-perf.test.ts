@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createEditor } from "../src/editor-api.ts";
 import { SnippetSession } from "../aaronnote/snippets.ts";
+import { blockMathDecoRangeVisitCount, blockMathFullRebuildCount, revealFormulaSource, texHighlightScanCount } from "../src/cm6/extensions/visual/widgets/math.ts";
 
 // Happy DOM is slower and noisier than WebKit, and the 5 MB syntax tree is
 // already fully parsed at editor creation, so absolute numbers are inflated and
@@ -106,6 +107,99 @@ describe("large-document bounded editing", () => {
     latencies.sort((a, b) => a - b);
     expect(latencies[Math.floor(latencies.length / 2)] ?? Infinity).toBeLessThan(BOUNDED_CEILING_MS);
     expect(session.active()).toBe(true);
+    editor.destroy();
+    host.remove();
+  }, 20_000);
+
+  test("editing revealed display source patches only its formula window", () => {
+    const formulaCount = 1_200;
+    const formulas = Array.from(
+      { length: formulaCount },
+      (_, index) => `section ${index}\n\\[\nx_${index}=y_${index}\n\\]`,
+    );
+    const document = formulas.join("\n\n");
+    const middle = Math.floor(formulaCount / 2);
+    const body = `x_${middle}=y_${middle}`;
+    const bodyFrom = document.indexOf(body);
+    const formulaFrom = document.lastIndexOf("\\[", bodyFrom);
+    const formulaTo = document.indexOf("\\]", bodyFrom) + 2;
+    const host = window.document.createElement("div");
+    window.document.body.append(host);
+    const editor = createEditor(host, { kernel: "cm6", initialContent: document });
+    expect(revealFormulaSource(editor.view, formulaFrom, formulaTo, 2)).toBe(true);
+
+    const latencies: number[] = [];
+    const position = bodyFrom + 2;
+    for (let index = 0; index < 9; index++) {
+      const started = performance.now();
+      editor.view.dispatch({
+        changes: { from: position, insert: "q" },
+        selection: { anchor: position + 1 },
+      });
+      editor.view.dispatch({
+        changes: { from: position, to: position + 1 },
+        selection: { anchor: position },
+      });
+      latencies.push(performance.now() - started);
+    }
+    latencies.sort((a, b) => a - b);
+    expect(latencies[Math.floor(latencies.length / 2)] ?? Infinity).toBeLessThan(120);
+    editor.destroy();
+    host.remove();
+  }, 20_000);
+
+  test("moving the caret inside revealed display source touches no other formula", () => {
+    const formulaCount = 1_200;
+    const formulas = Array.from(
+      { length: formulaCount },
+      (_, index) => `section ${index}\n\\[\nx_${index}=y_${index}\n\\]`,
+    );
+    const document = formulas.join("\n\n");
+    const middle = Math.floor(formulaCount / 2);
+    const body = `x_${middle}=y_${middle}`;
+    const bodyFrom = document.indexOf(body);
+    const formulaFrom = document.lastIndexOf("\\[", bodyFrom);
+    const formulaTo = document.indexOf("\\]", bodyFrom) + 2;
+    const host = window.document.createElement("div");
+    window.document.body.append(host);
+    const editor = createEditor(host, { kernel: "cm6", initialContent: document });
+    expect(revealFormulaSource(editor.view, formulaFrom, formulaTo, 2)).toBe(true);
+
+    // Pure selection transactions. While a formula was revealed these used to
+    // rebuild the decorations for every display formula in the note, so arrow
+    // keys cost the same as a full re-render.
+    const rebuildsBefore = blockMathFullRebuildCount();
+    const visitsBefore = blockMathDecoRangeVisitCount();
+    const highlightScansBefore = texHighlightScanCount();
+    for (let index = 0; index < 12; index++) {
+      editor.view.dispatch({ selection: { anchor: bodyFrom + 1 + (index % body.length) } });
+    }
+    expect(blockMathFullRebuildCount()).toBe(rebuildsBefore);
+    // Moving the caret within one revealed formula must not even look at the
+    // other 1_199: the window patch binary-searches to its own formula, and a
+    // move that changes no key skips the patch entirely.
+    expect(blockMathDecoRangeVisitCount() - visitsBefore).toBeLessThan(24);
+
+    // Highlighting only ever tokenizes the one revealed formula, so a caret
+    // move costs at most a constant number of scans regardless of how many
+    // formulas the note holds.
+    expect(texHighlightScanCount() - highlightScansBefore).toBeLessThan(24);
+
+    // The same must hold while editing that revealed source.
+    const position = bodyFrom + 2;
+    for (let index = 0; index < 6; index++) {
+      editor.view.dispatch({
+        changes: { from: position, insert: "q" },
+        selection: { anchor: position + 1 },
+      });
+      editor.view.dispatch({
+        changes: { from: position, to: position + 1 },
+        selection: { anchor: position },
+      });
+    }
+    expect(blockMathFullRebuildCount()).toBe(rebuildsBefore);
+    // 12 caret moves + 12 edits over a 1_200-formula note.
+    expect(texHighlightScanCount() - highlightScansBefore).toBeLessThan(64);
     editor.destroy();
     host.remove();
   }, 20_000);

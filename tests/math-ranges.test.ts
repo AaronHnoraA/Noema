@@ -2,6 +2,7 @@ import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 import { EditorState } from "@codemirror/state";
 
 import {
+  blockMathRangeAt,
   blockMathRangesExtension,
   blockMathRangesOverlapping,
   getBlockMathRanges,
@@ -49,6 +50,17 @@ describe("block math range queries", () => {
     expect(after.contentFrom).toBe(before.contentFrom);
     expect(after.contentTo).toBe(before.contentTo + 4);
     expect(after.tex).toBe("x + y");
+  });
+
+  test("finds the active display formula through the shared indexed boundary", () => {
+    const state = EditorState.create({
+      doc: "plain\n\\[\na\n\\]\nmiddle\n\\[\nb\n\\]\nend",
+      extensions: [blockMathRangesExtension],
+    });
+    const [first, second] = getBlockMathRanges(state);
+    expect(blockMathRangeAt(state, first!.contentFrom)).toBe(first);
+    expect(blockMathRangeAt(state, second!.contentTo)).toBe(second);
+    expect(blockMathRangeAt(state, state.doc.toString().indexOf("middle"))).toBeNull();
   });
 
   test("reuses unaffected math ranges and crops queries to viewport windows", () => {

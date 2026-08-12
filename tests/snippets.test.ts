@@ -60,6 +60,28 @@ class TextEditor {
 }
 
 describe("aaronnote snippets", () => {
+  test("exposes immutable pending tabstops for LiveTeX preview", () => {
+    const text = new TextEditor();
+    const session = new SnippetSession(text.asEditor());
+    expect(session.insert({
+      key: "preview",
+      name: "Preview",
+      mode: "tex-mode",
+      body: "${1}+$1+${2}$0",
+    })).toBe(true);
+
+    let preview = session.previewState();
+    expect(preview.stops.filter((stop) => stop.index === 1)).toHaveLength(2);
+    expect(preview.stops.filter((stop) => stop.active).every((stop) => stop.index === 1)).toBe(true);
+    expect(preview.stops.some((stop) => stop.mirror)).toBe(true);
+    expect(preview.stops.some((stop) => stop.index === 0)).toBe(false);
+
+    expect(session.next()).toBe(true);
+    preview = session.previewState();
+    expect(preview.stops.every((stop) => stop.index === 2)).toBe(true);
+    expect(preview.stops[0]?.active).toBe(true);
+  });
+
   test("ranks snippets after applying mode and kind filters", () => {
     const tex = Array.from({ length: 12 }, (_, index) => ({
       key: `a${index}`,
@@ -682,7 +704,7 @@ describe("aaronnote snippets", () => {
     }
   });
 
-  test("inline-math shortcut opens an empty formula directly without an x placeholder", () => {
+  test("inline-math shortcut reveals empty formula source without an x placeholder", () => {
     const mount = document.createElement("div");
     document.body.appendChild(mount);
     const editor = createEditor(mount);
@@ -697,7 +719,9 @@ describe("aaronnote snippets", () => {
 
       expect(editor.getMarkdown()).toBe("\\(\\) ");
       expect(editor.getSelection()).toEqual({ from: 2, to: 2 });
-      expect(mount.querySelector(".cm-math-inline-editor")).toBeTruthy();
+      expect(mount.querySelector(".cm-math-inline-editor")).toBeNull();
+      expect(mount.querySelector(".cm-math-inline")).toBeNull();
+      expect(mount.textContent).toContain("\\(\\)");
     } finally {
       editor.destroy();
       mount.remove();

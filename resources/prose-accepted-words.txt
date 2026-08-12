@@ -121,6 +121,7 @@ HMM
 homebrew
 homomorphism
 homotopy
+hyperedge
 hypergraph
 ibuffer
 icomplete

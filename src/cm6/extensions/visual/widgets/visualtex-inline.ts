@@ -50,6 +50,43 @@ export type VisualTexInlineEditor = {
   destroy(): void;
 };
 
+export type VisualTexPreviewPlaceholder = {
+  offset: number;
+  active?: boolean;
+  mirror?: boolean;
+};
+
+export type VisualTexPreviewState = {
+  latex: string;
+  display: boolean;
+  selection: { anchor: number; head: number };
+  placeholders: readonly VisualTexPreviewPlaceholder[];
+};
+
+export type VisualTexPreview = {
+  readonly ready: Promise<void>;
+  update(state: VisualTexPreviewState): void;
+  /** Stop all deferred synchronization while retaining the reusable field. */
+  suspend(): void;
+  destroy(): void;
+};
+
+export type VisualTexPreviewOptions = {
+  macros: Record<string, string>;
+  /**
+   * A frame has been rendered. `contentChanged` is false for caret-only
+   * updates, where the formula's size cannot have changed and the host can skip
+   * re-measuring it.
+   */
+  onRendered?: (contentChanged: boolean) => void;
+  onUnavailable?: (error: unknown) => void;
+  onSourcePosition?: (offset: number) => void;
+  /** Trailing source-to-MathLive synchronization delay, in milliseconds. */
+  syncIdleMs?: number;
+  /** Test/runtime injection; production shares the module-level lazy loader. */
+  loadMathLive?: () => Promise<typeof import("mathlive")>;
+};
+
 export type VisualTexMathCompletionRequest = {
   prefix: string;
   rect: { left: number; top: number; bottom: number };
@@ -582,6 +619,7 @@ function focusVisualTexField(field: MathfieldElement | null | undefined): void {
 
 export function createNoemaMathfield(
   Constructor: MathLiveModule["MathfieldElement"],
+  options: { readOnlyMirror?: boolean } = {},
 ): MathfieldElement {
   // Noema owns the only snippet index, popup, ranking and key handling used by
   // LiveTeX. MathLive warns when these are passed as public constructor
@@ -607,15 +645,20 @@ export function createNoemaMathfield(
     field.popoverPolicy = "off";
     field.environmentPopoverPolicy = "off";
   }, { once: true });
-  field.addEventListener("input", () => revealVisualTexCaret(field));
-  field.addEventListener("selection-change", () => revealVisualTexCaret(field));
-  field.addEventListener("focusin", () => revealVisualTexCaret(field));
+  if (!options.readOnlyMirror) {
+    // A mirror is never focused and never scrolled to its caret, so these would
+    // only schedule animation frames and walk the shadow tree for nothing — and
+    // a fresh set is attached every time a failed commit rebuilds the field.
+    field.addEventListener("input", () => revealVisualTexCaret(field));
+    field.addEventListener("selection-change", () => revealVisualTexCaret(field));
+    field.addEventListener("focusin", () => revealVisualTexCaret(field));
+  }
   // Every MathLive selection command calls Mathfield.scrollIntoView(). Its
   // default first calls host.scrollIntoView({ inline: "nearest" }), which can
   // drag a wide display formula and the entire CM6 page back to the formula's
   // left edge. Supplying this callback disables that page-level branch while
   // retaining MathLive's own internal caret scrolling below it.
-  field.onScrollIntoView = () => revealVisualTexCaret(field);
+  if (!options.readOnlyMirror) field.onScrollIntoView = () => revealVisualTexCaret(field);
   configureNoemaMathfield(field);
   return field;
 }
@@ -671,7 +714,7 @@ function visualTexMathfieldSourceOffset(field: MathfieldElement): number {
   return visualTexMathfieldRangeLatex(field, 0, field.position).length;
 }
 
-function visualTexMathfieldPositionFromSourceOffset(
+export function visualTexMathfieldPositionFromSourceOffset(
   field: MathfieldElement,
   sourceOffset: number,
 ): number {
@@ -687,6 +730,321 @@ function visualTexMathfieldPositionFromSourceOffset(
     if (nextDistance === 0) break;
   }
   return closest;
+}
+
+export type VisualTexPreviewDraft = {
+  latex: string;
+  caretOffset: number | null;
+  placeholders: readonly VisualTexPreviewPlaceholder[];
+  sourceOffset(offset: number, affinity?: "before" | "after"): number;
+};
+
+function visualTexControlSequenceAtOffset(source: string, offset: number): [number, number] | null {
+  let wordStart = offset;
+  while (wordStart > 0 && /[A-Za-z@]/.test(source[wordStart - 1] ?? "")) wordStart--;
+  if (wordStart > 0 && source[wordStart - 1] === "\\") {
+    const from = wordStart - 1;
+    let to = wordStart;
+    while (to < source.length && /[A-Za-z@]/.test(source[to] ?? "")) to++;
+    if (offset > from && offset < to) return [from, to];
+  }
+  if (offset > 0 && source[offset - 1] === "\\" && offset < source.length) {
+    return [offset - 1, Math.min(source.length, offset + 1)];
+  }
+  return null;
+}
+
+/** Keep a preview-only atom from splitting a TeX control sequence. */
+function visualTexPreviewSafeMarkerOffsetInSource(
+  source: string,
+  sourceOffset: number,
+  affinity: "before" | "after" = "after",
+): number {
+  const requested = Math.max(0, Math.min(source.length, sourceOffset));
+  let offset = requested;
+  const control = visualTexControlSequenceAtOffset(source, requested);
+  if (control) {
+    const [from, to] = control;
+    const midpoint = from + ((to - from) / 2);
+    offset = requested < midpoint || (requested === midpoint && affinity === "before") ? from : to;
+  }
+
+  // Inserting between a script operator and its operand would turn the marker
+  // into that operand. Snap to the operator boundary; source-side ^/_ helpers
+  // normally make this transient state disappear immediately.
+  let previous = offset - 1;
+  while (previous >= 0 && /\s/.test(source[previous] ?? "")) previous--;
+  if (source[previous] === "^" || source[previous] === "_") return previous;
+
+  // Delimiter commands consume the next token. Keep the marker on the far
+  // side of that token so \left( and friends continue to parse as one unit.
+  const prefix = source.slice(0, offset);
+  if (/\\(?:left|right|middle|big|Big|bigg|Bigg)[lr]?$/.test(prefix)) {
+    let next = offset;
+    while (next < source.length && /\s/.test(source[next] ?? "")) next++;
+    if (source[next] === "\\") {
+      const controlEnd = source.slice(next).match(/^\\(?:[A-Za-z@]+|.)/)?.[0].length ?? 1;
+      return Math.min(source.length, next + controlEnd);
+    }
+    return Math.min(source.length, next + (next < source.length ? 1 : 0));
+  }
+  return offset;
+}
+
+export function visualTexPreviewSafeMarkerOffset(
+  latex: string,
+  sourceOffset: number,
+  affinity: "before" | "after" = "after",
+): number {
+  return visualTexPreviewSafeMarkerOffsetInSource(
+    normalizeVisualTexLatex(latex),
+    sourceOffset,
+    affinity,
+  );
+}
+
+/** Keep preview metadata beside, never inside, the TeX source. */
+export function buildVisualTexPreviewDraft(
+  latex: string,
+  placeholders: readonly VisualTexPreviewPlaceholder[],
+  selection?: { anchor: number; head: number },
+): VisualTexPreviewDraft {
+  const source = normalizeVisualTexLatex(latex);
+  const grouped = new Map<number, {
+    active: boolean;
+    mirror: boolean;
+  }>();
+  for (const placeholder of placeholders) {
+    const offset = visualTexPreviewSafeMarkerOffsetInSource(
+      source,
+      Math.max(0, Math.min(source.length, placeholder.offset)),
+      "after",
+    );
+    const current = grouped.get(offset);
+    grouped.set(offset, {
+      active: Boolean(current?.active || placeholder.active),
+      mirror: Boolean(current?.mirror || placeholder.mirror),
+    });
+  }
+  const caretOffset = selection
+    ? visualTexPreviewSafeMarkerOffsetInSource(source, selection.head, "after")
+    : null;
+  return {
+    // Preview metadata must never be injected into the TeX stream. In
+    // particular, MathLive parses unknown commands as literal text while the
+    // user is deleting an incomplete `\\text{...}` group. Caret and snippet
+    // stops are drawn as host overlays after MathLive renders this exact value.
+    latex: source,
+    caretOffset,
+    placeholders: [...grouped.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([offset, marker]) => ({ offset, ...marker })),
+    sourceOffset(offset, _affinity = "after") {
+      return Math.max(0, Math.min(source.length, offset));
+    },
+  };
+}
+
+type VisualTexSourceToken = { value: string; from: number; to: number };
+
+/**
+ * Split TeX source into the units a rendered formula can point back at.
+ *
+ * Every unit is kept, including whitespace and the structural `_`/`^`/braces,
+ * because the alignment below decides what to skip by comparing against what
+ * MathLive actually produced. Dropping units here is what previously made the
+ * two sequences disagree on counts.
+ */
+function visualTexSourceTokens(source: string): VisualTexSourceToken[] {
+  const tokens: VisualTexSourceToken[] = [];
+  for (let position = 0; position < source.length;) {
+    const from = position;
+    const character = source[position]!;
+    if (character === "\\") {
+      position++;
+      if (/[A-Za-z@]/.test(source[position] ?? "")) {
+        while (position < source.length && /[A-Za-z@]/.test(source[position]!)) position++;
+      } else if (position < source.length) {
+        position += String.fromCodePoint(source.codePointAt(position)!).length;
+      }
+    } else {
+      position += String.fromCodePoint(source.codePointAt(position)!).length;
+    }
+    tokens.push({ value: source.slice(from, position), from, to: position });
+  }
+  return tokens;
+}
+
+/**
+ * The source unit a single MathLive atom stands for, or `null` when the atom is
+ * pure structure.
+ *
+ * `getValue(p - 1, p, "latex")` serializes exactly one atom. Leaves come back as
+ * their own literal source (`u`, `(`, `\in`, `\circ`), text-mode characters come
+ * back wrapped in `\text{…}`, and every structural atom — a group boundary, the
+ * `\bar` accent shell, the `\frac` shell, a `\left(…\right)` shell — comes back
+ * as the empty string. That gives a leaf stream in source order, which is the
+ * only faithful correspondence MathLive exposes: whole-value serialization is
+ * verbatim but useless for offsets, and any *range* serialization rebuilds the
+ * structures it partially covers (`_{i_a}` comes back as `_{i_{a}}`), which is
+ * what the previous prefix-based mapping was trying to match against.
+ */
+function visualTexAtomLeafValue(atomLatex: string): string | null {
+  const value = atomLatex.trim() === "" ? "" : atomLatex;
+  if (!value) return null;
+  const text = /^\\(?:text|textrm|textnormal|mbox)\{([\s\S]*)\}$/.exec(atomLatex);
+  if (text) return text[1] ?? null;
+  if (/^\\placeholder(\[[^\]]*\])?\{[\s\S]*\}$/.test(value)) return null;
+  return value;
+}
+
+/**
+ * How many source units a single leaf may skip past while looking for its own.
+ * One leaf is preceded by at most a short run of structure (`\left\lfloor`,
+ * `\frac`, `{`, `_`, `^`, whitespace); beyond that the leaf is treated as
+ * MathLive-synthesized and inherits the previous boundary.
+ */
+const VISUAL_TEX_ALIGNMENT_LOOKAHEAD = 32;
+
+/**
+ * Atom count past which the exact per-atom index is not worth a frame. A very
+ * large `align` environment would otherwise cost one serialization per atom on
+ * every commit; beyond this the mapping degrades to a proportional estimate and
+ * the overlay hides rather than stalling.
+ */
+const VISUAL_TEX_PREVIEW_INDEX_LIMIT = 1500;
+
+type VisualTexPreviewPositionIndex = {
+  source: string;
+  lastOffset: number;
+  /**
+   * Source offset each MathLive position maps to, monotone non-decreasing.
+   * Index `p` holds the end of the source unit rendered by the atom at `p`.
+   * Empty when `degraded` is set.
+   */
+  sourceOffsetAt: number[];
+  /** Formula too large to index exactly; positions fall back to a ratio. */
+  degraded: boolean;
+};
+
+/**
+ * Align MathLive's leaf-atom stream with the TeX source.
+ *
+ * Both sequences are in document order and every leaf is serialized as its own
+ * literal source, so this is an exact match with skipping — never a similarity
+ * score. A leaf only ever skips forward, which makes the whole map monotone:
+ * clicking further right can never resolve further left.
+ */
+function buildVisualTexPreviewPositionIndex(
+  field: MathfieldElement,
+  latex: string,
+): VisualTexPreviewPositionIndex {
+  const source = normalizeVisualTexLatex(latex);
+  if (field.lastOffset > VISUAL_TEX_PREVIEW_INDEX_LIMIT) {
+    return { source, lastOffset: field.lastOffset, sourceOffsetAt: [], degraded: true };
+  }
+  const tokens = visualTexSourceTokens(source);
+  const sourceOffsetAt: number[] = [0];
+  let tokenIndex = 0;
+  let matchedEnd = 0;
+  for (let position = 1; position <= field.lastOffset; position++) {
+    const leaf = visualTexAtomLeafValue(field.getValue(position - 1, position, "latex"));
+    if (leaf !== null) {
+      const limit = Math.min(tokens.length, tokenIndex + VISUAL_TEX_ALIGNMENT_LOOKAHEAD);
+      for (let candidate = tokenIndex; candidate < limit; candidate++) {
+        if (tokens[candidate]!.value === leaf) {
+          matchedEnd = tokens[candidate]!.to;
+          tokenIndex = candidate + 1;
+          break;
+        }
+      }
+    }
+    sourceOffsetAt.push(matchedEnd);
+  }
+  return { source, lastOffset: field.lastOffset, sourceOffsetAt, degraded: false };
+}
+
+/** Source offset the caret sits at when MathLive is at `position`. */
+function visualTexPreviewSourceOffsetFromIndex(
+  index: VisualTexPreviewPositionIndex,
+  position: number,
+): number {
+  if (position <= 0) return 0;
+  if (position >= index.lastOffset) return index.source.length;
+  if (index.degraded) {
+    return visualTexPreviewSafeMarkerOffsetInSource(
+      index.source,
+      Math.round((position / index.lastOffset) * index.source.length),
+      "after",
+    );
+  }
+  return index.sourceOffsetAt[position] ?? 0;
+}
+
+function visualTexPreviewPositionFromIndex(
+  index: VisualTexPreviewPositionIndex,
+  sourceOffset: number,
+): number {
+  const { source, lastOffset, sourceOffsetAt } = index;
+  const target = visualTexPreviewSafeMarkerOffsetInSource(source, sourceOffset, "after");
+  if (lastOffset <= 0 || target <= 0) return 0;
+  if (target >= source.length) return lastOffset;
+  if (index.degraded) return Math.round((target / source.length) * lastOffset);
+  // `sourceOffsetAt` is monotone: take the first position that has consumed the
+  // source up to the caret.
+  let low = 0;
+  let high = lastOffset;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if ((sourceOffsetAt[mid] ?? 0) < target) low = mid + 1;
+    else high = mid;
+  }
+  return low;
+}
+
+/** Map a CM6 source boundary to the MathLive position rendering it. */
+export function visualTexPreviewMathfieldPositionFromSourceOffset(
+  field: MathfieldElement,
+  latex: string,
+  sourceOffset: number,
+): number {
+  return visualTexPreviewPositionFromIndex(
+    buildVisualTexPreviewPositionIndex(field, latex),
+    sourceOffset,
+  );
+}
+
+/** Map a MathLive position back to the CM6 TeX boundary it renders. */
+export function visualTexPreviewSourceOffsetFromMathfieldPosition(
+  field: MathfieldElement,
+  latex: string,
+  position: number,
+): number {
+  return visualTexPreviewSourceOffsetFromIndex(
+    buildVisualTexPreviewPositionIndex(field, latex),
+    position,
+  );
+}
+
+/**
+ * `Mathfield.setValue()` defaults its insertion mode to whatever mode the
+ * current caret position happens to be in. A formula that momentarily contains
+ * an unterminated `\\text{` leaves that position in text mode, after which
+ * every later assignment is inserted as literal characters — the whole LaTeX
+ * source, backslashes and all, appears instead of a rendered formula, and the
+ * field stays stuck that way. A read-only mirror must never inherit an editing
+ * mode, so pin every assignment to math mode.
+ */
+export function setVisualTexPreviewValue(
+  field: Pick<MathfieldElement, "setValue">,
+  latex: string,
+): void {
+  field.setValue(latex, {
+    mode: "math",
+    format: "latex",
+    selectionMode: "after",
+    silenceNotifications: true,
+  });
 }
 
 function visualTexSnippetRangeValue(
@@ -1659,19 +2017,29 @@ export function initializeNoemaMathfield(
   field: NoemaMathfieldInitializationTarget,
   latex: string,
   macros: Record<string, string>,
+  // A mirror never receives input, so the snippet/undo machinery below is dead
+  // weight on it — and monkey-patching `field.insert` on a field nobody types
+  // into only widens the surface for a MathLive render to fail.
+  options: { readOnlyMirror?: boolean } = {},
 ): void {
   visualTexLastSourceSpaceBoundary.delete(field as object);
   visualTexSnippetSessions.delete(field as object);
   visualTexMathfieldSerializationStates.delete(field as object);
-  installVisualTexSnippetInsertAdapter(field as MathfieldElement);
-  installVisualTexHistoryInputBridge(field as MathfieldElement);
+  if (!options.readOnlyMirror) {
+    installVisualTexSnippetInsertAdapter(field as MathfieldElement);
+    installVisualTexHistoryInputBridge(field as MathfieldElement);
+  }
   field.macros = {
     ...visualTexMathLiveMacros(macros),
     [VISUAL_TEX_SOURCE_SPACE_MACRO_NAME]: VISUAL_TEX_SOURCE_SPACE_MACRO,
     [VISUAL_TEX_SNIPPET_START_MACRO_NAME]: VISUAL_TEX_SNIPPET_MARKER_MACRO,
     [VISUAL_TEX_SNIPPET_END_MACRO_NAME]: VISUAL_TEX_SNIPPET_MARKER_MACRO,
   };
-  field.setValue(normalizeVisualTexLatex(latex), { selectionMode: "after" });
+  // `mode` is deliberate: without it MathLive inherits the mode of whatever
+  // position the field's caret currently sits in, which turns a reused field
+  // into a literal-text renderer once a `\text{` group has been open.
+  field.setValue(normalizeVisualTexLatex(latex), { mode: "math", selectionMode: "after" });
+  if (options.readOnlyMirror) return;
   field.resetUndo();
   // resetUndo() removes MathLive's setValue snapshot as well as stale history.
   // Seed the clean parsed value again so the very first user edit can undo to
@@ -2520,6 +2888,441 @@ function createVisualTexQuickbar(
   return {
     element: bar,
     setStatus: (nextStatus) => { state.textContent = nextStatus; },
+  };
+}
+
+function installVisualTexPreviewShadowStyles(field: MathfieldElement): void {
+  const root = field.shadowRoot;
+  if (!root || root.querySelector("style[data-noema-livetex-preview]")) return;
+  const style = document.createElement("style");
+  style.dataset.noemaLivetexPreview = "true";
+  style.textContent = `
+    [part='placeholder'],
+    .ML__placeholder {
+      min-width: 0.58em;
+      border-radius: 2px;
+      outline: 1px dashed rgb(130 184 214 / 62%);
+      background: rgb(130 184 214 / 13%);
+    }
+    [data-noema-preview-active='true'] [part='placeholder'],
+    [data-noema-preview-active='true'].ML__placeholder,
+    [data-noema-preview-active='true'] .ML__placeholder {
+      outline: 1px solid rgb(239 91 135 / 85%);
+      background: rgb(239 91 135 / 20%);
+    }
+  `;
+  root.append(style);
+}
+
+type VisualTexPreviewOverlayGeometry = {
+  left: number;
+  top: number;
+  height: number;
+};
+
+/**
+ * `hostRect` is passed in rather than read here: this runs once per snippet
+ * stop plus once for the caret, and reading the host's box inside the loop cost
+ * a forced layout per marker.
+ */
+function visualTexPreviewOverlayGeometry(
+  field: MathfieldElement,
+  hostRect: DOMRect,
+  sourceOffset: number,
+  positionIndex: VisualTexPreviewPositionIndex,
+): VisualTexPreviewOverlayGeometry | null {
+  if (positionIndex.degraded) return null;
+  if (field.lastOffset <= 0) {
+    const fieldRect = field.getBoundingClientRect();
+    return {
+      left: fieldRect.left - hostRect.left,
+      top: fieldRect.top - hostRect.top,
+      height: Math.max(12, fieldRect.height),
+    };
+  }
+  const target = Math.max(0, Math.min(positionIndex.source.length, sourceOffset));
+  const position = visualTexPreviewPositionFromIndex(positionIndex, target);
+  const infoPosition = position <= 0 ? 1 : Math.min(field.lastOffset, position);
+  const info = field.getElementInfo(infoPosition);
+  const bounds = info?.bounds;
+  if (!bounds) return null;
+  const mappedSourceOffset = visualTexPreviewSourceOffsetFromIndex(positionIndex, position);
+  return {
+    // A serialized prefix longer than the requested source prefix means the
+    // nearest MathLive atom lies after the CM6 caret (not before it).
+    left: (position <= 0 || mappedSourceOffset > target ? bounds.left : bounds.right) - hostRect.left,
+    top: bounds.top - hostRect.top,
+    height: Math.max(12, bounds.height),
+  };
+}
+
+/**
+ * Trailing merge for source→MathLive synchronization. Short on purpose: after
+ * the O(n) alignment index replaced the old O(n²) one, a single commit is
+ * cheap, so this only needs to collapse a burst of keystrokes.
+ */
+const VISUAL_TEX_PREVIEW_SYNC_MS = 40;
+
+let visualTexPreviewRecoveries = 0;
+
+/**
+ * How many times a preview commit failed verification and had to be re-applied
+ * or rebuilt. Ordinary editing must never increment this; tests assert that.
+ */
+export function visualTexPreviewRecoveryCount(): number {
+  return visualTexPreviewRecoveries;
+}
+
+/** A focus-free MathLive mirror for the CM6 source caret and snippet fields. */
+export function mountVisualTexPreview(
+  host: HTMLElement,
+  options: VisualTexPreviewOptions,
+): VisualTexPreview {
+  let destroyed = false;
+  let suspended = false;
+  let Constructor: MathLiveModule["MathfieldElement"] | null = null;
+  let field: MathfieldElement | null = null;
+  let pending: VisualTexPreviewState | null = null;
+  let pendingKey = "";
+  let valueKey = "";
+  let renderedDraft: VisualTexPreviewDraft | null = null;
+  let positionIndex: VisualTexPreviewPositionIndex | null = null;
+  let renderFrame = 0;
+  let syncTimer = 0;
+  let awaitingCommitVerification = false;
+  let commitAttempts = 0;
+  let removePointerListener = (): void => {};
+  const placeholderLayer = document.createElement("div");
+  placeholderLayer.className = "noema-visualtex-preview-placeholders";
+  const caret = document.createElement("div");
+  caret.className = "noema-visualtex-preview-caret";
+  caret.hidden = true;
+
+  const cancelScheduledSync = (): void => {
+    window.clearTimeout(syncTimer);
+    syncTimer = 0;
+  };
+
+  const replaceField = (latex: string, display: boolean): MathfieldElement => {
+    if (!Constructor) throw new Error("MathLive MathfieldElement is unavailable in this runtime");
+    const next = createNoemaMathfield(Constructor);
+    next.className = "noema-visualtex-preview-field";
+    next.classList.toggle("is-display", display);
+    next.readOnly = true;
+    next.tabIndex = -1;
+    next.setAttribute("aria-label", "LiveTeX 跟随预览");
+    next.setAttribute("aria-readonly", "true");
+    next.onScrollIntoView = () => {};
+    next.addEventListener("mount", () => installVisualTexPreviewShadowStyles(next), { once: true });
+    // Initialize the detached field exactly once. Appending an empty field and
+    // immediately calling setValue() again can race MathLive's WebKit render
+    // queue and leave its temporary LaTeX source layer visible.
+    initializeNoemaMathfield(next, latex, options.macros, { readOnlyMirror: true });
+    field = next;
+    positionIndex = null;
+    host.replaceChildren(next, placeholderLayer, caret);
+    next.blur();
+    installVisualTexPreviewShadowStyles(next);
+    return next;
+  };
+
+  // Both the click mapping and the overlay read the same alignment between the
+  // rendered atom tree and the CM6 source. It is rebuilt only when the value
+  // MathLive actually holds changes, never per caret move.
+  const ensurePositionIndex = (active: MathfieldElement): VisualTexPreviewPositionIndex | null => {
+    const latex = renderedDraft?.latex ?? (valueKey || null);
+    if (latex === null) return null;
+    if (!positionIndex
+      || positionIndex.source !== latex
+      || positionIndex.lastOffset !== active.lastOffset) {
+      positionIndex = buildVisualTexPreviewPositionIndex(active, latex);
+    }
+    return positionIndex;
+  };
+
+  const handledPointerEvents = new WeakSet<Event>();
+  const onPointerDown = (event: PointerEvent): void => {
+    const active = field;
+    if (event.button > 0 || handledPointerEvents.has(event)
+      || suspended || !active || !pending || !options.onSourcePosition) return;
+    handledPointerEvents.add(event);
+    event.preventDefault();
+    event.stopPropagation();
+    const index = ensurePositionIndex(active);
+    if (!index) return;
+    const position = Math.max(0, Math.min(active.lastOffset, active.getOffsetFromPoint(
+      event.clientX,
+      event.clientY,
+      { bias: 0 },
+    )));
+    options.onSourcePosition(visualTexPreviewSourceOffsetFromIndex(index, position));
+  };
+
+  const updateOverlay = (active: MathfieldElement): void => {
+    caret.hidden = true;
+    if (!renderedDraft) return;
+    const mapping = ensurePositionIndex(active);
+    if (!mapping) return;
+    if (mapping.degraded) {
+      // No exact geometry for a formula this large; drawing an approximate
+      // caret over it would be worse than drawing none.
+      placeholderLayer.replaceChildren();
+      return;
+    }
+    // One layout read for the whole overlay pass.
+    const hostRect = host.getBoundingClientRect();
+    const markers = renderedDraft.placeholders;
+    while (placeholderLayer.childElementCount < markers.length) {
+      const marker = document.createElement("div");
+      marker.className = "noema-visualtex-preview-placeholder";
+      placeholderLayer.append(marker);
+    }
+    while (placeholderLayer.childElementCount > markers.length) {
+      placeholderLayer.lastElementChild?.remove();
+    }
+    markers.forEach((marker, index) => {
+      const element = placeholderLayer.children[index] as HTMLElement;
+      const geometry = visualTexPreviewOverlayGeometry(active, hostRect, marker.offset, mapping);
+      element.hidden = !geometry;
+      element.classList.toggle("is-active", Boolean(marker.active));
+      element.classList.toggle("is-mirror", Boolean(marker.mirror));
+      if (!geometry) return;
+      element.style.left = `${Math.round(geometry.left)}px`;
+      element.style.top = `${Math.round(geometry.top)}px`;
+      element.style.height = `${Math.max(12, Math.round(geometry.height))}px`;
+    });
+    if (renderedDraft.caretOffset === null) return;
+    const geometry = visualTexPreviewOverlayGeometry(
+      active,
+      hostRect,
+      renderedDraft.caretOffset,
+      mapping,
+    );
+    if (!geometry) return;
+    caret.style.left = `${Math.round(geometry.left)}px`;
+    caret.style.top = `${Math.round(geometry.top)}px`;
+    caret.style.height = `${Math.max(12, Math.round(geometry.height))}px`;
+    caret.hidden = false;
+  };
+
+  /**
+   * Whether MathLive actually holds the value it was last given.
+   *
+   * It does not always. `setValue(…, { insertionMode: "replaceAll" })` can leave
+   * an atom from the previous content behind — an accent whose argument was
+   * still being typed is the reproducible case: after `sssss\bar` → `sssss`,
+   * `getValue()` comes back as `sssss\bar`, so the stray overline stays on
+   * screen forever. Clearing the field first, collapsing the selection, or
+   * selecting all before the assignment all fail to dislodge it; only a fresh
+   * element does. `mathfield.dirty` is checked alongside because
+   * `requestUpdate()` refuses to schedule any repaint while it is set and only
+   * clears it at the very end of `render()`, so an interrupted render freezes
+   * the DOM the same way.
+   */
+  const commitLooksApplied = (active: MathfieldElement): boolean => {
+    if (Boolean((active as unknown as { _mathfield?: { dirty?: boolean } })._mathfield?.dirty)) {
+      return false;
+    }
+    // Compare ignoring whitespace and MathLive's synthesized placeholders: an
+    // over-strict check would rebuild the field on ordinary input, which is
+    // worse than the fault it guards against.
+    const collapse = (value: string): string => (
+      stripVisualTexPlaceholders(normalizeVisualTexLatex(value)).replace(/\s+/g, "")
+    );
+    return collapse(active.getValue("latex")) === collapse(valueKey);
+  };
+
+  /**
+   * Rebuild the mirror around the value that failed to apply. Nothing short of
+   * a new element recovers the cases above, so there is no point retrying the
+   * assignment first; the second attempt only exists to stop a loop if even a
+   * fresh field disagrees.
+   */
+  const recoverPreviewField = (): boolean => {
+    // Giving up must still leave a usable frame: the caller falls through to
+    // the overlay and onRendered() so the pop is at least placed and sized.
+    if (commitAttempts >= 2) return false;
+    visualTexPreviewRecoveries++;
+    commitAttempts++;
+    positionIndex = null;
+    replaceField(valueKey, pending?.display ?? false);
+    awaitingCommitVerification = true;
+    notifyRendered();
+    return true;
+  };
+
+  const notifyRendered = (): void => {
+    window.cancelAnimationFrame(renderFrame);
+    renderFrame = window.requestAnimationFrame(() => {
+      renderFrame = 0;
+      if (destroyed || suspended || !field || !pending) return;
+      const contentChanged = awaitingCommitVerification;
+      if (awaitingCommitVerification) {
+        awaitingCommitVerification = false;
+        if (!commitLooksApplied(field) && recoverPreviewField()) return;
+      }
+      try {
+        updateOverlay(field);
+        options.onRendered?.(contentChanged);
+      } catch {
+        // Incomplete source is normal while typing/deleting. Keep the last
+        // MathLive frame alive even if that transient atom tree has no stable
+        // geometry for an overlay yet.
+        caret.hidden = true;
+        placeholderLayer.replaceChildren();
+        options.onRendered?.(contentChanged);
+      }
+    });
+  };
+
+  const render = (state: VisualTexPreviewState): void => {
+    const active = field;
+    if (!active || destroyed || suspended) return;
+    cancelScheduledSync();
+    const draft = buildVisualTexPreviewDraft(state.latex, state.placeholders, state.selection);
+    renderedDraft = draft;
+    try {
+      active.classList.toggle("is-display", state.display);
+      if (draft.latex !== valueKey) {
+        setVisualTexPreviewValue(active, draft.latex);
+        positionIndex = null;
+        valueKey = draft.latex;
+        awaitingCommitVerification = true;
+        commitAttempts = 0;
+      }
+      installVisualTexPreviewShadowStyles(active);
+      notifyRendered();
+    } catch (error) {
+      options.onUnavailable?.(error);
+    }
+  };
+
+  const scheduleRender = (): void => {
+    if (!field || !pending || destroyed || suspended) return;
+    cancelScheduledSync();
+    window.cancelAnimationFrame(renderFrame);
+    renderFrame = 0;
+    // The overlay belongs to the rendered atom tree, not the newer CM6 text.
+    // Hide it during the short synchronization window instead of showing a
+    // caret or snippet stop at a stale position.
+    caret.hidden = true;
+    placeholderLayer.replaceChildren();
+    const delay = Math.max(0, options.syncIdleMs ?? VISUAL_TEX_PREVIEW_SYNC_MS);
+    if (delay === 0) {
+      render(pending);
+      return;
+    }
+    // A short trailing merge, nothing more. An additional requestIdleCallback
+    // hop used to sit here; on a busy page it deferred the commit long after
+    // typing stopped and raced suspend(), which read as "the preview lags".
+    syncTimer = window.setTimeout(() => {
+      syncTimer = 0;
+      if (!destroyed && !suspended && pending) render(pending);
+    }, delay);
+  };
+
+  const ready = (options.loadMathLive?.() ?? loadMathLive())
+    .then((module) => {
+      if (destroyed) return;
+      Constructor = module.MathfieldElement;
+      if (!Constructor) throw new Error("MathLive MathfieldElement is unavailable in this runtime");
+      Constructor.locale = "zh-cn";
+      host.addEventListener("pointerdown", onPointerDown, true);
+      // happy-dom and a few older WebKit event paths omit target-phase capture;
+      // the bubble registration is a no-op in current WebKit because capture
+      // stops propagation first, but keeps the adapter robust in those hosts.
+      host.addEventListener("pointerdown", onPointerDown, false);
+      removePointerListener = () => {
+        host.removeEventListener("pointerdown", onPointerDown, true);
+        host.removeEventListener("pointerdown", onPointerDown, false);
+      };
+      if (pending && !suspended) {
+        renderedDraft = buildVisualTexPreviewDraft(
+          pending.latex,
+          pending.placeholders,
+          pending.selection,
+        );
+        replaceField(renderedDraft.latex, pending.display);
+        valueKey = renderedDraft.latex;
+        notifyRendered();
+      } else if (!suspended) {
+        replaceField("", false);
+      }
+    })
+    .catch((error) => {
+      if (!destroyed && !suspended) options.onUnavailable?.(error);
+    });
+
+  return {
+    ready,
+    update(state) {
+      if (destroyed) return;
+      const wasSuspended = suspended;
+      suspended = false;
+      const nextPendingKey = `${state.display ? "display" : "inline"}\n${state.latex}\n${state.selection.head}\n${state.placeholders.map((placeholder) => (
+        `${placeholder.offset}:${placeholder.active ? 1 : 0}:${placeholder.mirror ? 1 : 0}`
+      )).join(",")}`;
+      if (nextPendingKey === pendingKey) {
+        if (field && !syncTimer) notifyRendered();
+        return;
+      }
+      pendingKey = nextPendingKey;
+      pending = {
+        ...state,
+        selection: { ...state.selection },
+        placeholders: state.placeholders.map((placeholder) => ({ ...placeholder })),
+      };
+      if (!field && Constructor) {
+        renderedDraft = buildVisualTexPreviewDraft(
+          pending.latex,
+          pending.placeholders,
+          pending.selection,
+        );
+        replaceField(renderedDraft.latex, pending.display);
+        valueKey = renderedDraft.latex;
+        notifyRendered();
+        return;
+      }
+      if (field) {
+        const nextLatex = normalizeVisualTexLatex(pending.latex);
+        if (wasSuspended || !valueKey || nextLatex === valueKey) {
+          cancelScheduledSync();
+          render(pending);
+        } else {
+          scheduleRender();
+        }
+      }
+    },
+    suspend() {
+      if (destroyed || suspended) return;
+      suspended = true;
+      window.cancelAnimationFrame(renderFrame);
+      cancelScheduledSync();
+      renderFrame = 0;
+      pending = null;
+      pendingKey = "";
+      renderedDraft = null;
+      positionIndex = null;
+      caret.hidden = true;
+      placeholderLayer.replaceChildren();
+      field?.blur();
+    },
+    destroy() {
+      destroyed = true;
+      suspended = true;
+      window.cancelAnimationFrame(renderFrame);
+      cancelScheduledSync();
+      removePointerListener();
+      removePointerListener = () => {};
+      field?.blur();
+      field = null;
+      pending = null;
+      renderedDraft = null;
+      positionIndex = null;
+      pendingKey = "";
+      valueKey = "";
+      host.replaceChildren();
+    },
   };
 }
 

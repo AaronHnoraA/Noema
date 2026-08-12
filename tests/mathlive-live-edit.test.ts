@@ -6,20 +6,31 @@ import { MathfieldElement } from "../node_modules/mathlive/mathlive.mjs";
 import {
   advanceVisualTexNavigation,
   applyVisualTexCompletionTemplate,
+  buildVisualTexPreviewDraft,
   createNoemaMathfield,
   initializeNoemaMathfield,
   insertVisualTexNaturalSpace,
   insertVisualTexInlineRow,
+  mountVisualTexPreview,
   normalizeVisualTexMathLiveOutput,
   requestVisualTexSnippetBoundaryHandoff,
   revealVisualTexCaretHorizontally,
   selectAllVisualTexMathfield,
   visualTexCompletionPrefix,
   visualTexMathfieldLatex,
+  visualTexPreviewSourceOffsetFromMathfieldPosition,
+  visualTexPreviewSafeMarkerOffset,
+  visualTexPreviewMathfieldPositionFromSourceOffset,
+  setVisualTexPreviewValue,
+  visualTexPreviewRecoveryCount,
   visualTexMathBottomLeftInsets,
   visualTexMathfieldTypedText,
 } from "../src/cm6/extensions/visual/widgets/visualtex-inline.ts";
 import { mathLiveSnippetTemplate } from "../aaronnote/snippets.ts";
+
+function nextAnimationFrame(): Promise<void> {
+  return new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
+}
 
 describe("LiveTeX custom macro writeback", () => {
   afterEach(() => {
@@ -67,6 +78,552 @@ describe("LiveTeX custom macro writeback", () => {
     expect(field.popoverPolicy).toBe("off");
     expect(field.environmentPopoverPolicy).toBe("off");
     expect(field.onInlineShortcut(field, "bra")).toBe("");
+  });
+
+  test("keeps preview overlays out of source while retaining cursor offsets", () => {
+    const draft = buildVisualTexPreviewDraft("a+b", [
+      { offset: 1, active: true },
+      { offset: 1, active: true, mirror: true },
+      { offset: 3 },
+    ]);
+
+    expect(draft.latex).toBe("a+b");
+    expect(draft.latex).not.toContain("noema-preview");
+    expect(draft.placeholders).toEqual([
+      { offset: 1, active: true, mirror: true },
+      { offset: 3, active: false, mirror: false },
+    ]);
+    expect(draft.sourceOffset(1, "before")).toBe(1);
+    expect(draft.sourceOffset(1, "after")).toBe(1);
+    expect(draft.sourceOffset(2, "after") - draft.sourceOffset(1, "after")).toBe(1);
+  });
+
+  test("tracks the preview caret without selecting or rewriting MathLive", () => {
+    const source = String.raw`T_{(G-F)^\circ}+sss`;
+    const draft = buildVisualTexPreviewDraft(source, [], {
+      anchor: source.length,
+      head: source.length,
+    });
+    expect(draft.latex).toBe(source);
+    expect(draft.caretOffset).toBe(source.length);
+
+    const field = new MathfieldElement();
+    patchHappyDomMathfieldHostSelector(field);
+    document.body.append(field);
+    initializeNoemaMathfield(field, draft.latex, {});
+    expect(field.getValue("latex-expanded")).toContain("sss");
+    expect(field.getValue("latex-expanded")).not.toContain("noema-preview");
+    expect(document.activeElement).not.toBe(field);
+  });
+
+  function mountPreviewMathfield(source: string): InstanceType<typeof MathfieldElement> {
+    const field = new MathfieldElement();
+    patchHappyDomMathfieldHostSelector(field);
+    document.body.append(field);
+    initializeNoemaMathfield(field, source, {});
+    return field;
+  }
+
+  test("maps every MathLive position onto an exact TeX source boundary", () => {
+    const sources = [
+      String.raw`T_{(G-F)^\circ}+sss`,
+      String.raw`\bar u_{i_a}^{(a)}\in\bar U_{a,1}`,
+      String.raw`\text{ asdasd} \frac{asdas}{b}`,
+      String.raw`\left(\frac{a+b}{c}\right)^2`,
+      "sssssss",
+    ];
+    for (const source of sources) {
+      const field = mountPreviewMathfield(source);
+      let previous = 0;
+      for (let position = 0; position <= field.lastOffset; position++) {
+        const offset = visualTexPreviewSourceOffsetFromMathfieldPosition(field, source, position);
+        // Never lands mid-command and never walks backwards.
+        expect(offset).toBeGreaterThanOrEqual(previous);
+        expect(offset).toBeLessThanOrEqual(source.length);
+        expect(visualTexPreviewSafeMarkerOffset(source, offset, "after")).toBe(offset);
+        previous = offset;
+      }
+    }
+  });
+
+  test("round-trips every rendered leaf between source and MathLive", () => {
+    // Each leaf's own source unit: clicking it must resolve to the boundary
+    // right after that unit, and asking for that boundary must come back to the
+    // same MathLive position.
+    // Offsets are spelled out rather than searched for: several of these units
+    // repeat inside the formula, which is exactly the case being pinned down.
+    const cases: Array<[source: string, ends: number[]]> = [
+      // \bar u_{i_a}^{(a)}\in\bar U_{a,1}
+      //          u=6 i=9 a=11 (=15 a=16 )=17 \in=21 U=27 a=30 ,=31 1=32
+      [String.raw`\bar u_{i_a}^{(a)}\in\bar U_{a,1}`, [6, 9, 11, 15, 16, 17, 21, 27, 30, 31, 32]],
+      // T_{(G-F)^\circ}+sss
+      [String.raw`T_{(G-F)^\circ}+sss`, [1, 4, 5, 6, 7, 8, 14, 16, 17, 18, 19]],
+      // \left(\frac{a+b}{c}\right)^2
+      [String.raw`\left(\frac{a+b}{c}\right)^2`, [13, 14, 15, 18, 28]],
+    ];
+    for (const [source, ends] of cases) {
+      const field = mountPreviewMathfield(source);
+      for (const target of ends) {
+        const position = visualTexPreviewMathfieldPositionFromSourceOffset(field, source, target);
+        expect(
+          visualTexPreviewSourceOffsetFromMathfieldPosition(field, source, position),
+        ).toBe(target);
+      }
+    }
+  });
+
+  test("resolves repeated identifiers to their own occurrence", () => {
+    // `u` and `U` both follow a `\bar`, and `a` occurs four times. The previous
+    // similarity-based mapping picked whichever occurrence scored best, which is
+    // what made preview clicks land in a different branch of the formula.
+    const source = String.raw`\bar u_{i_a}^{(a)}\in\bar U_{a,1}`;
+    const field = mountPreviewMathfield(source);
+    // the `u`, the `a` inside `^{(a)}`, the `U`, the `a` inside `_{a,1}`
+    const offsets = [6, 16, 27, 30];
+    const positions = offsets.map((offset) => (
+      visualTexPreviewMathfieldPositionFromSourceOffset(field, source, offset)
+    ));
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
+    expect(new Set(positions).size).toBe(positions.length);
+    positions.forEach((position, index) => {
+      expect(visualTexPreviewSourceOffsetFromMathfieldPosition(field, source, position))
+        .toBe(offsets[index]);
+    });
+  });
+
+  test("snaps the overlay caret without ever splitting a control word", () => {
+    const source = String.raw`E\setminus F=\varnothing`;
+    const insideSetminus = source.indexOf("setminus") + 3;
+    const draft = buildVisualTexPreviewDraft(source, [], {
+      anchor: insideSetminus,
+      head: insideSetminus,
+    });
+
+    expect(draft.latex).toBe(source);
+    expect([source.indexOf(String.raw`\setminus`), source.indexOf(String.raw`\setminus`) + 9])
+      .toContain(draft.caretOffset);
+
+    const leftSource = String.raw`\left(x\right)`;
+    const insideLeft = leftSource.indexOf("left") + 4;
+    const leftDraft = buildVisualTexPreviewDraft(leftSource, [], {
+      anchor: insideLeft,
+      head: insideLeft,
+    });
+    expect(leftDraft.latex).toBe(leftSource);
+    expect(leftDraft.caretOffset).not.toBe(insideLeft);
+
+    const scriptSource = String.raw`x^\circ`;
+    const insideCirc = scriptSource.indexOf("circ") + 2;
+    const scriptDraft = buildVisualTexPreviewDraft(scriptSource, [], {
+      anchor: insideCirc,
+      head: insideCirc,
+    });
+    expect(scriptDraft.latex).toBe(scriptSource);
+    expect(scriptDraft.caretOffset).not.toBe(insideCirc);
+  });
+
+  test("keeps caret and snippet metadata out of a text-mode argument", () => {
+    const source = String.raw`T_{G}\text{asdadada}`;
+    const stop = source.indexOf("asdadada") + 4;
+    const draft = buildVisualTexPreviewDraft(source, [
+      { offset: stop, active: true },
+      { offset: stop, mirror: true },
+    ], { anchor: stop, head: stop });
+
+    expect(draft.latex).toBe(source);
+    expect(draft.latex).not.toContain("noema-preview");
+    expect(draft.caretOffset).toBe(stop);
+    expect(draft.placeholders).toEqual([{ offset: stop, active: true, mirror: true }]);
+
+    const field = new MathfieldElement();
+    patchHappyDomMathfieldHostSelector(field);
+    document.body.append(field);
+    initializeNoemaMathfield(field, draft.latex, {});
+    expect(field.getValue("latex-expanded")).not.toContain("noema-preview");
+
+    const nestedSource = String.raw`\text{a {nested} value}`;
+    const nestedStop = nestedSource.indexOf("nested") + 3;
+    const nestedDraft = buildVisualTexPreviewDraft(
+      nestedSource,
+      [{ offset: nestedStop, active: true }],
+      { anchor: nestedStop, head: nestedStop },
+    );
+    expect(nestedDraft.latex).toBe(nestedSource);
+    expect(nestedDraft.latex).not.toContain("noema-preview");
+  });
+
+  test("does not contaminate incomplete text groups during matched deletion", () => {
+    const sources = [
+      String.raw`\lambda(G)=2 ` + "\\",
+      String.raw`\lambda_\otimes(T_G)=\min\{\dim N:N\leq Y_G,\ T_G\bmod N\text{ is decomposable}`,
+      String.raw`\lambda_\otimes(T_G)=\min\{\dim N:N\leq Y_G,\ T_G\bmod N\text{\},`,
+      String.raw`\lambda_\otimes(T_G)=\min\{\dim N:N\leq Y_G,\ T_G\bmod N\text{`,
+    ];
+    for (const source of sources) {
+      const draft = buildVisualTexPreviewDraft(source, [{ offset: source.length, active: true }], {
+        anchor: source.length,
+        head: source.length,
+      });
+      expect(draft.latex).toBe(source);
+      expect(draft.latex).not.toContain("htmlData");
+      expect(draft.latex).not.toContain("noema-preview");
+
+      const field = new MathfieldElement();
+      patchHappyDomMathfieldHostSelector(field);
+      document.body.append(field);
+      initializeNoemaMathfield(field, draft.latex, {});
+      expect(field.getValue("latex-expanded")).not.toContain("noema-preview");
+      field.remove();
+    }
+  });
+
+  test("keeps a reused field in math mode across an unterminated \\text group", () => {
+    const field = new MathfieldElement();
+    patchHappyDomMathfieldHostSelector(field);
+    document.body.append(field);
+    initializeNoemaMathfield(field, "x", {});
+
+    // Typing `\text{` leaves MathLive's caret inside a text-mode group. Without
+    // an explicit mode, the next assignment is inserted as literal characters
+    // and the field renders the raw LaTeX source from then on.
+    for (const value of [
+      String.raw`\text{`,
+      String.raw`\text{ asdasd}`,
+      String.raw`\text{ asdasd} sads asdas`,
+      String.raw`\text{ asdasd} \frac{asdas}{b}`,
+    ]) {
+      setVisualTexPreviewValue(field, value);
+      const rendered = field.getValue("latex-expanded");
+      expect(rendered).not.toContain(String.raw`\textbackslash`);
+      expect(rendered).not.toContain(String.raw`\{`);
+    }
+    expect(field.getValue("latex-expanded")).toContain(String.raw`\frac`);
+  });
+
+  test("sends a source change into MathLive at most once", async () => {
+    const bootstrap = new MathfieldElement();
+    patchHappyDomMathfieldHostSelector(bootstrap);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const state = {
+      latex: String.raw`x^2+\text{value}`,
+      display: false,
+      selection: { anchor: 2, head: 2 },
+      placeholders: [{ offset: 2, active: true }],
+    };
+    const preview = mountVisualTexPreview(host, {
+      macros: {},
+      syncIdleMs: 0,
+      loadMathLive: async () => ({ MathfieldElement } as unknown as typeof import("mathlive")),
+    });
+    preview.update(state);
+    await preview.ready;
+
+    const field = host.querySelector(".noema-visualtex-preview-field") as InstanceType<typeof MathfieldElement>;
+    expect(field).toBeInstanceOf(MathfieldElement);
+    // happy-dom cannot complete MathLive's connectedCallback, so establish the
+    // first rendered value through the same update path before measuring
+    // content-level deduplication. Real WebKit renders the pending state during
+    // mount.
+    preview.update({ ...state, selection: { anchor: 3, head: 3 } });
+    const originalSetValue = field.setValue.bind(field);
+    let setValueCalls = 0;
+    field.setValue = ((...args: Parameters<typeof field.setValue>) => {
+      setValueCalls++;
+      return originalSetValue(...args);
+    }) as typeof field.setValue;
+
+    preview.update({
+      ...state,
+      selection: { ...state.selection },
+      placeholders: state.placeholders.map((placeholder) => ({ ...placeholder })),
+    });
+    expect(setValueCalls).toBe(0);
+
+    preview.update({ ...state, selection: { anchor: 4, head: 4 } });
+    expect(setValueCalls).toBe(0);
+    preview.update({ ...state, latex: String.raw`x^3+\text{value}` });
+    expect(setValueCalls).toBe(1);
+
+    const withBar = String.raw`x^3+\text{value}+\bar{}`;
+    preview.update({ ...state, latex: withBar });
+    expect(setValueCalls).toBe(2);
+    preview.update({ ...state, latex: String.raw`x^3+\text{value}` });
+    expect(setValueCalls).toBe(3);
+    // Content-level deduplication: identical source never re-enters MathLive.
+    // (Whether the *element* survives the `\bar` deletion is covered by the
+    // recovery test below — MathLive cannot clear that atom in place.)
+    expect(host.querySelectorAll(".noema-visualtex-preview-field")).toHaveLength(1);
+
+    preview.destroy();
+    preview.update(state);
+    expect(host.childElementCount).toBe(0);
+  });
+
+  test("coalesces continuous preview source edits at idle", async () => {
+    const bootstrap = new MathfieldElement();
+    patchHappyDomMathfieldHostSelector(bootstrap);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const initial = {
+      latex: "x",
+      display: false,
+      selection: { anchor: 1, head: 1 },
+      placeholders: [],
+    };
+    const preview = mountVisualTexPreview(host, {
+      macros: {},
+      syncIdleMs: 10,
+      loadMathLive: async () => ({ MathfieldElement } as unknown as typeof import("mathlive")),
+    });
+    preview.update(initial);
+    await preview.ready;
+    // Establish the first value after happy-dom's partial custom-element mount.
+    preview.update({ ...initial, selection: { anchor: 0, head: 0 } });
+    const field = host.querySelector(".noema-visualtex-preview-field") as InstanceType<typeof MathfieldElement>;
+    const originalSetValue = field.setValue.bind(field);
+    const writes: string[] = [];
+    field.setValue = ((...args: Parameters<typeof field.setValue>) => {
+      writes.push(args[0]);
+      return originalSetValue(...args);
+    }) as typeof field.setValue;
+
+    preview.update({ ...initial, latex: "x+a", selection: { anchor: 3, head: 3 } });
+    preview.update({ ...initial, latex: "x+ab", selection: { anchor: 4, head: 4 } });
+    preview.update({ ...initial, latex: "x+abc", selection: { anchor: 5, head: 5 } });
+    expect(writes).toEqual([]);
+    await new Promise((resolve) => window.setTimeout(resolve, 25));
+    expect(writes).toEqual(["x+abc"]);
+    preview.destroy();
+  });
+
+  async function mountLivePreview(latex: string) {
+    const bootstrap = new MathfieldElement();
+    patchHappyDomMathfieldHostSelector(bootstrap);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const base = { latex, display: false, selection: { anchor: 0, head: 0 }, placeholders: [] };
+    const preview = mountVisualTexPreview(host, {
+      macros: {},
+      syncIdleMs: 0,
+      loadMathLive: async () => ({ MathfieldElement } as unknown as typeof import("mathlive")),
+    });
+    preview.update(base);
+    await preview.ready;
+    await nextAnimationFrame();
+    const currentField = () => (
+      host.querySelector(".noema-visualtex-preview-field") as InstanceType<typeof MathfieldElement>
+    );
+    const type = async (next: string) => {
+      preview.update({ ...base, latex: next, selection: { anchor: next.length, head: next.length } });
+      await nextAnimationFrame();
+      await nextAnimationFrame();
+    };
+    return { host, preview, currentField, type };
+  }
+
+  test("keeps one preview field for ordinary editing", async () => {
+    const { host, preview, currentField, type } = await mountLivePreview("x");
+    const field = currentField();
+    const quiet = visualTexPreviewRecoveryCount();
+    for (const latex of ["xy", "xyz", "xyza", "xyz", "xy", "x"]) {
+      await type(latex);
+    }
+    // A false positive here would rebuild the mirror on every keystroke, which
+    // is worse than the fault verification guards against.
+    expect(visualTexPreviewRecoveryCount()).toBe(quiet);
+    expect(currentField()).toBe(field);
+    expect(field.getValue("latex").replace(/\s+/g, "")).toBe("x");
+    preview.destroy();
+    host.remove();
+  });
+
+  test("reports caret-only frames so the host can skip re-measuring", async () => {
+    const bootstrap = new MathfieldElement();
+    patchHappyDomMathfieldHostSelector(bootstrap);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const rendered: boolean[] = [];
+    const base = { latex: "x+y", display: false, selection: { anchor: 0, head: 0 }, placeholders: [] };
+    const preview = mountVisualTexPreview(host, {
+      macros: {},
+      syncIdleMs: 0,
+      onRendered: (contentChanged) => rendered.push(contentChanged),
+      loadMathLive: async () => ({ MathfieldElement } as unknown as typeof import("mathlive")),
+    });
+    preview.update(base);
+    await preview.ready;
+    await nextAnimationFrame();
+    rendered.length = 0;
+
+    // Moving the caret cannot change the formula's size, so the host must not
+    // be told to re-measure and re-fit the pop on every arrow key.
+    for (const head of [1, 2, 3]) {
+      preview.update({ ...base, selection: { anchor: head, head } });
+      await nextAnimationFrame();
+    }
+    expect(rendered).toEqual([false, false, false]);
+
+    preview.update({ ...base, latex: "x+y+z", selection: { anchor: 5, head: 5 } });
+    await nextAnimationFrame();
+    expect(rendered.at(-1)).toBe(true);
+    preview.destroy();
+    host.remove();
+  });
+
+  test("still renders a frame after giving up on recovery", async () => {
+    const bootstrap = new MathfieldElement();
+    patchHappyDomMathfieldHostSelector(bootstrap);
+    const host = document.createElement("div");
+    document.body.append(host);
+    let renders = 0;
+    const base = { latex: "x", display: false, selection: { anchor: 0, head: 0 }, placeholders: [] };
+    const preview = mountVisualTexPreview(host, {
+      macros: {},
+      syncIdleMs: 0,
+      onRendered: () => { renders++; },
+      loadMathLive: async () => ({ MathfieldElement } as unknown as typeof import("mathlive")),
+    });
+    preview.update(base);
+    await preview.ready;
+    await nextAnimationFrame();
+
+    // A field that can never agree with what was committed: recovery rebuilds
+    // once, the rebuild disagrees too, and then it gives up. Giving up must not
+    // swallow the frame — the pop would otherwise never be placed again.
+    const patchAll = () => {
+      for (const element of host.querySelectorAll(".noema-visualtex-preview-field")) {
+        const target = element as InstanceType<typeof MathfieldElement>;
+        if ((target as { patchedForTest?: boolean }).patchedForTest) continue;
+        (target as { patchedForTest?: boolean }).patchedForTest = true;
+        target.getValue = (() => "definitely-not-the-committed-value") as typeof target.getValue;
+      }
+    };
+    patchAll();
+    const before = renders;
+    preview.update({ ...base, latex: "xyz", selection: { anchor: 3, head: 3 } });
+    for (let frame = 0; frame < 6; frame++) {
+      patchAll();
+      await nextAnimationFrame();
+    }
+    expect(renders).toBeGreaterThan(before);
+    preview.destroy();
+    host.remove();
+  });
+
+  test("degrades instead of indexing a formula with thousands of atoms", async () => {
+    const bootstrap = new MathfieldElement();
+    patchHappyDomMathfieldHostSelector(bootstrap);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const huge = "a".repeat(2_000);
+    const preview = mountVisualTexPreview(host, {
+      macros: {},
+      syncIdleMs: 0,
+      loadMathLive: async () => ({ MathfieldElement } as unknown as typeof import("mathlive")),
+    });
+    preview.update({
+      latex: huge,
+      display: true,
+      selection: { anchor: 10, head: 10 },
+      placeholders: [{ offset: 10, active: true }],
+    });
+    await preview.ready;
+
+    const field = host.querySelector(".noema-visualtex-preview-field") as InstanceType<typeof MathfieldElement>;
+    let rangeReads = 0;
+    const originalGetValue = field.getValue.bind(field) as (...args: unknown[]) => string;
+    field.getValue = ((...args: unknown[]) => {
+      if (args.length === 3) rangeReads++;
+      return originalGetValue(...args);
+    }) as typeof field.getValue;
+
+    preview.update({
+      latex: huge,
+      display: true,
+      selection: { anchor: 11, head: 11 },
+      placeholders: [{ offset: 11, active: true }],
+    });
+    await nextAnimationFrame();
+
+    // No per-atom serialization, and no approximate overlay drawn over it.
+    expect(rangeReads).toBe(0);
+    expect(host.querySelectorAll(".noema-visualtex-preview-placeholder")).toHaveLength(0);
+    expect(host.querySelector(".noema-visualtex-preview-caret:not([hidden])")).toBeNull();
+    preview.destroy();
+    host.remove();
+  });
+
+  test("rebuilds the mirror when MathLive keeps an atom the source no longer has", async () => {
+    const { host, preview, currentField, type } = await mountLivePreview("sssss");
+    const field = currentField();
+    const quiet = visualTexPreviewRecoveryCount();
+
+    // Typing an accent and deleting it again. MathLive's replaceAll leaves the
+    // `\bar` atom in the model no matter how the assignment is made, which is
+    // the stray overline the source no longer contains.
+    for (const latex of [
+      String.raw`sssss\b`,
+      String.raw`sssss\ba`,
+      String.raw`sssss\bar`,
+      String.raw`sssss\ba`,
+      String.raw`sssss\b`,
+      "sssss",
+      "ssssss",
+      "sssssss",
+    ]) {
+      await type(latex);
+    }
+
+    const recovered = currentField();
+    expect(recovered.getValue("latex").replace(/\s+/g, "")).toBe("sssssss");
+    expect(recovered.getValue("latex-expanded")).not.toContain("\\bar");
+    expect(visualTexPreviewRecoveryCount()).toBeGreaterThan(quiet);
+    expect(recovered).not.toBe(field);
+    expect(host.querySelectorAll(".noema-visualtex-preview-field")).toHaveLength(1);
+    preview.destroy();
+    host.remove();
+  });
+
+  test("cancels pending preview work outside the formula boundary and resumes on re-entry", async () => {
+    const bootstrap = new MathfieldElement();
+    patchHappyDomMathfieldHostSelector(bootstrap);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const initial = {
+      latex: "x",
+      display: false,
+      selection: { anchor: 1, head: 1 },
+      placeholders: [{ offset: 1, active: true }],
+    };
+    const preview = mountVisualTexPreview(host, {
+      macros: {},
+      syncIdleMs: 10,
+      loadMathLive: async () => ({ MathfieldElement } as unknown as typeof import("mathlive")),
+    });
+    preview.update(initial);
+    await preview.ready;
+    preview.update({ ...initial, selection: { anchor: 0, head: 0 } });
+    const field = host.querySelector(".noema-visualtex-preview-field") as InstanceType<typeof MathfieldElement>;
+    const originalSetValue = field.setValue.bind(field);
+    const writes: string[] = [];
+    field.setValue = ((...args: Parameters<typeof field.setValue>) => {
+      writes.push(args[0]);
+      return originalSetValue(...args);
+    }) as typeof field.setValue;
+
+    // A pending trailing sync must not survive leaving the formula: the debounce
+    // fires after suspend() and must find nothing left to commit.
+    preview.update({ ...initial, latex: "x+pending", selection: { anchor: 9, head: 9 } });
+    preview.suspend();
+    await new Promise((resolve) => window.setTimeout(resolve, 30));
+    expect(writes).toEqual([]);
+    expect(host.querySelector(".noema-visualtex-preview-caret:not([hidden])")).toBeNull();
+    expect(host.querySelectorAll(".noema-visualtex-preview-placeholder")).toHaveLength(0);
+
+    preview.update({ ...initial, latex: "x+resumed", selection: { anchor: 9, head: 9 } });
+    expect(writes).toEqual(["x+resumed"]);
+    preview.destroy();
   });
 
   test("prevents MathLive selection commands from scrolling the page host", () => {
@@ -1316,6 +1873,20 @@ function patchHappyDomMathfieldHostSelector(field: InstanceType<typeof Mathfield
         load(): Promise<this> { return Promise.resolve(this); }
       },
     });
+  }
+  // Patch the prototype, not just this instance: fields created inside
+  // mountVisualTexPreview (including a recovery rebuild) are never handed to
+  // this helper, and without the patch their connectedCallback throws.
+  const shadowRootPrototype = (globalThis as { ShadowRoot?: { prototype: ShadowRoot } })
+    .ShadowRoot?.prototype as (ShadowRoot & { noemaHostSelectorPatched?: boolean }) | undefined;
+  if (shadowRootPrototype && !shadowRootPrototype.noemaHostSelectorPatched) {
+    const querySelector = shadowRootPrototype.querySelector;
+    shadowRootPrototype.querySelector = function patched(this: ShadowRoot, selector: string) {
+      return selector === ":host > span"
+        ? querySelector.call(this, "span")
+        : querySelector.call(this, selector);
+    } as typeof shadowRootPrototype.querySelector;
+    shadowRootPrototype.noemaHostSelectorPatched = true;
   }
   const shadow = field.shadowRoot;
   if (!shadow) return;

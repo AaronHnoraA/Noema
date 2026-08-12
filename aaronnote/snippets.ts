@@ -24,6 +24,21 @@ type SnippetFrame = {
   activeIndex: number | null;
 };
 
+export type SnippetPreviewStop = {
+  index: number;
+  from: number;
+  to: number;
+  primary: boolean;
+  mirror: boolean;
+  active: boolean;
+  depth: number;
+};
+
+export type SnippetPreviewState = {
+  suspended: boolean;
+  stops: readonly SnippetPreviewStop[];
+};
+
 export type SnippetExpansionOptions = {
   selectedText?: string;
   newId?: (kind: NoemaIdKind) => string;
@@ -592,6 +607,28 @@ export class SnippetSession {
 
   active(): boolean {
     return this.validateActiveSelection();
+  }
+
+  /** Immutable source ranges used by read-only renderers such as LiveTeX preview. */
+  previewState(): SnippetPreviewState {
+    const stops: SnippetPreviewStop[] = [];
+    this.frames.forEach((frame, depth) => {
+      const pending = new Set(frame.order.slice(Math.max(0, frame.cursor)));
+      pending.delete(0);
+      for (const stop of frame.stops) {
+        if (!pending.has(stop.index)) continue;
+        stops.push({
+          index: stop.index,
+          from: stop.from,
+          to: stop.to,
+          primary: stop.primary,
+          mirror: !stop.primary,
+          active: frame.activeIndex === stop.index,
+          depth,
+        });
+      }
+    });
+    return { suspended: this.suspended, stops };
   }
 
   /**

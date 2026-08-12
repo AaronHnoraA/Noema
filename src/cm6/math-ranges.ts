@@ -227,6 +227,36 @@ export function getBlockMathRanges(state: EditorState): readonly BlockMathRange[
   return state.field(blockMathRangesField, false)?.ranges ?? scanBlockMathRangesInDoc(state.doc);
 }
 
+/** Find the display-math content containing a position without scanning every range. */
+export function blockMathRangeAt(state: EditorState, position: number): BlockMathRange | null {
+  const ranges = getBlockMathRanges(state);
+  let low = 0;
+  let high = ranges.length;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (ranges[mid]!.contentFrom <= position) low = mid + 1;
+    else high = mid;
+  }
+  const candidate = ranges[low - 1];
+  return candidate && position >= candidate.contentFrom && position <= candidate.contentTo
+    ? candidate
+    : null;
+}
+
+/** Display-math range whose whole `\[ … \]` span brackets a position. */
+export function blockMathRangeSpanning(state: EditorState, position: number): BlockMathRange | null {
+  const ranges = getBlockMathRanges(state);
+  let low = 0;
+  let high = ranges.length;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (ranges[mid]!.from <= position) low = mid + 1;
+    else high = mid;
+  }
+  const candidate = ranges[low - 1];
+  return candidate && position >= candidate.from && position <= candidate.to ? candidate : null;
+}
+
 export function blockMathRangesOverlapping(
   state: EditorState,
   windows: readonly { from: number; to: number }[],

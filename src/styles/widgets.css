@@ -659,12 +659,66 @@
   overflow-wrap: anywhere;
 }
 .cm-editor .cm-math-source-line {
+  background: color-mix(in srgb, var(--aaron-paper-soft, #1e2536), transparent 58%);
   text-align: left !important;
   font-family: var(--aaron-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace) !important;
   font-weight: normal !important;
   font-style: normal !important;
   font-size: 0.95em;
   white-space: pre-wrap;
+}
+.cm-editor .cm-math-inline-source {
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--aaron-paper-soft, #1e2536), transparent 48%);
+  font-family: var(--aaron-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 0.95em;
+}
+
+/*
+ * TeX syntax colours for the formula currently being edited. Only the revealed
+ * formula carries these classes — collapsed formulas render as KaTeX and whole
+ * document source mode is untouched.
+ */
+.cm-editor .cm-tex-command { color: var(--aaron-accent, #7fb2e5); }
+.cm-editor .cm-tex-delimiter { color: var(--aaron-accent, #7fb2e5); opacity: 0.82; }
+.cm-editor .cm-tex-environment { color: #c9a0f0; font-style: italic; }
+.cm-editor .cm-tex-script { color: #f0a35e; font-weight: 600; }
+.cm-editor .cm-tex-number { color: #d7b06a; }
+.cm-editor .cm-tex-align { color: #f0a35e; font-weight: 600; }
+.cm-editor .cm-tex-text {
+  color: var(--aaron-ink, #d8dee9);
+  font-style: italic;
+  opacity: 0.9;
+}
+.cm-editor .cm-tex-comment {
+  color: var(--aaron-ink-muted, #7c879b);
+  font-style: italic;
+}
+
+/* Rainbow matching brackets: both halves of a pair share one colour. */
+.cm-editor .cm-tex-bracket-0 { color: #e5c07b; }
+.cm-editor .cm-tex-bracket-1 { color: #c678dd; }
+.cm-editor .cm-tex-bracket-2 { color: #56b6c2; }
+.cm-editor .cm-tex-bracket-3 { color: #98c379; }
+.cm-editor .cm-tex-bracket-4 { color: #e06c9a; }
+.cm-editor .cm-tex-bracket-5 { color: #61afef; }
+.cm-editor .cm-tex-bracket-unmatched {
+  color: var(--aaron-callout-danger, #ff96b4);
+  text-decoration: underline wavy currentColor 1px;
+  text-underline-offset: 2px;
+}
+
+@media (prefers-color-scheme: light) {
+  .cm-editor .cm-tex-environment { color: #8250df; }
+  .cm-editor .cm-tex-script,
+  .cm-editor .cm-tex-align { color: #bc4c00; }
+  .cm-editor .cm-tex-number { color: #953800; }
+  .cm-editor .cm-tex-bracket-0 { color: #9a6700; }
+  .cm-editor .cm-tex-bracket-1 { color: #8250df; }
+  .cm-editor .cm-tex-bracket-2 { color: #1b7c83; }
+  .cm-editor .cm-tex-bracket-3 { color: #1a7f37; }
+  .cm-editor .cm-tex-bracket-4 { color: #bf3989; }
+  .cm-editor .cm-tex-bracket-5 { color: #0969da; }
 }
 
 /* ─── CM6 list marker ────────────────────────────────────────────── */

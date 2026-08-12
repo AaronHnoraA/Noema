@@ -323,15 +323,61 @@ export function orgEnvExitTarget(state: EditorState): number | null {
     : containing.closeTo;
 }
 
+type OrgEnvContainerIndex = {
+  blocks: readonly OrgEnvBlock[];
+  /** Running maximum of `bodyTo` over `blocks[0..i]`, for early termination. */
+  maxBodyTo: number[];
+};
+
+const orgEnvContainerIndexCache = new WeakMap<readonly OrgEnvBlock[], OrgEnvContainerIndex>();
+
+function orgEnvContainerIndex(state: EditorState): OrgEnvContainerIndex {
+  const source = orgEnvBlocksFromState(state);
+  const cached = orgEnvContainerIndexCache.get(source);
+  if (cached) return cached;
+  const blocks = source
+    .filter((block) => block.kind !== "meta")
+    .slice()
+    .sort((a, b) => a.bodyFrom - b.bodyFrom || a.bodyTo - b.bodyTo);
+  const maxBodyTo: number[] = [];
+  let running = Number.NEGATIVE_INFINITY;
+  for (const block of blocks) {
+    running = Math.max(running, block.bodyTo);
+    maxBodyTo.push(running);
+  }
+  const index = { blocks, maxBodyTo };
+  orgEnvContainerIndexCache.set(source, index);
+  return index;
+}
+
+/**
+ * Innermost org environment whose body contains `[from, to]`.
+ *
+ * This runs once per rendered formula/widget, so it must not allocate: the old
+ * implementation filtered and sorted the note's entire org-env block list on
+ * every call, making a decoration rebuild O(widgets x blocks).
+ */
 export function orgEnvContextForRange(state: EditorState, from: number, to: number): OrgEnvContext | null {
-  const containing = orgEnvBlocksFromState(state)
-    .filter((block) => (
-      block.kind !== "meta"
-      && block.bodyFrom <= from
-      && to <= block.bodyTo
-    ))
-    .sort((a, b) => (a.to - a.from) - (b.to - b.from))[0];
-  return containing ? { kind: containing.kind, depth: containing.depth } : null;
+  const { blocks, maxBodyTo } = orgEnvContainerIndex(state);
+  if (blocks.length === 0) return null;
+  // Last block whose body can start at or before `from`.
+  let low = 0;
+  let high = blocks.length;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (blocks[mid]!.bodyFrom <= from) low = mid + 1;
+    else high = mid;
+  }
+  for (let index = low - 1; index >= 0; index--) {
+    if (maxBodyTo[index]! < to) break;
+    const block = blocks[index]!;
+    // Blocks are properly nested, so the latest-starting container is the
+    // innermost one.
+    if (block.bodyFrom <= from && to <= block.bodyTo) {
+      return { kind: block.kind, depth: block.depth };
+    }
+  }
+  return null;
 }
 
 function buildOrgEnvSource(kind: string, title: string, body: string): string {

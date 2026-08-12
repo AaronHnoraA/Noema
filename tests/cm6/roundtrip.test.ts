@@ -24,6 +24,7 @@ import { SnippetSession } from "../../aaronnote/snippets.ts";
 import { indentMarkdownBlock } from "../../src/cm6/commands/index.ts";
 import {
   revealFormulaSource,
+  texHighlightScanCount,
   toggleFormulaSourceAtSelection,
 } from "../../src/cm6/extensions/visual/widgets/math.ts";
 import {
@@ -356,7 +357,8 @@ maybeDescribe("cm6 kernel: getMarkdown / setMarkdown", () => {
     editor.setMarkdownSelection(md.indexOf("asdas"));
 
     expect(document.querySelector(".cm-math-inline")).toBeNull();
-    expect(document.querySelector(".cm-math-inline-editor")).toBeTruthy();
+    expect(document.querySelector(".cm-math-inline-editor")).toBeNull();
+    expect(editor.view.contentDOM.textContent).toContain("\\([asdas] s asd asd\\)");
     expect(document.querySelector(".cm-link-text")).toBeNull();
     expect(editor.getMarkdown()).toBe(md);
     cleanup();
@@ -1427,7 +1429,7 @@ y^2
     }
   });
 
-  test("clicking org-env display math uses the same in-place editor as outside", () => {
+  test("clicking org-env display math reveals its source in place", () => {
     const md = String.raw`#+begin theorem
 Before
 
@@ -1439,15 +1441,119 @@ y^2
     editor.setMarkdownSelection(0);
     const math = document.querySelector<HTMLElement>(".cm-math-block");
     expect(math).toBeTruthy();
-    const formulaFrom = Number(math!.dataset.cmSourceFrom);
+    const bodyFrom = md.indexOf("y^2");
 
     math!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
 
-    expect(editor.getMarkdownSelection().from).toBe(formulaFrom);
+    expect(editor.getMarkdownSelection().from).toBe(bodyFrom);
     expect(document.querySelector(".cm-math-block")).toBeNull();
-    expect(document.querySelector(".cm-math-block-editor")).toBeTruthy();
+    expect(document.querySelector(".cm-math-block-editor")).toBeNull();
+    expect(document.querySelectorAll(".cm-math-source-line")).toHaveLength(3);
     expect(editor.getMarkdown()).toBe(md);
     cleanup();
+  });
+
+  test("clicking display math still reveals source after an edit above it", () => {
+    const md = String.raw`Intro
+
+\[
+y^2
+\]
+
+Tail`;
+    const { editor, cleanup } = mountCM6(md);
+    editor.setMarkdownSelection(0);
+    const math = document.querySelector<HTMLElement>(".cm-math-block");
+    expect(math).toBeTruthy();
+
+    // Shifts every later formula. The decoration set is mapped rather than
+    // rebuilt here, so the widget keeps its original data-cm-source-* values.
+    editor.insertText("XYZ", 0);
+    const bodyFrom = editor.getMarkdown().indexOf("y^2");
+    const stale = document.querySelector<HTMLElement>(".cm-math-block");
+    expect(stale).toBeTruthy();
+
+    stale!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+
+    expect(editor.getMarkdownSelection().from).toBe(bodyFrom);
+    expect(document.querySelector(".cm-math-block")).toBeNull();
+    expect(document.querySelectorAll(".cm-math-source-line")).toHaveLength(3);
+    expect(editor.getMarkdown()).toBe(`XYZ${md}`);
+    cleanup();
+  });
+
+  test("moving the caret into display math reveals source instead of mounting MathLive", async () => {
+    const md = String.raw`Before
+
+\[
+y^2
+\]
+
+After`;
+    const { editor, cleanup } = mountCM6(md);
+    editor.setMarkdownSelection(0);
+    expect(document.querySelector(".cm-math-block")).toBeTruthy();
+
+    editor.setMarkdownSelection(md.indexOf("y^2") + 1);
+    await nextTick();
+
+    expect(document.querySelector(".cm-math-block-editor")).toBeNull();
+    expect(document.querySelectorAll(".cm-math-source-line")).toHaveLength(3);
+    expect(editor.getMarkdown()).toBe(md);
+    cleanup();
+  });
+
+  test("highlights only the formula being edited", async () => {
+    const md = String.raw`Intro \(\alpha^2\) tail.
+
+\[
+\frac{a}{b}
+\]
+
+\[
+\gamma
+\]`;
+    const { editor, cleanup } = mountCM6(md);
+    try {
+      editor.setMarkdownSelection(0);
+      // Nothing is being edited yet, so no formula carries TeX token classes.
+      expect(document.querySelectorAll(".cm-tex-command")).toHaveLength(0);
+
+      const scansBefore = texHighlightScanCount();
+      editor.setMarkdownSelection(md.indexOf("\\frac") + 2);
+      await nextTick();
+      const commands = Array.from(document.querySelectorAll(".cm-tex-command"))
+        .map((element) => element.textContent);
+      expect(commands).toEqual([String.raw`\frac`]);
+      // The other display formula and the inline one stay rendered, so their
+      // source is never tokenized: one revealed formula, one scan.
+      expect(texHighlightScanCount() - scansBefore).toBe(1);
+      expect(document.querySelectorAll(".cm-tex-bracket-0").length).toBeGreaterThan(0);
+      expect(document.querySelectorAll(".cm-tex-bracket-unmatched")).toHaveLength(0);
+
+      // Leaving restores the rendered widget and drops the highlighting.
+      editor.setMarkdownSelection(0);
+      await nextTick();
+      expect(document.querySelectorAll(".cm-tex-command")).toHaveLength(0);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("highlights inline math source when the caret enters it", async () => {
+    const md = String.raw`Intro \(\alpha^2\) tail.`;
+    const { editor, cleanup } = mountCM6(md);
+    try {
+      editor.setMarkdownSelection(md.indexOf("alpha"));
+      await nextTick();
+      const classes = Array.from(document.querySelectorAll(".cm-math-inline-source *"))
+        .map((element) => element.className);
+      expect(classes).toContain("cm-tex-command");
+      expect(classes).toContain("cm-tex-script");
+      expect(editor.getMarkdown()).toBe(md);
+    } finally {
+      cleanup();
+    }
   });
 
   test("renders markdown table as a directly editable table widget", () => {
@@ -2339,7 +2445,7 @@ First draft.
     cleanup();
   });
 
-  test("clicking a rendered display math block opens its in-place editor without revealing the old cursor", () => {
+  test("clicking a rendered display math block reveals source without scrolling the old viewport", () => {
     const md = "before\n\n\\[\na+b\n\\]\n\nafter";
     const { editor, host, cleanup } = mountCM6(md);
     editor.setMarkdownSelection(0);
@@ -2348,13 +2454,13 @@ First draft.
     const dispatch = vi.spyOn(editor.view, "dispatch");
     const block = document.querySelector<HTMLElement>(".cm-math-block");
     expect(block).toBeTruthy();
-    const formulaFrom = Number(block!.dataset.cmSourceFrom);
+    const bodyFrom = md.indexOf("a+b");
     block!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
     const selection = editor.getMarkdownSelection();
-    expect(selection.from).toBe(formulaFrom);
+    expect(selection.from).toBe(bodyFrom);
     expect(document.querySelector(".cm-math-block")).toBeNull();
-    expect(document.querySelector(".cm-math-block-editor")).toBeTruthy();
-    expect(document.querySelectorAll(".cm-math-source-line")).toHaveLength(0);
+    expect(document.querySelector(".cm-math-block-editor")).toBeNull();
+    expect(document.querySelectorAll(".cm-math-source-line")).toHaveLength(3);
     expect(editor.getMarkdown()).toBe(md);
     const pointerSelection = dispatch.mock.calls
       .map(([spec]) => spec as { selection?: unknown; scrollIntoView?: boolean })
@@ -2378,42 +2484,34 @@ First draft.
     cleanup();
   });
 
-  test("buffers display editor input and commits it at the formula end", async () => {
+  test("edits display math directly in source and collapses after leaving", async () => {
     const md = "before\n\n\\[\na=b\n\\]\n\nafter";
     const { editor, cleanup } = mountCM6(md);
-    document.querySelector<HTMLElement>(".cm-math-block")!
-      .dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
-    const visual = document.querySelector<HTMLElement>(".cm-math-block-editor");
-    expect(visual).toBeTruthy();
-
-    visual!.dispatchEvent(new CustomEvent("aaronnote:display-math-draft", {
-      detail: { latex: "c=d \\\\\ne=f" },
-    }));
-    expect(editor.getMarkdown()).toBe(md);
-    visual!.dispatchEvent(new CustomEvent("aaronnote:display-math-commit"));
-
+    expect(revealFormulaSource(
+      editor.view,
+      md.indexOf("\\["),
+      md.indexOf("\\]") + 2,
+      0,
+    )).toBe(true);
+    editor.setMarkdownSelection(md.indexOf("a=b"), md.indexOf("a=b") + 3);
+    editor.insertText("c=d \\\\\ne=f");
     expect(editor.getMarkdown()).toBe("before\n\n\\[\nc=d \\\\\ne=f\n\\]\n\nafter");
     expect(document.querySelector(".cm-math-block-editor")).toBeNull();
-    expect(editor.getMarkdownSelection()).toEqual({
-      from: editor.getMarkdown().indexOf("\\]") + 3,
-      to: editor.getMarkdown().indexOf("\\]") + 3,
-    });
+    expect(document.querySelector(".cm-math-block")).toBeNull();
+    editor.setMarkdownSelection(editor.getMarkdown().length);
     await nextTick();
-    expect(editor.getMarkdownSelection()).toEqual({
-      from: editor.getMarkdown().indexOf("\\]") + 3,
-      to: editor.getMarkdown().indexOf("\\]") + 3,
-    });
+    expect(document.querySelector(".cm-math-block")).toBeTruthy();
     editor.undo();
     expect(editor.getMarkdown()).toBe(md);
     cleanup();
   });
 
-  test("toggles only the selected display formula source and restores LiveTeX", () => {
+  test("display formula source reveal is idempotent and never mounts an editor", () => {
     const md = "before\n\n\\[\na=b\n\\]\n\nafter";
     const { editor, cleanup } = mountCM6(md);
     document.querySelector<HTMLElement>(".cm-math-block")!
       .dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
-    expect(document.querySelector(".cm-math-block-editor")).toBeTruthy();
+    expect(document.querySelector(".cm-math-block-editor")).toBeNull();
 
     expect(toggleFormulaSourceAtSelection(editor.view)).toBe(true);
     expect(editor.getMarkdown()).toBe(md);
@@ -2422,7 +2520,8 @@ First draft.
     expect(editor.view.contentDOM.textContent).toContain("a=b");
 
     expect(toggleFormulaSourceAtSelection(editor.view)).toBe(true);
-    expect(document.querySelector(".cm-math-block-editor")).toBeTruthy();
+    expect(document.querySelector(".cm-math-block-editor")).toBeNull();
+    expect(document.querySelector(".cm-math-block")).toBeNull();
     expect(editor.getMarkdown()).toBe(md);
     cleanup();
   });
@@ -2444,7 +2543,7 @@ First draft.
     editor.setMarkdownSelection(editor.getMarkdownSelection().from - 1);
     expect(document.querySelector(".cm-math-block")).toBeNull();
     expect(toggleFormulaSourceAtSelection(editor.view)).toBe(true);
-    expect(document.querySelector(".cm-math-block-editor")).toBeTruthy();
+    expect(document.querySelector(".cm-math-block-editor")).toBeNull();
     cleanup();
   });
 
@@ -2472,16 +2571,12 @@ First draft.
     cleanup();
   });
 
-  test("writes the latest display draft when focus moves to another source position", async () => {
+  test("writes display source immediately before focus moves elsewhere", async () => {
     const md = "before\n\n\\[\na=b\n\\]\n\nafter";
     const { editor, cleanup } = mountCM6(md);
-    document.querySelector<HTMLElement>(".cm-math-block")!
-      .dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
-    document.querySelector<HTMLElement>(".cm-math-block-editor")!
-      .dispatchEvent(new CustomEvent("aaronnote:display-math-draft", {
-        detail: { latex: "c=d" },
-      }));
-
+    expect(revealFormulaSource(editor.view, md.indexOf("\\["), md.indexOf("\\]") + 2, 0)).toBe(true);
+    editor.setMarkdownSelection(md.indexOf("a=b"), md.indexOf("a=b") + 3);
+    editor.insertText("c=d");
     editor.setMarkdownSelection(md.length);
     await Promise.resolve();
 
@@ -2490,29 +2585,24 @@ First draft.
     cleanup();
   });
 
-  test("deletes the whole display formula when its visual editor is empty", () => {
+  test("allows an empty display formula to remain editable source", () => {
     const md = "before\n\n\\[\na=b\n\\]\n\nafter";
     const { editor, cleanup } = mountCM6(md);
-    document.querySelector<HTMLElement>(".cm-math-block")!
-      .dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
-    const visual = document.querySelector<HTMLElement>(".cm-math-block-editor");
-    visual!.dispatchEvent(new CustomEvent("aaronnote:display-math-draft", {
-      detail: { latex: "   " },
-    }));
-    visual!.dispatchEvent(new CustomEvent("aaronnote:display-math-commit"));
-    expect(editor.getMarkdown()).toBe("before\n\n\n\nafter");
+    expect(revealFormulaSource(editor.view, md.indexOf("\\["), md.indexOf("\\]") + 2, 0)).toBe(true);
+    editor.setMarkdownSelection(md.indexOf("a=b"), md.indexOf("a=b") + 3);
+    editor.insertText("");
+    expect(editor.getMarkdown()).toBe("before\n\n\\[\n\n\\]\n\nafter");
+    expect(document.querySelector(".cm-math-block-editor")).toBeNull();
     editor.undo();
     expect(editor.getMarkdown()).toBe(md);
     cleanup();
   });
 
-  test("falls back to display TeX source when MathLive is unavailable", () => {
+  test("display source entry does not depend on an in-place MathLive mount", () => {
     const md = "before\n\n\\[\na+b\n\\]\n\nafter";
     const { editor, cleanup } = mountCM6(md);
     document.querySelector<HTMLElement>(".cm-math-block")!
       .dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
-    const visual = document.querySelector<HTMLElement>(".cm-math-block-editor");
-    visual!.dispatchEvent(new CustomEvent("aaronnote:display-math-unavailable"));
     expect(editor.getMarkdown()).toBe(md);
     expect(document.querySelector(".cm-math-block-editor")).toBeNull();
     expect(document.querySelectorAll(".cm-math-source-line")).toHaveLength(3);
@@ -2537,7 +2627,7 @@ First draft.
     cleanup();
   });
 
-  test("org-env display math is replaced by the in-place editor", () => {
+  test("org-env display math expands as ordinary source", () => {
     const md = String.raw`#+begin proof
 \[
 \langle v,w_1+w_2 \rangle
@@ -2552,8 +2642,8 @@ First draft.
       .dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
 
     expect(document.querySelector(".cm-math-block")).toBeNull();
-    expect(document.querySelector(".cm-math-block-editor")).toBeTruthy();
-    expect(document.querySelectorAll(".cm-math-source-line")).toHaveLength(0);
+    expect(document.querySelector(".cm-math-block-editor")).toBeNull();
+    expect(document.querySelectorAll(".cm-math-source-line").length).toBeGreaterThan(2);
     expect(editor.getMarkdown()).toBe(md);
     cleanup();
   });
@@ -2573,7 +2663,8 @@ $x$
       .dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
 
     expect(document.querySelector(".cm-math-block")).toBeNull();
-    expect(document.querySelector(".cm-math-block-editor")).toBeTruthy();
+    expect(document.querySelector(".cm-math-block-editor")).toBeNull();
+    expect(document.querySelectorAll(".cm-math-source-line").length).toBeGreaterThan(2);
     expect(document.querySelector(".cm-math-inline")).toBeNull();
     expect(document.querySelector(".cm-md-h1")).toBeNull();
     expect(document.querySelector(".inline-todo-widget")).toBeNull();
@@ -2848,7 +2939,7 @@ after
     cleanup();
   });
 
-  test("clicking rendered inline math replaces it with the in-place editor", () => {
+  test("clicking rendered inline math reveals its source in place", () => {
     const md = "before \\(x+1\\) after\n\n- [ ] task\n\n![alt](missing.png)";
     const { editor, cleanup } = mountCM6(md);
     editor.setMarkdownSelection(md.length);
@@ -2859,7 +2950,8 @@ after
     renderedChild.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
     expect(editor.getMarkdownSelection().from).toBe(md.indexOf("\\(x+1\\)") + 2);
     expect(document.querySelector(".cm-math-inline")).toBeNull();
-    expect(document.querySelector(".cm-math-inline-editor")).toBeTruthy();
+    expect(document.querySelector(".cm-math-inline-editor")).toBeNull();
+    expect(editor.view.contentDOM.textContent).toContain("\\(x+1\\)");
     expect(editor.getMarkdown()).toBe(md);
 
     editor.setMarkdownSelection(0);
@@ -2870,44 +2962,31 @@ after
     cleanup();
   });
 
-  test("buffers inline editor input and commits it at the formula end", async () => {
+  test("edits inline math directly in source and collapses after leaving", async () => {
     const md = "before \\(x+1\\) after";
     const { editor, cleanup } = mountCM6(md);
     const bodyFrom = md.indexOf("x+1");
     editor.setMarkdownSelection(bodyFrom);
 
-    const visual = document.querySelector<HTMLElement>(".cm-math-inline-editor");
-    expect(visual).toBeTruthy();
-    expect(visual!.dataset.aaronnoteVim).toBe("native");
-    visual!.dispatchEvent(new CustomEvent("aaronnote:inline-math-draft", {
-      detail: { latex: "\\frac{a}{b}" },
-    }));
-    expect(editor.getMarkdown()).toBe(md);
-
-    visual!.dispatchEvent(new CustomEvent("aaronnote:inline-math-commit"));
+    editor.setMarkdownSelection(bodyFrom, bodyFrom + "x+1".length);
+    editor.insertText("\\frac{a}{b}");
     expect(editor.getMarkdown()).toBe("before \\(\\frac{a}{b}\\) after");
     expect(document.querySelector(".cm-math-inline-editor")).toBeNull();
-    expect(document.querySelector(".cm-math-inline")).toBeTruthy();
-    expect(editor.getMarkdownSelection()).toEqual({
-      from: editor.getMarkdown().indexOf("\\)") + 2,
-      to: editor.getMarkdown().indexOf("\\)") + 2,
-    });
+    expect(document.querySelector(".cm-math-inline")).toBeNull();
+    editor.setMarkdownSelection(editor.getMarkdown().length);
     await nextTick();
-    expect(editor.getMarkdownSelection()).toEqual({
-      from: editor.getMarkdown().indexOf("\\)") + 2,
-      to: editor.getMarkdown().indexOf("\\)") + 2,
-    });
+    expect(document.querySelector(".cm-math-inline")).toBeTruthy();
 
     editor.undo();
     expect(editor.getMarkdown()).toBe(md);
     cleanup();
   });
 
-  test("toggles only the selected inline formula source and restores LiveTeX", () => {
+  test("inline formula source reveal is idempotent and never mounts an editor", () => {
     const md = "before \\(x+1\\) after";
     const { editor, cleanup } = mountCM6(md);
     editor.setMarkdownSelection(md.indexOf("x+1") + 1);
-    expect(document.querySelector(".cm-math-inline-editor")).toBeTruthy();
+    expect(document.querySelector(".cm-math-inline-editor")).toBeNull();
 
     expect(toggleFormulaSourceAtSelection(editor.view)).toBe(true);
     expect(editor.getMarkdown()).toBe(md);
@@ -2916,7 +2995,8 @@ after
     expect(editor.view.contentDOM.textContent).toContain("\\(x+1\\)");
 
     expect(toggleFormulaSourceAtSelection(editor.view)).toBe(true);
-    expect(document.querySelector(".cm-math-inline-editor")).toBeTruthy();
+    expect(document.querySelector(".cm-math-inline-editor")).toBeNull();
+    expect(document.querySelector(".cm-math-inline")).toBeNull();
     expect(editor.getMarkdown()).toBe(md);
     cleanup();
   });
@@ -2941,7 +3021,7 @@ after
     editor.setMarkdownSelection(editor.getMarkdownSelection().from - 1);
     expect(document.querySelector(".cm-math-inline")).toBeNull();
     expect(toggleFormulaSourceAtSelection(editor.view)).toBe(true);
-    expect(document.querySelector(".cm-math-inline-editor")).toBeTruthy();
+    expect(document.querySelector(".cm-math-inline-editor")).toBeNull();
     vim.destroy();
     cleanup();
   });
@@ -2970,15 +3050,11 @@ after
     cleanup();
   });
 
-  test("writes the latest inline draft when focus moves elsewhere", async () => {
+  test("writes inline source immediately before focus moves elsewhere", async () => {
     const md = "before \\(x+1\\) after";
     const { editor, cleanup } = mountCM6(md);
-    editor.setMarkdownSelection(md.indexOf("x+1"));
-    document.querySelector<HTMLElement>(".cm-math-inline-editor")!
-      .dispatchEvent(new CustomEvent("aaronnote:inline-math-draft", {
-        detail: { latex: "y+2" },
-      }));
-
+    editor.setMarkdownSelection(md.indexOf("x+1"), md.indexOf("x+1") + 3);
+    editor.insertText("y+2");
     editor.setMarkdownSelection(md.length);
     await Promise.resolve();
 
@@ -2987,27 +3063,22 @@ after
     cleanup();
   });
 
-  test("deletes the whole inline formula when its visual editor is empty", () => {
+  test("allows an empty inline formula to remain editable source", () => {
     const md = "before \\(x+1\\) after";
     const { editor, cleanup } = mountCM6(md);
-    editor.setMarkdownSelection(md.indexOf("x+1"));
-    const visual = document.querySelector<HTMLElement>(".cm-math-inline-editor");
-    visual!.dispatchEvent(new CustomEvent("aaronnote:inline-math-draft", {
-      detail: { latex: "" },
-    }));
-    visual!.dispatchEvent(new CustomEvent("aaronnote:inline-math-commit"));
-    expect(editor.getMarkdown()).toBe("before  after");
+    editor.setMarkdownSelection(md.indexOf("x+1"), md.indexOf("x+1") + 3);
+    editor.insertText("");
+    expect(editor.getMarkdown()).toBe("before \\(\\) after");
+    expect(document.querySelector(".cm-math-inline-editor")).toBeNull();
     editor.undo();
     expect(editor.getMarkdown()).toBe(md);
     cleanup();
   });
 
-  test("falls back to inline TeX source when MathLive is unavailable", () => {
+  test("inline source entry does not depend on an in-place MathLive mount", () => {
     const md = "before \\(x+1\\) after";
     const { editor, cleanup } = mountCM6(md);
     editor.setMarkdownSelection(md.indexOf("x+1"));
-    const visual = document.querySelector<HTMLElement>(".cm-math-inline-editor");
-    visual!.dispatchEvent(new CustomEvent("aaronnote:inline-math-unavailable"));
     expect(editor.getMarkdown()).toBe(md);
     expect(document.querySelector(".cm-math-inline-editor")).toBeNull();
     expect(document.querySelector(".cm-math-inline")).toBeNull();
@@ -3034,7 +3105,8 @@ after
     expect(rendered).toBeTruthy();
     expect(document.querySelector(".cm-math-inline-editor")).toBeNull();
     rendered!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
-    expect(document.querySelector(".cm-math-inline-editor")).toBeTruthy();
+    expect(document.querySelector(".cm-math-inline-editor")).toBeNull();
+    expect(document.querySelector(".cm-math-inline")).toBeNull();
     cleanup();
   });
 
@@ -3060,7 +3132,7 @@ after
 
     editor.setMarkdownSelection(md.indexOf("x+1"));
     expect(document.querySelector(".cm-math-inline")).toBeNull();
-    expect(document.querySelector(".cm-math-inline-editor")).toBeTruthy();
+    expect(document.querySelector(".cm-math-inline-editor")).toBeNull();
     editor.setMarkdownSelection(md.length);
     await nextTick();
     expect(document.querySelector(".cm-math-inline")).toBeTruthy();
@@ -3659,7 +3731,7 @@ After`;
     cleanup();
   });
 
-  test("vim insert entry opens editable rendered math from i, a, and arrows", () => {
+  test("vim insert entry reveals editable formula source from i, a, and arrows", () => {
     const md = "a \\(x+y\\) b";
     const formulaFrom = md.indexOf("\\(");
 
@@ -3670,7 +3742,9 @@ After`;
       vim.setMode("normal");
       expect(vim.handleKey({ key })).toBe(true);
       expect(vim.mode()).toBe("insert");
-      expect(document.querySelector(".cm-math-inline-editor")).toBeTruthy();
+      expect(document.querySelector(".cm-math-inline-editor")).toBeNull();
+      expect(document.querySelector(".cm-math-inline")).toBeNull();
+      expect(editor.getMarkdownSelection().from).toBeGreaterThan(formulaFrom);
       cleanup();
     }
 
@@ -3679,7 +3753,8 @@ After`;
     editor.setMarkdownSelection(formulaFrom);
     vim.setMode("insert");
     expect(vim.handleKey({ key: "ArrowRight" })).toBe(true);
-    expect(document.querySelector(".cm-math-inline-editor")).toBeTruthy();
+    expect(document.querySelector(".cm-math-inline-editor")).toBeNull();
+    expect(document.querySelector(".cm-math-inline")).toBeNull();
     cleanup();
   });
 

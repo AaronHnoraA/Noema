@@ -18,24 +18,25 @@ import { markdownHrefAt } from "../src/cm6/editor-cm6.ts";
 import {
   finishInlineMathEditing,
   revealFormulaSource,
-  toggleFormulaSourceAtSelection,
 } from "../src/cm6/extensions/visual/widgets/math.ts";
 import { nextGraphemePosition, previousGraphemePosition } from "../src/cm6/text-boundaries.ts";
 import { getBlockMathRanges, rangeAtPosition, rangeOverlapsAny } from "../src/cm6/math-ranges.ts";
 import {
   mountVisualTexDisplayEditor,
+  mountVisualTexPreview,
   normalizeVisualTexLatex,
   setVisualTexDisplayLayout,
   visualTexDisplayLayout,
   visualTexOuterDisplayLayout,
   type VisualTexInlineEditor,
+  type VisualTexPreview,
   type VisualTexCompletionTemplate,
   type VisualTexDisplayLayout,
 } from "../src/cm6/extensions/visual/widgets/visualtex-inline.ts";
-import { jumpStructuralDelimiter } from "../src/cm6/structural-jump.ts";
+import { jumpStructuralDelimiter, jumpTexUnit } from "../src/cm6/structural-jump.ts";
 import { equationTagsFromText, getEquationTagHits } from "../src/equation-tags.ts";
 import { INLINE_MATH_RE } from "../src/inline-math.ts";
-import { formatMathRenderError, renderMathHTML } from "../src/math-render.ts";
+import { formatMathRenderError } from "../src/math-render.ts";
 import { mathPreviewFitScale } from "./math-preview-fit.ts";
 import { getKatexMacros, setKatexMacros } from "../src/katex-macros.ts";
 import { renderJupyterVariablesTable } from "../src/jupyter-variables-view.ts";
@@ -713,6 +714,12 @@ document.body.appendChild(snippetPopup);
 const mathPreview = document.createElement("div");
 mathPreview.className = "aaronnote-math-preview";
 mathPreview.hidden = true;
+const mathPreviewVisualHost = document.createElement("div");
+mathPreviewVisualHost.className = "aaronnote-math-preview-visual";
+const mathPreviewFallback = document.createElement("pre");
+mathPreviewFallback.className = "aaronnote-math-preview-fallback";
+mathPreviewFallback.hidden = true;
+mathPreview.append(mathPreviewVisualHost, mathPreviewFallback);
 document.body.appendChild(mathPreview);
 
 const selectionTool = document.createElement("div");
@@ -973,13 +980,22 @@ const BUILTIN_SNIPPETS: SnippetSummary[] = [{
 })), ...LATEX_MARK_SNIPPETS];
 let paused = false;
 const pauseReasons = new Set<string>();
-let mathPreviewKey = "";
+type MathPreviewSession = {
+  /** Formula identity, stable while its body is being edited. */
+  formula: string;
+  tex: string;
+  contentFrom: number;
+  display: boolean;
+  anchorRect: { left: number; top: number; bottom: number } | null;
+  bottomRect: { bottom: number } | null;
+};
+let mathPreviewSession: MathPreviewSession | null = null;
 let mathPreviewPendingErrorKey = "";
 let mathPreviewErrorTimer = 0;
 let mathPreviewWidth = 0;
+let liveTexPreview: VisualTexPreview | null = null;
 const clientId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 const changeHandlers = new Set<() => void>();
-const MATH_PREVIEW_ERROR_IDLE_MS = 650;
 const MATH_PREVIEW_ERROR_MAX_LENGTH = 180;
 const NAVIGATION_BACK_STACK_MAX = 80;
 const PROSE_SCOPE_PADDING = 32 * 1024;
@@ -1313,11 +1329,11 @@ const editor = createEditor(host, {
   },
   onSelectionChange: () => {
     scheduleWritingStats(writingStatsController?.isDocumentChanged() ?? true);
+    scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
   },
   onBlur: () => {
-    // Moving focus from CM6 into the in-place MathLive field is still part of
-    // the same editing gesture. Preserve insert mode so committing the formula
-    // returns to ordinary prose input instead of silently switching to normal.
+    // The body-mounted LiveTeX studio is the only native math editing surface.
+    // Its focus transition remains part of the same editing gesture.
     if (!visualMathEditorActive
         && !document.activeElement?.closest("[data-aaronnote-vim='native']")) onBlurVimReset?.();
     void flushCursorPosition();
@@ -3203,6 +3219,20 @@ function mathTargetFromSourceElement(target: EventTarget | null): ContextMathTar
     ? target.closest<HTMLElement>(".cm-math-inline, .cm-math-inline-editor, .cm-math-block, .cm-math-block-editor")
     : null;
   if (!element) return null;
+  // The widget's `data-cm-source-*` attributes are written once at toDOM() time
+  // and deliberately go stale: display-math decorations are mapped rather than
+  // rebuilt when an edit does not touch math, so a widget keeps its original
+  // coordinates after any edit earlier in the note. Ask the view where this
+  // element actually sits instead.
+  try {
+    const position = editor.view.posAtDOM(element, 1);
+    if (Number.isFinite(position)) {
+      const resolved = mathTargetAtPosition(position);
+      if (resolved) return resolved;
+    }
+  } catch (_) {
+    // The element may already be detached from the current view tree.
+  }
   const from = Number(element.dataset.cmSourceFrom);
   const to = Number(element.dataset.cmSourceTo);
   if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to) return null;
@@ -4404,8 +4434,8 @@ setupCopilot({
   preserveScroll: (update) => editor.preserveViewport(update),
   jumpSnippetNext: jumpSnippetTabstop,
   jumpSnippetPrevious: jumpSnippetTabstopBack,
-  forwardDelimiter: () => jumpStructuralDelimiter(editor.view, 1),
-  backwardDelimiter: () => jumpStructuralDelimiter(editor.view, -1),
+  forwardDelimiter: () => jumpTexUnit(editor.view, 1) || jumpStructuralDelimiter(editor.view, 1),
+  backwardDelimiter: () => jumpTexUnit(editor.view, -1) || jumpStructuralDelimiter(editor.view, -1),
 });
 
 function toggleSourceMode(): void {
@@ -4803,9 +4833,15 @@ function runSourceToggleShortcut(event: KeyboardEvent): boolean {
     scheduleAssistUpdate({ mathPreview: true, cursor: true });
     return true;
   }
-  if (!editor.isSourceMode()
-    && !slideDeck?.isRevealView()
-    && toggleFormulaSourceAtSelection(editor.view)) {
+  const selection = editor.view.state.selection.main;
+  const formula = mathTargetAtPosition(selection.head);
+  if (!slideDeck?.isRevealView()
+    && formula
+    && selection.anchor >= formula.from
+    && selection.anchor <= formula.to
+    && selection.head >= formula.from
+    && selection.head <= formula.to
+    && openContextLiveTex(formula)) {
     scheduleAssistUpdate({ mathPreview: true, cursor: true });
     return true;
   }
@@ -7708,14 +7744,20 @@ function clearMathPreviewErrorTimer(): void {
 
 function hideMathPreview(): void {
   clearMathPreviewErrorTimer();
+  // The field DOM is intentionally retained for cheap re-entry, but no
+  // MathLive timer, overlay RAF or source-coordinate work may survive outside
+  // the active formula boundary.
+  liveTexPreview?.suspend();
   mathPreview.hidden = true;
-  mathPreview.innerHTML = "";
   mathPreview.classList.remove("is-display", "is-error", "is-overflowing");
+  mathPreviewVisualHost.hidden = false;
+  mathPreviewFallback.hidden = true;
+  mathPreviewFallback.textContent = "";
   mathPreview.style.left = "";
   mathPreview.style.top = "";
   mathPreview.style.width = "";
   mathPreview.style.height = "";
-  mathPreviewKey = "";
+  mathPreviewSession = null;
   mathPreviewPendingErrorKey = "";
   mathPreviewWidth = 0;
 }
@@ -8465,21 +8507,51 @@ function showSnippetPopup(
 function mathAtCursor(ctx: ReturnType<typeof editor.cursorContext>): {
   tex: string;
   display: boolean;
+  from: number;
+  to: number;
+  contentFrom: number;
+  contentTo: number;
+  selection: { anchor: number; head: number };
   rect: { left: number; top: number; bottom: number } | null;
   rectEnd?: { left: number; top: number; bottom: number } | null;
 } | null {
   const state = editor.view.state;
-  const cursor = state.selection.main.from;
+  const selection = state.selection.main;
+  const cursor = selection.head;
   const contextStart = Math.max(0, cursor - ctx.before.length);
-  const rectAtSourceOffset = (offset: number) => ctx.rectAtOffset(offset - contextStart);
+  const rectAtSourceOffset = (offset: number) => {
+    try {
+      const direct = editor.view.coordsAtPos(Math.max(0, Math.min(state.doc.length, offset)));
+      if (direct) return { left: direct.left, top: direct.top, bottom: direct.bottom };
+    } catch (_) {
+      // A decoration may be changing in the same frame. The cursor-context
+      // geometry remains a stable fallback until CM6 finishes measuring it.
+    }
+    return ctx.rectAtOffset(offset - contextStart);
+  };
   const blockRanges = getBlockMathRanges(state);
   const displayMath = rangeAtPosition(cursor, blockRanges);
-  if (displayMath && cursor > displayMath.from && cursor < displayMath.to) {
+  if (displayMath
+    && selection.anchor >= displayMath.contentFrom
+    && selection.anchor <= displayMath.contentTo
+    && selection.head >= displayMath.contentFrom
+    && selection.head <= displayMath.contentTo) {
+    const body = state.doc.sliceString(displayMath.contentFrom, displayMath.contentTo);
+    const formulaStartRect = rectAtSourceOffset(displayMath.from);
+    const formulaEndRect = rectAtSourceOffset(displayMath.to);
     return {
-      tex: displayMath.tex,
+      tex: body,
       display: true,
-      rect: rectAtSourceOffset(displayMath.from),
-      rectEnd: rectAtSourceOffset(displayMath.to),
+      from: displayMath.from,
+      to: displayMath.to,
+      contentFrom: displayMath.contentFrom,
+      contentTo: displayMath.contentTo,
+      selection: {
+        anchor: Math.max(0, Math.min(body.length, selection.anchor - displayMath.contentFrom)),
+        head: Math.max(0, Math.min(body.length, selection.head - displayMath.contentFrom)),
+      },
+      rect: formulaStartRect ?? ctx.rect ?? rectAtSourceOffset(cursor),
+      rectEnd: formulaEndRect,
     };
   }
 
@@ -8490,15 +8562,36 @@ function mathAtCursor(ctx: ReturnType<typeof editor.cursorContext>): {
     const from = line.from + match.index;
     const to = from + match[0].length;
     const tex = match[1] || "";
-    if (cursor <= from || cursor >= to) continue;
+    const contentFrom = from + 2;
+    const contentTo = to - 2;
+    if (cursor < contentFrom || cursor > contentTo) continue;
+    if (selection.anchor < contentFrom || selection.anchor > contentTo) continue;
     if (rangeOverlapsAny(from, to, blockRanges)) continue;
-    return { tex, display: false, rect: rectAtSourceOffset(from) };
+    const formulaStartRect = rectAtSourceOffset(from);
+    const formulaEndRect = rectAtSourceOffset(to);
+    return {
+      tex,
+      display: false,
+      from,
+      to,
+      contentFrom,
+      contentTo,
+      selection: {
+        anchor: Math.max(0, Math.min(tex.length, selection.anchor - contentFrom)),
+        head: Math.max(0, Math.min(tex.length, selection.head - contentFrom)),
+      },
+      rect: formulaStartRect ?? ctx.rect ?? rectAtSourceOffset(cursor),
+      rectEnd: formulaEndRect,
+    };
   }
   return null;
 }
 
-function snippetContextMode(ctx: ReturnType<typeof editor.cursorContext>): string {
-  if (mathAtCursor(ctx)) return "tex-mode";
+function snippetContextMode(
+  ctx: ReturnType<typeof editor.cursorContext>,
+  activeMath: ReturnType<typeof mathAtCursor> = mathAtCursor(ctx),
+): string {
+  if (activeMath) return "tex-mode";
   const state = editor.view.state;
   const cursor = state.selection.main.from;
   const block = editor.getBlockContext();
@@ -8579,7 +8672,10 @@ function scheduleAsyncCompletion(
   });
 }
 
-function updateSnippetPopup(ctx: ReturnType<typeof editor.cursorContext>): void {
+function updateSnippetPopup(
+  ctx: ReturnType<typeof editor.cursorContext>,
+  activeMath: ReturnType<typeof mathAtCursor> | undefined = undefined,
+): void {
   if (!editorOwnsActiveSurface()) {
     hideSnippetPopup();
     clearCompletionCache();
@@ -8791,7 +8887,7 @@ function updateSnippetPopup(ctx: ReturnType<typeof editor.cursorContext>): void 
     return;
   }
   if (!snippetCompletionArmed && snippetPopup.hidden) return;
-  const mode = snippetContextMode(ctx);
+  const mode = snippetContextMode(ctx, activeMath === undefined ? mathAtCursor(ctx) : activeMath);
   const matches = matchingSnippets(prefix, mode, ctx);
   if (matches.length === 0) {
     hideSnippetPopup();
@@ -8915,12 +9011,17 @@ function expandSnippetAtCursor(): boolean {
   return insertSnippet(exact, prefix.length);
 }
 
-function mathPreviewKeyFor(math: { tex: string; display: boolean }): string {
-  return `${math.display ? "display" : "inline"}\n${math.tex.trim()}`;
+/**
+ * Which formula the preview is following. Deliberately excludes the TeX body:
+ * editing inside a formula is not a new preview, and treating it as one reset
+ * the cached width and forced a layout measurement on every keystroke.
+ */
+function mathPreviewFormulaKey(math: { display: boolean; from: number }): string {
+  return `${math.display ? "display" : "inline"}:${math.from}`;
 }
 
 function resetMathPreviewFitState(): void {
-  const child = mathPreview.querySelector<HTMLElement>(".katex-display, .katex, math, mjx-container");
+  const child = mathPreview.querySelector<HTMLElement>(".noema-visualtex-preview-field");
   if (child) {
     child.style.transform = "";
     child.style.transformOrigin = "";
@@ -8935,8 +9036,8 @@ function resetMathPreviewFitState(): void {
 function mathPreviewPreferredWidth(display: boolean): number {
   const margin = 8;
   const maxWidth = Math.max(220, window.innerWidth - margin * 2);
-  const minimum = display ? 220 : 120;
-  const fallback = display ? 420 : 180;
+  const minimum = display ? 260 : 180;
+  const fallback = display ? 480 : 240;
   const previousWidth = mathPreview.style.width;
   resetMathPreviewFitState();
   mathPreview.style.width = "max-content";
@@ -8948,7 +9049,7 @@ function mathPreviewPreferredWidth(display: boolean): number {
 function updateMathPreviewOverflow(): void {
   if (mathPreview.hidden || mathPreview.classList.contains("is-error")) return;
   resetMathPreviewFitState();
-  const rendered = mathPreview.querySelector<HTMLElement>(".katex-display, .katex, math, mjx-container");
+  const rendered = mathPreview.querySelector<HTMLElement>(".noema-visualtex-preview-field");
   if (!rendered) return;
   const style = window.getComputedStyle(mathPreview);
   const paddingX = Number.parseFloat(style.paddingLeft) + Number.parseFloat(style.paddingRight);
@@ -8985,77 +9086,139 @@ function placeMathPreview(
   placeFloatingAbove(mathPreview, anchorRect, mathPreviewWidth, bottomRect);
 }
 
-function scheduleMathPreviewError(nextKey: string, error: string, display: boolean): void {
-  clearMathPreviewErrorTimer();
-  mathPreviewPendingErrorKey = nextKey;
-  const message = `Math error: ${formatMathRenderError(error, MATH_PREVIEW_ERROR_MAX_LENGTH)}`;
-  mathPreviewErrorTimer = window.setTimeout(() => {
-    if (mathPreviewPendingErrorKey !== nextKey || mathPreviewKey !== nextKey) return;
-    if (paused || !editorSurfaceVisible()) return;
-    const ctx = editor.cursorContext(display ? 640 : 320);
-    const math = mathAtCursor(ctx);
-    if (!math || mathPreviewKeyFor(math) !== nextKey) return;
-    const anchorRect = math.rect ?? ctx.rect;
-    const bottomRect = math.display ? (math.rectEnd ?? anchorRect) : undefined;
-    mathPreview.innerHTML = "";
-    mathPreview.textContent = message;
-    mathPreview.classList.add("is-error");
-    mathPreview.classList.toggle("is-display", math.display);
-    mathPreview.hidden = false;
-    mathPreviewWidth = 0;
-    placeFloatingAbove(mathPreview, anchorRect, math.display ? 640 : 320, bottomRect);
-  }, MATH_PREVIEW_ERROR_IDLE_MS);
+function mathPreviewPlaceholders(math: NonNullable<ReturnType<typeof mathAtCursor>>) {
+  return snippetSession.previewState().stops
+    .filter((stop) => stop.from === stop.to
+      && stop.from >= math.contentFrom
+      && stop.from <= math.contentTo)
+    .map((stop) => ({
+      offset: stop.from - math.contentFrom,
+      active: stop.active,
+      mirror: stop.mirror,
+    }));
 }
 
-function updateMathPreview(ctx: ReturnType<typeof editor.cursorContext>, allowNewPreview: boolean): void {
+function showMathPreviewFallback(error: unknown): void {
+  const session = mathPreviewSession;
+  if (paused || !editorSurfaceVisible() || !session) return;
+  const message = error instanceof Error ? error.message : String(error || "LiveTeX unavailable");
+  mathPreviewVisualHost.hidden = true;
+  mathPreviewFallback.hidden = false;
+  mathPreviewFallback.textContent = `${session.tex}\n\nLiveTeX: ${formatMathRenderError(message, MATH_PREVIEW_ERROR_MAX_LENGTH)}`;
+  mathPreview.classList.add("is-error");
+  mathPreview.hidden = false;
+  mathPreviewWidth = 0;
+  placeFloatingAbove(
+    mathPreview,
+    session.anchorRect,
+    session.display ? 680 : 380,
+    session.bottomRect,
+  );
+}
+
+function ensureLiveTexPreview(): VisualTexPreview {
+  liveTexPreview ??= mountVisualTexPreview(mathPreviewVisualHost, {
+    macros: getKatexMacros(),
+    // Every callback below reads the session the assist frame already resolved.
+    // Re-running cursorContext() + mathAtCursor() here scanned the same formula
+    // up to three times per frame and could disagree with the frame that opened
+    // the preview.
+    onSourcePosition: (sourceOffset) => {
+      const session = mathPreviewSession;
+      if (!session) return;
+      const position = session.contentFrom
+        + Math.max(0, Math.min(session.tex.length, sourceOffset));
+      editor.setMarkdownSelection(position, undefined, { scrollIntoView: true });
+      editor.focus();
+      scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
+    },
+    onRendered: (contentChanged) => {
+      const session = mathPreviewSession;
+      if (mathPreview.hidden || paused || !session || !editorSurfaceVisible()) return;
+      mathPreviewVisualHost.hidden = false;
+      mathPreviewFallback.hidden = true;
+      mathPreview.classList.remove("is-error");
+      if (!contentChanged) {
+        // Caret-only frame: the formula is the same size it was, so re-running
+        // the measure/fit cycle here would be a forced synchronous layout on
+        // every arrow key.
+        placeFloatingAbove(
+          mathPreview,
+          session.anchorRect,
+          mathPreviewWidth || (session.display ? 680 : 380),
+          session.bottomRect,
+        );
+        return;
+      }
+      // The rendered formula just changed size; this is the one place allowed
+      // to force a layout measurement.
+      mathPreviewWidth = 0;
+      placeMathPreview(session.anchorRect, session.display, session.bottomRect);
+    },
+    onUnavailable: showMathPreviewFallback,
+  });
+  return liveTexPreview;
+}
+
+function updateMathPreview(
+  ctx: ReturnType<typeof editor.cursorContext>,
+  allowNewPreview: boolean,
+  activeMath: ReturnType<typeof mathAtCursor> = mathAtCursor(ctx),
+): void {
   if (visualMathEditorActive) {
-    if (!mathPreview.hidden || mathPreviewKey) hideMathPreview();
+    if (!mathPreview.hidden || mathPreviewSession) hideMathPreview();
     return;
   }
-  const math = mathAtCursor(ctx);
-  if (!math || math.tex.trim().length === 0) {
-    if (!mathPreview.hidden || mathPreviewKey) hideMathPreview();
+  const math = activeMath;
+  const placeholders = math ? mathPreviewPlaceholders(math) : [];
+  if (!math || (math.tex.trim().length === 0 && placeholders.length === 0)) {
+    if (!mathPreview.hidden || mathPreviewSession) hideMathPreview();
     return;
   }
-  const nextKey = mathPreviewKeyFor(math);
+  const nextFormula = mathPreviewFormulaKey(math);
   const anchorRect = math.rect ?? ctx.rect;
-  const bottomRect = math.display ? (math.rectEnd ?? anchorRect) : undefined;
+  const bottomRect = math.rectEnd ?? anchorRect;
+  const previous = mathPreviewSession;
   if (mathPreview.hidden && !allowNewPreview) return;
-  if (mathPreviewKey === nextKey && !mathPreview.hidden) {
-    placeMathPreview(anchorRect, math.display, bottomRect);
-    return;
-  }
-  if (mathPreviewKey !== nextKey && !allowNewPreview) return;
-  if (mathPreviewKey !== nextKey) {
+  if (previous?.formula !== nextFormula && !allowNewPreview) return;
+  if (previous?.formula !== nextFormula) {
     clearMathPreviewErrorTimer();
-    mathPreviewKey = nextKey;
     mathPreviewWidth = 0;
-    mathPreview.innerHTML = "";
     mathPreview.classList.remove("is-error");
     mathPreview.classList.toggle("is-display", math.display);
-    const rendered = renderMathHTML(math.tex.trim(), {
-      displayMode: math.display,
-      strict: "ignore",
-    });
-    if (rendered.error) {
-      scheduleMathPreviewError(nextKey, rendered.error, math.display);
-      mathPreview.hidden = true;
-      return;
-    }
-    mathPreview.innerHTML = rendered.html;
     mathPreview.scrollLeft = 0;
     mathPreview.scrollTop = 0;
   }
-  if (mathPreviewPendingErrorKey === nextKey && mathPreview.hidden) return;
+  mathPreviewSession = {
+    formula: nextFormula,
+    tex: math.tex,
+    contentFrom: math.contentFrom,
+    display: math.display,
+    anchorRect,
+    bottomRect,
+  };
   clearMathPreviewErrorTimer();
+  mathPreviewPendingErrorKey = "";
   mathPreview.classList.remove("is-error");
+  mathPreviewVisualHost.hidden = false;
+  mathPreviewFallback.hidden = true;
   mathPreview.hidden = false;
-  placeMathPreview(anchorRect, math.display, bottomRect);
-  window.requestAnimationFrame(() => {
-    if (!paused && editorSurfaceVisible() && mathPreviewKey === nextKey && !mathPreview.hidden) {
-      placeMathPreview(anchorRect, math.display, bottomRect);
-    }
+  ensureLiveTexPreview().update({
+    latex: math.tex,
+    display: math.display,
+    selection: math.selection,
+    placeholders,
   });
+  // Placement is independent of content synchronization: the anchor is already
+  // known, and `placeFloatingAbove` is pure arithmetic over the cached width.
+  // Deferring it to onRendered() left the pop hovering over the previously
+  // edited formula for the whole debounce window.
+  placeFloatingAbove(
+    mathPreview,
+    anchorRect,
+    mathPreviewWidth || (math.display ? 680 : 380),
+    bottomRect,
+  );
 }
 
 function activeEditorSelection(): { text: string; rect: DOMRect } | null {
@@ -9166,6 +9329,10 @@ function runAssistUpdate(flags: AssistUpdateFlags): void {
   if (passiveServerReader || visualMathEditorActive) hideMathPreview();
   const needsCursorContext = wantsSnippets || wantsMathPreview;
   const ctx = needsCursorContext ? editor.cursorContext(!snippetPopup.hidden ? 640 : 320) : null;
+  // Recognition is shared by snippet routing and LiveTeX. Never scan the same
+  // formula twice in one assist frame, and never construct preview geometry
+  // when no preview work was requested.
+  const activeMath = ctx && wantsMathPreview ? mathAtCursor(ctx) : undefined;
   if (flags.toc) updateFloatingToc();
   if (flags.selectionTool && (!serverReaderMode || serverReader.selectionToolbar)) {
     const activeSelection = snippetPopup.hidden && modal.hidden ? activeEditorSelection() : null;
@@ -9177,12 +9344,12 @@ function runAssistUpdate(flags: AssistUpdateFlags): void {
   if (visualMathEditorActive) return;
   if (!insertMode) {
     hideSnippetPopup();
-    if (ctx && wantsMathPreview) updateMathPreview(ctx, flags.mathPreview);
+    if (ctx && wantsMathPreview) updateMathPreview(ctx, flags.mathPreview, activeMath);
     return;
   }
   if (ctx) {
-    if (wantsSnippets) updateSnippetPopup(ctx);
-    if (wantsMathPreview) updateMathPreview(ctx, flags.mathPreview);
+    if (wantsSnippets) updateSnippetPopup(ctx, activeMath);
+    if (wantsMathPreview) updateMathPreview(ctx, flags.mathPreview, activeMath);
   }
 }
 
@@ -9324,12 +9491,15 @@ function runHostKey(body: Record<string, unknown>): boolean {
   const bracketLeft = body.code === "BracketLeft" || key === "[";
   if (vim.mode() === "insert" && primaryBracket && (bracketRight || bracketLeft)) {
     const handled = bracketRight
-      ? jumpSnippetTabstop() || jumpStructuralDelimiter(editor.view, 1)
-      : jumpSnippetTabstopBack() || jumpStructuralDelimiter(editor.view, -1);
+      ? jumpSnippetTabstop() || jumpTexUnit(editor.view, 1) || jumpStructuralDelimiter(editor.view, 1)
+      : jumpSnippetTabstopBack() || jumpTexUnit(editor.view, -1) || jumpStructuralDelimiter(editor.view, -1);
     if (handled) {
       scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
-      return true;
     }
+    // Cmd-[ / Cmd-] belong to the TeX/snippet navigation state. Consume an
+    // unmatched chord as a no-op so CodeMirror never falls through to its
+    // generic indentation binding.
+    return true;
   }
   if (currentReadOnly) {
     if (key === "Tab" || key === "Enter" || key === "Backspace" || key === "Delete" || (!hostKey.ctrlKey && !hostKey.metaKey && !hostKey.altKey && key.length === 1)) {
@@ -9855,6 +10025,28 @@ document.addEventListener("keydown", (event) => {
     event.stopPropagation();
     return;
   }
+  const texBracketDirection = !event.defaultPrevented
+    && vim.mode() === "insert"
+    && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
+    ? event.code === "BracketRight" || event.key === "]" ? 1
+      : event.code === "BracketLeft" || event.key === "[" ? -1
+        : 0
+    : 0;
+  if (texBracketDirection) {
+    const snippetMoved = texBracketDirection > 0 ? jumpSnippetTabstop() : jumpSnippetTabstopBack();
+    const handled = snippetMoved || (texBracketDirection > 0
+      ? jumpTexUnit(editor.view, 1) || jumpStructuralDelimiter(editor.view, 1)
+      : jumpTexUnit(editor.view, -1) || jumpStructuralDelimiter(editor.view, -1));
+    event.preventDefault();
+    event.stopPropagation();
+    if (handled) {
+      if (!snippetMoved) setStatus("TeX unit");
+      scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
+    }
+    // No generic Cmd-bracket indentation fallback: outside a TeX/snippet
+    // scope this shortcut is intentionally a consumed no-op.
+    return;
+  }
   if (plainEscapeKey(event)) {
     if (!modal.hidden) return;
     if (!toolsPanel.hidden) {
@@ -10324,6 +10516,8 @@ window.addEventListener("pagehide", () => {
 });
 window.addEventListener("beforeunload", () => {
   savePendingNoteKeepalive();
+  liveTexPreview?.destroy();
+  liveTexPreview = null;
   removeNoemaThemeRuntime();
   removeDesktopCommandListener?.();
   removeNativeDropListener?.();

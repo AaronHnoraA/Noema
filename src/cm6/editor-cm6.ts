@@ -33,6 +33,7 @@ import {
 } from "./markdown-link-events.ts";
 import { wikiLinkAt } from "../../shared/wiki-link.mjs";
 import { vscodeCloseBrackets, vscodeDeleteBracketPairKeymap } from "./close-brackets-vscode.ts";
+import { texSourceInput } from "./tex-source-input.ts";
 import { foldEffect, syntaxTree, unfoldEffect } from "@codemirror/language";
 import { disposeHighlightWorker } from "../code-highlight-async.ts";
 import { disposeMathRuntime } from "../math-render.ts";
@@ -72,12 +73,12 @@ import {
   minimalDocumentChange,
 } from "./viewport-stability.ts";
 import {
-  activateBlockMath,
-  activateInlineMath,
   finishInlineMathEditing,
   hasVisualMode,
   isVisualMode,
   orgEnvExitTarget,
+  formulaRangeAtWidgetPosition,
+  revealFormulaSource,
   setVisualMode,
 } from "./extensions/visual/index.ts";
 
@@ -118,6 +119,24 @@ function sourceAnchorForClick(source: HTMLElement, event: MouseEvent, from: numb
   if (rect.width <= 0 || innerTo <= innerFrom) return innerFrom;
   const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
   return Math.round(innerFrom + ratio * (innerTo - innerFrom));
+}
+
+/** Live document position of a replace-decoration widget's root element. */
+function widgetSourcePosition(view: EditorView, source: HTMLElement): number | null {
+  try {
+    const position = view.posAtDOM(source, -1);
+    return Number.isFinite(position) ? position : null;
+  } catch (_) {
+    // The element may already be detached from the current view tree.
+    return null;
+  }
+}
+
+function formulaSourceOffsetForClick(source: HTMLElement, event: MouseEvent, sourceLength: number): number {
+  const rect = source.getBoundingClientRect();
+  if (rect.width <= 0 || sourceLength <= 0) return 0;
+  const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
+  return Math.round(sourceLength * ratio);
 }
 
 function eventTargetElement(target: EventTarget | Node | null): Element | null {
@@ -500,7 +519,7 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
     const mathBlock = source.dataset.cmMathBlock === "true";
     const inlineMath = source.dataset.cmInlineMath === "static";
     if (!openSource && !mathBlock) return;
-    if (options.passiveReader) {
+    if (view.state.readOnly || options.passiveReader) {
       // CM6 otherwise maps the pointer into the hidden source range, which
       // replaces the visual widget with authoring source even in read-only
       // mode. Reader mode keeps the same widget rendering but makes that
@@ -511,31 +530,35 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
       return;
     }
     if (event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return;
-    const from = Number(source.dataset.cmSourceFrom);
-    const to = Number(source.dataset.cmSourceTo);
+    // The widget's own dataset is only a hint: it is written once at toDOM()
+    // time and goes stale as soon as an edit elsewhere shifts the document, so
+    // the live decoration position is the authority.
+    const widgetPosition = widgetSourcePosition(view, source);
+    const datasetFrom = Number(source.dataset.cmSourceFrom);
+    const datasetTo = Number(source.dataset.cmSourceTo);
+    const formula = mathBlock || inlineMath
+      ? formulaRangeAtWidgetPosition(view.state, widgetPosition ?? datasetFrom)
+      : null;
+    const from = formula?.from ?? datasetFrom;
+    const to = formula?.to ?? datasetTo;
     if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to) return;
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation();
-    const anchor = mathBlock
-      ? from
-      : sourceAnchorForClick(source, event, from, to);
+    const anchor = sourceAnchorForClick(source, event, from, to);
     // The pointer already identifies visible content.  Asking CM6 to reveal
     // the new source cursor scrolls the old viewport while the replacement
     // widget is expanding, which is both unnecessary and disorienting.
-    if (mathBlock) {
-      activateBlockMath(view, from, to, {
-        kind: "point",
-        x: event.clientX,
-        y: event.clientY,
-      });
-    } else if (inlineMath) {
-      activateInlineMath(view, from, to, {
-        kind: "point",
-        x: event.clientX,
-        y: event.clientY,
-      });
-      view.contentDOM.focus({ preventScroll: true });
+    if (formula) {
+      revealFormulaSource(
+        view,
+        formula.from,
+        formula.to,
+        formulaSourceOffsetForClick(source, event, formula.contentTo - formula.contentFrom),
+      );
+      if (!formula.display) view.contentDOM.focus({ preventScroll: true });
+    } else if (mathBlock || inlineMath) {
+      return;
     } else {
       view.dispatch({ selection: { anchor } });
       view.contentDOM.focus({ preventScroll: true });
@@ -1115,6 +1138,7 @@ function buildExtensions(
       drawSelection({ cursorBlinkRate: -1 }),
       standaloneHistory,
     ] : []),
+    texSourceInput(),
     vscodeCloseBrackets(),
     closeBrackets(),
     EditorView.inputHandler.of(wrapSelectedMarkdownInput),
