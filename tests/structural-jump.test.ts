@@ -92,6 +92,11 @@ describe("region-bounded structural jumps", () => {
     expect(boundaries).not.toContain(alphaFrom + 2);
   });
 
+  test("consumes a non-BMP escaped character without slicing the remaining source", () => {
+    const source = "\\😀+x";
+    expect(texUnitBoundaries(source)).toEqual([0, 3, 4, 5]);
+  });
+
   test("adds Cmd-bracket TeX-unit navigation before delimiter fallback", () => {
     const mount = document.createElement("div");
     document.body.appendChild(mount);

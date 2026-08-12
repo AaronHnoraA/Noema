@@ -20,7 +20,14 @@ import {
 } from "@codemirror/view";
 import { MeasuredWidget } from "./measured-widget.ts";
 import { shortHash } from "./measured-observer.ts";
-import { EditorSelection, StateEffect, StateField, type ChangeSet, type EditorState } from "@codemirror/state";
+import {
+  EditorSelection,
+  StateEffect,
+  StateField,
+  type ChangeSet,
+  type EditorState,
+  type Transaction,
+} from "@codemirror/state";
 import type { Range } from "@codemirror/state";
 import { scanInlineMathRanges } from "../../../../inline-math.ts";
 import { renderMathHTML } from "../../../../math-render.ts";
@@ -377,6 +384,7 @@ class BlockMathWidget extends MeasuredWidget {
 
 type BlockMathFieldValue = {
   decorations: DecorationSet;
+  atomicRanges: DecorationSet;
   active: BlockMathEditSession | null;
   suppressedKey: string;
 };
@@ -565,6 +573,58 @@ function buildBlockMathDecos(
   return Decoration.set(buildBlockMathDecoRanges(state, 0, state.doc.length, active, suppressedKey), true);
 }
 
+const blockMathAtomicMark = Decoration.mark({});
+let blockMathAtomicFullRebuilds = 0;
+let blockMathAtomicRangeVisits = 0;
+
+export function blockMathAtomicFullRebuildCount(): number {
+  return blockMathAtomicFullRebuilds;
+}
+
+export function blockMathAtomicRangeVisitCount(): number {
+  return blockMathAtomicRangeVisits;
+}
+
+function buildBlockMathAtomicRangeItems(
+  state: EditorState,
+  from = 0,
+  to = state.doc.length,
+  active: BlockMathEditSession | null = null,
+  suppressedKey = "",
+): Range<Decoration>[] {
+  const items: Range<Decoration>[] = [];
+  const ranges = getBlockMathRanges(state);
+  let low = 0;
+  let high = ranges.length;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (ranges[mid]!.to < from) low = mid + 1;
+    else high = mid;
+  }
+  for (let index = low; index < ranges.length; index++) {
+    const range = ranges[index]!;
+    blockMathAtomicRangeVisits++;
+    if (range.from > to) break;
+    const key = blockMathKey(range);
+    if (active?.from === range.from && active.to === range.to) continue;
+    if (suppressedKey === key) continue;
+    items.push(blockMathAtomicMark.range(range.from, range.to));
+  }
+  return items;
+}
+
+function buildBlockMathAtomicRanges(
+  state: EditorState,
+  active: BlockMathEditSession | null = null,
+  suppressedKey = "",
+): DecorationSet {
+  blockMathAtomicFullRebuilds++;
+  return Decoration.set(
+    buildBlockMathAtomicRangeItems(state, 0, state.doc.length, active, suppressedKey),
+    true,
+  );
+}
+
 function activeBlockMathKey(state: EditorState): string {
   // Hot path: a single caret can only touch the formula that spans it, so this
   // stays a binary search. A *range* selection touches every formula it
@@ -633,12 +693,101 @@ function patchBlockMathDecosForSelectionChange(
   return next.update({ add, sort: true });
 }
 
+function patchBlockMathAtomicRangesForKeys(
+  state: EditorState,
+  current: DecorationSet,
+  keys: readonly string[],
+  active: BlockMathEditSession | null = null,
+  suppressedKey = "",
+): DecorationSet {
+  const windows = mergeWindows(keys
+    .filter((key, index) => key && keys.indexOf(key) === index)
+    .map(rangeFromKey)
+    .filter((range): range is { from: number; to: number } => Boolean(range))
+    .map((range) => blockMathWindow(state, range.from, range.to)));
+  if (windows.length === 0) return current;
+
+  let next = current;
+  const add: Range<Decoration>[] = [];
+  for (const range of windows) {
+    next = next.update({ filterFrom: range.from, filterTo: range.to, filter: () => false });
+    add.push(...buildBlockMathAtomicRangeItems(
+      state,
+      range.from,
+      range.to,
+      active,
+      suppressedKey,
+    ));
+  }
+  return next.update({ add, sort: true });
+}
+
+function mapBlockMathKey(key: string, changes: ChangeSet): string {
+  const range = rangeFromKey(key);
+  return range
+    ? `${changes.mapPos(range.from, -1)}:${changes.mapPos(range.to, 1)}`
+    : "";
+}
+
+function finishBlockMathFieldUpdate(
+  value: BlockMathFieldValue,
+  tr: Transaction,
+  decorations: DecorationSet,
+  active: BlockMathEditSession | null,
+  suppressedKey: string,
+  topologyStable: boolean,
+  previousActiveKey: string,
+): BlockMathFieldValue {
+  let atomicRanges = value.atomicRanges;
+  let rebuiltAtomicRanges = false;
+  if (tr.docChanged) {
+    if (topologyStable) {
+      atomicRanges = atomicRanges.map(tr.changes);
+    } else {
+      atomicRanges = buildBlockMathAtomicRanges(tr.state, active, suppressedKey);
+      rebuiltAtomicRanges = true;
+    }
+  }
+
+  if (!rebuiltAtomicRanges) {
+    const mappedPreviousActiveKey = tr.docChanged
+      ? mapBlockMathKey(previousActiveKey, tr.changes)
+      : previousActiveKey;
+    const mappedPreviousSuppressedKey = tr.docChanged
+      ? mapBlockMathKey(value.suppressedKey, tr.changes)
+      : value.suppressedKey;
+    const activeKey = active ? blockMathKey(active) : "";
+    if (mappedPreviousActiveKey !== activeKey
+      || mappedPreviousSuppressedKey !== suppressedKey) {
+      atomicRanges = patchBlockMathAtomicRangesForKeys(
+        tr.state,
+        atomicRanges,
+        [mappedPreviousActiveKey, activeKey, mappedPreviousSuppressedKey, suppressedKey],
+        active,
+        suppressedKey,
+      );
+    }
+  }
+
+  if (decorations === value.decorations
+    && atomicRanges === value.atomicRanges
+    && active === value.active
+    && suppressedKey === value.suppressedKey) return value;
+  return { decorations, atomicRanges, active, suppressedKey };
+}
+
 const mathBlockField = StateField.define<BlockMathFieldValue>({
   create(state) {
-    return { decorations: buildBlockMathDecos(state), active: null, suppressedKey: "" };
+    return {
+      decorations: buildBlockMathDecos(state),
+      atomicRanges: buildBlockMathAtomicRanges(state),
+      active: null,
+      suppressedKey: "",
+    };
   },
   update(value, tr) {
     const previousActive = value.active;
+    const previousActiveKey = previousActive ? blockMathKey(previousActive) : "";
     let active = previousActive;
     let suppressedKey = value.suppressedKey;
     let finishedByEffect = false;
@@ -714,15 +863,25 @@ const mathBlockField = StateField.define<BlockMathFieldValue>({
     if (tr.docChanged && previousActive && !active && !fallbackByEffect) {
       const ranges = getBlockMathRanges(tr.startState);
       const nextRanges = getBlockMathRanges(tr.state);
-      const decorations = canPatchBlockMathDecorations(ranges, nextRanges, tr.changes)
+      const patchable = canPatchBlockMathDecorations(ranges, nextRanges, tr.changes);
+      const decorations = patchable
         ? patchBlockMathDecosNearChanges(
           tr.state,
           value.decorations.map(tr.changes),
           ranges,
+          nextRanges,
           tr.changes,
         )
         : buildBlockMathDecos(tr.state, active, suppressedKey);
-      return { decorations, active, suppressedKey };
+      return finishBlockMathFieldUpdate(
+        value,
+        tr,
+        decorations,
+        active,
+        suppressedKey,
+        patchable,
+        previousActiveKey,
+      );
     }
     if (tr.docChanged && suppressedKey && !active) {
       const ranges = getBlockMathRanges(tr.startState);
@@ -731,19 +890,31 @@ const mathBlockField = StateField.define<BlockMathFieldValue>({
       // keystroke. That is not a real session transition and must never rebuild
       // every display-math widget in the document. Map all unaffected widgets
       // and recreate only the formula window touched by this transaction.
-      const decorations = canMapBlockMathDecorations(ranges, nextRanges, tr.changes)
+      const mappable = canMapBlockMathDecorations(ranges, nextRanges, tr.changes);
+      const patchable = !mappable
+        && canPatchBlockMathDecorations(ranges, nextRanges, tr.changes);
+      const decorations = mappable
         ? value.decorations.map(tr.changes)
-        : canPatchBlockMathDecorations(ranges, nextRanges, tr.changes)
+        : patchable
           ? patchBlockMathDecosNearChanges(
             tr.state,
             value.decorations.map(tr.changes),
             ranges,
+            nextRanges,
             tr.changes,
             active,
             suppressedKey,
           )
           : buildBlockMathDecos(tr.state, active, suppressedKey);
-      return { decorations, active, suppressedKey };
+      return finishBlockMathFieldUpdate(
+        value,
+        tr,
+        decorations,
+        active,
+        suppressedKey,
+        mappable || patchable,
+        previousActiveKey,
+      );
     }
     // A session start/finish genuinely swaps a widget for an editor, so a full
     // rebuild is proportionate there. `value.suppressedKey` used to be part of
@@ -751,28 +922,36 @@ const mathBlockField = StateField.define<BlockMathFieldValue>({
     // *every* caret movement rebuilt the decorations for every display formula
     // in the note — the dominant source of typing lag in long documents.
     if (active !== previousActive || finishedByEffect || fallbackByEffect || active !== null) {
-      return {
-        decorations: buildBlockMathDecos(tr.state, active, suppressedKey),
+      return finishBlockMathFieldUpdate(
+        value,
+        tr,
+        buildBlockMathDecos(tr.state, active, suppressedKey),
         active,
         suppressedKey,
-      };
+        false,
+        previousActiveKey,
+      );
     }
 
     let decorations = value.decorations;
+    let topologyStable = !tr.docChanged;
     if (tr.docChanged) {
       const ranges = getBlockMathRanges(tr.startState);
       const nextRanges = getBlockMathRanges(tr.state);
       if (canMapBlockMathDecorations(ranges, nextRanges, tr.changes)) {
         decorations = decorations.map(tr.changes);
+        topologyStable = true;
       } else if (canPatchBlockMathDecorations(ranges, nextRanges, tr.changes)) {
         decorations = patchBlockMathDecosNearChanges(
           tr.state,
           decorations.map(tr.changes),
           ranges,
+          nextRanges,
           tr.changes,
           active,
           suppressedKey,
         );
+        topologyStable = true;
       } else {
         decorations = buildBlockMathDecos(tr.state, active, suppressedKey);
       }
@@ -794,31 +973,22 @@ const mathBlockField = StateField.define<BlockMathFieldValue>({
         );
       }
     }
-    return { decorations, active, suppressedKey };
+    return finishBlockMathFieldUpdate(
+      value,
+      tr,
+      decorations,
+      active,
+      suppressedKey,
+      topologyStable,
+      previousActiveKey,
+    );
   },
   provide: (f) => EditorView.decorations.from(f, (value) => value.decorations),
 });
 
-// CodeMirror reads the atomicRanges facet several times per cursor movement.
-// Rebuilding a set covering every display formula on each of those reads was a
-// per-keystroke O(formulas) allocation; one build per state is enough.
-const blockMathAtomicCache = new WeakMap<BlockMathFieldValue, DecorationSet>();
-
 const mathBlockAtomicExtension = EditorView.atomicRanges.of((view) => {
   const value = view.state.field(mathBlockField, false);
-  if (!value) return Decoration.none;
-  const cached = blockMathAtomicCache.get(value);
-  if (cached) return cached;
-  const ranges: Range<Decoration>[] = [];
-  for (const range of getBlockMathRanges(view.state)) {
-    const key = blockMathKey(range);
-    if (value.active?.from === range.from && value.active.to === range.to) continue;
-    if (value.suppressedKey === key) continue;
-    ranges.push(Decoration.mark({}).range(range.from, range.to));
-  }
-  const built = Decoration.set(ranges, true);
-  blockMathAtomicCache.set(value, built);
-  return built;
+  return value?.atomicRanges ?? Decoration.none;
 });
 
 function canMapBlockMathDecorations(
@@ -827,17 +997,29 @@ function canMapBlockMathDecorations(
   changes: ChangeSet,
 ): boolean {
   if (ranges.length !== nextRanges.length) return false;
-  for (let index = 0; index < ranges.length; index++) {
-    const before = ranges[index]!;
-    const after = nextRanges[index]!;
-    if (changes.mapPos(before.from, -1) !== after.from
-      || changes.mapPos(before.to, 1) !== after.to) return false;
-  }
   let touchesMath = false;
-  changes.iterChanges((fromA, toA) => {
-    if (ranges.some((range) => fromA <= range.to && toA >= range.from)) touchesMath = true;
+  changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+    if (blockMathRangeIndexWindow(ranges, fromA, toA)
+      || blockMathRangeIndexWindow(nextRanges, fromB, toB)) touchesMath = true;
   });
   return !touchesMath;
+}
+
+function blockMathRangeIndexWindow(
+  ranges: readonly { from: number; to: number }[],
+  from: number,
+  to: number,
+): { from: number; to: number } | null {
+  let low = 0;
+  let high = ranges.length;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (ranges[mid]!.to < from) low = mid + 1;
+    else high = mid;
+  }
+  const start = low;
+  while (low < ranges.length && ranges[low]!.from <= to) low++;
+  return low > start ? { from: start, to: low } : null;
 }
 
 function canPatchBlockMathDecorations(
@@ -845,45 +1027,88 @@ function canPatchBlockMathDecorations(
   nextRanges: readonly { from: number; to: number }[],
   changes: ChangeSet,
 ): boolean {
-  let touchedBlock = false;
-  changes.iterChanges((fromA, toA) => {
-    if (ranges.some((range) => fromA <= range.to && toA >= range.from)) touchedBlock = true;
-  });
-  if (!touchedBlock) return false;
   if (ranges.length !== nextRanges.length) return false;
-  return ranges.every((range, index) => {
-    const next = nextRanges[index]!;
-    return changes.mapPos(range.from, -1) === next.from
-      && changes.mapPos(range.to, 1) === next.to;
+  let first = ranges.length;
+  let last = -1;
+  changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+    const before = blockMathRangeIndexWindow(ranges, fromA, toA);
+    const after = blockMathRangeIndexWindow(nextRanges, fromB, toB);
+    if (before) {
+      first = Math.min(first, before.from);
+      last = Math.max(last, before.to - 1);
+    }
+    if (after) {
+      first = Math.min(first, after.from);
+      last = Math.max(last, after.to - 1);
+    }
   });
+  if (last < first) return false;
+
+  // A changed fence can shift array identity past the directly touched range.
+  // Checking one sentinel on either side detects that without comparing every
+  // formula in a long document.
+  first = Math.max(0, first - 1);
+  last = Math.min(ranges.length - 1, last + 1);
+  for (let index = first; index <= last; index++) {
+    const range = ranges[index]!;
+    const next = nextRanges[index]!;
+    if (changes.mapPos(range.from, -1) !== next.from
+      || changes.mapPos(range.to, 1) !== next.to) return false;
+  }
+  return true;
 }
 
 function patchBlockMathDecosNearChanges(
   state: EditorState,
   mapped: DecorationSet,
   oldRanges: readonly { from: number; to: number }[],
+  nextRanges: readonly { from: number; to: number }[],
   changes: ChangeSet,
   active: BlockMathEditSession | null = null,
   suppressedKey = "",
 ): DecorationSet {
-  let from = Number.POSITIVE_INFINITY;
-  let to = 0;
-  changes.iterChanges((fromA, toA) => {
-    for (const range of oldRanges) {
-      if (fromA > range.to || toA < range.from) continue;
-      from = Math.min(from, changes.mapPos(range.from, -1));
-      to = Math.max(to, changes.mapPos(range.to, 1));
+  const windows: Array<{ from: number; to: number }> = [];
+  changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+    const before = blockMathRangeIndexWindow(oldRanges, fromA, toA);
+    const after = blockMathRangeIndexWindow(nextRanges, fromB, toB);
+    let from = Number.POSITIVE_INFINITY;
+    let to = Number.NEGATIVE_INFINITY;
+    if (before) {
+      for (let index = before.from; index < before.to; index++) {
+        const range = oldRanges[index]!;
+        from = Math.min(from, changes.mapPos(range.from, -1));
+        to = Math.max(to, changes.mapPos(range.to, 1));
+      }
+    }
+    if (after) {
+      for (let index = after.from; index < after.to; index++) {
+        const range = nextRanges[index]!;
+        from = Math.min(from, range.from);
+        to = Math.max(to, range.to);
+      }
+    }
+    if (Number.isFinite(from) && Number.isFinite(to)) {
+      windows.push(blockMathWindow(state, from, to));
     }
   });
-  if (!Number.isFinite(from)) return mapped;
-  for (const range of getBlockMathRanges(state)) {
-    if (range.from > to || range.to < from) continue;
-    from = Math.min(from, range.from);
-    to = Math.max(to, range.to);
+  if (windows.length === 0) return mapped;
+
+  let next = mapped;
+  for (const window of mergeWindows(windows)) {
+    next = next
+      .update({ filterFrom: window.from, filterTo: window.to, filter: () => false })
+      .update({
+        add: buildBlockMathDecoRanges(
+          state,
+          window.from,
+          window.to,
+          active,
+          suppressedKey,
+        ),
+        sort: true,
+      });
   }
-  return mapped
-    .update({ filterFrom: from, filterTo: to, filter: () => false })
-    .update({ add: buildBlockMathDecoRanges(state, from, to, active, suppressedKey), sort: true });
+  return next;
 }
 
 function dispatchMathEditState(view: EditorView, active: boolean, kind: "inline" | "display"): void {

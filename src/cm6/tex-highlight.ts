@@ -63,7 +63,13 @@ const COMMAND_BRACKET_CLOSERS = new Set(Object.values(COMMAND_BRACKETS));
 const PLAIN_BRACKETS: Record<string, string> = { "{": "}", "(": ")", "[": "]" };
 const PLAIN_BRACKET_CLOSERS = new Set(Object.values(PLAIN_BRACKETS));
 
-type OpenBracket = { close: string; tokenIndex: number };
+type OpenBracket = {
+  close: string;
+  tokenIndex: number;
+  depth: number;
+  previous: OpenBracket | null;
+  previousSame: OpenBracket | null;
+};
 
 function isLetter(character: string | undefined): boolean {
   return character !== undefined && /[A-Za-z@]/.test(character);
@@ -109,7 +115,9 @@ function readGroupEnd(source: string, index: number): number {
  */
 export function scanTexSource(source: string, baseOffset = 0): TexToken[] {
   const tokens: TexToken[] = [];
-  const stack: OpenBracket[] = [];
+  let stack: OpenBracket | null = null;
+  let stackDepth = 0;
+  const latestByCloser = new Map<string, OpenBracket>();
 
   const push = (from: number, to: number, kind: TexTokenKind, depth?: number): number => {
     if (to <= from) return -1;
@@ -117,24 +125,43 @@ export function scanTexSource(source: string, baseOffset = 0): TexToken[] {
     return tokens.length - 1;
   };
   const open = (from: number, to: number, close: string): void => {
-    const depth = stack.length % TEX_BRACKET_DEPTH_COLORS;
-    stack.push({ close, tokenIndex: push(from, to, "bracket", depth) });
+    const depth = stackDepth % TEX_BRACKET_DEPTH_COLORS;
+    const entry: OpenBracket = {
+      close,
+      tokenIndex: push(from, to, "bracket", depth),
+      depth,
+      previous: stack,
+      previousSame: latestByCloser.get(close) ?? null,
+    };
+    stack = entry;
+    stackDepth++;
+    latestByCloser.set(close, entry);
   };
   const close = (from: number, to: number, closer: string): void => {
-    for (let index = stack.length - 1; index >= 0; index--) {
-      if (stack[index]!.close !== closer) continue;
-      // Anything opened inside this one can no longer close: `{a(b}` leaves the
-      // `(` orphaned, and it has to be flagged rather than keep the colour it
-      // was optimistically given when it opened.
-      // `splice` returns the match first, then the orphans above it.
-      for (const orphan of stack.splice(index).slice(1)) {
-        const token = tokens[orphan.tokenIndex];
-        if (token) token.depth = -1;
-      }
-      push(from, to, "bracket", index % TEX_BRACKET_DEPTH_COLORS);
+    const match = latestByCloser.get(closer);
+    if (!match) {
+      push(from, to, "bracket", -1);
       return;
     }
-    push(from, to, "bracket", -1);
+    // Pop and orphan every bracket above the matching opener. Each opener is
+    // removed at most once, while an unmatched closer is now an O(1) lookup;
+    // repeated wrong closers can no longer rescan a deep stack quadratically.
+    while (stack && stack !== match) {
+      const orphan = stack;
+      const token = tokens[orphan.tokenIndex];
+      if (token) token.depth = -1;
+      stack = orphan.previous;
+      stackDepth--;
+      if (latestByCloser.get(orphan.close) === orphan) {
+        if (orphan.previousSame) latestByCloser.set(orphan.close, orphan.previousSame);
+        else latestByCloser.delete(orphan.close);
+      }
+    }
+    stack = match.previous;
+    stackDepth--;
+    if (match.previousSame) latestByCloser.set(closer, match.previousSame);
+    else latestByCloser.delete(closer);
+    push(from, to, "bracket", match.depth);
   };
 
   let position = 0;
@@ -176,9 +203,9 @@ export function scanTexSource(source: string, baseOffset = 0): TexToken[] {
         push(position, end, "command");
         const groupEnd = readGroupEnd(source, end);
         if (groupEnd > 0) {
-          push(end, end + 1, "bracket", stack.length % TEX_BRACKET_DEPTH_COLORS);
+          push(end, end + 1, "bracket", stackDepth % TEX_BRACKET_DEPTH_COLORS);
           push(end + 1, groupEnd - 1, "environment");
-          push(groupEnd - 1, groupEnd, "bracket", stack.length % TEX_BRACKET_DEPTH_COLORS);
+          push(groupEnd - 1, groupEnd, "bracket", stackDepth % TEX_BRACKET_DEPTH_COLORS);
           position = groupEnd;
           continue;
         }
@@ -190,7 +217,7 @@ export function scanTexSource(source: string, baseOffset = 0): TexToken[] {
         if (groupEnd > 0) {
           // The argument is prose, not math: colour it as one run so it reads
           // the way it will render.
-          const depth = stack.length % TEX_BRACKET_DEPTH_COLORS;
+          const depth = stackDepth % TEX_BRACKET_DEPTH_COLORS;
           push(end, end + 1, "bracket", depth);
           push(end + 1, groupEnd - 1, "text");
           push(groupEnd - 1, groupEnd, "bracket", depth);
@@ -226,9 +253,11 @@ export function scanTexSource(source: string, baseOffset = 0): TexToken[] {
     position++;
   }
 
-  for (const entry of stack) {
+  while (stack) {
+    const entry: OpenBracket = stack;
     const token = tokens[entry.tokenIndex];
     if (token) token.depth = -1;
+    stack = entry.previous;
   }
   return tokens;
 }

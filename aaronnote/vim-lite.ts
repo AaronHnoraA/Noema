@@ -2,6 +2,12 @@ import type { Editor } from "../src/lib.ts";
 import { EditorSelection, findClusterBreak, type Text } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import {
+  selectCharLeft,
+  selectCharRight,
+  selectLineDown,
+  selectLineUp,
+} from "@codemirror/commands";
+import {
   graphemeEndPosition,
   previousGraphemePosition,
 } from "../src/cm6/text-boundaries.ts";
@@ -12,6 +18,7 @@ import { getOrgEnvHeadingRanges } from "../src/cm6/extensions/visual/widgets/blo
 import { cancelPointerSelection } from "../src/cm6/extensions/visual/selection.ts";
 import {
   activateBlockMath,
+  formulaRangeAtWidgetPosition,
   formulaSourceRangeAtPosition,
   activateInlineMath,
   activateInlineMathFromArrow,
@@ -25,6 +32,10 @@ import {
   type VimJumpDirection,
   type VimJumpSession,
 } from "../src/cm6/vim-jump.ts";
+import {
+  captureEditorPasteTarget,
+  releaseEditorPasteTarget,
+} from "../src/cm6/paste-target.ts";
 
 export type VimLiteMode = "insert" | "normal" | "visual" | "visual-line";
 export type VimLiteFoldAction = "close" | "open" | "toggle" | "close-all" | "open-all";
@@ -332,7 +343,9 @@ function moveNormalCharPosition(text: Text, pos: number, dir: -1 | 1): number {
 }
 
 function setNormalPos(editor: Editor, pos: number): void {
-  setPos(editor, normalCharPosition(doc(editor), pos));
+  const normalized = normalCharPosition(doc(editor), pos);
+  const object = staticMathObjectAtPosition(editor, normalized);
+  setPos(editor, object?.from ?? normalized);
 }
 
 function moveChar(editor: Editor, dir: -1 | 1): void {
@@ -784,9 +797,25 @@ export function createVimLite(
     let target = currentHead(editor);
     if (mode === "insert") {
       const text = doc(editor);
-      target = insertEntry?.doc === text && insertEntry.boundary === currentHead(editor)
-        ? insertEntry.returnPos
-        : insertExitPosition(text, currentHead(editor));
+      const source = formulaSourceRangeAtPosition(editor.view, currentHead(editor));
+      if (source) {
+        const formula = formulaRangeAtWidgetPosition(editor.view.state, currentHead(editor))
+          ?? formulaRangeAtWidgetPosition(editor.view.state, source.from);
+        const contentFrom = formula?.contentFrom ?? source.from;
+        const contentTo = formula?.contentTo ?? source.to;
+        const candidate = insertExitPosition(text, currentHead(editor));
+        // Esc is a Vim mode transition, not a request to commit/collapse the
+        // locally revealed TeX source. Keep the Normal cursor on formula
+        // content (never on a \( / \[ fence), including display math whose
+        // closing fence begins on the next line.
+        target = candidate >= contentTo && contentTo > contentFrom
+          ? previousGraphemePosition(text, contentTo)
+          : clamp(candidate, contentFrom, contentTo);
+      } else {
+        target = insertEntry?.doc === text && insertEntry.boundary === currentHead(editor)
+          ? insertEntry.returnPos
+          : insertExitPosition(text, currentHead(editor));
+      }
     } else if (mode === "visual" || mode === "visual-line") {
       target = visualHead ?? target;
     }
@@ -807,7 +836,8 @@ export function createVimLite(
   function setVisualHead(head: number): void {
     const text = doc(editor);
     if (visualAnchor == null) visualAnchor = normalCharPosition(text, currentHead(editor));
-    visualHead = normalCharPosition(text, head);
+    const normalized = normalCharPosition(text, head);
+    visualHead = staticMathObjectAtPosition(editor, normalized)?.from ?? normalized;
     if (visualHead >= visualAnchor) {
       setSelection(editor, visualAnchor, visualObjectEndPosition(editor, visualHead));
     } else {
@@ -914,6 +944,19 @@ export function createVimLite(
     setVisualHead(which === "start" ? line.start : normalCharPosition(doc(editor), line.end));
   }
 
+  function visualDocumentBoundary(which: "start" | "end"): void {
+    resetMotionMemory();
+    setVisualHead(which === "start" ? 0 : doc(editor).length);
+  }
+
+  function visualLineDocumentBoundary(which: "start" | "end"): void {
+    resetMotionMemory();
+    const text = doc(editor);
+    visualHead = docLineRange(text, which === "start" ? 0 : text.length).cursor;
+    const range = docLineSelectionRange(text, visualAnchor ?? visualHead, visualHead);
+    setSelection(editor, range.from, range.to);
+  }
+
   function visualMoveWord(dir: -1 | 1, bigWord = false): void {
     resetMotionMemory();
     const text = doc(editor);
@@ -935,12 +978,15 @@ export function createVimLite(
 
     cancelJump();
     const forward = head > anchor;
-    visualAnchor = normalCharPosition(text, forward ? anchor : previousGraphemePosition(text, anchor));
-    visualHead = normalCharPosition(text, forward ? previousGraphemePosition(text, head) : head);
+    const rawAnchor = normalCharPosition(text, forward ? anchor : previousGraphemePosition(text, anchor));
+    const rawHead = normalCharPosition(text, forward ? previousGraphemePosition(text, head) : head);
+    visualAnchor = staticMathObjectAtPosition(editor, rawAnchor)?.from ?? rawAnchor;
+    visualHead = staticMathObjectAtPosition(editor, rawHead)?.from ?? rawHead;
     const changed = mode !== "visual";
     mode = "visual";
     resetMotionMemory();
     if (changed) options.onModeChange?.(mode);
+    if (visualAnchor !== rawAnchor || visualHead !== rawHead) setVisualHead(visualHead);
   }
 
   function deleteLineCommand(): void {
@@ -968,9 +1014,17 @@ export function createVimLite(
 
   function paste(where: "before" | "after"): void {
     resetMotionMemory();
-    const placement = register.kind === "linewise"
-      ? { kind: "line" as const, where }
-      : { kind: "character" as const, where };
+    const replacingVisual = mode === "visual" || mode === "visual-line";
+    const selectedRange = replacingVisual ? editor.getMarkdownSelection() : undefined;
+    const placement = replacingVisual
+      ? { kind: "selection" as const }
+      : register.kind === "linewise"
+        ? { kind: "line" as const, where }
+        : { kind: "character" as const, where };
+    // Visual paste is a command completion, so leave Visual immediately.  The
+    // captured range remains mapped while the clipboard read is pending.
+    if (replacingVisual) setMode("normal");
+    const target = captureEditorPasteTarget(editor.view, selectedRange);
     // Capture the current register in case it changes before the async path runs.
     const localRegister = register;
     const pending = pendingClipboardWrite;
@@ -982,12 +1036,12 @@ export function createVimLite(
         // 400 ms guard prevents a stalled write from blocking paste indefinitely.
         await Promise.race([pending, new Promise<void>((r) => setTimeout(r, 400))]);
         if (destroyed || epoch !== asyncEpoch) return;
-        const handled = await editor.pasteFromClipboard({ placement });
+        const handled = await editor.pasteFromClipboard({ placement, target });
         if (!handled && localRegister.text) {
-          editor.pastePlainText(localRegister.text, { placement });
+          editor.pastePlainText(localRegister.text, { placement, target });
         }
       })().finally(() => {
-        if (!destroyed && epoch === asyncEpoch) setMode("normal");
+        if (!destroyed && epoch === asyncEpoch) releaseEditorPasteTarget(editor.view, target);
       });
     }, 0);
   }
@@ -1204,7 +1258,8 @@ export function createVimLite(
         moveWord(editor, -1, true);
         return true;
       case "u":
-        return options.onUndo?.() ?? false;
+        options.onUndo?.();
+        return true;
       case "g":
         pending = "g";
         return true;
@@ -1216,8 +1271,18 @@ export function createVimLite(
         docBoundary(editor, "end");
         return true;
       case "i":
-        enterInsert(normalCharPosition(doc(editor), currentHead(editor)));
-        enterStaticMathObject(editor, "start");
+        {
+          const returnPos = staticMathObjectAtPosition(editor, currentHead(editor))?.from
+            ?? normalCharPosition(doc(editor), currentHead(editor));
+          enterInsert(returnPos);
+          if (enterStaticMathObject(editor, "start")) {
+            insertEntry = {
+              doc: doc(editor),
+              boundary: currentHead(editor),
+              returnPos,
+            };
+          }
+        }
         return true;
       case "v":
         enterVisual();
@@ -1227,8 +1292,11 @@ export function createVimLite(
         return true;
       case "a":
         if (staticMathObjectAtPosition(editor, currentHead(editor))) {
-          enterInsert(normalCharPosition(doc(editor), currentHead(editor)));
-          enterStaticMathObject(editor, "end");
+          const returnPos = staticMathObjectAtPosition(editor, currentHead(editor))!.from;
+          enterInsert(returnPos);
+          if (enterStaticMathObject(editor, "end")) {
+            insertEntry = { doc: doc(editor), boundary: currentHead(editor), returnPos };
+          }
         } else appendChar();
         return true;
       case "I":
@@ -1274,7 +1342,8 @@ export function createVimLite(
         return true;
       case "/":
         resetMotionMemory();
-        return options.onFind?.() ?? false;
+        options.onFind?.();
+        return true;
       case "r":
         pending = "r";
         return true;
@@ -1318,6 +1387,11 @@ export function createVimLite(
       setMode("normal");
       return true;
     }
+    if (pending === "g") {
+      pending = "";
+      if (key === "g") visualDocumentBoundary("start");
+      return true;
+    }
     switch (key) {
       case "h":
       case "ArrowLeft":
@@ -1343,6 +1417,12 @@ export function createVimLite(
       case "$":
         visualLineBoundary("end");
         return true;
+      case "g":
+        pending = "g";
+        return true;
+      case "G":
+        visualDocumentBoundary("end");
+        return true;
       case "w":
         visualMoveWord(1);
         return true;
@@ -1367,6 +1447,12 @@ export function createVimLite(
       case "y":
         yankSelection();
         return true;
+      case "p":
+        paste("after");
+        return true;
+      case "P":
+        paste("before");
+        return true;
       case "o":
         swapVisualEnds();
         return true;
@@ -1378,7 +1464,8 @@ export function createVimLite(
         return true;
       case "/":
         resetMotionMemory();
-        return options.onFind?.() ?? false;
+        options.onFind?.();
+        return true;
       case "v":
       case "Escape":
         setMode("normal");
@@ -1390,6 +1477,11 @@ export function createVimLite(
   }
 
   function visualLineCommand(key: string): boolean {
+    if (pending === "g") {
+      pending = "";
+      if (key === "g") visualLineDocumentBoundary("start");
+      return true;
+    }
     switch (key) {
       case "j":
       case "ArrowDown":
@@ -1408,12 +1500,25 @@ export function createVimLite(
       case "y":
         yankSelection("linewise");
         return true;
+      case "p":
+        paste("after");
+        return true;
+      case "P":
+        paste("before");
+        return true;
+      case "g":
+        pending = "g";
+        return true;
+      case "G":
+        visualLineDocumentBoundary("end");
+        return true;
       case "v":
         switchToVisualChar();
         return true;
       case "/":
         resetMotionMemory();
-        return options.onFind?.() ?? false;
+        options.onFind?.();
+        return true;
       case "V":
       case "Escape":
         setMode("normal");
@@ -1447,8 +1552,22 @@ export function createVimLite(
         }
         return false;
       }
+      if (mode === "normal"
+          && event.shiftKey
+          && !hasCommandModifier({ ...event, shiftKey: false })
+          && /^Arrow(?:Left|Right|Up|Down)$/u.test(event.key)) {
+        const command = event.key === "ArrowLeft" ? selectCharLeft
+          : event.key === "ArrowRight" ? selectCharRight
+            : event.key === "ArrowUp" ? selectLineUp
+              : selectLineDown;
+        if (command(editor.view)) syncSelectionFromEditor();
+        // A boundary no-op is still a recognized modal command and must not
+        // fall through to browser chrome.
+        return true;
+      }
       if (event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "r") {
-        return options.onRedo?.() ?? false;
+        options.onRedo?.();
+        return true;
       }
       if (hasCommandModifier(event)) {
         cancelJump();

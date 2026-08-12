@@ -102,14 +102,14 @@ function withNavigatorPlatform(platform: string, run: () => void): void {
 }
 
 describe("xwidget key guard", () => {
-  test("guards known control keys outside editor and text controls", () => {
+  test("leaves known control keys native on interactive controls", () => {
     const host = withMounted(document.createElement("section"));
     const button = withMounted(document.createElement("button"));
     try {
       for (const key of ["Escape", "Delete", "Backspace"]) {
         const result = runGuard(button, key, host);
-        expect(result.guarded).toBe(true);
-        expect(result.defaultPrevented).toBe(true);
+        expect(result.guarded).toBe(false);
+        expect(result.defaultPrevented).toBe(false);
       }
     } finally {
       button.remove();
@@ -604,6 +604,60 @@ describe("xwidget key guard", () => {
     }
   });
 
+  test("capture deletion preserves bracket pairs and every selection range", () => {
+    const host = withMounted(document.createElement("section"));
+    const editor = createEditor(host, { initialContent: "()" });
+    const vim = createVimLite(editor, host);
+    try {
+      editor.setMarkdownSelection(1);
+      const pair = new KeyboardEvent("keydown", { key: "Backspace", bubbles: true, cancelable: true });
+      Object.defineProperty(pair, "target", { value: document.body });
+      expect(handleXwidgetControlKeydown(pair, { editor, editorHost: host, vim })).toBe(true);
+      expect(editor.getMarkdown()).toBe("");
+
+      editor.setMarkdown("ab cd", { history: "reset" });
+      editor.view.dispatch({
+        selection: EditorSelection.create([
+          EditorSelection.cursor(1),
+          EditorSelection.cursor(4),
+        ]),
+      });
+      const multi = new KeyboardEvent("keydown", { key: "Backspace", bubbles: true, cancelable: true });
+      Object.defineProperty(multi, "target", { value: document.body });
+      expect(handleXwidgetControlKeydown(multi, { editor, editorHost: host, vim })).toBe(true);
+      expect(editor.getMarkdown()).toBe("b d");
+      expect(editor.view.state.selection.ranges).toHaveLength(2);
+    } finally {
+      editor.destroy();
+      host.remove();
+    }
+  });
+
+  test("interactive controls keep their keys and cannot edit the document", () => {
+    const host = withMounted(document.createElement("section"));
+    const button = withMounted(document.createElement("button"));
+    const editor = createEditor(host, { initialContent: "abc" });
+    const vim = createVimLite(editor, host);
+    editor.setMarkdownSelection(1);
+    button.focus();
+    try {
+      for (const key of ["Backspace", "Delete", "Enter", "ArrowLeft"]) {
+        const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+        Object.defineProperty(event, "target", { value: button });
+        const handled = key === "Backspace" || key === "Delete"
+          ? handleXwidgetControlKeydown(event, { editor, editorHost: host, vim })
+          : handleXwidgetSpecialKeydown(event, { editor, editorHost: host, vim });
+        expect(handled).toBe(false);
+        expect(event.defaultPrevented).toBe(false);
+      }
+      expect(editor.getMarkdown()).toBe("abc");
+    } finally {
+      editor.destroy();
+      button.remove();
+      host.remove();
+    }
+  });
+
   test("maps raw xwidget keydown control bytes before they can insert glyphs", () => {
     const host = withMounted(document.createElement("section"));
     const editor = createEditor(host, { initialContent: "abc" });
@@ -695,6 +749,25 @@ describe("xwidget key guard", () => {
       expect(handleXwidgetSpecialKeydown(event, { editor, editorHost: host, vim })).toBe(true);
       expect(event.defaultPrevented).toBe(true);
       expect(editor.getMarkdown()).toBe("a\nbc");
+    } finally {
+      editor.destroy();
+      host.remove();
+    }
+  });
+
+  test("capture Enter keeps Markdown tables intact and moves to the same column", () => {
+    const host = withMounted(document.createElement("section"));
+    const markdown = "| A | B |\n| --- | --- |\n| x | y |\n| z | w |";
+    const editor = createEditor(host, { initialContent: markdown });
+    const vim = createVimLite(editor, host);
+    vim.setMode("insert");
+    editor.setMarkdownSelection(markdown.indexOf("y"));
+    try {
+      const event = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+      Object.defineProperty(event, "target", { value: document.body });
+      expect(handleXwidgetSpecialKeydown(event, { editor, editorHost: host, vim })).toBe(true);
+      expect(editor.getMarkdown().split("\n")).toHaveLength(4);
+      expect(editor.view.state.doc.lineAt(editor.getMarkdownSelection().from).number).toBe(4);
     } finally {
       editor.destroy();
       host.remove();

@@ -1,32 +1,13 @@
 import type { Editor } from "../src/lib.ts";
 import type { VimLiteController } from "./vim-lite.ts";
+import { indentMarkdownList } from "../src/cm6/commands/index.ts";
 import {
-  cursorCharLeft,
-  cursorCharRight,
-  cursorLineBoundaryBackward,
-  cursorLineBoundaryForward,
-  cursorLineDown,
-  cursorLineUp,
-  cursorPageDown,
-  cursorPageUp,
-  insertNewlineAndIndent,
-  selectCharLeft,
-  selectCharRight,
-  selectLineBoundaryBackward,
-  selectLineBoundaryForward,
-  selectLineDown,
-  selectLineUp,
-  selectPageDown,
-  selectPageUp,
-} from "@codemirror/commands";
-import { insertNewlineContinueMarkup } from "@codemirror/lang-markdown";
-import { continueMarkdownBlock, exitEmptyMarkdownBlock, indentMarkdownList } from "../src/cm6/commands/index.ts";
-import { nextGraphemePosition, previousGraphemePosition } from "../src/cm6/text-boundaries.ts";
+  runEditorDelete,
+  runEditorEnter,
+  runEditorMovement,
+  type EditorMovementKey,
+} from "../src/cm6/input-commands.ts";
 import { historyChordKind } from "../src/keymap/shortcut-router.ts";
-import {
-  activateInlineMathFromArrow,
-  moveInsertLineWithDisplayMathEntry,
-} from "../src/cm6/extensions/visual/index.ts";
 
 type XwidgetControlKey = "Escape" | "Delete" | "Backspace";
 type XwidgetSpecialKey =
@@ -45,6 +26,8 @@ type XwidgetKeyContext = {
   editorHost: HTMLElement;
   vim: Pick<VimLiteController, "handleKey" | "mode" | "setMode">;
   enabled?: boolean;
+  /** Emacs/xwidget may report editor-owned keys on body instead of cm-content. */
+  allowDetachedTarget?: boolean;
 };
 type EmacsKeyForwardOptions = {
   client?: () => string | null | undefined;
@@ -122,6 +105,38 @@ function isTextEditingTarget(target: EventTarget | null, editorHost: HTMLElement
   return !(editorHost.contains(editable) && editable.classList.contains("cm-content"));
 }
 
+function isInteractiveControlTarget(target: EventTarget | null, editorHost: HTMLElement): boolean {
+  const element = targetElement(target);
+  if (!element) return false;
+  if (editorHost.contains(element) && element.closest(".cm-content")) return false;
+  return Boolean(element.closest([
+    "button",
+    "a[href]",
+    "summary",
+    "input",
+    "textarea",
+    "select",
+    "[contenteditable]:not([contenteditable='false'])",
+    "[role='button']",
+    "[role='menuitem']",
+    "[role='option']",
+    "[tabindex]:not([tabindex='-1'])",
+  ].join(",")));
+}
+
+function eventOwnedByEditor(
+  event: KeyboardEvent | InputEvent,
+  editorHost: HTMLElement,
+  allowDetachedTarget: boolean,
+): boolean {
+  if (isInteractiveControlTarget(event.target, editorHost)
+      || isInteractiveControlTarget(document.activeElement, editorHost)) return false;
+  const target = targetElement(event.target);
+  const active = targetElement(document.activeElement);
+  if ((target && editorHost.contains(target)) || (active && editorHost.contains(active))) return true;
+  return allowDetachedTarget;
+}
+
 function hardStop(event: Event): void {
   event.preventDefault();
   event.stopPropagation();
@@ -193,13 +208,14 @@ function shouldHandleXwidgetControlEvent(
   event: KeyboardEvent | InputEvent,
   editorHost: HTMLElement,
   key: XwidgetControlKey | null,
+  allowDetachedTarget = true,
 ): key is XwidgetControlKey {
   if (event.defaultPrevented || event.isComposing) return false;
   if (event instanceof KeyboardEvent && (event.ctrlKey || event.metaKey || event.altKey)) return false;
   if (!key) return false;
   if (isTextEditingTarget(event.target, editorHost)) return false;
   if (isTextEditingTarget(document.activeElement, editorHost)) return false;
-  return true;
+  return eventOwnedByEditor(event, editorHost, allowDetachedTarget);
 }
 
 function shouldHandleXwidgetSpecialEvent(
@@ -213,19 +229,7 @@ function shouldHandleXwidgetSpecialEvent(
   if (event instanceof KeyboardEvent && (event.ctrlKey || event.metaKey || event.altKey)) return false;
   if (isTextEditingTarget(event.target, context.editorHost)) return false;
   if (isTextEditingTarget(document.activeElement, context.editorHost)) return false;
-  return true;
-}
-
-function deleteFromEditor(editor: Editor, key: "Delete" | "Backspace"): void {
-  const { from, to } = editor.getMarkdownSelection();
-  if (from !== to) {
-    editor.replaceMarkdownRange(from, to, "", "start");
-    return;
-  }
-  const text = editor.view.state.doc;
-  const start = key === "Backspace" ? previousGraphemePosition(text, from) : from;
-  const end = key === "Delete" ? nextGraphemePosition(text, to) : to;
-  if (start < end) editor.replaceMarkdownRange(start, end, "", "start");
+  return eventOwnedByEditor(event, context.editorHost, context.allowDetachedTarget !== false);
 }
 
 function nowMs(): number {
@@ -315,7 +319,7 @@ function runEditorControlKey(key: XwidgetControlKey, context: XwidgetKeyContext)
   }
 
   if (context.vim.mode() === "insert") {
-    deleteFromEditor(context.editor, key);
+    runEditorDelete(context.editor.view, key === "Backspace" ? "backward" : "forward");
   } else {
     context.vim.handleKey({ key });
   }
@@ -328,51 +332,15 @@ function runEditorSpecialKey(key: XwidgetSpecialKey, context: XwidgetKeyContext,
     if (handled) context.editor.focus();
     return handled;
   }
-  if (!shiftKey && (key === "ArrowLeft" || key === "ArrowRight")) {
-    if (activateInlineMathFromArrow(context.editor.view, key)) return true;
+  if (key === "Enter") {
+    const handled = runEditorEnter(context.editor.view);
+    if (handled) context.editor.focus();
+    return handled;
   }
-  if (!shiftKey && /^Arrow(?:Left|Right|Up|Down)$/.test(key)) {
-    const handled = context.vim.handleKey({ key });
-    if (handled) {
-      context.editor.focus();
-      return true;
-    }
-  }
-  const view = context.editor.view;
-  if (!shiftKey && (key === "ArrowUp" || key === "ArrowDown")) {
-    const moved = moveInsertLineWithDisplayMathEntry(view, key === "ArrowDown");
-    if (moved) {
-      // Refocusing CM6 after display activation would immediately blur and
-      // commit MathLive. Plain cursor movement remains focused as usual.
-      if (moved === "cursor") context.editor.focus();
-      return true;
-    }
-  }
-  const command = (() => {
-    switch (key) {
-      case "Enter":
-        return () => exitEmptyMarkdownBlock(view) || continueMarkdownBlock(view) || insertNewlineContinueMarkup(view) || insertNewlineAndIndent(view);
-      case "ArrowLeft":
-        return shiftKey ? selectCharLeft : cursorCharLeft;
-      case "ArrowRight":
-        return shiftKey ? selectCharRight : cursorCharRight;
-      case "ArrowUp":
-        return shiftKey ? selectLineUp : cursorLineUp;
-      case "ArrowDown":
-        return shiftKey ? selectLineDown : cursorLineDown;
-      case "Home":
-        return shiftKey ? selectLineBoundaryBackward : cursorLineBoundaryBackward;
-      case "End":
-        return shiftKey ? selectLineBoundaryForward : cursorLineBoundaryForward;
-      case "PageUp":
-        return shiftKey ? selectPageUp : cursorPageUp;
-      case "PageDown":
-        return shiftKey ? selectPageDown : cursorPageDown;
-    }
-  })();
-  const handled = command(view);
-  if (handled) context.editor.focus();
-  return handled;
+  const moved = runEditorMovement(context.editor.view, key as EditorMovementKey, shiftKey);
+  // Refocusing after formula activation can commit a native math surface.
+  if (moved === "cursor") context.editor.focus();
+  return Boolean(moved);
 }
 
 function runXwidgetTabKey(editor: Editor, shiftKey: boolean): boolean {
@@ -387,7 +355,7 @@ function shouldHandleXwidgetVimKey(event: KeyboardEvent | InputEvent, context: X
   if (event.defaultPrevented || event.isComposing) return false;
   if (isTextEditingTarget(event.target, context.editorHost)) return false;
   if (isTextEditingTarget(document.activeElement, context.editorHost)) return false;
-  return true;
+  return eventOwnedByEditor(event, context.editorHost, context.allowDetachedTarget !== false);
 }
 
 function shouldHandleXwidgetHistoryKey(
@@ -399,7 +367,7 @@ function shouldHandleXwidgetHistoryKey(
   if (!kind || event.defaultPrevented || event.isComposing) return false;
   if (isTextEditingTarget(event.target, context.editorHost)) return false;
   if (isTextEditingTarget(document.activeElement, context.editorHost)) return false;
-  return true;
+  return eventOwnedByEditor(event, context.editorHost, context.allowDetachedTarget !== false);
 }
 
 export function handleXwidgetHistoryKeydown(event: KeyboardEvent, context: XwidgetKeyContext): boolean {
@@ -516,7 +484,12 @@ export function handleXwidgetControlKeydown(
 ): boolean {
   if (context.enabled === false) return false;
   const key = controlKeyFromKeyboardEvent(event);
-  if (!shouldHandleXwidgetControlEvent(event, context.editorHost, key)) return false;
+  if (!shouldHandleXwidgetControlEvent(
+    event,
+    context.editorHost,
+    key,
+    context.allowDetachedTarget !== false,
+  )) return false;
 
   hardStop(event);
   noteHandledKeydown(context.editor, key);
@@ -545,7 +518,12 @@ export function handleXwidgetVimKeydown(event: KeyboardEvent, context: XwidgetKe
 export function handleXwidgetControlBeforeInput(event: InputEvent, context: XwidgetKeyContext): boolean {
   if (context.enabled === false) return false;
   const key = controlKeyFromInputEvent(event);
-  if (!shouldHandleXwidgetControlEvent(event, context.editorHost, key)) return false;
+  if (!shouldHandleXwidgetControlEvent(
+    event,
+    context.editorHost,
+    key,
+    context.allowDetachedTarget !== false,
+  )) return false;
   hardStop(event);
   if (!recentlyHandledKeydown(context.editor, key)) runEditorControlKey(key, context);
   return true;

@@ -66,6 +66,8 @@ export type VisualTexPreviewState = {
 export type VisualTexPreview = {
   readonly ready: Promise<void>;
   update(state: VisualTexPreviewState): void;
+  /** Refit and realign overlays after an external viewport/layout change. */
+  refreshLayout(): void;
   /** Stop all deferred synchronization while retaining the reusable field. */
   suspend(): void;
   destroy(): void;
@@ -74,11 +76,12 @@ export type VisualTexPreview = {
 export type VisualTexPreviewOptions = {
   macros: Record<string, string>;
   /**
-   * A frame has been rendered. `contentChanged` is false for caret-only
+   * A frame has been rendered. `measureRequired` is false for caret-only
    * updates, where the formula's size cannot have changed and the host can skip
-   * re-measuring it.
+   * re-measuring it. It is true for first mount, content/display changes and an
+   * explicit layout refresh.
    */
-  onRendered?: (contentChanged: boolean) => void;
+  onRendered?: (measureRequired: boolean) => void;
   onUnavailable?: (error: unknown) => void;
   onSourcePosition?: (offset: number) => void;
   /** Trailing source-to-MathLive synchronization delay, in milliseconds. */
@@ -2891,9 +2894,16 @@ function createVisualTexQuickbar(
   };
 }
 
+const visualTexPreviewStyledFields = new WeakSet<object>();
+
 function installVisualTexPreviewShadowStyles(field: MathfieldElement): void {
+  if (visualTexPreviewStyledFields.has(field)) return;
   const root = field.shadowRoot;
-  if (!root || root.querySelector("style[data-noema-livetex-preview]")) return;
+  if (!root) return;
+  if (root.querySelector("style[data-noema-livetex-preview]")) {
+    visualTexPreviewStyledFields.add(field);
+    return;
+  }
   const style = document.createElement("style");
   style.dataset.noemaLivetexPreview = "true";
   style.textContent = `
@@ -2912,6 +2922,7 @@ function installVisualTexPreviewShadowStyles(field: MathfieldElement): void {
     }
   `;
   root.append(style);
+  visualTexPreviewStyledFields.add(field);
 }
 
 type VisualTexPreviewOverlayGeometry = {
@@ -2961,9 +2972,15 @@ function visualTexPreviewOverlayGeometry(
  * the O(n) alignment index replaced the old O(n²) one, a single commit is
  * cheap, so this only needs to collapse a burst of keystrokes.
  */
-const VISUAL_TEX_PREVIEW_SYNC_MS = 40;
+// The outer assist scheduler already coalesces source changes to one update per
+// animation frame.  Adding another trailing timer here made every key wait at
+// least 40 ms before MathLive even saw it, which was the dominant source of the
+// preview's heavy feel.
+const VISUAL_TEX_PREVIEW_SYNC_MS = 0;
 
 let visualTexPreviewRecoveries = 0;
+let visualTexPreviewValueCommits = 0;
+let visualTexPreviewFieldCreations = 0;
 
 /**
  * How many times a preview commit failed verification and had to be re-applied
@@ -2971,6 +2988,41 @@ let visualTexPreviewRecoveries = 0;
  */
 export function visualTexPreviewRecoveryCount(): number {
   return visualTexPreviewRecoveries;
+}
+
+/** Test-visible counters for the resident-mirror performance contract. */
+export function visualTexPreviewValueCommitCount(): number {
+  return visualTexPreviewValueCommits;
+}
+
+export function visualTexPreviewFieldCreationCount(): number {
+  return visualTexPreviewFieldCreations;
+}
+
+function sameVisualTexPreviewState(
+  left: VisualTexPreviewState | null,
+  right: VisualTexPreviewState,
+): boolean {
+  if (!left
+    || left.display !== right.display
+    || left.latex !== right.latex
+    || left.selection.anchor !== right.selection.anchor
+    || left.selection.head !== right.selection.head
+    || left.placeholders.length !== right.placeholders.length) return false;
+  return left.placeholders.every((placeholder, index) => {
+    const candidate = right.placeholders[index];
+    return candidate?.offset === placeholder.offset
+      && Boolean(candidate.active) === Boolean(placeholder.active)
+      && Boolean(candidate.mirror) === Boolean(placeholder.mirror);
+  });
+}
+
+function copyVisualTexPreviewState(state: VisualTexPreviewState): VisualTexPreviewState {
+  return {
+    ...state,
+    selection: { ...state.selection },
+    placeholders: state.placeholders.map((placeholder) => ({ ...placeholder })),
+  };
 }
 
 /** A focus-free MathLive mirror for the CM6 source caret and snippet fields. */
@@ -2983,14 +3035,18 @@ export function mountVisualTexPreview(
   let Constructor: MathLiveModule["MathfieldElement"] | null = null;
   let field: MathfieldElement | null = null;
   let pending: VisualTexPreviewState | null = null;
-  let pendingKey = "";
   let valueKey = "";
+  let renderedDisplay: boolean | null = null;
   let renderedDraft: VisualTexPreviewDraft | null = null;
   let positionIndex: VisualTexPreviewPositionIndex | null = null;
   let renderFrame = 0;
   let syncTimer = 0;
   let awaitingCommitVerification = false;
+  let verificationGraceFrames = 0;
   let commitAttempts = 0;
+  let measurementRequired = false;
+  let overlayLayoutInvalidated = true;
+  let renderedPlaceholderKey = "";
   let removePointerListener = (): void => {};
   const placeholderLayer = document.createElement("div");
   placeholderLayer.className = "noema-visualtex-preview-placeholders";
@@ -3005,7 +3061,8 @@ export function mountVisualTexPreview(
 
   const replaceField = (latex: string, display: boolean): MathfieldElement => {
     if (!Constructor) throw new Error("MathLive MathfieldElement is unavailable in this runtime");
-    const next = createNoemaMathfield(Constructor);
+    visualTexPreviewFieldCreations++;
+    const next = createNoemaMathfield(Constructor, { readOnlyMirror: true });
     next.className = "noema-visualtex-preview-field";
     next.classList.toggle("is-display", display);
     next.readOnly = true;
@@ -3019,7 +3076,10 @@ export function mountVisualTexPreview(
     // queue and leave its temporary LaTeX source layer visible.
     initializeNoemaMathfield(next, latex, options.macros, { readOnlyMirror: true });
     field = next;
+    renderedDisplay = display;
     positionIndex = null;
+    overlayLayoutInvalidated = true;
+    renderedPlaceholderKey = "";
     host.replaceChildren(next, placeholderLayer, caret);
     next.blur();
     installVisualTexPreviewShadowStyles(next);
@@ -3067,41 +3127,67 @@ export function mountVisualTexPreview(
       // No exact geometry for a formula this large; drawing an approximate
       // caret over it would be worse than drawing none.
       placeholderLayer.replaceChildren();
+      renderedPlaceholderKey = "";
       return;
     }
-    // One layout read for the whole overlay pass.
-    const hostRect = host.getBoundingClientRect();
     const markers = renderedDraft.placeholders;
-    while (placeholderLayer.childElementCount < markers.length) {
-      const marker = document.createElement("div");
-      marker.className = "noema-visualtex-preview-placeholder";
-      placeholderLayer.append(marker);
+    if (markers.length === 0 && renderedDraft.caretOffset === null) {
+      placeholderLayer.replaceChildren();
+      renderedPlaceholderKey = "";
+      overlayLayoutInvalidated = false;
+      return;
     }
-    while (placeholderLayer.childElementCount > markers.length) {
-      placeholderLayer.lastElementChild?.remove();
+    const placeholderKey = markers.map((marker) => (
+      `${marker.offset}:${marker.active ? 1 : 0}:${marker.mirror ? 1 : 0}`
+    )).join(",");
+    const refreshPlaceholders = overlayLayoutInvalidated
+      || placeholderKey !== renderedPlaceholderKey;
+    // One host layout read for the entire pass. The pop can move independently
+    // on scroll, so an absolute DOMRect must never be cached across frames.
+    const hostRect = host.getBoundingClientRect();
+    // Finish every MathLive/host geometry read before touching overlay DOM.
+    // Interleaving getBoundingClientRect() with style writes forced repeated
+    // layout in WebKit when a snippet exposed several placeholders.
+    const placeholderGeometries = refreshPlaceholders
+      ? markers.map((marker) => (
+        visualTexPreviewOverlayGeometry(active, hostRect, marker.offset, mapping)
+      ))
+      : null;
+    const caretGeometry = renderedDraft.caretOffset === null
+      ? null
+      : visualTexPreviewOverlayGeometry(
+        active,
+        hostRect,
+        renderedDraft.caretOffset,
+        mapping,
+      );
+    if (refreshPlaceholders) {
+      while (placeholderLayer.childElementCount < markers.length) {
+        const marker = document.createElement("div");
+        marker.className = "noema-visualtex-preview-placeholder";
+        placeholderLayer.append(marker);
+      }
+      while (placeholderLayer.childElementCount > markers.length) {
+        placeholderLayer.lastElementChild?.remove();
+      }
+      markers.forEach((marker, index) => {
+        const element = placeholderLayer.children[index] as HTMLElement;
+        const geometry = placeholderGeometries?.[index] ?? null;
+        element.hidden = !geometry;
+        element.classList.toggle("is-active", Boolean(marker.active));
+        element.classList.toggle("is-mirror", Boolean(marker.mirror));
+        if (!geometry) return;
+        element.style.left = `${Math.round(geometry.left)}px`;
+        element.style.top = `${Math.round(geometry.top)}px`;
+        element.style.height = `${Math.max(12, Math.round(geometry.height))}px`;
+      });
+      renderedPlaceholderKey = placeholderKey;
     }
-    markers.forEach((marker, index) => {
-      const element = placeholderLayer.children[index] as HTMLElement;
-      const geometry = visualTexPreviewOverlayGeometry(active, hostRect, marker.offset, mapping);
-      element.hidden = !geometry;
-      element.classList.toggle("is-active", Boolean(marker.active));
-      element.classList.toggle("is-mirror", Boolean(marker.mirror));
-      if (!geometry) return;
-      element.style.left = `${Math.round(geometry.left)}px`;
-      element.style.top = `${Math.round(geometry.top)}px`;
-      element.style.height = `${Math.max(12, Math.round(geometry.height))}px`;
-    });
-    if (renderedDraft.caretOffset === null) return;
-    const geometry = visualTexPreviewOverlayGeometry(
-      active,
-      hostRect,
-      renderedDraft.caretOffset,
-      mapping,
-    );
-    if (!geometry) return;
-    caret.style.left = `${Math.round(geometry.left)}px`;
-    caret.style.top = `${Math.round(geometry.top)}px`;
-    caret.style.height = `${Math.max(12, Math.round(geometry.height))}px`;
+    overlayLayoutInvalidated = false;
+    if (!caretGeometry) return;
+    caret.style.left = `${Math.round(caretGeometry.left)}px`;
+    caret.style.top = `${Math.round(caretGeometry.top)}px`;
+    caret.style.height = `${Math.max(12, Math.round(caretGeometry.height))}px`;
     caret.hidden = false;
   };
 
@@ -3119,9 +3205,9 @@ export function mountVisualTexPreview(
    * clears it at the very end of `render()`, so an interrupted render freezes
    * the DOM the same way.
    */
-  const commitLooksApplied = (active: MathfieldElement): boolean => {
+  const commitStatus = (active: MathfieldElement): "pending" | "applied" | "failed" => {
     if (Boolean((active as unknown as { _mathfield?: { dirty?: boolean } })._mathfield?.dirty)) {
-      return false;
+      return "pending";
     }
     // Compare ignoring whitespace and MathLive's synthesized placeholders: an
     // over-strict check would rebuild the field on ordinary input, which is
@@ -3129,24 +3215,27 @@ export function mountVisualTexPreview(
     const collapse = (value: string): string => (
       stripVisualTexPlaceholders(normalizeVisualTexLatex(value)).replace(/\s+/g, "")
     );
-    return collapse(active.getValue("latex")) === collapse(valueKey);
+    return collapse(active.getValue("latex")) === collapse(valueKey) ? "applied" : "failed";
   };
 
   /**
    * Rebuild the mirror around the value that failed to apply. Nothing short of
    * a new element recovers the cases above, so there is no point retrying the
-   * assignment first; the second attempt only exists to stop a loop if even a
-   * fresh field disagrees.
+   * assignment first. One fresh element is the recovery budget for a commit;
+   * if it also disagrees, keep a usable frame instead of entering a rebuild
+   * loop.
    */
   const recoverPreviewField = (): boolean => {
     // Giving up must still leave a usable frame: the caller falls through to
     // the overlay and onRendered() so the pop is at least placed and sized.
-    if (commitAttempts >= 2) return false;
+    if (commitAttempts >= 1) return false;
     visualTexPreviewRecoveries++;
     commitAttempts++;
     positionIndex = null;
     replaceField(valueKey, pending?.display ?? false);
     awaitingCommitVerification = true;
+    verificationGraceFrames = 0;
+    measurementRequired = true;
     notifyRendered();
     return true;
   };
@@ -3156,21 +3245,31 @@ export function mountVisualTexPreview(
     renderFrame = window.requestAnimationFrame(() => {
       renderFrame = 0;
       if (destroyed || suspended || !field || !pending) return;
-      const contentChanged = awaitingCommitVerification;
       if (awaitingCommitVerification) {
+        const status = commitStatus(field);
+        if (status === "pending" && verificationGraceFrames < 1) {
+          verificationGraceFrames++;
+          notifyRendered();
+          return;
+        }
         awaitingCommitVerification = false;
-        if (!commitLooksApplied(field) && recoverPreviewField()) return;
+        verificationGraceFrames = 0;
+        if (status !== "applied" && recoverPreviewField()) return;
       }
+      const measureRequired = measurementRequired;
+      measurementRequired = false;
       try {
+        // The host fits/scales the field synchronously. Overlay geometry must
+        // be read afterwards or it is one frame behind the rendered formula.
+        options.onRendered?.(measureRequired);
         updateOverlay(field);
-        options.onRendered?.(contentChanged);
       } catch {
         // Incomplete source is normal while typing/deleting. Keep the last
         // MathLive frame alive even if that transient atom tree has no stable
         // geometry for an overlay yet.
         caret.hidden = true;
         placeholderLayer.replaceChildren();
-        options.onRendered?.(contentChanged);
+        renderedPlaceholderKey = "";
       }
     });
   };
@@ -3182,15 +3281,25 @@ export function mountVisualTexPreview(
     const draft = buildVisualTexPreviewDraft(state.latex, state.placeholders, state.selection);
     renderedDraft = draft;
     try {
-      active.classList.toggle("is-display", state.display);
+      const displayChanged = renderedDisplay !== state.display;
+      if (displayChanged) {
+        active.classList.toggle("is-display", state.display);
+        renderedDisplay = state.display;
+        measurementRequired = true;
+        overlayLayoutInvalidated = true;
+      }
       if (draft.latex !== valueKey) {
+        visualTexPreviewValueCommits++;
         setVisualTexPreviewValue(active, draft.latex);
         positionIndex = null;
         valueKey = draft.latex;
         awaitingCommitVerification = true;
+        verificationGraceFrames = 0;
         commitAttempts = 0;
+        measurementRequired = true;
+        overlayLayoutInvalidated = true;
+        renderedPlaceholderKey = "";
       }
-      installVisualTexPreviewShadowStyles(active);
       notifyRendered();
     } catch (error) {
       options.onUnavailable?.(error);
@@ -3207,6 +3316,7 @@ export function mountVisualTexPreview(
     // caret or snippet stop at a stale position.
     caret.hidden = true;
     placeholderLayer.replaceChildren();
+    renderedPlaceholderKey = "";
     const delay = Math.max(0, options.syncIdleMs ?? VISUAL_TEX_PREVIEW_SYNC_MS);
     if (delay === 0) {
       render(pending);
@@ -3244,6 +3354,10 @@ export function mountVisualTexPreview(
         );
         replaceField(renderedDraft.latex, pending.display);
         valueKey = renderedDraft.latex;
+        awaitingCommitVerification = true;
+        verificationGraceFrames = 0;
+        commitAttempts = 0;
+        measurementRequired = true;
         notifyRendered();
       } else if (!suspended) {
         replaceField("", false);
@@ -3259,19 +3373,13 @@ export function mountVisualTexPreview(
       if (destroyed) return;
       const wasSuspended = suspended;
       suspended = false;
-      const nextPendingKey = `${state.display ? "display" : "inline"}\n${state.latex}\n${state.selection.head}\n${state.placeholders.map((placeholder) => (
-        `${placeholder.offset}:${placeholder.active ? 1 : 0}:${placeholder.mirror ? 1 : 0}`
-      )).join(",")}`;
-      if (nextPendingKey === pendingKey) {
-        if (field && !syncTimer) notifyRendered();
-        return;
+      if (sameVisualTexPreviewState(pending, state)) return;
+      pending = copyVisualTexPreviewState(state);
+      if (wasSuspended) {
+        measurementRequired = true;
+        overlayLayoutInvalidated = true;
+        renderedPlaceholderKey = "";
       }
-      pendingKey = nextPendingKey;
-      pending = {
-        ...state,
-        selection: { ...state.selection },
-        placeholders: state.placeholders.map((placeholder) => ({ ...placeholder })),
-      };
       if (!field && Constructor) {
         renderedDraft = buildVisualTexPreviewDraft(
           pending.latex,
@@ -3280,6 +3388,10 @@ export function mountVisualTexPreview(
         );
         replaceField(renderedDraft.latex, pending.display);
         valueKey = renderedDraft.latex;
+        awaitingCommitVerification = true;
+        verificationGraceFrames = 0;
+        commitAttempts = 0;
+        measurementRequired = true;
         notifyRendered();
         return;
       }
@@ -3293,6 +3405,13 @@ export function mountVisualTexPreview(
         }
       }
     },
+    refreshLayout() {
+      if (destroyed || suspended || !field || !pending) return;
+      measurementRequired = true;
+      overlayLayoutInvalidated = true;
+      renderedPlaceholderKey = "";
+      notifyRendered();
+    },
     suspend() {
       if (destroyed || suspended) return;
       suspended = true;
@@ -3300,11 +3419,10 @@ export function mountVisualTexPreview(
       cancelScheduledSync();
       renderFrame = 0;
       pending = null;
-      pendingKey = "";
       renderedDraft = null;
-      positionIndex = null;
       caret.hidden = true;
       placeholderLayer.replaceChildren();
+      renderedPlaceholderKey = "";
       field?.blur();
     },
     destroy() {
@@ -3319,8 +3437,9 @@ export function mountVisualTexPreview(
       pending = null;
       renderedDraft = null;
       positionIndex = null;
-      pendingKey = "";
       valueKey = "";
+      renderedDisplay = null;
+      renderedPlaceholderKey = "";
       host.replaceChildren();
     },
   };

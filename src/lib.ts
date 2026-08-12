@@ -20,6 +20,7 @@ export type {
   EditorPasteAssetStore,
   EditorPasteOptions,
   EditorPastePlacement,
+  EditorPasteTarget,
   QuickInsertContext,
   QuickInsertItem,
   QuickInsertProvider,

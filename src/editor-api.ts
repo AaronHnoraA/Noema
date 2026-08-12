@@ -13,6 +13,7 @@ export type {
   EditorPasteAssetStore,
   EditorPasteOptions,
   EditorPastePlacement,
+  EditorPasteTarget,
   StoredPasteAsset,
 } from "./paste.ts";
 

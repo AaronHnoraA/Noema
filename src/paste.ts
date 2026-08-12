@@ -33,6 +33,13 @@ export type EditorClipboardPayload =
 
 export type EditorPasteOptions = {
   placement?: EditorPastePlacement;
+  /** A CM6-mapped command location captured before an asynchronous read. */
+  target?: EditorPasteTarget;
+};
+
+export type EditorPasteTarget = {
+  readonly id: number;
+  readonly owner: object;
 };
 
 export type EditorPasteContext = {

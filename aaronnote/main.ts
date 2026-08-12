@@ -13,13 +13,19 @@ import {
   type StoredPasteAsset,
 } from "../src/lib.ts";
 import { setupCopilot } from "../plugins/noema-copilot/renderer.ts";
-import { continueMarkdownBlock, exitEmptyMarkdownBlock, indentMarkdownBlock, indentMarkdownList, tableNavigateCell, tableEnterSameColumn } from "../src/cm6/commands/index.ts";
+import { indentMarkdownBlock, indentMarkdownList, tableNavigateCell } from "../src/cm6/commands/index.ts";
+import {
+  runEditorDelete,
+  runEditorEnter,
+  runEditorMovement,
+  runEditorTextInput,
+  type EditorMovementKey,
+} from "../src/cm6/input-commands.ts";
 import { markdownHrefAt } from "../src/cm6/editor-cm6.ts";
 import {
   finishInlineMathEditing,
   revealFormulaSource,
 } from "../src/cm6/extensions/visual/widgets/math.ts";
-import { nextGraphemePosition, previousGraphemePosition } from "../src/cm6/text-boundaries.ts";
 import { getBlockMathRanges, rangeAtPosition, rangeOverlapsAny } from "../src/cm6/math-ranges.ts";
 import {
   mountVisualTexDisplayEditor,
@@ -984,8 +990,11 @@ type MathPreviewSession = {
   /** Formula identity, stable while its body is being edited. */
   formula: string;
   tex: string;
+  to: number;
   contentFrom: number;
   display: boolean;
+  doc: object;
+  geometryEpoch: number;
   anchorRect: { left: number; top: number; bottom: number } | null;
   bottomRect: { bottom: number } | null;
 };
@@ -994,6 +1003,7 @@ let mathPreviewPendingErrorKey = "";
 let mathPreviewErrorTimer = 0;
 let mathPreviewWidth = 0;
 let liveTexPreview: VisualTexPreview | null = null;
+let mathPreviewGeometryEpoch = 0;
 const clientId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 const changeHandlers = new Set<() => void>();
 const MATH_PREVIEW_ERROR_MAX_LENGTH = 180;
@@ -1296,12 +1306,11 @@ function subscribe<K extends keyof DocumentEventMap>(
   return () => document.removeEventListener(type, handler, options);
 }
 
-// Forward ref patched after vim is created (avoids TDZ while keeping reset near vim).
-let onBlurVimReset: (() => void) | undefined;
 let visualMathEditorActive = false;
 let visualMathReturnMode: VimLiteMode | null = null;
 let slideDeck: SlideDeckController | null = null;
 let writingStatsController: WritingStatsController | null = null;
+let reconcileVimSelection: (() => void) | undefined;
 
 const editor = createEditor(host, {
   initialContent: "",
@@ -1328,14 +1337,13 @@ const editor = createEditor(host, {
     slideDeck?.refresh();
   },
   onSelectionChange: () => {
+    reconcileVimSelection?.();
     scheduleWritingStats(writingStatsController?.isDocumentChanged() ?? true);
     scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
   },
   onBlur: () => {
-    // The body-mounted LiveTeX studio is the only native math editing surface.
-    // Its focus transition remains part of the same editing gesture.
-    if (!visualMathEditorActive
-        && !document.activeElement?.closest("[data-aaronnote-vim='native']")) onBlurVimReset?.();
+    // Focus changes are not mode commands.  Desktop controls and Emacs buffer
+    // switches must preserve Insert/Normal/Visual and the live selection.
     void flushCursorPosition();
   },
 });
@@ -2109,13 +2117,20 @@ const vim = createVimLite(editor, host, {
 });
 const assistScheduler = new AssistScheduler(window, editorSurfaceVisible, runAssistUpdate);
 updateModeLabel(vim.mode());
-// Reset to normal mode when the editor loses focus (xwidget buffer switch).
-// Prevents silent insert/visual mode on return from another Emacs buffer.
-onBlurVimReset = () => {
-  if (vim.mode() !== "normal") vim.setMode("normal");
-  cancelPointerSelection(editor.view, editor.view.state.selection.main.head);
-  imeLastSentMode = "";
-  syncImeForVimMode("normal");
+let vimSelectionSyncPending = false;
+reconcileVimSelection = () => {
+  if (vimSelectionSyncPending) return;
+  vimSelectionSyncPending = true;
+  queueMicrotask(() => {
+    vimSelectionSyncPending = false;
+    if (vim.mode() === "insert") return;
+    // Linewise motion keeps a directional logical head that a forward CM6
+    // whole-line range cannot encode.  A collapsed range still means a native
+    // cut/paste completed and should leave Visual-line.
+    if (vim.mode() === "visual-line"
+        && !editor.view.state.selection.main.empty) return;
+    vim.syncSelectionFromEditor();
+  });
 };
 // Re-assert IME state when the window regains focus.
 window.addEventListener("focus", () => {
@@ -8511,23 +8526,39 @@ function mathAtCursor(ctx: ReturnType<typeof editor.cursorContext>): {
   to: number;
   contentFrom: number;
   contentTo: number;
+  doc: object;
+  geometryEpoch: number;
   selection: { anchor: number; head: number };
   rect: { left: number; top: number; bottom: number } | null;
-  rectEnd?: { left: number; top: number; bottom: number } | null;
+  rectEnd?: { bottom: number } | null;
 } | null {
   const state = editor.view.state;
   const selection = state.selection.main;
   const cursor = selection.head;
-  const contextStart = Math.max(0, cursor - ctx.before.length);
-  const rectAtSourceOffset = (offset: number) => {
-    try {
-      const direct = editor.view.coordsAtPos(Math.max(0, Math.min(state.doc.length, offset)));
-      if (direct) return { left: direct.left, top: direct.top, bottom: direct.bottom };
-    } catch (_) {
-      // A decoration may be changing in the same frame. The cursor-context
-      // geometry remains a stable fallback until CM6 finishes measuring it.
+  const geometryFor = (display: boolean, from: number, to: number) => {
+    const formula = mathPreviewFormulaKey({ display, from });
+    const cached = mathPreviewSession;
+    if (cached?.formula === formula
+      && cached.to === to
+      && cached.doc === state.doc
+      && cached.geometryEpoch === mathPreviewGeometryEpoch) {
+      return { rect: cached.anchorRect, rectEnd: cached.bottomRect };
     }
-    return ctx.rectAtOffset(offset - contextStart);
+    const contextStart = Math.max(0, cursor - ctx.before.length);
+    const rectAtSourceOffset = (offset: number) => {
+      try {
+        const direct = editor.view.coordsAtPos(Math.max(0, Math.min(state.doc.length, offset)));
+        if (direct) return { left: direct.left, top: direct.top, bottom: direct.bottom };
+      } catch (_) {
+        // A decoration may be changing in the same frame. The cursor-context
+        // geometry remains a stable fallback until CM6 finishes measuring it.
+      }
+      return ctx.rectAtOffset(offset - contextStart);
+    };
+    return {
+      rect: rectAtSourceOffset(from) ?? ctx.rect ?? rectAtSourceOffset(cursor),
+      rectEnd: rectAtSourceOffset(to),
+    };
   };
   const blockRanges = getBlockMathRanges(state);
   const displayMath = rangeAtPosition(cursor, blockRanges);
@@ -8537,8 +8568,7 @@ function mathAtCursor(ctx: ReturnType<typeof editor.cursorContext>): {
     && selection.head >= displayMath.contentFrom
     && selection.head <= displayMath.contentTo) {
     const body = state.doc.sliceString(displayMath.contentFrom, displayMath.contentTo);
-    const formulaStartRect = rectAtSourceOffset(displayMath.from);
-    const formulaEndRect = rectAtSourceOffset(displayMath.to);
+    const geometry = geometryFor(true, displayMath.from, displayMath.to);
     return {
       tex: body,
       display: true,
@@ -8546,12 +8576,14 @@ function mathAtCursor(ctx: ReturnType<typeof editor.cursorContext>): {
       to: displayMath.to,
       contentFrom: displayMath.contentFrom,
       contentTo: displayMath.contentTo,
+      doc: state.doc,
+      geometryEpoch: mathPreviewGeometryEpoch,
       selection: {
         anchor: Math.max(0, Math.min(body.length, selection.anchor - displayMath.contentFrom)),
         head: Math.max(0, Math.min(body.length, selection.head - displayMath.contentFrom)),
       },
-      rect: formulaStartRect ?? ctx.rect ?? rectAtSourceOffset(cursor),
-      rectEnd: formulaEndRect,
+      rect: geometry.rect,
+      rectEnd: geometry.rectEnd,
     };
   }
 
@@ -8567,8 +8599,7 @@ function mathAtCursor(ctx: ReturnType<typeof editor.cursorContext>): {
     if (cursor < contentFrom || cursor > contentTo) continue;
     if (selection.anchor < contentFrom || selection.anchor > contentTo) continue;
     if (rangeOverlapsAny(from, to, blockRanges)) continue;
-    const formulaStartRect = rectAtSourceOffset(from);
-    const formulaEndRect = rectAtSourceOffset(to);
+    const geometry = geometryFor(false, from, to);
     return {
       tex,
       display: false,
@@ -8576,12 +8607,14 @@ function mathAtCursor(ctx: ReturnType<typeof editor.cursorContext>): {
       to,
       contentFrom,
       contentTo,
+      doc: state.doc,
+      geometryEpoch: mathPreviewGeometryEpoch,
       selection: {
         anchor: Math.max(0, Math.min(tex.length, selection.anchor - contentFrom)),
         head: Math.max(0, Math.min(tex.length, selection.head - contentFrom)),
       },
-      rect: formulaStartRect ?? ctx.rect ?? rectAtSourceOffset(cursor),
-      rectEnd: formulaEndRect,
+      rect: geometry.rect,
+      rectEnd: geometry.rectEnd,
     };
   }
   return null;
@@ -9020,6 +9053,16 @@ function mathPreviewFormulaKey(math: { display: boolean; from: number }): string
   return `${math.display ? "display" : "inline"}:${math.from}`;
 }
 
+function sameMathPreviewRect(
+  left: { left?: number; top?: number; bottom: number } | null,
+  right: { left?: number; top?: number; bottom: number } | null,
+): boolean {
+  return left === right || Boolean(left && right
+    && left.left === right.left
+    && left.top === right.top
+    && left.bottom === right.bottom);
+}
+
 function resetMathPreviewFitState(): void {
   const child = mathPreview.querySelector<HTMLElement>(".noema-visualtex-preview-field");
   if (child) {
@@ -9119,6 +9162,10 @@ function showMathPreviewFallback(error: unknown): void {
 function ensureLiveTexPreview(): VisualTexPreview {
   liveTexPreview ??= mountVisualTexPreview(mathPreviewVisualHost, {
     macros: getKatexMacros(),
+    // AssistScheduler already keeps this to one latest update per animation
+    // frame. Do not add a second 40 ms debounce between source input and the
+    // resident MathLive mirror.
+    syncIdleMs: 0,
     // Every callback below reads the session the assist frame already resolved.
     // Re-running cursorContext() + mathAtCursor() here scanned the same formula
     // up to three times per frame and could disagree with the frame that opened
@@ -9138,18 +9185,10 @@ function ensureLiveTexPreview(): VisualTexPreview {
       mathPreviewVisualHost.hidden = false;
       mathPreviewFallback.hidden = true;
       mathPreview.classList.remove("is-error");
-      if (!contentChanged) {
-        // Caret-only frame: the formula is the same size it was, so re-running
-        // the measure/fit cycle here would be a forced synchronous layout on
-        // every arrow key.
-        placeFloatingAbove(
-          mathPreview,
-          session.anchorRect,
-          mathPreviewWidth || (session.display ? 680 : 380),
-          session.bottomRect,
-        );
-        return;
-      }
+      // Placement already ran when the formula/anchor changed. A caret-only
+      // frame must not write popup styles immediately before the overlay reads
+      // MathLive geometry, since that creates a forced layout on every arrow.
+      if (!contentChanged) return;
       // The rendered formula just changed size; this is the one place allowed
       // to force a layout measurement.
       mathPreviewWidth = 0;
@@ -9179,6 +9218,7 @@ function updateMathPreview(
   const anchorRect = math.rect ?? ctx.rect;
   const bottomRect = math.rectEnd ?? anchorRect;
   const previous = mathPreviewSession;
+  const wasHidden = mathPreview.hidden;
   if (mathPreview.hidden && !allowNewPreview) return;
   if (previous?.formula !== nextFormula && !allowNewPreview) return;
   if (previous?.formula !== nextFormula) {
@@ -9192,8 +9232,11 @@ function updateMathPreview(
   mathPreviewSession = {
     formula: nextFormula,
     tex: math.tex,
+    to: math.to,
     contentFrom: math.contentFrom,
     display: math.display,
+    doc: math.doc,
+    geometryEpoch: math.geometryEpoch,
     anchorRect,
     bottomRect,
   };
@@ -9213,12 +9256,17 @@ function updateMathPreview(
   // known, and `placeFloatingAbove` is pure arithmetic over the cached width.
   // Deferring it to onRendered() left the pop hovering over the previously
   // edited formula for the whole debounce window.
-  placeFloatingAbove(
-    mathPreview,
-    anchorRect,
-    mathPreviewWidth || (math.display ? 680 : 380),
-    bottomRect,
-  );
+  if (wasHidden
+    || previous?.formula !== nextFormula
+    || !sameMathPreviewRect(previous.anchorRect, anchorRect)
+    || !sameMathPreviewRect(previous.bottomRect, bottomRect)) {
+    placeFloatingAbove(
+      mathPreview,
+      anchorRect,
+      mathPreviewWidth || (math.display ? 680 : 380),
+      bottomRect,
+    );
+  }
 }
 
 function activeEditorSelection(): { text: string; rect: DOMRect } | null {
@@ -9417,23 +9465,12 @@ function insertHostKeyText(key: string, text?: string): boolean {
           : "";
   if (!literal) return false;
   snippetCompletionArmed = key !== "Enter" && key !== "Tab";
-  editor.insertText(literal);
-  return true;
+  return runEditorTextInput(editor.view, literal);
 }
 
 function deleteHostKeyText(key: string): boolean {
   if (key !== "Backspace" && key !== "Delete") return false;
-  const { from, to } = editor.getMarkdownSelection();
-  if (from !== to) {
-    editor.replaceMarkdownRange(from, to, "", "start");
-    return true;
-  }
-  const text = editor.view.state.doc;
-  const start = key === "Backspace" ? previousGraphemePosition(text, from) : from;
-  const end = key === "Delete" ? nextGraphemePosition(text, to) : to;
-  if (start >= end) return false;
-  editor.replaceMarkdownRange(start, end, "", "start");
-  return true;
+  return runEditorDelete(editor.view, key === "Backspace" ? "backward" : "forward");
 }
 
 function routeHostKeyToMathEditor(key: VimLiteKey, text?: string, code?: string): boolean {
@@ -9546,9 +9583,13 @@ function runHostKey(body: Record<string, unknown>): boolean {
     // No snippet/list match — fall through to insertHostKeyText("\t").
   }
   if (vim.mode() !== "insert" || hostKey.ctrlKey || hostKey.metaKey || hostKey.altKey) return false;
+  if (/^(?:Arrow(?:Left|Right|Up|Down)|Home|End|PageUp|PageDown)$/u.test(key)) {
+    runEditorMovement(editor.view, key as EditorMovementKey, hostKey.shiftKey);
+    scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
+    return true;
+  }
   if (key === "Enter") {
-    const handled = tableEnterSameColumn(editor.view) || exitEmptyMarkdownBlock(editor.view) || continueMarkdownBlock(editor.view);
-    if (!handled) editor.insertText("\n");
+    runEditorEnter(editor.view);
     scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
     return true;
   }
@@ -9966,6 +10007,7 @@ document.addEventListener("keydown", (event) => {
     editor,
     editorHost: host,
     vim,
+    allowDetachedTarget: !standaloneMode(),
     enabled: modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden,
   })) return;
   // Cmd-/ is a document-surface boundary even while MathLive owns focus: first
@@ -10014,6 +10056,7 @@ document.addEventListener("keydown", (event) => {
     editor,
     editorHost: host,
     vim,
+    allowDetachedTarget: !standaloneMode(),
     enabled: modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden,
   })) {
     scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
@@ -10066,6 +10109,7 @@ document.addEventListener("keydown", (event) => {
     editor,
     editorHost: host,
     vim,
+    allowDetachedTarget: !standaloneMode(),
     enabled: modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden,
   })) {
     if (plainEscapeKey(event)) noteCursorPositionEvent();
@@ -10076,6 +10120,7 @@ document.addEventListener("keydown", (event) => {
     editor,
     editorHost: host,
     vim,
+    allowDetachedTarget: !standaloneMode(),
     enabled: modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden,
   })) {
     if (plainEscapeKey(event)) noteCursorPositionEvent();
@@ -10096,6 +10141,7 @@ document.addEventListener("keydown", (event) => {
     editor,
     editorHost: host,
     vim,
+    allowDetachedTarget: !standaloneMode(),
     enabled: modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden,
   })) {
     scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
@@ -10178,6 +10224,7 @@ document.addEventListener("beforeinput", (event) => {
     editor,
     editorHost: host,
     vim,
+    allowDetachedTarget: !standaloneMode(),
     enabled: modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden,
   })) return;
   if (eventTargetsNativeWidgetInput(event.target)) return;
@@ -10220,6 +10267,7 @@ document.addEventListener("beforeinput", (event) => {
     editor,
     editorHost: host,
     vim,
+    allowDetachedTarget: !standaloneMode(),
     enabled: modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden,
   })) {
     scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
@@ -10229,6 +10277,7 @@ document.addEventListener("beforeinput", (event) => {
     editor,
     editorHost: host,
     vim,
+    allowDetachedTarget: !standaloneMode(),
     enabled: modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden,
   })) {
     scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
@@ -10238,6 +10287,7 @@ document.addEventListener("beforeinput", (event) => {
     editor,
     editorHost: host,
     vim,
+    allowDetachedTarget: !standaloneMode(),
     enabled: modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden,
   })) {
     scheduleAssistUpdate({ mathPreview: true, cursor: true });
@@ -10253,11 +10303,8 @@ document.addEventListener("mousedown", (event) => {
   if (!editorSurfaceVisible() || event.defaultPrevented) return;
   if (!(event.target instanceof Node) || editor.view.dom.contains(event.target)) return;
   if (editor.view.state.selection.ranges.every((range) => range.empty)) return;
-  // Selection-owned controls prevent their own mousedown default, so they
-  // retain the range until their command runs. An ordinary click elsewhere
-  // is an explicit cancellation even when the clicked surface is not focusable
-  // and therefore would not produce a CM6 blur event.
-  vim.handleKey({ key: "Escape" });
+  // Hiding the toolbar is a UI concern.  A click outside the editor may move
+  // focus, but it is not an implicit Escape and must not collapse Vim state.
   selectionTool.hidden = true;
   selectionMore.hidden = true;
 });
@@ -10265,15 +10312,20 @@ document.addEventListener("mouseup", (event) => {
   if (!editorSurfaceVisible()) return;
   if (isPointerSelecting(editor.view.state)
       || (event.target instanceof Node && editor.view.dom.contains(event.target))) {
-    vim.syncSelectionFromEditor();
+    // Insert mode owns native half-open selections (typing replaces them).
+    // Normal/Visual adopt pointer selections into the modal selection model.
+    if (vim.mode() !== "insert") vim.syncSelectionFromEditor();
     noteCursorPositionEvent();
   }
   scheduleAssistUpdate({ mathPreview: true, cursor: true, selectionTool: true });
 });
 window.addEventListener("resize", () => {
+  mathPreviewGeometryEpoch++;
+  liveTexPreview?.refreshLayout();
   scheduleAssistUpdate({ mathPreview: true, cursor: true, selectionTool: !selectionTool.hidden });
 });
 window.addEventListener("scroll", (event) => {
+  mathPreviewGeometryEpoch++;
   scheduleAssistUpdate({ mathPreview: true, cursor: true, selectionTool: !selectionTool.hidden, toc: serverReaderMode });
   if (event.target instanceof Node && host.contains(event.target)) {
     scheduleAutomaticProseCheck(proseProfile().scrollMs);

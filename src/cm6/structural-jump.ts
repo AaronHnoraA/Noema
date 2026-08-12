@@ -99,23 +99,32 @@ export function structuralJumpTarget(view: EditorView, direction: 1 | -1): numbe
   const pairs = structuralPairs(view.state.doc.sliceString(scope.from, scope.to), scope.from, scope.math);
 
   if (direction > 0) {
-    const containing = pairs
-      .filter((pair) => pair.open < cursor && pair.close + 1 > cursor)
-      .sort((a, b) => a.close - b.close || b.open - a.open);
-    const following = pairs
-      .filter((pair) => pair.open >= cursor && pair.close + 1 > cursor)
-      .sort((a, b) => a.open - b.open || a.close - b.close);
-    const pair = containing[0] ?? following[0];
-    return pair ? pair.close + 1 : null;
+    let containing: Pair | null = null;
+    let following: Pair | null = null;
+    for (const pair of pairs) {
+      if (pair.open < cursor && pair.close + 1 > cursor) {
+        if (!containing || pair.close < containing.close
+          || (pair.close === containing.close && pair.open > containing.open)) containing = pair;
+      } else if (pair.open >= cursor && pair.close + 1 > cursor) {
+        if (!following || pair.open < following.open
+          || (pair.open === following.open && pair.close < following.close)) following = pair;
+      }
+    }
+    return containing || following ? (containing ?? following)!.close + 1 : null;
   }
 
-  const containing = pairs
-    .filter((pair) => pair.open + 1 < cursor && pair.close + 1 >= cursor)
-    .sort((a, b) => b.open - a.open || a.close - b.close);
-  const preceding = pairs
-    .filter((pair) => pair.close < cursor && pair.open + 1 < cursor)
-    .sort((a, b) => b.close - a.close || b.open - a.open);
-  const target = containing[0] ?? preceding[0];
+  let containing: Pair | null = null;
+  let preceding: Pair | null = null;
+  for (const pair of pairs) {
+    if (pair.open + 1 < cursor && pair.close + 1 >= cursor) {
+      if (!containing || pair.open > containing.open
+        || (pair.open === containing.open && pair.close < containing.close)) containing = pair;
+    } else if (pair.close < cursor && pair.open + 1 < cursor) {
+      if (!preceding || pair.close > preceding.close
+        || (pair.close === preceding.close && pair.open > preceding.open)) preceding = pair;
+    }
+  }
+  const target = containing ?? preceding;
   return target ? target.open + 1 : null;
 }
 
@@ -132,7 +141,7 @@ function texIdentifierCharacter(character: string): boolean {
 
 /** Source-safe boundaries for the same command/group units MathLive displays. */
 export function texUnitBoundaries(source: string, baseOffset = 0): number[] {
-  const boundaries = new Set<number>([baseOffset, baseOffset + source.length]);
+  const boundaries: number[] = [baseOffset];
   for (let position = 0; position < source.length;) {
     const start = position;
     const character = source[position]!;
@@ -146,7 +155,7 @@ export function texUnitBoundaries(source: string, baseOffset = 0): number[] {
       if (/[A-Za-z@]/.test(source[position] ?? "")) {
         while (position < source.length && /[A-Za-z@]/.test(source[position]!)) position++;
       } else if (position < source.length) {
-        position += Array.from(source.slice(position))[0]?.length ?? 1;
+        position += (source.codePointAt(position) ?? 0) > 0xffff ? 2 : 1;
       }
     } else {
       const codePoint = String.fromCodePoint(source.codePointAt(position)!);
@@ -161,10 +170,12 @@ export function texUnitBoundaries(source: string, baseOffset = 0): number[] {
         position += codePoint.length;
       }
     }
-    boundaries.add(baseOffset + start);
-    boundaries.add(baseOffset + position);
+    const absoluteStart = baseOffset + start;
+    if (boundaries[boundaries.length - 1] !== absoluteStart) boundaries.push(absoluteStart);
+    const absoluteEnd = baseOffset + position;
+    if (boundaries[boundaries.length - 1] !== absoluteEnd) boundaries.push(absoluteEnd);
   }
-  return [...boundaries].sort((a, b) => a - b);
+  return boundaries;
 }
 
 export function texUnitJumpTarget(view: EditorView, direction: 1 | -1): number | null {
@@ -176,11 +187,17 @@ export function texUnitJumpTarget(view: EditorView, direction: 1 | -1): number |
     view.state.doc.sliceString(scope.from, scope.to),
     scope.from,
   );
-  if (direction > 0) return boundaries.find((boundary) => boundary > cursor) ?? null;
-  for (let index = boundaries.length - 1; index >= 0; index--) {
-    if (boundaries[index]! < cursor) return boundaries[index]!;
+  let low = 0;
+  let high = boundaries.length;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (boundaries[mid]! <= cursor) low = mid + 1;
+    else high = mid;
   }
-  return null;
+  if (direction > 0) return boundaries[low] ?? null;
+  let previous = low - 1;
+  if (boundaries[previous] === cursor) previous--;
+  return boundaries[previous] ?? null;
 }
 
 export function jumpTexUnit(view: EditorView, direction: 1 | -1): boolean {

@@ -136,7 +136,7 @@ operators belong to the real vector space of Hermitian operators.
 中文直觉：正半定保证测量概率非负；迹为一保证总概率为一。
 #+end note
 
-The expectation value of an observable \(A\) in state \(\rho\) is this this \(sadsad^{asdasd} \frac{asdas}{sadas}\) 
+The expectation value of an observable \(A\) in state \(\rho\) is this this \(sadsad^{asdasd} \frac{asdas}{sadas}\)
 
 \[
 \langle A\rangle
@@ -184,7 +184,7 @@ The expression
 does not uniquely determine the ensemble \(\{p_j,|\psi_j\rangle\}_j\).
 
 Different classical preparation procedures may induce the same density
-operator. Operationally, the density operator is the object thadt determine 
+operator. Operationally, the density operator is the object thadt determine
 \[
 asdas
 \]
@@ -193,7 +193,7 @@ all measurement statistics.
 
 
 #+end important
-\(x^{6_{2}}_{6} + sadas asdas sadasdas asd sad sadThis  asd assssssssss_{asdasd} ssssss_{sadas_{asdasdadsa}}  \text{ asdasdasda} a \frac{asds}{asdsad} \) 
+\(x^{6_{2}}_{6} + sadas asdas sadasdas asd sad sadThis  asd assssssssss_{asdasd} ssssss_{sadas_{asdasdadsa}}  \text{ asdasdasda} a \frac{asds}{asdsad} \)
 The purity of \(\rho\) isa sa sdad as dasd
 \(x^{sadasdasd}\frac{asdas}{sadasd}\)
 \[
@@ -205,7 +205,7 @@ asdasd_{asda}^{asdas} + sadas  \frac{sadasd}{sadas} dsadas \otimes R^{6_{asasd}}
 \]
 
 In finite dimensions,
-\(x^{6} *8 \frac{asdas}{asdas} *x \operatorname{Mult}(U^{5},\mathbb{F})\) 
+\(x^{6} *8 \frac{asdas}{asdas} *x \operatorname{Mult}(U^{5},\mathbb{F})\)
 
 \[
 \rho \text{ is pure}
@@ -245,7 +245,7 @@ constants \(c_{ab}^k\) satisfying
 #+begin define Structure tensor
 Let \(V\) and \(W\) be finite-dimensional vector spaces over a field \(F\).
 The structure tensor associated with a bilinear map \(\mu:V\times V\to W\)
-  is the tensor \(T_\mu\) whose coordinates are the structure constants of \(ssssss\) 
+  is the tensor \(T_\mu\) whose coordinates are the structure constants of \(ssssss\)
 \(\mu\) in chosen bases.
 
 Changing bases changes the coordinates, but not the abstract tensorial

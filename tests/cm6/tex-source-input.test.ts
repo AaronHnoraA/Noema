@@ -8,6 +8,7 @@ import {
   isTexSourceStructuralInput,
   moveAcrossTexSourceAutoPair,
   moveAcrossTexSourceUnit,
+  texMathContentRangeLookupCount,
 } from "../../src/cm6/tex-source-input.ts";
 
 type InputHandler = (view: EditorView, from: number, to: number, insert: string) => boolean;
@@ -39,6 +40,19 @@ describe("CM6 TeX source input", () => {
     }
     expect(isTexSourceStructuralInput(String.raw`\left\langl`, "e")).toBe(true);
     expect(isTexSourceStructuralInput("x", "^")).toBe(true);
+  });
+
+  test("rejects ordinary deletion locally without copying a long formula", () => {
+    const body = "a".repeat(20_000);
+    const { editor, cleanup } = mountCM6(`\\(${body}\\)`);
+    try {
+      setCursor(editor.view, 2 + (body.length >> 1));
+      const lookups = texMathContentRangeLookupCount();
+      expect(deleteTexSourceAutoPair(editor.view)).toBe(false);
+      expect(texMathContentRangeLookupCount()).toBe(lookups);
+    } finally {
+      cleanup();
+    }
   });
 
   test("creates script braces and types over their closer", () => {

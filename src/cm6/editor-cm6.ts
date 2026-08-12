@@ -32,8 +32,13 @@ import {
   markdownLinkPrimaryModifier,
 } from "./markdown-link-events.ts";
 import { wikiLinkAt } from "../../shared/wiki-link.mjs";
-import { vscodeCloseBrackets, vscodeDeleteBracketPairKeymap } from "./close-brackets-vscode.ts";
+import { vscodeCloseBrackets } from "./close-brackets-vscode.ts";
 import { texSourceInput } from "./tex-source-input.ts";
+import { runEditorDelete, runEditorEnter } from "./input-commands.ts";
+import {
+  pasteTargetExtension,
+  resolveEditorPasteTarget,
+} from "./paste-target.ts";
 import { foldEffect, syntaxTree, unfoldEffect } from "@codemirror/language";
 import { disposeHighlightWorker } from "../code-highlight-async.ts";
 import { disposeMathRuntime } from "../math-render.ts";
@@ -41,11 +46,8 @@ import {
   runCommandCM6,
   getBlockContextCM6,
   createQuickInsertRegistry,
-  continueMarkdownBlock,
-  exitEmptyMarkdownBlock,
   indentMarkdownBlock,
   tableNavigateCell,
-  tableEnterSameColumn,
 } from "./commands/index.ts";
 import {
   pasteDataTransfer,
@@ -625,11 +627,16 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
     return { from: anchor, to: head };
   }
 
-  function pasteInsertRange(options: EditorPasteOptions | undefined, text: string): { from: number; to: number; text: string } {
+  function pasteInsertRange(options: EditorPasteOptions | undefined, text: string): { from: number; to: number; text: string; ownsSelection: boolean } | null {
     const placement = options?.placement;
-    const selection = view.state.selection.main;
+    const target = options?.target
+      ? resolveEditorPasteTarget(view, options.target)
+      : null;
+    if (options?.target && !target) return null;
+    const selection = target ?? view.state.selection.main;
+    const ownsSelection = target?.ownsSelection ?? true;
     if (!placement || placement.kind == null || placement.kind === "selection") {
-      return { from: selection.from, to: selection.to, text };
+      return { from: selection.from, to: selection.to, text, ownsSelection };
     }
 
     if (placement.kind === "character") {
@@ -637,10 +644,10 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
       const from = placement.where === "after"
         ? Math.min(line.to, selection.to)
         : selection.from;
-      return { from, to: from, text };
+      return { from, to: from, text, ownsSelection };
     }
     if (placement.kind !== "line") {
-      return { from: selection.from, to: selection.to, text };
+      return { from: selection.from, to: selection.to, text, ownsSelection };
     }
 
     if (!text.includes("\n")) {
@@ -648,7 +655,7 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
       const from = placement.where === "after"
         ? Math.min(line.to, selection.to)
         : selection.from;
-      return { from, to: from, text };
+      return { from, to: from, text, ownsSelection };
     }
 
     const docLength = view.state.doc.length;
@@ -663,17 +670,18 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
         if (docLength > 0) insert = `\n${insert}`;
       }
     }
-    return { from, to: from, text: insert };
+    return { from, to: from, text: insert, ownsSelection };
   }
 
   function insertPastedMarkdown(text: string, pasteOptions?: EditorPasteOptions): boolean {
     if (options.readOnly) return false;
     if (!text) return false;
     const range = pasteInsertRange(pasteOptions, text);
+    if (!range) return false;
     view.dispatch({
       changes: { from: range.from, to: range.to, insert: range.text },
-      selection: { anchor: range.from + range.text.length },
-      scrollIntoView: true,
+      ...(range.ownsSelection ? { selection: { anchor: range.from + range.text.length } } : {}),
+      scrollIntoView: range.ownsSelection,
     });
     return true;
   }
@@ -1139,13 +1147,15 @@ function buildExtensions(
       standaloneHistory,
     ] : []),
     texSourceInput(),
+    pasteTargetExtension,
     vscodeCloseBrackets(),
     closeBrackets(),
     EditorView.inputHandler.of(wrapSelectedMarkdownInput),
     ...(standalone ? [rectangularSelection()] : []),
     keymap.of([
-      ...vscodeDeleteBracketPairKeymap,
-      { key: "Enter", run: (view) => tableEnterSameColumn(view) || exitEmptyMarkdownBlock(view) || continueMarkdownBlock(view) },
+      { key: "Backspace", run: (view) => runEditorDelete(view, "backward") },
+      { key: "Delete", run: (view) => runEditorDelete(view, "forward") },
+      { key: "Enter", run: runEditorEnter },
       { key: "Mod-Enter", run: exitCurrentOrgEnv },
       { key: "Tab", run: (view) => tableNavigateCell(view, 1) || indentMarkdownBlock(view, 1) },
       { key: "Shift-Tab", run: (view) => tableNavigateCell(view, -1) || indentMarkdownBlock(view, -1) },

@@ -90,6 +90,16 @@ describe("TeX highlight scanner", () => {
     expect(bracketsOf("{a(b}")).toEqual([["{", 0], ["(", -1], ["}", 0]]);
   });
 
+  test("keeps repeated wrong closers linear with a deep opener stack", () => {
+    const depth = 20_000;
+    const source = "(".repeat(depth) + "]".repeat(depth);
+    const started = performance.now();
+    const brackets = scanTexSource(source).filter((token) => token.kind === "bracket");
+    expect(brackets).toHaveLength(depth * 2);
+    expect(brackets.every((token) => token.depth === -1)).toBe(true);
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
   test("offsets every token by baseOffset", () => {
     const tokens = scanTexSource(String.raw`\alpha`, 100);
     expect(tokens[0]).toMatchObject({ from: 100, to: 106, kind: "command" });

@@ -70,8 +70,19 @@ const TEX_DELIMITER_PAIRS: ReadonlyArray<readonly [open: string, close: string]>
   ["^{", "}"],
   ["_{", "}"],
 ];
+const MAX_TEX_DELIMITER_OPEN_LENGTH = Math.max(
+  ...TEX_DELIMITER_PAIRS.map(([open]) => open.length),
+);
+const MAX_TEX_DELIMITER_CLOSE_LENGTH = Math.max(
+  ...TEX_DELIMITER_PAIRS.map(([, close]) => close.length),
+);
 
 let nextTexAutoPairId = 1;
+let texMathContentRangeLookups = 0;
+
+export function texMathContentRangeLookupCount(): number {
+  return texMathContentRangeLookups;
+}
 
 const addTexAutoPair = StateEffect.define<TexAutoPair>();
 const removeTexAutoPair = StateEffect.define<number>();
@@ -123,6 +134,7 @@ const texAutoPairState = StateField.define<readonly TexAutoPair[]>({
 });
 
 function texMathContentRangeAt(state: EditorState, position: number): TexMathContentRange | null {
+  texMathContentRangeLookups++;
   const block = blockMathRangeAt(state, position);
   if (block) return { from: block.contentFrom, to: block.contentTo };
 
@@ -343,13 +355,25 @@ function texDelimiterPairAt(
   state: EditorState,
   position: number,
 ): { openFrom: number; closeTo: number } | null {
-  const math = texMathContentRangeAt(state, position);
-  if (!math) return null;
-  const before = state.doc.sliceString(math.from, position);
-  const after = state.doc.sliceString(position, math.to);
+  // Ordinary Backspace/Delete reaches this function too. Reject it from two
+  // tiny local slices before doing even the current-line inline-math scan, and
+  // never copy the full formula just to compare a delimiter suffix/prefix.
+  const before = state.doc.sliceString(
+    Math.max(0, position - MAX_TEX_DELIMITER_OPEN_LENGTH),
+    position,
+  );
+  const after = state.doc.sliceString(
+    position,
+    Math.min(state.doc.length, position + MAX_TEX_DELIMITER_CLOSE_LENGTH),
+  );
   for (const [openText, closeText] of TEX_DELIMITER_PAIRS) {
     if (!before.endsWith(openText) || !after.startsWith(closeText)) continue;
-    return { openFrom: position - openText.length, closeTo: position + closeText.length };
+    const openFrom = position - openText.length;
+    const closeTo = position + closeText.length;
+    const math = texMathContentRangeAt(state, position);
+    return math && openFrom >= math.from && closeTo <= math.to
+      ? { openFrom, closeTo }
+      : null;
   }
   return null;
 }
@@ -367,9 +391,14 @@ function deleteTexSourcePair(view: EditorView, forward: boolean): boolean {
 
   // Innermost first: nested pairs all contain the caret, and the one being
   // edited is the tightest.
-  const tracked = view.state.field(texAutoPairState)
-    .filter((candidate) => candidate.openTo === head && candidate.closeFrom === head)
-    .sort((a, b) => (a.closeTo - a.openFrom) - (b.closeTo - b.openFrom))[0];
+  let tracked: TexAutoPair | null = null;
+  for (const candidate of view.state.field(texAutoPairState)) {
+    if (candidate.openTo !== head || candidate.closeFrom !== head) continue;
+    if (!tracked
+      || candidate.closeTo - candidate.openFrom < tracked.closeTo - tracked.openFrom) {
+      tracked = candidate;
+    }
+  }
   if (tracked) {
     view.dispatch({
       changes: [
@@ -406,9 +435,12 @@ export function deleteTexSourceAutoPairForward(view: EditorView): boolean {
 export function moveAcrossTexSourceAutoPair(view: EditorView, backward = false): boolean {
   const selection = view.state.selection.main;
   if (!selection.empty || view.state.selection.ranges.length !== 1) return false;
-  const pair = view.state.field(texAutoPairState)
-    .filter((candidate) => selection.head >= candidate.openTo && selection.head <= candidate.closeFrom)
-    .sort((a, b) => (a.closeFrom - a.openTo) - (b.closeFrom - b.openTo))[0];
+  let pair: TexAutoPair | null = null;
+  for (const candidate of view.state.field(texAutoPairState)) {
+    if (selection.head < candidate.openTo || selection.head > candidate.closeFrom) continue;
+    if (!pair
+      || candidate.closeFrom - candidate.openTo < pair.closeFrom - pair.openTo) pair = candidate;
+  }
   if (!pair) return false;
   view.dispatch({
     selection: EditorSelection.cursor(backward ? pair.openTo : pair.closeTo),

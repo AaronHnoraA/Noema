@@ -11,6 +11,7 @@ import { EditorView } from "@codemirror/view";
 import { EditorSelection } from "@codemirror/state";
 import { deleteBracketPair } from "@codemirror/autocomplete";
 import { createEditor } from "../../src/editor-api.ts";
+import { runEditorTextInput } from "../../src/cm6/input-commands.ts";
 
 function mountCM6(initialContent = "") {
   const host = document.createElement("div");
@@ -130,6 +131,18 @@ describe("vscodeCloseBrackets", () => {
       const handled = deleteBracketPair({ state: editor.view.state, dispatch: (tr) => editor.view.dispatch(tr) });
       expect(handled).toBe(true);
       expect(editor.getMarkdown()).toBe("x");
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("host-injected text uses the same close-bracket input handlers", () => {
+    const { editor, cleanup } = mountCM6("x");
+    try {
+      setCursor(editor.view, 1);
+      expect(runEditorTextInput(editor.view, "(")).toBe(true);
+      expect(editor.getMarkdown()).toBe("x()");
+      expect(editor.getMarkdownSelection()).toEqual({ from: 2, to: 2 });
     } finally {
       cleanup();
     }

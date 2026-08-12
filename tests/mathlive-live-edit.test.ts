@@ -23,6 +23,8 @@ import {
   visualTexPreviewMathfieldPositionFromSourceOffset,
   setVisualTexPreviewValue,
   visualTexPreviewRecoveryCount,
+  visualTexPreviewFieldCreationCount,
+  visualTexPreviewValueCommitCount,
   visualTexMathBottomLeftInsets,
   visualTexMathfieldTypedText,
 } from "../src/cm6/extensions/visual/widgets/visualtex-inline.ts";
@@ -360,6 +362,36 @@ describe("LiveTeX custom macro writeback", () => {
     expect(host.childElementCount).toBe(0);
   });
 
+  test("uses the outer animation-frame coalescer without a default 40 ms delay", async () => {
+    const bootstrap = new MathfieldElement();
+    patchHappyDomMathfieldHostSelector(bootstrap);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const initial = {
+      latex: "x",
+      display: false,
+      selection: { anchor: 1, head: 1 },
+      placeholders: [],
+    };
+    const preview = mountVisualTexPreview(host, {
+      macros: {},
+      loadMathLive: async () => ({ MathfieldElement } as unknown as typeof import("mathlive")),
+    });
+    preview.update(initial);
+    await preview.ready;
+    preview.update({ ...initial, selection: { anchor: 0, head: 0 } });
+    const before = visualTexPreviewValueCommitCount();
+    preview.update({
+      ...initial,
+      latex: "x+y",
+      selection: { anchor: 3, head: 3 },
+    });
+    // Production calls arrive from AssistScheduler, which already limits this
+    // to one update per frame. The mirror commit itself must be immediate.
+    expect(visualTexPreviewValueCommitCount()).toBe(before + 1);
+    preview.destroy();
+  });
+
   test("coalesces continuous preview source edits at idle", async () => {
     const bootstrap = new MathfieldElement();
     patchHappyDomMathfieldHostSelector(bootstrap);
@@ -426,12 +458,14 @@ describe("LiveTeX custom macro writeback", () => {
     const { host, preview, currentField, type } = await mountLivePreview("x");
     const field = currentField();
     const quiet = visualTexPreviewRecoveryCount();
+    const creations = visualTexPreviewFieldCreationCount();
     for (const latex of ["xy", "xyz", "xyza", "xyz", "xy", "x"]) {
       await type(latex);
     }
     // A false positive here would rebuild the mirror on every keystroke, which
     // is worse than the fault verification guards against.
     expect(visualTexPreviewRecoveryCount()).toBe(quiet);
+    expect(visualTexPreviewFieldCreationCount()).toBe(creations);
     expect(currentField()).toBe(field);
     expect(field.getValue("latex").replace(/\s+/g, "")).toBe("x");
     preview.destroy();
@@ -463,6 +497,10 @@ describe("LiveTeX custom macro writeback", () => {
       await nextAnimationFrame();
     }
     expect(rendered).toEqual([false, false, false]);
+
+    preview.refreshLayout();
+    await nextAnimationFrame();
+    expect(rendered.at(-1)).toBe(true);
 
     preview.update({ ...base, latex: "x+y+z", selection: { anchor: 5, head: 5 } });
     await nextAnimationFrame();

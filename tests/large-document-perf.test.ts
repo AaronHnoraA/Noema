@@ -3,7 +3,14 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createEditor } from "../src/editor-api.ts";
 import { SnippetSession } from "../aaronnote/snippets.ts";
-import { blockMathDecoRangeVisitCount, blockMathFullRebuildCount, revealFormulaSource, texHighlightScanCount } from "../src/cm6/extensions/visual/widgets/math.ts";
+import {
+  blockMathAtomicFullRebuildCount,
+  blockMathAtomicRangeVisitCount,
+  blockMathDecoRangeVisitCount,
+  blockMathFullRebuildCount,
+  revealFormulaSource,
+  texHighlightScanCount,
+} from "../src/cm6/extensions/visual/widgets/math.ts";
 
 // Happy DOM is slower and noisier than WebKit, and the 5 MB syntax tree is
 // already fully parsed at editor creation, so absolute numbers are inflated and
@@ -170,11 +177,15 @@ describe("large-document bounded editing", () => {
     // keys cost the same as a full re-render.
     const rebuildsBefore = blockMathFullRebuildCount();
     const visitsBefore = blockMathDecoRangeVisitCount();
+    const atomicRebuildsBefore = blockMathAtomicFullRebuildCount();
+    const atomicVisitsBefore = blockMathAtomicRangeVisitCount();
     const highlightScansBefore = texHighlightScanCount();
     for (let index = 0; index < 12; index++) {
       editor.view.dispatch({ selection: { anchor: bodyFrom + 1 + (index % body.length) } });
     }
     expect(blockMathFullRebuildCount()).toBe(rebuildsBefore);
+    expect(blockMathAtomicFullRebuildCount()).toBe(atomicRebuildsBefore);
+    expect(blockMathAtomicRangeVisitCount() - atomicVisitsBefore).toBeLessThan(24);
     // Moving the caret within one revealed formula must not even look at the
     // other 1_199: the window patch binary-searches to its own formula, and a
     // move that changes no key skips the patch entirely.
@@ -198,6 +209,7 @@ describe("large-document bounded editing", () => {
       });
     }
     expect(blockMathFullRebuildCount()).toBe(rebuildsBefore);
+    expect(blockMathAtomicFullRebuildCount()).toBe(atomicRebuildsBefore);
     // 12 caret moves + 12 edits over a 1_200-formula note.
     expect(texHighlightScanCount() - highlightScansBefore).toBeLessThan(64);
     editor.destroy();
