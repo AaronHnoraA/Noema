@@ -4,7 +4,7 @@ import * as widgetOutput from "@jupyter-widgets/jupyterlab-manager/lib/output";
 import { KernelWidgetManager, WIDGET_VIEW_MIMETYPE } from "@jupyter-widgets/jupyterlab-manager/lib/manager";
 import { WidgetRenderer } from "@jupyter-widgets/jupyterlab-manager/lib/renderer";
 import type { RenderMimeRegistry } from "@jupyterlab/rendermime";
-import { KernelConnection, ServerConnection, type Kernel } from "@jupyterlab/services";
+import { CommsOverSubshells, KernelConnection, ServerConnection, type Kernel } from "@jupyterlab/services";
 import { MessageLoop } from "@lumino/messaging";
 import * as LuminoWidgets from "@lumino/widgets";
 import requireJsSource from "requirejs/require.js?raw";
@@ -178,6 +178,13 @@ async function loadCustomWidgetModule(
 class AaronnoteWidgetManager extends KernelWidgetManager {
   readonly renderMime: RenderMimeRegistry;
   private readonly runtimeId: string;
+  // KernelWidgetManager starts restoreWidgets() from its base constructor.
+  // At that point a freshly opened browser channel can still be settling and,
+  // more importantly, the kernel may still be finishing the Cell that emitted
+  // this very widget.  Suppress that eager request: captured comm state gives
+  // us a live model immediately, then one background restore reconciles it
+  // with the authoritative kernel state without blocking the output UI.
+  private restoreEnabled = false;
   private restorePromise: Promise<void> | null = null;
   private replayQueue: Promise<void> = Promise.resolve();
   private readonly replayedMessages = new Set<string>();
@@ -190,6 +197,7 @@ class AaronnoteWidgetManager extends KernelWidgetManager {
     // the surrounding cell output exactly.
     const renderMime = createBaseRenderMime();
     super(kernel, renderMime);
+    this.restoreEnabled = true;
     this.runtimeId = runtimeId;
     this.renderMime = renderMime;
     this.registerCoreWidgetModules();
@@ -208,6 +216,13 @@ class AaronnoteWidgetManager extends KernelWidgetManager {
 
   get rendermime(): RenderMimeRegistry {
     return this.renderMime;
+  }
+
+  override async restoreWidgets(): Promise<void> {
+    // Dynamic dispatch reaches here once during super().  Derived fields have
+    // not been initialized then, so `restoreEnabled` is intentionally falsy.
+    if (!this.restoreEnabled) return;
+    await super.restoreWidgets();
   }
 
   private registerCoreWidgetModules(): void {
@@ -363,27 +378,46 @@ class AaronnoteWidgetManager extends KernelWidgetManager {
       if (!this.has_model(commId)) continue;
       let model: unknown;
       try { model = await this.get_model(commId); } catch { continue; }
-      const outputModel = model as { set?: (key: string, value: unknown) => void; save_changes?: () => void };
+      const outputModel = model as { set?: (key: string, value: unknown) => void };
       if (typeof outputModel.set !== "function") continue;
       this.seededOutputComms.add(commId);
       outputModel.set("outputs", outputs);
-      outputModel.save_changes?.();
     }
   }
 
   async mount(modelId: string, host: HTMLElement, messages: JupyterWidgetKernelMessage[] = [], widgetOutputs?: WidgetOutputsMap): Promise<() => void> {
-    // Kernel-state-first: pull live widget state directly from the kernel via
-    // the ipywidgets control comm (KernelWidgetManager.restoreWidgets), exactly
-    // like JupyterLab and VS Code Jupyter. This is what makes interaction work:
-    // the live view registers its own comm/message hooks, so slider changes
-    // round-trip and Output areas update in place.
-    let restoreError: unknown = null;
-    try {
-      await this.restoreFromKernel();
-    } catch (error) {
-      restoreError = error;
+    // The execution service captured the real comm_open/comm_msg sequence.
+    // Replaying it against this *live* KernelConnection creates the same model
+    // and comm hooks JupyterLab uses, so controls can send immediately even if
+    // the kernel is still busy.  Do not synchronously put a control-comm
+    // restore in front of rendering: that queues on the kernel shell channel
+    // and lets one @interact output stall every later UI request.
+    let replayError: unknown = null;
+    if (!this.has_model(modelId) && messages.length > 0) {
+      try {
+        await this.restoreFromMessages(messages);
+      } catch (error) {
+        replayError = error;
+      }
     }
-    if (!this.has_model(modelId)) {
+    const viaReplay = this.has_model(modelId);
+
+    // Reconcile captured state with the kernel in the background.  If replay
+    // could not provide this model (old kernels or truncated captures), wait
+    // for the normal Jupyter widget-state restore as the fallback.
+    let restoreError: unknown = null;
+    if (viaReplay) {
+      void this.restoreFromKernel().catch((error) => {
+        console.warn(`[aaronnote-jupyter] background widget-state reconciliation failed: ${errorText(error)}`);
+      });
+    } else {
+      try {
+        await this.restoreFromKernel();
+      } catch (error) {
+        restoreError = error;
+      }
+    }
+    if (!viaReplay && !this.has_model(modelId)) {
       // The first restore can lose a race against the connection actually
       // warming up (comm target registration / IOPub subscribe settling) —
       // this is the classic "works on the second run" symptom. Since a 0-model
@@ -397,19 +431,7 @@ class AaronnoteWidgetManager extends KernelWidgetManager {
       }
     }
     const modelsAfterRestore = this.loadedModelCount();
-    const viaRestore = this.has_model(modelId);
-    // Fallback for kernels whose ipywidgets predate the control comm, or when
-    // the live state was unavailable: replay the comm messages captured during
-    // execution. This yields a static (non-interactive) view but avoids a hard
-    // failure.
-    let replayError: unknown = null;
-    if (!this.has_model(modelId) && messages.length > 0) {
-      try {
-        await this.restoreFromMessages(messages);
-      } catch (error) {
-        replayError = error;
-      }
-    }
+    const viaRestore = !viaReplay && this.has_model(modelId);
     if (!this.has_model(modelId)) {
       // Report *why* nothing resolved so the failure is actionable on screen
       // instead of a bare "model not found": which mechanism ran, how much it
@@ -428,7 +450,7 @@ class AaronnoteWidgetManager extends KernelWidgetManager {
       throw new Error(`widget model not found (${detail})`);
     }
     console.info(
-      `[aaronnote-jupyter] mounted widget ${modelId.slice(0, 8)} via ${viaRestore ? "kernel-restore (LIVE)" : "message-replay (static)"}`
+      `[aaronnote-jupyter] mounted widget ${modelId.slice(0, 8)} via ${viaRestore ? "kernel-restore" : "captured-state replay"} (LIVE)`
       + ` — ${this.loadedModelCount()} models, kernel ${this.kernel.connectionStatus}/${this.kernel.status}`,
     );
     await this.seedOutputWidgets(widgetOutputs);
@@ -554,48 +576,26 @@ function disposeOlderGenerations(runtime: JupyterWidgetRuntime): void {
   }
 }
 
-// Wait for the connection to actually be usable before trusting it: not just
-// "kernel_info replied on shell" (jlab's own `kernel.info` already waits for
-// that) but "connected" *and* at least one IOPub message seen. Each browser
-// widget connection is its own fresh ZMQ identity/subscription on the server
-// bridge, so it has the same slow-joiner window a brand-new subscriber always
-// does — without this, the very first restoreWidgets() call on it can race
-// past comm state that hasn't arrived yet (the root cause of "works on the
-// second run").
-async function warmupRuntimeConnection(kernel: KernelConnection, timeoutMs = 10_000): Promise<void> {
+// Opening the browser channel is the only prerequisite for captured-state
+// replay.  Do not probe kernel_info or wait for arbitrary IOPub traffic here:
+// both are kernel requests, and when the Cell is busy they queue behind it and
+// turn a harmless widget mount into a page-wide timeout.
+async function waitForRuntimeConnection(kernel: KernelConnection, timeoutMs = 10_000): Promise<void> {
   await withTimeout(
-    (async () => {
-      if (kernel.connectionStatus !== "connected") {
-        await new Promise<void>((resolve) => {
-          const handler = (_sender: unknown, status: string) => {
-            if (status !== "connected") return;
-            kernel.connectionStatusChanged.disconnect(handler as never);
-            resolve();
-          };
-          kernel.connectionStatusChanged.connect(handler as never);
-          if (kernel.connectionStatus === "connected") {
-            kernel.connectionStatusChanged.disconnect(handler as never);
-            resolve();
-          }
-        });
+    new Promise<void>((resolve) => {
+      const handler = (_sender: unknown, status: string) => {
+        if (status !== "connected") return;
+        kernel.connectionStatusChanged.disconnect(handler as never);
+        resolve();
+      };
+      kernel.connectionStatusChanged.connect(handler as never);
+      if (kernel.connectionStatus === "connected") {
+        kernel.connectionStatusChanged.disconnect(handler as never);
+        resolve();
       }
-      await new Promise<void>((resolve) => {
-        let settled = false;
-        const finish = () => {
-          if (settled) return;
-          settled = true;
-          kernel.iopubMessage.disconnect(finish as never);
-          resolve();
-        };
-        kernel.iopubMessage.connect(finish as never);
-        // Poke the kernel in case no iopub traffic is already in flight; retry
-        // once shortly after in case the first request raced kernel startup.
-        kernel.requestKernelInfo().catch(() => {});
-        window.setTimeout(() => { if (!settled) kernel.requestKernelInfo().catch(() => {}); }, 500);
-      });
-    })(),
+    }),
     timeoutMs,
-    "Timed out warming up the widget kernel connection",
+    "Timed out opening the live Jupyter widget channel",
   );
 }
 
@@ -612,10 +612,24 @@ async function createRuntimeEntry(runtime: JupyterWidgetRuntime): Promise<Runtim
     serverSettings,
     username: "aaronnote-widget",
     handleComms: true,
+    // Keep widget callbacks on the kernel's normal shell, as classic
+    // Notebook and VS Code do.  Recent @jupyterlab/services defaults to one
+    // JEP-91 subshell per comm target; Sage advertises that feature, but a
+    // Sage @interact callback which plots/typesets from the subshell can
+    // deadlock the kernel after the first slider update.  The UI then moves
+    // locally while every later execute/inspect request waits forever.
+    // Widgets are already carried by their own browser KernelConnection, so
+    // disabling a second level of subshell multiplexing does not serialize
+    // or block Noema's server-owned execution connection.
+    commsOverSubshells: CommsOverSubshells.Disabled,
   });
-  await kernel.info;
-  await warmupRuntimeConnection(kernel);
-  return { kernel, manager: new AaronnoteWidgetManager(kernel, runtime.id) };
+  try {
+    await waitForRuntimeConnection(kernel);
+    return { kernel, manager: new AaronnoteWidgetManager(kernel, runtime.id) };
+  } catch (error) {
+    kernel.dispose();
+    throw error;
+  }
 }
 
 function getRuntimeEntry(runtime: JupyterWidgetRuntime): Promise<RuntimeEntry> {

@@ -43,12 +43,18 @@ export type WidgetMountFn = (
   widgetOutputs?: WidgetOutputsMap,
 ) => Promise<() => void>;
 
+export type JupyterOutputView = (() => void) & {
+  clear(): void;
+  setOutput(index: number, output: unknown): void;
+};
+
 export type RenderMimeOptions = {
   widgetRuntime?: JupyterWidgetRuntimeRef;
   widgetMessages?: unknown[];
   widgetOutputs?: WidgetOutputsMap;
   mountWidget?: WidgetMountFn;
   markdownParser?: IRenderMime.IMarkdownParser;
+  jsonMimeTypes?: string[];
 };
 
 function mimeToString(value: unknown): string {
@@ -105,6 +111,7 @@ class KatexTypesetter implements IRenderMime.ILatexTypesetter {
         const parent = node.parentElement;
         if (!parent) return NodeFilter.FILTER_REJECT;
         if (parent.closest("script,style,code,pre,.cm-ceil-output-latex")) return NodeFilter.FILTER_REJECT;
+        INLINE_MATH_RE.lastIndex = 0;
         return INLINE_MATH_RE.test(node.nodeValue ?? "") ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
       },
     });
@@ -227,11 +234,63 @@ class AaronnoteHtmlRenderer extends Widget implements IRenderMime.IRenderer {
     if (stockHtmlFactory) {
       const inner = stockHtmlFactory.createRenderer(this.options);
       await inner.renderModel(model);
+      // The stock renderer only runs its typesetter from Lumino's
+      // onAfterAttach hook.  It is nested inside this adapter and therefore
+      // never receives that hook itself; invoke the same shared KaTeX
+      // typesetter explicitly so Sage show()/pretty_print MathJax-style HTML
+      // is not left on screen as raw `\(...\)` source.
+      katexTypesetter().typeset(inner.node);
       this.node.replaceChildren(inner.node);
       return;
     }
     this.node.innerHTML = html;
   }
+}
+
+class AaronnoteJsonRenderer extends Widget implements IRenderMime.IRenderer {
+  private readonly mimeType: string;
+
+  constructor(options: IRenderMime.IRendererOptions) {
+    super();
+    this.mimeType = options.mimeType;
+    this.addClass("jp-RenderedText");
+    this.addClass("jp-RenderedJSON");
+    this.node.dataset.mimeType = this.mimeType;
+  }
+
+  async renderModel(model: IRenderMime.IMimeModel): Promise<void> {
+    const raw = model.data[this.mimeType];
+    let value: unknown = raw;
+    if (typeof raw === "string") {
+      try { value = JSON.parse(raw); } catch { value = raw; }
+    }
+    let rendered: string;
+    try {
+      rendered = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+    } catch {
+      rendered = String(value ?? "");
+    }
+    const pre = document.createElement("pre");
+    pre.textContent = rendered ?? String(value ?? "");
+    this.node.replaceChildren(pre);
+  }
+}
+
+function jsonMimeTypesForOutput(output: unknown): string[] {
+  const data = output && typeof output === "object" ? (output as { data?: unknown }).data : null;
+  if (!data || typeof data !== "object") return [];
+  return Object.keys(data).filter(
+    (mimeType) => mimeType === "application/json" || /^application\/[\w.+-]+\+json$/i.test(mimeType),
+  );
+}
+
+function addJsonMimeFactory(registry: RenderMimeRegistry, mimeType: string, rank: number): void {
+  if (registry.mimeTypes.includes(mimeType)) return;
+  registry.addFactory({
+    safe: true,
+    mimeTypes: [mimeType],
+    createRenderer: (rendererOptions) => new AaronnoteJsonRenderer(rendererOptions),
+  }, rank);
 }
 
 class WidgetViewRenderer extends Widget implements IRenderMime.IRenderer {
@@ -324,11 +383,24 @@ export function createBaseRenderMime(options: Pick<RenderMimeOptions, "markdownP
     mimeTypes: ["text/html"],
     createRenderer: (rendererOptions) => new AaronnoteHtmlRenderer(rendererOptions),
   }, 1);
+  registry.addFactory({
+    safe: true,
+    mimeTypes: ["application/json"],
+    createRenderer: (rendererOptions) => new AaronnoteJsonRenderer(rendererOptions),
+  }, 55);
   return registry;
 }
 
 export function createAaronnoteRenderMime(options: RenderMimeOptions = {}): RenderMimeRegistry {
   const registry = createBaseRenderMime(options);
+  // Jupyter kernels and extensions frequently emit custom `+json` bundles.
+  // JupyterLab only uses a vendor-specific renderer when its extension is
+  // installed; otherwise keep text/plain ahead of this readable JSON
+  // fallback, while still avoiding a blank output when JSON is the sole MIME.
+  for (const mimeType of options.jsonMimeTypes || []) {
+    if (mimeType === "application/json" || !/^application\/[\w.+-]+\+json$/i.test(mimeType)) continue;
+    addJsonMimeFactory(registry, mimeType, 125);
+  }
   registry.addFactory({
     safe: false,
     mimeTypes: [WIDGET_VIEW_MIMETYPE],
@@ -343,15 +415,33 @@ export function renderJupyterOutputs(
   host: HTMLElement,
   outputs: unknown[],
   options: RenderMimeOptions = {},
-): () => void {
-  const rendermime = createAaronnoteRenderMime(options);
+): JupyterOutputView {
+  const jsonMimeTypes = new Set(options.jsonMimeTypes || []);
+  for (const output of outputs) {
+    for (const mimeType of jsonMimeTypesForOutput(output)) jsonMimeTypes.add(mimeType);
+  }
+  const rendermime = createAaronnoteRenderMime({ ...options, jsonMimeTypes: Array.from(jsonMimeTypes) });
   const model = new OutputAreaModel({ trusted: true });
   const area = new OutputArea({ model, rendermime });
   area.addClass("cm-ceil-output-area");
   host.appendChild(area.node);
   model.fromJSON(outputs as never);
-  return () => {
+  const dispose = (() => {
     try { area.dispose(); } catch {}
     try { model.dispose(); } catch {}
+  }) as JupyterOutputView;
+  dispose.clear = () => model.clear();
+  dispose.setOutput = (index, output) => {
+    if (!Number.isInteger(index) || index < 0) return;
+    // A live cell can introduce a vendor +json MIME after its OutputArea was
+    // created (for example, after clear_output). Register that readable
+    // fallback before updating the model so the first event renders instead
+    // of staying blank until a later full snapshot.
+    for (const mimeType of jsonMimeTypesForOutput(output)) {
+      if (mimeType !== "application/json") addJsonMimeFactory(rendermime, mimeType, 125);
+    }
+    if (index < model.length) model.set(index, output as never);
+    else if (index === model.length) model.add(output as never);
   };
+  return dispose;
 }

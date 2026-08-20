@@ -5,7 +5,7 @@ import "./jupyter-page.css";
 import { api } from "./api-client.ts";
 import type { JupyterKernelSpec } from "./api-client.ts";
 import { renderJupyterOutputs } from "../src/jupyter-rendermime.ts";
-import type { JupyterMarkdownParser, WidgetMountFn } from "../src/jupyter-rendermime.ts";
+import type { JupyterMarkdownParser, JupyterOutputView, WidgetMountFn } from "../src/jupyter-rendermime.ts";
 import type { JupyterWidgetKernelMessage } from "../src/jupyter-widget-runtime.ts";
 import { renderJupyterVariablesTable } from "../src/jupyter-variables-view.ts";
 import { renderMarkdownHTML } from "../src/render-html.ts";
@@ -123,6 +123,7 @@ let activeView: "outputs" | "variables" | "manage" = "outputs";
 let managerOpen = false;
 let inspectorOpen = false;
 const outputDisposers = new Set<() => void>();
+const cellOutputViews = new Map<string, JupyterOutputView>();
 let dialogOutputDispose: (() => void) | null = null;
 
 try {
@@ -283,6 +284,52 @@ function disposeOutputs(): void {
     try { dispose(); } catch {}
   }
   outputDisposers.clear();
+  cellOutputViews.clear();
+}
+
+function cellOutputKey(tab: TabState, cell: CellSnapshot): string {
+  return `${tab.ref.scriptFile}\0${cell.id}`;
+}
+
+function registerCellOutputView(tab: TabState, cell: CellSnapshot, view: JupyterOutputView): void {
+  cellOutputViews.set(cellOutputKey(tab, cell), view);
+  outputDisposers.add(view);
+}
+
+function cellCard(cell: CellSnapshot): HTMLElement | null {
+  return workspaceEl.querySelector<HTMLElement>(`[data-cell-id="${CSS.escape(cell.id)}"]`);
+}
+
+function ensureCellOutputView(tab: TabState, cell: CellSnapshot): JupyterOutputView | null {
+  const key = cellOutputKey(tab, cell);
+  const existing = cellOutputViews.get(key);
+  if (existing) return existing;
+  const output = cellCard(cell)?.querySelector<HTMLElement>(".noema-jupyter-output");
+  if (!output) return null;
+  output.hidden = false;
+  output.replaceChildren();
+  const view = renderJupyterOutputs(output, [], outputRenderOptions(cell));
+  registerCellOutputView(tab, cell, view);
+  installAutomaticOutputFold(tab, cell, output);
+  return view;
+}
+
+function isWidgetOutput(output: unknown): boolean {
+  const data = output && typeof output === "object" ? (output as { data?: unknown }).data : null;
+  return Boolean(
+    data && typeof data === "object"
+    && "application/vnd.jupyter.widget-view+json" in data
+  );
+}
+
+function updateCellChrome(cell: CellSnapshot): void {
+  const card = cellCard(cell);
+  if (!card) return;
+  card.dataset.status = cell.status || "idle";
+  const prompt = card.querySelector<HTMLElement>(".noema-jupyter-prompt");
+  if (prompt) prompt.textContent = cell.executionCount == null ? "[ ]" : `[${cell.executionCount}]`;
+  const status = card.querySelector<HTMLElement>(".noema-jupyter-badges span:first-child");
+  if (status) status.textContent = cell.status || "idle";
 }
 
 function selectCell(tab: TabState, cellId: string, focus = false): void {
@@ -490,7 +537,6 @@ async function execute(mode: "current" | "selected" | "above" | "below" | "all",
       });
     }
     await loadManager(false);
-    await loadTab(tab, true);
     setStatus("Execution complete");
   } catch (error) {
     setStatus(error instanceof Error ? error.message : "Execution failed", true);
@@ -721,6 +767,38 @@ function openCellMenu(tab: TabState, cell: CellSnapshot, x: number, y: number): 
   contextMenuEl.querySelector<HTMLButtonElement>("button")?.focus();
 }
 
+function appendStdinForm(output: HTMLElement, cell: CellSnapshot): void {
+  output.querySelector(".noema-jupyter-stdin")?.remove();
+  if (!cell.stdin) return;
+  output.hidden = false;
+  const stdin = document.createElement("form");
+  stdin.className = "noema-jupyter-stdin";
+  const label = document.createElement("label");
+  label.textContent = cell.stdin.prompt || (cell.stdin.password ? "Password:" : "Input:");
+  const input = document.createElement("input");
+  input.type = cell.stdin.password ? "password" : "text";
+  input.autocomplete = "off";
+  const submit = document.createElement("button");
+  submit.type = "submit";
+  submit.textContent = "Send";
+  const cancel = button("Cancel", "Cancel input", async () => {
+    await api.jupyterCell.inputReply({ runId: cell.stdin!.runId, cancel: true });
+    delete cell.stdin;
+    stdin.remove();
+  });
+  stdin.append(label, input, submit, cancel);
+  stdin.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const runId = cell.stdin?.runId || "";
+    void api.jupyterCell.inputReply({ runId, value: input.value }).finally(() => {
+      delete cell.stdin;
+      stdin.remove();
+    });
+  });
+  output.append(stdin);
+  requestAnimationFrame(() => input.focus());
+}
+
 function renderCell(tab: TabState, cell: CellSnapshot): HTMLElement {
   const card = document.createElement("article");
   card.className = "noema-jupyter-cell";
@@ -772,7 +850,7 @@ function renderCell(tab: TabState, cell: CellSnapshot): HTMLElement {
   output.className = "noema-jupyter-output";
   if (cell.outputUi?.outputFolded) output.hidden = true;
   if (Array.isArray(cell.outputs) && cell.outputs.length > 0) {
-    outputDisposers.add(renderJupyterOutputs(output, cell.outputs, outputRenderOptions(cell)));
+    registerCellOutputView(tab, cell, renderJupyterOutputs(output, cell.outputs, outputRenderOptions(cell)));
     installAutomaticOutputFold(tab, cell, output);
   } else {
     const empty = document.createElement("div");
@@ -780,34 +858,7 @@ function renderCell(tab: TabState, cell: CellSnapshot): HTMLElement {
     empty.textContent = cell.status === "error" ? "Execution failed" : "No output";
     output.append(empty);
   }
-  if (cell.stdin) {
-    output.hidden = false;
-    const stdin = document.createElement("form");
-    stdin.className = "noema-jupyter-stdin";
-    const label = document.createElement("label");
-    label.textContent = cell.stdin.prompt || (cell.stdin.password ? "Password:" : "Input:");
-    const input = document.createElement("input");
-    input.type = cell.stdin.password ? "password" : "text";
-    input.autocomplete = "off";
-    const submit = document.createElement("button");
-    submit.type = "submit";
-    submit.textContent = "Send";
-    const cancel = button("Cancel", "Cancel input", async () => {
-      await api.jupyterCell.inputReply({ runId: cell.stdin!.runId, cancel: true });
-      delete cell.stdin;
-      renderWorkspace();
-    });
-    stdin.append(label, input, submit, cancel);
-    stdin.addEventListener("submit", (event) => {
-      event.preventDefault();
-      const runId = cell.stdin?.runId || "";
-      void api.jupyterCell.inputReply({ runId, value: input.value }).finally(() => {
-        delete cell.stdin;
-        renderWorkspace();
-      });
-    });
-    output.append(stdin);
-  }
+  appendStdinForm(output, cell);
   card.append(head, output);
   return card;
 }
@@ -1169,6 +1220,7 @@ window.addEventListener("aaronnote:jupyter-cell", (event) => {
   if (!tab) return;
   const cell = tab.snapshot?.cells.find((item) => item.id === text(detail.cellId));
   if (cell) {
+    const outputView = cellOutputViews.get(cellOutputKey(tab, cell));
     if (detail.phase === "start") cell.status = "busy";
     if (detail.phase === "stdin") {
       cell.stdin = {
@@ -1183,18 +1235,34 @@ window.addEventListener("aaronnote:jupyter-cell", (event) => {
       delete cell.stdin;
     }
     for (const patch of detail.events || []) {
-      if (patch.kind === "clear") cell.outputs = [];
+      if (patch.kind === "clear") {
+        cell.outputs = [];
+        outputView?.clear();
+      }
       else if (patch.kind === "set" && Number.isInteger(patch.index)) {
         const outputs = [...cell.outputs];
         outputs[Number(patch.index)] = patch.output;
         cell.outputs = outputs;
+        // Widget display_data arrives before its complete comm transcript and
+        // live runtime stamp.  Mounting that partial output starts a control
+        // comm while the Cell is still busy, then every later stream/status
+        // event used to tear it down and start another one.  Keep the Cell's
+        // OutputArea stable and mount the widget once from the authoritative
+        // end-of-execution snapshot. Ordinary stream/rich outputs still update
+        // in place through JupyterLab's OutputAreaModel.
+        if (!isWidgetOutput(patch.output)) {
+          ensureCellOutputView(tab, cell)?.setOutput(Number(patch.index), patch.output);
+        }
       } else if (patch.kind === "executionCount") {
         cell.executionCount = patch.value ?? cell.executionCount;
       } else if (patch.kind === "status") {
         cell.status = text(patch.state) || cell.status;
       }
     }
-    renderWorkspace();
+    updateCellChrome(cell);
+    const output = cellCard(cell)?.querySelector<HTMLElement>(".noema-jupyter-output");
+    if (output && detail.phase === "stdin") appendStdinForm(output, cell);
+    if (output && detail.phase === "end") output.querySelector(".noema-jupyter-stdin")?.remove();
   }
   if (detail.phase === "end") {
     window.clearTimeout(refreshTimer);
@@ -1213,6 +1281,8 @@ window.addEventListener("aaronnote:jupyter-session", (event) => {
   const tab = tabs.get(scriptFile)
     || Array.from(tabs.values()).find((item) => item.ref.scriptFile === scriptFile);
   if (!tab || !snapshot?.document) return;
+  window.clearTimeout(refreshTimer);
+  refreshTimer = 0;
   tab.snapshot = snapshot;
   tab.ref = { ...tab.ref, ...snapshot.document };
   if (!snapshot.cells.some((cell) => cell.id === tab.activeCellId)) {

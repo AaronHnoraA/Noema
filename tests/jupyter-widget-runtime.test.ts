@@ -23,16 +23,17 @@ describe("Jupyter widget runtime", () => {
     expect(source).not.toContain('@jupyterlab/outputarea/style/index.js');
   });
 
-  test("mounts kernel-state-first and seeds Output widgets captured server-side", () => {
+  test("mounts captured comm state live before background kernel reconciliation", () => {
     const source = readFileSync(join(process.cwd(), "src/jupyter-widget-runtime.ts"), "utf8");
-    // restoreFromKernel (live control comm) is attempted before the captured
-    // message replay fallback, so interactive widgets resolve their models and
-    // slider round-trips update outputs in place.
-    const restoreIdx = source.indexOf("await this.restoreFromKernel()");
+    // Captured comms are rebound to the live KernelConnection first.  A
+    // control-comm restore is only background reconciliation, so a busy Cell
+    // cannot block the widget UI or queue repeated restore requests.
     const replayIdx = source.indexOf("await this.restoreFromMessages(messages)");
-    expect(restoreIdx).toBeGreaterThan(-1);
+    const restoreIdx = source.indexOf("void this.restoreFromKernel()");
     expect(replayIdx).toBeGreaterThan(-1);
-    expect(restoreIdx).toBeLessThan(replayIdx);
+    expect(restoreIdx).toBeGreaterThan(replayIdx);
+    expect(source).toContain("private restoreEnabled = false");
+    expect(source).toContain("if (!this.restoreEnabled) return");
     // Inline output and popout can mount the same widget concurrently; replay
     // must serialize and tolerate comms created by an earlier replay/restore.
     expect(source).toContain("private replayQueue: Promise<void>");
@@ -42,6 +43,7 @@ describe("Jupyter widget runtime", () => {
     expect(source).toContain("async seedOutputWidgets(");
     expect(source).toContain('outputModel.set("outputs", outputs)');
     expect(source).toContain("await this.seedOutputWidgets(widgetOutputs)");
+    expect(source).not.toContain("outputModel.save_changes");
   });
 
   test("first-run fix: a cold/empty restore is not permanently memoized, and mount() retries once", () => {
@@ -61,16 +63,23 @@ describe("Jupyter widget runtime", () => {
     expect(secondRestoreIdx).toBeGreaterThan(retryCommentIdx);
   });
 
-  test("each widget-runtime connection is warmed up (connected + first iopub seen) before use", () => {
+  test("widget-runtime setup waits only for the socket connection and does not probe a busy kernel", () => {
     const source = readFileSync(join(process.cwd(), "src/jupyter-widget-runtime.ts"), "utf8");
-    // Each browser widget connection is a fresh ZMQ identity/subscription on
-    // the server bridge, so it has its own slow-joiner window independent of
-    // the server's own persistent execution connection.
-    expect(source).toContain("async function warmupRuntimeConnection(");
-    expect(source).toContain('kernel.connectionStatus !== "connected"');
-    expect(source).toContain("kernel.iopubMessage.connect(");
-    expect(source).toContain("kernel.requestKernelInfo()");
-    expect(source).toContain("await warmupRuntimeConnection(kernel);");
+    expect(source).toContain("async function waitForRuntimeConnection(");
+    expect(source).toContain("kernel.connectionStatusChanged.connect(");
+    expect(source).toContain('kernel.connectionStatus === "connected"');
+    expect(source).toContain("await waitForRuntimeConnection(kernel);");
+    expect(source).not.toContain("kernel.iopubMessage.connect(");
+    expect(source).not.toContain("kernel.requestKernelInfo()");
+    expect(source).not.toContain("await kernel.info");
+  });
+
+  test("keeps widget comm callbacks off JEP-91 subshells", () => {
+    const source = readFileSync(join(process.cwd(), "src/jupyter-widget-runtime.ts"), "utf8");
+    // Sage advertises subshell support, but plotting/typesetting from an
+    // @interact observer in that subshell can deadlock the whole kernel.
+    expect(source).toContain("CommsOverSubshells");
+    expect(source).toContain("commsOverSubshells: CommsOverSubshells.Disabled");
   });
 
   test("widget-runtime KernelConnections are disposed on pagehide", () => {
