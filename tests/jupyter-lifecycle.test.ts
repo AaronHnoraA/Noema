@@ -40,6 +40,13 @@ describeIfKernel("kernel lifecycle (real ipykernel)", () => {
           metadata: {},
           outputs: [],
           source: "print(6 * 7)\n",
+        }, {
+          cell_type: "code",
+          execution_count: null,
+          id: "widget-cell",
+          metadata: {},
+          outputs: [],
+          source: "import ipywidgets as widgets\nslider = widgets.IntSlider(value=3)\nslider\n",
         }],
         metadata: {
           kernelspec: { display_name: "Python 3", language: "python", name: "python3" },
@@ -84,6 +91,25 @@ describeIfKernel("kernel lifecycle (real ipykernel)", () => {
           cursorPos: 3,
         });
         expect(inspected).toMatchObject({ supported: true, found: true });
+        const widgetExecuted = await service.scriptAction({
+          scriptFile: notebook,
+          cellId: "widget-cell",
+          action: "run-current",
+        });
+        expect(widgetExecuted.results[0]).toMatchObject({ status: "ok" });
+        const snapshot = await service.documentSnapshot({ scriptFile: notebook });
+        const widgetCell = snapshot.cells.find((cell: { id: string }) => cell.id === "widget-cell");
+        expect(widgetCell).toMatchObject({
+          widgetRuntime: expect.objectContaining({ id: expect.any(String), name: "python3" }),
+        });
+        expect(widgetCell.outputs).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            output_type: "execute_result",
+            data: expect.objectContaining({
+              "application/vnd.jupyter.widget-view+json": expect.objectContaining({ model_id: expect.any(String) }),
+            }),
+          }),
+        ]));
       } finally {
         await service.shutdown();
         await rm(noteRoot, { recursive: true, force: true });

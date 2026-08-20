@@ -257,14 +257,18 @@ export function buildNotebook({
   return { notebook, text: serializeNotebook(notebook), line };
 }
 
-export function notebookOutput(cell, { passive = false } = {}) {
+export function notebookOutput(cell, { passive = false, includeRuntimeStamp = false } = {}) {
   if (!cell || cell.cell_type !== "code") return null;
   const noema = object(object(cell.metadata).noema);
   const hasPortableOutput = cell.execution_count != null || (Array.isArray(cell.outputs) && cell.outputs.length > 0);
   if (!hasPortableOutput && Object.keys(noema).length === 0) return null;
-  const { widgetRuntime: _widgetRuntime, kernelRuntime: _kernelRuntime, ...persisted } = noema;
+  const { widgetRuntime: _widgetRuntime, kernelRuntime, ...persisted } = noema;
   return {
     ...persisted,
+    // kernelRuntime is a private identity stamp, not a serializable widget
+    // manager.  Active service paths may retain it just long enough to prove
+    // that the saved comm state belongs to the currently running generation.
+    ...(includeRuntimeStamp && kernelRuntime ? { kernelRuntime } : {}),
     executionCount: cell.execution_count ?? null,
     outputs: Array.isArray(cell.outputs) ? cell.outputs : [],
     ...(passive ? { live: false } : {}),

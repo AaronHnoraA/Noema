@@ -979,10 +979,35 @@ sseHeartbeatInterval.unref();
 // unsaved editor state), but do not let the failure be silent: surface a
 // bounded diagnostic on the SSE stream so the editor / Emacs can react instead
 // of the server wedging in a half-broken state unnoticed.
-function reportServerError(kind, detail) {
+let rejectionReported = false;
+
+function reportServerError(kind, detail, { fatal = true } = {}) {
+  const text = detail?.stack || String(detail ?? "");
+  if (!fatal) {
+    // A rejected promise is a bug in one code path, not evidence that the
+    // process is unsound. Tearing the server down here would take every
+    // running kernel with it (process.on("exit") SIGKILLs the owned process
+    // groups), losing in-kernel state over an unrelated failure.
+    process.stderr.write(`[aaronnote-web] ${kind}: ${text}\n`);
+    if (!rejectionReported) {
+      rejectionReported = true;
+      try {
+        broadcast("command", {
+          command: "server-error",
+          kind,
+          message: hostMode === "server"
+            ? "Server reader unavailable"
+            : (detail instanceof Error ? detail.message : String(detail ?? "")).slice(0, 500),
+          at: Date.now(),
+        });
+      } catch {
+        // Never let diagnostic broadcasting trigger another failure.
+      }
+    }
+    return;
+  }
   if (fatalReported) return;
   fatalReported = true;
-  const text = detail?.stack || String(detail ?? "");
   process.stderr.write(`[aaronnote-web] ${kind}: ${text}\n`);
   try {
     broadcast("command", {
@@ -999,8 +1024,13 @@ function reportServerError(kind, detail) {
   void beginShutdown({ reason: kind, exitCode: 1 });
 }
 
+// An uncaught exception can leave the process in an undefined state, so it
+// still shuts down. An unhandled rejection does not, and is not worth every
+// kernel's memory.
 process.on("uncaughtException", (err) => reportServerError("uncaughtException", err));
-process.on("unhandledRejection", (reason) => reportServerError("unhandledRejection", reason));
+process.on("unhandledRejection", (reason) =>
+  reportServerError("unhandledRejection", reason, { fatal: false }),
+);
 
 function closeHttpServer() {
   return new Promise((resolve) => {

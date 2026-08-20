@@ -76,6 +76,7 @@ export function executeOnKernel(kernel, code, options = {}) {
     storeHistory = true,
     stopOnError = false,
     streamLimit = 1024 * 1024,
+    outputLimit = 4096,
     widgetMessageLimit = 512,
     widgetMessageBytesLimit = 8 * 1024 * 1024,
     execTimeoutMs = 0,
@@ -93,6 +94,12 @@ export function executeOnKernel(kernel, code, options = {}) {
     : null;
 
   const outputs = [];
+  // Only stream text was bounded. A loop emitting a figure per iteration
+  // accumulates every one of them here, then serialises the lot into the RPC
+  // reply and the .ipynb -- a cell nobody would ever read renders the
+  // notebook unopenable. Rich outputs are bounded by count instead of bytes,
+  // since a single image is legitimately large.
+  let outputTruncated = false;
   const displayIndexes = new Map();
   const widgetCommIds = new Set();
   const outputRouter = createOutputWidgetRouter();
@@ -179,6 +186,19 @@ export function executeOnKernel(kernel, code, options = {}) {
         return;
       }
       output = { ...output, output_type: "display_data" };
+    }
+    if (outputs.length >= outputLimit) {
+      if (!outputTruncated) {
+        outputTruncated = true;
+        const marker = {
+          output_type: "stream",
+          name: "stderr",
+          text: `\n[aaronnote: further outputs dropped after ${outputLimit} entries]\n`,
+        };
+        outputs.push(marker);
+        emit?.({ kind: "set", index: outputs.length - 1, output: { ...marker } });
+      }
+      return;
     }
     if (displayId) displayIndexes.set(displayId, outputs.length);
     outputs.push(output);

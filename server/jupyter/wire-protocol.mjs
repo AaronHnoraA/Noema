@@ -59,7 +59,11 @@ export function decode(messageFrames, key, scheme = "sha256") {
     hmac.update(messageFrames[i + 4]);
     hmac.update(messageFrames[i + 5]);
     const expectedSignature = hmac.digest("hex");
-    if (expectedSignature !== obtainedSignature) {
+    // Constant-time: a plain `!==` leaks how much of the signature matched,
+    // which is enough to forge one byte at a time against a long-lived key.
+    const obtained = Buffer.from(obtainedSignature, "utf8");
+    const expected = Buffer.from(expectedSignature, "utf8");
+    if (obtained.length !== expected.length || !crypto.timingSafeEqual(obtained, expected)) {
       throw new Error(
         `Message Decoding: Incorrect;\nObtained "${obtainedSignature}"\nExpected "${expectedSignature}"`,
       );

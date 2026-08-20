@@ -37,11 +37,39 @@ export function jupyterKernelWsId(pathname) {
  * @param {(id: string) => void} [options.touchKernel]
  * @param {NodeJS.WritableStream} [options.stderr]
  */
-export function installJupyterKernelWebSocket({ server, resolveKernelChannel, zmq, touchKernel = noop, stderr = process.stderr }) {
+export function installJupyterKernelWebSocket({
+  server,
+  resolveKernelChannel,
+  zmq,
+  touchKernel = noop,
+  stderr = process.stderr,
+  keepaliveMs = 30_000,
+}) {
   const log = makeLogger(stderr);
   const wss = new WebSocketServer({ noServer: true, handleProtocols: () => false });
 
-  server.on("upgrade", async (req, socket, head) => {
+  // A browser that goes away without closing cleanly (laptop suspended, tab
+  // killed) leaves a half-open socket that holds its four ZMQ sockets open
+  // until TCP eventually notices, which can be many minutes. Ping every
+  // client and drop the ones that stop answering.
+  const keepalive = setInterval(() => {
+    for (const client of wss.clients) {
+      if (client.isAlive === false) {
+        try { client.terminate(); } catch { /* ignore */ }
+        continue;
+      }
+      client.isAlive = false;
+      try { client.ping(); } catch { /* ignore */ }
+    }
+  }, keepaliveMs);
+  keepalive.unref?.();
+
+  const trackLiveness = (ws) => {
+    ws.isAlive = true;
+    ws.on("pong", () => { ws.isAlive = true; });
+  };
+
+  const onUpgrade = async (req, socket, head) => {
     let url;
     try {
       url = new URL(req.url || "/", "http://localhost");
@@ -66,11 +94,15 @@ export function installJupyterKernelWebSocket({ server, resolveKernelChannel, zm
       // that server's own channels endpoint. This is a message relay, not a
       // socket splice: the upstream handshake needs the auth headers and TLS
       // options a browser WebSocket cannot carry, so they are applied here.
-      wss.handleUpgrade(req, socket, head, (ws) => bridgeUpstream(ws, id, channel.upstream, log));
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        trackLiveness(ws);
+        bridgeUpstream(ws, id, channel.upstream, log);
+      });
       return;
     }
 
     wss.handleUpgrade(req, socket, head, (ws) => {
+      trackLiveness(ws);
       const protocol = ws.protocol || "";
       let rawSocket;
       try {
@@ -129,10 +161,16 @@ export function installJupyterKernelWebSocket({ server, resolveKernelChannel, zm
       });
 
     });
-  });
+  };
+
+  server.on("upgrade", onUpgrade);
 
   return {
     close() {
+      clearInterval(keepalive);
+      // Leaving this attached would keep a closed bridge handling upgrades,
+      // and stack another handler on every re-install.
+      server.off("upgrade", onUpgrade);
       for (const client of wss.clients) {
         try {
           client.terminate();
@@ -154,8 +192,12 @@ export function installJupyterKernelWebSocket({ server, resolveKernelChannel, zm
  * Frames pass through untouched — both ends already speak the same wire
  * format — so nothing here needs to understand Jupyter messages.
  */
-function bridgeUpstream(ws, id, upstream, log) {
+function bridgeUpstream(ws, id, upstream, log, { queueLimit = 256 } = {}) {
+  // Frames the browser sends before the upstream handshake finishes are
+  // replayed in order. Bounded, because a browser that keeps sending while
+  // the upstream never connects would otherwise buffer without limit.
   let queued = [];
+  let queueDropped = 0;
   const remote = new WebSocketClient(upstream.url, [], {
     headers: upstream.headers || {},
     ...(upstream.allowUnauthorized ? { rejectUnauthorized: false } : {}),
@@ -189,6 +231,11 @@ function bridgeUpstream(ws, id, upstream, log) {
     if (remote.readyState === remote.OPEN) {
       try { remote.send(data, { binary: isBinary }); } catch { /* ignore */ }
     } else if (remote.readyState === remote.CONNECTING) {
+      if (queued.length >= queueLimit) {
+        if (!queueDropped) log.error(`Upstream kernel channel for ${id} is not keeping up; dropping queued frames`);
+        queueDropped += 1;
+        return;
+      }
       queued.push({ data, binary: isBinary });
     }
   });

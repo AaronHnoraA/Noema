@@ -64,7 +64,15 @@ export async function sweepOrphanKernels({ sidecarPath, stderr = process.stderr,
   try {
     entries = JSON.parse(await fs.readFile(sidecarPath, "utf8"));
     if (!Array.isArray(entries)) entries = [];
-  } catch {
+  } catch (ex) {
+    // A missing sidecar is the normal case. One that exists but cannot be
+    // parsed is not: leaving it in place makes every later start repeat this
+    // failure, so the orphans it described are never reaped at all.
+    const missing = ex?.code === "ENOENT";
+    if (!missing) {
+      log.warn(`discarding unreadable owned-kernels sidecar ${sidecarPath}: ${ex?.message || ex}`);
+      await fs.unlink(sidecarPath).catch(noop);
+    }
     return { reaped: 0 };
   }
   let reaped = 0;
@@ -297,6 +305,24 @@ export function createKernelRegistry({
       variableBaseline: null,
       ...base,
     };
+  }
+
+  /**
+   * Settle a restart-in-place attempt.
+   *
+   * A record left in `starting` after a failed handshake is worse than a dead
+   * one: `ensure`/`ensureServer` only relaunch a record whose status is
+   * `dead`, so anything else is handed back out as if it were usable.
+   */
+  async function markDeadOnFailure(record, promise) {
+    try {
+      return await promise;
+    } catch (ex) {
+      record.status = "dead";
+      record.lastError = ex?.message || String(ex);
+      stopHeartbeat(record);
+      throw ex;
+    }
   }
 
   /** Wait for the connection to come up, run the kernel_info handshake, and record what it reported. */
@@ -661,6 +687,7 @@ export function createKernelRegistry({
         // The server restarts the process in place and keeps the kernel id,
         // so the existing connection stays valid — but in-kernel state is
         // gone, and any browser widget connection must not be reused.
+        if (!serverRegistry) throw new Error("No Jupyter server registry is configured");
         await serverRegistry.restartKernel(record.serverId, record.serverKernelId);
         record.widgetGeneration += 1;
         record.stateLost = true;
@@ -668,7 +695,10 @@ export function createKernelRegistry({
         record.variableBaseline = null;
         record.kernelInfo = null;
         record.status = "starting";
-        return await readyRecord(record, `restarting kernel on Jupyter server ${record.serverId}`);
+        return await markDeadOnFailure(
+          record,
+          readyRecord(record, `restarting kernel on Jupyter server ${record.serverId}`),
+        );
       }
       if (record.hosted && typeof kernelHost?.restart === "function") {
         // The broker owns placement, so let it relaunch on the target and
@@ -684,7 +714,10 @@ export function createKernelRegistry({
           connectionFile: hosted.connectionFile,
           pid: hosted.pid,
         });
-        return await readyRecord(record, `restarting hosted kernel "${record.kernelName}"`);
+        return await markDeadOnFailure(
+          record,
+          readyRecord(record, `restarting hosted kernel "${record.kernelName}"`),
+        );
       }
       const kernelSpecEntry = {
         name: record.kernelName,

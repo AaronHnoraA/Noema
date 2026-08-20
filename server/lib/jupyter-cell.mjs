@@ -416,6 +416,27 @@ export function createJupyterCellService({
   // notebook metadata: choosing "No Kernel" is live manager state, while the
   // notebook keeps its last portable kernelspec.
   const documentSessions = new Map();
+  const documentSessionLimit = durationFromEnv("AARONNOTE_JUPYTER_MAX_DOCUMENT_SESSIONS", 512);
+
+  /**
+   * Record a document's live session, keeping the map bounded.
+   *
+   * Every field here except `detached` is recomputed from the notebook on the
+   * next `managedDocument`, so the map is a cache -- but it never dropped an
+   * entry, so it grew once per notebook ever opened. `detached` is the
+   * exception: it is the user's explicit "no kernel" choice and is stored
+   * nowhere else, so evicting it would silently re-attach a kernel they
+   * turned off. Those entries stay.
+   */
+  function rememberDocumentSession(scriptFile, value) {
+    documentSessions.set(scriptFile, value);
+    if (documentSessions.size <= documentSessionLimit) return;
+    for (const [key, session] of documentSessions) {
+      if (documentSessions.size <= documentSessionLimit) break;
+      if (key === scriptFile || session?.detached === true) continue;
+      documentSessions.delete(key);
+    }
+  }
   /** Outstanding `input_request`s, keyed by runId, awaiting an answer from the UI. */
   const pendingStdin = new Map();
 
@@ -630,20 +651,33 @@ export function createJupyterCellService({
     };
   }
 
-  async function attachLiveRuntimeToOutput(output, noteFile, kernel, session, language, explicitScriptFile = "") {
+  function attachLiveRuntimeFromRecord(output, record) {
     if (!output || typeof output !== "object") return output ?? null;
-    const scriptFile = explicitScriptFile || hiddenScriptPath(noteFile, session, language);
-    const registry = await getRegistry();
-    const record = registry.get(kernelKey({ file: scriptFile, kernel }));
     const runtime = widgetRuntimeForRecord(record);
     const stamp = outputRuntimeStamp(output);
-    const live = Boolean(runtime && stamp && stamp.id === runtime.id && Number(stamp.generation || 1) === Number(runtime.generation || 1));
-    const { widgetRuntime: _oldWidgetRuntime, ...rest } = output;
+    const live = Boolean(
+      runtime && stamp
+      && stamp.id === runtime.id
+      && Number(stamp.generation || 1) === Number(runtime.generation || 1)
+    );
+    const {
+      widgetRuntime: _oldWidgetRuntime,
+      kernelRuntime: _privateRuntimeStamp,
+      ...rest
+    } = output;
     return {
       ...rest,
       live,
       ...(live ? { widgetRuntime: runtime } : {}),
     };
+  }
+
+  async function attachLiveRuntimeToOutput(output, noteFile, kernel, session, language, explicitScriptFile = "") {
+    if (!output || typeof output !== "object") return output ?? null;
+    const scriptFile = explicitScriptFile || hiddenScriptPath(noteFile, session, language);
+    const registry = await getRegistry();
+    const record = registry.get(kernelKey({ file: scriptFile, kernel }));
+    return attachLiveRuntimeFromRecord(output, record);
   }
 
   function kernelTask(key, record) {
@@ -1074,6 +1108,7 @@ export function createJupyterCellService({
     live.start();
     try {
       const streamLimit = durationFromEnv("AARONNOTE_JUPYTER_MAX_STREAM_BYTES", 1024 * 1024);
+      const outputLimit = durationFromEnv("AARONNOTE_JUPYTER_MAX_OUTPUTS", 4096);
       const widgetMessageLimit = durationFromEnv("AARONNOTE_JUPYTER_MAX_WIDGET_MESSAGES", 512);
       const widgetMessageBytesLimit = durationFromEnv("AARONNOTE_JUPYTER_MAX_WIDGET_MESSAGE_BYTES", 8 * 1024 * 1024);
       let result;
@@ -1087,6 +1122,7 @@ export function createJupyterCellService({
           // didn't ask for.
           stopOnError: Boolean(body?.stopOnError),
           streamLimit,
+          outputLimit,
           widgetMessageLimit,
           widgetMessageBytesLimit,
           execTimeoutMs,
@@ -1330,8 +1366,10 @@ export function createJupyterCellService({
     const language = languageForKernel(
       kernel, liveSession.language || storedLanguage || requestedLanguage,
     );
-    const outputs = await readOutputMirror(outputFile, "", files);
-    const savedOutput = outputs?.cells?.[cellId] ?? null;
+    const savedCell = (existing.notebook.cells || []).find(
+      (entry) => entry?.cell_type === "code" && entry.id === cellId,
+    );
+    const savedOutput = notebookOutput(savedCell, { includeRuntimeStamp: true });
     let info = null;
     try { info = await files.stat(scriptFile); } catch {}
     return {
@@ -1942,6 +1980,11 @@ export function createJupyterCellService({
           reason: force ? "forced" : (isDead ? "dead" : "idle"),
         });
       }
+      // The TTL only decided freshness; nothing ever removed an entry, so the
+      // map grew once per distinct note file for the life of the process.
+      for (const [key, entry] of kernelspecCache) {
+        if (entry.expiresAt <= now) kernelspecCache.delete(key);
+      }
     } finally {
       cleanupRunning = false;
       if ((await getRegistry()).list().some((r) => !r.attached)) scheduleCleanup();
@@ -1996,7 +2039,7 @@ export function createJupyterCellService({
       scriptFile, noteFile, notebook, text: existing.text, kernel, portableKernel,
       session, language, sessionId, detached: liveSession.detached === true,
     };
-    documentSessions.set(scriptFile, {
+    rememberDocumentSession(scriptFile, {
       ...liveSession,
       scriptFile,
       sourceFile: noteFile,
@@ -2039,7 +2082,14 @@ export function createJupyterCellService({
       if (cell?.cell_type !== "code") continue;
       const code = notebookSource(cell.source);
       const revision = codeRevision(code);
-      const saved = notebookOutput(cell) || {};
+      // Notebook metadata persists only a kernelRuntime stamp.  Reattach the
+      // live runtime when the same kernel generation still exists so the
+      // standalone Jupyter workspace can restore ipywidget comms just like
+      // Noema's in-editor Cell renderer does.
+      const saved = attachLiveRuntimeFromRecord(
+        notebookOutput(cell, { includeRuntimeStamp: true }) || {},
+        record,
+      );
       cells.push({
         id: cell.id,
         index: cells.length,

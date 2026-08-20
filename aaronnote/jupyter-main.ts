@@ -5,9 +5,10 @@ import "./jupyter-page.css";
 import { api } from "./api-client.ts";
 import type { JupyterKernelSpec } from "./api-client.ts";
 import { renderJupyterOutputs } from "../src/jupyter-rendermime.ts";
-import type { WidgetMountFn } from "../src/jupyter-rendermime.ts";
+import type { JupyterMarkdownParser, WidgetMountFn } from "../src/jupyter-rendermime.ts";
 import type { JupyterWidgetKernelMessage } from "../src/jupyter-widget-runtime.ts";
 import { renderJupyterVariablesTable } from "../src/jupyter-variables-view.ts";
+import { renderMarkdownHTML } from "../src/render-html.ts";
 import { installNoemaThemeRuntime, loadNoemaAppConfig } from "./theme-runtime.ts";
 import { selectedKernelOptionValue } from "./jupyter-kernel-selection.ts";
 
@@ -122,6 +123,7 @@ let activeView: "outputs" | "variables" | "manage" = "outputs";
 let managerOpen = false;
 let inspectorOpen = false;
 const outputDisposers = new Set<() => void>();
+let dialogOutputDispose: (() => void) | null = null;
 
 try {
   const layout = JSON.parse(localStorage.getItem(LAYOUT_STORAGE_KEY) || "{}");
@@ -140,6 +142,12 @@ const mountWidget: WidgetMountFn = (host, modelId, runtime, messages, widgetOutp
       messages as JupyterWidgetKernelMessage[],
       widgetOutputs,
     ));
+};
+
+const noemaMarkdownParser: JupyterMarkdownParser = {
+  async render(source: string): Promise<string> {
+    return renderMarkdownHTML(source);
+  },
 };
 
 const app = document.createElement("main");
@@ -547,6 +555,9 @@ async function showVariables(): Promise<void> {
   const tab = activeTab();
   if (!tab) return;
   activeView = "variables";
+  inspectorOpen = true;
+  persistLayout();
+  renderLayout();
   inspectorEl.innerHTML = `<div class="noema-jupyter-panel-empty">Loading variables…</div>`;
   renderManager();
   try {
@@ -563,6 +574,9 @@ async function showVariables(): Promise<void> {
 
 async function showTasks(): Promise<void> {
   activeView = "manage";
+  managerOpen = true;
+  persistLayout();
+  renderLayout();
   await loadManager(true);
 }
 
@@ -589,6 +603,52 @@ async function saveOutputUi(tab: TabState, cell: CellSnapshot): Promise<void> {
       outputExpanded: cell.outputUi?.outputExpanded === true,
     }));
   } catch {}
+}
+
+function outputRenderOptions(cell: CellSnapshot) {
+  return {
+    widgetRuntime: cell.widgetRuntime,
+    widgetMessages: cell.widgetMessages,
+    widgetOutputs: cell.widgetOutputs,
+    mountWidget,
+    markdownParser: noemaMarkdownParser,
+  };
+}
+
+function installAutomaticOutputFold(tab: TabState, cell: CellSnapshot, output: HTMLElement): void {
+  if (output.hidden || cell.outputUi?.outputExpanded === true) return;
+  let observer: ResizeObserver | null = null;
+  const collapseIfLong = () => {
+    if (!output.isConnected || output.hidden || output.classList.contains("is-auto-collapsed")) return;
+    if (output.scrollHeight <= 360) return;
+    output.classList.add("is-auto-collapsed");
+    const expand = button("Show full output", "Expand long output", async () => {
+      output.classList.remove("is-auto-collapsed");
+      expand.remove();
+      observer?.disconnect();
+      cell.outputUi = { ...cell.outputUi, outputExpanded: true, outputFolded: false };
+      await saveOutputUi(tab, cell);
+    }, "noema-jupyter-output-expander");
+    output.append(expand);
+    observer?.disconnect();
+  };
+  observer = new ResizeObserver(collapseIfLong);
+  observer.observe(output);
+  outputDisposers.add(() => observer?.disconnect());
+  requestAnimationFrame(collapseIfLong);
+}
+
+function popoutCellOutput(cell: CellSnapshot): void {
+  dialogOutputDispose?.();
+  dialogOutputDispose = null;
+  dialogBodyEl.replaceChildren();
+  dialogBodyEl.classList.add("noema-jupyter-popout-output");
+  openDialog(`Output · ${cell.id}`);
+  if (cell.outputs.length === 0) {
+    dialogBodyEl.textContent = "No output";
+    return;
+  }
+  dialogOutputDispose = renderJupyterOutputs(dialogBodyEl, cell.outputs, outputRenderOptions(cell));
 }
 
 function closeCellMenu(): void {
@@ -627,11 +687,19 @@ function openCellMenu(tab: TabState, cell: CellSnapshot, x: number, y: number): 
     menuItem("Run Below", "Run this Cell and every Cell below", () => execute("below")),
     separator(),
     menuItem("Open Source in Emacs", "Jump to source", () => openSource(cell)),
+    menuItem("Pop Out Output", "Open full output in a resizable dialog", () => popoutCellOutput(cell)),
     menuItem(cell.outputUi?.outputFolded ? "Show Output" : "Fold Output", "Toggle output visibility", async () => {
       cell.outputUi = { ...cell.outputUi, outputFolded: !cell.outputUi?.outputFolded };
       await saveOutputUi(tab, cell);
       renderWorkspace();
     }),
+    ...(cell.outputUi?.outputExpanded ? [
+      menuItem("Use Compact Output", "Limit long output to its own scroll area", async () => {
+        cell.outputUi = { ...cell.outputUi, outputExpanded: false, outputFolded: false };
+        await saveOutputUi(tab, cell);
+        renderWorkspace();
+      }),
+    ] : []),
     menuItem("Clear Output", "Clear this Cell output", () => clearOutput(false)),
     separator(),
     menuItem("Insert Cell Above", "Insert a Cell above", () => mutate("insertAbove")),
@@ -663,7 +731,16 @@ function renderCell(tab: TabState, cell: CellSnapshot): HTMLElement {
   card.addEventListener("focus", () => {
     if (tab.activeCellId !== cell.id) activateCell(tab, cell.id);
   });
-  card.addEventListener("click", () => card.focus());
+  card.addEventListener("click", (event) => {
+    activateCell(tab, cell.id);
+    const target = event.target as Element | null;
+    // Do not steal DOM focus from live ipywidgets, stdin, links, or rendered
+    // HTML controls.  The card becomes active, while the interactive output
+    // keeps owning keyboard/pointer input.
+    if (!target?.closest("button, input, select, textarea, a, [contenteditable='true'], .jupyter-widgets")) {
+      card.focus({ preventScroll: true });
+    }
+  });
   card.addEventListener("contextmenu", (event) => {
     event.preventDefault();
     openCellMenu(tab, cell, event.clientX, event.clientY);
@@ -695,24 +772,8 @@ function renderCell(tab: TabState, cell: CellSnapshot): HTMLElement {
   output.className = "noema-jupyter-output";
   if (cell.outputUi?.outputFolded) output.hidden = true;
   if (Array.isArray(cell.outputs) && cell.outputs.length > 0) {
-    outputDisposers.add(renderJupyterOutputs(output, cell.outputs, {
-      widgetRuntime: cell.widgetRuntime,
-      widgetMessages: cell.widgetMessages,
-      widgetOutputs: cell.widgetOutputs,
-      mountWidget,
-    }));
-    requestAnimationFrame(() => {
-      if (!output.isConnected || output.hidden
-          || cell.outputUi?.outputExpanded === true || output.scrollHeight <= 360) return;
-      output.classList.add("is-auto-collapsed");
-      const expand = button("Show full output", "Expand long output", async () => {
-        output.classList.remove("is-auto-collapsed");
-        expand.remove();
-        cell.outputUi = { ...cell.outputUi, outputExpanded: true, outputFolded: false };
-        await saveOutputUi(tab, cell);
-      }, "noema-jupyter-output-expander");
-      output.append(expand);
-    });
+    outputDisposers.add(renderJupyterOutputs(output, cell.outputs, outputRenderOptions(cell)));
+    installAutomaticOutputFold(tab, cell, output);
   } else {
     const empty = document.createElement("div");
     empty.className = "noema-jupyter-output-empty";
@@ -969,6 +1030,7 @@ function renderWorkspace(): void {
 kernelSelectEl.addEventListener("change", () => void switchKernel(kernelSelectEl.value));
 
 function render(): void {
+  renderLayout();
   renderTabs();
   renderManager();
   renderWorkspace();
@@ -976,6 +1038,7 @@ function render(): void {
   renderTasks();
 }
 
+app.querySelector("[data-action='run-current']")?.addEventListener("click", () => void execute("current"));
 app.querySelector("[data-action='run-all']")?.addEventListener("click", () => void execute("all"));
 app.querySelector("[data-action='restart-run-all']")?.addEventListener("click", async () => {
   await kernelAction("restart");
@@ -989,14 +1052,45 @@ app.querySelector("[data-action='variables']")?.addEventListener("click", () => 
 app.querySelector("[data-action='tasks']")?.addEventListener("click", () => void showTasks());
 app.querySelector("[data-action='board']")?.addEventListener("click", () => {
   activeView = "manage";
+  managerOpen = true;
+  inspectorOpen = true;
+  persistLayout();
   void loadManager(true);
 });
-app.querySelector("[data-dialog-close]")?.addEventListener("click", () => dialogEl.close());
+for (const paneButton of app.querySelectorAll<HTMLButtonElement>("[data-pane]")) {
+  paneButton.addEventListener("click", () => {
+    if (paneButton.dataset.pane === "manager") managerOpen = !managerOpen;
+    else inspectorOpen = !inspectorOpen;
+    persistLayout();
+    renderLayout();
+  });
+}
+for (const menuButton of app.querySelectorAll<HTMLButtonElement>(".noema-jupyter-action-menu button")) {
+  menuButton.addEventListener("click", () => menuButton.closest("details")?.removeAttribute("open"));
+}
+function closeDialog(): void {
+  dialogOutputDispose?.();
+  dialogOutputDispose = null;
+  dialogBodyEl.classList.remove("noema-jupyter-popout-output");
+  dialogEl.close();
+}
+
+app.querySelector("[data-dialog-close]")?.addEventListener("click", closeDialog);
 dialogEl.addEventListener("click", (event) => {
-  if (event.target === dialogEl) dialogEl.close();
+  if (event.target === dialogEl) closeDialog();
+});
+window.addEventListener("pointerdown", (event) => {
+  if (!contextMenuEl.hidden && !(event.target as Element | null)?.closest("[data-context-menu]")) {
+    closeCellMenu();
+  }
 });
 
 window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !contextMenuEl.hidden) {
+    event.preventDefault();
+    closeCellMenu();
+    return;
+  }
   const target = event.target as HTMLElement | null;
   if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
   const tab = activeTab();
@@ -1073,7 +1167,6 @@ window.addEventListener("aaronnote:jupyter-cell", (event) => {
   }>).detail;
   const tab = tabs.get(text(detail?.scriptFile)) || Array.from(tabs.values()).find((item) => item.ref.sourceFile === text(detail?.file));
   if (!tab) return;
-  if (detail.cellId) tab.activeCellId = text(detail.cellId);
   const cell = tab.snapshot?.cells.find((item) => item.id === text(detail.cellId));
   if (cell) {
     if (detail.phase === "start") cell.status = "busy";
@@ -1102,14 +1195,12 @@ window.addEventListener("aaronnote:jupyter-cell", (event) => {
       }
     }
     renderWorkspace();
-    requestAnimationFrame(() => {
-      workspaceEl.querySelector<HTMLElement>(`[data-cell-id="${CSS.escape(cell.id)}"]`)
-        ?.scrollIntoView({ block: "center" });
-    });
   }
   if (detail.phase === "end") {
     window.clearTimeout(refreshTimer);
-    refreshTimer = window.setTimeout(() => void loadTab(tab, true), 90);
+    // Refresh outputs after execution without revealing any Cell.  Cross-view
+    // navigation is reserved for the explicit Cmd/M-Enter open command.
+    refreshTimer = window.setTimeout(() => void loadTab(tab, false), 90);
   }
   if (detail.phase === "start" || detail.phase === "end") {
     void loadManager(false).then(() => renderTasks());
@@ -1170,6 +1261,7 @@ void loadManager(true);
 
 window.addEventListener("beforeunload", () => {
   persistTabs();
+  dialogOutputDispose?.();
   disposeOutputs();
   removeThemeRuntime();
 }, { once: true });

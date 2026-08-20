@@ -11,7 +11,10 @@
 // should receive an output. Captured outputs are grouped by comm_id so the
 // client can seed the widget after it mounts.
 
-export function createOutputWidgetRouter() {
+/** Per-widget output cap. `widgetMessages` is byte-capped upstream; this was not. */
+const DEFAULT_WIDGET_OUTPUT_LIMIT = 1024;
+
+export function createOutputWidgetRouter({ outputLimit = DEFAULT_WIDGET_OUTPUT_LIMIT } = {}) {
   const outputWidgetComms = new Set();
   const msgIdToOutputComm = new Map();
   const widgetOutputs = Object.create(null);
@@ -77,6 +80,9 @@ export function createOutputWidgetRouter() {
         return;
       }
     }
+    // A widget written to in a loop would otherwise accumulate every output
+    // it ever showed, even though only the tail is what the widget displays.
+    if (group.length >= outputLimit) group.splice(0, group.length - outputLimit + 1);
     group.push(output);
   };
 

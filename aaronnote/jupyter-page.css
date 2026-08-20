@@ -6,65 +6,93 @@
 }
 
 * { box-sizing: border-box; }
-html, body { margin: 0; min-height: 100%; background: var(--aaron-ui-page, #10141d); }
+html, body {
+  margin: 0; width: 100%; height: 100%; overflow: hidden; overscroll-behavior: none;
+  background: var(--aaron-ui-page, #10141d);
+}
+body { position: fixed; inset: 0; }
 button { font: inherit; }
 
-.noema-jupyter-page { min-height: 100vh; padding-bottom: 88px; }
-.noema-jupyter-header {
-  position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 14px;
-  min-height: 54px; padding: 8px 14px; border-bottom: 1px solid var(--aaron-ui-border, #2d3545);
-  background: color-mix(in srgb, var(--aaron-ui-surface, #171d29) 94%, transparent);
-  backdrop-filter: blur(14px);
+.noema-jupyter-page {
+  display: grid; grid-template-rows: 38px 30px minmax(0, 1fr) 27px;
+  width: 100%; height: 100%; min-height: 0; overflow: hidden;
 }
-.noema-jupyter-brand { display: flex; align-items: center; gap: 9px; min-width: 160px; }
-.noema-jupyter-brand div { display: grid; }
-.noema-jupyter-brand small { color: var(--aaron-ui-text-muted, #98a2b5); font-size: 10px; }
+.noema-jupyter-header {
+  z-index: 20; display: flex; align-items: center; gap: 8px; min-width: 0;
+  height: 38px; padding: 3px 8px; overflow-x: auto; overflow-y: hidden;
+  border-bottom: 1px solid var(--aaron-ui-border, #2d3545);
+  background: var(--aaron-ui-surface, #171d29); scrollbar-width: none;
+}
+.noema-jupyter-header::-webkit-scrollbar { display: none; }
+.noema-jupyter-brand { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.noema-jupyter-brand strong { font-size: 12px; letter-spacing: .01em; }
 .noema-jupyter-logo {
-  display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px;
-  background: #f37726; color: white; font-weight: 800;
+  display: grid; place-items: center; width: 22px; height: 22px; border-radius: 5px;
+  background: #f37726; color: white; font-size: 11px; font-weight: 800;
 }
 .noema-jupyter-kernel {
-  padding: 5px 9px; border: 1px solid var(--aaron-ui-border, #343d50); border-radius: 999px;
-  color: var(--aaron-ui-text-muted, #aeb7c8); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+  flex: 0 0 auto; padding: 3px 7px; border: 1px solid var(--aaron-ui-border, #343d50); border-radius: 4px;
+  color: var(--aaron-ui-text-muted, #aeb7c8); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace;
 }
-.noema-jupyter-kernel-select { display: flex; align-items: center; gap: 6px; color: var(--aaron-ui-text-muted, #aeb7c8); font-size: 11px; }
+.noema-jupyter-kernel-select { display: flex; align-items: center; gap: 4px; flex: 0 1 220px; min-width: 130px; color: var(--aaron-ui-text-muted, #aeb7c8); font-size: 10px; }
+.noema-jupyter-kernel-select > span { display: none; }
 .noema-jupyter-kernel-select select {
-  max-width: 190px; border: 1px solid var(--aaron-ui-border, #374155); border-radius: 6px;
-  padding: 4px 7px; background: var(--aaron-ui-surface-raised, #202736); color: inherit;
+  width: 100%; min-width: 0; height: 25px; border: 1px solid var(--aaron-ui-border, #374155); border-radius: 4px;
+  padding: 2px 6px; background: var(--aaron-ui-surface-raised, #202736); color: inherit;
 }
-.noema-jupyter-global-actions { display: flex; gap: 5px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }
+.noema-jupyter-global-actions { display: flex; align-items: center; gap: 3px; margin-left: auto; flex: 0 0 auto; }
 .noema-jupyter-page button {
-  border: 1px solid var(--aaron-ui-border, #374155); border-radius: 6px; padding: 5px 8px;
+  border: 1px solid var(--aaron-ui-border, #374155); border-radius: 4px; padding: 3px 7px;
   background: var(--aaron-ui-surface-raised, #202736); color: inherit; cursor: pointer;
 }
 .noema-jupyter-page button:hover { border-color: #f37726; background: color-mix(in srgb, #f37726 13%, var(--aaron-ui-surface-raised, #202736)); }
+.noema-jupyter-page button.is-primary { border-color: color-mix(in srgb, #f37726 60%, var(--aaron-ui-border, #374155)); }
+.noema-jupyter-page button[aria-pressed="true"] { border-color: #f37726; color: #ffb27e; background: color-mix(in srgb, #f37726 13%, var(--aaron-ui-surface-raised, #202736)); }
 .noema-jupyter-page button.is-danger:hover { border-color: #e35d6a; color: #ff9ba4; }
+.noema-jupyter-toolbar-separator { width: 1px; height: 18px; margin: 0 2px; background: var(--aaron-ui-border, #374155); }
+.noema-jupyter-action-menu { position: relative; }
+.noema-jupyter-action-menu summary {
+  display: grid; place-items: center; width: 28px; height: 25px; border: 1px solid var(--aaron-ui-border, #374155);
+  border-radius: 4px; background: var(--aaron-ui-surface-raised, #202736); cursor: pointer; list-style: none;
+}
+.noema-jupyter-action-menu summary::-webkit-details-marker { display: none; }
+.noema-jupyter-action-menu > div {
+  position: fixed; z-index: 60; top: 36px; right: 7px; display: grid; width: 190px; padding: 5px;
+  border: 1px solid var(--aaron-ui-border, #3a455a); border-radius: 6px;
+  background: var(--aaron-ui-surface-raised, #202736); box-shadow: 0 12px 34px rgb(0 0 0 / 38%);
+}
+.noema-jupyter-action-menu > div button { border: 0; text-align: left; background: transparent; }
 
 .noema-jupyter-tabs {
-  position: sticky; top: 55px; z-index: 15; display: flex; gap: 2px; min-height: 38px;
-  padding: 5px 12px 0; overflow-x: auto; border-bottom: 1px solid var(--aaron-ui-border, #2d3545);
+  z-index: 15; display: flex; gap: 1px; height: 30px;
+  padding: 2px 7px 0; overflow-x: auto; border-bottom: 1px solid var(--aaron-ui-border, #2d3545);
   background: var(--aaron-ui-surface, #171d29);
 }
-.noema-jupyter-tab { display: flex; align-items: stretch; border: 1px solid transparent; border-bottom: 0; border-radius: 7px 7px 0 0; }
-.noema-jupyter-tab[data-active="true"] { border-color: var(--aaron-ui-border, #384358); background: var(--aaron-ui-page, #10141d); }
+.noema-jupyter-tab { display: flex; align-items: stretch; border: 1px solid transparent; border-bottom: 0; border-radius: 4px 4px 0 0; }
+.noema-jupyter-tab[data-active="true"] { border-color: var(--aaron-ui-border, #384358); border-top-color: #f37726; background: var(--aaron-ui-page, #10141d); }
 .noema-jupyter-tab button { border: 0; border-radius: 0; background: transparent; white-space: nowrap; }
-.noema-jupyter-tab-select { max-width: 300px; overflow: hidden; text-overflow: ellipsis; }
-.noema-jupyter-tab-close { color: var(--aaron-ui-text-muted, #9ba5b8); font-size: 16px; }
+.noema-jupyter-tab-select { max-width: 270px; padding-block: 2px !important; overflow: hidden; font-size: 10px; text-overflow: ellipsis; }
+.noema-jupyter-tab-close { padding: 0 5px !important; color: var(--aaron-ui-text-muted, #9ba5b8); font-size: 14px; }
 
 .noema-jupyter-shell {
-  display: grid; grid-template-columns: 230px minmax(420px, 1fr) 250px;
-  align-items: stretch; min-height: calc(100vh - 142px);
+  display: grid; grid-template-columns: 0 minmax(0, 1fr) 0;
+  min-width: 0; min-height: 0; overflow: hidden;
 }
+.noema-jupyter-shell[data-manager-open="true"] { grid-template-columns: 216px minmax(0, 1fr) 0; }
+.noema-jupyter-shell[data-inspector-open="true"] { grid-template-columns: 0 minmax(0, 1fr) 224px; }
+.noema-jupyter-shell[data-manager-open="true"][data-inspector-open="true"] { grid-template-columns: 216px minmax(0, 1fr) 224px; }
 .noema-jupyter-manager, .noema-jupyter-inspector {
-  position: sticky; top: 93px; align-self: start; height: calc(100vh - 142px); overflow: auto;
-  padding: 12px 10px; background: var(--aaron-ui-surface, #171d29);
+  min-width: 0; height: 100%; overflow: auto; padding: 8px;
+  overscroll-behavior: contain; scrollbar-gutter: stable;
+  background: var(--aaron-ui-surface, #171d29);
 }
+.noema-jupyter-manager[aria-hidden="true"], .noema-jupyter-inspector[aria-hidden="true"] { display: none; }
 .noema-jupyter-manager { border-right: 1px solid var(--aaron-ui-border, #2d3545); }
 .noema-jupyter-inspector { border-left: 1px solid var(--aaron-ui-border, #2d3545); }
-.noema-jupyter-view-nav { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; margin-bottom: 14px; }
+.noema-jupyter-view-nav { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; margin-bottom: 10px; }
 .noema-jupyter-view-nav button { padding-inline: 4px; font-size: 10px; }
 .noema-jupyter-view-nav button[data-active="true"] { border-color: #f37726; color: #ffb27e; }
-.noema-jupyter-manager-section { margin: 0 0 16px; }
+.noema-jupyter-manager-section { margin: 0 0 12px; }
 .noema-jupyter-manager-section h2, .noema-jupyter-inspector h2 {
   margin: 0 0 8px; color: var(--aaron-ui-text-muted, #aab3c4); font-size: 11px;
   font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
@@ -80,7 +108,10 @@ button { font: inherit; }
 .noema-jupyter-manager-card > div { display: flex; gap: 4px; }
 .noema-jupyter-manager-card button, .noema-jupyter-spec-button { padding: 3px 5px; font-size: 9px; }
 .noema-jupyter-spec-button { width: 100%; margin-bottom: 4px; overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
-.noema-jupyter-workspace { min-width: 0; width: 100%; margin: 0 auto; padding: 22px 24px 70px; }
+.noema-jupyter-workspace {
+  min-width: 0; width: 100%; height: 100%; padding: 8px 10px 30px; overflow: auto;
+  overscroll-behavior: contain; scrollbar-gutter: stable; scroll-padding-block: 44px;
+}
 .noema-jupyter-inspector dl { display: grid; grid-template-columns: auto 1fr; gap: 7px 9px; margin: 0 0 14px; font-size: 11px; }
 .noema-jupyter-inspector dt { color: var(--aaron-ui-text-muted, #9da8b9); }
 .noema-jupyter-inspector dd { margin: 0; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
@@ -89,33 +120,38 @@ button { font: inherit; }
 .noema-jupyter-inspector .cm-ceil-variables-table { width: 100%; font-size: 10px; }
 .noema-jupyter-inspector .cm-ceil-variables-table :is(th, td) { padding: 5px 3px; overflow-wrap: anywhere; }
 .noema-jupyter-tasks {
-  position: fixed; z-index: 25; right: 0; bottom: 0; left: 0; display: grid;
-  grid-template-columns: auto 1fr; gap: 12px; align-items: center; min-height: 36px; max-height: 150px;
-  padding: 7px 12px; overflow: auto; border-top: 1px solid var(--aaron-ui-border, #344055);
+  z-index: 25; display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: center;
+  min-height: 27px; max-height: 150px; padding: 3px 8px; overflow: auto;
+  border-top: 1px solid var(--aaron-ui-border, #344055);
+  overscroll-behavior: contain;
   background: color-mix(in srgb, var(--aaron-ui-surface, #171d29) 96%, transparent); font-size: 10px;
 }
 .noema-jupyter-task-list { display: flex; gap: 10px; overflow-x: auto; color: var(--aaron-ui-text-muted, #a5afc0); }
 .noema-jupyter-tasks[data-expanded="true"] { grid-template-columns: 1fr; align-items: start; }
 .noema-jupyter-tasks[data-expanded="true"] .noema-jupyter-task-list { display: grid; }
 .noema-jupyter-cell {
-  display: grid; grid-template-columns: minmax(0, 1fr); margin: 0 0 18px; overflow: clip;
-  border: 1px solid var(--aaron-ui-border, #30394b); border-left: 4px solid transparent; border-radius: 8px;
-  background: var(--aaron-ui-surface, #171d29); box-shadow: 0 8px 24px rgb(0 0 0 / 12%); outline: none;
+  display: grid; grid-template-columns: minmax(0, 1fr); margin: 0 0 7px; overflow: clip;
+  border: 1px solid var(--aaron-ui-border, #30394b); border-left: 3px solid transparent; border-radius: 4px;
+  background: var(--aaron-ui-surface, #171d29); outline: none;
 }
-.noema-jupyter-cell[data-active="true"] { border-left-color: #f37726; box-shadow: 0 0 0 1px color-mix(in srgb, #f37726 38%, transparent), 0 10px 30px rgb(0 0 0 / 18%); }
+.noema-jupyter-cell[data-active="true"] { border-left-color: #f37726; box-shadow: 0 0 0 1px color-mix(in srgb, #f37726 30%, transparent); }
+.noema-jupyter-cell[data-status="busy"] { border-left-color: #5aa9ff; }
+.noema-jupyter-cell[data-status="error"] { border-left-color: #e35d6a; }
 .noema-jupyter-cell-header {
-  display: flex; align-items: center; gap: 9px; min-height: 40px; padding: 6px 9px;
+  display: flex; align-items: center; gap: 7px; min-height: 28px; padding: 3px 6px;
   border-bottom: 1px solid var(--aaron-ui-border, #2e3748); background: var(--aaron-ui-surface-raised, #1d2432);
 }
-.noema-jupyter-prompt { min-width: 38px; color: #f39a5d; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; text-align: right; }
-.noema-jupyter-cell-id { color: var(--aaron-ui-text-muted, #a7b0c1); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.noema-jupyter-prompt { min-width: 31px; color: #f39a5d; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; text-align: right; }
+.noema-jupyter-cell-id { color: var(--aaron-ui-text-muted, #a7b0c1); font: 9px ui-monospace, SFMono-Regular, Menlo, monospace; }
 .noema-jupyter-badges { display: flex; gap: 4px; }
-.noema-jupyter-badges span { padding: 2px 6px; border-radius: 999px; background: #2a3344; color: #bdc6d5; font-size: 10px; }
+.noema-jupyter-badges span { padding: 1px 5px; border-radius: 999px; background: #2a3344; color: #bdc6d5; font-size: 8px; }
 .noema-jupyter-badges span:nth-child(2) { background: #513c1f; color: #ffc872; }
-.noema-jupyter-cell-actions { display: flex; gap: 4px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }
-.noema-jupyter-cell-actions button, .noema-jupyter-cell-footer button { padding: 3px 7px; font-size: 11px; }
-.noema-jupyter-output {
-  min-height: 55px; padding: 13px 16px; overflow: auto; background: var(--aaron-ui-page, #111721);
+.noema-jupyter-cell-actions { display: flex; gap: 2px; margin-left: auto; opacity: .45; transition: opacity 100ms ease; }
+.noema-jupyter-cell:is(:hover, :focus-within)[data-active="true"] .noema-jupyter-cell-actions { opacity: 1; }
+.noema-jupyter-more-button { min-width: 28px; padding: 1px 5px !important; border-color: transparent !important; background: transparent !important; font-size: 11px; }
+.noema-jupyter-output, .noema-jupyter-popout-output {
+  position: relative; min-height: 30px; padding: 7px 10px; overflow: auto;
+  overscroll-behavior: contain; background: var(--aaron-ui-page, #111721);
   /* OutputArea normally inherits these tokens from JupyterLab's application
      shell.  The Noema workspace is standalone, so define the compact subset
      used by rendermime instead of leaving prompt widths and text metrics as
@@ -136,33 +172,46 @@ button { font: inherit; }
   --jp-border-color1: #435574;
   --jp-border-color2: #37445e;
 }
-.noema-jupyter-output .jp-OutputArea { width: 100%; color: inherit; }
+.noema-jupyter-output .jp-OutputArea, .noema-jupyter-popout-output .jp-OutputArea { width: 100%; color: inherit; }
 /* The Noema card header already owns the execution count.  JupyterLab's
    second Out[n] gutter is redundant here and, without the full Lab notebook
    shell, used to collapse into the misleading "[…]" seen beside results. */
-.noema-jupyter-output :is(.jp-OutputPrompt, .jp-OutputArea-promptOverlay) { display: none; }
-.noema-jupyter-output .jp-OutputArea-child { display: block; }
-.noema-jupyter-output .jp-OutputArea-output { width: 100%; padding: 0; }
-.noema-jupyter-output .jp-OutputArea-executeResult .jp-RenderedText.jp-OutputArea-output {
+:is(.noema-jupyter-output, .noema-jupyter-popout-output) :is(.jp-OutputPrompt, .jp-OutputArea-promptOverlay) { display: none; }
+:is(.noema-jupyter-output, .noema-jupyter-popout-output) .jp-OutputArea-child { display: block; }
+:is(.noema-jupyter-output, .noema-jupyter-popout-output) .jp-OutputArea-output { width: 100%; padding: 0; }
+:is(.noema-jupyter-output, .noema-jupyter-popout-output) .jp-OutputArea-executeResult .jp-RenderedText.jp-OutputArea-output {
   padding-top: 0;
   border-top: 0;
 }
-.noema-jupyter-output .jp-RenderedText { padding-left: 0; }
-.noema-jupyter-output-empty { display: grid; place-items: center; min-height: 44px; color: var(--aaron-ui-text-muted, #8993a6); font-size: 12px; }
+:is(.noema-jupyter-output, .noema-jupyter-popout-output) .jp-RenderedText { padding-left: 0; }
+.noema-jupyter-output.is-auto-collapsed { max-height: 360px; overflow: auto; padding-bottom: 42px; scrollbar-gutter: stable; }
+.noema-jupyter-output-expander {
+  position: sticky; z-index: 2; bottom: 0; display: block; width: max-content; margin: 8px auto -32px;
+  border-color: color-mix(in srgb, #f37726 55%, var(--aaron-ui-border, #374155)) !important;
+  box-shadow: 0 3px 12px rgb(0 0 0 / 30%); white-space: nowrap;
+}
+.noema-jupyter-output-empty { display: grid; place-items: center; min-height: 28px; color: var(--aaron-ui-text-muted, #8993a6); font-size: 10px; }
 .noema-jupyter-stdin { display: flex; align-items: center; gap: 7px; margin-top: 10px; padding: 8px; border: 1px solid #f37726; border-radius: 7px; }
 .noema-jupyter-stdin label { color: #f7b27f; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
 .noema-jupyter-stdin input { flex: 1; min-width: 120px; border: 1px solid var(--aaron-ui-border, #3b465a); border-radius: 5px; padding: 5px 7px; background: #0e141e; color: inherit; }
-.noema-jupyter-cell-footer { display: flex; justify-content: flex-end; padding: 4px 8px; border-top: 1px solid var(--aaron-ui-border, #293143); }
 .noema-jupyter-empty { display: grid; place-items: center; gap: 8px; min-height: 45vh; color: var(--aaron-ui-text-muted, #9ba5b8); }
 .noema-jupyter-empty strong { color: var(--aaron-ui-text, #edf1f8); font-size: 18px; }
 .noema-jupyter-empty.is-error strong { color: #ff8791; }
 .noema-jupyter-status {
-  position: fixed; right: 16px; bottom: 16px; z-index: 40; max-width: min(560px, calc(100vw - 32px));
-  padding: 8px 12px; border: 1px solid var(--aaron-ui-border, #3b465a); border-radius: 8px;
+  position: fixed; right: 10px; bottom: 34px; z-index: 70; max-width: min(560px, calc(100vw - 20px));
+  padding: 7px 10px; border: 1px solid var(--aaron-ui-border, #3b465a); border-radius: 5px;
   background: #202838; color: #e8edf6; opacity: 0; transform: translateY(8px); pointer-events: none; transition: 140ms ease;
 }
 .noema-jupyter-status.is-visible { opacity: 1; transform: translateY(0); }
 .noema-jupyter-status[data-error="true"] { border-color: #e35d6a; }
+.noema-jupyter-context-menu {
+  position: fixed; z-index: 80; display: grid; width: 205px; max-height: min(520px, calc(100vh - 16px));
+  padding: 5px; overflow: auto; border: 1px solid var(--aaron-ui-border, #3a455a); border-radius: 6px;
+  background: var(--aaron-ui-surface-raised, #202736); box-shadow: 0 14px 38px rgb(0 0 0 / 42%);
+}
+.noema-jupyter-context-menu[hidden] { display: none; }
+.noema-jupyter-context-menu button { width: 100%; border: 0; padding: 5px 7px; text-align: left; background: transparent; }
+.noema-jupyter-context-menu hr { width: 100%; margin: 4px 0; border: 0; border-top: 1px solid var(--aaron-ui-border, #374155); }
 .noema-jupyter-dialog {
   width: min(860px, calc(100vw - 36px)); max-height: min(720px, calc(100vh - 50px));
   padding: 0; overflow: hidden; border: 1px solid var(--aaron-ui-border, #3b465a);
@@ -175,13 +224,24 @@ button { font: inherit; }
 .noema-jupyter-task-table, .noema-jupyter-dialog .cm-ceil-variables-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .noema-jupyter-task-table :is(th, td), .noema-jupyter-dialog .cm-ceil-variables-table :is(th, td) { padding: 7px 9px; border-bottom: 1px solid var(--aaron-ui-border, #30394b); text-align: left; }
 
-@media (max-width: 900px) {
-  .noema-jupyter-header { align-items: flex-start; flex-wrap: wrap; }
-  .noema-jupyter-global-actions { width: 100%; justify-content: flex-start; }
-  .noema-jupyter-tabs { top: 101px; }
-  .noema-jupyter-shell { grid-template-columns: 1fr; }
-  .noema-jupyter-manager, .noema-jupyter-inspector { position: static; width: auto; height: auto; border: 0; border-bottom: 1px solid var(--aaron-ui-border, #2d3545); }
-  .noema-jupyter-workspace { padding: 14px 10px 60px; }
-  .noema-jupyter-cell-header { align-items: flex-start; flex-wrap: wrap; }
-  .noema-jupyter-cell-actions { width: 100%; margin-left: 0; justify-content: flex-start; }
+@media (max-width: 980px) {
+  .noema-jupyter-brand strong, .noema-jupyter-kernel { display: none; }
+  .noema-jupyter-kernel-select { flex-basis: 170px; }
+  .noema-jupyter-shell,
+  .noema-jupyter-shell[data-manager-open="true"],
+  .noema-jupyter-shell[data-inspector-open="true"],
+  .noema-jupyter-shell[data-manager-open="true"][data-inspector-open="true"] { grid-template-columns: minmax(0, 1fr); }
+  .noema-jupyter-manager, .noema-jupyter-inspector {
+    position: fixed; z-index: 55; top: 68px; bottom: 27px; width: min(280px, 82vw);
+    box-shadow: 0 16px 40px rgb(0 0 0 / 42%);
+  }
+  .noema-jupyter-manager { left: 0; }
+  .noema-jupyter-inspector { right: 0; }
+  .noema-jupyter-workspace { padding: 6px 6px 24px; }
+}
+
+@media (max-width: 680px) {
+  .noema-jupyter-global-actions > button:not(.is-primary),
+  .noema-jupyter-toolbar-separator { display: none; }
+  .noema-jupyter-kernel-select { flex: 1 1 130px; }
 }
