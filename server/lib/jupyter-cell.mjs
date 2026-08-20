@@ -29,6 +29,7 @@ import {
   notebookCodeOrder,
   notebookOutput,
   notebookOutputMirror,
+  notebookSource,
   parseNotebook,
   serializeNotebook,
 } from "./jupyter-notebook-format.mjs";
@@ -83,6 +84,9 @@ function languageForKernel(kernel, requested = "") {
   const value = String(kernel || "").toLowerCase();
   if (value.includes("lean") || explicit === "lean" || explicit === "lean4") return "lean4";
   if (["bash", "sh", "shell", "zsh"].includes(explicit)) return "bash";
+  // Sage is a Python kernel, not a notebook language.  Kernel identity lives
+  // in kernelspec metadata; filenames and language_info use Python.
+  if (["sage", "sagemath", "py", "python3"].includes(explicit)) return "python";
   if (explicit) return explicit;
   if (value.includes("sage")) return "python";
   if (value.includes("python") || value === "py" || value === "python3") return "python";
@@ -104,6 +108,12 @@ function hiddenScriptPath(noteFile, session, language) {
   const safeLanguage = safeSlug(language, "python");
   const safeSession = safeSlug(session, "default");
   return join(cellStoreDir(noteFile), `${noteBase}.${safeLanguage}.${safeSession}.ipynb`);
+}
+
+function legacyHiddenScriptPath(noteFile, session, language, kernel) {
+  return language === "python" && /sage/i.test(String(kernel || ""))
+    ? hiddenScriptPath(noteFile, session, "sage")
+    : "";
 }
 
 function outputMirrorPath(noteFile, session, language) {
@@ -402,6 +412,10 @@ export function createJupyterCellService({
   let registrySync = null;
   const mirrorLocks = new Map();
   const executionQueues = new Map();
+  // UI session selection belongs to Noema.  It is deliberately separate from
+  // notebook metadata: choosing "No Kernel" is live manager state, while the
+  // notebook keeps its last portable kernelspec.
+  const documentSessions = new Map();
   /** Outstanding `input_request`s, keyed by runId, awaiting an answer from the UI. */
   const pendingStdin = new Map();
 
@@ -547,7 +561,9 @@ export function createJupyterCellService({
     const kernel = cleanToken(body?.kernel, "python3");
     const session = cleanToken(body?.session, "default");
     const language = languageForKernel(kernel, body?.language || body?.lang);
-    const scriptFile = hiddenScriptPath(noteFile, session, language);
+    const scriptFile = String(body?.scriptFile || "").trim()
+      ? managedScriptFile(body)
+      : hiddenScriptPath(noteFile, session, language);
     return {
       noteFile,
       scriptFile,
@@ -569,6 +585,24 @@ export function createJupyterCellService({
     if (id) {
       const record = registry.list().find((item) => item.id === id);
       if (record) return { key: record.key, record };
+    }
+    const scriptValue = String(body?.scriptFile || "").trim();
+    if (scriptValue) {
+      const scriptFile = managedScriptFile(body);
+      const liveKernel = cleanToken(
+        documentSessions.get(scriptFile)?.kernel || body?.kernel,
+        "python3",
+      );
+      const key = kernelKey({ file: scriptFile, kernel: liveKernel });
+      const record = registry.get(key);
+      if (record) return { key, record };
+      // The caller's cached kernel name may lag a socket event.  scriptFile
+      // is the document identity, so prefer its most recently active private
+      // runtime rather than incorrectly reporting that no kernel is running.
+      const candidates = registry.list()
+        .filter((item) => item.scriptFile === scriptFile)
+        .sort((left, right) => Number(right.lastActivity || 0) - Number(left.lastActivity || 0));
+      if (candidates[0]) return { key: candidates[0].key, record: candidates[0] };
     }
     const fileValue = String(body?.file || "").trim();
     if (!fileValue) return { key: "", record: undefined };
@@ -596,9 +630,9 @@ export function createJupyterCellService({
     };
   }
 
-  async function attachLiveRuntimeToOutput(output, noteFile, kernel, session, language) {
+  async function attachLiveRuntimeToOutput(output, noteFile, kernel, session, language, explicitScriptFile = "") {
     if (!output || typeof output !== "object") return output ?? null;
-    const scriptFile = hiddenScriptPath(noteFile, session, language);
+    const scriptFile = explicitScriptFile || hiddenScriptPath(noteFile, session, language);
     const registry = await getRegistry();
     const record = registry.get(kernelKey({ file: scriptFile, kernel }));
     const runtime = widgetRuntimeForRecord(record);
@@ -755,16 +789,65 @@ export function createJupyterCellService({
       list.push({ name: "lean4", displayName: "Lean 4", language: "lean4" });
     }
     const attachable = await findAttachableConnectionFiles(attachDirs);
+    const attachableChoices = attachable.map((item) => ({
+      name: `attach:${item.token}`,
+      displayName: `Attach: ${item.token}`,
+      language: "",
+    }));
+    const serverGroups = await listServerKernels();
+    // This is the one canonical start/adopt list consumed by both the Web
+    // workspace and the Emacs header.  Keep the older grouped fields for API
+    // compatibility, but do not make either UI reconstruct policy itself.
+    const choices = [
+      ...list.map((item) => ({ ...item, kind: "start", group: "Kernel Specs" })),
+      ...attachableChoices.map((item) => ({ ...item, kind: "start", group: "Attach" })),
+      ...serverGroups.flatMap((server) => [
+        ...(server.kernels || []).map((item) => ({
+          ...item, kind: "start", group: `Server: ${server.displayName}`,
+        })),
+        ...(server.running || []).map((item) => ({
+          ...item, kind: "start", group: `Server Running: ${server.displayName}`,
+        })),
+      ]),
+    ];
+    const scriptFile = String(body?.scriptFile || "").trim()
+      ? managedScriptFile(body) : "";
+    const registry = await getRegistry();
+    const selections = [
+      {
+        kind: "none", value: "", name: "", displayName: "No Kernel",
+        group: "Session", label: "No Kernel",
+      },
+      ...choices.map((item) => ({
+        ...item,
+        value: item.name,
+        label: `Start · ${item.group} · ${item.displayName || item.name}  [${item.name}]`,
+      })),
+      ...registry.list()
+        .filter((record) => scriptFile && record.scriptFile === scriptFile && record.id)
+        .sort((left, right) => Number(right.lastActivity || 0) - Number(left.lastActivity || 0))
+        .map((record) => {
+          const status = Number(record.running || 0) > 0
+            ? "running" : (record.lastStatus || record.status || "idle");
+          return {
+            kind: "connect",
+            value: record.id,
+            name: record.kernelName,
+            displayName: record.kernelName,
+            language: record.language || record.kernelSpec?.language || "",
+            group: "Running Kernel",
+            label: `Connect · Running Kernel · ${record.kernelName} · ${status}  [${record.id}]`,
+          };
+        }),
+    ];
     return {
       ok: true,
       default: "python3",
       kernels: list.sort((a, b) => a.name.localeCompare(b.name)),
-      attachable: attachable.map((item) => ({
-        name: `attach:${item.token}`,
-        displayName: `Attach: ${item.token}`,
-        language: "",
-      })),
-      servers: await listServerKernels(),
+      attachable: attachableChoices,
+      servers: serverGroups,
+      choices,
+      selections,
     };
   }
 
@@ -1122,19 +1205,46 @@ export function createJupyterCellService({
 
   async function openScript(body) {
     const noteFile = safeNoteFile(body?.file);
-    const kernel = cleanToken(body?.kernel, "python3");
+    const requestedKernel = cleanToken(body?.kernel, "python3");
     const session = cleanToken(body?.session, "default");
-    const language = languageForKernel(kernel, body?.language || body?.lang);
+    const requestedLanguage = languageForKernel(
+      requestedKernel, body?.language || body?.lang,
+    );
     const targetCellId = markerId(body?.cellId || body?.id);
     const storage = "ipynb";
     const cells = Array.isArray(body?.cells) ? body.cells : [];
     if (!targetCellId) throw error("Missing Jupyter cell id", 400);
     if (cells.length === 0) throw error("No Jupyter cells to write", 400);
-    const scriptFile = hiddenScriptPath(noteFile, session, language);
+    const scriptFile = String(body?.scriptFile || "").trim()
+      ? managedScriptFile(body)
+      : hiddenScriptPath(noteFile, session, requestedLanguage);
+    const legacyScriptFile = String(body?.scriptFile || "").trim()
+      ? ""
+      : legacyHiddenScriptPath(
+        noteFile, session, requestedLanguage, requestedKernel,
+      );
+    let kernel = requestedKernel;
+    let language = requestedLanguage;
     let rendered;
     let changed = false;
+    let migratedFrom = "";
     await withMirrorLock(scriptFile, async () => {
-      const existingScript = await readExistingHiddenScript(scriptFile, "", files);
+      const existingScript = await readExistingHiddenScript(
+        scriptFile, legacyScriptFile, files,
+      );
+      const usedLegacy = Boolean(
+        legacyScriptFile && existingScript.notebook && !existingScript.text,
+      );
+      if (existingScript.notebook) {
+        const liveSession = documentSessions.get(scriptFile) || {};
+        const storedKernel = existingScript.notebook.metadata?.kernelspec?.name;
+        const storedLanguage = existingScript.notebook.metadata?.language_info?.name
+          || existingScript.notebook.metadata?.kernelspec?.language;
+        kernel = cleanToken(liveSession.kernel || storedKernel, requestedKernel);
+        language = languageForKernel(
+          kernel, liveSession.language || storedLanguage || requestedLanguage,
+        );
+      }
       rendered = buildHiddenScript({
         noteFile,
         kernel,
@@ -1147,6 +1257,10 @@ export function createJupyterCellService({
       });
       changed = existingScript.text !== rendered.text;
       if (changed) await writeNotebookFile(scriptFile, rendered.text, files);
+      if (usedLegacy) {
+        await files.rm(legacyScriptFile, { force: true });
+        migratedFrom = legacyScriptFile;
+      }
     });
     const info = await files.stat(scriptFile);
     let kernelSpec = null;
@@ -1185,6 +1299,7 @@ export function createJupyterCellService({
       ok: true,
       ...payload,
       changed,
+      ...(migratedFrom ? { migratedFrom } : {}),
       mtimeMs: info.mtimeMs,
       size: info.size,
     };
@@ -1192,14 +1307,29 @@ export function createJupyterCellService({
 
   async function readScriptCell(body) {
     const noteFile = safeNoteFile(body?.file);
-    const kernel = cleanToken(body?.kernel, "python3");
-    const session = cleanToken(body?.session, "default");
-    const language = languageForKernel(kernel, body?.language || body?.lang);
+    const requestedKernel = cleanToken(body?.kernel, "python3");
+    let session = cleanToken(body?.session, "default");
+    const requestedLanguage = languageForKernel(
+      requestedKernel, body?.language || body?.lang,
+    );
     const cellId = markerId(body?.cellId || body?.id);
     if (!cellId) throw error("Missing Jupyter cell id", 400);
-    const scriptFile = hiddenScriptPath(noteFile, session, language);
-    const outputFile = outputMirrorPath(noteFile, session, language);
-    const cells = await readExistingHiddenCells(scriptFile, "", files);
+    const scriptFile = String(body?.scriptFile || "").trim()
+      ? managedScriptFile(body)
+      : hiddenScriptPath(noteFile, session, requestedLanguage);
+    const outputFile = scriptFile;
+    const existing = await readExistingHiddenScript(scriptFile, "", files);
+    const liveSession = documentSessions.get(scriptFile) || {};
+    const noema = notebookPrivateMetadata(existing.notebook);
+    const storedKernel = existing.notebook?.metadata?.kernelspec?.name;
+    const storedLanguage = noema.language
+      || existing.notebook?.metadata?.language_info?.name
+      || existing.notebook?.metadata?.kernelspec?.language;
+    const kernel = cleanToken(liveSession.kernel || storedKernel, requestedKernel);
+    session = cleanToken(liveSession.session || noema.session, session);
+    const language = languageForKernel(
+      kernel, liveSession.language || storedLanguage || requestedLanguage,
+    );
     const outputs = await readOutputMirror(outputFile, "", files);
     const savedOutput = outputs?.cells?.[cellId] ?? null;
     let info = null;
@@ -1211,8 +1341,8 @@ export function createJupyterCellService({
       session,
       language,
       cellId,
-      code: cells.get(cellId) ?? "",
-      output: await attachLiveRuntimeToOutput(savedOutput, noteFile, kernel, session, language),
+      code: existing.cells.get(cellId) ?? "",
+      output: await attachLiveRuntimeToOutput(savedOutput, noteFile, kernel, session, language, scriptFile),
       exists: Boolean(info),
       mtimeMs: info?.mtimeMs ?? 0,
       size: info?.size ?? 0,
@@ -1221,7 +1351,7 @@ export function createJupyterCellService({
 
   async function persistScriptCellResult(noteFile, cell, result) {
     if (leanRuntimeP(cell.language, cell.kernel)) return;
-    const outputFile = outputMirrorPath(noteFile, cell.session, cell.language);
+    const outputFile = cell.file || outputMirrorPath(noteFile, cell.session, cell.language);
     const { widgetRuntime, ...persistedResult } = result;
     await withMirrorLock(outputFile, async () => {
       const mirror = await readOutputMirror(outputFile, "", files);
@@ -1305,26 +1435,34 @@ export function createJupyterCellService({
 
   async function executeScriptCellWithContext(body) {
     const noteFile = safeNoteFile(body?.file);
-    const kernel = cleanToken(body?.kernel, "python3");
+    const requestedKernel = cleanToken(body?.kernel, "python3");
     const session = cleanToken(body?.session, "default");
-    const language = languageForKernel(kernel, body?.language || body?.lang);
+    const requestedLanguage = languageForKernel(
+      requestedKernel, body?.language || body?.lang,
+    );
     const targetCellId = markerId(body?.cellId || body?.id);
     if (!targetCellId) throw error("Missing Jupyter cell id", 400);
 
-    const runtime = runtimeForBody({ ...(body || {}), file: noteFile, kernel, session, language });
+    const opened = await openScript({
+      ...(body || {}),
+      file: noteFile,
+      cellId: targetCellId,
+      kernel: requestedKernel,
+      session,
+      language: requestedLanguage,
+      storage: "ipynb",
+      open: false,
+    });
+    const kernel = cleanToken(opened.kernel, requestedKernel);
+    const language = languageForKernel(
+      kernel, opened.language || requestedLanguage,
+    );
+    const scriptFile = opened.file;
+    const outputFile = opened.file;
+    const runtime = runtimeForBody({
+      ...(body || {}), file: noteFile, scriptFile, kernel, session, language,
+    });
     return await withKernelExecutionQueue(runtime.key, async () => {
-      const opened = await openScript({
-        ...(body || {}),
-        file: noteFile,
-        cellId: targetCellId,
-        kernel,
-        session,
-        language,
-        storage: "ipynb",
-        open: false,
-      });
-      const scriptFile = hiddenScriptPath(noteFile, session, language);
-      const outputFile = outputMirrorPath(noteFile, session, language);
       const hiddenCells = await readExistingHiddenCells(scriptFile, "", files);
       const selected = selectedContextIds(body, targetCellId);
       const entries = normalizeContextCells(body?.cells, hiddenCells, targetCellId, { kernel, session, language })
@@ -1411,8 +1549,8 @@ export function createJupyterCellService({
     return {
       ...result,
       live: true,
-      file: hiddenScriptPath(noteFile, read.session, read.language),
-      outputFile: outputMirrorPath(noteFile, read.session, read.language),
+      file: read.file,
+      outputFile: read.file,
     };
   }
 
@@ -1423,7 +1561,9 @@ export function createJupyterCellService({
     const language = languageForKernel(kernel, body?.language || body?.lang);
     const cellId = markerId(body?.cellId || body?.id);
     if (!cellId) throw error("Missing Jupyter cell id", 400);
-    const outputFile = outputMirrorPath(noteFile, session, language);
+    const outputFile = String(body?.scriptFile || "").trim()
+      ? managedScriptFile(body)
+      : outputMirrorPath(noteFile, session, language);
     await withMirrorLock(outputFile, async () => {
       const mirror = await readOutputMirror(outputFile, "", files);
       const cells = mirror.cells && typeof mirror.cells === "object" ? mirror.cells : {};
@@ -1447,8 +1587,12 @@ export function createJupyterCellService({
     const language = languageForKernel(kernel, body?.language || body?.lang);
     const cellId = markerId(body?.cellId || body?.id);
     if (!cellId) throw error("Missing Jupyter cell id", 400);
-    const scriptFile = hiddenScriptPath(noteFile, session, language);
-    const outputFile = outputMirrorPath(noteFile, session, language);
+    const scriptFile = String(body?.scriptFile || "").trim()
+      ? managedScriptFile(body)
+      : hiddenScriptPath(noteFile, session, language);
+    const outputFile = String(body?.scriptFile || "").trim()
+      ? managedScriptFile(body)
+      : outputMirrorPath(noteFile, session, language);
     let remainingOrder = [];
     let removedScript = false;
     let changedScript = false;
@@ -1501,7 +1645,9 @@ export function createJupyterCellService({
     const language = languageForKernel(kernel, body?.language || body?.lang);
     const cellId = markerId(body?.cellId || body?.id);
     if (!cellId) throw error("Missing Jupyter cell id", 400);
-    const outputFile = outputMirrorPath(noteFile, session, language);
+    const outputFile = String(body?.scriptFile || "").trim()
+      ? managedScriptFile(body)
+      : outputMirrorPath(noteFile, session, language);
     let savedCell = null;
     await withMirrorLock(outputFile, async () => {
       const mirror = await readOutputMirror(outputFile, "", files);
@@ -1539,7 +1685,9 @@ export function createJupyterCellService({
     const kernel = cleanToken(body?.kernel, "python3");
     const session = cleanToken(body?.session, "default");
     const language = languageForKernel(kernel, body?.language || body?.lang);
-    const outputFile = outputMirrorPath(noteFile, session, language);
+    const outputFile = String(body?.scriptFile || "").trim()
+      ? managedScriptFile(body)
+      : outputMirrorPath(noteFile, session, language);
     await withMirrorLock(outputFile, () => writeOutputMirror(outputFile, {
       version: 1,
       source: noteFile,
@@ -1787,14 +1935,447 @@ export function createJupyterCellService({
         const idleMs = now - Number(record?.lastActivity || now);
         if (!force && !isDead && (running || idleMs < kernelIdleTtlMs)) continue;
         await registry.shutdown(record.key).catch(() => {});
-        removed.push({ key: record.key, kernel: record.kernelName, reason: force ? "forced" : (isDead ? "dead" : "idle") });
+        removed.push({
+          key: record.key,
+          kernel: record.kernelName,
+          scriptFile: record.scriptFile || "",
+          reason: force ? "forced" : (isDead ? "dead" : "idle"),
+        });
       }
     } finally {
       cleanupRunning = false;
       if ((await getRegistry()).list().some((r) => !r.attached)) scheduleCleanup();
     }
+    for (const scriptFile of new Set(removed.map((item) => item.scriptFile).filter(Boolean))) {
+      await publishDocumentSession(scriptFile).catch(() => {});
+    }
     const snapshot = await listTasks();
     return { ...snapshot, scheduled, removed };
+  }
+
+  // --- Noema-owned document manager -----------------------------------
+  // These methods back jupyter.html and the Emacs toolbar.  They are adapters
+  // over this service's registry/notebook functions; no protocol request is
+  // delegated to Emacs.
+
+  function managedScriptFile(body = {}) {
+    const raw = String(body?.scriptFile || "").trim();
+    if (!raw) throw error("Missing Jupyter scriptFile", 400);
+    const scriptFile = jupyterLogicalPath(raw);
+    if (!/\.ipynb$/i.test(scriptFile)) {
+      throw error(`Invalid Jupyter scriptFile: ${scriptFile}`, 400);
+    }
+    if (!remoteLogicalPath(scriptFile)
+        && !inside(notes, scriptFile) && !inside(workspace, scriptFile)) {
+      throw error(`Notebook is outside the allowed root: ${scriptFile}`, 403);
+    }
+    return scriptFile;
+  }
+
+  function notebookPrivateMetadata(notebook) {
+    const metadata = notebook?.metadata && typeof notebook.metadata === "object" ? notebook.metadata : {};
+    return metadata.noema && typeof metadata.noema === "object" ? metadata.noema : {};
+  }
+
+  async function managedDocument(body = {}) {
+    const scriptFile = managedScriptFile(body);
+    const existing = await readExistingHiddenScript(scriptFile, "", files);
+    if (!existing.notebook) throw error(`Jupyter notebook not found: ${scriptFile}`, 404);
+    const notebook = existing.notebook;
+    const noema = notebookPrivateMetadata(notebook);
+    const kernelspec = notebook.metadata?.kernelspec || {};
+    const languageInfo = notebook.metadata?.language_info || {};
+    const noteFile = safeNoteFile(noema.source_file || body?.sourceFile || scriptFile);
+    const portableKernel = cleanToken(kernelspec.name || body?.kernel, "python3");
+    const liveSession = documentSessions.get(scriptFile) || {};
+    const kernel = cleanToken(liveSession.kernel || portableKernel, portableKernel);
+    const session = cleanToken(noema.session || body?.session, "default");
+    const language = languageForKernel(kernel, noema.language || languageInfo.name || body?.language);
+    const sessionId = `session-${createHash("sha256").update(scriptFile).digest("hex").slice(0, 24)}`;
+    const value = {
+      scriptFile, noteFile, notebook, text: existing.text, kernel, portableKernel,
+      session, language, sessionId, detached: liveSession.detached === true,
+    };
+    documentSessions.set(scriptFile, {
+      ...liveSession,
+      scriptFile,
+      sourceFile: noteFile,
+      kernel,
+      session,
+      language,
+      sessionId,
+    });
+    return value;
+  }
+
+  async function writeManagedNotebook(context) {
+    const text = serializeNotebook(context.notebook);
+    await withMirrorLock(context.scriptFile, () => writeNotebookFile(context.scriptFile, text, files));
+    context.text = text;
+    return context;
+  }
+
+  function managedBody(context, extra = {}) {
+    return {
+      file: context.noteFile,
+      scriptFile: context.scriptFile,
+      sourceFile: context.noteFile,
+      kernel: context.kernel,
+      session: context.session,
+      language: context.language,
+      ...extra,
+    };
+  }
+
+  async function documentSnapshot(body = {}) {
+    const context = await managedDocument(body);
+    const registry = await getRegistry();
+    const key = kernelKey({ file: context.scriptFile, kernel: context.kernel });
+    const record = context.detached ? undefined : registry.get(key);
+    const revisions = executedRevisions(record);
+    let line = 1;
+    const cells = [];
+    for (const cell of context.notebook.cells || []) {
+      if (cell?.cell_type !== "code") continue;
+      const code = notebookSource(cell.source);
+      const revision = codeRevision(code);
+      const saved = notebookOutput(cell) || {};
+      cells.push({
+        id: cell.id,
+        index: cells.length,
+        line,
+        revision,
+        code,
+        stale: !record?.id || revisions.get(cell.id) !== revision,
+        status: String(saved.status || (record?.lastCellId === cell.id ? record.lastStatus : "idle") || "idle"),
+        executionCount: cell.execution_count ?? null,
+        outputs: Array.isArray(cell.outputs) ? cell.outputs : [],
+        widgetMessages: Array.isArray(saved.widgetMessages) ? saved.widgetMessages : [],
+        widgetOutputs: saved.widgetOutputs && typeof saved.widgetOutputs === "object" ? saved.widgetOutputs : {},
+        ...(saved.widgetRuntime ? { widgetRuntime: saved.widgetRuntime } : {}),
+        outputUi: saved.ui && typeof saved.ui === "object" ? saved.ui : {},
+        ...(saved.stdin ? { stdin: saved.stdin } : {}),
+      });
+      line += code.split("\n").length + 2;
+    }
+    return {
+      ok: true,
+      documentRevision: codeRevision(context.text),
+      document: {
+        scriptFile: context.scriptFile,
+        sourceFile: context.noteFile,
+        language: context.language,
+        kernel: context.detached ? "" : context.kernel,
+        session: context.session,
+        kernelSpecName: context.detached ? "" : context.kernel,
+        kernelId: record?.id || "",
+        sessionName: context.session,
+        sessionId: context.sessionId,
+      },
+      kernelStatus: context.detached ? "no-kernel"
+        : record?.id ? (Number(record.running || 0) > 0 ? "busy" : (record.lastStatus || "idle"))
+          : "not-started",
+      cells,
+    };
+  }
+
+  async function publishDocumentSession(scriptFile) {
+    const snapshot = await documentSnapshot({ scriptFile });
+    if (typeof publish === "function") {
+      try { publish("jupyter-session", snapshot); } catch { /* transport is best effort */ }
+    }
+    return snapshot;
+  }
+
+  async function managerSnapshot() {
+    const registry = await getRegistry();
+    const records = registry.list();
+    const sessions = Array.from(documentSessions.values()).map((session) => {
+      const record = session.detached ? undefined
+        : records.find((item) => item.scriptFile === session.scriptFile
+          && item.kernelName === session.kernel);
+      return {
+        id: session.sessionId,
+        sessionId: session.sessionId,
+        scriptFile: session.scriptFile,
+        sourceFile: session.sourceFile,
+        sessionName: session.session,
+        language: session.language,
+        kernelSpecName: session.kernel,
+        kernelId: record?.id || "",
+        running: Number(record?.running || 0),
+      };
+    });
+    const kernels = records.map((record) => {
+      const task = kernelTask(record.key, record);
+      return {
+        ...task,
+        kernelId: record.id,
+        kernelSpecName: record.kernelName,
+        targetId: record.hosted ? "broker" : "local",
+        sessionIds: sessions
+          .filter((session) => session.kernelId === record.id)
+          .map((session) => session.sessionId),
+      };
+    });
+    let configuredServers = [];
+    try {
+      configuredServers = typeof serverHost?.listServers === "function"
+        ? await serverHost.listServers() : [];
+    } catch {}
+    return {
+      ok: true,
+      server: { status: "ready", owned: true, owner: "noema" },
+      servers: configuredServers,
+      kernels,
+      sessions,
+      tasks: kernels.filter((kernel) => kernel.running > 0).map((kernel) => ({
+        id: `task-${kernel.kernelId}`,
+        taskId: `task-${kernel.kernelId}`,
+        kernelId: kernel.kernelId,
+        scriptFile: kernel.file,
+        cellId: kernel.lastCellId,
+        status: kernel.status,
+        error: kernel.lastError,
+      })),
+    };
+  }
+
+  async function sessionSelect(body = {}) {
+    const context = await managedDocument(body);
+    const kind = String(body?.kind || "none");
+    if (kind === "none") {
+      documentSessions.set(context.scriptFile, {
+        ...documentSessions.get(context.scriptFile), detached: true,
+      });
+      return await publishDocumentSession(context.scriptFile);
+    }
+    let kernel = "";
+    if (kind === "start") {
+      kernel = cleanToken(body?.kernelSpecName || body?.kernel, context.portableKernel);
+    } else if (kind === "connect") {
+      const registry = await getRegistry();
+      const record = registry.list().find((item) => item.id === String(body?.kernelId || ""));
+      if (!record) throw error(`Unknown Noema Jupyter kernel: ${body?.kernelId || ""}`, 404);
+      if (record.scriptFile && record.scriptFile !== context.scriptFile) {
+        throw error("A Noema document cannot adopt another document's private kernel", 400);
+      }
+      kernel = record.kernelName;
+    } else {
+      throw error(`Unsupported Jupyter session selection: ${kind}`, 400);
+    }
+    context.kernel = kernel;
+    context.language = languageForKernel(kernel, context.language);
+    context.notebook.metadata.kernelspec = {
+      ...(context.notebook.metadata.kernelspec || {}),
+      display_name: kernel,
+      language: context.language,
+      name: kernel,
+    };
+    context.notebook.metadata.language_info = {
+      ...(context.notebook.metadata.language_info || {}),
+      name: context.language,
+    };
+    context.notebook.metadata.noema = {
+      ...notebookPrivateMetadata(context.notebook),
+      language: context.language,
+      session: context.session,
+      storage: "ipynb",
+    };
+    await writeManagedNotebook(context);
+    documentSessions.set(context.scriptFile, {
+      ...documentSessions.get(context.scriptFile),
+      kernel,
+      language: context.language,
+      detached: false,
+    });
+    await ensureKernel(managedBody(context));
+    return await publishDocumentSession(context.scriptFile);
+  }
+
+  async function kernelControl(body = {}) {
+    const { key, record } = await kernelRecordForBody(body);
+    if (!record?.id) return { ok: true, status: "not-started" };
+    const registry = await getRegistry();
+    const action = String(body?.action || "");
+    try {
+      if (action === "interrupt") await registry.interrupt(key);
+      else if (action === "restart") await registry.restart(key);
+      else if (action === "shutdown") await registry.shutdown(key);
+      else throw error(`Unsupported Jupyter kernel action: ${action}`, 400);
+      return { ok: true, kernelId: record.id, action };
+    } finally {
+      if (record.scriptFile) {
+        await publishDocumentSession(record.scriptFile).catch(() => {});
+      }
+    }
+  }
+
+  function managedCellType(value) {
+    const type = String(value || "code").toLowerCase();
+    if (!["code", "markdown", "raw"].includes(type)) {
+      throw error(`Unsupported Jupyter cell type: ${type}`, 400);
+    }
+    return type;
+  }
+
+  function freshManagedCell(source = "", requestedType = "code") {
+    const cellType = managedCellType(requestedType);
+    const cell = {
+      cell_type: cellType,
+      id: notebookCellId(`cell-${randomUUID()}`),
+      metadata: {},
+      source,
+    };
+    if (cellType === "code") {
+      cell.execution_count = null;
+      cell.outputs = [];
+    }
+    return cell;
+  }
+
+  function clearManagedCellRuntime(cell) {
+    if (cell?.cell_type === "code") {
+      cell.execution_count = null;
+      cell.outputs = [];
+    } else {
+      delete cell.execution_count;
+      delete cell.outputs;
+    }
+    return cell;
+  }
+
+  function joinManagedCellSource(first, second) {
+    const before = notebookSource(first);
+    const after = notebookSource(second);
+    if (!before || !after || before.endsWith("\n")) return `${before}${after}`;
+    return `${before}\n${after}`;
+  }
+
+  async function mutateManagedDocument(context, cellId, action, body = {}) {
+    const cells = context.notebook.cells || [];
+    const index = cells.findIndex((cell) => cell?.id === cellId);
+    if (index < 0) throw error(`Unknown Jupyter cell: ${cellId}`, 404);
+    let activeCellId = cellId;
+    if (action === "insertAbove" || action === "insertBelow") {
+      const cell = freshManagedCell("", body?.cellType);
+      cells.splice(index + (action === "insertBelow" ? 1 : 0), 0, cell);
+      activeCellId = cell.id;
+    } else if (action === "duplicate") {
+      const original = cells[index];
+      const cell = {
+        ...original,
+        id: notebookCellId(`cell-${randomUUID()}`),
+        metadata: { ...(original.metadata || {}) },
+      };
+      clearManagedCellRuntime(cell);
+      cells.splice(index + 1, 0, cell);
+      activeCellId = cell.id;
+    } else if (action === "moveUp" && index > 0) {
+      [cells[index - 1], cells[index]] = [cells[index], cells[index - 1]];
+    } else if (action === "moveDown" && index < cells.length - 1) {
+      [cells[index], cells[index + 1]] = [cells[index + 1], cells[index]];
+    } else if (action === "delete") {
+      cells.splice(index, 1);
+      activeCellId = cells[Math.min(index, cells.length - 1)]?.id || "";
+    } else if (action === "split") {
+      const original = cells[index];
+      const source = Array.from(notebookSource(original.source));
+      const offset = Math.max(0, Math.min(source.length, Number(body?.offset || 0)));
+      original.source = source.slice(0, offset).join("");
+      clearManagedCellRuntime(original);
+      const cell = freshManagedCell(
+        source.slice(offset).join(""), original.cell_type,
+      );
+      cells.splice(index + 1, 0, cell);
+      activeCellId = cell.id;
+    } else if (action === "mergeAbove" && index > 0) {
+      const target = cells[index - 1];
+      const current = cells[index];
+      if (target.cell_type !== current.cell_type) {
+        throw error("Cannot merge Jupyter cells with different types", 400);
+      }
+      target.source = joinManagedCellSource(target.source, current.source);
+      clearManagedCellRuntime(target);
+      cells.splice(index, 1);
+      activeCellId = target.id;
+    } else if (action === "mergeBelow" && index < cells.length - 1) {
+      const target = cells[index];
+      const next = cells[index + 1];
+      if (target.cell_type !== next.cell_type) {
+        throw error("Cannot merge Jupyter cells with different types", 400);
+      }
+      target.source = joinManagedCellSource(target.source, next.source);
+      clearManagedCellRuntime(target);
+      cells.splice(index + 1, 1);
+      activeCellId = target.id;
+    } else if (!((action === "moveUp" && index === 0)
+                 || (action === "moveDown" && index === cells.length - 1)
+                 || (action === "mergeAbove" && index === 0)
+                 || (action === "mergeBelow" && index === cells.length - 1))) {
+      throw error(`Unsupported Jupyter document action: ${action}`, 400);
+    }
+    context.notebook.cells = cells;
+    await writeManagedNotebook(context);
+    return { ok: true, activeCellId, action };
+  }
+
+  async function scriptAction(body = {}) {
+    const context = await managedDocument(body);
+    try {
+      const action = String(body?.action || "");
+      const cellId = markerId(body?.cellId || body?.id);
+      if (["insertAbove", "insertBelow", "duplicate", "moveUp", "moveDown", "delete", "split", "mergeAbove", "mergeBelow"].includes(action)) {
+        return await mutateManagedDocument(context, cellId, action, body);
+      }
+      const request = managedBody(context, { cellId });
+      if (action === "clear-output") return await clearScriptCellOutput(request);
+      if (action === "clear-all-outputs") return await clearAllOutputs(request);
+      if (action === "interrupt") return await interrupt(request);
+      if (action === "restart") return await restart(request);
+      if (action === "shutdown") return await shutdownKernel(request);
+      if (action === "restart-run-all") await restart(request);
+      if (!action.startsWith("run-") && action !== "restart-run-all") {
+        throw error(`Unsupported Jupyter script action: ${action}`, 400);
+      }
+      if (context.detached) throw error("This Noema document has no selected kernel", 400);
+      const codeCells = (context.notebook.cells || []).filter((cell) => cell?.cell_type === "code");
+      const target = codeCells.findIndex((cell) => cell.id === cellId);
+      let plan;
+      const mode = action === "restart-run-all" ? "all" : action.slice(4);
+      if (mode === "all") plan = codeCells;
+      else if (mode === "above") plan = codeCells.slice(0, target + 1);
+      else if (mode === "below") plan = codeCells.slice(Math.max(0, target));
+      else if (mode === "selected") {
+        const selected = new Set((body?.cellIds || body?.selectedCellIds || []).map(markerId));
+        plan = codeCells.filter((cell) => selected.has(cell.id));
+      } else {
+        if (target < 0) throw error(`Unknown Jupyter cell: ${cellId}`, 404);
+        plan = [codeCells[target]];
+      }
+      const results = [];
+      for (const cell of plan) {
+        const result = await executeScriptCell(managedBody(context, { cellId: cell.id }));
+        results.push(result);
+        if (result?.status === "error" || result?.ok === false) break;
+      }
+      return { ok: results.every((result) => result?.ok !== false), action, results };
+    } finally {
+      await publishDocumentSession(context.scriptFile).catch(() => {});
+    }
+  }
+
+  async function documentMutate(body = {}) {
+    return await scriptAction({ ...body, action: body?.op });
+  }
+
+  async function documentExecute(body = {}) {
+    return await scriptAction({ ...body, action: `run-${String(body?.mode || "current")}` });
+  }
+
+  async function managedVariables(body = {}) {
+    const context = body?.scriptFile ? await managedDocument(body) : null;
+    return await variables(context ? managedBody(context) : body);
   }
 
   async function shutdown() {
@@ -1943,6 +2524,14 @@ export function createJupyterCellService({
   return {
     execute,
     kernels,
+    documentSnapshot,
+    documentMutate,
+    documentExecute,
+    managerSnapshot,
+    scriptAction,
+    sessionSelect,
+    kernelControl,
+    openBoard: managerSnapshot,
     openScript,
     readScriptCell,
     executeScriptCell,
@@ -1950,7 +2539,7 @@ export function createJupyterCellService({
     deleteScriptCell,
     saveScriptCellOutputUi,
     clearAllOutputs,
-    variables,
+    variables: managedVariables,
     inputReply,
     complete,
     inspect,

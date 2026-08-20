@@ -2588,8 +2588,8 @@ class CeilCommandWidget extends MeasuredWidget {
     });
     const popoutButton = makeButton("Popout", "Show output in a separate panel", () => openCeilOutputPopup(lastResult));
 
-    if (hostMode() !== "emacs") {
-      const reason = "Jupyter execution and Cell editing require the Emacs backend";
+    if (hostMode() === "server") {
+      const reason = "Jupyter execution and Cell editing are unavailable in reader mode";
       for (const control of [
         editButton,
         runButton,

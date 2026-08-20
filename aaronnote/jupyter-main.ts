@@ -3,11 +3,13 @@ import "../src/styles/aaron-ui-elegant.css";
 import "../src/styles/theme-loader.ts";
 import "./jupyter-page.css";
 import { api } from "./api-client.ts";
+import type { JupyterKernelSpec } from "./api-client.ts";
 import { renderJupyterOutputs } from "../src/jupyter-rendermime.ts";
 import type { WidgetMountFn } from "../src/jupyter-rendermime.ts";
 import type { JupyterWidgetKernelMessage } from "../src/jupyter-widget-runtime.ts";
 import { renderJupyterVariablesTable } from "../src/jupyter-variables-view.ts";
 import { installNoemaThemeRuntime, loadNoemaAppConfig } from "./theme-runtime.ts";
+import { selectedKernelOptionValue } from "./jupyter-kernel-selection.ts";
 
 type DocumentRef = {
   scriptFile: string;
@@ -24,6 +26,7 @@ type DocumentRef = {
 type ManagerKernel = {
   id?: string;
   kernelId?: string;
+  file?: string;
   kernelSpecName?: string;
   language?: string;
   targetId?: string;
@@ -108,15 +111,23 @@ const removeThemeRuntime = installNoemaThemeRuntime();
 void loadNoemaAppConfig().catch(() => {});
 
 const STORAGE_KEY = "noema:jupyter:tabs:v1";
+const LAYOUT_STORAGE_KEY = "noema:jupyter:layout:v2";
 const tabs = new Map<string, TabState>();
 let activeScript = "";
 let statusTimer = 0;
 let refreshTimer = 0;
-let managerTimer = 0;
 let lastDKeyAt = 0;
 let manager: ManagerSnapshot = {};
 let activeView: "outputs" | "variables" | "manage" = "outputs";
+let managerOpen = false;
+let inspectorOpen = false;
 const outputDisposers = new Set<() => void>();
+
+try {
+  const layout = JSON.parse(localStorage.getItem(LAYOUT_STORAGE_KEY) || "{}");
+  managerOpen = layout.managerOpen === true;
+  inspectorOpen = layout.inspectorOpen === true;
+} catch {}
 
 const mountWidget: WidgetMountFn = (host, modelId, runtime, messages, widgetOutputs) => {
   (window as Window & { __jupyter_widgets_assets_path__?: string }).__jupyter_widgets_assets_path__ ??=
@@ -137,22 +148,31 @@ app.innerHTML = `
   <header class="noema-jupyter-header">
     <div class="noema-jupyter-brand">
       <span class="noema-jupyter-logo">N</span>
-      <div><strong>Jupyter</strong><small>Emacs-owned workspace</small></div>
+      <strong>Jupyter</strong>
     </div>
     <div class="noema-jupyter-kernel" data-kernel-status></div>
-    <label class="noema-jupyter-kernel-select">Kernel
+    <label class="noema-jupyter-kernel-select"><span>Kernel</span>
       <select data-kernel-select aria-label="Kernel"></select>
     </label>
     <div class="noema-jupyter-global-actions">
+      <button type="button" class="is-primary" data-action="run-current">▶ Run</button>
       <button type="button" data-action="run-all">Run All</button>
-      <button type="button" data-action="restart-run-all">Restart & Run All</button>
       <button type="button" data-action="interrupt">Interrupt</button>
       <button type="button" data-action="restart">Restart</button>
-      <button type="button" data-action="shutdown">Shut Down</button>
-      <button type="button" data-action="clear-all">Clear Outputs</button>
-      <button type="button" data-action="variables">Variables</button>
-      <button type="button" data-action="tasks">Kernel Tasks</button>
-      <button type="button" data-action="board">Jupyter Board</button>
+      <span class="noema-jupyter-toolbar-separator" aria-hidden="true"></span>
+      <button type="button" data-pane="manager" aria-pressed="false">Sessions</button>
+      <button type="button" data-pane="inspector" aria-pressed="false">Inspector</button>
+      <details class="noema-jupyter-action-menu">
+        <summary title="More workspace actions">•••</summary>
+        <div>
+          <button type="button" data-action="restart-run-all">Restart & Run All</button>
+          <button type="button" data-action="clear-all">Clear All Outputs</button>
+          <button type="button" data-action="variables">Variables</button>
+          <button type="button" data-action="tasks">Kernel Tasks</button>
+          <button type="button" data-action="board">Jupyter Board</button>
+          <button type="button" class="is-danger" data-action="shutdown">Shut Down Kernel</button>
+        </div>
+      </details>
     </div>
   </header>
   <nav class="noema-jupyter-tabs" aria-label="Jupyter documents" data-tabs></nav>
@@ -163,6 +183,7 @@ app.innerHTML = `
   </div>
   <section class="noema-jupyter-tasks" data-task-panel></section>
   <div class="noema-jupyter-status" role="status" data-status></div>
+  <div class="noema-jupyter-context-menu" role="menu" data-context-menu hidden></div>
   <dialog class="noema-jupyter-dialog" data-dialog>
     <header><strong data-dialog-title></strong><button type="button" data-dialog-close>×</button></header>
     <div class="noema-jupyter-dialog-body" data-dialog-body></div>
@@ -181,7 +202,9 @@ const kernelSelectEl = app.querySelector<HTMLSelectElement>("[data-kernel-select
 const dialogEl = app.querySelector<HTMLDialogElement>("[data-dialog]")!;
 const dialogTitleEl = app.querySelector<HTMLElement>("[data-dialog-title]")!;
 const dialogBodyEl = app.querySelector<HTMLElement>("[data-dialog-body]")!;
-const kernelOptions = new Map<string, Array<{ name: string; displayName?: string; language?: string }>>();
+const shellEl = app.querySelector<HTMLElement>(".noema-jupyter-shell")!;
+const contextMenuEl = app.querySelector<HTMLElement>("[data-context-menu]")!;
+const kernelOptions = new Map<string, JupyterKernelSpec[]>();
 
 function text(value: unknown): string {
   return String(value ?? "").trim();
@@ -208,6 +231,21 @@ function setStatus(message: string, error = false): void {
 function persistTabs(): void {
   const value = Array.from(tabs.values()).map((tab) => ({ ref: tab.ref, activeCellId: tab.activeCellId }));
   localStorage.setItem(STORAGE_KEY, JSON.stringify({ activeScript, tabs: value }));
+}
+
+function persistLayout(): void {
+  localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify({ managerOpen, inspectorOpen }));
+}
+
+function renderLayout(): void {
+  shellEl.dataset.managerOpen = managerOpen ? "true" : "false";
+  shellEl.dataset.inspectorOpen = inspectorOpen ? "true" : "false";
+  managerEl.setAttribute("aria-hidden", managerOpen ? "false" : "true");
+  inspectorEl.setAttribute("aria-hidden", inspectorOpen ? "false" : "true");
+  for (const item of app.querySelectorAll<HTMLButtonElement>("[data-pane]")) {
+    const open = item.dataset.pane === "manager" ? managerOpen : inspectorOpen;
+    item.setAttribute("aria-pressed", open ? "true" : "false");
+  }
 }
 
 function restoredTabs(): Array<{ ref: DocumentRef; activeCellId?: string }> {
@@ -292,8 +330,15 @@ async function loadManager(renderAfter = true): Promise<void> {
 
 async function loadKernelOptions(tab: TabState): Promise<void> {
   try {
-    const result = await api.jupyterCell.kernels({ file: tab.ref.sourceFile || tab.ref.scriptFile });
-    const values = [...(result.kernels || []), ...(result.attachable || [])];
+    const result = await api.jupyterCell.kernels({
+      file: tab.ref.sourceFile || tab.ref.scriptFile,
+      scriptFile: tab.ref.scriptFile,
+    });
+    const values = result.selections || [
+      { name: "", kind: "none", value: "", group: "Session", label: "No Kernel" },
+      ...(result.choices || [...(result.kernels || []), ...(result.attachable || [])])
+        .map((item) => ({ ...item, kind: "start" as const, value: item.name })),
+    ];
     kernelOptions.set(tab.ref.scriptFile, values);
     if (tab === activeTab()) renderWorkspace();
   } catch {
@@ -305,7 +350,9 @@ async function switchKernel(name: string): Promise<void> {
   const tab = activeTab();
   if (!tab?.snapshot || !name) return;
   kernelSelectEl.disabled = true;
-  const [kind, value = ""] = name.split(":", 2);
+  const separator = name.indexOf(":");
+  const kind = separator < 0 ? name : name.slice(0, separator);
+  const value = separator < 0 ? "" : name.slice(separator + 1);
   setStatus(kind === "none" ? "Detaching session…" : "Selecting kernel…");
   try {
     await api.jupyterCell.sessionSelect({
@@ -525,22 +572,102 @@ async function openSource(cell = activeCell()): Promise<void> {
   await api.emacs.open({ file: tab.ref.scriptFile, line: cell.line || 1, col: 0 });
 }
 
+function activateCell(tab: TabState, cellId: string): void {
+  tab.activeCellId = cellId;
+  persistTabs();
+  for (const item of workspaceEl.querySelectorAll<HTMLElement>(".noema-jupyter-cell")) {
+    item.dataset.active = item.dataset.cellId === cellId ? "true" : "false";
+  }
+  if (inspectorOpen) renderInspector();
+}
+
+async function saveOutputUi(tab: TabState, cell: CellSnapshot): Promise<void> {
+  try {
+    await api.jupyterCell.saveScriptCellOutputUi(documentParams(tab, {
+      cellId: cell.id,
+      outputFolded: cell.outputUi?.outputFolded === true,
+      outputExpanded: cell.outputUi?.outputExpanded === true,
+    }));
+  } catch {}
+}
+
+function closeCellMenu(): void {
+  contextMenuEl.hidden = true;
+  contextMenuEl.replaceChildren();
+}
+
+function openCellMenu(tab: TabState, cell: CellSnapshot, x: number, y: number): void {
+  activateCell(tab, cell.id);
+  const menuItem = (
+    label: string,
+    title: string,
+    run: () => void | Promise<void>,
+    danger = false,
+  ): HTMLButtonElement => {
+    const result = button(label, title, () => {
+      closeCellMenu();
+      return run();
+    }, danger ? "is-danger" : "");
+    result.setAttribute("role", "menuitem");
+    return result;
+  };
+  const separator = (): HTMLHRElement => {
+    const result = document.createElement("hr");
+    result.setAttribute("role", "separator");
+    return result;
+  };
+  contextMenuEl.replaceChildren(
+    menuItem("Run Cell", "Run this Cell", () => execute("current")),
+    menuItem("Run and Select Next", "Run this Cell and select the next", async () => {
+      await execute("current");
+      const next = tab.snapshot?.cells[cell.index + 1];
+      if (next) selectCell(tab, next.id, true);
+    }),
+    menuItem("Run Above", "Run this Cell and every Cell above", () => execute("above")),
+    menuItem("Run Below", "Run this Cell and every Cell below", () => execute("below")),
+    separator(),
+    menuItem("Open Source in Emacs", "Jump to source", () => openSource(cell)),
+    menuItem(cell.outputUi?.outputFolded ? "Show Output" : "Fold Output", "Toggle output visibility", async () => {
+      cell.outputUi = { ...cell.outputUi, outputFolded: !cell.outputUi?.outputFolded };
+      await saveOutputUi(tab, cell);
+      renderWorkspace();
+    }),
+    menuItem("Clear Output", "Clear this Cell output", () => clearOutput(false)),
+    separator(),
+    menuItem("Insert Cell Above", "Insert a Cell above", () => mutate("insertAbove")),
+    menuItem("Insert Cell Below", "Insert a Cell below", () => mutate("insertBelow")),
+    menuItem("Duplicate Cell", "Duplicate this Cell", () => mutate("duplicate")),
+    menuItem("Move Cell Up", "Move this Cell up", () => mutate("moveUp")),
+    menuItem("Move Cell Down", "Move this Cell down", () => mutate("moveDown")),
+    separator(),
+    menuItem("Delete Cell", "Delete this Cell", async () => {
+      if (cell.outputs.length > 0 && !window.confirm(`Delete Cell ${cell.id} and its output?`)) return;
+      await mutate("delete");
+    }, true),
+  );
+  contextMenuEl.hidden = false;
+  const width = contextMenuEl.offsetWidth;
+  const height = contextMenuEl.offsetHeight;
+  contextMenuEl.style.left = `${Math.max(8, Math.min(x, window.innerWidth - width - 8))}px`;
+  contextMenuEl.style.top = `${Math.max(8, Math.min(y, window.innerHeight - height - 8))}px`;
+  contextMenuEl.querySelector<HTMLButtonElement>("button")?.focus();
+}
+
 function renderCell(tab: TabState, cell: CellSnapshot): HTMLElement {
   const card = document.createElement("article");
   card.className = "noema-jupyter-cell";
   card.dataset.cellId = cell.id;
   card.dataset.active = cell.id === tab.activeCellId ? "true" : "false";
+  card.dataset.status = cell.status || "idle";
   card.tabIndex = 0;
   card.addEventListener("focus", () => {
-    if (tab.activeCellId !== cell.id) {
-      tab.activeCellId = cell.id;
-      persistTabs();
-      for (const item of workspaceEl.querySelectorAll<HTMLElement>(".noema-jupyter-cell")) {
-        item.dataset.active = item === card ? "true" : "false";
-      }
-    }
+    if (tab.activeCellId !== cell.id) activateCell(tab, cell.id);
   });
   card.addEventListener("click", () => card.focus());
+  card.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    openCellMenu(tab, cell, event.clientX, event.clientY);
+  });
 
   const head = document.createElement("header");
   head.className = "noema-jupyter-cell-header";
@@ -558,28 +685,10 @@ function renderCell(tab: TabState, cell: CellSnapshot): HTMLElement {
   );
   const actions = document.createElement("div");
   actions.className = "noema-jupyter-cell-actions";
-  actions.append(
-    button("Run", "Run only this Cell (Ctrl+Enter)", () => { tab.activeCellId = cell.id; return execute("current"); }),
-    button("Next", "Run and select next (Shift+Enter)", async () => {
-      tab.activeCellId = cell.id;
-      await execute("current");
-      const next = tab.snapshot?.cells[cell.index + 1];
-      if (next) selectCell(tab, next.id, true);
-    }),
-    button("Above", "Run this Cell and all above", () => { tab.activeCellId = cell.id; return execute("above"); }),
-    button("Below", "Run this Cell and all below", () => { tab.activeCellId = cell.id; return execute("below"); }),
-    button("Clear", "Clear this output", () => { tab.activeCellId = cell.id; return clearOutput(false); }),
-    button("Source", "Open source in Emacs (Cmd+Enter)", () => openSource(cell)),
-    button("＋", "Insert Cell below", () => { tab.activeCellId = cell.id; return mutate("insertBelow"); }),
-    button("Duplicate", "Duplicate Cell", () => { tab.activeCellId = cell.id; return mutate("duplicate"); }),
-    button("↑", "Move Cell up", () => { tab.activeCellId = cell.id; return mutate("moveUp"); }),
-    button("↓", "Move Cell down", () => { tab.activeCellId = cell.id; return mutate("moveDown"); }),
-    button("Delete", "Delete Cell", async () => {
-      tab.activeCellId = cell.id;
-      if (cell.outputs.length > 0 && !window.confirm(`Delete Cell ${cell.id} and its output?`)) return;
-      await mutate("delete");
-    }, "is-danger"),
-  );
+  actions.append(button("•••", "Cell actions", () => {
+    const rect = actions.getBoundingClientRect();
+    openCellMenu(tab, cell, rect.right, rect.bottom + 4);
+  }, "noema-jupyter-more-button"));
   head.append(prompt, identity, badges, actions);
 
   const output = document.createElement("div");
@@ -592,6 +701,18 @@ function renderCell(tab: TabState, cell: CellSnapshot): HTMLElement {
       widgetOutputs: cell.widgetOutputs,
       mountWidget,
     }));
+    requestAnimationFrame(() => {
+      if (!output.isConnected || output.hidden
+          || cell.outputUi?.outputExpanded === true || output.scrollHeight <= 360) return;
+      output.classList.add("is-auto-collapsed");
+      const expand = button("Show full output", "Expand long output", async () => {
+        output.classList.remove("is-auto-collapsed");
+        expand.remove();
+        cell.outputUi = { ...cell.outputUi, outputExpanded: true, outputFolded: false };
+        await saveOutputUi(tab, cell);
+      }, "noema-jupyter-output-expander");
+      output.append(expand);
+    });
   } else {
     const empty = document.createElement("div");
     empty.className = "noema-jupyter-output-empty";
@@ -626,24 +747,7 @@ function renderCell(tab: TabState, cell: CellSnapshot): HTMLElement {
     });
     output.append(stdin);
   }
-  const foot = document.createElement("footer");
-  foot.className = "noema-jupyter-cell-footer";
-  foot.append(button(output.hidden ? "Show output" : "Fold output", "Toggle output visibility", async () => {
-    output.hidden = !output.hidden;
-    cell.outputUi = {
-      ...cell.outputUi,
-      outputFolded: output.hidden,
-    };
-    try {
-      await api.jupyterCell.saveScriptCellOutputUi(documentParams(tab, {
-        cellId: cell.id,
-        outputFolded: output.hidden,
-        outputExpanded: cell.outputUi?.outputExpanded === true,
-      }));
-    } catch {}
-    renderWorkspace();
-  }));
-  card.append(head, output, foot);
+  card.append(head, output);
   return card;
 }
 
@@ -673,7 +777,7 @@ function renderManager(): void {
   const serverRow = document.createElement("div");
   serverRow.className = "noema-jupyter-manager-row";
   serverRow.append(
-    Object.assign(document.createElement("strong"), { textContent: "Emacs Jupyter" }),
+    Object.assign(document.createElement("strong"), { textContent: "Noema Jupyter" }),
     Object.assign(document.createElement("span"), { textContent: text(manager.server?.status) || "connecting" }),
   );
   server.append(serverRow);
@@ -687,6 +791,7 @@ function renderManager(): void {
     server.append(row);
   }
 
+  const tab = activeTab();
   const running = panelSection(`Running Kernels (${manager.kernels?.length || 0})`);
   for (const kernel of manager.kernels || []) {
     const row = document.createElement("div");
@@ -697,9 +802,11 @@ function renderManager(): void {
     detail.textContent = `${text(kernel.status) || "unknown"} · ${kernel.sessionIds?.length || 0} session · ${kernel.running || 0} task`;
     const actions = document.createElement("div");
     const id = text(kernel.kernelId || kernel.id);
+    if (tab && text(kernel.file) === tab.ref.scriptFile) {
+      actions.append(button("Attach", "Attach this script to its Noema kernel", () => switchKernel(`connect:${id}`)));
+    }
     actions.append(
-      button("Attach", "Attach the active script session", () => switchKernel(`connect:${id}`)),
-      button("Stop", "Shut down this global kernel", async () => {
+      button("Stop", "Shut down this Noema kernel", async () => {
         if (!id) return;
         await api.jupyterCell.kernelControl({ kernelId: id, action: "shutdown" });
         await loadManager(true);
@@ -713,9 +820,10 @@ function renderManager(): void {
   if (!manager.kernels?.length) running.append(Object.assign(document.createElement("small"), { textContent: "No running kernels" }));
 
   const specs = panelSection("Kernel Specs");
-  const tab = activeTab();
   for (const spec of tab ? kernelOptions.get(tab.ref.scriptFile) || [] : []) {
-    const row = button(spec.displayName || spec.name, `Start ${spec.name}`, () => switchKernel(`start:${spec.name}`));
+    if ((spec.kind || "start") !== "start") continue;
+    const value = text(spec.value || spec.name);
+    const row = button(spec.label || spec.displayName || spec.name, `Start ${value}`, () => switchKernel(`start:${value}`));
     row.className = "noema-jupyter-spec-button";
     specs.append(row);
   }
@@ -802,36 +910,43 @@ function renderWorkspace(): void {
   kernelStatusEl.textContent = tab?.snapshot
     ? `${tab.ref.kernel} · ${tab.ref.session} · ${tab.snapshot.kernelStatus}`
     : "No kernel";
-  const noKernel = document.createElement("option");
-  noKernel.value = "none:";
-  noKernel.textContent = "No Kernel";
-  const specs = document.createElement("optgroup");
-  specs.label = "Start New Kernel";
+  const optionGroups = new Map<string, HTMLOptGroupElement>();
+  const optionNodes: Array<HTMLOptionElement | HTMLOptGroupElement> = [];
+  const chooseKernel = Object.assign(document.createElement("option"), {
+    value: "",
+    textContent: "Select and start a kernel…",
+    disabled: true,
+  });
+  optionNodes.push(chooseKernel);
   for (const item of tab ? kernelOptions.get(tab.ref.scriptFile) || [] : []) {
-    specs.append(Object.assign(document.createElement("option"), {
-      value: `start:${item.name}`,
-      textContent: item.displayName || item.name,
-    }));
+    const kind = item.kind || "start";
+    const value = text(item.value ?? item.name);
+    const option = Object.assign(document.createElement("option"), {
+      value: `${kind}:${value}`,
+      textContent: item.label || item.displayName || item.name,
+    });
+    if (kind === "none") {
+      optionNodes.push(option);
+      continue;
+    }
+    const groupName = item.group || (kind === "connect" ? "Running Kernel" : "Kernel Specs");
+    let group = optionGroups.get(groupName);
+    if (!group) {
+      group = document.createElement("optgroup");
+      group.label = groupName;
+      optionGroups.set(groupName, group);
+      optionNodes.push(group);
+    }
+    group.append(option);
   }
-  const running = document.createElement("optgroup");
-  running.label = "Connect to Running Kernel";
-  for (const item of manager.kernels || []) {
-    if (tab && text(item.language) && text(item.language).toLowerCase() !== tab.ref.language.toLowerCase()) continue;
-    const id = text(item.kernelId || item.id);
-    running.append(Object.assign(document.createElement("option"), {
-      value: `connect:${id}`,
-      textContent: `${text(item.kernelSpecName)} · ${text(item.status)} · ${id.slice(-6)}`,
-    }));
-  }
-  kernelSelectEl.replaceChildren(noKernel, specs, running);
-  kernelSelectEl.value = tab?.ref.kernelId
-    ? `connect:${tab.ref.kernelId}`
-    : (tab?.ref.kernelSpecName || tab?.ref.kernel)
-      ? `start:${tab?.ref.kernelSpecName || tab?.ref.kernel}`
-      : "none:";
+  kernelSelectEl.replaceChildren(...optionNodes);
+  kernelSelectEl.value = selectedKernelOptionValue(
+    tab?.ref.kernelId,
+    tab?.snapshot?.kernelStatus,
+  );
   kernelSelectEl.disabled = !tab?.snapshot;
   if (!tab) {
-    workspaceEl.innerHTML = `<div class="noema-jupyter-empty"><strong>No Jupyter document</strong><span>Open a .cell script in Emacs and press C-c i p.</span></div>`;
+    workspaceEl.innerHTML = `<div class="noema-jupyter-empty"><strong>No Jupyter document</strong><span>Open any ipynb in Emacs and press C-c C-p.</span></div>`;
     return;
   }
   if (tab.loading && !tab.snapshot) {
@@ -996,6 +1111,36 @@ window.addEventListener("aaronnote:jupyter-cell", (event) => {
     window.clearTimeout(refreshTimer);
     refreshTimer = window.setTimeout(() => void loadTab(tab, true), 90);
   }
+  if (detail.phase === "start" || detail.phase === "end") {
+    void loadManager(false).then(() => renderTasks());
+  }
+});
+
+window.addEventListener("aaronnote:jupyter-session", (event) => {
+  const snapshot = (event as CustomEvent<DocumentSnapshot>).detail;
+  const scriptFile = text(snapshot?.document?.scriptFile);
+  const tab = tabs.get(scriptFile)
+    || Array.from(tabs.values()).find((item) => item.ref.scriptFile === scriptFile);
+  if (!tab || !snapshot?.document) return;
+  tab.snapshot = snapshot;
+  tab.ref = { ...tab.ref, ...snapshot.document };
+  if (!snapshot.cells.some((cell) => cell.id === tab.activeCellId)) {
+    tab.activeCellId = snapshot.cells[0]?.id || "";
+  }
+  persistTabs();
+  render();
+  void Promise.all([loadManager(false), loadKernelOptions(tab)]).then(() => render());
+});
+
+window.addEventListener("aaronnote:connection", (event) => {
+  const detail = (event as CustomEvent<{ status?: string }>).detail;
+  if (detail?.status !== "connected") return;
+  // Reconcile once after an actual socket connection/reconnection.  Normal
+  // synchronization is carried by jupyter-cell/jupyter-session events.
+  void loadManager(false);
+  for (const tab of tabs.values()) {
+    void Promise.all([loadKernelOptions(tab), loadTab(tab, false)]);
+  }
 });
 
 const query = new URLSearchParams(location.search);
@@ -1022,10 +1167,8 @@ if (initial) {
   if (tab) void loadTab(tab, false);
 }
 void loadManager(true);
-managerTimer = window.setInterval(() => void loadManager(true), 2500);
 
 window.addEventListener("beforeunload", () => {
-  window.clearInterval(managerTimer);
   persistTabs();
   disposeOutputs();
   removeThemeRuntime();

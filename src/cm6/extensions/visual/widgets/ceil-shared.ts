@@ -20,6 +20,9 @@ export function ceilLanguageForKernel(kernel: string, requested = ""): string {
   const value = String(kernel || "").toLowerCase();
   if (value.includes("lean") || explicit === "lean" || explicit === "lean4") return "lean4";
   if (["bash", "sh", "shell", "zsh"].includes(explicit)) return "bash";
+  // Sage is a kernelspec in the Python language family.  Keep it out of
+  // @@cell language/session identity and hidden notebook filenames.
+  if (["sage", "sagemath", "py", "python3"].includes(explicit)) return "python";
   if (explicit) return explicit;
   if (value.includes("sage")) return "python";
   if (value.includes("python") || value === "py" || value === "python3") return "python";

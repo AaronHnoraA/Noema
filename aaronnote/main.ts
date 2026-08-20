@@ -223,7 +223,7 @@ const serverReader = { ...serverReaderDefaults, ...(injectedServerReader || {}) 
 const passiveServerReader = serverReaderMode && !serverReader.editingAids;
 const initialReadOnly = serverReaderMode || initialParams.get("readonly") === "1" || initialParams.get("readonly") === "true";
 const desktopMode = standaloneMode() && Boolean(window.noemaDesktop);
-const jupyterExecutionAvailable = !desktopMode && !serverReaderMode;
+const jupyterExecutionAvailable = !serverReaderMode;
 const desktopPlatform = window.noemaDesktop?.platform || (/Mac/.test(navigator.platform) ? "darwin" : "");
 const platformLabels = desktopPlatformLabels(desktopPlatform);
 document.body.dataset.hostMode = serverReaderMode ? "server" : desktopMode ? "desktop" : "emacs";
@@ -2759,7 +2759,7 @@ async function ensureJupyterScript(cell: JupyterPanelCell, allCells = scanJupyte
 
 async function runJupyterCell(cell: JupyterPanelCell, allCells = scanJupyterCells()): Promise<boolean> {
   if (!jupyterExecutionAvailable) {
-    setStatus("Jupyter execution requires the Emacs backend");
+    setStatus("Jupyter execution is unavailable in reader mode");
     return false;
   }
   const key = jupyterCellKey(cell);
@@ -2830,7 +2830,7 @@ async function runJupyterCell(cell: JupyterPanelCell, allCells = scanJupyterCell
 
 async function runJupyterCells(mode: "all" | "above" | "below" | "section"): Promise<void> {
   if (!jupyterExecutionAvailable) {
-    setStatus("Jupyter execution requires the Emacs backend");
+    setStatus("Jupyter execution is unavailable in reader mode");
     return;
   }
   if (!currentFile) {
@@ -3110,7 +3110,7 @@ function jupyterCellFromPointer(event: MouseEvent, fallbackToSelection = true): 
 
 async function openJupyterCellSource(cell: JupyterPanelCell): Promise<void> {
   if (!jupyterExecutionAvailable) {
-    setStatus("Cell editing requires the Emacs backend");
+    setStatus("Cell editing is unavailable in reader mode");
     return;
   }
   if (!currentFile) {
@@ -3131,7 +3131,7 @@ async function openJupyterCellSource(cell: JupyterPanelCell): Promise<void> {
 async function deleteJupyterCellBlock(cell: JupyterPanelCell): Promise<void> {
   if (rejectReadOnlyAction("Read-only pane")) return;
   if (!jupyterExecutionAvailable) {
-    setStatus("Cell editing requires the Emacs backend");
+    setStatus("Cell editing is unavailable in reader mode");
     return;
   }
   if (!currentFile) {
@@ -10052,7 +10052,7 @@ if (!jupyterExecutionAvailable) {
   for (const control of jupyterPanel.querySelectorAll<HTMLButtonElement>("[data-jupyter-action]")) {
     if (control.dataset.jupyterAction === "refresh") continue;
     control.disabled = true;
-    control.title = "Jupyter execution requires the Emacs backend";
+    control.title = "Jupyter execution is unavailable in reader mode";
   }
 }
 jupyterPanel.addEventListener("click", (event) => {

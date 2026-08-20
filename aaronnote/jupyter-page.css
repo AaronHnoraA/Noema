@@ -114,8 +114,40 @@ button { font: inherit; }
 .noema-jupyter-badges span:nth-child(2) { background: #513c1f; color: #ffc872; }
 .noema-jupyter-cell-actions { display: flex; gap: 4px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }
 .noema-jupyter-cell-actions button, .noema-jupyter-cell-footer button { padding: 3px 7px; font-size: 11px; }
-.noema-jupyter-output { min-height: 55px; padding: 13px 16px; overflow: auto; background: var(--aaron-ui-page, #111721); }
-.noema-jupyter-output .jp-OutputArea { color: inherit; }
+.noema-jupyter-output {
+  min-height: 55px; padding: 13px 16px; overflow: auto; background: var(--aaron-ui-page, #111721);
+  /* OutputArea normally inherits these tokens from JupyterLab's application
+     shell.  The Noema workspace is standalone, so define the compact subset
+     used by rendermime instead of leaving prompt widths and text metrics as
+     unresolved var() expressions. */
+  --jp-code-font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --jp-code-font-size: 12px;
+  --jp-code-line-height: 1.5;
+  --jp-code-padding: 4px;
+  --jp-border-width: 1px;
+  --jp-content-font-color0: #f4f7fc;
+  --jp-content-font-color1: #e4e9f2;
+  --jp-content-font-color2: #b6c0d3;
+  --jp-content-font-color3: #8592a8;
+  --jp-content-link-color: #8fd8ff;
+  --jp-layout-color0: transparent;
+  --jp-layout-color1: #171f2f;
+  --jp-layout-color2: #1e2638;
+  --jp-border-color1: #435574;
+  --jp-border-color2: #37445e;
+}
+.noema-jupyter-output .jp-OutputArea { width: 100%; color: inherit; }
+/* The Noema card header already owns the execution count.  JupyterLab's
+   second Out[n] gutter is redundant here and, without the full Lab notebook
+   shell, used to collapse into the misleading "[…]" seen beside results. */
+.noema-jupyter-output :is(.jp-OutputPrompt, .jp-OutputArea-promptOverlay) { display: none; }
+.noema-jupyter-output .jp-OutputArea-child { display: block; }
+.noema-jupyter-output .jp-OutputArea-output { width: 100%; padding: 0; }
+.noema-jupyter-output .jp-OutputArea-executeResult .jp-RenderedText.jp-OutputArea-output {
+  padding-top: 0;
+  border-top: 0;
+}
+.noema-jupyter-output .jp-RenderedText { padding-left: 0; }
 .noema-jupyter-output-empty { display: grid; place-items: center; min-height: 44px; color: var(--aaron-ui-text-muted, #8993a6); font-size: 12px; }
 .noema-jupyter-stdin { display: flex; align-items: center; gap: 7px; margin-top: 10px; padding: 8px; border: 1px solid #f37726; border-radius: 7px; }
 .noema-jupyter-stdin label { color: #f7b27f; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }

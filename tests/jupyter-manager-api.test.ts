@@ -4,7 +4,7 @@ import { describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
 // @ts-expect-error no declaration file is needed for this route table.
 import { createJupyterApiHandlers } from "../server/Features/Jupyter/api.mjs";
 
-describe("Emacs-owned Jupyter manager API", () => {
+describe("Noema-owned Jupyter manager API", () => {
   test("exposes manager, script, session, and opaque kernel routes", async () => {
     const managerSnapshot = vi.fn(async () => ({ ok: true, kernels: [] }));
     const documentSnapshot = vi.fn(async (body: unknown) => ({ ok: true, body }));

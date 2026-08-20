@@ -11,7 +11,8 @@ import crypto from "node:crypto";
 import * as wireProtocol from "./wire-protocol.mjs";
 import { noop, makeLogger } from "./util.mjs";
 
-function formConnectionString(config, channel) {
+/** Build the ZMQ endpoint for one Jupyter channel of a connection file. */
+export function formConnectionString(config, channel) {
   const portDelimiter = config.transport === "tcp" ? ":" : "-";
   const port = config[`${channel}_port`];
   if (!port) throw new Error(`Port not found for channel "${channel}"`);
@@ -72,6 +73,9 @@ function ensureIOPubContent(message) {
  * kernel connection info (each caller gets an independent ZMQ identity).
  */
 export class RawSocket {
+  /** Consecutive undecodable frames on one channel before it is declared broken. */
+  static MAX_CONSECUTIVE_BAD_FRAMES = 16;
+
   onopen = noop;
   onerror = noop;
   onclose = noop;
@@ -81,6 +85,8 @@ export class RawSocket {
 
   #receiveHooks = [];
   #sendHooks = [];
+  /** Consecutive undecodable frames per channel; reset by any good frame. */
+  #badFrames = new Map();
   #msgChain = Promise.resolve();
   #sendChain = Promise.resolve();
   #channels;
@@ -136,6 +142,26 @@ export class RawSocket {
   addSendHook(hook) { this.#sendHooks.push(hook); }
   removeSendHook(hook) { this.#sendHooks = this.#sendHooks.filter((h) => h !== hook); }
 
+  /**
+   * Report a channel we can no longer read as a socket-level failure, so
+   * consumers (`RawKernel`, the widget WS bridge) see an error instead of a
+   * connection that looks healthy but has gone deaf.
+   */
+  #failChannel(channel, ex) {
+    if (this.#closed) return;
+    // `close()` rather than just setting #closed: dispose() is a no-op once
+    // #closed is set, so short-circuiting it here would strand all four ZMQ
+    // sockets for the life of the process.
+    this.close();
+    const error = new Error(`Jupyter channel ${channel} failed: ${ex?.message || ex}`);
+    try {
+      this.onerror({ error, message: error.message, type: "error", target: this });
+    } catch { /* consumer handler threw; the close notification still runs */ }
+    try {
+      this.onclose({ wasClean: false, code: 1006, reason: error.message, target: this });
+    } catch { /* ignore */ }
+  }
+
   #generateChannel(connection, channel, ctor) {
     const result = ctor();
     result.connect(formConnectionString(connection, channel));
@@ -183,9 +209,27 @@ export class RawSocket {
   }
 
   #onIncomingMessage(channel, data) {
-    const message = this.#closed
-      ? {}
-      : wireProtocol.decode(data, this.#connection.key, this.#connection.signature_scheme);
+    if (this.#closed) return;
+    // `decode` throws on a short frame, a missing delimiter, or a signature
+    // mismatch. Letting that escape ends the `for await` loop in
+    // #processSocketMessages, which silently kills this channel for the rest
+    // of the kernel's life while the kernel still reports as idle. Drop the
+    // bad frame and keep reading; only a sustained run of them is treated as
+    // a broken channel.
+    let message;
+    try {
+      message = wireProtocol.decode(data, this.#connection.key, this.#connection.signature_scheme);
+    } catch (ex) {
+      const seen = (this.#badFrames.get(channel) || 0) + 1;
+      this.#badFrames.set(channel, seen);
+      this.#log.error(`Discarding undecodable frame #${seen} on channel ${channel}`, ex);
+      if (seen >= RawSocket.MAX_CONSECUTIVE_BAD_FRAMES) {
+        this.#log.error(`Channel ${channel} exceeded the bad-frame limit; closing the connection`);
+        this.#failChannel(channel, ex);
+      }
+      return;
+    }
+    this.#badFrames.delete(channel);
     message.channel = channel;
 
     if (this.#receiveHooks.length) {

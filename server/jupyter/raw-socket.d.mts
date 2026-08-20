@@ -36,3 +36,9 @@ export class RawSocket {
   addSendHook(hook: (data: unknown, cb?: (err?: Error) => void) => Promise<void>): void;
   removeSendHook(hook: (data: unknown, cb?: (err?: Error) => void) => Promise<void>): void;
 }
+
+/** Build the ZMQ endpoint for one Jupyter channel of a connection file. */
+export function formConnectionString(
+  config: Pick<KernelConnectionInfo, "transport" | "ip"> & Record<string, unknown>,
+  channel: string,
+): string;

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
-import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createJupyterCellService, durationFromEnv, jupyterWidgetCommOpenP } from "../server/lib/jupyter-cell.mjs";
@@ -26,6 +26,59 @@ async function withService(run: (ctx: {
 }
 
 describe("jupyter cell service (no kernel)", () => {
+  test("session selection publishes the authoritative document snapshot", async () => {
+    const root = await mkdtemp(join(tmpdir(), "noema-jcell-session-event-"));
+    const published: Array<{ event: string; payload: Record<string, unknown> }> = [];
+    const service = createJupyterCellService({
+      runtimeRoot: root,
+      noteRoot: root,
+      workspaceRoot: root,
+      publish(event: string, payload: Record<string, unknown>) {
+        published.push({ event, payload });
+      },
+    });
+    const note = join(root, "note.md");
+    await writeFile(note, "# note\n", "utf8");
+    try {
+      const opened = await service.openScript({
+        file: note,
+        cellId: "cell-a",
+        kernel: "python3",
+        session: "default",
+        language: "python",
+        storage: "ipynb",
+        open: false,
+        cells: [{ cellId: "cell-a", id: "cell-a", code: "answer = 42" }],
+      });
+      const snapshot = await service.sessionSelect({ scriptFile: opened.file, kind: "none" });
+      expect(snapshot).toMatchObject({
+        kernelStatus: "no-kernel",
+        document: { scriptFile: opened.file, kernel: "", kernelSpecName: "" },
+      });
+      expect(published).toContainEqual({
+        event: "jupyter-session",
+        payload: snapshot,
+      });
+      published.length = 0;
+      await service.scriptAction({
+        scriptFile: opened.file,
+        cellId: "cell-a",
+        action: "insertBelow",
+      });
+      expect(published).toEqual([
+        expect.objectContaining({
+          event: "jupyter-session",
+          payload: expect.objectContaining({
+            document: expect.objectContaining({ scriptFile: opened.file }),
+          }),
+        }),
+      ]);
+    } finally {
+      await service.shutdown().catch(() => {});
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("creates a fresh packaged-state runtime directory before registry use", async () => {
     const root = await mkdtemp(join(tmpdir(), "noema-jcell-runtime-root-"));
     const stateRoot = await mkdtemp(join(tmpdir(), "noema-jcell-state-root-"));
@@ -68,7 +121,15 @@ describe("jupyter cell service (no kernel)", () => {
       },
     });
     try {
-      await service.kernels({ file: note });
+      const catalog = await service.kernels({ file: note });
+      expect(catalog.choices).toEqual(expect.arrayContaining([
+        expect.objectContaining({ kind: "start", name: "python3", group: "Kernel Specs" }),
+        expect.objectContaining({ kind: "start", name: "lean4", group: "Kernel Specs" }),
+      ]));
+      expect(catalog.selections).toEqual(expect.arrayContaining([
+        expect.objectContaining({ kind: "none", value: "", label: "No Kernel" }),
+        expect.objectContaining({ kind: "start", value: "python3" }),
+      ]));
       const result = await service.openScript({
         file: note,
         cellId: "cell-a",
@@ -226,6 +287,122 @@ describe("jupyter cell service (no kernel)", () => {
     });
   });
 
+  test("Noema owns document snapshots, mutations, and manager state", async () => {
+    await withService(async ({ service, note }) => {
+      const opened = await service.openScript({
+        file: note,
+        cellId: "cell-a",
+        kernel: "python3",
+        session: "default",
+        language: "python",
+        open: false,
+        cells: [
+          { cellId: "cell-a", code: "a = 1" },
+          { cellId: "cell-b", code: "b = 2" },
+        ],
+      });
+      const snapshot = await service.documentSnapshot({ scriptFile: opened.file });
+      expect(snapshot.server).toBeUndefined();
+      expect(snapshot.document).toMatchObject({
+        scriptFile: opened.file,
+        sourceFile: note,
+        kernelSpecName: "python3",
+      });
+      expect(snapshot.cells.map((cell: { id: string }) => cell.id)).toEqual(["cell-a", "cell-b"]);
+      expect(snapshot.kernelStatus).toBe("not-started");
+
+      await service.scriptAction({
+        scriptFile: opened.file,
+        cellId: "cell-a",
+        action: "moveDown",
+      });
+      const moved = await service.documentSnapshot({ scriptFile: opened.file });
+      expect(moved.cells.map((cell: { id: string }) => cell.id)).toEqual(["cell-b", "cell-a"]);
+
+      const split = await service.scriptAction({
+        scriptFile: opened.file,
+        cellId: "cell-a",
+        action: "split",
+        offset: 1,
+      });
+      const afterSplit = await service.documentSnapshot({ scriptFile: opened.file });
+      expect(afterSplit.cells.map((cell: { id: string }) => cell.id)).toEqual([
+        "cell-b", "cell-a", split.activeCellId,
+      ]);
+      await service.scriptAction({
+        scriptFile: opened.file,
+        cellId: split.activeCellId,
+        action: "mergeAbove",
+      });
+      const afterMerge = await service.documentSnapshot({ scriptFile: opened.file });
+      expect(afterMerge.cells.map((cell: { id: string }) => cell.id)).toEqual(["cell-b", "cell-a"]);
+
+      const manager = await service.managerSnapshot();
+      expect(manager.server).toMatchObject({ status: "ready", owned: true, owner: "noema" });
+      expect(manager.sessions).toHaveLength(1);
+      expect(manager.kernels).toEqual([]);
+    });
+  });
+
+  test("manages an ordinary ipynb without Noema note metadata", async () => {
+    await withService(async ({ service, note }) => {
+      const notebook = join(dirname(note), "standalone.ipynb");
+      await writeFile(notebook, `${JSON.stringify({
+        cells: [{
+          cell_type: "code",
+          execution_count: null,
+          metadata: {},
+          outputs: [],
+          source: "value = 1\n",
+        }],
+        metadata: {},
+        nbformat: 4,
+        nbformat_minor: 4,
+      }, null, 2)}\n`, "utf8");
+
+      const snapshot = await service.documentSnapshot({ scriptFile: notebook });
+      expect(snapshot.document).toMatchObject({
+        scriptFile: notebook,
+        sourceFile: notebook,
+        kernelSpecName: "python3",
+      });
+      expect(snapshot.cells).toHaveLength(1);
+      expect(snapshot.cells[0]).toMatchObject({ id: "cell-1", code: "value = 1\n" });
+      await service.scriptAction({
+        scriptFile: notebook,
+        cellId: "cell-1",
+        action: "insertBelow",
+      });
+      const changed = await service.documentSnapshot({ scriptFile: notebook });
+      expect(changed.cells).toHaveLength(2);
+
+      const markdown = await service.scriptAction({
+        scriptFile: notebook,
+        cellId: "cell-1",
+        action: "insertBelow",
+        cellType: "markdown",
+      });
+      const persisted = JSON.parse(await readFile(notebook, "utf8"));
+      const markdownCell = persisted.cells.find(
+        (cell: { id: string }) => cell.id === markdown.activeCellId,
+      );
+      expect(persisted.cells[0]).not.toHaveProperty("id");
+      expect(persisted.nbformat_minor).toBe(4);
+      expect(persisted.metadata.language_info.name).toBe("python");
+      expect(persisted.metadata.kernelspec.language).toBe("python");
+      expect(markdown.activeCellId).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
+      expect(markdown.activeCellId).not.toBe("cell-1");
+      expect(markdownCell).toMatchObject({
+        cell_type: "markdown",
+        id: markdown.activeCellId,
+        metadata: {},
+        source: "",
+      });
+      expect(markdownCell).not.toHaveProperty("execution_count");
+      expect(markdownCell).not.toHaveProperty("outputs");
+    });
+  });
+
   test("openScript preserves existing notebook cells omitted by a partial context", async () => {
     await withService(async ({ service, note }) => {
       await service.openScript({
@@ -344,22 +521,22 @@ describe("jupyter cell service (no kernel)", () => {
     });
   });
 
-  test("openScript keeps one notebook per language/session when kernel changes", async () => {
+  test("openScript preserves the notebook-selected kernel for a language/session", async () => {
     await withService(async ({ service, note }) => {
-      await service.openScript({
+      const sageOpen = await service.openScript({
         file: note,
         cellId: "cell-a",
-        kernel: "python3",
+        kernel: "sagemath-10.9",
         session: "default",
-        language: "python",
+        language: "sage",
         storage: "ipynb",
         open: false,
         cells: [{ cellId: "cell-a", id: "cell-a", code: "x = 1" }],
       });
-      await service.openScript({
+      const normalizedOpen = await service.openScript({
         file: note,
         cellId: "cell-a",
-        kernel: "sagemath-10.9",
+        kernel: "python3",
         session: "default",
         language: "python",
         storage: "ipynb",
@@ -374,11 +551,67 @@ describe("jupyter cell service (no kernel)", () => {
         file: note, cellId: "cell-a", kernel: "sagemath-10.9", session: "default", language: "python",
       });
       const script = await readFile(scriptPath, "utf8");
+      const notebook = JSON.parse(script);
+      expect(sageOpen.kernel).toBe("sagemath-10.9");
+      expect(normalizedOpen.kernel).toBe("sagemath-10.9");
       expect(pythonRead.file).toBe(scriptPath);
       expect(sageRead.file).toBe(scriptPath);
+      expect(pythonRead.kernel).toBe("sagemath-10.9");
+      expect(sageRead.kernel).toBe("sagemath-10.9");
       expect(pythonRead.code).toBe("x = 2");
       expect(sageRead.code).toBe("x = 2");
-      expect(JSON.parse(script).cells[0].source).toBe("x = 2");
+      expect(notebook.cells[0].source).toBe("x = 2");
+      expect(notebook.metadata.kernelspec.name).toBe("sagemath-10.9");
+      expect(notebook.metadata.language_info.name).toBe("python");
+    });
+  });
+
+  test("migrates a legacy Sage-named notebook to its Python language name", async () => {
+    await withService(async ({ service, note }) => {
+      const legacyPath = join(note, "..", ".cell", "note.sage.default.ipynb");
+      const canonicalPath = join(note, "..", ".cell", "note.python.default.ipynb");
+      await service.openScript({
+        file: note,
+        cellId: "legacy-cell",
+        kernel: "sagemath",
+        session: "default",
+        language: "sage",
+        storage: "ipynb",
+        open: false,
+        cells: [{ cellId: "legacy-cell", code: "old_value = 1" }],
+      });
+      // Recreate the pre-migration name to exercise a real existing notebook.
+      const legacyNotebook = JSON.parse(await readFile(canonicalPath, "utf8"));
+      legacyNotebook.cells[0].metadata.noema = {
+        kernel: "sagemath",
+        session: "default",
+        language: "sage",
+      };
+      await writeFile(legacyPath, `${JSON.stringify(legacyNotebook, null, 2)}\n`, "utf8");
+      await rm(canonicalPath);
+
+      const opened = await service.openScript({
+        file: note,
+        cellId: "new-cell",
+        kernel: "sagemath",
+        session: "default",
+        language: "sage",
+        storage: "ipynb",
+        open: false,
+        cells: [{ cellId: "new-cell", code: "new_value = 2" }],
+      });
+      expect(opened.file).toBe(canonicalPath);
+      expect(opened.migratedFrom).toBe(legacyPath);
+      await expect(stat(legacyPath)).rejects.toMatchObject({ code: "ENOENT" });
+      const notebook = JSON.parse(await readFile(canonicalPath, "utf8"));
+      expect(notebook.metadata.kernelspec.name).toBe("sagemath");
+      expect(notebook.metadata.language_info.name).toBe("python");
+      expect(notebook.cells.find(
+        (cell: { id: string }) => cell.id === "legacy-cell",
+      ).metadata.noema.language).toBe("python");
+      expect(notebook.cells.map((cell: { id: string }) => cell.id)).toEqual([
+        "new-cell", "legacy-cell",
+      ]);
     });
   });
 

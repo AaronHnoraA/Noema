@@ -10,11 +10,11 @@ describe("Jupyter project defaults", () => {
     });
   });
 
-  test("derives the stable Sage kernel id from project language", () => {
+  test("keeps Sage as a Python-language kernelspec", () => {
     expect(jupyterDefaultsFromEnv({
       AARONNOTE_JUPYTER_DEFAULT_LANGUAGE: "sage",
     })).toEqual({
-      language: "sage",
+      language: "python",
       kernel: "sagemath",
       session: "default",
     });

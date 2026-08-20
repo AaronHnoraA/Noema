@@ -22,6 +22,77 @@ const pythonKernelRunner = join(aaronnoteRoot, "jupyter", "bin", "python-jupyter
 
 describeIfKernel("kernel lifecycle (real ipykernel)", () => {
   test(
+    "Noema executes an ordinary ipynb in place without a Markdown sidecar",
+    async () => {
+      const noteRoot = await mkdtemp(join(tmpdir(), "aaronnote-ordinary-ipynb-"));
+      const service = createJupyterCellService({
+        runtimeRoot: aaronnoteRoot,
+        noteRoot,
+        workspaceRoot: noteRoot,
+        zmq,
+      });
+      const notebook = join(noteRoot, "ordinary.ipynb");
+      await writeFile(notebook, `${JSON.stringify({
+        cells: [{
+          cell_type: "code",
+          execution_count: null,
+          id: "ordinary-cell",
+          metadata: {},
+          outputs: [],
+          source: "print(6 * 7)\n",
+        }],
+        metadata: {
+          kernelspec: { display_name: "Python 3", language: "python", name: "python3" },
+          language_info: { name: "python" },
+        },
+        nbformat: 4,
+        nbformat_minor: 5,
+      }, null, 2)}\n`, "utf8");
+
+      try {
+        await service.sessionSelect({
+          scriptFile: notebook,
+          kind: "start",
+          kernelSpecName: "python3",
+        });
+        const executed = await service.scriptAction({
+          scriptFile: notebook,
+          cellId: "ordinary-cell",
+          action: "run-current",
+        });
+        expect(executed.ok).toBe(true);
+        expect(executed.results[0]).toMatchObject({ status: "ok", file: notebook });
+        const saved = JSON.parse(await readFile(notebook, "utf8"));
+        expect(saved.cells[0].execution_count).toBe(1);
+        expect(saved.cells[0].outputs[0]).toMatchObject({
+          output_type: "stream",
+          text: "42\n",
+        });
+        const catalog = await service.kernels({ file: notebook, scriptFile: notebook });
+        expect(catalog.selections).toEqual(expect.arrayContaining([
+          expect.objectContaining({ kind: "start", value: "python3" }),
+          expect.objectContaining({ kind: "connect", name: "python3" }),
+        ]));
+        const inspected = await service.inspect({
+          file: notebook,
+          scriptFile: notebook,
+          // A socket consumer may briefly retain an older kernel field.  The
+          // document identity must still resolve the authoritative runtime.
+          kernel: "stale-client-value",
+          session: "default",
+          code: "len",
+          cursorPos: 3,
+        });
+        expect(inspected).toMatchObject({ supported: true, found: true });
+      } finally {
+        await service.shutdown();
+        await rm(noteRoot, { recursive: true, force: true });
+      }
+    },
+    30_000,
+  );
+
+  test(
     "task snapshots expose management metadata and restart accepts runtime id",
     async () => {
       const noteRoot = await mkdtemp(join(tmpdir(), "aaronnote-management-"));

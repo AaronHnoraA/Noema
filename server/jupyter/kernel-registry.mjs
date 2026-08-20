@@ -31,6 +31,7 @@ import { allocateKernelPorts, releaseKernelPorts } from "./kernel-ports.mjs";
 import { writeConnectionFile, spawnKernelProcess } from "./kernel-process.mjs";
 import { buildKernelEnv } from "./kernel-env.mjs";
 import { noop, makeLogger, raceTimeout } from "./util.mjs";
+import { createKernelHeartbeat } from "./kernel-heartbeat.mjs";
 
 function isProcessAlive(pid) {
   if (!pid) return false;
@@ -172,6 +173,7 @@ export function createKernelRegistry({
   stderr = process.stderr,
   kernelHost,
   baseEnvironment,
+  heartbeatIntervalMs,
 } = {}) {
   const log = makeLogger(stderr);
   /** @type {Map<string, object>} key -> record */
@@ -211,6 +213,57 @@ export function createKernelRegistry({
     });
   }
 
+  /**
+   * Mark a record dead the way the process-exit handler does, so anything
+   * waiting on the kernel (jlab rejects every in-flight future when the
+   * connection is disposed) fails promptly instead of hanging.
+   */
+  function markRecordDead(record, reason) {
+    if (record.disposed || record.status === "dead") return;
+    record.status = "dead";
+    record.lastError = reason;
+    stopHeartbeat(record);
+    try {
+      record.kernel.dispose();
+    } catch {
+      /* already gone */
+    }
+    persistSidecar();
+  }
+
+  /**
+   * Watch a raw-ZMQ record's `hb` channel.
+   *
+   * Locally spawned kernels also get one: process exit tells us a kernel is
+   * gone, but not that a live process has stopped servicing its sockets. For
+   * hosted (Emacs-broker) and attached kernels this is the *only* death
+   * signal there is — their process handles cannot report an exit.
+   */
+  function startHeartbeat(record, connectionInfo) {
+    if (record.kind === "server") return;
+    if (!connectionInfo?.hb_port) return;
+    record.heartbeat = createKernelHeartbeat({
+      connection: connectionInfo,
+      zmq,
+      ...(heartbeatIntervalMs ? { intervalMs: heartbeatIntervalMs } : {}),
+      stderr,
+      onDead: () => {
+        log.warn(`kernel for ${record.key} stopped answering its heartbeat; marking dead`);
+        markRecordDead(record, "kernel stopped answering its heartbeat");
+      },
+    });
+    record.heartbeat.start();
+  }
+
+  function stopHeartbeat(record) {
+    try {
+      record.heartbeat?.stop();
+    } catch {
+      /* ignore */
+    }
+    record.heartbeat = undefined;
+  }
+
   /** The bookkeeping every connector's record shares; `base` supplies the connector-specific half. */
   function newRecord(base) {
     return {
@@ -233,6 +286,7 @@ export function createKernelRegistry({
       totalRuns: 0,
       lastError: undefined,
       disposed: false,
+      heartbeat: undefined,
       // `kernel_info_reply` content, captured during the readiness handshake:
       // language_info (file extension, codemirror mode), banner, help_links.
       kernelInfo: null,
@@ -249,9 +303,19 @@ export function createKernelRegistry({
   async function readyRecord(record, label) {
     const connected = await waitForConnected(record.kernel, launchTimeoutMs);
     if (!connected) throw new Error(`Timed out ${label}`);
+    // `waitForConnected` is not evidence of a kernel on the raw-ZMQ path:
+    // `connect()` never fails on a ZMQ socket and the wrapper reports "open"
+    // as soon as it is constructed. `warmupKernelInfo` is the only round trip
+    // that proves something is answering, so its result decides readiness --
+    // otherwise a kernel that never bound (bad port, failed ipykernel import)
+    // gets cached as `idle` and the first execute() waits on it forever.
     const warm = await warmupKernelInfo(record.kernel, launchTimeoutMs, { stderr });
-    if (warm?.info) record.kernelInfo = warm.info;
+    if (!warm?.ok) {
+      throw new Error(`Timed out ${label} (no reply to kernel_info_request)`);
+    }
+    if (warm.info) record.kernelInfo = warm.info;
     record.status = "idle";
+    startHeartbeat(record, record.connectionInfo);
     return record;
   }
 
@@ -284,22 +348,29 @@ export function createKernelRegistry({
       process_ = hostedProcessHandle(hosted);
     } else {
       ports = await allocateKernelPorts(5);
-      connectionInfo = makeConnectionInfo(ports, kernelSpecEntry.name);
-      connectionFilePath = path.join(runtimeDir, `aaronnote-kernel-${crypto.randomUUID()}.json`);
-      await writeConnectionFile(connectionFilePath, connectionInfo);
+      try {
+        connectionInfo = makeConnectionInfo(ports, kernelSpecEntry.name);
+        connectionFilePath = path.join(runtimeDir, `aaronnote-kernel-${crypto.randomUUID()}.json`);
+        await writeConnectionFile(connectionFilePath, connectionInfo);
 
-      const env = buildKernelEnv({
-        kernelSpecEnv: kernelSpecEntry.spec.env,
-        runtimeBinDir: runtimeBinDir || venvBinDir,
-        baseEnvironment,
-      });
-      process_ = spawnKernelProcess({
-        kernelSpec: kernelSpecEntry.spec,
-        connectionFilePath,
-        env,
-        cwd,
-        stderr,
-      });
+        const env = buildKernelEnv({
+          kernelSpecEnv: kernelSpecEntry.spec.env,
+          runtimeBinDir: runtimeBinDir || venvBinDir,
+          baseEnvironment,
+        });
+        process_ = spawnKernelProcess({
+          kernelSpec: kernelSpecEntry.spec,
+          connectionFilePath,
+          env,
+          cwd,
+          stderr,
+        });
+      } catch (ex) {
+        // `usedPorts` is process-wide and nothing else will ever release
+        // these: without this the five ports are unusable until restart.
+        releaseKernelPorts(ports);
+        throw ex;
+      }
     }
 
     const { kernel, socket } = openConnection(connectionInfo, kernelSpecEntry.name);
@@ -417,6 +488,7 @@ export function createKernelRegistry({
   async function disposeRecord(record, { graceful = true } = {}) {
     if (record.disposed) return;
     record.disposed = true;
+    stopHeartbeat(record);
     if (graceful && record.owned && record.status !== "dead" && shutdownGraceMs > 0) {
       const pending = Promise.resolve()
         .then(() => record.kernel?.shutdown?.())
@@ -480,6 +552,9 @@ export function createKernelRegistry({
    * replaced too.
    */
   function rebindHostedConnection(record, { connectionInfo, generation, stateLost, runtimeId, connectionFile, pid }) {
+    // The old heartbeat is watching the previous generation's forwarded
+    // ports; readyRecord starts a fresh one for the new connection.
+    stopHeartbeat(record);
     try { record.kernel?.dispose(); } catch { /* ignore */ }
     try { record.socket?.dispose(); } catch { /* ignore */ }
     const { kernel, socket } = openConnection(connectionInfo, record.kernelName);
@@ -525,6 +600,12 @@ export function createKernelRegistry({
       if (existing) {
         record.widgetGeneration = existing.widgetGeneration + 1;
         record.stateLost = true;
+        // Releasing the dead record is not optional bookkeeping: for a hosted
+        // kernel this is the only `kernelHost.shutdown()` the Emacs broker
+        // ever receives, and without it the broker keeps the runtime entry,
+        // its connection file, and its five forwarded channels alive — one
+        // more leaked set on every self-healing relaunch.
+        await disposeRecord(existing, { graceful: false }).catch(noop);
       }
       records.set(key, record);
       persistSidecar();
@@ -544,6 +625,7 @@ export function createKernelRegistry({
       if (existing) {
         record.widgetGeneration = existing.widgetGeneration + 1;
         record.stateLost = true;
+        await disposeRecord(existing, { graceful: false }).catch(noop);
       }
       records.set(key, record);
       return record;
@@ -555,7 +637,12 @@ export function createKernelRegistry({
       if (existing && existing.status !== "dead") return existing;
 
       const record = await attachTo(key, kernelName, connectionFilePath);
-      if (existing) record.widgetGeneration = existing.widgetGeneration + 1;
+      if (existing) {
+        record.widgetGeneration = existing.widgetGeneration + 1;
+        // Attached kernels are never killed by dispose — this only releases
+        // our own connection, heartbeat, and sockets for the stale record.
+        await disposeRecord(existing, { graceful: false }).catch(noop);
+      }
       records.set(key, record);
       return record;
     },

@@ -12,6 +12,29 @@ function object(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
+const transientCellIds = new WeakMap();
+const missingCellId = Symbol("missing-cell-id");
+
+function rememberTransientCellId(cell, raw) {
+  if (Object.prototype.hasOwnProperty.call(raw, "id")) {
+    transientCellIds.set(cell, { original: raw.id });
+  } else {
+    transientCellIds.set(cell, missingCellId);
+  }
+  return cell;
+}
+
+function inheritTransientCellId(from, to) {
+  if (from && transientCellIds.has(from)) {
+    transientCellIds.set(to, transientCellIds.get(from));
+  }
+  return to;
+}
+
+function validCellId(value) {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(value);
+}
+
 export function notebookCellId(value) {
   const clean = String(value || "")
     .trim()
@@ -51,7 +74,7 @@ function codeCell(raw, fallbackId = "cell") {
     source: notebookSource(cell.source),
   };
   delete result.attachments;
-  return result;
+  return inheritTransientCellId(cell, result);
 }
 
 export function createNotebook({ sourceFile = "", kernel = "python3", session = "default", language = "python", storage = "ipynb" } = {}) {
@@ -91,20 +114,33 @@ export function parseNotebook(text, defaults = {}) {
     ...base.metadata.language_info,
     ...object(object(parsed.metadata).language_info),
   };
-  metadata.noema = { ...base.metadata.noema, ...object(object(parsed.metadata).noema) };
+  const parsedNoema = object(object(parsed.metadata).noema);
+  const standalone = typeof parsedNoema.source_file === "string"
+    && parsedNoema.source_file.endsWith(".ipynb");
+  if (Object.keys(parsedNoema).length > 0) {
+    metadata.noema = { ...base.metadata.noema, ...parsedNoema };
+  } else {
+    delete metadata.noema;
+  }
   const seen = new Set();
   const cells = [];
   for (const [index, raw] of (Array.isArray(parsed.cells) ? parsed.cells : []).entries()) {
-    const id = uniqueCellId(object(raw).id, seen, index);
-    if (object(raw).cell_type !== "code") {
-      const cell = { ...object(raw) };
+    const rawCell = object(raw);
+    const originalId = rawCell.id;
+    const keepId = validCellId(originalId) && !seen.has(originalId);
+    const id = uniqueCellId(originalId, seen, index);
+    if (rawCell.cell_type !== "code") {
+      const cell = { ...rawCell };
       cell.id = id;
       cell.metadata = object(cell.metadata);
       cell.source = notebookSource(cell.source);
+      if (!keepId) rememberTransientCellId(cell, rawCell);
       cells.push(cell);
       continue;
     }
-    const cell = codeCell({ ...object(raw), id }, id);
+    const cell = codeCell(rawCell, id);
+    cell.id = id;
+    if (!keepId) rememberTransientCellId(cell, rawCell);
     cells.push(cell);
   }
   return {
@@ -112,12 +148,18 @@ export function parseNotebook(text, defaults = {}) {
     cells,
     metadata,
     nbformat: 4,
-    nbformat_minor: Math.max(5, Number(parsed.nbformat_minor) || 0),
+    nbformat_minor: Object.keys(parsedNoema).length > 0 && !standalone
+      ? Math.max(5, Number(parsed.nbformat_minor) || 0)
+      : Number(parsed.nbformat_minor) || 0,
   };
 }
 
 export function serializeNotebook(notebook) {
-  return `${JSON.stringify(notebook, null, 2)}\n`;
+  return `${JSON.stringify(notebook, function preserveOrdinaryCellIds(key, value) {
+    if (key !== "id" || !transientCellIds.has(this)) return value;
+    const original = transientCellIds.get(this);
+    return original === missingCellId ? undefined : original.original;
+  }, 2)}\n`;
 }
 
 export function notebookCodeCells(notebook) {
@@ -158,7 +200,9 @@ export function buildNotebook({
     const old = oldById.get(id);
     const supplied = notebookSource(raw?.code);
     const source = supplied.trim() ? supplied : notebookSource(old?.source ?? supplied);
-    incoming.push(codeCell({ ...old, id, source }, id));
+    const cell = codeCell({ ...old, id, source }, id);
+    inheritTransientCellId(old, cell);
+    incoming.push(cell);
   }
   // A partial editor projection must not discard cells already in the file.
   for (const old of notebook.cells || []) {
@@ -167,6 +211,22 @@ export function buildNotebook({
     incoming.push(old);
   }
   notebook.cells = incoming;
+  for (const cell of notebook.cells) {
+    if (cell?.cell_type !== "code") continue;
+    cell.metadata = object(cell.metadata);
+    const noema = object(cell.metadata.noema);
+    // Do not add private metadata to an ordinary untouched cell, but when a
+    // Noema result record exists keep its runtime labels aligned with the
+    // notebook's canonical language/session and selected kernelspec.
+    if (Object.keys(noema).length > 0) {
+      cell.metadata.noema = {
+        ...noema,
+        kernel: String(kernel),
+        session: String(session),
+        language: String(language),
+      };
+    }
+  }
   notebook.metadata = object(notebook.metadata);
   notebook.metadata.kernelspec = {
     ...object(notebook.metadata.kernelspec),

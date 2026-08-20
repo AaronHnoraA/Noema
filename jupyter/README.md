@@ -71,6 +71,19 @@ The Node cell service owns kernel lifecycle and each cell run:
   The whole notebook is replaced atomically, and concurrent result writes are
   serialized so they cannot clobber source or each other. Invalid notebook JSON
   is reported instead of silently discarding its source.
+  The filename dimension is the notebook language, not the kernelspec: a Sage
+  kernel therefore uses `<note>.python.<session>.ipynb`, with `sagemath` kept
+  in `metadata.kernelspec`. Legacy `.sage.` names migrate on first open.
+- A standalone external ipynb may predate nbformat cell ids. Noema gives such
+  cells deterministic transient ids for document/UI operations but omits those
+  ids again when serializing, so managing or saving it does not rewrite all of
+  its old cells. Newly inserted/split/duplicated cells still receive persisted
+  standard ids. Notebooks without language metadata default to Python.
+- The kernels endpoint publishes one flattened `choices` catalog for both the
+  Web workspace and Emacs. It includes broker-discovered kernelspecs, attach
+  targets, and configured Jupyter-server kernels/running targets; clients do
+  not apply a second language filter. A private running kernel remains
+  connectable only by its owning notebook.
 - Consecutive `stdout`/`stderr` stream chunks are merged, and total stream text
   is capped so a runaway loop cannot produce an unbounded payload. The inline
   widget view truncates long output further; **Popout** shows the full capped

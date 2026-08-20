@@ -181,12 +181,22 @@ export type JupyterKernelInfo = {
     codemirrorMode?: unknown;
   };
 };
-export type JupyterKernelSpec = { name: string; displayName?: string; language?: string };
+export type JupyterKernelSpec = {
+  name: string;
+  displayName?: string;
+  language?: string;
+  kind?: "none" | "start" | "connect";
+  value?: string;
+  group?: string;
+  label?: string;
+};
 export type JupyterKernelListResult = {
   ok?: boolean;
   default?: string;
   kernels?: JupyterKernelSpec[];
   attachable?: JupyterKernelSpec[];
+  choices?: JupyterKernelSpec[];
+  selections?: JupyterKernelSpec[];
 };
 /**
  * `complete_reply`. `cursorStart`/`cursorEnd` are offsets into the submitted
