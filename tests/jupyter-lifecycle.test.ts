@@ -22,6 +22,55 @@ const pythonKernelRunner = join(aaronnoteRoot, "jupyter", "bin", "python-jupyter
 
 describeIfKernel("kernel lifecycle (real ipykernel)", () => {
   test(
+    "task snapshots expose management metadata and restart accepts runtime id",
+    async () => {
+      const noteRoot = await mkdtemp(join(tmpdir(), "aaronnote-management-"));
+      const service = createJupyterCellService({
+        runtimeRoot: aaronnoteRoot,
+        noteRoot,
+        workspaceRoot: noteRoot,
+        zmq,
+      });
+      const note = join(noteRoot, "managed.md");
+      await writeFile(note, "# managed\n", "utf8");
+      try {
+        await service.execute({
+          file: note,
+          kernel: "python3",
+          session: "board",
+          language: "python",
+          code: "value = 42",
+        });
+        const before = await service.listTasks();
+        expect(before.kernels).toHaveLength(1);
+        expect(before.kernels[0]).toMatchObject({
+          sourceFile: note,
+          kernel: "python3",
+          session: "board",
+          language: "python",
+          owned: true,
+          attached: false,
+        });
+        expect(before.kernels[0].file).toContain("/.cell/");
+
+        const restarted = await service.restart({ id: before.kernels[0].id });
+        expect(restarted.key).toBe(before.kernels[0].key);
+        expect(restarted.id).not.toBe(before.kernels[0].id);
+        const after = await service.listTasks();
+        expect(after.kernels[0]).toMatchObject({
+          sourceFile: note,
+          session: "board",
+          language: "python",
+        });
+      } finally {
+        await service.shutdown();
+        await rm(noteRoot, { recursive: true, force: true });
+      }
+    },
+    30_000,
+  );
+
+  test(
     "ensure() self-heals a dead record and bumps widgetGeneration (not just manual restart)",
     async () => {
       const runtimeDir = await mkdtemp(join(tmpdir(), "aaronnote-selfheal-"));

@@ -79,7 +79,10 @@ describeIfKernel("raw ZMQ kernel stack (real ipykernel)", () => {
           expect(connected).toBe(true);
 
           const warm = await warmupKernelInfo(kernel, 15_000);
-          expect(warm).toBe(true);
+          expect(warm.ok).toBe(true);
+          // The handshake reply is kept, not just counted: language_info is
+          // what the registry stores on the record.
+          expect(warm.info?.language_info?.name).toBe("python");
 
           const info = await kernel.info;
           expect(info?.language_info?.name).toBe("python");

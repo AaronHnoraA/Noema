@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { createJupyterCellService, durationFromEnv, jupyterWidgetCommOpenP } from "../server/lib/jupyter-cell.mjs";
 
 // These exercise only the filesystem + short-circuit paths of the cell service
-// (hidden-script write/read, output-mirror self-heal, non-kernel branches). They
+// (notebook write/read and non-kernel branches). They
 // never reach a Jupyter server, so they run anywhere. Kernel execution, stream
 // merge/truncate and dead-kernel retry are covered by manual e2e (they need a
 // live websocket).
@@ -75,7 +75,7 @@ describe("jupyter cell service (no kernel)", () => {
         kernel: "python3",
         session: "default",
         language: "python",
-        storage: "script",
+        storage: "ipynb",
         cells: [{ cellId: "cell-a", id: "cell-a", code: "answer = 42" }],
       });
       expect(opened).toHaveLength(1);
@@ -86,7 +86,7 @@ describe("jupyter cell service (no kernel)", () => {
         kernel: "python3",
         session: "default",
         language: "python",
-        storage: "script",
+        storage: "ipynb",
         kernelSpec: { name: "python3", resourceDir: "/runtime/kernels/python3" },
       });
     } finally {
@@ -133,11 +133,11 @@ describe("jupyter cell service (no kernel)", () => {
         kernel: "python3",
         session: "default",
         language: "python",
-        storage: "script",
+        storage: "ipynb",
         open: false,
         cells: [{ cellId: "cell-a", id: "cell-a", code: "answer = 42" }],
       });
-      expect(opened.file).toBe("/fs:lab:/work/notes/.cell/remote.python.default.py");
+      expect(opened.file).toBe("/fs:lab:/work/notes/.cell/remote.python.default.ipynb");
       expect(store.get(opened.file)).toContain("answer = 42");
       const read = await service.readScriptCell({
         file: note,
@@ -189,7 +189,7 @@ describe("jupyter cell service (no kernel)", () => {
     })).toBe(false);
   });
 
-  test("openScript writes a hidden script that readScriptCell round-trips", async () => {
+  test("openScript writes an ipynb that readScriptCell round-trips", async () => {
     await withService(async ({ service, note }) => {
       await service.openScript({
         file: note,
@@ -197,7 +197,7 @@ describe("jupyter cell service (no kernel)", () => {
         kernel: "python3",
         session: "default",
         language: "python",
-        storage: "script",
+        storage: "ipynb",
         open: false,
         cells: [{ cellId: "cell-a", id: "cell-a", code: "print('hi')" }],
       });
@@ -208,10 +208,25 @@ describe("jupyter cell service (no kernel)", () => {
       expect(read.exists).toBe(true);
       expect(read.code).toBe("print('hi')");
       expect(read.output).toBe(null);
+      const notebook = JSON.parse(await readFile(read.file, "utf8"));
+      expect(notebook).toMatchObject({ nbformat: 4, nbformat_minor: 5 });
+      expect(notebook.cells[0]).toMatchObject({
+        cell_type: "code",
+        id: "cell-a",
+        source: "print('hi')",
+        execution_count: null,
+        outputs: [],
+      });
+      expect(notebook.metadata.noema).toMatchObject({
+        source_file: note,
+        session: "default",
+        language: "python",
+        storage: "ipynb",
+      });
     });
   });
 
-  test("openScript preserves existing hidden cell bodies omitted by a partial context", async () => {
+  test("openScript preserves existing notebook cells omitted by a partial context", async () => {
     await withService(async ({ service, note }) => {
       await service.openScript({
         file: note,
@@ -219,7 +234,7 @@ describe("jupyter cell service (no kernel)", () => {
         kernel: "python3",
         session: "default",
         language: "python",
-        storage: "script",
+        storage: "ipynb",
         open: false,
         cells: [
           { cellId: "cell-a", id: "cell-a", code: "x = 1" },
@@ -232,7 +247,7 @@ describe("jupyter cell service (no kernel)", () => {
         kernel: "python3",
         session: "default",
         language: "python",
-        storage: "script",
+        storage: "ipynb",
         open: false,
         cells: [{ cellId: "cell-c", id: "cell-c", code: "" }],
       });
@@ -251,17 +266,17 @@ describe("jupyter cell service (no kernel)", () => {
     });
   });
 
-  test("deleteScriptCell removes hidden code and deletes files when the script becomes empty", async () => {
+  test("deleteScriptCell removes notebook cells and deletes the notebook when empty", async () => {
     await withService(async ({ service, note }) => {
-      const scriptFile = join(dirname(note), ".cell", "note.python.default.py");
-      const outputFile = join(dirname(note), ".cell", "note.output.python.default.json");
+      const scriptFile = join(dirname(note), ".cell", "note.python.default.ipynb");
+      const outputFile = scriptFile;
       await service.openScript({
         file: note,
         cellId: "cell-a",
         kernel: "python3",
         session: "default",
         language: "python",
-        storage: "script",
+        storage: "ipynb",
         open: false,
         cells: [
           { cellId: "cell-a", id: "cell-a", code: "x = 1" },
@@ -279,12 +294,9 @@ describe("jupyter cell service (no kernel)", () => {
         file: note, cellId: "cell-a", kernel: "python3", session: "default", language: "python",
       });
       expect(first.removedScript).toBe(false);
-      const scriptAfterFirst = await readFile(scriptFile, "utf8");
-      expect(scriptAfterFirst).not.toContain("id=cell-a");
-      expect(scriptAfterFirst).toContain("id=cell-b");
-      const outputAfterFirst = JSON.parse(await readFile(outputFile, "utf8"));
-      expect(outputAfterFirst.cells["cell-a"]).toBeUndefined();
-      expect(outputAfterFirst.cells["cell-b"]).toBeTruthy();
+      const notebookAfterFirst = JSON.parse(await readFile(scriptFile, "utf8"));
+      expect(notebookAfterFirst.cells.map((cell: { id: string }) => cell.id)).toEqual(["cell-b"]);
+      expect(notebookAfterFirst.cells[0].metadata.noema.ui.outputExpanded).toBe(true);
 
       const second = await service.deleteScriptCell({
         file: note, cellId: "cell-b", kernel: "python3", session: "default", language: "python",
@@ -295,7 +307,7 @@ describe("jupyter cell service (no kernel)", () => {
     });
   });
 
-  test("openScript orders hidden cells by the incoming document context", async () => {
+  test("openScript orders notebook cells by the incoming document context", async () => {
     await withService(async ({ service, note }) => {
       await service.openScript({
         file: note,
@@ -303,7 +315,7 @@ describe("jupyter cell service (no kernel)", () => {
         kernel: "python3",
         session: "default",
         language: "python",
-        storage: "script",
+        storage: "ipynb",
         open: false,
         cells: [
           { cellId: "cell-a", id: "cell-a", code: "a = 1" },
@@ -316,7 +328,7 @@ describe("jupyter cell service (no kernel)", () => {
         kernel: "python3",
         session: "default",
         language: "python",
-        storage: "script",
+        storage: "ipynb",
         open: false,
         cells: [
           { cellId: "cell-a", id: "cell-a", code: "" },
@@ -324,16 +336,15 @@ describe("jupyter cell service (no kernel)", () => {
           { cellId: "cell-c", id: "cell-c", code: "" },
         ],
       });
-      const scriptPath = join(note, "..", ".cell", "note.python.default.py");
-      const script = await readFile(scriptPath, "utf8");
-      expect(script.indexOf("id=cell-a")).toBeLessThan(script.indexOf("id=cell-b"));
-      expect(script.indexOf("id=cell-b")).toBeLessThan(script.indexOf("id=cell-c"));
-      expect(script).toContain("a = 1");
-      expect(script).toContain("c = a + 1");
+      const scriptPath = join(note, "..", ".cell", "note.python.default.ipynb");
+      const notebook = JSON.parse(await readFile(scriptPath, "utf8"));
+      expect(notebook.cells.map((cell: { id: string }) => cell.id)).toEqual(["cell-a", "cell-b", "cell-c"]);
+      expect(notebook.cells[0].source).toBe("a = 1");
+      expect(notebook.cells[2].source).toBe("c = a + 1");
     });
   });
 
-  test("openScript keeps one hidden script per language/session when kernel changes", async () => {
+  test("openScript keeps one notebook per language/session when kernel changes", async () => {
     await withService(async ({ service, note }) => {
       await service.openScript({
         file: note,
@@ -341,7 +352,7 @@ describe("jupyter cell service (no kernel)", () => {
         kernel: "python3",
         session: "default",
         language: "python",
-        storage: "script",
+        storage: "ipynb",
         open: false,
         cells: [{ cellId: "cell-a", id: "cell-a", code: "x = 1" }],
       });
@@ -351,11 +362,11 @@ describe("jupyter cell service (no kernel)", () => {
         kernel: "sagemath-10.9",
         session: "default",
         language: "python",
-        storage: "script",
+        storage: "ipynb",
         open: false,
         cells: [{ cellId: "cell-a", id: "cell-a", code: "x = 2" }],
       });
-      const scriptPath = join(note, "..", ".cell", "note.python.default.py");
+      const scriptPath = join(note, "..", ".cell", "note.python.default.ipynb");
       const pythonRead = await service.readScriptCell({
         file: note, cellId: "cell-a", kernel: "python3", session: "default", language: "python",
       });
@@ -367,7 +378,7 @@ describe("jupyter cell service (no kernel)", () => {
       expect(sageRead.file).toBe(scriptPath);
       expect(pythonRead.code).toBe("x = 2");
       expect(sageRead.code).toBe("x = 2");
-      expect(script).toContain("x = 2");
+      expect(JSON.parse(script).cells[0].source).toBe("x = 2");
     });
   });
 
@@ -386,44 +397,36 @@ describe("jupyter cell service (no kernel)", () => {
           { cellId: "cell-b", id: "cell-b", kernel: "python3", session: "default", language: "python", code: "" },
         ],
       });
-      const mirrorPath = join(note, "..", ".cell", "note.output.python.default.json");
-      const mirror = JSON.parse(await readFile(mirrorPath, "utf8"));
+      const notebookPath = join(note, "..", ".cell", "note.python.default.ipynb");
+      const notebook = JSON.parse(await readFile(notebookPath, "utf8"));
       expect(result.results.map((item: { kernel?: string }) => item.kernel)).toEqual(["sagemath-10.9", "sagemath-10.9"]);
-      expect(mirror.cells["cell-a"].kernel).toBe("sagemath-10.9");
-      expect(mirror.cells["cell-b"].kernel).toBe("sagemath-10.9");
+      expect(notebook.cells[0].metadata.noema.kernel).toBe("sagemath-10.9");
+      expect(notebook.cells[1].metadata.noema.kernel).toBe("sagemath-10.9");
     });
   });
 
-  test("a corrupt output mirror is ignored, not thrown", async () => {
+  test("a corrupt notebook is reported instead of discarding its source", async () => {
     await withService(async ({ service, note }) => {
       await service.openScript({
         file: note, cellId: "cell-b", kernel: "python3", session: "default", language: "python",
-        storage: "script", open: false, cells: [{ cellId: "cell-b", id: "cell-b", code: "x = 1" }],
+        storage: "ipynb", open: false, cells: [{ cellId: "cell-b", id: "cell-b", code: "x = 1" }],
       });
-      const before = await service.readScriptCell({
+      const notebookPath = join(note, "..", ".cell", "note.python.default.ipynb");
+      await writeFile(notebookPath, "{ this is not json", "utf8");
+      await expect(service.readScriptCell({
         file: note, cellId: "cell-b", kernel: "python3", session: "default", language: "python",
-      });
-      // Write a valid mirror via the public clear path, then corrupt the file.
-      await service.clearAllOutputs({ file: note, kernel: "python3", session: "default", language: "python" });
-      const mirrorPath = join(note, "..", ".cell", "note.output.python.default.json");
-      await writeFile(mirrorPath, "{ this is not json", "utf8");
-      // readScriptCell must survive the corrupt mirror.
-      const after = await service.readScriptCell({
-        file: note, cellId: "cell-b", kernel: "python3", session: "default", language: "python",
-      });
-      expect(before.code).toBe("x = 1");
-      expect(after.code).toBe("x = 1");
-      expect(after.output).toBe(null);
+      })).rejects.toBeInstanceOf(SyntaxError);
     });
   });
 
-  test("output mirror is written atomically (no leftover temp files)", async () => {
+  test("output clearing writes a valid notebook atomically", async () => {
     await withService(async ({ service, note }) => {
       await service.clearAllOutputs({ file: note, kernel: "python3", session: "default", language: "python" });
-      const mirrorPath = join(note, "..", ".cell", "note.output.python.default.json");
-      const parsed = JSON.parse(await readFile(mirrorPath, "utf8"));
-      expect(parsed.version).toBe(1);
-      expect(parsed.cells).toEqual({});
+      const notebookPath = join(note, "..", ".cell", "note.python.default.ipynb");
+      const parsed = JSON.parse(await readFile(notebookPath, "utf8"));
+      expect(parsed.nbformat).toBe(4);
+      expect(parsed.nbformat_minor).toBeGreaterThanOrEqual(5);
+      expect(parsed.cells).toEqual([]);
     });
   });
 
@@ -431,24 +434,29 @@ describe("jupyter cell service (no kernel)", () => {
     await withService(async ({ service, note }) => {
       await service.openScript({
         file: note, cellId: "cell-live", kernel: "python3", session: "default", language: "python",
-        storage: "script", open: false, cells: [{ cellId: "cell-live", id: "cell-live", code: "x = 1" }],
+        storage: "ipynb", open: false, cells: [{ cellId: "cell-live", id: "cell-live", code: "x = 1" }],
       });
-      const mirrorPath = join(note, "..", ".cell", "note.output.python.default.json");
-      await writeFile(mirrorPath, JSON.stringify({
-        version: 1,
-        source: note,
-        kernel: "python3",
-        session: "default",
-        language: "python",
-        cells: {
-          "cell-live": {
+      const notebookPath = join(note, "..", ".cell", "note.python.default.ipynb");
+      await writeFile(notebookPath, JSON.stringify({
+        cells: [{
+          cell_type: "code",
+          id: "cell-live",
+          source: "x = 1",
+          execution_count: 3,
+          outputs: [],
+          metadata: { noema: {
             ok: true,
             status: "ok",
-            executionCount: 3,
-            outputs: [],
             kernelRuntime: { id: "old-kernel", name: "python3", generation: 1 },
-          },
+          } },
+        }],
+        metadata: {
+          kernelspec: { display_name: "python3", language: "python", name: "python3" },
+          language_info: { name: "python" },
+          noema: { source_file: note, session: "default", language: "python", storage: "ipynb" },
         },
+        nbformat: 4,
+        nbformat_minor: 5,
       }), "utf8");
       const read = await service.readScriptCell({
         file: note, cellId: "cell-live", kernel: "python3", session: "default", language: "python",

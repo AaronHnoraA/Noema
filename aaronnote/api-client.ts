@@ -160,6 +160,26 @@ export type JupyterCellExecuteResult = {
     name: string;
     generation?: number;
   };
+  /** `execute_reply` payload from `%load`/`%recall`: rewrite this cell, or insert one below. */
+  setNextInput?: { text: string; replace: boolean };
+  /** `execute_reply` payload from `exit`/`quit` typed in a cell. */
+  askExit?: { keepKernel: boolean };
+};
+/** The interesting half of `kernel_info_reply` — see describeKernelInfo in server/lib/jupyter-cell.mjs. */
+export type JupyterKernelInfo = {
+  implementation?: string;
+  implementationVersion?: string;
+  protocolVersion?: string;
+  banner?: string;
+  helpLinks?: Array<{ text?: string; url?: string }>;
+  language?: {
+    name?: string;
+    version?: string;
+    mimetype?: string;
+    fileExtension?: string;
+    pygmentsLexer?: string;
+    codemirrorMode?: unknown;
+  };
 };
 export type JupyterKernelSpec = { name: string; displayName?: string; language?: string };
 export type JupyterKernelListResult = {
@@ -167,6 +187,43 @@ export type JupyterKernelListResult = {
   default?: string;
   kernels?: JupyterKernelSpec[];
   attachable?: JupyterKernelSpec[];
+};
+/**
+ * `complete_reply`. `cursorStart`/`cursorEnd` are offsets into the submitted
+ * code describing the span the matches replace — the kernel decides how much
+ * of the token it is completing, so never assume a client-side word boundary.
+ */
+export type JupyterCompletionResult = {
+  ok?: boolean;
+  /** False when no kernel is running for this cell; nothing was asked. */
+  supported?: boolean;
+  matches?: string[];
+  items?: Array<{ text: string; type?: string; signature?: string }>;
+  cursorStart?: number;
+  cursorEnd?: number;
+  /** True when the kernel was busy and the bounded wait expired. */
+  timedOut?: boolean;
+};
+export type JupyterInspectResult = {
+  ok?: boolean;
+  supported?: boolean;
+  found?: boolean;
+  data?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  timedOut?: boolean;
+};
+export type JupyterIsCompleteResult = {
+  ok?: boolean;
+  supported?: boolean;
+  /** `unknown` means the kernel doesn't implement it — treat as complete. */
+  status?: "complete" | "incomplete" | "invalid" | "unknown" | string;
+  indent?: string;
+  timedOut?: boolean;
+};
+export type JupyterHistoryResult = {
+  ok?: boolean;
+  supported?: boolean;
+  history?: Array<{ session: number; lineNumber: number; source: string; output: string }>;
 };
 export type JupyterVariable = {
   name?: string;
@@ -188,8 +245,16 @@ export type JupyterKernelTask = {
   sourceFile?: string;
   kernel?: string;
   session?: string;
+  language?: string;
   status?: string;
   running?: number;
+  owned?: boolean;
+  attached?: boolean;
+  hostRuntimeId?: string;
+  generation?: number;
+  placement?: "target" | "client" | string;
+  stateLost?: boolean;
+  widgetGeneration?: number;
   createdAt?: number;
   createdAtIso?: string;
   lastUsedAt?: number;
@@ -499,6 +564,15 @@ type NativeApi = {
   };
   jupyterCell?: {
     kernels?: (body?: unknown) => Promise<unknown>;
+    documentSnapshot?: (body?: unknown) => Promise<unknown>;
+    documentMutate?: (body?: unknown) => Promise<unknown>;
+    documentExecute?: (body?: unknown) => Promise<unknown>;
+    managerSnapshot?: () => Promise<unknown>;
+    scriptSnapshot?: (body?: unknown) => Promise<unknown>;
+    scriptAction?: (body?: unknown) => Promise<unknown>;
+    sessionSelect?: (body?: unknown) => Promise<unknown>;
+    kernelControl?: (body?: unknown) => Promise<unknown>;
+    openBoard?: () => Promise<unknown>;
     execute?: (body?: unknown) => Promise<unknown>;
     openScript?: (body?: unknown) => Promise<unknown>;
     readScriptCell?: (body?: unknown) => Promise<unknown>;
@@ -508,6 +582,12 @@ type NativeApi = {
     saveScriptCellOutputUi?: (body?: unknown) => Promise<unknown>;
     clearAllOutputs?: (body?: unknown) => Promise<unknown>;
     variables?: (body?: unknown) => Promise<unknown>;
+    inputReply?: (body?: unknown) => Promise<unknown>;
+    complete?: (body?: unknown) => Promise<unknown>;
+    inspect?: (body?: unknown) => Promise<unknown>;
+    isComplete?: (body?: unknown) => Promise<unknown>;
+    history?: (body?: unknown) => Promise<unknown>;
+    commInfo?: (body?: unknown) => Promise<unknown>;
     kernelStatus?: (body?: unknown) => Promise<unknown>;
     restart?: (body?: unknown) => Promise<unknown>;
     interrupt?: (body?: unknown) => Promise<unknown>;
@@ -1008,6 +1088,42 @@ export const api = {
       const call = requireMethod(nativeApi().jupyterCell?.kernels, "Jupyter kernels");
       return ensureOk(await call(body) as JupyterKernelListResult, "Jupyter kernels failed");
     },
+    async documentSnapshot(body: unknown): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().jupyterCell?.documentSnapshot, "Jupyter document");
+      return ensureOk(await call(body) as Record<string, unknown>, "Jupyter document failed");
+    },
+    async documentMutate(body: unknown): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().jupyterCell?.documentMutate, "Jupyter document mutation");
+      return ensureOk(await call(body) as Record<string, unknown>, "Jupyter document mutation failed");
+    },
+    async documentExecute(body: unknown): Promise<JupyterCellExecuteResult> {
+      const call = requireMethod(nativeApi().jupyterCell?.documentExecute, "Jupyter document execution");
+      return ensureOk(await call(body) as JupyterCellExecuteResult, "Jupyter document execution failed");
+    },
+    async managerSnapshot(): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().jupyterCell?.managerSnapshot, "Jupyter manager");
+      return ensureOk(await call() as Record<string, unknown>, "Jupyter manager failed");
+    },
+    async scriptSnapshot(body: unknown): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().jupyterCell?.scriptSnapshot, "Jupyter script");
+      return ensureOk(await call(body) as Record<string, unknown>, "Jupyter script failed");
+    },
+    async scriptAction(body: unknown): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().jupyterCell?.scriptAction, "Jupyter script action");
+      return ensureOk(await call(body) as Record<string, unknown>, "Jupyter script action failed");
+    },
+    async sessionSelect(body: unknown): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().jupyterCell?.sessionSelect, "Jupyter session selection");
+      return ensureOk(await call(body) as Record<string, unknown>, "Jupyter session selection failed");
+    },
+    async kernelControl(body: unknown): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().jupyterCell?.kernelControl, "Jupyter kernel control");
+      return ensureOk(await call(body) as Record<string, unknown>, "Jupyter kernel control failed");
+    },
+    async openBoard(): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().jupyterCell?.openBoard, "Jupyter Board");
+      return ensureOk(await call() as Record<string, unknown>, "Jupyter Board failed");
+    },
     async execute(body: unknown): Promise<JupyterCellExecuteResult> {
       const call = requireMethod(nativeApi().jupyterCell?.execute, "Jupyter cell");
       return ensureOk(await call(body) as JupyterCellExecuteResult, "Jupyter cell failed");
@@ -1043,6 +1159,30 @@ export const api = {
     async variables(body: unknown): Promise<JupyterVariablesResult> {
       const call = requireMethod(nativeApi().jupyterCell?.variables, "Jupyter variables");
       return ensureOk(await call(body) as JupyterVariablesResult, "Jupyter variables failed");
+    },
+    async inputReply(body: unknown): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().jupyterCell?.inputReply, "Jupyter input reply");
+      return ensureOk(await call(body) as Record<string, unknown>, "Jupyter input reply failed");
+    },
+    async complete(body: unknown): Promise<JupyterCompletionResult> {
+      const call = requireMethod(nativeApi().jupyterCell?.complete, "Jupyter completion");
+      return ensureOk(await call(body) as JupyterCompletionResult, "Jupyter completion failed");
+    },
+    async inspect(body: unknown): Promise<JupyterInspectResult> {
+      const call = requireMethod(nativeApi().jupyterCell?.inspect, "Jupyter inspect");
+      return ensureOk(await call(body) as JupyterInspectResult, "Jupyter inspect failed");
+    },
+    async isComplete(body: unknown): Promise<JupyterIsCompleteResult> {
+      const call = requireMethod(nativeApi().jupyterCell?.isComplete, "Jupyter is-complete");
+      return ensureOk(await call(body) as JupyterIsCompleteResult, "Jupyter is-complete failed");
+    },
+    async history(body: unknown): Promise<JupyterHistoryResult> {
+      const call = requireMethod(nativeApi().jupyterCell?.history, "Jupyter history");
+      return ensureOk(await call(body) as JupyterHistoryResult, "Jupyter history failed");
+    },
+    async commInfo(body: unknown): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().jupyterCell?.commInfo, "Jupyter comm info");
+      return ensureOk(await call(body) as Record<string, unknown>, "Jupyter comm info failed");
     },
     async kernelStatus(body: unknown): Promise<Record<string, unknown>> {
       const call = requireMethod(nativeApi().jupyterCell?.kernelStatus, "Jupyter kernel status");

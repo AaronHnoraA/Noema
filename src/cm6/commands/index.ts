@@ -298,15 +298,22 @@ function nearestJupyterCellArgs(view: EditorView): string {
     const line = doc.line(lineNumber);
     const match = JUPYTER_CELL_LINE_RE.exec(line.text);
     if (!match) continue;
-    const args = (match[1] || "").trim();
-    if (!args) continue;
+    const raw = (match[1] || "").trim();
+    if (!raw) continue;
+    const parts = raw.split(",").map((part) => part.trim()).filter(Boolean);
+    const language = parts[0] || "python";
+    const secondLooksLikeLegacyKernel = /python3|sage|julia|ir|bash|zsh|node|javascript|typescript|lean4?/i.test(parts[1] || "");
+    const session = parts.length >= 3
+      ? (parts[2] || "default")
+      : secondLooksLikeLegacyKernel ? "default" : (parts[1] || "default");
+    const args = `${language}, ${session}`;
     if (lineNumber <= cursorLineNumber) previous = args;
     else {
       next = args;
       break;
     }
   }
-  return previous || next || "python, python3";
+  return previous || next || "python, default";
 }
 
 export function exitEmptyMarkdownBlock(view: EditorView): boolean {

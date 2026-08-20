@@ -1208,13 +1208,13 @@ y^2
     cleanup();
   });
 
-  test("jupyter cell insert inherits previous language kernel and session", () => {
+  test("jupyter cell insert inherits language and session without note kernel authority", () => {
     const md = "@@cell(python, sagemath-10.9, analysis) [a]\nplain";
     const { editor, cleanup } = mountCM6(md);
     editor.setMarkdownSelection(md.length);
 
     expect(editor.runCommand("jupyter-cell")).toBe(true);
-    expect(editor.getMarkdown().match(/@@cell\(python, sagemath-10\.9, analysis\)/g)?.length).toBe(2);
+    expect(editor.getMarkdown()).toContain("@@cell(python, analysis)");
 
     cleanup();
   });
@@ -1228,7 +1228,7 @@ y^2
     await new Promise((resolve) => window.requestAnimationFrame(resolve));
     await new Promise((resolve) => window.requestAnimationFrame(resolve));
 
-    expect(editor.getMarkdown()).toMatch(/@@cell\(python, sagemath-10\.9, analysis\) \[ceil-[^\]]+\]/);
+    expect(editor.getMarkdown()).toMatch(/@@cell\(python, analysis\) \[ceil-[^\]]+\]/);
 
     cleanup();
   });
@@ -1247,7 +1247,7 @@ y^2
         executeScriptCell,
       },
     };
-    const { cleanup } = mountCM6("@@cell(python, python3, default) [run-error]");
+    const { cleanup } = mountCM6("@@cell(python, default) [run-error]");
     try {
       await nextTick();
       await nextTick();
@@ -1264,7 +1264,7 @@ y^2
         kernel: "python3",
         session: "default",
         selectedCellIds: ["run-error"],
-        // Source remains server-owned in the hidden script; the renderer sends
+        // Source remains server-owned in the notebook; the renderer sends
         // the complete ordered cell metadata without overwriting edited code.
         cells: [expect.objectContaining({ cellId: "run-error", code: "" })],
       }));

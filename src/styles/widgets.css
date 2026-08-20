@@ -3292,6 +3292,43 @@ body.has-diagram-fullscreen {
   font-style: italic;
 }
 
+/* Inline stdin prompt: the cell is blocked in input()/getpass(). Stays visible
+   even when the output area is folded — a hidden prompt is a hung kernel. */
+.cm-editor .cm-ceil-output-wrap .cm-ceil-stdin {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.55rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--aaron-border, #d0d0d0);
+  border-radius: 4px;
+  background: var(--aaron-surface, transparent);
+}
+
+.cm-editor .cm-ceil-output-wrap.is-folded .cm-ceil-stdin {
+  display: flex;
+}
+
+.cm-editor .cm-ceil-stdin-prompt {
+  white-space: pre-wrap;
+  font-family: var(--aaron-mono-font, ui-monospace, monospace);
+}
+
+.cm-editor .cm-ceil-stdin-input {
+  flex: 1 1 auto;
+  min-width: 6rem;
+  font-family: var(--aaron-mono-font, ui-monospace, monospace);
+  color: inherit;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--aaron-border, #d0d0d0);
+  outline: none;
+}
+
+.cm-editor .cm-ceil-stdin-cancel {
+  flex: 0 0 auto;
+}
+
 .cm-editor .cm-ceil-output-item + .cm-ceil-output-item {
   margin-top: 0.55rem;
 }

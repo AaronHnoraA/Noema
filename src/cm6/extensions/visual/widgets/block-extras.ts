@@ -52,6 +52,7 @@ import {
 import { applyImageLayout, imageLayoutFromAttrs, readImageTrailingAttrs, type ImageLayoutAttrs } from "../../../../image-attrs.ts";
 import { supportedDiagramLang } from "../../../../diagram-langs.ts";
 import { api } from "../../../../../aaronnote/api-client.ts";
+import { hostMode } from "../../../../../aaronnote/host-mode.ts";
 import { renderJupyterVariablesTable } from "../../../../jupyter-variables-view.ts";
 import { tocIndexFromState, type MarkdownHeading } from "../../../toc-index.ts";
 import { scanInlineCommands } from "../../../../command-syntax.ts";
@@ -183,6 +184,86 @@ function registerCeilRunHandler(cellId: string, run: () => Promise<void>): () =>
       window.AaronnoteRunCeilCell = undefined;
     }
   };
+}
+
+/**
+ * Live output events pushed from the server while a cell runs (see
+ * createLiveOutputStream in server/lib/jupyter-cell.mjs). One window listener
+ * fans out to the mounted cell widgets by cell id, mirroring how the run
+ * bridge above is installed once and shared.
+ */
+export type CeilLiveEvent =
+  | { kind: "status"; state: string }
+  | { kind: "executionCount"; value: number | null }
+  | { kind: "set"; index: number; output: Record<string, unknown> }
+  | { kind: "append"; index: number; text: string }
+  | { kind: "clear" };
+
+export type CeilLiveDetail = {
+  key?: string;
+  runId?: string;
+  cellId?: string;
+  file?: string;
+  kernel?: string;
+  session?: string;
+  phase?: "start" | "events" | "end" | "stdin" | "stdin-done";
+  events?: CeilLiveEvent[];
+  status?: string;
+  executionCount?: number | null;
+  /** phase "stdin": the kernel is blocked in input()/getpass() and wants an answer. */
+  prompt?: string;
+  password?: boolean;
+};
+
+const ceilLiveHandlers = new Map<string, (detail: CeilLiveDetail) => void>();
+let ceilLiveBridgeInstalled = false;
+
+function handleCeilLiveEvent(event: Event): void {
+  const detail = (event as CustomEvent<CeilLiveDetail>).detail;
+  const id = String(detail?.cellId || "").trim();
+  if (!id) return;
+  ceilLiveHandlers.get(id)?.(detail);
+}
+
+function registerCeilLiveHandler(cellId: string, handle: (detail: CeilLiveDetail) => void): () => void {
+  const id = String(cellId || "").trim();
+  if (!id) return () => {};
+  if (!ceilLiveBridgeInstalled) {
+    window.addEventListener("aaronnote:jupyter-cell", handleCeilLiveEvent);
+    ceilLiveBridgeInstalled = true;
+  }
+  ceilLiveHandlers.set(id, handle);
+  return () => {
+    if (ceilLiveHandlers.get(id) === handle) ceilLiveHandlers.delete(id);
+    if (ceilLiveHandlers.size === 0 && ceilLiveBridgeInstalled) {
+      window.removeEventListener("aaronnote:jupyter-cell", handleCeilLiveEvent);
+      ceilLiveBridgeInstalled = false;
+    }
+  };
+}
+
+/**
+ * Apply one live patch to an outputs array being built. Mirrors the server's
+ * own assembly exactly, so the array converges on the same value the execute
+ * response will carry.
+ */
+export function applyCeilLiveEvent(
+  outputs: Array<Record<string, unknown>>,
+  event: CeilLiveEvent,
+): Array<Record<string, unknown>> {
+  if (event.kind === "clear") return [];
+  if (event.kind === "set") {
+    const next = outputs.slice();
+    next[event.index] = event.output;
+    return next;
+  }
+  if (event.kind === "append") {
+    const next = outputs.slice();
+    const target = next[event.index];
+    if (target) next[event.index] = { ...target, text: String(target.text ?? "") + event.text };
+    return next;
+  }
+  return outputs;
 }
 
 const ORG_ENV_OPEN_LINE_RE = /^([ \t]*#\+\s*begin\s+)(\S+)(?:([ \t]+)([^\n]*?))?[ \t]*$/i;
@@ -722,26 +803,35 @@ function defaultCeilKernelForLanguage(language: string): string {
 function parseCeilCommand(range: CeilCommandRange, file: string, defaults?: CeilCommandDefaults): CeilCommandMeta {
   const args = range.argsRaw.split(",").map((part) => part.trim()).filter(Boolean);
   let language = args[0] || defaults?.language || DEFAULT_CEIL_LANGUAGE;
-  let kernel = args[1] || "";
-  let session = args[2] || defaults?.session || DEFAULT_CEIL_SESSION;
+  let kernel = "";
+  let session = defaults?.session || DEFAULT_CEIL_SESSION;
   if (args.length === 1 && ceilLooksLikeKernelToken(args[0]!)) {
     kernel = args[0]!;
     language = ceilLanguageForKernel(kernel);
-  } else if (!args[1] && defaults?.kernel) {
+  } else if (args.length >= 3 || (args.length === 2 && ceilLooksLikeKernelToken(args[1]!))) {
+    // Read the legacy language,kernel[,session] marker, but never write it.
+    kernel = args[1] || "";
+    session = args[2] || DEFAULT_CEIL_SESSION;
+  } else {
+    // Current marker authority is language,session.  Kernel selection belongs
+    // to the sidecar session header and the Emacs global manager.
+    session = args[1] || (args.length === 0
+      ? (defaults?.session || DEFAULT_CEIL_SESSION)
+      : DEFAULT_CEIL_SESSION);
+  }
+  if (!kernel && defaults?.kernel) {
     const defaultLanguage = ceilLanguageForKernel(defaults.kernel, defaults.language);
     const requestedLanguage = language.toLowerCase();
     if (!args[0] || requestedLanguage === defaults.language.toLowerCase() || requestedLanguage === defaultLanguage.toLowerCase()) {
       kernel = defaults.kernel;
     }
   }
-  if (!args[1] && !kernel) kernel = defaultCeilKernelForLanguage(language);
+  if (!kernel) kernel = defaultCeilKernelForLanguage(language);
   kernel = cleanCeilToken(stripCeilKernelParens(kernel), defaultCeilKernelForLanguage(language));
   session = cleanCeilToken(session, DEFAULT_CEIL_SESSION);
   language = ceilLanguageForKernel(kernel, language);
   const id = cleanCeilToken(range.idRaw, ceilCommandGeneratedId(file, range));
-  const normalizedArgs = session && session !== DEFAULT_CEIL_SESSION
-    ? `${language}, ${kernel}, ${session}`
-    : `${language}, ${kernel}`;
+  const normalizedArgs = `${language}, ${session}`;
   return {
     kernel,
     session,
@@ -754,13 +844,11 @@ function parseCeilCommand(range: CeilCommandRange, file: string, defaults?: Ceil
 }
 
 function formatCeilCommand(meta: CeilCommandMeta): string {
-  const args = meta.session && meta.session !== DEFAULT_CEIL_SESSION
-    ? `${meta.language}, ${meta.kernel}, ${meta.session}`
-    : `${meta.language}, ${meta.kernel}`;
-  return `@@cell(${args}) [${meta.id}]`;
+  return `@@cell(${meta.language}, ${meta.session || DEFAULT_CEIL_SESSION}) [${meta.id}]`;
 }
 
 function replaceCeilCommandLine(view: EditorView, from: number, insert: string): void {
+  if (from < 0 || from > view.state.doc.length) return;
   const line = view.state.doc.lineAt(from);
   const range = parseCeilCommandLine(line.text, line.from);
   if (!range) return;
@@ -2190,7 +2278,7 @@ class CeilCommandWidget extends MeasuredWidget {
           kernel: meta.kernel,
           session: meta.session,
           language: meta.language,
-          storage: "script",
+          storage: "ipynb",
           cells: ceilCommandCellsForContext(view.state, meta, file),
         });
         setStatus(meta.id);
@@ -2214,7 +2302,7 @@ class CeilCommandWidget extends MeasuredWidget {
     );
     const executeEntries = async (
       selectedEntries: CeilCellContextEntry[],
-      mode: "dependencies" | "selected",
+      mode: "current" | "selected",
       entries: CeilCellContextEntry[],
     ): Promise<CeilExecutionResult> => (
       await api.jupyterCell.executeScriptCell({
@@ -2223,7 +2311,7 @@ class CeilCommandWidget extends MeasuredWidget {
         kernel: meta.kernel,
         session: meta.session,
         language: meta.language,
-        runMode: mode,
+        mode,
         selectedCellIds: selectedEntries.map((entry) => entry.id),
         cells: entries,
       }) as CeilExecutionResult
@@ -2268,14 +2356,14 @@ class CeilCommandWidget extends MeasuredWidget {
       setBusy(true);
       let ranCurrent = false;
       try {
-        const dependencyMode = entriesToRun.length === 1 && entriesToRun[0]?.id === meta.id;
+        const currentMode = entriesToRun.length === 1 && entriesToRun[0]?.id === meta.id;
         setStatus(entriesToRun.length === 1 ? "Running..." : `Running ${entriesToRun.length}`);
-        if (dependencyMode && !leanRuntime) {
+        if (currentMode && !leanRuntime) {
           preserveCeilScroll(view, () => {
             output.textContent = "Running...";
           });
         }
-        const result = await executeEntries(entriesToRun, dependencyMode ? "dependencies" : "selected", entries);
+        const result = await executeEntries(entriesToRun, currentMode ? "current" : "selected", entries);
         const published = new Set<string>();
         if (Array.isArray(result.results)) {
           for (const item of result.results) {
@@ -2309,13 +2397,114 @@ class CeilCommandWidget extends MeasuredWidget {
       }
     };
 
-    const runButton = makeButton(leanRuntime ? "Sync" : "Run", leanRuntime ? "Sync this Lean cell source file" : "Run this cell and stale cells above in the same language/session script", async () => {
+    const runButton = makeButton(leanRuntime ? "Sync" : "Run", leanRuntime ? "Sync this Lean cell source file" : "Run only this Cell (JupyterLab semantics)", async () => {
       await runEntries([currentEntry()], "No cell");
     });
-    (block as HTMLElement & { __ceilRunCleanup?: () => void }).__ceilRunCleanup =
-      registerCeilRunHandler(meta.id, async () => {
-        await runEntries([currentEntry()], "No cell");
+    // Live output: paint iopub as it arrives instead of waiting for the
+    // execute response. The response stays authoritative — `runEntries` still
+    // renders `currentResult` when it lands — so this only affects what the
+    // cell shows *during* a run, and a dropped frame costs nothing.
+    let liveRunId = "";
+    let liveOutputs: Array<Record<string, unknown>> = [];
+    let stdinRow: HTMLElement | null = null;
+
+    const closeStdinPrompt = (): void => {
+      stdinRow?.remove();
+      stdinRow = null;
+    };
+
+    /**
+     * The cell is blocked in input()/getpass(). Show a prompt inline, the way
+     * a notebook does. Cancelling is a first-class action: the server answers
+     * the kernel with EOF, so the cell fails with EOFError instead of leaving
+     * the kernel — and every other cell sharing it — stuck on a read.
+     */
+    const openStdinPrompt = (runId: string, prompt: string, password: boolean): void => {
+      closeStdinPrompt();
+      const row = document.createElement("form");
+      row.className = "cm-ceil-stdin";
+      const label = document.createElement("label");
+      label.className = "cm-ceil-stdin-prompt";
+      label.textContent = prompt || (password ? "Password:" : "Input:");
+      const field = document.createElement("input");
+      field.className = "cm-ceil-stdin-input";
+      field.type = password ? "password" : "text";
+      field.autocomplete = "off";
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.className = "cm-ceil-stdin-cancel";
+      cancel.textContent = "Cancel";
+      row.append(label, field, cancel);
+
+      let answered = false;
+      const answer = (body: Record<string, unknown>): void => {
+        if (answered) return;
+        answered = true;
+        closeStdinPrompt();
+        void api.jupyterCell.inputReply({ runId, ...body }).catch(() => {});
+      };
+      row.addEventListener("submit", (event) => {
+        event.preventDefault();
+        answer({ value: field.value });
       });
+      cancel.addEventListener("click", () => answer({ cancel: true }));
+      field.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          answer({ cancel: true });
+        }
+      });
+
+      stdinRow = row;
+      outputWrap.append(row);
+      field.focus();
+    };
+    const stopLive = leanRuntime ? () => {} : registerCeilLiveHandler(meta.id, (detail) => {
+      if (detail.kernel !== meta.kernel || detail.session !== meta.session) return;
+      if (detail.phase === "start") {
+        liveRunId = String(detail.runId || "");
+        liveOutputs = [];
+        return;
+      }
+      if (!liveRunId || detail.runId !== liveRunId) return;
+      if (detail.phase === "end") {
+        liveRunId = "";
+        closeStdinPrompt();
+        return;
+      }
+      if (detail.phase === "stdin") {
+        openStdinPrompt(detail.runId ?? "", String(detail.prompt ?? ""), Boolean(detail.password));
+        return;
+      }
+      if (detail.phase === "stdin-done") {
+        closeStdinPrompt();
+        return;
+      }
+      for (const event of detail.events ?? []) {
+        if (event.kind === "status") {
+          setStatus(event.state === "busy" ? "Running..." : ceilResultStatusLabel(meta, lastResult));
+          continue;
+        }
+        liveOutputs = applyCeilLiveEvent(liveOutputs, event);
+      }
+      if (liveOutputs.length === 0) return;
+      renderCeilOutputs(
+        output,
+        { ok: true, status: "ok", live: true, outputs: liveOutputs },
+        outputWrap.classList.contains("is-expanded"),
+        view,
+        { preserveScroll: true },
+      );
+    });
+
+    const stopRun = registerCeilRunHandler(meta.id, async () => {
+      await runEntries([currentEntry()], "No cell");
+    });
+    (block as HTMLElement & { __ceilRunCleanup?: () => void }).__ceilRunCleanup = () => {
+      stopRun();
+      stopLive();
+      closeStdinPrompt();
+    };
     const runAboveButton = makeButton("Above", "Run cells above this one in the same session", async () => {
       await runEntries(contextEntries().filter((entry) => entry.from < this.range.from), "No cells above");
     });
@@ -2398,6 +2587,29 @@ class CeilCommandWidget extends MeasuredWidget {
       requestMeasurePreservingCeilScroll(view);
     });
     const popoutButton = makeButton("Popout", "Show output in a separate panel", () => openCeilOutputPopup(lastResult));
+
+    if (hostMode() !== "emacs") {
+      const reason = "Jupyter execution and Cell editing require the Emacs backend";
+      for (const control of [
+        editButton,
+        runButton,
+        runAboveButton,
+        runAllButton,
+        interruptButton,
+        variablesButton,
+        restartButton,
+        clearButton,
+      ]) {
+        control.disabled = true;
+        control.title = reason;
+      }
+      languageInput.disabled = true;
+      kernelSelect.disabled = true;
+      sessionInput.disabled = true;
+      languageInput.title = reason;
+      kernelSelect.title = reason;
+      sessionInput.title = reason;
+    }
 
     buttonBar.append(editButton, runButton, runAboveButton, runAllButton);
     const isAttachedKernel = meta.kernel.startsWith("attach:");

@@ -51,7 +51,8 @@ describeIfKernel("jupyter kernel WebSocket bridge (real kernel)", () => {
 
         bridge = installJupyterKernelWebSocket({
           server: httpServer,
-          resolveConnectionInfo: (id) => (id === record.id ? record.connectionInfo : undefined),
+          resolveKernelChannel: async (id: string) =>
+            (id === record.id ? { kind: "zmq" as const, connectionInfo: record.connectionInfo } : undefined),
           zmq,
         });
 

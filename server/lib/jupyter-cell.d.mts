@@ -50,5 +50,17 @@ export interface JupyterCellService {
 }
 
 export function createJupyterCellService(options?: JupyterCellServiceOptions): JupyterCellService;
+export function readPersistedScriptCell(body?: Record<string, unknown>): Promise<{
+  ok: true;
+  kernel: string;
+  session: string;
+  language: string;
+  cellId: string;
+  code: string;
+  output: Record<string, any> | null;
+  exists: boolean;
+  mtimeMs: number;
+  size: number;
+}>;
 export function durationFromEnv(name: string, fallback: number): number;
 export function jupyterWidgetCommOpenP(content: Record<string, unknown>): boolean;

@@ -108,11 +108,22 @@ export async function sendInterruptRequest(kernel, { stderr } = {}) {
  * socket is actually subscribed (ZMQ "slow joiner" problem) before the caller
  * starts trusting iopub traffic — the same fix vscode-jupyter uses to avoid
  * silently dropping the first status/comm messages after kernel start.
+ *
+ * Returns `{ ok, info }`. `info` is the `kernel_info_reply` content — the only
+ * authoritative source for `language_info` (file extension, codemirror mode,
+ * pygments lexer), `banner`, `help_links`, and the implementation version.
+ * Callers keep it on the kernel record rather than re-deriving language facts
+ * from the kernelspec name.
  */
 export async function warmupKernelInfo(kernel, timeoutMs, { stderr } = {}) {
   const log = makeLogger(stderr);
   const gotIopubMessage = createDeferred();
   const kernelInfoHandled = createDeferred();
+  let info;
+  const rememberInfo = (reply) => {
+    const content = reply?.content;
+    if (content && content.status !== "error" && !info) info = content;
+  };
   const iopubHandler = () => gotIopubMessage.resolve(true);
   gotIopubMessage.promise.catch(noop);
   kernelInfoHandled.promise.catch(noop);
@@ -128,11 +139,20 @@ export async function warmupKernelInfo(kernel, timeoutMs, { stderr } = {}) {
     });
     kernel
       .sendControlMessage(msg, true, true)
-      .done.then(() => kernelInfoHandled.resolve(true))
+      .done.then((reply) => {
+        rememberInfo(reply);
+        kernelInfoHandled.resolve(true);
+      })
       .catch(noop);
   };
   const sendOnShellChannel = () => {
-    kernel.requestKernelInfo().then(() => kernelInfoHandled.resolve(true)).catch(noop);
+    kernel
+      .requestKernelInfo()
+      .then((reply) => {
+        rememberInfo(reply);
+        kernelInfoHandled.resolve(true);
+      })
+      .catch(noop);
   };
 
   const start = Date.now();
@@ -150,7 +170,7 @@ export async function warmupKernelInfo(kernel, timeoutMs, { stderr } = {}) {
     }
     const ok = gotIopubMessage.completed && kernelInfoHandled.completed;
     if (!ok) log.warn(`Didn't get a response for requestKernelInfo after ${attempts} attempt(s)`);
-    return ok;
+    return { ok, info };
   } finally {
     kernel.iopubMessage.disconnect(iopubHandler);
   }

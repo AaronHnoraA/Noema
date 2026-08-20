@@ -223,6 +223,7 @@ const serverReader = { ...serverReaderDefaults, ...(injectedServerReader || {}) 
 const passiveServerReader = serverReaderMode && !serverReader.editingAids;
 const initialReadOnly = serverReaderMode || initialParams.get("readonly") === "1" || initialParams.get("readonly") === "true";
 const desktopMode = standaloneMode() && Boolean(window.noemaDesktop);
+const jupyterExecutionAvailable = !desktopMode && !serverReaderMode;
 const desktopPlatform = window.noemaDesktop?.platform || (/Mac/.test(navigator.platform) ? "darwin" : "");
 const platformLabels = desktopPlatformLabels(desktopPlatform);
 document.body.dataset.hostMode = serverReaderMode ? "server" : desktopMode ? "desktop" : "emacs";
@@ -2339,19 +2340,29 @@ function jupyterDefaultKernelForLanguage(language: string): string {
 function parseJupyterCellRuntime(rawArgs: string, defaults: JupyterCellDefaults = DEFAULT_JUPYTER_CELL): JupyterCellDefaults {
   const args = rawArgs.split(",").map((item) => item.trim()).filter(Boolean);
   let requestedLanguage = cleanJupyterToken(args[0] || "", defaults.language);
-  let kernel = args[1] || "";
-  const session = cleanJupyterToken(args[2] || "", defaults.session);
+  let kernel = "";
+  let session = defaults.session;
   if (args.length === 1 && jupyterLooksLikeKernelToken(args[0]!)) {
     kernel = args[0]!;
     requestedLanguage = ceilLanguageForKernel(kernel);
-  } else if (!args[1] && defaults.kernel) {
+  } else if (args.length >= 3 || (args.length === 2 && jupyterLooksLikeKernelToken(args[1]!))) {
+    // Legacy language,kernel[,session] input remains readable for migration.
+    kernel = args[1] || "";
+    session = cleanJupyterToken(args[2] || "", DEFAULT_JUPYTER_CELL.session);
+  } else {
+    session = cleanJupyterToken(
+      args[1] || "",
+      args.length === 0 ? defaults.session : DEFAULT_JUPYTER_CELL.session,
+    );
+  }
+  if (!kernel && defaults.kernel) {
     const defaultLanguage = ceilLanguageForKernel(defaults.kernel, defaults.language);
     const requestedLanguageLower = requestedLanguage.toLowerCase();
     if (!args[0] || requestedLanguageLower === defaults.language.toLowerCase() || requestedLanguageLower === defaultLanguage.toLowerCase()) {
       kernel = defaults.kernel;
     }
   }
-  if (!args[1] && !kernel) kernel = jupyterDefaultKernelForLanguage(requestedLanguage);
+  if (!kernel) kernel = jupyterDefaultKernelForLanguage(requestedLanguage);
   kernel = cleanJupyterToken(kernel, jupyterDefaultKernelForLanguage(requestedLanguage)).replace(/^\((.*)\)$/, "$1").trim()
     || jupyterDefaultKernelForLanguage(requestedLanguage);
   const language = ceilLanguageForKernel(kernel, requestedLanguage);
@@ -2427,18 +2438,16 @@ function formatJupyterCellHeader(
   rawId: string,
   runtime: JupyterCellDefaults,
 ): string {
-  const nextArgs = runtime.session && runtime.session !== DEFAULT_JUPYTER_CELL.session
-    ? [runtime.language, runtime.kernel, runtime.session]
-    : [runtime.language, runtime.kernel];
+  const nextArgs = [runtime.language, runtime.session || DEFAULT_JUPYTER_CELL.session];
   return `${leading}@@cell(${nextArgs.join(", ")})${rawId ? ` [${rawId.trim()}]` : ""}`;
 }
 
-function switchJupyterKernelForCells(body: {
+async function switchJupyterKernelForCells(body: {
   language?: string;
   session?: string;
   kernel?: string;
   oldKernel?: string;
-}): number {
+}): Promise<number> {
   if (rejectReadOnlyAction("Read-only pane")) return 0;
   const targetLanguage = String(body.language || "").trim().toLowerCase();
   const targetSession = String(body.session || "").trim() || "default";
@@ -2449,49 +2458,26 @@ function switchJupyterKernelForCells(body: {
     return 0;
   }
 
-  const markdown = editor.getMarkdown();
-  const replacements: Array<{ from: number; to: number; text: string }> = [];
-  let pos = 0;
-  let lastCellDefaults = DEFAULT_JUPYTER_CELL;
-  while (pos <= markdown.length) {
-    const lineEndIndex = markdown.indexOf("\n", pos);
-    const lineEnd = lineEndIndex < 0 ? markdown.length : lineEndIndex;
-    const line = markdown.slice(pos, lineEnd);
-    const match = JUPYTER_CELL_RE.exec(line);
-    if (match) {
-      const leading = match[1] ?? "";
-      const rawArgs = match[2] ?? "";
-      const rawId = match[3] ?? "";
-      const runtime = parseJupyterCellRuntime(rawArgs, lastCellDefaults);
-      lastCellDefaults = runtime;
-      if (
-        runtime.language.toLowerCase() === targetLanguage
-        && runtime.session === targetSession
-        && (!oldKernel || runtime.kernel === oldKernel)
-        && runtime.kernel !== targetKernel
-      ) {
-        replacements.push({
-          from: pos,
-          to: lineEnd,
-          text: formatJupyterCellHeader(leading, rawId, { ...runtime, kernel: targetKernel }),
-        });
-      }
-    }
-    if (lineEndIndex < 0) break;
-    pos = lineEnd + 1;
+  const cells = scanJupyterCells().filter((cell) => (
+    cell.language.toLowerCase() === targetLanguage
+    && cell.session === targetSession
+    && (!oldKernel || cell.kernel === oldKernel)
+  ));
+  const anchor = cells[0];
+  if (anchor) {
+    const opened = await ensureJupyterScript(anchor);
+    const scriptFile = String(opened.file || opened.scriptFile || "");
+    if (!scriptFile) throw new Error("Jupyter script controller is unavailable");
+    await api.jupyterCell.sessionSelect({
+      scriptFile,
+      kind: "start",
+      kernelSpecName: targetKernel,
+    });
   }
-
-  for (const replacement of replacements.reverse()) {
-    editor.replaceMarkdownRange(replacement.from, replacement.to, replacement.text);
-  }
-  if (replacements.length > 0) {
-    jupyterScanMarkdown = null;
-    renderJupyterPanel();
-  }
-  setStatus(replacements.length
-    ? `Switched ${replacements.length} ${targetLanguage}/${targetSession} cell${replacements.length === 1 ? "" : "s"} to ${targetKernel}`
+  setStatus(cells.length
+    ? `Selected ${targetKernel} for ${targetLanguage}/${targetSession}`
     : `No matching ${targetLanguage}/${targetSession} cells`);
-  return replacements.length;
+  return cells.length;
 }
 
 function exitJupyterCellFromLean(cell: JupyterPanelCell): boolean {
@@ -2584,7 +2570,7 @@ function renderJupyterKernelMatchPreview(): void {
 }
 
 function switchJupyterKernelFromTool(): void {
-  switchJupyterKernelForCells({
+  void switchJupyterKernelForCells({
     language: jupyterKernelLanguage.value,
     session: jupyterKernelSession.value,
     kernel: jupyterKernelNew.value,
@@ -2758,20 +2744,24 @@ function filterJupyterCells(mode: string, cells = scanJupyterCells()): JupyterPa
   return [];
 }
 
-async function ensureJupyterScript(cell: JupyterPanelCell, allCells = scanJupyterCells()): Promise<void> {
-  await api.jupyterCell.openScript({
+async function ensureJupyterScript(cell: JupyterPanelCell, allCells = scanJupyterCells()): Promise<Record<string, unknown>> {
+  return await api.jupyterCell.openScript({
     file: currentFile,
     cellId: cell.id,
     kernel: cell.kernel,
     session: cell.session,
     language: cell.language,
-    storage: "script",
+    storage: "ipynb",
     open: false,
     cells: jupyterCellsForContext(cell, allCells),
   });
 }
 
 async function runJupyterCell(cell: JupyterPanelCell, allCells = scanJupyterCells()): Promise<boolean> {
+  if (!jupyterExecutionAvailable) {
+    setStatus("Jupyter execution requires the Emacs backend");
+    return false;
+  }
   const key = jupyterCellKey(cell);
   jupyterTaskState.set(key, { status: "running" });
   renderJupyterPanel();
@@ -2784,7 +2774,7 @@ async function runJupyterCell(cell: JupyterPanelCell, allCells = scanJupyterCell
       kernel: cell.kernel,
       session: cell.session,
       language: cell.language,
-      runMode: "dependencies",
+      mode: "current",
       selectedCellIds: [cell.id],
       cells: jupyterCellsForContext(cell, allCells),
     }) as JupyterPanelExecutionResult;
@@ -2839,6 +2829,10 @@ async function runJupyterCell(cell: JupyterPanelCell, allCells = scanJupyterCell
 }
 
 async function runJupyterCells(mode: "all" | "above" | "below" | "section"): Promise<void> {
+  if (!jupyterExecutionAvailable) {
+    setStatus("Jupyter execution requires the Emacs backend");
+    return;
+  }
   if (!currentFile) {
     setStatus("Save note first");
     return;
@@ -2868,7 +2862,7 @@ async function runJupyterCells(mode: "all" | "above" | "below" | "section"): Pro
       kernel: anchor.kernel,
       session: anchor.session,
       language: anchor.language,
-      runMode: "selected",
+      mode: "selected",
       selectedCellIds: groupCells.map((cell) => cell.id),
       cells: jupyterCellsForContext(anchor, allCells),
     }) as JupyterPanelExecutionResult;
@@ -3115,6 +3109,10 @@ function jupyterCellFromPointer(event: MouseEvent, fallbackToSelection = true): 
 }
 
 async function openJupyterCellSource(cell: JupyterPanelCell): Promise<void> {
+  if (!jupyterExecutionAvailable) {
+    setStatus("Cell editing requires the Emacs backend");
+    return;
+  }
   if (!currentFile) {
     setStatus("Save note first");
     return;
@@ -3125,14 +3123,31 @@ async function openJupyterCellSource(cell: JupyterPanelCell): Promise<void> {
     kernel: cell.kernel,
     session: cell.session,
     language: cell.language,
-    storage: "script",
+    storage: "ipynb",
     cells: jupyterCellsForContext(cell),
   });
 }
 
 async function deleteJupyterCellBlock(cell: JupyterPanelCell): Promise<void> {
   if (rejectReadOnlyAction("Read-only pane")) return;
+  if (!jupyterExecutionAvailable) {
+    setStatus("Cell editing requires the Emacs backend");
+    return;
+  }
+  if (!currentFile) {
+    setStatus("Save note first");
+    return;
+  }
   try {
+    await ensureJupyterScript(cell);
+    await api.jupyterCell.documentMutate({
+      file: currentFile,
+      cellId: cell.id,
+      kernel: cell.kernel,
+      session: cell.session,
+      language: cell.language,
+      op: "delete",
+    });
     const doc = editor.view.state.doc;
     const line = doc.lineAt(cell.from);
     let from = line.from;
@@ -3146,23 +3161,6 @@ async function deleteJupyterCellBlock(cell: JupyterPanelCell): Promise<void> {
     setStatus(`Deleted Jupyter cell ${cell.id}`);
   } catch (error) {
     setStatus(error instanceof Error ? `Delete failed: ${error.message}` : "Delete failed");
-    return;
-  }
-  if (!currentFile) return;
-  try {
-    const result = await api.jupyterCell.deleteScriptCell({
-      file: currentFile,
-      cellId: cell.id,
-      kernel: cell.kernel,
-      session: cell.session,
-      language: cell.language,
-    });
-    const removedScript = result.removedScript === true;
-    setStatus(removedScript
-      ? `Deleted Jupyter cell ${cell.id} and empty script`
-      : `Deleted Jupyter cell ${cell.id}`);
-  } catch (error) {
-    setStatus(error instanceof Error ? `Cell deleted; cleanup failed: ${error.message}` : "Cell deleted; cleanup failed");
   }
 }
 
@@ -3831,17 +3829,17 @@ function showContextMenu(event: MouseEvent, target: Partial<AaronContextMenuTarg
     );
   } else if (cell) {
     items.push(
-      { label: "Run Cell", detail: cellDetail, disabled: !currentFile, run: () => runJupyterCell(cell) },
-      { label: "Edit Cell Source", detail: cell.id, disabled: !currentFile, run: () => openJupyterCellSource(cell) },
-      { label: "Run Section", detail: cell.session, disabled: !currentFile, run: () => runJupyterCells("section") },
+      { label: "Run Cell", detail: cellDetail, disabled: !currentFile || !jupyterExecutionAvailable, run: () => runJupyterCell(cell) },
+      { label: "Edit Cell Source", detail: cell.id, disabled: !currentFile || !jupyterExecutionAvailable, run: () => openJupyterCellSource(cell) },
+      { label: "Run Section", detail: cell.session, disabled: !currentFile || !jupyterExecutionAvailable, run: () => runJupyterCells("section") },
       ...(isLeanJupyterCell(cell) ? [{
         label: "Convert to Python Cell",
         detail: "Lean -> python3",
         disabled: currentReadOnly,
         run: () => exitJupyterCellFromLean(cell),
       }] : []),
-      { label: "Kernel Tool", detail: "switch", disabled: isLeanJupyterCell(cell), run: () => void openJupyterKernelTool(cell) },
-      { label: "Delete Cell Block", detail: "source + output", danger: true, disabled: currentReadOnly, run: () => deleteJupyterCellBlock(cell) },
+      { label: "Kernel Tool", detail: "switch", disabled: isLeanJupyterCell(cell) || !jupyterExecutionAvailable, run: () => void openJupyterKernelTool(cell) },
+      { label: "Delete Cell Block", detail: "source + output", danger: true, disabled: currentReadOnly || !jupyterExecutionAvailable, run: () => deleteJupyterCellBlock(cell) },
     );
   } else if (href) {
     const detail = hrefPath(href) || href;
@@ -9890,7 +9888,7 @@ function runHostCommand(detail: unknown): boolean {
       void cleanupJupyterRuntime(Boolean((body as { force?: unknown }).force));
       return true;
     case "jupyter-switch-kernel":
-      switchJupyterKernelForCells(body as {
+      void switchJupyterKernelForCells(body as {
         language?: string;
         session?: string;
         kernel?: string;
@@ -10050,6 +10048,13 @@ jupyterKernelOld.addEventListener("change", () => {
   renderJupyterKernelMatchPreview();
 });
 jupyterKernelNew.addEventListener("change", renderJupyterKernelMatchPreview);
+if (!jupyterExecutionAvailable) {
+  for (const control of jupyterPanel.querySelectorAll<HTMLButtonElement>("[data-jupyter-action]")) {
+    if (control.dataset.jupyterAction === "refresh") continue;
+    control.disabled = true;
+    control.title = "Jupyter execution requires the Emacs backend";
+  }
+}
 jupyterPanel.addEventListener("click", (event) => {
   const button = (event.target as Element | null)?.closest<HTMLButtonElement>("[data-jupyter-action]");
   if (!button) return;

@@ -10,8 +10,28 @@ import {
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createKernelRegistry, sweepOrphanKernels } from "../jupyter/kernel-registry.mjs";
+import { createServerRegistry } from "../jupyter/server-registry.mjs";
 import { defaultKernelSearchDirs, findKernelSpecs, findAttachableConnectionFiles, resolveAttachToken } from "../jupyter/kernel-finder.mjs";
 import { executeOnKernel, jupyterWidgetCommOpenP } from "../jupyter/execution-message-handler.mjs";
+import {
+  commInfoOnKernel,
+  completeOnKernel,
+  historyOnKernel,
+  inspectOnKernel,
+  isCompleteOnKernel,
+} from "../jupyter/kernel-requests.mjs";
+import {
+  applyOutputMirror,
+  buildNotebook,
+  createNotebook,
+  notebookCellId,
+  notebookCodeMap,
+  notebookCodeOrder,
+  notebookOutput,
+  notebookOutputMirror,
+  parseNotebook,
+  serializeNotebook,
+} from "./jupyter-notebook-format.mjs";
 
 export { jupyterWidgetCommOpenP };
 
@@ -54,7 +74,8 @@ function safeSlug(value, fallback = "cell") {
 }
 
 function markerId(value) {
-  return String(value || "").trim().replace(/\s+/g, "-");
+  const text = String(value || "").trim();
+  return text ? notebookCellId(text) : "";
 }
 
 function languageForKernel(kernel, requested = "") {
@@ -73,40 +94,6 @@ function languageForKernel(kernel, requested = "") {
   return "python";
 }
 
-function extensionForLanguage(language) {
-  const map = {
-    bash: "sh",
-    c: "c",
-    cpp: "cpp",
-    csharp: "cs",
-    elisp: "el",
-    javascript: "js",
-    julia: "jl",
-    lean: "lean",
-    lean4: "lean",
-    lisp: "lisp",
-    python: "py",
-    r: "R",
-    ruby: "rb",
-    rust: "rs",
-    sage: "py",
-    scheme: "scm",
-    shell: "sh",
-    sql: "sql",
-    typescript: "ts",
-  };
-  return map[String(language || "").toLowerCase()] || "txt";
-}
-
-function commentPrefix(language) {
-  const value = String(language || "").toLowerCase();
-  if (["javascript", "typescript", "c", "cpp", "java", "rust", "go", "swift", "kotlin", "csharp"].includes(value)) return "//";
-  if (value === "sql") return "--";
-  if (value === "lean" || value === "lean4") return "--";
-  if (["elisp", "lisp", "scheme", "clojure"].includes(value)) return ";";
-  return "#";
-}
-
 function cellStoreDir(noteFile) {
   return join(dirname(noteFile), ".cell");
 }
@@ -116,16 +103,11 @@ function hiddenScriptPath(noteFile, session, language) {
   const noteBase = safeSlug(basename(noteFile, noteExt), "note");
   const safeLanguage = safeSlug(language, "python");
   const safeSession = safeSlug(session, "default");
-  const ext = extensionForLanguage(language);
-  return join(cellStoreDir(noteFile), `${noteBase}.${safeLanguage}.${safeSession}.${ext}`);
+  return join(cellStoreDir(noteFile), `${noteBase}.${safeLanguage}.${safeSession}.ipynb`);
 }
 
 function outputMirrorPath(noteFile, session, language) {
-  const noteExt = extname(noteFile);
-  const noteBase = safeSlug(basename(noteFile, noteExt), "note");
-  const safeLanguage = safeSlug(language, "python");
-  const safeSession = safeSlug(session, "default");
-  return join(cellStoreDir(noteFile), `${noteBase}.output.${safeLanguage}.${safeSession}.json`);
+  return hiddenScriptPath(noteFile, session, language);
 }
 
 function normalizeCode(value) {
@@ -152,44 +134,51 @@ function isoTime(value) {
 }
 
 function parseHiddenScriptCells(text) {
-  const lines = normalizeCode(text).split("\n");
-  const cells = new Map();
-  let current = null;
-  let body = [];
-  const startRe = /^\s*(?:\/\/|--|#|;)\s*%%\s+aaronnote-cell\s+id=([^\s]+)\s*$/;
-  const endRe = /^\s*(?:\/\/|--|#|;)\s*%%\s+end-aaronnote-cell\s+id=([^\s]+)\s*$/;
-  for (const line of lines) {
-    const start = startRe.exec(line);
-    if (start) {
-      current = markerId(start[1]);
-      body = [];
-      continue;
-    }
-    const end = endRe.exec(line);
-    if (end && current && markerId(end[1]) === current) {
-      cells.set(current, body.join("\n").replace(/\n$/, ""));
-      current = null;
-      body = [];
-      continue;
-    }
-    if (current) body.push(line);
+  return notebookCodeMap(parseNotebook(text));
+}
+
+/**
+ * Read a Cell projection without creating a kernel registry.  Server reader
+ * mode uses this after resolving `file` through its public catalog, so merely
+ * viewing saved source/output can never discover, attach to, or sweep a
+ * kernel process.
+ */
+export async function readPersistedScriptCell(body = {}) {
+  const noteFile = resolve(String(body.noteFile || body.file || ""));
+  const kernel = cleanToken(body.kernel, "python3");
+  const session = cleanToken(body.session, "default");
+  const language = languageForKernel(kernel, body.language || body.lang);
+  const cellId = markerId(body.cellId || body.id);
+  if (!noteFile) throw error("Missing note file", 400);
+  if (!cellId) throw error("Missing Jupyter cell id", 400);
+  const scriptFile = hiddenScriptPath(noteFile, session, language);
+  let notebook = createNotebook({ sourceFile: noteFile, kernel, session, language });
+  let info = null;
+  try {
+    notebook = parseNotebook(await nativeReadFile(scriptFile, "utf8"), {
+      sourceFile: noteFile, kernel, session, language,
+    });
+    info = await nativeStat(scriptFile);
+  } catch (cause) {
+    if (cause?.code !== "ENOENT") throw cause;
   }
-  return cells;
+  const cell = (notebook.cells || []).find((entry) => entry?.cell_type === "code" && entry.id === cellId);
+  return {
+    ok: true,
+    kernel,
+    session,
+    language,
+    cellId,
+    code: normalizeCode(cell?.source),
+    output: notebookOutput(cell, { passive: true }),
+    exists: Boolean(info),
+    mtimeMs: info?.mtimeMs ?? 0,
+    size: info?.size ?? 0,
+  };
 }
 
 function hiddenScriptCellOrder(text) {
-  const ids = [];
-  const seen = new Set();
-  const startRe = /^\s*(?:\/\/|--|#|;)\s*%%\s+aaronnote-cell\s+id=([^\s]+)\s*$/;
-  for (const line of normalizeCode(text).split("\n")) {
-    const start = startRe.exec(line);
-    if (!start) continue;
-    const id = markerId(start[1]);
-    if (!id || seen.has(id)) continue;
-    seen.add(id);
-    ids.push(id);
-  }
-  return ids;
+  return notebookCodeOrder(parseNotebook(text));
 }
 
 async function readExistingHiddenCells(scriptFile, fallbackFile = "", files) {
@@ -212,14 +201,12 @@ async function readExistingHiddenCells(scriptFile, fallbackFile = "", files) {
 
 async function readOutputMirror(file, fallbackFile = "", files) {
   try {
-    const parsed = JSON.parse(await files.readFile(file, "utf8"));
-    return parsed && typeof parsed === "object" ? parsed : {};
+    return notebookOutputMirror(parseNotebook(await files.readFile(file, "utf8")));
   } catch (err) {
     if (err?.code === "ENOENT") {
       if (fallbackFile && fallbackFile !== file) {
         try {
-          const parsed = JSON.parse(await files.readFile(fallbackFile, "utf8"));
-          return parsed && typeof parsed === "object" ? parsed : {};
+          return notebookOutputMirror(parseNotebook(await files.readFile(fallbackFile, "utf8")));
         } catch (fallbackErr) {
           if (fallbackErr?.code !== "ENOENT") throw fallbackErr;
         }
@@ -227,25 +214,21 @@ async function readOutputMirror(file, fallbackFile = "", files) {
       return {};
     }
     if (err instanceof SyntaxError) {
-      // A partially-written or hand-corrupted mirror must not brick the cell.
-      process.stderr.write(`[aaronnote-jupyter] ignoring corrupt output mirror: ${file}\n`);
-      return {};
+      process.stderr.write(`[aaronnote-jupyter] invalid notebook: ${file}\n`);
     }
     throw err;
   }
 }
 
-async function writeOutputMirror(file, value, files) {
+async function writeNotebookFile(file, serialized, files) {
   await files.mkdir(dirname(file), { recursive: true });
   if (files.atomicWriteP(file)) {
-    await files.writeFile(file, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    await files.writeFile(file, serialized, "utf8");
     return;
   }
-  // Atomic replace: a crash mid-write leaves the previous mirror intact instead
-  // of a half-written JSON that readOutputMirror would then have to discard.
   const tmp = `${file}.${randomUUID()}.tmp`;
   try {
-    await files.writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    await files.writeFile(tmp, serialized, "utf8");
     await files.rename(tmp, file);
   } catch (err) {
     try { await files.rm(tmp, { force: true }); } catch {}
@@ -253,76 +236,72 @@ async function writeOutputMirror(file, value, files) {
   }
 }
 
+async function writeOutputMirror(file, value, files) {
+  let notebook;
+  try {
+    notebook = parseNotebook(await files.readFile(file, "utf8"), {
+      sourceFile: value?.source,
+      kernel: value?.kernel,
+      session: value?.session,
+      language: value?.language,
+    });
+  } catch (err) {
+    if (err?.code !== "ENOENT") throw err;
+    notebook = createNotebook({
+      sourceFile: value?.source,
+      kernel: value?.kernel,
+      session: value?.session,
+      language: value?.language,
+    });
+  }
+  const serialized = serializeNotebook(applyOutputMirror(notebook, value));
+  await writeNotebookFile(file, serialized, files);
+}
+
 async function readExistingHiddenScript(scriptFile, fallbackFile = "", files) {
   try {
     const text = await files.readFile(scriptFile, "utf8");
+    const notebook = parseNotebook(text);
     return {
       text,
-      cells: parseHiddenScriptCells(text),
-      order: hiddenScriptCellOrder(text),
+      notebook,
+      cells: notebookCodeMap(notebook),
+      order: notebookCodeOrder(notebook),
     };
   } catch (err) {
     if (err?.code === "ENOENT") {
       if (fallbackFile && fallbackFile !== scriptFile) {
         try {
           const text = await files.readFile(fallbackFile, "utf8");
+          const notebook = parseNotebook(text);
           return {
             text: "",
-            cells: parseHiddenScriptCells(text),
-            order: hiddenScriptCellOrder(text),
+            notebook,
+            cells: notebookCodeMap(notebook),
+            order: notebookCodeOrder(notebook),
           };
         } catch (fallbackErr) {
           if (fallbackErr?.code !== "ENOENT") throw fallbackErr;
         }
       }
-      return { text: "", cells: new Map(), order: [] };
+      return { text: "", notebook: null, cells: new Map(), order: [] };
     }
     throw err;
   }
 }
 
-function buildHiddenScript({ noteFile, kernel, session, language, cells, targetCellId, storage = "markdown", existingCells = new Map(), existingOrder = [] }) {
-  const prefix = commentPrefix(language);
-  const leanRuntime = leanRuntimeP(language, kernel);
-  const normalizedCells = [];
-  const seen = new Set();
-  for (const cell of cells) {
-    const id = markerId(cell.cellId || cell.id);
-    if (!id || seen.has(id)) continue;
-    seen.add(id);
-    normalizedCells.push({ ...cell, cellId: id, id });
-  }
-  // Opening one cell must never discard another cell body already present in
-  // the hidden script. This protects unsaved/older @@cell entries when the
-  // current editor scan is stale, partial, or still generating a new id.
-  for (const id of existingOrder) {
-    if (!id || seen.has(id)) continue;
-    seen.add(id);
-    normalizedCells.push({ cellId: id, id, code: "" });
-  }
-  const lines = [
-    `${prefix} Noema cell source: ${noteFile}`,
-    `${prefix} Noema cell kernel: ${kernel}`,
-    `${prefix} Noema cell session: ${session}`,
-    `${prefix} Noema cell storage: ${storage}`,
-    leanRuntime
-      ? `${prefix} Noema Lean cell source; edit cell bodies between markers.`
-      : `${prefix} Noema Jupyter cell script; edit cell bodies between markers.`,
-    "",
-  ];
-  let targetLine = 1;
-  for (const cell of normalizedCells) {
-    const id = markerId(cell.cellId || cell.id);
-    lines.push(`${prefix} %% aaronnote-cell id=${id}`);
-    if (id === targetCellId) targetLine = lines.length + 1;
-    const incoming = normalizeCode(cell.code);
-    const code = incoming.trim() ? incoming : (existingCells.get(id) ?? incoming);
-    const codeLines = normalizeCode(code).split("\n");
-    lines.push(...codeLines);
-    lines.push(`${prefix} %% end-aaronnote-cell id=${id}`);
-    lines.push("");
-  }
-  return { text: `${lines.join("\n").replace(/\s*$/, "")}\n`, line: targetLine };
+function buildHiddenScript({ noteFile, kernel, session, language, cells, targetCellId, storage = "ipynb", existingNotebook = null, dropCellIds = [] }) {
+  return buildNotebook({
+    existing: existingNotebook,
+    noteFile,
+    kernel,
+    session,
+    language,
+    cells,
+    targetCellId,
+    storage,
+    dropCellIds,
+  });
 }
 
 export function createJupyterCellService({
@@ -332,9 +311,11 @@ export function createJupyterCellService({
   workspaceRoot,
   stdout = process.stdout,
   stderr = process.stderr,
+  publish,
   zmq: injectedZmq,
   fileHost,
   kernelHost,
+  serverHost,
   openFile,
   toolEnvironment,
 } = {}) {
@@ -352,6 +333,13 @@ export function createJupyterCellService({
   const cleanupIntervalMs = durationFromEnv("AARONNOTE_JUPYTER_CLEANUP_INTERVAL_MS", 30 * 1000);
   const execTimeoutMs = durationFromEnv("AARONNOTE_JUPYTER_EXEC_TIMEOUT_MS", 0);
   const interruptGraceMs = durationFromEnv("AARONNOTE_JUPYTER_INTERRUPT_GRACE_MS", 5000);
+  const shutdownGraceMs = durationFromEnv("AARONNOTE_JUPYTER_SHUTDOWN_GRACE_MS", 2000);
+  const introspectTimeoutMs = durationFromEnv("AARONNOTE_JUPYTER_INTROSPECT_TIMEOUT_MS", 3000);
+  const liveFlushMs = durationFromEnv("AARONNOTE_JUPYTER_LIVE_FLUSH_MS", 80);
+  // Jupyter itself waits for stdin indefinitely. We put a ceiling on it
+  // because a prompt nobody answers also blocks every other cell sharing the
+  // kernel; 0 restores the upstream behaviour.
+  const stdinTimeoutMs = durationFromEnv("AARONNOTE_JUPYTER_STDIN_TIMEOUT_MS", 5 * 60 * 1000);
   const kernelspecCacheTtlMs = durationFromEnv("AARONNOTE_JUPYTER_KERNELSPEC_CACHE_TTL_MS", 15 * 1000);
   const useHomeKernels = process.env.AARONNOTE_JUPYTER_USE_HOME_KERNELS !== "0";
   const allowedKernelsRaw = String(process.env.AARONNOTE_JUPYTER_ALLOWED_KERNELS || "").trim();
@@ -397,12 +385,25 @@ export function createJupyterCellService({
     },
   };
 
+  // Remote Jupyter servers. `serverHost` answers "what is server X?" — in
+  // Emacs host mode the broker resolves it against the note's Remote target
+  // and may open a channel first, handing back a client-reachable URL.
+  const servers = serverHost
+    ? createServerRegistry({
+        resolveServer: (serverId) => serverHost.resolveServer(serverId),
+        releaseServer: (serverId) => serverHost.releaseServer?.(serverId),
+        stderr,
+      })
+    : null;
+
   let cleanupTimer = null;
   let cleanupRunning = false;
   let registryPromise = null;
   let registrySync = null;
   const mirrorLocks = new Map();
   const executionQueues = new Map();
+  /** Outstanding `input_request`s, keyed by runId, awaiting an answer from the UI. */
+  const pendingStdin = new Map();
 
   // Last-resort synchronous cleanup: `process.on("exit")` handlers cannot
   // await, so if the async SIGTERM/SIGINT shutdown() path didn't run to
@@ -436,6 +437,8 @@ export function createJupyterCellService({
           runtimeDir,
           cwd: workspace,
           zmq,
+          serverRegistry: servers,
+          shutdownGraceMs,
           stderr,
           kernelHost,
           baseEnvironment: toolEnvironment,
@@ -474,8 +477,8 @@ export function createJupyterCellService({
   }
 
   function withMirrorLock(file, run) {
-    // Serialize read-modify-write on a single output mirror so two cells sharing
-    // one kernel/session file cannot clobber each other's saved outputs.
+    // Serialize read-modify-write on one notebook so two cells sharing a
+    // kernel/session cannot clobber source or each other's saved outputs.
     const previous = mirrorLocks.get(file) || Promise.resolve();
     const result = previous.then(run, run);
     const guard = result.catch(() => {});
@@ -612,18 +615,28 @@ export function createJupyterCellService({
   function kernelTask(key, record) {
     const now = Date.now();
     const running = Math.max(0, Number(record?.running || 0));
+    const lastUsedAt = Number(record?.lastActivity || now);
     return {
       key,
       id: record?.id || "",
+      file: record?.scriptFile || "",
+      sourceFile: record?.sourceFile || "",
       kernel: record?.kernelName || "",
+      session: record?.session || "default",
+      language: record?.language || record?.kernelSpec?.language || "",
       status: record?.status === "dead" ? "dead" : (running > 0 ? "running" : (record?.lastStatus || "idle")),
       running,
+      owned: Boolean(record?.owned),
       attached: Boolean(record?.attached),
+      hostRuntimeId: record?.hostRuntimeId || "",
       createdAt: record?.createdAt || 0,
       createdAtIso: isoTime(record?.createdAt),
-      lastUsedAt: record?.lastActivity || 0,
+      lastUsedAt,
       lastUsedAtIso: isoTime(record?.lastActivity),
-      idleMs: Math.max(0, now - Number(record?.lastActivity || now)),
+      lastActivityAt: lastUsedAt,
+      lastActivityAtIso: isoTime(lastUsedAt),
+      idleMs: running > 0 ? 0 : Math.max(0, now - lastUsedAt),
+      runningMs: running > 0 ? Math.max(0, now - lastUsedAt) : 0,
       totalRuns: Number(record?.totalRuns || 0),
       executionCount: record?.executionCount ?? null,
       lastCellId: record?.lastCellId || "",
@@ -669,11 +682,47 @@ export function createJupyterCellService({
     }
   }
 
+  /**
+   * Parse a remote-server kernel name.
+   *
+   *   server:<serverId>:<kernelspec>        start a new kernel there
+   *   server:<serverId>:kernel:<kernelId>   adopt one already running there
+   *
+   * Returns undefined for any other name, so local kernelspec and `attach:`
+   * names fall through unchanged.
+   */
+  function parseServerKernelName(kernel) {
+    const value = String(kernel || "");
+    if (!value.startsWith("server:")) return undefined;
+    const rest = value.slice("server:".length);
+    const split = rest.indexOf(":");
+    if (split <= 0) return undefined;
+    const serverId = rest.slice(0, split);
+    const target = rest.slice(split + 1);
+    if (target.startsWith("kernel:")) {
+      const kernelId = target.slice("kernel:".length);
+      return kernelId ? { serverId, kernelId } : undefined;
+    }
+    return target ? { serverId, kernelSpecName: target } : undefined;
+  }
+
   async function ensureKernel(body) {
     const { noteFile, scriptFile, kernel, session, language, key } = runtimeForBody(body || {});
     const registry = await getRegistry();
     let record;
-    if (kernel.startsWith("attach:")) {
+    const serverTarget = parseServerKernelName(kernel);
+    if (serverTarget) {
+      if (!servers) throw error("No Jupyter servers are configured", 400);
+      record = await registry.ensureServer(key, kernel, {
+        ...serverTarget,
+        // The session path is what the server shows in its own UI and what
+        // sets the kernel's working directory. Only the note's base name is
+        // used: the server has its own filesystem, and a client-side path
+        // would point at a directory that does not exist there.
+        path: `${basename(noteFile).replace(/\.[^.]*$/, "")}.ipynb`,
+        name: basename(noteFile),
+      });
+    } else if (kernel.startsWith("attach:")) {
       const token = kernel.slice("attach:".length);
       const connectionFilePath = await resolveAttachToken(token, attachDirs);
       if (!connectionFilePath) throw error(`No attachable kernel connection file found for "${token}"`, 404);
@@ -687,6 +736,7 @@ export function createJupyterCellService({
       if (!specEntry) throw error(`Unknown Jupyter kernel: ${kernel}`, 404);
       record = await registry.ensure(key, { ...specEntry, sourceFile: noteFile });
     }
+    Object.assign(record, { sourceFile: noteFile, scriptFile, session, language });
     await captureVariableBaseline(record, kernel);
     registry.touch(key);
     scheduleCleanup();
@@ -714,6 +764,83 @@ export function createJupyterCellService({
         displayName: `Attach: ${item.token}`,
         language: "",
       })),
+      servers: await listServerKernels(),
+    };
+  }
+
+  /**
+   * Kernels available on each configured remote Jupyter server: its
+   * kernelspecs (start a new one) and the kernels already running there
+   * (adopt one). A server that is unreachable reports its error rather than
+   * disappearing from the list — silently omitting it would look like a
+   * configuration problem.
+   */
+  async function listServerKernels() {
+    if (!servers || typeof serverHost?.listServers !== "function") return [];
+    let configured = [];
+    try {
+      configured = await serverHost.listServers();
+    } catch (err) {
+      stderr.write(`[aaronnote-jupyter] failed to list Jupyter servers: ${err?.message || err}\n`);
+      return [];
+    }
+    return await Promise.all((configured || []).map(async (entry) => {
+      const serverId = String(entry?.id || "");
+      const base = {
+        id: serverId,
+        displayName: String(entry?.displayName || entry?.name || serverId),
+        url: String(entry?.url || ""),
+        kind: String(entry?.kind || "server"),
+        target: String(entry?.target || "local"),
+      };
+      try {
+        const [specs, running] = await Promise.all([
+          servers.listKernelSpecs(serverId),
+          servers.listRunning(serverId).catch(() => []),
+        ]);
+        return {
+          ...base,
+          kernels: specs.map((spec) => ({
+            name: `server:${serverId}:${spec.name}`,
+            displayName: String(spec.spec?.display_name || spec.name),
+            language: String(spec.spec?.language || ""),
+          })),
+          running: running.map((model) => ({
+            name: `server:${serverId}:kernel:${model.id}`,
+            displayName: `${model.name} (${String(model.id).slice(0, 8)})`,
+            language: "",
+            lastActivity: model.last_activity || "",
+            connections: Number(model.connections || 0),
+            executionState: String(model.execution_state || ""),
+          })),
+        };
+      } catch (err) {
+        return { ...base, kernels: [], running: [], error: String(err?.message || err) };
+      }
+    }));
+  }
+
+  /**
+   * The interesting half of `kernel_info_reply`. `language_info` is the only
+   * authoritative source for the file extension, CodeMirror mode, and Pygments
+   * lexer of a kernel's language — a kernelspec name is a guess.
+   */
+  function describeKernelInfo(info) {
+    const language = info?.language_info || {};
+    return {
+      implementation: String(info?.implementation || ""),
+      implementationVersion: String(info?.implementation_version || ""),
+      protocolVersion: String(info?.protocol_version || ""),
+      banner: String(info?.banner || ""),
+      helpLinks: Array.isArray(info?.help_links) ? info.help_links : [],
+      language: {
+        name: String(language.name || ""),
+        version: String(language.version || ""),
+        mimetype: String(language.mimetype || ""),
+        fileExtension: String(language.file_extension || ""),
+        pygmentsLexer: String(language.pygments_lexer || ""),
+        codemirrorMode: language.codemirror_mode ?? null,
+      },
     };
   }
 
@@ -721,6 +848,133 @@ export function createJupyterCellService({
     const err = (outputs || []).find((item) => item.output_type === "error");
     if (!err) return "";
     return `${err.ename || "Error"}: ${err.evalue || ""}`.trim();
+  }
+
+  /**
+   * Batches an execution's live output events and publishes them to the UI.
+   *
+   * Two things are deliberate here. Events are coalesced on a short timer
+   * rather than sent per message, because a `for i in range(100000): print(i)`
+   * loop emits far more iopub traffic than a UI can usefully paint, and one
+   * SSE frame per line would starve everything else on that connection.
+   * Consecutive appends to the same output are merged for the same reason.
+   *
+   * Nothing here is load-bearing for correctness: the execute RPC still
+   * returns the complete outputs array, and the client reconciles against it,
+   * so a dropped or coalesced-away frame only costs smoothness.
+   */
+  function createLiveOutputStream(kernelInfo, cellId, runId) {
+    const identity = {
+      key: kernelInfo.key,
+      runId,
+      cellId,
+      file: kernelInfo.sourceFile,
+      kernel: kernelInfo.kernel,
+      session: kernelInfo.session,
+    };
+    if (typeof publish !== "function") {
+      return { identity, push() {}, start() {}, finish() {} };
+    }
+    let pending = [];
+    let timer = null;
+
+    const flush = () => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      if (pending.length === 0) return;
+      const events = pending;
+      pending = [];
+      try {
+        publish("jupyter-cell", { ...identity, phase: "events", events });
+      } catch {
+        /* a broken event transport must never fail the execution */
+      }
+    };
+
+    return {
+      identity,
+      start() {
+        try {
+          publish("jupyter-cell", { ...identity, phase: "start" });
+        } catch { /* ignore */ }
+      },
+      push(event) {
+        const last = pending[pending.length - 1];
+        if (event.kind === "append" && last?.kind === "append" && last.index === event.index) {
+          last.text += event.text;
+        } else {
+          pending.push(event);
+        }
+        if (!timer) {
+          timer = setTimeout(flush, Math.max(0, liveFlushMs));
+          timer.unref?.();
+        }
+      },
+      finish(summary) {
+        flush();
+        try {
+          publish("jupyter-cell", { ...identity, phase: "end", ...summary });
+        } catch { /* ignore */ }
+      },
+    };
+  }
+
+  /**
+   * Ask the UI to answer a kernel `input_request` and resolve with what the
+   * user typed.
+   *
+   * The prompt is published on the same live channel as cell output, and the
+   * answer comes back through `inputReply` below. Rejecting (cancel, timeout,
+   * or shutdown) makes executeOnKernel send EOF, so the cell ends with a
+   * normal EOFError rather than leaving the kernel blocked on a read.
+   */
+  function requestStdin(identity, request) {
+    if (typeof publish !== "function") return Promise.reject(new Error("No UI to answer stdin"));
+    const runId = identity.runId;
+    return new Promise((resolve, reject) => {
+      let timer = null;
+      const settle = (fn, value) => {
+        if (!pendingStdin.has(runId)) return;
+        pendingStdin.delete(runId);
+        if (timer) clearTimeout(timer);
+        try {
+          publish("jupyter-cell", { ...identity, phase: "stdin-done" });
+        } catch { /* ignore */ }
+        fn(value);
+      };
+      pendingStdin.set(runId, {
+        resolve: (value) => settle(resolve, value),
+        reject: (err) => settle(reject, err),
+      });
+      if (stdinTimeoutMs > 0) {
+        timer = setTimeout(
+          () => settle(reject, new Error("Timed out waiting for input")),
+          stdinTimeoutMs,
+        );
+        timer.unref?.();
+      }
+      try {
+        publish("jupyter-cell", { ...identity, phase: "stdin", ...request });
+      } catch (ex) {
+        settle(reject, ex instanceof Error ? ex : new Error(String(ex)));
+      }
+    });
+  }
+
+  /**
+   * Answer (or cancel) an outstanding `input_request`. Cancelling is not a
+   * failure: it resolves the execution with EOFError, which is what
+   * interrupting a blocked `input()` does in a terminal.
+   */
+  async function inputReply(body) {
+    const runId = String(body?.runId || "");
+    const waiting = pendingStdin.get(runId);
+    if (!waiting) return { ok: true, delivered: false };
+    if (body?.cancel) waiting.reject(new Error("Input cancelled"));
+    else waiting.resolve(String(body?.value ?? ""));
+    return { ok: true, delivered: true };
   }
 
   async function runExecuteAttempt(kernelInfo, code, cellId, body) {
@@ -732,6 +986,9 @@ export function createJupyterCellService({
     record.lastCellId = cellId;
     record.lastStatus = "running";
     record.lastError = "";
+    const runId = randomUUID();
+    const live = createLiveOutputStream(kernelInfo, cellId, runId);
+    live.start();
     try {
       const streamLimit = durationFromEnv("AARONNOTE_JUPYTER_MAX_STREAM_BYTES", 1024 * 1024);
       const widgetMessageLimit = durationFromEnv("AARONNOTE_JUPYTER_MAX_WIDGET_MESSAGES", 512);
@@ -741,10 +998,25 @@ export function createJupyterCellService({
         result = await executeOnKernel(record.kernel, code, {
           silent: Boolean(body?.silent),
           storeHistory: body?.storeHistory !== false,
+          // Jupyter's own semantics: a run-all/run-above sequence aborts the
+          // remaining queued cells once one raises. A single explicit run
+          // stays permissive so an error doesn't tear down a batch the user
+          // didn't ask for.
+          stopOnError: Boolean(body?.stopOnError),
           streamLimit,
           widgetMessageLimit,
           widgetMessageBytesLimit,
           execTimeoutMs,
+          onStdin: typeof publish === "function"
+            ? (request) => requestStdin(live.identity, request)
+            : undefined,
+          onEvent: (event) => {
+            // The kernel's own busy/idle, kept separate from `lastStatus`
+            // (which is the last execute_reply status): a cell can be idle
+            // between two runs while its last result was an error.
+            if (event.kind === "status" && event.state) record.kernelState = event.state;
+            live.push(event);
+          },
         });
       } catch (err) {
         if (Number(err?.statusCode) === 504) {
@@ -774,6 +1046,11 @@ export function createJupyterCellService({
           generation: Number(record.widgetGeneration || 1),
         },
         stateLost: Boolean(record.stateLost),
+        // `execute_reply` payloads (see applyReplyPayloads): `%load` wants to
+        // rewrite the cell source, `exit` wants the kernel gone. `page` was
+        // already folded into `outputs`.
+        ...(result.setNextInput ? { setNextInput: result.setNextInput } : {}),
+        ...(result.askExit ? { askExit: result.askExit } : {}),
         ...(result.widgetMessages ? { widgetMessages: result.widgetMessages, widgetMessagesTruncated: result.widgetMessagesTruncated } : {}),
         ...(result.widgetOutputs ? { widgetOutputs: result.widgetOutputs } : {}),
       };
@@ -782,10 +1059,25 @@ export function createJupyterCellService({
       record.lastError = err?.message || String(err || "");
       throw err;
     } finally {
+      live.finish({
+        status: record.lastStatus,
+        executionCount: record.executionCount ?? null,
+      });
       record.running = Math.max(0, Number(record.running || 0) - 1);
       record.lastActivity = Date.now();
       scheduleCleanup();
     }
+  }
+
+  /**
+   * `exit`/`quit` in a cell produces an `ask_exit` payload. Honour it after
+   * the response has been assembled (and outside the execution queue slot) so
+   * the caller still receives the run's own output.
+   */
+  async function honourAskExit(key, result) {
+    if (!result?.askExit || result.askExit.keepKernel) return;
+    const registry = await getRegistry();
+    await registry.shutdown(key).catch(() => {});
   }
 
   async function executePrepared(body, code, cellId, { queued = true } = {}) {
@@ -815,7 +1107,9 @@ export function createJupyterCellService({
         session: runtime.session,
         language: runtime.language,
       });
-      return await runExecuteAttempt(kernelInfo, normalizedCode, normalizedCellId, body);
+      const result = await runExecuteAttempt(kernelInfo, normalizedCode, normalizedCellId, body);
+      await honourAskExit(kernelInfo.key, result);
+      return result;
     };
     return queued ? await withKernelExecutionQueue(runtime.key, run) : await run();
   }
@@ -832,30 +1126,32 @@ export function createJupyterCellService({
     const session = cleanToken(body?.session, "default");
     const language = languageForKernel(kernel, body?.language || body?.lang);
     const targetCellId = markerId(body?.cellId || body?.id);
-    const storage = cleanToken(body?.storage, "markdown") === "script" ? "script" : "markdown";
+    const storage = "ipynb";
     const cells = Array.isArray(body?.cells) ? body.cells : [];
     if (!targetCellId) throw error("Missing Jupyter cell id", 400);
     if (cells.length === 0) throw error("No Jupyter cells to write", 400);
     const scriptFile = hiddenScriptPath(noteFile, session, language);
-    const existingScript = await readExistingHiddenScript(scriptFile, "", files);
-    const rendered = buildHiddenScript({
-      noteFile,
-      kernel,
-      session,
-      language,
-      cells,
-      targetCellId,
-      storage,
-      existingCells: existingScript.cells,
-      existingOrder: existingScript.order,
+    let rendered;
+    let changed = false;
+    await withMirrorLock(scriptFile, async () => {
+      const existingScript = await readExistingHiddenScript(scriptFile, "", files);
+      rendered = buildHiddenScript({
+        noteFile,
+        kernel,
+        session,
+        language,
+        cells,
+        targetCellId,
+        storage,
+        existingNotebook: existingScript.notebook,
+      });
+      changed = existingScript.text !== rendered.text;
+      if (changed) await writeNotebookFile(scriptFile, rendered.text, files);
     });
-    await files.mkdir(dirname(scriptFile), { recursive: true });
-    const changed = existingScript.text !== rendered.text;
-    if (changed) await files.writeFile(scriptFile, rendered.text, "utf8");
     const info = await files.stat(scriptFile);
     let kernelSpec = null;
     let kernelSpecError = "";
-    if (!kernel.startsWith("attach:")) {
+    if (!kernel.startsWith("attach:") && !kernel.startsWith("server:")) {
       try {
         kernelSpec = (await listKernelSpecs(noteFile)).find((entry) => entry?.name === kernel) || null;
       } catch (err) {
@@ -1024,7 +1320,7 @@ export function createJupyterCellService({
         kernel,
         session,
         language,
-        storage: "script",
+        storage: "ipynb",
         open: false,
       });
       const scriptFile = hiddenScriptPath(noteFile, session, language);
@@ -1153,16 +1449,19 @@ export function createJupyterCellService({
     if (!cellId) throw error("Missing Jupyter cell id", 400);
     const scriptFile = hiddenScriptPath(noteFile, session, language);
     const outputFile = outputMirrorPath(noteFile, session, language);
-    const existingScript = await readExistingHiddenScript(scriptFile, "", files);
-    const remainingOrder = existingScript.order.filter((id) => id && id !== cellId);
+    let remainingOrder = [];
     let removedScript = false;
-    let changedScript = existingScript.order.includes(cellId);
-
-    if (remainingOrder.length === 0) {
-      await files.rm(scriptFile, { force: true });
-      await files.rm(outputFile, { force: true });
-      removedScript = true;
-    } else if (changedScript) {
+    let changedScript = false;
+    await withMirrorLock(scriptFile, async () => {
+      const existingScript = await readExistingHiddenScript(scriptFile, "", files);
+      remainingOrder = existingScript.order.filter((id) => id && id !== cellId);
+      changedScript = existingScript.order.includes(cellId);
+      if (!changedScript) return;
+      if (remainingOrder.length === 0) {
+        await files.rm(scriptFile, { force: true });
+        removedScript = true;
+        return;
+      }
       const cells = remainingOrder.map((id) => ({
         cellId: id,
         id,
@@ -1175,49 +1474,12 @@ export function createJupyterCellService({
         language,
         cells,
         targetCellId: remainingOrder[0],
-        storage: "script",
-        existingCells: new Map(),
-        existingOrder: [],
+        storage: "ipynb",
+        existingNotebook: existingScript.notebook,
+        dropCellIds: [cellId],
       });
-      await files.mkdir(dirname(scriptFile), { recursive: true });
-      await files.writeFile(scriptFile, rendered.text, "utf8");
-      await withMirrorLock(outputFile, async () => {
-        const mirror = await readOutputMirror(outputFile, "", files);
-        const cellsMirror = mirror.cells && typeof mirror.cells === "object" ? mirror.cells : {};
-        delete cellsMirror[cellId];
-        if (Object.keys(cellsMirror).length === 0) {
-          await files.rm(outputFile, { force: true });
-        } else {
-          await writeOutputMirror(outputFile, {
-            version: 1,
-            source: noteFile,
-            kernel,
-            session,
-            language,
-            cells: cellsMirror,
-          }, files);
-        }
-      });
-    } else {
-      await withMirrorLock(outputFile, async () => {
-        const mirror = await readOutputMirror(outputFile, "", files);
-        const cellsMirror = mirror.cells && typeof mirror.cells === "object" ? mirror.cells : {};
-        if (!Object.prototype.hasOwnProperty.call(cellsMirror, cellId)) return;
-        delete cellsMirror[cellId];
-        if (Object.keys(cellsMirror).length === 0) {
-          await files.rm(outputFile, { force: true });
-        } else {
-          await writeOutputMirror(outputFile, {
-            version: 1,
-            source: noteFile,
-            kernel,
-            session,
-            language,
-            cells: cellsMirror,
-          }, files);
-        }
-      });
-    }
+      await writeNotebookFile(scriptFile, rendered.text, files);
+    });
     return {
       ok: true,
       file: scriptFile,
@@ -1349,6 +1611,86 @@ export function createJupyterCellService({
     return { ok: true, supported: true, kernel, session: cleanToken(body?.session, "default"), variables: values };
   }
 
+  /**
+   * Shell-channel introspection (complete/inspect/is_complete/history/
+   * comm_info) against the kernel this cell already belongs to.
+   *
+   * These deliberately do NOT go through ensureKernel: typing in a cell must
+   * never launch a kernel process as a side effect, and they must not enter
+   * the execution queue — they are not executions, and queueing them behind a
+   * running cell would make the completion popup wait for it. The kernel's own
+   * shell channel already serializes them; kernel-requests.mjs bounds the wait.
+   */
+  async function withLiveKernel(body, run, absent) {
+    const { record } = await kernelRecordForBody(body || {});
+    if (!record?.id || record.status === "dead") {
+      return { ok: true, supported: false, ...absent };
+    }
+    const registry = await getRegistry();
+    registry.touch(record.key);
+    return { ok: true, supported: true, ...(await run(record)) };
+  }
+
+  async function complete(body) {
+    return await withLiveKernel(
+      body,
+      async (record) => await completeOnKernel(record.kernel, {
+        code: String(body?.code || ""),
+        cursorPos: Number(body?.cursorPos ?? body?.cursor_pos ?? 0),
+        timeoutMs: introspectTimeoutMs,
+      }),
+      { matches: [], items: [], cursorStart: 0, cursorEnd: 0 },
+    );
+  }
+
+  async function inspect(body) {
+    return await withLiveKernel(
+      body,
+      async (record) => await inspectOnKernel(record.kernel, {
+        code: String(body?.code || ""),
+        cursorPos: Number(body?.cursorPos ?? body?.cursor_pos ?? 0),
+        detailLevel: Number(body?.detailLevel ?? body?.detail_level ?? 0) === 1 ? 1 : 0,
+        timeoutMs: introspectTimeoutMs * 2,
+      }),
+      { found: false, data: {}, metadata: {} },
+    );
+  }
+
+  async function isComplete(body) {
+    return await withLiveKernel(
+      body,
+      async (record) => await isCompleteOnKernel(record.kernel, {
+        code: String(body?.code || ""),
+        timeoutMs: introspectTimeoutMs,
+      }),
+      { status: "unknown", indent: "" },
+    );
+  }
+
+  async function history(body) {
+    return await withLiveKernel(
+      body,
+      async (record) => await historyOnKernel(record.kernel, {
+        pattern: String(body?.pattern || ""),
+        count: Number(body?.count ?? 100),
+        output: Boolean(body?.output),
+        timeoutMs: introspectTimeoutMs * 2,
+      }),
+      { history: [] },
+    );
+  }
+
+  async function commInfo(body) {
+    return await withLiveKernel(
+      body,
+      async (record) => await commInfoOnKernel(record.kernel, {
+        targetName: String(body?.targetName || body?.target_name || ""),
+        timeoutMs: introspectTimeoutMs * 2,
+      }),
+      { comms: {} },
+    );
+  }
+
   async function kernelStatus(body) {
     const { kernel, session, key } = runtimeForBody(body || {});
     const registry = await getRegistry();
@@ -1359,20 +1701,36 @@ export function createJupyterCellService({
       session,
       status: existing?.id ? (Number(existing.running || 0) > 0 ? "running" : (existing.lastStatus || "idle")) : "not-started",
       attached: Boolean(existing?.attached),
+      kind: existing?.kind || "",
+      kernelState: existing?.kernelState || "",
       id: existing?.id || "",
       key: existing?.id ? key : "",
+      ...(existing?.kernelInfo ? { kernelInfo: describeKernelInfo(existing.kernelInfo) } : {}),
     };
   }
 
   async function restart(body) {
-    const kernelInfo = await ensureKernel(body || {});
     const registry = await getRegistry();
+    const existing = await kernelRecordForBody(body || {});
+    let key = existing.key;
+    let record = existing.record;
+    if (!record?.id) {
+      const kernelInfo = await ensureKernel(body || {});
+      key = kernelInfo.key;
+      record = kernelInfo.record;
+    }
     try {
-      await registry.restart(kernelInfo.key);
+      record = await registry.restart(key);
     } catch (err) {
       throw error(err?.message || String(err), 400);
     }
-    return { ok: true, kernel: kernelInfo.kernel, session: kernelInfo.session };
+    return {
+      ok: true,
+      key,
+      id: record?.id || "",
+      kernel: record?.kernelName || cleanToken(body?.kernel, "python3"),
+      session: record?.session || cleanToken(body?.session, "default"),
+    };
   }
 
   async function interrupt(body) {
@@ -1441,9 +1799,16 @@ export function createJupyterCellService({
 
   async function shutdown() {
     cancelCleanupTimer();
+    // Release anything blocked on a prompt first: shutdownAll() sends
+    // shutdown_request and waits, and a kernel parked in raw_input() will not
+    // service it until stdin is answered.
+    for (const waiting of Array.from(pendingStdin.values())) {
+      waiting.reject(new Error("Jupyter cell service is shutting down"));
+    }
     if (registryPromise) {
       const registry = await registryPromise;
       await registry.shutdownAll();
+      await servers?.forgetAll().catch(() => {});
       process.off("exit", onProcessExit);
       registrySync = null;
     }
@@ -1454,6 +1819,83 @@ export function createJupyterCellService({
     const registry = await getRegistry();
     const record = registry.list().find((item) => item.id === id);
     return record && record.status !== "dead" ? record.connectionInfo : undefined;
+  }
+
+  /**
+   * Where the browser's kernel-channels WebSocket should be bridged for a live
+   * kernel id: raw ZMQ for a local/attached kernel, or the remote server's own
+   * `/api/kernels/<id>/channels` for a server kernel.
+   */
+  async function resolveKernelChannelById(id) {
+    const registry = await getRegistry();
+    const record = registry.list().find((item) => item.id === id);
+    if (!record || record.status === "dead") return undefined;
+    if (record.kind === "server") {
+      if (!servers) return undefined;
+      return { kind: "server", upstream: await servers.kernelChannelTarget(record.serverId, record.serverKernelId) };
+    }
+    return record.connectionInfo ? { kind: "zmq", connectionInfo: record.connectionInfo } : undefined;
+  }
+
+  // --- Remote server contents -------------------------------------------
+  // Browse and open files that live on a Jupyter server rather than on this
+  // machine or a Remote target. This is deliberately a *small* surface — list,
+  // read, save — scoped to the Jupyter feature. It is not a second general
+  // file framework, and nothing outside these three calls should reach for it.
+
+  function serverContentsPath(body) {
+    const serverId = String(body?.serverId || "").trim();
+    if (!serverId) throw error("Missing Jupyter server id", 400);
+    const path = String(body?.path ?? "").replace(/^\/+/, "");
+    if (/(?:^|\/)\.\.(?:\/|$)/.test(path)) throw error("Invalid Jupyter server path", 400);
+    return { serverId, path };
+  }
+
+  async function serverList(body) {
+    const { serverId, path } = serverContentsPath(body);
+    if (!servers) throw error("No Jupyter servers are configured", 400);
+    const contents = await servers.contents(serverId);
+    const model = await contents.get(path, { content: true });
+    return {
+      ok: true,
+      serverId,
+      path: String(model.path ?? path),
+      type: String(model.type || "directory"),
+      entries: (Array.isArray(model.content) ? model.content : []).map((entry) => ({
+        name: String(entry.name || ""),
+        path: String(entry.path || ""),
+        type: String(entry.type || "file"),
+        size: Number(entry.size || 0),
+        lastModified: String(entry.last_modified || ""),
+      })),
+    };
+  }
+
+  async function serverRead(body) {
+    const { serverId, path } = serverContentsPath(body);
+    if (!servers) throw error("No Jupyter servers are configured", 400);
+    const contents = await servers.contents(serverId);
+    const model = await contents.get(path, { content: true, type: "file", format: "text" });
+    return {
+      ok: true,
+      serverId,
+      path: String(model.path ?? path),
+      format: String(model.format || "text"),
+      content: typeof model.content === "string" ? model.content : JSON.stringify(model.content ?? ""),
+      lastModified: String(model.last_modified || ""),
+    };
+  }
+
+  async function serverWrite(body) {
+    const { serverId, path } = serverContentsPath(body);
+    if (!servers) throw error("No Jupyter servers are configured", 400);
+    const contents = await servers.contents(serverId);
+    const model = await contents.save(path, {
+      type: "file",
+      format: "text",
+      content: String(body?.content ?? ""),
+    });
+    return { ok: true, serverId, path: String(model.path ?? path), lastModified: String(model.last_modified || "") };
   }
 
   /**
@@ -1509,11 +1951,21 @@ export function createJupyterCellService({
     saveScriptCellOutputUi,
     clearAllOutputs,
     variables,
+    inputReply,
+    complete,
+    inspect,
+    isComplete,
+    history,
+    commInfo,
     kernelStatus,
     restart,
     interrupt,
     shutdownKernel,
+    serverList,
+    serverRead,
+    serverWrite,
     resolveConnectionInfoById,
+    resolveKernelChannelById,
     readNbextensionAsset,
     touchKernelById,
     listTasks,

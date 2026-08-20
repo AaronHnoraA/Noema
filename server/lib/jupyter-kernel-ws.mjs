@@ -11,7 +11,7 @@
 // @jupyterlab/services' browser KernelConnection falls back to it cleanly
 // when the server doesn't select a subprotocol.
 
-import { WebSocketServer } from "ws";
+import WebSocketClient, { WebSocketServer } from "ws";
 import * as jlabSerialize from "@jupyterlab/services/lib/kernel/serialize.js";
 import { RawSocket } from "../jupyter/raw-socket.mjs";
 import { noop, makeLogger } from "../jupyter/util.mjs";
@@ -29,12 +29,15 @@ export function jupyterKernelWsId(pathname) {
 /**
  * @param {object} options
  * @param {import("node:http").Server} options.server
- * @param {(id: string) => object | undefined} options.resolveConnectionInfo - kernel connection info for a live kernel id, or undefined
+ * @param {(id: string) => Promise<object | undefined>} options.resolveKernelChannel
+ *   Where to bridge a live kernel id: `{ kind: "zmq", connectionInfo }` for a
+ *   local or attached kernel, or `{ kind: "server", upstream }` for one living
+ *   on a remote Jupyter server.
  * @param {object} options.zmq - the `zeromq` module
  * @param {(id: string) => void} [options.touchKernel]
  * @param {NodeJS.WritableStream} [options.stderr]
  */
-export function installJupyterKernelWebSocket({ server, resolveConnectionInfo, zmq, touchKernel = noop, stderr = process.stderr }) {
+export function installJupyterKernelWebSocket({ server, resolveKernelChannel, zmq, touchKernel = noop, stderr = process.stderr }) {
   const log = makeLogger(stderr);
   const wss = new WebSocketServer({ noServer: true, handleProtocols: () => false });
 
@@ -47,9 +50,23 @@ export function installJupyterKernelWebSocket({ server, resolveConnectionInfo, z
       return;
     }
     const id = jupyterKernelWsId(url.pathname);
-    const connectionInfo = id ? await resolveConnectionInfo(id) : undefined;
-    if (!connectionInfo || socket.destroyed) {
+    let channel;
+    try {
+      channel = id ? await resolveKernelChannel(id) : undefined;
+    } catch (ex) {
+      log.error(`Failed to resolve kernel channel for ${id}`, ex);
+    }
+    if (!channel || socket.destroyed) {
       socket.destroy();
+      return;
+    }
+
+    if (channel.kind === "server") {
+      // The kernel lives on a real Jupyter server, so bridge the browser to
+      // that server's own channels endpoint. This is a message relay, not a
+      // socket splice: the upstream handshake needs the auth headers and TLS
+      // options a browser WebSocket cannot carry, so they are applied here.
+      wss.handleUpgrade(req, socket, head, (ws) => bridgeUpstream(ws, id, channel.upstream, log));
       return;
     }
 
@@ -57,7 +74,7 @@ export function installJupyterKernelWebSocket({ server, resolveConnectionInfo, z
       const protocol = ws.protocol || "";
       let rawSocket;
       try {
-        rawSocket = new RawSocket(connectionInfo, jlabSerialize.serialize, zmq, { stderr });
+        rawSocket = new RawSocket(channel.connectionInfo, jlabSerialize.serialize, zmq, { stderr });
       } catch (ex) {
         log.error(`Failed to open raw kernel socket for ${id}`, ex);
         try {
@@ -130,6 +147,56 @@ export function installJupyterKernelWebSocket({ server, resolveConnectionInfo, z
       }
     },
   };
+}
+
+/**
+ * Relay one browser kernel-channels socket to the upstream Jupyter server's.
+ * Frames pass through untouched — both ends already speak the same wire
+ * format — so nothing here needs to understand Jupyter messages.
+ */
+function bridgeUpstream(ws, id, upstream, log) {
+  let queued = [];
+  const remote = new WebSocketClient(upstream.url, [], {
+    headers: upstream.headers || {},
+    ...(upstream.allowUnauthorized ? { rejectUnauthorized: false } : {}),
+    ...(upstream.serverName ? { servername: upstream.serverName } : {}),
+  });
+
+  const closeBoth = (code, reason) => {
+    try { if (ws.readyState === ws.OPEN) ws.close(code, reason); } catch { /* ignore */ }
+    try { if (remote.readyState === remote.OPEN) remote.close(code, reason); } catch { /* ignore */ }
+  };
+
+  remote.on("open", () => {
+    // Anything the browser sent during the upstream handshake is replayed in
+    // order; dropping it would lose the first kernel_info_request.
+    for (const frame of queued) {
+      try { remote.send(frame.data, { binary: frame.binary }); } catch { /* ignore */ }
+    }
+    queued = [];
+  });
+  remote.on("message", (data, isBinary) => {
+    if (ws.readyState !== ws.OPEN) return;
+    try { ws.send(data, { binary: isBinary }); } catch { /* ignore */ }
+  });
+  remote.on("close", (code, reason) => closeBoth(code >= 1000 && code <= 4999 ? code : 1011, reason?.toString?.() || ""));
+  remote.on("error", (ex) => {
+    log.error(`Upstream kernel WebSocket error for ${id}`, ex);
+    closeBoth(1011, "Upstream kernel channel error");
+  });
+
+  ws.on("message", (data, isBinary) => {
+    if (remote.readyState === remote.OPEN) {
+      try { remote.send(data, { binary: isBinary }); } catch { /* ignore */ }
+    } else if (remote.readyState === remote.CONNECTING) {
+      queued.push({ data, binary: isBinary });
+    }
+  });
+  ws.on("close", () => closeBoth(1000, ""));
+  ws.on("error", (ex) => {
+    log.error(`Browser kernel WebSocket error for ${id}`, ex);
+    closeBoth(1011, "Browser channel error");
+  });
 }
 
 function toArrayBuffer(buffer) {

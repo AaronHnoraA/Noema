@@ -34,6 +34,7 @@ export default defineConfig(({ command }) => ({
         index: resolve("aaronnote/index.html"),
         agenda: resolve("aaronnote/agenda.html"),
         config: resolve("aaronnote/config.html"),
+        jupyter: resolve("aaronnote/jupyter.html"),
         wiki: resolve("aaronnote/wiki.html"),
         slides: resolve("aaronnote/slides.html"),
       },

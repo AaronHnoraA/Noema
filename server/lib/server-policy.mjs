@@ -13,6 +13,7 @@ const SERVER_READ_CHANNELS = new Set([
   "aaronnote:api:notes:graph",
   "aaronnote:api:config:katex-macros",
   "aaronnote:api:config:app",
+  "aaronnote:api:jupyter-cell:read-script-cell",
 ]);
 
 const SERVER_COMPATIBILITY_CHANNELS = new Map([

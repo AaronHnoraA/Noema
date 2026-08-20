@@ -76,7 +76,7 @@ describe("slides deck ranges", () => {
   test("reuses canonical inherited Jupyter cell descriptors for slides", () => {
     const state = EditorState.create({
       doc: [
-        "@@cell(python, python3, lecture) [first]",
+        "@@cell(python, lecture) [first]",
         "@@cell() [second]",
       ].join("\n"),
       extensions: [tocIndexExtension],

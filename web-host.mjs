@@ -178,7 +178,7 @@ import { createTasksApiHandlers } from "./server/Features/Tasks/api.mjs";
 const ime = createImeSwitcher();
 import { runtimeMkdtemp, sweepRuntimeTmp } from "./server/lib/tmp.mjs";
 import { loadKatexMacros } from "./server/lib/katex-macros.mjs";
-import { createJupyterCellService } from "./server/lib/jupyter-cell.mjs";
+import { createJupyterCellService, readPersistedScriptCell } from "./server/lib/jupyter-cell.mjs";
 import { authorizedWorkspaceEnvironment } from "./server/lib/workspace-env.mjs";
 import { jupyterDefaultsFromEnv } from "./server/lib/jupyter-defaults.mjs";
 import { sweepGlobalOrphanKernels } from "./server/jupyter/kernel-registry.mjs";
@@ -396,7 +396,46 @@ async function rebuildServerPublicCatalog({ sync = false } = {}) {
   return serverPublicCatalog;
 }
 
-const jupyterCell = hostMode === "server" ? null : createJupyterCellService({
+/**
+ * Remote Jupyter servers for standalone (non-Emacs) host modes, from
+ * `AARONNOTE_JUPYTER_SERVERS`: a JSON array of
+ * `{ id, displayName, url, kind, auth, token, password, user,
+ *    allowUnauthorized, serverName }`.
+ *
+ * There is no Remote framework here, so every server must already be
+ * reachable from this machine; `target` is accepted and ignored so one config
+ * can be shared with Emacs host mode.
+ */
+function standaloneJupyterServerHost() {
+  const raw = String(process.env.AARONNOTE_JUPYTER_SERVERS || "").trim();
+  if (!raw) return undefined;
+  let entries;
+  try {
+    entries = JSON.parse(raw);
+  } catch (ex) {
+    process.stderr.write(`[aaronnote-jupyter] AARONNOTE_JUPYTER_SERVERS is not valid JSON: ${ex?.message || ex}\n`);
+    return undefined;
+  }
+  if (!Array.isArray(entries) || entries.length === 0) return undefined;
+  const byId = new Map(entries.filter((entry) => entry?.id).map((entry) => [String(entry.id), entry]));
+  return {
+    async listServers() {
+      return Array.from(byId.values()).map((entry) => ({
+        id: String(entry.id),
+        displayName: String(entry.displayName || entry.id),
+        url: String(entry.url || ""),
+        kind: String(entry.kind || "server"),
+        target: "local",
+      }));
+    },
+    async resolveServer(serverId) {
+      return byId.get(String(serverId));
+    },
+    async releaseServer() {},
+  };
+}
+
+const projectedJupyterCell = hostMode === "server" ? null : createJupyterCellService({
   runtimeRoot,
   ...(hostMode === "desktop" ? { stateRoot } : {}),
   noteRoot,
@@ -406,6 +445,8 @@ const jupyterCell = hostMode === "server" ? null : createJupyterCellService({
   zmq,
   openFile: ({ file, line, col }) => apiOpenInEmacs(file, line, col),
   toolEnvironment: workspaceEnvironment.environment,
+  // Live cell output rides the SSE stream the editor is already connected to.
+  publish: (event, payload) => broadcast(event, payload),
   fileHost: hostMode === "emacs" ? {
     async readFile(file) {
       const result = await gatewayRequest(
@@ -460,6 +501,14 @@ const jupyterCell = hostMode === "server" ? null : createJupyterCellService({
         "aaronnote.jupyter.interrupt", { runtimeId }, 30_000,
       );
     },
+    async restart(runtimeId) {
+      // The broker relaunches on the target and returns a fresh runtime with
+      // its own forward group; the registry rebinds to it rather than
+      // shutting down and launching separately.
+      return await gatewayRequest(
+        "aaronnote.jupyter.restart", { runtimeId }, 60_000,
+      );
+    },
     async shutdown(runtimeId) {
       return await gatewayRequest(
         "aaronnote.jupyter.shutdown", { runtimeId }, 30_000,
@@ -473,7 +522,211 @@ const jupyterCell = hostMode === "server" ? null : createJupyterCellService({
       );
     },
   } : undefined,
+  // Remote Jupyter servers. In Emacs host mode the broker owns them: it holds
+  // the registry, reads secrets from auth-source, and — for a server that only
+  // exists on a Remote target — opens a channel first and hands back a
+  // client-reachable URL. Standalone desktop mode reads the same shape from
+  // the environment so the two hosts do not diverge.
+  serverHost: hostMode === "emacs" ? {
+    async listServers() {
+      const result = await gatewayRequest("aaronnote.jupyter.server.list", {}, 30_000);
+      return Array.isArray(result?.servers) ? result.servers : [];
+    },
+    async resolveServer(serverId) {
+      // Generous timeout: this may spawn a JupyterHub server or open an SSH
+      // forward to the owning target.
+      return await gatewayRequest("aaronnote.jupyter.server.resolve", { serverId }, 180_000);
+    },
+    async releaseServer(serverId) {
+      return await gatewayRequest("aaronnote.jupyter.server.release", { serverId }, 30_000);
+    },
+  } : standaloneJupyterServerHost(),
 });
+
+function emacsOwnedJupyterService(projection) {
+  const request = (method, body = {}, timeout = 30_000) => gatewayRequest(method, body || {}, timeout);
+  const scriptFileOf = (body, opened) => {
+    const direct = String(body?.scriptFile || "");
+    if (direct) return direct;
+    const candidate = String(body?.file || "");
+    if (/(?:^|\/)\.cell\/[^/]+$/.test(candidate)) return candidate;
+    return String(opened?.file || opened?.scriptFile || "");
+  };
+  const resolveScript = async (body = {}) => {
+    const direct = scriptFileOf(body);
+    if (direct) return { ...body, scriptFile: direct };
+    const opened = await projection.openScript(body || {});
+    const scriptFile = scriptFileOf(body, opened);
+    if (!scriptFile) throw new Error("Jupyter script controller is unavailable");
+    return { scriptFile, cellId: body?.cellId || body?.id || "" };
+  };
+  const scriptAction = async (body = {}, action, timeout = 30_000) => {
+    const script = await resolveScript(body);
+    return await request("aaronnote.jupyter.script.action", {
+      scriptFile: script.scriptFile,
+      cellId: body?.cellId || body?.id || script.cellId || "",
+      action,
+      ...(body?.offset === undefined ? {} : { offset: body.offset }),
+      ...(Array.isArray(body?.cellIds) ? { cellIds: body.cellIds } : {}),
+      ...(Array.isArray(body?.selectedCellIds) ? { selectedCellIds: body.selectedCellIds } : {}),
+    }, timeout);
+  };
+  return {
+    // File projection stays in Noema: it materializes the hidden script from
+    // @@cell references and reads persisted source/output for rendering.  All
+    // executable and structural authority lives behind the Emacs gateway.
+    kernels: (body) => projection.kernels(body || {}),
+    openScript: (body) => projection.openScript(body || {}),
+    async readScriptCell(body) {
+      const projected = await projection.readScriptCell(body || {});
+      const scriptFile = scriptFileOf(body, projected);
+      const snapshot = scriptFile
+        ? await request("aaronnote.jupyter.script.snapshot", { scriptFile })
+        : { cells: [] };
+      const cell = Array.isArray(snapshot?.cells)
+        ? snapshot.cells.find((item) => String(item?.id || "") === String(body?.cellId || body?.id || ""))
+        : null;
+      if (!cell) return projected;
+      return {
+        ...projected,
+        code: String(cell.code || projected.code || ""),
+        output: {
+          ok: cell.status !== "error",
+          status: cell.status || "idle",
+          executionCount: cell.executionCount ?? null,
+          outputs: Array.isArray(cell.outputs) ? cell.outputs : [],
+          widgetMessages: Array.isArray(cell.widgetMessages) ? cell.widgetMessages : [],
+          widgetOutputs: cell.widgetOutputs || {},
+          widgetRuntime: cell.widgetRuntime || undefined,
+          live: cell.live === true,
+          ui: cell.outputUi || {},
+        },
+      };
+    },
+    documentSnapshot: (body) => request("aaronnote.jupyter.script.snapshot", body),
+    documentMutate: (body) => scriptAction(body, String(body?.op || "")),
+    documentExecute: (body) => scriptAction(
+      body,
+      `run-${String(body?.mode || "current")}`,
+      60 * 60_000,
+    ),
+    scriptAction: (body) => scriptAction(
+      body,
+      String(body?.action || ""),
+      String(body?.action || "").startsWith("run-") ? 60 * 60_000 : 30_000,
+    ),
+    managerSnapshot: () => request("aaronnote.jupyter.manager.snapshot", {}),
+    sessionSelect: (body) => request("aaronnote.jupyter.session.select", body),
+    kernelControl: (body) => request("aaronnote.jupyter.kernel.control", body),
+    openBoard: () => request("aaronnote.jupyter.manager.snapshot", {}),
+    execute: (body) => scriptAction(body, "run-current", 60 * 60_000),
+    executeScriptCell: (body) => scriptAction(
+      body,
+      `run-${String(body?.mode || body?.runMode || "current")}`,
+      60 * 60_000,
+    ),
+    clearScriptCellOutput: (body) => scriptAction(body, "clear-output"),
+    clearAllOutputs: (body) => scriptAction(body, "clear-all-outputs"),
+    deleteScriptCell: (body) => scriptAction(body, "delete"),
+    saveScriptCellOutputUi: (body) => request("aaronnote.jupyter.output.save-ui", body),
+    inputReply: (body) => request("aaronnote.jupyter.stdin.reply", body),
+    complete: (body) => request("aaronnote.jupyter.introspect.complete", body),
+    inspect: (body) => request("aaronnote.jupyter.introspect.inspect", body),
+    isComplete: (body) => request("aaronnote.jupyter.introspect.is-complete", body),
+    history: (body) => request("aaronnote.jupyter.introspect.history", body),
+    commInfo: (body) => request("aaronnote.jupyter.introspect.comm-info", body),
+    variables: async (body) => request("aaronnote.jupyter.variables", await resolveScript(body)),
+    kernelStatus: (body) => request("aaronnote.jupyter.script.snapshot", body),
+    restart: (body) => scriptAction(body, "restart"),
+    interrupt: (body) => scriptAction(body, "interrupt"),
+    shutdownKernel: (body) => scriptAction(body, "shutdown"),
+    listTasks: () => request("aaronnote.jupyter.manager.snapshot", {}),
+    cleanup: () => request("aaronnote.jupyter.manager.snapshot", {}),
+    serverList: (body) => projection.serverList(body || {}),
+    serverRead: (body) => projection.serverRead(body || {}),
+    serverWrite: (body) => projection.serverWrite(body || {}),
+    readNbextensionAsset: (relative, runtimeId) => projection.readNbextensionAsset(relative, runtimeId),
+    resolveKernelChannelById: (id) => request("aaronnote.jupyter.kernel.channel", { id }),
+    touchKernelById: () => true,
+    shutdown: () => projection.shutdown(),
+  };
+}
+
+function displayOnlyJupyterService(projection) {
+  const unavailable = async () => {
+    throw Object.assign(new Error("Jupyter execution requires the Emacs backend"), {
+      code: "EMACS_JUPYTER_UNAVAILABLE",
+      statusCode: 503,
+    });
+  };
+  return {
+    kernels: async () => ({ ok: true, default: "", kernels: [], backendAvailable: false }),
+    readScriptCell: (body) => projection.readScriptCell(body || {}),
+    openScript: unavailable,
+    execute: unavailable,
+    executeScriptCell: unavailable,
+    clearScriptCellOutput: unavailable,
+    deleteScriptCell: unavailable,
+    saveScriptCellOutputUi: unavailable,
+    clearAllOutputs: unavailable,
+    variables: unavailable,
+    inputReply: unavailable,
+    complete: unavailable,
+    inspect: unavailable,
+    isComplete: unavailable,
+    history: unavailable,
+    commInfo: unavailable,
+    kernelStatus: async () => ({ ok: true, status: "unavailable", backendAvailable: false }),
+    restart: unavailable,
+    interrupt: unavailable,
+    shutdownKernel: unavailable,
+    serverList: (body) => projection.serverList(body || {}),
+    serverRead: (body) => projection.serverRead(body || {}),
+    serverWrite: unavailable,
+    listTasks: async () => ({ ok: true, server: { status: "unavailable", owned: false }, kernels: [] }),
+    cleanup: unavailable,
+    documentSnapshot: unavailable,
+    documentMutate: unavailable,
+    documentExecute: unavailable,
+    managerSnapshot: async () => ({
+      ok: true,
+      server: { status: "unavailable", owned: false },
+      kernels: [],
+      sessions: [],
+      tasks: [],
+    }),
+    scriptAction: unavailable,
+    sessionSelect: unavailable,
+    kernelControl: unavailable,
+    openBoard: unavailable,
+    readNbextensionAsset: async () => undefined,
+    resolveKernelChannelById: () => undefined,
+    touchKernelById: () => false,
+    shutdown: () => projection.shutdown(),
+  };
+}
+
+const serverJupyterProjection = hostMode === "server" ? {
+  async readScriptCell(body = {}) {
+    const publicRef = String(body.file || "").replace(/^\/+/, "");
+    const noteFile = currentServerCatalog().note(publicRef);
+    if (!noteFile) {
+      throw Object.assign(new Error("Page not found"), { statusCode: 404 });
+    }
+    return await readPersistedScriptCell({ ...body, file: noteFile });
+  },
+  async serverList() { return { ok: true, servers: [] }; },
+  async serverRead() { throw Object.assign(new Error("Unavailable in Server reader mode"), { statusCode: 403 }); },
+  async shutdown() {},
+} : null;
+
+const jupyterCell = hostMode === "emacs" && projectedJupyterCell
+  ? emacsOwnedJupyterService(projectedJupyterCell)
+  : hostMode === "desktop" && projectedJupyterCell
+    ? displayOnlyJupyterService(projectedJupyterCell)
+    : serverJupyterProjection
+      ? displayOnlyJupyterService(serverJupyterProjection)
+      : null;
 let jupyterKernelWs = null;
 let gatewaySocket = null;
 let gatewayRetryTimer = null;
@@ -1786,6 +2039,9 @@ async function handleGatewayRequest(message) {
         String(message.params?.channel || ""),
         message.params?.args || [],
       );
+    } else if (message.method === "aaronnote.jupyter.publish") {
+      broadcast("jupyter-cell", message.params || {});
+      result = { ok: true };
     } else {
       throw Object.assign(new Error("Method not found"), { code: -32601 });
     }
@@ -2007,6 +2263,13 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
       console.error("[aaronnote-host] open-file event failed", err);
     }
   }
+  function handleJupyterCellEvent(event) {
+    try {
+      window.dispatchEvent(new CustomEvent("aaronnote:jupyter-cell", {detail: JSON.parse(event.data)}));
+    } catch (err) {
+      console.error("[aaronnote-host] jupyter-cell event failed", err);
+    }
+  }
   function connectEventStream(reason, force) {
     var status = currentConnectionStatus();
     if (status === "connected") return Promise.resolve(true);
@@ -2030,6 +2293,7 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
     eventSource = source;
     source.addEventListener("command", handleCommandEvent);
     source.addEventListener("open-file", handleOpenFileEvent);
+    source.addEventListener("jupyter-cell", handleJupyterCellEvent);
     eventConnectionPromise = new Promise(function(resolve) {
       eventConnectionResolve = resolve;
     });
@@ -2148,7 +2412,16 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
       mirror: function(body) { return call("aaronnote:api:slides:mirror", [body || {}]); }
     },
     jupyterCell: {
-      kernels: function() { return call("aaronnote:api:jupyter-cell:kernels", []); },
+      kernels: function(body) { return call("aaronnote:api:jupyter-cell:kernels", [body || {}]); },
+      documentSnapshot: function(body) { return call("aaronnote:api:jupyter:document-snapshot", [body || {}]); },
+      documentMutate: function(body) { return call("aaronnote:api:jupyter:document-mutate", [body || {}]); },
+      documentExecute: function(body) { return call("aaronnote:api:jupyter:document-execute", [body || {}]); },
+      managerSnapshot: function() { return call("aaronnote:api:jupyter:manager-snapshot", []); },
+      scriptSnapshot: function(body) { return call("aaronnote:api:jupyter:script-snapshot", [body || {}]); },
+      scriptAction: function(body) { return call("aaronnote:api:jupyter:script-action", [body || {}]); },
+      sessionSelect: function(body) { return call("aaronnote:api:jupyter:session-select", [body || {}]); },
+      kernelControl: function(body) { return call("aaronnote:api:jupyter:kernel-control", [body || {}]); },
+      openBoard: function() { return call("aaronnote:api:jupyter:board-open", []); },
       execute: function(body) { return call("aaronnote:api:jupyter-cell:execute", [body || {}]); },
       openScript: function(body) { return call("aaronnote:api:jupyter-cell:open-script", [body || {}]); },
       readScriptCell: function(body) { return call("aaronnote:api:jupyter-cell:read-script-cell", [body || {}]); },
@@ -2158,10 +2431,19 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
       saveScriptCellOutputUi: function(body) { return call("aaronnote:api:jupyter-cell:save-script-cell-output-ui", [body || {}]); },
       clearAllOutputs: function(body) { return call("aaronnote:api:jupyter-cell:clear-all-outputs", [body || {}]); },
       variables: function(body) { return call("aaronnote:api:jupyter-cell:variables", [body || {}]); },
+      inputReply: function(body) { return call("aaronnote:api:jupyter-cell:input-reply", [body || {}]); },
+      complete: function(body) { return call("aaronnote:api:jupyter-cell:complete", [body || {}]); },
+      inspect: function(body) { return call("aaronnote:api:jupyter-cell:inspect", [body || {}]); },
+      isComplete: function(body) { return call("aaronnote:api:jupyter-cell:is-complete", [body || {}]); },
+      history: function(body) { return call("aaronnote:api:jupyter-cell:history", [body || {}]); },
+      commInfo: function(body) { return call("aaronnote:api:jupyter-cell:comm-info", [body || {}]); },
       kernelStatus: function(body) { return call("aaronnote:api:jupyter-cell:kernel-status", [body || {}]); },
       restart: function(body) { return call("aaronnote:api:jupyter-cell:restart", [body || {}]); },
       interrupt: function(body) { return call("aaronnote:api:jupyter-cell:interrupt", [body || {}]); },
       shutdown: function(body) { return call("aaronnote:api:jupyter-cell:shutdown", [body || {}]); },
+      serverList: function(body) { return call("aaronnote:api:jupyter-cell:server-list", [body || {}]); },
+      serverRead: function(body) { return call("aaronnote:api:jupyter-cell:server-read", [body || {}]); },
+      serverWrite: function(body) { return call("aaronnote:api:jupyter-cell:server-write", [body || {}]); },
       tasks: function() { return call("aaronnote:api:jupyter-cell:tasks", []); },
       cleanup: function(body) { return call("aaronnote:api:jupyter-cell:cleanup", [body || {}]); }
     },
@@ -2518,7 +2800,7 @@ async function serveNoteAsset(url, res) {
 
 async function serveStatic(urlPath, res, origin) {
   const requested = decodeURIComponent(urlPath).replace(/^\/+/, "") || "index.html";
-  if (hostMode === "server" && ["agenda.html", "config.html"].includes(requested)) {
+  if (hostMode === "server" && ["agenda.html", "config.html", "jupyter.html"].includes(requested)) {
     sendText(res, 404, "Not found");
     return;
   }
@@ -2536,7 +2818,7 @@ async function serveStatic(urlPath, res, origin) {
     res.end(transformJavaScript(data.toString("utf8")));
     return;
   }
-  if (["index.html", "agenda.html", "config.html", "slides.html", "wiki.html"].some((name) => file.endsWith(name))) {
+  if (["index.html", "agenda.html", "config.html", "jupyter.html", "slides.html", "wiki.html"].some((name) => file.endsWith(name))) {
     const appConfig = await currentAppConfigPayload();
     const html = data.toString("utf8").replace("</head>", `${adapterScript(origin, appConfig)}\n</head>`);
     res.writeHead(200, {
@@ -2843,7 +3125,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
 jupyterKernelWs = jupyterCell ? installJupyterKernelWebSocket({
   server,
-  resolveConnectionInfo: (id) => jupyterCell.resolveConnectionInfoById(id),
+  resolveKernelChannel: (id) => jupyterCell.resolveKernelChannelById(id),
   touchKernel: (id) => jupyterCell.touchKernelById(id),
   zmq,
   stderr: process.stderr,
