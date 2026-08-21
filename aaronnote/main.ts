@@ -2107,6 +2107,22 @@ function syncImeForVimMode(mode: import("./vim-lite.ts").VimLiteMode): void {
   });
 }
 
+/**
+ * Adopt a selection that CodeMirror built on its own into the Vim model.
+ *
+ * The chord is observed in the capture phase, so CodeMirror has not applied
+ * its transaction yet; defer to a task so the adopted range is the final one.
+ * Insert mode keeps CodeMirror's native half-open selection, exactly as the
+ * pointer path does.
+ */
+function adoptKeyboardSelectionIntoVim(): void {
+  window.setTimeout(() => {
+    if (vim.mode() === "insert") return;
+    vim.syncSelectionFromEditor();
+    scheduleAssistUpdate({ cursor: true, selectionTool: true });
+  }, 0);
+}
+
 function runVimFind(): boolean {
   openFindPanel();
   return true;
@@ -2118,6 +2134,9 @@ const vim = createVimLite(editor, host, {
   onRedo: () => editor.redo(),
   onIndent: (dir) => indentMarkdownBlock(editor.view, dir),
   onFind: runVimFind,
+  // A modal key with no binding used to be swallowed with no trace, which is
+  // indistinguishable from the keystroke being dropped. Name it instead.
+  onUnhandledKey: (sequence) => setStatus(`Vim: ${sequence} is not bound`),
   onFold: (action) => {
     if (action === "close") return editor.runCommand("fold-heading");
     if (action === "open") return editor.runCommand("unfold-heading");
@@ -3138,6 +3157,28 @@ async function deleteJupyterCellBlock(cell: JupyterPanelCell): Promise<void> {
     setStatus("Save note first");
     return;
   }
+  // The scan that produced `cell` is memoized by document identity, so the
+  // offset can be stale. Re-resolve it and refuse to touch a line that is no
+  // longer this marker rather than deleting an unrelated one.
+  const doc = editor.view.state.doc;
+  const line = doc.lineAt(Math.min(Math.max(cell.from, 0), doc.length));
+  if (!JUPYTER_CELL_RE.test(line.text)) {
+    setStatus("Cell marker moved; nothing deleted");
+    return;
+  }
+  // Markdown source is the runtime document: the @@cell marker is what makes
+  // the cell exist at all. Remove it first so the action the user asked for
+  // always lands, then reconcile the hidden notebook. A notebook left with a
+  // stale cell is recoverable; a marker that survives its own delete is the
+  // bug this ordering fixes.
+  let from = line.from;
+  let to = line.to;
+  if (to < doc.length) to += 1;
+  else if (from > 0) from -= 1;
+  editor.replaceMarkdownRange(from, to, "");
+  jupyterTaskState.delete(jupyterCellKey(cell));
+  jupyterScanMarkdown = null;
+  renderJupyterPanel();
   try {
     await ensureJupyterScript(cell);
     await api.jupyterCell.documentMutate({
@@ -3148,19 +3189,11 @@ async function deleteJupyterCellBlock(cell: JupyterPanelCell): Promise<void> {
       language: cell.language,
       op: "delete",
     });
-    const doc = editor.view.state.doc;
-    const line = doc.lineAt(cell.from);
-    let from = line.from;
-    let to = line.to;
-    if (to < doc.length) to += 1;
-    else if (from > 0) from -= 1;
-    editor.replaceMarkdownRange(from, to, "");
-    jupyterTaskState.delete(jupyterCellKey(cell));
-    jupyterScanMarkdown = null;
-    renderJupyterPanel();
     setStatus(`Deleted Jupyter cell ${cell.id}`);
   } catch (error) {
-    setStatus(error instanceof Error ? `Delete failed: ${error.message}` : "Delete failed");
+    setStatus(error instanceof Error
+      ? `Deleted cell ${cell.id}; notebook cleanup failed: ${error.message}`
+      : `Deleted cell ${cell.id}; notebook cleanup failed`);
   }
 }
 
@@ -9736,12 +9769,12 @@ function runHostCommand(detail: unknown): boolean {
       if (phase === "conflicted") {
         setStatus(`${repositoryId} has a Git conflict; open Wiki repositories to resolve it`);
       } else if (phase === "error" && body.notifyError !== false) {
-        setStatus(`${repositoryId} sync failed: ${String(body.error || "will retry at the next scheduled push")}`);
+        setStatus(`${repositoryId} sync failed: ${String(body.error || "review Wiki repositories for recovery details")}`);
       }
       return true;
     }
     case "wiki-sync-batch-failed":
-      setStatus(String(body.message || "Git sync failed; Noema will retry at the next scheduled push."));
+      setStatus(String(body.message || "Git sync needs attention; review Wiki repositories for recovery details."));
       return true;
     case "bibliography-index-changed":
       hideSnippetPopup();
@@ -10248,6 +10281,15 @@ document.addEventListener("keydown", (event) => {
     scheduleAssistUpdate({ mathPreview: true, cursor: true });
     event.stopPropagation();
     return;
+  }
+  // Cmd-A builds a full-document selection inside CodeMirror without passing
+  // through Vim, which would otherwise keep believing the caret is still a
+  // collapsed Normal-mode cursor. Observe the chord without consuming it and
+  // adopt the resulting range once CodeMirror has applied its transaction.
+  // Cmd-D is deliberately left alone: it produces multiple ranges that the
+  // modal selection model would collapse to one.
+  if (primaryMod(event) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "a") {
+    adoptKeyboardSelectionIntoVim();
   }
   if (primaryMod(event) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "s") {
     event.preventDefault();

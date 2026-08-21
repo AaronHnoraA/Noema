@@ -5,10 +5,20 @@ export type WikiAutoSync = {
   mark(repositoryId: string): void;
   cancel(repositoryId: string): void;
   retry(repositoryId: string, delayMs?: number): void;
+  pause(repositoryId: string): void;
+  resume(repositoryId: string, options?: { immediate?: boolean }): void;
   start(repositoryIds?: string[]): void;
   syncNow(repositoryId: string): Promise<WikiAutoSyncState | null>;
   close(options?: { flush?: boolean }): Promise<void>;
-  snapshot(): { known: string[]; pending: string[]; active: string[]; waiting: string[]; rerun: string[] };
+  snapshot(): {
+    known: string[];
+    pending: string[];
+    active: string[];
+    waiting: string[];
+    rerun: string[];
+    blocked: string[];
+    blockedDirty: string[];
+  };
 };
 
 export function createWikiAutoSync(options: {

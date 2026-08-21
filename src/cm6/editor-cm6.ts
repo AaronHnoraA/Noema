@@ -10,7 +10,7 @@
  * CM6 doc positions are the markdown source offsets used by the public API.
  */
 
-import { Compartment, EditorSelection, EditorState, findClusterBreak, Transaction, type Extension, type Text as CMText } from "@codemirror/state";
+import { Compartment, EditorSelection, EditorState, findClusterBreak, Transaction, type Extension, type SelectionRange, type Text as CMText } from "@codemirror/state";
 import {
   EditorView,
   keymap,
@@ -35,6 +35,7 @@ import { wikiLinkAt } from "../../shared/wiki-link.mjs";
 import { vscodeCloseBrackets } from "./close-brackets-vscode.ts";
 import { texSourceInput } from "./tex-source-input.ts";
 import { runEditorDelete, runEditorEnter, runEditorTab } from "./input-commands.ts";
+import { isWordChar } from "./text-boundaries.ts";
 import {
   pasteTargetExtension,
   resolveEditorPasteTarget,
@@ -1269,11 +1270,10 @@ function wordRangeAt(state: EditorState, pos: number): { from: number; to: numbe
   const doc = state.doc;
   const line = doc.lineAt(pos);
   const offset = pos - line.from;
-  const isWord = (ch: string): boolean => /[\p{L}\p{N}_-]/u.test(ch);
   let from = offset;
   let to = offset;
-  while (from > 0 && isWord(line.text[from - 1] ?? "")) from--;
-  while (to < line.text.length && isWord(line.text[to] ?? "")) to++;
+  while (from > 0 && isWordChar(line.text[from - 1] ?? "")) from--;
+  while (to < line.text.length && isWordChar(line.text[to] ?? "")) to++;
   if (from === to) return null;
   return { from: line.from + from, to: line.from + to };
 }
@@ -1301,37 +1301,40 @@ function findMarkdownText(
   }
 }
 
-export function selectNextMarkdownOccurrence(view: EditorView): boolean {
-  const state = view.state;
-  const main = state.selection.main;
-  let query = main.empty ? "" : state.doc.sliceString(main.from, main.to);
-  let firstFrom = main.from;
-  let firstTo = main.to;
-  if (!query) {
-    const word = wordRangeAt(state, main.from);
-    if (!word) return false;
-    query = state.doc.sliceString(word.from, word.to);
-    firstFrom = word.from;
-    firstTo = word.to;
-  }
-  if (!query) return false;
-  const start = main.to;
-  let from = findMarkdownText(state.doc, query, start);
-  if (from < 0) {
-    from = findMarkdownText(state.doc, query, 0, Math.max(0, firstFrom));
-    if (from < 0) return false;
-  }
-  const range = EditorSelection.range(from, from + query.length);
-  const ranges = [
-    ...state.selection.ranges,
-    ...(main.empty && !state.selection.ranges.some((r) => r.from === firstFrom && r.to === firstTo)
-      ? [EditorSelection.range(firstFrom, firstTo)]
-      : []),
-    range,
-  ].sort((a, b) => a.from - b.from || a.to - b.to);
+/** Add RANGE to the selection as the new main range, keeping document order. */
+function addOccurrenceRange(view: EditorView, added: SelectionRange): boolean {
+  const kept = view.state.selection.ranges.filter((range) => (
+    !range.empty && !(range.from === added.from && range.to === added.to)
+  ));
+  const ranges = [...kept, added].sort((a, b) => a.from - b.from || a.to - b.to);
+  const mainIndex = ranges.findIndex((range) => range.from === added.from && range.to === added.to);
   view.dispatch({
-    selection: EditorSelection.create(ranges, ranges.length - 1),
+    selection: EditorSelection.create(ranges, Math.max(0, mainIndex)),
     scrollIntoView: true,
   });
   return true;
+}
+
+export function selectNextMarkdownOccurrence(view: EditorView): boolean {
+  const state = view.state;
+  const main = state.selection.main;
+
+  // A bare caret selects the word under it and stops there, the way VSCode and
+  // Sublime do. This used to jump straight to the next match in the same press,
+  // which both skipped a step and left the command doing nothing at all on a
+  // word that occurs only once — the search failed, so nothing was selected.
+  if (main.empty) {
+    const word = wordRangeAt(state, main.from);
+    if (!word) return false;
+    return addOccurrenceRange(view, EditorSelection.range(word.from, word.to));
+  }
+
+  const query = state.doc.sliceString(main.from, main.to);
+  if (!query) return false;
+  let from = findMarkdownText(state.doc, query, main.to);
+  if (from < 0) {
+    from = findMarkdownText(state.doc, query, 0, Math.max(0, main.from));
+    if (from < 0) return false;
+  }
+  return addOccurrenceRange(view, EditorSelection.range(from, from + query.length));
 }

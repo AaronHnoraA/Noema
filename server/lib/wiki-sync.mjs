@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
@@ -18,6 +18,9 @@ const DEFAULT_REPOSITORY_LEASE_DEAD_GRACE_MS = 5_000;
 const DEFAULT_REPOSITORY_LEASE_WAIT_MS = 250;
 const DEFAULT_REPOSITORY_LEASE_POLL_MS = 40;
 const DEFAULT_REPOSITORY_BUSY_RETRY_MS = 5_000;
+const DEFAULT_RECOVERY_RETENTION_MS = 30 * 24 * 60 * 60_000;
+const DEFAULT_NETWORK_RETRY_DELAYS_MS = [60_000, 5 * 60_000, 30 * 60_000, 2 * 60 * 60_000];
+const SYNC_SCHEMA = 2;
 
 function apiError(message, statusCode = 400, code = "ERR_WIKI_SYNC") {
   return Object.assign(new Error(message), { statusCode, code });
@@ -81,6 +84,24 @@ function timestampToken(value = new Date()) {
 function numericOption(options, key, fallback) {
   const value = Number(options?.[key]);
   return Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+
+function syncOperationId() {
+  return `${Date.now().toString(36)}-${process.pid}-${Math.random().toString(16).slice(2)}`;
+}
+
+function transactionState(state = {}) {
+  return Object.fromEntries([
+    "operationId",
+    "snapshotHead",
+    "remoteHead",
+    "integrationHead",
+    "publishedHead",
+    "integrationBranch",
+    "integrationPath",
+    "branch",
+    "recoveryArtifacts",
+  ].filter((key) => state[key] !== undefined).map((key) => [key, state[key]]));
 }
 
 function processIsAlive(pid) {
@@ -267,7 +288,7 @@ async function writeSyncState(root, repository, state) {
   const file = stateFile(root, repository);
   await mkdir(dirname(file), { recursive: true });
   const payload = {
-    schema: 1,
+    schema: SYNC_SCHEMA,
     repositoryId: repository.id,
     repositoryUid: repository.uid,
     updatedAt: new Date().toISOString(),
@@ -281,7 +302,7 @@ async function writeSyncState(root, repository, state) {
 
 function transientSyncState(repository, state) {
   return {
-    schema: 1,
+    schema: SYNC_SCHEMA,
     repositoryId: repository.id,
     repositoryUid: repository.uid,
     updatedAt: new Date().toISOString(),
@@ -289,15 +310,23 @@ function transientSyncState(repository, state) {
   };
 }
 
+async function storedWikiSyncState(root, repository) {
+  try {
+    return JSON.parse(await readFile(stateFile(root, repository), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
 export async function readWikiSyncState(rootValue, repositoryId = "") {
   const root = expandNoemaPath(rootValue);
   if (repositoryId) {
     const repository = await repositoryFromId(root, repositoryId);
-    try {
-      return JSON.parse(await readFile(stateFile(root, repository), "utf8"));
-    } catch {
+    const stored = await storedWikiSyncState(root, repository);
+    if (stored) return stored;
+    else {
       return {
-        schema: 1,
+        schema: SYNC_SCHEMA,
         repositoryId: repository.id,
         repositoryUid: repository.uid,
         phase: "idle",
@@ -408,13 +437,28 @@ async function changedPathsBetween(repository, before, after) {
     .map((path) => join(repository.path, path));
 }
 
-async function ensureWorkBranch(repository, device) {
+async function ensureWorkBranch(root, repository, device) {
   const branch = `noema/${safeDeviceName(device.name)}-${String(device.id).slice(0, 8)}`;
-  if (await currentBranch(repository) === branch) return branch;
-  if (await branchExists(repository, branch)) await git(repository, ["switch", branch]);
-  else if (await hasHead(repository)) await git(repository, ["switch", "-c", branch]);
+  if (await currentBranch(repository) === branch) return { branch, recoveryArtifact: null };
+  let recoveryArtifact = null;
+  if (await branchExists(repository, branch)) {
+    const switched = await git(repository, ["switch", branch], { allowFailure: true });
+    if (switched.error) {
+      const classified = classifyGitFailure(switched);
+      if (classified.errorKind !== "workspace") throw apiError(classified.message, 409);
+      const targetHead = (await git(repository, ["rev-parse", branch])).stdout.trim();
+      recoveryArtifact = await quarantineWorkingFiles(
+        root,
+        repository,
+        repository.path,
+        await primaryCollisionPaths(repository, targetHead),
+        "primary",
+      );
+      await git(repository, ["switch", branch]);
+    }
+  } else if (await hasHead(repository)) await git(repository, ["switch", "-c", branch]);
   else await git(repository, ["switch", "--orphan", branch]);
-  return branch;
+  return { branch, recoveryArtifact };
 }
 
 async function stagedChanges(repository) {
@@ -445,12 +489,16 @@ async function commitIdentity(repository, device) {
 
 async function checkpointWikiRepositoryUnlocked(root, repository, options = {}, recoveredGitLock = null) {
   const device = await ensureNoemaDeviceIdentity(options);
-  await writeSyncState(root, repository, {
-    phase: "checkpointing",
-    ...(recoveredGitLock ? { recoveredGitLock } : {}),
-  });
+  const persistState = options.persistState !== false;
+  if (persistState) {
+    await writeSyncState(root, repository, {
+      phase: "checkpointing",
+      ...(recoveredGitLock ? { recoveredGitLock } : {}),
+    });
+  }
   try {
-    const branch = await ensureWorkBranch(repository, device);
+    const workBranch = await ensureWorkBranch(root, repository, device);
+    const branch = workBranch.branch;
     await git(repository, ["add", "-A", "--", "."]);
     let committed = false;
     let changedFiles = 0;
@@ -468,7 +516,7 @@ async function checkpointWikiRepositoryUnlocked(root, repository, options = {}, 
       committed = true;
     }
     const head = await git(repository, ["rev-parse", "HEAD"], { allowFailure: true });
-    const state = await writeSyncState(root, repository, {
+    const payload = {
       phase: "idle",
       branch,
       head: head.stdout.trim(),
@@ -476,18 +524,24 @@ async function checkpointWikiRepositoryUnlocked(root, repository, options = {}, 
       committed,
       changedFiles,
       identityFallback,
+      ...(workBranch.recoveryArtifact ? { recoveryArtifacts: [workBranch.recoveryArtifact] } : {}),
       ...(recoveredGitLock ? {
         recoveredGitLock,
         message: "Recovered an orphaned Git index lock before checkpointing",
       } : {}),
-    });
+    };
+    const state = persistState
+      ? await writeSyncState(root, repository, payload)
+      : transientSyncState(repository, payload);
     return { ok: true, type: "wiki-checkpoint", repository, ...state };
   } catch (error) {
-    await writeSyncState(root, repository, {
-      phase: "error",
-      failedAt: new Date().toISOString(),
-      error: String(error?.message || error),
-    }).catch(() => {});
+    if (persistState) {
+      await writeSyncState(root, repository, {
+        phase: "error",
+        failedAt: new Date().toISOString(),
+        error: String(error?.message || error),
+      }).catch(() => {});
+    }
     throw error;
   }
 }
@@ -503,6 +557,152 @@ export async function checkpointWikiRepository(rootValue, repositoryId, options 
 async function remoteUrl(repository) {
   const result = await git(repository, ["remote", "get-url", "origin"], { allowFailure: true });
   return result.error ? "" : result.stdout.trim();
+}
+
+function gitFailureMessage(value) {
+  return String(value?.stderr || value?.error?.stderr || value?.message || value?.error?.message || value || "Git command failed").trim();
+}
+
+function classifyGitFailure(value) {
+  const message = gitFailureMessage(value);
+  const lower = message.toLowerCase();
+  if (/non-fast-forward|fetch first|failed to push some refs|stale info/.test(lower)) {
+    return { errorKind: "remote-race", retryable: true, message };
+  }
+  if (/authentication failed|permission denied \(publickey\)|could not read username|terminal prompts disabled|access denied/.test(lower)) {
+    return { errorKind: "authentication", retryable: false, actionRequired: "Check the origin credentials and retry sync", message };
+  }
+  if (/does not appear to be a git repository|repository .* not found|no such remote|couldn't find remote ref|has no main branch|no configured push destination/.test(lower)) {
+    return { errorKind: "configuration", retryable: false, actionRequired: "Check the origin remote and its main branch", message };
+  }
+  if (/could not resolve host|connection (timed out|reset|refused)|network is unreachable|remote end hung up|http 5\d\d|operation timed out|temporary failure/.test(lower)) {
+    return { errorKind: "network", retryable: true, message };
+  }
+  if (/untracked working tree files would be overwritten|local changes .* would be overwritten|would be overwritten by (merge|checkout)|unable to create .*index\.lock/.test(lower)) {
+    return { errorKind: "workspace", retryable: true, message };
+  }
+  return { errorKind: "internal", retryable: false, actionRequired: "Open the repository status and retry after reviewing the Git error", message };
+}
+
+function networkRetryDelay(previousState = {}, options = {}) {
+  const configured = Array.isArray(options.networkRetryDelaysMs)
+    ? options.networkRetryDelaysMs.map(Number).filter((value) => Number.isFinite(value) && value >= 0)
+    : DEFAULT_NETWORK_RETRY_DELAYS_MS;
+  const delays = configured.length ? configured : DEFAULT_NETWORK_RETRY_DELAYS_MS;
+  const failureCount = Math.max(1, Number(previousState.consecutiveFailures || 0) + 1);
+  return {
+    failureCount,
+    retryAfterMs: delays[Math.min(failureCount - 1, delays.length - 1)],
+  };
+}
+
+function recoveryBaseDirectory(root) {
+  return join(root, ".noema", "recovery", "git");
+}
+
+async function gitPathList(worktree, args) {
+  const result = await execFileAsync("git", ["-C", worktree, ...args], {
+    maxBuffer: 1024 * 1024 * 32,
+  }).catch(() => ({ stdout: "" }));
+  return String(result.stdout || "").split("\0").filter(Boolean);
+}
+
+async function unexpectedWorktreePaths(worktree) {
+  const groups = await Promise.all([
+    gitPathList(worktree, ["ls-files", "--others", "--exclude-standard", "-z"]),
+    gitPathList(worktree, ["ls-files", "--others", "--ignored", "--exclude-standard", "-z"]),
+    gitPathList(worktree, ["diff", "--name-only", "-z", "--"]),
+    gitPathList(worktree, ["diff", "--cached", "--name-only", "-z", "--"]),
+  ]);
+  const ordered = [...new Set(groups.flat())].sort((left, right) => left.length - right.length);
+  return ordered.filter((path, index) => !ordered.slice(0, index).some((parent) => path.startsWith(`${parent}${sep}`)));
+}
+
+async function filesystemWorkingPaths(root, directory = root) {
+  const entries = await readdir(directory, { withFileTypes: true }).catch(() => []);
+  const paths = [];
+  for (const entry of entries) {
+    const file = join(directory, entry.name);
+    const relativeFile = relative(root, file);
+    if (!relativeFile || relativeFile === ".git") continue;
+    if (entry.isDirectory()) paths.push(...await filesystemWorkingPaths(root, file));
+    else paths.push(relativeFile);
+  }
+  return paths;
+}
+
+async function validGitWorktree(path) {
+  const result = await execFileAsync("git", ["-C", path, "rev-parse", "--is-inside-work-tree"], {
+    maxBuffer: 1024 * 1024,
+  }).catch(() => ({ stdout: "" }));
+  return String(result.stdout || "").trim() === "true";
+}
+
+async function quarantineWorkingFiles(root, repository, worktree, paths, source) {
+  const safePaths = [...new Set(paths.map(String).filter(Boolean))];
+  if (safePaths.length === 0) return null;
+  const createdAt = new Date().toISOString();
+  const batch = `${timestampToken()}-${process.pid}-${Math.random().toString(16).slice(2)}`;
+  const directory = join(recoveryBaseDirectory(root), repositoryToken(repository), batch);
+  const files = [];
+  for (const path of safePaths) {
+    const sourceFile = resolve(worktree, path);
+    const sourceRelative = relative(resolve(worktree), sourceFile);
+    if (!sourceRelative || sourceRelative === ".." || sourceRelative.startsWith(`..${sep}`)) continue;
+    try {
+      await lstat(sourceFile);
+    } catch (error) {
+      if (error?.code === "ENOENT") continue;
+      throw error;
+    }
+    const target = join(directory, "files", sourceRelative);
+    await mkdir(dirname(target), { recursive: true });
+    await rename(sourceFile, target);
+    files.push(sourceRelative);
+  }
+  if (files.length === 0) return null;
+  const artifact = {
+    kind: "working-files",
+    source,
+    createdAt,
+    path: relative(root, directory),
+    files,
+  };
+  await writeFile(join(directory, "recovery.json"), `${JSON.stringify({
+    schema: 1,
+    repositoryId: repository.id,
+    ...artifact,
+  }, null, 2)}\n`, "utf8");
+  return artifact;
+}
+
+async function pruneWikiGitRecovery(root, options = {}) {
+  const retentionMs = numericOption(options, "recoveryRetentionMs", DEFAULT_RECOVERY_RETENTION_MS);
+  const base = recoveryBaseDirectory(root);
+  let repositories = [];
+  try {
+    repositories = await readdir(base, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  }
+  const removed = [];
+  for (const repositoryEntry of repositories) {
+    if (!repositoryEntry.isDirectory()) continue;
+    const repositoryDirectory = join(base, repositoryEntry.name);
+    const batches = await readdir(repositoryDirectory, { withFileTypes: true }).catch(() => []);
+    for (const batch of batches) {
+      if (!batch.isDirectory()) continue;
+      const directory = join(repositoryDirectory, batch.name);
+      const info = await stat(directory).catch(() => null);
+      if (!info || Date.now() - info.mtimeMs <= retentionMs) continue;
+      await rm(directory, { recursive: true, force: true });
+      removed.push(relative(root, directory));
+    }
+    const remaining = await readdir(repositoryDirectory).catch(() => ["unknown"]);
+    if (remaining.length === 0) await rm(repositoryDirectory, { recursive: true, force: true });
+  }
+  return removed;
 }
 
 async function ensureOriginMain(repository, localHead) {
@@ -552,7 +752,7 @@ async function mergeInProgress(path) {
   return Boolean(result?.stdout?.trim());
 }
 
-async function conflictFiles(path) {
+async function conflictFiles(path, context = {}) {
   const result = await execFileAsync("git", ["-C", path, "ls-files", "-u", "-z"], {
     maxBuffer: 1024 * 1024 * 16,
   }).catch(() => ({ stdout: "" }));
@@ -568,33 +768,230 @@ async function conflictFiles(path) {
   return [...files.values()].map((file) => ({
     ...file,
     kind: file.stages.length === 3 ? "text-or-binary" : "delete-modify",
+    oursStage: Number(context.oursStage) === 3 ? 3 : 2,
+    theirsStage: Number(context.theirsStage) === 2 ? 2 : 3,
+    oursLabel: String(context.oursLabel || "Your local contribution"),
+    theirsLabel: String(context.theirsLabel || "Remote main"),
   }));
 }
 
-async function prepareIntegrationWorktree(root, repository, device, lease, options = {}) {
+async function integrationWorktreeHead(path) {
+  const result = await execFileAsync("git", ["-C", path, "rev-parse", "HEAD"], {
+    maxBuffer: 1024 * 1024,
+  }).catch(() => ({ stdout: "" }));
+  return String(result.stdout || "").trim();
+}
+
+async function refIsAncestor(repository, ancestor, descendant) {
+  if (!ancestor || !descendant) return false;
+  const result = await git(repository, ["merge-base", "--is-ancestor", ancestor, descendant], { allowFailure: true });
+  return !result.error;
+}
+
+function conflictContextFromState(state = {}) {
+  const first = Array.isArray(state.conflicts) ? state.conflicts[0] : null;
+  if (first?.oursStage || first?.theirsStage) return first;
+  if (Number(state.schema || 1) < SYNC_SCHEMA) {
+    return {
+      oursStage: 3,
+      theirsStage: 2,
+      oursLabel: "Your local contribution",
+      theirsLabel: "Remote main",
+    };
+  }
+  return {};
+}
+
+async function prepareIntegrationWorktree(root, repository, device, startHead, lease, options = {}) {
   const path = integrationPath(root, repository);
   const branch = integrationBranch(device, repository);
+  let recoveryArtifact = null;
   if (existsSync(path)) {
     await recoverOrphanIndexLockAtPath(root, repository, path, lease, options, "integration");
     if (await mergeInProgress(path)) return { path, branch, conflicted: true };
-    await execFileAsync("git", ["-C", path, "reset", "--hard", "origin/main"]);
-    return { path, branch, conflicted: false };
+    const worktreeIsValid = await validGitWorktree(path);
+    recoveryArtifact = await quarantineWorkingFiles(
+      root,
+      repository,
+      path,
+      worktreeIsValid ? await unexpectedWorktreePaths(path) : await filesystemWorkingPaths(path),
+      "integration",
+    );
+    await git(repository, ["worktree", "remove", "--force", path], { allowFailure: true });
+    await rm(path, { recursive: true, force: true });
   }
   await mkdir(dirname(path), { recursive: true });
   await git(repository, ["worktree", "prune"]);
-  await git(repository, ["worktree", "add", "-B", branch, path, "origin/main"]);
-  return { path, branch, conflicted: false };
+  await git(repository, ["worktree", "add", "-B", branch, path, startHead]);
+  return { path, branch, conflicted: false, recoveryArtifact };
+}
+
+async function mergeIntoIntegration(path, ref, identity, context) {
+  const merge = await execFileAsync(
+    "git",
+    ["-C", path, "-c", `user.name=${identity.name}`, "-c", `user.email=${identity.email}`, "merge", "--no-edit", ref],
+    { maxBuffer: 1024 * 1024 * 32 },
+  ).catch((error) => ({ error, stdout: error.stdout || "", stderr: error.stderr || "" }));
+  if (!merge.error) return { ok: true, head: await integrationWorktreeHead(path), conflicts: [] };
+  const conflicts = await conflictFiles(path, context);
+  return { ok: false, merge, conflicts };
+}
+
+async function primaryCollisionPaths(repository, targetHead) {
+  const current = await currentHeadSha(repository);
+  if (!current || !targetHead || current === targetHead) return [];
+  const changed = await gitPathList(repository.path, ["diff", "--name-only", "-z", current, targetHead, "--"]);
+  const collisions = new Set();
+  for (const path of changed) {
+    const parts = path.split(sep);
+    for (let length = 1; length <= parts.length; length++) {
+      const candidate = parts.slice(0, length).join(sep);
+      if (!existsSync(join(repository.path, candidate))) continue;
+      const tracked = await git(repository, ["ls-files", "--error-unmatch", "--", candidate], { allowFailure: true });
+      if (tracked.error) collisions.add(candidate);
+      break;
+    }
+  }
+  return [...collisions];
+}
+
+async function applyPublishedHead(root, repository, publishedHead, options = {}) {
+  const current = await currentHeadSha(repository);
+  if (current === publishedHead) return { applied: true, head: current, recoveryArtifact: null };
+  if (!await refIsAncestor(repository, current, publishedHead)) {
+    return { applied: false, reason: "Local device history advanced while the remote result was being published" };
+  }
+  const recoveryArtifact = await quarantineWorkingFiles(
+    root,
+    repository,
+    repository.path,
+    await primaryCollisionPaths(repository, publishedHead),
+    "primary",
+  );
+  const applied = await git(repository, ["merge", "--ff-only", publishedHead], { allowFailure: true });
+  if (applied.error) {
+    return { applied: false, reason: gitFailureMessage(applied), recoveryArtifact };
+  }
+  return { applied: true, head: await currentHeadSha(repository), recoveryArtifact };
+}
+
+function recoveryArtifacts(...values) {
+  const cutoff = Date.now() - DEFAULT_RECOVERY_RETENTION_MS;
+  return values.flat().filter((artifact) => {
+    if (!artifact) return false;
+    const createdAt = Date.parse(String(artifact.createdAt || ""));
+    return !Number.isFinite(createdAt) || createdAt >= cutoff;
+  });
+}
+
+async function runSyncTestHook(options, name, payload) {
+  const hook = options?.testHooks?.[name];
+  if (typeof hook === "function") await hook(payload);
+}
+
+async function writeGitFailureState(root, repository, previousState, baseState, failure, options = {}) {
+  const classified = classifyGitFailure(failure);
+  if (classified.errorKind === "network") {
+    const retry = networkRetryDelay(previousState, options);
+    return await writeSyncState(root, repository, {
+      ...baseState,
+      phase: "waiting",
+      error: classified.message,
+      errorKind: classified.errorKind,
+      retryable: true,
+      retryAfterMs: retry.retryAfterMs,
+      nextRetryAt: new Date(Date.now() + retry.retryAfterMs).toISOString(),
+      consecutiveFailures: retry.failureCount,
+      reportError: retry.failureCount === 1,
+    });
+  }
+  if (classified.errorKind === "internal" && previousState.errorKind !== "internal") {
+    return await writeSyncState(root, repository, {
+      ...baseState,
+      phase: "waiting",
+      error: classified.message,
+      errorKind: "internal",
+      retryable: true,
+      retryAfterMs: 0,
+      nextRetryAt: new Date().toISOString(),
+      consecutiveFailures: 1,
+      reportError: false,
+    });
+  }
+  return await writeSyncState(root, repository, {
+    ...baseState,
+    phase: classified.retryable ? "waiting" : "error",
+    error: classified.message,
+    errorKind: classified.errorKind,
+    retryable: classified.retryable,
+    retryAfterMs: classified.retryable ? DEFAULT_REPOSITORY_BUSY_RETRY_MS : undefined,
+    nextRetryAt: classified.retryable
+      ? new Date(Date.now() + DEFAULT_REPOSITORY_BUSY_RETRY_MS).toISOString()
+      : undefined,
+    actionRequired: classified.actionRequired,
+    consecutiveFailures: Math.max(1, Number(previousState.consecutiveFailures || 0) + 1),
+    reportError: !classified.retryable,
+  });
 }
 
 async function runSync(root, repository, options = {}, recoveredGitLock = null, lease = null) {
+  let previousState = await storedWikiSyncState(root, repository) || {};
   const device = await ensureNoemaDeviceIdentity(options);
   const identity = await commitIdentity(repository, device);
+  const existingIntegrationPath = integrationPath(root, repository);
+  if (existsSync(existingIntegrationPath) && await mergeInProgress(existingIntegrationPath)) {
+    const context = conflictContextFromState(previousState);
+    const existingConflicts = await conflictFiles(existingIntegrationPath, context);
+    if (existingConflicts.length) {
+      return await writeSyncState(root, repository, {
+        ...transactionState(previousState),
+        phase: "conflicted",
+        conflicts: existingConflicts,
+        errorKind: "conflict",
+        retryable: false,
+      });
+    }
+    await execFileAsync(
+      "git",
+      ["-C", existingIntegrationPath, "-c", `user.name=${identity.name}`, "-c", `user.email=${identity.email}`, "commit", "--no-edit"],
+      { maxBuffer: 1024 * 1024 * 32 },
+    );
+    previousState = await writeSyncState(root, repository, {
+      ...transactionState(previousState),
+      phase: "merging",
+      integrationHead: await integrationWorktreeHead(existingIntegrationPath),
+      conflicts: [],
+    });
+  }
+  const existingIntegrationHead = existsSync(existingIntegrationPath)
+    ? await integrationWorktreeHead(existingIntegrationPath)
+    : "";
+  const resumableIntegrationHead = previousState.integrationHead
+    && previousState.integrationHead === existingIntegrationHead
+    ? existingIntegrationHead
+    : "";
+
   const headBefore = await currentHeadSha(repository);
-  const checkpoint = await checkpointWikiRepositoryUnlocked(root, repository, options, recoveredGitLock);
+  const operationId = syncOperationId();
+  await writeSyncState(root, repository, {
+    phase: "checkpointing",
+    operationId,
+    ...(recoveredGitLock ? { recoveredGitLock } : {}),
+  });
+  const checkpoint = await checkpointWikiRepositoryUnlocked(
+    root,
+    repository,
+    { ...options, persistState: false },
+    recoveredGitLock,
+  );
   const checkpointState = {
+    operationId,
     checkpointedAt: checkpoint.checkpointedAt,
     committed: checkpoint.committed,
     changedFiles: checkpoint.changedFiles,
+    branch: checkpoint.branch,
+    snapshotHead: checkpoint.head,
+    ...(checkpoint.recoveryArtifacts?.length ? { recoveryArtifacts: checkpoint.recoveryArtifacts } : {}),
     ...(checkpoint.recoveredGitLock ? {
       recoveredGitLock: checkpoint.recoveredGitLock,
       message: checkpoint.message,
@@ -602,118 +999,207 @@ async function runSync(root, repository, options = {}, recoveredGitLock = null, 
   };
   if (!(await remoteUrl(repository))) {
     const changedPaths = await changedPathsBetween(repository, headBefore, checkpoint.head);
+    await pruneWikiGitRecovery(root, options).catch(() => {});
     return await writeSyncState(root, repository, {
       ...checkpointState,
       phase: "idle",
-      branch: checkpoint.branch,
       head: checkpoint.head,
       changedPaths,
       localOnly: true,
+      consecutiveFailures: 0,
       message: "No origin remote; local checkpoint completed",
     });
   }
   const bootstrap = await ensureOriginMain(repository, checkpoint.head);
   if (bootstrap.error) {
-    return await writeSyncState(root, repository, {
-      ...checkpointState,
-      phase: "error",
-      branch: checkpoint.branch,
-      error: bootstrap.error,
-    });
+    return await writeGitFailureState(root, repository, previousState, checkpointState, bootstrap.error, options);
   }
-  await writeSyncState(root, repository, { phase: "fetching", branch: checkpoint.branch });
+  await writeSyncState(root, repository, { ...checkpointState, phase: "fetching" });
   const fetch = await git(repository, ["fetch", "--prune", "origin", "main"], { allowFailure: true });
   if (fetch.error) {
-    return await writeSyncState(root, repository, {
-      ...checkpointState,
-      phase: "error",
-      branch: checkpoint.branch,
-      error: String(fetch.stderr || fetch.error.message).trim(),
-    });
+    return await writeGitFailureState(root, repository, previousState, checkpointState, fetch, options);
   }
-  const integration = await prepareIntegrationWorktree(root, repository, device, lease, options);
+  const remoteHead = (await git(repository, ["rev-parse", "refs/remotes/origin/main"])).stdout.trim();
+  const baseState = { ...checkpointState, remoteHead };
+  await writeSyncState(root, repository, { ...baseState, phase: "merging" });
+  const integration = await prepareIntegrationWorktree(root, repository, device, checkpoint.head, lease, options);
+  const artifacts = recoveryArtifacts(
+    previousState.recoveryArtifacts,
+    checkpoint.recoveryArtifacts,
+    integration.recoveryArtifact,
+  );
+  const integrationState = {
+    ...baseState,
+    integrationBranch: integration.branch,
+    integrationPath: integration.path,
+    ...(artifacts.length ? { recoveryArtifacts: artifacts } : {}),
+  };
   if (integration.conflicted) {
     return await writeSyncState(root, repository, {
-      ...checkpointState,
+      ...integrationState,
       phase: "conflicted",
-      branch: checkpoint.branch,
-      integrationBranch: integration.branch,
-      integrationPath: integration.path,
-      conflicts: await conflictFiles(integration.path),
+      conflicts: await conflictFiles(integration.path, conflictContextFromState(previousState)),
+      errorKind: "conflict",
+      retryable: false,
     });
   }
-  await writeSyncState(root, repository, { phase: "merging", branch: checkpoint.branch });
-  const merge = await execFileAsync(
-    "git",
-    ["-C", integration.path, "-c", `user.name=${identity.name}`, "-c", `user.email=${identity.email}`, "merge", "--no-edit", checkpoint.branch],
-    { maxBuffer: 1024 * 1024 * 32 },
-  ).catch((error) => ({ error, stdout: error.stdout || "", stderr: error.stderr || "" }));
-  if (merge.error) {
-    const conflicts = await conflictFiles(integration.path);
-    if (conflicts.length) {
+  if (resumableIntegrationHead && !await refIsAncestor(repository, resumableIntegrationHead, checkpoint.head)) {
+    const resumed = await mergeIntoIntegration(integration.path, resumableIntegrationHead, identity, {
+      oursStage: 2,
+      theirsStage: 3,
+      oursLabel: "Your latest local contribution",
+      theirsLabel: "Recovered sync result",
+    });
+    if (!resumed.ok) {
+      if (resumed.conflicts.length) {
+        return await writeSyncState(root, repository, {
+          ...integrationState,
+          phase: "conflicted",
+          integrationHead: await integrationWorktreeHead(integration.path),
+          conflicts: resumed.conflicts,
+          errorKind: "conflict",
+          retryable: false,
+        });
+      }
+      return await writeGitFailureState(root, repository, previousState, integrationState, resumed.merge, options);
+    }
+  }
+  const mergedRemote = await mergeIntoIntegration(integration.path, remoteHead, identity, {
+    oursStage: 2,
+    theirsStage: 3,
+    oursLabel: "Your local contribution",
+    theirsLabel: "Remote main",
+  });
+  if (!mergedRemote.ok) {
+    if (mergedRemote.conflicts.length) {
       return await writeSyncState(root, repository, {
-        ...checkpointState,
+        ...integrationState,
         phase: "conflicted",
-        branch: checkpoint.branch,
-        integrationBranch: integration.branch,
-        integrationPath: integration.path,
-        conflicts,
+        integrationHead: await integrationWorktreeHead(integration.path),
+        conflicts: mergedRemote.conflicts,
+        errorKind: "conflict",
+        retryable: false,
       });
     }
-    return await writeSyncState(root, repository, {
-      ...checkpointState,
-      phase: "error",
-      branch: checkpoint.branch,
-      error: String(merge.stderr || merge.error.message).trim(),
-    });
+    return await writeGitFailureState(root, repository, previousState, integrationState, mergedRemote.merge, options);
   }
-  await writeSyncState(root, repository, { phase: "pushing", branch: checkpoint.branch });
+
+  const finalCheckpoint = await checkpointWikiRepositoryUnlocked(
+    root,
+    repository,
+    { ...options, persistState: false },
+    null,
+  );
+  if (!await refIsAncestor(repository, finalCheckpoint.head, mergedRemote.head)) {
+    const mergedLatest = await mergeIntoIntegration(integration.path, finalCheckpoint.head, identity, {
+      oursStage: 3,
+      theirsStage: 2,
+      oursLabel: "Your latest local edits",
+      theirsLabel: "Resolved sync result",
+    });
+    if (!mergedLatest.ok) {
+      if (mergedLatest.conflicts.length) {
+        return await writeSyncState(root, repository, {
+          ...integrationState,
+          snapshotHead: finalCheckpoint.head,
+          phase: "conflicted",
+          integrationHead: await integrationWorktreeHead(integration.path),
+          conflicts: mergedLatest.conflicts,
+          errorKind: "conflict",
+          retryable: false,
+        });
+      }
+      return await writeGitFailureState(root, repository, previousState, integrationState, mergedLatest.merge, options);
+    }
+  }
+
+  let integrationHead = await integrationWorktreeHead(integration.path);
+  let publishState = { ...integrationState, snapshotHead: finalCheckpoint.head, integrationHead };
+  await writeSyncState(root, repository, { ...publishState, phase: "pushing" });
   for (let attempt = 1; attempt <= 3; attempt++) {
+    await runSyncTestHook(options, "beforePush", { attempt, repository, integrationPath: integration.path });
     const push = await execFileAsync("git", ["-C", integration.path, "push", "origin", "HEAD:main"], {
       maxBuffer: 1024 * 1024 * 32,
     }).catch((error) => ({ error, stderr: error.stderr || "" }));
-    if (!push.error) {
-      await git(repository, ["merge", "--ff-only", integration.branch]);
-      const head = await currentHeadSha(repository);
-      const changedPaths = await changedPathsBetween(repository, headBefore, head);
-      return await writeSyncState(root, repository, {
-        ...checkpointState,
-        phase: "idle",
-        branch: checkpoint.branch,
-        head,
-        changedPaths,
-        integrationBranch: integration.branch,
-        lastSyncedAt: new Date().toISOString(),
-        localOnly: false,
-        bootstrappedMain: bootstrap.bootstrapped,
-      });
+    if (!push.error) break;
+    const classified = classifyGitFailure(push);
+    if (classified.errorKind !== "remote-race") {
+      return await writeGitFailureState(root, repository, previousState, publishState, push, options);
     }
     if (attempt === 3) {
       return await writeSyncState(root, repository, {
-        ...checkpointState,
-        phase: "error",
-        branch: checkpoint.branch,
-        error: String(push.stderr || push.error.message).trim(),
+        ...publishState,
+        phase: "waiting",
+        error: classified.message,
+        errorKind: "remote-race",
+        retryable: true,
+        retryAfterMs: DEFAULT_REPOSITORY_BUSY_RETRY_MS,
+        nextRetryAt: new Date(Date.now() + DEFAULT_REPOSITORY_BUSY_RETRY_MS).toISOString(),
       });
     }
-    await git(repository, ["fetch", "origin", "main"]);
-    await execFileAsync("git", ["-C", integration.path, "reset", "--hard", "origin/main"]);
-    const retryMerge = await execFileAsync(
-      "git",
-      ["-C", integration.path, "-c", `user.name=${identity.name}`, "-c", `user.email=${identity.email}`, "merge", "--no-edit", checkpoint.branch],
-      { maxBuffer: 1024 * 1024 * 32 },
-    ).catch((error) => ({ error }));
-    if (retryMerge.error) {
-      return await writeSyncState(root, repository, {
-        ...checkpointState,
-        phase: "conflicted",
-        branch: checkpoint.branch,
-        integrationBranch: integration.branch,
-        integrationPath: integration.path,
-        conflicts: await conflictFiles(integration.path),
-      });
+    const racedFetch = await git(repository, ["fetch", "origin", "main"], { allowFailure: true });
+    if (racedFetch.error) {
+      return await writeGitFailureState(root, repository, previousState, publishState, racedFetch, options);
     }
+    const latestRemote = (await git(repository, ["rev-parse", "refs/remotes/origin/main"])).stdout.trim();
+    const racedMerge = await mergeIntoIntegration(integration.path, latestRemote, identity, {
+      oursStage: 2,
+      theirsStage: 3,
+      oursLabel: "Your resolved sync result",
+      theirsLabel: "New remote changes",
+    });
+    if (!racedMerge.ok) {
+      if (racedMerge.conflicts.length) {
+        return await writeSyncState(root, repository, {
+          ...publishState,
+          remoteHead: latestRemote,
+          phase: "conflicted",
+          integrationHead: await integrationWorktreeHead(integration.path),
+          conflicts: racedMerge.conflicts,
+          errorKind: "conflict",
+          retryable: false,
+        });
+      }
+      return await writeGitFailureState(root, repository, previousState, publishState, racedMerge.merge, options);
+    }
+    integrationHead = racedMerge.head;
+    publishState = { ...publishState, remoteHead: latestRemote, integrationHead };
+    await writeSyncState(root, repository, { ...publishState, phase: "pushing" });
   }
+
+  const applyingState = { ...publishState, publishedHead: integrationHead };
+  await writeSyncState(root, repository, { ...applyingState, phase: "applying" });
+  await runSyncTestHook(options, "afterPublished", { repository, publishedHead: integrationHead });
+  const applied = await applyPublishedHead(root, repository, integrationHead, options);
+  const finalArtifacts = recoveryArtifacts(artifacts, applied.recoveryArtifact);
+  const recoveredThisRun = Boolean(integration.recoveryArtifact || applied.recoveryArtifact);
+  if (!applied.applied) {
+    return await writeSyncState(root, repository, {
+      ...applyingState,
+      ...(finalArtifacts.length ? { recoveryArtifacts: finalArtifacts } : {}),
+      phase: "applying",
+      error: applied.reason,
+      errorKind: "workspace",
+      retryable: true,
+      retryAfterMs: DEFAULT_REPOSITORY_BUSY_RETRY_MS,
+      nextRetryAt: new Date(Date.now() + DEFAULT_REPOSITORY_BUSY_RETRY_MS).toISOString(),
+    });
+  }
+  const changedPaths = await changedPathsBetween(repository, headBefore, applied.head);
+  await pruneWikiGitRecovery(root, options).catch(() => {});
+  return await writeSyncState(root, repository, {
+    ...applyingState,
+    ...(finalArtifacts.length ? { recoveryArtifacts: finalArtifacts } : {}),
+    phase: "idle",
+    head: applied.head,
+    changedPaths,
+    lastSyncedAt: new Date().toISOString(),
+    localOnly: false,
+    bootstrappedMain: bootstrap.bootstrapped,
+    consecutiveFailures: 0,
+    retryable: false,
+    message: recoveredThisRun ? "Git sync completed after safely recovering working files" : undefined,
+  });
 }
 
 export function syncWikiRepository(rootValue, repositoryId, options = {}) {
@@ -738,14 +1224,15 @@ export function syncWikiRepository(rootValue, repositoryId, options = {}) {
           phase: "waiting",
           retryable: true,
           retryAfterMs: numericOption(options, "repositoryBusyRetryMs", DEFAULT_REPOSITORY_BUSY_RETRY_MS),
+          errorKind: "busy",
           error: String(error?.message || error),
         });
       } else {
-        result = await writeSyncState(root, repository, {
-          phase: "error",
+        const previousState = await storedWikiSyncState(root, repository) || {};
+        result = await writeGitFailureState(root, repository, previousState, {
+          ...transactionState(previousState),
           failedAt: new Date().toISOString(),
-          error: String(error?.message || error),
-        });
+        }, error, options);
       }
     }
     return result;
@@ -775,12 +1262,16 @@ export async function readWikiConflict(rootValue, body = {}) {
   const worktree = integrationPath(root, repository);
   const path = String(body.path || "");
   if (!path || !await mergeInProgress(worktree)) throw apiError("No active merge conflict", 404);
-  const [base, remoteMain, deviceBranch] = await Promise.all([
+  const state = await storedWikiSyncState(root, repository) || {};
+  const summary = (state.conflicts || []).find((conflict) => conflict.path === path) || conflictContextFromState(state);
+  const oursStage = Number(summary.oursStage) === 3 ? 3 : 2;
+  const theirsStage = Number(summary.theirsStage) === 2 ? 2 : 3;
+  const [base, ours, theirs] = await Promise.all([
     stageContent(worktree, 1, path),
-    stageContent(worktree, 2, path),
-    stageContent(worktree, 3, path),
+    stageContent(worktree, oursStage, path),
+    stageContent(worktree, theirsStage, path),
   ]);
-  const kind = [base, remoteMain, deviceBranch].some((buffer) => contentKind(buffer) === "binary") ? "binary" : "text";
+  const kind = [base, ours, theirs].some((buffer) => contentKind(buffer) === "binary") ? "binary" : "text";
   const encode = (buffer) => kind === "text" ? buffer.toString("utf8") : buffer.toString("base64");
   return {
     ok: true,
@@ -789,8 +1280,10 @@ export async function readWikiConflict(rootValue, body = {}) {
     path,
     kind,
     base: encode(base),
-    ours: encode(deviceBranch),
-    theirs: encode(remoteMain),
+    ours: encode(ours),
+    theirs: encode(theirs),
+    oursLabel: String(summary.oursLabel || "Your local contribution"),
+    theirsLabel: String(summary.theirsLabel || "Remote main"),
   };
 }
 
@@ -807,6 +1300,7 @@ async function resolveWikiConflictUnlocked(root, repository, body = {}, recovere
     "integration",
   );
   const recovery = recoveredGitLock || recoveredIntegrationLock;
+  const previousState = await storedWikiSyncState(root, repository) || {};
   const headBefore = await currentHeadSha(repository);
   const path = String(body.path || "");
   const target = resolve(worktree, path);
@@ -819,11 +1313,16 @@ async function resolveWikiConflictUnlocked(root, repository, body = {}, recovere
     || targetRelative.startsWith(`..${sep}`)
   ) throw apiError("Invalid conflict path");
   const choice = String(body.choice || "result");
+  const summary = (previousState.conflicts || []).find((conflict) => conflict.path === path)
+    || conflictContextFromState(previousState);
   if (choice === "delete") {
     await rm(target, { recursive: true, force: true });
     await execFileAsync("git", ["-C", worktree, "rm", "-f", "--ignore-unmatch", "--", path]);
   } else if (choice === "ours" || choice === "theirs") {
-    const gitSide = choice === "ours" ? "theirs" : "ours";
+    const selectedStage = choice === "ours"
+      ? (Number(summary.oursStage) === 3 ? 3 : 2)
+      : (Number(summary.theirsStage) === 2 ? 2 : 3);
+    const gitSide = selectedStage === 2 ? "ours" : "theirs";
     await execFileAsync("git", ["-C", worktree, "checkout", `--${gitSide}`, "--", path]);
     await execFileAsync("git", ["-C", worktree, "add", "--", path]);
   } else {
@@ -832,12 +1331,15 @@ async function resolveWikiConflictUnlocked(root, repository, body = {}, recovere
     await writeFile(target, data);
     await execFileAsync("git", ["-C", worktree, "add", "--", path]);
   }
-  const remaining = await conflictFiles(worktree);
+  const remaining = await conflictFiles(worktree, summary);
   if (remaining.length) {
     return await writeSyncState(root, repository, {
+      ...transactionState(previousState),
       phase: "conflicted",
       integrationPath: worktree,
       conflicts: remaining,
+      errorKind: "conflict",
+      retryable: false,
     });
   }
   await execFileAsync(
@@ -846,30 +1348,145 @@ async function resolveWikiConflictUnlocked(root, repository, body = {}, recovere
     { maxBuffer: 1024 * 1024 * 32 },
   );
   const integrationBranchName = (await execFileAsync("git", ["-C", worktree, "branch", "--show-current"])).stdout.trim();
-  const push = await execFileAsync("git", ["-C", worktree, "push", "origin", "HEAD:main"], {
-    maxBuffer: 1024 * 1024 * 32,
-  }).catch((error) => ({ error, stderr: error.stderr || "" }));
-  if (push.error) {
+  const resolvedConflictHead = await integrationWorktreeHead(worktree);
+  const durableResolutionState = await writeSyncState(root, repository, {
+    ...transactionState(previousState),
+    phase: "merging",
+    integrationBranch: integrationBranchName,
+    integrationPath: worktree,
+    integrationHead: resolvedConflictHead,
+    conflicts: [],
+  });
+  const latestCheckpoint = await checkpointWikiRepositoryUnlocked(
+    root,
+    repository,
+    { ...body, persistState: false },
+    null,
+  );
+  let integrationHead = await integrationWorktreeHead(worktree);
+  let resolutionState = {
+    ...transactionState(durableResolutionState),
+    operationId: previousState.operationId || syncOperationId(),
+    branch: latestCheckpoint.branch,
+    snapshotHead: latestCheckpoint.head,
+    integrationBranch: integrationBranchName,
+    integrationPath: worktree,
+    integrationHead,
+    checkpointedAt: latestCheckpoint.checkpointedAt,
+    committed: Boolean(previousState.committed || latestCheckpoint.committed),
+    changedFiles: Number(previousState.changedFiles || 0) + Number(latestCheckpoint.changedFiles || 0),
+    conflicts: [],
+  };
+  if (!await refIsAncestor(repository, latestCheckpoint.head, integrationHead)) {
+    const latestMerge = await mergeIntoIntegration(worktree, latestCheckpoint.head, identity, {
+      oursStage: 3,
+      theirsStage: 2,
+      oursLabel: "Your latest local edits",
+      theirsLabel: "Resolved sync result",
+    });
+    if (!latestMerge.ok) {
+      if (latestMerge.conflicts.length) {
+        return await writeSyncState(root, repository, {
+          ...resolutionState,
+          phase: "conflicted",
+          integrationHead: await integrationWorktreeHead(worktree),
+          conflicts: latestMerge.conflicts,
+          errorKind: "conflict",
+          retryable: false,
+        });
+      }
+      return await writeGitFailureState(root, repository, previousState, resolutionState, latestMerge.merge, body);
+    }
+    integrationHead = latestMerge.head;
+    resolutionState = { ...resolutionState, integrationHead };
+  }
+
+  await writeSyncState(root, repository, { ...resolutionState, phase: "pushing" });
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await runSyncTestHook(body, "beforePush", { attempt, repository, integrationPath: worktree });
+    const push = await execFileAsync("git", ["-C", worktree, "push", "origin", "HEAD:main"], {
+      maxBuffer: 1024 * 1024 * 32,
+    }).catch((error) => ({ error, stderr: error.stderr || "" }));
+    if (!push.error) break;
+    const classified = classifyGitFailure(push);
+    if (classified.errorKind !== "remote-race") {
+      return await writeGitFailureState(root, repository, previousState, resolutionState, push, body);
+    }
+    if (attempt === 3) {
+      return await writeSyncState(root, repository, {
+        ...resolutionState,
+        phase: "waiting",
+        error: classified.message,
+        errorKind: "remote-race",
+        retryable: true,
+        retryAfterMs: DEFAULT_REPOSITORY_BUSY_RETRY_MS,
+      });
+    }
+    const fetched = await git(repository, ["fetch", "origin", "main"], { allowFailure: true });
+    if (fetched.error) return await writeGitFailureState(root, repository, previousState, resolutionState, fetched, body);
+    const latestRemote = (await git(repository, ["rev-parse", "refs/remotes/origin/main"])).stdout.trim();
+    const mergedRemote = await mergeIntoIntegration(worktree, latestRemote, identity, {
+      oursStage: 2,
+      theirsStage: 3,
+      oursLabel: "Your resolved sync result",
+      theirsLabel: "New remote changes",
+    });
+    if (!mergedRemote.ok) {
+      if (mergedRemote.conflicts.length) {
+        return await writeSyncState(root, repository, {
+          ...resolutionState,
+          remoteHead: latestRemote,
+          phase: "conflicted",
+          integrationHead: await integrationWorktreeHead(worktree),
+          conflicts: mergedRemote.conflicts,
+          errorKind: "conflict",
+          retryable: false,
+        });
+      }
+      return await writeGitFailureState(root, repository, previousState, resolutionState, mergedRemote.merge, body);
+    }
+    integrationHead = mergedRemote.head;
+    resolutionState = { ...resolutionState, remoteHead: latestRemote, integrationHead };
+    await writeSyncState(root, repository, { ...resolutionState, phase: "pushing" });
+  }
+
+  const applyingState = { ...resolutionState, publishedHead: integrationHead };
+  await writeSyncState(root, repository, { ...applyingState, phase: "applying" });
+  await runSyncTestHook(body, "afterPublished", { repository, publishedHead: integrationHead });
+  const applied = await applyPublishedHead(root, repository, integrationHead, body);
+  const artifacts = recoveryArtifacts(
+    previousState.recoveryArtifacts,
+    latestCheckpoint.recoveryArtifacts,
+    applied.recoveryArtifact,
+  );
+  if (!applied.applied) {
     return await writeSyncState(root, repository, {
-      phase: "error",
-      integrationPath: worktree,
-      conflicts: [],
-      error: String(push.stderr || push.error.message).trim(),
+      ...applyingState,
+      ...(artifacts.length ? { recoveryArtifacts: artifacts } : {}),
+      phase: "applying",
+      error: applied.reason,
+      errorKind: "workspace",
+      retryable: true,
+      retryAfterMs: DEFAULT_REPOSITORY_BUSY_RETRY_MS,
     });
   }
-  await git(repository, ["merge", "--ff-only", integrationBranchName]);
-  const head = await currentHeadSha(repository);
+  const head = applied.head;
   const changedPaths = [...new Set([
     ...await changedPathsBetween(repository, headBefore, head),
     join(repository.path, path),
   ])];
+  await pruneWikiGitRecovery(root, body).catch(() => {});
   return await writeSyncState(root, repository, {
+    ...applyingState,
+    ...(artifacts.length ? { recoveryArtifacts: artifacts } : {}),
     phase: "idle",
     head,
     changedPaths,
     integrationPath: worktree,
     conflicts: [],
     lastSyncedAt: new Date().toISOString(),
+    consecutiveFailures: 0,
+    retryable: false,
     message: recovery
       ? "Recovered an orphaned Git index lock; conflict resolved and pushed"
       : "Conflict resolved and pushed",

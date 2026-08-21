@@ -24,3 +24,16 @@ export function nextGraphemePosition(text: Text, pos: number): number {
   if (end > cursor) return end;
   return cursor < text.length ? cursor + 1 : cursor;
 }
+
+/**
+ * One definition of a "word" character for every caret-level word operation.
+ *
+ * Vim's `w`/`b`, `Mod-d`'s occurrence selection and CodeMirror's own
+ * double-click used to disagree, so `foo-bar` produced three different
+ * selections depending on how you asked for it. Hyphen is a separator here,
+ * which is what Vim, CodeMirror's default categorizer and VSCode's Cmd-D all
+ * already do.
+ */
+export function isWordChar(ch: string): boolean {
+  return /[\p{L}\p{N}_]/u.test(ch);
+}

@@ -158,6 +158,180 @@ describe("Wiki Git synchronization", () => {
     expect(await readFile(join(checkout, "sync.md"), "utf8")).toContain("# Local edit");
   });
 
+  test("quarantines an untracked integration collision and rebuilds the disposable worktree", async () => {
+    const item = await fixture();
+    const initial = await syncWikiRepository(item.root, "private/research", { configDir: item.configDir });
+    const relativePath = "project/UNSW/ISO(202603)/.cell/GraphTensor.bash.default.ipynb";
+    const localFile = join(item.repositoryPath, relativePath);
+    const integrationFile = join(String(initial.integrationPath), relativePath);
+    await mkdir(join(localFile, ".."), { recursive: true });
+    await mkdir(join(integrationFile, ".."), { recursive: true });
+    await writeFile(localFile, "local contribution\n");
+    await writeFile(integrationFile, "stale integration artifact\n");
+
+    const state = await syncWikiRepository(item.root, "private/research", { configDir: item.configDir });
+
+    expect(state.phase).toBe("idle");
+    const artifact = state.recoveryArtifacts?.find((entry) => entry.source === "integration");
+    expect(artifact?.files).toEqual([relativePath]);
+    expect(await readFile(join(item.root, artifact!.path, "files", relativePath), "utf8"))
+      .toBe("stale integration artifact\n");
+    expect(await readFile(localFile, "utf8")).toBe("local contribution\n");
+
+    const checkout = join(item.suite, "integration-recovery-verification");
+    await execFileAsync("git", ["clone", item.remote, checkout]);
+    expect(await readFile(join(checkout, relativePath), "utf8")).toBe("local contribution\n");
+  });
+
+  test("quarantines a differing ignored primary file before applying a remote tracked path", async () => {
+    const item = await fixture();
+    await writeFile(join(item.repositoryPath, ".gitignore"), "generated/\n");
+    await syncWikiRepository(item.root, "private/research", { configDir: item.configDir });
+
+    const collaborator = join(item.suite, "primary-collision-collaborator");
+    await execFileAsync("git", ["clone", item.remote, collaborator]);
+    await mkdir(join(collaborator, "generated"), { recursive: true });
+    await writeFile(join(collaborator, "generated/result.txt"), "remote tracked result\n");
+    await git(collaborator, "add", "-f", "generated/result.txt");
+    await git(collaborator, "-c", "user.name=Remote", "-c", "user.email=remote@local", "commit", "-m", "track generated result");
+    await git(collaborator, "push", "origin", "main");
+
+    const localCollision = join(item.repositoryPath, "generated/result.txt");
+    await mkdir(join(item.repositoryPath, "generated"), { recursive: true });
+    await writeFile(localCollision, "local ignored result\n");
+    const state = await syncWikiRepository(item.root, "private/research", { configDir: item.configDir });
+
+    expect(state.phase).toBe("idle");
+    expect(await readFile(localCollision, "utf8")).toBe("remote tracked result\n");
+    const artifact = state.recoveryArtifacts?.find((entry) => entry.source === "primary");
+    expect(artifact?.files).toEqual(["generated"]);
+    expect(await readFile(join(item.root, artifact!.path, "files/generated/result.txt"), "utf8"))
+      .toBe("local ignored result\n");
+  });
+
+  test("preserves an untracked collision when returning an externally switched repository to its device branch", async () => {
+    const item = await fixture();
+    const deviceOnly = join(item.repositoryPath, "device-only.txt");
+    await writeFile(deviceOnly, "tracked device contribution\n");
+    await syncWikiRepository(item.root, "private/research", { configDir: item.configDir });
+    await git(item.repositoryPath, "switch", "main");
+    await writeFile(deviceOnly, "external untracked contribution\n");
+
+    const state = await syncWikiRepository(item.root, "private/research", { configDir: item.configDir });
+
+    expect(state.phase).toBe("idle");
+    expect(await readFile(deviceOnly, "utf8")).toBe("tracked device contribution\n");
+    const recovered = state.recoveryArtifacts?.find((artifact) => (
+      artifact.source === "primary" && artifact.files.includes("device-only.txt")
+    ));
+    expect(await readFile(join(item.root, recovered!.path, "files/device-only.txt"), "utf8"))
+      .toBe("external untracked contribution\n");
+  });
+
+  test("preserves both sides when origin/main advances immediately before push", async () => {
+    const item = await fixture();
+    const collaborator = join(item.suite, "push-race-collaborator");
+    await execFileAsync("git", ["clone", item.remote, collaborator]);
+    await writeFile(join(collaborator, "remote-race.md"), "# Remote won the race\n");
+    await git(collaborator, "add", "remote-race.md");
+    await git(collaborator, "-c", "user.name=Remote", "-c", "user.email=remote@local", "commit", "-m", "remote race");
+    await writeFile(join(item.repositoryPath, "local-race.md"), "# Local contribution\n");
+    let raced = false;
+
+    const state = await syncWikiRepository(item.root, "private/research", {
+      configDir: item.configDir,
+      testHooks: {
+        async beforePush({ attempt }: { attempt: number }) {
+          if (attempt !== 1 || raced) return;
+          raced = true;
+          await git(collaborator, "push", "origin", "main");
+        },
+      },
+    });
+
+    expect(state.phase).toBe("idle");
+    const checkout = join(item.suite, "push-race-verification");
+    await execFileAsync("git", ["clone", item.remote, checkout]);
+    expect(await readFile(join(checkout, "local-race.md"), "utf8")).toContain("Local contribution");
+    expect(await readFile(join(checkout, "remote-race.md"), "utf8")).toContain("Remote won the race");
+  });
+
+  test("records a published head when a newer local edit blocks application, then reconciles without loss", async () => {
+    const item = await fixture();
+    const collaborator = join(item.suite, "published-apply-collaborator");
+    await execFileAsync("git", ["clone", item.remote, collaborator]);
+    await writeFile(join(collaborator, "sync.md"), "# Remote published content\n");
+    await git(collaborator, "add", "sync.md");
+    await git(collaborator, "-c", "user.name=Remote", "-c", "user.email=remote@local", "commit", "-m", "remote content");
+    await git(collaborator, "push", "origin", "main");
+    await writeFile(join(item.repositoryPath, "local-published.md"), "# Local published contribution\n");
+
+    const first = await syncWikiRepository(item.root, "private/research", {
+      configDir: item.configDir,
+      testHooks: {
+        async afterPublished() {
+          await writeFile(join(item.repositoryPath, "sync.md"), "# Newer local edit after publish\n");
+        },
+      },
+    });
+
+    expect(first).toMatchObject({ phase: "applying", errorKind: "workspace", retryable: true });
+    expect(first.publishedHead).toBeTruthy();
+    expect(await readFile(join(item.repositoryPath, "sync.md"), "utf8")).toContain("Newer local edit");
+    const verification = join(item.suite, "published-apply-verification");
+    await execFileAsync("git", ["clone", item.remote, verification]);
+    expect(await readFile(join(verification, "local-published.md"), "utf8")).toContain("Local published contribution");
+
+    const second = await syncWikiRepository(item.root, "private/research", { configDir: item.configDir });
+    expect(second.phase).toBe("conflicted");
+    const conflict = await readWikiConflict(item.root, { repositoryId: "private/research", path: "sync.md" });
+    expect(conflict.ours).toContain("Newer local edit");
+    expect(conflict.theirs).toContain("Remote published content");
+    expect(conflict.oursLabel).toBe("Your latest local contribution");
+    expect(conflict.theirsLabel).toBe("Recovered sync result");
+  });
+
+  test("reconciles an interrupted transaction after the remote publish was recorded", async () => {
+    const item = await fixture();
+    await writeFile(join(item.repositoryPath, "interrupted.md"), "# Durable local contribution\n");
+    const first = await syncWikiRepository(item.root, "private/research", {
+      configDir: item.configDir,
+      testHooks: {
+        afterPublished() {
+          throw new Error("simulated process interruption after publish");
+        },
+      },
+    });
+
+    expect(first).toMatchObject({ phase: "waiting", errorKind: "internal", retryable: true });
+    expect(first.publishedHead).toBeTruthy();
+
+    const second = await syncWikiRepository(item.root, "private/research", { configDir: item.configDir });
+    expect(second.phase).toBe("idle");
+    expect(await readFile(join(item.repositoryPath, "interrupted.md"), "utf8")).toContain("Durable local contribution");
+    const localHead = await git(item.repositoryPath, "rev-parse", "HEAD");
+    const remoteHead = await git(item.repositoryPath, "rev-parse", "origin/main");
+    expect(localHead).toBe(remoteHead);
+  });
+
+  test("prunes only expired Noema Git recovery batches", async () => {
+    const item = await fixture();
+    const oldBatch = join(item.root, ".noema/recovery/git/fixture/old-batch");
+    await mkdir(oldBatch, { recursive: true });
+    await writeFile(join(oldBatch, "preserved.txt"), "expired recovery\n");
+    const old = new Date(Date.now() - 60_000);
+    await utimes(oldBatch, old, old);
+
+    const state = await syncWikiRepository(item.root, "private/research", {
+      configDir: item.configDir,
+      recoveryRetentionMs: 1_000,
+    });
+
+    expect(state.phase).toBe("idle");
+    await expect(readFile(join(oldBatch, "preserved.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(join(item.repositoryPath, "sync.md"), "utf8")).toContain("# Common");
+  });
+
   test("coalesces repeated manual sync clicks for the same repository", async () => {
     const item = await fixture();
     const first = syncWikiRepository(item.root, "private/research", { configDir: item.configDir });
@@ -283,6 +457,11 @@ describe("Wiki Git synchronization", () => {
     expect(conflict.base).toContain("# Common");
     expect(conflict.ours).toContain("# Local edit");
     expect(conflict.theirs).toContain("# Remote edit");
+    expect(conflict.oursLabel).toBe("Your local contribution");
+    expect(conflict.theirsLabel).toBe("Remote main");
+
+    const duringConflict = join(item.repositoryPath, "during-conflict.md");
+    await writeFile(duringConflict, "# Local work continued\n");
 
     const resolved = await resolveWikiConflict(item.root, {
       repositoryId: "private/research",
@@ -290,9 +469,10 @@ describe("Wiki Git synchronization", () => {
       choice: "ours",
     });
     expect(resolved).toMatchObject({ phase: "idle", conflicts: [] });
-    expect(resolved.changedPaths).toEqual([localFile]);
+    expect(resolved.changedPaths).toEqual([duringConflict, localFile]);
     await git(collaborator, "pull", "--ff-only");
     expect(await readFile(remoteFile, "utf8")).toContain("# Local edit");
+    expect(await readFile(join(collaborator, "during-conflict.md"), "utf8")).toContain("Local work continued");
   });
 
   test("starts ungit as a loopback-only embedded sidecar behind an opaque capability path", async () => {

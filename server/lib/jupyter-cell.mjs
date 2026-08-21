@@ -2305,7 +2305,16 @@ export function createJupyterCellService({
   async function mutateManagedDocument(context, cellId, action, body = {}) {
     const cells = context.notebook.cells || [];
     const index = cells.findIndex((cell) => cell?.id === cellId);
-    if (index < 0) throw error(`Unknown Jupyter cell: ${cellId}`, 404);
+    if (index < 0) {
+      // Deleting a cell this notebook no longer knows about is already the
+      // state the caller asked for, so report success instead of 404. An
+      // unlabeled @@cell's id is derived from the marker's document offset,
+      // so any edit above it renames the cell while the notebook still holds
+      // the previous id. Failing here left the caller's Markdown line in
+      // place, which reads as "Delete Cell Block does nothing".
+      if (action === "delete") return { ok: true, activeCellId: "", action, alreadyAbsent: true };
+      throw error(`Unknown Jupyter cell: ${cellId}`, 404);
+    }
     let activeCellId = cellId;
     if (action === "insertAbove" || action === "insertBelow") {
       const cell = freshManagedCell("", body?.cellType);

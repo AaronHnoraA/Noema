@@ -12,10 +12,11 @@ function timerDelay(value, fallback) {
 /**
  * Repository-scoped automatic synchronization. Each repository gets its own
  * debounce timer and at most one active sync. Changes arriving during a sync
- * schedule one follow-up pass instead of overlapping Git processes. Failed
- * Git failures wait for the next ordinary sync window. A repository held by
+ * schedule one follow-up pass instead of overlapping Git processes. Retryable
+ * results supply their own delay; semantic conflicts and actionable errors
+ * pause the repository while remembering later edits. A repository held by
  * another Noema host uses a short retry and is not reported as a failure.
- * Failures from a concurrent batch are collected into one complete report.
+ * Reportable failures from a concurrent batch are collected once.
  */
 export function createWikiAutoSync(options = {}) {
   if (typeof options.sync !== "function") throw new TypeError("Wiki auto sync requires a sync function");
@@ -30,6 +31,8 @@ export function createWikiAutoSync(options = {}) {
   const active = new Map();
   const waiting = new Set();
   const rerun = new Set();
+  const blocked = new Set();
+  const blockedDirty = new Set();
   const batchFailures = new Map();
   let periodicTimer = null;
   let batchReportTimer = null;
@@ -83,6 +86,10 @@ export function createWikiAutoSync(options = {}) {
   function schedule(repositoryId, delayMs, reset = true) {
     if (!accepting || !repositoryId) return;
     known.add(repositoryId);
+    if (blocked.has(repositoryId)) {
+      blockedDirty.add(repositoryId);
+      return;
+    }
     if (active.has(repositoryId)) {
       rerun.add(repositoryId);
       return;
@@ -116,9 +123,16 @@ export function createWikiAutoSync(options = {}) {
       .then(() => options.sync(repositoryId))
       .then((result) => {
         options.onResult?.(repositoryId, result);
-        if (result?.phase === "waiting" && result?.retryable !== false) {
+        if (result?.phase === "conflicted" || (result?.phase === "error" && result?.retryable === false)) {
+          blocked.add(repositoryId);
+        } else if (result?.phase === "idle") {
+          blocked.delete(repositoryId);
+          blockedDirty.delete(repositoryId);
+        }
+        if (result?.retryable === true && !blocked.has(repositoryId)) {
           retryDelayMs = timerDelay(result.retryAfterMs, busyRetryMs);
-        } else if (result?.phase === "error") {
+        }
+        if (result?.phase === "error" || result?.reportError === true) {
           recordBatchFailure(repositoryId, result.error);
         }
         return result;
@@ -131,7 +145,9 @@ export function createWikiAutoSync(options = {}) {
     const tracked = task.finally(() => {
       if (active.get(repositoryId) === tracked) active.delete(repositoryId);
       const rerunRequested = rerun.delete(repositoryId);
-      if (retryDelayMs !== null) schedule(repositoryId, retryDelayMs, true);
+      if (blocked.has(repositoryId)) {
+        if (rerunRequested) blockedDirty.add(repositoryId);
+      } else if (retryDelayMs !== null) schedule(repositoryId, retryDelayMs, true);
       else if (rerunRequested) schedule(repositoryId, debounceMs, true);
       if (accepting && waiting.size > 0) {
         const next = waiting.values().next().value;
@@ -155,7 +171,25 @@ export function createWikiAutoSync(options = {}) {
   }
 
   function retry(repositoryId, delayMs = busyRetryMs) {
-    schedule(String(repositoryId || ""), timerDelay(delayMs, busyRetryMs), true);
+    const id = String(repositoryId || "");
+    blocked.delete(id);
+    blockedDirty.delete(id);
+    schedule(id, timerDelay(delayMs, busyRetryMs), true);
+  }
+
+  function pause(repositoryId) {
+    const id = String(repositoryId || "");
+    if (!id) return;
+    clearPending(id);
+    waiting.delete(id);
+    blocked.add(id);
+  }
+
+  function resume(repositoryId, { immediate = true } = {}) {
+    const id = String(repositoryId || "");
+    const wasDirty = blockedDirty.delete(id);
+    blocked.delete(id);
+    if (immediate || wasDirty) schedule(id, immediate ? 0 : debounceMs, true);
   }
 
   function start(repositoryIds = []) {
@@ -172,7 +206,12 @@ export function createWikiAutoSync(options = {}) {
     const id = String(repositoryId || "");
     if (!id) return null;
     known.add(id);
+    blocked.delete(id);
+    blockedDirty.delete(id);
     cancel(id);
+    while (active.size >= maxConcurrency && !active.has(id)) {
+      await Promise.race([...active.values()]);
+    }
     return await run(id);
   }
 
@@ -181,10 +220,11 @@ export function createWikiAutoSync(options = {}) {
     accepting = false;
     if (periodicTimer) clearTimeout(periodicTimer);
     periodicTimer = null;
-    const queued = new Set([...pending.keys(), ...waiting, ...rerun]);
+    const queued = new Set([...pending.keys(), ...waiting, ...rerun, ...blockedDirty]);
     for (const repositoryId of pending.keys()) clearPending(repositoryId);
     rerun.clear();
     waiting.clear();
+    blockedDirty.clear();
     await Promise.allSettled([...active.values()]);
     cancelBatchFailureReport();
     if (flush) {
@@ -207,6 +247,8 @@ export function createWikiAutoSync(options = {}) {
     mark,
     cancel,
     retry,
+    pause,
+    resume,
     start,
     syncNow,
     close,
@@ -217,6 +259,8 @@ export function createWikiAutoSync(options = {}) {
         active: [...active.keys()],
         waiting: [...waiting],
         rerun: [...rerun],
+        blocked: [...blocked],
+        blockedDirty: [...blockedDirty],
       };
     },
   };

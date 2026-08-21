@@ -79,6 +79,47 @@ describe("jupyter cell service (no kernel)", () => {
     }
   });
 
+  test("deleting a cell the notebook no longer knows about succeeds", async () => {
+    // An unlabeled @@cell's id is derived from the marker's document offset,
+    // so editing anything above it renames the cell while the notebook still
+    // holds the previous id. A 404 here used to abort the caller before it
+    // removed the Markdown marker, so "Delete Cell Block" appeared to do
+    // nothing. Deleting something already absent is the requested state.
+    await withService(async ({ service, note }) => {
+      const opened = await service.openScript({
+        file: note,
+        cellId: "ceil-oldhash",
+        kernel: "python3",
+        session: "default",
+        language: "python",
+        storage: "ipynb",
+        open: false,
+        cells: [{ cellId: "ceil-oldhash", id: "ceil-oldhash", code: "a = 1" }],
+      });
+      const result = await service.documentMutate({
+        scriptFile: opened.file,
+        cellId: "ceil-newhash",
+        op: "delete",
+      });
+      expect(result).toMatchObject({ ok: true, action: "delete", alreadyAbsent: true });
+
+      // The cell that does exist is still deletable, and other actions still
+      // reject an unknown id rather than silently succeeding.
+      await expect(service.documentMutate({
+        scriptFile: opened.file,
+        cellId: "ceil-newhash",
+        op: "insertBelow",
+      })).rejects.toThrow(/Unknown Jupyter cell/);
+      const deleted = await service.documentMutate({
+        scriptFile: opened.file,
+        cellId: "ceil-oldhash",
+        op: "delete",
+      });
+      expect(deleted).toMatchObject({ ok: true, action: "delete" });
+      expect(deleted).not.toHaveProperty("alreadyAbsent");
+    });
+  });
+
   test("creates a fresh packaged-state runtime directory before registry use", async () => {
     const root = await mkdtemp(join(tmpdir(), "noema-jcell-runtime-root-"));
     const stateRoot = await mkdtemp(join(tmpdir(), "noema-jcell-state-root-"));

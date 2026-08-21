@@ -8,6 +8,7 @@ import {
 } from "@codemirror/commands";
 import {
   graphemeEndPosition,
+  isWordChar,
   previousGraphemePosition,
 } from "../src/cm6/text-boundaries.ts";
 import { scanCodeRanges } from "../src/cm6/code-ranges.ts";
@@ -66,6 +67,12 @@ type VimLiteOptions = {
   onIndent?: (direction: 1 | -1) => boolean;
   onFold?: (action: VimLiteFoldAction) => boolean;
   onFind?: () => boolean;
+  /**
+   * A chord that Normal/Visual mode consumed as modal input but has no binding
+   * for. Swallowing it silently is indistinguishable from a dropped keystroke,
+   * which is the most disorienting thing a modal editor can do.
+   */
+  onUnhandledKey?: (sequence: string) => void;
   jumpTimeoutMs?: number;
 };
 
@@ -370,13 +377,9 @@ function docCluster(text: Text, pos: number): string {
   return end > pos ? text.sliceString(pos, end) : text.sliceString(pos, pos + 1);
 }
 
-function wordChar(ch: string): boolean {
-  return /[\p{L}\p{N}_]/u.test(ch);
-}
-
 function wordCategory(ch: string, bigWord = false): "space" | "word" | "punctuation" {
   if (!ch || /\s/u.test(ch)) return "space";
-  if (bigWord || wordChar(ch)) return "word";
+  if (bigWord || isWordChar(ch)) return "word";
   return "punctuation";
 }
 
@@ -678,12 +681,31 @@ function moveScreenLine(
   return nextGoals;
 }
 
+/**
+ * Boundary of the *visual* row rather than the source line.
+ *
+ * `j`/`k` already move by wrapped row (`moveScreenLine`), and Insert mode's
+ * Home/End already resolve against CodeMirror's visual line boundaries. Having
+ * `0`/`$` use the source line made those three disagree in the single most
+ * common Markdown case: inside a wrapped paragraph `j` stepped one row while
+ * `$` jumped to the end of the entire paragraph, and `Home` and `0` landed in
+ * different places. A detached editor has no layout to measure, so fall back
+ * to the source line there.
+ */
+function visualRowBoundary(editor: Editor, pos: number, which: "start" | "end"): number {
+  const rect = editor.view.contentDOM.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) {
+    const line = docLineInfo(doc(editor), pos);
+    return which === "start" ? line.start : line.end;
+  }
+  return editor.view.moveToLineBoundary(EditorSelection.cursor(pos), which === "end").head;
+}
+
 function lineBoundary(editor: Editor, which: "start" | "end"): void {
   const text = doc(editor);
-  setNormalCursorPositions(editor, editor.view.state.selection.ranges.map((range) => {
-    const line = docLineInfo(text, normalCharPosition(text, range.head));
-    return which === "start" ? line.start : line.end;
-  }));
+  setNormalCursorPositions(editor, editor.view.state.selection.ranges.map((range) => (
+    visualRowBoundary(editor, normalCharPosition(text, range.head), which)
+  )));
 }
 
 function lineEndInsertBoundary(editor: Editor): void {
@@ -966,6 +988,10 @@ export function createVimLite(
     register = { text: registerText, kind, fragments };
     (window as unknown as Record<string, unknown>).__aaronoteVimRegister = register;
     pendingClipboardWrite = writeSystemClipboard(registerText);
+  }
+
+  function reportUnhandled(sequence: string): void {
+    if (sequence) options.onUnhandledKey?.(sequence);
   }
 
   function resetMotionMemory(): void {
@@ -1417,10 +1443,10 @@ export function createVimLite(
   function visualLineBoundary(which: "start" | "end"): void {
     resetMotionMemory();
     const text = doc(editor);
-    renderVisualCharStates(currentVisualCharStates().map((state) => {
-      const line = docLineInfo(text, state.head);
-      return { ...state, head: which === "start" ? line.start : normalCharPosition(text, line.end) };
-    }));
+    renderVisualCharStates(currentVisualCharStates().map((state) => ({
+      ...state,
+      head: normalCharPosition(text, visualRowBoundary(editor, state.head, which)),
+    })));
   }
 
   function visualDocumentBoundary(which: "start" | "end"): void {
@@ -1649,7 +1675,9 @@ export function createVimLite(
         return true;
       default:
         pending = "";
-        return key.length === 1;
+        if (key.length !== 1) return false;
+        reportUnhandled(key);
+        return true;
     }
   }
 
@@ -1679,6 +1707,7 @@ export function createVimLite(
         deleteLineCommand();
         return true;
       }
+      reportUnhandled(`d${key}`);
       return true;
     }
     if (pending === "y") {
@@ -1687,6 +1716,7 @@ export function createVimLite(
         yankLine();
         return true;
       }
+      reportUnhandled(`y${key}`);
       return true;
     }
     if (pending === "r") {
@@ -1695,6 +1725,8 @@ export function createVimLite(
         resetMotionMemory();
         replaceChars(editor, key);
         setMode("normal");
+      } else {
+        reportUnhandled(`r${key}`);
       }
       return true;
     }
@@ -1703,6 +1735,8 @@ export function createVimLite(
       if (key === "g") {
         resetMotionMemory();
         docBoundary(editor, "start");
+      } else {
+        reportUnhandled(`g${key}`);
       }
       return true;
     }
@@ -1720,6 +1754,7 @@ export function createVimLite(
         case "R":
           return foldCommand("open-all");
         default:
+          reportUnhandled(`z${key}`);
           return true;
       }
     }
@@ -1728,6 +1763,8 @@ export function createVimLite(
       if (key === ">") {
         resetMotionMemory();
         options.onIndent?.(1);
+      } else {
+        reportUnhandled(`>${key}`);
       }
       return true;
     }
@@ -1736,6 +1773,8 @@ export function createVimLite(
       if (key === "<") {
         resetMotionMemory();
         options.onIndent?.(-1);
+      } else {
+        reportUnhandled(`<${key}`);
       }
       return true;
     }
@@ -1891,7 +1930,9 @@ export function createVimLite(
         return true;
       default:
         pending = "";
-        return key.length === 1;
+        if (key.length !== 1) return false;
+        reportUnhandled(key);
+        return true;
     }
   }
 
@@ -1902,6 +1943,7 @@ export function createVimLite(
         deleteLineCommand();
         return true;
       }
+      reportUnhandled(`d${key}`);
       return true;
     }
     if (pending === "r") {
@@ -1910,6 +1952,8 @@ export function createVimLite(
         resetMotionMemory();
         const replacedFrom = replaceChars(editor, key);
         if (replacedFrom != null) visualHead = replacedFrom;
+      } else {
+        reportUnhandled(`r${key}`);
       }
       setMode("normal");
       return true;
@@ -1917,6 +1961,7 @@ export function createVimLite(
     if (pending === "g") {
       pending = "";
       if (key === "g") visualDocumentBoundary("start");
+      else reportUnhandled(`g${key}`);
       return true;
     }
     switch (key) {
@@ -1999,7 +2044,9 @@ export function createVimLite(
         return true;
       default:
         pending = "";
-        return key.length === 1;
+        if (key.length !== 1) return false;
+        reportUnhandled(key);
+        return true;
     }
   }
 
@@ -2070,7 +2117,9 @@ export function createVimLite(
         return true;
       default:
         pending = "";
-        return key.length === 1;
+        if (key.length !== 1) return false;
+        reportUnhandled(key);
+        return true;
     }
   }
 

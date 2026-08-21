@@ -794,7 +794,7 @@ function wikiAutoSyncFailureMessage(failures) {
   const noun = repositories.length === 1 ? "repository" : "repositories";
   const reasons = [...new Set(failures.map((failure) => String(failure.error || "").trim()).filter(Boolean))];
   const reason = reasons.length === 1 ? ` Reason: ${reasons[0].slice(0, 240)}.` : "";
-  return `Git sync failed for ${repositories.length} ${noun}: ${repositories.join(", ")}.${reason} Noema will retry at the next scheduled push.`;
+  return `Git sync needs attention for ${repositories.length} ${noun}: ${repositories.join(", ")}.${reason} Recovery and retry details are available in Wiki repositories.`;
 }
 
 const wikiAutoSync = wikiAutoSyncEnabled
@@ -845,11 +845,24 @@ async function checkpointWikiRepositoryFromApi(body = {}) {
 
 async function syncWikiRepositoryFromApi(body = {}) {
   const repositoryId = String(body.repositoryId || "");
-  wikiAutoSync?.cancel(repositoryId);
-  const result = await syncWikiRepository(noteRoot, repositoryId, body);
-  if (result?.phase === "waiting") wikiAutoSync?.retry(repositoryId, result.retryAfterMs);
-  else if (result?.phase === "error") wikiAutoSync?.mark(repositoryId);
-  return { ...applyWikiSyncResult(repositoryId, result), automatic: wikiAutoSyncEnabled };
+  const result = wikiAutoSync
+    ? await wikiAutoSync.syncNow(repositoryId)
+    : await syncWikiRepository(noteRoot, repositoryId, body);
+  return {
+    ...(wikiAutoSync ? result : applyWikiSyncResult(repositoryId, result)),
+    automatic: wikiAutoSyncEnabled,
+  };
+}
+
+function reconcileWikiAutoSyncSchedule(repositoryId, result) {
+  if (!wikiAutoSync || !repositoryId) return;
+  if (result?.phase === "conflicted" || (result?.phase === "error" && result?.retryable === false)) {
+    wikiAutoSync.pause(repositoryId);
+  } else if (result?.retryable === true) {
+    wikiAutoSync.retry(repositoryId, result.retryAfterMs);
+  } else if (result?.phase === "idle") {
+    wikiAutoSync.resume(repositoryId, { immediate: false });
+  }
 }
 
 if (wikiAutoSync) {
@@ -1591,11 +1604,14 @@ const apiRouter = new ApiRouter().register({
   "aaronnote:api:wiki:conflict": (body) => readWikiConflict(noteRoot, body || {}),
   "aaronnote:api:wiki:resolve-conflict": async (body) => {
     const repositoryId = String(body?.repositoryId || "");
-    return applyWikiSyncResult(repositoryId, await resolveWikiConflict(noteRoot, body || {}));
+    const result = await resolveWikiConflict(noteRoot, body || {});
+    reconcileWikiAutoSyncSchedule(repositoryId, result);
+    return applyWikiSyncResult(repositoryId, result);
   },
   "aaronnote:api:wiki:abort-conflict": async (body) => {
     const repositoryId = String(body?.repositoryId || "");
     const result = await abortWikiConflict(noteRoot, repositoryId);
+    reconcileWikiAutoSyncSchedule(repositoryId, result);
     broadcast("command", { command: "wiki-sync-state-changed", repositoryId, ...result });
     return result;
   },

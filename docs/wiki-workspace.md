@@ -144,7 +144,9 @@ repository dirty; it does not create a Git commit per edit. All repositories
 synchronize shortly after startup and then roughly once per day, with up to
 ten minutes of jitter so multiple devices do not all contact the remote at the
 same instant. Work is serialized per repository and an offline/error result is
-reported once for the batch, then waits for the next scheduled push. During an orderly App shutdown, dirty repositories
+reported once for the batch. Busy repositories retry shortly, transient network
+failures use bounded exponential backoff, and authentication/configuration
+failures pause with an actionable repository status. During an orderly App shutdown, dirty repositories
 receive a local checkpoint; the next startup/periodic pass performs the network
 sync. `NOEMA_WIKI_AUTO_SYNC=0` is the diagnostic override for disabling this
 policy.
@@ -156,9 +158,13 @@ author. Legacy layout does not opt into the multi-repository automatic policy.
 
 Conflicts are isolated in a disposable integration worktree and resolved in
 the embedded three-way merge editor. The user's primary working tree stays on
-the device branch and is never left in a partially merged state. Automatic
-retry pauses for a conflicted repository until the user resolves or aborts the
-merge from the repository view.
+the device branch and is never left in a partially merged state. Local editing
+may continue while a conflict is open; Noema checkpoints those later edits and
+includes them before publishing the resolved result. Automatic retry pauses for
+a conflicted repository until the user resolves or aborts the merge from the
+repository view. Unexpected files in Noema-owned integration worktrees are
+quarantined below `.noema/recovery/git/` before the worktree is rebuilt; recovery
+batches are retained for 30 days.
 The embedded ungit sidecar provides the full visual staging, commit, branch,
 and history workflow for advanced maintenance without sending users to a
 terminal or another application.

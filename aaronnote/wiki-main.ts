@@ -255,8 +255,23 @@ let activeView = "home";
 let activeGraph: WorkspaceGraph | null = null;
 let graphPayloadCache: GraphPayload | null = null;
 let busy = false;
-let activeConflict: { repositoryId: string; path: string; kind: string; editor?: HTMLElement & { ctr?: string } } | null = null;
-type WikiConflictSummary = { path: string; kind: string; stages: number[] };
+let activeConflict: {
+  repositoryId: string;
+  path: string;
+  kind: string;
+  oursLabel?: string;
+  theirsLabel?: string;
+  editor?: HTMLElement & { ctr?: string };
+} | null = null;
+type WikiConflictSummary = {
+  path: string;
+  kind: string;
+  stages: number[];
+  oursStage?: 2 | 3;
+  theirsStage?: 2 | 3;
+  oursLabel?: string;
+  theirsLabel?: string;
+};
 const pendingConflicts = new Map<string, WikiConflictSummary[]>();
 let activeManagedNote: WikiNote | null = null;
 let pageSearch: { query: string; items: WikiNote[]; total: number; nextCursor: number | null; generation: string } = {
@@ -1253,8 +1268,14 @@ function renderSyncState(
         : "No local changes to commit"
       : "",
     state.localOnly ? "Local commit only (no origin remote)" : "",
+    state.phase === "applying" && state.publishedHead ? "Remote published; safely applying the result to this device" : "",
     state.automatic ? "Automatic startup and daily batch sync enabled" : "",
     state.lastSyncedAt ? `Last synced ${state.lastSyncedAt}` : "",
+    state.nextRetryAt ? `Next automatic retry ${state.nextRetryAt}` : "",
+    state.actionRequired || "",
+    ...(state.recoveryArtifacts || []).map((artifact) => (
+      `Recovered ${artifact.files.length} working file${artifact.files.length === 1 ? "" : "s"} to ${artifact.path}`
+    )),
     state.message || "",
     state.error || "",
   ].filter(Boolean).join("\n");
@@ -1280,8 +1301,16 @@ async function openConflict(repositoryId: string, path: string): Promise<void> {
       base?: string;
       ours?: string;
       theirs?: string;
+      oursLabel?: string;
+      theirsLabel?: string;
     };
-    activeConflict = { repositoryId, path, kind: String(conflict.kind || "text") };
+    const oursLabel = String(conflict.oursLabel || "Your local contribution");
+    const theirsLabel = String(conflict.theirsLabel || "Remote main");
+    root.querySelector<HTMLButtonElement>("[data-conflict-ours]")!.textContent = `Keep ${oursLabel}`;
+    root.querySelector<HTMLButtonElement>("[data-conflict-theirs]")!.textContent = `Use ${theirsLabel}`;
+    root.querySelector<HTMLButtonElement>("[data-conflict-all-ours]")!.textContent = `Keep ${oursLabel} for all`;
+    root.querySelector<HTMLButtonElement>("[data-conflict-all-theirs]")!.textContent = `Use ${theirsLabel} for all`;
+    activeConflict = { repositoryId, path, kind: String(conflict.kind || "text"), oursLabel, theirsLabel };
     if (activeConflict.kind === "text") {
       const editor = document.createElement("mis-merge3") as HTMLElement & {
         lhs: string;
@@ -1299,10 +1328,10 @@ async function openConflict(repositoryId: string, path: string): Promise<void> {
       editor.wrapLines = true;
       activeConflict.editor = editor;
       conflictEditor.append(editor);
-      conflictMessage.textContent = "Use the arrows inside the merge editor, then review the center result before saving.";
+      conflictMessage.textContent = `Left: ${oursLabel} · Right: ${theirsLabel}. Review the center result before saving.`;
       root.querySelector<HTMLButtonElement>("[data-conflict-save]")!.hidden = false;
     } else {
-      conflictEditor.append(emptyState("Binary conflict", "Choose your file, the remote file, or delete it. Binary content cannot be merged by blocks."));
+      conflictEditor.append(emptyState("Binary conflict", `Choose ${oursLabel}, ${theirsLabel}, or delete it. Binary content cannot be merged by blocks.`));
       conflictMessage.textContent = "No content is uploaded; the choice is applied inside the local integration worktree.";
       root.querySelector<HTMLButtonElement>("[data-conflict-save]")!.hidden = true;
     }
@@ -1339,7 +1368,9 @@ async function finishConflict(choice: "result" | "ours" | "theirs" | "delete"): 
 async function finishAllConflicts(choice: "ours" | "theirs"): Promise<void> {
   if (!activeConflict) return;
   const repositoryId = activeConflict.repositoryId;
-  const label = choice === "ours" ? "your local files" : "the remote files";
+  const label = choice === "ours"
+    ? (activeConflict.oursLabel || "your local files")
+    : (activeConflict.theirsLabel || "the remote files");
   if (!window.confirm(`Use ${label} for every remaining conflict in ${repositoryId}?`)) return;
   conflictMessage.textContent = `Resolving every remaining conflict with ${label}…`;
   try {
@@ -1815,13 +1846,13 @@ window.addEventListener("aaronnote:command", (event) => {
   else if (detail?.command === "wiki-sync-state-changed") {
     rememberSyncState(detail.repositoryId || "Repository", detail as Partial<WikiSyncState>);
     if (detail.phase === "error" && detail.notifyError !== false) {
-      setStatus(`${detail.repositoryId || "Repository"} sync failed: ${detail.error || "will retry at the next scheduled push"}`, true);
+      setStatus(`${detail.repositoryId || "Repository"} sync failed: ${detail.error || "review the repository status for recovery details"}`, true);
     } else if (detail.phase === "conflicted") {
       setStatus(`${detail.repositoryId || "Repository"} needs conflict resolution`, true);
     }
     if (activeView === "repositories" || activeView === "sync") render();
   } else if (detail?.command === "wiki-sync-batch-failed") {
-    setStatus(detail.message || "Git sync failed; Noema will retry at the next scheduled push.", true);
+    setStatus(detail.message || "Git sync needs attention; review Wiki repositories for recovery details.", true);
   }
 });
 

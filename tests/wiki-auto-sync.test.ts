@@ -212,6 +212,66 @@ describe("Wiki automatic synchronization", () => {
     await scheduler.close();
   });
 
+  test("pauses a conflicted repository, remembers later edits, and resumes explicitly", async () => {
+    vi.useFakeTimers();
+    let calls = 0;
+    const scheduler = createWikiAutoSync({
+      debounceMs: 10,
+      periodicMs: 0,
+      async sync() {
+        calls += 1;
+        return calls === 1
+          ? { phase: "conflicted", retryable: false }
+          : { phase: "idle" };
+      },
+    });
+
+    scheduler.mark("private/research");
+    await vi.advanceTimersByTimeAsync(10);
+    expect(calls).toBe(1);
+    expect(scheduler.snapshot().blocked).toEqual(["private/research"]);
+
+    scheduler.mark("private/research");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(calls).toBe(1);
+    expect(scheduler.snapshot().blockedDirty).toEqual(["private/research"]);
+
+    scheduler.resume("private/research");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toBe(2);
+    expect(scheduler.snapshot().blocked).toEqual([]);
+    await scheduler.close();
+  });
+
+  test("reports the first network failure once while honoring its retry delay", async () => {
+    vi.useFakeTimers();
+    let calls = 0;
+    const reports: unknown[] = [];
+    const scheduler = createWikiAutoSync({
+      debounceMs: 10,
+      periodicMs: 0,
+      async sync() {
+        calls += 1;
+        return calls === 1
+          ? { phase: "waiting", error: "offline", retryable: true, retryAfterMs: 25, reportError: true }
+          : { phase: "idle" };
+      },
+      onBatchError(failures) {
+        reports.push(failures);
+      },
+    });
+
+    scheduler.mark("public/AI");
+    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(reports).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(23);
+    expect(calls).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toBe(2);
+    await scheduler.close();
+  });
+
   test("uses a local checkpoint callback rather than network sync when closing", async () => {
     vi.useFakeTimers();
     const actions: string[] = [];

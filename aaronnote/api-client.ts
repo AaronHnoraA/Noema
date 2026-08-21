@@ -775,7 +775,7 @@ export type WikiDirectory = {
   name: string;
   fileCount: number;
 };
-export type WikiSyncPhase = "idle" | "waiting" | "checkpointing" | "fetching" | "merging" | "conflicted" | "pushing" | "error";
+export type WikiSyncPhase = "idle" | "waiting" | "checkpointing" | "fetching" | "merging" | "conflicted" | "pushing" | "applying" | "error";
 export type WikiSyncState = {
   repositoryId: string;
   repositoryUid?: string;
@@ -794,6 +794,23 @@ export type WikiSyncState = {
   message?: string;
   retryable?: boolean;
   retryAfterMs?: number;
+  nextRetryAt?: string;
+  errorKind?: "busy" | "network" | "authentication" | "configuration" | "remote-race" | "workspace" | "conflict" | "internal";
+  actionRequired?: string;
+  operationId?: string;
+  snapshotHead?: string;
+  remoteHead?: string;
+  integrationHead?: string;
+  publishedHead?: string;
+  integrationBranch?: string;
+  integrationPath?: string;
+  recoveryArtifacts?: Array<{
+    kind: "working-files";
+    source: "integration" | "primary";
+    createdAt: string;
+    path: string;
+    files: string[];
+  }>;
   recoveredGitLock?: {
     kind: "orphan-index-lock";
     recoveredAt: string;
@@ -802,7 +819,15 @@ export type WikiSyncState = {
     backup: string;
     previousOwnerPid?: number;
   };
-  conflicts?: Array<{ path: string; kind: string; stages: number[] }>;
+  conflicts?: Array<{
+    path: string;
+    kind: string;
+    stages: number[];
+    oursStage?: 2 | 3;
+    theirsStage?: 2 | 3;
+    oursLabel?: string;
+    theirsLabel?: string;
+  }>;
 };
 export type WikiIndex = {
   type: "wiki-index";

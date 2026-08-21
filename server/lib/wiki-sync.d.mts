@@ -1,6 +1,21 @@
 import type { WikiRepository } from "./wiki-workspace.mjs";
 
-export type WikiSyncConflict = { path: string; kind: string; stages: number[] };
+export type WikiSyncConflict = {
+  path: string;
+  kind: string;
+  stages: number[];
+  oursStage?: 2 | 3;
+  theirsStage?: 2 | 3;
+  oursLabel?: string;
+  theirsLabel?: string;
+};
+export type WikiRecoveryArtifact = {
+  kind: "working-files";
+  source: "integration" | "primary";
+  createdAt: string;
+  path: string;
+  files: string[];
+};
 export type WikiRecoveredGitLock = {
   kind: "orphan-index-lock";
   recoveredAt: string;
@@ -13,7 +28,7 @@ export type WikiSyncState = {
   schema?: number;
   repositoryId: string;
   repositoryUid?: string;
-  phase: "idle" | "waiting" | "checkpointing" | "fetching" | "merging" | "conflicted" | "pushing" | "error";
+  phase: "idle" | "waiting" | "checkpointing" | "fetching" | "merging" | "conflicted" | "pushing" | "applying" | "error";
   updatedAt?: string;
   lastSyncedAt?: string;
   checkpointedAt?: string;
@@ -27,6 +42,17 @@ export type WikiSyncState = {
   message?: string;
   retryable?: boolean;
   retryAfterMs?: number;
+  nextRetryAt?: string;
+  errorKind?: "busy" | "network" | "authentication" | "configuration" | "remote-race" | "workspace" | "conflict" | "internal";
+  actionRequired?: string;
+  operationId?: string;
+  snapshotHead?: string;
+  remoteHead?: string;
+  integrationHead?: string;
+  publishedHead?: string;
+  integrationBranch?: string;
+  integrationPath?: string;
+  recoveryArtifacts?: WikiRecoveryArtifact[];
   recoveredGitLock?: WikiRecoveredGitLock;
   conflicts?: WikiSyncConflict[];
 };
@@ -48,6 +74,8 @@ export function readWikiConflict(root: string, body?: Record<string, unknown>): 
   base: string;
   ours: string;
   theirs: string;
+  oursLabel: string;
+  theirsLabel: string;
 }>;
 export function resolveWikiConflict(root: string, body?: Record<string, unknown>): Promise<WikiSyncState>;
 export function abortWikiConflict(root: string, repositoryId: string): Promise<WikiSyncState>;
