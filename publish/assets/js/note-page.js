@@ -1,1 +1,0 @@
-../../../js/note-page.js
