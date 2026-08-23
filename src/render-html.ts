@@ -15,6 +15,7 @@ import { safeHref } from "./url-safety.ts";
 import { scanInlineCommands } from "./command-syntax.ts";
 import { semanticOutlineFromCommand } from "./semantic-outline.ts";
 import { parseOrgEnvIdentityTitle, shortBlockId } from "../shared/block-identity.mjs";
+import { wikiHrefForTarget } from "../shared/wiki-link.mjs";
 import { renderTikzIframe } from "./tikz-render.ts";
 import {
   metaEntryMap,
@@ -939,7 +940,7 @@ function wikiLinkRule(state: StateInline, silent: boolean): boolean {
   if (!target || !label) return false;
   if (silent) return true;
   const open = state.push("link_open", "a", 1);
-  open.attrs = [["href", `roam://wiki/${encodeURIComponent(target)}`], ["class", "noema-wiki-link noema-internal-link"], ["data-wiki-target", target], ["data-internal-link", "true"]];
+  open.attrs = [["href", wikiHrefForTarget(target)], ["class", "noema-wiki-link noema-internal-link"], ["data-wiki-target", target], ["data-internal-link", "true"]];
   const text = state.push("text", "", 0);
   text.content = label;
   state.push("link_close", "a", -1);

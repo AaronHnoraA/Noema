@@ -20,6 +20,21 @@ function hasArg(args, name) {
   return args.includes(name);
 }
 
+async function resolveWorkspaceLayout(args, runtimeRoot) {
+  const explicit = argValue(args, "--layout", process.env.NOEMA_WORKSPACE_LAYOUT || "");
+  if (explicit) return String(explicit).toLowerCase() === "wiki" ? "wiki" : "legacy";
+  try {
+    const configUrl = pathToFileURL(resolve(runtimeRoot, "server/lib/app-config.mjs")).href;
+    const { getNoemaAppConfig } = await import(configUrl);
+    const payload = await getNoemaAppConfig();
+    return String(payload?.config?.workspace?.layout || "").toLowerCase() === "wiki"
+      ? "wiki"
+      : "legacy";
+  } catch {
+    return "legacy";
+  }
+}
+
 async function main() {
   const scriptDir = dirname(fileURLToPath(import.meta.url));
   const args = process.argv.slice(2);
@@ -53,12 +68,19 @@ async function main() {
   const runtimeUrl = pathToFileURL(resolve(runtimeRoot, "server/lib/index.mjs")).href;
   const runtime = await import(runtimeUrl);
 
+  // The layout decides whether `public/**` is generated output (legacy) or a
+  // real note partition (wiki).  Without it this CLI always ran as "legacy"
+  // and silently dropped every note under `public/`, so the Emacs fallback
+  // path disagreed with the running web-host about what the vault contains.
+  const workspaceLayout = await resolveWorkspaceLayout(args, runtimeRoot);
+
   runtime.configure({
     root,
     workspaceRoot,
     stateRoot,
     tmpRoot,
     templatesRoot,
+    workspaceLayout,
   });
 
   let result;

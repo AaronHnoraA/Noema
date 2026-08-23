@@ -349,7 +349,9 @@ maybeDescribe("cm6 kernel: getMarkdown / setMarkdown", () => {
     view.contentDOM.dispatchEvent(event);
 
     expect(event.defaultPrevented).toBe(true);
-    expect(events[0]?.detail).toEqual({ href: "roam://wiki/roam%3A%2F%2Fpage-id", newWindow: false });
+    // The stable `[[roam://<id>|Label]]` form is already canonical; it must
+    // reach the opener untouched rather than re-wrapped as a wiki title.
+    expect(events[0]?.detail).toEqual({ href: "roam://page-id", newWindow: false });
     document.removeEventListener("aaronnote:open-url", listener);
     if (originalDescriptor) Object.defineProperty(view, "posAtCoords", originalDescriptor);
     else delete (view as { posAtCoords?: unknown }).posAtCoords;

@@ -2,7 +2,13 @@ const WIKI_LINK_RE = /(?<!\\)\[\[([^\]\n|]+?)(?:\|([^\]\n]+?))?\]\]/g;
 
 export function wikiHrefForTarget(value) {
   const target = String(value || "").trim();
-  return target ? `roam://wiki/${encodeURIComponent(target)}` : "";
+  if (!target) return "";
+  // `formatStableWikiLink` writes `[[roam://<id>#<frag>|Label]]`, so a target
+  // can already be a canonical roam URL.  Wrapping it again produced
+  // `roam://wiki/roam%3A%2F%2F<id>%23<frag>`, which resolves to nothing —
+  // the stable form round-tripped into a dangling link.
+  if (/^roam:\/\//i.test(target)) return target;
+  return `roam://wiki/${encodeURIComponent(target)}`;
 }
 
 export function scanWikiLinks(value, offset = 0) {

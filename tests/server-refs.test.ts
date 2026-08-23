@@ -158,8 +158,25 @@ describe("server note refs", () => {
     expect(refs).not.toContain("./");
   });
 
-  test("treats double-bracket text as plain prose, not a note ref", () => {
-    expect(refsFromContent("See [[ Density Operator ]] and [[Alias A]].")).toEqual([]);
+  // `[[...]]` is a real link syntax in the CM6 editor and the wiki index
+  // (`wiki-workspace.mjs` resolves it via `scanWikiLinks`).  This index used
+  // to skip it, so a note linked only by wiki links showed no backlinks.
+  test("resolves wiki links by title and alias", () => {
+    expect(refsFromContent("See [[ Density Operator ]] and [[Alias A]].").sort())
+      .toEqual(["Alias A", "Density Operator"]);
+  });
+
+  test("keeps the target and drops the label of a piped wiki link", () => {
+    expect(refsFromContent("See [[Density Operator|the operator]].")).toEqual(["Density Operator"]);
+  });
+
+  test("passes a stable roam wiki link through without re-encoding it", () => {
+    expect(refsFromContent("See [[roam://20260520T120000-density-operator#eq-1|D]]."))
+      .toEqual(["20260520T120000-density-operator"]);
+  });
+
+  test("ignores escaped double brackets and empty targets", () => {
+    expect(refsFromContent("Literal \\[[not a link]] and [[]] stay out.")).toEqual([]);
   });
 
   test("suggests paths from relative, parent, and roam-root prefixes without hidden entries", async () => {

@@ -27,6 +27,7 @@ import {
   configureBibliography,
 } from "./bibliography.mjs";
 import { parseCommandArgs, scanInlineCommands } from "../../shared/command-syntax.mjs";
+import { scanWikiLinks } from "../../shared/wiki-link.mjs";
 import {
   patchPlanningNodeRaw,
   scanPlanningNodes,
@@ -115,6 +116,15 @@ const excludedDirs = new Set([
   ".ruff_cache",
   ".virtual_documents",
 ]);
+
+// `public/` is generated publish output in the legacy layout, but in the wiki
+// layout it is a real note partition (`public/<Repo>/**`).  Scanners, path
+// suggestions and the file watcher must all agree on that, so every directory
+// exclusion test goes through this helper rather than touching the Set.
+function isExcludedDir(name) {
+  if (name === "public") return workspaceLayout !== "wiki";
+  return excludedDirs.has(name);
+}
 const generatedAttachmentDirs = new Set(["asset", "assets", "attachment", "attachments", "file", "files", "img", "imgs", "image", "images", "media", "pdf", "pdfs"]);
 const noteExts = new Set([".typ", ".md", ".markdown"]);
 const projectRootMarkers = [
@@ -142,7 +152,7 @@ const projectRootMarkers = [
 const defaultNoteKind = "default";
 const defaultNoteKindAliases = new Set(["", "default", "note"]);
 const noteKindPattern = /^[a-z0-9_-]+$/;
-const refTokenPattern = /#note\("([^"]+)"\)|\broam:\/\/[^\s<>)\]]+/gi;
+const refTokenPattern = /#note\("([^"]+)"\)|\broam:\/\/[^\s<>)\]|]+/gi;
 let noteCacheRoot = "";
 let noteCache = new Map();
 let notesSnapshotRoot = "";
@@ -860,7 +870,7 @@ function pathSuggestionDirectory(current, prefix) {
   const dir = resolve(baseDir, relativeDir || ".");
   if (!inside(dir, allowedRoot)) return null;
   const relParts = relativeCanonical(allowedRoot, dir).split(sep).filter(Boolean);
-  if (relParts.some((part) => excludedDirs.has(part))) return null;
+  if (relParts.some((part) => isExcludedDir(part))) return null;
   return { dir, displayPrefix };
 }
 
@@ -886,7 +896,7 @@ export async function pathSuggestionsForFile(file, prefix = "./") {
   }
   return entries
     .filter((entry) => !entry.name.startsWith("."))
-    .filter((entry) => entry.isFile() || (entry.isDirectory() && !excludedDirs.has(entry.name)))
+    .filter((entry) => entry.isFile() || (entry.isDirectory() && !isExcludedDir(entry.name)))
     .map((entry) => `${target.displayPrefix}${entry.name}${entry.isDirectory() ? "/" : ""}`)
     .sort((a, b) => {
       const aDir = a.endsWith("/");
@@ -1307,7 +1317,13 @@ function parseFrontMatter(content) {
 }
 
 function parseMetaBlock(content) {
-  const match = content.match(/^\s*#\+begin\s+meta\s*\r?\n([\s\S]*?)\r?\n\s*#\+end\s+meta\s*$/im);
+  // A `#+begin summary` block may sit inside the meta block.  Its prose is
+  // not metadata, but a line like "Note: something" matches the `key: value`
+  // grammar, so it used to land in the note as a bogus field — and a prose
+  // line starting "tags:" silently replaced the real tag list.  Masking keeps
+  // every offset intact while blanking the summary body.
+  const source = maskMetaSummaryContent(String(content || ""));
+  const match = source.match(/^\s*#\+begin\s+meta\s*\r?\n([\s\S]*?)\r?\n\s*#\+end\s+meta\s*$/im);
   return match ? parseMetaLines(match[1]) : {};
 }
 
@@ -1862,6 +1878,10 @@ function refFromRoamLikeHref(href) {
   if (protocol && protocol !== "roam") return "";
   if (protocol !== "roam" && !raw.includes("#") && !raw.includes("@")) return "";
   let body = raw.replace(/^roam:\/\//i, "");
+  // `wikiHrefForTarget` namespaces plain page titles as roam://wiki/<title>;
+  // the remainder is an ordinary ref once the marker is dropped.  Only do this
+  // for real roam:// URLs so a relative `wiki/page.md` path keeps its folder.
+  if (protocol === "roam") body = body.replace(/^wiki\//i, "");
   body = body.split(/[?&]/, 1)[0] || body;
   const hashIndex = body.indexOf("#");
   if (hashIndex >= 0) body = body.slice(0, hashIndex);
@@ -2007,6 +2027,18 @@ function markdownLinkDestinations(text) {
   return destinations;
 }
 
+// `[[Target]]` / `[[Target|Label]]` links are a first-class syntax in the CM6
+// editor and the wiki index, but this index never looked for them, so a note
+// linked only by wiki links appeared to have no refs and no backlinks at all.
+function wikiLinkRefs(source) {
+  const refs = [];
+  for (const link of scanWikiLinks(source)) {
+    const ref = refFromRoamLikeHref(link.href);
+    if (ref) refs.push(ref);
+  }
+  return refs;
+}
+
 export function refsFromContent(content) {
   const meta = noteMetadata(content);
   const source = maskMetaSummaryContent(content);
@@ -2023,6 +2055,7 @@ export function refsFromContent(content) {
     const roamRef = refFromRoamLikeHref(href);
     if (roamRef) refs.add(roamRef);
   }
+  for (const ref of wikiLinkRefs(source)) refs.add(ref);
   return [...refs].filter(Boolean);
 }
 
@@ -2041,6 +2074,7 @@ export function roamDbRefsFromContent(content) {
     const roamRef = refFromRoamLikeHref(href);
     if (roamRef) refs.add(roamRef);
   }
+  for (const ref of wikiLinkRefs(source)) refs.add(ref);
   return [...refs].filter(Boolean);
 }
 
@@ -2417,7 +2451,7 @@ async function scanFilesystemEntries(notes = []) {
     }
     for (const entry of entries) {
       if (entry.name.startsWith(".") && entry.name !== ".emacs.d") continue;
-      if (entry.isDirectory() && excludedDirs.has(entry.name)) continue;
+      if (entry.isDirectory() && isExcludedDir(entry.name)) continue;
       const full = join(dir, entry.name);
       if (!inside(full, noteScanRoot)) continue;
       const childGenerated = generated || generatedAttachmentDirs.has(entry.name.toLowerCase());
@@ -2812,7 +2846,7 @@ export function noteSelfWriteRecently(file, windowMs = 2000) {
 export function notePathWatchRelevant(relPath) {
   if (!relPath) return false;
   const parts = String(relPath).replace(/\\/g, "/").split("/").filter(Boolean);
-  if (parts.some((p) => excludedDirs.has(p) || p.startsWith("."))) return false;
+  if (parts.some((p) => isExcludedDir(p) || p.startsWith("."))) return false;
   const name = parts[parts.length - 1] || "";
   const dot = name.lastIndexOf(".");
   return dot >= 0 && noteExts.has(name.slice(dot).toLowerCase());
@@ -3040,11 +3074,11 @@ async function walkFiles(root, accept, options = {}) {
       if (entry.name.startsWith(".") && entry.name !== ".emacs.d") continue;
       const full = join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (!excludedDirs.has(entry.name)) await walk(full);
+        if (!isExcludedDir(entry.name)) await walk(full);
       } else if (options.followDirectorySymlinks && entry.isSymbolicLink()) {
         try {
           const target = await stat(full);
-          if (target.isDirectory() && !excludedDirs.has(entry.name)) await walk(full);
+          if (target.isDirectory() && !isExcludedDir(entry.name)) await walk(full);
         } catch {}
       } else if (entry.isFile() && accept(full, entry.name)) {
         files.push(full);
