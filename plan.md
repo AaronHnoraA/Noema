@@ -227,6 +227,10 @@ markdown box 用真实文件名，不用 `<parentID>/<childID>.sy`：
 
 **"可用"里程碑：WS 实时刷新（2026-08-25，Noema 主仓库 commit `7fa16b5`）**：lab 页接上内核已有的 `/ws` 端点（`?app=...&id=...&type=main`），监听 `reloaddoc` 推送（只来自 `markdown_watcher.go` 的外部编辑探测，不来自这个页面自己的保存——`SaveMarkdownDoc` 从不直接调 `PushReloadDoc`），命中当前打开文档的 rootID 时自动重新加载；只有编辑器当前内容仍等于"上次确认与服务端同步"的内容时才自动刷新，本地有未保存改动时改成提示而不是静默覆盖。**在真实 Chrome 里验证过端到端全链路**：加载一个文档，直接在磁盘上改这个文件（模拟 Emacs，完全不碰浏览器），~3 秒内编辑器内容自动更新，零手动交互——这正是这次 fork 存在的核心理由（"Emacs 和 CM6 看到同一份文档，而且是实时的"），现在证明真的跑通了：内核存储 → 索引 → 搜索 → 外部 watcher → WS 推送 → 浏览器实时更新，全部在真实进程/真实浏览器里验证过，不只是 `go test`。副作用：自己的保存也会触发一次 `reloaddoc`（watcher 分不清"自己保存"和"外部编辑"，两者都是磁盘写入），已知、无害，只是状态栏文字会从"saved"再闪回一次"loaded"，不是 bug。
 
+**文档浏览器（2026-08-25，Noema 主仓库 commit `ab8f7e1`）**：之前 `ListMarkdownDocs`/`listDocs` 端点建了但没人用——lab 页一直要求手敲路径。现在接上了：侧栏列出当前 notebook 下所有 `.md` 文件，点击直接打开；一个"new doc path" 输入框 + `+` 按钮可以在任意路径新建（复用 `LoadMarkdownDoc` 已有的"路径不存在就给空文档"行为，不用另写新建逻辑）；每次保存后自动刷新列表，新建的文档立刻出现在侧栏并高亮为当前项。真实 Chrome 里验证过：连接一个用 curl 预先塞了两篇文档的 notebook，两篇都正确显示、可点击打开；用 `+` 按钮新建第三篇、输入内容、看到保存后自动出现在侧栏并高亮——全程没有手动输入过路径。
+
+**`plan.md` 本身开始被追踪进 git（2026-08-25，Noema 主仓库 commit `45ca765`）**：这个文件之前是开工前 plan 模式批准时留下的一份快照，没有纳入版本控制，也没有跟着后续进展更新。现在补齐到当前进度，纳入 git 追踪，并且这份文档往后**每做一步就更新一步**——不是等一大段工作做完再补总结。
+
 CM6 侧新增（都是 widget/decoration 层加法，不动现有 feature 顺序 `src/cm6/extensions/index.ts`）：
 - 块 ID gutter + 块引用 `((id "text"))` 的 live-preview widget（复用 `roam-link-status.ts` 的 hover/解析模式）
 - `#+begin av` widget → 渲染思源 AV（复用 `app/src/protyle/render/av/` 的 ~50 个文件，这部分是**独立于 protyle 编辑面的纯渲染层**，可以单独抽出）
