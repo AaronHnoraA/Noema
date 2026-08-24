@@ -59,3 +59,11 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# Go kernel (kernel/, see kernel/CLAUDE.md-equivalent notes in the plan doc)
+kernel/kernel
+kernel/*.test
+kernel/**/logging.log
+app/conf/
+app/data/
+app/temp/
