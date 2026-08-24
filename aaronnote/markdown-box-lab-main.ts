@@ -27,6 +27,17 @@ interface LoadDocResponse {
   data?: { markdown: string; blocks: MarkdownBlockRef[] };
 }
 
+interface MarkdownDocSummary {
+  path: string;
+  title: string;
+}
+
+interface ListDocsResponse {
+  code: number;
+  msg: string;
+  data?: { docs: MarkdownDocSummary[] };
+}
+
 const root = document.createElement("div");
 root.style.cssText = "display:flex;flex-direction:column;height:100vh;background:var(--aaron-surface-base,#141a27);color:var(--aaron-role-strong,#e2eaff);font-family:system-ui,sans-serif;";
 document.body.style.margin = "0";
@@ -44,20 +55,43 @@ function makeInput(placeholder: string, value: string, width: string): HTMLInput
   return el;
 }
 
+function makeButton(label: string): HTMLButtonElement {
+  const el = document.createElement("button");
+  el.textContent = label;
+  el.style.cssText = "background:var(--aaron-role-popout,#7ee7ff);color:#141a27;border:none;border-radius:4px;padding:5px 12px;cursor:pointer;font:inherit;";
+  return el;
+}
+
 const kernelBaseInput = makeInput("kernel base URL", "http://127.0.0.1:16888", "220px");
 const notebookInput = makeInput("notebook ID", "", "220px");
-const pathInput = makeInput("path", "/notes/hello.md", "220px");
-const loadBtn = document.createElement("button");
-loadBtn.textContent = "Load";
-loadBtn.style.cssText = "background:var(--aaron-role-popout,#7ee7ff);color:#141a27;border:none;border-radius:4px;padding:5px 12px;cursor:pointer;font:inherit;";
+const connectBtn = makeButton("Connect");
 const statusEl = document.createElement("span");
 statusEl.style.cssText = "opacity:0.75;font-size:0.85em;margin-left:8px;";
 
-for (const el of [kernelBaseInput, notebookInput, pathInput, loadBtn, statusEl]) toolbar.appendChild(el);
+for (const el of [kernelBaseInput, notebookInput, connectBtn, statusEl]) toolbar.appendChild(el);
+
+const body = document.createElement("div");
+body.style.cssText = "display:flex;flex:1;min-height:0;";
+root.appendChild(body);
+
+const sidebar = document.createElement("div");
+sidebar.style.cssText = "width:220px;flex:0 0 auto;overflow-y:auto;border-right:1px solid var(--aaron-role-faded,#435574);padding:8px;";
+body.appendChild(sidebar);
+
+const newDocRow = document.createElement("div");
+newDocRow.style.cssText = "display:flex;gap:4px;margin-bottom:8px;";
+const newPathInput = makeInput("new doc path", "/notes/new.md", "140px");
+const newDocBtn = makeButton("+");
+newDocBtn.style.padding = "5px 8px";
+newDocRow.append(newPathInput, newDocBtn);
+sidebar.appendChild(newDocRow);
+
+const docListEl = document.createElement("div");
+sidebar.appendChild(docListEl);
 
 const editorHost = document.createElement("div");
 editorHost.style.cssText = "flex:1;overflow:auto;min-height:0;";
-root.appendChild(editorHost);
+body.appendChild(editorHost);
 
 function setStatus(text: string, isError = false): void {
   statusEl.textContent = text;
@@ -106,9 +140,9 @@ function docIDFromBlocks(blocks: MarkdownBlockRef[]): string {
   return blocks.find((b) => "NodeDocument" === b.type)?.id ?? "";
 }
 
-async function doLoad(): Promise<void> {
+async function doLoad(path?: string): Promise<void> {
   currentNotebook = notebookInput.value.trim();
-  currentPath = pathInput.value.trim();
+  currentPath = path ?? currentPath;
   if (!currentNotebook || !currentPath) {
     setStatus("notebook and path are required", true);
     return;
@@ -127,9 +161,61 @@ async function doLoad(): Promise<void> {
     lastSyncedMarkdown = resp.data.markdown;
     currentDocID = docIDFromBlocks(resp.data.blocks);
     connectWs();
+    highlightActiveDoc();
     setStatus(`loaded, ${resp.data.blocks.length} block(s) with a persisted ID`);
   } catch (err) {
     setStatus(`load error: ${String(err)}`, true);
+  }
+}
+
+// Document browser sidebar. A markdown box has no notion of "open this
+// notebook" the way a .sy box does — Connect just means "the notebook ID
+// field is good enough to list and load against". Manually refreshable
+// (button + after every load/save/new-doc) rather than wired to
+// PushReloadFiletree's WS event: that broadcasts to a different session
+// "type" (filetree, not main) than the live-reload connection uses, and a
+// second parallel WS connection isn't worth it yet for a lab page — see
+// plan.md's "一点点写一点点挪" note.
+async function refreshDocList(): Promise<void> {
+  const notebook = notebookInput.value.trim();
+  if (!notebook) {
+    docListEl.textContent = "";
+    return;
+  }
+  let resp: ListDocsResponse;
+  try {
+    resp = await postJson<ListDocsResponse>("/api/noema/markdown/listDocs", { notebook });
+  } catch (err) {
+    docListEl.textContent = `list failed: ${String(err)}`;
+    return;
+  }
+  if (0 !== resp.code || !resp.data) {
+    docListEl.textContent = `list failed: ${resp.msg}`;
+    return;
+  }
+  docListEl.textContent = "";
+  for (const doc of resp.data.docs) {
+    const entry = document.createElement("div");
+    entry.textContent = doc.title;
+    entry.title = doc.path;
+    entry.dataset.path = doc.path;
+    entry.style.cssText = "padding:4px 6px;border-radius:4px;cursor:pointer;font-size:0.9em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+    entry.addEventListener("click", () => void doLoad(doc.path));
+    docListEl.appendChild(entry);
+  }
+  if (0 === resp.data.docs.length) {
+    docListEl.textContent = "(no documents yet)";
+    docListEl.style.opacity = "0.6";
+  } else {
+    docListEl.style.opacity = "1";
+  }
+  highlightActiveDoc();
+}
+
+function highlightActiveDoc(): void {
+  for (const child of Array.from(docListEl.children)) {
+    const el = child as HTMLElement;
+    el.style.background = el.dataset.path === currentPath ? "var(--aaron-surface-selected,#2d3b57)" : "";
   }
 }
 
@@ -215,6 +301,7 @@ async function doSave(): Promise<void> {
     }
     currentDocID = docIDFromBlocks(resp.data.blocks);
     setStatus(`saved (${resp.data.blocks.length} persisted block ID(s))`);
+    void refreshDocList(); // cheap; catches a brand-new path appearing in the sidebar
   } catch (err) {
     setStatus(`save error: ${String(err)}`, true);
   } finally {
@@ -226,6 +313,12 @@ async function doSave(): Promise<void> {
   }
 }
 
-loadBtn.addEventListener("click", () => void doLoad());
+connectBtn.addEventListener("click", () => void refreshDocList());
+newDocBtn.addEventListener("click", () => {
+  const p = newPathInput.value.trim();
+  if (!p) return;
+  newPathInput.value = "";
+  void doLoad(p);
+});
 ensureEditor();
-setStatus("enter a notebook ID + path, then Load");
+setStatus("enter a notebook ID, click Connect, then pick or create a doc");
