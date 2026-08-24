@@ -81,9 +81,13 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 let editor: Editor | null = null;
 let currentNotebook = "";
 let currentPath = "";
+let currentDocID = "";
+let lastSyncedMarkdown = "";
 let saveTimer = 0;
 let saveInFlight = false;
 let saveAgainAfterFlight = false;
+let ws: WebSocket | null = null;
+let wsReconnectTimer = 0;
 
 function ensureEditor(): Editor {
   if (editor) return editor;
@@ -96,6 +100,10 @@ function ensureEditor(): Editor {
     },
   });
   return editor;
+}
+
+function docIDFromBlocks(blocks: MarkdownBlockRef[]): string {
+  return blocks.find((b) => "NodeDocument" === b.type)?.id ?? "";
 }
 
 async function doLoad(): Promise<void> {
@@ -116,10 +124,67 @@ async function doLoad(): Promise<void> {
       return;
     }
     ensureEditor().setMarkdown(resp.data.markdown, { history: "reset" });
+    lastSyncedMarkdown = resp.data.markdown;
+    currentDocID = docIDFromBlocks(resp.data.blocks);
+    connectWs();
     setStatus(`loaded, ${resp.data.blocks.length} block(s) with a persisted ID`);
   } catch (err) {
     setStatus(`load error: ${String(err)}`, true);
   }
+}
+
+// Live reload: an external editor (Emacs, git checkout, ...) changed the file
+// on disk. The kernel's watcher (markdown_watcher.go) picks it up, reindexes,
+// and pushes a "reloaddoc" WS event carrying the doc's root ID — this is the
+// core "Emacs and CM6 see the same document live" experience the whole point
+// of this fork is chasing. Never silently clobber an unsaved local edit: only
+// auto-reload when the editor's content still matches what we last confirmed
+// synced with the server.
+interface WsPush {
+  cmd: string;
+  data: unknown;
+}
+
+function wsUrl(): string {
+  const base = kernelBase().replace(/^https:\/\//, "wss://").replace(/^http:\/\//, "ws://");
+  const sessionId = Math.random().toString(36).slice(2);
+  return `${base}/ws?app=noema-markdown-box-lab&id=${sessionId}&type=main`;
+}
+
+function connectWs(): void {
+  window.clearTimeout(wsReconnectTimer);
+  ws?.close();
+  ws = null;
+  if (!currentNotebook) return;
+
+  const socket = new WebSocket(wsUrl());
+  ws = socket;
+  socket.addEventListener("message", (event) => {
+    let msg: WsPush;
+    try {
+      msg = JSON.parse(String(event.data)) as WsPush;
+    } catch {
+      return;
+    }
+    if ("reloaddoc" !== msg.cmd || !currentDocID || msg.data !== currentDocID) return;
+    void reloadIfUnedited();
+  });
+  socket.addEventListener("close", () => {
+    if (ws !== socket) return; // superseded by a newer connection; don't reconnect on its behalf
+    ws = null;
+    wsReconnectTimer = window.setTimeout(connectWs, 2000);
+  });
+  socket.addEventListener("error", () => socket.close());
+}
+
+async function reloadIfUnedited(): Promise<void> {
+  if (!editor || !currentNotebook || !currentPath) return;
+  if (editor.getMarkdown() !== lastSyncedMarkdown) {
+    setStatus("changed externally — you have unsaved edits here, not auto-reloading", true);
+    return;
+  }
+  setStatus("reloading (changed externally)…");
+  await doLoad();
 }
 
 async function doSave(): Promise<void> {
@@ -142,9 +207,13 @@ async function doSave(): Promise<void> {
       return;
     }
     // Only reconcile normalization drift if the user hasn't kept typing past what we sent.
-    if (editor.getMarkdown() === sent && resp.data.markdown !== sent) {
-      editor.setMarkdown(resp.data.markdown, { history: "skip", preserveView: true });
+    if (editor.getMarkdown() === sent) {
+      if (resp.data.markdown !== sent) {
+        editor.setMarkdown(resp.data.markdown, { history: "skip", preserveView: true });
+      }
+      lastSyncedMarkdown = resp.data.markdown;
     }
+    currentDocID = docIDFromBlocks(resp.data.blocks);
     setStatus(`saved (${resp.data.blocks.length} persisted block ID(s))`);
   } catch (err) {
     setStatus(`save error: ${String(err)}`, true);
