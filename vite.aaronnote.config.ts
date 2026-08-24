@@ -37,6 +37,7 @@ export default defineConfig(({ command }) => ({
         jupyter: resolve("aaronnote/jupyter.html"),
         wiki: resolve("aaronnote/wiki.html"),
         slides: resolve("aaronnote/slides.html"),
+        "markdown-box-lab": resolve("aaronnote/markdown-box-lab.html"),
       },
       checks: {
         eval: false,
