@@ -14,6 +14,7 @@ import "../src/styles/aaron-ui-elegant.css";
 
 import { createEditor } from "../src/editor-api.ts";
 import type { Editor } from "../src/editor-api.ts";
+import { markdownLineStartOffset } from "./markdown-box-lab-navigation.ts";
 
 interface MarkdownBlockRef {
   id: string;
@@ -36,6 +37,20 @@ interface ListDocsResponse {
   code: number;
   msg: string;
   data?: { docs: MarkdownDocSummary[] };
+}
+
+interface MarkdownBlockLocation {
+  id: string;
+  notebook: string;
+  path: string;
+  line?: number;
+  type?: string;
+}
+
+interface ResolveBlockResponse {
+  code: number;
+  msg: string;
+  data?: MarkdownBlockLocation;
 }
 
 const root = document.createElement("div");
@@ -62,13 +77,42 @@ function makeButton(label: string): HTMLButtonElement {
   return el;
 }
 
-const kernelBaseInput = makeInput("kernel base URL", "http://127.0.0.1:16888", "220px");
+const kernelBaseInput = makeInput(
+  "kernel base URL",
+  window.__noemaKernelBase || "http://127.0.0.1:16888",
+  "220px",
+);
 const notebookInput = makeInput("notebook ID", "", "220px");
 const connectBtn = makeButton("Connect");
 const statusEl = document.createElement("span");
 statusEl.style.cssText = "opacity:0.75;font-size:0.85em;margin-left:8px;";
 
+async function discoverManagedKernel(): Promise<void> {
+  const deadline = Date.now() + 120_000;
+  while (Date.now() < deadline) {
+    try {
+      const health = await fetch("/health", { cache: "no-store" }).then((response) => response.json());
+      const managed = health?.kernel;
+      if (managed?.baseUrl) kernelBaseInput.value = String(managed.baseUrl);
+      if (managed?.box?.id && !notebookInput.value) notebookInput.value = String(managed.box.id);
+      if (managed?.state === "listening") {
+        statusEl.textContent = "managed kernel ready";
+        return;
+      }
+    } catch {
+      // Manual URLs remain supported for an isolated lab page.
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+  }
+  statusEl.textContent = "managed kernel unavailable; enter a URL manually";
+}
+
 for (const el of [kernelBaseInput, notebookInput, connectBtn, statusEl]) toolbar.appendChild(el);
+if (window.__noemaKernel?.state === "listening" && window.__noemaKernel.box?.id) {
+  notebookInput.value = window.__noemaKernel.box.id;
+} else {
+  void discoverManagedKernel();
+}
 
 const body = document.createElement("div");
 body.style.cssText = "display:flex;flex:1;min-height:0;";
@@ -167,6 +211,36 @@ async function doLoad(path?: string): Promise<void> {
     setStatus(`load error: ${String(err)}`, true);
   }
 }
+
+// Block-ref widgets stay host-agnostic and only dispatch this event. The lab
+// is the first Go-backed host adapter: resolve canonical UUIDv7 -> repository
+// path/line in the kernel, open that exact source document, then let CM6 own
+// the source offset and scrolling.
+editorHost.addEventListener("aaronnote:open-block-ref", (event) => {
+  const custom = event as CustomEvent<{ id?: string }>;
+  const id = String(custom.detail?.id || "").trim();
+  if (!id) return;
+  event.preventDefault();
+  void (async () => {
+    setStatus(`resolving block ${id}…`);
+    try {
+      const resp = await postJson<ResolveBlockResponse>("/api/noema/markdown/resolveBlock", { id });
+      if (0 !== resp.code || !resp.data) {
+        setStatus(`block resolve failed: ${resp.msg}`, true);
+        return;
+      }
+      notebookInput.value = resp.data.notebook;
+      await doLoad(resp.data.path);
+      if (!editor || currentNotebook !== resp.data.notebook || currentPath !== resp.data.path) return;
+      const offset = markdownLineStartOffset(editor.getMarkdown(), resp.data.line || 1);
+      editor.setMarkdownSelection(offset, offset);
+      editor.revealCursor();
+      setStatus(`opened block ${resp.data.id} at ${resp.data.path}:${resp.data.line || 1}`);
+    } catch (err) {
+      setStatus(`block resolve error: ${String(err)}`, true);
+    }
+  })();
+});
 
 // Document browser sidebar. A markdown box has no notion of "open this
 // notebook" the way a .sy box does — Connect just means "the notebook ID

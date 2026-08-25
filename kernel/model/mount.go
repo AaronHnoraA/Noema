@@ -30,6 +30,7 @@ import (
 	"github.com/88250/lute/ast"
 	"github.com/aaronhe/noema/kernel/cache"
 	"github.com/aaronhe/noema/kernel/conf"
+	"github.com/aaronhe/noema/kernel/filesys"
 	"github.com/aaronhe/noema/kernel/sql"
 	"github.com/aaronhe/noema/kernel/task"
 	"github.com/aaronhe/noema/kernel/treenode"
@@ -141,9 +142,11 @@ func RenameBox(boxID, name string) (err error) {
 		logging.LogErrorf("save box conf [%s] failed: %s", boxID, err)
 		return
 	}
-	if err = renameBoxDoc(boxID, name); err != nil {
-		logging.LogErrorf("rename box document [box=%s] failed: %s", boxID, err)
-		return
+	if conf.BoxKindMarkdown != GetBoxKind(boxID) {
+		if err = renameBoxDoc(boxID, name); err != nil {
+			logging.LogErrorf("rename box document [box=%s] failed: %s", boxID, err)
+			return
+		}
 	}
 	IncSync()
 	logging.LogInfof("renamed box [%s] to [%s]", boxID, name)
@@ -207,6 +210,9 @@ func RemoveBox(boxID string) (err error) {
 		return fmt.Errorf("query database-bound blocks in notebook [%s] failed: %w", boxID, err)
 	}
 	isUserGuide := IsUserGuide(boxID)
+	// Removing an external Markdown box deletes only its workspace shadow
+	// registration. The repository returned by filesys.BoxRootPath is user
+	// content and must never be removed by notebook unregister.
 	localPath := filepath.Join(util.DataDir, boxID)
 	if !filelock.IsExist(localPath) {
 		return
@@ -325,7 +331,7 @@ func mountBox(boxID string) (alreadyMount bool, err error) {
 	FlushTxQueue()
 	isUserGuide := IsUserGuide(boxID)
 
-	localPath := filepath.Join(util.DataDir, boxID)
+	localPath := filesys.BoxRootPath(boxID)
 	var reMountGuide bool
 	if isUserGuide {
 		databaseIndexDataLock.Lock()

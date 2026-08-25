@@ -1,4 +1,4 @@
-import "./tauri-bridge.ts";
+import "./desktop-bridge.ts";
 import "../src/styles/theme-loader.ts";
 import "./wiki.css";
 import "@mismerge/core/styles.css";
@@ -24,7 +24,7 @@ document.body.dataset.hostMode = serverReaderMode ? "server" : (window.noemaDesk
 if (window.noemaDesktop) document.body.dataset.desktopPlatform = desktopPlatform;
 
 root.innerHTML = `
-  <header class="noema-desktop-titlebar noema-wiki-titlebar" data-desktop-titlebar data-tauri-drag-region>
+  <header class="noema-desktop-titlebar noema-wiki-titlebar" data-desktop-titlebar data-desktop-drag-region>
     <div class="noema-wiki-history">
       <button type="button" class="noema-wiki-panel-toggle" aria-label="Toggle navigation" aria-expanded="false" data-toggle-nav>☰</button>
       <button type="button" aria-label="Back" title="Back" data-desktop-command="back">←</button>

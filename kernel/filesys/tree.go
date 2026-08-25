@@ -34,14 +34,14 @@ import (
 	"github.com/88250/lute/html"
 	"github.com/88250/lute/parse"
 	"github.com/88250/lute/render"
+	"github.com/aaronhe/noema/kernel/cache"
+	"github.com/aaronhe/noema/kernel/treenode"
+	"github.com/aaronhe/noema/kernel/util"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/panjf2000/ants/v2"
 	"github.com/siyuan-note/dataparser"
 	"github.com/siyuan-note/filelock"
 	"github.com/siyuan-note/logging"
-	"github.com/aaronhe/noema/kernel/cache"
-	"github.com/aaronhe/noema/kernel/treenode"
-	"github.com/aaronhe/noema/kernel/util"
 )
 
 func LoadTrees(ids []string) (ret map[string]*parse.Tree) {
@@ -144,7 +144,8 @@ func batchLoadTrees(boxIDs, paths []string, luteEngine *lute.Lute) (ret []*parse
 }
 
 // ValidateBoxRelativePath 校验 box 内相对路径是否安全。
-// 拒绝 ..、绝对路径，确保最终路径位于 <DataDir>/<boxID> 内。
+// 拒绝 ..、绝对路径，确保最终路径位于 box 的物理内容根内。普通 box 的根是
+// <DataDir>/<boxID>；external Markdown box 由 BoxRootProvider 路由到原仓库。
 // 允许路径以 / 开头（如 /20230101/xxx.sy），会自动标准化再去掉前导斜杠。
 // 根路径（"/" 或 ""）合法，返回空字符串。
 func ValidateBoxRelativePath(boxID, p string) (string, error) {
@@ -160,8 +161,8 @@ func ValidateBoxRelativePath(boxID, p string) (string, error) {
 	if strings.HasPrefix(p, "..") || strings.Contains(p, "/../") || strings.HasSuffix(p, "/..") || p == ".." || p == "." {
 		return "", fmt.Errorf("path [%s] must not contain '..'", origP)
 	}
-	resolved := filepath.Join(util.DataDir, boxID, origP)
-	boxRoot := filepath.Join(util.DataDir, boxID)
+	boxRoot := BoxRootPath(boxID)
+	resolved := filepath.Join(boxRoot, origP)
 	if !gulu.File.IsSubPath(boxRoot, resolved) {
 		return "", fmt.Errorf("path [%s] escapes box directory", origP)
 	}
@@ -193,7 +194,7 @@ func LoadTreeWithFix(boxID, p string, luteEngine *lute.Lute) (ret *parse.Tree, n
 		return
 	}
 
-	filePath := filepath.Join(util.DataDir, boxID, p)
+	filePath := filepath.Join(BoxRootPath(boxID), p)
 	data, err := filelock.ReadFile(filePath)
 	if nil != err {
 		if !os.IsNotExist(err) {
@@ -274,7 +275,7 @@ func LoadTreeByData(data []byte, boxID, p string, luteEngine *lute.Lute) (ret *p
 		}
 		parentAbsPath += ".sy"
 		parentPath := parentAbsPath
-		parentAbsPath = filepath.Join(util.DataDir, boxID, parentAbsPath)
+		parentAbsPath = filepath.Join(BoxRootPath(boxID), parentAbsPath)
 
 		parentDocIAL := DocIAL(parentAbsPath)
 		if 1 > len(parentDocIAL) {
@@ -304,19 +305,11 @@ func LoadTreeByData(data []byte, boxID, p string, luteEngine *lute.Lute) (ret *p
 }
 
 // loadMarkdownTree 读取 markdown box 内一个 .md 文件并解析为内存块树。
-// 与 .sy 路径的关键差异：文件名不是块 ID（真实文件名，如 /notes/foo.md），
-// 树的 ID 只能来自内容里已有的文档级 kramdown IAL（`{: id="..." type="doc"}`），
-// 首次解析缺失时由 lute 自动补一个（parse.IALStart 的 IsDocIAL2 分支、
-// finalParseBlockIAL 的兜底分支），此后落盘、再解析保持稳定——Spike 1 已验证幂等。
-//
-// 注意：返回的树里，源文本中没有显式 {: id=...} 的块仍然带着 lute（因为
-// util.NewLute() 开了 SetProtyleWYSIWYG）现场发的临时 ID——这些 ID 不会被
-// FormatRenderer 写回磁盘，每次重新解析都不一样。FormatRenderer 依赖它们
-// 的存在来决定块间距（清掉会让某些块类型的输出多一个空行，已验证），所以
-// 这里不能直接清。真正需要"只看真实持久化 ID"的消费者（索引、块列表这类）
-// 应该在 WriteTree 之后调用 StripEphemeralMarkdownBlockIDs——见该函数注释。
+// Markdown 源字节是权威数据：lute 自动生成的文档 IAL 会被移除，文档根 ID
+// 从 Noema meta.id 确定性投影（无 meta 时从 box/path 投影），且所有临时块 ID
+// 在返回前清理。这个函数只读，冷索引或重复加载绝不能改写文件。
 func loadMarkdownTree(boxID, p string, luteEngine *lute.Lute) (ret *parse.Tree, err error) {
-	filePath := filepath.Join(util.DataDir, boxID, p)
+	filePath := filepath.Join(BoxRootPath(boxID), p)
 	data, err := filelock.ReadFile(filePath)
 	if nil != err {
 		if !os.IsNotExist(err) {
@@ -330,9 +323,9 @@ func loadMarkdownTree(boxID, p string, luteEngine *lute.Lute) (ret *parse.Tree, 
 	ret.Box = boxID
 	ret.Path = p
 	ret.Root.Path = p
-	if "" == ret.ID {
-		ret.ID = ret.Root.ID
-	}
+	ApplyMarkdownDocumentIdentity(ret, data, boxID, p)
+	StripEphemeralMarkdownBlockIDs(ret)
+	ApplyNoemaBlockProjection(ret, data)
 	ret.HPath = markdownHPath(p)
 	ret.Hash = treenode.NodeHash(ret.Root, ret, luteEngine)
 	return
@@ -425,7 +418,7 @@ func TreeSize(tree *parse.Tree) (size uint64) {
 
 func WriteTree(tree *parse.Tree) (size uint64, err error) {
 	if isMarkdownBox(tree.Box) {
-		return writeMarkdownTree(tree)
+		return 0, ErrMarkdownTreeWriteUnsupported
 	}
 
 	data, filePath, err := prepareWriteTree(tree)
@@ -485,60 +478,6 @@ func WriteTree(tree *parse.Tree) (size uint64, err error) {
 	return
 }
 
-// writeMarkdownTree 把内存块树用 lute 的 FormatRenderer 渲染回 kramdown-IAL markdown 字节并落盘。
-// 不涉及 JSON / 加密 / rootID 前置缓存这些 .sy 专属机制；未变更时跳过落盘，避免制造无意义的 git diff。
-func writeMarkdownTree(tree *parse.Tree) (size uint64, err error) {
-	data, filePath, err := prepareWriteMarkdownTree(tree)
-	if err != nil {
-		return
-	}
-
-	if diskData, readErr := filelock.ReadFile(filePath); nil == readErr && bytes.Equal(diskData, data) {
-		return uint64(len(data)), nil
-	}
-
-	if err = util.WriteFileByMmap(filePath, data); nil != err {
-		if err = writeTreeByWriteFile(filePath, data); nil != err {
-			return
-		}
-	}
-
-	if util.ExceedLargeFileWarningSize(len(data)) {
-		msg := fmt.Sprintf(util.Langs[util.Lang][268], tree.Root.IALAttr("title")+" "+filepath.Base(filePath), util.LargeFileWarningSize)
-		util.PushErrMsg(msg, 7000)
-	}
-
-	afterWriteTree(tree)
-	size = uint64(len(data))
-	return
-}
-
-func prepareWriteMarkdownTree(tree *parse.Tree) (data []byte, filePath string, err error) {
-	luteEngine := util.NewLute() // 不关注用户的自定义解析渲染选项
-
-	if nil == tree.Root.FirstChild {
-		newP := treenode.NewParagraph("")
-		tree.Root.AppendChild(newP)
-		tree.Root.SetIALAttr("updated", util.TimeFromID(newP.ID))
-		treenode.UpsertBlockTree(tree)
-	}
-
-	if _, err = ValidateBoxRelativePath(tree.Box, tree.Path); err != nil {
-		return
-	}
-
-	filePath = filepath.Join(util.DataDir, tree.Box, tree.Path)
-	tree.Root.SetIALAttr("type", "doc")
-
-	renderer := render.NewFormatRenderer(tree, luteEngine.RenderOptions, luteEngine.ParseOptions)
-	data = renderer.Render()
-
-	if err = os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
-		return
-	}
-	return
-}
-
 func writeTreeByWriteFile(filePath string, data []byte) (err error) {
 	if err = filelock.WriteFile(filePath, data); err != nil {
 		msg := fmt.Sprintf("write data [%s] failed: %s", filePath, err)
@@ -565,7 +504,7 @@ func prepareWriteTree(tree *parse.Tree) (data []byte, filePath string, err error
 		return
 	}
 
-	filePath = filepath.Join(util.DataDir, tree.Box, tree.Path)
+	filePath = filepath.Join(BoxRootPath(tree.Box), tree.Path)
 	tree.Root.SetIALAttr("type", "doc")
 	renderer := render.NewJSONRenderer(tree, luteEngine.RenderOptions, luteEngine.ParseOptions)
 	data = renderer.Render()

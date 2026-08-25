@@ -33,6 +33,7 @@ func init() {
 	filesys.DEKLockAcquire = HoldBoxReadLock
 	filesys.DEKLockRelease = ReleaseBoxReadLock
 	filesys.BoxKindProvider = GetBoxKind
+	filesys.BoxRootProvider = GetBoxRoot
 	av.AVDEKProvider = GetDEKIfUnlocked
 	av.AVLockAcquire = HoldBoxReadLock
 	av.AVLockRelease = ReleaseBoxReadLock
@@ -49,6 +50,7 @@ func init() {
 	sql.IsEncryptedBoxFn = IsEncryptedBox
 	sql.IsBoxUnlockedFn = isBoxUnlockedForAccess
 	sql.IsMarkdownBoxFn = func(boxID string) bool { return conf.BoxKindMarkdown == GetBoxKind(boxID) }
+	sql.BoxRootPathFn = filesys.BoxRootPath
 	treenode.IsEncryptedBoxFn = IsEncryptedBox
 	util.ReloadDocInfoGuard = func(boxID string) bool {
 		// 加密笔记本锁定后丢弃延迟 reloadDocInfo 广播，防止明文元数据泄漏

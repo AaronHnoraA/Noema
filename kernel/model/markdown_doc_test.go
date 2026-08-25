@@ -93,17 +93,18 @@ func TestListMarkdownDocsSkipsSiyuanDirAndSortsByPath(t *testing.T) {
 	mustWrite("/zebra.md")
 	mustWrite("/notes/alpha.md")
 	mustWrite("/notes/sub/beta.md")
+	mustWrite("/notes/gamma.markdown")
 	mustWrite("/notes/not-markdown.sy")
 
 	docs, err := ListMarkdownDocs(boxID)
 	if nil != err {
 		t.Fatalf("ListMarkdownDocs failed: %s", err)
 	}
-	if 3 != len(docs) {
-		t.Fatalf("expected exactly 3 markdown docs, got %+v", docs)
+	if 4 != len(docs) {
+		t.Fatalf("expected exactly 4 markdown docs, got %+v", docs)
 	}
 
-	wantPaths := []string{"/notes/alpha.md", "/notes/sub/beta.md", "/zebra.md"}
+	wantPaths := []string{"/notes/alpha.md", "/notes/gamma.markdown", "/notes/sub/beta.md", "/zebra.md"}
 	for i, want := range wantPaths {
 		if docs[i].Path != want {
 			t.Fatalf("docs[%d].Path = %q, want %q (full list: %+v)", i, docs[i].Path, want, docs)

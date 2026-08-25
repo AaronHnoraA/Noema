@@ -19,12 +19,11 @@
 package model
 
 import (
-	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/88250/gulu"
-	"github.com/aaronhe/noema/kernel/util"
+	"github.com/aaronhe/noema/kernel/filesys"
 	"github.com/radovskyb/watcher"
 	"github.com/siyuan-note/logging"
 )
@@ -41,7 +40,7 @@ var (
 const markdownWatchPollInterval = 1 * time.Second
 
 func WatchMarkdownBox(boxID string) {
-	boxDir := filepath.Join(util.DataDir, boxID)
+	boxDir := filesys.BoxRootPath(boxID)
 	if !gulu.File.IsDir(boxDir) {
 		return
 	}

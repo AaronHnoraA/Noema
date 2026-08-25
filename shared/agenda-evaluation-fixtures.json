@@ -1,0 +1,273 @@
+[
+  {
+    "name": "stable ids after and blocks compute blocked status and urgency",
+    "request": {
+      "todayMs": 1787623200000,
+      "todos": [
+        { "id": "#a", "status": "doing", "text": "First", "file": "/a.md", "noteTitle": "A", "index": 0, "line": 1, "canon": { "prio": "A", "ddl": "2026-08-24" } },
+        { "id": "#b", "status": "todo", "text": "Second", "file": "/a.md", "noteTitle": "A", "index": 10, "line": 2, "canon": { "after": "#a" } },
+        { "id": "#c", "status": "done", "text": "Third", "file": "/a.md", "noteTitle": "A", "index": 20, "line": 3, "canon": { "blocks": "#b" } }
+      ]
+    },
+    "expected": {
+      "todos": [
+        { "id": "#a", "deps": [], "effectiveStatus": "doing", "blockedBy": [], "urgency": 4650 },
+        { "id": "#b", "deps": ["#a", "#c"], "effectiveStatus": "blocked", "blockedBy": ["#a"], "urgency": -1000 },
+        { "id": "#c", "deps": [], "effectiveStatus": "done", "blockedBy": [], "urgency": 1000 }
+      ],
+      "lints": []
+    }
+  },
+  {
+    "name": "duplicate fuzzy and cross-note references emit ordered lints",
+    "request": {
+      "todayMs": 1787623200000,
+      "todos": [
+        { "id": "#dup", "status": "todo", "text": "Alpha task", "file": "/a.md", "noteTitle": "A", "index": 0, "line": 1, "canon": { "prio": "B" } },
+        { "id": "#dup", "status": "todo", "text": "Alpine task", "file": "/a.md", "noteTitle": "A", "index": 10, "line": 2, "canon": {} },
+        { "id": "/a.md:20", "status": "todo", "text": "Dependent", "file": "/a.md", "noteTitle": "A", "index": 20, "line": 3, "canon": { "after": "Al & missing" } },
+        { "id": "#cross", "status": "todo", "text": "Cross", "file": "/b.md", "noteTitle": "B", "index": 0, "line": 1, "canon": { "after": "[[Same]]::target" } },
+        { "id": "#x", "status": "done", "text": "target", "file": "/x1.md", "noteTitle": "Same", "index": 0, "line": 1, "canon": {} },
+        { "id": "#y", "status": "done", "text": "target", "file": "/x2.md", "noteTitle": "Same", "index": 0, "line": 1, "canon": {} }
+      ]
+    },
+    "expected": {
+      "todos": [
+        { "id": "#dup", "deps": [], "effectiveStatus": "todo", "blockedBy": [], "urgency": 3000 },
+        { "id": "/a.md:10", "deps": [], "effectiveStatus": "todo", "blockedBy": [], "urgency": 1000 },
+        { "id": "/a.md:20", "deps": [], "effectiveStatus": "todo", "blockedBy": [], "urgency": 1000 },
+        { "id": "#cross", "deps": [], "effectiveStatus": "todo", "blockedBy": [], "urgency": 1000 },
+        { "id": "#x", "deps": [], "effectiveStatus": "done", "blockedBy": [], "urgency": 1000 },
+        { "id": "#y", "deps": [], "effectiveStatus": "done", "blockedBy": [], "urgency": 1000 }
+      ],
+      "lints": [
+        { "todoId": "/a.md:10", "file": "/a.md", "line": 2, "kind": "duplicate-id", "ref": "#dup", "message": "Duplicate id \"#dup\"; fell back to a positional id" },
+        { "todoId": "/a.md:20", "file": "/a.md", "line": 3, "kind": "ambiguous-ref", "ref": "Al", "via": "after", "message": "Multiple todos match \"Al\"", "candidates": [{ "id": "#dup", "text": "Alpha task" }, { "id": "/a.md:10", "text": "Alpine task" }] },
+        { "todoId": "/a.md:20", "file": "/a.md", "line": 3, "kind": "broken-ref", "ref": "missing", "via": "after", "message": "No matching todo for \"missing\"" },
+        { "todoId": "#cross", "file": "/b.md", "line": 1, "kind": "ambiguous-note", "ref": "[[Same]]::target", "via": "after", "message": "Multiple notes titled \"Same\"" }
+      ]
+    }
+  },
+  {
+    "name": "warning window doing bonus and blocked penalty match org-style urgency",
+    "request": {
+      "todayMs": 1787623200000,
+      "todos": [
+        { "id": "#urgent", "status": "doing", "text": "Urgent", "file": "/u.md", "noteTitle": "U", "index": 0, "line": 1, "canon": { "prio": "B", "ddl": "2026-08-30", "warn": "10d" } },
+        { "id": "#blocked", "status": "todo", "text": "Blocked", "file": "/u.md", "noteTitle": "U", "index": 10, "line": 2, "canon": { "prio": "A", "ddl": "2026-08-25", "after": "#urgent" } },
+        { "id": "#low", "status": "todo", "text": "Low", "file": "/u.md", "noteTitle": "U", "index": 20, "line": 3, "canon": { "prio": "F" } }
+      ]
+    },
+    "expected": {
+      "todos": [
+        { "id": "#urgent", "deps": [], "effectiveStatus": "doing", "blockedBy": [], "urgency": 3300 },
+        { "id": "#blocked", "deps": ["#urgent"], "effectiveStatus": "blocked", "blockedBy": ["#urgent"], "urgency": 2500 },
+        { "id": "#low", "deps": [], "effectiveStatus": "todo", "blockedBy": [], "urgency": -1000 }
+      ],
+      "lints": []
+    }
+  },
+  {
+    "name": "gantt tasks backlog milestones lanes and lints match the Node model",
+    "request": {
+      "todayMs": 1787623200000,
+      "includeGantt": true,
+      "projects": [
+        { "id": "#p", "status": "active", "title": "Paper", "text": "Paper", "file": "/p.md", "index": 0, "line": 1, "source": "@@project(active) [Paper] {project=paper}", "canon": { "project": "paper" } }
+      ],
+      "milestones": [
+        { "id": "#m1", "status": "", "title": "Freeze", "text": "Freeze", "file": "/p.md", "index": 40, "line": 5, "source": "@@milestone [Freeze] {project=paper, date=2026-08-28}", "canon": { "project": "paper", "date": "2026-08-28" } },
+        { "id": "#m2", "status": "", "title": "Missing", "text": "Missing", "file": "/p.md", "index": 50, "line": 6, "source": "@@milestone [Missing] {project=paper}", "canon": { "project": "paper" } }
+      ],
+      "todos": [
+        { "id": "#t1", "status": "doing", "text": "Draft", "file": "/p.md", "noteTitle": "Paper", "index": 10, "line": 2, "source": "@@todo(doing) [Draft] {id=t1}", "canon": { "project": "paper", "sche": "2026-08-25", "ddl": "2026-08-27", "progress": "25", "after": "#t3" } },
+        { "id": "#t2", "status": "todo", "text": "Orphan", "file": "/p.md", "noteTitle": "Paper", "index": 20, "line": 3, "source": "@@todo [Orphan] {id=t2}", "canon": { "project": "paper", "end": "2026-08-30" } },
+        { "id": "#t3", "status": "done", "text": "Done task", "file": "/p.md", "noteTitle": "Paper", "index": 30, "line": 4, "source": "@@todo(done) [Done task] {id=t3}", "canon": { "project": "paper", "sche": "2026-08-24", "end": "2026-08-26" } }
+      ]
+    },
+    "expected": {
+      "todos": [
+        { "id": "#t1", "deps": ["#t3"], "effectiveStatus": "doing", "blockedBy": [], "urgency": 1478.5714285714284 },
+        { "id": "#t2", "deps": [], "effectiveStatus": "todo", "blockedBy": [], "urgency": 1000 },
+        { "id": "#t3", "deps": [], "effectiveStatus": "done", "blockedBy": [], "urgency": 1000 }
+      ],
+      "lints": [],
+      "gantt": {
+        "tasks": [
+          { "id": "#t1", "name": "Draft", "project": "paper", "status": "doing", "source": { "file": "/p.md", "index": 10, "line": 2, "source": "@@todo(doing) [Draft] {id=t1}", "text": "Draft" }, "dependencies": ["#t3"], "progress": 25, "start": "2026-08-25", "end": "2026-08-27" },
+          { "id": "#t3", "name": "Done task", "project": "paper", "status": "done", "source": { "file": "/p.md", "index": 30, "line": 4, "source": "@@todo(done) [Done task] {id=t3}", "text": "Done task" }, "dependencies": [], "progress": 100, "start": "2026-08-24", "end": "2026-08-26" }
+        ],
+        "backlog": [
+          { "id": "#t2", "name": "Orphan", "project": "paper", "status": "todo", "source": { "file": "/p.md", "index": 20, "line": 3, "source": "@@todo [Orphan] {id=t2}", "text": "Orphan" }, "dependencies": [], "progress": 0, "start": "", "end": "2026-08-30" }
+        ],
+        "milestones": [
+          { "id": "#m1", "name": "Freeze", "project": "paper", "date": "2026-08-28", "source": { "file": "/p.md", "index": 40, "line": 5, "source": "@@milestone [Freeze] {project=paper, date=2026-08-28}", "text": "Freeze" } }
+        ],
+        "lanes": [
+          { "id": "#p", "key": "paper", "name": "Paper", "start": "2026-08-24", "end": "2026-08-27", "childTaskIds": ["#t1", "#t3"] }
+        ],
+        "lints": [
+          { "todoId": "#t2", "file": "/p.md", "line": 3, "kind": "missing-gantt-date", "ref": "Orphan", "message": "Partially scheduled Gantt tasks need both sche/start and end/ddl" },
+          { "todoId": "#m2", "file": "/p.md", "line": 6, "kind": "missing-milestone-date", "ref": "Missing", "message": "Milestones need date" }
+        ]
+      }
+    }
+  },
+  {
+    "name": "clock references clocktable and project summaries match the Node model",
+    "request": {
+      "todayMs": 1787623200000,
+      "includePlanning": true,
+      "projects": [
+        { "id": "#p", "status": "active", "title": "Timed", "text": "Timed", "file": "/t.md", "index": 0, "line": 1, "source": "@@project(active) [Timed] {project=timed}", "canon": { "project": "timed", "area": "work", "phase": "build" }, "args": { "project": "timed", "area": "work", "phase": "build" } }
+      ],
+      "milestones": [],
+      "todos": [
+        { "id": "#a", "status": "doing", "text": "Track", "file": "/t.md", "noteTitle": "Timed", "index": 10, "line": 2, "source": "@@todo(doing) [Track] {id=a}", "canon": { "project": "timed", "effort": "2h" } },
+        { "id": "#b", "status": "done", "text": "Done task", "file": "/t.md", "noteTitle": "Timed", "index": 20, "line": 3, "source": "@@todo(done) [Done task] {id=b}", "canon": { "project": "timed", "effort": "30m" } },
+        { "id": "#c", "status": "cancelled", "text": "Cancelled", "file": "/t.md", "noteTitle": "Timed", "index": 30, "line": 4, "source": "@@todo(cancelled) [Cancelled] {id=c}", "canon": { "project": "timed" } },
+        { "id": "#d", "status": "todo", "text": "Blocked", "file": "/t.md", "noteTitle": "Timed", "index": 40, "line": 5, "source": "@@todo [Blocked] {id=d}", "canon": { "project": "timed", "after": "#a" } }
+      ],
+      "clocks": [
+        { "id": "/t.md:100", "status": "", "title": "Track", "text": "Track", "file": "/t.md", "index": 100, "line": 10, "source": "@@clock [Track]{from: 2026-08-25 09:00, to: 2026-08-25 10:00, task: #a}", "canon": {}, "args": { "from": "2026-08-25 09:00", "to": "2026-08-25 10:00", "task": "#a" } },
+        { "id": "/t.md:110", "status": "", "title": "Track", "text": "Track", "file": "/t.md", "index": 110, "line": 11, "source": "@@clock [Track]{from: 2026-08-25 10:00, to: 2026-08-25 10:30, task: #a}", "canon": {}, "args": { "from": "2026-08-25 10:00", "to": "2026-08-25 10:30", "task": "#a" } },
+        { "id": "/t.md:120", "status": "", "title": "Done task", "text": "Done task", "file": "/t.md", "index": 120, "line": 12, "source": "@@clock [Done task]{from: 2026-08-25 11:00, to: 2026-08-25 11:15}", "canon": {}, "args": { "from": "2026-08-25 11:00", "to": "2026-08-25 11:15" } }
+      ]
+    },
+    "expected": {
+      "todos": [
+        { "id": "#a", "deps": [], "effectiveStatus": "doing", "blockedBy": [], "urgency": 1050 },
+        { "id": "#b", "deps": [], "effectiveStatus": "done", "blockedBy": [], "urgency": 1000 },
+        { "id": "#c", "deps": [], "effectiveStatus": "cancelled", "blockedBy": [], "urgency": 1000 },
+        { "id": "#d", "deps": ["#a"], "effectiveStatus": "blocked", "blockedBy": ["#a"], "urgency": -1000 }
+      ],
+      "lints": [],
+      "clocks": [{ "todoId": "#a" }, { "todoId": "#a" }, { "todoId": "#b" }],
+      "clocktable": {
+        "tasks": [
+          { "todoId": "#a", "text": "Track", "file": "/t.md", "minutes": 90, "effortMinutes": 120 },
+          { "todoId": "#b", "text": "Done task", "file": "/t.md", "minutes": 15, "effortMinutes": 30 }
+        ],
+        "byDay": { "2026-08-25": 105 },
+        "byProject": { "timed": 105 },
+        "running": null
+      },
+      "projectModel": [
+        { "id": "#p", "key": "timed", "title": "Timed", "status": "active", "area": "work", "phase": "build", "file": "/t.md", "open": 0, "doing": 1, "done": 1, "cancelled": 1, "blocked": 1, "total": 4, "progress": 33, "effortMinutes": 150, "clockedMinutes": 105, "childTodoIds": ["#a", "#b", "#c", "#d"] }
+      ],
+      "clockLints": []
+    }
+  },
+  {
+    "name": "clock reference and span quality lints retain aggregation",
+    "request": {
+      "todayMs": 1787623200000,
+      "includePlanning": true,
+      "projects": [
+        { "id": "#p", "status": "active", "title": "Timed", "text": "Timed", "file": "/q.md", "index": 0, "line": 1, "source": "@@project(active) [Timed] {project=timed}", "canon": { "project": "timed" }, "args": { "project": "timed" } }
+      ],
+      "milestones": [],
+      "todos": [
+        { "id": "#a", "status": "doing", "text": "Tracked", "file": "/q.md", "noteTitle": "Timed", "index": 10, "line": 2, "source": "@@todo(doing) [Tracked] {id=a}", "canon": { "project": "timed", "effort": "1h" } }
+      ],
+      "clocks": [
+        { "id": "/q.md:100", "title": "Tracked", "text": "Tracked", "file": "/q.md", "index": 100, "line": 10, "source": "clock-one", "canon": {}, "args": { "from": "2026-08-25 09:00", "to": "2026-08-25 10:00", "task": "#a" } },
+        { "id": "/q.md:110", "title": "Tracked", "text": "Tracked", "file": "/q.md", "index": 110, "line": 11, "source": "clock-overlap", "canon": {}, "args": { "from": "2026-08-25 09:30", "to": "2026-08-25 10:30", "task": "#a" } },
+        { "id": "/q.md:120", "title": "Tracked", "text": "Tracked", "file": "/q.md", "index": 120, "line": 12, "source": "clock-reversed", "canon": {}, "args": { "from": "2026-08-25 11:00", "to": "2026-08-25 10:45", "task": "#a" } },
+        { "id": "/q.md:130", "title": "Broken", "text": "Broken", "file": "/q.md", "index": 130, "line": 13, "source": "clock-broken", "canon": {}, "args": { "from": "2026-08-25 12:00", "to": "2026-08-25 13:00", "task": "#missing" } }
+      ]
+    },
+    "expected": {
+      "todos": [{ "id": "#a", "deps": [], "effectiveStatus": "doing", "blockedBy": [], "urgency": 1050 }],
+      "lints": [],
+      "clocks": [{ "todoId": "#a" }, { "todoId": "#a" }, { "todoId": "#a" }, { "todoId": "" }],
+      "clocktable": {
+        "tasks": [
+          { "todoId": "#a", "text": "Tracked", "file": "/q.md", "minutes": 120, "effortMinutes": 60 },
+          { "todoId": "", "text": "Broken", "file": "/q.md", "minutes": 60, "effortMinutes": 0 }
+        ],
+        "byDay": { "2026-08-25": 180 },
+        "byProject": { "timed": 120 },
+        "running": null
+      },
+      "projectModel": [
+        { "id": "#p", "key": "timed", "title": "Timed", "status": "active", "area": "", "phase": "", "file": "/q.md", "open": 0, "doing": 1, "done": 0, "cancelled": 0, "blocked": 0, "total": 1, "progress": 0, "effortMinutes": 60, "clockedMinutes": 120, "childTodoIds": ["#a"] }
+      ],
+      "clockLints": [
+        { "file": "/q.md", "line": 13, "kind": "broken-clock-ref", "ref": "#missing", "message": "No todo with id \"#missing\"" },
+        { "todoId": "#a", "file": "/q.md", "line": 12, "kind": "reversed-clock-span", "ref": "clock-reversed", "message": "Clock ends before it starts (counted as 0 min)" },
+        { "todoId": "#a", "file": "/q.md", "line": 11, "kind": "overlapping-clocks", "ref": "clock-overlap", "message": "Overlaps another clock; totals over-count" }
+      ]
+    }
+  },
+  {
+    "name": "day view carries overdue schedules warnings repeats logs and stats",
+    "source": "# Agenda\n\n@@todo(doing) [Overdue] {id=a, prio=A, ddl=2026-08-24, sche=2026-08-23}\n@@todo [Repeating] {id=b, ddl=2026-08-27, warn=3d, sche=\"2026-08-26 09:30\", repeat=+1d}\n@@todo(done) [Closed] {id=c, done=2026-08-25, log=\"2026-08-24 & 2026-08-25\"}\n@@todo(cancelled) [Cancelled] {id=d}\n@@todo [Blocked] {id=e, after=#a}\n",
+    "request": {
+      "todayMs": 1787623200000,
+      "includeView": true,
+      "from": "2026-08-25",
+      "days": 5,
+      "todos": [
+        { "id": "#a", "status": "doing", "text": "Overdue", "file": "/agenda.md", "noteTitle": "Agenda", "index": 10, "line": 3, "canon": { "prio": "A", "ddl": "2026-08-24", "sche": "2026-08-23" } },
+        { "id": "#b", "status": "todo", "text": "Repeating", "file": "/agenda.md", "noteTitle": "Agenda", "index": 20, "line": 4, "canon": { "ddl": "2026-08-27", "warn": "3d", "sche": "2026-08-26 09:30", "repeat": "+1d" } },
+        { "id": "#c", "status": "done", "text": "Closed", "file": "/agenda.md", "noteTitle": "Agenda", "index": 30, "line": 5, "canon": { "done": "2026-08-25", "log": "2026-08-24 & 2026-08-25" } },
+        { "id": "#d", "status": "cancelled", "text": "Cancelled", "file": "/agenda.md", "noteTitle": "Agenda", "index": 40, "line": 6, "canon": {} },
+        { "id": "#e", "status": "todo", "text": "Blocked", "file": "/agenda.md", "noteTitle": "Agenda", "index": 50, "line": 7, "canon": { "after": "#a" } }
+      ]
+    },
+    "expected": {
+      "todos": [
+        { "id": "#a", "deps": [], "effectiveStatus": "doing", "blockedBy": [], "urgency": 4650 },
+        { "id": "#b", "deps": [], "effectiveStatus": "todo", "blockedBy": [], "urgency": 1166.6666666666667 },
+        { "id": "#c", "deps": [], "effectiveStatus": "done", "blockedBy": [], "urgency": 1000 },
+        { "id": "#d", "deps": [], "effectiveStatus": "cancelled", "blockedBy": [], "urgency": 1000 },
+        { "id": "#e", "deps": ["#a"], "effectiveStatus": "blocked", "blockedBy": ["#a"], "urgency": -1000 }
+      ],
+      "lints": [],
+      "view": {
+        "range": { "from": "2026-08-25", "to": "2026-08-29", "today": "2026-08-25" },
+        "days": [
+          {
+            "date": "2026-08-25",
+            "entries": [
+              { "kind": "overdue", "label": "1 d ago:", "todoId": "#a", "date": "2026-08-24", "dateKey": "ddl", "time": null, "urgency": 4650 },
+              { "kind": "sched-carry", "label": "Sched 2x:", "todoId": "#a", "date": "2026-08-23", "dateKey": "sche", "time": null, "urgency": 4650 },
+              { "kind": "warning", "label": "In 2 d.", "todoId": "#b", "date": "2026-08-27", "dateKey": "ddl", "time": null, "urgency": 1166.6666666666667 },
+              { "kind": "log", "label": "Closed", "todoId": "#c", "date": "2026-08-25", "dateKey": "done", "time": null, "urgency": 1000 }
+            ]
+          },
+          {
+            "date": "2026-08-26",
+            "entries": [
+              { "kind": "scheduled", "label": "Scheduled", "todoId": "#b", "date": "2026-08-26 09:30", "dateKey": "sche", "time": "09:30", "urgency": 1166.6666666666667 }
+            ]
+          },
+          {
+            "date": "2026-08-27",
+            "entries": [
+              { "kind": "repeat", "label": "Repeats (sched)", "todoId": "#b", "date": "2026-08-27 09:30", "dateKey": "2026-08-27", "time": "09:30", "urgency": 1166.6666666666667, "virtual": true },
+              { "kind": "deadline", "label": "In 2 d.", "todoId": "#b", "date": "2026-08-27", "dateKey": "ddl", "time": null, "urgency": 1166.6666666666667 }
+            ]
+          },
+          {
+            "date": "2026-08-28",
+            "entries": [
+              { "kind": "repeat", "label": "Repeats (sched)", "todoId": "#b", "date": "2026-08-28 09:30", "dateKey": "2026-08-28", "time": "09:30", "urgency": 1166.6666666666667, "virtual": true },
+              { "kind": "repeat", "label": "Repeats", "todoId": "#b", "date": "2026-08-28", "dateKey": "2026-08-28", "time": null, "urgency": 1166.6666666666667, "virtual": true }
+            ]
+          },
+          {
+            "date": "2026-08-29",
+            "entries": [
+              { "kind": "repeat", "label": "Repeats (sched)", "todoId": "#b", "date": "2026-08-29 09:30", "dateKey": "2026-08-29", "time": "09:30", "urgency": 1166.6666666666667, "virtual": true },
+              { "kind": "repeat", "label": "Repeats", "todoId": "#b", "date": "2026-08-29", "dateKey": "2026-08-29", "time": null, "urgency": 1166.6666666666667, "virtual": true }
+            ]
+          }
+        ],
+        "logByDay": { "2026-08-25": 1, "2026-08-24": 1 },
+        "stats": { "open": 1, "doing": 1, "done": 1, "cancelled": 1, "blocked": 1, "overdue": 1 }
+      }
+    }
+  }
+]

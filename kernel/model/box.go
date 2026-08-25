@@ -157,7 +157,7 @@ func ListNotebooks() (ret []*Box, err error) {
 	}
 
 	var fileTreeSort int
-	if nil != Conf.FileTree {
+	if nil != Conf && nil != Conf.FileTree {
 		fileTreeSort = Conf.FileTree.Sort
 	}
 	switch fileTreeSort {
@@ -261,7 +261,7 @@ func (box *Box) Ls(p string) (ret []*FileInfo, totals int, err error) {
 	if _, err = box.validateBoxPath(p); err != nil {
 		return
 	}
-	boxLocalPath := filepath.Join(util.DataDir, box.ID)
+	boxLocalPath := filesys.BoxRootPath(box.ID)
 	if before, ok := strings.CutSuffix(p, ".sy"); ok {
 		dir := before
 		absDir := filepath.Join(boxLocalPath, dir)
@@ -272,7 +272,7 @@ func (box *Box) Ls(p string) (ret []*FileInfo, totals int, err error) {
 		}
 	}
 
-	entries, err := os.ReadDir(filepath.Join(util.DataDir, box.ID, p))
+	entries, err := os.ReadDir(filepath.Join(boxLocalPath, p))
 	if err != nil {
 		return
 	}
@@ -290,7 +290,7 @@ func (box *Box) Ls(p string) (ret []*FileInfo, totals int, err error) {
 		}
 		if strings.HasSuffix(name, ".tmp") {
 			// 移除写入失败时产生的并且早于 30 分钟前的临时文件，近期创建的临时文件可能正在写入中
-			removePath := filepath.Join(util.DataDir, box.ID, p, name)
+			removePath := filepath.Join(boxLocalPath, p, name)
 			if info.ModTime().Before(time.Now().Add(-30 * time.Minute)) {
 				if removeErr := os.Remove(removePath); nil != removeErr {
 					logging.LogWarnf("remove tmp file [%s] failed: %s", removePath, removeErr)
@@ -318,7 +318,7 @@ func (box *Box) Stat(p string) (ret *FileInfo) {
 	if _, err := box.validateBoxPath(p); err != nil {
 		return
 	}
-	absPath := filepath.Join(util.DataDir, box.ID, p)
+	absPath := filepath.Join(filesys.BoxRootPath(box.ID), p)
 	info, err := os.Stat(absPath)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -339,14 +339,14 @@ func (box *Box) Exist(p string) bool {
 	if _, err := box.validateBoxPath(p); err != nil {
 		return false
 	}
-	return filelock.IsExist(filepath.Join(util.DataDir, box.ID, p))
+	return filelock.IsExist(filepath.Join(filesys.BoxRootPath(box.ID), p))
 }
 
 func (box *Box) Mkdir(path string) error {
 	if _, err := box.validateBoxPath(path); err != nil {
 		return err
 	}
-	if err := os.Mkdir(filepath.Join(util.DataDir, box.ID, path), 0755); err != nil {
+	if err := os.Mkdir(filepath.Join(filesys.BoxRootPath(box.ID), path), 0755); err != nil {
 		msg := fmt.Sprintf(Conf.Language(6), box.Name, path, err)
 		logging.LogErrorf("mkdir [path=%s] in box [%s] failed: %s", path, box.ID, err)
 		return errors.New(msg)
@@ -359,7 +359,7 @@ func (box *Box) MkdirAll(path string) error {
 	if _, err := box.validateBoxPath(path); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Join(util.DataDir, box.ID, path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(filesys.BoxRootPath(box.ID), path), 0755); err != nil {
 		msg := fmt.Sprintf(Conf.Language(6), box.Name, path, err)
 		logging.LogErrorf("mkdir all [path=%s] in box [%s] failed: %s", path, box.ID, err)
 		return errors.New(msg)
@@ -375,7 +375,7 @@ func (box *Box) Move(oldPath, newPath string) error {
 	if _, err := box.validateBoxPath(newPath); err != nil {
 		return err
 	}
-	boxLocalPath := filepath.Join(util.DataDir, box.ID)
+	boxLocalPath := filesys.BoxRootPath(box.ID)
 	fromPath := filepath.Join(boxLocalPath, oldPath)
 	toPath := filepath.Join(boxLocalPath, newPath)
 
@@ -399,7 +399,7 @@ func (box *Box) Remove(path string) error {
 	if _, err := box.validateBoxPath(path); err != nil {
 		return err
 	}
-	boxLocalPath := filepath.Join(util.DataDir, box.ID)
+	boxLocalPath := filesys.BoxRootPath(box.ID)
 	filePath := filepath.Join(boxLocalPath, path)
 	if err := filelock.Remove(filePath); err != nil {
 		msg := fmt.Sprintf(Conf.Language(7), box.Name, path, err)
@@ -478,7 +478,7 @@ func (box *Box) GetInfo() (ret *BoxInfo) {
 			continue
 		}
 
-		absPath := filepath.Join(util.DataDir, box.ID, fileInfo.path)
+		absPath := filepath.Join(filesys.BoxRootPath(box.ID), fileInfo.path)
 		info, err := os.Stat(absPath)
 		if err != nil {
 			logging.LogErrorf("stat [%s] failed: %s", absPath, err)

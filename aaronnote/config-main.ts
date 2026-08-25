@@ -1,4 +1,4 @@
-import "./tauri-bridge.ts";
+import "./desktop-bridge.ts";
 import "../src/styles/theme-loader.ts";
 import "./config.css";
 
@@ -18,7 +18,7 @@ document.body.dataset.hostMode = window.noemaDesktop ? "desktop" : "browser";
 if (window.noemaDesktop) document.body.dataset.desktopPlatform = window.noemaDesktop.platform;
 
 root.innerHTML = `
-  <header class="noema-config-titlebar" data-tauri-drag-region>
+  <header class="noema-config-titlebar" data-desktop-drag-region>
     <div class="noema-config-title">
       <span class="noema-config-mark" aria-hidden="true">N</span>
       <span>

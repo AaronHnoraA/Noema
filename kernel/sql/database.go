@@ -41,13 +41,14 @@ import (
 	"github.com/88250/lute/editor"
 	"github.com/88250/lute/html"
 	"github.com/88250/lute/parse"
+	noemamarkdown "github.com/aaronhe/noema/kernel/noema/markdown"
+	"github.com/aaronhe/noema/kernel/search"
+	"github.com/aaronhe/noema/kernel/treenode"
+	"github.com/aaronhe/noema/kernel/util"
 	"github.com/mattn/go-sqlite3"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/siyuan-note/eventbus"
 	"github.com/siyuan-note/logging"
-	"github.com/aaronhe/noema/kernel/search"
-	"github.com/aaronhe/noema/kernel/treenode"
-	"github.com/aaronhe/noema/kernel/util"
 )
 
 var (
@@ -73,6 +74,10 @@ var (
 	// markdown 正文塞进文档根块自己的 content/markdown 字段，代价是搜索精度降到
 	// "命中哪篇笔记"而非"命中哪一段"。.sy box 不受影响，继续用 IALAttr("title")。
 	IsMarkdownBoxFn func(boxID string) bool
+
+	// BoxRootPathFn routes asset hashing for external Markdown boxes to their
+	// physical repository root instead of the workspace shadow directory.
+	BoxRootPathFn func(boxID string) string
 
 	// IsBoxUnlockedFn 由 model 层注入，用于在读取明文缓存前确认加密笔记本仍处于解锁状态。
 	IsBoxUnlockedFn func(boxID string) bool
@@ -579,6 +584,38 @@ func refsFromTree(tree *parse.Tree) (refs []*Ref, fileAnnotationRefs []*FileAnno
 		}
 		return ast.WalkContinue
 	})
+	// Lute's block-ref grammar only accepts SiYuan timestamp IDs. Noema UUIDv7
+	// refs are scanned from source and carried on the in-memory tree; map them
+	// to disposable internal IDs only at the inherited SQL edge.
+	for _, projected := range noemamarkdown.ProjectionFromTree(tree).References {
+		var defBlockParentID, defBlockRootID, defBlockPath string
+		if defBlock := treenode.GetBlockTreeInBox(projected.ProjectionID, tree.Box); nil != defBlock {
+			defBlockParentID = defBlock.ParentID
+			defBlockRootID = defBlock.RootID
+			defBlockPath = defBlock.Path
+		}
+		content := projected.Label
+		if "" == content {
+			content = projected.CanonicalID
+		}
+		ref := &Ref{
+			ID:               ast.NewNodeID(),
+			DefBlockID:       projected.ProjectionID,
+			DefBlockParentID: defBlockParentID,
+			DefBlockRootID:   defBlockRootID,
+			DefBlockPath:     defBlockPath,
+			BlockID:          tree.ID,
+			RootID:           tree.ID,
+			Box:              tree.Box,
+			Path:             tree.Path,
+			Content:          content,
+			Markdown:         projected.Raw,
+			Type:             treenode.TypeAbbr(ast.NodeBlockRef.String()),
+		}
+		if !isRepeatedRef(refs, ref) {
+			refs = append(refs, ref)
+		}
+	}
 	return
 }
 
@@ -608,13 +645,26 @@ func buildRef(tree *parse.Tree, refNode *ast.Node) *Ref {
 		defBlockPath = defBlock.Path
 	}
 	parentBlock := treenode.ParentBlock(refNode)
+	blockID := parentBlock.ID
+	if "" == blockID && nil != IsMarkdownBoxFn && IsMarkdownBoxFn(tree.Box) {
+		// markdown box + 惰性 IAL：引用 (( )) 所在的段落/标题绝大多数情况下没有
+		// 持久化 ID（只有被引用/被嵌入/被设属性/进入属性视图的块才会带
+		// {: id=...}，见 §1.2），此时这个段落解析时临时分配的 ID 已经在落盘前被
+		// filesys.StripEphemeralMarkdownBlockIDs 清空。BlockID 留空会让这一条
+		// ref 在 GetBacklink 里因为查不到对应的 blocks 行而被静默丢弃——退化到
+		// 用文档根 ID（永远持久化）作为反链定位粒度：反链能找到"这篇文档"而不
+		// 是"这一段"，跟 buildBlockFromNode 对 markdown box NodeDocument 的处理
+		// 取同一个粒度取舍（都是为了不破坏 §1.2 "只有真正被引用的块才带 ID"
+		// 这条 git-diff-干净的保证）。
+		blockID = tree.ID
+	}
 	return &Ref{
 		ID:               ast.NewNodeID(),
 		DefBlockID:       defBlockID,
 		DefBlockParentID: defBlockParentID,
 		DefBlockRootID:   defBlockRootID,
 		DefBlockPath:     defBlockPath,
-		BlockID:          parentBlock.ID,
+		BlockID:          blockID,
 		RootID:           tree.ID,
 		Box:              tree.Box,
 		Path:             tree.Path,
@@ -634,13 +684,18 @@ func buildEmbedRef(tree *parse.Tree, embedNode *ast.Node) *Ref {
 		defBlockPath = defBlock.Path
 	}
 
+	blockID := embedNode.ID
+	if "" == blockID && nil != IsMarkdownBoxFn && IsMarkdownBoxFn(tree.Box) {
+		// 同 buildRef 上面的注释：markdown box 下嵌入块自身也可能没有持久化 ID。
+		blockID = tree.ID
+	}
 	return &Ref{
 		ID:               ast.NewNodeID(),
 		DefBlockID:       defBlockID,
 		DefBlockParentID: defBlockParentID,
 		DefBlockRootID:   defBlockRootID,
 		DefBlockPath:     defBlockPath,
-		BlockID:          embedNode.ID,
+		BlockID:          blockID,
 		RootID:           tree.ID,
 		Box:              tree.Box,
 		Path:             tree.Path,
@@ -754,6 +809,11 @@ func isAttr(name string) bool {
 
 func buildSpanFromNode(n *ast.Node, tree *parse.Tree, rootID, boxID, p string) (blocks []*Block, spans []*Span, assets []*Asset, attributes []*Attribute, walkStatus ast.WalkStatus) {
 	boxLocalPath := filepath.Join(util.DataDir, boxID)
+	if nil != BoxRootPathFn {
+		if routed := BoxRootPathFn(boxID); "" != routed {
+			boxLocalPath = routed
+		}
+	}
 	docDirLocalPath := filepath.Join(boxLocalPath, p)
 	switch n.Type {
 	case ast.NodeImage:

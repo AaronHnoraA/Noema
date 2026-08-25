@@ -1,0 +1,146 @@
+[
+  {
+    "name": "todo table filters sorts and limits portable attributes",
+    "request": {
+      "title": "Open work",
+      "source": "source: todo\ncolumns: text, status, project, prio, ddl\nfilter: status in todo|doing\nfilter: project = paper\nsort: prio asc, ddl asc\nlimit: 2",
+      "items": [
+        { "id": "#a", "kind": "todo", "status": "doing", "text": "Draft", "file": "/paper.md", "noteTitle": "Paper", "line": 3, "canon": { "project": "paper", "prio": "A", "ddl": "2026-08-27" } },
+        { "id": "#b", "kind": "todo", "status": "todo", "text": "Revise", "file": "/paper.md", "noteTitle": "Paper", "line": 4, "canon": { "project": "paper", "prio": "B", "ddl": "2026-08-26" } },
+        { "id": "#c", "kind": "todo", "status": "done", "text": "Archive", "file": "/paper.md", "noteTitle": "Paper", "line": 5, "canon": { "project": "paper", "prio": "A" } },
+        { "id": "#d", "kind": "todo", "status": "todo", "text": "Other", "file": "/other.md", "noteTitle": "Other", "line": 2, "canon": { "project": "other", "prio": "A" } },
+        { "id": "#p", "kind": "project", "status": "active", "text": "Paper", "file": "/paper.md", "noteTitle": "Paper", "line": 1, "canon": { "project": "paper" } },
+        { "id": "#e", "kind": "todo", "status": "todo", "text": "Polish", "file": "/paper.md", "noteTitle": "Paper", "line": 6, "canon": { "project": "paper", "prio": "C", "ddl": "2026-08-25" } }
+      ]
+    },
+    "expected": {
+      "title": "Open work",
+      "source": "todo",
+      "columns": [
+        { "key": "text", "label": "Task" },
+        { "key": "status", "label": "Status" },
+        { "key": "project", "label": "Project" },
+        { "key": "prio", "label": "Priority" },
+        { "key": "ddl", "label": "Deadline" }
+      ],
+      "rows": [
+        { "id": "#a", "kind": "todo", "file": "/paper.md", "index": 0, "line": 3, "cells": [{ "key": "text", "value": "Draft" }, { "key": "status", "value": "doing" }, { "key": "project", "value": "paper" }, { "key": "prio", "value": "A" }, { "key": "ddl", "value": "2026-08-27" }] },
+        { "id": "#b", "kind": "todo", "file": "/paper.md", "index": 0, "line": 4, "cells": [{ "key": "text", "value": "Revise" }, { "key": "status", "value": "todo" }, { "key": "project", "value": "paper" }, { "key": "prio", "value": "B" }, { "key": "ddl", "value": "2026-08-26" }] }
+      ],
+      "total": 3,
+      "truncated": true,
+      "diagnostics": []
+    }
+  },
+  {
+    "name": "invalid directives preserve safe defaults and diagnostics",
+    "request": {
+      "title": "Broken {#0198fbac-0780-7c99-85e6-333333333333}",
+      "source": "source: mystery\ncolumns: text, bad key\nfilter: project empty\nsort: line desc\nlimit: 0\nwat: ever\nbroken",
+      "items": [
+        { "id": "#a", "kind": "todo", "status": "todo", "text": "No project", "file": "/a.md", "noteTitle": "A", "line": 2, "canon": {} },
+        { "id": "#b", "kind": "todo", "status": "doing", "text": "Has project", "file": "/b.md", "noteTitle": "B", "line": 5, "canon": { "project": "work" } }
+      ]
+    },
+    "expected": {
+      "title": "Broken",
+      "source": "todo",
+      "columns": [{ "key": "text", "label": "Task" }, { "key": "status", "label": "Status" }, { "key": "project", "label": "Project" }, { "key": "file", "label": "File" }],
+      "rows": [{ "id": "#a", "kind": "todo", "file": "/a.md", "index": 0, "line": 2, "cells": [{ "key": "text", "value": "No project" }, { "key": "status", "value": "todo" }, { "key": "project", "value": "" }, { "key": "file", "value": "/a.md" }] }],
+      "total": 1,
+      "truncated": false,
+      "diagnostics": [
+        { "line": 1, "kind": "invalid-source", "message": "Unknown attribute-view source \"mystery\"" },
+        { "line": 2, "kind": "invalid-columns", "message": "Columns must be comma-separated attribute names" },
+        { "line": 5, "kind": "invalid-limit", "message": "Limit must be a positive integer" },
+        { "line": 6, "kind": "unknown-directive", "message": "Unknown attribute-view directive \"wat\"" },
+        { "line": 7, "kind": "invalid-directive", "message": "Expected \"key: value\", got \"broken\"" }
+      ]
+    }
+  },
+  {
+    "name": "portable block source combines prose and org-env properties without planning rows",
+    "request": {
+      "title": "Claims {#0198fbac-0780-7c99-85e6-333333333333 owner=aaron}",
+      "source": "source: block\ncolumns: text, kind, env, status, owner, phase\nsort: line asc",
+      "items": [
+        { "id": "#0198fc34-7b32-7a11-8cb4-6c40e3b33d68", "kind": "prose", "status": "draft", "text": "Claim text", "file": "/paper.md", "noteTitle": "Paper", "index": 20, "line": 3, "canon": { "status": "draft", "owner": "Aaron" }, "args": { "status": "draft", "owner": "Aaron" } },
+        { "id": "#0198fc34-7b32-7a11-8cb4-6c40e3b33d69", "kind": "org-env", "status": "", "text": "Spectral theorem", "file": "/paper.md", "noteTitle": "Paper", "index": 80, "line": 7, "canon": { "phase": "proof" }, "args": { "phase": "proof", "env": "theorem" } },
+        { "id": "#todo", "kind": "todo", "status": "todo", "text": "Not a property block", "file": "/paper.md", "noteTitle": "Paper", "index": 120, "line": 10, "canon": { "owner": "Aaron" } }
+      ]
+    },
+    "expected": {
+      "title": "Claims",
+      "source": "block",
+      "columns": [
+        { "key": "text", "label": "Task" },
+        { "key": "kind", "label": "Type" },
+        { "key": "env", "label": "Env" },
+        { "key": "status", "label": "Status" },
+        { "key": "owner", "label": "Owner" },
+        { "key": "phase", "label": "Phase" }
+      ],
+      "rows": [
+        { "id": "#0198fc34-7b32-7a11-8cb4-6c40e3b33d68", "kind": "prose", "file": "/paper.md", "index": 20, "line": 3, "cells": [{ "key": "text", "value": "Claim text" }, { "key": "kind", "value": "prose" }, { "key": "env", "value": "" }, { "key": "status", "value": "draft" }, { "key": "owner", "value": "Aaron" }, { "key": "phase", "value": "" }] },
+        { "id": "#0198fc34-7b32-7a11-8cb4-6c40e3b33d69", "kind": "org-env", "file": "/paper.md", "index": 80, "line": 7, "cells": [{ "key": "text", "value": "Spectral theorem" }, { "key": "kind", "value": "org-env" }, { "key": "env", "value": "theorem" }, { "key": "status", "value": "" }, { "key": "owner", "value": "" }, { "key": "phase", "value": "proof" }] }
+      ],
+      "total": 2,
+      "truncated": false,
+      "diagnostics": []
+    }
+  },
+  {
+    "name": "gallery presentation preserves the portable row projection",
+    "request": {
+      "title": "Claim gallery",
+      "source": "source: block\nview: gallery\ncolumns: text, kind, owner",
+      "items": [
+        { "id": "#0198fc34-7b32-7a11-8cb4-6c40e3b33d70", "kind": "prose", "text": "Portable claim", "file": "/claims.md", "index": 12, "line": 2, "canon": { "owner": "Noema" } }
+      ]
+    },
+    "expected": {
+      "title": "Claim gallery",
+      "source": "block",
+      "columns": [
+        { "key": "text", "label": "Task" },
+        { "key": "kind", "label": "Type" },
+        { "key": "owner", "label": "Owner" }
+      ],
+      "rows": [
+        { "id": "#0198fc34-7b32-7a11-8cb4-6c40e3b33d70", "kind": "prose", "file": "/claims.md", "index": 12, "line": 2, "cells": [{ "key": "text", "value": "Portable claim" }, { "key": "kind", "value": "prose" }, { "key": "owner", "value": "Noema" }] }
+      ],
+      "total": 1,
+      "truncated": false,
+      "diagnostics": [],
+      "view": "gallery"
+    }
+  },
+  {
+    "name": "kanban presentation groups by an attribute outside visible columns",
+    "request": {
+      "title": "Work board",
+      "source": "source: todo\nview: kanban\ngroup: status\ncolumns: text, prio\nsort: status asc, prio asc",
+      "items": [
+        { "id": "#a", "kind": "todo", "status": "todo", "text": "Polish", "file": "/paper.md", "line": 4, "canon": { "prio": "B" } },
+        { "id": "#b", "kind": "todo", "status": "doing", "text": "Draft", "file": "/paper.md", "line": 3, "canon": { "prio": "A" } }
+      ]
+    },
+    "expected": {
+      "title": "Work board",
+      "source": "todo",
+      "columns": [
+        { "key": "text", "label": "Task" },
+        { "key": "prio", "label": "Priority" }
+      ],
+      "rows": [
+        { "id": "#b", "kind": "todo", "file": "/paper.md", "index": 0, "line": 3, "cells": [{ "key": "text", "value": "Draft" }, { "key": "prio", "value": "A" }], "group": "doing" },
+        { "id": "#a", "kind": "todo", "file": "/paper.md", "index": 0, "line": 4, "cells": [{ "key": "text", "value": "Polish" }, { "key": "prio", "value": "B" }], "group": "todo" }
+      ],
+      "total": 2,
+      "truncated": false,
+      "diagnostics": [],
+      "view": "kanban",
+      "groupBy": "status"
+    }
+  }
+]

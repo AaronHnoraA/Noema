@@ -1,0 +1,56 @@
+[
+  {
+    "name": "prose and org-env anchors carry portable properties",
+    "source": "Claim text {#0198fc34-7b32-7a11-8cb4-6c40e3b33d68 status=draft owner=\"Aaron He\" score=7}\n\n#+begin theorem Spectral theorem {#0198fc34-7b32-7a11-8cb4-6c40e3b33d69 phase=proof tags='linear algebra'}\nBody\n#+end theorem\n",
+    "expected": {
+      "definitions": [
+        {
+          "canonicalId": "0198fc34-7b32-7a11-8cb4-6c40e3b33d68",
+          "line": 1,
+          "index": 0,
+          "kind": "block",
+          "orgEnv": false,
+          "text": "Claim text",
+          "properties": { "owner": "Aaron He", "score": "7", "status": "draft" }
+        },
+        {
+          "canonicalId": "0198fc34-7b32-7a11-8cb4-6c40e3b33d69",
+          "line": 3,
+          "index": 90,
+          "kind": "theorem",
+          "orgEnv": true,
+          "text": "Spectral theorem",
+          "properties": { "phase": "proof", "tags": "linear algebra" }
+        }
+      ],
+      "duplicateDefinitionIds": []
+    }
+  },
+  {
+    "name": "literal regions are masked and duplicate identities remain ambiguous",
+    "source": "```\nLiteral {#0198fc34-7b32-7a11-8cb4-6c40e3b33d68 status=no}\n```\n#+begin meta Hidden {#0198fc34-7b32-7a11-8cb4-6c40e3b33d69 status=no}\n#+end meta\nOne {#0198fc34-7b32-7a11-8cb4-6c40e3b33d70 status=open}\nTwo {#0198fc34-7b32-7a11-8cb4-6c40e3b33d70 status=done}\n",
+    "expected": {
+      "definitions": [
+        {
+          "canonicalId": "0198fc34-7b32-7a11-8cb4-6c40e3b33d70",
+          "line": 6,
+          "index": 147,
+          "kind": "block",
+          "orgEnv": false,
+          "text": "One",
+          "properties": { "status": "open" }
+        },
+        {
+          "canonicalId": "0198fc34-7b32-7a11-8cb4-6c40e3b33d70",
+          "line": 7,
+          "index": 203,
+          "kind": "block",
+          "orgEnv": false,
+          "text": "Two",
+          "properties": { "status": "done" }
+        }
+      ],
+      "duplicateDefinitionIds": ["0198fc34-7b32-7a11-8cb4-6c40e3b33d70"]
+    }
+  }
+]

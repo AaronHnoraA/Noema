@@ -1,0 +1,105 @@
+[
+  {
+    "name": "inline todo with canonical attrs",
+    "input": "@@todo(doing) [Build Gantt]{project: notes, sche: 2026-07-06}",
+    "wanted": "",
+    "expected": [{
+      "kind": "todo", "status": "doing", "title": "Build Gantt",
+      "attrs": { "project": "notes", "sche": "2026-07-06" },
+      "attrsRaw": "{project: notes, sche: 2026-07-06}", "shape": "inline",
+      "span": { "from": 0, "to": 61, "line": 1, "column": 1 },
+      "raw": "@@todo(doing) [Build Gantt]{project: notes, sche: 2026-07-06}",
+      "diagnostics": []
+    }]
+  },
+  {
+    "name": "bare itodo with utf16 prefix and quoted comma",
+    "input": "前缀😀\n  @@itodo(blocked) 修复中文 🧪 {project: \"Noema, desktop\", due: tomorrow}\n",
+    "wanted": "todo",
+    "expected": [{
+      "kind": "itodo", "status": "blocked", "title": "修复中文 🧪",
+      "attrs": { "project": "Noema, desktop", "due": "tomorrow" },
+      "attrsRaw": "{project: \"Noema, desktop\", due: tomorrow}", "shape": "inline",
+      "span": { "from": 7, "to": 74, "line": 2, "column": 3 },
+      "raw": "@@itodo(blocked) 修复中文 🧪 {project: \"Noema, desktop\", due: tomorrow}",
+      "diagnostics": []
+    }]
+  },
+  {
+    "name": "multiline bracket project",
+    "input": "@@project(active) [Notes App] {\n  area: tooling\n  goal: \"Org-level project planning\"\n}\n",
+    "wanted": "project",
+    "expected": [{
+      "kind": "project", "status": "active", "title": "Notes App",
+      "attrs": { "area": "tooling", "goal": "Org-level project planning" },
+      "attrsRaw": "{\n  area: tooling\n  goal: \"Org-level project planning\"\n}", "shape": "block",
+      "span": { "from": 0, "to": 86, "line": 1, "column": 1 },
+      "raw": "@@project(active) [Notes App] {\n  area: tooling\n  goal: \"Org-level project planning\"\n}",
+      "diagnostics": []
+    }]
+  },
+  {
+    "name": "plain title planning forms",
+    "input": "@@project(active) ISO 202603 tensor paper {\n  area: UNSW\n}\n@@milestone Internal proof freeze {project: iso-202603, date: 2026-07-17}\n@@clock(running) Focus block {task: \"#abc123\", from: 2026-07-07 09:30}\n",
+    "wanted": "",
+    "expected": [
+      {
+        "kind": "project", "status": "active", "title": "ISO 202603 tensor paper",
+        "attrs": { "area": "UNSW" }, "attrsRaw": "{\n  area: UNSW\n}", "shape": "block",
+        "span": { "from": 0, "to": 58, "line": 1, "column": 1 },
+        "raw": "@@project(active) ISO 202603 tensor paper {\n  area: UNSW\n}", "diagnostics": []
+      },
+      {
+        "kind": "milestone", "status": "", "title": "Internal proof freeze",
+        "attrs": { "project": "iso-202603", "date": "2026-07-17" },
+        "attrsRaw": "{project: iso-202603, date: 2026-07-17}", "shape": "inline",
+        "span": { "from": 59, "to": 132, "line": 4, "column": 1 },
+        "raw": "@@milestone Internal proof freeze {project: iso-202603, date: 2026-07-17}", "diagnostics": []
+      },
+      {
+        "kind": "clock", "status": "running", "title": "Focus block",
+        "attrs": { "task": "#abc123", "from": "2026-07-07 09:30" },
+        "attrsRaw": "{task: \"#abc123\", from: 2026-07-07 09:30}", "shape": "inline",
+        "span": { "from": 133, "to": 203, "line": 5, "column": 1 },
+        "raw": "@@clock(running) Focus block {task: \"#abc123\", from: 2026-07-07 09:30}", "diagnostics": []
+      }
+    ]
+  },
+  {
+    "name": "escaped brackets and inline math stay in title",
+    "input": "x @@todo [Check \\] and \\(x[y]\\)] {effort: 1:30, after: \"other task\"} z",
+    "wanted": "todo",
+    "expected": [{
+      "kind": "todo", "status": "", "title": "Check ] and \\(x[y]\\)",
+      "attrs": { "effort": "1:30", "after": "other task" },
+      "attrsRaw": "{effort: 1:30, after: \"other task\"}", "shape": "inline",
+      "span": { "from": 2, "to": 68, "line": 1, "column": 3 },
+      "raw": "@@todo [Check \\] and \\(x[y]\\)] {effort: 1:30, after: \"other task\"}",
+      "diagnostics": []
+    }]
+  },
+  {
+    "name": "diagnostics preserve nodes and source order",
+    "input": "@@todo [Broken attrs] {due: not-a-date, repeat: every-day, effort: nope, duee: 2026-07-07}",
+    "wanted": "",
+    "expected": [{
+      "kind": "todo", "status": "", "title": "Broken attrs",
+      "attrs": { "due": "not-a-date", "repeat": "every-day", "effort": "nope", "duee": "2026-07-07" },
+      "attrsRaw": "{due: not-a-date, repeat: every-day, effort: nope, duee: 2026-07-07}", "shape": "inline",
+      "span": { "from": 0, "to": 90, "line": 1, "column": 1 },
+      "raw": "@@todo [Broken attrs] {due: not-a-date, repeat: every-day, effort: nope, duee: 2026-07-07}",
+      "diagnostics": [
+        { "kind": "invalid-date", "key": "due", "message": "Unparseable date in \"due\": not-a-date" },
+        { "kind": "invalid-repeater", "key": "repeat", "message": "Unparseable repeater in \"repeat\": every-day" },
+        { "kind": "invalid-duration", "key": "effort", "message": "Unparseable duration in \"effort\": nope" },
+        { "kind": "unknown-key", "key": "duee", "message": "Unrecognized planning key \"duee\"" }
+      ]
+    }]
+  },
+  {
+    "name": "unterminated block does not emit partial inline",
+    "input": "@@todo(doing) [Broken block] {\n  project: iso-202603\n",
+    "wanted": "",
+    "expected": []
+  }
+]

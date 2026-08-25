@@ -15,8 +15,10 @@ export default defineConfig(({ command }) => ({
   lint: { options: { typeAware: true, typeCheck: true } },
   test: {
     // Tests live in tests/ and reference src/ directly; pick the project
-    // root, not the website root, so vitest discovers them.
+    // root, not the website root, so vitest discovers them. Keep the archived
+    // reference/siyuan checkout out of Noema's canonical test collection.
     root: ".",
+    include: ["tests/**/*.test.ts"],
     environment: "happy-dom",
   },
 }));

@@ -71,6 +71,8 @@ import {
 } from "../../../markdown-link-events.ts";
 import { refreshViewportDecorations } from "../../../viewport-refresh.ts";
 import { preserveEditorViewport } from "../../../viewport-stability.ts";
+import { AttributeViewWidget } from "./attribute-view.ts";
+import { EmbedQueryWidget } from "./embed-query.ts";
 
 // ---------------------------------------------------------------------------
 // TOC fold state (session-level, not editor history)
@@ -3977,6 +3979,26 @@ function addOrgEnvBlockExtraDecos(
     occupied?.push([block.from, block.to]);
     return;
   }
+  if (block.kind === "av" && !selectionTouchesRange(state, block.from, block.to)) {
+    decos.push(
+      Decoration.replace({
+        widget: new AttributeViewWidget(block.title, block.body, block.from, block.to),
+        block: true,
+      }).range(block.from, block.to),
+    );
+    occupied?.push([block.from, block.to]);
+    return;
+  }
+  if (block.kind === "embed" && !selectionTouchesRange(state, block.from, block.to)) {
+    decos.push(
+      Decoration.replace({
+        widget: new EmbedQueryWidget(block.title, block.body, block.from, block.to),
+        block: true,
+      }).range(block.from, block.to),
+    );
+    occupied?.push([block.from, block.to]);
+    return;
+  }
   if (block.kind === "comment" && !selectionTouchesRange(state, block.from, block.to)) {
     decos.push(
       Decoration.replace({
@@ -4155,7 +4177,7 @@ function activeBlockExtraKey(state: EditorState): string {
     if (sel.from >= range.from && sel.from <= range.to) parts.push(`hr:${range.from}:${range.to}`);
   }
   for (const block of blocks) {
-    if ((block.kind === "comment" || block.kind === "fold") && selectionTouchesRange(state, block.from, block.to)) {
+    if ((block.kind === "comment" || block.kind === "fold" || block.kind === "av" || block.kind === "embed") && selectionTouchesRange(state, block.from, block.to)) {
       parts.push(`${block.kind}:${block.from}:${block.to}`);
       continue;
     }
@@ -4229,7 +4251,7 @@ function canMapBlockExtraDecos(state: EditorState, changes: ChangeSet): boolean 
   if (ranges.hrs.some((range) => changesTouchRange(changes, range.from, range.to))) return false;
   if (ranges.frontMatter && changesTouchRange(changes, ranges.frontMatter.from, ranges.frontMatter.to)) return false;
   if (blocks.some((block) => (
-    (block.kind === "meta" || block.kind === "comment" || block.kind === "fold" || block.kind === "html" || block.kind === "tikz")
+    (block.kind === "meta" || block.kind === "comment" || block.kind === "fold" || block.kind === "html" || block.kind === "tikz" || block.kind === "av" || block.kind === "embed")
     && changesTouchRange(changes, block.from, block.to)
   ))) {
     return false;
@@ -4248,7 +4270,7 @@ function canPatchBlockExtraDecosNearChanges(state: EditorState, changes: ChangeS
   // Whole-block widgets own their body source. Rebuild them only when touched;
   // ordinary prose and line-owned commands can stay on the bounded path.
   return !blocks.some((block) => (
-    (block.kind === "meta" || block.kind === "comment" || block.kind === "fold" || block.kind === "html" || block.kind === "tikz")
+    (block.kind === "meta" || block.kind === "comment" || block.kind === "fold" || block.kind === "html" || block.kind === "tikz" || block.kind === "av" || block.kind === "embed")
     && changesTouchRange(changes, block.from, block.to)
   ));
 }
@@ -4291,6 +4313,8 @@ function patchBlockExtraDecosForOrgEnvTitleChange(
   const fullBlockWidgetActive = block.kind === "meta"
     || block.kind === "html"
     || block.kind === "tikz"
+    || (block.kind === "av" && !selectionTouchesRange(state, block.from, block.to))
+    || (block.kind === "embed" && !selectionTouchesRange(state, block.from, block.to))
     || ((block.kind === "comment" || block.kind === "fold") && !selectionTouchesRange(state, block.from, block.to));
   let next = fullBlockWidgetActive
     ? mapped.update({ filterFrom: block.from, filterTo: block.to, filter: () => false })

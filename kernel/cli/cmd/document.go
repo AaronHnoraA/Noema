@@ -25,6 +25,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/88250/lute/ast"
+	"github.com/aaronhe/noema/kernel/conf"
 	"github.com/aaronhe/noema/kernel/model"
 	"github.com/aaronhe/noema/kernel/treenode"
 
@@ -45,6 +46,22 @@ var documentListCmd = &cobra.Command{
 		hpath, _ := cmd.Flags().GetString("hpath")
 		if notebook == "" {
 			return fmt.Errorf("--notebook is required")
+		}
+		// markdown box 的文档树就是真实的文件系统层级，没有 .sy 的 <parentID>/<childID> 嵌套结构，
+		// ListDocTree 会静默返回空列表。改走已有的 ListMarkdownDocs，与 CM6 文档浏览器同一个数据源。
+		if conf.BoxKindMarkdown == model.GetBoxKind(notebook) {
+			docs, err := model.ListMarkdownDocs(notebook)
+			if err != nil {
+				return err
+			}
+			switch outputFormat {
+			case "json":
+				data, _ := json.MarshalIndent(docs, "", "  ")
+				fmt.Println(string(data))
+			default:
+				printMarkdownDocTable(docs)
+			}
+			return nil
 		}
 		files, _, err := model.ListDocTree(notebook, resolvePath(notebook, docPath, hpath), 0, false, false, 128)
 		if err != nil {
@@ -382,6 +399,17 @@ func documentSearchDisplayFields(doc map[string]string) (typ, id, name string) {
 		return "NOTEBOOK", doc["box"], path.Base(hPath)
 	}
 	return "DOCUMENT", strings.TrimSuffix(path.Base(doc["path"]), ".sy"), path.Base(hPath)
+}
+
+// printMarkdownDocTable 打印 markdown box 的文档列表。这里只有 PATH/TITLE 两列，
+// 因为 markdown box 的文档身份是文件路径，SIZE/COUNT/MTIME 是 .sy File 结构才有的字段。
+func printMarkdownDocTable(docs []model.MarkdownDocSummary) {
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "PATH\tTITLE")
+	for _, d := range docs {
+		fmt.Fprintf(w, "%s\t%s\n", d.Path, d.Title)
+	}
+	w.Flush()
 }
 
 func printDocumentTable(files []*model.File) {

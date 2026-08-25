@@ -7,14 +7,21 @@ NPM_VERSION := 11.17.0
 NVM_SH ?= $(HOME)/.nvm/nvm.sh
 APP_NAME := Noema
 APP_DEST := /Applications/$(APP_NAME).app
-APP_BUNDLE := $(firstword $(wildcard src-tauri/target/*/release/bundle/macos/$(APP_NAME).app src-tauri/target/release/bundle/macos/$(APP_NAME).app))
-ICON_SVG := public/Noema.svg
-ICON_ICNS := src-tauri/icons/icon.icns
+APP_BUNDLE := build/electron/$(APP_NAME).app
+KERNEL_DIR := kernel
+KERNEL_BIN_NAME := noema-kernel
+KERNEL_GOOS ?= $(shell go env GOOS 2>/dev/null)
+KERNEL_GOARCH ?= $(shell go env GOARCH 2>/dev/null)
+KERNEL_BUILD_DIR := build/kernel/$(KERNEL_GOOS)-$(KERNEL_GOARCH)
+KERNEL_BIN := $(KERNEL_BUILD_DIR)/$(KERNEL_BIN_NAME)
+KERNEL_BIN_LINK ?= $(HOME)/.local/bin/$(KERNEL_BIN_NAME)
 
 .DEFAULT_GOAL := build
 
-.PHONY: all bootstrap build build-web check-env clean dev help icon init-data \
-	install install-app jupyter-bootstrap nvm-install run server-build \
+.PHONY: all bootstrap build build-web check-env check-go clean clean-all clean-cache dev \
+	disk-audit help \
+	init-data install install-app jupyter-bootstrap kernel-build kernel-install \
+	nvm-install prune-desktop-stage prune-legacy-garbage run server-build \
 	server-config-init server-deploy server-start setup test
 
 all: build
@@ -26,6 +33,9 @@ check-env:
 	@command -v npm >/dev/null || (echo "npm $(NPM_VERSION) is required" && exit 1)
 	@test "$$(npm --version)" = "$(NPM_VERSION)" || \
 		(echo "Expected npm $(NPM_VERSION), got $$(npm --version); run 'npm install -g npm@$(NPM_VERSION)'" && exit 1)
+
+check-go:
+	@command -v go >/dev/null || (echo "Go is required to build the kernel; see https://go.dev/dl/" && exit 1)
 
 nvm-install:
 	@test -s "$(NVM_SH)" || \
@@ -40,10 +50,11 @@ init-data:
 
 setup: bootstrap init-data
 
-build: check-env icon
+build: check-env check-go prune-legacy-garbage
 	npm run build:desktop
 
 install: install-app
+	@$(MAKE) --no-print-directory prune-desktop-stage
 
 build-web: check-env
 	npm run build:aaronnote
@@ -62,17 +73,23 @@ server-start: check-env
 server-deploy: server-build
 	node scripts/deploy-server.mjs
 
+kernel-build: check-go
+	@mkdir -p "$(KERNEL_BUILD_DIR)"
+	cd "$(KERNEL_DIR)" && CGO_ENABLED=1 GOOS=$(KERNEL_GOOS) GOARCH=$(KERNEL_GOARCH) \
+		go build -tags fts5 -ldflags "-s -w" -o "$(CURDIR)/$(KERNEL_BIN)" .
+	ln -sfn "$(CURDIR)/app" "$(KERNEL_BUILD_DIR)/app"
+
+kernel-install: kernel-build
+	mkdir -p "$(dir $(KERNEL_BIN_LINK))"
+	ln -sfn "$(CURDIR)/$(KERNEL_BIN)" "$(KERNEL_BIN_LINK)"
+	@echo "Linked $(KERNEL_BIN_LINK) -> $(KERNEL_BIN) (binary and app/ assets stay linked, nothing copied)"
+
 dev: check-env init-data
 	npm run start:vite
 
-icon: $(ICON_ICNS)
-
-$(ICON_ICNS): $(ICON_SVG)
-	node_modules/.bin/tauri icon "$(ICON_SVG)" --output src-tauri/icons
-
 install-app:
-	@test -n "$(APP_BUNDLE)" || (echo "Noema.app was not generated under release" && exit 1)
-	node scripts/install-local-app.mjs "$(CURDIR)/$(APP_BUNDLE)" "$(APP_DEST)"
+	@test -d "$(APP_BUNDLE)" || (echo "Noema.app was not generated under build/electron" && exit 1)
+	node scripts/install-local-app.mjs "$(CURDIR)/$(APP_BUNDLE)" "$(APP_DEST)" --link
 
 run: build
 	open "$(CURDIR)/$(APP_BUNDLE)"
@@ -80,20 +97,51 @@ run: build
 test: check-env
 	npm test
 
-clean:
-	rm -rf build dist release src-tauri/target src-tauri/binaries src-tauri/gen/runtime
+prune-legacy-garbage:
+	rm -rf "$(CURDIR)/release"
+
+prune-desktop-stage:
+	rm -rf "$(CURDIR)/build/electron"
+
+clean: prune-legacy-garbage prune-desktop-stage
+	@echo "Preserved linked Electron runtime, Go kernel, renderer, and node_modules required by /Applications/Noema.app."
+
+clean-all: clean
+	rm -rf "$(CURDIR)/build" "$(CURDIR)/dist"
+	@echo "Removed linked-app runtime outputs; run 'make build && make install' before launching Noema.app."
+
+clean-cache:
+	@if pgrep -f '/Applications/Noema.app/Contents/MacOS/[E]lectron' >/dev/null; then \
+		echo "Quit Noema.app before clearing its disposable caches"; exit 1; \
+	fi
+	rm -rf "$(HOME)/Library/Caches/com.noema.desktop" \
+		"$(HOME)/Library/WebKit/com.noema.desktop" \
+		"$(HOME)/Library/Application Support/noema"
+	@echo "Removed Electron/WebKit cache and retired lowercase profile; preserved com.noema.desktop state and notes."
+
+disk-audit:
+	@for candidate in release build/electron build/kernel dist node_modules/electron \
+		"$(HOME)/Library/Application Support/com.noema.desktop" \
+		"$(HOME)/Library/Application Support/noema" "$(HOME)/Library/Caches/com.noema.desktop" \
+		"$(HOME)/Library/WebKit/com.noema.desktop"; do \
+		if [ -e "$$candidate" ]; then du -sh "$$candidate"; fi; \
+	done
+	@if [ -d node_modules ] && [ -d "$(APP_DEST)" ]; then \
+		echo "Unique physical accounting (installed Framework hard links counted once):"; \
+		du -sh node_modules "$(APP_DEST)"; \
+	fi
 
 jupyter-bootstrap:
 	npm run jupyter:bootstrap
 
 help:
 	@echo "Noema build targets"
-	@echo "  make | make build  Build Noema.app under release/"
+	@echo "  make | make build  Build the linked SiYuan-derived Electron + shared Node/Go Noema.app"
 	@echo "  make setup         Install dependencies and create $(NOEMA_ROOT)"
 	@echo "  make bootstrap     Reproducibly install dependencies with npm ci"
 	@echo "  make nvm-install   Install/use pinned Node and npm through nvm"
 	@echo "  make init-data     Create the Noema notes directory"
-	@echo "  make install       Install the local App shell with linked runtime dependencies"
+	@echo "  make install       Install a linked Electron App shell, then discard its staging bundle"
 	@echo "  make run           Build and launch the local app bundle"
 	@echo "  make build-web     Build only the web assets"
 	@echo "  make dev           Run the Vite development server"
@@ -101,5 +149,10 @@ help:
 	@echo "  make server-build  Build the rsync-ready Server mode release"
 	@echo "  make server-start  Run Server mode from server-config/runtime.json"
 	@echo "  make server-deploy Build, rsync, and restart the configured user service"
+	@echo "  make kernel-build  Build the Go kernel binary under build/kernel/ (linked to app/)"
+	@echo "  make kernel-install  Link the kernel binary onto PATH ($(KERNEL_BIN_LINK))"
 	@echo "  make test          Run the test suite"
-	@echo "  make clean         Remove generated build, dist, and release output"
+	@echo "  make disk-audit    Report disk use for Noema's generated outputs"
+	@echo "  make clean         Remove obsolete Tauri/Rust and disposable Electron staging output"
+	@echo "  make clean-cache   Remove disposable desktop caches; preserve notes and canonical state"
+	@echo "  make clean-all     Remove all generated output (invalidates a linked local App)"

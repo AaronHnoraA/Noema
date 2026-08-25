@@ -89,6 +89,125 @@ func TestLoadMarkdownDocAPIRejectsMissingFields(t *testing.T) {
 	}
 }
 
+func TestListMarkdownRelationshipsAPIRejectsMissingNotebook(t *testing.T) {
+	setupMarkdownDocAPITest(t)
+	engine := gin.New()
+	engine.POST("/api/noema/markdown/listRelationships", listMarkdownRelationships)
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/noema/markdown/listRelationships", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, req)
+	var resp markdownDocResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); nil != err {
+		t.Fatalf("unmarshal response failed: %v", err)
+	}
+	if -1 != resp.Code {
+		t.Fatalf("expected missing notebook rejection, got %s", recorder.Body.String())
+	}
+}
+
+func TestListMarkdownPlanningAPI(t *testing.T) {
+	boxID := setupMarkdownDocAPITest(t)
+	abs := filepath.Join(util.DataDir, boxID, "agenda.md")
+	if err := os.WriteFile(abs, []byte("@@todo(doing) [API planning] {due: tomorrow}\n"), 0644); nil != err {
+		t.Fatal(err)
+	}
+
+	engine := gin.New()
+	engine.POST("/api/noema/markdown/listPlanning", listMarkdownPlanning)
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/noema/markdown/listPlanning", strings.NewReader(`{"notebook":"`+boxID+`","path":"/agenda.md"}`))
+	req.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, req)
+
+	var resp markdownDocResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); nil != err {
+		t.Fatal(err)
+	}
+	if resp.Code != 0 {
+		t.Fatalf("planning API failed: %s", recorder.Body.String())
+	}
+	var data struct {
+		Documents []model.MarkdownPlanningDocument `json:"documents"`
+	}
+	if err := json.Unmarshal(resp.Data, &data); nil != err {
+		t.Fatal(err)
+	}
+	if len(data.Documents) != 1 || len(data.Documents[0].Nodes) != 1 || data.Documents[0].Nodes[0].Title != "API planning" {
+		t.Fatalf("unexpected planning API response: %+v", data.Documents)
+	}
+}
+
+func TestListMarkdownPropertyBlocksAPI(t *testing.T) {
+	boxID := setupMarkdownDocAPITest(t)
+	id := "0198fc34-7b32-7a11-8cb4-6c40e3b33d68"
+	abs := filepath.Join(util.DataDir, boxID, "properties.md")
+	if err := os.WriteFile(abs, []byte("Claim {#"+id+" status=draft}\n"), 0644); nil != err {
+		t.Fatal(err)
+	}
+
+	engine := gin.New()
+	engine.POST("/api/noema/markdown/listPropertyBlocks", listMarkdownPropertyBlocks)
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/noema/markdown/listPropertyBlocks", strings.NewReader(`{"notebook":"`+boxID+`","path":"/properties.md"}`))
+	req.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, req)
+	var resp markdownDocResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); nil != err {
+		t.Fatal(err)
+	}
+	if resp.Code != 0 {
+		t.Fatalf("property block API failed: %s", recorder.Body.String())
+	}
+	var data struct {
+		Documents []model.MarkdownPropertyDocument `json:"documents"`
+	}
+	if err := json.Unmarshal(resp.Data, &data); nil != err {
+		t.Fatal(err)
+	}
+	if len(data.Documents) != 1 || len(data.Documents[0].Blocks) != 1 || data.Documents[0].Blocks[0].CanonicalID != id {
+		t.Fatalf("unexpected property block response: %+v", data.Documents)
+	}
+}
+
+func TestMutateMarkdownPropertyBlockAPIRejectsMissingFields(t *testing.T) {
+	setupMarkdownDocAPITest(t)
+	engine := gin.New()
+	engine.POST("/api/noema/markdown/mutatePropertyBlock", mutateMarkdownPropertyBlock)
+	for _, body := range []string{`{}`, `{"notebook":"box","path":"/a.md"}`, `{"notebook":"box","path":"/a.md","id":"uuid"}`} {
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/noema/markdown/mutatePropertyBlock", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		engine.ServeHTTP(recorder, req)
+		var resp markdownDocResponse
+		if err := json.Unmarshal(recorder.Body.Bytes(), &resp); nil != err {
+			t.Fatal(err)
+		}
+		if resp.Code != -1 {
+			t.Fatalf("expected missing-field rejection for %s: %s", body, recorder.Body.String())
+		}
+	}
+}
+
+func TestMutateMarkdownPlanningAPIRejectsMissingFields(t *testing.T) {
+	setupMarkdownDocAPITest(t)
+	engine := gin.New()
+	engine.POST("/api/noema/markdown/mutatePlanning", mutateMarkdownPlanning)
+	for _, body := range []string{`{}`, `{"notebook":"box"}`, `{"notebook":"box","path":"/a.md"}`} {
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/noema/markdown/mutatePlanning", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		engine.ServeHTTP(recorder, req)
+		var resp markdownDocResponse
+		if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		if resp.Code != -1 {
+			t.Fatalf("expected missing-field rejection for %s: %s", body, recorder.Body.String())
+		}
+	}
+}
+
 func TestLoadMarkdownDocAPIReturnsEmptyDocForMissingPath(t *testing.T) {
 	boxID := setupMarkdownDocAPITest(t)
 
@@ -161,6 +280,103 @@ func TestListMarkdownDocsAPI(t *testing.T) {
 	}
 	if "/alpha.md" != data.Docs[0].Path || "/notes/beta.md" != data.Docs[1].Path {
 		t.Fatalf("unexpected doc order/paths: %+v", data.Docs)
+	}
+}
+
+func TestStoreMarkdownAssetAPIs(t *testing.T) {
+	boxID := setupMarkdownDocAPITest(t)
+	engine := gin.New()
+	engine.POST("/api/noema/markdown/storeAsset", storeMarkdownAsset)
+	engine.POST("/api/noema/markdown/storeAssetFromPath", storeMarkdownAssetFromPath)
+
+	request := func(endpoint, body string) (resp markdownDocResponse) {
+		t.Helper()
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, endpoint, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		engine.ServeHTTP(recorder, req)
+		if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		if resp.Code != 0 {
+			t.Fatalf("asset request failed: %s", recorder.Body.String())
+		}
+		return
+	}
+
+	encoded := request("/api/noema/markdown/storeAsset", `{"notebook":"`+boxID+`","path":"/topic.md","name":"plot.png","type":"image/png","data":"UE5H"}`)
+	var first model.MarkdownAsset
+	if err := json.Unmarshal(encoded.Data, &first); err != nil {
+		t.Fatal(err)
+	}
+	if first.MarkdownPath != "./images/topic/plot.png" || first.Source != "kernel-assets" {
+		t.Fatalf("unexpected encoded asset result: %+v", first)
+	}
+
+	source := filepath.Join(t.TempDir(), "paper.pdf")
+	if err := os.WriteFile(source, []byte("PDF"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	imported := request("/api/noema/markdown/storeAssetFromPath", `{"notebook":"`+boxID+`","path":"/topic.md","sourcePath":"`+source+`"}`)
+	var second model.MarkdownAsset
+	if err := json.Unmarshal(imported.Data, &second); err != nil {
+		t.Fatal(err)
+	}
+	if second.MarkdownPath != "./attachments/topic/paper.pdf" || second.Type != "application/pdf" {
+		t.Fatalf("unexpected imported asset result: %+v", second)
+	}
+}
+
+func TestStoreMarkdownAssetAPIRejectsInvalidBase64(t *testing.T) {
+	boxID := setupMarkdownDocAPITest(t)
+	engine := gin.New()
+	engine.POST("/api/noema/markdown/storeAsset", storeMarkdownAsset)
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/noema/markdown/storeAsset", strings.NewReader(
+		`{"notebook":"`+boxID+`","path":"/topic.md","data":"not base64"}`))
+	req.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, req)
+	var resp markdownDocResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Code != -1 || !strings.Contains(resp.Msg, "base64") {
+		t.Fatalf("expected base64 rejection, got %s", recorder.Body.String())
+	}
+}
+
+func TestListUnusedMarkdownAssetsAPI(t *testing.T) {
+	boxID := setupMarkdownDocAPITest(t)
+	assetPath := filepath.Join(util.DataDir, boxID, "attachments", "topic", "orphan.pdf")
+	if err := os.MkdirAll(filepath.Dir(assetPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(assetPath, []byte("orphan"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	engine := gin.New()
+	engine.POST("/api/noema/markdown/listUnusedAssets", listUnusedMarkdownAssets)
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/noema/markdown/listUnusedAssets", strings.NewReader(
+		`{"notebook":"`+boxID+`","includePublic":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, req)
+	var resp markdownDocResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Code != 0 {
+		t.Fatalf("list unused assets failed: %s", recorder.Body.String())
+	}
+	var data struct {
+		Assets []model.MarkdownUnusedAsset `json:"assets"`
+		Source string                      `json:"source"`
+	}
+	if err := json.Unmarshal(resp.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data.Source != "kernel-assets" || len(data.Assets) != 1 || data.Assets[0].Path != "attachments/topic/orphan.pdf" {
+		t.Fatalf("unexpected unused asset response: %+v", data)
 	}
 }
 

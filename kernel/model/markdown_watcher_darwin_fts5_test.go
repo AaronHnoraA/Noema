@@ -25,8 +25,8 @@ import (
 
 // TestWatchMarkdownBoxIndexesExternallyWrittenFile 是 §1.5 的完整端到端验证：
 // 外部编辑器（模拟 Emacs）往一个已挂载的 markdown box 里直接写一个全新的 .md
-// 文件，watcher 应该在轮询间隔内探测到、通过 UpsertIndexes 重新索引、这个 ID
-// 应该稳定持久化回磁盘。需要 -tags fts5，见 markdown_doc_save_fts5_test.go
+// 文件，watcher 应该在轮询间隔内探测到并通过 UpsertIndexes 重新索引，同时保持
+// Markdown 源文件字节不变。需要 -tags fts5，见 markdown_doc_save_fts5_test.go
 // 顶部关于这个 tag 为什么必需的说明；不带这个 tag 时的轻量版本
 // （只测 watcher 生命周期，不触达 sql 层）在 markdown_watcher_darwin_test.go。
 //
@@ -102,8 +102,11 @@ func TestWatchMarkdownBoxIndexesExternallyWrittenFile(t *testing.T) {
 	if nil != err {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), bt.RootID) {
-		t.Fatalf("watcher indexed the file but did not persist the assigned ID back to disk:\n%s", raw)
+	if string(raw) != source {
+		t.Fatalf("watcher must not rewrite source-authoritative Markdown:\nwant: %q\n got: %q", source, raw)
+	}
+	if strings.Contains(string(raw), `type="doc"`) {
+		t.Fatalf("watcher must not persist a synthetic document IAL:\n%s", raw)
 	}
 
 	sql.FlushQueue()

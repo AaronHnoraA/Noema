@@ -373,7 +373,13 @@ A \leq_p B.
 
 #+begin warning Promise preservation
 For promise problems, it is not enough to map yes-instances to yes-instances.
-One must also map no-instances to no-instances. Inputs outside the promise
+One must also map no-instances to no-instances. Inputs outside the promise this this this this is ha vary goood this her 
+
+
+we can do something ber \(aaaaa^{sadas}\)  sadasd sad as dasssssssssssssssssssssssss ssdas dsa  asd as d,
+This is a vary interesting thing b
+
+
 are irrelevant, but the reduction must preserve the promised domain.
 #+end warning
 
@@ -588,6 +594,7 @@ The conceptual chain of this section is:
 \]
 
 For isomorphism problems, the recurring pattern is:
+We can do this later an Here's something easy to use 
 
 \[
 \text{isomorphism}
@@ -671,7 +678,7 @@ Let \(H\) be a finite-dimensional Hilbert space. A dggggensity operator on \(H\)
 is a linear operator
 
 \[
-\rho : H \to H
+\rho : H \to Hsssss
 \]
 
 such that

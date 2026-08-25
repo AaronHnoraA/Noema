@@ -1,4 +1,4 @@
-import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
+import { describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +9,9 @@ import * as serverIndex from "../server/lib/index.mjs";
 const {
   applyRepeater,
   buildAgenda,
+  buildClockModel,
+  buildGanttModel,
+  buildProjectModel,
   completeTodo,
   configure,
   createTodo,
@@ -20,6 +23,8 @@ const {
   parseLeadTime,
   parseRepeater,
   patchTodo,
+  lintClocks,
+  resolveClockRefs,
   resolveTodoDeps,
   syncRoamDb,
   todoUrgency,
@@ -218,6 +223,55 @@ describe("dependency resolution (text refs)", () => {
 });
 
 describe("dependency resolution (stable ids)", () => {
+  test("matches the shared Go dependency and urgency evaluation fixtures", async () => {
+    const fixtures = JSON.parse(await readFile(join(process.cwd(), "shared", "agenda-evaluation-fixtures.json"), "utf8"));
+    for (const fixture of fixtures) {
+      const todos = structuredClone(fixture.request.todos);
+      const { lints } = resolveTodoDeps(todos);
+      const actual = {
+        todos: todos.map((todo: any) => ({
+          id: todo.id,
+          deps: todo.deps,
+          effectiveStatus: todo.effectiveStatus,
+          blockedBy: todo.blockedBy,
+          urgency: todoUrgency(todo, fixture.request.todayMs),
+        })),
+        lints,
+      };
+      if (fixture.request.includeGantt) {
+        (actual as any).gantt = buildGanttModel(todos, fixture.request.projects || [], fixture.request.milestones || []);
+      }
+      if (fixture.request.includePlanning) {
+        const clocks = structuredClone(fixture.request.clocks || []);
+        const { lints: clockRefLints } = resolveClockRefs(clocks, todos);
+        (actual as any).clocks = clocks.map((clock: any) => ({ todoId: clock.todoId || "" }));
+        (actual as any).clocktable = buildClockModel(clocks, todos, fixture.request.projects || []);
+        (actual as any).projectModel = buildProjectModel(fixture.request.projects || [], todos, clocks);
+        (actual as any).clockLints = [...clockRefLints, ...lintClocks(clocks)];
+      }
+      if (fixture.request.includeView) {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date(fixture.request.todayMs));
+        try {
+          await withVault(async (root) => {
+            await writeFile(join(root, "agenda.md"), fixture.source, "utf8");
+            await syncRoamDb(null, { mode: "full" });
+            const agenda = await buildAgenda({ from: fixture.request.from, days: fixture.request.days });
+            (actual as any).view = {
+              range: agenda.range,
+              days: agenda.days,
+              logByDay: agenda.logByDay,
+              stats: agenda.stats,
+            };
+          });
+        } finally {
+          vi.useRealTimers();
+        }
+      }
+      expect(actual, fixture.name).toEqual(fixture.expected);
+    }
+  });
+
   test("after: #id resolves directly against the id index", () => {
     const todos = extractTodos(
       ["@@todo(doing) [write proof of lemma] {id: abc123}", '@@todo [write up final draft] {after: "#abc123"}'].join("\n"),

@@ -17,6 +17,9 @@ import { durationFromEnv } from "./jupyter-cell.mjs";
 import { moveWindowsPathToRecycleBin } from "./windows-shell.mjs";
 import { maskMetaSummaryContent } from "../../shared/meta-summary.mjs";
 import { BLOCK_ID_SOURCE, parseOrgEnvIdentityTitle } from "../../shared/block-identity.mjs";
+import { blockPropertyItemsForDocument, patchBlockPropertySource } from "../../shared/block-properties.mjs";
+import { evaluateAttributeView } from "../../shared/attribute-view.mjs";
+import { parseEmbedQuerySpec } from "../../shared/embed-query.mjs";
 import { SessionManager } from "../Features/Session/manager.mjs";
 import {
   bibliographyCompletions,
@@ -33,6 +36,15 @@ import {
   scanPlanningNodes,
   serializeInlineAttrs,
 } from "../../shared/planning-dsl.mjs";
+import {
+  CANON_PATCH_KEYS,
+  CREATE_TODO_KEYS,
+  LEGACY_PATCH_TO_CANON,
+  escapePlanningTitle,
+  nextTodoSourceForPatch,
+  normalizeCanonPatchValue,
+  planningNodeArgs,
+} from "../../shared/planning-semantic.mjs";
 import {
   DATE_KEYS,
   TODO_KEY_ALIASES,
@@ -163,6 +175,10 @@ let notesSnapshotDirty = true;
 let notesSnapshotFullDirty = true;
 let dirtyNoteFiles = new Set();
 let externalFileProvider = null;
+let markdownFileProvider = null;
+let planningProvider = null;
+let katexMacrosProvider = null;
+let assetProvider = null;
 let snippetCache = { key: "", scannedAt: 0, snippets: [] };
 let templateCache = { key: "", scannedAt: 0, templates: [] };
 let copilotClient = null;
@@ -179,7 +195,10 @@ const noteCodeFilePending = new Map();
 let noteCodeFileCacheBytes = 0;
 const pathSuggestionDirListingCache = new Map();
 const contentRootCache = new Map();
-const AGENDA_CACHE_SCHEMA = 1;
+// Schema 2 invalidates payloads/files produced before desktop planning scans
+// moved to the Go parser. Reusing schema-1 payloads would silently bypass the
+// kernel on the first agenda request after upgrading.
+const AGENDA_CACHE_SCHEMA = 3;
 const AGENDA_PAYLOAD_CACHE_LIMIT = 32;
 const ASSET_CLEANUP_SCHEMA = 2;
 const ROAM_FULL_SYNC_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -261,6 +280,36 @@ async function atomicWriteFile(file, data, options) {
     await rm(tmp, { force: true }).catch(() => {});
     throw err;
   }
+}
+
+function markdownFileProviderOwns(file) {
+  return markdownFileProvider?.owns?.(String(file || "")) === true;
+}
+
+async function readMarkdownFile(file) {
+  if (!markdownFileProviderOwns(file)) return await readFile(file, "utf8");
+  const opened = await markdownFileProvider.read(String(file));
+  return String(opened?.content ?? opened?.markdown ?? "");
+}
+
+async function writeMarkdownFile(file, content) {
+  if (!markdownFileProviderOwns(file)) {
+    await atomicWriteFile(file, content, "utf8");
+    return;
+  }
+  const wrote = await markdownFileProvider.write({ file: String(file), content: String(content) });
+  if (wrote?.ok === false) {
+    const err = new Error(String(wrote?.message || "Markdown persistence provider rejected the save"));
+    err.statusCode = Number(wrote?.statusCode) || 500;
+    throw err;
+  }
+  const saved = String(wrote?.content ?? wrote?.markdown ?? content);
+  if (saved !== content) {
+    const err = new Error("Markdown persistence provider changed the source bytes");
+    err.statusCode = 502;
+    throw err;
+  }
+  noteSelfWrite(file);
 }
 
 function canonicalExistingPath(path) {
@@ -574,6 +623,9 @@ export function resolveMediaFile(file, base = "") {
 }
 
 export async function storeAsset(body) {
+  if (assetProvider?.owns?.(body?.file) === true && typeof assetProvider?.store === "function") {
+    return assetProvider.store(body || {});
+  }
   const current = body.file ? safeOpenFile(body.file) : "";
   const originalName = sanitizeAssetName(body.name, imageAssetP("", body.type) ? "image.png" : "attachment");
   const isImage = imageAssetP(originalName, body.type);
@@ -605,6 +657,9 @@ export async function storeAsset(body) {
 }
 
 export async function storeAssetFromPath(body) {
+  if (assetProvider?.owns?.(body?.file) === true && typeof assetProvider?.storeFromPath === "function") {
+    return assetProvider.storeFromPath(body || {});
+  }
   const current = body.file ? safeOpenFile(body.file) : "";
   const source = resolveUserPath(body.path || body.source || "");
   if (!source) {
@@ -1178,6 +1233,9 @@ async function assetRefsByFileIncremental() {
 }
 
 export async function scanUnusedAssets() {
+  if (typeof assetProvider?.scan === "function") {
+    return assetProvider.scan();
+  }
   const refsByFile = await assetRefsByFileIncremental();
   const referenced = new Set();
   for (const refs of Object.values(refsByFile)) {
@@ -3235,11 +3293,11 @@ function planningArgsWithNoteDefaults(attrs, note) {
   return normalizeArgDates(args);
 }
 
-export function extractTodos(content, note, updatedAt) {
+export function planningItemsFromNodes(inputNodes, note, updatedAt, content = "") {
+  const nodes = Array.isArray(inputNodes) ? inputNodes : [];
   const todos = [];
-  const planningSource = maskMetaSummaryContent(content);
   const lineStarts = [0];
-  for (let i = 0; i < content.length; i++) {
+  for (let i = 0; i < String(content || "").length; i++) {
     if (content[i] === "\n") lineStarts.push(i + 1);
   }
   const lineFor = (index) => {
@@ -3252,15 +3310,17 @@ export function extractTodos(content, note, updatedAt) {
     }
     return Math.max(0, hi) + 1;
   };
-  for (const command of scanPlanningNodes(planningSource, { kind: "todo" })) {
-    const source = content.slice(command.span.from, command.span.to);
+  for (const command of nodes.filter((node) => node.kind === "todo" || node.kind === "itodo")) {
+    const source = content ? content.slice(command.span.from, command.span.to) : String(command.raw || "");
     const text = String(command.title || "").trim();
     const status = normalizeTodoStatus(command.status);
     const args = planningArgsWithNoteDefaults(command.attrs, note);
-    const line = lineFor(command.span.from);
+    const line = content ? lineFor(command.span.from) : Number(command.span?.line || 1);
     const lineStart = lineStarts[line - 1] || 0;
-    const lineEnd = content.indexOf("\n", lineStart);
-    const rawLine = content.slice(lineStart, lineEnd < 0 ? content.length : lineEnd).trim();
+    const lineEnd = content ? content.indexOf("\n", lineStart) : -1;
+    const rawLine = content
+      ? content.slice(lineStart, lineEnd < 0 ? content.length : lineEnd).trim()
+      : source.split(/\r?\n/, 1)[0].trim();
     todos.push({
       id: args.id ? `#${args.id}` : `${note.file}:${command.span.from}`,
       command: command.kind,
@@ -3291,12 +3351,6 @@ export function extractTodos(content, note, updatedAt) {
       updatedAt,
     });
   }
-  return todos;
-}
-
-export function extractPlanningItems(content, note, updatedAt) {
-  const nodes = scanPlanningNodes(maskMetaSummaryContent(content));
-  const todos = extractTodos(content, note, updatedAt);
   const todoByIndex = new Map(todos.map((todo) => [todo.index, todo]));
   const projects = [];
   const milestones = [];
@@ -3334,6 +3388,16 @@ export function extractPlanningItems(content, note, updatedAt) {
     else if (node.kind === "clock") clocks.push(base);
   }
   return { todos: todos.map((todo) => todoByIndex.get(todo.index) || todo), projects, milestones, clocks, nodes };
+}
+
+export function extractTodos(content, note, updatedAt) {
+  const nodes = scanPlanningNodes(maskMetaSummaryContent(content));
+  return planningItemsFromNodes(nodes, note, updatedAt, content).todos;
+}
+
+export function extractPlanningItems(content, note, updatedAt) {
+  const nodes = scanPlanningNodes(maskMetaSummaryContent(content));
+  return planningItemsFromNodes(nodes, note, updatedAt, content);
 }
 
 function todoStatusSource(status, commandName = "todo") {
@@ -3421,6 +3485,12 @@ function patchTodoSource(source, body = {}) {
 function locateTodoInContent(content, body, file) {
   const source = String(body.source || "");
   const wantedText = String(body.text || "");
+  const selectorId = String(body.selectorId || "");
+  if (selectorId) {
+    const todos = extractTodos(content, { file, path: displayPathForFile(file), key: "", id: "", title: "" }, 0);
+    const selected = todos.find((todo) => todo.id === selectorId);
+    return selected ? { from: selected.index, to: selected.index + selected.source.length } : null;
+  }
   const hasIndex = body.index !== undefined && body.index !== null && String(body.index) !== "";
   const rawIndex = hasIndex ? Number(body.index) : NaN;
   let from = -1;
@@ -3461,7 +3531,7 @@ function locateTodoInContent(content, body, file) {
 
   if (from < 0 || to <= from) {
     const todos = extractTodos(content, { file, path: displayPathForFile(file), key: "", id: "", title: "" }, 0);
-    const wantedId = String(body.id || "");
+    const wantedId = String(body.selectorId || body.id || "");
     const match = todos.find((todo) =>
       (wantedId && todo.id === wantedId)
       || (source && todo.source === source)
@@ -3475,10 +3545,123 @@ function locateTodoInContent(content, body, file) {
   return from >= 0 && to > from ? { from, to } : null;
 }
 
+function planningMutationProviderOwns(file) {
+  return planningProvider?.owns?.(file) === true && typeof planningProvider?.mutate === "function";
+}
+
+function locateProviderPlanningNode(nodes, body = {}, kind = "todo") {
+  const candidates = (Array.isArray(nodes) ? nodes : []).filter((node) =>
+    kind === "todo" ? node.kind === "todo" || node.kind === "itodo" : node.kind === kind);
+  const selectorId = String(body.selectorId || "");
+  if (selectorId) {
+    const stableId = selectorId.startsWith("#") ? selectorId.slice(1) : "";
+    return candidates.find((node) => stableId && node.attrs?.id === stableId)
+      || candidates.find((node) => selectorId.endsWith(`:${node.span?.from}`))
+      || null;
+  }
+  const index = Number(body.index);
+  if (Number.isInteger(index) && index >= 0) {
+    const atIndex = candidates.find((node) => node.span?.from === index
+      && (body.text ? node.title === body.text : (!body.source || node.raw === body.source)));
+    if (atIndex) return atIndex;
+  }
+  const id = String(body.selectorId || body.id || "");
+  const stableId = id.startsWith("#") ? id.slice(1) : "";
+  return candidates.find((node) => stableId && node.attrs?.id === stableId)
+    || candidates.find((node) => id && id.endsWith(`:${node.span?.from}`))
+    || candidates.find((node) => body.source && node.raw === body.source)
+    || candidates.find((node) => body.text && node.title === body.text)
+    || candidates.find((node) => body.open && node.attrs?.from && !node.attrs?.to)
+    || null;
+}
+
+function planningSemanticValue(value) {
+  return value === null || value === undefined || value === false ? null : String(value);
+}
+
+function todoSemanticMutation(body = {}, nowMs = Date.now()) {
+  const attrs = {};
+  for (const key of CANON_PATCH_KEYS) {
+    if (bodyHasOwn(body, key)) attrs[key] = planningSemanticValue(body[key]);
+  }
+  for (const [legacy, canon] of Object.entries(LEGACY_PATCH_TO_CANON)) {
+    if (bodyHasOwn(body, legacy) && !bodyHasOwn(attrs, canon)) attrs[canon] = planningSemanticValue(body[legacy]);
+  }
+  const todo = {
+    op: body.op === "complete" ? "complete" : "patch",
+    attrs,
+    nowMs,
+  };
+  if (bodyHasOwn(body, "status")) todo.status = String(body.status ?? "");
+  if (bodyHasOwn(body, "afterAdd")) todo.afterAdd = String(body.afterAdd ?? "");
+  return { type: "patch-todo", todo };
+}
+
+async function mutatePlanningNodeThroughProvider(file, kind, body, transformOrMutation) {
+  let lastConflict = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const snapshot = await planningProvider.read(file);
+    const node = locateProviderPlanningNode(snapshot?.nodes, body, kind);
+    if (!node) {
+      const err = new Error(kind === "todo" ? "Todo source was not found" : "Planning source was not found");
+      err.statusCode = 404;
+      throw err;
+    }
+    let mutation = transformOrMutation;
+    if (typeof transformOrMutation === "function") {
+      const nextSource = String(await transformOrMutation(node, snapshot));
+      if (nextSource === node.raw) {
+        return {
+          changed: false, from: node.span.from, to: node.span.to,
+          source: node.raw, nextSource, version: snapshot.version || "",
+          mtimeMs: Number(snapshot.mtimeMs || 0), node,
+        };
+      }
+      mutation = { type: "replace", source: nextSource };
+    }
+    try {
+      const result = await planningProvider.mutate({
+        file,
+        expectedVersion: snapshot.version || "",
+        selector: {
+          kind,
+          index: node.span.from,
+          source: node.raw,
+          id: String(body.selectorId || body.id || ""),
+          title: node.title || "",
+          open: body.open === true,
+        },
+        mutation,
+      });
+      if (result?.changed) {
+        noteSelfWrite(file);
+        markNotesDirty(file);
+      }
+      return result;
+    } catch (error) {
+      if (Number(error?.statusCode) !== 409 || attempt > 0) throw error;
+      lastConflict = error;
+    }
+  }
+  throw lastConflict || new Error("Planning mutation conflict");
+}
+
 async function updateTodoStatusInFile(file, body) {
   const hasMetadataPatch = [...TODO_PATCH_ARG_KEYS].some((key) => bodyHasOwn(body, key));
   const shouldPatchStatus = bodyHasOwn(body, "status") || !hasMetadataPatch;
   const status = shouldPatchStatus ? normalizeTodoStatus(body.status || "done") : "";
+  if (planningMutationProviderOwns(file)) {
+    const patchBody = shouldPatchStatus ? { ...body, status } : body;
+    const result = await mutatePlanningNodeThroughProvider(file, "todo", body,
+      todoSemanticMutation(patchBody));
+    return {
+      type: "todo-updated", ok: true, file,
+      status: status || normalizeTodoStatus(body.status || ""),
+      changed: result.changed === true, from: result.from, to: result.to,
+      source: result.source, nextSource: result.nextSource,
+      mtimeMs: Number(result.mtimeMs || 0), version: result.version || "",
+    };
+  }
   const content = await readFile(file, "utf8");
   const loc = locateTodoInContent(content, body, file);
   if (!loc) {
@@ -3545,7 +3728,25 @@ async function readAndCachePlanning(cached, note) {
   return planning;
 }
 
+async function planningItemsFromProvider(note, suppliedNodes = null) {
+  if (!planningProvider?.owns?.(note?.file)) return null;
+  try {
+    const payload = suppliedNodes === null ? await planningProvider.read(note.file) : { nodes: suppliedNodes };
+    let updatedAt = Number(noteCache.get(note.file)?.mtimeMs || 0);
+    if (!updatedAt) {
+      try { updatedAt = (await stat(note.file)).mtimeMs; } catch {}
+    }
+    return planningItemsFromNodes(payload?.nodes || [], note, updatedAt);
+  } catch {
+    // Compatibility fallback: a transient kernel failure must not make the
+    // existing Emacs/Node agenda disappear during the staged migration.
+    return null;
+  }
+}
+
 async function todosForNote(note) {
+  const provided = await planningItemsFromProvider(note);
+  if (provided) return provided.todos.map((todo) => ({ ...todo }));
   const cached = note.file ? noteCache.get(note.file) : null;
   if (cached) {
     if (Array.isArray(cached.todos)) return cached.todos.map((todo) => ({ ...todo }));
@@ -3573,12 +3774,32 @@ async function todosForNote(note) {
   }
 }
 
+async function planningGroupsForNotes(scanned) {
+  const supplied = new Map();
+  const owned = planningProvider?.readMany
+    ? scanned.filter((note) => planningProvider.owns?.(note.file))
+    : [];
+  if (owned.length) {
+    try {
+      const documents = await planningProvider.readMany(owned.map((note) => note.file));
+      for (const document of documents || []) supplied.set(String(document.file || ""), document.nodes || []);
+    } catch {
+      // Per-file provider attempts below retain a narrow recovery path.
+    }
+  }
+  return mapLimit(scanned, scanConcurrency, async (note) => {
+    if (supplied.has(note.file)) {
+      const group = await planningItemsFromProvider(note, supplied.get(note.file));
+      if (group) return group;
+    }
+    return planningItemsForNote(note);
+  });
+}
+
 async function scanTodos() {
   const scanned = await scanNotes();
-  const todoGroups = await mapLimit(scanned, scanConcurrency, async (note) => {
-    return todosForNote(note);
-  });
-  const todos = todoGroups.flat();
+  const groups = await planningGroupsForNotes(scanned);
+  const todos = groups.flatMap((group) => group.todos || []);
   return todos.sort((a, b) => {
     const statusRank = { blocked: 0, doing: 1, todo: 2, done: 3, cancelled: 4 };
     return (statusRank[a.status] ?? 9) - (statusRank[b.status] ?? 9)
@@ -3599,6 +3820,8 @@ function clonePlanningGroup(group) {
 
 async function planningItemsForNote(note) {
   try {
+    const provided = await planningItemsFromProvider(note);
+    if (provided) return clonePlanningGroup(provided);
     const cached = note.file ? noteCache.get(note.file) : null;
     if (cached) {
       if (cached.planning) return clonePlanningGroup(cached.planning);
@@ -3624,13 +3847,120 @@ async function planningItemsForNote(note) {
 
 async function scanPlanningItems() {
   const scanned = await scanNotes();
-  const groups = await mapLimit(scanned, scanConcurrency, async (note) => planningItemsForNote(note));
+  const groups = await planningGroupsForNotes(scanned);
   return {
     todos: groups.flatMap((group) => group.todos || []),
     projects: groups.flatMap((group) => group.projects || []),
     milestones: groups.flatMap((group) => group.milestones || []),
     clocks: groups.flatMap((group) => group.clocks || []),
     nodes: groups.flatMap((group) => group.nodes || []),
+  };
+}
+
+// Attribute views are rendered by multiple host windows through one Node
+// sidecar. Never derive their query scope from the process-global
+// `noteScanRoot`: opening a standalone file in one window changes that legacy
+// cursor for every other caller. The renderer supplies its current file, so
+// build a bounded planning projection against that file's root using only
+// local variables. The desktop provider still performs one bulk Go scan for
+// files it owns; Emacs/standalone roots retain the shared JS parser.
+async function scanPlanningItemsForFile(scopeFile = "") {
+  const requested = String(scopeFile || "").trim();
+  const root = requested ? scanRootForOpenFile(safeOpenFile(requested)) : noteScanRoot;
+  const files = await walkFiles(root, (file) => {
+    const dot = file.lastIndexOf(".");
+    return dot >= 0 && noteExts.has(file.slice(dot).toLowerCase());
+  });
+  const documents = (await mapLimit(files, scanConcurrency, async (file) => {
+    try {
+      const [info, content] = await Promise.all([stat(file), readFile(file, "utf8")]);
+      if (!info.isFile()) return null;
+      const path = displayPathForScanRoot(file, root);
+      const groupKey = groupKeyFor(file, root);
+      const id = idFromContent(file, root, content);
+      return {
+        file,
+        content,
+        mtimeMs: info.mtimeMs,
+        note: {
+          key: id,
+          id,
+          title: titleFromContent(file, content),
+          file,
+          path,
+          date: dateFromContent(content),
+          project: projectFromContent(content),
+          tags: tagsFromContent(content),
+          inlineTags: inlineTagsFromContent(content),
+          groupKey,
+          groupLabel: groupLabelFor(groupKey),
+        },
+      };
+    } catch {
+      return null;
+    }
+  })).filter(Boolean);
+
+  const supplied = new Map();
+  const owned = planningProvider?.readMany
+    ? documents.filter((document) => planningProvider.owns?.(document.file))
+    : [];
+  if (owned.length) {
+    try {
+      const provided = await planningProvider.readMany(owned.map((document) => document.file));
+      for (const document of provided || []) supplied.set(String(document.file || ""), document.nodes || []);
+    } catch {
+      // Per-document JS parsing below is the same compatibility boundary used
+      // by the existing agenda scanner during transient kernel outages.
+    }
+  }
+  const suppliedBlocks = new Map();
+  const propertyOwned = planningProvider?.readPropertyBlocks
+    ? documents.filter((document) => planningProvider.owns?.(document.file))
+    : [];
+  if (propertyOwned.length) {
+    try {
+      const provided = await planningProvider.readPropertyBlocks(propertyOwned.map((document) => document.file));
+      for (const document of provided || []) suppliedBlocks.set(String(document.file || ""), document);
+    } catch {
+      // A transient kernel failure retains the portable JS property scanner.
+    }
+  }
+  const groups = documents.map((document) => supplied.has(document.file)
+    ? planningItemsFromNodes(supplied.get(document.file), document.note, document.mtimeMs)
+    : extractPlanningItems(document.content, document.note, document.mtimeMs));
+  const blocks = documents.flatMap((document) => {
+    const provided = suppliedBlocks.get(document.file);
+    if (!provided) {
+      return blockPropertyItemsForDocument(document.content, { file: document.file, noteTitle: document.note.title });
+    }
+    const duplicates = new Set((provided.duplicateDefinitionIds || []).map((id) => String(id).toLowerCase()));
+    return (provided.blocks || []).filter((definition) => !duplicates.has(String(definition?.canonicalId || "").toLowerCase())).map((definition) => {
+      const properties = Object.fromEntries(Object.entries(definition?.properties && typeof definition.properties === "object" ? definition.properties : {})
+        .map(([key, value]) => [String(key).toLowerCase(), String(value ?? "")]));
+      const orgEnv = definition?.orgEnv === true;
+      return {
+        id: `#${String(definition?.canonicalId || "")}`,
+        kind: orgEnv ? "org-env" : "prose",
+        status: String(properties.status || ""),
+        text: String(definition?.text || ""),
+        title: String(definition?.text || ""),
+        file: document.file,
+        noteTitle: document.note.title,
+        index: Number(definition?.index || 0),
+        line: Number(definition?.line || 0),
+        canon: properties,
+        args: orgEnv ? { ...properties, env: String(definition?.kind || "") } : properties,
+      };
+    });
+  });
+  return {
+    todos: groups.flatMap((group) => group.todos || []),
+    projects: groups.flatMap((group) => group.projects || []),
+    milestones: groups.flatMap((group) => group.milestones || []),
+    clocks: groups.flatMap((group) => group.clocks || []),
+    nodes: groups.flatMap((group) => group.nodes || []),
+    blocks,
   };
 }
 
@@ -3807,6 +4137,48 @@ export function todoUrgency(todo, todayMs = Date.now()) {
   const doingBonus = todo.status === "doing" ? 50 : 0;
   const blockedPenalty = todo.effectiveStatus === "blocked" ? 2000 : 0;
   return prioWeight * 1000 + dateScore + doingBonus - blockedPenalty;
+}
+
+async function evaluateTodoAgenda(todos, todayMs, { projects = [], milestones = [], clocks = [], includePlanning = false, includeGantt = false, from = "", days = 7 } = {}) {
+  if (typeof planningProvider?.evaluateAgenda === "function") {
+    try {
+      const evaluated = await planningProvider.evaluateAgenda(todos, todayMs, { projects, milestones, clocks, includePlanning, includeGantt, from, days });
+      const items = Array.isArray(evaluated?.todos) ? evaluated.todos : [];
+      if (items.length === todos.length) {
+        for (let index = 0; index < todos.length; index++) {
+          const source = items[index] || {};
+          const todo = todos[index];
+          todo.id = String(source.id || todo.id || "");
+          todo.deps = Array.isArray(source.deps) ? source.deps.map(String) : [];
+          todo.effectiveStatus = String(source.effectiveStatus || todo.status || "");
+          todo.blockedBy = Array.isArray(source.blockedBy) ? source.blockedBy.map(String) : [];
+          todo.urgency = Number(source.urgency || 0);
+        }
+        if (includePlanning) {
+          const clockItems = Array.isArray(evaluated?.clocks) ? evaluated.clocks : [];
+          if (clockItems.length !== clocks.length) throw new Error("Kernel agenda clock projection length mismatch");
+          for (let index = 0; index < clocks.length; index++) {
+            clocks[index].todoId = String(clockItems[index]?.todoId || "");
+          }
+        }
+        return {
+          lints: Array.isArray(evaluated?.lints) ? evaluated.lints : [],
+          source: "kernel-agenda",
+          gantt: evaluated?.gantt || null,
+          clocktable: evaluated?.clocktable || null,
+          projectModel: Array.isArray(evaluated?.projectModel) ? evaluated.projectModel : null,
+          clockLints: Array.isArray(evaluated?.clockLints) ? evaluated.clockLints : [],
+          view: evaluated?.view || null,
+        };
+      }
+    } catch {
+      // A transient kernel evaluator failure must not erase the established
+      // agenda in Emacs/Server-compatible sessions during staged migration.
+    }
+  }
+  const { lints } = resolveTodoDeps(todos);
+  for (const todo of todos) todo.urgency = todoUrgency(todo, todayMs);
+  return { lints, source: "node-agenda" };
 }
 
 function sortByUrgency(todos) {
@@ -4048,7 +4420,7 @@ export function buildProjectModel(projects, todos, clocks) {
   return [...byKey.values()].sort((a, b) => b.total - a.total || a.title.localeCompare(b.title));
 }
 
-function buildGanttModel(todos, projects, milestones) {
+export function buildGanttModel(todos, projects, milestones) {
   const lints = [];
   const tasks = [];
   const backlog = [];
@@ -4231,7 +4603,7 @@ export function buildClockModel(clocks, todos, projects) {
 // the underlying data problem so a human notices and fixes the source. Call
 // after resolveClockRefs so `clock.todoId` is populated (used to annotate
 // each lint with the task it belongs to, when resolved).
-function lintClocks(clocks) {
+export function lintClocks(clocks) {
   const lints = [];
   const openClocks = [];
   const spans = [];
@@ -4315,21 +4687,39 @@ export async function buildAgenda(body = {}) {
   const projects = includePlanning ? planning.projects : [];
   const milestones = includePlanning ? planning.milestones : [];
   const clocks = includePlanning ? planning.clocks : [];
-  const { lints } = resolveTodoDeps(todos);
-  const dayMs = 86_400_000;
-  for (const todo of todos) todo.urgency = todoUrgency(todo, todayMs);
+  const evaluation = await evaluateTodoAgenda(todos, todayMs, {
+    projects,
+    milestones,
+    clocks,
+    includePlanning,
+    includeGantt: body.includeGantt === true,
+    from: String(body.from || ""),
+    days: Number(body.days || 7),
+  });
+  const { lints } = evaluation;
+  let dayBuckets;
+  let logByDay;
+  let stats;
+  let agendaRange;
+  if (evaluation.view) {
+    agendaRange = evaluation.view.range;
+    dayBuckets = (evaluation.view.days || []).map((day) => ({ date: day.date, entries: day.entries || [] }));
+    logByDay = evaluation.view.logByDay || {};
+    stats = evaluation.view.stats || { open: 0, doing: 0, done: 0, cancelled: 0, blocked: 0, overdue: 0 };
+  } else {
+    const dayMs = 86_400_000;
 
-  const fromParsed = body.from ? parseDateValue(body.from) : null;
-  const fromMs = fromParsed ? midnightMs(new Date(fromParsed.time)) : todayMid;
-  const days = Math.max(1, Math.min(90, Number(body.days) || 7));
+    const fromParsed = body.from ? parseDateValue(body.from) : null;
+    const fromMs = fromParsed ? midnightMs(new Date(fromParsed.time)) : todayMid;
+    const days = Math.max(1, Math.min(90, Number(body.days) || 7));
 
-  const dayBuckets = [];
-  for (let i = 0; i < days; i++) {
-    const ms = fromMs + i * dayMs;
-    dayBuckets.push({ date: formatDateValue(ms, false), ms, entries: [] });
-  }
-  const bucketByDate = new Map(dayBuckets.map((b) => [b.date, b]));
-  const logByDay = {};
+    dayBuckets = [];
+    for (let i = 0; i < days; i++) {
+      const ms = fromMs + i * dayMs;
+      dayBuckets.push({ date: formatDateValue(ms, false), ms, entries: [] });
+    }
+    const bucketByDate = new Map(dayBuckets.map((b) => [b.date, b]));
+    logByDay = {};
 
   const addLogDate = (dateStr) => {
     const parsed = parseDateValue(dateStr);
@@ -4414,7 +4804,7 @@ export async function buildAgenda(body = {}) {
     });
   }
 
-  const stats = { open: 0, doing: 0, done: 0, cancelled: 0, blocked: 0, overdue: 0 };
+    stats = { open: 0, doing: 0, done: 0, cancelled: 0, blocked: 0, overdue: 0 };
   for (const todo of todos) {
     if (todo.effectiveStatus === "blocked") stats.blocked++;
     else if (todo.status === "todo") stats.open++;
@@ -4423,11 +4813,14 @@ export async function buildAgenda(body = {}) {
     else if (todo.status === "cancelled") stats.cancelled++;
     const ddl = todo.canon?.ddl ? parseDateValue(todo.canon.ddl) : null;
     if (ddl && ddl.time < todayMid && !CLOSED_STATUSES.has(todo.status)) stats.overdue++;
+    }
+    agendaRange = { from: dayBuckets[0]?.date || todayKey, to: dayBuckets[dayBuckets.length - 1]?.date || todayKey, today: todayKey };
   }
 
   const payload = {
     type: "agenda",
-    range: { from: dayBuckets[0]?.date || todayKey, to: dayBuckets[dayBuckets.length - 1]?.date || todayKey, today: todayKey },
+    evaluationSource: evaluation.source,
+    range: agendaRange,
     days: dayBuckets.map(({ date, entries }) => ({ date, entries })),
     todos: sortByUrgency(todos),
     lints,
@@ -4435,90 +4828,214 @@ export async function buildAgenda(body = {}) {
     stats,
   };
   if (includePlanning) {
-    const { lints: clockLints } = resolveClockRefs(clocks, todos);
-    const clockQualityLints = lintClocks(clocks);
     payload.projects = projects;
     payload.milestones = milestones;
     payload.clocks = clocks;
-    payload.clocktable = buildClockModel(clocks, todos, projects);
-    payload.projectModel = buildProjectModel(projects, todos, clocks);
-    payload.lints = [...lints, ...clockLints, ...clockQualityLints];
+    if (evaluation.source === "kernel-agenda" && evaluation.clocktable && evaluation.projectModel) {
+      payload.clocktable = evaluation.clocktable;
+      payload.projectModel = evaluation.projectModel;
+      payload.lints = [...lints, ...evaluation.clockLints];
+    } else {
+      const { lints: clockLints } = resolveClockRefs(clocks, todos);
+      const clockQualityLints = lintClocks(clocks);
+      payload.clocktable = buildClockModel(clocks, todos, projects);
+      payload.projectModel = buildProjectModel(projects, todos, clocks);
+      payload.lints = [...lints, ...clockLints, ...clockQualityLints];
+    }
   }
   if (body.includeGantt === true) {
-    payload.gantt = buildGanttModel(todos, projects, milestones);
+    payload.gantt = evaluation.source === "kernel-agenda" && evaluation.gantt
+      ? evaluation.gantt
+      : buildGanttModel(todos, projects, milestones);
     payload.lints = [...payload.lints, ...(payload.gantt.lints || [])];
   }
   await rememberAgendaPayload(body, todayKey, payload);
   return payload;
 }
 
-// --- canonical-key patching (alias-preserving) + repeater-aware completion --
-
-function normalizeCanonPatchValue(key, value) {
-  if (value === null || value === undefined || value === false) return "";
-  const raw = String(value).trim();
-  if (!raw) return "";
-  if (key === "prio") {
-    const p = raw.toUpperCase();
-    return /^[A-Z]$/.test(p) ? p : "";
-  }
-  if (key === "ddl" || key === "sche" || key === "end" || key === "date" || key === "done") return normalizeDateValue(raw) || raw;
-  if (key === "progress") return String(Math.max(0, Math.min(100, Number(raw) || 0)));
-  if (key === "repeat") return parseRepeater(raw) ? raw : "";
-  return raw;
+function portableEmbedQueryID(file, blockId, statement) {
+  const digest = createHash("sha256").update(`${file}\n${blockId}\n${statement}`).digest("hex");
+  const suffix = BigInt(`0x${digest.slice(0, 14)}`).toString(36).padStart(7, "0").slice(-7);
+  return `20000101000000-${suffix}`;
 }
 
-// Writes canonical-key values into a `@@todo` source line, reusing whichever
-// alias the line already has (e.g. keeps `due:` as `due:`) and only using
-// the canonical spelling when the arg is brand new.
-function patchTodoSourceCanonical(source, canonPatch = {}) {
-  const text = String(source || "");
-  const node = scanPlanningNodes(text, { kind: "todo" })[0];
-  if (!node || node.span.from !== 0) return text;
-  const args = { ...(node.attrs || {}) };
-  for (const [canonKey, rawValue] of Object.entries(canonPatch)) {
-    const value = normalizeCanonPatchValue(canonKey, rawValue);
-    if (value) {
-      const argKey = todoArgKeyForCanonical(canonKey, node.attrs || {});
-      args[argKey] = value;
-    } else {
-      for (const alias of TODO_KEY_ALIASES[canonKey] || [canonKey]) delete args[alias];
+export async function buildEmbedQuery(body = {}) {
+  const file = String(body.file || "");
+  const spec = parseEmbedQuerySpec(body.title, body.source);
+  const base = {
+    type: "embed-query",
+    title: spec.title,
+    blockId: spec.blockId,
+    diagnostics: spec.diagnostics,
+  };
+  if (!spec.statement || spec.diagnostics.length > 0) {
+    return { ...base, evaluationSource: "portable-embed-parser", items: [], total: 0 };
+  }
+  if (!file || planningProvider?.owns?.(file) !== true || typeof planningProvider?.searchEmbed !== "function") {
+    throw Object.assign(new Error("Raw-SQL embed queries require the Noema desktop kernel"), { statusCode: 501 });
+  }
+  const embedBlockID = portableEmbedQueryID(file, spec.blockId, spec.statement);
+  const result = await planningProvider.searchEmbed({
+    statement: spec.statement,
+    embedBlockID,
+    headingMode: spec.headingMode,
+    breadcrumb: spec.breadcrumb,
+    excludeIDs: [embedBlockID],
+  });
+  const items = (Array.isArray(result?.blocks) ? result.blocks : [])
+    .filter((block) => !spec.blockId || String(block?.canonicalId || "") !== spec.blockId)
+    .slice(0, 100).map((block) => {
+      const markdown = String(block?.markdown || "");
+      return {
+        id: String(block?.canonicalId || block?.id || ""),
+        projectionId: String(block?.id || ""),
+        rootId: String(block?.rootId || ""),
+        file: String(block?.file || ""),
+        path: String(block?.path || ""),
+        hPath: String(block?.hPath || ""),
+        markdown: markdown.slice(0, 200_000),
+        markdownTruncated: markdown.length > 200_000,
+        kind: String(block?.type || ""),
+        subType: String(block?.subType || ""),
+        breadcrumb: Array.isArray(block?.breadcrumb) ? block.breadcrumb : [],
+      };
+    });
+  return {
+    ...base,
+    evaluationSource: "kernel-search-embed",
+    items,
+    total: items.length,
+  };
+}
+
+export async function buildAttributeView(body = {}) {
+  const planning = await scanPlanningItemsForFile(body.file);
+  const items = [
+    ...planning.todos.map((item) => ({ ...item, kind: "todo" })),
+    ...planning.projects.map((item) => ({ ...item, kind: "project" })),
+    ...planning.milestones.map((item) => ({ ...item, kind: "milestone" })),
+    ...planning.clocks.map((item) => ({ ...item, kind: "clock" })),
+    ...(planning.blocks || []),
+  ];
+  const request = {
+    title: String(body.title || ""),
+    source: String(body.source || ""),
+    items,
+  };
+  if (typeof planningProvider?.evaluateAttributeView === "function") {
+    try {
+      const evaluated = await planningProvider.evaluateAttributeView(request);
+      if (evaluated && Array.isArray(evaluated.columns) && Array.isArray(evaluated.rows)) {
+        return { type: "attribute-view", evaluationSource: "kernel-attribute-view", ...evaluated };
+      }
+    } catch {
+      // The desktop evaluator is an optimization boundary. Emacs/Server and
+      // transient kernel outages retain the shared portable JS evaluator.
     }
   }
-  return node.shape === "block"
-    ? patchPlanningNodeRaw(node, { attrs: args })
-    : replaceTodoArgsInSource(text, node.attrsRaw || "", serializeInlineAttrs(args));
+  return { type: "attribute-view", evaluationSource: "node-attribute-view", ...evaluateAttributeView(request) };
 }
 
-function appendDepRef(existingAfter, ref) {
-  const parts = String(existingAfter || "")
-    .split("&")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  if (!parts.includes(ref)) parts.push(ref);
-  return parts.join(" & ");
-}
+const ATTRIBUTE_VIEW_TODO_EDIT_KEYS = new Set([
+  "status", "ddl", "sche", "end", "date", "prio", "repeat", "warn",
+  "after", "blocks", "project", "area", "phase", "goal", "effort",
+  "progress", "owner", "tags", "context",
+]);
 
-const CANON_PATCH_KEYS = ["id", "ddl", "sche", "end", "date", "prio", "repeat", "warn", "after", "blocks", "project", "area", "phase", "goal", "effort", "progress", "owner", "tags", "context", "done", "log"];
-const LEGACY_PATCH_TO_CANON = { priority: "prio", due: "ddl", deadline: "ddl", scheduled: "sche", start: "sche", finish: "end", pct: "progress", proj: "project", rep: "repeat", every: "repeat", lead: "warn", dep: "after", ctx: "context" };
-const CREATE_TODO_KEYS = ["ddl", "sche", "end", "prio", "repeat", "warn", "after", "blocks", "project", "area", "phase", "goal", "effort", "progress", "owner", "tags", "context"];
+const ATTRIBUTE_VIEW_BLOCK_READ_ONLY_KEYS = new Set([
+  "id", "text", "title", "kind", "type", "env", "file", "line", "note", "notetitle", "note-title",
+]);
 
-function planningNodeArgs(source) {
-  const node = scanPlanningNodes(source, { kind: "todo" })[0];
-  if (node && node.span.from === 0) return node.attrs || {};
-  return scanInlineCommands(source, "todo")[0]?.args || {};
-}
-
-function argValueForCanonical(args, canonKey) {
-  for (const alias of TODO_KEY_ALIASES[canonKey] || [canonKey]) {
-    if (args && Object.prototype.hasOwnProperty.call(args, alias) && args[alias]) return args[alias];
+async function patchAttributeBlockProperty(file, { id, key, value }) {
+  const providerOwns = planningProvider?.owns?.(file) === true
+    && typeof planningProvider?.readPropertyBlock === "function"
+    && typeof planningProvider?.mutatePropertyBlock === "function";
+  if (providerOwns) {
+    let lastConflict = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const snapshot = await planningProvider.readPropertyBlock(file);
+      try {
+        const result = await planningProvider.mutatePropertyBlock({
+          file, id, key, value, expectedVersion: String(snapshot?.version || ""),
+        });
+        if (result?.changed) {
+          noteSelfWrite(file);
+          markNotesDirty(file);
+        }
+        return { ...result, file };
+      } catch (error) {
+        if (Number(error?.statusCode) !== 409 || attempt > 0) throw error;
+        lastConflict = error;
+      }
+    }
+    throw lastConflict || new Error("Block property mutation conflict");
   }
-  return "";
+  return enqueueSaveWrite(file, async () => {
+    const content = await readFile(file, "utf8");
+    const patch = patchBlockPropertySource(content, { id, key, value });
+    const changed = patch.markdown !== content;
+    if (changed) {
+      await atomicWriteFile(file, patch.markdown, "utf8");
+      markNotesDirty(file);
+    }
+    let mtimeMs = 0;
+    try { mtimeMs = (await stat(file)).mtimeMs; } catch {}
+    return { ...patch, changed, file, mtimeMs, version: contentDigest(patch.markdown) };
+  });
 }
 
-function escapePlanningTitle(text) {
-  return String(text || "").replace(/([\]\\])/g, "\\$1");
+export async function patchAttributeViewCell(body = {}) {
+  const kind = String(body.kind || "").toLowerCase();
+  const key = String(body.key || "").toLowerCase();
+  if (kind === "prose" || kind === "org-env") {
+    if (!/^[a-z][a-z0-9_-]*$/i.test(key) || ATTRIBUTE_VIEW_BLOCK_READ_ONLY_KEYS.has(key)) {
+      const err = new Error(`Attribute-view block column is read-only: ${key || "(empty)"}`);
+      err.statusCode = 400;
+      throw err;
+    }
+    const file = safeOpenFile(body.file || "");
+    const id = String(body.id || "");
+    if (!id.startsWith("#")) {
+      const err = new Error("Block property edit requires a stable UUIDv7 row identity");
+      err.statusCode = 400;
+      throw err;
+    }
+    const value = body.value === null || body.value === undefined || String(body.value) === "" ? null : String(body.value);
+    const result = await patchAttributeBlockProperty(file, { id, key, value });
+    return { ...result, type: "attribute-view-cell-patched", key, value: value ?? "" };
+  }
+  if (kind !== "todo") {
+    const err = new Error("Only todo and UUIDv7 property rows are editable in portable attribute views");
+    err.statusCode = 400;
+    throw err;
+  }
+  if (!ATTRIBUTE_VIEW_TODO_EDIT_KEYS.has(key)) {
+    const err = new Error(`Attribute-view column is read-only: ${key || "(empty)"}`);
+    err.statusCode = 400;
+    throw err;
+  }
+  const file = safeOpenFile(body.file || "");
+  const index = Number(body.index);
+  const id = String(body.id || "");
+  if (!id && (!Number.isInteger(index) || index < 0)) {
+    const err = new Error("Attribute-view cell edit requires a stable row selector");
+    err.statusCode = 400;
+    throw err;
+  }
+  const patch = { file, selectorId: id, index, text: String(body.text || "") };
+  patch[key] = body.value === null || body.value === undefined ? "" : String(body.value);
+  const result = await patchTodo(patch);
+  return {
+    ...result,
+    type: "attribute-view-cell-patched",
+    key,
+    value: patch[key],
+  };
 }
+
+// --- canonical-key patching (alias-preserving) + repeater-aware completion --
+// The serializer itself lives in shared/planning-semantic.mjs so the Node
+// compatibility path and Go fixture mirror have one explicit JS contract.
 
 function defaultTodoFileTitle(file) {
   const stem = basename(file, extname(file)).replace(/[-_]+/g, " ").trim();
@@ -4646,6 +5163,23 @@ function todoSourceFromCreateBody(body = {}, id = "") {
   return `@@todo${statusPart} [${escapePlanningTitle(text)}]${args ? ` ${args}` : ""}`;
 }
 
+function todoCreateSemanticFromBody(body = {}) {
+  const attrs = {};
+  const rawValue = (value) => value === null || value === undefined || value === false ? "" : String(value);
+  for (const key of CREATE_TODO_KEYS) {
+    if (bodyHasOwn(body, key)) attrs[key] = rawValue(body[key]);
+  }
+  for (const [legacy, canon] of Object.entries(LEGACY_PATCH_TO_CANON)) {
+    if (!CREATE_TODO_KEYS.includes(canon)) continue;
+    if (bodyHasOwn(body, legacy) && !bodyHasOwn(attrs, canon)) attrs[canon] = rawValue(body[legacy]);
+  }
+  return {
+    title: String(body.text || body.title || ""),
+    status: String(body.status || "todo"),
+    attrs,
+  };
+}
+
 function initialTodoFileContent(file) {
   const title = defaultTodoFileTitle(file);
   return [
@@ -4664,11 +5198,64 @@ function initialTodoFileContent(file) {
 
 export async function createTodo(body = {}) {
   const file = resolveTodoCreateFile(body.file || body.path || "");
-  const id = await generatePlanningId();
-  const source = todoSourceFromCreateBody(body, id);
   return enqueueSaveWrite(file, async () => {
-    await mkdir(dirname(file), { recursive: true });
     const existed = existsSync(file);
+    if (planningMutationProviderOwns(file)) {
+      let result = null;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const snapshot = await planningProvider.read(file);
+        try {
+          result = await planningProvider.mutate({
+            file,
+            expectedVersion: String(snapshot?.version || ""),
+            mutation: { type: "append-todo", create: todoCreateSemanticFromBody(body) },
+          });
+          break;
+        } catch (error) {
+          if (Number(error?.statusCode) !== 409 || attempt > 0) throw error;
+        }
+      }
+      if (!result) throw new Error("Todo append failed");
+      const source = String(result.nextSource || result.node?.raw || "");
+      if (!source) throw new Error("Todo append returned no created source");
+      if (result.changed) {
+        noteSelfWrite(file);
+        markNotesDirty(file);
+      }
+      const nextContent = await readMarkdownFile(file);
+      const meta = noteMetadata(nextContent);
+      const noteTitle = String(meta.title || defaultTodoFileTitle(file));
+      const note = {
+        file,
+        path: displayPathForFile(file),
+        key: noteTitle,
+        id: String(meta.id || ""),
+        title: noteTitle,
+        project: String(meta.project || meta.proj || "").trim(),
+      };
+      const created = result.node
+        ? planningItemsFromNodes([result.node], note, Number(result.mtimeMs || 0)).todos[0] || null
+        : extractTodos(nextContent, note, Number(result.mtimeMs || 0))
+          .find((todo) => todo.index === result.from) || null;
+      return {
+        type: "todo-created",
+        ok: true,
+        file,
+        path: displayPathForFile(file),
+        createdFile: !existed,
+        changed: result.changed === true,
+        index: Number(result.from || 0),
+        line: Number(result.node?.span?.line || lineNumberAt(nextContent, Number(result.from || 0))),
+        source,
+        todo: created,
+        mtimeMs: Number(result.mtimeMs || 0),
+        version: String(result.version || ""),
+      };
+    }
+
+    const id = await generatePlanningId();
+    const source = todoSourceFromCreateBody(body, id);
+    await mkdir(dirname(file), { recursive: true });
     let content = existed ? await readFile(file, "utf8") : initialTodoFileContent(file);
     const base = content.replace(/\s*$/, "");
     const prefix = base ? "\n\n" : "";
@@ -4705,12 +5292,18 @@ export async function createTodo(body = {}) {
   });
 }
 
-// General todo patch: writes any canonical key (or its legacy alias field
-// name) plus `status`, straight back into the source `@@todo` line. `op:
-// "complete"` runs the repeater engine — rolling `ddl`/`sche` forward,
-// resetting status to `todo`, and recording `done`/`log` — instead of a
-// plain status flip.
 async function patchTodoInFile(file, body) {
+  const nowMs = Date.now();
+  if (planningMutationProviderOwns(file)) {
+    const result = await mutatePlanningNodeThroughProvider(file, "todo", body,
+      todoSemanticMutation(body, nowMs));
+    return {
+      type: "todo-patched", ok: true, file,
+      changed: result.changed === true, from: result.from, to: result.to,
+      source: result.source, nextSource: result.nextSource,
+      mtimeMs: Number(result.mtimeMs || 0), version: result.version || "",
+    };
+  }
   const content = await readFile(file, "utf8");
   const loc = locateTodoInContent(content, body, file);
   if (!loc) {
@@ -4720,48 +5313,7 @@ async function patchTodoInFile(file, body) {
   }
   const { from, to } = loc;
   const oldSource = content.slice(from, to);
-  const op = body.op === "complete" ? "complete" : "patch";
-  const nowMs = Date.now();
-
-  const canonPatch = {};
-  for (const key of CANON_PATCH_KEYS) {
-    if (bodyHasOwn(body, key)) canonPatch[key] = body[key];
-  }
-  for (const [legacy, canon] of Object.entries(LEGACY_PATCH_TO_CANON)) {
-    if (bodyHasOwn(body, legacy) && !bodyHasOwn(canonPatch, canon)) canonPatch[canon] = body[legacy];
-  }
-  const args0 = planningNodeArgs(oldSource);
-  if (bodyHasOwn(body, "afterAdd")) {
-    canonPatch.after = appendDepRef(argValueForCanonical(args0, "after"), String(body.afterAdd));
-  }
-
-  let statusPatch = "";
-  if (op === "complete") {
-    const repeaterRaw = argValueForCanonical(args0, "repeat");
-    const repeater = parseRepeater(repeaterRaw);
-    const doneStr = formatDateValue(nowMs, false);
-    if (repeater) {
-      const ddlVal = argValueForCanonical(args0, "ddl");
-      const scheVal = argValueForCanonical(args0, "sche");
-      if (ddlVal) canonPatch.ddl = applyRepeater(ddlVal, repeater, nowMs);
-      if (scheVal) canonPatch.sche = applyRepeater(scheVal, repeater, nowMs);
-      canonPatch.done = doneStr;
-      const logParts = String(argValueForCanonical(args0, "log")).split("&").map((s) => s.trim()).filter(Boolean);
-      logParts.push(doneStr);
-      while (logParts.length > 30) logParts.shift();
-      canonPatch.log = logParts.join(" & ");
-      statusPatch = "todo";
-    } else {
-      canonPatch.done = doneStr;
-      statusPatch = "done";
-    }
-  } else if (bodyHasOwn(body, "status")) {
-    statusPatch = normalizeTodoStatus(body.status);
-  }
-
-  let next = oldSource;
-  if (statusPatch) next = replaceTodoStatusInSource(next, statusPatch);
-  if (Object.keys(canonPatch).length > 0) next = patchTodoSourceCanonical(next, canonPatch);
+  const next = nextTodoSourceForPatch(oldSource, body, nowMs);
 
   if (next === oldSource) {
     let mtimeMs = 0;
@@ -4797,6 +5349,27 @@ export async function completeTodo(body = {}) {
 // wrapper here would deadlock, since this function itself already runs
 // inside this file's queue.
 async function ensureTodoIdInFile(file, body) {
+  if (planningMutationProviderOwns(file)) {
+    const snapshot = await planningProvider.read(file);
+    const node = locateProviderPlanningNode(snapshot?.nodes, body, "todo");
+    if (!node) {
+      const err = new Error("Todo source was not found");
+      err.statusCode = 404;
+      throw err;
+    }
+    const existingId = String(node.attrs?.id || "");
+    if (existingId) {
+      return {
+        type: "todo-id", ok: true, file, id: `#${existingId}`,
+        changed: false, from: node.span.from, to: node.span.to,
+        source: node.raw, nextSource: node.raw,
+        mtimeMs: Number(snapshot.mtimeMs || 0), version: snapshot.version || "",
+      };
+    }
+    const id = await generatePlanningId();
+    const result = await patchTodoInFile(file, { ...body, file, id });
+    return { ...result, type: "todo-id", id: `#${id}` };
+  }
   const content = await readFile(file, "utf8");
   const loc = locateTodoInContent(content, body, file);
   if (!loc) {
@@ -4842,6 +5415,18 @@ function findClockNode(content, locator = {}) {
 }
 
 async function closeClockInFileUnlocked(file, locator, toIso) {
+  if (planningMutationProviderOwns(file)) {
+    try {
+      const result = await mutatePlanningNodeThroughProvider(file, "clock", { ...locator, open: true }, {
+        type: "patch-node",
+        attrs: { to: toIso },
+      });
+      return result.changed === true;
+    } catch (error) {
+      if (Number(error?.statusCode) === 404) return false;
+      throw error;
+    }
+  }
   const content = await readFile(file, "utf8");
   const node = findClockNode(content, locator);
   if (!node) return false;
@@ -4906,6 +5491,37 @@ async function clockInUnlocked(body = {}) {
     const idResult = await ensureTodoIdInFile(file, body);
     const from = idResult.from;
     const to = idResult.changed ? idResult.from + idResult.nextSource.length : idResult.to;
+
+    if (planningMutationProviderOwns(file)) {
+      const todoSource = String(idResult.nextSource || idResult.source || "");
+      const todoNode = scanPlanningNodes(todoSource, { kind: "todo" })[0];
+      let expectedVersion = idResult.version || "";
+      let result = null;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          result = await planningProvider.mutate({
+            file,
+            expectedVersion,
+            selector: { kind: "todo", id: idResult.id, title: todoNode?.title || "" },
+            mutation: { type: "insert-clock", attrs: { from: nowIso, task: idResult.id } },
+          });
+          break;
+        } catch (error) {
+          if (Number(error?.statusCode) !== 409 || attempt > 0) throw error;
+          expectedVersion = String((await planningProvider.read(file))?.version || "");
+        }
+      }
+      if (!result) throw new Error("Clock insertion failed");
+      noteSelfWrite(file);
+      markNotesDirty(file);
+      return {
+        type: "clock-in", ok: true, file,
+        from: result.from, to: result.to,
+        source: String(result.nextSource || ""),
+        todoId: idResult.id,
+        mtimeMs: Number(result.mtimeMs || 0), version: result.version || "",
+      };
+    }
 
     const content = await readFile(file, "utf8");
     const todoNode = scanPlanningNodes(content.slice(from, to), { kind: "todo" })[0];
@@ -5990,7 +6606,7 @@ export async function exportLatex(body = {}) {
   const header = parseLatexTemplateHeader(template.text, template.file);
   const engine = String(body.engine || header.engine || "pdflatex").toLowerCase();
   if (!["pdflatex", "xelatex", "lualatex"].includes(engine)) throw new Error(`Unsupported LaTeX engine: ${engine}`);
-  const macroResult = loadKatexMacros(katexMacrosRoot);
+  const macroResult = await loadRuntimeKatexMacros(katexMacrosRoot);
   const declaredSharedFiles = await latexTemplateSharedFiles(template.file, header.sharedFiles);
   const generatedSharedFiles = template.text.includes("\\usepackage{aaronnote-macros}")
     ? [{ name: "aaronnote-macros.sty", content: Buffer.from(latexMacrosPackage(macroResult.macros, converted.features), "utf8") }]
@@ -7122,7 +7738,7 @@ export async function readNote(file, options = {}) {
     err.statusCode = 400;
     throw err;
   }
-  const content = await readFile(safe, "utf8");
+  const content = await readMarkdownFile(safe);
   const standalone = standaloneFile(safe);
   const payload = {
     type: "open",
@@ -8049,6 +8665,49 @@ export function configureExternalFileProvider(provider = null) {
     : null;
 }
 
+export function configureMarkdownFileProvider(provider = null) {
+  markdownFileProvider = provider && typeof provider === "object"
+    ? provider
+    : null;
+}
+
+export function configurePlanningProvider(provider = null) {
+  planningProvider = provider && typeof provider === "object"
+    ? provider
+    : null;
+}
+
+export function configureKatexMacrosProvider(provider = null) {
+  katexMacrosProvider = provider && typeof provider === "object"
+    ? provider
+    : null;
+}
+
+export function configureAssetProvider(provider = null) {
+  assetProvider = provider && typeof provider === "object"
+    ? provider
+    : null;
+}
+
+export async function loadRuntimeKatexMacros(dir = katexMacrosRoot) {
+  const resolved = String(dir || "");
+  if (typeof katexMacrosProvider?.load === "function") {
+    try {
+      const result = await katexMacrosProvider.load(resolved);
+      return {
+        dir: String(result?.dir || resolved),
+        macros: result?.macros && typeof result.macros === "object" ? result.macros : {},
+        errors: Array.isArray(result?.errors) ? result.errors : [],
+        source: "kernel-katex-macros",
+      };
+    } catch {
+      // Emacs/Server and transient desktop kernel outages retain the same
+      // optional local parser; macro loading must not block the first paint.
+    }
+  }
+  return { ...loadKatexMacros(resolved), source: "node-katex-macros" };
+}
+
 export async function saveNote(body) {
   if (externalFileProvider?.owns?.(body?.file)) {
     const file = String(body.file);
@@ -8098,7 +8757,14 @@ export async function saveNote(body) {
   }
   const file = safeOpenFile(body.file);
   const content = String(body.content ?? "");
-  const previousContent = await readFile(file, "utf8").catch(() => "");
+  let previousContent = "";
+  try {
+    previousContent = await readMarkdownFile(file);
+  } catch (err) {
+    // A missing local file is handled by the existing save flow, but a
+    // desktop kernel outage must never downgrade into an unchecked write.
+    if (markdownFileProviderOwns(file)) throw err;
+  }
   if (body.force !== true && content.trim() === "" && previousContent.trim() !== "") {
     return {
       type: "saved", ok: false, file,
@@ -8112,7 +8778,7 @@ export async function saveNote(body) {
     if (!acceptSaveRequest(file, body)) return false;
     if (!force && (baseVersion || (Number.isFinite(baseMtimeMs) && baseMtimeMs > 0))) {
       try {
-        const [current, currentContent] = await Promise.all([stat(file), readFile(file, "utf8")]);
+        const [current, currentContent] = await Promise.all([stat(file), readMarkdownFile(file)]);
         const versionChanged = Boolean(baseVersion) && contentDigest(currentContent) !== baseVersion;
         const mtimeChanged = !baseVersion && current.mtimeMs !== baseMtimeMs;
         if (versionChanged || mtimeChanged) {
@@ -8130,9 +8796,11 @@ export async function saveNote(body) {
             };
           }
         }
-      } catch {}
+      } catch (err) {
+        if (markdownFileProviderOwns(file)) throw err;
+      }
     }
-    await atomicWriteFile(file, content, "utf8");
+    await writeMarkdownFile(file, content);
     const info = await stat(file);
     rememberSuccessfulClientSave(file, body, content, info);
     markNotesDirty(file);

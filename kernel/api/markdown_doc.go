@@ -17,6 +17,7 @@
 package api
 
 import (
+	"encoding/base64"
 	"net/http"
 
 	"github.com/88250/gulu"
@@ -24,6 +25,88 @@ import (
 	"github.com/aaronhe/noema/kernel/util"
 	"github.com/gin-gonic/gin"
 )
+
+func storeMarkdownAsset(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+	arg, ok := util.JsonArg(c, ret)
+	if !ok {
+		return
+	}
+	var notebook, p, name, mediaType, encoded string
+	if !util.ParseJsonArgs(arg, ret,
+		util.BindJsonArg("notebook", &notebook, true, true),
+		util.BindJsonArg("path", &p, true, true),
+		util.BindJsonArg("name", &name, false, false),
+		util.BindJsonArg("type", &mediaType, false, false),
+		util.BindJsonArg("data", &encoded, true, true),
+	) {
+		return
+	}
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		ret.Code = -1
+		ret.Msg = "invalid base64 asset data"
+		return
+	}
+	asset, err := model.StoreMarkdownAssetBytes(notebook, p, name, mediaType, data)
+	if err != nil {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+	ret.Data = asset
+}
+
+func storeMarkdownAssetFromPath(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+	arg, ok := util.JsonArg(c, ret)
+	if !ok {
+		return
+	}
+	var notebook, p, sourcePath, name, mediaType string
+	if !util.ParseJsonArgs(arg, ret,
+		util.BindJsonArg("notebook", &notebook, true, true),
+		util.BindJsonArg("path", &p, true, true),
+		util.BindJsonArg("sourcePath", &sourcePath, true, true),
+		util.BindJsonArg("name", &name, false, false),
+		util.BindJsonArg("type", &mediaType, false, false),
+	) {
+		return
+	}
+	asset, err := model.StoreMarkdownAssetFromPath(notebook, p, sourcePath, name, mediaType)
+	if err != nil {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+	ret.Data = asset
+}
+
+func listUnusedMarkdownAssets(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+	arg, ok := util.JsonArg(c, ret)
+	if !ok {
+		return
+	}
+	var notebook string
+	var includePublic bool
+	if !util.ParseJsonArgs(arg, ret,
+		util.BindJsonArg("notebook", &notebook, true, true),
+		util.BindJsonArg("includePublic", &includePublic, false, false),
+	) {
+		return
+	}
+	assets, err := model.ListUnusedMarkdownAssets(notebook, includePublic)
+	if err != nil {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+	ret.Data = map[string]any{"assets": assets, "source": "kernel-assets"}
+}
 
 // loadMarkdownDoc 是 CM6 文本协议的加载端点（计划文档 Phase 2）：给一个
 // markdown box 内的文档路径，返回当前 markdown 全文和已持久化 ID 的块列表
@@ -61,10 +144,9 @@ func loadMarkdownDoc(c *gin.Context) {
 }
 
 // saveMarkdownDoc 是 CM6 文本协议的保存端点：CM6 防抖全文保存后把最新
-// markdown 文本整篇送过来，内核落盘、重新解析、增量更新索引，返回规范化后
-// 真正落盘的字节和最新块列表（可能因为 normalizeOrgEndBlankLines 之类的
-// 规范化而与调用方传入的不完全一样，调用方应该用返回值刷新自己的状态，
-// 不能假设"我传什么就是磁盘上的什么"）。
+// markdown 文本整篇送过来，内核按原字节落盘、重新解析、增量更新索引，并
+// 返回真正落盘的字节和最新块列表。Noema 的 portable identity 只做内存投影，
+// 此端点不得为了内部 ID 或格式化需要改写源文本。
 func saveMarkdownDoc(c *gin.Context) {
 	ret := gulu.Ret.NewResult()
 	defer c.JSON(http.StatusOK, ret)
@@ -122,4 +204,200 @@ func listMarkdownDocs(c *gin.Context) {
 	ret.Data = map[string]any{
 		"docs": docs,
 	}
+}
+
+// registerExternalMarkdownBox creates or updates a workspace-local shadow
+// registration for an existing Wiki/Git repository, then mounts it in place.
+// The external root is never copied and never receives .siyuan metadata.
+func registerExternalMarkdownBox(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+
+	arg, ok := util.JsonArg(c, ret)
+	if !ok {
+		return
+	}
+
+	var name, root, repositoryID string
+	if !util.ParseJsonArgs(arg, ret,
+		util.BindJsonArg("name", &name, false, false),
+		util.BindJsonArg("root", &root, true, false),
+		util.BindJsonArg("repositoryId", &repositoryID, false, false),
+	) {
+		return
+	}
+
+	registration, err := model.RegisterExternalMarkdownBox(name, root, repositoryID)
+	if nil != err {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+	alreadyMounted, err := model.Mount(registration.ID)
+	if nil != err {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+	ret.Data = map[string]any{
+		"box":            registration,
+		"alreadyMounted": alreadyMounted,
+	}
+}
+
+func listExternalMarkdownBoxes(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+
+	boxes, err := model.ListExternalMarkdownBoxes()
+	if nil != err {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+	ret.Data = map[string]any{"boxes": boxes}
+}
+
+func listMarkdownRelationships(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+
+	arg, ok := util.JsonArg(c, ret)
+	if !ok {
+		return
+	}
+	var notebook string
+	if !util.ParseJsonArgs(arg, ret, util.BindJsonArg("notebook", &notebook, true, true)) {
+		return
+	}
+	relationships, err := model.ListMarkdownRelationships(notebook)
+	if nil != err {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+	ret.Data = map[string]any{"relationships": relationships}
+}
+
+// listMarkdownPlanning exposes the span-aware planning scanner for one
+// Markdown document or the whole external box. It is deliberately read-only;
+// patch/clock mutations remain on their serialized host path until the write
+// protocol migrates as a separate milestone.
+func listMarkdownPlanning(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+
+	arg, ok := util.JsonArg(c, ret)
+	if !ok {
+		return
+	}
+	var notebook, path string
+	if !util.ParseJsonArgs(arg, ret,
+		util.BindJsonArg("notebook", &notebook, true, true),
+		util.BindJsonArg("path", &path, false, false),
+	) {
+		return
+	}
+	documents, err := model.ListMarkdownPlanning(notebook, path)
+	if nil != err {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+	ret.Data = map[string]any{"documents": documents}
+}
+
+// listMarkdownPropertyBlocks exposes the narrow portable UUIDv7 property
+// scanner in bulk so an attribute view never needs one request per block.
+func listMarkdownPropertyBlocks(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+
+	arg, ok := util.JsonArg(c, ret)
+	if !ok {
+		return
+	}
+	var notebook, path string
+	if !util.ParseJsonArgs(arg, ret,
+		util.BindJsonArg("notebook", &notebook, true, true),
+		util.BindJsonArg("path", &path, false, false),
+	) {
+		return
+	}
+	documents, err := model.ListMarkdownPropertyBlocks(notebook, path)
+	if nil != err {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+	ret.Data = map[string]any{"documents": documents}
+}
+
+func mutateMarkdownPropertyBlock(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+
+	var request model.MarkdownPropertyMutationRequest
+	if err := c.ShouldBindJSON(&request); nil != err {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+	if request.Notebook == "" || request.Path == "" || request.ID == "" || request.Key == "" {
+		ret.Code = -1
+		ret.Msg = "notebook, path, id, and key are required"
+		return
+	}
+	result, err := model.MutateMarkdownProperty(request)
+	if nil != err {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+	ret.Data = result
+}
+
+func mutateMarkdownPlanning(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+
+	var request model.MarkdownPlanningMutationRequest
+	if err := c.ShouldBindJSON(&request); nil != err {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+	if request.Notebook == "" || request.Path == "" || request.Mutation.Type == "" {
+		ret.Code = -1
+		ret.Msg = "notebook, path, and mutation.type are required"
+		return
+	}
+	result, err := model.MutateMarkdownPlanning(request)
+	if nil != err {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+	ret.Data = result
+}
+
+func resolveMarkdownBlock(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+
+	arg, ok := util.JsonArg(c, ret)
+	if !ok {
+		return
+	}
+	var id string
+	if !util.ParseJsonArgs(arg, ret, util.BindJsonArg("id", &id, true, true)) {
+		return
+	}
+	location, err := model.ResolveMarkdownBlock(id)
+	if nil != err {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+	ret.Data = location
 }

@@ -17,9 +17,11 @@
 package model
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/aaronhe/noema/kernel/filesys"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
 	"github.com/siyuan-note/filelock"
@@ -42,7 +44,7 @@ func handleMarkdownFileEvent(boxID, absPath string, removed bool) {
 		return
 	}
 
-	boxDir := filepath.Join(util.DataDir, boxID)
+	boxDir := filesys.BoxRootPath(boxID)
 	rel, err := filepath.Rel(boxDir, absPath)
 	if nil != err {
 		return
@@ -70,7 +72,13 @@ func handleMarkdownFileEvent(boxID, absPath string, removed bool) {
 	util.PushReloadFiletree()
 
 	if bt := treenode.GetBlockTreeRootByPath(boxID, rel); nil != bt {
-		util.PushReloadDoc(bt.RootID)
+		docID := bt.RootID
+		if raw, readErr := os.ReadFile(absPath); nil == readErr {
+			if canonical := filesys.MarkdownDocumentIdentity(raw); "" != canonical {
+				docID = canonical
+			}
+		}
+		util.PushReloadDoc(docID)
 	} else {
 		logging.LogWarnf("markdown watcher: no blocktree entry for [%s%s] after indexing", boxID, rel)
 	}

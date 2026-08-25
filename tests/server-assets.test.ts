@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "@voidzero-dev/vite-plus-test";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 import { tmpdir } from "node:os";
 
 // @ts-ignore The server is a Node ESM module outside the TS app graph.
@@ -18,6 +18,18 @@ afterEach(async () => {
 });
 
 describe("server asset refs", () => {
+  test("matches the shared asset reference contract", async () => {
+    const fixturePath = join(process.cwd(), "shared", "asset-reference-fixtures.json");
+    const fixtures = JSON.parse(await readFile(fixturePath, "utf8"));
+    for (const fixture of fixtures) {
+      const note = join(noteRoot, ...String(fixture.note).split("/"));
+      const actual = assetRefsFromContent(String(fixture.content), note)
+        .map((file: string) => relative(noteRoot, file).split(sep).join("/"))
+        .sort();
+      expect(actual, fixture.name).toEqual(fixture.expected);
+    }
+  });
+
   test("extracts markdown image and attachment paths relative to note file", () => {
     const note = `${noteRoot}/project/a.md`;
     expect(

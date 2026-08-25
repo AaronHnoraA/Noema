@@ -23,8 +23,8 @@ import (
 	"time"
 
 	"github.com/88250/gulu"
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/siyuan-note/logging"
 )
 
 var (
@@ -458,5 +458,34 @@ func execTask(task *Task) {
 		currentTaskLock.Lock()
 		currentTask = nil
 		currentTaskLock.Unlock()
+	}
+}
+
+// ExecSyncTasksUntilEmpty 在没有后台 cron 消费者的场景下同步排空任务队列。
+//
+// serve 模式由 job.StartCron 启动的 ExecTaskJob 每 100ms 消费一个任务；CLI 是单次命令进程，
+// 从不启动 cron，因此 AppendTask 排入的任务（例如 Box.Index 派发的 removeBoxRefs/indexBox/IndexRefs）
+// 永远不会被执行——索引不会建立，随后的 search/sql/ref 只会静默返回空结果。
+//
+// 只处理非异步任务：popTask 本身就跳过 Async 任务，而异步任务（如 PushMsg 状态推送）是给长驻 UI 用的，
+// 一次性命令既不需要它们，也不应为其 Delay 阻塞。
+//
+// timeout 是整体预算而非单任务预算（单任务超时由 execTask 自己的 context 控制），
+// 用于防止任务在执行过程中不断重新入队时把 CLI 挂死。
+func ExecSyncTasksUntilEmpty(timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for {
+		if util.IsExiting.Load() {
+			return
+		}
+		if !time.Now().Before(deadline) {
+			logging.LogWarnf("exec sync tasks exceeded budget [%s], %d task(s) left in queue", timeout, len(getCurrentTasks()))
+			return
+		}
+		t := popTask()
+		if nil == t {
+			return
+		}
+		execTask(t)
 	}
 }

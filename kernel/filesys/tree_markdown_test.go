@@ -9,13 +9,16 @@
 package filesys
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/88250/lute/ast"
 	"github.com/88250/lute/parse"
 	"github.com/aaronhe/noema/kernel/conf"
+	noemamarkdown "github.com/aaronhe/noema/kernel/noema/markdown"
 	"github.com/aaronhe/noema/kernel/util"
 )
 
@@ -46,7 +49,7 @@ func TestBoxKindDefaultsToSyWhenUnset(t *testing.T) {
 	}
 }
 
-func TestWriteTreeThenLoadTreeRoundTripsMarkdownBox(t *testing.T) {
+func TestLoadTreeProjectsNoemaIdentityWithoutWritingMarkdownBox(t *testing.T) {
 	originalDataDir := util.DataDir
 	util.DataDir = t.TempDir()
 	t.Cleanup(func() { util.DataDir = originalDataDir })
@@ -54,58 +57,114 @@ func TestWriteTreeThenLoadTreeRoundTripsMarkdownBox(t *testing.T) {
 	boxID := "20260824230000-mdbox01"
 	withMarkdownBox(t, boxID)
 
+	const canonicalID = "0198fc34-7b32-7a11-8cb4-6c40e3b33d68"
+	const relPath = "/notes/hello.md"
+	source := "#+begin meta\nid: " + canonicalID + "\ntitle: Title\n#+end meta\n\n# Title\n\nSee @@cmd(foo, bar) for details.\n\n#+begin note\nSome text.\n#+end note\n\n$$\nx^2 + y^2 = z^2\n$$\n"
+	absPath := filepath.Join(util.DataDir, boxID, relPath)
+	if err := os.MkdirAll(filepath.Dir(absPath), 0755); nil != err {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(absPath, []byte(source), 0644); nil != err {
+		t.Fatal(err)
+	}
+
 	luteEngine := util.NewLute()
-	source := "# Title\n\nSee @@cmd(foo, bar) for details.\n\n#+begin note\nSome text.\n#+end note\n\n$$\nx^2 + y^2 = z^2\n$$\n"
-	tree := parse.Parse(boxID, []byte(source), luteEngine.ParseOptions)
-	tree.Box = boxID
-	tree.Path = "/notes/hello.md"
-	tree.Root.Path = tree.Path
-
-	if _, err := WriteTree(tree); nil != err {
-		t.Fatalf("WriteTree failed: %s", err)
-	}
-
-	absPath := filepath.Join(util.DataDir, boxID, tree.Path)
-	raw, err := os.ReadFile(absPath)
-	if nil != err {
-		t.Fatalf("read written file failed: %s", err)
-	}
-	written := string(raw)
-	if strings.HasPrefix(strings.TrimSpace(written), "{") {
-		t.Fatalf("markdown box wrote JSON instead of markdown: %s", written)
-	}
-	for _, want := range []string{"@@cmd(foo, bar)", "#+begin note", "#+end note", "x^2 + y^2 = z^2"} {
-		if !strings.Contains(written, want) {
-			t.Fatalf("written markdown lost %q:\n%s", want, written)
-		}
-	}
-
-	writtenID := tree.Root.ID
-	if "" == writtenID {
-		t.Fatal("tree root ID was not assigned on first write")
-	}
-
-	reloaded, err := LoadTree(boxID, tree.Path, luteEngine)
+	tree, err := LoadTree(boxID, relPath, luteEngine)
 	if nil != err {
 		t.Fatalf("LoadTree failed: %s", err)
 	}
-	if reloaded.ID != writtenID {
-		t.Fatalf("reloaded tree ID [%s] != written tree ID [%s] — doc-level IAL was not recovered", reloaded.ID, writtenID)
+	if !ast.IsNodeIDPattern(tree.ID) {
+		t.Fatalf("projection ID is not a valid internal node key: %s", tree.ID)
 	}
-	if reloaded.HPath != "/notes/hello" {
-		t.Fatalf("unexpected markdown HPath [%s]", reloaded.HPath)
+	if got := MarkdownCanonicalDocumentID(tree); canonicalID != got {
+		t.Fatalf("canonical Noema ID mismatch: got %s want %s", got, canonicalID)
+	}
+	if tree.HPath != "/notes/hello" {
+		t.Fatalf("unexpected markdown HPath [%s]", tree.HPath)
+	}
+	if _, err := WriteTree(tree); !errors.Is(err, ErrMarkdownTreeWriteUnsupported) {
+		t.Fatalf("markdown WriteTree must be rejected, got %v", err)
+	}
+	raw, err := os.ReadFile(absPath)
+	if nil != err {
+		t.Fatal(err)
+	}
+	if string(raw) != source {
+		t.Fatalf("LoadTree/WriteTree rejection changed source bytes:\n%s", raw)
+	}
+	if strings.Contains(string(raw), `type="doc"`) {
+		t.Fatalf("source-authoritative load injected a document IAL:\n%s", raw)
 	}
 
-	// 二次读取的树再写一次应当稳定（幂等）：不应生成新的 ID 或改变已写内容之外的字节。
-	if _, err := WriteTree(reloaded); nil != err {
-		t.Fatalf("second WriteTree failed: %s", err)
-	}
-	raw2, err := os.ReadFile(absPath)
+	reloaded, err := LoadTree(boxID, relPath, luteEngine)
 	if nil != err {
-		t.Fatalf("read re-written file failed: %s", err)
+		t.Fatal(err)
 	}
-	if string(raw2) != written {
-		t.Fatalf("re-writing a freshly reloaded tree changed the file bytes:\nfirst:\n%s\nsecond:\n%s", written, string(raw2))
+	if reloaded.ID != tree.ID {
+		t.Fatalf("projection ID is not deterministic: first=%s second=%s", tree.ID, reloaded.ID)
+	}
+}
+
+func TestLoadTreeProjectsNoemaUUIDBlockAndReferenceWithoutWriting(t *testing.T) {
+	originalDataDir := util.DataDir
+	util.DataDir = t.TempDir()
+	t.Cleanup(func() { util.DataDir = originalDataDir })
+
+	boxID := "20260825113000-uuidblk"
+	withMarkdownBox(t, boxID)
+	const blockID = "0198fc34-7b32-7a11-8cb4-6c40e3b33d68"
+	const orgBlockID = "0198fc34-7b32-7a11-8cb4-6c40e3b33d69"
+	const relPath = "/notes/blocks.md"
+	source := "Target paragraph {#" + blockID + " status=draft owner=\"Aaron He\"}\n\nSee ((" + blockID + " \"target\")).\n\n" +
+		"#+begin note Result {#" + orgBlockID + " phase=proof}\nbody\n#+end note\n"
+	absPath := filepath.Join(util.DataDir, boxID, relPath)
+	if err := os.MkdirAll(filepath.Dir(absPath), 0755); nil != err {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(absPath, []byte(source), 0644); nil != err {
+		t.Fatal(err)
+	}
+
+	tree, err := LoadTree(boxID, relPath, util.NewLute())
+	if nil != err {
+		t.Fatal(err)
+	}
+	projected := map[string]*ast.Node{}
+	ast.Walk(tree.Root, func(n *ast.Node, entering bool) ast.WalkStatus {
+		if entering {
+			canonical := MarkdownCanonicalBlockID(n)
+			if canonical == blockID || canonical == orgBlockID {
+				projected[canonical] = n
+			}
+		}
+		return ast.WalkContinue
+	})
+	for _, canonical := range []string{blockID, orgBlockID} {
+		internal := projected[canonical]
+		if nil == internal {
+			var nodes []string
+			ast.Walk(tree.Root, func(n *ast.Node, entering bool) ast.WalkStatus {
+				if entering && n.IsBlock() {
+					nodes = append(nodes, n.Type.String()+":"+n.Text()+":"+n.TokensStr())
+				}
+				return ast.WalkContinue
+			})
+			t.Fatalf("Noema UUIDv7 block definition %s was not mapped onto the Lute tree: %#v", canonical, nodes)
+		}
+		if internal.ID == canonical || !ast.IsNodeIDPattern(internal.ID) {
+			t.Fatalf("block did not receive a disposable internal projection: canonical=%s internal=%s", canonical, internal.ID)
+		}
+	}
+	projection := noemamarkdown.ProjectionFromTree(tree)
+	if 1 != len(projection.References) || projection.References[0].CanonicalID != blockID || projection.References[0].ProjectionID != projected[blockID].ID {
+		t.Fatalf("Noema reference projection mismatch: %#v", projection)
+	}
+	raw, err := os.ReadFile(absPath)
+	if nil != err {
+		t.Fatal(err)
+	}
+	if string(raw) != source {
+		t.Fatalf("UUIDv7 projection changed source bytes: got %q want %q", raw, source)
 	}
 }
 

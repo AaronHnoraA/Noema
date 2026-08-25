@@ -45,8 +45,8 @@ separate editor implementation.
 | `shared/planning-values.mjs` | Value-grammar layer for the planning DSL: dates, repeaters, lead-time, dep-refs, durations, canonical-key aliasing, status normalization. Shared by the server and `src/planning-values.ts` (browser facade) so both validate identically. |
 | `src/styles/*.css` | CM6 editor chrome and swappable Markdown themes. |
 | `aaronnote/main.ts` | Shared editor composition shell used by both Emacs and Noema.app. |
-| `aaronnote/tauri-bridge.ts` | Tauri renderer adapter exposing the compatibility `window.noemaDesktop` surface without Node or Electron globals. |
-| `src-tauri/src/lib.rs` | Native Tauri desktop host: system WebView windows and menus, local Node sidecar lifecycle, dialogs, clipboard, drag/drop, sessions, and desktop commands. |
+| `aaronnote/desktop-bridge.ts` | Host-neutral packaged-smoke adapter over the narrow `window.noemaDesktop` preload surface. |
+| `desktop/main.mjs` / `desktop/preload.cjs` | SiYuan-derived Electron system adapter: native windows and menus, dialogs, clipboard, drag/drop, sessions, and startup of the shared Node web host. The preload keeps context isolation and sandboxing enabled. |
 | `aaronnote/agenda.html`/`aaronnote/agenda-main.ts` | Vite entry for the standalone `/agenda` page — mounts `agenda-view.ts` in page mode using the same `api-client.ts` facade the embedded editor uses (`window.aaronnoteApi` is bridged in via `web-host.mjs`'s `adapterScript` for this page too). |
 | `aaronnote/agenda-view.ts` | Full-screen, vault-wide agenda renderer: week/list/month/log/gantt/projects/clocktable/lints views over `api.notes.agenda`. All edits round-trip through `patchTodo`/`clockIn`/`clockOut` — holds no state that isn't re-derivable from markdown. See `docs/agenda.md`. |
 | `aaronnote/latex-export-scope.ts` | Pure whole-note/selection/heading-subtree range model used by the LaTeX scope picker. |

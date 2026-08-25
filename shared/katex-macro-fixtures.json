@@ -1,0 +1,44 @@
+[
+  {
+    "name": "commands operators defs and comments",
+    "files": [
+      {
+        "name": "a.tex",
+        "text": "% ignored\n\\newcommand{\\R}{\\mathbb{R}}\n\\newcommand{\\abs}[1]{\\left|#1\\right|}\n\\DeclareMathOperator*{\\argmax}{arg\\,max}"
+      },
+      {
+        "name": "b.tex",
+        "text": "\\def\\pair#1#2{(#1,#2)}\n\\renewcommand\\R{\\mathbb{Q}} % override"
+      }
+    ],
+    "macros": {
+      "\\R": "\\mathbb{Q}",
+      "\\abs": "\\left|#1\\right|",
+      "\\argmax": "\\operatorname*{arg\\,max}",
+      "\\pair": "(#1,#2)"
+    },
+    "errors": []
+  },
+  {
+    "name": "malformed definitions are reported and scanning continues",
+    "files": [
+      {
+        "name": "bad.tex",
+        "text": "\\newcommand{not-a-control}{x}\n\\providecommand{\\ok}{yes}\n\\DeclareMathOperator{\\broken}"
+      }
+    ],
+    "macros": {
+      "\\ok": "yes"
+    },
+    "errors": [
+      {
+        "file": "bad.tex",
+        "message": "Missing macro name after \\newcommand"
+      },
+      {
+        "file": "bad.tex",
+        "message": "Malformed \\DeclareMathOperator for \\broken"
+      }
+    ]
+  }
+]

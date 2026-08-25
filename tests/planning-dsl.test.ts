@@ -1,4 +1,6 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 // @ts-ignore Shared ESM module outside the TS app graph.
 import {
@@ -16,8 +18,21 @@ import {
   parseLeadTime,
   parseRepeater,
 } from "../shared/planning-values.mjs";
+// @ts-ignore Shared ESM module outside the TS app graph.
+import { applyPlanningSourceMutation } from "../shared/planning-mutation.mjs";
+// @ts-ignore Shared ESM module outside the TS app graph.
+import { applyPlanningSemanticMutation } from "../shared/planning-semantic.mjs";
 
 describe("planning DSL parser", () => {
+  test("stays byte-for-byte aligned with the Go parser contract fixtures", () => {
+    const fixturePath = join(process.cwd(), "shared", "planning-fixtures.json");
+    const fixtures = JSON.parse(readFileSync(fixturePath, "utf8"));
+    for (const fixture of fixtures) {
+      expect(scanPlanningNodes(fixture.input, fixture.wanted ? { kind: fixture.wanted } : {}), fixture.name)
+        .toEqual(fixture.expected);
+    }
+  });
+
   test("parses existing inline todo syntax as span-aware planning nodes", () => {
     const [todo] = scanPlanningNodes("@@todo(doing) [Build Gantt]{project: notes, sche: 2026-07-06}");
     expect(todo).toMatchObject({
@@ -139,6 +154,26 @@ describe("planning DSL parser", () => {
   test("valid attrs produce no diagnostics", () => {
     const [todo] = scanPlanningNodes("@@todo(doing) [Fine] {due: 2026-07-07, repeat: +1w, effort: 2h, after: \"other task\"}");
     expect(todo.diagnostics).toEqual([]);
+  });
+});
+
+describe("planning source mutation contract", () => {
+  test("stays aligned with the Go atomic mutation fixtures", () => {
+    const fixturePath = join(process.cwd(), "shared", "planning-mutation-fixtures.json");
+    const fixtures = JSON.parse(readFileSync(fixturePath, "utf8"));
+    for (const fixture of fixtures) {
+      expect(applyPlanningSourceMutation(fixture.input, fixture.selector, fixture.mutation), fixture.name)
+        .toEqual(fixture.expected);
+    }
+  });
+
+  test("stays aligned with the Go semantic serializer fixtures", () => {
+    const fixturePath = join(process.cwd(), "shared", "planning-semantic-fixtures.json");
+    const fixtures = JSON.parse(readFileSync(fixturePath, "utf8"));
+    for (const fixture of fixtures) {
+      expect(applyPlanningSemanticMutation(fixture.input, fixture.mutation), fixture.name)
+        .toBe(fixture.expectedSource);
+    }
   });
 });
 

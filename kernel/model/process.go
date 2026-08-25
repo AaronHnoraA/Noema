@@ -24,9 +24,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aaronhe/noema/kernel/util"
 	goPS "github.com/mitchellh/go-ps"
 	"github.com/siyuan-note/logging"
-	"github.com/aaronhe/noema/kernel/util"
 )
 
 func HandleSignal() {
@@ -35,6 +35,40 @@ func HandleSignal() {
 	s := <-c
 	logging.LogInfof("received os signal [%s], exit kernel process now", s)
 	Close(false, true, 1)
+}
+
+// WatchSupervisorProcess binds an owned kernel to the shared Node web host.
+// Tauri and Emacs both launch that same host, so neither adapter needs its own
+// kernel lifecycle implementation. A short consecutive-miss threshold avoids
+// turning a transient process-table read error into data loss.
+func WatchSupervisorProcess(pid int) {
+	if pid <= 0 || pid == os.Getpid() {
+		logging.LogWarnf("ignore invalid kernel supervisor pid [%d]", pid)
+		return
+	}
+	const missingThreshold = 3
+	missing := 0
+	for !util.IsExiting.Load() {
+		if !supervisorProcessAlive(pid) {
+			missing++
+			if missing >= missingThreshold {
+				logging.LogWarnf("web-host supervisor [%d] exited, stop kernel gracefully", pid)
+				Close(false, true, 1)
+				return
+			}
+		} else {
+			missing = 0
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+
+func supervisorProcessAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	proc, err := goPS.FindProcess(pid)
+	return nil == err && nil != proc
 }
 
 var (

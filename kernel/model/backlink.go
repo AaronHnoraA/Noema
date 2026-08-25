@@ -27,19 +27,27 @@ import (
 	"github.com/88250/lute"
 	"github.com/88250/lute/ast"
 	"github.com/88250/lute/parse"
-	"github.com/emirpasic/gods/sets/hashset"
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/filesys"
+	noemaidentity "github.com/aaronhe/noema/kernel/noema/identity"
 	"github.com/aaronhe/noema/kernel/search"
 	"github.com/aaronhe/noema/kernel/sql"
 	"github.com/aaronhe/noema/kernel/task"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/emirpasic/gods/sets/hashset"
+	"github.com/siyuan-note/logging"
 )
 
 func RefreshBacklink(id string) {
 	FlushTxQueue()
-	refreshRefsByDefID(id)
+	refreshRefsByDefID(projectNoemaBlockID(id))
+}
+
+func projectNoemaBlockID(id string) string {
+	if noemaidentity.IsUUIDv7(id) {
+		return noemaidentity.ProjectionID(id, "")
+	}
+	return id
 }
 
 func refreshRefsByDefID(defID string) {
@@ -79,6 +87,7 @@ type Backlink struct {
 }
 
 func GetBackmentionDoc(defID, refTreeID, keyword string, containChildren, highlight bool) (ret []*Backlink, keywords []string) {
+	defID = projectNoemaBlockID(defID)
 	keyword = strings.TrimSpace(keyword)
 	if "" != keyword {
 		keywords = strings.Split(keyword, " ")
@@ -139,6 +148,7 @@ func GetBackmentionDoc(defID, refTreeID, keyword string, containChildren, highli
 }
 
 func GetBacklinkDoc(defID, refTreeID, keyword string, containChildren, highlight bool) (ret []*Backlink, keywords []string) {
+	defID = projectNoemaBlockID(defID)
 	keyword = strings.TrimSpace(keyword)
 	if "" != keyword {
 		keywords = strings.Split(keyword, " ")
@@ -203,6 +213,7 @@ func GetBacklinkDoc(defID, refTreeID, keyword string, containChildren, highlight
 }
 
 func GetBacklinkDocInBox(defID, refTreeID, keyword string, containChildren, highlight bool, boxID string) (ret []*Backlink, keywords []string) {
+	defID = projectNoemaBlockID(defID)
 	keyword = strings.TrimSpace(keyword)
 	if "" != keyword {
 		keywords = strings.Split(keyword, " ")
@@ -249,6 +260,7 @@ func GetBacklinkDocInBox(defID, refTreeID, keyword string, containChildren, high
 }
 
 func GetBackmentionDocInBox(defID, refTreeID, keyword string, containChildren, highlight bool, boxID string) (ret []*Backlink, keywords []string) {
+	defID = projectNoemaBlockID(defID)
 	keyword = strings.TrimSpace(keyword)
 	if "" != keyword {
 		keywords = strings.Split(keyword, " ")
@@ -451,6 +463,7 @@ func GetBacklink2(id, keyword, mentionKeyword string, sortMode, mentionSortMode 
 
 // GetBacklink2InBox 与 GetBacklink2 一致，但按 boxID 路由到加密 db 或全局 db。
 func GetBacklink2InBox(id, keyword, mentionKeyword string, sortMode, mentionSortMode int, containChildren bool, boxID string) (boxIDOut string, backlinks, backmentions []*Path, linkRefsCount, mentionsCount int) {
+	id = projectNoemaBlockID(id)
 	keyword = strings.TrimSpace(keyword)
 	var keywords []string
 	if "" != keyword {
@@ -558,6 +571,7 @@ func GetBacklink(id, keyword, mentionKeyword string, beforeLen int, containChild
 
 // GetBacklinkInBox 与 GetBacklink 一致，但按 boxID 路由到加密 db 或全局 db。
 func GetBacklinkInBox(id, keyword, mentionKeyword string, beforeLen int, containChildren bool, boxID string) (boxIDOut string, linkPaths, mentionPaths []*Path, linkRefsCount, mentionsCount int) {
+	id = projectNoemaBlockID(id)
 	linkPaths = []*Path{}
 	mentionPaths = []*Path{}
 

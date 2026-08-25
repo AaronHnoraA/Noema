@@ -1,6 +1,10 @@
 export {
   configure,
   configureExternalFileProvider,
+  configureMarkdownFileProvider,
+  configurePlanningProvider,
+  configureKatexMacrosProvider,
+  configureAssetProvider,
   markNotesDirty,
   notesIndexVersionValue,
   noteSelfWriteRecently,

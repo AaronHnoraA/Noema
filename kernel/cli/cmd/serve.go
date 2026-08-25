@@ -17,13 +17,13 @@
 package cmd
 
 import (
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/cache"
 	"github.com/aaronhe/noema/kernel/job"
 	"github.com/aaronhe/noema/kernel/model"
 	"github.com/aaronhe/noema/kernel/server"
 	"github.com/aaronhe/noema/kernel/sql"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/siyuan-note/logging"
 
 	"github.com/spf13/cobra"
 )
@@ -40,6 +40,7 @@ var (
 	serveAttachUI       bool
 	serveSafeMode       bool
 	serveEnablePprof    bool
+	serveSupervisorPID  int
 )
 
 var serveCmd = &cobra.Command{
@@ -85,6 +86,9 @@ var serveCmd = &cobra.Command{
 		go cache.LoadAssets()
 		go util.CheckFileSysStatus()
 		go model.StartEmbeddingIndexer()
+		if 0 < serveSupervisorPID {
+			go model.WatchSupervisorProcess(serveSupervisorPID)
+		}
 
 		model.WatchAssets()
 		model.WatchEmojis()
@@ -106,6 +110,7 @@ func init() {
 	serveCmd.Flags().BoolVar(&serveAttachUI, "attach-ui", false, "attach kernel lifecycle to desktop UI process (used by Electron)")
 	serveCmd.Flags().BoolVar(&serveSafeMode, "safe-mode", false, "boot in safe mode")
 	serveCmd.Flags().BoolVar(&serveEnablePprof, "enable-pprof", false, "register unauthenticated /debug/pprof/ endpoints exposing process memory dumps (dev only, never enable on a network-exposed instance)")
+	serveCmd.Flags().IntVar(&serveSupervisorPID, "supervisor-pid", 0, "exit gracefully when the owning web-host process exits")
 
 	rootCmd.AddCommand(serveCmd)
 }

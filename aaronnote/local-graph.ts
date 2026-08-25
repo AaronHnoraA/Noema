@@ -19,6 +19,7 @@ type LocalGraphPanelOptions = {
   groupInput?: HTMLSelectElement;
   detail?: HTMLElement;
   modeButtons?: HTMLButtonElement[];
+  isVisible?: () => boolean;
   getWorkspaceGraph?: () => Promise<GraphPayload>;
   getIndexVersion?: () => number;
   getNotes: () => NoteSummary[];
@@ -34,6 +35,7 @@ type LocalGraphPanelOptions = {
 export type LocalGraphPanel = {
   toggle: () => void;
   collapse: () => void;
+  suspend: () => void;
   update: (force?: boolean) => void;
   invalidate: () => void;
 };
@@ -237,7 +239,7 @@ export function createLocalGraphPanel(options: LocalGraphPanelOptions): LocalGra
   const detail = options.detail ?? document.createElement("div");
 
   function isCollapsed(): boolean {
-    return options.root.classList.contains("is-collapsed");
+    return options.root.classList.contains("is-collapsed") || options.isVisible?.() === false;
   }
 
   function settings(): { depth: number; refs: boolean; backlinks: boolean; tags: boolean } {
@@ -649,6 +651,10 @@ export function createLocalGraphPanel(options: LocalGraphPanelOptions): LocalGra
     clearGraph();
   }
 
+  function suspend(): void {
+    clearGraph();
+  }
+
   function toggle(): void {
     const collapsed = isCollapsed();
     options.root.classList.toggle("is-collapsed", !collapsed);
@@ -693,5 +699,5 @@ export function createLocalGraphPanel(options: LocalGraphPanelOptions): LocalGra
   groupInput.disabled = true;
   window.addEventListener("resize", () => scheduleUpdate(120));
 
-  return { toggle, collapse, update, invalidate };
+  return { toggle, collapse, suspend, update, invalidate };
 }

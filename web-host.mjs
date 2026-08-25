@@ -1,9 +1,9 @@
 /**
- * Noema web host for Emacs/Appine.
+ * Shared Noema backend for the Emacs/Appine and Tauri adapters.
  *
  * Noema owns the editable CodeMirror document in the browser.  Emacs only
- * starts this host, opens the local URL in Appine/xwidget, and receives coarse
- * events such as "open this file in Emacs".  There is intentionally no
+ * starts this host, opens the local URL in its system webview, and receives
+ * coarse adapter events such as "open this file in Emacs". There is intentionally no
  * per-keystroke Emacs -> browser preview stream here.
  */
 
@@ -47,6 +47,9 @@ import {
   getTodos,
   updateTodoStatus,
   buildAgenda,
+  buildEmbedQuery,
+  buildAttributeView,
+  patchAttributeViewCell,
   createTodo,
   patchTodo,
   ensureTodoId,
@@ -54,6 +57,7 @@ import {
   clockOut,
   todoRefCompletions,
   runtimeDebugSnapshot,
+  loadRuntimeKatexMacros,
 } from "./server/lib/index.mjs";
 import {
   bibliographyPathWatchRelevant,
@@ -61,11 +65,25 @@ import {
   clearBibliographyCache,
   configure,
   configureExternalFileProvider,
+  configureMarkdownFileProvider,
+  configurePlanningProvider,
+  configureKatexMacrosProvider,
+  configureAssetProvider,
   markNotesDirty,
   notesIndexVersionValue,
   noteSelfWriteRecently,
   notePathWatchRelevant,
 } from "./server/lib/state.mjs";
+import { createKernelMarkdownProvider } from "./server/lib/kernel-markdown-provider.mjs";
+import { createKernelPlanningProvider } from "./server/lib/kernel-planning-provider.mjs";
+import { createKernelKatexMacrosProvider } from "./server/lib/kernel-katex-macros-provider.mjs";
+import { createKernelAssetsProvider } from "./server/lib/kernel-assets-provider.mjs";
+import {
+  createKernelKnowledgeSearch,
+  kernelLexicalSearchEligible,
+} from "./server/lib/kernel-knowledge-search.mjs";
+import { createKernelRelationshipOverlay } from "./server/lib/kernel-relationships.mjs";
+import { createKernelSupervisor } from "./server/lib/kernel-supervisor.mjs";
 import { startNoteWatcher } from "./server/lib/watch.mjs";
 import { coreTasks } from "./server/lib/task-core.mjs";
 import { saveNote } from "./server/lib/save.mjs";
@@ -177,7 +195,6 @@ import { createTasksApiHandlers } from "./server/Features/Tasks/api.mjs";
 
 const ime = createImeSwitcher();
 import { runtimeMkdtemp, sweepRuntimeTmp } from "./server/lib/tmp.mjs";
-import { loadKatexMacros } from "./server/lib/katex-macros.mjs";
 import { createJupyterCellService, readPersistedScriptCell } from "./server/lib/jupyter-cell.mjs";
 import { authorizedWorkspaceEnvironment } from "./server/lib/workspace-env.mjs";
 import { jupyterDefaultsFromEnv } from "./server/lib/jupyter-defaults.mjs";
@@ -229,6 +246,14 @@ const templatesRoot = resolve(process.env.AARONNOTE_TEMPLATES_ROOT || (serverCon
 const katexMacrosDir = resolve(process.env.AARONNOTE_KATEX_MACROS_DIR || (serverConfig ? join(runtimeRoot, "resources", "katex-macros") : join(workspaceRoot, "etc", "katex-macros")));
 const bindHost = serverConfig?.listen.host || process.env.AARONNOTE_WEB_HOST || "127.0.0.1";
 const bindPort = serverConfig?.listen.port || Number(process.env.AARONNOTE_WEB_PORT || 0);
+let noemaKernel = Object.freeze({
+  state: "unavailable",
+  baseUrl: "",
+  box: null,
+  owned: false,
+  reason: "not started",
+});
+let kernelSupervisor = null;
 const gatewayUrl = String(process.env.AARONNOTE_EMACS_GATEWAY_URL || "").trim();
 const gatewayBinding = String(process.env.AARONNOTE_EMACS_GATEWAY_BINDING || "").trim();
 const gatewayClientId = String(process.env.AARONNOTE_EMACS_GATEWAY_CLIENT_ID || "aaronnote").trim();
@@ -241,6 +266,7 @@ const liuGongQuanFontCandidates = [
 
 mkdirSync(noteRoot, { recursive: true });
 mkdirSync(tmpRoot, { recursive: true });
+
 const serverTheme = serverConfig ? noemaAppTheme(serverConfig.appearance.theme) : null;
 const serverAppConfig = serverConfig ? {
   ok: true,
@@ -366,6 +392,63 @@ configure({
   toolEnvironment: workspaceEnvironment.environment,
   workspaceLayout,
 });
+
+let kernelKnowledgeSearch = null;
+let kernelRelationshipOverlay = null;
+
+function applyKernelState(next) {
+  noemaKernel = next;
+  const ready = next?.state === "listening" && next.box;
+  configureMarkdownFileProvider(ready
+    ? createKernelMarkdownProvider({ baseUrl: next.baseUrl, box: next.box })
+    : null);
+  configurePlanningProvider(ready
+    ? createKernelPlanningProvider({ baseUrl: next.baseUrl, box: next.box })
+    : null);
+  configureKatexMacrosProvider(ready
+    ? createKernelKatexMacrosProvider({ baseUrl: next.baseUrl })
+    : null);
+  configureAssetProvider(ready
+    ? createKernelAssetsProvider({
+      baseUrl: next.baseUrl,
+      box: next.box,
+      includePublic: workspaceLayout === "wiki",
+    })
+    : null);
+  kernelKnowledgeSearch = ready
+    ? createKernelKnowledgeSearch({ baseUrl: next.baseUrl, box: next.box })
+    : null;
+  kernelRelationshipOverlay = ready
+    ? createKernelRelationshipOverlay({ baseUrl: next.baseUrl, box: next.box })
+    : null;
+}
+
+kernelSupervisor = createKernelSupervisor({
+  enabled: hostMode !== "server",
+  env: process.env,
+  runtimeRoot,
+  stateRoot,
+  noteRoot,
+  stderr: process.stderr,
+  onState: applyKernelState,
+});
+applyKernelState(kernelSupervisor.status());
+void kernelSupervisor.start().catch((error) => {
+  process.stderr.write(`[aaronnote-web] kernel supervisor failed: ${error?.stack || error}\n`);
+});
+
+async function productionWikiIndexPayload(options = {}) {
+  const index = await wikiIndexPayload(options);
+  return kernelRelationshipOverlay ? kernelRelationshipOverlay(index) : index;
+}
+
+async function knowledgeSearchPayload(body = {}) {
+  const index = await productionWikiIndexPayload();
+  const lexical = kernelKnowledgeSearch && kernelLexicalSearchEligible(body)
+    ? await kernelKnowledgeSearch(index, body)
+    : searchWikiDatabase(noteRoot, body);
+  return knowledgeSearchResponse(index, body, lexical);
+}
 
 let serverRepositoryState = serverConfig
   ? await syncServerRepositories(serverConfig)
@@ -1086,6 +1169,7 @@ async function beginShutdown({ reason = "shutdown", exitCode = 0, deadlineMs = 3
         wikiAutoSync?.close({ flush: true }),
         Promise.resolve().then(() => jupyterKernelWs?.close()),
         jupyterCell?.shutdown(),
+        kernelSupervisor?.close(),
         shutdownCopilot(),
         stopAllWikiGitUis(),
       ]);
@@ -1098,6 +1182,7 @@ async function beginShutdown({ reason = "shutdown", exitCode = 0, deadlineMs = 3
 }
 process.on("SIGTERM", () => beginShutdown({ reason: "SIGTERM", exitCode: 0, deadlineMs: 30_000 }));
 process.on("SIGINT", () => beginShutdown({ reason: "SIGINT", exitCode: 0 }));
+process.on("exit", () => kernelSupervisor?.forceCloseSync());
 
 // Tauri's shell sidecar API does not provide a portable SIGTERM operation.
 // The desktop adapter therefore requests the same graceful path over the
@@ -1248,7 +1333,7 @@ function cleanStatusCode(err, fallback = 500) {
 
 async function notesListPayload(force = false) {
   if (workspaceLayout === "wiki") {
-    const index = await wikiIndexPayload({ force });
+    const index = await productionWikiIndexPayload({ force });
     return {
       type: "notes",
       notes: index.notes,
@@ -1259,13 +1344,16 @@ async function notesListPayload(force = false) {
     };
   }
   if (force) markNotesDirty();
-  return { type: "notes", ...await notesIndexPayload(), root: noteRoot };
+  const payload = { type: "notes", ...await notesIndexPayload(), root: noteRoot };
+  return kernelRelationshipOverlay ? kernelRelationshipOverlay(payload) : payload;
 }
 
 async function bootstrapNotePayload(file) {
   const opened = await bootstrapNote(file || undefined);
-  if (workspaceLayout !== "wiki") return opened;
-  const index = await wikiIndexPayload();
+  if (workspaceLayout !== "wiki") {
+    return kernelRelationshipOverlay ? kernelRelationshipOverlay(opened) : opened;
+  }
+  const index = await productionWikiIndexPayload();
   return {
     ...opened,
     notes: index.notes,
@@ -1534,7 +1622,7 @@ async function serverOpenedPayload(file, includeIndex = false) {
 }
 
 const apiRouter = new ApiRouter().register({
-  "aaronnote:api:wiki:bootstrap": () => hostMode === "server" ? currentServerCatalog().index : wikiIndexPayload(),
+  "aaronnote:api:wiki:bootstrap": () => hostMode === "server" ? currentServerCatalog().index : productionWikiIndexPayload(),
   "aaronnote:api:wiki:environment": () => ({
     ok: true,
     active: workspaceEnvironment.active,
@@ -1545,16 +1633,16 @@ const apiRouter = new ApiRouter().register({
   }),
   "aaronnote:api:wiki:refresh": (body) => hostMode === "server"
     ? currentServerCatalog().index
-    : wikiIndexPayload({ mode: body?.mode || "auto", refresh: true }),
+    : productionWikiIndexPayload({ mode: body?.mode || "auto", refresh: true }),
   "aaronnote:api:wiki:index-status": () => hostMode === "server"
     ? { ok: true, mode: "server", generation: currentServerCatalog().index.generation, inFlight: false, queued: 0 }
     : wikiIndexStatusPayload(),
   "aaronnote:api:wiki:search": async (body) => hostMode === "server"
     ? currentServerCatalog().search(body || {})
-    : knowledgeSearchResponse(await wikiIndexPayload(), body || {}, searchWikiDatabase(noteRoot, body || {})),
+    : knowledgeSearchPayload(body || {}),
   "aaronnote:api:knowledge:search": async (body) => hostMode === "server"
     ? currentServerCatalog().search(body || {})
-    : knowledgeSearchResponse(await wikiIndexPayload(), body || {}, searchWikiDatabase(noteRoot, body || {})),
+    : knowledgeSearchPayload(body || {}),
   "aaronnote:api:wiki:resolve-link": async (body) => hostMode === "server"
     ? currentServerCatalog().resolveLink(body?.target ?? body, body?.sourceFile || "")
     : resolveWikiLink(await wikiIndexPayload(), body?.target ?? body, { sourceFile: body?.sourceFile || "" }),
@@ -1685,6 +1773,13 @@ const apiRouter = new ApiRouter().register({
     return result.changed === false ? result : applyWikiMutationResult(result);
   },
   "aaronnote:api:notes:agenda": (body) => buildAgenda(body || {}),
+  "aaronnote:api:notes:embed-query": (body) => buildEmbedQuery(body || {}),
+  "aaronnote:api:notes:attribute-view": (body) => buildAttributeView(body || {}),
+  "aaronnote:api:notes:attribute-view-cell-patch": async (body) => {
+    const result = await patchAttributeViewCell(body || {});
+    broadcast("command", { command: "agenda-changed", version: notesIndexVersionValue() });
+    return result.changed === false ? result : applyWikiMutationResult(result);
+  },
   "aaronnote:api:notes:create-todo": async (body) => {
     const result = await createTodo(body || {});
     broadcast("command", { command: "agenda-changed", version: notesIndexVersionValue() });
@@ -1734,26 +1829,35 @@ const apiRouter = new ApiRouter().register({
     return { type: "todo-dep-ref", ref: idResult.id };
   },
   "aaronnote:api:notes:index": async () => {
-    return hostMode === "server"
-      ? { type: "notes", ...currentServerCatalog().index, root: "" }
-      : { type: "notes", ...await notesIndexPayload(), root: noteRoot };
+    if (hostMode === "server") return { type: "notes", ...currentServerCatalog().index, root: "" };
+    const payload = { type: "notes", ...await notesIndexPayload(), root: noteRoot };
+    return kernelRelationshipOverlay ? kernelRelationshipOverlay(payload) : payload;
   },
   "aaronnote:api:notes:graph": async () => {
     const wikiGraph = hostMode === "server" || workspaceLayout === "wiki";
     const graphIndex = wikiGraph
-      ? (hostMode === "server" ? currentServerCatalog().index : await wikiIndexPayload())
+      ? (hostMode === "server" ? currentServerCatalog().index : await productionWikiIndexPayload())
+      : null;
+    const legacyNotes = graphIndex ? null : await scanRoamNotes();
+    const relationshipIndex = legacyNotes && kernelRelationshipOverlay
+      ? await kernelRelationshipOverlay({ notes: legacyNotes })
       : null;
     const payload = graphPayload(
-      graphIndex ? graphIndex.notes : await scanRoamNotes(),
+      graphIndex ? graphIndex.notes : relationshipIndex?.notes || legacyNotes,
       {
         scope: hostMode === "server" ? "server" : wikiGraph ? "wiki" : "legacy",
         generation: graphIndex?.generation || "",
       },
     );
-    return { ...payload, indexVersion: notesIndexVersionValue() };
+    return {
+      ...payload,
+      indexVersion: notesIndexVersionValue(),
+      relationshipSource: graphIndex?.relationshipSource || relationshipIndex?.relationshipSource || "node",
+    };
   },
   "aaronnote:api:notes:roam-index": async () => {
-    return { type: "notes", ...await roamNotesIndexPayload(), root: noteRoot };
+    const payload = { type: "notes", ...await roamNotesIndexPayload(), root: noteRoot };
+    return kernelRelationshipOverlay ? kernelRelationshipOverlay(payload) : payload;
   },
   "aaronnote:api:runtime:debug": async () => ({ type: "runtime-debug", ...runtimeDebugSnapshot() }),
   "aaronnote:api:note-code:read-region": (body) => readNoteCodeRegion(body || {}),
@@ -1882,8 +1986,8 @@ const apiRouter = new ApiRouter().register({
     apiEmacsZotero,
     apiChooseNotePath,
   }),
-  "aaronnote:api:config:katex-macros": () => {
-    const payload = katexMacrosPayload();
+  "aaronnote:api:config:katex-macros": async () => {
+    const payload = await katexMacrosPayload();
     return hostMode === "server" ? { ...payload, dir: "" } : payload;
   },
   "aaronnote:api:config:app": () => currentAppConfigPayload(),
@@ -1906,9 +2010,9 @@ const apiRouter = new ApiRouter().register({
 
 // Read + parse the global KaTeX macro folder on every request (few small files),
 // so editing macros only needs a browser refresh to take effect.
-function katexMacrosPayload() {
-  const { macros, errors } = loadKatexMacros(katexMacrosDir);
-  return { type: "katex-macros", dir: katexMacrosDir, macros, errors };
+async function katexMacrosPayload() {
+  const { dir, macros, errors, source } = await loadRuntimeKatexMacros(katexMacrosDir);
+  return { type: "katex-macros", dir, macros, errors, source };
 }
 
 async function readSystemClipboard(body) {
@@ -2103,6 +2207,8 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
   window.__aaronnoteNotesRoot = ${JSON.stringify(hostMode === "server" ? "" : noteRoot)};
   window.__aaronnoteJupyterDefaults = ${JSON.stringify(hostMode === "server" ? {} : jupyterDefaults)};
   window.__aaronnoteHostMode = ${JSON.stringify(hostMode)};
+  window.__noemaKernelBase = ${JSON.stringify(noemaKernel.baseUrl)};
+  window.__noemaKernel = ${JSON.stringify(noemaKernel)};
   window.__noemaServerReadOnly = ${JSON.stringify(hostMode === "server")};
   window.__noemaServerReader = ${serverReaderJson};
   function call(channel, args) {
@@ -2344,6 +2450,9 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
       todos: function(file) { return call("aaronnote:api:notes:todos", [{ file: String(file || "") }]); },
       updateTodo: function(body) { return call("aaronnote:api:notes:update-todo", [body || {}]); },
       agenda: function(body) { return call("aaronnote:api:notes:agenda", [body || {}]); },
+      embedQuery: function(body) { return call("aaronnote:api:notes:embed-query", [body || {}]); },
+      attributeView: function(body) { return call("aaronnote:api:notes:attribute-view", [body || {}]); },
+      attributeViewCellPatch: function(body) { return call("aaronnote:api:notes:attribute-view-cell-patch", [body || {}]); },
       createTodo: function(body) { return call("aaronnote:api:notes:create-todo", [body || {}]); },
       patchTodo: function(body) { return call("aaronnote:api:notes:patch-todo", [body || {}]); },
       clockIn: function(body) { return call("aaronnote:api:notes:clock-in", [body || {}]); },
@@ -2772,7 +2881,7 @@ async function serveStatic(urlPath, res, origin) {
     res.end(transformJavaScript(data.toString("utf8")));
     return;
   }
-  if (["index.html", "agenda.html", "config.html", "jupyter.html", "slides.html", "wiki.html"].some((name) => file.endsWith(name))) {
+  if (["index.html", "agenda.html", "config.html", "jupyter.html", "slides.html", "wiki.html", "markdown-box-lab.html"].some((name) => file.endsWith(name))) {
     const appConfig = await currentAppConfigPayload();
     const html = data.toString("utf8").replace("</head>", `${adapterScript(origin, appConfig)}\n</head>`);
     res.writeHead(200, {
@@ -3071,6 +3180,7 @@ document.addEventListener("DOMContentLoaded", function () {
           tmp: tmpRoot,
           snippets: snippetsRoot,
           templates: templatesRoot,
+          kernel: noemaKernel,
         });
       }
       return;

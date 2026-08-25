@@ -59,7 +59,7 @@ describe("org-env title math", () => {
 
   test("block IDs render separately and copy their page-scoped target", async () => {
     const id = "0198fbac-0780-7c99-85e6-333333333333";
-    const md = `#+begin theorem Spectral {#${id}}\nBody.\n#+end theorem\n\nAfter.`;
+    const md = `#+begin theorem Spectral {#${id} phase=proof owner="Aaron He"}\nBody.\n#+end theorem\n\nAfter.`;
     const copied: string[] = [];
     window.AaronnoteBlockTarget = (blockId) => `roam://page-id#${blockId}`;
     window.AaronnoteCopyBlockTarget = async (blockId) => {

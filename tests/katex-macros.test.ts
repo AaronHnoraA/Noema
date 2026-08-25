@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, test } from "@voidzero-dev/vite-plus-test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { parseLatexMacros } from "../shared/katex-macros.mjs";
 import {
@@ -14,6 +16,16 @@ afterEach(() => {
 });
 
 describe("parseLatexMacros", () => {
+  test("stays aligned with the Go loader through shared fixtures", () => {
+    const fixtures = JSON.parse(readFileSync(join(process.cwd(), "shared", "katex-macro-fixtures.json"), "utf8"));
+    for (const fixture of fixtures) {
+      expect(parseLatexMacros(fixture.files), fixture.name).toEqual({
+        macros: fixture.macros,
+        errors: fixture.errors,
+      });
+    }
+  });
+
   test("parses \\newcommand with and without args and braces", () => {
     const { macros, errors } = parseLatexMacros([
       {

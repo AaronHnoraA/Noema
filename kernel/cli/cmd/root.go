@@ -23,12 +23,14 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"time"
 
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/model"
 	"github.com/aaronhe/noema/kernel/sql"
+	"github.com/aaronhe/noema/kernel/task"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/siyuan-note/logging"
 
 	"github.com/spf13/cobra"
 )
@@ -39,6 +41,10 @@ var (
 	dryRun        bool
 	logLevel      string
 )
+
+// cliTaskDrainBudget 是 CLI 单次命令同步排空任务队列的整体预算。全量索引一个大笔记本可能耗时数十秒，
+// 取值需要宽到不误伤真实索引，又要保证异常情况下命令不会永远挂住。
+const cliTaskDrainBudget = 10 * time.Minute
 
 var rootCmd = &cobra.Command{
 	Use:     "SiYuan-Kernel",
@@ -53,6 +59,11 @@ var rootCmd = &cobra.Command{
 		if name == "serve" || (cmd.Parent() != nil && cmd.Parent().Name() == "workspace") {
 			return nil
 		}
+		// 同理，任务队列（task.AppendTask）的消费者 ExecTaskJob 也只在 serve 的 cron 下运行。
+		// Box.Index() 把 removeBoxRefs/indexBox/IndexRefs 全部排进该队列，CLI 下若不排空，
+		// 索引根本不会建立，后续 search/sql/ref 会静默返回空结果。必须在 flush SQL 之前排空，
+		// 因为索引任务正是往 SQL 队列里写数据的那一方。
+		task.ExecSyncTasksUntilEmpty(cliTaskDrainBudget)
 		model.FlushTxQueue()
 		sql.FlushQueue()
 		return nil

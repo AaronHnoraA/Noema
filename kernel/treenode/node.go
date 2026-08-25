@@ -116,9 +116,31 @@ func GetBlockRef(n *ast.Node) (blockRefID, blockRefText, blockRefSubtype string)
 		return
 	}
 
-	blockRefID = n.TextMarkBlockRefID
-	blockRefText = n.TextMarkTextContent
-	blockRefSubtype = n.TextMarkBlockRefSubtype
+	if ast.NodeTextMark == n.Type {
+		blockRefID = n.TextMarkBlockRefID
+		blockRefText = n.TextMarkTextContent
+		blockRefSubtype = n.TextMarkBlockRefSubtype
+		return
+	}
+
+	// markdown box：filesys.LoadTree 走的是原生 parse.Parse，不像 protyle 那样再跑一遍
+	// parse.NestedInlines2FlattedSpansHybrid 把 ((id "text")) 拍平成 NodeTextMark，
+	// 所以这里看到的是未拍平的 ast.NodeBlockRef，ID/锚文本挂在 NodeBlockRefID/
+	// NodeBlockRefText（或匿名引用的 NodeBlockRefDynamicText）子节点上。取法照抄
+	// lute 自己 render 包里処理同一种节点形状的方式（见 render/protyle_renderer.go
+	// 的 renderBlockRef：idNode.TokensStr() + refTextNode.Text()），不是新发明的读法。
+	if idNode := n.ChildByType(ast.NodeBlockRefID); nil != idNode {
+		blockRefID = idNode.TokensStr()
+	}
+	blockRefSubtype = "s"
+	refTextNode := n.ChildByType(ast.NodeBlockRefText)
+	if nil == refTextNode {
+		refTextNode = n.ChildByType(ast.NodeBlockRefDynamicText)
+		blockRefSubtype = "d"
+	}
+	if nil != refTextNode {
+		blockRefText = refTextNode.Text()
+	}
 	return
 }
 

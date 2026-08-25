@@ -28,6 +28,9 @@ import (
 	"github.com/88250/lute/ast"
 	"github.com/aaronhe/noema/kernel/conf"
 	"github.com/aaronhe/noema/kernel/filesys"
+	noemaidentity "github.com/aaronhe/noema/kernel/noema/identity"
+	noemamarkdown "github.com/aaronhe/noema/kernel/noema/markdown"
+	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
 	"github.com/siyuan-note/filelock"
 )
@@ -46,14 +49,45 @@ type MarkdownBlockRef struct {
 	Level int    `json:"level,omitempty"` // 标题层级 1-6；非标题块为 0
 }
 
+// MarkdownBlockLocation is the canonical navigation result for a Noema block
+// reference. Internal SiYuan-shaped projection IDs never cross this boundary.
+type MarkdownBlockLocation struct {
+	ID       string `json:"id"`
+	Notebook string `json:"notebook"`
+	Path     string `json:"path"`
+	Line     int    `json:"line,omitempty"`
+	Type     string `json:"type,omitempty"`
+}
+
+func ResolveMarkdownBlock(id string) (ret *MarkdownBlockLocation, err error) {
+	canonical := strings.ToLower(strings.TrimSpace(id))
+	internal := canonical
+	if noemaidentity.IsUUIDv7(canonical) {
+		internal = noemaidentity.ProjectionID(canonical, "")
+	}
+	bt := treenode.GetBlockTree(internal)
+	if nil == bt || conf.BoxKindMarkdown != GetBoxKind(bt.BoxID) {
+		return nil, ErrBlockNotFound
+	}
+	ret = &MarkdownBlockLocation{ID: canonical, Notebook: bt.BoxID, Path: bt.Path, Type: bt.Type}
+	raw, readErr := os.ReadFile(filepath.Join(filesys.BoxRootPath(bt.BoxID), bt.Path))
+	if nil != readErr {
+		return nil, readErr
+	}
+	for _, definition := range noemamarkdown.Scan(raw).Definitions {
+		if strings.EqualFold(definition.CanonicalID, canonical) {
+			ret.Line = definition.Line
+			break
+		}
+	}
+	return ret, nil
+}
+
 // LoadMarkdownDoc 读取一个 markdown box 文档，返回保证与磁盘一致的当前
 // markdown 字节，以及文档里已经分配了 ID 的块列表。
 //
-// 若这次解析给文档分配了新 ID，或者 normalizeOrgEndBlankLines 之类的规范化
-// 改动了字节（见 filesys.loadMarkdownTree），会先落盘一次再读回——
-// writeMarkdownTree 内容不变时直接跳过落盘，这个保证的代价可以忽略，
-// 换来的是调用方看到的 markdown 字节、磁盘上的字节、后续 UpsertIndexes
-// 索引的字节三者永远一致，不会出现"读到的内容里有 ID 但磁盘上还没有"的窗口。
+// 加载和索引严格只读：文档身份来自 meta.id 的确定性投影，绝不写入 doc IAL
+// 或格式化整篇 Markdown。返回的 markdown 始终是磁盘原始字节。
 func LoadMarkdownDoc(boxID, path string) (markdown string, blocks []MarkdownBlockRef, err error) {
 	if conf.BoxKindMarkdown != GetBoxKind(boxID) {
 		return "", nil, fmt.Errorf("box [%s] is not a markdown box", boxID)
@@ -62,7 +96,7 @@ func LoadMarkdownDoc(boxID, path string) (markdown string, blocks []MarkdownBloc
 		return "", nil, err
 	}
 
-	absPath := filepath.Join(util.DataDir, boxID, path)
+	absPath := filepath.Join(filesys.BoxRootPath(boxID), path)
 	if _, statErr := os.Stat(absPath); nil != statErr {
 		if os.IsNotExist(statErr) {
 			// 加载一个还不存在的路径是"新建文档"这个流程里完全正常的第一步——
@@ -80,20 +114,13 @@ func LoadMarkdownDoc(boxID, path string) (markdown string, blocks []MarkdownBloc
 		return "", nil, err
 	}
 
-	if _, err = filesys.WriteTree(tree); nil != err {
-		return "", nil, err
-	}
-	// 必须在 WriteTree 之后：见 filesys.StripEphemeralMarkdownBlockIDs 的注释。
-	filesys.StripEphemeralMarkdownBlockIDs(tree)
-
 	raw, err := os.ReadFile(absPath)
 	if nil != err {
 		return "", nil, err
 	}
 	markdown = string(raw)
 
-	// 上面已经调过 StripEphemeralMarkdownBlockIDs，这里能看到的 n.ID 保证是真实存在于
-	// 源文本、会被 FormatRenderer 写回磁盘的，不是 ProtyleWYSIWYG 每次解析现发的临时 ID。
+	canonicalDocID := filesys.MarkdownCanonicalDocumentID(tree)
 	ast.Walk(tree.Root, func(n *ast.Node, entering bool) ast.WalkStatus {
 		if !entering || !n.IsBlock() || "" == n.ID {
 			return ast.WalkContinue
@@ -102,17 +129,20 @@ func LoadMarkdownDoc(boxID, path string) (markdown string, blocks []MarkdownBloc
 		if ast.NodeHeading == n.Type {
 			level = n.HeadingLevel
 		}
-		blocks = append(blocks, MarkdownBlockRef{ID: n.ID, Type: n.Type.String(), Level: level})
+		id := filesys.MarkdownCanonicalBlockID(n)
+		if n == tree.Root {
+			id = canonicalDocID
+		}
+		blocks = append(blocks, MarkdownBlockRef{ID: id, Type: n.Type.String(), Level: level})
 		return ast.WalkContinue
 	})
 	return
 }
 
 // SaveMarkdownDoc 用调用方（CM6 的防抖全文保存）送来的最新 markdown 文本
-// 覆盖一个 markdown box 文档：落盘、重新解析、增量更新 blocktree/sql 索引、
-// 推送 WS 刷新事件，最后返回规范化之后真正落盘的字节和最新块列表——
-// 复用 LoadMarkdownDoc 保证这一步和"读"看到的是完全同一套规则（同一个
-// normalizeOrgEndBlankLines、同一套 ID 分配/持久化逻辑），不重复实现一遍。
+// 覆盖一个 markdown box 文档：原样落盘、重新解析、增量更新 blocktree/sql
+// 索引并推送刷新事件。该路径不经过 lute FormatRenderer；调用方传入的字节
+// 就是磁盘真相源。
 //
 // 已知的权衡：这里直接落盘会触发 markdown_watcher.go 的外部编辑监听，
 // 导致同一次保存被 UpsertIndexes 索引两遍（一遍这里主动触发，一遍 watcher
@@ -127,7 +157,7 @@ func SaveMarkdownDoc(boxID, path, markdown string) (saved string, blocks []Markd
 		return "", nil, err
 	}
 
-	absPath := filepath.Join(util.DataDir, boxID, path)
+	absPath := filepath.Join(filesys.BoxRootPath(boxID), path)
 	if err = os.MkdirAll(filepath.Dir(absPath), 0755); nil != err {
 		return "", nil, err
 	}
@@ -151,7 +181,7 @@ type MarkdownDocSummary struct {
 	Title string `json:"title"` // 目前只是去掉扩展名的文件名；真实标题（比如取正文第一个标题）是后续增量
 }
 
-// ListMarkdownDocs 列出一个 markdown box 里的所有 .md 文档，按路径排序。
+// ListMarkdownDocs 列出一个 markdown box 里的所有 .md/.markdown 文档，按路径排序。
 // 用于给客户端（比如 CM6 那边的文档浏览器）提供"这个 box 里有哪些笔记"，
 // 不需要用户手敲路径才能打开已有文档。
 func ListMarkdownDocs(boxID string) (docs []MarkdownDocSummary, err error) {
@@ -159,7 +189,7 @@ func ListMarkdownDocs(boxID string) (docs []MarkdownDocSummary, err error) {
 		return nil, fmt.Errorf("box [%s] is not a markdown box", boxID)
 	}
 
-	boxDir := filepath.Join(util.DataDir, boxID)
+	boxDir := filesys.BoxRootPath(boxID)
 	docs = []MarkdownDocSummary{}
 	walkErr := filepath.WalkDir(boxDir, func(p string, d fs.DirEntry, walkErr error) error {
 		if nil != walkErr {
@@ -169,12 +199,12 @@ func ListMarkdownDocs(boxID string) (docs []MarkdownDocSummary, err error) {
 			return walkErr
 		}
 		if d.IsDir() {
-			if ".siyuan" == d.Name() {
+			if p != boxDir && strings.HasPrefix(d.Name(), ".") {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if !strings.HasSuffix(p, ".md") {
+		if !isMarkdownDocPath(p) {
 			return nil
 		}
 		rel, relErr := filepath.Rel(boxDir, p)
@@ -184,7 +214,7 @@ func ListMarkdownDocs(boxID string) (docs []MarkdownDocSummary, err error) {
 		rel = "/" + filepath.ToSlash(rel)
 		docs = append(docs, MarkdownDocSummary{
 			Path:  rel,
-			Title: strings.TrimSuffix(filepath.Base(rel), ".md"),
+			Title: strings.TrimSuffix(filepath.Base(rel), filepath.Ext(rel)),
 		})
 		return nil
 	})

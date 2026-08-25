@@ -1962,6 +1962,33 @@
   font: inherit;
 }
 
+.cm-editor .cm-noema-block-id {
+  display: inline-block;
+  margin: 0 0.15em;
+  padding: 0 0.32em;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--aaron-faint, #6f748b), transparent 82%);
+  color: var(--aaron-faint, #6f748b);
+  cursor: pointer;
+  font: 0.72em/1.5 var(--aaron-font-mono, "Fira Code", ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+.cm-editor .cm-noema-block-id-copied {
+  background: color-mix(in srgb, var(--aaron-link, #9de7ff), transparent 70%);
+  color: var(--aaron-link, #9de7ff);
+}
+.cm-editor .cm-block-ref {
+  padding: 0 0.15em;
+  border-radius: 3px;
+  color: var(--aaron-link, #9de7ff);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--aaron-link, #9de7ff), transparent 55%);
+  text-underline-offset: 0.15em;
+  cursor: pointer;
+}
+.cm-editor .cm-block-ref:hover {
+  background: color-mix(in srgb, var(--aaron-link, #9de7ff), transparent 88%);
+}
+
 /* ─── Visible-range block drag handles ──────────────────────────── */
 .cm-editor .cm-gutters {
   border-inline-end: 0;
@@ -4320,4 +4347,383 @@ body.has-diagram-fullscreen {
 /* Inline raw HTML tag replacement */
 .cm-editor .cm-html-inline-widget {
   display: inline;
+}
+.cm-attribute-view {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0.55rem 0;
+  color: var(--aaronnote-fg, inherit);
+  font-family: var(--aaronnote-ui-font, system-ui, sans-serif);
+}
+
+.cm-attribute-view-header {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 2rem;
+  padding: 0.35rem 0.65rem;
+  border: 1px solid color-mix(in srgb, currentColor 16%, transparent);
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  background: color-mix(in srgb, currentColor 4%, transparent);
+}
+
+.cm-attribute-view-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cm-attribute-view-count {
+  margin-right: auto;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  color: color-mix(in srgb, currentColor 70%, transparent);
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  font-size: 0.78rem;
+}
+
+.cm-attribute-view-action {
+  appearance: none;
+  border: 0;
+  padding: 0.2rem 0.35rem;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.cm-attribute-view-action:hover {
+  background: color-mix(in srgb, currentColor 9%, transparent);
+  border-radius: 4px;
+}
+
+.cm-attribute-view-content {
+  border: 1px solid color-mix(in srgb, currentColor 16%, transparent);
+  border-radius: 0 0 8px 8px;
+  overflow: hidden;
+  min-height: 2.5rem;
+}
+
+.cm-attribute-view-scroller {
+  overflow-x: auto;
+}
+
+.cm-attribute-view-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: auto;
+  font-size: 0.86rem;
+}
+
+.cm-attribute-view-table th,
+.cm-attribute-view-table td {
+  min-width: 6rem;
+  max-width: 22rem;
+  padding: 0.42rem 0.6rem;
+  border-right: 1px solid color-mix(in srgb, currentColor 10%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, currentColor 10%, transparent);
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cm-attribute-view-table th {
+  color: color-mix(in srgb, currentColor 74%, transparent);
+  background: color-mix(in srgb, currentColor 4%, transparent);
+  font-weight: 600;
+}
+
+.cm-attribute-view-table td[data-empty="true"]::after {
+  content: "—";
+  color: color-mix(in srgb, currentColor 35%, transparent);
+}
+
+.cm-attribute-view-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(16rem, 100%), 1fr));
+  gap: 0.65rem;
+  padding: 0.7rem;
+}
+
+.cm-attribute-view-card {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, currentColor 2.5%, transparent);
+  box-shadow: 0 1px 2px color-mix(in srgb, currentColor 7%, transparent);
+}
+
+.cm-attribute-view-card-title {
+  min-height: 1.35rem;
+  padding: 0.55rem 0.65rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 650;
+}
+
+.cm-attribute-view-card-fields {
+  margin: 0;
+  padding: 0 0.65rem 0.55rem;
+}
+
+.cm-attribute-view-card-field {
+  display: grid;
+  grid-template-columns: minmax(4.5rem, 0.42fr) minmax(0, 1fr);
+  gap: 0.55rem;
+  align-items: baseline;
+  min-height: 1.55rem;
+  border-top: 1px solid color-mix(in srgb, currentColor 8%, transparent);
+  padding: 0.3rem 0;
+  font-size: 0.82rem;
+}
+
+.cm-attribute-view-card-field dt {
+  color: color-mix(in srgb, currentColor 62%, transparent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cm-attribute-view-card-field dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cm-attribute-view-card .cm-attribute-view-cell[data-empty="true"]::after {
+  content: "—";
+  color: color-mix(in srgb, currentColor 35%, transparent);
+}
+
+.cm-attribute-view-kanban {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+  overflow-x: auto;
+  padding: 0.7rem;
+}
+
+.cm-attribute-view-kanban-lane {
+  flex: 0 0 min(17rem, calc(100vw - 5rem));
+  min-width: 0;
+  border-radius: 7px;
+  background: color-mix(in srgb, currentColor 4%, transparent);
+}
+
+.cm-attribute-view-kanban-header {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.5rem 0.6rem;
+  font-size: 0.82rem;
+}
+
+.cm-attribute-view-kanban-header strong {
+  min-width: 0;
+  margin-right: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cm-attribute-view-kanban-header span {
+  min-width: 1.25rem;
+  border-radius: 999px;
+  padding: 0.05rem 0.25rem;
+  background: color-mix(in srgb, currentColor 9%, transparent);
+  text-align: center;
+  font-size: 0.72rem;
+}
+
+.cm-attribute-view-kanban-cards {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0 0.5rem 0.55rem;
+}
+
+.cm-attribute-view-table td.cm-attribute-view-cell-editable {
+  cursor: text;
+}
+
+.cm-attribute-view-card .cm-attribute-view-cell-editable {
+  cursor: text;
+}
+
+.cm-attribute-view-table td.cm-attribute-view-cell-link,
+.cm-attribute-view-card .cm-attribute-view-cell-link {
+  cursor: pointer;
+}
+
+.cm-attribute-view-table td.cm-attribute-view-cell-editable:hover,
+.cm-attribute-view-table td.cm-attribute-view-cell-editable:focus,
+.cm-attribute-view-card .cm-attribute-view-cell-editable:hover,
+.cm-attribute-view-card .cm-attribute-view-cell-editable:focus {
+  outline: 1px solid color-mix(in srgb, currentColor 28%, transparent);
+  outline-offset: -1px;
+  background: color-mix(in srgb, currentColor 5%, transparent);
+}
+
+.cm-attribute-view-table td[data-editing="true"]::after,
+.cm-attribute-view-card [data-editing="true"]::after {
+  content: none;
+}
+
+.cm-attribute-view-cell-editor {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 5rem;
+  border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+  border-radius: 4px;
+  padding: 0.15rem 0.25rem;
+  color: inherit;
+  background: var(--aaronnote-bg, Canvas);
+  font: inherit;
+}
+
+.cm-attribute-view-empty,
+.cm-attribute-view-diagnostics {
+  padding: 0.65rem;
+  color: color-mix(in srgb, currentColor 62%, transparent);
+  font-size: 0.82rem;
+}
+
+.cm-attribute-view-diagnostics {
+  border-top: 1px solid color-mix(in srgb, currentColor 10%, transparent);
+  color: var(--aaronnote-warning, #a15c00);
+}
+
+.cm-embed-query {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0.55rem 0;
+  color: var(--aaronnote-fg, inherit);
+  font-family: var(--aaronnote-ui-font, system-ui, sans-serif);
+}
+
+.cm-embed-query-header {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 2rem;
+  padding: 0.35rem 0.65rem;
+  border: 1px solid color-mix(in srgb, currentColor 16%, transparent);
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  background: color-mix(in srgb, currentColor 4%, transparent);
+}
+
+.cm-embed-query-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cm-embed-query-count {
+  margin-right: auto;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  color: color-mix(in srgb, currentColor 70%, transparent);
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  font-size: 0.78rem;
+}
+
+.cm-embed-query-action,
+.cm-embed-query-result-path {
+  appearance: none;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.cm-embed-query-action {
+  padding: 0.2rem 0.35rem;
+  font-size: 0.78rem;
+}
+
+.cm-embed-query-action:hover,
+.cm-embed-query-result-path:hover {
+  border-radius: 4px;
+  background: color-mix(in srgb, currentColor 9%, transparent);
+}
+
+.cm-embed-query-content {
+  display: grid;
+  gap: 0.6rem;
+  min-height: 2.5rem;
+  border: 1px solid color-mix(in srgb, currentColor 16%, transparent);
+  border-radius: 0 0 8px 8px;
+  padding: 0.65rem;
+}
+
+.cm-embed-query-result {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, currentColor 2%, transparent);
+}
+
+.cm-embed-query-result-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 9%, transparent);
+  background: color-mix(in srgb, currentColor 3%, transparent);
+  font-size: 0.78rem;
+}
+
+.cm-embed-query-result-path {
+  min-width: 0;
+  margin-right: auto;
+  padding: 0.12rem 0.25rem;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cm-embed-query-result-kind {
+  flex: none;
+  color: color-mix(in srgb, currentColor 58%, transparent);
+}
+
+.cm-embed-query-result-markdown {
+  padding: 0.5rem 0.65rem;
+  font-family: var(--aaronnote-text-font, inherit);
+}
+
+.cm-embed-query-result-markdown > :first-child {
+  margin-top: 0;
+}
+
+.cm-embed-query-result-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.cm-embed-query-empty,
+.cm-embed-query-diagnostics,
+.cm-embed-query-truncated {
+  color: color-mix(in srgb, currentColor 62%, transparent);
+  font-size: 0.82rem;
+}
+
+.cm-embed-query-diagnostics {
+  color: var(--aaronnote-warning, #a15c00);
+}
+
+.cm-embed-query-truncated {
+  padding: 0 0.65rem 0.5rem;
 }

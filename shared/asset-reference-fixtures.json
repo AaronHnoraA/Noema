@@ -1,0 +1,47 @@
+[
+  {
+    "name": "markdown destinations decode and preserve nested parentheses",
+    "note": "project/topic.md",
+    "content": "![plot](./images/topic/used%20plot.png)\n[file](<./attachments/topic/raw (final).pdf>)\n",
+    "expected": [
+      "project/attachments/topic/raw (final).pdf",
+      "project/images/topic/used plot.png"
+    ]
+  },
+  {
+    "name": "html media attributes and srcset",
+    "note": "project/topic.md",
+    "content": "<video poster=\"./attachments/topic/poster.jpg\"><source src=\"./attachments/topic/movie.mp4\"></video>\n<img srcset=\"./images/topic/small.png 1x, ./images/topic/large.png 2x\">\n",
+    "expected": [
+      "project/attachments/topic/movie.mp4",
+      "project/attachments/topic/poster.jpg",
+      "project/images/topic/large.png",
+      "project/images/topic/small.png"
+    ]
+  },
+  {
+    "name": "css org file and include references",
+    "note": "project/topic.md",
+    "content": "<style>x{background:url('./images/topic/background.webp')}</style>\n[[file:./attachments/topic/raw.pdf][raw]]\n#+include: \"./attachments/topic/included.txt\"\n",
+    "expected": [
+      "project/attachments/topic/included.txt",
+      "project/attachments/topic/raw.pdf",
+      "project/images/topic/background.webp"
+    ]
+  },
+  {
+    "name": "root and roam-prefixed paths stay inside the note root",
+    "note": "project/topic.md",
+    "content": "![root](/images/root.png)\n[roam](roam/attachments/root.pdf)\n",
+    "expected": [
+      "attachments/root.pdf",
+      "images/root.png"
+    ]
+  },
+  {
+    "name": "external protocols anchors and escapes are ignored",
+    "note": "project/topic.md",
+    "content": "![remote](https://example.com/a.png)\n<a href=\"mailto:a@example.com\">mail</a>\n[anchor](#section)\n[escape](../../outside.png)\n",
+    "expected": []
+  }
+]

@@ -93,14 +93,12 @@ func TestListMarkdownFilesSkipsSiyuanConfDir(t *testing.T) {
 	}
 }
 
-// TestFreshMarkdownFilePersistsAssignedIDOnIndex 复现"外部编辑器直接写了一个全新
-// .md 文件，此前从未经过内核"的场景，验证 index.go 里给 upsertIndexes/indexBox
-// 加的写回逻辑思路：LoadTree 首次解析分配的 ID，WriteTree 一次就能把它落盘，
-// 之后重新 LoadTree 拿到的是同一个 ID（不会每次索引都换一个新 ID）。
+// TestFreshMarkdownFileGetsStableProjectionWithoutWrite 复现外部编辑器直接写入
+// Markdown 的场景，验证 LoadTree 从 Noema meta.id 建立稳定投影且不改写源文件。
 // 这里直接调 filesys 层加 treenode，不经过 upsertIndexes 本身——upsertIndexes
 // 还会调 sql.UpsertTreeQueue，需要完整的 sql.InitDatabase（fts5 build tag、
 // 独立子进程，见 file_index_test.go），超出这次改动想要覆盖的范围。
-func TestFreshMarkdownFilePersistsAssignedIDOnIndex(t *testing.T) {
+func TestFreshMarkdownFileGetsStableProjectionWithoutWrite(t *testing.T) {
 	originalDataDir := util.DataDir
 	originalBlockTreeDBPath := util.BlockTreeDBPath
 	tempDir := t.TempDir()
@@ -121,7 +119,7 @@ func TestFreshMarkdownFilePersistsAssignedIDOnIndex(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(absPath), 0755); nil != err {
 		t.Fatal(err)
 	}
-	source := "# Hello\n\nWritten directly to disk, like Emacs would.\n"
+	source := "#+begin meta\nid: 0198fc34-7b32-7a11-8cb4-6c40e3b33d68\n#+end meta\n\n# Hello\n\nWritten directly to disk, like Emacs would.\n"
 	if err := os.WriteFile(absPath, []byte(source), 0644); nil != err {
 		t.Fatal(err)
 	}
@@ -136,11 +134,6 @@ func TestFreshMarkdownFilePersistsAssignedIDOnIndex(t *testing.T) {
 		t.Fatal("LoadTree did not assign a root ID for a fresh markdown file")
 	}
 
-	// 这一步是 index.go 里新加的写回：不做的话下次 LoadTree 会分配一个不同的 ID。
-	if _, err := filesys.WriteTree(tree); nil != err {
-		t.Fatalf("WriteTree failed: %s", err)
-	}
-
 	treenode.UpsertBlockTree(tree)
 	bt := treenode.GetBlockTreeRootByPath(boxID, relPath)
 	if nil == bt || bt.RootID != rootID {
@@ -152,7 +145,17 @@ func TestFreshMarkdownFilePersistsAssignedIDOnIndex(t *testing.T) {
 		t.Fatalf("second LoadTree failed: %s", err)
 	}
 	if reloaded.ID != rootID {
-		t.Fatalf("reloaded tree ID [%s] != originally assigned+persisted ID [%s] — the ID was not stable across reindex", reloaded.ID, rootID)
+		t.Fatalf("reloaded tree ID [%s] != original projection ID [%s]", reloaded.ID, rootID)
+	}
+	raw, err := os.ReadFile(absPath)
+	if nil != err {
+		t.Fatal(err)
+	}
+	if string(raw) != source {
+		t.Fatalf("loading/indexing rewrote source bytes:\n%s", raw)
+	}
+	if strings.Contains(string(raw), `type="doc"`) {
+		t.Fatalf("loading/indexing injected a document IAL:\n%s", raw)
 	}
 
 	treenode.RemoveBlockTreesByRootID(boxID, rootID)
@@ -204,10 +207,6 @@ func TestRepeatedReindexDoesNotAccumulateEphemeralBlockGarbage(t *testing.T) {
 		if nil != err {
 			t.Fatalf("pass %d: LoadTree failed: %s", i, err)
 		}
-		if _, err := filesys.WriteTree(tree); nil != err {
-			t.Fatalf("pass %d: WriteTree failed: %s", i, err)
-		}
-		filesys.StripEphemeralMarkdownBlockIDs(tree)
 		treenode.UpsertBlockTree(tree)
 		rootID = tree.ID
 

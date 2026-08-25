@@ -31,17 +31,14 @@ import (
 // 稳定的块收进索引；由于这个 ID 每次重新解析都不一样，每次重索引都会插入一批新的垃圾行，
 // 上一批因为 ID 对不上也清不掉——索引会无限膨胀，而且都是从未被引用过的普通段落/标题。
 //
-// **调用时机很重要**：必须在 filesys.WriteTree（如果这次调用需要写）之后再调用，
-// 不能在 LoadTree 拿到树之后立刻调用。FormatRenderer 渲染时依赖这些临时 ID 的存在
-// 来决定某些块类型（比如数学块）后面要不要多空一行；解析完立刻清空会让 WriteTree
-// 渲染出和"这棵树本该渲染成的样子"不一致的字节（已经用测试踩到过：数学块后面的
-// ID 被提前清空后，第二次落盘会比第一次多一个空行）。调用顺序应该总是：
-// LoadTree → （需要的话）WriteTree → StripEphemeralMarkdownBlockIDs → 索引/取块列表。
+// Noema 的 markdown 路径不再调用 FormatRenderer/WriteTree，因此 LoadTree 会在返回
+// 前直接清掉这些 ID。该顺序只适用于 source-authoritative markdown box；.sy 路径
+// 继续使用原来的树写入协议。
 //
 // 判断依据：源文本里是否真的紧跟着一个字面的 NodeKramdownBlockIAL 兄弟节点
-// （对应真实存在的 `{: id=...}` 行）——文档根节点的 IAL 是 t.Root.AppendChild
-// 挂上去的，永远是 Root 的最后一个子节点，不算某个内容块自己的 IAL，即使这个
-// 内容块恰好是文档里的最后一块、导致 n.Next == root.LastChild。
+// （对应真实存在的 `{: id=...}` 行）。ApplyMarkdownDocumentIdentity 会先移除
+// lute 合成的文档根 IAL，所以这里遇到的 IAL 都是源文本中显式存在的兼容标记；
+// 即使它恰好是 Root 的最后一个子节点，也仍属于前面的内容块。
 func StripEphemeralMarkdownBlockIDs(tree *parse.Tree) {
 	if nil == tree || nil == tree.Root {
 		return
@@ -51,7 +48,7 @@ func StripEphemeralMarkdownBlockIDs(tree *parse.Tree) {
 		if !entering || root == n || !n.IsBlock() || "" == n.ID {
 			return ast.WalkContinue
 		}
-		hasRealIAL := nil != n.Next && ast.NodeKramdownBlockIAL == n.Next.Type && n.Next != root.LastChild
+		hasRealIAL := nil != n.Next && ast.NodeKramdownBlockIAL == n.Next.Type
 		if !hasRealIAL {
 			n.ID = ""
 			n.KramdownIAL = nil

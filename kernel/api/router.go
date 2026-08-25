@@ -21,9 +21,9 @@ import (
 	"net/http"
 
 	"github.com/88250/gulu"
+	"github.com/aaronhe/noema/kernel/model"
 	"github.com/gin-gonic/gin"
 	"github.com/siyuan-note/logging"
-	"github.com/aaronhe/noema/kernel/model"
 )
 
 func ServeAPI(ginServer *gin.Engine) {
@@ -132,7 +132,21 @@ func ServeAPI(ginServer *gin.Engine) {
 	ginServer.Handle("POST", "/api/filetree/getDoc", model.CheckAuth, getDoc)
 	ginServer.Handle("POST", "/api/noema/markdown/loadDoc", model.CheckAuth, loadMarkdownDoc)
 	ginServer.Handle("POST", "/api/noema/markdown/saveDoc", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, saveMarkdownDoc)
+	ginServer.Handle("POST", "/api/noema/markdown/storeAsset", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, storeMarkdownAsset)
+	ginServer.Handle("POST", "/api/noema/markdown/storeAssetFromPath", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, storeMarkdownAssetFromPath)
+	ginServer.Handle("POST", "/api/noema/markdown/listUnusedAssets", model.CheckAuth, listUnusedMarkdownAssets)
 	ginServer.Handle("POST", "/api/noema/markdown/listDocs", model.CheckAuth, listMarkdownDocs)
+	ginServer.Handle("POST", "/api/noema/markdown/registerExternalBox", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, registerExternalMarkdownBox)
+	ginServer.Handle("POST", "/api/noema/markdown/listExternalBoxes", model.CheckAuth, listExternalMarkdownBoxes)
+	ginServer.Handle("POST", "/api/noema/config/katexMacros", model.CheckAuth, loadNoemaKatexMacros)
+	ginServer.Handle("POST", "/api/noema/markdown/listRelationships", model.CheckAuth, listMarkdownRelationships)
+	ginServer.Handle("POST", "/api/noema/markdown/listPlanning", model.CheckAuth, listMarkdownPlanning)
+	ginServer.Handle("POST", "/api/noema/markdown/listPropertyBlocks", model.CheckAuth, listMarkdownPropertyBlocks)
+	ginServer.Handle("POST", "/api/noema/markdown/mutatePropertyBlock", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, mutateMarkdownPropertyBlock)
+	ginServer.Handle("POST", "/api/noema/markdown/mutatePlanning", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, mutateMarkdownPlanning)
+	ginServer.Handle("POST", "/api/noema/markdown/resolveBlock", model.CheckAuth, resolveMarkdownBlock)
+	ginServer.Handle("POST", "/api/noema/agenda/evaluate", model.CheckAuth, evaluateNoemaAgenda)
+	ginServer.Handle("POST", "/api/noema/attribute-view/evaluate", model.CheckAuth, evaluateNoemaAttributeView)
 	ginServer.Handle("POST", "/api/filetree/getDocCreateSavePath", model.CheckAuth, getDocCreateSavePath)
 	ginServer.Handle("POST", "/api/filetree/getRefCreateSavePath", model.CheckAuth, getRefCreateSavePath)
 	ginServer.Handle("POST", "/api/filetree/getShorthandSavePath", model.CheckAuth, getShorthandSavePath)
@@ -463,7 +477,6 @@ func ServeAPI(ginServer *gin.Engine) {
 	ginServer.Handle("POST", "/api/bazaar/updateBazaarPackage", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, updateBazaarPackage)
 	ginServer.Handle("POST", "/api/bazaar/batchUpdatePackage", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, batchUpdatePackage)
 	ginServer.Handle("POST", "/api/bazaar/installLocalBazaarPackage", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, installLocalBazaarPackage)
-
 
 	ginServer.Handle("POST", "/api/riff/createRiffDeck", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, createRiffDeck)
 	ginServer.Handle("POST", "/api/riff/renameRiffDeck", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, renameRiffDeck)

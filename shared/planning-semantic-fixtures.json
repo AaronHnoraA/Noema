@@ -1,0 +1,71 @@
+[
+  {
+    "name": "canonical patch retains aliases and attribute order",
+    "input": "@@todo(doing) [Task] {due: tomorrow, priority: b, pct: 10, ctx: old}",
+    "mutation": {
+      "type": "patch-todo",
+      "todo": {
+        "op": "patch",
+        "status": "done",
+        "attrs": {
+          "ddl": "2026-09-01",
+          "prio": "a",
+          "progress": "120",
+          "context": null,
+          "owner": "Alice Smith"
+        },
+        "nowMs": 1787623200000
+      }
+    },
+    "expectedSource": "@@todo(done) [Task] {due=2026-09-01, priority=A, pct=100, owner=\"Alice Smith\"}"
+  },
+  {
+    "name": "repeater completion advances aliases and records bounded log",
+    "input": "@@todo(done) [Repeat] {deadline: 2026-08-20, scheduled: 2026-08-19, every: ++1d, log: 2026-08-18}",
+    "mutation": {
+      "type": "patch-todo",
+      "todo": {
+        "op": "complete",
+        "attrs": {},
+        "nowMs": 1787623200000
+      }
+    },
+    "expectedSource": "@@todo [Repeat] {deadline=2026-08-26, scheduled=2026-08-26, every=++1d, log=\"2026-08-18 & 2026-08-25\", done=2026-08-25}"
+  },
+  {
+    "name": "non-repeating block completion keeps block shape",
+    "input": "@@todo(doing) [Block] {\ndue: 2026-08-24\nowner: Aaron\n}",
+    "mutation": {
+      "type": "patch-todo",
+      "todo": {
+        "op": "complete",
+        "attrs": {},
+        "nowMs": 1787623200000
+      }
+    },
+    "expectedSource": "@@todo(done) [Block] {\n  due: 2026-08-24\n  owner: Aaron\n  done: 2026-08-25\n}"
+  },
+  {
+    "name": "generic clock patch serializes a closing timestamp",
+    "input": "@@clock [Task] {from: 2026-08-25 09:00, note: \"deep work\"}",
+    "mutation": {
+      "type": "patch-node",
+      "attrs": {
+        "to": "2026-08-25 10:15"
+      }
+    },
+    "expectedSource": "@@clock [Task] {from=\"2026-08-25 09:00\", note=\"deep work\", to=\"2026-08-25 10:15\"}"
+  },
+  {
+    "name": "clock insertion source comes from todo title and semantic attrs",
+    "input": "@@todo [Task] {id=t1}",
+    "mutation": {
+      "type": "insert-clock",
+      "attrs": {
+        "from": "2026-08-25 12:00",
+        "task": "#t1"
+      }
+    },
+    "expectedSource": "@@clock [Task]{from: 2026-08-25 12:00, task: #t1}"
+  }
+]

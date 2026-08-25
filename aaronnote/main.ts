@@ -1,4 +1,4 @@
-import "./tauri-bridge.ts";
+import "./desktop-bridge.ts";
 import "../src/styles/widgets.css";
 import "../src/styles/typography.css";
 import "./style.css";
@@ -158,6 +158,16 @@ import {
   orgEnvBlockIdentityAtPosition,
   orgEnvBlockIdentityPosition,
 } from "../src/cm6/extensions/visual/widgets/block-extras.ts";
+import type {
+  AttributeViewCellPatchDetail,
+  AttributeViewOpenRowDetail,
+  AttributeViewRequestDetail,
+} from "../src/cm6/extensions/visual/widgets/attribute-view.ts";
+import type {
+  EmbedQueryOpenDetail,
+  EmbedQueryRequestDetail,
+} from "../src/cm6/extensions/visual/widgets/embed-query.ts";
+import { markdownLineStartOffset } from "./markdown-box-lab-navigation.ts";
 import {
   handleXwidgetControlBeforeInput,
   handleXwidgetControlKeydown,
@@ -186,6 +196,17 @@ import {
 import { wikiCompletionSnippets, wikiLinkCompletionContext } from "./wiki-completion.ts";
 import { createLinkPreviewController } from "./link-preview.ts";
 import { createKnowledgeSearch } from "./knowledge-search.ts";
+import { currentNoteFromIndex } from "./note-index.ts";
+import {
+  createDesktopKnowledgeDock,
+  type DesktopKnowledgeDock,
+} from "./desktop-knowledge-dock.ts";
+import {
+  closeAgendaView,
+  isAgendaViewOpen,
+  openAgendaView,
+  refreshAgendaView,
+} from "./agenda-view.ts";
 
 const removeNoemaThemeRuntime = installNoemaThemeRuntime();
 const root = document.querySelector<HTMLElement>("#app");
@@ -233,7 +254,7 @@ if (serverReaderMode) {
 }
 
 root.innerHTML = `
-  <header class="noema-desktop-titlebar" data-desktop-titlebar data-tauri-drag-region ${desktopMode ? "" : "hidden"}>
+  <header class="noema-desktop-titlebar" data-desktop-titlebar data-desktop-drag-region ${desktopMode ? "" : "hidden"}>
     <nav class="noema-desktop-titlebar-controls" aria-label="Note navigation">
       <button type="button" data-desktop-command="back" title="Back" aria-label="Back">←</button>
       <button type="button" data-desktop-command="forward" title="Forward" aria-label="Forward">→</button>
@@ -321,28 +342,51 @@ prosePopover.hidden = true;
 document.body.appendChild(prosePopover);
 
 const graphPanelRoot = document.createElement("aside");
-graphPanelRoot.className = "aaronnote-local-graph-panel is-collapsed";
+graphPanelRoot.className = `aaronnote-local-graph-panel is-collapsed${desktopMode ? " noema-knowledge-dock" : ""}`;
+graphPanelRoot.setAttribute("aria-label", desktopMode ? "Knowledge dock" : "Knowledge graph");
 graphPanelRoot.innerHTML = `
-  <header>
-    <strong>Knowledge graph</strong>
+  <header class="noema-knowledge-dock-header">
+    <strong>${desktopMode ? "Knowledge" : "Knowledge graph"}</strong>
+    <nav class="noema-knowledge-dock-tabs" role="tablist" aria-label="Knowledge views" ${desktopMode ? "" : "hidden"}>
+      <button type="button" role="tab" data-knowledge-view="backlinks">Backlinks</button>
+      <button type="button" role="tab" data-knowledge-view="graph">Graph</button>
+      <button type="button" role="tab" data-knowledge-view="search">Search</button>
+      <button type="button" role="tab" data-knowledge-view="tags">Tags</button>
+    </nav>
     <button type="button" data-graph-close>Close</button>
   </header>
-  <div class="aaronnote-local-graph-controls">
-    <div class="aaronnote-graph-mode" role="group" aria-label="Graph scope">
-      <button type="button" data-graph-mode="local" class="is-active">Local</button>
-      <button type="button" data-graph-mode="workspace">Workspace</button>
+  <section class="noema-knowledge-dock-pane noema-knowledge-backlinks" data-knowledge-pane="backlinks" hidden>
+    <div class="noema-knowledge-dock-status" data-knowledge-backlink-status></div>
+    <div class="noema-knowledge-backlink-list" data-knowledge-backlink-list></div>
+  </section>
+  <section class="noema-knowledge-dock-pane noema-knowledge-graph" data-knowledge-pane="graph">
+    <div class="aaronnote-local-graph-controls">
+      <div class="aaronnote-graph-mode" role="group" aria-label="Graph scope">
+        <button type="button" data-graph-mode="local" class="is-active">Local</button>
+        <button type="button" data-graph-mode="workspace">Workspace</button>
+      </div>
+      <input type="search" data-graph-search placeholder="Search graph" aria-label="Search graph" />
+      <select data-graph-group aria-label="Filter graph group"><option value="">All groups</option></select>
+      <label>Depth <input type="range" data-graph-depth min="1" max="3" value="1" /></label>
+      <span data-graph-depth-label>1</span>
+      <label><input type="checkbox" data-graph-refs checked /> Refs</label>
+      <label><input type="checkbox" data-graph-backlinks checked /> Back</label>
+      <label><input type="checkbox" data-graph-tags checked /> Tags</label>
     </div>
-    <input type="search" data-graph-search placeholder="Search graph" aria-label="Search graph" />
-    <select data-graph-group aria-label="Filter graph group"><option value="">All groups</option></select>
-    <label>Depth <input type="range" data-graph-depth min="1" max="3" value="1" /></label>
-    <span data-graph-depth-label>1</span>
-    <label><input type="checkbox" data-graph-refs checked /> Refs</label>
-    <label><input type="checkbox" data-graph-backlinks checked /> Back</label>
-    <label><input type="checkbox" data-graph-tags checked /> Tags</label>
-  </div>
-  <div class="aaronnote-local-graph-canvas" data-graph-canvas></div>
-  <div class="aaronnote-local-graph-status" data-graph-status></div>
-  <div class="aaronnote-graph-detail" data-graph-detail hidden></div>
+    <div class="aaronnote-local-graph-canvas" data-graph-canvas></div>
+    <div class="aaronnote-local-graph-status" data-graph-status></div>
+    <div class="aaronnote-graph-detail" data-graph-detail hidden></div>
+  </section>
+  <section class="noema-knowledge-dock-pane noema-knowledge-search" data-knowledge-pane="search" hidden>
+    <div class="noema-knowledge-dock-search-anchor" data-knowledge-search-anchor>
+      <label><span aria-hidden="true">⌕</span><input type="search" data-knowledge-search placeholder="Search notes, tags, namespaces…" aria-label="Search knowledge" autocomplete="off" /></label>
+    </div>
+    <p class="noema-knowledge-search-hint">Open a result here, or hold the primary modifier to open it in a new Noema window.</p>
+  </section>
+  <section class="noema-knowledge-dock-pane noema-knowledge-tags" data-knowledge-pane="tags" hidden>
+    <div class="noema-knowledge-dock-status" data-knowledge-tag-status></div>
+    <div class="noema-knowledge-tag-list" data-knowledge-tag-list></div>
+  </section>
 `;
 document.body.appendChild(graphPanelRoot);
 const graphDepthInput = graphPanelRoot.querySelector<HTMLInputElement>("[data-graph-depth]")!;
@@ -357,6 +401,17 @@ const graphGroup = graphPanelRoot.querySelector<HTMLSelectElement>("[data-graph-
 const graphDetail = graphPanelRoot.querySelector<HTMLElement>("[data-graph-detail]")!;
 const graphModeButtons = Array.from(graphPanelRoot.querySelectorAll<HTMLButtonElement>("[data-graph-mode]"));
 const graphClose = graphPanelRoot.querySelector<HTMLButtonElement>("[data-graph-close]")!;
+const knowledgeTabButtons = Array.from(graphPanelRoot.querySelectorAll<HTMLButtonElement>("[data-knowledge-view]"));
+const knowledgeBacklinksPane = graphPanelRoot.querySelector<HTMLElement>("[data-knowledge-pane='backlinks']")!;
+const knowledgeGraphPane = graphPanelRoot.querySelector<HTMLElement>("[data-knowledge-pane='graph']")!;
+const knowledgeSearchPane = graphPanelRoot.querySelector<HTMLElement>("[data-knowledge-pane='search']")!;
+const knowledgeTagsPane = graphPanelRoot.querySelector<HTMLElement>("[data-knowledge-pane='tags']")!;
+const knowledgeBacklinkList = graphPanelRoot.querySelector<HTMLElement>("[data-knowledge-backlink-list]")!;
+const knowledgeBacklinkStatus = graphPanelRoot.querySelector<HTMLElement>("[data-knowledge-backlink-status]")!;
+const knowledgeSearchAnchor = graphPanelRoot.querySelector<HTMLElement>("[data-knowledge-search-anchor]")!;
+const knowledgeSearchInput = graphPanelRoot.querySelector<HTMLInputElement>("[data-knowledge-search]")!;
+const knowledgeTagList = graphPanelRoot.querySelector<HTMLElement>("[data-knowledge-tag-list]")!;
+const knowledgeTagStatus = graphPanelRoot.querySelector<HTMLElement>("[data-knowledge-tag-status]")!;
 
 const toc = document.createElement("aside");
 toc.className = "aaronnote-floating-toc is-collapsed";
@@ -899,6 +954,8 @@ let restoringNavigationForward = false;
 let snippets: SnippetSummary[] = [];
 let notes: NoteSummary[] = [];
 let pathSuggestions: string[] = [];
+let currentRelationshipSource = "";
+let desktopKnowledgeDock: DesktopKnowledgeDock | null = null;
 // Tracks the index version from the last notesIndexPayload response so we can
 // detect when the server's watcher has bumped the index due to external changes.
 let lastNotesIndexVersion = 0;
@@ -2083,6 +2140,83 @@ host.addEventListener("aaronnote:inline-math-edit-state", (event) => {
 document.addEventListener("aaronnote:visualtex-save-request", () => {
   void save(false);
 });
+
+document.addEventListener("aaronnote:attribute-view-request", (event) => {
+  const custom = event as CustomEvent<AttributeViewRequestDetail>;
+  const respond = custom.detail?.respond;
+  if (typeof respond !== "function") return;
+  event.preventDefault();
+  void api.notes.attributeView({
+    title: String(custom.detail?.title || ""),
+    source: String(custom.detail?.source || ""),
+    file: currentFile,
+  }).then((model) => respond(model)).catch((error) => {
+    respond(null, error instanceof Error ? error.message : String(error));
+  });
+});
+
+document.addEventListener("aaronnote:embed-query-request", (event) => {
+  const custom = event as CustomEvent<EmbedQueryRequestDetail>;
+  const respond = custom.detail?.respond;
+  if (typeof respond !== "function") return;
+  event.preventDefault();
+  void api.notes.embedQuery({
+    title: String(custom.detail?.title || ""),
+    source: String(custom.detail?.source || ""),
+    file: currentFile,
+  }).then((model) => respond(model)).catch((error) => {
+    respond(null, error instanceof Error ? error.message : String(error));
+  });
+});
+
+document.addEventListener("aaronnote:embed-query-open", (event) => {
+  const item = (event as CustomEvent<EmbedQueryOpenDetail>).detail?.item;
+  if (!item?.file) return;
+  event.preventDefault();
+  void (async () => {
+    if (item.file !== currentFile) await openFile(item.file);
+    if (item.file !== currentFile) return;
+    const markdown = editor.getMarkdown();
+    const anchor = item.id ? markdown.indexOf(`{#${item.id}`) : -1;
+    const offset = anchor >= 0 ? markdown.lastIndexOf("\n", anchor) + 1 : 0;
+    editor.setMarkdownSelection(offset, offset);
+    editor.revealCursor();
+    editor.focus();
+    noteCursorPositionEvent();
+  })();
+});
+
+document.addEventListener("aaronnote:attribute-view-cell-patch", (event) => {
+  const custom = event as CustomEvent<AttributeViewCellPatchDetail>;
+  const detail = custom.detail;
+  if (!detail?.row || typeof detail.respond !== "function") return;
+  event.preventDefault();
+  void api.notes.attributeViewCellPatch({
+    id: detail.row.id,
+    kind: detail.row.kind,
+    file: detail.row.file,
+    index: detail.row.index,
+    key: detail.key,
+    value: detail.value,
+  }).then(() => detail.respond(true)).catch((error) => {
+    detail.respond(false, error instanceof Error ? error.message : String(error));
+  });
+});
+
+document.addEventListener("aaronnote:attribute-view-open-row", (event) => {
+  const row = (event as CustomEvent<AttributeViewOpenRowDetail>).detail?.row;
+  if (!row?.file) return;
+  event.preventDefault();
+  void (async () => {
+    if (row.file !== currentFile) await openFile(row.file);
+    if (row.file !== currentFile) return;
+    const offset = markdownLineStartOffset(editor.getMarkdown(), row.line || 1);
+    editor.setMarkdownSelection(offset, offset);
+    editor.revealCursor();
+    editor.focus();
+    noteCursorPositionEvent();
+  })();
+});
 host.addEventListener("aaronnote:inline-math-edit-error", (event) => {
   const message = (event as CustomEvent<{ message?: unknown }>).detail?.message;
   setStatus(typeof message === "string" ? `${message}; 已回退到 TeX 源码编辑` : "Visual formula editor unavailable");
@@ -2211,6 +2345,10 @@ let pendingKnowledgeInsert: { from: number; to: number; selected: string } | nul
 const hideKnowledgeSearch = (): void => { globalSearchRoot.hidden = true; globalSearchInput.value = ""; pendingKnowledgeInsert = null; editor.focus(); };
 const showKnowledgeSearch = (): void => {
   if (serverReaderMode) { serverSearchInput?.focus(); return; }
+  if (desktopMode && desktopKnowledgeDock && !pendingKnowledgeInsert) {
+    desktopKnowledgeDock.show("search");
+    return;
+  }
   globalSearchRoot.hidden = false;
   globalSearchInput.focus();
   globalSearchInput.select();
@@ -2258,6 +2396,7 @@ const localGraphPanel = createLocalGraphPanel({
   groupInput: graphGroup,
   detail: graphDetail,
   modeButtons: graphModeButtons,
+  isVisible: () => !knowledgeGraphPane.hidden,
   getWorkspaceGraph: () => api.notes.graph(),
   getIndexVersion: () => lastNotesIndexVersion,
   getNotes: () => notes.filter(note => note.roam !== false),
@@ -2268,6 +2407,68 @@ const localGraphPanel = createLocalGraphPanel({
   openNote,
   openTag: openTagFilter,
 });
+
+if (desktopMode) {
+  createKnowledgeSearch({
+    input: knowledgeSearchInput,
+    anchor: knowledgeSearchAnchor,
+    search: (body) => api.knowledge.search(body),
+    context: () => ({ file: currentFile, id: currentNote()?.id || "" }),
+    open: (note, options) => openNote(note, options),
+    limit: 12,
+  });
+  desktopKnowledgeDock = createDesktopKnowledgeDock({
+    root: graphPanelRoot,
+    body: document.body,
+    visibilityButton: graphButton,
+    tabButtons: knowledgeTabButtons,
+    panes: {
+      backlinks: knowledgeBacklinksPane,
+      graph: knowledgeGraphPane,
+      search: knowledgeSearchPane,
+      tags: knowledgeTagsPane,
+    },
+    backlinkList: knowledgeBacklinkList,
+    backlinkStatus: knowledgeBacklinkStatus,
+    tagList: knowledgeTagList,
+    tagStatus: knowledgeTagStatus,
+    searchInput: knowledgeSearchInput,
+    getCurrentNote: currentNote,
+    resolveNoteRef,
+    relationshipSource: () => currentRelationshipSource,
+    openNote,
+    getTags: () => {
+      const liveTags = metadataTagsFromMarkdown(editor.getMarkdown()) ?? currentNote()?.tags ?? [];
+      const currentTags = new Set(liveTags.map((tag) => String(tag || "").trim().replace(/^#/, "").toLocaleLowerCase()).filter(Boolean));
+      const labels = new Map<string, string>();
+      const counts = new Map<string, number>();
+      for (const note of notes) {
+        const unique = new Set((note.tags ?? [])
+          .map((tag) => String(tag || "").trim().replace(/^#/, ""))
+          .filter(Boolean));
+        for (const tag of unique) {
+          const key = tag.toLocaleLowerCase();
+          if (!labels.has(key)) labels.set(key, tag);
+          counts.set(key, (counts.get(key) ?? 0) + 1);
+        }
+      }
+      for (const tag of liveTags) {
+        const clean = String(tag || "").trim().replace(/^#/, "");
+        if (!clean) continue;
+        const key = clean.toLocaleLowerCase();
+        if (!labels.has(key)) labels.set(key, clean);
+        if (!counts.has(key)) counts.set(key, 1);
+      }
+      return [...labels.entries()]
+        .map(([key, name]) => ({ name, count: counts.get(key) ?? 0, current: currentTags.has(key) }))
+        .sort((a, b) => Number(b.current) - Number(a.current) || b.count - a.count || a.name.localeCompare(b.name));
+    },
+    openTag: openTagFilter,
+    onGraphVisible: () => localGraphPanel.update(true),
+    onGraphHidden: () => localGraphPanel.suspend(),
+    onCollapse: () => localGraphPanel.collapse(),
+  });
+}
 const graphOverlayTimer = new CoalescedTimer(400);
 let graphOverlayIdleHandle = 0;
 function scheduleGraphOverlayUpdate(): void {
@@ -2291,7 +2492,10 @@ function scheduleGraphOverlayUpdate(): void {
 }
 changeHandlers.add(scheduleGraphOverlayUpdate);
 
-graphClose.addEventListener("click", () => localGraphPanel.collapse());
+graphClose.addEventListener("click", () => {
+  if (desktopKnowledgeDock) desktopKnowledgeDock.collapse();
+  else localGraphPanel.collapse();
+});
 
 type JupyterPanelCell = {
   id: string;
@@ -4380,6 +4584,9 @@ function applyOpenedNote(
       setStatus(targetDom ? `DOM target not found: ${targetDom}` : `Anchor not found: ${targetHash}`);
     });
   }
+  window.dispatchEvent(new CustomEvent("aaronnote:note-opened", {
+    detail: { file: currentFile, title: currentTitle },
+  }));
   if (reloadNoteIndex) void reloadNotes(false);
   if (!Array.isArray(opened.snippets) && snippets.length === 0) void reloadSnippets();
 }
@@ -4997,7 +5204,7 @@ function encodeMarkdownHrefPath(path: string): string {
     .join("/");
 }
 
-function applyIndexPayload(payload: { notes?: NoteSummary[]; note?: NoteSummary; kind?: string; standalone?: boolean; indexVersion?: number }): void {
+function applyIndexPayload(payload: { notes?: NoteSummary[]; note?: NoteSummary; kind?: string; standalone?: boolean; indexVersion?: number; relationshipSource?: string }): void {
   if (typeof payload.indexVersion === "number" && payload.indexVersion > lastNotesIndexVersion) {
     lastNotesIndexVersion = payload.indexVersion;
   }
@@ -5009,6 +5216,7 @@ function applyIndexPayload(payload: { notes?: NoteSummary[]; note?: NoteSummary;
   }
   if (typeof payload.kind === "string") currentKind = payload.kind;
   if (typeof payload.standalone === "boolean") currentStandalone = payload.standalone;
+  if (typeof payload.relationshipSource === "string") currentRelationshipSource = payload.relationshipSource;
   pathSuggestions = [...new Set(notes
     .flatMap((note) => [note.path, note.file, note.link])
     .map((value) => String(value || "").trim())
@@ -5018,6 +5226,8 @@ function applyIndexPayload(payload: { notes?: NoteSummary[]; note?: NoteSummary;
   slideDeck?.sync(currentKind);
   renderModeToggleLabel(vim.mode());
   localGraphPanel.invalidate();
+  desktopKnowledgeDock?.refresh();
+  void refreshAgendaView();
 }
 
 async function reloadNotes(force = false): Promise<void> {
@@ -5041,8 +5251,7 @@ async function loadPathSuggestions(): Promise<void> {
 }
 
 function currentNote(): NoteSummary | undefined {
-  return notes.find((note) => note.file === currentFile)
-    ?? notes.find((note) => note.path === currentFile || note.link === currentFile);
+  return currentNoteFromIndex(notes, currentFile, currentTitle);
 }
 
 function noteSearchValues(note: NoteSummary): string[] {
@@ -7162,6 +7371,43 @@ function agendaOpenTodo(todo: TodoItem): void {
   void openFile(file);
 }
 
+async function jumpFromAgendaView(todo: TodoItem): Promise<void> {
+  const file = todoString(todo, "file");
+  if (!file) return;
+  const target = todoTargetFromItem(todo);
+  if (sameOpenFile(file)) {
+    if (!jumpToTodoTarget(target)) setStatus("Todo location not found");
+    return;
+  }
+  pendingTodoTarget = target;
+  await openFile(file);
+}
+
+async function openDesktopAgendaDock(): Promise<void> {
+  if (!roamToolsPanel.hidden) closeRoamToolsPanel();
+  await openAgendaView({
+    api,
+    jumpToTodo: jumpFromAgendaView,
+    setStatus,
+    surface: "desktop-dock",
+    onOpenChange: (open) => {
+      document.body.classList.toggle("noema-agenda-dock-open", open);
+      agendaButton.setAttribute("aria-expanded", String(open));
+      if (!open) editor.focus();
+    },
+  });
+}
+
+function toggleAgendaSurface(): void {
+  if (desktopMode) {
+    if (isAgendaViewOpen()) closeAgendaView();
+    else void openDesktopAgendaDock();
+    return;
+  }
+  if (!roamToolsPanel.hidden && roamToolsPanel.classList.contains("is-agenda")) closeRoamToolsPanel();
+  else void openAgendaTool();
+}
+
 function todoStatusSourcePrefix(status: string, commandName = "todo"): string {
   const s = (status || "todo").toLowerCase();
   const command = commandName.toLowerCase() === "itodo" ? "itodo" : "todo";
@@ -7709,7 +7955,7 @@ function toolActions(): ToolAction[] {
       },
     }] : []),
     ...(slideDeck?.isSlides() ? [{ id: "slides-mirror", group: "publish" as const, title: "Reveal mirror", detail: "Edit this note's .slides JavaScript mirror", run: () => void slideDeck?.openMirror() }] : []),
-    { id: "toc", group: "view", title: "Page outline", detail: "Headings, anchors, tags, and backlinks", run: () => { floatingTocPanel.toggle(); updateFloatingToc(); } },
+    { id: "toc", group: "view", title: "Page outline", detail: "Headings from the live CM6 index", run: togglePageOutline },
     { id: "tag-ref", group: "writing", title: "Tag / copy reference", detail: "Equation tag, inline anchor, and reference copy", run: () => void tagOrCopyRef() },
     { id: "export-latex", group: "publish", title: "Export LaTeX", detail: "Write selection, heading, or document to a .tex file", run: () => void exportLatexTool() },
     { id: "latex-export-agent", group: "publish", title: "Switch export agent", detail: "Choose Codex, Claude, or OpenCode for LaTeX polish", run: () => void switchLatexExportAgentTool() },
@@ -9551,6 +9797,7 @@ function scheduleAssistUpdate(options: AssistUpdateOptions = {}): void {
 
 function updateFloatingToc(): void {
   floatingTocPanel.update();
+  desktopKnowledgeDock?.refresh();
 }
 
 async function reloadSnippets(): Promise<void> {
@@ -9755,6 +10002,9 @@ function runHostCommand(detail: unknown): boolean {
       }
       return true;
     }
+    case "agenda-changed":
+      void refreshAgendaView();
+      return true;
     case "wiki-index-changed": {
       wikiIndexCache = null;
       wikiIndexPromise = null;
@@ -9858,6 +10108,14 @@ function runHostCommand(detail: unknown): boolean {
     case "search-notes":
       showKnowledgeSearch();
       return true;
+    case "knowledge-backlinks":
+      if (desktopKnowledgeDock) desktopKnowledgeDock.toggle("backlinks");
+      else localGraphPanel.toggle();
+      return true;
+    case "knowledge-tags":
+      if (desktopKnowledgeDock) desktopKnowledgeDock.toggle("tags");
+      else void manageCurrentNoteTags();
+      return true;
     case "find-next":
       if (findPanel.hidden) openFindPanel();
       else gotoFindMatch(findIndex + 1);
@@ -9936,11 +10194,11 @@ function runHostCommand(detail: unknown): boolean {
       togglePageOutline();
       return true;
     case "toggle-agenda":
-      if (!roamToolsPanel.hidden && roamToolsPanel.classList.contains("is-agenda")) closeRoamToolsPanel();
-      else void openAgendaTool();
+      toggleAgendaSurface();
       return true;
     case "toggle-graph":
-      localGraphPanel.toggle();
+      if (desktopKnowledgeDock) desktopKnowledgeDock.toggle("graph");
+      else localGraphPanel.toggle();
       return true;
     case "toggle-tools":
       toggleToolsPanel();
@@ -10039,19 +10297,26 @@ function togglePageOutline(): void {
   statsToggle.classList.toggle("is-active", expanded);
 }
 
+function openKnowledgeDockFromPage(event: MouseEvent): void {
+  if (!desktopKnowledgeDock) return;
+  event.preventDefault();
+  if (!toc.classList.contains("is-collapsed")) togglePageOutline();
+  desktopKnowledgeDock.show("backlinks");
+}
+
+tocButton.title = "Single-click Page outline; double-click Knowledge dock";
+statsToggle.title = "Single-click Page outline; double-click Knowledge dock";
 tocButton.addEventListener("click", togglePageOutline);
+tocButton.addEventListener("dblclick", openKnowledgeDockFromPage);
 statsToggle.addEventListener("click", togglePageOutline);
+statsToggle.addEventListener("dblclick", openKnowledgeDockFromPage);
 statsToggle.addEventListener("keydown", (event) => {
   if (event.key !== "Enter" && event.key !== " ") return;
   event.preventDefault();
   togglePageOutline();
 });
 agendaButton.addEventListener("click", () => {
-  if (!roamToolsPanel.hidden && roamToolsPanel.classList.contains("is-agenda")) {
-    closeRoamToolsPanel();
-    return;
-  }
-  void openAgendaTool();
+  toggleAgendaSurface();
 });
 toolsButton.addEventListener("click", toggleToolsPanel);
 function activateModeToggle(): void {

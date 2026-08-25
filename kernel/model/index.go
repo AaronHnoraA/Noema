@@ -196,17 +196,8 @@ func upsertIndexes(upsertFilePaths []string) (upsertRootIDs []string) {
 			if isMarkdown {
 				rootID = tree.ID
 				util.IncBootProgress(bootProgressPart, fmt.Sprintf(Conf.Language(40), rootID))
-				// 首次索引一个此前从未经过内核的 .md 文件时，lute 只在内存里分配了文档级 ID，
-				// 不写回磁盘的话下次重新索引又会分配一个新 ID。writeMarkdownTree 内容不变时
-				// 直接跳过落盘，所以这里无条件调用是安全、廉价的。
-				if _, writeErr := filesys.WriteTree(tree); nil != writeErr {
-					logging.LogErrorf("persist assigned doc ID for markdown tree [%s] failed: %s", tree.Path, writeErr)
-				}
-				// 必须在 WriteTree 之后：清理临时块 ID 前 FormatRenderer 需要它们仍然在场
-				// 才能渲染出正确的字节（见 filesys.StripEphemeralMarkdownBlockIDs 的注释）。
-				// 不清的话 treenode.UpsertBlockTree 会把这些每次解析都换新的临时 ID
-				// 当成真实块索引进去，索引会无限膨胀。
-				filesys.StripEphemeralMarkdownBlockIDs(tree)
+				// LoadTree 已从 meta.id/box+path 建立稳定投影并清理临时块 ID；
+				// 索引过程严格只读，不能为了内部身份写回 doc IAL。
 			}
 			treenode.UpsertBlockTree(tree)
 			sql.UpsertTreeQueue(tree)
@@ -256,7 +247,16 @@ func listSyFiles(dir string) (ret []string) {
 // listMarkdownFiles 是 listSyFiles 的 markdown box 版本：递归列出 .md 文件，
 // 跳过 .siyuan 配置目录（会话/账户等元数据存放处，不是笔记内容）。
 func listMarkdownFiles(dir string) (ret []string) {
-	dirPath := filepath.Join(util.DataDir, dir)
+	normalized := strings.Trim(strings.TrimSpace(filepath.ToSlash(dir)), "/")
+	boxID, relDir, found := strings.Cut(normalized, "/")
+	if "" == boxID {
+		return
+	}
+	if !found {
+		relDir = ""
+	}
+	boxRoot := filesys.BoxRootPath(boxID)
+	dirPath := filepath.Join(boxRoot, filepath.FromSlash(relDir))
 	err := filelock.Walk(dirPath, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			logging.LogWarnf("walk dir [%s] failed: %s", dirPath, err)
@@ -264,15 +264,17 @@ func listMarkdownFiles(dir string) (ret []string) {
 		}
 
 		if d.IsDir() {
-			if ".siyuan" == d.Name() {
+			if path != dirPath && strings.HasPrefix(d.Name(), ".") {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 
 		if strings.HasSuffix(path, ".md") {
-			p := filepath.ToSlash(strings.TrimPrefix(path, util.DataDir))
-			ret = append(ret, p)
+			rel, relErr := filepath.Rel(boxRoot, path)
+			if nil == relErr {
+				ret = append(ret, boxID+"/"+filepath.ToSlash(rel))
+			}
 		}
 		return nil
 	})
@@ -351,27 +353,13 @@ func indexBox(boxID string) {
 		}
 
 		docIAL := parse.IAL2Map(tree.Root.KramdownIAL)
-		if "" == docIAL["updated"] { // 早期的数据可能没有 updated 属性，这里进行订正
+		if !strings.HasSuffix(tree.Path, ".md") && "" == docIAL["updated"] { // 早期 .sy 数据可能没有 updated 属性，这里进行订正
 			updated := util.TimeFromID(tree.Root.ID)
 			tree.Root.SetIALAttr("updated", updated)
 			docIAL["updated"] = updated
 			if _, writeErr := filesys.WriteTree(tree); nil != writeErr {
 				logging.LogErrorf("write tree [%s] failed: %s", tree.Path, writeErr)
 			}
-		} else if strings.HasSuffix(tree.Path, ".md") {
-			// markdown box 首次全量索引一个此前从未经过内核的 .md 文件时，lute 只在内存里分配了
-			// 文档级 ID，不写回磁盘下次重新索引又会分配新 ID。writeMarkdownTree 内容不变时直接
-			// 跳过落盘，无条件调用是安全、廉价的（见 upsertIndexes 里同样的处理）。
-			if _, writeErr := filesys.WriteTree(tree); nil != writeErr {
-				logging.LogErrorf("persist assigned doc ID for markdown tree [%s] failed: %s", tree.Path, writeErr)
-			}
-		}
-		if strings.HasSuffix(tree.Path, ".md") {
-			// 必须在上面两个 WriteTree 分支之后：见 filesys.StripEphemeralMarkdownBlockIDs
-			// 的注释——清理临时块 ID 前 FormatRenderer 需要它们在场才能渲染出正确字节，
-			// 但下面马上要做的 treenode.IndexBlockTree 又必须看不到这些每次解析都换新的
-			// 临时 ID，否则全量重索引会无限膨胀垃圾行。
-			filesys.StripEphemeralMarkdownBlockIDs(tree)
 		}
 
 		lock.Lock()

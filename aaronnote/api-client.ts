@@ -514,6 +514,7 @@ export type ClockModel = {
 };
 export type AgendaMsg = {
   type?: string;
+  evaluationSource?: string;
   range?: { from?: string; to?: string; today?: string };
   days?: AgendaDay[];
   todos?: TodoItem[];
@@ -548,6 +549,9 @@ type NativeApi = {
     todos?: (file: string) => Promise<unknown>;
     updateTodo?: (body: Record<string, unknown>) => Promise<unknown>;
     agenda?: (body: Record<string, unknown>) => Promise<unknown>;
+    embedQuery?: (body: Record<string, unknown>) => Promise<unknown>;
+    attributeView?: (body: Record<string, unknown>) => Promise<unknown>;
+    attributeViewCellPatch?: (body: Record<string, unknown>) => Promise<unknown>;
     createTodo?: (body: Record<string, unknown>) => Promise<unknown>;
     patchTodo?: (body: Record<string, unknown>) => Promise<unknown>;
     clockIn?: (body: Record<string, unknown>) => Promise<unknown>;
@@ -923,6 +927,7 @@ export type CoreTasksResult = { type?: string; ok?: boolean; tasks?: CoreTask[];
 export type KatexMacrosResult = {
   type?: string;
   dir?: string;
+  source?: string;
   macros?: Record<string, string>;
   errors?: { file: string; message: string }[];
 };
@@ -932,6 +937,8 @@ declare global {
     aaronnoteApi?: NativeApi;
     aaronnoteOpenTaskManager?: () => void;
     __noemaAppConfig?: NoemaAppConfigMsg;
+    __noemaKernelBase?: string;
+    __noemaKernel?: { state: string; baseUrl: string; box: { id?: string; name?: string; root?: string } | null };
     noemaDesktop?: {
       platform: string;
       filePath(file: File): string;
@@ -959,6 +966,7 @@ declare global {
       listPlugins(): Promise<NoemaDesktopPlugin[]>;
       setPluginEnabled(id: string, enabled: boolean): Promise<NoemaDesktopPlugin[]>;
       notifyAppConfigChanged(revision: string): void;
+      reportSmoke?(report: Record<string, unknown>): Promise<boolean>;
       onCommand(callback: (detail: unknown) => void): () => void;
       onFileDrop?(callback: (event: {
         type: "enter" | "over" | "drop" | "leave";
@@ -1090,6 +1098,18 @@ export const api = {
     async agenda(body: Record<string, unknown> = {}): Promise<AgendaMsg> {
       const call = requireMethod(nativeApi().notes?.agenda, "Agenda");
       return ensureOk(await call(body) as AgendaMsg, "Agenda failed");
+    },
+    async embedQuery(body: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().notes?.embedQuery, "Embed query");
+      return ensureOk(await call(body) as Record<string, unknown>, "Embed query failed");
+    },
+    async attributeView(body: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().notes?.attributeView, "Attribute view");
+      return ensureOk(await call(body) as Record<string, unknown>, "Attribute view failed");
+    },
+    async attributeViewCellPatch(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().notes?.attributeViewCellPatch, "Attribute view cell edit");
+      return ensureOk(await call(body) as Record<string, unknown>, "Attribute view cell edit failed");
     },
     async createTodo(body: Record<string, unknown>): Promise<Record<string, unknown>> {
       const call = requireMethod(nativeApi().notes?.createTodo, "Todo create");

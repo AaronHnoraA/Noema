@@ -41,10 +41,13 @@ either adapter:
 
 - In Emacs, `init-aaronnote.el` owns the existing header-line, transient menus,
   buffer integration, and every `my/noema-*` entry point.
-- In Noema.app, `src-tauri/src/lib.rs`, `aaronnote/tauri-bridge.ts`, and the
+- In Noema.app, `desktop/main.mjs`, `desktop/preload.cjs`, and the
   `.noema-desktop-titlebar` renderer provide the macOS application menu,
-  window title bar, drag/drop, and VS Code/new-window behavior. The local Node
-  core runs as a bundled Tauri sidecar; Electron and Chromium are forbidden.
+  window title bar, drag/drop, and VS Code/new-window behavior. This adapter is
+  derived from SiYuan's mature Electron shell, with `contextIsolation`, sandbox,
+  and a narrow preload bridge. Electron starts the same `web-host.mjs` used by
+  Emacs; that Node host owns the Go kernel lifecycle. Do not duplicate backend,
+  Jupyter, Copilot, or kernel-supervisor logic in the Electron adapter.
 
 The Emacs header-line is the functional reference for the App title bar:
 
@@ -77,7 +80,7 @@ Verify the packaged host reports `hostMode: "desktop"` and that Emacs legacy
 asset paths resolve into `resources/`. For a packaged UI check, launch:
 
 ```sh
-NOEMA_DESKTOP_SMOKE=1 /Applications/Noema.app/Contents/MacOS/Noema
+NOEMA_DESKTOP_SMOKE=1 /Applications/Noema.app/Contents/MacOS/Electron
 ```
 
 The report must show `preload: true`, `titlebarVisible: true`, a 54px title bar,

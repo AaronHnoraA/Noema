@@ -34,13 +34,6 @@ import (
 	"time"
 
 	"github.com/88250/gulu"
-	"github.com/gin-contrib/gzip"
-	"github.com/gin-contrib/sessions"
-	"github.com/gin-contrib/sessions/cookie"
-	"github.com/gin-gonic/gin"
-	"github.com/mssola/useragent"
-	"github.com/olahol/melody"
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/api"
 	"github.com/aaronhe/noema/kernel/av"
 	"github.com/aaronhe/noema/kernel/cmd"
@@ -50,8 +43,14 @@ import (
 	"github.com/aaronhe/noema/kernel/model"
 	"github.com/aaronhe/noema/kernel/server/proxy"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/gin-contrib/gzip"
+	"github.com/gin-contrib/sessions"
+	"github.com/gin-contrib/sessions/cookie"
+	"github.com/gin-gonic/gin"
+	"github.com/mssola/useragent"
+	"github.com/olahol/melody"
+	"github.com/siyuan-note/logging"
 	"github.com/soheilhy/cmux"
-
 )
 
 const (
@@ -207,6 +206,12 @@ func Serve(fastMode bool, cookieKey string) {
 		}
 	}
 	util.ServerPort = port
+	if !fastMode {
+		// Stable machine-readable discovery line consumed by the Noema Tauri
+		// host. Keep this independent of the configured log level and ANSI
+		// formatting so sidecar startup does not depend on human log output.
+		fmt.Printf("[noema-kernel] http://127.0.0.1:%s\n", port)
+	}
 
 	model.Conf.ServerAddrs = util.GetServerAddrs()
 	model.Conf.Save()

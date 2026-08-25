@@ -136,6 +136,24 @@ afterEach(() => {
 });
 
 describe("agenda keyboard handling", () => {
+  test("mounts the shared agenda renderer as a closeable desktop dock", async () => {
+    const onOpenChange = vi.fn();
+    const dockDeps = deps();
+    dockDeps.api.notes.agenda = async () => ({ ...emptyAgenda, evaluationSource: "kernel-agenda" });
+    await openAgendaView({ ...dockDeps, surface: "desktop-dock", onOpenChange });
+    const overlay = document.querySelector<HTMLElement>(".aaronnote-agenda-full")!;
+
+    expect(overlay.hidden).toBe(false);
+    expect(overlay.classList.contains("is-desktop-dock")).toBe(true);
+    expect(overlay.dataset.agendaSurface).toBe("desktop-dock");
+    expect(overlay.dataset.agendaSource).toBe("kernel-agenda");
+    expect(onOpenChange).toHaveBeenCalledWith(true);
+
+    overlay.querySelector<HTMLButtonElement>(".aaronnote-agenda-full-close")?.click();
+    expect(overlay.hidden).toBe(true);
+    expect(onOpenChange).toHaveBeenLastCalledWith(false);
+  });
+
   test("does not treat Meta-q as the agenda q shortcut", async () => {
     await openAgendaView(deps());
     const overlay = document.querySelector<HTMLElement>(".aaronnote-agenda-full")!;

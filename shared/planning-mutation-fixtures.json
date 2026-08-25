@@ -1,0 +1,41 @@
+[
+  {
+    "name": "replace uses utf16 offsets after emoji",
+    "input": "前😀\n@@todo [旧] {id: t1}\n尾\n",
+    "selector": { "kind": "todo", "title": "旧" },
+    "mutation": { "type": "replace", "source": "@@todo(done) [旧] {id: t1}" },
+    "expected": {
+      "content": "前😀\n@@todo(done) [旧] {id: t1}\n尾\n",
+      "from": 4,
+      "to": 29,
+      "source": "@@todo [旧] {id: t1}",
+      "nextSource": "@@todo(done) [旧] {id: t1}"
+    }
+  },
+  {
+    "name": "insert after containing inline todo line",
+    "input": "prefix @@todo [Task] {id: t1} suffix\nAfter\n",
+    "selector": { "kind": "todo", "id": "#t1" },
+    "mutation": { "type": "insert-after", "source": "@@clock [Task]{from: 2026-08-25 12:00, task: #t1}" },
+    "expected": {
+      "content": "prefix @@todo [Task] {id: t1} suffix\n@@clock [Task]{from: 2026-08-25 12:00, task: #t1}\nAfter\n",
+      "from": 37,
+      "to": 87,
+      "source": "",
+      "nextSource": "@@clock [Task]{from: 2026-08-25 12:00, task: #t1}\n"
+    }
+  },
+  {
+    "name": "append trims transport whitespace and keeps one blank separator",
+    "input": "# Inbox\n\n",
+    "selector": {},
+    "mutation": { "type": "append", "source": "@@todo [New] {id: n1}" },
+    "expected": {
+      "content": "# Inbox\n\n@@todo [New] {id: n1}\n",
+      "from": 9,
+      "to": 30,
+      "source": "",
+      "nextSource": "@@todo [New] {id: n1}"
+    }
+  }
+]
