@@ -22,6 +22,7 @@ export type KnowledgeVirtualMention = {
   sourceId: string;
   sourceTitle: string;
   file: string;
+  path?: string;
   count: number;
   keywords: string[];
   snippet: string;

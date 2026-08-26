@@ -126,6 +126,9 @@ func moveMarkdownPath(boxID, fromPath, toPath string, allowDirectory bool) (ret 
 	if fromPath == toPath {
 		return nil, errors.New("source and target paths are the same")
 	}
+	// Settle pending Markdown index work before taking the index lock. Waiting
+	// for it afterwards would deadlock: the indexer needs this very lock.
+	WaitMarkdownIndex()
 	databaseIndexDataLock.Lock()
 	defer databaseIndexDataLock.Unlock()
 
@@ -248,5 +251,6 @@ func moveMarkdownPath(boxID, fromPath, toPath string, allowDirectory bool) (ret 
 	ret = &MarkdownPathMoveResult{
 		Notebook: boxID, FromPath: fromPath, ToPath: toPath, Directory: directory, Documents: documents,
 	}
+	resetMarkdownBoxCatalog(boxID)
 	return ret, nil
 }

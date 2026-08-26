@@ -757,7 +757,7 @@ func validDate(value string) bool {
 		lower == "今天" || lower == "明天" || lower == "昨天" || relativeDatePattern.MatchString(lower) {
 		return true
 	}
-	norm := strings.NewReplacer("年", "-", "月", "-", "日", "", "号", "", ".", "-", "/", "-").Replace(strings.TrimSpace(value))
+	norm := semanticDateReplacer.Replace(strings.TrimSpace(value))
 	if yearDatePattern.MatchString(norm) || isoDatePattern.MatchString(norm) {
 		return true
 	}

@@ -20,7 +20,7 @@ if (desktopSmokeParams.get("desktopSmoke") === "1") {
       try {
         const health = await fetch("/health", { cache: "no-store" }).then((response) => response.json());
         backendKernel = health?.kernel || backendKernel;
-        if (backendKernel?.state === "listening") break;
+        if (backendKernel?.state === "listening" || backendKernel?.reason === "node-default") break;
       } catch {
         // The final report retains the last state so startup failures remain
         // visible instead of turning into a separate smoke harness failure.
@@ -124,6 +124,18 @@ if (desktopSmokeParams.get("desktopSmoke") === "1") {
       // The report keeps a null value so a packaged transport regression is
       // visible without preventing the remaining host smoke assertions.
     }
+    let editorPerformance: Record<string, number | boolean> | null = null;
+    const runEditorPerf = (window as Window & {
+      __noemaRunEditorPerfProbe?: () => Promise<Record<string, number | boolean>>;
+    }).__noemaRunEditorPerfProbe;
+    if (runEditorPerf) {
+      try {
+        editorPerformance = await runEditorPerf();
+      } catch {
+        // A null result makes the packaged performance regression visible in
+        // the smoke report without hiding the rest of the adapter diagnostics.
+      }
+    }
     const report = {
       hostMode: document.body.dataset.hostMode || "",
       preload: Boolean(window.noemaDesktop),
@@ -178,6 +190,7 @@ if (desktopSmokeParams.get("desktopSmoke") === "1") {
         height: agendaBounds?.height || 0,
       } : null,
       katexMacros,
+      editorPerformance,
       kernel: backendKernel,
       protocolProbe: protocolProbeExpected ? {
         expected: protocolProbeExpected,

@@ -1,5 +1,23 @@
 import type { NoteSummary } from "./types.ts";
 
+type NoteIndexPayload = {
+  notes?: NoteSummary[];
+  note?: NoteSummary;
+};
+
+/** True only when a response carries an actual catalog replacement or row. */
+export function payloadUpdatesNoteIndex(payload: NoteIndexPayload): boolean {
+  return Array.isArray(payload.notes) || Boolean(payload.note?.file);
+}
+
+/**
+ * Opening a document does not make the catalog stale. Bootstrap normally
+ * supplies it once, and host/kernel watchers deliver later invalidations.
+ */
+export function openedNoteNeedsIndexReload(payload: NoteIndexPayload, indexLoaded: boolean): boolean {
+  return !Array.isArray(payload.notes) && !indexLoaded;
+}
+
 function normalizedPath(value: unknown): string {
   return String(value || "")
     .trim()

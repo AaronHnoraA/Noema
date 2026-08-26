@@ -5,9 +5,10 @@
  * CM6 doc IS the markdown source, so:
  *   - no parser/serializer needed (getMarkdown = doc.toString())
  *   - no source-mode toggle (the whole doc is always source)
- *   - CM6 positions == markdown byte offsets
+ *   - CM6 positions == Markdown UTF-16 code-unit offsets
  *
- * CM6 doc positions are the markdown source offsets used by the public API.
+ * JavaScript and CM6 share UTF-16 positions. The Go persistence boundary
+ * converts them to UTF-8 byte offsets when it applies an incremental save.
  */
 
 import { Compartment, EditorSelection, EditorState, findClusterBreak, Transaction, type Extension, type SelectionRange, type Text as CMText } from "@codemirror/state";

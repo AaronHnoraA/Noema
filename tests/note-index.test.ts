@@ -1,6 +1,10 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
-import { currentNoteFromIndex } from "../aaronnote/note-index.ts";
+import {
+  currentNoteFromIndex,
+  openedNoteNeedsIndexReload,
+  payloadUpdatesNoteIndex,
+} from "../aaronnote/note-index.ts";
 import type { NoteSummary } from "../aaronnote/types.ts";
 
 function note(file: string, path: string, title: string): NoteSummary {
@@ -8,6 +12,17 @@ function note(file: string, path: string, title: string): NoteSummary {
 }
 
 describe("current note index identity", () => {
+  test("keeps save metadata and ordinary opens off the catalog refresh path", () => {
+    expect(payloadUpdatesNoteIndex({})).toBe(false);
+    expect(payloadUpdatesNoteIndex({ note: {} })).toBe(false);
+    expect(payloadUpdatesNoteIndex({ note: { file: "/notes/a.md" } })).toBe(true);
+    expect(payloadUpdatesNoteIndex({ notes: [] })).toBe(true);
+
+    expect(openedNoteNeedsIndexReload({ notes: [] }, false)).toBe(false);
+    expect(openedNoteNeedsIndexReload({}, true)).toBe(false);
+    expect(openedNoteNeedsIndexReload({}, false)).toBe(true);
+  });
+
   test("prefers exact file identity", () => {
     const exact = note("/vault/current.md", "current.md", "Current");
     const nested = note("/vault/nested/current.md", "nested/current.md", "Nested");

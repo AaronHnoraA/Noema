@@ -42,7 +42,6 @@ describe("desktop kernel planning mutations", () => {
     configurePlanningProvider({
       owns(candidate: string) { return candidate === file; },
       read: snapshot,
-      async readMany(files: string[]) { return Promise.all(files.map(() => snapshot())); },
       async mutate({ mutation, expectedVersion }: any) {
         const current = await readFile(file, "utf8").catch(() => "");
         if (digest(current) !== expectedVersion) throw Object.assign(new Error("planning document version conflict"), { statusCode: 409 });
@@ -109,7 +108,6 @@ describe("desktop kernel planning mutations", () => {
     configurePlanningProvider({
       owns(candidate: string) { return candidate === file; },
       read: snapshot,
-      async readMany(files: string[]) { return Promise.all(files.map(() => snapshot())); },
       async mutate({ selector, mutation, expectedVersion }: any) {
         const source = await readFile(file, "utf8");
         if (digest(source) !== expectedVersion) throw Object.assign(new Error("planning document version conflict"), { statusCode: 409 });

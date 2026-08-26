@@ -370,8 +370,41 @@ func loadMarkdownTree(boxID, p string, luteEngine *lute.Lute) (ret *parse.Tree, 
 		return
 	}
 
+	return LoadMarkdownTreeByData(data, boxID, p, luteEngine), nil
+}
+
+var legacyIALMarker = []byte("{:")
+
+// markdownParseOptions turns off kramdown IAL parsing for source that contains
+// no IAL at all, which is every note Noema itself writes: block identity comes
+// from {#uuid} anchors, and StripEphemeralMarkdownBlockIDs discards the IDs and
+// attributes this option makes Lute synthesize for every block.
+//
+// Besides being wasted work — about 40% of the parse — those synthesized IDs
+// are regenerated on each parse, so blocks carrying them (Lute manufactures IAL
+// siblings for lists even in plain source) were reaching the API and the index
+// with a different identity every save. Skipping the option leaves exactly the
+// document root and its anchored blocks identified, which is the set Noema
+// documents as stable.
+//
+// Source that does carry a legacy SiYuan IAL keeps the inherited behaviour.
+func markdownParseOptions(data []byte, luteEngine *lute.Lute) *parse.Options {
+	if bytes.Contains(data, legacyIALMarker) {
+		return luteEngine.ParseOptions
+	}
+	options := *luteEngine.ParseOptions
+	options.KramdownBlockIAL = false
+	options.KramdownSpanIAL = false
+	return &options
+}
+
+// LoadMarkdownTreeByData parses one immutable Markdown snapshot. Callers that
+// already own the source bytes (notably SaveMarkdownDoc) can project blocks
+// and enqueue the SQL index from the same tree instead of reading and parsing
+// the just-written file a second time.
+func LoadMarkdownTreeByData(data []byte, boxID, p string, luteEngine *lute.Lute) (ret *parse.Tree) {
 	data = normalizeOrgEndBlankLines(data)
-	ret = parse.Parse(p, data, luteEngine.ParseOptions)
+	ret = parse.Parse(p, data, markdownParseOptions(data, luteEngine))
 	ret.Box = boxID
 	ret.Path = p
 	ret.Root.Path = p

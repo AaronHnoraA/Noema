@@ -27,6 +27,7 @@ import {
   wantedPages,
   scanRoamNotes,
   scanNotes,
+  markdownCatalogProviderActive,
   tagIndexPayload,
   pathSuggestionsForFile,
   latexExportDefaults,
@@ -93,6 +94,7 @@ import {
 import { createKernelRelationshipOverlay } from "./server/lib/kernel-relationships.mjs";
 import { createKernelSupervisor } from "./server/lib/kernel-supervisor.mjs";
 import { startNoteWatcher } from "./server/lib/watch.mjs";
+import { createRendererBuildWatcher } from "./server/lib/renderer-build-watch.mjs";
 import { coreTasks } from "./server/lib/task-core.mjs";
 import { saveNote } from "./server/lib/save.mjs";
 import {
@@ -409,17 +411,20 @@ configure({
   templatesRoot,
   toolEnvironment: workspaceEnvironment.environment,
   workspaceLayout,
+  requireGoCore: hostMode !== "server",
 });
 
 let kernelKnowledgeSearch = null;
 let kernelRelationshipOverlay = null;
+let kernelMarkdownProvider = null;
 
 function applyKernelState(next) {
   noemaKernel = next;
   const ready = next?.state === "listening" && next.box;
-  configureMarkdownFileProvider(ready
+  kernelMarkdownProvider = ready
     ? createKernelMarkdownProvider({ baseUrl: next.baseUrl, box: next.box })
-    : null);
+    : null;
+  configureMarkdownFileProvider(kernelMarkdownProvider);
   configurePlanningProvider(ready
     ? createKernelPlanningProvider({ baseUrl: next.baseUrl, box: next.box })
     : null);
@@ -474,8 +479,14 @@ async function productionWikiIndexPayload(options = {}) {
   return kernelRelationshipOverlay ? kernelRelationshipOverlay(index) : index;
 }
 
+async function knowledgeIndexPayload() {
+  if (hostMode === "server") return currentServerCatalog().index;
+  if (workspaceLayout === "wiki") return productionWikiIndexPayload();
+  return primaryNoteIndexPayload(false);
+}
+
 async function knowledgeSearchPayload(body = {}) {
-  const index = await productionWikiIndexPayload();
+  const index = await knowledgeIndexPayload();
   const lexical = kernelKnowledgeSearch && kernelLexicalSearchEligible(body)
     ? await kernelKnowledgeSearch(index, body)
     : searchWikiDatabase(noteRoot, body);
@@ -483,7 +494,15 @@ async function knowledgeSearchPayload(body = {}) {
 }
 
 async function knowledgeVirtualReferencesPayload(body = {}) {
-  const index = hostMode === "server" ? currentServerCatalog().index : await productionWikiIndexPayload();
+	if (hostMode !== "server") {
+		if (typeof kernelMarkdownProvider?.virtualReferences === "function") {
+			return kernelMarkdownProvider.virtualReferences(body);
+		}
+		const error = new Error("Go kernel virtual-reference projection is unavailable");
+		error.statusCode = 503;
+		throw error;
+	}
+  const index = await knowledgeIndexPayload();
   return virtualReferencesPayload(index, body);
 }
 
@@ -1077,6 +1096,19 @@ let appConfigSignature = JSON.stringify({
   diagnostics: initialAppConfig.diagnostics,
 });
 let appConfigWatchTimer = null;
+const rendererBuildReceipt = join(webDir, ".noema-renderer-build.json");
+const rendererBuildWatcher = hostMode === "server"
+  ? { generation: "", close() {} }
+  : await createRendererBuildWatcher({
+      receiptFile: rendererBuildReceipt,
+      onBuild({ generation }) {
+        broadcast("command", {
+          command: "renderer-updated",
+          generation,
+          at: Date.now(),
+        });
+      },
+    });
 const appConfigWatcher = hostMode === "server" ? { close() {} } : watch(noemaAppConfigDir({ env: process.env }), (_event, filename) => {
   if (filename && String(filename) !== "config.json") return;
   if (appConfigWatchTimer) clearTimeout(appConfigWatchTimer);
@@ -1201,6 +1233,7 @@ async function beginShutdown({ reason = "shutdown", exitCode = 0, deadlineMs = 3
       cancelAllExternalProseChecks("server-shutdown");
       await Promise.allSettled([
         closeHttpServer(),
+        Promise.resolve().then(() => rendererBuildWatcher.close()),
         Promise.resolve().then(() => appConfigWatcher.close()),
         Promise.resolve().then(() => noteWatcher.close()),
         wikiAutoSync?.close({ flush: true }),
@@ -1380,24 +1413,39 @@ async function notesListPayload(force = false) {
       generation: index.generation,
     };
   }
+  if (typeof kernelMarkdownProvider?.catalog === "function" && markdownCatalogProviderActive()) {
+    const payload = await kernelMarkdownProvider.catalog(force);
+    return {
+      ...payload,
+      root: noteRoot,
+      // Renderer refresh broadcasts still use the host's monotonic counter;
+      // the catalog contents and relationship projection themselves are Go-owned.
+      indexVersion: notesIndexVersionValue(),
+    };
+  }
   if (force) markNotesDirty();
   const payload = { type: "notes", ...await notesIndexPayload(), root: noteRoot };
   return kernelRelationshipOverlay ? kernelRelationshipOverlay(payload) : payload;
 }
 
+async function primaryNoteIndexPayload(force = false) {
+  if (typeof kernelMarkdownProvider?.catalog === "function") {
+    return {
+      ...await kernelMarkdownProvider.catalog(force),
+      root: noteRoot,
+      indexVersion: notesIndexVersionValue(),
+    };
+  }
+  const payload = { type: "notes", ...await roamNotesIndexPayload(), root: noteRoot };
+  return kernelRelationshipOverlay ? kernelRelationshipOverlay(payload) : payload;
+}
+
 async function bootstrapNotePayload(file) {
   const opened = await bootstrapNote(file || undefined);
-  if (workspaceLayout !== "wiki") {
-    return kernelRelationshipOverlay ? kernelRelationshipOverlay(opened) : opened;
-  }
-  const index = await productionWikiIndexPayload();
-  return {
-    ...opened,
-    notes: index.notes,
-    directories: index.directories,
-    files: index.files,
-    generation: index.generation,
-  };
+  // Source and the small cached snippet catalog form the editor-ready payload.
+  // The renderer requests the heavier note catalog after installing it;
+  // kernel/watch events keep both projections current from then on.
+  return opened;
 }
 
 let cachedCompletionTags = null;
@@ -1869,16 +1917,16 @@ const apiRouter = new ApiRouter().register({
   },
   "aaronnote:api:notes:index": async () => {
     if (hostMode === "server") return { type: "notes", ...currentServerCatalog().index, root: "" };
-    const payload = { type: "notes", ...await notesIndexPayload(), root: noteRoot };
-    return kernelRelationshipOverlay ? kernelRelationshipOverlay(payload) : payload;
+    return notesListPayload(false);
   },
   "aaronnote:api:notes:graph": async () => {
     const wikiGraph = hostMode === "server" || workspaceLayout === "wiki";
     const graphIndex = wikiGraph
       ? (hostMode === "server" ? currentServerCatalog().index : await productionWikiIndexPayload())
       : null;
-    const legacyNotes = graphIndex ? null : await scanRoamNotes();
-    const relationshipIndex = legacyNotes && kernelRelationshipOverlay
+    const legacyIndex = graphIndex ? null : await primaryNoteIndexPayload(false);
+    const legacyNotes = legacyIndex?.notes || null;
+    const relationshipIndex = legacyNotes && !kernelMarkdownProvider && kernelRelationshipOverlay
       ? await kernelRelationshipOverlay({ notes: legacyNotes })
       : null;
     const payload = graphPayload(
@@ -1891,12 +1939,13 @@ const apiRouter = new ApiRouter().register({
     return {
       ...payload,
       indexVersion: notesIndexVersionValue(),
-      relationshipSource: graphIndex?.relationshipSource || relationshipIndex?.relationshipSource || "node",
+      relationshipSource: graphIndex?.relationshipSource || relationshipIndex?.relationshipSource
+        || (kernelMarkdownProvider ? "kernel-note-catalog" : "node"),
     };
   },
   "aaronnote:api:notes:roam-index": async () => {
-    const payload = { type: "notes", ...await roamNotesIndexPayload(), root: noteRoot };
-    return kernelRelationshipOverlay ? kernelRelationshipOverlay(payload) : payload;
+    if (hostMode === "server") return { type: "notes", ...currentServerCatalog().index, root: "" };
+    return primaryNoteIndexPayload(false);
   },
   "aaronnote:api:runtime:debug": async () => ({ type: "runtime-debug", ...runtimeDebugSnapshot() }),
   "aaronnote:api:note-code:read-region": (body) => readNoteCodeRegion(body || {}),
@@ -2253,6 +2302,7 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
   window.__aaronnoteNotesRoot = ${JSON.stringify(hostMode === "server" ? "" : noteRoot)};
   window.__aaronnoteJupyterDefaults = ${JSON.stringify(hostMode === "server" ? {} : jupyterDefaults)};
   window.__aaronnoteHostMode = ${JSON.stringify(hostMode)};
+  window.__noemaRendererBuild = ${JSON.stringify(rendererBuildWatcher.generation)};
   window.__noemaKernelBase = ${JSON.stringify(noemaKernel.baseUrl)};
   window.__noemaKernel = ${JSON.stringify(noemaKernel)};
   window.__noemaServerReadOnly = ${JSON.stringify(hostMode === "server")};
@@ -2349,7 +2399,17 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
   }
   function handleCommandEvent(event) {
     try {
-      window.dispatchEvent(new CustomEvent("aaronnote:command", {detail: JSON.parse(event.data)}));
+      var detail = JSON.parse(event.data);
+      window.dispatchEvent(new CustomEvent("aaronnote:command", {detail: detail}));
+      if (detail
+          && detail.command === "renderer-updated"
+          && detail.generation
+          && detail.generation !== window.__noemaRendererBuild) {
+        var prepare = window.AaronnotePrepareRendererReload;
+        Promise.resolve(typeof prepare === "function" ? prepare(detail) : true)
+          .then(function(ready) { if (ready === true) window.location.reload(); })
+          .catch(function(err) { console.error("[noema-renderer] reload failed", err); });
+      }
     } catch (err) {
       console.error("[aaronnote-host] command event failed", err);
     }
@@ -2997,6 +3057,13 @@ const server = createServer(async (req, res) => {
       });
       res.write("retry: 2000\n\n");
       res.write(`event: command\ndata: ${JSON.stringify({ command: "server-ready", at: Date.now() })}\n\n`);
+      if (rendererBuildWatcher.generation) {
+        res.write(`event: command\ndata: ${JSON.stringify({
+          command: "renderer-updated",
+          generation: rendererBuildWatcher.generation,
+          at: Date.now(),
+        })}\n\n`);
+      }
       eventClients.add(res);
       req.on("close", () => eventClients.delete(res));
       return;
@@ -3237,6 +3304,7 @@ document.addEventListener("DOMContentLoaded", function () {
           tmp: tmpRoot,
           snippets: snippetsRoot,
           templates: templatesRoot,
+          rendererBuild: rendererBuildWatcher.generation,
           kernel: noemaKernel,
         });
       }
@@ -3269,6 +3337,13 @@ server.on("error", (err) => {
   process.stderr.write(`[aaronnote-web] Failed to start server: ${err.message}\n`);
   process.exit(1);
 });
+if (hostMode !== "server") {
+  const initialKernel = await kernelSupervisor.ready();
+  if (initialKernel.state !== "listening") {
+    await kernelSupervisor.close();
+    throw new Error(`Go kernel core failed before host startup: ${initialKernel.reason || initialKernel.state}`);
+  }
+}
 server.listen(bindPort, bindHost, () => {
   const port = server.address().port;
   process.stderr.write(`[aaronnote-web] http://${bindHost}:${port}\n`);

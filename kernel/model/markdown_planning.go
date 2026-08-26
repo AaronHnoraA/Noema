@@ -7,10 +7,8 @@
 package model
 
 import (
-	"crypto/sha256"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -42,18 +40,12 @@ func ListMarkdownPlanning(boxID, path string) (documents []MarkdownPlanningDocum
 		}
 		paths = append(paths, path)
 	} else {
-		var docs []MarkdownDocSummary
-		if docs, err = ListMarkdownDocs(boxID); nil != err {
-			return nil, err
-		}
-		for _, doc := range docs {
-			paths = append(paths, doc.Path)
-		}
+		return markdownCatalogPlanning(boxID)
 	}
 
 	documents = make([]MarkdownPlanningDocument, 0, len(paths))
 	for _, relativePath := range paths {
-		raw, readErr := os.ReadFile(filepath.Join(filesys.BoxRootPath(boxID), relativePath))
+		snapshot, readErr := loadMarkdownSnapshot(boxID, relativePath)
 		if nil != readErr {
 			if os.IsNotExist(readErr) {
 				documents = append(documents, MarkdownPlanningDocument{Path: relativePath, Nodes: []noemaplanning.Node{}, Version: markdownPlanningVersion(nil)})
@@ -61,23 +53,10 @@ func ListMarkdownPlanning(boxID, path string) (documents []MarkdownPlanningDocum
 			}
 			return nil, readErr
 		}
-		info, _ := os.Stat(filepath.Join(filesys.BoxRootPath(boxID), relativePath))
-		mtimeMs := float64(0)
-		if nil != info {
-			mtimeMs = float64(info.ModTime().UnixNano()) / 1e6
-		}
-		documents = append(documents, MarkdownPlanningDocument{
-			Path: relativePath, Nodes: noemaplanning.ScanDocument(string(raw), ""),
-			Version: markdownPlanningVersion(raw), MtimeMs: mtimeMs,
-		})
+		documents = append(documents, planningDocumentFromSnapshot(relativePath, snapshot))
 	}
 	sort.Slice(documents, func(i, j int) bool { return documents[i].Path < documents[j].Path })
 	return documents, nil
-}
-
-func markdownPlanningVersion(source []byte) string {
-	digest := sha256.Sum256(source)
-	return fmt.Sprintf("%x", digest)
 }
 
 func isMarkdownDocPath(path string) bool {

@@ -27,11 +27,17 @@ describe("App and Emacs shared UI contract", () => {
     const manifest = JSON.parse(read("package.json"));
 
     expect(host).toContain('join(scriptDir, "dist", "aaronnote")');
+    expect(host).toContain('command: "renderer-updated"');
+    expect(host).toContain("window.AaronnotePrepareRendererReload");
+    expect(host).toContain("detail.generation !== window.__noemaRendererBuild");
+    expect(host).toContain("generation: rendererBuildWatcher.generation");
     expect(desktop).toContain('AARONNOTE_WEB_DIR: join(appRoot, "dist", "aaronnote")');
     expect(desktop).toContain('AARONNOTE_HOST_MODE: "desktop"');
     expect(makefile).toContain("build: check-env check-go prune-legacy-garbage build-web");
+    expect(makefile).toMatch(/^install: build$/mu);
     expect(manifest.scripts["build:desktop-shell"]).not.toContain("build:aaronnote");
     expect(manifest.scripts["build:desktop"]).toContain("build:aaronnote");
+    expect(manifest.scripts["build:aaronnote"]).toContain("write-renderer-build.mjs");
   });
 
   test("keeps document canvas regions out of the raised b3 panel system", () => {

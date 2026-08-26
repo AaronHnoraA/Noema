@@ -44,3 +44,35 @@ func TestBacklinkIndexChange(t *testing.T) {
 		t.Fatal("expected full backlink change")
 	}
 }
+
+func TestContiguousOperationBatchesPreserveOrderAndDatabaseRouting(t *testing.T) {
+	ops := []*dbQueueOperation{
+		{action: "delete_box", box: "a"},
+		{action: "delete_box_refs", box: "a"},
+		{action: "delete_box", box: "b"},
+		{action: "delete_box_refs", box: "b"},
+		{action: "delete_box", box: "a"},
+		{action: "delete_assets"},
+		{action: "delete_ids"},
+	}
+	batches := contiguousOperationBatches(ops)
+	if 4 != len(batches) {
+		t.Fatalf("expected 4 contiguous batches, got %d", len(batches))
+	}
+	wantSizes := []int{2, 2, 1, 2}
+	wantBoxes := []string{"a", "b", "a", ""}
+	for index, batch := range batches {
+		if wantSizes[index] != len(batch) || wantBoxes[index] != batch[0].boxID() {
+			t.Fatalf("unexpected batch %d: box=%q size=%d", index, batch[0].boxID(), len(batch))
+		}
+	}
+	flattened := make([]*dbQueueOperation, 0, len(ops))
+	for _, batch := range batches {
+		flattened = append(flattened, batch...)
+	}
+	for index := range ops {
+		if flattened[index] != ops[index] {
+			t.Fatalf("operation order changed at %d", index)
+		}
+	}
+}

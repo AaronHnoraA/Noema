@@ -742,9 +742,21 @@ func IndexBlockTree(tree *parse.Tree) {
 }
 
 func UpsertBlockTree(tree *parse.Tree) {
+	upsertBlockTree(tree)
+}
+
+// UpsertBlockTreeReportingPrevious upserts the tree and returns the rows this
+// root had beforehand. Reading them costs a full blocktrees scan, so callers
+// that also need the previous block set — to invalidate caches, say — take it
+// from here instead of querying blocktree.db a second time.
+func UpsertBlockTreeReportingPrevious(tree *parse.Tree) (previous []*BlockTree) {
+	return upsertBlockTree(tree)
+}
+
+func upsertBlockTree(tree *parse.Tree) (previous []*BlockTree) {
 	oldBts := map[string]*BlockTree{}
-	bts := GetBlockTreesByRootIDInBox(tree.ID, tree.Box)
-	for _, bt := range bts {
+	previous = GetBlockTreesByRootIDInBox(tree.ID, tree.Box)
+	for _, bt := range previous {
 		oldBts[bt.ID] = bt
 	}
 
@@ -807,6 +819,7 @@ func UpsertBlockTree(tree *parse.Tree) {
 	if err = tx.Commit(); err != nil {
 		logging.LogErrorf("commit transaction failed: %s", err)
 	}
+	return
 }
 
 func execInsertBlocktrees(tx *sql.Tx, tree *parse.Tree, changedNodes []*ast.Node) {
@@ -834,7 +847,10 @@ func execInsertBlocktrees(tx *sql.Tx, tree *parse.Tree, changedNodes []*ast.Node
 		if nil != n.Parent {
 			parentID = n.Parent.ID
 		}
-		if _, err = tx.Exec(sqlStmt, n.ID, tree.ID, parentID, tree.Box, tree.Path, tree.HPath, n.IALAttr("updated"), TypeAbbr(n.Type.String())); err != nil {
+		// stmt is the prepared form of sqlStmt; going back through tx.Exec here
+		// would re-prepare the same INSERT once per block, which on a large
+		// document meant hundreds of redundant preparations per save.
+		if _, err = stmt.Exec(n.ID, tree.ID, parentID, tree.Box, tree.Path, tree.HPath, n.IALAttr("updated"), TypeAbbr(n.Type.String())); err != nil {
 			tx.Rollback()
 			logging.LogErrorf("exec database stmt [%s] failed: %s\n  %s", sqlStmt, err, logging.ShortStack())
 

@@ -14,8 +14,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//go:build !darwin
-
 package model
 
 import (
@@ -24,9 +22,9 @@ import (
 	"time"
 
 	"github.com/88250/gulu"
+	"github.com/aaronhe/noema/kernel/util"
 	"github.com/fsnotify/fsnotify"
 	"github.com/siyuan-note/logging"
-	"github.com/aaronhe/noema/kernel/util"
 )
 
 var emojisWatcher *fsnotify.Watcher
@@ -63,8 +61,11 @@ func watchEmojis() {
 	go func() {
 		defer logging.Recover()
 
-		timer := time.NewTimer(100 * time.Millisecond)
-		<-timer.C // timer should be expired at first
+		timer := time.NewTimer(time.Hour)
+		if !timer.Stop() {
+			<-timer.C
+		}
+		defer timer.Stop()
 
 		for {
 			select {

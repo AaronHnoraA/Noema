@@ -21,6 +21,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/88250/gulu"
@@ -29,12 +30,12 @@ import (
 	"github.com/88250/lute/editor"
 	"github.com/88250/lute/parse"
 	"github.com/ClarkThan/ahocorasick"
-	"github.com/dgraph-io/ristretto"
 	"github.com/aaronhe/noema/kernel/search"
 	"github.com/aaronhe/noema/kernel/sql"
 	"github.com/aaronhe/noema/kernel/task"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/dgraph-io/ristretto"
 )
 
 // virtualBlockRefCache 用于保存块关联的虚拟引用关键字。
@@ -44,6 +45,17 @@ var virtualBlockRefCache, _ = ristretto.NewCache(&ristretto.Config{
 	MaxCost:     10240,
 	BufferItems: 64,
 })
+
+type virtualRefMatchPlan struct {
+	matcher          *ahocorasick.Matcher
+	patternCounts    map[string]int
+	patternByKeyword map[string]string
+}
+
+var (
+	virtualRefMatchPlanLock sync.Mutex
+	virtualRefMatchPlans    = map[string]*virtualRefMatchPlan{}
+)
 
 func getBlockVirtualRefKeywords(root *ast.Node, boxID string) (ret []string) {
 	key := boxID + "\x00" + root.ID
@@ -69,38 +81,31 @@ func getBlockVirtualRefKeywords(root *ast.Node, boxID string) (ret []string) {
 }
 
 func putBlockVirtualRefKeywords(blockContent string, root *ast.Node, boxID string) (ret []string) {
-	keywords := getVirtualRefKeywords(root, boxID)
-	if 1 > len(keywords) {
+	key := boxID + "\x00" + root.ID
+	defer func() {
+		virtualBlockRefCache.SetWithTTL(key, append([]string(nil), ret...), 1, 10*time.Minute)
+	}()
+	plan := getVirtualRefMatchPlan(boxID)
+	if nil == plan || nil == plan.matcher {
 		return
 	}
 
 	contentTmp := blockContent
-	var keywordsTmp []string
 	if !Conf.Search.CaseSensitive {
 		contentTmp = strings.ToLower(blockContent)
-		for _, keyword := range keywords {
-			keywordsTmp = append(keywordsTmp, strings.ToLower(keyword))
-		}
-	} else {
-		for _, keyword := range keywords {
-			keywordsTmp = append(keywordsTmp, keyword)
-		}
 	}
 
-	m := ahocorasick.NewMatcher()
-	m.BuildWithPatterns(keywordsTmp)
-	hits := m.Search(contentTmp)
+	excluded := currentRootVirtualRefPatternCounts(plan, root)
+	hits := plan.matcher.Search(contentTmp)
 	for _, hit := range hits {
-		ret = append(ret, hit)
+		if plan.patternCounts[hit] > excluded[hit] {
+			ret = append(ret, hit)
+		}
 	}
 
-	if 1 > len(ret) {
-		return
+	if 0 < len(ret) {
+		ret = gulu.Str.RemoveDuplicatedElem(ret)
 	}
-
-	ret = gulu.Str.RemoveDuplicatedElem(ret)
-	key := boxID + "\x00" + root.ID
-	virtualBlockRefCache.SetWithTTL(key, ret, 1, 10*time.Minute)
 	return
 }
 
@@ -112,6 +117,9 @@ func CacheVirtualBlockRefJob() {
 }
 
 func ResetVirtualBlockRefCache() {
+	virtualRefMatchPlanLock.Lock()
+	virtualRefMatchPlans = map[string]*virtualRefMatchPlan{}
+	virtualRefMatchPlanLock.Unlock()
 	virtualBlockRefCache.Clear()
 	if nil == Conf {
 		return
@@ -276,7 +284,7 @@ func parseKeywords(keywordsStr string) (keywords []string) {
 	return
 }
 
-func getVirtualRefKeywords(root *ast.Node, boxIDs ...string) (ret []string) {
+func getVirtualRefBaseKeywords(boxIDs ...string) (ret []string) {
 	if !Conf.Editor.VirtualBlockRef {
 		return
 	}
@@ -286,13 +294,13 @@ func getVirtualRefKeywords(root *ast.Node, boxIDs ...string) (ret []string) {
 		key = boxIDs[0] + "\x00virtual_ref"
 	}
 	if val, ok := virtualBlockRefCache.Get(key); ok {
-		ret = val.([]string)
+		ret = append([]string(nil), val.([]string)...)
 	} else {
 		searchIgnoreLines := getSearchIgnoreLines()
 		refSearchIgnoreLines := getRefSearchIgnoreLines()
 		ret = sql.QueryVirtualRefKeywords(Conf.Search.VirtualRefName, Conf.Search.VirtualRefAlias,
 			Conf.Search.VirtualRefAnchor, Conf.Search.VirtualRefDoc, searchIgnoreLines, refSearchIgnoreLines, boxIDs...)
-		virtualBlockRefCache.Set(key, ret, 1)
+		virtualBlockRefCache.Set(key, append([]string(nil), ret...), 1)
 	}
 
 	includes := parseKeywords(Conf.Editor.VirtualBlockRefInclude)
@@ -331,6 +339,20 @@ func getVirtualRefKeywords(root *ast.Node, boxIDs ...string) (ret []string) {
 		}
 	}
 
+	ret = prepareMarkKeywords(ret)
+	return
+}
+
+func getVirtualRefKeywords(root *ast.Node, boxIDs ...string) (ret []string) {
+	ret = getVirtualRefBaseKeywords(boxIDs...)
+	return excludeCurrentRootVirtualRefKeywords(ret, root)
+}
+
+func excludeCurrentRootVirtualRefKeywords(ret []string, root *ast.Node) []string {
+	if nil == root || 1 > len(ret) {
+		return ret
+	}
+
 	// 虚拟引用排除当前文档名 https://github.com/siyuan-note/siyuan/issues/4537
 	// Virtual references exclude the name and aliases from the current document https://github.com/siyuan-note/siyuan/issues/9204
 	title := root.IALAttr("title")
@@ -344,8 +366,80 @@ func getVirtualRefKeywords(root *ast.Node, boxIDs ...string) (ret []string) {
 		}
 	}
 
-	ret = prepareMarkKeywords(ret)
-	return
+	return ret
+}
+
+func currentRootVirtualRefPatternCounts(plan *virtualRefMatchPlan, root *ast.Node) map[string]int {
+	if nil == plan || nil == root {
+		return nil
+	}
+	excludedKeywords := map[string]struct{}{}
+	if title := root.IALAttr("title"); "" != title {
+		excludedKeywords[title] = struct{}{}
+	}
+	if name := root.IALAttr("name"); "" != name {
+		excludedKeywords[name] = struct{}{}
+	}
+	if alias := root.IALAttr("alias"); "" != alias {
+		for value := range strings.SplitSeq(alias, ",") {
+			excludedKeywords[value] = struct{}{}
+		}
+	}
+	ret := make(map[string]int, len(excludedKeywords))
+	for keyword := range excludedKeywords {
+		if pattern, ok := plan.patternByKeyword[keyword]; ok {
+			ret[pattern]++
+		}
+	}
+	return ret
+}
+
+func getVirtualRefMatchPlan(boxID string) *virtualRefMatchPlan {
+	if nil == Conf || nil == Conf.Editor || !Conf.Editor.VirtualBlockRef || nil == Conf.Search {
+		return nil
+	}
+	caseSensitive := Conf.Search.CaseSensitive
+	key := boxID + "\x00"
+	if caseSensitive {
+		key += "case-sensitive"
+	} else {
+		key += "case-insensitive"
+	}
+	virtualRefMatchPlanLock.Lock()
+	defer virtualRefMatchPlanLock.Unlock()
+	if plan, ok := virtualRefMatchPlans[key]; ok {
+		return plan
+	}
+	keywords := getVirtualRefBaseKeywords(boxID)
+	if 1 > len(keywords) {
+		plan := &virtualRefMatchPlan{}
+		virtualRefMatchPlans[key] = plan
+		return plan
+	}
+	plan := newVirtualRefMatchPlan(keywords, caseSensitive)
+	virtualRefMatchPlans[key] = plan
+	return plan
+}
+
+func newVirtualRefMatchPlan(keywords []string, caseSensitive bool) *virtualRefMatchPlan {
+	if 1 > len(keywords) {
+		return nil
+	}
+	patterns := make([]string, 0, len(keywords))
+	patternCounts := make(map[string]int, len(keywords))
+	patternByKeyword := make(map[string]string, len(keywords))
+	for _, keyword := range keywords {
+		pattern := keyword
+		if !caseSensitive {
+			pattern = strings.ToLower(keyword)
+		}
+		patterns = append(patterns, pattern)
+		patternCounts[pattern]++
+		patternByKeyword[keyword] = pattern
+	}
+	matcher := ahocorasick.NewMatcher()
+	matcher.BuildWithPatterns(patterns)
+	return &virtualRefMatchPlan{matcher: matcher, patternCounts: patternCounts, patternByKeyword: patternByKeyword}
 }
 
 func prepareMarkKeywords(keywords []string) (ret []string) {

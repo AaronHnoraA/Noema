@@ -29,10 +29,10 @@ import (
 
 	"github.com/88250/lute/ast"
 	"github.com/88250/vitess-sqlparser/sqlparser"
+	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/emirpasic/gods/sets/hashset"
 	sqlparser2 "github.com/rqlite/sql"
 	"github.com/siyuan-note/logging"
-	"github.com/aaronhe/noema/kernel/treenode"
 )
 
 func QueryEmptyContentEmbedBlocks() (ret []*Block) {
@@ -696,6 +696,33 @@ func SelectBlocksRawStmtArgs(stmt string, args []any, limit int) (ret []*Block) 
 		}
 	}
 	return
+}
+
+// QueryRootBlockProjectionsByBox returns the small persisted projection needed
+// to reconcile source documents. Loading it once avoids issuing one SELECT *
+// query per Markdown file during every warm attach.
+func QueryRootBlockProjectionsByBox(boxID string) (ret map[string]*Block, err error) {
+	ret = map[string]*Block{}
+	// Markdown document hashes include content, fcontent, Markdown and IAL (see
+	// buildBlockFromNode), so id+hash is the complete reconciliation identity.
+	const stmt = "SELECT id, hash, path FROM blocks WHERE box = ? AND type = 'd' AND id = root_id"
+	rows, err := queryForBox(boxID, stmt, boxID)
+	if nil != err {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		block := &Block{Box: boxID, RootID: ""}
+		if err = rows.Scan(&block.ID, &block.Hash, &block.Path); nil != err {
+			return nil, err
+		}
+		block.RootID = block.ID
+		ret[block.Path] = block
+	}
+	if err = rows.Err(); nil != err {
+		return nil, err
+	}
+	return ret, nil
 }
 
 type queryRowsFunc func(string, ...any) (*sql.Rows, error)

@@ -27,6 +27,80 @@ func resetQueue() {
 	queueLock.Lock()
 	taskQueue = nil
 	queueLock.Unlock()
+	select {
+	case <-taskQueueChanged:
+	default:
+	}
+	select {
+	case <-taskStatusChanged:
+	default:
+	}
+}
+
+func TestTaskStatusConsumerSleepsWhenIdleAndCoalesces(t *testing.T) {
+	changed := make(chan struct{}, 1)
+	stop := make(chan struct{})
+	pushed := make(chan struct{}, 2)
+	go consumeTaskStatus(changed, 10*time.Millisecond, func() { pushed <- struct{}{} }, stop)
+	t.Cleanup(func() { close(stop) })
+
+	time.Sleep(25 * time.Millisecond)
+	select {
+	case <-pushed:
+		t.Fatal("idle task status consumer pushed")
+	default:
+	}
+	for range 8 {
+		select {
+		case changed <- struct{}{}:
+		default:
+		}
+	}
+	select {
+	case <-pushed:
+	case <-time.After(time.Second):
+		t.Fatal("task status change was not pushed")
+	}
+	time.Sleep(25 * time.Millisecond)
+	select {
+	case <-pushed:
+		t.Fatal("task status changes were not coalesced")
+	default:
+	}
+}
+
+func TestQueueConsumerWakesForImmediateAndDelayedWork(t *testing.T) {
+	resetQueue()
+	defer resetQueue()
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		consumeTaskQueue(stop)
+		close(done)
+	}()
+
+	result := make(chan string, 2)
+	AppendTask("test-consumer-immediate", func() { result <- "immediate" })
+	AppendAsyncTaskWithDelay("test-consumer-delayed", 30*time.Millisecond, func() { result <- "delayed" })
+
+	for _, want := range []string{"immediate", "delayed"} {
+		select {
+		case got := <-result:
+			if got != want {
+				t.Fatalf("expected %q, got %q", want, got)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for %s task", want)
+		}
+	}
+
+	close(stop)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("task consumer did not stop")
+	}
 }
 
 // TestQueuedTasksNeverRunWithoutConsumer 锁定这次修复的前提：入队本身不执行任何东西。

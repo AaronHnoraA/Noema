@@ -19,39 +19,46 @@ package job
 import (
 	"time"
 
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/model"
 	"github.com/aaronhe/noema/kernel/sql"
 	"github.com/aaronhe/noema/kernel/task"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/siyuan-note/logging"
 )
 
-func StartCron() {
-	go every(100*time.Millisecond, task.ExecTaskJob)
-	go every(100*time.Millisecond, task.ExecAsyncTaskJob)
-	go every(7*time.Second, task.StatusJob)
+func StartCron(supervisorPID ...int) {
+	task.StartQueueConsumer()
+	sql.StartQueueConsumers()
+	util.StartAssetsTextsSaver()
+	model.StartAutoFixIndexScheduler()
 	go every(2*time.Hour, model.StatJob)
 	go every(6*time.Hour, util.RefreshRhyResultJob, "RefreshRhyResultJob")
 	go every(2*time.Hour, model.RefreshCheckJob2H)
 	go every(6*time.Hour, model.RefreshCheckJob6H)
-	go every(3*time.Second, model.FlushUpdateRefTextRenameDocJob)
-	go every(util.SQLFlushInterval, sql.FlushTxJob)
-	go every(util.SQLFlushInterval, sql.FlushHistoryTxJob)
-	go every(util.SQLFlushInterval, sql.FlushAssetContentTxJob)
 	go every(10*time.Minute, model.IndexEmbedBlockJob)
 	go every(10*time.Minute, model.CacheVirtualBlockRefJob)
-	go every(30*time.Second, model.OCRAssetsJob)
-	go every(30*time.Second, model.FlushAssetsTextsJob)
-	go every(30*time.Second, model.HookDesktopUIProcJob)
-	go every(1*time.Minute, model.AutoFixIndex)
+	go startOCRAssetsJob()
+	if 0 == len(supervisorPID) || supervisorPID[0] <= 0 {
+		// Legacy attached UIs have no owned host process to watch. Noema.app
+		// passes a supervisor PID and uses the native process-exit event instead,
+		// avoiding this compatibility poll entirely while idle.
+		go every(30*time.Second, model.HookDesktopUIProcJob)
+	}
 	go every(30*time.Minute, model.AutoCheckMicrosoftDefenderJob)
 	go every(24*time.Hour, model.ClearOutdatedHistoryDirJob)
-	go every(1*time.Minute, model.AutoLockIdleEncryptedBoxesJob)
 	if util.IsMobileContainer() {
 		go every(3*time.Second, model.AutoConsumeShorthandsJob)
 	}
 
 	model.StartPushQueueConsumer()
+}
+
+func startOCRAssetsJob() {
+	util.WaitForTesseractInit()
+	if !util.TesseractEnabled {
+		return
+	}
+	every(30*time.Second, model.OCRAssetsJob)
 }
 
 func every(interval time.Duration, f func(), name ...string) {

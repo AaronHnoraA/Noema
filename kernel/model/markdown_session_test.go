@@ -21,6 +21,7 @@ func setupMarkdownSessionTest(t *testing.T, boxID string) {
 	util.DataDir = t.TempDir()
 	markdownSessionNow = func() float64 { return 99 }
 	t.Cleanup(func() {
+		resetMarkdownSessionCache(boxID)
 		util.DataDir = originalDataDir
 		markdownSessionNow = originalNow
 	})

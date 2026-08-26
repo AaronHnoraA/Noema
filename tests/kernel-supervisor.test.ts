@@ -103,7 +103,7 @@ describe("shared kernel supervisor", () => {
     });
 
     void supervisor.start();
-    await waitFor(() => supervisor.status().state === "listening");
+    await expect(supervisor.ready()).resolves.toMatchObject({ state: "listening" });
     expect(supervisor.status()).toMatchObject({
       state: "listening",
       baseUrl: "http://127.0.0.1:43127",
@@ -274,7 +274,7 @@ describe("shared kernel supervisor", () => {
     });
 
     void supervisor.start();
-    await waitFor(() => states.includes("degraded"));
+    await expect(supervisor.ready()).resolves.toMatchObject({ state: "degraded" });
     expect(registrationAborted).toBe(true);
     expect(states).not.toContain("listening");
     await supervisor.close();

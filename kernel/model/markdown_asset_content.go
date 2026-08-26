@@ -189,6 +189,9 @@ func numericInt64(value any) int64 {
 }
 
 func SearchMarkdownAssetContent(boxID, query string, limit int) (ret []*AssetContent, total, indexed int, err error) {
+	// Attachment references are read out of the Markdown index, which saves
+	// populate asynchronously. Settle it at the entry point, before any lock.
+	WaitMarkdownIndex()
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return []*AssetContent{}, 0, 0, nil

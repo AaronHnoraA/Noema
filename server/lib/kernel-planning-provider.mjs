@@ -42,6 +42,43 @@ export function createKernelPlanningProvider({ baseUrl, box, fetchImpl = globalT
     owns(file) {
       return Boolean(pathFor(file));
     },
+    async workspaceProjection({ includeProperties = false } = {}) {
+      const data = await post("workspaceProjection", {
+        notebook,
+        includeProperties: includeProperties === true,
+      });
+      const documents = (Array.isArray(data.documents) ? data.documents : []).map((raw) => {
+        const path = `/${String(raw?.path || "").replace(/\\/g, "/").replace(/^\/+/, "")}`;
+        const file = fileFor(path);
+        const notePath = String(raw?.note?.path || raw?.note?.link || "").replace(/^\/+/, "");
+        if (!file || path !== `/${notePath}`) {
+          throw Object.assign(new Error("Kernel workspace projection path escapes the registered Markdown box"), { statusCode: 502 });
+        }
+        return {
+          file,
+          path,
+          note: {
+            ...(raw.note && typeof raw.note === "object" ? raw.note : {}),
+            file,
+            path: notePath,
+            link: notePath,
+            standalone: false,
+          },
+          nodes: Array.isArray(raw?.nodes) ? raw.nodes : [],
+          blocks: Array.isArray(raw?.blocks) ? raw.blocks : [],
+          duplicateDefinitionIds: Array.isArray(raw?.duplicateDefinitionIds)
+            ? raw.duplicateDefinitionIds.map(String)
+            : [],
+          version: String(raw?.version || ""),
+          mtimeMs: Number(raw?.mtimeMs || raw?.note?.mtimeMs || 0),
+        };
+      });
+      return {
+        documents,
+        indexVersion: Number(data.indexVersion) || 0,
+        source: String(data.source || "kernel-workspace-projection"),
+      };
+    },
     async read(file) {
       const path = pathFor(file);
       if (!path) throw Object.assign(new Error("File is outside the kernel Markdown box"), { statusCode: 403 });
@@ -54,45 +91,6 @@ export function createKernelPlanningProvider({ baseUrl, box, fetchImpl = globalT
         version: String(document?.version || ""),
         mtimeMs: Number(document?.mtimeMs || 0),
       };
-    },
-    async readMany(files = []) {
-      const wanted = new Map();
-      for (const file of files) {
-        const path = pathFor(file);
-        if (path) wanted.set(path, String(file));
-      }
-      if (wanted.size === 0) return [];
-      const data = await post("listPlanning", { notebook });
-      const documents = Array.isArray(data.documents) ? data.documents : [];
-      const documentsByPath = new Map(documents.map((document) => [document?.path, document]));
-      return [...wanted].map(([path, file]) => ({
-        file,
-        path,
-        nodes: Array.isArray(documentsByPath.get(path)?.nodes) ? documentsByPath.get(path).nodes : [],
-        version: String(documentsByPath.get(path)?.version || ""),
-        mtimeMs: Number(documentsByPath.get(path)?.mtimeMs || 0),
-      }));
-    },
-    async readPropertyBlocks(files = []) {
-      const wanted = new Map();
-      for (const file of files) {
-        const path = pathFor(file);
-        if (path) wanted.set(path, String(file));
-      }
-      if (wanted.size === 0) return [];
-      const data = await post("listPropertyBlocks", { notebook });
-      const documents = Array.isArray(data.documents) ? data.documents : [];
-      const documentsByPath = new Map(documents.map((document) => [document?.path, document]));
-      return [...wanted].map(([path, file]) => ({
-        file,
-        path,
-        blocks: Array.isArray(documentsByPath.get(path)?.blocks) ? documentsByPath.get(path).blocks : [],
-        duplicateDefinitionIds: Array.isArray(documentsByPath.get(path)?.duplicateDefinitionIds)
-          ? documentsByPath.get(path).duplicateDefinitionIds.map(String)
-          : [],
-        version: String(documentsByPath.get(path)?.version || ""),
-        mtimeMs: Number(documentsByPath.get(path)?.mtimeMs || 0),
-      }));
     },
     async readPropertyBlock(file) {
       const path = pathFor(file);

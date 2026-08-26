@@ -178,6 +178,7 @@ let dirtyNoteFiles = new Set();
 let externalFileProvider = null;
 let markdownFileProvider = null;
 let planningProvider = null;
+let requireGoCore = false;
 let katexMacrosProvider = null;
 let latexProvider = null;
 let assetProvider = null;
@@ -289,14 +290,34 @@ function markdownFileProviderOwns(file) {
   return markdownFileProvider?.owns?.(String(file || "")) === true;
 }
 
+function canonicalGoCoreFile(file) {
+  const value = String(file || "");
+  const dot = value.lastIndexOf(".");
+  return Boolean(value) && inside(value, noteRoot) && dot >= 0 && noteExts.has(value.slice(dot).toLowerCase());
+}
+
+function goCoreUnavailable(capability) {
+  const err = new Error(`Go kernel ${capability} is unavailable`);
+  err.statusCode = 503;
+  return err;
+}
+
+function assertGoCoreCapability(file, available, capability) {
+  if (requireGoCore && canonicalGoCoreFile(file) && !available) throw goCoreUnavailable(capability);
+}
+
 async function readMarkdownFile(file) {
-  if (!markdownFileProviderOwns(file)) return await readFile(file, "utf8");
+  if (!markdownFileProviderOwns(file)) {
+    assertGoCoreCapability(file, false, "Markdown persistence");
+    return await readFile(file, "utf8");
+  }
   const opened = await markdownFileProvider.read(String(file));
   return String(opened?.content ?? opened?.markdown ?? "");
 }
 
 async function writeMarkdownFile(file, content, options = {}) {
   if (!markdownFileProviderOwns(file)) {
+    assertGoCoreCapability(file, false, "Markdown persistence");
     await atomicWriteFile(file, content, "utf8");
     return { ok: true, content: String(content) };
   }
@@ -2851,7 +2872,7 @@ function computeNotesSnapshotFingerprint(rawNotes) {
   const parts = [];
   for (const note of rawNotes || []) {
     const cached = note?.file ? noteCache.get(note.file) : null;
-    parts.push(`${note?.file || ""}\0${note?.id || ""}\0${cached?.mtimeMs || 0}\0${cached?.size || 0}`);
+    parts.push(`${note?.file || ""}\0${note?.id || ""}\0${cached?.mtimeMs || note?.mtimeMs || 0}\0${cached?.size || note?.size || 0}`);
   }
   for (const part of parts.sort()) hash.update(`${part}\n`);
   return hash.digest("hex");
@@ -3206,8 +3227,51 @@ async function mapLimit(items, limit, mapper) {
 // dirtyNoteFiles/notesSnapshotFullDirty, which the *next* loop iteration (or
 // the next external scanNotes() call) picks up.
 let scanNotesInFlight = null;
+let markdownCatalogScanInFlight = null;
+
+async function scanNotesFromMarkdownCatalog() {
+  if (notesSnapshotRoot === noteRoot && notesSnapshot && !notesSnapshotDirty) {
+    return cloneNotes(notesSnapshot);
+  }
+  if (!markdownCatalogScanInFlight) {
+    const provider = markdownFileProvider;
+    const requestedVersion = notesIndexVersion;
+    const pending = (async () => ({
+      provider,
+      requestedVersion,
+      payload: await provider.catalog(false),
+    }))();
+    markdownCatalogScanInFlight = pending;
+    void pending.finally(() => {
+      if (markdownCatalogScanInFlight === pending) markdownCatalogScanInFlight = null;
+    }).catch(() => {});
+  }
+  const { provider, requestedVersion, payload } = await markdownCatalogScanInFlight;
+  if (!Array.isArray(payload?.notes)) {
+    const err = new Error("Go kernel note catalog is unavailable");
+    err.statusCode = 502;
+    throw err;
+  }
+  const notes = cloneNotes(payload.notes);
+  if (provider === markdownFileProvider && noteScanRoot === noteRoot && requestedVersion === notesIndexVersion) {
+    noteCacheRoot = noteRoot;
+    notesSnapshotRoot = noteRoot;
+    notesRawSnapshot = cloneNotes(notes);
+    notesSnapshot = cloneNotes(notes);
+    notesRelationshipCache = buildRelationshipCache(notes);
+    notesSnapshotFingerprint = computeNotesSnapshotFingerprint(notes);
+    notesSnapshotDirty = false;
+    notesSnapshotFullDirty = false;
+    dirtyNoteFiles = new Set();
+  }
+  return notes;
+}
 
 export async function scanNotes() {
+  if (markdownCatalogProviderActive()) {
+    return scanNotesFromMarkdownCatalog();
+  }
+  if (requireGoCore && noteScanRoot === noteRoot) throw goCoreUnavailable("note catalog");
   for (;;) {
     if (noteCacheRoot !== noteScanRoot) {
       noteCacheRoot = noteScanRoot;
@@ -3585,7 +3649,9 @@ function locateTodoInContent(content, body, file) {
 }
 
 function planningMutationProviderOwns(file) {
-  return planningProvider?.owns?.(file) === true && typeof planningProvider?.mutate === "function";
+  const available = planningProvider?.owns?.(file) === true && typeof planningProvider?.mutate === "function";
+  assertGoCoreCapability(file, available, "planning mutation");
+  return available;
 }
 
 function locateProviderPlanningNode(nodes, body = {}, kind = "todo") {
@@ -3768,15 +3834,19 @@ async function readAndCachePlanning(cached, note) {
 }
 
 async function planningItemsFromProvider(note, suppliedNodes = null) {
-  if (!planningProvider?.owns?.(note?.file)) return null;
+  if (!planningProvider?.owns?.(note?.file)) {
+    assertGoCoreCapability(note?.file, false, "planning projection");
+    return null;
+  }
   try {
     const payload = suppliedNodes === null ? await planningProvider.read(note.file) : { nodes: suppliedNodes };
-    let updatedAt = Number(noteCache.get(note.file)?.mtimeMs || 0);
+    let updatedAt = Number(note?.mtimeMs || noteCache.get(note.file)?.mtimeMs || payload?.mtimeMs || 0);
     if (!updatedAt) {
       try { updatedAt = (await stat(note.file)).mtimeMs; } catch {}
     }
     return planningItemsFromNodes(payload?.nodes || [], note, updatedAt);
-  } catch {
+  } catch (error) {
+    if (requireGoCore && canonicalGoCoreFile(note?.file)) throw error;
     // Compatibility fallback: a transient kernel failure must not make the
     // existing Emacs/Node agenda disappear during the staged migration.
     return null;
@@ -3814,30 +3884,46 @@ async function todosForNote(note) {
 }
 
 async function planningGroupsForNotes(scanned) {
-  const supplied = new Map();
-  const owned = planningProvider?.readMany
-    ? scanned.filter((note) => planningProvider.owns?.(note.file))
-    : [];
-  if (owned.length) {
-    try {
-      const documents = await planningProvider.readMany(owned.map((note) => note.file));
-      for (const document of documents || []) supplied.set(String(document.file || ""), document.nodes || []);
-    } catch {
-      // Per-file provider attempts below retain a narrow recovery path.
-    }
-  }
   return mapLimit(scanned, scanConcurrency, async (note) => {
-    if (supplied.has(note.file)) {
-      const group = await planningItemsFromProvider(note, supplied.get(note.file));
-      if (group) return group;
-    }
     return planningItemsForNote(note);
   });
 }
 
+async function workspacePlanningDocuments(root = noteScanRoot, includeProperties = false) {
+  if (root !== noteRoot) return null;
+  if (typeof planningProvider?.workspaceProjection !== "function") {
+    if (requireGoCore) throw goCoreUnavailable("workspace planning projection");
+    return null;
+  }
+  try {
+    const payload = await planningProvider.workspaceProjection({ includeProperties });
+    if (!Array.isArray(payload?.documents) ||
+        payload.documents.some((document) => !document?.file || !planningProvider.owns?.(document.file))) {
+      if (requireGoCore) throw goCoreUnavailable("workspace planning projection");
+      return null;
+    }
+    return payload.documents;
+  } catch (error) {
+    if (requireGoCore) throw error;
+    // The Go projection is the canonical fast path. A transient kernel
+    // failure retains the mature per-file Node/Emacs compatibility scanner.
+    return null;
+  }
+}
+
+function planningGroupsFromWorkspaceDocuments(documents) {
+  return (documents || []).map((document) => planningItemsFromNodes(
+    document.nodes || [],
+    document.note || { file: document.file, title: basename(document.file || "") },
+    Number(document.mtimeMs || document.note?.mtimeMs || 0),
+  ));
+}
+
 async function scanTodos() {
-  const scanned = await scanNotes();
-  const groups = await planningGroupsForNotes(scanned);
+  const projected = await workspacePlanningDocuments(noteScanRoot, false);
+  const groups = projected
+    ? planningGroupsFromWorkspaceDocuments(projected)
+    : await planningGroupsForNotes(await scanNotes());
   const todos = groups.flatMap((group) => group.todos || []);
   return todos.sort((a, b) => {
     const statusRank = { blocked: 0, doing: 1, todo: 2, done: 3, cancelled: 4 };
@@ -3885,8 +3971,10 @@ async function planningItemsForNote(note) {
 }
 
 async function scanPlanningItems() {
-  const scanned = await scanNotes();
-  const groups = await planningGroupsForNotes(scanned);
+  const projected = await workspacePlanningDocuments(noteScanRoot, false);
+  const groups = projected
+    ? planningGroupsFromWorkspaceDocuments(projected)
+    : await planningGroupsForNotes(await scanNotes());
   return {
     todos: groups.flatMap((group) => group.todos || []),
     projects: groups.flatMap((group) => group.projects || []),
@@ -3896,16 +3984,54 @@ async function scanPlanningItems() {
   };
 }
 
+function blockPropertyItemsFromProviderDocument(document) {
+  const duplicates = new Set((document?.duplicateDefinitionIds || []).map((id) => String(id).toLowerCase()));
+  return (document?.blocks || [])
+    .filter((definition) => !duplicates.has(String(definition?.canonicalId || "").toLowerCase()))
+    .map((definition) => {
+      const properties = Object.fromEntries(Object.entries(definition?.properties && typeof definition.properties === "object" ? definition.properties : {})
+        .map(([key, value]) => [String(key).toLowerCase(), String(value ?? "")]));
+      const orgEnv = definition?.orgEnv === true;
+      return {
+        id: `#${String(definition?.canonicalId || "")}`,
+        kind: orgEnv ? "org-env" : "prose",
+        status: String(properties.status || ""),
+        text: String(definition?.text || ""),
+        title: String(definition?.text || ""),
+        file: document.file,
+        noteTitle: document.note?.title || "",
+        index: Number(definition?.index || 0),
+        line: Number(definition?.line || 0),
+        canon: properties,
+        args: orgEnv ? { ...properties, env: String(definition?.kind || "") } : properties,
+      };
+    });
+}
+
 // Attribute views are rendered by multiple host windows through one Node
 // sidecar. Never derive their query scope from the process-global
 // `noteScanRoot`: opening a standalone file in one window changes that legacy
 // cursor for every other caller. The renderer supplies its current file, so
 // build a bounded planning projection against that file's root using only
-// local variables. The desktop provider still performs one bulk Go scan for
-// files it owns; Emacs/standalone roots retain the shared JS parser.
+// local variables. Canonical App/Emacs roots require one joined Go workspace
+// projection. Only standalone/server compatibility roots retain the JS parser;
+// a degraded Go core must fail closed instead of silently reviving a second
+// canonical Node kernel.
 async function scanPlanningItemsForFile(scopeFile = "") {
   const requested = String(scopeFile || "").trim();
   const root = requested ? scanRootForOpenFile(safeOpenFile(requested)) : noteScanRoot;
+  const projected = await workspacePlanningDocuments(root, true);
+  if (projected) {
+    const groups = planningGroupsFromWorkspaceDocuments(projected);
+    return {
+      todos: groups.flatMap((group) => group.todos || []),
+      projects: groups.flatMap((group) => group.projects || []),
+      milestones: groups.flatMap((group) => group.milestones || []),
+      clocks: groups.flatMap((group) => group.clocks || []),
+      nodes: groups.flatMap((group) => group.nodes || []),
+      blocks: projected.flatMap(blockPropertyItemsFromProviderDocument),
+    };
+  }
   const files = await walkFiles(root, (file) => {
     const dot = file.lastIndexOf(".");
     return dot >= 0 && noteExts.has(file.slice(dot).toLowerCase());
@@ -3939,60 +4065,9 @@ async function scanPlanningItemsForFile(scopeFile = "") {
       return null;
     }
   })).filter(Boolean);
-
-  const supplied = new Map();
-  const owned = planningProvider?.readMany
-    ? documents.filter((document) => planningProvider.owns?.(document.file))
-    : [];
-  if (owned.length) {
-    try {
-      const provided = await planningProvider.readMany(owned.map((document) => document.file));
-      for (const document of provided || []) supplied.set(String(document.file || ""), document.nodes || []);
-    } catch {
-      // Per-document JS parsing below is the same compatibility boundary used
-      // by the existing agenda scanner during transient kernel outages.
-    }
-  }
-  const suppliedBlocks = new Map();
-  const propertyOwned = planningProvider?.readPropertyBlocks
-    ? documents.filter((document) => planningProvider.owns?.(document.file))
-    : [];
-  if (propertyOwned.length) {
-    try {
-      const provided = await planningProvider.readPropertyBlocks(propertyOwned.map((document) => document.file));
-      for (const document of provided || []) suppliedBlocks.set(String(document.file || ""), document);
-    } catch {
-      // A transient kernel failure retains the portable JS property scanner.
-    }
-  }
-  const groups = documents.map((document) => supplied.has(document.file)
-    ? planningItemsFromNodes(supplied.get(document.file), document.note, document.mtimeMs)
-    : extractPlanningItems(document.content, document.note, document.mtimeMs));
-  const blocks = documents.flatMap((document) => {
-    const provided = suppliedBlocks.get(document.file);
-    if (!provided) {
-      return blockPropertyItemsForDocument(document.content, { file: document.file, noteTitle: document.note.title });
-    }
-    const duplicates = new Set((provided.duplicateDefinitionIds || []).map((id) => String(id).toLowerCase()));
-    return (provided.blocks || []).filter((definition) => !duplicates.has(String(definition?.canonicalId || "").toLowerCase())).map((definition) => {
-      const properties = Object.fromEntries(Object.entries(definition?.properties && typeof definition.properties === "object" ? definition.properties : {})
-        .map(([key, value]) => [String(key).toLowerCase(), String(value ?? "")]));
-      const orgEnv = definition?.orgEnv === true;
-      return {
-        id: `#${String(definition?.canonicalId || "")}`,
-        kind: orgEnv ? "org-env" : "prose",
-        status: String(properties.status || ""),
-        text: String(definition?.text || ""),
-        title: String(definition?.text || ""),
-        file: document.file,
-        noteTitle: document.note.title,
-        index: Number(definition?.index || 0),
-        line: Number(definition?.line || 0),
-        canon: properties,
-        args: orgEnv ? { ...properties, env: String(definition?.kind || "") } : properties,
-      };
-    });
-  });
+  const groups = documents.map((document) => extractPlanningItems(document.content, document.note, document.mtimeMs));
+  const blocks = documents.flatMap((document) =>
+    blockPropertyItemsForDocument(document.content, { file: document.file, noteTitle: document.note.title }));
   return {
     todos: groups.flatMap((group) => group.todos || []),
     projects: groups.flatMap((group) => group.projects || []),
@@ -4179,6 +4254,7 @@ export function todoUrgency(todo, todayMs = Date.now()) {
 }
 
 async function evaluateTodoAgenda(todos, todayMs, { projects = [], milestones = [], clocks = [], includePlanning = false, includeGantt = false, from = "", days = 7 } = {}) {
+  let providerError = null;
   if (typeof planningProvider?.evaluateAgenda === "function") {
     try {
       const evaluated = await planningProvider.evaluateAgenda(todos, todayMs, { projects, milestones, clocks, includePlanning, includeGantt, from, days });
@@ -4210,10 +4286,14 @@ async function evaluateTodoAgenda(todos, todayMs, { projects = [], milestones = 
           view: evaluated?.view || null,
         };
       }
-    } catch {
+    } catch (error) {
+      providerError = error;
       // A transient kernel evaluator failure must not erase the established
       // agenda in Emacs/Server-compatible sessions during staged migration.
     }
+  }
+  if (requireGoCore && noteScanRoot === noteRoot) {
+    throw providerError || goCoreUnavailable("agenda evaluation");
   }
   const { lints } = resolveTodoDeps(todos);
   for (const todo of todos) todo.urgency = todoUrgency(todo, todayMs);
@@ -4985,16 +5065,23 @@ export async function buildAttributeView(body = {}) {
     source: String(body.source || ""),
     items,
   };
+  let providerError = null;
   if (typeof planningProvider?.evaluateAttributeView === "function") {
     try {
       const evaluated = await planningProvider.evaluateAttributeView(request);
       if (evaluated && Array.isArray(evaluated.columns) && Array.isArray(evaluated.rows)) {
         return { type: "attribute-view", evaluationSource: "kernel-attribute-view", ...evaluated };
       }
-    } catch {
+    } catch (error) {
+      providerError = error;
       // The desktop evaluator is an optimization boundary. Emacs/Server and
       // transient kernel outages retain the shared portable JS evaluator.
     }
+  }
+  const requested = String(body.file || "").trim();
+  const canonicalScope = requested ? !standaloneFile(safeOpenFile(requested)) : noteScanRoot === noteRoot;
+  if (requireGoCore && canonicalScope) {
+    throw providerError || goCoreUnavailable("attribute-view evaluation");
   }
   return { type: "attribute-view", evaluationSource: "node-attribute-view", ...evaluateAttributeView(request) };
 }
@@ -5013,6 +5100,7 @@ async function patchAttributeBlockProperty(file, { id, key, value }) {
   const providerOwns = planningProvider?.owns?.(file) === true
     && typeof planningProvider?.readPropertyBlock === "function"
     && typeof planningProvider?.mutatePropertyBlock === "function";
+  assertGoCoreCapability(file, providerOwns, "block-property mutation");
   if (providerOwns) {
     let lastConflict = null;
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -7808,6 +7896,30 @@ export async function readNote(file, options = {}) {
     throw err;
   }
   noteScanRoot = scanRootForOpenFile(safe);
+  if (markdownFileProviderOwns(safe)) {
+    const opened = await markdownFileProvider.read(safe);
+    const content = String(opened?.content ?? opened?.markdown ?? "");
+    const payload = {
+      type: "open",
+      file: safe,
+      title: titleFromContent(safe, content),
+      mode: modeForFile(safe),
+      content,
+      kind: kindFromContent(content),
+      mtimeMs: Number(opened?.mtimeMs) || 0,
+      size: Number(opened?.size) || Buffer.byteLength(content, "utf8"),
+      version: String(opened?.version || contentDigest(content)),
+      standalone: standaloneFile(safe),
+      incrementalSave: typeof markdownFileProvider?.writeChanges === "function",
+    };
+    if (options.includeIndex === true) {
+      Object.assign(payload, await notesIndexPayload());
+      payload.snippets = await scanSnippets();
+      payload.templates = await scanTemplates();
+    }
+    return payload;
+  }
+  assertGoCoreCapability(safe, false, "Markdown persistence");
   const info = await stat(safe);
   if (!info.isFile()) {
     const err = new Error(`Not a regular file: ${safe}`);
@@ -7827,6 +7939,7 @@ export async function readNote(file, options = {}) {
     size: info.size,
     version: contentDigest(content),
     standalone,
+    incrementalSave: standalone,
   };
   if (options.includeIndex === true) {
     Object.assign(payload, await notesIndexPayload());
@@ -8949,6 +9062,7 @@ export function configure(options = {}) {
   workspaceLayout = String(options.workspaceLayout || process.env.NOEMA_WORKSPACE_LAYOUT || "").toLowerCase() === "wiki"
     ? "wiki"
     : "legacy";
+  requireGoCore = options.requireGoCore === true;
   toolEnvironment = options.toolEnvironment && typeof options.toolEnvironment === "object"
     ? { ...process.env, ...options.toolEnvironment }
     : { ...process.env };
@@ -8999,9 +9113,54 @@ export function configureExternalFileProvider(provider = null) {
 }
 
 export function configureMarkdownFileProvider(provider = null) {
-  markdownFileProvider = provider && typeof provider === "object"
+  const next = provider && typeof provider === "object"
     ? provider
     : null;
+  if (markdownFileProvider !== next) {
+    markdownFileProvider = next;
+    notesSnapshotDirty = true;
+    notesSnapshotFullDirty = true;
+  }
+}
+
+export function markdownCatalogProviderActive() {
+  return noteScanRoot === noteRoot && typeof markdownFileProvider?.catalog === "function";
+}
+
+function applyMarkdownChangeSet(source, payload) {
+  const original = String(source ?? "");
+  const length = Number(payload?.length);
+  const newLength = Number(payload?.newLength);
+  const changes = Array.isArray(payload?.changes) ? payload.changes : null;
+  if (!Number.isSafeInteger(length) || length < 0 || length !== original.length ||
+      !Number.isSafeInteger(newLength) || newLength < 0 || !changes) {
+    const err = new Error("Markdown change-set source length mismatch");
+    err.statusCode = 400;
+    throw err;
+  }
+  let cursor = 0;
+  const patched = [];
+  for (const change of changes) {
+    const from = Number(change?.from);
+    const to = Number(change?.to);
+    if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) ||
+        from < cursor || from < 0 || to < from || to > original.length ||
+        typeof change?.insert !== "string") {
+      const err = new Error("Markdown change-set range is invalid");
+      err.statusCode = 400;
+      throw err;
+    }
+    patched.push(original.slice(cursor, from), change.insert);
+    cursor = to;
+  }
+  patched.push(original.slice(cursor));
+  const result = patched.join("");
+  if (result.length !== newLength) {
+    const err = new Error("Markdown change-set new length mismatch");
+    err.statusCode = 400;
+    throw err;
+  }
+  return result;
 }
 
 export function configurePlanningProvider(provider = null) {
@@ -9055,6 +9214,11 @@ export async function loadRuntimeKatexMacros(dir = katexMacrosRoot) {
 
 export async function saveNote(body) {
   if (externalFileProvider?.owns?.(body?.file)) {
+    if (body?.changes) {
+      const err = new Error("Remote incremental save is not supported");
+      err.statusCode = 400;
+      throw err;
+    }
     const file = String(body.file);
     const content = String(body.content ?? "");
     if (!acceptSaveRequest(file, body)) {
@@ -9101,61 +9265,127 @@ export async function saveNote(body) {
     };
   }
   const file = safeOpenFile(body.file);
-  const content = String(body.content ?? "");
-  let previousContent = "";
-  try {
-    previousContent = await readMarkdownFile(file);
-  } catch (err) {
-    // A missing local file is handled by the existing save flow, but a
-    // desktop kernel outage must never downgrade into an unchecked write.
-    if (markdownFileProviderOwns(file)) throw err;
+  const incrementalChanges =
+    body?.changes && typeof body.changes === "object" ? body.changes : null;
+  let content = incrementalChanges ? "" : String(body.content ?? "");
+  const kernelOwned = markdownFileProviderOwns(file);
+  assertGoCoreCapability(file, kernelOwned, "Markdown persistence");
+  const standaloneIncremental = Boolean(incrementalChanges && !kernelOwned && standaloneFile(file));
+  if (
+    incrementalChanges &&
+    (!standaloneIncremental && (!kernelOwned || typeof markdownFileProvider?.writeChanges !== "function"))
+  ) {
+    const err = new Error("Go kernel incremental Markdown persistence is unavailable");
+    err.statusCode = 503;
+    throw err;
   }
-  if (body.force !== true && content.trim() === "" && previousContent.trim() !== "") {
-    return {
-      type: "saved", ok: false, file,
-      message: "Refusing to save empty content over a non-empty file. Use force: true to override.",
-    };
+  if (!kernelOwned && !incrementalChanges) {
+    let previousContent = "";
+    try {
+      previousContent = await readMarkdownFile(file);
+    } catch {
+      // A missing local file is handled by the existing save flow.
+    }
+    if (body.force !== true && content.trim() === "" && previousContent.trim() !== "") {
+      return {
+        type: "saved",
+        ok: false,
+        file,
+        message:
+          "Refusing to save empty content over a non-empty file. Use force: true to override.",
+      };
+    }
   }
   const force = body.force === true;
   const baseMtimeMs = Number(body.baseMtimeMs);
   const baseVersion = String(body.baseVersion || "");
   const wrote = await enqueueSaveWrite(file, async () => {
     if (!acceptSaveRequest(file, body)) return false;
-    let kernelExpectedVersion = "";
-    if (!force && (baseVersion || (Number.isFinite(baseMtimeMs) && baseMtimeMs > 0))) {
-      try {
-        const [current, currentContent] = await Promise.all([stat(file), readMarkdownFile(file)]);
-        kernelExpectedVersion = contentDigest(currentContent);
-        const versionChanged = Boolean(baseVersion) && contentDigest(currentContent) !== baseVersion;
-        const mtimeChanged = !baseVersion && current.mtimeMs !== baseMtimeMs;
-        if (versionChanged || mtimeChanged) {
-          // A newer edit can be captured before the previous save response
-          // reaches the renderer, so it may legitimately carry the older
-          // base mtime. Accept that chain only when the file still contains
-          // the exact bytes last written by this same client. Any intervening
-          // write from another pane or process remains a real conflict.
-          if (!await followsSuccessfulClientSave(file, body, currentContent)) {
-            return {
-              conflict: true,
-              mtimeMs: current.mtimeMs,
-              size: current.size,
-              version: contentDigest(currentContent),
-            };
-          }
-        }
-      } catch (err) {
-        if (markdownFileProviderOwns(file)) throw err;
+    // Incremental changes have no meaning without their exact source
+    // version, including an explicit force request. Full-source force saves
+    // may still intentionally omit the precondition.
+    let kernelExpectedVersion = incrementalChanges && baseVersion ? baseVersion : "";
+    if (standaloneIncremental) {
+      if (!baseVersion) {
+        const err = new Error("Standalone incremental save requires a base version");
+        err.statusCode = 400;
+        throw err;
+      }
+      const [current, currentContent] = await Promise.all([stat(file), readFile(file, "utf8")]);
+      const currentVersion = contentDigest(currentContent);
+      if (!force && currentVersion !== baseVersion) {
+        return {
+          conflict: true,
+          mtimeMs: current.mtimeMs,
+          size: current.size,
+          version: currentVersion,
+        };
+      }
+      content = applyMarkdownChangeSet(currentContent, incrementalChanges);
+      if (!force && content.trim() === "" && currentContent.trim() !== "") {
+        return {
+          rejected: true,
+          message: "Refusing to save empty content over a non-empty file. Use force: true to override.",
+          mtimeMs: current.mtimeMs,
+          size: current.size,
+          version: currentVersion,
+        };
       }
     }
-    const persisted = await writeMarkdownFile(file, content, { expectedVersion: kernelExpectedVersion, force });
-    if (persisted?.conflict === true) return persisted;
-    const info = Number(persisted?.mtimeMs) > 0
-      ? { mtimeMs: Number(persisted.mtimeMs), size: Number(persisted.size) || Buffer.byteLength(content, "utf8") }
-      : await stat(file);
-    rememberSuccessfulClientSave(file, body, content, info);
+    if (!incrementalChanges && !force && (baseVersion || (Number.isFinite(baseMtimeMs) && baseMtimeMs > 0))) {
+      if (kernelOwned && baseVersion) {
+        // CM6 saves are serialized by SaveDrain, so baseVersion is the
+        // exact version returned by the preceding Go write. Let the Go CAS
+        // perform the single authoritative read/compare/write operation.
+        kernelExpectedVersion = baseVersion;
+      } else {
+        try {
+          const [current, currentContent] = await Promise.all([stat(file), readMarkdownFile(file)]);
+          kernelExpectedVersion = contentDigest(currentContent);
+          const versionChanged = Boolean(baseVersion) && contentDigest(currentContent) !== baseVersion;
+          const mtimeChanged = !baseVersion && current.mtimeMs !== baseMtimeMs;
+          if (versionChanged || mtimeChanged) {
+            // A newer edit can be captured before the previous save response
+            // reaches the renderer, so it may legitimately carry the older
+            // base mtime. Accept that chain only when the file still contains
+            // the exact bytes last written by this same client. Any intervening
+            // write from another pane or process remains a real conflict.
+            if (!(await followsSuccessfulClientSave(file, body, currentContent))) {
+              return {
+                conflict: true,
+                mtimeMs: current.mtimeMs,
+                size: current.size,
+                version: contentDigest(currentContent),
+              };
+            }
+          }
+        } catch (err) {
+          if (markdownFileProviderOwns(file)) throw err;
+        }
+      }
+    }
+    const persisted = incrementalChanges && !standaloneIncremental
+      ? await markdownFileProvider.writeChanges({
+          file,
+          changes: incrementalChanges,
+          expectedVersion: kernelExpectedVersion,
+          force,
+        })
+      : await writeMarkdownFile(file, content, { expectedVersion: kernelExpectedVersion, force });
+    if (persisted?.conflict === true || persisted?.rejected === true || persisted?.ok === false)
+      return persisted;
+    const info =
+      Number(persisted?.mtimeMs) > 0
+        ? {
+            mtimeMs: Number(persisted.mtimeMs),
+            size: Number(persisted.size) || Buffer.byteLength(content, "utf8"),
+          }
+        : await stat(file);
+    if (!incrementalChanges) rememberSuccessfulClientSave(file, body, content, info);
     markNotesDirty(file);
     return {
       wrote: true,
+      incremental: Boolean(incrementalChanges),
       mtimeMs: info.mtimeMs,
       size: info.size,
       version: String(persisted?.version || contentDigest(content)),
@@ -9164,8 +9394,35 @@ export async function saveNote(body) {
   if (wrote && typeof wrote === "object" && wrote.conflict) {
     return { type: "saved", ok: false, file, conflict: true, message: "File changed on disk. Review before overwriting.", mtimeMs: wrote.mtimeMs, size: wrote.size, version: wrote.version };
   }
+  if (wrote && typeof wrote === "object" && (wrote.rejected || wrote.ok === false)) {
+    return {
+      type: "saved",
+      ok: false,
+      file,
+      conflict: false,
+      message: String(wrote.message || "Save rejected"),
+      mtimeMs: wrote.mtimeMs,
+      size: wrote.size,
+      version: wrote.version,
+    };
+  }
   if (!wrote) {
     return { type: "saved", ok: true, file, stale: true, message: "Skipped stale save" };
+  }
+  if (wrote.incremental) {
+    const standalone = standaloneFile(file);
+    if (standalone) noteScanRoot = scanRootForOpenFile(file);
+    return {
+      type: "saved",
+      ok: true,
+      file,
+      message: "Saved",
+      notesRefresh: "deferred",
+      standalone,
+      mtimeMs: wrote.mtimeMs,
+      size: wrote.size,
+      version: wrote.version,
+    };
   }
   if (standaloneFile(file)) {
     noteScanRoot = scanRootForOpenFile(file);
@@ -9182,14 +9439,27 @@ export async function saveNote(body) {
 }
 
 export async function bootstrapNote(file) {
+  // Snippet completion is part of the editor-ready contract: the renderer may
+  // accept input immediately after applying this payload.  Keep the catalog
+  // scan in parallel with the source read, while leaving the much heavier note
+  // index and templates on their independent lazy paths.
+  const snippetsPromise = scanSnippets();
   if (file) {
-    return readNote(file, { includeIndex: true });
+    const [opened, snippets] = await Promise.all([readNote(file), snippetsPromise]);
+    return { ...opened, snippets };
   }
   noteScanRoot = noteRoot;
-  const index = await notesIndexPayload();
-  const snippets = await scanSnippets();
-  const templates = await scanTemplates();
-  return { type: "open", file: "", title: "Noema", mode: "markdown", content: "# Noema\n\nSelect a note from the left, or keep this scratch buffer.", ...index, snippets, templates, root: noteRoot, noteDir: "." };
+  const snippets = await snippetsPromise;
+  return {
+    type: "open",
+    file: "",
+    title: "Noema",
+    mode: "markdown",
+    content: "# Noema\n\nSelect a note from the left, or keep this scratch buffer.",
+    root: noteRoot,
+    noteDir: ".",
+    snippets,
+  };
 }
 
 export async function getTodos(file = "", options = {}) {

@@ -49,6 +49,9 @@ var (
 	fixIndexMu sync.Mutex
 	// lastFixedAt 记录上次订正完成时间，用于 AutoFixIndex 的冷却期判断。
 	lastFixedAt time.Time
+
+	autoFixIndexSchedulerOnce sync.Once
+	autoFixIndexActivity      = make(chan struct{}, 1)
 )
 
 const (
@@ -119,7 +122,60 @@ func fixIndexPipeline() error {
 	return fixErr
 }
 
-// AutoFixIndex 在用户空闲且存在未订正变更时，自动订正索引。由 cron 每分钟调用。
+// StartAutoFixIndexScheduler arms index repair only after a real write. An
+// untouched workspace therefore has no one-minute index-maintenance ticker.
+func StartAutoFixIndexScheduler() {
+	autoFixIndexSchedulerOnce.Do(func() {
+		go consumeAutoFixIndexActivity(autoFixIndexActivity, idleFixThreshold, time.Minute, AutoFixIndex, util.IsIndexFixDirty, nil)
+	})
+}
+
+func notifyAutoFixIndexActivity() {
+	select {
+	case autoFixIndexActivity <- struct{}{}:
+	default:
+	}
+}
+
+func consumeAutoFixIndexActivity(activity <-chan struct{}, idleDelay, retryDelay time.Duration, fix func(), dirty func() bool, stop <-chan struct{}) {
+	var timer *time.Timer
+	var timerC <-chan time.Time
+	arm := func(delay time.Duration) {
+		if nil == timer {
+			timer = time.NewTimer(delay)
+		} else {
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(delay)
+		}
+		timerC = timer.C
+	}
+	defer func() {
+		if nil != timer {
+			timer.Stop()
+		}
+	}()
+	for {
+		select {
+		case <-activity:
+			arm(idleDelay)
+		case <-timerC:
+			timerC = nil
+			fix()
+			if dirty() {
+				arm(retryDelay)
+			}
+		case <-stop:
+			return
+		}
+	}
+}
+
+// AutoFixIndex 在用户空闲且存在未订正变更时，自动订正索引。由事件调度器调用。
 // 触发需同时满足：空闲达 idleFixThreshold、存在未订正变更（dirty）、冷却期已过。
 func AutoFixIndex() {
 	defer logging.Recover()

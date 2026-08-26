@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
@@ -51,6 +52,28 @@ import (
 
 // databaseIndexDataLock 用于避免索引任务读取正在被替换或删除的笔记本目录。
 var databaseIndexDataLock sync.Mutex
+
+func dataIndexRecoveryMarkerPath() string {
+	return filepath.Join(util.QueueDir, "index.pending")
+}
+
+func persistDataIndexRecoveryMarker() error {
+	if err := os.MkdirAll(util.QueueDir, 0o755); nil != err {
+		return err
+	}
+	return os.WriteFile(dataIndexRecoveryMarkerPath(), []byte("1\n"), 0o600)
+}
+
+func clearDataIndexRecoveryMarker() {
+	if err := os.Remove(dataIndexRecoveryMarkerPath()); nil != err && !os.IsNotExist(err) {
+		logging.LogWarnf("clear data-index recovery marker failed: %s", err)
+	}
+}
+
+func dataIndexRecoveryMarkerExists() bool {
+	_, err := os.Stat(dataIndexRecoveryMarkerPath())
+	return nil == err
+}
 
 // pathBoxIsMarkdown 从一个 <boxID>/... 相对 DataDir 的路径反推 boxID 并查询其存储形态。
 func pathBoxIsMarkdown(p string) bool {
@@ -213,14 +236,7 @@ func upsertIndexes(upsertFilePaths []string) (upsertRootIDs []string) {
 				// LoadTree 已从 meta.id/box+path 建立稳定投影并清理临时块 ID；
 				// 索引过程严格只读，不能为了内部身份写回 doc IAL。
 			}
-			treenode.UpsertBlockTree(tree)
-			sql.UpsertTreeQueue(tree)
-
-			bts := treenode.GetBlockTreesByRootIDInBox(rootID, tree.Box)
-			for _, b := range bts {
-				cache.RemoveBlockIAL(b.ID)
-			}
-			cache.RemoveDocIAL(tree.Path)
+			upsertLoadedTree(tree)
 			return rootID, true
 		}()
 		if indexed {
@@ -232,6 +248,51 @@ func upsertIndexes(upsertFilePaths []string) (upsertRootIDs []string) {
 		upsertRootIDs = []string{}
 	}
 	return
+}
+
+// upsertLoadedTree commits an already parsed snapshot to the in-memory and SQL
+// indexes. Keeping this separate from path loading lets Markdown save reuse
+// the exact tree it just parsed for its API response. It also removes a stale
+// previous root when meta.id changes at the same repository path.
+// databaseIndexDataLock must be held by the caller.
+func upsertLoadedTree(tree *parse.Tree) {
+	if nil == tree || nil == tree.Root {
+		return
+	}
+	if old := treenode.GetBlockTreeRootByPath(tree.Box, tree.Path); nil != old && old.RootID != tree.ID {
+		for _, block := range treenode.GetBlockTreesByRootIDInBox(old.RootID, tree.Box) {
+			cache.RemoveBlockIALInBox(block.ID, tree.Box)
+		}
+		cache.RemoveTreeDataInBox(old.RootID, tree.Box)
+		sql.RemoveTreeQueue(tree.Box, old.RootID)
+		treenode.RemoveBlockTreesByRootID(tree.Box, old.RootID)
+	}
+	// Reading this root's rows is a full blocktrees scan and was the single
+	// most expensive step of a save, because it ran twice: once inside
+	// UpsertBlockTree to decide what changed, then again here to list the
+	// blocks whose IAL cache needs dropping. Take the pre-write rows from the
+	// upsert and pair them with the tree's own blocks. Post-write rows are
+	// always a subset of that union, so every ID the second query would have
+	// returned is still invalidated, plus the blocks this save removed.
+	previous := treenode.UpsertBlockTreeReportingPrevious(tree)
+	sql.UpsertTreeQueue(tree)
+	for _, block := range previous {
+		cache.RemoveBlockIALInBox(block.ID, tree.Box)
+	}
+	ast.Walk(tree.Root, func(n *ast.Node, entering bool) ast.WalkStatus {
+		if !entering || !n.IsBlock() || "" == n.ID {
+			return ast.WalkContinue
+		}
+		cache.RemoveBlockIALInBox(n.ID, tree.Box)
+		return ast.WalkContinue
+	})
+	cache.RemoveDocIALInBox(tree.Path, tree.Box)
+}
+
+func upsertLoadedMarkdownTree(tree *parse.Tree) {
+	databaseIndexDataLock.Lock()
+	upsertLoadedTree(tree)
+	databaseIndexDataLock.Unlock()
 }
 
 func listSyFiles(dir string) (ret []string) {
@@ -278,7 +339,7 @@ func listMarkdownFiles(dir string) (ret []string) {
 		}
 
 		if d.IsDir() {
-			if path != dirPath && strings.HasPrefix(d.Name(), ".") {
+			if path != dirPath && markdownAssetScanExcludedDir(d.Name(), true) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -511,6 +572,16 @@ func reconcileMarkdownBoxChecked(boxID string) (changed int, err error) {
 			existingByPath[bt.Path] = bt
 		}
 	}
+	persistedByPath, err := sql.QueryRootBlockProjectionsByBox(boxID)
+	if nil != err {
+		return 0, fmt.Errorf("load persisted Markdown roots: %w", err)
+	}
+	boxRoot := filesys.BoxRootPath(boxID)
+	persistentCacheLock := markdownIndexCacheLock(boxID)
+	persistentCacheLock.Lock()
+	defer persistentCacheLock.Unlock()
+	indexCache := loadMarkdownIndexCache(boxID, boxRoot)
+	indexCacheDirty := false
 	sourcePaths := map[string]struct{}{}
 	luteEngine := util.NewLute()
 	loadFailures := 0
@@ -520,7 +591,15 @@ func reconcileMarkdownBoxChecked(boxID string) (changed int, err error) {
 			continue
 		}
 		sourcePaths[file.path] = struct{}{}
-		tree, loadErr := filesys.LoadTree(boxID, file.path, luteEngine)
+		oldTree := existingByPath[file.path]
+		persistedRoot := persistedByPath[file.path]
+		if cached, ok := indexCache.Entries[file.path]; ok && nil != oldTree && nil != persistedRoot {
+			info, statErr := os.Stat(filepath.Join(boxRoot, file.path))
+			if nil == statErr && cached.matches(info, oldTree.RootID, persistedRoot.ID, persistedRoot.Hash) {
+				continue
+			}
+		}
+		snapshot, loadErr := loadMarkdownSnapshot(boxID, file.path)
 		if nil != loadErr {
 			loadFailures++
 			if nil == firstLoadFailure {
@@ -529,16 +608,18 @@ func reconcileMarkdownBoxChecked(boxID string) (changed int, err error) {
 			continue
 		}
 
-		oldTree := existingByPath[file.path]
-		rows := sql.SelectBlocksRawStmtArgs(
-			"SELECT * FROM blocks WHERE box = ? AND path = ? AND type = 'd' AND id = root_id",
-			[]any{boxID, file.path}, 2,
-		)
+		tree := filesys.LoadMarkdownTreeByData(snapshot.source, boxID, file.path, luteEngine)
 		projectedRoot := sql.BuildBlockFromNode(tree.Root, tree)
-		unchanged := nil != oldTree && oldTree.RootID == tree.ID && 1 == len(rows) &&
-			rows[0].Hash == projectedRoot.Hash && rows[0].Markdown == projectedRoot.Markdown &&
-			rows[0].Content == projectedRoot.Content && rows[0].IAL == projectedRoot.IAL
-		if unchanged {
+		previousCacheEntry, hadCacheEntry := indexCache.Entries[file.path]
+		nextCacheEntry, sourceChanged := markdownIndexEntryForSnapshot(previousCacheEntry, snapshot)
+		if sourceChanged || !hadCacheEntry || nextCacheEntry.RootID != projectedRoot.ID || nextCacheEntry.Hash != projectedRoot.Hash {
+			nextCacheEntry.RootID = projectedRoot.ID
+			nextCacheEntry.Hash = projectedRoot.Hash
+			indexCache.Entries[file.path] = nextCacheEntry
+			indexCacheDirty = true
+		}
+		if nil != oldTree && oldTree.RootID == tree.ID && nil != persistedRoot && persistedRoot.ID == tree.ID &&
+			persistedRoot.Hash == projectedRoot.Hash {
 			continue
 		}
 		if nil != oldTree && oldTree.RootID != tree.ID {
@@ -551,6 +632,11 @@ func reconcileMarkdownBoxChecked(boxID string) (changed int, err error) {
 		changed++
 	}
 	if 0 < loadFailures {
+		if indexCacheDirty {
+			if saveErr := saveMarkdownIndexCache(boxID, indexCache); nil != saveErr {
+				logging.LogWarnf("save partial Markdown index cache failed: %s", saveErr)
+			}
+		}
 		return changed, fmt.Errorf("Markdown reconciliation incomplete: %d source files failed (first error: %w)", loadFailures, firstLoadFailure)
 	}
 
@@ -561,7 +647,16 @@ func reconcileMarkdownBoxChecked(boxID string) (changed int, err error) {
 		sql.RemoveTreeQueue(boxID, oldTree.RootID)
 		treenode.RemoveBlockTreesByRootID(boxID, oldTree.RootID)
 		cache.RemoveDocIAL(sourcePath)
+		if _, cached := indexCache.Entries[sourcePath]; cached {
+			delete(indexCache.Entries, sourcePath)
+			indexCacheDirty = true
+		}
 		changed++
+	}
+	if indexCacheDirty {
+		if saveErr := saveMarkdownIndexCache(boxID, indexCache); nil != saveErr {
+			logging.LogWarnf("save Markdown index cache failed: %s", saveErr)
+		}
 	}
 	return changed, nil
 }
@@ -866,13 +961,28 @@ func subscribeSQLEvents() {
 		util.ContextPushMsg(context, msg)
 	})
 
+	// These fire once per queued SQL operation. A tiny existence marker keeps
+	// crash recovery synchronous without making an editor save marshal,
+	// encrypt and fsync the complete conf.json. The ordinary config snapshot is
+	// brought up to date later by the background SQL flush worker.
 	eventbus.Subscribe(eventbus.EvtSQLIndexChanged, func() {
+		if 1 == Conf.DataIndexState {
+			return
+		}
 		Conf.DataIndexState = 1
-		Conf.Save()
+		if err := persistDataIndexRecoveryMarker(); nil != err {
+			logging.LogWarnf("persist data-index recovery marker failed: %s", err)
+			Conf.Save()
+		}
 	})
 
 	eventbus.Subscribe(eventbus.EvtSQLIndexFlushed, func() {
+		if 0 == Conf.DataIndexState {
+			clearDataIndexRecoveryMarker()
+			return
+		}
 		Conf.DataIndexState = 0
+		clearDataIndexRecoveryMarker()
 		Conf.Save()
 	})
 }

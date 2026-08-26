@@ -190,15 +190,12 @@ func ListNotebooks() (ret []*Box, err error) {
 // GetBoxKind 返回 boxID 对应的存储形态（conf.BoxKindSy / conf.BoxKindMarkdown）。
 // 注入给 filesys.BoxKindProvider，供 LoadTree/WriteTree 分派读写路径。
 func GetBoxKind(boxID string) string {
-	kind := (&Box{ID: boxID}).GetConf().Kind
-	if "" == kind {
-		return conf.BoxKindSy
-	}
-	return kind
+	return loadBoxStorageRoute(boxID).kind
 }
 
 func (box *Box) GetConf() (ret *conf.BoxConf) {
 	ret = conf.NewBoxConf()
+	defer func() { rememberBoxStorageRoute(box.ID, ret) }()
 
 	confPath := filepath.Join(util.DataDir, box.ID, ".siyuan/conf.json")
 	if !filelock.IsExist(confPath) {
@@ -229,14 +226,21 @@ func (box *Box) SaveConf(persisted *conf.BoxConf) error {
 
 	oldData, err := filelock.ReadFile(confPath)
 	if err != nil {
-		return box.saveConf0(newData)
+		if err = box.saveConf0(newData); nil == err {
+			rememberBoxStorageRoute(box.ID, persisted)
+		}
+		return err
 	}
 
 	if bytes.Equal(newData, oldData) {
+		rememberBoxStorageRoute(box.ID, persisted)
 		return nil
 	}
 
-	return box.saveConf0(newData)
+	if err = box.saveConf0(newData); nil == err {
+		rememberBoxStorageRoute(box.ID, persisted)
+	}
+	return err
 }
 
 func (box *Box) saveConf0(data []byte) error {

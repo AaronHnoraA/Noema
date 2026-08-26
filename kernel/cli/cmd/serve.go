@@ -84,7 +84,7 @@ var serveCmd = &cobra.Command{
 		util.SetBooted()
 		util.PushClearAllMsg()
 
-		job.StartCron()
+		job.StartCron(serveSupervisorPID)
 
 		go model.AutoGenerateFileHistory()
 		go cache.LoadAssets()

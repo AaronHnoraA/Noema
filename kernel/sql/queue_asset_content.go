@@ -20,14 +20,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"runtime/debug"
 	"sync"
 	"time"
 
-	"github.com/siyuan-note/eventbus"
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/task"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/siyuan-note/eventbus"
+	"github.com/siyuan-note/logging"
 )
 
 var (
@@ -66,7 +65,7 @@ func FlushAssetContentQueue() {
 
 	context := map[string]any{eventbus.CtxPushMsg: eventbus.CtxPushMsgToStatusBar}
 	groupOpsCurrent := map[string]int{}
-	for i, op := range ops {
+	for _, op := range ops {
 		if util.IsExiting.Load() {
 			return
 		}
@@ -92,13 +91,6 @@ func FlushAssetContentQueue() {
 			return
 		}
 
-		if 16 < i && 0 == i%128 {
-			debug.FreeOSMemory()
-		}
-	}
-
-	if 128 < total {
-		debug.FreeOSMemory()
 	}
 
 	elapsed := time.Since(start).Milliseconds()
@@ -127,6 +119,7 @@ func DeleteAssetContentsByPathQueue(path string) {
 
 	newOp := &assetContentDBQueueOperation{inQueueTime: time.Now(), action: "deletePath", path: path}
 	assetContentOperationQueue = append(assetContentOperationQueue, newOp)
+	notifyAssetContentDatabaseQueueChanged()
 }
 
 func IndexAssetContentsQueue(assetContents []*AssetContent) {
@@ -135,6 +128,7 @@ func IndexAssetContentsQueue(assetContents []*AssetContent) {
 
 	newOp := &assetContentDBQueueOperation{inQueueTime: time.Now(), action: "index", assetContents: assetContents}
 	assetContentOperationQueue = append(assetContentOperationQueue, newOp)
+	notifyAssetContentDatabaseQueueChanged()
 }
 
 func getAssetContentOperations() (ops []*assetContentDBQueueOperation) {

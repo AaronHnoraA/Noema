@@ -60,6 +60,47 @@ func TestLoadMarkdownDocReturnsEmptyDocForMissingPath(t *testing.T) {
 	}
 }
 
+func TestLoadMarkdownDocProjectionSourceOnlySkipsLuteTree(t *testing.T) {
+	originalDataDir := util.DataDir
+	util.DataDir = t.TempDir()
+	t.Cleanup(func() { util.DataDir = originalDataDir })
+
+	boxID := "20260825000000-loadfast1"
+	setupMarkdownBoxForIndexTest(t, boxID)
+	relPath := "/notes/fast.md"
+	absPath := filepath.Join(util.DataDir, boxID, relPath)
+	if err := os.MkdirAll(filepath.Dir(absPath), 0755); nil != err {
+		t.Fatal(err)
+	}
+	source := []byte("# Fast open\n\nParagraph.\n{: id=\"20260101000000-abcdefg\"}\n")
+	if err := os.WriteFile(absPath, source, 0644); nil != err {
+		t.Fatal(err)
+	}
+
+	loaded, err := LoadMarkdownDocProjection(boxID, relPath, false)
+	if nil != err {
+		t.Fatal(err)
+	}
+	if loaded.Markdown != string(source) || loaded.Size != int64(len(source)) || loaded.MtimeMs <= 0 || loaded.Version != markdownDocVersion(source) {
+		t.Fatalf("unexpected source-only projection: %+v", loaded)
+	}
+	if 0 != len(loaded.Blocks) {
+		t.Fatalf("source-only projection unexpectedly returned blocks: %+v", loaded.Blocks)
+	}
+	value, ok := markdownSnapshots.Load(markdownSnapshotKey(boxID, relPath))
+	if !ok || nil != value.(*markdownSnapshot).tree {
+		t.Fatal("source-only editor open parsed a Lute block tree")
+	}
+
+	withBlocks, err := LoadMarkdownDocProjection(boxID, relPath, true)
+	if nil != err {
+		t.Fatal(err)
+	}
+	if 0 == len(withBlocks.Blocks) || nil == value.(*markdownSnapshot).tree {
+		t.Fatalf("explicit block projection did not build the block tree: %+v", withBlocks.Blocks)
+	}
+}
+
 func TestLoadMarkdownDocRejectsPathEscape(t *testing.T) {
 	originalDataDir := util.DataDir
 	util.DataDir = t.TempDir()

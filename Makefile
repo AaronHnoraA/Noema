@@ -20,7 +20,7 @@ KERNEL_BIN_LINK ?= $(HOME)/.local/bin/$(KERNEL_BIN_NAME)
 
 .PHONY: all bootstrap build build-web check-env check-go clean clean-all clean-cache dev \
 	disk-audit help \
-	init-data install install-app jupyter-bootstrap kernel-build kernel-install \
+	init-data install jupyter-bootstrap kernel-build kernel-install \
 	nvm-install prune-desktop-stage prune-legacy-garbage run server-build \
 	server-config-init server-deploy server-start setup test
 
@@ -53,7 +53,12 @@ setup: bootstrap init-data
 build: check-env check-go prune-legacy-garbage build-web
 	npm run build:desktop-shell
 
-install: install-app
+# Installation always goes through the canonical full build.  Besides keeping
+# a standalone `make install` fresh, this preserves dist/aaronnote as the one
+# renderer consumed through the repository links by both Noema.app and Emacs.
+install: build
+	@test -d "$(APP_BUNDLE)" || (echo "Noema.app was not generated under build/electron" && exit 1)
+	node scripts/install-local-app.mjs "$(CURDIR)/$(APP_BUNDLE)" "$(APP_DEST)" --link
 	@$(MAKE) --no-print-directory prune-desktop-stage
 
 build-web: check-env
@@ -86,10 +91,6 @@ kernel-install: kernel-build
 
 dev: check-env init-data
 	npm run start:vite
-
-install-app:
-	@test -d "$(APP_BUNDLE)" || (echo "Noema.app was not generated under build/electron" && exit 1)
-	node scripts/install-local-app.mjs "$(CURDIR)/$(APP_BUNDLE)" "$(APP_DEST)" --link
 
 run: build
 	open "$(CURDIR)/$(APP_BUNDLE)"
@@ -141,7 +142,7 @@ help:
 	@echo "  make bootstrap     Reproducibly install dependencies with npm ci"
 	@echo "  make nvm-install   Install/use pinned Node and npm through nvm"
 	@echo "  make init-data     Create the Noema notes directory"
-	@echo "  make install       Install Noema.app only, then discard its staging bundle"
+	@echo "  make install       Rebuild the shared App/Emacs output, install Noema.app, then discard staging"
 	@echo "  make run           Build and launch the local app bundle"
 	@echo "  make build-web     Build the shared renderer consumed by both App and Emacs"
 	@echo "  make dev           Run the Vite development server"

@@ -24,7 +24,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -48,11 +47,20 @@ var (
 	assetsTexts        = map[string]string{}
 	assetsTextsLock    = sync.Mutex{}
 	assetsTextsChanged = atomic.Bool{}
+	assetsTextsNotify  = make(chan struct{}, 1)
+	assetsTextsSaver   sync.Once
 )
+
+func markAssetsTextsChanged() {
+	assetsTextsChanged.Store(true)
+	select {
+	case assetsTextsNotify <- struct{}{}:
+	default:
+	}
+}
 
 func CleanNotExistAssetsTexts() {
 	assetsTextsLock.Lock()
-	defer assetsTextsLock.Unlock()
 
 	assetsPath := GetDataAssetsAbsPath()
 	var toRemoves []string
@@ -66,7 +74,10 @@ func CleanNotExistAssetsTexts() {
 
 	for _, asset := range toRemoves {
 		delete(assetsTexts, asset)
-		assetsTextsChanged.Store(true)
+	}
+	assetsTextsLock.Unlock()
+	if 0 < len(toRemoves) {
+		markAssetsTextsChanged()
 	}
 	return
 }
@@ -91,10 +102,10 @@ func LoadAssetsTexts() {
 		if err = filelock.Remove(assetsTextsPath); err != nil {
 			logging.LogErrorf("removed corrupted assets texts failed: %s", err)
 		}
+		assetsTextsLock.Unlock()
 		return
 	}
 	assetsTextsLock.Unlock()
-	debug.FreeOSMemory()
 
 	if elapsed := time.Since(start).Seconds(); 2 < elapsed {
 		logging.LogWarnf("read assets texts [%s] to [%s], elapsed [%.2fs]", humanize.BytesCustomCeil(uint64(len(data)), 2), assetsTextsPath, elapsed)
@@ -112,32 +123,70 @@ func SaveAssetsTexts() {
 	assetsPath := GetDataAssetsAbsPath()
 	assetsTextsPath := filepath.Join(assetsPath, "ocr-texts.json")
 
+	// Keep mutations serialized through the write. OCR metadata changes are
+	// rare, and this prevents a SetAssetText racing the final dirty=false store
+	// from being lost until the next process start.
 	assetsTextsLock.Lock()
 	// OCR 功能未开启且 ocr-texts.json 不存在时，如果 assetsTexts 为空则不创建文件
 	if !TesseractEnabled && !filelock.IsExist(assetsTextsPath) && 0 == len(assetsTexts) {
-		assetsTextsLock.Unlock()
 		assetsTextsChanged.Store(false)
+		assetsTextsLock.Unlock()
 		return
 	}
 	data, err := gulu.JSON.MarshalIndentJSON(assetsTexts, "", "  ")
 	if err != nil {
 		logging.LogErrorf("marshal assets texts failed: %s", err)
 		assetsTextsLock.Unlock()
+		retryAssetsTextsSave()
 		return
 	}
-	assetsTextsLock.Unlock()
 
 	if err = filelock.WriteFile(assetsTextsPath, data); err != nil {
 		logging.LogErrorf("write assets texts failed: %s", err)
+		assetsTextsLock.Unlock()
+		retryAssetsTextsSave()
 		return
 	}
-	debug.FreeOSMemory()
+	assetsTextsChanged.Store(false)
+	assetsTextsLock.Unlock()
 
 	if elapsed := time.Since(start).Seconds(); 2 < elapsed {
 		logging.LogWarnf("save assets texts [size=%s] to [%s], elapsed [%.2fs]", humanize.BytesCustomCeil(uint64(len(data)), 2), assetsTextsPath, elapsed)
 	}
+}
 
-	assetsTextsChanged.Store(false)
+// StartAssetsTextsSaver persists OCR metadata only after a mutation. The old
+// 30-second cron woke for the lifetime of every kernel even when OCR was off
+// and the map had never changed.
+func StartAssetsTextsSaver() {
+	assetsTextsSaver.Do(func() {
+		go func() {
+			for range assetsTextsNotify {
+				timer := time.NewTimer(time.Second)
+				<-timer.C
+				for {
+					select {
+					case <-assetsTextsNotify:
+						continue
+					default:
+					}
+					break
+				}
+				SaveAssetsTexts()
+			}
+		}()
+		if assetsTextsChanged.Load() {
+			markAssetsTextsChanged()
+		}
+	})
+}
+
+func retryAssetsTextsSave() {
+	time.AfterFunc(30*time.Second, func() {
+		if assetsTextsChanged.Load() {
+			markAssetsTextsChanged()
+		}
+	})
 }
 
 func SetAssetText(asset, text string) {
@@ -146,7 +195,7 @@ func SetAssetText(asset, text string) {
 	assetsTexts[asset] = text
 	assetsTextsLock.Unlock()
 	if !ok || oldText != text {
-		assetsTextsChanged.Store(true)
+		markAssetsTextsChanged()
 	}
 }
 
@@ -172,7 +221,7 @@ func OcrAsset(asset string) (ret []map[string]any, err error) {
 	assetsTexts[asset] = ocrText
 	assetsTextsLock.Unlock()
 	if "" != ocrText {
-		assetsTextsChanged.Store(true)
+		markAssetsTextsChanged()
 	}
 	return
 }
@@ -188,7 +237,7 @@ func RemoveAssetText(asset string) {
 	assetsTextsLock.Lock()
 	delete(assetsTexts, asset)
 	assetsTextsLock.Unlock()
-	assetsTextsChanged.Store(true)
+	markAssetsTextsChanged()
 }
 
 var tesseractExts = []string{
@@ -318,21 +367,23 @@ func GetOcrJsonText(jsonData []map[string]any) (ret string) {
 	return ret
 }
 
-var tesseractInited = atomic.Bool{}
+var (
+	tesseractInitDone = make(chan struct{})
+	tesseractInitOnce sync.Once
+)
 
 func WaitForTesseractInit() {
-	for {
-		if tesseractInited.Load() {
-			return
-		}
-		time.Sleep(time.Second)
-	}
+	<-tesseractInitDone
+}
+
+func finishTesseractInit() {
+	tesseractInitOnce.Do(func() { close(tesseractInitDone) })
 }
 
 func InitTesseract() {
 	ver := getTesseractVer()
 	if "" == ver {
-		tesseractInited.Store(true)
+		finishTesseractInit()
 		return
 	}
 
@@ -340,7 +391,7 @@ func InitTesseract() {
 	if 1 > len(langs) {
 		logging.LogWarnf("no tesseract langs found, disabling tesseract-ocr")
 		TesseractEnabled = false
-		tesseractInited.Store(true)
+		finishTesseractInit()
 		return
 	}
 
@@ -357,7 +408,7 @@ func InitTesseract() {
 			TesseractEnabled = enabledBool
 			if !enabledBool {
 				logging.LogInfof("tesseract-ocr disabled by env")
-				tesseractInited.Store(true)
+				finishTesseractInit()
 				return
 			}
 		}
@@ -365,7 +416,7 @@ func InitTesseract() {
 
 	TesseractLangs = filterTesseractLangs(langs)
 	logging.LogInfof("tesseract-ocr enabled [ver=%s, maxSize=%s, langs=%s]", ver, humanize.BytesCustomCeil(TesseractMaxSize, 2), strings.Join(TesseractLangs, "+"))
-	tesseractInited.Store(true)
+	finishTesseractInit()
 }
 
 func filterTesseractLangs(langs []string) (ret []string) {

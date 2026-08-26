@@ -209,10 +209,11 @@ func loadMarkdownBibliography(c *gin.Context) {
 }
 
 // loadMarkdownDoc 是 CM6 文本协议的加载端点（计划文档 Phase 2）：给一个
-// markdown box 内的文档路径，返回当前 markdown 全文和已持久化 ID 的块列表
-// （不含源偏移 from/to——CM6 用自己的 Lezer 解析同一份文本顺带算出，见计划
-// 文档 Phase 2 关于这一点的澄清）。非 markdown box 的路径会报错，不是
-// 这个协议要处理的对象（.sy box 走现有的 /api/filetree/getDoc）。
+// markdown box 内的文档路径，返回当前 markdown 全文和同一快照的 CAS 元数据。
+// CM6 已经会解析这份全文，因此桌面编辑器传 includeBlocks=false，避免 Go 在
+// 首次绘制前再做一次 Lute 全文解析；需要块身份的兼容/MCP 调用仍可请求 blocks。
+// 非 markdown box 的路径会报错，不是这个协议要处理的对象（.sy box 走现有的
+// /api/filetree/getDoc）。
 func loadMarkdownDoc(c *gin.Context) {
 	ret := gulu.Ret.NewResult()
 	defer c.JSON(http.StatusOK, ret)
@@ -223,30 +224,34 @@ func loadMarkdownDoc(c *gin.Context) {
 	}
 
 	var notebook, p string
+	includeBlocks := true
 	if !util.ParseJsonArgs(arg, ret,
 		util.BindJsonArg("notebook", &notebook, true, true),
 		util.BindJsonArg("path", &p, true, true),
 	) {
 		return
 	}
+	if _, exists := arg["includeBlocks"]; exists && !util.ParseJsonArgs(arg, ret,
+		util.BindJsonArg("includeBlocks", &includeBlocks, true, false),
+	) {
+		return
+	}
 
-	markdown, blocks, err := model.LoadMarkdownDoc(notebook, p)
+	loaded, err := model.LoadMarkdownDocProjection(notebook, p, includeBlocks)
 	if nil != err {
 		ret.Code = -1
 		ret.Msg = err.Error()
 		return
 	}
 
-	ret.Data = map[string]any{
-		"markdown": markdown,
-		"blocks":   blocks,
-	}
+	ret.Data = loaded
 }
 
-// saveMarkdownDoc 是 CM6 文本协议的保存端点：CM6 防抖全文保存后把最新
-// markdown 文本整篇送过来，内核按原字节落盘、重新解析、增量更新索引，并
-// 返回真正落盘的字节和最新块列表。Noema 的 portable identity 只做内存投影，
-// 此端点不得为了内部 ID 或格式化需要改写源文本。
+// saveMarkdownDoc is the compatibility/fallback full-source endpoint. Normal
+// CM6 autosaves use applyMarkdownDocChanges; this remains for initial files,
+// unload keepalive, remote/server mode, and recovery after a document reset.
+// Noema portable identity stays an in-memory projection, so even this fallback
+// must never format or otherwise rewrite the caller's source bytes.
 func saveMarkdownDoc(c *gin.Context) {
 	ret := gulu.Ret.NewResult()
 	defer c.JSON(http.StatusOK, ret)
@@ -275,6 +280,36 @@ func saveMarkdownDoc(c *gin.Context) {
 		return
 	}
 
+	ret.Data = result
+}
+
+func applyMarkdownDocChanges(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+
+	var request struct {
+		Notebook        string                  `json:"notebook"`
+		Path            string                  `json:"path"`
+		ExpectedVersion string                  `json:"expectedVersion"`
+		Changes         model.MarkdownChangeSet `json:"changes"`
+		Force           bool                    `json:"force"`
+	}
+	if err := c.ShouldBindJSON(&request); nil != err {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+	if "" == request.Notebook || "" == request.Path || "" == request.ExpectedVersion {
+		ret.Code = -1
+		ret.Msg = "notebook, path, and expectedVersion are required"
+		return
+	}
+	result, err := model.SaveMarkdownDocChangesCAS(request.Notebook, request.Path, request.ExpectedVersion, request.Changes, request.Force)
+	if nil != err {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
 	ret.Data = result
 }
 
@@ -384,6 +419,106 @@ func listMarkdownDocs(c *gin.Context) {
 	ret.Data = map[string]any{
 		"docs": docs,
 	}
+}
+
+func listMarkdownNoteCatalog(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+
+	arg, ok := util.JsonArg(c, ret)
+	if !ok {
+		return
+	}
+	var notebook string
+	var force bool
+	if !util.ParseJsonArgs(arg, ret,
+		util.BindJsonArg("notebook", &notebook, true, true),
+		util.BindJsonArg("force", &force, false, false),
+	) {
+		return
+	}
+	catalog, err := model.ListMarkdownNoteCatalog(notebook, force)
+	if nil != err {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+	ret.Data = catalog
+}
+
+// listMarkdownWorkspaceProjection joins rich note metadata, planning nodes,
+// and (when requested) portable block properties in one kernel request. It is
+// the read path used by Agenda and Attribute View for a canonical Go-owned
+// Markdown root.
+func listMarkdownWorkspaceProjection(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+
+	arg, ok := util.JsonArg(c, ret)
+	if !ok {
+		return
+	}
+	var notebook string
+	var includeProperties bool
+	if !util.ParseJsonArgs(arg, ret,
+		util.BindJsonArg("notebook", &notebook, true, true),
+		util.BindJsonArg("includeProperties", &includeProperties, false, false),
+	) {
+		return
+	}
+	projection, err := model.ListMarkdownWorkspaceProjection(notebook, includeProperties)
+	if nil != err {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+	ret.Data = projection
+}
+
+// listMarkdownVirtualReferences returns unlinked title/alias mentions from
+// the Go snapshot catalog. The Node host forwards this result but does not
+// walk, stat, read, or parse the Markdown workspace.
+func listMarkdownVirtualReferences(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+
+	arg, ok := util.JsonArg(c, ret)
+	if !ok {
+		return
+	}
+	var notebook, targetID, id, file, p, title string
+	var caseSensitive bool
+	if !util.ParseJsonArgs(arg, ret,
+		util.BindJsonArg("notebook", &notebook, true, true),
+		util.BindJsonArg("targetId", &targetID, false, false),
+		util.BindJsonArg("id", &id, false, false),
+		util.BindJsonArg("file", &file, false, false),
+		util.BindJsonArg("path", &p, false, false),
+		util.BindJsonArg("title", &title, false, false),
+		util.BindJsonArg("caseSensitive", &caseSensitive, false, false),
+	) {
+		return
+	}
+	requested := targetID
+	if requested == "" {
+		requested = id
+	}
+	if requested == "" {
+		requested = file
+	}
+	if requested == "" {
+		requested = p
+	}
+	if requested == "" {
+		requested = title
+	}
+	result, err := model.ListMarkdownVirtualReferences(notebook, requested, caseSensitive)
+	if err != nil {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+	ret.Data = result
 }
 
 // registerExternalMarkdownBox creates or updates a workspace-local shadow

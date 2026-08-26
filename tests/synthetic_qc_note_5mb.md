@@ -2979,7 +2979,7 @@ such that
 #+begin note Positivity and Hermitian structure
 In finite-dimensional quantum theory, positivity already implies
 self-adjointness. However, listing Hermitian symmetry explicitly is often
-pedagogically useful because it reminds us that observables and density
+pedagogically useful because it reminds us that observables and density this tthis this this this this is a very hard things to use ssssssssssssssssssssssssssssss but I can't do this later. I can't do this it is hard 
 operators belong to the real vector space of Hermitian operators.
 
 中文直觉：正半定保证测量概率非负；迹为一保证总概率为一。

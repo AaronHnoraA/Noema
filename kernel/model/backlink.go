@@ -213,6 +213,10 @@ func GetBacklinkDoc(defID, refTreeID, keyword string, containChildren, highlight
 }
 
 func GetBacklinkDocInBox(defID, refTreeID, keyword string, containChildren, highlight bool, boxID string) (ret []*Backlink, keywords []string) {
+	// Backlinks are answered from the index, and Markdown saves populate it
+	// asynchronously; settle that work first. This is the entry point, before
+	// any index lock, so waiting here cannot deadlock against the indexer.
+	WaitMarkdownIndex()
 	defID = projectNoemaBlockID(defID)
 	keyword = strings.TrimSpace(keyword)
 	if "" != keyword {
@@ -463,6 +467,10 @@ func GetBacklink2(id, keyword, mentionKeyword string, sortMode, mentionSortMode 
 
 // GetBacklink2InBox 与 GetBacklink2 一致，但按 boxID 路由到加密 db 或全局 db。
 func GetBacklink2InBox(id, keyword, mentionKeyword string, sortMode, mentionSortMode int, containChildren bool, boxID string) (boxIDOut string, backlinks, backmentions []*Path, linkRefsCount, mentionsCount int) {
+	// Backlinks are answered from the index, and Markdown saves populate it
+	// asynchronously; settle that work first. This is the entry point, before
+	// any index lock, so waiting here cannot deadlock against the indexer.
+	WaitMarkdownIndex()
 	id = projectNoemaBlockID(id)
 	keyword = strings.TrimSpace(keyword)
 	var keywords []string
@@ -571,6 +579,10 @@ func GetBacklink(id, keyword, mentionKeyword string, beforeLen int, containChild
 
 // GetBacklinkInBox 与 GetBacklink 一致，但按 boxID 路由到加密 db 或全局 db。
 func GetBacklinkInBox(id, keyword, mentionKeyword string, beforeLen int, containChildren bool, boxID string) (boxIDOut string, linkPaths, mentionPaths []*Path, linkRefsCount, mentionsCount int) {
+	// Backlinks are answered from the index, and Markdown saves populate it
+	// asynchronously; settle that work first. This is the entry point, before
+	// any index lock, so waiting here cannot deadlock against the indexer.
+	WaitMarkdownIndex()
 	id = projectNoemaBlockID(id)
 	linkPaths = []*Path{}
 	mentionPaths = []*Path{}

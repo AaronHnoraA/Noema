@@ -13,6 +13,42 @@ afterEach(async () => {
 });
 
 describe("desktop kernel planning provider", () => {
+  test("loads one joined workspace projection and rejects mismatched note paths", async () => {
+    const root = await mkdtemp(join(tmpdir(), "noema-kernel-workspace-projection-"));
+    roots.push(root);
+    const file = join(root, "nested", "project.md");
+    await mkdir(join(root, "nested"), { recursive: true });
+    await writeFile(file, "# Project\n", "utf8");
+    const requests: Array<{ url: string; body: any }> = [];
+    let invalid = false;
+    const provider = createKernelPlanningProvider({
+      baseUrl: "http://127.0.0.1:6806", box: { id: "box-a", root },
+      fetchImpl: async (input: string, init: RequestInit) => {
+        requests.push({ url: String(input), body: JSON.parse(String(init.body)) });
+        return new Response(JSON.stringify({ code: 0, data: {
+          source: "kernel-workspace-projection", indexVersion: 7,
+          documents: [{
+            path: "/nested/project.md",
+            note: { id: "project-id", title: "Project", path: invalid ? "other.md" : "nested/project.md", file: "/untrusted" },
+            nodes: [{ kind: "todo", title: "Ship" }], blocks: [], duplicateDefinitionIds: [], version: "v1", mtimeMs: 42,
+          }],
+        } }), { status: 200, headers: { "Content-Type": "application/json" } });
+      },
+    });
+
+    expect(await provider.workspaceProjection({ includeProperties: true })).toEqual({
+      source: "kernel-workspace-projection", indexVersion: 7,
+      documents: [{
+        file, path: "/nested/project.md",
+        note: { id: "project-id", title: "Project", path: "nested/project.md", link: "nested/project.md", file, standalone: false },
+        nodes: [{ kind: "todo", title: "Ship" }], blocks: [], duplicateDefinitionIds: [], version: "v1", mtimeMs: 42,
+      }],
+    });
+    expect(requests).toEqual([{ url: "http://127.0.0.1:6806/api/noema/markdown/workspaceProjection", body: { notebook: "box-a", includeProperties: true } }]);
+    invalid = true;
+    await expect(provider.workspaceProjection()).rejects.toMatchObject({ statusCode: 502 });
+  });
+
   test("sends a bounded portable attribute-view projection", async () => {
     const root = await mkdtemp(join(tmpdir(), "noema-kernel-attribute-view-"));
     roots.push(root);
@@ -123,14 +159,11 @@ describe("desktop kernel planning provider", () => {
     expect(result.todos[0]).toMatchObject({ urgency: 1000 });
   });
 
-  test("reads one document and bulk maps kernel paths back to absolute files", async () => {
+  test("reads one document and maps its kernel path back to an absolute file", async () => {
     const root = await mkdtemp(join(tmpdir(), "noema-kernel-planning-"));
     roots.push(root);
     const a = join(root, "a.md");
-    const b = join(root, "nested", "b.markdown");
-    await mkdir(join(root, "nested"), { recursive: true });
     await writeFile(a, "# A\n", "utf8");
-    await writeFile(b, "# B\n", "utf8");
     const requests: Record<string, unknown>[] = [];
     const node = {
       kind: "todo", status: "doing", title: "from kernel", attrs: {}, attrsRaw: "", shape: "inline",
@@ -142,9 +175,7 @@ describe("desktop kernel planning provider", () => {
       fetchImpl: async (_url: string, init: RequestInit) => {
         const body = JSON.parse(String(init.body)) as Record<string, unknown>;
         requests.push(body);
-        const documents = body.path
-          ? [{ path: body.path, nodes: [node] }]
-          : [{ path: "/a.md", nodes: [node] }, { path: "/nested/b.markdown", nodes: [] }];
+        const documents = [{ path: body.path, nodes: [node] }];
         return new Response(JSON.stringify({ code: 0, data: { documents } }), {
           status: 200, headers: { "Content-Type": "application/json" },
         });
@@ -152,14 +183,7 @@ describe("desktop kernel planning provider", () => {
     });
 
     expect(await provider.read(a)).toMatchObject({ file: a, path: "/a.md", nodes: [{ title: "from kernel" }] });
-    expect(await provider.readMany([a, b, join(root, "asset.txt")])).toEqual([
-      { file: a, path: "/a.md", nodes: [node], version: "", mtimeMs: 0 },
-      { file: b, path: "/nested/b.markdown", nodes: [], version: "", mtimeMs: 0 },
-    ]);
-    expect(requests).toEqual([
-      { notebook: "box-a", path: "/a.md" },
-      { notebook: "box-a" },
-    ]);
+    expect(requests).toEqual([{ notebook: "box-a", path: "/a.md" }]);
   });
 
   test("sends versioned atomic mutations and exposes kernel conflicts as 409", async () => {
@@ -198,38 +222,6 @@ describe("desktop kernel planning provider", () => {
     });
     await expect(conflicting.mutate({ file, mutation: { type: "replace", source: "x" } }))
       .rejects.toMatchObject({ statusCode: 409 });
-  });
-
-  test("bulk maps portable property blocks without N+1 requests", async () => {
-    const root = await mkdtemp(join(tmpdir(), "noema-kernel-property-blocks-"));
-    roots.push(root);
-    const a = join(root, "a.md");
-    const b = join(root, "nested", "b.md");
-    await mkdir(join(root, "nested"), { recursive: true });
-    await Promise.all([writeFile(a, "# A\n", "utf8"), writeFile(b, "# B\n", "utf8")]);
-    let url = "";
-    let request: any = null;
-    const block = {
-      canonicalId: "0198fc34-7b32-7a11-8cb4-6c40e3b33d68", projectionId: "internal",
-      line: 2, index: 4, kind: "block", text: "Claim", properties: { status: "draft" },
-    };
-    const provider = createKernelPlanningProvider({
-      baseUrl: "http://127.0.0.1:6806", box: { id: "box-a", root },
-      fetchImpl: async (input: string, init: RequestInit) => {
-        url = String(input);
-        request = JSON.parse(String(init.body));
-        return new Response(JSON.stringify({ code: 0, data: { documents: [
-          { path: "/a.md", blocks: [block], duplicateDefinitionIds: [] },
-          { path: "/nested/b.md", blocks: [], duplicateDefinitionIds: ["duplicate"] },
-        ] } }), { status: 200, headers: { "Content-Type": "application/json" } });
-      },
-    });
-    expect(await provider.readPropertyBlocks([a, b])).toEqual([
-      { file: a, path: "/a.md", blocks: [block], duplicateDefinitionIds: [], version: "", mtimeMs: 0 },
-      { file: b, path: "/nested/b.md", blocks: [], duplicateDefinitionIds: ["duplicate"], version: "", mtimeMs: 0 },
-    ]);
-    expect(url).toBe("http://127.0.0.1:6806/api/noema/markdown/listPropertyBlocks");
-    expect(request).toEqual({ notebook: "box-a" });
   });
 
   test("reads and CAS-patches one portable property block", async () => {

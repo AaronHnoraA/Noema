@@ -68,18 +68,12 @@ func ListMarkdownPropertyBlocks(boxID, path string) (documents []MarkdownPropert
 		}
 		paths = append(paths, path)
 	} else {
-		var docs []MarkdownDocSummary
-		if docs, err = ListMarkdownDocs(boxID); nil != err {
-			return nil, err
-		}
-		for _, doc := range docs {
-			paths = append(paths, doc.Path)
-		}
+		return markdownCatalogProperties(boxID)
 	}
 
 	documents = make([]MarkdownPropertyDocument, 0, len(paths))
 	for _, relativePath := range paths {
-		raw, readErr := os.ReadFile(filepath.Join(filesys.BoxRootPath(boxID), relativePath))
+		snapshot, readErr := loadMarkdownSnapshot(boxID, relativePath)
 		if nil != readErr {
 			if os.IsNotExist(readErr) {
 				documents = append(documents, MarkdownPropertyDocument{
@@ -89,24 +83,7 @@ func ListMarkdownPropertyBlocks(boxID, path string) (documents []MarkdownPropert
 			}
 			return nil, readErr
 		}
-		projection := noemamarkdown.Scan(raw)
-		info, _ := os.Stat(filepath.Join(filesys.BoxRootPath(boxID), relativePath))
-		mtimeMs := float64(0)
-		if nil != info {
-			mtimeMs = float64(info.ModTime().UnixNano()) / 1e6
-		}
-		blocks := projection.Definitions
-		if nil == blocks {
-			blocks = []noemamarkdown.Definition{}
-		}
-		duplicates := projection.DuplicateDefinitionIDs
-		if nil == duplicates {
-			duplicates = []string{}
-		}
-		documents = append(documents, MarkdownPropertyDocument{
-			Path: relativePath, Blocks: blocks, DuplicateDefinitionIDs: duplicates,
-			Version: markdownPlanningVersion(raw), MtimeMs: mtimeMs,
-		})
+		documents = append(documents, propertyDocumentFromSnapshot(relativePath, snapshot))
 	}
 	sort.Slice(documents, func(i, j int) bool { return documents[i].Path < documents[j].Path })
 	return documents, nil

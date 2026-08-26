@@ -78,6 +78,7 @@ func TestSaveThenLoadMarkdownDocViaAPI(t *testing.T) {
 	engine := gin.New()
 	engine.POST("/api/noema/markdown/loadDoc", loadMarkdownDoc)
 	engine.POST("/api/noema/markdown/saveDoc", saveMarkdownDoc)
+	engine.POST("/api/noema/markdown/applyChanges", applyMarkdownDocChanges)
 
 	post := func(path, body string) markdownDocResponse {
 		t.Helper()
@@ -110,6 +111,7 @@ func TestSaveThenLoadMarkdownDocViaAPI(t *testing.T) {
 	var saveData struct {
 		Markdown string                   `json:"markdown"`
 		Blocks   []model.MarkdownBlockRef `json:"blocks"`
+		Version  string                   `json:"version"`
 	}
 	if err := json.Unmarshal(saveResp.Data, &saveData); nil != err {
 		t.Fatalf("unmarshal save data failed: %v", err)
@@ -126,6 +128,28 @@ func TestSaveThenLoadMarkdownDocViaAPI(t *testing.T) {
 	if "" == docID {
 		t.Fatalf("missing document root block ref: %+v", saveData.Blocks)
 	}
+
+	changeBody, err := json.Marshal(map[string]any{
+		"notebook":        boxID,
+		"path":            relPath,
+		"expectedVersion": saveData.Version,
+		"changes": map[string]any{
+			"length":    len(source),
+			"newLength": len(source) + 1,
+			"changes":   []map[string]any{{"from": 2, "to": 7, "insert": "Titled"}},
+		},
+	})
+	if nil != err {
+		t.Fatal(err)
+	}
+	changeResp := post("/api/noema/markdown/applyChanges", string(changeBody))
+	if 0 != changeResp.Code {
+		t.Fatalf("incremental save failed with code %d: %s", changeResp.Code, changeResp.Msg)
+	}
+	if strings.Contains(string(changeResp.Data), `"markdown"`) {
+		t.Fatalf("successful incremental response unnecessarily returned full Markdown: %s", changeResp.Data)
+	}
+	source = "# Titled\n\nSee @@cmd(foo) here.\n"
 
 	sql.FlushQueue()
 
@@ -145,8 +169,8 @@ func TestSaveThenLoadMarkdownDocViaAPI(t *testing.T) {
 	if err := json.Unmarshal(loadResp.Data, &loadData); nil != err {
 		t.Fatalf("unmarshal load data failed: %v", err)
 	}
-	if loadData.Markdown != saveData.Markdown {
-		t.Fatalf("load returned different bytes than save:\nsave:\n%s\nload:\n%s", saveData.Markdown, loadData.Markdown)
+	if loadData.Markdown != source {
+		t.Fatalf("load returned different bytes after incremental save:\nwant:\n%s\nload:\n%s", source, loadData.Markdown)
 	}
 	var loadDocID string
 	for _, b := range loadData.Blocks {

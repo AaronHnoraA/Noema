@@ -189,8 +189,8 @@ export type GitRepoStatus = {
 };
 
 export type Inbound =
-  | { type: "open"; file?: string; title?: string; content?: string; kind?: string; mode?: "markdown" | "source"; standalone?: boolean; remote?: boolean; mtimeMs?: number; size?: number; version?: string; notes?: NoteSummary[]; directories?: DirectorySummary[]; files?: FileSummary[]; snippets?: SnippetSummary[]; templates?: TemplateSummary[]; selection?: { from?: number; to?: number } }
-  | { type: "saved"; ok?: boolean; message?: string; file?: string; kind?: string; standalone?: boolean; remote?: boolean; stale?: boolean; conflict?: boolean; mtimeMs?: number; size?: number; version?: string; note?: NoteSummary; notes?: NoteSummary[]; directories?: DirectorySummary[]; files?: FileSummary[]; notesRefresh?: "full" | "deferred" }
+  | { type: "open"; file?: string; title?: string; content?: string; kind?: string; mode?: "markdown" | "source"; standalone?: boolean; incrementalSave?: boolean; remote?: boolean; mtimeMs?: number; size?: number; version?: string; notes?: NoteSummary[]; directories?: DirectorySummary[]; files?: FileSummary[]; snippets?: SnippetSummary[]; templates?: TemplateSummary[]; selection?: { from?: number; to?: number } }
+  | { type: "saved"; ok?: boolean; message?: string; file?: string; kind?: string; standalone?: boolean; incrementalSave?: boolean; remote?: boolean; stale?: boolean; conflict?: boolean; mtimeMs?: number; size?: number; version?: string; note?: NoteSummary; notes?: NoteSummary[]; directories?: DirectorySummary[]; files?: FileSummary[]; notesRefresh?: "full" | "deferred" }
   | { type: "notes"; notes?: NoteSummary[]; directories?: DirectorySummary[]; files?: FileSummary[] }
   | { type: "positions"; positions?: CursorPosition[] }
   | { type: "snippets"; snippets?: SnippetSummary[] }

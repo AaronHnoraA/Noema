@@ -368,6 +368,9 @@ function urlForFile(file = "", target = {}) {
   if (!file) url.pathname = desktopSmoke ? "/" : "/wiki";
   url.searchParams.set("host", "desktop");
   if (desktopSmoke) url.searchParams.set("desktopSmoke", "1");
+  if (desktopSmoke && process.env.NOEMA_DESKTOP_PERF_SMOKE === "1") {
+    url.searchParams.set("desktopPerfSmoke", "1");
+  }
   if (desktopPrintProbe) url.searchParams.set("desktopPrintProbe", "1");
   if (desktopProtocolProbe) url.searchParams.set("desktopProtocolProbe", desktopProtocolProbe);
   if (file) url.searchParams.set("file", resolve(file));

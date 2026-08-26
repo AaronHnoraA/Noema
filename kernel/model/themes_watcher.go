@@ -14,8 +14,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//go:build !darwin
-
 package model
 
 import (
@@ -26,9 +24,9 @@ import (
 	"time"
 
 	"github.com/88250/gulu"
+	"github.com/aaronhe/noema/kernel/util"
 	"github.com/fsnotify/fsnotify"
 	"github.com/siyuan-note/logging"
-	"github.com/aaronhe/noema/kernel/util"
 )
 
 var (

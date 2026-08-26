@@ -35,7 +35,7 @@
     "dev": "vp dev",
     "start:vite": "vp dev --config vite.aaronnote.config.ts --host 127.0.0.1",
     "start:server": "AARONNOTE_HOST_MODE=server node web-host.mjs",
-    "build:aaronnote": "tsc && vp build --config vite.aaronnote.config.ts",
+    "build:aaronnote": "tsc && vp build --config vite.aaronnote.config.ts && node scripts/write-renderer-build.mjs",
     "prepare:electron": "node scripts/prepare-electron-runtime.mjs",
     "build:desktop-shell": "node --check desktop/main.mjs && node --check desktop/preload.cjs && node --check web-host.mjs && npm run prepare:electron && node scripts/build-electron.mjs",
     "build:desktop": "npm run build:aaronnote && npm run build:desktop-shell",

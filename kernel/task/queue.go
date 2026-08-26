@@ -28,8 +28,11 @@ import (
 )
 
 var (
-	taskQueue []*Task
-	queueLock = sync.Mutex{}
+	taskQueue         []*Task
+	queueLock         = sync.Mutex{}
+	taskQueueChanged  = make(chan struct{}, 1)
+	taskStatusChanged = make(chan struct{}, 1)
+	taskConsumerOnce  sync.Once
 )
 
 type Task struct {
@@ -78,8 +81,137 @@ func appendTaskWithDelayTimeout(action string, async bool, delay, timeout time.D
 	}
 
 	queueLock.Lock()
-	defer queueLock.Unlock()
 	taskQueue = append(taskQueue, task)
+	queueLock.Unlock()
+	notifyTaskQueueChanged()
+	notifyTaskStatusChanged()
+}
+
+func notifyTaskQueueChanged() {
+	select {
+	case taskQueueChanged <- struct{}{}:
+	default:
+	}
+}
+
+func notifyTaskStatusChanged() {
+	select {
+	case taskStatusChanged <- struct{}{}:
+	default:
+	}
+}
+
+// StartQueueConsumer starts the long-running server consumer. Work wakes the
+// consumer when it is enqueued; delayed async work arms a one-shot timer for
+// its own deadline. This keeps the server responsive without polling an empty
+// queue every 100 ms.
+func StartQueueConsumer() {
+	taskConsumerOnce.Do(func() {
+		go consumeTaskQueue(nil)
+		go consumeTaskStatus(taskStatusChanged, 25*time.Millisecond, StatusJob, nil)
+		notifyTaskStatusChanged()
+	})
+}
+
+func consumeTaskStatus(ch <-chan struct{}, delay time.Duration, push func(), stop <-chan struct{}) {
+	for {
+		select {
+		case <-ch:
+		case <-stop:
+			return
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-timer.C:
+		case <-stop:
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return
+		}
+		for {
+			select {
+			case <-ch:
+				continue
+			default:
+			}
+			break
+		}
+		push()
+	}
+}
+
+func consumeTaskQueue(stop <-chan struct{}) {
+	for {
+		drainReadyTasks()
+		delay, ok := nextAsyncTaskDelay()
+		if !ok {
+			select {
+			case <-taskQueueChanged:
+			case <-stop:
+				return
+			}
+			continue
+		}
+		if delay <= 0 {
+			continue
+		}
+
+		timer := time.NewTimer(delay)
+		select {
+		case <-taskQueueChanged:
+			if !timer.Stop() {
+				<-timer.C
+			}
+		case <-timer.C:
+		case <-stop:
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return
+		}
+	}
+}
+
+func drainReadyTasks() {
+	for {
+		task := popTask()
+		if nil == task {
+			break
+		}
+		if !util.IsExiting.Load() {
+			execTask(task)
+		}
+	}
+
+	if util.IsExiting.Load() {
+		return
+	}
+	for _, task := range popAsyncTasks() {
+		go execTask(task)
+	}
+}
+
+func nextAsyncTaskDelay() (time.Duration, bool) {
+	queueLock.Lock()
+	defer queueLock.Unlock()
+
+	var (
+		shortest time.Duration
+		found    bool
+	)
+	now := time.Now()
+	for _, task := range taskQueue {
+		if !task.Async {
+			continue
+		}
+		remaining := task.Created.Add(task.Delay).Sub(now)
+		if !found || remaining < shortest {
+			shortest = remaining
+			found = true
+		}
+	}
+	return shortest, found
 }
 
 func containTask(task *Task, tasks []*Task) bool {
@@ -438,6 +570,7 @@ func execTask(task *Task) {
 		currentTask = task
 		currentTaskLock.Unlock()
 	}
+	notifyTaskStatusChanged()
 
 	ctx, cancel := context.WithTimeout(context.Background(), task.Timeout)
 	defer cancel()
@@ -459,6 +592,7 @@ func execTask(task *Task) {
 		currentTask = nil
 		currentTaskLock.Unlock()
 	}
+	notifyTaskStatusChanged()
 }
 
 // ExecSyncTasksUntilEmpty 在没有后台 cron 消费者的场景下同步排空任务队列。

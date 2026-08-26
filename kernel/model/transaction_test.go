@@ -16,7 +16,10 @@
 
 package model
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestDoUpdateRejectsInvalidData(t *testing.T) {
 	tests := []any{nil, 1, ""}
@@ -38,5 +41,62 @@ func TestTxErrFromPanic(t *testing.T) {
 	}
 	if err := txErrFromPanic(2, "test"); nil != err {
 		t.Fatal("expected a committed transaction panic to preserve the committed result")
+	}
+}
+
+func TestTransactionWaitForCommitUsesCompletionSignal(t *testing.T) {
+	tx := &Transaction{}
+	tx.prepareDone()
+	returned := make(chan struct{})
+	go func() {
+		tx.WaitForCommit()
+		close(returned)
+	}()
+
+	select {
+	case <-returned:
+		t.Fatal("WaitForCommit returned before the transaction completed")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	tx.signalDone()
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		t.Fatal("WaitForCommit did not wake from the completion signal")
+	}
+}
+
+func TestRenameRefConsumerSleepsWhenIdleAndCoalesces(t *testing.T) {
+	changed := make(chan struct{}, 1)
+	stop := make(chan struct{})
+	flushed := make(chan struct{}, 2)
+	go consumeUpdateRefTextRenameDocs(changed, 10*time.Millisecond, func() {
+		flushed <- struct{}{}
+	}, stop)
+	t.Cleanup(func() { close(stop) })
+
+	time.Sleep(25 * time.Millisecond)
+	select {
+	case <-flushed:
+		t.Fatal("idle rename-ref queue flushed")
+	default:
+	}
+	for range 8 {
+		select {
+		case changed <- struct{}{}:
+		default:
+		}
+	}
+	select {
+	case <-flushed:
+	case <-time.After(time.Second):
+		t.Fatal("signaled rename-ref queue did not flush")
+	}
+	time.Sleep(25 * time.Millisecond)
+	select {
+	case <-flushed:
+		t.Fatal("rename-ref notifications were not coalesced")
+	default:
 	}
 }

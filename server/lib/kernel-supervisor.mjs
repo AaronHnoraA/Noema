@@ -98,7 +98,6 @@ export function resolveKernelLaunchConfig({
   if (String(env.NOEMA_KERNEL_DISABLED || "") === "1") {
     return { enabled: false, owned: false, reason: "disabled" };
   }
-
   const name = executableName(platform);
   const explicitBinary = String(env.NOEMA_KERNEL_BIN || "").trim();
   const binary = explicitBinary
@@ -189,6 +188,15 @@ export function createKernelSupervisor({
   let loopPromise = null;
   let closing = false;
   const sleepers = new Set();
+  let initialReadySettled = false;
+  let resolveInitialReady;
+  const initialReady = new Promise((resolveReady) => { resolveInitialReady = resolveReady; });
+
+  const settleInitialReady = () => {
+    if (initialReadySettled || !["listening", "degraded", "unavailable"].includes(state.state)) return;
+    initialReadySettled = true;
+    resolveInitialReady(state);
+  };
 
   const publish = (next, detail = {}) => {
     const baseUrl = detail.baseUrl || "";
@@ -201,6 +209,7 @@ export function createKernelSupervisor({
       reason: detail.reason || "",
       mcpUrl,
     });
+    settleInitialReady();
     try {
       if (mcpUrl) {
         writeMcpDescriptor(stateRoot, {
@@ -473,6 +482,10 @@ export function createKernelSupervisor({
   return {
     config,
     status() { return state; },
+    ready() {
+      settleInitialReady();
+      return initialReady;
+    },
     start() {
       if (!loopPromise) loopPromise = run();
       return loopPromise;

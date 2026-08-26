@@ -217,6 +217,7 @@ func RemoveBox(boxID string) (err error) {
 	// content and must never be removed by notebook unregister.
 	localPath := filepath.Join(util.DataDir, boxID)
 	if !filelock.IsExist(localPath) {
+		forgetBoxStorageRoute(boxID)
 		return
 	}
 	if !gulu.File.IsDir(localPath) {
@@ -251,6 +252,7 @@ func RemoveBox(boxID string) (err error) {
 	if err = removeBoxDir(localPath); err != nil {
 		return
 	}
+	forgetBoxStorageRoute(boxID)
 	// 目录删除成功后再清理，避免删除失败时提前移除数据库条目。
 	flushDeletedAttributeViewBlocks(deletedAttrViewBlockIDs)
 
@@ -488,6 +490,7 @@ func indexExternalMarkdownBoxAndWait(box *Box) error {
 	if 0 != Conf.DataIndexState {
 		dataIndexRecoveryRequired = false
 		Conf.DataIndexState = 0
+		clearDataIndexRecoveryMarker()
 		Conf.Save()
 	}
 	return nil

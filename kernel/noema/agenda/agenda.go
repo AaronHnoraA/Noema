@@ -223,6 +223,17 @@ type evaluatedTodo struct {
 	Todo
 	deps, blockedBy []string
 	effectiveStatus string
+	normalizedText  string
+	urgencyScore    float64
+	deadline        agendaDate
+	scheduled       agendaDate
+	done            agendaDate
+}
+
+type agendaDate struct {
+	value   time.Time
+	hasTime bool
+	ok      bool
 }
 
 type depRef struct {
@@ -250,12 +261,19 @@ func Evaluate(request EvaluateRequest) EvaluateResult {
 		now = time.UnixMilli(request.TodayMs).In(time.Local)
 	}
 	items := make([]*evaluatedTodo, 0, len(request.Todos))
+	todosByFile := make(map[string][]*evaluatedTodo)
 	for _, todo := range request.Todos {
 		copy := todo
 		if nil == copy.Canon {
 			copy.Canon = map[string]string{}
 		}
-		items = append(items, &evaluatedTodo{Todo: copy, deps: []string{}, blockedBy: []string{}})
+		item := &evaluatedTodo{
+			Todo: copy, deps: []string{}, blockedBy: []string{}, normalizedText: normalizeTitle(copy.Text),
+			deadline: parseAgendaDate(copy.Canon["ddl"], now), scheduled: parseAgendaDate(copy.Canon["sche"], now),
+			done: parseAgendaDate(copy.Canon["done"], now),
+		}
+		items = append(items, item)
+		todosByFile[item.File] = append(todosByFile[item.File], item)
 	}
 	lints := []Lint{}
 	titleIndex := map[string]map[string]bool{}
@@ -287,12 +305,12 @@ func Evaluate(request EvaluateRequest) EvaluateResult {
 
 	for _, todo := range items {
 		if raw := todo.Canon["after"]; raw != "" {
-			todo.deps = append(todo.deps, resolveTargets(todo, raw, titleIndex, items, byID, &lints, "after")...)
+			todo.deps = append(todo.deps, resolveTargets(todo, raw, titleIndex, todosByFile, byID, &lints, "after")...)
 		}
 	}
 	for _, todo := range items {
 		if raw := todo.Canon["blocks"]; raw != "" {
-			for _, targetID := range resolveTargets(todo, raw, titleIndex, items, byID, &lints, "blocks") {
+			for _, targetID := range resolveTargets(todo, raw, titleIndex, todosByFile, byID, &lints, "blocks") {
 				if target := byID[targetID]; nil != target && !contains(target.deps, todo.ID) {
 					target.deps = append(target.deps, todo.ID)
 				}
@@ -316,9 +334,10 @@ func Evaluate(request EvaluateRequest) EvaluateResult {
 			todo.effectiveStatus = todo.Status
 			todo.blockedBy = []string{}
 		}
+		todo.urgencyScore = urgency(todo, now)
 		results = append(results, Evaluation{
 			ID: todo.ID, Deps: todo.deps, EffectiveStatus: todo.effectiveStatus,
-			BlockedBy: todo.blockedBy, Urgency: urgency(todo, now),
+			BlockedBy: todo.blockedBy, Urgency: todo.urgencyScore,
 		})
 	}
 	ret := EvaluateResult{Todos: results, Lints: lints}
@@ -343,7 +362,7 @@ func Evaluate(request EvaluateRequest) EvaluateResult {
 	return ret
 }
 
-func resolveTargets(todo *evaluatedTodo, raw string, titleIndex map[string]map[string]bool, todos []*evaluatedTodo, byID map[string]*evaluatedTodo, lints *[]Lint, via string) []string {
+func resolveTargets(todo *evaluatedTodo, raw string, titleIndex map[string]map[string]bool, todosByFile map[string][]*evaluatedTodo, byID map[string]*evaluatedTodo, lints *[]Lint, via string) []string {
 	targets := []string{}
 	for _, ref := range parseDepRefs(raw) {
 		if ref.id != "" {
@@ -355,7 +374,7 @@ func resolveTargets(todo *evaluatedTodo, raw string, titleIndex map[string]map[s
 			}
 			continue
 		}
-		scopeFiles := map[string]bool{}
+		scopeFile := todo.File
 		if ref.noteTitle != "" {
 			files := titleIndex[normalizeTitle(ref.noteTitle)]
 			if len(files) == 0 {
@@ -367,18 +386,10 @@ func resolveTargets(todo *evaluatedTodo, raw string, titleIndex map[string]map[s
 				continue
 			}
 			for file := range files {
-				scopeFiles[file] = true
-			}
-		} else {
-			scopeFiles[todo.File] = true
-		}
-		scope := []*evaluatedTodo{}
-		for _, candidate := range todos {
-			if scopeFiles[candidate.File] {
-				scope = append(scope, candidate)
+				scopeFile = file
 			}
 		}
-		tier, hits := matchTodo(scope, ref.text, todo.ID)
+		tier, hits := matchTodo(todosByFile[scopeFile], ref.text, todo.ID)
 		switch tier {
 		case "none":
 			*lints = append(*lints, Lint{TodoID: todo.ID, File: todo.File, Line: todo.Line, Kind: "broken-ref", Ref: ref.raw, Via: via, Message: fmt.Sprintf(`No matching todo for %q`, ref.text)})
@@ -431,44 +442,44 @@ func buildAgendaView(todos []*evaluatedTodo, fromRaw string, requestedDays int, 
 		}
 	}
 	for _, todo := range todos {
-		urgencyScore := urgency(todo, now)
+		urgencyScore := todo.urgencyScore
 		if deadline := todo.Canon["ddl"]; deadline != "" {
-			if parsed, _, ok := noemaplanning.ParseDateValue(deadline, now); ok {
-				date := parsed.Format("2006-01-02")
-				daysLeft := int(math.Round(parsed.Sub(today).Hours() / 24))
+			if todo.deadline.ok {
+				date := todo.deadline.value.Format("2006-01-02")
+				daysLeft := int(math.Round(todo.deadline.value.Sub(today).Hours() / 24))
 				open := todo.Status != "done" && todo.Status != "cancelled"
 				if daysLeft < 0 {
 					if open {
-						addEntry(todayKey, agendaEntryFor(todo, "overdue", fmt.Sprintf("%d d ago:", -daysLeft), deadline, "ddl", urgencyScore, now))
+						addEntry(todayKey, agendaEntryFor(todo, "overdue", fmt.Sprintf("%d d ago:", -daysLeft), deadline, "ddl", urgencyScore, todo.deadline))
 					}
 				} else {
 					label := fmt.Sprintf("In %d d.", daysLeft)
 					if daysLeft == 0 {
 						label = "Deadline"
 					}
-					addEntry(date, agendaEntryFor(todo, "deadline", label, deadline, "ddl", urgencyScore, now))
+					addEntry(date, agendaEntryFor(todo, "deadline", label, deadline, "ddl", urgencyScore, todo.deadline))
 					warn := parseLeadDays(todo.Canon["warn"], 14)
 					if open && daysLeft > 0 && daysLeft <= warn {
-						addEntry(todayKey, agendaEntryFor(todo, "warning", fmt.Sprintf("In %d d.", daysLeft), deadline, "ddl", urgencyScore, now))
+						addEntry(todayKey, agendaEntryFor(todo, "warning", fmt.Sprintf("In %d d.", daysLeft), deadline, "ddl", urgencyScore, todo.deadline))
 					}
 				}
 			}
 		}
 		if scheduled := todo.Canon["sche"]; scheduled != "" {
-			if parsed, _, ok := noemaplanning.ParseDateValue(scheduled, now); ok {
-				date := parsed.Format("2006-01-02")
-				if !parsed.Before(today) {
-					addEntry(date, agendaEntryFor(todo, "scheduled", "Scheduled", scheduled, "sche", urgencyScore, now))
+			if todo.scheduled.ok {
+				date := todo.scheduled.value.Format("2006-01-02")
+				if !todo.scheduled.value.Before(today) {
+					addEntry(date, agendaEntryFor(todo, "scheduled", "Scheduled", scheduled, "sche", urgencyScore, todo.scheduled))
 				} else if todo.Status != "done" && todo.Status != "cancelled" {
-					late := int(math.Round(today.Sub(parsed).Hours() / 24))
-					addEntry(todayKey, agendaEntryFor(todo, "sched-carry", fmt.Sprintf("Sched %dx:", late), scheduled, "sche", urgencyScore, now))
+					late := int(math.Round(today.Sub(todo.scheduled.value).Hours() / 24))
+					addEntry(todayKey, agendaEntryFor(todo, "sched-carry", fmt.Sprintf("Sched %dx:", late), scheduled, "sche", urgencyScore, todo.scheduled))
 				}
 			}
 		}
 		if done := todo.Canon["done"]; done != "" {
 			addLogDate(done)
-			if parsed, _, ok := noemaplanning.ParseDateValue(done, now); ok {
-				addEntry(parsed.Format("2006-01-02"), agendaEntryFor(todo, "log", "Closed", done, "done", urgencyScore, now))
+			if todo.done.ok {
+				addEntry(todo.done.value.Format("2006-01-02"), agendaEntryFor(todo, "log", "Closed", done, "done", urgencyScore, todo.done))
 			}
 		}
 		if logValue := todo.Canon["log"]; logValue != "" {
@@ -527,7 +538,7 @@ func buildAgendaView(todos []*evaluatedTodo, fromRaw string, requestedDays int, 
 			}
 		}
 		if deadline := todo.Canon["ddl"]; deadline != "" && todo.Status != "done" && todo.Status != "cancelled" {
-			if parsed, _, ok := noemaplanning.ParseDateValue(deadline, now); ok && parsed.Before(today) {
+			if todo.deadline.ok && todo.deadline.value.Before(today) {
 				view.Stats.Overdue++
 			}
 		}
@@ -536,13 +547,21 @@ func buildAgendaView(todos []*evaluatedTodo, fromRaw string, requestedDays int, 
 	return view
 }
 
-func agendaEntryFor(todo *evaluatedTodo, kind, label, date, dateKey string, urgencyScore float64, now time.Time) AgendaEntry {
+func agendaEntryFor(todo *evaluatedTodo, kind, label, date, dateKey string, urgencyScore float64, parsed agendaDate) AgendaEntry {
 	var clockTime *string
-	if parsed, hasTime, ok := noemaplanning.ParseDateValue(date, now); ok && hasTime {
-		value := parsed.Format("15:04")
+	if parsed.ok && parsed.hasTime {
+		value := parsed.value.Format("15:04")
 		clockTime = &value
 	}
 	return AgendaEntry{Kind: kind, Label: label, TodoID: todo.ID, Date: date, DateKey: dateKey, Time: clockTime, Urgency: urgencyScore}
+}
+
+func parseAgendaDate(raw string, now time.Time) agendaDate {
+	if strings.TrimSpace(raw) == "" {
+		return agendaDate{}
+	}
+	value, hasTime, ok := noemaplanning.ParseDateValue(raw, now)
+	return agendaDate{value: value, hasTime: hasTime, ok: ok}
 }
 
 type agendaOccurrence struct {
@@ -664,16 +683,10 @@ func parseDepRefs(raw string) []depRef {
 
 func matchTodo(scope []*evaluatedTodo, needleText, excludeID string) (string, []*evaluatedTodo) {
 	needle := normalizeTitle(needleText)
-	candidates := []*evaluatedTodo{}
-	for _, todo := range scope {
-		if todo.ID != excludeID {
-			candidates = append(candidates, todo)
-		}
-	}
 	match := func(predicate func(string) bool) []*evaluatedTodo {
 		ret := []*evaluatedTodo{}
-		for _, todo := range candidates {
-			if predicate(normalizeTitle(todo.Text)) {
+		for _, todo := range scope {
+			if todo.ID != excludeID && predicate(todo.normalizedText) {
 				ret = append(ret, todo)
 			}
 		}
@@ -699,23 +712,28 @@ func matchTodo(scope []*evaluatedTodo, needleText, excludeID string) (string, []
 }
 
 func urgency(todo *evaluatedTodo, now time.Time) float64 {
-	weights := map[string]float64{"A": 4, "B": 3, "C": 2, "D": 1, "E": 0, "F": -1}
-	priority := strings.ToUpper(todo.Canon["prio"])
-	weight, exists := weights[priority]
-	if !exists {
-		weight = weights["D"]
+	weight := float64(1)
+	switch strings.ToUpper(todo.Canon["prio"]) {
+	case "A":
+		weight = 4
+	case "B":
+		weight = 3
+	case "C":
+		weight = 2
+	case "E":
+		weight = 0
+	case "F":
+		weight = -1
 	}
 	dateScore := float64(0)
-	if deadline := todo.Canon["ddl"]; deadline != "" {
-		if parsed, _, ok := noemaplanning.ParseDateValue(deadline, now); ok {
-			today := noemaplanning.Midnight(now)
-			daysLeft := math.Round(parsed.Sub(today).Hours() / 24)
-			warn := math.Max(1, float64(parseLeadDays(todo.Canon["warn"], 14)))
-			if daysLeft < 0 {
-				dateScore = 500 + math.Min(-daysLeft, 10)*100
-			} else {
-				dateScore = math.Max(0, ((warn-daysLeft)*500)/warn)
-			}
+	if todo.deadline.ok {
+		today := noemaplanning.Midnight(now)
+		daysLeft := math.Round(todo.deadline.value.Sub(today).Hours() / 24)
+		warn := math.Max(1, float64(parseLeadDays(todo.Canon["warn"], 14)))
+		if daysLeft < 0 {
+			dateScore = 500 + math.Min(-daysLeft, 10)*100
+		} else {
+			dateScore = math.Max(0, ((warn-daysLeft)*500)/warn)
 		}
 	}
 	doing := float64(0)
@@ -803,8 +821,10 @@ func resolveClockReferences(clocks []PlanningItem, todos []*evaluatedTodo) []Lin
 	lints := []Lint{}
 	byID := map[string]*evaluatedTodo{}
 	titleIndex := map[string]map[string]bool{}
+	todosByFile := map[string][]*evaluatedTodo{}
 	for _, todo := range todos {
 		byID[todo.ID] = todo
+		todosByFile[todo.File] = append(todosByFile[todo.File], todo)
 		key := normalizeTitle(todo.NoteTitle)
 		if key != "" {
 			if nil == titleIndex[key] {
@@ -831,7 +851,7 @@ func resolveClockReferences(clocks []PlanningItem, todos []*evaluatedTodo) []Lin
 			continue
 		}
 		ref := refs[0]
-		scopeFiles := map[string]bool{}
+		scopeFile := clock.File
 		if ref.noteTitle != "" {
 			files := titleIndex[normalizeTitle(ref.noteTitle)]
 			if len(files) == 0 {
@@ -843,18 +863,10 @@ func resolveClockReferences(clocks []PlanningItem, todos []*evaluatedTodo) []Lin
 				continue
 			}
 			for file := range files {
-				scopeFiles[file] = true
-			}
-		} else {
-			scopeFiles[clock.File] = true
-		}
-		scope := []*evaluatedTodo{}
-		for _, todo := range todos {
-			if scopeFiles[todo.File] {
-				scope = append(scope, todo)
+				scopeFile = file
 			}
 		}
-		tier, hits := matchTodo(scope, ref.text, "")
+		tier, hits := matchTodo(todosByFile[scopeFile], ref.text, "")
 		if tier == "none" {
 			lints = append(lints, Lint{File: clock.File, Line: clock.Line, Kind: "broken-clock-ref", Ref: ref.raw, Message: fmt.Sprintf(`No matching todo for %q`, ref.text)})
 		} else if tier == "ambiguous" {

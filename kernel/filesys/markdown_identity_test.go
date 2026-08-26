@@ -77,3 +77,81 @@ func TestMarkdownProjectionIDIsDeterministicAndDisposable(t *testing.T) {
 		t.Fatal("different provisional paths must not share an internal projection")
 	}
 }
+
+// referenceMarkdownDocumentIdentity is the original line-slice implementation,
+// kept as the oracle for the streaming rewrite that replaced it.
+func referenceMarkdownDocumentIdentity(markdown []byte) string {
+	lines := strings.Split(strings.ReplaceAll(string(markdown), "\r\n", "\n"), "\n")
+	metaStart := -1
+	for i, line := range lines {
+		if 12 <= i {
+			break
+		}
+		if markdownMetaBeginPattern.MatchString(line) {
+			metaStart = i
+			break
+		}
+	}
+	if 0 <= metaStart {
+		candidate := ""
+		summaryDepth := 0
+		for _, line := range lines[metaStart+1:] {
+			if markdownSummaryBeginPattern.MatchString(line) {
+				summaryDepth++
+				continue
+			}
+			if 0 < summaryDepth {
+				if markdownSummaryEndPattern.MatchString(line) {
+					summaryDepth--
+				}
+				continue
+			}
+			if markdownMetaEndPattern.MatchString(line) {
+				return candidate
+			}
+			if match := markdownMetaIDPattern.FindStringSubmatch(line); nil != match {
+				candidate = strings.Trim(strings.TrimSpace(match[1]), `"'`)
+			}
+		}
+	}
+	if match := legacyDocIALIDPattern.FindSubmatch(markdown); nil != match {
+		return string(match[1])
+	}
+	return ""
+}
+
+func TestMarkdownDocumentIdentityMatchesReference(t *testing.T) {
+	const canonical = "0198fc34-7b32-7a11-8cb4-6c40e3b33d68"
+	const legacy = "20260825095344-8w75nfv"
+	for name, source := range map[string]string{
+		"empty":                     "",
+		"no trailing newline":       "# Note",
+		"plain note":                "# Note\n\nBody.\n",
+		"meta with id":              "#+begin meta\nid: " + canonical + "\n#+end meta\n\n# Note\n",
+		"meta without id":           "#+begin meta\ntitle: Noema\n#+end meta\n\n# Note\n",
+		"meta after preface":        "preface\n\n#+begin meta\nid: " + canonical + "\n#+end meta\n",
+		"meta at line 11":           strings.Repeat("x\n", 11) + "#+begin meta\nid: " + canonical + "\n#+end meta\n",
+		"meta at line 12":           strings.Repeat("x\n", 12) + "#+begin meta\nid: " + canonical + "\n#+end meta\n",
+		"unterminated meta":         "#+begin meta\nid: " + canonical + "\n\n# Note\n",
+		"unterminated meta legacy":  "#+begin meta\nid: " + canonical + "\n\n{: id=\"" + legacy + "\" type=\"doc\"}\n",
+		"last id wins":              "#+begin meta\nid: aaaa\nid: " + canonical + "\n#+end meta\n",
+		"nested summary":            "#+begin meta\nid: " + canonical + "\n#+begin summary\nid: nope\n#+begin summary\nid: nope2\n#+end summary\n#+end summary\n#+end meta\n",
+		"quoted id":                 "#+begin meta\nid: '" + canonical + "'\n#+end meta\n",
+		"crlf meta":                 "#+begin meta\r\nid: " + canonical + "\r\n#+end meta\r\n",
+		"crlf legacy":               "# Legacy\r\n\r\n{: id=\"" + legacy + "\" type=\"doc\"}\r\n",
+		"legacy only":               "# Legacy\n\n{: id=\"" + legacy + "\" type=\"doc\"}\n",
+		"legacy unquoted type":      "# Legacy\n\n{: id=\"" + legacy + "\" type=doc}\n",
+		"legacy without doc type":   "# Legacy\n\n{: id=\"" + legacy + "\" type=\"p\"}\n",
+		"brace but no legacy ial":   "# Note\n\n{: not-an-ial}\n",
+		"meta then legacy":          "#+begin meta\nid: " + canonical + "\n#+end meta\n\n{: id=\"" + legacy + "\" type=\"doc\"}\n",
+		"uppercase meta markers":    "#+BEGIN META\nID: " + canonical + "\n#+END META\n",
+		"indented meta markers":     "  #+begin meta\n  id: " + canonical + "\n  #+end meta\n",
+		"blank document body":       "\n\n\n",
+		"meta opener with trailing": "#+begin meta extra words\nid: " + canonical + "\n#+end meta\n",
+	} {
+		want := referenceMarkdownDocumentIdentity([]byte(source))
+		if got := MarkdownDocumentIdentity([]byte(source)); got != want {
+			t.Fatalf("%s: got %q want %q for source %q", name, got, want, source)
+		}
+	}
+}

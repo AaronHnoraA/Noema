@@ -94,3 +94,109 @@ func TestSaveMarkdownDocCASRejectsStaleVersionWithoutWriting(t *testing.T) {
 		t.Fatalf("stale save changed disk: content=%q err=%v", onDisk, readErr)
 	}
 }
+
+func TestSaveMarkdownDocCASRejectsAccidentalEmptyOverwriteWithoutWriting(t *testing.T) {
+	originalDataDir := util.DataDir
+	util.DataDir = t.TempDir()
+	t.Cleanup(func() { util.DataDir = originalDataDir })
+
+	boxID := "20260826215000-saveempty"
+	setupMarkdownBoxForIndexTest(t, boxID)
+	absPath := filepath.Join(util.DataDir, boxID, "notes", "protected.md")
+	if err := os.MkdirAll(filepath.Dir(absPath), 0755); nil != err {
+		t.Fatal(err)
+	}
+	const current = "# Keep this note\n"
+	if err := os.WriteFile(absPath, []byte(current), 0644); nil != err {
+		t.Fatal(err)
+	}
+
+	result, err := SaveMarkdownDocCAS(boxID, "/notes/protected.md", " \n\t", markdownDocVersion([]byte(current)), false)
+	if nil != err {
+		t.Fatal(err)
+	}
+	if !result.Rejected || result.Conflict || result.Markdown != current || "" == result.Message {
+		t.Fatalf("unexpected empty-overwrite rejection: %+v", result)
+	}
+	if onDisk, readErr := os.ReadFile(absPath); nil != readErr || string(onDisk) != current {
+		t.Fatalf("empty save changed disk: content=%q err=%v", onDisk, readErr)
+	}
+}
+
+func TestApplyMarkdownChangeSetUsesCodeMirrorUTF16Offsets(t *testing.T) {
+	tests := []struct {
+		name      string
+		source    string
+		changeSet MarkdownChangeSet
+		want      string
+		wantErr   bool
+	}{
+		{
+			name:   "multiple ranges",
+			source: "abcdef",
+			changeSet: MarkdownChangeSet{Length: 6, NewLength: 5, Changes: []MarkdownTextChange{
+				{From: 1, To: 2, Insert: "X"},
+				{From: 4, To: 6, Insert: "Y"},
+			}},
+			want: "aXcdY",
+		},
+		{
+			name:   "astral characters",
+			source: "a😀b",
+			changeSet: MarkdownChangeSet{Length: 4, NewLength: 6, Changes: []MarkdownTextChange{
+				{From: 1, To: 3, Insert: "🙂🙂"},
+			}},
+			want: "a🙂🙂b",
+		},
+		{
+			name:   "reject split surrogate",
+			source: "a😀b",
+			changeSet: MarkdownChangeSet{Length: 4, NewLength: 4, Changes: []MarkdownTextChange{
+				{From: 2, To: 2, Insert: ""},
+			}},
+			wantErr: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := applyMarkdownChangeSet([]byte(test.source), test.changeSet)
+			if test.wantErr {
+				if nil == err {
+					t.Fatalf("expected invalid change-set error, got %q", got)
+				}
+				return
+			}
+			if nil != err || string(got) != test.want {
+				t.Fatalf("apply changes = %q, %v; want %q", got, err, test.want)
+			}
+		})
+	}
+}
+
+func TestSaveMarkdownDocChangesCASRejectsStaleVersionWithoutWriting(t *testing.T) {
+	originalDataDir := util.DataDir
+	util.DataDir = t.TempDir()
+	t.Cleanup(func() { util.DataDir = originalDataDir })
+
+	boxID := "20260826221500-changecas"
+	setupMarkdownBoxForIndexTest(t, boxID)
+	absPath := filepath.Join(util.DataDir, boxID, "notes", "race.md")
+	if err := os.MkdirAll(filepath.Dir(absPath), 0755); nil != err {
+		t.Fatal(err)
+	}
+	const current = "# External winner\n"
+	if err := os.WriteFile(absPath, []byte(current), 0644); nil != err {
+		t.Fatal(err)
+	}
+	changeSet := MarkdownChangeSet{Length: 18, NewLength: 18, Changes: []MarkdownTextChange{{From: 2, To: 10, Insert: "Local ed"}}}
+	result, err := SaveMarkdownDocChangesCAS(boxID, "/notes/race.md", "stale-version", changeSet, false)
+	if nil != err {
+		t.Fatal(err)
+	}
+	if !result.Conflict || result.Markdown != current || result.Version != markdownDocVersion([]byte(current)) {
+		t.Fatalf("unexpected incremental CAS conflict: %+v", result)
+	}
+	if onDisk, readErr := os.ReadFile(absPath); nil != readErr || string(onDisk) != current {
+		t.Fatalf("stale incremental save changed disk: content=%q err=%v", onDisk, readErr)
+	}
+}

@@ -64,6 +64,43 @@ export function createKernelMarkdownProvider({ baseUrl, box, fetchImpl = globalT
     return payload.data;
   }
 
+  function mapNote(raw, label = "Kernel note catalog") {
+    const relativePath = String(raw?.path || raw?.link || "").replace(/^\/+/, "");
+    const kernelPath = relativePath ? `/${relativePath}` : "";
+    const file = relativePath
+      ? resolve(root, ...relativePath.split("/").filter(Boolean))
+      : "";
+    if (!file || pathFor(file) !== kernelPath) {
+      throw Object.assign(new Error(`${label} path escapes the registered Markdown box`), { statusCode: 502 });
+    }
+    return {
+      ...raw,
+      file,
+      path: relativePath,
+      link: relativePath,
+      standalone: false,
+    };
+  }
+
+  function mapVirtualMentionPath(rawPath) {
+    const raw = String(rawPath || "");
+    if (!raw || raw.includes("\\")) {
+      throw Object.assign(new Error("Kernel virtual-reference mention path is invalid"), { statusCode: 502 });
+    }
+    const relativePath = raw.replace(/^\/+/, "");
+    const parts = relativePath.split("/");
+    if (!relativePath || parts.some((part) => !part || part === "." || part === "..")
+      || !markdownExtensions.has(extname(relativePath).toLowerCase())) {
+      throw Object.assign(new Error("Kernel virtual-reference mention path escapes the registered Markdown box"), { statusCode: 502 });
+    }
+    const candidate = resolve(root, ...parts);
+    const rel = relative(resolve(root), candidate);
+    if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+      throw Object.assign(new Error("Kernel virtual-reference mention path escapes the registered Markdown box"), { statusCode: 502 });
+    }
+    return relativePath;
+  }
+
   return {
     owns(file) {
       return Boolean(pathFor(file));
@@ -71,14 +108,78 @@ export function createKernelMarkdownProvider({ baseUrl, box, fetchImpl = globalT
     ownsPath(file) {
       return Boolean(kernelBoxPath(root, file));
     },
+    async catalog(force = false) {
+      const data = await post("/api/noema/markdown/catalog", { notebook, force: force === true });
+      if (!Array.isArray(data.notes)) {
+        throw Object.assign(new Error("Kernel note catalog response is missing notes"), { statusCode: 502 });
+      }
+      const notes = data.notes.map((raw) => mapNote(raw));
+      return {
+        type: "notes",
+        notes,
+        directories: Array.isArray(data.directories) ? data.directories : [],
+        files: Array.isArray(data.files) ? data.files : [],
+        indexVersion: Number(data.indexVersion) || 0,
+        source: String(data.source || "kernel-note-catalog"),
+      };
+    },
+    async virtualReferences(body = {}) {
+      const requestedFile = String(body?.file || "");
+      const requestedPath = requestedFile ? pathFor(requestedFile) : String(body?.path || "");
+      if (requestedFile && !requestedPath) {
+        throw Object.assign(new Error("Virtual-reference target is outside the kernel Markdown box"), { statusCode: 403 });
+      }
+      const data = await post("/api/noema/markdown/virtualReferences", {
+        notebook,
+        targetId: String(body?.targetId || ""),
+        id: String(body?.id || ""),
+        path: requestedPath,
+        title: String(body?.title || ""),
+        caseSensitive: body?.caseSensitive === true,
+      });
+      if (!Array.isArray(data?.mentions)) {
+        throw Object.assign(new Error("Kernel virtual-reference response is missing mentions"), { statusCode: 502 });
+      }
+      let target = null;
+      if (data.target) {
+        const mapped = mapNote(data.target, "Kernel virtual-reference target");
+        target = { id: String(data.target.id || ""), title: String(data.target.title || ""), file: mapped.file, path: mapped.path };
+      }
+      const mentions = data.mentions.map((raw) => {
+        const note = raw?.note ? mapNote(raw.note, "Kernel virtual-reference mention") : undefined;
+        const path = note?.path || mapVirtualMentionPath(raw?.path);
+        return {
+          ...raw,
+          sourceId: String(raw.sourceId || note?.id || note?.key || ""),
+          sourceTitle: String(raw.sourceTitle || note?.title || ""),
+          file: note?.file || "",
+          path,
+          keywords: Array.isArray(raw.keywords) ? raw.keywords.map(String) : [],
+          note,
+        };
+      });
+      return {
+        ...data,
+        type: "virtual-references",
+        evaluationSource: String(data.evaluationSource || "noema-aho-corasick"),
+        target,
+        mentions,
+      };
+    },
     async read(file) {
       const path = pathFor(file);
       if (!path) throw Object.assign(new Error("File is outside the kernel Markdown box"), { statusCode: 403 });
-      const data = await post("/api/noema/markdown/loadDoc", { notebook, path });
+      const data = await post("/api/noema/markdown/loadDoc", { notebook, path, includeBlocks: false });
       if (typeof data.markdown !== "string") {
         throw Object.assign(new Error("Kernel load response is missing Markdown source"), { statusCode: 502 });
       }
-      return { file: String(file), content: data.markdown, blocks: data.blocks || [] };
+      return {
+        file: String(file),
+        content: data.markdown,
+        mtimeMs: Number(data.mtimeMs) || 0,
+        size: Number(data.size) || 0,
+        version: String(data.version || ""),
+      };
     },
     async resolveBlock(id) {
       const canonicalId = String(id || "").trim().toLowerCase();
@@ -134,6 +235,18 @@ export function createKernelMarkdownProvider({ baseUrl, box, fetchImpl = globalT
           version: String(data.version || ""),
         };
       }
+      if (data.rejected === true) {
+        return {
+          ok: false,
+          conflict: false,
+          file: String(file),
+          content: data.markdown,
+          message: String(data.message || "Kernel rejected Markdown save"),
+          mtimeMs: Number(data.mtimeMs) || 0,
+          size: Number(data.size) || 0,
+          version: String(data.version || ""),
+        };
+      }
       const saved = data.markdown;
       if (saved !== source) {
         throw Object.assign(new Error("Kernel changed Markdown source bytes while saving"), { statusCode: 502 });
@@ -143,6 +256,49 @@ export function createKernelMarkdownProvider({ baseUrl, box, fetchImpl = globalT
         file: String(file),
         content: saved,
         blocks: data.blocks || [],
+        mtimeMs: Number(data.mtimeMs) || 0,
+        size: Number(data.size) || 0,
+        version: String(data.version || ""),
+      };
+    },
+    async writeChanges({ file, changes, expectedVersion = "", force = false }) {
+      const path = pathFor(file);
+      if (!path)
+        throw Object.assign(new Error("File is outside the kernel Markdown box"), {
+          statusCode: 403,
+        });
+      if (!expectedVersion) {
+        throw Object.assign(new Error("Incremental Markdown save requires a base version"), {
+          statusCode: 400,
+        });
+      }
+      const request = { notebook, path, expectedVersion: String(expectedVersion), changes };
+      if (force === true) request.force = true;
+      const data = await post("/api/noema/markdown/applyChanges", request);
+      if (data.conflict === true || data.rejected === true) {
+        return {
+          ok: false,
+          conflict: data.conflict === true,
+          rejected: data.rejected === true,
+          file: String(file),
+          content: typeof data.markdown === "string" ? data.markdown : "",
+          message: String(
+            data.message ||
+              (data.conflict ? "File changed on disk" : "Kernel rejected Markdown save"),
+          ),
+          mtimeMs: Number(data.mtimeMs) || 0,
+          size: Number(data.size) || 0,
+          version: String(data.version || ""),
+        };
+      }
+      if (typeof data.version !== "string" || !data.version) {
+        throw Object.assign(new Error("Kernel incremental Markdown response has no version"), {
+          statusCode: 502,
+        });
+      }
+      return {
+        ok: true,
+        file: String(file),
         mtimeMs: Number(data.mtimeMs) || 0,
         size: Number(data.size) || 0,
         version: String(data.version || ""),

@@ -714,13 +714,19 @@ func fromTree(node *ast.Node, tree *parse.Tree) (blocks []*Block, spans []*Span,
 	rootID := tree.Root.ID
 	boxID := tree.Box
 	p := tree.Path
+	boxLocalPath := filepath.Join(util.DataDir, boxID)
+	if nil != BoxRootPathFn {
+		if routed := BoxRootPathFn(boxID); "" != routed {
+			boxLocalPath = routed
+		}
+	}
 	ast.Walk(node, func(n *ast.Node, entering bool) ast.WalkStatus {
 		if !entering {
 			return ast.WalkContinue
 		}
 
 		// 构造行级元素
-		spanBlocks, spanSpans, spanAssets, spanAttrs, walkStatus := buildSpanFromNode(n, tree, rootID, boxID, p)
+		spanBlocks, spanSpans, spanAssets, spanAttrs, walkStatus := buildSpanFromNode(n, tree, rootID, boxID, p, boxLocalPath)
 		if 0 < len(spanBlocks) {
 			blocks = append(blocks, spanBlocks...)
 		}
@@ -807,13 +813,7 @@ func isAttr(name string) bool {
 	return strings.HasPrefix(name, "custom-") || "name" == name || "alias" == name || "memo" == name || "bookmark" == name || "fold" == name || "heading-fold" == name || "style" == name
 }
 
-func buildSpanFromNode(n *ast.Node, tree *parse.Tree, rootID, boxID, p string) (blocks []*Block, spans []*Span, assets []*Asset, attributes []*Attribute, walkStatus ast.WalkStatus) {
-	boxLocalPath := filepath.Join(util.DataDir, boxID)
-	if nil != BoxRootPathFn {
-		if routed := BoxRootPathFn(boxID); "" != routed {
-			boxLocalPath = routed
-		}
-	}
+func buildSpanFromNode(n *ast.Node, tree *parse.Tree, rootID, boxID, p, boxLocalPath string) (blocks []*Block, spans []*Span, assets []*Asset, attributes []*Attribute, walkStatus ast.WalkStatus) {
 	docDirLocalPath := filepath.Join(boxLocalPath, p)
 	switch n.Type {
 	case ast.NodeImage:

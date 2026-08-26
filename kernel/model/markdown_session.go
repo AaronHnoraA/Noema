@@ -27,8 +27,15 @@ const (
 	markdownCursorPositionLimit = 240
 )
 
-var markdownSessionStateLock sync.Mutex
 var markdownSessionNow = func() float64 { return float64(time.Now().UnixNano()) / 1e6 }
+
+type markdownSessionCache struct {
+	mu     sync.Mutex
+	loaded bool
+	state  MarkdownSessionState
+}
+
+var markdownSessionCaches sync.Map // boxID -> *markdownSessionCache
 
 type MarkdownRecentNote struct {
 	Notebook string  `json:"notebook"`
@@ -176,18 +183,55 @@ func saveMarkdownSessionStateUnlocked(boxID string, state *MarkdownSessionState)
 	return filelock.WriteFile(statePath, raw)
 }
 
+func markdownSessionCacheFor(boxID string) *markdownSessionCache {
+	value, _ := markdownSessionCaches.LoadOrStore(boxID, &markdownSessionCache{})
+	return value.(*markdownSessionCache)
+}
+
+func loadMarkdownSessionCacheLocked(boxID string, cache *markdownSessionCache) error {
+	if cache.loaded {
+		return nil
+	}
+	state, err := loadMarkdownSessionStateUnlocked(boxID)
+	if nil != err {
+		return err
+	}
+	cache.state = *state
+	cache.state.Source = ""
+	cache.loaded = true
+	return nil
+}
+
+func cloneMarkdownSessionState(state *MarkdownSessionState) *MarkdownSessionState {
+	ret := &MarkdownSessionState{
+		Recent:    append([]MarkdownRecentNote(nil), state.Recent...),
+		Positions: append([]MarkdownCursorPosition(nil), state.Positions...),
+		Source:    state.Source,
+	}
+	return ret
+}
+
+func markdownSessionResponse(state *MarkdownSessionState) *MarkdownSessionState {
+	ret := cloneMarkdownSessionState(state)
+	ret.Source = "kernel-session"
+	return ret
+}
+
+func resetMarkdownSessionCache(boxID string) {
+	markdownSessionCaches.Delete(boxID)
+}
+
 func ReadMarkdownSession(boxID string) (*MarkdownSessionState, error) {
 	if _, err := normalizeMarkdownSessionPath(boxID, "/session.md"); err != nil {
 		return nil, err
 	}
-	markdownSessionStateLock.Lock()
-	defer markdownSessionStateLock.Unlock()
-	state, err := loadMarkdownSessionStateUnlocked(boxID)
-	if err != nil {
+	cache := markdownSessionCacheFor(boxID)
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if err := loadMarkdownSessionCacheLocked(boxID, cache); err != nil {
 		return nil, err
 	}
-	state.Source = "kernel-session"
-	return state, nil
+	return markdownSessionResponse(&cache.state), nil
 }
 
 func TouchMarkdownRecentNote(entry MarkdownRecentNote) (*MarkdownSessionState, error) {
@@ -200,18 +244,19 @@ func TouchMarkdownRecentNote(entry MarkdownRecentNote) (*MarkdownSessionState, e
 	if entry.OpenedAt == 0 || math.IsNaN(entry.OpenedAt) || math.IsInf(entry.OpenedAt, 0) {
 		entry.OpenedAt = markdownSessionNow()
 	}
-	markdownSessionStateLock.Lock()
-	defer markdownSessionStateLock.Unlock()
-	state, err := loadMarkdownSessionStateUnlocked(boxID)
-	if err != nil {
+	cache := markdownSessionCacheFor(boxID)
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if err = loadMarkdownSessionCacheLocked(boxID, cache); err != nil {
 		return nil, err
 	}
+	state := cloneMarkdownSessionState(&cache.state)
 	state.Recent = normalizeMarkdownRecentNotes(boxID, append([]MarkdownRecentNote{entry}, state.Recent...))
 	if err = saveMarkdownSessionStateUnlocked(boxID, state); err != nil {
 		return nil, err
 	}
-	state.Source = "kernel-session"
-	return state, nil
+	cache.state = *state
+	return markdownSessionResponse(&cache.state), nil
 }
 
 func TouchMarkdownCursorPosition(entry MarkdownCursorPosition) (*MarkdownSessionState, error) {
@@ -231,17 +276,18 @@ func TouchMarkdownCursorPosition(entry MarkdownCursorPosition) (*MarkdownSession
 		fallback.Client = ""
 		entries = append(entries, fallback)
 	}
-	markdownSessionStateLock.Lock()
-	defer markdownSessionStateLock.Unlock()
-	state, err := loadMarkdownSessionStateUnlocked(boxID)
-	if err != nil {
+	cache := markdownSessionCacheFor(boxID)
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if err = loadMarkdownSessionCacheLocked(boxID, cache); err != nil {
 		return nil, err
 	}
+	state := cloneMarkdownSessionState(&cache.state)
 	entries = append(entries, state.Positions...)
 	state.Positions = normalizeMarkdownCursorPositions(boxID, entries)
 	if err = saveMarkdownSessionStateUnlocked(boxID, state); err != nil {
 		return nil, err
 	}
-	state.Source = "kernel-session"
-	return state, nil
+	cache.state = *state
+	return markdownSessionResponse(&cache.state), nil
 }

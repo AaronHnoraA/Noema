@@ -22,16 +22,16 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
 
 	"github.com/88250/lute"
 	"github.com/88250/lute/render"
-	"github.com/gofrs/flock"
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/cache"
 	"github.com/aaronhe/noema/kernel/filesys"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/fsnotify/fsnotify"
+	"github.com/gofrs/flock"
+	"github.com/siyuan-note/logging"
 )
 
 type pushEntry struct {
@@ -199,13 +199,38 @@ func PollPushQueue() {
 
 func StartPushQueueConsumer() {
 	go func() {
-		ticker := time.NewTicker(3 * time.Second)
-		defer ticker.Stop()
+		ensurePushQueue()
+		watcher, err := fsnotify.NewWatcher()
+		if err != nil {
+			logging.LogErrorf("create push queue watcher failed: %s", err)
+			return
+		}
+		defer watcher.Close()
+		if err = watcher.Add(util.QueueDir); err != nil {
+			logging.LogErrorf("watch push queue directory failed: %s", err)
+			return
+		}
+
+		// Recover any entries written before the watcher was ready.
+		PollPushQueue()
 		for {
-			PollPushQueue()
 			select {
 			case <-pushNotifyCh:
-			case <-ticker.C:
+				PollPushQueue()
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return
+				}
+				if filepath.Clean(event.Name) != filepath.Clean(pushQueuePath) ||
+					event.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Remove|fsnotify.Rename) == 0 {
+					continue
+				}
+				PollPushQueue()
+			case err, ok := <-watcher.Errors:
+				if !ok {
+					return
+				}
+				logging.LogErrorf("watch push queue failed: %s", err)
 			}
 		}
 	}()

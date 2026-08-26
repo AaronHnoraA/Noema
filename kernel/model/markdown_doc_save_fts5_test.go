@@ -191,6 +191,21 @@ func TestSaveMarkdownDocWritesAndIndexes(t *testing.T) {
 	if saved != string(onDisk) {
 		t.Fatalf("returned bytes don't match what's on disk:\nreturned:\n%s\non-disk:\n%s", saved, onDisk)
 	}
+	beforeNoop, err := os.Stat(absPath)
+	if nil != err {
+		t.Fatal(err)
+	}
+	noopSaved, noopBlocks, err := SaveMarkdownDoc(boxID, relPath, source)
+	if nil != err {
+		t.Fatal(err)
+	}
+	afterNoop, err := os.Stat(absPath)
+	if nil != err {
+		t.Fatal(err)
+	}
+	if noopSaved != saved || len(noopBlocks) != len(blocks) || !os.SameFile(beforeNoop, afterNoop) {
+		t.Fatalf("identical save was not a no-op: saved=%t blocks=%d/%d sameFile=%t", noopSaved == saved, len(noopBlocks), len(blocks), os.SameFile(beforeNoop, afterNoop))
+	}
 
 	var docBlock *MarkdownBlockRef
 	for i := range blocks {
@@ -206,5 +221,34 @@ func TestSaveMarkdownDocWritesAndIndexes(t *testing.T) {
 	bt := treenode.GetBlockTreeRootByPath(boxID, relPath)
 	if nil == bt || bt.RootID != docBlock.ID {
 		t.Fatalf("blocktree not updated by SaveMarkdownDoc's UpsertIndexes call: %+v (want root %s)", bt, docBlock.ID)
+	}
+
+	changeFrom := strings.Index(source, "bar")
+	incremental, err := SaveMarkdownDocChangesCAS(boxID, relPath, markdownDocVersion([]byte(source)), MarkdownChangeSet{
+		Length: len(source), NewLength: len(source) + 1,
+		Changes: []MarkdownTextChange{{From: changeFrom, To: changeFrom + 3, Insert: "baz!"}},
+	}, false)
+	if nil != err {
+		t.Fatal(err)
+	}
+	if incremental.Conflict || incremental.Rejected || "" == incremental.Version || "" != incremental.Markdown {
+		t.Fatalf("unexpected incremental save result: %+v", incremental)
+	}
+	wantIncremental := strings.Replace(source, "bar", "baz!", 1)
+	if onDisk, readErr := os.ReadFile(absPath); nil != readErr || string(onDisk) != wantIncremental {
+		t.Fatalf("incremental save mismatch: content=%q err=%v", onDisk, readErr)
+	}
+	sql.FlushQueue()
+	incrementalSnapshot, snapshotErr := loadMarkdownSnapshot(boxID, relPath)
+	if nil != snapshotErr || nil == incrementalSnapshot.tree {
+		t.Fatalf("index worker did not retain its parsed tree on the saved snapshot: snapshot=%+v err=%v", incrementalSnapshot, snapshotErr)
+	}
+	bt = treenode.GetBlockTreeRootByPath(boxID, relPath)
+	if nil == bt {
+		t.Fatal("incremental save removed the document block tree")
+	}
+	block := sql.GetBlockInBox(bt.RootID, boxID)
+	if nil == block || !strings.Contains(block.Content, "@@cmd(baz!)") {
+		t.Fatalf("incremental source was not indexed: %+v", block)
 	}
 }

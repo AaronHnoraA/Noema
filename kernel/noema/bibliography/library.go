@@ -12,6 +12,10 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
+	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 var (
@@ -23,6 +27,25 @@ var inheritedMetaFields = map[string]struct{}{
 	"bib": {}, "tags": {}, "kind": {}, "project": {}, "source": {},
 	"summary": {}, "private": {}, "css": {},
 }
+
+const (
+	bibCacheLimit = 32
+	bibCacheBytes = 16 * 1024 * 1024
+)
+
+type bibCacheEntry struct {
+	mtimeNs int64
+	size    int64
+	usedAt  time.Time
+	parsed  ParseResult
+}
+
+var (
+	bibCacheMu       sync.Mutex
+	bibParsedCache   = map[string]*bibCacheEntry{}
+	bibParsedBytes   int64
+	bibParseRequests singleflight.Group
+)
 
 type LibraryFile struct {
 	File           string   `json:"file"`
@@ -276,12 +299,11 @@ func Load(root, notePath, metadata string) (Library, error) {
 	files, diagnostics := visibleBibFiles(root, file, metadata)
 	ret := Library{Files: []LibraryFile{}, Diagnostics: diagnostics, Source: "kernel-bibliography"}
 	for _, source := range files {
-		raw, err := os.ReadFile(source.raw)
+		parsed, err := parseBibFile(source.raw)
 		if nil != err {
 			ret.Diagnostics = append(ret.Diagnostics, fmt.Sprintf("failed to read bibliography %s: %s", rootRelative(source.raw, root), err))
 			continue
 		}
-		parsed := Parse(string(raw))
 		path := rootRelative(source.raw, root)
 		namespace := strings.TrimSuffix(path, filepath.Ext(path))
 		shortNamespace := strings.TrimSuffix(filepath.Base(source.raw), filepath.Ext(source.raw))
@@ -324,6 +346,85 @@ func Load(root, notePath, metadata string) (Library, error) {
 	}
 	ret.Diagnostics = unique(ret.Diagnostics)
 	return ret, nil
+}
+
+// parseBibFile ports the Node bibliography parser cache into the Go backend.
+// Parsing is cached by nanosecond mtime + size, bounded by both entry count and
+// bytes, and concurrent requests for the same file collapse into one parse.
+func parseBibFile(file string) (ParseResult, error) {
+	info, err := os.Stat(file)
+	if nil != err {
+		return ParseResult{}, err
+	}
+	if parsed, ok := cachedBibParse(file, info); ok {
+		return parsed, nil
+	}
+	value, err, _ := bibParseRequests.Do(file, func() (any, error) {
+		info, statErr := os.Stat(file)
+		if nil != statErr {
+			return ParseResult{}, statErr
+		}
+		if parsed, ok := cachedBibParse(file, info); ok {
+			return parsed, nil
+		}
+
+		raw, readErr := os.ReadFile(file)
+		if nil != readErr {
+			return ParseResult{}, readErr
+		}
+		after, statErr := os.Stat(file)
+		if nil != statErr {
+			return ParseResult{}, statErr
+		}
+		parsed := Parse(string(raw))
+		entry := &bibCacheEntry{
+			mtimeNs: after.ModTime().UnixNano(), size: after.Size(), usedAt: time.Now(), parsed: parsed,
+		}
+		bibCacheMu.Lock()
+		if old := bibParsedCache[file]; nil != old {
+			bibParsedBytes -= old.size
+		}
+		bibParsedCache[file] = entry
+		bibParsedBytes += entry.size
+		for len(bibParsedCache) > bibCacheLimit || bibParsedBytes > bibCacheBytes {
+			victimPath := ""
+			var victim *bibCacheEntry
+			for path, candidate := range bibParsedCache {
+				if nil == victim || candidate.usedAt.Before(victim.usedAt) {
+					victimPath, victim = path, candidate
+				}
+			}
+			if nil == victim {
+				break
+			}
+			delete(bibParsedCache, victimPath)
+			bibParsedBytes -= victim.size
+		}
+		bibCacheMu.Unlock()
+		return parsed, nil
+	})
+	if nil != err {
+		return ParseResult{}, err
+	}
+	return value.(ParseResult), nil
+}
+
+func cachedBibParse(file string, info os.FileInfo) (ParseResult, bool) {
+	bibCacheMu.Lock()
+	defer bibCacheMu.Unlock()
+	cached := bibParsedCache[file]
+	if nil == cached || cached.mtimeNs != info.ModTime().UnixNano() || cached.size != info.Size() {
+		return ParseResult{}, false
+	}
+	cached.usedAt = time.Now()
+	return cached.parsed, true
+}
+
+func resetBibParsedCache() {
+	bibCacheMu.Lock()
+	bibParsedCache = map[string]*bibCacheEntry{}
+	bibParsedBytes = 0
+	bibCacheMu.Unlock()
 }
 
 func unique(values []string) []string {

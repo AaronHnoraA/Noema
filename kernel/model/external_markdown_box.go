@@ -37,14 +37,7 @@ type ExternalMarkdownBox struct {
 // GetBoxRoot is injected into filesys.BoxRootProvider. Returning an empty
 // string delegates normal boxes to filesys' <DataDir>/<boxID> fallback.
 func GetBoxRoot(boxID string) string {
-	boxConf := (&Box{ID: boxID}).GetConf()
-	if conf.BoxKindMarkdown != boxConf.Kind || "" == strings.TrimSpace(boxConf.Root) {
-		return ""
-	}
-	if !filepath.IsAbs(boxConf.Root) {
-		return ""
-	}
-	return filepath.Clean(boxConf.Root)
+	return loadBoxStorageRoute(boxID).root
 }
 
 func repositoryIdentityAtRoot(root string) (string, error) {

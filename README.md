@@ -60,8 +60,12 @@ make install
 
 Node `26.5.0` and npm `11.17.0` are pinned by `.nvmrc`, `.node-version`,
 `package.json`, and `.npmrc`; `make bootstrap` uses the committed lock file via
-`npm ci`. `make`/`make build` creates `Noema.app` under `release/`, while
-`make install` installs it into `/Applications`.
+`npm ci`. `make`/`make build` creates the shared App/Emacs renderer and stages
+`Noema.app` under `build/electron/`. `make install` first runs that same full
+build, then installs its fresh App shell into `/Applications`; it is safe to run
+directly after a source or dependency update. A successful shared renderer
+build also notifies running local App and Emacs hosts; clean/local notes are
+saved and their existing page reloads onto the new hashed bundle automatically.
 
 The desktop host is independent from Emacs, stores runtime state under the
 app's user-data directory, and opens source-code targets in a new VS Code
@@ -219,15 +223,11 @@ hard-coded theme branch.
 
 ## Desktop builds
 
-After `npm ci`, `npm run build:desktop` builds the native Tauri package for the
-current platform: a macOS `.app`, a Windows NSIS installer, or a Linux
-AppImage. Windows x64 and arm64 builds bundle the matching checksummed official
-Node 26.5.0 sidecar and use the system WebView2 runtime; they do not bundle
-Chromium.
-
-On macOS, `make build` is the convenience entry point. Run `make install`
-afterward to copy the already-built app into `/Applications`; installation
-does not rebuild it.
+After `npm ci`, `npm run build:desktop` builds the shared renderer and the
+Electron desktop shell. On macOS, `make`/`make build` is the canonical entry
+point used by both Noema.app and the Emacs host. `make install` deliberately
+runs that same build before transactionally updating `/Applications/Noema.app`,
+so it never installs a leftover staging bundle.
 
 ## Library install
 

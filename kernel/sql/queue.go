@@ -22,18 +22,17 @@ import (
 	"fmt"
 	"math"
 	"path"
-	"runtime/debug"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/88250/lute/parse"
-	"github.com/siyuan-note/eventbus"
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/task"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/siyuan-note/eventbus"
+	"github.com/siyuan-note/logging"
 )
 
 var (
@@ -43,6 +42,34 @@ var (
 )
 
 const maxBeginTxRetries = 3
+
+// preFlushHooks run before either index barrier so work scheduled outside this
+// package — Markdown saves hand their tree to an index queue of their own —
+// is drained before a caller concludes the index is current.
+var (
+	preFlushHooks     []func()
+	preFlushHooksLock sync.Mutex
+)
+
+// RegisterPreFlushHook adds a barrier that FlushQueue and WaitFlushTx run
+// before they consider the index settled.
+func RegisterPreFlushHook(hook func()) {
+	if nil == hook {
+		return
+	}
+	preFlushHooksLock.Lock()
+	preFlushHooks = append(preFlushHooks, hook)
+	preFlushHooksLock.Unlock()
+}
+
+func runPreFlushHooks() {
+	preFlushHooksLock.Lock()
+	hooks := append([]func(){}, preFlushHooks...)
+	preFlushHooksLock.Unlock()
+	for _, hook := range hooks {
+		hook()
+	}
+}
 
 type dbQueueOperation struct {
 	inQueueTime                   time.Time
@@ -163,6 +190,8 @@ func FlushTxJob() {
 }
 
 func WaitFlushTx() {
+	runPreFlushHooks()
+
 	dbQueueLock.Lock()
 	defer dbQueueLock.Unlock()
 
@@ -204,6 +233,8 @@ func ClearQueue() {
 var flushingTx = atomic.Bool{}
 
 func FlushQueue() {
+	runPreFlushHooks()
+
 	initDatabaseLock.Lock()
 	defer initDatabaseLock.Unlock()
 
@@ -261,59 +292,61 @@ func FlushQueue() {
 
 	groupOpsCurrent := map[string]int{}
 	backlinkChange := newBacklinkIndexChange()
-	for i, op := range ops {
+	for _, batch := range contiguousOperationBatches(ops) {
 		if util.IsExiting.Load() {
 			return
 		}
-
-		tx, err := beginTxForBox(op.boxID())
+		tx, err := beginTxForBox(batch[0].boxID())
 		if err != nil {
-			logging.LogWarnf("skip queue operation [%s] for box [%s]: %s", op.action, op.boxID(), err)
-			if op.beginTxRetries < maxBeginTxRetries {
-				op.beginTxRetries++
-				requeueOperation(op)
-			} else {
-				logging.LogErrorf("drop queue operation [%s] for box [%s] after %d retries: %s", op.action, op.boxID(), maxBeginTxRetries, err)
+			for _, op := range batch {
+				requeueFailedOperation(op, err)
 			}
 			continue
 		}
 
-		groupOpsCurrent[op.action]++
-		context["current"] = groupOpsCurrent[op.action]
-		context["total"] = groupOpsTotal[op.action]
-		if err = execOp(op, tx, context); err != nil {
-			tx.Rollback()
+		succeeded := make([]*dbQueueOperation, 0, len(batch))
+		var batchErr error
+		for _, op := range batch {
+			groupOpsCurrent[op.action]++
+			context["current"] = groupOpsCurrent[op.action]
+			context["total"] = groupOpsTotal[op.action]
+			if _, batchErr = tx.Exec("SAVEPOINT noema_queue_op"); nil != batchErr {
+				logging.LogErrorf("create queue operation savepoint failed: %s", batchErr)
+				break
+			}
+			if opErr := execOp(op, tx, context); nil != opErr {
+				_, _ = tx.Exec("ROLLBACK TO SAVEPOINT noema_queue_op")
+				_, _ = tx.Exec("RELEASE SAVEPOINT noema_queue_op")
+				logging.LogErrorf("queue operation [%s] failed: %s", op.action, opErr)
+				continue
+			}
+			if _, batchErr = tx.Exec("RELEASE SAVEPOINT noema_queue_op"); nil != batchErr {
+				logging.LogErrorf("release queue operation savepoint failed: %s", batchErr)
+				break
+			}
+			succeeded = append(succeeded, op)
+		}
+
+		if nil != batchErr {
+			_ = tx.Rollback()
 			closeTxPreparedStmts(tx)
-			logging.LogErrorf("queue operation [%s] failed: %s", op.action, err)
+			for _, op := range batch {
+				requeueFailedOperation(op, batchErr)
+			}
 			continue
 		}
-
-		if err = commitTx(tx); err != nil {
-			logging.LogErrorf("commit tx failed: %s", err)
+		if err = commitTx(tx); nil != err {
+			_ = tx.Rollback()
+			for _, op := range succeeded {
+				requeueFailedOperation(op, err)
+			}
 			continue
 		}
-		backlinkChange.addOperation(op)
-
-		switch op.action {
-		case "index":
-			eventbus.Publish(eventbus.EvtEmbeddingDirty, op.indexTree.ID)
-		case "upsert":
-			eventbus.Publish(eventbus.EvtEmbeddingDirty, op.upsertTree.ID)
-		case "update_block_content":
-			eventbus.Publish(eventbus.EvtEmbeddingDirty, op.block.ID)
-		case "index_node":
-			eventbus.Publish(eventbus.EvtEmbeddingDirty, op.id)
-		}
-
-		if 16 < i && 0 == i%128 {
-			debug.FreeOSMemory()
+		for _, op := range succeeded {
+			backlinkChange.addOperation(op)
+			publishIndexedOperation(op)
 		}
 	}
-
-	if 128 < total {
-		debug.FreeOSMemory()
-	}
-
 	elapsed := time.Since(start).Milliseconds()
 	if 7000 < elapsed {
 		logging.LogInfof("database op tx [%dms]", elapsed)
@@ -326,6 +359,45 @@ func FlushQueue() {
 
 	// 刷新期间追加的操作仍在内存队列中，磁盘队列仅用于进程重启恢复，不能在这里重复执行。
 	clearIndexQueue(indexSnapshot)
+}
+
+// contiguousOperationBatches preserves queue ordering while sharing one SQL
+// transaction across adjacent operations routed to the same database. A full
+// Markdown-box registration is one such batch instead of hundreds of fsyncs.
+func contiguousOperationBatches(ops []*dbQueueOperation) (ret [][]*dbQueueOperation) {
+	for start := 0; start < len(ops); {
+		boxID := ops[start].boxID()
+		end := start + 1
+		for end < len(ops) && ops[end].boxID() == boxID {
+			end++
+		}
+		ret = append(ret, ops[start:end])
+		start = end
+	}
+	return
+}
+
+func requeueFailedOperation(op *dbQueueOperation, err error) {
+	logging.LogWarnf("skip queue operation [%s] for box [%s]: %s", op.action, op.boxID(), err)
+	if op.beginTxRetries < maxBeginTxRetries {
+		op.beginTxRetries++
+		requeueOperation(op)
+		return
+	}
+	logging.LogErrorf("drop queue operation [%s] for box [%s] after %d retries: %s", op.action, op.boxID(), maxBeginTxRetries, err)
+}
+
+func publishIndexedOperation(op *dbQueueOperation) {
+	switch op.action {
+	case "index":
+		eventbus.Publish(eventbus.EvtEmbeddingDirty, op.indexTree.ID)
+	case "upsert":
+		eventbus.Publish(eventbus.EvtEmbeddingDirty, op.upsertTree.ID)
+	case "update_block_content":
+		eventbus.Publish(eventbus.EvtEmbeddingDirty, op.block.ID)
+	case "index_node":
+		eventbus.Publish(eventbus.EvtEmbeddingDirty, op.id)
+	}
 }
 
 func execOp(op *dbQueueOperation, tx *sql.Tx, context map[string]any) (err error) {
@@ -613,6 +685,7 @@ func appendOperation(op *dbQueueOperation) {
 	operationQueue = append(operationQueue, op)
 	appendToIndexQueue(op)
 	eventbus.Publish(eventbus.EvtSQLIndexChanged)
+	notifyDatabaseQueueChanged()
 }
 
 func requeueOperation(op *dbQueueOperation) {
@@ -621,4 +694,5 @@ func requeueOperation(op *dbQueueOperation) {
 	dbQueueLock.Unlock()
 	appendToIndexQueue(op)
 	eventbus.Publish(eventbus.EvtSQLIndexChanged)
+	notifyDatabaseQueueChanged()
 }

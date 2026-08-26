@@ -2,11 +2,13 @@ package bibliography
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 type sharedFixture struct {
@@ -131,4 +133,81 @@ func TestLoadRejectsEscapingBibliographyAndSuppressesAmbiguousShortAlias(t *test
 	if !contains(result.Diagnostics, "bib source is outside the allowed note root: ../outside.bib") {
 		t.Fatalf("missing path escape diagnostic: %+v", result.Diagnostics)
 	}
+}
+
+func TestParseBibFileCacheReusesAndInvalidates(t *testing.T) {
+	resetBibParsedCache()
+	t.Cleanup(resetBibParsedCache)
+	file := filepath.Join(t.TempDir(), "refs.bib")
+	if err := os.WriteFile(file, []byte("@book{One, title={First}}"), 0644); nil != err {
+		t.Fatal(err)
+	}
+	first, err := parseBibFile(file)
+	if nil != err || 1 != len(first.Entries) || "First" != first.Entries[0].Fields["title"] {
+		t.Fatalf("unexpected first parse: %+v, %v", first, err)
+	}
+	bibCacheMu.Lock()
+	firstEntry := bibParsedCache[file]
+	bibCacheMu.Unlock()
+	if _, err = parseBibFile(file); nil != err {
+		t.Fatal(err)
+	}
+	bibCacheMu.Lock()
+	secondEntry := bibParsedCache[file]
+	bibCacheMu.Unlock()
+	if firstEntry != secondEntry {
+		t.Fatal("unchanged bibliography should reuse its parsed cache entry")
+	}
+
+	if err = os.WriteFile(file, []byte("@book{Two, title={Second changed}}"), 0644); nil != err {
+		t.Fatal(err)
+	}
+	nextTime := time.Now().Add(2 * time.Second)
+	if err = os.Chtimes(file, nextTime, nextTime); nil != err {
+		t.Fatal(err)
+	}
+	changed, err := parseBibFile(file)
+	if nil != err || 1 != len(changed.Entries) || "Second changed" != changed.Entries[0].Fields["title"] {
+		t.Fatalf("unexpected changed parse: %+v, %v", changed, err)
+	}
+	bibCacheMu.Lock()
+	changedEntry := bibParsedCache[file]
+	bibCacheMu.Unlock()
+	if firstEntry == changedEntry {
+		t.Fatal("changed bibliography should replace its parsed cache entry")
+	}
+}
+
+func BenchmarkParseBibFileCache(b *testing.B) {
+	file := filepath.Join(b.TempDir(), "large.bib")
+	var source strings.Builder
+	for index := 0; index < 1000; index++ {
+		fmt.Fprintf(&source, "@article{Key%d, author={Author, %d}, title={Title %d}, year={2026}}\n", index, index, index)
+	}
+	if err := os.WriteFile(file, []byte(source.String()), 0644); nil != err {
+		b.Fatal(err)
+	}
+	resetBibParsedCache()
+	b.Cleanup(resetBibParsedCache)
+	if _, err := parseBibFile(file); nil != err {
+		b.Fatal(err)
+	}
+
+	b.Run("warm", func(b *testing.B) {
+		b.ReportAllocs()
+		for index := 0; index < b.N; index++ {
+			if _, err := parseBibFile(file); nil != err {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("cold", func(b *testing.B) {
+		b.ReportAllocs()
+		for index := 0; index < b.N; index++ {
+			resetBibParsedCache()
+			if _, err := parseBibFile(file); nil != err {
+				b.Fatal(err)
+			}
+		}
+	})
 }

@@ -7,10 +7,12 @@ package identity
 
 import (
 	"crypto/sha256"
-	"fmt"
+	"encoding/hex"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -33,6 +35,30 @@ func IsLegacyNodeID(value string) bool {
 //
 // fallbackSeed is used only when canonical is empty (for provisional pages).
 func ProjectionID(canonical, fallbackSeed string) string {
+	key := canonical + "\x00" + fallbackSeed
+	if cached, ok := projectionIDs.Load(key); ok {
+		return cached.(string)
+	}
+	ret := projectionID(canonical, fallbackSeed)
+	// A vault has a bounded number of anchors, but a long-lived kernel can see
+	// many provisional box/path seeds; drop the whole table rather than grow
+	// without limit, since every entry is recomputable.
+	if maxCachedProjectionIDs <= projectionIDCount.Add(1) {
+		projectionIDs.Clear()
+		projectionIDCount.Store(0)
+	}
+	projectionIDs.Store(key, ret)
+	return ret
+}
+
+const maxCachedProjectionIDs = 1 << 16
+
+var (
+	projectionIDs     sync.Map
+	projectionIDCount atomic.Int64
+)
+
+func projectionID(canonical, fallbackSeed string) string {
 	canonical = strings.TrimSpace(canonical)
 	seed := canonical
 	stamp := "20000101000000"
@@ -47,5 +73,5 @@ func ProjectionID(canonical, fallbackSeed string) string {
 		stamp = canonical[:14]
 	}
 	digest := sha256.Sum256([]byte(seed))
-	return stamp + "-" + fmt.Sprintf("%x", digest[:4])[:7]
+	return stamp + "-" + hex.EncodeToString(digest[:4])[:7]
 }

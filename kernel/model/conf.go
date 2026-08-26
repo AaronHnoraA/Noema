@@ -730,13 +730,13 @@ func InitConf() {
 	Conf.AccessAuthCode = util.RemoveInvalid(Conf.AccessAuthCode)
 	Conf.AccessAuthCode = strings.TrimSpace(Conf.AccessAuthCode)
 
-	dataIndexRecoveryRequired = 1 == Conf.DataIndexState
+	dataIndexRecoveryRequired = 1 == Conf.DataIndexState || dataIndexRecoveryMarkerExists()
 	if dataIndexRecoveryRequired {
 		// The durable queue contains only operations that were appended before a
 		// crash. A box-wide index can be interrupted before every source file has
 		// reached that queue, so replay alone cannot prove completeness. Keep the
 		// marker set until InitBoxes has rebuilt from the source of truth.
-		logging.LogInfof("data index state is [%d], will rebuild opened notebooks from source", Conf.DataIndexState)
+		logging.LogInfof("data index recovery is pending [state=%d, marker=%t], will rebuild opened notebooks from source", Conf.DataIndexState, dataIndexRecoveryMarkerExists())
 	} else {
 		Conf.DataIndexState = 0
 	}
@@ -961,6 +961,10 @@ func Close(force, setCurrentWorkspace bool, execInstallPkg int) (exitCode int, i
 			Unmount(box.ID)
 		}
 	}
+	// Markdown saves index asynchronously, so drain that queue before the
+	// databases go away or the last few saves would be lost — and would log
+	// "database is nil" on the way out.
+	WaitMarkdownIndex()
 	sql.CloseDatabase()
 	closePushQueue()
 	util.SaveAssetsTexts()
@@ -1205,6 +1209,9 @@ func (conf *AppConf) language(num int) (ret string) {
 func markDataIndexRecoveryRequired() {
 	dataIndexRecoveryRequired = true
 	Conf.DataIndexState = 1
+	if err := persistDataIndexRecoveryMarker(); nil != err {
+		logging.LogWarnf("persist data-index recovery marker failed: %s", err)
+	}
 	Conf.Save()
 }
 
@@ -1229,6 +1236,7 @@ func InitBoxes() error {
 		}
 		dataIndexRecoveryRequired = false
 		Conf.DataIndexState = 0
+		clearDataIndexRecoveryMarker()
 		Conf.Save()
 		logging.LogInfof("tree/block count [%d/%d] after interrupted-index recovery", treenode.CountTrees(), treenode.CountBlocks())
 		return nil

@@ -22,15 +22,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/siyuan-note/eventbus"
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/task"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/siyuan-note/eventbus"
+	"github.com/siyuan-note/logging"
 )
 
 var (
@@ -69,7 +68,7 @@ func FlushHistoryQueue() {
 
 	context := map[string]any{eventbus.CtxPushMsg: eventbus.CtxPushMsgToStatusBar}
 	groupOpsCurrent := map[string]int{}
-	for i, op := range ops {
+	for _, op := range ops {
 		if util.IsExiting.Load() {
 			return
 		}
@@ -104,13 +103,6 @@ func FlushHistoryQueue() {
 			return
 		}
 
-		if 16 < i && 0 == i%128 {
-			debug.FreeOSMemory()
-		}
-	}
-
-	if 128 < total {
-		debug.FreeOSMemory()
 	}
 
 	elapsed := time.Since(start).Milliseconds()
@@ -139,6 +131,7 @@ func DeleteOutdatedHistories(before int64) {
 
 	newOp := &historyDBQueueOperation{inQueueTime: time.Now(), action: "deleteOutdated", before: before}
 	historyOperationQueue = append(historyOperationQueue, newOp)
+	notifyHistoryDatabaseQueueChanged()
 }
 
 func IndexHistoriesQueue(histories []*History) {
@@ -151,6 +144,7 @@ func IndexHistoriesQueue(histories []*History) {
 
 	newOp := &historyDBQueueOperation{inQueueTime: time.Now(), action: "index", histories: histories}
 	historyOperationQueue = append(historyOperationQueue, newOp)
+	notifyHistoryDatabaseQueueChanged()
 }
 
 func getHistoryOperations() (ops []*historyDBQueueOperation) {

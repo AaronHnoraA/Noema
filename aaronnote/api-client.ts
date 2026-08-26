@@ -8,7 +8,12 @@ type PositionsMsg = Extract<Inbound, { type: "positions" }>;
 type SnippetsMsg = Extract<Inbound, { type: "snippets" }>;
 type SaveBody = {
   file: string;
-  content: string;
+  content?: string;
+  changes?: {
+    length: number;
+    newLength: number;
+    changes: Array<{ from: number; to: number; insert: string }>;
+  };
   mode: string;
   clientId: string;
   seq: number;
@@ -895,6 +900,7 @@ export type VirtualReferenceMention = {
   sourceId: string;
   sourceTitle: string;
   file: string;
+  path?: string;
   count: number;
   keywords: string[];
   snippet: string;
@@ -1019,6 +1025,8 @@ declare global {
     __noemaAppConfig?: NoemaAppConfigMsg;
     __noemaKernelBase?: string;
     __noemaKernel?: { state: string; baseUrl: string; box: { id?: string; name?: string; root?: string } | null };
+    __noemaRendererBuild?: string;
+    AaronnotePrepareRendererReload?: (detail?: { generation?: string }) => Promise<boolean>;
     __noemaDesktopPrintDocument?: () => { html: string; title: string; defaultPath: string } | null;
     noemaDesktop?: {
       platform: string;

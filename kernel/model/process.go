@@ -46,6 +46,13 @@ func WatchSupervisorProcess(pid int) {
 		logging.LogWarnf("ignore invalid kernel supervisor pid [%d]", pid)
 		return
 	}
+	if observed, err := waitSupervisorProcessExit(pid); nil == err && observed {
+		logging.LogWarnf("web-host supervisor [%d] exited, stop kernel gracefully", pid)
+		Close(false, true, 1)
+		return
+	} else if nil != err {
+		logging.LogWarnf("watch supervisor [%d] by process event failed, use compatibility polling: %s", pid, err)
+	}
 	const missingThreshold = 3
 	missing := 0
 	for !util.IsExiting.Load() {

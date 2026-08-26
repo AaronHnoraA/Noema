@@ -29,6 +29,118 @@ describe("desktop kernel Markdown provider", () => {
     expect(kernelMarkdownPath(root, join(root, "..", "outside.md"))).toBe("");
   });
 
+  test("maps the Go rich catalog into the existing editor note contract", async () => {
+    const root = await setupRoot();
+    const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const provider = createKernelMarkdownProvider({
+      baseUrl: "http://127.0.0.1:6806/",
+      box: { id: "box-a", root },
+      fetchImpl: async (url: string, init: RequestInit) => {
+        requests.push({ url, body: JSON.parse(String(init.body)) });
+        return new Response(JSON.stringify({ code: 0, data: {
+          notes: [{
+            id: "note-id", key: "note-id", title: "Note",
+            path: "nested/note.md", link: "nested/note.md", file: "/untrusted/kernel/path.md",
+            tags: [], refs: [], backlinks: [], blocks: [], domTargets: [],
+          }],
+          directories: [{ path: "nested", label: "Nested" }],
+          files: [],
+          indexVersion: 7,
+          source: "kernel-note-catalog",
+        } }), { status: 200, headers: { "Content-Type": "application/json" } });
+      },
+    });
+
+    await expect(provider.catalog(true)).resolves.toEqual({
+      type: "notes",
+      notes: [expect.objectContaining({
+        id: "note-id",
+        file: join(root, "nested", "note.md"),
+        path: "nested/note.md",
+        link: "nested/note.md",
+        standalone: false,
+      })],
+      directories: [{ path: "nested", label: "Nested" }],
+      files: [],
+      indexVersion: 7,
+      source: "kernel-note-catalog",
+    });
+    expect(requests).toEqual([{
+      url: "http://127.0.0.1:6806/api/noema/markdown/catalog",
+      body: { notebook: "box-a", force: true },
+    }]);
+  });
+
+  test("rejects a rich catalog path outside the registered box", async () => {
+    const root = await setupRoot();
+    const provider = createKernelMarkdownProvider({
+      baseUrl: "http://127.0.0.1:6806",
+      box: { id: "box-a", root },
+      fetchImpl: async () => new Response(JSON.stringify({ code: 0, data: {
+        notes: [{ id: "bad", path: "../outside.md" }], directories: [], files: [],
+      } }), { status: 200, headers: { "Content-Type": "application/json" } }),
+    });
+
+    await expect(provider.catalog()).rejects.toMatchObject({ statusCode: 502 });
+  });
+
+  test("forwards virtual references to Go and distrusts every returned filesystem path", async () => {
+    const root = await setupRoot();
+    const file = join(root, "nested", "note.md");
+    const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const provider = createKernelMarkdownProvider({
+      baseUrl: "http://127.0.0.1:6806/",
+      box: { id: "box-a", root },
+      fetchImpl: async (url: string, init: RequestInit) => {
+        requests.push({ url, body: JSON.parse(String(init.body)) });
+        return new Response(JSON.stringify({ code: 0, data: {
+          type: "virtual-references",
+          evaluationSource: "noema-aho-corasick",
+          target: { id: "target", title: "Target", path: "target.md", file: "/untrusted/target.md" },
+          mentions: [{
+            sourceId: "note-id", sourceTitle: "Note", file: "/untrusted/mention.md",
+            path: "nested/note.md", count: 2, keywords: ["Target"], snippet: "Target appears twice",
+          }],
+          scannedDocuments: 2,
+          ttlMs: 600_000,
+        } }), { status: 200, headers: { "Content-Type": "application/json" } });
+      },
+    });
+
+    await expect(provider.virtualReferences({ targetId: "target", file, title: "Target" })).resolves.toEqual(expect.objectContaining({
+      type: "virtual-references",
+      target: { id: "target", title: "Target", file: join(root, "target.md"), path: "target.md" },
+      mentions: [expect.objectContaining({
+        sourceId: "note-id",
+        file: "",
+        path: "nested/note.md",
+        note: undefined,
+      })],
+    }));
+    expect(requests).toEqual([{
+      url: "http://127.0.0.1:6806/api/noema/markdown/virtualReferences",
+      body: {
+        notebook: "box-a", targetId: "target", id: "", path: "/nested/note.md",
+        title: "Target", caseSensitive: false,
+      },
+    }]);
+  });
+
+  test("rejects a virtual-reference mention path outside the registered box", async () => {
+    const root = await setupRoot();
+    const provider = createKernelMarkdownProvider({
+      baseUrl: "http://127.0.0.1:6806",
+      box: { id: "box-a", root },
+      fetchImpl: async () => new Response(JSON.stringify({ code: 0, data: {
+        type: "virtual-references",
+        target: null,
+        mentions: [{ sourceId: "bad", sourceTitle: "Bad", path: "../outside.md", count: 1, keywords: ["Bad"], snippet: "Bad" }],
+      } }), { status: 200, headers: { "Content-Type": "application/json" } }),
+    });
+
+    await expect(provider.virtualReferences({ targetId: "bad" })).rejects.toMatchObject({ statusCode: 502 });
+  });
+
   test("resolves canonical block IDs to a verified file inside the registered box", async () => {
     const root = await setupRoot();
     const id = "0198fc34-7b32-7a11-8cb4-6c40e3b33d68";
@@ -85,9 +197,9 @@ describe("desktop kernel Markdown provider", () => {
   test("loads and saves exact source bytes through the Go endpoints", async () => {
     const root = await setupRoot();
     const file = join(root, "nested", "note.md");
-    const requests: Array<{ url: string; body: Record<string, string> }> = [];
+    const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
     const fetchImpl = async (url: string, init: RequestInit) => {
-      const body = JSON.parse(String(init.body)) as Record<string, string>;
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
       requests.push({ url, body });
       if (url.endsWith("/movePath")) {
         return new Response(JSON.stringify({ code: 0, data: {
@@ -105,8 +217,19 @@ describe("desktop kernel Markdown provider", () => {
           headers: { "Content-Type": "application/json" },
         });
       }
+      if (url.endsWith("/applyChanges")) {
+        return new Response(
+          JSON.stringify({
+            code: 0,
+            data: { mtimeMs: Date.now(), size: 16, version: "incremental-version" },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
       const markdown = url.endsWith("/loadDoc") ? "# From kernel\n" : body.markdown;
-      return new Response(JSON.stringify({ code: 0, data: { markdown, blocks: [] } }), {
+      return new Response(JSON.stringify({ code: 0, data: {
+        markdown, blocks: [], mtimeMs: 1234, size: 14, version: "source-version",
+      } }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
@@ -118,11 +241,24 @@ describe("desktop kernel Markdown provider", () => {
     });
 
     expect(provider.owns(file)).toBe(true);
-    expect(await provider.read(file)).toMatchObject({ file, content: "# From kernel\n" });
+    expect(await provider.read(file)).toEqual({
+      file,
+      content: "# From kernel\n",
+      mtimeMs: 1234,
+      size: 14,
+      version: "source-version",
+    });
     expect(await provider.write({ file, content: "# Exact\n\nBody\n", expectedVersion: "base-version" })).toMatchObject({
       ok: true,
       content: "# Exact\n\nBody\n",
     });
+    expect(
+      await provider.writeChanges({
+        file,
+        expectedVersion: "saved-version",
+        changes: { length: 15, newLength: 16, changes: [{ from: 2, to: 7, insert: "Exact!" }] },
+      }),
+    ).toMatchObject({ ok: true });
     const target = join(root, "nested", "renamed.md");
     expect(await provider.move({ file, target })).toMatchObject({
       ok: true,
@@ -141,11 +277,20 @@ describe("desktop kernel Markdown provider", () => {
     expect(requests).toEqual([
       {
         url: "http://127.0.0.1:6806/api/noema/markdown/loadDoc",
-        body: { notebook: "box-a", path: "/nested/note.md" },
+        body: { notebook: "box-a", path: "/nested/note.md", includeBlocks: false },
       },
       {
         url: "http://127.0.0.1:6806/api/noema/markdown/saveDoc",
         body: { notebook: "box-a", path: "/nested/note.md", markdown: "# Exact\n\nBody\n", expectedVersion: "base-version" },
+      },
+      {
+        url: "http://127.0.0.1:6806/api/noema/markdown/applyChanges",
+        body: {
+          notebook: "box-a",
+          path: "/nested/note.md",
+          expectedVersion: "saved-version",
+          changes: { length: 15, newLength: 16, changes: [{ from: 2, to: 7, insert: "Exact!" }] },
+        },
       },
       {
         url: "http://127.0.0.1:6806/api/noema/markdown/moveDoc",
@@ -201,6 +346,28 @@ describe("desktop kernel Markdown provider", () => {
         size: 11,
         version: "external-version",
       });
+  });
+
+  test("fails closed when an incremental kernel response omits the next version", async () => {
+    const root = await setupRoot();
+    const file = join(root, "nested", "note.md");
+    const provider = createKernelMarkdownProvider({
+      baseUrl: "http://127.0.0.1:6806",
+      box: { id: "box-a", root },
+      fetchImpl: async () =>
+        new Response(JSON.stringify({ code: 0, data: { mtimeMs: 42, size: 11 } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    });
+
+    await expect(
+      provider.writeChanges({
+        file,
+        expectedVersion: "base-version",
+        changes: { length: 1, newLength: 2, changes: [{ from: 1, to: 1, insert: "x" }] },
+      }),
+    ).rejects.toMatchObject({ statusCode: 502 });
   });
 
   test("forwards metadata intent and live editor source without interpreting the block in Node", async () => {

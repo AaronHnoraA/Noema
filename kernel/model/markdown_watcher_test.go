@@ -44,3 +44,23 @@ func TestHandleMarkdownFileEventSkipsNonCandidatePaths(t *testing.T) {
 		handleMarkdownFileEvent(boxID, absPath, true)
 	}
 }
+
+func TestMarkdownFiletreeReloadOnlyForStructuralChanges(t *testing.T) {
+	tests := []struct {
+		name             string
+		created, removed bool
+		want             bool
+	}{
+		{name: "content write", want: false},
+		{name: "create", created: true, want: true},
+		{name: "remove", removed: true, want: true},
+		{name: "rename replacement", created: true, removed: true, want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := markdownFiletreeNeedsReload(test.created, test.removed); got != test.want {
+				t.Fatalf("markdownFiletreeNeedsReload(%v, %v) = %v, want %v", test.created, test.removed, got, test.want)
+			}
+		})
+	}
+}

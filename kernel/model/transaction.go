@@ -57,10 +57,11 @@ func IsMoveOutlineHeading(transactions *[]*Transaction) bool {
 }
 
 func FlushTxQueue() {
-	time.Sleep(time.Duration(50) * time.Millisecond)
-	for 0 < txQueueSize() || isFlushing.Load() {
-		time.Sleep(10 * time.Millisecond)
+	txQueueLock.Lock()
+	for 0 < len(txQueue) || isFlushing.Load() {
+		txQueueIdle.Wait()
 	}
+	txQueueLock.Unlock()
 }
 
 // PerformTxSync 同步执行单笔事务并返回错误，供 undo/redo 重放使用。
@@ -73,6 +74,7 @@ func PerformTxSync(tx *Transaction) (err error) {
 	defer func() {
 		isFlushing.Store(false)
 		flushLock.Unlock()
+		notifyTxQueueIdle()
 	}()
 	return performTxSyncLocked(tx)
 }
@@ -89,29 +91,56 @@ func performTxSyncLocked(tx *Transaction) (err error) {
 }
 
 var (
-	txQueue     []*Transaction
-	txQueueLock sync.Mutex
-	flushLock   sync.Mutex
-	isFlushing  atomic.Bool
+	txQueue        []*Transaction
+	txQueueLock    sync.Mutex
+	txQueueIdle    = sync.NewCond(&txQueueLock)
+	txQueueChanged = make(chan struct{}, 1)
+	flushLock      sync.Mutex
+	isFlushing     atomic.Bool
 )
 
 func init() {
 	go flushQueue()
+	go consumeUpdateRefTextRenameDocs(updateRefTextRenameDocChanged, updateRefTextRenameDocDelay, FlushUpdateRefTextRenameDocJob, nil)
 }
 
 func flushQueue() {
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
-	for range ticker.C {
-		flushLock.Lock()
-		isFlushing.Store(true)
-		transactions := takeQueuedTransactions()
-		for _, tx := range transactions {
-			flushTx(tx)
+	for range txQueueChanged {
+		// Preserve the former <=50 ms transaction coalescing window, but only
+		// arm a timer after work arrives instead of waking 20 times per second
+		// while the queue is empty.
+		time.Sleep(50 * time.Millisecond)
+		// Enqueues during the coalescing window are already present in txQueue.
+		// Drain their redundant edge notifications so an empty queue does not
+		// incur another 50 ms wake after this batch finishes.
+		for {
+			select {
+			case <-txQueueChanged:
+				continue
+			default:
+			}
+			break
 		}
-		isFlushing.Store(false)
-		flushLock.Unlock()
+		flushQueuedTransactions()
 	}
+}
+
+func flushQueuedTransactions() {
+	flushLock.Lock()
+	isFlushing.Store(true)
+	transactions := takeQueuedTransactions()
+	for _, tx := range transactions {
+		flushTx(tx)
+	}
+	isFlushing.Store(false)
+	flushLock.Unlock()
+	notifyTxQueueIdle()
+}
+
+func notifyTxQueueIdle() {
+	txQueueLock.Lock()
+	txQueueIdle.Broadcast()
+	txQueueLock.Unlock()
 }
 
 func flushTx(tx *Transaction) {
@@ -167,14 +196,19 @@ func PerformTransactions(transactions *[]*Transaction) error {
 		return err
 	}
 	txQueueLock.Lock()
-	defer txQueueLock.Unlock()
 	for _, tx := range *transactions {
 		tx.m = &sync.Mutex{}
+		tx.prepareDone()
 		txQueue = append(txQueue, tx)
 	}
 	sort.SliceStable(txQueue, func(i, j int) bool {
 		return txQueue[i].Timestamp < txQueue[j].Timestamp
 	})
+	txQueueLock.Unlock()
+	select {
+	case txQueueChanged <- struct{}{}:
+	default:
+	}
 	return nil
 }
 
@@ -222,6 +256,8 @@ func (e *TxErr) Code() int {
 }
 
 func performTx(tx *Transaction) (ret *TxErr) {
+	tx.prepareDone()
+	defer tx.signalDone()
 	if 1 > len(tx.DoOperations) {
 		return
 	}
@@ -2330,6 +2366,9 @@ type Transaction struct {
 	luteEngine *lute.Lute
 	m          *sync.Mutex
 	state      atomic.Int32 // 0: 初始化，1：未提交，:2: 已提交，3: 已回滚
+	doneMu     sync.Mutex
+	done       chan struct{}
+	doneOnce   sync.Once
 }
 
 func (tx *Transaction) GetChangedRootIDs() (ret []string) {
@@ -2365,13 +2404,31 @@ func (tx *Transaction) GetMutatedRootIDs() (ret []string) {
 }
 
 func (tx *Transaction) WaitForCommit() {
-	for {
-		if 1 == tx.state.Load() {
-			time.Sleep(10 * time.Millisecond)
-			continue
-		}
-		return
+	tx.doneMu.Lock()
+	done := tx.done
+	tx.doneMu.Unlock()
+	if nil != done {
+		<-done
 	}
+}
+
+func (tx *Transaction) prepareDone() {
+	tx.doneMu.Lock()
+	if nil == tx.done {
+		tx.done = make(chan struct{})
+	}
+	tx.doneMu.Unlock()
+}
+
+func (tx *Transaction) signalDone() {
+	tx.doneOnce.Do(func() {
+		tx.doneMu.Lock()
+		done := tx.done
+		tx.doneMu.Unlock()
+		if nil != done {
+			close(done)
+		}
+	})
 }
 
 func (tx *Transaction) begin() (err error) {
@@ -2596,11 +2653,17 @@ func getRefsCacheByDefNode(updateNode *ast.Node, boxID string) (ret []*sql.Ref, 
 
 var updateRefTextRenameDocs = map[string]*parse.Tree{}
 var updateRefTextRenameDocLock = sync.Mutex{}
+var updateRefTextRenameDocChanged = make(chan struct{}, 1)
+var updateRefTextRenameDocDelay = util.SQLFlushInterval
 
 func updateRefTextRenameDoc(renamedTree *parse.Tree) {
 	updateRefTextRenameDocLock.Lock()
 	updateRefTextRenameDocs[renamedTree.ID] = renamedTree
 	updateRefTextRenameDocLock.Unlock()
+	select {
+	case updateRefTextRenameDocChanged <- struct{}{}:
+	default:
+	}
 }
 
 func FlushUpdateRefTextRenameDocJob() {
@@ -2610,12 +2673,41 @@ func FlushUpdateRefTextRenameDocJob() {
 
 func flushUpdateRefTextRenameDoc() {
 	updateRefTextRenameDocLock.Lock()
-	defer updateRefTextRenameDocLock.Unlock()
+	trees := updateRefTextRenameDocs
+	updateRefTextRenameDocs = map[string]*parse.Tree{}
+	updateRefTextRenameDocLock.Unlock()
 
-	for _, tree := range updateRefTextRenameDocs {
+	for _, tree := range trees {
 		refreshDynamicRefText(tree.Root, tree)
 	}
-	updateRefTextRenameDocs = map[string]*parse.Tree{}
+}
+
+func consumeUpdateRefTextRenameDocs(ch <-chan struct{}, delay time.Duration, flush func(), stop <-chan struct{}) {
+	for {
+		select {
+		case <-ch:
+		case <-stop:
+			return
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-timer.C:
+		case <-stop:
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return
+		}
+		for {
+			select {
+			case <-ch:
+				continue
+			default:
+			}
+			break
+		}
+		flush()
+	}
 }
 
 type changedDefNode struct {

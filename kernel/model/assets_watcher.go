@@ -14,8 +14,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//go:build !darwin
-
 package model
 
 import (
@@ -24,10 +22,10 @@ import (
 	"time"
 
 	"github.com/88250/gulu"
-	"github.com/fsnotify/fsnotify"
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/cache"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/fsnotify/fsnotify"
+	"github.com/siyuan-note/logging"
 )
 
 var assetsWatcher *fsnotify.Watcher
@@ -64,12 +62,12 @@ func watchAssets() {
 	go func() {
 		defer logging.Recover()
 
-		var (
-			timer     *time.Timer
-			lastEvent fsnotify.Event
-		)
-		timer = time.NewTimer(100 * time.Millisecond)
-		<-timer.C // timer should be expired at first
+		timer := time.NewTimer(time.Hour)
+		if !timer.Stop() {
+			<-timer.C
+		}
+		defer timer.Stop()
+		var lastEvent fsnotify.Event
 
 		for {
 			select {

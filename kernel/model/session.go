@@ -27,11 +27,11 @@ import (
 	"time"
 
 	"github.com/88250/gulu"
+	"github.com/aaronhe/noema/kernel/util"
 	ginSessions "github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/siyuan-note/logging"
-	"github.com/aaronhe/noema/kernel/util"
 	"github.com/steambap/captcha"
 )
 
@@ -464,13 +464,35 @@ func Recover(c *gin.Context) {
 }
 
 // Activity 记录用户写操作时间，用于 AutoFixIndex 的空闲判断。
-// 只认会产生数据变更的事务类请求（/api/transactions*），因为只有写操作才会引入索引不一致；
+// 只认会产生数据变更的事务类请求和 Noema Markdown 写端点，因为只有写操作才会引入索引不一致；
 // 读操作和前端定时轮询（如 /api/ai/embeddingStat）不计入，避免 SiYuan 开着却不操作时被判为活跃。
 func Activity(c *gin.Context) {
-	if strings.HasPrefix(c.Request.URL.Path, "/api/transactions") {
+	if isIndexMutatingRequest(c.Request.URL.Path) {
 		util.RefreshActivity()
+		notifyAutoFixIndexActivity()
 	}
 	c.Next()
+}
+
+func isIndexMutatingRequest(requestPath string) bool {
+	if strings.HasPrefix(requestPath, "/api/transactions") {
+		return true
+	}
+	switch requestPath {
+	case "/api/noema/markdown/saveDoc",
+		"/api/noema/markdown/mutateMeta",
+		"/api/noema/markdown/moveDoc",
+		"/api/noema/markdown/movePath",
+		"/api/noema/markdown/storeAsset",
+		"/api/noema/markdown/storeAssetFromPath",
+		"/api/noema/markdown/renameAsset",
+		"/api/noema/markdown/startObsidianVaultImport",
+		"/api/noema/markdown/registerExternalBox",
+		"/api/noema/markdown/mutatePropertyBlock",
+		"/api/noema/markdown/mutatePlanning":
+		return true
+	}
+	return false
 }
 
 var (

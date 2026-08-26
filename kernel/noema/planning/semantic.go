@@ -63,6 +63,7 @@ var (
 	semanticISODate      = regexp.MustCompile(`(?i)^(\d{4})-(\d{1,2})-(\d{1,2})[ T](\d{1,2}):(\d{2})(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:?\d{2})$`)
 	semanticShortDate    = regexp.MustCompile(`^(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{2}))?$`)
 	semanticRepeater     = regexp.MustCompile(`(?i)^(\+\+|\.\+|\+)?(\d+)\s*(d|day|days|w|week|weeks|m|month|months|y|year|years)$`)
+	semanticDateReplacer = strings.NewReplacer("年", "-", "月", "-", "日", "", "号", "", ".", "-", "/", "-")
 )
 
 type semanticRepeaterValue struct {
@@ -504,7 +505,10 @@ func parseSemanticDate(raw string, now time.Time) (semanticDateValue, bool) {
 		unit := byte(strings.ToLower(match[3])[0])
 		return semanticDateValue{time: shiftSemanticDate(semanticMidnight(now), n, unit)}, true
 	}
-	normalized := strings.NewReplacer("年", "-", "月", "-", "日", "", "号", "", ".", "-", "/", "-").Replace(text)
+	if parsed, ok := parseCanonicalSemanticDate(text); ok {
+		return parsed, true
+	}
+	normalized := semanticDateReplacer.Replace(text)
 	if match := semanticYearDate.FindStringSubmatch(normalized); nil != match {
 		year := semanticInt(match[1])
 		month := semanticInt(match[2])
@@ -529,6 +533,61 @@ func parseSemanticDate(raw string, now time.Time) (semanticDateValue, bool) {
 		}
 	}
 	return semanticDateValue{}, false
+}
+
+// parseCanonicalSemanticDate handles the normalized forms emitted by Noema's
+// planning providers without allocating a replacement string or regexp
+// capture slice. Less common CJK, slash, dot, short, and imported ISO forms
+// continue through the complete grammar below this fast path.
+func parseCanonicalSemanticDate(text string) (semanticDateValue, bool) {
+	if len(text) < 7 || text[4] != '-' {
+		return semanticDateValue{}, false
+	}
+	year, yearOK := semanticDecimal(text[:4])
+	month, monthOK := semanticDecimal(text[5:7])
+	if !yearOK || !monthOK {
+		return semanticDateValue{}, false
+	}
+	if len(text) == 7 {
+		return semanticDateValue{time: time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.Local)}, true
+	}
+	if len(text) < 10 || text[7] != '-' {
+		return semanticDateValue{}, false
+	}
+	day, dayOK := semanticDecimal(text[8:10])
+	if !dayOK {
+		return semanticDateValue{}, false
+	}
+	if len(text) == 10 {
+		return semanticDateValue{time: time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.Local)}, true
+	}
+	if (len(text) != 15 && len(text) != 16) || (text[10] != ' ' && text[10] != 'T') {
+		return semanticDateValue{}, false
+	}
+	colon := len(text) - 3
+	if colon <= 11 || text[colon] != ':' {
+		return semanticDateValue{}, false
+	}
+	hour, hourOK := semanticDecimal(text[11:colon])
+	minute, minuteOK := semanticDecimal(text[colon+1:])
+	if !hourOK || !minuteOK {
+		return semanticDateValue{}, false
+	}
+	return semanticDateValue{time: time.Date(year, time.Month(month), day, hour, minute, 0, 0, time.Local), hasTime: true}, true
+}
+
+func semanticDecimal(raw string) (int, bool) {
+	if raw == "" {
+		return 0, false
+	}
+	value := 0
+	for index := range len(raw) {
+		if raw[index] < '0' || raw[index] > '9' {
+			return 0, false
+		}
+		value = value*10 + int(raw[index]-'0')
+	}
+	return value, true
 }
 
 func semanticMutationTime(ms int64) time.Time {
@@ -620,6 +679,9 @@ func semanticContains(values []string, wanted string) bool {
 }
 
 func semanticInt(raw string) int {
+	if raw == "" {
+		return 0
+	}
 	value, _ := strconv.Atoi(raw)
 	return value
 }

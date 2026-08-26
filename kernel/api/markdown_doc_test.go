@@ -10,11 +10,13 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/aaronhe/noema/kernel/conf"
@@ -23,6 +25,8 @@ import (
 	"github.com/aaronhe/noema/kernel/util"
 	"github.com/gin-gonic/gin"
 )
+
+var markdownDocAPITestSequence atomic.Uint64
 
 type markdownDocResponse struct {
 	Code int             `json:"code"`
@@ -34,7 +38,7 @@ func setupMarkdownDocAPITest(t *testing.T) (boxID string) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
-	boxID = "20260825040000-apimdbox"
+	boxID = fmt.Sprintf("20260825040000-api%04d", markdownDocAPITestSequence.Add(1))
 	originalConf := model.Conf
 	originalDataDir := util.DataDir
 	originalBlockTreeDBPath := util.BlockTreeDBPath
@@ -122,6 +126,27 @@ func TestSaveMarkdownDocAPIReturnsCASConflictWithoutWriting(t *testing.T) {
 	}
 	if onDisk, err := os.ReadFile(absPath); nil != err || string(onDisk) != current {
 		t.Fatalf("stale API save changed disk: content=%q err=%v", onDisk, err)
+	}
+}
+
+func TestApplyMarkdownDocChangesAPIRejectsMissingVersion(t *testing.T) {
+	boxID := setupMarkdownDocAPITest(t)
+	engine := gin.New()
+	engine.POST("/api/noema/markdown/applyChanges", applyMarkdownDocChanges)
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/noema/markdown/applyChanges", strings.NewReader(
+		`{"notebook":"`+boxID+`","path":"/plain.md","changes":{"length":0,"newLength":1,"changes":[{"from":0,"to":0,"insert":"x"}]}}`,
+	))
+	req.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, req)
+
+	var resp markdownDocResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); nil != err {
+		t.Fatal(err)
+	}
+	if -1 != resp.Code || !strings.Contains(resp.Msg, "expectedVersion") {
+		t.Fatalf("missing incremental base version was accepted: %s", recorder.Body.String())
 	}
 }
 
@@ -249,6 +274,52 @@ func TestListMarkdownPropertyBlocksAPI(t *testing.T) {
 	}
 }
 
+func TestListMarkdownWorkspaceProjectionAPI(t *testing.T) {
+	boxID := setupMarkdownDocAPITest(t)
+	id := "0198fc34-7b32-7a11-8cb4-6c40e3b33d68"
+	abs := filepath.Join(util.DataDir, boxID, "project.md")
+	source := "---\nid: project-id\ntitle: Project\nproject: Noema\n---\n\n@@todo(doing) [Ship] {id=ship}\n\nClaim {#" + id + " status=draft}\n"
+	if err := os.WriteFile(abs, []byte(source), 0644); nil != err {
+		t.Fatal(err)
+	}
+	// API tests reuse one box ID while swapping util.DataDir. Rebuild the
+	// process-global catalog so this request is isolated from earlier cases.
+	if _, err := model.ListMarkdownNoteCatalog(boxID, true); nil != err {
+		t.Fatal(err)
+	}
+
+	engine := gin.New()
+	engine.POST("/api/noema/markdown/workspaceProjection", listMarkdownWorkspaceProjection)
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/noema/markdown/workspaceProjection", strings.NewReader(
+		`{"notebook":"`+boxID+`","includeProperties":true}`,
+	))
+	req.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, req)
+
+	var resp markdownDocResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); nil != err {
+		t.Fatal(err)
+	}
+	if resp.Code != 0 {
+		t.Fatalf("workspace projection API failed: %s", recorder.Body.String())
+	}
+	var data model.MarkdownWorkspaceProjection
+	if err := json.Unmarshal(resp.Data, &data); nil != err {
+		t.Fatal(err)
+	}
+	if data.Source != "kernel-workspace-projection" || len(data.Documents) != 1 {
+		t.Fatalf("unexpected workspace projection header: %+v", data)
+	}
+	document := data.Documents[0]
+	if document.Path != "/project.md" || document.Note.ID != "project-id" || document.Note.Project != "Noema" {
+		t.Fatalf("unexpected workspace note: %+v", document)
+	}
+	if len(document.Nodes) != 1 || document.Nodes[0].Title != "Ship" || len(document.Blocks) != 1 || document.Blocks[0].CanonicalID != id {
+		t.Fatalf("workspace projections were not joined: %+v", document)
+	}
+}
+
 func TestLoadMarkdownBibliographyAPI(t *testing.T) {
 	boxID := setupMarkdownDocAPITest(t)
 	noteDir := filepath.Join(util.DataDir, boxID, "notes")
@@ -335,6 +406,40 @@ func TestMoveMarkdownPathAPIsRejectMissingFields(t *testing.T) {
 	}
 }
 
+func TestListMarkdownVirtualReferencesAPI(t *testing.T) {
+	boxID := setupMarkdownDocAPITest(t)
+	boxDir := filepath.Join(util.DataDir, boxID)
+	for name, source := range map[string]string{
+		"alpha.md":  "---\nid: alpha\ntitle: Alpha\naliases: (\"First\")\n---\n# Alpha\n",
+		"source.md": "---\nid: source\ntitle: Source\n---\nAlpha and First are discussed here.\n",
+	} {
+		if err := os.WriteFile(filepath.Join(boxDir, name), []byte(source), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	engine := gin.New()
+	engine.POST("/api/noema/markdown/virtualReferences", listMarkdownVirtualReferences)
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/noema/markdown/virtualReferences",
+		strings.NewReader(`{"notebook":"`+boxID+`","targetId":"alpha"}`))
+	req.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, req)
+	var response markdownDocResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != 0 {
+		t.Fatalf("response = %s", recorder.Body.String())
+	}
+	var result model.MarkdownVirtualReferences
+	if err := json.Unmarshal(response.Data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Target == nil || result.Target.ID != "alpha" || len(result.Mentions) != 1 || result.Mentions[0].Count != 2 {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
 func TestMutateMarkdownPropertyBlockAPIRejectsMissingFields(t *testing.T) {
 	setupMarkdownDocAPITest(t)
 	engine := gin.New()
@@ -403,6 +508,38 @@ func TestLoadMarkdownDocAPIReturnsEmptyDocForMissingPath(t *testing.T) {
 	}
 }
 
+func TestLoadMarkdownDocAPISourceOnlyReturnsCASMetadataWithoutBlocks(t *testing.T) {
+	boxID := setupMarkdownDocAPITest(t)
+	source := []byte("# Fast API open\n\nBody.\n")
+	absPath := filepath.Join(util.DataDir, boxID, "fast.md")
+	if err := os.WriteFile(absPath, source, 0644); nil != err {
+		t.Fatal(err)
+	}
+
+	engine := gin.New()
+	engine.POST("/api/noema/markdown/loadDoc", loadMarkdownDoc)
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/noema/markdown/loadDoc", strings.NewReader(
+		`{"notebook":"`+boxID+`","path":"/fast.md","includeBlocks":false}`))
+	req.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, req)
+
+	var resp markdownDocResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); nil != err {
+		t.Fatal(err)
+	}
+	if 0 != resp.Code {
+		t.Fatalf("source-only load failed: %s", recorder.Body.String())
+	}
+	var data model.MarkdownDocLoadResult
+	if err := json.Unmarshal(resp.Data, &data); nil != err {
+		t.Fatal(err)
+	}
+	if data.Markdown != string(source) || data.Size != int64(len(source)) || data.MtimeMs <= 0 || data.Version == "" || 0 != len(data.Blocks) {
+		t.Fatalf("unexpected source-only API projection: %+v", data)
+	}
+}
+
 func TestListMarkdownDocsAPI(t *testing.T) {
 	boxID := setupMarkdownDocAPITest(t)
 
@@ -445,6 +582,36 @@ func TestListMarkdownDocsAPI(t *testing.T) {
 	}
 	if "/alpha.md" != data.Docs[0].Path || "/notes/beta.md" != data.Docs[1].Path {
 		t.Fatalf("unexpected doc order/paths: %+v", data.Docs)
+	}
+}
+
+func TestListMarkdownNoteCatalogAPI(t *testing.T) {
+	boxID := setupMarkdownDocAPITest(t)
+	abs := filepath.Join(util.DataDir, boxID, "note.md")
+	if err := os.WriteFile(abs, []byte("---\nid: api-note\ntitle: API Note\n---\n# API Note\n"), 0o644); nil != err {
+		t.Fatal(err)
+	}
+
+	engine := gin.New()
+	engine.POST("/api/noema/markdown/catalog", listMarkdownNoteCatalog)
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/noema/markdown/catalog", strings.NewReader(`{"notebook":"`+boxID+`","force":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, req)
+
+	var resp markdownDocResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); nil != err {
+		t.Fatal(err)
+	}
+	if 0 != resp.Code {
+		t.Fatalf("listMarkdownNoteCatalog failed: %s", recorder.Body.String())
+	}
+	var catalog model.MarkdownNoteCatalog
+	if err := json.Unmarshal(resp.Data, &catalog); nil != err {
+		t.Fatal(err)
+	}
+	if len(catalog.Notes) != 1 || catalog.Notes[0].ID != "api-note" || catalog.Source != "kernel-note-catalog" {
+		t.Fatalf("unexpected rich catalog: %+v", catalog)
 	}
 }
 

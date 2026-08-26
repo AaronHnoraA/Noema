@@ -166,6 +166,12 @@ let saveInFlight = false;
 let saveAgainAfterFlight = false;
 let ws: WebSocket | null = null;
 let wsReconnectTimer = 0;
+let wsConnectionKey = "";
+let loadGeneration = 0;
+let reloadInFlight = false;
+let reloadAgainAfterFlight = false;
+let listedNotebook = "";
+const knownDocPaths = new Set<string>();
 
 function ensureEditor(): Editor {
   if (editor) return editor;
@@ -185,23 +191,31 @@ function docIDFromBlocks(blocks: MarkdownBlockRef[]): string {
 }
 
 async function doLoad(path?: string): Promise<void> {
-  currentNotebook = notebookInput.value.trim();
-  currentPath = path ?? currentPath;
-  if (!currentNotebook || !currentPath) {
+  const notebook = notebookInput.value.trim();
+  const requestedPath = path ?? currentPath;
+  if (!notebook || !requestedPath) {
     setStatus("notebook and path are required", true);
     return;
   }
+  const generation = ++loadGeneration;
   setStatus("loading…");
   try {
     const resp = await postJson<LoadDocResponse>("/api/noema/markdown/loadDoc", {
-      notebook: currentNotebook,
-      path: currentPath,
+      notebook,
+      path: requestedPath,
     });
+    if (generation !== loadGeneration) return;
     if (0 !== resp.code || !resp.data) {
       setStatus(`load failed: ${resp.msg}`, true);
       return;
     }
-    ensureEditor().setMarkdown(resp.data.markdown, { history: "reset" });
+    const switchedDocument = currentNotebook !== notebook || currentPath !== requestedPath;
+    currentNotebook = notebook;
+    currentPath = requestedPath;
+    const activeEditor = ensureEditor();
+    if (switchedDocument || activeEditor.getMarkdown() !== resp.data.markdown) {
+      activeEditor.setMarkdown(resp.data.markdown, { history: "reset" });
+    }
     lastSyncedMarkdown = resp.data.markdown;
     currentDocID = docIDFromBlocks(resp.data.blocks);
     connectWs();
@@ -245,7 +259,7 @@ editorHost.addEventListener("aaronnote:open-block-ref", (event) => {
 // Document browser sidebar. A markdown box has no notion of "open this
 // notebook" the way a .sy box does — Connect just means "the notebook ID
 // field is good enough to list and load against". Manually refreshable
-// (button + after every load/save/new-doc) rather than wired to
+// (button + after the first save of a new path) rather than wired to
 // PushReloadFiletree's WS event: that broadcasts to a different session
 // "type" (filetree, not main) than the live-reload connection uses, and a
 // second parallel WS connection isn't worth it yet for a lab page — see
@@ -267,8 +281,12 @@ async function refreshDocList(): Promise<void> {
     docListEl.textContent = `list failed: ${resp.msg}`;
     return;
   }
+  if (notebookInput.value.trim() !== notebook) return;
   docListEl.textContent = "";
+  listedNotebook = notebook;
+  knownDocPaths.clear();
   for (const doc of resp.data.docs) {
+    knownDocPaths.add(doc.path);
     const entry = document.createElement("div");
     entry.textContent = doc.title;
     entry.title = doc.path;
@@ -312,10 +330,15 @@ function wsUrl(): string {
 }
 
 function connectWs(): void {
+  const nextKey = currentNotebook ? `${kernelBase()}\n${currentNotebook}` : "";
+  if (nextKey && wsConnectionKey === nextKey && ws
+      && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
   window.clearTimeout(wsReconnectTimer);
-  ws?.close();
+  const previous = ws;
   ws = null;
-  if (!currentNotebook) return;
+  wsConnectionKey = nextKey;
+  previous?.close();
+  if (!nextKey) return;
 
   const socket = new WebSocket(wsUrl());
   ws = socket;
@@ -332,6 +355,7 @@ function connectWs(): void {
   socket.addEventListener("close", () => {
     if (ws !== socket) return; // superseded by a newer connection; don't reconnect on its behalf
     ws = null;
+    if (wsConnectionKey !== nextKey) return;
     wsReconnectTimer = window.setTimeout(connectWs, 2000);
   });
   socket.addEventListener("error", () => socket.close());
@@ -339,12 +363,50 @@ function connectWs(): void {
 
 async function reloadIfUnedited(): Promise<void> {
   if (!editor || !currentNotebook || !currentPath) return;
+  if (reloadInFlight) {
+    reloadAgainAfterFlight = true;
+    return;
+  }
   if (editor.getMarkdown() !== lastSyncedMarkdown) {
     setStatus("changed externally — you have unsaved edits here, not auto-reloading", true);
     return;
   }
+  const notebook = currentNotebook;
+  const path = currentPath;
+  const expected = lastSyncedMarkdown;
+  reloadInFlight = true;
   setStatus("reloading (changed externally)…");
-  await doLoad();
+  try {
+    const resp = await postJson<LoadDocResponse>("/api/noema/markdown/loadDoc", { notebook, path });
+    if (!editor || currentNotebook !== notebook || currentPath !== path) return;
+    if (0 !== resp.code || !resp.data) {
+      setStatus(`reload failed: ${resp.msg}`, true);
+      return;
+    }
+    if (editor.getMarkdown() !== expected || lastSyncedMarkdown !== expected) {
+      setStatus("changed externally — you have unsaved edits here, not auto-reloading", true);
+      return;
+    }
+    // A duplicate/self notification must be a strict no-op. Replacing an
+    // unchanged CM6 document rebuilds its visual widgets and was a major source
+    // of the apparent typing/deletion stalls in the Go-backed lab.
+    if (resp.data.markdown !== expected) {
+      editor.setMarkdown(resp.data.markdown, { history: "reset", preserveView: true });
+    }
+    lastSyncedMarkdown = resp.data.markdown;
+    currentDocID = docIDFromBlocks(resp.data.blocks);
+    setStatus(`reloaded, ${resp.data.blocks.length} block(s) with a persisted ID`);
+  } catch (err) {
+    if (currentNotebook === notebook && currentPath === path) {
+      setStatus(`reload error: ${String(err)}`, true);
+    }
+  } finally {
+    reloadInFlight = false;
+    if (reloadAgainAfterFlight) {
+      reloadAgainAfterFlight = false;
+      void reloadIfUnedited();
+    }
+  }
 }
 
 async function doSave(): Promise<void> {
@@ -353,15 +415,19 @@ async function doSave(): Promise<void> {
     saveAgainAfterFlight = true;
     return;
   }
+  const notebook = currentNotebook;
+  const path = currentPath;
+  const pathWasKnown = listedNotebook === notebook && knownDocPaths.has(path);
   const sent = editor.getMarkdown();
   saveInFlight = true;
   setStatus("saving…");
   try {
     const resp = await postJson<LoadDocResponse>("/api/noema/markdown/saveDoc", {
-      notebook: currentNotebook,
-      path: currentPath,
+      notebook,
+      path,
       markdown: sent,
     });
+    if (currentNotebook !== notebook || currentPath !== path) return;
     if (0 !== resp.code || !resp.data) {
       setStatus(`save failed: ${resp.msg}`, true);
       return;
@@ -371,13 +437,15 @@ async function doSave(): Promise<void> {
       if (resp.data.markdown !== sent) {
         editor.setMarkdown(resp.data.markdown, { history: "skip", preserveView: true });
       }
-      lastSyncedMarkdown = resp.data.markdown;
     }
+    lastSyncedMarkdown = resp.data.markdown;
     currentDocID = docIDFromBlocks(resp.data.blocks);
     setStatus(`saved (${resp.data.blocks.length} persisted block ID(s))`);
-    void refreshDocList(); // cheap; catches a brand-new path appearing in the sidebar
+    if (!pathWasKnown) void refreshDocList();
   } catch (err) {
-    setStatus(`save error: ${String(err)}`, true);
+    if (currentNotebook === notebook && currentPath === path) {
+      setStatus(`save error: ${String(err)}`, true);
+    }
   } finally {
     saveInFlight = false;
     if (saveAgainAfterFlight) {

@@ -148,12 +148,14 @@ describe("SiYuan-derived Electron desktop adapter", () => {
     expect(makefile).toContain("build/electron/$(APP_NAME).app");
     expect(makefile).toContain("prune-legacy-garbage build-web");
     expect(makefile).toContain("npm run build:desktop-shell");
+    expect(makefile).toMatch(/^install: build$/mu);
     expect(manifest.scripts["build:desktop"]).toContain("npm run build:aaronnote");
     expect(makefile).toContain("prune-legacy-garbage");
     expect(makefile).toContain("prune-desktop-stage");
     expect(makefile).toContain("clean-cache:");
     expect(makefile).toContain('"$(HOME)/Library/Caches/com.noema.desktop"');
     expect(makefile).toContain('"$(APP_DEST)" --link');
+    expect(makefile).not.toMatch(/^install-app:/mu);
     expect(makefile).not.toContain("LOCAL_APP_MODE");
     expect(makefile).not.toContain("NOEMA_PORTABLE");
     expect(makefile).not.toContain("npm run prepare:tauri");

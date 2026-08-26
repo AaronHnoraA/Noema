@@ -90,6 +90,40 @@ func TestCreateTodoSourceOwnsNewItemSemantics(t *testing.T) {
 	}
 }
 
+func TestParseDateValueCanonicalFastPathAndFallbacks(t *testing.T) {
+	location := time.FixedZone("AEST", 10*60*60)
+	originalLocation := time.Local
+	time.Local = location
+	t.Cleanup(func() { time.Local = originalLocation })
+	now := time.Date(2026, time.August, 25, 9, 30, 0, 0, location)
+	tests := []struct {
+		raw     string
+		want    string
+		hasTime bool
+	}{
+		{raw: "2026-08", want: "2026-08-01"},
+		{raw: "2026-08-26", want: "2026-08-26"},
+		{raw: "2026-08-26 9:05", want: "2026-08-26 09:05", hasTime: true},
+		{raw: "2026-08-26T19:05", want: "2026-08-26 19:05", hasTime: true},
+		{raw: "2026年8月26日", want: "2026-08-26"},
+		{raw: "8/26", want: "2026-08-26"},
+		{raw: "tomorrow", want: "2026-08-26"},
+	}
+	for _, test := range tests {
+		value, hasTime, ok := ParseDateValue(test.raw, now)
+		if !ok {
+			t.Fatalf("ParseDateValue(%q) failed", test.raw)
+		}
+		format := "2006-01-02"
+		if test.hasTime {
+			format += " 15:04"
+		}
+		if got := value.Format(format); got != test.want || hasTime != test.hasTime {
+			t.Fatalf("ParseDateValue(%q) = %q, hasTime=%v; want %q, %v", test.raw, got, hasTime, test.want, test.hasTime)
+		}
+	}
+}
+
 func TestSharedPlanningFixtures(t *testing.T) {
 	fixturePath := filepath.Join("..", "..", "..", "shared", "planning-fixtures.json")
 	raw, err := os.ReadFile(fixturePath)

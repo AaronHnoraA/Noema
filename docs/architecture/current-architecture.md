@@ -98,8 +98,13 @@ Electron 不在正文外再注入 tab/leaf/左/右/下 dock。Window Actions 的
 编辑画布尺寸。B3 组件装饰使用显式 surface 白名单，不能依据 `<aside>` 或 `-panel`
 后缀把 status HUD、References 等正文区域提升成卡片。
 
-`make build-web` 生成两宿主共同消费的 renderer；`make build` 先执行这一步，再组装
-standalone Noema.app。`make install` 只负责安装已经构建的 App，不另建 Emacs UI。
+`make build-web` 生成两宿主共同消费的 renderer；`make`/`make build` 先执行这一步，
+再组装 standalone Noema.app。`make install` 也先走同一条完整构建链，再事务安装 App，
+因此不会安装遗留 staging，也不会另建一份 Emacs UI。renderer 成功构建后会原子写入
+generation 回执；本地 Node host 监听该回执，并让正在运行的 App/xwidget/Appine 在保存
+本地修改后整页 reload。这样长期存活的 Emacs WebKit 页面不会继续执行旧 hashed bundle；
+EventSource 每次重连也会比较当前 generation，休眠或断线期间错过的构建不会遗失。未保存
+的 remote note 或 scratch 会阻止自动 reload，不能以更新为由丢失内容。
 
 ## Node host
 
@@ -114,6 +119,38 @@ web-host.mjs                    HTTP/SSE、静态资源、router composition
 
 HTTP handler 不再直接拥有 Jupyter、Assets、Session、Tasks、Filesystem、Prose、
 Emacs channel 表。Session manager 通过注入合法路径和原子写策略与 runtime 解耦。
+
+Node host 对 canonical note root 只保留协议与插件装配：Markdown 打开、CM6 ChangeSet
+CAS 保存、rich note catalog、planning/property 和 FTS5 都由其监督的 Go kernel 提供。
+`server/lib/kernel-markdown-provider.mjs` 只做 box/path 边界校验与 JSON 形状映射；
+Jupyter、Copilot、MCP 可以继续作为独立 Node 插件单向调用 kernel，不能成为编辑核心
+的反向依赖。
+
+编辑器只在打开响应明确声明 `incrementalSave` 时发送 ChangeSet。这样旧 host 或 kernel
+尚未 ready 时会安全回退全文，而不会把能力缺失误报成保存失败；canonical box ready
+后是一趟 Go UTF-16/CAS 保存。note root 外的 standalone Markdown 仍是明确兼容边界，
+由 Node 在保存队列内直接应用同一 UTF-16 ChangeSet、校验 SHA-256 baseVersion 并原子
+rename，因此大文件也不需要从 renderer 发送全文。
+
+Go rich catalog 把 title/id/kind/date/project/tags/aliases/summary、blocks、DOM targets、
+refs/backlinks 和 mtime/size 缓存在 immutable Markdown snapshot 及持久索引 cache 中。
+watch/save 每次只替换变化路径，再在内存重连关系；`notes:list`、completion、Agenda、
+Graph 和 related Knowledge 共用该投影。standalone 文件打开后仍扫描其本地 sibling root，
+不会错误复用 canonical note-root catalog。
+
+Agenda/Todo/Attribute View 的 canonical workspace projection 也只由 Go 生成。kernel 在一次
+request 中联结窄 note metadata、planning nodes 与可选 property blocks；Node 不再先 walk/stat/read
+全库，也不存在旧的 `readMany`/`readPropertyBlocks` 覆盖链。App/Emacs 启动时等待 Go 完成首次
+box 注册后才监听，并对 canonical core 声明 `requireGoCore`：后续 provider 缺失或 degraded 时
+失败关闭，不允许静默恢复第二套 Node note/planning/evaluator kernel。server reader 和 note root
+外 standalone 仍使用明确隔离的兼容 parser；它们不属于 Go box 数据面。
+
+Knowledge Dock 的 canonical virtual references 同样只由 Go 生成。kernel 从 additive persistent
+narrow metadata 与 immutable source snapshot 取得 id/title/aliases/resolved refs，在目标专用的
+Aho–Corasick pass 中排除 fenced/inline code、显式链接、自引用、已链接引用和歧义别名；catalog
+generation 变化会精确清空 10 分钟有界 LRU。Node 只转发窄 mention/path 并做路径验证，renderer
+再用已加载的 rich catalog 按 source id 解析可打开笔记，因此响应不重复携带整份 note row。
+只读 server reader 仍保留自身 Node scanner；desktop/Emacs 缺 Go endpoint 时 503，不回退读盘。
 
 ## Emacs
 

@@ -1041,3 +1041,230 @@ TOC 打开动作随后补齐当前位置跟随：根据编辑器 selection 选�
 项置于目录视口中央；该过程不改变正文 selection，也不抢焦点。两个定位/折叠边界测试
 已加入，最终 `make test` 为 2001 passed / 16 skipped，`make build`、`make install` 与
 安装版 smoke 再次通过。
+
+### 编辑保存与 idle 热路径收口（2026-08-26，当前工作树）
+
+对照思源原生 block transaction、Node 全文 CAS 与 CM6 `ChangeSet` 后，普通编辑保存已
+从“Node 向 Go 预读正文 + stat/read + 全文 CAS”的三次后端往返改为一笔 CM6 composed
+change-set + `baseVersion` 的 Go CAS。Go 新增 UTF-16 code-unit 到 UTF-8 byte 的严格
+单遍应用器，拒绝 surrogate 中点、越界、乱序、长度不符与 stale version；空内容覆盖
+保护也归 Go。成功只返回 mtime/size/version，只有冲突/拒绝才回传当前全文。保存进行中
+的新编辑保留为后缀，失败后与 in-flight 前缀重新 compose，坐标空间失效时才回退一次
+全文；keepalive、remote/server 与首次无版本文档继续使用兼容全文入口。
+
+Go 提交原语改为直接接收 `[]byte`，不再做 patched bytes → string → bytes 的整篇复制；
+增量成功响应不需要 block refs，因此同步路径也不再扫描 Noema projection 或运行 Lute。
+解析/SQL/blocktree 进入按文档合并的后台队列，`sql.FlushQueue`/shutdown 仍是严格 barrier，
+worker 解析出的 immutable tree 会种回对应 snapshot。4ms 合并窗避免后台解析与下一笔
+保存争抢 GC；大文档已有 ChangeSet 时不再等待最长 2.5s 的旧 `requestIdleCallback`，
+idle gate 只留给真实全文回退。约 60KB 的单字符请求从 61,644B 降至 287B（214.8x），
+512KB 从 524,492B 降至 291B（1802.4x）；Apple M2 Max 上 60KB/128-section 的真实
+atomic-write/CAS 响应约 0.39–0.42ms、215.8KB/167 allocs，后台索引不计入响应。
+
+聚焦 TypeScript 41/41、Go incremental/API/FTS5、并发 CAS 与 race 均通过；默认
+`go test ./...` 全树通过。精确 Node 26.5.0/npm 11.17.0 下 `make test` 为 205 files
+passed / 7 skipped、2005 tests passed / 16 skipped，`make build`、`make install` 与
+AGENTS.md 原样 packaged smoke 全过；smoke 报告 desktop/preload、54px、五项标题栏、
+owned/listening Go kernel。Emacs full-project link 和 7 个 shared asset links 均解析到
+canonical repository/`resources/`，retired lowercase path 缺席，`git diff --check`
+干净。终态边界按产品要求明确为单向依赖：Go kernel 自身零 Node 依赖，笔记/编辑/
+索引核心数据面只在 Go；Jupyter、Copilot、MCP 可作为独立可选 Node 插件调用 kernel，
+其故障不得影响核心编辑。下一步只移除 Node 中剩余的笔记业务实现与兼容转发。
+
+### 编辑打开与 idle 刷新收口（2026-08-26，当前工作树）
+
+继续按“核心 Go、可选 Node 插件单向调用 Go”的边界处理用户最能感知的打开与 idle。
+`loadDoc` 新增 source-only 投影：桌面/Emacs provider 明确传 `includeBlocks: false`，Go 从
+同一个 immutable snapshot 返回原始 Markdown、SHA-256 version、mtime 和 size，不再为了
+一个调用方会丢弃的 `blocks` 先做 Lute 全文解析；Node 也不再额外 `stat` 或重算全文摘要。
+兼容/MCP 调用省略该字段时仍默认返回 blocks，原协议未降级。约 60KB/128 段冷打开由
+5.66–6.25ms、12.31MB/56.7k allocations 降至 0.104–0.112ms、146KB/133 allocations，
+约 50–60 倍；打开正文仍然必须完整交给 CM6，省掉的是重复解析、重复 stat/hash，而
+不是引入第二套局部文档状态机。
+
+首屏 `bootstrap` 不再串行等待整库 notes/目录和无人消费的 templates 扫描。snippet 是
+编辑器可用契约的一部分：正文与缓存/小型 snippet catalog 并行读取，二者齐备后才安装
+CM6，避免首批输入看到空 completion；当前 1450 项真实 catalog 冷扫约 104ms、命中内存
+cache 约 0.055ms。App 配置、KaTeX 宏和正文/snippet 也改为并行取得，只在安装正文前等
+配置/宏完成；可选 LanguageTool 设置完全退出首屏关键路径。首次空 notes catalog 放到浏览器
+idle 窗口执行，但 1.5 秒 deadline 后必须运行，不能被连续输入无限饿死。普通切换笔记不再
+无条件重拉 notes list，外部变化继续由 kernel/host watcher 事件失效。增量自动保存的
+metadata-only 响应也不再触发全库路径重算、Knowledge Dock、本地图、Agenda、幻灯片和
+模式 UI 刷新；只有响应真正携带 notes/note 或 kind 时才刷新对应投影。
+
+Markdown 异步索引 barrier 改为严格的 channel 驱动：普通保存仍保留 4ms idle 合并窗；
+搜索、flush、关机等一致性读会立即打断延迟并等待 blocktree/SQL 入队完成。移除了
+200µs polling 和“5 秒后放弃一致性”的路径。增量保存仍为 0.404–0.419ms；两项 FTS5
+保存/并发 CAS 索引测试连续 20 轮及 race 通过，默认 `go test ./...` 全树通过；精确
+Node 26.5.0/npm 11.17.0 的 `make test` 为 205 files passed / 7 skipped、2008 tests
+passed / 16 skipped；snippet/启动/索引聚焦组 79/79 通过。
+
+本轮 `make build`、`make install` 与 AGENTS.md 原样 packaged smoke 同样通过；报告为
+`hostMode: desktop`、`preload: true`、`titlebarVisible: true`、54px，并包含 Back、
+Forward、Refresh、Editor actions、Window actions，Go kernel owned/listening。Emacs
+full-project link 与 7 个历史 asset link 仍全部解析到 canonical repository/`resources/`，
+retired lowercase path 缺席，smoke 进程树已退出，`git diff --check` 干净。
+
+### Go rich catalog 与 standalone 大文件保存修复（2026-08-26，当前工作树）
+
+用户在 `tests/synthetic_qc_note_5mb.md` 的 Appine 编辑现场暴露了一个能力边界回归：该文件
+位于 canonical `NOEMA_ROOT` 外，open 正确标为 standalone，但新 CM6 队列仍无条件发送
+ChangeSet；旧 host 只允许 Go-owned 文件增量保存，于是连续返回
+`Go kernel incremental Markdown persistence is unavailable`。现在 open/saved 协议显式携带
+`incrementalSave`，renderer 只在 host 声明能力后发增量；旧 host/启动过渡期安全回退全文，
+不再报 503。新 host 对 standalone 不把约 5MB 正文塞回 JSON，而是在原 per-file save
+queue 内按 JavaScript/CM6 原生 UTF-16 坐标严格应用 ChangeSet、校验 SHA-256 baseVersion、
+保留空覆盖保护和原子 rename；canonical note root 仍只走 Go CAS，不会静默降级到 Node。
+约 5.5MB、emoji/UTF-16、连续两次版本推进与外部修改冲突均有回归测试。
+
+原 idle 后首次 `notes:list` 虽已移出首屏，却仍会让 Node 对全库执行 walk、每文件
+stat/read、metadata/refs/backlinks/DOM target 重算，并额外扫描 renderer 不消费的非笔记
+files。Go 现新增 `/api/noema/markdown/catalog`：rich row 语义对齐 Node 的
+id/title/kind/date/group/source/project/aliases/summary/tags/inlineTags/blocks/refs/backlinks/
+roam/domTargets，meta summary、围栏、嵌套 Markdown label、wiki/roam/file refs、CRLF 与
+UTF-16 block offset 都有测试。投影挂在 immutable snapshot 上，并以原 cache schema 的
+可选字段持久化；升级不会使既有 planning/property cache 整体失效。save/watcher 只重算
+变化文件，关系只在内存重连。
+
+Node provider 现在只验证 Go 路径并映射旧 payload；canonical root 的 `notes:list`、
+`notes:index`、roam completion/index、Graph、Agenda planning metadata、related Knowledge
+和其他 `scanNotes()` 调用都消费 Go catalog。standalone 打开的 sibling catalog 仍保留
+Node 兼容扫描。500 篇带 metadata、链接和 DOM target 的同夹具测得：Node 冷 rich scan
+约 78.4ms；Go 冷源解析约 24.4ms，进程重启命中持久摘要约 9.1ms，进程内 warm 返回约
+0.18ms。此前 Node warm `notesIndexPayload` 仍需约 2.31ms 扫 auxiliary filesystem，这一
+往返现从 canonical 编辑 idle 路径移除。
+
+门禁：Go `go test ./...` 全树通过；精确 Node 26.5.0/npm 11.17.0 下 `make test` 为
+206 files passed / 7 skipped、2016 tests passed / 16 skipped；`make build` 与
+`make install` 成功。安装包 smoke 报告 `hostMode:desktop`、preload、54px、Back/Forward/
+Refresh/Editor actions/Window actions、41 workspace tags、102 个 kernel KaTeX macros，
+以及 owned/listening Go kernel。Emacs full-project link、7 个 shared asset links 与 retired
+lowercase path 规则复核通过，安装包进程树已退出。Node 中尚未迁移的 explicit structured
+structured Knowledge query 和 standalone 兼容实现仍是后续反向优化项；canonical virtual-reference
+正文扫描已由下节 Go 纵切接管。只读 server reader 继续保留隔离的 Node 实现；
+Jupyter/Copilot/MCP/kernel supervisor 按产品要求继续作为可选 Node 插件，不列入删除范围。
+
+### Go workspace projection 性能对比与 Node kernel 去重（2026-08-26，当前工作树）
+
+**原问题与删除判断**：Attribute View 的 canonical 正常路径仍残留一段迁移期混合内核：
+Node 先递归 `walk` 全库，对每篇 Markdown 做 `stat + readFile` 并解析 note/planning/property，
+随后再用两次 HTTP 分别取得 Go planning nodes 与 property blocks，最后把投影发回 Go evaluator。
+Agenda/Todo 也会先拿 rich catalog，再发一次 bulk planning。也就是说 Go 已拥有相同数据时，
+Node 仍固定重复文件发现、全文 I/O 和结构解析；kernel 瞬时失败时还会悄悄恢复 canonical
+Node parser，使 App/Emacs 实际存在两套核心语义。
+
+**修复思路**：Go 新增只读 `/api/noema/markdown/workspaceProjection`，在同一 box catalog 锁、
+同一 persistent cache decode 和同一 per-file stat/snapshot 上一次联结 planning 所需 note metadata、
+planning nodes 与可选 UUID property blocks。latency-sensitive note row 不携带 refs/backlinks/DOM/
+summary 等 Agenda 不消费的 rich 字段；snapshot 和 schema-1 additive persistent cache 都单独缓存这份
+窄投影。首次构建由“一类投影一遍 cache/stat/save”收敛成全类型一遍，进程内完整 map 则直接 clone，
+不再碰 persistent JSON 或文件系统。Node provider 只验证 box path、把相对路径映射为绝对路径；旧
+`readMany`/`readPropertyBlocks` bulk 方法和“Node 预读全文后以 Go 覆盖”实现已删除。
+
+**可复现基准**：Apple M2 Max，Go `darwin/arm64`，Node `26.5.0`。夹具固定为 500 篇 Markdown，
+每篇各含 meta id/title/tags/project、一条 todo 和一个 UUIDv7 property block。旧 Node 命令为
+`node scripts/benchmark-node-planning-projection.mjs 500 20`；它走已退休的 walk/stat/read/parse
+加既有 JS Attribute View response model，首轮为 cold，随后 20 轮取 OS-warm 分布。Go model 命令为
+`go test ./model -run '^$' -bench '^BenchmarkMarkdownWorkspaceProjection$' -benchmem -benchtime=3x -count=5`；
+`warm` 是进程内 snapshot/catalog，`restart-persistent` 每轮清进程内 catalog 但保留持久摘要，
+`cold-source` 同时删除持久摘要。另用
+`go test ./api -run '^$' -bench '^BenchmarkListMarkdownWorkspaceProjectionAPI$' -benchmem -benchtime=5x -count=3`
+计入 request decode、response JSON encode 与实际 wire payload。Node 数值含 JS evaluator，而 Go model
+数值不含 evaluator，因此真正接近宿主边界的是 Go API 行；所有原始数值仍完整保留，不混称端到端 UI。
+
+| 路径 | 原始结果（500 docs） | 相对旧 Node |
+| --- | ---: | ---: |
+| 旧 Node cold | 55.797ms | baseline |
+| 旧 Node OS-warm | min 27.890ms / median 28.577ms / p95 35.635ms | baseline |
+| Go model warm，5 次样本 | 0.058945 / 0.063806 / 0.059681 / 0.060722 / 0.065500ms | median 约 470.6x faster |
+| Go restart-persistent，5 次样本 | 9.186 / 9.030 / 8.985 / 9.036 / 9.289ms | median 比 Node warm 约 3.16x、比 Node cold 约 6.17x faster |
+| Go cold-source，5 次样本 | 20.688 / 20.709 / 19.441 / 19.499 / 19.910ms | median 比 Node cold 约 2.80x faster |
+| Go warm API（含 JSON） | 0.998–1.032ms，510,830 wire bytes，约 1.38MB/op、6043 allocs | 比 Node warm median 约 27.7x faster |
+
+**Node kernel 删除边界**：local App/Emacs configure 现在显式 `requireGoCore`；shared host 在 Go 首次
+`listening` 且 external Markdown box 注册完成前不开始监听。canonical root 的 Markdown open/save/
+catalog、planning/property projection、Agenda evaluator 与 Attribute View evaluator 缺能力或请求失败时
+统一 503/fail closed，不再落回 Node 业务内核。保留的 JS note/planning parser 只服务两个不与 Go box
+重叠的边界：只读 server reader，以及 canonical note root 外的 standalone sibling/edit compatibility。
+`web-host.mjs`、narrow provider、kernel supervisor 仍必须保留，因为它们是 App/Emacs 共用的协议宿主和
+Go 生命周期所有者；Jupyter/Copilot/MCP 继续作为独立 Node 插件。structured Knowledge 与 explicit
+virtual-reference 扫描尚无等价 Go structured API，仍列入下一阶段迁移，而不是伪装成已删除或擅自砍掉功能。
+
+**本阶段最终门禁（2026-08-26）**：Go `go test ./...` 全树通过；kernel supervisor、Markdown
+provider、planning provider、strict canonical boundary、standalone compatibility、Agenda/Attribute
+View 聚焦组为 6 files / 46 tests 全绿。精确 Node 26.5.0/npm 11.17.0 的 `make test` 最终为
+206 files passed / 7 skipped、2018 tests passed / 16 skipped；`make build` 与 `make install` 均成功，
+4015-module renderer、Go kernel 和 Electron shell 已重建并更新 `/Applications/Noema.app`。AGENTS.md
+原样 packaged smoke 报告 `hostMode:desktop`、`preload:true`、`titlebarVisible:true`、54px、Back/
+Forward/Refresh/Editor actions/Window actions、102 个 `kernel-katex-macros` 与 owned/listening Go kernel
+全绿，退出前 supervisor 正常关闭窗口与宿主。Emacs full-project link 指向 canonical repository，
+Markdown/TeX snippets、Noema/LaTeX/TeX templates、KaTeX macros 与 accepted-words 共 7 个历史链接
+全部解析到 `resources/`，retired lowercase project path 缺席。排除用户正在维护且早已记录的
+`tests/synthetic_qc_note_5mb.md` 尾随空格后，本阶段 `git diff --check` 干净。
+
+### Go virtual references 与 Node 全库正文扫描去重（2026-08-26，当前工作树）
+
+**原问题**：Knowledge Dock 打开 Mentions 时，local App/Emacs 虽已拿到 Go rich catalog，Node 仍会
+截取最多 5000 篇 note，对每篇重新 `stat + readFile`（单篇最多 8MB、总计最多 64MB），再在 JS
+清理 frontmatter/fence/inline code/link、为全库所有标题与别名编译 Aho–Corasick，最后只取当前
+target 的一项结果。10 分钟 cache 或 catalog generation 失效后重复整套 I/O/扫描；这是 canonical
+Go box 内最后一条明显的 Node 全文读取内核。
+
+**Go 修复与删除边界**：新增只读 `/api/noema/markdown/virtualReferences`。Go 为 virtual reference
+单独保存 narrow id/title/path/source/aliases/refs metadata，snapshot 与 schema-1 additive persistent
+cache 共享源身份；首次不再被迫构造 summary/DOM targets/blocks/backlinks。refs 在 Go 内按 rich
+catalog 同一 canonical reference 规则解析。扫描只为当前 target 的无歧义标题/别名编译 matcher，
+仍保持 NFC、case sensitivity、Unicode word boundary、重叠计数、snippet、self/linked/ambiguous
+排除与 5000 docs / 8MB each / 64MB total 界限。结果按 target/case 放入 16-entry、10 分钟 LRU，
+save/watcher/catalog generation 变化立即精确失效。常见无 fence/code/link 的 prose 先检查 literal
+opener，避免 Go regexp 对不可能命中的文档做三次完整 backtracking pass。
+
+local `web-host.mjs` 现在只调用 Go provider；endpoint 缺失统一 503，不再取得 knowledge index 后交给
+Node scanner。provider 不信任 Go absolute path：target 做 canonical box 校验，mention 只转发验证过的
+relative Markdown path。renderer 本来就按 sourceId 从已加载 catalog 解析 note，因此 Go 响应不再为
+每个 mention 重复编码整份 rich note row。Node `server/lib/virtual-references.mjs` 仅保留给隔离的只读
+server reader，不属于 App/Emacs canonical kernel，也没有删除 server 功能。
+
+**可复现基准**：Apple M2 Max，Go `darwin/arm64`，Node 26.5.0；500 篇 Markdown，每篇 title + alias，
+499 篇各出现目标 title/alias 64 次。旧 Node 命令：
+`node scripts/benchmark-node-virtual-references.mjs 500 10 30`。它预先持有 index，但每个 cold round
+清结果 cache，仍重新 stat/read/clean/scan 全库；warm 是其 structuredClone cache。Go 命令：
+`go test ./model -run '^$' -bench '^BenchmarkMarkdownVirtualReferences$' -benchmem -benchtime=3x -count=5`；
+`cold-target-scan` 只清 target result、保留同进程 snapshot/catalog，`restart-persistent` 同时清内存
+catalog/snapshot，`cold-source` 再删除持久窄 metadata。API 命令：
+`go test ./api -run '^$' -bench '^BenchmarkListMarkdownVirtualReferencesAPI$' -benchmem -benchtime=5x -count=3`，
+包含 request decode、完整 response JSON encode 与 wire bytes。Node cold 不含 index 构造，因此不拿它
+与 Go `cold-source` 做伪端到端倍率。
+
+| 路径 | 原始结果（500 docs / 499 mention sources） | 对比 |
+| --- | ---: | ---: |
+| 旧 Node cache-cold，10 次 | 50.411 / 42.241 / 35.412 / 41.411 / 38.577 / 39.951 / 39.029 / 33.661 / 33.975 / 34.877ms；median 39.029ms | baseline |
+| 旧 Node warm | min 0.698ms / median 0.767ms / p95 0.906ms | baseline |
+| Go cold-target-scan，5 次 | 24.456 / 24.511 / 24.542 / 25.187 / 24.547ms；约 13.1MB、17,129–17,140 allocs | median 1.59x faster；Go 最慢仍比 Node 最快约 1.34x faster |
+| Go warm-target，5 次 | 0.019778 / 0.018695 / 0.028653 / 0.023278 / 0.021875ms；73,856B、506 allocs | median 约 35.1x faster |
+| Go restart-persistent，5 次 | 41.842 / 39.830 / 41.164 / 41.977 / 41.655ms | 包含窄 catalog + snapshot 重建；落在 Node cold 分布内 |
+| Go cold-source，5 次 | 67.240 / 68.097 / 67.871 / 66.976 / 67.697ms | 同时构建持久 metadata；Node 行未包含对应 index 构造，不宣称倍率 |
+| Go warm API（含 JSON） | 0.261–0.311ms，median 0.284ms；210,453 wire bytes、约 508KB/op、547 allocs | 即使计入 HTTP JSON 仍比 Node warm function median 约 2.70x faster |
+
+**收尾门禁**：virtual-reference 语义/model/API/provider/路径逃逸/Knowledge Dock 聚焦组为
+5 files / 27 tests 全通过，`go test ./...` 全通过；完整 `make test` 为 206 files passed、7 skipped，
+2020 tests passed、16 skipped。`make build` 与 `make install` 均成功，安装后的
+`NOEMA_DESKTOP_SMOKE=1 /Applications/Noema.app/Contents/MacOS/Electron` 报告
+`hostMode: "desktop"`、`preload: true`、`titlebarVisible: true`、54px title bar、Back/Forward/Refresh/
+Editor actions/Window actions 全部存在，Go kernel 为 `listening`，并正常 beforeQuit/windowClosed。
+Emacs full-project link 与 7 个 shared asset links 全部指向当前仓库/`resources/`，retired lowercase
+`lisp/roam/aaronnote` 缺席。排除用户已有的 `tests/synthetic_qc_note_5mb.md:2982` 尾随空格后，
+`git diff --check` 干净。按用户要求，本波到此暂停，不继续展开 structured Knowledge query。
+
+**暂停后的性能待办（不在本波实施）**：
+
+- 将 structured Knowledge 的 `tag/title/repo/namespace/path/kind/linksto/is` 过滤、related ranking、
+  facets 与 typo suggestion 逐项翻译为 Go；先建立 shared fixtures 与 Node/Go differential benchmark，
+  等所有查询语义和排序完全对齐后再删除 local Node evaluator。普通 lexical query 已走 Go FTS5，
+  不重复迁移。
+- 复核 note root 外 standalone sibling/edit compatibility 是否值得做独立 Go transient box；只有能在
+  不污染 canonical box registry、且 5MB 编辑/打开基准明确获益时才迁移。只读 server reader 可长期
+  保留 Node，不把部署场景误算为 desktop kernel 重叠。
+- virtual references 若未来 workspace 超过当前 64MB 扫描上限，再评估按 snapshot generation 维护
+  per-document normalized prose/token cache，避免扩大上限后线性复制；先以真实大库 profile 为准，
+  不提前增加另一套索引状态。

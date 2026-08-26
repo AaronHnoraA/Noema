@@ -202,6 +202,7 @@ import {
 import { installActiveCoreReconnect } from "./active-core-reconnect.ts";
 import { noteAutoSaveEnabled } from "./save-policy.ts";
 import { SaveDrain } from "./save-drain.ts";
+import { EditorSaveChangeTracker, type EditorSaveChangeToken } from "./editor-save-changes.ts";
 import {
   installNoemaThemeRuntime,
   loadNoemaAppConfig,
@@ -209,7 +210,11 @@ import {
 import { wikiCompletionSnippets, wikiLinkCompletionContext } from "./wiki-completion.ts";
 import { createLinkPreviewController } from "./link-preview.ts";
 import { createKnowledgeSearch } from "./knowledge-search.ts";
-import { currentNoteFromIndex } from "./note-index.ts";
+import {
+  currentNoteFromIndex,
+  openedNoteNeedsIndexReload,
+  payloadUpdatesNoteIndex,
+} from "./note-index.ts";
 import {
   createDesktopKnowledgeDock,
   type DesktopKnowledgeDock,
@@ -956,12 +961,15 @@ let currentTitle = "";
 let currentClient = "";
 let currentKind = "";
 let currentStandalone = false;
+let currentIncrementalSave = false;
 let currentRemote = false;
 let currentReadOnly = initialReadOnly;
 let currentMtimeMs = 0;
 let currentVersion = "";
 let revision = 0;
 let savedRevision = 0;
+const editorSaveChanges = new EditorSaveChangeTracker();
+let forceFullEditorSave = false;
 // Unlike the document-local revision, this must never reset when a note is
 // reopened. The host uses it to reject genuinely out-of-order writes from the
 // same browser client.
@@ -1002,6 +1010,7 @@ let restoringNavigationBack = false;
 let restoringNavigationForward = false;
 let snippets: SnippetSummary[] = [];
 let notes: NoteSummary[] = [];
+let notesIndexLoaded = false;
 let pathSuggestions: string[] = [];
 let currentRelationshipSource = "";
 let desktopKnowledgeDock: DesktopKnowledgeDock | null = null;
@@ -1014,6 +1023,7 @@ let pendingNotesRefresh = false;
 let wikiIndexCache: WikiIndex | null = null;
 let wikiIndexPromise: Promise<WikiIndex> | null = null;
 const notesRefreshTimer = new CoalescedTimer(500);
+let initialNotesIdleHandle = 0;
 // Ephemeral request-level cache for completions — NOT a roam business cache.
 // Holds results only for the duration of the current completion session (same
 // context key). Discarded as soon as the context key changes.
@@ -1555,6 +1565,109 @@ const editor = createEditor(host, {
     void flushCursorPosition();
   },
 });
+editor.onViewUpdate((update) => {
+  if (update.docChanged) editorSaveChanges.record(update.changes);
+});
+editor.onDocumentReset(() => {
+  editorSaveChanges.reset();
+  forceFullEditorSave = false;
+});
+
+type DesktopEditorPerfResult = {
+  iterations: number;
+  insertMs: number;
+  deleteMs: number;
+  insertP95Ms: number;
+  deleteP95Ms: number;
+  maxInsertMs: number;
+  maxDeleteMs: number;
+  longTaskCount: number;
+  longTaskMs: number;
+  contentRestored: boolean;
+};
+
+if (initialParams.get("desktopPerfSmoke") === "1") {
+  (
+    window as Window & {
+      __noemaRunEditorPerfProbe?: () => Promise<DesktopEditorPerfResult>;
+    }
+  ).__noemaRunEditorPerfProbe = async () => {
+    const iterations = 500;
+    const original = editor.view.state.doc.toString();
+    const originalSelection = editor.view.state.selection.main;
+    const longTasks: number[] = [];
+    const observer =
+      typeof PerformanceObserver !== "undefined"
+        ? new PerformanceObserver((list) => {
+            for (const entry of list.getEntries()) longTasks.push(entry.duration);
+          })
+        : null;
+    try {
+      observer?.observe({ entryTypes: ["longtask"] });
+    } catch {
+      // Long Tasks is not available in every Chromium execution mode.
+    }
+
+    const frame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    const percentile95 = (samples: number[]) => {
+      const sorted = [...samples].sort((a, b) => a - b);
+      return sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)] || 0;
+    };
+    const selection = editor.view.state.doc.length;
+    editor.view.dispatch({ selection: { anchor: selection } });
+    await frame();
+
+    // Warm the update/decorations path without including first-use module and
+    // font work in the measured run.
+    for (let i = 0; i < 20; i += 1) editor.insertText("x");
+    for (let i = 0; i < 20; i += 1) editor.insertText("", 1);
+    await frame();
+
+    const insertSamples: number[] = [];
+    const insertStart = performance.now();
+    for (let i = 0; i < iterations; i += 1) {
+      const started = performance.now();
+      editor.insertText("x");
+      insertSamples.push(performance.now() - started);
+    }
+    await frame();
+    const insertMs = performance.now() - insertStart;
+
+    const deleteSamples: number[] = [];
+    const deleteStart = performance.now();
+    for (let i = 0; i < iterations; i += 1) {
+      const started = performance.now();
+      editor.insertText("", 1);
+      deleteSamples.push(performance.now() - started);
+    }
+    await frame();
+    const deleteMs = performance.now() - deleteStart;
+
+    editor.view.dispatch({
+      changes: { from: 0, to: editor.view.state.doc.length, insert: original },
+      selection: {
+        anchor: Math.min(originalSelection.anchor, original.length),
+        head: Math.min(originalSelection.head, original.length),
+      },
+    });
+    await frame();
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    observer?.disconnect();
+
+    return {
+      iterations,
+      insertMs,
+      deleteMs,
+      insertP95Ms: percentile95(insertSamples),
+      deleteP95Ms: percentile95(deleteSamples),
+      maxInsertMs: Math.max(...insertSamples),
+      maxDeleteMs: Math.max(...deleteSamples),
+      longTaskCount: longTasks.length,
+      longTaskMs: longTasks.reduce((sum, duration) => sum + duration, 0),
+      contentRestored: editor.view.state.doc.toString() === original,
+    };
+  };
+}
 
 document.body.dataset.headingNumbers = headingNumberingPreference.enabled ? "true" : "false";
 
@@ -4396,10 +4509,18 @@ function closeJupyterPanel(): void {
   jupyterButton.setAttribute("aria-expanded", "false");
 }
 
-function saveBody() {
+function saveBody(changeToken: EditorSaveChangeToken | null = null, forceFull = false) {
+  const incremental =
+    !forceFull &&
+    !forceFullEditorSave &&
+    !serverMode() &&
+    !currentRemote &&
+    currentIncrementalSave &&
+    Boolean(currentVersion) &&
+    Boolean(changeToken);
   return {
     file: currentFile,
-    content: editor.getMarkdown(),
+    ...(incremental ? { changes: changeToken!.payload } : { content: editor.getMarkdown() }),
     mode: editor.isSourceMode() ? "source" : "markdown",
     clientId,
     seq: ++saveSequence,
@@ -4409,11 +4530,28 @@ function saveBody() {
   };
 }
 
+function incrementalEditorSaveReady(): boolean {
+  return (
+    !forceFullEditorSave &&
+    !serverMode() &&
+    !currentRemote &&
+    currentIncrementalSave &&
+    Boolean(currentVersion) &&
+    editorSaveChanges.hasPending()
+  );
+}
+
 type EditorSaveSnapshot = {
   file: string;
   revision: number;
+  changeToken: EditorSaveChangeToken | null;
   body: ReturnType<typeof saveBody>;
 };
+
+function restoreEditorSaveChanges(snapshot: EditorSaveSnapshot): void {
+  if (!snapshot.changeToken || snapshot.file !== currentFile) return;
+  if (!editorSaveChanges.restore(snapshot.changeToken)) forceFullEditorSave = true;
+}
 
 const saveDrain = new SaveDrain<EditorSaveSnapshot, Awaited<ReturnType<typeof api.notes.save>>>({
   capture() {
@@ -4421,10 +4559,12 @@ const saveDrain = new SaveDrain<EditorSaveSnapshot, Awaited<ReturnType<typeof ap
     desktopSaveConflict = false;
     updateTitle();
     setStatus("Saving...");
+    const changeToken = editorSaveChanges.capture();
     return {
       file: currentFile,
       revision,
-      body: saveBody(),
+      changeToken,
+      body: saveBody(changeToken),
     };
   },
   write(snapshot) {
@@ -4436,23 +4576,33 @@ const saveDrain = new SaveDrain<EditorSaveSnapshot, Awaited<ReturnType<typeof ap
     // guard for host-driven opens.
     if (snapshot.file !== currentFile) return false;
     if (result.stale) {
+      restoreEditorSaveChanges(snapshot);
       setStatus("Saving newer edit...");
       return true;
     }
     if (result.conflict) {
+      restoreEditorSaveChanges(snapshot);
       desktopSaveConflict = true;
       setStatus(result.message || `Save conflict; reopen from ${sourceEditorName()}`);
       return false;
     }
+    if (result.ok === false) {
+      restoreEditorSaveChanges(snapshot);
+      setStatus(result.message || "Save rejected");
+      return false;
+    }
     currentMtimeMs = Number(result.mtimeMs) || currentMtimeMs;
     currentVersion = String(result.version || currentVersion);
+    if (typeof result.incrementalSave === "boolean") currentIncrementalSave = result.incrementalSave;
+    forceFullEditorSave = false;
     applyIndexPayload(result);
     savedRevision = Math.max(savedRevision, snapshot.revision);
     updateTitle();
     setStatus(revision === savedRevision ? "Saved" : "Saving newer edit...");
     return true;
   },
-  fail(error) {
+  fail(error, snapshot) {
+    restoreEditorSaveChanges(snapshot);
     setStatus(error instanceof Error ? error.message : "Save failed");
   },
   active(value) {
@@ -4469,7 +4619,7 @@ function savePendingNoteKeepalive(): void {
   const key = `${currentFile}:${revision}`;
   if (key === keepaliveSaveKey) return;
   keepaliveSaveKey = key;
-  api.notes.saveKeepalive(saveBody());
+  api.notes.saveKeepalive(saveBody(null, true));
 }
 
 async function save(commitLiveTex = true): Promise<void> {
@@ -4500,7 +4650,17 @@ function scheduleSave(): void {
   setStatus("Edited");
   saveTimer = window.setTimeout(() => {
     saveTimer = 0;
-    if (editor.getMarkdownLength() < LARGE_DOCUMENT_CHARS || !("requestIdleCallback" in window)) {
+    // The large-document idle gate existed to keep whole-document
+    // serialization and JSON encoding away from active typing. Normal desktop
+    // and Emacs saves now send only a composed CM6 ChangeSet, so delaying that
+    // tiny request can make the editor appear unsaved for another 2.5 seconds
+    // without reducing main-thread work. Keep the gate only for a real
+    // full-source compatibility/recovery save.
+    if (
+      incrementalEditorSaveReady() ||
+      editor.getMarkdownLength() < LARGE_DOCUMENT_CHARS ||
+      !("requestIdleCallback" in window)
+    ) {
       void save(false);
       return;
     }
@@ -4515,6 +4675,39 @@ function scheduleSave(): void {
     }, { timeout: 2500 });
   }, 650);
 }
+
+let rendererReloadPending = false;
+window.AaronnotePrepareRendererReload = async () => {
+  if (rendererReloadPending) return false;
+  rendererReloadPending = true;
+  try {
+    if (!currentFile && revision !== savedRevision && editor.getMarkdownLength() > 0) {
+      setStatus("Renderer updated — preserve the scratch text, then reopen Noema");
+      rendererReloadPending = false;
+      return false;
+    }
+    if (!currentReadOnly && currentFile && revision !== savedRevision) {
+      if (!noteAutoSaveEnabled(currentRemote)) {
+        setStatus("Renderer updated — save the remote note, then reopen Noema");
+        rendererReloadPending = false;
+        return false;
+      }
+      await save();
+      if (revision !== savedRevision) {
+        setStatus("Renderer updated — reload deferred until the note is saved");
+        rendererReloadPending = false;
+        return false;
+      }
+    }
+    await flushCursorPosition();
+    setStatus("Renderer updated — reloading…");
+    return true;
+  } catch (error) {
+    rendererReloadPending = false;
+    setStatus(error instanceof Error ? error.message : "Renderer reload failed");
+    return false;
+  }
+};
 
 function cursorPositionKey(position: Pick<CursorPosition, "file" | "client" | "mode" | "from" | "to" | "scrollY">): string {
   return [
@@ -4733,6 +4926,7 @@ function applyOpenedNote(
   currentTitle = String(opened.title || "").trim();
   currentKind = String(opened.kind || "");
   currentStandalone = Boolean(opened.standalone);
+  currentIncrementalSave = opened.incrementalSave === true;
   currentRemote = Boolean(opened.remote);
   currentReadOnly = initialReadOnly;
   applyReadOnlyUi();
@@ -4836,11 +5030,15 @@ function applyOpenedNote(
   window.dispatchEvent(new CustomEvent("aaronnote:note-opened", {
     detail: { file: currentFile, title: currentTitle },
   }));
-  if (reloadNoteIndex) void reloadNotes(false);
-  if (!Array.isArray(opened.snippets) && snippets.length === 0) void reloadSnippets();
+  if (reloadNoteIndex && openedNoteNeedsIndexReload(opened, notesIndexLoaded)) scheduleInitialNoteIndexReload();
+  if (!Array.isArray(opened.snippets) && snippets.length === 0) void reloadSnippets(true);
 }
 
-async function openFile(file?: string, bootstrap = false): Promise<void> {
+async function openFile(
+  file?: string,
+  bootstrap = false,
+  beforeApply?: Promise<unknown>,
+): Promise<void> {
   const target = file || undefined;
   try {
     if (!commitActiveLiveTexForBoundary(false)) return;
@@ -4857,6 +5055,10 @@ async function openFile(file?: string, bootstrap = false): Promise<void> {
       ? api.notes.open(target)
       : api.notes.bootstrap(target);
     const [opened, positions] = await Promise.all([openPromise, loadCursorPositions()]);
+    // Initial bootstrap may fetch the document while renderer prerequisites
+    // load.  Gate only installation so I/O overlaps without a KaTeX/theme
+    // first-paint flash.
+    if (beforeApply) await beforeApply;
     applyOpenedNote(opened, target, positions);
   } catch (error) {
     applyingContent = false;
@@ -4938,14 +5140,14 @@ async function refreshPendingExternalSaveOnFocus(): Promise<void> {
   }
 }
 
-async function openInitialFile(): Promise<void> {
+async function openInitialFile(beforeApply?: Promise<unknown>): Promise<void> {
   const file = initialParams.get("file") || undefined;
   currentClient = initialParams.get("client") || "";
   pendingOpenHash = initialParams.get("hash") || "";
   pendingOpenDomTarget = initialParams.get("dom") || "";
   currentReadOnly = initialReadOnly;
   applyReadOnlyUi();
-  await openFile(file, true);
+  await openFile(file, true, beforeApply);
 }
 
 let copilotTexContextCache: {
@@ -5452,29 +5654,38 @@ function encodeMarkdownHrefPath(path: string): string {
 }
 
 function applyIndexPayload(payload: { notes?: NoteSummary[]; note?: NoteSummary; kind?: string; standalone?: boolean; indexVersion?: number; relationshipSource?: string }): void {
+  const indexChanged = payloadUpdatesNoteIndex(payload);
+  const presentationChanged = typeof payload.kind === "string";
   if (typeof payload.indexVersion === "number" && payload.indexVersion > lastNotesIndexVersion) {
     lastNotesIndexVersion = payload.indexVersion;
   }
-  if (Array.isArray(payload.notes)) notes = payload.notes;
+  if (Array.isArray(payload.notes)) {
+    notes = payload.notes;
+    notesIndexLoaded = true;
+  }
   else if (payload.note?.file) {
     const index = notes.findIndex((note) => note.file === payload.note?.file);
     if (index >= 0) notes = notes.map((note, i) => i === index ? payload.note! : note);
     else notes = [...notes, payload.note];
   }
-  if (typeof payload.kind === "string") currentKind = payload.kind;
+  if (presentationChanged) currentKind = payload.kind!;
   if (typeof payload.standalone === "boolean") currentStandalone = payload.standalone;
   if (typeof payload.relationshipSource === "string") currentRelationshipSource = payload.relationshipSource;
-  pathSuggestions = [...new Set(notes
-    .flatMap((note) => [note.path, note.file, note.link])
-    .map((value) => String(value || "").trim())
-    .filter(Boolean))]
-    .sort((a, b) => a.localeCompare(b));
-  scheduleAssistUpdate({ toc: true });
-  slideDeck?.sync(currentKind);
-  renderModeToggleLabel(vim.mode());
-  localGraphPanel.invalidate();
-  desktopKnowledgeDock?.refresh();
-  void refreshAgendaView();
+  if (indexChanged) {
+    pathSuggestions = [...new Set(notes
+      .flatMap((note) => [note.path, note.file, note.link])
+      .map((value) => String(value || "").trim())
+      .filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b));
+    scheduleAssistUpdate({ toc: true });
+    localGraphPanel.invalidate();
+    desktopKnowledgeDock?.refresh();
+    void refreshAgendaView();
+  }
+  if (presentationChanged) {
+    slideDeck?.sync(currentKind);
+    renderModeToggleLabel(vim.mode());
+  }
 }
 
 async function reloadNotes(force = false): Promise<void> {
@@ -5484,6 +5695,25 @@ async function reloadNotes(force = false): Promise<void> {
     void loadPathSuggestions();
   } catch (error) {
     if (force) setStatus(error instanceof Error ? error.message : "Note index failed");
+  }
+}
+
+function scheduleInitialNoteIndexReload(): void {
+  if (initialNotesIdleHandle || notesIndexLoaded) return;
+  const run = (deadline?: IdleDeadline) => {
+    initialNotesIdleHandle = 0;
+    if (notesIndexLoaded) return;
+    const scheduling = navigator as Navigator & { scheduling?: { isInputPending?: () => boolean } };
+    if (!deadline?.didTimeout && scheduling.scheduling?.isInputPending?.()) {
+      scheduleInitialNoteIndexReload();
+      return;
+    }
+    void reloadNotes(false);
+  };
+  if ("requestIdleCallback" in window) {
+    initialNotesIdleHandle = window.requestIdleCallback(run, { timeout: 1500 });
+  } else {
+    initialNotesIdleHandle = window.setTimeout(() => run(), 0);
   }
 }
 
@@ -10303,8 +10533,8 @@ function updateFloatingToc(): void {
   desktopKnowledgeDock?.refresh();
 }
 
-async function reloadSnippets(): Promise<void> {
-  setStatus("Reloading snippets");
+async function reloadSnippets(silent = false): Promise<void> {
+  if (!silent) setStatus("Reloading snippets");
   try {
     const msg = await api.notes.snippets();
     if (!Array.isArray(msg.snippets)) {
@@ -10315,9 +10545,9 @@ async function reloadSnippets(): Promise<void> {
     snippets = withBuiltinSnippets(msg.snippets);
     hideSnippetPopup();
     scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true, toc: true });
-    setStatus(`Reloaded ${snippets.length} snippets`);
+    if (!silent) setStatus(`Reloaded ${snippets.length} snippets`);
   } catch (error) {
-    setStatus(error instanceof Error ? error.message : "Snippet reload failed");
+    if (!silent) setStatus(error instanceof Error ? error.message : "Snippet reload failed");
   }
 }
 
@@ -11528,22 +11758,26 @@ window.addEventListener("popstate", () => {
   void restoreNavigationBack();
 });
 
-// Install the global KaTeX macros before the first note renders so the initial
-// paint already uses them; failures degrade to plain KaTeX rather than blocking.
+// Fetch the note/snippets, renderer config and KaTeX macros concurrently.  The
+// note is installed only after config/macros settle, so its first paint is
+// stable, while optional LanguageTool settings never gate editor readiness.
 void (async () => {
-  try {
-    const config = await loadNoemaAppConfig();
-    if (config.diagnostics[0]) setStatus(config.diagnostics[0].message);
-  } catch (error) {
-    setStatus(`Settings failed: ${error instanceof Error ? error.message : String(error)}`);
-  }
-  const languageToolReady = loadLanguageToolConfiguration();
-  try {
-    const result = await api.config.katexMacros();
-    if (result?.macros) setKatexMacros(result.macros);
-  } catch (_) {
-    // Macros are optional.
-  }
-  await languageToolReady;
-  await openInitialFile();
+  const configReady = (async () => {
+    try {
+      const config = await loadNoemaAppConfig();
+      if (config.diagnostics[0]) setStatus(config.diagnostics[0].message);
+    } catch (error) {
+      setStatus(`Settings failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  })();
+  const macrosReady = (async () => {
+    try {
+      const result = await api.config.katexMacros();
+      if (result?.macros) setKatexMacros(result.macros);
+    } catch (_) {
+      // Macros are optional.
+    }
+  })();
+  void loadLanguageToolConfiguration();
+  await openInitialFile(Promise.all([configReady, macrosReady]));
 })();

@@ -16,7 +16,21 @@ afterEach(async () => {
 });
 
 describe("production todo/agenda kernel planning projection", () => {
-  test("uses bulk Go nodes while retaining the established Node response model", async () => {
+  test("does not revive the canonical Node planning kernel when Go is unavailable", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "noema-required-go-planning-"));
+    const notes = join(workspace, "notes");
+    const file = join(notes, "project.md");
+    roots.push(workspace);
+    await mkdir(notes, { recursive: true });
+    await writeFile(file, "# Project\n\n@@todo [Node fallback must stay retired]\n", "utf8");
+    configure({ root: notes, workspaceRoot: workspace, stateRoot: join(workspace, "state"), requireGoCore: true });
+    configurePlanningProvider(null);
+
+    await expect(buildAttributeView({ file, source: "columns: text" }))
+      .rejects.toMatchObject({ statusCode: 503 });
+  });
+
+  test("uses the joined Go workspace projection while retaining the host response model", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "noema-kernel-agenda-"));
     const notes = join(workspace, "notes");
     const file = join(notes, "project.md");
@@ -25,8 +39,8 @@ describe("production todo/agenda kernel planning projection", () => {
     await writeFile(file, "# Project\n\n@@todo [disk parser must not win]\n\nDisk block {#0198fc34-7b32-7a11-8cb4-6c40e3b33d68 status=disk}\n", "utf8");
     configure({ root: notes, workspaceRoot: workspace, stateRoot: join(workspace, "state") });
 
-    let bulkReads = 0;
     let singleReads = 0;
+    let workspaceReads = 0;
     let evaluations = 0;
     let attributeEvaluations = 0;
     let attributeRequest: any = null;
@@ -38,19 +52,21 @@ describe("production todo/agenda kernel planning projection", () => {
     };
     configurePlanningProvider({
       owns(candidate: string) { return candidate === file; },
-      async read() { singleReads++; return { file, nodes: [node] }; },
-      async readMany(files: string[]) { bulkReads++; return files.map((candidate) => ({ file: candidate, nodes: [node] })); },
-      async readPropertyBlocks(files: string[]) {
-        return files.map((candidate) => ({
-          file: candidate,
-          duplicateDefinitionIds: [],
-          blocks: [{
+      async workspaceProjection({ includeProperties = false } = {}) {
+        workspaceReads++;
+        return { documents: [{
+          file, path: "/project.md", mtimeMs: 123,
+          note: { id: "project", key: "project", title: "Project", file, path: "project.md", project: "Noema", mtimeMs: 123 },
+          nodes: [node],
+          blocks: includeProperties ? [{
             canonicalId: "0198fc34-7b32-7a11-8cb4-6c40e3b33d68",
             line: 5, index: 48, kind: "block", text: "kernel-owned block",
             properties: { status: "draft", owner: "Go" },
-          }],
-        }));
+          }] : [],
+          duplicateDefinitionIds: [],
+        }] };
       },
+      async read() { singleReads++; return { file, nodes: [node] }; },
       async evaluateAgenda(todos: any[], _todayMs: number, options: any) {
         evaluations++;
         return {
@@ -87,7 +103,6 @@ describe("production todo/agenda kernel planning projection", () => {
     expect(agenda.logByDay).toEqual({ "2026-08-25": 1 });
     expect(agenda.lints).toEqual(expect.arrayContaining([{ kind: "kernel-gantt", message: "computed by Go" }]));
     expect(agenda.lints).toEqual(expect.arrayContaining([{ kind: "kernel-clock", message: "computed by Go" }]));
-    expect(bulkReads).toBeGreaterThanOrEqual(2);
     expect(singleReads).toBe(0);
     expect(evaluations).toBe(1);
 
@@ -99,6 +114,7 @@ describe("production todo/agenda kernel planning projection", () => {
     expect(attributeRequest.items).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: "prose", text: "kernel-owned block", status: "draft", canon: { status: "draft", owner: "Go" } }),
     ]));
+    expect(workspaceReads).toBeGreaterThanOrEqual(3);
     expect(attributeEvaluations).toBe(1);
   });
 });

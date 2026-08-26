@@ -10,7 +10,7 @@ import { readNote } from "../server/lib/index.mjs";
 // @ts-ignore The server is a Node ESM module outside the TS app graph.
 import { saveNote } from "../server/lib/save.mjs";
 // @ts-ignore Runtime path operations are Node ESM outside the TS graph.
-import { createNode, duplicateManagedFile, moveManagedPath, renameManagedPath, updateCurrentNoteMeta } from "../server/lib/runtime.mjs";
+import { bootstrapNote, createNode, duplicateManagedFile, moveManagedPath, renameManagedPath, scanNotes, updateCurrentNoteMeta } from "../server/lib/runtime.mjs";
 
 const roots: string[] = [];
 
@@ -20,7 +20,265 @@ afterEach(async () => {
 });
 
 describe("server facade with desktop kernel persistence", () => {
-  test("keeps Node save policy while routing source reads and writes through the provider", async () => {
+  test("requires the Go core for canonical notes while preserving standalone compatibility", async () => {
+    const root = await mkdtemp(join(tmpdir(), "noema-required-go-core-"));
+    const notes = join(root, "notes");
+    const canonical = join(notes, "canonical.md");
+    const standalone = join(root, "standalone.md");
+    roots.push(root);
+    await mkdir(notes, { recursive: true });
+    await Promise.all([
+      writeFile(canonical, "# Canonical\n", "utf8"),
+      writeFile(standalone, "# Standalone\n", "utf8"),
+    ]);
+    configure({ root: notes, workspaceRoot: root, stateRoot: join(root, "state"), requireGoCore: true });
+    configureMarkdownFileProvider(null);
+
+    await expect(readNote(canonical)).rejects.toMatchObject({ statusCode: 503 });
+    await expect(saveNote({ file: canonical, content: "# Must not write\n", force: true })).rejects.toMatchObject({ statusCode: 503 });
+    await expect(scanNotes()).rejects.toMatchObject({ statusCode: 503 });
+    expect(await readFile(canonical, "utf8")).toBe("# Canonical\n");
+
+    const opened = await readNote(standalone) as { standalone?: boolean; incrementalSave?: boolean };
+    expect(opened).toMatchObject({ standalone: true, incrementalSave: true });
+    await expect(saveNote({ file: standalone, content: "# Standalone saved\n", force: true }))
+      .resolves.toMatchObject({ ok: true, standalone: true });
+    expect(await readFile(standalone, "utf8")).toBe("# Standalone saved\n");
+  });
+
+  test("delegates the canonical note scan to the Go rich catalog", async () => {
+    const root = await mkdtemp(join(tmpdir(), "noema-kernel-catalog-"));
+    const notes = join(root, "notes");
+    roots.push(root);
+    await mkdir(notes, { recursive: true });
+    await writeFile(join(notes, "disk.md"), "# Disk note that Node must not parse\n", "utf8");
+    configure({ root: notes, workspaceRoot: root, pluginRoot: join(root, "plugin") });
+    let calls = 0;
+    configureMarkdownFileProvider({
+      owns() { return true; },
+      async catalog() {
+        calls++;
+        return {
+          notes: [{
+            key: "go-note", id: "go-note", title: "From Go",
+            file: join(notes, "go.md"), path: "go.md", link: "go.md",
+            tags: [], inlineTags: [], blocks: [], refs: [], backlinks: [], aliases: [], domTargets: [],
+            roam: true, standalone: false,
+          }],
+        };
+      },
+    });
+
+    await expect(scanNotes()).resolves.toEqual([
+      expect.objectContaining({ id: "go-note", title: "From Go" }),
+    ]);
+    await expect(scanNotes()).resolves.toEqual([
+      expect.objectContaining({ id: "go-note", title: "From Go" }),
+    ]);
+    expect(calls).toBe(1);
+  });
+
+  test("retains the local sibling catalog for a standalone Markdown file", async () => {
+    const root = await mkdtemp(join(tmpdir(), "noema-standalone-catalog-"));
+    const notes = join(root, "notes");
+    const standaloneRoot = join(root, "project");
+    const standalone = join(standaloneRoot, "standalone.md");
+    roots.push(root);
+    await mkdir(notes, { recursive: true });
+    await mkdir(standaloneRoot, { recursive: true });
+    await writeFile(standalone, "# Standalone\n", "utf8");
+    await writeFile(join(standaloneRoot, "sibling.md"), "# Sibling\n", "utf8");
+    configure({ root: notes, workspaceRoot: root, pluginRoot: join(root, "plugin") });
+    let catalogCalls = 0;
+    configureMarkdownFileProvider({
+      owns() { return false; },
+      async catalog() {
+        catalogCalls++;
+        return { notes: [] };
+      },
+    });
+
+    await readNote(standalone);
+    const scanned = await scanNotes();
+    expect(scanned.map((note: { title?: string }) => note.title).sort()).toEqual(["Sibling", "Standalone"]);
+    expect(catalogCalls).toBe(0);
+  });
+
+  test("returns editor-ready snippets without scanning the note catalog or templates", async () => {
+    const root = await mkdtemp(join(tmpdir(), "noema-kernel-bootstrap-"));
+    const notes = join(root, "notes");
+    const file = join(notes, "a.md");
+    roots.push(root);
+    await mkdir(notes, { recursive: true });
+    await writeFile(file, "# Bootstrap\n", "utf8");
+    configure({ root: notes, workspaceRoot: root, pluginRoot: join(root, "plugin") });
+    configureMarkdownFileProvider({
+      owns(candidate: string) {
+        return candidate === file;
+      },
+      async read() {
+        return { content: "# Bootstrap\n", version: "bootstrap-version", mtimeMs: 1234, size: 12 };
+      },
+    });
+
+    const opened = await bootstrapNote(file) as Record<string, unknown>;
+    expect(opened).toMatchObject({ content: "# Bootstrap\n", version: "bootstrap-version" });
+    expect(opened).not.toHaveProperty("notes");
+    expect(opened).not.toHaveProperty("directories");
+    expect(opened.snippets).toEqual(expect.any(Array));
+    expect(opened).not.toHaveProperty("templates");
+  });
+
+  test("opens from the kernel snapshot without requiring a second Node stat", async () => {
+    const root = await mkdtemp(join(tmpdir(), "noema-kernel-open-"));
+    const notes = join(root, "notes");
+    const file = join(notes, "kernel-only.md");
+    roots.push(root);
+    await mkdir(notes, { recursive: true });
+    configure({ root: notes, workspaceRoot: root, pluginRoot: join(root, "plugin") });
+
+    configureMarkdownFileProvider({
+      owns(candidate: string) {
+        return candidate === file;
+      },
+      async read() {
+        return {
+          content: "# Kernel snapshot\n",
+          mtimeMs: 1234,
+          size: 18,
+          version: "kernel-version",
+        };
+      },
+    });
+
+    await expect(readNote(file)).resolves.toMatchObject({
+      file,
+      content: "# Kernel snapshot\n",
+      title: "Kernel snapshot",
+      mtimeMs: 1234,
+      size: 18,
+      version: "kernel-version",
+    });
+  });
+
+  test("saves a composed CM6 change set without sending the full document", async () => {
+    const root = await mkdtemp(join(tmpdir(), "noema-kernel-incremental-"));
+    const notes = join(root, "notes");
+    const file = join(notes, "a.md");
+    roots.push(root);
+    await mkdir(notes, { recursive: true });
+    await writeFile(file, "# Initial\n", "utf8");
+    configure({ root: notes, workspaceRoot: root, pluginRoot: join(root, "plugin") });
+
+    let received: Record<string, unknown> | null = null;
+    configureMarkdownFileProvider({
+      owns(candidate: string) {
+        return candidate === file;
+      },
+      async read() {
+        return { content: await readFile(file, "utf8") };
+      },
+      async writeChanges(body: Record<string, unknown>) {
+        received = body;
+        await writeFile(file, "# Patched\n", "utf8");
+        return { ok: true, mtimeMs: Date.now(), size: 10, version: "patched-version" };
+      },
+    });
+
+    const opened = (await readNote(file)) as { version: string; mtimeMs: number };
+    const changes = { length: 10, newLength: 10, changes: [{ from: 2, to: 9, insert: "Patched" }] };
+    const saved = (await saveNote({
+      file,
+      changes,
+      clientId: "desktop-kernel-incremental",
+      seq: 1,
+      baseMtimeMs: opened.mtimeMs,
+      baseVersion: opened.version,
+      refresh: "deferred",
+    })) as { ok?: boolean; version?: string; note?: unknown };
+
+    expect(saved).toMatchObject({ ok: true, version: "patched-version" });
+    expect(saved.note).toBeUndefined();
+    expect(received).toMatchObject({ file, changes, expectedVersion: opened.version });
+    expect(received).not.toHaveProperty("content");
+    expect(await readFile(file, "utf8")).toBe("# Patched\n");
+  });
+
+  test("keeps standalone large-file saves incremental when the file is outside the Go box", async () => {
+    const root = await mkdtemp(join(tmpdir(), "noema-standalone-incremental-"));
+    const notes = join(root, "notes");
+    const file = join(root, "synthetic-5mb.md");
+    roots.push(root);
+    await mkdir(notes, { recursive: true });
+    const original = `# Initial 😀\n\n${"large line\n".repeat(500_000)}`;
+    await writeFile(file, original, "utf8");
+    configure({ root: notes, workspaceRoot: root, pluginRoot: join(root, "plugin") });
+    configureMarkdownFileProvider(null);
+
+    const opened = await readNote(file) as { version: string; standalone: boolean };
+    const from = original.indexOf("Initial");
+    const firstContent = `${original.slice(0, from)}Patched${original.slice(from + "Initial".length)}`;
+    const first = await saveNote({
+      file,
+      changes: {
+        length: original.length,
+        newLength: firstContent.length,
+        changes: [{ from, to: from + "Initial".length, insert: "Patched" }],
+      },
+      clientId: "standalone-incremental",
+      seq: 1,
+      baseVersion: opened.version,
+      refresh: "deferred",
+    }) as { ok?: boolean; version?: string; standalone?: boolean };
+
+    expect(opened.standalone).toBe(true);
+    expect(first).toMatchObject({ ok: true, standalone: true });
+    expect(first.version).not.toBe(opened.version);
+    expect(await readFile(file, "utf8")).toBe(firstContent);
+
+    const secondContent = `${firstContent}!`;
+    const second = await saveNote({
+      file,
+      changes: {
+        length: firstContent.length,
+        newLength: secondContent.length,
+        changes: [{ from: firstContent.length, to: firstContent.length, insert: "!" }],
+      },
+      clientId: "standalone-incremental",
+      seq: 2,
+      baseVersion: first.version,
+      refresh: "deferred",
+    }) as { ok?: boolean; conflict?: boolean };
+    expect(second).toMatchObject({ ok: true });
+    expect(await readFile(file, "utf8")).toBe(secondContent);
+  });
+
+  test("retains CAS conflict protection for standalone incremental saves", async () => {
+    const root = await mkdtemp(join(tmpdir(), "noema-standalone-conflict-"));
+    const notes = join(root, "notes");
+    const file = join(root, "standalone.md");
+    roots.push(root);
+    await mkdir(notes, { recursive: true });
+    await writeFile(file, "# Initial\n", "utf8");
+    configure({ root: notes, workspaceRoot: root, pluginRoot: join(root, "plugin") });
+    configureMarkdownFileProvider(null);
+
+    const opened = await readNote(file) as { version: string };
+    await writeFile(file, "# External\n", "utf8");
+    const saved = await saveNote({
+      file,
+      changes: { length: 10, newLength: 8, changes: [{ from: 2, to: 9, insert: "Local" }] },
+      clientId: "standalone-conflict",
+      seq: 1,
+      baseVersion: opened.version,
+      refresh: "deferred",
+    }) as { ok?: boolean; conflict?: boolean };
+
+    expect(saved).toMatchObject({ ok: false, conflict: true });
+    expect(await readFile(file, "utf8")).toBe("# External\n");
+  });
+
+  test("performs one provider write without redundant source reads", async () => {
     const root = await mkdtemp(join(tmpdir(), "noema-kernel-persistence-"));
     const notes = join(root, "notes");
     const file = join(notes, "a.md");
@@ -59,12 +317,12 @@ describe("server facade with desktop kernel persistence", () => {
     }) as { ok?: boolean; conflict?: boolean; note?: { title?: string } };
 
     expect(saved).toMatchObject({ ok: true, note: { title: "Saved through kernel" } });
-    expect(reads).toBeGreaterThanOrEqual(3);
+    expect(reads).toBe(1);
     expect(writes).toBe(1);
     expect(await readFile(file, "utf8")).toBe("# Saved through kernel\n\nExact bytes.\n");
   });
 
-  test("rejects an external edit before calling the provider write", async () => {
+  test("delegates external-edit conflict detection to the provider CAS", async () => {
     const root = await mkdtemp(join(tmpdir(), "noema-kernel-conflict-"));
     const notes = join(root, "notes");
     const file = join(notes, "a.md");
@@ -81,10 +339,14 @@ describe("server facade with desktop kernel persistence", () => {
       async read() {
         return { content: await readFile(file, "utf8") };
       },
-      async write(body: { content: string }) {
+      async write() {
         writes++;
-        await writeFile(file, body.content, "utf8");
-        return { ok: true, content: body.content };
+        return {
+          ok: false,
+          conflict: true,
+          content: await readFile(file, "utf8"),
+          version: "external-version",
+        };
       },
     });
 
@@ -103,7 +365,7 @@ describe("server facade with desktop kernel persistence", () => {
     }) as { conflict?: boolean };
 
     expect(saved.conflict).toBe(true);
-    expect(writes).toBe(0);
+    expect(writes).toBe(1);
     expect(await readFile(file, "utf8")).toBe("# External\n");
   });
 
@@ -154,7 +416,7 @@ describe("server facade with desktop kernel persistence", () => {
     expect(await readFile(file, "utf8")).toBe("# Raced external edit\n");
   });
 
-  test("fails closed when the kernel cannot provide the current source", async () => {
+  test("fails closed when the kernel write endpoint is unavailable", async () => {
     const root = await mkdtemp(join(tmpdir(), "noema-kernel-outage-"));
     const notes = join(root, "notes");
     const file = join(notes, "a.md");
@@ -173,19 +435,21 @@ describe("server facade with desktop kernel persistence", () => {
       },
       async write() {
         writes++;
-        return { ok: true, content: "# Lost\n" };
+        throw new Error("kernel unavailable");
       },
     });
 
-    await expect(saveNote({
-      file,
-      content: "# Local\n",
-      clientId: "desktop-kernel-outage",
-      seq: 1,
-      force: true,
-      refresh: "deferred",
-    })).rejects.toThrow("kernel unavailable");
-    expect(writes).toBe(0);
+    await expect(
+      saveNote({
+        file,
+        content: "# Local\n",
+        clientId: "desktop-kernel-outage",
+        seq: 1,
+        force: true,
+        refresh: "deferred",
+      }),
+    ).rejects.toThrow("kernel unavailable");
+    expect(writes).toBe(1);
     expect(await readFile(file, "utf8")).toBe("# Preserved\n");
   });
 
