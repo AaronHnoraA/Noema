@@ -2115,6 +2115,20 @@ After`;
     cleanup();
   });
 
+  test("renders KaTeX in the CM6 toc widget", () => {
+    const md = String.raw`# Energy \(E=mc^2\)
+
+[toc]
+
+Body`;
+    const { editor, cleanup } = mountCM6(md);
+    editor.setMarkdownSelection(md.length);
+
+    expect(document.querySelector(".cm-toc .toc-item-text .aaronnote-toc-math .katex")).toBeTruthy();
+    expect(document.querySelector(".cm-toc .toc-item-text")?.textContent).not.toContain(String.raw`\(E=mc^2\)`);
+    cleanup();
+  });
+
   test("toc fold state is scoped to duplicate heading instances", () => {
     const md = "# Course\n\n[toc]\n\n## Homework\n\n# Course\n\n## Homework";
     const { editor, cleanup } = mountCM6(md);

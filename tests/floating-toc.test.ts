@@ -1,5 +1,7 @@
 import { EditorState, Text } from "@codemirror/state";
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 import { createFloatingTocPanel, inlineTagAnchorsFromText, markdownHeadingsFromText, orgEnvAnchorsFromText } from "../aaronnote/floating-toc.ts";
 import { createEditor } from "../src/lib.ts";
@@ -165,6 +167,141 @@ describe("floating toc heading scan", () => {
       search.value = "no heading matches";
       search.dispatchEvent(new Event("input"));
       expect(toc.textContent).toContain("#tensor");
+    } finally {
+      editor.destroy();
+      mount.remove();
+      toc.remove();
+    }
+  });
+
+  test("renders KaTeX in heading and org-env labels", () => {
+    const mount = document.createElement("div");
+    const toc = document.createElement("aside");
+    const list = document.createElement("nav");
+    const toggleButton = document.createElement("button");
+    toc.className = "is-collapsed";
+    toc.appendChild(list);
+    document.body.append(mount, toc);
+    const editor = createEditor(mount);
+    editor.setMarkdown(String.raw`# Energy \(E=mc^2\)
+#+begin theorem Pythagoras \(a^2+b^2=c^2\)
+body
+#+end theorem`);
+    try {
+      const panel = createFloatingTocPanel({
+        toc,
+        toggleButton,
+        list,
+        editor,
+        getNotes: () => [],
+        getCurrentFile: () => "note.md",
+        resolveNoteRef: () => undefined,
+        openNote: () => {},
+      });
+
+      panel.toggle();
+      panel.update();
+      expect(toc.querySelector(".aaronnote-toc-item .aaronnote-toc-math .katex")).toBeTruthy();
+      expect(toc.querySelector(".aaronnote-toc-item")?.textContent).not.toContain(String.raw`\(E=mc^2\)`);
+
+      toc.querySelector<HTMLButtonElement>(".aaronnote-toc-org-toggle")!.click();
+      expect(toc.querySelector(".aaronnote-toc-org-env .aaronnote-toc-math .katex")).toBeTruthy();
+    } finally {
+      editor.destroy();
+      mount.remove();
+      toc.remove();
+    }
+  });
+
+  test("keeps B3-adopted TOC controls left aligned", () => {
+    const css = readFileSync(resolve(process.cwd(), "aaronnote/style.css"), "utf8");
+    expect(css).toMatch(/\.aaronnote-toc-org-toggle\s*\{[^}]*justify-content:\s*flex-start/s);
+    expect(css).toMatch(/\.aaronnote-toc-item\s*\{[^}]*justify-content:\s*flex-start/s);
+    expect(css).toMatch(/\.aaronnote-toc-label\s*\{[^}]*text-align:\s*left/s);
+  });
+
+  test("opening the TOC reveals and scrolls to the current heading without moving the editor cursor", () => {
+    const mount = document.createElement("div");
+    const toc = document.createElement("aside");
+    const list = document.createElement("nav");
+    const toggleButton = document.createElement("button");
+    toc.className = "is-collapsed";
+    toc.appendChild(list);
+    document.body.append(mount, toc);
+    const editor = createEditor(mount);
+    const md = "# Parent\n\n## First\n\n## Current\n\nBody";
+    editor.setMarkdown(md);
+    const currentPos = md.indexOf("Current");
+    editor.setMarkdownSelection(currentPos);
+    const scrollTargets: HTMLElement[] = [];
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = function scrollIntoView(): void {
+      scrollTargets.push(this);
+    };
+    try {
+      const panel = createFloatingTocPanel({
+        toc,
+        toggleButton,
+        list,
+        editor,
+        getNotes: () => [],
+        getCurrentFile: () => "note.md",
+        resolveNoteRef: () => undefined,
+        openNote: () => {},
+      });
+
+      panel.toggle();
+      const active = toc.querySelector<HTMLElement>(".aaronnote-toc-item.is-active");
+      expect(active?.textContent).toBe("Current");
+      expect(scrollTargets).toEqual([active]);
+      expect(editor.getMarkdownSelection().from).toBe(currentPos);
+      expect(document.activeElement).not.toBe(active);
+    } finally {
+      if (originalScrollIntoView) HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
+      else delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+      editor.destroy();
+      mount.remove();
+      toc.remove();
+    }
+  });
+
+  test("opening the TOC unfolds only ancestors needed to expose the current heading", () => {
+    const mount = document.createElement("div");
+    const toc = document.createElement("aside");
+    const list = document.createElement("nav");
+    const toggleButton = document.createElement("button");
+    toc.className = "is-collapsed";
+    toc.appendChild(list);
+    document.body.append(mount, toc);
+    const editor = createEditor(mount);
+    const md = "# Parent\n\n## Current\n\n# Other\n\n## Other child";
+    editor.setMarkdown(md);
+    try {
+      const panel = createFloatingTocPanel({
+        toc,
+        toggleButton,
+        list,
+        editor,
+        getNotes: () => [],
+        getCurrentFile: () => "note.md",
+        resolveNoteRef: () => undefined,
+        openNote: () => {},
+      });
+
+      panel.toggle();
+      toc.querySelectorAll<HTMLButtonElement>(".aaronnote-toc-chevron")[0]!.click();
+      toc.querySelectorAll<HTMLButtonElement>(".aaronnote-toc-chevron")[1]!.click();
+      panel.toggle();
+      editor.setMarkdownSelection(md.indexOf("Current"));
+      panel.toggle();
+
+      expect(toc.querySelector<HTMLElement>(".aaronnote-toc-item.is-active")?.textContent).toBe("Current");
+      const other = Array.from(toc.querySelectorAll<HTMLElement>(".aaronnote-toc-item"))
+        .find((item) => item.textContent === "Other");
+      expect(other?.previousElementSibling?.classList.contains("aaronnote-toc-chevron")).toBe(true);
+      expect(other?.previousElementSibling?.textContent).toBe("▶");
+      expect(Array.from(toc.querySelectorAll<HTMLElement>(".aaronnote-toc-item"))
+        .some((item) => item.textContent === "Other child")).toBe(false);
     } finally {
       editor.destroy();
       mount.remove();

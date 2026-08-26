@@ -9,6 +9,8 @@ import {
 } from "../src/cm6/toc-index.ts";
 import type { NoteSummary } from "./types.ts";
 import { markdownLinkPrimaryModifier } from "../src/cm6/markdown-link-events.ts";
+import { getKatexMacrosVersion } from "../src/katex-macros.ts";
+import { renderTocInlineMath } from "../src/toc-inline-math.ts";
 
 type OpenNoteOptions = { newWindow?: boolean; equationTag?: string; inlineTag?: string };
 
@@ -144,6 +146,7 @@ export function createFloatingTocPanel(options: {
   let orgEnvDoc: unknown = null;
   let orgEnvCache: { items: OrgEnvAnchor[]; signature: string } = { items: [], signature: "" };
   let orgEnvActive = false;
+  let revealActiveOnNextRender = false;
 
   const resizeHandle = document.createElement("div");
   resizeHandle.className = "aaronnote-toc-resize-handle";
@@ -346,12 +349,24 @@ export function createFloatingTocPanel(options: {
     const anchors = anchorState.items;
     const selectionPos = options.getActivePosition?.() ?? options.editor.view.state.selection.main.from;
     const activeIndex = headings.reduce((active, heading, index) => heading.pos <= selectionPos ? index : active, -1);
+    const keys = floatingTocFoldKeys(headings);
+    if (revealActiveOnNextRender && activeIndex >= 0) {
+      // Reveal only the active heading's ancestor chain. Other manually folded
+      // branches stay folded, and the active heading's own children keep their
+      // previous state.
+      let ancestorLevel = headings[activeIndex]!.level;
+      for (let index = activeIndex - 1; index >= 0 && ancestorLevel > 1; index -= 1) {
+        if (headings[index]!.level >= ancestorLevel) continue;
+        floatingFoldState.delete(keys[index]!);
+        ancestorLevel = headings[index]!.level;
+      }
+    }
     const currentNote = notes.find((note) => note.file === options.getCurrentFile());
     const relatedIds = [...(currentNote?.refs ?? []), ...(currentNote?.backlinks ?? [])];
     const tags = currentNote?.tags ?? [];
     const foldRevision = [...floatingFoldState].sort().join(",");
     const headingRenderSignature = floatingTocSignature(headings);
-    const key = `${activeIndex}\n${currentNote?.id ?? ""}\n${relatedIds.join(",")}\n${tags.join(",")}\n${headingRenderSignature}\n${anchorState.signature}\n${orgEnvState.signature}\n${foldRevision}\n${filterQuery}\n${orgEnvActive ? 1 : 0}`;
+    const key = `${activeIndex}\n${currentNote?.id ?? ""}\n${relatedIds.join(",")}\n${tags.join(",")}\n${headingRenderSignature}\n${anchorState.signature}\n${orgEnvState.signature}\n${foldRevision}\n${filterQuery}\n${orgEnvActive ? 1 : 0}\nmath:${getKatexMacrosVersion()}`;
     if (key === renderKey) return;
     renderKey = key;
 
@@ -368,7 +383,6 @@ export function createFloatingTocPanel(options: {
     const orgEnvCount = visibleOrgEnvs.length;
     options.toggleButton.textContent = headings.length > 0 ? `Page ${headings.length}` : "Page";
 
-    const keys = floatingTocFoldKeys(headings);
     const boundaries = new Array<number>(headings.length).fill(Number.POSITIVE_INFINITY);
     const boundaryStack: number[] = [];
     for (let index = headings.length - 1; index >= 0; index -= 1) {
@@ -426,7 +440,10 @@ export function createFloatingTocPanel(options: {
       button.dataset.level = String(heading.level);
       button.title = heading.text;
       if (index === activeIndex) button.setAttribute("aria-current", "location");
-      button.textContent = heading.text;
+      const label = document.createElement("span");
+      label.className = "aaronnote-toc-label";
+      renderTocInlineMath(label, heading.text);
+      button.appendChild(label);
       button.addEventListener("click", () => {
         const currentHeadings = editorHeadings().items.filter((item) => !item.omit);
         const currentKeys = floatingTocFoldKeys(currentHeadings);
@@ -456,7 +473,10 @@ export function createFloatingTocPanel(options: {
       button.type = "button";
       button.className = "aaronnote-toc-item aaronnote-toc-org-env";
       button.dataset.kind = item.kind;
-      button.textContent = item.title || item.kind;
+      const label = document.createElement("span");
+      label.className = "aaronnote-toc-label";
+      renderTocInlineMath(label, item.title, item.kind);
+      button.appendChild(label);
       button.title = `#+begin ${item.kind}${item.title ? ` ${item.title}` : ""}`;
       button.addEventListener("click", () => {
         options.editor.setSelection(item.pos);
@@ -515,6 +535,8 @@ export function createFloatingTocPanel(options: {
       empty.className = "aaronnote-toc-empty";
       empty.textContent = "No roam context";
       options.list.replaceChildren(empty);
+      revealActiveOnNextRender = false;
+      options.list.scrollTop = 0;
       return;
     }
     if (searching && visibleHeadingCount === 0 && anchorCount === 0 && visibleOrgEnvCount === 0) {
@@ -543,12 +565,23 @@ export function createFloatingTocPanel(options: {
       renderRelatedNotes(frag, currentNote);
     }
     options.list.replaceChildren(frag);
+    if (revealActiveOnNextRender) {
+      revealActiveOnNextRender = false;
+      const activeItem = options.list.querySelector<HTMLElement>(".aaronnote-toc-item.is-active");
+      if (activeItem) activeItem.scrollIntoView?.({ block: "center", inline: "nearest" });
+      else options.list.scrollTop = 0;
+    }
   }
 
   function toggle(): void {
     options.toc.classList.toggle("is-collapsed");
-    options.toggleButton.setAttribute("aria-expanded", options.toc.classList.contains("is-collapsed") ? "false" : "true");
-    if (!options.toc.classList.contains("is-collapsed")) renderKey = "";
+    const opening = !options.toc.classList.contains("is-collapsed");
+    options.toggleButton.setAttribute("aria-expanded", opening ? "true" : "false");
+    if (opening) {
+      revealActiveOnNextRender = true;
+      renderKey = "";
+      update();
+    }
   }
 
   return { update, toggle };

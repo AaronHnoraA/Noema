@@ -1045,6 +1045,17 @@
 .cm-editor .cm-toc .toc-item { display: flex; align-items: center; }
 .cm-editor .cm-toc .toc-item-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 
+.aaronnote-toc-math {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: -0.08em;
+}
+.aaronnote-toc-math .katex { font-size: 1em; }
+.aaronnote-toc-math.is-error {
+  color: var(--aaron-danger, #ff8a9b);
+  font-family: var(--aaron-font-mono, monospace);
+}
+
 /* ─── CM6 org-env block ──────────────────────────────────────────── */
 .cm-editor .cm-org-env-block {
   --block-c: var(--c-env-default, #a7b0c4);

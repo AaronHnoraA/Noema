@@ -1027,3 +1027,17 @@ Emacs full-project link 与 canonical repository 的 `dist/aaronnote/index.html`
 7 个历史 asset links 全部解析到 `resources/`，retired lowercase path 缺席；Emacs
 `make jupyter-test` 四组共 141/141 通过。仓库中不再存在迁移期 `reference/` 或
 `references/` 目录，Noema 的源码、构建和桌面运行时均不依赖外部 checkout。
+
+**TOC KaTeX 与对齐校正（2026-08-26）**：浮动 Page TOC 和文内 `[toc]` 现在共用
+Noema 既有 `renderMathHTML`/宏环境渲染标题及 org-env 标题中的 canonical
+`\(...\)`；普通文本只走 text node，公式错误回退原始源码。B3 的通用 button flex
+样式曾让 `text-align:left` 失效，TOC 标题与 Org blocks 因而视觉居中；两个控制现显式
+使用 `justify-content:flex-start`，标签继续提供 ellipsis。聚焦 TOC/CM6 275/275、
+完整 `make test` 1999 passed / 16 skipped，`make build`、`make install` 与安装版 smoke
+全部通过；App 和 Emacs 继续消费同一份 `dist/aaronnote`。
+
+TOC 打开动作随后补齐当前位置跟随：根据编辑器 selection 选择最后一个不晚于光标的
+标题，仅展开遮住该标题的祖先链，保留其他手动折叠分支，再用 `scrollIntoView` 将 active
+项置于目录视口中央；该过程不改变正文 selection，也不抢焦点。两个定位/折叠边界测试
+已加入，最终 `make test` 为 2001 passed / 16 skipped，`make build`、`make install` 与
+安装版 smoke 再次通过。

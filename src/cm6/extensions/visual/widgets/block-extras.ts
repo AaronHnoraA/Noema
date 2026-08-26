@@ -73,6 +73,8 @@ import { refreshViewportDecorations } from "../../../viewport-refresh.ts";
 import { preserveEditorViewport } from "../../../viewport-stability.ts";
 import { AttributeViewWidget } from "./attribute-view.ts";
 import { EmbedQueryWidget } from "./embed-query.ts";
+import { getKatexMacrosVersion } from "../../../../katex-macros.ts";
+import { renderTocInlineMath } from "../../../../toc-inline-math.ts";
 
 // ---------------------------------------------------------------------------
 // TOC fold state (session-level, not editor history)
@@ -1079,7 +1081,7 @@ class TocWidget extends MeasuredWidget {
     super();
     this.headings = headings;
     this.foldState = foldState;
-    this.signature = tocSignature(headings, foldState);
+    this.signature = `${tocSignature(headings, foldState)}\nmath:${getKatexMacrosVersion()}`;
   }
 
   protected measureKey(): string { return "toc:" + shortHash(this.signature); }
@@ -1150,7 +1152,7 @@ class TocWidget extends MeasuredWidget {
 
       const span = document.createElement("span");
       span.className = "toc-item-text";
-      span.textContent = heading.text || "(empty heading)";
+      renderTocInlineMath(span, heading.text, "(empty heading)");
       span.title = heading.text || "(empty heading)";
       li.append(span);
 
