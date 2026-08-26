@@ -50,8 +50,8 @@ init-data:
 
 setup: bootstrap init-data
 
-build: check-env check-go prune-legacy-garbage
-	npm run build:desktop
+build: check-env check-go prune-legacy-garbage build-web
+	npm run build:desktop-shell
 
 install: install-app
 	@$(MAKE) --no-print-directory prune-desktop-stage
@@ -136,14 +136,14 @@ jupyter-bootstrap:
 
 help:
 	@echo "Noema build targets"
-	@echo "  make | make build  Build the linked SiYuan-derived Electron + shared Node/Go Noema.app"
+	@echo "  make | make build  Build the one shared App/Emacs renderer and standalone Noema.app"
 	@echo "  make setup         Install dependencies and create $(NOEMA_ROOT)"
 	@echo "  make bootstrap     Reproducibly install dependencies with npm ci"
 	@echo "  make nvm-install   Install/use pinned Node and npm through nvm"
 	@echo "  make init-data     Create the Noema notes directory"
-	@echo "  make install       Install a linked Electron App shell, then discard its staging bundle"
+	@echo "  make install       Install Noema.app only, then discard its staging bundle"
 	@echo "  make run           Build and launch the local app bundle"
-	@echo "  make build-web     Build only the web assets"
+	@echo "  make build-web     Build the shared renderer consumed by both App and Emacs"
 	@echo "  make dev           Run the Vite development server"
 	@echo "  make server-config-init  Create ignored Server mode config files"
 	@echo "  make server-build  Build the rsync-ready Server mode release"

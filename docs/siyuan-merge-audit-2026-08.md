@@ -12,7 +12,7 @@
 
 `plan.md` 记录的进度已经很深，但那些都是**沿着既定路线**做的。这份报告问的是另一个问题：**思源仓库里还躺着什么，是路线图上没写、但真的值得吃的？**
 
-**实现跟进（2026-08-26）**：审计 backlog 已按“迁入、用 Noema-native 实现覆盖、明确不采用”三种结论全部收口。#1 host-neutral platform/hotkey/DOM/transient seam、#2 b3/CLI、#3 Office list/AV width/image pause/标题编号/格式刷/Tree/Wiki/hint、#4 declarative menu、workspace layout/dock、自包含 HTML/PDF、完整 AV 类型与计算、虚拟引用、Markdown attachment 维护与内容搜索、Obsidian Markdown-native 导入以及 MCP 均进入 canonical 源树和测试。版权来源固定在 `NOTICE` 与直接改编文件头；装饰性 covers、Pandoc bundle、protyle/mobile 和已裁剪云/同步/插件运行时明确不采用。正式门禁与移除上游 checkout 后的复验记录见本文末尾。
+**实现跟进（2026-08-26）**：审计 backlog 已按“迁入、用 Noema-native 实现覆盖、明确不采用”三种结论全部收口。#1 host-neutral platform/hotkey/DOM/transient seam、#2 b3/CLI、#3 Office list/AV width/image pause/标题编号/格式刷/Tree/Wiki/hint、#4 declarative menu、自包含 HTML/PDF、完整 AV 类型与计算、虚拟引用、Markdown attachment 维护与内容搜索、Obsidian Markdown-native 导入以及 MCP 均进入 canonical 源树和测试。workspace layout/dock 曾进入实验实现，但经 App/Emacs 单画布复审后从生产和源码移除：原生多窗口承担平铺，按需浮层承担工具 UI。版权来源固定在 `NOTICE` 与直接改编文件头；装饰性 covers、Pandoc bundle、protyle/mobile 和已裁剪云/同步/插件运行时明确不采用。正式门禁与移除上游 checkout 后的复验记录见本文末尾。
 
 ---
 
@@ -902,7 +902,7 @@ Electron 专属，开一个新 BrowserWindow。三个关键函数：
 | 3 | 完成 | Office list、AV 列宽、图片暂停、标题编号、格式刷、Tree/Wiki 和 CM6 等价边界均有聚焦测试 |
 | 4 | 完成 | `src/menu-system.ts` 已替换生产 context menu，并接异步 submenu、键盘模型和 54px 定位 |
 | 5 | 完成 | canonical `kernel/cli/` 已支持 Markdown box、同步任务排空和文档列表 |
-| 6 | 完成 | `src/workspace-layout.ts`、`workspace-layout-view.ts`、`workspace-dock.ts` 已接分屏、rails、惰性 frame 与持久化 |
+| 6 | 不采用 | 实验版 layout/dock 曾接入，后因制造 App/Emacs 外壳分叉、默认 tabbar 和三边常驻卡片而完整移除；Split 使用原生新窗口平铺 |
 | 7 | 完成 | 自包含 HTML、图片等待/宽度修复与 Electron 原生 PDF 全文档打印均进入生产 |
 | 8 | 完成 | portable AV 覆盖 17 类型、17 算子、嵌套 AND/OR、相对日期与 22 种聚合，Go/Node fixtures 对拍 |
 | 9 | 完成 | Aho-Corasick virtual references、10 分钟有界 cache 与 Knowledge Mentions 已接线 |
@@ -919,7 +919,7 @@ Electron 专属，开一个新 BrowserWindow。三个关键函数：
 - `make test`：206 files passed / 7 skipped，2004 tests passed / 16 skipped。
 - `go test ./...`：全树通过；attachment FTS5、Obsidian import、MCP Markdown 三条聚焦 FTS5 端到端测试通过。
 - `make build` 与 `make install`：在 checkout 缺席状态下成功。
-- 安装版 smoke：`hostMode: desktop`、`preload: true`、`titlebarVisible: true`、54px，Back / Forward / Refresh / Editor actions / Window actions 齐全；owned kernel listening 且发布 `mcpUrl`。
+- 安装版 smoke：`hostMode: desktop`、`preload: true`、`titlebarVisible: true`、54px，Back / Forward / Refresh / Editor actions / Window actions 齐全；共享编辑器只挂载一次、无 workspace iframe/三边 rail；owned kernel listening 且发布 `mcpUrl`。
 - Emacs full-project link 正确，小写旧入口缺席；7 个历史资产入口全部解析到 canonical `resources/`。
 
 因此 Noema 的源码、构建、测试、安装包、运行时与兼容资产均已独立。

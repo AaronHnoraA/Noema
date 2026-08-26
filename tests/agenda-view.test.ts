@@ -136,16 +136,15 @@ afterEach(() => {
 });
 
 describe("agenda keyboard handling", () => {
-  test("mounts the shared agenda renderer as a closeable desktop dock", async () => {
+  test("mounts the shared agenda renderer as a closeable overlay", async () => {
     const onOpenChange = vi.fn();
-    const dockDeps = deps();
-    dockDeps.api.notes.agenda = async () => ({ ...emptyAgenda, evaluationSource: "kernel-agenda" });
-    await openAgendaView({ ...dockDeps, surface: "desktop-dock", onOpenChange });
+    const overlayDeps = deps();
+    overlayDeps.api.notes.agenda = async () => ({ ...emptyAgenda, evaluationSource: "kernel-agenda" });
+    await openAgendaView({ ...overlayDeps, onOpenChange });
     const overlay = document.querySelector<HTMLElement>(".aaronnote-agenda-full")!;
 
     expect(overlay.hidden).toBe(false);
-    expect(overlay.classList.contains("is-desktop-dock")).toBe(true);
-    expect(overlay.dataset.agendaSurface).toBe("desktop-dock");
+    expect(overlay.dataset.agendaSurface).toBe("overlay");
     expect(overlay.dataset.agendaSource).toBe("kernel-agenda");
     expect(onOpenChange).toHaveBeenCalledWith(true);
 

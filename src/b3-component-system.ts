@@ -18,6 +18,12 @@ const DIALOG_CONTAINER_TOKENS = new Set([
 ]);
 
 const PANEL_TOKENS = new Set([
+  "aaronnote-tools-panel",
+  "aaronnote-jupyter-panel",
+  "aaronnote-floating-toc",
+  "aaronnote-local-graph-panel",
+  "aaronnote-find-panel",
+  "noema-knowledge-dock",
   "aaronnote-agenda-full",
   "aaronnote-roam-tools",
   "noema-config-section",
@@ -65,11 +71,12 @@ export function b3SurfaceKind(element: Element): B3SurfaceKind | null {
         && tokens.some((token) => tokenEndsWithSurface(token, "menu") || tokenEndsWithSurface(token, "popup")))) {
     return "menu";
   }
-  if (element.tagName === "ASIDE"
-      || tokens.some((token) => PANEL_TOKENS.has(token)
-        || tokenEndsWithSurface(token, "panel")
-        || tokenEndsWithSurface(token, "popover")
-        || tokenEndsWithSurface(token, "dock"))) {
+  // Panels are deliberately opt-in. Structural <aside> elements and document
+  // regions whose historical class happens to end in "-panel" (the status
+  // HUD and bibliography are the important examples) belong to the shared
+  // editor canvas; decorating them as b3 panels creates a second background,
+  // border, and shadow in both Electron and Emacs.
+  if (tokens.some((token) => PANEL_TOKENS.has(token))) {
     return "panel";
   }
   return null;

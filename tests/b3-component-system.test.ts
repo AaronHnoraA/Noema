@@ -28,6 +28,10 @@ describe("b3 component system", () => {
     menu.setAttribute("role", "menu");
     const dock = document.createElement("aside");
     dock.className = "noema-knowledge-dock";
+    const statusHud = document.createElement("aside");
+    statusHud.className = "aaronnote-status-hud";
+    const bibliography = document.createElement("section");
+    bibliography.className = "aaronnote-bib-panel";
     const editorBlock = document.createElement("div");
     editorBlock.className = "cm-line";
     const dropOverlay = document.createElement("div");
@@ -39,6 +43,8 @@ describe("b3 component system", () => {
     expect(b3SurfaceKind(host)).toBe("dialog-host");
     expect(b3SurfaceKind(menu)).toBe("menu");
     expect(b3SurfaceKind(dock)).toBe("panel");
+    expect(b3SurfaceKind(statusHud)).toBeNull();
+    expect(b3SurfaceKind(bibliography)).toBeNull();
     expect(b3SurfaceKind(editorBlock)).toBeNull();
     expect(b3SurfaceKind(dropOverlay)).toBeNull();
     expect(b3SurfaceKind(themePreview)).toBeNull();
@@ -149,7 +155,7 @@ describe("b3 component system", () => {
     expect(bridge).toContain("b3Components");
     expect(bridge).toContain('knowledgeDock: Boolean(knowledgeDock?.classList.contains("b3-panel"))');
     expect(bridge).toContain('tocPopover: Boolean(tocPopover?.classList.contains("b3-panel"))');
-    expect(bridge).toContain('agendaDock: Boolean(agendaDock?.classList.contains("b3-panel"))');
+    expect(bridge).toContain('agendaSurface: Boolean(agendaSurface?.classList.contains("b3-panel"))');
   });
 
   test("keeps the b3 layer palette-owned while host adapters retain geometry", () => {

@@ -994,6 +994,36 @@ AGENTS.md 原样无附加变量 smoke 最终再次报告 `protocolRegistered:tru
 
 ## Phase 6 — 审计 backlog 与独立化终态（2026-08-26，完成）
 
-审计总排序 #1–#13 已逐项收口：host-neutral core、b3、纯函数生产纵切、菜单、CLI、layout/dock、HTML/PDF 导出、完整 portable AV 语义、virtual references、hint、附件维护/正文 FTS5、MCP 与 Obsidian Markdown-native 导入均已进入 canonical 树并有生产或端到端证据；covers、Pandoc bundle、protyle/mobile 及已裁剪云/同步/加密/插件/DAV/OIDC 明确不采用。必要版权与来源保存在 `NOTICE` 和直接改编文件头。
+审计总排序 #1–#13 已逐项收口：host-neutral core、b3、纯函数生产纵切、菜单、CLI、HTML/PDF 导出、完整 portable AV 语义、virtual references、hint、附件维护/正文 FTS5、MCP 与 Obsidian Markdown-native 导入均已进入 canonical 树并有生产或端到端证据；layout/dock 实验在后续单画布复审中撤销并移除，covers、Pandoc bundle、protyle/mobile 及已裁剪云/同步/加密/插件/DAV/OIDC 明确不采用。必要版权与来源保存在 `NOTICE` 和直接改编文件头。
 
-迁移期上游 checkout 已移出仓库，并以废纸篓 `Noema-reference-20260826` 保持可恢复。随后在其完全缺席的状态下完成最终门禁：`make test` 为 206 files passed / 7 skipped、2004 tests passed / 16 skipped；`go test ./...` 全树通过，三个 FTS5 纵切通过；`make build`、`make install` 成功。安装版 smoke 报告 `hostMode:desktop`、preload、54px 标题栏、五项系统控制、22/22 b3 surfaces、workspace layout/docks、owned/listening kernel 与 `mcpUrl` 全绿。Emacs full-project link、7 个 shared asset links 和小写旧入口规则通过。源码/构建/文档路径扫描无 checkout 依赖，Noema 达到独立终态。
+迁移期上游 checkout 已从仓库移除；最终复核时废纸篓中的历史 reference 副本也已不存在。在其完全缺席的状态下完成最终门禁：`make test` 为 206 files passed / 7 skipped、2004 tests passed / 16 skipped；`go test ./...` 全树通过，三个 FTS5 纵切通过；`make build`、`make install` 成功。该次 smoke 中的 workspace layout/docks 结论已由下方 UI 单画布校正取代；仍有效的证据是 `hostMode:desktop`、preload、54px 标题栏、五项系统控制、owned/listening kernel 与 `mcpUrl`。Emacs full-project link、7 个 shared asset links 和小写旧入口规则通过。源码/构建/文档路径扫描无 checkout 依赖，Noema 达到独立终态。
+
+### UI 单画布校正（2026-08-26，当前工作树）
+
+用户否决了上段记录中的 workspace layout/docks 产品方向：App 不应默认出现 tabbar，
+也不需要左、右、下三条 dock/card。生产入口现已撤掉 layout iframe、三边 rail 和
+Knowledge/Agenda 对正文的尺寸挤压；Window Actions 的 Split 改为新的原生 Noema 窗口
+平铺。App 与 Emacs 均直接挂载同一次 `createEditor(host)`，共享同一份
+`dist/aaronnote`；两者只保留标题栏/header-line 等宿主适配差异。
+
+B3 自动装饰器原先把所有 `<aside>` 和 `-panel` 后缀都当 raised panel，导致 status
+HUD、References、Emacs 顶部区域出现整块异色背景。分类现改为显式 UI surface 白名单；
+Meta cover、Properties、planning/TODO 与 References 同时回到透明 Noema 画布和细分隔
+语义。`make build` 的依赖关系显式先构建 App/Emacs 共用 renderer，再组装 App；
+`make install` 仅安装 App。
+
+Knowledge 的初始化与 Agenda 的 presentation 也已去掉 desktop-only/dock 分支：App 与
+Emacs 共享同一套按需浮层，server reader 只保留自身只读适配。聚焦
+B3/双宿主/Electron/Knowledge/Agenda 测试 35/35 通过；精确 Node 26.5.0、npm 11.17.0
+下正式 `make test` 为 204 files passed / 7 skipped、1996 tests passed / 16 skipped。
+新的显式共享构建链 `make build` 已通过：先生成 `dist/aaronnote`，再组装 Electron App
+和 Go kernel；`make install` 仅更新 `/Applications/Noema.app` 并成功。
+
+安装版 smoke 返回 `hostMode:desktop`、preload、54px 标题栏与五个规定系统控件；生产
+DOM/computed style 进一步证明只有 1 个 editor mount、0 iframe、无 workspace wrapper、
+0 persistent dock rails，body/shell 背景均为原 Aaronnote/Noema Midnight 的
+`rgb(20, 26, 39)`。status HUD 为透明且不属于 B3 panel，References 也不属于 panel。
+Emacs full-project link 与 canonical repository 的 `dist/aaronnote/index.html` inode 相同，
+7 个历史 asset links 全部解析到 `resources/`，retired lowercase path 缺席；Emacs
+`make jupyter-test` 四组共 141/141 通过。仓库中不再存在迁移期 `reference/` 或
+`references/` 目录，Noema 的源码、构建和桌面运行时均不依赖外部 checkout。

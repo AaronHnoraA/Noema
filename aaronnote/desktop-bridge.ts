@@ -27,19 +27,8 @@ if (desktopSmokeParams.get("desktopSmoke") === "1") {
       }
       await new Promise<void>((resolve) => setTimeout(resolve, 100));
     }
-    const workspaceRoot = document.querySelector<HTMLElement>(".noema-desktop-workspace.noema-workspace-layout");
-    const initialWorkspaceLeaves = workspaceRoot?.querySelectorAll(".noema-workspace-leaf").length || 0;
-    window.dispatchEvent(new CustomEvent("aaronnote:command", {
-      detail: { command: "workspace-split-right" },
-    }));
-    await new Promise<void>((resolve) => setTimeout(resolve, 40));
-    const splitWorkspaceLeaves = workspaceRoot?.querySelectorAll(".noema-workspace-leaf").length || 0;
-    const splitWorkspaceFrames = workspaceRoot?.querySelectorAll(".noema-workspace-editor-frame").length || 0;
-    window.dispatchEvent(new CustomEvent("aaronnote:command", {
-      detail: { command: "workspace-close-active" },
-    }));
-    await new Promise<void>((resolve) => setTimeout(resolve, 20));
-    const restoredWorkspaceLeaves = workspaceRoot?.querySelectorAll(".noema-workspace-leaf").length || 0;
+    const editorHost = document.querySelector<HTMLElement>("[data-editor]");
+    const focusedShell = document.querySelector<HTMLElement>(".aaronnote-focused-shell");
     const knowledgeDock = document.querySelector<HTMLElement>(".noema-knowledge-dock");
     let tocPopover: HTMLElement | null = null;
     let tocVisible = false;
@@ -91,34 +80,21 @@ if (desktopSmokeParams.get("desktopSmoke") === "1") {
       }));
       await new Promise<void>((resolve) => setTimeout(resolve, 220));
     }
-    window.dispatchEvent(new CustomEvent("aaronnote:command", {
-      detail: { command: "toggle-agenda" },
-    }));
+    window.dispatchEvent(new CustomEvent("aaronnote:command", { detail: { command: "toggle-agenda" } }));
     const agendaDeadline = Date.now() + 4_000;
-    let agendaDock = document.querySelector<HTMLElement>(".aaronnote-agenda-full.is-desktop-dock");
-    while ((!agendaDock || !agendaDock.dataset.agendaSource) && Date.now() < agendaDeadline) {
+    let agendaSurface = document.querySelector<HTMLElement>(".aaronnote-roam-tools.is-agenda");
+    while ((!agendaSurface || agendaSurface.hidden) && Date.now() < agendaDeadline) {
       await new Promise<void>((resolve) => setTimeout(resolve, 50));
-      agendaDock = document.querySelector<HTMLElement>(".aaronnote-agenda-full.is-desktop-dock");
-    }
-    // Window restoration and the shell's CSS transitions can overlap. Poll
-    // actual geometry so an occluded WKWebView reports the settled layout.
-    const layoutDeadline = Date.now() + 4_000;
-    while (agendaDock && Date.now() < layoutDeadline) {
-      const currentEditor = document.querySelector<HTMLElement>(".aaronnote-focused-shell")?.getBoundingClientRect();
-      const currentKnowledge = knowledgeDock?.getBoundingClientRect();
-      const currentAgenda = agendaDock.getBoundingClientRect();
-      const clearsKnowledge = !currentKnowledge || Boolean(currentEditor && currentEditor.right <= currentKnowledge.left + 1);
-      const clearsAgenda = Boolean(currentEditor && currentEditor.bottom <= currentAgenda.top + 1);
-      const docksClear = !currentKnowledge || currentAgenda.right <= currentKnowledge.left + 1;
-      if (clearsKnowledge && clearsAgenda && docksClear) break;
-      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      agendaSurface = document.querySelector<HTMLElement>(".aaronnote-roam-tools.is-agenda");
     }
     const titlebar = document.querySelector<HTMLElement>("[data-desktop-titlebar]");
+    const statusHud = document.querySelector<HTMLElement>(".aaronnote-status-hud");
+    const bibliography = document.querySelector<HTMLElement>(".aaronnote-bib-panel");
     const controls = Array.from(document.querySelectorAll<HTMLElement>("[data-desktop-command], [data-desktop-menu]"));
     const bounds = titlebar?.getBoundingClientRect();
     const dockBounds = knowledgeDock?.getBoundingClientRect();
-    const agendaBounds = agendaDock?.getBoundingClientRect();
-    const editorBounds = document.querySelector<HTMLElement>(".aaronnote-focused-shell")?.getBoundingClientRect();
+    const agendaBounds = agendaSurface?.getBoundingClientRect();
+    const editorBounds = focusedShell?.getBoundingClientRect();
     const themeStyle = getComputedStyle(document.documentElement);
     const theme = {
       id: document.documentElement.dataset.noemaTheme || "",
@@ -134,7 +110,7 @@ if (desktopSmokeParams.get("desktopSmoke") === "1") {
       ...b3Audit,
       knowledgeDock: Boolean(knowledgeDock?.classList.contains("b3-panel")),
       tocPopover: Boolean(tocPopover?.classList.contains("b3-panel")),
-      agendaDock: Boolean(agendaDock?.classList.contains("b3-panel")),
+      agendaSurface: Boolean(agendaSurface?.classList.contains("b3-panel")),
     };
     let katexMacros: { source: string; count: number; errors: number } | null = null;
     try {
@@ -158,16 +134,20 @@ if (desktopSmokeParams.get("desktopSmoke") === "1") {
       b3Components,
       visualTypography: auditVisualTypography(document),
       productionHandfeel: auditProductionHandfeel(document),
-      workspaceLayout: workspaceRoot ? {
-        version: workspaceRoot.dataset.workspaceLayoutVersion || "",
-        initialLeaves: initialWorkspaceLeaves,
-        splitLeaves: splitWorkspaceLeaves,
-        lazyFrames: splitWorkspaceFrames,
-        restoredLeaves: restoredWorkspaceLeaves,
-        splitControls: workspaceRoot.querySelectorAll("[data-noema-workspace-split]").length,
-        rails: Array.from(document.querySelectorAll<HTMLElement>("[data-noema-dock-rail]"))
-          .map((rail) => rail.dataset.noemaDockRail || ""),
-      } : null,
+      sharedEditor: {
+        mountCount: document.querySelectorAll(".aaronnote-focused-editor[data-editor]").length,
+        directShellChild: editorHost?.parentElement === focusedShell,
+        iframeCount: document.querySelectorAll(".noema-workspace-editor-frame").length,
+        workspaceWrapper: Boolean(document.querySelector(".noema-desktop-workspace, .noema-workspace-layout")),
+        persistentDockRails: document.querySelectorAll("[data-noema-dock-rail]").length,
+      },
+      canvas: {
+        bodyBackground: getComputedStyle(document.body).backgroundColor,
+        shellBackground: focusedShell ? getComputedStyle(focusedShell).backgroundColor : "",
+        statusHudIsPanel: Boolean(statusHud?.classList.contains("b3-panel")),
+        statusHudBackground: statusHud ? getComputedStyle(statusHud).backgroundColor : "",
+        bibliographyIsPanel: Boolean(bibliography?.classList.contains("b3-panel")),
+      },
       tocPopover: tocPopover ? {
         visible: tocVisible,
         status: tocStatus,
@@ -188,24 +168,14 @@ if (desktopSmokeParams.get("desktopSmoke") === "1") {
         top: dockBounds?.top || 0,
         bottom: dockBounds?.bottom || 0,
         width: dockBounds?.width || 0,
-        editorClearsDock: Boolean(editorBounds && dockBounds && editorBounds.right <= dockBounds.left + 1),
-        position: knowledgeDock.dataset.noemaDockPosition || "",
-        pinned: knowledgeDock.dataset.noemaDockPinned || "",
+        overlaysEditor: Boolean(editorBounds && dockBounds && dockBounds.left < editorBounds.right),
       } : null,
-      agendaDock: agendaDock ? {
-        visible: !agendaDock.hidden && Boolean(agendaBounds?.height),
-        surface: agendaDock.dataset.agendaSurface || "",
-        source: agendaDock.dataset.agendaSource || "",
-        views: Array.from(agendaDock.querySelectorAll<HTMLElement>(".aaronnote-agenda-full-tabs button"))
-          .map((tab) => tab.textContent?.trim() || ""),
-        stats: agendaDock.querySelector<HTMLElement>(".aaronnote-agenda-full-stats")?.textContent?.trim() || "",
+      agendaSurface: agendaSurface ? {
+        visible: !agendaSurface.hidden && Boolean(agendaBounds?.height),
+        presentation: "transient",
         top: agendaBounds?.top || 0,
         bottom: agendaBounds?.bottom || 0,
         height: agendaBounds?.height || 0,
-        editorClearsDock: Boolean(editorBounds && agendaBounds && editorBounds.bottom <= agendaBounds.top + 1),
-        clearsKnowledgeDock: Boolean(!dockBounds || !agendaBounds || agendaBounds.right <= dockBounds.left + 1),
-        position: agendaDock.dataset.noemaDockPosition || "",
-        pinned: agendaDock.dataset.noemaDockPinned || "",
       } : null,
       katexMacros,
       kernel: backendKernel,

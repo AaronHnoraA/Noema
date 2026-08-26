@@ -25,9 +25,6 @@ export type AgendaViewDeps = {
   /** True when mounted as the standalone `/agenda` page: hides the "Close"
    * button (there is nothing to return to) and syncs `view`/`q` to the URL. */
   pageMode?: boolean;
-  /** App adapter presentation. The shared renderer/data model is unchanged;
-   * only its containing surface is docked into the desktop workbench. */
-  surface?: "overlay" | "desktop-dock";
   onOpenChange?: (open: boolean) => void;
 };
 
@@ -2396,9 +2393,7 @@ export async function openAgendaView(nextDeps: AgendaViewDeps): Promise<void> {
   deps = nextDeps;
   ensureOverlay();
   if (!overlay) return;
-  const desktopDock = nextDeps.surface === "desktop-dock";
-  overlay.classList.toggle("is-desktop-dock", desktopDock);
-  overlay.dataset.agendaSurface = desktopDock ? "desktop-dock" : nextDeps.pageMode ? "page" : "overlay";
+  overlay.dataset.agendaSurface = nextDeps.pageMode ? "page" : "overlay";
   delete overlay.dataset.agendaSource;
   overlay.hidden = false;
   nextDeps.onOpenChange?.(true);

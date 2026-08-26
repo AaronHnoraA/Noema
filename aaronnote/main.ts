@@ -78,17 +78,6 @@ import { primaryModifierDown } from "../src/platform-compat.ts";
 import type { HeadingNumberFormat } from "../src/heading-number.ts";
 import { createMenuController, type NoemaMenuItem } from "../src/menu-system.ts";
 import { createTransientSurfaceRegistry } from "../src/transient-surfaces.ts";
-import {
-  createWorkspaceLayout,
-  findWorkspaceNode,
-  parseWorkspaceLayout,
-  workspaceLeaves,
-  workspaceTabs,
-  type WorkspaceLayoutState,
-  type WorkspaceTab,
-} from "../src/workspace-layout.ts";
-import { createWorkspaceLayoutView, type WorkspaceLayoutView } from "../src/workspace-layout-view.ts";
-import { createWorkspaceDockController, type WorkspaceDockController } from "../src/workspace-dock.ts";
 import { blobToBase64 } from "../src/paste.ts";
 import { collectFindMatches, createFindPattern, type FindMatch } from "./find.ts";
 import { AssistScheduler, type AssistUpdateFlags, type AssistUpdateOptions } from "./assist-scheduler.ts";
@@ -225,12 +214,7 @@ import {
   createDesktopKnowledgeDock,
   type DesktopKnowledgeDock,
 } from "./desktop-knowledge-dock.ts";
-import {
-  closeAgendaView,
-  isAgendaViewOpen,
-  openAgendaView,
-  refreshAgendaView,
-} from "./agenda-view.ts";
+import { refreshAgendaView } from "./agenda-view.ts";
 
 const removeNoemaThemeRuntime = installNoemaThemeRuntime();
 const root = document.querySelector<HTMLElement>("#app");
@@ -271,13 +255,11 @@ const passiveServerReader = serverReaderMode && !serverReader.editingAids;
 const initialReadOnly = serverReaderMode || initialParams.get("readonly") === "1" || initialParams.get("readonly") === "true";
 const desktopMode = standaloneMode() && Boolean(window.noemaDesktop);
 let activeObsidianTaskID = "";
-const workspacePaneMode = desktopMode && initialParams.get("workspacePane") === "1";
 const jupyterExecutionAvailable = !serverReaderMode;
 const desktopPlatform = window.noemaDesktop?.platform || (/Mac/.test(navigator.platform) ? "darwin" : "");
 const platformLabels = desktopPlatformLabels(desktopPlatform);
 document.body.dataset.hostMode = serverReaderMode ? "server" : desktopMode ? "desktop" : "emacs";
 if (desktopMode) document.body.dataset.desktopPlatform = desktopPlatform;
-if (workspacePaneMode) document.body.dataset.workspacePane = "true";
 if (serverReaderMode) {
   document.body.dataset.serverReaderEditingAids = String(serverReader.editingAids);
 }
@@ -371,12 +353,12 @@ prosePopover.hidden = true;
 document.body.appendChild(prosePopover);
 
 const graphPanelRoot = document.createElement("aside");
-graphPanelRoot.className = `aaronnote-local-graph-panel is-collapsed${desktopMode ? " noema-knowledge-dock" : ""}`;
-graphPanelRoot.setAttribute("aria-label", desktopMode ? "Knowledge dock" : "Knowledge graph");
+graphPanelRoot.className = "aaronnote-local-graph-panel noema-knowledge-dock is-collapsed";
+graphPanelRoot.setAttribute("aria-label", "Knowledge");
 graphPanelRoot.innerHTML = `
   <header class="noema-knowledge-dock-header">
-    <strong>${desktopMode ? "Knowledge" : "Knowledge graph"}</strong>
-    <nav class="noema-knowledge-dock-tabs" role="tablist" aria-label="Knowledge views" ${desktopMode ? "" : "hidden"}>
+    <strong>Knowledge</strong>
+    <nav class="noema-knowledge-dock-tabs" role="tablist" aria-label="Knowledge views" ${serverReaderMode ? "hidden" : ""}>
       <button type="button" role="tab" data-knowledge-view="backlinks">Backlinks</button>
       <button type="button" role="tab" data-knowledge-view="mentions">Mentions</button>
       <button type="button" role="tab" data-knowledge-view="graph">Graph</button>
@@ -978,15 +960,6 @@ let currentRemote = false;
 let currentReadOnly = initialReadOnly;
 let currentMtimeMs = 0;
 let currentVersion = "";
-type WorkspacePaneState = {
-  file: string;
-  client: string;
-  dirty?: boolean;
-};
-const WORKSPACE_LAYOUT_STORAGE_KEY = "noema.workspace.layout.v1";
-const PRIMARY_WORKSPACE_TAB_ID = "noema-primary-editor";
-let workspaceLayoutView: WorkspaceLayoutView<WorkspacePaneState> | null = null;
-const workspacePaneFrames = new Map<string, HTMLIFrameElement>();
 let revision = 0;
 let savedRevision = 0;
 // Unlike the document-local revision, this must never reset when a note is
@@ -1032,7 +1005,6 @@ let notes: NoteSummary[] = [];
 let pathSuggestions: string[] = [];
 let currentRelationshipSource = "";
 let desktopKnowledgeDock: DesktopKnowledgeDock | null = null;
-let workspaceDockController: WorkspaceDockController | null = null;
 // Tracks the index version from the last notesIndexPayload response so we can
 // detect when the server's watcher has bumped the index due to external changes.
 let lastNotesIndexVersion = 0;
@@ -1493,7 +1465,6 @@ function updateTitle(): void {
   document.title = currentReadOnly
     ? serverReaderMode ? `${displayName} · Noema Wiki` : `${name} (read-only)`
     : revision === savedRevision ? name : `* ${name}`;
-  syncWorkspacePrimaryTab();
   const windowState = {
     kind: "note" as const,
     file: currentFile,
@@ -1503,17 +1474,7 @@ function updateTitle(): void {
     conflict: desktopSaveConflict,
     busy: false,
   };
-  if (workspacePaneMode) {
-    window.parent.postMessage({
-      type: "noema-workspace-pane-state",
-      client: currentClient,
-      state: windowState,
-    }, window.location.origin);
-  } else if (workspaceLayoutView) {
-    syncActiveWorkspaceWindowState(workspaceLayoutView.getState());
-  } else {
-    window.noemaDesktop?.updateWindowState(windowState);
-  }
+  window.noemaDesktop?.updateWindowState(windowState);
 }
 
 function renderModeToggleLabel(mode: VimLiteMode): void {
@@ -1595,145 +1556,6 @@ const editor = createEditor(host, {
   },
 });
 
-function defaultWorkspaceLayout(): WorkspaceLayoutState<WorkspacePaneState> {
-  return createWorkspaceLayout({
-    type: "leaf",
-    id: "noema-primary-leaf",
-    activeTabId: PRIMARY_WORKSPACE_TAB_ID,
-    tabs: [{
-      id: PRIMARY_WORKSPACE_TAB_ID,
-      kind: "primary-editor",
-      title: "Noema",
-      state: { file: "", client: "primary" },
-    }],
-  });
-}
-
-function validWorkspaceLayout(state: WorkspaceLayoutState<WorkspacePaneState>): boolean {
-  const tabs = workspaceTabs(state.root);
-  return tabs.filter((tab) => tab.id === PRIMARY_WORKSPACE_TAB_ID && tab.kind === "primary-editor").length === 1
-    && tabs.every((tab) => tab.kind === "primary-editor" || tab.kind === "editor-pane")
-    && workspaceLeaves(state.root).every((leaf) => leaf.tabs.length > 0);
-}
-
-function workspacePaneUrl(state: WorkspacePaneState): string {
-  const url = new URL(window.location.pathname || "/", window.location.origin);
-  url.searchParams.set("workspacePane", "1");
-  if (state.file) url.searchParams.set("file", state.file);
-  if (state.client) url.searchParams.set("client", state.client);
-  return url.toString();
-}
-
-function newWorkspacePaneClient(): string {
-  return `workspace-${typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
-}
-
-function activeWorkspaceTab(): WorkspaceTab<WorkspacePaneState> | null {
-  const state = workspaceLayoutView?.getState();
-  if (!state) return null;
-  const leaf = findWorkspaceNode(state.root, state.activeLeafId);
-  return leaf?.type === "leaf" ? leaf.tabs.find((tab) => tab.id === leaf.activeTabId) ?? null : null;
-}
-
-function syncActiveWorkspaceWindowState(state: WorkspaceLayoutState<WorkspacePaneState>): void {
-  const leaf = findWorkspaceNode(state.root, state.activeLeafId);
-  const tab = leaf?.type === "leaf" ? leaf.tabs.find((item) => item.id === leaf.activeTabId) : null;
-  if (!tab) return;
-  const primary = tab.kind === "primary-editor";
-  const file = primary ? currentFile : tab.state.file;
-  const title = primary
-    ? currentFile.split(/[\\/]/u).at(-1) || "Noema"
-    : tab.title || tab.state.file.split(/[\\/]/u).at(-1) || "Noema";
-  const dirty = primary ? !currentReadOnly && revision !== savedRevision : Boolean(tab.state.dirty);
-  desktopTitleName.textContent = title;
-  desktopTitleName.title = file || title;
-  document.title = dirty ? `* ${title}` : title;
-  window.noemaDesktop?.updateWindowState({
-    kind: "note",
-    file,
-    title,
-    dirty,
-    saveInFlight: primary ? desktopSaveInFlight : false,
-    conflict: primary ? desktopSaveConflict : false,
-    busy: false,
-  });
-}
-
-function installDesktopWorkspaceLayout(): void {
-  if (!desktopMode || workspacePaneMode) return;
-  const fallback = defaultWorkspaceLayout();
-  let restored = fallback;
-  try {
-    restored = parseWorkspaceLayout<WorkspacePaneState>(localStorage.getItem(WORKSPACE_LAYOUT_STORAGE_KEY), fallback);
-  } catch {
-    restored = fallback;
-  }
-  if (!validWorkspaceLayout(restored)) restored = fallback;
-
-  const layoutRoot = document.createElement("div");
-  layoutRoot.className = "noema-desktop-workspace";
-  host.replaceWith(layoutRoot);
-  workspaceLayoutView = createWorkspaceLayoutView(layoutRoot, {
-    state: restored,
-    cloneTab: (tab, id) => ({
-      id,
-      kind: "editor-pane",
-      title: `${tab.title || "Noema"} · split`,
-      state: {
-        file: tab.kind === "primary-editor" ? currentFile : tab.state.file,
-        client: newWorkspacePaneClient(),
-      },
-    }),
-    mountTab: ({ tab, host: panel }) => {
-      if (tab.kind === "primary-editor") {
-        panel.append(host);
-        return;
-      }
-      const frame = document.createElement("iframe");
-      frame.className = "noema-workspace-editor-frame";
-      frame.title = tab.title;
-      frame.src = workspacePaneUrl(tab.state);
-      frame.setAttribute("allow", "clipboard-read; clipboard-write");
-      frame.addEventListener("focus", () => {
-        const leafId = panel.dataset.noemaWorkspaceLeaf || "";
-        if (leafId) workspaceLayoutView?.activate(leafId, tab.id);
-      });
-      panel.append(frame);
-      workspacePaneFrames.set(tab.id, frame);
-      return () => {
-        workspacePaneFrames.delete(tab.id);
-        frame.src = "about:blank";
-        frame.remove();
-      };
-    },
-    onStateChange: (state) => {
-      document.body.dataset.workspacePanes = String(workspaceLeaves(state.root).length);
-      try {
-        localStorage.setItem(WORKSPACE_LAYOUT_STORAGE_KEY, JSON.stringify(state));
-      } catch {
-        // The live recursive layout remains authoritative for this window.
-      }
-      syncActiveWorkspaceWindowState(state);
-    },
-    onPopoutTab: (tab) => {
-      const file = tab.kind === "primary-editor" ? currentFile : tab.state.file;
-      if (file) void window.noemaDesktop?.openFiles([file]);
-    },
-    canCloseTab: (tab) => tab.id !== PRIMARY_WORKSPACE_TAB_ID,
-  });
-  document.body.dataset.workspacePanes = String(workspaceLeaves(workspaceLayoutView.getState().root).length);
-}
-
-function syncWorkspacePrimaryTab(): void {
-  const dirty = !currentReadOnly && revision !== savedRevision;
-  const name = currentFile.split(/[\\/]/u).at(-1) || "Noema";
-  workspaceLayoutView?.updateTab(PRIMARY_WORKSPACE_TAB_ID, (tab) => {
-    if (tab.title === name && tab.state.file === currentFile && tab.state.dirty === dirty) return tab;
-    return { ...tab, title: name, state: { ...tab.state, file: currentFile, dirty } };
-  });
-}
-
-installDesktopWorkspaceLayout();
 document.body.dataset.headingNumbers = headingNumberingPreference.enabled ? "true" : "false";
 
 function applyHeadingNumberingPreference(
@@ -2730,7 +2552,7 @@ let pendingKnowledgeInsert: { from: number; to: number; selected: string } | nul
 const hideKnowledgeSearch = (): void => { globalSearchRoot.hidden = true; globalSearchInput.value = ""; pendingKnowledgeInsert = null; editor.focus(); };
 const showKnowledgeSearch = (): void => {
   if (serverReaderMode) { serverSearchInput?.focus(); return; }
-  if (desktopMode && desktopKnowledgeDock && !pendingKnowledgeInsert) {
+  if (desktopKnowledgeDock && !pendingKnowledgeInsert) {
     desktopKnowledgeDock.show("search");
     return;
   }
@@ -2793,7 +2615,7 @@ const localGraphPanel = createLocalGraphPanel({
   openTag: openTagFilter,
 });
 
-if (desktopMode && !workspacePaneMode) {
+if (!serverReaderMode) {
   createKnowledgeSearch({
     input: knowledgeSearchInput,
     anchor: knowledgeSearchAnchor,
@@ -2864,39 +2686,10 @@ if (desktopMode && !workspacePaneMode) {
         .sort((a, b) => Number(b.current) - Number(a.current) || b.count - a.count || a.name.localeCompare(b.name));
     },
     openTag: openTagFilter,
-    onStateChange: (_view, expanded) => workspaceDockController?.syncVisibility("knowledge", expanded),
+    onStateChange: () => {},
     onGraphVisible: () => localGraphPanel.update(true),
     onGraphHidden: () => localGraphPanel.suspend(),
     onCollapse: () => localGraphPanel.collapse(),
-  });
-
-  workspaceDockController = createWorkspaceDockController({
-    body: document.body,
-    storage: localStorage,
-  });
-  workspaceDockController.register({
-    id: "knowledge",
-    label: "Knowledge",
-    element: () => graphPanelRoot,
-    open: () => desktopKnowledgeDock?.show(desktopKnowledgeDock.activeView(), { focus: false }),
-    close: () => desktopKnowledgeDock?.collapse(),
-    focus: () => graphPanelRoot.querySelector<HTMLElement>("button, input, select, [tabindex]")?.focus(),
-    defaultPosition: "right",
-    defaultSize: 390,
-    minSize: 320,
-    maxSize: 720,
-  });
-  workspaceDockController.register({
-    id: "agenda",
-    label: "Agenda",
-    element: () => document.querySelector<HTMLElement>(".aaronnote-agenda-full.is-desktop-dock"),
-    open: openDesktopAgendaDock,
-    close: closeAgendaView,
-    focus: () => document.querySelector<HTMLElement>(".aaronnote-agenda-full.is-desktop-dock")?.focus(),
-    defaultPosition: "bottom",
-    defaultSize: 430,
-    minSize: 180,
-    maxSize: 720,
   });
 }
 const graphOverlayTimer = new CoalescedTimer(400);
@@ -8031,40 +7824,7 @@ function agendaOpenTodo(todo: TodoItem): void {
   void openFile(file);
 }
 
-async function jumpFromAgendaView(todo: TodoItem): Promise<void> {
-  const file = todoString(todo, "file");
-  if (!file) return;
-  const target = todoTargetFromItem(todo);
-  if (sameOpenFile(file)) {
-    if (!jumpToTodoTarget(target)) setStatus("Todo location not found");
-    return;
-  }
-  pendingTodoTarget = target;
-  await openFile(file);
-}
-
-async function openDesktopAgendaDock(): Promise<void> {
-  if (!roamToolsPanel.hidden) closeRoamToolsPanel();
-  await openAgendaView({
-    api,
-    jumpToTodo: jumpFromAgendaView,
-    setStatus,
-    surface: "desktop-dock",
-    onOpenChange: (open) => {
-      document.body.classList.toggle("noema-agenda-dock-open", open);
-      agendaButton.setAttribute("aria-expanded", String(open));
-      workspaceDockController?.syncVisibility("agenda", open);
-      if (!open) editor.focus();
-    },
-  });
-}
-
 function toggleAgendaSurface(): void {
-  if (desktopMode) {
-    if (isAgendaViewOpen()) closeAgendaView();
-    else void openDesktopAgendaDock();
-    return;
-  }
   if (!roamToolsPanel.hidden && roamToolsPanel.classList.contains("is-agenda")) closeRoamToolsPanel();
   else void openAgendaTool();
 }
@@ -10710,26 +10470,6 @@ function runHostKey(body: Record<string, unknown>): boolean {
   return inserted;
 }
 
-const WORKSPACE_FORWARDABLE_COMMANDS = new Set([
-  "save", "refresh", "reload", "back", "nav-back", "navigation-back", "forward", "nav-forward", "navigation-forward",
-  "find", "find-next", "find-previous", "focus", "paste", "escape", "normal", "vim-normal", "insert", "vim-insert",
-  "toggle-source", "source", "toggle-heading-numbers", "heading-numbers", "toggle-toc", "toggle-agenda", "toggle-graph", "toggle-tools",
-  "prose-check", "spell-check", "export-html", "export-pdf", "export-latex", "open-source-editor", "reveal-current-file",
-  "capture-format", "capture-format-once", "copy-format", "capture-format-continuous", "copy-format-continuous", "apply-format", "paint-format",
-  "clear-format-painter", "cancel-format-painter", "undo", "redo", "jupyter-panel", "jupyter-run-cell", "jupyter-run-all",
-  "jupyter-run-section", "jupyter-restart-run-all", "jupyter-interrupt", "jupyter-runtime-tasks", "jupyter-cleanup", "jupyter-switch-kernel",
-]);
-
-function forwardHostCommandToWorkspacePane(command: string, detail: unknown): boolean {
-  if (workspacePaneMode || command.startsWith("workspace-")) return false;
-  if (!WORKSPACE_FORWARDABLE_COMMANDS.has(command) && !isEditorCommand(command)) return false;
-  const tab = activeWorkspaceTab();
-  const frame = tab?.kind === "editor-pane" ? workspacePaneFrames.get(tab.id) : null;
-  if (!frame?.contentWindow) return false;
-  frame.contentWindow.postMessage({ type: "noema-workspace-command", detail }, window.location.origin);
-  return true;
-}
-
 function runHostCommand(detail: unknown): boolean {
   const body = (detail && typeof detail === "object" ? detail : {}) as {
     command?: string;
@@ -10753,7 +10493,6 @@ function runHostCommand(detail: unknown): boolean {
   };
   const command = String(body.command || "").trim().toLowerCase();
   if (!command) return false;
-  if (forwardHostCommandToWorkspacePane(command, detail)) return true;
 
   switch (command) {
     case "notes-index-changed": {
@@ -10965,14 +10704,6 @@ function runHostCommand(detail: unknown): boolean {
     case "heading-numbers":
       toggleHeadingNumbering();
       return true;
-    case "workspace-split-right":
-      return workspaceLayoutView?.splitActive("lr") ?? false;
-    case "workspace-split-below":
-      return workspaceLayoutView?.splitActive("tb") ?? false;
-    case "workspace-close-active": {
-      const tab = activeWorkspaceTab();
-      return tab ? workspaceLayoutView?.close(tab.id) ?? false : false;
-    }
     case "capture-format":
     case "capture-format-once":
     case "copy-format":
@@ -11637,46 +11368,9 @@ root.querySelectorAll<HTMLButtonElement>("[data-desktop-menu]").forEach((button)
   });
 });
 
-const removeDesktopCommandListener = desktopMode && !workspacePaneMode
+const removeDesktopCommandListener = desktopMode
   ? window.noemaDesktop?.onCommand((detail) => runHostCommand(detail)) ?? null
   : null;
-
-window.addEventListener("message", (event) => {
-  if (event.origin !== window.location.origin || !event.data || typeof event.data !== "object") return;
-  const message = event.data as { type?: unknown; detail?: unknown; client?: unknown; state?: unknown };
-  if (workspacePaneMode && message.type === "noema-workspace-command") {
-    runHostCommand(message.detail);
-    return;
-  }
-  if (workspacePaneMode || message.type !== "noema-workspace-pane-state" || !workspaceLayoutView) return;
-  const client = String(message.client || "");
-  const paneState = message.state && typeof message.state === "object"
-    ? message.state as { file?: unknown; title?: unknown; dirty?: unknown; saveInFlight?: unknown; conflict?: unknown }
-    : {};
-  const state = workspaceLayoutView.getState();
-  const tab = workspaceTabs(state.root).find((item) => item.kind === "editor-pane" && item.state.client === client);
-  if (!tab) return;
-  const file = String(paneState.file || tab.state.file || "");
-  const title = String(paneState.title || file.split(/[\\/]/u).at(-1) || tab.title || "Noema");
-  const dirty = Boolean(paneState.dirty);
-  workspaceLayoutView.updateTab(tab.id, (current) => {
-    if (current.title === title && current.state.file === file && current.state.dirty === dirty) return current;
-    return { ...current, title, state: { ...current.state, file, dirty } };
-  });
-  if (activeWorkspaceTab()?.id !== tab.id) return;
-  desktopTitleName.textContent = title;
-  desktopTitleName.title = file || title;
-  document.title = dirty ? `* ${title}` : title;
-  window.noemaDesktop?.updateWindowState({
-    kind: "note",
-    file,
-    title,
-    dirty,
-    saveInFlight: Boolean(paneState.saveInFlight),
-    conflict: Boolean(paneState.conflict),
-    busy: false,
-  });
-});
 
 window.addEventListener("aaronnote:command", (event) => {
   const detail = (event as CustomEvent<unknown>).detail;
@@ -11827,10 +11521,6 @@ window.addEventListener("beforeunload", () => {
   imeCoalesceTimer.cancel();
   zoomController.destroy();
   writingStatsController?.destroy();
-  workspaceDockController?.destroy();
-  workspaceDockController = null;
-  workspaceLayoutView?.destroy();
-  workspaceLayoutView = null;
   flushCursorPositionKeepalive();
   notifyClientClosedKeepalive();
 });

@@ -85,6 +85,22 @@ aaronnote/
 Controller 显式返回 `destroy()`；`window.aaronnoteApi`、宿主事件和 xwidget wire
 protocol 保持不变。
 
+### App / Emacs 单一渲染契约
+
+App 与 Emacs 都由 `web-host.mjs` 提供同一份 `dist/aaronnote`，都只执行一次
+`aaronnote/main.ts -> createEditor(host)`。`data-host-mode` 只允许适配宿主 chrome：
+Electron 显示 54px 系统标题栏、原生菜单、拖放和新窗口；Emacs 保留 header-line、
+xwidget/Appine、buffer、gateway 与按键适配。正文 DOM、CM6 extensions、主题、排版和
+document widgets 不按宿主分叉。
+
+Electron 不在正文外再注入 tab/leaf/左/右/下 dock。Window Actions 的平铺命令创建
+新的原生 Noema 窗口；Knowledge、Agenda、TOC 等只在调用时作为共享浮层出现，不改变
+编辑画布尺寸。B3 组件装饰使用显式 surface 白名单，不能依据 `<aside>` 或 `-panel`
+后缀把 status HUD、References 等正文区域提升成卡片。
+
+`make build-web` 生成两宿主共同消费的 renderer；`make build` 先执行这一步，再组装
+standalone Noema.app。`make install` 只负责安装已经构建的 App，不另建 Emacs UI。
+
 ## Node host
 
 ```text

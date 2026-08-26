@@ -88,12 +88,10 @@ describe("SiYuan-derived Electron desktop adapter", () => {
     expect(editor).toContain('desktopKnowledgeDock.show("backlinks")');
     expect(editor).toContain('case "knowledge-mentions"');
     expect(editor).toContain("api.knowledge.virtualReferences");
-    expect(editor).toContain("createWorkspaceLayoutView(layoutRoot");
-    expect(editor).toContain("createWorkspaceDockController({");
-    expect(editor).toContain('id: "knowledge"');
-    expect(editor).toContain('id: "agenda"');
-    expect(editor).toContain('case "workspace-split-right"');
-    expect(editor).toContain('case "workspace-split-below"');
+    expect(editor).toContain("const editor = createEditor(host");
+    expect(editor).not.toContain("createWorkspaceLayoutView");
+    expect(editor).not.toContain("createWorkspaceDockController");
+    expect(editor).not.toContain("workspacePane");
     expect(editor).toContain("renderPublishedNoteHTML(currentMarkdownText()");
     expect(editor).toContain('case "export-pdf"');
     expect(editor).toContain('case "export-html"');
@@ -113,16 +111,16 @@ describe("SiYuan-derived Electron desktop adapter", () => {
     expect(bridge).toContain('command: "knowledge-mentions"');
     expect(bridge).toContain("mentionStatus");
     expect(bridge).toContain("mentionItems");
-    expect(bridge).toContain("agendaDock");
+    expect(bridge).toContain("agendaSurface");
     expect(bridge).toContain("katexMacros");
     expect(bridge).toContain("b3ThemePrimary");
     expect(bridge).toContain('getPropertyValue("--b3-theme-background")');
     expect(bridge).toContain("visualTypography: auditVisualTypography(document)");
     expect(bridge).toContain("productionHandfeel: auditProductionHandfeel(document)");
-    expect(bridge).toContain("workspaceLayout:");
-    expect(bridge).toContain('command: "workspace-split-right"');
-    expect(bridge).toContain('command: "workspace-close-active"');
-    expect(bridge).toContain("splitWorkspaceFrames");
+    expect(bridge).toContain("sharedEditor:");
+    expect(bridge).toContain("persistentDockRails");
+    expect(bridge).toContain("statusHudIsPanel");
+    expect(bridge).not.toContain('command: "workspace-split-right"');
     expect(bridge).toContain("reportSmoke");
     expect(bridge).not.toContain("__TAURI_INTERNALS__");
     expect(wiki).toContain("window.noemaDesktop.openTarget");
@@ -133,6 +131,7 @@ describe("SiYuan-derived Electron desktop adapter", () => {
     const build = read("scripts/build-electron.mjs");
     const prepare = read("scripts/prepare-electron-runtime.mjs");
     const makefile = read("Makefile");
+    const manifest = readJson("package.json");
 
     expect(build).toContain('resolve("node_modules", "electron", "dist", "Electron.app")');
     expect(build).toContain('hardlinkTree(join(sourceContents, "Frameworks")');
@@ -147,6 +146,9 @@ describe("SiYuan-derived Electron desktop adapter", () => {
     expect(prepare).toContain('"go",');
     expect(prepare).toContain('"fts5"');
     expect(makefile).toContain("build/electron/$(APP_NAME).app");
+    expect(makefile).toContain("prune-legacy-garbage build-web");
+    expect(makefile).toContain("npm run build:desktop-shell");
+    expect(manifest.scripts["build:desktop"]).toContain("npm run build:aaronnote");
     expect(makefile).toContain("prune-legacy-garbage");
     expect(makefile).toContain("prune-desktop-stage");
     expect(makefile).toContain("clean-cache:");

@@ -525,6 +525,23 @@ function commandItem(label, command, accelerator = undefined) {
   };
 }
 
+function splitWindowItem(label, disposition, accelerator = undefined) {
+  return {
+    label,
+    ...(accelerator ? { accelerator } : {}),
+    click: (_item, win) => {
+      const source = win || activeWindow();
+      const state = source && windowStates.get(source.id);
+      if (!source || !state) return;
+      openTarget({
+        ...(state.file ? { file: state.file } : { url: new URL(state.route || "/wiki", hostUrl).toString() }),
+        source: "window",
+        disposition,
+      }, source);
+    },
+  };
+}
+
 async function chooseMarkdownFiles() {
   const options = {
     title: "Open in Noema",
@@ -631,9 +648,8 @@ function windowActionsTemplate(win = activeWindow()) {
   return [
     { label: "New Window", accelerator: "CmdOrCtrl+Shift+N", click: () => createWindow() },
     { label: "Open…", accelerator: "CmdOrCtrl+O", click: () => void chooseMarkdownFiles() },
-    commandItem("Split Right", "workspace-split-right", "CmdOrCtrl+\\"),
-    commandItem("Split Below", "workspace-split-below", "Shift+CmdOrCtrl+\\"),
-    commandItem("Close Active Split", "workspace-close-active"),
+    splitWindowItem("Tile New Window Right", "split-right", "CmdOrCtrl+\\"),
+    splitWindowItem("Tile New Window Below", "split-down", "Shift+CmdOrCtrl+\\"),
     { type: "separator" },
     { label: "Minimize", role: "minimize" },
     zoomItem,
@@ -766,9 +782,8 @@ function buildApplicationMenu() {
       label: "Window",
       submenu: [
         { label: "New Window", accelerator: "CmdOrCtrl+Shift+N", click: () => createWindow() },
-        commandItem("Split Right", "workspace-split-right", "CmdOrCtrl+\\"),
-        commandItem("Split Below", "workspace-split-below", "Shift+CmdOrCtrl+\\"),
-        commandItem("Close Active Split", "workspace-close-active"),
+        splitWindowItem("Tile New Window Right", "split-right", "CmdOrCtrl+\\"),
+        splitWindowItem("Tile New Window Below", "split-down", "Shift+CmdOrCtrl+\\"),
         { type: "separator" },
         { role: "minimize" },
         ...(desktopPlatform === "darwin"
