@@ -1616,9 +1616,9 @@ invertible. This identifies one matching pair of summands. Removing that this is
 hhhhhhh hhhh this is good to see 
 
 
-pair and applying induction proves the result.
+  pair and applying induction proves the result. this is sssssssssssssssssssss some thing here to use as some eas \(\frac{asdasd}{asdas} sadasd\)  This is easy to use as something hard to seee
 #+end proof
-
+ 
 中文直觉：如果整体分解成不可再拆的小块，那么同构不能把“小块类型”凭空改变，只能重排。
 
 ## 3.7. Measurement statistics

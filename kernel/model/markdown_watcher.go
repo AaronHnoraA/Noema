@@ -38,6 +38,14 @@ func handleMarkdownFileEvent(boxID, absPath string, removed bool) {
 		return
 	}
 	if !isMarkdownDocPath(absPath) {
+		rel, relErr := filepath.Rel(filesys.BoxRootPath(boxID), absPath)
+		if relErr == nil && markdownAssetCandidate(rel) {
+			if removed {
+				removeMarkdownAssetContent(boxID, absPath)
+			} else if filelock.IsExist(absPath) {
+				indexMarkdownAssetContent(boxID, absPath)
+			}
+		}
 		return
 	}
 	if filelock.IsHidden(absPath) {

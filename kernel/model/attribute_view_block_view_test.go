@@ -296,9 +296,7 @@ func setupDatabaseBlockTransactionTest(t *testing.T, initialDatabase bool) *data
 		}
 		treenode.CloseDatabase()
 		util.BlockTreeDBPath = oldBlockTreeDBPath
-		if "" != oldBlockTreeDBPath {
-			treenode.InitBlockTree(false)
-		}
+		restoreTestBlockTreeDatabase(oldBlockTreeDBPath)
 	})
 
 	attrView := av.NewAttributeView("20260803091000-avdata0")

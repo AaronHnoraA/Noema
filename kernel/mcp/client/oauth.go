@@ -33,12 +33,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/modelcontextprotocol/go-sdk/auth"
-	"github.com/modelcontextprotocol/go-sdk/oauthex"
-	"github.com/siyuan-note/httpclient"
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/conf"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/modelcontextprotocol/go-sdk/auth"
+	"github.com/modelcontextprotocol/go-sdk/oauthex"
+	"github.com/siyuan-note/logging"
 	"golang.org/x/oauth2"
 )
 
@@ -97,7 +96,7 @@ func newMCPOAuthHandler(server conf.MCPServer, interactive bool) *mcpOAuthHandle
 	handler := &mcpOAuthHandler{
 		server: server,
 		client: &http.Client{
-			Transport: httpclient.NewUserAgentRoundTripper(http.DefaultTransport),
+			Transport: &noemaUserAgentRoundTripper{base: http.DefaultTransport},
 			Timeout:   30 * time.Second,
 		},
 	}
@@ -299,7 +298,7 @@ func (h *mcpOAuthHandler) Authorize(ctx context.Context, req *http.Request, resp
 			TokenEndpointAuthMethod: tokenAuthMethod,
 			GrantTypes:              grantTypes,
 			ResponseTypes:           []string{"code"},
-			ClientName:              "SiYuan",
+			ClientName:              "Noema",
 			Scope:                   strings.Join(scopes, " "),
 			ApplicationType:         "native",
 		}, h.client)
@@ -718,7 +717,7 @@ func DisconnectMCPOAuth(serverID string) error {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			client := &http.Client{Transport: httpclient.NewUserAgentRoundTripper(http.DefaultTransport), Timeout: 15 * time.Second}
+			client := &http.Client{Transport: &noemaUserAgentRoundTripper{base: http.DefaultTransport}, Timeout: 15 * time.Second}
 			var revokeErr error
 			for _, credential := range credentials {
 				if err := revokeOAuthCredential(ctx, client, credential); err != nil {

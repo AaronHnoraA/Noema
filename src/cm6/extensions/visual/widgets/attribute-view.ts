@@ -1,10 +1,12 @@
 import type { EditorView } from "@codemirror/view";
+import { applyPortableAttributeViewFitWidths } from "../../../../attribute-view-column-width.ts";
 import { MeasuredWidget } from "./measured-widget.ts";
 import { shortHash } from "./measured-observer.ts";
 
-export type AttributeViewColumn = { key: string; label: string };
+export type AttributeViewColumn = { key: string; label: string; type?: string };
 export type AttributeViewCell = { key: string; value: string };
 export type AttributeViewRow = { id: string; kind: string; file: string; index: number; line: number; cells: AttributeViewCell[]; group?: string };
+export type AttributeViewCalculation = { key: string; operator: string; type?: string; value: unknown };
 export type AttributeViewModel = {
   title?: string;
   source?: string;
@@ -16,6 +18,7 @@ export type AttributeViewModel = {
   evaluationSource?: string;
   view?: "table" | "gallery" | "kanban";
   groupBy?: string;
+  calculations?: AttributeViewCalculation[];
 };
 
 export type AttributeViewRequestDetail = {
@@ -197,6 +200,13 @@ function renderTable(columns: AttributeViewColumn[], rows: AttributeViewRow[], r
   scroller.className = "cm-attribute-view-scroller";
   const table = document.createElement("table");
   table.className = "cm-attribute-view-table";
+  const colgroup = document.createElement("colgroup");
+  for (const column of columns) {
+    const col = document.createElement("col");
+    col.dataset.column = column.key;
+    colgroup.append(col);
+  }
+  table.append(colgroup);
   const head = document.createElement("thead");
   const headRow = document.createElement("tr");
   for (const column of columns) {
@@ -220,6 +230,12 @@ function renderTable(columns: AttributeViewColumn[], rows: AttributeViewRow[], r
   }
   table.append(body);
   scroller.append(table);
+  // First apply the deterministic CJK/ASCII estimate while detached. Once the
+  // table is mounted, repeat with its real computed font and canvas metrics.
+  applyPortableAttributeViewFitWidths(table, columns, rows);
+  queueMicrotask(() => {
+    if (table.isConnected) applyPortableAttributeViewFitWidths(table, columns, rows);
+  });
   return scroller;
 }
 
@@ -302,6 +318,34 @@ function renderKanban(
   return board;
 }
 
+function calculationValue(calculation: AttributeViewCalculation): string {
+  if (Array.isArray(calculation.value)) return calculation.value.map(String).join(", ");
+  if (calculation.value === null || calculation.value === undefined) return "—";
+  if (calculation.operator.startsWith("percent-") && typeof calculation.value === "number") {
+    return `${(calculation.value * 100).toLocaleString(undefined, { maximumFractionDigits: 2 })}%`;
+  }
+  return String(calculation.value);
+}
+
+function renderCalculations(calculations: AttributeViewCalculation[], columns: AttributeViewColumn[]): HTMLElement {
+  const list = document.createElement("dl");
+  list.className = "cm-attribute-view-calculations";
+  list.setAttribute("aria-label", "Attribute view calculations");
+  for (const calculation of calculations) {
+    const item = document.createElement("div");
+    item.dataset.column = calculation.key;
+    item.dataset.operator = calculation.operator;
+    const label = document.createElement("dt");
+    const column = columns.find((candidate) => candidate.key === calculation.key);
+    label.textContent = `${column?.label || calculation.key} · ${calculation.operator.replaceAll("-", " ")}`;
+    const value = document.createElement("dd");
+    value.textContent = calculationValue(calculation);
+    item.append(label, value);
+    list.append(item);
+  }
+  return list;
+}
+
 function renderModel(root: HTMLElement, model: AttributeViewModel, refresh: () => void): void {
   const content = root.querySelector<HTMLElement>(".cm-attribute-view-content");
   const count = root.querySelector<HTMLElement>(".cm-attribute-view-count");
@@ -332,6 +376,8 @@ function renderModel(root: HTMLElement, model: AttributeViewModel, refresh: () =
     }
   }
   const diagnostics = Array.isArray(model.diagnostics) ? model.diagnostics : [];
+  const calculations = Array.isArray(model.calculations) ? model.calculations : [];
+  if (calculations.length > 0) content.append(renderCalculations(calculations, columns));
   if (diagnostics.length > 0) {
     const message = document.createElement("div");
     message.className = "cm-attribute-view-diagnostics";

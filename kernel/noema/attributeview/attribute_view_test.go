@@ -35,3 +35,26 @@ func TestSharedAttributeViewFixtures(t *testing.T) {
 		})
 	}
 }
+
+func TestTypedVocabularyStaysComplete(t *testing.T) {
+	if len(fieldTypes) != 17 {
+		t.Fatalf("field type count = %d, want 17", len(fieldTypes))
+	}
+	if len(calcOperators) != 22 {
+		t.Fatalf("calculation operator count = %d, want 22", len(calcOperators))
+	}
+	// Includes the 17 canonical operators plus legacy portable `in`/`not-in`
+	// aliases retained for existing Markdown views.
+	if len(filterOperators) != 19 {
+		t.Fatalf("filter operator count = %d, want 19", len(filterOperators))
+	}
+}
+
+func TestCollectionEqualityUsesSetSemantics(t *testing.T) {
+	if !equalTypedValues("Research|draft|research", "draft|research", "mselect", 0) {
+		t.Fatal("multi-select values with the same members should compare equal")
+	}
+	if equalTypedValues("research", "draft|research", "mselect", 0) {
+		t.Fatal("multi-select values with different members should not compare equal")
+	}
+}

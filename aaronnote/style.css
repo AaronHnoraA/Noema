@@ -328,6 +328,84 @@ body[data-host-mode="desktop"] .aaronnote-focused-shell {
   transition: width 160ms ease, height 160ms ease;
 }
 
+.noema-desktop-workspace,
+.noema-workspace-layout {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.noema-workspace-split {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.noema-workspace-split.is-lr { flex-direction: row; }
+.noema-workspace-split.is-tb { flex-direction: column; }
+.noema-workspace-split-slot { min-width: 0; min-height: 0; overflow: hidden; }
+
+.noema-workspace-divider {
+  position: relative;
+  z-index: 5;
+  flex: 0 0 5px;
+  background: color-mix(in srgb, var(--aaronnote-border), transparent 62%);
+  transition: background 120ms ease;
+}
+
+.noema-workspace-split.is-lr > .noema-workspace-divider { cursor: col-resize; }
+.noema-workspace-split.is-tb > .noema-workspace-divider { cursor: row-resize; }
+.noema-workspace-divider:is(:hover, :focus-visible) { background: var(--aaron-accent); outline: 0; }
+
+.noema-workspace-leaf {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  border: 1px solid transparent;
+  background: var(--aaronnote-bg);
+}
+
+.noema-workspace-leaf.is-active { border-color: color-mix(in srgb, var(--aaron-accent), transparent 74%); }
+.noema-workspace-tabbar {
+  display: flex;
+  min-height: 34px;
+  flex: 0 0 34px;
+  align-items: stretch;
+  border-bottom: 1px solid color-mix(in srgb, var(--aaronnote-border), transparent 40%);
+  background: color-mix(in srgb, var(--aaron-paper-soft), transparent 12%);
+  font: 11px/1.2 var(--aaron-font-sans);
+}
+
+.noema-workspace-tabs { display: flex; min-width: 0; flex: 1; overflow-x: auto; scrollbar-width: none; }
+.noema-workspace-tabs::-webkit-scrollbar { display: none; }
+.noema-workspace-tab { display: flex; min-width: 92px; max-width: 230px; align-items: center; border-right: 1px solid color-mix(in srgb, var(--aaronnote-border), transparent 50%); }
+.noema-workspace-tab:has([aria-selected="true"]) { background: var(--aaronnote-bg); box-shadow: inset 0 2px var(--aaron-accent); }
+.noema-workspace-tab-label { min-width: 0; flex: 1; overflow: hidden; border: 0; padding: 0 8px; background: transparent; font: inherit; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.noema-workspace-tab-close { width: 24px; min-width: 24px; border: 0; padding: 0; background: transparent; font-size: 15px; }
+.noema-workspace-leaf-actions { display: flex; flex: 0 0 auto; align-items: center; padding: 0 3px; }
+.noema-workspace-leaf-actions button { width: 27px; min-width: 27px; border: 0; padding: 0; background: transparent; font-size: 13px; }
+.noema-workspace-leaf-body { position: relative; min-width: 0; min-height: 0; flex: 1; overflow: hidden; }
+.noema-workspace-layout.is-tab-dragging .noema-workspace-leaf-body { outline: 2px dashed color-mix(in srgb, var(--aaron-accent), transparent 45%); outline-offset: -5px; }
+.noema-workspace-tab-panel { display: block; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
+.noema-workspace-tab-panel[hidden] { display: none; }
+.noema-workspace-tab-panel > .aaronnote-focused-editor { height: 100%; }
+.noema-workspace-editor-frame { display: block; width: 100%; height: 100%; border: 0; background: var(--aaronnote-bg); }
+
+body[data-workspace-pane="true"] .noema-desktop-titlebar,
+body[data-workspace-pane="true"] .aaronnote-status-hud { display: none !important; }
+body[data-host-mode="desktop"][data-workspace-pane="true"] .aaronnote-focused-shell {
+  width: 100%;
+  height: 100vh;
+  margin-top: 0;
+}
+
 body[data-host-mode="desktop"].noema-knowledge-dock-open .aaronnote-focused-shell {
   width: calc(100% - var(--noema-knowledge-dock-width));
 }
@@ -1579,6 +1657,29 @@ body[data-host-mode="server"][data-server-reader-editing-aids="false"] :is(
   display: none;
 }
 
+.aaronnote-context-menu:focus {
+  outline: none;
+}
+
+.aaronnote-context-menu.noema-menu-submenu {
+  z-index: 1201;
+}
+
+.aaronnote-context-menu .noema-menu-readonly,
+.aaronnote-context-menu .noema-menu-empty {
+  padding: 7px 8px;
+  color: var(--aaron-muted);
+  font: 11px/1.3 var(--aaron-font-sans);
+}
+
+.aaronnote-context-menu .noema-menu-empty {
+  text-align: center;
+}
+
+.aaronnote-context-menu .noema-menu-custom {
+  min-width: 0;
+}
+
 .aaronnote-context-menu.is-bibliography {
   width: min(500px, calc(100vw - 12px));
 }
@@ -2050,9 +2151,28 @@ body[data-host-mode="server"][data-server-reader-editing-aids="false"] :is(
 }
 
 .aaronnote-context-menu button:hover:not(:disabled),
-.aaronnote-context-menu button:focus-visible {
+.aaronnote-context-menu button:focus-visible,
+.aaronnote-context-menu button:focus {
   border-color: var(--aaron-paper-line);
   background: var(--aaron-paper-soft);
+}
+
+.aaronnote-context-menu button.noema-menu-group-first {
+  border-start-start-radius: 5px;
+  border-start-end-radius: 5px;
+}
+
+.aaronnote-context-menu button.noema-menu-group-last {
+  border-end-start-radius: 5px;
+  border-end-end-radius: 5px;
+}
+
+.aaronnote-context-menu button.is-current {
+  border-color: color-mix(in srgb, var(--aaron-accent), transparent 55%);
+}
+
+.aaronnote-context-menu button[data-warning="true"] span {
+  color: var(--b3-theme-warning, #c58b32);
 }
 
 .aaronnote-context-menu button:disabled {
@@ -4041,6 +4161,67 @@ body[data-host-mode="desktop"].noema-knowledge-dock-open .aaronnote-agenda-full.
   padding-top: 4px;
 }
 
+.noema-asset-maintenance-panel {
+  width: min(760px, calc(100vw - 32px));
+  max-height: min(760px, calc(100vh - 72px));
+  overflow: auto;
+}
+
+.noema-asset-maintenance-panel > header,
+.noema-asset-maintenance-section-header,
+.noema-asset-search-form,
+.noema-asset-maintenance-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.noema-asset-maintenance-panel > header,
+.noema-asset-maintenance-section-header {
+  justify-content: space-between;
+}
+
+.noema-asset-maintenance-panel > header h2 {
+  margin: 0;
+}
+
+.noema-asset-search-form input {
+  flex: 1;
+}
+
+.noema-asset-maintenance-status,
+.noema-asset-maintenance-summary {
+  color: var(--b3-theme-on-surface-light, var(--aaron-muted));
+  font-size: 12px;
+}
+
+.noema-asset-maintenance-list {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 18px;
+}
+
+.noema-asset-maintenance-item {
+  padding: 9px 10px;
+  border: 1px solid var(--b3-border-color, var(--aaron-border));
+  border-radius: 8px;
+  background: var(--b3-theme-surface, var(--aaron-panel));
+}
+
+.noema-asset-maintenance-item > div {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 3px;
+}
+
+.noema-asset-maintenance-item strong,
+.noema-asset-maintenance-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .aaronnote-languagetool-tool {
   width: min(540px, calc(100vw - 32px));
   max-height: min(760px, calc(100vh - 32px));
@@ -5172,5 +5353,152 @@ html.aaronnote-paused *::after {
     right: 8px !important;
     left: 8px !important;
     width: auto !important;
+  }
+}
+
+body[data-noema-format-painter] .cm-content {
+  cursor: copy;
+}
+
+/* Source-owned workbench docks. Knowledge and Agenda keep their independent
+   renderers; this adapter owns only rail placement, pin/floating behavior,
+   sizing, and the shared content insets. */
+.noema-workspace-dock-rail {
+  position: fixed;
+  z-index: 86;
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  background: color-mix(in srgb, var(--aaron-paper-soft), transparent 4%);
+  border: 1px solid var(--aaron-paper-line);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--aaron-ink), transparent 92%);
+}
+.noema-workspace-dock-rail.is-left,
+.noema-workspace-dock-rail.is-right {
+  top: 60px;
+  bottom: 8px;
+  width: 28px;
+  flex-direction: column;
+  align-items: stretch;
+  border-radius: 0 7px 7px 0;
+}
+.noema-workspace-dock-rail.is-left { left: 0; border-left: 0; }
+.noema-workspace-dock-rail.is-right { right: 0; border-right: 0; border-radius: 7px 0 0 7px; }
+.noema-workspace-dock-rail.is-bottom {
+  right: 34px;
+  bottom: 0;
+  left: 34px;
+  min-height: 28px;
+  justify-content: center;
+  border-bottom: 0;
+  border-radius: 7px 7px 0 0;
+}
+.noema-workspace-dock-rail button {
+  min-width: 0;
+  min-height: 25px;
+  border: 0;
+  border-radius: 5px;
+  padding: 5px 7px;
+  background: transparent;
+  color: var(--aaron-muted);
+  cursor: grab;
+  font: 10px/1.15 var(--aaron-font-sans);
+}
+.noema-workspace-dock-rail.is-left button,
+.noema-workspace-dock-rail.is-right button {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  padding: 7px 5px;
+}
+.noema-workspace-dock-rail button:is(:hover, :focus-visible),
+.noema-workspace-dock-rail button.is-active {
+  background: var(--aaron-paper);
+  color: var(--aaron-red-dark);
+  outline: none;
+}
+.noema-workspace-dock-rail button.is-pinned::after { content: " ·"; color: var(--aaron-accent); }
+body.is-dock-dragging .noema-workspace-dock-rail { outline: 2px dashed var(--aaron-accent); outline-offset: -3px; }
+
+body[data-host-mode="desktop"].noema-dock-managed .aaronnote-focused-shell {
+  width: calc(100% - var(--noema-dock-left-size, 0px) - var(--noema-dock-right-size, 0px));
+  height: calc(100vh - 54px - var(--noema-dock-bottom-size, 0px));
+  margin-left: var(--noema-dock-left-size, 0px);
+}
+body[data-host-mode="desktop"].noema-dock-managed .aaronnote-status-hud {
+  right: calc(var(--noema-dock-right-size, 0px) + 18px);
+  left: calc(var(--noema-dock-left-size, 0px) + 18px);
+}
+body[data-host-mode="desktop"].noema-dock-managed .noema-workspace-dock-panel {
+  z-index: 78;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 54px);
+  border-radius: 0;
+  transition: box-shadow 120ms ease;
+}
+body[data-host-mode="desktop"].noema-dock-managed .noema-workspace-dock-panel[data-noema-dock-position="left"] {
+  top: 54px !important;
+  right: auto !important;
+  bottom: var(--noema-dock-bottom-size, 0px) !important;
+  left: 0 !important;
+  width: var(--noema-workspace-dock-size) !important;
+  height: auto !important;
+  border-width: 0 1px 0 0 !important;
+}
+body[data-host-mode="desktop"].noema-dock-managed .noema-workspace-dock-panel[data-noema-dock-position="right"] {
+  top: 54px !important;
+  right: 0 !important;
+  bottom: var(--noema-dock-bottom-size, 0px) !important;
+  left: auto !important;
+  width: var(--noema-workspace-dock-size) !important;
+  height: auto !important;
+  border-width: 0 0 0 1px !important;
+}
+body[data-host-mode="desktop"].noema-dock-managed .noema-workspace-dock-panel[data-noema-dock-position="bottom"] {
+  top: auto !important;
+  right: var(--noema-dock-right-size, 0px) !important;
+  bottom: 0 !important;
+  left: var(--noema-dock-left-size, 0px) !important;
+  width: auto !important;
+  height: var(--noema-workspace-dock-size) !important;
+  border-width: 1px 0 0 !important;
+}
+body[data-host-mode="desktop"].noema-dock-managed .noema-workspace-dock-panel[data-noema-dock-pinned="false"] {
+  z-index: 88;
+  box-shadow: 0 14px 42px color-mix(in srgb, var(--aaron-ink), transparent 76%);
+}
+.noema-workspace-dock-pin {
+  order: 98;
+  flex: 0 0 auto;
+  min-height: 24px;
+  border: 0;
+  border-radius: 4px;
+  padding: 4px 6px;
+  background: transparent;
+  color: var(--aaron-muted);
+  cursor: pointer;
+  font: 10px/1 var(--aaron-font-sans);
+}
+.noema-workspace-dock-pin:is(:hover, :focus-visible) { background: var(--aaron-paper); color: var(--aaron-red-dark); }
+.noema-workspace-dock-resize { position: absolute; z-index: 3; touch-action: none; }
+.noema-workspace-dock-resize[data-noema-dock-position="left"] { top: 0; right: -4px; bottom: 0; width: 8px; cursor: ew-resize; }
+.noema-workspace-dock-resize[data-noema-dock-position="right"] { top: 0; bottom: 0; left: -4px; width: 8px; cursor: ew-resize; }
+.noema-workspace-dock-resize[data-noema-dock-position="bottom"] { top: -4px; right: 0; left: 0; height: 8px; cursor: ns-resize; }
+.noema-workspace-dock-resize:is(:hover, :focus-visible) { background: color-mix(in srgb, var(--aaron-accent), transparent 45%); outline: none; }
+
+@media (max-width: 720px) {
+  .noema-workspace-dock-rail.is-left,
+  .noema-workspace-dock-rail.is-right { display: none; }
+  body[data-host-mode="desktop"].noema-dock-managed .aaronnote-focused-shell {
+    width: 100%;
+    height: calc(100vh - 54px);
+    margin-left: 0;
+  }
+  body[data-host-mode="desktop"].noema-dock-managed .noema-workspace-dock-panel {
+    top: 54px !important;
+    right: 0 !important;
+    bottom: 28px !important;
+    left: 0 !important;
+    width: auto !important;
+    height: auto !important;
   }
 }

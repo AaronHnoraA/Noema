@@ -11,6 +11,7 @@ import {
   createEditor,
   type EditorClipboardPayload,
   type EditorCommand,
+  type QuickInsertItem,
   type StoredPasteAsset,
 } from "../src/lib.ts";
 import { setupCopilot } from "../plugins/noema-copilot/renderer.ts";
@@ -51,6 +52,7 @@ import { mathPreviewFitScale } from "./math-preview-fit.ts";
 import { getKatexMacros, setKatexMacros } from "../src/katex-macros.ts";
 import { renderJupyterVariablesTable } from "../src/jupyter-variables-view.ts";
 import { formatCitationLabel, renderPublishedNoteHTML } from "../src/render-html.ts";
+import { createSelfContainedNoteHTML } from "../src/self-contained-html.ts";
 import { hrefProtocol, safeHref } from "../src/url-safety.ts";
 import {
   api,
@@ -70,6 +72,23 @@ import {
 } from "./api-client.ts";
 import { Epoch } from "../src/async-epoch.ts";
 import { CoalescedTimer } from "../src/coalesced-timer.ts";
+import { findSlashHint, resolveHintMenuItems } from "../src/hint-core.ts";
+import { matchHotKey } from "../src/hotkey.ts";
+import { primaryModifierDown } from "../src/platform-compat.ts";
+import type { HeadingNumberFormat } from "../src/heading-number.ts";
+import { createMenuController, type NoemaMenuItem } from "../src/menu-system.ts";
+import { createTransientSurfaceRegistry } from "../src/transient-surfaces.ts";
+import {
+  createWorkspaceLayout,
+  findWorkspaceNode,
+  parseWorkspaceLayout,
+  workspaceLeaves,
+  workspaceTabs,
+  type WorkspaceLayoutState,
+  type WorkspaceTab,
+} from "../src/workspace-layout.ts";
+import { createWorkspaceLayoutView, type WorkspaceLayoutView } from "../src/workspace-layout-view.ts";
+import { createWorkspaceDockController, type WorkspaceDockController } from "../src/workspace-dock.ts";
 import { blobToBase64 } from "../src/paste.ts";
 import { collectFindMatches, createFindPattern, type FindMatch } from "./find.ts";
 import { AssistScheduler, type AssistUpdateFlags, type AssistUpdateOptions } from "./assist-scheduler.ts";
@@ -95,6 +114,7 @@ import {
 import { resolveAnchorHeading } from "../src/heading-slug.ts";
 import { createLocalGraphPanel } from "./local-graph.ts";
 import { openLanguageToolSettingsTool } from "./languagetool-tool.ts";
+import { openAssetMaintenance } from "./asset-maintenance.ts";
 import { setFindHighlightRanges } from "../src/cm6/find-highlight.ts";
 import { refreshViewportDecorationsNow } from "../src/cm6/viewport-refresh.ts";
 import {
@@ -250,11 +270,14 @@ const serverReader = { ...serverReaderDefaults, ...(injectedServerReader || {}) 
 const passiveServerReader = serverReaderMode && !serverReader.editingAids;
 const initialReadOnly = serverReaderMode || initialParams.get("readonly") === "1" || initialParams.get("readonly") === "true";
 const desktopMode = standaloneMode() && Boolean(window.noemaDesktop);
+let activeObsidianTaskID = "";
+const workspacePaneMode = desktopMode && initialParams.get("workspacePane") === "1";
 const jupyterExecutionAvailable = !serverReaderMode;
 const desktopPlatform = window.noemaDesktop?.platform || (/Mac/.test(navigator.platform) ? "darwin" : "");
 const platformLabels = desktopPlatformLabels(desktopPlatform);
 document.body.dataset.hostMode = serverReaderMode ? "server" : desktopMode ? "desktop" : "emacs";
 if (desktopMode) document.body.dataset.desktopPlatform = desktopPlatform;
+if (workspacePaneMode) document.body.dataset.workspacePane = "true";
 if (serverReaderMode) {
   document.body.dataset.serverReaderEditingAids = String(serverReader.editingAids);
 }
@@ -355,6 +378,7 @@ graphPanelRoot.innerHTML = `
     <strong>${desktopMode ? "Knowledge" : "Knowledge graph"}</strong>
     <nav class="noema-knowledge-dock-tabs" role="tablist" aria-label="Knowledge views" ${desktopMode ? "" : "hidden"}>
       <button type="button" role="tab" data-knowledge-view="backlinks">Backlinks</button>
+      <button type="button" role="tab" data-knowledge-view="mentions">Mentions</button>
       <button type="button" role="tab" data-knowledge-view="graph">Graph</button>
       <button type="button" role="tab" data-knowledge-view="search">Search</button>
       <button type="button" role="tab" data-knowledge-view="tags">Tags</button>
@@ -364,6 +388,10 @@ graphPanelRoot.innerHTML = `
   <section class="noema-knowledge-dock-pane noema-knowledge-backlinks" data-knowledge-pane="backlinks" hidden>
     <div class="noema-knowledge-dock-status" data-knowledge-backlink-status></div>
     <div class="noema-knowledge-backlink-list" data-knowledge-backlink-list></div>
+  </section>
+  <section class="noema-knowledge-dock-pane noema-knowledge-mentions" data-knowledge-pane="mentions" hidden>
+    <div class="noema-knowledge-dock-status" data-knowledge-mention-status></div>
+    <div class="noema-knowledge-backlink-list" data-knowledge-mention-list></div>
   </section>
   <section class="noema-knowledge-dock-pane noema-knowledge-graph" data-knowledge-pane="graph">
     <div class="aaronnote-local-graph-controls">
@@ -409,11 +437,14 @@ const graphModeButtons = Array.from(graphPanelRoot.querySelectorAll<HTMLButtonEl
 const graphClose = graphPanelRoot.querySelector<HTMLButtonElement>("[data-graph-close]")!;
 const knowledgeTabButtons = Array.from(graphPanelRoot.querySelectorAll<HTMLButtonElement>("[data-knowledge-view]"));
 const knowledgeBacklinksPane = graphPanelRoot.querySelector<HTMLElement>("[data-knowledge-pane='backlinks']")!;
+const knowledgeMentionsPane = graphPanelRoot.querySelector<HTMLElement>("[data-knowledge-pane='mentions']")!;
 const knowledgeGraphPane = graphPanelRoot.querySelector<HTMLElement>("[data-knowledge-pane='graph']")!;
 const knowledgeSearchPane = graphPanelRoot.querySelector<HTMLElement>("[data-knowledge-pane='search']")!;
 const knowledgeTagsPane = graphPanelRoot.querySelector<HTMLElement>("[data-knowledge-pane='tags']")!;
 const knowledgeBacklinkList = graphPanelRoot.querySelector<HTMLElement>("[data-knowledge-backlink-list]")!;
 const knowledgeBacklinkStatus = graphPanelRoot.querySelector<HTMLElement>("[data-knowledge-backlink-status]")!;
+const knowledgeMentionList = graphPanelRoot.querySelector<HTMLElement>("[data-knowledge-mention-list]")!;
+const knowledgeMentionStatus = graphPanelRoot.querySelector<HTMLElement>("[data-knowledge-mention-status]")!;
 const knowledgeSearchAnchor = graphPanelRoot.querySelector<HTMLElement>("[data-knowledge-search-anchor]")!;
 const knowledgeSearchInput = graphPanelRoot.querySelector<HTMLInputElement>("[data-knowledge-search]")!;
 const knowledgeTagList = graphPanelRoot.querySelector<HTMLElement>("[data-knowledge-tag-list]")!;
@@ -833,6 +864,36 @@ contextMenu.className = "aaronnote-context-menu";
 contextMenu.hidden = true;
 contextMenu.setAttribute("role", "menu");
 document.body.appendChild(contextMenu);
+const contextMenuController = createMenuController(contextMenu, {
+  topBoundary: () => desktopMode ? 54 : 6,
+  onError: (error) => setStatus(error instanceof Error ? error.message : "Context action failed"),
+  onClose: () => contextMenu.classList.remove("is-bibliography", "is-math"),
+});
+const transientSurfaces = createTransientSurfaceRegistry();
+transientSurfaces.register({
+  id: "context-menu",
+  priority: 100,
+  visible: () => contextMenuController.visible,
+  close: () => hideContextMenu(),
+});
+transientSurfaces.register({
+  id: "snippet-popup",
+  priority: 80,
+  visible: () => !snippetPopup.hidden || Boolean(snippetPopupChooseHandler),
+  close: () => hideSnippetPopup(),
+});
+transientSurfaces.register({
+  id: "math-preview",
+  priority: 70,
+  visible: () => !mathPreview.hidden || Boolean(mathPreviewSession),
+  close: () => hideMathPreview(),
+});
+transientSurfaces.register({
+  id: "prose-popover",
+  priority: 60,
+  visible: () => !prosePopover.hidden,
+  close: () => hideProsePopover(),
+});
 
 const liveTexStudio = document.createElement("div");
 liveTexStudio.className = "aaronnote-livetex-backdrop";
@@ -917,6 +978,15 @@ let currentRemote = false;
 let currentReadOnly = initialReadOnly;
 let currentMtimeMs = 0;
 let currentVersion = "";
+type WorkspacePaneState = {
+  file: string;
+  client: string;
+  dirty?: boolean;
+};
+const WORKSPACE_LAYOUT_STORAGE_KEY = "noema.workspace.layout.v1";
+const PRIMARY_WORKSPACE_TAB_ID = "noema-primary-editor";
+let workspaceLayoutView: WorkspaceLayoutView<WorkspacePaneState> | null = null;
+const workspacePaneFrames = new Map<string, HTMLIFrameElement>();
 let revision = 0;
 let savedRevision = 0;
 // Unlike the document-local revision, this must never reset when a note is
@@ -962,6 +1032,7 @@ let notes: NoteSummary[] = [];
 let pathSuggestions: string[] = [];
 let currentRelationshipSource = "";
 let desktopKnowledgeDock: DesktopKnowledgeDock | null = null;
+let workspaceDockController: WorkspaceDockController | null = null;
 // Tracks the index version from the last notesIndexPayload response so we can
 // detect when the server's watcher has bumped the index due to external changes.
 let lastNotesIndexVersion = 0;
@@ -990,6 +1061,96 @@ let snippetRenderKey = "";
 let snippetPopupMatchKey = "";
 let snippetPopupChooseHandler: ((snippet: SnippetSummary) => boolean) | null = null;
 const snippetUsage = new SnippetUsageStore();
+
+const QUICK_INSERT_ALIASES: Readonly<Record<string, readonly string[]>> = {
+  footnote: ["脚注", "jiaozhu", "jiaoz", "引用"],
+  revision: ["修订", "xiuding", "建议", "jianyi"],
+  metadata: ["属性", "shuxing", "元数据", "yuanshuju"],
+  "heading-1": ["一级标题", "标题", "yijibiaoti", "biaoti", "bt"],
+  "heading-2": ["二级标题", "标题", "erjibiaoti", "biaoti", "bt"],
+  "heading-3": ["三级标题", "标题", "sanjibiaoti", "biaoti", "bt"],
+  "bullet-list": ["无序列表", "wuxuliebiao", "liebia", "liebiao"],
+  "ordered-list": ["有序列表", "youxuliebiao", "编号", "bianhao"],
+  "task-list": ["任务列表", "renwuliebiao", "待办", "daiban"],
+  blockquote: ["引用块", "yinyong", "引用"],
+  "code-block": ["代码块", "daimakuai", "daima"],
+  "jupyter-cell": ["计算单元", "jisuan", "代码单元", "daimadanyuan"],
+  table: ["表格", "biaoge", "bg"],
+  "table-insert-row": ["插入行", "charuhang", "表格"],
+  "table-insert-column": ["插入列", "charulie", "表格"],
+  "table-delete-row": ["删除行", "shanchuhang", "表格"],
+  "table-delete-column": ["删除列", "shanchulie", "表格"],
+  "table-align-left": ["左对齐", "zuoduiqi", "表格"],
+  "table-align-center": ["居中", "juzhong", "表格"],
+  "table-align-right": ["右对齐", "youduiqi", "表格"],
+  "table-format": ["格式化表格", "geshihua", "表格"],
+  "math-block": ["公式", "gongshi", "数学", "shuxue"],
+  toc: ["目录", "mulu", "大纲", "dagang"],
+  "org-env-proof": ["证明", "zhengming"],
+  "org-env-theorem": ["定理", "dingli"],
+  "org-env-note": ["注记", "笔记块", "zhuji", "biji"],
+  image: ["图片", "tupian", "图像", "tuxiang"],
+};
+
+type SlashMenuPreferences = {
+  enabled: boolean;
+  order: string[];
+  hidden: Set<string>;
+};
+
+function readStringArrayStorage(key: string): string[] {
+  try {
+    const value = JSON.parse(localStorage.getItem(key) || "[]");
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function loadSlashMenuPreferences(): SlashMenuPreferences {
+  let enabled = true;
+  try {
+    enabled = localStorage.getItem("noema.quickInsert.enabled") !== "false";
+  } catch {
+    // Storage can be unavailable in a locked-down browser; defaults remain safe.
+  }
+  return {
+    enabled,
+    order: readStringArrayStorage("noema.quickInsert.order"),
+    hidden: new Set(readStringArrayStorage("noema.quickInsert.hidden")),
+  };
+}
+
+let slashMenuPreferences = loadSlashMenuPreferences();
+window.addEventListener("storage", (event) => {
+  if (event.key?.startsWith("noema.quickInsert.")) slashMenuPreferences = loadSlashMenuPreferences();
+});
+
+const HEADING_NUMBER_FORMATS = new Set<HeadingNumberFormat>([
+  "decimal-hierarchical",
+  "upper-alpha-hierarchical",
+  "lower-alpha-hierarchical",
+  "upper-roman-hierarchical",
+  "lower-roman-hierarchical",
+  "upper-greek-hierarchical",
+  "lower-greek-hierarchical",
+  "decimal-parenthesized",
+  "chinese-document",
+]);
+
+function loadHeadingNumberingPreference(): { enabled: boolean; format: HeadingNumberFormat } {
+  try {
+    const format = localStorage.getItem("noema.headingNumbering.format") as HeadingNumberFormat | null;
+    return {
+      enabled: localStorage.getItem("noema.headingNumbering.enabled") === "true",
+      format: format && HEADING_NUMBER_FORMATS.has(format) ? format : "decimal-hierarchical",
+    };
+  } catch {
+    return { enabled: false, format: "decimal-hierarchical" };
+  }
+}
+
+let headingNumberingPreference = loadHeadingNumberingPreference();
 
 function loadWikiCompletionIndex(force = false): Promise<WikiIndex> {
   if (!force && wikiIndexCache) return Promise.resolve(wikiIndexCache);
@@ -1332,15 +1493,27 @@ function updateTitle(): void {
   document.title = currentReadOnly
     ? serverReaderMode ? `${displayName} · Noema Wiki` : `${name} (read-only)`
     : revision === savedRevision ? name : `* ${name}`;
-  window.noemaDesktop?.updateWindowState({
-    kind: "note",
+  syncWorkspacePrimaryTab();
+  const windowState = {
+    kind: "note" as const,
     file: currentFile,
     title: name,
     dirty: !currentReadOnly && revision !== savedRevision,
     saveInFlight: desktopSaveInFlight,
     conflict: desktopSaveConflict,
     busy: false,
-  });
+  };
+  if (workspacePaneMode) {
+    window.parent.postMessage({
+      type: "noema-workspace-pane-state",
+      client: currentClient,
+      state: windowState,
+    }, window.location.origin);
+  } else if (workspaceLayoutView) {
+    syncActiveWorkspaceWindowState(workspaceLayoutView.getState());
+  } else {
+    window.noemaDesktop?.updateWindowState(windowState);
+  }
 }
 
 function renderModeToggleLabel(mode: VimLiteMode): void {
@@ -1388,6 +1561,7 @@ const editor = createEditor(host, {
   initialContent: "",
   readOnly: initialReadOnly,
   passiveReader: passiveServerReader,
+  headingNumbering: headingNumberingPreference,
   getCurrentFile: () => currentFile,
   pasteAssets: {
     uploadBlobAsset: uploadPasteBlobAsset,
@@ -1420,6 +1594,178 @@ const editor = createEditor(host, {
     void flushCursorPosition();
   },
 });
+
+function defaultWorkspaceLayout(): WorkspaceLayoutState<WorkspacePaneState> {
+  return createWorkspaceLayout({
+    type: "leaf",
+    id: "noema-primary-leaf",
+    activeTabId: PRIMARY_WORKSPACE_TAB_ID,
+    tabs: [{
+      id: PRIMARY_WORKSPACE_TAB_ID,
+      kind: "primary-editor",
+      title: "Noema",
+      state: { file: "", client: "primary" },
+    }],
+  });
+}
+
+function validWorkspaceLayout(state: WorkspaceLayoutState<WorkspacePaneState>): boolean {
+  const tabs = workspaceTabs(state.root);
+  return tabs.filter((tab) => tab.id === PRIMARY_WORKSPACE_TAB_ID && tab.kind === "primary-editor").length === 1
+    && tabs.every((tab) => tab.kind === "primary-editor" || tab.kind === "editor-pane")
+    && workspaceLeaves(state.root).every((leaf) => leaf.tabs.length > 0);
+}
+
+function workspacePaneUrl(state: WorkspacePaneState): string {
+  const url = new URL(window.location.pathname || "/", window.location.origin);
+  url.searchParams.set("workspacePane", "1");
+  if (state.file) url.searchParams.set("file", state.file);
+  if (state.client) url.searchParams.set("client", state.client);
+  return url.toString();
+}
+
+function newWorkspacePaneClient(): string {
+  return `workspace-${typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
+}
+
+function activeWorkspaceTab(): WorkspaceTab<WorkspacePaneState> | null {
+  const state = workspaceLayoutView?.getState();
+  if (!state) return null;
+  const leaf = findWorkspaceNode(state.root, state.activeLeafId);
+  return leaf?.type === "leaf" ? leaf.tabs.find((tab) => tab.id === leaf.activeTabId) ?? null : null;
+}
+
+function syncActiveWorkspaceWindowState(state: WorkspaceLayoutState<WorkspacePaneState>): void {
+  const leaf = findWorkspaceNode(state.root, state.activeLeafId);
+  const tab = leaf?.type === "leaf" ? leaf.tabs.find((item) => item.id === leaf.activeTabId) : null;
+  if (!tab) return;
+  const primary = tab.kind === "primary-editor";
+  const file = primary ? currentFile : tab.state.file;
+  const title = primary
+    ? currentFile.split(/[\\/]/u).at(-1) || "Noema"
+    : tab.title || tab.state.file.split(/[\\/]/u).at(-1) || "Noema";
+  const dirty = primary ? !currentReadOnly && revision !== savedRevision : Boolean(tab.state.dirty);
+  desktopTitleName.textContent = title;
+  desktopTitleName.title = file || title;
+  document.title = dirty ? `* ${title}` : title;
+  window.noemaDesktop?.updateWindowState({
+    kind: "note",
+    file,
+    title,
+    dirty,
+    saveInFlight: primary ? desktopSaveInFlight : false,
+    conflict: primary ? desktopSaveConflict : false,
+    busy: false,
+  });
+}
+
+function installDesktopWorkspaceLayout(): void {
+  if (!desktopMode || workspacePaneMode) return;
+  const fallback = defaultWorkspaceLayout();
+  let restored = fallback;
+  try {
+    restored = parseWorkspaceLayout<WorkspacePaneState>(localStorage.getItem(WORKSPACE_LAYOUT_STORAGE_KEY), fallback);
+  } catch {
+    restored = fallback;
+  }
+  if (!validWorkspaceLayout(restored)) restored = fallback;
+
+  const layoutRoot = document.createElement("div");
+  layoutRoot.className = "noema-desktop-workspace";
+  host.replaceWith(layoutRoot);
+  workspaceLayoutView = createWorkspaceLayoutView(layoutRoot, {
+    state: restored,
+    cloneTab: (tab, id) => ({
+      id,
+      kind: "editor-pane",
+      title: `${tab.title || "Noema"} · split`,
+      state: {
+        file: tab.kind === "primary-editor" ? currentFile : tab.state.file,
+        client: newWorkspacePaneClient(),
+      },
+    }),
+    mountTab: ({ tab, host: panel }) => {
+      if (tab.kind === "primary-editor") {
+        panel.append(host);
+        return;
+      }
+      const frame = document.createElement("iframe");
+      frame.className = "noema-workspace-editor-frame";
+      frame.title = tab.title;
+      frame.src = workspacePaneUrl(tab.state);
+      frame.setAttribute("allow", "clipboard-read; clipboard-write");
+      frame.addEventListener("focus", () => {
+        const leafId = panel.dataset.noemaWorkspaceLeaf || "";
+        if (leafId) workspaceLayoutView?.activate(leafId, tab.id);
+      });
+      panel.append(frame);
+      workspacePaneFrames.set(tab.id, frame);
+      return () => {
+        workspacePaneFrames.delete(tab.id);
+        frame.src = "about:blank";
+        frame.remove();
+      };
+    },
+    onStateChange: (state) => {
+      document.body.dataset.workspacePanes = String(workspaceLeaves(state.root).length);
+      try {
+        localStorage.setItem(WORKSPACE_LAYOUT_STORAGE_KEY, JSON.stringify(state));
+      } catch {
+        // The live recursive layout remains authoritative for this window.
+      }
+      syncActiveWorkspaceWindowState(state);
+    },
+    onPopoutTab: (tab) => {
+      const file = tab.kind === "primary-editor" ? currentFile : tab.state.file;
+      if (file) void window.noemaDesktop?.openFiles([file]);
+    },
+    canCloseTab: (tab) => tab.id !== PRIMARY_WORKSPACE_TAB_ID,
+  });
+  document.body.dataset.workspacePanes = String(workspaceLeaves(workspaceLayoutView.getState().root).length);
+}
+
+function syncWorkspacePrimaryTab(): void {
+  const dirty = !currentReadOnly && revision !== savedRevision;
+  const name = currentFile.split(/[\\/]/u).at(-1) || "Noema";
+  workspaceLayoutView?.updateTab(PRIMARY_WORKSPACE_TAB_ID, (tab) => {
+    if (tab.title === name && tab.state.file === currentFile && tab.state.dirty === dirty) return tab;
+    return { ...tab, title: name, state: { ...tab.state, file: currentFile, dirty } };
+  });
+}
+
+installDesktopWorkspaceLayout();
+document.body.dataset.headingNumbers = headingNumberingPreference.enabled ? "true" : "false";
+
+function applyHeadingNumberingPreference(
+  next: { enabled: boolean; format?: HeadingNumberFormat },
+  persist = true,
+): void {
+  headingNumberingPreference = {
+    enabled: next.enabled,
+    format: next.format ?? headingNumberingPreference.format,
+  };
+  editor.setHeadingNumbering(headingNumberingPreference);
+  document.body.dataset.headingNumbers = headingNumberingPreference.enabled ? "true" : "false";
+  if (persist) {
+    try {
+      localStorage.setItem("noema.headingNumbering.enabled", String(headingNumberingPreference.enabled));
+      localStorage.setItem("noema.headingNumbering.format", headingNumberingPreference.format);
+    } catch {
+      // The live editor state remains authoritative when storage is unavailable.
+    }
+  }
+}
+
+function toggleHeadingNumbering(): void {
+  applyHeadingNumberingPreference({ enabled: !headingNumberingPreference.enabled });
+  setStatus(`Heading numbers ${headingNumberingPreference.enabled ? "shown" : "hidden"}`);
+}
+
+window.addEventListener("storage", (event) => {
+  if (event.key?.startsWith("noema.headingNumbering.")) {
+    applyHeadingNumberingPreference(loadHeadingNumberingPreference(), false);
+  }
+});
 host.appendChild(bibliographyPanel);
 
 const linkPreview = createLinkPreviewController({
@@ -1450,7 +1796,7 @@ const linkPreview = createLinkPreviewController({
     return url.toString();
   },
   beforeShow: () => {
-    contextMenu.hidden = true;
+    hideContextMenu();
     selectionTool.hidden = true;
   },
   setStatus,
@@ -1865,14 +2211,16 @@ function showBibliographyContextMenu(
   y: number,
 ): void {
   contextMenu.classList.add("is-bibliography");
-  const nodes: HTMLElement[] = [bibliographyContextPreview(refs)];
-  if (items.length > 0) nodes.push(contextMenuItem({ separator: true, label: "" }));
-  nodes.push(...items.map(contextMenuItem));
-  contextMenu.replaceChildren(...nodes);
-  contextMenu.hidden = false;
-  const rect = contextMenu.getBoundingClientRect();
-  contextMenu.style.left = `${Math.max(6, Math.min(window.innerWidth - rect.width - 6, x))}px`;
-  contextMenu.style.top = `${Math.max(6, Math.min(window.innerHeight - rect.height - 6, y))}px`;
+  contextMenuController.open([
+    {
+      id: "bibliography-preview",
+      label: "",
+      type: "custom",
+      bind: (row) => row.appendChild(bibliographyContextPreview(refs)),
+    },
+    ...(items.length > 0 ? [{ separator: true, label: "" } as AaronContextMenuItem] : []),
+    ...items,
+  ], { left: x, top: y });
 }
 
 function showCitationContextMenu(from: number, to: number, x: number, y: number): void {
@@ -2006,15 +2354,17 @@ document.addEventListener("aaronnote:attachment-context-menu", (event) => {
 }, { capture: true });
 document.addEventListener("pointerdown", (event) => {
   const target = event.target;
-  if (!contextMenu.hidden && target instanceof Node && !contextMenu.contains(target)) hideContextMenu();
+  if (contextMenuController.visible && target instanceof Node && !contextMenuController.contains(target)) {
+    transientSurfaces.close(["context-menu"], "outside");
+  }
 }, { capture: true });
-window.addEventListener("resize", hideContextMenu);
+window.addEventListener("resize", () => transientSurfaces.close(["context-menu"], "viewport"));
 document.addEventListener("scroll", () => {
-  hideContextMenu();
+  transientSurfaces.close(["context-menu"], "viewport");
 }, { capture: true, passive: true });
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
-    hideContextMenu();
+    transientSurfaces.close(["context-menu"], "escape");
   }
 }, { capture: true });
 const snippetSession = new SnippetSession(editor);
@@ -2443,7 +2793,7 @@ const localGraphPanel = createLocalGraphPanel({
   openTag: openTagFilter,
 });
 
-if (desktopMode) {
+if (desktopMode && !workspacePaneMode) {
   createKnowledgeSearch({
     input: knowledgeSearchInput,
     anchor: knowledgeSearchAnchor,
@@ -2459,16 +2809,31 @@ if (desktopMode) {
     tabButtons: knowledgeTabButtons,
     panes: {
       backlinks: knowledgeBacklinksPane,
+      mentions: knowledgeMentionsPane,
       graph: knowledgeGraphPane,
       search: knowledgeSearchPane,
       tags: knowledgeTagsPane,
     },
     backlinkList: knowledgeBacklinkList,
     backlinkStatus: knowledgeBacklinkStatus,
+    mentionList: knowledgeMentionList,
+    mentionStatus: knowledgeMentionStatus,
     tagList: knowledgeTagList,
     tagStatus: knowledgeTagStatus,
     searchInput: knowledgeSearchInput,
     getCurrentNote: currentNote,
+    getVirtualMentions: async () => {
+      const note = currentNote();
+      if (!note) return { mentions: [] };
+      const result = await api.knowledge.virtualReferences({ targetId: note.id || note.key, file: note.file, title: note.title });
+      return {
+        ...result,
+        mentions: result.mentions.map((mention) => ({
+          ...mention,
+          note: mention.note ? resolveNoteRef(mention.note.id || mention.sourceId) : resolveNoteRef(mention.sourceId),
+        })),
+      };
+    },
     resolveNoteRef,
     relationshipSource: () => currentRelationshipSource,
     openNote,
@@ -2499,9 +2864,39 @@ if (desktopMode) {
         .sort((a, b) => Number(b.current) - Number(a.current) || b.count - a.count || a.name.localeCompare(b.name));
     },
     openTag: openTagFilter,
+    onStateChange: (_view, expanded) => workspaceDockController?.syncVisibility("knowledge", expanded),
     onGraphVisible: () => localGraphPanel.update(true),
     onGraphHidden: () => localGraphPanel.suspend(),
     onCollapse: () => localGraphPanel.collapse(),
+  });
+
+  workspaceDockController = createWorkspaceDockController({
+    body: document.body,
+    storage: localStorage,
+  });
+  workspaceDockController.register({
+    id: "knowledge",
+    label: "Knowledge",
+    element: () => graphPanelRoot,
+    open: () => desktopKnowledgeDock?.show(desktopKnowledgeDock.activeView(), { focus: false }),
+    close: () => desktopKnowledgeDock?.collapse(),
+    focus: () => graphPanelRoot.querySelector<HTMLElement>("button, input, select, [tabindex]")?.focus(),
+    defaultPosition: "right",
+    defaultSize: 390,
+    minSize: 320,
+    maxSize: 720,
+  });
+  workspaceDockController.register({
+    id: "agenda",
+    label: "Agenda",
+    element: () => document.querySelector<HTMLElement>(".aaronnote-agenda-full.is-desktop-dock"),
+    open: openDesktopAgendaDock,
+    close: closeAgendaView,
+    focus: () => document.querySelector<HTMLElement>(".aaronnote-agenda-full.is-desktop-dock")?.focus(),
+    defaultPosition: "bottom",
+    defaultSize: 430,
+    minSize: 180,
+    maxSize: 720,
   });
 }
 const graphOverlayTimer = new CoalescedTimer(400);
@@ -3436,51 +3831,59 @@ async function deleteJupyterCellBlock(cell: JupyterPanelCell): Promise<void> {
   }
 }
 
-type AaronContextMenuItem = {
-  label: string;
-  detail?: string;
-  disabled?: boolean;
-  danger?: boolean;
-  separator?: boolean;
-  run?: () => void | Promise<void>;
-};
+type AaronContextMenuItem = NoemaMenuItem;
 
 function hideContextMenu(): void {
-  contextMenu.hidden = true;
-  contextMenu.classList.remove("is-bibliography", "is-math");
-  contextMenu.replaceChildren();
-}
-
-function contextMenuItem(item: AaronContextMenuItem): HTMLElement {
-  if (item.separator) {
-    const separator = document.createElement("div");
-    separator.className = "aaronnote-context-separator";
-    separator.setAttribute("role", "separator");
-    return separator;
-  }
-  const button = document.createElement("button");
-  button.type = "button";
-  button.disabled = Boolean(item.disabled);
-  button.dataset.danger = item.danger ? "true" : "false";
-  button.innerHTML = "<span></span><small></small>";
-  button.querySelector("span")!.textContent = item.label;
-  button.querySelector("small")!.textContent = item.detail || "";
-  button.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    hideContextMenu();
-    if (!item.disabled) {
-      Promise.resolve(item.run?.()).catch((error) => {
-        setStatus(error instanceof Error ? error.message : "Context action failed");
-      });
-    }
-  });
-  return button;
+  contextMenuController.close();
 }
 
 function runContextEditorCommand(command: EditorCommand, value = ""): boolean {
   editor.focus();
   return editor.runCommand(command, value);
+}
+
+function syncFormatPainterUi(): void {
+  const state = editor.getFormatPainterState();
+  if (state) document.body.dataset.noemaFormatPainter = state.mode;
+  else delete document.body.dataset.noemaFormatPainter;
+}
+
+function formatPainterDetail(): string {
+  const state = editor.getFormatPainterState();
+  if (!state) return "No copied format";
+  return `${state.mode} · ${state.snapshot.types.join(", ") || "plain text"}`;
+}
+
+function captureFormatPainter(mode: "once" | "continuous"): boolean {
+  if (currentReadOnly) {
+    setStatus("Read-only pane");
+    return false;
+  }
+  const snapshot = editor.captureFormat(mode);
+  syncFormatPainterUi();
+  if (!snapshot) {
+    setStatus("Select text before copying its format");
+    return false;
+  }
+  setStatus(`Format painter ${mode}: ${snapshot.types.join(", ") || "plain text"}`);
+  return true;
+}
+
+function applyFormatPainter(): boolean {
+  if (rejectReadOnlyAction("Read-only pane")) return false;
+  editor.focus();
+  const applied = editor.applyCapturedFormat();
+  syncFormatPainterUi();
+  setStatus(applied ? "Format painted" : "Copy a format and select target text first");
+  return applied;
+}
+
+function clearFormatPainter(announce = true): boolean {
+  if (!editor.getFormatPainterState()) return false;
+  editor.clearFormatPainter();
+  syncFormatPainterUi();
+  if (announce) setStatus("Format painter canceled");
+  return true;
 }
 
 function markdownHrefFromPointer(event: MouseEvent): string {
@@ -4122,8 +4525,21 @@ function showContextMenu(event: MouseEvent, target: Partial<AaronContextMenuTarg
       { label: "Copy Link", detail: "clipboard", run: () => copyContextLink(href) },
     );
   } else if (hasSelection) {
+    const painterState = editor.getFormatPainterState();
     items.push(
       { label: "Copy Selection", detail: primaryShortcut("C"), run: () => copyEditorSelection() },
+      {
+        label: "Format Painter",
+        detail: painterState ? formatPainterDetail() : "copy / apply",
+        disabled: currentReadOnly,
+        submenu: [
+          { label: "Copy Format Once", detail: "next selection", run: () => captureFormatPainter("once") },
+          { label: "Copy Format Continuously", detail: "until canceled", run: () => captureFormatPainter("continuous") },
+          { separator: true, label: "" },
+          { label: "Apply Copied Format", detail: painterState ? formatPainterDetail() : "inactive", disabled: !painterState, run: applyFormatPainter },
+          { label: "Cancel Format Painter", detail: "Escape", disabled: !painterState, run: () => clearFormatPainter() },
+        ],
+      },
       { label: "Bold", detail: primaryShortcut("B"), disabled: currentReadOnly, run: () => runContextEditorCommand("bold") },
       { label: "Italic", detail: primaryShortcut("I"), disabled: currentReadOnly, run: () => runContextEditorCommand("italic") },
       { label: "Inline Code", detail: "`code`", disabled: currentReadOnly, run: () => runContextEditorCommand("code") },
@@ -4148,10 +4564,22 @@ function showContextMenu(event: MouseEvent, target: Partial<AaronContextMenuTarg
       ...(block.type.includes("code") ? [
         { label: "Copy Code", detail: "block", run: () => runContextEditorCommand("copy-code") },
       ] : []),
+      {
+        label: "Insert…",
+        detail: "quick insert",
+        disabled: currentReadOnly,
+        loadSubmenu: async () => editor.getQuickInsertItems("").map((item) => ({
+          id: `quick-insert:${item.id}`,
+          label: item.label,
+          detail: item.detail,
+          run: () => editor.runQuickInsert(item),
+        })),
+      },
       { label: "Document Properties", detail: "org-env(meta)", disabled: currentReadOnly, run: () => runContextEditorCommand("edit-properties") },
       { label: "Paste", detail: primaryShortcut("V"), disabled: currentReadOnly, run: () => pasteIntoEditorFromContextMenu() },
       { label: "Find in Note", detail: primaryShortcut("F"), run: () => openFindPanel() },
       { label: "Save", detail: currentReadOnly ? "read-only" : primaryShortcut("S"), disabled: currentReadOnly || !currentFile, run: () => save() },
+      { label: headingNumberingPreference.enabled ? "Hide Heading Numbers" : "Show Heading Numbers", detail: "visual only", run: toggleHeadingNumbering },
       { label: slideDeck?.isSlides()
         ? (slideDeck.isRevealView() ? "Edit slides" : "Present slides")
         : (editor.isSourceMode() ? "Markdown View" : "Source View"), detail: primaryShortcut("/"), run: () => togglePresentationOrSource() },
@@ -4159,15 +4587,9 @@ function showContextMenu(event: MouseEvent, target: Partial<AaronContextMenuTarg
     );
   }
 
-  contextMenu.replaceChildren(...items.map(contextMenuItem));
-  contextMenu.hidden = false;
-  const rect = contextMenu.getBoundingClientRect();
   const x = target.x ?? event.clientX;
   const y = target.y ?? event.clientY;
-  const left = Math.max(6, Math.min(window.innerWidth - rect.width - 6, x));
-  const top = Math.max(6, Math.min(window.innerHeight - rect.height - 6, y));
-  contextMenu.style.left = `${left}px`;
-  contextMenu.style.top = `${top}px`;
+  contextMenuController.open(items, { left: x, top: y });
 }
 
 function toggleJupyterPanel(): void {
@@ -4534,6 +4956,7 @@ function applyOpenedNote(
     history: "reset",
     preserveView: options.preserveView === true,
   });
+  syncFormatPainterUi();
   revision = 0;
   savedRevision = 0;
   desktopSaveConflict = false;
@@ -4578,11 +5001,9 @@ function applyOpenedNote(
   lastTrackedCursorPositionKey = lastSavedCursorPositionKey;
   if (restored) rememberCursorPosition(restored);
   snippetSession.clear();
-  hideSnippetPopup();
-  hideMathPreview();
+  transientSurfaces.close(["snippet-popup", "math-preview", "prose-popover", "context-menu"], "document-change");
   proseLifecycle.invalidate("note-changed");
   setProseDiagnostics(editor.view, []);
-  hideProsePopover();
   selectionTool.hidden = true;
   selectionMore.hidden = true;
   if (resetVim) vim.setMode("insert");
@@ -4842,9 +5263,7 @@ function isEditorCommand(command: string): command is EditorCommand {
 }
 
 function primaryMod(event: KeyboardEvent): boolean {
-  return /Mac/.test(navigator.platform)
-    ? event.metaKey && !event.ctrlKey
-    : event.ctrlKey && !event.metaKey;
+  return primaryModifierDown(event, desktopPlatform);
 }
 
 type ProseCheckInput = {
@@ -5130,7 +5549,7 @@ function runProseCheck(automatic = false): void {
 }
 
 function runProseCheckShortcut(event: KeyboardEvent): boolean {
-  if (!primaryMod(event) || !event.shiftKey || event.altKey || event.key.toLowerCase() !== "c") return false;
+  if (!matchHotKey("Primary+Shift+C", event, { platform: desktopPlatform })) return false;
   event.preventDefault();
   void runProseCheck(false);
   return true;
@@ -5272,6 +5691,99 @@ async function reloadNotes(force = false): Promise<void> {
     void loadPathSuggestions();
   } catch (error) {
     if (force) setStatus(error instanceof Error ? error.message : "Note index failed");
+  }
+}
+
+function obsidianTaskFailure(task: import("./api-client.ts").ObsidianImportTask): Error {
+  const detail = [task.error, task.detail].map((value) => String(value || "").trim()).filter(Boolean).join(" · ");
+  return new Error(detail || task.message || `Obsidian import ${task.state}`);
+}
+
+async function waitForObsidianTask(
+  taskID: string,
+  accepted: ReadonlySet<string>,
+  timeoutMs = 20 * 60 * 1000,
+): Promise<import("./api-client.ts").ObsidianImportTask> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const task = await api.imports.obsidianTask(taskID);
+    setStatus(`${task.message || "Obsidian import"} · ${Math.max(0, Math.min(100, task.progress || 0))}%`);
+    if (accepted.has(task.state)) return task;
+    if (task.state === "failed" || task.state === "cancelled") throw obsidianTaskFailure(task);
+    await new Promise((resolveWait) => window.setTimeout(resolveWait, 250));
+  }
+  throw new Error("Obsidian import timed out");
+}
+
+function obsidianVaultName(sourcePath: string, suggested = ""): string {
+  const segment = String(suggested || sourcePath.split(/[\\/]/).filter(Boolean).pop() || "Obsidian Vault").trim();
+  return segment.replace(/[\\/:*?"<>|]+/g, "-").replace(/^\.+|\.+$/g, "").trim() || "Obsidian Vault";
+}
+
+async function importObsidianVault(): Promise<void> {
+  if (activeObsidianTaskID) {
+    setStatus("An Obsidian import is already active");
+    return;
+  }
+  let sourcePath = "";
+  if (window.noemaDesktop?.selectDirectory) {
+    const selection = await window.noemaDesktop.selectDirectory({ title: "Choose Obsidian Vault" });
+    if (selection.canceled) return;
+    sourcePath = selection.path;
+  } else {
+    const values = await openFormModal("Import Obsidian Vault", [{
+      id: "path", label: "Vault folder", required: true,
+      description: "Enter the absolute path to a Vault containing a .obsidian directory.",
+    }], "Analyze");
+    sourcePath = values?.path?.trim() || "";
+  }
+  if (!sourcePath) return;
+
+  try {
+    setStatus("Analyzing Obsidian Vault…");
+    const started = await api.imports.obsidianAnalyze(sourcePath);
+    activeObsidianTaskID = started.taskID;
+    const ready = await waitForObsidianTask(started.taskID, new Set(["ready"]));
+    const analysis = ready.analysis || {};
+    const vaultName = obsidianVaultName(sourcePath, String(analysis.vaultName || analysis.notebookName || ""));
+    const warnings = Array.isArray(analysis.warnings) ? analysis.warnings.length : 0;
+    const destination = await openFormModal("Import Obsidian Vault", [{
+      id: "destination",
+      label: "Destination folder",
+      value: `Imports/${vaultName}`,
+      required: true,
+      description: `${Number(analysis.markdownCount) || 0} Markdown notes · ${Number(analysis.importableAssetCount) || 0} assets · ${Number(analysis.missingCount) || 0} unresolved links · ${warnings} warnings. The original Vault is not modified.`,
+    }], "Import");
+    if (!destination) {
+      await api.imports.obsidianCancel(started.taskID);
+      setStatus("Obsidian import cancelled");
+      return;
+    }
+    const target = destination.destination.trim().replace(/^\/+|\/+$/g, "");
+    if (!target) throw new Error("Choose a destination below the note root");
+    await api.imports.obsidianStart(started.taskID, target);
+    const completed = await waitForObsidianTask(started.taskID, new Set(["completed"]));
+    await reloadNotes(true);
+    const result = completed.result || {};
+    setStatus(`Imported ${Number(result.markdownCount) || 0} notes and ${Number(result.importedAttachmentCount) || 0} assets to ${String(result.destination || target)}`);
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "Obsidian import failed");
+  } finally {
+    activeObsidianTaskID = "";
+  }
+}
+
+async function cancelObsidianImport(): Promise<void> {
+  const taskID = activeObsidianTaskID;
+  if (!taskID) {
+    setStatus("No cancellable Obsidian import is active");
+    return;
+  }
+  try {
+    await api.imports.obsidianCancel(taskID);
+    setStatus("Obsidian import cancelled");
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "Obsidian import could not be cancelled at this stage");
   }
 }
 
@@ -6843,6 +7355,29 @@ function currentPrintablePdfDocument(): { html: string; title: string; defaultPa
   return { html, title, defaultPath };
 }
 
+async function currentSelfContainedHtmlDocument(): Promise<{ html: string; title: string; defaultPath: string } | null> {
+  if (!currentFile) return null;
+  const note = currentNote();
+  const title = note?.title || fileNameFromPath(currentFile).replace(/\.[^.]+$/, "") || "Noema";
+  const defaultPath = /\.(?:md|markdown)$/i.test(currentFile)
+    ? currentFile.replace(/\.(?:md|markdown)$/i, ".html")
+    : `${currentFile}.html`;
+  const themeId = document.documentElement.dataset.noemaTheme || "aaronnote";
+  const lightThemes = new Set(["claude", "daylight", "mediki"]);
+  const html = await createSelfContainedNoteHTML(currentMarkdownText(), {
+    title,
+    group: note?.groupLabel || note?.groupKey || "Root",
+    date: note?.date || "",
+    kind: note?.kind || currentKind || "default",
+    themeId,
+    alternateThemeId: lightThemes.has(themeId) ? "aaronnote" : "daylight",
+    assetResolver: (source) => window.AaronnoteResolveAssetUrl?.(source) || source,
+    document,
+    baseUrl: location.href,
+  });
+  return { html, title, defaultPath };
+}
+
 if (desktopMode && initialParams.get("desktopPrintProbe") === "1") {
   window.__noemaDesktopPrintDocument = currentPrintablePdfDocument;
 }
@@ -6868,6 +7403,30 @@ async function exportPdfTool(): Promise<void> {
     setStatus(`Exported PDF · ${fileNameFromPath(result.path)}`);
   } catch (error) {
     setStatus(`PDF export failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+async function exportHtmlTool(): Promise<void> {
+  if (!window.noemaDesktop?.exportHtml) {
+    setStatus("Self-contained HTML export is available in Noema.app");
+    return;
+  }
+  finishInlineMathEditing(editor.view);
+  setStatus("Preparing self-contained HTML…");
+  try {
+    const standalone = await currentSelfContainedHtmlDocument();
+    if (!standalone) {
+      setStatus("Open a desktop note before exporting HTML");
+      return;
+    }
+    const result = await window.noemaDesktop.exportHtml(standalone);
+    if (result.canceled) {
+      setStatus("HTML export canceled");
+      return;
+    }
+    setStatus(`Exported HTML · ${fileNameFromPath(result.path)}`);
+  } catch (error) {
+    setStatus(`HTML export failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -7494,6 +8053,7 @@ async function openDesktopAgendaDock(): Promise<void> {
     onOpenChange: (open) => {
       document.body.classList.toggle("noema-agenda-dock-open", open);
       agendaButton.setAttribute("aria-expanded", String(open));
+      workspaceDockController?.syncVisibility("agenda", open);
       if (!open) editor.focus();
     },
   });
@@ -8013,6 +8573,7 @@ function toolActions(): ToolAction[] {
     { id: "save", group: "document", title: "Save document", detail: "Write current changes to disk", disabled: currentReadOnly || !currentFile, run: () => void save() },
     { id: "refresh", group: "document", title: "Refresh from disk", detail: "Reload the current document", disabled: !currentFile, run: () => void reloadCurrentFilePreservingCursor({ preserveView: true }) },
     { id: "source", group: "view", title: editor.isSourceMode() ? "Markdown view" : "Source view", detail: "Switch between rendered Markdown and source", run: () => toggleSourceMode() },
+    { id: "heading-numbers", group: "view", title: headingNumberingPreference.enabled ? "Hide heading numbers" : "Show heading numbers", detail: `${headingNumberingPreference.format} · visual only`, run: toggleHeadingNumbering },
     {
       id: "open-source-editor",
       group: "document",
@@ -8058,6 +8619,10 @@ function toolActions(): ToolAction[] {
     ...(slideDeck?.isSlides() ? [{ id: "slides-mirror", group: "publish" as const, title: "Reveal mirror", detail: "Edit this note's .slides JavaScript mirror", run: () => void slideDeck?.openMirror() }] : []),
     { id: "toc", group: "view", title: "Page outline", detail: "Headings from the live CM6 index", run: togglePageOutline },
     { id: "tag-ref", group: "writing", title: "Tag / copy reference", detail: "Equation tag, inline anchor, and reference copy", run: () => void tagOrCopyRef() },
+    { id: "format-copy", group: "writing", title: "Copy selection format", detail: "Activate one-shot Markdown format painter", disabled: currentReadOnly, run: () => captureFormatPainter("once") },
+    { id: "format-copy-continuous", group: "writing", title: "Copy format continuously", detail: "Keep painting selections until canceled", disabled: currentReadOnly, run: () => captureFormatPainter("continuous") },
+    { id: "format-apply", group: "writing", title: "Apply copied format", detail: formatPainterDetail(), disabled: currentReadOnly || !editor.getFormatPainterState(), run: applyFormatPainter },
+    { id: "format-cancel", group: "writing", title: "Cancel format painter", detail: formatPainterDetail(), disabled: !editor.getFormatPainterState(), run: () => clearFormatPainter() },
     { id: "export-latex", group: "publish", title: "Export LaTeX", detail: "Write selection, heading, or document to a .tex file", run: () => void exportLatexTool() },
     { id: "latex-export-agent", group: "publish", title: "Switch export agent", detail: "Choose Codex, Claude, or OpenCode for LaTeX polish", run: () => void switchLatexExportAgentTool() },
     { id: "zotero-import-bibtex", group: "writing", title: "Import Zotero BibTeX", detail: "Use the Zotero picker and append to a local .bib file", run: () => void zoteroImportBibtexTool() },
@@ -9165,6 +9730,78 @@ function scheduleAsyncCompletion(
   });
 }
 
+function quickInsertFilter(item: QuickInsertItem): string[] {
+  return [
+    item.id,
+    item.label,
+    item.detail ?? "",
+    item.command ?? "",
+    item.value ?? "",
+    ...(item.keywords ?? []),
+    ...(QUICK_INSERT_ALIASES[item.id] ?? []),
+  ].filter(Boolean);
+}
+
+function showSlashQuickInsert(
+  ctx: ReturnType<typeof editor.cursorContext>,
+  activeMath: ReturnType<typeof mathAtCursor> | undefined,
+): boolean {
+  const selection = editor.getMarkdownSelection();
+  if (selection.from !== selection.to) return false;
+  const blockType = editor.getBlockContext().type.toLowerCase();
+  if (blockType.includes("code") || blockType.includes("html")) return false;
+  if (snippetContextMode(ctx, activeMath === undefined ? mathAtCursor(ctx) : activeMath) !== "markdown-mode") return false;
+
+  const trigger = findSlashHint(ctx.before, ctx.after);
+  if (!trigger) return false;
+  const sourceItems = editor.getQuickInsertItems("");
+  const byId = new Map(sourceItems.map((item) => [item.id, item]));
+  const items = resolveHintMenuItems(sourceItems.map((item) => ({
+    entryKey: item.id,
+    filter: quickInsertFilter(item),
+    item,
+  })), {
+    enabled: slashMenuPreferences.enabled,
+    query: trigger.query,
+    order: slashMenuPreferences.order,
+    visible: (entryKey) => !slashMenuPreferences.hidden.has(entryKey),
+  });
+  if (items.length === 0) {
+    hideSnippetPopup();
+    return true;
+  }
+
+  showSnippetPopup(
+    `${trigger.key}${trigger.query}`,
+    items.slice(0, 18).map(({ item }) => ({
+      id: `quick-insert:${item.id}`,
+      key: item.id,
+      name: item.label,
+      description: item.detail,
+      mode: "markdown-mode",
+      group: "quick-insert",
+      body: item.markdown ?? "",
+      source: item.detail ?? item.command ?? "",
+      provider: "quick-insert",
+      browserCompatible: true,
+    })),
+    trigger.deleteBefore,
+    ctx.rect,
+    (snippet) => {
+      const item = byId.get(String(snippet.key || ""));
+      if (!item) return false;
+      const current = editor.getMarkdownSelection();
+      const from = Math.max(0, current.from - trigger.deleteBefore);
+      const removed = editor.markdownBetween(from, current.to);
+      editor.replaceMarkdownRange(from, current.to, "");
+      const applied = editor.runQuickInsert(item);
+      if (!applied) editor.replaceMarkdownRange(from, from, removed);
+      return applied;
+    },
+  );
+  return true;
+}
+
 function updateSnippetPopup(
   ctx: ReturnType<typeof editor.cursorContext>,
   activeMath: ReturnType<typeof mathAtCursor> | undefined = undefined,
@@ -9357,6 +9994,11 @@ function updateSnippetPopup(
       ctx.rect,
       () => matchingTodoRefCompletions(depRefPrefix, quoted),
     );
+    return;
+  }
+
+  if (showSlashQuickInsert(ctx, activeMath)) {
+    clearCompletionCache();
     return;
   }
 
@@ -10068,6 +10710,26 @@ function runHostKey(body: Record<string, unknown>): boolean {
   return inserted;
 }
 
+const WORKSPACE_FORWARDABLE_COMMANDS = new Set([
+  "save", "refresh", "reload", "back", "nav-back", "navigation-back", "forward", "nav-forward", "navigation-forward",
+  "find", "find-next", "find-previous", "focus", "paste", "escape", "normal", "vim-normal", "insert", "vim-insert",
+  "toggle-source", "source", "toggle-heading-numbers", "heading-numbers", "toggle-toc", "toggle-agenda", "toggle-graph", "toggle-tools",
+  "prose-check", "spell-check", "export-html", "export-pdf", "export-latex", "open-source-editor", "reveal-current-file",
+  "capture-format", "capture-format-once", "copy-format", "capture-format-continuous", "copy-format-continuous", "apply-format", "paint-format",
+  "clear-format-painter", "cancel-format-painter", "undo", "redo", "jupyter-panel", "jupyter-run-cell", "jupyter-run-all",
+  "jupyter-run-section", "jupyter-restart-run-all", "jupyter-interrupt", "jupyter-runtime-tasks", "jupyter-cleanup", "jupyter-switch-kernel",
+]);
+
+function forwardHostCommandToWorkspacePane(command: string, detail: unknown): boolean {
+  if (workspacePaneMode || command.startsWith("workspace-")) return false;
+  if (!WORKSPACE_FORWARDABLE_COMMANDS.has(command) && !isEditorCommand(command)) return false;
+  const tab = activeWorkspaceTab();
+  const frame = tab?.kind === "editor-pane" ? workspacePaneFrames.get(tab.id) : null;
+  if (!frame?.contentWindow) return false;
+  frame.contentWindow.postMessage({ type: "noema-workspace-command", detail }, window.location.origin);
+  return true;
+}
+
 function runHostCommand(detail: unknown): boolean {
   const body = (detail && typeof detail === "object" ? detail : {}) as {
     command?: string;
@@ -10091,6 +10753,7 @@ function runHostCommand(detail: unknown): boolean {
   };
   const command = String(body.command || "").trim().toLowerCase();
   if (!command) return false;
+  if (forwardHostCommandToWorkspacePane(command, detail)) return true;
 
   switch (command) {
     case "notes-index-changed": {
@@ -10215,6 +10878,10 @@ function runHostCommand(detail: unknown): boolean {
       if (desktopKnowledgeDock) desktopKnowledgeDock.toggle("backlinks");
       else localGraphPanel.toggle();
       return true;
+    case "knowledge-mentions":
+      if (desktopKnowledgeDock) desktopKnowledgeDock.toggle("mentions");
+      else setStatus("Unlinked mentions are available in Noema.app Knowledge dock");
+      return true;
     case "knowledge-tags":
       if (desktopKnowledgeDock) desktopKnowledgeDock.toggle("tags");
       else void manageCurrentNoteTags();
@@ -10238,6 +10905,7 @@ function runHostCommand(detail: unknown): boolean {
     case "escape":
     case "normal":
     case "vim-normal":
+      if (clearFormatPainter()) return true;
       vim.setMode("normal");
       editor.focus();
       return true;
@@ -10293,6 +10961,31 @@ function runHostCommand(detail: unknown): boolean {
     case "source":
       toggleSourceMode();
       return true;
+    case "toggle-heading-numbers":
+    case "heading-numbers":
+      toggleHeadingNumbering();
+      return true;
+    case "workspace-split-right":
+      return workspaceLayoutView?.splitActive("lr") ?? false;
+    case "workspace-split-below":
+      return workspaceLayoutView?.splitActive("tb") ?? false;
+    case "workspace-close-active": {
+      const tab = activeWorkspaceTab();
+      return tab ? workspaceLayoutView?.close(tab.id) ?? false : false;
+    }
+    case "capture-format":
+    case "capture-format-once":
+    case "copy-format":
+      return captureFormatPainter("once");
+    case "capture-format-continuous":
+    case "copy-format-continuous":
+      return captureFormatPainter("continuous");
+    case "apply-format":
+    case "paint-format":
+      return applyFormatPainter();
+    case "clear-format-painter":
+    case "cancel-format-painter":
+      return clearFormatPainter();
     case "toggle-toc":
       togglePageOutline();
       return true;
@@ -10353,8 +11046,23 @@ function runHostCommand(detail: unknown): boolean {
     case "task-manager":
       openTaskManager();
       return true;
+    case "asset-maintenance":
+      openAssetMaintenance({
+        reveal: window.noemaDesktop ? (file) => { void window.noemaDesktop?.revealPath(file); } : undefined,
+        setStatus,
+      });
+      return true;
+    case "import-obsidian":
+      void importObsidianVault();
+      return true;
+    case "cancel-obsidian-import":
+      void cancelObsidianImport();
+      return true;
     case "open-location":
       openLocationFromHost(body);
+      return true;
+    case "export-html":
+      void exportHtmlTool();
       return true;
     case "export-pdf":
       void exportPdfTool();
@@ -10599,6 +11307,11 @@ document.addEventListener("keydown", (event) => {
     if (!roamToolsPanel.hidden) {
       event.preventDefault();
       closeRoamToolsPanel();
+      editor.focus();
+      return;
+    }
+    if (clearFormatPainter()) {
+      event.preventDefault();
       editor.focus();
       return;
     }
@@ -10924,9 +11637,46 @@ root.querySelectorAll<HTMLButtonElement>("[data-desktop-menu]").forEach((button)
   });
 });
 
-const removeDesktopCommandListener = desktopMode
+const removeDesktopCommandListener = desktopMode && !workspacePaneMode
   ? window.noemaDesktop?.onCommand((detail) => runHostCommand(detail)) ?? null
   : null;
+
+window.addEventListener("message", (event) => {
+  if (event.origin !== window.location.origin || !event.data || typeof event.data !== "object") return;
+  const message = event.data as { type?: unknown; detail?: unknown; client?: unknown; state?: unknown };
+  if (workspacePaneMode && message.type === "noema-workspace-command") {
+    runHostCommand(message.detail);
+    return;
+  }
+  if (workspacePaneMode || message.type !== "noema-workspace-pane-state" || !workspaceLayoutView) return;
+  const client = String(message.client || "");
+  const paneState = message.state && typeof message.state === "object"
+    ? message.state as { file?: unknown; title?: unknown; dirty?: unknown; saveInFlight?: unknown; conflict?: unknown }
+    : {};
+  const state = workspaceLayoutView.getState();
+  const tab = workspaceTabs(state.root).find((item) => item.kind === "editor-pane" && item.state.client === client);
+  if (!tab) return;
+  const file = String(paneState.file || tab.state.file || "");
+  const title = String(paneState.title || file.split(/[\\/]/u).at(-1) || tab.title || "Noema");
+  const dirty = Boolean(paneState.dirty);
+  workspaceLayoutView.updateTab(tab.id, (current) => {
+    if (current.title === title && current.state.file === file && current.state.dirty === dirty) return current;
+    return { ...current, title, state: { ...current.state, file, dirty } };
+  });
+  if (activeWorkspaceTab()?.id !== tab.id) return;
+  desktopTitleName.textContent = title;
+  desktopTitleName.title = file || title;
+  document.title = dirty ? `* ${title}` : title;
+  window.noemaDesktop?.updateWindowState({
+    kind: "note",
+    file,
+    title,
+    dirty,
+    saveInFlight: Boolean(paneState.saveInFlight),
+    conflict: Boolean(paneState.conflict),
+    busy: false,
+  });
+});
 
 window.addEventListener("aaronnote:command", (event) => {
   const detail = (event as CustomEvent<unknown>).detail;
@@ -11077,6 +11827,10 @@ window.addEventListener("beforeunload", () => {
   imeCoalesceTimer.cancel();
   zoomController.destroy();
   writingStatsController?.destroy();
+  workspaceDockController?.destroy();
+  workspaceDockController = null;
+  workspaceLayoutView?.destroy();
+  workspaceLayoutView = null;
   flushCursorPositionKeepalive();
   notifyClientClosedKeepalive();
 });

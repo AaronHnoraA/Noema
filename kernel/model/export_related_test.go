@@ -115,9 +115,7 @@ func setupExportRelatedTest(t *testing.T, boxIDs ...string) {
 		util.DataDir = originalDataDir
 		util.TempDir = originalTempDir
 		util.BlockTreeDBPath = originalBlockTreeDBPath
-		if "" != originalBlockTreeDBPath {
-			treenode.InitBlockTree(false)
-		}
+		restoreTestBlockTreeDatabase(originalBlockTreeDBPath)
 	})
 }
 

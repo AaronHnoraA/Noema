@@ -18,6 +18,7 @@ package tools
 
 import (
 	"fmt"
+	pathpkg "path"
 	"strings"
 
 	"github.com/88250/lute/ast"
@@ -29,17 +30,18 @@ import (
 
 var DocumentTool = &Tool{
 	Name:        "document",
-	Description: "Document operations. Actions: get(id), create(notebook, path=hPath, title, markdown?), list(notebook, path=hPath default /), delete(id), rename(id, title), move(id, notebook, path=target hPath), duplicate(id), search_docs(keyword), info(id).",
+	Description: "Document operations for Noema Markdown repositories and legacy notebooks. Markdown actions: get(notebook, path), create(notebook, path=.md, title?, markdown?), list(notebook, path=/), rename(notebook, source_path, title), move(notebook, source_path, path=target .md). Legacy actions may use document IDs.",
 	InputSchema: ToolSchema{
 		Type: "object",
 		Properties: map[string]Property{
-			"action":   {Type: "string", Description: "Operation", Enum: []string{"get", "create", "list", "delete", "rename", "move", "duplicate", "search_docs", "info"}},
-			"id":       {Type: "string", Description: "Document block ID"},
-			"title":    {Type: "string", Description: "Document title (for create, rename)"},
-			"path":     {Type: "string", Description: "Document hPath, the human-readable path shown in the document tree (e.g. /folder/doc). Used for create, list, move."},
-			"markdown": {Type: "string", Description: "Initial markdown content (for create)"},
-			"keyword":  {Type: "string", Description: "Search keyword (for search_docs)"},
-			"notebook": {Type: "string", Description: "Notebook ID (required for create, list, move)"},
+			"action":      {Type: "string", Description: "Operation", Enum: []string{"get", "create", "list", "delete", "rename", "move", "duplicate", "search_docs", "info"}},
+			"id":          {Type: "string", Description: "Document block ID"},
+			"title":       {Type: "string", Description: "Document title (for create, rename)"},
+			"path":        {Type: "string", Description: "Repository-relative Markdown path, or legacy human-readable path. Used for get, create, list and as the move target."},
+			"source_path": {Type: "string", Description: "Repository-relative source Markdown path for rename or move."},
+			"markdown":    {Type: "string", Description: "Initial markdown content (for create)"},
+			"keyword":     {Type: "string", Description: "Search keyword (for search_docs)"},
+			"notebook":    {Type: "string", Description: "Notebook ID (required for create, list, move)"},
 		},
 		Required: []string{"action"},
 	},
@@ -79,6 +81,20 @@ func documentHandler(args map[string]any) (CallToolResult, error) {
 }
 
 func documentGet(args map[string]any) (CallToolResult, error) {
+	notebook, _ := args["notebook"].(string)
+	markdownPath, _ := args["path"].(string)
+	if notebook != "" && conf.BoxKindMarkdown == model.GetBoxKind(notebook) {
+		if markdownPath == "" {
+			return toolError("path is required for a Markdown document"), nil
+		}
+		markdown, blocks, err := model.LoadMarkdownDoc(notebook, markdownPath)
+		if err != nil {
+			return toolError(fmt.Sprintf("load Markdown document failed: %s", err)), nil
+		}
+		return CallToolResult{Content: []ContentItem{{Type: "text", Text: fmt.Sprintf(
+			"Notebook: %s\nPath: %s\nBlocks: %d\nMarkdown:\n%s", notebook, markdownPath, len(blocks), markdown,
+		)}}}, nil
+	}
 	id, _ := args["id"].(string)
 	if id == "" {
 		return CallToolResult{Content: []ContentItem{{Type: "text", Text: "id is required"}}, IsError: true}, nil
@@ -111,6 +127,22 @@ func documentCreate(args map[string]any) (CallToolResult, error) {
 	}
 	markdown, _ := args["markdown"].(string)
 	title, _ := args["title"].(string)
+	if conf.BoxKindMarkdown == model.GetBoxKind(notebook) {
+		markdownPath, pathErr := normalizeMCPMarkdownPath(hPath, title)
+		if pathErr != nil {
+			return toolError(pathErr.Error()), nil
+		}
+		if markdown == "" && strings.TrimSpace(title) != "" {
+			markdown = "# " + strings.TrimSpace(title) + "\n"
+		}
+		saved, blocks, saveErr := model.SaveMarkdownDoc(notebook, markdownPath, markdown)
+		if saveErr != nil {
+			return toolError(fmt.Sprintf("create Markdown document failed: %s", saveErr)), nil
+		}
+		return CallToolResult{Content: []ContentItem{{Type: "text", Text: fmt.Sprintf(
+			"Markdown document created: %s (notebook: %s, bytes: %d, blocks: %d)", markdownPath, notebook, len(saved), len(blocks),
+		)}}}, nil
+	}
 	if title == "" {
 		title = hPath
 		if strings.Contains(title, "/") {
@@ -139,6 +171,30 @@ func documentCreate(args map[string]any) (CallToolResult, error) {
 	return CallToolResult{Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("document created: %s (hPath: %s)", tree.Root.ID, hPath)}}}, nil
 }
 
+func toolError(message string) CallToolResult {
+	return CallToolResult{Content: []ContentItem{{Type: "text", Text: message}}, IsError: true}
+}
+
+func normalizeMCPMarkdownPath(value, title string) (string, error) {
+	value = strings.TrimSpace(strings.ReplaceAll(value, "\\", "/"))
+	if value == "" {
+		return "", fmt.Errorf("path is required")
+	}
+	if !strings.HasPrefix(value, "/") {
+		value = "/" + value
+	}
+	extension := strings.ToLower(pathpkg.Ext(value))
+	if extension == "" {
+		value += ".md"
+	} else if extension != ".md" && extension != ".markdown" {
+		return "", fmt.Errorf("Markdown document path must end in .md or .markdown")
+	}
+	if strings.TrimSpace(title) == "" && (pathpkg.Base(value) == ".md" || pathpkg.Base(value) == ".markdown") {
+		return "", fmt.Errorf("Markdown document path needs a filename")
+	}
+	return value, nil
+}
+
 func parentDir(p string) string {
 	i := strings.LastIndex(p, "/")
 	if i <= 0 {
@@ -164,6 +220,9 @@ func documentList(args map[string]any) (CallToolResult, error) {
 		var sb strings.Builder
 		sb.WriteString(fmt.Sprintf("Documents in %s:\n\n", notebook))
 		for _, doc := range docs {
+			if hPath != "/" && !strings.HasPrefix(doc.Path, strings.TrimRight(hPath, "/")+"/") && doc.Path != hPath {
+				continue
+			}
 			sb.WriteString(fmt.Sprintf("- %s (path: %s)\n", doc.Title, doc.Path))
 		}
 		return CallToolResult{Content: []ContentItem{{Type: "text", Text: sb.String()}}}, nil
@@ -209,6 +268,37 @@ func documentDelete(args map[string]any) (CallToolResult, error) {
 }
 
 func documentRename(args map[string]any) (CallToolResult, error) {
+	notebook, _ := args["notebook"].(string)
+	if notebook != "" && conf.BoxKindMarkdown == model.GetBoxKind(notebook) {
+		sourcePath, _ := args["source_path"].(string)
+		if sourcePath == "" {
+			sourcePath, _ = args["path"].(string)
+		}
+		title, _ := args["title"].(string)
+		title = strings.TrimSpace(title)
+		if sourcePath == "" || title == "" {
+			return toolError("notebook, source_path and title are required for Markdown rename"), nil
+		}
+		if strings.ContainsAny(title, "/\\") || title == "." || title == ".." {
+			return toolError("Markdown title must be a filename, not a path"), nil
+		}
+		extension := pathpkg.Ext(sourcePath)
+		if extension == "" {
+			extension = ".md"
+		}
+		if pathpkg.Ext(title) == "" {
+			title += extension
+		}
+		targetPath := pathpkg.Join(pathpkg.Dir(sourcePath), title)
+		if !strings.HasPrefix(targetPath, "/") {
+			targetPath = "/" + targetPath
+		}
+		move, err := model.MoveMarkdownDoc(notebook, sourcePath, targetPath)
+		if err != nil {
+			return toolError(fmt.Sprintf("rename Markdown document failed: %s", err)), nil
+		}
+		return CallToolResult{Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Markdown document renamed: %s -> %s", move.FromPath, move.ToPath)}}}, nil
+	}
 	id, _ := args["id"].(string)
 	title, _ := args["title"].(string)
 	if id == "" || title == "" {
@@ -228,9 +318,20 @@ func documentRename(args map[string]any) (CallToolResult, error) {
 }
 
 func documentMove(args map[string]any) (CallToolResult, error) {
-	id, _ := args["id"].(string)
 	notebook, _ := args["notebook"].(string)
 	hPath, _ := args["path"].(string)
+	if notebook != "" && conf.BoxKindMarkdown == model.GetBoxKind(notebook) {
+		sourcePath, _ := args["source_path"].(string)
+		if sourcePath == "" || hPath == "" {
+			return toolError("notebook, source_path and target path are required for Markdown move"), nil
+		}
+		move, err := model.MoveMarkdownDoc(notebook, sourcePath, hPath)
+		if err != nil {
+			return toolError(fmt.Sprintf("move Markdown document failed: %s", err)), nil
+		}
+		return CallToolResult{Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Markdown document moved: %s -> %s", move.FromPath, move.ToPath)}}}, nil
+	}
+	id, _ := args["id"].(string)
 	if id == "" || notebook == "" || hPath == "" {
 		return CallToolResult{Content: []ContentItem{{Type: "text", Text: "id, notebook and path are required"}}, IsError: true}, nil
 	}

@@ -2,15 +2,17 @@
 
 审计日期：2026-08-25
 
-审计对象：`reference/siyuan`（完整 SiYuan v3.8.1 + Noema fork 历史）、主仓库 `kernel/`、Noema `src/` 与 `aaronnote/`
+审计对象：迁移期 SiYuan v3.8.1 checkout + Noema fork 历史、主仓库 `kernel/`、Noema `src/` 与 `aaronnote/`
 
-审计性质：**只读研判，不推进实现**。思源整个仓库逐子系统过一遍，每项给判决；已决定删的部分也过，标注「已决定删」并说明里面是否有值得单独抠出来的零件。行数与耦合数据均为实测，非估计。
+审计性质：原始报告是**只读研判**。从 2026-08-26 起，Aaron 要求继续沿本报告把值得吃的项目全部推进；实时进度仍只写入权威 `plan.md`，本文只在总排序中标记对应条目的收口状态。
 
 与 `plan.md` 的关系：`plan.md` 是唯一权威的活进度记录，本文档不替代它。本文档问的是另一个问题——**路线图上没写、但躺在思源仓库里值得吃的东西是什么**。第六节列出三条与 `plan.md` 既有决策冲突、需要 Aaron 拍板的点。
 
 ## Context
 
 `plan.md` 记录的进度已经很深，但那些都是**沿着既定路线**做的。这份报告问的是另一个问题：**思源仓库里还躺着什么，是路线图上没写、但真的值得吃的？**
+
+**实现跟进（2026-08-26）**：审计 backlog 已按“迁入、用 Noema-native 实现覆盖、明确不采用”三种结论全部收口。#1 host-neutral platform/hotkey/DOM/transient seam、#2 b3/CLI、#3 Office list/AV width/image pause/标题编号/格式刷/Tree/Wiki/hint、#4 declarative menu、workspace layout/dock、自包含 HTML/PDF、完整 AV 类型与计算、虚拟引用、Markdown attachment 维护与内容搜索、Obsidian Markdown-native 导入以及 MCP 均进入 canonical 源树和测试。版权来源固定在 `NOTICE` 与直接改编文件头；装饰性 covers、Pandoc bundle、protyle/mobile 和已裁剪云/同步/插件运行时明确不采用。正式门禁与移除上游 checkout 后的复验记录见本文末尾。
 
 ---
 
@@ -20,9 +22,9 @@
 
 ## 事实 1：Go 内核不是"要搬进来"，而是**已经全量在仓库里躺着**
 
-`kernel/` 与 `reference/siyuan/kernel` 只差 54 个路径（一半是 `logging.log`）。**21.4 万行 Go 已经在 `main` 分支工作树里**，能编译、能跑。
+迁移期比对显示 canonical `kernel/` 与上游内核只差 54 个路径（一半是 `logging.log`）。**21.4 万行 Go 已经在 `main` 分支工作树里**，能编译、能跑。
 
-Phase 0 的裁剪**也已经做完了**（在 `reference/siyuan` 的 fork 历史里，`baeb38bfc`..`b3fb59d39`，74 个文件 / 30,609 行）：crypto 家族 ~5,400、`repository.go`(dejavu) 3,084、`publish_access*` ~3,600、sync 三件套 1,590、`oidc*` ~2,000、caldav/carddav/dav 1,620、`kernel/plugin/`(goja) ~6,900、`updater*` ~930、mobile+harmony 765。
+Phase 0 的裁剪**也已经做完了**（fork 历史 `baeb38bfc`..`b3fb59d39`，74 个文件 / 30,609 行）：crypto 家族 ~5,400、`repository.go`(dejavu) 3,084、`publish_access*` ~3,600、sync 三件套 1,590、`oidc*` ~2,000、caldav/carddav/dav 1,620、`kernel/plugin/`(goja) ~6,900、`updater*` ~930、mobile+harmony 765。
 
 **所以 Go 侧的"merge"不是搬代码，是"接上一个已经在树里、但没有任何 Noema 代码调用的休眠子系统"。** 成本模型完全不同——不是"移植"，是"适配 + 接线"。
 
@@ -280,7 +282,7 @@ Noema 的 portable AV：`shared/attribute-view.mjs` 191 行 + `kernel/noema/attr
 
 ## 1.12 `kernel/filesys/` — 16 文件 / 2,364 行
 
-- `tree.go`：`DocIAL(absPath)`(`:341`) **流式读文件头只取文档 IAL，避免整篇解析**；`ValidateBoxRelativePath`(`:151`)；⭐ `removeUnescapedUnicodeNull`(`:529`) 只在前面有**偶数个反斜杠**（即真正未转义）时才删字面 ` ` —— 真实的损坏修复边界
+- `tree.go`：`DocIAL(absPath)`(`:341`) **流式读文件头只取文档 IAL，避免整篇解析**；`ValidateBoxRelativePath`(`:151`)；⭐ `removeUnescapedUnicodeNull`(`:529`) 只在前面有**偶数个反斜杠**（即真正未转义）时才删字面 `\\0` —— 真实的损坏修复边界
 - ⭐ `markdown_ephemeral_ids.go`(61)：`:24-41` 的注释是这个 fork 里最重要的一条设计笔记（`util.NewLute()` 开 `SetProtyleWYSIWYG(true)` → lute 给每个无显式 IAL 的块现发随机 ID → 下游按非空 `n.ID` 当稳定块 → **每次重索引插一批新垃圾行，上一批 ID 对不上永远清不掉：索引无界增长**）。已解决
 - ⭐ `markdown_orgenv.go`(114)：CommonMark 懒续行吞掉块终止符的陷阱，**只在前一行是列表项/列表续行时**插空行（`riskyPrecedingLine`, `:84`），**故意不对段落做**（过度插入会在干净文档里制造一次性 diff），还能自愈旧内核写坏的文件、跳过围栏代码块。**round-trip 保真工作的范本**
 - 文件锁不在这里，在外部依赖 `github.com/siyuan-note/filelock`（**62 个文件 import**），提供路径→RWMutex 注册表 + 写临时文件后 rename 的原子写
@@ -835,10 +837,10 @@ Electron 专属，开一个新 BrowserWindow。三个关键函数：
 
 | 序 | 项 | 规模 | 为什么排这里 |
 |---|---|---|---|
-| 1 | **把 `protyle/util/` 的 4 个文件挪进中立 `core/`**（`hasClosest` 138 + `hotKey` 199 + `hideElements` 96 + `compatibility` 非编辑器那半） | 极小（~1,400 行搬家） | 做完之后前端 **70% 的"protyle 耦合"消失**。这是**所有**前端 merge 的前置条件，成本最低收益最高 |
+| 1 | **把 `protyle/util/` 的 4 个文件挪进中立 `core/`**（生产已接线） | 极小 | 已落为 Noema source-owned platform/hotkey/DOM ancestry/transient registry；没有复制移动端或 contenteditable 分支 |
 | 2 | **b3 设计系统**（SCSS 4,200 行 + 2 个 theme + 图标 sprite） | 小 | plan.md 列的"要吃到的"四件事里唯一完全没开工的；零 JS 耦合，纯拷贝；165 变量 + 15 种按钮 + 3 模式菜单 + 255 图标 |
-| 3 | **纯函数收割**（protyle 内 C 类 ~2,000 行 + 前端 util ~1,500 行，**大多自带测试**） | 小 | `officeList.ts`(562，Word/PPT 列表还原) · `headingNumberCore.ts`(292) · `columnWidth.ts`(101 canvas 精确测宽) · `dynamicLoadState.ts` · `slashMenu.ts` · `formatPainterCore.ts` · `imageAnimation.ts` · `upload/insertPosition.ts` · `Tree.ts` · `upDownHint.ts` · `search/request.ts` · `setPosition.ts`。**思源已经替你做完了抽取工作，测试一起送** |
-| 4 | **菜单系统**（1,650 行） | 小 | 独立、无耦合；Noema 现在没有真正的菜单基础设施。`loadSubmenu` 异步 + 分隔符自动分组 + sticky 定位 + 完整方向键 |
+| 3 | **纯函数收割**（生产清单已收口；待正式实包门禁） | 小 | Office/heading/column/image/hint/format painter/Tree 已迁入生产；insert target/request/key navigation/position/viewport loading 均有更强 Noema 等价物与明确边界证据 |
+| 4 | **菜单系统**（生产已接线；待本批正式实包门禁） | 小 | 独立、无耦合；source-owned controller 已替换旧 context menu，`loadSubmenu` 异步 + 分隔符自动分组 + sticky/54px 定位 + 完整方向键均进入真实产品链 |
 | 5 | **`kernel/cli/`**（已在树里，只需接线） | 极小 | Emacs 宿主的天然接口，进程内直调不走 HTTP；**路线图完全遗漏** |
 | 6 | **layout/dock 引擎**（5,200 行） | 中 | 分屏 + 拖拽分屏 + 浮动 dock + 布局持久化 + 惰性 tab 水合；Noema 的 dock/workbench 正在手写这些的劣化版。`editor/index.ts`(217) 是写 `CMEditor extends Model` 时该逐行读的文件 |
 | 7 | **导出三件套**（自包含 HTML 配方 + `window.siyuan` 15 行桩 + PDF 三个坑） | 中 | `onExport` 模板让离线 HTML 仍保留主题/数学/代码主题/十种图表；`fixBlockWidth`/`waitForImages`/非分页自定义页尺寸正是 PDF 导出必踩的三处 |
@@ -861,13 +863,13 @@ Electron 专属，开一个新 BrowserWindow。三个关键函数：
 
 三条都判为**不做破坏性动作**，因此可以先落定、后续要改随时能改。
 
-## 6.1 前端插件系统 —— 保留可能性，暂不开工
+## 6.1 前端插件系统 —— 明确不迁移上游 runtime
 
 `plan.md` 写过"插件运行时 + roamlookup：移除；Copilot 是内建"。但那条决策针对的是 **Go 侧的 `kernel/plugin/` goja 沙箱**（6,900 行，已在 Phase 0 删除），理由是安全沙箱的复杂度。
 
 前端 `app/src/plugin/` 是另一回事：本质是"用户脚本 + 事件总线 + dock/tab 注册"，900 行无 protyle 耦合，不含任何沙箱。它与那条决策的**理由**不冲突，但也不在关键路径上——Noema 目前没有第三方扩展的需求方。
 
-**结论：不推翻既有决策，也不现在实现。** 等 layout/dock 引擎真的落地（那时 `addDock`/`addTab` 才有意义）再重新评估。`EventBus.ts`（55 行，`document.createComment` 当 EventTarget）单独就很优雅，可以先当模式参考。
+**最终结论：不迁移。** layout/dock 已由 Noema-native 引擎落地；当前只有 bundled Copilot 的明确需求，不引入上游第三方脚本 runtime 或其 API 兼容负担。未来若出现真实扩展需求，应围绕 Noema 的安全 preload、Markdown 数据面与双宿主契约重新设计，不以旧 runtime 为依赖。
 
 ## 6.2 文档历史 —— 保留，不删
 
@@ -879,10 +881,45 @@ Electron 专属，开一个新 BrowserWindow。三个关键函数：
 
 **结论：不删。** 它当前是完全休眠的（没有任何 Noema 代码调用），零维护成本，删掉却是不可逆的。真要做 git-log-backed 历史时，这三样是现成的参考实现。⚠️ 注意 `plan.md` 顶部"删除清单"里没有列它，所以这里不存在推翻决策，只是把"它还在"这件事记下来。
 
-## 6.3 `app/appearance/covers/`（19MB）—— 维持现状，留在 reference
+## 6.3 `app/appearance/covers/`（19MB）—— 明确不迁移
 
-`plan.md` 按"一点点挪"原则把它留在 `reference/siyuan`，理由是"装饰性封面图，没有功能依赖"。这个判断在**今天**是对的：Noema 没有任何代码引用它。
+`plan.md` 按"一点点挪"原则没有迁入这批装饰性封面图。Noema 没有任何代码引用它。
 
 `header/Background.ts`(929) + `coverData.ts`(70) 那套封面图/文档图标系统确实会给这 19MB 一个落点，但那是一个尚未排期的前端功能。**在功能真的开工之前搬进来，正是"提前搬进来占地方"——恰好是那条原则要避免的。**
 
-**结论：维持现状。** 等 `Background.ts` 真的排期时一起搬。
+**结论：不迁移。** 若未来产品需要封面系统，应从产品规格和许可清单重新选材，不依赖已退役的上游 checkout。
+
+---
+
+# 七、终态收口（2026-08-26）
+
+审计总排序已全部得到产品终态，不再有“只因上游代码还在就算完成”的条目：
+
+| 序 | 终态 | canonical 证据 |
+|---|---|---|
+| 1 | 完成 | `src/platform-compat.ts`、`hotkey.ts`、`dom-ancestry.ts`、`transient-surfaces.ts` 已接生产与测试 |
+| 2 | 完成 | b3 component/theme 系统进入 renderer；安装版 smoke 为 22/22 surfaces、`unadopted: []` |
+| 3 | 完成 | Office list、AV 列宽、图片暂停、标题编号、格式刷、Tree/Wiki 和 CM6 等价边界均有聚焦测试 |
+| 4 | 完成 | `src/menu-system.ts` 已替换生产 context menu，并接异步 submenu、键盘模型和 54px 定位 |
+| 5 | 完成 | canonical `kernel/cli/` 已支持 Markdown box、同步任务排空和文档列表 |
+| 6 | 完成 | `src/workspace-layout.ts`、`workspace-layout-view.ts`、`workspace-dock.ts` 已接分屏、rails、惰性 frame 与持久化 |
+| 7 | 完成 | 自包含 HTML、图片等待/宽度修复与 Electron 原生 PDF 全文档打印均进入生产 |
+| 8 | 完成 | portable AV 覆盖 17 类型、17 算子、嵌套 AND/OR、相对日期与 22 种聚合，Go/Node fixtures 对拍 |
+| 9 | 完成 | Aho-Corasick virtual references、10 分钟有界 cache 与 Knowledge Mentions 已接线 |
+| 10 | 完成 | 多字符/闭合符、触发互斥、多语言过滤、晚到响应与完整键盘状态均由 Noema-native hint 链覆盖 |
+| 11 | 完成 | Markdown attachment 缺失/未用扫描、安全改名与引用重写、PDF/Office/text FTS5 搜索已接生产 |
+| 12 | 完成 | MCP descriptor、Noema 品牌、Markdown-native document tools 与生命周期测试已完成 |
+| 13 | 完成 | Obsidian vault 以 staged/atomic、可取消的 Markdown-native 导入落地，保留结构、资源、wiki/block refs |
+
+装饰性 covers、Pandoc bundle、protyle/mobile、云/同步/加密、goja 插件 runtime、DAV 与 OIDC 明确不采用；这是产品裁决，不是延期任务。`go mod tidy` 同步清除了这些已裁剪子系统留下的 144 行模块记录。SiYuan/Overleaf/Jupyter 等实际改编来源继续由 `NOTICE` 和直接改编文件头保存，不需要保留完整 checkout 才能履行。
+
+迁移期上游 checkout 已在全部功能与首次正式门禁通过后移出仓库，保存在废纸篓 `Noema-reference-20260826` 以便人工恢复。移除后重新验证：
+
+- 路径扫描没有任何源码、构建配置或文档依赖；剩余英文 `is-reference` 包名与 footnote reference 只是语义同名。
+- `make test`：206 files passed / 7 skipped，2004 tests passed / 16 skipped。
+- `go test ./...`：全树通过；attachment FTS5、Obsidian import、MCP Markdown 三条聚焦 FTS5 端到端测试通过。
+- `make build` 与 `make install`：在 checkout 缺席状态下成功。
+- 安装版 smoke：`hostMode: desktop`、`preload: true`、`titlebarVisible: true`、54px，Back / Forward / Refresh / Editor actions / Window actions 齐全；owned kernel listening 且发布 `mcpUrl`。
+- Emacs full-project link 正确，小写旧入口缺席；7 个历史资产入口全部解析到 canonical `resources/`。
+
+因此 Noema 的源码、构建、测试、安装包、运行时与兼容资产均已独立。

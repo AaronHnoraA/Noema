@@ -1,12 +1,13 @@
 # Noema × SiYuan 重构计划
 
-> **⚠️ 2026-08-25 起，Go 内核代码位置变了**：`/Users/hc/HC/SOURCE/Noema/kernel/`（Noema 主仓库、`main` 分支），不再是 `reference/siyuan/kernel`。`app/appearance/`、`app/stage/auth.html` 作为 `kernel/` 的同级目录一起搬过来了（内核自己的相对路径和一些既有测试都假设这个同级关系）。`reference/siyuan` 还留着，保留完整的逐次 commit 历史，但不再是活跃开发的位置。详见下面 Phase 0 进度记录里的说明。
+> **⚠️ 2026-08-25 起，Go 内核的唯一代码位置是** `/Users/hc/HC/SOURCE/Noema/kernel/`（Noema 主仓库、`main` 分支）。`app/appearance/`、`app/stage/auth.html` 作为 `kernel/` 的同级目录一起迁入，以保持内核相对路径契约。原始上游 checkout 只用于迁移期取证，终态不属于 Noema 源树。
 
 ## 工作方式约定（Aaron 明确要求，持久化在这里，不要只留在对话里）
 
 - **本文件（`/Users/hc/HC/SOURCE/Noema/plan.md`）是唯一权威、活的进度记录**，不是快照。每做完一步就更新一步（"每做一步更新一步"）——不要攒到一个大总结再补，也不要让它变成开工前那一版一次性快照后就再也不碰。
-- **代码要展开进项目结构，不能只放在 `reference/` 里当参考**（"不要单单把思源代码放进 reference 里面了，而是作为项目结构展开进项目"）。`reference/siyuan` 只是原始 SiYuan checkout + fork 过程的逐次 commit 历史，不是终点。
-- **搬迁方式是增量的，不是一次性大搬家**（"一点点写一点点挪"）：只把已经实际动过、验证过的部分从 `reference/siyuan` 搬进项目正式结构（目前是 `kernel/` + `app/appearance/` + `app/stage/auth.html`）；`app/pandoc/`（168MB，内核能容忍它不存在）、`app/appearance/covers/`（19MB，装饰性封面图，没有功能依赖它）、整个 `app/` 里还没碰过的 protyle/mobile 前端，都刻意留在 `reference/siyuan`，等真正开始动那部分工作时再搬，不要提前搬进来占地方。
+- **代码必须进入 canonical 项目结构，不能靠仓库内的上游副本运行。** 原始 checkout 与 fork 历史只用于迁移期取证，不是产品组成。
+- **最终必须删除整份上游 checkout，让 Noema 彻底独立**（Aaron 2026-08-26 明确要求）。删除前把决定保留的源码、测试、规格和必要版权信息迁入正式树，并证明源码、构建、测试、文档及安装包都不依赖该 checkout。
+- **搬迁方式是增量的，不是一次性大搬家**（"一点点写一点点挪"）：只把实际采用并验证过的部分迁入正式结构。`app/pandoc/`、装饰性 covers 和未采用的 protyle/mobile 前端经审计明确不迁移；这是一项产品决定，不是遗留待办。
 - 这些要求本身也要留在这份文档里，供以后的会话/协作者直接看到，不用重新问一遍。
 
 ## Context
@@ -280,7 +281,7 @@ TOC popover 最终安装门禁已过：`make install` 事务更新 `/Application
 
 **思源全量代码研判已完成（2026-08-25）**：见 `docs/siyuan-merge-audit-2026-08.md`。逐子系统过了一遍思源整个仓库（Go 内核 + 前端非 protyle + protyle 内可抠出的层），每项给判决，包含已决定删的部分。两条结论改变了后续"merge"的成本模型：
 
-- **Go 侧不是搬代码，是给休眠子系统接线。** `kernel/` 与 `reference/siyuan/kernel` 只差 54 个路径，21.4 万行 Go 已经在工作树里且能编译；Phase 0 裁剪也早已完成（fork 历史 `baeb38bfc`..`b3fb59d39`，74 文件 / 30,609 行）。`kernel/cli/`(6,084)、`kernel/mcp/`(12,292)、`model/virutalref.go` 等都躺着没有任何 Noema 代码调用。
+- **Go 侧不是搬代码，是给休眠子系统接线。** 迁移期比对表明 canonical `kernel/` 已包含所需的 21.4 万行 Go；Phase 0 裁剪也早已完成（fork 历史 `baeb38bfc`..`b3fb59d39`，74 文件 / 30,609 行）。`kernel/cli/`(6,084)、`kernel/mcp/`(12,292)、`model/virutalref.go` 等当时仍没有 Noema 消费者，后续均按审计结论接线或裁决。
 - **前端 protyle 耦合被高估。** 外部对 `protyle/*` 的 ~370 处 import 集中在四个非 contenteditable 的工具文件（`util/compatibility` 95、`util/hasClosest` 62、`ui/hideElements` 26、`util/hotKey` 8）；另外 `wysiwyg/transaction.ts:2071` 的 `transaction()` 已支持 `protyle === null` 退化成纯 REST POST，这把 `render/av/` 的 24,849 行从"不可分离"重新归类为"可用 12 字段 shim 抠出"。
 
 研判里还有三条与本文档既有决策冲突、需要单独拍板的点（前端插件系统、文档历史 vs git、covers 19MB 的落点），见该文档第六节。
@@ -366,7 +367,7 @@ md 为真相源后这条链路没有落点，且 Noema 不变量 #1（markdown �
 
 ## 目标仓库结构
 
-以 `reference/siyuan` 为新仓库底座，Noema 代码删改进去：
+以迁入 Noema 主仓库的 canonical 源码为底座：
 
 ```
 noema/
@@ -429,7 +430,7 @@ noema/
 
 ### 1.1 格式接缝
 
-`reference/siyuan/kernel/filesys/tree.go` 是**唯一**读写 `.sy` 字节的地方：
+迁入前的上游 `kernel/filesys/tree.go` 是**唯一**读写 `.sy` 字节的地方：
 - `LoadTree(boxID, p, luteEngine)` @ `:217` → `parseJSON2Tree` @ `:618`
 - `WriteTree(tree)` @ `:378` → `prepareWriteTree` @ `:446`（`render.NewJSONRenderer` + mmap 写）
 
@@ -690,11 +691,11 @@ AGENTS.md 原样 packaged smoke 最终再次报告 `hostMode:desktop`、`preload
 
 顺带抓到一个真实缺口：`createNotebook` 原来只接受 `name`，没有办法通过 API 建 markdown box——这次会话所有测试都是直接手写 `.siyuan/conf.json` 绕过 API 建的。已修：`model.CreateMarkdownBox(name)`（设 `Kind=markdown`，跳过 `ensureBoxDoc0`）+ `createNotebook` 新增可选 `kind` 字段（`"markdown"` 走新函数，其余/缺省行为不变，`CreateBox` 本身未改动，老 `conf.json` 字节不受影响）。
 
-**第一次真正碰 CM6（2026-08-25，Noema 主仓库 commit `c3d6639`，不是 `reference/siyuan`）**：加了一个完全独立的 Vite 入口 `aaronnote/markdown-box-lab.html`/`markdown-box-lab-main.ts`——用 `src/editor-api.ts` 的 `createEditor()`（生产环境同一个门面，手感真实）挂编辑器，直接 `fetch()` 调 Go 内核的 `loadDoc`/`saveDoc`，完全绕开 `aaronnote/api-client.ts`/`window.aaronnoteApi`（那是现有 Node 后端的通道桥，和新内核是两回事）。不碰 `aaronnote/main.ts`（10,731 行的生产编辑器壳）一个字。在真实 Chrome 里全流程验证过：起内核（`-tags fts5`）+ 起 `start:vite`、真的在浏览器里往编辑器打字、看到自动保存、看到服务端分配的文档 ID 实时同步回编辑器（`setMarkdown(..., {preserveView: true})`，光标不跳）、磁盘文件和浏览器显示的字节完全一致、刷新页面冷加载回来内容和 ID 都不变。这是这次会话第一次真正过 CLAUDE.md 要求的浏览器验证（之前全部止于 `go test`/`curl`）。
+**第一次真正碰 CM6（2026-08-25，Noema 主仓库 commit `c3d6639`）**：加了一个完全独立的 Vite 入口 `aaronnote/markdown-box-lab.html`/`markdown-box-lab-main.ts`——用 `src/editor-api.ts` 的 `createEditor()`（生产环境同一个门面，手感真实）挂编辑器，直接 `fetch()` 调 Go 内核的 `loadDoc`/`saveDoc`，完全绕开 `aaronnote/api-client.ts`/`window.aaronnoteApi`（那是现有 Node 后端的通道桥，和新内核是两回事）。不碰 `aaronnote/main.ts`（10,731 行的生产编辑器壳）一个字。在真实 Chrome 里全流程验证过：起内核（`-tags fts5`）+ 起 `start:vite`、真的在浏览器里往编辑器打字、看到自动保存、看到服务端分配的文档 ID 实时同步回编辑器（`setMarkdown(..., {preserveView: true})`，光标不跳）、磁盘文件和浏览器显示的字节完全一致、刷新页面冷加载回来内容和 ID 都不变。这是这次会话第一次真正过 CLAUDE.md 要求的浏览器验证（之前全部止于 `go test`/`curl`）。
 
 **动手时抓到一个严重 bug（不是这次新引入的，是 Phase 1 索引管线那次提交里就带着的）**：`util.NewLute()` 开着 `SetProtyleWYSIWYG(true)`，导致 lute 给源文本里**没有**显式 `{: id=...}` 的每一个块，每次解析都现场发一个**只存在于内存里、不落盘**的临时 ID（用测试直接验证过：文件字节两次解析前后完全不变）。`treenode.UpsertBlockTree`/`IndexBlockTree` 只看 `n.ID` 是否非空就当真实块索引进去——由于这个临时 ID 每次都不一样，每次重索引都会插入一批新垃圾行，上一批因为 ID 对不上永远清不掉。写了个回归测试复现：同一份没有任何引用的内容反复索引 5 次，blocktree 行数 7→13→19→25→31，线性增长、无界膨胀。修法是 `filesys.StripEphemeralMarkdownBlockIDs`，在 `WriteTree` **之后**（不能在之前——FormatRenderer 依赖这些临时 ID 的存在来决定某些块类型后面要不要多空一行，清早了会导致重复保存时字节漂移，也是测试踩出来的）清掉没有真实持久化 IAL 的块 ID，接在 `upsertIndexes`、`indexBox`、`LoadMarkdownDoc` 三个消费点。这类 bug 光靠代码审查很难发现，是"写一个会因为这个 bug 而失败的测试"这个习惯直接抓到的。
 
-**内核 restructure：kernel/ 展开进主仓库（2026-08-25，Noema 主仓库 commit `d11dfe7`）**：见文件顶部的位置变更提示和"工作方式约定"一节。`kernel/`（8.1M）+ `app/appearance/`（18M，语言包/主题/字体/emoji）+ `app/stage/auth.html`（access-code 登录页，几个既有内核测试直接依赖它）搬进了 Noema 主仓库、`main` 分支。踩过一次坑：一开始把 `appearance/` 嵌到 `kernel/` 里面（`kernel/appearance/`），导致 `TestCustomFontLifecycle` 等测试报错——它们硬编码相对路径 `../../app/...`，假设 `kernel/` 和 `app/` 是**同级**目录（跟 SiYuan 上游自己的仓库布局、以及本计划"目标仓库结构"一节写的一样）。改成同级后全部恢复，`go build`/`go vet`/`go test`（新位置，同一套 6 个既有失败基线）、`-tags fts5` 二进制真机 boot + curl 全部重新跑过一遍确认。`app/pandoc/`、`app/appearance/covers/`、`app/` 里还没碰的 protyle/mobile 前端，按"一点点挪"原则明确不搬，留在 `reference/siyuan`。
+**内核 restructure：kernel/ 展开进主仓库（2026-08-25，Noema 主仓库 commit `d11dfe7`）**：见文件顶部的位置变更提示和"工作方式约定"一节。`kernel/`（8.1M）+ `app/appearance/`（18M，语言包/主题/字体/emoji）+ `app/stage/auth.html`（access-code 登录页，几个既有内核测试直接依赖它）搬进了 Noema 主仓库、`main` 分支。踩过一次坑：一开始把 `appearance/` 嵌到 `kernel/` 里面（`kernel/appearance/`），导致 `TestCustomFontLifecycle` 等测试报错——它们硬编码相对路径 `../../app/...`，假设 `kernel/` 和 `app/` 是**同级**目录（跟 SiYuan 上游自己的仓库布局、以及本计划"目标仓库结构"一节写的一样）。改成同级后全部恢复，`go build`/`go vet`/`go test`、`-tags fts5` 二进制真机 boot + curl 全部重新跑过一遍确认。`app/pandoc/`、装饰性 covers 和未采用的 protyle/mobile 前端经审计明确不迁移。
 
 **"可用"里程碑：WS 实时刷新（2026-08-25，Noema 主仓库 commit `7fa16b5`）**：lab 页接上内核已有的 `/ws` 端点（`?app=...&id=...&type=main`），监听 `reloaddoc` 推送（只来自 `markdown_watcher.go` 的外部编辑探测，不来自这个页面自己的保存——`SaveMarkdownDoc` 从不直接调 `PushReloadDoc`），命中当前打开文档的 rootID 时自动重新加载；只有编辑器当前内容仍等于"上次确认与服务端同步"的内容时才自动刷新，本地有未保存改动时改成提示而不是静默覆盖。**在真实 Chrome 里验证过端到端全链路**：加载一个文档，直接在磁盘上改这个文件（模拟 Emacs，完全不碰浏览器），~3 秒内编辑器内容自动更新，零手动交互——这正是这次 fork 存在的核心理由（"Emacs 和 CM6 看到同一份文档，而且是实时的"），现在证明真的跑通了：内核存储 → 索引 → 搜索 → 外部 watcher → WS 推送 → 浏览器实时更新，全部在真实进程/真实浏览器里验证过，不只是 `go test`。副作用：自己的保存也会触发一次 `reloaddoc`（watcher 分不清"自己保存"和"外部编辑"，两者都是磁盘写入），已知、无害，只是状态栏文字会从"saved"再闪回一次"loaded"，不是 bug。
 
@@ -803,6 +804,7 @@ AGENTS.md 原样无附加变量 smoke 最终再次报告 `protocolRegistered:tru
 - [x] 思源 UI 设计落地：b3- 组件系统用于 Noema 的所有对话框/菜单/面板；反链、图谱、搜索、标签保持 Knowledge dock，大纲按已确认的最终交互保留独立 TOC popover
 - [x] 主题：`daylight`/`midnight` 与 Noema 现有 `src/styles/themes/` 合并，`--b3-*` 变量保留以吃思源主题生态（详见下方生产取证）
 - [x] 手感回归门禁：逐条对拍 vim 模式、排版宽度（4%–8% 自适应 + 95ch）、数学 snippet、bracket 行为、有序列表重编号、heading fold、结构跳转、Emacs 按键桥、5MB 大文档性能（详见下方正式门禁）
+- [x] 安装包生产手感探针：隔离 scratch CM6 通过真实 keydown/input-handler 验证 Enter、bracket/type-over、选区包裹、Unicode grapheme 删除、undo/redo 与 programmatic-load opt-out，且不触碰当前笔记
 
 **Phase 5 sidecar 收口（2026-08-26，当前工作树）**：安装版 Electron runtime 启动 shared `web-host.mjs` 的真实探针发现，desktop Jupyter 曾优先读源码 `jupyter/.jupyter/data` 中由历史 Emacs compatibility link 生成的同名 `python3` kernelspec，`argv` 因而落到 `~/.emacs.d/lisp/roam/Noema/...`；这违反 standalone App 不得运行时依赖 Emacs 的边界。现在 desktop 的 data/config/runtime 全部落到 `<stateRoot>/jupyter`，只在 desktop 模式让 source-owned `python3`/`bash`/`sagemath` 模板先占稳定名称，Emacs broker/generated-spec 顺序保持不变，其他用户 kernelspec 仍可发现。Python/Sage launcher 与 bootstrap/doctor/install-kernelspec 脚本已删除隐式 `EMACS_ROOT`/central Emacs runtime 发现，只接受显式 runtime metadata；三个模板把 Jupyter/IPython/Sage/log/tmp 路径明确注入 host state。隔离 maintenance probe 在精确 Node 26.5.0/npm 11.17.0 下实际完成 Python + Sage bootstrap/doctor，生成的三个 specs 全部指向 canonical Noema launcher 与独立 state，源码 `jupyter/.jupyter` 无新增写入。
 
@@ -826,6 +828,30 @@ AGENTS.md 原样无附加变量 smoke 最终再次报告 `protocolRegistered:tru
 
 **Phase 5 手感正式门禁（2026-08-26）**：精确 Node 26.5.0/npm 11.17.0 下，CM6/MathLive/snippet/xwidget 聚焦组 22 files、578 tests 全绿；5,295,985-byte fixture 的 5MB 独立性能组 11 tests 全绿（19.24s），覆盖普通键入、Enter、table/heading/math marker、已知 fence/`@@cell` 扫描、snippet transaction 与 1,200 display-formula 局部更新。Emacs `make jupyter-test` 四组共 141 ERT 全绿。最终 `make test` 为 176 files passed / 7 skipped、1643 tests passed / 16 skipped；`tsc --noEmit`、`make build`（3996 modules）、`make install` 均通过。AGENTS.md 原样 smoke 继续报告 `hostMode:desktop`、preload、54px、Back/Forward/Refresh/Editor actions/Window actions、21/21 b3 surfaces、TOC popover、四 tab Knowledge、八视图 `kernel-agenda`、102 macros 与 owned/listening kernel 全绿，并新增上述 production typography audit。
 
+**Phase 5 安装包生产手感加固（2026-08-26，当前工作树）**：旧门禁的键盘行为仍主要来自测试 DOM；现在新增 source-owned `production-handfeel-audit.ts`，只在 desktop smoke 中创建一个位于视口外、没有 `onChange`/持久化 bridge 的 scratch CM6，并在返回前销毁。探针不是检查模块是否存在，而是实际向 production extension stack 发送 `keydown` 和 CM6 `inputHandler`：确认有序列表 Enter 得到 `2. `、标点前括号自动闭合且 closer type-over、非空选区包裹、一次 Backspace 删除完整 ZWJ family grapheme、真实 undo/redo，以及 `setMarkdown(..., history:skip, preserveView:true)` 不把刻意的 `5./9.` 编号自动改写。永久回归同时用 live-note sentinel 锁定 scratch host 清理与当前内容零触碰。
+
+精确 Node 26.5.0/npm 11.17.0 下 audit/desktop adapter 聚焦组 2 files / 6 tests、`tsc --noEmit` 与最终 `make test`（177 files passed / 7 skipped、1644 tests passed / 16 skipped）全绿；`make build` 重建 3997-module renderer，`make install` 成功。AGENTS.md 原样安装版 smoke 明确返回 `productionHandfeel.installed:true`、`scratchOnly:true`、七项行为全 true、`passed:true`；同一报告继续保持 desktop/preload、54px 五控件、21/21 b3 surfaces、95ch/4% typography、TOC、Knowledge、八视图 `kernel-agenda`、102 macros 与 owned/listening kernel 全绿。
+
+本批终检时仓库 HEAD 已推进到 `384b4940d029c995af8c5bbea4373d8d269e80f1`，Go 默认嵌入新 VCS revision，因此当前 canonical、installed `Resources/bin` 与 linked `Resources/app` 三处 kernel SHA-256 同步更新为 `bbdbda7fcb157c1e45677ed32511a95b3795adc8758319129853fa1718a29e39`，不是同一安装内的不一致。默认 root 无 `.siyuan`/`.sy`，Emacs 两个 full-project 入口正确、retired lowercase path 缺席；退出后无 packaged Electron/web-host/kernel 或 smoke/probe temp，`make disk-audit` 仍为安装 App 44KB unique physical accounting，`git diff --check` 干净。
+
+**SiYuan 审计 backlog 开始逐项收割（2026-08-26，当前工作树）**：按 `docs/siyuan-merge-audit-2026-08.md` 总排序继续推进尚未落地的项目，第一批从 #3 中挑零依赖、已有上游测试且能进入真实产品链的三件。`officeList.ts` 已迁入 source-owned `src/office-list.ts` 并接在 `htmlToMarkdown` 的 sanitizer 之前：Word 的 `mso-list` 与 PowerPoint 的 `mso-special-format` 尚在时先重建语义化 `ol`/`ul`/task list，随后仍经过 Noema 既有 DOMPurify 与 Turndown 边界；普通 HTML 和超过 900,000 字符的降级策略不变。移植覆盖大小写/引号/括号安全的 inline-style 解析、Word list identity、PowerPoint pt/in/px/pc/cm/mm 层级、数字/字母/罗马序号、Wingdings/Unicode task marker、跳级嵌套、编号重启和普通段落分组。
+
+同批 `columnWidth.ts` 迁为中立 `src/attribute-view-column-width.ts`，portable AV table 以稳定 column key 收集内容，先用 CJK=14px / 大写宽字符=9px / 空白=4px / 普通字符=7px 的确定性估算生成 `<colgroup>`，挂载后再用真实 cell 计算字体与 canvas `measureText` 重测，最终夹在 64–480px；resize 的 4px 吸附和等宽分配纯函数也一起保留。`imageAnimation.ts` 则迁为 `src/image-animation.ts` 并接到 CM6 的真实 `scrollDOM`：滚动时 O(1) 暂停动画，256ms 空闲后恢复，destroy 会解绑 listener；CSS 使用 Noema 自有 class，不泄漏 protyle 命名。Noema 已有的 `captureEditorPasteTarget`/state field 会让异步插入点跨 CM6 transaction 映射、文档替换失效并支持多光标，严格强于上游 24 行 DOM Range 检查，因此 `upload/insertPosition.ts` 记为语义已吸收，不复制较弱实现。当前五个聚焦文件 31 tests 全绿，默认 `tsc --noEmit` 也已在并行 Vim 改动完成接线后恢复通过；本批未覆盖或重写那组 Vim 工作。
+
+**SiYuan 审计首批正式门禁（2026-08-26）**：精确 Node 26.5.0/npm 11.17.0 下最终 `make test` 为 183 files passed / 7 skipped、1753 tests passed / 16 skipped；`make build` 重建 4000-module renderer、FTS5 Go kernel 与 Electron shell，`make install` 事务更新 `/Applications/Noema.app`。AGENTS.md 原样安装版 smoke 返回 `hostMode:"desktop"`、`preload:true`、`titlebarVisible:true`、54px 和 Back/Forward/Refresh/Editor actions/Window actions 五控件，另有 21/21 b3 surfaces、production handfeel 全项、TOC、四 tab Knowledge、八视图 `kernel-agenda`、102 macros 与 owned/listening kernel 全绿；退出后无 Electron/web-host/kernel 进程。默认 note root 无 `.siyuan`/`.sy`，Emacs full-project link 与 7 个 shared resource links 全部指向 canonical repository/`resources/`，retired lowercase path 缺席；`make disk-audit` 保持安装 App 44KB unique physical accounting。当前 `git diff --check` 唯一未清项是并行 Vim 工作正在修改的 `tests/synthetic_qc_note_5mb.md:1621` 尾随空格，本批不越界改写该 fixture，待并行工作稳定后必须复跑清零。
+
+**纯函数收割继续：hint/slash 生产接线（2026-08-26，当前工作树）**：`src/hint-core.ts` 已 source-own 思源 `slashMenu`、`blockHintRange` 和 entry-slot reorder 的中立语义：稳定 key 去重、已知条目在原 slot 内排序、可见性过滤、多语言 filter、空分组 separator 修复、多字符闭合符内编辑、block/tag/slash 触发互斥与右侧最新触发器。真实 `aaronnote/main.ts` 不另造第二个弹层，而把 `/` 与中文 `、` 接入既有 CM6 snippet listbox；条目来自每编辑器 `QuickInsertRegistry`，支持 localStorage 的 enabled/order/hidden 偏好，并补齐常用命令的中文、全拼和缩写过滤。选择条目时先按 Markdown 源偏移删除触发串，再调用 canonical `runQuickInsert`；失败会恢复原串。代码/HTML/数学上下文、URL/path slash、转义 slash 和非空选区不会误触。现有补全链的 `Epoch + CoalescedTimer` 已覆盖并强于 `search/request.ts` 的晚到响应守卫，现有 popup key state 已覆盖 `upDownHint.ts` 的上下/Home/End/分页/滚动可见性；这两项因此记为语义已吸收而不是复制平行实现。hint/editor/CM6 聚焦组 3 files、72 tests 与默认 `tsc --noEmit` 全绿。
+
+**纯函数收割继续：标题自动编号（2026-08-26，当前工作树）**：审计把 `headingNumberCore.ts` 称作零依赖，但其上游实现实际硬编码 protyle `data-node-id`/contenteditable DOM；Noema 没有照搬这层，而是把同一仓库更权威的 `kernel/model/heading_number.go` 层级/格式语义迁成 `src/heading-number.ts`，再由独立 `src/cm6/heading-number.ts` 消费既有 incremental `tocIndexField`，避免每次键入重新扫描长文档。现在支持 decimal/alpha/roman/Greek hierarchical、full-width parenthesized 和 Chinese-document 全套格式，正确处理跳级标题、全角标点后不加空格及 fenced code 排除；编号是 CM6 widget，切到 Source 自动撤下，Markdown 源和 HTML 导出都不被物化污染。公共 Editor API、Tools、右键菜单和 Noema.app 原生 Editor Actions 都有开关，enabled/format 跨窗口用 `noema.headingNumbering.*` 本地偏好同步。纯模型、直接 CM6 和公共 Editor API 共 5 tests 全绿；连同 hint/editor/Electron 聚焦组为 4 files、43 tests，默认 `tsc --noEmit` 通过。
+
+**中立前端工具与纯函数清单进一步收口（2026-08-26，当前工作树）**：新增 source-owned `src/platform-compat.ts`、`src/hotkey.ts`、`src/dom-ancestry.ts` 与 `src/transient-surfaces.ts`，把审计 #1 所指的错误 protyle 归属改造成 Noema 自己的 host-neutral seam：平台主修饰键同时供生产快捷键和 CM6 link-open 使用，热键 parser/matcher/tip 支持符号、Electron `CmdOrCtrl` 和 `Primary` 语法且默认精确拒绝额外修饰键；DOM helper 对 text node、边界、最近/最外层匹配都有测试；具名 transient registry 已真实接管 context menu 的 outside/viewport/Escape 关闭和换文档时 snippet/math/prose/menu 的集中清场。它只复用 Noema 既有 Electron narrow bridge、`src/clipboard.ts`/paste 与 localStorage 数据面，没有搬入思源的 Android/iOS/HarmonyOS 分支。
+
+同批把 `formatPainterCore.ts` 迁为 `src/format-painter.ts` 并完成生产纵切：保留多段选择样式交集、once/continuous 和提示策略，但把 contenteditable span/CSS 手术改为 Markdown delimiter transaction，支持 strong/em/strike/highlight/sup/sub/code、现有 mark 清除、多光标、Source/visual 两种选区边界以及 code literal 互斥。公共 Editor API、右键惰性子菜单、Tools、Noema.app 原生 Editor Actions 和 Escape 取消均已接线，body 状态还提供明确 painter cursor。`Tree.ts` 则迁成 accessible `src/tree-view.ts`（递归折叠、roving focus、方向键/Home/End/Enter、modifier activation、右键和 drag/drop hooks），并替换 Wiki Folders 原平铺列表为可持久化的真实 repository/directory 树。`setPosition.ts` 已由上一批菜单 positioning core 覆盖；`dynamicLoadState.ts`/`loadAll` 属于 protyle 把单篇服务端 DOM 分块拉取的协议，Noema 的权威 Markdown 全文已在 CM6 immutable document，视口只由 `visibleRanges` + 增量 decoration delta 虚拟化，另有 `EditorViewportStabilizer` 保证 transaction 后锚点，因此该协议明确判为不适用、不能倒灌第二个部分文档状态机。当前 tree/core/format/menu/wiki/Electron 聚焦组均绿（最近一组 4 files / 34 tests；格式/菜单组 4 files / 20 tests），默认 `tsc --noEmit` 通过。
+
+**审计总排序 #4 菜单系统接入（2026-08-26，当前工作树）**：新增 source-owned `src/menu-system.ts`，不是只留一个模型文件，而是替换生产 `aaronnote/main.ts` 的旧 button-only context menu renderer。声明项支持 stable id、accelerator/detail、checked/current、warning/danger/disabled、ignore/index、custom/readonly/empty/separator/submenu、同步子菜单和 `loadSubmenu()`；异步子菜单先显示 loading，按 parent render token、button connectivity 和 controller identity 拒绝晚到结果，空态/错误态有界。连续段会在过滤后重新标 group-first/group-last；键盘可循环 ↑↓、Home/End、→ 打开并聚焦子菜单、← 返回父级、Enter/Space 激活、Escape 关闭整棵树。定位函数上下翻转、水平/垂直钳制、sticky 锁边，并把 desktop 54px title bar 作为顶边界。Bibliography 自定义预览与所有既有 editor/link/math/Jupyter 动作已转用共享 controller；普通块的 Insert… 是真实异步惰性 Quick Insert 子菜单，动作仍回到 canonical `runQuickInsert`，命令语义没有搬进 UI 层。菜单/Editor/Electron/heading/hint 聚焦组 5 files、48 tests 与默认 `tsc --noEmit` 全绿。
+
+最终终态同步升级：审计中判定“接上 / 拿 / 高价值”的剩余项必须逐项完成，明确“不要 / 暂不开工 / 可选”的项目要留下最终产品决策与独立证据；全部完成并跑过正式门禁后移除迁移期上游 checkout，再以全仓库引用扫描、构建/测试、安装包 smoke 和版权审计证明 Noema 不再依赖它。
+
 ---
 
 ## 需要先做的三个 Spike（在承诺 Phase 1 之前）—— 全部完成，2026-08-24
@@ -843,6 +869,100 @@ AGENTS.md 原样无附加变量 smoke 最终再次报告 `protocolRegistered:tru
 
 3. **lute 语法扩展成本**：Noema 私有语法要教给 lute（Go 侧解析 + 3.6MB WASM 重新编译）还是在 CM6 侧单独解析（Lezer，现状）。倾向后者 —— 内核只需识别块边界与块 ID，不必理解 `@@todo` 内部结构；但 agenda 的 Go 实现需要 `kernel/noema/planning/` 独立解析，两边靠共享 fixture 对齐
    **结果：确认倾向成立，且被 Spike 1 直接证实。** lute 未经任何扩展就已经把 `@@cmd(...)`、`{attrs}`、通用 `#+begin note` 当作不透明段落文本原样保留（不解析、不报错、不丢字节）——内核完全不需要教会 lute 理解这些语法的内部结构，CM6/Lezer 继续独占语义层。唯一需要教给 lute（kernel 侧扩展）的是一个封闭小集合：`#+begin av/superblock/embed` 这三种保留 kind 的**边界识别**（不是内容语义），且必须按 Spike 1 发现的 fenced-container 扫描方式实现，不能指望默认段落/列表解析正确收尾。
+
+---
+
+## 基础行为审计与修复（2026-08-26，当前工作树）
+
+一次针对"基本手感"的横向审计：版本管理同步、Markdown 渲染、Vim hjkl/上下左右、输入。方法是先跑基线（1643 项全绿，靠读代码找不出问题），再对每个领域写探针测试打出真实行为，只修有证据的缺陷。基线到收尾：**1643 → 1810 项通过，无回归**；`tsc --noEmit` 干净。
+
+### 修掉的 bug
+
+- **`dd` 会把光标留在文档末尾之外**（`aaronnote/vim-lite.ts`）。`deleteLines` 用 `changes.mapPos(range.from, -1)` 定位光标；当删除借用了*前一个*换行符（删最后一行时必然如此），映射结果是存活行的**行尾**——Normal 模式没有这个合法位置。后果不是"看着别扭"而已：紧接着按 `i` 会在最后一个字符之后进入 Insert，按 `x` 删错字符。修法是新增 `linewiseLandingPosition`，按 Vim 的规则落在"顶上来那一行的第一个非空白字符"。普通 `dd`（normal → normal）此前完全没经过 `normalizeNormalSelections`，Visual-line 的 `dd` 因为 `setMode` 会归一化所以没暴露这个问题。
+- **块锚点 `{#id}` 与块引用 `((id "label"))` 会原样泄漏进导出/发布 HTML**（`src/render-html.ts`）。编辑器早就把两者投影成徽章和 chip（`block-anchor.ts` / `block-ref.ts`），`renderOrgEnv` 也给 org-env 身份做了同样的事，但普通段落/标题/列表项没有对应规则——每个带锚点的块发布出去都带着一串 `{#0198fbac-…}`。新增 `noema_block_identity` core rule 补齐。三个实现细节值得记：(1) 必须是 **core rule 而不是 inline rule**，因为 markdown-it 的 `text` 规则只在终结符集合上停下，而 `(` 不在其中——`((id))` 的 inline rule 永远走不到；(2) 扫描 inline token 的**原始 `content`** 而不是已经切好的 children，否则 `"a*b*c"` 这种标签会被 emphasis 拆散、再也拼不回来，非身份片段用 `parseInline` 重新 token 化（和 `aaronnoteCalloutsRule` 同一套做法）；(3) 用 `matchAll` 而不是 `exec` 循环——`parseInline` 会递归重入这条规则并把共享 `g` 正则的 `lastIndex` 归零，`exec` 写法会**死循环**（这个 bug 是自己引入又当场被测试抓住的）。代码/数学区间由 `literalInlineRanges` 排除，与两个 widget 的 `excludedRanges` 对齐。发布页的 `<article>` 本来就带 `class="cm-editor"`，所以复用 `cm-noema-block-id` / `cm-block-ref` 两个类名即可，**不需要新增任何 CSS**。
+- **`[[wiki link]]` 的 `noema-internal-link` 类名重复输出两遍**：`wikiLinkRule` 已经打了这个类，`link_open` 又 `attrJoin` 了一次。新增 `joinNewClasses` 把 class 列表当集合处理。
+- **同步的瞬时 5xx 被误判成不可重试的 internal 错误**（`server/lib/wiki-sync.mjs`）。`classifyGitFailure` 的 network 分支只认 `http 5xx`——那是 Git 智能 HTTP 的 RPC 措辞。`git fetch`/`ls-remote` 走 curl 时报的是 `The requested URL returned error: 503`，匹配不上，于是落进 `internal`：只给一次免费重试，第二次就变成 `phase: "error"`、`retryable: false`、要求人工介入——而这本质上是服务端的临时故障。补齐 curl 措辞、429 限流、`failed to connect to` / `bad gateway` / `early EOF` 等形态，让它们回到 network 的 1m/5m/30m/2h 退避。同时把 `classifyGitFailure` 导出以便直接测试。
+
+### 补齐的 Vim 基本动作
+
+审计发现 Normal 模式此前只有 `dd`/`yy` 两个操作符组合，且**完全没有计数前缀**——每个数字键都走 `reportUnhandled`。以下全部补齐并测试：
+
+- **计数前缀**：`3j`、`2dd`、`d3d`、`2d3d`（按 Vim 语义相乘）、`5w`、`3x`、`3~`、`3J`。`0` 在没有计数时仍是行首动作，有计数时才是数字。计数上限 `MAX_VIM_COUNT = 10_000`——每次重复都是真实工作量，卡键卡出的 `999999999j` 不能冻死编辑器。
+- **动作**：`e`/`E`（词尾）、`^`（首个非空白）、`{`/`}`（段落，整段空行算一个停靠点而不是每行一个）、`f`/`F`/`t`/`T` + `;`/`,`（只在光标所在行内搜索；`;` 重复 `t` 时要多跳一格，否则会卡在同一个邻居上）、`G`/`gg` 带计数变成"跳到第 N 行"。
+- **操作符 + 动作**：`d`/`c`/`y` 现在接受上述所有动作。exclusive/inclusive 的区分是这里的全部要害——`dw` 停在下一个词之前，`de` 要吃掉当前词最后一个字符。另外实现了两个 Vim 特例：`cw` 在非空白上等价于 `ce`（不吞掉词间空格），`dw` 在行尾最后一个词上停在行尾而不是吞掉换行。
+- **行尾操作与其他**：`D`、`C`、`Y`、`cc`（清空行内容但保留行和缩进）、`J`（合并行，折叠缩进为单个空格）、`~`（换大小写并前进）。Visual / Visual-line 模式同样接入计数与新动作。
+
+`aaronnote/xwidget-key-guard.ts` 无需改动：`handleXwidgetVimKeydown` 对非 insert 模式的键是原样透传的，没有白名单，新键在 Emacs 宿主里自动生效。
+
+### 审计过但没有发现缺陷的部分
+
+- **输入 / 列表续行**（`runEditorEnter`）：无序/有序/任务/引用列表的续行与空项退出、嵌套缩进、行中拆分、有序列表重编号，探针全部正确。
+- **Markdown 渲染的通用部分**：表格与对齐、嵌套列表、任务列表、删除线、硬换行、setext 标题、脚注、自动链接、实体、XSS（`<script>`、`onerror`、`javascript:` href 与 img src）全部正确。`$…$` 不渲染是**设计如此**——Noema 的行内数学是 `\(…\)`（见 `src/inline-math.ts` 的说明），不是 bug。
+- **保存冲突检测**（`runtime.mjs` 的 `saveNote`）：`baseVersion`/mtime 前置条件、同客户端连续保存链的识别、空覆盖保护、保存队列，逻辑自洽。
+- **`wiki-sync` 的主流程**：租约、孤儿 index.lock 恢复、隔离（quarantine）、集成 worktree、冲突三方暂存，都有真实 git 仓库的端到端测试覆盖（703 行），除上面那条分类问题外没找到能证实的缺陷。
+
+### 新增测试
+
+`tests/vim-normal-mode.test.ts`（7）、`tests/vim-motions.test.ts`（64）、`tests/vim-operators.test.ts`（44）、`tests/render-block-identity.test.ts`（19）、`tests/wiki-sync-failure-classes.test.ts`（12）。`tests/vim-unhandled-key.test.ts` 里原先把"计数前缀"和 `dw`、`c`、`f` 钉成"未绑定"的用例已改写——它们现在都能用了，该文件继续守住"未绑定和弦必须有反馈"这条真正的契约。
+
+---
+
+## 基础行为审计第二轮（2026-08-26，当前工作树）
+
+接着上一轮，把只浅尝过的两块挖到底：**编辑器内的实时渲染（live-preview）**和**非 insert 模式的 hjkl**。方法同前——先探针打出真实行为，只修有证据的缺陷。**1860 → 1917 项通过，`tsc --noEmit` 全干净。**
+
+### 修掉的 bug
+
+- **平台探测把 macOS 认成 Windows，Cmd+click 打不开链接**（`src/platform-compat.ts`）。陷阱是 **`"darwin".includes("win")` 为真**：`detectNoemaPlatform` 的 `win` 分支排在 Apple 分支之前，于是任何拼出 Darwin 内核名的平台串都被判成 `win32`。而 `navigator.platform` 恰恰就这么拼——Emacs xwidget 宿主和测试环境里都报 `"X11; Darwin arm64"`。后果是 `primaryModifierDown` 反过来要求 Ctrl，macOS 上 Cmd+click 直接失效，`tests/cm6/roundtrip.test.ts` 12 个链接用例同时红掉。抽出 `classifyPlatformHint` 统一两条分支（explicit 与 navigator 都有这个洞），并把顺序固定成 Apple → Linux/BSD → Windows。顺带修正了 explicit 分支的同类问题：`detectNoemaPlatform("Darwin x64")` 此前也会返回 `win32`（`value === "darwin"` 精确匹配救不了带后缀的串）。
+- **每个 Markdown 链接被包进 5 层同名嵌套 span**（`src/cm6/live-preview.ts`）。`[label](url)` 有 5 个 delimiter 节点（`[`、`]`、`(`、URL、`)`），每个都带着**整段**链接的 `linkClass`，而 `buildDecorations` 对每个 delimiter 都 push 一次整段 mark。`color` 和 `underline` 在嵌套下幂等，所以一直没被发现；但内部链接 `:hover` 的半透明底色 `color-mix(…, transparent 91%)` 会叠 5 层（约 9% → 37%），而且每次选区变化 CM6 都要重做 5 倍的 decoration 与 DOM 工作。按 `(spanFrom, spanTo, linkClass)` 去重后降为 1 层。
+- **Tab 缩进 2 格、Backspace 只退 1 格，缩进不可逆**（`src/cm6/input-commands.ts`）。`runEditorTab` 插入一个 indent unit（默认 2），但删除链最后落到逐字素删除，于是 Tab 之后 Backspace 会让行比原来浅 1 格。新增 `deleteIndentUnitBackward` 插在 `deleteMarkupBackward` 与字素删除之间：只在**纯行首空白**里生效，退到上一个 tab stop（这正是 CM6 自己 `deleteCharBackward` 的规则，Noema 的删除链因为不走那条命令所以得自己补）。列表标记 outdent、括号对删除、词间空格、字面 tab、选区删除、前向 Delete 全部不受影响。
+
+### 让不可测的导航逻辑变得可测
+
+`moveScreenLine` 的**像素路径**（真实布局下按屏幕行移动，再由 `crossedVisualEntry` 判断是否跨过了 Visual 层折叠掉的东西）在无头 DOM 下从不执行——`getBoundingClientRect()` 返回零尺寸，测试永远只走逻辑行 fallback。`crossedVisualEntry` 自己并不测量任何东西，只是调用方需要布局，所以把它导出后可以直接用显式 start/target 测：现已覆盖行间公式、org-env 标题、被块吸收的空行三类吸附点，以及"没跨过就不吸附""Source 模式不吸附"两条边界。
+
+审计中一度怀疑像素路径有单位错配——`goalColumn` 被塞进的是 `coords.left - rect.left`（内容相对），而 CM6 的 `posAtCoords` 吃的是视口坐标。核对 CM6 源码后确认**不是 bug**：`moveVertically` 内部就是 `goal = startCoords.left - rect.left`，再 `resolvedGoal = rect.left + goal`，Noema 连无坐标时的 `defaultCharacterWidth * column` 兜底都跟 CM6 的约定一致。
+
+### 审计过、确认无缺陷的部分
+
+- **非 insert 模式 hjkl（46 个探针，全对）**：`h`/`l` 不跨行、停在末字符不越界、空行上是 no-op、按字素簇整体跨越 CJK / ZWJ emoji 家族 / 组合字符 / tab、行内公式按边界原子进入；`j`/`k` 的 goal column 跨短行与空行都保持、水平移动会正确重置、`3j`/`3k` 计数正确、首末行不动、CJK 列宽按字素算；Visual 模式 inclusive 语义（含反向跨锚点、`o` 换端不改选区）；Visual-line 整行选取与 `h`/`l`/`0`/`$` 被吞掉不塌陷选区。已固化为 `tests/vim-vertical-motion.test.ts`（21）与 `tests/vim-visual-motion.test.ts`（17）。
+- **live-preview 其余构件**：粗体/斜体/删除线/行内代码/标题/wikilink 的 `syntax-hidden` 隐藏与光标触碰转 `syntax-hint` 全部正确；转义 `\*` 正确保留 `*` 只隐藏反斜杠；嵌套强调、链接套粗体、代码里的 `**`、脚注、引用式链接、表格、任务列表等 16 种构件均无多余嵌套 span，源码往返全部无损。唯一剩下的两层 `cm-link-text` 是 `[](#slug)` 空锚点——URL 被有意当作可点文本渲染，`color`/`underline` 幂等，无视觉影响。
+- **source ↔ preview 切换**：纯文本、行内数学、表格、org-env、围栏代码五种构件切过去再切回来字节稳定。
+- **括号与输入**：自动配对（`(`/`[`/`{`/`"`）、配对后 overtype、配对删除、选区包裹（`(`、反引号、`*`、`"`）、词前不配对、数学区内仍配对（这是 `close-brackets-vscode.ts` 有意放宽的 VSCode 规则）全部正确。
+
+### 新增测试
+
+`tests/vim-vertical-motion.test.ts`（21）、`tests/vim-visual-motion.test.ts`（17）、`tests/live-preview-link-spans.test.ts`（10）、`tests/editor-indent-delete.test.ts`（14）、`tests/platform-compat-detection.test.ts`（13）。
+
+---
+
+## Vim 模式专项审计（2026-08-26 第三轮，当前工作树）
+
+专门针对 vim 模式，把前两轮没覆盖的面全部过掉：模式切换与 Escape 语义、insert 入口变体、寄存器与 `p`/`P`、`r`、undo/redo、fold 与缩进、多光标、`s`/`S` avy 跳转、公式感知的行操作、嵌入式输入框内的 vim。**1917 → 1985 项通过，`tsc --noEmit` 干净。**
+
+### 修掉的 bug
+
+- **Visual 模式 `y` 之后光标停在错误的一端**（`aaronnote/vim-lite.ts`）。`normalizeNormalSelections` 的 collapse 分支写成 `if (collapse && !range.empty)`，无条件覆盖 `position`——把调用方通过 `mainOverride` 传进来的落点直接丢掉。同一个函数紧接着的 `fromInsert` 分支有 `&& !overridden` 守卫，两相对照可以确定是疏漏而非设计。后果：`yankSelection` 明明设了 `visualHead = 选区起点`（Vim 的 `y` 就是把光标留在被复制文本的开头），但因为退出 Visual 时选区还在，落点被改写成 `head - 1`，光标停到了另一端。补上 `!overridden` 即可；`d` 不受影响是因为删除后选区已经塌陷。
+- **`3rz` 只替换一个字符**。计数在其他地方都通了，唯独 `r` 没接。新增 `countedCharacterRange`：按字素推进 N 个，行内长度不够时**整个命令不执行**（Vim 就是这个语义，不是"能替几个替几个"）。同时修正落点——Vim 把光标留在**最后一个**被替换的字符上，原实现固定映射 `range.from`。改成从映射后的区间末尾回退一个字素，count=1 时结果与原来完全一致。
+- **`3>>` 只缩进一行**。`>`/`<` 连 `pendingCount` 都没有 bank。宿主的缩进命令作用于选区，所以计数的正确表达是把选区临时展开到 N 行、调一次 `onIndent`、再把光标还原到首行第一个非空白字符（Vim 的落点）。已验证对普通行与列表项都正确，超出文档时钳制。
+- **行式 `p` 在文件末尾多长出一个空行**（`src/cm6/editor-cm6.ts`）。粘贴到最后一行之后时，代码既保留了寄存器自带的结尾换行、又补了一个前导换行分隔符——但末尾没有下一行来承接那个结尾换行，于是每次 `yy p`/`dd p` 在文件最后一行都留下一个空行。这不是显示问题：它会被**存盘**，然后出现在 git diff 里。修法是把那个换行"花"在分隔符上（末尾追加时去掉一个结尾换行）。文档中部粘贴、`P`、以及本来就以换行结尾的文档三条路径均不受影响，已分别锁定。
+- **Normal 模式下嵌入式 `<input>` 里的 Backspace 会真的删字**。`editableNormalCommand` 的非富文本分支用 `key.length === 1` 吞掉可打印键，但 `Backspace`/`Delete` 不是可打印键，于是原样透传给控件。同一函数的富文本分支把 Backspace 当作左移动作——又是两个分支不一致。Normal 模式不该破坏文本，现已吞掉。
+
+### 审计过、确认无缺陷的部分
+
+- **insert 入口变体**：`i`/`I`（首个非空白）/`a`/`A`/`o`/`O` 落点全对，`a` 在行尾进入行尾后一位（Insert 的合法位置）。
+- **Escape 语义**：insert → normal 的"左移一格"规则、行首不越界、从 Visual / Visual-line 退出时的落点、连按两次 Escape 不动、`Ctrl+[` 等价 Escape。
+- **`r`**：CJK 单字替换、`r` 后接 Escape 静默取消、Visual 模式整段替换。
+- **undo/redo**：`u` 与 `Ctrl+R`（大小写皆可）正确往返。
+- **fold 与 `/`**：`zc`/`zo`/`za`/`zM`/`zR` 与 `/` 全部正确派发到宿主回调。
+- **多光标**：`l`、`x`、`dd`、`3l` 在双光标下均正确；`syncSelectionFromEditor` 对外部选区的采纳与塌陷正确。
+- **`s`/`S` avy 跳转**：唯一匹配立即跳转、反向 `S`、无匹配不动、Escape 取消、多匹配时挂起等待标签——全部正确（注意 needle 有 500ms 超时，测试须显式 settle）。
+- **公式感知的行操作**：`dd` 在块级公式上删掉整个公式、在已展开的行内公式里只删 TeX 正文（这是 `logicalLineAt` 的既定语义，不是 bug）、`x` 原子删除整个行内公式对象、`D` 与 `J` 与公式共存正确。
+- **嵌入式控件守卫**：`data-aaronnote-vim="native"` 的完全退出（连 Escape 都不拦）、Cmd 组合键留给控件、host 之外的目标一律不碰、`.cm-content` 不算"嵌入控件"。
+
+### 新增测试
+
+`tests/vim-editing-commands.test.ts`（31）、`tests/vim-paste-and-jump.test.ts`（15）、`tests/vim-embedded-editables.test.ts`（15）。另外 `o`/`O` 的续行修复（见上一轮）新增了共享的 `markdownContinuationPrefix`，由 `o`/`O` 与 Enter 共用。
 
 ---
 
@@ -869,3 +989,11 @@ AGENTS.md 原样无附加变量 smoke 最终再次报告 `protocolRegistered:tru
 
 
 更多开发想法在docs/siyuan-merge-audit-2026-08.md
+
+---
+
+## Phase 6 — 审计 backlog 与独立化终态（2026-08-26，完成）
+
+审计总排序 #1–#13 已逐项收口：host-neutral core、b3、纯函数生产纵切、菜单、CLI、layout/dock、HTML/PDF 导出、完整 portable AV 语义、virtual references、hint、附件维护/正文 FTS5、MCP 与 Obsidian Markdown-native 导入均已进入 canonical 树并有生产或端到端证据；covers、Pandoc bundle、protyle/mobile 及已裁剪云/同步/加密/插件/DAV/OIDC 明确不采用。必要版权与来源保存在 `NOTICE` 和直接改编文件头。
+
+迁移期上游 checkout 已移出仓库，并以废纸篓 `Noema-reference-20260826` 保持可恢复。随后在其完全缺席的状态下完成最终门禁：`make test` 为 206 files passed / 7 skipped、2004 tests passed / 16 skipped；`go test ./...` 全树通过，三个 FTS5 纵切通过；`make build`、`make install` 成功。安装版 smoke 报告 `hostMode:desktop`、preload、54px 标题栏、五项系统控制、22/22 b3 surfaces、workspace layout/docks、owned/listening kernel 与 `mcpUrl` 全绿。Emacs full-project link、7 个 shared asset links 和小写旧入口规则通过。源码/构建/文档路径扫描无 checkout 依赖，Noema 达到独立终态。

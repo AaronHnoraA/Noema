@@ -1,8 +1,28 @@
 import { spawn } from "node:child_process";
-import { accessSync, constants, existsSync, mkdirSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 
 const LOOPBACK_KERNEL = /^http:\/\/127\.0\.0\.1:\d+$/;
+
+export function mcpDescriptorPath(stateRoot) {
+  return join(resolve(stateRoot), "mcp.json");
+}
+
+export function removeMcpDescriptor(stateRoot) {
+  if (!stateRoot) return;
+  try { unlinkSync(mcpDescriptorPath(stateRoot)); } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+}
+
+export function writeMcpDescriptor(stateRoot, descriptor) {
+  const target = mcpDescriptorPath(stateRoot);
+  mkdirSync(dirname(target), { recursive: true });
+  const temporary = `${target}.${process.pid}.tmp`;
+  writeFileSync(temporary, `${JSON.stringify(descriptor, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  renameSync(temporary, target);
+  return target;
+}
 
 export function normalizeKernelBase(value) {
   const raw = String(value || "").trim().replace(/\/+$/, "");
@@ -132,6 +152,7 @@ function frozenState(state, detail = {}) {
     box: null,
     owned: false,
     reason: "",
+    mcpUrl: "",
     ...detail,
   });
 }
@@ -170,12 +191,34 @@ export function createKernelSupervisor({
   const sleepers = new Set();
 
   const publish = (next, detail = {}) => {
+    const baseUrl = detail.baseUrl || "";
+    const box = detail.box || null;
+    const mcpUrl = next === "listening" && baseUrl ? `${baseUrl}/mcp` : "";
     state = frozenState(next, {
-      baseUrl: detail.baseUrl || "",
-      box: detail.box || null,
+      baseUrl,
+      box,
       owned: config.owned === true,
       reason: detail.reason || "",
+      mcpUrl,
     });
+    try {
+      if (mcpUrl) {
+        writeMcpDescriptor(stateRoot, {
+          name: "Noema",
+          transport: "streamable-http",
+          url: mcpUrl,
+          baseUrl,
+          noteRoot: resolve(noteRoot),
+          notebook: box?.id || "",
+          pid: supervisorPid,
+          ownedKernel: config.owned === true,
+        });
+      } else {
+        removeMcpDescriptor(stateRoot);
+      }
+    } catch (error) {
+      stderr.write(`[aaronnote-web] MCP descriptor update failed: ${error?.message || error}\n`);
+    }
     try {
       onState(state);
     } catch (error) {
@@ -440,10 +483,12 @@ export function createKernelSupervisor({
       wakeSleepers();
       await stopChild();
       await loopPromise;
+      try { removeMcpDescriptor(stateRoot); } catch {}
     },
     forceCloseSync() {
       closing = true;
       wakeSleepers();
+      try { removeMcpDescriptor(stateRoot); } catch {}
       const target = child;
       child = null;
       if (target) {

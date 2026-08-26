@@ -3,9 +3,9 @@
  *
  * `normalCommand`/`visualCommand`/`visualLineCommand` consume every printable
  * key so it cannot leak into the document or browser chrome. That is correct,
- * but it used to be indistinguishable from a dropped keystroke: pressing `dw`
- * or a count prefix moved nothing and said nothing. These tests pin the
- * feedback channel that makes an unbound chord visible.
+ * but it is otherwise indistinguishable from a dropped keystroke: an operator
+ * aimed at a motion Vim-lite does not implement would move nothing and say
+ * nothing. These tests pin the feedback channel that makes that visible.
  */
 
 import { describe, expect, it } from "@voidzero-dev/vite-plus-test";
@@ -51,10 +51,21 @@ describe("a selection built outside Vim is adopted, not ignored", () => {
 });
 
 describe("unbound Normal-mode chords are reported", () => {
-  it("reports a count prefix rather than dropping it", async () => {
+  it("drives a motion with a count prefix instead of reporting it", async () => {
+    const { press, reported, editor, dispose } = await setup("a\nb\nc\nd\ne");
+    editor.setSelection(0, 0);
+    press("3");
+    press("j");
+    expect(reported).toEqual([]);
+    expect(editor.getMarkdownSelectionRange().head).toBe(6);
+    dispose();
+  });
+
+  it("still reports the unbound key a count was aimed at", async () => {
     const { press, reported, dispose } = await setup();
-    expect(press("3")).toBe(true);
-    expect(reported).toEqual(["3"]);
+    press("3");
+    press("q");
+    expect(reported).toEqual(["q"]);
     dispose();
   });
 
@@ -62,17 +73,26 @@ describe("unbound Normal-mode chords are reported", () => {
     const { press, reported, editor, dispose } = await setup();
     const before = editor.getMarkdown();
     expect(press("d")).toBe(true);
-    expect(press("w")).toBe(true);
-    expect(reported).toEqual(["dw"]);
+    expect(press("q")).toBe(true);
+    expect(reported).toEqual(["dq"]);
     expect(editor.getMarkdown()).toBe(before);
     dispose();
   });
 
-  it("reports unbound single keys such as c and f", async () => {
+  it("stays silent for an operator with a motion it does support", async () => {
+    const { press, reported, editor, dispose } = await setup();
+    press("d");
+    press("w");
+    expect(reported).toEqual([]);
+    expect(editor.getMarkdown()).toBe("beta\ngamma");
+    dispose();
+  });
+
+  it("reports unbound single keys such as q and m", async () => {
     const { press, reported, dispose } = await setup();
-    press("c");
-    press("f");
-    expect(reported).toEqual(["c", "f"]);
+    press("q");
+    press("m");
+    expect(reported).toEqual(["q", "m"]);
     dispose();
   });
 
@@ -88,6 +108,10 @@ describe("unbound Normal-mode chords are reported", () => {
     press("g");
     press(">");
     press(">");
+    press("e");
+    press("^");
+    press("}");
+    press("{");
     expect(reported).toEqual([]);
     dispose();
   });

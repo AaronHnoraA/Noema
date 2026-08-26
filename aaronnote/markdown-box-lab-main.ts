@@ -1,5 +1,5 @@
 // Standalone lab page for Phase 2 of the SiYuan-kernel fork (see the plan at
-// reference/siyuan and CLAUDE.md's kernel section): proves CM6 can load/save
+// the retired upstream checkout and the kernel migration plan): proves CM6 can load/save
 // a markdown-box document directly against the new Go kernel's
 // /api/noema/markdown/{loadDoc,saveDoc} endpoints, completely isolated from
 // the production app shell (aaronnote/main.ts) and its Node backend

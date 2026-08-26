@@ -158,9 +158,7 @@ func TestGetDocBlocksOrders(t *testing.T) {
 		treenode.CloseDatabase()
 		util.DataDir = previousDataDir
 		util.BlockTreeDBPath = previousBlockTreeDBPath
-		if "" != previousBlockTreeDBPath {
-			treenode.InitBlockTree(false)
-		}
+		restoreTestBlockTreeDatabase(previousBlockTreeDBPath)
 	})
 
 	expected := []string{child1ID, child1BID}

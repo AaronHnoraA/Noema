@@ -32,9 +32,7 @@ func TestCheckBlockRefInBoxRejectsMissingBlockTrees(t *testing.T) {
 	t.Cleanup(func() {
 		treenode.CloseDatabase()
 		util.BlockTreeDBPath = previousBlockTreeDBPath
-		if "" != previousBlockTreeDBPath {
-			treenode.InitBlockTree(false)
-		}
+		restoreTestBlockTreeDatabase(previousBlockTreeDBPath)
 	})
 
 	_, err := CheckBlockRefInBox([]string{"20260730000000-missing"}, nil, nil, "")

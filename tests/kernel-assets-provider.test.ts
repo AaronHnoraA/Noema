@@ -111,4 +111,41 @@ describe("kernel assets provider", () => {
       body: { notebook: "box-id", includePublic: true },
     }]);
   });
+
+  test("routes Markdown asset maintenance and Obsidian tasks through the registered kernel box", async () => {
+    const root = await mkdtemp(join(tmpdir(), "noema-kernel-assets-maintenance-"));
+    roots.push(root);
+    const vault = join(root, "Obsidian Vault");
+    await mkdir(vault);
+    const calls: Array<{ url: string; body: any }> = [];
+    const provider = createKernelAssetsProvider({
+      baseUrl: "http://127.0.0.1:6806",
+      box: { id: "box-id", root },
+      fetchImpl: async (url: string, init: RequestInit) => {
+        const body = JSON.parse(String(init.body));
+        calls.push({ url, body });
+        return new Response(JSON.stringify({ code: 0, data: String(url).includes("startObsidianVaultAnalysis")
+          ? { taskID: "20260826153000-task001", state: "queued", progress: 0, message: "queued" }
+          : { ok: true, assets: [], missing: [] } }));
+      },
+    });
+
+    await provider.inspect();
+    await provider.searchContent("needle", 12);
+    await provider.rename(join(root, "attachments", "old.pdf"), "new.pdf");
+    await provider.startObsidianAnalysis(vault);
+    await provider.obsidianTask("20260826153000-task001");
+    await provider.startObsidianImport("20260826153000-task001", "Imports/Vault");
+    await provider.cancelObsidianTask("20260826153000-task001");
+
+    expect(calls).toEqual([
+      { url: "http://127.0.0.1:6806/api/noema/markdown/inspectAssets", body: { notebook: "box-id", includePublic: false } },
+      { url: "http://127.0.0.1:6806/api/noema/markdown/searchAssetContent", body: { notebook: "box-id", query: "needle", limit: 12 } },
+      { url: "http://127.0.0.1:6806/api/noema/markdown/renameAsset", body: { notebook: "box-id", oldPath: join(root, "attachments", "old.pdf"), newName: "new.pdf" } },
+      { url: "http://127.0.0.1:6806/api/import/startObsidianVaultAnalysis", body: { localPath: vault } },
+      { url: "http://127.0.0.1:6806/api/import/getObsidianVaultTask", body: { taskID: "20260826153000-task001" } },
+      { url: "http://127.0.0.1:6806/api/noema/markdown/startObsidianVaultImport", body: { notebook: "box-id", taskID: "20260826153000-task001", destination: "Imports/Vault" } },
+      { url: "http://127.0.0.1:6806/api/import/cancelObsidianVaultTask", body: { taskID: "20260826153000-task001" } },
+    ]);
+  });
 });

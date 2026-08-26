@@ -2,6 +2,7 @@ package model
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -248,5 +249,77 @@ func TestMarkdownAssetReferencesMatchSharedFixtures(t *testing.T) {
 				t.Fatalf("got %v, want %v", got, fixture.Expected)
 			}
 		})
+	}
+}
+
+func TestInspectMarkdownAssetsReportsMissingAttachmentsWithoutTreatingNotesAsAssets(t *testing.T) {
+	boxID := setupMarkdownAssetTest(t)
+	root := filepath.Join(util.DataDir, boxID)
+	if err := os.MkdirAll(filepath.Join(root, "images", "topic"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "images", "topic", "present.png"), []byte("png"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	source := strings.Join([]string{
+		"![present](./images/topic/present.png)",
+		"![missing](./images/topic/missing.png)",
+		"[missing attachment](./attachments/topic/data.pdf)",
+		"[another note](missing-note.md)",
+		"[[Unresolved Wiki Page]]",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(root, "topic.md"), []byte(source), 0644); err != nil {
+		t.Fatal(err)
+	}
+	health, err := InspectMarkdownAssets(boxID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(health.Unused) != 0 || len(health.Missing) != 2 || health.Source != "kernel-assets" {
+		t.Fatalf("unexpected asset health: %+v", health)
+	}
+	if health.Missing[0].Path != "attachments/topic/data.pdf" || health.Missing[1].Path != "images/topic/missing.png" {
+		t.Fatalf("unexpected missing assets: %+v", health.Missing)
+	}
+}
+
+func TestRenameMarkdownAssetRewritesOnlyParsedDestinations(t *testing.T) {
+	boxID := setupMarkdownAssetTest(t)
+	root := filepath.Join(util.DataDir, boxID)
+	assetDir := filepath.Join(root, "images", "topic")
+	if err := os.MkdirAll(assetDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	oldFile := filepath.Join(assetDir, "old.png")
+	if err := os.WriteFile(oldFile, []byte("png"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	note := filepath.Join(root, "topic.md")
+	source := strings.Join([]string{
+		"![markdown](./images/topic/old.png)",
+		`<img src="./images/topic/old.png" srcset="./images/topic/old.png 1x, ./images/topic/other.png 2x">`,
+		`<style>x{background:url('./images/topic/old.png')}</style>`,
+		"Plain text ./images/topic/old.png must not change.",
+	}, "\n")
+	if err := os.WriteFile(note, []byte(source), 0644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := RenameMarkdownAsset(boxID, oldFile, "renamed.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.NewPath != "images/topic/renamed.png" || len(result.RewrittenNotes) != 1 || result.Source != "kernel-assets" {
+		t.Fatalf("unexpected rename result: %+v", result)
+	}
+	updated, err := os.ReadFile(note)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(updated), "./images/topic/renamed.png") != 4 ||
+		!strings.Contains(string(updated), "Plain text ./images/topic/old.png must not change.") {
+		t.Fatalf("unexpected rewritten note: %s", updated)
+	}
+	if _, err = os.Stat(oldFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old asset still exists: %v", err)
 	}
 }

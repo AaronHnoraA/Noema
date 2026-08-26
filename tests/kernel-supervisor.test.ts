@@ -1,12 +1,12 @@
 import { EventEmitter } from "node:events";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
 // @ts-ignore Node ESM modules live outside the TS application graph.
-import { createKernelSupervisor, kernelBaseFromOutput, localKernelRoot, normalizeKernelBase, resolveKernelLaunchConfig } from "../server/lib/kernel-supervisor.mjs";
+import { createKernelSupervisor, kernelBaseFromOutput, localKernelRoot, mcpDescriptorPath, normalizeKernelBase, resolveKernelLaunchConfig } from "../server/lib/kernel-supervisor.mjs";
 
 const cleanups: string[] = [];
 
@@ -179,9 +179,21 @@ describe("shared kernel supervisor", () => {
     expect(supervisor.status()).toMatchObject({
       state: "listening",
       baseUrl: "http://127.0.0.1:43128",
+      mcpUrl: "http://127.0.0.1:43128/mcp",
       owned: true,
     });
+    const descriptorFile = mcpDescriptorPath(stateRoot);
+    expect(JSON.parse(await readFile(descriptorFile, "utf8"))).toMatchObject({
+      name: "Noema",
+      transport: "streamable-http",
+      url: "http://127.0.0.1:43128/mcp",
+      noteRoot,
+      notebook: "box-owned",
+      pid: 4242,
+    });
+    expect((await stat(descriptorFile)).mode & 0o777).toBe(0o600);
     await supervisor.close();
+    await expect(readFile(descriptorFile, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     expect(signals).toContain("SIGTERM");
     expect(signals).not.toContain("SIGKILL");
   });

@@ -95,9 +95,7 @@ func setupFileOperationTest(t *testing.T) *fileOperationTestFixture {
 		Conf = originalConf
 		util.DataDir = originalDataDir
 		util.BlockTreeDBPath = originalBlockTreeDBPath
-		if "" != originalBlockTreeDBPath {
-			treenode.InitBlockTree(false)
-		}
+		restoreTestBlockTreeDatabase(originalBlockTreeDBPath)
 	})
 
 	return &fileOperationTestFixture{

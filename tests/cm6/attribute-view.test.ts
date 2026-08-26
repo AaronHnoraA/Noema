@@ -32,6 +32,10 @@ describe("portable attribute-view widget", () => {
         columns: [{ key: "text", label: "Task" }, { key: "status", label: "Status" }, { key: "project", label: "Project" }],
         rows: [{ id: "#a", kind: "todo", file: "/paper.md", index: 20, line: 3, cells: [{ key: "text", value: "Draft" }, { key: "status", value: "doing" }, { key: "project", value: "paper" }] }],
         total: 1, truncated: false, diagnostics: [], evaluationSource: "kernel-attribute-view",
+        calculations: [
+          { key: "project", operator: "count-unique-values", type: "select", value: 1 },
+          { key: "status", operator: "percent-checked", type: "checkbox", value: 0.5 },
+        ],
       });
     });
     editor.view.dom.querySelector<HTMLButtonElement>(".cm-attribute-view-action")?.click();
@@ -40,7 +44,13 @@ describe("portable attribute-view widget", () => {
     expect(editor.view.dom.querySelector<HTMLElement>(".cm-attribute-view-title")?.textContent).toBe("Open work");
     expect(Array.from(editor.view.dom.querySelectorAll(".cm-attribute-view-table th")).map((node) => node.textContent)).toEqual(["Task", "Status", "Project"]);
     expect(Array.from(editor.view.dom.querySelectorAll(".cm-attribute-view-table td")).map((node) => node.textContent)).toEqual(["Draft", "doing", "paper"]);
+    const fittedColumns = Array.from(editor.view.dom.querySelectorAll<HTMLTableColElement>(
+      ".cm-attribute-view-table colgroup col",
+    ));
+    expect(fittedColumns.map((column) => column.dataset.column)).toEqual(["text", "status", "project"]);
+    expect(fittedColumns.every((column) => /^\d+px$/.test(column.style.width))).toBe(true);
     expect(editor.view.dom.querySelector<HTMLElement>(".cm-attribute-view")?.dataset.evaluationSource).toBe("kernel-attribute-view");
+    expect(Array.from(editor.view.dom.querySelectorAll(".cm-attribute-view-calculations dd")).map((node) => node.textContent)).toEqual(["1", "50%"]);
     expect(editor.getMarkdown()).toBe(source);
     cleanup();
   });

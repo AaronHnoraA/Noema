@@ -12,6 +12,10 @@ import {
   printHtmlToPdf,
 } from "./print-pdf.mjs";
 import {
+  normalizeExportHtmlRequest,
+  writeStandaloneHtml,
+} from "./export-html.mjs";
+import {
   NOEMA_PROTOCOL_SCHEME,
   noemaProtocolUrlFromArgv,
   parseNoemaProtocolUrl,
@@ -563,14 +567,31 @@ async function exportPdfFromWindow(win, input = {}, explicitOutputPath = "") {
   });
 }
 
+async function exportHtmlFromWindow(win, input = {}) {
+  if (!win || win.isDestroyed()) return { canceled: true, path: "" };
+  const request = normalizeExportHtmlRequest(input);
+  const settings = {
+    title: `Export ${request.title} as self-contained HTML`,
+    defaultPath: request.defaultPath || join(app.getPath("documents"), `${request.title}.html`),
+    filters: [{ name: "HTML", extensions: ["html", "htm"] }],
+  };
+  const localized = desktopPlugins.transformDialogOptions("saveDialog", settings);
+  const result = await dialog.showSaveDialog(win, localized);
+  if (result.canceled || !result.filePath) return { canceled: true, path: "" };
+  return writeStandaloneHtml(result.filePath, request.html);
+}
+
 function editorActionsTemplate() {
   return [
     commandItem("Search Knowledge…", "knowledge-search", "CmdOrCtrl+Shift+K"),
     commandItem("Focus Editor", "focus"),
     commandItem("Task Manager", "task-manager"),
+    commandItem("Asset Maintenance…", "asset-maintenance"),
+    commandItem("Import Obsidian Vault…", "import-obsidian"),
     { type: "separator" },
     commandItem("Page Outline", "toggle-toc"),
     commandItem("Backlinks", "knowledge-backlinks"),
+    commandItem("Unlinked Mentions", "knowledge-mentions"),
     commandItem("Tags", "knowledge-tags"),
     commandItem("Agenda", "toggle-agenda"),
     commandItem("Knowledge Graph", "toggle-graph"),
@@ -579,7 +600,13 @@ function editorActionsTemplate() {
     commandItem("Jupyter Cells", "jupyter-panel"),
     { type: "separator" },
     commandItem("Toggle Source", "toggle-source", "CmdOrCtrl+/"),
+    commandItem("Toggle Heading Numbers", "toggle-heading-numbers"),
+    commandItem("Copy Selection Format", "capture-format-once"),
+    commandItem("Apply Copied Format", "apply-format"),
+    commandItem("Copy Format Continuously", "capture-format-continuous"),
+    commandItem("Cancel Format Painter", "clear-format-painter"),
     commandItem("Run Prose Check", "prose-check"),
+    commandItem("Export Self-contained HTML…", "export-html"),
     commandItem("Export PDF…", "export-pdf"),
     commandItem("Export LaTeX…", "export-latex"),
     { type: "separator" },
@@ -604,8 +631,9 @@ function windowActionsTemplate(win = activeWindow()) {
   return [
     { label: "New Window", accelerator: "CmdOrCtrl+Shift+N", click: () => createWindow() },
     { label: "Open…", accelerator: "CmdOrCtrl+O", click: () => void chooseMarkdownFiles() },
-    { label: "Split Right", accelerator: "CmdOrCtrl+\\", click: () => openTarget({ url: win?.webContents.getURL(), source: "window", disposition: "split-right" }, win || activeWindow()) },
-    { label: "Split Below", accelerator: "Shift+CmdOrCtrl+\\", click: () => openTarget({ url: win?.webContents.getURL(), source: "window", disposition: "split-down" }, win || activeWindow()) },
+    commandItem("Split Right", "workspace-split-right", "CmdOrCtrl+\\"),
+    commandItem("Split Below", "workspace-split-below", "Shift+CmdOrCtrl+\\"),
+    commandItem("Close Active Split", "workspace-close-active"),
     { type: "separator" },
     { label: "Minimize", role: "minimize" },
     zoomItem,
@@ -642,7 +670,12 @@ function buildApplicationMenu() {
         { label: "Open…", accelerator: "CmdOrCtrl+O", click: () => void chooseMarkdownFiles() },
         { label: "New Window", accelerator: "CmdOrCtrl+Shift+N", click: () => createWindow() },
         { type: "separator" },
+        commandItem("Import Obsidian Vault…", "import-obsidian"),
+        commandItem("Cancel Obsidian Import", "cancel-obsidian-import"),
+        commandItem("Asset Maintenance…", "asset-maintenance"),
+        { type: "separator" },
         commandItem("Save", "save", "CmdOrCtrl+S"),
+        commandItem("Export Self-contained HTML…", "export-html"),
         commandItem("Export PDF…", "export-pdf"),
         commandItem("Open Source in VS Code", "open-source-editor", "CmdOrCtrl+Shift+O"),
         commandItem(`Reveal Note in ${platformLabels.fileManager}`, "reveal-current-file"),
@@ -733,8 +766,9 @@ function buildApplicationMenu() {
       label: "Window",
       submenu: [
         { label: "New Window", accelerator: "CmdOrCtrl+Shift+N", click: () => createWindow() },
-        { label: "Split Right", accelerator: "CmdOrCtrl+\\", click: () => openTarget({ url: activeWindow()?.webContents.getURL(), source: "window", disposition: "split-right" }) },
-        { label: "Split Below", accelerator: "Shift+CmdOrCtrl+\\", click: () => openTarget({ url: activeWindow()?.webContents.getURL(), source: "window", disposition: "split-down" }) },
+        commandItem("Split Right", "workspace-split-right", "CmdOrCtrl+\\"),
+        commandItem("Split Below", "workspace-split-below", "Shift+CmdOrCtrl+\\"),
+        commandItem("Close Active Split", "workspace-close-active"),
         { type: "separator" },
         { role: "minimize" },
         ...(desktopPlatform === "darwin"
@@ -1093,6 +1127,11 @@ ipcMain.handle("noema:export-pdf", async (event, options = {}) => {
   return exportPdfFromWindow(owner, options);
 });
 
+ipcMain.handle("noema:export-html", async (event, options = {}) => {
+  const owner = BrowserWindow.fromWebContents(event.sender);
+  return exportHtmlFromWindow(owner, options);
+});
+
 ipcMain.handle("noema:read-clipboard", () => {
   const image = clipboard.readImage();
   if (!image.isEmpty()) {
@@ -1132,6 +1171,21 @@ ipcMain.handle("noema:choose-directory", async (event, options = {}) => {
     return { canceled: true, path: "", message: "Choose a folder inside the selected Wiki repository" };
   }
   return { canceled: false, path: selected, relativePath: rel === "." ? "" : rel };
+});
+
+ipcMain.handle("noema:select-directory", async (event, options = {}) => {
+  const owner = BrowserWindow.fromWebContents(event.sender);
+  const defaultPath = String(options.defaultPath || "").trim();
+  const settings = {
+    title: String(options.title || "Choose a folder"),
+    ...(defaultPath ? { defaultPath: resolve(defaultPath) } : {}),
+    properties: ["openDirectory"],
+  };
+  const localized = desktopPlugins.transformDialogOptions("openDialog", settings);
+  const result = owner
+    ? await dialog.showOpenDialog(owner, localized)
+    : await dialog.showOpenDialog(localized);
+  return { canceled: result.canceled || !result.filePaths[0], path: result.filePaths[0] || "" };
 });
 
 app.whenReady().then(async () => {

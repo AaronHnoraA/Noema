@@ -1,6 +1,7 @@
 import DOMPurify from "dompurify";
 import TurndownService from "turndown";
 import { gfm } from "turndown-plugin-gfm";
+import { convertOfficeLists } from "./office-list.ts";
 
 const MAX_HTML_TO_MARKDOWN_CHARS = 900_000;
 
@@ -73,7 +74,11 @@ function plainTextFromHtml(html: string): string {
 export function htmlToMarkdown(html: string): string {
   const raw = String(html || "");
   if (raw.length > MAX_HTML_TO_MARKDOWN_CHARS) return plainTextFromHtml(raw);
-  const clean = DOMPurify.sanitize(raw, {
+  // Word and PowerPoint encode list structure in proprietary mso-* styles.
+  // Recover semantic lists while that metadata is still present, then apply
+  // the normal sanitizer and HTML-to-Markdown boundary.
+  const officeHtml = convertOfficeLists(raw).html;
+  const clean = DOMPurify.sanitize(officeHtml, {
     ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel|file|zotero|roam):|[^:]*?(?:[/?#]|$))/i,
     ADD_TAGS: ["math-block"],
     ADD_ATTR: ["data-aaronnote-math-block", "data-display", "data-delimiter", "data-math-render-key", "data-tex"],

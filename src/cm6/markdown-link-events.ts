@@ -1,8 +1,9 @@
 /** Shared pointer contract for opening rendered and source-backed Markdown links. */
 
+import { primaryModifierDown } from "../platform-compat.ts";
+
 export function markdownLinkPrimaryModifier(event: Pick<MouseEvent, "metaKey" | "ctrlKey">): boolean {
-  if (event.metaKey && !event.ctrlKey) return true;
-  return !/Mac/.test(navigator.platform) && event.ctrlKey && !event.metaKey;
+  return primaryModifierDown(event);
 }
 
 export function markdownLinkOpensNewWindow(_href: string, event: MouseEvent): boolean {

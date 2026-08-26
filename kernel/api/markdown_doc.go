@@ -112,6 +112,78 @@ func listUnusedMarkdownAssets(c *gin.Context) {
 	ret.Data = map[string]any{"assets": assets, "source": "kernel-assets"}
 }
 
+func inspectMarkdownAssets(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+	arg, ok := util.JsonArg(c, ret)
+	if !ok {
+		return
+	}
+	var notebook string
+	var includePublic bool
+	if !util.ParseJsonArgs(arg, ret,
+		util.BindJsonArg("notebook", &notebook, true, true),
+		util.BindJsonArg("includePublic", &includePublic, false, false)) {
+		return
+	}
+	health, err := model.InspectMarkdownAssets(notebook, includePublic)
+	if err != nil {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+	ret.Data = health
+}
+
+func renameMarkdownAsset(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+	arg, ok := util.JsonArg(c, ret)
+	if !ok {
+		return
+	}
+	var notebook, oldPath, newName string
+	if !util.ParseJsonArgs(arg, ret,
+		util.BindJsonArg("notebook", &notebook, true, true),
+		util.BindJsonArg("oldPath", &oldPath, true, true),
+		util.BindJsonArg("newName", &newName, true, true)) {
+		return
+	}
+	result, err := model.RenameMarkdownAsset(notebook, oldPath, newName)
+	if err != nil {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+	ret.Data = result
+}
+
+func searchMarkdownAssetContent(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+	arg, ok := util.JsonArg(c, ret)
+	if !ok {
+		return
+	}
+	var notebook, query string
+	var limit int
+	if !util.ParseJsonArgs(arg, ret,
+		util.BindJsonArg("notebook", &notebook, true, true),
+		util.BindJsonArg("query", &query, true, true),
+		util.BindJsonArg("limit", &limit, false, false)) {
+		return
+	}
+	assets, total, indexed, err := model.SearchMarkdownAssetContent(notebook, query, limit)
+	if err != nil {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+	ret.Data = map[string]any{
+		"assets": assets, "total": total, "indexed": indexed, "source": "kernel-asset-content-fts5",
+	}
+}
+
 func loadMarkdownBibliography(c *gin.Context) {
 	ret := gulu.Ret.NewResult()
 	defer c.JSON(http.StatusOK, ret)

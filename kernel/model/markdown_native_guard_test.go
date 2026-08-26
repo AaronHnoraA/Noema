@@ -39,9 +39,7 @@ func TestMarkdownBoxRejectsNativeDocumentTreeOperationsBeforeWrite(t *testing.T)
 		util.HistoryDir = originalHistoryDir
 		util.BlockTreeDBPath = originalBlockTreeDBPath
 		Conf = originalConf
-		if "" != originalBlockTreeDBPath {
-			treenode.InitBlockTree(false)
-		}
+		restoreTestBlockTreeDatabase(originalBlockTreeDBPath)
 	})
 
 	boxID := "20260826050000-native1"

@@ -564,6 +564,7 @@ func StoreMarkdownAssetBytes(boxID, notePath, name, mediaType string, data []byt
 	if err = filelock.WriteFile(target, data); err != nil {
 		return nil, err
 	}
+	indexMarkdownAssetContent(boxID, target)
 	return markdownAssetResult(target, relativePath, isImage), nil
 }
 
@@ -596,5 +597,6 @@ func StoreMarkdownAssetFromPath(boxID, notePath, sourcePath, name, mediaType str
 	if err = filelock.Copy(sourcePath, target); err != nil {
 		return nil, err
 	}
+	indexMarkdownAssetContent(boxID, target)
 	return markdownAssetResult(target, relativePath, isImage), nil
 }

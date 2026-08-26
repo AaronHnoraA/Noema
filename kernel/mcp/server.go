@@ -24,12 +24,12 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/gin-gonic/gin"
-	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/mcp/tools"
 	"github.com/aaronhe/noema/kernel/model"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/gin-gonic/gin"
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/siyuan-note/logging"
 )
 
 const protocolVersion20260728 = "2026-07-28"
@@ -129,7 +129,7 @@ func (projection *toolProjection) refresh() {
 	}
 }
 
-// RefreshToolExposure 根据当前配置刷新 SiYuan MCP 服务对外提供的能力。
+// RefreshToolExposure 根据当前配置刷新 Noema MCP 服务对外提供的能力。
 func RefreshToolExposure() {
 	externalToolProjectionMu.RLock()
 	projection := externalToolProjection
@@ -151,7 +151,7 @@ func externalMCPToolAllowed(tool *tools.Tool) bool {
 
 func newServer() *mcpsdk.Server {
 	server := mcpsdk.NewServer(&mcpsdk.Implementation{
-		Name:    "SiYuan",
+		Name:    "Noema",
 		Version: util.Ver,
 	}, &mcpsdk.ServerOptions{
 		Capabilities: &mcpsdk.ServerCapabilities{},

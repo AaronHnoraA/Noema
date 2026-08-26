@@ -229,9 +229,7 @@ func TestAddAttributeViewBlockAcceptsValidBoundItemWithoutDatabaseBlock(t *testi
 	t.Cleanup(func() {
 		treenode.CloseDatabase()
 		util.BlockTreeDBPath = oldBlockTreeDBPath
-		if "" != oldBlockTreeDBPath {
-			treenode.InitBlockTree(false)
-		}
+		restoreTestBlockTreeDatabase(oldBlockTreeDBPath)
 	})
 
 	avID := "20260730130004-boundav"

@@ -50,7 +50,12 @@ describe("SiYuan-derived Electron desktop adapter", () => {
     expect(main).toContain("nodeIntegration: false");
     expect(main).toContain("sandbox: true");
     expect(main).toContain('ipcMain.handle("noema:export-pdf"');
+    expect(main).toContain('ipcMain.handle("noema:export-html"');
+    expect(main).toContain('ipcMain.handle("noema:select-directory"');
+    expect(main).toContain('commandItem("Export Self-contained HTML…", "export-html")');
     expect(main).toContain('commandItem("Export PDF…", "export-pdf")');
+    expect(main).toContain('commandItem("Import Obsidian Vault…", "import-obsidian")');
+    expect(main).toContain('commandItem("Asset Maintenance…", "asset-maintenance")');
     expect(main).toContain("printHtmlToPdf");
     expect(main).toContain('app.on("open-url"');
     expect(main).toContain("app.setAsDefaultProtocolClient(NOEMA_PROTOCOL_SCHEME)");
@@ -68,6 +73,8 @@ describe("SiYuan-derived Electron desktop adapter", () => {
     expect(preload).toContain('"noema:desktop-smoke-report"');
     expect(preload).toContain('"noema:broadcast-app-config"');
     expect(preload).toContain('ipcRenderer.invoke("noema:export-pdf", options)');
+    expect(preload).toContain('ipcRenderer.invoke("noema:export-html", options)');
+    expect(preload).toContain('ipcRenderer.invoke("noema:select-directory", options)');
   });
 
   test("retains current titlebar, TOC popover, Knowledge double-click and packaged smoke contracts", () => {
@@ -79,8 +86,21 @@ describe("SiYuan-derived Electron desktop adapter", () => {
     expect(editor).toContain("floatingTocPanel.toggle()");
     expect(editor).toContain('addEventListener("dblclick", openKnowledgeDockFromPage)');
     expect(editor).toContain('desktopKnowledgeDock.show("backlinks")');
+    expect(editor).toContain('case "knowledge-mentions"');
+    expect(editor).toContain("api.knowledge.virtualReferences");
+    expect(editor).toContain("createWorkspaceLayoutView(layoutRoot");
+    expect(editor).toContain("createWorkspaceDockController({");
+    expect(editor).toContain('id: "knowledge"');
+    expect(editor).toContain('id: "agenda"');
+    expect(editor).toContain('case "workspace-split-right"');
+    expect(editor).toContain('case "workspace-split-below"');
     expect(editor).toContain("renderPublishedNoteHTML(currentMarkdownText()");
     expect(editor).toContain('case "export-pdf"');
+    expect(editor).toContain('case "export-html"');
+    expect(editor).toContain('case "asset-maintenance"');
+    expect(editor).toContain('case "import-obsidian"');
+    expect(editor).toContain("api.imports.obsidianStart(started.taskID, target)");
+    expect(editor).toContain("createSelfContainedNoteHTML(currentMarkdownText()");
     expect(editor).toContain("window.noemaDesktop.exportPdf(printable)");
     expect(editor).toContain("window.__noemaDesktopPrintDocument = currentPrintablePdfDocument");
     expect(bridge).toContain("nativeReport.printDocument = window.__noemaDesktopPrintDocument?.()");
@@ -90,11 +110,19 @@ describe("SiYuan-derived Electron desktop adapter", () => {
     expect(editor).not.toContain('desktopKnowledgeDock.toggle("outline")');
     expect(bridge).toContain("tocPopover");
     expect(bridge).toContain("openedByDoubleClick");
+    expect(bridge).toContain('command: "knowledge-mentions"');
+    expect(bridge).toContain("mentionStatus");
+    expect(bridge).toContain("mentionItems");
     expect(bridge).toContain("agendaDock");
     expect(bridge).toContain("katexMacros");
     expect(bridge).toContain("b3ThemePrimary");
     expect(bridge).toContain('getPropertyValue("--b3-theme-background")');
     expect(bridge).toContain("visualTypography: auditVisualTypography(document)");
+    expect(bridge).toContain("productionHandfeel: auditProductionHandfeel(document)");
+    expect(bridge).toContain("workspaceLayout:");
+    expect(bridge).toContain('command: "workspace-split-right"');
+    expect(bridge).toContain('command: "workspace-close-active"');
+    expect(bridge).toContain("splitWorkspaceFrames");
     expect(bridge).toContain("reportSmoke");
     expect(bridge).not.toContain("__TAURI_INTERNALS__");
     expect(wiki).toContain("window.noemaDesktop.openTarget");

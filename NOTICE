@@ -36,6 +36,16 @@ the adapted source file:
   https://github.com/org-roam/org-roam-ui
   commit 2894dcbf56d2eca8d3cae2b1ae183f51724b5db6
 
+The Go data kernel, Electron shell patterns, b3 design system, and selected
+editor-neutral utilities include code adapted from SiYuan, copyright b3log and
+SiYuan contributors, licensed under GNU Affero General Public License version
+3. The reviewed Noema fork revision is:
+
+  https://github.com/siyuan-note/siyuan
+  commit 844e214ef73025db61084857a3f6d0b0a6812c5f
+
+Directly adapted standalone files record their upstream source path.
+
 The generated math snippet catalog includes filtered completion data derived
 from James Yu's LaTeX Workshop at commit
 57f9e8d0306ea0c7419290a2b62ee0cec3c31041, used under the MIT License. Source

@@ -55,10 +55,24 @@ import {
   type EditorPasteOptions,
 } from "../paste.ts";
 import { renderMarkdownHTML } from "../render-html.ts";
+import {
+  applyMarkdownFormat,
+  captureMarkdownFormat,
+  getCommonFormatPainterSnapshot,
+  shouldKeepFormatPainterActive,
+  type FormatPainterMode,
+  type FormatPainterSnapshot,
+} from "../format-painter.ts";
 import { markdownLinkDestination } from "../markdown-link.ts";
+import { pauseImageAnimationTemporarily } from "../image-animation.ts";
 import { getBlockMathRanges, positionInsideAnyRange } from "./math-ranges.ts";
 import { scanInlineMathRanges } from "../inline-math.ts";
 import { tocIndexFromState } from "./toc-index.ts";
+import {
+  headingNumberingExtension,
+  setHeadingNumbering as configureHeadingNumbering,
+  type HeadingNumberingConfiguration,
+} from "./heading-number.ts";
 import { resolveAnchorHeading } from "../heading-slug.ts";
 import { skipOrderedListRenumber } from "./ordered-list-renumber.ts";
 import { captureHeadingFoldKeys, restoreHeadingFoldKeys } from "./heading-fold.ts";
@@ -454,6 +468,11 @@ function openAttachmentContextMenuFromEvent(view: EditorView, event: MouseEvent)
 
 export function createEditorCM6(host: HTMLElement, options: EditorOptions): Editor {
   const qiRegistry = createQuickInsertRegistry();
+  let formatPainter: { mode: FormatPainterMode; snapshot: FormatPainterSnapshot } | null = null;
+  const headingNumbering: HeadingNumberingConfiguration = {
+    enabled: options.headingNumbering?.enabled ?? false,
+    format: options.headingNumbering?.format ?? "decimal-hierarchical",
+  };
   const externalUpdateListeners = new Set<(update: import("@codemirror/view").ViewUpdate) => void>();
   const documentResetListeners = new Set<() => void>();
   // Preserve the stable outer DOM shape so themes and layout CSS work
@@ -494,6 +513,8 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
     },
   });
   viewportStabilizer = new EditorViewportStabilizer(view, host);
+  const onEditorScroll = (): void => pauseImageAnimationTemporarily(view.contentDOM, 256);
+  view.scrollDOM.addEventListener("scroll", onEditorScroll, { passive: true });
   scheduleViewportDecorationRefresh(view);
   void document.fonts?.ready.then(() => {
     if (view.dom.isConnected) view.requestMeasure();
@@ -673,7 +694,13 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
           from = line.to + 1;
         } else {
           from = line.to;
-          if (docLength > 0) insert = `\n${insert}`;
+          // Appending past the last line, there is no following line for the
+          // register's trailing newline to sit in front of, so keeping it as
+          // well as adding the leading separator left a stray blank line at the
+          // end of the file — which then gets saved and shows up in every diff.
+          // Spend that newline as the separator instead.
+          const body = insert.endsWith("\n") ? insert.slice(0, -1) : insert;
+          insert = docLength > 0 ? `\n${body}` : body;
         }
       }
       return { from, to: from, text: insert };
@@ -792,6 +819,7 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
           return;
         }
         rememberHeadingFolds();
+        formatPainter = null;
         activeDocumentKey = nextDocumentKey;
         const visual = isVisualMode(view);
         view.dispatch({ effects: beforeChangeDocumentEffect.of(undefined) });
@@ -952,6 +980,64 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
       wrap.classList.toggle("typora-web-typewriter-mode", !!modeOptions.typewriterMode);
     },
 
+    setHeadingNumbering(next): void {
+      if (typeof next.enabled === "boolean") headingNumbering.enabled = next.enabled;
+      if (next.format) headingNumbering.format = next.format;
+      configureHeadingNumbering(view, next);
+    },
+
+    captureFormat(mode = "once"): FormatPainterSnapshot | undefined {
+      const source = view.state.doc.toString();
+      const segments = view.state.selection.ranges
+        .map((range) => captureMarkdownFormat(source, range.from, range.to))
+        .filter((snapshot): snapshot is FormatPainterSnapshot => Boolean(snapshot));
+      if (segments.length !== view.state.selection.ranges.length) return undefined;
+      const snapshot = getCommonFormatPainterSnapshot(segments.map((segment) => ({
+        styles: segment.styles,
+        types: segment.types,
+      })));
+      if (!snapshot) return undefined;
+      formatPainter = { mode, snapshot };
+      return { styles: { ...snapshot.styles }, types: [...snapshot.types] };
+    },
+
+    applyCapturedFormat(): boolean {
+      if (options.readOnly || !formatPainter) return false;
+      const source = view.state.doc.toString();
+      const changes = view.state.selection.ranges.map((range) => (
+        applyMarkdownFormat(source, range.from, range.to, formatPainter!.snapshot)
+      ));
+      if (changes.some((change) => !change)) return false;
+      const resolved = changes as Array<NonNullable<(typeof changes)[number]>>;
+      let offset = 0;
+      const paintedSelections = resolved.map((change) => {
+        const selection = EditorSelection.range(
+          change.selectionFrom + offset,
+          change.selectionTo + offset,
+        );
+        offset += change.insert.length - (change.to - change.from);
+        return selection;
+      });
+      view.dispatch({
+        changes: resolved.map(({ from, to, insert }) => ({ from, to, insert })),
+        selection: EditorSelection.create(paintedSelections, view.state.selection.mainIndex),
+        scrollIntoView: true,
+      });
+      if (!shouldKeepFormatPainterActive(formatPainter.mode)) formatPainter = null;
+      return true;
+    },
+
+    getFormatPainterState(): { mode: FormatPainterMode; snapshot: FormatPainterSnapshot } | null {
+      return formatPainter ? {
+        mode: formatPainter.mode,
+        snapshot: { styles: { ...formatPainter.snapshot.styles }, types: [...formatPainter.snapshot.types] },
+      } : null;
+    },
+
+    clearFormatPainter(): void {
+      formatPainter = null;
+    },
+
     cursorContext(maxChars = 512): {
       before: string;
       after: string;
@@ -1017,6 +1103,7 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
       externalUpdateListeners.clear();
       documentResetListeners.clear();
       view.contentDOM.removeEventListener("mousedown", onSourceWidgetMouseDown, { capture: true });
+      view.scrollDOM.removeEventListener("scroll", onEditorScroll);
       viewportStabilizer!.destroy();
       view.destroy();
       wrap.remove();
@@ -1202,6 +1289,10 @@ function buildExtensions(
       ...(standalone ? historyKeymap : []),
     ]),
     createMarkdownFeatureExtensions({ initialVisualMode }),
+    headingNumberingExtension({
+      enabled: options.headingNumbering?.enabled ?? false,
+      format: options.headingNumbering?.format ?? "decimal-hierarchical",
+    }),
     highlightActiveLine(),
     EditorView.lineWrapping,
     EditorView.updateListener.of((update) => {

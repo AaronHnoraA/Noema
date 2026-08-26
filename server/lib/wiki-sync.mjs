@@ -598,7 +598,7 @@ function gitFailureMessage(value) {
   return String(value?.stderr || value?.error?.stderr || value?.message || value?.error?.message || value || "Git command failed").trim();
 }
 
-function classifyGitFailure(value) {
+export function classifyGitFailure(value) {
   const message = gitFailureMessage(value);
   const lower = message.toLowerCase();
   if (/non-fast-forward|fetch first|failed to push some refs|stale info/.test(lower)) {
@@ -610,7 +610,14 @@ function classifyGitFailure(value) {
   if (/does not appear to be a git repository|repository .* not found|no such remote|couldn't find remote ref|has no main branch|no configured push destination/.test(lower)) {
     return { errorKind: "configuration", retryable: false, actionRequired: "Check the origin remote and its main branch", message };
   }
-  if (/could not resolve host|connection (timed out|reset|refused)|network is unreachable|remote end hung up|http 5\d\d|operation timed out|temporary failure/.test(lower)) {
+  // `http 5xx` alone only covers Git's smart-HTTP RPC wording. A 5xx or a rate
+  // limit met while fetching or listing refs is reported through curl's
+  // "The requested URL returned error: 503" instead, which used to fall through
+  // to `internal` — one free retry, then a hard stop demanding manual action
+  // for what is by definition a transient server-side fault.
+  if (/could not resolve host|connection (timed out|reset|refused)|network is unreachable|remote end hung up|http (?:5\d\d|429)|operation timed out|temporary failure/.test(lower)
+    || /requested url returned error: (?:5\d\d|429)/.test(lower)
+    || /failed to connect to|service unavailable|bad gateway|gateway time-?out|early eof|unexpected disconnect/.test(lower)) {
     return { errorKind: "network", retryable: true, message };
   }
   if (/untracked working tree files would be overwritten|local changes .* would be overwritten|would be overwritten by (merge|checkout)|unable to create .*index\.lock/.test(lower)) {

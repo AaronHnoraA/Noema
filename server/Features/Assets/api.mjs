@@ -5,6 +5,13 @@ export function createAssetsApiHandlers({
   renderTikzAsset,
   scanUnusedAssets,
   trashUnusedAssets,
+  inspectAssets,
+  renameAsset,
+  searchAssetContent,
+  startObsidianAnalysis,
+  readObsidianTask,
+  startObsidianImport,
+  cancelObsidianTask,
   readSystemClipboard,
 }) {
   return {
@@ -17,6 +24,13 @@ export function createAssetsApiHandlers({
       root: noteRoot,
     }),
     "aaronnote:api:assets:trash-orphans": (files) => trashUnusedAssets({ files }),
+    "aaronnote:api:assets:inspect": () => inspectAssets(),
+    "aaronnote:api:assets:rename": (body) => renameAsset(body || {}),
+    "aaronnote:api:assets:search-content": (body) => searchAssetContent(body || {}),
+    "aaronnote:api:imports:obsidian-analyze": (body) => startObsidianAnalysis(body || {}),
+    "aaronnote:api:imports:obsidian-task": (body) => readObsidianTask(body || {}),
+    "aaronnote:api:imports:obsidian-start": (body) => startObsidianImport(body || {}),
+    "aaronnote:api:imports:obsidian-cancel": (body) => cancelObsidianTask(body || {}),
     "aaronnote:api:clipboard:read": (body) => readSystemClipboard(body || {}),
   };
 }

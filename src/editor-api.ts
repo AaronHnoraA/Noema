@@ -1,6 +1,8 @@
 import type { EditorView, ViewUpdate } from "@codemirror/view";
 
 import { createEditorCM6 } from "./cm6/editor-cm6.ts";
+import type { FormatPainterMode, FormatPainterSnapshot } from "./format-painter.ts";
+import type { HeadingNumberFormat } from "./heading-number.ts";
 import type {
   EditorClipboardPayload,
   EditorPasteAssetStore,
@@ -42,6 +44,11 @@ export interface EditorOptions {
   readOnly?: boolean;
   /** Read-only website surface: keep rendered widgets passive instead of revealing authoring source. */
   passiveReader?: boolean;
+  /** Ephemeral visual heading numbers. They never alter Markdown source. */
+  headingNumbering?: {
+    enabled?: boolean;
+    format?: HeadingNumberFormat;
+  };
 }
 
 export type EditorCommand =
@@ -501,6 +508,16 @@ export interface Editor {
   runQuickInsert(item: QuickInsertItem): boolean;
   /** Toggle writing affordances without changing markdown. */
   setWritingMode(options: WritingModeOptions): void;
+  /** Configure visual-only automatic heading numbering. */
+  setHeadingNumbering(options: { enabled?: boolean; format?: HeadingNumberFormat }): void;
+  /** Copy the Markdown marks shared by the current source selection(s). */
+  captureFormat(mode?: FormatPainterMode): FormatPainterSnapshot | undefined;
+  /** Apply the copied marks to the current source selection(s). */
+  applyCapturedFormat(): boolean;
+  /** Current source-owned format painter state, if active. */
+  getFormatPainterState(): { mode: FormatPainterMode; snapshot: FormatPainterSnapshot } | null;
+  /** Cancel a pending once/continuous format painter. */
+  clearFormatPainter(): void;
   /** Text and viewport rect around the active cursor, for completions/previews. */
   cursorContext(maxChars?: number): {
     before: string;

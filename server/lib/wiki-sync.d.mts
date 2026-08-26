@@ -84,6 +84,12 @@ export function checkpointWikiRepository(root: string, repositoryId: string, opt
   WikiSyncState & { ok: true; type: "wiki-checkpoint"; repository: WikiRepository }
 >;
 export function syncWikiRepository(root: string, repositoryId: string, options?: Record<string, unknown>): Promise<WikiSyncState>;
+export function classifyGitFailure(value: unknown): {
+  errorKind: "remote-race" | "authentication" | "configuration" | "network" | "workspace" | "internal";
+  retryable: boolean;
+  actionRequired?: string;
+  message: string;
+};
 export function defaultWikiSyncIntervalMs(): number;
 export function defaultWikiGitMaintenanceBytes(): number;
 export function readWikiConflict(root: string, body?: Record<string, unknown>): Promise<{

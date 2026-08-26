@@ -1,5 +1,6 @@
 import { auditB3ComponentSystem } from "../src/b3-component-system.ts";
 import { auditVisualTypography } from "../src/cm6/extensions/visual/typography.ts";
+import { auditProductionHandfeel } from "../src/cm6/production-handfeel-audit.ts";
 
 /** Host-neutral packaged desktop smoke harness. */
 const desktopSmokeParams = new URL(location.href).searchParams;
@@ -26,6 +27,19 @@ if (desktopSmokeParams.get("desktopSmoke") === "1") {
       }
       await new Promise<void>((resolve) => setTimeout(resolve, 100));
     }
+    const workspaceRoot = document.querySelector<HTMLElement>(".noema-desktop-workspace.noema-workspace-layout");
+    const initialWorkspaceLeaves = workspaceRoot?.querySelectorAll(".noema-workspace-leaf").length || 0;
+    window.dispatchEvent(new CustomEvent("aaronnote:command", {
+      detail: { command: "workspace-split-right" },
+    }));
+    await new Promise<void>((resolve) => setTimeout(resolve, 40));
+    const splitWorkspaceLeaves = workspaceRoot?.querySelectorAll(".noema-workspace-leaf").length || 0;
+    const splitWorkspaceFrames = workspaceRoot?.querySelectorAll(".noema-workspace-editor-frame").length || 0;
+    window.dispatchEvent(new CustomEvent("aaronnote:command", {
+      detail: { command: "workspace-close-active" },
+    }));
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    const restoredWorkspaceLeaves = workspaceRoot?.querySelectorAll(".noema-workspace-leaf").length || 0;
     const knowledgeDock = document.querySelector<HTMLElement>(".noema-knowledge-dock");
     let tocPopover: HTMLElement | null = null;
     let tocVisible = false;
@@ -34,6 +48,8 @@ if (desktopSmokeParams.get("desktopSmoke") === "1") {
     let dockOpenedByDoubleClick = false;
     let tagStatus = "";
     let tagItems: string[] = [];
+    let mentionStatus = "";
+    let mentionItems: string[] = [];
     if (knowledgeDock) {
       window.dispatchEvent(new CustomEvent("aaronnote:command", {
         detail: { command: "toggle-toc" },
@@ -58,6 +74,17 @@ if (desktopSmokeParams.get("desktopSmoke") === "1") {
       tagStatus = knowledgeDock.querySelector<HTMLElement>("[data-knowledge-tag-status]")
         ?.textContent?.trim() || "";
       tagItems = Array.from(knowledgeDock.querySelectorAll<HTMLElement>(".noema-knowledge-tag > span"))
+        .map((item) => item.textContent?.trim() || "");
+      window.dispatchEvent(new CustomEvent("aaronnote:command", {
+        detail: { command: "knowledge-mentions" },
+      }));
+      const mentionDeadline = Date.now() + 4_000;
+      do {
+        await new Promise<void>((resolve) => setTimeout(resolve, 50));
+        mentionStatus = knowledgeDock.querySelector<HTMLElement>("[data-knowledge-mention-status]")
+          ?.textContent?.trim() || "";
+      } while ((!mentionStatus || mentionStatus.startsWith("Scanning")) && Date.now() < mentionDeadline);
+      mentionItems = Array.from(knowledgeDock.querySelectorAll<HTMLElement>("[data-knowledge-mention-list] strong"))
         .map((item) => item.textContent?.trim() || "");
       window.dispatchEvent(new CustomEvent("aaronnote:command", {
         detail: { command: "knowledge-backlinks" },
@@ -130,6 +157,17 @@ if (desktopSmokeParams.get("desktopSmoke") === "1") {
       theme,
       b3Components,
       visualTypography: auditVisualTypography(document),
+      productionHandfeel: auditProductionHandfeel(document),
+      workspaceLayout: workspaceRoot ? {
+        version: workspaceRoot.dataset.workspaceLayoutVersion || "",
+        initialLeaves: initialWorkspaceLeaves,
+        splitLeaves: splitWorkspaceLeaves,
+        lazyFrames: splitWorkspaceFrames,
+        restoredLeaves: restoredWorkspaceLeaves,
+        splitControls: workspaceRoot.querySelectorAll("[data-noema-workspace-split]").length,
+        rails: Array.from(document.querySelectorAll<HTMLElement>("[data-noema-dock-rail]"))
+          .map((rail) => rail.dataset.noemaDockRail || ""),
+      } : null,
       tocPopover: tocPopover ? {
         visible: tocVisible,
         status: tocStatus,
@@ -143,12 +181,16 @@ if (desktopSmokeParams.get("desktopSmoke") === "1") {
           .map((tab) => tab.textContent?.trim() || ""),
         tagStatus,
         tagItems,
+        mentionStatus,
+        mentionItems,
         backlinksStatus: knowledgeDock.querySelector<HTMLElement>("[data-knowledge-backlink-status]")
           ?.textContent?.trim() || "",
         top: dockBounds?.top || 0,
         bottom: dockBounds?.bottom || 0,
         width: dockBounds?.width || 0,
         editorClearsDock: Boolean(editorBounds && dockBounds && editorBounds.right <= dockBounds.left + 1),
+        position: knowledgeDock.dataset.noemaDockPosition || "",
+        pinned: knowledgeDock.dataset.noemaDockPinned || "",
       } : null,
       agendaDock: agendaDock ? {
         visible: !agendaDock.hidden && Boolean(agendaBounds?.height),
@@ -162,6 +204,8 @@ if (desktopSmokeParams.get("desktopSmoke") === "1") {
         height: agendaBounds?.height || 0,
         editorClearsDock: Boolean(editorBounds && agendaBounds && editorBounds.bottom <= agendaBounds.top + 1),
         clearsKnowledgeDock: Boolean(!dockBounds || !agendaBounds || agendaBounds.right <= dockBounds.left + 1),
+        position: agendaDock.dataset.noemaDockPosition || "",
+        pinned: agendaDock.dataset.noemaDockPinned || "",
       } : null,
       katexMacros,
       kernel: backendKernel,

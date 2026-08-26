@@ -1,6 +1,6 @@
 import type { NoteSummary } from "./types.ts";
 
-export type KnowledgeDockView = "backlinks" | "graph" | "search" | "tags";
+export type KnowledgeDockView = "backlinks" | "mentions" | "graph" | "search" | "tags";
 
 export type KnowledgeBacklink = {
   key: string;
@@ -16,6 +16,16 @@ export type KnowledgeTagItem = {
   name: string;
   count: number;
   current?: boolean;
+};
+
+export type KnowledgeVirtualMention = {
+  sourceId: string;
+  sourceTitle: string;
+  file: string;
+  count: number;
+  keywords: string[];
+  snippet: string;
+  note?: NoteSummary | null;
 };
 
 export type DesktopKnowledgeDock = {
@@ -35,6 +45,8 @@ type DesktopKnowledgeDockOptions = {
   panes: Record<KnowledgeDockView, HTMLElement>;
   backlinkList: HTMLElement;
   backlinkStatus: HTMLElement;
+  mentionList: HTMLElement;
+  mentionStatus: HTMLElement;
   tagList: HTMLElement;
   tagStatus: HTMLElement;
   searchInput: HTMLInputElement;
@@ -43,6 +55,7 @@ type DesktopKnowledgeDockOptions = {
   relationshipSource?: () => string;
   openNote: (note: NoteSummary, options?: { newWindow?: boolean }) => void;
   getTags: () => KnowledgeTagItem[];
+  getVirtualMentions: () => Promise<{ mentions?: KnowledgeVirtualMention[]; evaluationSource?: string; scannedDocuments?: number }>;
   openTag: (tag: string) => void;
   onStateChange?: (view: KnowledgeDockView, expanded: boolean) => void;
   onGraphVisible: () => void;
@@ -87,6 +100,7 @@ export function projectKnowledgeBacklinks(
 export function createDesktopKnowledgeDock(options: DesktopKnowledgeDockOptions): DesktopKnowledgeDock {
   let view: KnowledgeDockView = "backlinks";
   let destroyed = false;
+  let mentionGeneration = 0;
 
   const expanded = (): boolean => !options.root.classList.contains("is-collapsed");
 
@@ -182,8 +196,50 @@ export function createDesktopKnowledgeDock(options: DesktopKnowledgeDockOptions)
     appendGroup(current.length ? "Workspace" : "All tags", workspace);
   };
 
+  const renderMentions = async (): Promise<void> => {
+    const generation = ++mentionGeneration;
+    options.mentionList.replaceChildren();
+    options.mentionStatus.textContent = "Scanning unlinked mentions…";
+    try {
+      const result = await options.getVirtualMentions();
+      if (destroyed || generation !== mentionGeneration) return;
+      const mentions = Array.isArray(result.mentions) ? result.mentions : [];
+      const source = result.evaluationSource === "noema-aho-corasick" ? " · Aho–Corasick · 10m cache" : "";
+      options.mentionStatus.textContent = `${mentions.length} source${mentions.length === 1 ? "" : "s"}${source}`;
+      if (!mentions.length) {
+        const empty = document.createElement("p");
+        empty.className = "noema-knowledge-dock-empty";
+        empty.textContent = "No unlinked title or alias mentions found.";
+        options.mentionList.appendChild(empty);
+        return;
+      }
+      for (const mention of mentions) {
+        const item = document.createElement(mention.note ? "button" : "div");
+        item.className = "noema-knowledge-backlink noema-knowledge-mention";
+        if (item instanceof HTMLButtonElement) {
+          item.type = "button";
+          item.addEventListener("click", (event) => {
+            if (mention.note) options.openNote(mention.note, { newWindow: event.metaKey || event.ctrlKey || event.altKey });
+          });
+        }
+        const title = document.createElement("strong");
+        title.textContent = `${mention.sourceTitle || mention.file || "Untitled"} · ${mention.count}`;
+        const detail = document.createElement("small");
+        detail.textContent = mention.keywords.map((keyword) => `“${keyword}”`).join(", ");
+        const snippet = document.createElement("span");
+        snippet.textContent = mention.snippet;
+        item.append(title, detail, snippet);
+        options.mentionList.appendChild(item);
+      }
+    } catch (error) {
+      if (destroyed || generation !== mentionGeneration) return;
+      options.mentionStatus.textContent = error instanceof Error ? error.message : "Virtual reference scan failed";
+    }
+  };
+
   const renderActiveView = (): void => {
     if (view === "backlinks") renderBacklinks();
+    else if (view === "mentions") void renderMentions();
     else if (view === "tags") renderTags();
   };
 
@@ -251,6 +307,7 @@ export function createDesktopKnowledgeDock(options: DesktopKnowledgeDockOptions)
     destroy() {
       if (destroyed) return;
       destroyed = true;
+      mentionGeneration++;
       options.onCollapse();
       setExpanded(false);
       for (const button of options.tabButtons) button.removeEventListener("click", onTabClick);

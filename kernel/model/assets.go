@@ -1148,7 +1148,11 @@ func GetAssetAbsPathInBox(relativePath, boxID string) (string, error) {
 		}
 		// 解析符号链接/目录联接，防止软链接跳出资产根目录
 		if realP, evalErr := filepath.EvalSymlinks(p); evalErr == nil && realP != p {
-			if !gulu.File.IsSubPath(util.WorkspaceDir, realP) {
+			realWorkspace := util.WorkspaceDir
+			if resolved, resolveErr := filepath.EvalSymlinks(util.WorkspaceDir); resolveErr == nil {
+				realWorkspace = resolved
+			}
+			if !gulu.File.IsSubPath(realWorkspace, realP) {
 				return "", fmt.Errorf("symlink [%s] resolves outside workspace: [%s]", p, realP)
 			}
 			// 验证解析后的路径仍在 <boxID>/assets/ 或全局 data/assets/ 下
@@ -1156,7 +1160,11 @@ func GetAssetAbsPathInBox(relativePath, boxID string) (string, error) {
 			if boxID != "" {
 				expectedPrefix = filepath.Join(util.DataDir, boxID, "assets")
 			}
-			if !gulu.File.IsSubPath(expectedPrefix, realP) {
+			realExpectedPrefix := expectedPrefix
+			if resolved, resolveErr := filepath.EvalSymlinks(expectedPrefix); resolveErr == nil {
+				realExpectedPrefix = resolved
+			}
+			if !gulu.File.IsSubPath(realExpectedPrefix, realP) {
 				return "", fmt.Errorf("symlink [%s] resolves outside assets directory: [%s]", p, realP)
 			}
 		}
@@ -2059,7 +2067,19 @@ func missingAssetItems(referenceBlockIDs map[missingAssetReference]map[string]bo
 
 func assetReferenceExists(reference missingAssetReference, assetsPathMap map[string]string) bool {
 	if reference.encrypted {
-		_, err := GetAssetAbsPathInBox(reference.rawDest, reference.boxID)
+		cleanPath, boxID, err := assetPathAndBox(reference.rawDest, reference.boxID)
+		if nil != err || boxID != reference.boxID {
+			return false
+		}
+		cleanPath = path.Clean(cleanPath)
+		if !strings.HasPrefix(cleanPath, "assets/") || strings.HasPrefix(cleanPath, "../") || path.IsAbs(cleanPath) {
+			return false
+		}
+		candidate := filepath.Join(util.DataDir, reference.boxID, filepath.FromSlash(cleanPath))
+		if !filelock.IsExist(candidate) {
+			return false
+		}
+		_, err = GetAssetAbsPathInBox(reference.rawDest, reference.boxID)
 		return nil == err
 	}
 

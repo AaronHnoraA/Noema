@@ -29,10 +29,10 @@ import (
 	"time"
 
 	"github.com/88250/gulu"
-	"github.com/gin-gonic/gin"
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/model"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/gin-gonic/gin"
+	"github.com/siyuan-note/logging"
 )
 
 const stagedSYImportTTL = 30 * time.Minute
@@ -698,6 +698,30 @@ func startObsidianVaultImport(c *gin.Context) {
 		return
 	}
 	task, err := model.StartObsidianVaultImport(taskID, notebookName)
+	if err != nil {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+	ret.Data = task
+}
+
+func startObsidianVaultMarkdownImport(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+
+	arg, ok := util.JsonArg(c, ret)
+	if !ok {
+		return
+	}
+	var taskID, notebook, destination string
+	if !util.ParseJsonArgs(arg, ret,
+		util.BindJsonArg("taskID", &taskID, true, true),
+		util.BindJsonArg("notebook", &notebook, true, true),
+		util.BindJsonArg("destination", &destination, true, true)) || util.InvalidIDPattern(taskID, ret) {
+		return
+	}
+	task, err := model.StartObsidianVaultMarkdownImport(taskID, notebook, destination)
 	if err != nil {
 		ret.Code = -1
 		ret.Msg = err.Error()

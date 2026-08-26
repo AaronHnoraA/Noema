@@ -389,6 +389,33 @@ export function continueMarkdownQuote(view: EditorView): boolean {
   return true;
 }
 
+/**
+ * The prefix a new line must start with to continue TEXT's Markdown block —
+ * its list marker, task box, quote marker, or just its indentation.
+ *
+ * Shared so that opening a line (Vim's `o`/`O`) and pressing Enter agree.
+ * `openLine` used to copy only the leading whitespace, so `o` on `- item` gave
+ * a bare indented line while Enter gave `- `. An item with no content yields
+ * bare indentation, matching the way Enter declines to continue an empty item.
+ */
+export function markdownContinuationPrefix(text: string): string {
+  const markup = text.match(CONTINUE_MARKUP_RE);
+  if (markup && (markup[7] ?? "").trim().length > 0) {
+    const task = markup[3];
+    const bullet = markup[4];
+    const ordered = markup[5];
+    const marker = task
+      ? task
+      : bullet
+        ? `${bullet} `
+        : `${Number(ordered) + 1}${markup[6] ?? "."} `;
+    return `${markup[1] ?? ""}${markup[2] ?? ""}${marker}`;
+  }
+  const quote = text.match(CONTINUE_QUOTE_RE);
+  if (quote && (quote[2] ?? "").trim().length > 0) return quote[1] ?? "";
+  return text.match(/^[ \t]*/u)?.[0] ?? "";
+}
+
 export function continueMarkdownBlock(view: EditorView): boolean {
   return continueMarkdownMarkup(view) || continueMarkdownQuote(view);
 }

@@ -41,10 +41,10 @@ import (
 	"github.com/88250/lute/ast"
 	"github.com/88250/lute/parse"
 	"github.com/88250/lute/render"
-	"github.com/siyuan-note/filelock"
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/siyuan-note/filelock"
+	"github.com/siyuan-note/logging"
 )
 
 const (
@@ -108,6 +108,8 @@ type ObsidianVaultImportResult struct {
 	SkippedPathCount         int    `json:"skippedPathCount"`
 	Incomplete               bool   `json:"incomplete"`
 	FailedStage              string `json:"failedStage,omitempty"`
+	Destination              string `json:"destination,omitempty"`
+	Source                   string `json:"source,omitempty"`
 }
 
 type ObsidianVaultTask struct {
@@ -570,7 +572,7 @@ func validateObsidianVaultRoot(localPath string) (string, error) {
 	if !info.IsDir() {
 		return "", errObsidianVaultNotDirectory
 	}
-	if info.Mode()&os.ModeSymlink != 0 || isObsidianResolvedLink(abs) {
+	if info.Mode()&os.ModeSymlink != 0 || runtime.GOOS == "windows" && isObsidianResolvedLink(abs) {
 		return "", fmt.Errorf("%w: Vault root is a symbolic link or reparse point", errObsidianVaultUnsafePath)
 	}
 	if util.IsSensitivePath(abs) {
@@ -588,7 +590,7 @@ func validateObsidianVaultRoot(localPath string) (string, error) {
 		}
 		return "", fmt.Errorf("%w: read Vault config directory: %v", errObsidianVaultUnreadable, statErr)
 	}
-	if !configInfo.IsDir() || configInfo.Mode()&os.ModeSymlink != 0 || isObsidianResolvedLink(configPath) {
+	if !configInfo.IsDir() || configInfo.Mode()&os.ModeSymlink != 0 || runtime.GOOS == "windows" && isObsidianResolvedLink(configPath) {
 		return "", errObsidianVaultConfigMissing
 	}
 	return abs, nil
@@ -625,7 +627,7 @@ func scanObsidianVaultFiles(ctx context.Context, vault *obsidianVaultContext, re
 			vault.Analysis.Warnings = append(vault.Analysis.Warnings, rel)
 			continue
 		}
-		if entry.Type()&os.ModeSymlink != 0 || entryInfo.Mode()&os.ModeSymlink != 0 || isObsidianResolvedLink(abs) {
+		if entry.Type()&os.ModeSymlink != 0 || entryInfo.Mode()&os.ModeSymlink != 0 || runtime.GOOS == "windows" && isObsidianResolvedLink(abs) {
 			vault.Analysis.SkippedLinkCount++
 			continue
 		}

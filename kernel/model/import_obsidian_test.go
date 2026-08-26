@@ -22,8 +22,22 @@ import (
 	"github.com/aaronhe/noema/kernel/treenode"
 )
 
+func newObsidianTestRoot(t *testing.T) string {
+	t.Helper()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.MkdirTemp(home, ".noema-obsidian-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	return root
+}
+
 func TestAnalyzeObsidianVault(t *testing.T) {
-	root := t.TempDir()
+	root := newObsidianTestRoot(t)
 	if err := os.Mkdir(filepath.Join(root, ".obsidian"), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +67,7 @@ func TestAnalyzeObsidianVault(t *testing.T) {
 }
 
 func TestRevalidateObsidianVaultDetectsAttachmentListChanges(t *testing.T) {
-	root := t.TempDir()
+	root := newObsidianTestRoot(t)
 	if err := os.Mkdir(filepath.Join(root, ".obsidian"), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +93,7 @@ func TestRevalidateObsidianVaultDetectsAttachmentListChanges(t *testing.T) {
 }
 
 func TestObsidianVaultValidationErrors(t *testing.T) {
-	notDirectory := filepath.Join(t.TempDir(), "vault.md")
+	notDirectory := filepath.Join(newObsidianTestRoot(t), "vault.md")
 	if err := os.WriteFile(notDirectory, []byte("content"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -87,12 +101,12 @@ func TestObsidianVaultValidationErrors(t *testing.T) {
 		t.Fatalf("unexpected non-directory error: %v", err)
 	}
 
-	missingConfig := t.TempDir()
+	missingConfig := newObsidianTestRoot(t)
 	if _, err := validateObsidianVaultRoot(missingConfig); !errors.Is(err, errObsidianVaultConfigMissing) || obsidianVaultErrorLanguage(err) != 339 {
 		t.Fatalf("unexpected missing config error: %v", err)
 	}
 
-	missingMarkdown := t.TempDir()
+	missingMarkdown := newObsidianTestRoot(t)
 	if err := os.Mkdir(filepath.Join(missingMarkdown, ".obsidian"), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +117,7 @@ func TestObsidianVaultValidationErrors(t *testing.T) {
 }
 
 func TestAnalyzeObsidianVaultReportsMarkdownEncodingPath(t *testing.T) {
-	root := t.TempDir()
+	root := newObsidianTestRoot(t)
 	if err := os.Mkdir(filepath.Join(root, ".obsidian"), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -379,6 +393,36 @@ func TestTransformAndParseObsidianMarkdown(t *testing.T) {
 	}
 }
 
+func TestTransformObsidianMarkdownNativePreservesRepositoryFiles(t *testing.T) {
+	current := newObsidianTestDoc("Folder/Current")
+	current.Source = &obsidianSourceFile{RelPath: "Folder/Current.md"}
+	note := newObsidianTestDoc("Notes/Note")
+	note.Source = &obsidianSourceFile{RelPath: "Notes/Note.md"}
+	image := &obsidianAssetPlan{Source: &obsidianSourceFile{RelPath: "Folder/image.png"}}
+	vault := &obsidianVaultContext{
+		DocsByRel: map[string]*obsidianDocPlan{
+			obsidianPathKey(current.RelPath): current,
+			obsidianPathKey(note.RelPath):    note,
+		},
+		DocsByBase: map[string][]*obsidianDocPlan{"current": {current}, "note": {note}},
+		Assets:     map[string]*obsidianAssetPlan{obsidianPathKey(image.Source.RelPath): image},
+	}
+	currentID := "0198fc34-7b32-7a11-8cb4-6c40e3b33d68"
+	targetID := "0198fc34-7b32-7a11-8cb4-6c40e3b33d69"
+	converted, links, embeds := transformObsidianMarkdownNative(vault, current, []byte(
+		"See [[../Notes/Note|the note]] and [[../Notes/Note#^target|claim]].\n\n![[image.png]]\n\nParagraph ^current\n"), map[string]map[string]string{
+		obsidianPathKey(current.RelPath): {"current": currentID},
+		obsidianPathKey(note.RelPath):    {"target": targetID},
+	})
+	want := "See [the note](../Notes/Note.md) and ((" + targetID + " \"claim\")).\n\n![image.png](image.png)\n\nParagraph {#" + currentID + "}\n"
+	if string(converted) != want {
+		t.Fatalf("native transform mismatch\ngot:  %q\nwant: %q", converted, want)
+	}
+	if links != 3 || embeds != 1 {
+		t.Fatalf("native conversion counters = (%d, %d), want (3, 1)", links, embeds)
+	}
+}
+
 func TestObsidianBlockIDsOnStructuredBlocks(t *testing.T) {
 	doc := newObsidianTestDoc("Current")
 	doc.TargetPath = "/" + doc.ID + ".sy"
@@ -471,7 +515,7 @@ func TestParseObsidianCalloutAndCustomTaskMarker(t *testing.T) {
 }
 
 func TestStartObsidianVaultAnalysisReplacesPreImportTask(t *testing.T) {
-	root := t.TempDir()
+	root := newObsidianTestRoot(t)
 	if err := os.Mkdir(filepath.Join(root, ".obsidian"), 0755); err != nil {
 		t.Fatal(err)
 	}

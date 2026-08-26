@@ -14,7 +14,12 @@ import { markdownLinkDestination } from "./markdown-link.ts";
 import { safeHref } from "./url-safety.ts";
 import { scanInlineCommands } from "./command-syntax.ts";
 import { semanticOutlineFromCommand } from "./semantic-outline.ts";
-import { parseOrgEnvIdentityTitle, shortBlockId } from "../shared/block-identity.mjs";
+import {
+  BLOCK_ANCHOR_SOURCE,
+  BLOCK_REFERENCE_ID_SOURCE,
+  parseOrgEnvIdentityTitle,
+  shortBlockId,
+} from "../shared/block-identity.mjs";
 import { wikiHrefForTarget } from "../shared/wiki-link.mjs";
 import { renderTikzIframe } from "./tikz-render.ts";
 import {
@@ -63,6 +68,11 @@ export type RenderPublishedNoteOptions = {
   private?: boolean;
   includePrivateContent?: boolean;
   assetResolver?: (src: string) => string;
+  standalone?: {
+    styles: string;
+    themeId?: string;
+    alternateThemeId?: string;
+  };
 };
 
 export {
@@ -949,6 +959,13 @@ function wikiLinkRule(state: StateInline, silent: boolean): boolean {
   return true;
 }
 
+/** `attrJoin` appends unconditionally; this keeps a class list a set. */
+function joinNewClasses(token: Token, ...names: readonly string[]): void {
+  const present = new Set(String(token.attrGet("class") || "").split(/\s+/u).filter(Boolean));
+  const added = names.filter((name) => !present.has(name));
+  if (added.length > 0) token.attrJoin("class", added.join(" "));
+}
+
 function applyLayoutToToken(token: Token, kind: string, layout: LayoutAttrs): void {
   token.attrJoin("class", layoutClasses(kind, layout));
   token.attrSet("data-aaronnote-layout", kind);
@@ -1157,6 +1174,141 @@ function aaronnoteCalloutsRule(state: StateCore): void {
   }
 }
 
+/**
+ * Noema block identity in exported/published HTML.
+ *
+ * The editor already projects a trailing `{#id}` anchor into a quiet badge
+ * (`block-anchor.ts`) and an `((id "label"))` reference into a link chip
+ * (`block-ref.ts`), and `renderOrgEnv` above does the same for org-environment
+ * identities. Ordinary paragraphs, headings and list items had no such rule
+ * here, so every anchored block exported its raw `{#0198fbac-…}` and every
+ * reference exported its raw `((…))` source instead of the anchor text.
+ *
+ * This runs as a core rule rather than an inline rule because markdown-it's
+ * `text` rule only stops on its terminator set, and `(` is not in it — an
+ * inline rule for `((id))` would never be reached. Splitting already-tokenized
+ * `text` children also makes code spans and math immune for free: by this
+ * point they are `code_inline` / `math_inline` tokens, not text.
+ */
+// Named groups for the reference half: BLOCK_ANCHOR_SOURCE contributes capture
+// groups of its own, so positional indices here would silently shift if the
+// shared anchor grammar ever grows one.
+const BLOCK_IDENTITY_RE = new RegExp(
+  `${BLOCK_ANCHOR_SOURCE}`
+  + `|\\(\\((?<refId>${BLOCK_REFERENCE_ID_SOURCE})`
+  + `(?:\\s+(?<quote>["'])(?<label>(?:\\\\.|(?!\\k<quote>)[\\s\\S])*)\\k<quote>)?\\)\\)`,
+  "g",
+);
+
+/**
+ * Spans of raw inline source that must stay literal: code spans and inline
+ * math. Mirrors `excludedRanges` in block-anchor.ts / block-ref.ts, which do
+ * the same job against the CodeMirror document.
+ */
+function literalInlineRanges(source: string): Array<{ from: number; to: number }> {
+  const ranges: Array<{ from: number; to: number }> = [];
+  for (let pos = 0; pos < source.length; pos++) {
+    if (source[pos] === "\\" && source[pos + 1] === "(") {
+      const end = source.indexOf("\\)", pos + 2);
+      const newline = source.indexOf("\n", pos);
+      if (end > pos + 2 && (newline < 0 || newline > end)) {
+        ranges.push({ from: pos, to: end + 2 });
+        pos = end + 1;
+      }
+      continue;
+    }
+    if (source[pos] !== "`" || markdownEscapedAt(source, pos)) continue;
+    let run = 0;
+    while (source[pos + run] === "`") run++;
+    const fence = "`".repeat(run);
+    const close = source.indexOf(fence, pos + run);
+    // An unclosed backtick run is literal text, not an open code span.
+    if (close < 0 || source[close + run] === "`") { pos += run - 1; continue; }
+    ranges.push({ from: pos, to: close + run });
+    pos = close + run - 1;
+  }
+  return ranges;
+}
+
+/**
+ * Rebuild one inline token's children around the block identities in its raw
+ * source.
+ *
+ * Scanning the raw `content` rather than the already-tokenized children is what
+ * makes a label like `"a*b*c"` work: by the time children exist, markdown-it has
+ * split that label across `em_open`/`text`/`em_close`, and no per-child scan can
+ * put it back together. Each surviving text segment is re-tokenized the way
+ * aaronnoteCalloutsRule re-tokenizes a callout title.
+ */
+function blockIdentityChildren(state: StateCore, token: Token): Token[] | null {
+  const source = token.content;
+  // `matchAll` clones the regex, so every match is collected before the first
+  // `parseInline` below re-enters this rule. Driving the shared `g`-flagged
+  // regex with `exec` across those recursive calls would reset `lastIndex`
+  // under the loop and never terminate.
+  const matches = [...source.matchAll(BLOCK_IDENTITY_RE)];
+  if (matches.length === 0) return null;
+
+  const literal = literalInlineRanges(source);
+  const children: Token[] = [];
+  let last = 0;
+  let matched = false;
+
+  const pushSegment = (value: string): void => {
+    if (!value) return;
+    const parsed = state.md.parseInline(value, state.env as Record<string, unknown>);
+    children.push(...(parsed[0]?.children ?? []));
+  };
+
+  for (const match of matches) {
+    const from = match.index;
+    const to = from + match[0].length;
+    if (literal.some((range) => from >= range.from && to <= range.to)) continue;
+    pushSegment(source.slice(last, from));
+    last = to;
+    matched = true;
+    const anchorId = match[1];
+    const groups = match.groups ?? {};
+    const identity = new state.Token(anchorId ? "block_anchor" : "block_reference", "span", 0);
+    identity.meta = anchorId
+      ? { blockId: anchorId }
+      : {
+          blockId: groups.refId ?? "",
+          label: groups.label == null ? "" : groups.label.replace(/\\(.)/gu, "$1"),
+        };
+    children.push(identity);
+  }
+  if (!matched) return null;
+  pushSegment(source.slice(last));
+  return children;
+}
+
+function blockIdentityRule(state: StateCore): void {
+  for (const token of state.tokens) {
+    if (token.type !== "inline" || !token.children) continue;
+    const children = blockIdentityChildren(state, token);
+    if (children) token.children = children;
+  }
+}
+
+function renderBlockAnchor(tokens: Token[], idx: number): string {
+  const blockId = String(tokens[idx]?.meta?.blockId || "");
+  if (!blockId) return "";
+  // `aria-*` is stripped from exported HTML by cleanEditorHTML, so the full id
+  // travels in `title` (hover) and `data-block-id` (hydration) instead.
+  return `<span class="cm-noema-block-id" data-block-id="${escapeAttr(blockId)}"`
+    + ` title="${escapeAttr(blockId)}">#${escapeHtml(shortBlockId(blockId))}</span>`;
+}
+
+function renderBlockReference(tokens: Token[], idx: number): string {
+  const meta = tokens[idx]?.meta as { blockId?: string; label?: string } | undefined;
+  const blockId = String(meta?.blockId || "");
+  if (!blockId) return "";
+  const label = meta?.label || `#${shortBlockId(blockId)}`;
+  return `<span class="cm-block-ref" data-block-ref="${escapeAttr(blockId)}"`
+    + ` title="${escapeAttr(blockId)}">${escapeHtml(label)}</span>`;
+}
+
 function createMarkdownIt(options: RenderMarkdownHTMLOptions): MarkdownIt {
   const md = new MarkdownIt({
     html: options.allowHtml === true,
@@ -1173,6 +1325,7 @@ function createMarkdownIt(options: RenderMarkdownHTMLOptions): MarkdownIt {
   md.block.ruler.before("paragraph", "private_command_line", privateCommandLineRule, { alt: ["paragraph"] });
   md.block.ruler.before("reference", "footnote_definition", footnoteDefinitionRule, { alt: ["paragraph", "reference", "blockquote"] });
   md.core.ruler.push("aaronnote_callouts", aaronnoteCalloutsRule);
+  md.core.ruler.push("noema_block_identity", blockIdentityRule);
   md.inline.ruler.before("link", "empty_html_link_embed", emptyHtmlLinkEmbedRule);
   md.inline.ruler.before("link", "spaced_fragment_link", spacedFragmentLinkRule);
   md.inline.ruler.before("link", "jupyter_link", jupyterLinkRule);
@@ -1194,6 +1347,8 @@ function createMarkdownIt(options: RenderMarkdownHTMLOptions): MarkdownIt {
   md.renderer.rules.comment_inline = renderCommentInline;
   md.renderer.rules.side_comment_inline = renderSideCommentInline;
   md.renderer.rules.private_inline = () => "";
+  md.renderer.rules.block_anchor = renderBlockAnchor;
+  md.renderer.rules.block_reference = renderBlockReference;
   md.renderer.rules.footnote_reference = (tokens, idx, _opts, env) => {
     const meta = tokens[idx]!.meta as FootnoteTokenMeta;
     const state = ensureFootnoteEnvironment(env as Record<string, unknown>);
@@ -1233,7 +1388,9 @@ function createMarkdownIt(options: RenderMarkdownHTMLOptions): MarkdownIt {
       const attrIndex = token.attrIndex("href");
       if (attrIndex >= 0) token.attrs?.splice(attrIndex, 1);
     } else if (href && isRoamCoreHref(href)) {
-      token.attrJoin("class", "aaronnote-roam-link noema-internal-link");
+      // wikiLinkRule already marks its own links internal, so plain attrJoin
+      // emitted `noema-internal-link` twice on every [[wiki link]].
+      joinNewClasses(token, "aaronnote-roam-link", "noema-internal-link");
       token.attrSet("data-roam-link", "true");
       token.attrSet("data-internal-link", "true");
     } else if (href && isJupyterHref(href)) {
@@ -1317,6 +1474,7 @@ export function renderPublishedNoteHTML(
   const kind = safeNoteKind(options.kind);
   const format = options.format === "pdf" ? "pdf" : "html";
   const pdf = format === "pdf";
+  const standalone = options.standalone;
   const hidden = Boolean(options.private && !options.includePrivateContent);
   const contentHtml = hidden
     ? '<p class="sealed-note-message">This note has been sealed by the administrator.</p>'
@@ -1333,10 +1491,21 @@ export function renderPublishedNoteHTML(
   const resolvedNoteCssHref = noteCssHref && options.assetResolver
     ? options.assetResolver(noteCssHref)
     : noteCssHref;
-  const noteCssHtml = resolvedNoteCssHref
+  const noteCssHtml = resolvedNoteCssHref && !standalone
     ? `  <link rel="stylesheet" data-aaronnote-note-css href="${escapeAttr(resolvedNoteCssHref)}" />\n`
     : "";
-  const toolbarHtml = pdf ? "" : `    <header class="aaronnote-toolbar">
+  const toolbarHtml = pdf ? "" : standalone ? `    <header class="aaronnote-toolbar aaronnote-standalone-toolbar">
+      <div class="aaronnote-title">
+        <strong>Noema</strong>
+        <span data-file-label>${escapeHtml(title)}</span>
+      </div>
+      <nav class="aaronnote-actions" aria-label="Standalone note actions">
+        <button type="button" data-standalone-theme>Theme</button>
+      </nav>
+      <span class="aaronnote-vim-mode">READ</span>
+      <span class="aaronnote-status">Self-contained HTML</span>
+    </header>
+` : `    <header class="aaronnote-toolbar">
       <div class="aaronnote-title">
         <strong>Noema</strong>
         <span data-file-label>${escapeHtml(group)} / ${escapeHtml(date)}</span>
@@ -1354,24 +1523,47 @@ export function renderPublishedNoteHTML(
         <nav data-toc-list aria-label="Page outline"></nav>
       </aside>
 `;
-  const localGraphHtml = pdf ? "" : `      <div class="aaronnote-local-graph-trigger-wrap" data-published-local-graph>
+  const localGraphHtml = pdf || standalone ? "" : `      <div class="aaronnote-local-graph-trigger-wrap" data-published-local-graph>
         <button type="button" class="macwin-graph-trigger" data-local-graph-open aria-label="Open local graph">
           ⬡ Graph
         </button>
       </div>
 `;
-  const scriptHtml = pdf ? "" : `  <script src="${assetRoot}js/note-page.js?v=${escapeAttr(version)}"></script>
+  const standaloneScript = `  <script>(() => {
+    const root = document.documentElement;
+    const theme = document.querySelector('[data-standalone-theme]');
+    theme?.addEventListener('click', () => {
+      const current = root.dataset.noemaTheme || root.dataset.noemaThemePrimary || 'aaronnote';
+      const next = current === root.dataset.noemaThemePrimary
+        ? root.dataset.noemaThemeAlternate
+        : root.dataset.noemaThemePrimary;
+      if (next) root.dataset.noemaTheme = next;
+    });
+    const list = document.querySelector('[data-toc-list]');
+    const toggle = document.querySelector('[data-toc-toggle]');
+    const headings = Array.from(document.querySelectorAll('#content h1, #content h2, #content h3, #content h4, #content h5, #content h6'));
+    if (list) headings.forEach((heading, index) => {
+      if (!heading.id) heading.id = 'noema-heading-' + (index + 1);
+      const link = document.createElement('a');
+      link.href = '#' + heading.id;
+      link.textContent = heading.textContent || 'Heading';
+      link.dataset.level = heading.tagName.slice(1);
+      list.appendChild(link);
+    });
+    toggle?.addEventListener('click', () => {
+      const toc = document.querySelector('[data-published-toc]');
+      const collapsed = toc?.classList.toggle('is-collapsed') ?? true;
+      toggle.setAttribute('aria-expanded', String(!collapsed));
+    });
+  })();</script>\n`;
+  const scriptHtml = pdf ? "" : standalone ? standaloneScript : `  <script src="${assetRoot}js/note-page.js?v=${escapeAttr(version)}"></script>
   <script src="${assetRoot}Noema/aaronnote/published-toc.js?v=${escapeAttr(version)}"></script>
   <script src="${assetRoot}js/mac-window.js?v=${escapeAttr(version)}"></script>
   <script type="module" src="${assetRoot}Noema/aaronnote/published-local-graph.js?v=${escapeAttr(version)}"></script>
 `;
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>${escapeHtml(title)} | Aaron He</title>
-  <link rel="stylesheet" href="${assetRoot}Noema/aaronnote/style.css?v=${escapeAttr(version)}" />
+  const stylesheetHtml = standalone
+    ? `  <style data-noema-self-contained>${standalone.styles.replace(/<\/style/giu, "<\\/style")}</style>`
+    : `  <link rel="stylesheet" href="${assetRoot}Noema/aaronnote/style.css?v=${escapeAttr(version)}" />
   <link rel="stylesheet" href="${assetRoot}Noema/src/styles/widgets.css?v=${escapeAttr(version)}" />
   <link rel="stylesheet" href="${assetRoot}Noema/src/styles/themes/theme-typora.css?v=${escapeAttr(version)}" />
   <link rel="stylesheet" href="${assetRoot}Noema/src/styles/typography.css?v=${escapeAttr(version)}" />
@@ -1379,7 +1571,17 @@ export function renderPublishedNoteHTML(
   <link rel="stylesheet" href="${assetRoot}Noema/src/styles/aaron-ui-elegant.css?v=${escapeAttr(version)}" />
   <link rel="stylesheet" data-aaronnote-katex-css="embedded" href="${escapeAttr(katexStylesheetHref())}" />
   <link rel="stylesheet" href="${assetRoot}css/aaronnote-published.css?v=${escapeAttr(version)}" />
-  <link rel="stylesheet" href="${assetRoot}css/mac-window.css?v=${escapeAttr(version)}" />
+  <link rel="stylesheet" href="${assetRoot}css/mac-window.css?v=${escapeAttr(version)}" />`;
+  const themeAttributes = standalone
+    ? ` data-noema-theme="${escapeAttr(standalone.themeId || "aaronnote")}" data-noema-theme-primary="${escapeAttr(standalone.themeId || "aaronnote")}" data-noema-theme-alternate="${escapeAttr(standalone.alternateThemeId || "daylight")}"`
+    : "";
+  return `<!DOCTYPE html>
+<html lang="en"${themeAttributes}>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${escapeHtml(title)} | Aaron He</title>
+${stylesheetHtml}
 ${kindAssetsHtml}${noteCssHtml}</head>
 <body class="${pdf ? "aaronnote-published-document aaronnote-pdf-document" : "aaronnote-published-document"}" data-note-kind="${escapeAttr(kind)}">
   <main class="${escapeAttr(shellClass)}" data-note-kind="${escapeAttr(kind)}">

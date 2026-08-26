@@ -670,6 +670,15 @@ type NativeApi = {
     renderTikz?: (body: { file: string; id: string; timestamp: string; source: string }) => Promise<unknown>;
     scanOrphans?: () => Promise<unknown>;
     trashOrphans?: (files: string[]) => Promise<unknown>;
+    inspect?: () => Promise<unknown>;
+    rename?: (body: Record<string, unknown>) => Promise<unknown>;
+    searchContent?: (body: Record<string, unknown>) => Promise<unknown>;
+  };
+  imports?: {
+    obsidianAnalyze?: (body: Record<string, unknown>) => Promise<unknown>;
+    obsidianTask?: (body: Record<string, unknown>) => Promise<unknown>;
+    obsidianStart?: (body: Record<string, unknown>) => Promise<unknown>;
+    obsidianCancel?: (body: Record<string, unknown>) => Promise<unknown>;
   };
   ime?: {
     vimMode?: (mode: string) => Promise<unknown>;
@@ -722,6 +731,7 @@ type NativeApi = {
   };
   knowledge?: {
     search?: (body: Record<string, unknown>) => Promise<unknown>;
+    virtualReferences?: (body: Record<string, unknown>) => Promise<unknown>;
   };
 };
 
@@ -881,6 +891,63 @@ export type WikiSearchResult = {
   };
 };
 
+export type VirtualReferenceMention = {
+  sourceId: string;
+  sourceTitle: string;
+  file: string;
+  count: number;
+  keywords: string[];
+  snippet: string;
+  note?: WikiNote | null;
+};
+
+export type VirtualReferencesResult = {
+  type: "virtual-references";
+  evaluationSource?: string;
+  target?: { id?: string; title?: string; file?: string; path?: string } | null;
+  mentions: VirtualReferenceMention[];
+  scannedDocuments?: number;
+  ttlMs?: number;
+};
+
+export type MissingAsset = {
+  file: string;
+  path: string;
+  reference: string;
+  noteFile: string;
+  notePath: string;
+};
+
+export type AssetContentItem = {
+  id?: string;
+  name: string;
+  ext: string;
+  path: string;
+  size: number;
+  updated: number;
+  content: string;
+  file?: string;
+};
+
+export type ObsidianImportTask = {
+  taskID: string;
+  state: "queued" | "analyzing" | "ready" | "revalidating" | "staging" | "creating" | "writing" | "indexing" | "completed" | "failed" | "cancelled";
+  progress: number;
+  message: string;
+  error?: string;
+  detail?: string;
+  analysis?: Record<string, unknown> & {
+    vaultName?: string;
+    notebookName?: string;
+    markdownCount?: number;
+    importableAssetCount?: number;
+    missingCount?: number;
+    ambiguousCount?: number;
+    warnings?: string[];
+  };
+  result?: Record<string, unknown> & { destination?: string; markdownCount?: number; importedAttachmentCount?: number; source?: string };
+};
+
 export type LatexTemplateVar = {
   id: string;
   label: string;
@@ -971,6 +1038,11 @@ declare global {
         path: string;
         bytes?: number;
       }>;
+      exportHtml(options: { html: string; title?: string; defaultPath?: string }): Promise<{
+        canceled: boolean;
+        path: string;
+        bytes?: number;
+      }>;
       readClipboard(): Promise<
         | { kind: "empty" }
         | { kind: "text"; text: string; html?: string }
@@ -981,6 +1053,10 @@ declare global {
         path: string;
         relativePath?: string;
         message?: string;
+      }>;
+      selectDirectory(options?: { defaultPath?: string; title?: string }): Promise<{
+        canceled: boolean;
+        path: string;
       }>;
       listPlugins(): Promise<NoemaDesktopPlugin[]>;
       setPluginEnabled(id: string, enabled: boolean): Promise<NoemaDesktopPlugin[]>;
@@ -1541,6 +1617,36 @@ export const api = {
       const call = requireMethod(nativeApi().assets?.trashOrphans, "Asset trash");
       return ensureOk(await call(files) as Record<string, unknown> & { assets?: UnusedAsset[]; trashed?: unknown[]; message?: string }, "Asset trash failed");
     },
+    async inspect(): Promise<{ unused: UnusedAsset[]; missing: MissingAsset[]; source?: string }> {
+      const call = requireMethod(nativeApi().assets?.inspect, "Asset health");
+      return ensureOk(await call() as { unused: UnusedAsset[]; missing: MissingAsset[]; source?: string }, "Asset health failed");
+    },
+    async rename(body: { oldPath: string; newName: string }): Promise<Record<string, unknown> & { newPath?: string; rewrittenNotes?: string[] }> {
+      const call = requireMethod(nativeApi().assets?.rename, "Asset rename");
+      return ensureOk(await call(body) as Record<string, unknown> & { newPath?: string; rewrittenNotes?: string[] }, "Asset rename failed");
+    },
+    async searchContent(body: { query: string; limit?: number }): Promise<{ assets: AssetContentItem[]; total: number; indexed: number; source?: string }> {
+      const call = requireMethod(nativeApi().assets?.searchContent, "Attachment search");
+      return ensureOk(await call(body) as { assets: AssetContentItem[]; total: number; indexed: number; source?: string }, "Attachment search failed");
+    },
+  },
+  imports: {
+    async obsidianAnalyze(localPath: string): Promise<ObsidianImportTask> {
+      const call = requireMethod(nativeApi().imports?.obsidianAnalyze, "Obsidian analysis");
+      return ensureOk(await call({ localPath }) as ObsidianImportTask, "Obsidian analysis failed");
+    },
+    async obsidianTask(taskID: string): Promise<ObsidianImportTask> {
+      const call = requireMethod(nativeApi().imports?.obsidianTask, "Obsidian import status");
+      return ensureOk(await call({ taskID }) as ObsidianImportTask, "Obsidian import status failed");
+    },
+    async obsidianStart(taskID: string, destination: string): Promise<ObsidianImportTask> {
+      const call = requireMethod(nativeApi().imports?.obsidianStart, "Obsidian import");
+      return ensureOk(await call({ taskID, destination }) as ObsidianImportTask, "Obsidian import failed");
+    },
+    async obsidianCancel(taskID: string): Promise<ObsidianImportTask> {
+      const call = requireMethod(nativeApi().imports?.obsidianCancel, "Obsidian import cancellation");
+      return ensureOk(await call({ taskID }) as ObsidianImportTask, "Obsidian import cancellation failed");
+    },
   },
   ime: {
     async vimMode(mode: "normal" | "insert"): Promise<{ enabled?: boolean }> {
@@ -1735,6 +1841,10 @@ export const api = {
     async search(body: { query?: string; mode?: "suggest" | "results" | "related"; context?: Record<string, string>; entityKinds?: string[]; cursor?: number; limit?: number }): Promise<WikiSearchResult> {
       const call = requireMethod(nativeApi().knowledge?.search || nativeApi().wiki?.search, "Knowledge search");
       return ensureOk(await call(body) as WikiSearchResult, "Knowledge search failed");
+    },
+    async virtualReferences(body: { targetId?: string; file?: string; title?: string; caseSensitive?: boolean }): Promise<VirtualReferencesResult> {
+      const call = requireMethod(nativeApi().knowledge?.virtualReferences, "Virtual references");
+      return ensureOk(await call(body) as VirtualReferencesResult, "Virtual references failed");
     },
   },
 };

@@ -101,6 +101,13 @@ import {
   renderTikzAsset,
   scanUnusedAssets,
   trashUnusedAssets,
+  inspectAssets,
+  renameAsset,
+  searchAssetContent,
+  startObsidianAnalysis,
+  readObsidianTask,
+  startObsidianImport,
+  cancelObsidianTask,
 } from "./server/lib/assets.mjs";
 import {
   createNode,
@@ -191,6 +198,7 @@ import {
 } from "./server/lib/wiki-index-refresh.mjs";
 import { openWikiGitUi, stopAllWikiGitUis } from "./server/lib/wiki-git-ui.mjs";
 import { knowledgeSearchResponse } from "./server/lib/knowledge-search.mjs";
+import { virtualReferencesPayload } from "./server/lib/virtual-references.mjs";
 import { createImeSwitcher } from "./server/lib/ime.mjs";
 import { ApiRouter } from "./server/infrastructure/api-router.mjs";
 import { readJson, readText } from "./server/infrastructure/http-body.mjs";
@@ -472,6 +480,11 @@ async function knowledgeSearchPayload(body = {}) {
     ? await kernelKnowledgeSearch(index, body)
     : searchWikiDatabase(noteRoot, body);
   return knowledgeSearchResponse(index, body, lexical);
+}
+
+async function knowledgeVirtualReferencesPayload(body = {}) {
+  const index = hostMode === "server" ? currentServerCatalog().index : await productionWikiIndexPayload();
+  return virtualReferencesPayload(index, body);
 }
 
 let serverRepositoryState = serverConfig
@@ -1667,6 +1680,7 @@ const apiRouter = new ApiRouter().register({
   "aaronnote:api:knowledge:search": async (body) => hostMode === "server"
     ? currentServerCatalog().search(body || {})
     : knowledgeSearchPayload(body || {}),
+  "aaronnote:api:knowledge:virtual-references": (body) => knowledgeVirtualReferencesPayload(body || {}),
   "aaronnote:api:wiki:resolve-link": async (body) => hostMode === "server"
     ? currentServerCatalog().resolveLink(body?.target ?? body, body?.sourceFile || "")
     : resolveWikiLink(await wikiIndexPayload(), body?.target ?? body, { sourceFile: body?.sourceFile || "" }),
@@ -1958,6 +1972,13 @@ const apiRouter = new ApiRouter().register({
     renderTikzAsset,
     scanUnusedAssets,
     trashUnusedAssets,
+    inspectAssets,
+    renameAsset,
+    searchAssetContent,
+    startObsidianAnalysis,
+    readObsidianTask,
+    startObsidianImport,
+    cancelObsidianTask,
     readSystemClipboard,
   }), { full: ["aaronnote:api:assets:trash-orphans"] }),
   ...createSessionApiHandlers({
@@ -2562,7 +2583,16 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
       storeFromPath: function(body) { return call("aaronnote:api:assets:store-from-path", [body || {}]); },
       renderTikz: function(body) { return call("aaronnote:api:assets:render-tikz", [body || {}]); },
       scanOrphans: function() { return call("aaronnote:api:assets:scan-orphans", []); },
-      trashOrphans: function(files) { return call("aaronnote:api:assets:trash-orphans", [files || []]); }
+      trashOrphans: function(files) { return call("aaronnote:api:assets:trash-orphans", [files || []]); },
+      inspect: function() { return call("aaronnote:api:assets:inspect", []); },
+      rename: function(body) { return call("aaronnote:api:assets:rename", [body || {}]); },
+      searchContent: function(body) { return call("aaronnote:api:assets:search-content", [body || {}]); }
+    },
+    imports: {
+      obsidianAnalyze: function(body) { return call("aaronnote:api:imports:obsidian-analyze", [body || {}]); },
+      obsidianTask: function(body) { return call("aaronnote:api:imports:obsidian-task", [body || {}]); },
+      obsidianStart: function(body) { return call("aaronnote:api:imports:obsidian-start", [body || {}]); },
+      obsidianCancel: function(body) { return call("aaronnote:api:imports:obsidian-cancel", [body || {}]); }
     },
     clipboard: {
       read: function(body) { return call("aaronnote:api:clipboard:read", [body || {}]); }
@@ -2675,7 +2705,8 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
       gitUi: function(body) { return call("aaronnote:api:wiki:git-ui", [body || {}]); }
     },
     knowledge: {
-      search: function(body) { return call("aaronnote:api:knowledge:search", [body || {}]); }
+      search: function(body) { return call("aaronnote:api:knowledge:search", [body || {}]); },
+      virtualReferences: function(body) { return call("aaronnote:api:knowledge:virtual-references", [body || {}]); }
     }
   };
 }());

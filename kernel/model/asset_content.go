@@ -34,16 +34,16 @@ import (
 	"github.com/88250/go-humanize"
 	"github.com/88250/gulu"
 	"github.com/88250/lute/ast"
+	"github.com/aaronhe/noema/kernel/search"
+	"github.com/aaronhe/noema/kernel/sql"
+	"github.com/aaronhe/noema/kernel/task"
+	"github.com/aaronhe/noema/kernel/util"
 	"github.com/klippa-app/go-pdfium"
 	"github.com/klippa-app/go-pdfium/requests"
 	"github.com/klippa-app/go-pdfium/webassembly"
 	"github.com/siyuan-note/eventbus"
 	"github.com/siyuan-note/filelock"
 	"github.com/siyuan-note/logging"
-	"github.com/aaronhe/noema/kernel/search"
-	"github.com/aaronhe/noema/kernel/sql"
-	"github.com/aaronhe/noema/kernel/task"
-	"github.com/aaronhe/noema/kernel/util"
 	"github.com/xuri/excelize/v2"
 )
 
@@ -56,6 +56,7 @@ type AssetContent struct {
 	HSize   string `json:"hSize"`
 	Updated int64  `json:"updated"`
 	Content string `json:"content"`
+	File    string `json:"file,omitempty"`
 }
 
 func GetAssetContent(id, query string, queryMethod int) (ret *AssetContent) {

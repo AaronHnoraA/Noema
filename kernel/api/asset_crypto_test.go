@@ -25,12 +25,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gin-gonic/gin"
 	"github.com/aaronhe/noema/kernel/conf"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/gin-gonic/gin"
 )
 
-func TestSetFileAnnotationDoesNotDeleteFromLockedEncryptedNotebook(t *testing.T) {
+func TestSetFileAnnotationIgnoresRetiredEncryptedNotebookFlag(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	oldWorkspaceDir, oldDataDir := util.WorkspaceDir, util.DataDir
@@ -86,10 +86,10 @@ func TestSetFileAnnotationDoesNotDeleteFromLockedEncryptedNotebook(t *testing.T)
 	if err = json.Unmarshal(recorder.Body.Bytes(), response); err != nil {
 		t.Fatalf("unmarshal response failed: %v", err)
 	}
-	if response.Code == 0 {
-		t.Fatalf("locked encrypted annotation deletion unexpectedly succeeded: %s", recorder.Body.String())
+	if response.Code != 0 {
+		t.Fatalf("retired encrypted flag unexpectedly blocked annotation deletion: %s", recorder.Body.String())
 	}
-	if _, err = os.Stat(annotationPath); err != nil {
-		t.Fatalf("locked encrypted annotation was removed: %v", err)
+	if _, err = os.Stat(annotationPath); !os.IsNotExist(err) {
+		t.Fatalf("annotation was not removed after successful request: %v", err)
 	}
 }

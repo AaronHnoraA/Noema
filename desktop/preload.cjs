@@ -43,11 +43,17 @@ contextBridge.exposeInMainWorld("noemaDesktop", {
   exportPdf(options = {}) {
     return ipcRenderer.invoke("noema:export-pdf", options);
   },
+  exportHtml(options = {}) {
+    return ipcRenderer.invoke("noema:export-html", options);
+  },
   readClipboard() {
     return ipcRenderer.invoke("noema:read-clipboard");
   },
   chooseDirectory(options = {}) {
     return ipcRenderer.invoke("noema:choose-directory", options);
+  },
+  selectDirectory(options = {}) {
+    return ipcRenderer.invoke("noema:select-directory", options);
   },
   listPlugins() {
     return ipcRenderer.invoke("noema:list-plugins");

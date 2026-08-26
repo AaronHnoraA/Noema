@@ -18,8 +18,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gin-gonic/gin"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/gin-gonic/gin"
 )
 
 type assetRequestPathTest struct {
@@ -256,13 +256,14 @@ func TestSecureAssetContentHeadersForcesAttachmentOnUnknownExtension(t *testing.
 	// 无法识别 Content-Type 的扩展名会触发内容嗅探，可能被识别为 text/html，因此必须强制附件下载
 	recorder := httptest.NewRecorder()
 	context, _ := gin.CreateTestContext(recorder)
-	context.Request = httptest.NewRequest(http.MethodGet, "/assets/payload.xyz", nil)
-	assetPath := filepath.Join(t.TempDir(), "payload.xyz")
+	const extension = ".noema-unknown-binary-payload"
+	context.Request = httptest.NewRequest(http.MethodGet, "/assets/payload"+extension, nil)
+	assetPath := filepath.Join(t.TempDir(), "payload"+extension)
 	if err := os.WriteFile(assetPath, []byte("<script>alert(1)</script>"), 0644); err != nil {
 		t.Fatalf("write test asset failed: %v", err)
 	}
-	if mime.TypeByExtension(".xyz") != "" {
-		t.Fatalf("test precondition failed: .xyz unexpectedly has a MIME type")
+	if mime.TypeByExtension(extension) != "" {
+		t.Fatalf("test precondition failed: %s unexpectedly has a MIME type", extension)
 	}
 	secureAssetContentHeaders(context, assetPath, assetPath)
 	if !strings.HasPrefix(recorder.Header().Get("Content-Disposition"), "attachment") {

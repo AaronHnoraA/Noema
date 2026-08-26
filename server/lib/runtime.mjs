@@ -1275,6 +1275,49 @@ export async function scanUnusedAssets() {
     .sort((a, b) => String(a.path).localeCompare(String(b.path)));
 }
 
+export async function inspectAssets() {
+  if (typeof assetProvider?.inspect === "function") return assetProvider.inspect();
+  return { unused: await scanUnusedAssets(), missing: [], source: "node-assets" };
+}
+
+export async function renameAsset(body = {}) {
+  if (typeof assetProvider?.rename !== "function") {
+    throw Object.assign(new Error("Asset rename requires the Noema kernel"), { statusCode: 503 });
+  }
+  return assetProvider.rename(body.oldPath || body.file || body.path, body.newName || body.name);
+}
+
+export async function searchAssetContent(body = {}) {
+  if (typeof assetProvider?.searchContent !== "function") {
+    return { assets: [], total: 0, indexed: 0, source: "unavailable" };
+  }
+  return assetProvider.searchContent(body.query, body.limit);
+}
+
+function requireObsidianAssetProvider(method) {
+  const call = assetProvider?.[method];
+  if (typeof call !== "function") {
+    throw Object.assign(new Error("Obsidian import requires the Noema kernel"), { statusCode: 503 });
+  }
+  return call.bind(assetProvider);
+}
+
+export function startObsidianAnalysis(body = {}) {
+  return requireObsidianAssetProvider("startObsidianAnalysis")(body.localPath || body.path);
+}
+
+export function readObsidianTask(body = {}) {
+  return requireObsidianAssetProvider("obsidianTask")(body.taskID);
+}
+
+export function startObsidianImport(body = {}) {
+  return requireObsidianAssetProvider("startObsidianImport")(body.taskID, body.destination);
+}
+
+export function cancelObsidianTask(body = {}) {
+  return requireObsidianAssetProvider("cancelObsidianTask")(body.taskID);
+}
+
 export async function trashUnusedAssets(body) {
   const requested = Array.isArray(body.files) ? body.files.map((file) => resolve(String(file || ""))) : [];
   if (requested.length === 0) return { type: "unused-assets-trash", ok: true, trashed: [], skipped: [], assets: await scanUnusedAssets() };

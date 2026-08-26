@@ -28,17 +28,17 @@ import (
 	"sync"
 	"time"
 
-	"github.com/siyuan-note/filelock"
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/model"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/siyuan-note/filelock"
+	"github.com/siyuan-note/logging"
 )
 
 var ImageTool = &Tool{
 	Name:  "image",
 	Title: "Document images",
-	Description: "List and understand local images referenced by a SiYuan document, or generate an image asset. " +
+	Description: "List and understand local images referenced by a legacy block document, or generate an image asset. " +
 		"Use list before analyze. analyze attaches the selected image to the current Agent model. " +
 		"generate creates a reusable image asset in the target document's notebook.",
 	InputSchema: ToolSchema{

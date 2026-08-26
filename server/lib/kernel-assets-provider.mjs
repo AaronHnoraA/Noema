@@ -20,8 +20,8 @@ export function createKernelAssetsProvider({ baseUrl, box, includePublic = false
       ? resolve(join(homedir(), raw.replace(/^~[\\/]?/, "")))
       : resolve(raw);
   };
-  async function post(endpoint, body) {
-    const response = await fetchImpl(`${base}/api/noema/markdown/${endpoint}`, {
+  async function postPath(path, body) {
+    const response = await fetchImpl(`${base}${path}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -35,6 +35,7 @@ export function createKernelAssetsProvider({ baseUrl, box, includePublic = false
     }
     return payload.data;
   }
+  const post = (endpoint, body) => postPath(`/api/noema/markdown/${endpoint}`, body);
 
   function requestBody(file, body = {}) {
     const path = pathFor(file);
@@ -70,6 +71,27 @@ export function createKernelAssetsProvider({ baseUrl, box, includePublic = false
         throw Object.assign(new Error("Kernel asset scan response is missing assets"), { statusCode: 502 });
       }
       return data.assets;
+    },
+    async inspect() {
+      return post("inspectAssets", { notebook, includePublic: includePublic === true });
+    },
+    async rename(oldPath, newName) {
+      return post("renameAsset", { notebook, oldPath: String(oldPath || ""), newName: String(newName || "") });
+    },
+    async searchContent(query, limit = 20) {
+      return post("searchAssetContent", { notebook, query: String(query || ""), limit: Number(limit) || 20 });
+    },
+    async startObsidianAnalysis(localPath) {
+      return postPath("/api/import/startObsidianVaultAnalysis", { localPath: sourcePathFor(localPath) });
+    },
+    async obsidianTask(taskID) {
+      return postPath("/api/import/getObsidianVaultTask", { taskID: String(taskID || "") });
+    },
+    async startObsidianImport(taskID, destination) {
+      return post("startObsidianVaultImport", { notebook, taskID: String(taskID || ""), destination: String(destination || "") });
+    },
+    async cancelObsidianTask(taskID) {
+      return postPath("/api/import/cancelObsidianVaultTask", { taskID: String(taskID || "") });
     },
   };
 }

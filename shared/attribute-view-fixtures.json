@@ -142,5 +142,49 @@
       "view": "kanban",
       "groupBy": "status"
     }
+  },
+  {
+    "name": "typed filters nested groups relative dates and calculations",
+    "request": {
+      "title": "Typed work",
+      "nowMs": 1787745600000,
+      "source": "source: todo\ncolumns: text, effort, ddl, tags, done\ntype: effort number\ntype: ddl date\ntype: tags mSelect\ntype: done checkbox\nfilter: effort between 2..8\nfilter: ddl <= +7d\nfilter: tags contains-any research|writing\nfilter-any: status = todo; status = doing\ncalc: effort sum\ncalc: effort average\ncalc: effort median\ncalc: effort range\ncalc: ddl earliest\ncalc: ddl latest\ncalc: done checked\ncalc: done percent-checked\ncalc: tags unique-values\ncalc: effort template {{count}} rows / {{sum}} points",
+      "items": [
+        { "id": "a", "kind": "todo", "status": "todo", "text": "Draft", "canon": { "effort": "2", "ddl": "2026-08-26", "tags": "research|draft", "done": "true" } },
+        { "id": "b", "kind": "todo", "status": "doing", "text": "Revise", "canon": { "effort": "8", "ddl": "2026-09-02", "tags": "writing", "done": "false" } },
+        { "id": "c", "kind": "todo", "status": "done", "text": "Archive", "canon": { "effort": "4", "ddl": "2026-08-28", "tags": "research", "done": "true" } },
+        { "id": "d", "kind": "todo", "status": "todo", "text": "Too large", "canon": { "effort": "9", "ddl": "2026-08-27", "tags": "research", "done": "false" } }
+      ]
+    },
+    "expected": {
+      "title": "Typed work",
+      "source": "todo",
+      "columns": [
+        { "key": "text", "label": "Task" },
+        { "key": "effort", "label": "Effort", "type": "number" },
+        { "key": "ddl", "label": "Deadline", "type": "date" },
+        { "key": "tags", "label": "Tags", "type": "mselect" },
+        { "key": "done", "label": "Done", "type": "checkbox" }
+      ],
+      "rows": [
+        { "id": "a", "kind": "todo", "file": "", "index": 0, "line": 0, "cells": [{ "key": "text", "value": "Draft" }, { "key": "effort", "value": "2" }, { "key": "ddl", "value": "2026-08-26" }, { "key": "tags", "value": "research|draft" }, { "key": "done", "value": "true" }] },
+        { "id": "b", "kind": "todo", "file": "", "index": 0, "line": 0, "cells": [{ "key": "text", "value": "Revise" }, { "key": "effort", "value": "8" }, { "key": "ddl", "value": "2026-09-02" }, { "key": "tags", "value": "writing" }, { "key": "done", "value": "false" }] }
+      ],
+      "total": 2,
+      "truncated": false,
+      "diagnostics": [],
+      "calculations": [
+        { "key": "effort", "operator": "sum", "type": "number", "value": 10 },
+        { "key": "effort", "operator": "average", "type": "number", "value": 5 },
+        { "key": "effort", "operator": "median", "type": "number", "value": 5 },
+        { "key": "effort", "operator": "range", "type": "number", "value": 6 },
+        { "key": "ddl", "operator": "earliest", "type": "date", "value": "2026-08-26" },
+        { "key": "ddl", "operator": "latest", "type": "date", "value": "2026-09-02" },
+        { "key": "done", "operator": "checked", "type": "checkbox", "value": 1 },
+        { "key": "done", "operator": "percent-checked", "type": "checkbox", "value": 0.5 },
+        { "key": "tags", "operator": "unique-values", "type": "mselect", "value": ["research|draft", "writing"] },
+        { "key": "effort", "operator": "template", "type": "number", "value": "2 rows / 10 points" }
+      ]
+    }
   }
 ]

@@ -33,12 +33,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/siyuan-note/httpclient"
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/conf"
 	"github.com/aaronhe/noema/kernel/mcp/tools"
 	"github.com/aaronhe/noema/kernel/model"
+	"github.com/aaronhe/noema/kernel/util"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/siyuan-note/logging"
 )
 
 const (
@@ -166,6 +166,22 @@ func serverTimeout(server conf.MCPServer) time.Duration {
 type headerRoundTripper struct {
 	base    http.RoundTripper
 	headers map[string]string
+}
+
+type noemaUserAgentRoundTripper struct {
+	base http.RoundTripper
+}
+
+func (n *noemaUserAgentRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	if "" == clone.Header.Get("User-Agent") {
+		clone.Header.Set("User-Agent", "Noema/"+util.Ver)
+	}
+	base := n.base
+	if nil == base {
+		base = http.DefaultTransport
+	}
+	return base.RoundTrip(clone)
 }
 
 func (h *headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -427,7 +443,7 @@ func closeConnections(connections []Connection) {
 }
 
 func connectServer(ctx context.Context, server conf.MCPServer, interactive bool) (*mcp.ClientSession, *exec.Cmd, *mcpOAuthHandler, error) {
-	c := mcp.NewClient(&mcp.Implementation{Name: "siyuan", Version: "3.0"}, &mcp.ClientOptions{
+	c := mcp.NewClient(&mcp.Implementation{Name: "noema", Version: util.Ver}, &mcp.ClientOptions{
 		ToolListChangedHandler: func(context.Context, *mcp.ToolListChangedRequest) {
 			logging.LogInfof("mcp: server [%s] tool list changed, reconnecting", server.Name)
 			go reconnectMCPServer(server.ID)
@@ -626,8 +642,8 @@ func connectHTTP(ctx context.Context, client *mcp.Client, server conf.MCPServer,
 		oauthHandler = newMCPOAuthHandler(server, interactive)
 		transport.OAuthHandler = oauthHandler
 	}
-	// 所有 MCP HTTP 出站请求统一带上 SiYuan UA，便于第三方 MCP server 识别客户端身份
-	uaBase := httpclient.NewUserAgentRoundTripper(http.DefaultTransport)
+	// 所有 MCP HTTP 出站请求统一带上 Noema UA，便于第三方 MCP server 识别客户端身份。
+	uaBase := &noemaUserAgentRoundTripper{base: http.DefaultTransport}
 	if len(server.Headers) > 0 {
 		transport.HTTPClient = &http.Client{
 			Transport: &headerRoundTripper{

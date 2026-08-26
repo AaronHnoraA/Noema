@@ -16,7 +16,7 @@ export default defineConfig(({ command }) => ({
   test: {
     // Tests live in tests/ and reference src/ directly; pick the project
     // root, not the website root, so vitest discovers them. Keep the archived
-    // reference/siyuan checkout out of Noema's canonical test collection.
+    // Keep the retired upstream checkout out of Noema's canonical test collection.
     root: ".",
     include: ["tests/**/*.test.ts"],
     environment: "happy-dom",

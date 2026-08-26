@@ -25,22 +25,26 @@ function dockFixture(current: NoteSummary, notes: NoteSummary[]) {
   const visibilityButton = document.createElement("button");
   const backlinkList = document.createElement("div");
   const backlinkStatus = document.createElement("div");
+  const mentionList = document.createElement("div");
+  const mentionStatus = document.createElement("div");
   const tagList = document.createElement("div");
   const tagStatus = document.createElement("div");
   const searchInput = document.createElement("input");
   const panes = {
     backlinks: document.createElement("section"),
+    mentions: document.createElement("section"),
     graph: document.createElement("section"),
     search: document.createElement("section"),
     tags: document.createElement("section"),
   };
-  const tabButtons = (["backlinks", "graph", "search", "tags"] as const).map((view) => {
+  const tabButtons = (["backlinks", "mentions", "graph", "search", "tags"] as const).map((view) => {
     const button = document.createElement("button");
     button.dataset.knowledgeView = view;
     return button;
   });
-  root.append(...tabButtons, panes.backlinks, panes.graph, panes.search, panes.tags);
+  root.append(...tabButtons, panes.backlinks, panes.mentions, panes.graph, panes.search, panes.tags);
   panes.backlinks.append(backlinkStatus, backlinkList);
+  panes.mentions.append(mentionStatus, mentionList);
   panes.search.append(searchInput);
   panes.tags.append(tagStatus, tagList);
   document.body.append(root, visibilityButton);
@@ -56,6 +60,8 @@ function dockFixture(current: NoteSummary, notes: NoteSummary[]) {
     panes,
     backlinkList,
     backlinkStatus,
+    mentionList,
+    mentionStatus,
     tagList,
     tagStatus,
     searchInput,
@@ -67,6 +73,19 @@ function dockFixture(current: NoteSummary, notes: NoteSummary[]) {
       { name: "proof", count: 2, current: true },
       { name: "research", count: 5 },
     ],
+    getVirtualMentions: async () => ({
+      evaluationSource: "noema-aho-corasick",
+      scannedDocuments: 2,
+      mentions: [{
+        sourceId: "source",
+        sourceTitle: "Source",
+        file: "/notes/source.md",
+        count: 2,
+        keywords: ["Current", "Now"],
+        snippet: "Source discusses Current without an explicit link.",
+        note: notes.find((item) => item.id === "source"),
+      }],
+    }),
     openTag: (tag) => openedTags.push(tag),
     onStateChange: (view, expanded) => states.push({ view, expanded }),
     onGraphVisible: () => { calls.visible += 1; },
@@ -79,6 +98,8 @@ function dockFixture(current: NoteSummary, notes: NoteSummary[]) {
     visibilityButton,
     backlinkList,
     backlinkStatus,
+    mentionList,
+    mentionStatus,
     tagList,
     tagStatus,
     searchInput,
@@ -123,7 +144,7 @@ describe("desktop knowledge dock", () => {
       await Promise.resolve();
       expect(fixture.calls.hidden).toBe(1);
       expect(document.activeElement).toBe(fixture.searchInput);
-      expect(fixture.tabButtons[2]?.getAttribute("aria-selected")).toBe("true");
+      expect(fixture.tabButtons[3]?.getAttribute("aria-selected")).toBe("true");
 
       fixture.controller.toggle("search");
       expect(fixture.calls.collapsed).toBe(1);
@@ -131,6 +152,27 @@ describe("desktop knowledge dock", () => {
       expect(document.body.classList.contains("noema-knowledge-dock-open")).toBe(false);
       expect(document.activeElement).not.toBe(fixture.searchInput);
       expect(fixture.states.at(-1)).toEqual({ view: "search", expanded: false });
+    } finally {
+      fixture.controller.destroy();
+      fixture.root.remove();
+      fixture.visibilityButton.remove();
+      document.body.className = "";
+    }
+  });
+
+  test("loads unlinked mentions on demand and opens the source note", async () => {
+    const source = note({ id: "source", title: "Source" });
+    const current = note({ id: "current", title: "Current" });
+    const fixture = dockFixture(current, [source, current]);
+    try {
+      fixture.controller.show("mentions");
+      expect(fixture.mentionStatus.textContent).toBe("Scanning unlinked mentions…");
+      await Promise.resolve();
+      expect(fixture.mentionStatus.textContent).toBe("1 source · Aho–Corasick · 10m cache");
+      expect(fixture.mentionList.querySelector("strong")?.textContent).toBe("Source · 2");
+      expect(fixture.mentionList.querySelector("small")?.textContent).toBe("“Current”, “Now”");
+      fixture.mentionList.querySelector<HTMLButtonElement>("button")?.click();
+      expect(fixture.opened).toEqual([{ note: source, newWindow: false }]);
     } finally {
       fixture.controller.destroy();
       fixture.root.remove();

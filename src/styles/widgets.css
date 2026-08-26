@@ -740,6 +740,10 @@
   max-width: min(100%, var(--note-image-max, 560px));
   height: auto;
 }
+.cm-editor .noema-image-animation-paused,
+.cm-editor .noema-image-animation-paused .cm-image-render {
+  image-animation: paused;
+}
 .cm-editor .cm-image-widget {
   position: relative;
   display: flow-root;
@@ -981,6 +985,14 @@
 .cm-editor .cm-line:hover .cm-heading-fold-arrow,
 .cm-editor .cm-heading-fold-arrow.is-folded {
   opacity: 0.72;
+}
+
+.cm-editor .noema-heading-number {
+  color: var(--b3-theme-on-surface-light, var(--aaron-muted));
+  font-variant-numeric: tabular-nums;
+  unicode-bidi: isolate;
+  user-select: none;
+  pointer-events: none;
 }
 
 /* ─── CM6 TOC widget ─────────────────────────────────────────────── */
@@ -4593,6 +4605,38 @@ body.has-diagram-fullscreen {
   padding: 0.65rem;
   color: color-mix(in srgb, currentColor 62%, transparent);
   font-size: 0.82rem;
+}
+
+.cm-attribute-view-calculations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0 0;
+  padding: 0;
+}
+
+.cm-attribute-view-calculations > div {
+  display: grid;
+  grid-template-columns: minmax(0, auto) auto;
+  gap: 7px;
+  align-items: baseline;
+  margin: 0;
+  border: 1px solid var(--aaron-paper-line);
+  border-radius: 6px;
+  padding: 5px 8px;
+  background: var(--aaron-paper-soft);
+}
+
+.cm-attribute-view-calculations dt {
+  color: var(--aaron-muted);
+  font: 10px/1.25 var(--aaron-font-sans);
+  text-transform: capitalize;
+}
+
+.cm-attribute-view-calculations dd {
+  margin: 0;
+  color: var(--aaron-ink);
+  font: 11px/1.25 var(--aaron-font-mono);
 }
 
 .cm-attribute-view-diagnostics {

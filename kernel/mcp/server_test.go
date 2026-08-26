@@ -25,8 +25,8 @@ import (
 	"strings"
 	"testing"
 
-	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/aaronhe/noema/kernel/mcp/tools"
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func newTestHTTPServer(t *testing.T) (*mcpsdk.Server, *httptest.Server) {
@@ -197,7 +197,7 @@ func TestToolProjectionPolicyAndExecutionRecheck(t *testing.T) {
 
 func TestExternalMCPToolsAreNotReexposed(t *testing.T) {
 	if externalMCPToolAllowed(&tools.Tool{Name: "remote", Source: "mcp", Runtime: "mcp"}) {
-		t.Fatal("external MCP capability was exposed through the SiYuan MCP server")
+		t.Fatal("external MCP capability was exposed through the Noema MCP server")
 	}
 }
 

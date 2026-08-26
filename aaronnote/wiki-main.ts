@@ -6,7 +6,7 @@ import "@mismerge/core/styles.css";
 import "@mismerge/core/light.css";
 import "@mismerge/core/web";
 
-import { api, type WikiIndex, type WikiNote, type WikiRepository, type WikiSyncState } from "./api-client.ts";
+import { api, type WikiDirectory, type WikiIndex, type WikiNote, type WikiRepository, type WikiSyncState } from "./api-client.ts";
 import { serverMode } from "./host-mode.ts";
 import { installNoemaThemeRuntime } from "./theme-runtime.ts";
 import { splitQualifiedWikiTarget } from "../shared/wiki-link.mjs";
@@ -14,6 +14,7 @@ import { createWorkspaceGraph, type WorkspaceGraph, type WorkspaceGraphSettings 
 import type { GraphNode, GraphPayload } from "./types.ts";
 import { createKnowledgeSearch } from "./knowledge-search.ts";
 import { desktopPlatformLabels } from "../shared/desktop-shell.mjs";
+import { createTreeView, type NoemaTreeNode } from "../src/tree-view.ts";
 
 const root = document.querySelector<HTMLElement>("#wiki-app");
 if (!root) throw new Error("Missing #wiki-app");
@@ -284,6 +285,8 @@ let pageSearchTimer = 0;
 type WikiAppearance = { text: "small" | "standard" | "large"; width: "standard" | "wide" };
 const appearanceKey = "noema-wiki-appearance-v1";
 let appearance: WikiAppearance = { text: "standard", width: "standard" };
+const folderExpansionKey = "noema-wiki-folder-expansion-v1";
+let folderExpansion: Record<string, boolean> = {};
 
 function reportWikiWindowState(): void {
   window.noemaDesktop?.updateWindowState({
@@ -340,6 +343,11 @@ try {
   appearance = { ...appearance, ...JSON.parse(localStorage.getItem(appearanceKey) || "{}") };
 } catch {
   // A corrupt preference should never prevent the Wiki from opening.
+}
+try {
+  folderExpansion = JSON.parse(localStorage.getItem(folderExpansionKey) || "{}");
+} catch {
+  folderExpansion = {};
 }
 
 function applyAppearance(): void {
@@ -845,34 +853,68 @@ function renderFolders(): void {
   const directories = index?.directories || [];
   const list = document.createElement("div");
   list.className = "noema-wiki-folder-list";
+  type FolderValue = { repositoryId: string; path: string; count: number; directory?: WikiDirectory };
+  const roots: NoemaTreeNode<FolderValue>[] = [];
+  const byKey = new Map<string, NoemaTreeNode<FolderValue>>();
   for (const repository of index?.repositories || []) {
-    const rootRow = document.createElement("article");
-    rootRow.className = "noema-wiki-folder is-root";
-    rootRow.innerHTML = `<span>▾</span><div><strong></strong><small></small></div><b></b>`;
-    rootRow.querySelector("strong")!.textContent = repository.id;
-    rootRow.querySelector("small")!.textContent = repository.identityStatus === "managed"
-      ? `repository ${repository.uid}`
-      : "repository identity needs migration";
-    rootRow.querySelector("b")!.textContent = String((index?.files || []).filter((file) => file.repositoryId === repository.id).length);
-    list.append(rootRow);
-    for (const directory of directories.filter((item) => item.repositoryId === repository.id)) {
-      const row = document.createElement("article");
-      row.className = "noema-wiki-folder";
-      const depth = directory.path.split("/").filter(Boolean).length;
-      row.style.setProperty("--folder-depth", String(depth));
-      row.innerHTML = `<span>⌞</span><div><strong></strong><small></small></div><b></b>`;
-      row.querySelector("strong")!.textContent = directory.name;
-      row.querySelector("small")!.textContent = directory.path;
-      row.querySelector("b")!.textContent = String(directory.fileCount);
-      row.addEventListener("click", () => {
-        activeView = "files";
-        searchEl.value = `${directory.repositoryId} ${directory.path}`;
-        selectActiveNav();
-        render();
-      });
-      list.append(row);
-    }
+    const id = `repository:${repository.id}`;
+    const node: NoemaTreeNode<FolderValue> = {
+      id,
+      label: repository.id,
+      detail: repository.identityStatus === "managed"
+        ? `repository ${repository.uid}`
+        : "repository identity needs migration",
+      icon: "◆",
+      value: {
+        repositoryId: repository.id,
+        path: "",
+        count: (index?.files || []).filter((file) => file.repositoryId === repository.id).length,
+      },
+      expanded: folderExpansion[id] ?? true,
+      children: [],
+    };
+    roots.push(node);
+    byKey.set(`${repository.id}\0`, node);
   }
+  for (const directory of [...directories].sort((left, right) => (
+    left.repositoryId.localeCompare(right.repositoryId)
+    || left.path.split("/").length - right.path.split("/").length
+    || left.path.localeCompare(right.path)
+  ))) {
+    const cleanPath = directory.path.replace(/^\/+|\/+$/gu, "");
+    const id = `directory:${directory.repositoryId}:${cleanPath}`;
+    const node: NoemaTreeNode<FolderValue> = {
+      id,
+      label: directory.name,
+      detail: cleanPath,
+      icon: "◇",
+      value: { repositoryId: directory.repositoryId, path: cleanPath, count: directory.fileCount, directory },
+      expanded: folderExpansion[id] ?? false,
+      children: [],
+    };
+    const parentPath = cleanPath.split("/").slice(0, -1).join("/");
+    (byKey.get(`${directory.repositoryId}\0${parentPath}`)?.children
+      ?? byKey.get(`${directory.repositoryId}\0`)?.children)?.push(node);
+    byKey.set(`${directory.repositoryId}\0${cleanPath}`, node);
+  }
+  createTreeView(list, {
+    nodes: roots,
+    ariaLabel: "Wiki repository folders",
+    onToggle: (node, expanded) => {
+      folderExpansion[node.id] = expanded;
+      localStorage.setItem(folderExpansionKey, JSON.stringify(folderExpansion));
+    },
+    onActivate: ({ node }) => {
+      activeView = "files";
+      searchEl.value = `${node.value.repositoryId}${node.value.path ? ` ${node.value.path}` : ""}`;
+      selectActiveNav();
+      render();
+    },
+    renderTrailing: (node, host) => {
+      host.textContent = String(node.value.count);
+      host.title = `${node.value.count} file${node.value.count === 1 ? "" : "s"}`;
+    },
+  });
   if (!list.childElementCount) viewEl.append(emptyState("No folders", "Repositories retain their physical folder layout."));
   else viewEl.append(list);
 }

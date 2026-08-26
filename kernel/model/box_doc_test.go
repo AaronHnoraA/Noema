@@ -120,9 +120,7 @@ func TestFindUnindexedTreePathIgnoresTextMatch(t *testing.T) {
 		Conf = originalConf
 		util.DataDir = originalDataDir
 		util.BlockTreeDBPath = originalBlockTreeDBPath
-		if "" != originalBlockTreeDBPath {
-			treenode.InitBlockTree(false)
-		}
+		restoreTestBlockTreeDatabase(originalBlockTreeDBPath)
 	})
 
 	if matchedPath := findUnindexedTreePathInAllBoxes(targetID); "" != matchedPath {

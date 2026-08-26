@@ -440,6 +440,12 @@ function buildDecorations(view: EditorView, tokens = collectLivePreviewTokens(vi
   const sel = view.state.selection.main;
   const doc = view.state.doc;
   const cursorLine = doc.lineAt(sel.from).number;
+  // Every delimiter of a link (`[`, `]`, `(`, the URL, `)`) carries the same
+  // whole-span class, so styling the span per delimiter wrapped each link in
+  // five identical nested spans. Harmless for `color`, but the translucent
+  // hover background of an internal link stacked five deep — and it is five
+  // times the decoration and DOM work on every selection change.
+  const styledLinkSpans = new Set<string>();
 
   for (const token of tokens) {
     switch (token.kind) {
@@ -456,7 +462,13 @@ function buildDecorations(view: EditorView, tokens = collectLivePreviewTokens(vi
       case "link-delimiter": {
         const inSpan = selectionIntersectsSpan(sel, token.spanFrom, token.spanTo);
         pushMark(decos, token.from, token.to, inSpan ? "syntax-hint" : "syntax-hidden");
-        if (!inSpan) pushMark(decos, token.spanFrom, token.spanTo, token.linkClass);
+        if (!inSpan) {
+          const span = `${token.spanFrom}:${token.spanTo}:${token.linkClass}`;
+          if (!styledLinkSpans.has(span)) {
+            styledLinkSpans.add(span);
+            pushMark(decos, token.spanFrom, token.spanTo, token.linkClass);
+          }
+        }
         break;
       }
       case "block-mark":

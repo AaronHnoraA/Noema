@@ -1,5 +1,6 @@
 import { deleteBracketPair } from "@codemirror/autocomplete";
-import { EditorSelection, type Transaction } from "@codemirror/state";
+import { countColumn, EditorSelection, type Transaction } from "@codemirror/state";
+import { getIndentUnit } from "@codemirror/language";
 import {
   cursorCharLeft,
   cursorCharRight,
@@ -105,6 +106,43 @@ export function runEditorMovement(
   return command(view) ? "cursor" : false;
 }
 
+/**
+ * Backspace inside a line's leading whitespace removes a whole indent step.
+ *
+ * Tab inserts one indent unit, so deleting a single space made indentation
+ * asymmetric: Tab then Backspace did not return the line to where it started.
+ * This is CodeMirror's own `deleteCharBackward` rule; Noema's delete chain
+ * bottoms out in a grapheme delete instead, so it has to be applied here.
+ *
+ * Only pure leading whitespace qualifies — a space between words is still one
+ * character, and a literal tab is deleted whole.
+ */
+function deleteIndentUnitBackward(view: EditorView): boolean {
+  const state = view.state;
+  const range = state.selection.main;
+  if (!range.empty) return false;
+  const line = state.doc.lineAt(range.head);
+  const before = line.text.slice(0, range.head - line.from);
+  if (!before || /[^ \t]/u.test(before)) return false;
+  if (before.endsWith("\t")) return false;
+
+  const unit = getIndentUnit(state);
+  if (unit <= 1) return false;
+  const column = countColumn(before, state.tabSize);
+  const drop = column % unit || unit;
+  let from = range.head;
+  for (let step = 0; step < drop && line.text[from - line.from - 1] === " "; step++) from--;
+  if (from >= range.head) return false;
+
+  view.dispatch(state.update({
+    changes: { from, to: range.head },
+    selection: EditorSelection.cursor(from),
+    scrollIntoView: true,
+    userEvent: "delete.backward",
+  }));
+  return true;
+}
+
 function deleteGraphemes(view: EditorView, direction: EditorDeleteDirection): boolean {
   let changed = false;
   const spec = view.state.changeByRange((range) => {
@@ -153,6 +191,7 @@ export function runEditorDelete(
     return deleteTexSourceAutoPair(view)
       || deleteBracketPair(view)
       || deleteMarkupBackward(view)
+      || deleteIndentUnitBackward(view)
       || deleteGraphemes(view, direction);
   }
 

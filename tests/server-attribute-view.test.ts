@@ -4,7 +4,12 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 // @ts-ignore Shared ESM contract lives outside the TS app graph.
-import { evaluateAttributeView } from "../shared/attribute-view.mjs";
+import {
+  ATTRIBUTE_VIEW_CALC_OPERATORS,
+  ATTRIBUTE_VIEW_FIELD_TYPES,
+  ATTRIBUTE_VIEW_FILTER_OPERATORS,
+  evaluateAttributeView,
+} from "../shared/attribute-view.mjs";
 // @ts-ignore Server facade modules live outside the TS app graph.
 import { buildAttributeView, configure, configurePlanningProvider, patchAttributeViewCell, readNote, syncRoamDb } from "../server/lib/index.mjs";
 
@@ -16,9 +21,81 @@ afterEach(async () => {
 });
 
 describe("portable attribute views", () => {
+  test("source-owns the complete typed operator and calculation vocabulary", () => {
+    expect(ATTRIBUTE_VIEW_FIELD_TYPES).toHaveLength(17);
+    expect(ATTRIBUTE_VIEW_FILTER_OPERATORS).toHaveLength(17);
+    expect(ATTRIBUTE_VIEW_CALC_OPERATORS).toHaveLength(22);
+    expect(new Set(ATTRIBUTE_VIEW_FIELD_TYPES).size).toBe(17);
+    expect(new Set(ATTRIBUTE_VIEW_FILTER_OPERATORS).size).toBe(17);
+    expect(new Set(ATTRIBUTE_VIEW_CALC_OPERATORS).size).toBe(22);
+  });
+
   test("matches the shared Go parser and evaluator fixtures", async () => {
     const fixtures = JSON.parse(await readFile(join(process.cwd(), "shared", "attribute-view-fixtures.json"), "utf8"));
     for (const fixture of fixtures) expect(evaluateAttributeView(fixture.request), fixture.name).toEqual(fixture.expected);
+  });
+
+  test("applies typed filters, nested groups, relative dates and all calculation families", () => {
+    const result = evaluateAttributeView({
+      title: "Typed work",
+      nowMs: Date.parse("2026-08-26T12:00:00Z"),
+      source: [
+        "source: todo",
+        "columns: text, effort, ddl, tags, done",
+        "type: effort number",
+        "type: ddl date",
+        "type: tags mSelect",
+        "type: done checkbox",
+        "filter: effort between 2..8",
+        "filter: ddl <= +7d",
+        "filter: tags contains-any research|writing",
+        "filter-any: status = todo; status = doing",
+        "calc: effort sum",
+        "calc: effort average",
+        "calc: effort median",
+        "calc: effort range",
+        "calc: ddl earliest",
+        "calc: ddl latest",
+        "calc: done checked",
+        "calc: done percent-checked",
+        "calc: tags unique-values",
+        "calc: effort template {{count}} rows / {{sum}} points",
+      ].join("\n"),
+      items: [
+        { id: "a", kind: "todo", status: "todo", text: "Draft", canon: { effort: "2", ddl: "2026-08-26", tags: "research|draft", done: "true" } },
+        { id: "b", kind: "todo", status: "doing", text: "Revise", canon: { effort: "8", ddl: "2026-09-02", tags: "writing", done: "false" } },
+        { id: "c", kind: "todo", status: "done", text: "Archive", canon: { effort: "4", ddl: "2026-08-28", tags: "research", done: "true" } },
+        { id: "d", kind: "todo", status: "todo", text: "Too large", canon: { effort: "9", ddl: "2026-08-27", tags: "research", done: "false" } },
+      ],
+    });
+    expect(result.rows.map((row: { id: string }) => row.id)).toEqual(["a", "b"]);
+    expect(result.columns).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: "effort", type: "number" }),
+      expect.objectContaining({ key: "tags", type: "mselect" }),
+    ]));
+    expect(result.calculations).toEqual([
+      expect.objectContaining({ operator: "sum", value: 10 }),
+      expect.objectContaining({ operator: "average", value: 5 }),
+      expect.objectContaining({ operator: "median", value: 5 }),
+      expect.objectContaining({ operator: "range", value: 6 }),
+      expect.objectContaining({ operator: "earliest", value: "2026-08-26" }),
+      expect.objectContaining({ operator: "latest", value: "2026-09-02" }),
+      expect.objectContaining({ operator: "checked", value: 1 }),
+      expect.objectContaining({ operator: "percent-checked", value: 0.5 }),
+      expect.objectContaining({ operator: "unique-values", value: ["research|draft", "writing"] }),
+      expect.objectContaining({ operator: "template", value: "2 rows / 10 points" }),
+    ]);
+  });
+
+  test("treats multi-select equality as case-insensitive set equality", () => {
+    const result = evaluateAttributeView({
+      source: "source: todo\ncolumns: text, tags\ntype: tags mselect\nfilter: tags = draft|research",
+      items: [
+        { id: "same", kind: "todo", text: "Same set", canon: { tags: "Research|draft|research" } },
+        { id: "different", kind: "todo", text: "Different set", canon: { tags: "research" } },
+      ],
+    });
+    expect(result.rows.map((row: { id: string }) => row.id)).toEqual(["same"]);
   });
 
   test("Node/Emacs fallback scans planning items without an AV sidecar", async () => {
