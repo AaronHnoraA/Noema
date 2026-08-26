@@ -38,17 +38,18 @@ import (
 	"github.com/88250/gulu"
 	"github.com/88250/lute/ast"
 	"github.com/88250/lute/parse"
-	"github.com/gin-gonic/gin"
-	"github.com/jinzhu/copier"
-	"github.com/siyuan-note/filelock"
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/av"
 	"github.com/aaronhe/noema/kernel/cache"
+	"github.com/aaronhe/noema/kernel/conf"
 	"github.com/aaronhe/noema/kernel/filesys"
 	"github.com/aaronhe/noema/kernel/search"
 	"github.com/aaronhe/noema/kernel/sql"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/gin-gonic/gin"
+	"github.com/jinzhu/copier"
+	"github.com/siyuan-note/filelock"
+	"github.com/siyuan-note/logging"
 	"github.com/xrash/smetrics"
 )
 
@@ -157,6 +158,11 @@ func UnusedAttributeViews(sorted bool) (ret []*UnusedItem) {
 	luteEngine := util.NewLute()
 	boxes := Conf.GetBoxes()
 	for _, box := range boxes {
+		if conf.BoxKindMarkdown == GetBoxKind(box.ID) {
+			// Portable #+begin av blocks are source-owned and never reference
+			// native storage/av definitions.
+			continue
+		}
 		pages := pagedPaths(filepath.Join(util.DataDir, box.ID), 32)
 		for _, paths := range pages {
 			var trees []*parse.Tree
@@ -1061,6 +1067,9 @@ func (tx *Transaction) doSetAttrViewGroup(operation *Operation) (ret *TxErr) {
 }
 
 func SetAttributeViewGroup(avID, blockID string, group *av.ViewGroup) (err error) {
+	if err = requireNativeAttributeViewMutation(avID, blockID); nil != err {
+		return
+	}
 	attrView, err := av.ParseAttributeView(avID)
 	if err != nil {
 		return err
@@ -1273,6 +1282,9 @@ func (tx *Transaction) doSetAttrViewBlockVisibleViews(operation *Operation) (ret
 }
 
 func SetDatabaseBlockVisibleViews(blockID, avID string, viewIDs []string) (err error) {
+	if err = requireNativeAttributeViewMutation(avID, blockID); nil != err {
+		return
+	}
 	if 1 > len(viewIDs) {
 		return errors.New("at least one visible view is required")
 	}
@@ -1324,6 +1336,9 @@ func (tx *Transaction) doChangeAttrViewLayout(operation *Operation) (ret *TxErr)
 }
 
 func ChangeAttrViewLayout(blockID, avID string, newLayout av.LayoutType) (err error) {
+	if err = requireNativeAttributeViewMutation(avID, blockID); nil != err {
+		return
+	}
 	attrView, err := av.ParseAttributeView(avID)
 	if err != nil {
 		return
@@ -1998,10 +2013,33 @@ func setAttrViewCardCoverPosition(operation *Operation) (err error) {
 }
 
 func AppendAttributeViewDetachedBlocksWithValues(avID string, blocksValues [][]*av.Value) (err error) {
+	if err = requireNativeAttributeViewMutation(avID); nil != err {
+		return
+	}
 	attrView, err := av.ParseAttributeView(avID)
 	if err != nil {
 		logging.LogErrorf("parse attribute view [%s] failed: %s", avID, err)
 		return
+	}
+	if err = requireNativeAttributeViewState(attrView); nil != err {
+		return
+	}
+	for rowIndex, blockValues := range blocksValues {
+		if 0 == len(blockValues) {
+			return fmt.Errorf("attribute view row [%d] has no values", rowIndex)
+		}
+		for valueIndex, value := range blockValues {
+			if nil == value {
+				return fmt.Errorf("attribute view row [%d] value [%d] is nil", rowIndex, valueIndex)
+			}
+			keyValues, _ := attrView.GetKeyValues(value.KeyID)
+			if nil == keyValues || nil == keyValues.Key {
+				return fmt.Errorf("key [%s] not found", value.KeyID)
+			}
+			if av.KeyTypeBlock == keyValues.Key.Type && nil == value.Block {
+				return fmt.Errorf("attribute view row [%d] block value [%d] has no block data", rowIndex, valueIndex)
+			}
+		}
 	}
 
 	now := util.CurrentTimeMillis()
@@ -2073,9 +2111,15 @@ func AppendAttributeViewDetachedBlocksWithValues(avID string, blocksValues [][]*
 // 双向关联同步更新目标属性视图的反向关联列。新行 ID 由调用方（前端）生成并通过 newRowID 传入，
 // 副本插入到 previousItemID（通常为最后选中的条目）之后。
 func DuplicateAttributeViewRow(tx *Transaction, avID, previousItemID, srcRowID, newRowID string) (err error) {
+	if err = requireNativeAttributeViewMutation(avID, srcRowID); nil != err {
+		return
+	}
 	attrView, err := av.ParseAttributeView(avID)
 	if err != nil {
 		logging.LogErrorf("parse attribute view [%s] failed: %s", avID, err)
+		return
+	}
+	if err = requireNativeAttributeViewState(attrView); nil != err {
 		return
 	}
 
@@ -2088,6 +2132,9 @@ func DuplicateAttributeViewRow(tx *Transaction, avID, previousItemID, srcRowID, 
 	srcBlockVal := blockKeyValues.GetValue(srcRowID)
 	if nil == srcBlockVal {
 		err = fmt.Errorf("source row [%s] not found in attribute view [%s]", srcRowID, avID)
+		return
+	}
+	if err = requireNativeAttributeViewItems(attrView, srcRowID); nil != err {
 		return
 	}
 
@@ -2241,6 +2288,9 @@ func insertItemAfter(items []string, item, previousItemID string) []string {
 }
 
 func DuplicateDatabaseBlock(avID string) (newAvID, newBlockID string, err error) {
+	if err = requireNativeAttributeViewMutation(avID); nil != err {
+		return
+	}
 	// 加密笔记本的 AV 定义在笔记本级目录，通过 fallback 查找实际路径
 	oldAvPath, avBoxID := av.FindAttributeViewPath(avID)
 	if oldAvPath == "" {
@@ -2250,6 +2300,9 @@ func DuplicateDatabaseBlock(avID string) (newAvID, newBlockID string, err error)
 
 	oldAv, err := av.ParseAttributeView(avID)
 	if err != nil {
+		return
+	}
+	if err = requireNativeAttributeViewState(oldAv); nil != err {
 		return
 	}
 
@@ -2348,6 +2401,9 @@ func GetAttributeViewKeysByID(avID string, keyIDs ...string) (ret []*av.Key) {
 }
 
 func SetDatabaseBlockView(blockID, avID, viewID string) (err error) {
+	if err = requireNativeAttributeViewMutation(avID, blockID); nil != err {
+		return
+	}
 	attrView, err := av.ParseAttributeView(avID)
 	if nil != err {
 		logging.LogErrorf("parse attribute view [%s] failed: %s", avID, err)
@@ -2449,7 +2505,7 @@ func GetAttributeViewPrimaryKeyValues(avID, keyword string, blockIDs []string, p
 		logging.LogErrorf("parse attribute view [%s] failed: %s", avID, err)
 		return
 	}
-	if normalizeAttributeViewBlockRefSubtypes(attrView) {
+	if normalizeAttributeViewBlockRefSubtypes(attrView) && nil == requireNativeAttributeViewState(attrView) {
 		if saveErr := av.SaveAttributeView(attrView); nil != saveErr {
 			logging.LogWarnf("save attribute view [%s] block reference subtypes failed: %s", avID, saveErr)
 		}
@@ -3644,11 +3700,14 @@ func GetBlockAttributeViewKeys(nodeID string) (ret []*BlockAttributeViewKeys) {
 			}
 			cachedAttrViews[avID] = attrView
 		}
+		nativeWritable := nil == requireNativeAttributeViewState(attrView)
 
 		if !attrView.ExistBoundBlock(nodeID) {
 			// 比如剪切后粘贴，块 ID 会变，但是属性还在块上，这里做一次数据订正
 			// Auto verify the database name when clicking the block superscript icon https://github.com/siyuan-note/siyuan/issues/10861
-			unbindBlockAv(nil, avID, nodeID)
+			if nativeWritable {
+				unbindBlockAv(nil, avID, nodeID)
+			}
 			return
 		}
 
@@ -3658,7 +3717,7 @@ func GetBlockAttributeViewKeys(nodeID string) (ret []*BlockAttributeViewKeys) {
 		}
 
 		itemID := blockVal.BlockID
-		view, err := getRenderAttributeViewView(attrView, "", "", nodeID, true)
+		view, err := getRenderAttributeViewView(attrView, "", "", nodeID, nativeWritable)
 		if nil != err {
 			continue
 		}
@@ -3685,7 +3744,7 @@ func GetBlockAttributeViewKeys(nodeID string) (ret []*BlockAttributeViewKeys) {
 		}
 
 		// 字段排序
-		refreshAttrViewKeyIDs(attrView, true)
+		refreshAttrViewKeyIDs(attrView, nativeWritable)
 		sorts := map[string]int{}
 		for i, k := range attrView.KeyIDs {
 			sorts[k] = i
@@ -3720,7 +3779,7 @@ func GetBlockAttributeViewKeys(nodeID string) (ret []*BlockAttributeViewKeys) {
 			}
 			if 1 > len(blockIDs) {
 				tree, _ := LoadTreeByBlockID(nodeID)
-				if nil != tree {
+				if nativeWritable && nil != tree {
 					node := treenode.GetNodeInTree(tree, nodeID)
 					if nil != node {
 						if removeErr := removeNodeAvID(node, avID, nil, tree); nil != removeErr {
@@ -3731,8 +3790,10 @@ func GetBlockAttributeViewKeys(nodeID string) (ret []*BlockAttributeViewKeys) {
 				continue
 			}
 			blockIDs = gulu.Str.RemoveDuplicatedElem(blockIDs)
-			for _, blockID := range blockIDs {
-				av.UpsertBlockRel(avID, blockID)
+			if nativeWritable {
+				for _, blockID := range blockIDs {
+					av.UpsertBlockRel(avID, blockID)
+				}
 			}
 		}
 
@@ -5190,6 +5251,9 @@ func (tx *Transaction) setAttributeViewName(operation *Operation) (err error) {
 	if err != nil {
 		return
 	}
+	if err = requireNativeAttributeViewState(attrView); nil != err {
+		return
+	}
 
 	attrView.Name = strings.TrimSpace(operation.Data.(string))
 	attrView.Name = strings.ReplaceAll(attrView.Name, "\n", " ")
@@ -5302,15 +5366,31 @@ func (tx *Transaction) doSetAttrViewColRollupFilters(operation *Operation) (ret 
 
 // avParseView 根据 blockID 推导 box 上下文，使用 box-aware 或全局 AV 解析。
 func avParseView(avID, blockID string) (*av.AttributeView, error) {
-	boxID := deriveAVBoxID(blockID)
-	if boxID != "" {
-		return av.ParseAttributeViewInBox(avID, boxID)
+	if err := requireNativeAttributeViewMutation(avID, blockID); nil != err {
+		return nil, err
 	}
-	return av.ParseAttributeView(avID)
+	boxID := deriveAVBoxID(blockID)
+	var attrView *av.AttributeView
+	var err error
+	if boxID != "" {
+		attrView, err = av.ParseAttributeViewInBox(avID, boxID)
+	} else {
+		attrView, err = av.ParseAttributeView(avID)
+	}
+	if nil != err {
+		return nil, err
+	}
+	if err = requireNativeAttributeViewState(attrView); nil != err {
+		return nil, err
+	}
+	return attrView, nil
 }
 
 // avSaveView 根据 blockID 推导 box 上下文，使用 box-aware 或全局 AV 保存。
 func avSaveView(attrView *av.AttributeView, blockID string) error {
+	if err := requireNativeAttributeViewMutation(attrView.ID, blockID); nil != err {
+		return err
+	}
 	boxID := deriveAVBoxID(blockID)
 	if boxID != "" {
 		_, parseErr := av.ParseAttributeViewInBox(attrView.ID, boxID)
@@ -5319,6 +5399,105 @@ func avSaveView(attrView *av.AttributeView, blockID string) error {
 		}
 	}
 	return av.SaveAttributeView(attrView)
+}
+
+// requireNativeAttributeViewItems resolves AV row IDs to their live bound
+// block IDs before a mutation starts. A row ID is not guaranteed to equal its
+// bound block ID, so checking only transaction RowID/SrcIDs can miss a
+// repository-native Markdown projection.
+func requireNativeAttributeViewItems(attrView *av.AttributeView, itemIDs ...string) error {
+	if nil == attrView {
+		return nil
+	}
+	targets := make(map[string]struct{}, len(itemIDs))
+	for _, itemID := range itemIDs {
+		if "" != itemID {
+			targets[itemID] = struct{}{}
+		}
+	}
+	blockKeyValues := attrView.GetBlockKeyValues()
+	if nil == blockKeyValues {
+		return requireNativeAttributeViewMutation(attrView.ID)
+	}
+	boundBlockIDs := make([]string, 0, len(targets))
+	for _, value := range blockKeyValues.Values {
+		if nil == value || value.IsDetached || nil == value.Block {
+			continue
+		}
+		if _, ok := targets[value.BlockID]; ok {
+			boundBlockIDs = append(boundBlockIDs, value.Block.ID)
+		}
+	}
+	return requireNativeAttributeViewMutation(attrView.ID, boundBlockIDs...)
+}
+
+// requireNativeAttributeViewBoundBlocks enforces the portable/native AV split:
+// a native JSON attribute view may not be mutated while any of its rows is
+// bound to a disposable Markdown block projection.
+func requireNativeAttributeViewBoundBlocks(attrView *av.AttributeView) error {
+	if nil == attrView {
+		return nil
+	}
+	blockKeyValues := attrView.GetBlockKeyValues()
+	if nil == blockKeyValues {
+		return requireNativeAttributeViewMutation(attrView.ID)
+	}
+	boundBlockIDs := make([]string, 0, len(blockKeyValues.Values))
+	for _, value := range blockKeyValues.Values {
+		if nil == value || value.IsDetached || nil == value.Block {
+			continue
+		}
+		boundBlockIDs = append(boundBlockIDs, value.Block.ID)
+	}
+	return requireNativeAttributeViewMutation(attrView.ID, boundBlockIDs...)
+}
+
+// requireNativeAttributeViewState also preflights one-hop relation AVs that a
+// source mutation may update (two-way relations, rollups, and refreshed source
+// views). It deliberately uses the shallow bound-block check for peers so
+// cyclic AV relations cannot recurse.
+func requireNativeAttributeViewState(attrView *av.AttributeView) error {
+	if err := requireNativeAttributeViewBoundBlocks(attrView); nil != err || nil == attrView {
+		return err
+	}
+	relatedAvIDs := av.GetSrcAvIDs(attrView.ID)
+	for _, keyValues := range attrView.KeyValues {
+		if nil != keyValues && nil != keyValues.Key && nil != keyValues.Key.Relation {
+			relatedAvIDs = append(relatedAvIDs, keyValues.Key.Relation.AvID)
+		}
+	}
+	for _, relatedAvID := range gulu.Str.RemoveDuplicatedElem(relatedAvIDs) {
+		if "" == relatedAvID || relatedAvID == attrView.ID {
+			continue
+		}
+		if err := requireNativeAttributeViewMutation(relatedAvID); nil != err {
+			return err
+		}
+		relatedAv, parseErr := av.ParseAttributeView(relatedAvID)
+		if nil != parseErr {
+			continue
+		}
+		if err := requireNativeAttributeViewBoundBlocks(relatedAv); nil != err {
+			return err
+		}
+	}
+	return nil
+}
+
+func requireNativeAttributeViewContents(avID string) error {
+	if "" == strings.TrimSpace(avID) {
+		return nil
+	}
+	if err := requireNativeAttributeViewMutation(avID); nil != err {
+		return err
+	}
+	attrView, err := av.ParseAttributeView(avID)
+	if nil != err {
+		// Missing/corrupt AV validation belongs to the operation itself. This
+		// preflight only rejects a positively resolved Markdown association.
+		return nil
+	}
+	return requireNativeAttributeViewState(attrView)
 }
 
 // deriveAVBoxID 通过 blockID 反查所在 box。blockID 为空或不是加密 box 时返回空串。
@@ -5344,6 +5523,9 @@ func deriveAVBoxID(blockID string) string {
 // SetAttrViewFilters 用新的过滤规则数组整体替换指定视图的过滤规则，并持久化。
 // data 为 JSON 反序列化前的 []any（通常是前端传来的过滤节点树）。
 func SetAttrViewFilters(avID, blockID string, data []any) (err error) {
+	if err = requireNativeAttributeViewMutation(avID, blockID); nil != err {
+		return
+	}
 	attrView, err := avParseView(avID, blockID)
 	if err != nil {
 		return
@@ -5612,6 +5794,9 @@ func (tx *Transaction) doSetAttrViewSorts(operation *Operation) (ret *TxErr) {
 // SetAttrViewSorts 用新的排序规则数组整体替换指定视图的排序规则，并持久化。
 // data 为 JSON 反序列化前的 []any。
 func SetAttrViewSorts(avID, blockID string, data []any) (err error) {
+	if err = requireNativeAttributeViewMutation(avID, blockID); nil != err {
+		return
+	}
 	attrView, err := avParseView(avID, blockID)
 	if err != nil {
 		return
@@ -5732,9 +5917,25 @@ func addAttributeViewBlocks(tx *Transaction, srcs []map[string]any, avID, dbBloc
 	if 0 == len(srcs) {
 		return
 	}
+	blockIDs := []string{dbBlockID}
+	for _, src := range srcs {
+		isDetached, _ := src["isDetached"].(bool)
+		if isDetached {
+			continue
+		}
+		if id, ok := src["id"].(string); ok {
+			blockIDs = append(blockIDs, id)
+		}
+	}
+	if err = requireNativeAttributeViewMutation(avID, blockIDs...); nil != err {
+		return
+	}
 	slices.Reverse(srcs) // https://github.com/siyuan-note/siyuan/issues/11286
 	attrView, err := av.ParseAttributeView(avID)
 	if err != nil {
+		return
+	}
+	if err = requireNativeAttributeViewState(attrView); nil != err {
 		return
 	}
 
@@ -5784,6 +5985,9 @@ func addAttributeViewBlocks(tx *Transaction, srcs []map[string]any, avID, dbBloc
 func addAttributeViewBlock(now int64, avID, dbBlockID, viewID, groupID, previousItemID, addingItemID, addingBoundBlockID, addingBlockContent string, src map[string]any, isDetached, ignoreDefaultFill bool, tree *parse.Tree, tx *Transaction, result *insertAttrViewBlockResult) (err error) {
 	attrView, err := av.ParseAttributeView(avID)
 	if err != nil {
+		return
+	}
+	if err = requireNativeAttributeViewState(attrView); nil != err {
 		return
 	}
 	if err = addAttributeViewBlock0(attrView, now, avID, dbBlockID, viewID, groupID, previousItemID, addingItemID, addingBoundBlockID, addingBlockContent, src, isDetached, ignoreDefaultFill, tree, tx, result); nil != err {
@@ -6059,8 +6263,17 @@ func RemoveAttributeViewBlock(srcIDs []string, avID string) (err error) {
 }
 
 func removeAttributeViewBlock(srcIDs []string, avID string, tx *Transaction) (err error) {
+	if err = requireNativeAttributeViewMutation(avID, srcIDs...); nil != err {
+		return
+	}
 	attrView, err := av.ParseAttributeView(avID)
 	if err != nil {
+		return
+	}
+	if err = requireNativeAttributeViewState(attrView); nil != err {
+		return
+	}
+	if err = requireNativeAttributeViewItems(attrView, srcIDs...); nil != err {
 		return
 	}
 	relationDestAvIDs := map[string]bool{}
@@ -6816,6 +7029,9 @@ func (tx *Transaction) doSortAttrViewColumn(operation *Operation) (ret *TxErr) {
 }
 
 func SortAttributeViewViewKey(avID, blockID, keyID, previousKeyID string) (err error) {
+	if err = requireNativeAttributeViewMutation(avID, blockID); nil != err {
+		return
+	}
 	if keyID == previousKeyID {
 		// 拖拽到自己的右侧，不做任何操作 https://github.com/siyuan-note/siyuan/issues/11048
 		return
@@ -6823,6 +7039,9 @@ func SortAttributeViewViewKey(avID, blockID, keyID, previousKeyID string) (err e
 
 	attrView, err := av.ParseAttributeView(avID)
 	if err != nil {
+		return
+	}
+	if err = requireNativeAttributeViewState(attrView); nil != err {
 		return
 	}
 
@@ -6914,9 +7133,15 @@ func SortAttributeViewKey(avID, keyID, previousKeyID string) (err error) {
 	if keyID == previousKeyID {
 		return
 	}
+	if err = requireNativeAttributeViewMutation(avID); nil != err {
+		return
+	}
 
 	attrView, err := av.ParseAttributeView(avID)
 	if err != nil {
+		return
+	}
+	if err = requireNativeAttributeViewState(attrView); nil != err {
 		return
 	}
 
@@ -6971,7 +7196,7 @@ func refreshAttrViewKeyIDs(attrView *av.AttributeView, needSave bool) {
 	}
 	attrView.KeyIDs = tmp
 
-	if needSave {
+	if needSave && nil == requireNativeAttributeViewState(attrView) {
 		av.SaveAttributeView(attrView)
 	}
 }
@@ -6991,8 +7216,14 @@ func (tx *Transaction) doAddAttrViewColumn(operation *Operation) (ret *TxErr) {
 }
 
 func AddAttributeViewKey(avID, blockID, keyID, keyName, keyType, keyIcon, previousKeyID string, dateFormat av.DateDisplayFormat) (err error) {
+	if err = requireNativeAttributeViewMutation(avID, blockID); nil != err {
+		return
+	}
 	attrView, err := av.ParseAttributeView(avID)
 	if err != nil {
+		return
+	}
+	if err = requireNativeAttributeViewState(attrView); nil != err {
 		return
 	}
 
@@ -7303,8 +7534,14 @@ func (tx *Transaction) doRemoveAttrViewColumn(operation *Operation) (ret *TxErr)
 }
 
 func RemoveAttributeViewKey(avID, keyID string, removeRelationDest bool) (err error) {
+	if err = requireNativeAttributeViewMutation(avID); nil != err {
+		return
+	}
 	attrView, err := av.ParseAttributeView(avID)
 	if err != nil {
+		return
+	}
+	if err = requireNativeAttributeViewState(attrView); nil != err {
 		return
 	}
 
@@ -7493,8 +7730,17 @@ func (tx *Transaction) doReplaceAttrViewBlock(operation *Operation) (ret *TxErr)
 }
 
 func replaceAttributeViewBlock(avID, oldBlockID, newBlockID string, isDetached bool, tx *Transaction) (targetItemID string, duplicate bool, err error) {
+	if err = requireNativeAttributeViewMutation(avID, oldBlockID, newBlockID); nil != err {
+		return
+	}
 	attrView, err := av.ParseAttributeView(avID)
 	if err != nil {
+		return
+	}
+	if err = requireNativeAttributeViewState(attrView); nil != err {
+		return
+	}
+	if err = requireNativeAttributeViewItems(attrView, oldBlockID); nil != err {
 		return
 	}
 
@@ -7567,8 +7813,29 @@ func replaceAttributeViewBlock0(attrView *av.AttributeView, oldBlockID, newNodeI
 }
 
 func BatchReplaceAttributeViewBlocks(avID string, isDetached bool, oldNew []map[string]string) (err error) {
+	blockIDs := make([]string, 0, 2*len(oldNew))
+	for _, oldNewMap := range oldNew {
+		for oldBlockID, newNodeID := range oldNewMap {
+			blockIDs = append(blockIDs, oldBlockID, newNodeID)
+		}
+	}
+	if err = requireNativeAttributeViewMutation(avID, blockIDs...); nil != err {
+		return
+	}
 	attrView, err := av.ParseAttributeView(avID)
 	if err != nil {
+		return
+	}
+	if err = requireNativeAttributeViewState(attrView); nil != err {
+		return
+	}
+	oldItemIDs := make([]string, 0, len(oldNew))
+	for _, oldNewMap := range oldNew {
+		for oldBlockID := range oldNewMap {
+			oldItemIDs = append(oldItemIDs, oldBlockID)
+		}
+	}
+	if err = requireNativeAttributeViewItems(attrView, oldItemIDs...); nil != err {
 		return
 	}
 
@@ -7639,8 +7906,29 @@ func (tx *Transaction) doUpdateAttrViewCells(operation *Operation) (ret *TxErr) 
 }
 
 func BatchUpdateAttributeViewCells(tx *Transaction, avID string, values []any) (err error) {
+	itemIDs := make([]string, 0, len(values))
+	for _, value := range values {
+		v, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		if itemID, ok := v["itemID"].(string); ok {
+			itemIDs = append(itemIDs, itemID)
+		} else if rowID, ok := v["rowID"].(string); ok {
+			itemIDs = append(itemIDs, rowID)
+		}
+	}
+	if err = requireNativeAttributeViewMutation(avID, itemIDs...); nil != err {
+		return
+	}
 	attrView, err := av.ParseAttributeView(avID)
 	if err != nil {
+		return
+	}
+	if err = requireNativeAttributeViewState(attrView); nil != err {
+		return
+	}
+	if err = requireNativeAttributeViewItems(attrView, itemIDs...); nil != err {
 		return
 	}
 
@@ -7674,8 +7962,17 @@ func BatchUpdateAttributeViewCells(tx *Transaction, avID string, values []any) (
 }
 
 func UpdateAttributeViewCell(tx *Transaction, avID, keyID, itemID string, valueData any) (val *av.Value, err error) {
+	if err = requireNativeAttributeViewMutation(avID, itemID); nil != err {
+		return
+	}
 	attrView, err := av.ParseAttributeView(avID)
 	if err != nil {
+		return
+	}
+	if err = requireNativeAttributeViewState(attrView); nil != err {
+		return
+	}
+	if err = requireNativeAttributeViewItems(attrView, itemID); nil != err {
 		return
 	}
 
@@ -7748,6 +8045,13 @@ func updateAttributeViewValue0(tx *Transaction, attrView *av.AttributeView, keyI
 		err = av.ErrItemNotFound
 		return
 	}
+	if err = requireNativeAttributeViewState(attrView); nil != err {
+		return
+	}
+	if err = requireNativeAttributeViewItems(attrView, itemID); nil != err {
+		return
+	}
+	key := keyValues.Key
 
 	now := time.Now().UnixMilli()
 	oldIsDetached := blockVal.IsDetached
@@ -7764,6 +8068,24 @@ func updateAttributeViewValue0(tx *Transaction, attrView *av.AttributeView, keyI
 	}
 	if nil != val {
 		val.Type = keyValues.Key.Type
+	}
+
+	data, err := gulu.JSON.MarshalJSON(valueData)
+	if err != nil {
+		logging.LogErrorf("marshal value [%+v] failed: %s", valueData, err)
+		return
+	}
+	if av.KeyTypeBlock == keyValues.Key.Type {
+		candidate := &av.Value{}
+		if err = gulu.JSON.UnmarshalJSON(data, candidate); nil != err {
+			logging.LogErrorf("unmarshal data [%s] failed: %s", data, err)
+			return
+		}
+		if !candidate.IsDetached && nil != candidate.Block {
+			if err = requireNativeAttributeViewMutation(attrView.ID, candidate.Block.ID); nil != err {
+				return
+			}
+		}
 	}
 
 	if nil == val {
@@ -7787,11 +8109,6 @@ func updateAttributeViewValue0(tx *Transaction, attrView *av.AttributeView, keyI
 			}
 		}
 	}
-	data, err := gulu.JSON.MarshalJSON(valueData)
-	if err != nil {
-		logging.LogErrorf("marshal value [%+v] failed: %s", valueData, err)
-		return
-	}
 	if err = gulu.JSON.UnmarshalJSON(data, val); err != nil {
 		logging.LogErrorf("unmarshal data [%s] failed: %s", data, err)
 		return
@@ -7801,8 +8118,6 @@ func updateAttributeViewValue0(tx *Transaction, attrView *av.AttributeView, keyI
 	val.BlockID = itemID
 	val.Type = valueType
 	val.CreatedAt = valueCreatedAt
-
-	key, _ := attrView.GetKey(keyID)
 
 	if av.KeyTypeNumber == val.Type {
 		if nil != val.Number {

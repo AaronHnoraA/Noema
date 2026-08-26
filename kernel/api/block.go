@@ -26,12 +26,12 @@ import (
 	"github.com/88250/lute/ast"
 	"github.com/88250/lute/html"
 	"github.com/88250/lute/parse"
-	"github.com/gin-gonic/gin"
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/filesys"
 	"github.com/aaronhe/noema/kernel/model"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/gin-gonic/gin"
+	"github.com/siyuan-note/logging"
 )
 
 func checkBlockRef(c *gin.Context) {
@@ -389,7 +389,11 @@ func appendHeadingChildren(c *gin.Context) {
 
 	id := arg["id"].(string)
 	childrenDOM := arg["childrenDOM"].(string)
-	model.AppendHeadingChildren(id, childrenDOM)
+	if err := model.AppendHeadingChildren(id, childrenDOM); nil != err {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
 }
 
 func getHeadingChildrenDOM(c *gin.Context) {

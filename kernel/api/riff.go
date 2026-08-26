@@ -21,10 +21,10 @@ import (
 	"time"
 
 	"github.com/88250/gulu"
-	"github.com/gin-gonic/gin"
-	"github.com/siyuan-note/riff"
 	"github.com/aaronhe/noema/kernel/model"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/gin-gonic/gin"
+	"github.com/siyuan-note/riff"
 )
 
 func getRiffCardsByBlockIDs(c *gin.Context) {
@@ -347,7 +347,11 @@ func removeRiffCards(c *gin.Context) {
 		},
 	}
 
-	model.PerformTransactions(&transactions)
+	if err := model.PerformTransactions(&transactions); nil != err {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
 	model.FlushTxQueue()
 
 	if "" != deckID {
@@ -390,7 +394,11 @@ func addRiffCards(c *gin.Context) {
 		},
 	}
 
-	model.PerformTransactions(&transactions)
+	if err := model.PerformTransactions(&transactions); nil != err {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
 	model.FlushTxQueue()
 
 	deck := model.Decks[deckID]

@@ -392,7 +392,9 @@ var blockDeleteCmd = &cobra.Command{
 				ID:     id,
 			}},
 		}}
-		model.PerformTransactions(&transactions)
+		if err := model.PerformTransactions(&transactions); nil != err {
+			return err
+		}
 		model.FlushTxQueue()
 
 		if bt != nil {

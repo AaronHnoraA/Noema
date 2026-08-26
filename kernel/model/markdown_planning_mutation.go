@@ -29,7 +29,7 @@ var ErrMarkdownPlanningVersionConflict = errors.New("planning document version c
 
 var markdownPlanningMutationLocks sync.Map
 var markdownPlanningTodoIDLock sync.Mutex
-var saveMarkdownPlanningDoc = SaveMarkdownDoc
+var saveMarkdownPlanningDoc = saveMarkdownDocUnlocked
 var newMarkdownPlanningTodoID = randomMarkdownPlanningTodoID
 var newMarkdownPlanningDocumentID = func() (string, error) {
 	id, err := uuid.NewV7()
@@ -79,10 +79,7 @@ func MutateMarkdownPlanning(request MarkdownPlanningMutationRequest) (ret *Markd
 	if conf.BoxKindMarkdown != GetBoxKind(boxID) {
 		return nil, fmt.Errorf("box [%s] is not a markdown box", boxID)
 	}
-	if !isMarkdownDocPath(path) {
-		return nil, fmt.Errorf("path [%s] is not a Markdown document", path)
-	}
-	if _, err = filesys.ValidateBoxRelativePath(boxID, path); nil != err {
+	if path, err = normalizedMarkdownDocPath(boxID, path); nil != err {
 		return nil, err
 	}
 	mutationType := strings.ToLower(strings.TrimSpace(request.Mutation.Type))

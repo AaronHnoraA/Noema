@@ -31,13 +31,13 @@ import (
 	"github.com/88250/gulu"
 	"github.com/88250/lute/ast"
 	"github.com/88250/lute/parse"
+	"github.com/aaronhe/noema/kernel/model"
+	"github.com/aaronhe/noema/kernel/treenode"
+	"github.com/aaronhe/noema/kernel/util"
 	"github.com/gin-gonic/gin"
 	"github.com/mssola/useragent"
 	"github.com/siyuan-note/filelock"
 	"github.com/siyuan-note/logging"
-	"github.com/aaronhe/noema/kernel/model"
-	"github.com/aaronhe/noema/kernel/treenode"
-	"github.com/aaronhe/noema/kernel/util"
 )
 
 func exportCodeBlock(c *gin.Context) {
@@ -529,7 +529,12 @@ func exportNotebookSY(c *gin.Context) {
 		ret.Msg = model.Conf.Language(314)
 		return
 	}
-	zipPath := model.ExportNotebookSY(id)
+	zipPath, err := model.ExportNotebookSY(id)
+	if nil != err {
+		ret.Code = 1
+		ret.Msg = err.Error()
+		return
+	}
 	ret.Data = map[string]any{
 		"zip": zipPath,
 	}
@@ -555,7 +560,12 @@ func exportNotebooksSY(c *gin.Context) {
 			return
 		}
 	}
-	zipPath := model.ExportNotebooksSY(notebooks)
+	zipPath, err := model.ExportNotebooksSY(notebooks)
+	if nil != err {
+		ret.Code = 1
+		ret.Msg = err.Error()
+		return
+	}
 	ret.Data = map[string]any{
 		"zip": zipPath,
 	}
@@ -592,7 +602,12 @@ func exportSYs(c *gin.Context) {
 		return
 	}
 
-	zipPath := model.ExportSYs(ids)
+	zipPath, err := model.ExportSYs(ids)
+	if nil != err {
+		ret.Code = 1
+		ret.Msg = err.Error()
+		return
+	}
 	ret.Data = map[string]any{
 		"zip": zipPath,
 	}
@@ -614,7 +629,12 @@ func exportSY(c *gin.Context) {
 	if !holdEncryptedExportRequest(c, id, ret) {
 		return
 	}
-	zipPath := model.ExportSYs([]string{id})
+	zipPath, err := model.ExportSYs([]string{id})
+	if nil != err {
+		ret.Code = 1
+		ret.Msg = err.Error()
+		return
+	}
 	ret.Data = map[string]any{
 		"zip": zipPath,
 	}

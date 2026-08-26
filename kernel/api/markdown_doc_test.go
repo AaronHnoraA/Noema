@@ -89,6 +89,85 @@ func TestLoadMarkdownDocAPIRejectsMissingFields(t *testing.T) {
 	}
 }
 
+func TestSaveMarkdownDocAPIReturnsCASConflictWithoutWriting(t *testing.T) {
+	boxID := setupMarkdownDocAPITest(t)
+	absPath := filepath.Join(util.DataDir, boxID, "plain.md")
+	const current = "# Disk winner\n"
+	if err := os.WriteFile(absPath, []byte(current), 0644); nil != err {
+		t.Fatal(err)
+	}
+
+	engine := gin.New()
+	engine.POST("/api/noema/markdown/saveDoc", saveMarkdownDoc)
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/noema/markdown/saveDoc", strings.NewReader(
+		`{"notebook":"`+boxID+`","path":"/plain.md","markdown":"# Stale local edit\n","expectedVersion":"stale-version"}`,
+	))
+	req.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, req)
+
+	var resp markdownDocResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); nil != err {
+		t.Fatal(err)
+	}
+	if resp.Code != 0 {
+		t.Fatalf("save API conflict failed: %s", recorder.Body.String())
+	}
+	var data model.MarkdownDocCASResult
+	if err := json.Unmarshal(resp.Data, &data); nil != err {
+		t.Fatal(err)
+	}
+	if !data.Conflict || data.Markdown != current || data.Version == "" {
+		t.Fatalf("unexpected save conflict projection: %+v", data)
+	}
+	if onDisk, err := os.ReadFile(absPath); nil != err || string(onDisk) != current {
+		t.Fatalf("stale API save changed disk: content=%q err=%v", onDisk, err)
+	}
+}
+
+func TestMutateMarkdownMetaAPIRequiresIntentAndReturnsKernelProjection(t *testing.T) {
+	boxID := setupMarkdownDocAPITest(t)
+	path := filepath.Join(util.DataDir, boxID, "plain.md")
+	if err := os.WriteFile(path, []byte("# Plain\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	engine := gin.New()
+	engine.POST("/api/noema/markdown/mutateMeta", mutateMarkdownMeta)
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/noema/markdown/mutateMeta", strings.NewReader(
+		`{"notebook":"`+boxID+`","path":"/plain.md","action":"remove"}`))
+	req.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, req)
+	var resp markdownDocResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Code != 0 {
+		t.Fatalf("metadata no-op failed: %s", recorder.Body.String())
+	}
+	var data model.MarkdownMetaMutationResult
+	if err := json.Unmarshal(resp.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data.Changed || data.Markdown != "# Plain\n" || data.Source != "kernel-meta" {
+		t.Fatalf("unexpected metadata projection: %+v", data)
+	}
+
+	for _, body := range []string{`{}`, `{"notebook":"box"}`, `{"notebook":"box","path":"/a.md"}`} {
+		recorder = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodPost, "/api/noema/markdown/mutateMeta", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		engine.ServeHTTP(recorder, req)
+		if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		if resp.Code != -1 {
+			t.Fatalf("expected missing metadata intent rejection for %s: %s", body, recorder.Body.String())
+		}
+	}
+}
+
 func TestListMarkdownRelationshipsAPIRejectsMissingNotebook(t *testing.T) {
 	setupMarkdownDocAPITest(t)
 	engine := gin.New()
@@ -167,6 +246,92 @@ func TestListMarkdownPropertyBlocksAPI(t *testing.T) {
 	}
 	if len(data.Documents) != 1 || len(data.Documents[0].Blocks) != 1 || data.Documents[0].Blocks[0].CanonicalID != id {
 		t.Fatalf("unexpected property block response: %+v", data.Documents)
+	}
+}
+
+func TestLoadMarkdownBibliographyAPI(t *testing.T) {
+	boxID := setupMarkdownDocAPITest(t)
+	noteDir := filepath.Join(util.DataDir, boxID, "notes")
+	if err := os.MkdirAll(filepath.Join(noteDir, "bib"), 0755); nil != err {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(noteDir, "bib", "refs.bib"), []byte("@book{Ada, author={Lovelace, Ada}, title={Notes}, year={1843}}"), 0644); nil != err {
+		t.Fatal(err)
+	}
+
+	engine := gin.New()
+	engine.POST("/api/noema/markdown/loadBibliography", loadMarkdownBibliography)
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/noema/markdown/loadBibliography", strings.NewReader(
+		`{"notebook":"`+boxID+`","path":"/notes/note.md","metadata":"#+begin meta\n#+end meta\n"}`,
+	))
+	req.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, req)
+
+	var resp markdownDocResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); nil != err {
+		t.Fatal(err)
+	}
+	if 0 != resp.Code {
+		t.Fatalf("bibliography API failed: %s", recorder.Body.String())
+	}
+	var data struct {
+		Source string `json:"source"`
+		Files  []struct {
+			Path    string `json:"path"`
+			Entries []struct {
+				Key string `json:"key"`
+			} `json:"entries"`
+		} `json:"files"`
+	}
+	if err := json.Unmarshal(resp.Data, &data); nil != err {
+		t.Fatal(err)
+	}
+	if "kernel-bibliography" != data.Source || 1 != len(data.Files) || "notes/bib/refs.bib" != data.Files[0].Path || "Ada" != data.Files[0].Entries[0].Key {
+		t.Fatalf("unexpected bibliography response: %+v", data)
+	}
+}
+
+func TestLoadMarkdownBibliographyAPIRejectsMissingFields(t *testing.T) {
+	setupMarkdownDocAPITest(t)
+	engine := gin.New()
+	engine.POST("/api/noema/markdown/loadBibliography", loadMarkdownBibliography)
+	for _, body := range []string{`{}`, `{"notebook":"box"}`, `{"notebook":"box","path":"/note.md"}`} {
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/noema/markdown/loadBibliography", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		engine.ServeHTTP(recorder, req)
+		var resp markdownDocResponse
+		if err := json.Unmarshal(recorder.Body.Bytes(), &resp); nil != err {
+			t.Fatal(err)
+		}
+		if -1 != resp.Code {
+			t.Fatalf("expected missing-field rejection for %s: %s", body, recorder.Body.String())
+		}
+	}
+}
+
+func TestMoveMarkdownPathAPIsRejectMissingFields(t *testing.T) {
+	setupMarkdownDocAPITest(t)
+	for route, handler := range map[string]gin.HandlerFunc{
+		"/api/noema/markdown/moveDoc":  moveMarkdownDoc,
+		"/api/noema/markdown/movePath": moveMarkdownPath,
+	} {
+		engine := gin.New()
+		engine.POST(route, handler)
+		for _, body := range []string{`{}`, `{"notebook":"box"}`, `{"notebook":"box","fromPath":"/a.md"}`} {
+			recorder := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, route, strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			engine.ServeHTTP(recorder, req)
+			var resp markdownDocResponse
+			if err := json.Unmarshal(recorder.Body.Bytes(), &resp); nil != err {
+				t.Fatal(err)
+			}
+			if -1 != resp.Code {
+				t.Fatalf("expected missing-field rejection for %s %s: %s", route, body, recorder.Body.String())
+			}
+		}
 	}
 }
 

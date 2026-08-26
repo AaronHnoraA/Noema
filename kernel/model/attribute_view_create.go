@@ -23,11 +23,11 @@ import (
 	"unicode/utf8"
 
 	"github.com/88250/lute/ast"
-	"github.com/siyuan-note/filelock"
 	"github.com/aaronhe/noema/kernel/av"
 	"github.com/aaronhe/noema/kernel/cache"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/siyuan-note/filelock"
 )
 
 // AttributeViewCreateKey 描述创建数据库时需要按顺序初始化的字段。
@@ -50,6 +50,9 @@ func CreateAttributeViewDatabase(parentID, previousID, nextID, name, primaryKeyN
 	keySpecs []*AttributeViewCreateKey) (ret *AttributeViewCreateResult, err error) {
 	if "" == parentID {
 		return nil, errors.New("parent ID is required")
+	}
+	if err = requireNativeBlockIDs(parentID, previousID, nextID); nil != err {
+		return nil, err
 	}
 	if "" != previousID && "" != nextID {
 		return nil, errors.New("previous ID and next ID cannot both be specified")

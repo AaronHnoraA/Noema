@@ -28,13 +28,13 @@ import (
 	"github.com/88250/lute/editor"
 	"github.com/88250/lute/html"
 	"github.com/88250/lute/parse"
-	"github.com/araddon/dateparse"
 	"github.com/aaronhe/noema/kernel/av"
 	"github.com/aaronhe/noema/kernel/cache"
 	"github.com/aaronhe/noema/kernel/filesys"
 	"github.com/aaronhe/noema/kernel/sql"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/araddon/dateparse"
 )
 
 func SetCloudReminder(id, content, timed string) (err error) {
@@ -92,6 +92,9 @@ func SetBlockReminder(id, timed string) (err error) {
 	attrs := sql.GetBlockAttrs(id)
 	tree, err := LoadTreeByBlockID(id)
 	if err != nil {
+		return
+	}
+	if err = requireNativeDocumentTree(tree.Box); nil != err {
 		return
 	}
 
@@ -359,6 +362,10 @@ func setNodeAttrsWithTx(tx *Transaction, node *ast.Node, tree *parse.Tree, nameV
 }
 
 func setNodeAttrs0(node *ast.Node, nameValues map[string]string, boxID string) (oldAttrs map[string]string, err error) {
+	if err = requireNativeDocumentTree(boxID); nil != err {
+		return
+	}
+
 	// 加密笔记本不支持书签和标签（依赖全局 SQLite 聚合，加密笔记本是孤岛）
 	if IsEncryptedBox(boxID) && boxID != "" {
 		for name := range nameValues {

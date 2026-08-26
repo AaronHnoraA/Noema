@@ -21,7 +21,7 @@ import (
 )
 
 var ErrMarkdownPropertyVersionConflict = errors.New("block property document version conflict")
-var saveMarkdownPropertyDoc = SaveMarkdownDoc
+var saveMarkdownPropertyDoc = saveMarkdownDocUnlocked
 
 // MarkdownPropertyDocument is a read-only projection of portable
 // `{#UUIDv7 key=value}` anchors. Source indices use JavaScript UTF-16 units,
@@ -63,10 +63,7 @@ func ListMarkdownPropertyBlocks(boxID, path string) (documents []MarkdownPropert
 	}
 	paths := []string{}
 	if strings.TrimSpace(path) != "" {
-		if !isMarkdownDocPath(path) {
-			return nil, fmt.Errorf("path [%s] is not a Markdown document", path)
-		}
-		if _, err = filesys.ValidateBoxRelativePath(boxID, path); nil != err {
+		if path, err = normalizedMarkdownDocPath(boxID, path); nil != err {
 			return nil, err
 		}
 		paths = append(paths, path)
@@ -122,10 +119,7 @@ func MutateMarkdownProperty(request MarkdownPropertyMutationRequest) (ret *Markd
 	if conf.BoxKindMarkdown != GetBoxKind(boxID) {
 		return nil, fmt.Errorf("box [%s] is not a markdown box", boxID)
 	}
-	if !isMarkdownDocPath(path) {
-		return nil, fmt.Errorf("path [%s] is not a Markdown document", path)
-	}
-	if _, err = filesys.ValidateBoxRelativePath(boxID, path); nil != err {
+	if path, err = normalizedMarkdownDocPath(boxID, path); nil != err {
 		return nil, err
 	}
 

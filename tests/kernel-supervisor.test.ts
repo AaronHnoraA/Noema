@@ -66,6 +66,7 @@ describe("shared kernel supervisor", () => {
       binary,
       workingDir: join(runtimeRoot, "app"),
       workspace: join(stateRoot, "kernel-workspace"),
+      configDir: join(stateRoot, "kernel-config"),
     });
     expect(resolveKernelLaunchConfig({
       env: { NOEMA_KERNEL_BIN: join(suite, "missing-kernel"), PATH: suite },
@@ -130,8 +131,10 @@ describe("shared kernel supervisor", () => {
 
     const signals: string[] = [];
     let spawnedArgs: string[] = [];
-    const spawnImpl = (_file: string, args: string[]) => {
+    let spawnedEnv: NodeJS.ProcessEnv = {};
+    const spawnImpl = (_file: string, args: string[], options: { env?: NodeJS.ProcessEnv }) => {
       spawnedArgs = args;
+      spawnedEnv = options.env || {};
       const child = new EventEmitter() as EventEmitter & {
         stdout: PassThrough;
         stderr: PassThrough;
@@ -172,6 +175,7 @@ describe("shared kernel supervisor", () => {
       "--wd", join(runtimeRoot, "app"),
       "--supervisor-pid", "4242",
     ]));
+    expect(spawnedEnv.NOEMA_KERNEL_CONFIG_DIR).toBe(join(stateRoot, "kernel-config"));
     expect(supervisor.status()).toMatchObject({
       state: "listening",
       baseUrl: "http://127.0.0.1:43128",
@@ -180,6 +184,127 @@ describe("shared kernel supervisor", () => {
     await supervisor.close();
     expect(signals).toContain("SIGTERM");
     expect(signals).not.toContain("SIGKILL");
+  });
+
+  test("keeps starting while a first external-box registration builds its index", async () => {
+    let registrationFinished = false;
+    let bootProbes = 0;
+    const states: string[] = [];
+    const supervisor = createKernelSupervisor({
+      env: { NOEMA_KERNEL_BASE: "http://127.0.0.1:43129" },
+      runtimeRoot: "/tmp/runtime",
+      stateRoot: "/tmp/state",
+      noteRoot: "/tmp/notes",
+      requestTimeoutMs: 5,
+      bootTimeoutMs: 40,
+      registrationTimeoutMs: 1_000,
+      registrationProbeIntervalMs: 10,
+      healthIntervalMs: 10_000,
+      fetchImpl: async (url: string, init?: RequestInit) => {
+        if (String(url).endsWith("/api/system/bootProgress")) {
+          bootProbes++;
+          return response({ code: 0, data: { progress: 100 } });
+        }
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => {
+            registrationFinished = true;
+            resolve();
+          }, 120);
+          init?.signal?.addEventListener("abort", () => {
+            clearTimeout(timer);
+            reject(init.signal?.reason || new Error("aborted"));
+          }, { once: true });
+        });
+        return response({ code: 0, data: { box: { id: "box-slow", root: "/tmp/notes" } } });
+      },
+      stderr: { write() {} } as unknown as NodeJS.WritableStream,
+      onState(state: { state: string }) { states.push(state.state); },
+    });
+
+    void supervisor.start();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(registrationFinished).toBe(false);
+    expect(supervisor.status().state).toBe("starting");
+    await waitFor(() => supervisor.status().state === "listening");
+    expect(registrationFinished).toBe(true);
+    expect(bootProbes).toBeGreaterThan(2);
+    expect(states.filter((state) => state === "listening")).toHaveLength(1);
+    await supervisor.close();
+  });
+
+  test("bounds a live but stuck external-box registration", async () => {
+    let registrationAborted = false;
+    const states: string[] = [];
+    const supervisor = createKernelSupervisor({
+      env: { NOEMA_KERNEL_BASE: "http://127.0.0.1:43130" },
+      runtimeRoot: "/tmp/runtime",
+      stateRoot: "/tmp/state",
+      noteRoot: "/tmp/notes",
+      requestTimeoutMs: 5,
+      bootTimeoutMs: 40,
+      registrationTimeoutMs: 70,
+      registrationProbeIntervalMs: 10,
+      restartDelayMs: 10_000,
+      fetchImpl: async (url: string, init?: RequestInit) => {
+        if (String(url).endsWith("/api/system/bootProgress")) {
+          return response({ code: 0, data: { progress: 100 } });
+        }
+        await new Promise<void>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            registrationAborted = true;
+            reject(init.signal?.reason || new Error("aborted"));
+          }, { once: true });
+        });
+        throw new Error("unreachable");
+      },
+      stderr: { write() {} } as unknown as NodeJS.WritableStream,
+      onState(state: { state: string }) { states.push(state.state); },
+    });
+
+    void supervisor.start();
+    await waitFor(() => states.includes("degraded"));
+    expect(registrationAborted).toBe(true);
+    expect(states).not.toContain("listening");
+    await supervisor.close();
+  });
+
+  test("aborts registration when the kernel stops responding during indexing", async () => {
+    let bootProbes = 0;
+    let registrationAborted = false;
+    const states: string[] = [];
+    const supervisor = createKernelSupervisor({
+      env: { NOEMA_KERNEL_BASE: "http://127.0.0.1:43131" },
+      runtimeRoot: "/tmp/runtime",
+      stateRoot: "/tmp/state",
+      noteRoot: "/tmp/notes",
+      requestTimeoutMs: 5,
+      bootTimeoutMs: 35,
+      registrationTimeoutMs: 1_000,
+      registrationProbeIntervalMs: 10,
+      restartDelayMs: 10_000,
+      fetchImpl: async (url: string, init?: RequestInit) => {
+        if (String(url).endsWith("/api/system/bootProgress")) {
+          bootProbes++;
+          if (bootProbes === 1) return response({ code: 0, data: { progress: 100 } });
+          throw new Error("kernel offline");
+        }
+        await new Promise<void>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            registrationAborted = true;
+            reject(init.signal?.reason || new Error("aborted"));
+          }, { once: true });
+        });
+        throw new Error("unreachable");
+      },
+      stderr: { write() {} } as unknown as NodeJS.WritableStream,
+      onState(state: { state: string }) { states.push(state.state); },
+    });
+
+    void supervisor.start();
+    await waitFor(() => states.includes("degraded"));
+    expect(registrationAborted).toBe(true);
+    expect(states).not.toContain("listening");
+    await supervisor.close();
   });
 
   test("rebinds the shared providers after an owned kernel exits with a new port", async () => {

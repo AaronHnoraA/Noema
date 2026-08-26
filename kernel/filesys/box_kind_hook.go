@@ -16,7 +16,14 @@
 
 package filesys
 
-import "github.com/aaronhe/noema/kernel/conf"
+import (
+	"errors"
+	"fmt"
+	"path/filepath"
+	"strings"
+
+	"github.com/aaronhe/noema/kernel/conf"
+)
 
 // BoxKindProvider 由 model 层在 init 时注入，用于查询 boxID 对应的存储形态
 // （conf.BoxKindSy / conf.BoxKindMarkdown）。filesys 不能直接 import model
@@ -36,4 +43,36 @@ func boxKind(boxID string) string {
 
 func isMarkdownBox(boxID string) bool {
 	return conf.BoxKindMarkdown == boxKind(boxID)
+}
+
+// ErrBoxDocumentPathKind marks a path whose extension does not belong to the
+// source format selected by its box. It prevents a caller from treating a
+// stray .sy file in a Markdown repository as Markdown (or vice versa).
+var ErrBoxDocumentPathKind = errors.New("document path does not match notebook kind")
+
+func IsMarkdownDocumentPath(p string) bool {
+	ext := strings.ToLower(filepath.Ext(filepath.ToSlash(strings.TrimSpace(p))))
+	return ".md" == ext || ".markdown" == ext
+}
+
+func IsNativeDocumentPath(p string) bool {
+	return strings.HasSuffix(filepath.ToSlash(strings.TrimSpace(p)), ".sy")
+}
+
+func IsDocumentPathForKind(kind, p string) bool {
+	if conf.BoxKindMarkdown == kind {
+		return IsMarkdownDocumentPath(p)
+	}
+	return IsNativeDocumentPath(p)
+}
+
+func IsBoxDocumentPath(boxID, p string) bool {
+	return IsDocumentPathForKind(boxKind(boxID), p)
+}
+
+func ValidateBoxDocumentPath(boxID, p string) error {
+	if IsBoxDocumentPath(boxID, p) {
+		return nil
+	}
+	return fmt.Errorf("%w: notebook [%s] kind [%s], path [%s]", ErrBoxDocumentPathKind, boxID, boxKind(boxID), p)
 }

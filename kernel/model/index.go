@@ -19,6 +19,7 @@ package model
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"path/filepath"
@@ -60,7 +61,18 @@ func pathBoxIsMarkdown(p string) bool {
 	return conf.BoxKindMarkdown == GetBoxKind(boxID)
 }
 
+// pathIsBoxDocument checks both path extension and the owning box kind. A
+// Markdown repository may legitimately contain imported .sy files as assets;
+// those must never enter the Markdown parser/index just because of a suffix.
+func pathIsBoxDocument(p string) bool {
+	boxID, _, found := strings.Cut(strings.TrimPrefix(filepath.ToSlash(p), "/"), "/")
+	return found && filesys.IsBoxDocumentPath(boxID, p)
+}
+
 func UpsertIndexes(paths []string) {
+	databaseIndexDataLock.Lock()
+	defer databaseIndexDataLock.Unlock()
+
 	var files []string
 	for _, p := range paths {
 		if strings.HasSuffix(p, "/") {
@@ -72,7 +84,7 @@ func UpsertIndexes(paths []string) {
 			continue
 		}
 
-		if strings.HasSuffix(p, ".sy") || (strings.HasSuffix(p, ".md") && pathBoxIsMarkdown(p)) {
+		if pathIsBoxDocument(p) {
 			files = append(files, p)
 		}
 	}
@@ -82,6 +94,9 @@ func UpsertIndexes(paths []string) {
 }
 
 func RemoveIndexes(paths []string) {
+	databaseIndexDataLock.Lock()
+	defer databaseIndexDataLock.Unlock()
+
 	var files []string
 	for _, p := range paths {
 		if strings.HasSuffix(p, "/") {
@@ -93,7 +108,7 @@ func RemoveIndexes(paths []string) {
 			continue
 		}
 
-		if strings.HasSuffix(p, ".sy") || (strings.HasSuffix(p, ".md") && pathBoxIsMarkdown(p)) {
+		if pathIsBoxDocument(p) {
 			files = append(files, p)
 		}
 	}
@@ -111,10 +126,13 @@ func RemoveIndexes(paths []string) {
 func removeIndexes(removeFilePaths []string) (removeRootIDs []string) {
 	bootProgressPart := int32(10 / float64(len(removeFilePaths)))
 	for _, removeFile := range removeFilePaths {
+		if !pathIsBoxDocument(removeFile) {
+			continue
+		}
 		var rootID string
-		if strings.HasSuffix(removeFile, ".sy") {
+		if filesys.IsNativeDocumentPath(removeFile) {
 			rootID = util.GetTreeID(removeFile)
-		} else if strings.HasSuffix(removeFile, ".md") {
+		} else if filesys.IsMarkdownDocumentPath(removeFile) {
 			// markdown box：文件名不是块 ID，只能从已建立的 blocktree 索引反查这个路径此前对应的 rootID。
 			boxID, relPath, found := strings.Cut(strings.TrimPrefix(filepath.ToSlash(removeFile), "/"), "/")
 			if !found {
@@ -160,11 +178,6 @@ func upsertIndexes(upsertFilePaths []string) (upsertRootIDs []string) {
 	bootProgressPart := int32(10 / float64(len(upsertFilePaths)))
 	for _, upsertFile := range upsertFilePaths {
 		rootID, indexed := func() (string, bool) {
-			isMarkdown := strings.HasSuffix(upsertFile, ".md")
-			if !strings.HasSuffix(upsertFile, ".sy") && !isMarkdown {
-				return "", false
-			}
-
 			upsertFile = filepath.ToSlash(upsertFile)
 			upsertFile = strings.TrimPrefix(upsertFile, "/")
 
@@ -173,9 +186,10 @@ func upsertIndexes(upsertFilePaths []string) (upsertRootIDs []string) {
 				// .sy/.md 直接出现在 data 文件夹下，没有出现在笔记本文件夹下的情况
 				return "", false
 			}
-			if isMarkdown && conf.BoxKindMarkdown != GetBoxKind(box) {
+			if !filesys.IsBoxDocumentPath(box, upsertFile) {
 				return "", false
 			}
+			isMarkdown := filesys.IsMarkdownDocumentPath(upsertFile)
 
 			p := strings.TrimPrefix(upsertFile, box)
 
@@ -232,7 +246,7 @@ func listSyFiles(dir string) (ret []string) {
 			return nil
 		}
 
-		if strings.HasSuffix(path, ".sy") {
+		if filesys.IsNativeDocumentPath(path) {
 			p := filepath.ToSlash(strings.TrimPrefix(path, util.DataDir))
 			ret = append(ret, p)
 		}
@@ -270,7 +284,7 @@ func listMarkdownFiles(dir string) (ret []string) {
 			return nil
 		}
 
-		if strings.HasSuffix(path, ".md") {
+		if isMarkdownDocPath(path) {
 			rel, relErr := filepath.Rel(boxRoot, path)
 			if nil == relErr {
 				ret = append(ret, boxID+"/"+filepath.ToSlash(rel))
@@ -312,27 +326,79 @@ func removeBoxRefs(boxID string) {
 }
 
 func indexBox(boxID string) {
+	if err := indexBoxChecked(boxID); nil != err {
+		logging.LogErrorf("index notebook [%s] failed: %s", boxID, err)
+	}
+}
+
+// listBoxFilesForIndex is the error-preserving counterpart of Box.ListFiles.
+// A full rebuild must distinguish an empty notebook from an unreadable root or
+// subtree; treating both as an empty list would delete the old SQL rows and
+// then incorrectly report a complete index.
+func listBoxFilesForIndex(box *Box, p string) (ret []*FileInfo, err error) {
+	files, _, err := box.Ls(p)
+	if nil != err {
+		return nil, err
+	}
+	for _, file := range files {
+		if file.isdir {
+			children, listErr := listBoxFilesForIndex(box, file.path)
+			if nil != listErr {
+				return nil, listErr
+			}
+			ret = append(ret, children...)
+		}
+		ret = append(ret, file)
+	}
+	return
+}
+
+func indexBoxChecked(boxID string) error {
 	databaseIndexDataLock.Lock()
 	defer databaseIndexDataLock.Unlock()
 
 	box := Conf.Box(boxID)
 	if nil == box {
-		return
+		return ErrBoxNotFound
+	}
+	files, err := listBoxFilesForIndex(box, "/")
+	if nil != err {
+		return fmt.Errorf("scan notebook source: %w", err)
+	}
+	isMarkdownBox := conf.BoxKindMarkdown == GetBoxKind(boxID)
+	indexFiles := make([]*FileInfo, 0, len(files))
+	for _, file := range files {
+		if file.isdir {
+			continue
+		}
+		if !filesys.IsBoxDocumentPath(boxID, file.name) {
+			continue
+		}
+		if isMarkdownBox {
+			indexFiles = append(indexFiles, file)
+			continue
+		}
+		if !ast.IsNodeIDPattern(strings.TrimSuffix(file.name, ".sy")) {
+			// 不以块 ID 命名的 .sy 文件不应该被加载到思源中 https://github.com/siyuan-note/siyuan/issues/16089
+			continue
+		}
+		indexFiles = append(indexFiles, file)
 	}
 	// 全量索引使用纯 INSERT，开始前必须清理该笔记本的旧数据，避免重复任务叠加相同行。
 	sql.DeleteBoxQueue(boxID)
 
 	util.SetBootDetails(Conf.Language(303))
-	files := box.ListFiles("/")
 	boxLen := max(1, len(Conf.GetOpenedBoxes()))
-	bootProgressPart := int32(30.0 / float64(boxLen) / float64(len(files)))
+	bootProgressPart := int32(30.0 / float64(boxLen) / float64(max(1, len(indexFiles))))
 
 	start := time.Now()
 	luteEngine := util.NewLute()
 	var treeCount int
 	var treeSize int64
+	var loadFailureCount int
+	var firstLoadFailure error
 	lock := sync.Mutex{}
-	util.PushStatusBar(fmt.Sprintf("["+html.EscapeString(box.Name)+"] "+Conf.Language(64), len(files)))
+	util.PushStatusBar(fmt.Sprintf("["+html.EscapeString(box.Name)+"] "+Conf.Language(64), len(indexFiles)))
 
 	poolSize := min(runtime.NumCPU(), 4)
 	waitGroup := &sync.WaitGroup{}
@@ -341,19 +407,25 @@ func indexBox(boxID string) {
 		defer waitGroup.Done()
 
 		file := arg.(*FileInfo)
+		tree, err := filesys.LoadTree(box.ID, file.path, luteEngine)
+		if err != nil {
+			logging.LogErrorf("read box [%s] tree [%s] failed: %s", box.ID, file.path, err)
+			lock.Lock()
+			loadFailureCount++
+			if nil == firstLoadFailure {
+				firstLoadFailure = fmt.Errorf("load %s: %w", file.path, err)
+			}
+			lock.Unlock()
+			return
+		}
 		lock.Lock()
 		treeSize += file.size
 		treeCount++
 		i := treeCount
 		lock.Unlock()
-		tree, err := filesys.LoadTree(box.ID, file.path, luteEngine)
-		if err != nil {
-			logging.LogErrorf("read box [%s] tree [%s] failed: %s", box.ID, file.path, err)
-			return
-		}
 
 		docIAL := parse.IAL2Map(tree.Root.KramdownIAL)
-		if !strings.HasSuffix(tree.Path, ".md") && "" == docIAL["updated"] { // 早期 .sy 数据可能没有 updated 属性，这里进行订正
+		if !isMarkdownBox && "" == docIAL["updated"] { // 早期 .sy 数据可能没有 updated 属性，这里进行订正
 			updated := util.TimeFromID(tree.Root.ID)
 			tree.Root.SetIALAttr("updated", updated)
 			docIAL["updated"] = updated
@@ -362,41 +434,35 @@ func indexBox(boxID string) {
 			}
 		}
 
-		lock.Lock()
-		avNodes = append(avNodes, tree.Root.ChildrenByType(ast.NodeAttributeView)...)
-		lock.Unlock()
+		if !isMarkdownBox {
+			// Native database mirrors are workspace-owned metadata. Portable
+			// #+begin av blocks in a Markdown repository remain source-owned and
+			// must never populate storage/av/blocks.msgpack during reindexing.
+			lock.Lock()
+			avNodes = append(avNodes, tree.Root.ChildrenByType(ast.NodeAttributeView)...)
+			lock.Unlock()
+		}
 
 		cache.PutDocIALInBox(file.path, tree.Box, docIAL)
 		treenode.IndexBlockTree(tree)
 		sql.IndexTreeQueue(tree)
 		util.IncBootProgress(bootProgressPart, fmt.Sprintf(Conf.Language(92), util.ShortPathForBootingDisplay(tree.Path)))
 		if 1 < i && 0 == i%64 {
-			util.PushStatusBar(fmt.Sprintf(Conf.Language(88), i, (len(files))-i))
+			util.PushStatusBar(fmt.Sprintf(Conf.Language(88), i, (len(indexFiles))-i))
 		}
 	})
-	isMarkdownBox := conf.BoxKindMarkdown == GetBoxKind(boxID)
-	for _, file := range files {
-		if file.isdir {
-			continue
-		}
-		if isMarkdownBox {
-			if !strings.HasSuffix(file.name, ".md") {
-				continue
-			}
-		} else {
-			if !strings.HasSuffix(file.name, ".sy") {
-				continue
-			}
-			if !ast.IsNodeIDPattern(strings.TrimSuffix(file.name, ".sy")) {
-				// 不以块 ID 命名的 .sy 文件不应该被加载到思源中 https://github.com/siyuan-note/siyuan/issues/16089
-				continue
-			}
-		}
-
+	for _, file := range indexFiles {
 		waitGroup.Add(1)
 		invokeErr := p.Invoke(file)
 		if nil != invokeErr {
+			waitGroup.Done()
 			logging.LogErrorf("invoke [%s] failed: %s", file.path, invokeErr)
+			lock.Lock()
+			loadFailureCount++
+			if nil == firstLoadFailure {
+				firstLoadFailure = fmt.Errorf("schedule %s: %w", file.path, invokeErr)
+			}
+			lock.Unlock()
 			continue
 		}
 	}
@@ -411,6 +477,93 @@ func indexBox(boxID string) {
 	elapsed := end.Sub(start).Seconds()
 	logging.LogInfof("rebuilt database for notebook [%s] in [%.2fs], tree [count=%d, size=%s]", box.ID, elapsed, treeCount, humanize.BytesCustomCeil(uint64(treeSize), 2))
 	debug.FreeOSMemory()
+	if 0 < loadFailureCount {
+		return fmt.Errorf("notebook [%s] index incomplete: %d of %d source files failed (first error: %w)", box.ID, loadFailureCount, len(indexFiles), firstLoadFailure)
+	}
+	return nil
+}
+
+// reconcileMarkdownBoxChecked compares repository-native Markdown sources
+// with the disposable blocktree/SQL projection. It parses every source to
+// compare the same root hash stored by SQL, but only queues changed trees; on
+// a warm attach this avoids the expensive delete-and-reinsert transaction.
+// It also repairs files added, removed, renamed, or edited while Noema was not
+// running, before the host is allowed to publish listening.
+func reconcileMarkdownBoxChecked(boxID string) (changed int, err error) {
+	databaseIndexDataLock.Lock()
+	defer databaseIndexDataLock.Unlock()
+
+	box := Conf.Box(boxID)
+	if nil == box {
+		return 0, ErrBoxNotFound
+	}
+	if conf.BoxKindMarkdown != GetBoxKind(boxID) {
+		return 0, errors.New("not a Markdown notebook")
+	}
+	files, err := listBoxFilesForIndex(box, "/")
+	if nil != err {
+		return 0, fmt.Errorf("scan Markdown repository: %w", err)
+	}
+
+	existingByPath := map[string]*treenode.BlockTree{}
+	for _, bt := range treenode.GetBlockTreesByBoxID(boxID) {
+		if bt.ID == bt.RootID && "d" == bt.Type {
+			existingByPath[bt.Path] = bt
+		}
+	}
+	sourcePaths := map[string]struct{}{}
+	luteEngine := util.NewLute()
+	loadFailures := 0
+	var firstLoadFailure error
+	for _, file := range files {
+		if file.isdir || !isMarkdownDocPath(file.name) {
+			continue
+		}
+		sourcePaths[file.path] = struct{}{}
+		tree, loadErr := filesys.LoadTree(boxID, file.path, luteEngine)
+		if nil != loadErr {
+			loadFailures++
+			if nil == firstLoadFailure {
+				firstLoadFailure = fmt.Errorf("load %s: %w", file.path, loadErr)
+			}
+			continue
+		}
+
+		oldTree := existingByPath[file.path]
+		rows := sql.SelectBlocksRawStmtArgs(
+			"SELECT * FROM blocks WHERE box = ? AND path = ? AND type = 'd' AND id = root_id",
+			[]any{boxID, file.path}, 2,
+		)
+		projectedRoot := sql.BuildBlockFromNode(tree.Root, tree)
+		unchanged := nil != oldTree && oldTree.RootID == tree.ID && 1 == len(rows) &&
+			rows[0].Hash == projectedRoot.Hash && rows[0].Markdown == projectedRoot.Markdown &&
+			rows[0].Content == projectedRoot.Content && rows[0].IAL == projectedRoot.IAL
+		if unchanged {
+			continue
+		}
+		if nil != oldTree && oldTree.RootID != tree.ID {
+			sql.RemoveTreeQueue(boxID, oldTree.RootID)
+			treenode.RemoveBlockTreesByRootID(boxID, oldTree.RootID)
+		}
+		treenode.UpsertBlockTree(tree)
+		sql.UpsertTreeQueue(tree)
+		cache.RemoveDocIAL(tree.Path)
+		changed++
+	}
+	if 0 < loadFailures {
+		return changed, fmt.Errorf("Markdown reconciliation incomplete: %d source files failed (first error: %w)", loadFailures, firstLoadFailure)
+	}
+
+	for sourcePath, oldTree := range existingByPath {
+		if _, exists := sourcePaths[sourcePath]; exists {
+			continue
+		}
+		sql.RemoveTreeQueue(boxID, oldTree.RootID)
+		treenode.RemoveBlockTreesByRootID(boxID, oldTree.RootID)
+		cache.RemoveDocIAL(sourcePath)
+		changed++
+	}
+	return changed, nil
 }
 
 func IndexRefs() {
@@ -437,7 +590,40 @@ func IndexRefs() {
 	var defBlockIDs []string
 	defBlockBoxes := map[string]string{} // defBlockID -> boxID，加密笔记本下需按 box 路由后续加载
 	luteEngine := util.NewLute()
+	collectRefTree := func(tree *parse.Tree) {
+		ast.Walk(tree.Root, func(n *ast.Node, entering bool) ast.WalkStatus {
+			if !entering {
+				return ast.WalkContinue
+			}
+
+			if treenode.IsBlockRef(n) || treenode.IsFileAnnotationRef(n) {
+				defBlockIDs = append(defBlockIDs, tree.Root.ID)
+				defBlockBoxes[tree.Root.ID] = tree.Box
+			}
+			return ast.WalkContinue
+		})
+	}
 	for _, box := range boxes {
+		if conf.BoxKindMarkdown == GetBoxKind(box.ID) {
+			files, listErr := listBoxFilesForIndex(box, "/")
+			if nil != listErr {
+				logging.LogWarnf("list Markdown notebook [%s] for reference indexing failed: %s", box.ID, listErr)
+				continue
+			}
+			for _, file := range files {
+				if file.isdir || !isMarkdownDocPath(file.name) {
+					continue
+				}
+				tree, loadErr := filesys.LoadTree(box.ID, file.path, luteEngine)
+				if nil != loadErr {
+					logging.LogWarnf("load Markdown notebook [%s] tree [%s] for reference indexing failed: %s", box.ID, file.path, loadErr)
+					continue
+				}
+				collectRefTree(tree)
+			}
+			continue
+		}
+
 		encryptedBox := IsEncryptedBox(box.ID)
 		pages := pagedPaths(filepath.Join(util.DataDir, box.ID), 32)
 		for _, paths := range pages {
@@ -472,17 +658,7 @@ func IndexRefs() {
 					tree = parseTree
 				}
 
-				ast.Walk(tree.Root, func(n *ast.Node, entering bool) ast.WalkStatus {
-					if !entering {
-						return ast.WalkContinue
-					}
-
-					if treenode.IsBlockRef(n) || treenode.IsFileAnnotationRef(n) {
-						defBlockIDs = append(defBlockIDs, tree.Root.ID)
-						defBlockBoxes[tree.Root.ID] = box.ID
-					}
-					return ast.WalkContinue
-				})
+				collectRefTree(tree)
 			}
 		}
 	}

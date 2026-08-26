@@ -183,3 +183,41 @@ func ListExternalMarkdownBoxes() (ret []*ExternalMarkdownBox, err error) {
 	}
 	return ret, nil
 }
+
+// PruneMissingExternalMarkdownBoxes removes shadow registrations whose
+// physical repository root no longer exists. Roots that merely fail with a
+// permission or transient I/O error are retained: absence is the only safe
+// automatic cleanup signal. keepIDs protects registrations that have just
+// been rebound (for example, a portable repository moved to a new path).
+//
+// Removing a registration never removes the external repository. RemoveBox
+// recognizes external Markdown shadows and deletes only their workspace
+// metadata and indexes.
+func PruneMissingExternalMarkdownBoxes(keepIDs ...string) (ret []*ExternalMarkdownBox, err error) {
+	keep := make(map[string]struct{}, len(keepIDs))
+	for _, id := range keepIDs {
+		if id = strings.TrimSpace(id); "" != id {
+			keep[id] = struct{}{}
+		}
+	}
+
+	boxes, err := ListExternalMarkdownBoxes()
+	if nil != err {
+		return nil, err
+	}
+	var pruneErrors []error
+	for _, box := range boxes {
+		if _, ok := keep[box.ID]; ok {
+			continue
+		}
+		if _, statErr := os.Stat(box.Root); nil == statErr || !errors.Is(statErr, os.ErrNotExist) {
+			continue
+		}
+		if removeErr := RemoveBox(box.ID); nil != removeErr {
+			pruneErrors = append(pruneErrors, fmt.Errorf("remove stale external Markdown box [%s]: %w", box.ID, removeErr))
+			continue
+		}
+		ret = append(ret, box)
+	}
+	return ret, errors.Join(pruneErrors...)
+}

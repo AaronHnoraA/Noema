@@ -25,18 +25,29 @@ import (
 
 	"github.com/88250/gulu"
 	"github.com/88250/lute/ast"
-	"github.com/emirpasic/gods/sets/hashset"
 	"github.com/aaronhe/noema/kernel/search"
 	"github.com/aaronhe/noema/kernel/sql"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/emirpasic/gods/sets/hashset"
 )
 
 func RemoveTag(label string) (err error) {
+	tags := sql.QueryTagSpansByLabel(label)
+	if 0 == len(tags) {
+		return
+	}
+	for _, tag := range tags {
+		if nil != tag {
+			if err = requireNativeDocumentTree(tag.Box); nil != err {
+				return
+			}
+		}
+	}
+
 	util.PushEndlessProgress(Conf.Language(116))
 	util.RandomSleep(1000, 2000)
 
-	tags := sql.QueryTagSpansByLabel(label)
 	treeBlocks := map[string][]string{}
 	for _, tag := range tags {
 		if blocks, ok := treeBlocks[tag.RootID]; !ok {
@@ -140,10 +151,21 @@ func RenameTag(oldLabel, newLabel string) (err error) {
 		return
 	}
 
+	tags := sql.QueryTagSpansByLabel(oldLabel)
+	if 0 == len(tags) {
+		return
+	}
+	for _, tag := range tags {
+		if nil != tag {
+			if err = requireNativeDocumentTree(tag.Box); nil != err {
+				return
+			}
+		}
+	}
+
 	util.PushEndlessProgress(Conf.Language(110))
 	util.RandomSleep(500, 1000)
 
-	tags := sql.QueryTagSpansByLabel(oldLabel)
 	treeBlocks := map[string][]string{}
 	for _, tag := range tags {
 		if blocks, ok := treeBlocks[tag.RootID]; !ok {

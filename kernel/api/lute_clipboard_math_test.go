@@ -247,7 +247,10 @@ func TestClipboardMathMarkdownBlockDOM(t *testing.T) {
 	}
 	mixed := luteEngine.Md2BlockDOM("123\n\n$$\\frac{S}{N}$$\n\n456", false)
 	formulaIndex := strings.Index(mixed, `data-type="NodeMathBlock"`)
-	if textBefore, textAfter := strings.Index(mixed, "123"), strings.Index(mixed, "456"); textBefore < 0 || formulaIndex < textBefore || textAfter < formulaIndex {
+	// Match rendered text nodes rather than bare digits: generated block IDs
+	// include a wall-clock timestamp, so at xx:xx:45.6 a raw "456" search
+	// finds the first node ID and makes this ordering assertion flaky.
+	if textBefore, textAfter := strings.Index(mixed, ">123</div>"), strings.Index(mixed, ">456</div>"); textBefore < 0 || formulaIndex < textBefore || textAfter < formulaIndex {
 		t.Fatalf("mixed content order was not preserved: %s", mixed)
 	}
 	adjacent := luteEngine.Md2BlockDOM("Foo $x$111", false)

@@ -75,6 +75,9 @@ func TestStoreMarkdownAssetRejectsEscapingAndNonMarkdownPaths(t *testing.T) {
 	if _, err := StoreMarkdownAssetBytes(boxID, "/notes.txt", "x.png", "image/png", []byte("x")); err == nil {
 		t.Fatal("expected non-Markdown note path rejection")
 	}
+	if _, err := StoreMarkdownAssetBytes(boxID, "/.git/note.md", "x.png", "image/png", []byte("x")); err == nil {
+		t.Fatal("expected hidden note path rejection")
+	}
 }
 
 func TestStoreMarkdownAssetRejectsSymlinkedDirectoryOutsideBox(t *testing.T) {

@@ -24,11 +24,11 @@ import (
 	"time"
 
 	"github.com/88250/gulu"
-	"github.com/gin-gonic/gin"
 	"github.com/aaronhe/noema/kernel/av"
 	"github.com/aaronhe/noema/kernel/model"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/gin-gonic/gin"
 )
 
 func performTransactions(c *gin.Context) {
@@ -89,7 +89,11 @@ func performTransactions(c *gin.Context) {
 		transaction.MarkFromAPI() // 标记来自 HTTP 入口，供全局撤销日志捕获判别
 	}
 
-	model.PerformTransactions(&transactions)
+	if err = model.PerformTransactions(&transactions); nil != err {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
 
 	ret.Data = transactions
 

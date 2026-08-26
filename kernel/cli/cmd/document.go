@@ -47,8 +47,8 @@ var documentListCmd = &cobra.Command{
 		if notebook == "" {
 			return fmt.Errorf("--notebook is required")
 		}
-		// markdown box 的文档树就是真实的文件系统层级，没有 .sy 的 <parentID>/<childID> 嵌套结构，
-		// ListDocTree 会静默返回空列表。改走已有的 ListMarkdownDocs，与 CM6 文档浏览器同一个数据源。
+		// markdown box 的文档树就是真实的文件系统层级，没有 .sy 的 <parentID>/<childID> 嵌套结构。
+		// 改走已有的 ListMarkdownDocs，与 CM6 文档浏览器同一个数据源。
 		if conf.BoxKindMarkdown == model.GetBoxKind(notebook) {
 			docs, err := model.ListMarkdownDocs(notebook)
 			if err != nil {
@@ -275,7 +275,9 @@ var documentDuplicateCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		model.DuplicateDoc(tree)
+		if err = model.DuplicateDoc(tree); err != nil {
+			return err
+		}
 		model.AppendPushReloadFiletreeEntry()
 		fmt.Println(tree.ID)
 		return nil

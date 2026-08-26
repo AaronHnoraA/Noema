@@ -18,6 +18,8 @@ package model
 
 import (
 	gosql "database/sql"
+	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -117,6 +119,33 @@ func TestIsValidSearchBoxPath(t *testing.T) {
 	}
 }
 
+func TestIsValidSearchBoxPathAcceptsRepositoryMarkdownPaths(t *testing.T) {
+	originalDataDir := util.DataDir
+	util.DataDir = t.TempDir()
+	t.Cleanup(func() { util.DataDir = originalDataDir })
+
+	boxID := "20260826044000-srchmd1"
+	setupMarkdownBoxForIndexTest(t, boxID)
+	root := filepath.Join(util.DataDir, boxID)
+	if err := os.MkdirAll(filepath.Join(root, "notes"), 0755); nil != err {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "notes", "100%_needle.md"), []byte("needle\n"), 0644); nil != err {
+		t.Fatal(err)
+	}
+
+	for _, path := range []string{"/", "/notes", "/notes/100%_needle.md", "/missing.md", "/x%') UNION SELECT id FROM blocks -- "} {
+		if !IsValidSearchBoxPath(boxID, path) {
+			t.Fatalf("expected valid Markdown search path %q", path)
+		}
+	}
+	for _, path := range []string{"notes/100%_needle.md", "/.git/config", "/notes/../outside.md"} {
+		if IsValidSearchBoxPath(boxID, path) {
+			t.Fatalf("expected invalid Markdown search path %q", path)
+		}
+	}
+}
+
 // TestBuildBoxesPathFiltersArgCount 验证参数化过滤器产出的 "?" 数量与 args 长度一致。
 func TestBuildBoxesPathFiltersArgCount(t *testing.T) {
 	boxes := []string{"20210808180117-6v0mkxr", "20210808180117-a1b2c3d"}
@@ -128,7 +157,7 @@ func TestBuildBoxesPathFiltersArgCount(t *testing.T) {
 		t.Fatalf("expected 2 box args, got %d", len(args))
 	}
 
-	paths := []string{"/20210808180117-6v0mkxr", "/20210808180117-a1b2c3d/20210808180530-e5f6g7h.sy"}
+	paths := []string{"/20210808180117-6v0mkxr", "/notes/100%_needle.md"}
 	clause, args = buildPathsFilter(paths)
 	if countPlaceholder(clause) != len(args) {
 		t.Fatalf("path filter placeholder/arg mismatch: %q vs %d args", clause, len(args))
@@ -136,11 +165,15 @@ func TestBuildBoxesPathFiltersArgCount(t *testing.T) {
 	if len(args) != 2 {
 		t.Fatalf("expected 2 path args, got %d", len(args))
 	}
+	expectedPathArgs := []string{paths[0] + "%", `/notes/100\%\_needle.md%`}
 	for i, a := range args {
 		s, ok := a.(string)
-		if !ok || s != paths[i]+"%" {
-			t.Fatalf("path arg %d should be %q%%, got %v", i, paths[i], a)
+		if !ok || s != expectedPathArgs[i] {
+			t.Fatalf("path arg %d should be %q, got %v", i, expectedPathArgs[i], a)
 		}
+	}
+	if !strings.Contains(clause, `ESCAPE '\'`) {
+		t.Fatalf("path filter must escape LIKE wildcard characters: %q", clause)
 	}
 }
 

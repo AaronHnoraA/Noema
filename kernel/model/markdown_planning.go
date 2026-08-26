@@ -37,10 +37,7 @@ func ListMarkdownPlanning(boxID, path string) (documents []MarkdownPlanningDocum
 	}
 	paths := []string{}
 	if strings.TrimSpace(path) != "" {
-		if !isMarkdownDocPath(path) {
-			return nil, fmt.Errorf("path [%s] is not a Markdown document", path)
-		}
-		if _, err = filesys.ValidateBoxRelativePath(boxID, path); nil != err {
+		if path, err = normalizedMarkdownDocPath(boxID, path); nil != err {
 			return nil, err
 		}
 		paths = append(paths, path)
@@ -84,6 +81,5 @@ func markdownPlanningVersion(source []byte) string {
 }
 
 func isMarkdownDocPath(path string) bool {
-	ext := strings.ToLower(filepath.Ext(path))
-	return ext == ".md" || ext == ".markdown"
+	return filesys.IsMarkdownDocumentPath(path)
 }

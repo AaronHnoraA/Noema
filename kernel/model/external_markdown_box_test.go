@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aaronhe/noema/kernel/conf"
 	"github.com/aaronhe/noema/kernel/filesys"
@@ -90,6 +91,64 @@ func TestRegisterExternalMarkdownBoxKeepsRepositoryInPlace(t *testing.T) {
 	}
 	if 1 != len(list) || list[0].ID != registration.ID || list[0].RepositoryID != externalBoxRepositoryID {
 		t.Fatalf("unexpected external registry: %#v", list)
+	}
+}
+
+func TestExternalMarkdownBoxInfoCountsMarkdownDocuments(t *testing.T) {
+	originalDataDir := util.DataDir
+	originalConf := Conf
+	const testLang = "external-markdown-box-info-test"
+	originalTimeLang, hadTimeLang := util.TimeLangs[testLang]
+	util.TimeLangs[testLang] = map[string]any{
+		"albl": "ago", "blbl": "from now", "now": "now", "1s": "1 second %s", "xs": "%d seconds %s",
+		"1m": "1 minute %s", "xm": "%d minutes %s", "1h": "1 hour %s", "xh": "%d hours %s", "1d": "1 day %s",
+		"xd": "%d days %s", "1w": "1 week %s", "xw": "%d weeks %s", "1M": "1 month %s", "xM": "%d months %s",
+		"1y": "1 year %s", "2y": "2 years %s", "xy": "%d years %s", "max": "a long while %s",
+	}
+	util.DataDir = filepath.Join(t.TempDir(), "data")
+	Conf = NewAppConf()
+	Conf.Lang = testLang
+	t.Cleanup(func() {
+		util.DataDir = originalDataDir
+		Conf = originalConf
+		if hadTimeLang {
+			util.TimeLangs[testLang] = originalTimeLang
+		} else {
+			delete(util.TimeLangs, testLang)
+		}
+	})
+
+	repositoryRoot := filepath.Join(t.TempDir(), "knowledge")
+	const pageSource = "# Page\n"
+	writeExternalRepositoryFixture(t, repositoryRoot, pageSource)
+	const appendixSource = "# Appendix\n\nPortable notes.\n"
+	appendixPath := filepath.Join(repositoryRoot, "notes", "appendix.markdown")
+	if err := os.WriteFile(appendixPath, []byte(appendixSource), 0644); nil != err {
+		t.Fatal(err)
+	}
+	latest := time.Now().Add(time.Minute).Truncate(time.Second)
+	if err := os.Chtimes(appendixPath, latest, latest); nil != err {
+		t.Fatal(err)
+	}
+	hiddenPath := filepath.Join(repositoryRoot, ".git", "ignored.md")
+	if err := os.Chtimes(hiddenPath, latest.Add(time.Hour), latest.Add(time.Hour)); nil != err {
+		t.Fatal(err)
+	}
+
+	registration, err := RegisterExternalMarkdownBox("Knowledge", repositoryRoot, "")
+	if nil != err {
+		t.Fatal(err)
+	}
+	info := (&Box{ID: registration.ID, Name: registration.Name}).GetInfo()
+	if 2 != info.DocCount {
+		t.Fatalf("external Markdown document count mismatch: got %d want 2", info.DocCount)
+	}
+	wantSize := uint64(len(pageSource) + len(appendixSource))
+	if wantSize != info.Size {
+		t.Fatalf("external Markdown document size mismatch: got %d want %d", info.Size, wantSize)
+	}
+	if latest.Unix() != info.Mtime {
+		t.Fatalf("external Markdown modification time mismatch: got %d want %d", info.Mtime, latest.Unix())
 	}
 }
 

@@ -9,6 +9,7 @@ import { afterEach, describe, expect, test } from "@voidzero-dev/vite-plus-test"
 import { createWikiPage, initWikiRepository } from "../server/lib/wiki-workspace.mjs";
 import {
   checkpointWikiRepository,
+  configureWikiSyncGitProvider,
   defaultWikiGitMaintenanceBytes,
   defaultWikiSyncIntervalMs,
   readWikiConflict,
@@ -75,6 +76,7 @@ async function fixture(): Promise<{
 }
 
 afterEach(async () => {
+  configureWikiSyncGitProvider(null);
   await stopAllWikiGitUis();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
@@ -83,6 +85,111 @@ describe("Wiki Git synchronization", () => {
   test("uses a once-daily automatic sync cadence", () => {
     expect(defaultWikiSyncIntervalMs()).toBe(24 * 60 * 60 * 1000);
     expect(defaultWikiGitMaintenanceBytes()).toBe(2 * 1024 * 1024 * 1024);
+  });
+
+  test("routes checkpoint commit data through the kernel provider", async () => {
+    const item = await fixture();
+    const head = await git(item.repositoryPath, "rev-parse", "HEAD");
+    const calls: Array<{
+      repositoryPath: string;
+      request: { branch: string; message?: string; deviceName: string; deviceId: string };
+    }> = [];
+    configureWikiSyncGitProvider({
+      owns: (repositoryPath: string) => repositoryPath === item.repositoryPath,
+      async checkpoint(repositoryPath: string, request: {
+        branch: string; message?: string; deviceName: string; deviceId: string;
+      }) {
+        calls.push({ repositoryPath, request });
+        return {
+          branch: request.branch,
+          head,
+          committed: false,
+          changedFiles: 0,
+          identityFallback: false,
+          source: "kernel-vaultgit" as const,
+        };
+      },
+    });
+
+    const state = await checkpointWikiRepository(item.root, "private/research", {
+      configDir: item.configDir,
+      name: "Checkpoint Device",
+      message: "provider checkpoint",
+    });
+    expect(state).toMatchObject({
+      phase: "idle",
+      committed: false,
+      changedFiles: 0,
+      head,
+      source: "kernel-vaultgit",
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      repositoryPath: item.repositoryPath,
+      request: {
+        branch: expect.stringMatching(/^noema\/checkpoint-device-[0-9a-f]{8}$/),
+        message: "provider checkpoint",
+        deviceName: "checkpoint-device",
+        deviceId: expect.any(String),
+      },
+    });
+    expect(await git(item.repositoryPath, "status", "--porcelain")).toBe("");
+  });
+
+  test("routes complete origin/main transport through the kernel provider", async () => {
+    const item = await fixture();
+    const calls: string[] = [];
+    configureWikiSyncGitProvider({
+      owns: (repositoryPath: string) => repositoryPath === item.repositoryPath,
+      async checkpoint(repositoryPath: string, request: {
+        branch: string; message?: string; deviceName: string; deviceId: string;
+      }) {
+        calls.push("checkpoint");
+        return {
+          branch: request.branch,
+          head: await git(repositoryPath, "rev-parse", "HEAD"),
+          committed: false,
+          changedFiles: 0,
+          identityFallback: false,
+          source: "kernel-vaultgit" as const,
+        };
+      },
+      async ensureMain(repositoryPath: string, commit: string) {
+        calls.push("ensure-main");
+        const remoteHead = (await git(repositoryPath, "ls-remote", "origin", "refs/heads/main")).split(/\s+/, 1)[0];
+        return {
+          action: "ensure-main" as const, commit, remoteHead, bootstrapped: false,
+          source: "kernel-vaultgit" as const,
+        };
+      },
+      async fetchMain(repositoryPath: string) {
+        calls.push("fetch-main");
+        await git(repositoryPath, "fetch", "--prune", "origin", "main");
+        return {
+          action: "fetch-main" as const, commit: "",
+          remoteHead: await git(repositoryPath, "rev-parse", "refs/remotes/origin/main"),
+          bootstrapped: false, source: "kernel-vaultgit" as const,
+        };
+      },
+      async pushMain(repositoryPath: string, commit: string) {
+        calls.push("push-main");
+        await git(repositoryPath, "push", "origin", `${commit}:refs/heads/main`);
+        return {
+          action: "push-main" as const, commit, remoteHead: commit, bootstrapped: false,
+          source: "kernel-vaultgit" as const,
+        };
+      },
+    });
+
+    const state = await syncWikiRepository(item.root, "private/research", { configDir: item.configDir });
+    expect(state).toMatchObject({
+      phase: "idle",
+      localOnly: false,
+      checkpointSource: "kernel-vaultgit",
+      transportSource: "kernel-vaultgit",
+    });
+    expect(state.source).toBeUndefined();
+    expect(calls).toEqual(["checkpoint", "ensure-main", "fetch-main", "checkpoint", "push-main"]);
   });
 
   test("cleans only merged, unused Noema branches after the Git object store crosses the threshold", async () => {
@@ -147,7 +254,12 @@ describe("Wiki Git synchronization", () => {
     const file = join(item.repositoryPath, "sync.md");
     await writeFile(file, (await readFile(file, "utf8")).replace("# Common", "# Local edit"));
     const state = await syncWikiRepository(item.root, "private/research", { configDir: item.configDir });
-    expect(state).toMatchObject({ phase: "idle", localOnly: false, committed: true, changedFiles: 1 });
+    expect(state).toMatchObject({
+      phase: "idle", localOnly: false, committed: true, changedFiles: 1,
+      checkpointSource: "node-vaultgit",
+      transportSource: "node-vaultgit",
+    });
+    expect(state.source).toBeUndefined();
     expect(state.changedPaths).toEqual([file]);
     expect(await git(item.repositoryPath, "branch", "--show-current")).toMatch(/^noema\//);
     expect(await git(item.repositoryPath, "log", "-1", "--format=%an <%ae>")).toBe("Researcher <researcher@example.test>");
@@ -254,6 +366,94 @@ describe("Wiki Git synchronization", () => {
     await execFileAsync("git", ["clone", item.remote, checkout]);
     expect(await readFile(join(checkout, "local-race.md"), "utf8")).toContain("Local contribution");
     expect(await readFile(join(checkout, "remote-race.md"), "utf8")).toContain("Remote won the race");
+  });
+
+  test("retries a kernel transport push race through kernel fetch and exact push", async () => {
+    const item = await fixture();
+    const collaborator = join(item.suite, "kernel-push-race-collaborator");
+    await execFileAsync("git", ["clone", item.remote, collaborator]);
+    await writeFile(join(collaborator, "remote-kernel-race.md"), "# Remote kernel race\n");
+    await git(collaborator, "add", "remote-kernel-race.md");
+    await git(collaborator, "-c", "user.name=Remote", "-c", "user.email=remote@local", "commit", "-m", "remote kernel race");
+    await writeFile(join(item.repositoryPath, "local-kernel-race.md"), "# Local kernel contribution\n");
+    const calls: string[] = [];
+
+    configureWikiSyncGitProvider({
+      owns: (repositoryPath: string) => repositoryPath === item.repositoryPath,
+      async checkpoint(repositoryPath: string, request: {
+        branch: string; message?: string; deviceName: string; deviceId: string;
+      }) {
+        calls.push("checkpoint");
+        await git(repositoryPath, "add", "-A", "--", ".");
+        const changed = (await git(repositoryPath, "diff", "--cached", "--name-only", "--"))
+          .split("\n").filter(Boolean);
+        if (changed.length) {
+          await git(
+            repositoryPath,
+            "-c", `user.name=Noema (${request.deviceName})`,
+            "-c", `user.email=noema-${request.deviceId.slice(0, 8)}@local`,
+            "commit", "-m", request.message || "kernel checkpoint",
+          );
+        }
+        return {
+          branch: request.branch,
+          head: await git(repositoryPath, "rev-parse", "HEAD"),
+          committed: changed.length > 0,
+          changedFiles: changed.length,
+          identityFallback: true,
+          source: "kernel-vaultgit" as const,
+        };
+      },
+      async ensureMain(repositoryPath: string, commit: string) {
+        calls.push("ensure-main");
+        const remoteHead = (await git(repositoryPath, "ls-remote", "origin", "refs/heads/main")).split(/\s+/, 1)[0];
+        return {
+          action: "ensure-main" as const, commit, remoteHead, bootstrapped: false,
+          source: "kernel-vaultgit" as const,
+        };
+      },
+      async fetchMain(repositoryPath: string) {
+        calls.push("fetch-main");
+        await git(repositoryPath, "fetch", "--prune", "origin", "main");
+        return {
+          action: "fetch-main" as const, commit: "",
+          remoteHead: await git(repositoryPath, "rev-parse", "refs/remotes/origin/main"),
+          bootstrapped: false, source: "kernel-vaultgit" as const,
+        };
+      },
+      async pushMain(repositoryPath: string, commit: string) {
+        calls.push("push-main");
+        await git(repositoryPath, "push", "origin", `${commit}:refs/heads/main`);
+        return {
+          action: "push-main" as const, commit, remoteHead: commit, bootstrapped: false,
+          source: "kernel-vaultgit" as const,
+        };
+      },
+    });
+
+    let raced = false;
+    const state = await syncWikiRepository(item.root, "private/research", {
+      configDir: item.configDir,
+      testHooks: {
+        async beforePush({ attempt }: { attempt: number }) {
+          if (attempt !== 1 || raced) return;
+          raced = true;
+          await git(collaborator, "push", "origin", "main");
+        },
+      },
+    });
+
+    expect(state).toMatchObject({
+      phase: "idle",
+      checkpointSource: "kernel-vaultgit",
+      transportSource: "kernel-vaultgit",
+    });
+    expect(calls.filter((call) => call === "fetch-main")).toHaveLength(2);
+    expect(calls.filter((call) => call === "push-main")).toHaveLength(2);
+    const checkout = join(item.suite, "kernel-push-race-verification");
+    await execFileAsync("git", ["clone", item.remote, checkout]);
+    expect(await readFile(join(checkout, "local-kernel-race.md"), "utf8")).toContain("Local kernel contribution");
+    expect(await readFile(join(checkout, "remote-kernel-race.md"), "utf8")).toContain("Remote kernel race");
   });
 
   test("records a published head when a newer local edit blocks application, then reconciles without loss", async () => {

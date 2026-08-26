@@ -571,7 +571,28 @@ Body.
     expect(html).toContain('<section class="aaronnote-editor" id="editor">');
     expect(html).toContain('<span class="aaronnote-vim-mode">READ</span>');
     expect(html).toContain('../Noema/src/styles/typography.css?v=test');
+    expect(html).toContain('data-aaronnote-katex-css="embedded"');
+    expect(html).toContain('href="data:text/css;charset=utf-8,');
+    expect(html).not.toContain("cdn.jsdelivr.net");
     expect(html).toContain("<p>Body</p>");
+  });
+
+  test("routes printable note assets and absolute note CSS through an explicit resolver", () => {
+    const markdown = [
+      "#+begin meta",
+      "css: /tmp/theme.css",
+      "#+end meta",
+      "",
+      "![Plot](images/plot.png)",
+    ].join("\n");
+    const html = renderPublishedNoteHTML(markdown, {
+      title: "Resolved PDF",
+      format: "pdf",
+      assetResolver: (source) => `/note-asset?src=${encodeURIComponent(source)}`,
+    });
+
+    expect(html).toContain('src="/note-asset?src=images%2Fplot.png"');
+    expect(html).toContain('data-aaronnote-note-css href="/note-asset?src=file%3A%2F%2F%2Ftmp%2Ftheme.css"');
   });
 
   test("published notes append meta css after built-in and kind styles", () => {

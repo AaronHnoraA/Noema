@@ -31,12 +31,15 @@ import (
 	"github.com/88250/gulu"
 	"github.com/88250/lute/ast"
 	"github.com/88250/lute/parse"
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/siyuan-note/logging"
 )
 
 func MoveLocalShorthands(boxID string) (retIDs []string, err error) {
+	if err = requireNativeDocumentTree(boxID); nil != err {
+		return
+	}
 	shorthandsDir := filepath.Join(util.ShortcutsPath, "shorthands")
 	if !gulu.File.IsDir(shorthandsDir) {
 		return

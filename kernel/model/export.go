@@ -46,6 +46,11 @@ import (
 	"github.com/88250/lute/lex"
 	"github.com/88250/lute/parse"
 	"github.com/88250/lute/render"
+	"github.com/aaronhe/noema/kernel/av"
+	"github.com/aaronhe/noema/kernel/filesys"
+	"github.com/aaronhe/noema/kernel/sql"
+	"github.com/aaronhe/noema/kernel/treenode"
+	"github.com/aaronhe/noema/kernel/util"
 	"github.com/emirpasic/gods/sets/hashset"
 	"github.com/emirpasic/gods/stacks/linkedliststack"
 	"github.com/imroc/req/v3"
@@ -59,11 +64,6 @@ import (
 	"github.com/siyuan-note/httpclient"
 	"github.com/siyuan-note/logging"
 	"github.com/siyuan-note/riff"
-	"github.com/aaronhe/noema/kernel/av"
-	"github.com/aaronhe/noema/kernel/filesys"
-	"github.com/aaronhe/noema/kernel/sql"
-	"github.com/aaronhe/noema/kernel/treenode"
-	"github.com/aaronhe/noema/kernel/util"
 )
 
 func getExportBlockTree(id string) *treenode.BlockTree {
@@ -385,6 +385,9 @@ func Export2Liandi(id string) (err error) {
 			logging.LogErrorf("load tree by block id [%s] failed: %s", id, loadErr)
 			return loadErr
 		}
+		if nativeErr := requireNativeDocumentTree(tree.Box); nil != nativeErr {
+			return nativeErr
+		}
 
 		if IsUserGuide(tree.Box) {
 			// Doc in the user guide no longer supports one-click sending to the community https://github.com/siyuan-note/siyuan/issues/8388
@@ -507,7 +510,7 @@ func ExportSystemLog() (zipPath string) {
 		return
 	}
 
-	appLog := filepath.Join(util.HomeDir, ".config", "siyuan", "app.log")
+	appLog := filepath.Join(util.UserConfigDir(), "app.log")
 	if gulu.File.IsExist(appLog) {
 		to := filepath.Join(exportFolder, "app.log")
 		if err := filelock.Copy(appLog, to); err != nil {
@@ -515,7 +518,7 @@ func ExportSystemLog() (zipPath string) {
 		}
 	}
 
-	kernelLog := filepath.Join(util.HomeDir, ".config", "siyuan", "kernel.log")
+	kernelLog := filepath.Join(util.UserConfigDir(), "kernel.log")
 	if gulu.File.IsExist(kernelLog) {
 		to := filepath.Join(exportFolder, "kernel.log")
 		if err := filelock.Copy(kernelLog, to); err != nil {
@@ -596,7 +599,10 @@ func withExportReadLockByBlockID(id string, fn func() error) error {
 	return fn()
 }
 
-func ExportNotebookSY(id string) (zipPath string) {
+func ExportNotebookSY(id string) (zipPath string, err error) {
+	if err = requireNativeDocumentTree(id); nil != err {
+		return
+	}
 	// 加密笔记本必须已解锁才能导出（DEK 在内存才能读 .sy/assets/AV 明文）
 	if IsEncryptedBox(id) && !IsBoxUnlocked(id) {
 		logging.LogErrorf("export encrypted notebook [%s] failed: locked", id)
@@ -607,8 +613,12 @@ func ExportNotebookSY(id string) (zipPath string) {
 }
 
 // ExportNotebooksSY 将多个笔记本打包到同一个可批量导入的 .sy.zip 中。
-func ExportNotebooksSY(ids []string) (zipPath string) {
-	return exportNotebooksSYBundle(ids)
+func ExportNotebooksSY(ids []string) (zipPath string, err error) {
+	if err = requireNativeDocumentTree(ids...); nil != err {
+		return
+	}
+	zipPath = exportNotebooksSYBundle(ids)
+	return
 }
 
 func exportNotebooksBaseName(boxes []*Box) string {
@@ -625,12 +635,21 @@ func exportNotebooksBaseName(boxes []*Box) string {
 	return name
 }
 
-func ExportSYs(ids []string) (zipPath string) {
+func ExportSYs(ids []string) (zipPath string, err error) {
 	if len(ids) == 0 {
 		return
 	}
 	block := getExportBlockTree(ids[0])
 	if block == nil {
+		return
+	}
+	bts := getExportBlockTrees(ids)
+	boxIDs := make([]string, 0, len(bts)+1)
+	boxIDs = append(boxIDs, block.BoxID)
+	for _, bt := range bts {
+		boxIDs = append(boxIDs, bt.BoxID)
+	}
+	if err = requireNativeDocumentTree(boxIDs...); nil != err {
 		return
 	}
 	if nil != block && IsEncryptedBox(block.BoxID) && !IsBoxUnlocked(block.BoxID) {
@@ -644,7 +663,6 @@ func ExportSYs(ids []string) (zipPath string) {
 	}
 
 	var docPaths []string
-	bts := getExportBlockTrees(ids)
 	for _, bt := range bts {
 		docPaths = append(docPaths, bt.Path)
 
@@ -1599,7 +1617,7 @@ func ProcessPDF(id, p string, merge, removeAssets, watermark bool, mergeHeadingO
 		}
 
 		api.DisableConfigDir()
-		font.UserFontDir = filepath.Join(util.HomeDir, ".config", "siyuan", "fonts")
+		font.UserFontDir = filepath.Join(util.UserConfigDir(), "fonts")
 		if mkdirErr := os.MkdirAll(font.UserFontDir, 0755); nil != mkdirErr {
 			logging.LogErrorf("mkdir [%s] failed: %s", font.UserFontDir, mkdirErr)
 			return nil

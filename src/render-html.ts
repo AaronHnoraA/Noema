@@ -9,7 +9,7 @@ import { cleanEditorHTML } from "./export-html.ts";
 import { supportedDiagramLang } from "./diagram-langs.ts";
 import { imageLayoutClasses, imageLayoutFromAttrs, imageLayoutStyle, readImageTrailingAttrs } from "./image-attrs.ts";
 import { layoutClasses, layoutFromAttrs, layoutStyle, readLayoutAttrsLine, type LayoutAttrs } from "./layout-attrs.ts";
-import { renderMathHTML } from "./math-render.ts";
+import { katexStylesheetHref, renderMathHTML } from "./math-render.ts";
 import { markdownLinkDestination } from "./markdown-link.ts";
 import { safeHref } from "./url-safety.ts";
 import { scanInlineCommands } from "./command-syntax.ts";
@@ -62,6 +62,7 @@ export type RenderPublishedNoteOptions = {
   kindAssetsHtml?: string;
   private?: boolean;
   includePrivateContent?: boolean;
+  assetResolver?: (src: string) => string;
 };
 
 export {
@@ -1319,7 +1320,7 @@ export function renderPublishedNoteHTML(
   const hidden = Boolean(options.private && !options.includePrivateContent);
   const contentHtml = hidden
     ? '<p class="sealed-note-message">This note has been sealed by the administrator.</p>'
-    : renderMarkdownHTML(markdown);
+    : renderMarkdownHTML(markdown, { assetResolver: options.assetResolver });
   const shellClass = classList(
     "aaronnote-shell",
     "published-note-page",
@@ -1329,8 +1330,11 @@ export function renderPublishedNoteHTML(
   );
   const kindAssetsHtml = options.kindAssetsHtml ? `${options.kindAssetsHtml}\n` : "";
   const noteCssHref = noteCssHrefFromMarkdown(markdown);
-  const noteCssHtml = noteCssHref
-    ? `  <link rel="stylesheet" data-aaronnote-note-css href="${escapeAttr(noteCssHref)}" />\n`
+  const resolvedNoteCssHref = noteCssHref && options.assetResolver
+    ? options.assetResolver(noteCssHref)
+    : noteCssHref;
+  const noteCssHtml = resolvedNoteCssHref
+    ? `  <link rel="stylesheet" data-aaronnote-note-css href="${escapeAttr(resolvedNoteCssHref)}" />\n`
     : "";
   const toolbarHtml = pdf ? "" : `    <header class="aaronnote-toolbar">
       <div class="aaronnote-title">
@@ -1373,7 +1377,7 @@ export function renderPublishedNoteHTML(
   <link rel="stylesheet" href="${assetRoot}Noema/src/styles/typography.css?v=${escapeAttr(version)}" />
   <link rel="stylesheet" href="${assetRoot}Noema/src/styles/aaron-ui-tokens.css?v=${escapeAttr(version)}" />
   <link rel="stylesheet" href="${assetRoot}Noema/src/styles/aaron-ui-elegant.css?v=${escapeAttr(version)}" />
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.47/dist/katex.min.css" crossorigin="anonymous" />
+  <link rel="stylesheet" data-aaronnote-katex-css="embedded" href="${escapeAttr(katexStylesheetHref())}" />
   <link rel="stylesheet" href="${assetRoot}css/aaronnote-published.css?v=${escapeAttr(version)}" />
   <link rel="stylesheet" href="${assetRoot}css/mac-window.css?v=${escapeAttr(version)}" />
 ${kindAssetsHtml}${noteCssHtml}</head>

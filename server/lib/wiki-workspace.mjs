@@ -44,6 +44,11 @@ const IGNORED_DIRECTORIES = new Set([
   "__pycache__", ".ipynb_checkpoints", ".pytest_cache", ".mypy_cache", ".ruff_cache",
 ]);
 const IGNORED_FILES = new Set([".DS_Store"]);
+let wikiGitProvider = null;
+
+export function configureWikiGitProvider(provider = null) {
+  wikiGitProvider = provider && typeof provider === "object" ? provider : null;
+}
 
 function apiError(message, statusCode = 400, code = "ERR_WIKI") {
   return Object.assign(new Error(message), { statusCode, code });
@@ -1458,6 +1463,9 @@ async function git(repository, args) {
 export async function wikiRepositoryStatus(rootValue, repositoryId) {
   const root = expandNoemaPath(rootValue);
   const repository = await repositoryFromId(root, repositoryId);
+  if (typeof wikiGitProvider?.owns === "function" && wikiGitProvider.owns(repository.path)) {
+    return { ok: true, repository, ...await wikiGitProvider.status(repository.path) };
+  }
   const [{ stdout: statusText }, { stdout: branchText }, remote] = await Promise.all([
     git(repository, ["status", "--porcelain=v1", "--branch"]),
     git(repository, ["branch", "--show-current"]),
@@ -1470,6 +1478,7 @@ export async function wikiRepositoryStatus(rootValue, repositoryId) {
     remote: remote.stdout.trim(),
     clean: !statusText.split(/\r?\n/).some((line) => line && !line.startsWith("##")),
     status: statusText.trim(),
+    source: "node-vaultgit",
   };
 }
 
@@ -1477,6 +1486,28 @@ export async function runWikiGitAction(rootValue, actionValue, body = {}) {
   const root = expandNoemaPath(rootValue);
   const repository = await repositoryFromId(root, body.repositoryId);
   const action = String(actionValue || "");
+  const message = String(body.message || "").trim();
+  const paths = action === "commit" && Array.isArray(body.paths)
+    ? body.paths.map(cleanRelativePath).filter(Boolean)
+    : [];
+  if (action === "commit" && !message) throw apiError("Commit message is required");
+  if (action === "commit" && !paths.length) throw apiError("Select at least one repository-relative path to commit");
+  if (!["pull", "push", "commit"].includes(action)) throw apiError(`Unsupported Git action: ${action}`);
+  if (typeof wikiGitProvider?.owns === "function" && wikiGitProvider.owns(repository.path)) {
+    const result = await wikiGitProvider.action({ repositoryPath: repository.path, action, message, paths });
+    const changedPaths = (result.changedPaths || []).map((path) => {
+      const relativePath = String(path ?? "");
+      const parts = sep === "\\" ? relativePath.split(/[\\/]/) : relativePath.split("/");
+      const absolutePath = resolve(repository.path, relativePath);
+      if (!relativePath || isAbsolute(relativePath)
+          || parts.some((part) => !part || part === "." || part === "..")
+          || !inside(repository.path, absolutePath)) {
+        throw apiError("Kernel returned an unsafe changed path", 502, "ERR_WIKI_GIT");
+      }
+      return absolutePath;
+    });
+    return { ok: true, repository, ...result, changedPaths };
+  }
   let changedPaths = [];
   if (action === "pull") {
     const before = (await git(repository, ["rev-parse", "HEAD"])).stdout.trim();
@@ -1489,14 +1520,8 @@ export async function runWikiGitAction(rootValue, actionValue, body = {}) {
   }
   else if (action === "push") await git(repository, ["push"]);
   else if (action === "commit") {
-    const message = String(body.message || "").trim();
-    if (!message) throw apiError("Commit message is required");
-    const paths = Array.isArray(body.paths) ? body.paths.map(cleanRelativePath).filter(Boolean) : [];
-    if (!paths.length) throw apiError("Select at least one repository-relative path to commit");
     await git(repository, ["add", "--", ...paths]);
     await git(repository, ["commit", "-m", message, "--", ...paths]);
-  } else {
-    throw apiError(`Unsupported Git action: ${action}`);
   }
   return {
     ...await wikiRepositoryStatus(root, repository.id),
@@ -1504,6 +1529,7 @@ export async function runWikiGitAction(rootValue, actionValue, body = {}) {
     phase: "idle",
     changedPaths,
     message: action === "pull" ? "Repository refreshed" : `Git ${action} completed`,
+    source: "node-vaultgit",
   };
 }
 
@@ -1586,12 +1612,17 @@ export async function wikiPageHistory(rootValue, body = {}) {
   const root = expandNoemaPath(rootValue);
   const { note, repository } = await wikiNoteById(root, body.pageId);
   const limit = Math.max(1, Math.min(200, Number(body.limit) || 50));
+  const path = relative(repository.path, note.file).split(sep).join("/");
+  const history = typeof wikiGitProvider?.owns === "function" && wikiGitProvider.owns(repository.path)
+    ? await wikiGitProvider.history(repository.path, path, limit)
+    : { commits: await fileHistory(repository.path, note.file, limit), source: "node-vaultgit" };
   return {
     ok: true,
     type: "wiki-page-history",
     pageId: note.id,
     file: note.file,
-    commits: await fileHistory(repository.path, note.file, limit),
+    commits: history.commits,
+    source: history.source,
   };
 }
 
@@ -1600,7 +1631,14 @@ export async function wikiPageDiff(rootValue, body = {}) {
   const { note, repository } = await wikiNoteById(root, body.pageId);
   const sha = String(body.sha || "").trim();
   if (!/^[0-9a-f]{7,64}$/i.test(sha)) throw apiError("Invalid Git commit", 400, "ERR_WIKI_GIT_COMMIT");
-  return { ok: true, type: "wiki-page-diff", pageId: note.id, ...(await diffRoamFile(repository.path, note.file, { sha })) };
+  if (typeof wikiGitProvider?.owns === "function" && wikiGitProvider.owns(repository.path)) {
+    const path = relative(repository.path, note.file).split(sep).join("/");
+    return { ok: true, type: "wiki-page-diff", pageId: note.id, file: note.file, ...await wikiGitProvider.diff(repository.path, path, sha) };
+  }
+  return {
+    ok: true, type: "wiki-page-diff", pageId: note.id,
+    ...(await diffRoamFile(repository.path, note.file, { sha })), source: "node-vaultgit",
+  };
 }
 
 export async function restoreWikiPageVersion(rootValue, body = {}) {
@@ -1608,8 +1646,13 @@ export async function restoreWikiPageVersion(rootValue, body = {}) {
   const { note, repository } = await wikiNoteById(root, body.pageId);
   const sha = String(body.sha || "").trim();
   if (!/^[0-9a-f]{7,64}$/i.test(sha)) throw apiError("Invalid Git commit", 400, "ERR_WIKI_GIT_COMMIT");
+  if (typeof wikiGitProvider?.owns === "function" && wikiGitProvider.owns(repository.path)) {
+    const path = relative(repository.path, note.file).split(sep).join("/");
+    const restored = await wikiGitProvider.restore(repository.path, path, sha);
+    return { ok: true, type: "wiki-page-restored", pageId: note.id, file: note.file, sha, source: restored.source };
+  }
   await restoreFileFromCommit(repository.path, note.file, sha);
-  return { ok: true, type: "wiki-page-restored", pageId: note.id, file: note.file, sha };
+  return { ok: true, type: "wiki-page-restored", pageId: note.id, file: note.file, sha, source: "node-vaultgit" };
 }
 
 function destinationFile(repository, body, fallbackName) {

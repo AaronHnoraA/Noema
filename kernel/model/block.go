@@ -31,12 +31,12 @@ import (
 	"github.com/88250/lute/editor"
 	"github.com/88250/lute/parse"
 	"github.com/88250/lute/render"
-	"github.com/open-spaced-repetition/go-fsrs/v3"
 	"github.com/aaronhe/noema/kernel/av"
 	"github.com/aaronhe/noema/kernel/filesys"
 	"github.com/aaronhe/noema/kernel/sql"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/open-spaced-repetition/go-fsrs/v3"
 )
 
 // Block 描述了内容块。
@@ -672,6 +672,9 @@ func RecentUpdatedBlocks() (ret []*Block) {
 }
 
 func TransferBlockRef(fromID, toID string, refIDs []string) (err error) {
+	if err = requireNativeBlockIDs(fromID, toID); nil != err {
+		return
+	}
 	toTree, _ := LoadTreeByBlockID(toID)
 	if nil == toTree {
 		err = ErrBlockNotFound
@@ -684,11 +687,14 @@ func TransferBlockRef(fromID, toID string, refIDs []string) (err error) {
 	}
 	toRefText := getNodeRefText(toNode)
 
-	util.PushMsg(Conf.Language(116), 7000)
-
 	if 1 > len(refIDs) { // 如果不指定 refIDs，则转移所有引用了 fromID 的块
 		refIDs = sql.QueryRefIDsByDefID(fromID, false)
 	}
+	if err = requireNativeBlockIDs(refIDs...); nil != err {
+		return
+	}
+
+	util.PushMsg(Conf.Language(116), 7000)
 
 	trees := filesys.LoadTrees(refIDs)
 	for refID, tree := range trees {
@@ -717,6 +723,9 @@ func TransferBlockRef(fromID, toID string, refIDs []string) (err error) {
 }
 
 func SwapBlockRef(refID, defID string, includeChildren bool) (err error) {
+	if err = requireNativeBlockIDs(refID, defID); nil != err {
+		return
+	}
 	refTree, err := LoadTreeByBlockID(refID)
 	if err != nil {
 		return
@@ -944,7 +953,10 @@ func headingChildrenIDs(heading *ast.Node) (ret []string) {
 	return
 }
 
-func AppendHeadingChildren(id, childrenDOM string) {
+func AppendHeadingChildren(id, childrenDOM string) (err error) {
+	if err = requireNativeBlockIDs(id); nil != err {
+		return
+	}
 	tree, err := LoadTreeByBlockID(id)
 	if err != nil {
 		return
@@ -967,9 +979,8 @@ func AppendHeadingChildren(id, childrenDOM string) {
 		heading.InsertAfter(n)
 	}
 
-	if err = indexWriteTreeUpsertQueue(tree); err != nil {
-		return
-	}
+	err = indexWriteTreeUpsertQueue(tree)
+	return
 }
 
 func GetHeadingChildrenDOM(id string, removeFoldAttr bool) (ret string) {

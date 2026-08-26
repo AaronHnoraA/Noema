@@ -27,13 +27,14 @@ import (
 	"github.com/88250/lute/ast"
 	"github.com/88250/lute/html"
 	"github.com/88250/lute/parse"
-	"github.com/siyuan-note/filelock"
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/cache"
+	"github.com/aaronhe/noema/kernel/conf"
 	"github.com/aaronhe/noema/kernel/filesys"
 	"github.com/aaronhe/noema/kernel/sql"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/siyuan-note/filelock"
+	"github.com/siyuan-note/logging"
 )
 
 const (
@@ -133,6 +134,14 @@ func ensureBoxDoc0(boxID string) (boxDocID string, err error) {
 	box := Conf.GetBox(boxID)
 	if nil == box {
 		return "", ErrBoxNotFound
+	}
+	// A Markdown box is a projection of repository-native .md files. Box
+	// documents and their boxDoc.json metadata belong to the nested .sy tree
+	// model, so they must remain unavailable even when the global feature is
+	// enabled. Keep this guard at the shared primitive so startup, settings
+	// refresh, and future callers cannot leak .sy state into a Markdown root.
+	if conf.BoxKindMarkdown == box.GetConf().Kind {
+		return
 	}
 
 	if !IsBoxDocEnabled() {
@@ -288,6 +297,9 @@ func BoxDocSubFileCountForPublish(boxID string, publishAccess PublishAccess) int
 }
 
 func boxDocSubFileCount(boxID string, include func(string) bool) int {
+	if nil != requireNativeDocumentTree(boxID) {
+		return 0
+	}
 	entries, err := os.ReadDir(filepath.Join(util.DataDir, boxID))
 	if err != nil {
 		return 0
@@ -348,6 +360,9 @@ func normalizeBoxDocTarget(boxID, p string) string {
 }
 
 func renameBoxDoc(boxID, name string) error {
+	if nil != requireNativeDocumentTree(boxID) {
+		return nil
+	}
 	box := Conf.Box(boxID)
 	if nil == box || !box.Exist(boxDocPath(box.ID)) {
 		return nil
@@ -356,6 +371,9 @@ func renameBoxDoc(boxID, name string) error {
 }
 
 func setBoxDocIcon(boxID, icon string) error {
+	if nil != requireNativeDocumentTree(boxID) {
+		return nil
+	}
 	box := Conf.Box(boxID)
 	if nil == box || !box.Exist(boxDocPath(box.ID)) {
 		return nil

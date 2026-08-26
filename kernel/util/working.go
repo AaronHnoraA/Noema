@@ -276,8 +276,23 @@ var (
 	UIProcessIDs = sync.Map{} // UI 进程 ID
 )
 
+// UserConfigDir returns the process-scoped kernel configuration directory.
+// Noema hosts set NOEMA_KERNEL_CONFIG_DIR so their workspace registry, logs,
+// cookies, ports, shortcuts, and fonts never touch a user's SiYuan state.
+// Keeping the historical directory as the fallback preserves upstream CLI and
+// mobile compatibility when the kernel is launched outside a Noema host.
+func UserConfigDir() string {
+	if configured := strings.TrimSpace(os.Getenv("NOEMA_KERNEL_CONFIG_DIR")); configured != "" {
+		if absolute, err := filepath.Abs(configured); err == nil {
+			return filepath.Clean(absolute)
+		}
+		return filepath.Clean(configured)
+	}
+	return filepath.Join(HomeDir, ".config", "siyuan")
+}
+
 func initWorkspaceDir(workspaceArg string) {
-	userHomeConfDir := filepath.Join(HomeDir, ".config", "siyuan")
+	userHomeConfDir := UserConfigDir()
 	workspaceConf := filepath.Join(userHomeConfDir, "workspace.json")
 	logging.SetLogPath(filepath.Join(userHomeConfDir, "kernel.log"))
 
@@ -311,7 +326,8 @@ func initWorkspaceDir(workspaceArg string) {
 		}
 	}
 
-	if "" != workspaceArg {
+	explicitWorkspace := "" != workspaceArg
+	if explicitWorkspace {
 		WorkspaceDir = workspaceArg
 	}
 
@@ -320,12 +336,18 @@ func initWorkspaceDir(workspaceArg string) {
 	WorkspaceDir = filepath.Clean(WorkspaceDir)
 
 	if !gulu.File.IsDir(WorkspaceDir) {
-		logging.LogWarnf("use the default workspace [%s] since the specified workspace [%s] is not a dir", defaultWorkspaceDir, WorkspaceDir)
-		if err := os.MkdirAll(defaultWorkspaceDir, 0755); err != nil && !os.IsExist(err) {
-			logging.LogErrorf("create default workspace folder [%s] failed: %s", defaultWorkspaceDir, err)
+		selectedWorkspace := WorkspaceDir
+		var err error
+		WorkspaceDir, err = ensureWorkspaceDir(WorkspaceDir, defaultWorkspaceDir, explicitWorkspace)
+		if err != nil {
+			logging.LogErrorf("create workspace folder [%s] failed: %s", WorkspaceDir, err)
 			os.Exit(logging.ExitCodeInitWorkspaceErr)
 		}
-		WorkspaceDir = defaultWorkspaceDir
+		if explicitWorkspace {
+			logging.LogInfof("created specified workspace [%s]", WorkspaceDir)
+		} else {
+			logging.LogWarnf("created default workspace [%s] since selected workspace [%s] is not a dir", WorkspaceDir, selectedWorkspace)
+		}
 	}
 	workspacePaths = append(workspacePaths, WorkspaceDir)
 
@@ -362,6 +384,19 @@ func initWorkspaceDir(workspaceArg string) {
 	ShortcutsPath = filepath.Join(userHomeConfDir, "shortcuts")
 }
 
+// ensureWorkspaceDir never redirects an explicit --workspace to another
+// application's data. Noema desktop normally pre-creates its kernel workspace,
+// but direct serve invocations must be equally safe when the final directory is
+// absent. Registry/default selections retain the historical fallback behavior.
+func ensureWorkspaceDir(selected, fallback string, explicit bool) (ret string, err error) {
+	ret = selected
+	if !explicit {
+		ret = fallback
+	}
+	err = os.MkdirAll(ret, 0755)
+	return
+}
+
 func DeduplicateWorkspacePaths(paths []string) []string {
 	if !gulu.OS.IsWindows() {
 		return gulu.Str.RemoveDuplicatedElem(paths)
@@ -396,7 +431,7 @@ func RemoveWorkspacePath(paths []string, target string) []string {
 
 func ReadWorkspacePaths() (ret []string, err error) {
 	ret = []string{}
-	workspaceConf := filepath.Join(HomeDir, ".config", "siyuan", "workspace.json")
+	workspaceConf := filepath.Join(UserConfigDir(), "workspace.json")
 	data, err := os.ReadFile(workspaceConf)
 	if err != nil {
 		msg := fmt.Sprintf("read workspace conf [%s] failed: %s", workspaceConf, err)
@@ -436,7 +471,7 @@ func ReadWorkspacePaths() (ret []string, err error) {
 
 func WriteWorkspacePaths(workspacePaths []string) (err error) {
 	workspacePaths = DeduplicateWorkspacePaths(workspacePaths)
-	workspaceConf := filepath.Join(HomeDir, ".config", "siyuan", "workspace.json")
+	workspaceConf := filepath.Join(UserConfigDir(), "workspace.json")
 	data, err := gulu.JSON.MarshalJSON(workspacePaths)
 	if err != nil {
 		msg := fmt.Sprintf("marshal workspace conf [%s] failed: %s", workspaceConf, err)

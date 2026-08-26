@@ -162,16 +162,68 @@ func ValidateBoxRelativePath(boxID, p string) (string, error) {
 		return "", fmt.Errorf("path [%s] must not contain '..'", origP)
 	}
 	boxRoot := BoxRootPath(boxID)
-	resolved := filepath.Join(boxRoot, origP)
+	resolved := filepath.Join(boxRoot, p)
 	if !gulu.File.IsSubPath(boxRoot, resolved) {
 		return "", fmt.Errorf("path [%s] escapes box directory", origP)
 	}
+	canonicalRoot, err := canonicalExistingBoxPath(boxRoot)
+	if nil != err {
+		return "", fmt.Errorf("resolve box root [%s]: %w", boxRoot, err)
+	}
+	canonicalResolved, err := canonicalExistingBoxPath(resolved)
+	if nil != err {
+		return "", fmt.Errorf("resolve path [%s]: %w", origP, err)
+	}
+	rel, err := filepath.Rel(canonicalRoot, canonicalResolved)
+	if nil != err || filepath.IsAbs(rel) || ".." == rel || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path [%s] escapes box directory through a symbolic link", origP)
+	}
 	return p, nil
+}
+
+// canonicalExistingBoxPath resolves every symlink in the longest existing
+// prefix and then appends any not-yet-created suffix. A dangling symlink is an
+// error instead of being mistaken for an ordinary missing path: otherwise a
+// later write could follow that link outside the box.
+func canonicalExistingBoxPath(p string) (string, error) {
+	probe := filepath.Clean(p)
+	missing := []string{}
+	for {
+		if _, err := os.Lstat(probe); nil == err {
+			real, resolveErr := filepath.EvalSymlinks(probe)
+			if nil != resolveErr {
+				return "", resolveErr
+			}
+			if !filepath.IsAbs(real) {
+				real, resolveErr = filepath.Abs(real)
+				if nil != resolveErr {
+					return "", resolveErr
+				}
+			}
+			return filepath.Join(append([]string{real}, missing...)...), nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			return "", fmt.Errorf("no existing ancestor for [%s]", p)
+		}
+		missing = append([]string{filepath.Base(probe)}, missing...)
+		probe = parent
+	}
 }
 
 func LoadTreeWithFix(boxID, p string, luteEngine *lute.Lute) (ret *parse.Tree, needFix bool, err error) {
 	if _, err = ValidateBoxRelativePath(boxID, p); err != nil {
 		logging.LogErrorf("invalid tree path [%s] for box [%s]: %s", p, boxID, err)
+		return
+	}
+	// Native callers historically probe extensionless/human paths and expect
+	// the ordinary not-found result. Markdown boxes have no such hierarchy, so
+	// enforce their source extensions here at the format dispatch boundary.
+	if isMarkdownBox(boxID) && !IsMarkdownDocumentPath(p) {
+		err = ValidateBoxDocumentPath(boxID, p)
+		logging.LogErrorf("invalid tree source path [%s] for box [%s]: %s", p, boxID, err)
 		return
 	}
 
@@ -331,11 +383,11 @@ func loadMarkdownTree(boxID, p string, luteEngine *lute.Lute) (ret *parse.Tree, 
 	return
 }
 
-// markdownHPath 是 markdown box 的临时人类可读路径：去掉扩展名的相对路径。
-// 目录标题跟随父 .sy 文档 IAL 的完整 HPath 语义留给 Phase 1.4（路径模型简化）实现。
+// markdownHPath keeps the repository-native filename. Markdown directories
+// are real directories rather than parent documents, so Path and HPath are
+// intentionally isomorphic and never require walking parent .sy files.
 func markdownHPath(p string) string {
-	slashed := "/" + strings.TrimPrefix(filepath.ToSlash(p), "/")
-	return strings.TrimSuffix(slashed, filepath.Ext(slashed))
+	return "/" + strings.TrimPrefix(filepath.ToSlash(p), "/")
 }
 
 func DocIAL(absPath string) (ret map[string]string) {
@@ -419,6 +471,9 @@ func TreeSize(tree *parse.Tree) (size uint64) {
 func WriteTree(tree *parse.Tree) (size uint64, err error) {
 	if isMarkdownBox(tree.Box) {
 		return 0, ErrMarkdownTreeWriteUnsupported
+	}
+	if err = ValidateBoxDocumentPath(tree.Box, tree.Path); nil != err {
+		return
 	}
 
 	data, filePath, err := prepareWriteTree(tree)

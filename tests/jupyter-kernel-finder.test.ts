@@ -1,5 +1,5 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defaultKernelSearchDirs, findKernelSpecs } from "../server/jupyter/kernel-finder.mjs";
@@ -82,5 +82,51 @@ describe("Jupyter kernelspec discovery", () => {
     expect(kernels[0]?.spec.argv[0]).toBe("/Applications/Noema.app/Contents/Resources/jupyter/bin/python-jupyter-kernel");
     expect(kernels[0]?.spec.env?.HOME).toBe("/Users/me");
     expect(kernels[0]?.spec.env?.IPYTHONDIR).toBe("/Users/me/Library/Application Support/com.noema.desktop/state/jupyter/ipython");
+  });
+
+  test("can reserve stable bundled names ahead of stale generated or user kernelspecs", async () => {
+    const generated = await mkdtemp(join(tmpdir(), "noema-kernels-generated-"));
+    const templates = await mkdtemp(join(tmpdir(), "noema-kernels-templates-"));
+    await writeKernel(generated, "python3", "Historical Emacs Python");
+    const python = join(templates, "python3");
+    await mkdir(python, { recursive: true });
+    await writeFile(join(python, "kernel.json"), JSON.stringify({
+      argv: ["@AARONNOTE_JUPYTER_ROOT@/bin/python-jupyter-kernel", "-f", "{connection_file}"],
+      display_name: "Noema Python",
+      language: "python",
+    }));
+
+    const normal = await findKernelSpecs({
+      searchDirs: [generated],
+      fallbackKernelDirs: [templates],
+      templateVariables: { AARONNOTE_JUPYTER_ROOT: "/canonical/Noema/jupyter" },
+    });
+    expect(normal[0]?.spec.display_name).toBe("Historical Emacs Python");
+
+    const stable = await findKernelSpecs({
+      searchDirs: [generated],
+      fallbackKernelDirs: [templates],
+      preferFallbackKernelDirs: true,
+      templateVariables: { AARONNOTE_JUPYTER_ROOT: "/canonical/Noema/jupyter" },
+    });
+    expect(stable[0]?.spec.display_name).toBe("Noema Python");
+    expect(stable[0]?.spec.argv[0]).toBe("/canonical/Noema/jupyter/bin/python-jupyter-kernel");
+  });
+
+  test("launch and maintenance scripts do not derive an Emacs repository at runtime", async () => {
+    const root = process.cwd();
+    const files = [
+      "jupyter/bin/python-jupyter-kernel",
+      "jupyter/bin/sage-jupyter-kernel",
+      "jupyter/scripts/bootstrap-jupyter.sh",
+      "jupyter/scripts/doctor-jupyter.sh",
+      "jupyter/scripts/install-kernelspecs.sh",
+    ];
+    for (const file of files) {
+      const source = await readFile(join(root, file), "utf8");
+      expect(source, file).not.toContain("EMACS_ROOT");
+      expect(source, file).not.toContain("scripts/aaronnote-runtime");
+      expect(source, file).not.toContain("../../../..");
+    }
   });
 });

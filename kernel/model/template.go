@@ -32,8 +32,6 @@ import (
 	"github.com/88250/lute/ast"
 	"github.com/88250/lute/parse"
 	"github.com/88250/lute/render"
-	"github.com/siyuan-note/filelock"
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/av"
 	"github.com/aaronhe/noema/kernel/bazaar"
 	"github.com/aaronhe/noema/kernel/filesys"
@@ -41,6 +39,8 @@ import (
 	"github.com/aaronhe/noema/kernel/sql"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/siyuan-note/filelock"
+	"github.com/siyuan-note/logging"
 	"github.com/xrash/smetrics"
 )
 
@@ -372,6 +372,11 @@ func dynamicIconTemplateFuncs() template.FuncMap {
 }
 
 func RenderTemplate(p, id string, preview bool) (tree *parse.Tree, dom string, err error) {
+	if !preview {
+		if err = requireNativeBlockIDs(id); nil != err {
+			return
+		}
+	}
 	tree, err = LoadTreeByBlockID(id)
 	if err != nil {
 		return
@@ -424,6 +429,20 @@ func RenderTemplate(p, id string, preview bool) (tree *parse.Tree, dom string, e
 		logging.LogError(msg)
 		err = errors.New(msg)
 		return
+	}
+	if !preview {
+		var templateAVIDs []string
+		ast.Walk(tree.Root, func(n *ast.Node, entering bool) ast.WalkStatus {
+			if entering && ast.NodeAttributeView == n.Type {
+				templateAVIDs = append(templateAVIDs, n.AttributeViewID)
+			}
+			return ast.WalkContinue
+		})
+		for _, templateAVID := range gulu.Str.RemoveDuplicatedElem(templateAVIDs) {
+			if err = requireNativeAttributeViewContents(templateAVID); nil != err {
+				return
+			}
+		}
 	}
 
 	var nodesNeedAppendChild, unlinks []*ast.Node

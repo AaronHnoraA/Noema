@@ -41,8 +41,6 @@ import (
 	"github.com/88250/lute/lex"
 	"github.com/88250/lute/parse"
 	"github.com/88250/vitess-sqlparser/sqlparser"
-	"github.com/jinzhu/copier"
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/conf"
 	"github.com/aaronhe/noema/kernel/filesys"
 	"github.com/aaronhe/noema/kernel/search"
@@ -50,6 +48,8 @@ import (
 	"github.com/aaronhe/noema/kernel/task"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/jinzhu/copier"
+	"github.com/siyuan-note/logging"
 	"github.com/xrash/smetrics"
 )
 
@@ -63,6 +63,11 @@ func ListInvalidBlockRefs(page, pageSize int) (ret []*Block, matchedBlockCount, 
 	}
 	luteEngine := util.NewLute()
 	for _, notebook := range notebooks {
+		if conf.BoxKindMarkdown == GetBoxKind(notebook.ID) {
+			// Canonical Markdown references are validated from the refs/source
+			// data plane, not by scanning a native .sy document hierarchy.
+			continue
+		}
 		pages := pagedPaths(filepath.Join(util.DataDir, notebook.ID), 32)
 		for _, paths := range pages {
 			var trees []*parse.Tree
@@ -624,6 +629,13 @@ func FindReplace(keyword, replacement string, replaceTypes map[string]bool, ids 
 
 // FindReplaceInBox 与 FindReplace 一致，但按 boxID 路由到加密 db 或全局 db。
 func FindReplaceInBox(keyword, replacement string, replaceTypes map[string]bool, ids []string, paths, boxes []string, types, subTypes map[string]bool, method int, boxID string) (err error) {
+	targetBoxes := append([]string{}, boxes...)
+	if "" != boxID {
+		targetBoxes = append(targetBoxes, boxID)
+	}
+	if err = requireNativeDocumentTree(targetBoxes...); nil != err {
+		return
+	}
 	// method：0：文本，1：查询语法，2：SQL，3：正则表达式
 	if 2 == method {
 		err = errors.New(Conf.Language(132))
@@ -651,11 +663,6 @@ func FindReplaceInBox(keyword, replacement string, replaceTypes map[string]bool,
 	renameRootTitles := map[string]string{}
 	cachedTrees := map[string]*parse.Tree{}
 
-	historyDir, err := getHistoryDir(HistoryOpReplace)
-	if err != nil {
-		return
-	}
-
 	if 1 > len(ids) {
 		// `Replace All` is no longer affected by pagination https://github.com/siyuan-note/siyuan/issues/8265
 		// 替换目标始终使用未分组的块级结果，分组仅影响搜索结果展示
@@ -664,6 +671,14 @@ func FindReplaceInBox(keyword, replacement string, replaceTypes map[string]bool,
 		for _, block := range blocks {
 			ids = append(ids, block.ID)
 		}
+	}
+	if err = requireNativeBlockIDs(ids...); nil != err {
+		return
+	}
+
+	historyDir, err := getHistoryDir(HistoryOpReplace)
+	if err != nil {
+		return
 	}
 
 	for _, id := range ids {
@@ -1840,9 +1855,10 @@ func FullTextSearchBlockInBoxWithHPathContext(ctx context.Context, query string,
 	return
 }
 
-// IsValidSearchBoxPath 校验搜索入参中的笔记本 ID 与文档路径，阻止 SQL 元字符进入语句拼接。
-// box 必须是合法的节点 ID；docPath 为空表示仅限定笔记本范围；否则须为以 "/" 开头、
-// 由节点 ID 段组成的文档路径（如 "/20210808180117-6v0mkxr.sy" 或子树目录 "/20210808180117-6v0mkxr"）。
+// IsValidSearchBoxPath 校验搜索入参中的笔记本 ID 与文档路径。SQL 过滤器始终使用
+// 绑定参数；这里额外保证路径符合对应 notebook 的物理模型且不进入隐藏/越界路径。
+// 原生 notebook 只接受 node-ID/.sy 文档树路径，Markdown notebook 接受安全的
+// repository-relative 文档或目录路径（不存在的过滤前缀合法，只会得到空结果）。
 func IsValidSearchBoxPath(box, docPath string) bool {
 	if !ast.IsNodeIDPattern(box) {
 		return false
@@ -1852,6 +1868,10 @@ func IsValidSearchBoxPath(box, docPath string) bool {
 	}
 	if !strings.HasPrefix(docPath, "/") {
 		return false
+	}
+	if conf.BoxKindMarkdown == GetBoxKind(box) {
+		_, err := normalizedMarkdownPath(box, docPath)
+		return nil == err
 	}
 	segments := strings.Split(strings.TrimPrefix(docPath, "/"), "/")
 	for i, segment := range segments {
@@ -1904,7 +1924,8 @@ func buildPathsFilter(paths []string, alias ...string) (clause string, args []an
 	builder := bytes.Buffer{}
 	builder.WriteString(" AND (")
 	for i, path := range paths {
-		builder.WriteString(fmt.Sprintf("%spath LIKE ?", prefix))
+		builder.WriteString(fmt.Sprintf("%spath LIKE ? ESCAPE '\\'", prefix))
+		path = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(path)
 		args = append(args, path+"%")
 		if i < len(paths)-1 {
 			builder.WriteString(" OR ")

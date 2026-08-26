@@ -29,12 +29,13 @@ import (
 	"github.com/88250/lute/ast"
 	"github.com/88250/lute/editor"
 	"github.com/88250/lute/parse"
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/av"
+	"github.com/aaronhe/noema/kernel/conf"
 	"github.com/aaronhe/noema/kernel/filesys"
 	"github.com/aaronhe/noema/kernel/sql"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/siyuan-note/logging"
 )
 
 type BlockInfo struct {
@@ -157,7 +158,7 @@ func getDocInfoByTree(blockID string, tree *parse.Tree) (ret *BlockInfo) {
 	var subFileCount int
 	if IsBoxDoc(tree.Box, tree.ID) {
 		subFileCount = BoxDocSubFileCount(tree.Box)
-	} else {
+	} else if conf.BoxKindMarkdown != GetBoxKind(tree.Box) {
 		boxLocalPath := filepath.Join(util.DataDir, tree.Box)
 		subFiles, readErr := os.ReadDir(filepath.Join(boxLocalPath, strings.TrimSuffix(tree.Path, ".sy")))
 		if readErr == nil {
@@ -267,7 +268,7 @@ func GetDocsInfo(blockIDs []string, queryRefCount bool, queryAv bool) (rets []*B
 		var subFileCount int
 		if IsBoxDoc(tree.Box, tree.ID) {
 			subFileCount = BoxDocSubFileCount(tree.Box)
-		} else {
+		} else if conf.BoxKindMarkdown != GetBoxKind(tree.Box) {
 			boxLocalPath := filepath.Join(util.DataDir, tree.Box)
 			subFiles, readErr := os.ReadDir(filepath.Join(boxLocalPath, strings.TrimSuffix(tree.Path, ".sy")))
 			if readErr == nil {

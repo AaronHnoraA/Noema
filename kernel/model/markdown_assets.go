@@ -166,12 +166,8 @@ func markdownAssetTarget(boxID, notePath, name, mediaType string) (target, relat
 		err = fmt.Errorf("box [%s] is not a markdown box", boxID)
 		return
 	}
-	notePath, err = filesys.ValidateBoxRelativePath(boxID, notePath)
+	notePath, err = normalizedMarkdownDocPath(boxID, notePath)
 	if err != nil {
-		return
-	}
-	if !isMarkdownDocPath(notePath) {
-		err = fmt.Errorf("path [%s] is not a Markdown document", notePath)
 		return
 	}
 	fallback := "attachment"

@@ -1,5 +1,6 @@
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { isBlockReferenceId } from "../../shared/block-identity.mjs";
 
 const markdownExtensions = new Set([".md", ".markdown"]);
 
@@ -21,13 +22,18 @@ function canonicalExistingPath(path) {
   }
 }
 
-export function kernelMarkdownPath(root, file) {
+export function kernelBoxPath(root, file) {
   const canonicalRoot = canonicalExistingPath(root);
   const canonicalFile = canonicalExistingPath(file);
   const rel = relative(canonicalRoot, canonicalFile);
   if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return "";
-  if (!markdownExtensions.has(extname(canonicalFile).toLowerCase())) return "";
   return `/${rel.split(sep).join("/")}`;
+}
+
+export function kernelMarkdownPath(root, file) {
+  const path = kernelBoxPath(root, file);
+  if (!path || !markdownExtensions.has(extname(path).toLowerCase())) return "";
+  return path;
 }
 
 export function createKernelMarkdownProvider({ baseUrl, box, fetchImpl = globalThis.fetch, timeoutMs = 30_000 } = {}) {
@@ -62,6 +68,9 @@ export function createKernelMarkdownProvider({ baseUrl, box, fetchImpl = globalT
     owns(file) {
       return Boolean(pathFor(file));
     },
+    ownsPath(file) {
+      return Boolean(kernelBoxPath(root, file));
+    },
     async read(file) {
       const path = pathFor(file);
       if (!path) throw Object.assign(new Error("File is outside the kernel Markdown box"), { statusCode: 403 });
@@ -71,19 +80,108 @@ export function createKernelMarkdownProvider({ baseUrl, box, fetchImpl = globalT
       }
       return { file: String(file), content: data.markdown, blocks: data.blocks || [] };
     },
-    async write({ file, content }) {
+    async resolveBlock(id) {
+      const canonicalId = String(id || "").trim().toLowerCase();
+      if (!isBlockReferenceId(canonicalId)) {
+        throw Object.assign(new Error("Block reference ID is invalid"), { statusCode: 400 });
+      }
+      const data = await post("/api/noema/markdown/resolveBlock", { id: canonicalId });
+      const returnedId = String(data.id || "").trim().toLowerCase();
+      const returnedNotebook = String(data.notebook || "").trim();
+      const returnedPath = String(data.path || "").trim();
+      if (returnedId !== canonicalId || returnedNotebook !== notebook || !returnedPath.startsWith("/")) {
+        throw Object.assign(new Error("Kernel block location does not match the registered Markdown box"), { statusCode: 502 });
+      }
+      const file = resolve(root, ...returnedPath.slice(1).split("/").filter(Boolean));
+      if (pathFor(file) !== returnedPath) {
+        throw Object.assign(new Error("Kernel block location escapes the registered Markdown box"), { statusCode: 502 });
+      }
+      let canonicalFile = "";
+      try {
+        canonicalFile = realpathSync.native(file);
+        if (!statSync(canonicalFile).isFile()) throw new Error("not a regular file");
+      } catch {
+        throw Object.assign(new Error("Kernel block location is not a readable Markdown file"), { statusCode: 502 });
+      }
+      return {
+        id: canonicalId,
+        notebook,
+        path: returnedPath,
+        file: canonicalFile,
+        line: Math.max(1, Number.isInteger(Number(data.line)) ? Number(data.line) : 1),
+        blockType: String(data.type || ""),
+      };
+    },
+    async write({ file, content, expectedVersion = "", force = false }) {
       const path = pathFor(file);
       if (!path) throw Object.assign(new Error("File is outside the kernel Markdown box"), { statusCode: 403 });
       const source = String(content ?? "");
-      const data = await post("/api/noema/markdown/saveDoc", { notebook, path, markdown: source });
+      const request = { notebook, path, markdown: source };
+      if (String(expectedVersion || "")) request.expectedVersion = String(expectedVersion);
+      if (force === true) request.force = true;
+      const data = await post("/api/noema/markdown/saveDoc", request);
       if (typeof data.markdown !== "string") {
         throw Object.assign(new Error("Kernel save response is missing Markdown source"), { statusCode: 502 });
+      }
+      if (data.conflict === true) {
+        return {
+          ok: false,
+          conflict: true,
+          file: String(file),
+          content: data.markdown,
+          mtimeMs: Number(data.mtimeMs) || 0,
+          size: Number(data.size) || 0,
+          version: String(data.version || ""),
+        };
       }
       const saved = data.markdown;
       if (saved !== source) {
         throw Object.assign(new Error("Kernel changed Markdown source bytes while saving"), { statusCode: 502 });
       }
-      return { ok: true, file: String(file), content: saved, blocks: data.blocks || [] };
+      return {
+        ok: true,
+        file: String(file),
+        content: saved,
+        blocks: data.blocks || [],
+        mtimeMs: Number(data.mtimeMs) || 0,
+        size: Number(data.size) || 0,
+        version: String(data.version || ""),
+      };
+    },
+    async mutateMeta(body = {}, action = "") {
+      const file = String(body.file || "");
+      const path = pathFor(file);
+      if (!path) throw Object.assign(new Error("File is outside the kernel Markdown box"), { statusCode: 403 });
+      const request = { notebook, path, action: String(action || body.action || "") };
+      if (typeof body.content === "string") request.markdown = body.content;
+      if (typeof body.expectedVersion === "string" && body.expectedVersion) request.expectedVersion = body.expectedVersion;
+      for (const key of ["title", "kind", "project"]) {
+        if (Object.prototype.hasOwnProperty.call(body, key)) request[key] = String(body[key] ?? "");
+      }
+      if (Object.prototype.hasOwnProperty.call(body, "tags")) {
+        if (!Array.isArray(body.tags)) {
+          throw Object.assign(new Error("Metadata tags must be an array"), { statusCode: 400 });
+        }
+        request.tags = body.tags.map((tag) => String(tag));
+      }
+      const data = await post("/api/noema/markdown/mutateMeta", request);
+      if (typeof data.markdown !== "string" || data.source !== "kernel-meta") {
+        throw Object.assign(new Error("Kernel metadata response is incomplete"), { statusCode: 502 });
+      }
+      return data;
+    },
+    async move({ file, target, directory = false }) {
+      const fromPath = directory ? kernelBoxPath(root, file) : pathFor(file);
+      const toPath = directory ? kernelBoxPath(root, target) : pathFor(target);
+      if (!fromPath || !toPath) {
+        throw Object.assign(new Error("Markdown move must stay inside the kernel box"), { statusCode: 403 });
+      }
+      const endpoint = directory ? "/api/noema/markdown/movePath" : "/api/noema/markdown/moveDoc";
+      const data = await post(endpoint, { notebook, fromPath, toPath });
+      if (data.fromPath !== fromPath || data.toPath !== toPath || (directory ? data.directory !== true || !Array.isArray(data.documents) : !data.id)) {
+        throw Object.assign(new Error("Kernel move response does not match the requested paths"), { statusCode: 502 });
+      }
+      return { ok: true, file: String(target), oldFile: String(file), ...data };
     },
   };
 }

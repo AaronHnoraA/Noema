@@ -106,6 +106,15 @@ export type NoemaAppConfigUpdate = {
   wiki?: { creation?: NoemaAppConfig["wiki"]["creation"] };
   revision?: string;
 };
+export type BlockReferenceLocation = {
+  type: "block-reference-location";
+  source: "kernel-block-index";
+  id: string;
+  file: string;
+  path: string;
+  line: number;
+  blockType: string;
+};
 type ProseCheckMsg = {
   ok?: boolean;
   diagnostics?: Array<{
@@ -549,6 +558,7 @@ type NativeApi = {
     todos?: (file: string) => Promise<unknown>;
     updateTodo?: (body: Record<string, unknown>) => Promise<unknown>;
     agenda?: (body: Record<string, unknown>) => Promise<unknown>;
+    resolveBlock?: (id: string) => Promise<unknown>;
     embedQuery?: (body: Record<string, unknown>) => Promise<unknown>;
     attributeView?: (body: Record<string, unknown>) => Promise<unknown>;
     attributeViewCellPatch?: (body: Record<string, unknown>) => Promise<unknown>;
@@ -794,6 +804,9 @@ export type WikiSyncState = {
   committed?: boolean;
   changedFiles?: number;
   changedPaths?: string[];
+  source?: "kernel-vaultgit" | "node-vaultgit";
+  checkpointSource?: "kernel-vaultgit" | "node-vaultgit";
+  transportSource?: "kernel-vaultgit" | "node-vaultgit";
   error?: string;
   message?: string;
   retryable?: boolean;
@@ -939,6 +952,7 @@ declare global {
     __noemaAppConfig?: NoemaAppConfigMsg;
     __noemaKernelBase?: string;
     __noemaKernel?: { state: string; baseUrl: string; box: { id?: string; name?: string; root?: string } | null };
+    __noemaDesktopPrintDocument?: () => { html: string; title: string; defaultPath: string } | null;
     noemaDesktop?: {
       platform: string;
       filePath(file: File): string;
@@ -952,6 +966,11 @@ declare global {
       openPath(file: string): Promise<{ ok: boolean; message?: string }>;
       openExternal(url: string): Promise<{ ok: boolean; message?: string }>;
       chooseSavePath(options: { title?: string; defaultPath?: string; extension?: string }): Promise<{ canceled: boolean; path: string }>;
+      exportPdf(options: { html: string; title?: string; defaultPath?: string }): Promise<{
+        canceled: boolean;
+        path: string;
+        bytes?: number;
+      }>;
       readClipboard(): Promise<
         | { kind: "empty" }
         | { kind: "text"; text: string; html?: string }
@@ -1098,6 +1117,10 @@ export const api = {
     async agenda(body: Record<string, unknown> = {}): Promise<AgendaMsg> {
       const call = requireMethod(nativeApi().notes?.agenda, "Agenda");
       return ensureOk(await call(body) as AgendaMsg, "Agenda failed");
+    },
+    async resolveBlock(id: string): Promise<BlockReferenceLocation> {
+      const call = requireMethod(nativeApi().notes?.resolveBlock, "Block navigation");
+      return ensureOk(await call(id) as BlockReferenceLocation, "Block navigation failed");
     },
     async embedQuery(body: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
       const call = requireMethod(nativeApi().notes?.embedQuery, "Embed query");

@@ -186,6 +186,40 @@ func TestAddAttributeViewBlocksAcceptsDetachedItemsInBatch(t *testing.T) {
 	}
 }
 
+func TestAppendAttributeViewDetachedBlocksRejectsMalformedRows(t *testing.T) {
+	setupAttributeViewValidationTest(t)
+
+	avID := "20260826084000-invalid"
+	attrView := av.NewAttributeView(avID)
+	if err := av.SaveAttributeView(attrView); nil != err {
+		t.Fatalf("save attribute view failed: %s", err)
+	}
+	blockKeyID := attrView.GetBlockKeyValues().Key.ID
+	tests := []struct {
+		name   string
+		values [][]*av.Value
+	}{
+		{name: "empty row", values: [][]*av.Value{{}}},
+		{name: "nil value", values: [][]*av.Value{{nil}}},
+		{name: "missing key", values: [][]*av.Value{{{KeyID: "20260826084001-missing"}}}},
+		{name: "missing block data", values: [][]*av.Value{{{KeyID: blockKeyID}}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := AppendAttributeViewDetachedBlocksWithValues(avID, test.values); nil == err {
+				t.Fatal("expected malformed row to be rejected")
+			}
+			parsed, err := av.ParseAttributeView(avID)
+			if nil != err {
+				t.Fatal(err)
+			}
+			if values := parsed.GetBlockKeyValues().Values; 0 != len(values) {
+				t.Fatalf("malformed row changed persisted values: %+v", values)
+			}
+		})
+	}
+}
+
 func TestAddAttributeViewBlockAcceptsValidBoundItemWithoutDatabaseBlock(t *testing.T) {
 	setupAttributeViewValidationTest(t)
 

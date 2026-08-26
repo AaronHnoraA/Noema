@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/88250/lute/ast"
+	"github.com/aaronhe/noema/kernel/conf"
 	"github.com/aaronhe/noema/kernel/model"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
@@ -155,6 +156,18 @@ func documentList(args map[string]any) (CallToolResult, error) {
 	if hPath == "" {
 		hPath = "/"
 	}
+	if conf.BoxKindMarkdown == model.GetBoxKind(notebook) {
+		docs, err := model.ListMarkdownDocs(notebook)
+		if nil != err {
+			return CallToolResult{Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("list docs failed: %s", err)}}, IsError: true}, nil
+		}
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("Documents in %s:\n\n", notebook))
+		for _, doc := range docs {
+			sb.WriteString(fmt.Sprintf("- %s (path: %s)\n", doc.Title, doc.Path))
+		}
+		return CallToolResult{Content: []ContentItem{{Type: "text", Text: sb.String()}}}, nil
+	}
 
 	fsPath := hPath
 	if hPath != "/" {
@@ -254,7 +267,9 @@ func documentDuplicate(args map[string]any) (CallToolResult, error) {
 		return CallToolResult{Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("load doc failed: %s", err)}}, IsError: true}, nil
 	}
 
-	model.DuplicateDoc(tree)
+	if err = model.DuplicateDoc(tree); err != nil {
+		return CallToolResult{Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("duplicate doc failed: %s", err)}}, IsError: true}, nil
+	}
 	util.PushReloadFiletree()
 	return CallToolResult{Content: []ContentItem{{Type: "text", Text: "document duplicated: " + id}}}, nil
 }

@@ -210,6 +210,8 @@ func RemoveBox(boxID string) (err error) {
 		return fmt.Errorf("query database-bound blocks in notebook [%s] failed: %w", boxID, err)
 	}
 	isUserGuide := IsUserGuide(boxID)
+	boxConf := (&Box{ID: boxID}).GetConf()
+	isExternalMarkdown := conf.BoxKindMarkdown == boxConf.Kind && "" != strings.TrimSpace(boxConf.Root)
 	// Removing an external Markdown box deletes only its workspace shadow
 	// registration. The repository returned by filesys.BoxRootPath is user
 	// content and must never be removed by notebook unregister.
@@ -229,7 +231,7 @@ func RemoveBox(boxID string) (err error) {
 	ClearRichClipboardBox(boxID)
 	unindex(boxID)
 
-	if !isUserGuide {
+	if !isUserGuide && !isExternalMarkdown {
 		var historyDir string
 		historyDir, err = getHistoryDir(HistoryOpDelete)
 		if err != nil {
@@ -318,10 +320,25 @@ func Mount(boxID string) (alreadyMount bool, err error) {
 	if !ast.IsNodeIDPattern(boxID) {
 		return false, errors.New("invalid notebook ID")
 	}
-	return mountBox(boxID)
+	return mountBox(boxID, false)
 }
 
-func mountBox(boxID string) (alreadyMount bool, err error) {
+// MountExternalMarkdownBoxAndWait is the desktop/Emacs attach readiness
+// boundary for a standalone repository. Ordinary Mount keeps the upstream
+// asynchronous notebook-open contract; an external registration must not
+// return until its source scan and SQL/FTS commit are complete.
+func MountExternalMarkdownBoxAndWait(boxID string) (alreadyMount bool, err error) {
+	if !ast.IsNodeIDPattern(boxID) {
+		return false, errors.New("invalid notebook ID")
+	}
+	boxConf := (&Box{ID: boxID}).GetConf()
+	if conf.BoxKindMarkdown != boxConf.Kind || "" == strings.TrimSpace(boxConf.Root) {
+		return false, errors.New("not an external Markdown notebook")
+	}
+	return mountBox(boxID, true)
+}
+
+func mountBox(boxID string, waitForMarkdownIndex bool) (alreadyMount bool, err error) {
 	if _, loaded := boxLock.LoadOrStore(boxID, true); loaded {
 		err = errors.New(Conf.language(239))
 		return
@@ -395,6 +412,14 @@ func mountBox(boxID string) (alreadyMount bool, err error) {
 
 	for _, box := range Conf.GetOpenedBoxes() {
 		if box.ID == boxID {
+			// Recreate the process-local watcher and reconcile changes made while
+			// Noema was offline. An already-open persisted box is not itself proof
+			// that its disposable SQL projection matches the repository.
+			if waitForMarkdownIndex && conf.BoxKindMarkdown == GetBoxKind(boxID) {
+				if indexErr := indexExternalMarkdownBoxAndWait(box); nil != indexErr {
+					return true, indexErr
+				}
+			}
 			return true, nil
 		}
 	}
@@ -416,8 +441,14 @@ func mountBox(boxID string) (alreadyMount bool, err error) {
 	if conf.BoxKindMarkdown == boxConf.Kind {
 		// markdown box：EnsureBoxDoc/ListDocTree 是 .sy 嵌套文档树的概念，不适用；
 		// 全量索引已经是 box-kind 感知的（见 index.go），空 box 也能安全地无操作跑一遍。
-		box.Index()
-		WatchMarkdownBox(boxID)
+		if waitForMarkdownIndex {
+			if indexErr := indexExternalMarkdownBoxAndWait(box); nil != indexErr {
+				return false, indexErr
+			}
+		} else {
+			box.Index()
+			WatchMarkdownBox(boxID)
+		}
 	} else {
 		if _, ensureErr := EnsureBoxDoc(boxID); nil != ensureErr {
 			logging.LogErrorf("ensure box document [%s] failed: %s", boxID, ensureErr)
@@ -435,6 +466,31 @@ func mountBox(boxID string) (alreadyMount bool, err error) {
 		return true, nil
 	}
 	return false, nil
+}
+
+func indexExternalMarkdownBoxAndWait(box *Box) error {
+	// External registration only returns after the root is searchable; this is
+	// the Node supervisor's listening boundary.
+	WatchMarkdownBox(box.ID)
+	changed, err := reconcileMarkdownBoxChecked(box.ID)
+	if nil != err {
+		// Flush any already-enqueued successful trees before persisting the
+		// marker. EvtSQLIndexFlushed clears DataIndexState, so the explicit marker
+		// must be written after that event to survive a retry or process restart.
+		sql.FlushQueue()
+		markDataIndexRecoveryRequired()
+		return err
+	}
+	if 0 < changed {
+		sql.FlushQueue()
+		ResetVirtualBlockRefCache()
+	}
+	if 0 != Conf.DataIndexState {
+		dataIndexRecoveryRequired = false
+		Conf.DataIndexState = 0
+		Conf.Save()
+	}
+	return nil
 }
 
 func IsUserGuide(boxID string) bool {

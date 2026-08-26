@@ -33,11 +33,11 @@ import (
 
 	"github.com/88250/gulu"
 	"github.com/88250/lute/ast"
-	"github.com/gin-gonic/gin"
 	"github.com/aaronhe/noema/kernel/filesys"
 	"github.com/aaronhe/noema/kernel/model"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/gin-gonic/gin"
 )
 
 func moveLocalShorthands(c *gin.Context) {
@@ -77,6 +77,11 @@ func listDocTree(c *gin.Context) {
 
 	notebook := arg["notebook"].(string)
 	if util.InvalidIDPattern(notebook, ret) {
+		return
+	}
+	if err := model.RequireNativeDocumentTree(notebook); nil != err {
+		ret.Code = -1
+		ret.Msg = err.Error()
 		return
 	}
 
@@ -826,7 +831,11 @@ func duplicateDoc(c *gin.Context) {
 	}
 
 	notebook := tree.Box
-	model.DuplicateDoc(tree)
+	if err = model.DuplicateDoc(tree); nil != err {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
 
 	ret.Data = map[string]any{
 		"id":       tree.Root.ID,
@@ -1135,7 +1144,11 @@ func changeSort(c *gin.Context) {
 	for _, p := range pathsArg {
 		paths = append(paths, p.(string))
 	}
-	model.ChangeFileTreeSort(notebook, paths)
+	if err := model.ChangeFileTreeSort(notebook, paths); nil != err {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
 }
 
 type sortRequestItem struct {

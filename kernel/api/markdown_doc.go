@@ -19,12 +19,16 @@ package api
 import (
 	"encoding/base64"
 	"net/http"
+	"sync"
 
 	"github.com/88250/gulu"
 	"github.com/aaronhe/noema/kernel/model"
 	"github.com/aaronhe/noema/kernel/util"
 	"github.com/gin-gonic/gin"
+	"github.com/siyuan-note/logging"
 )
+
+var registerExternalMarkdownBoxLock sync.Mutex
 
 func storeMarkdownAsset(c *gin.Context) {
 	ret := gulu.Ret.NewResult()
@@ -108,6 +112,30 @@ func listUnusedMarkdownAssets(c *gin.Context) {
 	ret.Data = map[string]any{"assets": assets, "source": "kernel-assets"}
 }
 
+func loadMarkdownBibliography(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+	arg, ok := util.JsonArg(c, ret)
+	if !ok {
+		return
+	}
+	var notebook, p, metadata string
+	if !util.ParseJsonArgs(arg, ret,
+		util.BindJsonArg("notebook", &notebook, true, true),
+		util.BindJsonArg("path", &p, true, true),
+		util.BindJsonArg("metadata", &metadata, true, false),
+	) {
+		return
+	}
+	library, err := model.LoadMarkdownBibliography(notebook, p, metadata)
+	if nil != err {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+	ret.Data = library
+}
+
 // loadMarkdownDoc 是 CM6 文本协议的加载端点（计划文档 Phase 2）：给一个
 // markdown box 内的文档路径，返回当前 markdown 全文和已持久化 ID 的块列表
 // （不含源偏移 from/to——CM6 用自己的 Lezer 解析同一份文本顺带算出，见计划
@@ -156,26 +184,106 @@ func saveMarkdownDoc(c *gin.Context) {
 		return
 	}
 
-	var notebook, p, markdown string
+	var notebook, p, markdown, expectedVersion string
+	var force bool
 	if !util.ParseJsonArgs(arg, ret,
 		util.BindJsonArg("notebook", &notebook, true, true),
 		util.BindJsonArg("path", &p, true, true),
 		util.BindJsonArg("markdown", &markdown, true, false), // 允许保存空文档
+		util.BindJsonArg("expectedVersion", &expectedVersion, false, false),
+		util.BindJsonArg("force", &force, false, false),
 	) {
 		return
 	}
 
-	saved, blocks, err := model.SaveMarkdownDoc(notebook, p, markdown)
+	result, err := model.SaveMarkdownDocCAS(notebook, p, markdown, expectedVersion, force)
 	if nil != err {
 		ret.Code = -1
 		ret.Msg = err.Error()
 		return
 	}
 
-	ret.Data = map[string]any{
-		"markdown": saved,
-		"blocks":   blocks,
+	ret.Data = result
+}
+
+func mutateMarkdownMeta(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+
+	var request model.MarkdownMetaMutationRequest
+	if err := c.ShouldBindJSON(&request); nil != err {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
 	}
+	if request.Notebook == "" || request.Path == "" || request.Action == "" {
+		ret.Code = -1
+		ret.Msg = "notebook, path, and action are required"
+		return
+	}
+	result, err := model.MutateMarkdownMeta(request)
+	if nil != err {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+	ret.Data = result
+}
+
+func moveMarkdownDoc(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+
+	arg, ok := util.JsonArg(c, ret)
+	if !ok {
+		return
+	}
+	var notebook, fromPath, toPath string
+	if !util.ParseJsonArgs(arg, ret,
+		util.BindJsonArg("notebook", &notebook, true, true),
+		util.BindJsonArg("fromPath", &fromPath, true, false),
+		util.BindJsonArg("toPath", &toPath, true, false),
+	) {
+		return
+	}
+	if util.InvalidIDPattern(notebook, ret) {
+		return
+	}
+	result, err := model.MoveMarkdownDoc(notebook, fromPath, toPath)
+	if nil != err {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+	ret.Data = result
+}
+
+func moveMarkdownPath(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+
+	arg, ok := util.JsonArg(c, ret)
+	if !ok {
+		return
+	}
+	var notebook, fromPath, toPath string
+	if !util.ParseJsonArgs(arg, ret,
+		util.BindJsonArg("notebook", &notebook, true, true),
+		util.BindJsonArg("fromPath", &fromPath, true, false),
+		util.BindJsonArg("toPath", &toPath, true, false),
+	) {
+		return
+	}
+	if util.InvalidIDPattern(notebook, ret) {
+		return
+	}
+	result, err := model.MoveMarkdownPath(notebook, fromPath, toPath)
+	if nil != err {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+	ret.Data = result
 }
 
 // listMarkdownDocs 列出一个 markdown box 里的所有 .md 文档，供客户端渲染
@@ -227,13 +335,28 @@ func registerExternalMarkdownBox(c *gin.Context) {
 		return
 	}
 
+	// A first mount now waits for its source scan and SQL/FTS commit. Serialize
+	// registrations so concurrent App/Emacs attach attempts for the same
+	// portable root wait for that operation instead of observing the shadow as
+	// already mounted and returning before its index is ready.
+	registerExternalMarkdownBoxLock.Lock()
+	defer registerExternalMarkdownBoxLock.Unlock()
+
 	registration, err := model.RegisterExternalMarkdownBox(name, root, repositoryID)
 	if nil != err {
 		ret.Code = -1
 		ret.Msg = err.Error()
 		return
 	}
-	alreadyMounted, err := model.Mount(registration.ID)
+	// A kernel workspace is reused across App/Emacs launches. Reconcile
+	// registrations only after the active portable repository has had a chance
+	// to rebind its existing identity at a new path, then remove shadows whose
+	// roots are provably gone. Transient permission/I/O failures are retained.
+	pruned, pruneErr := model.PruneMissingExternalMarkdownBoxes(registration.ID)
+	if nil != pruneErr {
+		logging.LogWarnf("prune stale external Markdown boxes failed: %s", pruneErr)
+	}
+	alreadyMounted, err := model.MountExternalMarkdownBoxAndWait(registration.ID)
 	if nil != err {
 		ret.Code = -1
 		ret.Msg = err.Error()
@@ -242,6 +365,7 @@ func registerExternalMarkdownBox(c *gin.Context) {
 	ret.Data = map[string]any{
 		"box":            registration,
 		"alreadyMounted": alreadyMounted,
+		"pruned":         pruned,
 	}
 }
 

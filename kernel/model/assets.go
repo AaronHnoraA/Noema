@@ -38,11 +38,6 @@ import (
 	"github.com/88250/lute/editor"
 	"github.com/88250/lute/html"
 	"github.com/88250/lute/parse"
-	"github.com/disintegration/imaging"
-	"github.com/gabriel-vasile/mimetype"
-	"github.com/siyuan-note/filelock"
-	"github.com/siyuan-note/httpclient"
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/av"
 	"github.com/aaronhe/noema/kernel/cache"
 	"github.com/aaronhe/noema/kernel/conf"
@@ -52,6 +47,11 @@ import (
 	"github.com/aaronhe/noema/kernel/sql"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/disintegration/imaging"
+	"github.com/gabriel-vasile/mimetype"
+	"github.com/siyuan-note/filelock"
+	"github.com/siyuan-note/httpclient"
+	"github.com/siyuan-note/logging"
 )
 
 func GetAssetImgSize(assetPath string) (width, height int) {
@@ -474,6 +474,9 @@ func GenerateDocumentImage(ctx context.Context, request GenerateDocumentImageReq
 	if err != nil {
 		return GenerateDocumentImageResult{}, err
 	}
+	if err = requireNativeDocumentTree(bt.BoxID); nil != err {
+		return GenerateDocumentImageResult{}, err
+	}
 	generated, err := GenerateImage(ctx, GenerateImageRequest{
 		Prompt: request.Prompt, Size: request.Size, Quality: request.Quality, OutputFormat: request.OutputFormat,
 	})
@@ -559,9 +562,17 @@ func docAssets(rootID string, retainQueryStr bool, itemFilter attributeViewItemF
 func NetAssets2LocalAssets(rootID string, onlyImg bool, originalURL string) (err error) {
 	syncingFiles.Store(rootID, true)
 	defer syncingFiles.Delete(rootID)
+	if bt := treenode.GetBlockTree(rootID); nil != bt {
+		if err = requireNativeDocumentTree(bt.BoxID); nil != err {
+			return
+		}
+	}
 
 	tree, err := LoadTreeByBlockID(rootID)
 	if err != nil {
+		return
+	}
+	if err = requireNativeDocumentTree(tree.Box); nil != err {
 		return
 	}
 
@@ -816,6 +827,9 @@ func netAssets2LocalAssets0(tree *parse.Tree, onlyImg bool, originalURL string, 
 // DownloadNetAssets2LocalAssets 将语法树中的网络资源下载到本地并改写链接，
 // 不持久化文档树，由调用方负责后续保存与渲染。
 func DownloadNetAssets2LocalAssets(tree *parse.Tree, onlyImg bool, originalURL string, assetsDirPath string) {
+	if nil == tree || nil != requireNativeDocumentTree(tree.Box) {
+		return
+	}
 	netAssets2LocalAssets0(tree, onlyImg, originalURL, assetsDirPath, false)
 }
 
@@ -1207,6 +1221,11 @@ func getAssetAbsPath(relativePath string, includeEncrypted bool) (absPath string
 		return "", errors.New(Conf.Language(0))
 	}
 	for _, notebook := range notebooks {
+		if conf.BoxKindMarkdown == GetBoxKind(notebook.ID) {
+			// Repository-native assets are resolved relative to their external
+			// source root, never through the workspace shadow/global fallback.
+			continue
+		}
 		if !includeEncrypted && IsEncryptedBox(notebook.ID) {
 			continue // 加密笔记本的资源不参与全局路径解析（孤岛，资源不跨边界）
 		}
@@ -1238,12 +1257,18 @@ func getAssetAbsPath(relativePath string, includeEncrypted bool) (absPath string
 }
 
 func UploadAssets2Cloud(id string, ignorePushMsg bool) (count int, err error) {
+	if err = requireNativeBlockIDs(id); nil != err {
+		return
+	}
 	if !IsSubscriber() {
 		return
 	}
 
 	tree, err := LoadTreeByBlockID(id)
 	if err != nil {
+		return
+	}
+	if err = requireNativeDocumentTree(tree.Box); nil != err {
 		return
 	}
 
@@ -1596,6 +1621,11 @@ func RenameAsset(oldPath, newName string) (newPath string, err error) {
 
 	luteEngine := util.NewLute()
 	for _, notebook := range notebooks {
+		if conf.BoxKindMarkdown == GetBoxKind(notebook.ID) {
+			// Repository-native asset rename/link repair uses the dedicated
+			// Markdown asset and source-patch pipeline.
+			continue
+		}
 		// 加密笔记本的资源重命名已在入口处拦截，这里跳过加密 box
 		if IsEncryptedBox(notebook.ID) {
 			continue
@@ -1786,6 +1816,11 @@ func UnusedAssets(sorted bool) (ret []*UnusedItem) {
 	}
 	luteEngine := util.NewLute()
 	for _, notebook := range notebooks {
+		if conf.BoxKindMarkdown == GetBoxKind(notebook.ID) {
+			// External repositories have their own source-aware unused-asset
+			// endpoint; never fold them into native/global cleanup.
+			continue
+		}
 		if IsEncryptedBox(notebook.ID) {
 			continue // 加密笔记本的资源不参与未引用清理（孤岛，资源不跨边界）
 		}
@@ -1945,6 +1980,11 @@ func MissingAssets() (ret []*UnusedItem) {
 	referenceBlockIDs := map[missingAssetReference]map[string]bool{}
 	for _, notebook := range notebooks {
 		if notebook.Closed {
+			continue
+		}
+		if conf.BoxKindMarkdown == GetBoxKind(notebook.ID) {
+			// Markdown assets resolve relative to the repository/note and are
+			// checked by the repository-native asset pipeline.
 			continue
 		}
 		encrypted := IsEncryptedBox(notebook.ID)
@@ -2331,6 +2371,9 @@ func setAssetsLinkDest(node *ast.Node, oldDest, dest string) {
 		if nil == attrView {
 			return
 		}
+		if nil != requireNativeAttributeViewState(attrView) {
+			return
+		}
 
 		for _, keyValues := range attrView.KeyValues {
 			if av.KeyTypeMAsset != keyValues.Key.Type {
@@ -2465,7 +2508,7 @@ func allAssetAbsPaths() (assetsAbsPathMap map[string]string, err error) {
 	assetsAbsPathMap = map[string]string{}
 	// 笔记本 assets（跳过加密 box，加密资产不参与全局去重/清理）
 	for _, notebook := range notebooks {
-		if IsEncryptedBox(notebook.ID) {
+		if IsEncryptedBox(notebook.ID) || conf.BoxKindMarkdown == GetBoxKind(notebook.ID) {
 			continue
 		}
 		notebookAbsPath := filepath.Join(util.DataDir, notebook.ID)

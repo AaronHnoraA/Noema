@@ -97,13 +97,13 @@ export function renderMathHTML(
   const key = mathCacheKey(tex, options);
   const cached = cachedMathHtml(key);
   if (cached) {
-    if (!cached.error) ensureKatexCss(katexCssText);
+    if (!cached.error) ensureKatexCss();
     return cached;
   }
   try {
     const resolved = katexOptions(options);
     const html = katex.renderToString(katexCompatibleLatex(tex), resolved);
-    ensureKatexCss(katexCssText);
+    ensureKatexCss();
     const rendered = { html };
     rememberMathHtml(key, rendered);
     return rendered;
@@ -174,18 +174,22 @@ function katexOptions(options: KatexRenderOptions): KatexRenderOptions {
   };
 }
 
-function ensureKatexCss(css: string): void {
+function ensureKatexCss(): void {
   if (typeof document === "undefined") return;
   if (document.querySelector("link[data-aaronnote-katex-css], style[data-aaronnote-katex-css]")) return;
   const link = document.createElement("link");
   link.dataset.aaronnoteKatexCss = "embedded";
   link.rel = "stylesheet";
-  link.href = `data:text/css;charset=utf-8,${encodeURIComponent(css)}`;
+  link.href = katexStylesheetHref();
   document.head.appendChild(link);
 }
 
+export function katexStylesheetHref(): string {
+  return `data:text/css;charset=utf-8,${encodeURIComponent(katexCssText)}`;
+}
+
 export function ensureMathStyles(): void {
-  ensureKatexCss(katexCssText);
+  ensureKatexCss();
 }
 
 function fitRenderedMath(element: HTMLElement): void {

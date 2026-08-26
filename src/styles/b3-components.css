@@ -1,0 +1,325 @@
+/*
+ * Noema's source-owned subset of SiYuan's b3 component contract.
+ *
+ * The upstream b3 classes own interaction chrome and consume the complete
+ * --b3-* theme palette.  Host/page styles continue to own geometry so a
+ * floating TOC, a desktop dock, and a full-screen LiveTeX dialog keep their
+ * intentionally different layouts.
+ */
+
+:where([data-noema-b3-surface]) {
+  color: var(--b3-theme-on-background);
+  font-family: var(--b3-font-family);
+  font-size: var(--b3-font-size);
+}
+
+:where(.b3-panel) {
+  border-color: var(--b3-theme-surface-lighter);
+  background-color: var(--b3-theme-surface);
+  color: var(--b3-theme-on-background);
+  box-shadow: var(--b3-dialog-shadow);
+}
+
+:where(.b3-panel__header) {
+  border-bottom-color: var(--b3-theme-surface-lighter);
+  color: var(--b3-theme-on-background);
+}
+
+:where(.b3-dialog) {
+  color: var(--b3-theme-on-background);
+  font-size: var(--b3-font-size);
+}
+
+:where(.b3-dialog[hidden], .b3-dialog__container[hidden], .b3-menu[hidden], .b3-panel[hidden]) {
+  display: none;
+}
+
+:where(.b3-dialog__container) {
+  border-color: var(--b3-theme-surface-lighter);
+  border-radius: var(--b3-border-radius-b);
+  background-color: var(--b3-theme-surface);
+  color: var(--b3-theme-on-background);
+  box-shadow: var(--b3-dialog-shadow);
+}
+
+:where(dialog.b3-dialog__container)::backdrop {
+  background-color: var(--b3-mask-background);
+  backdrop-filter: blur(3px);
+}
+
+:where(.b3-dialog__header) {
+  border-bottom-color: var(--b3-theme-surface-lighter);
+  color: var(--b3-theme-on-background);
+}
+
+:where(.b3-dialog__action) {
+  border-top-color: var(--b3-theme-surface-lighter);
+}
+
+:where(.b3-menu) {
+  border-color: var(--b3-theme-surface-lighter);
+  border-radius: var(--b3-border-radius-b);
+  background-color: var(--b3-menu-background);
+  color: var(--b3-theme-on-background);
+  box-shadow: var(--b3-dialog-shadow);
+}
+
+:where(.b3-menu__item) {
+  min-height: 28px;
+  border: 0;
+  border-radius: var(--b3-border-radius);
+  background-color: transparent;
+  color: var(--b3-theme-on-background);
+  cursor: pointer;
+  text-align: left;
+}
+
+:where(.b3-menu__item:hover, .b3-menu__item:focus-visible, .b3-menu__item--current, .b3-menu__item[aria-selected="true"]) {
+  background-color: var(--b3-list-hover);
+  color: var(--b3-theme-primary);
+  box-shadow: none;
+}
+
+:where(.b3-menu__item:disabled, .b3-menu__item[aria-disabled="true"]) {
+  cursor: not-allowed;
+  opacity: 0.38;
+}
+
+:where(.b3-menu__separator) {
+  width: 100%;
+  height: 1px;
+  margin: 4px 0;
+  padding: 0;
+  border: 0;
+  background-color: var(--b3-theme-surface-lighter);
+}
+
+:where(.b3-list) {
+  color: var(--b3-theme-on-background);
+}
+
+:where(.b3-list-item) {
+  min-height: 28px;
+  border: 0;
+  border-radius: var(--b3-border-radius);
+  background-color: transparent;
+  color: var(--b3-theme-on-background);
+  cursor: pointer;
+}
+
+:where(.b3-list--background .b3-list-item:hover, .b3-list-item--focus, .b3-list-item[aria-selected="true"]) {
+  background-color: var(--b3-list-hover);
+}
+
+:where(.b3-button) {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  border: 0;
+  border-radius: var(--b3-border-radius);
+  padding: 4px 8px;
+  background-color: var(--b3-theme-primary);
+  color: var(--b3-theme-on-primary);
+  cursor: pointer;
+  line-height: 20px;
+  text-align: center;
+  transition: box-shadow 120ms ease, background-color 120ms ease, color 120ms ease;
+  white-space: nowrap;
+}
+
+:where(.b3-button:hover, .b3-button:focus-visible) {
+  box-shadow: var(--b3-button-shadow);
+}
+
+:where(.b3-button:active) {
+  box-shadow: var(--b3-button-active-shadow);
+}
+
+:where(.b3-button--text) {
+  background-color: transparent;
+  color: var(--b3-theme-primary);
+}
+
+:where(.b3-button--text:hover, .b3-button--text:focus-visible) {
+  background-color: var(--b3-theme-primary-lightest);
+  box-shadow: none;
+}
+
+:where(.b3-button--cancel) {
+  background-color: transparent;
+  color: var(--b3-theme-on-surface);
+}
+
+:where(.b3-button--cancel:hover, .b3-button--cancel:focus-visible) {
+  background-color: var(--b3-list-hover);
+  box-shadow: none;
+}
+
+:where(.b3-button--outline) {
+  background-color: transparent;
+  color: var(--b3-theme-primary);
+  box-shadow: inset 0 0 0 1px var(--b3-theme-primary);
+}
+
+:where(.b3-button--outline:hover, .b3-button--outline:focus-visible) {
+  background-color: var(--b3-theme-primary-lightest);
+  box-shadow: inset 0 0 0 1px var(--b3-theme-primary);
+}
+
+:where(.b3-button--remove) {
+  background-color: transparent;
+  color: var(--b3-theme-error);
+  box-shadow: inset 0 0 0 1px var(--b3-theme-error);
+}
+
+:where(.b3-button--remove:hover, .b3-button--remove:focus-visible) {
+  background-color: var(--b3-card-error-background);
+  box-shadow: inset 0 0 0 1px var(--b3-theme-error);
+}
+
+:where(.b3-button:disabled) {
+  cursor: not-allowed;
+  opacity: 0.38;
+}
+
+:where(.b3-text-field) {
+  box-sizing: border-box;
+  border: 0;
+  border-radius: var(--b3-border-radius);
+  outline: 1px solid var(--b3-border-color);
+  outline-offset: -1px;
+  padding: 4px 8px;
+  background-color: var(--b3-theme-background);
+  color: var(--b3-theme-on-background);
+  box-shadow: none;
+  font-size: 14px;
+  line-height: 20px;
+  transition: box-shadow 120ms ease, outline-color 120ms ease;
+  -webkit-appearance: none;
+}
+
+:where(.b3-text-field:hover) {
+  box-shadow: 0 0 0 0.6px var(--b3-border-color);
+}
+
+:where(.b3-text-field:focus) {
+  outline-color: var(--b3-theme-primary-light);
+  box-shadow: 0 0 0 0.6px var(--b3-theme-primary-lighter);
+}
+
+:where(.b3-select) {
+  box-sizing: border-box;
+  height: 28px;
+  border: 0;
+  border-radius: var(--b3-border-radius);
+  padding: 4px 26px 4px 8px;
+  background: var(--b3-select-background);
+  color: var(--b3-theme-on-background);
+  box-shadow: inset 0 0 0 1px var(--b3-border-color);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+:where(.b3-select:hover) {
+  background-color: var(--b3-theme-surface);
+  box-shadow: inset 0 0 0 1px var(--b3-border-color), 0 0 0 0.6px var(--b3-border-color);
+}
+
+:where(.b3-select:focus) {
+  box-shadow: inset 0 0 0 1px var(--b3-theme-primary-light), 0 0 0 0.6px var(--b3-theme-primary-lighter);
+}
+
+:where(.b3-slider) {
+  height: 16px;
+  border-radius: var(--b3-border-radius);
+  padding: 0 4px;
+  background-color: transparent;
+  -webkit-appearance: none;
+}
+
+:where(.b3-slider::-webkit-slider-runnable-track) {
+  height: 2px;
+  background-color: var(--b3-theme-primary-lighter);
+  -webkit-appearance: none;
+}
+
+:where(.b3-slider::-webkit-slider-thumb) {
+  width: 10px;
+  height: 10px;
+  margin-top: -4px;
+  border-radius: var(--b3-border-radius-b);
+  background-color: var(--b3-theme-primary);
+  box-shadow: var(--b3-point-shadow);
+  cursor: pointer;
+  transition: transform 100ms ease-out;
+  -webkit-appearance: none;
+}
+
+:where(.b3-slider:hover, .b3-slider:focus) {
+  outline: none;
+}
+
+:where(.b3-slider:hover::-webkit-slider-thumb, .b3-slider:focus::-webkit-slider-thumb) {
+  transform: scale(1.5);
+}
+
+:where(.b3-switch) {
+  box-sizing: border-box;
+  flex-shrink: 0;
+  width: 26px;
+  height: 16px;
+  margin: 0;
+  border: 1px solid var(--b3-switch-border);
+  border-radius: var(--b3-border-radius-b);
+  outline: none;
+  background-color: var(--b3-switch-background);
+  cursor: pointer;
+  position: relative;
+  -webkit-appearance: none;
+}
+
+:where(.b3-switch)::after {
+  position: absolute;
+  top: 50%;
+  left: 7px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--b3-switch-border);
+  content: "";
+  transform: translate(-50%, -50%);
+  transition: left 80ms linear, width 80ms linear, height 80ms linear, background-color 80ms linear;
+}
+
+:where(.b3-switch:checked) {
+  border-color: transparent;
+  background-color: var(--b3-switch-checked-background);
+  box-shadow: none;
+}
+
+:where(.b3-switch:checked)::after {
+  left: 17px;
+  width: 12px;
+  height: 12px;
+  background-color: var(--b3-switch-checked);
+}
+
+:where(.b3-switch:disabled) {
+  cursor: not-allowed;
+  opacity: 0.38;
+}
+
+:where(.b3-card) {
+  border-radius: var(--b3-border-radius);
+  background-color: var(--b3-theme-surface);
+  box-shadow: var(--b3-point-shadow) inset;
+  color: var(--b3-theme-on-background);
+  transition: var(--b3-background-transition);
+}
+
+:where(.b3-card:hover, .b3-card--current) {
+  background-color: var(--b3-list-hover);
+}

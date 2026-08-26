@@ -39,9 +39,6 @@ import (
 	"github.com/88250/lute/html"
 	"github.com/88250/lute/parse"
 	util2 "github.com/88250/lute/util"
-	"github.com/siyuan-note/filelock"
-	"github.com/siyuan-note/logging"
-	"github.com/siyuan-note/riff"
 	"github.com/aaronhe/noema/kernel/av"
 	"github.com/aaronhe/noema/kernel/cache"
 	"github.com/aaronhe/noema/kernel/filesys"
@@ -50,6 +47,9 @@ import (
 	"github.com/aaronhe/noema/kernel/task"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/siyuan-note/filelock"
+	"github.com/siyuan-note/logging"
+	"github.com/siyuan-note/riff"
 )
 
 type File struct {
@@ -400,6 +400,9 @@ type FileInfo struct {
 
 // ResolveDocTreeSortMode 按当前父文档、最近祖先文档、笔记本和全局配置的顺序解析子文档排序方式。
 func ResolveDocTreeSortMode(boxID, listPath string) (sortMode int, err error) {
+	if err = requireNativeDocumentTree(boxID); nil != err {
+		return
+	}
 	box := Conf.Box(boxID)
 	if nil == box {
 		return 0, errors.New(Conf.Language(0))
@@ -446,6 +449,9 @@ func ListDocTree(boxID, listPath string, sortMode int, flashcard, showHidden boo
 	//cpuProfile, _ := os.Create("pprof/cpu_profile_list_doc_tree")
 	//pprof.StartCPUProfile(cpuProfile)
 	//defer pprof.StopCPUProfile()
+	if err = requireNativeDocumentTree(boxID); nil != err {
+		return nil, 0, err
+	}
 
 	ret = []*File{}
 	if flashcard && IsEncryptedBox(boxID) {
@@ -1258,6 +1264,12 @@ func loadNodesByMode(node *ast.Node, inputIndex, mode, size int, isDoc, isHeadin
 }
 
 func writeTreeUpsertQueue(tree *parse.Tree) (err error) {
+	if nil == tree {
+		return errors.New("tree is nil")
+	}
+	if err = requireNativeDocumentTree(tree.Box); nil != err {
+		return
+	}
 	isNew := !filelock.IsExist(filepath.Join(util.DataDir, tree.Box, tree.Path))
 	size, err := filesys.WriteTree(tree)
 	if err != nil {
@@ -1272,6 +1284,12 @@ func writeTreeUpsertQueue(tree *parse.Tree) (err error) {
 }
 
 func indexWriteTreeIndexQueue(tree *parse.Tree) (err error) {
+	if nil == tree {
+		return errors.New("tree is nil")
+	}
+	if err = requireNativeDocumentTree(tree.Box); nil != err {
+		return
+	}
 	treenode.IndexBlockTree(tree)
 	_, err = filesys.WriteTree(tree)
 	if err != nil {
@@ -1282,11 +1300,23 @@ func indexWriteTreeIndexQueue(tree *parse.Tree) (err error) {
 }
 
 func indexWriteTreeUpsertQueue(tree *parse.Tree) (err error) {
+	if nil == tree {
+		return errors.New("tree is nil")
+	}
+	if err = requireNativeDocumentTree(tree.Box); nil != err {
+		return
+	}
 	treenode.UpsertBlockTree(tree)
 	return writeTreeUpsertQueue(tree)
 }
 
 func renameWriteJSONQueue(tree *parse.Tree) (err error) {
+	if nil == tree {
+		return errors.New("tree is nil")
+	}
+	if err = requireNativeDocumentTree(tree.Box); nil != err {
+		return
+	}
 	size, err := filesys.WriteTree(tree)
 	if err != nil {
 		return
@@ -1297,7 +1327,13 @@ func renameWriteJSONQueue(tree *parse.Tree) (err error) {
 	return
 }
 
-func DuplicateDoc(tree *parse.Tree) {
+func DuplicateDoc(tree *parse.Tree) error {
+	if nil == tree {
+		return ErrBlockNotFound
+	}
+	if err := requireNativeDocumentTree(tree.Box); nil != err {
+		return err
+	}
 	msgId := util.PushMsg(Conf.Language(116), 30000)
 	defer util.PushClearMsg(msgId)
 
@@ -1324,7 +1360,9 @@ func DuplicateDoc(tree *parse.Tree) {
 		return ast.WalkContinue
 	})
 
-	createTreeTx(tree)
+	if err := createTreeTx(tree); nil != err {
+		return err
+	}
 	box := Conf.Box(tree.Box)
 	if nil != box {
 		box.addSort(previousPath, tree.ID)
@@ -1334,11 +1372,12 @@ func DuplicateDoc(tree *parse.Tree) {
 	arg := map[string]any{}
 	arg["listDocTree"] = true
 	PushCreate(box, tree.Path, arg)
+	return nil
 }
 
-func createTreeTx(tree *parse.Tree) {
+func createTreeTx(tree *parse.Tree) error {
 	transaction := &Transaction{DoOperations: []*Operation{{Action: "create", Data: tree}}}
-	PerformTransactions(&[]*Transaction{transaction})
+	return PerformTransactions(&[]*Transaction{transaction})
 }
 
 var createDocLock = sync.Mutex{}
@@ -1351,6 +1390,9 @@ func CreateDocByMd(boxID, p, title, md string, sorts []string, arg map[string]an
 	if nil != err {
 		return
 	}
+	if err = requireNativeDocumentTree(box.ID); nil != err {
+		return
+	}
 
 	luteEngine := util.NewLute()
 	dom := luteEngine.Md2BlockDOM(md, false)
@@ -1361,7 +1403,9 @@ func CreateDocByMd(boxID, p, title, md string, sorts []string, arg map[string]an
 
 	FlushTxQueue()
 	if 0 < len(sorts) {
-		ChangeFileTreeSort(box.ID, sorts)
+		if err = ChangeFileTreeSort(box.ID, sorts); nil != err {
+			return
+		}
 	} else {
 		box.setSortByConf(path.Dir(tree.Path), tree.ID)
 	}
@@ -1379,6 +1423,9 @@ func CreateWithMarkdown(tags, boxID, hPath, md, parentID, id string, withMath bo
 	box := Conf.Box(boxID)
 	if nil == box {
 		err = errors.New(Conf.Language(0))
+		return
+	}
+	if err = requireNativeDocumentTree(box.ID); nil != err {
 		return
 	}
 
@@ -1478,6 +1525,9 @@ func CreateDailyNote(boxID string) (p string, existed bool, err error) {
 	box := Conf.Box(boxID)
 	if nil == box {
 		err = ErrBoxNotFound
+		return
+	}
+	if err = requireNativeDocumentTree(box.ID); nil != err {
 		return
 	}
 
@@ -1738,10 +1788,20 @@ func MoveDocs(fromPaths []string, toBoxID, toPath string, callback any) (err err
 		err = errors.New(Conf.Language(0))
 		return
 	}
+	if err = requireNativeDocumentTree(toBox.ID); nil != err {
+		return
+	}
 	toPath = normalizeBoxDocTarget(toBoxID, toPath)
 	pathsBoxes, err := getBoxesByPathsStrict(fromPaths)
 	if err != nil {
 		return
+	}
+	for _, fromBox := range pathsBoxes {
+		if nil != fromBox {
+			if err = requireNativeDocumentTree(fromBox.ID); nil != err {
+				return
+			}
+		}
 	}
 
 	fromPaths = util.FilterMoveDocFromPaths(fromPaths, toPath)
@@ -2012,6 +2072,9 @@ func RemoveDoc(boxID, p string) error {
 	if nil == box {
 		return ErrBoxNotFound
 	}
+	if err := requireNativeDocumentTree(box.ID); nil != err {
+		return err
+	}
 	if IsBoxDocPath(boxID, p) {
 		return errors.New(Conf.Language(341))
 	}
@@ -2039,6 +2102,11 @@ func RemoveDocs(paths []string) error {
 	paths = util.FilterSelfChildDocs(paths)
 	pathsBoxes := getBoxesByPaths(paths)
 	for p, box := range pathsBoxes {
+		if nil != box {
+			if err := requireNativeDocumentTree(box.ID); nil != err {
+				return err
+			}
+		}
 		if nil != box && IsBoxDocPath(box.ID, p) {
 			return errors.New(Conf.Language(341))
 		}
@@ -2184,6 +2252,9 @@ func removeDoc0(tree *parse.Tree) {
 }
 
 func RenameDoc(boxID, p, title string) (err error) {
+	if err = requireNativeDocumentTree(boxID); nil != err {
+		return
+	}
 	if IsBoxDocPath(boxID, p) {
 		if err = RenameBox(boxID, title); err != nil {
 			return
@@ -2332,6 +2403,9 @@ func validateCreateDoc(boxID, p, title string, titleEmpty bool) (ret *createDocV
 	if nil != boxErr {
 		return nil, boxErr
 	}
+	if err = requireNativeDocumentTree(box.ID); nil != err {
+		return nil, err
+	}
 
 	folder := path.Dir(p)
 	hPath := "/" + title
@@ -2435,7 +2509,9 @@ func createDoc(boxID, p, title, dom string, titleEmpty bool) (tree *parse.Tree, 
 	}
 
 	transaction := &Transaction{DoOperations: []*Operation{{Action: "create", Data: tree}}}
-	PerformTransactions(&[]*Transaction{transaction})
+	if err = PerformTransactions(&[]*Transaction{transaction}); nil != err {
+		return
+	}
 	FlushTxQueue()
 	return
 }
@@ -2499,6 +2575,9 @@ func SetDocSortMode(id string, sortMode *int) (ret *DocSortModeResult, err error
 	if nil != err {
 		return nil, err
 	}
+	if err = requireNativeDocumentTree(tree.Box); nil != err {
+		return nil, err
+	}
 	if tree.ID != id || tree.Root.ID != id || ast.NodeDocument != tree.Root.Type || IsBoxDoc(tree.Box, tree.ID) {
 		return nil, fmt.Errorf("block [%s] is not a document that can declare a child document sort mode", id)
 	}
@@ -2553,6 +2632,9 @@ func PushDocSortModeChanged(scope, boxID, id, p string, sortMode *int) {
 }
 
 func moveSorts(rootID, fromBox, toBox string) {
+	if nil != requireNativeDocumentTree(fromBox, toBox) {
+		return
+	}
 	root := treenode.GetBlockTree(rootID)
 	if nil == root {
 		return
@@ -2602,7 +2684,10 @@ func moveSorts(rootID, fromBox, toBox string) {
 
 }
 
-func ChangeFileTreeSort(boxID string, paths []string) {
+func ChangeFileTreeSort(boxID string, paths []string) (err error) {
+	if err = requireNativeDocumentTree(boxID); nil != err {
+		return
+	}
 	if 1 > len(paths) {
 		return
 	}
@@ -2664,6 +2749,7 @@ func ChangeFileTreeSort(boxID string, paths []string) {
 	IncSync()
 
 	pushFiletreeSortChanged(sortFolderIDs)
+	return
 }
 
 var fileTreeSortLock sync.Mutex
@@ -2753,6 +2839,9 @@ func SetFileTreeSort(notebookSorts, docSorts []*SortItem) (ret *SetFileTreeSortR
 		if nil == boxes[bt.BoxID] {
 			return ret, fmt.Errorf("notebook [%s] not found for document [%s]", bt.BoxID, item.ID)
 		}
+		if err = requireNativeDocumentTree(bt.BoxID); nil != err {
+			return ret, err
+		}
 		docPlans = append(docPlans, &docSortPlan{item: item, boxID: bt.BoxID, parentPath: path.Dir(bt.Path)})
 	}
 
@@ -2837,6 +2926,9 @@ func SetFileTreeSort(notebookSorts, docSorts []*SortItem) (ret *SetFileTreeSortR
 }
 
 func (box *Box) fillSort(files *[]*File) {
+	if nil == box || nil != requireNativeDocumentTree(box.ID) {
+		return
+	}
 	confPath := filepath.Join(util.DataDir, box.ID, ".siyuan", "sort.json")
 	fullSortIDs, err := readSortConfMap(confPath)
 	if err != nil {
@@ -2850,6 +2942,9 @@ func (box *Box) fillSort(files *[]*File) {
 }
 
 func (box *Box) removeSort(ids []string) {
+	if nil == box || nil != requireNativeDocumentTree(box.ID) {
+		return
+	}
 	fileTreeSortLock.Lock()
 	defer fileTreeSortLock.Unlock()
 
@@ -2873,6 +2968,9 @@ func (box *Box) removeSort(ids []string) {
 }
 
 func (box *Box) setSortByConf(parentPath, id string) {
+	if nil == box || nil != requireNativeDocumentTree(box.ID) {
+		return
+	}
 	if *Conf.FileTree.CreateDocAtTop {
 		box.addMinSort(parentPath, id)
 	} else {
@@ -2881,6 +2979,9 @@ func (box *Box) setSortByConf(parentPath, id string) {
 }
 
 func (box *Box) addMaxSort(parentPath, id string) {
+	if nil == box || nil != requireNativeDocumentTree(box.ID) {
+		return
+	}
 	docs, _, err := ListDocTree(box.ID, parentPath, util.SortModeCustom, false, false, math.MaxInt)
 	if err != nil {
 		logging.LogErrorf("list doc tree failed: %s", err)
@@ -2903,6 +3004,9 @@ func (box *Box) addMaxSort(parentPath, id string) {
 }
 
 func (box *Box) addMinSort(parentPath, id string) {
+	if nil == box || nil != requireNativeDocumentTree(box.ID) {
+		return
+	}
 	docs, _, err := ListDocTree(box.ID, parentPath, util.SortModeCustom, false, false, 1)
 	if err != nil {
 		logging.LogErrorf("list doc tree failed: %s", err)
@@ -2925,6 +3029,9 @@ func (box *Box) addMinSort(parentPath, id string) {
 }
 
 func (box *Box) setSortVal(id string, sortVal int) {
+	if nil == box || nil != requireNativeDocumentTree(box.ID) {
+		return
+	}
 	fileTreeSortLock.Lock()
 	defer fileTreeSortLock.Unlock()
 
@@ -2947,6 +3054,9 @@ func (box *Box) setSortVal(id string, sortVal int) {
 }
 
 func (box *Box) addSort(previousPath, id string) {
+	if nil == box || nil != requireNativeDocumentTree(box.ID) {
+		return
+	}
 	fileTreeSortLock.Lock()
 	defer fileTreeSortLock.Unlock()
 
@@ -2989,6 +3099,9 @@ func (box *Box) addSort(previousPath, id string) {
 }
 
 func (box *Box) setSort(sortIDVals map[string]int) {
+	if nil == box || nil != requireNativeDocumentTree(box.ID) {
+		return
+	}
 	fileTreeSortLock.Lock()
 	defer fileTreeSortLock.Unlock()
 

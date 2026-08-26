@@ -22,14 +22,23 @@ import (
 	"github.com/88250/lute/ast"
 	"github.com/88250/lute/editor"
 	"github.com/88250/lute/render"
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/siyuan-note/logging"
 )
 
 func AutoSpace(rootID string) (err error) {
+	if blockTree := treenode.GetBlockTree(rootID); nil != blockTree {
+		if err = requireNativeDocumentTree(blockTree.BoxID); nil != err {
+			return
+		}
+	}
+
 	tree, err := LoadTreeByBlockID(rootID)
 	if err != nil {
+		return
+	}
+	if err = requireNativeDocumentTree(tree.Box); nil != err {
 		return
 	}
 

@@ -17,6 +17,7 @@
 package model
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -24,6 +25,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/88250/lute/ast"
 	"github.com/aaronhe/noema/kernel/conf"
@@ -92,7 +94,7 @@ func LoadMarkdownDoc(boxID, path string) (markdown string, blocks []MarkdownBloc
 	if conf.BoxKindMarkdown != GetBoxKind(boxID) {
 		return "", nil, fmt.Errorf("box [%s] is not a markdown box", boxID)
 	}
-	if _, err = filesys.ValidateBoxRelativePath(boxID, path); nil != err {
+	if path, err = normalizedMarkdownDocPath(boxID, path); nil != err {
 		return "", nil, err
 	}
 
@@ -153,9 +155,22 @@ func SaveMarkdownDoc(boxID, path, markdown string) (saved string, blocks []Markd
 	if conf.BoxKindMarkdown != GetBoxKind(boxID) {
 		return "", nil, fmt.Errorf("box [%s] is not a markdown box", boxID)
 	}
-	if _, err = filesys.ValidateBoxRelativePath(boxID, path); nil != err {
+	if path, err = normalizedMarkdownDocPath(boxID, path); nil != err {
 		return "", nil, err
 	}
+	lock := markdownDocMutationLock(boxID, path)
+	lock.Lock()
+	defer lock.Unlock()
+	return saveMarkdownDocUnlocked(boxID, path, markdown)
+}
+
+func markdownDocMutationLock(boxID, path string) *sync.Mutex {
+	lockKey := boxID + "\x00" + path
+	lockValue, _ := markdownPlanningMutationLocks.LoadOrStore(lockKey, &sync.Mutex{})
+	return lockValue.(*sync.Mutex)
+}
+
+func saveMarkdownDocUnlocked(boxID, path, markdown string) (saved string, blocks []MarkdownBlockRef, err error) {
 
 	absPath := filepath.Join(filesys.BoxRootPath(boxID), path)
 	if err = os.MkdirAll(filepath.Dir(absPath), 0755); nil != err {
@@ -173,6 +188,60 @@ func SaveMarkdownDoc(boxID, path, markdown string) (saved string, blocks []Markd
 	UpsertIndexes([]string{boxID + path})
 	util.PushReloadFiletree()
 	return
+}
+
+type MarkdownDocCASResult struct {
+	Markdown string             `json:"markdown"`
+	Blocks   []MarkdownBlockRef `json:"blocks"`
+	Conflict bool               `json:"conflict"`
+	MtimeMs  float64            `json:"mtimeMs"`
+	Size     int64              `json:"size"`
+	Version  string             `json:"version"`
+}
+
+func markdownDocVersion(source []byte) string {
+	digest := sha256.Sum256(source)
+	return fmt.Sprintf("%x", digest)
+}
+
+// SaveMarkdownDocCAS closes the Node-check/Go-write race for CM6 saves. The
+// version precondition and write share the same per-document lock as planning,
+// property, metadata, restore, and ordinary Markdown saves.
+func SaveMarkdownDocCAS(boxID, path, markdown, expectedVersion string, force bool) (ret *MarkdownDocCASResult, err error) {
+	if conf.BoxKindMarkdown != GetBoxKind(boxID) {
+		return nil, fmt.Errorf("box [%s] is not a markdown box", boxID)
+	}
+	if path, err = normalizedMarkdownDocPath(boxID, path); nil != err {
+		return nil, err
+	}
+	lock := markdownDocMutationLock(boxID, path)
+	lock.Lock()
+	defer lock.Unlock()
+
+	absPath := filepath.Join(filesys.BoxRootPath(boxID), path)
+	current, readErr := os.ReadFile(absPath)
+	if nil != readErr && !os.IsNotExist(readErr) {
+		return nil, readErr
+	}
+	ret = &MarkdownDocCASResult{Markdown: string(current), Blocks: []MarkdownBlockRef{}, Version: markdownDocVersion(current)}
+	if info, statErr := os.Stat(absPath); nil == statErr {
+		ret.MtimeMs = float64(info.ModTime().UnixNano()) / 1e6
+		ret.Size = info.Size()
+	}
+	if !force && expectedVersion != "" && expectedVersion != ret.Version {
+		ret.Conflict = true
+		return ret, nil
+	}
+	ret.Markdown, ret.Blocks, err = saveMarkdownDocUnlocked(boxID, path, markdown)
+	if nil != err {
+		return nil, err
+	}
+	ret.Version = markdownDocVersion([]byte(ret.Markdown))
+	if info, statErr := os.Stat(absPath); nil == statErr {
+		ret.MtimeMs = float64(info.ModTime().UnixNano()) / 1e6
+		ret.Size = info.Size()
+	}
+	return ret, nil
 }
 
 // MarkdownDocSummary 是 markdown box 文档树里一个 .md 文件的摘要，供浏览/打开列表用。

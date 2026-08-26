@@ -5,13 +5,13 @@
  * Renders as a link-styled chip; clicking
  * dispatches `aaronnote:open-block-ref` (bubbles, cancelable) on the widget
  * element the same way `editor-cm6.ts` dispatches `aaronnote:open-url` —
- * this module has no opinion on cross-document navigation, that is an
- * app-shell concern once a block-ID index exists.
+ * this module stays host-agnostic. The production and lab host adapters
+ * resolve that event through the shared kernel block index.
  *
  * Deliberately does not mark refs as valid/broken (unlike roam-link-status.ts):
- * there is no known-block-ID index wired up yet for kernel-backed docs, and
- * fabricating one here would be presentational only. Add that once a real
- * lookup exists.
+ * the editor decoration layer has no injected validity snapshot, and doing a
+ * request per visible chip would be an N+1 regression. Navigation performs a
+ * real lookup on demand instead.
  */
 
 import { syntaxTree } from "@codemirror/language";

@@ -47,6 +47,7 @@ import {
   getTodos,
   updateTodoStatus,
   buildAgenda,
+  resolveBlockReference,
   buildEmbedQuery,
   buildAttributeView,
   patchAttributeViewCell,
@@ -68,7 +69,10 @@ import {
   configureMarkdownFileProvider,
   configurePlanningProvider,
   configureKatexMacrosProvider,
+  configureLatexProvider,
   configureAssetProvider,
+  configureSessionProvider,
+  configureBibliographyProvider,
   markNotesDirty,
   notesIndexVersionValue,
   noteSelfWriteRecently,
@@ -77,7 +81,11 @@ import {
 import { createKernelMarkdownProvider } from "./server/lib/kernel-markdown-provider.mjs";
 import { createKernelPlanningProvider } from "./server/lib/kernel-planning-provider.mjs";
 import { createKernelKatexMacrosProvider } from "./server/lib/kernel-katex-macros-provider.mjs";
+import { createKernelLatexProvider } from "./server/lib/kernel-latex-provider.mjs";
 import { createKernelAssetsProvider } from "./server/lib/kernel-assets-provider.mjs";
+import { createKernelSessionProvider } from "./server/lib/kernel-session-provider.mjs";
+import { createKernelBibliographyProvider } from "./server/lib/kernel-bibliography-provider.mjs";
+import { createKernelVaultGitProvider } from "./server/lib/kernel-vaultgit-provider.mjs";
 import {
   createKernelKnowledgeSearch,
   kernelLexicalSearchEligible,
@@ -162,10 +170,12 @@ import {
   wikiPageHistory,
   wikiRepositoryStatus,
   restoreWikiPageVersion,
+  configureWikiGitProvider,
 } from "./server/lib/wiki-workspace.mjs";
 import {
   abortWikiConflict,
   checkpointWikiRepository,
+  configureWikiSyncGitProvider,
   defaultWikiSyncIntervalMs,
   readWikiConflict,
   readWikiSyncState,
@@ -408,6 +418,9 @@ function applyKernelState(next) {
   configureKatexMacrosProvider(ready
     ? createKernelKatexMacrosProvider({ baseUrl: next.baseUrl })
     : null);
+  configureLatexProvider(ready
+    ? createKernelLatexProvider({ baseUrl: next.baseUrl })
+    : null);
   configureAssetProvider(ready
     ? createKernelAssetsProvider({
       baseUrl: next.baseUrl,
@@ -415,6 +428,17 @@ function applyKernelState(next) {
       includePublic: workspaceLayout === "wiki",
     })
     : null);
+  configureSessionProvider(ready
+    ? createKernelSessionProvider({ baseUrl: next.baseUrl, box: next.box })
+    : null);
+  configureBibliographyProvider(ready
+    ? createKernelBibliographyProvider({ baseUrl: next.baseUrl, box: next.box })
+    : null);
+  const vaultGitProvider = ready
+    ? createKernelVaultGitProvider({ baseUrl: next.baseUrl, box: next.box })
+    : null;
+  configureWikiGitProvider(vaultGitProvider);
+  configureWikiSyncGitProvider(vaultGitProvider);
   kernelKnowledgeSearch = ready
     ? createKernelKnowledgeSearch({ baseUrl: next.baseUrl, box: next.box })
     : null;
@@ -1773,6 +1797,7 @@ const apiRouter = new ApiRouter().register({
     return result.changed === false ? result : applyWikiMutationResult(result);
   },
   "aaronnote:api:notes:agenda": (body) => buildAgenda(body || {}),
+  "aaronnote:api:notes:resolve-block": (body) => resolveBlockReference(body || {}),
   "aaronnote:api:notes:embed-query": (body) => buildEmbedQuery(body || {}),
   "aaronnote:api:notes:attribute-view": (body) => buildAttributeView(body || {}),
   "aaronnote:api:notes:attribute-view-cell-patch": async (body) => {
@@ -2450,6 +2475,7 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
       todos: function(file) { return call("aaronnote:api:notes:todos", [{ file: String(file || "") }]); },
       updateTodo: function(body) { return call("aaronnote:api:notes:update-todo", [body || {}]); },
       agenda: function(body) { return call("aaronnote:api:notes:agenda", [body || {}]); },
+      resolveBlock: function(id) { return call("aaronnote:api:notes:resolve-block", [{ id: String(id || "") }]); },
       embedQuery: function(body) { return call("aaronnote:api:notes:embed-query", [body || {}]); },
       attributeView: function(body) { return call("aaronnote:api:notes:attribute-view", [body || {}]); },
       attributeViewCellPatch: function(body) { return call("aaronnote:api:notes:attribute-view-cell-patch", [body || {}]); },

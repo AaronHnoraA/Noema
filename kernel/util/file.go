@@ -447,33 +447,42 @@ func SizeOfDirectory(path string) (size int64, err error) {
 
 func DataSize() (dataSize, assetsSize int64) {
 	filelock.Walk(DataDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			if os.IsNotExist(err) {
-				return nil
-			}
-			logging.LogErrorf("size of data failed: %s", err)
-			return io.EOF
-		}
-
-		info, err := d.Info()
-		if err != nil {
-			logging.LogErrorf("size of data failed: %s", err)
-			return nil
-		}
-
-		if !info.IsDir() {
-			s := info.Size()
-			dataSize += s
-
-			if strings.Contains(strings.TrimPrefix(path, DataDir), "assets") {
-				assetsSize += s
-			}
-		} else {
-			dataSize += 4096
-		}
-		return nil
+		return accumulateDataSize(path, d, err, &dataSize, &assetsSize)
 	})
 	return
+}
+
+func accumulateDataSize(path string, d fs.DirEntry, walkErr error, dataSize, assetsSize *int64) error {
+	if nil != walkErr {
+		if os.IsNotExist(walkErr) {
+			return nil
+		}
+		logging.LogErrorf("size of data failed: %s", walkErr)
+		return io.EOF
+	}
+
+	info, err := d.Info()
+	if nil != err {
+		// A concurrent notebook/shadow removal can invalidate a directory entry
+		// between Walk reading it and Info resolving it. That is expected during
+		// registry maintenance and must not be reported as a data-size failure.
+		if os.IsNotExist(err) {
+			return nil
+		}
+		logging.LogErrorf("size of data failed: %s", err)
+		return nil
+	}
+
+	if !info.IsDir() {
+		s := info.Size()
+		*dataSize += s
+		if strings.Contains(strings.TrimPrefix(path, DataDir), "assets") {
+			*assetsSize += s
+		}
+	} else {
+		*dataSize += 4096
+	}
+	return nil
 }
 
 func CeilSize(size int64) int64 {

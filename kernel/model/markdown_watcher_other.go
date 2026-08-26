@@ -87,7 +87,7 @@ func addMarkdownWatchTree(w *fsnotify.Watcher, root string, onFile func(path str
 			}
 			return nil
 		}
-		if nil != onFile && strings.HasSuffix(path, ".md") {
+		if nil != onFile && isMarkdownDocPath(path) {
 			onFile(path)
 		}
 		return nil

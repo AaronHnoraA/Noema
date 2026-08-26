@@ -5,8 +5,11 @@
  * library consumers that do not install the runtime theme attribute keep the
  * historical appearance.
  */
+@import "../../../app/appearance/themes/midnight/theme.css";
+
 :root,
-:root[data-noema-theme="aaronnote"] {
+:root[data-noema-theme="aaronnote"],
+:root[data-noema-theme="midnight"] {
   color-scheme: dark;
   --noema-window-background: #141a27;
   --aaronnote-bg: #141a27;

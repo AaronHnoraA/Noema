@@ -631,16 +631,7 @@ export function createNoemaMathfield(
   // there so no native provider exists even during the mount microtask.
   Constructor.scientificNotationTemplate = null;
   const field = new Constructor();
-  const nativeSnippetOptions = {
-    inlineShortcuts: {},
-    onInlineShortcut: () => "",
-    popoverPolicy: "off",
-    environmentPopoverPolicy: "off",
-  };
-  const deferred = field as unknown as {
-    _setOptions?: (options: typeof nativeSnippetOptions) => void;
-  };
-  deferred._setOptions?.(nativeSnippetOptions);
+  disableMathLiveNativeSuggestions(field);
   field.addEventListener("mount", () => {
     // Reassert the boundary against future MathLive deferred-state changes.
     field.inlineShortcuts = {};
@@ -664,6 +655,19 @@ export function createNoemaMathfield(
   if (!options.readOnlyMirror) field.onScrollIntoView = () => revealVisualTexCaret(field);
   configureNoemaMathfield(field);
   return field;
+}
+
+function disableMathLiveNativeSuggestions(field: object): void {
+  const nativeSuggestionOptions = {
+    inlineShortcuts: {},
+    onInlineShortcut: () => "",
+    popoverPolicy: "off",
+    environmentPopoverPolicy: "off",
+  };
+  const deferred = field as unknown as {
+    _setOptions?: (options: typeof nativeSuggestionOptions) => void;
+  };
+  deferred._setOptions?.(nativeSuggestionOptions);
 }
 
 /** Read only standard TeX; transient snippet boundaries never enter the note. */
@@ -2025,6 +2029,10 @@ export function initializeNoemaMathfield(
   // into only widens the surface for a MathLive render to fail.
   options: { readOnlyMirror?: boolean } = {},
 ): void {
+  // Initialization is also a public boundary. Callers that supply an existing
+  // MathLive field must not accidentally reactivate its own completions or
+  // leave the suggestion-popover timer alive after the field is discarded.
+  disableMathLiveNativeSuggestions(field);
   visualTexLastSourceSpaceBoundary.delete(field as object);
   visualTexSnippetSessions.delete(field as object);
   visualTexMathfieldSerializationStates.delete(field as object);

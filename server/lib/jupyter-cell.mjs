@@ -333,11 +333,14 @@ export function createJupyterCellService({
   const notes = resolve(noteRoot || root);
   const workspace = resolve(workspaceRoot || notes);
   const jupyterRoot = join(root, "jupyter");
-  const dataDir = join(jupyterRoot, ".jupyter", "data");
   const bundledKernelTemplates = join(jupyterRoot, "kernel-templates");
   const jupyterStateRoot = stateRoot
     ? join(resolve(stateRoot), "jupyter")
     : join(jupyterRoot, ".jupyter");
+  // `jupyterRoot` is immutable application source. Desktop state belongs
+  // under the host state root; otherwise an installed App can accidentally
+  // consume or mutate historical `.jupyter` files in the source/Emacs tree.
+  const dataDir = join(jupyterStateRoot, "data");
   const runtimeDir = join(jupyterStateRoot, "runtime");
   const kernelIdleTtlMs = durationFromEnv("AARONNOTE_JUPYTER_KERNEL_IDLE_TTL_MS", 10 * 60 * 1000);
   const cleanupIntervalMs = durationFromEnv("AARONNOTE_JUPYTER_CLEANUP_INTERVAL_MS", 30 * 1000);
@@ -500,6 +503,10 @@ export function createJupyterCellService({
           searchDirs: kernelSearchDirs(),
           allowedNames,
           fallbackKernelDirs: [bundledKernelTemplates],
+          // `stateRoot` is supplied only by the standalone desktop adapter.
+          // Preserve the Emacs broker/generated-spec ordering while reserving
+          // Noema's stable bundled names in the desktop host.
+          preferFallbackKernelDirs: Boolean(stateRoot),
           templateVariables: {
             AARONNOTE_JUPYTER_ROOT: jupyterRoot,
             AARONNOTE_JUPYTER_STATE_ROOT: jupyterStateRoot,

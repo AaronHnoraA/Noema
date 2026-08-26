@@ -1,4 +1,6 @@
-:root {
+:root:not([data-noema-theme]),
+:root[data-noema-theme="midnight"],
+:root[data-noema-theme="aaronnote"] {
     /* 主色 — Noema aaronnote 深色 Wave 配色（--aaron-accent 青色 / --aaron-accent-sand 金色） */
     --b3-theme-primary: #7ee7ff;
     --b3-theme-primary-light: rgba(126, 231, 255, .72);
@@ -225,18 +227,26 @@
 }
 
 /* 微软字体斜体会被相邻背景遮挡，将 arial 放置其前 https://github.com/siyuan-note/siyuan/issues/11841；"Segoe UI" 和 Noto-COLRv1-2.047 冲突，故移除。 */
-:root:lang(zh-CN) {
+:root:not([data-noema-theme]):lang(zh-CN),
+:root[data-noema-theme="midnight"]:lang(zh-CN),
+:root[data-noema-theme="aaronnote"]:lang(zh-CN) {
     --b3-font-family: "Emojis Additional", "Emojis Reset", BlinkMacSystemFont, Helvetica, "PingFang SC", "Luxi Sans", "DejaVu Sans", "Hiragino Sans GB", "Source Han Sans SC", arial, "Microsoft Yahei", sans-serif, emojis;
 }
 
-:root:lang(zh-TW) {
+:root:not([data-noema-theme]):lang(zh-TW),
+:root[data-noema-theme="midnight"]:lang(zh-TW),
+:root[data-noema-theme="aaronnote"]:lang(zh-TW) {
     --b3-font-family: "Emojis Additional", "Emojis Reset", BlinkMacSystemFont, Helvetica, "PingFang TC", "Luxi Sans", "DejaVu Sans", "Hiragino Sans TC", "Source Han Sans TC", "Microsoft JhengHei", arial, sans-serif, emojis;
 }
 
-:root:lang(ja) {
+:root:not([data-noema-theme]):lang(ja),
+:root[data-noema-theme="midnight"]:lang(ja),
+:root[data-noema-theme="aaronnote"]:lang(ja) {
     --b3-font-family: "Emojis Additional", "Emojis Reset", BlinkMacSystemFont, Helvetica, "Luxi Sans", "DejaVu Sans", "Yu Gothic UI", arial, sans-serif, emojis;
 }
 
-.b3-text-field::-webkit-calendar-picker-indicator {
+:root:not([data-noema-theme]) .b3-text-field::-webkit-calendar-picker-indicator,
+:root[data-noema-theme="midnight"] .b3-text-field::-webkit-calendar-picker-indicator,
+:root[data-noema-theme="aaronnote"] .b3-text-field::-webkit-calendar-picker-indicator {
     filter: invert(1)
 }

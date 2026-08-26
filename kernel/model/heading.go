@@ -27,11 +27,11 @@ import (
 	"github.com/88250/gulu"
 	"github.com/88250/lute/ast"
 	"github.com/88250/lute/parse"
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/cache"
 	"github.com/aaronhe/noema/kernel/sql"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/siyuan-note/logging"
 )
 
 // GetHeadingFoldTransaction 生成直接子标题或同级标题的批量折叠事务。
@@ -184,6 +184,9 @@ func Doc2Heading(srcID, targetID string, after bool) (srcTreeBox, srcTreePath st
 		err = ErrBlockNotFound
 		return
 	}
+	if err = requireNativeDocumentTree(srcTree.Box); nil != err {
+		return
+	}
 	if IsBoxDoc(srcTree.Box, srcTree.ID) {
 		err = errors.New(Conf.Language(341))
 		return
@@ -209,6 +212,9 @@ func Doc2Heading(srcID, targetID string, after bool) (srcTreeBox, srcTreePath st
 	targetTree, _ := LoadTreeByBlockID(targetID)
 	if nil == targetTree {
 		// 目标块不存在时忽略处理
+		return
+	}
+	if err = requireNativeDocumentTree(targetTree.Box); nil != err {
 		return
 	}
 
@@ -342,12 +348,18 @@ func Doc2Heading(srcID, targetID string, after bool) (srcTreeBox, srcTreePath st
 }
 
 func Heading2Doc(srcHeadingID, targetBoxID, targetPath, previousPath string, toTop bool) (srcRootBlockID, newTargetPath string, err error) {
+	if err = requireNativeDocumentTree(targetBoxID); nil != err {
+		return
+	}
 	targetPath = normalizeBoxDocTarget(targetBoxID, targetPath)
 	FlushTxQueue()
 
 	srcTree, _ := LoadTreeByBlockID(srcHeadingID)
 	if nil == srcTree {
 		err = ErrBlockNotFound
+		return
+	}
+	if err = requireNativeDocumentTree(srcTree.Box); nil != err {
 		return
 	}
 	srcRootBlockID = srcTree.Root.ID

@@ -127,7 +127,10 @@ func TestHTML2TreeUsesExistingNotebookAssets(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tree, _ := HTML2Tree(`<img alt="diagram" src="data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=">`, util.NewLute(), boxID)
+	tree, _, err := HTML2Tree(`<img alt="diagram" src="data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=">`, util.NewLute(), boxID)
+	if nil != err {
+		t.Fatal(err)
+	}
 	entries, err := os.ReadDir(boxAssetsDir)
 	if err != nil {
 		t.Fatal(err)

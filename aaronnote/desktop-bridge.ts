@@ -1,6 +1,12 @@
+import { auditB3ComponentSystem } from "../src/b3-component-system.ts";
+import { auditVisualTypography } from "../src/cm6/extensions/visual/typography.ts";
+
 /** Host-neutral packaged desktop smoke harness. */
-if (new URL(location.href).searchParams.get("desktopSmoke") === "1") {
+const desktopSmokeParams = new URL(location.href).searchParams;
+if (desktopSmokeParams.get("desktopSmoke") === "1") {
+  const protocolProbeExpected = desktopSmokeParams.get("desktopProtocolProbe")?.trim() || "";
   let noteOpened = false;
+  let openedNoteFile = "";
   let reportStarted = false;
   let fallbackTimer = 0;
   const reportSmoke = async () => {
@@ -86,6 +92,23 @@ if (new URL(location.href).searchParams.get("desktopSmoke") === "1") {
     const dockBounds = knowledgeDock?.getBoundingClientRect();
     const agendaBounds = agendaDock?.getBoundingClientRect();
     const editorBounds = document.querySelector<HTMLElement>(".aaronnote-focused-shell")?.getBoundingClientRect();
+    const themeStyle = getComputedStyle(document.documentElement);
+    const theme = {
+      id: document.documentElement.dataset.noemaTheme || "",
+      colorScheme: themeStyle.colorScheme,
+      noemaBackground: themeStyle.getPropertyValue("--aaronnote-bg").trim(),
+      noemaInk: themeStyle.getPropertyValue("--aaron-ink").trim(),
+      b3ThemeBackground: themeStyle.getPropertyValue("--b3-theme-background").trim(),
+      b3ThemePrimary: themeStyle.getPropertyValue("--b3-theme-primary").trim(),
+      b3BorderColor: themeStyle.getPropertyValue("--b3-border-color").trim(),
+    };
+    const b3Audit = auditB3ComponentSystem(document.body);
+    const b3Components = {
+      ...b3Audit,
+      knowledgeDock: Boolean(knowledgeDock?.classList.contains("b3-panel")),
+      tocPopover: Boolean(tocPopover?.classList.contains("b3-panel")),
+      agendaDock: Boolean(agendaDock?.classList.contains("b3-panel")),
+    };
     let katexMacros: { source: string; count: number; errors: number } | null = null;
     try {
       const result = await window.aaronnoteApi?.config?.katexMacros();
@@ -104,6 +127,9 @@ if (new URL(location.href).searchParams.get("desktopSmoke") === "1") {
       titlebarVisible: Boolean(titlebar && !titlebar.hidden && bounds && bounds.height > 0),
       titlebarHeight: bounds?.height || 0,
       controls: controls.map((control) => control.getAttribute("aria-label")),
+      theme,
+      b3Components,
+      visualTypography: auditVisualTypography(document),
       tocPopover: tocPopover ? {
         visible: tocVisible,
         status: tocStatus,
@@ -139,8 +165,21 @@ if (new URL(location.href).searchParams.get("desktopSmoke") === "1") {
       } : null,
       katexMacros,
       kernel: backendKernel,
+      protocolProbe: protocolProbeExpected ? {
+        expected: protocolProbeExpected,
+        openedFile: openedNoteFile,
+        matched: noteOpened,
+      } : null,
     };
-    void window.noemaDesktop?.reportSmoke?.(report);
+    const nativeReport: Record<string, unknown> = { ...report };
+    if (desktopSmokeParams.get("desktopPrintProbe") === "1") {
+      try {
+        nativeReport.printDocument = window.__noemaDesktopPrintDocument?.() || null;
+      } catch {
+        nativeReport.printDocument = null;
+      }
+    }
+    void window.noemaDesktop?.reportSmoke?.(nativeReport);
     void fetch("/api/desktop-smoke", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -151,18 +190,29 @@ if (new URL(location.href).searchParams.get("desktopSmoke") === "1") {
     if (reportStarted || document.readyState !== "complete") return;
     const editorRoute = Boolean(document.querySelector(".noema-knowledge-dock"));
     if (editorRoute && !noteOpened) {
-      if (!fallbackTimer) fallbackTimer = window.setTimeout(() => void reportSmoke(), 5_000);
+      if (!fallbackTimer) fallbackTimer = window.setTimeout(
+        () => void reportSmoke(),
+        protocolProbeExpected ? 30_000 : 5_000,
+      );
       return;
     }
     window.setTimeout(() => void reportSmoke(), 250);
   };
-  window.addEventListener("aaronnote:note-opened", () => {
+  const onNoteOpened = (event: Event): void => {
+    const file = String((event as CustomEvent<{ file?: string }>).detail?.file || "").trim();
+    openedNoteFile = file;
+    if (protocolProbeExpected) {
+      const normalizedFile = file.replace(/\\/g, "/");
+      const normalizedExpected = protocolProbeExpected.replace(/\\/g, "/").replace(/^\.\//, "");
+      if (normalizedFile !== normalizedExpected && !normalizedFile.endsWith(`/${normalizedExpected}`)) return;
+    }
     noteOpened = true;
+    window.removeEventListener("aaronnote:note-opened", onNoteOpened);
     window.clearTimeout(fallbackTimer);
     fallbackTimer = 0;
     maybeReportSmoke();
-  }, { once: true });
+  };
+  window.addEventListener("aaronnote:note-opened", onNoteOpened);
   if (document.readyState === "complete") maybeReportSmoke();
   else window.addEventListener("load", maybeReportSmoke, { once: true });
 }
-

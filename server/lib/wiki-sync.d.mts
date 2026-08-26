@@ -38,6 +38,9 @@ export type WikiSyncState = {
   committed?: boolean;
   changedFiles?: number;
   changedPaths?: string[];
+  source?: "kernel-vaultgit" | "node-vaultgit";
+  checkpointSource?: "kernel-vaultgit" | "node-vaultgit";
+  transportSource?: "kernel-vaultgit" | "node-vaultgit";
   error?: string;
   message?: string;
   retryable?: boolean;
@@ -57,6 +60,24 @@ export type WikiSyncState = {
   conflicts?: WikiSyncConflict[];
 };
 
+export function configureWikiSyncGitProvider(provider?: {
+  owns(repositoryPath: string): boolean;
+  checkpoint(repositoryPath: string, request: {
+    branch: string; message?: string; deviceName: string; deviceId: string;
+  }): Promise<{
+    branch: string; head: string; committed: boolean; changedFiles: number;
+    identityFallback: boolean; source: "kernel-vaultgit";
+  }>;
+  ensureMain?(repositoryPath: string, commit: string): Promise<{
+    action: "ensure-main"; commit: string; remoteHead: string; bootstrapped: boolean; source: "kernel-vaultgit";
+  }>;
+  fetchMain?(repositoryPath: string): Promise<{
+    action: "fetch-main"; commit: string; remoteHead: string; bootstrapped: boolean; source: "kernel-vaultgit";
+  }>;
+  pushMain?(repositoryPath: string, commit: string): Promise<{
+    action: "push-main"; commit: string; remoteHead: string; bootstrapped: boolean; source: "kernel-vaultgit";
+  }>;
+} | null): void;
 export function ensureNoemaDeviceIdentity(options?: Record<string, unknown>): Promise<Record<string, any>>;
 export function readWikiSyncState(root: string, repositoryId?: string): Promise<WikiSyncState | Record<string, any>>;
 export function checkpointWikiRepository(root: string, repositoryId: string, options?: Record<string, unknown>): Promise<

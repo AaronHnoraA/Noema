@@ -1,6 +1,10 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 import { createEditor } from "../../src/editor-api.ts";
 import { toggleAaronnoteMarkdownSource } from "../../src/cm6/editor-cm6.ts";
+import {
+  VISUAL_TYPOGRAPHY_INLINE_GUTTER,
+  visualTypographyGutterPx,
+} from "../../src/cm6/extensions/visual/typography.ts";
 
 function mount(initialContent: string) {
   const host = document.createElement("div");
@@ -20,6 +24,20 @@ function blankLines(): HTMLElement[] {
 }
 
 describe("Visual typography kernel", () => {
+  test("locks the adaptive 4%-8% gutter around a 95ch target measure", () => {
+    expect(VISUAL_TYPOGRAPHY_INLINE_GUTTER).toBe(
+      "clamp(max(var(--aaron-prose-gutter-floor), calc(var(--content-width) * 0.04)), calc((var(--content-width) - 95ch) / 2), calc(var(--content-width) * 0.08))",
+    );
+
+    // 95ch is 760px when 1ch is 8px. These cases exercise the floor,
+    // percentage floor, exact 95ch centering, and percentage ceiling.
+    expect(visualTypographyGutterPx(600, 8)).toBe(32);
+    expect(visualTypographyGutterPx(810, 8)).toBeCloseTo(32.4);
+    expect(visualTypographyGutterPx(860, 8)).toBe(50);
+    expect(860 - 2 * visualTypographyGutterPx(860, 8)).toBe(760);
+    expect(visualTypographyGutterPx(1_000, 8)).toBe(80);
+  });
+
   test("is installed as a Visual-only core extension", () => {
     const { editor, cleanup } = mount("Alpha\n\nBeta");
     expect(editor.view.dom.classList.contains("aaronnote-visual-typography")).toBe(true);

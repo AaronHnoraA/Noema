@@ -23,13 +23,14 @@ The runtime provides:
 - an `aaronnote-python` Conda environment, reconciled from
   `etc/conda/aaronnote-python.yml`, with `ipykernel`, `ipywidgets`, and
   `bash_kernel`
-- stable `python3`, `bash`, and `sagemath` kernelspec ids whose launchers read
-  generated runtime metadata, so upgrades do not embed interpreter paths or a
-  Sage version in notes
+- stable, source-owned `python3`, `bash`, and `sagemath` kernelspec templates;
+  their launchers discover installed runtimes or read an explicitly supplied
+  `AARONNOTE_*_RUNTIME_ENV`, so Noema.app never resolves through an Emacs tree
 - kernelspec discovery matching Jupyter's own search order (this project's
   data dir and — unless disabled — the user's
   `~/Library/Jupyter`/`~/.local/share/jupyter` and system dirs)
-- isolated Jupyter config/data/runtime directories under `jupyter/.jupyter`
+- isolated Jupyter config/data/runtime directories under the host state root
+  (`<stateRoot>/jupyter` in Noema.app); application source remains read-only
 - attaching to an already-running kernel via its connection file (e.g. a
   remembered `kernel-*.json` from an Emacs-managed remote-kernel workflow),
   instead of only ever launching kernels locally
@@ -39,10 +40,9 @@ The runtime provides:
   WebSocket bridge (`server/lib/jupyter-kernel-ws.mjs`), which talks raw ZMQ
   directly rather than proxying to a Jupyter server
 
-From the Noema notes repository, run `make setup` or `make runtime-update`.
-Both are thin proxies to the central Emacs script
-`scripts/aaronnote-runtime`. For compatibility, from `lisp/roam/aaronnote`
-you can also run:
+`make setup` installs Noema's JavaScript dependencies and creates the note
+root. To initialize/verify optional local Jupyter runtimes and write explicit
+kernelspec copies under the host state root, run:
 
 ```sh
 npm run jupyter:bootstrap
@@ -107,7 +107,7 @@ The Node cell service owns kernel lifecycle and each cell run:
   this instance owns are torn down; a `process.on("exit")` fallback SIGKILLs
   any still-alive owned process groups if the async shutdown path didn't run.
   A previous instance's crash leaves an `aaronnote-owned.json` sidecar under
-  `jupyter/.jupyter/runtime/`; the next instance sweeps it on first use,
+  `<stateRoot>/jupyter/runtime/`; the next instance sweeps it on first use,
   killing any orphaned kernel process it can still find and confirm (by PID +
   matching connection-file path in its command line).
 
@@ -152,9 +152,12 @@ they stay out of the main editor bundle until a cell actually produces output.
 | `AARONNOTE_JUPYTER_INTERRUPT_GRACE_MS` | `5000` | Grace period after interrupting a timed-out execution. |
 | `AARONNOTE_JUPYTER_MAX_STREAM_BYTES` | `1048576` | Cap on merged stream text per run before truncation. |
 | `AARONNOTE_JUPYTER_MAX_WIDGET_MESSAGES` / `_BYTES` | `512` / `8388608` | Caps on captured widget comm messages per run. |
+| `AARONNOTE_JUPYTER_STATE_ROOT` | `<AARONNOTE_STATE_DIR>/jupyter` in a host; platform Noema state otherwise | Explicit config/data/runtime/log/temp root used by kernels and maintenance scripts. |
 | `AARONNOTE_JUPYTER_USE_HOME_KERNELS` | `1` | Also search `~/Library/Jupyter`, `~/.local/share/jupyter`, and system Jupyter dirs for kernelspecs. |
 | `AARONNOTE_JUPYTER_ALLOWED_KERNELS` | unset | Comma-separated kernelspec name allowlist. |
-| `AARONNOTE_JUPYTER_ATTACH_DIRS` | unset | `:`-separated extra directories to search for attachable `kernel-*.json` connection files, beyond `jupyter/.jupyter/runtime`. |
+| `AARONNOTE_JUPYTER_ATTACH_DIRS` | unset | `:`-separated extra directories to search for attachable `kernel-*.json` connection files, beyond `<stateRoot>/jupyter/runtime`. |
+| `AARONNOTE_PYTHON_RUNTIME_ENV` / `AARONNOTE_SAGE_RUNTIME_ENV` | unset | Optional explicit shell metadata files for a host-managed runtime; they are never discovered through an Emacs path. |
+| `AARONNOTE_RUNTIME_ENV` | unset | Generic explicit runtime metadata fallback used only when the language-specific variable is unset. |
 | `AARONNOTE_JUPYTER_DEFAULT_LANGUAGE` | `python` | Default language for a newly inserted bare cell; supplied from project `:aaronnote-jupyter` settings. |
 | `AARONNOTE_JUPYTER_DEFAULT_KERNEL` | derived | Stable default kernelspec id (`sagemath` for Sage, otherwise `python3`) unless the project overrides it. |
 | `AARONNOTE_JUPYTER_DEFAULT_SESSION` | `default` | Default persistent cell session name. |

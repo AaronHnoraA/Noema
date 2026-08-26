@@ -74,10 +74,14 @@ func TestFullTextSearchFindsMarkdownBoxContent(t *testing.T) {
 	sql.InitAssetContentDatabase(true)
 	t.Cleanup(sql.CloseDatabase)
 
-	relPath := "/notes/needle.md"
+	relPath := "/notes/100%_needle.md"
 	source := "# Findable Title\n\nA paragraph containing a very distinctive noemasearchneedle token for full text search.\n"
 	if _, _, err := SaveMarkdownDoc(boxID, relPath, source); nil != err {
 		t.Fatalf("SaveMarkdownDoc failed: %s", err)
+	}
+	siblingPath := "/notes/100XYneedle.md"
+	if _, _, err := SaveMarkdownDoc(boxID, siblingPath, source); nil != err {
+		t.Fatalf("SaveMarkdownDoc sibling failed: %s", err)
 	}
 	sql.FlushQueue()
 
@@ -100,5 +104,12 @@ func TestFullTextSearchFindsMarkdownBoxContent(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("full-text search matched %d block(s), but none from the markdown box document [%s%s]: %+v", matchedBlockCount, boxID, relPath, blocks)
+	}
+
+	blocks, matchedBlockCount, _, _, _ = FullTextSearchBlock(
+		"noemasearchneedle", []string{boxID}, []string{relPath}, nil, nil, 0, 0, 0, 1, 32,
+	)
+	if 1 != matchedBlockCount || 1 != len(blocks) || relPath != blocks[0].Path {
+		t.Fatalf("escaped Markdown path filter should match only %q, got count=%d blocks=%+v", relPath, matchedBlockCount, blocks)
 	}
 }

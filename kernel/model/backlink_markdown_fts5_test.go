@@ -66,16 +66,19 @@ func TestGetBacklinkFindsMarkdownBoxRefFromUnidentifiedCitingParagraph(t *testin
 	}
 
 	Conf = NewAppConf()
+	Conf.Editor = conf.NewEditor()
 	Conf.FileTree = conf.NewFileTree()
 	Conf.NotebookCrypto = conf.NewNotebookCrypto()
 	Conf.Sync = conf.NewSync()
 	Conf.Search = conf.NewSearch()
 
-	boxID := "20260825020000-backlinkfts5"
+	boxID := "20260825020000-backl01"
 	box := &Box{ID: boxID}
 	boxConf := conf.NewBoxConf()
 	boxConf.Kind = conf.BoxKindMarkdown
 	boxConf.Name = "Backlink fts5 test"
+	boxConf.Root = t.TempDir()
+	boxConf.Closed = false
 	if err := box.SaveConf(boxConf); nil != err {
 		t.Fatal(err)
 	}
@@ -112,5 +115,40 @@ func TestGetBacklinkFindsMarkdownBoxRefFromUnidentifiedCitingParagraph(t *testin
 	if 0 == linkRefsCount || 0 == len(linkPaths) {
 		t.Fatalf("GetBacklink found no backlink from citing.md's unidentified paragraph to %s (linkRefsCount=%d, linkPaths=%+v)",
 			targetID, linkRefsCount, linkPaths)
+	}
+
+	// Warm attach reconciliation must update changed roots without deleting the
+	// entire box's refs afterward. IndexRefs scans the shadow DataDir for native
+	// boxes, so a delete-all + rebuild sequence cannot recover external refs.
+	updatedCitingSource := "Updated offline, still citing: ((" + targetID + " \"target text\")).\n"
+	if err := os.WriteFile(filepath.Join(boxConf.Root, "citing.md"), []byte(updatedCitingSource), 0o644); nil != err {
+		t.Fatal(err)
+	}
+	if err := indexExternalMarkdownBoxAndWait(box); nil != err {
+		t.Fatalf("warm external reconciliation failed: %v", err)
+	}
+	t.Cleanup(func() { CloseWatchMarkdownBox(boxID) })
+	refs = sql.QueryRefsByDefIDInBox(targetID, false, "")
+	if 1 != len(refs) {
+		t.Fatalf("warm reconciliation removed external Markdown refs: %+v", refs)
+	}
+	_, linkPaths, _, linkRefsCount, _ = GetBacklink(targetID, "", "", 12, false)
+	if 0 == linkRefsCount || 0 == len(linkPaths) {
+		t.Fatalf("warm reconciliation lost backlink: linkRefsCount=%d linkPaths=%+v", linkRefsCount, linkPaths)
+	}
+
+	// Full reindex schedules a second reference pass after rebuilding blocks.
+	// That pass must enumerate the registered external root, not the conf-only
+	// data/<boxID> shadow directory used by native .sy notebooks.
+	sql.DeleteBoxRefsQueue(boxID)
+	sql.FlushQueue()
+	if refs = sql.QueryRefsByDefIDInBox(targetID, false, ""); 0 != len(refs) {
+		t.Fatalf("precondition: reference rows were not cleared: %+v", refs)
+	}
+	IndexRefs()
+	sql.FlushQueue()
+	refs = sql.QueryRefsByDefIDInBox(targetID, false, "")
+	if 1 != len(refs) {
+		t.Fatalf("full reference pass did not rebuild external Markdown refs: %+v", refs)
 	}
 }

@@ -262,13 +262,18 @@ func (box *Box) Ls(p string) (ret []*FileInfo, totals int, err error) {
 		return
 	}
 	boxLocalPath := filesys.BoxRootPath(box.ID)
-	if before, ok := strings.CutSuffix(p, ".sy"); ok {
-		dir := before
-		absDir := filepath.Join(boxLocalPath, dir)
-		if gulu.File.IsDir(absDir) {
-			p = dir
-		} else {
-			return
+	// Only native notebooks map a document path to the same-stem child
+	// directory. In a Markdown repository, foo.sy is an ordinary repository
+	// file and must not silently list the unrelated foo/ directory.
+	if conf.BoxKindMarkdown != GetBoxKind(box.ID) {
+		if before, ok := strings.CutSuffix(p, ".sy"); ok {
+			dir := before
+			absDir := filepath.Join(boxLocalPath, dir)
+			if gulu.File.IsDir(absDir) {
+				p = dir
+			} else {
+				return
+			}
 		}
 	}
 
@@ -291,7 +296,7 @@ func (box *Box) Ls(p string) (ret []*FileInfo, totals int, err error) {
 		if strings.HasSuffix(name, ".tmp") {
 			// 移除写入失败时产生的并且早于 30 分钟前的临时文件，近期创建的临时文件可能正在写入中
 			removePath := filepath.Join(boxLocalPath, p, name)
-			if info.ModTime().Before(time.Now().Add(-30 * time.Minute)) {
+			if conf.BoxKindMarkdown != GetBoxKind(box.ID) && info.ModTime().Before(time.Now().Add(-30*time.Minute)) {
 				if removeErr := os.Remove(removePath); nil != removeErr {
 					logging.LogWarnf("remove tmp file [%s] failed: %s", removePath, removeErr)
 				}
@@ -343,6 +348,9 @@ func (box *Box) Exist(p string) bool {
 }
 
 func (box *Box) Mkdir(path string) error {
+	if err := requireNativeDocumentTree(box.ID); nil != err {
+		return err
+	}
 	if _, err := box.validateBoxPath(path); err != nil {
 		return err
 	}
@@ -356,6 +364,9 @@ func (box *Box) Mkdir(path string) error {
 }
 
 func (box *Box) MkdirAll(path string) error {
+	if err := requireNativeDocumentTree(box.ID); nil != err {
+		return err
+	}
 	if _, err := box.validateBoxPath(path); err != nil {
 		return err
 	}
@@ -369,6 +380,9 @@ func (box *Box) MkdirAll(path string) error {
 }
 
 func (box *Box) Move(oldPath, newPath string) error {
+	if err := requireNativeDocumentTree(box.ID); nil != err {
+		return err
+	}
 	if _, err := box.validateBoxPath(oldPath); err != nil {
 		return err
 	}
@@ -396,6 +410,9 @@ func (box *Box) Move(oldPath, newPath string) error {
 }
 
 func (box *Box) Remove(path string) error {
+	if err := requireNativeDocumentTree(box.ID); nil != err {
+		return err
+	}
 	if _, err := box.validateBoxPath(path); err != nil {
 		return err
 	}
@@ -453,13 +470,38 @@ func (box *Box) GetInfo() (ret *BoxInfo) {
 		Name: util.EscapeHTML(box.Name),
 	}
 
-	fileInfos := box.ListFiles("/")
-
 	t, _ := time.ParseInLocation("20060102150405", box.ID[:14], time.Local)
 	ret.CTime = t.Unix()
 	ret.HCtime = t.Format("2006-01-02 15:04:05") + ", " + util.HumanizeTime(t, Conf.Lang)
 
 	docLatestModTime := t
+	if conf.BoxKindMarkdown == GetBoxKind(box.ID) {
+		docs, err := ListMarkdownDocs(box.ID)
+		if nil != err {
+			logging.LogErrorf("list Markdown documents in box [%s] failed: %s", box.ID, err)
+			docs = []MarkdownDocSummary{}
+		}
+		for _, doc := range docs {
+			absPath := filepath.Join(filesys.BoxRootPath(box.ID), doc.Path)
+			info, statErr := os.Stat(absPath)
+			if nil != statErr {
+				logging.LogErrorf("stat [%s] failed: %s", absPath, statErr)
+				continue
+			}
+			ret.DocCount++
+			ret.Size += uint64(info.Size())
+			if docModT := info.ModTime(); docModT.After(docLatestModTime) {
+				docLatestModTime = docModT
+			}
+		}
+
+		ret.HSize = humanize.BytesCustomCeil(ret.Size, 2)
+		ret.Mtime = docLatestModTime.Unix()
+		ret.HMtime = docLatestModTime.Format("2006-01-02 15:04:05") + ", " + util.HumanizeTime(docLatestModTime, Conf.Lang)
+		return
+	}
+
+	fileInfos := box.ListFiles("/")
 	for _, fileInfo := range fileInfos {
 		if fileInfo.isdir {
 			continue
@@ -469,7 +511,7 @@ func (box *Box) GetInfo() (ret *BoxInfo) {
 			continue
 		}
 
-		if !strings.HasSuffix(fileInfo.path, ".sy") {
+		if !filesys.IsNativeDocumentPath(fileInfo.path) {
 			continue
 		}
 
@@ -513,7 +555,7 @@ func moveTree(tree *parse.Tree) {
 	subFiles := box.ListFiles(tree.Path)
 	luteEngine := util.NewLute()
 	for _, subFile := range subFiles {
-		if !strings.HasSuffix(subFile.path, ".sy") {
+		if !filesys.IsNativeDocumentPath(subFile.path) {
 			continue
 		}
 
@@ -831,8 +873,8 @@ func FullReindex(needResetScroll bool) {
 	}
 }
 
-func FullReindexDirect() {
-	fullReindex()
+func FullReindexDirect() error {
+	return fullReindexChecked()
 }
 
 func ReindexFTS() {
@@ -850,6 +892,12 @@ func ReindexFTS() {
 }
 
 func fullReindex() {
+	if err := fullReindexChecked(); nil != err {
+		logging.LogErrorf("full reindex incomplete: %s", err)
+	}
+}
+
+func fullReindexChecked() error {
 	cache.ClearTreeCache()
 	cache.ClearDocsIAL()
 	cache.ClearBlocksIAL()
@@ -867,11 +915,23 @@ func fullReindex() {
 
 	sql.IndexIgnoreCached = false
 	openedBoxes := Conf.GetOpenedBoxes()
+	var firstErr error
+	failedBoxes := 0
 	for _, openedBox := range openedBoxes {
-		indexBox(openedBox.ID)
+		if err := indexBoxChecked(openedBox.ID); nil != err {
+			failedBoxes++
+			if nil == firstErr {
+				firstErr = err
+			}
+			logging.LogErrorf("full reindex notebook [%s] failed: %s", openedBox.ID, err)
+		}
 	}
 	LoadFlashcards()
 	debug.FreeOSMemory()
+	if 0 < failedBoxes {
+		return fmt.Errorf("full reindex incomplete: %d of %d notebooks failed (first error: %w)", failedBoxes, len(openedBoxes), firstErr)
+	}
+	return nil
 }
 
 func ChangeBoxSort(boxIDs []string) {

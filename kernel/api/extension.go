@@ -31,12 +31,12 @@ import (
 	"github.com/88250/lute"
 	"github.com/88250/lute/ast"
 	"github.com/88250/lute/parse"
+	"github.com/aaronhe/noema/kernel/model"
+	"github.com/aaronhe/noema/kernel/util"
 	"github.com/gabriel-vasile/mimetype"
 	"github.com/gin-gonic/gin"
 	"github.com/siyuan-note/httpclient"
 	"github.com/siyuan-note/logging"
-	"github.com/aaronhe/noema/kernel/model"
-	"github.com/aaronhe/noema/kernel/util"
 )
 
 func extensionCopy(c *gin.Context) {
@@ -52,6 +52,11 @@ func extensionCopy(c *gin.Context) {
 		nb := notebookVal[0]
 		if ast.IsNodeIDPattern(nb) {
 			targetBoxID = nb
+			if err := model.RequireNativeDocumentTree(targetBoxID); nil != err {
+				ret.Code = -1
+				ret.Msg = err.Error()
+				return
+			}
 			assets = model.GetImportAssetsDir(targetBoxID, "")
 			if model.IsEncryptedBox(targetBoxID) {
 				encryptedBoxID = targetBoxID
@@ -249,7 +254,13 @@ func extensionCopy(c *gin.Context) {
 			return s
 		})
 
-		tree, withMath = model.HTML2Tree(dom, luteEngine, targetBoxID)
+		var convertErr error
+		tree, withMath, convertErr = model.HTML2Tree(dom, luteEngine, targetBoxID)
+		if nil != convertErr {
+			ret.Code = -1
+			ret.Msg = convertErr.Error()
+			return
+		}
 	} else {
 		tree = parse.Parse("", []byte(md), luteEngine.ParseOptions)
 	}

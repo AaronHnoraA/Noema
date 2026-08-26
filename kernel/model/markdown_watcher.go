@@ -37,7 +37,7 @@ func handleMarkdownFileEvent(boxID, absPath string, removed bool) {
 	if strings.HasSuffix(absPath, ".tmp") {
 		return
 	}
-	if !strings.HasSuffix(absPath, ".md") {
+	if !isMarkdownDocPath(absPath) {
 		return
 	}
 	if filelock.IsHidden(absPath) {

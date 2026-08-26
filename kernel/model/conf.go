@@ -45,7 +45,10 @@ import (
 	"golang.org/x/text/language"
 )
 
-var Conf *AppConf
+var (
+	Conf                      *AppConf
+	dataIndexRecoveryRequired bool
+)
 
 // AppConf 维护应用元数据，保存在 ~/.siyuan/conf.json。
 type AppConf struct {
@@ -727,12 +730,16 @@ func InitConf() {
 	Conf.AccessAuthCode = util.RemoveInvalid(Conf.AccessAuthCode)
 	Conf.AccessAuthCode = strings.TrimSpace(Conf.AccessAuthCode)
 
-	if 1 == Conf.DataIndexState {
-		// 上次未正常完成数据索引，后续会由 recoverIndexQueue() 恢复
-		logging.LogInfof("data index state is [%d], will recover through index queue", Conf.DataIndexState)
+	dataIndexRecoveryRequired = 1 == Conf.DataIndexState
+	if dataIndexRecoveryRequired {
+		// The durable queue contains only operations that were appended before a
+		// crash. A box-wide index can be interrupted before every source file has
+		// reached that queue, so replay alone cannot prove completeness. Keep the
+		// marker set until InitBoxes has rebuilt from the source of truth.
+		logging.LogInfof("data index state is [%d], will rebuild opened notebooks from source", Conf.DataIndexState)
+	} else {
+		Conf.DataIndexState = 0
 	}
-
-	Conf.DataIndexState = 0
 
 	if cookieKey := readCookieKey(); "" != cookieKey {
 		Conf.CookieKey = cookieKey
@@ -782,7 +789,7 @@ func InitConf() {
 }
 
 func readCookieKey() (cookieKey string) {
-	cookieKeyPath := filepath.Join(util.HomeDir, ".config", "siyuan", "cookie.key")
+	cookieKeyPath := filepath.Join(util.UserConfigDir(), "cookie.key")
 	if !gulu.File.IsExist(cookieKeyPath) {
 		return
 	}
@@ -798,7 +805,7 @@ func readCookieKey() (cookieKey string) {
 }
 
 func writeCookieKey(cookieKey string) {
-	cookieKeyPath := filepath.Join(util.HomeDir, ".config", "siyuan", "cookie.key")
+	cookieKeyPath := filepath.Join(util.UserConfigDir(), "cookie.key")
 	if gulu.File.IsExist(cookieKeyPath) {
 		return
 	}
@@ -1195,21 +1202,51 @@ func (conf *AppConf) language(num int) (ret string) {
 	return
 }
 
-func InitBoxes() {
-	blockCount := treenode.CountBlocks()
-	initialized := 0 < blockCount
+func markDataIndexRecoveryRequired() {
+	dataIndexRecoveryRequired = true
+	Conf.DataIndexState = 1
+	Conf.Save()
+}
+
+func InitBoxes() error {
 	for _, box := range Conf.GetOpenedBoxes() {
 		if _, err := EnsureBoxDoc(box.ID); nil != err {
 			logging.LogErrorf("ensure box document [%s] failed: %s", box.ID, err)
 		}
 		box.UpdateHistoryGenerated() // 初始化历史生成时间为当前时间
+	}
 
+	if dataIndexRecoveryRequired {
+		// An interrupted full-box index may have persisted a non-zero blocktree
+		// count while never enqueueing the remaining files. Replaying index.queue
+		// would then produce a silently partial FTS/refs database. Rebuild all
+		// opened boxes synchronously so bootProgress cannot reach 100 and the host
+		// cannot publish "listening" until the Markdown/.sy sources are complete.
+		logging.LogWarnf("rebuilding data index after an interrupted index operation")
+		if err := FullReindexDirect(); nil != err {
+			markDataIndexRecoveryRequired()
+			return err
+		}
+		dataIndexRecoveryRequired = false
+		Conf.DataIndexState = 0
+		Conf.Save()
+		logging.LogInfof("tree/block count [%d/%d] after interrupted-index recovery", treenode.CountTrees(), treenode.CountBlocks())
+		return nil
+	}
+
+	blockCount := treenode.CountBlocks()
+	initialized := 0 < blockCount
+	for _, box := range Conf.GetOpenedBoxes() {
 		if !initialized {
-			indexBox(box.ID)
+			if err := indexBoxChecked(box.ID); nil != err {
+				markDataIndexRecoveryRequired()
+				return err
+			}
 		}
 	}
 
 	logging.LogInfof("tree/block count [%d/%d]", treenode.CountTrees(), blockCount)
+	return nil
 }
 
 func IsSubscriber() bool {
@@ -1299,7 +1336,7 @@ func HideBoxConfSecret(c *conf.BoxConf) {
 
 func clearPortJSON() {
 	pid := fmt.Sprintf("%d", os.Getpid())
-	portJSON := filepath.Join(util.HomeDir, ".config", "siyuan", "port.json")
+	portJSON := filepath.Join(util.UserConfigDir(), "port.json")
 	pidPorts := map[string]string{}
 	var data []byte
 	var err error

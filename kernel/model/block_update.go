@@ -93,15 +93,13 @@ func buildBlockUpdateOperations(inputs []BlockUpdateInput, resolveTree blockUpda
 			return nil, nil, fmt.Errorf("invalid block ID [%s]", input.ID)
 		}
 
-		data, dataTree, parseErr := parseBlockUpdateData(input.Data, input.DataType, luteEngine)
-		if parseErr != nil {
-			return nil, nil, parseErr
-		}
-
 		var oldTree *parse.Tree
 		var cacheKey blockUpdateTreeKey
 		hasCacheKey := false
 		if blockTree := resolveTree(input.ID); nil != blockTree {
+			if guardErr := requireNativeDocumentTree(blockTree.BoxID); nil != guardErr {
+				return nil, nil, fmt.Errorf("update block [%s]: %w", input.ID, guardErr)
+			}
 			cacheKey = blockUpdateTreeKey{boxID: blockTree.BoxID, rootID: blockTree.RootID}
 			hasCacheKey = true
 			oldTree = treeCache[cacheKey]
@@ -115,10 +113,18 @@ func buildBlockUpdateOperations(inputs []BlockUpdateInput, resolveTree blockUpda
 			if nil == oldTree || nil == oldTree.Root {
 				return nil, nil, fmt.Errorf("load block tree [%s] failed: tree is empty", input.ID)
 			}
+			if guardErr := requireNativeDocumentTree(oldTree.Box); nil != guardErr {
+				return nil, nil, fmt.Errorf("update block [%s]: %w", input.ID, guardErr)
+			}
 			treeCache[blockUpdateTreeKey{boxID: oldTree.Box, rootID: oldTree.ID}] = oldTree
 			if hasCacheKey {
 				treeCache[cacheKey] = oldTree
 			}
+		}
+
+		data, dataTree, parseErr := parseBlockUpdateData(input.Data, input.DataType, luteEngine)
+		if parseErr != nil {
+			return nil, nil, parseErr
 		}
 		oldNode := treenode.GetNodeInTree(oldTree, input.ID)
 		if nil == oldNode {

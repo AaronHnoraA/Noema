@@ -1,6 +1,6 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, net, screen, session, shell } from "electron";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir, tmpdir } from "node:os";
@@ -8,11 +8,22 @@ import { getNoemaAppConfig } from "../server/lib/app-config.mjs";
 import { noemaAppTheme } from "../shared/app-themes.mjs";
 import { createDesktopPluginHost } from "./plugin-host.mjs";
 import {
+  normalizePrintPdfRequest,
+  printHtmlToPdf,
+} from "./print-pdf.mjs";
+import {
+  NOEMA_PROTOCOL_SCHEME,
+  noemaProtocolUrlFromArgv,
+  parseNoemaProtocolUrl,
+  verifyNoemaProtocolTarget,
+} from "./protocol-url.mjs";
+import {
   desktopOpenDecision,
   desktopPlatformLabels,
   desktopTitleBarOverlay,
   desktopWindowKind,
   desktopWindowRisk,
+  isMarkdownFilePath,
   sanitizeDesktopSession,
 } from "../shared/desktop-shell.mjs";
 
@@ -30,6 +41,12 @@ app.setName("Noema");
 const desktopPlatform = process.platform;
 const platformLabels = desktopPlatformLabels(desktopPlatform);
 const desktopSmoke = process.env.NOEMA_DESKTOP_SMOKE === "1";
+const desktopPrintProbe = desktopSmoke
+  ? String(process.env.NOEMA_DESKTOP_PRINT_PROBE || "").trim()
+  : "";
+const desktopProtocolProbe = desktopSmoke
+  ? String(process.env.NOEMA_DESKTOP_PROTOCOL_PROBE || "").trim()
+  : "";
 if (desktopSmoke) {
   for (const entry of readdirSync(tmpdir())) {
     const match = /^noema-desktop-smoke-(\d+)$/.exec(entry);
@@ -42,6 +59,41 @@ if (desktopSmoke) {
   }
 }
 const desktopSmokeUserData = desktopSmoke ? join(tmpdir(), `noema-desktop-smoke-${process.pid}`) : "";
+let desktopSmokeCleanupScheduled = false;
+
+function scheduleDesktopSmokeCleanup() {
+  if (!desktopSmokeUserData || desktopSmokeCleanupScheduled) return;
+  desktopSmokeCleanupScheduled = true;
+  const cleanupScript = String.raw`
+    const { existsSync, rmSync } = require("node:fs");
+    const target = process.argv[1];
+    const parentPid = Number(process.argv[2]);
+    const deadline = Date.now() + 20000;
+    let parentGoneAt = 0;
+    const clean = () => {
+      let parentAlive = false;
+      try { process.kill(parentPid, 0); parentAlive = true; } catch {}
+      if (!parentAlive && parentGoneAt === 0) parentGoneAt = Date.now();
+      const drained = parentGoneAt > 0 && Date.now() - parentGoneAt >= 750;
+      if (Date.now() >= deadline) return;
+      if (drained) {
+        try { rmSync(target, { recursive: true, force: true }); } catch {}
+        if (!existsSync(target) && parentGoneAt > 0 && Date.now() - parentGoneAt >= 5000) return;
+      }
+      setTimeout(clean, 100);
+    };
+    clean();
+  `;
+  try {
+    const cleaner = spawn(process.execPath, ["-e", cleanupScript, desktopSmokeUserData, String(process.pid)], {
+      detached: true,
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    cleaner.unref();
+  } catch {}
+}
 const desktopCacheRoot = desktopSmokeUserData || (
   desktopPlatform === "darwin"
     ? join(homedir(), "Library", "Caches", "com.noema.desktop")
@@ -85,7 +137,11 @@ let hostRestartAttempts = 0;
 let quitFallbackTimer = null;
 const windowStates = new Map();
 const bypassClose = new Set();
-let pendingFile = process.argv.slice(1).find((arg) => /\.(?:md|markdown)$/i.test(arg)) || "";
+const launchArguments = process.argv.slice(1);
+let pendingFile = launchArguments.find((arg) => !/^noema:/i.test(String(arg || "")) && isMarkdownFilePath(arg)) || "";
+const pendingProtocolUrls = [];
+const initialProtocolUrl = noemaProtocolUrlFromArgv(launchArguments);
+if (initialProtocolUrl) pendingProtocolUrls.push({ url: initialProtocolUrl, source: "argv" });
 let windowBackgroundColor = noemaAppTheme("").backgroundColor;
 let windowColorScheme = noemaAppTheme("").colorScheme;
 
@@ -303,12 +359,16 @@ function startHost(appConfig = null, requestedPort = 0) {
   });
 }
 
-function urlForFile(file = "") {
+function urlForFile(file = "", target = {}) {
   const url = new URL(hostUrl);
   if (!file) url.pathname = desktopSmoke ? "/" : "/wiki";
   url.searchParams.set("host", "desktop");
   if (desktopSmoke) url.searchParams.set("desktopSmoke", "1");
+  if (desktopPrintProbe) url.searchParams.set("desktopPrintProbe", "1");
+  if (desktopProtocolProbe) url.searchParams.set("desktopProtocolProbe", desktopProtocolProbe);
   if (file) url.searchParams.set("file", resolve(file));
+  if (target.hash) url.searchParams.set("hash", String(target.hash));
+  if (target.dom) url.searchParams.set("dom", String(target.dom));
   return url.toString();
 }
 
@@ -335,8 +395,9 @@ function windowById(id) {
   return state?.win && !state.win.isDestroyed() ? state.win : null;
 }
 
-function targetUrlFor({ file = "", url = "" } = {}) {
-  if (file) return urlForFile(file);
+function targetUrlFor(target = {}) {
+  const { file = "", url = "" } = target;
+  if (file) return urlForFile(file, target);
   if (!url) return urlForFile();
   try {
     const target = new URL(url, hostUrl);
@@ -395,13 +456,20 @@ function openTarget(target = {}, sourceWin = activeWindow()) {
     const existing = windowById(decision.windowId);
     existing?.show();
     existing?.focus();
+    if (existing && (target.hash || target.dom)) {
+      sendEditorCommand("open-location", {
+        file,
+        hash: String(target.hash || ""),
+        dom: String(target.dom || ""),
+      }, existing);
+    }
     return existing;
   }
   if (decision.action === "replace") {
     const destination = windowById(decision.windowId) || sourceWin || activeWindow();
     if (destination) return loadTarget(destination, { ...target, file });
   }
-  const created = createWindow(file, file ? "" : targetUrlFor(target), { show: true });
+  const created = createWindow(file, targetUrlFor({ ...target, file }), { show: true });
   if (decision.action === "split-right" || decision.action === "split-down") tileSplit(sourceWin, created, decision.action);
   return created;
 }
@@ -471,6 +539,30 @@ async function chooseMarkdownFiles() {
   result.filePaths.forEach((file, index) => openFile(file, { source: index === 0 ? "dialog" : "drop" }));
 }
 
+async function exportPdfFromWindow(win, input = {}, explicitOutputPath = "") {
+  if (!win || win.isDestroyed()) return { canceled: true, path: "" };
+  const request = normalizePrintPdfRequest(input);
+  let outputPath = String(explicitOutputPath || "").trim();
+  if (!outputPath) {
+    const settings = {
+      title: `Export ${request.title} as PDF`,
+      defaultPath: request.defaultPath || join(app.getPath("documents"), `${request.title}.pdf`),
+      filters: [{ name: "PDF", extensions: ["pdf"] }],
+    };
+    const localized = desktopPlugins.transformDialogOptions("saveDialog", settings);
+    const result = await dialog.showSaveDialog(win, localized);
+    if (result.canceled || !result.filePath) return { canceled: true, path: "" };
+    outputPath = result.filePath;
+  }
+  return printHtmlToPdf({
+    BrowserWindow,
+    html: request.html,
+    outputPath,
+    parent: win,
+    tempRoot: join(stateRoot, "tmp", "print"),
+  });
+}
+
 function editorActionsTemplate() {
   return [
     commandItem("Search Knowledge…", "knowledge-search", "CmdOrCtrl+Shift+K"),
@@ -488,6 +580,7 @@ function editorActionsTemplate() {
     { type: "separator" },
     commandItem("Toggle Source", "toggle-source", "CmdOrCtrl+/"),
     commandItem("Run Prose Check", "prose-check"),
+    commandItem("Export PDF…", "export-pdf"),
     commandItem("Export LaTeX…", "export-latex"),
     { type: "separator" },
     commandItem("Open Source in VS Code", "open-source-editor"),
@@ -550,6 +643,7 @@ function buildApplicationMenu() {
         { label: "New Window", accelerator: "CmdOrCtrl+Shift+N", click: () => createWindow() },
         { type: "separator" },
         commandItem("Save", "save", "CmdOrCtrl+S"),
+        commandItem("Export PDF…", "export-pdf"),
         commandItem("Open Source in VS Code", "open-source-editor", "CmdOrCtrl+Shift+O"),
         commandItem(`Reveal Note in ${platformLabels.fileManager}`, "reveal-current-file"),
         { type: "separator" },
@@ -769,11 +863,89 @@ function openConfigurationWindow() {
 }
 
 function openFile(file, options = {}) {
-  if (!hostUrl) {
-    pendingFile = file;
-    return;
+  const requested = String(file || "").trim();
+  if (!isMarkdownFilePath(requested)) return false;
+  const target = resolve(requested);
+  try {
+    if (!statSync(target).isFile()) return false;
+  } catch {
+    return false;
   }
-  openTarget({ file, source: options.source || "os", disposition: options.disposition || "" });
+  if (!hostUrl) {
+    pendingFile = target;
+    return true;
+  }
+  openTarget({ file: target, source: options.source || "os", disposition: options.disposition || "" });
+  return true;
+}
+
+function protocolWorkspaceRoot() {
+  return resolve(
+    process.env.NOEMA_ROOT
+      || process.env.AARONNOTE_ROOT
+      || expandedWorkspaceRoot(activeAppConfig)
+      || defaultNoteRoot,
+  );
+}
+
+function verifiedProtocolTarget(value) {
+  return verifyNoemaProtocolTarget(parseNoemaProtocolUrl(value, {
+    workspaceRoot: protocolWorkspaceRoot(),
+    platform: desktopPlatform,
+  }), { platform: desktopPlatform });
+}
+
+function dispatchProtocolUrl(value, source = "os") {
+  const target = verifiedProtocolTarget(value);
+  const opened = target.action === "open-route"
+    ? openTarget({ url: target.route, source: "protocol", disposition: target.disposition })
+    : openTarget({
+        file: target.file,
+        hash: target.hash,
+        dom: target.dom,
+        source: "protocol",
+        disposition: target.disposition,
+      });
+  if (!opened) throw new Error("Noema could not open the protocol target");
+  if (desktopSmoke) {
+    process.stdout.write(`[noema-desktop-protocol-smoke] ${JSON.stringify({
+      ok: true,
+      source,
+      action: target.action,
+      file: target.action === "open-note" ? target.file : "",
+      route: target.action === "open-route" ? target.route : "",
+    })}\n`);
+  }
+  return true;
+}
+
+function acceptProtocolUrl(value, source = "os") {
+  const url = String(value || "").trim();
+  if (!url) return false;
+  if (!hostUrl) {
+    if (!pendingProtocolUrls.some((item) => item.url === url)) pendingProtocolUrls.push({ url, source });
+    return true;
+  }
+  try {
+    return dispatchProtocolUrl(url, source);
+  } catch (error) {
+    console.error("[noema-desktop] protocol URL rejected", error);
+    if (desktopSmoke) {
+      process.stdout.write(`[noema-desktop-protocol-smoke] ${JSON.stringify({
+        ok: false,
+        source,
+        message: String(error?.message || error),
+      })}\n`);
+    }
+    return false;
+  }
+}
+
+function drainPendingProtocolUrls() {
+  const queued = pendingProtocolUrls.splice(0);
+  let opened = false;
+  for (const item of queued) opened = acceptProtocolUrl(item.url, item.source) || opened;
+  return opened;
 }
 
 app.on("open-file", (event, file) => {
@@ -781,9 +953,16 @@ app.on("open-file", (event, file) => {
   openFile(file);
 });
 
+app.on("open-url", (event, url) => {
+  event.preventDefault();
+  acceptProtocolUrl(url, "open-url");
+});
+
 app.on("second-instance", (_event, argv) => {
-  const file = argv.find((arg) => /\.(?:md|markdown)$/i.test(arg));
-  if (file) openFile(file);
+  const protocolUrl = noemaProtocolUrlFromArgv(argv);
+  const file = argv.find(isMarkdownFilePath);
+  if (protocolUrl) acceptProtocolUrl(protocolUrl, "second-instance");
+  else if (file) openFile(file);
   else if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.show();
     mainWindow.focus();
@@ -808,8 +987,27 @@ ipcMain.on("noema:broadcast-app-config", (_event, revision) => {
   }
 });
 
-ipcMain.handle("noema:desktop-smoke-report", () => {
+ipcMain.handle("noema:desktop-smoke-report", async (event, report = {}) => {
   if (!desktopSmoke) return false;
+  if (desktopPrintProbe) {
+    try {
+      const printable = report?.printDocument;
+      if (!printable || typeof printable !== "object") {
+        throw new Error("renderer did not provide a printable PDF document");
+      }
+      const result = await exportPdfFromWindow(
+        BrowserWindow.fromWebContents(event.sender),
+        printable,
+        desktopPrintProbe,
+      );
+      process.stdout.write(`[noema-desktop-print-smoke] ${JSON.stringify({ ok: true, ...result })}\n`);
+    } catch (error) {
+      process.stdout.write(`[noema-desktop-print-smoke] ${JSON.stringify({
+        ok: false,
+        message: String(error?.message || error),
+      })}\n`);
+    }
+  }
   quitApproved = true;
   setTimeout(() => app.quit(), 100);
   return true;
@@ -890,6 +1088,11 @@ ipcMain.handle("noema:choose-save-path", async (event, options = {}) => {
   return { canceled: result.canceled, path: result.filePath || "" };
 });
 
+ipcMain.handle("noema:export-pdf", async (event, options = {}) => {
+  const owner = BrowserWindow.fromWebContents(event.sender);
+  return exportPdfFromWindow(owner, options);
+});
+
 ipcMain.handle("noema:read-clipboard", () => {
   const image = clipboard.readImage();
   if (!image.isEmpty()) {
@@ -933,6 +1136,12 @@ ipcMain.handle("noema:choose-directory", async (event, options = {}) => {
 
 app.whenReady().then(async () => {
   try {
+    // Noema's installed development build is a standalone app shell whose
+    // Resources/app entry intentionally links to the canonical source tree.
+    // Electron therefore reports app.isPackaged=false even though LaunchServices
+    // sees the installed Noema bundle and its CFBundleURLTypes declaration.
+    const protocolRegistered = app.setAsDefaultProtocolClient(NOEMA_PROTOCOL_SCHEME);
+    if (desktopSmoke) console.log(`[noema-desktop-smoke] protocolRegistered=${protocolRegistered}`);
     await desktopPlugins.load();
     Menu.setApplicationMenu(buildApplicationMenu());
     const configEnvironment = desktopConfigDir
@@ -943,7 +1152,11 @@ app.whenReady().then(async () => {
     windowBackgroundColor = appConfig.activeTheme.backgroundColor;
     windowColorScheme = appConfig.activeTheme.colorScheme;
     await startHost(appConfig);
-    if (pendingFile) {
+    const protocolOpened = drainPendingProtocolUrls();
+    if (protocolOpened) {
+      // A deep link is the explicit launch intent; do not restore unrelated
+      // session windows on top of it.
+    } else if (pendingFile) {
       createWindow(pendingFile);
     } else {
       const restored = readSession().windows.filter((item) => item.kind !== "note" || (item.file && existsSync(item.file)));
@@ -1011,6 +1224,7 @@ app.on("before-quit", (event) => {
     })().finally(() => { quitPrompt = null; });
     return;
   }
+  scheduleDesktopSmokeCleanup();
   writeSession();
   quitting = true;
   if (hostRestartTimer) clearTimeout(hostRestartTimer);
@@ -1029,7 +1243,7 @@ app.on("before-quit", (event) => {
   quitFallbackTimer.unref?.();
 });
 
+app.once("will-quit", scheduleDesktopSmokeCleanup);
 process.once("exit", () => {
-  if (!desktopSmokeUserData) return;
-  try { rmSync(desktopSmokeUserData, { recursive: true, force: true }); } catch {}
+  scheduleDesktopSmokeCleanup();
 });

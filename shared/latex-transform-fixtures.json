@@ -1,0 +1,149 @@
+{
+  "cases": [
+    {
+      "name": "semantic-private-citation",
+      "markdown": "---\ntitle: \"YAML title\"\ndate: 2026-08-26\n---\n\n#+begin meta\ntitle: Canonical title\n#+end meta\n\n@@project(active) [Private plan] {\n  owner: hidden\n}\n\n@@part [Foundations]\n@@section(sub) [Operators] {id=sec:operators}\n# Markdown child\n\n#+begin theorem Case \\(x>0\\)\nVisible \\(x_1\\) @@tag[key] and @@cite(refs) [Ada; Turing] {locator=\"pp. 2, 4\", prefix=\"see\", suffix=\".\"}.\n#+end theorem",
+      "options": {
+        "citationKeyMap": {
+          "refs\u0000Ada": "refs:Ada",
+          "refs\u0000Turing": "refs:Turing"
+        }
+      },
+      "expected": {
+        "meta": { "title": "Canonical title", "date": "2026-08-26" },
+        "markdown": "\n\n\n# Foundations\n### Operators {#sec:operators}\n\n\n```{=latex}\n\\subparagraph{Markdown child}\n```\n\n\n\n\n\n```{=latex}\n\\begin{theorem}[Case \\(x>0\\)]\n```\n\n\nVisible `\\(x_1\\)`{=latex} `\\hypertarget{key}{}`{=latex} and `see \\cite[pp. 2, 4]{refs:Ada,refs:Turing}.`{=latex}.\n\n\n```{=latex}\n\\end{theorem}\n```\n\n",
+        "warnings": [],
+        "features": { "usesSideComment": false, "usesTikz": false }
+      }
+    },
+    {
+      "name": "multiline-private-html",
+      "markdown": "> Visible before @@todo [secret] {\n> nested: {\n> text: \"quoted\n> } still quoted\"\n> escaped: \\}\n> }\n> } AFTER MUST SURVIVE\n> Tail.\n\n<!-- hidden starts\n@@cite(refs) [Hidden]\n--> Visible @@cite(refs) [Real].",
+      "options": { "citationKeyMap": { "refs\u0000Real": "refs:Real" } },
+      "expected": {
+        "meta": {},
+        "markdown": "> Visible before \n>  AFTER MUST SURVIVE\n> Tail.\n\n<!-- hidden starts\n@@cite(refs) [Hidden]\n--> Visible `\\cite{refs:Real}`{=latex}.",
+        "warnings": [],
+        "features": { "usesSideComment": false, "usesTikz": false }
+      }
+    },
+    {
+      "name": "containers-math-marks",
+      "markdown": "> ```text\n> @@todo [literal]\n> @@latexmk(typo)\n> ````\n\n\\[\na+b\n\\]\n\n@@latexmk(noindent) Paragraph start.\nFirst @@latexmk(newline) second.\n\n@@latexmk(appendix)",
+      "expected": {
+        "meta": {},
+        "markdown": "> ```text\n> @@todo [literal]\n> @@latexmk(typo)\n> ````\n\n$$\na+b\n$$\n\n`\\noindent`{=latex} Paragraph start.\nFirst `\\\\`{=latex} second.\n\n`\\appendix`{=latex}",
+        "warnings": [],
+        "features": { "usesSideComment": false, "usesTikz": false }
+      }
+    },
+    {
+      "name": "custom-rules-and-tikz",
+      "markdown": "#+begin axiom Choice\nStatement.\n#+end axiom\n\n#+begin aside Note\nBody.\n#+end aside\n\n> [!WARNING] Careful\n\n#+begin tikz\n\\draw (0,0) -- (1,1);\n#+end tikz",
+      "options": { "rules": { "envMap": { "axiom": "axiom" }, "commentBlocks": ["aside"], "hiddenBlocks": [] } },
+      "expected": {
+        "meta": {},
+        "markdown": "\n\n```{=latex}\n\\begin{axiom}[Choice]\n```\n\n\nStatement.\n\n\n```{=latex}\n\\end{axiom}\n```\n\n\n\n\n\n```{=latex}\n\\begin{remark}[Note]\n```\n\n\nBody.\n\n\n```{=latex}\n\\end{remark}\n```\n\n\n\n> **Careful**\n\n\n```{=latex}\n\\begin{center}\n\\begin{tikzpicture}\n\\draw (0,0) -- (1,1);\n\\end{tikzpicture}\n\\end{center}\n```\n",
+        "warnings": [],
+        "features": { "usesSideComment": false, "usesTikz": true }
+      }
+    },
+    {
+      "name": "unresolved-and-protected",
+      "markdown": "[Visible @@comment [secret] label](https://example.com/(a)/@@latexmk(typo))\n\n`@@latexmk(typo)` and \\(x+y\\) and @@cite(missing) [Key].\n\n    @@todo [literal indented]",
+      "expected": {
+        "meta": {},
+        "markdown": "[Visible  label](https://example.com/(a)/@@latexmk(typo))\n\n`@@latexmk(typo)` and `\\(x+y\\)`{=latex} and `\\textnormal{[missing:Key]}`{=latex}.\n\n    @@todo [literal indented]",
+        "warnings": ["Unresolved Noema citation kept visibly: missing:Key"],
+        "features": { "usesSideComment": false, "usesTikz": false }
+      }
+    },
+    {
+      "name": "annotations",
+      "markdown": "Text @@scomment [Side **bold**] and @@comment(true) [Review] and @@revision [old] {advice=\"new\", reason=\"why\"}.\n\nSee @@cite(refs)[A] {locator=\"sec. ]2\", prefix=\"(\", suffix=\")\"}.",
+      "options": { "citationKeyMap": { "refs\u0000A": "refs:A" } },
+      "expected": {
+        "meta": {},
+        "markdown": "Text `\\sidecomment{Side \\textbf{bold}}`{=latex} and `\\aaroncomment{Review}`{=latex} and `\\aaronrevision{old}{new}{why}`{=latex}.\n\nSee `(\\cite[{sec. ]2}]{refs:A})`{=latex}.",
+        "warnings": [],
+        "features": { "usesSideComment": true, "usesTikz": false }
+      }
+    },
+    {
+      "name": "yaml-semantic-setext",
+      "markdown": "\uFEFF---\ntitle: >\n  Folded\n  title\ndate: |\n  2026-08-26\n---\n\n@@section [Public]\nMarkdown child\n==============",
+      "expected": {
+        "meta": { "title": "Folded title", "date": "2026-08-26" },
+        "markdown": "\n## Public\n\n\n```{=latex}\n\\subparagraph{Markdown child}\n```\n\n",
+        "warnings": [],
+        "features": { "usesSideComment": false, "usesTikz": false }
+      }
+    },
+    {
+      "name": "hidden-proof-fallback",
+      "markdown": "#+begin source\n#+begin source\n@@section [private]\n#+end source\n#+end source\n\n#+begin proof =>\nArgument.\n#+end proof\n\n#+begin custom Label\nBody.\n#+end custom",
+      "expected": {
+        "meta": {},
+        "markdown": "\n\n\n```{=latex}\n\\begin{proof}[Proof (\\(\\Rightarrow\\))]\n```\n\n\nArgument.\n\n\n```{=latex}\n\\end{proof}\n```\n\n\n\n\n\n```{=latex}\n\\begin{quote}\n\\textbf{custom: Label}\\par\n```\n\n\nBody.\n\n\n```{=latex}\n\\end{quote}\n```\n\n",
+        "warnings": [],
+        "features": { "usesSideComment": false, "usesTikz": false }
+      }
+    },
+    {
+      "name": "proof-title-word-boundary",
+      "markdown": "#+begin proof proofread\nBoundary.\n#+end proof",
+      "expected": {
+        "meta": {},
+        "markdown": "\n\n```{=latex}\n\\begin{proof}[Proof (proofread)]\n```\n\n\nBoundary.\n\n\n```{=latex}\n\\end{proof}\n```\n\n",
+        "warnings": [],
+        "features": { "usesSideComment": false, "usesTikz": false }
+      }
+    },
+    {
+      "name": "marks",
+      "markdown": "left @@latexmk(nbsp) right @@latexmk(allowbreak) tail\n\n@@latexmk(keepnext)\n\n@@latexmk(newpage)\n\n@@latexmk(clearpage)\n\n@@latexmk(nopagebreak)",
+      "expected": {
+        "meta": {},
+        "markdown": "left `~`{=latex} right `\\allowbreak{}`{=latex} tail\n\n`\\Needspace{4\\baselineskip}`{=latex}\n\n`\\newpage`{=latex}\n\n`\\clearpage`{=latex}\n\n`\\nopagebreak[4]`{=latex}",
+        "warnings": [],
+        "features": { "usesSideComment": false, "usesTikz": false }
+      }
+    },
+    {
+      "name": "display-comment-and-callout",
+      "markdown": "@@comment(true) [Public display comment]\n\n> [!NOTE] Label\n\n> $$\n> x+y\noutside",
+      "expected": {
+        "meta": {},
+        "markdown": "`\\aaroncomment{Public display comment}`{=latex}\n\n> **Label**\n\n> $$\n> x+y\n> $$\noutside",
+        "warnings": [],
+        "features": { "usesSideComment": false, "usesTikz": false }
+      }
+    }
+  ],
+  "errorCases": [
+    {
+      "name": "duplicate-appendix",
+      "markdown": "@@latexmk(appendix)\n\n@@latexmk(appendix)",
+      "message": "@@latexmk(appendix) may appear only once"
+    },
+    {
+      "name": "inline-block-mark",
+      "markdown": "prefix @@latexmk(newpage)",
+      "message": "@@latexmk(newpage) must be alone on its line"
+    },
+    {
+      "name": "late-noindent",
+      "markdown": "First line\n@@latexmk(noindent) continuation",
+      "message": "@@latexmk(noindent) must appear at the start of a paragraph"
+    },
+    {
+      "name": "adjacent-inline-marks",
+      "markdown": "left @@latexmk(newline) @@latexmk(nbsp) right",
+      "message": "@@latexmk(newline) must sit between visible inline content"
+    }
+  ],
+  "postprocess": {
+    "input": "Intro   \n\n\n\\begin{lstlisting}\ntrailing   \n\n\nnext\n\\end{lstlisting}\n\n\nTail   ",
+    "expected": "Intro\n\n\\begin{lstlisting}\ntrailing   \n\n\nnext\n\\end{lstlisting}\n\nTail\n"
+  }
+}

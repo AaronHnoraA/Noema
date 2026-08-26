@@ -103,6 +103,37 @@ export type WikiIndexMaintenance = {
   changes: { repositories: number; files: number; pages: number; relationships: number; removed: number };
 };
 
+export type WikiGitProvider = {
+  owns(repositoryPath: string): boolean;
+  status(repositoryPath: string): Promise<{
+    branch: string; remote: string; clean: boolean; status: string; source: "kernel-vaultgit";
+  }>;
+  history(repositoryPath: string, filePath: string, limit?: number): Promise<{
+    path: string; source: "kernel-vaultgit";
+    commits: Array<{ sha: string; date: string; author: string; email: string; subject: string }>;
+  }>;
+  diff(repositoryPath: string, filePath: string, sha: string): Promise<{
+    path: string; diff: string; scope: "commit"; sha: string; source: "kernel-vaultgit";
+  }>;
+  restore(repositoryPath: string, filePath: string, sha: string): Promise<{
+    path: string; sha: string; source: "kernel-vaultgit"; bytes: number;
+  }>;
+  checkpoint?(repositoryPath: string, request: {
+    branch: string; message?: string; deviceName: string; deviceId: string;
+  }): Promise<{
+    branch: string; head: string; committed: boolean; changedFiles: number;
+    identityFallback: boolean; source: "kernel-vaultgit";
+  }>;
+  action(request: {
+    repositoryPath: string; action: string; message: string; paths: string[];
+  }): Promise<{
+    branch: string; remote: string; clean: boolean; status: string; source: "kernel-vaultgit";
+    action: string; phase: "idle"; changedPaths: string[]; message: string;
+  }>;
+};
+
+export function configureWikiGitProvider(provider?: WikiGitProvider | null): void;
+
 export function expandNoemaPath(value?: string, fallback?: string): string;
 export function wikiLayout(value?: string): WikiLayout;
 export function discoverWikiRepositories(root: string): Promise<{

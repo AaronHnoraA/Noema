@@ -1092,6 +1092,14 @@ func buildBlockFromNode(n *ast.Node, tree *parse.Tree) (block *Block, attributes
 	fcontent = strings.ReplaceAll(fcontent, string(gulu.ZWJ)+"#", "#")
 	content = strings.ReplaceAll(content, string(gulu.ZWJ)+"#", "#")
 	markdown = strings.ReplaceAll(markdown, string(gulu.ZWJ)+"#", "#")
+	if ast.NodeDocument == n.Type && nil != IsMarkdownBoxFn && IsMarkdownBoxFn(boxID) {
+		// Markdown documents deliberately aggregate the complete source text into
+		// their root SQL block for FTS. NodeHash(document) does not include child
+		// content, so using it alone makes upsertTree classify a body-only edit as
+		// unchanged and leave stale FTS rows behind. Fold the actual aggregate SQL
+		// payload into the hash used by the incremental updater.
+		hash = fmt.Sprintf("%x", sha256.Sum256([]byte(hash+"\x00"+content+"\x00"+fcontent+"\x00"+markdown+"\x00"+ialContent)))
+	}
 
 	block = &Block{
 		ID:       n.ID,

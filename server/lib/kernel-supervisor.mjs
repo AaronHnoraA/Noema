@@ -113,6 +113,7 @@ export function resolveKernelLaunchConfig({
     };
   }
   const workspace = resolve(env.NOEMA_KERNEL_WORKSPACE || join(stateRoot, "kernel-workspace"));
+  const configDir = resolve(env.NOEMA_KERNEL_CONFIG_DIR || join(stateRoot, "kernel-config"));
   return {
     enabled: true,
     owned: true,
@@ -120,6 +121,7 @@ export function resolveKernelLaunchConfig({
     binary,
     workingDir,
     workspace,
+    configDir,
   };
 }
 
@@ -146,6 +148,8 @@ export function createKernelSupervisor({
   onState = () => {},
   startupTimeoutMs = 10_000,
   bootTimeoutMs = 120_000,
+  registrationTimeoutMs = 30 * 60_000,
+  registrationProbeIntervalMs = 1_000,
   requestTimeoutMs = 2_000,
   healthIntervalMs = 5_000,
   restartDelayMs = 500,
@@ -231,7 +235,7 @@ export function createKernelSupervisor({
     ];
     const spawned = spawnImpl(config.binary, args, {
       cwd: runtimeRoot,
-      env,
+      env: { ...env, NOEMA_KERNEL_CONFIG_DIR: config.configDir },
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
@@ -280,18 +284,60 @@ export function createKernelSupervisor({
     });
   };
 
-  const kernelJson = async (baseUrl, path, body) => {
+  const kernelJson = async (baseUrl, path, body, timeoutMs = requestTimeoutMs, signal) => {
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
     const response = await fetchImpl(`${baseUrl}${path}`, {
       method: body === undefined ? "GET" : "POST",
       headers: body === undefined ? undefined : { "Content-Type": "application/json" },
       body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(requestTimeoutMs),
+      signal: signal ? AbortSignal.any([timeoutSignal, signal]) : timeoutSignal,
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok || Number(payload?.code) !== 0) {
       throw new Error(payload?.msg || `kernel request failed with HTTP ${response.status}`);
     }
     return payload;
+  };
+
+  const registerExternalBox = async (baseUrl, exitPromise) => {
+    const controller = new AbortController();
+    // Registration is the first full repository scan and SQL/FTS commit. It
+    // may legitimately outlive the ordinary boot deadline, so keep a hard
+    // total cap while renewing the shorter liveness deadline only when the
+    // kernel continues to answer independent health probes.
+    const pending = kernelJson(baseUrl, "/api/noema/markdown/registerExternalBox", {
+      name: "Noema",
+      root: noteRoot,
+    }, registrationTimeoutMs, controller.signal).then(
+      (value) => ({ value }),
+      (error) => ({ error }),
+    );
+    let livenessDeadline = Date.now() + bootTimeoutMs;
+    const probeInterval = Math.max(1, Math.min(registrationProbeIntervalMs, bootTimeoutMs));
+    while (!closing) {
+      const outcome = await Promise.race([pending, sleep(probeInterval)]);
+      if (outcome) {
+        if (outcome.error) throw outcome.error;
+        return outcome.value;
+      }
+      if (config.owned && child === null) {
+        controller.abort();
+        const detail = await exitPromise;
+        throw detail?.error || new Error(`Noema kernel stopped while indexing (code=${detail?.code ?? "unknown"})`);
+      }
+      try {
+        await kernelJson(baseUrl, "/api/system/bootProgress");
+        livenessDeadline = Date.now() + bootTimeoutMs;
+      } catch {
+        // A single missed probe is tolerated until the liveness deadline.
+      }
+      if (Date.now() >= livenessDeadline) {
+        controller.abort();
+        throw new Error(`Noema kernel stopped responding while indexing for ${bootTimeoutMs}ms`);
+      }
+    }
+    controller.abort();
+    throw new Error("kernel supervisor is shutting down");
   };
 
   const attach = async (baseUrl, exitPromise) => {
@@ -305,10 +351,7 @@ export function createKernelSupervisor({
       try {
         const boot = await kernelJson(baseUrl, "/api/system/bootProgress");
         if (Number(boot?.data?.progress || 0) >= 100) {
-          const registration = await kernelJson(baseUrl, "/api/noema/markdown/registerExternalBox", {
-            name: "Noema",
-            root: noteRoot,
-          });
+          const registration = await registerExternalBox(baseUrl, exitPromise);
           const box = registration?.data?.box || null;
           if (!box?.id || !box?.root) throw new Error("kernel registration returned no Markdown box");
           return box;

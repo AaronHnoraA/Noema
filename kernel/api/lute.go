@@ -29,11 +29,11 @@ import (
 	"github.com/88250/lute/parse"
 	"github.com/88250/lute/render"
 	"github.com/PuerkitoBio/goquery"
-	"github.com/gin-gonic/gin"
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/model"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/gin-gonic/gin"
+	"github.com/siyuan-note/logging"
 )
 
 // maxSpinBlockDOMBytes 限制 spinBlockDOM 输入 DOM 的最大字节数。
@@ -96,6 +96,11 @@ func html2BlockDOM(c *gin.Context) {
 	// 可选 notebook 参数：指定目标加密笔记本时资源写入 box 内并加密
 	boxID := ""
 	if notebook, ok := arg["notebook"].(string); ok && notebook != "" {
+		if err := model.RequireNativeDocumentTree(notebook); nil != err {
+			ret.Code = -1
+			ret.Msg = err.Error()
+			return
+		}
 		if model.IsEncryptedBox(notebook) {
 			boxID = notebook
 		}
@@ -127,7 +132,12 @@ func html2BlockDOM(c *gin.Context) {
 	// 将 Word 和 WPS 批注转换为行级备注 https://github.com/siyuan-note/siyuan/issues/18748
 	dom = normalizeWPSComments(dom, text, wps)
 	dom = normalizeMSWordComments(dom)
-	tree, _ := model.HTML2Tree(dom, luteEngine, boxID)
+	tree, _, err := model.HTML2Tree(dom, luteEngine, boxID)
+	if nil != err {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
 	if nil == tree {
 		ret.Data = "Failed to convert"
 		return

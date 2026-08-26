@@ -16,6 +16,7 @@ import (
 
 	"github.com/aaronhe/noema/kernel/conf"
 	"github.com/aaronhe/noema/kernel/filesys"
+	noemaidentity "github.com/aaronhe/noema/kernel/noema/identity"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
 )
@@ -56,6 +57,93 @@ func TestPathBoxIsMarkdownReflectsBoxConfKind(t *testing.T) {
 	}
 	if pathBoxIsMarkdown("no-slash-here") {
 		t.Fatal("a path with no box segment must not be treated as markdown")
+	}
+
+	for _, test := range []struct {
+		path string
+		want bool
+	}{
+		{mdBoxID + "/notes/note.md", true},
+		{mdBoxID + "/notes/note.markdown", true},
+		{mdBoxID + "/notes/foreign.sy", false},
+		{syBoxID + "/20260824232000-document.sy", true},
+		{syBoxID + "/notes/foreign.md", false},
+		{"no-slash-here.sy", false},
+	} {
+		if got := pathIsBoxDocument(test.path); got != test.want {
+			t.Fatalf("pathIsBoxDocument(%q) = %v, want %v", test.path, got, test.want)
+		}
+	}
+}
+
+func TestMarkdownBoxLsDoesNotApplyNativeChildDirectoryMapping(t *testing.T) {
+	originalDataDir := util.DataDir
+	util.DataDir = t.TempDir()
+	t.Cleanup(func() { util.DataDir = originalDataDir })
+
+	const boxID = "20260826130500-lsformat"
+	setupMarkdownBoxForIndexTest(t, boxID)
+	boxRoot := filepath.Join(util.DataDir, boxID)
+	if err := os.MkdirAll(filepath.Join(boxRoot, "notes", "foreign"), 0o755); nil != err {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(boxRoot, "notes", "foreign", "child.md"), []byte("# Child\n"), 0o644); nil != err {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(boxRoot, "notes", "foreign.sy"), []byte("ordinary repository file\n"), 0o644); nil != err {
+		t.Fatal(err)
+	}
+
+	files, _, err := (&Box{ID: boxID}).Ls("/notes/foreign.sy")
+	if nil == err {
+		t.Fatalf("Markdown Ls treated foreign.sy as the native child directory: files=%+v", files)
+	}
+
+	const nativeBoxID = "20260826130501-lsformat"
+	nativeConf := conf.NewBoxConf()
+	nativeConf.Name = "Native Ls compatibility"
+	if err := (&Box{ID: nativeBoxID}).SaveConf(nativeConf); nil != err {
+		t.Fatal(err)
+	}
+	nativeRoot := filepath.Join(util.DataDir, nativeBoxID)
+	if err := os.MkdirAll(filepath.Join(nativeRoot, "notes", "20260826130502-parent1"), 0o755); nil != err {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nativeRoot, "notes", "20260826130502-parent1", "20260826130503-child01.sy"), []byte("{}"), 0o644); nil != err {
+		t.Fatal(err)
+	}
+	files, _, err = (&Box{ID: nativeBoxID}).Ls("/notes/20260826130502-parent1.sy")
+	if nil != err || 1 != len(files) || "20260826130503-child01.sy" != files[0].name {
+		t.Fatalf("native child-directory mapping changed: files=%+v err=%v", files, err)
+	}
+}
+
+func TestFindUnindexedTreeUsesMarkdownSourceProjection(t *testing.T) {
+	originalDataDir, originalConf := util.DataDir, Conf
+	util.DataDir = t.TempDir()
+	Conf = NewAppConf()
+	t.Cleanup(func() {
+		util.DataDir = originalDataDir
+		Conf = originalConf
+	})
+
+	boxID := "20260826044500-unidxmd"
+	setupMarkdownBoxForIndexTest(t, boxID)
+	canonicalID := "0198fc34-7b32-7a11-8cb4-6c40e3b33d71"
+	internalID := noemaidentity.ProjectionID(canonicalID, "")
+	docPath := "/notes/projected.md"
+	absPath := filepath.Join(util.DataDir, boxID, strings.TrimPrefix(docPath, "/"))
+	if err := os.MkdirAll(filepath.Dir(absPath), 0755); nil != err {
+		t.Fatal(err)
+	}
+	source := "#+begin meta\nid: " + canonicalID + "\n#+end meta\n\n# Projected\n"
+	if err := os.WriteFile(absPath, []byte(source), 0644); nil != err {
+		t.Fatal(err)
+	}
+
+	foundBox, foundPath := findUnindexedTreeInAllBoxes(internalID)
+	if boxID != foundBox || docPath != foundPath {
+		t.Fatalf("expected Markdown projection at %s%s, got %s%s", boxID, docPath, foundBox, foundPath)
 	}
 }
 

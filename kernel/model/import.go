@@ -84,7 +84,12 @@ func GetImportAssetsDir(boxID, docDirLocalPath string) string {
 	return globalAssetsDir
 }
 
-func HTML2Tree(htmlStr string, luteEngine *lute.Lute, boxID string) (tree *parse.Tree, withMath bool) {
+func HTML2Tree(htmlStr string, luteEngine *lute.Lute, boxID string) (tree *parse.Tree, withMath bool, err error) {
+	if "" != boxID {
+		if err = requireNativeDocumentTree(boxID); nil != err {
+			return
+		}
+	}
 	htmlStr = gulu.Str.RemovePUA(htmlStr)
 	assetDirPath := GetImportAssetsDir(boxID, "")
 	_ = os.MkdirAll(assetDirPath, 0755)
@@ -137,6 +142,9 @@ func HTML2Tree(htmlStr string, luteEngine *lute.Lute, boxID string) (tree *parse
 }
 
 func ImportSY(zipPath, boxID, toPath string) (err error) {
+	if err = requireNativeDocumentTree(boxID); nil != err {
+		return
+	}
 	if isSYNotebookBundle(zipPath) {
 		return errors.New(Conf.Language(373))
 	}
@@ -151,6 +159,11 @@ func ImportSYNotebook(zipPath string) (boxID string, err error) {
 var ErrSYTargetNotebookRequired = errors.New("target notebook required")
 
 func ImportSYAuto(zipPath, boxID, toPath string) (createdBoxID string, notebook bool, err error) {
+	if "" != boxID {
+		if err = requireNativeDocumentTree(boxID); nil != err {
+			return
+		}
+	}
 	createdBoxID, err = importSY(zipPath, boxID, toPath, false, true)
 	notebook = err == nil && createdBoxID != boxID
 	return
@@ -166,6 +179,11 @@ func importSY(zipPath, boxID, toPath string, createNotebook, autoDetect bool) (c
 
 func importSY0(zipPath, boxID, toPath string, createNotebook, autoDetect bool, sharedBlockIDs map[string]string,
 	precreatedBox bool) (createdBoxID string, err error) {
+	if !createNotebook && "" != boxID {
+		if err = requireNativeDocumentTree(boxID); nil != err {
+			return
+		}
+	}
 	util.PushEndlessProgress(Conf.Language(73))
 	defer util.ClearPushProgress(100)
 
@@ -1123,15 +1141,24 @@ func ImportData(zipPath string) (err error) {
 }
 
 func ImportFromLocalPath(boxID, localPath string, toPath string) (err error) {
+	if err = requireNativeDocumentTree(boxID); nil != err {
+		return
+	}
 	return importFromLocalPath(boxID, localPath, toPath, false)
 }
 
 // ImportFromLocalPathSkipRoot 导入本地路径，但不将来源根目录转换为文档。
 func ImportFromLocalPathSkipRoot(boxID, localPath string, toPath string) (err error) {
+	if err = requireNativeDocumentTree(boxID); nil != err {
+		return
+	}
 	return importFromLocalPath(boxID, localPath, toPath, true)
 }
 
 func importFromLocalPath(boxID, localPath string, toPath string, skipRoot bool) (err error) {
+	if err = requireNativeDocumentTree(boxID); nil != err {
+		return
+	}
 	box, err := getOpenedBox(boxID)
 	if nil != err {
 		return err

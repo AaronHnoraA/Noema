@@ -1,5 +1,6 @@
 import "./desktop-bridge.ts";
 import "../src/styles/theme-loader.ts";
+import { installB3ComponentSystem } from "../src/b3-component-system.ts";
 import "./config.css";
 
 import type { NoemaAppConfigMsg, NoemaAppTheme, NoemaDesktopPlugin } from "./api-client.ts";
@@ -13,6 +14,7 @@ import {
 
 const root = document.querySelector<HTMLElement>("#config-app");
 if (!root) throw new Error("Missing #config-app");
+const removeB3ComponentSystem = installB3ComponentSystem(document.body);
 
 document.body.dataset.hostMode = window.noemaDesktop ? "desktop" : "browser";
 if (window.noemaDesktop) document.body.dataset.desktopPlatform = window.noemaDesktop.platform;
@@ -363,6 +365,7 @@ const removeDesktopDropListener = window.noemaDesktop?.onFileDrop?.((event) => {
   if (paths.length) window.noemaDesktop?.openFiles(paths);
 }) ?? null;
 window.addEventListener("beforeunload", () => {
+  removeB3ComponentSystem();
   removeThemeRuntime();
   removeDesktopCommandListener?.();
   removeDesktopDropListener?.();

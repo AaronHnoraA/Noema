@@ -1,5 +1,6 @@
 import "./desktop-bridge.ts";
 import "../src/styles/theme-loader.ts";
+import { installB3ComponentSystem } from "../src/b3-component-system.ts";
 import "./wiki.css";
 import "@mismerge/core/styles.css";
 import "@mismerge/core/light.css";
@@ -16,6 +17,7 @@ import { desktopPlatformLabels } from "../shared/desktop-shell.mjs";
 
 const root = document.querySelector<HTMLElement>("#wiki-app");
 if (!root) throw new Error("Missing #wiki-app");
+const removeB3ComponentSystem = installB3ComponentSystem(document.body);
 
 const serverReaderMode = serverMode();
 const desktopPlatform = window.noemaDesktop?.platform || (/Mac/.test(navigator.platform) ? "darwin" : "");
@@ -2008,6 +2010,7 @@ root.querySelectorAll<HTMLElement>("[data-desktop-menu]").forEach((control) => {
 
 const removeThemeRuntime = installNoemaThemeRuntime();
 window.addEventListener("beforeunload", () => {
+  removeB3ComponentSystem();
   removeThemeRuntime();
   removeDesktopCommandListener?.();
   removeDesktopDropListener?.();

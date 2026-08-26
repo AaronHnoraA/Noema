@@ -1,7 +1,10 @@
 /*
  * Claude — a warm editorial light theme.
  */
-:root[data-noema-theme="claude"] {
+@import "../../../app/appearance/themes/daylight/theme.css";
+
+:root[data-noema-theme="claude"],
+:root[data-noema-theme="daylight"] {
   color-scheme: light;
   --noema-window-background: #f4f0e8;
   --aaronnote-bg: #f4f0e8;
@@ -108,6 +111,8 @@
 }
 
 :root[data-noema-theme="claude"] .noema-desktop-titlebar,
-:root[data-noema-theme="claude"] .aaronnote-status-pill {
+:root[data-noema-theme="claude"] .aaronnote-status-pill,
+:root[data-noema-theme="daylight"] .noema-desktop-titlebar,
+:root[data-noema-theme="daylight"] .aaronnote-status-pill {
   box-shadow: none;
 }

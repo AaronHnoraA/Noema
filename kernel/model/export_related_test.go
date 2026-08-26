@@ -58,7 +58,10 @@ func TestExportSYIncludesRelatedDocsAcrossNormalBoxes(t *testing.T) {
 	writeExportRelatedTestTree(t, sourceTree)
 	writeExportRelatedTestTree(t, targetTree)
 
-	zipURI := ExportSYs([]string{sourceDocID})
+	zipURI, err := ExportSYs([]string{sourceDocID})
+	if nil != err {
+		t.Fatal(err)
+	}
 	if "" == zipURI {
 		t.Fatal("export returned an empty archive path")
 	}

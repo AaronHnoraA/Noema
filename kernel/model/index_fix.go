@@ -32,13 +32,14 @@ import (
 	"github.com/88250/lute/ast"
 	"github.com/88250/lute/html"
 	"github.com/88250/lute/parse"
-	"github.com/siyuan-note/filelock"
-	"github.com/siyuan-note/logging"
+	"github.com/aaronhe/noema/kernel/conf"
 	"github.com/aaronhe/noema/kernel/filesys"
 	"github.com/aaronhe/noema/kernel/sql"
 	"github.com/aaronhe/noema/kernel/task"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/siyuan-note/filelock"
+	"github.com/siyuan-note/logging"
 )
 
 var (
@@ -70,22 +71,30 @@ func checkIndex() {
 		fixIndexMu.Lock()
 		defer fixIndexMu.Unlock()
 
-		runFixIndexPipeline()
+		if err := runFixIndexPipeline(); nil != err {
+			logging.LogErrorf("fix index failed: %s", err)
+		}
 	})
 }
 
 // runFixIndexPipeline 执行索引订正流水线并完成收尾（清除脏标志、记录订正时间）。
 // 调用方需持有 fixIndexMu。
-func runFixIndexPipeline() {
-	fixIndexPipeline()
+func runFixIndexPipeline() error {
+	if err := fixIndexPipeline(); nil != err {
+		// A partially unreadable external repository must remain dirty so the
+		// next idle pass or process restart retries from source truth.
+		markDataIndexRecoveryRequired()
+		return err
+	}
 	// 收尾：清除脏标志并记录订正时间，避免在冷却期内被 AutoFixIndex 重复触发
 	util.MarkIndexClean()
 	lastFixedAt = time.Now()
+	return nil
 }
 
 // fixIndexPipeline 执行索引订正流水线。
 // 由 checkIndex（同步后一次性）与 AutoFixIndex（空闲触发）共用，调用方负责加 fixIndexMu 互斥锁。
-func fixIndexPipeline() {
+func fixIndexPipeline() error {
 	logging.LogInfof("start fixing index...")
 
 	removeDuplicateDatabaseIndex()
@@ -94,7 +103,7 @@ func fixIndexPipeline() {
 	resetDuplicateBlocksOnFileSys()
 	sql.FlushQueue()
 
-	fixBlockTreeByFileSys()
+	fixErr := fixBlockTreeByFileSys()
 	sql.FlushQueue()
 
 	fixDatabaseIndexByBlockTree()
@@ -107,6 +116,7 @@ func fixIndexPipeline() {
 	debug.FreeOSMemory()
 	util.PushStatusBar(Conf.Language(185))
 	logging.LogInfof("finish fixing index")
+	return fixErr
 }
 
 // AutoFixIndex 在用户空闲且存在未订正变更时，自动订正索引。由 cron 每分钟调用。
@@ -138,7 +148,9 @@ func AutoFixIndex() {
 	}
 
 	logging.LogInfof("start auto fixing index on idle...")
-	runFixIndexPipeline()
+	if err := runFixIndexPipeline(); nil != err {
+		logging.LogErrorf("auto fixing index failed: %s", err)
+	}
 	logging.LogInfof("finish auto fixing index on idle")
 }
 
@@ -207,6 +219,11 @@ func resetDuplicateBlocksOnFileSys() {
 	blockIDs := map[string]bool{}
 	needRefreshUI := false
 	for _, box := range boxes {
+		if conf.BoxKindMarkdown == GetBoxKind(box.ID) {
+			// A Markdown repository owns stable source IDs. Never run the native
+			// duplicate-ID repair, which may reset nodes and rewrite .sy trees.
+			continue
+		}
 		// 关闭的加密笔记本无法解密 .sy，跳过（避免密文被当损坏移走）
 		if IsEncryptedBox(box.ID) && !IsBoxUnlocked(box.ID) {
 			continue
@@ -346,13 +363,26 @@ func recreateTree(tree *parse.Tree, absPath string) {
 }
 
 // fixBlockTreeByFileSys 通过文件系统订正块树。
-func fixBlockTreeByFileSys() {
+func fixBlockTreeByFileSys() (retErr error) {
 	defer logging.Recover()
 
 	util.PushStatusBar(fmt.Sprintf(Conf.Language(58), 3, 5))
 	boxes := Conf.GetOpenedBoxes()
 	luteEngine := lute.New()
 	for _, box := range boxes {
+		if conf.BoxKindMarkdown == GetBoxKind(box.ID) {
+			// The shadow data/<boxID> directory contains configuration only. An
+			// empty native scan followed by ClearRedundantBlockTrees would erase
+			// every valid external Markdown projection. Reconcile against the
+			// registered repository root instead.
+			if _, err := reconcileMarkdownBoxChecked(box.ID); nil != err {
+				logging.LogErrorf("reconcile Markdown notebook [%s] while fixing index failed: %s", box.ID, err)
+				if nil == retErr {
+					retErr = fmt.Errorf("reconcile Markdown notebook [%s]: %w", box.ID, err)
+				}
+			}
+			continue
+		}
 		boxPath := filepath.Join(util.DataDir, box.ID)
 		var paths []string
 		filelock.Walk(boxPath, func(path string, d fs.DirEntry, err error) error {
@@ -415,6 +445,7 @@ func fixBlockTreeByFileSys() {
 		}
 		treenode.RemoveBlockTreesByBoxID(box.ID)
 	}
+	return
 }
 
 // fixDatabaseIndexByBlockTree 通过块树订正数据库索引。

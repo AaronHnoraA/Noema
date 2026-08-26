@@ -16,7 +16,7 @@ import { loadKatexMacros } from "./katex-macros.mjs";
 import { durationFromEnv } from "./jupyter-cell.mjs";
 import { moveWindowsPathToRecycleBin } from "./windows-shell.mjs";
 import { maskMetaSummaryContent } from "../../shared/meta-summary.mjs";
-import { BLOCK_ID_SOURCE, parseOrgEnvIdentityTitle } from "../../shared/block-identity.mjs";
+import { BLOCK_ID_SOURCE, isBlockReferenceId, parseOrgEnvIdentityTitle } from "../../shared/block-identity.mjs";
 import { blockPropertyItemsForDocument, patchBlockPropertySource } from "../../shared/block-properties.mjs";
 import { evaluateAttributeView } from "../../shared/attribute-view.mjs";
 import { parseEmbedQuerySpec } from "../../shared/embed-query.mjs";
@@ -28,6 +28,7 @@ import {
   bibliographyVersion,
   clearBibliographyCache,
   configureBibliography,
+  configureBibliographyProvider,
 } from "./bibliography.mjs";
 import { parseCommandArgs, scanInlineCommands } from "../../shared/command-syntax.mjs";
 import { scanWikiLinks } from "../../shared/wiki-link.mjs";
@@ -178,7 +179,9 @@ let externalFileProvider = null;
 let markdownFileProvider = null;
 let planningProvider = null;
 let katexMacrosProvider = null;
+let latexProvider = null;
 let assetProvider = null;
+let sessionProvider = null;
 let snippetCache = { key: "", scannedAt: 0, snippets: [] };
 let templateCache = { key: "", scannedAt: 0, templates: [] };
 let copilotClient = null;
@@ -292,12 +295,18 @@ async function readMarkdownFile(file) {
   return String(opened?.content ?? opened?.markdown ?? "");
 }
 
-async function writeMarkdownFile(file, content) {
+async function writeMarkdownFile(file, content, options = {}) {
   if (!markdownFileProviderOwns(file)) {
     await atomicWriteFile(file, content, "utf8");
-    return;
+    return { ok: true, content: String(content) };
   }
-  const wrote = await markdownFileProvider.write({ file: String(file), content: String(content) });
+  const wrote = await markdownFileProvider.write({
+    file: String(file),
+    content: String(content),
+    expectedVersion: String(options.expectedVersion || ""),
+    force: options.force === true,
+  });
+  if (wrote?.conflict === true) return wrote;
   if (wrote?.ok === false) {
     const err = new Error(String(wrote?.message || "Markdown persistence provider rejected the save"));
     err.statusCode = Number(wrote?.statusCode) || 500;
@@ -310,6 +319,7 @@ async function writeMarkdownFile(file, content) {
     throw err;
   }
   noteSelfWrite(file);
+  return wrote;
 }
 
 function canonicalExistingPath(path) {
@@ -1296,19 +1306,55 @@ function currentSessionManager() {
 }
 
 export async function readRecentNotes() {
-  return currentSessionManager().readRecentNotes();
+  const manager = currentSessionManager();
+  const local = await manager.readRecentNotes();
+  if (typeof sessionProvider?.read !== "function") return local;
+  try {
+    const kernel = await sessionProvider.read();
+    return manager.normalizeRecentNotes([...(kernel?.recent || []), ...local]);
+  } catch {
+    return local;
+  }
 }
 
 export async function touchRecentNote(file, openedAt = Date.now()) {
-  return currentSessionManager().touchRecentNote(file, openedAt);
+  const manager = currentSessionManager();
+  const safe = safeOpenFile(file);
+  if (sessionProvider?.owns?.(safe) === true && typeof sessionProvider?.touchRecent === "function") {
+    try {
+      const kernel = await sessionProvider.touchRecent(safe, openedAt);
+      return manager.normalizeRecentNotes([...(kernel?.recent || []), ...await manager.readRecentNotes()]);
+    } catch {
+      // Optional UI state remains available during a transient kernel outage.
+    }
+  }
+  return manager.touchRecentNote(safe, openedAt);
 }
 
 export async function readCursorPositions() {
-  return currentSessionManager().readCursorPositions();
+  const manager = currentSessionManager();
+  const local = await manager.readCursorPositions();
+  if (typeof sessionProvider?.read !== "function") return local;
+  try {
+    const kernel = await sessionProvider.read();
+    return manager.normalizeCursorPositions([...(kernel?.positions || []), ...local]);
+  } catch {
+    return local;
+  }
 }
 
 export async function touchCursorPosition(body) {
-  return currentSessionManager().touchCursorPosition(body);
+  const manager = currentSessionManager();
+  const safe = safeOpenFile(body?.file);
+  if (sessionProvider?.owns?.(safe) === true && typeof sessionProvider?.touchPosition === "function") {
+    try {
+      const kernel = await sessionProvider.touchPosition({ ...(body || {}), file: safe });
+      return manager.normalizeCursorPositions([...(kernel?.positions || []), ...await manager.readCursorPositions()]);
+    } catch {
+      // Keep cursor persistence non-blocking when the optional kernel is down.
+    }
+  }
+  return manager.touchCursorPosition({ ...(body || {}), file: safe });
 }
 
 function modeForFile(file) {
@@ -1706,12 +1752,6 @@ function domTargetsFromContent(content, note) {
   }).filter((target) => target.label && target.slug && target.path.length > 0);
 }
 
-function pdfExportName(file) {
-  const raw = file ? file.split(sep).pop() || "Noema.pdf" : "Noema.pdf";
-  const stem = raw.replace(/\.[^.]+$/, "") || "Noema";
-  return `${stem}.pdf`.replace(/[/:]/g, "-");
-}
-
 function slugifyTitle(title) {
   const slug = String(title || "untitled")
     .normalize("NFKD")
@@ -1735,50 +1775,6 @@ function timestampId() {
     pad(now.getMinutes()),
     pad(now.getSeconds()),
   ].join("");
-}
-
-function markdownForPdf(content) {
-  return String(content ?? "")
-    .replace(/^\s*#\+begin\s+meta\s*\n[\s\S]*?\n\s*\\?#\+end\s+meta\s*\n*/i, "")
-    .replace(/^#\+begin\s+([A-Za-z][\w-]*)(?:\s+([^\n]+))?\s*$/gmi, (_m, kind, title = "") => {
-      const label = String(kind).toLowerCase() === "summary" ? "Summary" : String(kind);
-      return `::: {.${String(kind).toLowerCase()}}\n**${label}${title ? `: ${title}` : ""}.**`;
-    })
-    .replace(/^\\?#\+end\s+[A-Za-z][\w-]*\s*$/gmi, ":::");
-}
-
-export async function exportPdf(file, content) {
-  const dir = await runtimeMkdtemp("pdf", file || "Noema.pdf");
-  const input = join(dir, "input.md");
-  const out = join(dir, "output.pdf");
-  await writeFile(input, markdownForPdf(content), "utf8");
-  try {
-    await execFileAsync("pandoc", [
-      input,
-      "--from=markdown+tex_math_single_backslash+fenced_divs",
-      "--pdf-engine=xelatex",
-      "-V", "mainfont=Times New Roman",
-      "-V", "CJKmainfont=FZLiuGongQuanKaiShuJF",
-      "-V", "mathfont=GFS Neohellenic Math",
-      "-V", "geometry:margin=1in",
-      "-o", out,
-    ], {
-      cwd: noteRoot,
-      maxBuffer: 1024 * 1024 * 8,
-    });
-    return {
-      name: pdfExportName(file),
-      data: await readFile(out),
-    };
-  } catch (err) {
-    const message = [err.message, err.stderr, err.stdout].filter(Boolean).join("\n");
-    const next = new Error(message || "PDF export failed");
-    next.statusCode = 500;
-    throw next;
-  }
-  finally {
-    await rm(dir, { recursive: true, force: true });
-  }
 }
 
 function titleFromContent(file, content) {
@@ -4859,6 +4855,30 @@ function portableEmbedQueryID(file, blockId, statement) {
   return `20000101000000-${suffix}`;
 }
 
+export async function resolveBlockReference(body = {}) {
+  const id = String(typeof body === "string" ? body : body?.id || "").trim().toLowerCase();
+  if (!isBlockReferenceId(id)) {
+    throw Object.assign(new Error("Block reference ID is invalid"), { statusCode: 400 });
+  }
+  if (typeof markdownFileProvider?.resolveBlock !== "function") {
+    throw Object.assign(new Error("Block navigation requires the Noema Markdown kernel"), { statusCode: 501 });
+  }
+  const location = await markdownFileProvider.resolveBlock(id);
+  const file = safeOpenFile(location?.file || "");
+  if (markdownFileProvider.owns?.(file) !== true || String(location?.id || "").toLowerCase() !== id) {
+    throw Object.assign(new Error("Kernel returned an invalid block location"), { statusCode: 502 });
+  }
+  return {
+    type: "block-reference-location",
+    source: "kernel-block-index",
+    id,
+    file,
+    path: String(location?.path || ""),
+    line: Math.max(1, Number.isInteger(Number(location?.line)) ? Number(location.line) : 1),
+    blockType: String(location?.blockType || ""),
+  };
+}
+
 export async function buildEmbedQuery(body = {}) {
   const file = String(body.file || "");
   const spec = parseEmbedQuerySpec(body.title, body.source);
@@ -6584,10 +6604,13 @@ export async function exportLatex(body = {}) {
     pandocBin: executablePath("pandoc"),
     rules,
     citationKeyMap: citationMaps.byNamespaceKey,
+    transformProvider: latexProvider,
     signal,
   });
   throwIfAborted(signal);
-  const documentMeta = extractAaronnoteMetadata(documentContent);
+  const documentMeta = typeof latexProvider?.metadata === "function"
+    ? await latexProvider.metadata(documentContent)
+    : extractAaronnoteMetadata(documentContent);
   const metaTitle = String(documentMeta.title || converted.meta.title || "").trim();
   const title = latexExportTitle(sourceFile, body.title || "", metaTitle);
   const defaults = await latexExportDefaults({ file: sourceFile, title });
@@ -6634,13 +6657,22 @@ export async function exportLatex(body = {}) {
     rawTemplateVars[v.id] = raw;
     extraVars[v.id] = escapeLatexTemplateVariable(raw, v);
   }
-  const assemble = (bodyLatex, titleOverride = "") => applyLatexTemplate(template.text, {
-    ...extraVars,
-    title: escapeLatexTitle(String(titleOverride || docTitle)),
-    date: escapeLatexTitle(documentMeta.date || converted.meta.date || new Date().toISOString().slice(0, 10)),
-    source: escapeLatexTitle(sourceFile ? displayPathForFile(sourceFile) : ""),
-    body: bodyLatex,
-  });
+  const templateKeys = [...Object.keys(extraVars), "title", "date", "source", "body"];
+  const templatePlan = typeof latexProvider?.planTemplate === "function"
+    ? await latexProvider.planTemplate(template.text, templateKeys)
+    : null;
+  const assemble = (bodyLatex, titleOverride = "") => {
+    const vars = {
+      ...extraVars,
+      title: escapeLatexTitle(String(titleOverride || docTitle)),
+      date: escapeLatexTitle(documentMeta.date || converted.meta.date || new Date().toISOString().slice(0, 10)),
+      source: escapeLatexTitle(sourceFile ? displayPathForFile(sourceFile) : ""),
+      body: bodyLatex,
+    };
+    return templatePlan && typeof latexProvider?.renderTemplate === "function"
+      ? latexProvider.renderTemplate(templatePlan, vars)
+      : applyLatexTemplate(template.text, vars);
+  };
 
   // 2. Optional agent polish of the draft, gated on compilation, with fallback.
   const bibliographyLatex = bibliographyReferencesToLatex(bibliography.references || [], citationMaps.byId);
@@ -6759,6 +6791,7 @@ export async function exportLatex(body = {}) {
     title: docTitle,
     template: template.file,
     engine: engineUsed,
+    transformSource: converted.transformSource,
     agent: agentSummary,
     warnings,
     sharedFiles: sharedFileState,
@@ -7874,6 +7907,7 @@ export {
   bibliographyPathWatchRelevant,
   bibliographyVersion,
   clearBibliographyCache,
+  configureBibliographyProvider,
   fileHistory,
   restoreFileFromCommit,
   discardFileChanges,
@@ -7981,7 +8015,7 @@ export async function createNode(body) {
       "",
     ].join("\n");
   }
-  await writeFile(file, content, "utf8");
+  await writeMarkdownFile(file, content);
   markNotesDirty(file);
   const opened = await readNote(file, { includeIndex: true });
   if (selection) opened.selection = selection;
@@ -8158,6 +8192,160 @@ async function fsPayload(extra = {}) {
   return { ok: true, ...extra, ...index };
 }
 
+async function moveManagedPathStorage(file, target, info) {
+  const directory = info.isDirectory();
+  const sourceOwned = info.isFile()
+    ? markdownFileProviderOwns(file)
+    : directory && markdownFileProvider?.ownsPath?.(file) === true;
+  if (!sourceOwned) {
+    await rename(file, target);
+    return null;
+  }
+  const targetOwned = directory
+    ? markdownFileProvider?.ownsPath?.(target) === true
+    : markdownFileProviderOwns(target);
+  if (!targetOwned) {
+    const err = new Error("Kernel-managed Markdown paths must remain inside the note root");
+    err.statusCode = 400;
+    throw err;
+  }
+  if (typeof markdownFileProvider?.move !== "function") {
+    const err = new Error("Markdown persistence provider does not support path moves");
+    err.statusCode = 501;
+    throw err;
+  }
+  const moved = await markdownFileProvider.move({ file, target, directory });
+  if (moved?.ok === false) {
+    const err = new Error(String(moved?.message || "Markdown persistence provider rejected the move"));
+    err.statusCode = Number(moved?.statusCode) || 500;
+    throw err;
+  }
+  return moved || null;
+}
+
+async function copyManagedPathStorage(file, target, info) {
+  const sourceOwned = info.isFile() && markdownFileProviderOwns(file);
+  if (!sourceOwned) {
+    await copyFile(file, target);
+    return;
+  }
+  if (!markdownFileProviderOwns(target)) {
+    const err = new Error("Kernel-managed Markdown files must remain Markdown files inside the note root");
+    err.statusCode = 400;
+    throw err;
+  }
+  const content = await readMarkdownFile(file);
+  await writeMarkdownFile(target, content);
+}
+
+async function movedMarkdownFilePairs(file, target, info, storageMove) {
+  if (info.isFile()) {
+    return /\.(?:md|markdown)$/i.test(file) && /\.(?:md|markdown)$/i.test(target)
+      ? [{ file, target }]
+      : [];
+  }
+  if (!info.isDirectory()) return [];
+  if (Array.isArray(storageMove?.documents)) {
+    return storageMove.documents.map((document) => ({
+      file: resolve(noteScanRoot, String(document?.fromPath || "").replace(/^\/+/, "")),
+      target: resolve(noteScanRoot, String(document?.toPath || "").replace(/^\/+/, "")),
+    })).filter((pair) => inside(pair.file, file) && inside(pair.target, target));
+  }
+  const scanned = await scanNotes();
+  return scanned.filter((note) => note?.file && inside(note.file, target)).map((note) => ({
+    file: resolve(file, relative(target, note.file)),
+    target: note.file,
+  }));
+}
+
+async function rewriteMovedMarkdownReferences(pairs, movedRootFrom = "", movedRootTo = "") {
+  if (pairs.length === 0) return {};
+  const pathPairs = pairs.map((pair) => ({
+    oldPath: displayPathForScanRoot(pair.file, noteScanRoot) || "",
+    newPath: displayPathForScanRoot(pair.target, noteScanRoot) || "",
+  }));
+  try {
+    const rewritten = movedRootFrom && movedRootTo
+      ? await rewriteMarkdownDirectoryPathReferences({
+        oldPath: displayPathForScanRoot(movedRootFrom, noteScanRoot) || "",
+        newPath: displayPathForScanRoot(movedRootTo, noteScanRoot) || "",
+      })
+      : await rewriteMarkdownPathReferencePairs(pathPairs);
+    return {
+      referenceRewrite: {
+        changedCount: rewritten.changedCount || 0,
+        referenceCount: rewritten.referenceCount || 0,
+      },
+    };
+  } catch (error) {
+    // The file move has already committed and must still be reported as such.
+    // Surface the repair failure explicitly instead of returning an error that
+    // tempts callers to retry the now-invalid old path.
+    return { referenceRewriteError: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function encodedRelativeMarkdownHref(path) {
+  return slashPath(path).split("/").map((part) => {
+    if (part === "." || part === "..") return part;
+    return encodeURIComponent(part).replace(/\(/g, "%28").replace(/\)/g, "%29");
+  }).join("/");
+}
+
+function rewriteMovedDocumentRelativeRefsInContent(content, file, target, movedRootFrom = "", movedRootTo = "") {
+  if (dirname(file) === dirname(target)) return { content, count: 0 };
+  const destinations = markdownLinkDestinations(content).map((dest) => {
+    const raw = String(dest.href || "");
+    if (!raw || raw.startsWith("/") || raw.startsWith("#") || raw.startsWith("?")) return null;
+    if (hrefProtocol(raw)) return null;
+    const pathEnd = hrefPathSuffixIndex(raw);
+    const rawPath = raw.slice(0, pathEnd);
+    const decodedPath = decodeRef(rawPath);
+    if (!decodedPath || isAbsolute(decodedPath)) return null;
+    let referenced = resolve(dirname(file), decodedPath);
+    if (movedRootFrom && movedRootTo && inside(referenced, movedRootFrom)) {
+      referenced = resolve(movedRootTo, relative(movedRootFrom, referenced));
+    }
+    let nextPath = slashPath(relative(dirname(target), referenced));
+    if (!nextPath) nextPath = basename(referenced);
+    nextPath = encodedRelativeMarkdownHref(nextPath);
+    if (rawPath.startsWith("./") && !nextPath.startsWith(".")) nextPath = `./${nextPath}`;
+    const href = `${nextPath}${raw.slice(pathEnd)}`;
+    return href === raw ? null : { dest, href };
+  }).filter(Boolean);
+  if (destinations.length === 0) return { content, count: 0 };
+  let next = content;
+  for (const { dest, href } of destinations.reverse()) {
+    next = `${next.slice(0, dest.hrefFrom)}${href}${next.slice(dest.hrefTo)}`;
+  }
+  return { content: next, count: destinations.length };
+}
+
+async function rewriteMovedDocumentRelativeReferences(pairs, movedRootFrom = "", movedRootTo = "") {
+  if (pairs.length === 0) return {};
+  let referenceCount = 0;
+  const errors = [];
+  for (const pair of pairs) {
+    try {
+      const content = await readMarkdownFile(pair.target);
+      const rewritten = rewriteMovedDocumentRelativeRefsInContent(
+        content, pair.file, pair.target, movedRootFrom, movedRootTo,
+      );
+      referenceCount += rewritten.count;
+      if (rewritten.count > 0) {
+        await writeMarkdownFile(pair.target, rewritten.content);
+        markNotesDirty(pair.target);
+      }
+    } catch (error) {
+      errors.push(`${displayPathForScanRoot(pair.target, noteScanRoot)}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return {
+    relativeReferenceRewrite: { referenceCount },
+    ...(errors.length > 0 ? { relativeReferenceRewriteError: errors.join("; ") } : {}),
+  };
+}
+
 export async function renameManagedPath(body) {
   const { file, info } = await managedPathInfo(body.path || body.file);
   if (file === noteScanRoot) {
@@ -8167,16 +8355,25 @@ export async function renameManagedPath(body) {
   }
   const target = targetPathForRename(file, body.name || body.targetName);
   assertTargetWritable(file, target);
-  await rename(file, target);
+  const storageMove = await moveManagedPathStorage(file, target, info);
   noteSelfWrite(file); noteSelfWrite(target);
   await renameManagedLeanMirror(file, target, info);
   markNotesDirty();
+  const movedPairs = await movedMarkdownFilePairs(file, target, info, storageMove);
+  const relativeReferenceRewrite = await rewriteMovedDocumentRelativeReferences(
+    movedPairs, info.isDirectory() ? file : "", info.isDirectory() ? target : "",
+  );
+  const referenceRewrite = await rewriteMovedMarkdownReferences(
+    movedPairs, info.isDirectory() ? file : "", info.isDirectory() ? target : "",
+  );
   return fsPayload({
     type: "fs-renamed",
     file: target,
     oldFile: file,
     path: displayPathForScanRoot(target, noteScanRoot) || "Root",
     oldPath: displayPathForScanRoot(file, noteScanRoot) || "Root",
+    ...relativeReferenceRewrite,
+    ...referenceRewrite,
   });
 }
 
@@ -8195,16 +8392,25 @@ export async function moveManagedPath(body) {
   }
   assertTargetWritable(file, target);
   await assertMoveTargetParent(target);
-  await rename(file, target);
+  const storageMove = await moveManagedPathStorage(file, target, info);
   noteSelfWrite(file); noteSelfWrite(target);
   await renameManagedLeanMirror(file, target, info);
   markNotesDirty();
+  const movedPairs = await movedMarkdownFilePairs(file, target, info, storageMove);
+  const relativeReferenceRewrite = await rewriteMovedDocumentRelativeReferences(
+    movedPairs, info.isDirectory() ? file : "", info.isDirectory() ? target : "",
+  );
+  const referenceRewrite = await rewriteMovedMarkdownReferences(
+    movedPairs, info.isDirectory() ? file : "", info.isDirectory() ? target : "",
+  );
   return fsPayload({
     type: "fs-moved",
     file: target,
     oldFile: file,
     path: displayPathForScanRoot(target, noteScanRoot) || "Root",
     oldPath: displayPathForScanRoot(file, noteScanRoot) || "Root",
+    ...relativeReferenceRewrite,
+    ...referenceRewrite,
   });
 }
 
@@ -8232,7 +8438,7 @@ export async function duplicateManagedFile(body) {
   const target = duplicatePathFor(file, body.target || body.to || "");
   assertTargetWritable(file, target);
   await mkdir(dirname(target), { recursive: true });
-  await copyFile(file, target);
+  await copyManagedPathStorage(file, target, info);
   await copyManagedLeanMirror(file, target, info);
   markNotesDirty(target);
   return fsPayload({
@@ -8292,7 +8498,18 @@ export async function trashManagedPath(body) {
 
 export async function updateCurrentNoteMeta(body, action) {
   const file = safeFile(body.file);
-  const content = typeof body.content === "string" ? body.content : await readFile(file, "utf8");
+  if (markdownFileProviderOwns(file) && typeof markdownFileProvider?.mutateMeta === "function") {
+    const mutation = await markdownFileProvider.mutateMeta({ ...(body || {}), file }, action);
+    noteSelfWrite(file);
+    const opened = await readNote(file, { includeIndex: true });
+    return {
+      ...opened,
+      changed: mutation?.changed === true,
+      mutationSource: "kernel-meta",
+      version: String(mutation?.version || opened?.version || ""),
+    };
+  }
+  const content = typeof body.content === "string" ? body.content : await readMarkdownFile(file);
   let next = content;
   if (action === "remove") {
     next = removeMetaBlock(content);
@@ -8314,7 +8531,7 @@ export async function updateCurrentNoteMeta(body, action) {
     next = upsertMetaBlock(file, content, patch);
   }
   if (next !== content) {
-    await atomicWriteFile(file, next, "utf8");
+    await writeMarkdownFile(file, next);
     markNotesDirty(file);
   }
   const opened = await readNote(file, { includeIndex: true });
@@ -8328,7 +8545,7 @@ async function rewriteRoamMetaTags(updateTags) {
   for (const note of scanned.filter((item) => item.roam && item.file)) {
     let content = "";
     try {
-      content = await readFile(note.file, "utf8");
+      content = await readMarkdownFile(note.file);
     } catch {
       continue;
     }
@@ -8337,7 +8554,7 @@ async function rewriteRoamMetaTags(updateTags) {
     if (sameStringList(before, after)) continue;
     const next = upsertMetaBlock(note.file, content, { tags: after });
     if (next === content) continue;
-    await atomicWriteFile(note.file, next, "utf8");
+    await writeMarkdownFile(note.file, next);
     markNotesDirty(note.file);
     changedFiles.push(note.file);
     changed.push({ file: note.file, path: note.path || "", title: note.title || "", tags: after });
@@ -8510,6 +8727,64 @@ function rewriteMarkdownPathRefsInContent(content, note, oldPath, newPath) {
   return { content: next, count: destinations.length };
 }
 
+function rewriteMarkdownDirectoryRefsInContent(content, note, oldPath, newPath) {
+  const oldRoot = normalizeNoteRefPath(notePathWithoutRoamPrefix(oldPath)).replace(/^\/+|\/+$/g, "");
+  const newRoot = normalizeNoteRefPath(notePathWithoutRoamPrefix(newPath)).replace(/^\/+|\/+$/g, "");
+  if (!oldRoot || !newRoot) return { content, count: 0 };
+  const sourceDir = directoryParentPath(note.path || "");
+  const destinations = markdownLinkDestinations(content).map((dest) => {
+    const raw = String(dest.href || "");
+    if (!raw || raw.startsWith("#") || raw.startsWith("?") || hrefProtocol(raw)) return null;
+    const pathEnd = hrefPathSuffixIndex(raw);
+    const rawPath = raw.slice(0, pathEnd);
+    const decodedPath = decodeRef(rawPath);
+    if (!decodedPath) return null;
+    const absolute = decodedPath.startsWith("/");
+    const resolved = absolute
+      ? normalizeNoteRefPath(decodedPath).replace(/^\/+/, "")
+      : normalizeNoteRefPath(sourceDir === "Root" ? decodedPath : `${sourceDir}/${decodedPath}`);
+    if (resolved !== oldRoot && !resolved.startsWith(`${oldRoot}/`)) return null;
+    const nextRootPath = `${newRoot}${resolved.slice(oldRoot.length)}`;
+    let nextPath = absolute ? `/${nextRootPath}` : relativeNotePath(sourceDir, nextRootPath);
+    nextPath = encodedRelativeMarkdownHref(nextPath);
+    if (!absolute && rawPath.startsWith("./") && !nextPath.startsWith(".")) nextPath = `./${nextPath}`;
+    const href = `${nextPath}${raw.slice(pathEnd)}`;
+    return href === raw ? null : { dest, href };
+  }).filter(Boolean);
+  if (destinations.length === 0) return { content, count: 0 };
+  let next = content;
+  for (const { dest, href } of destinations.reverse()) {
+    next = `${next.slice(0, dest.hrefFrom)}${href}${next.slice(dest.hrefTo)}`;
+  }
+  return { content: next, count: destinations.length };
+}
+
+async function rewriteMarkdownDirectoryPathReferences({ oldPath, newPath }) {
+  const scanned = await scanNotes();
+  const changed = [];
+  for (const note of scanned.filter((item) => item.file)) {
+    let content = "";
+    try {
+      content = await readMarkdownFile(note.file);
+    } catch {
+      continue;
+    }
+    const result = rewriteMarkdownDirectoryRefsInContent(content, note, oldPath, newPath);
+    if (result.count === 0 || result.content === content) continue;
+    await writeMarkdownFile(note.file, result.content);
+    markNotesDirty(note.file);
+    changed.push({ file: note.file, path: note.path || "", title: note.title || "", count: result.count });
+  }
+  const index = await notesIndexPayload();
+  return {
+    ok: true,
+    changed,
+    changedCount: changed.length,
+    referenceCount: changed.reduce((sum, item) => sum + item.count, 0),
+    ...index,
+  };
+}
+
 export async function rewriteMarkdownPathReferences(body) {
   const oldPath = String(body.oldPath || body.from || "").trim();
   const newPath = String(body.newPath || body.to || "").trim();
@@ -8518,25 +8793,40 @@ export async function rewriteMarkdownPathReferences(body) {
     err.statusCode = 400;
     throw err;
   }
-  const dryRun = body.dryRun === true;
+  return rewriteMarkdownPathReferencePairs([{ oldPath, newPath }], { dryRun: body.dryRun === true });
+}
+
+async function rewriteMarkdownPathReferencePairs(pairs, { dryRun = false } = {}) {
+  const pathPairs = pairs.map((pair) => ({
+    oldPath: String(pair?.oldPath || "").trim(),
+    newPath: String(pair?.newPath || "").trim(),
+  })).filter((pair) => pair.oldPath && pair.newPath && pair.oldPath !== pair.newPath);
+  if (pathPairs.length === 0) {
+    const index = await notesIndexPayload();
+    return { ok: true, dryRun, changed: [], changedCount: 0, referenceCount: 0, ...index };
+  }
   const scanned = await scanNotes();
-  const changedFiles = [];
   const changed = [];
   for (const note of scanned.filter((item) => item.file)) {
     let content = "";
     try {
-      content = await readFile(note.file, "utf8");
+      content = await readMarkdownFile(note.file);
     } catch {
       continue;
     }
-    const result = rewriteMarkdownPathRefsInContent(content, note, oldPath, newPath);
-    if (result.count === 0 || result.content === content) continue;
-    if (!dryRun) {
-      await atomicWriteFile(note.file, result.content, "utf8");
-      markNotesDirty(note.file);
-      changedFiles.push(note.file);
+    let next = content;
+    let count = 0;
+    for (const pair of pathPairs) {
+      const result = rewriteMarkdownPathRefsInContent(next, note, pair.oldPath, pair.newPath);
+      next = result.content;
+      count += result.count;
     }
-    changed.push({ file: note.file, path: note.path || "", title: note.title || "", count: result.count });
+    if (count === 0 || next === content) continue;
+    if (!dryRun) {
+      await writeMarkdownFile(note.file, next);
+      markNotesDirty(note.file);
+    }
+    changed.push({ file: note.file, path: note.path || "", title: note.title || "", count });
   }
   const index = dryRun ? await notesIndexPayload(scanned) : await notesIndexPayload();
   return { ok: true, dryRun, changed, changedCount: changed.length, referenceCount: changed.reduce((sum, item) => sum + item.count, 0), ...index };
@@ -8683,8 +8973,20 @@ export function configureKatexMacrosProvider(provider = null) {
     : null;
 }
 
+export function configureLatexProvider(provider = null) {
+  latexProvider = provider && typeof provider === "object"
+    ? provider
+    : null;
+}
+
 export function configureAssetProvider(provider = null) {
   assetProvider = provider && typeof provider === "object"
+    ? provider
+    : null;
+}
+
+export function configureSessionProvider(provider = null) {
+  sessionProvider = provider && typeof provider === "object"
     ? provider
     : null;
 }
@@ -8776,9 +9078,11 @@ export async function saveNote(body) {
   const baseVersion = String(body.baseVersion || "");
   const wrote = await enqueueSaveWrite(file, async () => {
     if (!acceptSaveRequest(file, body)) return false;
+    let kernelExpectedVersion = "";
     if (!force && (baseVersion || (Number.isFinite(baseMtimeMs) && baseMtimeMs > 0))) {
       try {
         const [current, currentContent] = await Promise.all([stat(file), readMarkdownFile(file)]);
+        kernelExpectedVersion = contentDigest(currentContent);
         const versionChanged = Boolean(baseVersion) && contentDigest(currentContent) !== baseVersion;
         const mtimeChanged = !baseVersion && current.mtimeMs !== baseMtimeMs;
         if (versionChanged || mtimeChanged) {
@@ -8800,11 +9104,19 @@ export async function saveNote(body) {
         if (markdownFileProviderOwns(file)) throw err;
       }
     }
-    await writeMarkdownFile(file, content);
-    const info = await stat(file);
+    const persisted = await writeMarkdownFile(file, content, { expectedVersion: kernelExpectedVersion, force });
+    if (persisted?.conflict === true) return persisted;
+    const info = Number(persisted?.mtimeMs) > 0
+      ? { mtimeMs: Number(persisted.mtimeMs), size: Number(persisted.size) || Buffer.byteLength(content, "utf8") }
+      : await stat(file);
     rememberSuccessfulClientSave(file, body, content, info);
     markNotesDirty(file);
-    return { wrote: true, mtimeMs: info.mtimeMs, size: info.size, version: contentDigest(content) };
+    return {
+      wrote: true,
+      mtimeMs: info.mtimeMs,
+      size: info.size,
+      version: String(persisted?.version || contentDigest(content)),
+    };
   });
   if (wrote && typeof wrote === "object" && wrote.conflict) {
     return { type: "saved", ok: false, file, conflict: true, message: "File changed on disk. Review before overwriting.", mtimeMs: wrote.mtimeMs, size: wrote.size, version: wrote.version };

@@ -49,6 +49,84 @@ func TestBoxKindDefaultsToSyWhenUnset(t *testing.T) {
 	}
 }
 
+func TestBoxDocumentPathFollowsBoxKind(t *testing.T) {
+	const markdownBox = "20260826120500-pathkind"
+	withMarkdownBox(t, markdownBox)
+
+	for _, test := range []struct {
+		boxID string
+		path  string
+		want  bool
+	}{
+		{markdownBox, "/note.md", true},
+		{markdownBox, "/note.MARKDOWN", true},
+		{markdownBox, "/foreign.sy", false},
+		{"native-box", "/20260826120501-native1.sy", true},
+		{"native-box", "/note.md", false},
+	} {
+		if got := IsBoxDocumentPath(test.boxID, test.path); got != test.want {
+			t.Fatalf("IsBoxDocumentPath(%q, %q) = %v, want %v", test.boxID, test.path, got, test.want)
+		}
+		if err := ValidateBoxDocumentPath(test.boxID, test.path); (nil == err) != test.want {
+			t.Fatalf("ValidateBoxDocumentPath(%q, %q) = %v, want accepted=%v", test.boxID, test.path, err, test.want)
+		}
+	}
+}
+
+func TestLoadTreeRejectsForeignDocumentExtensionsBeforeRead(t *testing.T) {
+	originalDataDir := util.DataDir
+	util.DataDir = t.TempDir()
+	t.Cleanup(func() { util.DataDir = originalDataDir })
+
+	const markdownBox = "20260826120502-loadkind"
+	withMarkdownBox(t, markdownBox)
+	if _, err := LoadTree(markdownBox, "/foreign.sy", util.NewLute()); !errors.Is(err, ErrBoxDocumentPathKind) {
+		t.Fatalf("Markdown box accepted .sy tree source: %v", err)
+	}
+}
+
+func TestValidateBoxRelativePathRejectsSymlinkEscapeAndDanglingLink(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "box")
+	outside := filepath.Join(t.TempDir(), "outside")
+	if err := os.MkdirAll(filepath.Join(root, "real"), 0755); nil != err {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(outside, 0755); nil != err {
+		t.Fatal(err)
+	}
+	const boxID = "20260826013000-pathbox"
+	originalProvider := BoxRootProvider
+	BoxRootProvider = func(id string) string {
+		if id == boxID {
+			return root
+		}
+		return ""
+	}
+	t.Cleanup(func() { BoxRootProvider = originalProvider })
+
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); nil != err {
+		t.Skipf("symbolic links unavailable: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "missing.md"), filepath.Join(root, "dangling.md")); nil != err {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "real"), filepath.Join(root, "alias")); nil != err {
+		t.Fatal(err)
+	}
+
+	if got, err := ValidateBoxRelativePath(boxID, "/nested/new.md"); nil != err || got != "nested/new.md" {
+		t.Fatalf("safe missing path rejected: got=%q err=%v", got, err)
+	}
+	if got, err := ValidateBoxRelativePath(boxID, "/alias/inside.md"); nil != err || got != "alias/inside.md" {
+		t.Fatalf("box-internal symlink rejected: got=%q err=%v", got, err)
+	}
+	for _, unsafe := range []string{"/escape/note.md", "/dangling.md"} {
+		if _, err := ValidateBoxRelativePath(boxID, unsafe); nil == err {
+			t.Fatalf("unsafe symbolic-link path accepted: %s", unsafe)
+		}
+	}
+}
+
 func TestLoadTreeProjectsNoemaIdentityWithoutWritingMarkdownBox(t *testing.T) {
 	originalDataDir := util.DataDir
 	util.DataDir = t.TempDir()
@@ -79,7 +157,7 @@ func TestLoadTreeProjectsNoemaIdentityWithoutWritingMarkdownBox(t *testing.T) {
 	if got := MarkdownCanonicalDocumentID(tree); canonicalID != got {
 		t.Fatalf("canonical Noema ID mismatch: got %s want %s", got, canonicalID)
 	}
-	if tree.HPath != "/notes/hello" {
+	if tree.HPath != "/notes/hello.md" {
 		t.Fatalf("unexpected markdown HPath [%s]", tree.HPath)
 	}
 	if _, err := WriteTree(tree); !errors.Is(err, ErrMarkdownTreeWriteUnsupported) {

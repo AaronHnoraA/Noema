@@ -25,6 +25,22 @@
       "colorScheme": "light",
       "backgroundColor": "#f5f9f8",
       "description": "Cool clinical paper with ink-blue and teal accents"
+    },
+    {
+      "id": "daylight",
+      "name": "Daylight",
+      "file": "daylight.css",
+      "colorScheme": "light",
+      "backgroundColor": "#f4f0e8",
+      "description": "SiYuan-derived daylight palette with Noema typography"
+    },
+    {
+      "id": "midnight",
+      "name": "Midnight",
+      "file": "midnight.css",
+      "colorScheme": "dark",
+      "backgroundColor": "#141a27",
+      "description": "SiYuan-derived midnight palette with Noema typography"
     }
   ]
 }

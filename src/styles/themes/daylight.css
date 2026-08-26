@@ -1,0 +1,7 @@
+/*
+ * Daylight keeps Noema's warm Claude typography/editor tokens while exposing
+ * the complete SiYuan-derived b3 component palette from app/appearance.
+ * Both imports are source-owned and bundled; no runtime theme directory is
+ * consulted by the standalone app.
+ */
+@import "./claude.css";

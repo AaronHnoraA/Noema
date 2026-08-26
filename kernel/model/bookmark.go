@@ -25,20 +25,28 @@ import (
 
 	"github.com/88250/gulu"
 	"github.com/88250/lute/parse"
-	"github.com/gin-gonic/gin"
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/av"
 	"github.com/aaronhe/noema/kernel/cache"
 	"github.com/aaronhe/noema/kernel/sql"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/gin-gonic/gin"
+	"github.com/siyuan-note/logging"
 )
 
 func RemoveBookmark(bookmark string) (err error) {
+	bookmarks := sql.QueryBookmarkBlocks()
+	for _, bm := range bookmarks {
+		if nil != bm {
+			if err = requireNativeDocumentTree(bm.Box); nil != err {
+				return
+			}
+		}
+	}
+
 	util.PushEndlessProgress(Conf.Language(116))
 	defer util.PushClearProgress()
 
-	bookmarks := sql.QueryBookmarkBlocks()
 	treeBlocks := map[string][]string{}
 	for _, bm := range bookmarks {
 		if blocks, ok := treeBlocks[bm.RootID]; !ok {
@@ -107,10 +115,19 @@ func RenameBookmark(oldBookmark, newBookmark string) (err error) {
 		return
 	}
 
+	bookmarks := sql.QueryBookmarkBlocks()
+	for _, bm := range bookmarks {
+		if nil != bm {
+			if err = requireNativeDocumentTree(bm.Box); nil != err {
+				return
+			}
+		}
+
+	}
+
 	util.PushEndlessProgress(Conf.Language(110))
 	defer util.ClearPushProgress(100)
 
-	bookmarks := sql.QueryBookmarkBlocks()
 	treeBlocks := map[string][]string{}
 	for _, bm := range bookmarks {
 		if blocks, ok := treeBlocks[bm.RootID]; !ok {

@@ -666,7 +666,17 @@ function runPandoc(bin, args, input, options = {}) {
 }
 
 export async function aaronnoteMarkdownToLatexPandoc(markdown, options = {}) {
-  const prepared = preprocessAaronnoteForPandoc(markdown, options);
+  const transformProvider = options.transformProvider || null;
+  if (transformProvider
+      && (typeof transformProvider.prepare !== "function" || typeof transformProvider.postprocess !== "function")) {
+    throw new Error("Kernel LaTeX transform provider is incomplete");
+  }
+  const prepared = transformProvider
+    ? await transformProvider.prepare(markdown, {
+      rules: options.rules,
+      citationKeyMap: options.citationKeyMap,
+    })
+    : preprocessAaronnoteForPandoc(markdown, options);
   const pandocBin = String(options.pandocBin || "pandoc").trim();
   const maintainedExtensions = Array.isArray(options.rules?.pandocExtensions)
     ? options.rules.pandocExtensions.map((value) => String(value).trim()).filter((value) => /^[A-Za-z0-9_]+$/.test(value))
@@ -688,5 +698,15 @@ export async function aaronnoteMarkdownToLatexPandoc(markdown, options = {}) {
     const detail = String(error?.stderr || error?.message || error).trim();
     throw new Error(`Pandoc Markdown→LaTeX conversion failed: ${detail}`);
   }
-  return { meta: prepared.meta, body: academicLatexPostprocess(stdout), features: prepared.features, warnings: prepared.warnings, preprocessedMarkdown: prepared.markdown };
+  const body = transformProvider
+    ? await transformProvider.postprocess(stdout)
+    : academicLatexPostprocess(stdout);
+  return {
+    meta: prepared.meta,
+    body,
+    features: prepared.features,
+    warnings: prepared.warnings,
+    preprocessedMarkdown: prepared.markdown,
+    transformSource: transformProvider ? "kernel-latex" : "node-latex",
+  };
 }

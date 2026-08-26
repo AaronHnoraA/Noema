@@ -25,8 +25,10 @@ export function defaultKernelSearchDirs(options: {
 export function findKernelSpecs(options: {
   searchDirs: string[];
   allowedNames?: string[];
-  /** Direct kernelspec directories scanned after normal Jupyter data roots. */
+  /** Direct kernelspec directories, normally scanned after Jupyter data roots. */
   fallbackKernelDirs?: string[];
+  /** Scan fallback directories first so their stable names beat user/state duplicates. */
+  preferFallbackKernelDirs?: boolean;
   /** Values for @NAME@ placeholders in fallback kernelspec templates. */
   templateVariables?: Record<string, string>;
 }): Promise<KernelSpecEntry[]>;

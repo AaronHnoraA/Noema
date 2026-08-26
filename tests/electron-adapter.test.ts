@@ -32,6 +32,7 @@ describe("SiYuan-derived Electron desktop adapter", () => {
   test("keeps Electron as a system adapter over the shared Node and Go backend", () => {
     const main = read("desktop/main.mjs");
     const preload = read("desktop/preload.cjs");
+    const protocol = read("desktop/protocol-url.mjs");
     const webHost = read("web-host.mjs");
 
     expect(main).toContain("derived from SiYuan");
@@ -43,15 +44,30 @@ describe("SiYuan-derived Electron desktop adapter", () => {
     expect(main).toContain('app.setPath("sessionData"');
     expect(main).toContain('"Caches", "com.noema.desktop"');
     expect(main).toContain("noema-desktop-smoke-(\\d+)");
+    expect(main).toContain("scheduleDesktopSmokeCleanup");
+    expect(main).toContain('ELECTRON_RUN_AS_NODE: "1"');
     expect(main).toContain("contextIsolation: true");
     expect(main).toContain("nodeIntegration: false");
     expect(main).toContain("sandbox: true");
+    expect(main).toContain('ipcMain.handle("noema:export-pdf"');
+    expect(main).toContain('commandItem("Export PDF…", "export-pdf")');
+    expect(main).toContain("printHtmlToPdf");
+    expect(main).toContain('app.on("open-url"');
+    expect(main).toContain("app.setAsDefaultProtocolClient(NOEMA_PROTOCOL_SCHEME)");
+    expect(main).not.toMatch(/const protocolRegistered = app\.isPackaged/);
+    expect(main).toContain("parseNoemaProtocolUrl");
+    expect(main).toContain('sendEditorCommand("open-location"');
+    expect(protocol).toContain('export const NOEMA_PROTOCOL_SCHEME = "noema"');
+    expect(protocol).toContain("protocolPathWithin");
     expect(main).not.toMatch(/spawn\([^\n]*noema-kernel/);
     expect(webHost).toContain("createKernelSupervisor");
+    expect(webHost).toContain("createKernelVaultGitProvider");
+    expect(webHost).toContain("configureWikiGitProvider");
     expect(webHost).not.toContain("connectDesktopKernel");
     expect(preload).toContain('contextBridge.exposeInMainWorld("noemaDesktop"');
     expect(preload).toContain('"noema:desktop-smoke-report"');
     expect(preload).toContain('"noema:broadcast-app-config"');
+    expect(preload).toContain('ipcRenderer.invoke("noema:export-pdf", options)');
   });
 
   test("retains current titlebar, TOC popover, Knowledge double-click and packaged smoke contracts", () => {
@@ -63,11 +79,22 @@ describe("SiYuan-derived Electron desktop adapter", () => {
     expect(editor).toContain("floatingTocPanel.toggle()");
     expect(editor).toContain('addEventListener("dblclick", openKnowledgeDockFromPage)');
     expect(editor).toContain('desktopKnowledgeDock.show("backlinks")');
+    expect(editor).toContain("renderPublishedNoteHTML(currentMarkdownText()");
+    expect(editor).toContain('case "export-pdf"');
+    expect(editor).toContain("window.noemaDesktop.exportPdf(printable)");
+    expect(editor).toContain("window.__noemaDesktopPrintDocument = currentPrintablePdfDocument");
+    expect(bridge).toContain("nativeReport.printDocument = window.__noemaDesktopPrintDocument?.()");
+    expect(bridge).toContain("protocolProbeExpected");
+    expect(bridge).toContain("openedFile: openedNoteFile");
+    expect(editor).toContain('case "open-location"');
     expect(editor).not.toContain('desktopKnowledgeDock.toggle("outline")');
     expect(bridge).toContain("tocPopover");
     expect(bridge).toContain("openedByDoubleClick");
     expect(bridge).toContain("agendaDock");
     expect(bridge).toContain("katexMacros");
+    expect(bridge).toContain("b3ThemePrimary");
+    expect(bridge).toContain('getPropertyValue("--b3-theme-background")');
+    expect(bridge).toContain("visualTypography: auditVisualTypography(document)");
     expect(bridge).toContain("reportSmoke");
     expect(bridge).not.toContain("__TAURI_INTERNALS__");
     expect(wiki).toContain("window.noemaDesktop.openTarget");
@@ -85,6 +112,8 @@ describe("SiYuan-derived Electron desktop adapter", () => {
     expect(build).toContain('link(kernel, join(resources, "bin", "noema-kernel")');
     expect(build).toContain('link(resolve("desktop", "Noema.icns"), join(resources, "electron.icns")');
     expect(build).toContain('execFileSync("/bin/cp", ["-c"');
+    expect(build).toContain('Add :CFBundleURLTypes array');
+    expect(build).toContain('Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string noema');
     expect(build).not.toContain("cargo");
     expect(build).not.toContain("rustc");
     expect(prepare).toContain('"go",');

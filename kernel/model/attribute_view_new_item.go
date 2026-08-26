@@ -93,6 +93,9 @@ func CreateAttributeViewItemWithMarkdown(avID, blockID, viewID, templateID, prev
 
 func createAttributeViewItem(avID, blockID, viewID, templateID, previousID, groupID string,
 	document *CreateAttributeViewItemMarkdown) (*CreateAttributeViewItemResult, error) {
+	if err := requireNativeAttributeViewMutation(avID, blockID); nil != err {
+		return nil, err
+	}
 	attrView, err := av.ParseAttributeView(avID)
 	if nil != err {
 		return nil, err
@@ -197,6 +200,9 @@ func createAttributeViewItem(avID, blockID, viewID, templateID, previousID, grou
 
 // CreateAttributeViewItemDocs 将指定条目中的游离条目批量创建为文档并绑定。
 func CreateAttributeViewItemDocs(avID, blockID, saveMode string, itemIDs []string) (*CreateAttributeViewItemDocsResult, error) {
+	if err := requireNativeAttributeViewMutation(avID, blockID); nil != err {
+		return nil, err
+	}
 	unlock := lockAttributeViewItemDocs(avID)
 	defer unlock()
 
@@ -536,6 +542,9 @@ func resolveNewItemSaveConfig(currentBoxID string, location *av.NewItemSaveLocat
 }
 
 func validateNewItemSaveBox(currentBoxID, targetBoxID string) error {
+	if err := requireNativeDocumentTree(currentBoxID, targetBoxID); nil != err {
+		return err
+	}
 	if IsEncryptedBox(currentBoxID) && currentBoxID != targetBoxID {
 		return errors.New("new attribute view item document in an encrypted notebook must be saved in the current notebook")
 	}

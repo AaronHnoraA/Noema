@@ -1,4 +1,7 @@
-:root {
+:root:not([data-noema-theme]),
+:root[data-noema-theme="daylight"],
+:root[data-noema-theme="claude"],
+:root[data-noema-theme="mediki"] {
     /* 主色 — Noema Claude 浅色暖纸配色（--aaron-accent 赭石 / --aaron-accent-sand 沙金） */
     --b3-theme-primary: #c15f3c;
     --b3-theme-primary-light: rgba(193, 95, 60, .54);
@@ -226,18 +229,34 @@
 }
 
 /* 微软字体斜体会被相邻背景遮挡，将 arial 放置其前 https://github.com/siyuan-note/siyuan/issues/11841 */
-:root:lang(zh-CN) {
+:root:not([data-noema-theme]):lang(zh-CN),
+:root[data-noema-theme="daylight"]:lang(zh-CN),
+:root[data-noema-theme="claude"]:lang(zh-CN),
+:root[data-noema-theme="mediki"]:lang(zh-CN) {
     --b3-font-family: "Emojis Additional", "Emojis Reset", BlinkMacSystemFont, Helvetica, "PingFang SC", "Luxi Sans", "DejaVu Sans", arial, "Microsoft Yahei", "Hiragino Sans GB", "Source Han Sans SC", sans-serif, emojis;
 }
 
-:root:lang(zh-TW) {
+:root:not([data-noema-theme]):lang(zh-TW),
+:root[data-noema-theme="daylight"]:lang(zh-TW),
+:root[data-noema-theme="claude"]:lang(zh-TW),
+:root[data-noema-theme="mediki"]:lang(zh-TW) {
     --b3-font-family: "Emojis Additional", "Emojis Reset", BlinkMacSystemFont, Helvetica, "PingFang TC", "Luxi Sans", "DejaVu Sans", arial, "Microsoft JhengHei", "Hiragino Sans TC", "Source Han Sans TC", sans-serif, emojis;
 }
 
-:root:lang(ja) {
+:root:not([data-noema-theme]):lang(ja),
+:root[data-noema-theme="daylight"]:lang(ja),
+:root[data-noema-theme="claude"]:lang(ja),
+:root[data-noema-theme="mediki"]:lang(ja) {
     --b3-font-family: "Emojis Additional", "Emojis Reset", BlinkMacSystemFont, Helvetica, "Luxi Sans", "DejaVu Sans", "Yu Gothic UI", arial, sans-serif, emojis;
 }
 
-.b3-typography .code-block, .protyle-wysiwyg .code-block {
+:root:not([data-noema-theme]) .b3-typography .code-block,
+:root:not([data-noema-theme]) .protyle-wysiwyg .code-block,
+:root[data-noema-theme="daylight"] .b3-typography .code-block,
+:root[data-noema-theme="daylight"] .protyle-wysiwyg .code-block,
+:root[data-noema-theme="claude"] .b3-typography .code-block,
+:root[data-noema-theme="claude"] .protyle-wysiwyg .code-block,
+:root[data-noema-theme="mediki"] .b3-typography .code-block,
+:root[data-noema-theme="mediki"] .protyle-wysiwyg .code-block {
     background-color: rgba(47, 44, 40, .06);
 }

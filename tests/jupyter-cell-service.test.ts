@@ -1,5 +1,5 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createJupyterCellService, durationFromEnv, jupyterWidgetCommOpenP } from "../server/lib/jupyter-cell.mjs";
@@ -134,6 +134,59 @@ describe("jupyter cell service (no kernel)", () => {
       expect((await stat(join(stateRoot, "jupyter", "runtime"))).isDirectory()).toBe(true);
     } finally {
       await service.shutdown().catch(() => {});
+    }
+  });
+
+  test("desktop state ignores historical source kernelspecs and resolves the bundled launcher", async () => {
+    const root = await mkdtemp(join(tmpdir(), "noema-jcell-app-root-"));
+    const stateRoot = await mkdtemp(join(tmpdir(), "noema-jcell-app-state-"));
+    const stale = join(root, "jupyter", ".jupyter", "data", "kernels", "python3");
+    const bundled = join(root, "jupyter", "kernel-templates", "python3");
+    await mkdir(stale, { recursive: true });
+    await mkdir(bundled, { recursive: true });
+    await writeFile(join(stale, "kernel.json"), JSON.stringify({
+      argv: ["/Users/example/.emacs.d/lisp/roam/Noema/jupyter/bin/python-jupyter-kernel", "-f", "{connection_file}"],
+      display_name: "Historical Emacs Python",
+      language: "python",
+    }));
+    await writeFile(join(bundled, "kernel.json"), JSON.stringify({
+      argv: ["@AARONNOTE_JUPYTER_ROOT@/bin/python-jupyter-kernel", "-f", "{connection_file}"],
+      display_name: "Noema Python",
+      language: "python",
+      env: { JUPYTER_RUNTIME_DIR: "@AARONNOTE_JUPYTER_STATE_ROOT@/runtime" },
+    }));
+    const note = join(root, "note.md");
+    await writeFile(note, "# note\n", "utf8");
+    const service = createJupyterCellService({
+      runtimeRoot: root,
+      stateRoot,
+      noteRoot: root,
+      workspaceRoot: root,
+    });
+    try {
+      const opened = await service.openScript({
+        file: note,
+        cellId: "cell-a",
+        kernel: "python3",
+        session: "default",
+        language: "python",
+        open: false,
+        cells: [{ cellId: "cell-a", id: "cell-a", code: "answer = 42" }],
+      });
+      expect(opened.kernelSpec).toMatchObject({
+        name: "python3",
+        resourceDir: bundled,
+        spec: {
+          display_name: "Noema Python",
+          argv: [join(root, "jupyter", "bin", "python-jupyter-kernel"), "-f", "{connection_file}"],
+          env: { JUPYTER_RUNTIME_DIR: join(stateRoot, "jupyter", "runtime") },
+        },
+      });
+      expect(JSON.stringify(opened.kernelSpec)).not.toContain(".emacs.d");
+    } finally {
+      await service.shutdown().catch(() => {});
+      await rm(root, { recursive: true, force: true });
+      await rm(stateRoot, { recursive: true, force: true });
     }
   });
 

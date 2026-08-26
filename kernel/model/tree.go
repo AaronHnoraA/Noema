@@ -30,6 +30,7 @@ import (
 	"github.com/88250/lute/ast"
 	"github.com/88250/lute/parse"
 	"github.com/aaronhe/noema/kernel/av"
+	"github.com/aaronhe/noema/kernel/conf"
 	"github.com/aaronhe/noema/kernel/filesys"
 	"github.com/aaronhe/noema/kernel/search"
 	"github.com/aaronhe/noema/kernel/sql"
@@ -337,19 +338,11 @@ func indexTreeInFilesystem(blockID string) error {
 
 	logging.LogWarnf("searching tree on filesystem [id=%s]", blockID)
 
-	unindexedTreePath := findUnindexedTreePathInAllBoxes(blockID)
-	if "" == unindexedTreePath {
+	boxID, unindexedTreePath := findUnindexedTreeInAllBoxes(blockID)
+	if "" == boxID || "" == unindexedTreePath {
 		logging.LogInfof("tree not found on filesystem [id=%s]", blockID)
 		return ErrTreeNotFound
 	}
-
-	boxID := strings.TrimPrefix(unindexedTreePath, util.DataDir)
-	boxID = boxID[1:]
-	boxID = boxID[:strings.Index(boxID, string(os.PathSeparator))]
-	unindexedTreePath = strings.TrimPrefix(unindexedTreePath, util.DataDir)
-	unindexedTreePath = strings.TrimPrefix(unindexedTreePath, string(os.PathSeparator))
-	unindexedTreePath = strings.TrimPrefix(unindexedTreePath, boxID)
-	unindexedTreePath = filepath.ToSlash(unindexedTreePath)
 	if nil == Conf.Box(boxID) {
 		for _, b := range Conf.GetClosedBoxes() {
 			if b.ID == boxID {
@@ -380,6 +373,11 @@ func loadParentTree(tree *parse.Tree) (ret *parse.Tree) {
 	if nil == tree {
 		return
 	}
+	if conf.BoxKindMarkdown == GetBoxKind(tree.Box) {
+		// Repository directories are not parent documents. The native
+		// <parentID>.sy hierarchy has no Markdown equivalent.
+		return
+	}
 
 	boxDir := filepath.Join(util.DataDir, tree.Box)
 	parentDir := path.Dir(tree.Path)
@@ -393,14 +391,34 @@ func loadParentTree(tree *parse.Tree) (ret *parse.Tree) {
 	return
 }
 
-func findUnindexedTreePathInAllBoxes(id string) (ret string) {
+func findUnindexedTreePathInAllBoxes(id string) string {
+	boxID, treePath := findUnindexedTreeInAllBoxes(id)
+	if "" == boxID || "" == treePath {
+		return ""
+	}
+	return filepath.Join(filesys.BoxRootPath(boxID), filepath.FromSlash(strings.TrimPrefix(treePath, "/")))
+}
+
+func findUnindexedTreeInAllBoxes(id string) (boxID, treePath string) {
 	boxes := Conf.GetBoxes()
 	luteEngine := util.NewLute()
 	for _, box := range boxes {
-		root := filepath.Join(util.DataDir, box.ID)
+		if conf.BoxKindMarkdown == GetBoxKind(box.ID) {
+			docs, listErr := ListMarkdownDocs(box.ID)
+			if nil != listErr {
+				continue
+			}
+			for _, doc := range docs {
+				tree, loadErr := filesys.LoadTree(box.ID, doc.Path, luteEngine)
+				if nil == loadErr && treeContainsBlockID(tree, id) {
+					return box.ID, doc.Path
+				}
+			}
+			continue
+		}
+
+		root := filesys.BoxRootPath(box.ID)
 		paths := search.FindAllMatchedPaths(root, []string{id})
-		var rootIDs []string
-		rootIDPaths := map[string]string{}
 		for _, p := range paths {
 			base := filepath.ToSlash(p)
 			if !strings.HasSuffix(base, ".sy") {
@@ -413,30 +431,19 @@ func findUnindexedTreePathInAllBoxes(id string) (ret string) {
 			if !ast.IsNodeIDPattern(rootID) {
 				continue
 			}
-			rootIDs = append(rootIDs, rootID)
-			rootIDPaths[rootID] = p
-		}
-
-		result := treenode.ExistBlockTrees(rootIDs)
-		for rootID, exist := range result {
-			if exist {
+			relPath, relErr := filepath.Rel(root, p)
+			if nil != relErr {
 				continue
 			}
-
-			matchedPath := rootIDPaths[rootID]
-			relPath, relErr := filepath.Rel(root, matchedPath)
-			if nil != relErr {
-				return matchedPath
-			}
 			// 全文匹配只用于筛选候选文件，解析树后再确认是否存在真实块 ID。
-			treePath := "/" + filepath.ToSlash(relPath)
-			tree, loadErr := filesys.LoadTree(box.ID, treePath, luteEngine)
-			if nil != loadErr || treeContainsBlockID(tree, id) {
-				return matchedPath
+			candidatePath := "/" + filepath.ToSlash(relPath)
+			tree, loadErr := filesys.LoadTree(box.ID, candidatePath, luteEngine)
+			if nil == loadErr && treeContainsBlockID(tree, id) {
+				return box.ID, candidatePath
 			}
 		}
 	}
-	return
+	return "", ""
 }
 
 func treeContainsBlockID(tree *parse.Tree, id string) (ret bool) {

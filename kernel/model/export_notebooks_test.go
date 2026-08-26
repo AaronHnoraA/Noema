@@ -108,7 +108,10 @@ func TestExportNotebooksSYKeepsCrossNotebookReferences(t *testing.T) {
 	writeExportRelatedTestTree(t, sourceTree)
 	writeExportRelatedTestTree(t, targetTree)
 
-	exportPath := ExportNotebooksSY([]string{sourceBoxID, targetBoxID})
+	exportPath, err := ExportNotebooksSY([]string{sourceBoxID, targetBoxID})
+	if nil != err {
+		t.Fatal(err)
+	}
 	exportAbsPath, err := exportedFilePath(exportPath)
 	if nil != err {
 		t.Fatal(err)
@@ -119,7 +122,10 @@ func TestExportNotebooksSYKeepsCrossNotebookReferences(t *testing.T) {
 	if err = ImportSY(exportAbsPath, sourceBoxID, "/"); nil == err {
 		t.Fatal("notebook bundle should not be imported into a document")
 	}
-	singleExportPath := ExportNotebookSY(sourceBoxID)
+	singleExportPath, err := ExportNotebookSY(sourceBoxID)
+	if nil != err {
+		t.Fatal(err)
+	}
 	singleExportAbsPath, err := exportedFilePath(singleExportPath)
 	if nil != err {
 		t.Fatal(err)
@@ -177,7 +183,10 @@ func TestImportNotebooksSYKeepsEmptyNotebooks(t *testing.T) {
 		}
 	}
 
-	exportPath := ExportNotebooksSY([]string{firstBoxID, secondBoxID})
+	exportPath, err := ExportNotebooksSY([]string{firstBoxID, secondBoxID})
+	if nil != err {
+		t.Fatal(err)
+	}
 	exportAbsPath, err := exportedFilePath(exportPath)
 	if nil != err {
 		t.Fatal(err)

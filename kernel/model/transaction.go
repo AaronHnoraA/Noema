@@ -34,8 +34,6 @@ import (
 	"github.com/88250/lute/ast"
 	"github.com/88250/lute/editor"
 	"github.com/88250/lute/parse"
-	"github.com/siyuan-note/filelock"
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/av"
 	"github.com/aaronhe/noema/kernel/cache"
 	"github.com/aaronhe/noema/kernel/filesys"
@@ -43,6 +41,8 @@ import (
 	"github.com/aaronhe/noema/kernel/task"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/siyuan-note/filelock"
+	"github.com/siyuan-note/logging"
 )
 
 func IsMoveOutlineHeading(transactions *[]*Transaction) bool {
@@ -159,7 +159,13 @@ func flushTx(tx *Transaction) {
 	}
 }
 
-func PerformTransactions(transactions *[]*Transaction) {
+func PerformTransactions(transactions *[]*Transaction) error {
+	if nil == transactions {
+		return nil
+	}
+	if err := validateNativeTransactions(*transactions); nil != err {
+		return err
+	}
 	txQueueLock.Lock()
 	defer txQueueLock.Unlock()
 	for _, tx := range *transactions {
@@ -169,6 +175,7 @@ func PerformTransactions(transactions *[]*Transaction) {
 	sort.SliceStable(txQueue, func(i, j int) bool {
 		return txQueue[i].Timestamp < txQueue[j].Timestamp
 	})
+	return nil
 }
 
 func takeQueuedTransactions() (ret []*Transaction) {
@@ -1267,6 +1274,9 @@ func (tx *Transaction) syncDelete2Block(node *ast.Node, nodeTree *parse.Tree) (c
 		}
 
 		avID := n.AttributeViewID
+		if nil != requireNativeAttributeViewContents(avID) {
+			return ast.WalkContinue
+		}
 		isMirror := av.IsMirror(avID)
 		if changed := av.RemoveBlockRel(avID, n.ID, treenode.ExistBlockTree); changed {
 			changedAvIDs = append(changedAvIDs, avID)
@@ -1374,7 +1384,7 @@ func (tx *Transaction) flushDeletedAttributeViewBlocks() {
 func flushDeletedAttributeViewBlocks(deletedAttrViewBlockIDs map[string]map[string]struct{}) {
 	for avID, deletedBlockIDs := range deletedAttrViewBlockIDs {
 		attrView, err := av.ParseAttributeView(avID)
-		if nil != err || !removeAttributeViewBoundBlocks(attrView, deletedBlockIDs) {
+		if nil != err || nil != requireNativeAttributeViewState(attrView) || !removeAttributeViewBoundBlocks(attrView, deletedBlockIDs) {
 			continue
 		}
 		regenAttrViewGroups(attrView)
@@ -2007,7 +2017,7 @@ func upsertAvBlockRel(node *ast.Node) {
 		affectedAvIDs = gulu.Str.RemoveDuplicatedElem(affectedAvIDs)
 		for _, avID := range affectedAvIDs {
 			attrView, _ := av.ParseAttributeView(avID)
-			if nil != attrView {
+			if nil != attrView && nil == requireNativeAttributeViewState(attrView) {
 				regenAttrViewGroups(attrView)
 				av.SaveAttributeView(attrView)
 			}
@@ -2045,6 +2055,9 @@ func (tx *Transaction) doUpdateUpdated(operation *Operation) (ret *TxErr) {
 
 func (tx *Transaction) doCreate(operation *Operation) (ret *TxErr) {
 	tree := operation.Data.(*parse.Tree)
+	if err := requireNativeDocumentTree(tree.Box); nil != err {
+		return &TxErr{code: TxErrCodePushMsg, msg: err.Error(), id: tree.ID}
+	}
 	// 兜底校验：禁止跨加密边界块引（创建文档可能携带跨边界引用）
 	// 必须在 getRefDefIDs 之前，避免跨边界引用被收集进引用缓存
 	degradeCrossBoundaryBlockRefs(tree.Root, tree.Box)
@@ -2085,6 +2098,9 @@ func (tx *Transaction) doRemoveCreatedDoc(operation *Operation) (ret *TxErr) {
 			return
 		}
 		return &TxErr{code: TxErrCodeBlockNotFound, msg: err.Error(), id: operation.ID}
+	}
+	if err = requireNativeDocumentTree(tree.Box); nil != err {
+		return &TxErr{code: TxErrCodePushMsg, msg: err.Error(), id: operation.ID}
 	}
 	tx.removedCreatedDocs = append(tx.removedCreatedDocs, tree)
 	return
@@ -2376,6 +2392,22 @@ func (tx *Transaction) begin() (err error) {
 
 func (tx *Transaction) commit() (err error) {
 	for _, tree := range tx.trees {
+		if err = requireNativeDocumentTree(tree.Box); nil != err {
+			return err
+		}
+	}
+	for _, tree := range tx.removedCreatedDocs {
+		if err = requireNativeDocumentTree(tree.Box); nil != err {
+			return err
+		}
+	}
+	tx.relatedAvIDs = gulu.Str.RemoveDuplicatedElem(tx.relatedAvIDs)
+	for _, avID := range tx.relatedAvIDs {
+		if err = requireNativeAttributeViewContents(avID); nil != err {
+			return err
+		}
+	}
+	for _, tree := range tx.trees {
 		if err = writeTreeUpsertQueue(tree); err != nil {
 			return
 		}
@@ -2400,7 +2432,6 @@ func (tx *Transaction) commit() (err error) {
 	}
 	tx.changedRootIDs = refreshDynamicRefTexts(tx.nodes, tx.trees)
 
-	tx.relatedAvIDs = gulu.Str.RemoveDuplicatedElem(tx.relatedAvIDs)
 	for _, avID := range tx.relatedAvIDs {
 		destAv, _ := av.ParseAttributeView(avID)
 		if nil == destAv {
@@ -2453,6 +2484,9 @@ func (tx *Transaction) loadTreeByBlockTree(bt *treenode.BlockTree) (ret *parse.T
 	if nil == bt {
 		return nil, ErrBlockNotFound
 	}
+	if err = requireNativeDocumentTree(bt.BoxID); nil != err {
+		return nil, err
+	}
 
 	ret = tx.trees[bt.RootID]
 	if nil != ret {
@@ -2481,6 +2515,9 @@ func (tx *Transaction) loadTree(id string) (ret *parse.Tree, err error) {
 	}
 	if nil == bt {
 		return nil, ErrBlockNotFound
+	}
+	if err = requireNativeDocumentTree(bt.BoxID); nil != err {
+		return nil, err
 	}
 	rootID = bt.RootID
 	box = bt.BoxID

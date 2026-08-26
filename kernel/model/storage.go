@@ -29,11 +29,11 @@ import (
 
 	"github.com/88250/gulu"
 	"github.com/88250/lute/parse"
-	"github.com/siyuan-note/filelock"
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/sql"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/siyuan-note/filelock"
+	"github.com/siyuan-note/logging"
 )
 
 var localStorageLock = sync.Mutex{}
@@ -296,8 +296,9 @@ type RecentDoc struct {
 
 var recentDocLock = sync.Mutex{}
 
-// canPersistRecentDoc 仅允许全局块树中可确认属于普通笔记本的文档进入明文最近文档存储。
-// 加密笔记本使用独立块树，未知 ID 也按敏感数据处理，避免锁定时因无法解析归属而写入明文。
+// canPersistRecentDoc 仅允许全局块树中可确认属于非加密笔记本的文档进入明文最近文档存储。
+// recent-doc.json 是可丢弃的工作区 UI 状态：可以记录 Markdown 投影的 root ID，但不得成为源内容或
+// 语义属性的真相源。加密笔记本使用独立块树，未知 ID 也按敏感数据处理，避免锁定时泄漏标识。
 func canPersistRecentDoc(rootID string) bool {
 	bt := treenode.GetBlockTree(rootID)
 	return bt != nil && !IsEncryptedBox(bt.BoxID)
@@ -831,6 +832,8 @@ func loadRefUsed() (ret map[string]int64) {
 }
 
 func setRefUsed(used map[string]int64) (err error) {
+	// ref-used.json 仅是块引用选择器的最近使用排序状态；Markdown 投影 ID 可在索引重建后失效，
+	// 不得把该文件当作引用关系或笔记语义的真相源。
 	dirPath := filepath.Join(util.DataDir, "storage")
 	if err = os.MkdirAll(dirPath, 0755); err != nil {
 		logging.LogErrorf("create storage [ref-used] dir failed: %s", err)
@@ -858,6 +861,8 @@ type OutlineDoc struct {
 }
 
 var outlineStorageLock = sync.Mutex{}
+
+// outline.json 只保存大纲面板的折叠/展开等可丢弃 UI 状态。Markdown 的标题结构始终来自源文本与派生索引。
 
 func GetOutlineStorage(docID string) (ret map[string]any, err error) {
 	outlineStorageLock.Lock()

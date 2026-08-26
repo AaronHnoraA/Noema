@@ -13,6 +13,7 @@ const META_BLOCK_RE = /^\s*#\+begin\s+meta\s*\r?\n([\s\S]*?)\r?\n\s*#\+end\s+met
 
 let rootDir = "";
 let version = 0;
+let bibliographyProvider = null;
 const bibCache = new Map();
 let bibCacheBytes = 0;
 
@@ -41,6 +42,11 @@ function canonicalPath(value) {
 
 export function configureBibliography(options = {}) {
   rootDir = canonicalPath(options.root);
+  clearBibliographyCache();
+}
+
+export function configureBibliographyProvider(provider = null) {
+  bibliographyProvider = provider && typeof provider === "object" ? provider : null;
   clearBibliographyCache();
 }
 
@@ -598,6 +604,23 @@ function citationScan(markdown) {
 }
 
 async function loadVisibleBibliographies(file, content, metadataContent, allowedRoot = "", libraryRoot = rootDir) {
+  if (typeof bibliographyProvider?.load === "function" && bibliographyProvider.owns?.(file)) {
+    try {
+      const loaded = await bibliographyProvider.load({ file, metadataContent });
+      const parsed = loaded.files;
+      const shortCounts = new Map();
+      for (const bib of parsed) shortCounts.set(bib.shortNamespace, (shortCounts.get(bib.shortNamespace) || 0) + 1);
+      return {
+        parsed,
+        diagnostics: loaded.diagnostics,
+        shortCounts,
+        source: String(loaded.source || "kernel-bibliography"),
+      };
+    } catch {
+      // Standalone/Server and a transient local kernel outage retain the Node
+      // parser so citation rendering and export preflight remain available.
+    }
+  }
   const { files, diagnostics } = await visibleBibFiles(file, content, metadataContent, allowedRoot, libraryRoot);
   const results = await Promise.all(files.map(async (bib) => {
     try {
@@ -632,7 +655,7 @@ async function loadVisibleBibliographies(file, content, metadataContent, allowed
       bib.entries = bib.entries.map((entry) => ({ ...entry, shortNamespace: "" }));
     }
   }
-  return { parsed, diagnostics, shortCounts };
+  return { parsed, diagnostics, shortCounts, source: "node-bibliography" };
 }
 
 export async function bibliographyForDocument(options = {}) {
@@ -646,7 +669,7 @@ export async function bibliographyForDocument(options = {}) {
   if (commands.length === 0) {
     return { ok: true, version, entries: [], references: [], citations: [], namespaces: [], diagnostics: scanned.diagnostics };
   }
-  const { parsed, diagnostics } = await loadVisibleBibliographies(file, content, metadataContent, options.allowedRoot, libraryRoot);
+  const { parsed, diagnostics, source } = await loadVisibleBibliographies(file, content, metadataContent, options.allowedRoot, libraryRoot);
   diagnostics.push(...scanned.diagnostics);
   const namespaceList = parsed.map((bib) => ({
     namespace: bib.namespace,
@@ -723,7 +746,7 @@ export async function bibliographyForDocument(options = {}) {
   });
   const entries = references.map((reference) => reference.entry).filter(Boolean);
   const hash = createHash("sha1").update(content).update("\0").update(metadataContent).digest("hex").slice(0, 12);
-  return { ok: true, version, hash, namespaces: namespaceList, entries, references, citations, diagnostics: [...new Set(diagnostics)] };
+  return { ok: true, version, hash, namespaces: namespaceList, entries, references, citations, diagnostics: [...new Set(diagnostics)], source };
 }
 
 export async function bibliographyCompletions(options = {}) {
@@ -734,7 +757,7 @@ export async function bibliographyCompletions(options = {}) {
   const prefix = String(options.prefix || "");
   const kind = String(options.kind || "keys");
   const libraryRoot = rootDir;
-  const { parsed, diagnostics, shortCounts } = await loadVisibleBibliographies(file, content, metadataContent, options.allowedRoot, libraryRoot);
+  const { parsed, diagnostics, shortCounts, source } = await loadVisibleBibliographies(file, content, metadataContent, options.allowedRoot, libraryRoot);
   const needle = String(prefix || "").toLowerCase();
   if (kind === "namespaces") {
     const seen = new Map();
@@ -748,14 +771,14 @@ export async function bibliographyCompletions(options = {}) {
       .filter((item) => !needle || item.key.toLowerCase().includes(needle))
       .sort((a, b) => a.key.localeCompare(b.key))
       .slice(0, 24);
-    return { ok: true, items, diagnostics: [...new Set(diagnostics)] };
+    return { ok: true, items, diagnostics: [...new Set(diagnostics)], source };
   }
   const matches = namespaceMatches(parsed, namespace);
   if (matches.length !== 1) {
     const reason = matches.length === 0
       ? `unknown bibliography namespace: ${namespace}`
       : `ambiguous bibliography namespace: ${namespace}`;
-    return { ok: true, items: [], diagnostics: [...new Set([...diagnostics, reason])] };
+    return { ok: true, items: [], diagnostics: [...new Set([...diagnostics, reason])], source };
   }
   const keyCounts = new Map();
   for (const entry of matches[0].entries) keyCounts.set(entry.key, (keyCounts.get(entry.key) || 0) + 1);
@@ -771,6 +794,7 @@ export async function bibliographyCompletions(options = {}) {
       .sort((a, b) => a.key.localeCompare(b.key))
       .slice(0, 24),
     diagnostics: [...new Set(diagnostics)],
+    source,
   };
 }
 

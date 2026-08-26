@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
 import {
@@ -24,7 +24,7 @@ describe("packaged Noema themes", () => {
     const files = new Set(readdirSync(themeRoot));
     for (const theme of NOEMA_APP_THEMES) {
       expect(files.has(theme.file)).toBe(true);
-      const css = readFileSync(resolve(themeRoot, theme.file), "utf8");
+      const css = effectiveThemeCss(resolve(themeRoot, theme.file));
       expect(css).toContain(`data-noema-theme="${theme.id}"`);
       for (const token of [
         "--aaronnote-bg",
@@ -37,6 +37,22 @@ describe("packaged Noema themes", () => {
       ]) {
         expect(css).toContain(token);
       }
+      expect(b3Definitions(css).size, `${theme.id} b3 variable contract`).toBe(165);
+    }
+  });
+
+  test("bundles the complete source-owned b3 palette for daylight and midnight", () => {
+    for (const id of ["daylight", "midnight"]) {
+      const adapter = effectiveThemeCss(resolve(themeRoot, `${id}.css`));
+      const source = readFileSync(resolve(
+        process.cwd(), "app", "appearance", "themes", id, "theme.css",
+      ), "utf8");
+      const expected = b3Definitions(source);
+      const actual = b3Definitions(adapter);
+      expect(expected.size).toBe(165);
+      expect([...actual].sort()).toEqual([...expected].sort());
+      expect(source).toContain(":root:not([data-noema-theme])");
+      expect(source).toContain(`:root[data-noema-theme="${id}"]`);
     }
   });
 
@@ -47,4 +63,18 @@ describe("packaged Noema themes", () => {
 
 function filesInThemeDirectory(): string[] {
   return readdirSync(themeRoot);
+}
+
+function effectiveThemeCss(file: string, seen = new Set<string>()): string {
+  const absolute = resolve(file);
+  if (seen.has(absolute)) return "";
+  seen.add(absolute);
+  const source = readFileSync(absolute, "utf8");
+  const imports = [...source.matchAll(/@import\s+["']([^"']+)["']/g)]
+    .map((match) => effectiveThemeCss(resolve(dirname(absolute), match[1]!), seen));
+  return `${source}\n${imports.join("\n")}`;
+}
+
+function b3Definitions(css: string): Set<string> {
+  return new Set([...css.matchAll(/^\s*(--b3-[a-z0-9-]+)\s*:/gmi)].map((match) => match[1]!));
 }

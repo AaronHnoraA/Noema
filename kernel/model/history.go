@@ -67,6 +67,9 @@ func GenerateFileHistoryForBox(box *Box) {
 	if 1 > Conf.Editor.GenerateHistoryInterval {
 		return
 	}
+	if nil == box || conf.BoxKindMarkdown == GetBoxKind(box.ID) {
+		return
+	}
 	box.generateDocHistory0()
 }
 
@@ -81,6 +84,9 @@ func GenerateFileHistory() {
 
 	// 生成文档历史
 	for _, box := range Conf.GetOpenedBoxes() {
+		if conf.BoxKindMarkdown == GetBoxKind(box.ID) {
+			continue
+		}
 		// 加密笔记本也生成历史：密文 .sy 直接拷到历史目录，查看/回滚时按路径里的 boxID 解密
 		box.generateDocHistory0()
 	}
@@ -269,6 +275,9 @@ func RollbackDocHistory(historyPath string) (err error) {
 	if err != nil {
 		return
 	}
+	if !strings.EqualFold(filepath.Ext(historyPath), ".sy") {
+		return fmt.Errorf("%w: document history [%s]", ErrMarkdownNativeDocumentTree, historyPath)
+	}
 
 	FlushTxQueue()
 
@@ -282,6 +291,9 @@ func RollbackDocHistory(historyPath string) (err error) {
 	}
 	boxID := parts[1]
 	origBoxID := boxID // 保留原始 boxID 用于解密（getRollbackBox 可能返回不同的 box）
+	if err = requireNativeDocumentTree(origBoxID); nil != err {
+		return
+	}
 
 	// 加密笔记本的历史回滚要求原笔记本已挂载：
 	// WriteTree 根据 tree.Box 判断是否加密落盘。若原笔记本未挂载导致
@@ -606,6 +618,17 @@ func RollbackNotebookHistory(historyPath string) (err error) {
 	if err != nil {
 		return
 	}
+	confData, err := filelock.ReadFile(filepath.Join(historyPath, ".siyuan", "conf.json"))
+	if nil != err {
+		return
+	}
+	boxConf := conf.NewBoxConf()
+	if err = gulu.JSON.UnmarshalJSON(confData, boxConf); nil != err {
+		return fmt.Errorf("parse notebook history config failed: %w", err)
+	}
+	if conf.BoxKindMarkdown == boxConf.Kind {
+		return fmt.Errorf("%w: notebook [%s]", ErrMarkdownNativeDocumentTree, boxID)
+	}
 	if _, loaded := boxLock.LoadOrStore(boxID, true); loaded {
 		return errors.New(Conf.Language(239))
 	}
@@ -663,6 +686,24 @@ func RollbackAttributeViewHistory(historyPath string) (err error) {
 	ciphertext := util.IsCiphertext(data)
 	if ciphertext && (len(pathParts) < 3 || !ast.IsNodeIDPattern(pathParts[1]) || !IsEncryptedBox(pathParts[1])) {
 		return errors.New("encrypted attribute view history is missing valid notebook context")
+	}
+	avID := strings.TrimSuffix(filepath.Base(historyPath), ".json")
+	plainData := data
+	if ciphertext {
+		plainData, err = av.DecryptAVData(pathParts[1], avID, data)
+		if nil != err {
+			return err
+		}
+	}
+	historicalAV := &av.AttributeView{}
+	if err = gulu.JSON.UnmarshalJSON(plainData, historicalAV); nil != err {
+		return fmt.Errorf("parse attribute view history failed: %w", err)
+	}
+	if historicalAV.ID != avID {
+		return fmt.Errorf("attribute view history ID [%s] does not match file [%s]", historicalAV.ID, avID)
+	}
+	if err = requireNativeAttributeViewState(historicalAV); nil != err {
+		return err
 	}
 	to := filepath.Join(util.DataDir, "storage", "av", filepath.Base(historyPath))
 	if len(pathParts) >= 2 && IsEncryptedBox(pathParts[1]) {
@@ -833,6 +874,11 @@ func GetNotebookHistory() (ret []*History, err error) {
 		}
 		if err = json.Unmarshal(data, &c); err != nil {
 			logging.LogErrorf("parse notebook conf [%s] failed: %s", historyNotebookConf, err)
+			continue
+		}
+		if conf.BoxKindMarkdown == c.Kind {
+			// External repositories use Git history and are never restored from
+			// a copied workspace shadow.
 			continue
 		}
 
@@ -1095,6 +1141,9 @@ const (
 )
 
 func generateOpTypeHistory(tree *parse.Tree, opType string) {
+	if nil == tree || nil != requireNativeDocumentTree(tree.Box) {
+		return
+	}
 	historyDir, err := getHistoryDir(opType)
 	if err != nil {
 		logging.LogErrorf("get history dir failed: %s", err)
@@ -1108,6 +1157,11 @@ func generateOpTypeHistory(tree *parse.Tree, opType string) {
 }
 
 func CreateDocHistory(id string) (err error) {
+	if bt := treenode.GetBlockTree(id); nil != bt {
+		if err = requireNativeDocumentTree(bt.BoxID); nil != err {
+			return
+		}
+	}
 	tree, err := LoadTreeByBlockID(id)
 	if err != nil {
 		return
@@ -1117,6 +1171,9 @@ func CreateDocHistory(id string) (err error) {
 }
 
 func generateTreeHistory(tree *parse.Tree, historyDir string) {
+	if nil == tree || nil != requireNativeDocumentTree(tree.Box) {
+		return
+	}
 	// 加密笔记本的历史直接拷密文 .sy，查看/回滚时按路径里的 boxID 解密
 	historyPath := filepath.Join(historyDir, tree.Box, tree.Path)
 	var err error

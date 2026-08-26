@@ -10,6 +10,7 @@ import { afterEach, describe, expect, test } from "@voidzero-dev/vite-plus-test"
 import {
   adoptWikiRepository,
   buildWikiIndex,
+  configureWikiGitProvider,
   copyWikiPage,
   createWikiPage,
   deleteWikiPage,
@@ -28,6 +29,7 @@ import {
   wikiIndexStatus,
   wikiPageDiff,
   wikiPageHistory,
+  wikiRepositoryStatus,
   restoreWikiPageVersion,
   wikiTagIndex,
 } from "../server/lib/wiki-workspace.mjs";
@@ -67,6 +69,7 @@ ${body}
 }
 
 afterEach(async () => {
+  configureWikiGitProvider(null);
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -319,6 +322,48 @@ describe("Wiki workspace", () => {
     });
   });
 
+  test("routes direct Git status and actions through the kernel provider", async () => {
+    const root = await tempRoot();
+    const repository = await gitRepository(root, "public", "kernel-backed");
+    const requests: Array<Record<string, unknown>> = [];
+    configureWikiGitProvider({
+      owns: (path: string) => path === repository,
+      async status(path: string) {
+        requests.push({ type: "status", path });
+        return {
+          branch: "main", remote: "origin", clean: true, status: "## main", source: "kernel-vaultgit",
+        };
+      },
+      async action(request: Record<string, unknown>) {
+        requests.push({ type: "action", ...request });
+        return {
+          branch: "main", remote: "origin", clean: true, status: "## main", source: "kernel-vaultgit",
+          action: "pull", phase: "idle", changedPaths: ["incoming.md", ".noema/state.json", " leading.md"], message: "Repository refreshed",
+        };
+      },
+      async history() { throw new Error("unexpected history request"); },
+      async diff() { throw new Error("unexpected diff request"); },
+      async restore() { throw new Error("unexpected restore request"); },
+    });
+
+    await expect(wikiRepositoryStatus(root, "public/kernel-backed")).resolves.toMatchObject({
+      clean: true, source: "kernel-vaultgit",
+    });
+    await expect(runWikiGitAction(root, "pull", { repositoryId: "public/kernel-backed" })).resolves.toMatchObject({
+      action: "pull",
+      source: "kernel-vaultgit",
+      changedPaths: [
+        join(repository, "incoming.md"),
+        join(repository, ".noema", "state.json"),
+        join(repository, " leading.md"),
+      ],
+    });
+    expect(requests).toEqual([
+      { type: "status", path: repository },
+      { type: "action", repositoryPath: repository, action: "pull", message: "", paths: [] },
+    ]);
+  });
+
   test("incremental relationship persistence re-resolves unchanged source pages", async () => {
     const root = await tempRoot();
     const repository = await gitRepository(root, "private", "research");
@@ -391,10 +436,70 @@ describe("Wiki workspace", () => {
     await execFileAsync("git", ["-C", created.repository.path, "-c", "user.name=Historian", "-c", "user.email=history@example.test", "commit", "-m", "second version"]);
 
     const history = await wikiPageHistory(root, { pageId: page.id });
+    expect(history).toMatchObject({ source: "node-vaultgit" });
     expect(history.commits[0]).toMatchObject({ subject: "second version", author: "Historian" });
-    expect((await wikiPageDiff(root, { pageId: page.id, sha: history.commits[0].sha })).diff).toContain("Version two");
-    await restoreWikiPageVersion(root, { pageId: page.id, sha: firstSha });
+    expect(await wikiPageDiff(root, { pageId: page.id, sha: history.commits[0].sha })).toMatchObject({
+      source: "node-vaultgit", diff: expect.stringContaining("Version two"),
+    });
+    await expect(restoreWikiPageVersion(root, { pageId: page.id, sha: firstSha })).resolves.toMatchObject({
+      source: "node-vaultgit",
+    });
     expect(await readFile(page.file, "utf8")).toContain("# Versioned page");
+  });
+
+  test("routes Wiki page history, diff, and restore through the kernel provider", async () => {
+    const root = await tempRoot();
+    const created = await initWikiRepository(root, "private", "kernel-history");
+    const page = await createWikiPage(root, "wiki", {
+      title: "Kernel history",
+      repositoryId: "private/kernel-history",
+      filename: "versioned.md",
+    });
+    const sha = "0123456789abcdef0123456789abcdef01234567";
+    const requests: Array<Record<string, unknown>> = [];
+    configureWikiGitProvider({
+      owns: (path: string) => path === created.repository.path,
+      async status() {
+        return { branch: "main", remote: "", clean: true, status: "## main", source: "kernel-vaultgit" };
+      },
+      async action() {
+        return {
+          branch: "main", remote: "", clean: true, status: "## main", source: "kernel-vaultgit",
+          action: "pull", phase: "idle", changedPaths: [], message: "Repository refreshed",
+        };
+      },
+      async history(repositoryPath: string, filePath: string, limit: number) {
+        requests.push({ type: "history", repositoryPath, filePath, limit });
+        return {
+          path: filePath,
+          commits: [{ sha, date: "2026-08-26T00:00:00Z", author: "Historian", email: "history@example.test", subject: "version" }],
+          source: "kernel-vaultgit",
+        };
+      },
+      async diff(repositoryPath: string, filePath: string, requestedSHA: string) {
+        requests.push({ type: "diff", repositoryPath, filePath, sha: requestedSHA });
+        return { path: filePath, diff: "+Version", scope: "commit", sha: requestedSHA, source: "kernel-vaultgit" };
+      },
+      async restore(repositoryPath: string, filePath: string, requestedSHA: string) {
+        requests.push({ type: "restore", repositoryPath, filePath, sha: requestedSHA });
+        return { path: filePath, sha: requestedSHA, source: "kernel-vaultgit", bytes: 18 };
+      },
+    });
+
+    await expect(wikiPageHistory(root, { pageId: page.id, limit: 25 })).resolves.toMatchObject({
+      source: "kernel-vaultgit", commits: [{ sha, author: "Historian" }],
+    });
+    await expect(wikiPageDiff(root, { pageId: page.id, sha })).resolves.toMatchObject({
+      file: page.file, path: "versioned.md", diff: "+Version", source: "kernel-vaultgit",
+    });
+    await expect(restoreWikiPageVersion(root, { pageId: page.id, sha })).resolves.toMatchObject({
+      file: page.file, sha, source: "kernel-vaultgit",
+    });
+    expect(requests).toEqual([
+      { type: "history", repositoryPath: created.repository.path, filePath: "versioned.md", limit: 25 },
+      { type: "diff", repositoryPath: created.repository.path, filePath: "versioned.md", sha },
+      { type: "restore", repositoryPath: created.repository.path, filePath: "versioned.md", sha },
+    ]);
   });
 
   test("uses a workbench request to create a page at an explicit repository destination", async () => {

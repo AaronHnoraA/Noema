@@ -10,6 +10,7 @@ import { expandNoemaPath, repositoryFromId } from "./wiki-workspace.mjs";
 
 const execFileAsync = promisify(execFile);
 const repositoryQueues = new Map();
+let wikiSyncGitProvider = null;
 const DEFAULT_GIT_MAINTENANCE_BYTES = 2 * 1024 * 1024 * 1024;
 const DEFAULT_GIT_LOCK_STALE_MS = 10 * 60 * 1000;
 const DEFAULT_REPOSITORY_LEASE_STALE_MS = 10 * 60 * 1000;
@@ -21,6 +22,10 @@ const DEFAULT_REPOSITORY_BUSY_RETRY_MS = 5_000;
 const DEFAULT_RECOVERY_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const DEFAULT_NETWORK_RETRY_DELAYS_MS = [60_000, 5 * 60_000, 30 * 60_000, 2 * 60 * 60_000];
 const SYNC_SCHEMA = 2;
+
+export function configureWikiSyncGitProvider(provider = null) {
+  wikiSyncGitProvider = provider && typeof provider === "object" ? provider : null;
+}
 
 function apiError(message, statusCode = 400, code = "ERR_WIKI_SYNC") {
   return Object.assign(new Error(message), { statusCode, code });
@@ -100,6 +105,8 @@ function transactionState(state = {}) {
     "integrationBranch",
     "integrationPath",
     "branch",
+    "checkpointSource",
+    "transportSource",
     "recoveryArtifacts",
   ].filter((key) => state[key] !== undefined).map((key) => [key, state[key]]));
 }
@@ -499,31 +506,51 @@ async function checkpointWikiRepositoryUnlocked(root, repository, options = {}, 
   try {
     const workBranch = await ensureWorkBranch(root, repository, device);
     const branch = workBranch.branch;
-    await git(repository, ["add", "-A", "--", "."]);
     let committed = false;
     let changedFiles = 0;
     let identityFallback = false;
-    if (await stagedChanges(repository)) {
-      changedFiles = await stagedFileCount(repository);
-      const at = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
-      const identity = await commitIdentity(repository, device);
-      identityFallback = identity.fallback;
-      await git(repository, [
-        "-c", `user.name=${identity.name}`,
-        "-c", `user.email=${identity.email}`,
-        "commit", "-m", String(options.message || `noema: checkpoint ${changedFiles} file${changedFiles === 1 ? "" : "s"} · ${at}`),
-      ]);
-      committed = true;
+    let headValue = "";
+    let source = "node-vaultgit";
+    if (typeof wikiSyncGitProvider?.owns === "function"
+        && wikiSyncGitProvider.owns(repository.path)
+        && typeof wikiSyncGitProvider.checkpoint === "function") {
+      const checkpoint = await wikiSyncGitProvider.checkpoint(repository.path, {
+        branch,
+        message: String(options.message || ""),
+        deviceName: String(device.name || ""),
+        deviceId: String(device.id || ""),
+      });
+      committed = checkpoint.committed;
+      changedFiles = checkpoint.changedFiles;
+      identityFallback = checkpoint.identityFallback;
+      headValue = checkpoint.head;
+      source = checkpoint.source;
+    } else {
+      await git(repository, ["add", "-A", "--", "."]);
+      if (await stagedChanges(repository)) {
+        changedFiles = await stagedFileCount(repository);
+        const at = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+        const identity = await commitIdentity(repository, device);
+        identityFallback = identity.fallback;
+        await git(repository, [
+          "-c", `user.name=${identity.name}`,
+          "-c", `user.email=${identity.email}`,
+          "commit", "-m", String(options.message || `noema: checkpoint ${changedFiles} file${changedFiles === 1 ? "" : "s"} · ${at}`),
+        ]);
+        committed = true;
+      }
+      const head = await git(repository, ["rev-parse", "HEAD"], { allowFailure: true });
+      headValue = head.stdout.trim();
     }
-    const head = await git(repository, ["rev-parse", "HEAD"], { allowFailure: true });
     const payload = {
       phase: "idle",
       branch,
-      head: head.stdout.trim(),
+      head: headValue,
       checkpointedAt: new Date().toISOString(),
       committed,
       changedFiles,
       identityFallback,
+      source,
       ...(workBranch.recoveryArtifact ? { recoveryArtifacts: [workBranch.recoveryArtifact] } : {}),
       ...(recoveredGitLock ? {
         recoveredGitLock,
@@ -557,6 +584,14 @@ export async function checkpointWikiRepository(rootValue, repositoryId, options 
 async function remoteUrl(repository) {
   const result = await git(repository, ["remote", "get-url", "origin"], { allowFailure: true });
   return result.error ? "" : result.stdout.trim();
+}
+
+function originMainTransportProvider(repository) {
+  if (typeof wikiSyncGitProvider?.owns !== "function" || !wikiSyncGitProvider.owns(repository.path)) return null;
+  if (typeof wikiSyncGitProvider.ensureMain !== "function"
+      || typeof wikiSyncGitProvider.fetchMain !== "function"
+      || typeof wikiSyncGitProvider.pushMain !== "function") return null;
+  return wikiSyncGitProvider;
 }
 
 function gitFailureMessage(value) {
@@ -705,7 +740,15 @@ async function pruneWikiGitRecovery(root, options = {}) {
   return removed;
 }
 
-async function ensureOriginMain(repository, localHead) {
+async function ensureOriginMain(repository, localHead, provider = null) {
+  if (provider) {
+    try {
+      const result = await provider.ensureMain(repository.path, localHead);
+      return { error: "", bootstrapped: result.bootstrapped };
+    } catch (error) {
+      return { error: gitFailureMessage(error), bootstrapped: false };
+    }
+  }
   const listed = await git(repository, ["ls-remote", "--heads", "origin"], { allowFailure: true });
   if (listed.error) {
     return { error: String(listed.stderr || listed.error.message).trim(), bootstrapped: false };
@@ -735,6 +778,36 @@ async function ensureOriginMain(repository, localHead) {
   );
   if (!raced.error) return { error: "", bootstrapped: false };
   return { error: String(pushed.stderr || pushed.error.message).trim(), bootstrapped: false };
+}
+
+async function fetchOriginMain(repository, provider = null, prune = false) {
+  if (provider) {
+    try {
+      const result = await provider.fetchMain(repository.path);
+      return { remoteHead: result.remoteHead };
+    } catch (error) {
+      return { error, stderr: gitFailureMessage(error) };
+    }
+  }
+  const args = ["fetch", ...(prune ? ["--prune"] : []), "origin", "main"];
+  const fetched = await git(repository, args, { allowFailure: true });
+  if (fetched.error) return fetched;
+  const remoteHead = (await git(repository, ["rev-parse", "refs/remotes/origin/main"])).stdout.trim();
+  return { remoteHead };
+}
+
+async function pushOriginMain(repository, worktree, commit, provider = null) {
+  if (provider) {
+    try {
+      await provider.pushMain(repository.path, commit);
+      return {};
+    } catch (error) {
+      return { error, stderr: gitFailureMessage(error) };
+    }
+  }
+  return await execFileAsync("git", ["-C", worktree, "push", "origin", `${commit}:refs/heads/main`], {
+    maxBuffer: 1024 * 1024 * 32,
+  }).catch((error) => ({ error, stderr: error.stderr || "" }));
 }
 
 function integrationBranch(device, repository) {
@@ -991,6 +1064,7 @@ async function runSync(root, repository, options = {}, recoveredGitLock = null, 
     changedFiles: checkpoint.changedFiles,
     branch: checkpoint.branch,
     snapshotHead: checkpoint.head,
+    checkpointSource: checkpoint.source,
     ...(checkpoint.recoveryArtifacts?.length ? { recoveryArtifacts: checkpoint.recoveryArtifacts } : {}),
     ...(checkpoint.recoveredGitLock ? {
       recoveredGitLock: checkpoint.recoveredGitLock,
@@ -1010,17 +1084,22 @@ async function runSync(root, repository, options = {}, recoveredGitLock = null, 
       message: "No origin remote; local checkpoint completed",
     });
   }
-  const bootstrap = await ensureOriginMain(repository, checkpoint.head);
+  const transportProvider = originMainTransportProvider(repository);
+  const remoteCheckpointState = {
+    ...checkpointState,
+    transportSource: transportProvider ? "kernel-vaultgit" : "node-vaultgit",
+  };
+  const bootstrap = await ensureOriginMain(repository, checkpoint.head, transportProvider);
   if (bootstrap.error) {
-    return await writeGitFailureState(root, repository, previousState, checkpointState, bootstrap.error, options);
+    return await writeGitFailureState(root, repository, previousState, remoteCheckpointState, bootstrap.error, options);
   }
-  await writeSyncState(root, repository, { ...checkpointState, phase: "fetching" });
-  const fetch = await git(repository, ["fetch", "--prune", "origin", "main"], { allowFailure: true });
+  await writeSyncState(root, repository, { ...remoteCheckpointState, phase: "fetching" });
+  const fetch = await fetchOriginMain(repository, transportProvider, true);
   if (fetch.error) {
-    return await writeGitFailureState(root, repository, previousState, checkpointState, fetch, options);
+    return await writeGitFailureState(root, repository, previousState, remoteCheckpointState, fetch, options);
   }
-  const remoteHead = (await git(repository, ["rev-parse", "refs/remotes/origin/main"])).stdout.trim();
-  const baseState = { ...checkpointState, remoteHead };
+  const remoteHead = fetch.remoteHead;
+  const baseState = { ...remoteCheckpointState, remoteHead };
   await writeSyncState(root, repository, { ...baseState, phase: "merging" });
   const integration = await prepareIntegrationWorktree(root, repository, device, checkpoint.head, lease, options);
   const artifacts = recoveryArtifacts(
@@ -1118,9 +1197,7 @@ async function runSync(root, repository, options = {}, recoveredGitLock = null, 
   await writeSyncState(root, repository, { ...publishState, phase: "pushing" });
   for (let attempt = 1; attempt <= 3; attempt++) {
     await runSyncTestHook(options, "beforePush", { attempt, repository, integrationPath: integration.path });
-    const push = await execFileAsync("git", ["-C", integration.path, "push", "origin", "HEAD:main"], {
-      maxBuffer: 1024 * 1024 * 32,
-    }).catch((error) => ({ error, stderr: error.stderr || "" }));
+    const push = await pushOriginMain(repository, integration.path, integrationHead, transportProvider);
     if (!push.error) break;
     const classified = classifyGitFailure(push);
     if (classified.errorKind !== "remote-race") {
@@ -1137,11 +1214,11 @@ async function runSync(root, repository, options = {}, recoveredGitLock = null, 
         nextRetryAt: new Date(Date.now() + DEFAULT_REPOSITORY_BUSY_RETRY_MS).toISOString(),
       });
     }
-    const racedFetch = await git(repository, ["fetch", "origin", "main"], { allowFailure: true });
+    const racedFetch = await fetchOriginMain(repository, transportProvider);
     if (racedFetch.error) {
       return await writeGitFailureState(root, repository, previousState, publishState, racedFetch, options);
     }
-    const latestRemote = (await git(repository, ["rev-parse", "refs/remotes/origin/main"])).stdout.trim();
+    const latestRemote = racedFetch.remoteHead;
     const racedMerge = await mergeIntoIntegration(integration.path, latestRemote, identity, {
       oursStage: 2,
       theirsStage: 3,
@@ -1301,6 +1378,7 @@ async function resolveWikiConflictUnlocked(root, repository, body = {}, recovere
   );
   const recovery = recoveredGitLock || recoveredIntegrationLock;
   const previousState = await storedWikiSyncState(root, repository) || {};
+  const transportProvider = originMainTransportProvider(repository);
   const headBefore = await currentHeadSha(repository);
   const path = String(body.path || "");
   const target = resolve(worktree, path);
@@ -1369,6 +1447,8 @@ async function resolveWikiConflictUnlocked(root, repository, body = {}, recovere
     operationId: previousState.operationId || syncOperationId(),
     branch: latestCheckpoint.branch,
     snapshotHead: latestCheckpoint.head,
+    checkpointSource: latestCheckpoint.source,
+    transportSource: transportProvider ? "kernel-vaultgit" : "node-vaultgit",
     integrationBranch: integrationBranchName,
     integrationPath: worktree,
     integrationHead,
@@ -1404,9 +1484,7 @@ async function resolveWikiConflictUnlocked(root, repository, body = {}, recovere
   await writeSyncState(root, repository, { ...resolutionState, phase: "pushing" });
   for (let attempt = 1; attempt <= 3; attempt++) {
     await runSyncTestHook(body, "beforePush", { attempt, repository, integrationPath: worktree });
-    const push = await execFileAsync("git", ["-C", worktree, "push", "origin", "HEAD:main"], {
-      maxBuffer: 1024 * 1024 * 32,
-    }).catch((error) => ({ error, stderr: error.stderr || "" }));
+    const push = await pushOriginMain(repository, worktree, integrationHead, transportProvider);
     if (!push.error) break;
     const classified = classifyGitFailure(push);
     if (classified.errorKind !== "remote-race") {
@@ -1422,9 +1500,9 @@ async function resolveWikiConflictUnlocked(root, repository, body = {}, recovere
         retryAfterMs: DEFAULT_REPOSITORY_BUSY_RETRY_MS,
       });
     }
-    const fetched = await git(repository, ["fetch", "origin", "main"], { allowFailure: true });
+    const fetched = await fetchOriginMain(repository, transportProvider);
     if (fetched.error) return await writeGitFailureState(root, repository, previousState, resolutionState, fetched, body);
-    const latestRemote = (await git(repository, ["rev-parse", "refs/remotes/origin/main"])).stdout.trim();
+    const latestRemote = fetched.remoteHead;
     const mergedRemote = await mergeIntoIntegration(worktree, latestRemote, identity, {
       oursStage: 2,
       theirsStage: 3,

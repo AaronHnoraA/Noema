@@ -113,4 +113,16 @@ for (const command of [
   "Add :CFBundleDocumentTypes:0:CFBundleTypeExtensions:1 string markdown",
 ]) execFileSync(plist, ["-c", command, join(contents, "Info.plist")]);
 
+try {
+  execFileSync(plist, ["-c", "Delete :CFBundleURLTypes", join(contents, "Info.plist")], { stdio: "ignore" });
+} catch {}
+for (const command of [
+  "Add :CFBundleURLTypes array",
+  "Add :CFBundleURLTypes:0 dict",
+  "Add :CFBundleURLTypes:0:CFBundleURLName string com.noema.desktop.noema",
+  "Add :CFBundleURLTypes:0:CFBundleTypeRole string Viewer",
+  "Add :CFBundleURLTypes:0:CFBundleURLSchemes array",
+  "Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string noema",
+]) execFileSync(plist, ["-c", command, join(contents, "Info.plist")]);
+
 console.log(`[noema-electron] ${executableMode} SiYuan-derived Electron shell with hard-linked Frameworks and linked app/kernel/icon -> ${output}`);

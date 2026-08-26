@@ -30,8 +30,6 @@ import (
 	"github.com/88250/lute/ast"
 	"github.com/88250/lute/parse"
 	"github.com/88250/lute/render"
-	"github.com/emirpasic/gods/sets/hashset"
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/av"
 	"github.com/aaronhe/noema/kernel/conf"
 	"github.com/aaronhe/noema/kernel/filesys"
@@ -39,6 +37,8 @@ import (
 	"github.com/aaronhe/noema/kernel/task"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/emirpasic/gods/sets/hashset"
+	"github.com/siyuan-note/logging"
 )
 
 func PushReloadSnippet(snippet *conf.Snpt) {
@@ -175,7 +175,7 @@ func refreshDocInfo0(tree *parse.Tree, size uint64) {
 	subFileCount := 0
 	if IsBoxDoc(tree.Box, tree.ID) {
 		subFileCount = BoxDocSubFileCount(tree.Box)
-	} else if "true" != tree.Root.IALAttr(DocHiddenAttr) {
+	} else if conf.BoxKindMarkdown != GetBoxKind(tree.Box) && "true" != tree.Root.IALAttr(DocHiddenAttr) {
 		subDir := filepath.Join(util.DataDir, tree.Box, strings.TrimSuffix(tree.Path, ".sy"))
 		subFiles, err := os.ReadDir(subDir)
 		if err == nil {
@@ -356,6 +356,12 @@ func refreshDynamicRefTexts0(updatedDefNodes map[string]*ast.Node, updatedTrees 
 				continue
 			}
 		}
+		// Dynamic-anchor refresh is a native AST rewrite. Markdown references
+		// are source-authoritative and may only change through a bounded source
+		// patch, never through this derived blocktree projection.
+		if nil == refTree || nil != requireNativeDocumentTree(refTree.Box) {
+			continue
+		}
 
 		var refTreeChanged bool
 		ast.Walk(refTree.Root, func(n *ast.Node, entering bool) ast.WalkStatus {
@@ -449,6 +455,9 @@ func updateAttributeViewBlockText(updatedDefNodes map[string]*ast.Node) {
 	}
 
 	for _, updatedDefNode := range updatedDefNodes {
+		if nil != requireNativeBlockIDs(updatedDefNode.ID) {
+			continue
+		}
 		avs := updatedDefNode.IALAttr(av.NodeAttrNameAvs)
 		if "" == avs {
 			continue
@@ -456,6 +465,9 @@ func updateAttributeViewBlockText(updatedDefNodes map[string]*ast.Node) {
 
 		avIDs := strings.SplitSeq(avs, ",")
 		for avID := range avIDs {
+			if nil != requireNativeAttributeViewMutation(avID, updatedDefNode.ID) {
+				continue
+			}
 			attrView, parseErr := av.ParseAttributeView(avID)
 			if nil != parseErr {
 				continue

@@ -408,8 +408,13 @@ func RenderAttributeViewWithTarget(blockID, avID, viewID, query string, page, pa
 				}
 			}
 		}
-		if nil != bt && IsEncryptedBox(bt.BoxID) {
-			avBoxID = bt.BoxID
+		if nil != bt {
+			if err = requireNativeAttributeViewMutation(avID, blockID); nil != err {
+				return
+			}
+			if IsEncryptedBox(bt.BoxID) {
+				avBoxID = bt.BoxID
+			}
 		}
 	}
 
@@ -458,6 +463,9 @@ func RenderAttributeViewWithTarget(blockID, avID, viewID, query string, page, pa
 	}
 	if err != nil {
 		logging.LogErrorf("parse attribute view [%s] failed: %s", avID, err)
+		return
+	}
+	if err = requireNativeAttributeViewState(attrView); nil != err {
 		return
 	}
 	if targetItemID != "" {
@@ -597,7 +605,7 @@ func renderAttributeViewGroups(viewable av.Viewable, attrView *av.AttributeView,
 	// ignoreRows 时跳过重新生成（需要行数据），沿用已保存的分组。
 	if !ignoreRows && isGroupByTemplate(attrView, view) {
 		genAttrViewGroups(view, attrView) // 仅重新生成一个视图的分组以提升性能
-		if writable {
+		if writable && nil == requireNativeAttributeViewState(attrView) {
 			if err = av.SaveAttributeView(attrView); err != nil {
 				logging.LogErrorf("save attribute view [%s] failed: %s", attrView.ID, err)
 				return

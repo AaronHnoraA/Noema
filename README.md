@@ -91,6 +91,22 @@ bar mirroring the Emacs editor header: back, forward, refresh, editor actions,
 window actions, and the current filename. These are two maintained host
 adapters—the App controls do not remove or replace the Emacs header-line.
 
+The installed app also registers the `noema:` deep-link protocol. Workspace
+links should use an encoded path relative to the configured note root; an
+explicit absolute Markdown file is available for local automation:
+
+```text
+noema://open?path=projects%2Fpaper.md#Main%20Result
+noema://open?file=%2FUsers%2Fme%2FNotes%2Fpaper.md&disposition=new
+noema://wiki
+noema://graph
+```
+
+Only existing `.md`/`.markdown` files are accepted. Relative links may not
+escape the note root through `..` or symlinks, hidden paths and unknown query
+parameters are rejected, and `hash`/`dom` targets use the editor's normal
+navigation path rather than a privileged renderer API.
+
 Desktop drag/drop follows the note workflow:
 
 - Drop one or more Markdown files to open each in a new Noema window.

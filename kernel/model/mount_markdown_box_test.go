@@ -57,6 +57,14 @@ func TestCreateMarkdownBoxSetsKindWithoutInitializingBoxDoc(t *testing.T) {
 	if "Markdown Vault" != mdBoxConf.Name {
 		t.Fatalf("unexpected box name %q", mdBoxConf.Name)
 	}
+	// Enabling the global .sy box-document feature must not change the
+	// semantics of an existing Markdown box. EnsureBoxDoc is shared by startup
+	// and the feature-refresh path, so guard the primitive itself.
+	boxDocEnabled := true
+	Conf.FileTree.BoxDocEnabled = &boxDocEnabled
+	if boxDocID, ensureErr := EnsureBoxDoc(mdBoxID); nil != ensureErr || "" != boxDocID {
+		t.Fatalf("EnsureBoxDoc accepted Markdown box: id=%q err=%v", boxDocID, ensureErr)
+	}
 	// ensureBoxDoc0（initializeBoxDoc=true 才会跑）对 .sy box 会创建一个隐藏的
 	// "笔记本自身文档"元数据文件；markdown box 应该完全没有这个文件。
 	// readBoxDocID 对"文件不存在"和"文件存在但内容合法"都返回 nil error，
@@ -67,7 +75,11 @@ func TestCreateMarkdownBoxSetsKindWithoutInitializingBoxDoc(t *testing.T) {
 	} else if !os.IsNotExist(statErr) {
 		t.Fatalf("unexpected stat error for %s: %s", boxDocPath, statErr)
 	}
+	if _, statErr := os.Stat(filepath.Join(util.DataDir, mdBoxID, mdBoxID+".sy")); !os.IsNotExist(statErr) {
+		t.Fatalf("markdown box should not have a native .sy box document, stat err=%v", statErr)
+	}
 
+	boxDocEnabled = false
 	syBoxID, err := CreateBox("Sy Vault")
 	if nil != err {
 		t.Fatalf("CreateBox failed: %s", err)

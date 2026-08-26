@@ -14,7 +14,7 @@ import "../src/styles/aaron-ui-elegant.css";
 
 import { createEditor } from "../src/editor-api.ts";
 import type { Editor } from "../src/editor-api.ts";
-import { markdownLineStartOffset } from "./markdown-box-lab-navigation.ts";
+import { markdownBlockSourceOffset } from "./markdown-box-lab-navigation.ts";
 
 interface MarkdownBlockRef {
   id: string;
@@ -232,7 +232,7 @@ editorHost.addEventListener("aaronnote:open-block-ref", (event) => {
       notebookInput.value = resp.data.notebook;
       await doLoad(resp.data.path);
       if (!editor || currentNotebook !== resp.data.notebook || currentPath !== resp.data.path) return;
-      const offset = markdownLineStartOffset(editor.getMarkdown(), resp.data.line || 1);
+      const offset = markdownBlockSourceOffset(editor.getMarkdown(), resp.data.id, resp.data.line || 1);
       editor.setMarkdownSelection(offset, offset);
       editor.revealCursor();
       setStatus(`opened block ${resp.data.id} at ${resp.data.path}:${resp.data.line || 1}`);

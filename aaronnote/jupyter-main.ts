@@ -1,6 +1,7 @@
 import "../src/styles/aaron-ui-tokens.css";
 import "../src/styles/aaron-ui-elegant.css";
 import "../src/styles/theme-loader.ts";
+import { installB3ComponentSystem } from "../src/b3-component-system.ts";
 import "./jupyter-page.css";
 import { api } from "./api-client.ts";
 import type { JupyterKernelSpec } from "./api-client.ts";
@@ -109,6 +110,7 @@ declare global {
 }
 
 const removeThemeRuntime = installNoemaThemeRuntime();
+const removeB3ComponentSystem = installB3ComponentSystem(document.body);
 void loadNoemaAppConfig().catch(() => {});
 
 const STORAGE_KEY = "noema:jupyter:tabs:v1";
@@ -1333,5 +1335,6 @@ window.addEventListener("beforeunload", () => {
   persistTabs();
   dialogOutputDispose?.();
   disposeOutputs();
+  removeB3ComponentSystem();
   removeThemeRuntime();
 }, { once: true });

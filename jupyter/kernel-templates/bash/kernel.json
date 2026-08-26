@@ -8,6 +8,13 @@
   ],
   "display_name": "Bash",
   "language": "bash",
+  "env": {
+    "AARONNOTE_JUPYTER_STATE_ROOT": "@AARONNOTE_JUPYTER_STATE_ROOT@",
+    "JUPYTER_CONFIG_DIR": "@AARONNOTE_JUPYTER_STATE_ROOT@/config",
+    "JUPYTER_DATA_DIR": "@AARONNOTE_JUPYTER_STATE_ROOT@/data",
+    "JUPYTER_RUNTIME_DIR": "@AARONNOTE_JUPYTER_STATE_ROOT@/runtime",
+    "IPYTHONDIR": "@AARONNOTE_JUPYTER_STATE_ROOT@/ipython"
+  },
   "metadata": {
     "debugger": false
   }

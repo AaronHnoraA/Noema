@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "@voidzero-dev/vite-plus-test";
+import { afterEach, describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -6,13 +6,14 @@ import { tmpdir } from "node:os";
 // @ts-ignore The converter is a Node ESM module outside the TS app graph.
 import { aaronnoteMarkdownToLatex, applyLatexTemplate, escapeLatexTitle, latexMacrosPackage, latexSideCommentPreamble, writeLatexExport } from "../server/lib/latex-export.mjs";
 // @ts-ignore Node ESM module outside the TS app graph.
-import { aaronnoteMarkdownToLatexPandoc, preprocessAaronnoteForPandoc } from "../server/lib/latex-export-pandoc.mjs";
+import { academicLatexPostprocess, aaronnoteMarkdownToLatexPandoc, extractAaronnoteMetadata, preprocessAaronnoteForPandoc } from "../server/lib/latex-export-pandoc.mjs";
 // @ts-ignore The server is a Node ESM module outside the TS app graph.
-import { configure, exportLatex, latexExportAgentStatus, latexExportDefaults, listLatexTemplates, setLatexExportAgent } from "../server/lib/index.mjs";
+import { configure, configureLatexProvider, exportLatex, latexExportAgentStatus, latexExportDefaults, listLatexTemplates, setLatexExportAgent } from "../server/lib/index.mjs";
 
 const roots: string[] = [];
 
 afterEach(async () => {
+  configureLatexProvider(null);
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -566,6 +567,30 @@ describe("LaTeX export", () => {
 
     const defaults = await latexExportDefaults({ file: note }) as { outputPath?: string };
     expect(defaults.outputPath).toBe(out);
+  });
+
+  test("routes production preparation, metadata, postprocess, and template planning through the configured kernel provider", async () => {
+    const { notes } = await setupRoot();
+    const note = join(notes, "kernel-transform.md");
+    const out = join(notes, "kernel-transform.tex");
+    await writeFile(note, "#+begin meta\ntitle: Kernel transform\n#+end meta\n\n# Heading\n\nBody.\n", "utf8");
+    const provider = {
+      prepare: vi.fn(async (markdown: string, options: Record<string, unknown>) => preprocessAaronnoteForPandoc(markdown, options)),
+      metadata: vi.fn(async (markdown: string) => extractAaronnoteMetadata(markdown)),
+      postprocess: vi.fn(async (latex: string) => academicLatexPostprocess(latex)),
+      planTemplate: vi.fn(async (template: string) => ({ template })),
+      renderTemplate: vi.fn((plan: { template: string }, vars: Record<string, string>) => applyLatexTemplate(plan.template, vars)),
+    };
+    configureLatexProvider(provider);
+    const exported = await exportLatex({ file: note, outputPath: out }) as { ok?: boolean; transformSource?: string };
+    expect(exported.ok).toBe(true);
+    expect(exported.transformSource).toBe("kernel-latex");
+    expect(provider.prepare).toHaveBeenCalledOnce();
+    expect(provider.metadata).toHaveBeenCalledOnce();
+    expect(provider.postprocess).toHaveBeenCalledOnce();
+    expect(provider.planTemplate).toHaveBeenCalledOnce();
+    expect(provider.renderTemplate).toHaveBeenCalled();
+    expect(await readFile(out, "utf8")).toContain("Kernel transform");
   });
 
   test("lists templates and parses their headers", async () => {

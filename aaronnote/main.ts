@@ -1,6 +1,7 @@
 import "./desktop-bridge.ts";
 import "../src/styles/widgets.css";
 import "../src/styles/typography.css";
+import { installB3ComponentSystem } from "../src/b3-component-system.ts";
 import "./style.css";
 import "../src/styles/aaron-ui-tokens.css";
 import "../src/styles/aaron-ui-elegant.css";
@@ -49,7 +50,7 @@ import { formatMathRenderError } from "../src/math-render.ts";
 import { mathPreviewFitScale } from "./math-preview-fit.ts";
 import { getKatexMacros, setKatexMacros } from "../src/katex-macros.ts";
 import { renderJupyterVariablesTable } from "../src/jupyter-variables-view.ts";
-import { formatCitationLabel } from "../src/render-html.ts";
+import { formatCitationLabel, renderPublishedNoteHTML } from "../src/render-html.ts";
 import { hrefProtocol, safeHref } from "../src/url-safety.ts";
 import {
   api,
@@ -167,7 +168,10 @@ import type {
   EmbedQueryOpenDetail,
   EmbedQueryRequestDetail,
 } from "../src/cm6/extensions/visual/widgets/embed-query.ts";
-import { markdownLineStartOffset } from "./markdown-box-lab-navigation.ts";
+import {
+  markdownBlockSourceOffset,
+  markdownLineStartOffset,
+} from "./markdown-box-lab-navigation.ts";
 import {
   handleXwidgetControlBeforeInput,
   handleXwidgetControlKeydown,
@@ -211,6 +215,8 @@ import {
 const removeNoemaThemeRuntime = installNoemaThemeRuntime();
 const root = document.querySelector<HTMLElement>("#app");
 if (!root) throw new Error("Missing #app");
+const removeB3ComponentSystem = installB3ComponentSystem(document.body);
+window.addEventListener("beforeunload", removeB3ComponentSystem, { once: true });
 const initialParams = new URLSearchParams(window.location.search);
 const serverReaderMode = serverMode();
 if (serverReaderMode && initialParams.has("host")) {
@@ -2139,6 +2145,35 @@ host.addEventListener("aaronnote:inline-math-edit-state", (event) => {
 });
 document.addEventListener("aaronnote:visualtex-save-request", () => {
   void save(false);
+});
+
+document.addEventListener("aaronnote:open-block-ref", (event) => {
+  const id = String((event as CustomEvent<{ id?: string }>).detail?.id || "").trim();
+  if (!id) return;
+  event.preventDefault();
+  if (!commitActiveLiveTexForBoundary(false)) return;
+  setStatus(`Resolving block ${id}…`);
+  void api.notes.resolveBlock(id).then(async (location) => {
+    const file = String(location.file || "").trim();
+    if (!file) throw new Error("Block navigation returned no file");
+    const before = trackCursorPosition();
+    const changingFile = file !== currentFile;
+    if (changingFile) {
+      pushNavigationBackLocation(before);
+      await openFile(file);
+    }
+    if (file !== currentFile) throw new Error("Block target could not be opened");
+    if (!changingFile) pushNavigationBackLocation(before);
+    const markdown = editor.getMarkdown();
+    const offset = markdownBlockSourceOffset(markdown, location.id, location.line);
+    editor.setMarkdownSelection(offset, offset);
+    editor.revealCursor();
+    editor.focus();
+    noteCursorPositionEvent();
+    setStatus(`Opened block ${location.id} at ${location.path}:${location.line}`);
+  }).catch((error) => {
+    setStatus(`Block navigation failed: ${error instanceof Error ? error.message : String(error)}`);
+  });
 });
 
 document.addEventListener("aaronnote:attribute-view-request", (event) => {
@@ -5309,6 +5344,25 @@ function openNote(
   void openFile(note.file);
 }
 
+function openLocationFromHost(options: { file?: string; hash?: string; dom?: string }): void {
+  const file = String(options.file || "").trim();
+  const hash = String(options.hash || "").trim();
+  const domTarget = String(options.dom || "").trim();
+  if (!file) return;
+  const before = trackCursorPosition();
+  if (file === currentFile) {
+    const jumped = domTarget ? jumpToDomTarget(domTarget) : hash ? jumpToHash(hash) : false;
+    if (jumped) pushNavigationBackLocation(before);
+    else if (domTarget) setStatus(`DOM target not found: ${domTarget}`);
+    else if (hash) setStatus(`Anchor not found: ${hash}`);
+    return;
+  }
+  pushNavigationBackLocation(before);
+  pendingOpenHash = hash;
+  pendingOpenDomTarget = domTarget;
+  void openFile(file);
+}
+
 function cleanHref(href: string): string {
   return String(href || "").trim();
 }
@@ -6768,6 +6822,53 @@ function openLatexScopeModal(scopes: readonly LatexExportScope[]): Promise<Latex
       else list.querySelector<HTMLElement>(`[data-scope-id="${CSS.escape(focusedId)}"]`)?.focus();
     }, 0);
   });
+}
+
+function currentPrintablePdfDocument(): { html: string; title: string; defaultPath: string } | null {
+  if (!currentFile) return null;
+  const note = currentNote();
+  const title = note?.title || fileNameFromPath(currentFile).replace(/\.[^.]+$/, "") || "Noema";
+  const defaultPath = /\.(?:md|markdown)$/i.test(currentFile)
+    ? currentFile.replace(/\.(?:md|markdown)$/i, ".pdf")
+    : `${currentFile}.pdf`;
+  const html = renderPublishedNoteHTML(currentMarkdownText(), {
+    title,
+    group: note?.groupLabel || note?.groupKey || "Root",
+    date: note?.date || "",
+    kind: note?.kind || currentKind || "default",
+    format: "pdf",
+    root: `${location.origin}/`,
+    assetResolver: (source) => window.AaronnoteResolveAssetUrl?.(source) || source,
+  });
+  return { html, title, defaultPath };
+}
+
+if (desktopMode && initialParams.get("desktopPrintProbe") === "1") {
+  window.__noemaDesktopPrintDocument = currentPrintablePdfDocument;
+}
+
+async function exportPdfTool(): Promise<void> {
+  if (!window.noemaDesktop?.exportPdf) {
+    setStatus("PDF export is available in Noema.app");
+    return;
+  }
+  finishInlineMathEditing(editor.view);
+  const printable = currentPrintablePdfDocument();
+  if (!printable) {
+    setStatus("Open a desktop note before exporting PDF");
+    return;
+  }
+  setStatus("Choose PDF output path…");
+  try {
+    const result = await window.noemaDesktop.exportPdf(printable);
+    if (result.canceled) {
+      setStatus("PDF export canceled");
+      return;
+    }
+    setStatus(`Exported PDF · ${fileNameFromPath(result.path)}`);
+  } catch (error) {
+    setStatus(`PDF export failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 async function exportLatexTool(): Promise<void> {
@@ -9974,6 +10075,8 @@ function runHostCommand(detail: unknown): boolean {
     value?: string;
     text?: string;
     file?: string;
+    hash?: string;
+    dom?: string;
     mode?: VimLiteMode;
     version?: number;
     mtimeMs?: number;
@@ -10249,6 +10352,12 @@ function runHostCommand(detail: unknown): boolean {
       return true;
     case "task-manager":
       openTaskManager();
+      return true;
+    case "open-location":
+      openLocationFromHost(body);
+      return true;
+    case "export-pdf":
+      void exportPdfTool();
       return true;
     case "export-latex":
       void exportLatexTool();

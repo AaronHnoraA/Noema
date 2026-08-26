@@ -150,7 +150,9 @@ func assetCreateHTML(args map[string]any) (CallToolResult, error) {
 			NextID:     nextID,
 		}},
 	}}
-	model.PerformTransactions(&transactions)
+	if err := model.PerformTransactions(&transactions); nil != err {
+		return CallToolResult{Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("create HTML IFrame block failed: %s", err)}}, IsError: true}, nil
+	}
 	model.FlushTxQueue()
 	util.PushReloadProtyle(docBlockTree.RootID)
 

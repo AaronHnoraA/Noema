@@ -33,6 +33,38 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func TestListDocTreeRejectsMarkdownNotebook(t *testing.T) {
+	originalDataDir := util.DataDir
+	util.DataDir = filepath.Join(t.TempDir(), "data")
+	t.Cleanup(func() { util.DataDir = originalDataDir })
+
+	boxID := "20260826050000-lstdoc1"
+	boxConf := conf.NewBoxConf()
+	boxConf.Kind = conf.BoxKindMarkdown
+	if err := (&model.Box{ID: boxID}).SaveConf(boxConf); nil != err {
+		t.Fatal(err)
+	}
+
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.POST("/api/filetree/listDocTree", listDocTree)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/filetree/listDocTree", strings.NewReader(`{"notebook":"`+boxID+`","path":"/"}`))
+	request.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, request)
+
+	response := &struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+	}{}
+	if err := json.Unmarshal(recorder.Body.Bytes(), response); nil != err {
+		t.Fatal(err)
+	}
+	if -1 != response.Code || !strings.Contains(response.Msg, model.ErrMarkdownNativeDocumentTree.Error()) {
+		t.Fatalf("Markdown notebook entered native document-tree traversal: %s", recorder.Body.String())
+	}
+}
+
 func TestSetSortRejectsInvalidRequest(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()

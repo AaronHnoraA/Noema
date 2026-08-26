@@ -40,6 +40,9 @@ contextBridge.exposeInMainWorld("noemaDesktop", {
   chooseSavePath(options = {}) {
     return ipcRenderer.invoke("noema:choose-save-path", options);
   },
+  exportPdf(options = {}) {
+    return ipcRenderer.invoke("noema:export-pdf", options);
+  },
   readClipboard() {
     return ipcRenderer.invoke("noema:read-clipboard");
   },

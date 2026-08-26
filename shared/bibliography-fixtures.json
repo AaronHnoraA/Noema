@@ -1,0 +1,80 @@
+[
+  {
+    "name": "braced values and string macro",
+    "source": "@string{crelle = {Journal für die reine und angewandte Mathematik (Crelle's Journal)}}\n@article{Str87,\n  author = {Strassen, Volker},\n  title = {Relative Bilinear Complexity and Matrix Multiplication},\n  journal = crelle,\n  year = {1987},\n  pages = {406-443},\n  doi = {10.1515/crll.1987.375-376.406}\n}",
+    "expectedEntries": [
+      {
+        "type": "article",
+        "key": "Str87",
+        "fields": {
+          "author": "Strassen, Volker",
+          "title": "Relative Bilinear Complexity and Matrix Multiplication",
+          "journal": "Journal für die reine und angewandte Mathematik (Crelle's Journal)",
+          "year": "1987",
+          "pages": "406-443",
+          "doi": "10.1515/crll.1987.375-376.406"
+        }
+      }
+    ],
+    "expectedDiagnostics": []
+  },
+  {
+    "name": "TeX accents",
+    "source": "@book{Godel31,\n  author = {G{\\\"o}del, Kurt},\n  title = {On Formally Undecidable Propositions},\n  year = {1931}\n}",
+    "expectedEntries": [
+      {
+        "type": "book",
+        "key": "Godel31",
+        "fields": {
+          "author": "Gödel, Kurt",
+          "title": "On Formally Undecidable Propositions",
+          "year": "1931"
+        }
+      }
+    ],
+    "expectedDiagnostics": []
+  },
+  {
+    "name": "forward macros concatenation and month",
+    "source": "% @book{Ignored, title={comment}}\n@article{Forward,\n  journal = journalName # \" — Series A\",\n  month = jan,\n  year = 2026\n}\n@string{journalName = baseName # \" Transactions\"}\n@string{baseName = \"Noema\"}",
+    "expectedEntries": [
+      {
+        "type": "article",
+        "key": "Forward",
+        "fields": {
+          "journal": "Noema Transactions — Series A",
+          "month": "January",
+          "year": "2026"
+        }
+      }
+    ],
+    "expectedDiagnostics": []
+  },
+  {
+    "name": "invalid macros and field syntax",
+    "source": "@string{loopA = loopB}\n@string{loopB = loopA}\n@string{dup = \"first\"}\n@string{dup = \"second\"}\n@book{Broken, title = missingMacro, bad field}",
+    "expectedEntries": [
+      {
+        "type": "book",
+        "key": "Broken",
+        "fields": {
+          "title": "missingMacro"
+        }
+      }
+    ],
+    "diagnosticsContain": [
+      "Duplicate BibTeX string macro: dup",
+      "Unknown BibTeX string macro: missingMacro",
+      "Broken: invalid field syntax near \"bad field\""
+    ],
+    "diagnosticsPrefix": ["Cyclic BibTeX string macro:"]
+  },
+  {
+    "name": "UTF-16 diagnostic location",
+    "source": "😀\n@book{Broken, title={never closed}",
+    "expectedEntries": [],
+    "expectedDiagnostics": [
+      "Unclosed BibTeX entry near offset 3 (line 2, column 1)"
+    ]
+  }
+]

@@ -63,12 +63,23 @@ function substituteKernelTemplate(value, variables) {
   return value;
 }
 
-export async function findKernelSpecs({ searchDirs, allowedNames, fallbackKernelDirs = [], templateVariables = {} }) {
+export async function findKernelSpecs({
+  searchDirs,
+  allowedNames,
+  fallbackKernelDirs = [],
+  preferFallbackKernelDirs = false,
+  templateVariables = {},
+}) {
   const seen = new Map();
-  const kernelDirs = [
-    ...searchDirs.map((dir) => path.join(dir, "kernels")),
-    ...fallbackKernelDirs,
-  ];
+  const discoveredKernelDirs = searchDirs.map((dir) => path.join(dir, "kernels"));
+  // Noema's templates are executable source assets, not generated user
+  // state. Desktop uses them as the stable python/bash/Sage definitions so a
+  // stale kernelspec installed through the historical Emacs compatibility
+  // link cannot become a runtime dependency. Non-bundled user kernels remain
+  // discoverable after these names have been claimed.
+  const kernelDirs = preferFallbackKernelDirs
+    ? [...fallbackKernelDirs, ...discoveredKernelDirs]
+    : [...discoveredKernelDirs, ...fallbackKernelDirs];
   for (const kernelsDir of kernelDirs) {
     let entries;
     try {

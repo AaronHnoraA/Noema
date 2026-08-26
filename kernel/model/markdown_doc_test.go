@@ -73,6 +73,37 @@ func TestLoadMarkdownDocRejectsPathEscape(t *testing.T) {
 	}
 }
 
+func TestLoadMarkdownDocRejectsNonDocumentAndHiddenPaths(t *testing.T) {
+	originalDataDir := util.DataDir
+	util.DataDir = t.TempDir()
+	t.Cleanup(func() { util.DataDir = originalDataDir })
+
+	boxID := "20260825000000-loadpath1"
+	setupMarkdownBoxForIndexTest(t, boxID)
+	for _, candidate := range []string{"/notes/not-a-document.sy", "/.git/README.md", "/notes/.private.md"} {
+		if _, _, err := LoadMarkdownDoc(boxID, candidate); nil == err {
+			t.Fatalf("expected an error loading forbidden Markdown path %q", candidate)
+		}
+	}
+}
+
+func TestNormalizedMarkdownDocPathIsSharedCanonicalContract(t *testing.T) {
+	originalDataDir := util.DataDir
+	util.DataDir = t.TempDir()
+	t.Cleanup(func() { util.DataDir = originalDataDir })
+
+	boxID := "20260825000000-pathrule1"
+	setupMarkdownBoxForIndexTest(t, boxID)
+	if got, err := normalizedMarkdownDocPath(boxID, "notes/TOPIC.MD"); nil != err || "/notes/TOPIC.MD" != got {
+		t.Fatalf("Markdown path normalization mismatch: got %q, err=%v", got, err)
+	}
+	for _, candidate := range []string{"/", "/notes/topic.sy", "/.git/topic.md", "/notes/.private/topic.md", "/../outside.md"} {
+		if _, err := normalizedMarkdownDocPath(boxID, candidate); nil == err {
+			t.Fatalf("shared Markdown path contract accepted %q", candidate)
+		}
+	}
+}
+
 func TestListMarkdownDocsSkipsSiyuanDirAndSortsByPath(t *testing.T) {
 	originalDataDir := util.DataDir
 	util.DataDir = t.TempDir()

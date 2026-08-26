@@ -26,14 +26,17 @@ import (
 
 	"github.com/88250/lute/ast"
 	"github.com/88250/lute/parse"
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/search"
 	"github.com/aaronhe/noema/kernel/sql"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/siyuan-note/logging"
 )
 
 func createDocsByHPath(boxID, hPath, content, parentID, id string, titleEmpty bool) (retID string, err error) {
+	if err = requireNativeDocumentTree(boxID); nil != err {
+		return
+	}
 	if "" == id {
 		id = ast.NewNodeID()
 	}

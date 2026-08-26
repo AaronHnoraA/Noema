@@ -30,19 +30,29 @@ import (
 	"github.com/88250/gulu"
 	"github.com/88250/lute/ast"
 	"github.com/88250/lute/parse"
-	"github.com/open-spaced-repetition/go-fsrs/v3"
-	"github.com/siyuan-note/filelock"
-	"github.com/siyuan-note/logging"
-	"github.com/siyuan-note/riff"
 	"github.com/aaronhe/noema/kernel/cache"
 	"github.com/aaronhe/noema/kernel/sql"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/open-spaced-repetition/go-fsrs/v3"
+	"github.com/siyuan-note/filelock"
+	"github.com/siyuan-note/logging"
+	"github.com/siyuan-note/riff"
 )
 
 // ValidateFlashcardBlockIDs 只允许普通笔记本中可确认存在的块进入全局闪卡存储。
 func ValidateFlashcardBlockIDs(blockIDs []string) error {
-	return validateFlashcardBlockIDs(blockIDs, treenode.GetBlockTree, IsEncryptedBox)
+	if err := validateFlashcardBlockIDs(blockIDs, treenode.GetBlockTree, IsEncryptedBox); nil != err {
+		return err
+	}
+	for _, blockID := range blockIDs {
+		if bt := treenode.GetBlockTree(blockID); nil != bt {
+			if err := requireNativeDocumentTree(bt.BoxID); nil != err {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func validateFlashcardBlockIDs(blockIDs []string, getBlockTree func(string) *treenode.BlockTree, isEncryptedBox func(string) bool) error {
@@ -64,7 +74,7 @@ func validateFlashcardTree(rootID string) error {
 
 func isSupportedFlashcardBlock(blockID string) bool {
 	bt := treenode.GetBlockTreeInExactBox(blockID, "")
-	return bt != nil && !IsEncryptedBox(bt.BoxID)
+	return bt != nil && !IsEncryptedBox(bt.BoxID) && nil == requireNativeDocumentTree(bt.BoxID)
 }
 
 func filterSupportedFlashcards(cards []riff.Card) (ret []riff.Card) {
@@ -255,6 +265,9 @@ func ResetFlashcards(typ, id, deckID string, blockIDs []string) error {
 	}
 	switch typ {
 	case "notebook":
+		if err := requireNativeDocumentTree(id); nil != err {
+			return err
+		}
 		if IsEncryptedBox(id) {
 			return errors.New(Conf.Language(313))
 		}
@@ -279,13 +292,14 @@ func ResetFlashcards(typ, id, deckID string, blockIDs []string) error {
 					logging.LogWarnf("deck not found for blocks [%s]", strings.Join(blockIDs, ","))
 					continue
 				}
-				resetFlashcards(deckID, blockIDs)
+				if err := resetFlashcards(deckID, blockIDs); nil != err {
+					return err
+				}
 			}
 			return nil
 		}
 
-		resetFlashcards(deckID, blockIDs)
-		return nil
+		return resetFlashcards(deckID, blockIDs)
 	}
 
 	var blocks []*Block
@@ -325,11 +339,10 @@ func ResetFlashcards(typ, id, deckID string, blockIDs []string) error {
 	}
 
 	blockIDs = gulu.Str.RemoveDuplicatedElem(blockIDs)
-	resetFlashcards(deckID, blockIDs)
-	return nil
+	return resetFlashcards(deckID, blockIDs)
 }
 
-func resetFlashcards(deckID string, blockIDs []string) {
+func resetFlashcards(deckID string, blockIDs []string) error {
 	transactions := []*Transaction{
 		{
 			DoOperations: []*Operation{
@@ -351,8 +364,11 @@ func resetFlashcards(deckID string, blockIDs []string) {
 		},
 	}
 
-	PerformTransactions(&transactions)
+	if err := PerformTransactions(&transactions); nil != err {
+		return err
+	}
 	FlushTxQueue()
+	return nil
 }
 
 func GetFlashcardNotebooks() (ret []*Box) {
@@ -364,8 +380,8 @@ func GetFlashcardNotebooks() (ret []*Box) {
 	deckBlockIDs := deck.GetBlockIDs()
 	boxes := Conf.GetOpenedBoxes()
 	for _, box := range boxes {
-		// 加密笔记本不支持闪卡，不在闪卡笔记本列表中展示
-		if IsEncryptedBox(box.ID) {
+		// 加密和 Markdown 笔记本不支持原生闪卡，不在列表中展示。
+		if IsEncryptedBox(box.ID) || nil != requireNativeDocumentTree(box.ID) {
 			continue
 		}
 		newFlashcardCount, dueFlashcardCount, flashcardCount := countBoxFlashcard(box.ID, deck, deckBlockIDs)
@@ -401,7 +417,7 @@ func countTreeFlashcard(rootID string, deck *riff.Deck, deckBlockIDs []string) (
 }
 
 func countBoxFlashcard(boxID string, deck *riff.Deck, deckBlockIDs []string) (newFlashcardCount, dueFlashcardCount, flashcardCount int) {
-	if IsEncryptedBox(boxID) {
+	if IsEncryptedBox(boxID) || nil != requireNativeDocumentTree(boxID) {
 		return
 	}
 	blockIDsMap, blockIDs := getBoxBlocks(boxID)
@@ -428,7 +444,7 @@ var (
 
 func GetNotebookFlashcards(boxID string, page, pageSize int) (blocks []*Block, total, pageCount int) {
 	blocks = []*Block{}
-	if IsEncryptedBox(boxID) {
+	if IsEncryptedBox(boxID) || nil != requireNativeDocumentTree(boxID) {
 		return
 	}
 
@@ -739,6 +755,9 @@ func newFlashcard(card riff.Card, deckID string, now time.Time) *Flashcard {
 }
 
 func GetNotebookDueFlashcards(boxID string, reviewedCardIDs []string) (ret []*Flashcard, unreviewedCount, unreviewedNewCardCount, unreviewedOldCardCount int, err error) {
+	if err = requireNativeDocumentTree(boxID); nil != err {
+		return
+	}
 	if IsEncryptedBox(boxID) {
 		err = errors.New(Conf.Language(313))
 		return

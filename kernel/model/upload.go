@@ -28,12 +28,12 @@ import (
 
 	"github.com/88250/gulu"
 	"github.com/88250/lute/ast"
-	"github.com/gin-gonic/gin"
-	"github.com/siyuan-note/filelock"
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/cache"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/gin-gonic/gin"
+	"github.com/siyuan-note/filelock"
+	"github.com/siyuan-note/logging"
 )
 
 // InsertAssetBytes 将内存中的资源直接写入目标文档资源目录，避免生成内容经过明文临时文件。
@@ -41,6 +41,9 @@ func InsertAssetBytes(id, fileName string, data []byte) (assetPath string, creat
 	bt := treenode.GetBlockTree(id)
 	if bt == nil {
 		return "", false, errors.New(Conf.Language(71))
+	}
+	if err = requireNativeDocumentTree(bt.BoxID); nil != err {
+		return
 	}
 	if len(data) == 0 {
 		return "", false, errors.New("asset data is empty")
@@ -100,6 +103,9 @@ func InsertLocalAssets(id string, assetAbsPaths []string, isUpload bool) (succMa
 	bt := treenode.GetBlockTree(id)
 	if nil == bt {
 		err = errors.New(Conf.Language(71))
+		return
+	}
+	if err = requireNativeDocumentTree(bt.BoxID); nil != err {
 		return
 	}
 
@@ -229,6 +235,11 @@ func Upload(c *gin.Context) {
 			ret.Msg = Conf.Language(71)
 			return
 		}
+		if err = requireNativeDocumentTree(bt.BoxID); nil != err {
+			ret.Code = -1
+			ret.Msg = err.Error()
+			return
+		}
 		uploadBoxID = bt.BoxID
 		docDirLocalPath := filepath.Join(util.DataDir, bt.BoxID, path.Dir(bt.Path))
 		assetsDirPath = getAssetsDir(filepath.Join(util.DataDir, bt.BoxID), docDirLocalPath)
@@ -244,8 +255,15 @@ func Upload(c *gin.Context) {
 			return
 		}
 		// assetsDirPath 可能指向加密 box（调用方未传 id），反查 boxID 让文件名脱敏和内容加密生效
-		if pathBox := ExtractBoxIDFromAssetsPath(assetsDirPath); pathBox != "" && IsEncryptedBox(pathBox) {
-			uploadBoxID = pathBox
+		if pathBox := ExtractBoxIDFromAssetsPath(assetsDirPath); pathBox != "" {
+			if err = requireNativeDocumentTree(pathBox); nil != err {
+				ret.Code = -1
+				ret.Msg = err.Error()
+				return
+			}
+			if IsEncryptedBox(pathBox) {
+				uploadBoxID = pathBox
+			}
 		}
 	}
 	if !gulu.File.IsExist(assetsDirPath) {
@@ -525,6 +543,11 @@ func StoreAssetForBox(boxID, assetDirPath, originalName string, data []byte) (di
 // 普通 box：util.AssetName 生成名 → filelock.WriteFile 明文写入
 // boxID 为空时按普通 box 处理（写入全局 assets）。
 func storeAssetForBox(boxID, assetDirPath, originalName string, data []byte) (diskName string, err error) {
+	if "" != boxID {
+		if err = requireNativeDocumentTree(boxID); nil != err {
+			return
+		}
+	}
 	if IsEncryptedBox(boxID) {
 		HoldBoxReadLock(boxID)
 		defer ReleaseBoxReadLock(boxID)

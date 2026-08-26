@@ -17,6 +17,8 @@
 package cmd
 
 import (
+	"fmt"
+
 	"github.com/aaronhe/noema/kernel/cache"
 	"github.com/aaronhe/noema/kernel/job"
 	"github.com/aaronhe/noema/kernel/model"
@@ -57,7 +59,7 @@ var serveCmd = &cobra.Command{
 		}
 		return nil // bypass root's init — BootWithFlags() handles it
 	},
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		// --workspace 优先取 serve 自己的（rootCmd 的 persistent flag），兜底环境变量与默认值交给 util.BootWithFlags 内部处理（与原 Boot() 行为一致）。
 		ws := workspacePath
 
@@ -73,7 +75,9 @@ var serveCmd = &cobra.Command{
 		sql.SetCaseSensitive(model.Conf.Search.CaseSensitive)
 		sql.SetIndexAssetPath(model.Conf.Search.IndexAssetPath)
 
-		model.InitBoxes()
+		if err := model.InitBoxes(); nil != err {
+			return fmt.Errorf("initialize notebook indexes: %w", err)
+		}
 		model.LoadFlashcards()
 		util.LoadAssetsTexts()
 
@@ -94,6 +98,7 @@ var serveCmd = &cobra.Command{
 		model.WatchEmojis()
 		model.WatchThemes()
 		model.HandleSignal()
+		return nil
 	},
 }
 

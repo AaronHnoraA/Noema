@@ -65,6 +65,27 @@ func TestUpsertThenRemoveIndexesRoundTripsMarkdownBoxWithRealSQL(t *testing.T) {
 	sql.InitAssetContentDatabase(true)
 	t.Cleanup(sql.CloseDatabase)
 
+	foreignRelPath := "/notes/foreign.sy"
+	foreignAbsPath := filepath.Join(util.DataDir, boxID, foreignRelPath)
+	if err := os.MkdirAll(filepath.Dir(foreignAbsPath), 0755); nil != err {
+		t.Fatal(err)
+	}
+	foreignSource := []byte("# Foreign native export\n\nMust remain an ordinary repository file.\n")
+	if err := os.WriteFile(foreignAbsPath, foreignSource, 0644); nil != err {
+		t.Fatal(err)
+	}
+	UpsertIndexes([]string{boxID + foreignRelPath})
+	sql.FlushQueue()
+	if bt := treenode.GetBlockTreeRootByPath(boxID, foreignRelPath); nil != bt {
+		t.Fatalf("foreign .sy file in Markdown repository entered blocktree: %+v", bt)
+	}
+	if rows := sql.SelectBlocksRawStmtArgs("SELECT * FROM blocks WHERE box = ? AND path = ?", []any{boxID, foreignRelPath}, 2); 0 != len(rows) {
+		t.Fatalf("foreign .sy file in Markdown repository entered SQL: %+v", rows)
+	}
+	if got, err := os.ReadFile(foreignAbsPath); nil != err || string(got) != string(foreignSource) {
+		t.Fatalf("foreign .sy file changed during ignored index request: bytes=%q err=%v", got, err)
+	}
+
 	relPath := "/notes/hello.md"
 	absPath := filepath.Join(util.DataDir, boxID, relPath)
 	if err := os.MkdirAll(filepath.Dir(absPath), 0755); nil != err {
@@ -84,6 +105,24 @@ func TestUpsertThenRemoveIndexesRoundTripsMarkdownBoxWithRealSQL(t *testing.T) {
 	}
 	if nil == sql.GetBlock(bt.RootID) {
 		t.Fatal("UpsertIndexes did not reach the sql layer — root block not indexed")
+	}
+
+	// A stray .sy whose stem happens to equal a live Markdown projection ID
+	// must not make RemoveIndexes delete that projection by filename-derived ID.
+	foreignRemoveRelPath := "/notes/" + bt.RootID + ".sy"
+	if err := os.WriteFile(filepath.Join(util.DataDir, boxID, foreignRemoveRelPath), foreignSource, 0644); nil != err {
+		t.Fatal(err)
+	}
+	RemoveIndexes([]string{boxID + foreignRemoveRelPath})
+	sql.FlushQueue()
+	if nil == treenode.GetBlockTreeRootByPath(boxID, relPath) || nil == sql.GetBlock(bt.RootID) {
+		t.Fatal("foreign .sy removal request deleted the live Markdown projection")
+	}
+	if got, err := os.ReadFile(filepath.Join(util.DataDir, boxID, foreignRemoveRelPath)); nil != err || string(got) != string(foreignSource) {
+		t.Fatalf("foreign .sy file changed during ignored removal request: bytes=%q err=%v", got, err)
+	}
+	if got, err := os.ReadFile(absPath); nil != err || string(got) != source {
+		t.Fatalf("live Markdown source changed during foreign removal request: bytes=%q err=%v", got, err)
 	}
 
 	if err := os.Remove(absPath); nil != err {

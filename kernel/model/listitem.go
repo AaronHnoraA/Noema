@@ -28,12 +28,18 @@ import (
 )
 
 func ListItem2Doc(srcListItemID, targetBoxID, targetPath, previousPath string, toTop bool) (srcRootBlockID, newTargetPath string, err error) {
+	if err = requireNativeDocumentTree(targetBoxID); nil != err {
+		return
+	}
 	targetPath = normalizeBoxDocTarget(targetBoxID, targetPath)
 	FlushTxQueue()
 
 	srcTree, _ := LoadTreeByBlockID(srcListItemID)
 	if nil == srcTree {
 		err = ErrBlockNotFound
+		return
+	}
+	if err = requireNativeDocumentTree(srcTree.Box); nil != err {
 		return
 	}
 	srcRootBlockID = srcTree.Root.ID

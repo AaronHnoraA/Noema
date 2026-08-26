@@ -1,6 +1,8 @@
 /*
  * Mediki — a cool, information-dense medical Wiki theme.
  */
+@import "../../../app/appearance/themes/daylight/theme.css";
+
 :root[data-noema-theme="mediki"] {
   color-scheme: light;
   --noema-window-background: #f5f9f8;
@@ -105,6 +107,76 @@
   --aaron-status-error: #b13d54;
   --aaron-status-info: #146d86;
   --aaron-radius-2: 3px;
+
+  /* Keep the complete daylight b3 contract while adapting its semantic
+   * component colors to Mediki's cooler clinical palette. */
+  --b3-theme-primary: #087f78;
+  --b3-theme-primary-light: rgb(8 127 120 / 54%);
+  --b3-theme-primary-lighter: rgb(8 127 120 / 38%);
+  --b3-theme-primary-lightest: rgb(8 127 120 / 12%);
+  --b3-theme-secondary: #8a6a22;
+  --b3-theme-background: #f5f9f8;
+  --b3-theme-background-light: #e8f0ef;
+  --b3-theme-surface: #f7fbfa;
+  --b3-theme-surface-light: rgb(247 251 250 / 88%);
+  --b3-theme-surface-lighter: #dce9e7;
+  --b3-theme-error: #b13d54;
+  --b3-theme-success: #28744d;
+  --b3-theme-on-primary: #fff;
+  --b3-theme-on-secondary: #fff;
+  --b3-theme-on-background: #17313b;
+  --b3-theme-on-surface: #5e7175;
+  --b3-theme-on-surface-light: rgb(94 113 117 / 70%);
+  --b3-theme-on-surface-lighter: #b7c8c6;
+  --b3-theme-on-error: #fff;
+  --b3-body-background: #e8f0ef;
+  --b3-toolbar-color: rgb(94 113 117 / 70%);
+  --b3-toolbar-hover: rgb(8 127 120 / 8%);
+  --b3-border-color: #aebfbd;
+  --b3-scroll-color: rgb(23 49 59 / 20%);
+  --b3-list-hover: rgb(8 127 120 / 7%);
+  --b3-list-icon-hover: rgb(8 127 120 / 12%);
+  --b3-menu-background: #f5f9f8;
+  --b3-menu-icon-color: rgb(23 49 59 / 62%);
+  --b3-tooltips-background: #17313b;
+  --b3-tooltips-color: #fff;
+  --b3-tooltips-second-color: #829398;
+  --b3-empty-color: rgb(94 113 117 / 70%);
+  --b3-mask-background: rgb(232 240 239 / 58%);
+  --b3-card-error-color: #8f3044;
+  --b3-card-error-background: #f5dfe4;
+  --b3-card-warning-color: #7b671f;
+  --b3-card-warning-background: #f2ead4;
+  --b3-card-info-color: #28566a;
+  --b3-card-info-background: #dceef1;
+  --b3-card-success-color: #28744d;
+  --b3-card-success-background: #dcecdf;
+  --b3-highlight-color: #17313b;
+  --b3-highlight-background: #e8d98c;
+  --b3-highlight-current-background: #d7b954;
+  --b3-switch-background: #dce9e7;
+  --b3-switch-border: rgb(94 113 117 / 70%);
+  --b3-switch-hover: rgb(8 127 120 / 8%);
+  --b3-switch-checked: #fff;
+  --b3-switch-checked-background: #087f78;
+  --b3-switch-checked-hover: #d8efec;
+  --b3-switch-checked-hover2: rgb(8 127 120 / 8%);
+  --b3-dock-shadow-color: rgb(32 63 68 / 22%);
+  --b3-dialog-shadow: 0 8px 24px rgb(32 63 68 / 20%);
+  --b3-protyle-code-background: rgb(8 127 120 / 7%);
+  --b3-protyle-inline-link-color: #146d86;
+  --b3-protyle-inline-mark-background: #eee4a9;
+  --b3-protyle-inline-mark-color: #17313b;
+  --b3-protyle-inline-tag-color: rgb(23 49 59 / 62%);
+  --b3-protyle-inline-blockref-color: #4969a2;
+  --b3-protyle-inline-fileref-color: #28744d;
+  --b3-callout-note: #3d6f91;
+  --b3-callout-tip: #28744d;
+  --b3-callout-caution: #b13d54;
+  --b3-callout-important: #4969a2;
+  --b3-callout-warning: #d7b954;
+  --b3-table-even-background: rgb(8 127 120 / 4%);
+  --b3-parent-background: #f5f9f8;
 }
 
 :root[data-noema-theme="mediki"] .cm-editor h1 {
