@@ -77,7 +77,8 @@ import {
 import { resolveAnchorHeading } from "../heading-slug.ts";
 import { skipOrderedListRenumber } from "./ordered-list-renumber.ts";
 import { captureHeadingFoldKeys, restoreHeadingFoldKeys } from "./heading-fold.ts";
-import { scheduleViewportDecorationRefresh } from "./viewport-refresh.ts";
+import { forgetViewportDecorationRefresh, scheduleViewportDecorationRefresh } from "./viewport-refresh.ts";
+import { discardMeasuredWidgetView } from "./extensions/visual/widgets/measured-observer.ts";
 import { createMarkdownFeatureExtensions } from "./extensions/index.ts";
 import {
   beforeChangeDocumentEffect,
@@ -1106,6 +1107,8 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
       view.contentDOM.removeEventListener("mousedown", onSourceWidgetMouseDown, { capture: true });
       view.scrollDOM.removeEventListener("scroll", onEditorScroll);
       viewportStabilizer!.destroy();
+      forgetViewportDecorationRefresh(view);
+      discardMeasuredWidgetView(view);
       view.destroy();
       wrap.remove();
       disposeHighlightWorker();

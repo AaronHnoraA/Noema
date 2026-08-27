@@ -7,8 +7,13 @@ export const refreshViewportDecorations = StateEffect.define<readonly ViewportRe
 
 // Active rAF handle per view (for cancellation).
 const scheduledRefreshFrames = new WeakMap<EditorView, number>();
+// Sets make the weakly keyed schedules enumerable while a page is paused or
+// destroyed. They never grow beyond the live editor views in this renderer.
+const scheduledViews = new Set<EditorView>();
+const pausedDirtyViews = new Set<EditorView>();
 // Generation counter lets an in-flight refresh detect that it was superseded.
 const viewGenerations = new WeakMap<EditorView, number>();
+let viewportRefreshPaused = false;
 
 const VIEWPORT_PARSE_BUDGET_MS = 8;
 const VIEWPORT_OVERSCAN_CHARS = 16 * 1024;
@@ -24,39 +29,101 @@ function dispatchRefresh(view: EditorView, ranges: readonly ViewportRefreshRange
   if (view.dom.isConnected) view.dispatch({ effects: refreshViewportDecorations.of(ranges) });
 }
 
+function advanceGeneration(view: EditorView): number {
+  const generation = (viewGenerations.get(view) ?? 0) + 1;
+  viewGenerations.set(view, generation);
+  return generation;
+}
+
 function cancelPendingRefresh(view: EditorView): void {
   const handle = scheduledRefreshFrames.get(view);
   if (handle !== undefined) {
     window.cancelAnimationFrame(handle);
     scheduledRefreshFrames.delete(view);
   }
+  scheduledViews.delete(view);
+}
+
+function deferPausedRefresh(view: EditorView): void {
+  cancelPendingRefresh(view);
+  advanceGeneration(view);
+  if (view.dom.isConnected) pausedDirtyViews.add(view);
+  else pausedDirtyViews.delete(view);
+}
+
+/**
+ * Freeze decoration parsing/rebuild work for a background renderer.
+ *
+ * Calls made while paused collapse to one dirty bit per view. Resuming queues
+ * exactly one normal refresh, preserving correctness without an idle rAF loop.
+ */
+export function setViewportDecorationRefreshPaused(paused: boolean): void {
+  if (viewportRefreshPaused === paused) return;
+  viewportRefreshPaused = paused;
+  if (paused) {
+    for (const view of [...scheduledViews]) deferPausedRefresh(view);
+    return;
+  }
+  const dirtyViews = [...pausedDirtyViews];
+  pausedDirtyViews.clear();
+  for (const view of dirtyViews) scheduleViewportDecorationRefresh(view);
+}
+
+/** Remove any strong scheduler reference before an editor view is destroyed. */
+export function forgetViewportDecorationRefresh(view: EditorView): void {
+  cancelPendingRefresh(view);
+  advanceGeneration(view);
+  pausedDirtyViews.delete(view);
 }
 
 // Model-backed widgets (for example citations) already have a parsed editor
 // state. Dispatch their refresh immediately so an unrelated selection/layout
 // transaction cannot cancel the update between animation frames.
 export function refreshViewportDecorationsNow(view: EditorView): void {
+  if (viewportRefreshPaused) {
+    deferPausedRefresh(view);
+    return;
+  }
   cancelPendingRefresh(view);
-  viewGenerations.set(view, (viewGenerations.get(view) ?? 0) + 1);
+  advanceGeneration(view);
+  pausedDirtyViews.delete(view);
   dispatchRefresh(view, refreshRanges(view));
 }
 
 export function scheduleViewportDecorationRefresh(view: EditorView): void {
+  if (viewportRefreshPaused) {
+    deferPausedRefresh(view);
+    return;
+  }
   cancelPendingRefresh(view);
-  const gen = (viewGenerations.get(view) ?? 0) + 1;
-  viewGenerations.set(view, gen);
+  pausedDirtyViews.delete(view);
+  const gen = advanceGeneration(view);
   const scheduledState = view.state;
+  scheduledViews.add(view);
 
   const frame = window.requestAnimationFrame(() => {
     if (viewGenerations.get(view) !== gen) return;
     scheduledRefreshFrames.delete(view);
-    if (!view.dom.isConnected || view.state !== scheduledState) return;
+    if (!view.dom.isConnected || view.state !== scheduledState) {
+      scheduledViews.delete(view);
+      return;
+    }
+    if (viewportRefreshPaused) {
+      scheduledViews.delete(view);
+      pausedDirtyViews.add(view);
+      return;
+    }
     view.requestMeasure();
 
     const afterMeasure = window.requestAnimationFrame(() => {
       if (viewGenerations.get(view) !== gen) return;
       scheduledRefreshFrames.delete(view);
+      scheduledViews.delete(view);
       if (!view.dom.isConnected || view.state !== scheduledState) return;
+      if (viewportRefreshPaused) {
+        pausedDirtyViews.add(view);
+        return;
+      }
 
       const ranges = refreshRanges(view);
       const parseTo = ranges.reduce((maximum, range) => Math.max(maximum, range.to), 0);

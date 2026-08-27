@@ -1,5 +1,5 @@
 import type { EditorView } from "@codemirror/view";
-import { scheduleViewportDecorationRefresh } from "../../../viewport-refresh.ts";
+import { ViewMeasureScheduler } from "../../../view-measure-scheduler.ts";
 
 // ---------------------------------------------------------------------------
 // Per-content height cache: stable key → last measured pixel height
@@ -8,6 +8,7 @@ import { scheduleViewportDecorationRefresh } from "../../../viewport-refresh.ts"
 // ---------------------------------------------------------------------------
 
 const MAX_CACHE_SIZE = 500;
+const HEIGHT_CHANGE_EPSILON_CSS_PX = 1;
 export const measuredHeightCache = new Map<string, number>();
 
 function cacheSet(key: string, height: number): void {
@@ -28,10 +29,35 @@ export function shortHash(s: string): string {
   return (h >>> 0).toString(36);
 }
 
+/** Normalize WebKit's fractional layout noise to physical-pixel boundaries. */
+export function stableMeasuredHeight(height: number, pixelRatio = 1): number {
+  if (!Number.isFinite(height) || height <= 0) return 0;
+  const scale = Math.min(4, Math.max(1, Number.isFinite(pixelRatio) ? pixelRatio : 1));
+  return Math.round(height * scale) / scale;
+}
+
+/** A one-CSS-pixel wobble cannot affect CM6's block position meaningfully. */
+export function measuredHeightChanged(previous: number | undefined, next: number): boolean {
+  return previous === undefined || Math.abs(next - previous) > HEIGHT_CHANGE_EPSILON_CSS_PX;
+}
+
+function devicePixelRatio(): number {
+  return typeof window === "undefined" ? 1 : window.devicePixelRatio || 1;
+}
+
 function measuredElementHeight(el: HTMLElement): number {
   const rectHeight = el.getBoundingClientRect().height;
   if (Number.isFinite(rectHeight) && rectHeight > 0) return rectHeight;
   return el.offsetHeight;
+}
+
+function resizeEntryHeight(entry: ResizeObserverEntry, el: HTMLElement): number {
+  // borderBoxSize is already available from the observer's completed layout
+  // pass, so prefer it over a synchronous getBoundingClientRect() read.
+  const rawBox = entry.borderBoxSize as unknown as ResizeObserverSize | readonly ResizeObserverSize[] | undefined;
+  const box = Array.isArray(rawBox) ? rawBox[0] : rawBox;
+  const blockSize = box?.blockSize ?? 0;
+  return Number.isFinite(blockSize) && blockSize > 0 ? blockSize : measuredElementHeight(el);
 }
 
 function cacheElementHeight(el: HTMLElement, height: number): void {
@@ -44,46 +70,60 @@ function cacheElementHeight(el: HTMLElement, height: number): void {
 
 // ---------------------------------------------------------------------------
 // Shared ResizeObserver — detects height changes CM6's own MutationObserver
-// misses (lazy images, async SVGs, KaTeX font reflow, comment collapse, etc.)
-// and fires a debounced view.requestMeasure() to update the height map.
+// misses (lazy images, async SVGs, KaTeX font reflow, comment collapse, etc.).
 //
-// Performance: completely idle when no widgets are mounted; fires at most once
-// per animation frame even if many widgets resize simultaneously; no polling.
+// A resize only invalidates CM6's height map.  It must not rebuild viewport
+// decorations: rebuilding replaces measured widgets, which can recursively
+// trigger ResizeObserver in fractional-layout engines such as WebKit.
 // ---------------------------------------------------------------------------
 
 const elementToView = new WeakMap<Element, EditorView>();
 const lastHeights = new WeakMap<Element, number>();
-const pendingViews = new Set<EditorView>();
-let rafScheduled = false;
 let sharedRO: ResizeObserver | null = null;
+let measurementPaused = false;
+let measureScheduler: ViewMeasureScheduler<EditorView> | null = null;
+
+function getMeasureScheduler(): ViewMeasureScheduler<EditorView> | null {
+  if (measureScheduler) return measureScheduler;
+  if (typeof window === "undefined" || typeof window.requestAnimationFrame !== "function") return null;
+  measureScheduler = new ViewMeasureScheduler<EditorView>(
+    window,
+    (view) => view.dom.isConnected,
+    (view) => view.requestMeasure(),
+  );
+  measureScheduler.setPaused(measurementPaused);
+  return measureScheduler;
+}
 
 function getSharedRO(): ResizeObserver | null {
   if (sharedRO) return sharedRO;
   if (typeof ResizeObserver === "undefined") return null; // jsdom / test env
   sharedRO = new ResizeObserver((entries) => {
+    const scheduler = getMeasureScheduler();
+    if (!scheduler) return;
     for (const entry of entries) {
       const el = entry.target as HTMLElement;
-      const newH = measuredElementHeight(el);
+      const newH = stableMeasuredHeight(resizeEntryHeight(entry, el), devicePixelRatio());
       const oldH = lastHeights.get(el);
-      if (oldH !== undefined && Math.abs(newH - oldH) < 0.5) continue; // no real change
+      if (!measuredHeightChanged(oldH, newH)) continue;
       lastHeights.set(el, newH);
       cacheElementHeight(el, newH);
       const view = elementToView.get(el);
-      if (view?.dom.isConnected) pendingViews.add(view);
-    }
-    // Coalesce all pending views into one rAF call — at most 1 requestMeasure/frame
-    if (pendingViews.size > 0 && !rafScheduled) {
-      rafScheduled = true;
-      requestAnimationFrame(() => {
-        rafScheduled = false;
-        for (const view of pendingViews) {
-          if (view.dom.isConnected) scheduleViewportDecorationRefresh(view);
-        }
-        pendingViews.clear();
-      });
+      if (view) scheduler.schedule(view);
     }
   });
   return sharedRO;
+}
+
+/** Pause all observer-driven CM6 measurements without losing dirty views. */
+export function setMeasuredWidgetObservationPaused(paused: boolean): void {
+  measurementPaused = paused;
+  measureScheduler?.setPaused(paused);
+}
+
+/** Drop the scheduler's last possible strong reference before view teardown. */
+export function discardMeasuredWidgetView(view: EditorView): void {
+  measureScheduler?.discard(view);
 }
 
 export function observeWidget(el: HTMLElement, view: EditorView): void {
@@ -91,8 +131,8 @@ export function observeWidget(el: HTMLElement, view: EditorView): void {
   if (!ro) return;
   elementToView.set(el, view);
   ro.observe(el);
-  // Capture baseline immediately so the first RO callback has a reference
-  const h = measuredElementHeight(el);
+  // Capture baseline immediately so the first RO callback has a reference.
+  const h = stableMeasuredHeight(measuredElementHeight(el), devicePixelRatio());
   if (h > 0) {
     lastHeights.set(el, h);
     cacheElementHeight(el, h);

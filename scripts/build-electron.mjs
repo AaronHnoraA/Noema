@@ -20,7 +20,7 @@ if (process.platform !== "darwin") {
   throw new Error("The linked Electron app assembler currently supports macOS");
 }
 if (!existsSync(electronApp)) {
-  throw new Error("Electron runtime is missing; run npm ci with the pinned toolchain");
+  throw new Error("Electron runtime is missing; run npm run prepare:electron");
 }
 
 function link(source, destination, type = undefined) {

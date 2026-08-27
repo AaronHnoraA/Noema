@@ -105,7 +105,11 @@ import { createLocalGraphPanel } from "./local-graph.ts";
 import { openLanguageToolSettingsTool } from "./languagetool-tool.ts";
 import { openAssetMaintenance } from "./asset-maintenance.ts";
 import { setFindHighlightRanges } from "../src/cm6/find-highlight.ts";
-import { refreshViewportDecorationsNow } from "../src/cm6/viewport-refresh.ts";
+import {
+  refreshViewportDecorationsNow,
+  setViewportDecorationRefreshPaused,
+} from "../src/cm6/viewport-refresh.ts";
+import { setMeasuredWidgetObservationPaused } from "../src/cm6/extensions/visual/widgets/measured-observer.ts";
 import {
   cancelPointerSelection,
   isPointerSelecting,
@@ -10506,6 +10510,10 @@ function cancelAssistWork(): void {
 function applyPaused(next: boolean): void {
   if (paused === next) return;
   paused = next;
+  // One shared renderer activity gate is used by every host shell.  Emacs and
+  // Electron only contribute pause reasons; neither owns rendering behavior.
+  setMeasuredWidgetObservationPaused(next);
+  setViewportDecorationRefreshPaused(next);
   copilotActiveChangeHandlers.forEach((handler) => handler());
   assistScheduler.setPaused(next);
   proseLifecycle.setPaused(next, next ? "page-hidden" : "resumed");
@@ -10513,6 +10521,10 @@ function applyPaused(next: boolean): void {
   if (next) {
     cancelAssistWork();
   } else {
+    if (pendingNotesRefresh) {
+      pendingNotesRefresh = false;
+      notesRefreshTimer.schedule(() => void reloadNotes(false));
+    }
     scheduleAssistUpdate({ cursor: true, mathPreview: true, selectionTool: true, toc: true });
     scheduleAutomaticProseCheck();
   }
@@ -10730,7 +10742,7 @@ function runHostCommand(detail: unknown): boolean {
       // Ignore stale broadcasts (e.g. replayed on reconnect).
       if (version && version <= lastNotesIndexVersion) return true;
       if (version) lastNotesIndexVersion = version;
-      if (pauseReasons.has("visibility")) {
+      if (paused) {
         pendingNotesRefresh = true;
       } else {
         notesRefreshTimer.schedule(() => void reloadNotes(false));
@@ -11727,10 +11739,6 @@ document.addEventListener("visibilitychange", () => {
     void flushCursorPosition();
   } else {
     setPausedReason("visibility", false);
-    if (pendingNotesRefresh) {
-      pendingNotesRefresh = false;
-      notesRefreshTimer.schedule(() => void reloadNotes(false));
-    }
   }
 });
 window.addEventListener("pagehide", () => {

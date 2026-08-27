@@ -143,6 +143,8 @@ describe("SiYuan-derived Electron desktop adapter", () => {
     expect(build).toContain('Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string noema');
     expect(build).not.toContain("cargo");
     expect(build).not.toContain("rustc");
+    expect(prepare).toContain('resolve("node_modules", "electron", "install.js")');
+    expect(prepare).toContain("run(process.execPath, [installer])");
     expect(prepare).toContain('"go",');
     expect(prepare).toContain('"fts5"');
     expect(makefile).toContain("build/electron/$(APP_NAME).app");
