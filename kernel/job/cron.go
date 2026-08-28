@@ -17,8 +17,6 @@
 package job
 
 import (
-	"time"
-
 	"github.com/aaronhe/noema/kernel/model"
 	"github.com/aaronhe/noema/kernel/sql"
 	"github.com/aaronhe/noema/kernel/task"
@@ -26,67 +24,46 @@ import (
 	"github.com/siyuan-note/logging"
 )
 
-func StartCron(supervisorPID ...int) {
+// StartCron starts the kernel's background work.
+//
+// Everything here is event-driven: a queue consumer parked on a channel, or a
+// scheduler that arms a timer only after real activity. Noema deliberately runs
+// no periodic polling. SiYuan's inherited ticker jobs each woke the machine on
+// a fixed cadence for work that was either redundant, unreachable in Noema's
+// Markdown model, or read by nobody:
+//
+//   - OCR assets, every 30s — the highest-frequency idle wake in the kernel. Its
+//     text feeds SiYuan's own asset search; Noema searches through its own path.
+//     On-demand OCR stays available at /api/asset/{ocr,setImageOCRText}.
+//   - Index embed blocks, every 10m — serves SiYuan's {{...}} embed syntax, which
+//     does not exist in Noema's Markdown. /api/search/updateEmbedBlock remains.
+//   - Cache virtual block refs, every 10m — Conf.Editor.VirtualBlockRef defaults
+//     to off, and eight event-driven sites already call ResetVirtualBlockRefCache
+//     when indexing, mounting or settings actually change it.
+//   - Stat, every 2h — walked the whole data directory to fill Conf.Stat, which
+//     /api/system strips out of its response before anyone can read it.
+//   - Refresh checks (2h/6h) and the Microsoft Defender check (30m) — already
+//     no-op stubs here: cloud is gone, and the Defender check is Windows-only.
+//   - Consume shorthands, every 3s — mobile containers only; Noema has none.
+//   - Hook desktop UI proc, every 30s — a liveness poll for legacy attached UIs.
+//     Noema passes a supervisor PID and uses the process-exit event instead, so
+//     the poll was already switched off for every real Noema host.
+//
+// History pruning does still have to happen, since asset, attribute-view and
+// bookmark edits write into the history directory. It runs once at startup
+// rather than on a 24-hour ticker, which is the same guarantee for a kernel
+// whose lifetime is the app's.
+func StartCron(_ ...int) {
 	task.StartQueueConsumer()
 	sql.StartQueueConsumers()
 	util.StartAssetsTextsSaver()
 	model.StartAutoFixIndexScheduler()
-	go every(2*time.Hour, model.StatJob)
-	// No unattended call to SiYuan's cloud. This job fetched
-	// <cloud>/apis/siyuan/version at every kernel start and every six hours
-	// thereafter, which in a fork that removed the cloud is a phone-home and a
-	// periodic radio wake for a result nothing was waiting on. The bazaar still
-	// resolves the same value lazily through util.GetRhyBazaarHash when someone
-	// actually opens it, so the capability is intact — only the timer is gone.
-	go every(2*time.Hour, model.RefreshCheckJob2H)
-	go every(6*time.Hour, model.RefreshCheckJob6H)
-	go every(10*time.Minute, model.IndexEmbedBlockJob)
-	go every(10*time.Minute, model.CacheVirtualBlockRefJob)
-	go startOCRAssetsJob()
-	if 0 == len(supervisorPID) || supervisorPID[0] <= 0 {
-		// Legacy attached UIs have no owned host process to watch. Noema.app
-		// passes a supervisor PID and uses the native process-exit event instead,
-		// avoiding this compatibility poll entirely while idle.
-		go every(30*time.Second, model.HookDesktopUIProcJob)
-	}
-	go every(30*time.Minute, model.AutoCheckMicrosoftDefenderJob)
-	go every(24*time.Hour, model.ClearOutdatedHistoryDirJob)
-	if util.IsMobileContainer() {
-		go every(3*time.Second, model.AutoConsumeShorthandsJob)
-	}
-
 	model.StartPushQueueConsumer()
+	go clearOutdatedHistoryOnce()
 }
 
-func startOCRAssetsJob() {
-	util.WaitForTesseractInit()
-	if !util.TesseractEnabled {
-		return
-	}
-	every(30*time.Second, model.OCRAssetsJob)
-}
-
-func every(interval time.Duration, f func(), name ...string) {
+func clearOutdatedHistoryOnce() {
+	defer logging.Recover()
 	util.RandomSleep(50, 200)
-
-	// 启动后立即执行一次
-	func() {
-		defer logging.Recover()
-		f()
-		if 0 < len(name) {
-			logging.LogInfof("cron job [%s] executed", name)
-		}
-	}()
-
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for range ticker.C {
-		func() {
-			defer logging.Recover()
-			f()
-			if 0 < len(name) {
-				logging.LogInfof("cron job [%s] executed", name)
-			}
-		}()
-	}
+	model.ClearOutdatedHistoryDirJob()
 }

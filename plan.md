@@ -1411,3 +1411,57 @@ socket（原先启动即建立一条到 b3logfile 的 TLS 连接）。`go build`
 - `StatJob` 每 2 小时，会递归统计 data 目录大小并 `Conf.Save()`。
 - `ClearOutdatedHistoryDirJob` 每 24 小时，清 SiYuan 的 history 目录；Noema 的版本历史走 git。
 - `AutoCheckMicrosoftDefenderJob` 每 30 分钟在 darwin 上是空实现，只剩一个定时器，无害。
+
+### idle/功耗 第二刀：内核零轮询 + Node 停止每 5 秒探活（2026-08-28，当前工作树）
+
+用户明确要求："非必要不要用这种自动循环任务"。本轮把两处真正的轮询拿掉，并第一次量到了 Emacs
+xwidget 宿主里整条链路的空载开销。
+
+**`kernel/job/cron.go` 现在不含任何周期性 ticker。** 删掉的定时任务及理由都写在该文件的
+`StartCron` 文档注释里：OCR 资源扫描（30 秒，内核里频率最高的空载唤醒；按需 OCR 的
+`/api/asset/{ocr,setImageOCRText}` 保留）、嵌入块索引（10 分钟，服务 SiYuan 的 `{{...}}` 语法，
+Noema 的 Markdown 没有这个语法）、虚拟块引用缓存（10 分钟，`Conf.Editor.VirtualBlockRef` 默认关闭，
+且已有 8 个事件驱动的调用点）、StatJob（2 小时，遍历整个 data 目录填 `Conf.Stat`，而
+`/api/system` 在返回前就把它置空了）、两个云 refresh check 与 Windows Defender 检查（在此已是空实现）、
+移动端 shorthands（3 秒，Noema 没有移动端）、以及 legacy UI 存活轮询（30 秒，Noema 传 supervisor PID
+走进程退出事件，本来就不会启用）。history 目录仍然需要清理（asset/attributeview/bookmark 编辑会写进去），
+改成启动时执行一次而不是 24 小时 ticker——对一个生命周期等于 App 的内核，保证是一样的。
+留下的都是事件驱动：`task.StartQueueConsumer`、`sql.StartQueueConsumers`、`StartAssetsTextsSaver`、
+`StartAutoFixIndexScheduler`（活动后才 arm timer）、`StartPushQueueConsumer`。
+顺手把 `task/queue.go` 与 `cli/cmd/root.go` 里"ExecTaskJob 每 100ms 消费"的过期注释改掉——
+这两个消费者早就改成阻塞在 channel 上了。
+
+**Node supervisor 不再每 5 秒探活自己启动的内核。** `server/lib/kernel-supervisor.mjs` 的 `monitor`
+过去无条件 `GET /api/system/bootProgress`，每 5 秒一次、每分钟 12 个完整 HTTP 往返，唤醒 Node 和 Go
+两个进程去回答操作系统已经回答过的问题。自有内核改成直接 await 子进程退出 Promise；只有外部托管的
+内核（没有退出信号）才保留探测，默认间隔从 5 秒放宽到 60 秒。新增
+`never polls a kernel it owns` 回归用例（已确认在修复前失败），原有 owned 重启与 attached 失联
+用例继续通过，共 9 项。
+
+**Emacs xwidget 空载实测**（Apple M2 Max，真实 vault `~/Documents/Noema`，打开
+`public/Math/hilbert_space.md`，窗口开着但无输入，60 秒墙钟）：
+
+| 进程 | 修复前 cpu-s/60s | 修复后 cpu-s/60s | RSS |
+| --- | ---: | ---: | ---: |
+| emacs | 0.05 | 0.05 | 649MB |
+| web-host (node) | 0.11 | **0.00** | 100MB |
+| noema-kernel (go) | 0.08 | 0.07 | 75MB |
+| WebKit WebContent | 0.09 | 0.09 | 160MB |
+| WebKit Networking | 0.01 | 0.01 | 26MB |
+| WebKit GPU | 0.00 | 0.00 | 44MB |
+| **合计** | **0.34** | **0.22** | 约 1.06GB |
+
+也就是空载从约 20 CPU-秒/小时降到约 13 CPU-秒/小时，其中 Node 宿主这一项归零——那 5 秒探活基本就是
+它空载时的全部工作。内核这 0.07 在删掉全部 cron 之后仍然存在，来源是 Go runtime 自身（sysmon/GC）
+与 gin 监听，不是 Noema 的定时任务。
+
+复现命令：`scripts/measure-xwidget-idle.sh <note.md> [settle] [sample]`。它用独立 server socket 起一个
+GUI Emacs、经 emacsclient 打开笔记、采样 Emacs / WebKit 三进程 / web-host / Go kernel 的 CPU 时间，
+最后把自己起的东西全部关掉（脚本结束会打印 `leftover:`）。
+
+门禁：`npm test` 212 files passed / 7 skipped、2065 tests passed / 16 skipped；`go build`、`go vet`、
+`go test ./...` 全绿；`make kernel-build` 通过并以新二进制实测启动，日志中不再有任何 cron 行。
+
+**下一批候选（未做，等拍板）**：内核仍会在启动时生成本地 CA/TLS 证书并在固定端口 6806 上跑第二个
+HTTP 服务（`proxy.InitFixedPortService`）。Noema 的 Node supervisor 走的是动态端口，这个固定端口服务
+是 SiYuan 给外部客户端用的约定。它不是循环任务，但多一个监听端口和一次启动期证书生成。

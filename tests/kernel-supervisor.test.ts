@@ -319,6 +319,71 @@ describe("shared kernel supervisor", () => {
     await supervisor.close();
   });
 
+  // Noema runs no idle polling: the kernel it owns reports its own death, so
+  // nothing should keep asking it whether it is still alive.
+  test("never polls a kernel it owns", async () => {
+    const suite = await mkdtemp(join(tmpdir(), "noema-kernel-nopoll-"));
+    cleanups.push(suite);
+    const binary = join(suite, "noema-kernel");
+    const runtimeRoot = join(suite, "runtime");
+    const stateRoot = join(suite, "state");
+    const noteRoot = join(suite, "notes");
+    await writeFile(binary, "kernel");
+    await chmod(binary, 0o755);
+    await mkdir(join(runtimeRoot, "app", "appearance", "langs"), { recursive: true });
+    await mkdir(noteRoot);
+
+    let bootProbes = 0;
+    const children: Array<EventEmitter & { stdout: PassThrough; stderr: PassThrough; kill(signal: string): boolean }> = [];
+    const spawnImpl = () => {
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: PassThrough;
+        stderr: PassThrough;
+        kill(signal: string): boolean;
+      };
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.kill = () => {
+        queueMicrotask(() => child.emit("exit", 0, "SIGTERM"));
+        return true;
+      };
+      children.push(child);
+      queueMicrotask(() => child.stdout.write("[noema-kernel] http://127.0.0.1:43310\n"));
+      return child;
+    };
+    const supervisor = createKernelSupervisor({
+      env: { NOEMA_KERNEL_BIN: binary, PATH: "" },
+      runtimeRoot,
+      stateRoot,
+      noteRoot,
+      spawnImpl: spawnImpl as never,
+      fetchImpl: async (url: string) => {
+        if (String(url).endsWith("/api/system/bootProgress")) {
+          bootProbes += 1;
+          return response({ code: 0, data: { progress: 100 } });
+        }
+        return response({ code: 0, data: { box: { id: "box-nopoll", root: noteRoot } } });
+      },
+      stderr: { write() {} } as unknown as NodeJS.WritableStream,
+      // A poll at this cadence would be unmissable in the window below.
+      healthIntervalMs: 5,
+      restartDelayMs: 5,
+    });
+
+    void supervisor.start();
+    await expect(supervisor.ready()).resolves.toMatchObject({ state: "listening" });
+    const afterAttach = bootProbes;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(supervisor.status()).toMatchObject({ state: "listening" });
+    expect(bootProbes).toBe(afterAttach);
+
+    // The exit event, not a probe, is what makes the supervisor react.
+    children[0]!.emit("exit", 9, null);
+    await waitFor(() => supervisor.status().state !== "listening"
+      || children.length > 1);
+    await supervisor.close();
+  });
+
   test("rebinds the shared providers after an owned kernel exits with a new port", async () => {
     const suite = await mkdtemp(join(tmpdir(), "noema-kernel-restart-"));
     cleanups.push(suite);

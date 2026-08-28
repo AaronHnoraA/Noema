@@ -597,7 +597,7 @@ func execTask(task *Task) {
 
 // ExecSyncTasksUntilEmpty 在没有后台 cron 消费者的场景下同步排空任务队列。
 //
-// serve 模式由 job.StartCron 启动的 ExecTaskJob 每 100ms 消费一个任务；CLI 是单次命令进程，
+// serve 模式由 job.StartCron 启动的队列消费者按通知消费任务；CLI 是单次命令进程，
 // 从不启动 cron，因此 AppendTask 排入的任务（例如 Box.Index 派发的 removeBoxRefs/indexBox/IndexRefs）
 // 永远不会被执行——索引不会建立，随后的 search/sql/ref 只会静默返回空结果。
 //

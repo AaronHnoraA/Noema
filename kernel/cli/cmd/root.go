@@ -50,7 +50,7 @@ var rootCmd = &cobra.Command{
 	Use:     "SiYuan-Kernel",
 	Version: util.Ver,
 	PersistentPostRunE: func(cmd *cobra.Command, args []string) error {
-		// CLI 单次命令没有后台 cron 周期性 flush SQL 队列（server 模式才有 job.StartCron），进程在 main 返回后
+		// CLI 单次命令没有后台队列消费者 flush SQL 队列（server 模式才有 job.StartCron），进程在 main 返回后
 		// 即退出，内存里的 SQL 索引队列会随进程丢失（操作虽已落 index.queue，但要等下次启动 recoverIndexQueue
 		// 才恢复）。这里在命令执行完后统一落库，保证写完即可搜索。
 		name := cmd.Name()

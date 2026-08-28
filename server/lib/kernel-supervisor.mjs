@@ -171,7 +171,8 @@ export function createKernelSupervisor({
   registrationTimeoutMs = 30 * 60_000,
   registrationProbeIntervalMs = 1_000,
   requestTimeoutMs = 2_000,
-  healthIntervalMs = 5_000,
+  // Only an externally managed kernel is probed at all; see `monitor`.
+  healthIntervalMs = 60_000,
   restartDelayMs = 500,
   supervisorPid = process.pid,
 } = {}) {
@@ -417,16 +418,27 @@ export function createKernelSupervisor({
     throw new Error(`Noema kernel did not become ready: ${lastError?.message || "startup timed out"}`);
   };
 
+  /**
+   * Watch a running kernel and throw when it stops being usable.
+   *
+   * A kernel we started announces its own death: the child process exit is the
+   * signal, and waiting on it costs nothing. Polling it on a timer would only
+   * add a wake for the host and the kernel every few seconds for a question the
+   * operating system already answers. A kernel someone else manages has no such
+   * signal, so that one is probed — but slowly, since the only failure it can
+   * catch beyond a failing request is a kernel that is alive and wedged.
+   */
   const monitor = async (baseUrl, exitPromise) => {
+    if (config.owned) {
+      const detail = await exitPromise;
+      if (closing) return;
+      throw detail?.error || new Error(`Noema kernel stopped (code=${detail?.code ?? "unknown"})`);
+    }
     let failures = 0;
     let lastError = null;
     while (!closing) {
       await sleep(healthIntervalMs);
       if (closing) return;
-      if (config.owned && child === null) {
-        const detail = await exitPromise;
-        throw detail?.error || new Error(`Noema kernel stopped (code=${detail?.code ?? "unknown"})`);
-      }
       try {
         const boot = await kernelJson(baseUrl, "/api/system/bootProgress");
         if (Number(boot?.data?.progress || 0) < 100) {
