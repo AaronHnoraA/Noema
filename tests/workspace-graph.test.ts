@@ -116,6 +116,7 @@ describe("workspace graph performance boundaries", () => {
     let events: WorkspaceGraphEvents | null = null;
     let nodes: WorkspaceForceNode[] = [];
     let visual!: WorkspaceGraphVisualState;
+    const activity: string[] = [];
     const settings: Array<{ scope: string; localRoot: string }> = [];
     const opened: string[] = [];
     const adapter: WorkspaceGraphAdapter = {
@@ -124,6 +125,7 @@ describe("workspace graph performance boundaries", () => {
       focus() {},
       center() {},
       resize() {},
+      setActivity(state) { activity.push(state); },
       destroy() {},
     };
     const graph = createWorkspaceGraphRuntime({
@@ -161,6 +163,9 @@ describe("workspace graph performance boundaries", () => {
     events!.nodeClick(nodes.find((node) => node.key === "b")!, click(1_000));
     events!.nodeClick(nodes.find((node) => node.key === "b")!, click(1_100));
     expect(opened).toEqual(["b"]);
+    graph.setActivity("quiescent");
+    graph.setActivity("active");
+    expect(activity).toEqual(["quiescent", "active"]);
     graph.destroy();
     root.remove();
     status.remove();

@@ -1,4 +1,5 @@
 import type { Editor } from "../../../src/editor-api.ts";
+import type { RendererActivityState } from "../../../src/renderer-activity.ts";
 import { CoalescedTimer } from "../../../src/coalesced-timer.ts";
 import {
   accumulateWritingStatsRange,
@@ -14,6 +15,7 @@ import {
 
 export type WritingStatsController = {
   schedule: (documentChanged: boolean) => void;
+  setActivity: (state: RendererActivityState) => void;
   updateNow: () => void;
   isDocumentChanged: () => boolean;
   destroy: () => void;
@@ -44,6 +46,14 @@ export function createWritingStatsController(
   const clearBrowserTimeout = (handle: number): void => window.clearTimeout(handle);
   let destroyed = false;
   let workEpoch = 0;
+  let activityState: RendererActivityState = "active";
+  let pendingUpdate = false;
+  let pendingDelay = UPDATE_DELAY_MS;
+  let timerPending = false;
+
+  function canRunBackgroundWork(): boolean {
+    return activityState === "active" || activityState === "recently-active";
+  }
 
   function render(
     primary: WritingStats,
@@ -147,7 +157,11 @@ export function createWritingStatsController(
     requestIdle(step);
   }
 
-  function renderLargeDocumentScopes(epoch: number, scanDoc: typeof editor.view.state.doc): void {
+  function renderLargeDocumentScopes(
+    epoch: number,
+    scanDoc: typeof editor.view.state.doc,
+    onComplete: () => void,
+  ): void {
     if (destroyed || epoch !== workEpoch || editor.view.state.doc !== scanDoc) return;
     const state = editor.view.state;
     const selection = state.selection.main;
@@ -157,6 +171,7 @@ export function createWritingStatsController(
     const finish = (primary: WritingStats, subtreeStats: WritingStats | null): void => {
       if (destroyed || epoch !== workEpoch || editor.view.state.doc !== scanDoc) return;
       render(primary, hasSelection, subtree, subtreeStats, selection);
+      onComplete();
     };
     const resolveSubtree = (primary: WritingStats): void => {
       if (!subtree) return finish(primary, null);
@@ -180,11 +195,14 @@ export function createWritingStatsController(
   }
 
   function queueIdle(): void {
+    if (destroyed || !canRunBackgroundWork()) return;
     const epoch = ++workEpoch;
     const state = editor.view.state;
     if (state.doc === cachedDoc || state.doc.length < LARGE_DOCUMENT_CHARS) {
       requestIdle(() => {
-        if (!destroyed && epoch === workEpoch) updateNow();
+        if (destroyed || epoch !== workEpoch || !canRunBackgroundWork()) return;
+        updateNow();
+        pendingUpdate = false;
       });
       return;
     }
@@ -195,25 +213,69 @@ export function createWritingStatsController(
       full = stats;
       cachedDoc = scanDoc;
       subtreeCache = null;
-      renderLargeDocumentScopes(epoch, scanDoc);
+      renderLargeDocumentScopes(epoch, scanDoc, () => {
+        if (epoch === workEpoch && canRunBackgroundWork()) pendingUpdate = false;
+      });
     });
+  }
+
+  function armPending(delay: number): void {
+    timer.cancel();
+    timerPending = true;
+    timer.schedule(() => {
+      timerPending = false;
+      queueIdle();
+    }, undefined, delay);
   }
 
   function schedule(documentChanged: boolean): void {
     if (destroyed) return;
     cancelIdle();
     workEpoch++;
-    const delay = documentChanged
+    pendingUpdate = true;
+    pendingDelay = documentChanged
       ? (editor.getMarkdownLength() >= LARGE_DOCUMENT_CHARS ? LARGE_UPDATE_DELAY_MS : UPDATE_DELAY_MS)
       : SELECTION_DELAY_MS;
-    timer.schedule(queueIdle, undefined, delay);
+    timerPending = false;
+    if (!canRunBackgroundWork()) return;
+    armPending(pendingDelay);
+  }
+
+  function setActivity(state: RendererActivityState): void {
+    if (destroyed) return;
+    const wasSuspended = activityState === "quiescent" || activityState === "hidden";
+    activityState = state;
+    if (state === "destroyed") {
+      destroyed = true;
+      workEpoch++;
+      timer.cancel();
+      timerPending = false;
+      cancelIdle();
+      return;
+    }
+    if (state === "quiescent" || state === "hidden") {
+      if (timerPending || idleHandle !== null) pendingUpdate = true;
+      workEpoch++;
+      timer.cancel();
+      timerPending = false;
+      cancelIdle();
+      return;
+    }
+    if (wasSuspended && pendingUpdate && canRunBackgroundWork()) {
+      // Resume exactly once from the current document/selection rather than
+      // replaying the delay that expired while the renderer was quiescent.
+      armPending(0);
+    }
   }
 
   function destroy(): void {
     if (destroyed) return;
     destroyed = true;
+    activityState = "destroyed";
     workEpoch++;
+    pendingUpdate = false;
     timer.cancel();
+    timerPending = false;
     cancelIdle();
     cachedDoc = null;
     metaSummaryRange = null;
@@ -222,6 +284,7 @@ export function createWritingStatsController(
 
   return {
     schedule,
+    setActivity,
     updateNow,
     isDocumentChanged: () => editor.view.state.doc !== cachedDoc,
     destroy,

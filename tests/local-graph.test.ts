@@ -105,7 +105,7 @@ describe("local graph", () => {
       openTag: () => {},
       createWorkspaceGraph: (options: WorkspaceGraphOptions) => {
         rendered = options.payload;
-        return { center() {}, destroy() {} };
+        return { center() {}, setActivity() {}, destroy() {} };
       },
     });
 

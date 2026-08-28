@@ -1,5 +1,10 @@
 export type AaronnoteHostMode = "emacs" | "desktop" | "server";
 
+export type AaronnoteHostCapabilities = {
+  /** macOS WebKit/xwidget needs shared renderer focus parking when idle. */
+  focusQuiescence?: boolean;
+};
+
 export function hostMode(): AaronnoteHostMode {
   const injected = String(
     (window as Window & { __aaronnoteHostMode?: string }).__aaronnoteHostMode || "",
@@ -13,6 +18,13 @@ export function hostMode(): AaronnoteHostMode {
   } catch {
     return "emacs";
   }
+}
+
+export function focusQuiescenceEnabled(): boolean {
+  const capabilities = (window as Window & {
+    __aaronnoteHostCapabilities?: AaronnoteHostCapabilities;
+  }).__aaronnoteHostCapabilities;
+  return capabilities?.focusQuiescence === true;
 }
 
 export function standaloneMode(): boolean {

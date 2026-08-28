@@ -12,6 +12,10 @@ describe("App and Emacs shared UI contract", () => {
 
     expect(entry.match(/createEditor\(host/g)).toHaveLength(1);
     expect(entry).toContain('document.body.dataset.hostMode = serverReaderMode ? "server" : desktopMode ? "desktop" : "emacs"');
+    expect(entry).toContain("createFocusQuiescenceController");
+    expect(entry).toContain("focusQuiescenceEnabled()");
+    expect(entry).toContain("createRendererActivityGate");
+    expect(entry).toContain("rendererActivity.setPaused(next)");
     expect(entry).not.toMatch(/workspace-layout-view|workspace-dock|workspacePane|noema-desktop-workspace/);
     expect(entry).toContain('graphPanelRoot.className = "aaronnote-local-graph-panel noema-knowledge-dock is-collapsed"');
     expect(entry).not.toMatch(/desktopMode\s*&&\s*desktopKnowledgeDock/);
@@ -29,6 +33,8 @@ describe("App and Emacs shared UI contract", () => {
     expect(host).toContain('join(scriptDir, "dist", "aaronnote")');
     expect(host).toContain('command: "renderer-updated"');
     expect(host).toContain("window.AaronnotePrepareRendererReload");
+    expect(host).toContain("window.__aaronnoteHostCapabilities");
+    expect(host).toContain('focusQuiescence: hostMode === \"emacs\"');
     expect(host).toContain("detail.generation !== window.__noemaRendererBuild");
     expect(host).toContain("generation: rendererBuildWatcher.generation");
     expect(desktop).toContain('AARONNOTE_WEB_DIR: join(appRoot, "dist", "aaronnote")');

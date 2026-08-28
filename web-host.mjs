@@ -2302,6 +2302,7 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
   window.__aaronnoteNotesRoot = ${JSON.stringify(hostMode === "server" ? "" : noteRoot)};
   window.__aaronnoteJupyterDefaults = ${JSON.stringify(hostMode === "server" ? {} : jupyterDefaults)};
   window.__aaronnoteHostMode = ${JSON.stringify(hostMode)};
+  window.__aaronnoteHostCapabilities = ${JSON.stringify({ focusQuiescence: hostMode === "emacs" })};
   window.__noemaRendererBuild = ${JSON.stringify(rendererBuildWatcher.generation)};
   window.__noemaKernelBase = ${JSON.stringify(noemaKernel.baseUrl)};
   window.__noemaKernel = ${JSON.stringify(noemaKernel)};

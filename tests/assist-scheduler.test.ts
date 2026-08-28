@@ -97,6 +97,29 @@ describe("AssistScheduler", () => {
     expect(frames.pendingHandles()).toEqual([]);
   });
 
+  test("quiescence retains coalesced work and flushes it once on resume", () => {
+    const frames = createFrameApi();
+    const runs: AssistUpdateFlags[] = [];
+    const scheduler = new AssistScheduler(frames.api, () => true, (flags) => runs.push(flags));
+
+    scheduler.schedule({ snippets: true });
+    scheduler.setQuiescent(true);
+    scheduler.schedule({ mathPreview: true });
+    expect(frames.cancelled).toEqual([1]);
+    expect(frames.pendingHandles()).toEqual([]);
+
+    scheduler.setQuiescent(false);
+    expect(frames.pendingHandles()).toEqual([2]);
+    frames.fire(2);
+    expect(runs).toEqual([{
+      snippets: true,
+      mathPreview: true,
+      cursor: false,
+      toc: false,
+      selectionTool: false,
+    }]);
+  });
+
   test("visible gate prevents scheduling and firing", () => {
     const frames = createFrameApi();
     const runs: AssistUpdateFlags[] = [];

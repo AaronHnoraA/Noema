@@ -392,6 +392,73 @@ describe("ProseCheckLifecycle", () => {
     expect(terminals.at(-1)).toMatchObject({ terminal: "cancelled", reason: "note-changed" });
   });
 
+  test("quiescence defers automatic checks without losing the latest document", async () => {
+    vi.useFakeTimers();
+    const calls: string[] = [];
+    const lifecycle = new ProseCheckLifecycle<string, string>({
+      autoDebounceMs: 25,
+      run: async (input) => { calls.push(input); return input; },
+      apply: () => true,
+    });
+
+    lifecycle.scheduleAuto("latest", "sig-latest");
+    lifecycle.setQuiescent(true);
+    vi.advanceTimersByTime(1000);
+    await flushAsync();
+    expect(calls).toEqual([]);
+
+    lifecycle.setQuiescent(false);
+    vi.advanceTimersByTime(0);
+    await flushAsync();
+    expect(calls).toEqual(["latest"]);
+  });
+
+  test("quiescence cancels an active automatic request and resumes it once", async () => {
+    vi.useFakeTimers();
+    const gates: Array<ReturnType<typeof deferred<string>>> = [];
+    const contexts: ProseCheckContext[] = [];
+    const starts: string[] = [];
+    const cancelled: string[] = [];
+    const applied: string[] = [];
+    const lifecycle = new ProseCheckLifecycle<string, string>({
+      autoDebounceMs: 0,
+      run: async (input, context) => {
+        starts.push(input);
+        contexts.push(context);
+        const gate = deferred<string>();
+        gates.push(gate);
+        return gate.promise;
+      },
+      apply: (result) => {
+        applied.push(result);
+        return true;
+      },
+      onCancel: ({ reason }) => { cancelled.push(reason); },
+    });
+
+    lifecycle.scheduleAuto("latest", "sig-latest", 0);
+    vi.advanceTimersByTime(0);
+    await flushAsync();
+    expect(starts).toEqual(["latest"]);
+
+    lifecycle.setQuiescent(true);
+    expect(contexts[0]!.signal.aborted).toBe(true);
+    await flushAsync();
+    expect(lifecycle.activeKind).toBeNull();
+    expect(cancelled).toEqual(["quiescent"]);
+
+    lifecycle.setQuiescent(false);
+    vi.advanceTimersByTime(0);
+    await flushAsync();
+    expect(starts).toEqual(["latest", "latest"]);
+    expect(lifecycle.activeKind).toBe("auto");
+
+    gates[1]!.resolve("latest-result");
+    await flushAsync();
+    expect(applied).toEqual(["latest-result"]);
+    expect(lifecycle.appliedAutoSignature).toBe("sig-latest");
+  });
+
   test("dispose cancels work and every accepted task reaches finally exactly once", async () => {
     vi.useFakeTimers();
     const gate = deferred<string>();

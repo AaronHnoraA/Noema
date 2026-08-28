@@ -116,6 +116,10 @@ const createWorkspaceGraph3DAdapter: WorkspaceGraphAdapterFactory = (stage, size
     resize(width, height) {
       graph.width(width).height(height);
     },
+    setActivity(state) {
+      if (state === "quiescent" || state === "hidden" || state === "destroyed") graph.pauseAnimation();
+      else graph.resumeAnimation();
+    },
     destroy() {
       graph._destructor();
       stage.replaceChildren();

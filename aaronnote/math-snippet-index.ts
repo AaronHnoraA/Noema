@@ -3,6 +3,7 @@ import type { ViewUpdate } from "@codemirror/view";
 import type { Editor } from "../src/lib.ts";
 import { getKatexMacros, getKatexMacrosVersion } from "../src/katex-macros.ts";
 import type { SnippetSummary } from "./types.ts";
+import type { RendererActivityState } from "../src/renderer-activity.ts";
 
 const SCAN_CHUNK_CHARS = 16 * 1024;
 const IDLE_BUDGET_MS = 8;
@@ -106,6 +107,9 @@ export class MathSnippetIndex {
   private candidateCache: SnippetSummary[] = [];
   private readonly unsubscribe: () => void;
   private readonly unsubscribeReset: () => void;
+  private activityState: RendererActivityState = "active";
+  private destroyed = false;
+  private pendingRebuild = false;
 
   constructor(editor: Editor) {
     this.editor = editor;
@@ -114,8 +118,28 @@ export class MathSnippetIndex {
     this.scheduleRebuild();
   }
 
+  setActivity(state: RendererActivityState): void {
+    if (this.destroyed) return;
+    const wasSuspended = this.activityState === "quiescent" || this.activityState === "hidden";
+    this.activityState = state;
+    if (state === "destroyed") {
+      this.destroy();
+      return;
+    }
+    if (state === "quiescent" || state === "hidden") {
+      this.generation += 1;
+      if (this.scanHandle) cancelIdle(this.scanHandle);
+      this.scanHandle = 0;
+      return;
+    }
+    if (wasSuspended && this.pendingRebuild) this.scheduleRebuild();
+  }
+
   destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
     this.generation += 1;
+    this.pendingRebuild = false;
     this.unsubscribe();
     this.unsubscribeReset();
     if (this.scanHandle) cancelIdle(this.scanHandle);
@@ -175,14 +199,18 @@ export class MathSnippetIndex {
   }
 
   private scheduleRebuild(): void {
+    if (this.destroyed) return;
     const generation = ++this.generation;
+    this.pendingRebuild = true;
     if (this.scanHandle) cancelIdle(this.scanHandle);
+    if (this.activityState === "quiescent" || this.activityState === "hidden") return;
     const doc = this.editor.view.state.doc;
     let position = 0;
     let scanState: ScanState = { inlineMath: false, displayMath: false, fence: "", lineStart: true };
     const nextCounts = new Map<string, number>();
     const scan = (deadline: { timeRemaining: () => number }): void => {
-      if (generation !== this.generation) return;
+      if (this.destroyed || generation !== this.generation
+          || this.activityState === "quiescent" || this.activityState === "hidden") return;
       const started = performance.now();
       let firstChunk = true;
       while (position < doc.length && (firstChunk || (
@@ -202,6 +230,7 @@ export class MathSnippetIndex {
       this.counts = nextCounts;
       this.version += 1;
       this.candidateCacheKey = "";
+      this.pendingRebuild = false;
     };
     this.scanHandle = requestIdle(scan);
   }

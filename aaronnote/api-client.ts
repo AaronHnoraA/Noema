@@ -1023,6 +1023,7 @@ declare global {
     aaronnoteApi?: NativeApi;
     aaronnoteOpenTaskManager?: () => void;
     __noemaAppConfig?: NoemaAppConfigMsg;
+    __aaronnoteHostCapabilities?: { focusQuiescence?: boolean };
     __noemaKernelBase?: string;
     __noemaKernel?: { state: string; baseUrl: string; box: { id?: string; name?: string; root?: string } | null };
     __noemaRendererBuild?: string;

@@ -115,6 +115,7 @@ export class ProseCheckLifecycle<Input, Result> {
   private pendingManual: PendingTask<Input> | null = null;
   private active: ActiveTask<Input> | null = null;
   private paused = false;
+  private quiescent = false;
   private disposed = false;
   private lastAppliedAutoSignature: string | null = null;
 
@@ -214,12 +215,52 @@ export class ProseCheckLifecycle<Input, Result> {
     this.cancelActive(reason, "cancelled");
   }
 
+  /** Apply the shared renderer activity lifecycle. */
+  setActivity(state: import("../src/renderer-activity.ts").RendererActivityState): void {
+    if (state === "hidden" || state === "destroyed") {
+      this.setPaused(true, state === "destroyed" ? "disposed" : "page-hidden");
+      return;
+    }
+    if (this.paused) this.setPaused(false, "resumed");
+    this.setQuiescent(state === "quiescent");
+  }
+
   setPaused(paused: boolean, reason = "paused"): void {
     if (this.disposed || this.paused === paused) return;
     this.paused = paused;
     if (paused) {
+      this.quiescent = false;
       this.cancelPending(reason);
       this.cancelActive(reason, "cancelled");
+    } else {
+      this.pump();
+    }
+  }
+
+  /** Suspend automatic prose work while retaining the latest pending input. */
+  setQuiescent(quiescent: boolean, reason = "quiescent"): void {
+    if (this.disposed || this.quiescent === quiescent) return;
+    this.quiescent = quiescent;
+    if (quiescent) {
+      this.clearAutoTimer();
+      // A pending automatic task remains queued. Its due time is deliberately
+      // allowed to expire while quiescent, so resume performs one immediate
+      // check instead of losing a document revision.
+      if (this.active?.kind === "auto") {
+        const record = this.active;
+        this.cancelActive(reason, "cancelled");
+        // The request is already obsolete from a renderer perspective. Keep a
+        // retryable copy until resume; do not make the host reconstruct input.
+        if (!this.pendingAuto && !record.finished) {
+          this.pendingAuto = this.createTask("auto", record.input, record.signature, 0);
+          this.emit({
+            id: this.pendingAuto.id,
+            kind: "auto",
+            signature: this.pendingAuto.signature,
+            phase: "scheduled",
+          });
+        }
+      }
     } else {
       this.pump();
     }
@@ -249,7 +290,7 @@ export class ProseCheckLifecycle<Input, Result> {
   }
 
   private pump(): void {
-    if (this.disposed || this.paused || this.active) return;
+    if (this.disposed || this.paused || this.quiescent || this.active) return;
     if (this.pendingManual) {
       const task = this.pendingManual;
       this.pendingManual = null;

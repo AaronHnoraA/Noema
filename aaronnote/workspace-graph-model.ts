@@ -1,4 +1,5 @@
 import type { GraphEdge, GraphNode, GraphPayload } from "./types.ts";
+import type { RendererActivityState } from "../src/renderer-activity.ts";
 import { knowledgeEntityMatches, parseKnowledgeQuery } from "../shared/knowledge-query.mjs";
 
 export type WorkspaceGraphOptions = {
@@ -16,7 +17,11 @@ export type WorkspaceGraphOptions = {
   onSettingsChange?: (settings: WorkspaceGraphSettings) => void;
 };
 
-export type WorkspaceGraph = { destroy: () => void; center: () => void };
+export type WorkspaceGraph = {
+  destroy: () => void;
+  center: () => void;
+  setActivity: (state: RendererActivityState) => void;
+};
 
 export type WorkspaceGraphSettings = {
   showTags: boolean;

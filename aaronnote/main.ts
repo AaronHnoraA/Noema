@@ -111,6 +111,12 @@ import {
 } from "../src/cm6/viewport-refresh.ts";
 import { setMeasuredWidgetObservationPaused } from "../src/cm6/extensions/visual/widgets/measured-observer.ts";
 import {
+  createFocusQuiescenceController,
+  editorTextFromKeydown,
+  replayEditorKeydown,
+} from "../src/cm6/focus-quiescence.ts";
+import { createRendererActivityGate, type RendererActivityState } from "../src/renderer-activity.ts";
+import {
   cancelPointerSelection,
   isPointerSelecting,
 } from "../src/cm6/extensions/visual/selection.ts";
@@ -197,7 +203,7 @@ import {
   handleXwidgetVimBeforeInput,
   handleXwidgetVimKeydown,
 } from "./xwidget-key-guard.ts";
-import { serverMode, sourceEditorName, standaloneMode } from "./host-mode.ts";
+import { focusQuiescenceEnabled, serverMode, sourceEditorName, standaloneMode } from "./host-mode.ts";
 import { createZoomController } from "./features/zoom/controller.ts";
 import {
   createWritingStatsController,
@@ -1199,6 +1205,7 @@ const BUILTIN_SNIPPETS: SnippetSummary[] = [{
   source: BUILTIN_SNIPPET_SOURCE,
 })), ...LATEX_MARK_SNIPPETS];
 let paused = false;
+let rendererActivityState: RendererActivityState = "active";
 const pauseReasons = new Set<string>();
 type MathPreviewSession = {
   /** Formula identity, stable while its body is being edited. */
@@ -2603,6 +2610,51 @@ const vim = createVimLite(editor, host, {
     return editor.runCommand("unfold-all-headings");
   },
 });
+const focusQuiescence = createFocusQuiescenceController({
+  // The controller is shared by all renderer hosts. Only the Emacs xwidget
+  // adapter opts in because its WebKit contenteditable caret otherwise keeps
+  // the native compositor awake while the same CM6 tree is idle.
+  enabled: focusQuiescenceEnabled(),
+  autoPark: false,
+  view: editor.view,
+  editorSurface: host,
+  isSurfaceVisible: editorSurfaceVisible,
+  isPointerSelecting: () => isPointerSelecting(editor.view.state),
+  isInteractionBlocked: () =>
+    visualMathEditorActive
+    || !modal.hidden
+    || !findPanel.hidden
+    || !selectionTool.hidden
+    || !toolsPanel.hidden
+    || !roamToolsPanel.hidden
+    || !jupyterPanel.hidden
+    || focusedEditableOutsideEditor()
+    || eventTargetsNativeWidgetInput(document.activeElement),
+  onParkedKeydown: (event) => {
+    if (event.defaultPrevented || event.isComposing) return false;
+
+    // Focusing during capture does not retarget the event that is already in
+    // flight. Re-dispatch the same key at CM6 so the existing document
+    // keydown, xwidget/Vim, shortcut and CM6 keymap pipeline handles every
+    // control and modifier chord exactly as it does while focused.
+    const text = editorTextFromKeydown(event);
+    const modeBeforeReplay = vim.mode();
+    const documentBeforeReplay = editor.view.state.doc;
+    if (!replayEditorKeydown(editor.view.contentDOM, event)) return false;
+
+    // A synthetic keydown does not ask WebKit to generate a native
+    // beforeinput/input event. For an ordinary insert-mode text key, use the
+    // same input facet used by host key events only when the replayed shared
+    // pipeline did not already change the document (snippet/Vim/shortcut
+    // handlers may have consumed the key without inserting text).
+    if (modeBeforeReplay === "insert"
+        && text !== null
+        && editor.view.state.doc === documentBeforeReplay) {
+      runEditorTextInput(editor.view, text);
+    }
+    return true;
+  },
+});
 const assistScheduler = new AssistScheduler(window, editorSurfaceVisible, runAssistUpdate);
 updateModeLabel(vim.mode());
 let vimSelectionSyncPending = false;
@@ -2811,8 +2863,16 @@ if (!serverReaderMode) {
 }
 const graphOverlayTimer = new CoalescedTimer(400);
 let graphOverlayIdleHandle = 0;
-function scheduleGraphOverlayUpdate(): void {
+let graphOverlayActivityState: RendererActivityState = "active";
+let graphOverlayUpdatePending = false;
+const graphOverlayCanRun = (): boolean =>
+  graphOverlayActivityState === "active" || graphOverlayActivityState === "recently-active";
+
+function scheduleGraphOverlayUpdate(delayMs = 400): void {
+  graphOverlayUpdatePending = true;
+  if (!graphOverlayCanRun()) return;
   graphOverlayTimer.schedule(() => {
+    if (!graphOverlayCanRun()) return;
     const scheduling = navigator as Navigator & { scheduling?: { isInputPending?: () => boolean } };
     if (scheduling.scheduling?.isInputPending?.()) {
       scheduleGraphOverlayUpdate();
@@ -2822,14 +2882,34 @@ function scheduleGraphOverlayUpdate(): void {
       if (graphOverlayIdleHandle) window.cancelIdleCallback(graphOverlayIdleHandle);
       graphOverlayIdleHandle = window.requestIdleCallback(() => {
         graphOverlayIdleHandle = 0;
+        if (!graphOverlayCanRun()) return;
         if (scheduling.scheduling?.isInputPending?.()) scheduleGraphOverlayUpdate();
-        else localGraphPanel.update(true);
+        else {
+          graphOverlayUpdatePending = false;
+          localGraphPanel.update(true);
+        }
       }, { timeout: 1200 });
       return;
     }
+    graphOverlayUpdatePending = false;
     localGraphPanel.update(true);
-  });
+  }, undefined, delayMs);
 }
+
+const graphOverlayActivity = {
+  setActivity(state: RendererActivityState): void {
+    const wasSuspended = graphOverlayActivityState === "quiescent"
+      || graphOverlayActivityState === "hidden";
+    graphOverlayActivityState = state;
+    if (state === "quiescent" || state === "hidden" || state === "destroyed") {
+      graphOverlayTimer.cancel();
+      if (graphOverlayIdleHandle) window.cancelIdleCallback(graphOverlayIdleHandle);
+      graphOverlayIdleHandle = 0;
+      return;
+    }
+    if (wasSuspended && graphOverlayUpdatePending) scheduleGraphOverlayUpdate(0);
+  },
+};
 changeHandlers.add(scheduleGraphOverlayUpdate);
 
 graphClose.addEventListener("click", () => {
@@ -5216,7 +5296,13 @@ setupCopilot({
   onAction: () => () => {},
   onSettingsChange: () => () => {},
   getSettings: () => ({ idleDelayMs: 850, largeBufferThresholdKb: 512 }),
-  isActive: () => !serverReaderMode && !paused && !visualMathEditorActive && editorSurfaceVisible(),
+  isActive: () => !serverReaderMode
+    && !paused
+    && rendererActivityState !== "quiescent"
+    && rendererActivityState !== "hidden"
+    && rendererActivityState !== "destroyed"
+    && !visualMathEditorActive
+    && editorSurfaceVisible(),
   isCursorInTexSource: isCopilotTexContext,
   texSourceRangeAtCursor: copilotTexSourceRange,
   onDocumentEvent: subscribe,
@@ -5530,6 +5616,33 @@ const proseLifecycle = new ProseCheckLifecycle<ProseCheckInput, ProseCheckRunRes
   onFinally: onProseCheckFinally,
   onCancel: ({ context }) => api.proseCheck.cancelKeepalive(`${clientId}:prose:${context.id}`),
 });
+
+// All renderer activity-sensitive systems share this one state transition.
+// The host adapters only send pause/resume facts; they never maintain a
+// second implementation of editor quiescence or background scheduling.
+const rendererActivity = createRendererActivityGate([
+  { setPaused: setMeasuredWidgetObservationPaused },
+  { setPaused: setViewportDecorationRefreshPaused },
+  focusQuiescence,
+  assistScheduler,
+  proseLifecycle,
+  writingStatsController!,
+  mathSnippetIndex,
+  localGraphPanel,
+  graphOverlayActivity,
+], {
+  activityTarget: document,
+  autoStart: true,
+  onStateChange: (state) => {
+    rendererActivityState = state;
+    document.documentElement.classList.toggle("aaronnote-quiescent", state === "quiescent");
+    // Copilot's transport lifecycle is still the same renderer path: it only
+    // sees the shared activity fact and never owns a host-specific idle timer.
+    copilotActiveChangeHandlers.forEach((handler) => handler());
+  },
+});
+// A newly mounted editor starts active even before the first browser event.
+rendererActivity.notifyActivity();
 
 function scheduleAutomaticProseCheck(delayMs: number = proseProfile().idleMs): void {
   if (!languageToolSettings.automaticEnabled || currentReadOnly || !currentFile
@@ -10510,13 +10623,9 @@ function cancelAssistWork(): void {
 function applyPaused(next: boolean): void {
   if (paused === next) return;
   paused = next;
-  // One shared renderer activity gate is used by every host shell.  Emacs and
+  // One shared renderer activity gate is used by every host shell. Emacs and
   // Electron only contribute pause reasons; neither owns rendering behavior.
-  setMeasuredWidgetObservationPaused(next);
-  setViewportDecorationRefreshPaused(next);
-  copilotActiveChangeHandlers.forEach((handler) => handler());
-  assistScheduler.setPaused(next);
-  proseLifecycle.setPaused(next, next ? "page-hidden" : "resumed");
+  rendererActivity.setPaused(next);
   document.documentElement.classList.toggle("aaronnote-paused", next);
   if (next) {
     cancelAssistWork();
@@ -11755,6 +11864,8 @@ window.addEventListener("beforeunload", () => {
   removeDesktopCommandListener?.();
   removeNativeDropListener?.();
   coreReconnectController?.destroy();
+  rendererActivity.destroy();
+  focusQuiescence.destroy();
   vim.destroy();
   imeCoalesceTimer.cancel();
   zoomController.destroy();

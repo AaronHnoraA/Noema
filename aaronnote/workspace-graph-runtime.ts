@@ -16,6 +16,7 @@ import {
   type WorkspaceGraphSettings,
 } from "./workspace-graph-model.ts";
 import { markdownLinkPrimaryModifier } from "../src/cm6/markdown-link-events.ts";
+import type { RendererActivityState } from "../src/renderer-activity.ts";
 
 export type WorkspaceForceNode = DrawNode & { id: string };
 
@@ -58,6 +59,7 @@ export type WorkspaceGraphAdapter = {
   focus: (node: WorkspaceForceNode) => void;
   center: () => void;
   resize: (width: number, height: number) => void;
+  setActivity?: (state: RendererActivityState) => void;
   destroy: () => void;
 };
 
@@ -98,6 +100,13 @@ export function createWorkspaceGraphRuntime(
   let clickTimer = 0;
   let fitTimer = 0;
   let lastClickAt = 0;
+  let activityState: RendererActivityState = "active";
+  let fitPending = false;
+  let resizePending = false;
+
+  function canRender(): boolean {
+    return activityState === "active" || activityState === "recently-active";
+  }
 
   const stage = document.createElement("div");
   stage.className = "aaronnote-workspace-force-graph";
@@ -210,8 +219,12 @@ export function createWorkspaceGraphRuntime(
 
   function scheduleFit(): void {
     window.clearTimeout(fitTimer);
+    fitPending = true;
     fitTimer = window.setTimeout(() => {
-      if (!destroyed) adapter.center();
+      fitTimer = 0;
+      if (destroyed || !canRender()) return;
+      fitPending = false;
+      adapter.center();
     }, 90);
   }
 
@@ -340,12 +353,17 @@ export function createWorkspaceGraphRuntime(
   let resizeObserver: ResizeObserver | null = null;
   if (typeof ResizeObserver !== "undefined") {
     resizeObserver = new ResizeObserver(() => {
+      if (!canRender()) {
+        resizePending = true;
+        return;
+      }
       const next = options.root.getBoundingClientRect();
       const nextWidth = Math.max(320, Math.round(next.width || options.root.clientWidth || width));
       const nextHeight = Math.max(options.mode === "preview" ? 260 : 360, Math.round(next.height || options.root.clientHeight || height));
       if (nextWidth === width && nextHeight === height) return;
       width = nextWidth;
       height = nextHeight;
+      resizePending = false;
       adapter.resize(width, height);
     });
     resizeObserver.observe(options.root);
@@ -353,11 +371,47 @@ export function createWorkspaceGraphRuntime(
 
   rebuild(true);
   return {
-    center: () => adapter.center(),
+    center: () => {
+      if (!canRender()) {
+        fitPending = true;
+        return;
+      }
+      fitPending = false;
+      adapter.center();
+    },
+    setActivity(state: RendererActivityState): void {
+      if (destroyed || activityState === state) return;
+      const wasSuspended = activityState === "quiescent" || activityState === "hidden";
+      activityState = state;
+      adapter.setActivity?.(state);
+      if (state === "quiescent" || state === "hidden") {
+        if (fitTimer) {
+          window.clearTimeout(fitTimer);
+          fitTimer = 0;
+        }
+        return;
+      }
+      if (wasSuspended) {
+        if (resizePending) {
+          resizePending = false;
+          const next = options.root.getBoundingClientRect();
+          const nextWidth = Math.max(320, Math.round(next.width || options.root.clientWidth || width));
+          const nextHeight = Math.max(options.mode === "preview" ? 260 : 360, Math.round(next.height || options.root.clientHeight || height));
+          if (nextWidth !== width || nextHeight !== height) {
+            width = nextWidth;
+            height = nextHeight;
+            adapter.resize(width, height);
+          }
+        }
+        if (fitPending) scheduleFit();
+      }
+    },
     destroy() {
       destroyed = true;
       window.clearTimeout(clickTimer);
       window.clearTimeout(fitTimer);
+      fitTimer = 0;
+      fitPending = false;
       resizeObserver?.disconnect();
       resizeObserver = null;
       options.searchInput.removeEventListener("input", onSearch);

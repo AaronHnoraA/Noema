@@ -28,6 +28,59 @@ describe("writing stats feature controller", () => {
     controller.destroy();
   });
 
+  test("defers background scans during shared renderer quiescence and resumes once", () => {
+    vi.useFakeTimers();
+    const originalRequest = Object.getOwnPropertyDescriptor(window, "requestIdleCallback");
+    const originalCancel = Object.getOwnPropertyDescriptor(window, "cancelIdleCallback");
+    let nextHandle = 1;
+    const callbacks = new Map<number, IdleRequestCallback>();
+    Object.defineProperty(window, "requestIdleCallback", {
+      configurable: true,
+      value: (callback: IdleRequestCallback) => {
+        const handle = nextHandle++;
+        callbacks.set(handle, callback);
+        return handle;
+      },
+    });
+    Object.defineProperty(window, "cancelIdleCallback", {
+      configurable: true,
+      value: (handle: number) => callbacks.delete(handle),
+    });
+    const holder = {
+      state: EditorState.create({ doc: "hello world" }),
+    };
+    const editor = {
+      view: holder,
+      getMarkdownLength: () => holder.state.doc.length,
+    } as unknown as Editor;
+    const label = document.createElement("span");
+    const controller = createWritingStatsController(editor, label);
+
+    try {
+      controller.schedule(true);
+      controller.setActivity("quiescent");
+      vi.advanceTimersByTime(2_000);
+      expect(callbacks.size).toBe(0);
+      expect(controller.isDocumentChanged()).toBe(true);
+
+      controller.setActivity("active");
+      vi.runOnlyPendingTimers();
+      expect(callbacks.size).toBe(1);
+      const entry = callbacks.entries().next().value as [number, IdleRequestCallback];
+      callbacks.delete(entry[0]);
+      entry[1]({ didTimeout: false, timeRemaining: () => 10 });
+      expect(controller.isDocumentChanged()).toBe(false);
+      expect(label.textContent).toMatch(/^全文 \d+ 字$/);
+    } finally {
+      controller.destroy();
+      if (originalRequest) Object.defineProperty(window, "requestIdleCallback", originalRequest);
+      else delete (window as { requestIdleCallback?: unknown }).requestIdleCallback;
+      if (originalCancel) Object.defineProperty(window, "cancelIdleCallback", originalCancel);
+      else delete (window as { cancelIdleCallback?: unknown }).cancelIdleCallback;
+      vi.useRealTimers();
+    }
+  });
+
   test("large single-line documents are counted across cancellable idle chunks", () => {
     vi.useFakeTimers();
     const originalRequest = Object.getOwnPropertyDescriptor(window, "requestIdleCallback");

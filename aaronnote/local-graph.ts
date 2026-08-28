@@ -2,6 +2,7 @@ import type { GraphNode, GraphPayload, NoteSummary } from "./types.ts";
 import type { WorkspaceGraph, WorkspaceGraphOptions } from "./workspace-graph.ts";
 import { CoalescedTimer } from "../src/coalesced-timer.ts";
 import { metadataTagsFromMarkdown } from "./note-tag-transaction.ts";
+import type { RendererActivityState } from "../src/renderer-activity.ts";
 
 type OpenNoteOptions = { newWindow?: boolean };
 
@@ -36,6 +37,7 @@ export type LocalGraphPanel = {
   toggle: () => void;
   collapse: () => void;
   suspend: () => void;
+  setActivity: (state: RendererActivityState) => void;
   update: (force?: boolean) => void;
   invalidate: () => void;
 };
@@ -233,6 +235,12 @@ export function createLocalGraphPanel(options: LocalGraphPanelOptions): LocalGra
   let mode: "local" | "workspace" = "local";
   let workspaceGraph: WorkspaceGraph | null = null;
   let workspacePayload: GraphPayload | null = null;
+  let activityState: RendererActivityState = "active";
+  let pendingUpdate = false;
+
+  function canRender(): boolean {
+    return activityState === "active" || activityState === "recently-active";
+  }
   let workspaceRequest = 0;
   const searchInput = options.searchInput ?? document.createElement("input");
   const groupInput = options.groupInput ?? document.createElement("select");
@@ -613,6 +621,7 @@ export function createLocalGraphPanel(options: LocalGraphPanelOptions): LocalGra
           localRoot: currentKey(),
         },
       });
+      workspaceGraph.setActivity(activityState);
       if (local.truncated) options.status.textContent += " · capped";
     } catch (error) {
       if (request === workspaceRequest) {
@@ -632,16 +641,29 @@ export function createLocalGraphPanel(options: LocalGraphPanelOptions): LocalGra
 
   function update(force = false): void {
     if (isCollapsed()) return;
+    if (!canRender()) {
+      pendingUpdate = true;
+      return;
+    }
     expandedOnce = true;
     options.depthLabel.textContent = options.depthInput.value;
     const key = dataSignature();
-    if (!force && key === renderKey) return;
+    if (!force && key === renderKey) {
+      pendingUpdate = false;
+      return;
+    }
+    pendingUpdate = false;
     renderKey = key;
     renderGraph();
   }
 
   function scheduleUpdate(delay = 40): void {
     if (isCollapsed()) return;
+    if (!canRender()) {
+      pendingUpdate = true;
+      return;
+    }
+    pendingUpdate = true;
     resizeTimer.schedule(() => update(true), undefined, delay);
   }
 
@@ -668,6 +690,7 @@ export function createLocalGraphPanel(options: LocalGraphPanelOptions): LocalGra
 
   function invalidate(): void {
     renderKey = "";
+    pendingUpdate = true;
     if (workspacePayload && options.getIndexVersion && workspacePayload.indexVersion !== options.getIndexVersion()) {
       workspacePayload = null;
     }
@@ -699,5 +722,22 @@ export function createLocalGraphPanel(options: LocalGraphPanelOptions): LocalGra
   groupInput.disabled = true;
   window.addEventListener("resize", () => scheduleUpdate(120));
 
-  return { toggle, collapse, suspend, update, invalidate };
+  return {
+    toggle,
+    collapse,
+    suspend,
+    setActivity(state: RendererActivityState): void {
+      if (activityState === state) return;
+      const wasSuspended = activityState === "quiescent" || activityState === "hidden";
+      activityState = state;
+      workspaceGraph?.setActivity(state);
+      if (state === "quiescent" || state === "hidden") {
+        resizeTimer.cancel();
+        return;
+      }
+      if (wasSuspended && pendingUpdate && !isCollapsed()) update(true);
+    },
+    update,
+    invalidate,
+  };
 }
