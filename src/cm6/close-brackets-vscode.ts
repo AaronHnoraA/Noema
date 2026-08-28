@@ -45,7 +45,7 @@ const vscodeBracketState = StateField.define<RangeSet<ClosedBracketMark>>({
     return RangeSet.empty;
   },
   update(value, tr) {
-    value = value.map(tr.changes);
+    if (tr.docChanged) value = value.map(tr.changes);
     if (tr.selection) {
       const line = tr.state.doc.lineAt(tr.selection.main.head);
       value = value.update({ filter: (from) => from >= line.from && from <= line.to });

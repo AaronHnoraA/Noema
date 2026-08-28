@@ -172,7 +172,7 @@ export type FocusQuiescenceController = {
   setActivity(state: RendererActivityState): void;
   /** Reflect the shared renderer hidden gate. Pausing parks immediately. */
   setPaused(paused: boolean): void;
-  /** Park native contenteditable focus without destroying CM6 state. */
+  /** Park native contenteditable focus for an actually hidden host surface. */
   setQuiescent(quiescent: boolean): void;
   /** Mark editor activity without manufacturing focus. */
   notifyActivity(): void;
@@ -202,15 +202,8 @@ export type FocusQuiescenceOptions = {
    * return true only when it replayed/handled the key.
    */
   onParkedKeydown?: (event: KeyboardEvent) => boolean;
-  /** One-shot inactivity delay for the standalone controller fallback. */
-  inactivityMs?: number;
-  /** The shared renderer gate owns this timer in production. */
-  autoPark?: boolean;
   document?: Document;
-  window?: Window;
 };
-
-const DEFAULT_INACTIVITY_MS = 1000;
 
 function eventElement(target: EventTarget | null): Element | null {
   if (target instanceof Element) return target;
@@ -227,10 +220,10 @@ function isNativeInputElement(element: Element | null, contentDOM: HTMLElement):
 }
 
 /**
- * Park only the native contenteditable focus. CM6's document, selection, Vim
- * model, undo history and decorations remain untouched. This is deliberately
- * a renderer concern: Emacs and Electron use the same controller, while a
- * host merely opts in when its native WebKit surface needs this workaround.
+ * Park native contenteditable focus only when the host surface is actually
+ * hidden. CM6's document, selection, Vim model, undo history and decorations
+ * remain untouched. Renderer quiescence is only a background-work scheduling
+ * state: it must never blur the active editor or interrupt a long pointer drag.
  */
 export function createFocusQuiescenceController(
   options: FocusQuiescenceOptions,
@@ -243,10 +236,7 @@ export function createFocusQuiescenceController(
     isPointerSelecting = () => false,
     isInteractionBlocked = () => false,
     onParkedKeydown,
-    inactivityMs = DEFAULT_INACTIVITY_MS,
-    autoPark = true,
     document: documentRef = document,
-    window: windowRef = window,
   } = options;
   const contentDOM = view.contentDOM;
 
@@ -256,13 +246,6 @@ export function createFocusQuiescenceController(
   let parked = false;
   let composing = false;
   let pointerActive = false;
-  let inactivityTimer = 0;
-
-  const clearInactivityTimer = (): void => {
-    if (!inactivityTimer) return;
-    windowRef.clearTimeout(inactivityTimer);
-    inactivityTimer = 0;
-  };
 
   const activeElement = (): Element | null => documentRef.activeElement;
 
@@ -301,17 +284,7 @@ export function createFocusQuiescenceController(
     return editorHasFocus() || detachedKeyboardTarget(event.target);
   };
 
-  const scheduleInactivity = (): void => {
-    clearInactivityTimer();
-    if (!autoPark || !canPark() || composing || pointerActive || isPointerSelecting()) return;
-    inactivityTimer = windowRef.setTimeout(() => {
-      inactivityTimer = 0;
-      if (canPark()) parkNow();
-    }, Math.max(0, inactivityMs));
-  };
-
   const parkNow = (): void => {
-    clearInactivityTimer();
     if (!editorHasFocus()) return;
     parked = true;
     // Do not hide/rebuild CM6. The only operation here is the native focus
@@ -321,38 +294,22 @@ export function createFocusQuiescenceController(
 
   const wakeNow = (): void => {
     if (!canUseEditorSurface()) return;
-    clearInactivityTimer();
     parked = false;
     contentDOM.focus({ preventScroll: true });
   };
 
-  const notifyActivity = (): void => {
-    if (!canUseEditorSurface() || !editorHasFocus()) {
-      clearInactivityTimer();
-      return;
-    }
-    scheduleInactivity();
-  };
+  // Kept as a compatibility hook for the shared activity participant. Normal
+  // inactivity intentionally has no focus side effect and owns no timer.
+  const notifyActivity = (): void => {};
 
   const onFocusIn = (event: FocusEvent): void => {
-    if (event.target !== contentDOM) {
-      clearInactivityTimer();
-      return;
-    }
+    if (event.target !== contentDOM) return;
     parked = false;
-    notifyActivity();
-  };
-
-  const onFocusOut = (): void => {
-    clearInactivityTimer();
   };
 
   const onKeydown = (event: KeyboardEvent): void => {
     if (!canHandleKeyboardEvent(event)) return;
-    if (event.isComposing) {
-      composing = true;
-      clearInactivityTimer();
-    }
+    if (event.isComposing) composing = true;
     const wasParked = parked;
     if (wasParked) {
       wakeNow();
@@ -368,33 +325,25 @@ export function createFocusQuiescenceController(
         return;
       }
     }
-    if (!composing) notifyActivity();
   };
 
   const onBeforeInput = (event: InputEvent): void => {
     if (!canHandleKeyboardEvent(event)) return;
-    if (event.isComposing) {
-      composing = true;
-      clearInactivityTimer();
-    }
+    if (event.isComposing) composing = true;
     if (parked) wakeNow();
-    if (!composing) notifyActivity();
   };
 
   const onCompositionStart = (event: CompositionEvent): void => {
     if (!canHandleKeyboardEvent(event)) return;
     composing = true;
-    clearInactivityTimer();
     if (parked) wakeNow();
   };
 
-  const onCompositionEnd = (event: CompositionEvent): void => {
+  const onCompositionEnd = (): void => {
     // compositionend can arrive after focus has already moved to a native
-    // widget or another host surface. Always release the local guard, but
-    // only restart the editor timer when the editor still owns focus.
+    // widget or another host surface. Always release the local guard.
     if (!composing) return;
     composing = false;
-    if (canHandleKeyboardEvent(event)) notifyActivity();
   };
 
   const isEditorPointerTarget = (target: EventTarget | null): boolean => {
@@ -406,30 +355,18 @@ export function createFocusQuiescenceController(
   const onPointerDown = (event: PointerEvent | MouseEvent): void => {
     if (!canUseEditorSurface() || !isEditorPointerTarget(event.target)) return;
     pointerActive = true;
-    clearInactivityTimer();
     if (parked) wakeNow();
-  };
-
-  const onPointerActivity = (): void => {
-    if (!pointerActive) return;
-    clearInactivityTimer();
   };
 
   const finishPointer = (): void => {
     if (!pointerActive) return;
     pointerActive = false;
-    // Let CM6 finish its pointer transaction before consulting its
-    // isPointerSelecting state. This also avoids a timer during a drag.
-    queueMicrotask(notifyActivity);
   };
 
   const onVisibilityChange = (): void => {
     if (documentRef.hidden) {
-      clearInactivityTimer();
       composing = false;
-      return;
     }
-    notifyActivity();
   };
 
   const listeners: Array<[
@@ -462,15 +399,12 @@ export function createFocusQuiescenceController(
   }
 
   listen(documentRef, "focusin", onFocusIn as EventListener, true);
-  listen(documentRef, "focusout", onFocusOut as EventListener, true);
   listen(documentRef, "keydown", onKeydown as EventListener, true);
   listen(documentRef, "beforeinput", onBeforeInput as EventListener, true);
   listen(documentRef, "compositionstart", onCompositionStart as EventListener, true);
   listen(documentRef, "compositionend", onCompositionEnd as EventListener, true);
   listen(editorSurface, "pointerdown", onPointerDown as EventListener, true);
   listen(editorSurface, "mousedown", onPointerDown as EventListener, true);
-  listen(documentRef, "pointermove", onPointerActivity as EventListener, true);
-  listen(documentRef, "mousemove", onPointerActivity as EventListener, true);
   listen(documentRef, "pointerup", finishPointer as EventListener, true);
   listen(documentRef, "pointercancel", finishPointer as EventListener, true);
   listen(documentRef, "mouseup", finishPointer as EventListener, true);
@@ -489,7 +423,6 @@ export function createFocusQuiescenceController(
     setPaused(next: boolean): void {
       if (destroyed || paused === next) return;
       paused = next;
-      clearInactivityTimer();
       if (next) {
         quiescent = false;
         composing = false;
@@ -499,22 +432,18 @@ export function createFocusQuiescenceController(
         if (editorHasFocus()) parkNow();
         return;
       }
-      // Resume never focuses the editor. If a real user/host action already
-      // focused it, the normal idle timer may be started; otherwise it stays
-      // parked until an input or pointer event wakes it.
-      notifyActivity();
+      // Resume never focuses the editor. It stays parked until a real input or
+      // pointer event wakes it.
     },
     setQuiescent(next: boolean): void {
       if (destroyed || quiescent === next) return;
       quiescent = next;
-      clearInactivityTimer();
-      if (next) {
-        // Quiescence is allowed to park only native focus. The editor remains
-        // usable so the shared gate can wake it on the first real key/pointer.
-        if (editorHasFocus()) parkNow();
-      } else {
-        notifyActivity();
-      }
+      // Do not mutate focus here. `drawSelection({ cursorBlinkRate: -1 })` and
+      // the renderer stylesheet already disable cursor animation, so blurring
+      // a live contenteditable no longer buys the idle optimization this
+      // controller originally targeted. It does, however, break native focus,
+      // IME ownership and pointer selections exactly when the shared gate
+      // becomes quiescent. Hidden host surfaces still park through setPaused.
     },
     notifyActivity,
     wake: wakeNow,
@@ -524,7 +453,6 @@ export function createFocusQuiescenceController(
     destroy(): void {
       if (destroyed) return;
       destroyed = true;
-      clearInactivityTimer();
       for (const [target, type, listener, listenerOptions] of listeners) {
         target.removeEventListener(type, listener, listenerOptions);
       }

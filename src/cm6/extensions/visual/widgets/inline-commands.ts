@@ -1134,9 +1134,12 @@ function buildInlineCommandDecos(
 
 function activeInlineCommandKey(view: EditorView): string {
   const sel = view.state.selection.main;
+  // Range selection keeps command/citation widgets rendered. Returning a key
+  // containing the moving endpoints made a wide drag rebuild the entire
+  // visible command layer once per pointer event.
+  if (!sel.empty) return "";
   const firstLine = view.state.doc.lineAt(sel.from).number;
   const lastLine = view.state.doc.lineAt(Math.min(sel.to, view.state.doc.length)).number;
-  if (lastLine - firstLine > 50) return `wide:${sel.from}:${sel.to}`;
   const keys: string[] = [];
 
   const scanFromLine = Math.max(1, firstLine - 80);

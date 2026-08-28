@@ -116,9 +116,11 @@ import {
   replayEditorKeydown,
 } from "../src/cm6/focus-quiescence.ts";
 import { createRendererActivityGate, type RendererActivityState } from "../src/renderer-activity.ts";
+import { imageAnimationActivityParticipant } from "../src/image-animation.ts";
 import {
   cancelPointerSelection,
   isPointerSelecting,
+  pointerSelectionEffect,
 } from "../src/cm6/extensions/visual/selection.ts";
 import {
   allProseDiagnostics,
@@ -1598,18 +1600,24 @@ type DesktopEditorPerfResult = {
   deleteP95Ms: number;
   maxInsertMs: number;
   maxDeleteMs: number;
+  formulaDragSteps: number;
+  formulaDragDispatchP95Ms: number;
+  formulaDragDispatchMaxMs: number;
+  formulaDragFrameP95Ms: number;
+  formulaDragFrameMaxMs: number;
   longTaskCount: number;
   longTaskMs: number;
   contentRestored: boolean;
 };
 
-if (initialParams.get("desktopPerfSmoke") === "1") {
+const desktopPerfSmokeMode = initialParams.get("desktopPerfSmoke");
+if (desktopPerfSmokeMode === "1" || desktopPerfSmokeMode === "selection") {
   (
     window as Window & {
       __noemaRunEditorPerfProbe?: () => Promise<DesktopEditorPerfResult>;
     }
   ).__noemaRunEditorPerfProbe = async () => {
-    const iterations = 500;
+    const iterations = desktopPerfSmokeMode === "selection" ? 0 : 500;
     const original = editor.view.state.doc.toString();
     const originalSelection = editor.view.state.selection.main;
     const longTasks: number[] = [];
@@ -1630,15 +1638,17 @@ if (initialParams.get("desktopPerfSmoke") === "1") {
       const sorted = [...samples].sort((a, b) => a - b);
       return sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)] || 0;
     };
-    const selection = editor.view.state.doc.length;
-    editor.view.dispatch({ selection: { anchor: selection } });
-    await frame();
+    if (iterations > 0) {
+      const selection = editor.view.state.doc.length;
+      editor.view.dispatch({ selection: { anchor: selection } });
+      await frame();
 
-    // Warm the update/decorations path without including first-use module and
-    // font work in the measured run.
-    for (let i = 0; i < 20; i += 1) editor.insertText("x");
-    for (let i = 0; i < 20; i += 1) editor.insertText("", 1);
-    await frame();
+      // Warm the update/decorations path without including first-use module
+      // and font work in the measured run.
+      for (let i = 0; i < 20; i += 1) editor.insertText("x");
+      for (let i = 0; i < 20; i += 1) editor.insertText("", 1);
+      await frame();
+    }
 
     const insertSamples: number[] = [];
     const insertStart = performance.now();
@@ -1660,6 +1670,41 @@ if (initialParams.get("desktopPerfSmoke") === "1") {
     await frame();
     const deleteMs = performance.now() - deleteStart;
 
+    // Measure the interaction that is most sensitive to WebKit layout: a
+    // pointer selection crossing a rendered display formula in a large note.
+    // The dispatch samples expose synchronous CM6/plugin work; the frame
+    // samples also include drawSelection, widget layout and layer painting.
+    const formulaOpen = original.indexOf("\\[");
+    const formulaClose = formulaOpen >= 0 ? original.indexOf("\\]", formulaOpen + 2) : -1;
+    const formulaDragDispatchSamples: number[] = [];
+    const formulaDragFrameSamples: number[] = [];
+    let formulaDragSteps = 0;
+    if (formulaOpen >= 0 && formulaClose > formulaOpen) {
+      const anchor = Math.max(0, original.lastIndexOf("\n", Math.max(0, formulaOpen - 600)) + 1);
+      const end = Math.min(original.length, formulaClose + 2 + 600);
+      const heads = Array.from(
+        { length: 36 },
+        (_, index) => anchor + Math.floor(((end - anchor) * (index + 1)) / 36),
+      );
+      editor.view.dispatch({
+        selection: { anchor },
+        effects: pointerSelectionEffect.of(true),
+        scrollIntoView: true,
+      });
+      rendererActivity.notifyActivity();
+      await frame();
+      await frame();
+      for (const head of heads) {
+        const started = performance.now();
+        editor.view.dispatch({ selection: { anchor, head }, scrollIntoView: true });
+        formulaDragDispatchSamples.push(performance.now() - started);
+        await frame();
+        formulaDragFrameSamples.push(performance.now() - started);
+      }
+      formulaDragSteps = heads.length;
+      editor.view.dispatch({ effects: pointerSelectionEffect.of(false) });
+    }
+
     editor.view.dispatch({
       changes: { from: 0, to: editor.view.state.doc.length, insert: original },
       selection: {
@@ -1677,8 +1722,13 @@ if (initialParams.get("desktopPerfSmoke") === "1") {
       deleteMs,
       insertP95Ms: percentile95(insertSamples),
       deleteP95Ms: percentile95(deleteSamples),
-      maxInsertMs: Math.max(...insertSamples),
-      maxDeleteMs: Math.max(...deleteSamples),
+      maxInsertMs: Math.max(0, ...insertSamples),
+      maxDeleteMs: Math.max(0, ...deleteSamples),
+      formulaDragSteps,
+      formulaDragDispatchP95Ms: percentile95(formulaDragDispatchSamples),
+      formulaDragDispatchMaxMs: Math.max(0, ...formulaDragDispatchSamples),
+      formulaDragFrameP95Ms: percentile95(formulaDragFrameSamples),
+      formulaDragFrameMaxMs: Math.max(0, ...formulaDragFrameSamples),
       longTaskCount: longTasks.length,
       longTaskMs: longTasks.reduce((sum, duration) => sum + duration, 0),
       contentRestored: editor.view.state.doc.toString() === original,
@@ -2618,10 +2668,9 @@ const vim = createVimLite(editor, host, {
 });
 const focusQuiescence = createFocusQuiescenceController({
   // The controller is shared by all renderer hosts. Only the Emacs xwidget
-  // adapter opts in because its WebKit contenteditable caret otherwise keeps
-  // the native compositor awake while the same CM6 tree is idle.
+  // adapter opts in so a genuinely hidden buffer can park native focus and
+  // replay its first returning key through the shared CM6 pipeline.
   enabled: focusQuiescenceEnabled(),
-  autoPark: false,
   view: editor.view,
   editorSurface: host,
   isSurfaceVisible: editorSurfaceVisible,
@@ -5629,6 +5678,7 @@ const proseLifecycle = new ProseCheckLifecycle<ProseCheckInput, ProseCheckRunRes
 const rendererActivity = createRendererActivityGate([
   { setPaused: setMeasuredWidgetObservationPaused },
   { setPaused: setViewportDecorationRefreshPaused },
+  imageAnimationActivityParticipant(editor.view.contentDOM),
   focusQuiescence,
   assistScheduler,
   proseLifecycle,

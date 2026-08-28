@@ -50,23 +50,37 @@ export function installJupyterKernelWebSocket({
 
   // A browser that goes away without closing cleanly (laptop suspended, tab
   // killed) leaves a half-open socket that holds its four ZMQ sockets open
-  // until TCP eventually notices, which can be many minutes. Ping every
-  // client and drop the ones that stop answering.
-  const keepalive = setInterval(() => {
-    for (const client of wss.clients) {
-      if (client.isAlive === false) {
-        try { client.terminate(); } catch { /* ignore */ }
-        continue;
+  // until TCP eventually notices, which can be many minutes. Keep the ping
+  // guard while clients exist, without waking an idle host that has none.
+  let keepalive = null;
+
+  const stopKeepaliveIfIdle = () => {
+    if (wss.clients.size || !keepalive) return;
+    clearInterval(keepalive);
+    keepalive = null;
+  };
+
+  const startKeepalive = () => {
+    if (keepalive || !wss.clients.size) return;
+    keepalive = setInterval(() => {
+      for (const client of wss.clients) {
+        if (client.isAlive === false) {
+          try { client.terminate(); } catch { /* ignore */ }
+          continue;
+        }
+        client.isAlive = false;
+        try { client.ping(); } catch { /* ignore */ }
       }
-      client.isAlive = false;
-      try { client.ping(); } catch { /* ignore */ }
-    }
-  }, keepaliveMs);
-  keepalive.unref?.();
+      stopKeepaliveIfIdle();
+    }, keepaliveMs);
+    keepalive.unref?.();
+  };
 
   const trackLiveness = (ws) => {
     ws.isAlive = true;
     ws.on("pong", () => { ws.isAlive = true; });
+    ws.on("close", stopKeepaliveIfIdle);
+    startKeepalive();
   };
 
   const onUpgrade = async (req, socket, head) => {
@@ -167,7 +181,10 @@ export function installJupyterKernelWebSocket({
 
   return {
     close() {
-      clearInterval(keepalive);
+      if (keepalive) {
+        clearInterval(keepalive);
+        keepalive = null;
+      }
       // Leaving this attached would keep a closed bridge handling upgrades,
       // and stack another handler on every re-install.
       server.off("upgrade", onUpgrade);

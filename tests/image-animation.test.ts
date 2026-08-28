@@ -2,6 +2,7 @@ import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
 import {
   createImageAnimationController,
+  imageAnimationActivityParticipant,
   IMAGE_ANIMATION_PAUSED_CLASS,
 } from "../src/image-animation.ts";
 import { createEditor } from "../src/editor-api.ts";
@@ -54,5 +55,16 @@ describe("SiYuan-derived image animation controller", () => {
     expect(editor.view.contentDOM.classList.contains(IMAGE_ANIMATION_PAUSED_CLASS)).toBe(true);
     editor.destroy();
     host.remove();
+  });
+
+  test("shared renderer quiescence pauses editor image animation without a timer", () => {
+    const target = document.createElement("div");
+    const participant = imageAnimationActivityParticipant(target);
+    participant.setActivity?.("quiescent");
+    expect(target.classList.contains(IMAGE_ANIMATION_PAUSED_CLASS)).toBe(true);
+    participant.setActivity?.("active");
+    expect(target.classList.contains(IMAGE_ANIMATION_PAUSED_CLASS)).toBe(false);
+    participant.setActivity?.("hidden");
+    expect(target.classList.contains(IMAGE_ANIMATION_PAUSED_CLASS)).toBe(true);
   });
 });

@@ -3,6 +3,8 @@
  * app/src/protyle/util/imageAnimation.ts (AGPL-3.0).
  */
 
+import type { RendererActivityParticipant, RendererActivityState } from "./renderer-activity.ts";
+
 export const IMAGE_ANIMATION_PAUSED_CLASS = "noema-image-animation-paused";
 
 export function createImageAnimationController<T>(
@@ -53,3 +55,16 @@ const imageAnimationController = createImageAnimationController(
 export const pauseImageAnimation = imageAnimationController.pause;
 export const pauseImageAnimationTemporarily = imageAnimationController.pauseTemporarily;
 export const resumeImageAnimation = imageAnimationController.resume;
+
+/** Pause animated editor images whenever the shared renderer is idle/hidden. */
+export function imageAnimationActivityParticipant(element: HTMLElement): RendererActivityParticipant {
+  return {
+    setActivity(state: RendererActivityState): void {
+      if (state === "active" || state === "recently-active") {
+        resumeImageAnimation(element, 0);
+      } else {
+        pauseImageAnimation(element);
+      }
+    },
+  };
+}

@@ -48,6 +48,7 @@ if (desktopSmokeParams.get("desktopSmoke") === "1") {
       tocVisible = Boolean(tocPopover && !tocPopover.classList.contains("is-collapsed"));
       tocStatus = tocPopover?.querySelector<HTMLElement>(".aaronnote-toc-status")?.textContent?.trim() || "";
       tocItems = Array.from(tocPopover?.querySelectorAll<HTMLElement>(".aaronnote-toc-item") ?? [])
+        .slice(0, 100)
         .map((item) => item.textContent?.trim() || "");
       window.dispatchEvent(new CustomEvent("aaronnote:command", {
         detail: { command: "toggle-toc" },
@@ -63,6 +64,7 @@ if (desktopSmokeParams.get("desktopSmoke") === "1") {
       tagStatus = knowledgeDock.querySelector<HTMLElement>("[data-knowledge-tag-status]")
         ?.textContent?.trim() || "";
       tagItems = Array.from(knowledgeDock.querySelectorAll<HTMLElement>(".noema-knowledge-tag > span"))
+        .slice(0, 100)
         .map((item) => item.textContent?.trim() || "");
       window.dispatchEvent(new CustomEvent("aaronnote:command", {
         detail: { command: "knowledge-mentions" },
@@ -74,6 +76,7 @@ if (desktopSmokeParams.get("desktopSmoke") === "1") {
           ?.textContent?.trim() || "";
       } while ((!mentionStatus || mentionStatus.startsWith("Scanning")) && Date.now() < mentionDeadline);
       mentionItems = Array.from(knowledgeDock.querySelectorAll<HTMLElement>("[data-knowledge-mention-list] strong"))
+        .slice(0, 100)
         .map((item) => item.textContent?.trim() || "");
       window.dispatchEvent(new CustomEvent("aaronnote:command", {
         detail: { command: "knowledge-backlinks" },
@@ -206,12 +209,21 @@ if (desktopSmokeParams.get("desktopSmoke") === "1") {
         nativeReport.printDocument = null;
       }
     }
-    void window.noemaDesktop?.reportSmoke?.(nativeReport);
-    void fetch("/api/desktop-smoke", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(report),
-    });
+    // Persist the diagnostic before asking the native smoke adapter to quit.
+    // The old fire-and-forget ordering let Electron tear down the renderer and
+    // its Node host before this request left the page, producing a successful
+    // smoke exit with no report — exactly when performance evidence mattered.
+    try {
+      await fetch("/api/desktop-smoke", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(report),
+      });
+    } catch {
+      // The native IPC report still closes the smoke run and exposes failures
+      // through its own adapter diagnostics when the host is unavailable.
+    }
+    await window.noemaDesktop?.reportSmoke?.(nativeReport);
   };
   const maybeReportSmoke = (): void => {
     if (reportStarted || document.readyState !== "complete") return;

@@ -1623,6 +1623,9 @@ function buildTableDecos(state: EditorState): DecorationSet {
 
 function activeTableAttrsKey(state: EditorState): string {
   const sel = state.selection.main;
+  // Range selection preserves the rendered table. Only a collapsed caret in
+  // its source attributes needs to swap that table back to editable source.
+  if (!sel.empty) return "";
   const tables = markdownTablesFromState(state);
   const keys: string[] = [];
   for (const table of tables) {
@@ -1693,7 +1696,7 @@ const tableDecoField = StateField.define<DecorationSet>({
       const newKey = activeTableAttrsKey(tr.state);
       if (oldKey !== newKey) return patchTableDecosForSelectionChange(tr.state, value, oldKey, newKey);
     }
-    return value.map(tr.changes);
+    return value;
   },
   provide: (f) => EditorView.decorations.from(f),
 });
@@ -1843,7 +1846,7 @@ const lineDecoField = StateField.define<DecorationSet>({
         return patchLineDecosForBlankSelection(tr.state, value, oldRun, newRun);
       }
     }
-    return value.map(tr.changes);
+    return value;
   },
   provide: (f) => EditorView.decorations.from(f),
 });
@@ -2097,6 +2100,10 @@ function patchHtmlBlockDecosNearChanges(
 
 function activeHtmlBlockKey(state: EditorState): string {
   const sel = state.selection.main;
+  // Iterating the syntax tree from range start to range end made a drag or
+  // Cmd-A proportional to the selected document. Rich block widgets stay
+  // rendered during range selection; a collapsed caret still reveals source.
+  if (!sel.empty) return "";
   const fencedRanges = getFencedCodeRanges(state);
   const mathRanges = getBlockMathRanges(state);
   const keys: string[] = [];
@@ -2136,7 +2143,7 @@ const htmlBlockDecoField = StateField.define<DecorationSet>({
       const newKey = activeHtmlBlockKey(tr.state);
       if (oldKey !== newKey) return buildHtmlBlockDecos(tr.state);
     }
-    return value.map(tr.changes);
+    return value;
   },
   provide: (f) => EditorView.decorations.from(f),
 });

@@ -3869,7 +3869,7 @@ const orgEnvBodyLineDecorations = StateField.define<DecorationSet>({
       }
       return buildOrgEnvBodyLineDecos(tr.state);
     }
-    return value.map(tr.changes);
+    return value;
   },
   provide: (f) => EditorView.decorations.from(f),
 });
@@ -4159,6 +4159,11 @@ function changesTouchRange(changes: ChangeSet, from: number, to: number): boolea
 
 function activeBlockExtraKey(state: EditorState): string {
   const sel = state.selection.main;
+  // A range selection is selecting rendered content, not asking thousands of
+  // block widgets between its endpoints to reveal their source. Besides being
+  // the same model used by rendered math, this keeps drag/Cmd-A transactions
+  // independent of the number of inherited block constructs in a large note.
+  if (!sel.empty) return "";
   const parts: string[] = [];
   const ranges = state.field(blockExtraRangesField, false) ?? scanBlockExtraRanges(state.doc, blockExtraExcludedRanges(state));
   const blocks = orgEnvBlocksFromState(state);
@@ -4404,7 +4409,7 @@ const blockExtrasDecorations = StateField.define<DecorationSet>({
       const newKey = activeBlockExtraKey(tr.state);
       if (oldKey !== newKey) return patchBlockExtraDecosForSelectionChange(tr.state, value, oldKey, newKey);
     }
-    return value.map(tr.changes);
+    return value;
   },
   provide: (f) => EditorView.decorations.from(f),
 });

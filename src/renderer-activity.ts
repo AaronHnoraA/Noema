@@ -160,7 +160,10 @@ export function createRendererActivityGate(
   };
   // Keep this list deliberately small: continuous mouse movement and scroll
   // are not activity facts, while edits, focus, pointer ownership and paste
-  // are. Every host uses this list rather than installing its own idle timer.
+  // are. Pointer completion matters as much as pointer acquisition. Without
+  // it, a drag lasting longer than `quiescentMs` leaves the renderer asleep
+  // after mouseup, so the final selection/toolbar pass is retained until some
+  // unrelated later input wakes the page.
   for (const type of [
     "keydown",
     "beforeinput",
@@ -169,6 +172,11 @@ export function createRendererActivityGate(
     "compositionend",
     "focusin",
     "pointerdown",
+    "pointerup",
+    "pointercancel",
+    // WKWebView/xwidget has historically delivered mouse compatibility events
+    // even when the corresponding PointerEvent did not reach the page.
+    "mouseup",
     "touchstart",
     "wheel",
     "paste",

@@ -89,4 +89,24 @@ describe("shared renderer lifecycle", () => {
     gate.destroy();
     expect(calls.at(-1)).toBe("destroyed");
   });
+
+  test("a pointer release wakes a drag that outlasted the quiescent delay", () => {
+    vi.useFakeTimers();
+    const target = new EventTarget();
+    const states: string[] = [];
+    const gate = createRendererActivityGate([], {
+      activityTarget: target,
+      autoStart: true,
+      onStateChange: (state) => states.push(state),
+    });
+
+    target.dispatchEvent(new Event("pointerdown"));
+    vi.advanceTimersByTime(1_000);
+    expect(gate.state()).toBe("quiescent");
+
+    target.dispatchEvent(new Event("pointerup"));
+    expect(gate.state()).toBe("active");
+    expect(states).toEqual(["recently-active", "quiescent", "active"]);
+    gate.destroy();
+  });
 });

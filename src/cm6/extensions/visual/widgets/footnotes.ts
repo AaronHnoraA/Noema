@@ -168,11 +168,12 @@ function selectionTouches(view: EditorView, from: number, to: number): boolean {
 
 function activeFootnoteSourceKey(view: EditorView): string {
   const selection = view.state.selection.main;
+  // Range selection keeps the rendered reference while CM6 selects its
+  // underlying Markdown. A changing `wide:from:to` key rebuilt every visible
+  // footnote on every drag transaction once the selection crossed 64 lines.
+  if (!selection.empty) return "";
   const firstLine = view.state.doc.lineAt(selection.from).number;
   const lastLine = view.state.doc.lineAt(selection.to).number;
-  // Large selections already expose Markdown source. Avoid scanning an
-  // unbounded selection merely to decide whether decorations need refreshing.
-  if (lastLine - firstLine > 64) return `wide:${selection.from}:${selection.to}`;
   const touched: string[] = [];
   for (let lineNumber = firstLine; lineNumber <= lastLine; lineNumber++) {
     const line = view.state.doc.line(lineNumber);

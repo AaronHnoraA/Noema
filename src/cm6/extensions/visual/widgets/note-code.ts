@@ -13,6 +13,7 @@ import { hasViewportDecorationRefresh, scheduleViewportDecorationRefresh } from 
 import { parseNoteCodeLine } from "../../../../../shared/note-code.mjs";
 import { sourceEditorName } from "../../../../../aaronnote/host-mode.ts";
 import { desktopPlatformLabels } from "../../../../../shared/desktop-shell.mjs";
+import { isPointerSelecting, updateHasPointerSelectionEffect } from "../selection.ts";
 
 type NoteCodeLine = {
   commandFrom: number;
@@ -267,7 +268,12 @@ class NoteCodePlugin {
   }
 
   update(update: ViewUpdate): void {
-    if (update.docChanged || update.selectionSet || update.viewportChanged || hasViewportDecorationRefresh(update)) {
+    if (update.selectionSet && !update.docChanged && !update.viewportChanged
+        && isPointerSelecting(update.state)) return;
+    const pointerSelectionFinished = updateHasPointerSelectionEffect(update)
+      && !isPointerSelecting(update.state);
+    if (update.docChanged || update.selectionSet || update.viewportChanged
+        || pointerSelectionFinished || hasViewportDecorationRefresh(update)) {
       this.decorations = buildNoteCodeDecos(update.view);
     }
   }

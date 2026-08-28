@@ -230,7 +230,6 @@
   text-decoration-color: color-mix(in srgb, currentColor, transparent 52%);
   text-underline-offset: 0.18em;
   border-radius: 0.18em;
-  transition: color 120ms ease, background-color 120ms ease, text-decoration-color 120ms ease;
 }
 .cm-editor .cm-roam-link-text:hover,
 .cm-editor .cm-internal-link-text:hover {
@@ -771,7 +770,6 @@
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.28);
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.12s ease, transform 0.12s ease;
 }
 .cm-editor .cm-image-widget:hover .cm-image-toolbar,
 .cm-editor .cm-image-widget:focus-within .cm-image-toolbar {

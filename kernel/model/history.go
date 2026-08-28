@@ -29,6 +29,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/88250/gulu"
@@ -50,12 +51,33 @@ import (
 	"github.com/siyuan-note/logging"
 )
 
-var historyTicker = time.NewTicker(time.Minute * 10)
+var (
+	historyTicker   *time.Ticker
+	historyTickerMu sync.Mutex
+)
 
 func AutoGenerateFileHistory() {
-	ChangeHistoryTick(Conf.Editor.GenerateHistoryInterval)
-	for {
-		<-historyTicker.C
+	minutes := Conf.Editor.GenerateHistoryInterval
+	if 0 >= minutes {
+		minutes = 3600
+	}
+	historyTickerMu.Lock()
+	if nil != historyTicker {
+		historyTickerMu.Unlock()
+		return
+	}
+	ticker := time.NewTicker(time.Minute * time.Duration(minutes))
+	historyTicker = ticker
+	historyTickerMu.Unlock()
+	defer func() {
+		ticker.Stop()
+		historyTickerMu.Lock()
+		if historyTicker == ticker {
+			historyTicker = nil
+		}
+		historyTickerMu.Unlock()
+	}()
+	for range ticker.C {
 		task.AppendTask(task.HistoryGenerateFile, GenerateFileHistory)
 	}
 }
@@ -111,7 +133,11 @@ func ChangeHistoryTick(minutes int) {
 	if 0 >= minutes {
 		minutes = 3600
 	}
-	historyTicker.Reset(time.Minute * time.Duration(minutes))
+	historyTickerMu.Lock()
+	defer historyTickerMu.Unlock()
+	if nil != historyTicker {
+		historyTicker.Reset(time.Minute * time.Duration(minutes))
+	}
 }
 
 func ClearWorkspaceHistory() (err error) {

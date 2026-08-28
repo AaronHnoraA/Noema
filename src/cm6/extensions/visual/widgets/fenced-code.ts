@@ -600,6 +600,7 @@ function buildMermaidDecos(state: EditorState): DecorationSet {
 
 function activeMermaidBlockKey(state: EditorState): string {
   const sel = state.selection.main;
+  if (!sel.empty) return "";
   const blocks = state.field(mermaidBlocksField, false) ?? collectMermaidBlocks(state);
   for (const block of blocks) {
     if (sel.from < block.to && sel.to > block.from) return `${block.from}:${block.to}`;
@@ -665,7 +666,7 @@ const mermaidField = StateField.define<DecorationSet>({
       const newKey = activeMermaidBlockKey(tr.state);
       if (oldKey !== newKey) return patchMermaidDecosForSelectionChange(tr.state, value, oldKey, newKey);
     }
-    return value.map(tr.changes);
+    return value;
   },
   provide: (f) => EditorView.decorations.from(f),
 });

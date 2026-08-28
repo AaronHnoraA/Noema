@@ -33,6 +33,7 @@ import { scanInlineMathRanges } from "../../../../inline-math.ts";
 import { renderMathHTML } from "../../../../math-render.ts";
 import {
   blockMathRangeSpanning,
+  blockMathRangesOverlapping,
   getBlockMathRanges,
   rangeOverlapsAny,
   type BlockMathRange,
@@ -387,7 +388,64 @@ type BlockMathFieldValue = {
   atomicRanges: DecorationSet;
   active: BlockMathEditSession | null;
   suppressedKey: string;
+  renderWindow: BlockMathRenderWindow;
 };
+
+type BlockMathRenderWindow = { from: number; to: number };
+
+const BLOCK_MATH_RENDER_OVERSCAN = 32 * 1024;
+const BLOCK_MATH_RENDER_WINDOW_MAX = 192 * 1024;
+
+const setBlockMathRenderWindowEffect = StateEffect.define<BlockMathRenderWindow>();
+
+function normalizedBlockMathRenderWindow(
+  state: EditorState,
+  window: BlockMathRenderWindow,
+): BlockMathRenderWindow {
+  let from = Math.max(0, Math.min(window.from, state.doc.length));
+  let to = Math.max(from, Math.min(window.to, state.doc.length));
+  if (to - from > BLOCK_MATH_RENDER_WINDOW_MAX) {
+    to = Math.min(state.doc.length, from + BLOCK_MATH_RENDER_WINDOW_MAX);
+  }
+  if (to - from < BLOCK_MATH_RENDER_WINDOW_MAX && to === state.doc.length) {
+    from = Math.max(0, to - BLOCK_MATH_RENDER_WINDOW_MAX);
+  }
+  return { from, to };
+}
+
+function initialBlockMathRenderWindow(state: EditorState): BlockMathRenderWindow {
+  const head = state.selection.main.head;
+  return normalizedBlockMathRenderWindow(state, {
+    from: Math.max(0, head - BLOCK_MATH_RENDER_OVERSCAN),
+    to: Math.min(state.doc.length, head + BLOCK_MATH_RENDER_WINDOW_MAX - BLOCK_MATH_RENDER_OVERSCAN),
+  });
+}
+
+function mapBlockMathRenderWindow(
+  window: BlockMathRenderWindow,
+  tr: Transaction,
+): BlockMathRenderWindow {
+  return normalizedBlockMathRenderWindow(tr.state, {
+    from: tr.changes.mapPos(window.from, -1),
+    to: tr.changes.mapPos(window.to, 1),
+  });
+}
+
+function blockMathRenderWindowIncluding(
+  state: EditorState,
+  current: BlockMathRenderWindow,
+  from: number,
+  to: number,
+): BlockMathRenderWindow {
+  if (from >= current.from && to <= current.to) return current;
+  return normalizedBlockMathRenderWindow(state, {
+    from: Math.max(0, from - BLOCK_MATH_RENDER_OVERSCAN),
+    to: Math.min(
+      state.doc.length,
+      Math.max(to + BLOCK_MATH_RENDER_OVERSCAN, from + BLOCK_MATH_RENDER_WINDOW_MAX),
+    ),
+  });
+}
 
 const finishBlockMathSessionEffect = StateEffect.define<number>();
 const fallbackBlockMathSessionEffect = StateEffect.define<number>();
@@ -568,9 +626,16 @@ function buildBlockMathDecos(
   state: EditorState,
   active: BlockMathEditSession | null = null,
   suppressedKey = "",
+  renderWindow: BlockMathRenderWindow = { from: 0, to: state.doc.length },
 ): DecorationSet {
   blockMathFullRebuilds++;
-  return Decoration.set(buildBlockMathDecoRanges(state, 0, state.doc.length, active, suppressedKey), true);
+  return Decoration.set(buildBlockMathDecoRanges(
+    state,
+    renderWindow.from,
+    renderWindow.to,
+    active,
+    suppressedKey,
+  ), true);
 }
 
 const blockMathAtomicMark = Decoration.mark({});
@@ -617,28 +682,41 @@ function buildBlockMathAtomicRanges(
   state: EditorState,
   active: BlockMathEditSession | null = null,
   suppressedKey = "",
+  renderWindow: BlockMathRenderWindow = { from: 0, to: state.doc.length },
 ): DecorationSet {
   blockMathAtomicFullRebuilds++;
   return Decoration.set(
-    buildBlockMathAtomicRangeItems(state, 0, state.doc.length, active, suppressedKey),
+    buildBlockMathAtomicRangeItems(
+      state,
+      renderWindow.from,
+      renderWindow.to,
+      active,
+      suppressedKey,
+    ),
     true,
   );
 }
 
 function activeBlockMathKey(state: EditorState): string {
-  // Hot path: a single caret can only touch the formula that spans it, so this
-  // stays a binary search. A *range* selection touches every formula it
-  // overlaps — including ones it fully encloses, whose endpoints are outside
-  // any formula — so it has to scan. Range selections are not on the typing
-  // path, unlike caret movement.
+  // Selection transactions are a pointer-move hot path. Both a caret lookup
+  // and a range lookup stay logarithmic in the number of display formulas;
+  // scanning every formula here made dragging *towards* the first formula in
+  // a multi-megabyte note pay for the whole document on every mouse move.
   if (state.selection.ranges.length === 1 && state.selection.main.empty) {
     const range = blockMathRangeSpanning(state, state.selection.main.from);
     return range && selectionTouchesRange(state, range.from, range.to)
       ? blockMathKey(range)
       : "";
   }
-  for (const range of getBlockMathRanges(state)) {
-    if (selectionTouchesRange(state, range.from, range.to)) return blockMathKey(range);
+  const nonEmpty = state.selection.ranges
+    .filter((selection) => !selection.empty)
+    .map((selection) => ({ from: selection.from, to: selection.to }));
+  const overlapping = blockMathRangesOverlapping(state, nonEmpty)[0];
+  if (overlapping) return blockMathKey(overlapping);
+  for (const selection of state.selection.ranges) {
+    if (!selection.empty) continue;
+    const range = blockMathRangeSpanning(state, selection.from);
+    if (range && selectionTouchesRange(state, range.from, range.to)) return blockMathKey(range);
   }
   return "";
 }
@@ -737,6 +815,7 @@ function finishBlockMathFieldUpdate(
   suppressedKey: string,
   topologyStable: boolean,
   previousActiveKey: string,
+  renderWindow: BlockMathRenderWindow,
 ): BlockMathFieldValue {
   let atomicRanges = value.atomicRanges;
   let rebuiltAtomicRanges = false;
@@ -744,7 +823,7 @@ function finishBlockMathFieldUpdate(
     if (topologyStable) {
       atomicRanges = atomicRanges.map(tr.changes);
     } else {
-      atomicRanges = buildBlockMathAtomicRanges(tr.state, active, suppressedKey);
+      atomicRanges = buildBlockMathAtomicRanges(tr.state, active, suppressedKey, renderWindow);
       rebuiltAtomicRanges = true;
     }
   }
@@ -772,17 +851,21 @@ function finishBlockMathFieldUpdate(
   if (decorations === value.decorations
     && atomicRanges === value.atomicRanges
     && active === value.active
-    && suppressedKey === value.suppressedKey) return value;
-  return { decorations, atomicRanges, active, suppressedKey };
+    && suppressedKey === value.suppressedKey
+    && renderWindow.from === value.renderWindow.from
+    && renderWindow.to === value.renderWindow.to) return value;
+  return { decorations, atomicRanges, active, suppressedKey, renderWindow };
 }
 
 const mathBlockField = StateField.define<BlockMathFieldValue>({
   create(state) {
+    const renderWindow = initialBlockMathRenderWindow(state);
     return {
-      decorations: buildBlockMathDecos(state),
-      atomicRanges: buildBlockMathAtomicRanges(state),
+      decorations: buildBlockMathDecos(state, null, "", renderWindow),
+      atomicRanges: buildBlockMathAtomicRanges(state, null, "", renderWindow),
       active: null,
       suppressedKey: "",
+      renderWindow,
     };
   },
   update(value, tr) {
@@ -793,12 +876,28 @@ const mathBlockField = StateField.define<BlockMathFieldValue>({
     let finishedByEffect = false;
     let fallbackByEffect = false;
     let startedByEffect = false;
+    let renderWindow = tr.docChanged
+      ? mapBlockMathRenderWindow(value.renderWindow, tr)
+      : value.renderWindow;
+    let renderWindowChanged = false;
 
     for (const effect of tr.effects) {
-      if (effect.is(startBlockMathSessionEffect) && !tr.state.readOnly) {
+      if (effect.is(setBlockMathRenderWindowEffect)) {
+        const next = normalizedBlockMathRenderWindow(tr.state, effect.value);
+        renderWindowChanged = next.from !== renderWindow.from || next.to !== renderWindow.to;
+        renderWindow = next;
+      } else if (effect.is(startBlockMathSessionEffect) && !tr.state.readOnly) {
         const range = getBlockMathRanges(tr.state).find((candidate) =>
           candidate.from === effect.value.from && candidate.to === effect.value.to);
         if (range) {
+          const nextWindow = blockMathRenderWindowIncluding(
+            tr.state,
+            renderWindow,
+            range.from,
+            range.to,
+          );
+          renderWindowChanged ||= nextWindow !== renderWindow;
+          renderWindow = nextWindow;
           active = createBlockMathSession(tr.state, range);
           active.entry = effect.value.entry;
           suppressedKey = "";
@@ -813,6 +912,14 @@ const mathBlockField = StateField.define<BlockMathFieldValue>({
         fallbackByEffect = true;
       } else if (effect.is(revealBlockMathSourceEffect)
         && (!active || effect.value.id === 0 || active.id === effect.value.id)) {
+        const nextWindow = blockMathRenderWindowIncluding(
+          tr.state,
+          renderWindow,
+          effect.value.from,
+          effect.value.to,
+        );
+        renderWindowChanged ||= nextWindow !== renderWindow;
+        renderWindow = nextWindow;
         suppressedKey = blockMathKey(effect.value);
         active = null;
         fallbackByEffect = true;
@@ -844,6 +951,16 @@ const mathBlockField = StateField.define<BlockMathFieldValue>({
 
     const selected = blockMathAtSelection(tr.state);
     const selectedKey = selected ? blockMathKey(selected) : "";
+    if (selected) {
+      const nextWindow = blockMathRenderWindowIncluding(
+        tr.state,
+        renderWindow,
+        selected.from,
+        selected.to,
+      );
+      renderWindowChanged ||= nextWindow !== renderWindow;
+      renderWindow = nextWindow;
+    }
     if (suppressedKey && selectedKey !== suppressedKey) {
       const suppressedRange = getBlockMathRanges(tr.state)
         .find((range) => blockMathKey(range) === suppressedKey);
@@ -860,6 +977,15 @@ const mathBlockField = StateField.define<BlockMathFieldValue>({
       || suppressedKey !== value.suppressedKey
       || finishedByEffect
       || fallbackByEffect;
+    if (renderWindowChanged) {
+      return {
+        decorations: buildBlockMathDecos(tr.state, active, suppressedKey, renderWindow),
+        atomicRanges: buildBlockMathAtomicRanges(tr.state, active, suppressedKey, renderWindow),
+        active,
+        suppressedKey,
+        renderWindow,
+      };
+    }
     if (tr.docChanged && previousActive && !active && !fallbackByEffect) {
       const ranges = getBlockMathRanges(tr.startState);
       const nextRanges = getBlockMathRanges(tr.state);
@@ -872,7 +998,7 @@ const mathBlockField = StateField.define<BlockMathFieldValue>({
           nextRanges,
           tr.changes,
         )
-        : buildBlockMathDecos(tr.state, active, suppressedKey);
+        : buildBlockMathDecos(tr.state, active, suppressedKey, renderWindow);
       return finishBlockMathFieldUpdate(
         value,
         tr,
@@ -881,6 +1007,7 @@ const mathBlockField = StateField.define<BlockMathFieldValue>({
         suppressedKey,
         patchable,
         previousActiveKey,
+        renderWindow,
       );
     }
     if (tr.docChanged && suppressedKey && !active) {
@@ -905,7 +1032,7 @@ const mathBlockField = StateField.define<BlockMathFieldValue>({
             active,
             suppressedKey,
           )
-          : buildBlockMathDecos(tr.state, active, suppressedKey);
+          : buildBlockMathDecos(tr.state, active, suppressedKey, renderWindow);
       return finishBlockMathFieldUpdate(
         value,
         tr,
@@ -914,6 +1041,7 @@ const mathBlockField = StateField.define<BlockMathFieldValue>({
         suppressedKey,
         mappable || patchable,
         previousActiveKey,
+        renderWindow,
       );
     }
     // A session start/finish genuinely swaps a widget for an editor, so a full
@@ -925,11 +1053,12 @@ const mathBlockField = StateField.define<BlockMathFieldValue>({
       return finishBlockMathFieldUpdate(
         value,
         tr,
-        buildBlockMathDecos(tr.state, active, suppressedKey),
+        buildBlockMathDecos(tr.state, active, suppressedKey, renderWindow),
         active,
         suppressedKey,
         false,
         previousActiveKey,
+        renderWindow,
       );
     }
 
@@ -953,7 +1082,7 @@ const mathBlockField = StateField.define<BlockMathFieldValue>({
         );
         topologyStable = true;
       } else {
-        decorations = buildBlockMathDecos(tr.state, active, suppressedKey);
+        decorations = buildBlockMathDecos(tr.state, active, suppressedKey, renderWindow);
       }
     } else if (tr.selection != null || sessionTransition) {
       // Only the formulas whose rendering actually changed: the one the caret
@@ -981,6 +1110,7 @@ const mathBlockField = StateField.define<BlockMathFieldValue>({
       suppressedKey,
       topologyStable,
       previousActiveKey,
+      renderWindow,
     );
   },
   provide: (f) => EditorView.decorations.from(f, (value) => value.decorations),
@@ -990,6 +1120,48 @@ const mathBlockAtomicExtension = EditorView.atomicRanges.of((view) => {
   const value = view.state.field(mathBlockField, false);
   return value?.atomicRanges ?? Decoration.none;
 });
+
+function blockMathRenderWindowForView(view: EditorView): BlockMathRenderWindow {
+  const viewport = view.viewport;
+  return normalizedBlockMathRenderWindow(view.state, {
+    from: Math.max(0, viewport.from - BLOCK_MATH_RENDER_OVERSCAN),
+    to: Math.min(view.state.doc.length, viewport.to + BLOCK_MATH_RENDER_OVERSCAN),
+  });
+}
+
+class BlockMathViewportPlugin {
+  private readonly view: EditorView;
+  private readonly win: Window;
+  private frame = 0;
+
+  constructor(view: EditorView) {
+    this.view = view;
+    this.win = view.dom.ownerDocument.defaultView ?? window;
+    this.schedule();
+  }
+
+  update(update: ViewUpdate): void {
+    if (update.viewportChanged) this.schedule();
+  }
+
+  destroy(): void {
+    if (this.frame) this.win.cancelAnimationFrame(this.frame);
+  }
+
+  private schedule(): void {
+    if (this.frame) this.win.cancelAnimationFrame(this.frame);
+    this.frame = this.win.requestAnimationFrame(() => {
+      this.frame = 0;
+      if (!this.view.dom.isConnected) return;
+      const next = blockMathRenderWindowForView(this.view);
+      const current = this.view.state.field(mathBlockField, false)?.renderWindow;
+      if (current && current.from === next.from && current.to === next.to) return;
+      this.view.dispatch({ effects: setBlockMathRenderWindowEffect.of(next) });
+    });
+  }
+}
+
+const mathBlockViewportExtension = ViewPlugin.fromClass(BlockMathViewportPlugin);
 
 function canMapBlockMathDecorations(
   ranges: readonly { from: number; to: number }[],
@@ -1914,6 +2086,7 @@ export function revealFormulaSource(
 export const mathExtension = [
   mathBlockField,
   mathBlockAtomicExtension,
+  mathBlockViewportExtension,
   mathBlockSessionExtension,
   mathInlineExtension,
   mathInlineAtomicExtension,

@@ -1129,16 +1129,33 @@ const appConfigWatcher = hostMode === "server" ? { close() {} } : watch(noemaApp
   }, 80);
 });
 
-// SSE keepalive heartbeat — prevents hung-client memory leak and keeps
-// connections alive through idle-timeout proxies.
-const sseHeartbeatInterval = setInterval(() => {
-  const dead = [];
-  for (const res of eventClients) {
-    try { res.write(": keepalive\n\n"); } catch { dead.push(res); }
-  }
-  dead.forEach((res) => eventClients.delete(res));
-}, 25000);
-sseHeartbeatInterval.unref();
+// SSE keepalives still protect live renderer connections from idle-timeout
+// proxies, but an unopened editor must not wake the host every 25 seconds.
+let sseHeartbeatInterval = null;
+
+function stopSseHeartbeatIfIdle() {
+  if (eventClients.size || !sseHeartbeatInterval) return;
+  clearInterval(sseHeartbeatInterval);
+  sseHeartbeatInterval = null;
+}
+
+function startSseHeartbeat() {
+  if (sseHeartbeatInterval || !eventClients.size) return;
+  sseHeartbeatInterval = setInterval(() => {
+    const dead = [];
+    for (const res of eventClients) {
+      try { res.write(": keepalive\n\n"); } catch { dead.push(res); }
+    }
+    dead.forEach((res) => eventClients.delete(res));
+    stopSseHeartbeatIfIdle();
+  }, 25000);
+  sseHeartbeatInterval.unref?.();
+}
+
+function removeEventClient(res) {
+  eventClients.delete(res);
+  stopSseHeartbeatIfIdle();
+}
 
 // Keep the process alive on unexpected errors (forcing exit would drop any
 // unsaved editor state), but do not let the failure be silent: surface a
@@ -1221,7 +1238,10 @@ async function beginShutdown({ reason = "shutdown", exitCode = 0, deadlineMs = 3
     }, deadlineMs);
     deadline.unref();
     try {
-      clearInterval(sseHeartbeatInterval);
+      if (sseHeartbeatInterval) {
+        clearInterval(sseHeartbeatInterval);
+        sseHeartbeatInterval = null;
+      }
       if (wikiMaintenanceTimer) clearInterval(wikiMaintenanceTimer);
       if (wikiRefreshTimer) clearTimeout(wikiRefreshTimer);
       if (serverRepositorySyncTimer) clearTimeout(serverRepositorySyncTimer);
@@ -1342,6 +1362,7 @@ function broadcast(event, data) {
       eventClients.delete(res);
     }
   }
+  stopSseHeartbeatIfIdle();
 }
 
 function noteEditorClient(file, client, detail = {}) {
@@ -3066,7 +3087,8 @@ const server = createServer(async (req, res) => {
         })}\n\n`);
       }
       eventClients.add(res);
-      req.on("close", () => eventClients.delete(res));
+      startSseHeartbeat();
+      req.on("close", () => removeEventClient(res));
       return;
     }
 

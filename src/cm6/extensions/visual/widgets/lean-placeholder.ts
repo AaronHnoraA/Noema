@@ -9,6 +9,7 @@ import type { Range } from "@codemirror/state";
 import { MeasuredWidget } from "./measured-widget.ts";
 import { parseLeanPlaceholderLine } from "../../../../../shared/lean-placeholder.mjs";
 import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
+import { isPointerSelecting, updateHasPointerSelectionEffect } from "../selection.ts";
 
 export type LeanLspAction = "definition" | "declaration" | "typeDefinition" | "implementation" | "references" | "hover";
 export type LeanEditAction =
@@ -152,7 +153,12 @@ class LeanPlaceholderPlugin {
   }
 
   update(update: ViewUpdate): void {
-    if (update.docChanged || update.selectionSet || update.viewportChanged || hasViewportDecorationRefresh(update)) {
+    if (update.selectionSet && !update.docChanged && !update.viewportChanged
+        && isPointerSelecting(update.state)) return;
+    const pointerSelectionFinished = updateHasPointerSelectionEffect(update)
+      && !isPointerSelecting(update.state);
+    if (update.docChanged || update.selectionSet || update.viewportChanged
+        || pointerSelectionFinished || hasViewportDecorationRefresh(update)) {
       this.decorations = buildLeanPlaceholderDecos(update.view);
     }
   }

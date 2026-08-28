@@ -78,7 +78,6 @@ var serveCmd = &cobra.Command{
 		if err := model.InitBoxes(); nil != err {
 			return fmt.Errorf("initialize notebook indexes: %w", err)
 		}
-		model.LoadFlashcards()
 		util.LoadAssetsTexts()
 
 		util.SetBooted()
@@ -86,17 +85,19 @@ var serveCmd = &cobra.Command{
 
 		job.StartCron(serveSupervisorPID)
 
-		go model.AutoGenerateFileHistory()
+		// Noema's Markdown pages use repository checkpoints for history. Do not
+		// start SiYuan's native .sy history ticker, flashcard store, emoji/theme
+		// watchers, or its third-party-sync filesystem stress loop in this host.
+		// The corresponding APIs remain compiled for compatibility, but they own
+		// no background service unless an explicit feature invokes them.
 		go cache.LoadAssets()
-		go util.CheckFileSysStatus()
+		// Assets, Markdown FTS and opt-in semantic search are live Noema services.
 		go model.StartEmbeddingIndexer()
 		if 0 < serveSupervisorPID {
 			go model.WatchSupervisorProcess(serveSupervisorPID)
 		}
 
 		model.WatchAssets()
-		model.WatchEmojis()
-		model.WatchThemes()
 		model.HandleSignal()
 		return nil
 	},

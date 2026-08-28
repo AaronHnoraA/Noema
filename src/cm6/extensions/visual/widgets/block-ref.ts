@@ -21,6 +21,7 @@ import { blockMathRangesOverlapping, mergeOverlappingRanges, rangeInsideAny } fr
 import { scanInlineMathRanges } from "../../../../inline-math.ts";
 import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
 import { BLOCK_REFERENCE_ID_SOURCE, shortBlockId } from "../../../../../shared/block-identity.mjs";
+import { isPointerSelecting, updateHasPointerSelectionEffect } from "../selection.ts";
 
 const BLOCK_REF_RE = new RegExp(
   String.raw`\(\((${BLOCK_REFERENCE_ID_SOURCE})(?:\s+(["'])((?:\\.|(?!\2)[\s\S])*)\2)?\)\)`,
@@ -134,7 +135,12 @@ class BlockRefPlugin {
 
   update(update: ViewUpdate): void {
     if (update.view.compositionStarted && update.selectionSet && !update.docChanged && !update.viewportChanged) return;
-    if (update.docChanged || update.viewportChanged || update.selectionSet || hasViewportDecorationRefresh(update)) {
+    if (update.selectionSet && !update.docChanged && !update.viewportChanged
+        && isPointerSelecting(update.state)) return;
+    const pointerSelectionFinished = updateHasPointerSelectionEffect(update)
+      && !isPointerSelecting(update.state);
+    if (update.docChanged || update.viewportChanged || update.selectionSet
+        || pointerSelectionFinished || hasViewportDecorationRefresh(update)) {
       this.decorations = buildBlockRefDecorations(update.view);
     }
   }

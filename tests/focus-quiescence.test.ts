@@ -10,7 +10,6 @@ import {
 
 function createHarness(options: {
   enabled?: boolean;
-  inactivityMs?: number;
   visible?: () => boolean;
   pointerSelecting?: () => boolean;
   interactionBlocked?: () => boolean;
@@ -37,7 +36,6 @@ function createHarness(options: {
   const view = { contentDOM };
   const controller = createFocusQuiescenceController({
     enabled: options.enabled ?? true,
-    inactivityMs: options.inactivityMs ?? 100,
     view,
     editorSurface: surface,
     isSurfaceVisible: options.visible ?? (() => visible),
@@ -112,8 +110,7 @@ describe("shared parked-key routing", () => {
     document.addEventListener("keydown", listener, true);
     try {
       focus(contentDOM);
-      harness.controller.notifyActivity();
-      vi.advanceTimersByTime(100);
+      harness.controller.park();
       const focusSpy = vi.spyOn(contentDOM, "focus");
       const event = new KeyboardEvent("keydown", {
         key: "ArrowLeft",
@@ -135,36 +132,45 @@ describe("shared parked-key routing", () => {
 });
 
 describe("shared focus quiescence controller", () => {
-  test("parks one focused CM6 contenteditable after one idle timeout", () => {
+  test("shared renderer quiescence never blurs the active editor", () => {
     vi.useFakeTimers();
     const harness = createHarness();
     const blur = vi.spyOn(harness.contentDOM, "blur");
     try {
       focus(harness.contentDOM);
-      harness.controller.notifyActivity();
-      vi.advanceTimersByTime(99);
+      harness.controller.setActivity("quiescent");
       expect(blur).not.toHaveBeenCalled();
-      vi.advanceTimersByTime(1);
-      expect(blur).toHaveBeenCalledTimes(1);
-      vi.advanceTimersByTime(10_000);
-      expect(blur).toHaveBeenCalledTimes(1);
+      expect(document.activeElement).toBe(harness.contentDOM);
+      harness.controller.setActivity("active");
+      expect(document.activeElement).toBe(harness.contentDOM);
     } finally {
       harness.controller.destroy();
     }
   });
 
-  test("resets inactivity on editor activity without creating a repeating timer", () => {
+  test("ordinary inactivity never parks the focused CM6 contenteditable", () => {
     vi.useFakeTimers();
     const harness = createHarness();
     const blur = vi.spyOn(harness.contentDOM, "blur");
     try {
       focus(harness.contentDOM);
       harness.controller.notifyActivity();
-      vi.advanceTimersByTime(80);
-      dispatchKey(harness.contentDOM, "b");
-      vi.advanceTimersByTime(80);
+      vi.advanceTimersByTime(10_000);
       expect(blur).not.toHaveBeenCalled();
-      vi.advanceTimersByTime(20);
+      expect(document.activeElement).toBe(harness.contentDOM);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      harness.controller.destroy();
+    }
+  });
+
+  test("explicit parking remains available for a hidden host surface", () => {
+    vi.useFakeTimers();
+    const harness = createHarness();
+    const blur = vi.spyOn(harness.contentDOM, "blur");
+    try {
+      focus(harness.contentDOM);
+      harness.controller.park();
       expect(blur).toHaveBeenCalledTimes(1);
       expect(vi.getTimerCount()).toBe(0);
     } finally {
@@ -178,8 +184,7 @@ describe("shared focus quiescence controller", () => {
     const focusSpy = vi.spyOn(harness.contentDOM, "focus");
     try {
       focus(harness.contentDOM);
-      harness.controller.notifyActivity();
-      vi.advanceTimersByTime(100);
+      harness.controller.park();
       expect(document.activeElement).not.toBe(harness.contentDOM);
 
       dispatchKey(document.body, "x");
@@ -203,8 +208,7 @@ describe("shared focus quiescence controller", () => {
     const focusSpy = vi.spyOn(harness.contentDOM, "focus");
     try {
       focus(harness.contentDOM);
-      harness.controller.notifyActivity();
-      vi.advanceTimersByTime(100);
+      harness.controller.park();
       const event = new KeyboardEvent("keydown", { key: "中", bubbles: true, cancelable: true });
       document.body.dispatchEvent(event);
       expect(handled).toEqual(["中"]);
@@ -223,8 +227,7 @@ describe("shared focus quiescence controller", () => {
     const focusSpy = vi.spyOn(harness.contentDOM, "focus");
     try {
       focus(harness.contentDOM);
-      harness.controller.notifyActivity();
-      vi.advanceTimersByTime(100);
+      harness.controller.park();
       focusSpy.mockClear();
 
       outsideInput.focus();
@@ -240,33 +243,31 @@ describe("shared focus quiescence controller", () => {
     }
   });
 
-  test("keeps composition and pointer selection alive until they finish", async () => {
+  test("explicit parking cannot interrupt composition or pointer selection", () => {
     vi.useFakeTimers();
     const harness = createHarness();
     const blur = vi.spyOn(harness.contentDOM, "blur");
     try {
       focus(harness.contentDOM);
-      harness.controller.notifyActivity();
       harness.contentDOM.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
-      vi.advanceTimersByTime(1_000);
+      harness.controller.park();
       expect(blur).not.toHaveBeenCalled();
       harness.contentDOM.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
-      vi.advanceTimersByTime(100);
+      harness.controller.park();
       expect(blur).toHaveBeenCalledTimes(1);
 
       focus(harness.contentDOM);
       harness.setPointerSelecting(true);
-      harness.controller.notifyActivity();
-      vi.advanceTimersByTime(1_000);
+      harness.contentDOM.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+      harness.controller.park();
       expect(blur).toHaveBeenCalledTimes(1);
       harness.setPointerSelecting(false);
-      harness.controller.notifyActivity();
-      vi.advanceTimersByTime(100);
+      harness.contentDOM.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+      harness.controller.park();
       expect(blur).toHaveBeenCalledTimes(2);
     } finally {
       harness.controller.destroy();
     }
-    await Promise.resolve();
   });
 
   test("pointerdown wakes before CM6 pointer handling and does not intercept drag", () => {
@@ -275,13 +276,12 @@ describe("shared focus quiescence controller", () => {
     const focusSpy = vi.spyOn(harness.contentDOM, "focus");
     try {
       focus(harness.contentDOM);
-      harness.controller.notifyActivity();
-      vi.advanceTimersByTime(100);
+      harness.controller.park();
+      focusSpy.mockClear();
       const event = new PointerEvent("pointerdown", { bubbles: true, cancelable: true });
       harness.contentDOM.dispatchEvent(event);
       expect(focusSpy).toHaveBeenLastCalledWith({ preventScroll: true });
       expect(event.defaultPrevented).toBe(false);
-      vi.advanceTimersByTime(1_000);
       expect(document.activeElement).toBe(harness.contentDOM);
       harness.contentDOM.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
     } finally {
@@ -324,19 +324,20 @@ describe("shared focus quiescence controller", () => {
     }
   });
 
-  test("destroy removes the timer and event wake path", () => {
+  test("destroy removes the event wake path and owns no timer", () => {
     vi.useFakeTimers();
     const harness = createHarness();
     const focusSpy = vi.spyOn(harness.contentDOM, "focus");
     const blur = vi.spyOn(harness.contentDOM, "blur");
     try {
       focus(harness.contentDOM);
-      harness.controller.notifyActivity();
+      harness.controller.park();
+      focusSpy.mockClear();
       harness.controller.destroy();
       vi.advanceTimersByTime(10_000);
       dispatchKey(document.body, "a");
-      expect(blur).not.toHaveBeenCalled();
-      expect(focusSpy).toHaveBeenCalledTimes(1);
+      expect(blur).toHaveBeenCalledTimes(1);
+      expect(focusSpy).not.toHaveBeenCalled();
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       harness.controller.destroy();

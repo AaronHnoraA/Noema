@@ -462,10 +462,13 @@ function buildImageDecorations(view: EditorView): DecorationSet {
 
 function activeImageSourceKey(view: EditorView): string {
   const sel = view.state.selection.main;
+  // A range selects the image's Markdown source without turning every crossed
+  // image back into source. The old position-bearing `wide` key changed on
+  // every pointer move and forced a full visible-image redecoration each time.
+  if (!sel.empty) return "";
   const doc = view.state.doc;
   const firstLine = doc.lineAt(sel.from).number;
   const lastLine = doc.lineAt(Math.min(sel.to, doc.length)).number;
-  if (lastLine - firstLine > 50) return `wide:${sel.from}:${sel.to}`;
   const keys: string[] = [];
 
   for (let lineNum = firstLine; lineNum <= lastLine; lineNum++) {

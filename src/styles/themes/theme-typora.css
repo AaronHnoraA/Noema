@@ -221,7 +221,6 @@
   background: transparent;
   border-radius: 0.18em;
   padding: 0;
-  transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease;
 }
 .cm-editor a.aaronnote-roam-link:hover,
 .aaronnote-roam-link:hover,
@@ -1008,7 +1007,6 @@
   background: transparent;
   border-radius: 0.18em;
   padding: 0;
-  transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease;
 }
 .cm-editor .cm-roam-link-text:hover,
 .cm-editor .cm-internal-link-text:hover {

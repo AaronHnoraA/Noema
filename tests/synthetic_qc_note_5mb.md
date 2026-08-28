@@ -3222,7 +3222,7 @@ A \leq_p B.
 #+end define
 
 #+begin warning Promise preservation
-For promise problems, it is not enough to map yes-instances to yes-instances.
+For promise problems, it is not enough to map yes-instances to yes-instances. hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh thit thit thi 
 One must also map no-instances to no-instances. Inputs outside the promise
 are irrelevant, but the reduction must preserve the promised domain.
 #+end warning
@@ -6141,10 +6141,10 @@ def search_certificate(x: Instance, y: Instance) -> bool:
 ```
 
 #+begin attention Parser stress point
-This section intentionally mixes Markdown headings, Org-style environments,
+This section intentionally mixes Markdown headings, Org-style environments, sssss sssssssssssssssssssssss sssssssssssss ssssssssssssssssssss sssssssssssssssssssss ssssssssssssss This is a vary good things for 
 displayed equations, inline mathematical notation, tables, and code blocks.
 A good editor should remain responsive even when this pattern is repeated
-many times.
+many times. 
 #+end attention
 
 ## 11.10. Conceptual summary
@@ -6751,7 +6751,7 @@ representations:
 \text{orbit under a group action}.
 \]
 
-In computational complexity, the representation matters because algorithms
+In computational complexity, the representation matters because algorithms ttttttttt tttt ttt 
 operate on encodings, not on abstract objects directly.
 #+end summary
 

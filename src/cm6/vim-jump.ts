@@ -34,7 +34,7 @@ const vimJumpHintsField = StateField.define<DecorationSet>({
       if (effect.is(setVimJumpHints)) return jumpDecorations(effect.value);
     }
     if (transaction.docChanged) return Decoration.none;
-    return value.map(transaction.changes);
+    return value;
   },
   provide: (field) => EditorView.decorations.from(field),
 });
