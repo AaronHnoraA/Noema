@@ -1465,3 +1465,34 @@ GUI Emacs、经 emacsclient 打开笔记、采样 Emacs / WebKit 三进程 / web
 **下一批候选（未做，等拍板）**：内核仍会在启动时生成本地 CA/TLS 证书并在固定端口 6806 上跑第二个
 HTTP 服务（`proxy.InitFixedPortService`）。Noema 的 Node supervisor 走的是动态端口，这个固定端口服务
 是 SiYuan 给外部客户端用的约定。它不是循环任务，但多一个监听端口和一次启动期证书生成。
+
+### 选区工具栏一直是死的：`drawSelection` 隐藏了原生选区（2026-08-28，当前工作树）
+
+用户复述"选择文本 copy 仍然没有反应"。上一轮我只在 Chrome 里验证过，这轮在真实 Emacs xwidget 里
+用 `xwidget-webkit-execute-script` 探针复现，拿到确证：
+
+- 真实 Cmd+C **确实到达页面**（`{key:"c", code:"KeyC", meta:true}`，target 是 `.cm-content`），
+  但 `defaultPrevented:false`、`copy` 事件计数为 0。**WKWebView 收到按键但根本不执行 Copy 命令**——
+  xwidget 的 WKWebView 不在正常的 responder chain/Edit 菜单里，按键只以 JS keydown 的形式出现。
+  所以"页面自己处理 Cmd+C"是必需的，不是可选的。
+- 更关键的一条：编辑器启用了 CM6 的 `drawSelection`（`editor-cm6.ts`，standalone 模式），它的职责就是
+  **隐藏浏览器原生选区、自己画选区**。实测拖选后 `.cm-selectionBackground` 有 3 个盒子，而
+  `getSelection().isCollapsed === true`。而 `activeEditorSelection()` 一直建立在
+  `window.getSelection()` 上并要求它非折叠——于是它**永远返回 null**：浮动选区工具栏从来没有出现过，
+  `copyActiveSelection()` 第一行就 return。用户说的"copy 没反应"，字面意思是根本没有那个按钮。
+
+这不是上一轮引入的回归，是一直存在的：只要 `drawSelection` 在，这条路就是死的；桌面 Electron 同样受影响。
+
+**修复**：`activeEditorSelection()` 改为以 CM6 自己的选区为权威，几何来自 CM6 画出来的
+`.cm-selectionBackground` 并集（滚动出视口时回退 `coordsAtPos`）；只有当 CM6 选区为空时才回落到 DOM 选区，
+用于 CM6 模型之外的选中（渲染 widget 内部）。空白选区判断保留，仍然只在 ≤4096 字符时才读文本。
+并集运算抽成 `aaronnote/selection-geometry.ts` 的 `unionSelectionRect`，有 4 个用例覆盖多行、
+折叠盒子、空输入与零高度。
+
+**真实 xwidget 端到端验收**（Emacs + WKWebView，非 Chrome）：键盘建立 CM6 选区后工具栏
+`hidden` 由 true 变 false 并算出位置；点击工具栏 Copy 按钮，macOS pasteboard 拿到选区文本；
+随后真实 Cmd+C（System Events 发送，`meta:true` 确认到达）触发 2 次 `/api/clipboard` POST、
+0 次原生 copy 事件，pasteboard 同样更新。
+
+门禁：`npm test` 213 files passed / 7 skipped、2069 tests passed / 16 skipped；`tsc` 与
+`npm run build:aaronnote` 通过。

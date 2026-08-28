@@ -205,6 +205,7 @@ import {
 } from "./xwidget-key-guard.ts";
 import { focusQuiescenceEnabled, serverMode, sourceEditorName, standaloneMode } from "./host-mode.ts";
 import { installHostClipboard } from "./host-clipboard.ts";
+import { unionSelectionRect } from "./selection-geometry.ts";
 import { writeSystemClipboard } from "../src/system-clipboard.ts";
 import { copiedText } from "../src/cm6/copied-text.ts";
 import { createZoomController } from "./features/zoom/controller.ts";
@@ -10501,9 +10502,41 @@ function updateMathPreview(
 
 type ActiveEditorSelection = { rect: DOMRect; text: () => string };
 
+/** Whitespace-only selections offer no command; the read is bounded on purpose. */
+const BLANK_SELECTION_PROBE_LIMIT = 4096;
+
+function selectionLooksBlank(read: () => string, length: number): boolean {
+  // Checking needs the text, so only check while the selection is small enough
+  // for the read to be free; nobody selects four thousand blank characters.
+  return length <= BLANK_SELECTION_PROBE_LIMIT && !read().trim();
+}
+
 /**
- * The live DOM selection inside the editor, as geometry plus a lazy text
- * reader, or null when there is nothing the selection UI applies to.
+ * The screen box CodeMirror is painting the current selection into.
+ *
+ * It has to come from CodeMirror, not from `window.getSelection()`. The editor
+ * runs `drawSelection`, whose whole job is to hide the browser's selection and
+ * paint its own — so the DOM selection stays collapsed no matter how much text
+ * is selected, and anything keyed off it sees nothing at all.
+ */
+function editorSelectionRect(from: number, to: number): DOMRect | null {
+  const painted = [...host.querySelectorAll<HTMLElement>(".cm-selectionBackground")]
+    .map((element) => element.getBoundingClientRect());
+  const fromPainted = unionSelectionRect(painted);
+  if (fromPainted) return fromPainted;
+  // Scrolled out of the rendered viewport, or a theme without the layer.
+  const head = editor.view.coordsAtPos(from);
+  const tail = editor.view.coordsAtPos(to);
+  return unionSelectionRect([head, tail].filter((coords) => coords !== null));
+}
+
+/**
+ * The current editor selection as geometry plus a lazy text reader, or null
+ * when there is nothing the selection UI applies to.
+ *
+ * CodeMirror's own selection is the authority; the DOM selection is consulted
+ * only for text selected outside CodeMirror's model, such as inside a rendered
+ * widget, which the browser still reports normally.
  *
  * `text` is a thunk on purpose. Positioning the floating toolbar needs only the
  * rect, and it runs on every `selectionchange` — which a pointer drag emits
@@ -10515,29 +10548,27 @@ type ActiveEditorSelection = { rect: DOMRect; text: () => string };
 function activeEditorSelection(): ActiveEditorSelection | null {
   if (editor.isSourceMode()) return null;
   if (host.querySelector("[data-cm-visual-math='active']")) return null;
+
+  const logical = editor.getSelection();
+  const from = Math.min(logical.from, logical.to);
+  const to = Math.max(logical.from, logical.to);
+  if (from < to) {
+    const read = (): string => editor.textBetween(from, to);
+    if (selectionLooksBlank(read, to - from)) return null;
+    const rect = editorSelectionRect(from, to);
+    return rect ? { rect, text: read } : null;
+  }
+
   const selection = window.getSelection();
   if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null;
   const anchor = selection.anchorNode;
   const focus = selection.focusNode;
   if (!anchor || !focus || !host.contains(anchor) || !host.contains(focus)) return null;
+  const read = (): string => selection.toString();
+  if (selectionLooksBlank(read, BLANK_SELECTION_PROBE_LIMIT)) return null;
   const rect = selection.getRangeAt(0).getBoundingClientRect();
   if (rect.width === 0 && rect.height === 0) return null;
-  // Whitespace-only drags carry no command worth offering. Checking that needs
-  // the text, so only check it while the selection is small enough for the read
-  // to be free; nobody selects four thousand characters of pure whitespace.
-  const logicalRange = editor.getSelection();
-  const blankProbeLimit = 4096;
-  if (Math.abs(logicalRange.to - logicalRange.from) <= blankProbeLimit
-      && !selection.toString().trim()) return null;
-  return {
-    rect,
-    text: () => {
-      const logical = editor.getSelection();
-      const from = Math.min(logical.from, logical.to);
-      const to = Math.max(logical.from, logical.to);
-      return from < to ? editor.textBetween(from, to) : selection.toString();
-    },
-  };
+  return { rect, text: read };
 }
 
 function selectionTouchesEditor(): boolean {
