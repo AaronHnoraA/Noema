@@ -1,6 +1,7 @@
 import { StateEffect, type Transaction } from "@codemirror/state";
 import type { EditorView, ViewUpdate } from "@codemirror/view";
 import { ensureSyntaxTree } from "@codemirror/language";
+import { waitForParser } from "./extensions/parser-watcher.ts";
 
 export type ViewportRefreshRange = { from: number; to: number };
 export const refreshViewportDecorations = StateEffect.define<readonly ViewportRefreshRange[]>();
@@ -13,6 +14,8 @@ const scheduledViews = new Set<EditorView>();
 const pausedDirtyViews = new Set<EditorView>();
 // Generation counter lets an in-flight refresh detect that it was superseded.
 const viewGenerations = new WeakMap<EditorView, number>();
+// At most one background-parser continuation may exist for a live view.
+const parserWaitViews = new WeakSet<EditorView>();
 let viewportRefreshPaused = false;
 
 const VIEWPORT_PARSE_BUDGET_MS = 8;
@@ -23,6 +26,10 @@ function refreshRanges(view: EditorView): ViewportRefreshRange[] {
     from: Math.max(0, range.from - VIEWPORT_OVERSCAN_CHARS),
     to: Math.min(view.state.doc.length, range.to + VIEWPORT_OVERSCAN_CHARS),
   }));
+}
+
+function viewportParseTarget(view: EditorView): number {
+  return refreshRanges(view).reduce((maximum, range) => Math.max(maximum, range.to), 0);
 }
 
 function dispatchRefresh(view: EditorView, ranges: readonly ViewportRefreshRange[]): void {
@@ -42,6 +49,28 @@ function cancelPendingRefresh(view: EditorView): void {
     scheduledRefreshFrames.delete(view);
   }
   scheduledViews.delete(view);
+}
+
+function restartRefreshForLatestState(view: EditorView): void {
+  scheduledRefreshFrames.delete(view);
+  scheduledViews.delete(view);
+  if (view.dom.isConnected) scheduleViewportDecorationRefresh(view);
+}
+
+function refreshWhenParserReady(view: EditorView): void {
+  if (parserWaitViews.has(view)) return;
+  parserWaitViews.add(view);
+  try {
+    void waitForParser(view, (currentView) => viewportParseTarget(currentView)).then(() => {
+      parserWaitViews.delete(view);
+      if (view.dom.isConnected) scheduleViewportDecorationRefresh(view);
+    });
+  } catch {
+    // Lightweight test/embedding views may intentionally omit parserWatcher.
+    // The initial bounded refresh has still run; never replace a missing
+    // parser with an animation-frame retry loop.
+    parserWaitViews.delete(view);
+  }
 }
 
 function deferPausedRefresh(view: EditorView): void {
@@ -104,8 +133,17 @@ export function scheduleViewportDecorationRefresh(view: EditorView): void {
   const frame = window.requestAnimationFrame(() => {
     if (viewGenerations.get(view) !== gen) return;
     scheduledRefreshFrames.delete(view);
-    if (!view.dom.isConnected || view.state !== scheduledState) {
+    if (!view.dom.isConnected) {
       scheduledViews.delete(view);
+      return;
+    }
+    // Opening a note is followed by selection restore, host configuration and
+    // focus transactions. The previous implementation discarded the only
+    // initial viewport refresh when any of those replaced EditorState between
+    // these two frames. Toggling source mode rebuilt every visual compartment
+    // later, which is why Cmd+/ twice appeared to "finish" the first render.
+    if (view.state !== scheduledState) {
+      restartRefreshForLatestState(view);
       return;
     }
     if (viewportRefreshPaused) {
@@ -119,16 +157,26 @@ export function scheduleViewportDecorationRefresh(view: EditorView): void {
       if (viewGenerations.get(view) !== gen) return;
       scheduledRefreshFrames.delete(view);
       scheduledViews.delete(view);
-      if (!view.dom.isConnected || view.state !== scheduledState) return;
+      if (!view.dom.isConnected) return;
+      if (view.state !== scheduledState) {
+        restartRefreshForLatestState(view);
+        return;
+      }
       if (viewportRefreshPaused) {
         pausedDirtyViews.add(view);
         return;
       }
 
       const ranges = refreshRanges(view);
-      const parseTo = ranges.reduce((maximum, range) => Math.max(maximum, range.to), 0);
-      ensureSyntaxTree(view.state, parseTo, VIEWPORT_PARSE_BUDGET_MS);
+      const parseTo = viewportParseTarget(view);
+      const parsed = ensureSyntaxTree(view.state, parseTo, VIEWPORT_PARSE_BUDGET_MS);
       dispatchRefresh(view, ranges);
+      // `ensureSyntaxTree` is explicitly budgeted. If it cannot cover the
+      // viewport in 8 ms, let CM6's background parser continue and perform one
+      // final rebuild when parserWatcher reports that the current viewport is
+      // ready. This fixes the incomplete first build without adding a parse or
+      // animation-frame loop to large documents.
+      if (!parsed && view.dom.isConnected) refreshWhenParserReady(view);
     });
     scheduledRefreshFrames.set(view, afterMeasure);
   });

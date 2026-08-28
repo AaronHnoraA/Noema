@@ -34,9 +34,10 @@ describe("Noema kernel serve profile", () => {
     expect(runtime).not.toContain("func CheckFileSysStatus");
   });
 
-  test("arms connection keepalives only while clients exist", () => {
+  test("arms connection keepalives only where live clients need them", () => {
     const host = source("web-host.mjs");
     expect(host).toContain("let sseHeartbeatInterval = null");
+    expect(host).toContain('if (hostMode !== "server" || sseHeartbeatInterval || !eventClients.size) return;');
     expect(host).toContain("eventClients.add(res);\n      startSseHeartbeat();");
     expect(host).toContain("req.on(\"close\", () => removeEventClient(res))");
     expect(host).not.toMatch(/const sseHeartbeatInterval\s*=\s*setInterval/);
@@ -46,5 +47,12 @@ describe("Noema kernel serve profile", () => {
     expect(jupyterWs).toContain("ws.on(\"close\", stopKeepaliveIfIdle)");
     expect(jupyterWs).toContain("startKeepalive();");
     expect(jupyterWs).not.toMatch(/const keepalive\s*=\s*setInterval/);
+  });
+
+  test("sleeps until weekly wiki maintenance is due", () => {
+    const host = source("web-host.mjs");
+    expect(host).toContain("lastFull + WIKI_MAINTENANCE_INTERVAL_MS - Date.now()");
+    expect(host).toContain("wikiMaintenanceTimer = setTimeout(async () => {");
+    expect(host).not.toMatch(/wikiMaintenanceTimer\s*=.*setInterval/);
   });
 });

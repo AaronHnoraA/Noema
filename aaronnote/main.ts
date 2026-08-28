@@ -26,6 +26,8 @@ import {
 } from "../src/cm6/input-commands.ts";
 import { markdownHrefAt } from "../src/cm6/editor-cm6.ts";
 import {
+  blockMathAtomicFullRebuildCount,
+  blockMathFullRebuildCount,
   finishInlineMathEditing,
   formulaRangeAtWidgetPosition,
   formulaSourceRangeAtPosition,
@@ -1605,6 +1607,42 @@ type DesktopEditorPerfResult = {
   formulaDragDispatchMaxMs: number;
   formulaDragFrameP95Ms: number;
   formulaDragFrameMaxMs: number;
+  formulaScrollSteps: number;
+  formulaScrollFrameP95Ms: number;
+  formulaScrollFrameMaxMs: number;
+  formulaScrollTargetErrorMaxPx: number;
+  formulaScrollBacktracks: number;
+  formulaScrollMathRebuilds: number;
+  formulaScrollAtomicRebuilds: number;
+  sourceScrollFrameP95Ms: number;
+  sourceScrollFrameMaxMs: number;
+  sourceScrollTargetErrorMaxPx: number;
+  formulaPreviewVisibleBeforeScroll: boolean;
+  formulaPreviewClosedOnScroll: boolean;
+  initialVisualNodeCount: number;
+  settledVisualNodeCount: number;
+  roundTripVisualNodeCount: number;
+  initialVisualMatchesSettled: boolean;
+  settledVisualMatchesRoundTrip: boolean;
+  visualRoundTripConsistent: boolean;
+  initialMathBlockCount: number;
+  settledMathBlockCount: number;
+  roundTripMathBlockCount: number;
+  initialOrgEnvBlockCount: number;
+  settledOrgEnvBlockCount: number;
+  roundTripOrgEnvBlockCount: number;
+  initialViewportFrom: number;
+  initialViewportTo: number;
+  settledViewportFrom: number;
+  settledViewportTo: number;
+  roundTripViewportFrom: number;
+  roundTripViewportTo: number;
+  initialProbeScrollTop: number;
+  settledProbeScrollTop: number;
+  roundTripProbeScrollTop: number;
+  initialFirstMathSourceFrom: number;
+  settledFirstMathSourceFrom: number;
+  roundTripFirstMathSourceFrom: number;
   longTaskCount: number;
   longTaskMs: number;
   contentRestored: boolean;
@@ -1638,6 +1676,128 @@ if (desktopPerfSmokeMode === "1" || desktopPerfSmokeMode === "selection") {
       const sorted = [...samples].sort((a, b) => a - b);
       return sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)] || 0;
     };
+    const visualSelectors = [
+      ".cm-front-matter-block",
+      ".cm-org-env-block",
+      ".cm-math-block",
+      ".cm-math-inline",
+      ".cm-horizontal-rule",
+      ".cm-table-block",
+      ".cm-code-fold-button",
+      ".syntax-hidden",
+      ".syntax-hint",
+    ];
+    const visualSignature = (): Record<string, number> => (
+      Object.fromEntries(visualSelectors.map((selector) => [
+        selector,
+        editor.view.dom.querySelectorAll(selector).length,
+      ]))
+    );
+    const visualSourceSignature = (): Array<{ selector: string; from: number; to: number }> => {
+      const signature: Array<{ selector: string; from: number; to: number }> = [];
+      for (const selector of visualSelectors) {
+        for (const node of editor.view.dom.querySelectorAll<HTMLElement>(selector)) {
+          const datasetFrom = node.dataset.cmSourceFrom;
+          const datasetTo = node.dataset.cmSourceTo;
+          let from = datasetFrom == null ? Number.NaN : Number(datasetFrom);
+          let to = datasetTo == null ? Number.NaN : Number(datasetTo);
+          if (!Number.isFinite(from)) {
+            try { from = editor.view.posAtDOM(node, 0); } catch { continue; }
+          }
+          if (!Number.isFinite(to)) to = from;
+          signature.push({ selector, from, to });
+        }
+      }
+      return signature.sort((left, right) => (
+        left.from - right.from || left.to - right.to || left.selector.localeCompare(right.selector)
+      ));
+    };
+    const firstVisibleMathSourceFrom = (): number => {
+      const value = Number(editor.view.dom.querySelector<HTMLElement>(
+        ".cm-math-block[data-cm-source-from]",
+      )?.dataset.cmSourceFrom);
+      return Number.isFinite(value) ? value : -1;
+    };
+    const initialProbeSelection = editor.view.state.selection.main;
+    const initialProbeScrollTop = host.scrollTop;
+    await frame();
+    await frame();
+    const initialVisualSignature = visualSignature();
+    const initialVisualSources = visualSourceSignature();
+    const initialViewport = { ...editor.view.viewport };
+    const initialScrollTop = host.scrollTop;
+    const initialFirstMathSourceFrom = firstVisibleMathSourceFrom();
+    await new Promise<void>((resolve) => setTimeout(resolve, 1_000));
+    await frame();
+    await frame();
+    const settledVisualSignature = visualSignature();
+    const settledVisualSources = visualSourceSignature();
+    const settledViewport = { ...editor.view.viewport };
+    const settledProbeScrollTop = host.scrollTop;
+    const settledFirstMathSourceFrom = firstVisibleMathSourceFrom();
+    editor.toggleSource();
+    await frame();
+    await frame();
+    editor.toggleSource();
+    host.scrollTop = initialProbeScrollTop;
+    await frame();
+    await frame();
+    await frame();
+    await frame();
+    const roundTripVisualSignature = visualSignature();
+    const roundTripVisualSources = visualSourceSignature();
+    const roundTripViewport = { ...editor.view.viewport };
+    const roundTripProbeScrollTop = host.scrollTop;
+    const roundTripFirstMathSourceFrom = firstVisibleMathSourceFrom();
+    const initialVisualNodeCount = Object.values(initialVisualSignature)
+      .reduce((sum, count) => sum + count, 0);
+    const settledVisualNodeCount = Object.values(settledVisualSignature)
+      .reduce((sum, count) => sum + count, 0);
+    const roundTripVisualNodeCount = Object.values(roundTripVisualSignature)
+      .reduce((sum, count) => sum + count, 0);
+    // CM6 intentionally mounts an overscan margin outside the screen. A mode
+    // reconfiguration may widen that margin while the actual scroll position
+    // and visible source stay unchanged, so raw DOM counts are diagnostics,
+    // not a correctness predicate. Compare only the source interval covered
+    // by both snapshots.
+    const commonVisualFrom = Math.max(
+      initialViewport.from,
+      settledViewport.from,
+      roundTripViewport.from,
+    );
+    const commonVisualTo = Math.min(
+      initialViewport.to,
+      settledViewport.to,
+      roundTripViewport.to,
+    );
+    const comparableVisualSignature = (
+      signature: Array<{ selector: string; from: number; to: number }>,
+    ): string => signature
+      .filter((entry) => entry.to >= commonVisualFrom && entry.from <= commonVisualTo)
+      .map((entry) => `${entry.selector}:${entry.from}:${entry.to}`)
+      .join("|");
+    const sameVisualSignature = (
+      left: Array<{ selector: string; from: number; to: number }>,
+      right: Array<{ selector: string; from: number; to: number }>,
+    ) => comparableVisualSignature(left) === comparableVisualSignature(right);
+    const initialVisualMatchesSettled = sameVisualSignature(
+      initialVisualSources,
+      settledVisualSources,
+    );
+    const settledVisualMatchesRoundTrip = sameVisualSignature(
+      settledVisualSources,
+      roundTripVisualSources,
+    );
+    const visualRoundTripConsistent = sameVisualSignature(
+      initialVisualSources,
+      roundTripVisualSources,
+    );
+    editor.view.dispatch({
+      selection: {
+        anchor: initialProbeSelection.anchor,
+        head: initialProbeSelection.head,
+      },
+    });
     if (iterations > 0) {
       const selection = editor.view.state.doc.length;
       editor.view.dispatch({ selection: { anchor: selection } });
@@ -1705,13 +1865,110 @@ if (desktopPerfSmokeMode === "1" || desktopPerfSmokeMode === "selection") {
       editor.view.dispatch({ effects: pointerSelectionEffect.of(false) });
     }
 
-    editor.view.dispatch({
-      changes: { from: 0, to: editor.view.state.doc.length, insert: original },
-      selection: {
-        anchor: Math.min(originalSelection.anchor, original.length),
-        head: Math.min(originalSelection.head, original.length),
-      },
-    });
+    // Put the caret inside a real inline formula so the first scroll frame
+    // exercises the fixed formula preview. Scrolling intentionally closes the
+    // preview; all subsequent frames must remain free of popup geometry reads.
+    const inlineFormulaOpen = original.indexOf("\\(");
+    if (inlineFormulaOpen >= 0) {
+      editor.setMarkdownSelection(inlineFormulaOpen + 2, undefined, { scrollIntoView: true });
+      scheduleAssistUpdate({ mathPreview: true, cursor: true });
+      await frame();
+      await frame();
+    }
+    if (mathPreview.hidden && formulaOpen >= 0 && formulaClose > formulaOpen) {
+      // Visual mode normally opens MathLive inline. For this smoke-only path,
+      // mount the same resident preview with real document TeX so the first
+      // scroll frame still proves that the heavier floating surface is closed.
+      ensureLiveTexPreview().update({
+        latex: original.slice(formulaOpen + 2, formulaClose).trim(),
+        display: true,
+        selection: { anchor: 0, head: 0 },
+        placeholders: [],
+      });
+      mathPreview.classList.add("is-display");
+      mathPreview.hidden = false;
+      await frame();
+    }
+    const formulaPreviewVisibleBeforeScroll = !mathPreview.hidden;
+    const formulaScrollFrameSamples: number[] = [];
+    const formulaScrollErrors: number[] = [];
+    const formulaScrollSteps = 72;
+    // 240 px/frame covers a fast trackpad gesture without turning the probe
+    // into repeated PageDown-sized teleports through unmounted content.
+    const formulaScrollDelta = 240;
+    const formulaScrollStart = host.scrollTop;
+    const formulaScrollMaximum = Math.max(0, host.scrollHeight - host.clientHeight);
+    const formulaRebuildsBeforeScroll = blockMathFullRebuildCount();
+    const formulaAtomicRebuildsBeforeScroll = blockMathAtomicFullRebuildCount();
+    let formulaScrollBacktracks = 0;
+    let previousScrollTop = formulaScrollStart;
+    rendererActivity.notifyActivity();
+    host.dispatchEvent(new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      deltaY: formulaScrollDelta,
+    }));
+    for (let index = 1; index <= formulaScrollSteps; index += 1) {
+      const target = Math.min(
+        formulaScrollMaximum,
+        formulaScrollStart + index * formulaScrollDelta,
+      );
+      const started = performance.now();
+      host.scrollTop = target;
+      host.dispatchEvent(new Event("scroll"));
+      await frame();
+      const actual = host.scrollTop;
+      formulaScrollFrameSamples.push(performance.now() - started);
+      formulaScrollErrors.push(Math.abs(actual - target));
+      if (actual + 0.5 < previousScrollTop) formulaScrollBacktracks += 1;
+      previousScrollTop = actual;
+    }
+    const formulaPreviewClosedOnScroll = formulaPreviewVisibleBeforeScroll && mathPreview.hidden;
+    const formulaScrollMathRebuilds = blockMathFullRebuildCount() - formulaRebuildsBeforeScroll;
+    const formulaScrollAtomicRebuilds = blockMathAtomicFullRebuildCount()
+      - formulaAtomicRebuildsBeforeScroll;
+
+    // Same outer-scroll path with visual extensions disabled. This separates
+    // browser/CM6 baseline cost from viewport widget construction.
+    host.scrollTop = formulaScrollStart;
+    editor.toggleSource();
+    await frame();
+    await frame();
+    const sourceScrollFrameSamples: number[] = [];
+    const sourceScrollErrors: number[] = [];
+    host.dispatchEvent(new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      deltaY: formulaScrollDelta,
+    }));
+    for (let index = 1; index <= formulaScrollSteps; index += 1) {
+      const target = Math.min(
+        formulaScrollMaximum,
+        formulaScrollStart + index * formulaScrollDelta,
+      );
+      const started = performance.now();
+      host.scrollTop = target;
+      host.dispatchEvent(new Event("scroll"));
+      await frame();
+      sourceScrollFrameSamples.push(performance.now() - started);
+      sourceScrollErrors.push(Math.abs(host.scrollTop - target));
+    }
+    editor.toggleSource();
+    await frame();
+    await frame();
+
+    const restoredSelection = {
+      anchor: Math.min(originalSelection.anchor, original.length),
+      head: Math.min(originalSelection.head, original.length),
+    };
+    const currentContent = editor.view.state.doc.toString();
+    editor.view.dispatch(currentContent === original
+      ? { selection: restoredSelection }
+      : {
+          changes: { from: 0, to: editor.view.state.doc.length, insert: original },
+          selection: restoredSelection,
+        });
+    host.scrollTop = initialProbeScrollTop;
     await frame();
     await new Promise<void>((resolve) => setTimeout(resolve, 50));
     observer?.disconnect();
@@ -1729,6 +1986,42 @@ if (desktopPerfSmokeMode === "1" || desktopPerfSmokeMode === "selection") {
       formulaDragDispatchMaxMs: Math.max(0, ...formulaDragDispatchSamples),
       formulaDragFrameP95Ms: percentile95(formulaDragFrameSamples),
       formulaDragFrameMaxMs: Math.max(0, ...formulaDragFrameSamples),
+      formulaScrollSteps,
+      formulaScrollFrameP95Ms: percentile95(formulaScrollFrameSamples),
+      formulaScrollFrameMaxMs: Math.max(0, ...formulaScrollFrameSamples),
+      formulaScrollTargetErrorMaxPx: Math.max(0, ...formulaScrollErrors),
+      formulaScrollBacktracks,
+      formulaScrollMathRebuilds,
+      formulaScrollAtomicRebuilds,
+      sourceScrollFrameP95Ms: percentile95(sourceScrollFrameSamples),
+      sourceScrollFrameMaxMs: Math.max(0, ...sourceScrollFrameSamples),
+      sourceScrollTargetErrorMaxPx: Math.max(0, ...sourceScrollErrors),
+      formulaPreviewVisibleBeforeScroll,
+      formulaPreviewClosedOnScroll,
+      initialVisualNodeCount,
+      settledVisualNodeCount,
+      roundTripVisualNodeCount,
+      initialVisualMatchesSettled,
+      settledVisualMatchesRoundTrip,
+      visualRoundTripConsistent,
+      initialMathBlockCount: initialVisualSignature[".cm-math-block"] ?? 0,
+      settledMathBlockCount: settledVisualSignature[".cm-math-block"] ?? 0,
+      roundTripMathBlockCount: roundTripVisualSignature[".cm-math-block"] ?? 0,
+      initialOrgEnvBlockCount: initialVisualSignature[".cm-org-env-block"] ?? 0,
+      settledOrgEnvBlockCount: settledVisualSignature[".cm-org-env-block"] ?? 0,
+      roundTripOrgEnvBlockCount: roundTripVisualSignature[".cm-org-env-block"] ?? 0,
+      initialViewportFrom: initialViewport.from,
+      initialViewportTo: initialViewport.to,
+      settledViewportFrom: settledViewport.from,
+      settledViewportTo: settledViewport.to,
+      roundTripViewportFrom: roundTripViewport.from,
+      roundTripViewportTo: roundTripViewport.to,
+      initialProbeScrollTop: initialScrollTop,
+      settledProbeScrollTop,
+      roundTripProbeScrollTop,
+      initialFirstMathSourceFrom,
+      settledFirstMathSourceFrom,
+      roundTripFirstMathSourceFrom,
       longTaskCount: longTasks.length,
       longTaskMs: longTasks.reduce((sum, duration) => sum + duration, 0),
       contentRestored: editor.view.state.doc.toString() === original,
@@ -11749,9 +12042,23 @@ window.addEventListener("resize", () => {
   scheduleAssistUpdate({ mathPreview: true, cursor: true, selectionTool: !selectionTool.hidden });
 });
 window.addEventListener("scroll", (event) => {
+  const target = event.target;
+  const editorViewportScrolled = target === document
+    || target === window
+    || (target instanceof Node && host.contains(target));
+  if (!editorViewportScrolled) return;
   mathPreviewGeometryEpoch++;
-  scheduleAssistUpdate({ mathPreview: true, cursor: true, selectionTool: !selectionTool.hidden, toc: serverReaderMode });
-  if (event.target instanceof Node && host.contains(event.target)) {
+  // A fixed formula/snippet/selection surface chasing an inertial scroll has
+  // to read caret geometry and write overlay styles every frame. In WebKit it
+  // also feeds back into CM6 measurement, visibly pulling the document in the
+  // opposite direction. Viewport movement closes transient editing aids; the
+  // next real cursor/input action may open them again at fresh coordinates.
+  transientSurfaces.close(["snippet-popup", "math-preview", "prose-popover", "context-menu"], "viewport");
+  selectionTool.hidden = true;
+  selectionMore.hidden = true;
+  selectionRevisionForm.hidden = true;
+  if (serverReaderMode) scheduleAssistUpdate({ toc: true });
+  if (target instanceof Node && host.contains(target)) {
     scheduleAutomaticProseCheck(proseProfile().scrollMs);
   }
 }, { capture: true, passive: true });

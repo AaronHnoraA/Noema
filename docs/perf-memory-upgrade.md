@@ -104,3 +104,100 @@
 - 不再依赖“单次 change 是否包含完整 `\[` / `\]` 字符串”，因此逐字符补全、删除或拆分围栏也能立即得到正确渲染。
 - 初次加载仍需扫描一次全文；病态文档若每行都是未配对围栏，单次编辑仍与围栏数成正比，但不会读取普通正文。
 - 5 MB 性能用例已从 known-scan 档移入普通 bounded 档；增量索引另以 160 轮确定性随机编辑和独立全文扫描交叉校验。
+
+### 2026-08-28：功耗专项 —— 空闲实测 + 按键路径去平方
+
+关注点是**功耗**，不是吞吐量。结论先行：空闲侧已经到地板，真正的电池成本全在**按键路径**上。
+
+#### 空闲功耗实测（临时 vault，无客户端连接，60 秒采样）
+
+| 进程 | cpu-s / 60s | RSS |
+|---|---|---|
+| node web-host | **0.00** | 106 MB |
+| Go 内核 | **0.06** | 71 MB |
+
+- node 空闲**零唤醒**：SSE 心跳按客户端存在与否启停，wiki 维护 6 小时且 `unref`，Copilot 只在进程存活时轮询。
+- Go 内核用 `sample` 采样确认：主线程 park 在 `kevent`，其余线程 `_pthread_cond_wait`，唯一周期性的是 Go runtime 自己的 sysmon（`usleep`/`nanosleep`）。`StartCron` 里的消费者全部 channel park，`WatchSupervisorProcess` 走 kqueue `EVFILT_PROC/NOTE_EXIT`（已验证：node 退出后内核随之退出）。**运行时地板，无可优化项。**
+- 渲染端 CSS 也已干净：无 `infinite` 动画，光标闪烁全局关闭，14 处 `backdrop-filter` 全部位于临时浮层。
+
+#### 按键路径（5 MB 夹具 `synthetic_qc_note_5mb.md`，5143 标题 / ~21.5k 公式围栏）
+
+分层归因显示 **99.6% 的每键成本来自 Noema 自己的扩展**，与 CM6 和 Lezer 无关：
+
+| 层 | 每键 mean |
+|---|---|
+| 裸 CM6 | 0.08 ms |
+| + Lezer Markdown | 0.23 ms |
+| 完整编辑器 source 模式 | 30.4 ms |
+| 完整编辑器 visual 模式 | 62.9 ms |
+
+**10 — `heading-fold` 折叠范围去平方**
+
+`headingFoldEntries` 对每个标题调用 `foldRangeForHeading`，而后者的内层循环**每次都从数组第 0 个开始**（靠 `lineNumber <= h.lineNumber` 跳过前缀），因此是 O(标题数²)。`buildChevronDecos` 又是先算完整份 entries、再按视口过滤。
+
+- 内层扫描改为从 `index + 1` 起步。同级子树互不相交，一趟全量因此被 (层级数 × 标题数) 界住，而非平方。
+- `buildChevronDecos` 改为在 `tocIndex.headings` 上二分定位视口（排序键是 `pos`，且 markdown 标题满足 `markerFrom <= pos`，故不会漏掉标记仍在屏内的标题），只为可见标题构造范围与 widget。
+- `headingFoldEntries` / `markdownHeadingsWithLines` 按 `EditorState` 做 WeakMap 缓存（命令路径与 foldService 会重复取用同一 state）。
+- 该模块此前**零测试覆盖**。新增 `tests/heading-fold.test.ts`：把原 O(H²) 实现作为语义参考实现保留，在 5 MB 夹具（>1000 个折叠范围）与 8 个嵌套/围栏/边界用例上逐一比对，另加折叠命令行为与隔离的性能护栏。
+
+**11 — `math-ranges` 增量更新去分配**
+
+每次按键 `updateBlockMathIndex` 要：filter 21.5k 围栏 → spread 重建全部对象（~43k 次 `mapPos`）→ **对 21.5k 元素做完整排序** → `rangesFromFences` 再为 ~10.7k 个公式各建一个 `from:to:contentFrom:contentTo` 字符串键塞进 Map（又 ~43k 次 `mapPos`）。合计约 86k 次 `mapPos` + 21k 个字符串 + 32k 次对象分配，CPU 与 GC 双重压力。
+
+- 新增 `firstChangedOffset`：完全位于首个改动之前的围栏/范围映射即恒等，直接复用对象、跳过 `mapPos`。
+- 幸存围栏与改动行重扫结果都是有序的，用 `mergeFences` 线性归并取代全量 `sort`。
+- `rangesFromFences` 用单游标双指针取代字符串键 Map（两侧同为文档序），字符串与 Map 全部消除。
+- 由既有的 160 轮随机编辑对全文重扫交叉校验守住语义。
+
+#### 效果（同机、同夹具）
+
+| 场景 | 之前 | 之后 |
+|---|---|---|
+| 5 MB visual @开头 | 60.8 ms/键（120 键 7.3 s） | **13.3 ms**（1.6 s） |
+| 5 MB visual @末尾 | 72.2 ms/键（8.7 s） | **28.8 ms**（3.5 s） |
+| 5 MB source 模式 | 30.4 ms/键 | **1.8 ms** |
+| 40 KB | 1.25 ms/键 | 1.05 ms |
+
+`heading-fold` 层单独看：28.93 → 1.74 ms；`blockMathRanges` 层：20.22 → 5.25 ms。
+
+**测试**：2088 passed（此前 2082，净增 6）。
+
+**12 — 动图暂停链路修复**（本轮定位，实现由作者完成）
+
+原缺陷：`src/image-animation.ts` 的 class 开关与 idle 接线都正确，但 CSS 侧只有
+`image-animation: paused`，而**没有任何浏览器实现该属性**，动图在 idle/后台仍持续
+解码合成。既有测试只断言 class 开关，故长期未被发现。
+
+现方案：`nativeImageAnimationControlAvailable()` 用 `CSS.supports` 探测原生 CSS Image
+Animation，不支持时启用 `createImageAnimationFreezeFallback()` —— 把当前帧画进一张
+canvas 插在 `<img>` 前、原图 `display:none`，恢复时移除 canvas 还原原元素。canvas
+像素数有上限（默认 2M）以免大图冻结本身变成开销。仅对 `.gif/.apng/.webp` 及对应
+data URL 生效，普通 PNG/JPEG 不受影响。已配 `.noema-image-animation-freeze-frame`
+样式与单元测试。
+
+#### 后端负载路径复核
+
+空闲之外也复核了保存响应路径（`go test -tags fts5 -bench SaveResponsePhases`，
+M2 Max，60 KB 文档）：atomic-write 376 µs / scan 408 µs / signature 84 µs /
+document-identity 30 µs，合计约 0.9 ms，与 2026-08-26 那轮的结论一致。**后端空闲与
+负载两条路径现在都有实测支撑**，不是只凭空闲采样下的结论。
+
+#### 排除的假线索（记下来避免重复踩）
+
+- **`livePreview` 的 52 ms 是配置假象。** 分层叠加时出现非单调（单独 52 ms，叠加
+  `blockExtras` 后回落到 16 ms）。用「热身 10 次 + 100 次采样」重测发布配置：
+  common 4.64 ms → +widgets 8.68 ms → **+livePreview 12.27 ms**，即 livePreview 在
+  真实栈里只值 **+3.6 ms/键**。52 ms 只在「有 `livePreview` 但不加 widget 层」这种
+  产品中不存在的组合下出现（widget 层会把大段公式替换成替换型 widget，改变 CM6 的
+  视口构成）。**分层基准必须以发布配置为准，单层数字会误导。**
+- happy-dom 里 CM6 视口是正常的小范围（575–627 B）而非全文档，所以 live-preview 的
+  token 收集本来就是视口有界的——"happy-dom 无 layout 导致视口等于全文"这个猜想是错的。
+- 效果表「@末尾」一档部分是基准假象：光标在文档末尾而视口仍在顶部，真实使用中视口
+  跟随光标（即「@开头」那一档 13.3 ms 才是贴近真实的数字）。
+
+#### 尚未处理
+
+- `blockMathRanges` 每键仍是 O(全文围栏数) 的一趟遍历（5 MB/21.5k 围栏上约 3 ms）。
+  要做到真正亚线性需把围栏索引换成 CM6 `RangeSet`（持久化 B 树，`map` 只触及变动
+  子树），但那会改动所有消费者（`getBlockMathRanges` 的数组语义 + 二分查找）。
+  在 40 KB 量级的真实笔记上整机已是 1.05 ms/键，收益递减，暂不做。

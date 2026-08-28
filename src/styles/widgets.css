@@ -743,6 +743,9 @@
 .cm-editor .noema-image-animation-paused .cm-image-render {
   image-animation: paused;
 }
+.cm-editor .noema-image-animation-freeze-frame {
+  pointer-events: none;
+}
 .cm-editor .cm-image-widget {
   position: relative;
   display: flow-root;

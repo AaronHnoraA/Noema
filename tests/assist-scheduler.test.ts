@@ -41,6 +41,16 @@ describe("AssistScheduler", () => {
     expect(schedulerIndex).toBeLessThan(firstModeUpdateIndex);
   });
 
+  test("editor scrolling closes fixed previews instead of repositioning them every frame", () => {
+    const source = readFileSync(join(process.cwd(), "aaronnote/main.ts"), "utf8");
+    const start = source.indexOf('window.addEventListener("scroll", (event) => {');
+    const end = source.indexOf('}, { capture: true, passive: true });', start);
+    const handler = source.slice(start, end);
+    expect(handler).toContain('transientSurfaces.close(["snippet-popup", "math-preview"');
+    expect(handler).not.toContain("mathPreview: true");
+    expect(handler).not.toContain("selectionTool: true");
+  });
+
   test("coalesces repeated identical schedules without replacing the frame", () => {
     const frames = createFrameApi();
     const runs: AssistUpdateFlags[] = [];

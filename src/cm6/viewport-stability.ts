@@ -164,6 +164,8 @@ export class EditorViewportStabilizer {
   private forcedSnapshot: ViewportSnapshot | null = null;
   private stableSnapshot: ViewportSnapshot | null = null;
   private baselineFrame = 0;
+  private scrolling = false;
+  private scrollIdleTimer = 0;
   private readonly previousOverflowAnchor: string;
 
   constructor(view: EditorView, scrollHost: HTMLElement) {
@@ -176,16 +178,31 @@ export class EditorViewportStabilizer {
     // replacement widgets. The document-position anchor below is deterministic.
     scrollHost.style.overflowAnchor = "none";
 
-    const cancelForInteraction = (): void => {
+    const beginScrollInteraction = (): void => {
       this.interaction += 1;
       this.generation += 1;
-      this.scheduleBaselineCapture();
+      this.stableSnapshot = null;
+      this.scrolling = true;
+      if (this.baselineFrame) {
+        this.win.cancelAnimationFrame(this.baselineFrame);
+        this.baselineFrame = 0;
+      }
+      this.armScrollIdle();
     };
     const listenerOptions = { capture: true, passive: true, signal: this.abort.signal } as const;
-    scrollHost.addEventListener("pointerdown", cancelForInteraction, listenerOptions);
-    scrollHost.addEventListener("wheel", cancelForInteraction, listenerOptions);
-    scrollHost.addEventListener("touchmove", cancelForInteraction, listenerOptions);
-    scrollHost.addEventListener("scroll", () => this.scheduleBaselineCapture(), {
+    // Pointer ownership also covers scrollbar dragging and edge auto-scroll
+    // during selection. A click that never scrolls only suppresses automatic
+    // correction for the short idle window.
+    scrollHost.addEventListener("pointerdown", beginScrollInteraction, listenerOptions);
+    scrollHost.addEventListener("wheel", beginScrollInteraction, listenerOptions);
+    scrollHost.addEventListener("touchmove", beginScrollInteraction, listenerOptions);
+    scrollHost.addEventListener("scroll", () => {
+      if (this.scrolling) this.armScrollIdle();
+      // A slow frame can outlive the idle threshold, and scrollbar/programmatic
+      // movement may not have a preceding wheel event. A new scroll event is
+      // itself authoritative evidence that viewport movement resumed.
+      else beginScrollInteraction();
+    }, {
       passive: true,
       signal: this.abort.signal,
     });
@@ -193,7 +210,7 @@ export class EditorViewportStabilizer {
       const target = event.target instanceof Element ? event.target : null;
       if (target?.closest("[data-aaronnote-vim='native']")) return;
       if (["ArrowDown", "ArrowUp", "PageDown", "PageUp", "Home", "End", " "].includes(event.key)) {
-        cancelForInteraction();
+        beginScrollInteraction();
       }
     }, {
       capture: true,
@@ -204,7 +221,10 @@ export class EditorViewportStabilizer {
       ? null
       : new ResizeObserver(() => {
           const snapshot = this.stableSnapshot;
-          if (!snapshot || snapshot.interaction !== this.interaction || this.forcedDepth > 0) return;
+          if (this.scrolling
+              || !snapshot
+              || snapshot.interaction !== this.interaction
+              || this.forcedDepth > 0) return;
           this.scheduleRestore(snapshot);
         });
     this.resizeObserver?.observe(view.contentDOM);
@@ -222,6 +242,7 @@ export class EditorViewportStabilizer {
   afterUpdate(transactions: readonly Transaction[]): void {
     const forced = this.forcedSnapshot;
     const automatic = !forced
+      && !this.scrolling
       && transactions.some(transactionMayRelayout)
       && !transactions.some(transactionMovesViewport);
     // Explicit preserve() calls own a fresh pre-update snapshot. Automatic
@@ -239,7 +260,7 @@ export class EditorViewportStabilizer {
 
   preserve<T>(update: () => T, mapAnchor?: (position: number) => number): T {
     const outermost = this.forcedDepth === 0;
-    if (outermost) this.forcedSnapshot = this.capture();
+    if (outermost) this.forcedSnapshot = this.scrolling ? null : this.capture();
     const originalAnchor = outermost ? this.forcedSnapshot?.anchorPos ?? 0 : 0;
     this.forcedDepth += 1;
     try {
@@ -276,7 +297,19 @@ export class EditorViewportStabilizer {
     this.resizeObserver?.disconnect();
     viewportStabilizers.delete(this.view);
     if (this.baselineFrame) this.win.cancelAnimationFrame(this.baselineFrame);
+    if (this.scrollIdleTimer) this.win.clearTimeout(this.scrollIdleTimer);
     this.scrollHost.style.overflowAnchor = this.previousOverflowAnchor;
+  }
+
+  private armScrollIdle(): void {
+    if (this.scrollIdleTimer) this.win.clearTimeout(this.scrollIdleTimer);
+    this.scrollIdleTimer = this.win.setTimeout(() => {
+      this.scrollIdleTimer = 0;
+      this.scrolling = false;
+      this.generation += 1;
+      this.stableSnapshot = null;
+      this.scheduleBaselineCapture();
+    }, 140);
   }
 
   private capture(): ViewportSnapshot | null {
@@ -293,6 +326,11 @@ export class EditorViewportStabilizer {
       anchorPos = Math.max(0, Math.min(block.from, this.view.state.doc.length));
       anchorOffset = documentTop + block.top * this.view.scaleY - hostTop;
       if (!Number.isFinite(anchorOffset)) anchorOffset = null;
+      // At the upper boundary, scrollTop=0 is the authoritative anchor. A
+      // source/preview layout may move the first source position vertically;
+      // correcting that offset would push the host away from the document top
+      // and cannot be reversed while the other mode is clamped at zero.
+      if (scrollTop <= 0.5) anchorOffset = null;
     } catch {
       // A view can be between mount and its first measure. Absolute offsets
       // remain a safe fallback until the next animation frame captures a block.
@@ -339,7 +377,7 @@ export class EditorViewportStabilizer {
   }
 
   private scheduleRestore(snapshot: ViewportSnapshot): void {
-    if (snapshot.interaction !== this.interaction) return;
+    if (this.scrolling || snapshot.interaction !== this.interaction) return;
     const generation = ++this.generation;
     this.restore(snapshot, generation);
     this.view.requestMeasure({
@@ -356,11 +394,12 @@ export class EditorViewportStabilizer {
   }
 
   private scheduleBaselineCapture(): void {
+    if (this.scrolling) return;
     if (this.baselineFrame) this.win.cancelAnimationFrame(this.baselineFrame);
     this.baselineFrame = this.win.requestAnimationFrame(() => {
       this.baselineFrame = this.win.requestAnimationFrame(() => {
         this.baselineFrame = 0;
-        if (this.forcedDepth === 0) this.stableSnapshot = this.capture();
+        if (!this.scrolling && this.forcedDepth === 0) this.stableSnapshot = this.capture();
       });
     });
   }

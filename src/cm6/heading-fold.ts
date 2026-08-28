@@ -32,26 +32,49 @@ type HeadingFoldEntry = {
   range: { from: number; to: number };
 };
 
+// One line lookup per heading is affordable once per state, but CodeMirror
+// asks the fold service repeatedly while it resolves folds, so the result is
+// cached rather than rebuilt per query.
+const headingLineCache = new WeakMap<EditorState, HeadingWithLine[]>();
+
 function markdownHeadingsWithLines(state: EditorState): HeadingWithLine[] {
+  const cached = headingLineCache.get(state);
+  if (cached) return cached;
   const index = tocIndexFromState(state);
-  return index.headings
+  const headings = index.headings
     .filter((h) => h.source === "markdown")
     .map((h) => ({
       ...h,
       lineNumber: state.doc.lineAt(h.markerFrom ?? h.pos).number,
     }));
+  headingLineCache.set(state, headings);
+  return headings;
 }
 
-function foldRangeForHeading(
-  headings: HeadingWithLine[],
-  h: HeadingWithLine,
+/**
+ * A heading folds down to the line before the next heading of the same or a
+ * shallower level. `headings` is in document order, so that heading can only
+ * appear after `index`.
+ *
+ * Scanning the whole array from zero for every heading made this quadratic in
+ * the heading count: a 19k-heading note re-walked ~184M pairs on every
+ * keystroke. Starting at `index + 1` keeps each scan inside one heading's own
+ * subtree, and sibling subtrees are disjoint, so a full pass is bounded by
+ * (heading levels x headings) rather than headings squared.
+ */
+function foldRangeAtIndex(
+  headings: readonly HeadingWithLine[],
+  index: number,
   doc: EditorView["state"]["doc"],
 ): { from: number; to: number } | null {
+  const h = headings[index];
+  if (!h) return null;
   const headingLine = doc.line(h.lineNumber);
   let end = doc.line(doc.lines).to;
 
-  for (const other of headings) {
-    if (other === h || other.lineNumber <= h.lineNumber) continue;
+  for (let next = index + 1; next < headings.length; next++) {
+    const other = headings[next]!;
+    if (other.lineNumber <= h.lineNumber) continue;
     if ((other.renderLevel ?? other.level) <= (h.renderLevel ?? h.level)) {
       end = doc.line(other.lineNumber - 1).to;
       break;
@@ -80,16 +103,25 @@ function headingFoldKeys(headings: readonly HeadingWithLine[]): string[] {
   });
 }
 
+// Fold keys describe the whole outline, so the command paths below (capture /
+// restore / fold-all / fold-at-cursor) genuinely need every heading. They run
+// on user actions and note load, not on every keystroke, and several of them
+// ask for the same state twice, so one cached pass per EditorState is enough.
+const foldEntryCache = new WeakMap<EditorState, HeadingFoldEntry[]>();
+
 function headingFoldEntries(state: EditorState): HeadingFoldEntry[] {
+  const cached = foldEntryCache.get(state);
+  if (cached) return cached;
   const headings = markdownHeadingsWithLines(state);
   const keys = headingFoldKeys(headings);
   const entries: HeadingFoldEntry[] = [];
   for (let index = 0; index < headings.length; index++) {
     const heading = headings[index]!;
-    const range = foldRangeForHeading(headings, heading, state.doc);
+    const range = foldRangeAtIndex(headings, index, state.doc);
     if (!range) continue;
     entries.push({ key: keys[index]!, heading, range });
   }
+  foldEntryCache.set(state, entries);
   return entries;
 }
 
@@ -158,9 +190,9 @@ function unfoldRanges(view: EditorView, ranges: readonly { from: number; to: num
 const headingFoldService = foldService.of((state, lineStart) => {
   const headings = markdownHeadingsWithLines(state);
   const lineNumber = state.doc.lineAt(lineStart).number;
-  const h = headings.find((heading) => heading.lineNumber === lineNumber);
-  if (!h) return null;
-  return foldRangeForHeading(headings, h, state.doc);
+  const index = headings.findIndex((heading) => heading.lineNumber === lineNumber);
+  if (index < 0) return null;
+  return foldRangeAtIndex(headings, index, state.doc);
 });
 
 // ---------------------------------------------------------------------------
@@ -197,23 +229,66 @@ class ChevronWidget extends WidgetType {
   ignoreEvent() { return false; }
 }
 
+/** Longest heading marker (`###### `), used as the binary-search overshoot. */
+const MAX_HEADING_MARKER_LENGTH = 8;
+
+/**
+ * Chevrons only exist for headings inside the viewport, so this must not cost
+ * anything per off-screen heading. It used to build fold entries (and keys)
+ * for the entire outline first and filter afterwards, which made every
+ * keystroke in a heading-heavy note pay for the whole document.
+ *
+ * `tocIndex.headings` is sorted by `pos`, and markdown headings always have
+ * `markerFrom <= pos` on the same line, so a binary search on `pos` can never
+ * exclude a heading whose marker is still on screen.
+ */
 function buildChevronDecos(view: EditorView): DecorationSet {
-  const entries = headingFoldEntries(view.state);
-  if (entries.length === 0) return Decoration.none;
+  const headings = tocIndexFromState(view.state).headings;
+  if (headings.length === 0) return Decoration.none;
+
+  const doc = view.state.doc;
+  const { from: vpFrom, to: vpTo } = view.viewport;
+  const docEnd = doc.line(doc.lines).to;
+
+  let low = 0;
+  let high = headings.length;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (headings[mid]!.pos < vpFrom) low = mid + 1;
+    else high = mid;
+  }
 
   const builder = new RangeSetBuilder<Decoration>();
-  const { from: vpFrom, to: vpTo } = view.viewport;
-
-  for (const entry of entries) {
-    const h = entry.heading;
-    const markerPos = h.markerFrom ?? h.pos;
+  for (let index = low; index < headings.length; index++) {
+    const heading = headings[index]!;
+    if (heading.pos > vpTo + MAX_HEADING_MARKER_LENGTH) break;
+    if (heading.source !== "markdown") continue;
+    const markerPos = heading.markerFrom ?? heading.pos;
     if (markerPos < vpFrom || markerPos > vpTo) continue;
-    const lineStart = view.state.doc.line(h.lineNumber).from;
+
+    const headingLine = doc.lineAt(markerPos);
+    const level = heading.renderLevel ?? heading.level;
+    let end = docEnd;
+    for (let next = index + 1; next < headings.length; next++) {
+      const other = headings[next]!;
+      if (other.source !== "markdown") continue;
+      const otherPos = other.markerFrom ?? other.pos;
+      if (otherPos <= markerPos) continue;
+      if ((other.renderLevel ?? other.level) <= level) {
+        end = doc.lineAt(otherPos).from - 1;
+        break;
+      }
+    }
+    if (end <= headingLine.to) continue;
+
     const widget = Decoration.widget({
-      widget: new ChevronWidget(lineStart, foldedRangeMatches(view.state, entry.range)),
+      widget: new ChevronWidget(
+        headingLine.from,
+        foldedRangeMatches(view.state, { from: headingLine.to, to: end }),
+      ),
       side: -1,
     });
-    builder.add(lineStart, lineStart, widget);
+    builder.add(headingLine.from, headingLine.from, widget);
   }
 
   return builder.finish();

@@ -391,26 +391,73 @@ type BlockMathFieldValue = {
   renderWindow: BlockMathRenderWindow;
 };
 
-type BlockMathRenderWindow = { from: number; to: number };
+export type BlockMathRenderWindow = { from: number; to: number };
 
 const BLOCK_MATH_RENDER_OVERSCAN = 32 * 1024;
 const BLOCK_MATH_RENDER_WINDOW_MAX = 192 * 1024;
 
 const setBlockMathRenderWindowEffect = StateEffect.define<BlockMathRenderWindow>();
 
+function normalizedBlockMathRenderWindowForLength(
+  docLength: number,
+  window: BlockMathRenderWindow,
+): BlockMathRenderWindow {
+  let from = Math.max(0, Math.min(window.from, docLength));
+  let to = Math.max(from, Math.min(window.to, docLength));
+  if (to - from > BLOCK_MATH_RENDER_WINDOW_MAX) {
+    to = Math.min(docLength, from + BLOCK_MATH_RENDER_WINDOW_MAX);
+  }
+  if (to - from < BLOCK_MATH_RENDER_WINDOW_MAX && to === docLength) {
+    from = Math.max(0, to - BLOCK_MATH_RENDER_WINDOW_MAX);
+  }
+  return { from, to };
+}
+
 function normalizedBlockMathRenderWindow(
   state: EditorState,
   window: BlockMathRenderWindow,
 ): BlockMathRenderWindow {
-  let from = Math.max(0, Math.min(window.from, state.doc.length));
-  let to = Math.max(from, Math.min(window.to, state.doc.length));
-  if (to - from > BLOCK_MATH_RENDER_WINDOW_MAX) {
-    to = Math.min(state.doc.length, from + BLOCK_MATH_RENDER_WINDOW_MAX);
+  return normalizedBlockMathRenderWindowForLength(state.doc.length, window);
+}
+
+/**
+ * Return a stable render window with a guard band around the visible range.
+ * The same object is retained until the viewport crosses that guard, so an
+ * ordinary scroll does not dispatch a state effect or rebuild formula widgets.
+ */
+export function blockMathRenderWindowForViewport(
+  docLength: number,
+  viewport: BlockMathRenderWindow,
+  current?: BlockMathRenderWindow,
+): BlockMathRenderWindow {
+  const visible = normalizedBlockMathRenderWindowForLength(docLength, viewport);
+  if (current) {
+    const safeFrom = current.from === 0
+      ? 0
+      : Math.min(current.to, current.from + BLOCK_MATH_RENDER_OVERSCAN);
+    const safeTo = current.to === docLength
+      ? docLength
+      : Math.max(current.from, current.to - BLOCK_MATH_RENDER_OVERSCAN);
+    if (visible.from >= safeFrom && visible.to <= safeTo) return current;
   }
-  if (to - from < BLOCK_MATH_RENDER_WINDOW_MAX && to === state.doc.length) {
-    from = Math.max(0, to - BLOCK_MATH_RENDER_WINDOW_MAX);
+
+  const visibleSpan = Math.max(0, visible.to - visible.from);
+  const spare = Math.max(0, BLOCK_MATH_RENDER_WINDOW_MAX - visibleSpan);
+  let before = Math.max(BLOCK_MATH_RENDER_OVERSCAN, Math.floor(spare / 2));
+  if (current && visible.to > current.to - BLOCK_MATH_RENDER_OVERSCAN) {
+    // Keep two guard widths behind a forward-moving viewport. This avoids an
+    // immediate reverse rebuild from tiny trackpad oscillations while leaving
+    // most of the window available for continued forward scrolling.
+    before = Math.min(spare, BLOCK_MATH_RENDER_OVERSCAN * 2);
+  } else if (current && visible.from < current.from + BLOCK_MATH_RENDER_OVERSCAN) {
+    // Mirror the same hysteresis when scrolling backwards.
+    before = Math.max(0, spare - BLOCK_MATH_RENDER_OVERSCAN * 2);
   }
-  return { from, to };
+  const from = Math.max(0, visible.from - before);
+  return normalizedBlockMathRenderWindowForLength(docLength, {
+    from,
+    to: Math.min(docLength, from + BLOCK_MATH_RENDER_WINDOW_MAX),
+  });
 }
 
 function initialBlockMathRenderWindow(state: EditorState): BlockMathRenderWindow {
@@ -1122,11 +1169,8 @@ const mathBlockAtomicExtension = EditorView.atomicRanges.of((view) => {
 });
 
 function blockMathRenderWindowForView(view: EditorView): BlockMathRenderWindow {
-  const viewport = view.viewport;
-  return normalizedBlockMathRenderWindow(view.state, {
-    from: Math.max(0, viewport.from - BLOCK_MATH_RENDER_OVERSCAN),
-    to: Math.min(view.state.doc.length, viewport.to + BLOCK_MATH_RENDER_OVERSCAN),
-  });
+  const current = view.state.field(mathBlockField, false)?.renderWindow;
+  return blockMathRenderWindowForViewport(view.state.doc.length, view.viewport, current);
 }
 
 class BlockMathViewportPlugin {

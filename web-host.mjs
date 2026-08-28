@@ -1067,16 +1067,37 @@ const noteWatcher = hostMode !== "server" && process.env.AARONNOTE_WATCH !== "0"
     })
   : { close() {} };
 
-const wikiMaintenanceTimer = hostMode !== "server" ? setInterval(() => {
-  if (wikiIndexBuildPromise) return;
+const WIKI_MAINTENANCE_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
+const WIKI_MAINTENANCE_RETRY_MS = 6 * 60 * 60 * 1000;
+let wikiMaintenanceTimer = null;
+
+function scheduleWikiMaintenance(delayOverride) {
+  if (hostMode === "server" || wikiMaintenanceTimer) return;
   const status = wikiIndexStatus(noteRoot);
   const lastFull = Date.parse(status.lastFullAt || "");
-  if (!Number.isFinite(lastFull) || Date.now() - lastFull >= 7 * 24 * 60 * 60 * 1000) {
-    void wikiIndexPayload({ mode: "auto", refresh: true })
-      .catch((error) => process.stderr.write(`[noema-wiki] weekly self-heal failed: ${error?.message || error}\n`));
-  }
-}, 6 * 60 * 60 * 1000) : null;
-wikiMaintenanceTimer?.unref?.();
+  // Preserve the historical six-hour first check when no full-build receipt
+  // exists. Once it does, sleep directly until the weekly deadline instead of
+  // waking Node four times a day just to compare two timestamps.
+  const dueIn = Number.isFinite(lastFull)
+    ? Math.max(1_000, lastFull + WIKI_MAINTENANCE_INTERVAL_MS - Date.now())
+    : WIKI_MAINTENANCE_RETRY_MS;
+  wikiMaintenanceTimer = setTimeout(async () => {
+    wikiMaintenanceTimer = null;
+    if (wikiIndexBuildPromise) {
+      scheduleWikiMaintenance(WIKI_MAINTENANCE_RETRY_MS);
+      return;
+    }
+    try {
+      await wikiIndexPayload({ mode: "auto", refresh: true });
+      scheduleWikiMaintenance();
+    } catch (error) {
+      process.stderr.write(`[noema-wiki] weekly self-heal failed: ${error?.message || error}\n`);
+      scheduleWikiMaintenance(WIKI_MAINTENANCE_RETRY_MS);
+    }
+  }, Math.max(1_000, Number(delayOverride) || dueIn));
+  wikiMaintenanceTimer.unref?.();
+}
+scheduleWikiMaintenance();
 
 if (!existsSync(webDir)) {
   process.stderr.write(
@@ -1129,8 +1150,9 @@ const appConfigWatcher = hostMode === "server" ? { close() {} } : watch(noemaApp
   }, 80);
 });
 
-// SSE keepalives still protect live renderer connections from idle-timeout
-// proxies, but an unopened editor must not wake the host every 25 seconds.
+// SSE keepalives protect Server-mode connections from idle-timeout proxies.
+// Desktop and Emacs connect over loopback, so a heartbeat there only wakes
+// Node, the networking process and the renderer for no liveness benefit.
 let sseHeartbeatInterval = null;
 
 function stopSseHeartbeatIfIdle() {
@@ -1140,7 +1162,7 @@ function stopSseHeartbeatIfIdle() {
 }
 
 function startSseHeartbeat() {
-  if (sseHeartbeatInterval || !eventClients.size) return;
+  if (hostMode !== "server" || sseHeartbeatInterval || !eventClients.size) return;
   sseHeartbeatInterval = setInterval(() => {
     const dead = [];
     for (const res of eventClients) {
@@ -1242,7 +1264,7 @@ async function beginShutdown({ reason = "shutdown", exitCode = 0, deadlineMs = 3
         clearInterval(sseHeartbeatInterval);
         sseHeartbeatInterval = null;
       }
-      if (wikiMaintenanceTimer) clearInterval(wikiMaintenanceTimer);
+      if (wikiMaintenanceTimer) clearTimeout(wikiMaintenanceTimer);
       if (wikiRefreshTimer) clearTimeout(wikiRefreshTimer);
       if (serverRepositorySyncTimer) clearTimeout(serverRepositorySyncTimer);
       broadcast("command", { command: "server-shutdown", reason, at: Date.now() });

@@ -81,29 +81,32 @@ function scanBlockMathFencesInLines(
   return fences;
 }
 
+/**
+ * Re-pair fences into display-math ranges, reusing the previous range objects
+ * (and their already-sliced `tex`) wherever the document did not disturb them.
+ *
+ * Both `previous` and the ranges produced from `fences` are in document order,
+ * so a single cursor walks them together. The earlier implementation keyed a
+ * Map by a `from:to:contentFrom:contentTo` string built for every range in the
+ * document, which allocated a string and four mapped positions per formula on
+ * every keystroke; a note with ~10k formulas paid all of it to edit one line.
+ */
 function rangesFromFences(
   doc: Text,
   fences: readonly BlockMathFence[],
   previous: readonly BlockMathRange[] = [],
   changes?: ChangeSet,
+  firstChangeFrom = 0,
 ): BlockMathRange[] {
-  const ranges: BlockMathRange[] = [];
-  const reusable = new Map<string, { range: BlockMathRange; contentChanged: boolean }>();
-  if (changes) {
-    for (const range of previous) {
-      const mapped = {
-        from: changes.mapPos(range.from, -1),
-        to: changes.mapPos(range.to, 1),
-        contentFrom: changes.mapPos(range.contentFrom, -1),
-        contentTo: changes.mapPos(range.contentTo, 1),
-      };
-      reusable.set(
-        `${mapped.from}:${mapped.to}:${mapped.contentFrom}:${mapped.contentTo}`,
-        { range, contentChanged: changes.touchesRange(range.contentFrom, range.contentTo) !== false },
-      );
-    }
-  }
+  // Positions ahead of every change map to themselves, so the common case of
+  // editing below a long preamble skips position mapping entirely.
+  const mapFrom = (position: number): number =>
+    position < firstChangeFrom ? position : changes!.mapPos(position, -1);
+  const mapTo = (position: number): number =>
+    position < firstChangeFrom ? position : changes!.mapPos(position, 1);
 
+  const ranges: BlockMathRange[] = [];
+  let cursor = 0;
   let open: BlockMathFence | null = null;
   for (const fence of fences) {
     if (!open) {
@@ -112,26 +115,36 @@ function rangesFromFences(
     }
     if (fence.kind !== "close") continue;
     const contentFrom = open.to < doc.length ? open.to + 1 : open.to;
-    const candidate = {
-      from: open.from,
-      to: fence.to,
-      contentFrom,
-      contentTo: fence.from,
-    };
-    const cached = reusable.get(
-      `${candidate.from}:${candidate.to}:${candidate.contentFrom}:${candidate.contentTo}`,
-    );
-    if (cached && !cached.contentChanged
-      && cached.range.from === candidate.from && cached.range.to === candidate.to
-      && cached.range.contentFrom === candidate.contentFrom
-      && cached.range.contentTo === candidate.contentTo) {
-      ranges.push(cached.range);
+    const from = open.from;
+    const to = fence.to;
+    const contentTo = fence.from;
+
+    let reused: BlockMathRange | null = null;
+    if (changes) {
+      while (cursor < previous.length && mapFrom(previous[cursor]!.from) < from) cursor += 1;
+      const candidate = previous[cursor];
+      if (candidate
+        && mapFrom(candidate.from) === from
+        && mapTo(candidate.to) === to
+        && mapFrom(candidate.contentFrom) === contentFrom
+        && mapTo(candidate.contentTo) === contentTo
+        && (candidate.contentTo < firstChangeFrom
+          || changes.touchesRange(candidate.contentFrom, candidate.contentTo) === false)) {
+        reused = candidate;
+      }
+    }
+
+    if (reused
+      && reused.from === from && reused.to === to
+      && reused.contentFrom === contentFrom && reused.contentTo === contentTo) {
+      ranges.push(reused);
     } else {
       ranges.push({
-        ...candidate,
-        tex: cached && !cached.contentChanged
-          ? cached.range.tex
-          : doc.sliceString(contentFrom, fence.from).trim(),
+        from,
+        to,
+        contentFrom,
+        contentTo,
+        tex: reused ? reused.tex : doc.sliceString(contentFrom, contentTo).trim(),
       });
     }
     open = null;
@@ -191,6 +204,41 @@ function overlapsAnyLineWindow(
   return windows.some((window) => fence.from <= window.to && fence.to >= window.from);
 }
 
+/** Lowest offset in the old document that this change set disturbs. */
+function firstChangedOffset(changes: ChangeSet): number {
+  let first = Number.POSITIVE_INFINITY;
+  changes.iterChangedRanges((fromA) => {
+    if (fromA < first) first = fromA;
+  });
+  return first;
+}
+
+/** Merge two document-ordered fence runs without re-sorting the whole index. */
+function mergeFences(
+  left: readonly BlockMathFence[],
+  right: readonly BlockMathFence[],
+): BlockMathFence[] {
+  if (right.length === 0) return left as BlockMathFence[];
+  if (left.length === 0) return right as BlockMathFence[];
+  const merged: BlockMathFence[] = [];
+  let leftIndex = 0;
+  let rightIndex = 0;
+  while (leftIndex < left.length && rightIndex < right.length) {
+    const a = left[leftIndex]!;
+    const b = right[rightIndex]!;
+    if (a.from < b.from || (a.from === b.from && a.to <= b.to)) {
+      merged.push(a);
+      leftIndex += 1;
+    } else {
+      merged.push(b);
+      rightIndex += 1;
+    }
+  }
+  for (; leftIndex < left.length; leftIndex += 1) merged.push(left[leftIndex]!);
+  for (; rightIndex < right.length; rightIndex += 1) merged.push(right[rightIndex]!);
+  return merged;
+}
+
 function updateBlockMathIndex(
   index: BlockMathIndex,
   oldDoc: Text,
@@ -198,18 +246,27 @@ function updateBlockMathIndex(
   changes: ChangeSet,
 ): BlockMathIndex {
   const { oldWindows, newWindows } = changedLineWindows(oldDoc, newDoc, changes);
-  const fences = index.fences
-    .filter((fence) => !overlapsAnyLineWindow(fence, oldWindows))
-    .map((fence) => ({
-      ...fence,
-      from: changes.mapPos(fence.from, -1),
-      to: changes.mapPos(fence.to, 1),
-    }));
-  fences.push(...scanBlockMathFencesInLines(newDoc, newWindows));
-  fences.sort((a, b) => a.from - b.from || a.to - b.to);
+  const firstChangeFrom = firstChangedOffset(changes);
+
+  // Surviving fences stay in document order, and a rescan of the changed lines
+  // is ordered too, so the two runs merge in linear time. Sorting the whole
+  // index instead made every keystroke in a formula-heavy note pay
+  // O(fences log fences) — ~21k fences here — for a one-line edit.
+  const surviving: BlockMathFence[] = [];
+  for (const fence of index.fences) {
+    if (overlapsAnyLineWindow(fence, oldWindows)) continue;
+    surviving.push(fence.to < firstChangeFrom
+      ? fence
+      : {
+          from: changes.mapPos(fence.from, -1),
+          to: changes.mapPos(fence.to, 1),
+          kind: fence.kind,
+        });
+  }
+  const fences = mergeFences(surviving, scanBlockMathFencesInLines(newDoc, newWindows));
   return {
     fences,
-    ranges: rangesFromFences(newDoc, fences, index.ranges, changes),
+    ranges: rangesFromFences(newDoc, fences, index.ranges, changes, firstChangeFrom),
   };
 }
 

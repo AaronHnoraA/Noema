@@ -7,6 +7,7 @@ import {
   scheduleViewportDecorationRefresh,
   setViewportDecorationRefreshPaused,
 } from "../src/cm6/viewport-refresh.ts";
+import { createMarkdownLanguageExtension } from "../src/cm6/languages/markdown/index.ts";
 
 type FrameHarness = {
   cancelled: number[];
@@ -57,7 +58,7 @@ type FakeView = EditorView & {
 function createView(): FakeView {
   const dom = document.createElement("div");
   document.body.append(dom);
-  const state = EditorState.create({ doc: "# title\n\nbody" });
+  const state = refreshState("# title\n\nbody");
   const view = {
     dom,
     state,
@@ -72,6 +73,24 @@ function createView(): FakeView {
     },
   };
   return view as unknown as FakeView;
+}
+
+function createParserlessView(): FakeView {
+  const view = createView();
+  replaceState(view, EditorState.create({ doc: "# title\n\nbody" }));
+  return view;
+}
+
+function replaceState(view: FakeView, state: EditorState): void {
+  (view as unknown as { state: EditorState }).state = state;
+}
+
+function refreshState(doc: string | { toString(): string }, anchor = 0): EditorState {
+  return EditorState.create({
+    doc: doc.toString(),
+    selection: { anchor },
+    extensions: createMarkdownLanguageExtension(),
+  });
 }
 
 function destroyView(view: FakeView): void {
@@ -132,6 +151,70 @@ describe("viewport decoration activity gate", () => {
       frames.fire(4);
       expect(view.measurements).toBe(2);
       expect(view.dispatched).toHaveLength(1);
+    } finally {
+      destroyView(view);
+      frames.restore();
+    }
+  });
+
+  test("an opening transaction restarts the initial refresh on the latest state", () => {
+    const frames = installFrameHarness();
+    const view = createView();
+    try {
+      scheduleViewportDecorationRefresh(view);
+      replaceState(view, refreshState(view.state.doc, 2));
+
+      frames.fire(1);
+      expect(view.measurements).toBe(0);
+      expect(view.dispatched).toEqual([]);
+      expect(frames.pendingHandles()).toEqual([2]);
+
+      frames.fire(2);
+      expect(view.measurements).toBe(1);
+      expect(frames.pendingHandles()).toEqual([3]);
+      frames.fire(3);
+      expect(view.dispatched).toHaveLength(1);
+      expect(frames.pendingHandles()).toEqual([]);
+    } finally {
+      destroyView(view);
+      frames.restore();
+    }
+  });
+
+  test("a transaction during measurement also refreshes the latest state", () => {
+    const frames = installFrameHarness();
+    const view = createView();
+    try {
+      scheduleViewportDecorationRefresh(view);
+      frames.fire(1);
+      expect(view.measurements).toBe(1);
+
+      replaceState(view, refreshState(view.state.doc, 4));
+      frames.fire(2);
+      expect(view.dispatched).toEqual([]);
+      expect(frames.pendingHandles()).toEqual([3]);
+
+      frames.fire(3);
+      frames.fire(4);
+      expect(view.measurements).toBe(2);
+      expect(view.dispatched).toHaveLength(1);
+    } finally {
+      destroyView(view);
+      frames.restore();
+    }
+  });
+
+  test("a missing parser never creates an animation-frame retry loop", () => {
+    const frames = installFrameHarness();
+    const view = createParserlessView();
+    try {
+      scheduleViewportDecorationRefresh(view);
+      frames.fire(1);
+      frames.fire(2);
+
+      expect(view.measurements).toBe(1);
+      expect(view.dispatched).toHaveLength(1);
+      expect(frames.pendingHandles()).toEqual([]);
     } finally {
       destroyView(view);
       frames.restore();

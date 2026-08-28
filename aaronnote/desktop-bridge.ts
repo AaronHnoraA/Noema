@@ -29,6 +29,21 @@ if (desktopSmokeParams.get("desktopSmoke") === "1") {
     }
     const editorHost = document.querySelector<HTMLElement>("[data-editor]");
     const focusedShell = document.querySelector<HTMLElement>(".aaronnote-focused-shell");
+    // Run the editor probe before this harness opens TOC/Knowledge/Agenda.
+    // Those smoke-only surfaces change the available viewport and can turn a
+    // scroll measurement into a panel-layout benchmark.
+    let editorPerformance: Record<string, number | boolean> | null = null;
+    const runEditorPerf = (window as Window & {
+      __noemaRunEditorPerfProbe?: () => Promise<Record<string, number | boolean>>;
+    }).__noemaRunEditorPerfProbe;
+    if (runEditorPerf) {
+      try {
+        editorPerformance = await runEditorPerf();
+      } catch {
+        // A null result makes the packaged performance regression visible in
+        // the smoke report without hiding the rest of the adapter diagnostics.
+      }
+    }
     const knowledgeDock = document.querySelector<HTMLElement>(".noema-knowledge-dock");
     let tocPopover: HTMLElement | null = null;
     let tocVisible = false;
@@ -126,18 +141,6 @@ if (desktopSmokeParams.get("desktopSmoke") === "1") {
     } catch {
       // The report keeps a null value so a packaged transport regression is
       // visible without preventing the remaining host smoke assertions.
-    }
-    let editorPerformance: Record<string, number | boolean> | null = null;
-    const runEditorPerf = (window as Window & {
-      __noemaRunEditorPerfProbe?: () => Promise<Record<string, number | boolean>>;
-    }).__noemaRunEditorPerfProbe;
-    if (runEditorPerf) {
-      try {
-        editorPerformance = await runEditorPerf();
-      } catch {
-        // A null result makes the packaged performance regression visible in
-        // the smoke report without hiding the rest of the adapter diagnostics.
-      }
     }
     const report = {
       hostMode: document.body.dataset.hostMode || "",

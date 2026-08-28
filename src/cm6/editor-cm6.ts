@@ -1080,11 +1080,14 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
 
     toggleSource(): void {
       finishInlineMathEditing(view);
-      const { head } = view.state.selection.main;
-      const beforeTop = coordsTopAt(head);
       const enteringPreview = !isVisualMode(view);
-      view.dispatch(setVisualMode(enteringPreview));
-      preserveCursorScreenTop(head, beforeTop, enteringPreview);
+      // One viewport owner is enough. The previous cursor helper competed with
+      // EditorViewportStabilizer and performed additional writes two frames,
+      // 240 ms and 800 ms later. At the document top that correction was
+      // asymmetric (source mode could not scroll above zero, preview mode then
+      // pushed the host down), making a Cmd+/ round trip look like a different
+      // first render and allowing a late timer to fight a real user scroll.
+      viewportStabilizer!.preserve(() => view.dispatch(setVisualMode(enteringPreview)));
       view.focus();
     },
 
@@ -1138,37 +1141,6 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
 
   function flashCaret(): void {
     // No-op: caret-flash animation removed for performance.
-  }
-
-  function coordsTopAt(pos: number): number | null {
-    try {
-      return view.coordsAtPos(pos)?.top ?? null;
-    } catch {
-      return null;
-    }
-  }
-
-  function preserveCursorScreenTop(pos: number, beforeTop: number | null, repeatAfterWidgetLoad: boolean): void {
-    const adjust = (): void => {
-      if (!view.dom.isConnected) return;
-      const afterTop = coordsTopAt(pos);
-      if (beforeTop != null && afterTop != null) {
-        const delta = afterTop - beforeTop;
-        if (Math.abs(delta) >= 1) scrollEditorSurface(delta);
-      }
-      view.dispatch({ effects: EditorView.scrollIntoView(pos, { y: "nearest" }) });
-    };
-    window.requestAnimationFrame(() => window.requestAnimationFrame(adjust));
-    if (repeatAfterWidgetLoad) {
-      window.setTimeout(adjust, 240);
-      window.setTimeout(adjust, 800);
-    }
-  }
-
-  function scrollEditorSurface(delta: number): void {
-    const before = host.scrollTop;
-    host.scrollTop += delta;
-    if (Math.abs(host.scrollTop - before) < 1) window.scrollBy(0, delta);
   }
 }
 

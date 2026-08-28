@@ -15,6 +15,7 @@ import {
 import { createMarkdownLanguageExtension } from "../src/cm6/languages/markdown/index.ts";
 import { setVisualMode } from "../src/cm6/extensions/visual/visual-mode.ts";
 import {
+  blockMathRenderWindowForViewport,
   blockMathAtomicRangeVisitCount,
   blockMathDecoRangeVisitCount,
 } from "../src/cm6/extensions/visual/widgets/math.ts";
@@ -27,6 +28,45 @@ function bigDoc(paragraphs: number): string {
 }
 
 describe("drag-select cost", () => {
+  test("formula render window does not move on every scroll frame", () => {
+    const docLength = 1024 * 1024;
+    const initial = blockMathRenderWindowForViewport(docLength, { from: 0, to: 8 * 1024 });
+    expect(initial).toEqual({ from: 0, to: 192 * 1024 });
+
+    const ordinaryScroll = blockMathRenderWindowForViewport(
+      docLength,
+      { from: 80 * 1024, to: 88 * 1024 },
+      initial,
+    );
+    expect(ordinaryScroll).toBe(initial);
+
+    const crossedGuard = blockMathRenderWindowForViewport(
+      docLength,
+      { from: 164 * 1024, to: 172 * 1024 },
+      initial,
+    );
+    expect(crossedGuard).not.toBe(initial);
+    expect(crossedGuard.to - crossedGuard.from).toBe(192 * 1024);
+    expect(crossedGuard.from).toBeLessThan(164 * 1024);
+    expect(crossedGuard.to).toBeGreaterThan(172 * 1024);
+
+    let current = initial;
+    let rebuilds = 0;
+    for (let from = 0; from <= 512 * 1024; from += 1024) {
+      const next = blockMathRenderWindowForViewport(
+        docLength,
+        { from, to: from + 8 * 1024 },
+        current,
+      );
+      if (next !== current) rebuilds += 1;
+      current = next;
+    }
+    // 513 viewport updates used to dispatch 513 formula-window transactions.
+    // The exact count is deliberately bounded well below one rebuild per
+    // frame while still keeping the rendered range close to the viewport.
+    expect(rebuilds).toBeLessThanOrEqual(6);
+  });
+
   test("extending a selection across a large document stays bounded", () => {
     const host = document.createElement("div");
     document.body.appendChild(host);

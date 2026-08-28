@@ -532,7 +532,6 @@ func AgentChat(ctx context.Context, client *openai.Client, protocol, model, imag
 			sendCriticalEvent(ctx, ch, AgentEvent{Type: "error", Error: capabilityErr.Error()})
 			return
 		}
-		tools := capabilities.definitions
 		var messages []openai.ChatCompletionMessage
 		var checkpointMsgs []AgentMessage
 		var sessionEntries []SessionEntry
@@ -882,7 +881,6 @@ func AgentChat(ctx context.Context, client *openai.Client, protocol, model, imag
 				roundCapabilities = &capabilitySet{registrations: map[string]*capabilityRegistration{}}
 			}
 			capabilities = roundCapabilities
-			tools = requestTools
 			if len(messages) > 0 && messages[0].Role == openai.ChatMessageRoleSystem {
 				messages[0].Content = buildSystemPrompt(language, roundCapabilities)
 			}
@@ -1517,12 +1515,6 @@ func AgentChat(ctx context.Context, client *openai.Client, protocol, model, imag
 			return
 		}
 
-		turn.TokenBreakdown = computeBreakdownIfNeeded(model, messages, tools, lastPromptTokens)
-		if !saveTurn("finished") {
-			return
-		}
-		sendEvent(ch, AgentEvent{Type: "usage", PromptTokens: totalPrompt, CompletionTokens: totalCompletion, LastPromptTokens: lastPromptTokens, TokenBreakdown: turn.TokenBreakdown, CachedTokens: lastCachedTokens, ContextLimit: contextLimit})
-		sendCriticalEvent(ctx, ch, AgentEvent{Type: "done", TurnID: turn.TurnID})
 	}()
 
 	return ch

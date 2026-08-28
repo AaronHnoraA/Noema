@@ -1,9 +1,12 @@
-import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
+import { describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
 
 import {
   createImageAnimationController,
+  createImageAnimationFreezeFallback,
   imageAnimationActivityParticipant,
+  IMAGE_ANIMATION_FREEZE_FRAME_CLASS,
   IMAGE_ANIMATION_PAUSED_CLASS,
+  imageSourceMayAnimate,
 } from "../src/image-animation.ts";
 import { createEditor } from "../src/editor-api.ts";
 
@@ -66,5 +69,60 @@ describe("SiYuan-derived image animation controller", () => {
     expect(target.classList.contains(IMAGE_ANIMATION_PAUSED_CLASS)).toBe(false);
     participant.setActivity?.("hidden");
     expect(target.classList.contains(IMAGE_ANIMATION_PAUSED_CLASS)).toBe(true);
+  });
+
+  test("recognizes likely animated image URLs without penalizing ordinary assets", () => {
+    expect(imageSourceMayAnimate("figure.gif")).toBe(true);
+    expect(imageSourceMayAnimate("/asset?path=demo%2Eapng&v=2")).toBe(true);
+    expect(imageSourceMayAnimate("data:image/webp;base64,AAAA")).toBe(true);
+    expect(imageSourceMayAnimate("figure.png")).toBe(false);
+    expect(imageSourceMayAnimate("figure.jpeg")).toBe(false);
+  });
+
+  test("unsupported engines freeze one painted frame and restore the original image", () => {
+    const target = document.createElement("div");
+    const image = document.createElement("img");
+    image.className = "cm-image-render";
+    image.src = "animated.gif";
+    image.style.display = "block";
+    Object.defineProperties(image, {
+      complete: { configurable: true, value: true },
+      naturalWidth: { configurable: true, value: 120 },
+      naturalHeight: { configurable: true, value: 60 },
+    });
+    image.getBoundingClientRect = () => new DOMRect(0, 0, 120, 60);
+    target.append(image);
+    document.body.append(target);
+
+    const drawImage = vi.fn();
+    const setTransform = vi.fn();
+    const context = { drawImage, setTransform } as unknown as CanvasRenderingContext2D;
+    const fallback = createImageAnimationFreezeFallback({
+      createCanvas: () => {
+        const canvas = document.createElement("canvas");
+        Object.defineProperty(canvas, "getContext", { configurable: true, value: () => context });
+        return canvas;
+      },
+      devicePixelRatio: () => 2,
+    });
+
+    fallback.pause(target);
+    const frame = target.querySelector<HTMLCanvasElement>(`.${IMAGE_ANIMATION_FREEZE_FRAME_CLASS}`);
+    expect(frame).toBeTruthy();
+    expect(frame?.width).toBe(240);
+    expect(frame?.height).toBe(120);
+    expect(image.style.getPropertyValue("display")).toBe("none");
+    expect(image.style.getPropertyPriority("display")).toBe("important");
+    expect(drawImage).toHaveBeenCalledTimes(1);
+
+    // Repeated scroll events reuse the same frozen frame.
+    fallback.pause(target);
+    expect(drawImage).toHaveBeenCalledTimes(1);
+
+    fallback.resume(target);
+    expect(target.querySelector(`.${IMAGE_ANIMATION_FREEZE_FRAME_CLASS}`)).toBeNull();
+    expect(image.style.getPropertyValue("display")).toBe("block");
+    expect(image.style.getPropertyPriority("display")).toBe("");
+    target.remove();
   });
 });
