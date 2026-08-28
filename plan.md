@@ -1349,6 +1349,22 @@ CM6 侧新增 `src/cm6/copied-text.ts`（复刻 CodeMirror 自己的 copiedRange
 - Emacs 侧 `remote-gateway-request-sync` 的 8 秒阻塞 + roam-cli.mjs 兜底进程仍在。用户本轮把卡死
   归因于鼠标拖选，所以没有动这条路；如果之后 minibuffer 选择也卡，这里是下一个目标。
 
+### Emacs 侧收尾：passthrough 的 arity 修正与 ERT 覆盖（2026-08-28）
+
+`my/noema--pass-xwidget-command-event` 一直以 `(xwidget-webkit-pass-command-event event)`
+调用，而该命令是零参数的（它自己读 `last-command-event`），文件顶部的 `declare-function` 也写成了
+一个参数。于是"非 Noema xwidget buffer 上按 M-z/M-c/M-v"这条回退路径每次都抛
+`wrong-number-of-arguments`，而不是把事件传下去。改成零参数调用，并对"以命令名调用、没有事件"
+的情况直接返回；`my/noema-xwidget-cut` 也改为 `(interactive (list last-input-event))`，
+在还没有分配键位之前可以用 `M-x` 调用。
+
+Emacs 配置仓库（`~/.config/emacs`，独立仓库，用户有未提交的改动，**本轮没有提交**）里：
+两处 `xwidget-webkit-pass-command-event` 的 stub 从固定一个参数放宽成 `&optional`，
+断言改为验证"确实透传了"而不是某个 arity；新增
+`my/noema-xwidget-clipboard-keys-route-to-the-page` 与
+`my/noema-xwidget-clipboard-keys-win-the-shared-keymaps` 两个用例。
+`make jupyter-test` 四组 91+24+18+12 共 145 项全过。
+
 ### idle/功耗 第一刀：内核不再定时联网，选区统计不再随选区增长（2026-08-28，当前工作树）
 
 **内核的无人值守联网已移除。** `kernel/job/cron.go` 里的 `RefreshRhyResultJob` 会在每次内核启动时

@@ -32,7 +32,7 @@
 (declare-function my/xwidget-redo "init-browser" ())
 (declare-function xwidget-buffer "xwidget" (xwidget))
 (declare-function xwidget-webkit-edit-mode "xwidget" (&optional arg))
-(declare-function xwidget-webkit-pass-command-event "xwidget" (event))
+(declare-function xwidget-webkit-pass-command-event "xwidget" ())
 (declare-function remote-gateway-register-method "remote-gateway" (method handler))
 
 (defun my/noema--identity-random-hex ()
@@ -269,11 +269,18 @@ CLIENT, when non-nil, identifies the Noema xwidget that sent the key."
                            (my/noema-jupyter-url-p url)))))))))
 
 (defun my/noema--pass-xwidget-command-event (event)
-  "Pass EVENT through to xwidget when the current buffer is not Noema."
-  (if (fboundp 'xwidget-webkit-pass-command-event)
-      (xwidget-webkit-pass-command-event event)
-    (setq unread-command-events
-          (nconc (list event) unread-command-events))))
+  "Pass EVENT through to xwidget when the current buffer is not Noema.
+A nil EVENT means the command was run by name rather than from a key, and
+there is nothing to pass on."
+  (when event
+    ;; The command takes no argument -- it reads `last-command-event' itself,
+    ;; which is already EVENT here because every caller is an `interactive "e"'
+    ;; command.  Passing one signalled wrong-number-of-arguments, so this
+    ;; fallback used to error instead of passing anything through.
+    (if (fboundp 'xwidget-webkit-pass-command-event)
+        (xwidget-webkit-pass-command-event)
+      (setq unread-command-events
+            (nconc (list event) unread-command-events)))))
 
 (defun my/noema--jupyter-xwidget-command (event command)
   "Route xwidget EVENT/COMMAND to Jupyter, or pass EVENT through."
@@ -333,9 +340,12 @@ CLIENT, when non-nil, identifies the Noema xwidget that sent the key."
   (interactive "e")
   (my/noema--xwidget-editor-command event "copy"))
 
-(defun my/noema-xwidget-cut (event)
-  "Route a cut request from a Noema xwidget to the page's cut."
-  (interactive "e")
+(defun my/noema-xwidget-cut (&optional event)
+  "Route a cut request from a Noema xwidget to the page's cut.
+Unlike the other routed commands this one has no key of its own: Cmd-x stays
+Emacs' `execute-extended-command'.  It therefore takes EVENT optionally, so it
+can be run by name until a key is chosen for it."
+  (interactive (list last-input-event))
   (my/noema--xwidget-editor-command event "cut"))
 
 (defun my/noema-xwidget-paste (event)
