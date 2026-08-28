@@ -25,6 +25,7 @@ import { syntaxTree } from "@codemirror/language";
 import type { Range } from "@codemirror/state";
 import { getBlockMathRanges, rangeInsideAny } from "../../../math-ranges.ts";
 import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
+import { isCoalescedVisualTyping } from "../typing-burst.ts";
 
 // ---------------------------------------------------------------------------
 // Widget
@@ -140,6 +141,10 @@ class TaskListPlugin {
 
   update(update: ViewUpdate): void {
     if (update.view.compositionStarted && update.selectionSet && !update.docChanged && !update.viewportChanged) return;
+    if (isCoalescedVisualTyping(update)) {
+      this.decorations = this.decorations.map(update.changes);
+      return;
+    }
     if (update.docChanged || update.viewportChanged || hasViewportDecorationRefresh(update)) {
       this.activeLineKey = activeTaskMarkerLineKey(update.view);
       this.decorations = buildTaskDecorations(update.view);

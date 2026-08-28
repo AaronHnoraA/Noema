@@ -30,9 +30,11 @@ import { taskListExtension } from "./widgets/task-list.ts";
 import { pointerSelectionExtension } from "./selection.ts";
 import { visualTypographyExtension } from "./typography.ts";
 import { blockMoveGutterExtension } from "../../block-move.ts";
+import { visualTypingBurstExtension } from "./typing-burst.ts";
 
 export function createVisualMarkdownExtensions(): Extension {
   return [
+    visualTypingBurstExtension,
     blockMoveGutterExtension,
     visualTypographyExtension,
     pointerSelectionExtension,

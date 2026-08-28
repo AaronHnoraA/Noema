@@ -649,6 +649,7 @@ type NativeApi = {
   emacs?: {
     open?: (body: { file: string; tag?: string; line?: number; col?: number }) => Promise<unknown>;
     currentFile?: (body: string | { file: string; client?: string }) => Promise<unknown>;
+    inputFocus?: (body: { client?: string; file?: string }) => Promise<unknown>;
     uiState?: (body: Record<string, unknown>) => Promise<unknown>;
     key?: (body: string | { key: string; client?: string }) => Promise<unknown>;
     systemOpen?: (target: string, base?: string) => Promise<unknown>;
@@ -1479,6 +1480,18 @@ export const api = {
       const call = window.aaronnoteApi?.emacs?.currentFile;
       if (!call) return;
       const body = client ? { file, client } : file;
+      await call(body).catch(() => {});
+    },
+    /**
+     * Report that this renderer holds keyboard focus for `client`.
+     *
+     * Sent only when the page can prove the host's background belief is stale
+     * (see `host-input-focus.ts`), so the host can re-select the owning pane
+     * instead of re-pausing a page the user is typing into.
+     */
+    async inputFocus(body: { client?: string; file?: string }): Promise<void> {
+      const call = window.aaronnoteApi?.emacs?.inputFocus;
+      if (!call) return;
       await call(body).catch(() => {});
     },
     async uiState(body: Record<string, unknown>): Promise<void> {

@@ -16,6 +16,7 @@ import { scanInlineMathRanges } from "../../../../inline-math.ts";
 import { blockMathRangesOverlapping, mergeOverlappingRanges, rangeInsideAny } from "../../../math-ranges.ts";
 import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
 import { isPointerSelecting, updateHasPointerSelectionEffect } from "../selection.ts";
+import { isCoalescedVisualTyping } from "../typing-burst.ts";
 
 const BLOCK_ANCHOR_RE = new RegExp(BLOCK_ANCHOR_SOURCE, "g");
 const MAX_VIEWPORT_BADGES = 2_000;
@@ -118,6 +119,10 @@ class BlockAnchorPlugin {
 
   update(update: ViewUpdate): void {
     if (update.view.compositionStarted && update.selectionSet && !update.docChanged && !update.viewportChanged) return;
+    if (isCoalescedVisualTyping(update)) {
+      this.decorations = this.decorations.map(update.changes);
+      return;
+    }
     if (update.selectionSet && !update.docChanged && !update.viewportChanged
         && isPointerSelecting(update.state)) return;
     const pointerSelectionFinished = updateHasPointerSelectionEffect(update)

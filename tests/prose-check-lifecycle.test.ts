@@ -392,7 +392,7 @@ describe("ProseCheckLifecycle", () => {
     expect(terminals.at(-1)).toMatchObject({ terminal: "cancelled", reason: "note-changed" });
   });
 
-  test("quiescence defers automatic checks without losing the latest document", async () => {
+  test("the settled automatic check runs during idle, not on the next keystroke", async () => {
     vi.useFakeTimers();
     const calls: string[] = [];
     const lifecycle = new ProseCheckLifecycle<string, string>({
@@ -402,18 +402,43 @@ describe("ProseCheckLifecycle", () => {
     });
 
     lifecycle.scheduleAuto("latest", "sig-latest");
+    // The shared renderer goes quiescent a second after the last input, well
+    // before most automatic debounce profiles expire. Suspending here used to
+    // hold the settled check back until the next keystroke released it, so
+    // every typing burst opened a request its successor immediately cancelled.
     lifecycle.setQuiescent(true);
     vi.advanceTimersByTime(1000);
     await flushAsync();
-    expect(calls).toEqual([]);
+    expect(calls).toEqual(["latest"]);
 
+    // Resuming must not re-run a revision that already completed.
     lifecycle.setQuiescent(false);
     vi.advanceTimersByTime(0);
     await flushAsync();
     expect(calls).toEqual(["latest"]);
   });
 
-  test("quiescence cancels an active automatic request and resumes it once", async () => {
+  test("the automatic debounce, not quiescence, decides when a check starts", async () => {
+    vi.useFakeTimers();
+    const calls: string[] = [];
+    const lifecycle = new ProseCheckLifecycle<string, string>({
+      autoDebounceMs: 1_800,
+      run: async (input) => { calls.push(input); return input; },
+      apply: () => true,
+    });
+
+    lifecycle.scheduleAuto("first", "sig-1");
+    lifecycle.setQuiescent(true);
+    vi.advanceTimersByTime(1_700);
+    await flushAsync();
+    expect(calls).toEqual([]);
+
+    vi.advanceTimersByTime(100);
+    await flushAsync();
+    expect(calls).toEqual(["first"]);
+  });
+
+  test("quiescence never cancels an automatic request already in flight", async () => {
     vi.useFakeTimers();
     const gates: Array<ReturnType<typeof deferred<string>>> = [];
     const contexts: ProseCheckContext[] = [];
@@ -441,22 +466,81 @@ describe("ProseCheckLifecycle", () => {
     await flushAsync();
     expect(starts).toEqual(["latest"]);
 
+    // Aborting here threw away server work that was already under way and then
+    // paid for it again on resume. A hidden surface still cancels everything
+    // through setPaused, which is the gate that actually saves power.
     lifecycle.setQuiescent(true);
-    expect(contexts[0]!.signal.aborted).toBe(true);
+    expect(contexts[0]!.signal.aborted).toBe(false);
     await flushAsync();
-    expect(lifecycle.activeKind).toBeNull();
-    expect(cancelled).toEqual(["quiescent"]);
+    expect(lifecycle.activeKind).toBe("auto");
+    expect(cancelled).toEqual([]);
 
     lifecycle.setQuiescent(false);
     vi.advanceTimersByTime(0);
     await flushAsync();
-    expect(starts).toEqual(["latest", "latest"]);
-    expect(lifecycle.activeKind).toBe("auto");
+    expect(starts).toEqual(["latest"]);
 
-    gates[1]!.resolve("latest-result");
+    gates[0]!.resolve("latest-result");
     await flushAsync();
     expect(applied).toEqual(["latest-result"]);
     expect(lifecycle.appliedAutoSignature).toBe("sig-latest");
+  });
+
+  /**
+   * Request-volume guardrail for the Emacs xwidget host.
+   *
+   * Every request the renderer opens is real LanguageTool work on the Node
+   * side, and in an xwidget every renderer frame is paid twice because Emacs
+   * redraws the widget itself. This replays a realistic burst against the same
+   * two inputs the renderer feeds the lifecycle — a document edit per key, and
+   * the shared activity gate reaching quiescence one second after the last one
+   * — and pins how much server work a burst is allowed to cost.
+   */
+  test("a typing burst costs one settled request and no cancelled work", async () => {
+    vi.useFakeTimers();
+    const started: string[] = [];
+    const cancelled: string[] = [];
+    let clock = 0;
+    const lifecycle = new ProseCheckLifecycle<string, string>({
+      // `balanced`, the shipped default.
+      autoDebounceMs: 1_800,
+      now: () => clock,
+      run: async (input) => { started.push(input); return input; },
+      apply: () => true,
+      onCancel: ({ reason }) => { cancelled.push(reason); },
+    });
+
+    const advance = (ms: number): void => { clock += ms; vi.advanceTimersByTime(ms); };
+    // The shared gate quiesces 1s after the last activity and wakes on input.
+    let quiescentTimer: ReturnType<typeof setTimeout> | null = null;
+    const activity = (): void => {
+      lifecycle.setQuiescent(false);
+      if (quiescentTimer) clearTimeout(quiescentTimer);
+      quiescentTimer = setTimeout(() => lifecycle.setQuiescent(true), 1_000);
+    };
+
+    for (let key = 0; key < 40; key += 1) {
+      activity();
+      // main.ts does exactly this on every document change.
+      lifecycle.invalidate("document-edited");
+      lifecycle.scheduleAuto(`doc-${key}`, `sig-${key}`);
+      advance(120);
+      await flushAsync();
+    }
+
+    // Mid-burst: nothing may have started, so nothing can have been cancelled.
+    expect(started).toEqual([]);
+    expect(cancelled).toEqual([]);
+
+    advance(1_800);
+    await flushAsync();
+    expect(started).toEqual(["doc-39"]);
+    expect(cancelled).toEqual([]);
+
+    // Staying idle must not re-run the same revision.
+    advance(10_000);
+    await flushAsync();
+    expect(started).toEqual(["doc-39"]);
   });
 
   test("dispose cancels work and every accepted task reaches finally exactly once", async () => {

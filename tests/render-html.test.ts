@@ -249,10 +249,23 @@ y^2
   });
 
   test("keeps adversarial unmatched link labels linear in practice", () => {
-    const source = "[".repeat(100_000) + " plain";
-    const started = performance.now();
-    renderMarkdownHTML(source);
-    expect(performance.now() - started).toBeLessThan(1_000);
+    // Linearity is a claim about growth, so measure growth. A wall-clock
+    // ceiling on one size says as much about how busy the test runner is as
+    // about this renderer, and failed under a loaded full-suite run while
+    // passing in isolation. Doubling the input must roughly double the time;
+    // the quadratic scan this guards would quadruple it.
+    const render = (brackets: number): number => {
+      const source = "[".repeat(brackets) + " plain";
+      const started = performance.now();
+      renderMarkdownHTML(source);
+      return performance.now() - started;
+    };
+    render(1_000); // warm the parser so the first sample pays no start-up cost
+    const small = Math.max(render(50_000), 0.5);
+    const large = render(100_000);
+    // eslint-disable-next-line no-console
+    console.log(`[link-linearity] 50k=${small.toFixed(2)}ms 100k=${large.toFixed(2)}ms ratio=${(large / small).toFixed(2)}`);
+    expect(large / small).toBeLessThan(3);
   });
 
   test("marks jupyter links with toc selectors, including spaces", () => {

@@ -22,6 +22,7 @@ const SERVER_COMPATIBILITY_CHANNELS = new Map([
   ["aaronnote:api:session:client-close", { ok: true, closed: false }],
   ["aaronnote:api:emacs:current-file", { ok: true }],
   ["aaronnote:api:emacs:ui-state", { ok: true }],
+  ["aaronnote:api:emacs:input-focus", { ok: true }],
 ]);
 
 export function serverApiChannelAllowed(channel) {

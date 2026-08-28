@@ -1,6 +1,7 @@
 export interface EmacsApiDependencies {
   apiOpenInEmacs: (file: unknown, line?: unknown, col?: unknown, tag?: unknown) => unknown;
   apiCurrentFile: (file: unknown) => unknown;
+  apiEmacsInputFocus: (body: unknown) => unknown;
   apiEmacsUiState: (body: unknown) => unknown;
   apiEmacsKey: (key: unknown) => unknown;
   apiSystemOpen: (target: unknown) => unknown;

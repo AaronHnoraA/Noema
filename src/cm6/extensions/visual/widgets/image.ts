@@ -43,6 +43,7 @@ import {
   visualAttachmentTitle,
 } from "../../../../visual-attachments.ts";
 import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
+import { isCoalescedVisualTyping } from "../typing-burst.ts";
 
 declare global {
   interface Window {
@@ -519,6 +520,10 @@ class ImagePlugin {
 
   update(update: ViewUpdate): void {
     if (update.view.compositionStarted && update.selectionSet && !update.docChanged && !update.viewportChanged) return;
+    if (isCoalescedVisualTyping(update)) {
+      this.decorations = this.decorations.map(update.changes);
+      return;
+    }
     if (update.docChanged || update.viewportChanged || hasViewportDecorationRefresh(update)) {
       this.activeSourceKey = activeImageSourceKey(update.view);
       this.decorations = buildImageDecorations(update.view);

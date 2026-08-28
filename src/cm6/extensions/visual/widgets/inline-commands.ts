@@ -31,6 +31,7 @@ import {
   relativeDateLabel,
 } from "../../../../date-syntax.ts";
 import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
+import { isCoalescedVisualTyping } from "../typing-burst.ts";
 import { latexMark } from "../../../../../shared/latex-marks.mjs";
 
 declare global {
@@ -1200,6 +1201,14 @@ class TodoPlugin {
         });
       });
       window.AaronnoteBibliography.mapChanges(changes);
+    }
+    if (isCoalescedVisualTyping(update)) {
+      this.excludedRanges = this.excludedRanges.map((range) => ({
+        from: update.changes.mapPos(range.from, -1),
+        to: update.changes.mapPos(range.to, 1),
+      }));
+      this.decorations = this.decorations.map(update.changes);
+      return;
     }
     if (update.docChanged || update.viewportChanged || hasViewportDecorationRefresh(update)) {
       this.excludedRanges = excludedCommandRanges(update.view);

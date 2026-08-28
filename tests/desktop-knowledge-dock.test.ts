@@ -1,4 +1,4 @@
-import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
+import { describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
 
 import {
   createDesktopKnowledgeDock,
@@ -48,7 +48,7 @@ function dockFixture(current: NoteSummary, notes: NoteSummary[]) {
   panes.search.append(searchInput);
   panes.tags.append(tagStatus, tagList);
   document.body.append(root, visibilityButton);
-  const calls = { visible: 0, hidden: 0, collapsed: 0 };
+  const calls = { visible: 0, hidden: 0, collapsed: 0, tags: 0 };
   const opened: Array<{ note: NoteSummary; newWindow: boolean }> = [];
   const openedTags: string[] = [];
   const states: Array<{ view: string; expanded: boolean }> = [];
@@ -69,10 +69,13 @@ function dockFixture(current: NoteSummary, notes: NoteSummary[]) {
     resolveNoteRef: (ref) => notes.find((item) => [item.key, item.id, item.file, item.path, item.title].includes(ref)),
     relationshipSource: () => "kernel-refs",
     openNote: (target, options) => opened.push({ note: target, newWindow: Boolean(options?.newWindow) }),
-    getTags: () => [
-      { name: "proof", count: 2, current: true },
-      { name: "research", count: 5 },
-    ],
+    getTags: () => {
+      calls.tags += 1;
+      return [
+        { name: "proof", count: 2, current: true },
+        { name: "research", count: 5 },
+      ];
+    },
     getVirtualMentions: async () => ({
       evaluationSource: "noema-aho-corasick",
       scannedDocuments: 2,
@@ -198,6 +201,40 @@ describe("desktop knowledge dock", () => {
       fixture.root.remove();
       fixture.visibilityButton.remove();
       document.body.className = "";
+    }
+  });
+
+  test("does no refresh work while collapsed and coalesces an open dock typing burst", () => {
+    vi.useFakeTimers();
+    const current = note({ id: "current", title: "Current", tags: ["proof"] });
+    const fixture = dockFixture(current, [current]);
+    try {
+      fixture.controller.refresh();
+      fixture.controller.refresh();
+      vi.advanceTimersByTime(1_000);
+      expect(fixture.calls.tags).toBe(0);
+
+      fixture.controller.show("tags");
+      expect(fixture.calls.tags).toBe(1);
+      fixture.controller.refresh();
+      fixture.controller.refresh();
+      fixture.controller.refresh();
+      expect(fixture.calls.tags).toBe(1);
+      vi.advanceTimersByTime(179);
+      expect(fixture.calls.tags).toBe(1);
+      vi.advanceTimersByTime(1);
+      expect(fixture.calls.tags).toBe(2);
+
+      fixture.controller.refresh();
+      fixture.controller.collapse();
+      vi.advanceTimersByTime(1_000);
+      expect(fixture.calls.tags).toBe(2);
+    } finally {
+      fixture.controller.destroy();
+      fixture.root.remove();
+      fixture.visibilityButton.remove();
+      document.body.className = "";
+      vi.useRealTimers();
     }
   });
 

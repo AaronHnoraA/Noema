@@ -14,6 +14,7 @@ import { parseNoteCodeLine } from "../../../../../shared/note-code.mjs";
 import { sourceEditorName } from "../../../../../aaronnote/host-mode.ts";
 import { desktopPlatformLabels } from "../../../../../shared/desktop-shell.mjs";
 import { isPointerSelecting, updateHasPointerSelectionEffect } from "../selection.ts";
+import { isCoalescedVisualTyping } from "../typing-burst.ts";
 
 type NoteCodeLine = {
   commandFrom: number;
@@ -268,6 +269,10 @@ class NoteCodePlugin {
   }
 
   update(update: ViewUpdate): void {
+    if (isCoalescedVisualTyping(update)) {
+      this.decorations = this.decorations.map(update.changes);
+      return;
+    }
     if (update.selectionSet && !update.docChanged && !update.viewportChanged
         && isPointerSelecting(update.state)) return;
     const pointerSelectionFinished = updateHasPointerSelectionEffect(update)

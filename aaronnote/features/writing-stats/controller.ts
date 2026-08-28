@@ -56,8 +56,18 @@ export function createWritingStatsController(
   let pendingDelay = UPDATE_DELAY_MS;
   let timerPending = false;
 
+  /**
+   * Idle is when this work belongs, not when it must stop.
+   *
+   * Counting runs in `requestIdleCallback` chunks that already yield to
+   * `isInputPending()`, so quiescence buys no responsiveness by suspending it.
+   * It did, however, throw away a chunked full-document scan roughly a second
+   * after the last keystroke: on a large note that scan needs longer than that,
+   * so a type-pause-type rhythm restarted it from zero every cycle and it could
+   * never finish. Only a surface that is actually hidden stops the work.
+   */
   function canRunBackgroundWork(): boolean {
-    return activityState === "active" || activityState === "recently-active";
+    return activityState !== "hidden" && activityState !== "destroyed";
   }
 
   function render(
@@ -242,7 +252,7 @@ export function createWritingStatsController(
 
   function setActivity(state: RendererActivityState): void {
     if (destroyed) return;
-    const wasSuspended = activityState === "quiescent" || activityState === "hidden";
+    const wasSuspended = activityState === "hidden";
     activityState = state;
     if (state === "destroyed") {
       destroyed = true;
@@ -252,7 +262,7 @@ export function createWritingStatsController(
       cancelIdle();
       return;
     }
-    if (state === "quiescent" || state === "hidden") {
+    if (state === "hidden") {
       if (timerPending || idleHandle !== null) pendingUpdate = true;
       workEpoch++;
       timer.cancel();

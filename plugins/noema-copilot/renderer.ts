@@ -105,7 +105,13 @@ type NativeCopilotApi = {
   request?: (action: string, body?: unknown) => Promise<unknown>;
 };
 const defaultIdleDelayMs = 850;
-const defaultLargeBufferThresholdKb = 512;
+// Below this size the whole note is sent with every completion request. The
+// language server builds its prompt from a few thousand tokens around the
+// cursor, so anything past that window is serialized, posted and re-parsed for
+// nothing. At the previous 512 KB no ordinary note was ever windowed: a 120 KB
+// note shipped 128 KB per request. 64 KB still leaves far more context than the
+// model consumes while keeping the payload proportional to the completion.
+const defaultLargeBufferThresholdKb = 64;
 const forwardKeys = new Set(["]", "】", "］", "」", "〕"]);
 const backwardKeys = new Set(["[", "【", "［", "「", "〔"]);
 const wordKeys = new Set(["\\", "、", "＼"]);
@@ -317,20 +323,85 @@ function activeSelection(editor: EditorLike): { from: number; to: number } {
   return editor.getSelection?.() ?? editor.getMarkdownSelection();
 }
 
+function utf8ScalarBytes(codePoint: number, unpairedSurrogate = false): number {
+  if (unpairedSurrogate) return 3;
+  if (codePoint <= 0x7f) return 1;
+  if (codePoint <= 0x7ff) return 2;
+  if (codePoint <= 0xffff) return 3;
+  return 4;
+}
+
+function takeUtf8Before(markdown: string, end: number, byteBudget: number): { index: number; bytes: number } {
+  let index = end;
+  let bytes = 0;
+  while (index > 0) {
+    let start = index - 1;
+    const tail = markdown.charCodeAt(start);
+    let size: number;
+    if (tail >= 0xdc00 && tail <= 0xdfff && start > 0) {
+      const head = markdown.charCodeAt(start - 1);
+      if (head >= 0xd800 && head <= 0xdbff) {
+        start -= 1;
+        size = 4;
+      } else {
+        size = utf8ScalarBytes(tail, true);
+      }
+    } else {
+      size = utf8ScalarBytes(tail, tail >= 0xd800 && tail <= 0xdfff);
+    }
+    if (bytes + size > byteBudget) break;
+    bytes += size;
+    index = start;
+  }
+  return { index, bytes };
+}
+
+function takeUtf8After(markdown: string, start: number, byteBudget: number): { index: number; bytes: number } {
+  let index = start;
+  let bytes = 0;
+  while (index < markdown.length) {
+    const head = markdown.charCodeAt(index);
+    let step = 1;
+    let size: number;
+    if (head >= 0xd800 && head <= 0xdbff && index + 1 < markdown.length) {
+      const tail = markdown.charCodeAt(index + 1);
+      if (tail >= 0xdc00 && tail <= 0xdfff) {
+        step = 2;
+        size = 4;
+      } else {
+        size = utf8ScalarBytes(head, true);
+      }
+    } else {
+      size = utf8ScalarBytes(head, head >= 0xd800 && head <= 0xdfff);
+    }
+    if (bytes + size > byteBudget) break;
+    bytes += size;
+    index += step;
+  }
+  return { index, bytes };
+}
+
 function completionRequestDocument(
   markdown: string,
   offset: number,
-  maxChars: number,
+  maxBytes: number,
 ): { content: string; offset: number; from: number; to: number; clipped: boolean } {
   const cursor = clampedOffset(markdown, offset);
-  if (maxChars <= 0 || markdown.length <= maxChars) {
+  const budget = Math.max(0, Math.floor(maxBytes));
+  if (budget <= 0) {
     return { content: markdown, offset: cursor, from: 0, to: markdown.length, clipped: false };
   }
 
-  const beforeBudget = Math.max(0, Math.floor(maxChars * 0.72));
-  let from = Math.max(0, cursor - beforeBudget);
-  let to = Math.min(markdown.length, from + maxChars);
-  from = Math.max(0, to - maxChars);
+  // CM6 positions are UTF-16 offsets while the transport cost is UTF-8 bytes.
+  // Count code points directly so a CJK/emoji note cannot silently exceed the
+  // setting by 3–4x, and so range coordinates remain in CM6's native units.
+  const beforeTarget = Math.floor(budget * 0.72);
+  let before = takeUtf8Before(markdown, cursor, beforeTarget);
+  const after = takeUtf8After(markdown, cursor, budget - before.bytes);
+  // If the suffix is short, spend its unused budget on additional prefix.
+  before = takeUtf8Before(markdown, cursor, budget - after.bytes);
+  const from = before.index;
+  const to = after.index;
 
   return {
     content: markdown.slice(from, to),
@@ -344,21 +415,31 @@ function completionRequestDocument(
 function completionRequestDocumentFromEditor(
   editor: EditorLike,
   offset: number,
-  maxChars: number,
+  maxBytes: number,
 ): { content: string; offset: number; from: number; to: number; clipped: boolean } {
   const length = editor.getMarkdownLength?.() ?? editor.getMarkdown().length;
   const safeCursor = Math.max(0, Math.min(offset, length));
-  if (maxChars <= 0 || length <= maxChars || !editor.markdownBetween) {
-    return completionRequestDocument(editor.getMarkdown(), safeCursor, maxChars);
+  const budget = Math.max(0, Math.floor(maxBytes));
+  if (budget <= 0 || !editor.markdownBetween) {
+    return completionRequestDocument(editor.getMarkdown(), safeCursor, budget);
   }
 
-  const beforeBudget = Math.max(0, Math.floor(maxChars * 0.72));
-  let from = Math.max(0, safeCursor - beforeBudget);
-  let to = Math.min(length, from + maxChars);
-  from = Math.max(0, to - maxChars);
+  // UTF-8 is never smaller than the corresponding UTF-16 code-unit count.
+  // Therefore no valid byte-bounded window can reach farther than `budget`
+  // code units on either side. Reading only that local chunk avoids allocating
+  // a whole multi-megabyte note merely to decide its completion context.
+  const chunkFrom = Math.max(0, safeCursor - budget);
+  const chunkTo = Math.min(length, safeCursor + budget);
+  const local = completionRequestDocument(
+    editor.markdownBetween(chunkFrom, chunkTo),
+    safeCursor - chunkFrom,
+    budget,
+  );
+  const from = chunkFrom + local.from;
+  const to = chunkFrom + local.to;
 
   return {
-    content: editor.markdownBetween(from, to),
+    content: local.content,
     offset: safeCursor - from,
     from,
     to,
@@ -370,14 +451,34 @@ function completionRequestDocumentForRange(
   editor: EditorLike,
   offset: number,
   range: { from: number; to: number } | null | undefined,
+  maxBytes: number,
 ): { content: string; offset: number; from: number; to: number; clipped: boolean } | null {
   if (!range || !editor.markdownBetween) return null;
   const length = editor.getMarkdownLength?.() ?? editor.getMarkdown().length;
-  const from = Math.max(0, Math.min(range.from, length));
-  const to = Math.max(from, Math.min(range.to, length));
-  if (offset < from || offset > to) return null;
+  const rangeFrom = Math.max(0, Math.min(range.from, length));
+  const rangeTo = Math.max(rangeFrom, Math.min(range.to, length));
+  if (offset < rangeFrom || offset > rangeTo) return null;
+  const budget = Math.max(0, Math.floor(maxBytes));
+  if (budget <= 0) {
+    return {
+      content: editor.markdownBetween(rangeFrom, rangeTo),
+      offset: offset - rangeFrom,
+      from: rangeFrom,
+      to: rangeTo,
+      clipped: rangeFrom > 0 || rangeTo < length,
+    };
+  }
+  const chunkFrom = Math.max(rangeFrom, offset - budget);
+  const chunkTo = Math.min(rangeTo, offset + budget);
+  const local = completionRequestDocument(
+    editor.markdownBetween(chunkFrom, chunkTo),
+    offset - chunkFrom,
+    budget,
+  );
+  const from = chunkFrom + local.from;
+  const to = chunkFrom + local.to;
   return {
-    content: editor.markdownBetween(from, to),
+    content: local.content,
     offset: offset - from,
     from,
     to,
@@ -892,6 +993,7 @@ export function setupCopilot(context: Context): () => void {
       context.editor,
       fullOffset,
       texContext ? context.texSourceRangeAtCursor?.() : null,
+      settings.largeBufferThreshold,
     ) ?? completionRequestDocumentFromEditor(context.editor, fullOffset, settings.largeBufferThreshold);
     if (!eligible()) return;
     const key = editorStateKey();

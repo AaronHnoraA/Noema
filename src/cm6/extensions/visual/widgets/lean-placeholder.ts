@@ -10,6 +10,7 @@ import { MeasuredWidget } from "./measured-widget.ts";
 import { parseLeanPlaceholderLine } from "../../../../../shared/lean-placeholder.mjs";
 import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
 import { isPointerSelecting, updateHasPointerSelectionEffect } from "../selection.ts";
+import { isCoalescedVisualTyping } from "../typing-burst.ts";
 
 export type LeanLspAction = "definition" | "declaration" | "typeDefinition" | "implementation" | "references" | "hover";
 export type LeanEditAction =
@@ -153,6 +154,10 @@ class LeanPlaceholderPlugin {
   }
 
   update(update: ViewUpdate): void {
+    if (isCoalescedVisualTyping(update)) {
+      this.decorations = this.decorations.map(update.changes);
+      return;
+    }
     if (update.selectionSet && !update.docChanged && !update.viewportChanged
         && isPointerSelecting(update.state)) return;
     const pointerSelectionFinished = updateHasPointerSelectionEffect(update)

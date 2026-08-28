@@ -33,6 +33,7 @@ import { writeSystemClipboard } from "../../../../system-clipboard.ts";
 import { getBlockMathRanges, rangeInsideAny, rangeOverlapsAny } from "../../../math-ranges.ts";
 import { applyLayoutAttrs, layoutFromAttrs, readLayoutAttrsLine, type LayoutAttrs } from "../../../../layout-attrs.ts";
 import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
+import { isCoalescedVisualTyping } from "../typing-burst.ts";
 
 function setSourceRange(el: HTMLElement, from: number, to: number, anchor?: number, openSource = false): void {
   el.dataset.cmSourceFrom = String(from);
@@ -847,6 +848,10 @@ class FencedCodePlugin {
 
   update(update: ViewUpdate): void {
     if (update.view.compositionStarted && update.selectionSet && !update.docChanged && !update.viewportChanged) return;
+    if (isCoalescedVisualTyping(update)) {
+      this.decorations = this.decorations.map(update.changes);
+      return;
+    }
     const foldToggled = update.transactions.some((transaction) =>
       transaction.effects.some((effect) => effect.is(toggleCodeFoldEffect)));
     if (update.docChanged || update.viewportChanged || foldToggled || hasViewportDecorationRefresh(update)) {

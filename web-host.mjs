@@ -95,6 +95,13 @@ import { createKernelRelationshipOverlay } from "./server/lib/kernel-relationshi
 import { createKernelSupervisor } from "./server/lib/kernel-supervisor.mjs";
 import { startNoteWatcher } from "./server/lib/watch.mjs";
 import { createRendererBuildWatcher } from "./server/lib/renderer-build-watch.mjs";
+import {
+  clientLifecycleReplay,
+  eventTargetsClient,
+  forgetClientLifecycle,
+  normalizeEventClient,
+  rememberClientLifecycle,
+} from "./server/lib/client-event-routing.mjs";
 import { coreTasks } from "./server/lib/task-core.mjs";
 import { saveNote } from "./server/lib/save.mjs";
 import {
@@ -1107,8 +1114,12 @@ if (!existsSync(webDir)) {
   process.exit(1);
 }
 
-const eventClients = new Set();
+// Each renderer declares its stable URL client on the SSE connection. Targeted
+// Emacs traffic is routed here and filtered again in the renderer, so sibling
+// xwidgets neither receive nor apply another pane's lifecycle commands.
+const eventClients = new Map();
 const editorClients = new Map();
+const clientLifecycleStates = new Map();
 let shuttingDown = false;
 let shutdownPromise = null;
 let fatalReported = false;
@@ -1165,7 +1176,7 @@ function startSseHeartbeat() {
   if (hostMode !== "server" || sseHeartbeatInterval || !eventClients.size) return;
   sseHeartbeatInterval = setInterval(() => {
     const dead = [];
-    for (const res of eventClients) {
+    for (const res of eventClients.keys()) {
       try { res.write(": keepalive\n\n"); } catch { dead.push(res); }
     }
     dead.forEach((res) => eventClients.delete(res));
@@ -1268,7 +1279,7 @@ async function beginShutdown({ reason = "shutdown", exitCode = 0, deadlineMs = 3
       if (wikiRefreshTimer) clearTimeout(wikiRefreshTimer);
       if (serverRepositorySyncTimer) clearTimeout(serverRepositorySyncTimer);
       broadcast("command", { command: "server-shutdown", reason, at: Date.now() });
-      for (const res of eventClients) {
+      for (const res of eventClients.keys()) {
         try { res.end(); } catch {}
       }
       eventClients.clear();
@@ -1377,7 +1388,8 @@ function sendSse(res, event, data) {
 }
 
 function broadcast(event, data) {
-  for (const res of eventClients) {
+  for (const [res, client] of eventClients) {
+    if (!eventTargetsClient(data, client)) continue;
     try {
       sendSse(res, event, data);
     } catch {
@@ -1401,15 +1413,18 @@ function closeEditorClient(body = {}) {
   if (!client) return { ok: true, closed: false };
   const file = String((body && typeof body === "object" ? body.file : "") || "").trim();
   const existed = editorClients.delete(client);
+  forgetClientLifecycle(clientLifecycleStates, client);
   void handleCopilotRequest("close", {
     ...(body && typeof body === "object" ? body : {}),
     clientId: client,
     client,
     file,
   }).catch(() => {});
+  // `closedClient` is the subject, not an address: this must reach every other
+  // renderer, so it deliberately carries no `targetClient`.
   broadcast("command", {
     command: "client-closed",
-    client,
+    closedClient: client,
     file,
     existed,
   });
@@ -1656,6 +1671,23 @@ async function apiCurrentFile(body) {
   if (client) payload.client = client;
   if (client) noteEditorClient(target, client, { source: "current-file" });
   gatewayNotify("aaronnote.event", { type: "current-file", payload });
+  return { ok: true, ...payload };
+}
+
+/**
+ * A renderer reporting that it, not the host, currently owns keyboard input.
+ * Emacs uses this to re-select the pane it wrongly believed was background,
+ * instead of re-pausing a page the user is typing into.
+ */
+async function apiEmacsInputFocus(body) {
+  const source = body && typeof body === "object" ? body : {};
+  const payload = {
+    client: String(source.client || "").trim(),
+    file: resolveShellPath(String(source.file || "").trim()) || "",
+  };
+  if (!payload.client) return { ok: false, message: "input-focus needs a client" };
+  noteEditorClient(payload.file, payload.client, { source: "input-focus" });
+  gatewayNotify("aaronnote.event", { type: "input-focus", payload });
   return { ok: true, ...payload };
 }
 
@@ -2118,6 +2150,7 @@ const apiRouter = new ApiRouter().register({
   ...createEmacsApiHandlers({
     apiOpenInEmacs,
     apiCurrentFile,
+    apiEmacsInputFocus,
     apiEmacsUiState,
     apiEmacsKey,
     apiSystemOpen,
@@ -2200,7 +2233,15 @@ async function handleEmacsCommand(body = {}) {
       ...(body.detail && typeof body.detail === "object" ? body.detail : {}),
       command: String(body.command || ""),
     };
-    if (body.client) detail.client = String(body.client);
+    // `targetClient` is the routing address: only the renderer whose page URL
+    // carries this client runs the command. `client` is kept alongside it for
+    // retained xwidget pages built before the split, and is never the address
+    // for server-originated broadcasts, which use it as the event's subject.
+    if (body.client) {
+      detail.targetClient = String(body.client);
+      detail.client = String(body.client);
+    }
+    rememberClientLifecycle(clientLifecycleStates, detail);
     broadcast("command", detail);
     return { ok: true };
   }
@@ -2481,7 +2522,11 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
   }
   function connectEventStream(reason, force) {
     var status = currentConnectionStatus();
-    if (status === "connected") return Promise.resolve(true);
+    // A retained WKWebView can still report the old stream as connected while
+    // a replacement Node host has already reclaimed the same port. Explicit
+    // host-ready/activity recovery must replace that socket, not trust its
+    // stale local state.
+    if (!force && status === "connected") return Promise.resolve(true);
     if (!force && status === "connecting" && eventConnectionPromise) {
       return eventConnectionPromise;
     }
@@ -2494,7 +2539,12 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
     dispatchConnectionStatus("connecting", reason);
     var source;
     try {
-      source = new EventSource(BASE + "/events");
+      var eventUrl = BASE + "/events";
+      try {
+        var eventClient = new URL(window.location.href).searchParams.get("client") || "";
+        if (eventClient) eventUrl += "?client=" + encodeURIComponent(eventClient);
+      } catch (_) {}
+      source = new EventSource(eventUrl);
     } catch (_) {
       dispatchConnectionStatus("disconnected", reason);
       return Promise.resolve(false);
@@ -2730,6 +2780,7 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
           file && typeof file === "object" ? file : String(file || "")
         ]);
       },
+      inputFocus: function(body) { return call("aaronnote:api:emacs:input-focus", [body || {}]); },
       uiState: function(body) { return call("aaronnote:api:emacs:ui-state", [body || {}]); },
       key: function(k) {
         return call("aaronnote:api:emacs:key", [
@@ -3094,6 +3145,7 @@ const server = createServer(async (req, res) => {
     }
 
     if (url.pathname === "/events") {
+      const eventClient = normalizeEventClient(url.searchParams.get("client"));
       res.writeHead(200, {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
@@ -3108,7 +3160,9 @@ const server = createServer(async (req, res) => {
           at: Date.now(),
         })}\n\n`);
       }
-      eventClients.add(res);
+      const lifecycleReplay = clientLifecycleReplay(clientLifecycleStates, eventClient);
+      if (lifecycleReplay) sendSse(res, "command", lifecycleReplay);
+      eventClients.set(res, eventClient);
       startSseHeartbeat();
       req.on("close", () => removeEventClient(res));
       return;

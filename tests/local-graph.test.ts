@@ -26,6 +26,100 @@ function input(type: string, checked = false, value = ""): HTMLInputElement {
 }
 
 describe("local graph", () => {
+  /**
+   * Per-keystroke cost guardrail for the open graph panel.
+   *
+   * `changeHandlers` schedules an overlay update on every document change. The
+   * signature used to fold in the raw Markdown length, which changes on every
+   * typed character, so an editing pause forced a full rebuild and cytoscape
+   * layout even though the graph could not differ. Electron absorbs that; the
+   * Emacs xwidget, which repaints the widget through Emacs redisplay, does not.
+   * The panel must rebuild for what it draws — refs and tags — and for nothing
+   * else. Same code, both hosts.
+   */
+  test("typing prose does not rebuild the graph; typing a link does", () => {
+    const root = document.createElement("div");
+    root.className = "aaronnote-local-graph-panel is-collapsed";
+    const toggleButton = document.createElement("button");
+    const depthInput = input("range", false, "2");
+    const depthLabel = document.createElement("span");
+    const refsInput = input("checkbox", true);
+    const backlinksInput = input("checkbox", true);
+    const tagsInput = input("checkbox", true);
+    const canvas = document.createElement("div");
+    const status = document.createElement("div");
+    document.body.append(root, toggleButton, canvas);
+
+    const current = note({ id: "current", title: "Current" });
+    const related = note({ id: "related", title: "Related" });
+    const withTags = (tags: string): string => [
+      "#+begin meta",
+      "id: current",
+      "title: Current",
+      `tags: ${tags}`,
+      "#+end meta",
+      "",
+      "Body",
+    ].join("\n");
+    let markdown = withTags("alpha");
+    let builds = 0;
+
+    const panel = createLocalGraphPanel({
+      root,
+      toggleButton,
+      depthInput,
+      depthLabel,
+      refsInput,
+      backlinksInput,
+      tagsInput,
+      canvas,
+      status,
+      getNotes: () => [current, related],
+      getCurrentNote: () => current,
+      getMarkdown: () => markdown,
+      resolveNoteRef: (ref) => [current, related].find((item) => item.id === ref || item.path === ref),
+      openNote: () => {},
+      openTag: () => {},
+      createWorkspaceGraph: () => {
+        builds += 1;
+        return { center() {}, setActivity() {}, destroy() {} };
+      },
+    });
+
+    try {
+      panel.toggle();
+      const afterOpen = builds;
+      expect(afterOpen).toBeGreaterThan(0);
+
+      // Ordinary prose: the length changes on every character, the graph does not.
+      for (const word of ["one", "two", "three", "four", "five"]) {
+        markdown += ` ${word}`;
+        panel.update();
+      }
+      expect(builds).toBe(afterOpen);
+
+      // A link is a real edge, so this one must rebuild.
+      markdown += "\n\n[[related]]\n";
+      panel.update();
+      expect(builds).toBe(afterOpen + 1);
+
+      // And a tag. Only the meta block declares roam tags, so this edits it
+      // rather than writing a bare #hash in the body.
+      const body = markdown.slice(markdown.indexOf("#+end meta"));
+      markdown = withTags("alpha, gamma").replace(/#\+end meta[\s\S]*$/u, body);
+      panel.update();
+      expect(builds).toBe(afterOpen + 2);
+
+      // Repeating the same document must not rebuild again.
+      panel.update();
+      expect(builds).toBe(afterOpen + 2);
+    } finally {
+      root.remove();
+      toggleButton.remove();
+      canvas.remove();
+    }
+  });
+
   test("replaces stale current-note DB edges with live Markdown edges", () => {
     const current = note({ id: "current", title: "Current", tags: ["stale"] });
     const fresh = note({ id: "fresh", title: "Fresh" });

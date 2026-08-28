@@ -33,7 +33,6 @@ export class AssistScheduler {
   private frame = 0;
   private pending = emptyFlags();
   private paused = false;
-  private quiescent = false;
   private readonly frameApi: FrameApi;
   private readonly visible: () => boolean;
   private readonly run: (flags: AssistUpdateFlags) => void;
@@ -62,23 +61,24 @@ export class AssistScheduler {
     if (this.paused === paused) return;
     this.paused = paused;
     if (paused) {
-      this.quiescent = false;
       this.cancel();
-    } else if (!this.quiescent) {
+    } else {
       this.schedulePending();
     }
   }
 
-  /** Quiescence suspends the frame, but retains coalesced work for resume. */
-  setQuiescent(quiescent: boolean): void {
-    if (this.quiescent === quiescent) return;
-    this.quiescent = quiescent;
-    if (quiescent) {
-      this.cancelFrame();
-    } else if (!this.paused) {
-      this.schedulePending();
-    }
-  }
+  /**
+   * Record renderer idleness. Coalesced assist work runs straight through it.
+   *
+   * These are user-visible surfaces — snippet popup, math preview, cursor tool,
+   * outline — coalesced into one animation frame. Suspending them a second
+   * after the last keystroke withheld any update requested while idle (an index
+   * change refreshing the outline, a settled scroll, a resolved async lookup)
+   * until the user typed again. One frame is not an animation chain, and a
+   * visible page still gets frames; the surface that must not be driven is a
+   * hidden one, which `setPaused` still covers.
+   */
+  setQuiescent(_quiescent: boolean): void {}
 
   cancel(): void {
     if (this.frame) {
@@ -95,11 +95,11 @@ export class AssistScheduler {
   }
 
   private schedulePending(): void {
-    if (this.paused || this.quiescent || !this.visible() || !Object.values(this.pending).some(Boolean)) return;
+    if (this.paused || !this.visible() || !Object.values(this.pending).some(Boolean)) return;
     if (this.frame) return;
     this.frame = this.frameApi.requestAnimationFrame(() => {
       this.frame = 0;
-      if (this.paused || this.quiescent || !this.visible()) return;
+      if (this.paused || !this.visible()) return;
       const flags = this.pending;
       this.pending = emptyFlags();
       this.run(flags);
@@ -126,7 +126,6 @@ export class AssistScheduler {
     if (this.frame && sameFlags(this.pending, next)) return;
     if (this.frame) this.cancelFrame();
     this.pending = next;
-    if (this.quiescent) return;
     this.schedulePending();
   }
 

@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { createRendererActivityGate } from "../src/renderer-activity.ts";
 
 describe("shared renderer activity gate", () => {
@@ -108,5 +110,29 @@ describe("shared renderer lifecycle", () => {
     expect(gate.state()).toBe("active");
     expect(states).toEqual(["recently-active", "quiescent", "active"]);
     gate.destroy();
+  });
+});
+
+describe("renderer activity participant wiring", () => {
+  const mainSource = readFileSync(join(process.cwd(), "aaronnote", "main.ts"), "utf8");
+
+  test("retain-and-flush participants pause only for a hidden surface", () => {
+    // The gate's compatibility fallback maps a bare setPaused participant to
+    // `isHidden || isQuiescent`. Anything that queues work while paused and
+    // flushes it on resume must not take that path, or its queue sits unflushed
+    // for the whole idle period.
+    const start = mainSource.indexOf("const rendererActivity = createRendererActivityGate([");
+    const list = mainSource.slice(start, mainSource.indexOf("], {", start));
+    expect(list).toContain("hiddenSurfaceOnly(setMeasuredWidgetObservationPaused)");
+    expect(list).toContain("hiddenSurfaceOnly(setViewportDecorationRefreshPaused)");
+    expect(list).not.toContain("setPaused: setMeasuredWidgetObservationPaused");
+    expect(list).not.toContain("setPaused: setViewportDecorationRefreshPaused");
+
+    const helper = mainSource.slice(
+      mainSource.indexOf("const hiddenSurfaceOnly = ("),
+      start,
+    );
+    expect(helper).toContain('state === "hidden" || state === "destroyed"');
+    expect(helper).not.toContain("quiescent");
   });
 });

@@ -7882,11 +7882,7 @@ export async function readNote(file, options = {}) {
       standalone: true,
       remote: true,
     };
-    if (options.includeIndex === true) {
-      Object.assign(payload, await notesIndexPayload());
-      payload.snippets = await scanSnippets();
-      payload.templates = await scanTemplates();
-    }
+    if (options.includeIndex === true) await attachNoteIndexPayload(payload);
     return payload;
   }
   const safe = safeOpenFile(file);
@@ -7912,11 +7908,7 @@ export async function readNote(file, options = {}) {
       standalone: standaloneFile(safe),
       incrementalSave: typeof markdownFileProvider?.writeChanges === "function",
     };
-    if (options.includeIndex === true) {
-      Object.assign(payload, await notesIndexPayload());
-      payload.snippets = await scanSnippets();
-      payload.templates = await scanTemplates();
-    }
+    if (options.includeIndex === true) await attachNoteIndexPayload(payload);
     return payload;
   }
   assertGoCoreCapability(safe, false, "Markdown persistence");
@@ -7941,11 +7933,27 @@ export async function readNote(file, options = {}) {
     standalone,
     incrementalSave: standalone,
   };
-  if (options.includeIndex === true) {
-    Object.assign(payload, await notesIndexPayload());
-    payload.snippets = await scanSnippets();
-    payload.templates = await scanTemplates();
-  }
+  if (options.includeIndex === true) await attachNoteIndexPayload(payload);
+  return payload;
+}
+
+/**
+ * Attach the note index, snippet catalog and templates to an open payload.
+ *
+ * The three are independent — an index projection, and two catalog scans — so
+ * awaiting them in sequence made note creation and metadata edits pay the sum
+ * of three round trips instead of the slowest one. `bootstrapNote` already
+ * overlaps its catalog scan with the source read for the same reason.
+ */
+async function attachNoteIndexPayload(payload) {
+  const [index, snippets, templates] = await Promise.all([
+    notesIndexPayload(),
+    scanSnippets(),
+    scanTemplates(),
+  ]);
+  Object.assign(payload, index);
+  payload.snippets = snippets;
+  payload.templates = templates;
   return payload;
 }
 

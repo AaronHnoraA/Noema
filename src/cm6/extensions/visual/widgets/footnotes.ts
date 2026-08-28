@@ -12,6 +12,7 @@ import type { Range, Text } from "@codemirror/state";
 import { blockMathRangesOverlapping, mergeOverlappingRanges, rangeInsideAny } from "../../../math-ranges.ts";
 import { scanInlineMathRanges } from "../../../../inline-math.ts";
 import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
+import { isCoalescedVisualTyping } from "../typing-burst.ts";
 
 const FOOTNOTE_RE = /\[\^([^\]\n]{1,128})\]/g;
 const FOOTNOTE_DEFINITION_RE = /^\s*\[\^([^\]\n]{1,128})\]:/;
@@ -248,6 +249,10 @@ class FootnotePlugin {
 
   update(update: ViewUpdate): void {
     if (update.view.compositionStarted && update.selectionSet && !update.docChanged && !update.viewportChanged) return;
+    if (isCoalescedVisualTyping(update)) {
+      this.decorations = this.decorations.map(update.changes);
+      return;
+    }
     const nextSourceKey = update.selectionSet || update.docChanged
       ? activeFootnoteSourceKey(update.view)
       : this.activeSourceKey;

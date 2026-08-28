@@ -183,23 +183,67 @@ describe("heading fold cost", () => {
         ],
       }),
     });
-    try {
-      expect(tocIndexFromState(view.state).headings.length).toBeGreaterThan(5_000);
+    // The control is the same bytes with the ATX markers removed, so it differs
+    // from the fixture in heading count and little else. Measuring both in the
+    // same process is what makes the claim in this test's name checkable: a
+    // quadratic outline walk shows up as a ratio between them, and machine load
+    // — which moves both measurements together — cannot fake it.
+    const flat = big.replace(/^#{1,6} /gmu, "");
+    const flatHost = document.createElement("div");
+    document.body.appendChild(flatHost);
+    const flatView = new EditorView({
+      parent: flatHost,
+      state: EditorState.create({
+        doc: flat,
+        extensions: [
+          EditorView.lineWrapping,
+          createMarkdownLanguageExtension(),
+          tocIndexExtension,
+          headingFoldExtension,
+        ],
+      }),
+    });
+    const keystrokeP95 = (target: EditorView): number => {
+      const samples: number[] = [];
       // Typing at the start shifts every heading position in the index, which
       // is the worst case for anything that walks the whole outline.
-      const samples: number[] = [];
       for (let index = 0; index < 40; index += 1) {
         const started = performance.now();
-        view.dispatch({ changes: { from: 0, insert: "x" }, selection: { anchor: 1 } });
+        target.dispatch({ changes: { from: 0, insert: "x" }, selection: { anchor: 1 } });
         samples.push(performance.now() - started);
       }
       samples.sort((left, right) => left - right);
-      const p95 = samples[Math.max(0, Math.ceil(samples.length * 0.95) - 1)] ?? Infinity;
-      // Scanning the whole outline for every heading cost ~29 ms per keystroke
-      // on this fixture. The bound is loose enough for a loaded CI machine but
-      // still fails long before the quadratic scan could come back.
-      expect(p95).toBeLessThan(16);
+      return samples[Math.max(0, Math.ceil(samples.length * 0.95) - 1)] ?? Infinity;
+    };
+    try {
+      const headingCount = tocIndexFromState(view.state).headings.length;
+      expect(headingCount).toBeGreaterThan(5_000);
+      const flatHeadingCount = tocIndexFromState(flatView.state).headings.length;
+      expect(flatHeadingCount * 20).toBeLessThan(headingCount);
+
+      const p95 = keystrokeP95(view);
+      const flatP95 = keystrokeP95(flatView);
+      // eslint-disable-next-line no-console
+      console.log(
+        `[heading-fold] headings=${headingCount} p95=${p95.toFixed(2)}ms`
+        + ` flat-headings=${flatHeadingCount} flat-p95=${flatP95.toFixed(2)}ms`,
+      );
+
+      // The bound is expressed against the control, not in absolute
+      // milliseconds, because machine load moves both measurements together —
+      // an absolute 16 ms threshold here failed under a loaded 226-file run
+      // while passing every time in isolation.
+      //
+      // Measured on an idle machine: 5,143 headings cost 2.5 ms per keystroke
+      // against 0.35 ms for the same bytes with one heading, so heading count
+      // is worth roughly 7x. The quadratic outline walk this guards cost
+      // ~29 ms, roughly 80x. A 20x bound sits well clear of both. The floor
+      // stops a near-zero control from turning measurement noise into a
+      // failure.
+      expect(p95).toBeLessThan(Math.max(6, flatP95 * 20));
     } finally {
+      flatView.destroy();
+      flatHost.remove();
       view.destroy();
       host.remove();
     }

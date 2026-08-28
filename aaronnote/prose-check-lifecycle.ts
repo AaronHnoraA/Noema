@@ -237,33 +237,26 @@ export class ProseCheckLifecycle<Input, Result> {
     }
   }
 
-  /** Suspend automatic prose work while retaining the latest pending input. */
-  setQuiescent(quiescent: boolean, reason = "quiescent"): void {
+  /**
+   * Record the shared renderer's idle state. Automatic prose work deliberately
+   * runs straight through it.
+   *
+   * Quiescence is reached a second after the last input, while the automatic
+   * debounce is 1–3s depending on the profile. Suspending here inverted the
+   * whole schedule: the settled check never ran during the idle it was waiting
+   * for, and the queued task was instead released on the next keystroke — so
+   * every typing burst opened a full LanguageTool request on its first key and
+   * abandoned it on the second. That is the worst of both, paying for server
+   * work that is always discarded while never delivering a result at rest.
+   *
+   * The debounce timer is therefore the sole authority for when an automatic
+   * check starts, and signature deduplication already caps it at one run per
+   * document revision. A genuinely hidden surface still cancels everything
+   * through `setPaused`, which is the gate that actually saves power.
+   */
+  setQuiescent(quiescent: boolean, _reason = "quiescent"): void {
     if (this.disposed || this.quiescent === quiescent) return;
     this.quiescent = quiescent;
-    if (quiescent) {
-      this.clearAutoTimer();
-      // A pending automatic task remains queued. Its due time is deliberately
-      // allowed to expire while quiescent, so resume performs one immediate
-      // check instead of losing a document revision.
-      if (this.active?.kind === "auto") {
-        const record = this.active;
-        this.cancelActive(reason, "cancelled");
-        // The request is already obsolete from a renderer perspective. Keep a
-        // retryable copy until resume; do not make the host reconstruct input.
-        if (!this.pendingAuto && !record.finished) {
-          this.pendingAuto = this.createTask("auto", record.input, record.signature, 0);
-          this.emit({
-            id: this.pendingAuto.id,
-            kind: "auto",
-            signature: this.pendingAuto.signature,
-            phase: "scheduled",
-          });
-        }
-      }
-    } else {
-      this.pump();
-    }
   }
 
   dispose(reason = "disposed"): void {
@@ -290,7 +283,7 @@ export class ProseCheckLifecycle<Input, Result> {
   }
 
   private pump(): void {
-    if (this.disposed || this.paused || this.quiescent || this.active) return;
+    if (this.disposed || this.paused || this.active) return;
     if (this.pendingManual) {
       const task = this.pendingManual;
       this.pendingManual = null;

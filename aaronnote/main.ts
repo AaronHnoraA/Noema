@@ -83,6 +83,8 @@ import { createTransientSurfaceRegistry } from "../src/transient-surfaces.ts";
 import { blobToBase64 } from "../src/paste.ts";
 import { collectFindMatches, createFindPattern, type FindMatch } from "./find.ts";
 import { AssistScheduler, type AssistUpdateFlags, type AssistUpdateOptions } from "./assist-scheduler.ts";
+import { hostCommandTargetsClient } from "./host-command-target.ts";
+import { hostInputFocusEventTypes, provesHostInputFocus } from "./host-input-focus.ts";
 import {
   ProseCheckLifecycle,
   type ProseCheckContext,
@@ -245,6 +247,7 @@ if (!root) throw new Error("Missing #app");
 const removeB3ComponentSystem = installB3ComponentSystem(document.body);
 window.addEventListener("beforeunload", removeB3ComponentSystem, { once: true });
 const initialParams = new URLSearchParams(window.location.search);
+const rendererClient = initialParams.get("client")?.trim() ?? "";
 const serverReaderMode = serverMode();
 if (serverReaderMode && initialParams.has("host")) {
   const cleanUrl = new URL(window.location.href);
@@ -978,7 +981,7 @@ const findCloseButton = findPanel.querySelector<HTMLButtonElement>("[data-find-c
 
 let currentFile = "";
 let currentTitle = "";
-let currentClient = "";
+let currentClient = rendererClient;
 let currentKind = "";
 let currentStandalone = false;
 let currentIncrementalSave = false;
@@ -1485,17 +1488,33 @@ function withBuiltinSnippets(items: readonly SnippetSummary[] = []): SnippetSumm
 }
 snippets = withBuiltinSnippets(snippets);
 
+let lastWindowStateKey = "";
+
+/**
+ * Runs on every document change, so it must cost nothing when nothing changed.
+ *
+ * Only the dirty marker in `document.title` actually varies while typing; the
+ * chrome labels are constant for a given note. Writing them anyway dirtied five
+ * text/attribute nodes per keystroke, and in the Emacs xwidget host every
+ * resulting repaint is paid twice because Emacs redraws the widget through its
+ * own redisplay. Assigning an identical string is not free — it still replaces
+ * the text node and invalidates layout — so each write is guarded by a read.
+ */
 function updateTitle(): void {
   const name = currentFile.split(/[\\/]/).at(-1) || "Noema";
   const displayName = serverReaderMode && currentTitle ? currentTitle : name;
-  fileLabel.textContent = name;
-  desktopTitleName.textContent = name;
-  desktopTitleName.title = currentFile || name;
-  serverTitleName.textContent = displayName;
-  serverTitleName.title = currentFile || displayName;
-  document.title = currentReadOnly
+  const fileTitle = currentFile || name;
+  if (fileLabel.textContent !== name) fileLabel.textContent = name;
+  if (desktopTitleName.textContent !== name) desktopTitleName.textContent = name;
+  if (desktopTitleName.title !== fileTitle) desktopTitleName.title = fileTitle;
+  if (serverTitleName.textContent !== displayName) serverTitleName.textContent = displayName;
+  const serverTitle = currentFile || displayName;
+  if (serverTitleName.title !== serverTitle) serverTitleName.title = serverTitle;
+  const documentTitle = currentReadOnly
     ? serverReaderMode ? `${displayName} · Noema Wiki` : `${name} (read-only)`
     : revision === savedRevision ? name : `* ${name}`;
+  if (document.title !== documentTitle) document.title = documentTitle;
+  if (!window.noemaDesktop) return;
   const windowState = {
     kind: "note" as const,
     file: currentFile,
@@ -1505,7 +1524,12 @@ function updateTitle(): void {
     conflict: desktopSaveConflict,
     busy: false,
   };
-  window.noemaDesktop?.updateWindowState(windowState);
+  // The desktop shell repaints native chrome from this, so an unchanged state
+  // must not cross the preload boundary once per keystroke.
+  const key = JSON.stringify(windowState);
+  if (key === lastWindowStateKey) return;
+  lastWindowStateKey = key;
+  window.noemaDesktop.updateWindowState(windowState);
 }
 
 function renderModeToggleLabel(mode: VimLiteMode): void {
@@ -3213,8 +3237,11 @@ const graphOverlayTimer = new CoalescedTimer(400);
 let graphOverlayIdleHandle = 0;
 let graphOverlayActivityState: RendererActivityState = "active";
 let graphOverlayUpdatePending = false;
+// The overlay update is already deferred to requestIdleCallback and re-defers
+// itself whenever isInputPending() is true, so idleness is when it belongs, not
+// when it must stop. Only a hidden surface suspends it.
 const graphOverlayCanRun = (): boolean =>
-  graphOverlayActivityState === "active" || graphOverlayActivityState === "recently-active";
+  graphOverlayActivityState !== "hidden" && graphOverlayActivityState !== "destroyed";
 
 function scheduleGraphOverlayUpdate(delayMs = 400): void {
   graphOverlayUpdatePending = true;
@@ -3234,22 +3261,27 @@ function scheduleGraphOverlayUpdate(delayMs = 400): void {
         if (scheduling.scheduling?.isInputPending?.()) scheduleGraphOverlayUpdate();
         else {
           graphOverlayUpdatePending = false;
-          localGraphPanel.update(true);
+          // Deliberately unforced: this is the document-change path, so the
+          // panel's own data signature decides whether a rebuild and layout
+          // are warranted. Forcing here re-laid-out the graph on every editing
+          // pause even when nothing it draws had changed. `onGraphVisible` and
+          // the resize path still force, because those change layout without
+          // changing data.
+          localGraphPanel.update();
         }
       }, { timeout: 1200 });
       return;
     }
     graphOverlayUpdatePending = false;
-    localGraphPanel.update(true);
+    localGraphPanel.update();
   }, undefined, delayMs);
 }
 
 const graphOverlayActivity = {
   setActivity(state: RendererActivityState): void {
-    const wasSuspended = graphOverlayActivityState === "quiescent"
-      || graphOverlayActivityState === "hidden";
+    const wasSuspended = graphOverlayActivityState === "hidden";
     graphOverlayActivityState = state;
-    if (state === "quiescent" || state === "hidden" || state === "destroyed") {
+    if (state === "hidden" || state === "destroyed") {
       graphOverlayTimer.cancel();
       if (graphOverlayIdleHandle) window.cancelIdleCallback(graphOverlayIdleHandle);
       graphOverlayIdleHandle = 0;
@@ -5574,7 +5606,6 @@ async function refreshPendingExternalSaveOnFocus(): Promise<void> {
 
 async function openInitialFile(beforeApply?: Promise<unknown>): Promise<void> {
   const file = initialParams.get("file") || undefined;
-  currentClient = initialParams.get("client") || "";
   pendingOpenHash = initialParams.get("hash") || "";
   pendingOpenDomTarget = initialParams.get("dom") || "";
   currentReadOnly = initialReadOnly;
@@ -5643,7 +5674,11 @@ setupCopilot({
   },
   onAction: () => () => {},
   onSettingsChange: () => () => {},
-  getSettings: () => ({ idleDelayMs: 850, largeBufferThresholdKb: 512 }),
+  // Keep the completion payload proportional to the completion: the language
+  // server only reads a few thousand tokens around the cursor, so a whole-note
+  // upload per request is wasted serialization on this side and wasted parsing
+  // on the server's. See the threshold's note in the Copilot renderer.
+  getSettings: () => ({ idleDelayMs: 850, largeBufferThresholdKb: 64 }),
   isActive: () => !serverReaderMode
     && !paused
     && rendererActivityState !== "quiescent"
@@ -5968,9 +6003,24 @@ const proseLifecycle = new ProseCheckLifecycle<ProseCheckInput, ProseCheckRunRes
 // All renderer activity-sensitive systems share this one state transition.
 // The host adapters only send pause/resume facts; they never maintain a
 // second implementation of editor quiescence or background scheduling.
+// A participant that exposes only setPaused is driven by the gate's
+// compatibility fallback, which pauses it for quiescence as well as for a
+// hidden surface. These two must not take that path: both retain their work
+// while paused and flush it on resume, so quiescence left the CM6 height map
+// and the viewport decorations stale for as long as the user stayed idle —
+// an image finishing decode, a KaTeX render, or a Jupyter cell's output
+// arriving would not be measured until the next keystroke, which surfaces in
+// the Emacs xwidget as cursor and scroll drift. Neither costs anything while
+// idle and static: they only schedule a frame when work is actually pending.
+const hiddenSurfaceOnly = (
+  apply: (paused: boolean) => void,
+): { setActivity: (state: RendererActivityState) => void } => ({
+  setActivity: (state) => apply(state === "hidden" || state === "destroyed"),
+});
+
 const rendererActivity = createRendererActivityGate([
-  { setPaused: setMeasuredWidgetObservationPaused },
-  { setPaused: setViewportDecorationRefreshPaused },
+  hiddenSurfaceOnly(setMeasuredWidgetObservationPaused),
+  hiddenSurfaceOnly(setViewportDecorationRefreshPaused),
   imageAnimationActivityParticipant(editor.view.contentDOM),
   focusQuiescence,
   assistScheduler,
@@ -11055,6 +11105,28 @@ function setPausedReason(reason: string, active: boolean): void {
   applyPaused(pauseReasons.size > 0);
 }
 
+/**
+ * Recover from a host activity fact this page can prove wrong.
+ *
+ * Emacs pauses a pane it believes is in the background. When the user is in
+ * fact typing into that pane, the renderer must not wait for the host to
+ * notice: it drops the host pause locally so input stays responsive without a
+ * cross-host round trip, then reports the input-focus fact so Emacs' own
+ * bookkeeping is corrected. Without that report Emacs still believes the pane
+ * is paused, and the next genuine background transition would be deduplicated
+ * away — leaving a background page fully awake, which is exactly the battery
+ * cost pausing exists to avoid.
+ */
+function recoverFromStaleHostPause(event: Event): void {
+  if (!pauseReasons.has("host") || !provesHostInputFocus(event)) return;
+  setPausedReason("host", false);
+  rendererActivity.notifyActivity();
+  void api.emacs.inputFocus({ client: currentClient, file: currentFile });
+}
+for (const type of hostInputFocusEventTypes) {
+  document.addEventListener(type, recoverFromStaleHostPause, true);
+}
+
 function scheduleAssistUpdate(options: AssistUpdateOptions = {}): void {
   assistScheduler.schedule(options);
 }
@@ -11232,8 +11304,15 @@ function runHostKey(body: Record<string, unknown>): boolean {
 }
 
 function runHostCommand(detail: unknown): boolean {
+  // Emacs hosts several retained xwidget renderers behind one web host, and the
+  // host fans control events out over one shared SSE stream. This is the single
+  // routing gate for every entry point: accepting a sibling pane's pause leaves
+  // this visible editor interactive at the CM6 layer but disables previews and
+  // other scheduled renderer work.
+  if (!hostCommandTargetsClient(detail, rendererClient)) return true;
   const body = (detail && typeof detail === "object" ? detail : {}) as {
     command?: string;
+    client?: string;
     key?: string;
     value?: string;
     text?: string;
@@ -12161,12 +12240,9 @@ const removeDesktopCommandListener = desktopMode
   : null;
 
 window.addEventListener("aaronnote:command", (event) => {
-  const detail = (event as CustomEvent<unknown>).detail;
-  const targetClient = detail && typeof detail === "object"
-    ? String((detail as { client?: unknown }).client || "")
-    : "";
-  if (targetClient && targetClient !== currentClient) return;
-  runHostCommand(detail);
+  // Client routing lives in runHostCommand so every entry point — SSE, the
+  // desktop bridge, in-page buttons — obeys exactly one rule.
+  runHostCommand((event as CustomEvent<unknown>).detail);
 });
 
 function desktopExternalDrag(data: DataTransfer | null): boolean {

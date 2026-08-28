@@ -74,6 +74,10 @@ import {
   updateHasPointerSelectionEffect,
 } from "./extensions/visual/selection.ts";
 import { scanWikiLinks } from "../../shared/wiki-link.mjs";
+import {
+  isCoalescedVisualTyping,
+  isCoalescedVisualTypingTransaction,
+} from "./extensions/visual/typing-burst.ts";
 
 // ---------------------------------------------------------------------------
 // Asset URL helpers for raw HTML embedded in the live preview.
@@ -178,6 +182,24 @@ type LivePreviewToken =
   | { kind: "autolink"; from: number; to: number }
   | { kind: "static"; from: number; to: number; cls: string }
   | { kind: "html-inline"; from: number; to: number; source: string };
+
+function mapLivePreviewTokens(tokens: readonly LivePreviewToken[], changes: ChangeSet): LivePreviewToken[] {
+  return tokens.map((token) => {
+    const mapped = {
+      ...token,
+      from: changes.mapPos(token.from, -1),
+      to: changes.mapPos(token.to, 1),
+    };
+    if (token.kind === "span" || token.kind === "delimiter" || token.kind === "link-delimiter") {
+      return {
+        ...mapped,
+        spanFrom: changes.mapPos(token.spanFrom, -1),
+        spanTo: changes.mapPos(token.spanTo, 1),
+      } as LivePreviewToken;
+    }
+    return mapped as LivePreviewToken;
+  });
+}
 
 function selectionIntersectsSpan(sel: { from: number; to: number; empty: boolean }, from: number, to: number): boolean {
   return sel.empty ? sel.from > from && sel.from < to : sel.from < to && sel.to > from;
@@ -669,6 +691,16 @@ class LivePreviewPlugin {
 
   update(update: ViewUpdate): void {
     if (update.view.compositionStarted && update.selectionSet && !update.docChanged && !update.viewportChanged) return;
+
+    if (isCoalescedVisualTyping(update)) {
+      this.tokens = mapLivePreviewTokens(this.tokens, update.changes);
+      this.decorations = this.decorations.map(update.changes);
+      this.lastVpFrom = update.changes.mapPos(this.lastVpFrom, -1);
+      this.lastVpTo = update.changes.mapPos(this.lastVpTo, 1);
+      this.selectionKey = selectionAffectingTokenKey(update.state, this.tokens);
+      this.cjkLineCache.clear();
+      return;
+    }
 
     const forceRefresh = hasViewportDecorationRefresh(update);
     const pointerSelectionChanged = updateHasPointerSelectionEffect(update);
@@ -1832,6 +1864,7 @@ const lineDecoField = StateField.define<DecorationSet>({
       }
       return next;
     }
+    if (isCoalescedVisualTypingTransaction(tr)) return value.map(tr.changes);
     if (tr.docChanged) {
       if (canMapLineDecos(tr.startState.doc, tr.changes)) return value.map(tr.changes);
       if (canPatchLineDecosNearChanges(tr.startState.doc, tr.changes)) {
@@ -2135,6 +2168,7 @@ const htmlBlockDecoField = StateField.define<DecorationSet>({
       }
       return next;
     }
+    if (isCoalescedVisualTypingTransaction(tr)) return value.map(tr.changes);
     if (tr.docChanged) {
       return patchHtmlBlockDecosNearChanges(tr.state, value.map(tr.changes), tr.changes);
     }

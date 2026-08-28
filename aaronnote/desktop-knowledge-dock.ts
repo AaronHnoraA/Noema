@@ -102,6 +102,19 @@ export function createDesktopKnowledgeDock(options: DesktopKnowledgeDockOptions)
   let view: KnowledgeDockView = "backlinks";
   let destroyed = false;
   let mentionGeneration = 0;
+  let refreshTimer = 0;
+
+  // Document edits request outline/knowledge refreshes from the shared assist
+  // frame.  Rebuilding a collapsed dock is pure waste, and rebuilding an open
+  // backlinks/tag list once per animation frame is especially expensive in an
+  // Emacs xwidget where WebKit paint is followed by Emacs redisplay.  Opening
+  // or switching a tab still renders synchronously; background refresh calls
+  // coalesce into one trailing pass after a typing burst.
+  const cancelRefresh = (): void => {
+    if (!refreshTimer) return;
+    window.clearTimeout(refreshTimer);
+    refreshTimer = 0;
+  };
 
   const expanded = (): boolean => !options.root.classList.contains("is-collapsed");
 
@@ -245,6 +258,7 @@ export function createDesktopKnowledgeDock(options: DesktopKnowledgeDockOptions)
   };
 
   const select = (next: KnowledgeDockView, focus: boolean): void => {
+    cancelRefresh();
     const previous = view;
     view = next;
     options.root.dataset.knowledgeView = next;
@@ -279,6 +293,7 @@ export function createDesktopKnowledgeDock(options: DesktopKnowledgeDockOptions)
 
   const collapse = (): void => {
     if (destroyed || !expanded()) return;
+    cancelRefresh();
     if (view === "search") options.searchInput.blur();
     options.onCollapse();
     setExpanded(false);
@@ -302,12 +317,20 @@ export function createDesktopKnowledgeDock(options: DesktopKnowledgeDockOptions)
   return {
     activeView: () => view,
     collapse,
-    refresh: renderActiveView,
+    refresh() {
+      if (destroyed || !expanded()) return;
+      cancelRefresh();
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = 0;
+        if (!destroyed && expanded()) renderActiveView();
+      }, 180);
+    },
     show,
     toggle,
     destroy() {
       if (destroyed) return;
       destroyed = true;
+      cancelRefresh();
       mentionGeneration++;
       options.onCollapse();
       setExpanded(false);

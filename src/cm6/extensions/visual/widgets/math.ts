@@ -42,6 +42,7 @@ import { scanCodeRanges } from "../../../code-ranges.ts";
 import { scanTexSource, texTokenClass } from "../../../tex-highlight.ts";
 import { orgEnvContextForRange, type OrgEnvContext } from "./block-extras.ts";
 import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
+import { isCoalescedVisualTyping } from "../typing-burst.ts";
 import { getKatexMacros } from "../../../../katex-macros.ts";
 import {
   mountVisualTexDisplayEditor,
@@ -1709,6 +1710,19 @@ class MathInlinePlugin {
 
   update(update: ViewUpdate): void {
     if (update.view.compositionStarted && update.selectionSet && !update.docChanged && !update.viewportChanged) return;
+    if (isCoalescedVisualTyping(update) && !this.active) {
+      const mapKey = (key: string): string => {
+        const range = rangeFromKey(key);
+        return range
+          ? `${update.changes.mapPos(range.from, -1)}:${update.changes.mapPos(range.to, 1)}`
+          : "";
+      };
+      this.selectionKey = mapKey(this.selectionKey);
+      this.suppressedKey = mapKey(this.suppressedKey);
+      this.decorations = this.decorations.map(update.changes);
+      this.atomicRanges = this.atomicRanges.map(update.changes);
+      return;
+    }
     let rebuild = this.forceRebuild
       || update.docChanged
       || update.viewportChanged

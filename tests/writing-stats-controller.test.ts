@@ -28,7 +28,7 @@ describe("writing stats feature controller", () => {
     controller.destroy();
   });
 
-  test("defers background scans during shared renderer quiescence and resumes once", () => {
+  test("counts through renderer quiescence and defers only for a hidden surface", () => {
     vi.useFakeTimers();
     const originalRequest = Object.getOwnPropertyDescriptor(window, "requestIdleCallback");
     const originalCancel = Object.getOwnPropertyDescriptor(window, "cancelIdleCallback");
@@ -56,9 +56,29 @@ describe("writing stats feature controller", () => {
     const label = document.createElement("span");
     const controller = createWritingStatsController(editor, label);
 
+    const drainOneIdleCallback = (): void => {
+      const entry = callbacks.entries().next().value as [number, IdleRequestCallback];
+      callbacks.delete(entry[0]);
+      entry[1]({ didTimeout: false, timeRemaining: () => 10 });
+    };
+
     try {
+      // Quiescence arrives ~1s after the last keystroke. Counting is already
+      // chunked into idle callbacks that yield to pending input, so suspending
+      // it here bought nothing and discarded work in progress.
       controller.schedule(true);
       controller.setActivity("quiescent");
+      vi.advanceTimersByTime(2_000);
+      expect(callbacks.size).toBe(1);
+      drainOneIdleCallback();
+      expect(controller.isDocumentChanged()).toBe(false);
+      expect(label.textContent).toMatch(/^全文 \d+ 字$/);
+
+      // A hidden surface is the gate that really stops the work, and it must
+      // resume exactly once rather than replaying the elapsed delay.
+      holder.state = EditorState.create({ doc: "hello world again" });
+      controller.schedule(true);
+      controller.setActivity("hidden");
       vi.advanceTimersByTime(2_000);
       expect(callbacks.size).toBe(0);
       expect(controller.isDocumentChanged()).toBe(true);
@@ -66,11 +86,75 @@ describe("writing stats feature controller", () => {
       controller.setActivity("active");
       vi.runOnlyPendingTimers();
       expect(callbacks.size).toBe(1);
-      const entry = callbacks.entries().next().value as [number, IdleRequestCallback];
-      callbacks.delete(entry[0]);
-      entry[1]({ didTimeout: false, timeRemaining: () => 10 });
+      drainOneIdleCallback();
       expect(controller.isDocumentChanged()).toBe(false);
-      expect(label.textContent).toMatch(/^全文 \d+ 字$/);
+    } finally {
+      controller.destroy();
+      if (originalRequest) Object.defineProperty(window, "requestIdleCallback", originalRequest);
+      else delete (window as { requestIdleCallback?: unknown }).requestIdleCallback;
+      if (originalCancel) Object.defineProperty(window, "cancelIdleCallback", originalCancel);
+      else delete (window as { cancelIdleCallback?: unknown }).cancelIdleCallback;
+      vi.useRealTimers();
+    }
+  });
+
+  // Regression: quiescence arrives ~1s after the last keystroke, but a chunked
+  // full-document scan of a large note needs longer than that. Cancelling it
+  // there meant a type-pause-type rhythm restarted the scan from zero every
+  // cycle, burning CPU on work that could never finish — the exact background
+  // waste the shared activity gate exists to prevent.
+  test("a chunked large-document scan survives quiescence instead of restarting", () => {
+    vi.useFakeTimers();
+    const originalRequest = Object.getOwnPropertyDescriptor(window, "requestIdleCallback");
+    const originalCancel = Object.getOwnPropertyDescriptor(window, "cancelIdleCallback");
+    let nextHandle = 1;
+    const callbacks = new Map<number, IdleRequestCallback>();
+    Object.defineProperty(window, "requestIdleCallback", {
+      configurable: true,
+      value: (callback: IdleRequestCallback) => {
+        const handle = nextHandle++;
+        callbacks.set(handle, callback);
+        return handle;
+      },
+    });
+    Object.defineProperty(window, "cancelIdleCallback", {
+      configurable: true,
+      value: (handle: number) => callbacks.delete(handle),
+    });
+    // Above LARGE_DOCUMENT_CHARS, so queueIdle takes the chunked scanRange path.
+    const doc = "alpha beta gamma delta ".repeat(30_000);
+    const holder = { state: EditorState.create({ doc }) };
+    const editor = {
+      view: holder,
+      getMarkdownLength: () => holder.state.doc.length,
+    } as unknown as Editor;
+    const label = document.createElement("span");
+    const controller = createWritingStatsController(editor, label);
+
+    try {
+      controller.schedule(true);
+      vi.runOnlyPendingTimers();
+      expect(callbacks.size).toBe(1);
+
+      // Drain one chunk, then let the renderer go idle mid-scan.
+      const drain = (): boolean => {
+        const next = callbacks.entries().next();
+        if (next.done) return false;
+        const [handle, callback] = next.value as [number, IdleRequestCallback];
+        callbacks.delete(handle);
+        callback({ didTimeout: false, timeRemaining: () => 10 });
+        return true;
+      };
+      expect(drain()).toBe(true);
+      controller.setActivity("quiescent");
+
+      // The scan must still be in flight and must reach a rendered result
+      // without any further activity waking it.
+      let steps = 0;
+      while (drain() && steps < 500) steps += 1;
+      expect(steps).toBeGreaterThan(0);
+      expect(controller.isDocumentChanged()).toBe(false);
+      expect(label.textContent).toMatch(/^全文 [\d,]+ 字$/);
     } finally {
       controller.destroy();
       if (originalRequest) Object.defineProperty(window, "requestIdleCallback", originalRequest);

@@ -230,6 +230,9 @@ export function workspaceGraphWithCurrentMarkdown(
 
 export function createLocalGraphPanel(options: LocalGraphPanelOptions): LocalGraphPanel {
   let renderKey = "";
+  let liveInputsMarkdown: string | null = null;
+  let liveInputsKey = "";
+  let liveInputs: { refs: string[]; tags: string[] } | null = null;
   const resizeTimer = new CoalescedTimer(40);
   let expandedOnce = false;
   let mode: "local" | "workspace" = "local";
@@ -330,9 +333,34 @@ export function createLocalGraphPanel(options: LocalGraphPanelOptions): LocalGra
     ].join("\t");
   }
 
+  /**
+   * The live document's contribution to the graph: the refs and tags the
+   * current note declares in its own source, ahead of the index catching up.
+   *
+   * Cached on the memoized Markdown string, whose identity is stable while the
+   * document is unchanged, and shared with `buildGraph` so the scan happens
+   * once per revision rather than once per render.
+   */
+  function liveGraphInputs(): { refs: string[]; tags: string[] } {
+    const markdown = options.getMarkdown();
+    const current = options.getCurrentNote();
+    const key = noteKey(current);
+    if (liveInputsMarkdown === markdown && liveInputsKey === key && liveInputs) return liveInputs;
+    liveInputsMarkdown = markdown;
+    liveInputsKey = key;
+    liveInputs = { refs: markdownRefs(markdown), tags: currentRoamTags(current, markdown) };
+    return liveInputs;
+  }
+
   function dataSignature(): string {
     const config = settings();
     const current = options.getCurrentNote();
+    // The live document enters this signature through the values the graph
+    // actually draws, not through its length. Length changes on every typed
+    // character, so it forced a full rebuild and layout on each editing pause
+    // even when the graph could not possibly differ; refs and tags change only
+    // when a link or tag is written.
+    const live = expandedOnce ? liveGraphInputs() : { refs: [], tags: [] };
     return [
       noteKey(current),
       config.depth,
@@ -341,7 +369,8 @@ export function createLocalGraphPanel(options: LocalGraphPanelOptions): LocalGra
       config.tags ? "tags" : "",
       noteSignature(current),
       options.getNotes().map(noteSignature).join("\n"),
-      expandedOnce ? (options.getMarkdownLength?.() ?? options.getMarkdown().length) : "",
+      live.refs.join(","),
+      live.tags.join(","),
     ].join("\n");
   }
 
@@ -353,14 +382,14 @@ export function createLocalGraphPanel(options: LocalGraphPanelOptions): LocalGra
     const notes = unique([current, ...options.getNotes()], (note) => noteKey(note));
     const byLookup = buildLookup(notes);
     const currentKey = noteKey(current);
-    const currentTags = currentRoamTags(current, options.getMarkdown());
+    const currentTags = liveGraphInputs().tags;
     const outgoing = new Map<string, NoteSummary[]>();
     const incoming = new Map<string, NoteSummary[]>();
     const tagsByNote = new Map<string, string[]>();
     const tagNotes = new Map<string, NoteSummary[]>();
     const tagLabels = new Map<string, string>();
     const tagNeighbors = new Map<string, Map<string, string>>();
-    const markdownOut = markdownRefs(options.getMarkdown());
+    const markdownOut = liveGraphInputs().refs;
 
     for (const note of notes) {
       const key = noteKey(note);
@@ -728,10 +757,15 @@ export function createLocalGraphPanel(options: LocalGraphPanelOptions): LocalGra
     suspend,
     setActivity(state: RendererActivityState): void {
       if (activityState === state) return;
-      const wasSuspended = activityState === "quiescent" || activityState === "hidden";
+      const wasSuspended = activityState === "hidden";
       activityState = state;
+      // The 3D workspace graph owns an ongoing render loop, so it still makes
+      // its own decision about idleness from the raw state.
       workspaceGraph?.setActivity(state);
-      if (state === "quiescent" || state === "hidden") {
+      // This panel's own work is a coalesced relayout that must eventually
+      // land. Deferring it at quiescence left the overlay stale for the whole
+      // idle period and then repaid it on the next keystroke.
+      if (state === "hidden") {
         resizeTimer.cancel();
         return;
       }

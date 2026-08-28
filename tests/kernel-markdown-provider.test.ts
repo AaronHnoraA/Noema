@@ -303,6 +303,51 @@ describe("desktop kernel Markdown provider", () => {
     ]);
   });
 
+  /**
+   * Kernel request-count guardrail for the typing hot path.
+   *
+   * Every CM6 save reaches the Go kernel through this provider. A read before
+   * the write would double the round trips on the one path that runs while the
+   * user is typing, and would reintroduce a read/compare/write race that the
+   * kernel's own CAS is there to own. Pin both the count and the shape.
+   */
+  test("an incremental save costs exactly one kernel round trip", async () => {
+    const root = await setupRoot();
+    const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
+    const provider = createKernelMarkdownProvider({
+      baseUrl: "http://127.0.0.1:6806",
+      box: { id: "notebook", root },
+      fetchImpl: async (url: string, init: { body: string }) => {
+        calls.push({
+          path: new URL(url).pathname,
+          body: JSON.parse(init.body) as Record<string, unknown>,
+        });
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            code: 0,
+            data: { version: "v2", mtimeMs: 42, size: 7 },
+          }),
+        };
+      },
+    });
+
+    const saved = await provider.writeChanges({
+      file: join(root, "nested", "note.md"),
+      changes: { from: 0, to: 0, insert: "x" },
+      expectedVersion: "v1",
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.path).toBe("/api/noema/markdown/applyChanges");
+    // The base version travels with the write so the kernel performs one
+    // authoritative compare-and-swap; Node must not pre-read to compare.
+    expect(calls[0]!.body.expectedVersion).toBe("v1");
+    expect(calls[0]!.body.path).toBe("/nested/note.md");
+    expect(saved.version).toBe("v2");
+  });
+
   test("rejects a kernel response that rewrites Markdown", async () => {
     const root = await setupRoot();
     const file = join(root, "nested", "note.md");

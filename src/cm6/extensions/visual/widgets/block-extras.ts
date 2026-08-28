@@ -69,7 +69,8 @@ import {
   isMarkdownLinkOpenEvent,
   markdownLinkOpensNewWindow,
 } from "../../../markdown-link-events.ts";
-import { refreshViewportDecorations } from "../../../viewport-refresh.ts";
+import { hasViewportDecorationRefresh, refreshViewportDecorations } from "../../../viewport-refresh.ts";
+import { isCoalescedVisualTyping } from "../typing-burst.ts";
 import { preserveEditorViewport } from "../../../viewport-stability.ts";
 import { AttributeViewWidget } from "./attribute-view.ts";
 import { EmbedQueryWidget } from "./embed-query.ts";
@@ -3763,7 +3764,9 @@ class OrgEnvRailPlugin {
   }
 
   update(update: ViewUpdate): void {
-    if (update.docChanged || update.viewportChanged || update.geometryChanged) {
+    if (isCoalescedVisualTyping(update)) return;
+    if (update.docChanged || update.viewportChanged || update.geometryChanged
+        || hasViewportDecorationRefresh(update)) {
       this.schedule(update.view);
     }
   }

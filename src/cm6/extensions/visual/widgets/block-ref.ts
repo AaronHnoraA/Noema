@@ -22,6 +22,7 @@ import { scanInlineMathRanges } from "../../../../inline-math.ts";
 import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
 import { BLOCK_REFERENCE_ID_SOURCE, shortBlockId } from "../../../../../shared/block-identity.mjs";
 import { isPointerSelecting, updateHasPointerSelectionEffect } from "../selection.ts";
+import { isCoalescedVisualTyping } from "../typing-burst.ts";
 
 const BLOCK_REF_RE = new RegExp(
   String.raw`\(\((${BLOCK_REFERENCE_ID_SOURCE})(?:\s+(["'])((?:\\.|(?!\2)[\s\S])*)\2)?\)\)`,
@@ -135,6 +136,10 @@ class BlockRefPlugin {
 
   update(update: ViewUpdate): void {
     if (update.view.compositionStarted && update.selectionSet && !update.docChanged && !update.viewportChanged) return;
+    if (isCoalescedVisualTyping(update)) {
+      this.decorations = this.decorations.map(update.changes);
+      return;
+    }
     if (update.selectionSet && !update.docChanged && !update.viewportChanged
         && isPointerSelecting(update.state)) return;
     const pointerSelectionFinished = updateHasPointerSelectionEffect(update)

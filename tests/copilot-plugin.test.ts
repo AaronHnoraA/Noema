@@ -94,6 +94,7 @@ function createCopilotHarness(options: {
   cursor?: number;
   file?: string;
   idleDelayMs?: number;
+  largeBufferThresholdKb?: number;
   response?: (action: string, body: Record<string, unknown>) => Promise<unknown>;
   mode?: "insert" | "normal" | "visual" | "visual-line";
   active?: boolean;
@@ -180,7 +181,10 @@ function createCopilotHarness(options: {
       return () => { delete handlers.action; };
     },
     onSettingsChange: () => () => {},
-    getSettings: () => ({ idleDelayMs: options.idleDelayMs ?? 999_999, largeBufferThresholdKb: 512 }),
+    getSettings: () => ({
+      idleDelayMs: options.idleDelayMs ?? 999_999,
+      largeBufferThresholdKb: options.largeBufferThresholdKb ?? 512,
+    }),
     isActive: () => active,
     isCursorInTexSource: options.isCursorInTexSource,
     texSourceRangeAtCursor: options.texSourceRangeAtCursor,
@@ -1022,6 +1026,165 @@ describe("copilot plugin insertion", () => {
       expect(harness.editor.markdown).toBe("\\(E=mc^2\\)");
     } finally {
       harness.dispose();
+    }
+  });
+
+  test("byte-bounds a pathological TeX source range without reading the whole note", async () => {
+    const markdown = `\\(${"图".repeat(30_000)}needle\\)`;
+    const cursor = markdown.length - 2;
+    const harness = createCopilotHarness({
+      markdown,
+      cursor,
+      largeBufferThresholdKb: 64,
+      isCursorInTexSource: () => true,
+      texSourceRangeAtCursor: () => ({ from: 2, to: markdown.length - 2 }),
+      response: async () => ({ items: [] }),
+    });
+    try {
+      await harness.trigger();
+      const inline = harness.requests.find((request) => request.action === "inline");
+      const content = String(inline?.body.content || "");
+      expect(new TextEncoder().encode(content).byteLength).toBeLessThanOrEqual(64 * 1024);
+      expect(content).toContain("needle");
+      expect(inline?.body.offset).toBe(content.indexOf("needle") + "needle".length);
+      expect(inline?.body.window).toBeDefined();
+      expect(harness.editor.getMarkdownCalls).toBe(0);
+    } finally {
+      harness.dispose();
+    }
+  });
+
+  test("the default settings window an ordinary note instead of sending it whole", async () => {
+    const host = document.createElement("div");
+    const target = document.createElement("button");
+    host.appendChild(target);
+    document.body.appendChild(host);
+
+    // A 120 KB note is an ordinary research note, not a pathological one. The
+    // previous 512 KB threshold meant nothing this size was ever windowed, so
+    // every completion uploaded the whole document and the language server
+    // re-parsed it to read a few thousand tokens around the cursor.
+    const markdown = `${"prose and more prose. ".repeat(6000)}\nneedle`;
+    const editor = new FakeEditor(markdown);
+    const handlers: { action?: (action: string) => void } = {};
+    let inlineBody: { content: string; offset: number } | null = null;
+
+    const restoreApi = installNativeCopilot(async (action, body) => {
+      if (action === "inline") {
+        inlineBody = body as { content: string; offset: number };
+        return { items: [] };
+      }
+      return { ok: true };
+    });
+
+    const cleanup = setupCopilot({
+      editor,
+      host,
+      currentFile: () => "/tmp/ordinary.md",
+      vimMode: () => "insert",
+      setStatus: () => {},
+      onChange: () => () => {},
+      onKeyDown: () => () => {},
+      onAction: (handler: (action: string) => void) => {
+        handlers.action = handler;
+        return () => { delete handlers.action; };
+      },
+      onSettingsChange: () => () => {},
+      // Deliberately omits largeBufferThresholdKb so the plugin default applies.
+      getSettings: () => ({ idleDelayMs: 999_999 }),
+      onDocumentEvent: () => () => {},
+      jumpSnippetNext: () => false,
+      jumpSnippetPrevious: () => false,
+      forwardDelimiter: () => false,
+      backwardDelimiter: () => false,
+    });
+
+    try {
+      target.focus();
+      handlers.action?.("trigger");
+      await waitForMicrotasks();
+      await waitForMicrotasks();
+
+      expect(markdown.length).toBeGreaterThan(100 * 1024);
+      expect(inlineBody).not.toBeNull();
+      expect(inlineBody!.content.length).toBeLessThanOrEqual(64 * 1024);
+      expect(inlineBody!.content.length).toBeLessThan(markdown.length / 2);
+      expect(inlineBody!.content).toContain("needle");
+    } finally {
+      cleanup();
+      restoreApi();
+      host.remove();
+    }
+  });
+
+  test("the default completion window is bounded by UTF-8 bytes for CJK and emoji notes", async () => {
+    const requestBody = async (markdown: string) => {
+      const host = document.createElement("div");
+      const target = document.createElement("button");
+      host.appendChild(target);
+      document.body.appendChild(host);
+      const editor = new FakeEditor(markdown);
+      const handlers: { action?: (action: string) => void } = {};
+      let inlineBody: {
+        content: string;
+        offset: number;
+        window?: { from: number; to: number };
+      } | null = null;
+      const restoreApi = installNativeCopilot(async (action, body) => {
+        if (action === "inline") {
+          inlineBody = body as typeof inlineBody;
+          return { items: [] };
+        }
+        return { ok: true };
+      });
+      const cleanup = setupCopilot({
+        editor,
+        host,
+        currentFile: () => "/tmp/unicode.md",
+        vimMode: () => "insert",
+        setStatus: () => {},
+        onChange: () => () => {},
+        onKeyDown: () => () => {},
+        onAction: (handler: (action: string) => void) => {
+          handlers.action = handler;
+          return () => { delete handlers.action; };
+        },
+        onSettingsChange: () => () => {},
+        getSettings: () => ({ idleDelayMs: 999_999 }),
+        onDocumentEvent: () => () => {},
+        jumpSnippetNext: () => false,
+        jumpSnippetPrevious: () => false,
+        forwardDelimiter: () => false,
+        backwardDelimiter: () => false,
+      });
+      try {
+        target.focus();
+        handlers.action?.("trigger");
+        await waitForMicrotasks();
+        await waitForMicrotasks();
+        return { body: inlineBody!, editor };
+      } finally {
+        cleanup();
+        restoreApi();
+        host.remove();
+      }
+    };
+
+    for (const markdown of [
+      `${"图".repeat(30_000)}\nneedle`,
+      `${"🧠".repeat(20_000)}\nneedle`,
+    ]) {
+      // Both fixtures are fewer than 64K UTF-16 code units, which is why the
+      // old character-count implementation incorrectly sent them whole.
+      expect(markdown.length).toBeLessThan(64 * 1024);
+      expect(new TextEncoder().encode(markdown).byteLength).toBeGreaterThan(64 * 1024);
+      const { body, editor } = await requestBody(markdown);
+      expect(body).not.toBeNull();
+      expect(new TextEncoder().encode(body.content).byteLength).toBeLessThanOrEqual(64 * 1024);
+      expect(body.content).toContain("needle");
+      expect(body.offset).toBe(body.content.indexOf("needle") + "needle".length);
+      expect(body.window).toBeDefined();
+      expect(editor.getMarkdownCalls).toBe(0);
     }
   });
 

@@ -107,19 +107,20 @@ describe("AssistScheduler", () => {
     expect(frames.pendingHandles()).toEqual([]);
   });
 
-  test("quiescence retains coalesced work and flushes it once on resume", () => {
+  test("coalesced work is not withheld by renderer quiescence", () => {
     const frames = createFrameApi();
     const runs: AssistUpdateFlags[] = [];
     const scheduler = new AssistScheduler(frames.api, () => true, (flags) => runs.push(flags));
 
     scheduler.schedule({ snippets: true });
+    // Quiescence arrives ~1s after the last keystroke. These are user-visible
+    // surfaces — outline, math preview, cursor tool — and an update requested
+    // while idle used to sit unrendered until the next keystroke.
     scheduler.setQuiescent(true);
     scheduler.schedule({ mathPreview: true });
     expect(frames.cancelled).toEqual([1]);
-    expect(frames.pendingHandles()).toEqual([]);
-
-    scheduler.setQuiescent(false);
     expect(frames.pendingHandles()).toEqual([2]);
+
     frames.fire(2);
     expect(runs).toEqual([{
       snippets: true,
@@ -128,6 +129,13 @@ describe("AssistScheduler", () => {
       toc: false,
       selectionTool: false,
     }]);
+
+    // A hidden surface is still the gate that stops the work.
+    scheduler.schedule({ toc: true });
+    scheduler.setPaused(true);
+    scheduler.schedule({ toc: true });
+    expect(frames.pendingHandles()).toEqual([]);
+    expect(runs).toHaveLength(1);
   });
 
   test("visible gate prevents scheduling and firing", () => {

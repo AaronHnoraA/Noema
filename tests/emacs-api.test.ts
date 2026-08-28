@@ -8,6 +8,7 @@ describe("Emacs host API", () => {
     const handlers = createEmacsApiHandlers({
       apiOpenInEmacs: () => undefined,
       apiCurrentFile: () => undefined,
+      apiEmacsInputFocus: () => undefined,
       apiEmacsUiState: () => undefined,
       apiEmacsKey: () => undefined,
       apiSystemOpen: () => undefined,
@@ -24,6 +25,27 @@ describe("Emacs host API", () => {
       path: "/notes/project",
       relativePath: "project",
     });
+    expect(received).toEqual([body]);
+  });
+
+  test("routes the renderer input-focus fact to the Emacs gateway adapter", async () => {
+    const received: unknown[] = [];
+    const handlers = createEmacsApiHandlers({
+      apiOpenInEmacs: () => undefined,
+      apiCurrentFile: () => undefined,
+      apiEmacsInputFocus: async (body: unknown) => {
+        received.push(body);
+        return { ok: true };
+      },
+      apiEmacsUiState: () => undefined,
+      apiEmacsKey: () => undefined,
+      apiSystemOpen: () => undefined,
+      apiEmacsZotero: () => undefined,
+      apiChooseNotePath: () => undefined,
+    });
+    const body = { client: "aaronnote:/notes/a.md", file: "/notes/a.md" };
+
+    await expect(handlers["aaronnote:api:emacs:input-focus"](body)).resolves.toEqual({ ok: true });
     expect(received).toEqual([body]);
   });
 });

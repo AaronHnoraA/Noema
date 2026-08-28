@@ -118,15 +118,24 @@ export class MathSnippetIndex {
     this.scheduleRebuild();
   }
 
+  /**
+   * The command index is rebuilt in idle chunks bounded by IDLE_BUDGET_MS, so
+   * renderer idleness is when that scan belongs rather than when it must stop.
+   * Cancelling it at quiescence — roughly a second after the last keystroke —
+   * restarted a large, math-heavy note's scan from zero on every type-pause
+   * cycle, so it could never finish and math snippet completion silently went
+   * missing while the CPU was spent on the discarded passes. Only a hidden
+   * surface suspends it.
+   */
   setActivity(state: RendererActivityState): void {
     if (this.destroyed) return;
-    const wasSuspended = this.activityState === "quiescent" || this.activityState === "hidden";
+    const wasSuspended = this.activityState === "hidden";
     this.activityState = state;
     if (state === "destroyed") {
       this.destroy();
       return;
     }
-    if (state === "quiescent" || state === "hidden") {
+    if (state === "hidden") {
       this.generation += 1;
       if (this.scanHandle) cancelIdle(this.scanHandle);
       this.scanHandle = 0;
@@ -203,14 +212,14 @@ export class MathSnippetIndex {
     const generation = ++this.generation;
     this.pendingRebuild = true;
     if (this.scanHandle) cancelIdle(this.scanHandle);
-    if (this.activityState === "quiescent" || this.activityState === "hidden") return;
+    if (this.activityState === "hidden") return;
     const doc = this.editor.view.state.doc;
     let position = 0;
     let scanState: ScanState = { inlineMath: false, displayMath: false, fence: "", lineStart: true };
     const nextCounts = new Map<string, number>();
     const scan = (deadline: { timeRemaining: () => number }): void => {
       if (this.destroyed || generation !== this.generation
-          || this.activityState === "quiescent" || this.activityState === "hidden") return;
+          || this.activityState === "hidden") return;
       const started = performance.now();
       let firstChunk = true;
       while (position < doc.length && (firstChunk || (

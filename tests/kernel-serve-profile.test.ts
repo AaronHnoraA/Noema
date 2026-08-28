@@ -38,8 +38,9 @@ describe("Noema kernel serve profile", () => {
     const host = source("web-host.mjs");
     expect(host).toContain("let sseHeartbeatInterval = null");
     expect(host).toContain('if (hostMode !== "server" || sseHeartbeatInterval || !eventClients.size) return;');
-    expect(host).toContain("eventClients.add(res);\n      startSseHeartbeat();");
+    expect(host).toContain("eventClients.set(res, eventClient);\n      startSseHeartbeat();");
     expect(host).toContain("req.on(\"close\", () => removeEventClient(res))");
+    expect(host).toContain('if (!force && status === "connected") return Promise.resolve(true);');
     expect(host).not.toMatch(/const sseHeartbeatInterval\s*=\s*setInterval/);
 
     const jupyterWs = source("server/lib/jupyter-kernel-ws.mjs");
