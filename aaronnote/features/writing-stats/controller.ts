@@ -22,6 +22,11 @@ export type WritingStatsController = {
 };
 
 const LARGE_DOCUMENT_CHARS = 512 * 1024;
+// The document scope is counted once per edit; the selection and heading scopes
+// are counted again on every selection pass, and a drag emits those continuously.
+// They therefore go to idle chunks far sooner — roughly a few milliseconds of
+// inline counting, rather than a fifth of the pass interval.
+const LARGE_SCOPE_CHARS = 64 * 1024;
 const UPDATE_DELAY_MS = 300;
 const LARGE_UPDATE_DELAY_MS = 900;
 const SELECTION_DELAY_MS = 80;
@@ -170,7 +175,7 @@ export function createWritingStatsController(
         && subtreeCache.to === subtree.to
       ) return finish(primary, subtreeCache.stats);
       if (subtree.from === 0 && subtree.to === scanDoc.length) return finish(primary, full);
-      if (subtree.to - subtree.from < LARGE_DOCUMENT_CHARS) {
+      if (subtree.to - subtree.from < LARGE_SCOPE_CHARS) {
         const stats = countWritingStats(scanDoc, subtree.from, subtree.to, metaSummaryRange);
         subtreeCache = { doc: scanDoc, ...subtree, stats };
         return finish(primary, stats);
@@ -182,7 +187,7 @@ export function createWritingStatsController(
     };
 
     if (!hasSelection) return resolveSubtree(full);
-    if (selection.to - selection.from < LARGE_DOCUMENT_CHARS) {
+    if (selection.to - selection.from < LARGE_SCOPE_CHARS) {
       return resolveSubtree(countWritingStats(scanDoc, selection.from, selection.to, metaSummaryRange));
     }
     scanRange(epoch, scanDoc, selection.from, selection.to, metaSummaryRange, resolveSubtree);

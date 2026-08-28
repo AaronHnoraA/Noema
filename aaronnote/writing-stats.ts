@@ -1,5 +1,5 @@
 import type { Text } from "@codemirror/state";
-import { tocIndexFromState } from "../src/cm6/toc-index.ts";
+import { tocIndexFromState, type MarkdownHeading } from "../src/cm6/toc-index.ts";
 import {
   orgMetaSummaryRangeFromLines,
   type MetaSummarySourceRange,
@@ -118,15 +118,46 @@ export function readingMinutes(stats: WritingStats): number {
   return stats.words === 0 ? 0 : Math.max(1, Math.ceil(minutes));
 }
 
+/**
+ * Markdown headings in document order, cached per TOC index.
+ *
+ * The index is a state field, so its heading array keeps its identity across
+ * selection-only transactions — and this runs on every one of them while a
+ * drag is in progress. Filtering and sorting thousands of headings each time is
+ * pure repeat work.
+ */
+const orderedMarkdownHeadings = new WeakMap<object, MarkdownHeading[]>();
+
+function headingStart(heading: MarkdownHeading): number {
+  return heading.markerFrom ?? heading.pos;
+}
+
+function markdownHeadingsInOrder(state: EditorState): MarkdownHeading[] {
+  const headings = tocIndexFromState(state).headings;
+  const cached = orderedMarkdownHeadings.get(headings);
+  if (cached) return cached;
+  const ordered = headings
+    .filter((heading) => heading.source === "markdown")
+    .sort((a, b) => headingStart(a) - headingStart(b));
+  orderedMarkdownHeadings.set(headings, ordered);
+  return ordered;
+}
+
 /** Return the Markdown heading subtree containing POS, including its heading line. */
 export function headingSubtreeRange(state: EditorState, pos: number): { from: number; to: number } | null {
-  const headings = tocIndexFromState(state).headings
-    .filter((heading) => heading.source === "markdown")
-    .sort((a, b) => (a.markerFrom ?? a.pos) - (b.markerFrom ?? b.pos));
+  const headings = markdownHeadingsInOrder(state);
+  // Last heading that starts at or before pos.
+  let low = 0;
+  let high = headings.length - 1;
   let currentIndex = -1;
-  for (let index = 0; index < headings.length; index += 1) {
-    if ((headings[index]!.markerFrom ?? headings[index]!.pos) > pos) break;
-    currentIndex = index;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    if (headingStart(headings[mid]!) > pos) {
+      high = mid - 1;
+    } else {
+      currentIndex = mid;
+      low = mid + 1;
+    }
   }
   if (currentIndex < 0) return null;
   const current = headings[currentIndex]!;
@@ -135,9 +166,9 @@ export function headingSubtreeRange(state: EditorState, pos: number): { from: nu
   for (let index = currentIndex + 1; index < headings.length; index += 1) {
     const next = headings[index]!;
     if ((next.renderLevel ?? next.level) <= level) {
-      to = state.doc.lineAt(next.markerFrom ?? next.pos).from;
+      to = state.doc.lineAt(headingStart(next)).from;
       break;
     }
   }
-  return { from: state.doc.lineAt(current.markerFrom ?? current.pos).from, to };
+  return { from: state.doc.lineAt(headingStart(current)).from, to };
 }

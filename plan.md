@@ -1348,3 +1348,50 @@ CM6 侧新增 `src/cm6/copied-text.ts`（复刻 CodeMirror 自己的 copiedRange
 - Cmd+X 仍转发为 Emacs `M-x`，页面内没有剪切键位；`cut` 命令已具备，等用户决定绑哪个键。
 - Emacs 侧 `remote-gateway-request-sync` 的 8 秒阻塞 + roam-cli.mjs 兜底进程仍在。用户本轮把卡死
   归因于鼠标拖选，所以没有动这条路；如果之后 minibuffer 选择也卡，这里是下一个目标。
+
+### idle/功耗 第一刀：内核不再定时联网，选区统计不再随选区增长（2026-08-28，当前工作树）
+
+**内核的无人值守联网已移除。** `kernel/job/cron.go` 里的 `RefreshRhyResultJob` 会在每次内核启动时
+以及此后每 6 小时请求一次 `https://siyuan-sync.b3logfile.com/apis/siyuan/version?ver=<Ver>`
+（`kernel/util/rhy.go`）。这是"云 全部移除"这条既定决策的漏网之鱼：既是 phone-home，也是没有任何
+调用方在等结果的周期性网络唤醒。现在只删掉这个 cron，`rhy.go` 与 `util.GetRhyBazaarHash` 原样保留，
+bazaar 在真正被打开时仍会按需取到同一个值——能力没变，只是没有定时器了。
+验证：重建 kernel 后启动，日志里不再有 `RefreshRhyResultJob`，`lsof -i` 显示内核只有三个 loopback
+socket（原先启动即建立一条到 b3logfile 的 TLS 连接）。`go build`/`go vet` 通过，`go test ./...` 全绿。
+
+**空载基线（Apple M2 Max，空 vault，无浏览器连接，60 秒墙钟）**：`node web-host.mjs` 0.13 CPU-秒、
+`noema-kernel` 0.09 CPU-秒，RSS 分别约 108MB / 78MB。这条基线用于后续对比，不是终点。
+
+**选区统计不再随选区大小增长。** 承接上一节：`writing-stats` 控制器把文档尺度早就放进 idle 分块，
+选区与 heading 尺度却仍共用 512KB 的门槛，于是拖选 512KB 以内仍然是同步整段扫描——而这个尺度是
+**每次选区变化都要重来**的。新增 `LARGE_SCOPE_CHARS = 64KB` 只管选区/heading 两个重复尺度，
+文档尺度保持 512KB。另外 `headingSubtreeRange` 每次调用都对全库标题做一次 filter+sort，
+现在按 TOC index 的 heading 数组身份做 WeakMap 缓存并改成二分查找。
+
+**可复现基准**：`npm test -- tests/drag-select-cost.test.ts --reporter=verbose`。约 898KB / 9000 个
+小节的文档上做 60 次递增选区 transaction：
+
+| 每步成本 | 结果 |
+| --- | ---: |
+| 纯 CM6 selection transaction | 0.61ms |
+| 加上 writing-stats 这一遍（修复后） | 0.54ms |
+| 修复前这一遍的同步计数 | 20.05ms |
+
+也就是说选区尺度这一遍从 ~20ms 降到与测量噪声同级，并且不再随选区线性增长；用户那份 5MB 笔记上
+原来每 80ms 就要同步扫描几 MB，正是拖选卡死的直接来源。该基准作为 `tests/drag-select-cost.test.ts`
+留在套件里，断言是相对的（分块这一遍必须显著快于同步计数），37 倍余量。
+
+门禁：`npm test` 212 files passed / 7 skipped、2064 tests passed / 16 skipped；`tsc` 与
+`npm run build:aaronnote` 通过；`go test ./...` 全绿。
+
+**内核里仍在跑、但需要用户拍板的定时任务**（按记忆里的约定，不擅自裁剪 SiYuan 子系统）：
+
+- `startOCRAssetsJob` **每 30 秒**一次，本机 tesseract 已启用（内核日志确认 11 种语言）。每次扫描
+  assets cache 找未 OCR 的图片，最多 OCR 7 张。空 vault 近乎免费，有图片的真实 vault 会持续跑
+  tesseract。这是内核里频率最高的空载唤醒。
+- `IndexEmbedBlockJob` / `CacheVirtualBlockRefJob` 各 10 分钟。前者服务 SiYuan 的 `{{...}}` 嵌入块，
+  Noema 语法里没有；后者受 `Conf.Editor.VirtualBlockRef` 开关控制，且 Noema 已有自己的 Go
+  virtual references 实现。
+- `StatJob` 每 2 小时，会递归统计 data 目录大小并 `Conf.Save()`。
+- `ClearOutdatedHistoryDirJob` 每 24 小时，清 SiYuan 的 history 目录；Noema 的版本历史走 git。
+- `AutoCheckMicrosoftDefenderJob` 每 30 分钟在 darwin 上是空实现，只剩一个定时器，无害。

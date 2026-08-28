@@ -32,7 +32,12 @@ func StartCron(supervisorPID ...int) {
 	util.StartAssetsTextsSaver()
 	model.StartAutoFixIndexScheduler()
 	go every(2*time.Hour, model.StatJob)
-	go every(6*time.Hour, util.RefreshRhyResultJob, "RefreshRhyResultJob")
+	// No unattended call to SiYuan's cloud. This job fetched
+	// <cloud>/apis/siyuan/version at every kernel start and every six hours
+	// thereafter, which in a fork that removed the cloud is a phone-home and a
+	// periodic radio wake for a result nothing was waiting on. The bazaar still
+	// resolves the same value lazily through util.GetRhyBazaarHash when someone
+	// actually opens it, so the capability is intact — only the timer is gone.
 	go every(2*time.Hour, model.RefreshCheckJob2H)
 	go every(6*time.Hour, model.RefreshCheckJob6H)
 	go every(10*time.Minute, model.IndexEmbedBlockJob)
