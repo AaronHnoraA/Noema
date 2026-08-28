@@ -1268,3 +1268,83 @@ Emacs full-project link 与 7 个 shared asset links 全部指向当前仓库/`r
 - virtual references 若未来 workspace 超过当前 64MB 扫描上限，再评估按 snapshot generation 维护
   per-document normalized prose/token cache，避免扩大上限后线性复制；先以真实大库 profile 为准，
   不提前增加另一套索引状态。
+
+---
+
+## Emacs xwidget 专项：剪贴板与拖选卡顿（2026-08-28，当前工作树）
+
+用户报告两件事：Noema 里复制/粘贴根本进不到系统剪贴板（"点击 copy 按钮都没反应"），
+以及鼠标拖选正文文字时非常容易卡死。剪切键位维持现状——Cmd+X 仍然是 Emacs 的 `M-x`，
+这是用户明确保留的决定，本轮没有改。
+
+### 根因一：macOS xwidget 根本无法回放 Emacs 按键
+
+`xwidget-webkit-pass-command-event` 在 GTK 之外没有实现。对 Emacs 31 的这份
+`--with-ns --with-xwidgets` 构建做 `nm`，只有
+`nsxwidget_{init,init_view,resize,webkit_execute_script,webkit_goto_uri,...}`，
+**没有 `nsxwidget_perform_lispy_event`**。所以 `init-browser.el` 里绑到该命令的每个键
+（`M-c`/`M-v` 在内）在 xwidget buffer 中都被 Emacs 吞掉且什么都不做：当 Emacs 持有键位时，
+复制和粘贴根本不会发生。
+
+`emacs/noema-xwidget-keys.el` 因此改为把 `M-c`/`M-v` 路由到 Noema 自己的 `copy`/`paste`
+命令（与既有 `M-z`→undo 同一条通道），由页面执行复制、经 web host 的 pasteboard 通路落盘。
+键位安装抽成 `my/noema--install-xwidget-keys`，并额外挂在 `xwidget-webkit-mode-hook` 上——
+通用浏览器配置也在抢同一批键，两个 `with-eval-after-load 'xwidget` 之间没有确定顺序。
+非 Noema 页面的回退路径未改动。
+
+### 根因二：页面内的剪贴板写入在 WKWebView 里一律被拒
+
+`navigator.clipboard.writeText` 与 `execCommand("copy")` 都需要 transient user activation，
+而 Emacs 拥有的这个 WKWebView 经常没有：Emacs 转发的键、已经 await 过的工具栏命令、
+没有自己 DOM 事件的 Vim yank，全部落空且静默失败。原先 `main.ts`、`fenced-code.ts`、
+`commands/index.ts`、`vim-lite.ts` 各写了一份"先 clipboard API 再 textarea+execCommand"的
+回退，四份都在这个宿主下失效——这正是"点击 copy 按钮没反应"。
+
+新增 `src/system-clipboard.ts` 作为唯一出口：默认仍是浏览器路径，宿主可以注册一个 writer。
+`aaronnote/host-clipboard.ts` 只在 `hostMode() === "emacs"` 时注册，走已有的
+`POST /api/clipboard`（web host 里的 `pbcopy`）。Electron 与只读 server host 不注册，保持原生
+剪贴板不被降级成纯文本。装了 writer 时两条路都跑，但对外报告的成功与否以宿主那条为准——
+用户能从别的应用观察到的就是它。
+
+粘贴侧补上另一半：`pasteDataTransfer` 过去在 DataTransfer 为空时直接放弃。WKWebView 恰恰会
+派发 paste 事件却不把 pasteboard 暴露给页面，于是 Cmd+V 什么都不做。现在空事件会退到
+`readSystemClipboardFallback`（`pngpaste`/`pbpaste`），与显式 paste 命令同一条路。
+
+CM6 侧新增 `src/cm6/copied-text.ts`（复刻 CodeMirror 自己的 copiedRange 规则：非空区间用行分隔
+拼接，全空则按行去重复制光标所在行），并在 `editor-cm6.ts` 的 `copy`/`cut` DOM 事件上做镜像——
+仅在宿主注册了 writer 时才写，避免在 Chromium 里用纯文本覆盖浏览器更丰富的 flavor。
+
+### 根因三：拖选时按帧重算整段选区
+
+拖选正文卡死的实际来源有两处按帧执行的无界工作：
+
+- `writing-stats` 控制器在选区变化后 80ms 重算一次，`updateNow` 对选区调用同步的
+  `countWritingStats(from, to)`。文档尺度早就走 idle 分块了，选区尺度没有：在几 MB 的笔记上
+  拖选，等于每 80ms 同步扫描几 MB，而结果又被下一个拖动事件丢弃。现在选区与 subtree 走和
+  文档同一套尺寸规则（`renderLargeDocumentScopes` + `scanRange`，epoch 可取消）；顺带
+  把 subtree cache 的命中检查补进大文档路径——之前那条路只写不读。
+- `activeEditorSelection()` 为了给浮动工具栏定位，每次 `selectionchange` 都
+  `editor.textBetween(from, to)` materialize 整个选区。定位只需要 rect，文本改成 thunk，
+  由真正需要它的命令调用；空白选区的判断保留，但只在选区 ≤4096 字符时才做那次读取。
+  另外拖动进行中不再更新工具栏（`isPointerSelecting`），`mouseup` 负责最后一次，
+  与 `live-preview.ts` 已有的做法一致。
+
+### 验收
+
+- 新增 `tests/system-clipboard.test.ts`（11 项）覆盖 copiedText 三种形态、host writer 优先级与
+  失败上报、`installHostClipboard` 的宿主门槛、空 DataTransfer 回退；
+  `tests/writing-stats-controller.test.ts` 新增大选区分块回归（已确认在修复前失败）。
+- 真实浏览器端到端（`AARONNOTE_HOST_MODE=emacs` 的 web host + Chrome，
+  把 `navigator.clipboard.writeText` 改为 reject、`document.execCommand` 改为返回 false，
+  复现 WKWebView 的限制）：`copy` 命令、选区工具栏 Copy 按钮、原生 `copy` 事件镜像三条路都写进了
+  macOS pasteboard；`paste` 命令与空 DataTransfer 的 paste 事件都把系统剪贴板内容插进了正文。
+  `POST /api/clipboard` 单独用 curl 验证过 204 与中文/emoji 往返。
+- `make test` 口径：`npm test` 210 files passed / 7 skipped、2062 tests passed / 16 skipped，
+  唯一失败的 `tests/renderer-build-watch.test.ts` 单跑通过，是该用例 5ms sleep 在满载下的既有抖动。
+  `npm run build:aaronnote`（含 `tsc`）通过。
+
+### 本轮未做
+
+- Cmd+X 仍转发为 Emacs `M-x`，页面内没有剪切键位；`cut` 命令已具备，等用户决定绑哪个键。
+- Emacs 侧 `remote-gateway-request-sync` 的 8 秒阻塞 + roam-cli.mjs 兜底进程仍在。用户本轮把卡死
+  归因于鼠标拖选，所以没有动这条路；如果之后 minibuffer 选择也卡，这里是下一个目标。

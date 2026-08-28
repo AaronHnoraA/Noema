@@ -81,6 +81,69 @@ describe("writing stats feature controller", () => {
     }
   });
 
+  // Regression: a pointer drag re-schedules on every selection change. Counting
+  // a multi-megabyte selection inline on each of those passes is what made
+  // drag-selecting in a large note stall the editor.
+  test("a large selection is counted in idle chunks, not inline", () => {
+    const originalRequest = Object.getOwnPropertyDescriptor(window, "requestIdleCallback");
+    const originalCancel = Object.getOwnPropertyDescriptor(window, "cancelIdleCallback");
+    const callbacks = new Map<number, IdleRequestCallback>();
+    let nextHandle = 1;
+    Object.defineProperty(window, "requestIdleCallback", {
+      configurable: true,
+      value: (callback: IdleRequestCallback) => {
+        const handle = nextHandle++;
+        callbacks.set(handle, callback);
+        return handle;
+      },
+    });
+    Object.defineProperty(window, "cancelIdleCallback", {
+      configurable: true,
+      value: (handle: number) => callbacks.delete(handle),
+    });
+    const doc = "word ".repeat(200_000); // 1MB, comfortably over the chunking threshold
+    const holder = { state: EditorState.create({ doc }) };
+    const editor = {
+      view: holder,
+      getMarkdownLength: () => holder.state.doc.length,
+    } as unknown as Editor;
+    const label = document.createElement("span");
+    const controller = createWritingStatsController(editor, label);
+
+    try {
+      // Prime the full-document count so only the selection scope is at stake.
+      controller.updateNow();
+      const fullText = label.textContent;
+      expect(fullText).toMatch(/^全文 200[,.]000 字$/);
+      while (callbacks.size > 0) {
+        const entry = callbacks.entries().next().value as [number, IdleRequestCallback];
+        callbacks.delete(entry[0]);
+        entry[1]({ didTimeout: false, timeRemaining: () => 0 });
+      }
+
+      holder.state = holder.state.update({ selection: { anchor: 0, head: doc.length } }).state;
+      controller.updateNow();
+      // Deferred, not counted inline: the label still shows the previous scope.
+      expect(label.textContent).toBe(fullText);
+      expect(callbacks.size).toBeGreaterThan(0);
+
+      let guard = 500;
+      while (callbacks.size > 0 && guard-- > 0) {
+        const entry = callbacks.entries().next().value as [number, IdleRequestCallback];
+        callbacks.delete(entry[0]);
+        entry[1]({ didTimeout: false, timeRemaining: () => 0 });
+      }
+      expect(guard).toBeGreaterThan(0);
+      expect(label.textContent).toMatch(/^选区 200[,.]000 字$/);
+    } finally {
+      controller.destroy();
+      if (originalRequest) Object.defineProperty(window, "requestIdleCallback", originalRequest);
+      else delete (window as { requestIdleCallback?: unknown }).requestIdleCallback;
+      if (originalCancel) Object.defineProperty(window, "cancelIdleCallback", originalCancel);
+      else delete (window as { cancelIdleCallback?: unknown }).cancelIdleCallback;
+    }
+  });
+
   test("large single-line documents are counted across cancellable idle chunks", () => {
     vi.useFakeTimers();
     const originalRequest = Object.getOwnPropertyDescriptor(window, "requestIdleCallback");

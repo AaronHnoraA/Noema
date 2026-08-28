@@ -65,6 +65,8 @@ import {
   type FormatPainterSnapshot,
 } from "../format-painter.ts";
 import { markdownLinkDestination } from "../markdown-link.ts";
+import { copiedText } from "./copied-text.ts";
+import { systemClipboardWriter, writeSystemClipboard } from "../system-clipboard.ts";
 import { pauseImageAnimationTemporarily } from "../image-animation.ts";
 import { getBlockMathRanges, positionInsideAnyRange } from "./math-ranges.ts";
 import { scanInlineMathRanges } from "../inline-math.ts";
@@ -1330,6 +1332,8 @@ function buildExtensions(
       contextmenu: (event, eventView) => openAttachmentContextMenuFromEvent(eventView, event),
       focus: () => { options.onFocus?.(); return false; },
       blur: () => { options.onBlur?.(); return false; },
+      copy: (_event, copyView) => { mirrorCopyToHostClipboard(copyView.state); return false; },
+      cut: (_event, cutView) => { mirrorCopyToHostClipboard(cutView.state); return false; },
       paste: (event, pasteView) => {
         const data = event.clipboardData;
         if (!data) return false;
@@ -1359,6 +1363,21 @@ function buildExtensions(
       },
     }),
   ];
+}
+
+/**
+ * Mirror a native copy/cut to the host clipboard when the host installed one.
+ *
+ * The browser's own copy already ran (this handler never preempts it), so with
+ * no host writer there is nothing to add and we stay out of the way — writing
+ * again would replace the browser's richer flavors with plain text. A host that
+ * did install a writer is one whose WebKit copy does not reach the machine
+ * pasteboard on its own, which is exactly the case worth covering.
+ */
+function mirrorCopyToHostClipboard(state: EditorState): void {
+  if (!systemClipboardWriter()) return;
+  const text = copiedText(state);
+  if (text) void writeSystemClipboard(text);
 }
 
 function wordRangeAt(state: EditorState, pos: number): { from: number; to: number } | null {

@@ -13,6 +13,7 @@ import {
 } from "../src/cm6/text-boundaries.ts";
 import { markdownContinuationPrefix } from "../src/cm6/commands/index.ts";
 import { scanCodeRanges } from "../src/cm6/code-ranges.ts";
+import { writeSystemClipboard } from "../src/system-clipboard.ts";
 import { getBlockMathRanges, rangeOverlapsAny } from "../src/cm6/math-ranges.ts";
 import { scanInlineMathRanges } from "../src/inline-math.ts";
 import { getOrgEnvHeadingRanges } from "../src/cm6/extensions/visual/widgets/block-extras.ts";
@@ -1499,26 +1500,11 @@ export function createVimLite(
   // before reading back. Avoids the dd→p race where writeText is async.
   let pendingClipboardWrite: Promise<void> = Promise.resolve();
 
-  function writeSystemClipboard(text: string): Promise<void> {
+  function yankToSystemClipboard(text: string): Promise<void> {
     if (typeof window !== "undefined" && window.location.protocol === "about:") {
       return Promise.resolve();
     }
-    const hasHostBridge = typeof window !== "undefined"
-      && Boolean((window as unknown as { aaronnoteApi?: unknown }).aaronnoteApi);
-    const canUseHostClipboard = typeof window !== "undefined"
-      && (window.location.hostname === "127.0.0.1" || hasHostBridge);
-    const writeHostClipboard = (): Promise<void> => {
-      if (!canUseHostClipboard) return Promise.resolve();
-      return fetch("/api/clipboard", {
-        method: "POST",
-        headers: { "Content-Type": "text/plain; charset=utf-8" },
-        body: text,
-      }).then(() => {}).catch(() => {});
-    };
-    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-      return navigator.clipboard.writeText(text).catch(() => writeHostClipboard());
-    }
-    return writeHostClipboard();
+    return writeSystemClipboard(text).then(() => {}, () => {});
   }
 
   function yank(text: string | readonly string[], kind: VimRegisterKind = "characterwise"): void {
@@ -1531,7 +1517,7 @@ export function createVimLite(
     const registerText = fragments.join(kind === "linewise" ? "" : "\n");
     register = { text: registerText, kind, fragments };
     (window as unknown as Record<string, unknown>).__aaronoteVimRegister = register;
-    pendingClipboardWrite = writeSystemClipboard(registerText);
+    pendingClipboardWrite = yankToSystemClipboard(registerText);
   }
 
   /**

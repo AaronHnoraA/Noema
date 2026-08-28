@@ -158,7 +158,17 @@ export async function pasteDataTransfer(
   const files = filesFromDataTransfer(data);
   if (files.length > 0 && await pasteFiles(files, context, options)) return true;
   const markdown = markdownFromClipboard(data);
-  return markdown ? context.insertMarkdown(markdown, options) : false;
+  if (markdown) return context.insertMarkdown(markdown, options);
+  // A paste event whose DataTransfer carries nothing is not an empty clipboard.
+  // The Emacs xwidget host routinely delivers one: WKWebView dispatches the
+  // event but declines to expose the macOS pasteboard to the page. Ask the host
+  // the same way the explicit paste command does, instead of dropping the
+  // paste.
+  try {
+    return await pasteFallbackPayload(await context.readSystemClipboardFallback?.() ?? null, context, options);
+  } catch {
+    return false;
+  }
 }
 
 async function pasteClipboardItems(

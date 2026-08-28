@@ -12,6 +12,8 @@
 (defvar my/noema--app-buffer)
 (defvar my/noema--client-buffers)
 (defvar my/noema--port)
+(defvar xwidget-webkit-mode-map)
+(defvar xwidget-webkit-edit-mode-map)
 (defvar my/noema--xwidget-advice-installed nil)
 (defvar my/noema--windmove-focus-advice-installed nil)
 (defvar my/xwidget--session-id)
@@ -316,6 +318,49 @@ CLIENT, when non-nil, identifies the Noema xwidget that sent the key."
    '((key . "Tab")
      (shiftKey . t))))
 
+;; Clipboard.  On the macOS (NS) port `xwidget-webkit-pass-command-event' is a
+;; no-op: xwidget.c can replay a Lisp key into the widget only under GTK, and
+;; the Cocoa backend implements no counterpart -- `nm' on the Emacs binary shows
+;; nsxwidget_{init,resize,webkit_execute_script,...} and no
+;; nsxwidget_perform_lispy_event.  So every key Emacs binds to that command in
+;; an xwidget buffer is simply swallowed, Cmd-C and Cmd-V included, and neither
+;; copy nor paste ever happens.  Route them to Noema instead, which performs the
+;; copy in the page and moves the text through the web host's own pasteboard
+;; access rather than through WebKit's.
+
+(defun my/noema-xwidget-copy (event)
+  "Route Command-c / Meta-c from a Noema xwidget to the page's copy."
+  (interactive "e")
+  (my/noema--xwidget-editor-command event "copy"))
+
+(defun my/noema-xwidget-cut (event)
+  "Route a cut request from a Noema xwidget to the page's cut."
+  (interactive "e")
+  (my/noema--xwidget-editor-command event "cut"))
+
+(defun my/noema-xwidget-paste (event)
+  "Route Command-v / Meta-v from a Noema xwidget to the page's paste."
+  (interactive "e")
+  (my/noema--xwidget-editor-command event "paste"))
+
+(defun my/noema--install-xwidget-keys ()
+  "Install Noema's xwidget key routing on the shared xwidget keymaps.
+
+Re-applied from `xwidget-webkit-mode-hook' as well as at load time: the
+clipboard keys are also claimed by the generic browser configuration, and the
+two `with-eval-after-load' blocks have no defined order between them."
+  (dolist (map (list xwidget-webkit-mode-map xwidget-webkit-edit-mode-map))
+    (dolist (key '("M-z"))
+      (define-key map (kbd key) #'my/noema-xwidget-undo))
+    (dolist (key '("M-Z" "M-S-z"))
+      (define-key map (kbd key) #'my/noema-xwidget-redo))
+    (dolist (key '("M-c"))
+      (define-key map (kbd key) #'my/noema-xwidget-copy))
+    (dolist (key '("M-v"))
+      (define-key map (kbd key) #'my/noema-xwidget-paste))
+    (dolist (key '("<backtab>" "<iso-lefttab>" "S-TAB" "S-<tab>"))
+      (define-key map (kbd key) #'my/noema-xwidget-shift-tab))))
+
 (defun my/noema--xwidget-callback-advice (_xwidget _event-type)
   "After xwidget callback: fire pending file POST on load-finished."
   (when (and (eq _event-type 'load-changed)
@@ -346,13 +391,8 @@ CLIENT, when non-nil, identifies the Noema xwidget that sent the key."
     (advice-add 'xwidget-webkit-callback :after
                 #'my/noema--xwidget-callback-advice)
     (setq my/noema--xwidget-advice-installed t))
-  (dolist (map (list xwidget-webkit-mode-map xwidget-webkit-edit-mode-map))
-    (dolist (key '("M-z"))
-      (define-key map (kbd key) #'my/noema-xwidget-undo))
-    (dolist (key '("M-Z" "M-S-z"))
-      (define-key map (kbd key) #'my/noema-xwidget-redo))
-    (dolist (key '("<backtab>" "<iso-lefttab>" "S-TAB" "S-<tab>"))
-      (define-key map (kbd key) #'my/noema-xwidget-shift-tab))))
+  (my/noema--install-xwidget-keys)
+  (add-hook 'xwidget-webkit-mode-hook #'my/noema--install-xwidget-keys))
 
 (with-eval-after-load 'windmove
   (my/noema--install-windmove-focus-advice))

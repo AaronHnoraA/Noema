@@ -13,6 +13,7 @@ import { EditorView } from "@codemirror/view";
 import type { Text } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
 import { parseTableModel, formatTableLines, tableTooLarge, type TableAlign } from "../table-model.ts";
+import { writeSystemClipboard } from "../../system-clipboard.ts";
 import type {
   EditorBlockContext,
   EditorCommand,
@@ -1089,11 +1090,8 @@ export function runCommandCM6(view: EditorView, command: EditorCommand, value = 
   if (command === "copy-code") {
     const text = codeBlockAtCursor(view);
     if (text == null) return false;
-    if (navigator.clipboard?.writeText) {
-      void navigator.clipboard.writeText(text);
-      return true;
-    }
-    return false;
+    void writeSystemClipboard(text);
+    return true;
   }
 
   // ── Table ────────────────────────────────────────────────────────────────

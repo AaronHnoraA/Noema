@@ -71,6 +71,15 @@ export function createWritingStatsController(
     label.title = "字数按中日韩字符和其他语言单词统计";
   }
 
+  /**
+   * Recount for the current document and selection.
+   *
+   * The selection scope goes through the same size rule as the document scope.
+   * It used to be counted inline no matter how large it was, which made a
+   * pointer drag across a big note re-scan megabytes every 80ms — synchronously,
+   * on the main thread, and thrown away by the next drag event. On a document of
+   * a few megabytes that alone is enough to stop the surface responding.
+   */
   function updateNow(): void {
     if (destroyed) return;
     const state = editor.view.state;
@@ -78,29 +87,9 @@ export function createWritingStatsController(
       metaSummaryRange = orgMetaSummaryRangeFromLines(state.doc);
       full = countWritingStats(state.doc, 0, state.doc.length, metaSummaryRange);
       cachedDoc = state.doc;
+      subtreeCache = null;
     }
-    const selection = state.selection.main;
-    const hasSelection = selection.from !== selection.to;
-    const primary = hasSelection
-      ? countWritingStats(state.doc, selection.from, selection.to, metaSummaryRange)
-      : full;
-    const subtree = headingSubtreeRange(state, selection.head);
-    let subtreeStats: WritingStats | null = null;
-    if (subtree) {
-      if (
-        subtreeCache?.doc === state.doc
-        && subtreeCache.from === subtree.from
-        && subtreeCache.to === subtree.to
-      ) {
-        subtreeStats = subtreeCache.stats;
-      } else {
-        subtreeStats = subtree.from === 0 && subtree.to === state.doc.length
-          ? full
-          : countWritingStats(state.doc, subtree.from, subtree.to, metaSummaryRange);
-        subtreeCache = { doc: state.doc, ...subtree, stats: subtreeStats };
-      }
-    }
-    render(primary, hasSelection, subtree, subtreeStats, selection);
+    renderLargeDocumentScopes(workEpoch, state.doc, () => { pendingUpdate = false; });
   }
 
   function cancelIdle(): void {
@@ -175,6 +164,11 @@ export function createWritingStatsController(
     };
     const resolveSubtree = (primary: WritingStats): void => {
       if (!subtree) return finish(primary, null);
+      if (
+        subtreeCache?.doc === scanDoc
+        && subtreeCache.from === subtree.from
+        && subtreeCache.to === subtree.to
+      ) return finish(primary, subtreeCache.stats);
       if (subtree.from === 0 && subtree.to === scanDoc.length) return finish(primary, full);
       if (subtree.to - subtree.from < LARGE_DOCUMENT_CHARS) {
         const stats = countWritingStats(scanDoc, subtree.from, subtree.to, metaSummaryRange);

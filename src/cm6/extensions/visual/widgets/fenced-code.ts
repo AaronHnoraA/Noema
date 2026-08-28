@@ -29,6 +29,7 @@ import { syntaxTree } from "@codemirror/language";
 import type { Range } from "@codemirror/state";
 import { highlightCodeForEditor, onCodeHighlightReady } from "../../../../code-highlight-async.ts";
 import { supportedDiagramLang } from "../../../../diagram-langs.ts";
+import { writeSystemClipboard } from "../../../../system-clipboard.ts";
 import { getBlockMathRanges, rangeInsideAny, rangeOverlapsAny } from "../../../math-ranges.ts";
 import { applyLayoutAttrs, layoutFromAttrs, readLayoutAttrsLine, type LayoutAttrs } from "../../../../layout-attrs.ts";
 import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
@@ -171,29 +172,7 @@ class CodeCopyButtonWidget extends MeasuredWidget {
 }
 
 async function copyText(text: string): Promise<boolean> {
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      return true;
-    }
-  } catch {
-    // Clipboard API may be blocked; fall through to the textarea fallback below.
-  }
-
-  try {
-    const textarea = document.createElement("textarea");
-    textarea.value = text;
-    textarea.setAttribute("readonly", "true");
-    textarea.style.position = "fixed";
-    textarea.style.left = "-9999px";
-    document.body.append(textarea);
-    textarea.select();
-    const ok = document.execCommand("copy");
-    textarea.remove();
-    return ok;
-  } catch {
-    return false;
-  }
+  return writeSystemClipboard(text);
 }
 
 type CodeFold = { key: string; from: number; to: number; lines: number };

@@ -204,6 +204,9 @@ import {
   handleXwidgetVimKeydown,
 } from "./xwidget-key-guard.ts";
 import { focusQuiescenceEnabled, serverMode, sourceEditorName, standaloneMode } from "./host-mode.ts";
+import { installHostClipboard } from "./host-clipboard.ts";
+import { writeSystemClipboard } from "../src/system-clipboard.ts";
+import { copiedText } from "../src/cm6/copied-text.ts";
 import { createZoomController } from "./features/zoom/controller.ts";
 import {
   createWritingStatsController,
@@ -274,6 +277,8 @@ const jupyterExecutionAvailable = !serverReaderMode;
 const desktopPlatform = window.noemaDesktop?.platform || (/Mac/.test(navigator.platform) ? "darwin" : "");
 const platformLabels = desktopPlatformLabels(desktopPlatform);
 document.body.dataset.hostMode = serverReaderMode ? "server" : desktopMode ? "desktop" : "emacs";
+// Must run before the first copy: it decides whether a copy can reach the OS.
+installHostClipboard();
 if (desktopMode) document.body.dataset.desktopPlatform = desktopPlatform;
 if (serverReaderMode) {
   document.body.dataset.serverReaderEditingAids = String(serverReader.editingAids);
@@ -6594,19 +6599,9 @@ function focusedEditableOutsideEditor(): boolean {
 }
 
 async function copyText(text: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    const fallback = document.createElement("textarea");
-    fallback.value = text;
-    fallback.style.position = "fixed";
-    fallback.style.left = "-9999px";
-    document.body.appendChild(fallback);
-    fallback.select();
-    document.execCommand("copy");
-    fallback.remove();
-  }
+  await writeSystemClipboard(text);
 }
+
 
 window.AaronnoteCopyBlockTarget = async (blockId: string): Promise<string> => {
   const target = noteAnchorHref(currentNote(), encodeURIComponent(blockId));
@@ -6695,20 +6690,46 @@ function closeFindPanel(): void {
   editor.focus();
 }
 
-async function copyEditorSelection(): Promise<boolean> {
+async function copyEditorSelection(cut = false): Promise<boolean> {
   const active = activeEditorSelection();
-  let text = active?.text || "";
+  let text = active ? active.text() : "";
   if (!text) {
     const selection = editor.getMarkdownSelection();
     const from = Math.min(selection.from, selection.to);
     const to = Math.max(selection.from, selection.to);
-    if (from < to) text = editor.textBetween(from, to);
+    // A copy the host asked for arrives with no DOM selection at all — Emacs
+    // owns the focus at that moment. Fall back to CodeMirror's own rule, which
+    // also gives a bare cursor its whole line instead of nothing.
+    text = from < to ? editor.textBetween(from, to) : copiedText(editor.view.state);
   }
   if (!text) return false;
-  await copyText(text);
-  setStatus("Selection copied");
+  const copied = await writeSystemClipboard(text);
+  if (!copied) {
+    setStatus("Copy failed");
+    return false;
+  }
+  if (cut && !currentReadOnly) cutCopiedSelection();
+  setStatus(cut ? "Selection cut" : "Selection copied");
   selectionTool.hidden = true;
   return true;
+}
+
+/** Remove what `copyEditorSelection` just took, matching its linewise rule. */
+function cutCopiedSelection(): void {
+  const state = editor.view.state;
+  const ranges = state.selection.ranges.filter((range) => !range.empty);
+  if (ranges.length > 0) {
+    editor.view.dispatch({
+      changes: ranges.map((range) => ({ from: range.from, to: range.to })),
+      scrollIntoView: true,
+    });
+    return;
+  }
+  const line = state.doc.lineAt(state.selection.main.from);
+  editor.view.dispatch({
+    changes: { from: line.from, to: Math.min(state.doc.length, line.to + 1) },
+    scrollIntoView: true,
+  });
 }
 
 function runClipboardShortcut(event: KeyboardEvent): boolean {
@@ -10478,7 +10499,20 @@ function updateMathPreview(
   }
 }
 
-function activeEditorSelection(): { text: string; rect: DOMRect } | null {
+type ActiveEditorSelection = { rect: DOMRect; text: () => string };
+
+/**
+ * The live DOM selection inside the editor, as geometry plus a lazy text
+ * reader, or null when there is nothing the selection UI applies to.
+ *
+ * `text` is a thunk on purpose. Positioning the floating toolbar needs only the
+ * rect, and it runs on every `selectionchange` — which a pointer drag emits
+ * continuously. Materializing the selected string there meant a drag across a
+ * large note allocated the whole selection once per frame, which is enough on
+ * its own to stall the WebKit surface (and, in the Emacs xwidget host, Emacs
+ * along with it). Commands that genuinely need the text call the thunk.
+ */
+function activeEditorSelection(): ActiveEditorSelection | null {
   if (editor.isSourceMode()) return null;
   if (host.querySelector("[data-cm-visual-math='active']")) return null;
   const selection = window.getSelection();
@@ -10486,14 +10520,24 @@ function activeEditorSelection(): { text: string; rect: DOMRect } | null {
   const anchor = selection.anchorNode;
   const focus = selection.focusNode;
   if (!anchor || !focus || !host.contains(anchor) || !host.contains(focus)) return null;
-  const logical = editor.getSelection();
-  const from = Math.min(logical.from, logical.to);
-  const to = Math.max(logical.from, logical.to);
-  const text = from < to ? editor.textBetween(from, to) : selection.toString();
-  if (!text.trim()) return null;
   const rect = selection.getRangeAt(0).getBoundingClientRect();
   if (rect.width === 0 && rect.height === 0) return null;
-  return { text, rect };
+  // Whitespace-only drags carry no command worth offering. Checking that needs
+  // the text, so only check it while the selection is small enough for the read
+  // to be free; nobody selects four thousand characters of pure whitespace.
+  const logicalRange = editor.getSelection();
+  const blankProbeLimit = 4096;
+  if (Math.abs(logicalRange.to - logicalRange.from) <= blankProbeLimit
+      && !selection.toString().trim()) return null;
+  return {
+    rect,
+    text: () => {
+      const logical = editor.getSelection();
+      const from = Math.min(logical.from, logical.to);
+      const to = Math.max(logical.from, logical.to);
+      return from < to ? editor.textBetween(from, to) : selection.toString();
+    },
+  };
 }
 
 function selectionTouchesEditor(): boolean {
@@ -10527,20 +10571,7 @@ function updateSelectionTool(active = activeEditorSelection()): void {
 async function copyActiveSelection(): Promise<void> {
   const active = activeEditorSelection();
   if (!active) return;
-  let copied = false;
-  try {
-    await navigator.clipboard.writeText(active.text);
-    copied = true;
-  } catch {
-    const fallback = document.createElement("textarea");
-    fallback.value = active.text;
-    fallback.style.position = "fixed";
-    fallback.style.left = "-9999px";
-    document.body.appendChild(fallback);
-    fallback.select();
-    copied = document.execCommand("copy");
-    fallback.remove();
-  }
+  const copied = await writeSystemClipboard(active.text());
   setStatus(copied ? "Selection copied" : "Copy failed");
   selectionTool.hidden = true;
 }
@@ -10592,7 +10623,12 @@ function runAssistUpdate(flags: AssistUpdateFlags): void {
   const activeMath = ctx && wantsMathPreview ? mathAtCursor(ctx) : undefined;
   if (flags.toc) updateFloatingToc();
   if (flags.selectionTool && (!serverReaderMode || serverReader.selectionToolbar)) {
-    const activeSelection = snippetPopup.hidden && modal.hidden ? activeEditorSelection() : null;
+    // A drag in progress would have the toolbar chase the pointer, forcing a
+    // layout read and a reposition every frame. `mouseup` schedules the one
+    // pass that matters.
+    const activeSelection = snippetPopup.hidden && modal.hidden && !isPointerSelecting(editor.view.state)
+      ? activeEditorSelection()
+      : null;
     updateSelectionTool(activeSelection);
   }
   // MathLive drives the shared snippet popup with its own cursor and prefix.
@@ -10991,6 +11027,17 @@ function runHostCommand(detail: unknown): boolean {
       if (rejectReadOnlyAction("Read-only pane")) return true;
       editor.focus();
       void editor.pasteFromClipboard();
+      return true;
+    // Emacs routes Cmd-C/Cmd-X here rather than to the page's own key handling:
+    // on the macOS xwidget port a key Emacs owns can never be replayed into
+    // WebKit (see emacs/noema-xwidget-keys.el), so the copy has to be performed
+    // by the page itself and written through the host clipboard.
+    case "copy":
+      void copyEditorSelection();
+      return true;
+    case "cut":
+      if (rejectReadOnlyAction("Read-only pane")) return true;
+      void copyEditorSelection(true);
       return true;
     case "escape":
     case "normal":
@@ -11589,6 +11636,8 @@ document.addEventListener("beforeinput", (event) => {
 }, true);
 document.addEventListener("selectionchange", () => {
   if (!editorSurfaceVisible()) return;
+  // A pointer drag emits this continuously; `mouseup` runs the final pass.
+  if (isPointerSelecting(editor.view.state)) return;
   if (selectionTouchesEditor() || !selectionTool.hidden) {
     scheduleAssistUpdate({ selectionTool: true });
   }
