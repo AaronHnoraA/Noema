@@ -151,6 +151,11 @@ if (desktopSmokeParams.get("desktopSmoke") === "1") {
       theme,
       b3Components,
       visualTypography: auditVisualTypography(document),
+      lineBreaking: {
+        optimalParagraphs: document.querySelectorAll(".cm-line.cm-kp-paragraph").length,
+        visualBreaks: document.querySelectorAll(".cm-kp-break").length,
+        generatedSpacers: document.querySelectorAll(".cm-kp-spacer").length,
+      },
       productionHandfeel: auditProductionHandfeel(document),
       sharedEditor: {
         mountCount: document.querySelectorAll(".aaronnote-focused-editor[data-editor]").length,

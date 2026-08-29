@@ -66,6 +66,7 @@ import {
   type BibliographyDocument,
   type BibliographyReference,
   type LanguageToolSettings,
+  type NoemaAppConfigMsg,
   type WikiIndex,
 } from "./api-client.ts";
 import { Epoch } from "../src/async-epoch.ts";
@@ -1577,6 +1578,7 @@ let reconcileVimSelection: (() => void) | undefined;
 
 const editor = createEditor(host, {
   initialContent: "",
+  lineBreaking: window.__noemaAppConfig?.config.editor?.lineBreaking ?? "optimal",
   readOnly: initialReadOnly,
   passiveReader: passiveServerReader,
   headingNumbering: headingNumberingPreference,
@@ -1612,6 +1614,11 @@ const editor = createEditor(host, {
     void flushCursorPosition();
   },
 });
+const applyEditorConfig = (event: Event): void => {
+  const config = (event as CustomEvent<{ config?: NoemaAppConfigMsg["config"] }>).detail?.config;
+  if (config?.editor?.lineBreaking) editor.setLineBreaking(config.editor.lineBreaking);
+};
+window.addEventListener("noema:theme-changed", applyEditorConfig);
 editor.onViewUpdate((update) => {
   if (update.docChanged) editorSaveChanges.record(update.changes);
 });
@@ -12427,6 +12434,7 @@ window.addEventListener("beforeunload", () => {
   imeCoalesceTimer.cancel();
   zoomController.destroy();
   writingStatsController?.destroy();
+  window.removeEventListener("noema:theme-changed", applyEditorConfig);
   flushCursorPositionKeepalive();
   notifyClientClosedKeepalive();
 });
@@ -12441,6 +12449,7 @@ void (async () => {
   const configReady = (async () => {
     try {
       const config = await loadNoemaAppConfig();
+      editor.setLineBreaking(config.config.editor.lineBreaking);
       if (config.diagnostics[0]) setStatus(config.diagnostics[0].message);
     } catch (error) {
       setStatus(`Settings failed: ${error instanceof Error ? error.message : String(error)}`);

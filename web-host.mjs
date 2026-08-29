@@ -156,6 +156,7 @@ import {
   updateLanguageToolSettings,
 } from "./server/lib/languagetool-config.mjs";
 import {
+  NOEMA_APP_CONFIG_SCHEMA_VERSION,
   ensureNoemaAppConfig,
   getNoemaAppConfig,
   noemaAppConfigDir,
@@ -300,14 +301,16 @@ const serverAppConfig = serverConfig ? {
   ok: true,
   configFile: "",
   config: {
-    schemaVersion: 2,
+    schemaVersion: NOEMA_APP_CONFIG_SCHEMA_VERSION,
     appearance: { theme: serverTheme.id },
+    editor: { lineBreaking: "optimal" },
     workspace: { root: "", layout: "wiki" },
     wiki: { creation: { activeProfile: "", profiles: [] } },
   },
   defaults: {
-    schemaVersion: 2,
+    schemaVersion: NOEMA_APP_CONFIG_SCHEMA_VERSION,
     appearance: { theme: serverTheme.id },
+    editor: { lineBreaking: "optimal" },
     workspace: { root: "", layout: "wiki" },
     wiki: { creation: { activeProfile: "", profiles: [] } },
   },

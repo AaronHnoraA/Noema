@@ -52,6 +52,7 @@ func init() {
 	sql.IsMarkdownBoxFn = func(boxID string) bool { return conf.BoxKindMarkdown == GetBoxKind(boxID) }
 	sql.BoxRootPathFn = filesys.BoxRootPath
 	sql.IsContentDerivedBlockIDFn = filesys.MarkdownIndexProjection
+	sql.IsIndexPlaceholderBlockFn = filesys.MarkdownIndexPlaceholder
 	treenode.IsEncryptedBoxFn = IsEncryptedBox
 	util.ReloadDocInfoGuard = func(boxID string) bool {
 		// 加密笔记本锁定后丢弃延迟 reloadDocInfo 广播，防止明文元数据泄漏

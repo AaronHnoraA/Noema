@@ -82,6 +82,19 @@ var (
 	// Persistent .sy ids carry no such guarantee and keep the hash comparison.
 	IsContentDerivedBlockIDFn func(n *ast.Node) bool
 
+	// IsIndexPlaceholderBlockFn reports a node that stands in for a block the
+	// index already holds: an identity and a type, with no content behind it.
+	// Injected by model alongside the function above.
+	//
+	// Such a node must never become a row. The set that lets fromTree skip
+	// unchanged blocks is computed from rows read inside the write transaction,
+	// while the placeholders were chosen from rows read before it, so the two can
+	// disagree if anything removed a row in between. Treating a placeholder as
+	// unchanged unconditionally makes that disagreement harmless: the block is
+	// neither rewritten from an empty node nor deleted, and the next save of the
+	// document — which will not find its key indexed — restores it.
+	IsIndexPlaceholderBlockFn func(n *ast.Node) bool
+
 	// BoxRootPathFn routes asset hashing for external Markdown boxes to their
 	// physical repository root instead of the workspace shadow directory.
 	BoxRootPathFn func(boxID string) string

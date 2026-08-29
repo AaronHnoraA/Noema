@@ -413,7 +413,7 @@ func LoadMarkdownTreeByData(data []byte, boxID, p string, luteEngine *lute.Lute)
 	ApplyNoemaBlockProjection(ret, data)
 	// After the anchored blocks have claimed their canonical keys, so the two
 	// never compete for the same node.
-	AssignMarkdownBlockProjectionIDs(ret)
+	AssignMarkdownBlockProjectionIDs(ret, data)
 	ret.HPath = markdownHPath(p)
 	ret.Hash = treenode.NodeHash(ret.Root, ret, luteEngine)
 	return

@@ -141,21 +141,57 @@ func markdownIndexConsumer() {
 }
 
 func indexMarkdownJob(job markdownIndexJob) {
-	tree := job.tree
+	tree, partial := job.tree, false
+	if nil == tree {
+		tree, partial = incrementalMarkdownTree(job)
+	}
 	if nil == tree {
 		tree = filesys.LoadMarkdownTreeByData(job.source, job.boxID, job.path, util.NewLute())
 	}
 	if nil == tree || nil == tree.Root {
 		return
 	}
-	if nil != job.snapshot {
+	if nil != job.snapshot && !partial {
 		// The save response does not need a CommonMark tree. Once the worker has
 		// paid for the parse needed by the indexes, retain that exact immutable
 		// tree on the corresponding snapshot so a later load does not parse the
 		// same source a second time.
+		//
+		// A partial tree is never retained: its unchanged blocks are identity-only
+		// placeholders, so anything that reads content from it would see an empty
+		// document.
 		job.snapshot.treeOnce.Do(func() { job.snapshot.tree = tree })
 	}
 	upsertLoadedMarkdownTree(tree)
+}
+
+// incrementalMarkdownTree builds a tree in which only the blocks this save
+// changed were handed to Lute.
+//
+// The index is the authority for what may be skipped: a block is represented by
+// a placeholder only when its key — derived from its own source bytes — is
+// already an indexed row, which is proof the row still describes it. So a
+// placeholder can never introduce a row, only decline to rewrite one.
+func incrementalMarkdownTree(job markdownIndexJob) (tree *parse.Tree, partial bool) {
+	if 1 > len(job.source) {
+		return nil, false
+	}
+	// Everything that can rule the incremental path out is decided from the
+	// source alone, before the database is touched: the query below is only
+	// worth its round trip once the document is known to be splittable.
+	if _, ok := filesys.MarkdownBlockProjectionKeys(job.source, job.boxID, job.path); !ok {
+		return nil, false
+	}
+	rootID := filesys.MarkdownProjectionID(job.source, job.boxID, job.path)
+	indexed := sql.IndexedBlockTypes(rootID, job.boxID)
+	if 1 > len(indexed) {
+		return nil, false
+	}
+	ret, ok := filesys.MarkdownIncrementalTree(job.source, job.boxID, job.path, util.NewLute(), indexed)
+	if !ok {
+		return nil, false
+	}
+	return ret, true
 }
 
 // WaitMarkdownIndex blocks until every Markdown document queued so far has been

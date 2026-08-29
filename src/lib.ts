@@ -17,6 +17,7 @@ export type {
   EditorClipboardPayload,
   EditorCommand,
   EditorOptions,
+  LineBreakingMode,
   EditorPasteAssetStore,
   EditorPasteOptions,
   EditorPastePlacement,

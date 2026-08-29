@@ -67,22 +67,37 @@ func QueryEmptyContentEmbedBlocksInBox(boxID string) (ret []*Block) {
 	return
 }
 
-func queryBlockHashes(tx *sql.Tx, rootID string) (ret map[string]string) {
-	stmt := "SELECT id, hash FROM blocks WHERE root_id = ?"
+type indexedBlockRow struct {
+	hash string
+	path string
+}
+
+// queryBlockHashes returns the rows already indexed under a root, with the path
+// each one belongs to.
+//
+// The path is carried so upsertTree can refuse to delete a row that belongs to
+// a *different* document. Two documents can share a root id: an unanchored
+// Markdown document's key is 28 bits wide (ProjectionID's timestamp prefix is a
+// constant for it), which a vault of a few thousand notes can collide by
+// birthday. Without the check, saving one of the pair removes every row of the
+// other, and saving that one removes the first's back — the two silently take
+// turns disappearing from search.
+func queryBlockHashes(tx *sql.Tx, rootID string) (ret map[string]indexedBlockRow) {
+	stmt := "SELECT id, hash, path FROM blocks WHERE root_id = ?"
 	rows, err := queryTx(tx, stmt, rootID)
 	if err != nil {
 		logging.LogErrorf("sql query [%s] failed: %s", stmt, err)
 		return
 	}
 	defer rows.Close()
-	ret = map[string]string{}
+	ret = map[string]indexedBlockRow{}
 	for rows.Next() {
-		var id, hash string
-		if err = rows.Scan(&id, &hash); err != nil {
+		var id, hash, path string
+		if err = rows.Scan(&id, &hash, &path); err != nil {
 			logging.LogErrorf("query scan field failed: %s", err)
 			return
 		}
-		ret[id] = hash
+		ret[id] = indexedBlockRow{hash: hash, path: path}
 	}
 	return
 }
@@ -1189,4 +1204,33 @@ func containsLimitClause(stmt string) bool {
 	return strings.Contains(strings.ToLower(stmt), " limit ") ||
 		strings.Contains(strings.ToLower(stmt), "\nlimit ") ||
 		strings.Contains(strings.ToLower(stmt), "\tlimit ")
+}
+
+// IndexedBlockTypes maps a document's indexed block ids to their type
+// abbreviations. It is what lets the Markdown index decide, before parsing
+// anything, which blocks a save actually has to hand to Lute.
+//
+// Only the two columns are read. Selecting whole rows here would pull every
+// block's content back out of the database on every save — the cost this exists
+// to avoid.
+func IndexedBlockTypes(rootID, boxID string) (ret map[string]string) {
+	ret = map[string]string{}
+	if "" == rootID {
+		return ret
+	}
+	rows, err := queryForBox(boxID, "SELECT id, type FROM blocks WHERE root_id = ?", rootID)
+	if nil != err {
+		logging.LogErrorf("query indexed block types failed: %s", err)
+		return ret
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, blockType string
+		if err = rows.Scan(&id, &blockType); nil != err {
+			logging.LogErrorf("scan indexed block type failed: %s", err)
+			return ret
+		}
+		ret[id] = blockType
+	}
+	return ret
 }

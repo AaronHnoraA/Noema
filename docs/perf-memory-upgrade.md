@@ -1060,3 +1060,258 @@ ChangeSet 送过来了但内核用不上。这是索引之外的另一半，短�
 
 **测试**：Go 全绿（model/api/sql/treenode/filesys/noema，含 `-tags fts5` 与 `-race`），
 JS 全量 **2156 passed / 16 skipped**。
+
+### 2026-08-29（第十三轮）：解析也做成增量的 —— 改一个字，121 个块里 120 个根本不解析
+
+第十二轮把索引**写入**做成了块级增量，剩下的一半是：Lute 没有增量模式，所以每次自动保存
+仍然整篇重解一遍，只为了发现某一段变了。这一轮把这一半也做掉。
+
+#### 关键性质
+
+上一轮的块 key 是从 `n.Content()` 派生的——那要先解析。把它改成从**块自己的源字节**派生
+之后，一切就通了：**不解析就能给文档里每个块命名**，于是可以先比对索引里已有的 key，
+只把真正变了的块交给 Lute。
+
+#### 三个新部件
+
+**1. `SplitTopLevelMarkdownBlocks`（`filesys/markdown_block_spans.go`）**
+
+纯行扫描定位每个顶层块的字节范围。它**宁可拒绝也不猜**：不确定的构造一律交回整篇解析。
+目前拒绝的有——链接引用定义与脚注（文档作用域，块不再是自身字节的函数）、legacy `{:` IAL
+（另一套解析配置）、缩进代码块、左边距的裸 HTML（七种 HTML 块的起止条件不同，`<!-- -->`
+会吞掉看起来像标题和列表项的行）。
+
+它必须和 Lute 的顶层块**一一对应**，这是整个方案的地基，所以校验做得很重：
+
+- 一份刻意刁钻的手写语料（33 例：CRLF、嵌套围栏、松散列表、块引用、setext、thematic
+  break、org env、表格、任务列表、CJK……）；
+- 仓库自己的 Markdown（16 篇切分 / 6 篇拒绝）；
+- **用户真实笔记库：25 篇切分、4 篇拒绝、1405 个块，零不一致**。
+
+语料确实在干活——它先后抓出七类真实错误：连续标题不是一个块、CRLF 空行判断、块引用不像
+松散列表那样跨空行、org env 在 Lute 眼里根本不是一个构造、Noema 的解析配置关掉了 setext
+所以 `---` 是 thematic break、**列表/标题/围栏可以在没有空行时打断段落**（真实文档里到处
+都是）、闭合的围栏要当场结束块（否则紧随其后的 `{size:1200}` 属性行被并进去）。真实笔记库
+又抓出第八类：GFM 在列表项的 task-ness 变化处开新列表，所以 `- 普通项` 后面跟 `- [ ] 任务项`
+是两个 list 而不是一个。
+
+**2. `BlockProjectionID`（`noema/identity/block_projection.go`）**——上一轮就加的，这里
+仍是前提：`ProjectionID` 的 14 位前缀对无锚点文档恒为常量，只剩 28 bit，一个 key/块必然碰撞。
+
+**3. `MarkdownIncrementalTree`（`filesys/markdown_incremental_parse.go`）**
+
+拿到"索引里已有哪些 key"之后建树：key 已在索引里的块 ⟹ 内容逐字节相同 ⟹ 放一个只带
+id 和 type 的**占位节点**，永不交给 Lute；其余的单独解析。
+
+占位之所以安全，是因为它**只在索引已经有那一行时才产生**：`fromTree` 把它当未变块整棵子树
+跳过（`WalkSkipChildren`），`upsertBlockTree` 看到的 id 和 type 与它自己存的一致。所以占位
+永远只会"不重写"，不可能"凭空写出一行空的"。
+
+拒绝的情形：分块器拒绝；文档带 `{#uuid}` 锚点（锚定块的 key 来自全文投影而不是自身字节）；
+可复用比例 ≤50%（那还不如整篇解析）。**判断顺序很重要**——所有能从源文本决定的拒绝条件都
+排在查数据库之前，否则那次 `SELECT` 白花（第一版把它放在后面，反而慢了一倍）。
+
+同样重要：**部分树绝不回填到 snapshot 上**（`indexMarkdownJob` 的 `partial` 标志），否则
+后面从 snapshot 读内容的人会看到一篇空文档。
+
+#### 实测
+
+| 64 KB 无锚点笔记 | baseline(HEAD) | 增量解析 | |
+|---|---|---|---|
+| 单次索引任务（改一个字，含 flush） | 10.05 ms | **5.46 ms** | −46% |
+| 分配 | 13.08 MB | **3.68 MB** | −72% |
+| 端到端每次保存内核 CPU（40 次 @1s） | 42.4 ms | 39.8 ms | −6% |
+
+护栏实测：**改一个段落，121 个块里 120 个完全没有交给 Lute。**
+
+端到端只有 −6%，因为索引早已不是每次保存的大头了：同步路径上的
+`markdownNoteFromSnapshot`（catalog note summary）才是，上一轮测得 36.6%。解析这一半到此
+为止是真增量了；下一个目标在别处。
+
+#### 护栏
+
+`kernel/filesys/markdown_block_spans_test.go`：span 必须与 Lute 顶层块逐块相等（手写语料
+＋仓库真实文档）；每个非空白字节都必须被某个 span 覆盖；该拒绝的必须拒绝。
+
+`kernel/model/markdown_index_incremental_fts5_test.go`：
+- **同一份字节，增量索引与全量解析索引逐行相等**——跨 6 个修订（改段落、中间插入、删除、
+  改围栏内容、重排），比对每一行的 hash 与 content；
+- **增量路径确实被走到**（只测等价性的话，"永远整篇解析"也能通过）。
+
+#### 顺带修掉上一轮的一个回归
+
+`(*Box).Index` 的增量重建用**根块 hash** 判断"没变就跳过"。上一轮移除了"把整篇正文折进根块
+hash"的补偿之后，根 hash 不再随正文变化——于是**内核没在看时发生的编辑**（git pull、外部
+编辑器）在热重连时会被判成"没变"，旧行原地不动。改成同时要求 `!sourceChanged`（由源字节的
+mtime/size 得出）。
+
+这条是 `TestRegisterExternalMarkdownBoxAPIPreservesMissingShadows` 抓到的，而我上一轮**只对
+`./model/` 跑了 `-tags fts5`，`./api/` 只跑了默认 tag**，所以漏了。fts5 套件要对 api 也跑。
+
+#### 顺带修掉 Emacs 下 Copilot 完全不工作
+
+`clientBody()` 用 `document.hasFocus()` 判断"这个 pane 是不是活的"。Emacs xwidget 把
+WKWebView 嵌在 Emacs frame 里，**窗口级 focus 标志始终是 false**，哪怕光标就在编辑器里、
+按键正在到达。于是每个 Copilot 请求都报 `active:false`，Emacs 侧 `--body-active-p` 判定
+inactive-client，静默跳过补全返回空 items——Copilot 在 Emacs 里像死了，在别处一切正常。
+
+改用 `document.activeElement` 是否落在编辑器 host 内（`eligibleShell` 本来就在用这个判断）。
+这是共享层缺陷，不是宿主差异，所以修在共享层，没有加宿主分支。护栏
+`tests/copilot-plugin.test.ts` 把 `document.hasFocus` 打桩成 false 模拟 xwidget；还原成旧
+实现后该用例失败。
+
+**测试**：Go 全绿（`./...` 默认 tag，加 model/api/filesys 的 `-tags fts5`，加 `-race`），
+JS 全量 **2157 passed / 16 skipped**。
+
+### 2026-08-29（第十四轮）：同步保存路径上的 note projection —— 保存延迟砍掉一半
+
+第十三轮把索引的写入和解析都做成了增量，端到端却只降 6%，因为大头已经不在索引：活体
+profile 指出同步路径上的 `markdownNoteFromSnapshot`（catalog 的 note summary）占 36.6%。
+这一轮做它。它在 `SaveMarkdownDocChangesCAS → updateMarkdownCatalogPath` 里同步执行，
+所以既是功耗也是**保存延迟**。
+
+#### 1. 摘要为了 220 个字符把整篇文档重写六遍
+
+`markdownNoteSummary` 产出的是一个 **220 字符**的摘要，做法是对**整篇源文**跑五次正则替换
+＋一次全文 `strings.Map` ＋一次空白折叠，**最后才截断**。60 KB 的笔记于是被完整重写六遍。
+
+改成**开窗**：每一级变换都只会删除或缩短，所以结果的开头几个字符只来自源文的开头几个
+字节。取前缀就够了——只要它产出的字符数**明显多于 220**（留 64 的余量）：跨越切口的匹配
+只能扰动切口**处**的输出，而那已经在余量之外、被截断丢掉了。窗口从 1 KB 起按 ×4 增长，
+切口对齐行尾。
+
+唯一的例外是 `noteTypMetaPattern`（`(?s)#metadata\s*\(\(.*?\)\)\s*<note>`）——它能跨整篇，
+匹配不被任何前缀界定，所以含 `#metadata` 的文档走整篇路径。
+
+| | 整篇 | 开窗 | |
+|---|---|---|---|
+| 514 B | 33.0 µs | 33.5 µs | 持平（小于窗口） |
+| 8.2 KB | 567 µs | **66.8 µs** | 8.5× |
+| 67 KB | 6.63 ms | **76.7 µs** | **86×** |
+| 67 KB 分配 | 1.55 MB | **21 KB** | 74× |
+
+#### 2. 四个正则每行都跑，哪怕那行不可能匹配
+
+`markdownNoteRefs` 的 `(?i)#note\("…"\)|\broam://…`、`markdownNoteInlineTags` 的
+`(?i)@@tag…`、`markdownNoteBlocks` 的 `\{#…\}` / `\{…id…\}` / `#\+begin`、
+`markdownNoteDOMTargets` 的 `^#{1,6}` 和 `(?i)^@@(part|section)`——全都对每一行（或整篇）
+无条件执行。
+
+按各自锚定的字面量加护栏，就是 `noema/markdown/scan.go` 里已经写明的那条惯例
+（"Each line-level regexp is guarded by the cheap literal its pattern is anchored on"）。
+用户真实笔记库里 `#note(` 出现在 **0/29** 篇、`roam://` 5/29 篇，所以绝大多数笔记直接跳过
+整篇正则扫描。大小写不敏感的那几个用不分配的 `containsFoldASCII`。
+
+| 49.5 KB 笔记 | 改前 | 改后 | |
+|---|---|---|---|
+| `markdownNoteRefs` | 1.41 ms | **0.135 ms** | 10× |
+| `markdownNoteInlineTags` | 0.229 ms | **0.030 ms** | 7.6× |
+| 整条 note projection | 2.74 ms | **0.75 ms** | 3.7× |
+| 分配次数 | 12292 | **2269** | 5.4× |
+
+#### 端到端
+
+64 KB 无锚点笔记、40 次保存 @1s、全新 workspace（三档互相可比）：
+
+| | HEAD | ＋增量解析（十三轮） | ＋本轮 |
+|---|---|---|---|
+| 内核 CPU / 保存 | 42.4 ms | 39.8 ms | **21.6 ms** |
+| 保存延迟 p50 | ~28–32 ms | ~28–29 ms | **11.3–13.2 ms** |
+
+**保存延迟砍掉一半以上**——因为这一轮动的是同步路径，而前两轮动的是异步索引。
+
+#### 护栏
+
+优化正则的风险是**静默丢数据**（少一个锚点、少一个标签，没人会立刻发现），所以每一处都用
+"保留未优化的参照实现、在语料上对拍"的方式锁住，语料含仓库全部真实 Markdown：
+
+- `TestWindowedNoteSummaryMatchesWholeDocument`：14 种刁钻文档（纯标题、纯空行、纯标点、
+  `#metadata`、typ 指令、`#note()` 调用、CRLF、CJK、无末尾换行、单行超长……）＋真实文档，
+  开窗结果必须与整篇结果**逐字节相同**；另有一条覆盖 meta 前导区被切掉的入口形状。
+- `TestGuardedNoteRefsMatchUnguarded` / `TestGuardedInlineTagsMatchUnguarded` /
+  `TestGuardedNoteBlocksMatchUnguarded` / `TestGuardedDOMTargetsMatchUnguarded`：
+  21 种构造（各种大小写的 roam/note 调用、org env 带标题带锚点、planning id 用 `:` 和 `=`、
+  代码里的假标签、只有大括号没有 id、只有 `#+` 不是 begin、围栏里的锚点、CRLF、CJK……）
+  ＋真实文档。DOM 那条还额外断言：**凡是正则能匹配的行，护栏都必须放行**。
+- `TestContainsFoldASCII` 单独锁住那个不分配的大小写不敏感搜索。
+
+**证伪过**：把 planning 护栏从 `containsFoldASCII` 换成 `strings.Contains`（丢掉大小写
+不敏感）后，`TestGuardedNoteBlocksMatchUnguarded` 立刻失败。
+
+**测试**：Go 全绿（`./...` 默认 tag、model/api/filesys 的 `-tags fts5`、`-race`）。
+
+### 2026-08-29（第十五轮）：对前几轮做健壮性审查 —— 找到并修掉两个会静默毁索引的缺陷
+
+前四轮改的是索引这种"错了很久都不会有人发现"的东西，所以专门回头审一遍。审的方式是找
+**能静默出错**的路径，而不是复述改了什么。两个真缺陷，都用真实场景复现并证伪过。
+
+#### 缺陷一：占位节点可能被写成一行空白（静默洗掉一个块）
+
+增量解析的占位节点是从**事务外**读到的 `indexed` 选出来的，而 `fromTree` 用来跳过的
+`unchanged` 集合是在**事务内**用 `queryBlockHashes` 算的。两次读之间只要有行被删（排队中的
+delete、并发的 unindex、box 生命周期变化），那个占位就不在 `unchanged` 里——于是
+`buildBlockFromNode` 会拿一个**没有内容的节点**建行，把那个块在搜索里洗成空白。
+
+修法是把不变量变成局部可证的：占位节点显式打标记（`noema:index-placeholder`），
+`contentDerivedBlockState` 无条件把它算作 unchanged。这样两次读不一致时的后果从"写入一行
+错误数据"降级为"这一块暂时缺席"——而且**下次保存自愈**（它的 key 不在索引里，就会被解析）。
+
+护栏 `TestPlaceholderNeverWritesAnEmptyRow` 用普通保存摆出这个竞态：先记下 indexed，再用一次
+正常保存删掉某段（它的行随之消失），然后用那份过期的 indexed 建树。**证伪过**：去掉护栏后
+它立刻失败，并打印出那行 `Type:p Content:`——空白行。
+
+#### 缺陷二：根 ID 碰撞会让两篇笔记互相抹掉
+
+无锚点 markdown 文档的根 key 只有 **28 bit**（`ProjectionID` 的 14 位时间戳前缀对它恒为
+`20000101000000`，只剩 7 位十六进制后缀）。实测碰撞率：
+
+| vault 规模 | 出现至少一次碰撞的比例 | 平均碰撞数 |
+|---|---|---|
+| 5,000 篇 | 17% | 0.17 |
+| 20,000 篇 | 58% | 0.75 |
+| 50,000 篇 | **100%** | 5.2 |
+
+这是既有的设计上限，但**块粒度把后果放大了**：以前两篇共享根 ID 只是共用一行、轮流覆盖；
+现在一篇的所有行都挂在这个根 ID 下，于是保存 A 会把 B 的每一行都当成"已不存在"扫掉，
+保存 B 再把 A 的扫回去——两篇笔记轮流从搜索里消失。
+
+修的是**破坏性后果**而不是 ID 宽度：`queryBlockHashes` 现在一并返回每行的 path，
+`upsertTree` 拒绝删除属于**别的文档**的行。对正确数据这是无操作（markdown 的根 key 里就含
+path；`.sy` 的块 ID 跨重命名稳定，本来就不会进 `toRemoves`）。
+
+护栏 `TestCollidingRootIDsDoNotEraseEachOther` 用**真实找到的碰撞对**（`/c/682.md` 与
+`/c/8394.md` 在同一个 box 下产生同一个根 ID）。**证伪过**：去掉守卫后立刻报
+"saving the second document erased the first one's rows"。
+
+#### 补的兼容性护栏
+
+- `TestDeclinedDocumentsStayIndexedAndSearchable`：分块器拒绝的六类文档（HTML 注释、HTML
+  块、链接引用定义、脚注、缩进代码、带 `{#uuid}` 锚点）**仍然**块级索引、可搜索、改动能
+  进索引。这条很要紧：第十二轮删掉了"整篇塞进根块"的兜底，如果拒绝路径丢了块 ID，这些
+  文档的正文就会彻底搜不到。
+- `TestPlaceholderTypesRoundTrip`：占位节点带的 type 要能过 `TypeAbbr`/`FromAbbrType`/
+  `Str2NodeType` 的往返，否则 `upsertBlockTree` 每次保存都认为它变了、永远重写那一行。
+  11 种块类型全部验证。
+
+#### 审过但没问题的
+
+`-race` 跑完改动面全干净。`containsFoldASCII` 对 UTF-8 安全（ASCII 针不可能撞上多字节续
+字节，CJK 用例覆盖）。开窗循环单调递增、不会死循环。`upsertLoadedTree` 里对树的遍历只调
+`RemoveBlockIALInBox(n.ID)`，不读占位节点的内容。部分树不回填 snapshot（`partial` 标志）。
+`.sy` 路径不受影响：`contentDerivedBlockState` 对非内容派生 ID 返回 nil，走原来的哈希比较。
+
+#### 没修、留给决定的
+
+- **根 ID 宽度本身**。彻底的修法是把它也换成 `BlockProjectionID` 那套（~68 bit），
+  代价是所有文档**重新索引一次**。当前 vault 29 篇，碰撞概率约 1e-6，所以我只堵了后果、
+  没动 ID 方案。什么时候值得做，取决于 vault 会长到多大。
+- **`Box.Unindex` 的不可 join goroutine** 与 external-box 测试 `Cleanup` 的 data race
+  （`ResetVirtualBlockRefCache` 抢全局）。在 HEAD 上同样是 2 处，属于那份在写的工作；
+  第十二轮我只给它补了 `logging.Recover()`（在那之前它是段错误，直接带走整个内核）。
+
+**测试**：Go 全绿（`./...` 默认 tag、model/api/filesys/sql 的 `-tags fts5`、改动面 `-race`），
+JS 全量 **2175 passed / 16 skipped**。
+
+**注**：`tests/heading-fold.test.ts`、`tests/renderer-build-watch.test.ts`、
+`tests/drag-select-cost.test.ts` 是计时敏感用例（帧预算、fs watcher 防抖），机器在跑内核
+基准时会偶发失败，且每次失败的是不同那个——机器安静下来后全量绿。

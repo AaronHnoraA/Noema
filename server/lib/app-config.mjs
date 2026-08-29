@@ -10,11 +10,12 @@ import {
   validNoemaAppThemeId,
 } from "../../shared/app-themes.mjs";
 
-export const NOEMA_APP_CONFIG_SCHEMA_VERSION = 2;
+export const NOEMA_APP_CONFIG_SCHEMA_VERSION = 3;
 
 const DEFAULT_CONFIG = Object.freeze({
   schemaVersion: NOEMA_APP_CONFIG_SCHEMA_VERSION,
   appearance: Object.freeze({ theme: NOEMA_DEFAULT_THEME_ID }),
+  editor: Object.freeze({ lineBreaking: "optimal" }),
   workspace: Object.freeze({
     root: "~/Documents/Noema",
     layout: "legacy",
@@ -56,6 +57,7 @@ function cloneDefaults() {
   return {
     schemaVersion: DEFAULT_CONFIG.schemaVersion,
     appearance: { ...DEFAULT_CONFIG.appearance },
+    editor: { ...DEFAULT_CONFIG.editor },
     workspace: { ...DEFAULT_CONFIG.workspace },
     wiki: {
       creation: {
@@ -87,17 +89,17 @@ function normalizeParsedConfig(raw) {
   const diagnostics = [];
   const source = plainObject(raw) ? raw : {};
   const schemaVersion = Number(source.schemaVersion || 1);
-  if (schemaVersion !== 1 && schemaVersion !== NOEMA_APP_CONFIG_SCHEMA_VERSION) {
+  if (![1, 2, NOEMA_APP_CONFIG_SCHEMA_VERSION].includes(schemaVersion)) {
     diagnostics.push({
       code: "unsupported-schema",
       message: `Unsupported Noema config schemaVersion: ${String(source.schemaVersion)}`,
     });
     return { config: cloneDefaults(), diagnostics, writable: false };
   }
-  if (schemaVersion === 1) {
+  if (schemaVersion < NOEMA_APP_CONFIG_SCHEMA_VERSION) {
     diagnostics.push({
       code: "migrated-schema",
-      message: "Noema config schema v1 is loaded as v2; the saved theme is preserved",
+      message: `Noema config schema v${schemaVersion} is loaded as v${NOEMA_APP_CONFIG_SCHEMA_VERSION}; existing settings are preserved`,
     });
   }
 
@@ -111,6 +113,11 @@ function normalizeParsedConfig(raw) {
       message: `Unknown Noema theme: ${requestedTheme}; using ${noemaAppTheme("").name}`,
     });
   }
+
+  const editorSource = plainObject(source.editor) ? source.editor : {};
+  const lineBreaking = String(editorSource.lineBreaking || DEFAULT_CONFIG.editor.lineBreaking).trim().toLowerCase() === "native"
+    ? "native"
+    : "optimal";
 
   const workspaceSource = plainObject(source.workspace) ? source.workspace : {};
   const root = String(workspaceSource.root || DEFAULT_CONFIG.workspace.root).trim() || DEFAULT_CONFIG.workspace.root;
@@ -143,6 +150,7 @@ function normalizeParsedConfig(raw) {
     config: {
       schemaVersion: NOEMA_APP_CONFIG_SCHEMA_VERSION,
       appearance: { theme },
+      editor: { lineBreaking },
       workspace: { root, layout },
       wiki: { creation: { activeProfile, profiles } },
     },
@@ -238,13 +246,17 @@ export async function ensureNoemaAppConfig(options = {}) {
       await atomicWriteConfig(state.file, state.config);
       return publicPayload(await readConfigState(options));
     }
-    if (state.writable && Number(state.raw?.schemaVersion || 1) === 1) {
+    if (state.writable && Number(state.raw?.schemaVersion || 1) < NOEMA_APP_CONFIG_SCHEMA_VERSION) {
       await atomicWriteConfig(state.file, {
         ...state.raw,
         ...state.config,
         appearance: {
           ...(plainObject(state.raw.appearance) ? state.raw.appearance : {}),
           ...state.config.appearance,
+        },
+        editor: {
+          ...(plainObject(state.raw.editor) ? state.raw.editor : {}),
+          ...state.config.editor,
         },
       });
       return publicPayload(await readConfigState(options));
@@ -285,6 +297,14 @@ export async function updateNoemaAppConfig(patch = {}, options = {}) {
     }
 
     const rawAppearance = plainObject(state.raw.appearance) ? state.raw.appearance : {};
+    const editorPatch = plainObject(patch.editor) ? patch.editor : {};
+    const requestedLineBreaking = Object.prototype.hasOwnProperty.call(editorPatch, "lineBreaking")
+      ? String(editorPatch.lineBreaking || "").trim().toLowerCase()
+      : state.config.editor.lineBreaking;
+    if (!["optimal", "native"].includes(requestedLineBreaking)) {
+      throw Object.assign(new Error("Editor lineBreaking must be optimal or native"), { statusCode: 400 });
+    }
+    const rawEditor = plainObject(state.raw.editor) ? state.raw.editor : {};
     const workspacePatch = plainObject(patch.workspace) ? patch.workspace : {};
     const requestedRoot = Object.prototype.hasOwnProperty.call(workspacePatch, "root")
       ? String(workspacePatch.root || "").trim()
@@ -307,8 +327,9 @@ export async function updateNoemaAppConfig(patch = {}, options = {}) {
       throw Object.assign(new Error("At least one Wiki creation profile is required"), { statusCode: 400 });
     }
     const normalizedWiki = normalizeParsedConfig({
-      schemaVersion: 2,
+      schemaVersion: NOEMA_APP_CONFIG_SCHEMA_VERSION,
       appearance: { theme: requestedTheme },
+      editor: { lineBreaking: requestedLineBreaking },
       workspace: { root: requestedRoot, layout: requestedLayout },
       wiki: { creation: {
         activeProfile: creationPatch.activeProfile ?? state.config.wiki.creation.activeProfile,
@@ -323,6 +344,10 @@ export async function updateNoemaAppConfig(patch = {}, options = {}) {
       appearance: {
         ...rawAppearance,
         theme: requestedTheme,
+      },
+      editor: {
+        ...rawEditor,
+        lineBreaking: requestedLineBreaking,
       },
       workspace: {
         ...rawWorkspace,

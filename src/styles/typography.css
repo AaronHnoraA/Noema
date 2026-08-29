@@ -76,6 +76,29 @@
   line-height: var(--aaron-prose-leading);
 }
 
+/* Optimal paragraph layout inserts zero-source CM6 widgets at selected
+ * breakpoints. Native wrapping is disabled only on paragraphs with a complete
+ * measured plan; unsupported or dirty paragraphs retain CM6's pre-wrap path. */
+.cm-editor.aaronnote-visual-typography .cm-line.cm-kp-paragraph {
+  /* `pre` disables native wrapping while preserving source space runs. */
+  white-space: pre;
+  text-autospace: no-autospace;
+  text-spacing-trim: space-all;
+}
+
+.cm-editor.aaronnote-visual-typography .cm-kp-break {
+  display: inline;
+}
+
+.cm-editor.aaronnote-visual-typography .cm-kp-spacer {
+  display: inline-block;
+  height: 0;
+  padding: 0;
+  border: 0;
+  pointer-events: none;
+  user-select: none;
+}
+
 /* Rails retain their original overlay implementation.  Visual typography
  * translates the overlay to the prose edge and owns the text-to-rail gap. */
 .cm-editor.aaronnote-visual-typography .cm-org-env-rail {

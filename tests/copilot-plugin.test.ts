@@ -753,6 +753,76 @@ describe("copilot plugin insertion", () => {
     }
   });
 
+  // The Emacs xwidget embeds the WKWebView in an Emacs frame, so the
+  // window-level focus flag stays false while the caret is in the editor and
+  // keystrokes are arriving. Copilot used to read document.hasFocus() and
+  // therefore reported active:false on every request; the Emacs bridge answers
+  // an inactive client by skipping the completion, so Copilot was silently dead
+  // in Emacs and healthy everywhere else.
+  test("requests completions and reports active while only the editor host holds focus", async () => {
+    const host = document.createElement("div");
+    const target = document.createElement("button");
+    host.appendChild(target);
+    document.body.appendChild(host);
+
+    const editor = new FakeEditor("prefix");
+    editor.selection = { from: "prefix".length, to: "prefix".length };
+    editor.cursorAfter = "";
+    const handlers: { action?: (action: string) => void } = {};
+    const inlineBodies: Array<Record<string, unknown>> = [];
+
+    const hasFocus = document.hasFocus;
+    // Stand in for the xwidget: DOM focus is real, window focus is not.
+    (document as unknown as { hasFocus: () => boolean }).hasFocus = () => false;
+
+    const restoreApi = installNativeCopilot(async (action, body) => {
+      if (action === "inline") {
+        inlineBodies.push((body || {}) as Record<string, unknown>);
+        return { items: [{ insertText: "Suffix", item: { insertText: "Suffix" } }] };
+      }
+      return { ok: true };
+    });
+
+    const cleanup = setupCopilot({
+      editor,
+      host,
+      currentFile: () => "/tmp/document.md",
+      clientId: () => "pane-1",
+      vimMode: () => "insert",
+      setStatus: () => {},
+      onChange: () => () => {},
+      onKeyDown: () => () => {},
+      onAction: (handler: (action: string) => void) => {
+        handlers.action = handler;
+        return () => {
+          delete handlers.action;
+        };
+      },
+      onSettingsChange: () => () => {},
+      getSettings: () => ({ idleDelayMs: 999_999, largeBufferThresholdKb: 512 }),
+      onDocumentEvent: () => () => {},
+      jumpSnippetNext: () => false,
+      jumpSnippetPrevious: () => false,
+      forwardDelimiter: () => false,
+      backwardDelimiter: () => false,
+    });
+
+    try {
+      target.focus();
+      handlers.action?.("trigger");
+      await waitForMicrotasks();
+      await waitForMicrotasks();
+      expect(inlineBodies.length).toBe(1);
+      expect(inlineBodies[0].active).toBe(true);
+      expect(inlineBodies[0].clientId).toBe("pane-1");
+    } finally {
+      cleanup();
+      restoreApi();
+      host.remove();
+      (document as unknown as { hasFocus: () => boolean }).hasFocus = hasFocus;
+    }
+  });
+
   test("allows inline suggestions before closing punctuation", async () => {
     const host = document.createElement("div");
     const target = document.createElement("button");

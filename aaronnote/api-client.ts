@@ -76,8 +76,9 @@ export type NoemaAppTheme = {
   description: string;
 };
 export type NoemaAppConfig = {
-  schemaVersion: 2;
+  schemaVersion: 3;
   appearance: { theme: string };
+  editor: { lineBreaking: "optimal" | "native" };
   workspace: { root: string; layout: "legacy" | "wiki" };
   wiki: {
     creation: {
@@ -107,6 +108,7 @@ export type NoemaAppConfigMsg = {
 };
 export type NoemaAppConfigUpdate = {
   appearance?: { theme?: string };
+  editor?: { lineBreaking?: "optimal" | "native" };
   workspace?: { root?: string; layout?: "legacy" | "wiki" };
   wiki?: { creation?: NoemaAppConfig["wiki"]["creation"] };
   revision?: string;

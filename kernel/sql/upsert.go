@@ -460,9 +460,14 @@ func upsertTree(tx *sql.Tx, tree *parse.Tree, context map[string]any) (err error
 	}
 	unChanges := hashset.New()
 	var toRemoves []string
-	for id, hash := range oldBlockHashes {
+	for id, row := range oldBlockHashes {
 		if unchanged[id] {
 			unChanges.Add(id)
+			continue
+		}
+		// Never delete a row that belongs to another document. See
+		// queryBlockHashes for how two documents come to share a root id.
+		if "" != row.path && row.path != tree.Path {
 			continue
 		}
 		if nil != present && !present[id] {
@@ -472,7 +477,7 @@ func upsertTree(tx *sql.Tx, tree *parse.Tree, context map[string]any) (err error
 			continue
 		}
 		if newHash, ok := newBlockHashes[id]; ok {
-			if newHash == hash {
+			if newHash == row.hash {
 				unChanges.Add(id)
 			}
 		} else if nil == present {
@@ -651,7 +656,7 @@ func getIndexIgnoreLines() (ret []string) {
 // caller can tell "edited away" from "still here". Both are nil for trees whose
 // ids are persistent rather than content-derived (.sy documents), where an id
 // says nothing about content and the hash comparison has to run.
-func contentDerivedBlockState(tree *parse.Tree, oldBlockHashes map[string]string) (unchanged, present map[string]bool) {
+func contentDerivedBlockState(tree *parse.Tree, indexed map[string]indexedBlockRow) (unchanged, present map[string]bool) {
 	if nil == IsContentDerivedBlockIDFn || nil == tree || nil == tree.Root {
 		return nil, nil
 	}
@@ -663,11 +668,17 @@ func contentDerivedBlockState(tree *parse.Tree, oldBlockHashes map[string]string
 			return ast.WalkContinue
 		}
 		present[n.ID] = true
+		if nil != IsIndexPlaceholderBlockFn && IsIndexPlaceholderBlockFn(n) {
+			// Always skipped, never removed: see IsIndexPlaceholderBlockFn.
+			derived = true
+			unchanged[n.ID] = true
+			return ast.WalkContinue
+		}
 		if !IsContentDerivedBlockIDFn(n) {
 			return ast.WalkContinue
 		}
 		derived = true
-		if _, indexed := oldBlockHashes[n.ID]; indexed {
+		if _, found := indexed[n.ID]; found {
 			unchanged[n.ID] = true
 		}
 		return ast.WalkContinue

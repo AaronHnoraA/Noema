@@ -622,7 +622,15 @@ func reconcileMarkdownBoxChecked(boxID string) (changed int, err error) {
 			indexCache.Entries[file.path] = nextCacheEntry
 			indexCacheDirty = true
 		}
-		if nil != oldTree && oldTree.RootID == tree.ID && nil != persistedRoot && persistedRoot.ID == tree.ID &&
+		// The root's hash no longer says anything about the body. It used to,
+		// because a Markdown document was one SQL row into which the whole body
+		// was folded; now the body lives in one row per block and NodeHash(root)
+		// covers only the document node itself. So an edit made while the kernel
+		// was not watching — a git pull, an external editor — would leave this
+		// check reporting "identical" and the stale rows in place. The source
+		// bytes are the authority: sourceChanged is derived from them.
+		if !sourceChanged && nil != oldTree && oldTree.RootID == tree.ID &&
+			nil != persistedRoot && persistedRoot.ID == tree.ID &&
 			persistedRoot.Hash == projectedRoot.Hash {
 			continue
 		}

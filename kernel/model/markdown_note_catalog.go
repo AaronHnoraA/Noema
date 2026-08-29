@@ -380,6 +380,12 @@ func markdownNoteSlug(value string) string {
 }
 
 func markdownNoteSemanticHeading(line string) (noteHeading, bool) {
+	// `(?i)^@@(part|section)…` cannot match without the literal opener, and this
+	// runs on every line of the document twice — once to detect whether the note
+	// uses semantic headings at all, then again to collect them.
+	if !strings.Contains(line, "@@") {
+		return noteHeading{}, false
+	}
 	match := noteSemanticPattern.FindStringSubmatch(strings.TrimSpace(line))
 	if len(match) < 4 {
 		return noteHeading{}, false
@@ -403,6 +409,21 @@ func markdownNoteSemanticHeading(line string) (noteHeading, bool) {
 		slug = strings.TrimSpace(id[1])
 	}
 	return noteHeading{label: label, slug: slug, level: level}, true
+}
+
+// markdownNoteMayBeHeading is the cheap precondition of noteHeadingPattern: a
+// `#` within the first four columns.
+func markdownNoteMayBeHeading(line string) bool {
+	for index := 0; index < len(line) && index < 4; index++ {
+		switch line[index] {
+		case '#':
+			return true
+		case ' ', '\t':
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 func markdownNoteDOMTargets(lines []noteSourceLine, metaFrom, metaTo int, title, path string) []MarkdownNoteDOMTarget {
@@ -445,6 +466,10 @@ func markdownNoteDOMTargets(lines []noteSourceLine, metaFrom, metaTo int, title,
 		if semantic, ok := markdownNoteSemanticHeading(line.text); ok {
 			semantic.slug = unique(semantic.slug)
 			headings = append(headings, semantic)
+		}
+		// `^\s{0,3}(#{1,6})\s+…` needs a hash in the first four columns.
+		if !markdownNoteMayBeHeading(line.text) {
+			continue
 		}
 		match := noteHeadingPattern.FindStringSubmatch(line.text)
 		if len(match) < 3 {
@@ -525,7 +550,17 @@ func markdownNoteInlineTags(lines []noteSourceLine, metaFrom, metaTo int) []stri
 		if fence != 0 {
 			continue
 		}
-		visible := noteInlineCodePattern.ReplaceAllString(line.text, "")
+		// Both patterns are anchored on a literal, and most lines contain
+		// neither, so guard each on the cheap byte search rather than running a
+		// case-insensitive regexp over every line of the document. Same idiom as
+		// the line scanner in noema/markdown.
+		if !strings.Contains(line.text, "@@") {
+			continue
+		}
+		visible := line.text
+		if strings.IndexByte(visible, '`') >= 0 {
+			visible = noteInlineCodePattern.ReplaceAllString(visible, "")
+		}
 		for _, match := range noteInlineTagPattern.FindAllStringSubmatch(visible, -1) {
 			if value := strings.TrimSpace(match[1]); value != "" {
 				ret = append(ret, value)
@@ -559,8 +594,26 @@ func markdownNoteBlocks(lines []noteSourceLine, metaFrom, metaTo int, projection
 			offset += lineUnits
 			continue
 		}
-		visible := noteInlineCodePattern.ReplaceAllStringFunc(line.text, func(value string) string { return strings.Repeat(" ", len(value)) })
-		org := noteOrgBeginPattern.FindStringSubmatch(visible)
+		// A line can only hold a block anchor or a planning id if it has a brace,
+		// and only an org opener if it has `#+`. Checking that first keeps three
+		// case-insensitive regexps off every ordinary line of prose.
+		hasBrace := strings.IndexByte(line.text, '{') >= 0
+		if !hasBrace && !strings.Contains(line.text, "#+") {
+			offset += lineUnits
+			continue
+		}
+		visible := line.text
+		if strings.IndexByte(visible, '`') >= 0 {
+			visible = noteInlineCodePattern.ReplaceAllStringFunc(visible, func(value string) string { return strings.Repeat(" ", len(value)) })
+		}
+		var org []string
+		if strings.Contains(visible, "#+") {
+			org = noteOrgBeginPattern.FindStringSubmatch(visible)
+		}
+		if !hasBrace {
+			offset += lineUnits
+			continue
+		}
 		for _, match := range noteAnchorPattern.FindAllStringSubmatchIndex(visible, -1) {
 			id := visible[match[2]:match[3]]
 			block := MarkdownNoteBlock{ID: id, Kind: "anchor", Label: id, Offset: offset + markdownNoteUTF16Length(visible[:match[0]])}
@@ -580,6 +633,10 @@ func markdownNoteBlocks(lines []noteSourceLine, metaFrom, metaTo int, projection
 				order = append(order, id)
 			}
 			byID[id] = block
+		}
+		if !containsFoldASCII(visible, "id") {
+			offset += lineUnits
+			continue
 		}
 		for _, match := range notePlanningAnchorPattern.FindAllStringSubmatchIndex(visible, -1) {
 			id := visible[match[2]:match[3]]
@@ -763,6 +820,42 @@ func markdownNoteMarkdownHrefs(source string) []string {
 	return ret
 }
 
+// containsFoldASCII reports whether source contains needle, comparing ASCII
+// letters case-insensitively. needle must already be lowercase. It allocates
+// nothing, which is the point: it guards regexps on the save response path.
+func containsFoldASCII(source, needle string) bool {
+	if "" == needle {
+		return true
+	}
+	if len(needle) > len(source) {
+		return false
+	}
+	first := needle[0]
+	for index := 0; index+len(needle) <= len(source); index++ {
+		if lowerASCII(source[index]) != first {
+			continue
+		}
+		match := true
+		for offset := 1; offset < len(needle); offset++ {
+			if lowerASCII(source[index+offset]) != needle[offset] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
+
+func lowerASCII(char byte) byte {
+	if 'A' <= char && 'Z' >= char {
+		return char + ('a' - 'A')
+	}
+	return char
+}
+
 func markdownNoteRefs(source string, meta map[string]noteMetaValue) []string {
 	ret, seen := []string{}, map[string]bool{}
 	add := func(value string) {
@@ -775,11 +868,18 @@ func markdownNoteRefs(source string, meta map[string]noteMetaValue) []string {
 	for _, value := range noteMetaList(meta, "refs") {
 		add(value)
 	}
-	for _, match := range noteRefTokenPattern.FindAllStringSubmatch(source, -1) {
-		if len(match) > 1 && match[1] != "" {
-			add(match[1])
-		} else {
-			add(markdownNoteRoamRef(match[0]))
+	// Guard the case-insensitive alternation behind the literals it is anchored
+	// on. Both branches need one of these two, and neither appears in most
+	// notes, so the common document skips a whole-source regexp scan — the
+	// largest single item in the projection the save response waits for.
+	// Same idiom as the line scanner in noema/markdown.
+	if containsFoldASCII(source, "#note(") || containsFoldASCII(source, "roam:") {
+		for _, match := range noteRefTokenPattern.FindAllStringSubmatch(source, -1) {
+			if len(match) > 1 && match[1] != "" {
+				add(match[1])
+			} else {
+				add(markdownNoteRoamRef(match[0]))
+			}
 		}
 	}
 	for _, href := range markdownNoteMarkdownHrefs(source) {
@@ -817,6 +917,19 @@ func markdownNoteRefs(source string, meta map[string]noteMetaValue) []string {
 	return ret
 }
 
+// noteSummaryRunes is how much of a note the catalog shows as its summary.
+// noteSummarySlack is how much more than that a windowed pass must produce
+// before its leading runes can be trusted; see markdownNoteSummary.
+// noteSummaryWindow is the first prefix tried. A kilobyte of prose yields well
+// over the 284 runes needed even in CJK, and the window grows geometrically, so
+// a document that is mostly stripped syntax still costs little more than the
+// prefix it finally needs.
+const (
+	noteSummaryRunes  = 220
+	noteSummarySlack  = 64
+	noteSummaryWindow = 1024
+)
+
 func markdownNoteSummary(source string, meta map[string]noteMetaValue, metaFrom, metaTo int) string {
 	if value := noteMetaScalar(meta, "summary"); value != "" {
 		return value
@@ -824,6 +937,44 @@ func markdownNoteSummary(source string, meta map[string]noteMetaValue, metaFrom,
 	if metaTo > metaFrom {
 		source = source[:metaFrom] + source[metaTo:]
 	}
+
+	// The pipeline below rewrites its whole input five times over to produce at
+	// most 220 runes, which on a 60 KB note is six full-document passes for a
+	// couple of lines of output — and it runs on the save response path.
+	//
+	// Every stage only deletes or shortens, so the leading runes of the result
+	// come from the leading bytes of the source. A prefix is therefore enough,
+	// as long as it yields comfortably more than 220 runes: a pattern that
+	// straddles the cut can only disturb the output *at* the cut, which is past
+	// the slack and so past everything that is kept.
+	//
+	// noteTypMetaPattern is the exception. `(?s)#metadata\s*\(\(.*?\)\)\s*<note>`
+	// can span the whole document, so its match is not bounded by any prefix,
+	// and a document containing that opener takes the whole-document path.
+	if !strings.Contains(source, "#metadata") {
+		for window := noteSummaryWindow; window < len(source); window *= 4 {
+			prefix := source[:noteSummaryCut(source, window)]
+			if candidate := noteSummaryPipeline(prefix); noteSummaryRunes+noteSummarySlack <= utf8.RuneCountInString(candidate) {
+				return truncateRunes(candidate, noteSummaryRunes)
+			}
+		}
+	}
+	return truncateRunes(noteSummaryPipeline(source), noteSummaryRunes)
+}
+
+// noteSummaryCut rounds a window up to the next line boundary, so a prefix
+// never ends mid-line and the line-anchored patterns see whole lines.
+func noteSummaryCut(source string, window int) int {
+	if window >= len(source) {
+		return len(source)
+	}
+	if next := strings.IndexByte(source[window:], '\n'); 0 <= next {
+		return window + next + 1
+	}
+	return len(source)
+}
+
+func noteSummaryPipeline(source string) string {
 	source = noteTypMetaPattern.ReplaceAllString(source, "")
 	source = noteTypDirectivePattern.ReplaceAllString(source, "")
 	source = noteCallPattern.ReplaceAllString(source, "$2")
@@ -835,12 +986,14 @@ func markdownNoteSummary(source string, meta map[string]noteMetaValue, metaFrom,
 		}
 		return r
 	}, source)
-	source = strings.TrimSpace(noteSummarySpacePattern.ReplaceAllString(source, " "))
-	if utf8.RuneCountInString(source) <= 220 {
-		return source
+	return strings.TrimSpace(noteSummarySpacePattern.ReplaceAllString(source, " "))
+}
+
+func truncateRunes(value string, limit int) string {
+	if utf8.RuneCountInString(value) <= limit {
+		return value
 	}
-	runes := []rune(source)
-	return string(runes[:220])
+	return string([]rune(value)[:limit])
 }
 
 func markdownNoteGroupLabel(group string) string {

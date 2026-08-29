@@ -34,6 +34,7 @@ root.innerHTML = `
     <nav class="noema-config-nav" aria-label="Configuration sections">
       <span>Settings</span>
       <a href="#appearance" class="is-active">Appearance</a>
+      <a href="#editor">Editor</a>
       <a href="#workspace">Workspace</a>
       <a href="#new-pages">New pages</a>
       <a href="#plugins">Plugins</a>
@@ -93,6 +94,23 @@ root.innerHTML = `
         </div>
         <div class="noema-config-themes" data-config-themes role="radiogroup" aria-label="Noema theme"></div>
       </section>
+      <section class="noema-config-section" id="editor">
+        <div class="noema-config-section-head">
+          <div>
+            <p class="noema-config-eyebrow">Typography</p>
+            <h2>Paragraph line breaking</h2>
+          </div>
+        </div>
+        <label class="noema-config-field">
+          <span>Visual mode</span>
+          <select data-line-breaking>
+            <option value="optimal">Optimal · Knuth–Plass for Chinese and Latin</option>
+            <option value="native">Native · browser line wrapping</option>
+          </select>
+        </label>
+        <p class="noema-config-copy">Optimal layout runs after typing settles and falls back to native wrapping for unsupported paragraphs.</p>
+        <div class="noema-config-actions"><button type="button" data-config-save-editor>Save editor settings</button></div>
+      </section>
       <section class="noema-config-section" id="plugins">
         <div class="noema-config-section-head">
           <div>
@@ -133,6 +151,8 @@ const profileRepositoryEl = root.querySelector<HTMLInputElement>("[data-profile-
 const profileDirectoryEl = root.querySelector<HTMLInputElement>("[data-profile-directory]")!;
 const profileFilenameEl = root.querySelector<HTMLInputElement>("[data-profile-filename]")!;
 const saveWorkspaceButton = root.querySelector<HTMLButtonElement>("[data-config-save-workspace]")!;
+const lineBreakingEl = root.querySelector<HTMLSelectElement>("[data-line-breaking]")!;
+const saveEditorButton = root.querySelector<HTMLButtonElement>("[data-config-save-editor]")!;
 const pluginsEl = root.querySelector<HTMLElement>("[data-config-plugins]")!;
 
 let payload: NoemaAppConfigMsg | null = noemaAppConfigState();
@@ -227,6 +247,7 @@ function render(): void {
   themesEl.replaceChildren();
   workspaceRootEl.value = payload.config.workspace.root;
   workspaceLayoutEl.value = payload.config.workspace.layout;
+  lineBreakingEl.value = payload.config.editor.lineBreaking;
   const profile = payload.config.wiki.creation.profiles.find((item) => item.id === payload?.config.wiki.creation.activeProfile)
     || payload.config.wiki.creation.profiles[0];
   profilePartitionEl.value = profile?.partition || "private";
@@ -336,6 +357,26 @@ saveWorkspaceButton.addEventListener("click", () => {
     setStatus(error instanceof Error ? error.message : String(error), "error");
   }).finally(() => {
     saveWorkspaceButton.disabled = false;
+  });
+});
+saveEditorButton.addEventListener("click", () => {
+  if (!payload) return;
+  saveEditorButton.disabled = true;
+  setStatus("Saving editor settings…");
+  void api.config.updateApp({
+    revision: payload.revision,
+    editor: {
+      lineBreaking: lineBreakingEl.value as "optimal" | "native",
+    },
+  }).then((next) => {
+    payload = next;
+    window.noemaDesktop?.notifyAppConfigChanged(next.revision);
+    setStatus("Editor settings applied");
+    render();
+  }).catch((error) => {
+    setStatus(error instanceof Error ? error.message : String(error), "error");
+  }).finally(() => {
+    saveEditorButton.disabled = false;
   });
 });
 window.addEventListener("keydown", (event) => {

@@ -41,8 +41,9 @@ describe("Noema app config", () => {
     const payload = await ensureNoemaAppConfig({ configDir });
     expect(payload.configFile).toBe(join(configDir, "config.json"));
     expect(payload.config).toEqual({
-      schemaVersion: 2,
+      schemaVersion: 3,
       appearance: { theme: NOEMA_DEFAULT_THEME_ID },
+      editor: { lineBreaking: "optimal" },
       workspace: { root: "~/Documents/Noema", layout: "legacy" },
       wiki: {
         creation: {
@@ -81,7 +82,7 @@ describe("Noema app config", () => {
 
     expect(updated.config.appearance.theme).toBe(nextTheme.id);
     expect(JSON.parse(await readFile(file, "utf8"))).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       appearance: { theme: nextTheme.id, density: "compact" },
       editor: { lineNumbers: true },
     });
@@ -116,6 +117,20 @@ describe("Noema app config", () => {
       repository: "math",
       directory: "papers",
     });
+  });
+
+  test("updates the line-breaking mode and rejects unknown modes", async () => {
+    const configDir = await tempConfigDir();
+    const initial = await ensureNoemaAppConfig({ configDir });
+    const updated = await updateNoemaAppConfig({
+      revision: initial.revision,
+      editor: { lineBreaking: "native" },
+    }, { configDir });
+
+    expect(updated.config.editor.lineBreaking).toBe("native");
+    await expect(updateNoemaAppConfig({
+      editor: { lineBreaking: "unknown" },
+    }, { configDir })).rejects.toThrow("lineBreaking must be optimal or native");
   });
 
   test("rejects stale revisions and unknown themes", async () => {

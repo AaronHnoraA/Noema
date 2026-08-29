@@ -20,11 +20,14 @@ import { parserWatcher } from "./parser-watcher.ts";
 import {
   createVisualMarkdownEditingExtensions,
   createVisualMarkdownExtensions,
+  optimalLineBreakingController,
   visualMode,
 } from "./visual/index.ts";
+import type { LineBreakingMode } from "./visual/optimal-linebreak.ts";
 
 export type MarkdownFeatureExtensionOptions = {
   initialVisualMode: boolean;
+  lineBreaking: LineBreakingMode;
 };
 
 export function createMarkdownFeatureExtensions(
@@ -37,6 +40,7 @@ export function createMarkdownFeatureExtensions(
     tocIndexExtension,
     orderedListRenumber,
     headingFoldExtension,
+    optimalLineBreakingController(options.lineBreaking),
     createVisualMarkdownEditingExtensions(),
     visualMode(options.initialVisualMode, createVisualMarkdownExtensions()),
     findHighlightExtension,

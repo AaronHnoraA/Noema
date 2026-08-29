@@ -315,7 +315,9 @@ func TestRegisterExternalMarkdownBoxAPIPreservesMissingShadows(t *testing.T) {
 		[]any{data.Box.ID, "/ready.md"},
 		32,
 	)
-	if len(blocks) != 1 {
+	// A Markdown document is projected as one row per top-level block, so
+	// readiness is "its rows are there", not "its row is there".
+	if 1 > len(blocks) {
 		t.Fatalf("registration returned before initial Markdown index committed: %+v", blocks)
 	}
 	results, matched, _, _, _ := model.FullTextSearchBlock(

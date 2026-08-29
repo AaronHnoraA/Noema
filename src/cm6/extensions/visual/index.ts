@@ -31,6 +31,7 @@ import { pointerSelectionExtension } from "./selection.ts";
 import { visualTypographyExtension } from "./typography.ts";
 import { blockMoveGutterExtension } from "../../block-move.ts";
 import { visualTypingBurstExtension } from "./typing-burst.ts";
+import { optimalLinebreakExtension } from "./optimal-linebreak.ts";
 
 export function createVisualMarkdownExtensions(): Extension {
   return [
@@ -51,6 +52,9 @@ export function createVisualMarkdownExtensions(): Extension {
     leanPlaceholderPreviewExtension,
     noteCodePreviewExtension,
     inlineCommandsExtension,
+    // Must run after inline widgets so its measurement phase sees final Visual
+    // typography. Its direct StateField decorations may alter line structure.
+    optimalLinebreakExtension,
   ];
 }
 
@@ -78,3 +82,9 @@ export {
   setVisualMode,
   visualMode,
 } from "./visual-mode.ts";
+export {
+  optimalLineBreakingController,
+  optimalLineBreakingMode,
+  setOptimalLineBreakingMode,
+  type LineBreakingMode,
+} from "./optimal-linebreak.ts";

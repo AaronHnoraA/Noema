@@ -1,9 +1,12 @@
 import type { NoemaAppTheme, NoemaAppThemeId } from "../../shared/app-themes.mjs";
 
 export type NoemaAppConfig = {
-  schemaVersion: 2;
+  schemaVersion: 3;
   appearance: {
     theme: NoemaAppThemeId;
+  };
+  editor: {
+    lineBreaking: "optimal" | "native";
   };
   workspace: {
     root: string;
@@ -50,7 +53,7 @@ export type NoemaAppConfigOptions = {
   expectedRevision?: string;
 };
 
-export const NOEMA_APP_CONFIG_SCHEMA_VERSION: 2;
+export const NOEMA_APP_CONFIG_SCHEMA_VERSION: 3;
 export function noemaAppConfigDir(options?: NoemaAppConfigOptions): string;
 export function noemaAppConfigFile(options?: NoemaAppConfigOptions): string;
 export function getNoemaAppConfig(options?: NoemaAppConfigOptions): Promise<NoemaAppConfigPayload>;
@@ -58,6 +61,7 @@ export function ensureNoemaAppConfig(options?: NoemaAppConfigOptions): Promise<N
 export function updateNoemaAppConfig(
   patch?: {
     appearance?: { theme?: NoemaAppThemeId | string };
+    editor?: { lineBreaking?: "optimal" | "native" | string };
     workspace?: { root?: string; layout?: "legacy" | "wiki" | string };
     wiki?: { creation?: { activeProfile?: string; profiles?: NoemaWikiCreationProfile[] } };
     revision?: string;

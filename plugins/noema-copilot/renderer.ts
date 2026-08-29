@@ -827,11 +827,24 @@ export function setupCopilot(context: Context): () => void {
     ].join("\0");
   }
 
+  // Whether this pane is the one the user is typing in.
+  //
+  // Not document.hasFocus(): inside the Emacs xwidget the WKWebView is embedded
+  // in an Emacs frame and the window-level focus flag stays false even while the
+  // caret is in the editor and keystrokes are arriving. That made every Copilot
+  // request report active:false, which the Emacs bridge answers by skipping the
+  // completion as "inactive-client" and returning no items — Copilot looked
+  // dead in Emacs and worked everywhere else. document.activeElement reflects
+  // real DOM focus in both hosts, and is what eligibleShell already trusted.
+  function editorHasFocus(): boolean {
+    return targetInHost(context.host, document.activeElement);
+  }
+
   function clientBody(extra: Record<string, unknown> = {}): Record<string, unknown> {
     const clientId = context.clientId?.() || "";
     const active = Object.prototype.hasOwnProperty.call(extra, "active")
       ? extra.active
-      : document.hasFocus() && (!context.isActive || context.isActive());
+      : editorHasFocus() && (!context.isActive || context.isActive());
     return {
       ...extra,
       ...(clientId ? { clientId } : {}),
@@ -841,7 +854,7 @@ export function setupCopilot(context: Context): () => void {
 
   function notifyFocus(reason = "focus"): Promise<void> {
     const file = context.currentFile();
-    if (!file || !document.hasFocus()) return Promise.resolve();
+    if (!file || !editorHasFocus()) return Promise.resolve();
     if (context.isActive && !context.isActive()) return Promise.resolve();
     if (focusState === "focused" && focusedFile === file) return Promise.resolve();
     focusState = "focused";
@@ -881,9 +894,8 @@ export function setupCopilot(context: Context): () => void {
 
   function eligibleShell(): boolean {
     if (context.isActive && !context.isActive()) return false;
-    if (!document.hasFocus()) return false;
     if (context.vimMode() !== "insert") return false;
-    if (!targetInHost(context.host, document.activeElement)) return false;
+    if (!editorHasFocus()) return false;
     const selection = activeSelection(context.editor);
     return selection.from === selection.to;
   }

@@ -30,10 +30,15 @@ const NEWLINE_CEILING_MS = 520;
 // that pre-existing scan itself.
 const KNOWN_SCAN_CEILING_MS = 2000;
 
-function medianEditLatency(content: string, insert: string, positionValue?: number): number {
+function medianEditLatency(
+  content: string,
+  insert: string,
+  positionValue?: number,
+  lineBreaking: "optimal" | "native" = "optimal",
+): number {
   const host = document.createElement("div");
   document.body.append(host);
-  const editor = createEditor(host, { kernel: "cm6", initialContent: content });
+  const editor = createEditor(host, { kernel: "cm6", initialContent: content, lineBreaking });
   const position = positionValue ?? Math.floor(editor.getMarkdownLength() / 2);
   const latencies: number[] = [];
 
@@ -69,6 +74,17 @@ describe("large-document bounded editing", () => {
       expect(medianEditLatency(content, insert)).toBeLessThan(ceiling);
     }, 20_000);
   }
+
+  test("optimal line breaking adds no material synchronous typing cost", () => {
+    const position = Math.floor(content.length / 2);
+    const native = medianEditLatency(content, "x", position, "native");
+    const optimal = medianEditLatency(content, "x", position, "optimal");
+
+    // The KP work itself is delayed until the shared 120 ms typing-settle
+    // refresh. This comparison guards the synchronous transaction path, with a
+    // small fixed allowance for timer/cache bookkeeping and Happy DOM jitter.
+    expect(optimal).toBeLessThanOrEqual(native * 1.25 + 15);
+  }, 30_000);
 
   test("org-env identity title patches remain bounded in the 5 MB fixture", () => {
     const prefix = "#+begin theorem Spectral {#0198fbac-0780-7c99-85e6-333333333333}\nBody.\n#+end theorem\n\n";
