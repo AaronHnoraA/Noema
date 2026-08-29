@@ -103,7 +103,6 @@ import {
   orgEnvExitTarget,
   formulaRangeAtWidgetPosition,
   revealFormulaSource,
-  setOptimalLineBreakingMode,
   setVisualMode,
 } from "./extensions/visual/index.ts";
 
@@ -1001,10 +1000,6 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
       configureHeadingNumbering(view, next);
     },
 
-    setLineBreaking(mode): void {
-      view.dispatch({ effects: setOptimalLineBreakingMode.of(mode) });
-    },
-
     captureFormat(mode = "once"): FormatPainterSnapshot | undefined {
       const source = view.state.doc.toString();
       const segments = view.state.selection.ranges
@@ -1307,10 +1302,7 @@ function buildExtensions(
       ...(standalone ? defaultKeymap : []),
       ...(standalone ? historyKeymap : []),
     ]),
-    createMarkdownFeatureExtensions({
-      initialVisualMode,
-      lineBreaking: options.lineBreaking ?? "optimal",
-    }),
+    createMarkdownFeatureExtensions({ initialVisualMode }),
     headingNumberingExtension({
       enabled: options.headingNumbering?.enabled ?? false,
       format: options.headingNumbering?.format ?? "decimal-hierarchical",

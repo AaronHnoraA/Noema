@@ -117,6 +117,7 @@ describe("SiYuan-derived Electron desktop adapter", () => {
     expect(bridge).toContain('getPropertyValue("--b3-theme-background")');
     expect(bridge).toContain("visualTypography: auditVisualTypography(document)");
     expect(bridge).toContain('document.querySelectorAll(".cm-line.cm-kp-paragraph").length');
+    expect(bridge).toContain("audit: optimalLinebreakAudit()");
     expect(bridge).toContain("productionHandfeel: auditProductionHandfeel(document)");
     expect(bridge).toContain("sharedEditor:");
     expect(bridge).toContain("persistentDockRails");

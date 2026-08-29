@@ -303,14 +303,12 @@ const serverAppConfig = serverConfig ? {
   config: {
     schemaVersion: NOEMA_APP_CONFIG_SCHEMA_VERSION,
     appearance: { theme: serverTheme.id },
-    editor: { lineBreaking: "optimal" },
     workspace: { root: "", layout: "wiki" },
     wiki: { creation: { activeProfile: "", profiles: [] } },
   },
   defaults: {
     schemaVersion: NOEMA_APP_CONFIG_SCHEMA_VERSION,
     appearance: { theme: serverTheme.id },
-    editor: { lineBreaking: "optimal" },
     workspace: { root: "", layout: "wiki" },
     wiki: { creation: { activeProfile: "", profiles: [] } },
   },

@@ -15,7 +15,6 @@ export const NOEMA_APP_CONFIG_SCHEMA_VERSION = 3;
 const DEFAULT_CONFIG = Object.freeze({
   schemaVersion: NOEMA_APP_CONFIG_SCHEMA_VERSION,
   appearance: Object.freeze({ theme: NOEMA_DEFAULT_THEME_ID }),
-  editor: Object.freeze({ lineBreaking: "optimal" }),
   workspace: Object.freeze({
     root: "~/Documents/Noema",
     layout: "legacy",
@@ -57,7 +56,6 @@ function cloneDefaults() {
   return {
     schemaVersion: DEFAULT_CONFIG.schemaVersion,
     appearance: { ...DEFAULT_CONFIG.appearance },
-    editor: { ...DEFAULT_CONFIG.editor },
     workspace: { ...DEFAULT_CONFIG.workspace },
     wiki: {
       creation: {
@@ -83,6 +81,17 @@ export function noemaAppConfigFile(options = {}) {
 
 function revisionFor(value) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
+}
+
+function withoutRetiredLineBreaking(raw) {
+  if (!plainObject(raw) || !plainObject(raw.editor)
+      || !Object.prototype.hasOwnProperty.call(raw.editor, "lineBreaking")) return raw;
+  const editor = { ...raw.editor };
+  delete editor.lineBreaking;
+  const next = { ...raw };
+  if (Object.keys(editor).length > 0) next.editor = editor;
+  else delete next.editor;
+  return next;
 }
 
 function normalizeParsedConfig(raw) {
@@ -113,11 +122,6 @@ function normalizeParsedConfig(raw) {
       message: `Unknown Noema theme: ${requestedTheme}; using ${noemaAppTheme("").name}`,
     });
   }
-
-  const editorSource = plainObject(source.editor) ? source.editor : {};
-  const lineBreaking = String(editorSource.lineBreaking || DEFAULT_CONFIG.editor.lineBreaking).trim().toLowerCase() === "native"
-    ? "native"
-    : "optimal";
 
   const workspaceSource = plainObject(source.workspace) ? source.workspace : {};
   const root = String(workspaceSource.root || DEFAULT_CONFIG.workspace.root).trim() || DEFAULT_CONFIG.workspace.root;
@@ -150,7 +154,6 @@ function normalizeParsedConfig(raw) {
     config: {
       schemaVersion: NOEMA_APP_CONFIG_SCHEMA_VERSION,
       appearance: { theme },
-      editor: { lineBreaking },
       workspace: { root, layout },
       wiki: { creation: { activeProfile, profiles } },
     },
@@ -246,17 +249,29 @@ export async function ensureNoemaAppConfig(options = {}) {
       await atomicWriteConfig(state.file, state.config);
       return publicPayload(await readConfigState(options));
     }
-    if (state.writable && Number(state.raw?.schemaVersion || 1) < NOEMA_APP_CONFIG_SCHEMA_VERSION) {
+    const hasRetiredLineBreaking = plainObject(state.raw?.editor)
+      && Object.prototype.hasOwnProperty.call(state.raw.editor, "lineBreaking");
+    if (state.writable
+        && (Number(state.raw?.schemaVersion || 1) < NOEMA_APP_CONFIG_SCHEMA_VERSION
+          || hasRetiredLineBreaking)) {
+      const sanitizedRaw = withoutRetiredLineBreaking(state.raw);
       await atomicWriteConfig(state.file, {
-        ...state.raw,
+        ...sanitizedRaw,
         ...state.config,
         appearance: {
           ...(plainObject(state.raw.appearance) ? state.raw.appearance : {}),
           ...state.config.appearance,
         },
-        editor: {
-          ...(plainObject(state.raw.editor) ? state.raw.editor : {}),
-          ...state.config.editor,
+        workspace: {
+          ...(plainObject(state.raw.workspace) ? state.raw.workspace : {}),
+          ...state.config.workspace,
+        },
+        wiki: {
+          ...(plainObject(state.raw.wiki) ? state.raw.wiki : {}),
+          creation: {
+            ...(plainObject(state.raw.wiki?.creation) ? state.raw.wiki.creation : {}),
+            ...state.config.wiki.creation,
+          },
         },
       });
       return publicPayload(await readConfigState(options));
@@ -297,14 +312,6 @@ export async function updateNoemaAppConfig(patch = {}, options = {}) {
     }
 
     const rawAppearance = plainObject(state.raw.appearance) ? state.raw.appearance : {};
-    const editorPatch = plainObject(patch.editor) ? patch.editor : {};
-    const requestedLineBreaking = Object.prototype.hasOwnProperty.call(editorPatch, "lineBreaking")
-      ? String(editorPatch.lineBreaking || "").trim().toLowerCase()
-      : state.config.editor.lineBreaking;
-    if (!["optimal", "native"].includes(requestedLineBreaking)) {
-      throw Object.assign(new Error("Editor lineBreaking must be optimal or native"), { statusCode: 400 });
-    }
-    const rawEditor = plainObject(state.raw.editor) ? state.raw.editor : {};
     const workspacePatch = plainObject(patch.workspace) ? patch.workspace : {};
     const requestedRoot = Object.prototype.hasOwnProperty.call(workspacePatch, "root")
       ? String(workspacePatch.root || "").trim()
@@ -329,7 +336,6 @@ export async function updateNoemaAppConfig(patch = {}, options = {}) {
     const normalizedWiki = normalizeParsedConfig({
       schemaVersion: NOEMA_APP_CONFIG_SCHEMA_VERSION,
       appearance: { theme: requestedTheme },
-      editor: { lineBreaking: requestedLineBreaking },
       workspace: { root: requestedRoot, layout: requestedLayout },
       wiki: { creation: {
         activeProfile: creationPatch.activeProfile ?? state.config.wiki.creation.activeProfile,
@@ -339,15 +345,11 @@ export async function updateNoemaAppConfig(patch = {}, options = {}) {
     const rawWorkspace = plainObject(state.raw.workspace) ? state.raw.workspace : {};
     const rawWiki = plainObject(state.raw.wiki) ? state.raw.wiki : {};
     const next = {
-      ...state.raw,
+      ...withoutRetiredLineBreaking(state.raw),
       schemaVersion: NOEMA_APP_CONFIG_SCHEMA_VERSION,
       appearance: {
         ...rawAppearance,
         theme: requestedTheme,
-      },
-      editor: {
-        ...rawEditor,
-        lineBreaking: requestedLineBreaking,
       },
       workspace: {
         ...rawWorkspace,

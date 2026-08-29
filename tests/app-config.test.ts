@@ -43,7 +43,6 @@ describe("Noema app config", () => {
     expect(payload.config).toEqual({
       schemaVersion: 3,
       appearance: { theme: NOEMA_DEFAULT_THEME_ID },
-      editor: { lineBreaking: "optimal" },
       workspace: { root: "~/Documents/Noema", layout: "legacy" },
       wiki: {
         creation: {
@@ -119,18 +118,18 @@ describe("Noema app config", () => {
     });
   });
 
-  test("updates the line-breaking mode and rejects unknown modes", async () => {
+  test("retires the line-breaking selector while preserving unrelated editor settings", async () => {
     const configDir = await tempConfigDir();
-    const initial = await ensureNoemaAppConfig({ configDir });
-    const updated = await updateNoemaAppConfig({
-      revision: initial.revision,
-      editor: { lineBreaking: "native" },
-    }, { configDir });
+    const file = join(configDir, "config.json");
+    await writeFile(file, JSON.stringify({
+      schemaVersion: 3,
+      editor: { lineBreaking: "native", lineNumbers: true },
+    }), "utf8");
+    const migrated = await ensureNoemaAppConfig({ configDir });
+    const raw = JSON.parse(await readFile(file, "utf8"));
 
-    expect(updated.config.editor.lineBreaking).toBe("native");
-    await expect(updateNoemaAppConfig({
-      editor: { lineBreaking: "unknown" },
-    }, { configDir })).rejects.toThrow("lineBreaking must be optimal or native");
+    expect(migrated.config).not.toHaveProperty("editor");
+    expect(raw.editor).toEqual({ lineNumbers: true });
   });
 
   test("rejects stale revisions and unknown themes", async () => {

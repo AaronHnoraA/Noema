@@ -4287,7 +4287,7 @@ promise. This differs from a language decision problem, where every string
 over the alphabet must be classified.
 
 #+begin define Polynomial-time many-one reduction for promise problems
-Let \(A\) and \(B\) be promise problems. A polynomial-time many-one reduction
+Let \(A\) and \(B\) be promise problems. A polynomial-time many-one reduction sssssssssssssssssssssssssss ssssssssssssssssss this this this adhiasdioasnxioasdoi sajdoan ijdoasi jd sssssssssssss 
 from \(A\) to \(B\) is a polynomial-time computable function \(f\) such that
 
 \[

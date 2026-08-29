@@ -5,9 +5,6 @@ export type NoemaAppConfig = {
   appearance: {
     theme: NoemaAppThemeId;
   };
-  editor: {
-    lineBreaking: "optimal" | "native";
-  };
   workspace: {
     root: string;
     layout: "legacy" | "wiki";
@@ -61,7 +58,6 @@ export function ensureNoemaAppConfig(options?: NoemaAppConfigOptions): Promise<N
 export function updateNoemaAppConfig(
   patch?: {
     appearance?: { theme?: NoemaAppThemeId | string };
-    editor?: { lineBreaking?: "optimal" | "native" | string };
     workspace?: { root?: string; layout?: "legacy" | "wiki" | string };
     wiki?: { creation?: { activeProfile?: string; profiles?: NoemaWikiCreationProfile[] } };
     revision?: string;

@@ -82,9 +82,3 @@ export {
   setVisualMode,
   visualMode,
 } from "./visual-mode.ts";
-export {
-  optimalLineBreakingController,
-  optimalLineBreakingMode,
-  setOptimalLineBreakingMode,
-  type LineBreakingMode,
-} from "./optimal-linebreak.ts";

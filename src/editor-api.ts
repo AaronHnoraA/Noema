@@ -20,8 +20,6 @@ export type {
 } from "./paste.ts";
 
 export type EditorKernel = "cm6";
-export type LineBreakingMode = "optimal" | "native";
-
 export interface EditorOptions {
   /** Initial markdown the editor opens with. Defaults to empty. */
   initialContent?: string;
@@ -50,8 +48,6 @@ export interface EditorOptions {
     enabled?: boolean;
     format?: HeadingNumberFormat;
   };
-  /** Visual-mode paragraph wrapping. Optimal is the default; native is the safe fallback. */
-  lineBreaking?: LineBreakingMode;
 }
 
 export type EditorCommand =
@@ -513,8 +509,6 @@ export interface Editor {
   setWritingMode(options: WritingModeOptions): void;
   /** Configure visual-only automatic heading numbering. */
   setHeadingNumbering(options: { enabled?: boolean; format?: HeadingNumberFormat }): void;
-  /** Switch Visual-mode paragraph wrapping without changing Markdown. */
-  setLineBreaking(mode: LineBreakingMode): void;
   /** Copy the Markdown marks shared by the current source selection(s). */
   captureFormat(mode?: FormatPainterMode): FormatPainterSnapshot | undefined;
   /** Apply the copied marks to the current source selection(s). */

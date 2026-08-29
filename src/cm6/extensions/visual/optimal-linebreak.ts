@@ -29,28 +29,6 @@ import { waitForParser } from "../parser-watcher.ts";
 import { hasViewportDecorationRefresh } from "../../viewport-refresh.ts";
 import { isCoalescedVisualTyping } from "./typing-burst.ts";
 
-export type LineBreakingMode = "optimal" | "native";
-
-export const setOptimalLineBreakingMode = StateEffect.define<LineBreakingMode>();
-
-const lineBreakingModeField = StateField.define<LineBreakingMode>({
-  create: () => "optimal",
-  update(value, transaction) {
-    for (const effect of transaction.effects) {
-      if (effect.is(setOptimalLineBreakingMode)) return effect.value;
-    }
-    return value;
-  },
-});
-
-export function optimalLineBreakingController(initial: LineBreakingMode): Extension {
-  return lineBreakingModeField.init(() => initial);
-}
-
-export function optimalLineBreakingMode(state: EditorState): LineBreakingMode {
-  return state.field(lineBreakingModeField, false) ?? "native";
-}
-
 type AppliedLayout = {
   doc: Text;
   decorations: DecorationSet;
@@ -63,9 +41,7 @@ const optimalLinebreakDecorations = StateField.define<DecorationSet>({
   update(value, transaction) {
     if (transaction.docChanged) value = value.map(transaction.changes);
     for (const effect of transaction.effects) {
-      if (effect.is(setOptimalLineBreakingMode) && effect.value === "native") {
-        value = Decoration.none;
-      } else if (effect.is(applyOptimalLayout) && effect.value.doc === transaction.state.doc) {
+      if (effect.is(applyOptimalLayout) && effect.value.doc === transaction.state.doc) {
         value = effect.value.decorations;
       }
     }
@@ -120,6 +96,7 @@ const MAX_CACHE_PARAGRAPHS = 128;
 const MAX_CACHE_BYTES = 8_000_000;
 const TYPING_SETTLE_MS = 120;
 const WIDTH_EPSILON_PX = 0.25;
+const LAYOUT_PASS_BUDGET_MS = 6;
 
 type ParagraphSyntax = {
   from: number;
@@ -148,6 +125,8 @@ export type OptimalLinebreakAudit = {
   fallbacks: number;
   evaluatedEdges: number;
   reusedBreakpoints: number;
+  deferredPasses: number;
+  decorationSetBuilds: number;
 };
 
 const audit: OptimalLinebreakAudit = {
@@ -157,6 +136,8 @@ const audit: OptimalLinebreakAudit = {
   fallbacks: 0,
   evaluatedEdges: 0,
   reusedBreakpoints: 0,
+  deferredPasses: 0,
+  decorationSetBuilds: 0,
 };
 
 export function optimalLinebreakAudit(): OptimalLinebreakAudit {
@@ -170,6 +151,8 @@ export function resetOptimalLinebreakAudit(): void {
   audit.fallbacks = 0;
   audit.evaluatedEdges = 0;
   audit.reusedBreakpoints = 0;
+  audit.deferredPasses = 0;
+  audit.decorationSetBuilds = 0;
 }
 
 function topLevelPlainParagraph(node: { node: { parent: { name: string } | null; firstChild: { name: string; nextSibling: unknown } | null } }): boolean {
@@ -331,6 +314,7 @@ class OptimalLinebreakPlugin {
   private readonly context: CanvasRenderingContext2D | null;
   private readonly cache = new Map<string, CachedParagraph>();
   private readonly widthCache = new Map<string, number>();
+  private combinedDecorations: DecorationSet | null = Decoration.none;
   private cacheBytes = 0;
   private timer = 0;
   private generation = 0;
@@ -348,18 +332,12 @@ class OptimalLinebreakPlugin {
     this.context = this.canvas.getContext("2d");
     view.contentDOM.addEventListener("compositionend", this.compositionEnd);
     const fontsReady = view.dom.ownerDocument.fonts?.ready ?? Promise.resolve();
-    if (this.context && optimalLineBreakingMode(view.state) === "optimal") {
+    if (this.context) {
       void fontsReady.then(() => this.schedule(0));
     }
   }
 
   update(update: ViewUpdate): void {
-    if (optimalLineBreakingMode(update.state) !== "optimal") {
-      this.cancel();
-      this.cache.clear();
-      this.cacheBytes = 0;
-      return;
-    }
     // Headless DOMs and hardened webviews may expose <canvas> without a 2D
     // context. Native wrapping is already the safe fallback; avoid queuing a
     // measure/timer that can never produce a layout.
@@ -384,8 +362,7 @@ class OptimalLinebreakPlugin {
       // window by scheduling an immediate measure.
       this.schedule(Math.ceil(this.viewportQuietAt - now));
     } else if (update.docChanged
-        || viewportRefresh
-        || update.transactions.some((transaction) => transaction.effects.some((effect) => effect.is(setOptimalLineBreakingMode)))) {
+        || viewportRefresh) {
       this.schedule(0);
     } else if (update.geometryChanged) {
       this.schedule(0);
@@ -411,6 +388,7 @@ class OptimalLinebreakPlugin {
     }
     this.cache.clear();
     for (const [key, entry] of mapped) this.cache.set(key, entry);
+    this.combinedDecorations = null;
   }
 
   private schedule(delay: number): void {
@@ -418,7 +396,7 @@ class OptimalLinebreakPlugin {
     const generation = ++this.generation;
     this.timer = window.setTimeout(() => {
       this.timer = 0;
-      if (!this.view.dom.isConnected || optimalLineBreakingMode(this.view.state) !== "optimal") return;
+      if (!this.view.dom.isConnected) return;
       const scheduledState = this.view.state;
       this.view.requestMeasure({
         key: this.measureKey,
@@ -436,6 +414,10 @@ class OptimalLinebreakPlugin {
               doc: view.state.doc,
               decorations: measured.decorations,
             }) });
+            if (measured.deferred
+                && view.dom.isConnected) {
+              this.schedule(0);
+            }
           });
         },
       });
@@ -452,8 +434,13 @@ class OptimalLinebreakPlugin {
     view: EditorView,
     state: EditorState,
     generation: number,
-  ): { state: EditorState; generation: number; decorations: DecorationSet } | null {
-    if (view.state !== state || !this.context || optimalLineBreakingMode(state) !== "optimal") return null;
+  ): {
+    state: EditorState;
+    generation: number;
+    decorations: DecorationSet;
+    deferred: boolean;
+  } | null {
+    if (view.state !== state || !this.context) return null;
     const parseTo = view.visibleRanges.reduce((maximum, range) => Math.max(maximum, range.to), 0);
     if (!ensureSyntaxTree(state, parseTo, 8)) {
       this.dropDirtyCache();
@@ -461,17 +448,29 @@ class OptimalLinebreakPlugin {
         this.waitingForParse = true;
         void waitForParser(view, parseTo).then(() => {
           this.waitingForParse = false;
-          if (view.dom.isConnected && optimalLineBreakingMode(view.state) === "optimal") this.schedule(0);
+          if (view.dom.isConnected) this.schedule(0);
         });
       }
       return {
         state,
         generation,
         decorations: this.cachedDecorations(),
+        deferred: false,
       };
     }
 
+    const passStartedAt = performance.now();
+    let performedLayout = false;
+    let deferred = false;
     for (const paragraph of visibleParagraphs(view)) {
+      if (performedLayout && performance.now() - passStartedAt >= LAYOUT_PASS_BUDGET_MS) {
+        // Commit the completed prefix now, then continue in a fresh CM6
+        // measure cycle. This bounds first-open and large-viewport work per
+        // frame without changing paragraph results or the cache frontier.
+        deferred = true;
+        audit.deferredPasses += 1;
+        break;
+      }
       audit.paragraphVisits += 1;
       const text = state.doc.sliceString(paragraph.from, paragraph.to);
       if (!text || text.length > MAX_PARAGRAPH_CHARS) {
@@ -521,17 +520,21 @@ class OptimalLinebreakPlugin {
         hiddenRanges: paragraph.hiddenRanges,
         emergencyLineWidth: lineWidth,
       });
+      performedLayout = true;
       const layout = breakParagraph(items, { lineWidth, tolerance: 3 }, cached?.incremental);
       audit.evaluatedEdges += layout.evaluatedEdges;
       audit.reusedBreakpoints += layout.reusedBreakpoints;
       if (!layout.feasible) {
         audit.fallbacks += 1;
-        if (cached) this.cacheBytes -= cached.bytes;
-        this.cache.delete(cacheKey);
-        continue;
+      } else {
+        audit.paragraphLayouts += 1;
       }
-      audit.paragraphLayouts += 1;
-      const decorations = decorationsFor(state.doc, paragraph, items, layout);
+      // Cache an infeasible result as an empty decoration list too. Otherwise
+      // every viewport/geometry refresh retries the same native-fallback
+      // paragraph, and a time-sliced pass can repeatedly stop behind it.
+      const decorations = layout.feasible
+        ? decorationsFor(state.doc, paragraph, items, layout)
+        : [];
       const withoutBytes = {
         from: paragraph.from,
         to: paragraph.to,
@@ -550,6 +553,7 @@ class OptimalLinebreakPlugin {
       if (cached) this.cacheBytes -= cached.bytes;
       this.cache.set(cacheKey, entry);
       this.cacheBytes += entry.bytes;
+      this.combinedDecorations = null;
     }
 
     // Syntax-changing edits can split or remove the old paragraph. Such stale
@@ -562,20 +566,27 @@ class OptimalLinebreakPlugin {
       state,
       generation,
       decorations: this.cachedDecorations(),
+      deferred,
     };
   }
 
   private dropDirtyCache(): void {
+    let changed = false;
     for (const [key, entry] of this.cache) {
       if (!entry.dirty) continue;
       this.cache.delete(key);
       this.cacheBytes -= entry.bytes;
+      changed = true;
     }
+    if (changed) this.combinedDecorations = null;
   }
 
   private cachedDecorations(): DecorationSet {
+    if (this.combinedDecorations) return this.combinedDecorations;
     const ranges = [...this.cache.values()].flatMap((entry) => entry.decorations);
-    return Decoration.set(ranges, true);
+    audit.decorationSetBuilds += 1;
+    this.combinedDecorations = Decoration.set(ranges, true);
+    return this.combinedDecorations;
   }
 
   private evictCache(): void {
@@ -592,6 +603,7 @@ class OptimalLinebreakPlugin {
       const entry = this.cache.get(oldestKey)!;
       this.cache.delete(oldestKey);
       this.cacheBytes -= entry.bytes;
+      this.combinedDecorations = null;
     }
   }
 
@@ -600,6 +612,7 @@ class OptimalLinebreakPlugin {
     this.view.contentDOM.removeEventListener("compositionend", this.compositionEnd);
     this.cache.clear();
     this.widthCache.clear();
+    this.combinedDecorations = Decoration.none;
   }
 }
 

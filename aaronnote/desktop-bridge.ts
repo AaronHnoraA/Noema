@@ -1,4 +1,5 @@
 import { auditB3ComponentSystem } from "../src/b3-component-system.ts";
+import { optimalLinebreakAudit } from "../src/cm6/extensions/visual/optimal-linebreak.ts";
 import { auditVisualTypography } from "../src/cm6/extensions/visual/typography.ts";
 import { auditProductionHandfeel } from "../src/cm6/production-handfeel-audit.ts";
 
@@ -155,6 +156,7 @@ if (desktopSmokeParams.get("desktopSmoke") === "1") {
         optimalParagraphs: document.querySelectorAll(".cm-line.cm-kp-paragraph").length,
         visualBreaks: document.querySelectorAll(".cm-kp-break").length,
         generatedSpacers: document.querySelectorAll(".cm-kp-spacer").length,
+        audit: optimalLinebreakAudit(),
       },
       productionHandfeel: auditProductionHandfeel(document),
       sharedEditor: {

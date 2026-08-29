@@ -5,6 +5,7 @@ import {
   optimalLinebreakAudit,
   resetOptimalLinebreakAudit,
 } from "../src/cm6/extensions/visual/optimal-linebreak.ts";
+import { refreshViewportDecorationsNow } from "../src/cm6/viewport-refresh.ts";
 
 function rect(width: number, height = 24): DOMRect {
   return {
@@ -27,11 +28,13 @@ async function settleLayout(): Promise<void> {
   await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
 }
 
-function installLayoutMocks(): void {
+function installLayoutMocks(
+  measureText: (text: string) => { width: number } = (text) => ({ width: [...text].length * 10 }),
+): void {
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
     font: "16px serif",
     fontKerning: "normal",
-    measureText: (text: string) => ({ width: [...text].length * 10 }),
+    measureText,
   } as unknown as CanvasRenderingContext2D);
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function mockRect(this: HTMLElement) {
     return rect(this.classList.contains("cm-line") ? 150 : 800);
@@ -44,23 +47,19 @@ afterEach(() => {
 });
 
 describe("optimal Visual-mode line breaking", () => {
-  test("adds zero-source line breaks and can return immediately to native wrapping", async () => {
+  test("adds zero-source line breaks without changing Markdown", async () => {
     installLayoutMocks();
     const source = "中文排版需要在整个段落中选择更好的断点，同时保持English words readable and stable。";
     const host = document.createElement("div");
     host.style.font = "16px serif";
     document.body.append(host);
-    const editor = createEditor(host, { initialContent: source, lineBreaking: "optimal" });
+    const editor = createEditor(host, { initialContent: source });
 
     await settleLayout();
     expect(host.querySelector(".cm-kp-paragraph")).not.toBeNull();
     expect(host.querySelectorAll(".cm-kp-break").length).toBeGreaterThan(0);
     expect(editor.getMarkdown()).toBe(source);
 
-    editor.setLineBreaking("native");
-    expect(host.querySelector(".cm-kp-paragraph")).toBeNull();
-    expect(host.querySelector(".cm-kp-break")).toBeNull();
-    expect(editor.getMarkdown()).toBe(source);
     editor.destroy();
   });
 
@@ -165,5 +164,49 @@ describe("optimal Visual-mode line breaking", () => {
     expect(optimalLinebreakAudit().evaluatedEdges).toBe(0);
     expect(host.querySelector(".cm-kp-paragraph")).toBeNull();
     fallback.destroy();
+  });
+
+  test("time-slices multiple uncached paragraphs across measure passes", async () => {
+    let clock = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    installLayoutMocks((text) => {
+      clock += 7;
+      return { width: [...text].length * 10 };
+    });
+    const source = [
+      "第一段中文English混合排版需要选择全段最优断点。".repeat(6),
+      "第二段中文English混合排版也需要保持编辑响应。".repeat(6),
+      "第三段中文English混合排版用于验证分帧提交。".repeat(6),
+    ].join("\n\n");
+    const host = document.createElement("div");
+    document.body.append(host);
+    resetOptimalLinebreakAudit();
+    const editor = createEditor(host, { initialContent: source });
+
+    await settleLayout();
+    await settleLayout();
+    const measured = optimalLinebreakAudit();
+    expect(measured.deferredPasses).toBeGreaterThan(0);
+    expect(measured.paragraphLayouts).toBeGreaterThan(1);
+    expect(editor.getMarkdown()).toBe(source);
+    editor.destroy();
+  });
+
+  test("reuses the combined DecorationSet on an all-cache-hit refresh", async () => {
+    installLayoutMocks();
+    const host = document.createElement("div");
+    document.body.append(host);
+    const editor = createEditor(host, {
+      initialContent: "缓存命中的中文English段落不应重新排序全部装饰范围。".repeat(8),
+    });
+    await settleLayout();
+    resetOptimalLinebreakAudit();
+
+    refreshViewportDecorationsNow(editor.view);
+    await settleLayout();
+    const refreshed = optimalLinebreakAudit();
+    expect(refreshed.cacheHits).toBeGreaterThan(0);
+    expect(refreshed.decorationSetBuilds).toBe(0);
+    editor.destroy();
   });
 });

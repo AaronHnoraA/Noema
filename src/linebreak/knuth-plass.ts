@@ -237,89 +237,11 @@ function breakpointsFor(items: readonly KpItem[]): Breakpoint[] {
   return points;
 }
 
-function difference(values: Float64Array | Uint32Array, from: number, to: number): number {
-  return values[to]! - values[from]!;
-}
-
 function fitnessFor(ratio: number): number {
   if (ratio < -0.5) return 0;
   if (ratio <= 0.5) return 1;
   if (ratio <= 1) return 2;
   return 3;
-}
-
-function metricsFor(
-  prefix: PrefixMetrics,
-  start: Breakpoint,
-  end: Breakpoint,
-  lineWidth: number,
-  justify: boolean,
-  tolerance: number,
-): CandidateMetrics {
-  const from = start.nextItem;
-  const to = end.item;
-  const naturalWidth = difference(prefix.width, from, to) + end.penaltyWidth;
-  const stretch0 = difference(prefix.stretch0, from, to);
-  const stretch1 = difference(prefix.stretch1, from, to);
-  const shrink = difference(prefix.shrink, from, to);
-  const boxCount = difference(prefix.boxes, from, to);
-  const delta = lineWidth - naturalWidth;
-  const justified = justify && !end.mandatory;
-
-  let ratio = 0;
-  let feasible = true;
-  if (delta < 0) {
-    ratio = shrink > 0 ? delta / shrink : Number.NEGATIVE_INFINITY;
-    feasible = ratio >= -1;
-  } else if (justified) {
-    if (stretch0 > 0 && (delta <= stretch0 || stretch1 <= 0)) {
-      ratio = delta / stretch0;
-    } else if (stretch1 > 0) {
-      ratio = 1 + Math.max(0, delta - stretch0) / stretch1;
-    } else if (delta > 0) {
-      ratio = Number.POSITIVE_INFINITY;
-    }
-    feasible = ratio <= tolerance;
-  }
-
-  return {
-    naturalWidth,
-    stretch0,
-    stretch1,
-    shrink,
-    boxCount,
-    ratio,
-    fitness: fitnessFor(ratio),
-    feasible,
-    justified,
-  };
-}
-
-function lineDemerits(
-  metrics: CandidateMetrics,
-  end: Breakpoint,
-  previous: State,
-  options: Required<Pick<KpOptions, "fitnessDemerit" | "flaggedDemerit" | "runtPenalty">>,
-): number {
-  if (!metrics.feasible) return Number.POSITIVE_INFINITY;
-  const finiteRatio = Number.isFinite(metrics.ratio) ? metrics.ratio : 10;
-  const badness = metrics.justified || finiteRatio < 0
-    ? 100 * Math.abs(finiteRatio) ** 3
-    : 0;
-  let demerits = (1 + badness) ** 2;
-  if (end.penalty >= 0) {
-    demerits += end.penalty ** 2;
-  } else if (!end.mandatory) {
-    demerits -= end.penalty ** 2;
-  }
-  if (Math.abs(metrics.fitness - previous.fitness) > 1) {
-    demerits += options.fitnessDemerit;
-  }
-  if (previous.flagged && end.flagged) demerits += options.flaggedDemerit;
-  if (end.mandatory && metrics.boxCount <= 1 && previous.previous) {
-    demerits += options.runtPenalty;
-  }
-  return demerits;
 }
 
 function adjustmentsFor(
@@ -497,13 +419,17 @@ export function breakParagraph(
   }
 
   const prefix = buildPrefixMetrics(items);
-  const states: Array<Array<State | undefined>> = Array.from({ length: points.length }, () => []);
+  const states = new Array<Array<State | undefined>>(points.length);
   const reusedCount = reusableBreakpointCount(items, points, previous, options);
   for (let index = 0; index < reusedCount; index++) {
-    states[index] = [...previous!.states[index]!];
+    // A completed DP frontier is immutable: later breakpoints only point back
+    // to it. Share unchanged prefix arrays across generations instead of
+    // allocating/copying four fitness slots for every retained breakpoint.
+    states[index] = previous!.states[index] as Array<State | undefined>;
   }
   if (reusedCount === 0) {
-    states[0]![1] = {
+    const initialStates: Array<State | undefined> = [];
+    initialStates[1] = {
       breakpoint: 0,
       fitness: 1,
       flagged: false,
@@ -511,6 +437,7 @@ export function breakParagraph(
       previous: null,
       metrics: null,
     };
+    states[0] = initialStates;
   }
   let evaluatedEdges = 0;
   let mandatoryFloor = 0;
@@ -520,46 +447,110 @@ export function breakParagraph(
 
   for (let endIndex = Math.max(1, reusedCount); endIndex < points.length; endIndex++) {
     const end = points[endIndex]!;
+    const endStates: Array<State | undefined> = [];
+    states[endIndex] = endStates;
+    const justified = options.justify && !end.mandatory;
+    let penaltyDemerits = 0;
+    if (end.penalty >= 0) {
+      penaltyDemerits = end.penalty * end.penalty;
+    } else if (!end.mandatory) {
+      penaltyDemerits = -(end.penalty * end.penalty);
+    }
+
     for (let startIndex = endIndex - 1; startIndex >= mandatoryFloor; startIndex--) {
       const startStates = states[startIndex]!;
-      if (!startStates.some(Boolean)) continue;
-      const metrics = metricsFor(
-        prefix,
-        points[startIndex]!,
-        end,
-        options.lineWidth,
-        options.justify,
-        options.tolerance,
-      );
+      if (startStates.length === 0) continue;
+      const start = points[startIndex]!;
+      const from = start.nextItem;
+      const to = end.item;
+      const naturalWidth = prefix.width[to]! - prefix.width[from]! + end.penaltyWidth;
+      const stretch0 = prefix.stretch0[to]! - prefix.stretch0[from]!;
+      const stretch1 = prefix.stretch1[to]! - prefix.stretch1[from]!;
+      const shrink = prefix.shrink[to]! - prefix.shrink[from]!;
+      const boxCount = prefix.boxes[to]! - prefix.boxes[from]!;
+      const delta = options.lineWidth - naturalWidth;
+
+      let ratio = 0;
+      let feasible = true;
+      if (delta < 0) {
+        ratio = shrink > 0 ? delta / shrink : Number.NEGATIVE_INFINITY;
+        feasible = ratio >= -1;
+      } else if (justified) {
+        if (stretch0 > 0 && (delta <= stretch0 || stretch1 <= 0)) {
+          ratio = delta / stretch0;
+        } else if (stretch1 > 0) {
+          ratio = 1 + Math.max(0, delta - stretch0) / stretch1;
+        } else if (delta > 0) {
+          ratio = Number.POSITIVE_INFINITY;
+        }
+        feasible = ratio <= options.tolerance;
+      }
       evaluatedEdges++;
       // Widths are non-negative. Once even full shrink cannot fit, every
       // earlier candidate start is wider and can be skipped.
-      if (metrics.ratio < -1) break;
-      if (!metrics.feasible) continue;
+      if (ratio < -1) break;
+      if (!feasible) continue;
 
-      for (const previous of startStates) {
+      const fitness = fitnessFor(ratio);
+      const finiteRatio = Number.isFinite(ratio) ? ratio : 10;
+      const magnitude = Math.abs(finiteRatio);
+      const badness = justified || finiteRatio < 0
+        ? 100 * magnitude * magnitude * magnitude
+        : 0;
+      let edgeDemerits = (1 + badness) * (1 + badness) + penaltyDemerits;
+      if (end.mandatory && boxCount <= 1 && startIndex > 0) {
+        edgeDemerits += options.runtPenalty;
+      }
+
+      let bestPrevious: State | null = null;
+      let bestTotal = Number.POSITIVE_INFINITY;
+      for (let stateIndex = 0; stateIndex < startStates.length; stateIndex++) {
+        const previous = startStates[stateIndex];
         if (!previous) continue;
-        const total = previous.total + lineDemerits(metrics, end, previous, options);
-        const current = states[endIndex]![metrics.fitness];
-        if (!current || total < current.total - BOUND_EPSILON) {
-          states[endIndex]![metrics.fitness] = {
-            breakpoint: endIndex,
-            fitness: metrics.fitness,
-            flagged: end.flagged,
-            total,
-            previous,
-            metrics,
-          };
+        let total = previous.total + edgeDemerits;
+        if (Math.abs(fitness - previous.fitness) > 1) total += options.fitnessDemerit;
+        if (previous.flagged && end.flagged) total += options.flaggedDemerit;
+        if (!bestPrevious || total < bestTotal - BOUND_EPSILON) {
+          bestTotal = total;
+          bestPrevious = previous;
         }
+      }
+
+      const current = endStates[fitness];
+      if (bestPrevious && (!current || bestTotal < current.total - BOUND_EPSILON)) {
+        endStates[fitness] = {
+          breakpoint: endIndex,
+          fitness,
+          flagged: end.flagged,
+          total: bestTotal,
+          previous: bestPrevious,
+          // Allocate metrics only for a winning edge. The former hot path
+          // created one object for every evaluated edge (hundreds of thousands
+          // for a 4k Han paragraph), even though nearly all were discarded.
+          metrics: {
+            naturalWidth,
+            stretch0,
+            stretch1,
+            shrink,
+            boxCount,
+            ratio,
+            fitness,
+            feasible: true,
+            justified,
+          },
+        };
       }
     }
     // No later line may cross a forced Markdown break.
     if (end.mandatory) mandatoryFloor = endIndex;
   }
 
-  const finalState = states.at(-1)!
-    .filter((state): state is State => !!state)
-    .sort((left, right) => left.total - right.total)[0];
+  let finalState: State | undefined;
+  const finalStates = states.at(-1)!;
+  for (let index = 0; index < finalStates.length; index++) {
+    const state = finalStates[index];
+    if (state && (!finalState || state.total < finalState.total)) finalState = state;
+  }
   if (!finalState) {
     return {
       lines: [],

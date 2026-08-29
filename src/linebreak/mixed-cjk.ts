@@ -49,13 +49,27 @@ function kindFor(text: string): Cluster["kind"] {
   return "other";
 }
 
-function clustersFor(text: string, sourceFrom: number): Cluster[] {
-  return [...graphemeSegmenter.segment(text)].map((segment) => ({
-    text: segment.segment,
-    from: sourceFrom + segment.index,
-    to: sourceFrom + segment.index + segment.segment.length,
-    kind: kindFor(segment.segment),
-  }));
+function clustersFor(
+  text: string,
+  sourceFrom: number,
+  hiddenRanges: readonly { from: number; to: number }[],
+): Cluster[] {
+  const result: Cluster[] = [];
+  let hiddenIndex = 0;
+  for (const segment of graphemeSegmenter.segment(text)) {
+    const from = sourceFrom + segment.index;
+    const to = from + segment.segment.length;
+    while (hiddenRanges[hiddenIndex]?.to <= from) hiddenIndex++;
+    const hidden = hiddenRanges[hiddenIndex];
+    if (hidden && hidden.from <= from && hidden.to >= to) continue;
+    result.push({
+      text: segment.segment,
+      from,
+      to,
+      kind: kindFor(segment.segment),
+    });
+  }
+  return result;
 }
 
 function box(cluster: Cluster, measure: MixedCjkMeasure): KpBox {
@@ -155,12 +169,7 @@ export function mixedCjkItems(text: string, options: MixedCjkOptions): KpItem[] 
   const hiddenRanges = [...(options.hiddenRanges ?? [])]
     .filter((range) => range.to > range.from)
     .sort((left, right) => left.from - right.from);
-  let hiddenIndex = 0;
-  const clusters = clustersFor(text, sourceFrom).filter((cluster) => {
-    while (hiddenRanges[hiddenIndex]?.to <= cluster.from) hiddenIndex++;
-    const hidden = hiddenRanges[hiddenIndex];
-    return !hidden || hidden.from > cluster.from || hidden.to < cluster.to;
-  });
+  const clusters = clustersFor(text, sourceFrom, hiddenRanges);
   const items: KpItem[] = [];
   const em = Math.max(1, options.em);
   const wordSpace = Math.max(0, options.measure(" ", "prose"));
