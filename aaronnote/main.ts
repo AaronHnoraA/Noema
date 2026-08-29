@@ -17,12 +17,8 @@ import {
 import { setupCopilot } from "../plugins/noema-copilot/renderer.ts";
 import { indentMarkdownBlock } from "../src/cm6/commands/index.ts";
 import {
-  runEditorDelete,
-  runEditorEnter,
-  runEditorMovement,
   runEditorTab,
   runEditorTextInput,
-  type EditorMovementKey,
 } from "../src/cm6/input-commands.ts";
 import { markdownHrefAt } from "../src/cm6/editor-cm6.ts";
 import {
@@ -204,6 +200,7 @@ import {
   handleXwidgetHistoryKeydown,
   handleXwidgetMathBeforeInput,
   handleXwidgetMathKeydown,
+  restoreEditorFocusAfterCommand,
   handleXwidgetSpecialBeforeInput,
   handleXwidgetSpecialKeydown,
   handleXwidgetVimBeforeInput,
@@ -1046,6 +1043,11 @@ let pendingNotesRefresh = false;
 let wikiIndexCache: WikiIndex | null = null;
 let wikiIndexPromise: Promise<WikiIndex> | null = null;
 const notesRefreshTimer = new CoalescedTimer(500);
+// Debounce for a catalog refresh this page's own save triggered. Long enough
+// that a continuous typing session produces one refresh at the end rather than
+// one per 650 ms autosave, short enough that the note list is current again
+// well before anyone looks at it.
+const SELF_NOTES_REFRESH_DELAY_MS = 3000;
 let initialNotesIdleHandle = 0;
 // Ephemeral request-level cache for completions — NOT a roam business cache.
 // Holds results only for the duration of the current completion session (same
@@ -1638,6 +1640,18 @@ type DesktopEditorPerfResult = {
   formulaScrollBacktracks: number;
   formulaScrollMathRebuilds: number;
   formulaScrollAtomicRebuilds: number;
+  sourceToggleEnterDispatchMs: number;
+  sourceToggleEnterFrameMs: number;
+  sourceToggleExitDispatchMs: number;
+  sourceToggleExitFrameMs: number;
+  sourceToggleSelectionPreserved: boolean;
+  sourceToggleInitialCursorTopPx: number;
+  sourceToggleSourceCursorTopPx: number;
+  sourceTogglePreviewCursorTopPx: number;
+  sourceToggleSourceCursorDriftPx: number;
+  sourceTogglePreviewCursorDriftPx: number;
+  sourceToggleCursorDriftMaxPx: number;
+  sourceToggleScrollDriftMaxPx: number;
   sourceScrollFrameP95Ms: number;
   sourceScrollFrameMaxMs: number;
   sourceScrollTargetErrorMaxPx: number;
@@ -1816,6 +1830,73 @@ if (desktopPerfSmokeMode === "1" || desktopPerfSmokeMode === "selection") {
       initialVisualSources,
       roundTripVisualSources,
     );
+    // Probe a real in-document caret. Document-top toggles hide viewport
+    // anchoring regressions because scrollTop is clamped to zero there.
+    const sourceToggleProbePosition = Math.max(
+      0,
+      original.lastIndexOf("\n\n", Math.floor(original.length * 0.6)),
+    );
+    editor.setMarkdownSelection(sourceToggleProbePosition, undefined, { scrollIntoView: true });
+    await frame();
+    await frame();
+    // Noema owns an outer scrolling host, so CM6's inner scrollIntoView is not
+    // enough to put an arbitrary source position on screen. Place the probe at
+    // mid-viewport explicitly; otherwise a 12k-pixel offscreen coordinate can
+    // look like caret loss even though the user could never see that caret.
+    const probeRect = editor.cursorRect();
+    const hostRect = host.getBoundingClientRect();
+    if (probeRect && host.clientHeight > 0) {
+      host.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: 0 }));
+      host.scrollTop += probeRect.top - (hostRect.top + host.clientHeight * 0.5);
+      host.dispatchEvent(new Event("scroll"));
+      await new Promise<void>((resolve) => setTimeout(resolve, 160));
+      await frame();
+      await frame();
+    }
+    const sourceToggleSelection = editor.getMarkdownSelectionRange();
+    const sourceToggleCursorTop = editor.cursorRect()?.top ?? Number.NaN;
+    const sourceToggleInitialScrollTop = host.scrollTop;
+    let started = performance.now();
+    editor.toggleSource();
+    const sourceToggleEnterDispatchMs = performance.now() - started;
+    await frame();
+    const sourceToggleEnterFrameMs = performance.now() - started;
+    await frame();
+    await frame();
+    const sourceToggleSourceSelection = editor.getMarkdownSelectionRange();
+    const sourceToggleSourceCursorTop = editor.cursorRect()?.top ?? Number.NaN;
+    const sourceToggleSourceScrollTop = host.scrollTop;
+    started = performance.now();
+    editor.toggleSource();
+    const sourceToggleExitDispatchMs = performance.now() - started;
+    await frame();
+    const sourceToggleExitFrameMs = performance.now() - started;
+    await new Promise<void>((resolve) => setTimeout(resolve, 160));
+    await frame();
+    await frame();
+    const sourceTogglePreviewSelection = editor.getMarkdownSelectionRange();
+    const sourceTogglePreviewCursorTop = editor.cursorRect()?.top ?? Number.NaN;
+    const sourceTogglePreviewScrollTop = host.scrollTop;
+    const sameSelection = (candidate: { anchor: number; head: number }) => (
+      candidate.anchor === sourceToggleSelection.anchor
+      && candidate.head === sourceToggleSelection.head
+    );
+    const sourceToggleSelectionPreserved = sameSelection(sourceToggleSourceSelection)
+      && sameSelection(sourceTogglePreviewSelection);
+    const sourceToggleSourceCursorDriftPx = Number.isFinite(sourceToggleSourceCursorTop)
+      ? Math.abs(sourceToggleSourceCursorTop - sourceToggleCursorTop)
+      : 0;
+    const sourceTogglePreviewCursorDriftPx = Number.isFinite(sourceTogglePreviewCursorTop)
+      ? Math.abs(sourceTogglePreviewCursorTop - sourceToggleCursorTop)
+      : 0;
+    const sourceToggleCursorDriftMaxPx = Math.max(
+      sourceToggleSourceCursorDriftPx,
+      sourceTogglePreviewCursorDriftPx,
+    );
+    const sourceToggleScrollDriftMaxPx = Math.max(
+      Math.abs(sourceToggleSourceScrollTop - sourceToggleInitialScrollTop),
+      Math.abs(sourceTogglePreviewScrollTop - sourceToggleInitialScrollTop),
+    );
     editor.view.dispatch({
       selection: {
         anchor: initialProbeSelection.anchor,
@@ -1952,6 +2033,12 @@ if (desktopPerfSmokeMode === "1" || desktopPerfSmokeMode === "selection") {
     const formulaScrollAtomicRebuilds = blockMathAtomicFullRebuildCount()
       - formulaAtomicRebuildsBeforeScroll;
 
+    // The production renderer intentionally mounts formulas entering during a
+    // scroll burst after the shared 120 ms settle window. Let that one batch
+    // finish before comparing visual/source round trips.
+    await new Promise<void>((resolve) => setTimeout(resolve, 160));
+    await frame();
+
     // Same outer-scroll path with visual extensions disabled. This separates
     // browser/CM6 baseline cost from viewport widget construction.
     host.scrollTop = formulaScrollStart;
@@ -2017,6 +2104,18 @@ if (desktopPerfSmokeMode === "1" || desktopPerfSmokeMode === "selection") {
       formulaScrollBacktracks,
       formulaScrollMathRebuilds,
       formulaScrollAtomicRebuilds,
+      sourceToggleEnterDispatchMs,
+      sourceToggleEnterFrameMs,
+      sourceToggleExitDispatchMs,
+      sourceToggleExitFrameMs,
+      sourceToggleSelectionPreserved,
+      sourceToggleInitialCursorTopPx: sourceToggleCursorTop,
+      sourceToggleSourceCursorTopPx: sourceToggleSourceCursorTop,
+      sourceTogglePreviewCursorTopPx: sourceTogglePreviewCursorTop,
+      sourceToggleSourceCursorDriftPx,
+      sourceTogglePreviewCursorDriftPx,
+      sourceToggleCursorDriftMaxPx,
+      sourceToggleScrollDriftMaxPx,
       sourceScrollFrameP95Ms: percentile95(sourceScrollFrameSamples),
       sourceScrollFrameMaxMs: Math.max(0, ...sourceScrollFrameSamples),
       sourceScrollTargetErrorMaxPx: Math.max(0, ...sourceScrollErrors),
@@ -10643,17 +10742,6 @@ function handleSnippetPopupKey(event: KeyboardEvent): boolean {
   return handled;
 }
 
-function handleSnippetPopupHostKey(key: VimLiteKey): boolean {
-  return applySnippetPopupKeyAction(snippetPopupKeyAction({
-    key: key.key,
-    shiftKey: key.shiftKey,
-    commandKey: key.metaKey && !key.ctrlKey,
-    ctrlKey: key.ctrlKey,
-    altKey: key.altKey,
-    isComposing: key.isComposing,
-  }));
-}
-
 function expandSnippetAtCursor(): boolean {
   const ctx = editor.cursorContext(320);
   const prefix = snippetPrefix(ctx.before);
@@ -11154,22 +11242,6 @@ async function reloadSnippets(silent = false): Promise<void> {
   }
 }
 
-function insertHostKeyText(key: string, text?: string): boolean {
-  const literal = typeof text === "string" ? text
-    : key === "Enter" ? "\n"
-      : key === "Tab" ? "\t"
-        : key.length === 1 ? key
-          : "";
-  if (!literal) return false;
-  snippetCompletionArmed = key !== "Enter" && key !== "Tab";
-  return runEditorTextInput(editor.view, literal);
-}
-
-function deleteHostKeyText(key: string): boolean {
-  if (key !== "Backspace" && key !== "Delete") return false;
-  return runEditorDelete(editor.view, key === "Backspace" ? "backward" : "forward");
-}
-
 function routeHostKeyToMathEditor(key: VimLiteKey, text?: string, code?: string): boolean {
   if (!visualMathEditorActive) return false;
   const event = new CustomEvent("aaronnote:math-host-key", {
@@ -11187,6 +11259,8 @@ function routeHostKeyToMathEditor(key: VimLiteKey, text?: string, code?: string)
   document.dispatchEvent(event);
   return event.defaultPrevented;
 }
+
+let replayingHostKey = false;
 
 function runHostKey(body: Record<string, unknown>): boolean {
   const rawKey = String(body.key || "");
@@ -11220,87 +11294,46 @@ function runHostKey(body: Record<string, unknown>): boolean {
   });
   host.dispatchEvent(copilotKey);
   if (copilotKey.defaultPrevented) return true;
+
+  // A focus-escape recovery key must use the exact same document keydown
+  // pipeline as a native Noema.app/xwidget event. Replaying it at CM6 lets the
+  // shared source toggle, zoom, history, snippets, clipboard, Vim and CM6
+  // keymaps decide ownership in their normal order; this host adapter only
+  // supplies the missing browser event.
   editor.focus();
-  if (key === "Escape" || key === "Esc") snippetSession.clear();
-  if (handleSnippetPopupHostKey(hostKey)) {
-    scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
-    return true;
+  const replay = new KeyboardEvent("keydown", {
+    bubbles: true,
+    cancelable: true,
+    key,
+    code: typeof body.code === "string" ? body.code : "",
+    ctrlKey: hostKey.ctrlKey,
+    metaKey: hostKey.metaKey,
+    altKey: hostKey.altKey,
+    shiftKey: hostKey.shiftKey,
+    isComposing: Boolean(body.isComposing),
+  });
+  const modeBeforeReplay = vim.mode();
+  const documentBeforeReplay = editor.view.state.doc;
+  const text = typeof body.text === "string"
+    ? body.text
+    : editorTextFromKeydown(replay);
+  let replayed = false;
+  replayingHostKey = true;
+  try {
+    replayed = replayEditorKeydown(editor.view.contentDOM, replay);
+  } finally {
+    replayingHostKey = false;
   }
-  if (vim.handleKey(hostKey)) {
-    scheduleAssistUpdate({ mathPreview: true, cursor: true });
-    return true;
+  if (!replayed) return false;
+  // Synthetic keydown has no native beforeinput. Only supply ordinary insert
+  // text when the shared command pipeline left both mode and document alone.
+  if (modeBeforeReplay === "insert"
+      && text !== null
+      && editor.view.state.doc === documentBeforeReplay) {
+    runEditorTextInput(editor.view, text);
   }
-  const primaryBracket = !hostKey.altKey && !hostKey.shiftKey
-    && hostKey.metaKey !== hostKey.ctrlKey;
-  const bracketRight = body.code === "BracketRight" || key === "]";
-  const bracketLeft = body.code === "BracketLeft" || key === "[";
-  if (vim.mode() === "insert" && primaryBracket && (bracketRight || bracketLeft)) {
-    const handled = bracketRight
-      ? jumpSnippetTabstop() || jumpTexUnit(editor.view, 1) || jumpStructuralDelimiter(editor.view, 1)
-      : jumpSnippetTabstopBack() || jumpTexUnit(editor.view, -1) || jumpStructuralDelimiter(editor.view, -1);
-    if (handled) {
-      scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
-    }
-    // Cmd-[ / Cmd-] belong to the TeX/snippet navigation state. Consume an
-    // unmatched chord as a no-op so CodeMirror never falls through to its
-    // generic indentation binding.
-    return true;
-  }
-  if (currentReadOnly) {
-    if (key === "Tab" || key === "Enter" || key === "Backspace" || key === "Delete" || (!hostKey.ctrlKey && !hostKey.metaKey && !hostKey.altKey && key.length === 1)) {
-      setStatus("Read-only pane");
-      return true;
-    }
-    return false;
-  }
-  if (key === "Tab") {
-    if (vim.mode() !== "insert") return false;
-    editor.focus();
-    if (snippetSession.active()) {
-      const handled = hostKey.shiftKey ? jumpSnippetTabstopBack() : jumpSnippetTabstop();
-      if (handled) {
-        scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
-        return true;
-      }
-    }
-    if (hostKey.shiftKey) {
-      const handled = jumpSnippetTabstopBack();
-      if (handled) {
-        scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
-        return true;
-      }
-      runEditorTab(editor.view, true);
-      scheduleAssistUpdate({ snippets: true, cursor: true });
-      return true;
-    }
-    const snippetHandled = jumpSnippetTabstop() || expandSnippetAtCursor();
-    if (snippetHandled) {
-      scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
-      return true;
-    }
-    runEditorTab(editor.view);
-    scheduleAssistUpdate({ snippets: true, cursor: true });
-    return true;
-  }
-  if (vim.mode() !== "insert" || hostKey.ctrlKey || hostKey.metaKey || hostKey.altKey) return false;
-  if (/^(?:Arrow(?:Left|Right|Up|Down)|Home|End|PageUp|PageDown)$/u.test(key)) {
-    runEditorMovement(editor.view, key as EditorMovementKey, hostKey.shiftKey);
-    scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
-    return true;
-  }
-  if (key === "Enter") {
-    runEditorEnter(editor.view);
-    scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
-    return true;
-  }
-  if (key === "Backspace" || key === "Delete") {
-    const handled = deleteHostKeyText(key);
-    if (handled) scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
-    return handled;
-  }
-  const inserted = insertHostKeyText(key, typeof body.text === "string" ? body.text : undefined);
-  if (inserted) scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
-  return inserted;
+  restoreEditorFocusAfterCommand(editor);
+  return true;
 }
 
 function runHostCommand(detail: unknown): boolean {
@@ -11343,7 +11376,17 @@ function runHostCommand(detail: unknown): boolean {
       if (paused) {
         pendingNotesRefresh = true;
       } else {
-        notesRefreshTimer.schedule(() => void reloadNotes(false));
+        // A change this page caused is an autosave of the note already on
+        // screen, and re-reading the whole vault catalog once per typing pause
+        // was the single largest recurring cost of editing. Let our own saves
+        // coalesce across the session and settle once typing stops; a change
+        // from anywhere else still lands at the normal cadence.
+        const ours = String(body.clientId || "") === clientId;
+        notesRefreshTimer.schedule(
+          () => void reloadNotes(false),
+          undefined,
+          ours ? SELF_NOTES_REFRESH_DELAY_MS : undefined,
+        );
       }
       return true;
     }
@@ -11833,7 +11876,8 @@ document.addEventListener("keydown", (event) => {
     void exportLatexTool();
     return;
   }
-  if (!standaloneMode() && !serverReaderMode && handleXwidgetEmacsKeydown(event, { client: () => currentClient })) return;
+  if (!replayingHostKey && !standaloneMode() && !serverReaderMode
+      && handleXwidgetEmacsKeydown(event, { client: () => currentClient })) return;
   if (runVisualZoomShortcut(event)) {
     return;
   }

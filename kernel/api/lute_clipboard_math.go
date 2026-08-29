@@ -32,9 +32,10 @@ import (
 	"unicode"
 
 	"github.com/88250/gulu"
+	"github.com/aaronhe/noema/kernel/model"
+	"github.com/aaronhe/noema/kernel/util"
 	"github.com/richardlehane/mscfb"
 	"github.com/siyuan-note/logging"
-	"github.com/aaronhe/noema/kernel/util"
 )
 
 const (
@@ -323,6 +324,7 @@ func isClipboardMathDOCX(data []byte) bool {
 }
 
 func runClipboardMathPandoc(from, to string, input []byte) ([]byte, error) {
+	util.InitPandoc(model.Conf.Export.PandocBin)
 	pandocBinPath := util.GetPandocRuntime().BinPath
 	if pandocBinPath == "" {
 		return nil, util.ErrPandocNotFound

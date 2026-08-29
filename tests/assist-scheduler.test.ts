@@ -71,7 +71,7 @@ describe("AssistScheduler", () => {
     }]);
   });
 
-  test("replaces one pending frame when later work broadens the flags", () => {
+  test("broadens pending work without replacing the already queued frame", () => {
     const frames = createFrameApi();
     const runs: AssistUpdateFlags[] = [];
     const scheduler = new AssistScheduler(frames.api, () => true, (flags) => runs.push(flags));
@@ -79,10 +79,9 @@ describe("AssistScheduler", () => {
     scheduler.schedule({ cursor: true });
     scheduler.schedule({ mathPreview: true });
 
-    expect(frames.cancelled).toEqual([1]);
-    expect(frames.pendingHandles()).toEqual([2]);
+    expect(frames.cancelled).toEqual([]);
+    expect(frames.pendingHandles()).toEqual([1]);
     frames.fire(1);
-    frames.fire(2);
     expect(runs).toEqual([{
       snippets: false,
       mathPreview: true,
@@ -118,10 +117,10 @@ describe("AssistScheduler", () => {
     // while idle used to sit unrendered until the next keystroke.
     scheduler.setQuiescent(true);
     scheduler.schedule({ mathPreview: true });
-    expect(frames.cancelled).toEqual([1]);
-    expect(frames.pendingHandles()).toEqual([2]);
+    expect(frames.cancelled).toEqual([]);
+    expect(frames.pendingHandles()).toEqual([1]);
 
-    frames.fire(2);
+    frames.fire(1);
     expect(runs).toEqual([{
       snippets: true,
       mathPreview: true,

@@ -22,6 +22,7 @@ export function createWikiAutoSync(options = {}) {
   if (typeof options.sync !== "function") throw new TypeError("Wiki auto sync requires a sync function");
   const debounceMs = timerDelay(options.debounceMs, DEFAULT_DEBOUNCE_MS);
   const startupMs = timerDelay(options.startupMs, DEFAULT_STARTUP_MS);
+  const syncOnStart = options.syncOnStart !== false;
   const periodicMs = timerDelay(options.periodicMs, DEFAULT_PERIODIC_MS);
   const periodicJitterMs = timerDelay(options.periodicJitterMs, DEFAULT_PERIODIC_JITTER_MS);
   const busyRetryMs = timerDelay(options.busyRetryMs, DEFAULT_BUSY_RETRY_MS);
@@ -197,7 +198,12 @@ export function createWikiAutoSync(options = {}) {
       const id = String(repositoryId || "");
       if (!id) continue;
       known.add(id);
-      schedule(id, startupMs, false);
+      // Hosts that already have a durable daily sync schedule may register
+      // repositories without immediately walking/checkpointing every working
+      // tree. Real filesystem mutations still enter through mark(), explicit
+      // sync still enters through syncNow(), and the periodic remote pass is
+      // unchanged.
+      if (syncOnStart) schedule(id, startupMs, false);
     }
     scheduleNextPeriodicSync();
   }

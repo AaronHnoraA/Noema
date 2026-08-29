@@ -132,7 +132,20 @@ var (
 	}
 )
 
-func Serve(fastMode bool, cookieKey string) {
+// ServeOptions selects transport behavior that belongs to a host adapter
+// rather than to the API itself. The default keeps the standalone SiYuan
+// compatibility surface. Noema's Node-owned sidecar uses a single private
+// loopback HTTP listener: the shared host already owns discovery and no
+// SiYuan UI/browser extension connects to the kernel directly.
+type ServeOptions struct {
+	NoemaSidecar bool
+}
+
+func Serve(fastMode bool, cookieKey string, options ...ServeOptions) {
+	serveOptions := ServeOptions{}
+	if 0 < len(options) {
+		serveOptions = options[0]
+	}
 	gin.SetMode(gin.ReleaseMode)
 	ginServer := gin.New()
 	if err := ginServer.SetTrustedProxies([]string{"127.0.0.1", "::1"}); err != nil {
@@ -216,11 +229,18 @@ func Serve(fastMode bool, cookieKey string) {
 	model.Conf.ServerAddrs = util.GetServerAddrs()
 	model.Conf.Save()
 
-	// Generate TLS certificates for local HTTPS + HTTP/2 support
-	certPath, keyPath, certErr := util.GetOrCreateTLSCert()
-	if certErr != nil {
-		logging.LogWarnf("failed to get TLS certificates, local HTTPS/HTTP2 unavailable: %s", certErr)
-		certPath = ""
+	var certPath, keyPath string
+	if !serveOptions.NoemaSidecar {
+		// Standalone compatibility clients may connect to the kernel directly.
+		// The Noema sidecar is reached only through its owning Node host, so
+		// generating a CA and multiplexing HTTP/TLS there is unused startup and
+		// leaves two extra accept loops parked for the process lifetime.
+		var certErr error
+		certPath, keyPath, certErr = util.GetOrCreateTLSCert()
+		if certErr != nil {
+			logging.LogWarnf("failed to get TLS certificates, local HTTPS/HTTP2 unavailable: %s", certErr)
+			certPath = ""
+		}
 	}
 
 	if "" != certPath {
@@ -247,7 +267,9 @@ func Serve(fastMode bool, cookieKey string) {
 	}
 	util.HttpServing = true
 
-	go util.HookUILoaded()
+	if !serveOptions.NoemaSidecar {
+		go util.HookUILoaded()
+	}
 
 	// 启动后自动连接已配置的 MCP server，让用户首次使用 AI Agent 时工具已就绪。
 	// EnsureMCPConnected 是异步的，不阻塞 HTTP 监听；内置 mcpConnecting 标志防止重复连接。
@@ -255,18 +277,20 @@ func Serve(fastMode bool, cookieKey string) {
 		go mcpclient.EnsureMCPConnected(model.Conf.AI.MCP.Servers)
 	}
 
-	go func() {
-		time.Sleep(1 * time.Second)
-		// 反代服务器启动失败不影响核心服务器启动
+	if !serveOptions.NoemaSidecar {
 		go func() {
-			defer func() {
-				if e := recover(); nil != e {
-					logging.LogWarnf("boot fixed port service failed: %v", e)
-				}
+			time.Sleep(1 * time.Second)
+			// 反代服务器启动失败不影响核心服务器启动
+			go func() {
+				defer func() {
+					if e := recover(); nil != e {
+						logging.LogWarnf("boot fixed port service failed: %v", e)
+					}
+				}()
+				proxy.InitFixedPortService(host, certPath, keyPath)
 			}()
-			proxy.InitFixedPortService(host, certPath, keyPath)
 		}()
-	}()
+	}
 
 	httpHandler := ginServer.Handler()
 	util.HttpServer = &http.Server{

@@ -147,7 +147,7 @@ func (conf *AppConf) SetUser(user *conf.User) {
 	conf.User = user
 }
 
-func InitConf() {
+func InitConf(initializeExternalTools ...bool) {
 	initLang()
 
 	Conf = NewAppConf()
@@ -784,8 +784,11 @@ func InitConf() {
 
 	util.SetNetworkProxy(Conf.System.NetworkProxy.String(), Conf.System.NetworkProxy.IsSystem())
 
-	go util.InitPandoc(Conf.Export.PandocBin)
-	go util.InitTesseract()
+	initializeTools := 0 == len(initializeExternalTools) || initializeExternalTools[0]
+	if initializeTools {
+		go util.InitPandoc(Conf.Export.PandocBin)
+		go util.InitTesseract()
+	}
 }
 
 func readCookieKey() (cookieKey string) {
@@ -1216,6 +1219,14 @@ func markDataIndexRecoveryRequired() {
 }
 
 func InitBoxes() error {
+	deactivated, err := DeactivateMissingExternalMarkdownBoxes()
+	if nil != err {
+		return fmt.Errorf("deactivate missing external Markdown boxes: %w", err)
+	}
+	for _, box := range deactivated {
+		logging.LogInfof("closed external Markdown box [%s] during boot because root is missing [%s]", box.ID, box.Root)
+	}
+
 	for _, box := range Conf.GetOpenedBoxes() {
 		if _, err := EnsureBoxDoc(box.ID); nil != err {
 			logging.LogErrorf("ensure box document [%s] failed: %s", box.ID, err)

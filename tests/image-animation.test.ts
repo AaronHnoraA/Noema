@@ -6,6 +6,8 @@ import {
   imageAnimationActivityParticipant,
   IMAGE_ANIMATION_FREEZE_FRAME_CLASS,
   IMAGE_ANIMATION_PAUSED_CLASS,
+  pauseScrollingImageAnimationTemporarily,
+  resumeImageAnimation,
   imageSourceMayAnimate,
 } from "../src/image-animation.ts";
 import { createEditor } from "../src/editor-api.ts";
@@ -53,11 +55,31 @@ describe("SiYuan-derived image animation controller", () => {
   test("the production CM6 scroll surface uses the controller", () => {
     const host = document.createElement("div");
     document.body.append(host);
-    const editor = createEditor(host, { initialContent: "![animated](demo.gif)" });
+    const editor = createEditor(host, { initialContent: "scroll probe" });
+    const animated = document.createElement("img");
+    animated.src = "demo.gif";
+    editor.view.contentDOM.append(animated);
     editor.view.scrollDOM.dispatchEvent(new Event("scroll"));
-    expect(editor.view.contentDOM.classList.contains(IMAGE_ANIMATION_PAUSED_CLASS)).toBe(true);
+    expect(editor.view.contentDOM.classList.contains(IMAGE_ANIMATION_PAUSED_CLASS)).toBe(false);
+    expect(animated.classList.contains(IMAGE_ANIMATION_PAUSED_CLASS)).toBe(true);
     editor.destroy();
     host.remove();
+  });
+
+  test("scroll pause does not invalidate the editor root or static images", () => {
+    const root = document.createElement("div");
+    const animated = document.createElement("img");
+    const still = document.createElement("img");
+    animated.src = "demo.gif";
+    still.src = "figure.png";
+    root.append(animated, still);
+
+    pauseScrollingImageAnimationTemporarily(root, 256);
+
+    expect(root.classList.contains(IMAGE_ANIMATION_PAUSED_CLASS)).toBe(false);
+    expect(animated.classList.contains(IMAGE_ANIMATION_PAUSED_CLASS)).toBe(true);
+    expect(still.classList.contains(IMAGE_ANIMATION_PAUSED_CLASS)).toBe(false);
+    resumeImageAnimation(animated, 0);
   });
 
   test("shared renderer quiescence pauses editor image animation without a timer", () => {

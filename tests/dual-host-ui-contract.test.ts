@@ -26,6 +26,7 @@ describe("App and Emacs shared UI contract", () => {
 
   test("serves the same dist renderer to Electron and the default Emacs host", () => {
     const host = read("web-host.mjs");
+    const serverIndex = read("server/lib/index.mjs");
     const desktop = read("desktop/main.mjs");
     const makefile = read("Makefile");
     const manifest = JSON.parse(read("package.json"));
@@ -35,6 +36,8 @@ describe("App and Emacs shared UI contract", () => {
     expect(host).toContain("window.AaronnotePrepareRendererReload");
     expect(host).toContain("window.__aaronnoteHostCapabilities");
     expect(host).toContain('focusQuiescence: hostMode === \"emacs\"');
+    expect(host).toContain("kernelNoteCatalog");
+    expect(serverIndex).toContain("kernelNoteCatalog,");
     expect(host).toContain("detail.generation !== window.__noemaRendererBuild");
     expect(host).toContain("generation: rendererBuildWatcher.generation");
     expect(desktop).toContain('AARONNOTE_WEB_DIR: join(appRoot, "dist", "aaronnote")');
@@ -55,5 +58,12 @@ describe("App and Emacs shared UI contract", () => {
     expect(adapter).not.toContain('tokenEndsWithSurface(token, "panel")');
     expect(widgets).toMatch(/\.aaronnote-meta-cover\s*\{[^}]*background:\s*transparent/s);
     expect(widgets).toMatch(/\.aaronnote-meta-properties\s*\{[^}]*background:\s*transparent/s);
+  });
+
+  test("keeps block-handle hover selectors local during CM6 virtualization", () => {
+    const widgets = read("src/styles/widgets.css");
+
+    expect(widgets).toContain(".cm-editor .cm-block-drag-handle:hover");
+    expect(widgets).not.toContain(".cm-line:hover ~ * .cm-block-drag-handle");
   });
 });

@@ -183,7 +183,7 @@ func TestSaveThenLoadMarkdownDocViaAPI(t *testing.T) {
 	}
 }
 
-func TestRegisterExternalMarkdownBoxAPIPrunesOnlyMissingShadows(t *testing.T) {
+func TestRegisterExternalMarkdownBoxAPIPreservesMissingShadows(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	workspaceDir := t.TempDir()
@@ -286,14 +286,13 @@ func TestRegisterExternalMarkdownBoxAPIPrunesOnlyMissingShadows(t *testing.T) {
 		t.Fatalf("register external box failed: %s", recorder.Body.String())
 	}
 	var data struct {
-		Box    model.ExternalMarkdownBox   `json:"box"`
-		Pruned []model.ExternalMarkdownBox `json:"pruned"`
+		Box model.ExternalMarkdownBox `json:"box"`
 	}
 	if err = json.Unmarshal(resp.Data, &data); nil != err {
 		t.Fatal(err)
 	}
-	if 1 != len(data.Pruned) || stale.ID != data.Pruned[0].ID {
-		t.Fatalf("registration did not report the stale shadow cleanup: %+v", data.Pruned)
+	if strings.Contains(string(resp.Data), `"pruned"`) {
+		t.Fatalf("registration exposed a destructive automatic prune result: %s", resp.Data)
 	}
 	resolvedActiveRoot, err := filepath.EvalSymlinks(activeRoot)
 	if nil != err {
@@ -302,8 +301,8 @@ func TestRegisterExternalMarkdownBoxAPIPrunesOnlyMissingShadows(t *testing.T) {
 	if data.Box.Root != resolvedActiveRoot {
 		t.Fatalf("active registration root mismatch: got %q want %q", data.Box.Root, resolvedActiveRoot)
 	}
-	if _, statErr := os.Stat(filepath.Join(util.DataDir, stale.ID)); !os.IsNotExist(statErr) {
-		t.Fatalf("stale shadow survived automatic registration cleanup: %v", statErr)
+	if _, statErr := os.Stat(filepath.Join(util.DataDir, stale.ID, ".siyuan", "conf.json")); nil != statErr {
+		t.Fatalf("registering another repository deleted the missing shadow identity: %v", statErr)
 	}
 	if _, statErr := os.Stat(activeRoot); nil != statErr {
 		t.Fatalf("active external repository was changed or removed: %v", statErr)

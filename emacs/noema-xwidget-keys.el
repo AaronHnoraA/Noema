@@ -14,7 +14,9 @@
 (defvar my/noema--port)
 (defvar xwidget-webkit-mode-map)
 (defvar xwidget-webkit-edit-mode-map)
+(defvar xwidget-webkit-edit-mode)
 (defvar my/noema--xwidget-advice-installed nil)
+(defvar my/noema--xwidget-edit-mode-advice-installed nil)
 (defvar my/noema--windmove-focus-advice-installed nil)
 (defvar my/xwidget--session-id)
 (defvar-local my/noema--client-id nil)
@@ -27,13 +29,228 @@
 (declare-function my/noema-command "init-aaronnote" (command &optional detail))
 (declare-function my/noema-jupyter-url-p "init-aaronnote-jupyter" (url))
 (declare-function my/xwidget-current-url "init-browser" (&optional buffer))
-(declare-function my/xwidget-focus "init-browser" (&optional buffer))
 (declare-function my/xwidget-undo "init-browser" ())
 (declare-function my/xwidget-redo "init-browser" ())
 (declare-function xwidget-buffer "xwidget" (xwidget))
 (declare-function xwidget-webkit-edit-mode "xwidget" (&optional arg))
+(declare-function xwidget-webkit-current-session "xwidget" ())
 (declare-function xwidget-webkit-pass-command-event "xwidget" ())
 (declare-function remote-gateway-register-method "remote-gateway" (method handler))
+
+(defvar my/noema-xwidget-recovery-mode)
+
+(defconst my/noema--xwidget-recovery-special-keys
+  '(("<escape>" . "Escape")
+    ("<delete>" . "Delete")
+    ("<backspace>" . "Backspace")
+    ("DEL" . "Backspace")
+    ("RET" . "Enter")
+    ("<return>" . "Enter")
+    ("TAB" . "Tab")
+    ("<tab>" . "Tab")
+    ("<backtab>" . "Tab")
+    ("<iso-lefttab>" . "Tab")
+    ("S-TAB" . "Tab")
+    ("S-<tab>" . "Tab")
+    ("<left>" . "ArrowLeft")
+    ("<right>" . "ArrowRight")
+    ("<up>" . "ArrowUp")
+    ("<down>" . "ArrowDown")
+    ("<home>" . "Home")
+    ("<end>" . "End")
+    ("<prior>" . "PageUp")
+    ("<next>" . "PageDown"))
+  "Noema document keys that must recover a dropped xwidget edit mode.")
+
+(defconst my/noema--xwidget-emacs-meta-keys '(?x ?w ?q)
+  "Unshifted Command keys deliberately forwarded to Emacs by the renderer.")
+
+(defconst my/noema--xwidget-emacs-control-keys '(?x ?c ?g)
+  "Ctrl host prefixes deliberately kept by Emacs instead of the renderer.")
+
+(defun my/noema--xwidget-recovery-active-p ()
+  "Return non-nil only when a Noema pane has lost xwidget edit mode."
+  (and my/noema-xwidget-recovery-mode
+       (my/noema--xwidget-buffer-p)
+       (not (bound-and-true-p xwidget-webkit-edit-mode))))
+
+(defun my/noema--xwidget-key-name (event)
+  "Return the browser KeyboardEvent key name represented by Emacs EVENT."
+  (let ((basic (event-basic-type event)))
+    (cond
+     ((integerp basic) (char-to-string basic))
+     ((alist-get (key-description (vector basic))
+                 my/noema--xwidget-recovery-special-keys nil nil #'equal))
+     ((pcase basic
+        ('escape "Escape") ('delete "Delete") ('backspace "Backspace")
+        ('return "Enter") ('tab "Tab") ('left "ArrowLeft")
+        ('right "ArrowRight") ('up "ArrowUp") ('down "ArrowDown")
+        ('home "Home") ('end "End") ('prior "PageUp") ('next "PageDown")
+        (_ nil))))))
+
+(defun my/noema--xwidget-key-code (key)
+  "Return a browser KeyboardEvent code for normalized KEY."
+  (cond
+   ((string-match-p "\\`[[:alpha:]]\\'" key)
+    (concat "Key" (upcase key)))
+   ((string-match-p "\\`[0-9]\\'" key) (concat "Digit" key))
+   ((equal key " ") "Space")
+   ((equal key "/") "Slash")
+   ((equal key "[") "BracketLeft")
+   ((equal key "]") "BracketRight")
+   ((member key '("=" "+")) "Equal")
+   ((member key '("-" "_")) "Minus")
+   ((equal key "\\") "Backslash")
+   ((member key '("Escape" "Delete" "Backspace" "Enter" "Tab" "ArrowLeft"
+                  "ArrowRight" "ArrowUp" "ArrowDown" "Home" "End" "PageUp"
+                  "PageDown")) key)
+   (t "")))
+
+(defun my/noema--xwidget-recovery-detail (event)
+  "Return the shared Noema key payload for Emacs EVENT."
+  (when-let* ((key (my/noema--xwidget-key-name event)))
+    (let ((modifiers (event-modifiers event)))
+      `((key . ,key)
+        (code . ,(my/noema--xwidget-key-code key))
+        (metaKey . ,(and (memq 'meta modifiers) t))
+        (ctrlKey . ,(and (memq 'control modifiers) t))
+        (altKey . ,(and (or (memq 'alt modifiers) (memq 'hyper modifiers)) t))
+        (shiftKey . ,(and (memq 'shift modifiers) t))))))
+
+(defun my/noema--forward-recovery-key (buffer detail)
+  "Forward DETAIL for Noema BUFFER outside the originating Emacs key command."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      ;; The renderer's host-key adapter feeds the same Vim/CM6 command table
+      ;; as a native event. Emacs never evaluates JavaScript or waits for a
+      ;; WebKit result on this exceptional recovery path.
+      (my/noema-command "key" detail))))
+
+(defun my/noema-xwidget-recover-key (event)
+  "Deliver EVENT after a Noema xwidget pane has dropped edit focus."
+  (interactive "e")
+  (when-let* ((detail (my/noema--xwidget-recovery-detail event)))
+    (run-at-time 0 nil #'my/noema--forward-recovery-key
+                 (current-buffer) detail)
+    (when-let* ((window (get-buffer-window (current-buffer) 'visible)))
+      (my/noema--focus-xwidget-window window))))
+
+(defvar my/noema-xwidget-recovery-mode-map
+  (let ((map (make-sparse-keymap))
+        (binding #'my/noema-xwidget-recover-key))
+    ;; Printable keys cover every Vim operator/motion as well as Insert text,
+    ;; but only during the exceptional edit-mode-off state. Normal typing is
+    ;; never routed through Emacs or the gateway.
+    (dotimes (offset 95)
+      (let ((character (+ 32 offset)))
+        (define-key map (char-to-string character) binding)
+        ;; The renderer forwards only unshifted Cmd-X/W/Q to Emacs. Every
+        ;; other Command+printable chord belongs to the shared web editor
+        ;; (source toggle, history, formatting, find, save, zoom, CM6, ...).
+        (unless (memq character my/noema--xwidget-emacs-meta-keys)
+          (define-key map
+                      (vector (event-convert-list (list 'meta character)))
+                      binding))
+        ;; An inert placeholder cannot meaningfully execute ordinary C-a/C-e
+        ;; movement, C-d deletion, C-z history, or C-0 zoom. Recover all Ctrl
+        ;; printable keys through the shared renderer except the explicit
+        ;; Emacs host prefixes C-x/C-c and keyboard-quit C-g.
+        (when (and (string-match-p "\\`[[:alnum:]]\\'"
+                                   (char-to-string character))
+                   (not (memq (downcase character)
+                              my/noema--xwidget-emacs-control-keys)))
+          (define-key map
+                      (vector (event-convert-list
+                               (list 'control character)))
+                      binding))))
+    (dolist (entry my/noema--xwidget-recovery-special-keys)
+      (let ((basic (event-basic-type (aref (kbd (car entry)) 0))))
+        (when basic
+          ;; Named navigation/editing controls are never forwarded by the
+          ;; renderer's Emacs chord gate, with or without these modifiers.
+          (dolist (modifiers '(nil (shift) (meta) (meta shift) (control)
+                                (control shift)))
+            (define-key map
+                        (vector (event-convert-list
+                                 (append modifiers (list basic))))
+                        binding)))))
+    map)
+  "Conditional recovery keys for a Noema xwidget pane.")
+
+(defvar my/noema--xwidget-recovery-emulation-alist
+  `((my/noema-xwidget-recovery-mode . ,my/noema-xwidget-recovery-mode-map))
+  "High-precedence recovery map while a Noema xwidget is not editing.")
+
+;; `windmove-mode' and similar global UI modes use emulation maps, which are
+;; consulted before ordinary minor-mode maps. Recovery represents the page
+;; that still owns this pane, so it must precede those maps only while its
+;; buffer-local mode variable is non-nil.
+(add-to-list 'emulation-mode-map-alists
+             'my/noema--xwidget-recovery-emulation-alist)
+
+(define-minor-mode my/noema-xwidget-recovery-mode
+  "Recover Noema document keys only when xwidget edit mode drops."
+  :init-value nil
+  :lighter nil
+  :keymap my/noema-xwidget-recovery-mode-map)
+
+(defconst my/noema--xwidget-placeholder-mode-whitelist
+  '(xwidget-webkit-edit-mode
+    my/noema-keys-mode
+    my/noema-xwidget-recovery-mode)
+  "Local modes that belong to the Noema xwidget shell itself.")
+
+(defun my/noema--harden-xwidget-placeholder (&optional buffer)
+  "Make Noema xwidget BUFFER an inert, non-editable Emacs placeholder.
+The actual document, history, completion, syntax and input state live in the
+shared CM6 renderer. This buffer retains only xwidget identity/chrome modes."
+  (let ((buffer (or buffer (current-buffer))))
+    (when (and (buffer-live-p buffer)
+               (my/noema--xwidget-buffer-p buffer))
+      (with-current-buffer buffer
+        ;; Globalized plugins often turn on a buffer-local worker during a
+        ;; major-mode transition. Disable every such local mode except the
+        ;; three explicit host-shell modes above; never toggle a genuinely
+        ;; global mode from one placeholder buffer.
+        (dolist (mode minor-mode-list)
+          (when (and (local-variable-p mode)
+                     (boundp mode)
+                     (symbol-value mode)
+                     (fboundp mode)
+                     (not (memq mode
+                                my/noema--xwidget-placeholder-mode-whitelist)))
+            (ignore-errors (funcall mode -1))))
+        (when (fboundp 'font-lock-mode) (font-lock-mode -1))
+        (when (fboundp 'display-line-numbers-mode)
+          (display-line-numbers-mode -1))
+        (when (fboundp 'visual-line-mode) (visual-line-mode -1))
+        (when (fboundp 'hl-line-mode) (hl-line-mode -1))
+        (when (fboundp 'whitespace-mode) (whitespace-mode -1))
+        (setq-local buffer-read-only t)
+        (setq-local buffer-undo-list t)
+        (setq-local buffer-auto-save-file-name nil)
+        (setq-local completion-at-point-functions nil)
+        (setq-local eldoc-documentation-functions nil)
+        (setq-local syntax-propertize-function nil)
+        (setq-local fontification-functions nil)
+        (setq-local cursor-type nil)
+        (setq-local bidi-display-reordering nil)
+        (setq-local bidi-paragraph-direction 'left-to-right)
+        (setq-local bidi-inhibit-bpa t)
+        ;; A generic browser focus helper may inject JS synchronously. Noema's
+        ;; shell arms native edit mode and sends the shared `focus' command via
+        ;; its asynchronous host channel instead.
+        (when (boundp 'my/xwidget-focus-script)
+          (setq-local my/xwidget-focus-script nil))
+        (set-buffer-modified-p nil)))))
+
+(defun my/noema--sync-xwidget-recovery-mode (&rest _)
+  "Enable recovery keys exactly while this Noema xwidget is not editing.
+This is driven by `xwidget-webkit-edit-mode' transitions, so there is no
+timer, polling, or per-key mode detection on the normal typing path."
+  (when (my/noema--xwidget-buffer-p)
+    (my/noema-xwidget-recovery-mode
+     (if (bound-and-true-p xwidget-webkit-edit-mode) -1 1))))
 
 (defun my/noema--identity-random-hex ()
   "Return 20 hexadecimal random digits for a Noema UUIDv7."
@@ -126,13 +343,28 @@ normal result rather than a gateway error."
 (defun my/noema--focus-xwidget-window (window)
   "Focus Noema xwidget WINDOW like a direct window click."
   (when (window-live-p window)
-    (let ((buffer (window-buffer window)))
-      (when (my/noema--xwidget-buffer-p buffer)
-        (select-window window)
-        (my/noema--select-emacs-window window)
-        (setq my/noema--app-buffer buffer)
-        (when (fboundp 'my/xwidget-focus)
-          (my/xwidget-focus buffer))))))
+    (condition-case nil
+        (let ((buffer (window-buffer window)))
+          (when (my/noema--xwidget-buffer-p buffer)
+            (select-window window)
+            (my/noema--select-emacs-window window)
+            (setq my/noema--app-buffer buffer)
+            (when (fboundp 'xwidget-webkit-edit-mode)
+              (with-current-buffer buffer
+                (ignore-errors (xwidget-webkit-edit-mode 1))))
+            ;; Notification-only: no JavaScript evaluation and no reply wait
+            ;; in Emacs' focus/window command path.
+            (with-current-buffer buffer
+              (my/noema-command "focus"))))
+      (quit
+       (when (fboundp 'my/noema--record-interrupted-operation)
+         (my/noema--record-interrupted-operation "xwidget focus handoff"))))))
+
+(defun my/noema--focus-xwidget-buffer (buffer)
+  "Asynchronously arm the visible Noema xwidget BUFFER for page input."
+  (when-let* ((window (and (buffer-live-p buffer)
+                           (get-buffer-window buffer 'visible))))
+    (my/noema--focus-xwidget-window window)))
 
 (defun my/noema--focus-xwidget-window-if-still-selected (window buffer)
   "Focus WINDOW's xwidget if WINDOW still displays BUFFER and is selected."
@@ -401,6 +633,10 @@ two `with-eval-after-load' blocks have no defined order between them."
     (advice-add 'xwidget-webkit-callback :after
                 #'my/noema--xwidget-callback-advice)
     (setq my/noema--xwidget-advice-installed t))
+  (unless my/noema--xwidget-edit-mode-advice-installed
+    (advice-add 'xwidget-webkit-edit-mode :after
+                #'my/noema--sync-xwidget-recovery-mode)
+    (setq my/noema--xwidget-edit-mode-advice-installed t))
   (my/noema--install-xwidget-keys)
   (add-hook 'xwidget-webkit-mode-hook #'my/noema--install-xwidget-keys))
 

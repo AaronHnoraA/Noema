@@ -5,15 +5,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/cache"
 	"github.com/aaronhe/noema/kernel/sql"
 	"github.com/aaronhe/noema/kernel/task"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/siyuan-note/logging"
 )
 
 func OCRAssetsJob() {
-	util.WaitForTesseractInit()
+	util.EnsureTesseractInit()
 
 	if !util.TesseractEnabled {
 		return

@@ -35,6 +35,8 @@ type markdownBoxCatalog struct {
 	propOrdered          []MarkdownPropertyDocument
 	notes                map[string]MarkdownNoteSummary
 	noteOrdered          []MarkdownNoteSummary
+	noteRefIndex         map[string]string
+	noteDirectories      []MarkdownNoteDirectory
 	workspaceNotes       map[string]MarkdownWorkspaceNote
 	workspaceNoteOrdered []MarkdownWorkspaceNote
 	virtualNotes         map[string]MarkdownVirtualReferenceNote
@@ -281,20 +283,163 @@ func markdownCatalogNotes(boxID string) (MarkdownNoteCatalog, error) {
 		}
 	}
 	if nil == catalog.noteOrdered {
+		// resolveMarkdownNoteRelationships clones every note it keeps into its
+		// own `unique` map, so cloning here as well copied the whole vault twice
+		// per rebuild. It does sort the slice in place, which is why this is a
+		// fresh slice rather than a reference to the map's values.
 		raw := make([]MarkdownNoteSummary, 0, len(catalog.notes))
 		for _, note := range catalog.notes {
-			raw = append(raw, cloneMarkdownNoteSummary(note))
+			raw = append(raw, note)
 		}
 		catalog.noteOrdered = resolveMarkdownNoteRelationships(raw)
+		catalog.noteRefIndex = nil
+		catalog.noteDirectories = nil
+	}
+	if nil == catalog.noteDirectories {
+		catalog.noteDirectories = markdownNoteDirectories(catalog.noteOrdered)
 	}
 	notes := make([]MarkdownNoteSummary, len(catalog.noteOrdered))
 	for index, note := range catalog.noteOrdered {
 		notes[index] = cloneMarkdownNoteSummary(note)
 	}
 	return MarkdownNoteCatalog{
-		Notes: notes, Directories: markdownNoteDirectories(notes), Files: []any{},
-		IndexVersion: catalog.generation, Source: "kernel-note-catalog",
+		Notes:        notes,
+		Directories:  append([]MarkdownNoteDirectory(nil), catalog.noteDirectories...),
+		Files:        []any{},
+		IndexVersion: catalog.generation,
+		Source:       "kernel-note-catalog",
 	}, nil
+}
+
+// patchMarkdownNoteRelationships replaces one note in the resolved catalog
+// without re-resolving the vault, and reports whether it could.
+//
+// This is the Go port of the Node host's patchResolvedRelationships, which the
+// kernel takeover dropped: updateMarkdownCatalogPath simply cleared
+// noteOrdered, so a one-character edit made the next catalog read re-resolve
+// every note's refs and backlinks and re-clone the whole vault — measured at
+// 1.0 ms for 200 notes and 5.8 ms for 1000, once per autosave, growing linearly
+// with the vault.
+//
+// The fast path is only safe while the vault-wide ref index is unaffected, so
+// it is declined (leaving the caller to invalidate as before) whenever the note
+// is new, its id changed, or the set of values it can be referenced by changed.
+// Everything else — prose edits, ref edits, tag edits — patches in place: the
+// note's own resolved refs are recomputed against the unchanged index, and the
+// backlink lists of exactly the targets it gained or lost are adjusted.
+//
+// Caller must hold catalog.mu.
+func (catalog *markdownBoxCatalog) patchMarkdownNoteRelationships(stored, next MarkdownNoteSummary) bool {
+	if nil == catalog.noteOrdered || stored.ID == "" || stored.ID != next.ID {
+		return false
+	}
+	position := -1
+	for index, note := range catalog.noteOrdered {
+		if note.ID != stored.ID {
+			continue
+		}
+		if position >= 0 {
+			// The id is claimed by more than one row; which one the resolver
+			// keeps is its decision, not this patch's.
+			return false
+		}
+		position = index
+	}
+	if position < 0 || catalog.noteOrdered[position].Path != stored.Path || stored.Path != next.Path {
+		return false
+	}
+	previous := catalog.noteOrdered[position]
+	if !sameMarkdownStringList(markdownNoteRefKeys(stored), markdownNoteRefKeys(next)) {
+		return false
+	}
+
+	if nil == catalog.noteRefIndex {
+		unique := make(map[string]MarkdownNoteSummary, len(catalog.noteOrdered))
+		for _, note := range catalog.noteOrdered {
+			unique[note.ID] = note
+		}
+		catalog.noteRefIndex = markdownNoteRefIndex(unique)
+	}
+
+	byID := make(map[string]int, len(catalog.noteOrdered))
+	for index, note := range catalog.noteOrdered {
+		byID[note.ID] = index
+	}
+
+	oldRefs := make(map[string]bool, len(previous.Refs))
+	for _, ref := range previous.Refs {
+		oldRefs[ref] = true
+	}
+	resolved, newRefs := []string{}, map[string]bool{}
+	for _, ref := range next.Refs {
+		target := catalog.noteRefIndex[canonicalMarkdownNoteRef(ref)]
+		if target == "" || target == previous.ID || newRefs[target] {
+			continue
+		}
+		newRefs[target] = true
+		resolved = append(resolved, target)
+	}
+	sort.Strings(resolved)
+
+	patched := append([]MarkdownNoteSummary(nil), catalog.noteOrdered...)
+	for ref := range oldRefs {
+		if newRefs[ref] {
+			continue
+		}
+		index, ok := byID[ref]
+		if !ok {
+			continue
+		}
+		kept := make([]string, 0, len(patched[index].Backlinks))
+		for _, backlink := range patched[index].Backlinks {
+			if backlink != previous.ID {
+				kept = append(kept, backlink)
+			}
+		}
+		target := cloneMarkdownNoteSummary(patched[index])
+		target.Backlinks = kept
+		patched[index] = target
+	}
+	for ref := range newRefs {
+		if oldRefs[ref] {
+			continue
+		}
+		index, ok := byID[ref]
+		if !ok {
+			continue
+		}
+		target := cloneMarkdownNoteSummary(patched[index])
+		target.Backlinks = sortedUniqueMarkdownStrings(append(target.Backlinks, previous.ID))
+		patched[index] = target
+	}
+
+	replacement := cloneMarkdownNoteSummary(next)
+	replacement.Refs = resolved
+	// Backlinks point at this note from others, none of which changed.
+	replacement.Backlinks = append([]string(nil), previous.Backlinks...)
+	patched[position] = replacement
+
+	sort.Slice(patched, func(i, j int) bool {
+		if patched[i].Title == patched[j].Title {
+			return patched[i].Path < patched[j].Path
+		}
+		return patched[i].Title < patched[j].Title
+	})
+	catalog.noteOrdered = patched
+	// GroupKey is derived from the path, which this patch never changes.
+	return true
+}
+
+func sameMarkdownStringList(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func updateMarkdownCatalogPath(boxID, path string, removed bool, snapshot *markdownSnapshot) {
@@ -319,6 +464,8 @@ func updateMarkdownCatalogPath(boxID, path string, removed bool, snapshot *markd
 		catalog.planOrdered = nil
 		catalog.propOrdered = nil
 		catalog.noteOrdered = nil
+		catalog.noteRefIndex = nil
+		catalog.noteDirectories = nil
 		catalog.workspaceNoteOrdered = nil
 		catalog.virtualNoteOrdered = nil
 		catalog.virtualReferences = nil
@@ -346,8 +493,14 @@ func updateMarkdownCatalogPath(boxID, path string, removed bool, snapshot *markd
 		catalog.propOrdered = nil
 	}
 	if nil != catalog.notes {
-		catalog.notes[path] = snapshot.noteSummary(boxID, path)
-		catalog.noteOrdered = nil
+		stored, known := catalog.notes[path]
+		note := snapshot.noteSummary(boxID, path)
+		catalog.notes[path] = note
+		if !known || !catalog.patchMarkdownNoteRelationships(stored, note) {
+			catalog.noteOrdered = nil
+			catalog.noteRefIndex = nil
+			catalog.noteDirectories = nil
+		}
 	}
 	if nil != catalog.workspaceNotes {
 		catalog.workspaceNotes[path] = snapshot.workspaceNoteSummary(boxID, path)

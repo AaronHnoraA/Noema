@@ -2263,6 +2263,7 @@ func ExportPandocConvertZip(ids []string, pandocTo, ext string) (name, zipPath s
 	if len(ids) == 0 {
 		return
 	}
+	util.InitPandoc(Conf.Export.PandocBin)
 	block := getExportBlockTree(ids[0])
 	if block == nil {
 		return

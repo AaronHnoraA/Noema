@@ -284,6 +284,7 @@ export function createKernelSupervisor({
       "--wd", config.workingDir,
       "--port", "0",
       "--mode", "prod",
+      "--noema-sidecar",
       "--supervisor-pid", String(supervisorPid),
     ];
     const spawned = spawnImpl(config.binary, args, {

@@ -40,8 +40,10 @@ import {
 import { nextGraphemePosition, previousGraphemePosition } from "./text-boundaries.ts";
 import {
   activateInlineMathFromArrow,
+  isVisualMode,
   moveInsertLineWithDisplayMathEntry,
 } from "./extensions/visual/index.ts";
+import { preserveEditorViewport } from "./viewport-stability.ts";
 
 export type EditorDeleteDirection = "backward" | "forward";
 export type EditorMovementKey =
@@ -203,15 +205,30 @@ export function runEditorDelete(
 export function runEditorEnter(view: EditorView): boolean {
   if (view.state.readOnly) return true;
 
-  // The Markdown/table helpers are intentionally single-caret commands.
-  // Falling back immediately preserves CM6's native multi-selection behavior.
-  if (view.state.selection.ranges.length > 1) return insertNewlineAndIndent(view);
+  const run = (): boolean => {
+    // The Markdown/table helpers are intentionally single-caret commands.
+    // Falling back immediately preserves CM6's native multi-selection behavior.
+    if (view.state.selection.ranges.length > 1) return insertNewlineAndIndent(view);
 
-  return tableEnterSameColumn(view)
-    || exitEmptyMarkdownBlock(view)
-    || continueMarkdownBlock(view)
-    || insertNewlineContinueMarkup(view)
-    || insertNewlineAndIndent(view);
+    return tableEnterSameColumn(view)
+      || exitEmptyMarkdownBlock(view)
+      || continueMarkdownBlock(view)
+      || insertNewlineContinueMarkup(view)
+      || insertNewlineAndIndent(view);
+  };
+
+  const selection = view.state.selection.main;
+  const line = view.state.doc.lineAt(selection.head);
+  // In Preview an empty source line has a projected height. A second Enter
+  // changes both the document and which line owns that height. CM6's command
+  // requests scrollIntoView using its pre-measure height estimate; WebKit then
+  // used to correct the outer host after measuring the projection, producing
+  // a visible down-then-up twitch. Preserve the shared outer viewport across
+  // this one structural transaction. The first Enter on a content line and
+  // every Source-mode Enter retain native scrollIntoView behavior.
+  return isVisualMode(view) && selection.empty && line.text.trim().length === 0
+    ? preserveEditorViewport(view, run, selection.head)
+    : run();
 }
 
 /** Canonical Tab behavior shared by native CM6, desktop and xwidget input. */

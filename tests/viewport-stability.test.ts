@@ -2,6 +2,7 @@ import type { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
 import {
   EditorViewportStabilizer,
+  isViewportScrollKey,
   mapPositionAcrossText,
   minimalDocumentChange,
 } from "../src/cm6/viewport-stability.ts";
@@ -12,6 +13,13 @@ afterEach(() => {
 });
 
 describe("CM6 viewport position mapping", () => {
+  test("treats legacy xwidget Spacebar as the same scroll interaction as Space", () => {
+    expect(isViewportScrollKey({ key: " ", code: "Space" })).toBe(true);
+    expect(isViewportScrollKey({ key: "Spacebar", code: "Space" })).toBe(true);
+    expect(isViewportScrollKey({ key: "Space", code: "Space" })).toBe(true);
+    expect(isViewportScrollKey({ key: "a", code: "KeyA" })).toBe(false);
+  });
+
   test("maps a position through an insertion before the visible content", () => {
     const source = "alpha\nbeta\ngamma\n";
     const target = "new heading\nalpha\nbeta\ngamma\n";
@@ -142,6 +150,194 @@ describe("CM6 viewport position mapping", () => {
       expect(scrollHost.scrollTop).toBe(0);
       stabilizer.preserve(() => { documentTop = 53; });
       expect(scrollHost.scrollTop).toBe(0);
+    } finally {
+      stabilizer.destroy();
+      scrollHost.remove();
+    }
+  });
+
+  test("explicit preserve restores even inside the old scroll-idle window", () => {
+    vi.useFakeTimers();
+    const scrollHost = document.createElement("div");
+    const dom = document.createElement("div");
+    const contentDOM = document.createElement("div");
+    dom.append(contentDOM);
+    scrollHost.append(dom);
+    document.body.append(scrollHost);
+    scrollHost.scrollTop = 100;
+    let anchorTop = 100;
+    let measurement: {
+      read: () => unknown;
+      write: (value: unknown) => void;
+    } | null = null;
+    const fakeView = {
+      dom,
+      contentDOM,
+      state: { doc: { length: 2_000 } },
+      viewport: { from: 100, to: 500 },
+      get documentTop() { return -scrollHost.scrollTop; },
+      scaleY: 1,
+      lineBlockAtHeight: () => ({ from: 100, top: 100 }),
+      lineBlockAt: () => { throw new Error("virtual line block is not measured"); },
+      coordsAtPos: () => ({ top: anchorTop - scrollHost.scrollTop }),
+      requestMeasure: (request: typeof measurement) => { measurement = request; },
+    } as unknown as EditorView;
+    const stabilizer = new EditorViewportStabilizer(fakeView, scrollHost);
+
+    try {
+      scrollHost.dispatchEvent(new WheelEvent("wheel"));
+      expect(vi.getTimerCount()).toBe(1);
+      stabilizer.preserve(() => { anchorTop = 1_000; }, undefined, 100);
+      expect(scrollHost.scrollTop).toBe(1_000);
+      vi.advanceTimersByTime(141);
+      anchorTop = 1_200;
+      const queued = measurement as unknown as {
+        read: () => unknown;
+        write: (value: unknown) => void;
+      };
+      queued.write(queued.read());
+      expect(scrollHost.scrollTop).toBe(1_200);
+    } finally {
+      stabilizer.destroy();
+      scrollHost.remove();
+    }
+  });
+
+  test("keeps multi-phase programmatic scroll acknowledgements from canceling caret restoration", () => {
+    const scrollHost = document.createElement("div");
+    const dom = document.createElement("div");
+    const contentDOM = document.createElement("div");
+    dom.append(contentDOM);
+    scrollHost.append(dom);
+    document.body.append(scrollHost);
+    scrollHost.scrollTop = 100;
+    let anchorTop = 100;
+    let measurement: {
+      read: () => unknown;
+      write: (value: unknown) => void;
+    } | null = null;
+    const fakeView = {
+      dom,
+      contentDOM,
+      state: { doc: { length: 2_000 } },
+      viewport: { from: 100, to: 500 },
+      get documentTop() { return -scrollHost.scrollTop; },
+      scaleY: 1,
+      lineBlockAtHeight: () => ({ from: 100, top: 100 }),
+      lineBlockAt: () => ({ from: 100, top: anchorTop }),
+      requestMeasure: (request: typeof measurement) => { measurement = request; },
+    } as unknown as EditorView;
+    const stabilizer = new EditorViewportStabilizer(fakeView, scrollHost);
+
+    try {
+      stabilizer.preserve(() => { anchorTop = 1_000; });
+      expect(scrollHost.scrollTop).toBe(1_000);
+
+      // WebKit may acknowledge the transaction write and the correction write
+      // separately even though both observe the final programmed scrollTop.
+      scrollHost.dispatchEvent(new Event("scroll"));
+      scrollHost.dispatchEvent(new Event("scroll"));
+
+      anchorTop = 1_200;
+      const queued = measurement as unknown as {
+        read: () => unknown;
+        write: (value: unknown) => void;
+      };
+      queued.write(queued.read());
+      expect(scrollHost.scrollTop).toBe(1_200);
+    } finally {
+      stabilizer.destroy();
+      scrollHost.remove();
+    }
+  });
+
+  test("does not mistake WebKit height clamping for user scroll during a preserved relayout", () => {
+    const scrollHost = document.createElement("div");
+    const dom = document.createElement("div");
+    const contentDOM = document.createElement("div");
+    dom.append(contentDOM);
+    scrollHost.append(dom);
+    document.body.append(scrollHost);
+    scrollHost.scrollTop = 100;
+    let anchorTop = 100;
+    let measurement: {
+      read: () => unknown;
+      write: (value: unknown) => void;
+    } | null = null;
+    const fakeView = {
+      dom,
+      contentDOM,
+      state: { doc: { length: 2_000 } },
+      viewport: { from: 100, to: 500 },
+      get documentTop() { return -scrollHost.scrollTop; },
+      scaleY: 1,
+      lineBlockAtHeight: () => ({ from: 100, top: 100 }),
+      lineBlockAt: () => ({ from: 100, top: anchorTop }),
+      requestMeasure: (request: typeof measurement) => { measurement = request; },
+    } as unknown as EditorView;
+    const stabilizer = new EditorViewportStabilizer(fakeView, scrollHost);
+
+    try {
+      stabilizer.preserve(() => { anchorTop = 1_000; });
+      expect(scrollHost.scrollTop).toBe(1_000);
+
+      // Preview removal can temporarily shorten the document. WebKit clamps
+      // the outer host before CM6's next measure and emits a plain scroll.
+      scrollHost.scrollTop = 200;
+      scrollHost.dispatchEvent(new Event("scroll"));
+
+      anchorTop = 1_200;
+      const queued = measurement as unknown as {
+        read: () => unknown;
+        write: (value: unknown) => void;
+      };
+      queued.write(queued.read());
+      expect(scrollHost.scrollTop).toBe(1_200);
+    } finally {
+      stabilizer.destroy();
+      scrollHost.remove();
+    }
+  });
+
+  test("lets real wheel input cancel a pending preserved relayout", () => {
+    const scrollHost = document.createElement("div");
+    const dom = document.createElement("div");
+    const contentDOM = document.createElement("div");
+    dom.append(contentDOM);
+    scrollHost.append(dom);
+    document.body.append(scrollHost);
+    scrollHost.scrollTop = 100;
+    let anchorTop = 100;
+    let measurement: {
+      read: () => unknown;
+      write: (value: unknown) => void;
+    } | null = null;
+    const fakeView = {
+      dom,
+      contentDOM,
+      state: { doc: { length: 2_000 } },
+      viewport: { from: 100, to: 500 },
+      get documentTop() { return -scrollHost.scrollTop; },
+      scaleY: 1,
+      lineBlockAtHeight: () => ({ from: 100, top: 100 }),
+      lineBlockAt: () => ({ from: 100, top: anchorTop }),
+      requestMeasure: (request: typeof measurement) => { measurement = request; },
+    } as unknown as EditorView;
+    const stabilizer = new EditorViewportStabilizer(fakeView, scrollHost);
+
+    try {
+      stabilizer.preserve(() => { anchorTop = 1_000; });
+      scrollHost.dispatchEvent(new WheelEvent("wheel"));
+      scrollHost.scrollTop = 333;
+      scrollHost.dispatchEvent(new Event("scroll"));
+
+      anchorTop = 1_200;
+      const queued = measurement as unknown as {
+        read: () => unknown;
+        write: (value: unknown) => void;
+      };
+      queued.write(queued.read());
+      expect(scrollHost.scrollTop).toBe(333);
     } finally {
       stabilizer.destroy();
       scrollHost.remove();

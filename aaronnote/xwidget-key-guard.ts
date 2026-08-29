@@ -7,6 +7,7 @@ import {
   runEditorTab,
   type EditorMovementKey,
 } from "../src/cm6/input-commands.ts";
+import { normalizedEditorKey } from "../src/cm6/focus-quiescence.ts";
 import { historyChordKind } from "../src/keymap/shortcut-router.ts";
 
 type XwidgetControlKey = "Escape" | "Delete" | "Backspace";
@@ -29,6 +30,31 @@ type XwidgetKeyContext = {
   /** Emacs/xwidget may report editor-owned keys on body instead of cm-content. */
   allowDetachedTarget?: boolean;
 };
+
+/**
+ * Keep document commands on the persistent CM6 focus root.
+ *
+ * Structural Vim operations may remove the widget/line that owned the event.
+ * Both native WebKit events and host-injected keys call this same guard after
+ * a handled command. A real external control (find, menu, MathLive, input)
+ * remains authoritative and is never stolen back.
+ */
+export function restoreEditorFocusAfterCommand(
+  editor: Pick<Editor, "focus" | "view">,
+): void {
+  const recover = (): void => {
+    if (!editor.view.dom.isConnected) return;
+    const ownerDocument = editor.view.dom.ownerDocument;
+    const active = ownerDocument.activeElement;
+    if (active instanceof HTMLElement
+      && active !== ownerDocument.body
+      && active !== ownerDocument.documentElement
+      && !editor.view.dom.contains(active)) return;
+    editor.focus();
+  };
+  recover();
+  queueMicrotask(recover);
+}
 type EmacsKeyForwardOptions = {
   client?: () => string | null | undefined;
 };
@@ -183,7 +209,7 @@ function specialKeyFromKeyboardEvent(event: KeyboardEvent): XwidgetSpecialKey | 
 function printableMathKeyFromKeyboardEvent(event: KeyboardEvent): string {
   // Older xwidget WebKit reports physical Space as "Spacebar" (and some host
   // adapters use "Space"/"SPC") instead of the modern single-space key.
-  if (event.code === "Space" || event.key === "Spacebar" || event.key === "Space" || event.key === "SPC") {
+  if (normalizedEditorKey(event) === " ") {
     return " ";
   }
   if (event.key === "\\" || /^backslash$/i.test(event.key)
@@ -373,7 +399,7 @@ export function handleXwidgetHistoryKeydown(event: KeyboardEvent, context: Xwidg
   hardStop(event);
   if (kind === "undo") context.editor.undo();
   else context.editor.redo();
-  context.editor.focus();
+  restoreEditorFocusAfterCommand(context.editor);
   return true;
 }
 
@@ -472,6 +498,7 @@ export function handleXwidgetSpecialKeydown(event: KeyboardEvent, context: Xwidg
   if (!runEditorSpecialKey(key, context, shiftForSpecialKeyboardEvent(event))) return false;
   hardStop(event);
   noteHandledKeydown(context.editor, key);
+  restoreEditorFocusAfterCommand(context.editor);
   return true;
 }
 
@@ -491,13 +518,15 @@ export function handleXwidgetControlKeydown(
   hardStop(event);
   noteHandledKeydown(context.editor, key);
   runEditorControlKey(key, context);
+  restoreEditorFocusAfterCommand(context.editor);
   return true;
 }
 
 export function handleXwidgetVimKeydown(event: KeyboardEvent, context: XwidgetKeyContext): boolean {
   if (!shouldHandleXwidgetVimKey(event, context)) return false;
+  const key = normalizedEditorKey(event);
   const handled = context.vim.handleKey({
-    key: event.key,
+    key,
     ctrlKey: event.ctrlKey,
     metaKey: event.metaKey,
     altKey: event.altKey,
@@ -507,8 +536,8 @@ export function handleXwidgetVimKeydown(event: KeyboardEvent, context: XwidgetKe
   if (!handled) return false;
 
   hardStop(event);
-  noteHandledKeydown(context.editor, event.key);
-  context.editor.focus();
+  noteHandledKeydown(context.editor, key);
+  restoreEditorFocusAfterCommand(context.editor);
   return true;
 }
 
@@ -523,6 +552,7 @@ export function handleXwidgetControlBeforeInput(event: InputEvent, context: Xwid
   )) return false;
   hardStop(event);
   if (!recentlyHandledKeydown(context.editor, key)) runEditorControlKey(key, context);
+  restoreEditorFocusAfterCommand(context.editor);
   return true;
 }
 
@@ -532,6 +562,7 @@ export function handleXwidgetSpecialBeforeInput(event: InputEvent, context: Xwid
   if (key === "Tab") return false; // let CM6 insert \t naturally; snippet expansion happens in keydown
   hardStop(event);
   if (!recentlyHandledKeydown(context.editor, key)) runEditorSpecialKey(key, context);
+  restoreEditorFocusAfterCommand(context.editor);
   return true;
 }
 
@@ -541,7 +572,7 @@ export function handleXwidgetVimBeforeInput(event: InputEvent, context: XwidgetK
   hardStop(event);
   if (event.data.length === 1 && !recentlyHandledKeydown(context.editor, event.data)) {
     context.vim.handleKey({ key: event.data });
-    context.editor.focus();
+    restoreEditorFocusAfterCommand(context.editor);
   }
   return true;
 }
@@ -605,9 +636,11 @@ export function emacsKeyFromEvent(event: KeyboardEvent): string | null {
 /**
  * Returns true when this keystroke should be forwarded to Emacs.
  *
- * Scope: all Option(H-) and bare Ctrl chords, plus selected Cmd(M-) chords.
- * The editor's own Cmd shortcuts (S=save, B/I/K=format, Z/Y=undo) are not
- * captured here and continue to work normally.
+ * Scope: Option(H-) host chords, C-x/C-c prefixes, C-g, and selected Cmd(M-)
+ * chords.  Ordinary Ctrl keys stay in the shared renderer: CM6/Vim owns text
+ * movement and deletion, Ctrl-Z/R/Y history, Ctrl-[ Escape, and Ctrl-Tab/0
+ * visual zoom in both Noema.app and Emacs. Sending those to the inert xwidget
+ * placeholder would make the same editor behave differently by host.
  */
 export function shouldForwardToEmacs(event: KeyboardEvent): boolean {
   if (event.isComposing) return false;
@@ -620,10 +653,10 @@ export function shouldForwardToEmacs(event: KeyboardEvent): boolean {
   if (event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
     return event.code === "KeyX" || event.code === "KeyW" || event.code === "KeyQ";
   }
-  // Bare Ctrl: Emacs-style chords. Shift is ignored for letter chords so
+  // Only host-level Ctrl chords leave the renderer. Shift is ignored so
   // xwidget/browser variants such as C-X still become Emacs' C-x.
   if (event.ctrlKey && !event.metaKey && !event.altKey) {
-    return codeToBaseKey(event.code, false) !== null;
+    return event.code === "KeyX" || event.code === "KeyC" || event.code === "KeyG";
   }
   return false;
 }
@@ -668,7 +701,7 @@ function forwardEmacsKeyAndReleaseInput(event: KeyboardEvent, keyString: string,
 // When the user presses C-x or C-c, we enter prefix mode and capture the
 // NEXT keystroke before forwarding. Without this, C-x goes to Emacs but C-f
 // still goes to WebKit (which holds OS focus), so "C-x C-f" would never work.
-let pendingPrefix: string | null = null;
+let pendingPrefix: { key: string; client: string } | null = null;
 
 /**
  * Call at the top of the main keydown handler, before editing handlers.
@@ -677,25 +710,33 @@ let pendingPrefix: string | null = null;
  */
 export function handleXwidgetEmacsKeydown(event: KeyboardEvent, options?: EmacsKeyForwardOptions): boolean {
   if (pendingPrefix !== null) {
-    // C-g while in prefix mode: cancel prefix, forward C-g as keyboard-quit
-    if (event.ctrlKey && !event.metaKey && !event.altKey && event.code === "KeyG") {
+    const client = options?.client?.() || "";
+    // Prefix state belongs to the pane that received its first chord. A click
+    // into another retained xwidget must not complete a sibling pane's C-x or
+    // C-c sequence.
+    if (pendingPrefix.client !== client) {
       pendingPrefix = null;
-      forwardEmacsKeyAndReleaseInput(event, "C-g", options);
-      return true;
-    }
-    // Any other key: complete the prefix sequence
-    if (!event.isComposing) {
-      const nextKey = keyStringFromEvent(event);
-      if (nextKey) {
-        const fullKey = pendingPrefix + " " + nextKey;
+    } else {
+      // C-g while in prefix mode: cancel prefix, forward C-g as keyboard-quit
+      if (event.ctrlKey && !event.metaKey && !event.altKey && event.code === "KeyG") {
         pendingPrefix = null;
-        forwardEmacsKeyAndReleaseInput(event, fullKey, options);
+        forwardEmacsKeyAndReleaseInput(event, "C-g", options);
         return true;
       }
+      // Any other key: complete the prefix sequence
+      if (!event.isComposing) {
+        const nextKey = keyStringFromEvent(event);
+        if (nextKey) {
+          const fullKey = pendingPrefix.key + " " + nextKey;
+          pendingPrefix = null;
+          forwardEmacsKeyAndReleaseInput(event, fullKey, options);
+          return true;
+        }
+      }
+      // Unmappable key (modifier-only, etc.): cancel prefix silently
+      pendingPrefix = null;
+      return false;
     }
-    // Unmappable key (modifier-only, etc.): cancel prefix silently
-    pendingPrefix = null;
-    return false;
   }
 
   if (!shouldForwardToEmacs(event)) return false;
@@ -705,7 +746,7 @@ export function handleXwidgetEmacsKeydown(event: KeyboardEvent, options?: EmacsK
   // C-x and C-c are prefix keys — accumulate the next keystroke
   if (key === "C-x" || key === "C-c") {
     hardStop(event);
-    pendingPrefix = key;
+    pendingPrefix = { key, client: options?.client?.() || "" };
     return true;
   }
 

@@ -21,6 +21,39 @@ describe("Noema kernel serve profile", () => {
     expect(serve).toContain("model.WatchAssets()\n");
   });
 
+  test("uses a single private listener for the Node-owned sidecar", () => {
+    const command = source("kernel/cli/cmd/serve.go");
+    const server = source("kernel/server/serve.go");
+    const supervisor = source("server/lib/kernel-supervisor.mjs");
+
+    expect(command).toContain('BoolVar(&serveNoemaSidecar, "noema-sidecar"');
+    expect(supervisor).toContain('"--noema-sidecar"');
+    expect(server).toContain("if !serveOptions.NoemaSidecar {");
+    expect(server).toContain("go util.HookUILoaded()");
+    expect(server).toContain("proxy.InitFixedPortService(host, certPath, keyPath)");
+    expect(server).toContain("certPath, keyPath, certErr = util.GetOrCreateTLSCert()");
+  });
+
+  test("discovers external OCR tools on demand in the sidecar", () => {
+    const command = source("kernel/cli/cmd/serve.go");
+    const config = source("kernel/model/conf.go");
+    const ocr = source("kernel/util/ocr.go");
+
+    expect(command).toContain("model.InitConf(!serveNoemaSidecar)");
+    expect(config).toContain("if initializeTools {");
+    expect(ocr).toContain("func EnsureTesseractInit()");
+    expect(ocr).toContain("EnsureTesseractInit()\n\tif !TesseractEnabled");
+  });
+
+  test("semantic indexing sleeps on events or an exact failure deadline", () => {
+    const embedding = source("kernel/model/embedding.go");
+    expect(embedding).toContain("case <-embeddingDirtyCh:");
+    expect(embedding).toContain("case <-retryC:");
+    expect(embedding).toContain("retryTimer = time.NewTimer(delay)");
+    expect(embedding).not.toContain("case <-time.After(30 * time.Second):");
+    expect(embedding).not.toContain("time.Sleep(step)");
+  });
+
   test("compatibility history code owns no package-init ticker", () => {
     const history = source("kernel/model/history.go");
     expect(history).not.toMatch(/historyTicker\s*=\s*time\.NewTicker/);

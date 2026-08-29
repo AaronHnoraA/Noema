@@ -40,6 +40,9 @@ type MarkdownPathMoveResult struct {
 }
 
 func normalizedMarkdownPath(boxID, p string) (string, error) {
+	if err := ensureExternalMarkdownBoxRootAvailable(boxID); nil != err {
+		return "", err
+	}
 	normalized, err := filesys.ValidateBoxRelativePath(boxID, p)
 	if nil != err {
 		return "", err

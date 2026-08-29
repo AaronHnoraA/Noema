@@ -93,6 +93,21 @@ describe("shared parked-key routing", () => {
     expect(isReplayableEditorKeydown({ ...base, key: "Return", code: "NumpadEnter" })).toBe(true);
   });
 
+  test("replays the full shared Ctrl and primary-modifier authoring matrix", () => {
+    const base = { ctrlKey: false, metaKey: false, altKey: false, isComposing: false };
+    for (const [key, code] of [["a", "KeyA"], ["z", "KeyZ"], ["0", "Digit0"]]) {
+      expect(isReplayableEditorKeydown({ ...base, key, code, ctrlKey: true })).toBe(true);
+    }
+    for (const [key, code] of [
+      ["/", "Slash"],
+      ["=", "Equal"],
+      ["-", "Minus"],
+      ["0", "Digit0"],
+    ]) {
+      expect(isReplayableEditorKeydown({ ...base, key, code, metaKey: true })).toBe(true);
+    }
+  });
+
   test("replays at CM6 contentDOM and keeps the original body event from running twice", () => {
     vi.useFakeTimers();
     let contentDOM!: HTMLElement;
@@ -302,6 +317,24 @@ describe("shared focus quiescence controller", () => {
       harness.controller.setPaused(false);
       vi.advanceTimersByTime(1_000);
       expect(focusSpy).not.toHaveBeenCalled();
+    } finally {
+      harness.controller.destroy();
+    }
+  });
+
+  test("rejects asynchronous editor focus that arrives after the host paused", () => {
+    vi.useFakeTimers();
+    const harness = createHarness();
+    const blur = vi.spyOn(harness.contentDOM, "blur");
+    try {
+      harness.controller.setPaused(true);
+      focus(harness.contentDOM);
+      expect(blur).toHaveBeenCalledTimes(1);
+      expect(document.activeElement).not.toBe(harness.contentDOM);
+
+      harness.controller.setPaused(false);
+      focus(harness.contentDOM);
+      expect(document.activeElement).toBe(harness.contentDOM);
     } finally {
       harness.controller.destroy();
     }

@@ -36,6 +36,23 @@ export function kernelMarkdownPath(root, file) {
   return path;
 }
 
+// Box-relative paths minted by the kernel are validated lexically rather than
+// by canonicalising every entry. kernelBoxPath() resolves symlinks with a
+// realpath(3) walk per call, which is the right check for a host-supplied path
+// but ruinous for a catalog: it ran twice per note on every catalog fetch and
+// was the single largest consumer of Node host CPU while typing. A path with no
+// empty, "." or ".." segment and no backslash cannot leave the box once it is
+// resolved under the box root, which is the guarantee the catalog needs.
+export function kernelRelativeBoxPath(rawPath) {
+  const raw = String(rawPath || "");
+  if (!raw || raw.includes("\\")) return "";
+  const relativePath = raw.replace(/^\/+/, "");
+  if (!relativePath) return "";
+  const parts = relativePath.split("/");
+  if (parts.some((part) => !part || part === "." || part === "..")) return "";
+  return relativePath;
+}
+
 export function createKernelMarkdownProvider({ baseUrl, box, fetchImpl = globalThis.fetch, timeoutMs = 30_000 } = {}) {
   const base = String(baseUrl || "").replace(/\/+$/, "");
   const notebook = String(box?.id || "");
@@ -65,12 +82,11 @@ export function createKernelMarkdownProvider({ baseUrl, box, fetchImpl = globalT
   }
 
   function mapNote(raw, label = "Kernel note catalog") {
-    const relativePath = String(raw?.path || raw?.link || "").replace(/^\/+/, "");
-    const kernelPath = relativePath ? `/${relativePath}` : "";
-    const file = relativePath
-      ? resolve(root, ...relativePath.split("/").filter(Boolean))
+    const relativePath = kernelRelativeBoxPath(raw?.path || raw?.link);
+    const file = relativePath && markdownExtensions.has(extname(relativePath).toLowerCase())
+      ? resolve(root, ...relativePath.split("/"))
       : "";
-    if (!file || pathFor(file) !== kernelPath) {
+    if (!file) {
       throw Object.assign(new Error(`${label} path escapes the registered Markdown box`), { statusCode: 502 });
     }
     return {
@@ -83,19 +99,11 @@ export function createKernelMarkdownProvider({ baseUrl, box, fetchImpl = globalT
   }
 
   function mapVirtualMentionPath(rawPath) {
-    const raw = String(rawPath || "");
-    if (!raw || raw.includes("\\")) {
+    if (!String(rawPath || "")) {
       throw Object.assign(new Error("Kernel virtual-reference mention path is invalid"), { statusCode: 502 });
     }
-    const relativePath = raw.replace(/^\/+/, "");
-    const parts = relativePath.split("/");
-    if (!relativePath || parts.some((part) => !part || part === "." || part === "..")
-      || !markdownExtensions.has(extname(relativePath).toLowerCase())) {
-      throw Object.assign(new Error("Kernel virtual-reference mention path escapes the registered Markdown box"), { statusCode: 502 });
-    }
-    const candidate = resolve(root, ...parts);
-    const rel = relative(resolve(root), candidate);
-    if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    const relativePath = kernelRelativeBoxPath(rawPath);
+    if (!relativePath || !markdownExtensions.has(extname(relativePath).toLowerCase())) {
       throw Object.assign(new Error("Kernel virtual-reference mention path escapes the registered Markdown box"), { statusCode: 502 });
     }
     return relativePath;

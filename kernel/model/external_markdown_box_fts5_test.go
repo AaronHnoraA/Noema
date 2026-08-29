@@ -185,7 +185,7 @@ func TestExternalMarkdownBoxSaveWritesRepositoryAndIndexesShadowBox(t *testing.T
 	}
 }
 
-func TestPruneMissingExternalMarkdownBoxesKeepsLiveAndReboundRegistrations(t *testing.T) {
+func TestDeactivateMissingExternalMarkdownBoxesPreservesRegistryMetadata(t *testing.T) {
 	workspaceDir := t.TempDir()
 	originalConf := Conf
 	originalWorkspaceDir := util.WorkspaceDir
@@ -248,6 +248,12 @@ func TestPruneMissingExternalMarkdownBoxesKeepsLiveAndReboundRegistrations(t *te
 	if nil != err {
 		t.Fatal(err)
 	}
+	staleBox := &Box{ID: stale.ID}
+	staleConf := staleBox.GetConf()
+	staleConf.Closed = false
+	if err = staleBox.SaveConf(staleConf); nil != err {
+		t.Fatal(err)
+	}
 	if err = os.RemoveAll(staleRoot); nil != err {
 		t.Fatal(err)
 	}
@@ -257,15 +263,18 @@ func TestPruneMissingExternalMarkdownBoxesKeepsLiveAndReboundRegistrations(t *te
 	sql.InitAssetContentDatabase(true)
 	t.Cleanup(sql.CloseDatabase)
 
-	pruned, err := PruneMissingExternalMarkdownBoxes(live.ID)
+	deactivated, err := DeactivateMissingExternalMarkdownBoxes()
 	if nil != err {
 		t.Fatal(err)
 	}
-	if 1 != len(pruned) || stale.ID != pruned[0].ID {
-		t.Fatalf("unexpected stale registrations pruned: %#v", pruned)
+	if 1 != len(deactivated) || stale.ID != deactivated[0].ID {
+		t.Fatalf("unexpected stale registrations deactivated: %#v", deactivated)
 	}
-	if _, statErr := os.Stat(filepath.Join(util.DataDir, stale.ID)); !os.IsNotExist(statErr) {
-		t.Fatalf("stale shadow still exists: %v", statErr)
+	if !staleBox.GetConf().Closed {
+		t.Fatal("missing external registration remained open")
+	}
+	if _, statErr := os.Stat(filepath.Join(util.DataDir, stale.ID, ".siyuan", "conf.json")); nil != statErr {
+		t.Fatalf("deactivation deleted the stale shadow identity: %v", statErr)
 	}
 	if _, statErr := os.Stat(filepath.Join(util.DataDir, live.ID, ".siyuan", "conf.json")); nil != statErr {
 		t.Fatalf("live/kept registration was removed: %v", statErr)
@@ -274,14 +283,21 @@ func TestPruneMissingExternalMarkdownBoxesKeepsLiveAndReboundRegistrations(t *te
 	if nil != err {
 		t.Fatal(err)
 	}
-	if 1 != len(boxes) || live.ID != boxes[0].ID {
-		t.Fatalf("unexpected registry after pruning: %#v", boxes)
+	if 2 != len(boxes) {
+		t.Fatalf("deactivation removed a registry entry: %#v", boxes)
+	}
+	seen := map[string]bool{}
+	for _, box := range boxes {
+		seen[box.ID] = true
+	}
+	if !seen[live.ID] || !seen[stale.ID] {
+		t.Fatalf("registry identities changed after deactivation: %#v", boxes)
 	}
 	entries, err := os.ReadDir(util.HistoryDir)
 	if nil != err {
 		t.Fatal(err)
 	}
 	if 0 != len(entries) {
-		t.Fatalf("pruning stale shadows must not create deletion history: %#v", entries)
+		t.Fatalf("deactivating stale shadows must not create deletion history: %#v", entries)
 	}
 }

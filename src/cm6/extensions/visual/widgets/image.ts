@@ -44,6 +44,7 @@ import {
 } from "../../../../visual-attachments.ts";
 import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
 import { isCoalescedVisualTyping } from "../typing-burst.ts";
+import { rememberPersistentVisualPluginState, restorePersistentVisualPluginState } from "../visual-mode.ts";
 
 declare global {
   interface Window {
@@ -509,13 +510,22 @@ function activeImageSourceKey(view: EditorView): string {
 // ViewPlugin export
 // ---------------------------------------------------------------------------
 
+type ImagePluginSnapshot = { decorations: DecorationSet; activeSourceKey: string };
+const imagePluginCacheKey = {};
+
 class ImagePlugin {
   decorations: DecorationSet;
+  private readonly view: EditorView;
   private activeSourceKey: string;
 
   constructor(view: EditorView) {
-    this.activeSourceKey = activeImageSourceKey(view);
-    this.decorations = buildImageDecorations(view);
+    this.view = view;
+    const cached = restorePersistentVisualPluginState<ImagePluginSnapshot>(
+      view.state,
+      imagePluginCacheKey,
+    );
+    this.activeSourceKey = cached?.activeSourceKey ?? activeImageSourceKey(view);
+    this.decorations = cached?.decorations ?? buildImageDecorations(view);
   }
 
   update(update: ViewUpdate): void {
@@ -533,6 +543,13 @@ class ImagePlugin {
       this.activeSourceKey = nextSourceKey;
       this.decorations = buildImageDecorations(update.view);
     }
+  }
+
+  destroy(): void {
+    rememberPersistentVisualPluginState(this.view, imagePluginCacheKey, {
+      decorations: this.decorations,
+      activeSourceKey: this.activeSourceKey,
+    } satisfies ImagePluginSnapshot);
   }
 }
 

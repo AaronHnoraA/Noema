@@ -43,6 +43,12 @@ import { scanTexSource, texTokenClass } from "../../../tex-highlight.ts";
 import { orgEnvContextForRange, type OrgEnvContext } from "./block-extras.ts";
 import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
 import { isCoalescedVisualTyping } from "../typing-burst.ts";
+import {
+  persistentVisualStateField,
+  rememberPersistentVisualPluginState,
+  restorePersistentVisualPluginState,
+} from "../visual-mode.ts";
+import { deferFormulaScrollWork } from "../../../formula-scroll.ts";
 import { getKatexMacros } from "../../../../katex-macros.ts";
 import {
   mountVisualTexDisplayEditor,
@@ -371,9 +377,22 @@ class BlockMathWidget extends MeasuredWidget {
       div.dataset.orgEnvDepth = String(this.orgEnv.depth);
       div.style.setProperty("--org-env-depth", String(this.orgEnv.depth));
     }
-    const { html, error } = renderMathHTML(this.tex, { displayMode: true });
-    if (error) { div.classList.add("cm-math-error"); div.textContent = error; }
-    else div.innerHTML = html;
+    const mount = (): void => {
+      div.classList.remove("cm-math-scroll-deferred");
+      div.style.removeProperty("--cm-math-scroll-height");
+      div.removeAttribute("aria-busy");
+      const { html, error } = renderMathHTML(this.tex, { displayMode: true });
+      if (error) { div.classList.add("cm-math-error"); div.textContent = error; }
+      else div.innerHTML = html;
+    };
+    if (deferFormulaScrollWork(view, div, mount)) {
+      const estimate = this.estimatedHeight;
+      div.classList.add("cm-math-scroll-deferred");
+      div.style.setProperty("--cm-math-scroll-height", `${Math.max(36, Math.ceil(estimate))}px`);
+      div.setAttribute("aria-busy", "true");
+    } else {
+      mount();
+    }
     return this.registerMeasured(div, view);
   }
 
@@ -905,17 +924,19 @@ function finishBlockMathFieldUpdate(
   return { decorations, atomicRanges, active, suppressedKey, renderWindow };
 }
 
+function createMathBlockField(state: EditorState): BlockMathFieldValue {
+  const renderWindow = initialBlockMathRenderWindow(state);
+  return {
+    decorations: buildBlockMathDecos(state, null, "", renderWindow),
+    atomicRanges: buildBlockMathAtomicRanges(state, null, "", renderWindow),
+    active: null,
+    suppressedKey: "",
+    renderWindow,
+  };
+}
+
 const mathBlockField = StateField.define<BlockMathFieldValue>({
-  create(state) {
-    const renderWindow = initialBlockMathRenderWindow(state);
-    return {
-      decorations: buildBlockMathDecos(state, null, "", renderWindow),
-      atomicRanges: buildBlockMathAtomicRanges(state, null, "", renderWindow),
-      active: null,
-      suppressedKey: "",
-      renderWindow,
-    };
-  },
+  create: createMathBlockField,
   update(value, tr) {
     const previousActive = value.active;
     const previousActiveKey = previousActive ? blockMathKey(previousActive) : "";
@@ -1688,9 +1709,19 @@ function buildInlineMathDecos(
   };
 }
 
+type MathInlinePluginSnapshot = {
+  decorations: DecorationSet;
+  atomicRanges: DecorationSet;
+  selectionKey: string;
+  suppressedKey: string;
+};
+
+const mathInlinePluginCacheKey = {};
+
 class MathInlinePlugin {
   decorations: DecorationSet;
   atomicRanges: DecorationSet;
+  private readonly view: EditorView;
   private selectionKey: string;
   private active: InlineMathEditSession | null = null;
   private suppressedKey = "";
@@ -1698,6 +1729,18 @@ class MathInlinePlugin {
   private forceRebuild = false;
 
   constructor(view: EditorView) {
+    this.view = view;
+    const cached = restorePersistentVisualPluginState<MathInlinePluginSnapshot>(
+      view.state,
+      mathInlinePluginCacheKey,
+    );
+    if (cached) {
+      this.decorations = cached.decorations;
+      this.atomicRanges = cached.atomicRanges;
+      this.selectionKey = cached.selectionKey;
+      this.suppressedKey = cached.suppressedKey;
+      return;
+    }
     const selected = inlineMathAtSelection(view.state);
     this.selectionKey = selected ? `${selected.from}:${selected.to}` : "";
     if (selected && !view.state.readOnly) this.suppressedKey = this.selectionKey;
@@ -1937,6 +1980,14 @@ class MathInlinePlugin {
   }
 
   destroy(): void {
+    if (!this.active) {
+      rememberPersistentVisualPluginState(this.view, mathInlinePluginCacheKey, {
+        decorations: this.decorations,
+        atomicRanges: this.atomicRanges,
+        selectionKey: this.selectionKey,
+        suppressedKey: this.suppressedKey,
+      } satisfies MathInlinePluginSnapshot);
+    }
     this.active?.editor?.destroy();
     this.active = null;
   }
@@ -2142,7 +2193,7 @@ export function revealFormulaSource(
 // ---------------------------------------------------------------------------
 
 export const mathExtension = [
-  mathBlockField,
+  persistentVisualStateField(mathBlockField, createMathBlockField),
   mathBlockAtomicExtension,
   mathBlockViewportExtension,
   mathBlockSessionExtension,

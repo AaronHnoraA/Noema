@@ -15,7 +15,7 @@ afterEach(() => {
 });
 
 describe("shared visual typing burst", () => {
-  test("recognizes native typing and deletion but not programmatic document replacement", () => {
+  test("coalesces inline typing but never maps structural newline edits", () => {
     const host = document.createElement("div");
     document.body.append(host);
     const decisions: boolean[] = [];
@@ -32,8 +32,9 @@ describe("shared visual typing burst", () => {
       view.dispatch(view.state.update({ changes: { from: 3, insert: "d" }, userEvent: "input.type" }));
       view.dispatch(view.state.update({ changes: { from: 3, to: 4 }, userEvent: "delete.backward" }));
       view.dispatch(view.state.update({ changes: { from: 3, insert: "\n" }, userEvent: "input" }));
+      view.dispatch(view.state.update({ changes: { from: 3, to: 4 }, userEvent: "delete.backward" }));
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "reset" } });
-      expect(decisions).toEqual([true, true, true, false]);
+      expect(decisions).toEqual([true, true, false, false, false]);
     } finally {
       view.destroy();
     }

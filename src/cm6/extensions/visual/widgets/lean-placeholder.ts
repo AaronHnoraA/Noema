@@ -11,6 +11,7 @@ import { parseLeanPlaceholderLine } from "../../../../../shared/lean-placeholder
 import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
 import { isPointerSelecting, updateHasPointerSelectionEffect } from "../selection.ts";
 import { isCoalescedVisualTyping } from "../typing-burst.ts";
+import { rememberPersistentVisualPluginState, restorePersistentVisualPluginState } from "../visual-mode.ts";
 
 export type LeanLspAction = "definition" | "declaration" | "typeDefinition" | "implementation" | "references" | "hover";
 export type LeanEditAction =
@@ -146,11 +147,18 @@ function buildLeanPlaceholderDecos(view: EditorView): DecorationSet {
   return Decoration.set(decos, true);
 }
 
+const leanPlaceholderPluginCacheKey = {};
+
 class LeanPlaceholderPlugin {
   decorations: DecorationSet;
+  private readonly view: EditorView;
 
   constructor(view: EditorView) {
-    this.decorations = buildLeanPlaceholderDecos(view);
+    this.view = view;
+    this.decorations = restorePersistentVisualPluginState<DecorationSet>(
+      view.state,
+      leanPlaceholderPluginCacheKey,
+    ) ?? buildLeanPlaceholderDecos(view);
   }
 
   update(update: ViewUpdate): void {
@@ -166,6 +174,10 @@ class LeanPlaceholderPlugin {
         || pointerSelectionFinished || hasViewportDecorationRefresh(update)) {
       this.decorations = buildLeanPlaceholderDecos(update.view);
     }
+  }
+
+  destroy(): void {
+    rememberPersistentVisualPluginState(this.view, leanPlaceholderPluginCacheKey, this.decorations);
   }
 }
 

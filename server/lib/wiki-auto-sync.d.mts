@@ -29,6 +29,7 @@ export function createWikiAutoSync(options: {
   onBatchError?(failures: WikiAutoSyncFailure[]): void;
   debounceMs?: number;
   startupMs?: number;
+  syncOnStart?: boolean;
   periodicMs?: number;
   periodicJitterMs?: number;
   busyRetryMs?: number;

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
+import { describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
 
 import { createEditor, normalizePastedSourceText, type Editor } from "../src/editor-api.ts";
 
@@ -37,6 +37,34 @@ $$`;
     expect(normalizePastedSourceText(pasted)).toBe(String.raw`$$
 \beta + \frac{1}{2}
 $$`);
+  });
+});
+
+describe("editor cursor context", () => {
+  test("defers and caches cursor geometry until a floating surface requests it", () => {
+    const mount = document.createElement("div");
+    document.body.appendChild(mount);
+    const editor = createEditor(mount, { initialContent: "ordinary prose" });
+    try {
+      const coordsAtPos = vi.spyOn(editor.view, "coordsAtPos").mockReturnValue({
+        left: 10,
+        right: 11,
+        top: 20,
+        bottom: 30,
+      });
+      const context = editor.cursorContext(32);
+      expect(context.before).toBe("");
+      expect(context.after).toBe("ordinary prose");
+      expect(coordsAtPos).not.toHaveBeenCalled();
+
+      expect(context.rect).toEqual({ left: 10, top: 20, bottom: 30 });
+      expect(context.rect).toEqual({ left: 10, top: 20, bottom: 30 });
+      expect(coordsAtPos).toHaveBeenCalledTimes(1);
+    } finally {
+      editor.destroy();
+      mount.remove();
+      vi.restoreAllMocks();
+    }
   });
 });
 

@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aaronhe/noema/kernel/conf"
 	"github.com/aaronhe/noema/kernel/util"
 )
 
@@ -120,5 +121,52 @@ func TestMarkdownSelfWriteSuppressionMatchesExactCurrentBytes(t *testing.T) {
 	}
 	if markdownSelfWriteEvent(path) {
 		t.Fatal("an external delete must not be suppressed")
+	}
+}
+
+func TestWatchMarkdownBoxClosesRegistrationWhenExternalRootDisappears(t *testing.T) {
+	originalDataDir := util.DataDir
+	originalConf := Conf
+	util.DataDir = filepath.Join(t.TempDir(), "data")
+	Conf = NewAppConf()
+	Conf.Editor = conf.NewEditor()
+	t.Cleanup(func() {
+		util.DataDir = originalDataDir
+		Conf = originalConf
+	})
+
+	repositoryRoot := filepath.Join(t.TempDir(), "watched-repository")
+	writeExternalRepositoryFixture(t, repositoryRoot, "# Watched\n")
+	registration, err := RegisterExternalMarkdownBox("Watched", repositoryRoot, "")
+	if nil != err {
+		t.Fatal(err)
+	}
+	box := &Box{ID: registration.ID}
+	boxConf := box.GetConf()
+	boxConf.Closed = false
+	if err = box.SaveConf(boxConf); nil != err {
+		t.Fatal(err)
+	}
+	WatchMarkdownBox(registration.ID)
+	t.Cleanup(func() { CloseWatchMarkdownBox(registration.ID) })
+
+	if err = os.RemoveAll(repositoryRoot); nil != err {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && !box.GetConf().Closed {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !box.GetConf().Closed {
+		t.Fatal("root removal event did not close the external Markdown box")
+	}
+	markdownWatchersLock.Lock()
+	_, watched := markdownWatchers[registration.ID]
+	markdownWatchersLock.Unlock()
+	if watched {
+		t.Fatal("root removal left an idle watcher registered")
+	}
+	if _, statErr := os.Stat(filepath.Join(util.DataDir, registration.ID, ".siyuan", "conf.json")); nil != statErr {
+		t.Fatalf("root removal deleted the portable shadow identity: %v", statErr)
 	}
 }

@@ -78,6 +78,11 @@ import {
   isCoalescedVisualTyping,
   isCoalescedVisualTypingTransaction,
 } from "./extensions/visual/typing-burst.ts";
+import {
+  persistentVisualStateField,
+  rememberPersistentVisualPluginState,
+  restorePersistentVisualPluginState,
+} from "./extensions/visual/visual-mode.ts";
 
 // ---------------------------------------------------------------------------
 // Asset URL helpers for raw HTML embedded in the live preview.
@@ -672,15 +677,42 @@ function pushMark(
 // ViewPlugin export
 // ---------------------------------------------------------------------------
 
+type LivePreviewPluginSnapshot = {
+  decorations: DecorationSet;
+  tokens: LivePreviewToken[];
+  cjkLineCache: CjkLineCache;
+  lastVpFrom: number;
+  lastVpTo: number;
+  selectionKey: string;
+};
+
+const livePreviewPluginCacheKey = {};
+
 class LivePreviewPlugin {
   decorations: DecorationSet;
   tokens: LivePreviewToken[];
-  private readonly cjkLineCache: CjkLineCache = new Map();
+  private readonly view: EditorView;
+  private readonly cjkLineCache: CjkLineCache;
   private lastVpFrom: number;
   private lastVpTo: number;
   private selectionKey: string;
 
   constructor(view: EditorView) {
+    this.view = view;
+    const cached = restorePersistentVisualPluginState<LivePreviewPluginSnapshot>(
+      view.state,
+      livePreviewPluginCacheKey,
+    );
+    if (cached) {
+      this.decorations = cached.decorations;
+      this.tokens = cached.tokens;
+      this.cjkLineCache = cached.cjkLineCache;
+      this.lastVpFrom = cached.lastVpFrom;
+      this.lastVpTo = cached.lastVpTo;
+      this.selectionKey = cached.selectionKey;
+      return;
+    }
+    this.cjkLineCache = new Map();
     const vr = view.visibleRanges;
     this.tokens = collectLivePreviewTokens(view, vr, this.cjkLineCache);
     this.lastVpFrom = vr[0]?.from ?? 0;
@@ -761,6 +793,17 @@ class LivePreviewPlugin {
       this.selectionKey = nextSelectionKey;
       this.decorations = buildDecorations(update.view, this.tokens);
     }
+  }
+
+  destroy(): void {
+    rememberPersistentVisualPluginState(this.view, livePreviewPluginCacheKey, {
+      decorations: this.decorations,
+      tokens: this.tokens,
+      cjkLineCache: this.cjkLineCache,
+      lastVpFrom: this.lastVpFrom,
+      lastVpTo: this.lastVpTo,
+      selectionKey: this.selectionKey,
+    } satisfies LivePreviewPluginSnapshot);
   }
 }
 
@@ -1773,13 +1816,19 @@ function buildLineDecoRanges(
     const line = doc.line(lineNumber);
     if (line.text.trim().length > 0) continue;
 
+    // Only the real line that owns the caret expands. The remaining source
+    // newlines stay projected as one paragraph rhythm plus collapsed lines,
+    // so moving into a long authored blank run never opens a page-sized hole.
+    // Consecutive Enter scroll stability is owned by runEditorEnter's shared
+    // viewport transaction rather than by expanding the entire run here.
     const isActiveBlank = activeBlankRun?.activeLine === lineNumber;
     const firstInRun = lineNumber === 1 || doc.line(lineNumber - 1).text.trim().length > 0;
     const absorbed = firstInRun && blankRunTouchesSemanticBlock(doc, lineNumber, blockMathRanges);
     const classNames = ["cm-prose-blank-line"];
     if (isActiveBlank) classNames.push("cm-prose-blank-active");
     else if (absorbed) classNames.push("cm-prose-blank-absorbed");
-    else classNames.push("cm-prose-paragraph-gap");
+    else if (firstInRun) classNames.push("cm-prose-paragraph-gap");
+    else classNames.push("cm-prose-blank-collapsed");
     decos.push(Decoration.line({ attributes: { class: classNames.join(" ") } }).range(line.from));
   }
 
@@ -2186,4 +2235,10 @@ const htmlBlockDecoField = StateField.define<DecorationSet>({
 // Public export — inline mark plugin + line decoration field
 // ---------------------------------------------------------------------------
 
-export const livePreviewExtension = [livePreviewPlugin, markdownTablesField, lineDecoField, tableDecoField, htmlBlockDecoField];
+export const livePreviewExtension = [
+  livePreviewPlugin,
+  persistentVisualStateField(markdownTablesField, collectMarkdownTables),
+  persistentVisualStateField(lineDecoField, buildLineDecos),
+  persistentVisualStateField(tableDecoField, buildTableDecos),
+  persistentVisualStateField(htmlBlockDecoField, buildHtmlBlockDecos),
+];

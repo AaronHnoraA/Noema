@@ -51,7 +51,6 @@ export function createVisualMarkdownExtensions(): Extension {
     leanPlaceholderPreviewExtension,
     noteCodePreviewExtension,
     inlineCommandsExtension,
-    leanExtension,
   ];
 }
 
@@ -59,6 +58,7 @@ export function createVisualMarkdownEditingExtensions(): Extension {
   return [
     leanPlaceholderEditingExtension,
     noteCodeEditingExtension,
+    leanExtension,
   ];
 }
 

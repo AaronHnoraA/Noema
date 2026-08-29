@@ -25,7 +25,6 @@ import (
 	"github.com/aaronhe/noema/kernel/model"
 	"github.com/aaronhe/noema/kernel/util"
 	"github.com/gin-gonic/gin"
-	"github.com/siyuan-note/logging"
 )
 
 var registerExternalMarkdownBoxLock sync.Mutex
@@ -555,14 +554,6 @@ func registerExternalMarkdownBox(c *gin.Context) {
 		ret.Msg = err.Error()
 		return
 	}
-	// A kernel workspace is reused across App/Emacs launches. Reconcile
-	// registrations only after the active portable repository has had a chance
-	// to rebind its existing identity at a new path, then remove shadows whose
-	// roots are provably gone. Transient permission/I/O failures are retained.
-	pruned, pruneErr := model.PruneMissingExternalMarkdownBoxes(registration.ID)
-	if nil != pruneErr {
-		logging.LogWarnf("prune stale external Markdown boxes failed: %s", pruneErr)
-	}
 	alreadyMounted, err := model.MountExternalMarkdownBoxAndWait(registration.ID)
 	if nil != err {
 		ret.Code = -1
@@ -572,7 +563,6 @@ func registerExternalMarkdownBox(c *gin.Context) {
 	ret.Data = map[string]any{
 		"box":            registration,
 		"alreadyMounted": alreadyMounted,
-		"pruned":         pruned,
 	}
 }
 

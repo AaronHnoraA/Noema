@@ -61,9 +61,11 @@ const EDITOR_PRIMARY_MODIFIER_CODES = new Set([
   "KeyA", "KeyB", "KeyC", "KeyD", "KeyF", "KeyI", "KeyK",
   "KeyP", "KeyQ", "KeyS", "KeyV", "KeyW", "KeyX", "KeyY", "KeyZ",
   "Slash", "BracketLeft", "BracketRight",
+  // Shared layout-zoom shortcuts must also survive a parked xwidget focus.
+  "Equal", "Minus", "Digit0", "NumpadAdd", "NumpadSubtract", "Numpad0",
 ]);
 
-function normalizedEditorKey(event: Pick<KeyboardEvent, "key" | "code">): string {
+export function normalizedEditorKey(event: Pick<KeyboardEvent, "key" | "code">): string {
   if (event.key === "Spacebar" || event.key === "Space" || event.key === "SPC"
       || event.code === "Space") return " ";
   if (event.code === "NumpadEnter" || /^(?:Return|RET|CR|NumpadEnter)$/iu.test(event.key)) {
@@ -119,7 +121,9 @@ export function isReplayableEditorKeydown(
   const hasModifier = event.ctrlKey || event.metaKey || event.altKey;
   if (!hasModifier) return isPrintableEditorText(key);
   if (event.ctrlKey && !event.metaKey && !event.altKey) {
-    // Emacs/xwidget owns bare Ctrl+letter/digit chords in the Emacs host.
+    // Ctrl editor commands use this same CM6/Vim pipeline in every host.
+    // The Emacs adapter removes only its explicit host prefixes before this
+    // replay boundary.
     return /^(?:Key[A-Z]|Digit\d)$/u.test(event.code) || isPrintableEditorText(key);
   }
   if (event.altKey && !event.metaKey && !event.ctrlKey) {
@@ -304,6 +308,16 @@ export function createFocusQuiescenceController(
 
   const onFocusIn = (event: FocusEvent): void => {
     if (event.target !== contentDOM) return;
+    // A host may hide the xwidget before asynchronous note startup reaches its
+    // final editor.focus(). The paused transition then correctly parks an
+    // unfocused editor, but that late focus used to leak back into the hidden
+    // WKWebView and keep its caret compositor awake indefinitely. Hidden is a
+    // state invariant, not a one-shot blur: reject every late focus until the
+    // host explicitly resumes the surface.
+    if (paused) {
+      parkNow();
+      return;
+    }
     parked = false;
   };
 

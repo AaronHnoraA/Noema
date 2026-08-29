@@ -34,6 +34,11 @@ import { getBlockMathRanges, rangeInsideAny, rangeOverlapsAny } from "../../../m
 import { applyLayoutAttrs, layoutFromAttrs, readLayoutAttrsLine, type LayoutAttrs } from "../../../../layout-attrs.ts";
 import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
 import { isCoalescedVisualTyping } from "../typing-burst.ts";
+import {
+  persistentVisualStateField,
+  rememberPersistentVisualPluginState,
+  restorePersistentVisualPluginState,
+} from "../visual-mode.ts";
 
 function setSourceRange(el: HTMLElement, from: number, to: number, anchor?: number, openSource = false): void {
   el.dataset.cmSourceFrom = String(from);
@@ -216,8 +221,10 @@ function codeFoldDecorations(state: EditorState, folds: readonly CodeFold[]): De
   return Decoration.set(decorations, true);
 }
 
+const createCodeFoldState = (): CodeFoldState => ({ folds: [], decorations: Decoration.none });
+
 const codeFoldField = StateField.define<CodeFoldState>({
-  create: () => ({ folds: [], decorations: Decoration.none }),
+  create: createCodeFoldState,
   update(value, transaction) {
     let folds: CodeFold[] = [];
     if (transaction.docChanged) {
@@ -829,6 +836,13 @@ function pushMark(
   decos.push(Decoration.mark({ class: cls }).range(from, to));
 }
 
+type FencedCodePluginSnapshot = {
+  decorations: DecorationSet;
+  activeLineKey: string;
+};
+
+const fencedCodePluginCacheKey = {};
+
 class FencedCodePlugin {
   decorations: DecorationSet;
   private readonly view: EditorView;
@@ -837,8 +851,12 @@ class FencedCodePlugin {
 
   constructor(view: EditorView) {
     this.view = view;
-    this.activeLineKey = activeFenceChromeLineKey(view);
-    this.decorations = buildFencedCodeDecos(view);
+    const cached = restorePersistentVisualPluginState<FencedCodePluginSnapshot>(
+      view.state,
+      fencedCodePluginCacheKey,
+    );
+    this.activeLineKey = cached?.activeLineKey ?? activeFenceChromeLineKey(view);
+    this.decorations = cached?.decorations ?? buildFencedCodeDecos(view);
     this.unsubscribeHighlightReady = onCodeHighlightReady(() => {
       if (!this.view.dom.isConnected) return;
       this.decorations = buildFencedCodeDecos(this.view);
@@ -866,6 +884,10 @@ class FencedCodePlugin {
   }
 
   destroy(): void {
+    rememberPersistentVisualPluginState(this.view, fencedCodePluginCacheKey, {
+      decorations: this.decorations,
+      activeLineKey: this.activeLineKey,
+    } satisfies FencedCodePluginSnapshot);
     this.unsubscribeHighlightReady();
   }
 }
@@ -879,8 +901,8 @@ const fencedCodeViewPlugin = ViewPlugin.fromClass(FencedCodePlugin, {
 // ---------------------------------------------------------------------------
 
 export const fencedCodeExtension = [
-  mermaidBlocksField,
-  mermaidField,
-  codeFoldField,
+  persistentVisualStateField(mermaidBlocksField, collectMermaidBlocks),
+  persistentVisualStateField(mermaidField, buildMermaidDecos),
+  persistentVisualStateField(codeFoldField, createCodeFoldState),
   fencedCodeViewPlugin,
 ];

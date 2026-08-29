@@ -121,10 +121,13 @@ func ResetVirtualBlockRefCache() {
 	virtualRefMatchPlans = map[string]*virtualRefMatchPlan{}
 	virtualRefMatchPlanLock.Unlock()
 	virtualBlockRefCache.Clear()
-	if nil == Conf {
+	if nil == Conf || nil == Conf.Editor {
 		return
 	}
 	if !Conf.Editor.VirtualBlockRef {
+		return
+	}
+	if nil == Conf.Search {
 		return
 	}
 

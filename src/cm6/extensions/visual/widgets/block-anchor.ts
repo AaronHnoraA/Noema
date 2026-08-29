@@ -17,6 +17,7 @@ import { blockMathRangesOverlapping, mergeOverlappingRanges, rangeInsideAny } fr
 import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
 import { isPointerSelecting, updateHasPointerSelectionEffect } from "../selection.ts";
 import { isCoalescedVisualTyping } from "../typing-burst.ts";
+import { rememberPersistentVisualPluginState, restorePersistentVisualPluginState } from "../visual-mode.ts";
 
 const BLOCK_ANCHOR_RE = new RegExp(BLOCK_ANCHOR_SOURCE, "g");
 const MAX_VIEWPORT_BADGES = 2_000;
@@ -110,11 +111,18 @@ function buildBlockAnchorDecorations(view: EditorView): DecorationSet {
   return Decoration.set(decorations, true);
 }
 
+const blockAnchorPluginCacheKey = {};
+
 class BlockAnchorPlugin {
   decorations: DecorationSet;
+  private readonly view: EditorView;
 
   constructor(view: EditorView) {
-    this.decorations = buildBlockAnchorDecorations(view);
+    this.view = view;
+    this.decorations = restorePersistentVisualPluginState<DecorationSet>(
+      view.state,
+      blockAnchorPluginCacheKey,
+    ) ?? buildBlockAnchorDecorations(view);
   }
 
   update(update: ViewUpdate): void {
@@ -131,6 +139,10 @@ class BlockAnchorPlugin {
         || pointerSelectionFinished || hasViewportDecorationRefresh(update)) {
       this.decorations = buildBlockAnchorDecorations(update.view);
     }
+  }
+
+  destroy(): void {
+    rememberPersistentVisualPluginState(this.view, blockAnchorPluginCacheKey, this.decorations);
   }
 }
 

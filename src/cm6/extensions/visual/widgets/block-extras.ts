@@ -71,6 +71,7 @@ import {
 } from "../../../markdown-link-events.ts";
 import { hasViewportDecorationRefresh, refreshViewportDecorations } from "../../../viewport-refresh.ts";
 import { isCoalescedVisualTyping } from "../typing-burst.ts";
+import { persistentVisualStateField } from "../visual-mode.ts";
 import { preserveEditorViewport } from "../../../viewport-stability.ts";
 import { AttributeViewWidget } from "./attribute-view.ts";
 import { EmbedQueryWidget } from "./embed-query.ts";
@@ -95,8 +96,10 @@ function tocFoldReducer(state: Map<string, boolean>, effects: readonly StateEffe
   return next ?? state;
 }
 
+const createTocFoldState = (): Map<string, boolean> => new Map();
+
 const tocFoldField = StateField.define<Map<string, boolean>>({
-  create: () => new Map(),
+  create: createTocFoldState,
   update(state, tr) { return tocFoldReducer(state, tr.effects); },
 });
 
@@ -1347,8 +1350,11 @@ function scanBlockExtraRanges(
   return { toc, semanticHeadings, ceilCommands, hrs, frontMatter: scanFrontMatter(doc) };
 }
 
+const createBlockExtraRanges = (state: EditorState): BlockExtraRanges =>
+  scanBlockExtraRanges(state.doc, blockExtraExcludedRanges(state));
+
 const blockExtraRangesField = StateField.define<BlockExtraRanges>({
-  create: (state) => scanBlockExtraRanges(state.doc, blockExtraExcludedRanges(state)),
+  create: createBlockExtraRanges,
   update(ranges, tr) {
     if (tr.docChanged) {
       return canMapBlockExtraRanges(tr.startState.doc, tr.changes, ranges)
@@ -3526,8 +3532,11 @@ interface OrgEnvRailMeasure {
   left: number;
 }
 
+const createOrgEnvBlocks = (state: EditorState): readonly OrgEnvBlock[] =>
+  scanOrgEnvBlocks(state.doc.toString(), 0, 0, blockExtraExcludedRanges(state));
+
 const orgEnvBlocksField = StateField.define<readonly OrgEnvBlock[]>({
-  create: (state) => scanOrgEnvBlocks(state.doc.toString(), 0, 0, blockExtraExcludedRanges(state)),
+  create: createOrgEnvBlocks,
   update(blocks, tr) {
     if (!tr.docChanged) return blocks;
     if (!canMapOrgEnvBlocks(tr.startState.doc, blocks, tr.changes)) {
@@ -3538,8 +3547,10 @@ const orgEnvBlocksField = StateField.define<readonly OrgEnvBlock[]>({
   },
 });
 
+const createDirtyTikzBlocks = (): ReadonlySet<string> => new Set<string>();
+
 const dirtyTikzBlocksField = StateField.define<ReadonlySet<string>>({
-  create: () => new Set<string>(),
+  create: createDirtyTikzBlocks,
   update(value, tr) {
     let next: Set<string> | null = null;
     for (const effect of tr.effects) {
@@ -3857,7 +3868,7 @@ function buildOrgEnvBodyLineDecos(state: EditorState): DecorationSet {
 }
 
 const orgEnvBodyLineDecorations = StateField.define<DecorationSet>({
-  create: (state) => buildOrgEnvBodyLineDecos(state),
+  create: buildOrgEnvBodyLineDecos,
   update(value, tr) {
     if (tr.docChanged) {
       const blocks = tr.startState.field(orgEnvBlocksField, false) ?? orgEnvBlocksFromState(tr.startState);
@@ -4370,7 +4381,7 @@ function scanFrontMatter(doc: Text): { from: number; to: number; body: string } 
 // ---------------------------------------------------------------------------
 
 const blockExtrasDecorations = StateField.define<DecorationSet>({
-  create: (state) => buildBlockExtraDecos(state),
+  create: buildBlockExtraDecos,
   update(value, tr) {
     if (tr.effects.some((effect) => effect.is(tocFoldEffect))) {
       return patchTocWidgetDecos(tr.state, value);
@@ -4464,12 +4475,12 @@ const ceilCellReloadExtension = ViewPlugin.fromClass(CeilCellReloadPlugin);
 
 export const blockExtrasExtension: Extension = [
   fencedCodeRangesExtension,
-  blockExtraRangesField,
-  tocFoldField,
-  orgEnvBlocksField,
-  dirtyTikzBlocksField,
-  blockExtrasDecorations,
-  orgEnvBodyLineDecorations,
+  persistentVisualStateField(blockExtraRangesField, createBlockExtraRanges),
+  persistentVisualStateField(tocFoldField, createTocFoldState),
+  persistentVisualStateField(orgEnvBlocksField, createOrgEnvBlocks),
+  persistentVisualStateField(dirtyTikzBlocksField, createDirtyTikzBlocks),
+  persistentVisualStateField(blockExtrasDecorations, buildBlockExtraDecos),
+  persistentVisualStateField(orgEnvBodyLineDecorations, buildOrgEnvBodyLineDecos),
   orgEnvRailExtension,
   ceilCellReloadExtension,
 ];

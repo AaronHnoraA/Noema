@@ -127,4 +127,21 @@ describe("measured widget resize stability", () => {
     expect(source).toContain("view.requestMeasure()");
     expect(source).toContain("setMeasuredWidgetObservationPaused");
   });
+
+  test("widget registration does not synchronously force layout", () => {
+    const source = readFileSync(join(
+      process.cwd(),
+      "src", "cm6", "extensions", "visual", "widgets", "measured-observer.ts",
+    ), "utf8");
+    const registration = source.slice(
+      source.indexOf("export function observeWidget"),
+      source.indexOf("export function unobserveWidget"),
+    );
+    const executableRegistration = registration.replace(/\/\/.*$/gm, "");
+
+    expect(executableRegistration).toContain("ro.observe(el)");
+    expect(executableRegistration).not.toContain("measuredElementHeight(");
+    expect(executableRegistration).not.toContain("getBoundingClientRect(");
+    expect(executableRegistration).not.toContain("offsetHeight");
+  });
 });

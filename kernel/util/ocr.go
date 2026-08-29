@@ -207,6 +207,7 @@ func ExistsAssetText(asset string) (ret bool) {
 }
 
 func OcrAsset(asset string) (ret []map[string]any, err error) {
+	EnsureTesseractInit()
 	if !TesseractEnabled {
 		err = errors.New(Langs[Lang][266])
 		return
@@ -368,19 +369,32 @@ func GetOcrJsonText(jsonData []map[string]any) (ret string) {
 }
 
 var (
-	tesseractInitDone = make(chan struct{})
-	tesseractInitOnce sync.Once
+	tesseractInitDone      = make(chan struct{})
+	tesseractInitStartOnce sync.Once
+	tesseractInitCloseOnce sync.Once
 )
 
 func WaitForTesseractInit() {
 	<-tesseractInitDone
 }
 
+// EnsureTesseractInit probes the external OCR executable on first use. Noema
+// does not run the inherited periodic OCR scanner, so spawning `tesseract
+// --version` and `--list-langs` during every app launch only delays the editor
+// and burns startup energy for a capability that is usually never invoked.
+func EnsureTesseractInit() {
+	InitTesseract()
+}
+
 func finishTesseractInit() {
-	tesseractInitOnce.Do(func() { close(tesseractInitDone) })
+	tesseractInitCloseOnce.Do(func() { close(tesseractInitDone) })
 }
 
 func InitTesseract() {
+	tesseractInitStartOnce.Do(initTesseract)
+}
+
+func initTesseract() {
 	ver := getTesseractVer()
 	if "" == ver {
 		finishTesseractInit()

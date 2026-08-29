@@ -13,6 +13,7 @@ import { blockMathRangesOverlapping, mergeOverlappingRanges, rangeInsideAny } fr
 import { scanInlineMathRanges } from "../../../../inline-math.ts";
 import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
 import { isCoalescedVisualTyping } from "../typing-burst.ts";
+import { rememberPersistentVisualPluginState, restorePersistentVisualPluginState } from "../visual-mode.ts";
 
 const FOOTNOTE_RE = /\[\^([^\]\n]{1,128})\]/g;
 const FOOTNOTE_DEFINITION_RE = /^\s*\[\^([^\]\n]{1,128})\]:/;
@@ -238,13 +239,22 @@ function buildFootnoteDecorations(view: EditorView): DecorationSet {
   return Decoration.set(decorations, true);
 }
 
+type FootnotePluginSnapshot = { decorations: DecorationSet; activeSourceKey: string };
+const footnotePluginCacheKey = {};
+
 class FootnotePlugin {
   decorations: DecorationSet;
   activeSourceKey: string;
+  private readonly view: EditorView;
 
   constructor(view: EditorView) {
-    this.decorations = buildFootnoteDecorations(view);
-    this.activeSourceKey = activeFootnoteSourceKey(view);
+    this.view = view;
+    const cached = restorePersistentVisualPluginState<FootnotePluginSnapshot>(
+      view.state,
+      footnotePluginCacheKey,
+    );
+    this.decorations = cached?.decorations ?? buildFootnoteDecorations(view);
+    this.activeSourceKey = cached?.activeSourceKey ?? activeFootnoteSourceKey(view);
   }
 
   update(update: ViewUpdate): void {
@@ -263,6 +273,13 @@ class FootnotePlugin {
       this.decorations = buildFootnoteDecorations(update.view);
     }
     this.activeSourceKey = nextSourceKey;
+  }
+
+  destroy(): void {
+    rememberPersistentVisualPluginState(this.view, footnotePluginCacheKey, {
+      decorations: this.decorations,
+      activeSourceKey: this.activeSourceKey,
+    } satisfies FootnotePluginSnapshot);
   }
 }
 

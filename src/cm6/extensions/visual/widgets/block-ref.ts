@@ -23,6 +23,7 @@ import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
 import { BLOCK_REFERENCE_ID_SOURCE, shortBlockId } from "../../../../../shared/block-identity.mjs";
 import { isPointerSelecting, updateHasPointerSelectionEffect } from "../selection.ts";
 import { isCoalescedVisualTyping } from "../typing-burst.ts";
+import { rememberPersistentVisualPluginState, restorePersistentVisualPluginState } from "../visual-mode.ts";
 
 const BLOCK_REF_RE = new RegExp(
   String.raw`\(\((${BLOCK_REFERENCE_ID_SOURCE})(?:\s+(["'])((?:\\.|(?!\2)[\s\S])*)\2)?\)\)`,
@@ -127,11 +128,18 @@ function buildBlockRefDecorations(view: EditorView): DecorationSet {
   return Decoration.set(decorations, true);
 }
 
+const blockRefPluginCacheKey = {};
+
 class BlockRefPlugin {
   decorations: DecorationSet;
+  private readonly view: EditorView;
 
   constructor(view: EditorView) {
-    this.decorations = buildBlockRefDecorations(view);
+    this.view = view;
+    this.decorations = restorePersistentVisualPluginState<DecorationSet>(
+      view.state,
+      blockRefPluginCacheKey,
+    ) ?? buildBlockRefDecorations(view);
   }
 
   update(update: ViewUpdate): void {
@@ -148,6 +156,10 @@ class BlockRefPlugin {
         || pointerSelectionFinished || hasViewportDecorationRefresh(update)) {
       this.decorations = buildBlockRefDecorations(update.view);
     }
+  }
+
+  destroy(): void {
+    rememberPersistentVisualPluginState(this.view, blockRefPluginCacheKey, this.decorations);
   }
 }
 

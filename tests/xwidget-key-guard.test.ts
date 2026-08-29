@@ -1121,6 +1121,53 @@ describe("xwidget key guard", () => {
     }
   });
 
+  test("normalizes legacy xwidget Spacebar before Vim can leak a page scroll", () => {
+    const host = withMounted(document.createElement("section"));
+    const editor = createEditor(host, { initialContent: "abc" });
+    const vim = createVimLite(editor, host);
+    vim.setMode("normal");
+    editor.setMarkdownSelection(0);
+    try {
+      const space = new KeyboardEvent("keydown", {
+        key: "Spacebar",
+        code: "Space",
+        bubbles: true,
+        cancelable: true,
+      });
+      Object.defineProperty(space, "target", { value: document.body });
+      expect(handleXwidgetVimKeydown(space, { editor, editorHost: host, vim })).toBe(true);
+      expect(space.defaultPrevented).toBe(true);
+      expect(editor.getMarkdownSelection().from).toBe(1);
+    } finally {
+      editor.destroy();
+      host.remove();
+    }
+  });
+
+  test("dd keeps the surviving Normal cursor focused when its line DOM is removed", async () => {
+    const host = withMounted(document.createElement("section"));
+    const editor = createEditor(host, { initialContent: "aa\nbbbb\ncc" });
+    const vim = createVimLite(editor, host);
+    vim.setMode("normal");
+    editor.setMarkdownSelection(4);
+    editor.view.contentDOM.blur();
+    try {
+      for (const key of ["d", "d"]) {
+        const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+        Object.defineProperty(event, "target", { value: document.body });
+        expect(handleXwidgetVimKeydown(event, { editor, editorHost: host, vim })).toBe(true);
+      }
+      await Promise.resolve();
+      expect(editor.getMarkdown()).toBe("aa\ncc");
+      expect(editor.getMarkdownSelectionRange()).toEqual({ anchor: 3, head: 3 });
+      expect(document.activeElement).toBe(editor.view.contentDOM);
+      expect(editor.view.hasFocus).toBe(true);
+    } finally {
+      editor.destroy();
+      host.remove();
+    }
+  });
+
   test("leaves modified keys native inside embedded editable controls", () => {
     const host = withMounted(document.createElement("section"));
     const editor = createEditor(host, { initialContent: "abc" });
@@ -1283,18 +1330,59 @@ describe("xwidget key guard", () => {
     }
   });
 
-  test("forwards common bare Ctrl chords to Emacs", () => {
+  test("keeps ordinary Ctrl editor chords in the shared renderer", () => {
     withForwardedEmacsKeys((forwarded) => {
-      const event = new KeyboardEvent("keydown", {
-        key: "a",
-        code: "KeyA",
+      for (const [key, code] of [
+        ["a", "KeyA"], // CM6 line movement
+        ["d", "KeyD"], // CM6 deletion
+        ["r", "KeyR"], // Vim redo
+        ["z", "KeyZ"], // shared history
+        ["y", "KeyY"], // shared history/yank
+        ["0", "Digit0"], // shared visual zoom
+      ]) {
+        const event = new KeyboardEvent("keydown", {
+          key,
+          code,
+          ctrlKey: true,
+          bubbles: true,
+          cancelable: true,
+        });
+        expect(handleXwidgetEmacsKeydown(event)).toBe(false);
+        expect(event.defaultPrevented).toBe(false);
+      }
+      expect(forwarded).toEqual([]);
+    });
+  });
+
+  test("forwards only the explicit Ctrl host boundary", () => {
+    withForwardedEmacsKeys((forwarded) => {
+      const quit = new KeyboardEvent("keydown", {
+        key: "g",
+        code: "KeyG",
         ctrlKey: true,
         bubbles: true,
         cancelable: true,
       });
-      expect(handleXwidgetEmacsKeydown(event)).toBe(true);
-      expect(event.defaultPrevented).toBe(true);
-      expect(forwarded).toEqual(["C-a"]);
+      expect(handleXwidgetEmacsKeydown(quit)).toBe(true);
+      expect(quit.defaultPrevented).toBe(true);
+      expect(forwarded).toEqual(["C-g"]);
+
+      const prefix = new KeyboardEvent("keydown", {
+        key: "c",
+        code: "KeyC",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      expect(handleXwidgetEmacsKeydown(prefix)).toBe(true);
+      const next = new KeyboardEvent("keydown", {
+        key: "t",
+        code: "KeyT",
+        bubbles: true,
+        cancelable: true,
+      });
+      expect(handleXwidgetEmacsKeydown(next)).toBe(true);
+      expect(forwarded).toEqual(["C-g", "C-c t"]);
     });
   });
 
@@ -1361,6 +1449,64 @@ describe("xwidget key guard", () => {
       expect(handleXwidgetEmacsKeydown(event)).toBe(true);
       expect(event.defaultPrevented).toBe(true);
       expect(forwarded).toEqual(["M-w"]);
+    });
+  });
+
+  test("keeps non-reserved Cmd authoring shortcuts in the shared renderer", () => {
+    withForwardedEmacsKeys((forwarded) => {
+      for (const [key, code] of [
+        ["b", "KeyB"],
+        ["i", "KeyI"],
+        ["k", "KeyK"],
+        ["s", "KeyS"],
+        ["z", "KeyZ"],
+        ["y", "KeyY"],
+        ["/", "Slash"],
+        ["0", "Digit0"],
+      ]) {
+        const event = new KeyboardEvent("keydown", {
+          key,
+          code,
+          metaKey: true,
+          bubbles: true,
+          cancelable: true,
+        });
+        expect(handleXwidgetEmacsKeydown(event)).toBe(false);
+        expect(event.defaultPrevented).toBe(false);
+      }
+      expect(forwarded).toEqual([]);
+    });
+  });
+
+  test("does not complete a retained pane prefix in a sibling client", () => {
+    withForwardedEmacsPayloads((forwarded) => {
+      const prefix = new KeyboardEvent("keydown", {
+        key: "x",
+        code: "KeyX",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      expect(handleXwidgetEmacsKeydown(prefix, { client: () => "pane-a" })).toBe(true);
+
+      const siblingKey = new KeyboardEvent("keydown", {
+        key: "b",
+        code: "KeyB",
+        bubbles: true,
+        cancelable: true,
+      });
+      expect(handleXwidgetEmacsKeydown(siblingKey, { client: () => "pane-b" })).toBe(false);
+      expect(forwarded).toEqual([]);
+
+      expect(handleXwidgetEmacsKeydown(prefix, { client: () => "pane-a" })).toBe(true);
+      const samePaneKey = new KeyboardEvent("keydown", {
+        key: "b",
+        code: "KeyB",
+        bubbles: true,
+        cancelable: true,
+      });
+      expect(handleXwidgetEmacsKeydown(samePaneKey, { client: () => "pane-a" })).toBe(true);
+      expect(forwarded).toEqual([{ key: "C-x b", client: "pane-a" }]);
     });
   });
 

@@ -12,9 +12,22 @@ import { scheduleViewportDecorationRefresh } from "../../viewport-refresh.ts";
  */
 export function isCoalescedVisualTyping(update: ViewUpdate): boolean {
   if (!update.docChanged) return false;
-  return update.transactions.some((transaction) => (
-    transaction.isUserEvent("input") || transaction.isUserEvent("delete")
-  ));
+  return update.transactions.some(isInlineVisualTypingTransaction);
+}
+
+function isInlineVisualTypingTransaction(transaction: Transaction): boolean {
+  if (!transaction.docChanged
+      || (!transaction.isUserEvent("input") && !transaction.isUserEvent("delete"))) {
+    return false;
+  }
+  let changesLineStructure = false;
+  transaction.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
+    if (changesLineStructure) return;
+    changesLineStructure = inserted.lines > 1
+      || transaction.startState.doc.lineAt(fromA).number
+        !== transaction.startState.doc.lineAt(toA).number;
+  });
+  return !changesLineStructure;
 }
 
 const TYPING_SETTLE_MS = 120;
@@ -46,6 +59,5 @@ export const visualTypingBurstExtension = ViewPlugin.fromClass(VisualTypingBurst
 
 /** Useful to state fields that receive a Transaction instead of a ViewUpdate. */
 export function isCoalescedVisualTypingTransaction(transaction: Transaction): boolean {
-  if (!transaction.docChanged) return false;
-  return transaction.isUserEvent("input") || transaction.isUserEvent("delete");
+  return isInlineVisualTypingTransaction(transaction);
 }

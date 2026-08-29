@@ -107,6 +107,7 @@ func TestExternalMarkdownBoxInfoCountsMarkdownDocuments(t *testing.T) {
 	}
 	util.DataDir = filepath.Join(t.TempDir(), "data")
 	Conf = NewAppConf()
+	Conf.Editor = conf.NewEditor()
 	Conf.Lang = testLang
 	t.Cleanup(func() {
 		util.DataDir = originalDataDir
@@ -199,5 +200,92 @@ func TestRegisterExternalMarkdownBoxRejectsIdentityMismatch(t *testing.T) {
 	_, err := RegisterExternalMarkdownBox("Mismatch", repositoryRoot, "0198fc34-7b32-7a11-8cb4-6c40e3b33d70")
 	if nil == err || !strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("expected manifest/request identity mismatch, got %v", err)
+	}
+}
+
+func TestMissingExternalMarkdownBoxIsClosedWithoutDeletingItsShadow(t *testing.T) {
+	originalDataDir := util.DataDir
+	originalConf := Conf
+	util.DataDir = filepath.Join(t.TempDir(), "data")
+	Conf = NewAppConf()
+	Conf.Editor = conf.NewEditor()
+	t.Cleanup(func() {
+		util.DataDir = originalDataDir
+		Conf = originalConf
+	})
+
+	repositoryRoot := filepath.Join(t.TempDir(), "disposable-repository")
+	writeExternalRepositoryFixture(t, repositoryRoot, "# Disposable\n")
+	registration, err := RegisterExternalMarkdownBox("Disposable", repositoryRoot, "")
+	if nil != err {
+		t.Fatal(err)
+	}
+	box := &Box{ID: registration.ID}
+	boxConf := box.GetConf()
+	boxConf.Closed = false
+	if err = box.SaveConf(boxConf); nil != err {
+		t.Fatal(err)
+	}
+	if err = os.RemoveAll(repositoryRoot); nil != err {
+		t.Fatal(err)
+	}
+
+	deactivated, err := DeactivateMissingExternalMarkdownBoxes()
+	if nil != err {
+		t.Fatal(err)
+	}
+	if 1 != len(deactivated) || registration.ID != deactivated[0].ID {
+		t.Fatalf("unexpected deactivated boxes: %#v", deactivated)
+	}
+	if !box.GetConf().Closed {
+		t.Fatal("missing external box remained open")
+	}
+	shadowConf := filepath.Join(util.DataDir, registration.ID, ".siyuan", "conf.json")
+	if _, statErr := os.Stat(shadowConf); nil != statErr {
+		t.Fatalf("portable shadow identity was deleted: %v", statErr)
+	}
+	if _, statErr := os.Stat(repositoryRoot); !os.IsNotExist(statErr) {
+		t.Fatalf("deactivation recreated the missing repository root: %v", statErr)
+	}
+}
+
+func TestMarkdownAccessToMissingExternalRootFailsAndSchedulesClose(t *testing.T) {
+	originalDataDir := util.DataDir
+	originalConf := Conf
+	util.DataDir = filepath.Join(t.TempDir(), "data")
+	Conf = NewAppConf()
+	t.Cleanup(func() {
+		util.DataDir = originalDataDir
+		Conf = originalConf
+	})
+
+	repositoryRoot := filepath.Join(t.TempDir(), "access-repository")
+	writeExternalRepositoryFixture(t, repositoryRoot, "# Access\n")
+	registration, err := RegisterExternalMarkdownBox("Access", repositoryRoot, "")
+	if nil != err {
+		t.Fatal(err)
+	}
+	box := &Box{ID: registration.ID}
+	boxConf := box.GetConf()
+	boxConf.Closed = false
+	if err = box.SaveConf(boxConf); nil != err {
+		t.Fatal(err)
+	}
+	if err = os.RemoveAll(repositoryRoot); nil != err {
+		t.Fatal(err)
+	}
+
+	if _, _, err = SaveMarkdownDoc(registration.ID, "/must-not-reappear.md", "# Unsafe\n"); nil == err || !strings.Contains(err.Error(), "root") {
+		t.Fatalf("missing external root write should fail explicitly, got %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && !box.GetConf().Closed {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !box.GetConf().Closed {
+		t.Fatal("access-triggered deactivation did not close the missing box")
+	}
+	if _, statErr := os.Stat(repositoryRoot); !os.IsNotExist(statErr) {
+		t.Fatalf("failed write recreated the missing repository root: %v", statErr)
 	}
 }

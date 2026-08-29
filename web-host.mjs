@@ -28,6 +28,7 @@ import {
   scanRoamNotes,
   scanNotes,
   markdownCatalogProviderActive,
+  kernelNoteCatalog,
   tagIndexPayload,
   pathSuggestionsForFile,
   latexExportDefaults,
@@ -329,6 +330,8 @@ let wikiIndexDirty = true;
 const wikiIndexPendingFiles = new Set();
 let wikiIndexActive = null;
 let wikiIndexLastError = "";
+let wikiRefreshTimer = null;
+let wikiRefreshRequestedMode = "auto";
 
 function invalidateWikiIndex(files = []) {
   wikiIndexDirty = true;
@@ -347,10 +350,15 @@ async function wikiIndexPayload({ force = false, mode = "auto", changedFiles = [
   const pendingFiles = [...wikiIndexPendingFiles];
   wikiIndexPendingFiles.clear();
   wikiIndexDirty = false;
-  wikiIndexActive = { mode: requestedMode, startedAt: new Date().toISOString(), changedFiles: pendingFiles };
+  // A deferred scheduleWikiRefresh() no longer builds; it hands its mode to
+  // whichever read gets here first, so persistence still picks the strategy the
+  // mutation asked for. Consumed here, once the build is committed to.
+  const buildMode = coalesceWikiRefreshMode(requestedMode, wikiRefreshRequestedMode);
+  wikiRefreshRequestedMode = "auto";
+  wikiIndexActive = { mode: buildMode, startedAt: new Date().toISOString(), changedFiles: pendingFiles };
   wikiIndexBuildPromise = buildWikiIndex(noteRoot, {
     layout: workspaceLayout,
-    mode: requestedMode,
+    mode: buildMode,
     changedFiles: pendingFiles,
   })
     .then((index) => ({
@@ -850,19 +858,24 @@ void sweepGlobalOrphanKernels({ stderr: process.stderr }).then(({ reaped }) => {
 // Self-writes (the server's own atomic saves/renames) are suppressed within a
 // 2-second window to avoid redundant index re-reads.
 // Set AARONNOTE_WATCH=0 to disable (useful in test environments).
-let wikiRefreshTimer = null;
-let wikiRefreshRequestedMode = "auto";
+
+// Invalidate now, rebuild when someone reads.
+//
+// This used to build the index eagerly on the debounce so the broadcast could
+// carry a note count nobody reads. In the legacy (non-wiki) layout buildWikiIndex
+// has no incremental path: it re-walks and stats the whole vault and shells out
+// to `git status --untracked-files=all` before re-deriving the link graph. That
+// ran once per autosave — i.e. once per typing pause — duplicating an index the
+// Go kernel already maintains. wikiIndexDirty already makes the next reader
+// rebuild, so the eager build was pure anticipation; the first search after an
+// edit now pays the build that every keystroke used to pay.
 function scheduleWikiRefresh(files = [], { mode = files.length ? "incremental" : "auto" } = {}) {
   invalidateWikiIndex(files);
   wikiRefreshRequestedMode = coalesceWikiRefreshMode(wikiRefreshRequestedMode, mode);
   if (wikiRefreshTimer) clearTimeout(wikiRefreshTimer);
   wikiRefreshTimer = setTimeout(() => {
     wikiRefreshTimer = null;
-    const requestedMode = wikiRefreshRequestedMode;
-    wikiRefreshRequestedMode = "auto";
-    void wikiIndexPayload({ mode: requestedMode })
-      .then((payload) => broadcast("command", { command: "wiki-index-changed", noteCount: payload.notes.length }))
-      .catch((error) => process.stderr.write(`[noema-wiki] refresh failed: ${error?.message || error}\n`));
+    broadcast("command", { command: "wiki-index-changed" });
   }, 350);
   wikiRefreshTimer.unref?.();
 }
@@ -892,7 +905,14 @@ function applyWikiMutationResult(result, options = {}) {
   if (options.full || files.length > 0) {
     if (options.full) markNotesDirty();
     else for (const file of files) markNotesDirty(file);
-    broadcast("command", { command: "notes-index-changed", version: notesIndexVersionValue() });
+    // Tag the origin so the page that caused the change can coalesce its own
+    // refresh over a whole typing session instead of re-reading the catalog
+    // once per autosave; every other page still refreshes promptly.
+    broadcast("command", {
+      command: "notes-index-changed",
+      version: notesIndexVersionValue(),
+      ...(options.clientId ? { clientId: String(options.clientId) } : {}),
+    });
     scheduleWikiRefresh(files, { mode: options.full ? "full" : "incremental" });
   }
   if (options.markGit !== false) {
@@ -948,7 +968,11 @@ const wikiAutoSync = wikiAutoSyncEnabled
       debounceMs: defaultWikiSyncIntervalMs(),
       periodicMs: defaultWikiSyncIntervalMs(),
       periodicJitterMs: 10 * 60 * 1000,
-      startupMs: 2_000,
+      // Register repositories at boot, but do not checkpoint/fetch every Git
+      // working tree merely because either host opened. Local writes call
+      // mark(), explicit sync calls syncNow(), and the daily remote pass stays
+      // armed. This is shared host policy for both Noema.app and Emacs.
+      syncOnStart: false,
       maxConcurrency: 2,
       sync: (repositoryId) => syncWikiRepository(noteRoot, repositoryId),
       flush: (repositoryId) => checkpointWikiRepository(noteRoot, repositoryId, {
@@ -1472,7 +1496,7 @@ async function notesListPayload(force = false) {
     };
   }
   if (typeof kernelMarkdownProvider?.catalog === "function" && markdownCatalogProviderActive()) {
-    const payload = await kernelMarkdownProvider.catalog(force);
+    const payload = await kernelNoteCatalog(force);
     return {
       ...payload,
       root: noteRoot,
@@ -1489,7 +1513,7 @@ async function notesListPayload(force = false) {
 async function primaryNoteIndexPayload(force = false) {
   if (typeof kernelMarkdownProvider?.catalog === "function") {
     return {
-      ...await kernelMarkdownProvider.catalog(force),
+      ...await kernelNoteCatalog(force),
       root: noteRoot,
       indexVersion: notesIndexVersionValue(),
     };
@@ -1881,7 +1905,9 @@ const apiRouter = new ApiRouter().register({
         mtimeMs: Number(result.mtimeMs) || 0,
         clientId: String((body && typeof body === "object" ? body.clientId : "") || ""),
       });
-      applyWikiMutationResult(result);
+      applyWikiMutationResult(result, {
+        clientId: String((body && typeof body === "object" ? body.clientId : "") || ""),
+      });
     }
     return result;
   },

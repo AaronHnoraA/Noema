@@ -131,12 +131,12 @@ export function observeWidget(el: HTMLElement, view: EditorView): void {
   if (!ro) return;
   elementToView.set(el, view);
   ro.observe(el);
-  // Capture baseline immediately so the first RO callback has a reference.
-  const h = stableMeasuredHeight(measuredElementHeight(el), devicePixelRatio());
-  if (h > 0) {
-    lastHeights.set(el, h);
-    cacheElementHeight(el, h);
-  }
+  // Do not read layout here. Widget registration runs inside CM6's DOM
+  // reconciliation, often once per newly visible formula. A synchronous
+  // getBoundingClientRect() for every registration turns one viewport update
+  // into alternating DOM writes and forced layouts. The first ResizeObserver
+  // delivery already carries the post-layout border-box height; it seeds the
+  // cache and schedules one coalesced view measurement for the whole batch.
 }
 
 export function unobserveWidget(el: HTMLElement): void {

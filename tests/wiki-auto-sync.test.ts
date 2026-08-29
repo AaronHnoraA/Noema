@@ -33,6 +33,34 @@ describe("Wiki automatic synchronization", () => {
     await scheduler.close();
   });
 
+  test("can register repositories without an eager startup scan while keeping events and periodic sync", async () => {
+    vi.useFakeTimers();
+    const calls: string[] = [];
+    const scheduler = createWikiAutoSync({
+      syncOnStart: false,
+      startupMs: 5,
+      debounceMs: 20,
+      periodicMs: 100,
+      periodicJitterMs: 0,
+      async sync(repositoryId) {
+        calls.push(repositoryId);
+        return { phase: "idle" };
+      },
+    });
+
+    scheduler.start(["public/README", "private/research"]);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(calls).toEqual([]);
+
+    scheduler.mark("private/research");
+    await vi.advanceTimersByTimeAsync(20);
+    expect(calls).toEqual(["private/research"]);
+    await vi.advanceTimersByTimeAsync(70);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls.sort()).toEqual(["private/research", "private/research", "public/README"]);
+    await scheduler.close();
+  });
+
   test("debounces each repository independently", async () => {
     vi.useFakeTimers();
     const calls: string[] = [];

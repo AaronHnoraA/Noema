@@ -32,6 +32,7 @@ import {
 } from "../../../../date-syntax.ts";
 import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
 import { isCoalescedVisualTyping } from "../typing-burst.ts";
+import { rememberPersistentVisualPluginState, restorePersistentVisualPluginState } from "../visual-mode.ts";
 import { latexMark } from "../../../../../shared/latex-marks.mjs";
 
 declare global {
@@ -1170,15 +1171,28 @@ function activeInlineCommandKey(view: EditorView): string {
   return keys.join("|");
 }
 
+type TodoPluginSnapshot = {
+  decorations: DecorationSet;
+  excludedRanges: Array<{ from: number; to: number }>;
+  activeCommandKey: string;
+};
+const todoPluginCacheKey = {};
+
 class TodoPlugin {
   decorations: DecorationSet;
   excludedRanges: Array<{ from: number; to: number }>;
+  private readonly view: EditorView;
   private activeCommandKey: string;
 
   constructor(view: EditorView) {
-    this.excludedRanges = excludedCommandRanges(view);
-    this.activeCommandKey = activeInlineCommandKey(view);
-    this.decorations = buildInlineCommandDecos(view, this.excludedRanges);
+    this.view = view;
+    const cached = restorePersistentVisualPluginState<TodoPluginSnapshot>(
+      view.state,
+      todoPluginCacheKey,
+    );
+    this.excludedRanges = cached?.excludedRanges ?? excludedCommandRanges(view);
+    this.activeCommandKey = cached?.activeCommandKey ?? activeInlineCommandKey(view);
+    this.decorations = cached?.decorations ?? buildInlineCommandDecos(view, this.excludedRanges);
   }
 
   update(update: ViewUpdate): void {
@@ -1220,6 +1234,14 @@ class TodoPlugin {
       this.activeCommandKey = nextCommandKey;
       this.decorations = buildInlineCommandDecos(update.view, this.excludedRanges);
     }
+  }
+
+  destroy(): void {
+    rememberPersistentVisualPluginState(this.view, todoPluginCacheKey, {
+      decorations: this.decorations,
+      excludedRanges: this.excludedRanges,
+      activeCommandKey: this.activeCommandKey,
+    } satisfies TodoPluginSnapshot);
   }
 }
 

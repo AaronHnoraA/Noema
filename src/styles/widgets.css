@@ -638,6 +638,12 @@
   padding: 0;
   cursor: pointer;
 }
+.cm-editor .cm-math-block.cm-math-scroll-deferred {
+  min-block-size: var(--cm-math-scroll-height, 36px);
+  contain: layout paint style;
+  content-visibility: hidden;
+  cursor: default;
+}
 .cm-editor .cm-math-block-float-preview {
   display: block;
   text-align: center;
@@ -2042,7 +2048,6 @@
   user-select: none;
   font: 700 13px/1 ui-monospace, monospace;
 }
-.cm-editor .cm-line:hover ~ * .cm-block-drag-handle,
 .cm-editor .cm-block-drag-handle:hover { opacity: 0.9; color: var(--aaron-link, #9de7ff); }
 .cm-editor .cm-block-drag-handle:active { cursor: grabbing; }
 .cm-editor .cm-block-drag-handle.is-disabled { cursor: not-allowed; opacity: 0.18; }

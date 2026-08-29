@@ -6,6 +6,7 @@ export {
   roamNotesIndexPayload,
   scanNotes,
   markdownCatalogProviderActive,
+  kernelNoteCatalog,
   assetRefsFromContent,
   graphPayload,
   wantedPages,

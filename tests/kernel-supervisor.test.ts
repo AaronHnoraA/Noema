@@ -173,6 +173,7 @@ describe("shared kernel supervisor", () => {
       "serve",
       "--workspace", join(stateRoot, "kernel-workspace"),
       "--wd", join(runtimeRoot, "app"),
+      "--noema-sidecar",
       "--supervisor-pid", "4242",
     ]));
     expect(spawnedEnv.NOEMA_KERNEL_CONFIG_DIR).toBe(join(stateRoot, "kernel-config"));

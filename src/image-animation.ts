@@ -183,6 +183,26 @@ export const pauseImageAnimation = imageAnimationController.pause;
 export const pauseImageAnimationTemporarily = imageAnimationController.pauseTemporarily;
 export const resumeImageAnimation = imageAnimationController.resume;
 
+/**
+ * Pause only the animated images inside a scrolling editor.
+ *
+ * Applying the paused class to the editor root invalidates selector matching
+ * for its entire descendant tree. Formula-heavy notes contain thousands of
+ * KaTeX elements, so that broad class mutation can turn every scroll event
+ * into a full style recalculation even when the note contains no images.
+ * Scoping the mutation to likely animated image nodes keeps the same behavior
+ * without coupling unrelated visual widgets to the image policy.
+ */
+export function pauseScrollingImageAnimationTemporarily(
+  root: HTMLElement,
+  delay: number,
+): void {
+  root.querySelectorAll<HTMLImageElement>("img").forEach((image) => {
+    if (!imageSourceMayAnimate(image.currentSrc || image.src)) return;
+    pauseImageAnimationTemporarily(image, delay);
+  });
+}
+
 /** Pause animated editor images whenever the shared renderer is idle/hidden. */
 export function imageAnimationActivityParticipant(element: HTMLElement): RendererActivityParticipant {
   return {

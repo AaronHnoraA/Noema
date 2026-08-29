@@ -67,7 +67,12 @@ import {
 import { markdownLinkDestination } from "../markdown-link.ts";
 import { copiedText } from "./copied-text.ts";
 import { systemClipboardWriter, writeSystemClipboard } from "../system-clipboard.ts";
-import { pauseImageAnimationTemporarily } from "../image-animation.ts";
+import { pauseScrollingImageAnimationTemporarily } from "../image-animation.ts";
+import {
+  beginFormulaRenderBurst,
+  beginFormulaScrollBurst,
+  forgetFormulaScrollBurst,
+} from "./formula-scroll.ts";
 import { getBlockMathRanges, positionInsideAnyRange } from "./math-ranges.ts";
 import { scanInlineMathRanges } from "../inline-math.ts";
 import { tocIndexFromState } from "./toc-index.ts";
@@ -517,8 +522,13 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
     },
   });
   viewportStabilizer = new EditorViewportStabilizer(view, host);
-  const onEditorScroll = (): void => pauseImageAnimationTemporarily(view.contentDOM, 256);
-  view.scrollDOM.addEventListener("scroll", onEditorScroll, { passive: true });
+  const onEditorScroll = (): void => {
+    beginFormulaScrollBurst(view);
+    pauseScrollingImageAnimationTemporarily(view.contentDOM, 256);
+  };
+  // Capture runs before CM6's own bubbling scroll listener, so formula
+  // widgets entering during its synchronous viewport measure see the burst.
+  view.scrollDOM.addEventListener("scroll", onEditorScroll, { capture: true, passive: true });
   scheduleViewportDecorationRefresh(view);
   void document.fonts?.ready.then(() => {
     if (view.dom.isConnected) view.requestMeasure();
@@ -1065,7 +1075,26 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
         }
       }
 
-      return { before, after, rect: rectAt(from), rectAtOffset: (offset: number) => rectAt(beforeStart + offset) };
+      // Most typing frames only inspect surrounding text to decide that no
+      // completion or math preview is active. `coordsAtPos()` is a synchronous
+      // layout read, so doing it eagerly forced browser layout on every key —
+      // especially costly when WebKit is embedded in Emacs. Preserve the
+      // public property while resolving and caching it only for a consumer
+      // that actually needs to place a floating surface.
+      let rectResolved = false;
+      let cachedRect: { left: number; top: number; bottom: number } | null = null;
+      return {
+        before,
+        after,
+        get rect() {
+          if (!rectResolved) {
+            cachedRect = rectAt(from);
+            rectResolved = true;
+          }
+          return cachedRect;
+        },
+        rectAtOffset: (offset: number) => rectAt(beforeStart + offset),
+      };
     },
 
     cursorRect(): { left: number; top: number; bottom: number } | null {
@@ -1081,13 +1110,19 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
     toggleSource(): void {
       finishInlineMathEditing(view);
       const enteringPreview = !isVisualMode(view);
+      const selectionAnchor = view.state.selection.main.head;
+      if (enteringPreview) beginFormulaRenderBurst(view);
       // One viewport owner is enough. The previous cursor helper competed with
       // EditorViewportStabilizer and performed additional writes two frames,
       // 240 ms and 800 ms later. At the document top that correction was
       // asymmetric (source mode could not scroll above zero, preview mode then
       // pushed the host down), making a Cmd+/ round trip look like a different
       // first render and allowing a late timer to fight a real user scroll.
-      viewportStabilizer!.preserve(() => view.dispatch(setVisualMode(enteringPreview)));
+      viewportStabilizer!.preserve(
+        () => view.dispatch(setVisualMode(enteringPreview)),
+        undefined,
+        selectionAnchor,
+      );
       view.focus();
     },
 
@@ -1110,9 +1145,10 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
       externalUpdateListeners.clear();
       documentResetListeners.clear();
       view.contentDOM.removeEventListener("mousedown", onSourceWidgetMouseDown, { capture: true });
-      view.scrollDOM.removeEventListener("scroll", onEditorScroll);
+      view.scrollDOM.removeEventListener("scroll", onEditorScroll, { capture: true });
       viewportStabilizer!.destroy();
       forgetViewportDecorationRefresh(view);
+      forgetFormulaScrollBurst(view);
       discardMeasuredWidgetView(view);
       view.destroy();
       wrap.remove();

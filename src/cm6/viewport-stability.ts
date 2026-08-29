@@ -4,10 +4,13 @@ import type {
   Transaction,
 } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
+import { normalizedEditorKey } from "./focus-quiescence.ts";
+import { invalidatePersistentVisualState } from "./extensions/visual/visual-mode.ts";
 
 type ViewportSnapshot = {
   anchorPos: number;
   anchorOffset: number | null;
+  preciseAnchor: boolean;
   scrollTop: number;
   scrollLeft: number;
   interaction: number;
@@ -26,8 +29,23 @@ const scrollIntoViewEffectType = (
 
 const viewportStabilizers = new WeakMap<EditorView, EditorViewportStabilizer>();
 
-export function preserveEditorViewport<T>(view: EditorView, update: () => T): T {
-  return viewportStabilizers.get(view)?.preserve(update) ?? update();
+export function isViewportScrollKey(
+  event: Pick<KeyboardEvent, "key" | "code">,
+): boolean {
+  return ["ArrowDown", "ArrowUp", "PageDown", "PageUp", "Home", "End", " "]
+    .includes(normalizedEditorKey(event));
+}
+
+export function preserveEditorViewport<T>(
+  view: EditorView,
+  update: () => T,
+  preferredAnchorPos?: number,
+): T {
+  return viewportStabilizers.get(view)?.preserve(
+    update,
+    undefined,
+    preferredAnchorPos,
+  ) ?? update();
 }
 
 function transactionMovesViewport(transaction: Transaction): boolean {
@@ -166,6 +184,10 @@ export class EditorViewportStabilizer {
   private baselineFrame = 0;
   private scrolling = false;
   private scrollIdleTimer = 0;
+  private expectedProgrammaticScrollTop: number | null = null;
+  private restoringGeneration = 0;
+  private preserveGraceUntil = 0;
+  private leasedSnapshot: ViewportSnapshot | null = null;
   private readonly previousOverflowAnchor: string;
 
   constructor(view: EditorView, scrollHost: HTMLElement) {
@@ -179,6 +201,11 @@ export class EditorViewportStabilizer {
     scrollHost.style.overflowAnchor = "none";
 
     const beginScrollInteraction = (): void => {
+      invalidatePersistentVisualState(this.view);
+      this.expectedProgrammaticScrollTop = null;
+      this.restoringGeneration = 0;
+      this.preserveGraceUntil = 0;
+      this.leasedSnapshot = null;
       this.interaction += 1;
       this.generation += 1;
       this.stableSnapshot = null;
@@ -197,6 +224,33 @@ export class EditorViewportStabilizer {
     scrollHost.addEventListener("wheel", beginScrollInteraction, listenerOptions);
     scrollHost.addEventListener("touchmove", beginScrollInteraction, listenerOptions);
     scrollHost.addEventListener("scroll", () => {
+      const expected = this.expectedProgrammaticScrollTop;
+      if (expected != null) {
+        // A write made by restore() emits `scroll` asynchronously. It is an
+        // acknowledgement of our own anchor correction, not a new user
+        // interaction that should invalidate the remaining measured writes.
+        // Keep the target armed: one preserve cycle deliberately writes in
+        // the transaction, measure, and two animation-frame phases, and
+        // WebKit may emit a separate scroll event for each write.
+        if (Math.abs(this.scrollHost.scrollTop - expected) <= 0.5) return;
+      }
+      // Reconfiguring Preview/Source changes the document height before our
+      // measured anchor correction runs. WebKit emits a clamped `scroll`
+      // event for that layout change. It is not user intent and must not
+      // cancel the remaining transaction/measure/frame restores. Explicit
+      // wheel, pointer, touch and scroll keys still call beginScrollInteraction
+      // above and therefore win immediately.
+      if (this.restoringGeneration === this.generation
+          || this.win.performance.now() < this.preserveGraceUntil) {
+        const leased = this.activeLeasedSnapshot();
+        const snapshot = leased ?? this.stableSnapshot;
+        if (this.restoringGeneration === 0
+            && snapshot
+            && snapshot.interaction === this.interaction) {
+          this.scheduleRestore({ ...snapshot }, Boolean(leased));
+        }
+        return;
+      }
       if (this.scrolling) this.armScrollIdle();
       // A slow frame can outlive the idle threshold, and scrollbar/programmatic
       // movement may not have a preceding wheel event. A new scroll event is
@@ -209,7 +263,7 @@ export class EditorViewportStabilizer {
     scrollHost.ownerDocument.addEventListener("keydown", (event) => {
       const target = event.target instanceof Element ? event.target : null;
       if (target?.closest("[data-aaronnote-vim='native']")) return;
-      if (["ArrowDown", "ArrowUp", "PageDown", "PageUp", "Home", "End", " "].includes(event.key)) {
+      if (isViewportScrollKey(event)) {
         beginScrollInteraction();
       }
     }, {
@@ -220,13 +274,14 @@ export class EditorViewportStabilizer {
     this.resizeObserver = typeof ResizeObserver === "undefined"
       ? null
       : new ResizeObserver(() => {
-          const snapshot = this.stableSnapshot;
-          if (this.scrolling
-              || !snapshot
-              || snapshot.interaction !== this.interaction
-              || this.forcedDepth > 0) return;
-          this.scheduleRestore(snapshot);
-        });
+        const leased = this.activeLeasedSnapshot();
+        const snapshot = leased ?? this.stableSnapshot;
+        if (this.scrolling
+            || !snapshot
+            || snapshot.interaction !== this.interaction
+            || this.forcedDepth > 0) return;
+        this.scheduleRestore({ ...snapshot }, Boolean(leased));
+      });
     this.resizeObserver?.observe(view.contentDOM);
     this.scheduleBaselineCapture();
   }
@@ -241,26 +296,53 @@ export class EditorViewportStabilizer {
    */
   afterUpdate(transactions: readonly Transaction[]): void {
     const forced = this.forcedSnapshot;
+    const leased = forced ? null : this.activeLeasedSnapshot();
     const automatic = !forced
+      && !leased
       && !this.scrolling
       && transactions.some(transactionMayRelayout)
       && !transactions.some(transactionMovesViewport);
     // Explicit preserve() calls own a fresh pre-update snapshot. Automatic
     // stabilization uses the last asynchronously captured baseline so this
     // post-update hook never has to read layout before applying a transaction.
-    const snapshot = forced ?? (automatic && this.stableSnapshot
+    const snapshot = forced ?? leased ?? (automatic && this.stableSnapshot
       ? { ...this.stableSnapshot }
       : null);
     if (snapshot) this.mapSnapshot(snapshot, transactions);
+    if (leased && snapshot) this.leasedSnapshot = { ...snapshot };
 
     if (forced) return;
-    if (snapshot) this.scheduleRestore(snapshot);
+    if (snapshot) this.scheduleRestore(snapshot, Boolean(leased));
     else this.resetBaseline();
   }
 
-  preserve<T>(update: () => T, mapAnchor?: (position: number) => number): T {
+  preserve<T>(
+    update: () => T,
+    mapAnchor?: (position: number) => number,
+    preferredAnchorPos?: number,
+  ): T {
     const outermost = this.forcedDepth === 0;
-    if (outermost) this.forcedSnapshot = this.scrolling ? null : this.capture();
+    if (outermost && this.scrollIdleTimer) {
+      // The command establishes a new atomic viewport boundary. An idle timer
+      // from scrolling *before* the command must not advance generation in the
+      // middle of its measured restore. New input after this point creates a
+      // fresh interaction and still cancels the restore immediately.
+      this.win.clearTimeout(this.scrollIdleTimer);
+      this.scrollIdleTimer = 0;
+      this.scrolling = false;
+    }
+    // preserve() is an explicit atomic relayout request. Unlike automatic
+    // stabilization it must capture the current geometry even inside the
+    // short scroll-idle window; Cmd-/ commonly follows a reveal/selection
+    // scroll and previously lost its viewport for exactly that reason.
+    if (outermost) this.forcedSnapshot = this.capture(preferredAnchorPos);
+    if (outermost) {
+      // Fonts, formula widgets and WebKit's height map can settle well after
+      // the first two animation frames. During this bounded lease, an
+      // unaccompanied scroll is treated as layout clamping and re-anchored.
+      // Real input events revoke the lease synchronously above.
+      this.preserveGraceUntil = this.win.performance.now() + 1_000;
+    }
     const originalAnchor = outermost ? this.forcedSnapshot?.anchorPos ?? 0 : 0;
     this.forcedDepth += 1;
     try {
@@ -277,7 +359,8 @@ export class EditorViewportStabilizer {
               Math.min(this.view.state.doc.length, mapAnchor(originalAnchor)),
             );
           }
-          this.scheduleRestore(snapshot);
+          this.leasedSnapshot = { ...snapshot };
+          this.scheduleRestore(snapshot, true);
         } else {
           this.resetBaseline();
         }
@@ -312,20 +395,62 @@ export class EditorViewportStabilizer {
     }, 140);
   }
 
-  private capture(): ViewportSnapshot | null {
+  private activeLeasedSnapshot(): ViewportSnapshot | null {
+    if (this.win.performance.now() < this.preserveGraceUntil) {
+      return this.leasedSnapshot;
+    }
+    this.leasedSnapshot = null;
+    return null;
+  }
+
+  private capture(preferredAnchorPos?: number): ViewportSnapshot | null {
     if (!this.view.dom.isConnected || !this.scrollHost.isConnected) return null;
     const scrollTop = this.scrollHost.scrollTop;
     const scrollLeft = this.scrollHost.scrollLeft;
-    let anchorPos = Math.max(0, Math.min(this.view.viewport.from, this.view.state.doc.length));
+    let anchorPos = Math.max(0, Math.min(
+      preferredAnchorPos ?? this.view.viewport.from,
+      this.view.state.doc.length,
+    ));
     let anchorOffset: number | null = null;
+    let preciseAnchor = false;
+    let anchorCaptured = false;
     try {
       const hostTop = this.scrollHost.getBoundingClientRect().top;
-      const documentTop = this.view.documentTop;
-      const relativeHeight = Math.max(0, (hostTop - documentTop) / Math.max(0.0001, this.view.scaleY));
-      const block = this.view.lineBlockAtHeight(relativeHeight);
-      anchorPos = Math.max(0, Math.min(block.from, this.view.state.doc.length));
-      anchorOffset = documentTop + block.top * this.view.scaleY - hostTop;
-      if (!Number.isFinite(anchorOffset)) anchorOffset = null;
+      if (preferredAnchorPos != null) {
+        const captureCoordinates = (): void => {
+          const coordinates = this.view.coordsAtPos?.(anchorPos);
+          if (!coordinates) return;
+          anchorOffset = coordinates.top - hostTop;
+          preciseAnchor = true;
+          anchorCaptured = true;
+        };
+        if (anchorPos >= this.view.viewport.from && anchorPos <= this.view.viewport.to) {
+          try {
+            const block = this.view.lineBlockAt(anchorPos);
+            anchorOffset = this.view.documentTop + block.top * this.view.scaleY - hostTop;
+            anchorCaptured = true;
+          } catch {
+            captureCoordinates();
+          }
+        } else {
+          captureCoordinates();
+        }
+      }
+      if (!anchorCaptured) {
+        const documentTop = this.view.documentTop;
+        const relativeHeight = Math.max(0, (hostTop - documentTop) / Math.max(0.0001, this.view.scaleY));
+        const block = preferredAnchorPos == null
+          ? this.view.lineBlockAtHeight(relativeHeight)
+          : this.view.lineBlockAt(anchorPos);
+        anchorOffset = documentTop + block.top * this.view.scaleY - hostTop;
+        if (!Number.isFinite(anchorOffset)) anchorOffset = null;
+      }
+      if (preferredAnchorPos == null) {
+        const documentTop = this.view.documentTop;
+        const relativeHeight = Math.max(0, (hostTop - documentTop) / Math.max(0.0001, this.view.scaleY));
+        const block = this.view.lineBlockAtHeight(relativeHeight);
+        anchorPos = Math.max(0, Math.min(block.from, this.view.state.doc.length));
+      }
       // At the upper boundary, scrollTop=0 is the authoritative anchor. A
       // source/preview layout may move the first source position vertically;
       // correcting that offset would push the host away from the document top
@@ -338,6 +463,7 @@ export class EditorViewportStabilizer {
     return {
       anchorPos,
       anchorOffset,
+      preciseAnchor,
       scrollTop,
       scrollLeft,
       interaction: this.interaction,
@@ -356,16 +482,23 @@ export class EditorViewportStabilizer {
         || !this.view.dom.isConnected
         || !this.scrollHost.isConnected) return;
 
-    this.scrollHost.scrollTop = snapshot.scrollTop;
+    this.writeScrollTop(snapshot.scrollTop);
     this.scrollHost.scrollLeft = snapshot.scrollLeft;
     if (snapshot.anchorOffset != null) {
       try {
         const hostTop = this.scrollHost.getBoundingClientRect().top;
-        const block = this.view.lineBlockAt(Math.min(snapshot.anchorPos, this.view.state.doc.length));
-        const currentOffset = this.view.documentTop + block.top * this.view.scaleY - hostTop;
+        const position = Math.min(snapshot.anchorPos, this.view.state.doc.length);
+        const coordinates = snapshot.preciseAnchor
+          ? this.view.coordsAtPos?.(position)
+          : null;
+        const currentOffset = coordinates
+          ? coordinates.top - hostTop
+          : this.view.documentTop
+            + this.view.lineBlockAt(position).top * this.view.scaleY
+            - hostTop;
         const correction = currentOffset - snapshot.anchorOffset;
         if (Number.isFinite(correction) && Math.abs(correction) > 0.5) {
-          this.scrollHost.scrollTop += correction;
+          this.writeScrollTop(this.scrollHost.scrollTop + correction);
         }
       } catch {
         // Keep the absolute fallback and retry after CM6's scheduled measure.
@@ -376,9 +509,15 @@ export class EditorViewportStabilizer {
     this.stableSnapshot = snapshot;
   }
 
-  private scheduleRestore(snapshot: ViewportSnapshot): void {
-    if (this.scrolling || snapshot.interaction !== this.interaction) return;
+  private writeScrollTop(value: number): void {
+    this.scrollHost.scrollTop = value;
+    this.expectedProgrammaticScrollTop = this.scrollHost.scrollTop;
+  }
+
+  private scheduleRestore(snapshot: ViewportSnapshot, explicit = false): void {
+    if ((!explicit && this.scrolling) || snapshot.interaction !== this.interaction) return;
     const generation = ++this.generation;
+    this.restoringGeneration = generation;
     this.restore(snapshot, generation);
     this.view.requestMeasure({
       read: () => snapshot,
@@ -388,7 +527,10 @@ export class EditorViewportStabilizer {
       this.restore(snapshot, generation);
       this.win.requestAnimationFrame(() => {
         this.restore(snapshot, generation);
-        if (generation === this.generation) this.stableSnapshot = snapshot;
+        if (generation === this.generation) {
+          this.stableSnapshot = snapshot;
+          this.restoringGeneration = 0;
+        }
       });
     });
   }

@@ -20,8 +20,9 @@ import (
 	"net/http"
 
 	"github.com/88250/gulu"
-	"github.com/gin-gonic/gin"
+	"github.com/aaronhe/noema/kernel/model"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/gin-gonic/gin"
 )
 
 func pandoc(c *gin.Context) {
@@ -53,6 +54,7 @@ func pandoc(c *gin.Context) {
 		args = append(args, v.(string))
 	}
 
+	util.InitPandoc(model.Conf.Export.PandocBin)
 	path, err := util.ConvertPandoc(dir, args...)
 	if err != nil {
 		ret.Code = -1

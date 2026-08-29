@@ -964,6 +964,49 @@ func markdownNoteReferenceValues(note MarkdownNoteSummary) []string {
 	}, note.Aliases...)
 }
 
+// markdownNoteRefIndex maps every value a note can be referenced by to the id
+// of the note that claims it, first claim winning.
+//
+// Ids are visited in sorted order rather than in map order: two notes may claim
+// the same canonical key (a shared title, say), and letting Go's randomised map
+// iteration pick the winner made the resolved refs of the whole vault differ
+// between two reads of an unchanged catalog. A stable winner is also what lets
+// patchMarkdownNoteRelationships reuse this index instead of rebuilding it.
+func markdownNoteRefIndex(unique map[string]MarkdownNoteSummary) map[string]string {
+	ids := make([]string, 0, len(unique))
+	for id := range unique {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	index := make(map[string]string, len(unique)*4)
+	for _, id := range ids {
+		for _, key := range markdownNoteRefKeys(unique[id]) {
+			if _, exists := index[key]; !exists {
+				index[key] = id
+			}
+		}
+	}
+	return index
+}
+
+// markdownNoteRefKeys is the canonical form of every value a note answers to.
+// A change to this set invalidates the whole vault's ref index, so the
+// incremental catalog patch compares it before taking the fast path.
+func markdownNoteRefKeys(note MarkdownNoteSummary) []string {
+	values := markdownNoteReferenceValues(note)
+	keys := make([]string, 0, len(values))
+	seen := make(map[string]bool, len(values))
+	for _, value := range values {
+		key := canonicalMarkdownNoteRef(value)
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		keys = append(keys, key)
+	}
+	return keys
+}
+
 func resolveMarkdownNoteRelationships(raw []MarkdownNoteSummary) []MarkdownNoteSummary {
 	sort.Slice(raw, func(i, j int) bool { return raw[i].Path < raw[j].Path })
 	unique := map[string]MarkdownNoteSummary{}
@@ -973,16 +1016,7 @@ func resolveMarkdownNoteRelationships(raw []MarkdownNoteSummary) []MarkdownNoteS
 			unique[note.ID] = cloneMarkdownNoteSummary(note)
 		}
 	}
-	index := map[string]string{}
-	for id, note := range unique {
-		for _, value := range markdownNoteReferenceValues(note) {
-			if key := canonicalMarkdownNoteRef(value); key != "" {
-				if _, exists := index[key]; !exists {
-					index[key] = id
-				}
-			}
-		}
-	}
+	index := markdownNoteRefIndex(unique)
 	for id, note := range unique {
 		resolved, seen := []string{}, map[string]bool{}
 		for _, ref := range note.Refs {

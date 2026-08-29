@@ -15,6 +15,7 @@ import { sourceEditorName } from "../../../../../aaronnote/host-mode.ts";
 import { desktopPlatformLabels } from "../../../../../shared/desktop-shell.mjs";
 import { isPointerSelecting, updateHasPointerSelectionEffect } from "../selection.ts";
 import { isCoalescedVisualTyping } from "../typing-burst.ts";
+import { rememberPersistentVisualPluginState, restorePersistentVisualPluginState } from "../visual-mode.ts";
 
 type NoteCodeLine = {
   commandFrom: number;
@@ -259,12 +260,19 @@ function buildNoteCodeDecos(view: EditorView): DecorationSet {
   return Decoration.set(decos, true);
 }
 
+const noteCodePluginCacheKey = {};
+
 class NoteCodePlugin {
   decorations: DecorationSet;
+  private readonly view: EditorView;
   private cleanup: () => void;
 
   constructor(view: EditorView) {
-    this.decorations = buildNoteCodeDecos(view);
+    this.view = view;
+    this.decorations = restorePersistentVisualPluginState<DecorationSet>(
+      view.state,
+      noteCodePluginCacheKey,
+    ) ?? buildNoteCodeDecos(view);
     this.cleanup = onCodeHighlightReady(() => scheduleViewportDecorationRefresh(view));
   }
 
@@ -284,6 +292,7 @@ class NoteCodePlugin {
   }
 
   destroy(): void {
+    rememberPersistentVisualPluginState(this.view, noteCodePluginCacheKey, this.decorations);
     this.cleanup();
   }
 }

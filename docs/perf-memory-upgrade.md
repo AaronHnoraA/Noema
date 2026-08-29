@@ -572,3 +572,196 @@ length 签名后失败并报 `expected 6 to be 1`——5 次普通按键产生�
 
 **注**：`npx tsc` 目前在 `src/cm6/extensions/visual/typing-burst.ts` 报
 `TS1294 erasableSyntaxOnly`——那是另一个会话正在写的新文件，不属于本轮改动，我没有动它。
+
+### 2026-08-29（第九轮）：Node 时代 vs Go 时代逐行对比 —— 一次按键保存的扇出被放大了 8 倍
+
+第五轮审计看的是**请求形状**（一次增量保存 = 一个 kernel 往返），结论没错。这一轮看的是
+**保存之后发生了什么**，那里藏着整条回归链。
+
+先把测量摆正。空闲侧确实还是地板（60 秒采样：node +0.00、Go +0.03 cpu-s，idle wakeup
+约 0.3 次/秒 vs node 的 0），和 2026-08-28 的结论一致，不用再碰。但"后端已经到顶"这个
+推论只对**没有客户端连接**的空闲成立。把一个客户端接上、按真实节奏（每秒一次自动保存，
+对应 650 ms 防抖后的打字停顿）打字，200 篇笔记 / 1.6 MB 的临时 vault：
+
+| 一次按键保存 | 修复前 | 修复后 |
+|---|---|---|
+| Node host CPU | 73 ms | **6.0 ms** |
+| Go kernel CPU | 25 ms | **8.8 ms** |
+| `notes-index-changed` 广播 | 2 次 | 1 次 |
+| 全量 catalog 重取 | 2 次 | **0.025 次**（40 次保存共 1 次）|
+| 下行 JSON | 350 KB | **4.5 KB** |
+
+复现方式在本节末。五个独立缺陷，全部是"Node 时代有、Go 接管后丢了"：
+
+#### 1. 增量保存没登记 self-write，于是 watcher 把内核自己的写当成外部改动
+
+`saveNote` 的整源路径走 `writeMarkdownFile`，它在内核写完后调 `noteSelfWrite(file)`；
+**增量路径**（`markdownFileProvider.writeChanges`，也就是每次按键都走的那条）没有。Node
+时代写文件和看文件是同一个进程，这条不变量自动成立；Go 接管持久化之后，Node 的
+`fs.watch` 看到的是一个普通的外部修改，于是每次保存都被数两遍：一遍来自保存 handler，
+一遍来自 watcher。两遍各自 `markNotesDirty` + 广播 + 调度 wiki 重建。
+
+修复：`writeChanges` 成功后同样 `noteSelfWrite(file)`。
+
+#### 2. `notesListPayload` 绕过了快照缓存
+
+Go 路径直接 `kernelMarkdownProvider.catalog(force)`，**每次**都是一次全量 HTTP 取
++ JSON 解析。Node 时代它走 `scanNotes()`：干净时直接返回快照，脏时只重读
+`dirtyNoteFiles` 里的那几个文件。
+
+修复：`runtime.mjs` 新增 `kernelNoteCatalog(force)`，以 `notesIndexVersion` 为键做唯一的
+memo（该计数器由所有宿主 mutation 和 vault watcher 递增，正是 catalog 唯一可能变化的两个
+来源），`notesListPayload`、`primaryNoteIndexPayload`、`scanNotes` 三个入口共用。
+`notes:list` 13.8 ms → 3.2 ms，`notes:index` 12.9 → 2.2，`notes:graph` 12.0 → 1.6。
+
+#### 3. `mapNote` 每篇笔记做两次 `realpathSync`
+
+CPU profile 里 `realpath` 占 Node host 全部非空闲时间的 **54%**，调用链是
+`catalog → mapNote → pathFor → kernelBoxPath → canonicalExistingPath`：为了校验内核给的
+路径没跑出 box，对 root 和 file 各做一次 `existsSync` 循环加 `realpath(3)` 全路径遍历，
+200 篇 = 400 次 realpath，**每次 catalog 取都做一遍**。
+
+修复：内核自己枚举出来的 box 相对路径改成**词法校验**（不含空段 / `.` / `..` / 反斜杠，
+且扩展名是 markdown），这已经是同文件里 `mapVirtualMentionPath` 早就在用的规则——现在两处
+共用 `kernelRelativeBoxPath`。宿主传入的路径（`owns`/`ownsPath`/`move`）继续做完整
+canonicalize，那才是真正需要解符号链接的地方，而且每请求只调一次。
+
+#### 4. 非 wiki vault 每次保存都重建 Node 侧的 wiki 索引，还 fork 两个 git
+
+`scheduleWikiRefresh` 在防抖 350 ms 后**主动**跑 `buildWikiIndex`，只为让广播带上一个
+没人读的 `noteCount`。而 legacy（非 wiki）布局的 `buildWikiIndex` **没有增量路径**：
+`repositoryFileInventory` 重新 walk 并 stat 整个 vault，再 `git status --porcelain
+--untracked-files=all`，`repositoryHeadSha` 再 `git rev-parse HEAD`——两个子进程，每次
+保存。profile 里这一坨占 Node 主线程 22 ms/次保存，子进程的 fork/exec 系统时间在
+profile 之外。
+
+修复：`wikiIndexDirty` 本来就让下一个读者重建，所以主动重建纯粹是提前付账。改成
+"立刻失效 + 广播，谁读谁重建"，并把 mutation 请求的 mode 交给真正提交重建的那次读取
+（`coalesceWikiRefreshMode`）。代价：编辑后第一次搜索付这次重建——而它本来每次按键都在付。
+
+#### 5. 内核侧：`updateMarkdownCatalogPath` 把整个 vault 的关系重解一遍
+
+内核的 catalog 内部本来是增量的（按 path 替换 + `generation++`），但它同时
+`noteOrdered = nil`，于是下一次 `markdownCatalogNotes` 会 `resolveMarkdownNoteRelationships`
+重解全 vault 的 refs/backlinks、把每篇笔记克隆两遍、并重算 directories。这正是 Node 时代
+`patchResolvedRelationships` 解决过的问题，Go 接管时没有跟上。
+
+修复：把 Node 的算法移植成 `(*markdownBoxCatalog).patchMarkdownNoteRelationships`。
+只要**全 vault 的 ref 索引不受影响**就走快路径——即笔记不是新增的、id 没变、可被引用的
+值集合（id/key/title/path/link/source/file/aliases）没变；否则照旧整体失效。快路径里
+只用未变的索引重解这一篇的 refs，并且只调整它**得到或失去**的那些目标的 backlinks。
+顺带把响应前的多余深克隆去掉，并缓存 directories。
+
+`BenchmarkMarkdownCatalogNotes`（`kernel/model/markdown_catalog_bench_test.go`）：
+
+| vault | 改一篇后再读，修复前 | 修复后 |
+|---|---|---|
+| 200 篇 | 1.01 ms / 1.12 MB / 13.9k allocs | **0.106 ms / 0.26 MB / 1.1k allocs** |
+| 1000 篇 | 5.76 ms / 5.83 MB / 69k allocs | **0.456 ms / 1.26 MB / 5.0k allocs** |
+
+从 O(vault) 变成 O(1)。这一项在 200 篇的临时 vault 上只值 1 ms，在真实 vault 上是主项。
+
+顺带修掉一个确定性 bug：`index` 原来在 `unique` **map** 上迭代来决定"同一个 canonical key
+由谁认领"，Go 的随机 map 序意味着两篇同名笔记的 ref 解析结果在两次读取之间可能不同。
+现在按 id 排序迭代（`markdownNoteRefIndex`），并被 patch 复用。
+
+#### 6. 渲染端：自己的保存不该让自己重读整个 vault
+
+剩下的那一次 `notes-index-changed` 是合法的，但触发它的客户端就是刚保存的那个，而
+`reloadNotes()` 会重取 179 KB / 200 篇的 catalog 并重建索引状态——在 xwidget 里就是每个
+打字停顿一次 JSON 解析加一次 GC。
+
+修复：广播带上发起方 `clientId`（`note-saved` 早就带了），渲染端对**自己**引起的变更用
+3 秒防抖（`SELF_NOTES_REFRESH_DELAY_MS`）而不是 500 ms；其他来源的变更节奏不变。连续打字
+于是在停下之后刷新一次，而不是每次停顿刷一次。40 次保存的下行量 14.0 MB → 0.18 MB。
+
+#### 复现
+
+```sh
+# 临时 vault + 隔离 workspace，绝不要指向真实 vault
+NOEMA_ROOT=<tmp>/vault AARONNOTE_STATE_DIR=<tmp>/state \
+NOEMA_KERNEL_WORKSPACE=<tmp>/ws/kernel-workspace NOEMA_KERNEL_CONFIG_DIR=<tmp>/ws/kernel-config \
+AARONNOTE_WEB_PORT=39871 node web-host.mjs
+```
+
+然后：接一个 `/events` SSE 客户端并在 `notes-index-changed` 上重取 `notes:list`（模拟
+渲染端），同时以 1000 ms 间隔发 `notes:save` 增量请求，用 `ps -o time=` 采样两个进程。
+**间隔很关键**：500 ms 的间隔会被 wiki 防抖（350 ms）和渲染端防抖（500 ms）吞掉，
+测出来假的低成本；真实打字的保存间隔 ≥650 ms，所以每一次都单独触发。
+内核侧单独用 `go test ./model/ -bench BenchmarkMarkdownCatalogNotes`。
+
+**测试**：全量 JS **2130 passed / 16 skipped**，`npx tsc` 干净，`go vet ./model/` 干净，
+`go test ./model ./api ./treenode ./noema/...` 全绿。新增护栏
+`kernel/model/markdown_catalog_patch_test.go`：patch 结果必须与全量重解逐字段相等
+（含 refs 重定向、refs 删除、改标题、加别名），普通正文编辑必须真的走快路径（否则
+"永远拒绝快路径"这种退化会静默通过），ref 索引必须稳定。
+
+#### 陈旧 box：事件驱动关闭，不删除注册身份
+
+这一项已经在下一轮处理：内核启动时做一次 reconciliation；运行中由根目录的 fsnotify
+remove/rename/error，或一次真实 Markdown 访问发现 `ENOENT` 来触发。处理只把 shadow conf 的
+`closed` 置为 `true`，停止 watcher，并通过现有 index queue 清投影；不删除 shadow、历史或外部
+内容，也没有 ticker。最终复核时现存测试 vault 根目录均仍存在，因此没有被误关；无需也没有手工
+清理任何 box。
+
+### 2026-08-29（第十轮）：共享 CM6 输入稳定性、宿主边界与真正的静止态
+
+这一轮把用户在 Emacs/xwidget 实机上看到的四类现象拆开验证：连续输入卡顿、源码/预览切换漂移、
+Space/删除后的 viewport 回弹，以及真实空行和视觉空行冲突。修复仍然落在同一套 CM6 编辑器与
+`runHostCommand` 语义里；App 和 Emacs 没有两份编辑逻辑。
+
+#### 连续输入与视觉装饰
+
+输入突发期间不再逐键拆建整批视觉 DOM：安全的 inline 变化只映射既有 decorations，停键后合并
+刷新；换行、删除块边界等结构变化仍立即重算。这个策略由共享编辑器决定，宿主只报告能力，不复制
+命令或渲染实现。所有视觉 widget 也统一进入有界的 measured-observer / viewport 刷新路径，避免
+xwidget 把同一轮布局工作再放大一次。
+
+#### 真实空行只有一个布局所有者
+
+连续空行以前同时被文档 line block 和 visual blank placeholder 表示，造成两个高度来源争夺
+scroll anchor：Enter 会抽搐，大段空行会出现异常空洞。现在每个 inactive blank run 只有一个
+吸收间距的 owner，其余空行折叠；光标所在的真实空行始终保留为可编辑行，大段空行的视觉高度有界。
+连续 Enter 使用同一个 viewport lease，最终只做一次 anchor 恢复。
+
+真实 xwidget 探针连续发送 5 次浏览器原生 Enter（80 ms 间隔）：产生 5 个真实换行，
+`activeBlankCount=1`、空行高度冲突 0、scroll backtrack 0。连续 120 字符（35 ms 间隔）的完整输入链
+均值 24.583 ms/键。
+
+#### 光标、源码/预览切换与整张键表
+
+源码/预览切换保存 CM6 selection、preferred caret anchor 和 viewport lease，切回时按文档位置恢复，
+不依赖旧 DOM 坐标。删除、Space、Enter、模式切换等共享命令都走同一套 focus/selection 提交顺序；
+Emacs key adapter 只转发，整张映射表都做了契约测试，而不是给 `dd` 写例外。
+
+Emacs 侧 xwidget 后的占位 buffer 维持 inert：不开插件、不接收逃逸输入；同步等待式 gateway 路径被
+移出按键热路径。`C-g` 能解除的卡住仍作为 Emacs 主线程/xwidget 状态问题单独诊断，不能再用失焦
+解释。
+
+#### 启动 Git 同步才是剩余的非空闲功耗
+
+采样实际进程树后发现，host 启动会在 2 秒后给所有已知仓库各排一次 wiki autosync，并 fork Git。
+大仓库的 checkpoint 可持续一分钟以上；测量进程被终止时还会遗留待恢复 lease。这不是编辑器空闲
+工作，而是共享 host 的启动策略。
+
+`createWikiAutoSync` 现在保留 `syncOnStart` 能力，但 Noema 的共享 `web-host.mjs` 传
+`syncOnStart:false`：本地写入事件、显式 `syncNow` 和每日周期同步仍在，启动不再无条件扫描全部
+仓库。长 settle 后 30 秒实测 Node `0.00 cpu-s`、Go `0.01 cpu-s`，Git 子进程 0。
+
+#### 陈旧外部 Markdown box 生命周期
+
+缺失根目录按事件关闭的实现同时覆盖 App 与 Emacs workspace：启动一次检查，运行中依靠 fsnotify
+和真实访问失败；去重 worker 在锁内重新 stat 当前绑定，避免仓库已经重新绑定后被旧事件误关。
+写路径会明确返回根目录不可用，不会静默 `MkdirAll` 重建被删除的仓库。关闭只保留 registry shadow
+并释放 watcher/index；没有轮询，也没有数据删除。
+
+#### 最终验证
+
+- 共享 CM6/xwidget focused：90/90；Emacs ERT：103/103。
+- JS 全量：222 个文件通过、7 个跳过；2156 passed、16 skipped；TypeScript 构建干净。
+- Go：`go vet ./...`，以及带 fts5 的 `model/api/treenode/noema` 全绿。
+- `make test`、`make build`、`make install` 全部成功。
+- 安装后的 `/Applications/Noema.app` smoke：`hostMode: "desktop"`、preload true、54 px 标题栏，
+  Back / Forward / Refresh / Editor actions / Window actions 全部存在。
+- Emacs `lisp/roam/Noema` 指向本仓库；snippets、templates、KaTeX macros 和 prose 词表全部解析到
+  `resources/`，已退役的 `lisp/roam/aaronnote` 不存在。

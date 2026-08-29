@@ -31,12 +31,12 @@ import (
 	"unsafe"
 
 	"github.com/88250/gulu"
-	ignore "github.com/sabhiram/go-gitignore"
-	"github.com/siyuan-note/eventbus"
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/sql"
 	"github.com/aaronhe/noema/kernel/task"
 	"github.com/aaronhe/noema/kernel/util"
+	ignore "github.com/sabhiram/go-gitignore"
+	"github.com/siyuan-note/eventbus"
+	"github.com/siyuan-note/logging"
 )
 
 const (
@@ -105,14 +105,58 @@ func StartEmbeddingIndexer() {
 
 	embeddingTableOk = true
 
-	processPendingEmbeddings()
-
+	retryAfter := processPendingEmbeddings()
+	var retryTimer *time.Timer
+	var retryC <-chan time.Time
+	armRetry := func(delay time.Duration) {
+		if nil != retryTimer {
+			if !retryTimer.Stop() {
+				select {
+				case <-retryTimer.C:
+				default:
+				}
+			}
+		}
+		retryC = nil
+		if 0 >= delay {
+			return
+		}
+		if nil == retryTimer {
+			retryTimer = time.NewTimer(delay)
+		} else {
+			retryTimer.Reset(delay)
+		}
+		retryC = retryTimer.C
+	}
+	armRetry(retryAfter)
+	defer func() {
+		if nil != retryTimer {
+			retryTimer.Stop()
+		}
+	}()
 	for {
 		select {
 		case <-embeddingDirtyCh:
-			processPendingEmbeddings()
-		case <-time.After(30 * time.Second):
-			processPendingEmbeddings()
+			// SQL queue events are the authoritative signal for new or changed
+			// blocks. Coalesce a completed transaction's per-block notifications:
+			// one database query sees all committed rows, so replaying hundreds of
+			// identical wakeups would only issue hundreds of empty queries.
+		coalesceDirty:
+			for {
+				select {
+				case <-embeddingDirtyCh:
+					continue
+				default:
+					break coalesceDirty
+				}
+			}
+			// Cancel a pending failure retry and recompute the exact next due
+			// time from the database after handling the coalesced event.
+			armRetry(0)
+			armRetry(processPendingEmbeddings())
+		case <-retryC:
+			retryC = nil
+			armRetry(processPendingEmbeddings())
 		}
 	}
 }
@@ -130,15 +174,16 @@ type embeddingJob struct {
 	blocks []map[string]any
 }
 
-func processPendingEmbeddings() {
+func processPendingEmbeddings() time.Duration {
 	if !isEmbeddingEnabled() {
-		return
+		return 0
 	}
 
 	embeddingStop.Store(false)
 	embeddingErrNotified.Store(false)
 
 	workCh := make(chan embeddingJob, embeddingMaxConcurrency*2)
+	nextRetryCh := make(chan time.Duration, 1)
 
 	var workersWg sync.WaitGroup
 	for range embeddingMaxConcurrency {
@@ -157,6 +202,8 @@ func processPendingEmbeddings() {
 
 	go func() {
 		defer close(workCh)
+		nextRetry := time.Duration(0)
+		defer func() { nextRetryCh <- nextRetry }()
 		for {
 			if embeddingStop.Load() {
 				return
@@ -168,6 +215,7 @@ func processPendingEmbeddings() {
 			results, err := sql.QueryNoLimitArgs(stmtPendingBlocks, embeddingMaxFailCount, cutoff)
 			if err != nil {
 				logging.LogErrorf("query pending embedding blocks failed: %s", err)
+				nextRetry = time.Duration(embeddingBackoffBase) * time.Second
 				return
 			}
 
@@ -234,21 +282,22 @@ func processPendingEmbeddings() {
 				anySubmitted = true
 			}
 
-			// 本轮没有提交任何 job，且全部是被退避跳过的块：这些块状态没变，下轮 SQL 还会捞出同样的块，
-			// 直接进下一轮会 CPU 忙等 + 高频 DB 查询。sleep 到最近的到期时间再继续，期间检查熔断以便及时退出。
+			// 本轮没有提交任何 job，且全部是被退避跳过的块：把最近的到期时间
+			// 返回给外层一次性 timer。之前这里每秒醒来检查熔断，外层还叠加了 30s
+			// 轮询；失败退避越长，无效唤醒越多。新的 SQL 事件会取消 timer 并立即重试。
 			if !anySubmitted && backoffSkipped > 0 {
-				wait := max(time.Duration(minRemaining)*time.Second, time.Second)
-				// 分段 sleep，每秒检查一次 embeddingStop，熔断时尽快退出
-				for wait > 0 && !embeddingStop.Load() {
-					step := min(wait, time.Second)
-					time.Sleep(step)
-					wait -= step
-				}
+				nextRetry = max(time.Duration(minRemaining)*time.Second, time.Second)
+				return
 			}
 		}
 	}()
 
 	workersWg.Wait()
+	nextRetry := <-nextRetryCh
+	if embeddingStop.Load() && 0 >= nextRetry {
+		return time.Duration(embeddingBackoffBase) * time.Second
+	}
+	return nextRetry
 }
 
 // stmtPendingBlocks 捞取待嵌入块，分两类：
@@ -661,7 +710,8 @@ func fullReindexEmbedding() {
 	logging.LogInfof("embedding vectors cleared, indexer will re-embed all blocks")
 
 	// 若后台索引器死循环未运行（用户启动内核时嵌入未启用、随后才开启并点重建），这里补启动。
-	// StartEmbeddingIndexer 内部用 CAS 保证只启动一个死循环。已运行则 Publish 唤醒立即补齐，不必等 30s 兜底轮询。
+	// StartEmbeddingIndexer 内部用 CAS 保证只启动一个死循环。已运行则 Publish
+	// 唤醒立即补齐；空闲时没有轮询，只有失败块的精确一次性退避。
 	if !embeddingIndexerRunning.Load() {
 		go StartEmbeddingIndexer()
 	} else {

@@ -21,14 +21,6 @@ const emptyFlags = (): AssistUpdateFlags => ({
   selectionTool: false,
 });
 
-function sameFlags(a: AssistUpdateFlags, b: AssistUpdateFlags): boolean {
-  return a.snippets === b.snippets
-    && a.mathPreview === b.mathPreview
-    && a.cursor === b.cursor
-    && a.toc === b.toc
-    && a.selectionTool === b.selectionTool;
-}
-
 export class AssistScheduler {
   private frame = 0;
   private pending = emptyFlags();
@@ -88,12 +80,6 @@ export class AssistScheduler {
     this.pending = emptyFlags();
   }
 
-  private cancelFrame(): void {
-    if (!this.frame) return;
-    this.frameApi.cancelAnimationFrame(this.frame);
-    this.frame = 0;
-  }
-
   private schedulePending(): void {
     if (this.paused || !this.visible() || !Object.values(this.pending).some(Boolean)) return;
     if (this.frame) return;
@@ -123,9 +109,13 @@ export class AssistScheduler {
       toc: this.pending.toc || options.toc === true,
       selectionTool: this.pending.selectionTool || (explicit ? options.selectionTool === true : true),
     };
-    if (this.frame && sameFlags(this.pending, next)) return;
-    if (this.frame) this.cancelFrame();
     this.pending = next;
+    // A queued frame reads `this.pending` when it fires, so broadening the
+    // flags does not require replacing that frame. Document edits commonly
+    // request change work and selection work back-to-back; cancel/re-request
+    // turned every keystroke into two browser frame registrations and made the
+    // xwidget host pay an avoidable WebKit/Emacs scheduling round trip.
+    if (this.frame) return;
     this.schedulePending();
   }
 

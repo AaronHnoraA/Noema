@@ -3239,7 +3239,7 @@ async function scanNotesFromMarkdownCatalog() {
     const pending = (async () => ({
       provider,
       requestedVersion,
-      payload: await provider.catalog(false),
+      payload: await kernelNoteCatalog(false),
     }))();
     markdownCatalogScanInFlight = pending;
     void pending.finally(() => {
@@ -9126,6 +9126,7 @@ export function configureMarkdownFileProvider(provider = null) {
     : null;
   if (markdownFileProvider !== next) {
     markdownFileProvider = next;
+    kernelCatalogCache = null;
     notesSnapshotDirty = true;
     notesSnapshotFullDirty = true;
   }
@@ -9133,6 +9134,66 @@ export function configureMarkdownFileProvider(provider = null) {
 
 export function markdownCatalogProviderActive() {
   return noteScanRoot === noteRoot && typeof markdownFileProvider?.catalog === "function";
+}
+
+// Single memo for the Go kernel's note catalog.
+//
+// Every caller used to hit `provider.catalog()` directly, so a note list, a
+// knowledge search and a scanNotes() in the same tick each paid a full-vault
+// HTTP fetch, JSON parse and re-map — the Node-era path went through
+// scanNotes(), which served all three from one snapshot and only rescanned
+// what markNotesDirty() had marked. Keying on notesIndexVersion restores that:
+// the version is bumped by every host mutation and by the vault watcher, which
+// together are the only ways the catalog can change under us.
+//
+// The cached payload is shared, not cloned. Consumers on this path (note list
+// responses, knowledge search) copy before mutating; scanNotes() clones. Treat
+// it as immutable.
+let kernelCatalogCache = null;
+let kernelCatalogInFlight = null;
+
+export async function kernelNoteCatalog(force = false) {
+  const provider = markdownFileProvider;
+  if (typeof provider?.catalog !== "function") {
+    throw goCoreUnavailable("note catalog");
+  }
+  const version = notesIndexVersion;
+  if (
+    force !== true
+    && kernelCatalogCache
+    && kernelCatalogCache.provider === provider
+    && kernelCatalogCache.root === noteRoot
+    && kernelCatalogCache.version === version
+  ) {
+    return kernelCatalogCache.payload;
+  }
+  if (!kernelCatalogInFlight || force === true) {
+    const pending = (async () => ({
+      provider,
+      root: noteRoot,
+      version,
+      payload: await provider.catalog(force === true),
+    }))();
+    kernelCatalogInFlight = pending;
+    void pending.finally(() => {
+      if (kernelCatalogInFlight === pending) kernelCatalogInFlight = null;
+    }).catch(() => {});
+  }
+  const settled = await kernelCatalogInFlight;
+  // Only publish a result that still describes the current provider, root and
+  // version; a markNotesDirty() that landed mid-fetch must not be masked.
+  if (
+    settled.provider === markdownFileProvider
+    && settled.root === noteRoot
+    && settled.version === notesIndexVersion
+  ) {
+    kernelCatalogCache = settled;
+  }
+  return settled.payload;
+}
+
+export function forgetKernelNoteCatalog() {
+  kernelCatalogCache = null;
 }
 
 function applyMarkdownChangeSet(source, payload) {
@@ -9382,6 +9443,13 @@ export async function saveNote(body) {
       : await writeMarkdownFile(file, content, { expectedVersion: kernelExpectedVersion, force });
     if (persisted?.conflict === true || persisted?.rejected === true || persisted?.ok === false)
       return persisted;
+    // The Go kernel performs the write, so the host's own watcher sees a plain
+    // external modification unless the save is registered here. writeMarkdownFile()
+    // already does this for the whole-source path; the incremental path is the one
+    // every keystroke autosave takes, and without this each save was counted twice:
+    // once by the save handler and once by the watcher, doubling the index
+    // invalidation, the notes-index-changed broadcast and the catalog refetch.
+    if (incrementalChanges && !standaloneIncremental) noteSelfWrite(file);
     const info =
       Number(persisted?.mtimeMs) > 0
         ? {

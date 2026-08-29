@@ -918,10 +918,32 @@ function spacedFragmentLinkRule(state: StateInline, silent: boolean): boolean {
   return true;
 }
 
+type InlineDelimiterCursor = { close: number };
+
+const nextLinkLabelCloseCache = new WeakMap<StateInline, InlineDelimiterCursor>();
+const nextWikiCloseCache = new WeakMap<StateInline, InlineDelimiterCursor>();
+
+// Inline rules are called with monotonically increasing state.pos. Reusing the
+// next delimiter makes a run of unmatched/nested `[` linear: calling indexOf
+// from every opener otherwise rescans the same suffix for both the Jupyter and
+// wiki rules, which is quadratic before markdown-it gets a chance to parse it.
+function nextInlineDelimiter(
+  state: StateInline,
+  start: number,
+  delimiter: "]" | "]]",
+  cache: WeakMap<StateInline, InlineDelimiterCursor>,
+): number {
+  let cursor = cache.get(state);
+  if (cursor && (cursor.close < 0 || cursor.close > start)) return cursor.close;
+  cursor = { close: state.src.indexOf(delimiter, start + 1) };
+  cache.set(state, cursor);
+  return cursor.close;
+}
+
 function jupyterLinkRule(state: StateInline, silent: boolean): boolean {
   const start = state.pos;
   if (state.src.charCodeAt(start) !== 0x5b /* [ */) return false;
-  const closeLabel = state.src.indexOf("]", start + 1);
+  const closeLabel = nextInlineDelimiter(state, start, "]", nextLinkLabelCloseCache);
   if (closeLabel < 0 || state.src.charCodeAt(closeLabel + 1) !== 0x28 /* ( */) return false;
   const closeHref = state.src.indexOf(")", closeLabel + 2);
   if (closeHref < 0) return false;
@@ -940,8 +962,8 @@ function jupyterLinkRule(state: StateInline, silent: boolean): boolean {
 
 function wikiLinkRule(state: StateInline, silent: boolean): boolean {
   const start = state.pos;
-  if (state.src.slice(start, start + 2) !== "[[") return false;
-  const close = state.src.indexOf("]]", start + 2);
+  if (state.src.charCodeAt(start) !== 0x5b || state.src.charCodeAt(start + 1) !== 0x5b) return false;
+  const close = nextInlineDelimiter(state, start + 1, "]]", nextWikiCloseCache);
   if (close < 0) return false;
   const raw = state.src.slice(start + 2, close);
   if (!raw || raw.includes("\n")) return false;

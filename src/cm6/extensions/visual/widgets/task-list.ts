@@ -26,6 +26,7 @@ import type { Range } from "@codemirror/state";
 import { getBlockMathRanges, rangeInsideAny } from "../../../math-ranges.ts";
 import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
 import { isCoalescedVisualTyping } from "../typing-burst.ts";
+import { rememberPersistentVisualPluginState, restorePersistentVisualPluginState } from "../visual-mode.ts";
 
 // ---------------------------------------------------------------------------
 // Widget
@@ -130,13 +131,22 @@ function activeTaskMarkerLineKey(view: EditorView): string {
 // ViewPlugin export
 // ---------------------------------------------------------------------------
 
+type TaskListPluginSnapshot = { decorations: DecorationSet; activeLineKey: string };
+const taskListPluginCacheKey = {};
+
 class TaskListPlugin {
   decorations: DecorationSet;
+  private readonly view: EditorView;
   private activeLineKey: string;
 
   constructor(view: EditorView) {
-    this.activeLineKey = activeTaskMarkerLineKey(view);
-    this.decorations = buildTaskDecorations(view);
+    this.view = view;
+    const cached = restorePersistentVisualPluginState<TaskListPluginSnapshot>(
+      view.state,
+      taskListPluginCacheKey,
+    );
+    this.activeLineKey = cached?.activeLineKey ?? activeTaskMarkerLineKey(view);
+    this.decorations = cached?.decorations ?? buildTaskDecorations(view);
   }
 
   update(update: ViewUpdate): void {
@@ -154,6 +164,13 @@ class TaskListPlugin {
       this.activeLineKey = nextLineKey;
       this.decorations = buildTaskDecorations(update.view);
     }
+  }
+
+  destroy(): void {
+    rememberPersistentVisualPluginState(this.view, taskListPluginCacheKey, {
+      decorations: this.decorations,
+      activeLineKey: this.activeLineKey,
+    } satisfies TaskListPluginSnapshot);
   }
 }
 

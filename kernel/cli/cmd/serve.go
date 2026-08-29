@@ -42,6 +42,7 @@ var (
 	serveAttachUI       bool
 	serveSafeMode       bool
 	serveEnablePprof    bool
+	serveNoemaSidecar   bool
 	serveSupervisorPID  int
 )
 
@@ -66,8 +67,11 @@ var serveCmd = &cobra.Command{
 		util.BootWithFlags(ws, serveWdPath, servePort, serveReadOnly, serveAccessAuthCode, serveLang, serveMode, serveSSL, serveAttachUI, serveSafeMode, serveEnablePprof)
 
 		model.InitJwtKey()
-		model.InitConf()
-		go server.Serve(false, model.Conf.CookieKey)
+		// The Node-owned sidecar discovers optional external tools on first use,
+		// matching the old Node host's demand-driven startup. Standalone kernel
+		// compatibility keeps the eager probes.
+		model.InitConf(!serveNoemaSidecar)
+		go server.Serve(false, model.Conf.CookieKey, server.ServeOptions{NoemaSidecar: serveNoemaSidecar})
 		model.InitAppearance()
 		sql.InitDatabase(false)
 		sql.InitHistoryDatabase(false)
@@ -116,6 +120,7 @@ func init() {
 	serveCmd.Flags().BoolVar(&serveAttachUI, "attach-ui", false, "attach kernel lifecycle to desktop UI process (used by Electron)")
 	serveCmd.Flags().BoolVar(&serveSafeMode, "safe-mode", false, "boot in safe mode")
 	serveCmd.Flags().BoolVar(&serveEnablePprof, "enable-pprof", false, "register unauthenticated /debug/pprof/ endpoints exposing process memory dumps (dev only, never enable on a network-exposed instance)")
+	serveCmd.Flags().BoolVar(&serveNoemaSidecar, "noema-sidecar", false, "use the Node-owned private loopback transport without SiYuan UI polling, TLS multiplexing, or the fixed-port proxy")
 	serveCmd.Flags().IntVar(&serveSupervisorPID, "supervisor-pid", 0, "exit gracefully when the owning web-host process exits")
 
 	rootCmd.AddCommand(serveCmd)

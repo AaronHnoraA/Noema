@@ -24,6 +24,9 @@
 #
 # Everything it starts, it stops.
 #
+# Set NOEMA_TYPING_ACTION=enter to drive real browser line-break input and
+# verify that an active authored blank run keeps one stable measured height.
+#
 # Usage: scripts/measure-xwidget-typing.sh <note.md> [settle-seconds] [keystrokes] [interval-ms]
 set -u
 
@@ -31,12 +34,18 @@ NOTE="${1:-}"
 SETTLE="${2:-20}"
 KEYS="${3:-300}"
 INTERVAL_MS="${4:-120}"
+TYPING_MODE="${NOEMA_TYPING_MODE:-visual}"
+TYPING_ACTION="${NOEMA_TYPING_ACTION:-text}"
 SERVER="noema-typing-measure-$$"
-EMACS_BIN="${EMACS_BIN:-/Applications/Emacs.app/Contents/MacOS/Emacs}"
+SERVER_SOCKET=""
+EMACS_APP="${EMACS_APP:-Emacs}"
 EMACS_PID=""
+LAUNCHED_EMACS_PID=""
 WORKDIR=""
+EMACS_LOG=""
 OWNED_PIDS=()
 WEBKIT_BEFORE="$(ps -eo pid=,comm= | awk '/WebKit\.(WebContent|Networking|GPU)$/ { print $1 }' | tr '\n' ' ')"
+EMACS_BEFORE="$(ps -eo pid=,command= | awk '$0 ~ /\/Emacs\.app\/Contents\/MacOS\/Emacs([[:space:]]|$)/ { print $1 }' | tr '\n' ' ')"
 
 if [ -z "$NOTE" ]; then
   echo "usage: $0 <note.md> [settle-seconds] [keystrokes] [interval-ms]" >&2
@@ -44,6 +53,12 @@ if [ -z "$NOTE" ]; then
 fi
 case "$KEYS" in ''|*[!0-9]*) echo "keystrokes must be a positive integer" >&2; exit 2 ;; esac
 case "$INTERVAL_MS" in ''|*[!0-9]*) echo "interval-ms must be a positive integer" >&2; exit 2 ;; esac
+case "$TYPING_MODE" in visual|source) ;; *) echo "invalid NOEMA_TYPING_MODE: $TYPING_MODE" >&2; exit 2 ;; esac
+case "$TYPING_ACTION" in text|enter) ;; *) echo "invalid NOEMA_TYPING_ACTION: $TYPING_ACTION" >&2; exit 2 ;; esac
+[ "$TYPING_ACTION" != enter ] || [ "$TYPING_MODE" = visual ] || {
+  echo "NOEMA_TYPING_ACTION=enter requires NOEMA_TYPING_MODE=visual" >&2
+  exit 2
+}
 [ "$KEYS" -gt 0 ] || { echo "keystrokes must be a positive integer" >&2; exit 2; }
 if [ ! -f "$NOTE" ]; then
   echo "no such note: $NOTE" >&2
@@ -53,7 +68,13 @@ fi
 # This measurement types into the document, and the editor autosaves. Never
 # point the run at the original: copy it into a throwaway vault and drive that,
 # so a measurement can never damage a real note.
-WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/noema-typing-measure.XXXXXX")"
+# macOS AF_UNIX paths are short (roughly 104 bytes). $TMPDIR lives under a
+# long /var/folders path, and server-start then silently failed before the
+# benchmark could discover its private GUI. Keep only this socket workspace
+# under the canonical short /tmp alias.
+WORKDIR="$(mktemp -d "/tmp/noema-typing-measure.XXXXXX")"
+EMACS_LOG="$WORKDIR/emacs.log"
+SERVER_SOCKET="$WORKDIR/$SERVER"
 SOURCE_NOTE="$NOTE"
 NOTE="$WORKDIR/$(basename "$SOURCE_NOTE")"
 cp "$SOURCE_NOTE" "$NOTE"
@@ -64,7 +85,7 @@ cpu_seconds() {
     | awk -F: 'NF==3 { print $1*3600+$2*60+$3 } NF==2 { print $1*60+$2 }'
 }
 
-client() { emacsclient -s "$SERVER" -e "$1" 2>&1; }
+client() { emacsclient -s "$SERVER_SOCKET" -e "$1" 2>&1; }
 
 descendants_of() {
   local parent="$1" child
@@ -76,6 +97,8 @@ descendants_of() {
 
 cleanup() {
   trap - EXIT INT TERM
+  if [ -z "$EMACS_PID" ]; then EMACS_PID="$LAUNCHED_EMACS_PID"; fi
+  local closer_command=""
   if [ -n "$EMACS_PID" ] && kill -0 "$EMACS_PID" 2>/dev/null; then
     client '(progn (ignore-errors (my/noema-stop)) (kill-emacs))' >/dev/null 2>&1 &
     local closer=$!
@@ -83,7 +106,13 @@ cleanup() {
       kill -0 "$EMACS_PID" 2>/dev/null || break
       sleep 0.25
     done
-    kill "$closer" 2>/dev/null || true
+    if kill -0 "$closer" 2>/dev/null; then
+      closer_command="$(ps -o command= -p "$closer" 2>/dev/null)"
+      case "$closer_command" in
+        *"emacsclient -s $SERVER_SOCKET"*) kill -TERM "$closer" 2>/dev/null || true ;;
+      esac
+    fi
+    wait "$closer" 2>/dev/null || true
     if kill -0 "$EMACS_PID" 2>/dev/null; then
       kill -TERM "$EMACS_PID" 2>/dev/null || true
       sleep 1
@@ -91,12 +120,18 @@ cleanup() {
     if kill -0 "$EMACS_PID" 2>/dev/null; then
       kill -KILL "$EMACS_PID" 2>/dev/null || true
     fi
+    # Reap the exact GUI child before returning so back-to-back benchmark runs
+    # cannot overlap macOS application teardown.
+    wait "$EMACS_PID" 2>/dev/null || true
   fi
   # Only the exact descendants captured from this run, re-checked by command
   # before signalling. Never a broad pattern match: a bare `pgrep -f noema-kernel`
   # also matches the kernel belonging to the user's own Emacs session.
   local pid command
-  for pid in "${OWNED_PIDS[@]}"; do
+  # macOS still ships Bash 3, where expanding an initialized-but-empty array
+  # under `set -u` raises an unbound-variable error. PIDs contain no spaces, so
+  # the defaulted scalar expansion is safe and keeps failed-start cleanup quiet.
+  for pid in ${OWNED_PIDS[*]-}; do
     kill -0 "$pid" 2>/dev/null || continue
     command="$(ps -o command= -p "$pid" 2>/dev/null)"
     case "$command" in
@@ -105,73 +140,198 @@ cleanup() {
   done
   # Only ever a directory this run created with mktemp -d.
   case "${WORKDIR:-}" in
-    */noema-typing-measure.*) rm -rf "$WORKDIR" ;;
+    /tmp/noema-typing-measure.*|/private/tmp/noema-typing-measure.*) rm -rf "$WORKDIR" ;;
   esac
 }
 trap cleanup EXIT INT TERM
 
 echo "starting Emacs behind server socket '$SERVER'"
 NOEMA_MEASURE_NOTE="$NOTE" \
-"$EMACS_BIN" --eval "(progn (require 'server) (setq server-name \"$SERVER\") (server-start))" \
-  >/dev/null 2>&1 &
-EMACS_PID=$!
+  /usr/bin/open -n -a "$EMACS_APP" --args \
+  --eval "(progn (require 'server) (setq server-socket-dir \"$WORKDIR\" server-name \"$SERVER\") (server-start))" \
+  >"$EMACS_LOG" 2>&1
+
+# Remember the exact GUI process created by this `open -n` even if startup
+# fails before server-start. Cleanup can then reap our process without ever
+# matching an already-running user Emacs.
+for _ in $(seq 1 20); do
+  while read -r candidate_pid candidate_command; do
+    [ -n "$candidate_pid" ] || continue
+    case " $EMACS_BEFORE " in *" $candidate_pid "*) continue ;; esac
+    case "$candidate_command" in
+      *"/Emacs.app/Contents/MacOS/Emacs"*) LAUNCHED_EMACS_PID="$candidate_pid"; break ;;
+    esac
+  done < <(ps -eo pid=,command=)
+  [ -n "$LAUNCHED_EMACS_PID" ] && break
+  sleep 0.25
+done
 
 for _ in $(seq 1 60); do
-  client '(emacs-version)' | grep -q GNU && break
+  candidate_pid="$(client '(emacs-pid)' | tr -d '[:space:]')"
+  case "$candidate_pid" in
+    ''|*[!0-9]*) ;;
+    *)
+      if kill -0 "$candidate_pid" 2>/dev/null; then
+        EMACS_PID="$candidate_pid"
+        break
+      fi
+      ;;
+  esac
   sleep 1
 done
-if ! client '(emacs-version)' | grep -q GNU; then
-  echo "Emacs server never came up" >&2
+if [ -z "$EMACS_PID" ] || ! client '(emacs-version)' | grep -q GNU; then
+  if [ -n "$EMACS_PID" ] && kill -0 "$EMACS_PID" 2>/dev/null; then
+    echo "Emacs server never came up (process $EMACS_PID is still alive)" >&2
+  elif [ -n "$EMACS_PID" ]; then
+    wait "$EMACS_PID"
+    emacs_status=$?
+    EMACS_PID=""
+    echo "Emacs exited before its server came up (status=$emacs_status)" >&2
+  else
+    echo "Isolated Emacs server never came up" >&2
+  fi
+  tail -80 "$EMACS_LOG" >&2
   exit 1
 fi
 
-client '(let ((file (getenv "NOEMA_MEASURE_NOTE"))) (require '\''init-aaronnote) (setq my/noema-web-port 0) (find-file file) (my/noema-open-file file) "opened")' >/dev/null
+open_result="$(client '(let ((file (getenv "NOEMA_MEASURE_NOTE"))) (require '\''init-aaronnote) (setq my/noema-web-port 0) (find-file file) (my/noema-open-file file) "opened")')"
+case "$open_result" in
+  *'"opened"'*) ;;
+  *) echo "Noema open request failed: $open_result" >&2; exit 1 ;;
+esac
 for _ in $(seq 1 60); do
   ready="$(client '(and my/noema--ready (process-live-p my/noema--process) (buffer-live-p my/noema--app-buffer) (with-current-buffer my/noema--app-buffer (eq major-mode '\''xwidget-webkit-mode)))')"
   [ "$ready" = "t" ] && break
+  kill -0 "$EMACS_PID" 2>/dev/null || break
   sleep 1
 done
 if [ "${ready:-nil}" != "t" ]; then
-  echo "Noema xwidget/core never became ready: $(client '(list :ready my/noema--ready :process (and my/noema--process (process-status my/noema--process)) :buffer (and (buffer-live-p my/noema--app-buffer) (buffer-name my/noema--app-buffer)) :mode (and (buffer-live-p my/noema--app-buffer) (with-current-buffer my/noema--app-buffer major-mode)) :frames (length (frame-list)))')" >&2
+  if ! kill -0 "$EMACS_PID" 2>/dev/null; then
+    wait "$EMACS_PID"
+    emacs_status=$?
+    EMACS_PID=""
+    echo "Measurement Emacs exited before Noema became ready (status=$emacs_status)" >&2
+    tail -80 "$EMACS_LOG" >&2
+    exit 1
+  fi
+  echo "Noema xwidget/core never became ready: $(client '(list :ready my/noema--ready :process (and my/noema--process (process-status my/noema--process)) :buffer (and (buffer-live-p my/noema--app-buffer) (buffer-name my/noema--app-buffer)) :mode (and (buffer-live-p my/noema--app-buffer) (with-current-buffer my/noema--app-buffer major-mode)) :frames (length (frame-list)) :callbacks (length my/noema--ready-callbacks) :watchdog (timerp my/noema--ready-watchdog) :last-port my/noema--last-port)')" >&2
+  echo "Noema web-host log tail:" >&2
+  client '(if-let* ((buffer (get-buffer " *Noema web host*"))) (with-current-buffer buffer (buffer-substring-no-properties (max (point-min) (- (point-max) 12000)) (point-max))) "(missing)")' >&2
+  echo "Emacs messages tail:" >&2
+  client '(if-let* ((buffer (get-buffer "*Messages*"))) (with-current-buffer buffer (buffer-substring-no-properties (max (point-min) (- (point-max) 12000)) (point-max))) "(missing)")' >&2
+  tail -80 "$EMACS_LOG" >&2
   exit 1
+fi
+
+if [ "$TYPING_MODE" = source ]; then
+  client '(with-current-buffer my/noema--app-buffer (xwidget-webkit-execute-script (xwidget-webkit-current-session) "window.dispatchEvent(new CustomEvent(\"aaronnote:command\",{detail:{command:\"toggle-source\"}}))"))' >/dev/null
+  sleep 1
 fi
 
 # Typing only happens in a foreground pane, so make this one the active client
 # and confirm the renderer agrees before attributing any cost to it.
 client '(when-let* ((window (get-buffer-window my/noema--app-buffer t))) (select-frame-set-input-focus (window-frame window)) (select-window window)) (setq my/noema--last-activity-signature :unknown) (my/noema--update-activity)' >/dev/null
-sleep 1
-if [ "$(client '(with-current-buffer my/noema--app-buffer my/noema--activity-paused)')" != "nil" ]; then
+# Multiple Emacs instances share the same application name. Activate the exact
+# measurement process so an existing user frame cannot accidentally receive
+# the generic `tell application "Emacs" to activate` request.
+osascript -e "tell application \"System Events\" to set frontmost of first application process whose unix id is $EMACS_PID to true" >/dev/null 2>&1 || true
+typing_activity=""
+for _ in $(seq 1 20); do
+  client '(setq my/noema--last-activity-signature :unknown) (my/noema--update-activity)' >/dev/null
+  # Foreground resume is deliberately event-debounced by 120 ms. Read the
+  # applied state after that boundary instead of repeatedly cancelling and
+  # rescheduling it in the same emacsclient request.
+  sleep 0.2
+  typing_activity="$(client '(with-current-buffer my/noema--app-buffer my/noema--activity-paused)')"
+  [ "$typing_activity" = "nil" ] && break
+  client '(when-let* ((window (get-buffer-window my/noema--app-buffer t))) (select-frame-set-input-focus (window-frame window)) (select-window window))' >/dev/null
+  osascript -e "tell application \"System Events\" to set frontmost of first application process whose unix id is $EMACS_PID to true" >/dev/null 2>&1 || true
+done
+if [ "$typing_activity" != "nil" ]; then
   echo "Noema pane is not the active client; refusing to attribute typing cost to a paused renderer" >&2
+  echo "Emacs activity diagnostics: $(client '(list :selected-buffer (buffer-name (window-buffer (selected-window))) :app-buffer (and (buffer-live-p my/noema--app-buffer) (buffer-name my/noema--app-buffer)) :app-window (and (buffer-live-p my/noema--app-buffer) (get-buffer-window my/noema--app-buffer t)) :selected-frame-focus (frame-focus-state (selected-frame)) :selected-frame-visible (frame-visible-p (selected-frame)) :app-active (my/noema--app-buffer-visible-p) :snapshot (mapcar (lambda (entry) (cons (buffer-name (car entry)) (cdr entry))) (my/noema--activity-snapshot)) :paused (and (buffer-live-p my/noema--app-buffer) (with-current-buffer my/noema--app-buffer my/noema--activity-paused))))')" >&2
+  echo "macOS frontmost process: $(osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true' 2>&1) pid=$(osascript -e 'tell application "System Events" to get unix id of first application process whose frontmost is true' 2>&1)" >&2
+  echo "exact activation result: $(osascript -e "tell application \"System Events\" to set frontmost of first application process whose unix id is $EMACS_PID to true" 2>&1)" >&2
   exit 1
 fi
 
-echo "opened $NOTE; settling ${SETTLE}s"
+echo "opened $NOTE in $TYPING_MODE mode; settling ${SETTLE}s"
 sleep "$SETTLE"
 
 read -r -d '' DRIVER <<'JS' || true
 (() => {
-  const content = document.querySelector('.cm-content');
+  const content = document.querySelector('[data-editor] .cm-content[contenteditable="true"]');
+  const host = document.querySelector('[data-editor]');
   if (!content) return 'no-editor';
-  const probe = { done: false, typed: 0, path: '', error: '' };
+  const action = 'TYPING_ACTION';
+  const probe = {
+    done: false,
+    typed: 0,
+    path: '',
+    error: '',
+    activeBlankCount: 0,
+    blankClassConflicts: 0,
+    activeHeightSpreadMaxPx: 0,
+    scrollBacktracks: 0,
+    scrollBacktrackMaxPx: 0,
+  };
   window.__noemaTypingProbe = probe;
   content.focus();
+  let previousScrollTop = 0;
+  const placeCaretNearViewportEnd = () => {
+    const selection = document.getSelection();
+    if (!selection) return;
+    const mountedLines = Array.from(content.querySelectorAll('.cm-line'));
+    const target = mountedLines[Math.max(0, mountedLines.length - 3)] || content;
+    const range = document.createRange();
+    range.selectNodeContents(target);
+    range.collapse(false);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  };
+  const sampleBlankLayout = () => {
+    if (action !== 'enter') return;
+    const active = Array.from(content.querySelectorAll('.cm-line.cm-prose-blank-active'));
+    probe.activeBlankCount = active.length;
+    const heights = active.map((line) => line.getBoundingClientRect().height);
+    if (heights.length > 1) {
+      const spread = Math.max(...heights) - Math.min(...heights);
+      probe.activeHeightSpreadMaxPx = Math.max(probe.activeHeightSpreadMaxPx, spread);
+    }
+    probe.blankClassConflicts += active.filter((line) => (
+      line.classList.contains('cm-prose-paragraph-gap')
+      || line.classList.contains('cm-prose-blank-collapsed')
+      || line.classList.contains('cm-prose-blank-absorbed')
+    )).length;
+    if (host) {
+      const current = host.scrollTop;
+      if (current + 0.5 < previousScrollTop) {
+        probe.scrollBacktracks += 1;
+        probe.scrollBacktrackMaxPx = Math.max(probe.scrollBacktrackMaxPx, previousScrollTop - current);
+      }
+      previousScrollTop = current;
+    }
+  };
   const letters = 'the quick brown fox jumps over a lazy dog '.split('');
   let index = 0;
   const total = TOTAL_KEYS;
   const step = () => {
-    if (index >= total) { probe.done = true; return; }
+    if (index >= total) {
+      setTimeout(() => { sampleBlankLayout(); probe.done = true; }, 160);
+      return;
+    }
     try {
-      const character = letters[index % letters.length];
-      if (document.execCommand('insertText', false, character)) {
-        probe.path = probe.path || 'execCommand';
+      const command = action === 'enter' ? 'insertLineBreak' : 'insertText';
+      const value = action === 'enter' ? null : letters[index % letters.length];
+      if (document.execCommand(command, false, value)) {
+        probe.path = probe.path || (action === 'enter' ? 'execCommand-insertLineBreak' : 'execCommand');
       } else {
-        // Fall back to a CM6 transaction. This skips the DOM observer, so the
-        // result is reported with its path so the two are never conflated.
-        const view = content.cmView && content.cmView.view;
-        if (!view) { probe.error = 'no-view'; probe.done = true; return; }
-        const at = view.state.selection.main.head;
-        view.dispatch({ changes: { from: at, to: at, insert: character } });
-        probe.path = probe.path || 'dispatch';
+        // A CM6 transaction fallback would silently skip the browser editing
+        // and DOM-observer path this benchmark exists to measure. Fail closed
+        // instead of printing a deceptively cheap result.
+        probe.error = `execCommand-false:editable=${content.isContentEditable}:active=${document.activeElement === content}`;
+        probe.done = true;
+        return;
       }
       probe.typed = index + 1;
     } catch (err) {
@@ -180,14 +340,28 @@ read -r -d '' DRIVER <<'JS' || true
       return;
     }
     index += 1;
-    setTimeout(step, INTERVAL);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      sampleBlankLayout();
+      setTimeout(step, INTERVAL);
+    }));
   };
-  setTimeout(step, 0);
+  setTimeout(() => {
+    placeCaretNearViewportEnd();
+    // DOM selection is observed asynchronously by CM6. Establish the scroll
+    // baseline only after that selection transaction and its measured writes
+    // have settled, otherwise the probe would report its own setup movement
+    // as an Enter backtrack.
+    setTimeout(() => requestAnimationFrame(() => requestAnimationFrame(() => {
+      previousScrollTop = host ? host.scrollTop : 0;
+      step();
+    })), 240);
+  }, 200);
   return 'started';
 })()
 JS
 DRIVER="${DRIVER//TOTAL_KEYS/$KEYS}"
 DRIVER="${DRIVER//INTERVAL/$INTERVAL_MS}"
+DRIVER="${DRIVER//TYPING_ACTION/$TYPING_ACTION}"
 
 NAMES=(emacs)
 PIDS=("$EMACS_PID")
@@ -226,18 +400,47 @@ started_at="$(date +%s)"
 client "(with-current-buffer my/noema--app-buffer (xwidget-webkit-execute-script (xwidget-webkit-current-session) $(printf '%s' "$DRIVER" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')))" >/dev/null
 
 budget=$(( (KEYS * INTERVAL_MS) / 1000 + 30 ))
-typed=0
 for _ in $(seq 1 "$budget"); do
   sleep 1
   client '(with-current-buffer my/noema--app-buffer (xwidget-webkit-execute-script (xwidget-webkit-current-session) "JSON.stringify(window.__noemaTypingProbe || {})" (lambda (result) (setq my/noema-measure-probe result))))' >/dev/null
   sleep 0.3
   probe="$(client 'my/noema-measure-probe')"
-  case "$probe" in *'\"done\":true'*|*'"done":true'*) typed="$probe"; break ;; esac
+  case "$probe" in *'\"done\":true'*|*'"done":true'*) break ;; esac
 done
 elapsed=$(( $(date +%s) - started_at ))
 
 probe="$(client 'my/noema-measure-probe')"
 echo "driver probe: $probe"
+if ! printf '%s' "$probe" | NOEMA_EXPECTED_KEYS="$KEYS" NOEMA_EXPECTED_ACTION="$TYPING_ACTION" python3 -c '
+import ast
+import json
+import os
+import sys
+
+try:
+    payload = json.loads(ast.literal_eval(sys.stdin.read().strip()))
+except Exception:
+    raise SystemExit(1)
+expected = int(os.environ["NOEMA_EXPECTED_KEYS"])
+action = os.environ["NOEMA_EXPECTED_ACTION"]
+expected_path = "execCommand-insertLineBreak" if action == "enter" else "execCommand"
+valid = (
+    payload.get("done") is True
+    and payload.get("typed") == expected
+    and payload.get("path") == expected_path
+    and payload.get("error") == ""
+    and (action != "enter" or (
+        payload.get("activeBlankCount") == 1
+        and payload.get("blankClassConflicts") == 0
+        and payload.get("activeHeightSpreadMaxPx", 999) <= 0.5
+        and payload.get("scrollBacktracks") == 0
+    ))
+)
+raise SystemExit(0 if valid else 1)
+'; then
+  echo "typing driver failed; refusing to report a partial or non-DOM benchmark" >&2
+  exit 1
+fi
 echo "drive window: ${elapsed}s for ${KEYS} edits at ${INTERVAL_MS}ms"
 
 printf '\n%-20s %8s %12s %18s %9s\n' process pid "cpu-s" "cpu-ms/keystroke" rss-MB

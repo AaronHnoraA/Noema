@@ -9,7 +9,9 @@
 package model
 
 import (
+	"errors"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -31,6 +33,11 @@ var (
 // (temporary create, rename, write). Coalesce those events without a periodic
 // ticker so a completely idle Noema kernel causes no timer wakeups.
 const markdownWatchDebounce = 300 * time.Millisecond
+
+func markdownBoxRootMissing(root string) bool {
+	_, err := os.Stat(root)
+	return errors.Is(err, os.ErrNotExist)
+}
 
 func WatchMarkdownBox(boxID string) {
 	boxDir := filesys.BoxRootPath(boxID)
@@ -92,7 +99,21 @@ func addMarkdownWatchTree(w *fsnotify.Watcher, root string, onFile func(path str
 
 func watchMarkdownBoxEvents(boxID string, w *fsnotify.Watcher, stop <-chan struct{}, done chan<- struct{}) {
 	defer logging.Recover()
-	defer close(done)
+	boxRoot := filepath.Clean(filesys.BoxRootPath(boxID))
+	rootMissing := false
+	defer func() {
+		markdownWatchersLock.Lock()
+		if markdownWatchers[boxID] == w {
+			delete(markdownWatchers, boxID)
+			delete(markdownWatcherStops, boxID)
+			delete(markdownWatcherDone, boxID)
+		}
+		markdownWatchersLock.Unlock()
+		close(done)
+		if rootMissing {
+			ScheduleMissingExternalMarkdownBoxDeactivation(boxID)
+		}
+	}()
 
 	pending := map[string]bool{} // path -> removed
 	var debounce *time.Timer
@@ -137,10 +158,16 @@ func watchMarkdownBoxEvents(boxID string, w *fsnotify.Watcher, stop <-chan struc
 			return
 		case event, ok := <-w.Events:
 			if !ok {
+				rootMissing = markdownBoxRootMissing(boxRoot)
 				return
 			}
 			if 0 == event.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Remove|fsnotify.Rename) {
 				continue
+			}
+			if filepath.Clean(event.Name) == boxRoot &&
+				0 != event.Op&(fsnotify.Remove|fsnotify.Rename) && markdownBoxRootMissing(boxRoot) {
+				rootMissing = true
+				return
 			}
 			if event.Op&fsnotify.Create == fsnotify.Create && gulu.File.IsDir(event.Name) {
 				if markdownAssetScanExcludedDir(filepath.Base(event.Name), true) {
@@ -161,6 +188,11 @@ func watchMarkdownBoxEvents(boxID string, w *fsnotify.Watcher, stop <-chan struc
 			armDebounce()
 		case err, ok := <-w.Errors:
 			if !ok {
+				rootMissing = markdownBoxRootMissing(boxRoot)
+				return
+			}
+			if markdownBoxRootMissing(boxRoot) {
+				rootMissing = true
 				return
 			}
 			logging.LogErrorf("watch markdown box [%s] failed: %s", boxID, err)
