@@ -7,7 +7,6 @@
 package model
 
 import (
-	"os"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -128,35 +127,34 @@ func markdownCatalogPlanning(boxID string) ([]MarkdownPlanningDocument, error) {
 				}
 			}
 		}()
-		for path := range catalog.docs {
-			if entry, ok := persistent.Entries[path]; ok && entry.PlanningCached && "" != entry.SourceVersion {
-				info, statErr := os.Stat(filepath.Join(filesys.BoxRootPath(boxID), path))
-				if nil == statErr && entry.matchesSource(info) {
-					nodes := entry.Planning
-					if nil == nodes {
-						nodes = []noemaplanning.Node{}
-					}
-					catalog.planning[path] = MarkdownPlanningDocument{
-						Path: path, Nodes: nodes, Version: entry.SourceVersion, MtimeMs: float64(entry.MtimeNs) / 1e6,
-					}
-					continue
+		scans, scanErr := scanMarkdownDocPaths(boxID, sortedMarkdownDocPaths(catalog.docs), persistent,
+			func(entry markdownIndexCacheEntry) bool { return entry.PlanningCached && "" != entry.SourceVersion })
+		if nil != scanErr {
+			return nil, scanErr
+		}
+		for _, scan := range scans {
+			switch {
+			case scan.missing:
+				continue
+			case scan.cached:
+				nodes := scan.entry.Planning
+				if nil == nodes {
+					nodes = []noemaplanning.Node{}
 				}
-			}
-			snapshot, loadErr := loadMarkdownSnapshot(boxID, path)
-			if nil != loadErr {
-				if os.IsNotExist(loadErr) {
-					continue
+				catalog.planning[scan.path] = MarkdownPlanningDocument{
+					Path: scan.path, Nodes: nodes, Version: scan.entry.SourceVersion,
+					MtimeMs: float64(scan.entry.MtimeNs) / 1e6,
 				}
-				return nil, loadErr
+			default:
+				document := planningDocumentFromSnapshot(scan.path, scan.snapshot)
+				catalog.planning[scan.path] = document
+				entry, _ := markdownIndexEntryForSnapshot(persistent.Entries[scan.path], scan.snapshot)
+				entry.SourceVersion = document.Version
+				entry.PlanningCached = true
+				entry.Planning = document.Nodes
+				persistent.Entries[scan.path] = entry
+				persistentDirty = true
 			}
-			document := planningDocumentFromSnapshot(path, snapshot)
-			catalog.planning[path] = document
-			entry, _ := markdownIndexEntryForSnapshot(persistent.Entries[path], snapshot)
-			entry.SourceVersion = document.Version
-			entry.PlanningCached = true
-			entry.Planning = document.Nodes
-			persistent.Entries[path] = entry
-			persistentDirty = true
 		}
 	}
 	if nil == catalog.planOrdered {
@@ -190,41 +188,39 @@ func markdownCatalogProperties(boxID string) ([]MarkdownPropertyDocument, error)
 				}
 			}
 		}()
-		for path := range catalog.docs {
-			if entry, ok := persistent.Entries[path]; ok && entry.PropertiesCached && "" != entry.SourceVersion {
-				info, statErr := os.Stat(filepath.Join(filesys.BoxRootPath(boxID), path))
-				if nil == statErr && entry.matchesSource(info) {
-					blocks := entry.Properties
-					if nil == blocks {
-						blocks = []noemamarkdown.Definition{}
-					}
-					duplicates := entry.DuplicateDefinition
-					if nil == duplicates {
-						duplicates = []string{}
-					}
-					catalog.properties[path] = MarkdownPropertyDocument{
-						Path: path, Blocks: blocks, DuplicateDefinitionIDs: duplicates,
-						Version: entry.SourceVersion, MtimeMs: float64(entry.MtimeNs) / 1e6,
-					}
-					continue
+		scans, scanErr := scanMarkdownDocPaths(boxID, sortedMarkdownDocPaths(catalog.docs), persistent,
+			func(entry markdownIndexCacheEntry) bool { return entry.PropertiesCached && "" != entry.SourceVersion })
+		if nil != scanErr {
+			return nil, scanErr
+		}
+		for _, scan := range scans {
+			switch {
+			case scan.missing:
+				continue
+			case scan.cached:
+				blocks := scan.entry.Properties
+				if nil == blocks {
+					blocks = []noemamarkdown.Definition{}
 				}
-			}
-			snapshot, loadErr := loadMarkdownSnapshot(boxID, path)
-			if nil != loadErr {
-				if os.IsNotExist(loadErr) {
-					continue
+				duplicates := scan.entry.DuplicateDefinition
+				if nil == duplicates {
+					duplicates = []string{}
 				}
-				return nil, loadErr
+				catalog.properties[scan.path] = MarkdownPropertyDocument{
+					Path: scan.path, Blocks: blocks, DuplicateDefinitionIDs: duplicates,
+					Version: scan.entry.SourceVersion, MtimeMs: float64(scan.entry.MtimeNs) / 1e6,
+				}
+			default:
+				document := propertyDocumentFromSnapshot(scan.path, scan.snapshot)
+				catalog.properties[scan.path] = document
+				entry, _ := markdownIndexEntryForSnapshot(persistent.Entries[scan.path], scan.snapshot)
+				entry.SourceVersion = document.Version
+				entry.PropertiesCached = true
+				entry.Properties = document.Blocks
+				entry.DuplicateDefinition = document.DuplicateDefinitionIDs
+				persistent.Entries[scan.path] = entry
+				persistentDirty = true
 			}
-			document := propertyDocumentFromSnapshot(path, snapshot)
-			catalog.properties[path] = document
-			entry, _ := markdownIndexEntryForSnapshot(persistent.Entries[path], snapshot)
-			entry.SourceVersion = document.Version
-			entry.PropertiesCached = true
-			entry.Properties = document.Blocks
-			entry.DuplicateDefinition = document.DuplicateDefinitionIDs
-			persistent.Entries[path] = entry
-			persistentDirty = true
 		}
 	}
 	if nil == catalog.propOrdered {
@@ -258,28 +254,26 @@ func markdownCatalogNotes(boxID string) (MarkdownNoteCatalog, error) {
 				}
 			}
 		}()
-		for path := range catalog.docs {
-			if entry, ok := persistent.Entries[path]; ok && entry.CatalogCached {
-				info, statErr := os.Stat(filepath.Join(filesys.BoxRootPath(boxID), path))
-				if nil == statErr && entry.matchesSource(info) {
-					catalog.notes[path] = cloneMarkdownNoteSummary(entry.Catalog)
-					continue
-				}
+		scans, scanErr := scanMarkdownDocPaths(boxID, sortedMarkdownDocPaths(catalog.docs), persistent,
+			func(entry markdownIndexCacheEntry) bool { return entry.CatalogCached })
+		if nil != scanErr {
+			return MarkdownNoteCatalog{}, scanErr
+		}
+		for _, scan := range scans {
+			switch {
+			case scan.missing:
+				continue
+			case scan.cached:
+				catalog.notes[scan.path] = cloneMarkdownNoteSummary(scan.entry.Catalog)
+			default:
+				note := scan.snapshot.noteSummary(boxID, scan.path)
+				catalog.notes[scan.path] = note
+				entry, _ := markdownIndexEntryForSnapshot(persistent.Entries[scan.path], scan.snapshot)
+				entry.CatalogCached = true
+				entry.Catalog = cloneMarkdownNoteSummary(note)
+				persistent.Entries[scan.path] = entry
+				persistentDirty = true
 			}
-			snapshot, loadErr := loadMarkdownSnapshot(boxID, path)
-			if nil != loadErr {
-				if os.IsNotExist(loadErr) {
-					continue
-				}
-				return MarkdownNoteCatalog{}, loadErr
-			}
-			note := snapshot.noteSummary(boxID, path)
-			catalog.notes[path] = note
-			entry, _ := markdownIndexEntryForSnapshot(persistent.Entries[path], snapshot)
-			entry.CatalogCached = true
-			entry.Catalog = cloneMarkdownNoteSummary(note)
-			persistent.Entries[path] = entry
-			persistentDirty = true
 		}
 	}
 	if nil == catalog.noteOrdered {

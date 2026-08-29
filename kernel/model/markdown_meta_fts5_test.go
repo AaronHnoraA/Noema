@@ -77,7 +77,7 @@ func TestMutateMarkdownMetaWritesAndReindexesCanonicalUUIDv7(t *testing.T) {
 	if tree := treenode.GetBlockTreeRootByPath(boxID, path); tree == nil || tree.RootID != projectionID {
 		t.Fatalf("metadata identity was not reindexed: tree=%+v projection=%s", tree, projectionID)
 	}
-	if block := sql.GetBlockInBox(projectionID, boxID); block == nil || !strings.Contains(block.Content, "Meta search sentinel") {
-		t.Fatalf("metadata document is absent from SQL/FTS projection: %+v", block)
+	if !documentIsIndexed(boxID, path, "Meta search sentinel") {
+		t.Fatalf("metadata document is absent from SQL/FTS projection: %+v", blocksByBoxPath(boxID, path))
 	}
 }

@@ -28,12 +28,13 @@ import (
 	"sync"
 
 	"github.com/88250/gulu"
+	"github.com/88250/lute/ast"
 	"github.com/88250/lute/parse"
+	"github.com/aaronhe/noema/kernel/util"
 	"github.com/emirpasic/gods/sets/hashset"
 	ignore "github.com/sabhiram/go-gitignore"
 	"github.com/siyuan-note/eventbus"
 	"github.com/siyuan-note/logging"
-	"github.com/aaronhe/noema/kernel/util"
 )
 
 var luteEngine = util.NewLute()
@@ -436,7 +437,7 @@ func insertFileAnnotationRefs0(tx *sql.Tx, bulk []*FileAnnotationRef) (err error
 }
 
 func indexTree(tx *sql.Tx, tree *parse.Tree, context map[string]any) (err error) {
-	blocks, spans, assets, attributes := fromTree(tree.Root, tree)
+	blocks, spans, assets, attributes := fromTree(tree.Root, tree, nil)
 	refs, fileAnnotationRefs := refsFromTree(tree)
 	err = insertTree0(tx, tree, context, blocks, spans, assets, attributes, refs, fileAnnotationRefs)
 	return
@@ -444,7 +445,15 @@ func indexTree(tx *sql.Tx, tree *parse.Tree, context map[string]any) (err error)
 
 func upsertTree(tx *sql.Tx, tree *parse.Tree, context map[string]any) (err error) {
 	oldBlockHashes := queryBlockHashes(tx, tree.ID)
-	blocks, spans, assets, attributes := fromTree(tree.Root, tree)
+
+	// Blocks whose id was minted from their own content need no projection to
+	// be classified: an id already indexed under this root can only have come
+	// from byte-identical content. Deciding that before fromTree runs is the
+	// point — buildBlockFromNode renders every block it is handed to Markdown,
+	// which for a whole document is the dominant cost of an index job.
+	unchanged, present := contentDerivedBlockState(tree, oldBlockHashes)
+
+	blocks, spans, assets, attributes := fromTree(tree.Root, tree, unchanged)
 	newBlockHashes := map[string]string{}
 	for _, block := range blocks {
 		newBlockHashes[block.ID] = block.Hash
@@ -452,11 +461,21 @@ func upsertTree(tx *sql.Tx, tree *parse.Tree, context map[string]any) (err error
 	unChanges := hashset.New()
 	var toRemoves []string
 	for id, hash := range oldBlockHashes {
+		if unchanged[id] {
+			unChanges.Add(id)
+			continue
+		}
+		if nil != present && !present[id] {
+			// A content-derived id the current revision no longer has: its
+			// block was edited away or deleted.
+			toRemoves = append(toRemoves, id)
+			continue
+		}
 		if newHash, ok := newBlockHashes[id]; ok {
 			if newHash == hash {
 				unChanges.Add(id)
 			}
-		} else {
+		} else if nil == present {
 			toRemoves = append(toRemoves, id)
 		}
 	}
@@ -467,21 +486,44 @@ func upsertTree(tx *sql.Tx, tree *parse.Tree, context map[string]any) (err error
 		}
 	}
 	blocks = tmp
+	changedBlockIDs := hashset.New()
 	for _, b := range blocks {
 		toRemoves = append(toRemoves, b.ID)
+		changedBlockIDs.Add(b.ID)
 	}
 
 	if err = deleteBlocksByIDs(tx, toRemoves); err != nil {
 		return
 	}
 
-	if err = deleteSpansByRootID(tx, tree.ID); err != nil {
-		return
+	// Spans and attributes are pure projections of their owning source block.
+	// Keep rows for unchanged blocks and replace only rows whose block is being
+	// rewritten or removed. If a future parser emits an unowned row, fall back
+	// to the document-wide path rather than risking stale data.
+	derivedRowsScoped := rowsBelongToBlocks(spans, newBlockHashes, func(row *Span) string { return row.BlockID }) &&
+		rowsBelongToBlocks(attributes, newBlockHashes, func(row *Attribute) string { return row.BlockID })
+	if derivedRowsScoped {
+		if err = deleteSpansByBlockIDs(tx, toRemoves); err != nil {
+			return
+		}
+		if err = deleteAttributesByBlockIDs(tx, toRemoves); err != nil {
+			return
+		}
+		spans = retainChangedBlockRows(spans, changedBlockIDs, func(row *Span) string { return row.BlockID })
+		attributes = retainChangedBlockRows(attributes, changedBlockIDs, func(row *Attribute) string { return row.BlockID })
+	} else {
+		if err = deleteSpansByRootID(tx, tree.ID); err != nil {
+			return
+		}
+		if err = deleteAttributesByRootID(tx, tree.ID); err != nil {
+			return
+		}
 	}
+
+	// Asset hashes depend on external file bytes, not just Markdown source.
+	// A save must therefore refresh the document's asset rows even when the
+	// source block that names an asset is unchanged.
 	if err = deleteAssetsByRootID(tx, tree.ID); err != nil {
-		return
-	}
-	if err = deleteAttributesByRootID(tx, tree.ID); err != nil {
 		return
 	}
 	if err = deleteRefsByPathTx(tx, tree.Box, tree.Path); err != nil {
@@ -496,6 +538,25 @@ func upsertTree(tx *sql.Tx, tree *parse.Tree, context map[string]any) (err error
 		return
 	}
 	return err
+}
+
+func rowsBelongToBlocks[T any](rows []T, blocks map[string]string, blockID func(T) string) bool {
+	for _, row := range rows {
+		if _, exists := blocks[blockID(row)]; !exists {
+			return false
+		}
+	}
+	return true
+}
+
+func retainChangedBlockRows[T any](rows []T, changed *hashset.Set, blockID func(T) string) []T {
+	ret := rows[:0]
+	for _, row := range rows {
+		if changed.Contains(blockID(row)) {
+			ret = append(ret, row)
+		}
+	}
+	return ret
 }
 
 func insertTree0(tx *sql.Tx, tree *parse.Tree, context map[string]any,
@@ -521,10 +582,6 @@ func insertTree0(tx *sql.Tx, tree *parse.Tree, context map[string]any,
 	}
 
 	if 0 < len(spans) {
-		// 移除文档标签，否则会重复添加 https://github.com/siyuan-note/siyuan/issues/3723
-		if err = deleteSpansByRootID(tx, tree.Root.ID); err != nil {
-			return
-		}
 		if err = insertSpans(tx, spans); err != nil {
 			return
 		}
@@ -584,4 +641,39 @@ func getIndexIgnoreLines() (ret []string) {
 		indexIgnore = append(indexIgnore, line)
 	}
 	return
+}
+
+// contentDerivedBlockState classifies a tree's blocks before any of them is
+// projected, for documents whose ids encode their own content.
+//
+// `unchanged` holds ids already indexed under this root — proof the stored row
+// still describes the block. `present` is every id this revision has, so the
+// caller can tell "edited away" from "still here". Both are nil for trees whose
+// ids are persistent rather than content-derived (.sy documents), where an id
+// says nothing about content and the hash comparison has to run.
+func contentDerivedBlockState(tree *parse.Tree, oldBlockHashes map[string]string) (unchanged, present map[string]bool) {
+	if nil == IsContentDerivedBlockIDFn || nil == tree || nil == tree.Root {
+		return nil, nil
+	}
+	derived := false
+	present = map[string]bool{}
+	unchanged = map[string]bool{}
+	ast.Walk(tree.Root, func(n *ast.Node, entering bool) ast.WalkStatus {
+		if !entering || !n.IsBlock() || "" == n.ID {
+			return ast.WalkContinue
+		}
+		present[n.ID] = true
+		if !IsContentDerivedBlockIDFn(n) {
+			return ast.WalkContinue
+		}
+		derived = true
+		if _, indexed := oldBlockHashes[n.ID]; indexed {
+			unchanged[n.ID] = true
+		}
+		return ast.WalkContinue
+	})
+	if !derived {
+		return nil, nil
+	}
+	return unchanged, present
 }

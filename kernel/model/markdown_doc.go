@@ -152,6 +152,14 @@ func markdownBlockRefs(tree *parse.Tree) (blocks []MarkdownBlockRef) {
 		if !entering || !n.IsBlock() || "" == n.ID {
 			return ast.WalkContinue
 		}
+		// Blocks whose only id is the index projection are not addressable
+		// Noema identities: nothing references them and the key changes with
+		// their own text. The editor must keep seeing exactly the anchored
+		// blocks, so that Noema's "only a genuinely referenced block carries a
+		// persisted anchor" rule stays observable from the API.
+		if filesys.MarkdownIndexProjection(n) {
+			return ast.WalkContinue
+		}
 		level := 0
 		if ast.NodeHeading == n.Type {
 			level = n.HeadingLevel
@@ -159,6 +167,9 @@ func markdownBlockRefs(tree *parse.Tree) (blocks []MarkdownBlockRef) {
 		id := filesys.MarkdownCanonicalBlockID(n)
 		if n == tree.Root {
 			id = canonicalDocID
+		}
+		if "" == id {
+			return ast.WalkContinue
 		}
 		blocks = append(blocks, MarkdownBlockRef{ID: id, Type: n.Type.String(), Level: level})
 		return ast.WalkContinue

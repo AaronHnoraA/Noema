@@ -761,10 +761,12 @@ func upsertBlockTree(tree *parse.Tree) (previous []*BlockTree) {
 	}
 
 	var changedNodes []*ast.Node
+	present := map[string]bool{}
 	ast.Walk(tree.Root, func(n *ast.Node, entering bool) ast.WalkStatus {
 		if !entering || !n.IsBlock() || "" == n.ID {
 			return ast.WalkContinue
 		}
+		present[n.ID] = true
 
 		if oldBt, found := oldBts[n.ID]; found {
 			if oldBt.Updated != n.IALAttr("updated") || oldBt.Type != TypeAbbr(n.Type.String()) || oldBt.Path != tree.Path || oldBt.BoxID != tree.Box || oldBt.HPath != tree.HPath {
@@ -778,18 +780,39 @@ func upsertBlockTree(tree *parse.Tree) (previous []*BlockTree) {
 		return ast.WalkContinue
 	})
 
-	if 1 > len(changedNodes) {
+	// Rows for blocks this revision no longer has. Only the ids about to be
+	// reinserted used to be deleted, so a block that disappeared kept its row
+	// forever. That was invisible while a Markdown document was a single row
+	// whose id never changed; with block-level keys, which are derived from
+	// content and so are replaced whenever a block is edited, it would have made
+	// blocktree.db grow without bound.
+	var removedIDs []string
+	for id := range oldBts {
+		if !present[id] {
+			removedIDs = append(removedIDs, id)
+		}
+	}
+
+	if 1 > len(changedNodes) && 1 > len(removedIDs) {
 		return
 	}
 
 	ids := bytes.Buffer{}
-	for i, n := range changedNodes {
+	for _, n := range changedNodes {
+		if 0 < ids.Len() {
+			ids.WriteString(",")
+		}
 		ids.WriteString("'")
 		ids.WriteString(n.ID)
 		ids.WriteString("'")
-		if i < len(changedNodes)-1 {
+	}
+	for _, id := range removedIDs {
+		if 0 < ids.Len() {
 			ids.WriteString(",")
 		}
+		ids.WriteString("'")
+		ids.WriteString(id)
+		ids.WriteString("'")
 	}
 
 	indexBlockTreeLock.Lock()

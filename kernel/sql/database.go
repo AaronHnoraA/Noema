@@ -68,12 +68,19 @@ var (
 	IsEncryptedBoxFn func(boxID string) bool
 
 	// IsMarkdownBoxFn 由 model 层注入，用于判断 boxID 是否为 markdown box。
-	// 用途：buildBlockFromNode 给文档根块（NodeDocument）构造 FTS 可搜索内容时，
-	// markdown box 惰性 IAL（未被引用的段落/标题永远拿不到持久化 ID，天然不会被
-	// 索引成块）导致大多数正文内容原本完全搜不到——文档级方案是把整篇文档的
-	// markdown 正文塞进文档根块自己的 content/markdown 字段，代价是搜索精度降到
-	// "命中哪篇笔记"而非"命中哪一段"。.sy box 不受影响，继续用 IALAttr("title")。
 	IsMarkdownBoxFn func(boxID string) bool
+
+	// IsContentDerivedBlockIDFn reports whether a node's id was minted from the
+	// node's own content, which filesys does for every Markdown block that has
+	// no anchor of its own. Injected by model for the same reason as the
+	// functions above: sql cannot import filesys.
+	//
+	// Such an id is a change detector. If it is already indexed under this
+	// root, the block's content is byte-identical to what produced that row, so
+	// the row is current and the node can be skipped outright — including the
+	// markdown render inside buildBlockFromNode, which is what actually costs.
+	// Persistent .sy ids carry no such guarantee and keep the hash comparison.
+	IsContentDerivedBlockIDFn func(n *ast.Node) bool
 
 	// BoxRootPathFn routes asset hashing for external Markdown boxes to their
 	// physical repository root instead of the workspace shadow directory.
@@ -710,7 +717,10 @@ func getEmbedRef(embedNode *ast.Node) (queryBlockID string) {
 	return
 }
 
-func fromTree(node *ast.Node, tree *parse.Tree) (blocks []*Block, spans []*Span, assets []*Asset, attributes []*Attribute) {
+// fromTree projects a tree into index rows. Nodes whose id is in `unchanged`
+// are skipped along with their subtrees: their rows, and the rows derived from
+// them, are already correct.
+func fromTree(node *ast.Node, tree *parse.Tree, unchanged map[string]bool) (blocks []*Block, spans []*Span, assets []*Asset, attributes []*Attribute) {
 	rootID := tree.Root.ID
 	boxID := tree.Box
 	p := tree.Path
@@ -723,6 +733,9 @@ func fromTree(node *ast.Node, tree *parse.Tree) (blocks []*Block, spans []*Span,
 	ast.Walk(node, func(n *ast.Node, entering bool) ast.WalkStatus {
 		if !entering {
 			return ast.WalkContinue
+		}
+		if "" != n.ID && unchanged[n.ID] {
+			return ast.WalkSkipChildren
 		}
 
 		// 构造行级元素
@@ -1022,34 +1035,15 @@ func buildBlockFromNode(n *ast.Node, tree *parse.Tree) (block *Block, attributes
 	hash := treenode.NodeHash(n, tree, luteEngine)
 	var length int
 	if ast.NodeDocument == n.Type {
-		if nil != IsMarkdownBoxFn && IsMarkdownBoxFn(boxID) {
-			// markdown box：整篇文档正文塞进根块，弥补惰性 IAL 下未被引用的
-			// 段落/标题不会单独成块被索引的缺口（见 IsMarkdownBoxFn 注释）。
-			// 注意不能直接对 n（Root）调 nodeStaticContent——它对 NodeDocument
-			// 类型有自己的特判（sql/block.go），同样只返回 title IAL，不会走到
-			// 下面通用的 ast.Walk 正文提取逻辑。所以这里手动过一遍根节点的
-			// 直接子节点，分别取每个子节点的静态内容再拼起来。
-			markdown = treenode.ExportNodeStdMd(n, luteEngine)
-			var contentBuf strings.Builder
-			for c := n.FirstChild; nil != c; c = c.Next {
-				if ast.NodeKramdownBlockIAL == c.Type {
-					continue
-				}
-				childContent := nodeStaticContent(c, nil, true, indexAssetPath, true, true)
-				if "" == childContent {
-					continue
-				}
-				if 0 < contentBuf.Len() {
-					contentBuf.WriteByte(' ')
-				}
-				contentBuf.WriteString(childContent)
-			}
-			content = contentBuf.String()
-			fcontent = content
-		} else {
-			content = n.IALAttr("title")
-			fcontent = content
-		}
+		// Markdown roots used to aggregate the whole document body here, because
+		// filesys stripped the unstable ids Lute mints and no paragraph reached
+		// the index on its own. AssignMarkdownBlockProjectionIDs now gives every
+		// top-level block a deterministic key, so the body is indexed block by
+		// block and the root carries its title like any other document. Keeping
+		// the aggregate would index every note twice and put the whole-document
+		// rewrite back on the save path.
+		content = n.IALAttr("title")
+		fcontent = content
 		length = utf8.RuneCountInString(fcontent)
 	} else if n.IsContainerBlock() {
 		markdown = treenode.ExportNodeStdMd(n, luteEngine)
@@ -1092,14 +1086,10 @@ func buildBlockFromNode(n *ast.Node, tree *parse.Tree) (block *Block, attributes
 	fcontent = strings.ReplaceAll(fcontent, string(gulu.ZWJ)+"#", "#")
 	content = strings.ReplaceAll(content, string(gulu.ZWJ)+"#", "#")
 	markdown = strings.ReplaceAll(markdown, string(gulu.ZWJ)+"#", "#")
-	if ast.NodeDocument == n.Type && nil != IsMarkdownBoxFn && IsMarkdownBoxFn(boxID) {
-		// Markdown documents deliberately aggregate the complete source text into
-		// their root SQL block for FTS. NodeHash(document) does not include child
-		// content, so using it alone makes upsertTree classify a body-only edit as
-		// unchanged and leave stale FTS rows behind. Fold the actual aggregate SQL
-		// payload into the hash used by the incremental updater.
-		hash = fmt.Sprintf("%x", sha256.Sum256([]byte(hash+"\x00"+content+"\x00"+fcontent+"\x00"+markdown+"\x00"+ialContent)))
-	}
+	// The Markdown root no longer aggregates the body, so NodeHash's exclusion of
+	// child content is correct again: an edit changes the block it happened in,
+	// and that block's own hash. Folding the body back in here would mark the
+	// root changed on every keystroke and rewrite it for nothing.
 
 	block = &Block{
 		ID:       n.ID,
@@ -1275,6 +1265,10 @@ func deleteSpansByRootID(tx *sql.Tx, rootID string) (err error) {
 	return
 }
 
+func deleteSpansByBlockIDs(tx *sql.Tx, blockIDs []string) error {
+	return deleteRowsByBlockIDs(tx, "spans", blockIDs)
+}
+
 func deleteSpansByBoxTx(tx *sql.Tx, box string) (err error) {
 	stmt := "DELETE FROM spans WHERE box = ?"
 	err = execStmtTx(tx, stmt, box)
@@ -1298,6 +1292,27 @@ func deleteAttributesByRootID(tx *sql.Tx, rootID string) (err error) {
 	err = execStmtTx(tx, stmt, rootID)
 	return
 
+}
+
+func deleteAttributesByBlockIDs(tx *sql.Tx, blockIDs []string) error {
+	return deleteRowsByBlockIDs(tx, "attributes", blockIDs)
+}
+
+// deleteRowsByBlockIDs is intentionally limited to the two source-derived
+// tables above. Assets also name a source block, but their hash depends on the
+// referenced file; refs carry target path metadata. Neither is solely a
+// function of the source block hash and both keep their document-wide refresh.
+func deleteRowsByBlockIDs(tx *sql.Tx, table string, blockIDs []string) error {
+	if 1 > len(blockIDs) {
+		return nil
+	}
+	placeholders := make([]string, len(blockIDs))
+	args := make([]any, len(blockIDs))
+	for index, id := range blockIDs {
+		placeholders[index] = "?"
+		args[index] = id
+	}
+	return execStmtTx(tx, "DELETE FROM "+table+" WHERE block_id IN ("+strings.Join(placeholders, ",")+")", args...)
 }
 
 func deleteAttributesByBoxTx(tx *sql.Tx, box string) (err error) {
@@ -1706,6 +1721,13 @@ func migrateBlockEmbeddingsSchema() {
 }
 
 func beginTx() (tx *sql.Tx, err error) {
+	// The queue consumer and the box lifecycle both reach here from background
+	// goroutines that can outlive InitDatabase, and *sql.DB.Begin dereferences
+	// the receiver without a nil check. Report it instead of faulting: a caller
+	// that has no database has nothing to flush.
+	if nil == db {
+		return nil, errors.New("database is not open")
+	}
 	if tx, err = db.Begin(); err != nil {
 		logging.LogErrorf("begin tx failed: %s\n  %s", err, logging.ShortStack())
 		if strings.Contains(err.Error(), "database is locked") {

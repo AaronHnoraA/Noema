@@ -411,6 +411,9 @@ func LoadMarkdownTreeByData(data []byte, boxID, p string, luteEngine *lute.Lute)
 	ApplyMarkdownDocumentIdentity(ret, data, boxID, p)
 	StripEphemeralMarkdownBlockIDs(ret)
 	ApplyNoemaBlockProjection(ret, data)
+	// After the anchored blocks have claimed their canonical keys, so the two
+	// never compete for the same node.
+	AssignMarkdownBlockProjectionIDs(ret)
 	ret.HPath = markdownHPath(p)
 	ret.Hash = treenode.NodeHash(ret.Root, ret, luteEngine)
 	return

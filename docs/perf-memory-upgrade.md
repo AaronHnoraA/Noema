@@ -765,3 +765,298 @@ Emacs 侧 xwidget 后的占位 buffer 维持 inert：不开插件、不接收逃
   Back / Forward / Refresh / Editor actions / Window actions 全部存在。
 - Emacs `lisp/roam/Noema` 指向本仓库；snippets、templates、KaTeX macros 和 prose 词表全部解析到
   `resources/`，已退役的 `lisp/roam/aaronnote` 不存在。
+
+### 2026-08-29（第十轮）：Node→Go 优化补齐清单，以及 git 水位设计的去向
+
+第九轮修的是 Node 宿主侧的扇出。这一轮把 Node 实现里的**每一项优化**逐条对着 Go 内核过了一遍，
+补齐缺的，并实测判断值不值得补。结论按"补了 / 不补 / 试了但退回"三类记。
+
+#### 补了：catalog 冷构建是单线程的
+
+Node 用 `mapLimit(files, scanConcurrency=16)` 并发扫 vault；Go 接管后变成
+`for path := range catalog.docs` 的裸循环，冷启动时整个 vault 的 read+parse 全压在一个
+goroutine 上。三处同形循环（notes / planning / properties）改成
+`scanMarkdownDocPaths`（`markdown_catalog_scan.go`）：I/O 并发解析、结果按路径序返回，
+调用方串行合并，所以 catalog 的 map 和持久索引缓存仍是单写者。`markdownSnapshots` 是
+`sync.Map`，每个投影由 `sync.Once` 守，跨路径并发本来就安全；race detector 干净。
+
+500 篇 vault：`cold-source` 23.4 → 20.2 ms，`restart-persistent` 10.3 → 9.9 ms。
+
+**只有 ~15%，因为瓶颈不是解析而是元数据 syscall。** profile 里 `os.ReadFile` 占 49.5%
+（其中 93% 是 `os.Open` 本身）、`os.Stat` 15.5%，解析只占十几个百分点。这些是内核态时间，
+加 goroutine 并不能变快。基准跑在刚写完的 temp 目录上（page cache 全热），真实冷启动
+（缓存冷、目录树大）并发能掩盖 I/O 延迟，收益应当更大——这一条是推理，没实测，因为
+清 page cache 需要 sudo。
+
+顺带把遍历顺序定死（`sortedMarkdownDocPaths`）：Go 的 map 序是随机的，冷构建中途出错会
+留下不同的子集。
+
+#### 补了：`Box.Unindex` 的裸 goroutine 会把内核带走
+
+不是性能问题，但它挡住了整个 `go test ./model/`。`Box.Unindex` 起一个
+fire-and-forget goroutine 调 `sql.FlushQueue()`，**没有 `defer logging.Recover()`**——
+内核里其他每一个后台 goroutine 都有。而 `sql.beginTx` 直接 `db.Begin()`，`*sql.DB` 为 nil
+时段错误。两者叠加：任何在 `InitDatabase` 之前/之后到达的 unindex 都会让**整个内核进程**
+崩掉，而不只是这次 unindex 失败。
+
+补了 `logging.Recover()` 和 `beginTx` 的 nil 判断。这是别的会话正在写的代码
+（`external_markdown_box.go` 新增的 `box.Unindex()` 调用点触发的），我只动了这两处守卫。
+
+**还留着一个 data race**（之前被段错误掩盖，加了 Recover 才显形）：
+`TestMarkdownAccessToMissingExternalRootFailsAndSchedulesClose` 的 `Cleanup` 与
+`Unindex` goroutine 里的 `ResetVirtualBlockRefCache()` 抢同一个全局。根因还是那个
+不可 join 的 goroutine。怎么改是那份工作的主人决定，我没动。
+
+#### 试了但退回：把索引在一次打字会话里合并
+
+内核每次保存的 CPU 里，**约三分之二是 SQL 索引流水线**——活体 profile（45 次保存、60 KB
+笔记）归因：`sql.FlushQueue → execOp → upsertTree` 42%、`indexMarkdownJob` 14%、
+`sql.fromTree` 11%、`LoadMarkdownTreeByData` 10%，`runtime.cgocall`（就是 SQLite）单项 22%。
+单次索引任务的实测成本（`BenchmarkMarkdownIndexJob`，保留在树里）：
+
+| 笔记 | 一次索引 |
+|---|---|
+| 0.5 KB | 0.06 ms |
+| 7.4 KB | 0.54 ms |
+| 60 KB | **4.69 ms / 11.2 MB 分配** |
+
+`markdownIndexDelay = 4ms` 只能合并**背靠背**的保存，而打字不是这个形状：自动保存在最后
+一次按键后 650 ms 触发，所以每个打字停顿都单独跑一遍完整索引。于是做了个"打字保持窗口"：
+同一文档在 2 s 内再次保存就按 800 ms 防抖延后，从首次入队起最多压 3 s。单元测试里它确实
+工作——**8 次 650 ms 节奏的保存只跑 2 次索引**。
+
+**但活体内核上它没有生效，而且稳定慢 8%**（60 KB 笔记、40 次保存 @1s，两两对照各跑 2–3 轮：
+对照组 30.1 ms/save，开启后 33.0 ms/save）。开启后再抓 profile，`indexMarkdownJob` 的
+cum% 不降反升（14% → 19%），证明合并根本没发生。
+
+查到一条机制：`sql.RegisterPreFlushHook(WaitMarkdownIndex)` 让**每一次** `FlushQueue`
+都成为屏障，而 SQL 队列的空闲消费者（`consumeQueueNotifications`，50 ms 防抖）也走
+`FlushQueue`。于是链条闭环：索引任务 N → 写 SQL 队列 → 50 ms 后空闲 flush → pre-flush
+钩子 `WaitMarkdownIndex` → 立刻抽干被压住的任务 N+1 → …… 两个队列互相把对方的合并窗口
+取消掉。把空闲 flush 拆成不跑钩子的 `flushQueue`（读者用的 `FlushQueue`/`WaitFlushTx`
+保留屏障）之后再测——**还是 33.0 ms/save，`indexMarkdownJob` 仍是 19%**。说明还有别的
+路径在每次保存时抽干队列，我没找到。
+
+所以两处改动都**退回了**：拿不到收益，却实测倒退 8%，还增加了"索引落后打字最多 3 秒"
+的行为复杂度。保留的是证据：`BenchmarkMarkdownIndexJob` 和上面这段归因。
+
+**下次要接着做的话**，先回答"活体内核里每次保存是谁抽干了 markdown 索引队列"——
+`WaitMarkdownIndex` 的调用点只有 8 个（conf/backlink×3/markdown_doc/asset_content/path），
+`FlushQueue` 的有二十几个；在 `WaitMarkdownIndex` 里打一行带 `logging.ShortStack()` 的日志
+跑一次保存就能定位。合并这条路的天花板是 4×，值 ~20 ms/save（60 KB 笔记），是目前内核侧
+最大的单项。
+
+#### 不补：另外两处同形的串行循环
+
+`markdown_workspace_projection.go` 和 `markdown_virtual_references.go` 的循环和上面三处
+同形，但每条路径的判断要读 `catalog.notes` / `workspaceNotes` / `planning` 三张表并在同一
+循环里写回，拆并发要更小心。鉴于并发本身只值 ~15%（瓶颈是 syscall），先不动。
+
+#### 不补：基于 git 水位的增量设计——Go 里没有，而且基本是冗余的
+
+**先回答问题：没进来。** Node 侧 `chooseWikiPersistence`（`wiki-workspace.mjs`）有一整套：
+
+1. 每个仓库在索引时把 `head_sha` 记进 `repository_index_state`；
+2. 下次构建跑 `git merge-base --is-ancestor 旧HEAD 新HEAD`，**不是祖先**（rebase / reset /
+   切分支 / force pull）就强制全量重建；
+3. `last_full_at` 水位 + 7 天间隔，定期全量自愈；
+4. 仓库数量或 uid 变化 → 全量；schema 版本不符 → 全量。
+
+Go 内核这边只有 `markdownIndexCache` 的 `Schema` 版本号和 root 路径校验，**没有 git 水位、
+没有拓扑守卫、没有定期自愈**。
+
+但 (1)(2) 在 Go 的设计里基本是冗余的，因为两边的失效粒度不同：Node 是**按仓库**判断整份索引
+还能不能增量，所以需要一个粗粒度的"历史被改写了"信号；Go 是**按文件** `mtimeNs + size`
+判断（`entry.matchesSource`），git checkout 一定会写新的 mtime，所以内容变化本来就会被逐个
+文件抓到，连同目录重走带来的增删。真正漏掉的只有"内容变了但 mtime 和 size 都一模一样"，
+git 不会产生这种情况（`cp -p` / `rsync --times` 才会）。
+
+**唯一确实缺的是 (3) 定期全量自愈**：Go 的逐文件缓存一旦某条目悄悄错了，除非 bump schema，
+否则永远错下去。但直接照搬 Node 的 7 天 ticker 违反 [[feedback-no-polling-loops]]。
+Noema 形状的写法是：把上次全量构建的时间写进 `markdownIndexCache`，**在 box 首次打开时**
+判断是否超期，超期就当作 schema 不符走全量——一次性判断，没有任何 timer。
+要不要加、超期阈值多少，是行为和成本的取舍，等你定，没有擅自加。
+
+**测试**：Go 全绿（model/api/sql/treenode/noema/... 全部 ok，catalog 相关 `-race` 干净），
+JS 全量 **2156 passed / 16 skipped**。
+
+### 2026-08-29（第十一轮）：为什么索引不是增量的——因为一篇笔记在索引里只有**一行**
+
+第十轮里我试着"少跑几次索引"，方向就错了。正确的问题是用户问的那个：**这种东西不是增量维护
+热更新吗?** 是的，应该是。查下去发现 Go 这边根本没有可增量的粒度。
+
+#### 事实
+
+`upsertTree`（`kernel/sql/upsert.go`）**看起来**是增量的：它比对新旧块哈希，只重写变化的块。
+但对 Noema 的 markdown 笔记，这个机制完全空转。查活体数据库（200 篇 vault）：
+
+```
+blocks:  201 行，全部 type='d'，content 长度 6206 – 64095
+spans:   0    assets: 0    attributes: 0    refs: 0
+```
+
+**一篇笔记 = 一行，content 是整篇文档。** 那篇 60 KB 的笔记就是一行 64095 字符的 `content`。
+派生表全空。
+
+原因在 `filesys.StripEphemeralMarkdownBlockIDs`：`util.NewLute()` 开着
+`SetProtyleWYSIWYG(true)`，任何没有显式 `{: id=...}` 的块，lute 会现场发一个**每次解析都不同**
+的 ID。这些 ID 不写回磁盘，下游若当真会让索引无限膨胀，所以 Noema 直接把它们清空。而
+`fromTree` 里 `if "" == n.ID || !n.IsBlock() { continue }` —— 于是除了文档根，**没有任何块
+进入索引**，spans/assets/attributes 挂在 `parentBlock.ID`（空串）上，一个也建不出来。
+
+所以每次自动保存做的是：删掉那一行 64 KB 的 `blocks` 行和它的 `blocks_fts` 行，
+再整篇重新插入、重新分词。块哈希短路永远命中不了，因为那个"块"就是整篇文档，一个字符都会变。
+
+#### 代价
+
+单次索引任务（`BenchmarkMarkdownIndexJob`）**随文档大小线性增长，约 78 µs/KB**：
+
+| 笔记 | 一次索引 | 分配 |
+|---|---|---|
+| 0.5 KB | 0.06 ms | — |
+| 7.4 KB | 0.54 ms | 1.4 MB |
+| 60 KB | **4.69 ms** | **11.2 MB** |
+
+活体内核归因（60 KB 笔记、45 次保存）：`FlushQueue → execOp → upsertTree` **42%**（就是这一行的
+删+插+FTS 重新分词），`indexMarkdownJob` 14% + `fromTree` 11% + `LoadMarkdownTreeByData` 10%
+（整篇重新解析）。单次索引任务自身的 micro-profile 里 **41% 是 GC**，来自那 11.2 MB。
+
+#### 两半，性质不同
+
+- **SQL 那一半（~42%）是可以修的。** 给 markdown 块**确定性的 projection ID**
+  （Noema 已经有这套：`noemaidentity.ProjectionID` / `filesys.MarkdownProjectionID`，
+  锚定块 `markdown_blocks.go:123` 就是这么发 ID 的），块就有了真实粒度，
+  `upsertTree` 现成的哈希短路立刻生效：打一个字只重写那一个段落的行、只重新分词那一段，
+  而不是 64 KB。粗估这一项能从 4.69 ms 降到几十微秒量级。
+- **解析那一半（~25%）修不了**，除非换一个增量解析器。lute 每次都要整篇重解，CM6 已经把
+  ChangeSet 发过来了但内核这边用不上。
+
+#### 这是设计决定，没有擅自做
+
+给 markdown 笔记加块级行会改变索引的**语义**，不只是性能：搜索结果会从"文档"变成"段落"、
+块引用和反链的目标粒度、`blocks` 表规模（200 篇 → 从 201 行涨到上万行）都跟着变。
+是不是想要，取决于 Noema 想让搜索返回什么。所以只报告，等你定。
+
+另外注意 `StripEphemeralMarkdownBlockIDs` 的注释里写清楚了为什么不能直接留着 lute 的 ID
+（不稳定 → 索引无限膨胀）；真要做，必须换成**确定性**的 ID，不能只是不 strip。
+
+#### 顺带试了一下并退回：把 spans/assets/attributes 按块作用域化
+
+在发现"派生表全空"之前，我先按块 ID 把这三张表的删+插缩到变化的块上（`refs` 保留全量重写，
+因为 ref 行带的是**目标**的 box/path，可能因为别的文档移动而失效，不能用本文档的块哈希判断）。
+改动本身是对的，对 `.sy` 文档有用——但 Noema 的 markdown 笔记这三张表是空的，**完全空转**。
+不值得在核心索引函数里留这份复杂度，已退回。
+
+**测试**：Go 全绿（sql/model 含 `-tags fts5`）。
+
+### 2026-08-29（第十二轮）：块级增量索引 —— 一次按键从"重写整篇"变成"重写两行"
+
+第十一轮查明了根因：一篇 markdown 笔记在索引里只有**一行**，content 是整篇文档，所以
+`upsertTree` 现成的块哈希短路永远空转。这一轮把粒度做出来。
+
+#### 做了什么
+
+**1. 确定性块投影 ID**（`filesys/markdown_block_projection_ids.go`）
+
+`AssignMarkdownBlockProjectionIDs` 在 `ApplyNoemaBlockProjection` 之后跑，给每个**顶层**块
+一个从它自己内容派生的内存 key。锚定块保留 `{#uuid}` 给的规范投影不动。
+
+内容派生（而不是按序号）是关键，因为它匹配编辑的真实形状：
+
+- 在块里打字 → 只有这个块的 key 变 → 删一行插一行；
+- 在别处插入/删除块 → 其余块内容没变、key 没变 → 一行都不动。按序号的方案会因为一次
+  顶部插入而重编号整篇。
+
+seed 里带 `tree.Path`：块的行携带 path，重命名必须让整篇失效，而带 `{#uuid}` 的文档
+根 key 在移动时不变。
+
+**2. ID 空间必须先加宽**（`noema/identity/block_projection.go`）
+
+不能复用 `ProjectionID`：它的 14 位前缀是从规范身份派生的合成时间戳，而绝大多数 Noema
+笔记没有 `{#uuid}`，前缀恒为 `20000101000000` —— 整个 key 只剩 28 bit 的十六进制后缀。
+一个 key/文档够用，一个 key/块必然碰撞：10 万块的 vault 期望碰撞数 >18，而碰撞不是良性的
+（`deleteBlocksByIDs` 会让一篇文档的保存删掉另一篇的行）。
+
+所以两半都从摘要派生，后缀用 id 形状允许的全部小写字母数字（而非十六进制），在
+`ast.IsNodeIDPattern` 要求的 22 字符里拿到约 68 bit。时间戳是日期形状的，`util.TimeFromID`
+照常工作，但和 `ProjectionID` 的 `20000101000000` 一样，它是 key 的产物、**不是创建时间**。
+
+**3. 让 `fromTree` 跳过未变的块**（这一步才是真正省下来的地方）
+
+只有 ID 还不够：加了粒度之后单次索引反而从 4.69 ms 涨到 15 ms，因为
+`buildBlockFromNode` 会把**每个**块渲染成 markdown（`ExportNodeStdMd`），300 个块就跑 300 次，
+分配从 12 MB 涨到 26.7 MB，GC 占 36%。
+
+利用一条性质：**内容派生的 ID 本身就是变更检测器**。ID 已经索引在这个 root 下 ⟹ 内容逐字节
+相同 ⟹ 那一行是对的。于是 `upsertTree` 在调 `fromTree` 之前就能分类完
+（`contentDerivedBlockState`），`fromTree` 对未变块直接 `ast.WalkSkipChildren`，整棵子树的
+投影都省掉。`.sy` 文档的 ID 是持久的、不含内容信息，继续走原来的哈希比较
+（`IsContentDerivedBlockIDFn` 注入判断，sql 不能 import filesys）。
+
+**4. 拆掉为"没有粒度"而存在的两个补偿**
+
+`buildBlockFromNode` 不再把整篇正文塞进根块；根块回到和 `.sy` 一样只带 title。
+折叠聚合内容的那个根哈希特判也一并去掉——`NodeHash` 不含子块内容这件事现在是对的。
+
+**5. 补一个会致命的泄漏**（`treenode/blocktree.go`）
+
+`upsertBlockTree` 只 DELETE 它即将重插的 ID，**从不删消失的块**。文档是单行时 root ID 永不变，
+看不出来；换成内容派生的块 key（编辑即更换）就会让 blocktree.db 无限膨胀——正是
+`StripEphemeralMarkdownBlockIDs` 注释里警告的那个失败。现在按"旧行集 − 本次仍存在的 ID"
+一并删除。
+
+**6. 合成 ID 不许越过 API 边界**
+
+`markdownBlockRefs` 过滤掉 `filesys.MarkdownIndexProjection` 的块。编辑器看到的仍然精确是
+锚定块，Noema"只有真正被引用的块才带持久化 anchor、笔记字节保持 git-diff 干净"这条规则
+完全不变——这些 key 从不落盘，和文档根 key 是同一类内部投影。
+
+#### 实测
+
+索引形状（200 篇合成 vault，实查数据库）：
+
+| | 改前 | 改后 |
+|---|---|---|
+| 全库行数 | 201（全部 `type='d'`） | 6943（6241 段落 / 261 标题 / 201 文档 / 120 列表 / 60 公式 / 60 代码）|
+| 那篇 60 KB 笔记 | **1 行 × 64095 字符** | **543 行，最宽 565 字符** |
+
+成本（同一基准、同一台机器，baseline 从 HEAD 建独立 worktree 跑）：
+
+| | baseline | 块级增量 | |
+|---|---|---|---|
+| 单次索引（改一个字，含 flush）0.5 KB | 0.78 ms | 0.61 ms | −22% |
+| 同上 7.4 KB | 2.54 ms | 1.61 ms | −37% |
+| 同上 60 KB | 15.2 ms | **11.0 ms** | −28% |
+| 同上 60 KB 分配 | 22.8 MB | **17.0 MB** | −25% |
+| 端到端每次保存内核 CPU（60 KB、40 次 @1s、全新 workspace）| 58.6 ms | **54.1 ms** | −8% |
+
+活体 profile 里 `sql.FlushQueue → upsertTree` 已经**跌出热点前 14 名**（改前是 42%）。
+端到端只有 −8% 是因为索引只是每次保存的一部分：现在最大的单项变成了同步路径上的
+`markdownNoteFromSnapshot`（catalog 的 note summary，36.6%），那是下一个目标，和索引无关。
+
+**注意一个测量陷阱**：早先我拿"30.1 ms/save"当基线得出"改完更慢了"的错误结论——那次用的是
+**热 workspace**（之前的运行已经索引过），而新代码跑在全新 workspace 上。两边都必须用
+全新 workspace 才可比。
+
+#### 护栏
+
+`kernel/model/markdown_index_incremental_fts5_test.go`：
+
+- **改一个段落只能动 ≤8 行**（实测 202 行里动 2 行）——没有这条，退化会静默发生；
+- 改后的文本必须能搜到、**旧文本必须搜不到**（只数行数的护栏会被"什么都不写"骗过）；
+- 删掉一个段落，行数必须正好减一，且旧文本消失（防 blocktree/blocks 累积孤儿行）。
+
+`kernel/model/markdown_index_job_bench_fts5_test.go` 的 `reindex` / `after-one-edit` 两档
+是这条路径的常驻基准；**注意 `indexMarkdownJob` 只入队，SQL 重写在 `FlushQueue` 里**，
+基准必须把 flush 算进去，否则量到的是解析而不是索引。
+
+#### 还剩什么
+
+整篇**解析**（`LoadMarkdownTreeByData`）仍是每次保存 O(文档)，lute 没有增量解析器，CM6 已经把
+ChangeSet 送过来了但内核用不上。这是索引之外的另一半，短期无解。
+
+`sort` 列对未变块会滞后（内容没变但序号变了时不重写）。Noema 的搜索走 `orderBy: 7` +
+`method: 0`，走的是 rank 分支不读 `sort`，所以不影响；如果将来要按块序排序，需要重新考虑。
+
+**测试**：Go 全绿（model/api/sql/treenode/filesys/noema，含 `-tags fts5` 与 `-race`），
+JS 全量 **2156 passed / 16 skipped**。

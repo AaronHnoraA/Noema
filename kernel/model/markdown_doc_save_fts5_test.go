@@ -118,10 +118,10 @@ func TestSaveMarkdownDocCASSerializesConcurrentWritersAndIndexesWinner(t *testin
 	if nil == bt {
 		t.Fatal("CAS winner was not projected into the block tree")
 	}
-	block := sql.GetBlockInBox(bt.RootID, boxID)
 	winnerMarker := strings.TrimSpace(strings.SplitN(winner.Markdown, "\n\n", 2)[1])
-	if nil == block || !strings.Contains(block.Content, winnerMarker) {
-		t.Fatalf("SQL projection does not contain CAS winner: tree=%+v block=%+v winner=%q", bt, block, winner.Markdown)
+	if !documentIsIndexed(boxID, relPath, winnerMarker) {
+		t.Fatalf("SQL projection does not contain CAS winner: tree=%+v rows=%+v winner=%q",
+			bt, blocksByBoxPath(boxID, relPath), winner.Markdown)
 	}
 }
 
@@ -247,8 +247,7 @@ func TestSaveMarkdownDocWritesAndIndexes(t *testing.T) {
 	if nil == bt {
 		t.Fatal("incremental save removed the document block tree")
 	}
-	block := sql.GetBlockInBox(bt.RootID, boxID)
-	if nil == block || !strings.Contains(block.Content, "@@cmd(baz!)") {
-		t.Fatalf("incremental source was not indexed: %+v", block)
+	if !documentIsIndexed(boxID, relPath, "@@cmd(baz!)") {
+		t.Fatalf("incremental source was not indexed: %+v", blocksByBoxPath(boxID, relPath))
 	}
 }

@@ -362,6 +362,10 @@ func listMarkdownFiles(dir string) (ret []string) {
 func (box *Box) Unindex() {
 	task.AppendTask(task.DatabaseIndex, unindex, box.ID)
 	go func() {
+		// Unrecovered, a panic in here takes the whole kernel down rather than
+		// the unindex it was asked to do. Every other background goroutine in
+		// the kernel carries this.
+		defer logging.Recover()
 		sql.FlushQueue()
 		ResetVirtualBlockRefCache()
 	}()

@@ -138,5 +138,8 @@ func MarkdownCanonicalBlockID(n *ast.Node) string {
 	if canonical := n.IALAttr(markdownCanonicalIDAttr); "" != canonical {
 		return canonical
 	}
+	if MarkdownIndexProjection(n) {
+		return ""
+	}
 	return n.ID
 }

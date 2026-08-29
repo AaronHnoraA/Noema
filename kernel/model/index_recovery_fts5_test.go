@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/aaronhe/noema/kernel/conf"
@@ -111,7 +112,7 @@ func TestInitBoxesRebuildsInterruptedMarkdownIndexFromSource(t *testing.T) {
 		t.Fatalf("recovered tree count = %d, want 2", got)
 	}
 	blocks := blocksByBoxPath(boxID, "/missing.md")
-	if len(blocks) != 1 || blocks[0].Box != boxID {
+	if 1 > len(blocks) || blocks[0].Box != boxID {
 		t.Fatalf("interrupted-index recovery did not index missing.md: %+v", blocks)
 	}
 	results, matched, _, _, _ := FullTextSearchBlock(
@@ -175,5 +176,19 @@ func TestInitBoxesRebuildsInterruptedMarkdownIndexFromSource(t *testing.T) {
 }
 
 func blocksByBoxPath(boxID, path string) []*sql.Block {
-	return sql.SelectBlocksRawStmtArgs("SELECT * FROM blocks WHERE box = ? AND path = ?", []any{boxID, path}, 32)
+	return sql.SelectBlocksRawStmtArgs("SELECT * FROM blocks WHERE box = ? AND path = ?", []any{boxID, path}, 512)
+}
+
+// documentIsIndexed reports whether any of a document's rows carries text.
+//
+// A Markdown document is projected as one row per top-level block rather than a
+// single row holding the whole body, so "the save reached the index" is a
+// property of the document's row set, not of its root row.
+func documentIsIndexed(boxID, path, want string) bool {
+	for _, block := range blocksByBoxPath(boxID, path) {
+		if strings.Contains(block.Content, want) || strings.Contains(block.Markdown, want) {
+			return true
+		}
+	}
+	return false
 }
