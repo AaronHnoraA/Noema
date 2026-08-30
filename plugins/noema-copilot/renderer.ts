@@ -1398,6 +1398,28 @@ export function setupCopilot(context: Context): () => void {
     if (handled) custom.stopImmediatePropagation();
   }
 
+  /**
+   * Why an inline request cannot run right now, or "" when it can.
+   *
+   * Every gate below fails silently during normal typing, which is correct for
+   * an idle-triggered suggestion but useless when someone asks "why is Copilot
+   * doing nothing?". A manual trigger reports the exact gate instead.
+   */
+  function triggerBlockReason(): string {
+    if (!nativeCopilotApi()?.request) return "the native bridge is unavailable in this host";
+    if (context.isActive && !context.isActive()) return "the renderer is inactive (hidden, paused, or idle)";
+    const mode = context.vimMode();
+    if (mode !== "insert") return `vim is in ${mode} mode, not insert`;
+    if (!editorHasFocus()) return "the editor does not have keyboard focus";
+    const selection = activeSelection(context.editor);
+    if (selection.from !== selection.to) return "a selection is active";
+    if (!context.isCursorInTexSource?.()
+      && hasBlockingTextAfterCursorOnLine(context.editor.cursorContext(512).after)) {
+      return "there is still text after the cursor on this line";
+    }
+    return "";
+  }
+
   function runAction(action: string): void {
     void (async () => {
       try {
@@ -1435,9 +1457,23 @@ export function setupCopilot(context: Context): () => void {
           return;
         }
         if (action === "trigger") {
+          const blocked = triggerBlockReason();
+          if (blocked) {
+            context.setStatus(`Copilot cannot run: ${blocked}`);
+            return;
+          }
           clearCompletion();
           await requestCompletion();
-          if (!visible) context.setStatus("Copilot: no suggestion");
+          if (!visible) context.setStatus("Copilot: no suggestion for this position");
+          return;
+        }
+        if (action === "diagnostics") {
+          // One line that answers "is it wired up, and if so what is it doing?"
+          const blocked = triggerBlockReason();
+          const where = blocked ? `blocked (${blocked})` : "ready";
+          const res = await requestCopilot<unknown>("status");
+          context.setStatus(`Copilot ${where} — ${statusSummary(res, "no status reported")}`);
+          console.log("Noema Copilot diagnostics", { blocked, status: res });
           return;
         }
         if (action === "log") {

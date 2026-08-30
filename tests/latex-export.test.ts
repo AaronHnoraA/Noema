@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 // @ts-ignore The converter is a Node ESM module outside the TS app graph.
-import { aaronnoteMarkdownToLatex, applyLatexTemplate, escapeLatexTitle, latexMacrosPackage, latexSideCommentPreamble, writeLatexExport } from "../server/lib/latex-export.mjs";
+import { aaronnoteMarkdownToLatex, applyLatexTemplate, escapeLatexText, escapeLatexTitle, latexMacrosPackage, latexSideCommentPreamble, writeLatexExport } from "../server/lib/latex-export.mjs";
 // @ts-ignore Node ESM module outside the TS app graph.
 import { academicLatexPostprocess, aaronnoteMarkdownToLatexPandoc, extractAaronnoteMetadata, preprocessAaronnoteForPandoc } from "../server/lib/latex-export-pandoc.mjs";
 // @ts-ignore The server is a Node ESM module outside the TS app graph.
@@ -102,7 +102,7 @@ describe("LaTeX export", () => {
     expect(result.body).not.toContain("Private plan");
   });
 
-  test("never leaks multiline private-command attributes after visible prose", async () => {
+  test("exports a todo title as an annotation but never its attributes", async () => {
     const result = await aaronnoteMarkdownToLatexPandoc([
       "Visible before @@todo [secret] {",
       "  credentials: {",
@@ -114,7 +114,9 @@ describe("LaTeX export", () => {
     ].join("\n"));
     expect(result.body).toContain("Visible before");
     expect(result.body).toContain("Visible after.");
-    expect(result.body).not.toContain("secret");
+    // The title is a review annotation and now reaches the margin. The planning
+    // attribute block behind it stays private.
+    expect(result.body).toContain("\\aarontodo{secret}");
     expect(result.body).not.toContain("password");
     expect(result.body).not.toContain("hunter2");
   });
@@ -434,7 +436,7 @@ describe("LaTeX export", () => {
     expect(macros).toContain("COMMENT:");
   });
 
-  test("omits Noema todos from exported body", () => {
+  test("exports Noema todo titles as annotations and omits their planning attributes", () => {
     const result = aaronnoteMarkdownToLatex([
       "# Main",
       "",
@@ -448,13 +450,15 @@ describe("LaTeX export", () => {
 
     expect(result.body).toContain("Visible text.");
     expect(result.body).toContain("More text.");
-    expect(result.body).not.toContain("TODO");
-    expect(result.body).not.toContain("todo");
-    expect(result.body).not.toContain("private reminder");
-    expect(result.body).not.toContain("internal reminder");
+    // The title is the review annotation; the planning attribute block is not.
+    expect(result.body).toContain("\\aarontodo{draft private reminder}");
+    expect(result.body).toContain("\\aarontodo{draft internal reminder}");
+    expect(result.body).toContain("\\aarontodo{bare private reminder}");
+    expect(result.body).toContain("\\aarontodo{hidden inline reminder}");
     expect(result.body).not.toContain("iso-202603");
     expect(result.body).not.toContain("2026-07-12");
-    expect(result.body).not.toContain("hidden inline reminder");
+    expect(result.body).not.toContain("2026-07-03");
+    expect(result.body).not.toContain("ddl");
   });
 
   test("omits @@cell commands and Lean4 source blocks from exported body", () => {
@@ -515,9 +519,10 @@ describe("LaTeX export", () => {
     const source = '@@revision(green) [old **claim**] {advice: "new claim"; reason: "clearer"}';
     const mechanical = aaronnoteMarkdownToLatex(source);
     const prepared = preprocessAaronnoteForPandoc(source);
-    expect(mechanical.body).toContain(String.raw`\aaronrevision{old \textbf{claim}}{new claim}{clearer}`);
-    expect(prepared.markdown).toContain(String.raw`\aaronrevision{old \textbf{claim}}{new claim}{clearer}`);
-    expect(latexMacrosPackage({})).toContain("\\providecommand{\\aaronrevision}[3]");
+    // `green` is the legacy spelling of the `ok` review kind.
+    expect(mechanical.body).toContain(String.raw`\aaronrevision[ok]{old \textbf{claim}}{new claim}{clearer}`);
+    expect(prepared.markdown).toContain(String.raw`\aaronrevision[ok]{old \textbf{claim}}{new claim}{clearer}`);
+    expect(latexMacrosPackage({})).toContain("\\providecommand{\\aaronrevision}[4][suggest]");
   });
 
   test("converts @@scomment and reports the required LaTeX feature", () => {
@@ -750,7 +755,7 @@ describe("LaTeX export", () => {
     expect(tex).toContain("\\begin{theorem}[Key]");
   });
 
-  test("does not silently bypass the configured agent when it is unavailable", async () => {
+  test("does not silently bypass the configured agent when a requested polish cannot run", async () => {
     const { root, notes } = await setupRoot();
     configure({
       root: notes,
@@ -762,7 +767,7 @@ describe("LaTeX export", () => {
     const note = join(notes, "c.md");
     await writeFile(note, "# C\n\nBody.\n", "utf8");
     const out = join(notes, "c.tex");
-    await expect(exportLatex({ file: note, outputPath: out }))
+    await expect(exportLatex({ file: note, outputPath: out, polish: true }))
       .rejects.toThrow(/configured latex polish agent is unavailable/i);
     await expect(readFile(out, "utf8")).rejects.toThrow();
   });
@@ -792,7 +797,7 @@ describe("LaTeX export", () => {
     await expect(readFile(malformedOut, "utf8")).rejects.toThrow();
   });
 
-  test("runs the configured agent for every successful assisted export", async () => {
+  test("runs the configured agent when a polish pass is explicitly requested", async () => {
     const { root, notes } = await setupRoot();
     const agent = join(root, "fake-opencode.sh");
     await writeFile(agent, [
@@ -813,7 +818,7 @@ describe("LaTeX export", () => {
     const out = join(notes, "assisted.tex");
     await writeFile(note, "Verified body.\n", "utf8");
 
-    const result = await exportLatex({ file: note, outputPath: out }) as {
+    const result = await exportLatex({ file: note, outputPath: out, polish: true }) as {
       engine?: string;
       agent?: { backend?: string; attempts?: number; applied?: number; kept?: number; elapsedMs?: number };
     };
@@ -821,6 +826,91 @@ describe("LaTeX export", () => {
     expect(result.engine).toBe("opencode");
     expect(result.agent).toMatchObject({ backend: "opencode", attempts: 1, applied: 0, kept: 2 });
     expect(result.agent?.elapsedMs).toBeGreaterThanOrEqual(0);
+    expect(await readFile(out, "utf8")).toContain("Verified body.");
+  });
+
+  test("honors annotations:none from the whole note when exporting one scope", async () => {
+    const { notes } = await setupRoot();
+    const note = join(notes, "scoped-annotations.md");
+    const documentContent = [
+      "#+begin meta",
+      "annotations: none",
+      "#+end meta",
+      "",
+      "## Section",
+      "",
+      "Body @@todo [private reminder] tail.",
+      "",
+    ].join("\n");
+    await writeFile(note, documentContent, "utf8");
+    const out = join(notes, "scoped-annotations.tex");
+
+    // The exported scope starts below the metadata block, so the switch can only
+    // work if it is resolved from the whole document.
+    const scope = "Body @@todo [private reminder] tail.\n";
+    await exportLatex({ file: note, content: scope, documentContent, outputPath: out, scope: "heading" });
+
+    const tex = await readFile(out, "utf8");
+    expect(tex).toContain("Body");
+    expect(tex).not.toContain("aarontodo");
+    expect(tex).not.toContain("private reminder");
+  });
+
+  test("skips the agent entirely when the polish pass is turned off", async () => {
+    const { root, notes } = await setupRoot();
+    const agent = join(root, "must-not-run.sh");
+    await writeFile(agent, ["#!/bin/sh", "echo 'agent should not have run' >&2", "exit 1"].join("\n"), "utf8");
+    await chmod(agent, 0o755);
+    configure({
+      root: notes,
+      workspaceRoot: root,
+      latexTemplatesRoot: join(root, "templates"),
+      latexExportEngine: "codex",
+      latexExportAgent: "opencode",
+      latexOpencodeBin: agent,
+    });
+    const note = join(notes, "unpolished.md");
+    const out = join(notes, "unpolished.tex");
+    await writeFile(note, "Verified body.\n", "utf8");
+
+    const result = await exportLatex({ file: note, outputPath: out, polish: false }) as {
+      engine?: string;
+      warnings?: string[];
+    };
+
+    expect(result.engine).toBe("pandoc");
+    expect((result.warnings || []).join("\n")).not.toMatch(/agent should not have run/);
+    expect(await readFile(out, "utf8")).toContain("Verified body.");
+  });
+
+  test("commits the verified Pandoc draft when the agent fails its gates", async () => {
+    const { root, notes } = await setupRoot();
+    const agent = join(root, "failing-opencode.sh");
+    await writeFile(agent, ["#!/bin/sh", "echo 'model unavailable' >&2", "exit 1"].join("\n"), "utf8");
+    await chmod(agent, 0o755);
+    configure({
+      root: notes,
+      workspaceRoot: root,
+      latexTemplatesRoot: join(root, "templates"),
+      latexExportEngine: "codex",
+      latexExportAgent: "opencode",
+      latexOpencodeBin: agent,
+    });
+    const note = join(notes, "agent-failed.md");
+    const out = join(notes, "agent-failed.tex");
+    await writeFile(note, "Verified body.\n", "utf8");
+
+    // The mechanical draft already compiled. Losing the whole export because a
+    // free-form polish attempt failed would throw away a usable result.
+    const result = await exportLatex({ file: note, outputPath: out, polish: true }) as {
+      engine?: string;
+      warnings?: string[];
+      agent?: { used?: boolean };
+    };
+
+    expect(result.engine).toBe("pandoc");
+    expect(result.agent?.used).toBe(false);
+    expect((result.warnings || []).join("\n")).toMatch(/opencode/i);
     expect(await readFile(out, "utf8")).toContain("Verified body.");
   });
 
@@ -914,5 +1004,39 @@ describe("LaTeX export", () => {
       .rejects.toThrow(/PDF compilation failed|undefined control/i);
     expect(await readFile(out, "utf8")).toBe("OLD VERIFIED TEX\n");
     expect(await readFile(pdf, "utf8")).toBe("OLD VERIFIED PDF\n");
+  });
+});
+
+describe("LaTeX export regressions", () => {
+  test("keeps every link on a line whose label carries a private command", () => {
+    const result = preprocessAaronnoteForPandoc(
+      "See [a @@todo one](http://x.com) and [b](http://y.com) end.",
+    );
+    // A greedy label match used to span both links and delete the first
+    // destination, the prose between them, and the second link outright.
+    expect(result.markdown).toBe("See [a ](http://x.com) and [b](http://y.com) end.");
+  });
+
+  test("scopes label stripping to the outer link when a label contains a link", () => {
+    const result = preprocessAaronnoteForPandoc(
+      "Nested [see [1](http://inner) more @@todo x](http://outer) tail.",
+    );
+    expect(result.markdown).toBe("Nested [see [1](http://inner) more ](http://outer) tail.");
+  });
+
+  test("escapes a literal backslash as \\textbackslash{} without re-escaping its braces", () => {
+    expect(escapeLatexText("path C:\\dir")).toBe("path C:\\textbackslash{}dir");
+    expect(escapeLatexTitle("A \\ B")).toBe("A \\textbackslash{} B");
+    expect(escapeLatexText("a_b {c} 100% #1 ^ ~"))
+      .toBe("a\\_b \\{c\\} 100\\% \\#1 \\textasciicircum{} \\textasciitilde{}");
+  });
+
+  test("rejects instead of crashing the host when pandoc exits before draining stdin", async () => {
+    // Writing into the closed pipe emits EPIPE on child.stdin. With no listener
+    // there, the unhandled `error` event is an uncaught exception that takes the
+    // whole web host down rather than failing this one export.
+    await expect(aaronnoteMarkdownToLatexPandoc("x".repeat(2 * 1024 * 1024), {
+      pandocBin: "/usr/bin/false",
+    })).rejects.toThrow(/Pandoc Markdown/);
   });
 });

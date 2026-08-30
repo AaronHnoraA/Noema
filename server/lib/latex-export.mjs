@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { scanInlineCommands } from "../../shared/command-syntax.mjs";
+import { REVISION_KINDS, revisionKind } from "../../shared/revision-kinds.mjs";
 
 const DEFAULT_TEMPLATE = `\\documentclass[11pt]{article}
 \\usepackage[a4paper,margin=1in]{geometry}
@@ -50,12 +51,19 @@ const DISPLAY_MATH_OPEN_RE = /^\s*(?:\\\[|\$\$)\s*$/;
 const DISPLAY_MATH_CLOSE_RE = /^\s*(?:\\\]|\$\$)\s*$/;
 const CEIL_COMMAND_LINE_RE = /^\s*@@cell(?:[ \t]*\([^)\n]*\))?(?:[ \t]+\[[^\]\n]*\])?[ \t]*$/i;
 
+const LATEX_TEXT_ESCAPES = new Map([
+  ["\\", "\\textbackslash{}"],
+  ["^", "\\textasciicircum{}"],
+  ["~", "\\textasciitilde{}"],
+  ["#", "\\#"], ["$", "\\$"], ["%", "\\%"], ["&", "\\&"],
+  ["_", "\\_"], ["{", "\\{"], ["}", "\\}"],
+]);
+
 export function escapeLatexText(value) {
-  return String(value ?? "")
-    .replace(/\\/g, "\\textbackslash{}")
-    .replace(/([#$%&_{}])/g, "\\$1")
-    .replace(/\^/g, "\\textasciicircum{}")
-    .replace(/~/g, "\\textasciitilde{}");
+  // One pass over the source. Chained `replace` calls re-escaped the braces
+  // that `\textbackslash{}` itself introduces, so a literal backslash in prose
+  // reached the PDF as `\{}`.
+  return String(value ?? "").replace(/[\\^~#$%&_{}]/g, (char) => LATEX_TEXT_ESCAPES.get(char));
 }
 
 export function escapeLatexUrl(value) {
@@ -143,13 +151,15 @@ export function revisionLatex(command, options = {}) {
   const original = String(command?.context || "").replace(/\\\]/g, "]").replace(/\\\\/g, "\\");
   const advice = String(args.advice || "").replace(/\\\\/g, "\\");
   const reason = String(args.reason || "").replace(/\\\\/g, "\\");
-  return `\\aaronrevision{${convertInline(original, options)}}{${convertInline(advice, options)}}{${convertInline(reason, options)}}`;
+  const kind = revisionKind(command?.switchValue).id;
+  const macro = options.marginSafe === false ? "aaronrevisioninline" : "aaronrevision";
+  return `\\${macro}[${kind}]{${convertInline(original, options)}}{${convertInline(advice, options)}}{${convertInline(reason, options)}}`;
 }
 
 export function convertInline(text, options = {}) {
   const source = String(text ?? "").trim();
   const annotations = scanInlineCommands(source)
-    .filter((command) => command.name === "todo" || command.name === "comment" || command.name === "scomment" || command.name === "revision" || command.name === "cite" || command.name === "latexmk");
+    .filter((command) => command.name === "todo" || command.name === "itodo" || command.name === "comment" || command.name === "scomment" || command.name === "revision" || command.name === "cite" || command.name === "latexmk");
   let annotationIndex = 0;
   let latex = "";
   let plain = "";
@@ -171,6 +181,11 @@ export function convertInline(text, options = {}) {
         // dropping it. `comment(true)` still controls the editor's prominent
         // presentation, while both forms use the same export macro.
         latex += `\\aaroncomment{${convertInline(annotation.context, options)}}`;
+      } else if (annotation.name === "todo" || annotation.name === "itodo") {
+        // Review annotations reach the export. `convertInline` is also used for
+        // moving arguments, where the margin form cannot be typeset.
+        const title = convertInline(annotation.context, options);
+        if (title) latex += options.marginSafe === false ? `\\aarontodoinline{${title}}` : `\\aarontodo{${title}}`;
       } else if (annotation.name === "cite") {
         latex += citeLatex(annotation, options);
       } else if (annotation.name === "latexmk" && annotation.switchValue.toLowerCase() === "newline") {
@@ -205,7 +220,7 @@ function isPrivateAnnotationLine(line) {
   if (CEIL_COMMAND_LINE_RE.test(trimmed)) return true;
   const command = scanInlineCommands(trimmed)[0];
   return Boolean(command
-    && (command.name === "todo" || command.name === "itodo" || command.name === "comment")
+    && command.name === "comment"
     && !isDisplayCommentCommand(command)
     && command.fullFrom === 0
     && command.fullTo === trimmed.length);
@@ -225,7 +240,9 @@ function orgBlockCloseKind(line) {
 // inline math is still valid there. Escape prose while preserving Noema's
 // canonical \(...\) math spans instead of turning their backslashes into text.
 export function escapeLatexTitle(value, options = {}) {
-  return convertInline(value, options).replace(/\s+/g, " ").trim();
+  // Titles, headings, and environment labels are moving arguments, where a
+  // margin note from todonotes cannot be typeset.
+  return convertInline(value, { ...options, marginSafe: false }).replace(/\s+/g, " ").trim();
 }
 
 function parseMeta(lines) {
@@ -583,6 +600,56 @@ export function latexSideCommentPreamble(enabled) {
 `;
 }
 
+// Annotation macros. `\todo` comes from todonotes, which
+// `latexSideCommentPreamble` loads later in the same preamble; `\providecommand`
+// does not expand its body, so definition order here does not matter.
+export function latexAnnotationPreamble() {
+  const lines = [
+    "% Noema annotations",
+    "\\providecolor{AaronDisplayComment}{HTML}{EC008C}",
+    "\\providecommand{\\aaroncomment}[1]{%",
+    "  \\textcolor{AaronDisplayComment}{\\textbf{COMMENT:}\\nobreakspace #1}%",
+    "}",
+    "\\providecolor{AaronTodo}{HTML}{E8730A}",
+    "\\providecommand{\\aarontodo}[1]{%",
+    "  \\todo[fancyline,color=AaronTodo,textcolor=white,linecolor=AaronTodo,bordercolor=white]{%",
+    "    \\textbf{TODO:} #1}%",
+    "}",
+    // `\\todo` cannot appear in a moving argument or a tabular cell. The
+    // preprocessor routes those contexts here so an annotated heading or table
+    // still compiles instead of failing the whole export.
+    "\\providecommand{\\aarontodoinline}[1]{%",
+    "  \\textcolor{AaronTodo}{\\textbf{TODO:}\\nobreakspace #1}%",
+    "}",
+    "\\providecommand{\\sidecommentinline}[1]{%",
+    "  \\textcolor{AaronSideCommentBackground}{\\textbf{NOTE:}\\nobreakspace #1}%",
+    "}",
+  ];
+  for (const kind of REVISION_KINDS) {
+    lines.push(`\\providecolor{AaronRev${kind.id}}{HTML}{${kind.latexColor}}`);
+    lines.push(`\\providecommand{\\AaronRevLabel${kind.id}}{${kind.latexLabel}}`);
+  }
+  // Kept so a .tex exported before revision kinds existed still compiles
+  // against a regenerated package.
+  lines.push("\\providecolor{AaronRevision}{HTML}{6558D3}");
+  // The suggestion and its reason move to the margin, next to todos and side
+  // comments, so a reviewed document reads as one annotation column. The
+  // underline stays inline because only a revision marks a span of text.
+  lines.push(
+    "\\providecommand{\\aaronrevision}[4][suggest]{%",
+    "  \\textcolor{AaronRev#1}{\\uline{#2}}%",
+    "  \\todo[fancyline,color=AaronRev#1,textcolor=white,linecolor=AaronRev#1,bordercolor=white]{%",
+    "    \\textbf{\\csname AaronRevLabel#1\\endcsname:} #3\\ifstrempty{#4}{}{\\par\\textit{#4}}}%",
+    "}",
+    "\\providecommand{\\aaronrevisioninline}[4][suggest]{%",
+    "  \\textcolor{AaronRev#1}{\\uline{#2}}%",
+    "  \\textcolor{AaronRev#1}{\\nobreakspace\\textbf{\\csname AaronRevLabel#1\\endcsname:}\\nobreakspace #3%",
+    "    \\ifstrempty{#4}{}{\\space\\textit{#4}}}%",
+    "}",
+  );
+  return lines.join("\n");
+}
+
 export function latexMacrosPackage(macros, features = {}) {
   return [
     "\\NeedsTeXFormat{LaTeX2e}",
@@ -603,15 +670,6 @@ export function latexMacrosPackage(macros, features = {}) {
 \providecommand{\tightlist}{%
   \setlength{\itemsep}{0.2em}\setlength{\parskip}{0pt}}
 \providecommand{\st}[1]{\sout{#1}}
-\providecolor{AaronDisplayComment}{HTML}{EC008C}
-\providecommand{\aaroncomment}[1]{%
-  \textcolor{AaronDisplayComment}{\textbf{COMMENT:}\nobreakspace #1}%
-}
-\providecolor{AaronRevision}{HTML}{6558D3}
-\providecommand{\aaronrevision}[3]{%
-  \textcolor{AaronRevision}{\uline{#1}}%
-  \footnote{\textbf{Suggested:} #2\ifstrempty{#3}{}{\space\textit{Reason:} #3}}%
-}
 \newsavebox{\AaronPandocBox}
 \providecommand{\pandocbounded}[1]{%
   \sbox{\AaronPandocBox}{#1}%
@@ -625,6 +683,7 @@ export function latexMacrosPackage(macros, features = {}) {
 \displaywidowpenalty=10000
 \interfootnotelinepenalty=10000
 \setlength{\emergencystretch}{2em}`,
+    latexAnnotationPreamble(),
     latexMacrosPreamble(macros).trim(),
     // Keep this capability stable across every document in the same directory:
     // exporting a note without side comments must not make an older note fail.
@@ -632,6 +691,29 @@ export function latexMacrosPackage(macros, features = {}) {
     "\\endinput",
     "",
   ].filter(Boolean).join("\n\n");
+}
+
+// Shared LaTeX log lint. Undefined references/citations and missing characters
+// are fatal: the PDF would be published with `??` markers or dropped glyphs.
+// Overfull boxes and float pressure are layout warnings worth reporting.
+export function latexLogDiagnostics(log) {
+  const lines = String(log || "").split(/\r?\n/);
+  const fatal = lines.filter((line) =>
+    /LaTeX Warning: (?:Citation|Reference).+undefined|There were undefined references|There were undefined citations|Missing character: There is no/i.test(line),
+  );
+  const layout = lines.filter((line) =>
+    /Overfull \\[hv]box|Float too large|Too many unprocessed floats/i.test(line),
+  );
+  return {
+    fatal: [...new Set(fatal)].slice(-20),
+    layout: [...new Set(layout)].slice(-20),
+  };
+}
+
+// A single LaTeX pass leaves cross-references, the table of contents, and
+// citation labels unresolved. Only rerun when the compiler says so.
+export function latexNeedsAnotherPass(log) {
+  return /Rerun to get (?:cross-references|the bibliography|outlines) right|Rerun LaTeX|Label\(s\) may have changed|No file .*\.toc/i.test(String(log || ""));
 }
 
 export async function readLatexTemplate(templatesRoot, templatePath = "") {

@@ -34,7 +34,7 @@ import {
   unfoldAllHeadings,
   unfoldHeadingAtCursor,
 } from "../heading-fold.ts";
-import { revisionSource, type RevisionSourceOptions } from "../../authoring-syntax.ts";
+import { revisionAdviceRange, revisionSource, type RevisionSourceOptions } from "../../authoring-syntax.ts";
 import { moveBlockAtCursor } from "../block-move.ts";
 
 // ---------------------------------------------------------------------------
@@ -101,29 +101,71 @@ function insertFootnote(view: EditorView): boolean {
 }
 
 function revisionOptions(value: string): RevisionSourceOptions {
-  if (!value.trim()) return { advice: "replacement", reason: "", style: "indigo" };
+  if (!value.trim()) return { advice: "replacement", reason: "", style: "suggest" };
   try {
     const parsed = JSON.parse(value) as Partial<RevisionSourceOptions>;
     return {
       advice: String(parsed.advice || "replacement"),
       reason: String(parsed.reason || ""),
-      style: String(parsed.style || "indigo"),
+      style: String(parsed.style || "suggest"),
     };
   } catch {
-    return { advice: value, reason: "", style: "indigo" };
+    return { advice: value, reason: "", style: "suggest" };
   }
+}
+
+/**
+ * Write `source` over [from, to) and leave the selection on its advice value.
+ *
+ * Landing the caret after the whole command meant the one field the author came
+ * to fill sat behind a quoted attribute they had to navigate back into.
+ */
+function dispatchRevisionSource(view: EditorView, from: number, to: number, prefix: string, source: string, suffix: string): boolean {
+  const insert = `${prefix}${source}${suffix}`;
+  const advice = revisionAdviceRange(source);
+  const base = from + prefix.length;
+  view.dispatch({
+    changes: { from, to, insert },
+    selection: advice
+      ? { anchor: base + advice.from, head: base + advice.to }
+      : { anchor: from + insert.length },
+    scrollIntoView: true,
+  });
+  return true;
 }
 
 function insertRevision(view: EditorView, value: string): boolean {
   const { from, to } = view.state.selection.main;
-  const original = from === to ? "original" : view.state.doc.sliceString(from, to);
-  const source = revisionSource(original, revisionOptions(value));
-  view.dispatch({
-    changes: { from, to, insert: source },
-    selection: { anchor: from + source.length },
-    scrollIntoView: true,
+  const raw = from === to ? "" : view.state.doc.sliceString(from, to);
+  // Whitespace at the edges of a selection is surrounding document text, not
+  // part of the revised span. Folding it into `[...]` glued the command onto
+  // the preceding word.
+  const leading = raw.match(/^\s*/)?.[0] ?? "";
+  const trailing = raw.length > leading.length ? (raw.match(/\s*$/)?.[0] ?? "") : "";
+  const original = raw.slice(leading.length, raw.length - trailing.length) || "original";
+  return dispatchRevisionSource(view, from, to, leading, revisionSource(original, revisionOptions(value)), trailing);
+}
+
+/**
+ * Rewrite one existing `@@revision` in place.
+ *
+ * Editing used to mean selecting the whole raw command, where the next keypress
+ * destroyed it. Callers pass the command's source range plus the decoded
+ * original so the suggestion can be re-authored without retyping the span.
+ */
+function editRevision(view: EditorView, value: string): boolean {
+  type EditRevisionRequest = Partial<RevisionSourceOptions> & { from?: number; to?: number; original?: string };
+  let parsed: EditRevisionRequest | null = null;
+  try { parsed = JSON.parse(value) as EditRevisionRequest; } catch { return false; }
+  const from = Number(parsed?.from);
+  const to = Number(parsed?.to);
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to > view.state.doc.length || from >= to) return false;
+  const source = revisionSource(String(parsed?.original ?? ""), {
+    advice: String(parsed?.advice || "replacement"),
+    reason: String(parsed?.reason || ""),
+    style: String(parsed?.style || "suggest"),
   });
-  return true;
+  return dispatchRevisionSource(view, from, to, "", source, "");
 }
 
 function editProperties(view: EditorView): boolean {
@@ -1015,6 +1057,7 @@ export function runCommandCM6(view: EditorView, command: EditorCommand, value = 
   if (command === "subscript") return wrapInline(view, "~", "~");
   if (command === "insert-footnote") return insertFootnote(view);
   if (command === "insert-revision") return insertRevision(view, value);
+  if (command === "edit-revision") return editRevision(view, value);
   if (command === "edit-properties") return editProperties(view);
 
   if (command === "link") {

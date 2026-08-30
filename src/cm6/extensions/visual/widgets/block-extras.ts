@@ -2289,7 +2289,6 @@ class CeilCommandWidget extends MeasuredWidget {
           kernel: meta.kernel,
           session: meta.session,
           language: meta.language,
-          storage: "ipynb",
           cells: ceilCommandCellsForContext(view.state, meta, file),
         });
         setStatus(meta.id);

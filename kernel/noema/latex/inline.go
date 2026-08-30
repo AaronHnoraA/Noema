@@ -14,6 +14,37 @@ import (
 type Options struct {
 	Rules          Rules             `json:"rules,omitempty"`
 	CitationKeyMap map[string]string `json:"citationKeyMap,omitempty"`
+
+	// A scope export only carries part of the note, so the caller can assert the
+	// `annotations: none` switch from the whole document's metadata even when the
+	// `#+begin meta` block sits outside the exported range.
+	DisableAnnotations bool `json:"disableAnnotations,omitempty"`
+
+	// Render context, never part of the request payload. The zero value is the
+	// permissive one: margin notes are allowed.
+	InlineOnly bool `json:"-"`
+}
+
+// revisionKind mirrors shared/revision-kinds.mjs. The `legacy` colour spellings
+// keep notes written before review kinds existed rendering unchanged.
+type revisionKindSpec struct{ ID, Legacy string }
+
+var revisionKindSpecs = []revisionKindSpec{
+	{"suggest", "indigo"},
+	{"question", "yellow"},
+	{"error", "red"},
+	{"ok", "green"},
+	{"note", "teal"},
+}
+
+func revisionKindID(value string) string {
+	wanted := strings.ToLower(strings.TrimSpace(value))
+	for _, kind := range revisionKindSpecs {
+		if wanted == kind.ID || wanted == kind.Legacy {
+			return kind.ID
+		}
+	}
+	return revisionKindSpecs[0].ID
 }
 
 type Rules struct {
@@ -23,13 +54,18 @@ type Rules struct {
 	PandocExtensions []string          `json:"pandocExtensions,omitempty"`
 }
 
+// One pass over the source. Substituting the backslash first and then running
+// the replacer re-escaped the braces that \textbackslash{} itself introduces,
+// so a literal backslash in prose reached the PDF as \{}.
+var latexTextEscaper = strings.NewReplacer(
+	"\\", "\\textbackslash{}",
+	"^", "\\textasciicircum{}",
+	"~", "\\textasciitilde{}",
+	"#", "\\#", "$", "\\$", "%", "\\%", "&", "\\&", "_", "\\_", "{", "\\{", "}", "\\}",
+)
+
 func escapeLatexText(value string) string {
-	value = strings.ReplaceAll(value, "\\", "\\textbackslash{}")
-	replacer := strings.NewReplacer(
-		"#", "\\#", "$", "\\$", "%", "\\%", "&", "\\&", "_", "\\_", "{", "\\{", "}", "\\}",
-		"^", "\\textasciicircum{}", "~", "\\textasciitilde{}",
-	)
-	return replacer.Replace(value)
+	return latexTextEscaper.Replace(value)
 }
 
 func escapeLatexURL(value string) string {
@@ -128,7 +164,12 @@ func revisionLatex(command inlineCommand, options Options) string {
 	original := strings.ReplaceAll(strings.ReplaceAll(command.Context, "\\]", "]"), "\\\\", "\\")
 	advice := strings.ReplaceAll(command.Args["advice"], "\\\\", "\\")
 	reason := strings.ReplaceAll(command.Args["reason"], "\\\\", "\\")
-	return "\\aaronrevision{" + convertInline(original, options, true) + "}{" + convertInline(advice, options, true) + "}{" + convertInline(reason, options, true) + "}"
+	macro := "\\aaronrevision"
+	if options.InlineOnly {
+		macro = "\\aaronrevisioninline"
+	}
+	return macro + "[" + revisionKindID(command.SwitchValue) + "]{" + convertInline(original, options, true) + "}{" +
+		convertInline(advice, options, true) + "}{" + convertInline(reason, options, true) + "}"
 }
 
 func commandAllowedForInline(name string) bool {
@@ -262,6 +303,9 @@ func convertInline(text string, options Options, exportComments bool) string {
 }
 
 func escapeLatexTitle(value string, options Options) string {
+	// Titles, headings, and environment labels are moving arguments, where a
+	// todonotes margin note cannot be typeset.
+	options.InlineOnly = true
 	space := regexp.MustCompile(`\s+`)
 	return strings.TrimSpace(space.ReplaceAllString(convertInline(value, options, true), " "))
 }

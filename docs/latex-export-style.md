@@ -2,8 +2,12 @@
 
 This is the contract for converting an Noema note (Markdown source) into a
 LaTeX **body** for CMD+P export. Noema first applies private-syntax and
-semantic preprocessing, Pandoc converts standard Markdown, and the selected
-agent then performs gated structural and typographic polish.
+semantic preprocessing, then Pandoc converts standard Markdown, and the selected
+agent performs gated structural and typographic polish. The polish pass is
+**on by default** and can be turned off per export ("Agent polish" in the export
+dialog). It is gated on review, fidelity, and compilation; when it does not
+pass, the export falls back to the verified Pandoc draft with a warning rather
+than failing.
 
 ## Absolute rules
 
@@ -40,9 +44,53 @@ agent then performs gated structural and typographic polish.
 | tables / footnotes / definitions / task lists / strikeout | Pandoc-native academic LaTeX |
 | `@@latexmk(name)` | typed, placement-validated LaTeX mark |
 | `@@cite(namespace) [key; ...] {locator: ...}` | resolved `\\cite` plus matching bibliography entries; unresolved/partial groups are export errors |
-| `@@revision(style) [original] {advice: "..."; reason: "..."}` | always-visible `\\aaronrevision{original}{advice}{reason}` until accepted or kept |
-| `@@todo(...) [...]{...}` | **dropped** (todos never appear in exports) |
-| `#+begin meta ... #+end meta` | consumed for title/date; not emitted |
+| `@@revision(kind) [original] {advice: "..."; reason: "..."}` | `\\aaronrevision[kind]{original}{advice}{reason}` — the original stays underlined inline, the suggestion goes to the margin |
+| `@@todo(...) [title] {...}` / `@@itodo` | `\\aarontodo{title}` — an orange margin note. The planning attribute block is **never** exported |
+| `@@comment [text]` | `\\aaroncomment{text}` — inline, pink, prefixed `COMMENT:` |
+| `@@scomment [text]` | `\\sidecomment{text}` — an orange margin note with no prefix |
+| `@@project` / `@@milestone` / `@@clock` | **dropped** (planning bookkeeping, never exported) |
+| `#+begin meta ... #+end meta` | consumed for title/date/`annotations`; not emitted |
+
+### Review annotations
+
+Todos, comments, side comments, and revisions are **exported by default** as an
+annotation column in the margin. Each kind is distinguishable by colour and
+prefix, so a reviewed PDF can be read without the source:
+
+| Source | Placement | Colour | Prefix |
+|---|---|---|---|
+| `@@todo` / `@@itodo` | margin | orange | `TODO:` |
+| `@@scomment` | margin | orange | none |
+| `@@comment` | inline | pink | `COMMENT:` |
+| `@@revision(suggest)` | margin + inline underline | indigo | `REV:` |
+| `@@revision(question)` | margin + inline underline | amber | `Q:` |
+| `@@revision(error)` | margin + inline underline | red | `ERR:` |
+| `@@revision(ok)` | margin + inline underline | green | `OK:` |
+| `@@revision(note)` | margin + inline underline | teal | `NOTE:` |
+
+The pre-kind colour spellings (`indigo`, `yellow`, `red`, `green`, `teal`) are
+accepted and normalize to the kind that already carried that hue, so an older
+note renders unchanged.
+
+Two constraints follow from `todonotes`:
+
+- A margin note cannot be typeset in a moving argument or a tabular cell.
+  Annotations on a heading or a pipe-table row degrade automatically to an
+  inline form (`\\aarontodoinline`, `\\sidecommentinline`,
+  `\\aaronrevisioninline`). This is a placement fallback, not an error.
+- A bracket-less `@@todo some text` takes its title to the **end of the line**
+  (this is the planning DSL's grammar, identical to the editor). Mid-sentence,
+  prefer the bracketed `@@todo [title]` form so the rest of the sentence is not
+  absorbed into the annotation.
+
+To suppress every annotation — for a submission draft, say — add one line to the
+note metadata:
+
+```
+#+begin meta
+annotations: none
+#+end meta
+```
 
 ## Block environments (`#+begin kind ... #+end kind`)
 

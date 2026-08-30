@@ -30,8 +30,11 @@ import {
   notebookOutput,
   notebookOutputMirror,
   notebookSource,
+  notebookStorageForFile,
   parseNotebook,
+  parseNotebookText,
   serializeNotebook,
+  serializeNotebookText,
 } from "./jupyter-notebook-format.mjs";
 
 export { jupyterWidgetCommOpenP };
@@ -102,15 +105,24 @@ function cellStoreDir(noteFile) {
   return join(dirname(noteFile), ".cell");
 }
 
-function hiddenScriptPath(noteFile, session, language) {
+// Lean cells never reach a kernel and never persist output, so their store is
+// plain Lean source that `lean-mode` and the Lean LSP can open directly.
+function scriptExtensionForLanguage(language) {
+  return leanRuntimeP(language, "") ? "lean" : "ipynb";
+}
+
+function hiddenScriptPath(noteFile, session, language, extension = scriptExtensionForLanguage(language)) {
   const noteExt = extname(noteFile);
   const noteBase = safeSlug(basename(noteFile, noteExt), "note");
   const safeLanguage = safeSlug(language, "python");
   const safeSession = safeSlug(session, "default");
-  return join(cellStoreDir(noteFile), `${noteBase}.${safeLanguage}.${safeSession}.ipynb`);
+  return join(cellStoreDir(noteFile), `${noteBase}.${safeLanguage}.${safeSession}.${extension}`);
 }
 
 function legacyHiddenScriptPath(noteFile, session, language, kernel) {
+  // Lean stores written before the `.lean` format are read once and rewritten
+  // in place on the next save.
+  if (leanRuntimeP(language, kernel)) return hiddenScriptPath(noteFile, session, language, "ipynb");
   return language === "python" && /sage/i.test(String(kernel || ""))
     ? hiddenScriptPath(noteFile, session, "sage")
     : "";
@@ -143,8 +155,8 @@ function isoTime(value) {
   return value ? new Date(value).toISOString() : "";
 }
 
-function parseHiddenScriptCells(text) {
-  return notebookCodeMap(parseNotebook(text));
+function parseHiddenScriptCells(text, file = "") {
+  return notebookCodeMap(parseNotebookText(text, {}, file));
 }
 
 /**
@@ -165,9 +177,9 @@ export async function readPersistedScriptCell(body = {}) {
   let notebook = createNotebook({ sourceFile: noteFile, kernel, session, language });
   let info = null;
   try {
-    notebook = parseNotebook(await nativeReadFile(scriptFile, "utf8"), {
+    notebook = parseNotebookText(await nativeReadFile(scriptFile, "utf8"), {
       sourceFile: noteFile, kernel, session, language,
-    });
+    }, scriptFile);
     info = await nativeStat(scriptFile);
   } catch (cause) {
     if (cause?.code !== "ENOENT") throw cause;
@@ -187,18 +199,18 @@ export async function readPersistedScriptCell(body = {}) {
   };
 }
 
-function hiddenScriptCellOrder(text) {
-  return notebookCodeOrder(parseNotebook(text));
+function hiddenScriptCellOrder(text, file = "") {
+  return notebookCodeOrder(parseNotebookText(text, {}, file));
 }
 
 async function readExistingHiddenCells(scriptFile, fallbackFile = "", files) {
   try {
-    return parseHiddenScriptCells(await files.readFile(scriptFile, "utf8"));
+    return parseHiddenScriptCells(await files.readFile(scriptFile, "utf8"), scriptFile);
   } catch (err) {
     if (err?.code === "ENOENT") {
       if (fallbackFile && fallbackFile !== scriptFile) {
         try {
-          return parseHiddenScriptCells(await files.readFile(fallbackFile, "utf8"));
+          return parseHiddenScriptCells(await files.readFile(fallbackFile, "utf8"), fallbackFile);
         } catch (fallbackErr) {
           if (fallbackErr?.code !== "ENOENT") throw fallbackErr;
         }
@@ -211,12 +223,12 @@ async function readExistingHiddenCells(scriptFile, fallbackFile = "", files) {
 
 async function readOutputMirror(file, fallbackFile = "", files) {
   try {
-    return notebookOutputMirror(parseNotebook(await files.readFile(file, "utf8")));
+    return notebookOutputMirror(parseNotebookText(await files.readFile(file, "utf8"), {}, file));
   } catch (err) {
     if (err?.code === "ENOENT") {
       if (fallbackFile && fallbackFile !== file) {
         try {
-          return notebookOutputMirror(parseNotebook(await files.readFile(fallbackFile, "utf8")));
+          return notebookOutputMirror(parseNotebookText(await files.readFile(fallbackFile, "utf8"), {}, fallbackFile));
         } catch (fallbackErr) {
           if (fallbackErr?.code !== "ENOENT") throw fallbackErr;
         }
@@ -249,12 +261,12 @@ async function writeNotebookFile(file, serialized, files) {
 async function writeOutputMirror(file, value, files) {
   let notebook;
   try {
-    notebook = parseNotebook(await files.readFile(file, "utf8"), {
+    notebook = parseNotebookText(await files.readFile(file, "utf8"), {
       sourceFile: value?.source,
       kernel: value?.kernel,
       session: value?.session,
       language: value?.language,
-    });
+    }, file);
   } catch (err) {
     if (err?.code !== "ENOENT") throw err;
     notebook = createNotebook({
@@ -262,16 +274,17 @@ async function writeOutputMirror(file, value, files) {
       kernel: value?.kernel,
       session: value?.session,
       language: value?.language,
+      storage: notebookStorageForFile(file),
     });
   }
-  const serialized = serializeNotebook(applyOutputMirror(notebook, value));
+  const serialized = serializeNotebookText(applyOutputMirror(notebook, value), file);
   await writeNotebookFile(file, serialized, files);
 }
 
-async function readExistingHiddenScript(scriptFile, fallbackFile = "", files) {
+async function readExistingHiddenScript(scriptFile, fallbackFile = "", files, defaults = {}) {
   try {
     const text = await files.readFile(scriptFile, "utf8");
-    const notebook = parseNotebook(text);
+    const notebook = parseNotebookText(text, defaults, scriptFile);
     return {
       text,
       notebook,
@@ -283,7 +296,7 @@ async function readExistingHiddenScript(scriptFile, fallbackFile = "", files) {
       if (fallbackFile && fallbackFile !== scriptFile) {
         try {
           const text = await files.readFile(fallbackFile, "utf8");
-          const notebook = parseNotebook(text);
+          const notebook = parseNotebookText(text, defaults, fallbackFile);
           return {
             text: "",
             notebook,
@@ -1254,13 +1267,13 @@ export function createJupyterCellService({
       requestedKernel, body?.language || body?.lang,
     );
     const targetCellId = markerId(body?.cellId || body?.id);
-    const storage = "ipynb";
     const cells = Array.isArray(body?.cells) ? body.cells : [];
     if (!targetCellId) throw error("Missing Jupyter cell id", 400);
     if (cells.length === 0) throw error("No Jupyter cells to write", 400);
     const scriptFile = String(body?.scriptFile || "").trim()
       ? managedScriptFile(body)
       : hiddenScriptPath(noteFile, session, requestedLanguage);
+    const storage = notebookStorageForFile(scriptFile);
     const legacyScriptFile = String(body?.scriptFile || "").trim()
       ? ""
       : legacyHiddenScriptPath(
@@ -1274,6 +1287,7 @@ export function createJupyterCellService({
     await withMirrorLock(scriptFile, async () => {
       const existingScript = await readExistingHiddenScript(
         scriptFile, legacyScriptFile, files,
+        { sourceFile: noteFile, kernel: requestedKernel, session, language: requestedLanguage },
       );
       const usedLegacy = Boolean(
         legacyScriptFile && existingScript.notebook && !existingScript.text,
@@ -1361,7 +1375,9 @@ export function createJupyterCellService({
       ? managedScriptFile(body)
       : hiddenScriptPath(noteFile, session, requestedLanguage);
     const outputFile = scriptFile;
-    const existing = await readExistingHiddenScript(scriptFile, "", files);
+    const existing = await readExistingHiddenScript(scriptFile, "", files, {
+      sourceFile: noteFile, kernel: requestedKernel, session, language: requestedLanguage,
+    });
     const liveSession = documentSessions.get(scriptFile) || {};
     const noema = notebookPrivateMetadata(existing.notebook);
     const storedKernel = existing.notebook?.metadata?.kernelspec?.name;
@@ -1495,7 +1511,6 @@ export function createJupyterCellService({
       kernel: requestedKernel,
       session,
       language: requestedLanguage,
-      storage: "ipynb",
       open: false,
     });
     const kernel = cleanToken(opened.kernel, requestedKernel);
@@ -1642,7 +1657,9 @@ export function createJupyterCellService({
     let removedScript = false;
     let changedScript = false;
     await withMirrorLock(scriptFile, async () => {
-      const existingScript = await readExistingHiddenScript(scriptFile, "", files);
+      const existingScript = await readExistingHiddenScript(scriptFile, "", files, {
+        sourceFile: noteFile, kernel, session, language,
+      });
       remainingOrder = existingScript.order.filter((id) => id && id !== cellId);
       changedScript = existingScript.order.includes(cellId);
       if (!changedScript) return;
@@ -1663,7 +1680,7 @@ export function createJupyterCellService({
         language,
         cells,
         targetCellId: remainingOrder[0],
-        storage: "ipynb",
+        storage: notebookStorageForFile(scriptFile),
         existingNotebook: existingScript.notebook,
         dropCellIds: [cellId],
       });

@@ -45,6 +45,9 @@ import {
 import { jumpStructuralDelimiter, jumpTexUnit } from "../src/cm6/structural-jump.ts";
 import { equationTagsFromText, getEquationTagHits } from "../src/equation-tags.ts";
 import { INLINE_MATH_RE } from "../src/inline-math.ts";
+import { scanInlineCommands } from "../src/command-syntax.ts";
+import { decodeRevisionAttribute, decodeRevisionContext } from "../src/authoring-syntax.ts";
+import { DEFAULT_REVISION_KIND, revisionKindIdOf, revisionKinds } from "../src/revision-kinds.ts";
 import { formatMathRenderError } from "../src/math-render.ts";
 import { mathPreviewFitScale } from "./math-preview-fit.ts";
 import { getKatexMacros, setKatexMacros } from "../src/katex-macros.ts";
@@ -115,7 +118,7 @@ import {
   editorTextFromKeydown,
   replayEditorKeydown,
 } from "../src/cm6/focus-quiescence.ts";
-import { createRendererActivityGate, type RendererActivityState } from "../src/renderer-activity.ts";
+import { createRendererActivityGate, idleAssistAllowed, type RendererActivityState } from "../src/renderer-activity.ts";
 import { imageAnimationActivityParticipant } from "../src/image-animation.ts";
 import {
   cancelPointerSelection,
@@ -853,9 +856,8 @@ selectionTool.innerHTML = `
   <form class="aaronnote-revision-form" data-revision-form hidden>
     <input name="advice" placeholder="Replacement" aria-label="Revision replacement" required />
     <input name="reason" placeholder="Reason (optional)" aria-label="Revision reason" />
-    <select name="style" aria-label="Revision colour">
-      <option value="indigo">Indigo</option><option value="teal">Teal</option>
-      <option value="red">Red</option><option value="green">Green</option><option value="yellow">Yellow</option>
+    <select name="style" aria-label="Revision kind">
+      ${revisionKinds.map((kind) => `<option value="${kind.id}">${kind.label}</option>`).join("")}
     </select>
     <button type="submit">Insert</button>
   </form>
@@ -865,6 +867,95 @@ document.body.appendChild(selectionTool);
 const selectionMore = selectionTool.querySelector<HTMLElement>("[data-selection-more]")!;
 const selectionRoamIdlink = selectionTool.querySelector<HTMLButtonElement>("[data-selection-command='insert-roam-idlink']")!;
 const selectionRevisionForm = selectionTool.querySelector<HTMLFormElement>("[data-revision-form]")!;
+/**
+ * The source range the revision form was opened on.
+ *
+ * While the form is open it owns the toolbar. Anchoring to a stored range
+ * instead of the live DOM selection is what keeps the form alive: clicking its
+ * own inputs moves the document selection out of the editor, and every
+ * selection-driven refresh would otherwise tear the half-typed form down.
+ */
+type RevisionFormAnchor = {
+  from: number;
+  to: number;
+  /** `edit` rewrites the command at [from, to); `insert` wraps the selection. */
+  mode: "insert" | "edit";
+  original: string;
+};
+let revisionFormAnchor: RevisionFormAnchor | null = null;
+
+function closeRevisionForm(): void {
+  revisionFormAnchor = null;
+  selectionRevisionForm.reset();
+  selectionRevisionForm.hidden = true;
+}
+
+function closeSelectionTool(): void {
+  selectionTool.hidden = true;
+  selectionMore.hidden = true;
+  closeRevisionForm();
+}
+
+function revisionFormField(name: string): HTMLInputElement | HTMLSelectElement | null {
+  const element = selectionRevisionForm.elements.namedItem(name);
+  return element instanceof HTMLInputElement || element instanceof HTMLSelectElement ? element : null;
+}
+
+/**
+ * Open the revision form over `anchor`, prefilled when editing an existing one.
+ *
+ * Insert and edit share one surface so a revision is authored and re-authored
+ * the same way, instead of "edit" meaning "select the raw command".
+ */
+function openRevisionForm(anchor: RevisionFormAnchor, values: { advice?: string; reason?: string; style?: string } = {}): void {
+  selectionMore.hidden = true;
+  revisionFormAnchor = anchor;
+  const advice = revisionFormField("advice");
+  const reason = revisionFormField("reason");
+  const style = revisionFormField("style");
+  if (advice) advice.value = String(values.advice || "");
+  if (reason) reason.value = String(values.reason || "");
+  if (style) style.value = revisionKindIdOf(String(values.style || ""));
+  selectionRevisionForm.hidden = false;
+  updateSelectionTool();
+  window.setTimeout(() => {
+    advice?.focus();
+    if (advice instanceof HTMLInputElement) advice.select();
+  }, 0);
+}
+
+/** The `@@revision` under the pointer, read from the widget's source range. */
+function revisionEditTargetFromPointer(event: MouseEvent): (RevisionFormAnchor & { advice: string; reason: string; style: string; detail: string }) | null {
+  const node = event.target instanceof Element
+    ? event.target.closest<HTMLElement>(".aaronnote-revision[data-cm-source-from]")
+    : null;
+  if (!node) return null;
+  const from = Number(node.dataset.cmSourceFrom);
+  const to = Number(node.dataset.cmSourceTo);
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from >= to || to > editor.getMarkdownLength()) return null;
+  const command = scanInlineCommands(editor.textBetween(from, to), "revision")[0];
+  if (!command) return null;
+  const original = decodeRevisionContext(command.context.trim());
+  return {
+    from,
+    to,
+    mode: "edit",
+    original,
+    advice: decodeRevisionAttribute(command.args.advice || ""),
+    reason: decodeRevisionAttribute(command.args.reason || ""),
+    style: revisionKindIdOf(command.switchValue),
+    detail: original.length > 32 ? `${original.slice(0, 32)}…` : original,
+  };
+}
+
+function openRevisionEditor(target: RevisionFormAnchor & { advice: string; reason: string; style: string }): void {
+  if (rejectReadOnlyAction("Read-only pane")) return;
+  editor.setSelection(target.from, target.to);
+  openRevisionForm(
+    { from: target.from, to: target.to, mode: "edit", original: target.original },
+    { advice: target.advice, reason: target.reason, style: target.style },
+  );
+}
 
 const contextMenu = document.createElement("div");
 contextMenu.className = "aaronnote-context-menu";
@@ -900,6 +991,12 @@ transientSurfaces.register({
   priority: 60,
   visible: () => !prosePopover.hidden,
   close: () => hideProsePopover(),
+});
+transientSurfaces.register({
+  id: "selection-tool",
+  priority: 50,
+  visible: () => !selectionTool.hidden,
+  close: () => closeSelectionTool(),
 });
 
 const liveTexStudio = document.createElement("div");
@@ -2215,7 +2312,7 @@ const linkPreview = createLinkPreviewController({
   },
   beforeShow: () => {
     hideContextMenu();
-    selectionTool.hidden = true;
+    closeSelectionTool();
   },
   setStatus,
 });
@@ -2908,8 +3005,7 @@ host.addEventListener("aaronnote:inline-math-edit-state", (event) => {
   snippetSession.suspend();
   hideSnippetPopup();
   hideMathPreview();
-  selectionTool.hidden = true;
-  selectionMore.hidden = true;
+  closeSelectionTool();
 });
 document.addEventListener("aaronnote:visualtex-save-request", () => {
   void save(false);
@@ -3882,7 +3978,6 @@ async function ensureJupyterScript(cell: JupyterPanelCell, allCells = scanJupyte
     kernel: cell.kernel,
     session: cell.session,
     language: cell.language,
-    storage: "ipynb",
     open: false,
     cells: jupyterCellsForContext(cell, allCells),
   });
@@ -4254,7 +4349,6 @@ async function openJupyterCellSource(cell: JupyterPanelCell): Promise<void> {
     kernel: cell.kernel,
     session: cell.session,
     language: cell.language,
-    storage: "ipynb",
     cells: jupyterCellsForContext(cell),
   });
 }
@@ -4903,6 +4997,7 @@ function showContextMenu(event: MouseEvent, target: Partial<AaronContextMenuTarg
   const selection = editor.getMarkdownSelection();
   const hasSelection = selection.from !== selection.to;
   const planningTarget = planningEditTargetFromPointer(event);
+  const revisionTarget = revisionEditTargetFromPointer(event);
   const cell = target.cell !== undefined ? target.cell : jupyterCellFromPointer(event, false);
   const mathTarget = mathTargetFromPointer(event);
   const contextVimMode = vim.mode();
@@ -4939,6 +5034,18 @@ function showContextMenu(event: MouseEvent, target: Partial<AaronContextMenuTarg
       }
       items.push({ label: "Copy Page Path", detail: currentFile ? fileNameFromPath(currentFile) : "", disabled: !currentFile, run: () => copyCurrentNotePath() });
     }
+  } else if (revisionTarget) {
+    items.push({
+      label: "Edit Revision...",
+      detail: revisionTarget.detail,
+      disabled: currentReadOnly,
+      run: () => openRevisionEditor(revisionTarget),
+    });
+    items.push({
+      label: "Select Revision Source",
+      detail: "markdown",
+      run: () => editor.setSelection(revisionTarget.from, revisionTarget.to),
+    });
   } else if (planningTarget) {
     items.push({
       label: "Agenda...",
@@ -5563,8 +5670,7 @@ function applyOpenedNote(
   transientSurfaces.close(["snippet-popup", "math-preview", "prose-popover", "context-menu"], "document-change");
   proseLifecycle.invalidate("note-changed");
   setProseDiagnostics(editor.view, []);
-  selectionTool.hidden = true;
-  selectionMore.hidden = true;
+  closeSelectionTool();
   if (resetVim) vim.setMode("insert");
   updateTitle();
   void api.emacs.currentFile(currentFile, currentClient);
@@ -5746,6 +5852,22 @@ function isCopilotTexContext(): boolean {
   return Boolean(copilotTexSourceRange());
 }
 
+// Copilot exposes sign-in, status, manual trigger, and log capture as plugin
+// actions. Leaving this unsubscribed made all of them unreachable, so a bridge
+// that answered nothing looked identical to one that was never wired up.
+const copilotActionHandlers = new Set<(action: string) => void>();
+
+function runCopilotAction(action: string): void {
+  if (copilotActionHandlers.size === 0) {
+    setStatus("Copilot is not available in this window");
+    return;
+  }
+  // Every gate Copilot checks starts with editor focus, and these actions are
+  // invoked from a palette that just had it.
+  editor.focus();
+  copilotActionHandlers.forEach((handler) => handler(action));
+}
+
 setupCopilot({
   editor,
   host,
@@ -5780,18 +5902,23 @@ setupCopilot({
     document.addEventListener("keydown", listener, true);
     return () => document.removeEventListener("keydown", listener, true);
   },
-  onAction: () => () => {},
+  onAction: (handler) => {
+    copilotActionHandlers.add(handler);
+    return () => copilotActionHandlers.delete(handler);
+  },
   onSettingsChange: () => () => {},
   // Keep the completion payload proportional to the completion: the language
   // server only reads a few thousand tokens around the cursor, so a whole-note
   // upload per request is wasted serialization on this side and wasted parsing
   // on the server's. See the threshold's note in the Copilot renderer.
   getSettings: () => ({ idleDelayMs: 850, largeBufferThresholdKb: 64 }),
+  // `idleAssistAllowed` keeps the quiescent state qualifying on purpose: the
+  // completion fires 850ms after the last keystroke and the renderer goes
+  // quiescent at 1000ms, so gating on activity cancelled every request while
+  // its focus round-trip was still in flight.
   isActive: () => !serverReaderMode
     && !paused
-    && rendererActivityState !== "quiescent"
-    && rendererActivityState !== "hidden"
-    && rendererActivityState !== "destroyed"
+    && idleAssistAllowed(rendererActivityState)
     && !visualMathEditorActive
     && editorSurfaceVisible(),
   isCursorInTexSource: isCopilotTexContext,
@@ -7180,7 +7307,7 @@ function openFindPanel(): void {
   const selected = selectedMarkdownText();
   if (selected && !selected.includes("\n")) findInput.value = selected;
   findPanel.hidden = false;
-  selectionTool.hidden = true;
+  closeSelectionTool();
   refreshFind(findInput.value, false);
   findInput.focus();
   findInput.select();
@@ -7212,7 +7339,7 @@ async function copyEditorSelection(cut = false): Promise<boolean> {
   }
   if (cut && !currentReadOnly) cutCopiedSelection();
   setStatus(cut ? "Selection cut" : "Selection copied");
-  selectionTool.hidden = true;
+  closeSelectionTool();
   return true;
 }
 
@@ -8129,6 +8256,7 @@ async function exportLatexTool(): Promise<void> {
       templates = [];
     }
     let chosenTemplate: LatexTemplate | null = null;
+    let polish = true;
     if (templates.length > 0) {
       const rememberedFile = String(defaultInfo.template || "");
       const fallback =
@@ -8142,12 +8270,20 @@ async function exportLatexTool(): Promise<void> {
         type: "select",
         value: preselect.key,
         options: templates.map((t) => ({ value: t.key, label: `${t.name} (${t.engine})` })),
+      }, {
+        id: "polish",
+        label: "Agent polish",
+        type: "select",
+        value: "on",
+        description: "On adds an agent typesetting pass over the verified Pandoc draft. Off is faster and exports the draft as-is.",
+        options: [{ value: "on", label: "On" }, { value: "off", label: "Off (fast)" }],
       }], "Continue");
       if (!picked) {
         setStatus("LaTeX export canceled");
         return;
       }
       chosenTemplate = templates.find((t) => t.key === picked.template) || preselect;
+      polish = picked.polish !== "off";
     }
 
     // 2. Collect template-declared variables (course code, student id, …).
@@ -8207,6 +8343,7 @@ async function exportLatexTool(): Promise<void> {
       scope,
       ...(chosenTemplate ? { templatePath: chosenTemplate.file, engine: chosenTemplate.engine } : {}),
       ...(Object.keys(vars).length > 0 ? { vars } : {}),
+      polish,
     });
     setStatus("LaTeX export added to tasks");
   } catch (err) {
@@ -9255,6 +9392,10 @@ function toolActions(): ToolAction[] {
     { id: "format-cancel", group: "writing", title: "Cancel format painter", detail: formatPainterDetail(), disabled: !editor.getFormatPainterState(), run: () => clearFormatPainter() },
     { id: "export-latex", group: "publish", title: "Export LaTeX", detail: "Write selection, heading, or document to a .tex file", run: () => void exportLatexTool() },
     { id: "latex-export-agent", group: "publish", title: "Switch export agent", detail: "Choose Codex, Claude, or OpenCode for LaTeX polish", run: () => void switchLatexExportAgentTool() },
+    { id: "copilot-trigger", group: "writing", title: "Copilot suggestion", detail: "Request an inline completion at the cursor", disabled: currentReadOnly, run: () => runCopilotAction("trigger") },
+    { id: "copilot-diagnostics", group: "maintenance", title: "Copilot diagnostics", detail: "Report whether Copilot is reachable and what is blocking it", run: () => runCopilotAction("diagnostics") },
+    { id: "copilot-sign-in", group: "maintenance", title: "Copilot sign in", detail: "Start the GitHub device-code login", run: () => runCopilotAction("sign-in") },
+    { id: "copilot-log", group: "maintenance", title: "Copilot log capture", detail: "Start recording, then run again to copy the log", run: () => runCopilotAction("log") },
     { id: "zotero-import-bibtex", group: "writing", title: "Import Zotero BibTeX", detail: "Use the Zotero picker and append to a local .bib file", run: () => void zoteroImportBibtexTool() },
     { id: "languagetool", group: "writing", title: "LanguageTool", detail: languageToolActionDetail(), run: () => void languageToolSettingsTool() },
     { id: "reload-snippets", group: "maintenance", title: "Reload snippets", detail: "Refresh shared Markdown and TeX snippets", run: () => void reloadSnippets() },
@@ -11070,20 +11211,22 @@ function selectionTouchesEditor(): boolean {
 }
 
 function updateSelectionTool(active = activeEditorSelection()): void {
-  if ((serverReaderMode && !serverReader.selectionToolbar) || !active || !modal.hidden) {
-    selectionTool.hidden = true;
-    selectionMore.hidden = true;
-    selectionRevisionForm.hidden = true;
+  const anchored = revisionFormAnchor
+    ? editorSelectionRect(revisionFormAnchor.from, revisionFormAnchor.to)
+    : null;
+  const rect = anchored || active?.rect || null;
+  if ((serverReaderMode && !serverReader.selectionToolbar) || !rect || !modal.hidden) {
+    closeSelectionTool();
     return;
   }
   selectionRoamIdlink.hidden = currentStandalone;
   const margin = 8;
   const width = Math.min(520, Math.max(360, selectionTool.offsetWidth || 440));
   const left = Math.min(
-    Math.max(margin, active.rect.left + active.rect.width / 2 - width / 2),
+    Math.max(margin, rect.left + rect.width / 2 - width / 2),
     Math.max(margin, window.innerWidth - width - margin),
   );
-  const top = Math.max(margin, active.rect.top - 46);
+  const top = Math.max(margin, rect.top - 46);
   selectionTool.style.left = `${left}px`;
   selectionTool.style.top = `${top}px`;
   selectionTool.hidden = false;
@@ -11094,7 +11237,7 @@ async function copyActiveSelection(): Promise<void> {
   if (!active) return;
   const copied = await writeSystemClipboard(active.text());
   setStatus(copied ? "Selection copied" : "Copy failed");
-  selectionTool.hidden = true;
+  closeSelectionTool();
 }
 
 function runSelectionCommand(command: string): void {
@@ -11108,25 +11251,25 @@ function runSelectionCommand(command: string): void {
   }
   if (command === "revision-form") {
     if (rejectReadOnlyAction("Read-only pane")) return;
-    selectionMore.hidden = true;
-    selectionRevisionForm.hidden = false;
-    window.setTimeout(() => selectionRevisionForm.elements.namedItem("advice") instanceof HTMLElement
-      && (selectionRevisionForm.elements.namedItem("advice") as HTMLElement).focus(), 0);
+    const range = editor.getSelection();
+    openRevisionForm({
+      from: Math.min(range.from, range.to),
+      to: Math.max(range.from, range.to),
+      mode: "insert",
+      original: "",
+    });
     return;
   }
   if (command === "insert-roam-idlink") {
     if (rejectReadOnlyAction("Read-only pane")) return;
-    selectionMore.hidden = true;
-    selectionTool.hidden = true;
+    closeSelectionTool();
     void insertRoamIdLink();
     return;
   }
   if (!["bold", "italic", "highlight", "strike", "code", "link", "superscript", "subscript", "insert-footnote"].includes(command)) return;
   if (rejectReadOnlyAction("Read-only pane")) return;
   editor.runCommand(command as EditorCommand);
-  selectionTool.hidden = true;
-  selectionMore.hidden = true;
-  selectionRevisionForm.hidden = true;
+  closeSelectionTool();
 }
 
 function runAssistUpdate(flags: AssistUpdateFlags): void {
@@ -11173,8 +11316,7 @@ function cancelAssistWork(): void {
   clearMathPreviewErrorTimer();
   hideSnippetPopup();
   hideMathPreview();
-  selectionTool.hidden = true;
-  selectionMore.hidden = true;
+  closeSelectionTool();
 }
 
 function applyPaused(next: boolean): void {
@@ -12151,11 +12293,15 @@ document.addEventListener("selectionchange", () => {
 document.addEventListener("mousedown", (event) => {
   if (!editorSurfaceVisible() || event.defaultPrevented) return;
   if (!(event.target instanceof Node) || editor.view.dom.contains(event.target)) return;
+  // The toolbar lives on <body>, so a click inside it is not a click outside.
+  // Its text inputs and colour select deliberately skip `preventDefault` so
+  // they can take focus, which used to make the very first click on the
+  // revision form dismiss the form.
+  if (selectionTool.contains(event.target)) return;
   if (editor.view.state.selection.ranges.every((range) => range.empty)) return;
   // Hiding the toolbar is a UI concern.  A click outside the editor may move
   // focus, but it is not an implicit Escape and must not collapse Vim state.
-  selectionTool.hidden = true;
-  selectionMore.hidden = true;
+  closeSelectionTool();
 });
 document.addEventListener("mouseup", (event) => {
   if (!editorSurfaceVisible()) return;
@@ -12186,9 +12332,10 @@ window.addEventListener("scroll", (event) => {
   // opposite direction. Viewport movement closes transient editing aids; the
   // next real cursor/input action may open them again at fresh coordinates.
   transientSurfaces.close(["snippet-popup", "math-preview", "prose-popover", "context-menu"], "viewport");
-  selectionTool.hidden = true;
-  selectionMore.hidden = true;
-  selectionRevisionForm.hidden = true;
+  // A half-typed revision is real editing work, not a transient hint: follow
+  // its anchor through the scroll instead of throwing the form away.
+  if (revisionFormAnchor) updateSelectionTool();
+  else closeSelectionTool();
   if (serverReaderMode) scheduleAssistUpdate({ toc: true });
   if (target instanceof Node && host.contains(target)) {
     scheduleAutomaticProseCheck(proseProfile().scrollMs);
@@ -12204,21 +12351,41 @@ selectionTool.addEventListener("click", (event) => {
   event.stopPropagation();
   runSelectionCommand(button.dataset.selectionCommand || "");
 });
+selectionRevisionForm.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  event.preventDefault();
+  event.stopPropagation();
+  closeRevisionForm();
+  editor.focus();
+});
 selectionRevisionForm.addEventListener("submit", (event) => {
   event.preventDefault();
   if (rejectReadOnlyAction("Read-only pane")) return;
   const data = new FormData(selectionRevisionForm);
   const advice = String(data.get("advice") || "").trim();
   if (!advice) return;
-  editor.focus();
-  editor.runCommand("insert-revision", JSON.stringify({
+  const anchor = revisionFormAnchor;
+  const payload = {
     advice,
     reason: String(data.get("reason") || "").trim(),
-    style: String(data.get("style") || "indigo"),
-  }));
-  selectionRevisionForm.reset();
-  selectionRevisionForm.hidden = true;
-  selectionTool.hidden = true;
+    style: String(data.get("style") || DEFAULT_REVISION_KIND),
+  };
+  editor.focus();
+  if (anchor?.mode === "edit") {
+    editor.runCommand("edit-revision", JSON.stringify({ ...payload, from: anchor.from, to: anchor.to, original: anchor.original }));
+  } else {
+    editor.runCommand("insert-revision", JSON.stringify(payload));
+  }
+  closeSelectionTool();
+});
+// The revision widget's own Edit button asks the shell for this form. Marking
+// the event handled is what tells the widget not to fall back to selecting the
+// raw command.
+editor.view.dom.addEventListener("aaronnote-edit-revision", (event) => {
+  const detail = (event as CustomEvent).detail as (RevisionFormAnchor & { advice: string; reason: string; style: string }) | undefined;
+  if (!detail || !Number.isInteger(detail.from) || !Number.isInteger(detail.to)) return;
+  event.preventDefault();
+  openRevisionEditor({ ...detail, mode: "edit" });
 });
 
 findInput.addEventListener("input", () => refreshFind(findInput.value, false));

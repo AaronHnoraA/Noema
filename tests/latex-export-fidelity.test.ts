@@ -34,7 +34,7 @@ describe("LaTeX export mechanical fidelity", () => {
     expect(polished).toContain("\n\nTail\n");
   });
 
-  test("preserves public suffixes after nested multiline private attributes", async () => {
+  test("preserves public suffixes after nested multiline todo attributes", async () => {
     const source = [
       "> Visible before @@todo [secret] {",
       "> nested: {",
@@ -49,8 +49,10 @@ describe("LaTeX export mechanical fidelity", () => {
     expect(prepared.markdown).toContain("Visible before");
     expect(prepared.markdown).toContain("AFTER MUST SURVIVE");
     expect(prepared.markdown).toContain("Tail.");
-    expect(prepared.markdown).not.toContain("secret");
+    // The todo title is a review annotation; its attribute block is not.
+    expect(prepared.markdown).toContain("\\aarontodo{secret}");
     expect(prepared.markdown).not.toContain("still quoted");
+    expect(prepared.markdown).not.toContain("nested:");
 
     const converted = await aaronnoteMarkdownToLatexPandoc(source);
     expect(converted.body).toContain("Visible before");
@@ -67,7 +69,9 @@ describe("LaTeX export mechanical fidelity", () => {
     ].join("\n"));
     expect(prepared.markdown).toContain("## Public");
     expect(prepared.markdown).toContain("\\subparagraph{Markdown child}");
-    expect(prepared.markdown).not.toContain("private");
+    expect(prepared.markdown).toContain("\\aarontodo{private}");
+    expect(prepared.markdown).not.toContain("nested:");
+    expect(prepared.markdown).not.toContain("value");
   });
 
   test("extracts YAML and Noema metadata with preprocessing precedence", () => {

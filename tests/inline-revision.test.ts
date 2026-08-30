@@ -15,7 +15,8 @@ describe("native @@revision workflow", () => {
     try {
       editor.setMarkdownSelection(source.length);
       const widget = document.querySelector<HTMLElement>(".aaronnote-revision")!;
-      expect(widget.dataset.revisionStyle).toBe("red");
+      // `red` is the legacy spelling of the `error` review kind.
+      expect(widget.dataset.revisionStyle).toBe("error");
       expect(widget.querySelector(".aaronnote-revision-advice")?.textContent).toBe("new claim");
       const accept = Array.from(widget.querySelectorAll("button")).find((button) => button.textContent === "Accept")!;
       accept.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));

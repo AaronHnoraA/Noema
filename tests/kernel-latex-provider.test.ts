@@ -29,7 +29,10 @@ describe("shared-host kernel LaTeX provider", () => {
     expect(provider.renderTemplate(plan, { title: "Noema", body: "Body" })).toBe("A Noema B Body");
     const firstInit = fetchImpl.mock.calls[0]?.[1];
     expect(JSON.parse(String(firstInit?.body || ""))).toEqual({
-      markdown: "source", rules: { hiddenBlocks: ["private"] }, citationKeyMap: { ["refs\0Key"]: "refs:Key" },
+      markdown: "source",
+      rules: { hiddenBlocks: ["private"] },
+      citationKeyMap: { ["refs\0Key"]: "refs:Key" },
+      disableAnnotations: false,
     });
   });
 

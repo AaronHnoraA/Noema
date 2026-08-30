@@ -61,6 +61,7 @@ export type EditorCommand =
   | "subscript"
   | "insert-footnote"
   | "insert-revision"
+  | "edit-revision"
   | "edit-properties"
   | "move-block-up"
   | "move-block-down"

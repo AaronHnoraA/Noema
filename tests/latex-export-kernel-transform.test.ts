@@ -34,11 +34,16 @@ describe("kernel-backed LaTeX transformation boundary", () => {
       citationKeyMap: new Map([["refs\0Key", "refs:Key"]]),
       transformProvider: provider,
     });
+    // The cancellation signal and timeout budget are part of the boundary: a
+    // canceled export must not leave a kernel transform running.
     expect(provider.prepare).toHaveBeenCalledWith("private source", {
       rules: { hiddenBlocks: ["secret"] },
       citationKeyMap: new Map([["refs\0Key", "refs:Key"]]),
+      disableAnnotations: false,
+      signal: undefined,
+      timeoutMs: undefined,
     });
-    expect(provider.postprocess).toHaveBeenCalledWith("prepared by Go\n");
+    expect(provider.postprocess).toHaveBeenCalledWith("prepared by Go\n", { signal: undefined, timeoutMs: undefined });
     expect(result).toEqual({
       meta: { title: "Go title" },
       body: "postprocessed:prepared by Go\n",

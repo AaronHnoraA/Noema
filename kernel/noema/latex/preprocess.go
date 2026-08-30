@@ -280,8 +280,27 @@ func protectedInlineRanges(line string) []sourceRange {
 	return ranges
 }
 
+type linkSpan struct {
+	LabelFrom       int
+	LabelTo         int
+	DestinationFrom int
+	DestinationTo   int
+}
+
 func markdownLinkRanges(source string) []sourceRange {
-	ranges := []sourceRange{}
+	spans := markdownLinkSpans(source)
+	ranges := make([]sourceRange, 0, len(spans))
+	for _, span := range spans {
+		ranges = append(ranges, sourceRange{span.DestinationFrom, span.DestinationTo})
+	}
+	return ranges
+}
+
+// markdownLinkSpans is the bracket-matched link scanner shared by the
+// protected-range reader and the link-label rewriter. It reports the label and
+// destination span of every [label](destination) / ![label](destination).
+func markdownLinkSpans(source string) []linkSpan {
+	spans := []linkSpan{}
 	for start := 0; start < len(source); start++ {
 		image := source[start] == '!' && start+1 < len(source) && source[start+1] == '['
 		if !image && source[start] != '[' {
@@ -326,11 +345,16 @@ func markdownLinkRanges(source string) []sourceRange {
 			}
 		}
 		if depth == 0 {
-			ranges = append(ranges, sourceRange{destinationFrom, cursor})
+			spans = append(spans, linkSpan{
+				LabelFrom:       bracketStart + 1,
+				LabelTo:         destinationFrom - 1,
+				DestinationFrom: destinationFrom,
+				DestinationTo:   cursor,
+			})
 			start = cursor - 1
 		}
 	}
-	return ranges
+	return spans
 }
 
 func rangeContains(ranges []sourceRange, at int) bool {
@@ -343,28 +367,29 @@ func rangeContains(ranges []sourceRange, at int) bool {
 }
 
 func stripPrivateCommandsFromLinkLabels(line string) string {
+	spans := markdownLinkSpans(line)
+	if len(spans) == 0 {
+		return line
+	}
+	// One label at a time, right to left so earlier offsets stay valid. Scanning
+	// for the first "](" mis-scoped a label that itself contains a bracketed
+	// link, and the JavaScript side used to span two links at once.
 	result := line
-	for offset := 0; offset < len(result); {
-		open := strings.IndexByte(result[offset:], '[')
-		if open < 0 {
-			break
-		}
-		open += offset
-		labelEnd := strings.Index(result[open+1:], "](")
-		if labelEnd < 0 {
-			break
-		}
-		labelEnd += open + 1
-		label := result[open+1 : labelEnd]
+	for i := len(spans) - 1; i >= 0; i-- {
+		span := spans[i]
+		label := result[span.LabelFrom:span.LabelTo]
+		stripped := label
 		commands := scanInlineCommands(label)
-		for i := len(commands) - 1; i >= 0; i-- {
-			command := commands[i]
+		for c := len(commands) - 1; c >= 0; c-- {
+			command := commands[c]
 			if privateNames[command.Name] && !displayComment(command) {
-				label = label[:command.FullFrom] + label[command.FullTo:]
+				stripped = stripped[:command.FullFrom] + stripped[command.FullTo:]
 			}
 		}
-		result = result[:open+1] + label + result[labelEnd:]
-		offset = open + 1 + len(label) + 2
+		if stripped == label {
+			continue
+		}
+		result = result[:span.LabelFrom] + stripped + result[span.LabelTo:]
 	}
 	return result
 }
@@ -392,22 +417,47 @@ func withoutVisibleLatexMarks(line string) string {
 	return line
 }
 
+// exportedAnnotations are review marks that reach the exported document.
+// Planning bookkeeping (project, milestone, clock) and machine blocks stay private.
+var exportedAnnotations = map[string]bool{"todo": true, "itodo": true}
+
+var (
+	headingLineRe  = regexp.MustCompile(`^ {0,3}#{1,6}([ \t]|$)`)
+	tableRowLineRe = regexp.MustCompile(`^ {0,3}\|`)
+)
+
+// \todo from todonotes cannot live in a moving argument or a tabular cell.
+// Annotations on those lines degrade to an inline form so the document still
+// compiles instead of failing the whole export.
+func marginNoteSafeLine(content string) bool {
+	return !headingLineRe.MatchString(content) && !tableRowLineRe.MatchString(content)
+}
+
+func annotationsEnabled(options Options) bool { return !options.DisableAnnotations }
+
 func visiblePrivateCommands(line string) []inlineCommand {
 	return visibleCommands(line, func(command inlineCommand) bool { return privateNames[command.Name] && !displayComment(command) })
 }
 
-func privateCommandLine(line string) bool {
+func privateCommandLine(line string, options Options) bool {
 	trimmed := strings.TrimSpace(line)
 	if !strings.HasPrefix(strings.ToLower(trimmed), "@@") {
 		return false
 	}
 	commands := scanInlineCommands(trimmed)
-	return len(commands) > 0 && privateNames[commands[0].Name] && !displayComment(commands[0]) && commands[0].FullFrom == 0
+	if len(commands) == 0 {
+		return false
+	}
+	if annotationsEnabled(options) && exportedAnnotations[commands[0].Name] {
+		return false
+	}
+	return privateNames[commands[0].Name] && !displayComment(commands[0]) && commands[0].FullFrom == 0
 }
 
 type markContext struct {
 	AtParagraphStart bool
 	NextLineVisible  bool
+	MarginSafe       bool
 }
 
 func validateLatexMark(command inlineCommand, line string, context markContext) (string, markSpec, error) {
@@ -448,6 +498,9 @@ func validateLatexMark(command inlineCommand, line string, context markContext) 
 
 func transformInlineCommands(line string, options Options, context markContext, unresolved *[]string) (string, error) {
 	line = stripPrivateCommandsFromLinkLabels(line)
+	annotations := annotationsEnabled(options)
+	margin := context.MarginSafe
+	options.InlineOnly = !margin
 	commands := visibleCommands(line, func(command inlineCommand) bool {
 		return privateNames[command.Name] || command.Name == "scomment" || command.Name == "revision" || command.Name == "cite" || command.Name == "tag" || command.Name == "latexmk"
 	})
@@ -461,9 +514,27 @@ func transformInlineCommands(line string, options Options, context markContext, 
 			continue
 		}
 		output.WriteString(line[cursor:command.FullFrom])
+		if !annotations && (exportedAnnotations[command.Name] || command.Name == "scomment" ||
+			command.Name == "revision" || command.Name == "comment") {
+			// `annotations: none` in the note metadata strips every review mark.
+			cursor = command.FullTo
+			continue
+		}
 		switch command.Name {
+		case "todo", "itodo":
+			if title := convertInline(command.Context, options, true); title != "" {
+				macro := "\\aarontodo"
+				if !margin {
+					macro = "\\aarontodoinline"
+				}
+				output.WriteString(rawLatexInline(macro + "{" + title + "}"))
+			}
 		case "scomment":
-			output.WriteString(rawLatexInline("\\sidecomment{" + convertInline(command.Context, options, true) + "}"))
+			macro := "\\sidecomment"
+			if !margin {
+				macro = "\\sidecommentinline"
+			}
+			output.WriteString(rawLatexInline(macro + "{" + convertInline(command.Context, options, true) + "}"))
 		case "revision":
 			output.WriteString(rawLatexInline(revisionLatex(command, options)))
 		case "comment":
@@ -663,7 +734,7 @@ func displayMathBoundary(content string, open bool) bool {
 	return trimmed == "\\]" || trimmed == "$$"
 }
 
-func containsSemanticOutline(lines []string, frontMatterEnd int, hiddenKinds map[string]bool) bool {
+func containsSemanticOutline(lines []string, frontMatterEnd int, hiddenKinds map[string]bool, options Options) bool {
 	var fence *fenceState
 	displayMathDepth := -1
 	hidden := ""
@@ -734,7 +805,7 @@ func containsSemanticOutline(lines []string, frontMatterEnd int, hiddenKinds map
 			private = state
 			continue
 		}
-		if privateCommandLine(line) {
+		if privateCommandLine(line, options) {
 			continue
 		}
 		if semanticCommandOnLine(line) != nil {
@@ -847,7 +918,12 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 	for _, kind := range options.Rules.HiddenBlocks {
 		hiddenKinds[strings.ToLower(strings.TrimSpace(kind))] = true
 	}
-	hasSemanticOutline := containsSemanticOutline(lines, frontMatterEnd, hiddenKinds)
+	// `annotations: none` restores the pre-annotation behaviour: every todo,
+	// comment, side comment, and revision is dropped. An explicit request flag
+	// wins, so a scope export can assert it from the whole document's metadata.
+	options.DisableAnnotations = options.DisableAnnotations ||
+		strings.EqualFold(strings.TrimSpace(meta["annotations"]), "none")
+	hasSemanticOutline := containsSemanticOutline(lines, frontMatterEnd, hiddenKinds, options)
 	output := []string{}
 	type openedBlock struct{ Kind, Env string }
 	stack := []openedBlock{}
@@ -866,7 +942,11 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 		line := lines[index]
 		lineNumber := index + 1
 		atParagraphStart := index == 0 || strings.TrimSpace(lines[index-1]) == ""
-		context := markContext{AtParagraphStart: atParagraphStart, NextLineVisible: index+1 < len(lines) && strings.TrimSpace(lines[index+1]) != ""}
+		context := markContext{
+			AtParagraphStart: atParagraphStart,
+			NextLineVisible:  index+1 < len(lines) && strings.TrimSpace(lines[index+1]) != "",
+			MarginSafe:       marginNoteSafeLine(markdownContainerLine(line).Content),
+		}
 		container := markdownContainerLine(line)
 		if index <= frontMatterEnd {
 			continue
@@ -972,7 +1052,11 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 		}
 		if command, state := multilinePrivateStart(line); state != nil {
 			private = state
-			visiblePrefix, err := transformInlineCommands(line[:command.FullTo], options, markContext{AtParagraphStart: atParagraphStart}, &unresolved)
+			visiblePrefix, err := transformInlineCommands(
+				line[:command.FullTo], options,
+				markContext{AtParagraphStart: atParagraphStart, MarginSafe: context.MarginSafe},
+				&unresolved,
+			)
 			if err != nil {
 				return PrepareResult{}, err
 			}
@@ -981,7 +1065,7 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 			}
 			continue
 		}
-		if privateCommandLine(line) {
+		if privateCommandLine(line, options) {
 			continue
 		}
 		if semantic := semanticCommandOnLine(line); semantic != nil {

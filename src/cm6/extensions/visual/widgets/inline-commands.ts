@@ -16,6 +16,8 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import { MeasuredWidget } from "./measured-widget.ts";
+import { decodeRevisionAttribute, decodeRevisionContext } from "../../../../authoring-syntax.ts";
+import { revisionKindOf } from "../../../../revision-kinds.ts";
 import { findInlineCommandClose, parseCommandArgs, scanInlineCommands, type InlineCommand } from "../../../../command-syntax.ts";
 import { renderMarkdownHTML } from "../../../../render-html.ts";
 import type { Range } from "@codemirror/state";
@@ -696,11 +698,7 @@ class InlineCommentWidget extends MeasuredWidget {
   ignoreEvent(): boolean { return false; }
 }
 
-const REVISION_STYLES = new Set(["indigo", "teal", "red", "green", "yellow"]);
 
-function revisionDecoded(value: string): string {
-  return String(value || "").replace(/\\\]/g, "]").replace(/\\\\/g, "\\");
-}
 
 /** An unresolved, always-visible review suggestion backed by one source span. */
 class RevisionWidget extends MeasuredWidget {
@@ -723,14 +721,13 @@ class RevisionWidget extends MeasuredWidget {
   }
 
   toDOM(view: EditorView): HTMLElement {
-    const original = revisionDecoded(this.cmd.context.trim());
-    const advice = revisionDecoded(this.cmd.args.advice || "");
-    const reason = revisionDecoded(this.cmd.args.reason || "");
-    const requestedStyle = this.cmd.switchValue.trim().toLowerCase();
-    const style = REVISION_STYLES.has(requestedStyle) ? requestedStyle : "indigo";
+    const original = decodeRevisionContext(this.cmd.context.trim());
+    const advice = decodeRevisionAttribute(this.cmd.args.advice || "");
+    const reason = decodeRevisionAttribute(this.cmd.args.reason || "");
+    const kind = revisionKindOf(this.cmd.switchValue);
     const wrap = document.createElement("span");
     wrap.className = "aaronnote-revision inline-command-token";
-    wrap.dataset.revisionStyle = style;
+    wrap.dataset.revisionStyle = kind.id;
     wrap.dataset.cmSourceFrom = String(this.cmd.fullFrom);
     wrap.dataset.cmSourceTo = String(this.cmd.fullTo);
     wrap.setAttribute("role", "note");
@@ -744,7 +741,7 @@ class RevisionWidget extends MeasuredWidget {
     const card = document.createElement("span");
     card.className = "aaronnote-revision-card";
     const label = document.createElement("strong");
-    label.textContent = "Suggestion";
+    label.textContent = kind.label;
     const replacement = document.createElement("span");
     replacement.className = "aaronnote-revision-advice";
     replacement.innerHTML = advice ? inlineTodoBodyHTML(advice) : "Missing advice";
@@ -784,11 +781,29 @@ class RevisionWidget extends MeasuredWidget {
         });
         view.focus();
       }),
-      action("Edit", "Edit the revision source", () => {
-        view.dispatch({
-          selection: { anchor: this.cmd.fullFrom, head: this.cmd.fullTo },
-          scrollIntoView: true,
-        });
+      // Selecting the whole raw command used to be the only "edit": the next
+      // keypress then destroyed it. Ask the shell for the revision form
+      // instead, and fall back to selecting the source if nothing answers.
+      action("Edit", "Edit this revision", () => {
+        const detail = {
+          from: this.cmd.fullFrom,
+          to: this.cmd.fullTo,
+          original,
+          advice,
+          reason,
+          style: kind.id,
+        };
+        const handled = !view.dom.dispatchEvent(new CustomEvent("aaronnote-edit-revision", {
+          detail,
+          bubbles: true,
+          cancelable: true,
+        }));
+        if (!handled) {
+          view.dispatch({
+            selection: { anchor: this.cmd.fullFrom, head: this.cmd.fullTo },
+            scrollIntoView: true,
+          });
+        }
         view.focus();
       }),
     );
@@ -797,7 +812,10 @@ class RevisionWidget extends MeasuredWidget {
     return wrap;
   }
 
-  ignoreEvent(): boolean { return true; }
+  // Every other inline command widget lets events through. Swallowing them here
+  // meant a click could not place the caret inside the revision, leaving the
+  // toolbar button as the only way in.
+  ignoreEvent(): boolean { return false; }
 }
 
 class CiteWidget extends MeasuredWidget {

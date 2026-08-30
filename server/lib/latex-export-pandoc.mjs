@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { scanInlineCommands } from "../../shared/command-syntax.mjs";
 import { LATEX_MARKS, latexMark } from "../../shared/latex-marks.mjs";
 import { citeLatex, convertInline, escapeLatexTitle, isDisplayCommentCommand, revisionLatex } from "./latex-export.mjs";
+import { revisionKind } from "../../shared/revision-kinds.mjs";
 
 const ENV_MAP = new Map([
   ["definition", "definition"], ["define", "definition"],
@@ -12,6 +13,23 @@ const ENV_MAP = new Map([
 const REMARK_BLOCKS = new Set(["comment", "summary", "note", "important", "warning", "attention", "fold"]);
 const HIDDEN_BLOCKS = new Set(["lean4", "src", "source", "meta"]);
 const PRIVATE_INLINE = new Set(["todo", "itodo", "project", "milestone", "clock", "comment", "cell", "lean4", "note-code"]);
+// Review annotations that reach the exported document. Planning bookkeeping
+// (`project`, `milestone`, `clock`) and machine blocks stay private.
+const EXPORTED_ANNOTATIONS = new Set(["todo", "itodo"]);
+
+// `\todo` from todonotes cannot live in a moving argument or a tabular cell.
+// Annotations on those lines degrade to an inline form so the document still
+// compiles instead of failing the export outright.
+function marginNoteSafeLine(content) {
+  const text = String(content || "");
+  if (/^ {0,3}#{1,6}(?:[ \t]|$)/.test(text)) return false;
+  if (/^ {0,3}\|/.test(text)) return false;
+  return true;
+}
+
+function annotationsEnabled(options) {
+  return options?.exportAnnotations !== false;
+}
 const PRIVATE_COMMAND_LINE_RE = /^\s*@@(?:todo|itodo|project|milestone|clock|comment|cell|lean4|note-code)\b/i;
 
 export { LATEX_MARKS };
@@ -132,11 +150,21 @@ function transformInlineCommands(line, options, context = {}) {
   if (commands.length === 0) return line;
   let out = "";
   let cursor = 0;
+  const annotations = annotationsEnabled(options);
+  const margin = context.marginSafe !== false;
   for (const command of commands) {
     if (command.fullFrom < cursor) continue;
     out += line.slice(cursor, command.fullFrom);
-    if (command.name === "scomment") out += rawLatexInline(`\\sidecomment{${convertInline(command.context, options)}}`);
-    else if (command.name === "revision") out += rawLatexInline(revisionLatex(command, options));
+    if (!annotations && (EXPORTED_ANNOTATIONS.has(command.name) || command.name === "scomment"
+      || command.name === "revision" || command.name === "comment")) {
+      // `annotations: none` in the note metadata strips every review mark.
+    } else if (EXPORTED_ANNOTATIONS.has(command.name)) {
+      const title = convertInline(command.context, options);
+      if (title) out += rawLatexInline(margin ? `\\aarontodo{${title}}` : `\\aarontodoinline{${title}}`);
+    } else if (command.name === "scomment") {
+      const body = convertInline(command.context, options);
+      out += rawLatexInline(margin ? `\\sidecomment{${body}}` : `\\sidecommentinline{${body}}`);
+    } else if (command.name === "revision") out += rawLatexInline(revisionLatex(command, { ...options, marginSafe: margin }));
     else if (command.name === "comment") out += rawLatexInline(`\\aaroncomment{${convertInline(command.context, options)}}`);
     else if (command.name === "cite") {
       const citation = citeLatex(command, options);
@@ -161,16 +189,26 @@ function transformInlineCommands(line, options, context = {}) {
 }
 
 function stripPrivateCommandsFromLinkLabels(line) {
-  return String(line || "").replace(/(!?\[)([^\n]*)\]\(/g, (whole, open, label) => {
+  const source = String(line || "");
+  const spans = markdownLinkSpans(source);
+  if (spans.length === 0) return source;
+  // One label at a time, right to left so earlier offsets stay valid. A single
+  // greedy `[...](` regex spanned two links on one line and deleted the first
+  // destination, the prose between them, and the second link outright.
+  let result = source;
+  for (let index = spans.length - 1; index >= 0; index -= 1) {
+    const span = spans[index];
+    const label = result.slice(span.labelFrom, span.labelTo);
     const commands = scanInlineCommands(label)
       .filter((command) => PRIVATE_INLINE.has(command.name) && !isDisplayCommentCommand(command));
-    let result = String(label);
-    for (let index = commands.length - 1; index >= 0; index -= 1) {
-      const command = commands[index];
-      result = result.slice(0, command.fullFrom) + result.slice(command.fullTo);
+    if (commands.length === 0) continue;
+    let stripped = label;
+    for (let i = commands.length - 1; i >= 0; i -= 1) {
+      stripped = stripped.slice(0, commands[i].fullFrom) + stripped.slice(commands[i].fullTo);
     }
-    return `${open}${result} ](`.replace(" ](", "](");
-  });
+    result = `${result.slice(0, span.labelFrom)}${stripped}${result.slice(span.labelTo)}`;
+  }
+  return result;
 }
 
 function protectedInlineRanges(line) {
@@ -184,8 +222,15 @@ function protectedInlineRanges(line) {
 }
 
 function markdownLinkRanges(line) {
+  return markdownLinkSpans(line).map((span) => ({ from: span.destinationFrom, to: span.destinationTo }));
+}
+
+// Bracket-matched link scanner shared by the protected-range reader and the
+// link-label rewriter. Returns the label and destination span of every
+// `[label](destination)` / `![label](destination)` on the line.
+function markdownLinkSpans(line) {
   const source = String(line || "");
-  const ranges = [];
+  const spans = [];
   for (let start = 0; start < source.length; start += 1) {
     const image = source[start] === "!" && source[start + 1] === "[";
     if (!image && source[start] !== "[") continue;
@@ -213,11 +258,16 @@ function markdownLinkRanges(line) {
       else if (char === ")") parenDepth -= 1;
     }
     if (parenDepth === 0) {
-      ranges.push({ from: destinationFrom, to: cursor });
+      spans.push({
+        labelFrom: bracketStart + 1,
+        labelTo: destinationFrom - 1,
+        destinationFrom,
+        destinationTo: cursor,
+      });
       start = cursor - 1;
     }
   }
-  return ranges;
+  return spans;
 }
 
 function markdownContainerLine(line) {
@@ -287,7 +337,7 @@ function continuePrivatePlanning(line, state) {
   };
 }
 
-function containsSemanticOutline(lines, frontMatterEnd, hiddenKinds) {
+function containsSemanticOutline(lines, frontMatterEnd, hiddenKinds, options = {}) {
   let fence = null;
   let displayMath = null;
   let hidden = null;
@@ -328,7 +378,7 @@ function containsSemanticOutline(lines, frontMatterEnd, hiddenKinds) {
     if (begin && hiddenKinds.has(begin.kind)) { hidden = begin.kind; hiddenDepth = 1; continue; }
     const multilinePrivate = multilinePrivateStart(line);
     if (multilinePrivate) { privatePlanning = multilinePrivate.state; continue; }
-    if (privateCommandLine(line)) continue;
+    if (privateCommandLine(line, options)) continue;
     if (semanticCommandOnLine(line)) return true;
   }
   return false;
@@ -358,9 +408,10 @@ function visiblePrivateCommands(line) {
     .filter((command) => !protectedRanges.some((range) => command.fullFrom >= range.from && command.fullFrom < range.to));
 }
 
-function privateCommandLine(line) {
+function privateCommandLine(line, options = {}) {
   if (!PRIVATE_COMMAND_LINE_RE.test(line)) return false;
   const command = scanInlineCommands(String(line || "").trim())[0];
+  if (annotationsEnabled(options) && EXPORTED_ANNOTATIONS.has(command?.name)) return false;
   return !isDisplayCommentCommand(command);
 }
 
@@ -417,7 +468,11 @@ export function preprocessAaronnoteForPandoc(markdown, options = {}) {
   const frontMatter = parseYamlFrontMatter(lines);
   const meta = extractAaronnoteMetadata(source);
   const hiddenKinds = new Set([...HIDDEN_BLOCKS, ...(Array.isArray(options.rules?.hiddenBlocks) ? options.rules.hiddenBlocks.map((value) => String(value).toLowerCase()) : [])]);
-  const hasSemanticOutline = containsSemanticOutline(lines, frontMatter.end, hiddenKinds);
+  const hasSemanticOutline = containsSemanticOutline(lines, frontMatter.end, hiddenKinds, {
+    exportAnnotations: options.disableAnnotations === true
+      ? false
+      : String(meta.annotations || "").trim().toLowerCase() !== "none",
+  });
   const output = [];
   const stack = [];
   let hidden = null;
@@ -429,13 +484,24 @@ export function preprocessAaronnoteForPandoc(markdown, options = {}) {
   let htmlComment = false;
   const singletonMarks = new Set();
   const unresolvedCitations = [];
-  const conversionOptions = { ...options, unresolvedCitations };
+  // `annotations: none` restores the pre-annotation behaviour: every todo,
+  // comment, side comment, and revision is dropped. A scope export only carries
+  // part of the note, so the caller can assert it from the whole document's
+  // metadata even when the `#+begin meta` block is outside the exported range.
+  const exportAnnotations = options.disableAnnotations === true
+    ? false
+    : String(meta.annotations || "").trim().toLowerCase() !== "none";
+  const conversionOptions = { ...options, unresolvedCitations, exportAnnotations };
 
   for (let index = 0; index < lines.length; index += 1) {
     let line = lines[index];
     const lineNumber = index + 1;
     const atParagraphStart = index === 0 || !lines[index - 1].trim();
-    const markContext = { atParagraphStart, nextLineVisible: Boolean(lines[index + 1]?.trim()) };
+    const markContext = {
+      atParagraphStart,
+      nextLineVisible: Boolean(lines[index + 1]?.trim()),
+      marginSafe: marginNoteSafeLine(markdownContainerLine(line).content),
+    };
     let container = markdownContainerLine(line);
     if (index <= frontMatter.end) continue;
     if (privatePlanning) {
@@ -520,12 +586,16 @@ export function preprocessAaronnoteForPandoc(markdown, options = {}) {
     const multilinePrivate = multilinePrivateStart(line);
     if (multilinePrivate) {
       privatePlanning = multilinePrivate.state;
-      const visiblePrefix = transformInlineCommands(line.slice(0, multilinePrivate.command.fullTo), conversionOptions, { atParagraphStart });
+      const visiblePrefix = transformInlineCommands(
+        line.slice(0, multilinePrivate.command.fullTo),
+        conversionOptions,
+        { atParagraphStart, marginSafe: markContext.marginSafe },
+      );
       if (markdownContainerLine(visiblePrefix).content.trim()) output.push(canonicalMathForPandoc(visiblePrefix));
       continue;
     }
 
-    if (privateCommandLine(line)) {
+    if (privateCommandLine(line, conversionOptions)) {
       continue;
     }
     const semantic = semanticCommandOnLine(line);
@@ -661,6 +731,11 @@ function runPandoc(bin, args, input, options = {}) {
       if (options.signal.aborted) { onAbort(); return; }
       options.signal.addEventListener("abort", onAbort, { once: true });
     }
+    // pandoc can exit before draining stdin (bad arguments, OOM). Writing into
+    // the closed pipe emits EPIPE on the stream, and an unhandled `error` there
+    // is an uncaught exception that takes down the whole host process. The
+    // failure itself is already reported by the `error`/`close` handlers.
+    child.stdin.on("error", () => {});
     child.stdin.end(input, "utf8");
   });
 }
@@ -675,6 +750,9 @@ export async function aaronnoteMarkdownToLatexPandoc(markdown, options = {}) {
     ? await transformProvider.prepare(markdown, {
       rules: options.rules,
       citationKeyMap: options.citationKeyMap,
+      disableAnnotations: options.disableAnnotations === true,
+      signal: options.signal,
+      timeoutMs: options.timeoutMs,
     })
     : preprocessAaronnoteForPandoc(markdown, options);
   const pandocBin = String(options.pandocBin || "pandoc").trim();
@@ -699,7 +777,7 @@ export async function aaronnoteMarkdownToLatexPandoc(markdown, options = {}) {
     throw new Error(`Pandoc Markdown→LaTeX conversion failed: ${detail}`);
   }
   const body = transformProvider
-    ? await transformProvider.postprocess(stdout)
+    ? await transformProvider.postprocess(stdout, { signal: options.signal, timeoutMs: options.timeoutMs })
     : academicLatexPostprocess(stdout);
   return {
     meta: prepared.meta,

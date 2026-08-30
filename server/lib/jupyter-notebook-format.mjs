@@ -162,6 +162,79 @@ export function serializeNotebook(notebook) {
   }, 2)}\n`;
 }
 
+// ---- Lean source storage ---------------------------------------------------
+//
+// A Lean cell never runs through a Jupyter kernel: execution is refused and no
+// output is ever persisted, so its notebook only ever carried source. Storing
+// that source as an ordinary `.lean` file instead of notebook JSON lets Emacs,
+// `lean-mode`, and the Lean LSP open the exact same file the editor writes.
+//
+// Cells are delimited by a `-- %% <id>` line, which is a plain Lean comment, so
+// the file stays valid Lean and readable outside Noema.
+
+const LEAN_CELL_MARKER = /^--[ \t]*%%[ \t]*(.*?)[ \t]*$/;
+
+export function notebookStorageForFile(file) {
+  return /\.lean$/i.test(String(file || "")) ? "lean" : "ipynb";
+}
+
+export function parseLeanNotebook(text, defaults = {}) {
+  const notebook = createNotebook({ ...defaults, storage: "lean" });
+  const lines = String(text || "").replace(/\r\n?/g, "\n").split("\n");
+  const seen = new Set();
+  let pending = null;
+  const flush = () => {
+    if (!pending) return;
+    // Trailing blank lines are separator, not content. Dropping them is what
+    // makes serialize(parse(x)) stable.
+    while (pending.lines.length > 0 && !pending.lines.at(-1).trim()) pending.lines.pop();
+    if (pending.lines.length === 0 && !pending.explicit) { pending = null; return; }
+    notebook.cells.push(codeCell({
+      id: uniqueCellId(pending.id, seen, notebook.cells.length),
+      source: pending.lines.join("\n"),
+    }, "cell"));
+    pending = null;
+  };
+  for (const line of lines) {
+    const marker = line.match(LEAN_CELL_MARKER);
+    if (marker) {
+      flush();
+      pending = { id: marker[1], lines: [], explicit: true };
+      continue;
+    }
+    if (!pending) {
+      // Content ahead of the first marker still belongs to the file.
+      if (!line.trim()) continue;
+      pending = { id: "", lines: [], explicit: false };
+    }
+    pending.lines.push(line);
+  }
+  flush();
+  return notebook;
+}
+
+export function serializeLeanNotebook(notebook) {
+  const blocks = notebookCodeCells(notebook).map((cell) => {
+    const source = notebookSource(cell.source).replace(/\s+$/, "");
+    return source ? `-- %% ${cell.id}\n${source}\n` : `-- %% ${cell.id}\n`;
+  });
+  return blocks.join("\n");
+}
+
+/** Read notebook text using the storage format implied by its file name. */
+export function parseNotebookText(text, defaults = {}, file = "") {
+  return notebookStorageForFile(file) === "lean"
+    ? parseLeanNotebook(text, defaults)
+    : parseNotebook(text, defaults);
+}
+
+/** Write notebook text using the storage format implied by its file name. */
+export function serializeNotebookText(notebook, file = "") {
+  return notebookStorageForFile(file) === "lean"
+    ? serializeLeanNotebook(notebook)
+    : serializeNotebook(notebook);
+}
+
 export function notebookCodeCells(notebook) {
   return (Array.isArray(notebook?.cells) ? notebook.cells : [])
     .filter((cell) => cell?.cell_type === "code");
@@ -243,7 +316,7 @@ export function buildNotebook({
     source_file: String(noteFile),
     session: String(session),
     language: String(language),
-    storage: "ipynb",
+    storage: String(storage || "ipynb"),
   };
 
   let line = 1;
@@ -254,7 +327,11 @@ export function buildNotebook({
     }
     line += notebookSource(cell.source).split("\n").length + 2;
   }
-  return { notebook, text: serializeNotebook(notebook), line };
+  return {
+    notebook,
+    text: storage === "lean" ? serializeLeanNotebook(notebook) : serializeNotebook(notebook),
+    line,
+  };
 }
 
 export function notebookOutput(cell, { passive = false, includeRuntimeStamp = false } = {}) {

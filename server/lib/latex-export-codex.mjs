@@ -15,6 +15,7 @@ import { appendFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/pro
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import { LATEX_MARKS } from "../../shared/latex-marks.mjs";
+import { latexLogDiagnostics } from "./latex-export.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -406,11 +407,11 @@ async function compileLatex({ tex, dir, latexBin, engine = "pdflatex", sourceDir
     ], { cwd: dir, env, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, signal });
     let log = "";
     try { log = await readFile(join(dir, "out.log"), "utf8"); } catch {}
-    const layout = log.split(/\r?\n/)
-      .filter((line) => /Overfull \\[hv]box|Float too large|Too many unprocessed floats/i.test(line))
-      .slice(-20)
-      .join("\n");
-    return { ok: true, log: layout };
+    // The final export compile rejects undefined references/citations and
+    // missing glyphs. Applying the same test here stops a document that can
+    // never be published from first paying for a full agent session.
+    const diagnostics = latexLogDiagnostics(log);
+    return { ok: true, fatal: diagnostics.fatal, log: diagnostics.layout.join("\n") };
   } catch (err) {
     const logFile = join(dir, "out.log");
     let log = "";
@@ -418,7 +419,7 @@ async function compileLatex({ tex, dir, latexBin, engine = "pdflatex", sourceDir
     const tail = (log || `${err?.stdout || ""}\n${err?.stderr || ""}` || String(err?.message || ""))
       .split(/\r?\n/).filter((l) => /^!|error|undefined|runaway|missing|\.tex:\d+/i.test(l))
       .slice(-30).join("\n");
-    return { ok: false, log: tail || String(err?.message || "LaTeX compile failed").slice(0, 2000) };
+    return { ok: false, fatal: [], log: tail || String(err?.message || "LaTeX compile failed").slice(0, 2000) };
   }
 }
 
@@ -619,7 +620,7 @@ function progressEvent(backend, line) {
         return { label: "claude: audit complete", report: text };
       }
       if (type) return { label: `claude: ${type}`, report: "" };
-    } else {
+    } else if (backend === "opencode") {
       const text = String(ev.part?.text || ev.message?.text || ev.text || ev.result || "").trim();
       if (text) return { label: `opencode: ${text.slice(0, 140)}`, report: text };
       const label = ev.tool || ev.name || type;
@@ -893,6 +894,17 @@ export async function polishBodyWithAgent(opts) {
       timeoutMs: compileTimeoutMs,
       signal,
     });
+    if (draftVerification.fatal?.length) {
+      // Undefined references and missing glyphs are content defects, not
+      // typesetting ones. Report them now instead of spending an agent session
+      // and two full compiler passes to arrive at the same failure.
+      return {
+        ...base,
+        usedAgent: false,
+        compiled: false,
+        warnings: [...warnings, `LaTeX verification failed:\n${draftVerification.fatal.join("\n")}`],
+      };
+    }
     if (draftVerification.ok && !polishVerifiedDraft) {
       return { ...base, usedAgent: false, compiled: true, warnings };
     }
@@ -974,10 +986,19 @@ export async function polishBodyWithAgent(opts) {
       }
       emit(`Compiling (attempt ${attempts})…`);
       const res = await compileLatex({ tex: assemble(body, candidateAiTitle), dir: workdir, latexBin, engine, sourceDir, timeoutMs: compileTimeoutMs, signal });
+      if (res.fatal?.length) {
+        warnings.push(`${backend} output has fatal LaTeX diagnostics: ${res.fatal.join("; ")}`);
+        break;
+      }
       if (res.ok) {
         if (res.log) {
           warnings.push(`${backend} output has non-fatal LaTeX layout warnings: ${res.log}`);
         }
+        // The hard gate deliberately allows structural typesetting work, so it
+        // cannot also require identical prose. This heuristic makes dropped or
+        // invented text visible in the export result without blocking a body
+        // that preserved every protected payload and compiles.
+        warnings.push(...proseFidelityWarnings(sourceMarkdown, body).map((warning) => `${backend} ${warning}`));
         return { body, aiTitle: candidateAiTitle, backend, usedAgent: true, compiled: true, attempts, warnings, agentElapsedMs, review, agentSummary };
       }
       emit(`Compile failed; feeding log back to ${backend}…`);

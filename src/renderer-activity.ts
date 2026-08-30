@@ -77,6 +77,22 @@ function isQuiescent(state: RendererActivityState): boolean {
 }
 
 /**
+ * Whether a user-facing assist that is *triggered by* idleness may run.
+ *
+ * `quiescent` deliberately qualifies. It means the user stopped typing, which
+ * is precisely when an idle-triggered inline completion is wanted. Treating it
+ * as a disqualifier is self-defeating: the completion's own idle delay fires
+ * just before the quiescent transition, so every request was cancelled — or its
+ * response discarded — a few hundred milliseconds later, mid round-trip.
+ *
+ * Only a surface that is gone disqualifies the work. Keeping a language server
+ * from idling forever is the server's concern, not this predicate's.
+ */
+export function idleAssistAllowed(state: RendererActivityState): boolean {
+  return !isHidden(state);
+}
+
+/**
  * Create the one activity state machine used by every host scene.
  *
  * The generic activity listeners intentionally do not inspect host focus or

@@ -686,7 +686,8 @@ Body.
   test("always exports unresolved revisions with original, advice, and reason", () => {
     const html = renderMarkdownHTML('@@revision(red) [old **claim**] {advice: "new claim"; reason: "clearer"}');
     expect(html).toContain('class="aaronnote-revision"');
-    expect(html).toContain('data-revision-style="red"');
+    // `red` is the legacy spelling of the `error` review kind.
+    expect(html).toContain('data-revision-style="error"');
     expect(html).toContain("<strong>claim</strong>");
     expect(html).toContain("new claim");
     expect(html).toContain("clearer");

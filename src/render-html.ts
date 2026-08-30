@@ -13,6 +13,7 @@ import { katexStylesheetHref, renderMathHTML } from "./math-render.ts";
 import { markdownLinkDestination } from "./markdown-link.ts";
 import { safeHref } from "./url-safety.ts";
 import { scanInlineCommands } from "./command-syntax.ts";
+import { revisionKindOf } from "./revision-kinds.ts";
 import { semanticOutlineFromCommand } from "./semantic-outline.ts";
 import {
   BLOCK_ANCHOR_SOURCE,
@@ -635,15 +636,14 @@ function renderSideCommentInline(tokens: Token[], idx: number): string {
 function renderRevisionInline(tokens: Token[], idx: number): string {
   const original = tokens[idx]!.content;
   const meta = (tokens[idx]!.meta || {}) as { advice?: string; reason?: string; style?: string };
-  const allowed = new Set(["indigo", "teal", "red", "green", "yellow"]);
-  const style = allowed.has(meta.style || "") ? meta.style : "indigo";
+  const kind = revisionKindOf(String(meta.style || ""));
   const advice = String(meta.advice || "");
   const reason = String(meta.reason || "");
   return [
-    `<span class="aaronnote-revision" data-revision-style="${escapeAttr(style || "indigo")}" role="note" aria-label="Unresolved revision">`,
+    `<span class="aaronnote-revision" data-revision-style="${escapeAttr(kind.id)}" role="note" aria-label="${escapeAttr(kind.label)} revision">`,
     `<span class="aaronnote-revision-original">${renderMarkdownInlineHTML(original)}</span>`,
     '<span class="aaronnote-revision-card">',
-    "<strong>Suggestion</strong>",
+    `<strong>${escapeAttr(kind.label)}</strong>`,
     `<span class="aaronnote-revision-advice">${renderMarkdownInlineHTML(advice)}</span>`,
     reason ? `<span class="aaronnote-revision-reason">${renderMarkdownInlineHTML(reason)}</span>` : "",
     "</span></span>",

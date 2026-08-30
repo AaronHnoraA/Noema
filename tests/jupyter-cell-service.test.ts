@@ -793,6 +793,89 @@ describe("jupyter cell service (no kernel)", () => {
     });
   });
 
+  test("stores lean cells as plain .lean source, not notebook JSON", async () => {
+    await withService(async ({ service, note }) => {
+      const opened = await service.openScript({
+        file: note,
+        cellId: "bipartite",
+        kernel: "lean4",
+        session: "default",
+        language: "lean4",
+        cells: [{ cellId: "bipartite", code: "theorem t : True := trivial" }],
+        open: false,
+      });
+      // A Lean cell never reaches a kernel and never stores output, so notebook
+      // JSON bought nothing and kept the source out of reach of lean-mode.
+      expect(opened.file.endsWith(".lean")).toBe(true);
+      expect(opened.storage).toBe("lean");
+      const text = await readFile(opened.file, "utf8");
+      expect(text).toBe("-- %% bipartite\ntheorem t : True := trivial\n");
+
+      const read = await service.readScriptCell({
+        file: note, cellId: "bipartite", kernel: "lean4", session: "default", language: "lean4",
+      });
+      expect(read.code).toBe("theorem t : True := trivial");
+    });
+  });
+
+  test("keeps several lean cells in one file and preserves their order", async () => {
+    await withService(async ({ service, note }) => {
+      const opened = await service.openScript({
+        file: note,
+        cellId: "second",
+        kernel: "lean4",
+        session: "default",
+        language: "lean4",
+        cells: [
+          { cellId: "first", code: "def a := 1" },
+          { cellId: "second", code: "def b := 2" },
+        ],
+        open: false,
+      });
+      expect(await readFile(opened.file, "utf8"))
+        .toBe("-- %% first\ndef a := 1\n\n-- %% second\ndef b := 2\n");
+    });
+  });
+
+  test("migrates a lean store written as .ipynb to .lean on the next save", async () => {
+    await withService(async ({ service, note }) => {
+      const legacy = join(dirname(note), ".cell", "note.lean4.default.ipynb");
+      await mkdir(dirname(legacy), { recursive: true });
+      await writeFile(legacy, JSON.stringify({
+        cells: [{
+          cell_type: "code",
+          id: "legacy",
+          execution_count: null,
+          metadata: {},
+          outputs: [],
+          source: "theorem legacy : True := trivial",
+        }],
+        metadata: {
+          kernelspec: { display_name: "lean4", language: "lean4", name: "lean4" },
+          language_info: { name: "lean4" },
+        },
+        nbformat: 4,
+        nbformat_minor: 5,
+      }), "utf8");
+
+      const opened = await service.openScript({
+        file: note,
+        cellId: "legacy",
+        kernel: "lean4",
+        session: "default",
+        language: "lean4",
+        cells: [{ cellId: "legacy", code: "theorem legacy : True := trivial" }],
+        open: false,
+      });
+
+      expect(opened.file.endsWith(".lean")).toBe(true);
+      expect(opened.migratedFrom).toBe(legacy);
+      expect(await readFile(opened.file, "utf8"))
+        .toBe("-- %% legacy\ntheorem legacy : True := trivial\n");
+      await expect(stat(legacy)).rejects.toThrow();
+    });
+  });
+
   test("lean cells short-circuit without a kernel", async () => {
     await withService(async ({ service, note }) => {
       const result = await service.execute({

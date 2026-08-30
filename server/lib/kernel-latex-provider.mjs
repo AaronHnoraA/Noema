@@ -12,12 +12,21 @@ export function createKernelLatexProvider({ baseUrl, fetchImpl = globalThis.fetc
     throw new Error("Kernel LaTeX provider requires baseUrl and fetch");
   }
 
-  async function post(path, body) {
+  // The caller's abort signal has to reach the kernel: a canceled export must
+  // not leave a transform running, and a large note must not be capped by a
+  // timeout the caller cannot raise.
+  function requestSignal(options = {}) {
+    const budget = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : timeoutMs;
+    const deadline = AbortSignal.timeout(budget);
+    return options.signal ? AbortSignal.any([deadline, options.signal]) : deadline;
+  }
+
+  async function post(path, body, options = {}) {
     const response = await fetchImpl(`${base}${path}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: requestSignal(options),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok || Number(payload?.code) !== 0 || !payload?.data) {
@@ -34,7 +43,8 @@ export function createKernelLatexProvider({ baseUrl, fetchImpl = globalThis.fetc
         markdown: String(markdown ?? ""),
         rules: options.rules && typeof options.rules === "object" ? options.rules : {},
         citationKeyMap: citationKeyObject(options.citationKeyMap),
-      });
+        disableAnnotations: options.disableAnnotations === true,
+      }, options);
       if (typeof data.markdown !== "string" || !data.meta || !data.features) {
         throw Object.assign(new Error("Kernel LaTeX prepare response is incomplete"), { statusCode: 502 });
       }
@@ -55,8 +65,8 @@ export function createKernelLatexProvider({ baseUrl, fetchImpl = globalThis.fetc
       }
       return { ...data.meta };
     },
-    async postprocess(latex) {
-      const data = await post("/api/noema/latex/postprocessPandoc", { latex: String(latex ?? "") });
+    async postprocess(latex, options = {}) {
+      const data = await post("/api/noema/latex/postprocessPandoc", { latex: String(latex ?? "") }, options);
       if (typeof data.latex !== "string") {
         throw Object.assign(new Error("Kernel LaTeX postprocess response is incomplete"), { statusCode: 502 });
       }

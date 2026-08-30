@@ -9,7 +9,7 @@ import { createHash } from "node:crypto";
 import { changedRoamFilesSince, fileHistory, restoreFileFromCommit, discardFileChanges, roamRepoStatus, roamRepoChanges, diffRoamFile, diffRoamCommit, pullRoam, pushRoam, repoHistory, headSha } from "./roam-git.mjs";
 import { buildWikiIndex, wikiIndexStatus } from "./wiki-workspace.mjs";
 import { configureTmpRoot, aaronnoteTmpRoot, runtimeMkdtemp, runtimeTmpFile } from "./tmp.mjs";
-import { applyLatexTemplate, bibliographyReferencesToLatex, defaultLatexOutputPath, escapeLatexText, escapeLatexTitle, escapeLatexUrl, latexMacrosPackage, readLatexTemplate, writeLatexExport } from "./latex-export.mjs";
+import { applyLatexTemplate, bibliographyReferencesToLatex, defaultLatexOutputPath, escapeLatexText, escapeLatexTitle, escapeLatexUrl, latexLogDiagnostics, latexMacrosPackage, latexNeedsAnotherPass, readLatexTemplate, writeLatexExport } from "./latex-export.mjs";
 import { aaronnoteMarkdownToLatexPandoc, extractAaronnoteMetadata } from "./latex-export-pandoc.mjs";
 import { agentAvailable, loadAgentRules, normalizeAgentTitle, polishBodyWithAgent } from "./latex-export-codex.mjs";
 import { loadKatexMacros } from "./katex-macros.mjs";
@@ -6326,16 +6326,6 @@ function usefulTitleHeading(title) {
   return value && !/^(?:main|introduction|question\s*\d*|q\d+|problem\s*\d*)$/i.test(value) ? value : "";
 }
 
-function inferredAcademicSubject(content) {
-  const source = String(content || "");
-  // Prefer the broad course/topic signal over one local construction.  The
-  // assignment regression is about an idempotent linear map, but its document
-  // title should remain "Linear Algebra Assignment", not "Projectors".
-  if (/\bvector space\b/i.test(source) && /\blinear transformation\b/i.test(source)) return "Linear Algebra";
-  if (/\bidempotent\b/i.test(source) || /\b([A-Z])\s*\^\s*2\s*=\s*\1\b/.test(source)) return "Projectors";
-  return "";
-}
-
 function roleAwareFallbackTitle(heading, role) {
   const subject = usefulTitleHeading(heading);
   const workRole = String(role || "").trim();
@@ -6396,20 +6386,6 @@ function normalizedLatexOutputFile(outputPath) {
   return requested.toLowerCase().endsWith(".tex") ? requested : `${requested}.tex`;
 }
 
-function latexLogDiagnostics(log) {
-  const lines = String(log || "").split(/\r?\n/);
-  const fatal = lines.filter((line) =>
-    /LaTeX Warning: (?:Citation|Reference).+undefined|There were undefined references|There were undefined citations|Missing character: There is no/i.test(line),
-  );
-  const layout = lines.filter((line) =>
-    /Overfull \\[hv]box|Float too large|Too many unprocessed floats/i.test(line),
-  );
-  return {
-    fatal: [...new Set(fatal)].slice(-20),
-    layout: [...new Set(layout)].slice(-20),
-  };
-}
-
 async function compileLatexExportPdf({ latex, outputPath, engine, sourceDir, supportFiles = [], signal }) {
   const latexBin = executablePath(engine === "xelatex" ? "xelatex" : engine === "lualatex" ? "lualatex" : "pdflatex");
   if (!latexBin || !existsSync(latexBin)) throw new Error(`LaTeX engine not found: ${engine}`);
@@ -6432,18 +6408,23 @@ async function compileLatexExportPdf({ latex, outputPath, engine, sourceDir, sup
       if (!file?.name || !file?.content) continue;
       await writeFile(join(buildDir, basename(file.name)), file.content);
     }
-    // A second pass resolves references and the table of contents while all
-    // auxiliary files and generated dependencies remain isolated from the
-    // export directory. Nothing user-visible is replaced until both passes and
-    // log linting have succeeded.
-    throwIfAborted(signal);
-    await execFileAsync(latexBin, args, { cwd: buildDir, env, timeout: 120_000, maxBuffer: 16 * 1024 * 1024, signal });
-    throwIfAborted(signal);
-    await execFileAsync(latexBin, args, { cwd: buildDir, env, timeout: 120_000, maxBuffer: 16 * 1024 * 1024, signal });
-    throwIfAborted(signal);
-    const builtPdf = join(buildDir, `${basename(texFile, extname(texFile))}.pdf`);
+    // Compilation happens entirely inside the staging directory, so auxiliary
+    // files and generated dependencies never touch the export directory and
+    // nothing user-visible is replaced until compilation and log linting have
+    // both succeeded.
     const logFile = join(buildDir, `${basename(texFile, extname(texFile))}.log`);
-    const log = await readFile(logFile, "utf8").catch(() => "");
+    throwIfAborted(signal);
+    await execFileAsync(latexBin, args, { cwd: buildDir, env, timeout: 120_000, maxBuffer: 16 * 1024 * 1024, signal });
+    throwIfAborted(signal);
+    let log = await readFile(logFile, "utf8").catch(() => "");
+    // A second pass only matters when the first one left cross-references, a
+    // table of contents, or citation labels unresolved.
+    if (latexNeedsAnotherPass(log)) {
+      await execFileAsync(latexBin, args, { cwd: buildDir, env, timeout: 120_000, maxBuffer: 16 * 1024 * 1024, signal });
+      throwIfAborted(signal);
+      log = await readFile(logFile, "utf8").catch(() => "");
+    }
+    const builtPdf = join(buildDir, `${basename(texFile, extname(texFile))}.pdf`);
     const diagnostics = latexLogDiagnostics(log);
     if (diagnostics.fatal.length > 0) {
       throw new Error(`LaTeX verification failed:\n${diagnostics.fatal.join("\n")}`);
@@ -6729,19 +6710,23 @@ export async function exportLatex(body = {}) {
     throw error;
   }
   const citationMaps = latexCitationMaps(bibliography);
+  // Metadata is resolved from the whole note, not the exported scope: a heading
+  // or selection export rarely contains the `#+begin meta` block that carries
+  // the title, date, and `annotations` switch.
+  const documentMeta = typeof latexProvider?.metadata === "function"
+    ? await latexProvider.metadata(documentContent)
+    : extractAaronnoteMetadata(documentContent);
   const converted = await aaronnoteMarkdownToLatexPandoc(content, {
     sourceFile,
     sourceDir: sourceFile ? dirname(sourceFile) : "",
     pandocBin: executablePath("pandoc"),
     rules,
     citationKeyMap: citationMaps.byNamespaceKey,
+    disableAnnotations: String(documentMeta.annotations || "").trim().toLowerCase() === "none",
     transformProvider: latexProvider,
     signal,
   });
   throwIfAborted(signal);
-  const documentMeta = typeof latexProvider?.metadata === "function"
-    ? await latexProvider.metadata(documentContent)
-    : extractAaronnoteMetadata(documentContent);
   const metaTitle = String(documentMeta.title || converted.meta.title || "").trim();
   const title = latexExportTitle(sourceFile, body.title || "", metaTitle);
   const defaults = await latexExportDefaults({ file: sourceFile, title });
@@ -6775,7 +6760,7 @@ export async function exportLatex(body = {}) {
   const keepSourceTitle = meaningfulSourceTitle(sourceNameTitle);
   const docTitle = metaTitle
     || (keepSourceTitle ? sourceNameTitle : "")
-    || roleAwareFallbackTitle(usefulTitleHeading(firstHeadingTitle(content)) || inferredAcademicSubject(content), header.name)
+    || roleAwareFallbackTitle(usefulTitleHeading(firstHeadingTitle(content)), header.name)
     || filenameTitle
     || "Noema";
 
@@ -6810,20 +6795,19 @@ export async function exportLatex(body = {}) {
   let bodyLatex = `${converted.body}${bibliographyLatex}`;
   let engineUsed = "pandoc";
   let agentSummary = null;
+  // Every bibliography and citation diagnostic already failed the preflight
+  // above with a 422, so none of them can reach the warning list from here.
   const warnings = Array.isArray(converted.warnings) ? [...converted.warnings] : [];
-  for (const diagnostic of bibliography.diagnostics || []) {
-    warnings.push(`Bibliography: ${diagnostic}`);
-  }
-  for (const citation of bibliography.citations || []) {
-    const label = `${String(citation.namespace || "").trim()}:${(citation.keys || []).join(";")}`.replace(/^:/, "");
-    for (const diagnostic of citation.diagnostics || []) {
-      warnings.push(`Citation ${label || "(?)"}: ${diagnostic}`);
-    }
-  }
   const backend = ["codex", "claude", "opencode"].includes(latexExportAgent) ? latexExportAgent : "codex";
   const agentBin = executablePath(backend === "claude" ? latexClaudeBin : backend === "opencode" ? latexOpencodeBin : latexCodexBin);
   const wantAgent = latexExportEngine !== "mechanical" && String(body.engine || "").toLowerCase() !== "mechanical";
-  if (wantAgent && !agentAvailable(agentBin)) {
+  // The polish pass runs by default and can be turned off per export. It is no
+  // longer all-or-nothing: a pass that fails its gates falls back to the
+  // verified Pandoc draft, so leaving it on cannot cost the export itself.
+  // Only an explicit request fails loudly when the agent is missing.
+  const polishVerifiedDraft = body.polish !== false;
+  const polishRequested = body.polish === true;
+  if (wantAgent && polishRequested && !agentAvailable(agentBin)) {
     const error = new Error(`Configured LaTeX polish agent is unavailable: ${backend} (${agentBin || "no executable"})`);
     error.statusCode = 503;
     throw error;
@@ -6851,17 +6835,21 @@ export async function exportLatex(body = {}) {
       sourceDir: sourceFile ? dirname(sourceFile) : "",
       makeWorkdir: () => runtimeMkdtemp("latex-export", sourceFile || "export"),
       maxAttempts: latexExportMaxAttempts,
-      polishVerifiedDraft: true,
+      polishVerifiedDraft,
       agentTimeoutMs: latexExportAgentIdleTimeoutMs,
       agentHardTimeoutMs: latexExportAgentHardTimeoutMs,
       onProgress,
       signal,
     });
     throwIfAborted(signal);
-    if (!result.usedAgent || !result.compiled) {
+    // A polish attempt that fails its review/fidelity/compile gates is not a
+    // reason to lose the export: `polishBodyWithAgent` hands back the verified
+    // mechanical draft in that case. Only a draft that does not compile at all
+    // is unrecoverable here.
+    if (!result.compiled) {
       const details = Array.isArray(result.warnings) ? result.warnings.filter(Boolean) : [];
       const error = new Error([
-        `${backend} did not produce a LaTeX body that passed review, fidelity, and compile gates.`,
+        `${backend} did not repair the mechanical LaTeX compile failure.`,
         ...details,
       ].join("\n"));
       error.statusCode = 502;
@@ -6872,6 +6860,7 @@ export async function exportLatex(body = {}) {
     const decisions = Array.isArray(result.review?.decisions) ? result.review.decisions : [];
     agentSummary = {
       backend,
+      used: result.usedAgent === true,
       attempts: result.attempts,
       elapsedMs: result.agentElapsedMs || 0,
       applied: decisions.filter((decision) => decision?.action === "applied").length,

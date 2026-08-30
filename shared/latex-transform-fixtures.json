@@ -10,21 +10,34 @@
         }
       },
       "expected": {
-        "meta": { "title": "Canonical title", "date": "2026-08-26" },
+        "meta": {
+          "title": "Canonical title",
+          "date": "2026-08-26"
+        },
         "markdown": "\n\n\n# Foundations\n### Operators {#sec:operators}\n\n\n```{=latex}\n\\subparagraph{Markdown child}\n```\n\n\n\n\n\n```{=latex}\n\\begin{theorem}[Case \\(x>0\\)]\n```\n\n\nVisible `\\(x_1\\)`{=latex} `\\hypertarget{key}{}`{=latex} and `see \\cite[pp. 2, 4]{refs:Ada,refs:Turing}.`{=latex}.\n\n\n```{=latex}\n\\end{theorem}\n```\n\n",
         "warnings": [],
-        "features": { "usesSideComment": false, "usesTikz": false }
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
       }
     },
     {
       "name": "multiline-private-html",
       "markdown": "> Visible before @@todo [secret] {\n> nested: {\n> text: \"quoted\n> } still quoted\"\n> escaped: \\}\n> }\n> } AFTER MUST SURVIVE\n> Tail.\n\n<!-- hidden starts\n@@cite(refs) [Hidden]\n--> Visible @@cite(refs) [Real].",
-      "options": { "citationKeyMap": { "refs\u0000Real": "refs:Real" } },
+      "options": {
+        "citationKeyMap": {
+          "refs\u0000Real": "refs:Real"
+        }
+      },
       "expected": {
         "meta": {},
-        "markdown": "> Visible before \n>  AFTER MUST SURVIVE\n> Tail.\n\n<!-- hidden starts\n@@cite(refs) [Hidden]\n--> Visible `\\cite{refs:Real}`{=latex}.",
+        "markdown": "> Visible before `\\aarontodo{secret}`{=latex}\n>  AFTER MUST SURVIVE\n> Tail.\n\n<!-- hidden starts\n@@cite(refs) [Hidden]\n--> Visible `\\cite{refs:Real}`{=latex}.",
         "warnings": [],
-        "features": { "usesSideComment": false, "usesTikz": false }
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
       }
     },
     {
@@ -34,18 +47,34 @@
         "meta": {},
         "markdown": "> ```text\n> @@todo [literal]\n> @@latexmk(typo)\n> ````\n\n$$\na+b\n$$\n\n`\\noindent`{=latex} Paragraph start.\nFirst `\\\\`{=latex} second.\n\n`\\appendix`{=latex}",
         "warnings": [],
-        "features": { "usesSideComment": false, "usesTikz": false }
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
       }
     },
     {
       "name": "custom-rules-and-tikz",
       "markdown": "#+begin axiom Choice\nStatement.\n#+end axiom\n\n#+begin aside Note\nBody.\n#+end aside\n\n> [!WARNING] Careful\n\n#+begin tikz\n\\draw (0,0) -- (1,1);\n#+end tikz",
-      "options": { "rules": { "envMap": { "axiom": "axiom" }, "commentBlocks": ["aside"], "hiddenBlocks": [] } },
+      "options": {
+        "rules": {
+          "envMap": {
+            "axiom": "axiom"
+          },
+          "commentBlocks": [
+            "aside"
+          ],
+          "hiddenBlocks": []
+        }
+      },
       "expected": {
         "meta": {},
         "markdown": "\n\n```{=latex}\n\\begin{axiom}[Choice]\n```\n\n\nStatement.\n\n\n```{=latex}\n\\end{axiom}\n```\n\n\n\n\n\n```{=latex}\n\\begin{remark}[Note]\n```\n\n\nBody.\n\n\n```{=latex}\n\\end{remark}\n```\n\n\n\n> **Careful**\n\n\n```{=latex}\n\\begin{center}\n\\begin{tikzpicture}\n\\draw (0,0) -- (1,1);\n\\end{tikzpicture}\n\\end{center}\n```\n",
         "warnings": [],
-        "features": { "usesSideComment": false, "usesTikz": true }
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": true
+        }
       }
     },
     {
@@ -54,29 +83,47 @@
       "expected": {
         "meta": {},
         "markdown": "[Visible  label](https://example.com/(a)/@@latexmk(typo))\n\n`@@latexmk(typo)` and `\\(x+y\\)`{=latex} and `\\textnormal{[missing:Key]}`{=latex}.\n\n    @@todo [literal indented]",
-        "warnings": ["Unresolved Noema citation kept visibly: missing:Key"],
-        "features": { "usesSideComment": false, "usesTikz": false }
+        "warnings": [
+          "Unresolved Noema citation kept visibly: missing:Key"
+        ],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
       }
     },
     {
       "name": "annotations",
       "markdown": "Text @@scomment [Side **bold**] and @@comment(true) [Review] and @@revision [old] {advice=\"new\", reason=\"why\"}.\n\nSee @@cite(refs)[A] {locator=\"sec. ]2\", prefix=\"(\", suffix=\")\"}.",
-      "options": { "citationKeyMap": { "refs\u0000A": "refs:A" } },
+      "options": {
+        "citationKeyMap": {
+          "refs\u0000A": "refs:A"
+        }
+      },
       "expected": {
         "meta": {},
-        "markdown": "Text `\\sidecomment{Side \\textbf{bold}}`{=latex} and `\\aaroncomment{Review}`{=latex} and `\\aaronrevision{old}{new}{why}`{=latex}.\n\nSee `(\\cite[{sec. ]2}]{refs:A})`{=latex}.",
+        "markdown": "Text `\\sidecomment{Side \\textbf{bold}}`{=latex} and `\\aaroncomment{Review}`{=latex} and `\\aaronrevision[suggest]{old}{new}{why}`{=latex}.\n\nSee `(\\cite[{sec. ]2}]{refs:A})`{=latex}.",
         "warnings": [],
-        "features": { "usesSideComment": true, "usesTikz": false }
+        "features": {
+          "usesSideComment": true,
+          "usesTikz": false
+        }
       }
     },
     {
       "name": "yaml-semantic-setext",
-      "markdown": "\uFEFF---\ntitle: >\n  Folded\n  title\ndate: |\n  2026-08-26\n---\n\n@@section [Public]\nMarkdown child\n==============",
+      "markdown": "﻿---\ntitle: >\n  Folded\n  title\ndate: |\n  2026-08-26\n---\n\n@@section [Public]\nMarkdown child\n==============",
       "expected": {
-        "meta": { "title": "Folded title", "date": "2026-08-26" },
+        "meta": {
+          "title": "Folded title",
+          "date": "2026-08-26"
+        },
         "markdown": "\n## Public\n\n\n```{=latex}\n\\subparagraph{Markdown child}\n```\n\n",
         "warnings": [],
-        "features": { "usesSideComment": false, "usesTikz": false }
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
       }
     },
     {
@@ -86,7 +133,10 @@
         "meta": {},
         "markdown": "\n\n\n```{=latex}\n\\begin{proof}[Proof (\\(\\Rightarrow\\))]\n```\n\n\nArgument.\n\n\n```{=latex}\n\\end{proof}\n```\n\n\n\n\n\n```{=latex}\n\\begin{quote}\n\\textbf{custom: Label}\\par\n```\n\n\nBody.\n\n\n```{=latex}\n\\end{quote}\n```\n\n",
         "warnings": [],
-        "features": { "usesSideComment": false, "usesTikz": false }
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
       }
     },
     {
@@ -96,7 +146,10 @@
         "meta": {},
         "markdown": "\n\n```{=latex}\n\\begin{proof}[Proof (proofread)]\n```\n\n\nBoundary.\n\n\n```{=latex}\n\\end{proof}\n```\n\n",
         "warnings": [],
-        "features": { "usesSideComment": false, "usesTikz": false }
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
       }
     },
     {
@@ -106,7 +159,10 @@
         "meta": {},
         "markdown": "left `~`{=latex} right `\\allowbreak{}`{=latex} tail\n\n`\\Needspace{4\\baselineskip}`{=latex}\n\n`\\newpage`{=latex}\n\n`\\clearpage`{=latex}\n\n`\\nopagebreak[4]`{=latex}",
         "warnings": [],
-        "features": { "usesSideComment": false, "usesTikz": false }
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
       }
     },
     {
@@ -116,7 +172,84 @@
         "meta": {},
         "markdown": "`\\aaroncomment{Public display comment}`{=latex}\n\n> **Label**\n\n> $$\n> x+y\n> $$\noutside",
         "warnings": [],
-        "features": { "usesSideComment": false, "usesTikz": false }
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
+    },
+    {
+      "name": "multi-link-private-labels",
+      "markdown": "See [a @@todo one](http://x.com) and [b](http://y.com) end.\n\nNested [see [1](http://inner) more @@todo x](http://outer) tail.\n\nImage ![alt @@todo drop](http://img.png) and [z](http://z).",
+      "options": {},
+      "expected": {
+        "meta": {},
+        "markdown": "See [a ](http://x.com) and [b](http://y.com) end.\n\nNested [see [1](http://inner) more ](http://outer) tail.\n\nImage ![alt ](http://img.png) and [z](http://z).",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
+    },
+    {
+      "name": "backslash-escaping-in-moving-arguments",
+      "markdown": "#+begin theorem A \\ B\nBody with C:\\dir path.\n#+end theorem",
+      "options": {},
+      "expected": {
+        "meta": {},
+        "markdown": "\n\n```{=latex}\n\\begin{theorem}[A \\textbackslash{} B]\n```\n\n\nBody with C:\\dir path.\n\n\n```{=latex}\n\\end{theorem}\n```\n\n",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
+    },
+    {
+      "name": "todo-annotations",
+      "markdown": "Prose @@todo [Add refs.] tail.\n\n@@itodo [Standalone]\n\n## Heading @@todo [in heading]\n\n| a @@todo [in cell] | b |",
+      "options": {},
+      "expected": {
+        "meta": {},
+        "markdown": "Prose `\\aarontodo{Add refs.}`{=latex} tail.\n\n`\\aarontodo{Standalone}`{=latex}\n\n## Heading `\\aarontodoinline{in heading}`{=latex}\n\n| a `\\aarontodoinline{in cell}`{=latex} | b |",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
+    },
+    {
+      "name": "annotations-disabled",
+      "markdown": "#+begin meta\nannotations: none\n#+end meta\n\nProse @@todo [x] and @@scomment [y] and @@comment [z] end.",
+      "options": {},
+      "expected": {
+        "meta": {
+          "annotations": "none"
+        },
+        "markdown": "\nProse  and  and  end.",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
+    },
+    {
+      "name": "annotations-disabled-by-option",
+      "markdown": "Prose @@todo [x] and @@scomment [y] and @@comment [z] and @@revision [o] {advice: \"n\"} end.",
+      "options": {
+        "disableAnnotations": true
+      },
+      "expected": {
+        "meta": {},
+        "markdown": "Prose  and  and  and  end.",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
       }
     }
   ],

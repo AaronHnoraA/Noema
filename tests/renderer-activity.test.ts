@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { createRendererActivityGate } from "../src/renderer-activity.ts";
+import { createRendererActivityGate, idleAssistAllowed } from "../src/renderer-activity.ts";
 
 describe("shared renderer activity gate", () => {
   test("fans out one idempotent transition to every renderer participant", () => {
@@ -110,6 +110,29 @@ describe("shared renderer lifecycle", () => {
     expect(gate.state()).toBe("active");
     expect(states).toEqual(["recently-active", "quiescent", "active"]);
     gate.destroy();
+  });
+});
+
+describe("idle-triggered assist gating", () => {
+  test("a quiescent renderer still allows an idle-triggered completion", () => {
+    // Copilot's own idle delay (850ms) fires just before the renderer goes
+    // quiescent (1000ms). Treating quiescent as inactive cancelled the request
+    // while its focus round-trip was in flight, and discarded any response that
+    // arrived more than ~150ms after the last keystroke -- which is every one.
+    expect(idleAssistAllowed("active")).toBe(true);
+    expect(idleAssistAllowed("recently-active")).toBe(true);
+    expect(idleAssistAllowed("quiescent")).toBe(true);
+    expect(idleAssistAllowed("hidden")).toBe(false);
+    expect(idleAssistAllowed("destroyed")).toBe(false);
+  });
+
+  test("Copilot's host predicate goes through the shared gate", () => {
+    const mainSource = readFileSync(join(process.cwd(), "aaronnote", "main.ts"), "utf8");
+    const start = mainSource.indexOf("  isActive: () => !serverReaderMode");
+    expect(start).toBeGreaterThan(-1);
+    const predicate = mainSource.slice(start, mainSource.indexOf("editorSurfaceVisible(),", start));
+    expect(predicate).toContain("idleAssistAllowed(rendererActivityState)");
+    expect(predicate).not.toContain('"quiescent"');
   });
 });
 

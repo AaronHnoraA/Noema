@@ -1,5 +1,7 @@
 /** Native Noema authoring templates shared by commands and snippets. */
 
+import { DEFAULT_REVISION_KIND, revisionKindOf, revisionKinds } from "./revision-kinds.ts";
+
 export type AaronnoteSnippetContext = "prose" | "org-meta" | "markdown";
 
 export type AaronnoteBuiltinSnippet = {
@@ -26,7 +28,7 @@ export const AARONNOTE_AUTHORING_SNIPPETS: readonly AaronnoteBuiltinSnippet[] = 
   {
     key: "rev",
     name: "Revision suggestion",
-    body: '@@revision(${1|indigo,teal,red,green,yellow|}) [${2:original}] {advice: "${3:replacement}"; reason: "${4:reason}"}$0',
+    body: `@@revision(\${1|${revisionKinds.map((kind) => kind.id).join(",")}|}) [\${2:original}] {advice: "\${3:replacement}"; reason: "\${4:reason}"}$0`,
     context: "prose",
   },
   { key: "sup", name: "Superscript", body: "^${1:text}^$0", context: "prose" },
@@ -49,12 +51,46 @@ function escapeRevisionContext(value: string): string {
   return String(value || "").replace(/\\/g, "\\\\").replace(/\]/g, "\\]").replace(/\r?\n/g, " ");
 }
 
+/**
+ * Inverses of the escapers above, matching the exporter exactly.
+ *
+ * The command parser already unescapes `\"` inside a quoted attribute but leaves
+ * `\\` alone, and it never unescapes the `\]` that only the bracketed context
+ * needs. Decoding an attribute as if it were a context would corrupt a
+ * suggestion that legitimately contains `\]`.
+ */
+export function decodeRevisionContext(value: string): string {
+  return String(value || "").replace(/\\\]/g, "]").replace(/\\\\/g, "\\");
+}
+
+export function decodeRevisionAttribute(value: string): string {
+  return String(value || "").replace(/\\\\/g, "\\");
+}
+
 export function revisionSource(original: string, options: RevisionSourceOptions): string {
-  const allowed = new Set(["indigo", "teal", "red", "green", "yellow"]);
-  const style = allowed.has(String(options.style || "").toLowerCase())
-    ? String(options.style).toLowerCase()
-    : "indigo";
+  // Legacy colour spellings normalize to the review kind that already carried
+  // that hue, so rewriting an old revision never changes how it renders.
+  const kind = revisionKindOf(String(options.style || DEFAULT_REVISION_KIND)).id;
   const attrs = [`advice: "${escapeRevisionAttribute(options.advice)}"`];
   if (options.reason?.trim()) attrs.push(`reason: "${escapeRevisionAttribute(options.reason)}"`);
-  return `@@revision(${style}) [${escapeRevisionContext(original)}] {${attrs.join("; ")}}`;
+  return `@@revision(${kind}) [${escapeRevisionContext(original)}] {${attrs.join("; ")}}`;
+}
+
+/**
+ * Span of the `advice` value inside a source produced by `revisionSource`.
+ *
+ * The suggestion is the field an author actually came to write, and it lives
+ * inside a quoted attribute that is awkward to reach by hand. Callers use this
+ * to land the selection on it.
+ */
+export function revisionAdviceRange(source: string): { from: number; to: number } | null {
+  const marker = 'advice: "';
+  const start = source.indexOf(marker);
+  if (start < 0) return null;
+  const from = start + marker.length;
+  for (let index = from; index < source.length; index += 1) {
+    if (source[index] === "\\") { index += 1; continue; }
+    if (source[index] === '"') return { from, to: index };
+  }
+  return null;
 }

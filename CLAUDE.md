@@ -83,6 +83,12 @@ Emacs equivalents:
 Fenced `lean` and `lean4` code blocks render as **static syntax-highlighted
 snippets** in the web editor (no LSP process started from the browser).
 
+A `@@cell` with a Lean language never reaches a Jupyter kernel and never stores
+output, so its `.cell/` store is plain Lean source (`<note>.lean4.<session>.lean`)
+with `-- %% <cellId>` separators rather than notebook JSON — the same file
+`lean-mode` and the Lean LSP open. A store still written as `.ipynb` is read once
+and rewritten in the new format on the next save.
+
 ## Widget Rules
 
 All CM6 widgets that contribute vertical height must extend `MeasuredWidget`

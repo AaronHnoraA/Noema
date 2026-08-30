@@ -1828,15 +1828,23 @@
   display: inline;
   --revision-color: #8f82ff;
 }
-.cm-editor .aaronnote-revision[data-revision-style="teal"] { --revision-color: #3cc9bb; }
-.cm-editor .aaronnote-revision[data-revision-style="red"] { --revision-color: #ef6f7b; }
-.cm-editor .aaronnote-revision[data-revision-style="green"] { --revision-color: #69c786; }
-.cm-editor .aaronnote-revision[data-revision-style="yellow"] { --revision-color: #d4b34f; }
+/* Review kinds. Each keeps the hue of the colour name it replaced, so notes
+   written before kinds existed render exactly as they did. */
+.cm-editor .aaronnote-revision[data-revision-style="note"] { --revision-color: #3cc9bb; }
+.cm-editor .aaronnote-revision[data-revision-style="error"] { --revision-color: #ef6f7b; }
+.cm-editor .aaronnote-revision[data-revision-style="ok"] { --revision-color: #69c786; }
+.cm-editor .aaronnote-revision[data-revision-style="question"] { --revision-color: #d4b34f; }
 .cm-editor .aaronnote-revision-original {
-  border-bottom: 2px solid var(--revision-color);
+  border-bottom: 2px var(--revision-underline, solid) var(--revision-color);
   padding-bottom: 1px;
   cursor: help;
 }
+/* Hue alone is hard to read at two pixels, and unreadable in monochrome.
+   Each review kind also gets its own underline pattern. */
+.cm-editor .aaronnote-revision[data-revision-style="question"] { --revision-underline: dashed; }
+.cm-editor .aaronnote-revision[data-revision-style="error"] { --revision-underline: double; }
+.cm-editor .aaronnote-revision[data-revision-style="ok"] { --revision-underline: dotted; }
+.cm-editor .aaronnote-revision[data-revision-style="note"] { --revision-underline: dashed; }
 .cm-editor .aaronnote-revision-card {
   position: absolute;
   z-index: 35;

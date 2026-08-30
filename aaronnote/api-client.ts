@@ -981,6 +981,8 @@ export type LatexExportRequest = Record<string, unknown> & {
   templatePath?: string;
   engine?: string;
   vars?: Record<string, string>;
+  /** Run the optional agent polish pass over a draft that already compiles. */
+  polish?: boolean;
 };
 export type LatexExportAgentStatus = {
   type?: string;
