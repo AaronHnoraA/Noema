@@ -29,6 +29,11 @@ import {
   wikiIndexStatus,
   wikiPageDiff,
   wikiPageHistory,
+  runWikiBranchAction,
+  runWikiRemoteAction,
+  wikiRepositoryBranches,
+  wikiRepositoryDiff,
+  wikiRepositoryRemotes,
   wikiRepositoryStatus,
   restoreWikiPageVersion,
   wikiTagIndex,
@@ -650,6 +655,297 @@ describe("Wiki workspace", () => {
     const deleted = await deleteWikiPage(root, { pageId: target.id, confirm: "DELETE" }, { trashRoot });
     await expect(stat(target.file)).rejects.toMatchObject({ code: "ENOENT" });
     expect((await stat(String(deleted.trashedFile))).isFile()).toBe(true);
+  });
+
+  test("reports branch, upstream, ahead/behind and per-file state as structured status", async () => {
+    const root = await tempRoot();
+    const upstream = join(root, "origin.git");
+    await execFileAsync("git", ["init", "--bare", "--initial-branch=main", upstream]);
+    const repository = await gitRepository(root, "private", "tracked");
+    await execFileAsync("git", ["-C", repository, "config", "user.email", "test@example.com"]);
+    await execFileAsync("git", ["-C", repository, "config", "user.name", "Noema Test"]);
+    await execFileAsync("git", ["-C", repository, "checkout", "-B", "main"]);
+    await writeFile(join(repository, "kept.md"), note("kept", "Kept"));
+    await writeFile(join(repository, "renamed-from.md"), note("moved", "Moved"));
+    await execFileAsync("git", ["-C", repository, "add", "."]);
+    await execFileAsync("git", ["-C", repository, "commit", "-m", "initial"]);
+    await execFileAsync("git", ["-C", repository, "remote", "add", "origin", upstream]);
+    await execFileAsync("git", ["-C", repository, "push", "-u", "origin", "main"]);
+
+    // One commit the remote has not seen, plus a staged rename, an unstaged
+    // edit and an untracked file in the working tree.
+    await writeFile(join(repository, "ahead.md"), note("ahead", "Ahead"));
+    await execFileAsync("git", ["-C", repository, "add", "."]);
+    await execFileAsync("git", ["-C", repository, "commit", "-m", "local work"]);
+    await execFileAsync("git", ["-C", repository, "mv", "renamed-from.md", "renamed-to.md"]);
+    await writeFile(join(repository, "kept.md"), note("kept", "Kept", "edited"));
+    await writeFile(join(repository, "数学 note.md"), note("untracked", "Untracked"));
+
+    const status = await wikiRepositoryStatus(root, "private/tracked") as Record<string, any>;
+    expect(status).toMatchObject({
+      branch: "main",
+      upstream: "origin/main",
+      ahead: 1,
+      behind: 0,
+      clean: false,
+      conflictedFiles: 0,
+      source: "node-vaultgit",
+    });
+    expect(status.remote).toBe(upstream);
+    expect(status.head).toMatch(/^[0-9a-f]{40}$/);
+    const byPath = new Map(status.entries.map((entry: any) => [entry.path, entry]));
+    expect(byPath.get("renamed-to.md")).toMatchObject({ origPath: "renamed-from.md", label: "Renamed", staged: true });
+    expect(byPath.get("kept.md")).toMatchObject({ staged: false, unstaged: true, label: "Modified" });
+    expect(byPath.get("数学 note.md")).toMatchObject({ untracked: true, label: "Untracked" });
+    expect(status.changedFiles).toBe(3);
+    expect(status.status).toContain("## main...origin/main [ahead 1]");
+  });
+
+  test("derives the same structured status from a kernel-provided porcelain string", async () => {
+    const root = await tempRoot();
+    const upstream = join(root, "kernel.git");
+    await execFileAsync("git", ["init", "--bare", "--initial-branch=main", upstream]);
+    const repository = await gitRepository(root, "public", "kernel-status");
+    await execFileAsync("git", ["-C", repository, "config", "user.email", "test@example.com"]);
+    await execFileAsync("git", ["-C", repository, "config", "user.name", "Noema Test"]);
+    await execFileAsync("git", ["-C", repository, "checkout", "-B", "main"]);
+    await writeFile(join(repository, "note.md"), note("kernel", "Kernel"));
+    await execFileAsync("git", ["-C", repository, "add", "."]);
+    await execFileAsync("git", ["-C", repository, "commit", "-m", "seed"]);
+    await execFileAsync("git", ["-C", repository, "remote", "add", "origin", upstream]);
+    await execFileAsync("git", ["-C", repository, "push", "origin", "main"]);
+    await execFileAsync("git", ["-C", repository, "fetch", "origin"]);
+    await execFileAsync("git", ["-C", repository, "checkout", "-b", "work/mac"]);
+    configureWikiGitProvider({
+      owns: (path: string) => path === repository,
+      async status() {
+        return {
+          branch: "work/mac",
+          remote: "origin",
+          clean: false,
+          status: "## work/mac...origin/main [ahead 2, behind 1]\n M note.md",
+          source: "kernel-vaultgit",
+        };
+      },
+      async action() { throw new Error("unexpected action request"); },
+      async history() { throw new Error("unexpected history request"); },
+      async diff() { throw new Error("unexpected diff request"); },
+      async restore() { throw new Error("unexpected restore request"); },
+    });
+    const status = await wikiRepositoryStatus(root, "public/kernel-status") as Record<string, any>;
+    expect(status).toMatchObject({ ahead: 2, behind: 1, upstream: "origin/main", source: "kernel-vaultgit" });
+    expect(status.entries).toHaveLength(1);
+    expect(status.entries[0]).toMatchObject({ path: "note.md", unstaged: true });
+    expect(status.publishTarget).toBeUndefined();
+  });
+
+  test("names the origin publish target for a kernel-owned device branch", async () => {
+    const root = await tempRoot();
+    const upstream = join(root, "kernel-device.git");
+    await execFileAsync("git", ["init", "--bare", "--initial-branch=main", upstream]);
+    const repository = await gitRepository(root, "public", "kernel-device");
+    await execFileAsync("git", ["-C", repository, "config", "user.email", "test@example.com"]);
+    await execFileAsync("git", ["-C", repository, "config", "user.name", "Noema Test"]);
+    await execFileAsync("git", ["-C", repository, "checkout", "-B", "main"]);
+    await writeFile(join(repository, "note.md"), note("kernel", "Kernel"));
+    await execFileAsync("git", ["-C", repository, "add", "."]);
+    await execFileAsync("git", ["-C", repository, "commit", "-m", "seed"]);
+    await execFileAsync("git", ["-C", repository, "remote", "add", "origin", upstream]);
+    await execFileAsync("git", ["-C", repository, "push", "origin", "main"]);
+    await execFileAsync("git", ["-C", repository, "fetch", "origin"]);
+    await execFileAsync("git", ["-C", repository, "checkout", "-b", "noema/device-a"]);
+    await writeFile(join(repository, "later.md"), note("later", "Later"));
+    await execFileAsync("git", ["-C", repository, "add", "."]);
+    await execFileAsync("git", ["-C", repository, "commit", "-m", "device work"]);
+
+    // The kernel owns this repository, and reports a branch with no upstream —
+    // the distance that matters is still the one to the publish target.
+    configureWikiGitProvider({
+      owns: (path: string) => path === repository,
+      async status() {
+        return { branch: "noema/device-a", remote: "origin", clean: true, status: "## noema/device-a", source: "kernel-vaultgit" };
+      },
+      async action() { throw new Error("unexpected action request"); },
+      async history() { throw new Error("unexpected history request"); },
+      async diff() { throw new Error("unexpected diff request"); },
+      async restore() { throw new Error("unexpected restore request"); },
+    });
+    await expect(wikiRepositoryStatus(root, "public/kernel-device")).resolves.toMatchObject({
+      branch: "noema/device-a",
+      upstream: "",
+      publishTarget: "origin/main",
+      ahead: 1,
+      behind: 0,
+      source: "kernel-vaultgit",
+    });
+  });
+
+  test("measures a device work branch against its origin publish target", async () => {
+    const root = await tempRoot();
+    const upstream = join(root, "publish.git");
+    await execFileAsync("git", ["init", "--bare", "--initial-branch=main", upstream]);
+    const repository = await gitRepository(root, "private", "device");
+    await execFileAsync("git", ["-C", repository, "config", "user.email", "test@example.com"]);
+    await execFileAsync("git", ["-C", repository, "config", "user.name", "Noema Test"]);
+    await execFileAsync("git", ["-C", repository, "checkout", "-B", "main"]);
+    await writeFile(join(repository, "seed.md"), note("seed", "Seed"));
+    await execFileAsync("git", ["-C", repository, "add", "."]);
+    await execFileAsync("git", ["-C", repository, "commit", "-m", "seed"]);
+    await execFileAsync("git", ["-C", repository, "remote", "add", "origin", upstream]);
+    await execFileAsync("git", ["-C", repository, "push", "origin", "main"]);
+    await execFileAsync("git", ["-C", repository, "fetch", "origin"]);
+
+    // A device branch with no upstream, two commits past the publish target.
+    await execFileAsync("git", ["-C", repository, "checkout", "-b", "noema/device-a"]);
+    for (const name of ["one.md", "two.md"]) {
+      await writeFile(join(repository, name), note(name, name));
+      await execFileAsync("git", ["-C", repository, "add", "."]);
+      await execFileAsync("git", ["-C", repository, "commit", "-m", `add ${name}`]);
+    }
+
+    const status = await wikiRepositoryStatus(root, "private/device") as Record<string, any>;
+    expect(status).toMatchObject({
+      branch: "noema/device-a",
+      upstream: "",
+      publishTarget: "origin/main",
+      ahead: 2,
+      behind: 0,
+      clean: true,
+    });
+  });
+
+  test("diffs a tracked change against HEAD and an untracked file against nothing", async () => {
+    const root = await tempRoot();
+    const repository = await gitRepository(root, "private", "diffs");
+    await execFileAsync("git", ["-C", repository, "config", "user.email", "test@example.com"]);
+    await execFileAsync("git", ["-C", repository, "config", "user.name", "Noema Test"]);
+    await writeFile(join(repository, "tracked.md"), "before\n");
+    await execFileAsync("git", ["-C", repository, "add", "."]);
+    await execFileAsync("git", ["-C", repository, "commit", "-m", "initial"]);
+    await writeFile(join(repository, "tracked.md"), "after\n");
+    await writeFile(join(repository, "fresh.md"), "brand new\n");
+
+    const tracked = await wikiRepositoryDiff(root, { repositoryId: "private/diffs", path: "tracked.md" }) as Record<string, any>;
+    expect(tracked.tracked).toBe(true);
+    expect(tracked.diff).toContain("-before");
+    expect(tracked.diff).toContain("+after");
+
+    const untracked = await wikiRepositoryDiff(root, { repositoryId: "private/diffs", path: "fresh.md" }) as Record<string, any>;
+    expect(untracked.tracked).toBe(false);
+    expect(untracked.diff).toContain("+brand new");
+
+    await expect(wikiRepositoryDiff(root, { repositoryId: "private/diffs", path: "../escape.md" }))
+      .rejects.toThrow(/Invalid repository-relative path/);
+  });
+
+  test("lists branches with upstream, current, managed and other-worktree state", async () => {
+    const root = await tempRoot();
+    const repository = await gitRepository(root, "private", "branches");
+    await execFileAsync("git", ["-C", repository, "config", "user.email", "test@example.com"]);
+    await execFileAsync("git", ["-C", repository, "config", "user.name", "Noema Test"]);
+    await execFileAsync("git", ["-C", repository, "checkout", "-B", "main"]);
+    await writeFile(join(repository, "seed.md"), note("seed", "Seed"));
+    await execFileAsync("git", ["-C", repository, "add", "."]);
+    await execFileAsync("git", ["-C", repository, "commit", "-m", "seed"]);
+    await execFileAsync("git", ["-C", repository, "branch", "noema/device-a"]);
+    const parked = join(root, "parked");
+    await execFileAsync("git", ["-C", repository, "worktree", "add", "-b", "noema-integration/device-a", parked, "HEAD"]);
+
+    const listed = await wikiRepositoryBranches(root, { repositoryId: "private/branches" });
+    expect(listed.current).toBe("main");
+    const byName = new Map<string, any>(listed.branches.map((branch: any) => [String(branch.name), branch]));
+    expect(byName.get("main")).toMatchObject({ current: true, managed: false, checkedOutAt: "" });
+    expect(byName.get("noema/device-a")).toMatchObject({ current: false, managed: true });
+    expect(byName.get("noema-integration/device-a").checkedOutAt).toContain("parked");
+    // The current branch sorts first, and Noema-managed branches sort last.
+    expect(listed.branches[0].name).toBe("main");
+  });
+
+  test("guards branch switching on a clean tree and refuses worktree-held branches", async () => {
+    const root = await tempRoot();
+    const repository = await gitRepository(root, "private", "switching");
+    await execFileAsync("git", ["-C", repository, "config", "user.email", "test@example.com"]);
+    await execFileAsync("git", ["-C", repository, "config", "user.name", "Noema Test"]);
+    await execFileAsync("git", ["-C", repository, "checkout", "-B", "main"]);
+    await writeFile(join(repository, "seed.md"), note("seed", "Seed"));
+    await execFileAsync("git", ["-C", repository, "add", "."]);
+    await execFileAsync("git", ["-C", repository, "commit", "-m", "seed"]);
+    const parked = join(root, "parked");
+    await execFileAsync("git", ["-C", repository, "worktree", "add", "-b", "held", parked, "HEAD"]);
+
+    const created = await runWikiBranchAction(root, {
+      repositoryId: "private/switching",
+      action: "create",
+      name: "topic/rewrite",
+    });
+    expect(created.current).toBe("topic/rewrite");
+
+    await expect(runWikiBranchAction(root, { repositoryId: "private/switching", action: "switch", name: "held" }))
+      .rejects.toThrow(/checked out in another worktree/);
+
+    await writeFile(join(repository, "dirty.md"), note("dirty", "Dirty"));
+    await expect(runWikiBranchAction(root, { repositoryId: "private/switching", action: "switch", name: "main" }))
+      .rejects.toThrow(/Commit or checkpoint the working tree/);
+  });
+
+  test("refuses to delete the current branch, and a Noema branch without force", async () => {
+    const root = await tempRoot();
+    const repository = await gitRepository(root, "private", "deleting");
+    await execFileAsync("git", ["-C", repository, "config", "user.email", "test@example.com"]);
+    await execFileAsync("git", ["-C", repository, "config", "user.name", "Noema Test"]);
+    await execFileAsync("git", ["-C", repository, "checkout", "-B", "main"]);
+    await writeFile(join(repository, "seed.md"), note("seed", "Seed"));
+    await execFileAsync("git", ["-C", repository, "add", "."]);
+    await execFileAsync("git", ["-C", repository, "commit", "-m", "seed"]);
+    await execFileAsync("git", ["-C", repository, "branch", "noema/device-a"]);
+    await execFileAsync("git", ["-C", repository, "branch", "spare"]);
+
+    await expect(runWikiBranchAction(root, { repositoryId: "private/deleting", action: "delete", name: "main" }))
+      .rejects.toThrow(/Switch to another branch/);
+    await expect(runWikiBranchAction(root, { repositoryId: "private/deleting", action: "delete", name: "noema/device-a" }))
+      .rejects.toThrow(/maintained by Noema/);
+    await expect(runWikiBranchAction(root, {
+      repositoryId: "private/deleting", action: "delete", name: "noema/device-a", force: true,
+    })).resolves.toMatchObject({ action: "delete" });
+
+    const remaining = await runWikiBranchAction(root, { repositoryId: "private/deleting", action: "delete", name: "spare" });
+    expect(remaining.branches.map((branch: any) => branch.name)).toEqual(["main"]);
+  });
+
+  test("rejects unsafe branch names and remote URLs before they reach git", async () => {
+    const root = await tempRoot();
+    await initWikiRepository(root, "private", "validation");
+    for (const name of ["--force", "bad name", "tip..end", "refs/@{0}", "trailing/"]) {
+      await expect(runWikiBranchAction(root, { repositoryId: "private/validation", action: "create", name }))
+        .rejects.toThrow(/branch name/i);
+    }
+    await expect(runWikiRemoteAction(root, {
+      repositoryId: "private/validation", action: "set", name: "origin",
+      url: "https://user:secret@example.test/repo.git",
+    })).rejects.toThrow(/embedded credentials/);
+    await expect(runWikiRemoteAction(root, {
+      repositoryId: "private/validation", action: "set", name: "origin", url: "--upload-pack=touch",
+    })).rejects.toThrow(/must not start with/);
+    await expect(runWikiRemoteAction(root, {
+      repositoryId: "private/validation", action: "set", name: "bad name", url: "https://example.test/repo.git",
+    })).rejects.toThrow(/Invalid remote name/);
+  });
+
+  test("adds, rewrites, and removes the origin remote", async () => {
+    const root = await tempRoot();
+    await initWikiRepository(root, "private", "remotes");
+    expect((await wikiRepositoryRemotes(root, { repositoryId: "private/remotes" })).remotes).toEqual([]);
+
+    await runWikiRemoteAction(root, {
+      repositoryId: "private/remotes", action: "set", name: "origin", url: "https://example.test/first.git",
+    });
+    await expect(runWikiRemoteAction(root, {
+      repositoryId: "private/remotes", action: "set", name: "origin", url: "git@example.test:owner/second.git",
+    })).resolves.toMatchObject({
+      remotes: [{ name: "origin", fetchUrl: "git@example.test:owner/second.git" }],
+    });
+    await expect(runWikiRemoteAction(root, { repositoryId: "private/remotes", action: "remove", name: "origin" }))
+      .resolves.toMatchObject({ remotes: [] });
   });
 
   test("exports a physical repository snapshot with a portable manifest", async () => {

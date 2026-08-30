@@ -208,6 +208,11 @@ export function adoptWikiRepository(root: string, repositoryId: string): Promise
 }>;
 export function wikiRepositoryStatus(root: string, repositoryId: string): Promise<Record<string, unknown>>;
 export function runWikiGitAction(root: string, action: string, body?: Record<string, unknown>): Promise<Record<string, unknown>>;
+export function wikiRepositoryDiff(root: string, body?: Record<string, unknown>): Promise<Record<string, unknown>>;
+export function wikiRepositoryBranches(root: string, body?: Record<string, unknown>): Promise<Record<string, any>>;
+export function runWikiBranchAction(root: string, body?: Record<string, unknown>): Promise<Record<string, any>>;
+export function wikiRepositoryRemotes(root: string, body?: Record<string, unknown>): Promise<Record<string, any>>;
+export function runWikiRemoteAction(root: string, body?: Record<string, unknown>): Promise<Record<string, any>>;
 export function createWikiPage(root: string, layout: WikiLayout, body?: Record<string, unknown>): Promise<{
   ok: true; file: string; id: string; title: string; namespace: string; qualifiedTitle: string; repositoryId: string; partition: WikiPartition;
 }>;

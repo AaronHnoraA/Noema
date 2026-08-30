@@ -3,6 +3,7 @@ const DEFAULT_STARTUP_MS = 2_000;
 const DEFAULT_PERIODIC_MS = 24 * 60 * 60_000;
 const DEFAULT_PERIODIC_JITTER_MS = 10 * 60_000;
 const DEFAULT_BUSY_RETRY_MS = 5_000;
+const DEFAULT_MAX_CONSECUTIVE_FAILURES = 3;
 
 function timerDelay(value, fallback) {
   const number = Number(value);
@@ -20,13 +21,17 @@ function timerDelay(value, fallback) {
  */
 export function createWikiAutoSync(options = {}) {
   if (typeof options.sync !== "function") throw new TypeError("Wiki auto sync requires a sync function");
-  const debounceMs = timerDelay(options.debounceMs, DEFAULT_DEBOUNCE_MS);
+  let debounceMs = timerDelay(options.debounceMs, DEFAULT_DEBOUNCE_MS);
   const startupMs = timerDelay(options.startupMs, DEFAULT_STARTUP_MS);
   const syncOnStart = options.syncOnStart !== false;
-  const periodicMs = timerDelay(options.periodicMs, DEFAULT_PERIODIC_MS);
+  let periodicMs = timerDelay(options.periodicMs, DEFAULT_PERIODIC_MS);
   const periodicJitterMs = timerDelay(options.periodicJitterMs, DEFAULT_PERIODIC_JITTER_MS);
   const busyRetryMs = timerDelay(options.busyRetryMs, DEFAULT_BUSY_RETRY_MS);
   const maxConcurrency = Math.max(1, Math.floor(Number(options.maxConcurrency) || 2));
+  const maxConsecutiveFailures = Math.max(
+    1,
+    Math.floor(Number(options.maxConsecutiveFailures) || DEFAULT_MAX_CONSECUTIVE_FAILURES),
+  );
   const known = new Set();
   const pending = new Map();
   const active = new Map();
@@ -34,10 +39,46 @@ export function createWikiAutoSync(options = {}) {
   const rerun = new Set();
   const blocked = new Set();
   const blockedDirty = new Set();
+  const failures = new Map();
+  const failureBlocked = new Set();
   const batchFailures = new Map();
   let periodicTimer = null;
   let batchReportTimer = null;
   let accepting = true;
+
+  // A repository that keeps failing the same way will keep failing: a laptop
+  // away from the network, a wedged worktree, a bad credential.  Retrying it on
+  // every edit costs battery and produces nothing, so each repository gets a
+  // small budget of consecutive identical failures and is then parked.  Later
+  // edits are still remembered, the daily pass hands back a fresh budget, and an
+  // explicit sync clears it at once — no new timer, no polling.
+  function failureSignature(result, error) {
+    if (error) return `thrown:${String(error?.message || error).slice(0, 200)}`;
+    if (!result || result.phase === "conflicted") return "";
+    const kind = String(result.errorKind || "");
+    if (kind === "busy") return "";
+    const detail = String(result.error || "").trim();
+    if (!detail) return "";
+    return `${kind || "error"}:${detail.slice(0, 200)}`;
+  }
+
+  function recordFailure(repositoryId, signature) {
+    const previous = failures.get(repositoryId);
+    const count = previous?.signature === signature ? previous.count + 1 : 1;
+    failures.set(repositoryId, { count, signature });
+    if (count < maxConsecutiveFailures) return false;
+    blocked.add(repositoryId);
+    failureBlocked.add(repositoryId);
+    clearPending(repositoryId);
+    waiting.delete(repositoryId);
+    options.onExhausted?.(repositoryId, { attempts: count, signature });
+    return true;
+  }
+
+  function clearFailureBudget(repositoryId) {
+    failures.delete(repositoryId);
+    failureBlocked.delete(repositoryId);
+  }
 
   function recordBatchFailure(repositoryId, error) {
     batchFailures.set(repositoryId, String(error?.message || error || "Git synchronization failed"));
@@ -71,7 +112,14 @@ export function createWikiAutoSync(options = {}) {
     periodicTimer = setTimeout(() => {
       periodicTimer = null;
       // A periodic pass is authoritative: it flushes locally dirty repos and
-      // also fetches remote-only work for clean repos.
+      // also fetches remote-only work for clean repos.  It is also the one
+      // moment a repository parked by the failure budget gets another chance —
+      // a conflict still waits for the user.
+      for (const repositoryId of failureBlocked) {
+        blocked.delete(repositoryId);
+        failures.delete(repositoryId);
+      }
+      failureBlocked.clear();
       for (const repositoryId of known) schedule(repositoryId, 0, true);
       scheduleNextPeriodicSync();
     }, Math.max(0, periodicMs + jitter));
@@ -130,6 +178,9 @@ export function createWikiAutoSync(options = {}) {
           blocked.delete(repositoryId);
           blockedDirty.delete(repositoryId);
         }
+        const signature = failureSignature(result, null);
+        if (signature) recordFailure(repositoryId, signature);
+        else clearFailureBudget(repositoryId);
         if (result?.retryable === true && !blocked.has(repositoryId)) {
           retryDelayMs = timerDelay(result.retryAfterMs, busyRetryMs);
         }
@@ -141,6 +192,7 @@ export function createWikiAutoSync(options = {}) {
       .catch((error) => {
         options.onError?.(repositoryId, error);
         recordBatchFailure(repositoryId, error);
+        recordFailure(repositoryId, failureSignature(null, error));
         return null;
       });
     const tracked = task.finally(() => {
@@ -175,6 +227,7 @@ export function createWikiAutoSync(options = {}) {
     const id = String(repositoryId || "");
     blocked.delete(id);
     blockedDirty.delete(id);
+    clearFailureBudget(id);
     schedule(id, timerDelay(delayMs, busyRetryMs), true);
   }
 
@@ -190,6 +243,7 @@ export function createWikiAutoSync(options = {}) {
     const id = String(repositoryId || "");
     const wasDirty = blockedDirty.delete(id);
     blocked.delete(id);
+    clearFailureBudget(id);
     if (immediate || wasDirty) schedule(id, immediate ? 0 : debounceMs, true);
   }
 
@@ -214,6 +268,7 @@ export function createWikiAutoSync(options = {}) {
     known.add(id);
     blocked.delete(id);
     blockedDirty.delete(id);
+    clearFailureBudget(id);
     cancel(id);
     while (active.size >= maxConcurrency && !active.has(id)) {
       await Promise.race([...active.values()]);
@@ -249,6 +304,18 @@ export function createWikiAutoSync(options = {}) {
     reportBatchFailures();
   }
 
+  // The cadence is a user setting now, so it can change while the scheduler is
+  // running.  Re-arm the periodic timer against the new interval instead of
+  // waiting out the old one.
+  function reconfigure({ debounceMs: nextDebounce, periodicMs: nextPeriodic } = {}) {
+    if (nextDebounce !== undefined) debounceMs = timerDelay(nextDebounce, debounceMs);
+    if (nextPeriodic === undefined || timerDelay(nextPeriodic, periodicMs) === periodicMs) return;
+    periodicMs = timerDelay(nextPeriodic, periodicMs);
+    if (periodicTimer) clearTimeout(periodicTimer);
+    periodicTimer = null;
+    scheduleNextPeriodicSync();
+  }
+
   return {
     mark,
     cancel,
@@ -257,6 +324,7 @@ export function createWikiAutoSync(options = {}) {
     resume,
     start,
     syncNow,
+    reconfigure,
     close,
     snapshot() {
       return {
@@ -267,6 +335,7 @@ export function createWikiAutoSync(options = {}) {
         rerun: [...rerun],
         blocked: [...blocked],
         blockedDirty: [...blockedDirty],
+        failureBlocked: [...failureBlocked],
       };
     },
   };

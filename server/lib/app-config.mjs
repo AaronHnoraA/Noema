@@ -10,7 +10,12 @@ import {
   validNoemaAppThemeId,
 } from "../../shared/app-themes.mjs";
 
-export const NOEMA_APP_CONFIG_SCHEMA_VERSION = 3;
+export const NOEMA_APP_CONFIG_SCHEMA_VERSION = 4;
+
+// A sync pass talks to every remote, so the floor keeps a mistyped value from
+// turning the cadence into a polling loop.
+export const MIN_SYNC_INTERVAL_MINUTES = 5;
+export const MAX_SYNC_INTERVAL_MINUTES = 7 * 24 * 60;
 
 const DEFAULT_CONFIG = Object.freeze({
   schemaVersion: NOEMA_APP_CONFIG_SCHEMA_VERSION,
@@ -20,6 +25,8 @@ const DEFAULT_CONFIG = Object.freeze({
     layout: "legacy",
   }),
   wiki: Object.freeze({
+    // Git cadence used to be reachable only through NOEMA_WIKI_AUTO_SYNC.
+    sync: Object.freeze({ automatic: true, intervalMinutes: 24 * 60 }),
     creation: Object.freeze({
       activeProfile: "default",
       profiles: Object.freeze([
@@ -58,6 +65,7 @@ function cloneDefaults() {
     appearance: { ...DEFAULT_CONFIG.appearance },
     workspace: { ...DEFAULT_CONFIG.workspace },
     wiki: {
+      sync: { ...DEFAULT_CONFIG.wiki.sync },
       creation: {
         activeProfile: DEFAULT_CONFIG.wiki.creation.activeProfile,
         profiles: DEFAULT_CONFIG.wiki.creation.profiles.map((profile) => ({ ...profile })),
@@ -98,7 +106,8 @@ function normalizeParsedConfig(raw) {
   const diagnostics = [];
   const source = plainObject(raw) ? raw : {};
   const schemaVersion = Number(source.schemaVersion || 1);
-  if (![1, 2, NOEMA_APP_CONFIG_SCHEMA_VERSION].includes(schemaVersion)) {
+  if (!Number.isInteger(schemaVersion) || schemaVersion < 1
+      || schemaVersion > NOEMA_APP_CONFIG_SCHEMA_VERSION) {
     diagnostics.push({
       code: "unsupported-schema",
       message: `Unsupported Noema config schemaVersion: ${String(source.schemaVersion)}`,
@@ -129,6 +138,20 @@ function normalizeParsedConfig(raw) {
     ? "wiki"
     : "legacy";
   const wikiSource = plainObject(source.wiki) ? source.wiki : {};
+  const syncSource = plainObject(wikiSource.sync) ? wikiSource.sync : {};
+  const automatic = syncSource.automatic === undefined
+    ? DEFAULT_CONFIG.wiki.sync.automatic
+    : syncSource.automatic !== false;
+  const requestedInterval = Number(syncSource.intervalMinutes);
+  const intervalMinutes = Number.isFinite(requestedInterval)
+    ? Math.min(MAX_SYNC_INTERVAL_MINUTES, Math.max(MIN_SYNC_INTERVAL_MINUTES, Math.round(requestedInterval)))
+    : DEFAULT_CONFIG.wiki.sync.intervalMinutes;
+  if (syncSource.intervalMinutes !== undefined && intervalMinutes !== requestedInterval) {
+    diagnostics.push({
+      code: "clamped-sync-interval",
+      message: `Git sync interval must be ${MIN_SYNC_INTERVAL_MINUTES}–${MAX_SYNC_INTERVAL_MINUTES} minutes; using ${intervalMinutes}`,
+    });
+  }
   const creationSource = plainObject(wikiSource.creation) ? wikiSource.creation : {};
   const rawProfiles = Array.isArray(creationSource.profiles) ? creationSource.profiles : [];
   const profiles = rawProfiles.map((profile, index) => {
@@ -155,7 +178,7 @@ function normalizeParsedConfig(raw) {
       schemaVersion: NOEMA_APP_CONFIG_SCHEMA_VERSION,
       appearance: { theme },
       workspace: { root, layout },
-      wiki: { creation: { activeProfile, profiles } },
+      wiki: { sync: { automatic, intervalMinutes }, creation: { activeProfile, profiles } },
     },
     diagnostics,
     writable: true,
@@ -268,6 +291,10 @@ export async function ensureNoemaAppConfig(options = {}) {
         },
         wiki: {
           ...(plainObject(state.raw.wiki) ? state.raw.wiki : {}),
+          sync: {
+            ...(plainObject(state.raw.wiki?.sync) ? state.raw.wiki.sync : {}),
+            ...state.config.wiki.sync,
+          },
           creation: {
             ...(plainObject(state.raw.wiki?.creation) ? state.raw.wiki.creation : {}),
             ...state.config.wiki.creation,
@@ -326,6 +353,21 @@ export async function updateNoemaAppConfig(patch = {}, options = {}) {
       throw Object.assign(new Error("Workspace layout must be legacy or wiki"), { statusCode: 400 });
     }
     const wikiPatch = plainObject(patch.wiki) ? patch.wiki : {};
+    const syncPatch = plainObject(wikiPatch.sync) ? wikiPatch.sync : {};
+    const requestedAutomatic = Object.prototype.hasOwnProperty.call(syncPatch, "automatic")
+      ? syncPatch.automatic !== false
+      : state.config.wiki.sync.automatic;
+    const requestedInterval = Object.prototype.hasOwnProperty.call(syncPatch, "intervalMinutes")
+      ? Number(syncPatch.intervalMinutes)
+      : state.config.wiki.sync.intervalMinutes;
+    if (!Number.isFinite(requestedInterval)
+        || requestedInterval < MIN_SYNC_INTERVAL_MINUTES
+        || requestedInterval > MAX_SYNC_INTERVAL_MINUTES) {
+      throw Object.assign(
+        new Error(`Git sync interval must be between ${MIN_SYNC_INTERVAL_MINUTES} and ${MAX_SYNC_INTERVAL_MINUTES} minutes`),
+        { statusCode: 400 },
+      );
+    }
     const creationPatch = plainObject(wikiPatch.creation) ? wikiPatch.creation : {};
     const requestedProfiles = Object.prototype.hasOwnProperty.call(creationPatch, "profiles")
       ? creationPatch.profiles
@@ -337,10 +379,13 @@ export async function updateNoemaAppConfig(patch = {}, options = {}) {
       schemaVersion: NOEMA_APP_CONFIG_SCHEMA_VERSION,
       appearance: { theme: requestedTheme },
       workspace: { root: requestedRoot, layout: requestedLayout },
-      wiki: { creation: {
-        activeProfile: creationPatch.activeProfile ?? state.config.wiki.creation.activeProfile,
-        profiles: requestedProfiles,
-      } },
+      wiki: {
+        sync: { automatic: requestedAutomatic, intervalMinutes: requestedInterval },
+        creation: {
+          activeProfile: creationPatch.activeProfile ?? state.config.wiki.creation.activeProfile,
+          profiles: requestedProfiles,
+        },
+      },
     }).config.wiki;
     const rawWorkspace = plainObject(state.raw.workspace) ? state.raw.workspace : {};
     const rawWiki = plainObject(state.raw.wiki) ? state.raw.wiki : {};
@@ -358,6 +403,7 @@ export async function updateNoemaAppConfig(patch = {}, options = {}) {
       },
       wiki: {
         ...rawWiki,
+        sync: normalizedWiki.sync,
         creation: normalizedWiki.creation,
       },
     };

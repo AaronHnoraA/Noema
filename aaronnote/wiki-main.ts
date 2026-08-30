@@ -15,6 +15,7 @@ import type { GraphNode, GraphPayload } from "./types.ts";
 import { createKnowledgeSearch } from "./knowledge-search.ts";
 import { desktopPlatformLabels } from "../shared/desktop-shell.mjs";
 import { createTreeView, type NoemaTreeNode } from "../src/tree-view.ts";
+import { createVersionControlView } from "./wiki-version-control.ts";
 
 const root = document.querySelector<HTMLElement>("#wiki-app");
 if (!root) throw new Error("Missing #wiki-app");
@@ -74,10 +75,9 @@ root.innerHTML = `
         <button type="button" data-view="files">Files <b data-count-files>0</b></button>
         <button type="button" data-view="tags">Tags</button>
         <button type="button" data-view="dependencies">Dependencies</button>
-        <button type="button" data-view="sync">Sync</button>
         <button type="button" data-view="wanted">Wanted <b data-count-wanted>0</b></button>
         <button type="button" data-view="reports">Reports <b data-count-reports>0</b></button>
-        <button type="button" data-view="repositories">Repositories <b data-count-repos>0</b></button>
+        <button type="button" data-view="sync">Version control <b data-count-repos>0</b></button>
       </nav>
       <p class="noema-wiki-layout-note"><span data-wiki-layout>Loading…</span><br>Physical files, virtual knowledge graph.</p>
       <a href="/config" class="noema-wiki-settings">Configuration</a>
@@ -206,10 +206,11 @@ root.innerHTML = `
   <dialog class="noema-wiki-dialog noema-wiki-conflict-dialog" data-conflict-dialog>
     <section>
       <header>
-        <div><p>Git merge conflict</p><h2 data-conflict-title>Resolve conflict</h2></div>
+        <div><p data-conflict-kicker>Git merge conflict</p><h2 data-conflict-title>Resolve conflict</h2></div>
         <button type="button" aria-label="Close" data-conflict-close>×</button>
       </header>
-      <div class="noema-wiki-conflict-legend"><span>Your branch</span><span>Merge result</span><span>Remote main</span></div>
+      <nav class="noema-wiki-conflict-files" data-conflict-files aria-label="Conflicting files"></nav>
+      <div class="noema-wiki-conflict-legend"><span data-conflict-legend-ours>Your branch</span><span>Merge result — edit here</span><span data-conflict-legend-theirs>Remote main</span></div>
       <div data-conflict-editor></div>
       <p data-conflict-message></p>
       <footer>
@@ -248,6 +249,7 @@ const pageDialog = root.querySelector<HTMLDialogElement>("[data-page-dialog]")!;
 const pageForm = root.querySelector<HTMLFormElement>("[data-page-form]")!;
 const conflictDialog = root.querySelector<HTMLDialogElement>("[data-conflict-dialog]")!;
 const conflictEditor = root.querySelector<HTMLElement>("[data-conflict-editor]")!;
+const conflictFiles = root.querySelector<HTMLElement>("[data-conflict-files]")!;
 const conflictMessage = root.querySelector<HTMLElement>("[data-conflict-message]")!;
 const gitDialog = root.querySelector<HTMLDialogElement>("[data-git-dialog]")!;
 const gitFrame = root.querySelector<HTMLIFrameElement>("[data-git-frame]")!;
@@ -265,6 +267,7 @@ let activeConflict: {
   oursLabel?: string;
   theirsLabel?: string;
   editor?: HTMLElement & { ctr?: string };
+  draft?: string;
 } | null = null;
 type WikiConflictSummary = {
   path: string;
@@ -425,7 +428,7 @@ function routeForView(view: string): string {
 
 function navigateTo(view: string, query = "", options: { history?: boolean } = {}): void {
   const previous = activeView;
-  activeView = view;
+  activeView = serverReaderMode && (view === "sync" || view === "repositories") ? "home" : view;
   if (view === "home") searchEl.value = "";
   else if (query) searchEl.value = query;
   closePanels();
@@ -1209,134 +1212,58 @@ function renderReports(): void {
   }
 }
 
-async function repositoryCard(repository: WikiRepository): Promise<HTMLElement> {
-  const card = document.createElement("article");
-  card.className = "noema-wiki-repository";
-  const head = document.createElement("div");
-  const heading = document.createElement("h2");
-  heading.textContent = repository.name;
-  const path = document.createElement("p");
-  path.textContent = repository.id;
-  head.append(heading, path);
-  const status = document.createElement("pre");
-  status.textContent = "Loading sync state…";
-  const actions = document.createElement("div");
-  const statusButton = button("Status");
-  const checkpoint = button("Local commit");
-  const sync = button("Commit & sync", "is-primary");
-  const advanced = button("Advanced Git");
-  const adopt = repository.identityStatus === "managed" ? null : button("Establish shared identity");
-  statusButton.addEventListener("click", async () => {
-    status.textContent = "Loading…";
+const versionControl = createVersionControlView({
+  api: api.wiki,
+  repositories: () => index?.repositories || [],
+  setStatus,
+  reloadIndex: () => load(true),
+  openConflict: (repositoryId, path) => { void openConflict(repositoryId, path); },
+  openGitUi: async (repositoryId) => {
     try {
-      const result = await api.wiki.repositoryStatus(repository.id) as { status?: string; branch?: string; clean?: boolean };
-      status.textContent = `${result.branch || "detached"} · ${result.clean ? "clean" : "changes"}\n${result.status || ""}`.trim();
-    } catch (error) {
-      status.textContent = error instanceof Error ? error.message : String(error);
-    }
-  });
-  checkpoint.addEventListener("click", async () => {
-    const message = window.prompt("Local commit message (optional)", "");
-    if (message == null) return;
-    checkpoint.disabled = true;
-    try {
-      const result = await api.wiki.checkpoint(repository.id, message.trim());
-      status.textContent = JSON.stringify(result, null, 2);
-    } catch (error) {
-      status.textContent = error instanceof Error ? error.message : String(error);
-    } finally {
-      checkpoint.disabled = false;
-    }
-  });
-  sync.addEventListener("click", async () => {
-    sync.disabled = true;
-    status.textContent = "Committing local changes, fetching, merging, and pushing…";
-    try {
-      const result = await api.wiki.sync(repository.id);
-      renderSyncState(result, status, actions, repository);
-    } catch (error) {
-      status.textContent = error instanceof Error ? error.message : String(error);
-    } finally {
-      sync.disabled = false;
-    }
-  });
-  advanced.addEventListener("click", async () => {
-    advanced.disabled = true;
-    try {
-      const result = await api.wiki.gitUi(repository.id);
+      const result = await api.wiki.gitUi(repositoryId);
       if (!result.url) throw new Error("ungit did not return an embedded URL");
       gitUrl = result.url;
-      gitStatus.textContent = `Loading ${repository.id}…`;
+      gitStatus.textContent = `Loading ${repositoryId}…`;
       gitFrame.src = result.url;
       gitDialog.showModal();
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error), true);
-    } finally {
-      advanced.disabled = false;
     }
-  });
-  adopt?.addEventListener("click", async () => {
-    adopt.disabled = true;
-    try {
-      await api.wiki.adoptRepository(repository.id);
-      await load(true);
-    } catch (error) {
-      status.textContent = error instanceof Error ? error.message : String(error);
-      adopt.disabled = false;
-    }
-  });
-  actions.append(statusButton, checkpoint, sync, advanced);
-  if (adopt) actions.prepend(adopt);
-  card.append(head, actions, status);
-  try {
-    const state = await api.wiki.syncStatus(repository.id) as WikiSyncState;
-    renderSyncState(state, status, actions, repository);
-  } catch (error) {
-    status.textContent = error instanceof Error ? error.message : String(error);
-  }
-  return card;
-}
+  },
+  rememberSyncState,
+  addRepository: () => repoDialog.showModal(),
+  confirm: (message) => window.confirm(message),
+});
 
-function renderSyncState(
-  state: WikiSyncState,
-  status: HTMLElement,
-  actions: HTMLElement,
-  repository: WikiRepository,
-): void {
-  rememberSyncState(repository.id, state);
-  status.textContent = [
-    `${state.phase || "idle"} · ${state.branch || "branch pending"}`,
-    state.checkpointedAt
-      ? state.committed
-        ? `Committed ${state.changedFiles || 0} changed file${state.changedFiles === 1 ? "" : "s"}`
-        : "No local changes to commit"
-      : "",
-    state.localOnly ? "Local commit only (no origin remote)" : "",
-    state.phase === "applying" && state.publishedHead ? "Remote published; safely applying the result to this device" : "",
-    state.automatic ? "Automatic startup and daily batch sync enabled" : "",
-    state.lastSyncedAt ? `Last synced ${state.lastSyncedAt}` : "",
-    state.nextRetryAt ? `Next automatic retry ${state.nextRetryAt}` : "",
-    state.actionRequired || "",
-    ...(state.recoveryArtifacts || []).map((artifact) => (
-      `Recovered ${artifact.files.length} working file${artifact.files.length === 1 ? "" : "s"} to ${artifact.path}`
-    )),
-    state.message || "",
-    state.error || "",
-  ].filter(Boolean).join("\n");
-  actions.querySelectorAll("[data-conflict-path]").forEach((item) => item.remove());
-  for (const conflict of state.conflicts || []) {
-    const resolve = button(`Resolve ${conflict.path}`, "is-danger");
-    resolve.dataset.conflictPath = conflict.path;
-    resolve.addEventListener("click", () => {
-      void openConflict(repository.id, conflict.path);
+// Git leaves markers only where it could not decide; anything still carrying
+// them is an unfinished resolution, not a merge result.
+const CONFLICT_MARKER = /^(?:<{7}|={7}|>{7}|\|{7})(?: |$)/m;
+
+function renderConflictFileList(repositoryId: string, path: string, conflicts: Array<{ path: string }>): void {
+  const files = conflicts.length ? conflicts : [{ path }];
+  const index = Math.max(0, files.findIndex((conflict) => conflict.path === path));
+  root.querySelector<HTMLElement>("[data-conflict-kicker]")!.textContent = files.length > 1
+    ? `Git merge conflict · file ${index + 1} of ${files.length}`
+    : "Git merge conflict";
+  conflictFiles.replaceChildren();
+  conflictFiles.hidden = files.length < 2;
+  for (const conflict of files) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.textContent = conflict.path;
+    item.title = conflict.path;
+    item.classList.toggle("is-current", conflict.path === path);
+    item.addEventListener("click", () => {
+      if (conflict.path === path) return;
+      void openConflict(repositoryId, conflict.path);
     });
-    actions.append(resolve);
+    conflictFiles.append(item);
   }
 }
 
 async function openConflict(repositoryId: string, path: string): Promise<void> {
   conflictEditor.replaceChildren();
-  conflictMessage.textContent = "Loading Base / your branch / remote main…";
+  conflictMessage.textContent = "Loading your branch, git's merge draft, and remote main…";
   root.querySelector<HTMLElement>("[data-conflict-title]")!.textContent = path;
   if (!conflictDialog.open) conflictDialog.showModal();
   try {
@@ -1345,6 +1272,8 @@ async function openConflict(repositoryId: string, path: string): Promise<void> {
       base?: string;
       ours?: string;
       theirs?: string;
+      merged?: string;
+      conflicts?: Array<{ path: string }>;
       oursLabel?: string;
       theirsLabel?: string;
     };
@@ -1354,6 +1283,9 @@ async function openConflict(repositoryId: string, path: string): Promise<void> {
     root.querySelector<HTMLButtonElement>("[data-conflict-theirs]")!.textContent = `Use ${theirsLabel}`;
     root.querySelector<HTMLButtonElement>("[data-conflict-all-ours]")!.textContent = `Keep ${oursLabel} for all`;
     root.querySelector<HTMLButtonElement>("[data-conflict-all-theirs]")!.textContent = `Use ${theirsLabel} for all`;
+    root.querySelector<HTMLElement>("[data-conflict-legend-ours]")!.textContent = oursLabel;
+    root.querySelector<HTMLElement>("[data-conflict-legend-theirs]")!.textContent = theirsLabel;
+    renderConflictFileList(repositoryId, path, conflict.conflicts || pendingConflicts.get(repositoryId) || []);
     activeConflict = { repositoryId, path, kind: String(conflict.kind || "text"), oursLabel, theirsLabel };
     if (activeConflict.kind === "text") {
       const editor = document.createElement("mis-merge3") as HTMLElement & {
@@ -1364,15 +1296,24 @@ async function openConflict(repositoryId: string, path: string): Promise<void> {
         rhsEditable: boolean;
         wrapLines: boolean;
       };
+      // Seed the editable center with git's own merge output rather than the
+      // merge base: every hunk the two sides did not both touch is already
+      // merged there, and starting from the ancestor would silently drop it.
+      const draft = typeof conflict.merged === "string" && conflict.merged
+        ? conflict.merged
+        : String(conflict.base || "");
       editor.lhs = String(conflict.ours || "");
-      editor.ctr = String(conflict.base || "");
+      editor.ctr = draft;
       editor.rhs = String(conflict.theirs || "");
       editor.lhsEditable = false;
       editor.rhsEditable = false;
       editor.wrapLines = true;
       activeConflict.editor = editor;
+      activeConflict.draft = draft;
       conflictEditor.append(editor);
-      conflictMessage.textContent = `Left: ${oursLabel} · Right: ${theirsLabel}. Review the center result before saving.`;
+      conflictMessage.textContent = CONFLICT_MARKER.test(draft)
+        ? `Left: ${oursLabel} · Right: ${theirsLabel}. The center pane is git's merge with its conflict markers; remove them to finish.`
+        : `Left: ${oursLabel} · Right: ${theirsLabel}. Review the center result before saving.`;
       root.querySelector<HTMLButtonElement>("[data-conflict-save]")!.hidden = false;
     } else {
       conflictEditor.append(emptyState("Binary conflict", `Choose ${oursLabel}, ${theirsLabel}, or delete it. Binary content cannot be merged by blocks.`));
@@ -1393,7 +1334,20 @@ async function finishConflict(choice: "result" | "ours" | "theirs" | "delete"): 
       path: activeConflict.path,
       choice,
     };
-    if (choice === "result") body.result = activeConflict.editor?.ctr || "";
+    if (choice === "result") {
+      const editor = activeConflict.editor;
+      if (!editor || typeof editor.ctr !== "string") {
+        conflictMessage.textContent = "The merge editor did not load; choose one side, or reopen this conflict.";
+        return;
+      }
+      if (CONFLICT_MARKER.test(editor.ctr)) {
+        conflictMessage.textContent = "The merge result still contains conflict markers. Remove them, or pick one side.";
+        return;
+      }
+      if (!editor.ctr.trim() && activeConflict.draft?.trim()
+          && !window.confirm(`Save ${activeConflict.path} as an empty file?`)) return;
+      body.result = editor.ctr;
+    }
     const state = await api.wiki.resolveConflict(body) as WikiSyncState;
     rememberSyncState(activeConflict.repositoryId, state);
     if (state.phase === "conflicted" && state.conflicts?.length) {
@@ -1419,6 +1373,7 @@ async function finishAllConflicts(choice: "ours" | "theirs"): Promise<void> {
   conflictMessage.textContent = `Resolving every remaining conflict with ${label}…`;
   try {
     let state = await api.wiki.syncStatus(repositoryId) as WikiSyncState;
+    const total = state.conflicts?.length || 0;
     const attempted = new Set<string>();
     while (state.phase === "conflicted" && state.conflicts?.length) {
       const path = state.conflicts[0]!.path;
@@ -1426,12 +1381,14 @@ async function finishAllConflicts(choice: "ours" | "theirs"): Promise<void> {
         throw new Error(`Conflict resolver made no progress on ${path}`);
       }
       attempted.add(path);
+      conflictMessage.textContent = `Resolving ${attempted.size} of ${total} with ${label} — ${path}`;
       state = await api.wiki.resolveConflict({
         repositoryId,
         path,
         choice,
       }) as WikiSyncState;
       rememberSyncState(repositoryId, state);
+      renderConflictFileList(repositoryId, state.conflicts?.[0]?.path || path, state.conflicts || []);
     }
     conflictDialog.close();
     activeConflict = null;
@@ -1442,24 +1399,22 @@ async function finishAllConflicts(choice: "ours" | "theirs"): Promise<void> {
   }
 }
 
-async function renderRepositories(): Promise<void> {
-  const toolbar = document.createElement("div");
-  toolbar.className = "noema-wiki-repository-toolbar";
-  const add = button("Add repository", "is-primary");
-  add.addEventListener("click", () => repoDialog.showModal());
-  toolbar.append(add);
-  viewEl.append(toolbar);
-  const list = document.createElement("div");
-  list.className = "noema-wiki-repository-list";
-  viewEl.append(list);
-  for (const repository of index?.repositories || []) list.append(await repositoryCard(repository));
-  if (!index?.repositories.length) list.append(emptyState("No indexed repositories", "Add a Git repository or switch to Legacy layout in Configuration."));
+function renderVersionControl(): void {
+  if (serverReaderMode) {
+    viewEl.append(emptyState(
+      "Version control is local",
+      "The published reader mirrors these repositories read-only; commits, merges, and syncs run in the Noema app.",
+    ));
+    return;
+  }
+  versionControl.mount(viewEl);
 }
 
 function render(): void {
   if (!index) return;
   activeGraph?.destroy();
   activeGraph = null;
+  versionControl.destroy();
   root.dataset.wikiView = activeView;
   root.querySelector<HTMLElement>("[data-wiki-layout]")!.textContent = `${index.layout} layout`;
   root.querySelector<HTMLElement>("[data-wiki-root]")!.textContent = activeView === "home"
@@ -1488,10 +1443,10 @@ function render(): void {
     tags: serverReaderMode ? "Tags" : "Tag management",
     dependencies: "Dependencies",
     graph: "Knowledge graph",
-    sync: "Local and Git sync",
+    sync: "Version control",
     wanted: "Wanted pages",
     reports: "Reports",
-    repositories: "Repositories",
+    repositories: "Version control",
   };
   titleEl.textContent = labels[activeView] || "Wiki";
   kickerEl.textContent = activeView === "home" ? "Noema Wiki" : (serverReaderMode ? "Public knowledge" : "Workspace knowledge");
@@ -1500,7 +1455,7 @@ function render(): void {
   else if (activeView === "graph") renderGraph();
   else if (activeView === "wanted") renderWanted();
   else if (activeView === "reports") renderReports();
-  else if (activeView === "repositories" || activeView === "sync") void renderRepositories();
+  else if (activeView === "repositories" || activeView === "sync") renderVersionControl();
   else if (activeView === "folders") renderFolders();
   else if (activeView === "namespaces") renderNamespaces();
   else if (activeView === "files") renderFiles();
@@ -1563,7 +1518,7 @@ async function load(refresh = false, options: { silent?: boolean } = {}): Promis
 function showNewPage(title = "", requestedNamespace = ""): void {
   if (serverReaderMode) return;
   if (!index?.repositories.length) {
-    activeView = "repositories";
+    activeView = "sync";
     render();
     setStatus("Create or clone a repository before creating a page", true);
     return;
@@ -1894,7 +1849,7 @@ window.addEventListener("aaronnote:command", (event) => {
     } else if (detail.phase === "conflicted") {
       setStatus(`${detail.repositoryId || "Repository"} needs conflict resolution`, true);
     }
-    if (activeView === "repositories" || activeView === "sync") render();
+    if (detail.repositoryId) versionControl.applySyncState(detail.repositoryId, detail as Partial<WikiSyncState> & { live?: boolean });
   } else if (detail?.command === "wiki-sync-batch-failed") {
     setStatus(detail.message || "Git sync needs attention; review Wiki repositories for recovery details.", true);
   }
@@ -2060,7 +2015,8 @@ window.addEventListener("beforeunload", () => {
 const initialQuery = new URLSearchParams(location.search);
 searchEl.value = initialQuery.get("q") || "";
 const initialView = initialQuery.get("view") || "home";
-if (["home", "pages", "recent", "folders", "namespaces", "files", "tags", "dependencies", "graph", "sync", "wanted", "reports", "repositories"].includes(initialView)) {
+if (["home", "pages", "recent", "folders", "namespaces", "files", "tags", "dependencies", "graph", "sync", "wanted", "reports", "repositories"].includes(initialView)
+    && !(serverReaderMode && (initialView === "sync" || initialView === "repositories"))) {
   activeView = initialView;
 }
 window.addEventListener("popstate", () => {

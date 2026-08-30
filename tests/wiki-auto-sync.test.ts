@@ -320,4 +320,179 @@ describe("Wiki automatic synchronization", () => {
     await scheduler.close({ flush: true });
     expect(actions).toEqual(["checkpoint:private/research"]);
   });
+  test("re-arms the periodic pass against a new interval without waiting out the old one", async () => {
+    vi.useFakeTimers();
+    const calls: string[] = [];
+    const scheduler = createWikiAutoSync({
+      syncOnStart: false,
+      debounceMs: 10_000,
+      periodicMs: 10_000,
+      periodicJitterMs: 0,
+      async sync(repositoryId) {
+        calls.push(repositoryId);
+        return { phase: "idle" };
+      },
+    });
+
+    scheduler.start(["public/README"]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(calls).toHaveLength(0);
+
+    scheduler.reconfigure({ debounceMs: 100, periodicMs: 100 });
+    // The old 10s timer is discarded rather than left to fire first.  The
+    // periodic pass queues a zero-delay run, so it lands one tick later.
+    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toEqual(["public/README"]);
+    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toHaveLength(2);
+
+    // A debounce change takes effect on the next mark.
+    scheduler.reconfigure({ debounceMs: 20 });
+    scheduler.mark("public/README");
+    await vi.advanceTimersByTimeAsync(20);
+    expect(calls).toHaveLength(3);
+    expect(calls.at(-1)).toBe("public/README");
+    await scheduler.close();
+  });
+
+  test("ignores a reconfigure that does not change the interval", async () => {
+    vi.useFakeTimers();
+    const calls: string[] = [];
+    const scheduler = createWikiAutoSync({
+      syncOnStart: false,
+      periodicMs: 100,
+      periodicJitterMs: 0,
+      async sync(repositoryId) {
+        calls.push(repositoryId);
+        return { phase: "idle" };
+      },
+    });
+    scheduler.start(["public/README"]);
+    await vi.advanceTimersByTimeAsync(60);
+    scheduler.reconfigure({ periodicMs: 100 });
+    // Re-arming here would push the pass out to 160ms instead of 100ms.
+    await vi.advanceTimersByTimeAsync(40);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toEqual(["public/README"]);
+    await scheduler.close();
+  });
+  test("parks a repository after a bounded run of identical failures instead of retrying forever", async () => {
+    vi.useFakeTimers();
+    let calls = 0;
+    const exhausted: Array<{ repositoryId: string; attempts: number }> = [];
+    const scheduler = createWikiAutoSync({
+      debounceMs: 10,
+      periodicMs: 0,
+      maxConsecutiveFailures: 3,
+      async sync() {
+        calls += 1;
+        return { phase: "waiting", error: "offline", errorKind: "network", retryable: true, retryAfterMs: 20 };
+      },
+      onExhausted(repositoryId, detail) {
+        exhausted.push({ repositoryId, attempts: detail.attempts });
+      },
+    });
+
+    scheduler.mark("public/AI");
+    await vi.advanceTimersByTimeAsync(10);
+    expect(calls).toBe(1);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(calls).toBe(2);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(calls).toBe(3);
+
+    // Budget spent: no further retry is scheduled, and later edits are
+    // remembered rather than re-running the same failure.
+    expect(exhausted).toEqual([{ repositoryId: "public/AI", attempts: 3 }]);
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(calls).toBe(3);
+    scheduler.mark("public/AI");
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(calls).toBe(3);
+    expect(scheduler.snapshot().failureBlocked).toEqual(["public/AI"]);
+    expect(scheduler.snapshot().blockedDirty).toEqual(["public/AI"]);
+    await scheduler.close();
+  });
+
+  test("counts a thrown sync the same way and stops re-running it on every edit", async () => {
+    vi.useFakeTimers();
+    let calls = 0;
+    const scheduler = createWikiAutoSync({
+      debounceMs: 10,
+      periodicMs: 0,
+      maxConsecutiveFailures: 2,
+      async sync() {
+        calls += 1;
+        throw new Error("fatal: 'noema-integration/device' is already used by worktree at '/x'");
+      },
+    });
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      scheduler.mark("public/AI");
+      await vi.advanceTimersByTimeAsync(10);
+    }
+    expect(calls).toBe(2);
+    expect(scheduler.snapshot().failureBlocked).toEqual(["public/AI"]);
+    await scheduler.close();
+  });
+
+  test("a different failure restarts the budget, and success clears it", async () => {
+    vi.useFakeTimers();
+    const results = [
+      { phase: "waiting", error: "offline", errorKind: "network", retryable: true },
+      { phase: "waiting", error: "host unreachable", errorKind: "network", retryable: true },
+      { phase: "idle" },
+      { phase: "waiting", error: "offline", errorKind: "network", retryable: true },
+    ];
+    let calls = 0;
+    const scheduler = createWikiAutoSync({
+      debounceMs: 10,
+      periodicMs: 0,
+      maxConsecutiveFailures: 2,
+      async sync() {
+        return results[calls++] ?? { phase: "idle" };
+      },
+    });
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      scheduler.mark("public/AI");
+      await vi.advanceTimersByTimeAsync(10);
+    }
+    expect(calls).toBe(4);
+    expect(scheduler.snapshot().failureBlocked).toEqual([]);
+    await scheduler.close();
+  });
+
+  test("the daily pass hands a parked repository a fresh budget, a conflict still waits for the user", async () => {
+    vi.useFakeTimers();
+    const calls: string[] = [];
+    const scheduler = createWikiAutoSync({
+      syncOnStart: false,
+      debounceMs: 10,
+      periodicMs: 1_000,
+      periodicJitterMs: 0,
+      maxConsecutiveFailures: 1,
+      async sync(repositoryId) {
+        calls.push(repositoryId);
+        return repositoryId === "public/AI"
+          ? { phase: "waiting", error: "offline", errorKind: "network", retryable: true }
+          : { phase: "conflicted" };
+      },
+    });
+
+    scheduler.start(["public/AI", "private/research"]);
+    scheduler.mark("public/AI");
+    scheduler.mark("private/research");
+    await vi.advanceTimersByTimeAsync(10);
+    expect(calls.sort()).toEqual(["private/research", "public/AI"]);
+    expect(scheduler.snapshot().failureBlocked).toEqual(["public/AI"]);
+
+    calls.length = 0;
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toEqual(["public/AI"]);
+    await scheduler.close();
+  });
 });

@@ -186,6 +186,11 @@ import {
   wikiLayout,
   wikiPageDiff,
   wikiPageHistory,
+  runWikiBranchAction,
+  runWikiRemoteAction,
+  wikiRepositoryBranches,
+  wikiRepositoryDiff,
+  wikiRepositoryRemotes,
   wikiRepositoryStatus,
   restoreWikiPageVersion,
   configureWikiGitProvider,
@@ -195,6 +200,7 @@ import {
   checkpointWikiRepository,
   configureWikiSyncGitProvider,
   defaultWikiSyncIntervalMs,
+  onWikiSyncStateChange,
   readWikiConflict,
   readWikiSyncState,
   resolveWikiConflict,
@@ -893,9 +899,17 @@ function wikiRepositoryIdForFile(file) {
   return `${rel[0]}/${rel[1]}`;
 }
 
-const wikiAutoSyncEnabled = hostMode !== "server"
-  && workspaceLayout === "wiki"
-  && process.env.NOEMA_WIKI_AUTO_SYNC !== "0";
+// Cadence is a user setting (Configuration → Git synchronization).  The
+// environment variable stays as the diagnostic kill switch it has always been:
+// when it is set to 0 it wins over the stored policy.
+const wikiAutoSyncForcedOff = process.env.NOEMA_WIKI_AUTO_SYNC === "0";
+const wikiAutoSyncSupported = hostMode !== "server" && workspaceLayout === "wiki";
+let wikiSyncPolicy = {
+  automatic: initialAppConfig.config?.wiki?.sync?.automatic !== false,
+  intervalMinutes: Number(initialAppConfig.config?.wiki?.sync?.intervalMinutes)
+    || defaultWikiSyncIntervalMs() / 60_000,
+};
+let wikiAutoSyncEnabled = wikiAutoSyncSupported && !wikiAutoSyncForcedOff && wikiSyncPolicy.automatic;
 const wikiFullRefreshChance = wikiFullRefreshProbability(
   process.env.NOEMA_WIKI_FULL_REFRESH_PROBABILITY,
 );
@@ -956,6 +970,23 @@ function applyWikiSyncResult(repositoryId, result, { notifyError = true } = {}) 
   return result;
 }
 
+// The engine writes every phase transition to disk anyway; forwarding the same
+// payloads keeps a running checkpoint/fetch/merge/push visible in open windows
+// instead of surfacing only once it has finished.  `live` marks these as
+// progress, so the client neither refreshes its index nor raises a toast for
+// them — `applyWikiSyncResult` still owns the terminal result.
+if (hostMode !== "server") {
+  onWikiSyncStateChange((state) => {
+    broadcast("command", {
+      command: "wiki-sync-state-changed",
+      ...state,
+      repositoryId: String(state?.repositoryId || ""),
+      live: true,
+      notifyError: false,
+    });
+  });
+}
+
 function wikiAutoSyncFailureMessage(failures) {
   const repositories = [...new Set(failures.map((failure) => String(failure.repositoryId || "")).filter(Boolean))];
   const noun = repositories.length === 1 ? "repository" : "repositories";
@@ -964,10 +995,14 @@ function wikiAutoSyncFailureMessage(failures) {
   return `Git sync needs attention for ${repositories.length} ${noun}: ${repositories.join(", ")}.${reason} Recovery and retry details are available in Wiki repositories.`;
 }
 
-const wikiAutoSync = wikiAutoSyncEnabled
-  ? createWikiAutoSync({
-      debounceMs: defaultWikiSyncIntervalMs(),
-      periodicMs: defaultWikiSyncIntervalMs(),
+function wikiSyncIntervalMs() {
+  return Math.max(1, wikiSyncPolicy.intervalMinutes) * 60_000;
+}
+
+function createWikiAutoSyncScheduler() {
+  return createWikiAutoSync({
+      debounceMs: wikiSyncIntervalMs(),
+      periodicMs: wikiSyncIntervalMs(),
       periodicJitterMs: 10 * 60 * 1000,
       // Register repositories at boot, but do not checkpoint/fetch every Git
       // working tree merely because either host opened. Local writes call
@@ -998,8 +1033,56 @@ const wikiAutoSync = wikiAutoSyncEnabled
           message: wikiAutoSyncFailureMessage(failures),
         });
       },
-    })
-  : null;
+      // The budget is spent: say so in the repository's own state rather than
+      // leaving the card advertising a retry that will never come.
+      onExhausted(repositoryId, detail) {
+        process.stderr.write(
+          `[noema-wiki] ${repositoryId} paused after ${detail.attempts} consecutive failures: ${detail.signature}\n`,
+        );
+        broadcast("command", {
+          command: "wiki-sync-state-changed",
+          repositoryId,
+          phase: "error",
+          attemptsExhausted: true,
+          attempts: detail.attempts,
+          retryable: false,
+          actionRequired: `Paused after ${detail.attempts} failed attempts. Commit & sync retries now; the next scheduled pass retries on its own.`,
+          notifyError: false,
+        });
+      },
+    });
+}
+
+let wikiAutoSync = wikiAutoSyncEnabled ? createWikiAutoSyncScheduler() : null;
+
+// Turning the policy on starts a scheduler for the repositories already
+// discovered; turning it off stops the timers without flushing, because a
+// disabled cadence should not itself trigger one last network pass.
+async function applyWikiSyncPolicy(policy) {
+  if (!wikiAutoSyncSupported) return;
+  const automatic = policy.automatic !== false;
+  const intervalMinutes = Number(policy.intervalMinutes) || wikiSyncPolicy.intervalMinutes;
+  const changedInterval = intervalMinutes !== wikiSyncPolicy.intervalMinutes;
+  wikiSyncPolicy = { automatic, intervalMinutes };
+  const nextEnabled = automatic && !wikiAutoSyncForcedOff;
+  if (nextEnabled === wikiAutoSyncEnabled) {
+    if (nextEnabled && changedInterval) {
+      wikiAutoSync?.reconfigure({ debounceMs: wikiSyncIntervalMs(), periodicMs: wikiSyncIntervalMs() });
+    }
+    return;
+  }
+  wikiAutoSyncEnabled = nextEnabled;
+  if (!nextEnabled) {
+    const closing = wikiAutoSync;
+    wikiAutoSync = null;
+    await closing?.close({ flush: false });
+    return;
+  }
+  wikiAutoSync = createWikiAutoSyncScheduler();
+  await discoverWikiRepositories(noteRoot)
+    .then((discovered) => wikiAutoSync?.start(discovered.repositories.map((repository) => repository.id)))
+    .catch((error) => process.stderr.write(`[noema-wiki] automatic sync restart failed: ${error?.message || error}\n`));
+}
 
 function markWikiRepositoryDirty(file) {
   const repositoryId = wikiRepositoryIdForFile(file);
@@ -1178,6 +1261,7 @@ const appConfigWatcher = hostMode === "server" ? { close() {} } : watch(noemaApp
       });
       if (signature === appConfigSignature) return;
       appConfigSignature = signature;
+      void applyWikiSyncPolicy(payload.config?.wiki?.sync || {});
       broadcast("command", {
         command: "app-config-changed",
         revision: payload.revision,
@@ -1845,6 +1929,16 @@ const apiRouter = new ApiRouter().register({
     await adoptWikiRepository(noteRoot, body?.repositoryId), { full: true },
   ),
   "aaronnote:api:wiki:repository-status": (body) => wikiRepositoryStatus(noteRoot, body?.repositoryId ?? body),
+  "aaronnote:api:wiki:repository-diff": (body) => wikiRepositoryDiff(noteRoot, body || {}),
+  "aaronnote:api:wiki:branches": (body) => wikiRepositoryBranches(noteRoot, body || {}),
+  "aaronnote:api:wiki:branch-action": async (body) => {
+    const result = await runWikiBranchAction(noteRoot, body || {});
+    // A branch change moves the working tree, so the index projection and the
+    // dirty-repository bookkeeping both have to follow it.
+    return applyWikiMutationResult(result, { full: true });
+  },
+  "aaronnote:api:wiki:remotes": (body) => wikiRepositoryRemotes(noteRoot, body || {}),
+  "aaronnote:api:wiki:remote-action": (body) => runWikiRemoteAction(noteRoot, body || {}),
   "aaronnote:api:wiki:git": async (body) => {
     const repositoryId = String(body?.repositoryId || "");
     const result = await runWikiGitAction(noteRoot, body?.action, body || {});
@@ -1872,6 +1966,8 @@ const apiRouter = new ApiRouter().register({
   "aaronnote:api:wiki:sync-status": async (body) => ({
     ...await readWikiSyncState(noteRoot, body?.repositoryId || ""),
     automatic: wikiAutoSyncEnabled,
+    automaticIntervalMinutes: wikiSyncPolicy.intervalMinutes,
+    automaticForcedOff: wikiAutoSyncForcedOff,
   }),
   "aaronnote:api:wiki:checkpoint": (body) => checkpointWikiRepositoryFromApi(body || {}),
   "aaronnote:api:wiki:sync": (body) => syncWikiRepositoryFromApi(body || {}),
@@ -2198,6 +2294,7 @@ const apiRouter = new ApiRouter().register({
       revision: payload.revision,
       diagnostics: payload.diagnostics,
     });
+    await applyWikiSyncPolicy(payload.config?.wiki?.sync || {});
     broadcast("command", {
       command: "app-config-changed",
       revision: payload.revision,
@@ -2868,6 +2965,11 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
       cloneRepository: function(body) { return call("aaronnote:api:wiki:clone-repository", [body || {}]); },
       adoptRepository: function(body) { return call("aaronnote:api:wiki:adopt-repository", [body || {}]); },
       repositoryStatus: function(body) { return call("aaronnote:api:wiki:repository-status", [body || {}]); },
+      repositoryDiff: function(body) { return call("aaronnote:api:wiki:repository-diff", [body || {}]); },
+      branches: function(body) { return call("aaronnote:api:wiki:branches", [body || {}]); },
+      branchAction: function(body) { return call("aaronnote:api:wiki:branch-action", [body || {}]); },
+      remotes: function(body) { return call("aaronnote:api:wiki:remotes", [body || {}]); },
+      remoteAction: function(body) { return call("aaronnote:api:wiki:remote-action", [body || {}]); },
       git: function(body) { return call("aaronnote:api:wiki:git", [body || {}]); },
       createPage: function(body) { return call("aaronnote:api:wiki:create-page", [body || {}]); },
       movePage: function(body) { return call("aaronnote:api:wiki:move-page", [body || {}]); },
@@ -2878,6 +2980,9 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
       updateTag: function(body) { return call("aaronnote:api:wiki:update-tag", [body || {}]); },
       updateNamespace: function(body) { return call("aaronnote:api:wiki:update-namespace", [body || {}]); },
       export: function(body) { return call("aaronnote:api:wiki:export", [body || {}]); },
+      pageHistory: function(body) { return call("aaronnote:api:wiki:page-history", [body || {}]); },
+      pageDiff: function(body) { return call("aaronnote:api:wiki:page-diff", [body || {}]); },
+      restorePage: function(body) { return call("aaronnote:api:wiki:restore-page", [body || {}]); },
       syncStatus: function(body) { return call("aaronnote:api:wiki:sync-status", [body || {}]); },
       checkpoint: function(body) { return call("aaronnote:api:wiki:checkpoint", [body || {}]); },
       sync: function(body) { return call("aaronnote:api:wiki:sync", [body || {}]); },

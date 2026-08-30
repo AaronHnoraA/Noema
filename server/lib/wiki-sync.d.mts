@@ -101,8 +101,11 @@ export function readWikiConflict(root: string, body?: Record<string, unknown>): 
   base: string;
   ours: string;
   theirs: string;
+  merged: string;
+  conflicts: Array<{ path: string; [key: string]: unknown }>;
   oursLabel: string;
   theirsLabel: string;
 }>;
+export function onWikiSyncStateChange(listener?: ((state: Record<string, unknown>) => void) | null): void;
 export function resolveWikiConflict(root: string, body?: Record<string, unknown>): Promise<WikiSyncState>;
 export function abortWikiConflict(root: string, repositoryId: string): Promise<WikiSyncState>;

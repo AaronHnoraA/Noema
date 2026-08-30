@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { lstat, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
@@ -25,6 +25,15 @@ const SYNC_SCHEMA = 2;
 
 export function configureWikiSyncGitProvider(provider = null) {
   wikiSyncGitProvider = provider && typeof provider === "object" ? provider : null;
+}
+
+// Every phase this engine passes through is already durable in the state file.
+// The host registers here so the same transitions reach open windows while the
+// operation is still running, instead of only at its terminal result.
+let wikiSyncStateListener = null;
+
+export function onWikiSyncStateChange(listener = null) {
+  wikiSyncStateListener = typeof listener === "function" ? listener : null;
 }
 
 function apiError(message, statusCode = 400, code = "ERR_WIKI_SYNC") {
@@ -304,6 +313,7 @@ async function writeSyncState(root, repository, state) {
   const temporary = `${file}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
   await writeFile(temporary, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
   await rename(temporary, file);
+  try { wikiSyncStateListener?.(payload); } catch {}
   return payload;
 }
 
@@ -615,13 +625,28 @@ export function classifyGitFailure(value) {
   // "The requested URL returned error: 503" instead, which used to fall through
   // to `internal` — one free retry, then a hard stop demanding manual action
   // for what is by definition a transient server-side fault.
-  if (/could not resolve host|connection (timed out|reset|refused)|network is unreachable|remote end hung up|http (?:5\d\d|429)|operation timed out|temporary failure/.test(lower)
+  // `fetch failed` is undici's opaque transport error, raised when the local
+  // kernel's HTTP endpoint goes away mid-request.  It is transient by nature and
+  // used to be classified `internal`, which spends the repository's whole
+  // failure budget on a kernel restart.
+  if (/could not resolve host|connection (timed out|reset|refused)|network is unreachable|remote end hung up|http (?:5\d\d|429)|operation timed out|temporary failure|fetch failed/.test(lower)
     || /requested url returned error: (?:5\d\d|429)/.test(lower)
     || /failed to connect to|service unavailable|bad gateway|gateway time-?out|early eof|unexpected disconnect/.test(lower)) {
     return { errorKind: "network", retryable: true, message };
   }
   if (/untracked working tree files would be overwritten|local changes .* would be overwritten|would be overwritten by (merge|checkout)|unable to create .*index\.lock/.test(lower)) {
     return { errorKind: "workspace", retryable: true, message };
+  }
+  // A leftover worktree registration holding the integration branch.  The next
+  // attempt releases it, so this is worth retrying — but only inside the
+  // scheduler's failure budget, never forever.
+  if (/is already used by worktree|already checked out at|missing but (already )?locked worktree/.test(lower)) {
+    return {
+      errorKind: "workspace",
+      retryable: true,
+      actionRequired: "A stale Git worktree held the integration branch; Noema releases it on the next attempt",
+      message,
+    };
   }
   return { errorKind: "internal", retryable: false, actionRequired: "Open the repository status and retry after reviewing the Git error", message };
 }
@@ -882,6 +907,64 @@ function conflictContextFromState(state = {}) {
   return {};
 }
 
+function parseWorktreeRecords(text) {
+  const records = [];
+  let current = null;
+  for (const line of String(text || "").split(/\r?\n/)) {
+    if (line.startsWith("worktree ")) {
+      current = { path: line.slice("worktree ".length), branch: "", locked: false };
+      records.push(current);
+      continue;
+    }
+    if (!current) continue;
+    if (line.startsWith("branch refs/heads/")) current.branch = line.slice("branch refs/heads/".length);
+    else if (line === "locked" || line.startsWith("locked ")) current.locked = true;
+  }
+  return records;
+}
+
+// `git worktree add` locks the new worktree while it initializes and unlocks it
+// on success.  An add that is killed in that window leaves a locked
+// registration with no directory, and `git worktree prune` skips locked
+// registrations — so the integration branch stays claimed and every later sync
+// dies with "is already used by worktree at ...".  Release any registration
+// holding this branch: a missing directory is dead bookkeeping, and a surviving
+// one has its working files quarantined before it goes.
+async function releaseIntegrationBranchHolders(root, repository, branch, wantedPath, skipPath = "") {
+  const listed = await git(repository, ["worktree", "list", "--porcelain"], { allowFailure: true });
+  if (listed.error) return null;
+  // git reports resolved paths, so compare through realpath where it exists —
+  // on macOS the wanted `/var/...` is git's `/private/var/...`.
+  const realPath = (value) => {
+    if (!value) return "";
+    try { return realpathSync(value); } catch { return resolve(value); }
+  };
+  const wanted = realPath(wantedPath);
+  const skip = skipPath ? realPath(skipPath) : "";
+  let recoveryArtifact = null;
+  // The first record is the primary working tree and is never ours to remove.
+  for (const record of parseWorktreeRecords(listed.stdout).slice(1)) {
+    const recordPath = realPath(record.path);
+    if (record.branch !== branch && recordPath !== wanted) continue;
+    if (skip && recordPath === skip) continue;
+    if (existsSync(recordPath)) {
+      const valid = await validGitWorktree(recordPath);
+      recoveryArtifact = await quarantineWorkingFiles(
+        root,
+        repository,
+        recordPath,
+        valid ? await unexpectedWorktreePaths(recordPath) : await filesystemWorkingPaths(recordPath),
+        "integration",
+      ) || recoveryArtifact;
+    }
+    if (record.locked) await git(repository, ["worktree", "unlock", recordPath], { allowFailure: true });
+    await git(repository, ["worktree", "remove", "--force", recordPath], { allowFailure: true });
+    await rm(recordPath, { recursive: true, force: true });
+  }
+  await git(repository, ["worktree", "prune"], { allowFailure: true });
+  return recoveryArtifact;
+}
+
 async function prepareIntegrationWorktree(root, repository, device, startHead, lease, options = {}) {
   const path = integrationPath(root, repository);
   const branch = integrationBranch(device, repository);
@@ -897,11 +980,15 @@ async function prepareIntegrationWorktree(root, repository, device, startHead, l
       worktreeIsValid ? await unexpectedWorktreePaths(path) : await filesystemWorkingPaths(path),
       "integration",
     );
+    // `remove --force` refuses a locked worktree; unlock first so an
+    // interrupted add cannot pin this path either.
+    await git(repository, ["worktree", "unlock", path], { allowFailure: true });
     await git(repository, ["worktree", "remove", "--force", path], { allowFailure: true });
     await rm(path, { recursive: true, force: true });
   }
   await mkdir(dirname(path), { recursive: true });
-  await git(repository, ["worktree", "prune"]);
+  const released = await releaseIntegrationBranchHolders(root, repository, branch, path);
+  if (released && !recoveryArtifact) recoveryArtifact = released;
   await git(repository, ["worktree", "add", "-B", branch, path, startHead]);
   return { path, branch, conflicted: false, recoveryArtifact };
 }
@@ -1357,6 +1444,13 @@ export async function readWikiConflict(rootValue, body = {}) {
   ]);
   const kind = [base, ours, theirs].some((buffer) => contentKind(buffer) === "binary") ? "binary" : "text";
   const encode = (buffer) => kind === "text" ? buffer.toString("utf8") : buffer.toString("base64");
+  // Git already merged every hunk the two sides did not both touch and left
+  // markers only where it could not decide.  That file is the right starting
+  // point for the editor; seeding from the merge base would silently discard
+  // both sides' non-conflicting work.
+  const merged = kind === "text"
+    ? await readFile(resolve(worktree, path), "utf8").catch(() => "")
+    : "";
   return {
     ok: true,
     type: "wiki-conflict-file",
@@ -1366,6 +1460,8 @@ export async function readWikiConflict(rootValue, body = {}) {
     base: encode(base),
     ours: encode(ours),
     theirs: encode(theirs),
+    merged,
+    conflicts: (state.conflicts || []).map((conflict) => ({ ...conflict })),
     oursLabel: String(summary.oursLabel || "Your local contribution"),
     theirsLabel: String(summary.theirsLabel || "Remote main"),
   };

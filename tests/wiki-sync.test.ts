@@ -12,6 +12,7 @@ import {
   configureWikiSyncGitProvider,
   defaultWikiGitMaintenanceBytes,
   defaultWikiSyncIntervalMs,
+  onWikiSyncStateChange,
   readWikiConflict,
   resolveWikiConflict,
   syncWikiRepository,
@@ -77,6 +78,7 @@ async function fixture(): Promise<{
 
 afterEach(async () => {
   configureWikiSyncGitProvider(null);
+  onWikiSyncStateChange(null);
   await stopAllWikiGitUis();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
@@ -700,4 +702,82 @@ describe("Wiki Git synchronization", () => {
     expect(status.status).toBe(200);
     expect(JSON.parse(status.text)).toMatchObject({ branch: expect.stringContaining("main") });
   }, 15_000);
+  test("streams every phase transition to a registered listener", async () => {
+    const item = await fixture();
+    const seen: Array<Record<string, unknown>> = [];
+    onWikiSyncStateChange((state) => { seen.push(state); });
+    await writeFile(join(item.repositoryPath, "streamed.md"), "# Streamed contribution\n");
+    const state = await syncWikiRepository(item.root, "private/research", { configDir: item.configDir });
+    onWikiSyncStateChange(null);
+
+    expect(state.phase).toBe("idle");
+    const phases = seen.map((entry) => String(entry.phase || ""));
+    expect(phases).toContain("checkpointing");
+    expect(phases).toContain("fetching");
+    expect(phases).toContain("merging");
+    expect(phases).toContain("pushing");
+    expect(phases.at(-1)).toBe("idle");
+    expect(seen.every((entry) => entry.repositoryId === "private/research")).toBe(true);
+  });
+
+  test("hands the conflict editor git's merge draft, not the common ancestor", async () => {
+    const item = await fixture();
+    const file = join(item.repositoryPath, "sync.md");
+    await writeFile(file, "top\nmiddle\nbottom\n");
+    await git(item.repositoryPath, "add", "-A");
+    await git(item.repositoryPath, "-c", "user.name=Fixture", "-c", "user.email=fixture@local", "commit", "-m", "three lines");
+    await git(item.repositoryPath, "push", "origin", "HEAD:main");
+
+    const collaborator = join(item.suite, "merge-draft-collaborator");
+    await execFileAsync("git", ["clone", item.remote, collaborator]);
+    await writeFile(join(collaborator, "sync.md"), "remote top\nremote middle\nbottom\n");
+    await git(collaborator, "add", "sync.md");
+    await git(collaborator, "-c", "user.name=Remote", "-c", "user.email=remote@local", "commit", "-m", "remote edit");
+    await git(collaborator, "push", "origin", "main");
+
+    // Only the middle line is contested; the other two edits are one-sided and
+    // git merges them on its own.
+    await writeFile(file, "top\nlocal middle\nlocal bottom\n");
+    const state = await syncWikiRepository(item.root, "private/research", { configDir: item.configDir });
+    expect(state.phase).toBe("conflicted");
+
+    const conflict = await readWikiConflict(item.root, { repositoryId: "private/research", path: "sync.md" });
+    expect(conflict.merged).toContain("remote top");
+    expect(conflict.merged).toContain("local bottom");
+    expect(conflict.merged).toMatch(/^<{7}/m);
+    expect(conflict.base).toBe("top\nmiddle\nbottom\n");
+    expect(conflict.base).not.toContain("remote top");
+    expect(conflict.conflicts.map((entry) => entry.path)).toContain("sync.md");
+  });
+  test("recovers when an interrupted worktree add left the integration branch locked", async () => {
+    const item = await fixture();
+    await writeFile(join(item.repositoryPath, "first.md"), "# First contribution\n");
+    const first = await syncWikiRepository(item.root, "private/research", { configDir: item.configDir });
+    expect(first.phase).toBe("idle");
+
+    // Exactly what a killed `git worktree add` leaves behind: a locked
+    // registration whose directory is gone.  `git worktree prune` skips locked
+    // registrations, so the integration branch stays claimed forever.
+    const listed = await git(item.repositoryPath, "worktree", "list", "--porcelain");
+    const integration = listed.split(/\n\n+/)
+      .map((block) => block.split(/\n/))
+      .map((lines) => ({
+        path: lines.find((line) => line.startsWith("worktree "))?.slice("worktree ".length) || "",
+        branch: lines.find((line) => line.startsWith("branch "))?.slice("branch refs/heads/".length) || "",
+      }))
+      .find((record) => record.branch.startsWith("noema-integration/"));
+    expect(integration?.path).toBeTruthy();
+    await git(item.repositoryPath, "worktree", "lock", "--reason", "initializing", integration!.path);
+    await rm(integration!.path, { recursive: true, force: true });
+    await expect(git(item.repositoryPath, "worktree", "add", "-B", integration!.branch, integration!.path, "HEAD"))
+      .rejects.toThrow(/already used by worktree/);
+
+    await writeFile(join(item.repositoryPath, "second.md"), "# Second contribution\n");
+    const recovered = await syncWikiRepository(item.root, "private/research", { configDir: item.configDir });
+    expect(recovered.phase).toBe("idle");
+
+    const verification = join(item.suite, "worktree-recovery-verification");
+    await execFileAsync("git", ["clone", item.remote, verification]);
+    expect(await readFile(join(verification, "second.md"), "utf8")).toContain("Second contribution");
+  });
 });

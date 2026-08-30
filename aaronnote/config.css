@@ -523,3 +523,31 @@ body[data-host-mode="desktop"][data-desktop-platform="win32"] .noema-config-titl
     transition: none;
   }
 }
+
+.noema-config-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 14px;
+  color: var(--aaron-ink);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.noema-config-toggle input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--aaron-accent);
+  cursor: pointer;
+}
+
+.noema-config-field input:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+.noema-config-copy[data-state="off"] {
+  opacity: .6;
+}

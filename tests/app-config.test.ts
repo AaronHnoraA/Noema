@@ -41,10 +41,11 @@ describe("Noema app config", () => {
     const payload = await ensureNoemaAppConfig({ configDir });
     expect(payload.configFile).toBe(join(configDir, "config.json"));
     expect(payload.config).toEqual({
-      schemaVersion: 3,
+      schemaVersion: 4,
       appearance: { theme: NOEMA_DEFAULT_THEME_ID },
       workspace: { root: "~/Documents/Noema", layout: "legacy" },
       wiki: {
+        sync: { automatic: true, intervalMinutes: 1440 },
         creation: {
           activeProfile: "default",
           profiles: [{
@@ -81,7 +82,7 @@ describe("Noema app config", () => {
 
     expect(updated.config.appearance.theme).toBe(nextTheme.id);
     expect(JSON.parse(await readFile(file, "utf8"))).toMatchObject({
-      schemaVersion: 3,
+      schemaVersion: 4,
       appearance: { theme: nextTheme.id, density: "compact" },
       editor: { lineNumbers: true },
     });
@@ -122,7 +123,7 @@ describe("Noema app config", () => {
     const configDir = await tempConfigDir();
     const file = join(configDir, "config.json");
     await writeFile(file, JSON.stringify({
-      schemaVersion: 3,
+      schemaVersion: 4,
       editor: { lineBreaking: "native", lineNumbers: true },
     }), "utf8");
     const migrated = await ensureNoemaAppConfig({ configDir });
@@ -177,5 +178,46 @@ describe("Noema app config", () => {
     expect(payload.config.appearance.theme).toBe(NOEMA_DEFAULT_THEME_ID);
     expect(payload.activeTheme.id).toBe(NOEMA_DEFAULT_THEME_ID);
     expect(payload.diagnostics.map((diagnostic) => diagnostic.code)).toContain("unknown-theme");
+  });
+  test("stores the Git synchronization policy, clamps a stored value, and rejects a bad patch", async () => {
+    const configDir = await tempConfigDir();
+    const initial = await ensureNoemaAppConfig({ configDir });
+    expect(initial.config.wiki.sync).toEqual({ automatic: true, intervalMinutes: 1440 });
+
+    const updated = await updateNoemaAppConfig({
+      revision: initial.revision,
+      wiki: { sync: { automatic: false, intervalMinutes: 30 } },
+    }, { configDir });
+    expect(updated.config.wiki.sync).toEqual({ automatic: false, intervalMinutes: 30 });
+    expect(JSON.parse(await readFile(join(configDir, "config.json"), "utf8")).wiki.sync)
+      .toEqual({ automatic: false, intervalMinutes: 30 });
+
+    // Creation profiles survive a sync-only patch.
+    expect(updated.config.wiki.creation.profiles).toHaveLength(1);
+
+    await expect(updateNoemaAppConfig({
+      revision: updated.revision,
+      wiki: { sync: { intervalMinutes: 1 } },
+    }, { configDir })).rejects.toThrow(/between 5 and 10080 minutes/);
+
+    await writeFile(join(configDir, "config.json"), JSON.stringify({
+      schemaVersion: 4,
+      wiki: { sync: { automatic: true, intervalMinutes: 100000 } },
+    }), "utf8");
+    const clamped = await getNoemaAppConfig({ configDir });
+    expect(clamped.config.wiki.sync.intervalMinutes).toBe(10080);
+    expect(clamped.diagnostics.map((entry) => entry.code)).toContain("clamped-sync-interval");
+  });
+
+  test("loads the previous schema version rather than rejecting it as unsupported", async () => {
+    const configDir = await tempConfigDir();
+    await writeFile(join(configDir, "config.json"), JSON.stringify({
+      schemaVersion: 3,
+      appearance: { theme: NOEMA_DEFAULT_THEME_ID },
+      wiki: { creation: { activeProfile: "default", profiles: [{ id: "default", name: "Default" }] } },
+    }), "utf8");
+    const loaded = await getNoemaAppConfig({ configDir });
+    expect(loaded.diagnostics.map((entry) => entry.code)).toContain("migrated-schema");
+    expect(loaded.config.wiki.sync).toEqual({ automatic: true, intervalMinutes: 1440 });
   });
 });

@@ -15,6 +15,7 @@ import { knowledgeQueryTextTerms, parseKnowledgeQuery } from "../../shared/knowl
 import {
   normalizeWikiNamespace, qualifiedWikiTitle, scanWikiLinks, splitQualifiedWikiTarget, splitWikiFragmentTarget,
 } from "../../shared/wiki-link.mjs";
+import { parseGitPorcelainStatus } from "./git-status.mjs";
 import { diffRoamFile, fileHistory, restoreFileFromCommit } from "./roam-git.mjs";
 import { createWindowsZip, moveWindowsPathToRecycleBin } from "./windows-shell.mjs";
 
@@ -1460,25 +1461,321 @@ async function git(repository, args) {
   }
 }
 
+// The porcelain header already carries upstream and ahead/behind, and the
+// entry lines already carry per-file state.  Both used to be collapsed into a
+// single opaque string; the repository view needs them structured, so parse
+// once here and keep `status` as the human-readable projection of the same
+// data.
+function repositoryStatusProjection(parsed) {
+  return {
+    branch: parsed.branch,
+    upstream: parsed.upstream,
+    ahead: parsed.ahead,
+    behind: parsed.behind,
+    detached: parsed.detached,
+    initial: parsed.initial,
+    upstreamGone: parsed.gone,
+    clean: parsed.clean,
+    entries: parsed.entries,
+    changedFiles: parsed.changedFiles,
+    conflictedFiles: parsed.conflictedFiles,
+  };
+}
+
+// Noema's sync model puts each device on its own work branch and publishes to
+// origin/main, so the branch usually has no configured upstream.  Reporting
+// only "no upstream" would hide the one distance that matters; measure against
+// the publish target instead.
+// Read-only ref arithmetic, so it is safe to run directly even when the kernel
+// provider owns this repository's working state — it touches no index, no
+// worktree and no lock, and the provider exposes no equivalent query.
+async function distanceToPublishTarget(repository, parsed, remote) {
+  if (parsed.upstream || !remote || parsed.detached || parsed.initial) return null;
+  for (const target of ["origin/main", "origin/master"]) {
+    const counts = await execFileAsync("git", [
+      "-C", repository.path, "rev-list", "--left-right", "--count", `HEAD...${target}`,
+    ]).then((result) => result.stdout.trim().split(/\s+/).map(Number)).catch(() => null);
+    if (counts?.length === 2 && counts.every((value) => Number.isFinite(value))) {
+      return { publishTarget: target, ahead: counts[0], behind: counts[1] };
+    }
+  }
+  return null;
+}
+
 export async function wikiRepositoryStatus(rootValue, repositoryId) {
   const root = expandNoemaPath(rootValue);
   const repository = await repositoryFromId(root, repositoryId);
   if (typeof wikiGitProvider?.owns === "function" && wikiGitProvider.owns(repository.path)) {
-    return { ok: true, repository, ...await wikiGitProvider.status(repository.path) };
+    const provided = await wikiGitProvider.status(repository.path);
+    const parsed = parseGitPorcelainStatus(provided.status);
+    const published = await distanceToPublishTarget(repository, parsed, provided.remote);
+    return {
+      ok: true,
+      repository,
+      ...repositoryStatusProjection(parsed),
+      ...provided,
+      ...(published || {}),
+      path: repository.path,
+    };
   }
-  const [{ stdout: statusText }, { stdout: branchText }, remote] = await Promise.all([
-    git(repository, ["status", "--porcelain=v1", "--branch"]),
+  const [{ stdout: statusText }, { stdout: branchText }, remote, head] = await Promise.all([
+    git(repository, ["status", "--porcelain=v1", "--branch", "-z"]),
     git(repository, ["branch", "--show-current"]),
     git(repository, ["remote", "get-url", "origin"]).catch(() => ({ stdout: "" })),
+    git(repository, ["rev-parse", "HEAD"]).catch(() => ({ stdout: "" })),
   ]);
+  const parsed = parseGitPorcelainStatus(statusText, { nul: true });
+  const remoteUrl = remote.stdout.trim();
+  const published = await distanceToPublishTarget(repository, parsed, remoteUrl);
   return {
     ok: true,
     repository,
-    branch: branchText.trim(),
-    remote: remote.stdout.trim(),
-    clean: !statusText.split(/\r?\n/).some((line) => line && !line.startsWith("##")),
-    status: statusText.trim(),
+    ...repositoryStatusProjection(parsed),
+    ...(published || {}),
+    branch: branchText.trim() || parsed.branch,
+    remote: remoteUrl,
+    head: head.stdout.trim(),
+    path: repository.path,
+    status: parsed.display,
     source: "node-vaultgit",
+  };
+}
+
+// A working-tree diff for one path.  Untracked files have no diff against the
+// index, so they are rendered against an empty tree instead; `git diff` exits
+// non-zero whenever it finds a difference, which is the normal case here.
+export async function wikiRepositoryDiff(rootValue, body = {}) {
+  const root = expandNoemaPath(rootValue);
+  const repository = await repositoryFromId(root, body.repositoryId);
+  const path = cleanRelativePath(body.path);
+  if (!path) throw apiError("A repository-relative path is required");
+  const tracked = await execFileAsync("git", ["-C", repository.path, "ls-files", "--error-unmatch", "--", path])
+    .then(() => true).catch(() => false);
+  const args = tracked
+    ? ["-C", repository.path, "diff", "--no-color", "HEAD", "--", path]
+    : ["-C", repository.path, "diff", "--no-color", "--no-index", "--", "/dev/null", path];
+  const diff = await execFileAsync("git", args, { maxBuffer: 1024 * 1024 * 8 })
+    .then((result) => result.stdout)
+    .catch((error) => {
+      if (typeof error?.stdout === "string" && error.stdout) return error.stdout;
+      throw apiError(String(error?.stderr || error?.message || "Git diff failed").trim(), 409, "ERR_WIKI_GIT");
+    });
+  return {
+    ok: true,
+    type: "wiki-repository-diff",
+    repositoryId: repository.id,
+    path,
+    tracked,
+    diff,
+    source: "node-vaultgit",
+  };
+}
+
+// Branch and remote maintenance.  Noema owns two branch namespaces — the
+// per-device work branch and the disposable integration branch — and deleting
+// or switching away from them out from under the sync engine corrupts a
+// transaction, so they are refused here rather than left to git.
+const MANAGED_BRANCH_PREFIXES = ["noema/", "noema-integration/"];
+
+function managedBranch(name) {
+  return MANAGED_BRANCH_PREFIXES.some((prefix) => name.startsWith(prefix));
+}
+
+function cleanBranchName(value) {
+  const name = String(value || "").trim();
+  if (!name) throw apiError("A branch name is required");
+  if (name.startsWith("-")) throw apiError("A branch name must not start with '-'");
+  if (/[\s~^:?*\[\\]|\.\.|@\{|^\/|\/$|\/\/|\.lock$/.test(name)) {
+    throw apiError(`Invalid branch name: ${name}`);
+  }
+  return name;
+}
+
+function cleanRemoteName(value) {
+  const name = String(value || "origin").trim() || "origin";
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) throw apiError(`Invalid remote name: ${name}`);
+  return name;
+}
+
+// Same rule the Server reader applies to its repository list: a URL that
+// carries its own credentials would put a secret in config and in `git remote
+// -v` output.
+function cleanRemoteUrl(value) {
+  const url = String(value || "").trim();
+  if (!url) throw apiError("A Git remote URL is required");
+  if (url.startsWith("-")) throw apiError("A Git remote URL must not start with '-'");
+  try {
+    const parsed = new URL(url);
+    if (parsed.username || parsed.password) throw apiError("A Git remote URL must not contain embedded credentials");
+    if (!["https:", "ssh:", "git:", "file:"].includes(parsed.protocol)) {
+      throw apiError("A Git remote URL must use https, ssh, git, file, or an SSH alias");
+    }
+    return url;
+  } catch (error) {
+    if (error?.code === "ERR_WIKI") throw error;
+  }
+  if (/^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9._-]+:.+/.test(url) || isAbsolute(url)) return url;
+  throw apiError(`Not a supported Git URL: ${url}`);
+}
+
+// `git worktree list --porcelain` always reports the main working tree first.
+// Position beats path comparison here: git prints resolved paths, so on macOS
+// the repository's own `/var/...` never equals git's `/private/var/...`.
+async function branchesCheckedOutElsewhere(repository) {
+  const result = await git(repository, ["worktree", "list", "--porcelain"]).catch(() => ({ stdout: "" }));
+  const held = new Map();
+  let path = "";
+  let index = -1;
+  for (const line of String(result.stdout || "").split(/\r?\n/)) {
+    if (line.startsWith("worktree ")) {
+      path = line.slice("worktree ".length);
+      index += 1;
+    } else if (line.startsWith("branch refs/heads/") && index > 0) {
+      held.set(line.slice("branch refs/heads/".length), path);
+    }
+  }
+  return held;
+}
+
+export async function wikiRepositoryBranches(rootValue, body = {}) {
+  const root = expandNoemaPath(rootValue);
+  const repository = await repositoryFromId(root, body.repositoryId);
+  const [listed, current, held] = await Promise.all([
+    git(repository, [
+      "for-each-ref",
+      "--format=%(refname:short)%09%(upstream:short)%09%(committerdate:iso-strict)%09%(contents:subject)",
+      "refs/heads",
+    ]),
+    git(repository, ["branch", "--show-current"]).then((result) => result.stdout.trim()).catch(() => ""),
+    branchesCheckedOutElsewhere(repository),
+  ]);
+  const branches = [];
+  for (const line of String(listed.stdout || "").split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const [name, upstream = "", committedAt = "", subject = ""] = line.split("\t");
+    if (!name) continue;
+    branches.push({
+      name,
+      upstream,
+      committedAt,
+      subject,
+      current: name === current,
+      managed: managedBranch(name),
+      checkedOutAt: held.get(name) || "",
+    });
+  }
+  branches.sort((left, right) => (
+    Number(right.current) - Number(left.current)
+    || Number(left.managed) - Number(right.managed)
+    || right.committedAt.localeCompare(left.committedAt)
+  ));
+  return {
+    ok: true,
+    type: "wiki-repository-branches",
+    repositoryId: repository.id,
+    current,
+    branches,
+    source: "node-vaultgit",
+  };
+}
+
+export async function runWikiBranchAction(rootValue, body = {}) {
+  const root = expandNoemaPath(rootValue);
+  const repository = await repositoryFromId(root, body.repositoryId);
+  const action = String(body.action || "");
+  const name = cleanBranchName(body.name);
+  if (!["create", "switch", "delete"].includes(action)) {
+    throw apiError(`Unsupported branch action: ${action}`);
+  }
+  const current = await git(repository, ["branch", "--show-current"])
+    .then((result) => result.stdout.trim()).catch(() => "");
+
+  if (action === "delete") {
+    if (name === current) throw apiError("Switch to another branch before deleting this one");
+    if (managedBranch(name) && body.force !== true) {
+      throw apiError(`${name} is maintained by Noema's sync engine; deleting it needs an explicit force`);
+    }
+    const held = await branchesCheckedOutElsewhere(repository);
+    if (held.has(name)) throw apiError(`${name} is checked out in another worktree at ${held.get(name)}`);
+    await git(repository, ["branch", body.force === true ? "-D" : "-d", "--", name]);
+    return {
+      ...await wikiRepositoryBranches(root, { repositoryId: repository.id }),
+      action,
+      message: `Deleted ${name}`,
+    };
+  }
+
+  // Switching under a dirty tree hands the sync engine a working state it did
+  // not produce, so require a clean one.  `git switch` would allow it whenever
+  // the change happens not to collide.
+  const status = await wikiRepositoryStatus(root, repository.id);
+  if (!status.clean) throw apiError("Commit or checkpoint the working tree before switching branches");
+  if (await mergeIsInProgress(repository)) {
+    throw apiError("Finish or abort the in-progress merge before switching branches");
+  }
+  const held = await branchesCheckedOutElsewhere(repository);
+  if (held.has(name)) throw apiError(`${name} is checked out in another worktree at ${held.get(name)}`);
+
+  if (action === "create") {
+    const startPoint = String(body.startPoint || "").trim();
+    if (startPoint.startsWith("-")) throw apiError("An invalid start point was requested");
+    await git(repository, startPoint
+      ? ["switch", "--create", name, "--", startPoint]
+      : ["switch", "--create", name]);
+  } else {
+    await git(repository, ["switch", "--", name]);
+  }
+  return {
+    ...await wikiRepositoryBranches(root, { repositoryId: repository.id }),
+    action,
+    message: action === "create" ? `Created and switched to ${name}` : `Switched to ${name}`,
+  };
+}
+
+async function mergeIsInProgress(repository) {
+  const result = await git(repository, ["rev-parse", "-q", "--verify", "MERGE_HEAD"]).catch(() => ({ stdout: "" }));
+  return Boolean(String(result.stdout || "").trim());
+}
+
+export async function wikiRepositoryRemotes(rootValue, body = {}) {
+  const root = expandNoemaPath(rootValue);
+  const repository = await repositoryFromId(root, body.repositoryId);
+  const listed = await git(repository, ["remote", "-v"]).catch(() => ({ stdout: "" }));
+  const remotes = new Map();
+  for (const line of String(listed.stdout || "").split(/\r?\n/)) {
+    const match = /^(\S+)\t(.+?)\s+\((fetch|push)\)$/.exec(line);
+    if (!match) continue;
+    const entry = remotes.get(match[1]) || { name: match[1], fetchUrl: "", pushUrl: "" };
+    if (match[3] === "fetch") entry.fetchUrl = match[2];
+    else entry.pushUrl = match[2];
+    remotes.set(match[1], entry);
+  }
+  return {
+    ok: true,
+    type: "wiki-repository-remotes",
+    repositoryId: repository.id,
+    remotes: [...remotes.values()],
+    source: "node-vaultgit",
+  };
+}
+
+export async function runWikiRemoteAction(rootValue, body = {}) {
+  const root = expandNoemaPath(rootValue);
+  const repository = await repositoryFromId(root, body.repositoryId);
+  const action = String(body.action || "");
+  const name = cleanRemoteName(body.name);
+  if (!["set", "remove"].includes(action)) throw apiError(`Unsupported remote action: ${action}`);
+  if (action === "remove") {
+    await git(repository, ["remote", "remove", name]);
+  } else {
+    const url = cleanRemoteUrl(body.url);
+    const existing = await git(repository, ["remote", "get-url", name]).catch(() => null);
+    await git(repository, existing ? ["remote", "set-url", name, url] : ["remote", "add", name, url]);
+  }
+  return {
+    ...await wikiRepositoryRemotes(root, { repositoryId: repository.id }),
+    action,
+    message: action === "remove" ? `Removed remote ${name}` : `Saved remote ${name}`,
   };
 }
 

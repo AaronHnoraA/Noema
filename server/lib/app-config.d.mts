@@ -10,12 +10,19 @@ export type NoemaAppConfig = {
     layout: "legacy" | "wiki";
   };
   wiki: {
+    sync: {
+      automatic: boolean;
+      intervalMinutes: number;
+    };
     creation: {
       activeProfile: string;
       profiles: NoemaWikiCreationProfile[];
     };
   };
 };
+
+export declare const MIN_SYNC_INTERVAL_MINUTES: number;
+export declare const MAX_SYNC_INTERVAL_MINUTES: number;
 
 export type NoemaWikiCreationProfile = {
   id: string;
@@ -59,7 +66,10 @@ export function updateNoemaAppConfig(
   patch?: {
     appearance?: { theme?: NoemaAppThemeId | string };
     workspace?: { root?: string; layout?: "legacy" | "wiki" | string };
-    wiki?: { creation?: { activeProfile?: string; profiles?: NoemaWikiCreationProfile[] } };
+    wiki?: {
+      sync?: { automatic?: boolean; intervalMinutes?: number };
+      creation?: { activeProfile?: string; profiles?: NoemaWikiCreationProfile[] };
+    };
     revision?: string;
   },
   options?: NoemaAppConfigOptions,

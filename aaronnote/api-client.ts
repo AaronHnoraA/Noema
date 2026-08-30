@@ -80,6 +80,10 @@ export type NoemaAppConfig = {
   appearance: { theme: string };
   workspace: { root: string; layout: "legacy" | "wiki" };
   wiki: {
+    sync: {
+      automatic: boolean;
+      intervalMinutes: number;
+    };
     creation: {
       activeProfile: string;
       profiles: Array<{
@@ -108,7 +112,10 @@ export type NoemaAppConfigMsg = {
 export type NoemaAppConfigUpdate = {
   appearance?: { theme?: string };
   workspace?: { root?: string; layout?: "legacy" | "wiki" };
-  wiki?: { creation?: NoemaAppConfig["wiki"]["creation"] };
+  wiki?: {
+    sync?: Partial<NoemaAppConfig["wiki"]["sync"]>;
+    creation?: NoemaAppConfig["wiki"]["creation"];
+  };
   revision?: string;
 };
 export type BlockReferenceLocation = {
@@ -714,6 +721,11 @@ type NativeApi = {
     cloneRepository?: (body: Record<string, unknown>) => Promise<unknown>;
     adoptRepository?: (body: Record<string, unknown>) => Promise<unknown>;
     repositoryStatus?: (body: Record<string, unknown>) => Promise<unknown>;
+    repositoryDiff?: (body: Record<string, unknown>) => Promise<unknown>;
+    branches?: (body: Record<string, unknown>) => Promise<unknown>;
+    branchAction?: (body: Record<string, unknown>) => Promise<unknown>;
+    remotes?: (body: Record<string, unknown>) => Promise<unknown>;
+    remoteAction?: (body: Record<string, unknown>) => Promise<unknown>;
     git?: (body: Record<string, unknown>) => Promise<unknown>;
     createPage?: (body: Record<string, unknown>) => Promise<unknown>;
     movePage?: (body: Record<string, unknown>) => Promise<unknown>;
@@ -861,6 +873,65 @@ export type WikiSyncState = {
     oursLabel?: string;
     theirsLabel?: string;
   }>;
+  // Set on the phase transitions the sync engine streams while an operation is
+  // still running; the terminal result never carries it.
+  live?: boolean;
+  // Scheduler policy, reported by the sync-status channel rather than by a
+  // state broadcast.
+  automaticIntervalMinutes?: number;
+  automaticForcedOff?: boolean;
+  // The repository spent its consecutive-failure budget and is parked until an
+  // explicit sync or the next scheduled pass.
+  attemptsExhausted?: boolean;
+  attempts?: number;
+};
+export type WikiBranch = {
+  name: string;
+  upstream: string;
+  committedAt: string;
+  subject: string;
+  current: boolean;
+  managed: boolean;
+  checkedOutAt: string;
+};
+export type WikiBranchList = {
+  current?: string;
+  branches?: WikiBranch[];
+  message?: string;
+};
+export type WikiRemote = { name: string; fetchUrl: string; pushUrl: string };
+export type WikiRemoteList = { remotes?: WikiRemote[]; message?: string };
+export type WikiRepositoryStatusEntry = {
+  code: string;
+  path: string;
+  origPath: string;
+  label: string;
+  conflicted: boolean;
+  untracked: boolean;
+  staged: boolean;
+  unstaged: boolean;
+};
+export type WikiRepositoryStatus = {
+  ok?: boolean;
+  branch?: string;
+  upstream?: string;
+  // Set instead of `upstream` when the branch tracks nothing but the
+  // repository still publishes to an origin branch.
+  publishTarget?: string;
+  ahead?: number;
+  behind?: number;
+  detached?: boolean;
+  initial?: boolean;
+  upstreamGone?: boolean;
+  clean?: boolean;
+  entries?: WikiRepositoryStatusEntry[];
+  changedFiles?: number;
+  conflictedFiles?: number;
+  remote?: string;
+  head?: string;
+  path?: string;
+  status?: string;
+  source?: string;
 };
 export type WikiIndex = {
   type: "wiki-index";
@@ -1776,13 +1847,47 @@ export const api = {
       const call = requireMethod(nativeApi().wiki?.adoptRepository, "Wiki repository identity");
       return ensureOk(await call({ repositoryId }) as Record<string, unknown>, "Establishing repository identity failed");
     },
-    async repositoryStatus(repositoryId: string): Promise<Record<string, unknown>> {
+    async repositoryStatus(repositoryId: string): Promise<WikiRepositoryStatus> {
       const call = requireMethod(nativeApi().wiki?.repositoryStatus, "Wiki repository status");
-      return ensureOk(await call({ repositoryId }) as Record<string, unknown>, "Loading repository status failed");
+      return ensureOk(await call({ repositoryId }) as WikiRepositoryStatus, "Loading repository status failed");
     },
-    async git(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    async repositoryDiff(repositoryId: string, path: string): Promise<{ diff?: string; tracked?: boolean }> {
+      const call = requireMethod(nativeApi().wiki?.repositoryDiff, "Wiki repository diff");
+      return ensureOk(await call({ repositoryId, path }) as { diff?: string; tracked?: boolean }, "Loading diff failed");
+    },
+    async branches(repositoryId: string): Promise<WikiBranchList> {
+      const call = requireMethod(nativeApi().wiki?.branches, "Wiki branches");
+      return ensureOk(await call({ repositoryId }) as WikiBranchList, "Loading branches failed");
+    },
+    async branchAction(body: {
+      repositoryId: string;
+      action: "create" | "switch" | "delete";
+      name: string;
+      startPoint?: string;
+      force?: boolean;
+    }): Promise<WikiBranchList> {
+      const call = requireMethod(nativeApi().wiki?.branchAction, "Wiki branch action");
+      return ensureOk(await call(body) as WikiBranchList, `Branch ${body.action} failed`);
+    },
+    async remotes(repositoryId: string): Promise<WikiRemoteList> {
+      const call = requireMethod(nativeApi().wiki?.remotes, "Wiki remotes");
+      return ensureOk(await call({ repositoryId }) as WikiRemoteList, "Loading remotes failed");
+    },
+    async remoteAction(body: {
+      repositoryId: string;
+      action: "set" | "remove";
+      name: string;
+      url?: string;
+    }): Promise<WikiRemoteList> {
+      const call = requireMethod(nativeApi().wiki?.remoteAction, "Wiki remote action");
+      return ensureOk(await call(body) as WikiRemoteList, `Remote ${body.action} failed`);
+    },
+    // pull / push / commit-selected-paths.  This channel has always existed on
+    // both sides; until the repository view called it, the only reachable
+    // commit was "everything in the working tree".
+    async git(body: { repositoryId: string; action: "pull" | "push" | "commit"; message?: string; paths?: string[] }): Promise<Record<string, unknown>> {
       const call = requireMethod(nativeApi().wiki?.git, "Wiki Git action");
-      return ensureOk(await call(body) as Record<string, unknown>, "Git action failed");
+      return ensureOk(await call(body) as Record<string, unknown>, `Git ${body.action} failed`);
     },
     async createPage(body: Record<string, unknown>): Promise<{ ok?: boolean; file?: string; title?: string }> {
       const call = requireMethod(nativeApi().wiki?.createPage, "New Wiki page");

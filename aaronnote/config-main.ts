@@ -83,6 +83,28 @@ root.innerHTML = `
         </div>
         <div class="noema-config-actions"><button type="button" data-config-save-workspace>Save workspace settings</button></div>
       </section>
+      <section class="noema-config-section" id="git-sync">
+        <div class="noema-config-section-head">
+          <div>
+            <p class="noema-config-eyebrow">Wiki collaboration</p>
+            <h2>Git synchronization</h2>
+          </div>
+        </div>
+        <label class="noema-config-toggle">
+          <input data-sync-automatic type="checkbox">
+          <span>Synchronize repositories automatically</span>
+        </label>
+        <label class="noema-config-field">
+          <span>Interval between passes</span>
+          <input data-sync-interval type="number" min="5" max="10080" step="5" inputmode="numeric">
+        </label>
+        <p class="noema-config-copy" data-sync-copy>
+          A pass checkpoints local changes, fetches, merges, and pushes each repository, with up to ten minutes
+          of jitter so several devices do not contact the remote at once. Manual <strong>Commit &amp; sync</strong>
+          stays available either way. Applies immediately — no restart.
+        </p>
+        <div class="noema-config-actions"><button type="button" data-config-save-sync>Save synchronization settings</button></div>
+      </section>
       <section class="noema-config-section" id="appearance">
         <div class="noema-config-section-head">
           <div>
@@ -133,6 +155,10 @@ const profileRepositoryEl = root.querySelector<HTMLInputElement>("[data-profile-
 const profileDirectoryEl = root.querySelector<HTMLInputElement>("[data-profile-directory]")!;
 const profileFilenameEl = root.querySelector<HTMLInputElement>("[data-profile-filename]")!;
 const saveWorkspaceButton = root.querySelector<HTMLButtonElement>("[data-config-save-workspace]")!;
+const syncAutomaticEl = root.querySelector<HTMLInputElement>("[data-sync-automatic]")!;
+const syncIntervalEl = root.querySelector<HTMLInputElement>("[data-sync-interval]")!;
+const syncCopyEl = root.querySelector<HTMLElement>("[data-sync-copy]")!;
+const saveSyncButton = root.querySelector<HTMLButtonElement>("[data-config-save-sync]")!;
 const pluginsEl = root.querySelector<HTMLElement>("[data-config-plugins]")!;
 
 let payload: NoemaAppConfigMsg | null = noemaAppConfigState();
@@ -233,6 +259,10 @@ function render(): void {
   profileRepositoryEl.value = profile?.repository || "";
   profileDirectoryEl.value = profile?.directory || "";
   profileFilenameEl.value = profile?.filenamePattern || "{slug}.md";
+  syncAutomaticEl.checked = payload.config.wiki.sync.automatic;
+  syncIntervalEl.value = String(payload.config.wiki.sync.intervalMinutes);
+  syncIntervalEl.disabled = !payload.config.wiki.sync.automatic;
+  syncCopyEl.dataset.state = payload.config.wiki.sync.automatic ? "on" : "off";
 
   for (const theme of payload.themes) {
     const selected = theme.id === payload.config.appearance.theme;
@@ -336,6 +366,31 @@ saveWorkspaceButton.addEventListener("click", () => {
     setStatus(error instanceof Error ? error.message : String(error), "error");
   }).finally(() => {
     saveWorkspaceButton.disabled = false;
+  });
+});
+syncAutomaticEl.addEventListener("change", () => {
+  syncIntervalEl.disabled = !syncAutomaticEl.checked;
+});
+saveSyncButton.addEventListener("click", () => {
+  if (!payload) return;
+  const intervalMinutes = Number(syncIntervalEl.value);
+  if (!Number.isFinite(intervalMinutes) || intervalMinutes < 5 || intervalMinutes > 10080) {
+    setStatus("Interval must be between 5 and 10080 minutes", "error");
+    return;
+  }
+  saveSyncButton.disabled = true;
+  setStatus("Saving synchronization settings…");
+  void api.config.updateApp({
+    revision: payload.revision,
+    wiki: { sync: { automatic: syncAutomaticEl.checked, intervalMinutes } },
+  }).then((next) => {
+    payload = next;
+    setStatus(syncAutomaticEl.checked ? "Saved · automatic synchronization is on" : "Saved · automatic synchronization is off");
+    render();
+  }).catch((error) => {
+    setStatus(error instanceof Error ? error.message : String(error), "error");
+  }).finally(() => {
+    saveSyncButton.disabled = false;
   });
 });
 window.addEventListener("keydown", (event) => {

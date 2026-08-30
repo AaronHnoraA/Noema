@@ -20,6 +20,18 @@ describe("Noema configuration page", () => {
     expect(main).toContain('new URL("/config", window.location.origin)');
   });
 
+  test("exposes the Git synchronization cadence instead of only the environment override", () => {
+    const page = source("aaronnote/config-main.ts");
+    expect(page).toContain('id="git-sync"');
+    expect(page).toContain("data-sync-automatic");
+    expect(page).toContain("data-sync-interval");
+    expect(page).toContain("wiki: { sync: { automatic: syncAutomaticEl.checked, intervalMinutes } }");
+    // The policy takes effect without a restart, unlike the layout section.
+    const host = source("web-host.mjs");
+    expect(host).toContain("applyWikiSyncPolicy");
+    expect(host).toContain("reconfigure({ debounceMs: wikiSyncIntervalMs(), periodicMs: wikiSyncIntervalMs() })");
+  });
+
   test("renders manifest-provided themes and saves through the shared config API", () => {
     const page = source("aaronnote/config-main.ts");
     expect(page).toContain("for (const theme of payload.themes)");

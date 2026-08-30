@@ -9,6 +9,7 @@ export type WikiAutoSync = {
   resume(repositoryId: string, options?: { immediate?: boolean }): void;
   start(repositoryIds?: string[]): void;
   syncNow(repositoryId: string): Promise<WikiAutoSyncState | null>;
+  reconfigure(options: { debounceMs?: number; periodicMs?: number }): void;
   close(options?: { flush?: boolean }): Promise<void>;
   snapshot(): {
     known: string[];
@@ -18,6 +19,7 @@ export type WikiAutoSync = {
     rerun: string[];
     blocked: string[];
     blockedDirty: string[];
+    failureBlocked: string[];
   };
 };
 
@@ -27,6 +29,7 @@ export function createWikiAutoSync(options: {
   onResult?(repositoryId: string, result: WikiAutoSyncState): void;
   onError?(repositoryId: string, error: unknown): void;
   onBatchError?(failures: WikiAutoSyncFailure[]): void;
+  onExhausted?(repositoryId: string, detail: { attempts: number; signature: string }): void;
   debounceMs?: number;
   startupMs?: number;
   syncOnStart?: boolean;
@@ -34,4 +37,5 @@ export function createWikiAutoSync(options: {
   periodicJitterMs?: number;
   busyRetryMs?: number;
   maxConcurrency?: number;
+  maxConsecutiveFailures?: number;
 }): WikiAutoSync;

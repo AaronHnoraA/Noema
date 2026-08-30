@@ -77,6 +77,8 @@ body[data-host-mode="server"] .noema-wiki-titlebar { padding-left: 18px; }
 .is-server-reader [data-view="repositories"],
 .is-server-reader [data-view="wanted"],
 .is-server-reader [data-view="reports"],
+.is-server-reader [data-view="sync"],
+.is-server-reader [data-view="repositories"],
 .is-server-reader [data-refresh],
 .is-server-reader [data-desktop-menu],
 .is-server-reader [data-new-dialog],
@@ -158,8 +160,8 @@ body[data-host-mode="server"] .noema-wiki-titlebar { padding-left: 18px; }
 .noema-wiki-hero p { margin: 0 0 6px; color: var(--aaron-accent); font-size: 10px; font-weight: 850; letter-spacing: .11em; text-transform: uppercase; }
 .noema-wiki-hero h1 { max-width: 900px; margin: 0; font: 650 clamp(30px, 4.5vw, 48px)/1.1 var(--aaron-font-serif, Georgia, serif); letter-spacing: -.025em; }
 .noema-wiki-hero small { display: block; max-width: 680px; overflow: hidden; margin-top: 10px; color: var(--aaron-muted); text-overflow: ellipsis; white-space: nowrap; }
-.noema-wiki-hero-actions, .noema-wiki-repository-toolbar { display: flex; gap: 8px; }
-.noema-wiki-hero button, .noema-wiki-repository-toolbar button, .noema-wiki-report-list button, .noema-wiki-dialog button {
+.noema-wiki-hero-actions { display: flex; gap: 8px; }
+.noema-wiki-hero button, .noema-wiki-report-list button, .noema-wiki-dialog button, .noema-vc-toolbar button {
   min-height: 38px; border: 1px solid var(--aaron-paper-line); border-radius: 7px; padding: 0 14px; background: var(--aaron-paper); cursor: pointer;
 }
 button.is-primary { border-color: var(--aaron-accent); background: var(--aaron-accent); color: var(--aaron-paper); }
@@ -190,15 +192,15 @@ button.is-primary { border-color: var(--aaron-accent); background: var(--aaron-a
 .noema-wiki-conflict-alert strong { color: var(--aaron-danger); font-size: 12px; }
 .noema-wiki-conflict-alert span { overflow: hidden; color: var(--aaron-muted); font: 10px/1.4 var(--aaron-font-mono, monospace); text-overflow: ellipsis; white-space: nowrap; }
 
-.noema-wiki-page-list, .noema-wiki-report-list, .noema-wiki-repository-list { display: grid; gap: 0; border-top: 1px solid var(--aaron-paper-line); }
+.noema-wiki-page-list, .noema-wiki-report-list { display: grid; gap: 0; border-top: 1px solid var(--aaron-paper-line); }
 .noema-wiki-page {
   display: grid; grid-template-columns: 62px 1fr auto; gap: 14px; align-items: start; border: 0; border-bottom: 1px solid var(--aaron-paper-line); border-radius: 0; padding: 17px 8px; background: transparent; cursor: pointer;
 }
 .noema-wiki-page:hover { background: color-mix(in srgb, var(--aaron-accent-soft), transparent 28%); }
 .noema-wiki-page .partition { border-radius: 999px; padding: 4px 7px; background: var(--aaron-accent-soft); color: var(--aaron-accent); font-size: 9px; font-weight: 850; text-align: center; text-transform: uppercase; }
 .noema-wiki-page .partition.is-private { background: color-mix(in srgb, var(--aaron-danger), transparent 88%); color: var(--aaron-danger); }
-.noema-wiki-page h2, .noema-wiki-report-list h2, .noema-wiki-repository h2 { margin: 0; font-size: 16px; }
-.noema-wiki-page p, .noema-wiki-report-list p, .noema-wiki-repository p { margin: 5px 0; color: var(--aaron-muted); font: 11px/1.45 var(--aaron-font-mono, monospace); }
+.noema-wiki-page h2, .noema-wiki-report-list h2 { margin: 0; font-size: 16px; }
+.noema-wiki-page p, .noema-wiki-report-list p { margin: 5px 0; color: var(--aaron-muted); font: 11px/1.45 var(--aaron-font-mono, monospace); }
 .noema-wiki-page .noema-wiki-search-excerpt { display: -webkit-box; overflow: hidden; color: var(--aaron-ink); font: 12px/1.55 var(--aaron-font-sans); -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .noema-wiki-page small { color: var(--aaron-faint); }
 .noema-wiki-page-actions { min-width: 34px; min-height: 30px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; }
@@ -210,7 +212,7 @@ button.is-primary { border-color: var(--aaron-accent); background: var(--aaron-a
 .noema-wiki-empty { border: 1px dashed var(--aaron-paper-line); border-radius: 10px; padding: 52px 24px; text-align: center; }
 .noema-wiki-empty h2 { margin: 0 0 8px; }
 .noema-wiki-empty p { margin: 0; color: var(--aaron-muted); }
-.noema-wiki-report-list article, .noema-wiki-repository {
+.noema-wiki-report-list article {
   border: 1px solid var(--aaron-paper-line); border-radius: 9px; padding: 18px; background: var(--aaron-paper);
 }
 .noema-wiki-report-list article { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
@@ -220,7 +222,6 @@ button.is-primary { border-color: var(--aaron-accent); background: var(--aaron-a
 .noema-wiki-report-cards h2 { margin: 8px 0; font-size: 14px; }
 .noema-wiki-report-cards p, .noema-wiki-diagnostic { color: var(--aaron-muted); font-size: 11px; line-height: 1.5; }
 .noema-wiki-diagnostic { border-left: 3px solid var(--aaron-accent); padding: 8px 12px; background: var(--aaron-accent-soft); }
-.noema-wiki-repository-toolbar { justify-content: flex-end; margin-bottom: 12px; }
 .noema-wiki-tag-toolbar {
   display: grid;
   grid-template-columns: minmax(180px, 1fr) auto;
@@ -239,10 +240,6 @@ button.is-primary { border-color: var(--aaron-accent); background: var(--aaron-a
   font: 12px/1 var(--aaron-font-sans);
 }
 .noema-wiki-tag-toolbar span { color: var(--aaron-muted); font: 11px/1.2 var(--aaron-font-sans); }
-.noema-wiki-repository > div:first-child { display: flex; align-items: baseline; justify-content: space-between; }
-.noema-wiki-repository > div:nth-child(2) { display: flex; gap: 7px; margin: 12px 0; }
-.noema-wiki-repository button { min-height: 32px; border: 1px solid var(--aaron-paper-line); border-radius: 6px; background: var(--aaronnote-chrome); cursor: pointer; }
-.noema-wiki-repository pre { overflow: auto; margin: 0; border-radius: 6px; padding: 10px; background: var(--aaron-code-bg); color: var(--aaron-muted); font-size: 10px; white-space: pre-wrap; }
 
 .noema-wiki-tools {
   position: sticky;
@@ -492,3 +489,177 @@ body[data-host-mode="server"] :is(.noema-wiki-sidebar, .noema-wiki-tools) {
 .noema-wiki-path-input > button {
   white-space: nowrap;
 }
+
+/* Version control ------------------------------------------------------- */
+
+.noema-vc-toolbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap;
+  margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--aaron-paper-line);
+}
+.noema-vc-summary { margin: 0; color: var(--aaron-muted); font: 11px/1.5 var(--aaron-font-mono, monospace); }
+.noema-vc-toolbar-actions { display: flex; gap: 8px; }
+.noema-vc-list { display: grid; gap: 12px; }
+
+.noema-vc-repo {
+  display: grid; gap: 11px;
+  border: 1px solid var(--aaron-paper-line); border-radius: 10px; padding: 16px 18px;
+  background: var(--aaron-paper);
+}
+.noema-vc-repo.is-busy { border-color: color-mix(in srgb, var(--aaron-accent) 45%, var(--aaron-paper-line)); }
+.noema-vc-repo-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+.noema-vc-identity { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; min-width: 0; }
+.noema-vc-identity h2 { margin: 0; font-size: 16px; }
+.noema-vc-repo-id { color: var(--aaron-faint); font: 10px/1.4 var(--aaron-font-mono, monospace); }
+.noema-vc-partition {
+  border-radius: 999px; padding: 2px 8px; font-size: 9px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase;
+  background: var(--aaron-panel-strong); color: var(--aaron-muted);
+}
+.noema-vc-partition.is-public { background: color-mix(in srgb, var(--aaron-green) 16%, transparent); color: var(--aaron-green); }
+
+.noema-vc-badges { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.noema-vc-badge {
+  border: 1px solid var(--aaron-paper-line); border-radius: 6px; padding: 2px 8px;
+  font: 10px/1.6 var(--aaron-font-mono, monospace); white-space: nowrap;
+}
+.noema-vc-badge.is-branch { border-color: color-mix(in srgb, var(--aaron-accent) 40%, transparent); background: var(--aaron-accent-soft); color: var(--aaron-accent); font-weight: 700; }
+.noema-vc-badge.is-muted { color: var(--aaron-faint); }
+.noema-vc-badge.is-ahead { border-color: color-mix(in srgb, var(--aaron-green) 45%, transparent); background: color-mix(in srgb, var(--aaron-green) 12%, transparent); color: var(--aaron-green); }
+.noema-vc-badge.is-behind { border-color: color-mix(in srgb, var(--aaron-accent-sand) 45%, transparent); background: color-mix(in srgb, var(--aaron-accent-sand) 12%, transparent); color: var(--aaron-accent-sand); }
+.noema-vc-badge.is-dirty { border-color: color-mix(in srgb, var(--aaron-accent-2) 40%, transparent); color: var(--aaron-accent-2); }
+.noema-vc-badge.is-warn { border-color: color-mix(in srgb, var(--aaron-accent-sand) 55%, transparent); color: var(--aaron-accent-sand); }
+.noema-vc-badge.is-conflict { border-color: var(--aaron-danger); background: var(--aaron-danger-bg); color: var(--aaron-danger); font-weight: 700; }
+.noema-vc-badge.is-clean { color: var(--aaron-green); }
+
+.noema-vc-location {
+  margin: 0; overflow: hidden; color: var(--aaron-faint);
+  font: 10px/1.5 var(--aaron-font-mono, monospace); text-overflow: ellipsis; white-space: nowrap;
+}
+
+.noema-vc-phase {
+  display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+  border-radius: 7px; padding: 7px 10px; background: var(--aaron-panel);
+  font-size: 11px;
+}
+.noema-vc-phase[hidden] { display: none; }
+.noema-vc-phase strong { font-size: 11px; }
+.noema-vc-phase span { color: var(--aaron-muted); font: 10px/1.5 var(--aaron-font-mono, monospace); }
+.noema-vc-phase-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--aaron-faint); }
+.noema-vc-phase.is-running .noema-vc-phase-dot { background: var(--aaron-accent); animation: noema-vc-pulse 1.1s ease-in-out infinite; }
+.noema-vc-phase.is-error { background: var(--aaron-danger-bg); }
+.noema-vc-phase.is-error .noema-vc-phase-dot { background: var(--aaron-danger); }
+.noema-vc-phase.is-conflict { background: var(--aaron-danger-bg); }
+.noema-vc-phase.is-conflict .noema-vc-phase-dot { background: var(--aaron-danger); }
+@keyframes noema-vc-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .28; } }
+@media (prefers-reduced-motion: reduce) {
+  .noema-vc-phase.is-running .noema-vc-phase-dot { animation: none; }
+}
+
+.noema-vc-conflicts {
+  display: grid; gap: 8px;
+  border: 1px solid var(--aaron-danger); border-radius: 8px; padding: 11px 13px; background: var(--aaron-danger-bg);
+}
+.noema-vc-conflicts[hidden] { display: none; }
+.noema-vc-conflicts h3 { margin: 0; color: var(--aaron-danger); font-size: 12px; }
+.noema-vc-conflicts > button { justify-self: start; min-height: 28px; border: 1px solid var(--aaron-paper-line); border-radius: 6px; padding: 0 10px; background: var(--aaron-paper); font-size: 11px; cursor: pointer; }
+.noema-vc-conflict-list { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
+.noema-vc-conflict-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.noema-vc-conflict-row button {
+  min-height: 26px; border: 1px solid var(--aaron-danger); border-radius: 6px; padding: 0 10px;
+  background: var(--aaron-danger); color: var(--aaron-paper); font-size: 11px; cursor: pointer;
+}
+
+.noema-vc-changes { display: grid; gap: 8px; border: 1px solid var(--aaron-paper-line); border-radius: 8px; padding: 11px 13px; }
+.noema-vc-changes[hidden] { display: none; }
+.noema-vc-changes-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.noema-vc-select-all { display: flex; align-items: center; gap: 7px; font-size: 11px; cursor: pointer; }
+.noema-vc-changes-summary { color: var(--aaron-muted); font: 10px/1.5 var(--aaron-font-mono, monospace); }
+.noema-vc-change-list { display: grid; gap: 2px; max-height: 320px; overflow-y: auto; margin: 0; padding: 0; list-style: none; }
+.noema-vc-change-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  border-radius: 5px; padding: 3px 6px;
+}
+.noema-vc-change-row:hover { background: var(--aaron-panel); }
+.noema-vc-change-row.is-open { background: var(--aaron-accent-soft); }
+.noema-vc-change-label { display: flex; align-items: center; gap: 8px; min-width: 0; cursor: pointer; }
+.noema-vc-code {
+  flex: none; width: 22px; border-radius: 4px; background: var(--aaron-code-bg); color: var(--aaron-muted);
+  font: 10px/1.7 var(--aaron-font-mono, monospace); text-align: center;
+}
+.noema-vc-code.is-new { background: color-mix(in srgb, var(--aaron-green) 18%, transparent); color: var(--aaron-green); }
+.noema-vc-path {
+  overflow: hidden; color: var(--aaron-ink);
+  font: 11px/1.5 var(--aaron-font-mono, monospace); text-overflow: ellipsis; white-space: nowrap;
+}
+.noema-vc-diff-toggle {
+  flex: none; min-height: 24px; border: 1px solid transparent; border-radius: 5px; padding: 0 8px;
+  background: transparent; color: var(--aaron-link); font-size: 10px; cursor: pointer;
+}
+.noema-vc-change-row:hover .noema-vc-diff-toggle { border-color: var(--aaron-paper-line); }
+.noema-vc-diff {
+  max-height: 340px; overflow: auto; margin: 2px 0 6px; border-radius: 6px; padding: 10px;
+  background: var(--aaron-code-bg); font: 10px/1.55 var(--aaron-font-mono, monospace); white-space: pre;
+}
+.noema-vc-commit-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.noema-vc-commit-message {
+  flex: 1 1 220px; min-height: 32px; border: 1px solid var(--aaron-paper-line); border-radius: 6px;
+  padding: 0 10px; background: var(--aaron-paper); color: var(--aaron-ink); font: 12px/1.5 var(--aaron-font-sans);
+}
+.noema-vc-commit-message:focus { border-color: var(--aaron-accent); outline: none; box-shadow: 0 0 0 3px var(--aaron-accent-soft); }
+
+.noema-vc-actions { display: flex; gap: 7px; flex-wrap: wrap; }
+.noema-vc-repo button {
+  min-height: 32px; border: 1px solid var(--aaron-paper-line); border-radius: 6px; padding: 0 12px;
+  background: var(--aaronnote-chrome, var(--aaron-panel)); color: var(--aaron-ink); font-size: 12px; cursor: pointer;
+}
+.noema-vc-repo button.is-primary { border-color: var(--aaron-accent); background: var(--aaron-accent); color: var(--aaron-paper); }
+.noema-vc-repo button:disabled { opacity: .45; cursor: not-allowed; }
+.noema-vc-repo .noema-vc-diff-toggle { min-height: 24px; padding: 0 8px; background: transparent; }
+
+.noema-vc-message { margin: 0; color: var(--aaron-muted); font: 11px/1.55 var(--aaron-font-mono, monospace); white-space: pre-wrap; }
+.noema-vc-message[hidden] { display: none; }
+.noema-vc-message.is-error { color: var(--aaron-danger); }
+.noema-vc-message[data-error-kind="authentication"]::before { content: "Authentication · "; font-weight: 800; }
+.noema-vc-message[data-error-kind="network"]::before { content: "Network · "; font-weight: 800; }
+.noema-vc-message[data-error-kind="configuration"]::before { content: "Configuration · "; font-weight: 800; }
+.noema-vc-message[data-error-kind="workspace"]::before { content: "Workspace · "; font-weight: 800; }
+.noema-vc-message[data-error-kind="busy"]::before { content: "Busy · "; font-weight: 800; }
+.noema-vc-message[data-error-kind="remote-race"]::before { content: "Remote moved · "; font-weight: 800; }
+
+.noema-vc-raw summary { color: var(--aaron-faint); font-size: 10px; cursor: pointer; }
+.noema-vc-raw[hidden] { display: none; }
+.noema-vc-raw pre {
+  overflow: auto; margin: 7px 0 0; border-radius: 6px; padding: 10px;
+  background: var(--aaron-code-bg); color: var(--aaron-muted); font-size: 10px; white-space: pre-wrap;
+}
+
+.noema-wiki-conflict-files { display: flex; gap: 5px; overflow-x: auto; padding-bottom: 3px; }
+.noema-wiki-conflict-files[hidden] { display: none; }
+.noema-wiki-conflict-files button {
+  flex: none; min-height: 26px; max-width: 260px; overflow: hidden;
+  border: 1px solid var(--aaron-paper-line); border-radius: 6px; padding: 0 10px;
+  background: var(--aaron-paper); color: var(--aaron-muted);
+  font: 10px/1.6 var(--aaron-font-mono, monospace); text-overflow: ellipsis; white-space: nowrap; cursor: pointer;
+}
+.noema-wiki-conflict-files button.is-current { border-color: var(--aaron-danger); background: var(--aaron-danger-bg); color: var(--aaron-danger); font-weight: 700; }
+
+.noema-vc-maintenance summary { color: var(--aaron-faint); font-size: 10px; cursor: pointer; }
+.noema-vc-maintenance-body { display: grid; gap: 8px; margin-top: 10px; }
+.noema-vc-maintenance-body h3 {
+  margin: 4px 0 0; color: var(--aaron-muted);
+  font-size: 9px; font-weight: 850; letter-spacing: .1em; text-transform: uppercase;
+}
+.noema-vc-branch-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.noema-vc-branch-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  border-radius: 5px; padding: 4px 6px;
+}
+.noema-vc-branch-row:hover { background: var(--aaron-panel); }
+.noema-vc-branch-row.is-current { background: var(--aaron-accent-soft); }
+.noema-vc-branch-label { display: grid; gap: 1px; min-width: 0; }
+.noema-vc-branch-meta { color: var(--aaron-faint); font: 9px/1.5 var(--aaron-font-mono, monospace); }
+.noema-vc-branch-actions { display: flex; align-items: center; gap: 5px; flex: none; }
+.noema-vc-branch-actions button { min-height: 24px; padding: 0 9px; font-size: 10px; }
+.noema-vc-inline-form { display: flex; gap: 7px; flex-wrap: wrap; }
+.noema-vc-inline-form input { flex: 1 1 200px; min-height: 28px; font-size: 11px; }
+.noema-vc-inline-form button { min-height: 28px; font-size: 11px; }
+.noema-vc-hint { margin: 0; color: var(--aaron-faint); font: 10px/1.5 var(--aaron-font-mono, monospace); }
