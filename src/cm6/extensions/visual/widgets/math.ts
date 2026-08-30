@@ -44,6 +44,11 @@ import { orgEnvContextForRange, type OrgEnvContext } from "./block-extras.ts";
 import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
 import { isCoalescedVisualTyping } from "../typing-burst.ts";
 import {
+  isPointerSelecting,
+  transactionHasPointerSelection,
+  updateHasPointerSelectionEffect,
+} from "../selection.ts";
+import {
   persistentVisualStateField,
   rememberPersistentVisualPluginState,
   restorePersistentVisualPluginState,
@@ -1030,7 +1035,11 @@ const mathBlockField = StateField.define<BlockMathFieldValue>({
       renderWindowChanged ||= nextWindow !== renderWindow;
       renderWindow = nextWindow;
     }
-    if (suppressedKey && selectedKey !== suppressedKey) {
+    // Display formulas collapse the same way, and a collapsing block changes
+    // the height of everything below it. Keep the revealed source until the
+    // pointer gesture that moved the caret out of it is over. See the matching
+    // comment in MathInlinePlugin.update.
+    if (suppressedKey && selectedKey !== suppressedKey && !transactionHasPointerSelection(tr)) {
       const suppressedRange = getBlockMathRanges(tr.state)
         .find((range) => blockMathKey(range) === suppressedKey);
       if (!suppressedRange || !rangeContainsWholeSelection(tr.state, suppressedRange)) {
@@ -1502,8 +1511,16 @@ class MathBlockPlugin {
 
   update(update: ViewUpdate): void {
     const next = update.state.field(mathBlockField).active;
+    // The transaction that ends a pointer drag carries no selection of its own,
+    // so it has to be an activation trigger in its own right: entering a
+    // formula is deferred for the length of the gesture (see
+    // scheduleSelectionActivation) and this is where the deferred entry lands.
+    const pointerSelectionEnded = updateHasPointerSelectionEffect(update)
+      && !isPointerSelecting(update.state);
     if (next === this.active) {
-      if (!next && update.selectionSet) this.scheduleSelectionActivation(update.view);
+      if (!next && (update.selectionSet || pointerSelectionEnded)) {
+        this.scheduleSelectionActivation(update.view);
+      }
       return;
     }
     const previous = this.active;
@@ -1528,7 +1545,10 @@ class MathBlockPlugin {
    * against the same formula.
    */
   private scheduleSelectionActivation(view: EditorView): void {
-    if (this.pendingActivation || view.state.readOnly) return;
+    // Revealing a display formula's source changes the height of everything
+    // below it. Mid-drag that moves the document out from under the pointer,
+    // so wait for the gesture to finish and enter once from where it ended.
+    if (this.pendingActivation || view.state.readOnly || isPointerSelecting(view.state)) return;
     const field = view.state.field(mathBlockField, false);
     const range = blockMathAtSelection(view.state);
     if (!range || field?.suppressedKey === blockMathKey(range)) return;
@@ -1794,6 +1814,28 @@ class MathInlinePlugin {
       if (source) {
         this.suppressedKey = `${update.changes.mapPos(source.from, -1)}:${update.changes.mapPos(source.to, 1)}`;
       }
+    }
+
+    // A pointer drag emits one selection transaction per mouse move, and
+    // revealing or collapsing a formula rewrites the line's inline layout —
+    // TeX source is a different width than the rendered formula, so the line
+    // rewraps and everything after it moves. Doing that mid-gesture slides the
+    // text out from under the pointer: the click meant to dismiss a formula
+    // lands somewhere else, and CodeMirror goes on extending the drag to
+    // whatever moved under the cursor, which is how a click turns into a long
+    // accidental selection. Hold what is on screen until the gesture ends and
+    // settle once, the rule live-preview already applies to Markdown marks.
+    // `selectionKey` is deliberately left stale so the transaction that ends
+    // the drag rebuilds from the final selection.
+    if (!aborted && !this.active && isPointerSelecting(update.view.state)) {
+      if (rebuild) {
+        ({ decorations: this.decorations, atomicRanges: this.atomicRanges } = buildInlineMathDecos(
+          update.view,
+          this.active,
+          this.suppressedKey,
+        ));
+      }
+      return;
     }
 
     const selected = inlineMathAtSelection(update.view.state);

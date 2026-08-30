@@ -44,7 +44,39 @@ const CARD_TOKENS = new Set([
 ]);
 
 const CONTROL_SELECTOR = "button, input, select, textarea, [role='option'], [role='tab'], hr";
-const CANDIDATE_SELECTOR = "dialog, aside, [role='dialog'], [role='menu'], [role='listbox'], [class]";
+
+/**
+ * Everything `b3SurfaceKind` can possibly classify, and nothing else.
+ *
+ * This used to end in a bare `[class]`, which made every classed element in the
+ * document a candidate. The mutation observer below watches `document.body`
+ * with `subtree: true`, so each of CodeMirror's viewport rewrites — every
+ * scroll, every keystroke — handed this module a subtree and had it materialise
+ * and classify every classed descendant, which on a formula-dense note is
+ * hundreds of KaTeX spans per inserted line, inside a microtask checkpoint.
+ *
+ * The selector is derived from the same token sets `b3SurfaceKind` consults, so
+ * it cannot drift away from them: exact class tokens for the opt-in surfaces,
+ * and a substring match for the three words `tokenEndsWithSurface` recognises,
+ * which is a superset of the suffixes it accepts. Classification itself is
+ * unchanged — this only decides which elements are worth asking about.
+ */
+const SURFACE_TOKEN_SELECTORS = [
+  ...DIALOG_CONTAINER_TOKENS,
+  ...PANEL_TOKENS,
+  "aaronnote-modal",
+].map((token) => `[class~="${token}"]`);
+const SURFACE_SUFFIX_SELECTORS = ["backdrop", "menu", "popup"]
+  .map((word) => `[class*="${word}"]`);
+const CANDIDATE_SELECTOR = [
+  "dialog",
+  "aside",
+  "[role='dialog']",
+  "[role='menu']",
+  "[role='listbox']",
+  ...SURFACE_TOKEN_SELECTORS,
+  ...SURFACE_SUFFIX_SELECTORS,
+].join(", ");
 
 function classTokens(element: Element): string[] {
   return [...element.classList];

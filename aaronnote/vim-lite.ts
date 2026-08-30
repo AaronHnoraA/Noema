@@ -1941,20 +1941,33 @@ export function createVimLite(
     });
   }
 
+  /**
+   * Publish a Visual selection without re-announcing one that is already live.
+   *
+   * Reading a rendered selection back is lossy: an endpoint that was snapped to
+   * a formula's start renders as the formula's *end*, and reading that end
+   * returns the start again. A selection-change listener that re-renders what
+   * it just read therefore never reaches a fixed point, and because the whole
+   * cycle runs in microtasks it never yields either — the page freezes. Sending
+   * the scroll without the (identical) selection breaks that loop at its source.
+   */
+  function dispatchVisualSelection(selection: EditorSelection): void {
+    editor.view.dispatch(selection.eq(editor.view.state.selection)
+      ? { scrollIntoView: true }
+      : { selection, scrollIntoView: true });
+  }
+
   function renderVisualCharStates(states: readonly VisualCharState[]): void {
     if (states.length === 0) return;
     const mainIndex = Math.min(editor.view.state.selection.mainIndex, states.length - 1);
     const main = states[mainIndex]!;
     visualAnchor = main.anchor;
     visualHead = main.head;
-    editor.view.dispatch({
-      selection: EditorSelection.create(states.map((state) => (
-        state.head >= state.anchor
-          ? EditorSelection.range(state.anchor, visualObjectEndPosition(editor, state.head))
-          : EditorSelection.range(visualObjectEndPosition(editor, state.anchor), state.head)
-      )), mainIndex),
-      scrollIntoView: true,
-    });
+    dispatchVisualSelection(EditorSelection.create(states.map((state) => (
+      state.head >= state.anchor
+        ? EditorSelection.range(state.anchor, visualObjectEndPosition(editor, state.head))
+        : EditorSelection.range(visualObjectEndPosition(editor, state.anchor), state.head)
+    )), mainIndex));
   }
 
   function setVisualHead(head: number): void {
@@ -2004,10 +2017,7 @@ export function createVimLite(
     const main = visualLineStates[normalizedMainIndex]!;
     visualAnchor = main.anchor;
     visualHead = main.head;
-    editor.view.dispatch({
-      selection,
-      scrollIntoView: true,
-    });
+    dispatchVisualSelection(selection);
   }
 
   function lineStatesFromCharStates(states: readonly VisualCharState[]): VisualLineState[] {

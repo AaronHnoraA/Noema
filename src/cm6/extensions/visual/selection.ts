@@ -12,6 +12,7 @@ import {
   type EditorState,
   type Line,
   type Text,
+  type Transaction,
 } from "@codemirror/state";
 import { EditorView, ViewPlugin } from "@codemirror/view";
 import { updateHasEffect } from "../../utils/effects.ts";
@@ -56,6 +57,21 @@ export const extendForwardsOverEmptyLines = (
 
 export const pointerSelectionEffect = StateEffect.define<boolean>();
 export const updateHasPointerSelectionEffect = updateHasEffect(pointerSelectionEffect);
+
+/**
+ * Whether a pointer drag is still in flight once `transaction` has been applied.
+ *
+ * State fields cannot read a field that is registered after them, so this is
+ * derived from the previous state plus the transaction's own effects rather
+ * than from `transaction.state`. View plugins should use `isPointerSelecting`.
+ */
+export function transactionHasPointerSelection(transaction: Transaction): boolean {
+  let selecting = transaction.startState.field(pointerSelectionField, false) ?? false;
+  for (const effect of transaction.effects) {
+    if (effect.is(pointerSelectionEffect)) selecting = effect.value;
+  }
+  return selecting;
+}
 
 const pointerSelectionField = StateField.define<boolean>({
   create: () => false,

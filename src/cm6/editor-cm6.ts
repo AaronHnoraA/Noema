@@ -95,6 +95,7 @@ import {
   EditorViewportStabilizer,
   mapPositionAcrossText,
   minimalDocumentChange,
+  preserveEditorViewport,
 } from "./viewport-stability.ts";
 import {
   finishInlineMathEditing,
@@ -586,12 +587,19 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
     // the new source cursor scrolls the old viewport while the replacement
     // widget is expanding, which is both unnecessary and disorienting.
     if (formula) {
-      revealFormulaSource(
+      // Expanding a formula to its TeX source is a relayout: the source is a
+      // different width than the rendered formula, the line rewraps, and the
+      // paragraph can gain a line. Anchor the formula the pointer is on so it
+      // stays where it was clicked instead of sliding out from under the
+      // cursor. Automatic stabilization would not run here — the mousedown
+      // that opened the formula counts as a scroll interaction — so this asks
+      // for the anchoring explicitly, the way editing commands do.
+      preserveEditorViewport(view, () => revealFormulaSource(
         view,
         formula.from,
         formula.to,
         formulaSourceOffsetForClick(source, event, formula.contentTo - formula.contentFrom),
-      );
+      ), formula.from);
       if (!formula.display) view.contentDOM.focus({ preventScroll: true });
     } else if (mathBlock || inlineMath) {
       return;

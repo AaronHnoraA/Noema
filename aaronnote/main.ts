@@ -3133,14 +3133,23 @@ reconcileVimSelection = () => {
   if (vimSelectionSyncPending) return;
   vimSelectionSyncPending = true;
   queueMicrotask(() => {
-    vimSelectionSyncPending = false;
-    if (vim.mode() === "insert") return;
-    // Linewise motion keeps a directional logical head that a forward CM6
-    // whole-line range cannot encode.  A collapsed range still means a native
-    // cut/paste completed and should leave Visual-line.
-    if (vim.mode() === "visual-line"
-        && !editor.view.state.selection.main.empty) return;
-    vim.syncSelectionFromEditor();
+    // The flag is held across the sync, not cleared before it. Adopting a
+    // selection can itself dispatch one (a Visual endpoint snaps to a whole
+    // formula), and that dispatch re-enters this listener. Clearing first let
+    // vim-lite's own correction queue another reconcile pass, which corrected
+    // it again: an unbounded microtask chain that never yields to the event
+    // loop. Only a selection change we did not make is worth adopting.
+    try {
+      if (vim.mode() === "insert") return;
+      // Linewise motion keeps a directional logical head that a forward CM6
+      // whole-line range cannot encode.  A collapsed range still means a native
+      // cut/paste completed and should leave Visual-line.
+      if (vim.mode() === "visual-line"
+          && !editor.view.state.selection.main.empty) return;
+      vim.syncSelectionFromEditor();
+    } finally {
+      vimSelectionSyncPending = false;
+    }
   });
 };
 // Re-assert IME state when the window regains focus.
