@@ -62,10 +62,12 @@ D-023 derives every role from storage type plus its WorkNode binding.")
                      :null-object :null :false-object :false))
 
 (defun noema-research--json-scalar (value)
-  "Return scalar VALUE encoded as JSON text."
-  (substring (json-serialize (vector value)
-                             :null-object :null :false-object :false)
-             1 -1))
+  "Return scalar VALUE encoded as JSON text, as a character string.
+`json-serialize' returns unibyte UTF-8 on newer Emacsen; inserting those raw
+bytes would make the serialized document unparseable in memory."
+  (let ((json (json-serialize (vector value) :null-object :null :false-object :false)))
+    (substring (if (multibyte-string-p json) json (decode-coding-string json 'utf-8))
+               1 -1)))
 
 (defun noema-research--json-insert (value indent)
   "Insert VALUE as JSON indented like `JSON.stringify(value, null, 2)'.
@@ -282,18 +284,47 @@ The id is recorded in TAKEN when TAKEN is non-nil."
          (noema-research-cell-work-node-id (noema-research-find-cell document id)))))
 
 (defun noema-research-primary-cell (document work-node-id)
-  "Return the canonical cell bound to WORK-NODE-ID, else any bound cell."
+  "Return the canonical cell bound to WORK-NODE-ID, else any bound cell.
+The primary Cell carries the WorkNode's JuText header.  Other bound Cells are
+supporting notes; they keep a Cell-level title, which is how a question or
+checkpoint primary is told apart from a supporting note in the same storage."
   (let* ((node (noema-research-find-work-node document work-node-id))
          (kind (noema-research-work-node-field node "kind"))
-         (bound (seq-filter
-                (lambda (cell) (equal (noema-research-cell-work-node-id cell)
-                                      work-node-id))
-                (noema-research-cells document))))
-    (or (seq-find (lambda (cell)
-                    (equal (noema-research--get cell "cell_type")
-                           (if (equal kind "work") "code" "markdown")))
-                  bound)
+         (bound (and work-node-id
+                     (seq-filter
+                      (lambda (cell) (equal (noema-research-cell-work-node-id cell)
+                                            work-node-id))
+                      (noema-research-cells document))))
+         (matching (seq-filter (lambda (cell)
+                                 (equal (noema-research--get cell "cell_type")
+                                        (if (equal kind "work") "code" "markdown")))
+                               bound)))
+    (or (seq-find (lambda (cell) (not (noema-research-cell-field cell "title"))) matching)
+        (car matching)
         (car bound))))
+
+(defun noema-research-cell-primary-p (document cell)
+  "Return non-nil when CELL is the primary Cell of its WorkNode in DOCUMENT."
+  (when-let* ((id (noema-research-cell-work-node-id cell)))
+    (eq (noema-research-primary-cell document id) cell)))
+
+(defun noema-research-cell-supporting-p (document cell)
+  "Return non-nil when CELL is a supporting note bound to a WorkNode."
+  (and (noema-research-work-node-for-cell document cell)
+       (not (noema-research-cell-primary-p document cell))))
+
+(defun noema-research-work-node-cells (document id)
+  "Return every Cell of DOCUMENT bound to WorkNode ID, in document order."
+  (and id
+       (seq-filter (lambda (cell) (equal (noema-research-cell-work-node-id cell) id))
+                   (noema-research-cells document))))
+
+(defun noema-research-work-node-label (document id)
+  "Return a human label for WorkNode ID in DOCUMENT; never a machine id."
+  (let* ((node (noema-research-find-work-node document id))
+         (title (noema-research-work-node-field node "title")))
+    (or title
+        (format "untitled %s" (or (noema-research-work-node-field node "kind") "node")))))
 
 (defun noema-research--dependency-id (from to type)
   "Return deterministic identity for dependency FROM to TO of TYPE."
@@ -334,14 +365,18 @@ The id is recorded in TAKEN when TAKEN is non-nil."
      ((and (equal (noema-research--get cell "cell_type") "code")
            (equal (noema-research-work-node-field node "kind") "work")) "work")
      ((and (equal (noema-research--get cell "cell_type") "code")) "code")
-     ((member (noema-research-work-node-field node "kind") '("question" "checkpoint"))
+     ((and (member (noema-research-work-node-field node "kind") '("question" "checkpoint"))
+           (noema-research-cell-primary-p document cell))
       (noema-research-work-node-field node "kind"))
+     (node "note")
      (legacy legacy)
      (t "note"))))
 
 (defun noema-research-cell-title (cell &optional document)
-  "Return CELL's WorkNode title in DOCUMENT, or its local title."
+  "Return CELL's WorkNode title in DOCUMENT, or its local title.
+A supporting note shows its own title, not the WorkNode's."
   (or (and document
+           (not (noema-research-cell-supporting-p document cell))
            (noema-research-work-node-field
             (noema-research-work-node-for-cell document cell) "title"))
       (noema-research-cell-field cell "title") ""))
@@ -595,6 +630,62 @@ TYPES defaults to every relation type in the work DAG."
       (noema-research--set-dependencies document kept))
     (noema-research-find-work-node document target)))
 
+(defun noema-research-relation-parents (document id type)
+  "Return the TYPE parent WorkNode ids of ID in DOCUMENT, in edge order."
+  (delete-dups
+   (delq nil (mapcar (lambda (edge)
+                       (and (equal (noema-research--get edge "to") id)
+                            (equal (noema-research--get edge "type") type)
+                            (noema-research--string (noema-research--get edge "from"))))
+                     (noema-research-dependencies document)))))
+
+(defun noema-research-relation-children (document id type)
+  "Return the TYPE child WorkNode ids of ID in DOCUMENT, in edge order."
+  (delete-dups
+   (delq nil (mapcar (lambda (edge)
+                       (and (equal (noema-research--get edge "from") id)
+                            (equal (noema-research--get edge "type") type)
+                            (noema-research--string (noema-research--get edge "to"))))
+                     (noema-research-dependencies document)))))
+
+(defun noema-research--require-node-id (document id)
+  "Resolve WorkNode or cell ID in DOCUMENT or signal a `user-error'."
+  (or (noema-research-resolve-work-node-id document id)
+      (user-error "Unknown WorkNode: %s" id)))
+
+(defun noema-research-add-relation (document from to type)
+  "Add one TYPE edge FROM -> TO in DOCUMENT; return nil when it already exists."
+  (unless (member type noema-research-relation-types)
+    (user-error "Unsupported relation type: %s" type))
+  (let ((from (noema-research--require-node-id document from))
+        (to (noema-research--require-node-id document to)))
+    (when (equal from to)
+      (user-error "A WorkNode cannot be its own %s parent" type))
+    (unless (member from (noema-research-relation-parents document to type))
+      (when (noema-research-dependency-reaches-p document from to)
+        (user-error "Linking “%s” → “%s” would form a work-DAG cycle"
+                    (noema-research-work-node-label document from)
+                    (noema-research-work-node-label document to)))
+      (noema-research--set-dependencies
+       document
+       (append (noema-research-dependencies document)
+               (list (noema-research--table
+                      "id" (noema-research--dependency-id from to type)
+                      "from" from "to" to "type" type))))
+      t)))
+
+(defun noema-research-remove-relation (document from to type)
+  "Remove the TYPE edge FROM -> TO from DOCUMENT; return nil when absent."
+  (let* ((edges (noema-research-dependencies document))
+         (kept (seq-remove (lambda (edge)
+                             (and (equal (noema-research--get edge "from") from)
+                                  (equal (noema-research--get edge "to") to)
+                                  (equal (noema-research--get edge "type") type)))
+                           edges)))
+    (unless (= (length kept) (length edges))
+      (noema-research--set-dependencies document kept)
+      t)))
+
 (defun noema-research-strip-references (document removed)
   "Remove WorkNode ids in REMOVED and every dependency touching them."
   (noema-research--set-dependencies
@@ -663,11 +754,25 @@ Reuse WORK-NODE-ID when supplied; otherwise create an independent WorkNode."
       (remhash "outputs" cell))
     node))
 
-(defun noema-research-delete-work-node (document id &optional delete-cells)
+(defun noema-research-delete-work-node (document id &optional delete-cells reconnect)
   "Delete WorkNode ID and its dependencies from DOCUMENT.
 When DELETE-CELLS is non-nil, also delete all bound cells; otherwise unbind
-the ordinary cells."
+the ordinary cells.  With RECONNECT, every child keeps its provenance: for
+each relation type the child is linked to each of ID's parents of that type."
   (setq id (or (noema-research-resolve-work-node-id document id) id))
+  (when reconnect
+    (dolist (type noema-research-relation-types)
+      (let ((parents (noema-research-relation-parents document id type)))
+        (dolist (child (noema-research-relation-children document id type))
+          (dolist (parent parents)
+            (unless (or (equal parent child)
+                        (member parent (noema-research-relation-parents document child type)))
+              (noema-research--set-dependencies
+               document
+               (append (noema-research-dependencies document)
+                       (list (noema-research--table
+                              "id" (noema-research--dependency-id parent child type)
+                              "from" parent "to" child "type" type))))))))))
   (noema-research--set-work-nodes
    document (seq-remove (lambda (node) (equal (noema-research-work-node-id node) id))
                         (noema-research-work-nodes document)))
@@ -678,10 +783,202 @@ the ordinary cells."
           (push cell kept)
         (if delete-cells
             nil
+          ;; An unbound Cell cannot keep work storage or Run output.
+          (puthash "cell_type" "markdown" cell)
+          (remhash "execution_count" cell)
+          (remhash "outputs" cell)
           (noema-research-cell-set cell "work_node_id" nil)
           (push cell kept))))
     (puthash "cells" (vconcat (nreverse kept)) document))
   document)
+
+;;;; Structure editing
+
+(defun noema-research-cell-graph-p (document cell)
+  "Return non-nil when CELL carries a WorkNode header in DOCUMENT."
+  (member (noema-research-cell-kind cell document) noema-research-graph-kinds))
+
+(defun noema-research-cell-unit (document cell)
+  "Return CELL's block in DOCUMENT.
+A WorkNode header Cell owns the notes that follow it up to the next header;
+any other Cell is a block of its own."
+  (let ((tail (memq cell (noema-research-cells document))))
+    (cond
+     ((null tail) nil)
+     ((not (noema-research-cell-graph-p document cell)) (list cell))
+     (t (let ((unit (list cell)))
+          (setq tail (cdr tail))
+          (while (and tail (not (noema-research-cell-graph-p document (car tail))))
+            (push (car tail) unit)
+            (setq tail (cdr tail)))
+          (nreverse unit))))))
+
+(defun noema-research-work-node-block-end (document id)
+  "Return the last Cell of WorkNode ID's block in DOCUMENT, or nil."
+  (when-let* ((cell (noema-research-primary-cell document id)))
+    (car (last (noema-research-cell-unit document cell)))))
+
+(defun noema-research-move-cells (document moving after)
+  "Move MOVING Cells of DOCUMENT, keeping their order, to follow Cell AFTER.
+AFTER nil places them at the start of the document."
+  (when (memq after moving)
+    (user-error "A block cannot be moved after itself"))
+  (let* ((cells (noema-research-cells document))
+         (rest (seq-remove (lambda (cell) (memq cell moving)) cells))
+         (ordered (seq-filter (lambda (cell) (memq cell moving)) cells))
+         (index (if after
+                    (1+ (or (seq-position rest after #'eq)
+                            (user-error "Unknown target Cell")))
+                  0)))
+    (puthash "cells" (vconcat (seq-take rest index) ordered (seq-drop rest index))
+             document)
+    document))
+
+(defun noema-research-shift-block (document cell direction)
+  "Move CELL's block one block `up' or `down' (DIRECTION) in DOCUMENT.
+A WorkNode block moves with its trailing notes past the neighbouring block;
+a note moves past one neighbouring Cell."
+  (let* ((cells (noema-research-cells document))
+         (moving (or (noema-research-cell-unit document cell)
+                     (user-error "Unknown Cell")))
+         (graph (noema-research-cell-graph-p document cell)))
+    (pcase direction
+      ('up
+       (let ((index (seq-position cells (car moving) #'eq)))
+         (when (zerop index) (user-error "Already the first block"))
+         (let ((target (1- index)))
+           (when graph
+             (while (and (> target 0)
+                         (not (noema-research-cell-graph-p document (nth target cells))))
+               (setq target (1- target))))
+           (noema-research-move-cells document moving
+                                      (and (> target 0) (nth (1- target) cells))))))
+      ('down
+       (let* ((index (seq-position cells (car (last moving)) #'eq))
+              (next (or (nth (1+ index) cells) (user-error "Already the last block"))))
+         (noema-research-move-cells
+          document moving
+          (if graph (car (last (noema-research-cell-unit document next))) next))))
+      (_ (error "Unknown direction %S" direction)))
+    document))
+
+(defun noema-research-set-work-node-kind (document id kind)
+  "Change WorkNode ID's KIND in DOCUMENT and adapt its primary Cell storage.
+Changing away from work removes state, outcome and the primary Cell's outputs."
+  (unless (member kind noema-research-graph-kinds)
+    (user-error "Unsupported WorkNode kind: %s" kind))
+  (let* ((id (noema-research--require-node-id document id))
+         (node (noema-research-find-work-node document id))
+         (title (or (noema-research-work-node-field node "title") ""))
+         (primary (noema-research-primary-cell document id)))
+    (if primary
+        (progn
+          (noema-research-cell-set primary "title" nil)
+          (noema-research-bind-cell document primary kind title id))
+      (puthash "kind" kind node)
+      (if (equal kind "work")
+          (unless (noema-research-work-node-field node "state")
+            (puthash "state" "open" node))
+        (dolist (key '("state" "outcome" "dropped_reason")) (remhash key node))))
+    id))
+
+(defun noema-research--new-cell (document)
+  "Return a new empty markdown Cell whose id is unused in DOCUMENT."
+  (let ((taken (make-hash-table :test #'equal)))
+    (dolist (cell (noema-research-cells document))
+      (puthash (noema-research-cell-id cell) t taken))
+    (noema-research--table "cell_type" "markdown"
+                           "id" (noema-research-new-cell-id taken)
+                           "metadata" (make-hash-table :test #'equal)
+                           "source" "")))
+
+(cl-defun noema-research-create-work-node (document kind title &key parents after)
+  "Create a KIND WorkNode titled TITLE with its primary Cell in DOCUMENT.
+PARENTS become lineage parents.  The Cell follows Cell AFTER, or is appended.
+Return the new WorkNode id."
+  (unless (member kind noema-research-graph-kinds)
+    (user-error "Unsupported WorkNode kind: %s" kind))
+  (let ((cell (noema-research--new-cell document)))
+    (puthash "cells" (vconcat (noema-research-cells document) (vector cell)) document)
+    (when after (noema-research-move-cells document (list cell) after))
+    (let ((id (noema-research-work-node-id
+               (noema-research-bind-cell document cell kind (string-trim (or title ""))))))
+      (dolist (parent parents)
+        (noema-research-add-relation document parent id "lineage"))
+      id)))
+
+(cl-defun noema-research-attach-cell (document id &key after)
+  "Give cell-less WorkNode ID a primary Cell in DOCUMENT; return the Cell id.
+The Cell follows Cell AFTER, or is appended."
+  (let* ((id (noema-research--require-node-id document id))
+         (node (noema-research-find-work-node document id)))
+    (when (noema-research-primary-cell document id)
+      (user-error "“%s” already has a Cell" (noema-research-work-node-label document id)))
+    (let ((cell (noema-research--new-cell document)))
+      (puthash "cells" (vconcat (noema-research-cells document) (vector cell)) document)
+      (when after (noema-research-move-cells document (list cell) after))
+      (noema-research-bind-cell document cell (noema-research-work-node-field node "kind")
+                                (or (noema-research-work-node-field node "title") "") id)
+      (noema-research-cell-id cell))))
+
+(cl-defun noema-research-work-node-choices (document &key predicate near)
+  "Return (LABEL . WORK-NODE-ID) completion choices for DOCUMENT's WorkNodes.
+Labels are unique human text — kind, title, a “no Cell” marker, and an
+ordinal only when labels collide; machine ids never appear.  PREDICATE
+filters ids.  With NEAR, ancestors of NEAR come first, then the nodes
+nearest to it in the document, then Cell-less nodes."
+  (let ((positions (make-hash-table :test #'equal))
+        (ancestors (make-hash-table :test #'equal))
+        near-position ids)
+    (seq-do-indexed (lambda (cell index)
+                      (when-let* ((id (noema-research-cell-work-node-id cell)))
+                        (unless (gethash id positions) (puthash id index positions))))
+                    (noema-research-cells document))
+    (when near
+      (setq near-position (gethash near positions))
+      (let ((stack (list near)))
+        (while stack
+          (let ((id (pop stack)))
+            (dolist (type noema-research-relation-types)
+              (dolist (parent (noema-research-relation-parents document id type))
+                (unless (gethash parent ancestors)
+                  (puthash parent t ancestors)
+                  (push parent stack))))))))
+    (dolist (node (noema-research-work-nodes document))
+      (let ((id (noema-research-work-node-id node)))
+        (when (or (null predicate) (funcall predicate id))
+          (push id ids))))
+    (setq ids
+          (sort (nreverse ids)
+                (lambda (left right)
+                  (let ((lp (gethash left positions)) (rp (gethash right positions))
+                        (la (gethash left ancestors)) (ra (gethash right ancestors)))
+                    (cond
+                     ((and la (not ra)) t)
+                     ((and ra (not la)) nil)
+                     ((and lp (not rp)) t)
+                     ((and rp (not lp)) nil)
+                     ((and lp rp near-position)
+                      (< (abs (- lp near-position)) (abs (- rp near-position))))
+                     ((and lp rp) (< lp rp)))))))
+    (let* ((bases (mapcar (lambda (id)
+                            (replace-regexp-in-string
+                             "," " "
+                             (format "%s: %s%s"
+                                     (or (noema-research-work-node-field
+                                          (noema-research-find-work-node document id) "kind")
+                                         "node")
+                                     (noema-research-work-node-label document id)
+                                     (if (gethash id positions) "" " · no Cell"))))
+                          ids))
+           (ordinals (make-hash-table :test #'equal)))
+      (cl-mapcar (lambda (base id)
+                   (let ((n (puthash base (1+ (gethash base ordinals 0)) ordinals)))
+                     (cons (if (= (cl-count base bases :test #'equal) 1)
+                               base
+                             (format "%s ⟨%d⟩" base n))
+                           id)))
+                 bases ids))))
 
 ;;;; Validation
 
@@ -879,7 +1176,7 @@ descendants up to DEPTH, and siblings."
                 (push (list :id id
                             :cell-id (and cell (noema-research-cell-id cell))
                             :kind (noema-research-work-node-field node "kind")
-                            :title (or (noema-research-work-node-field node "title") id)
+                            :title (noema-research-work-node-label document id)
                             :state (noema-research-work-node-field node "state")
                             :outcome (noema-research-work-node-field node "outcome")
                             :focus (equal id focus-id)

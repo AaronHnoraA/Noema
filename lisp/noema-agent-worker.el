@@ -393,9 +393,9 @@ JuText buffer for that file is stale relative to disk until it is next
 saved or reverted.  Left alone, that staleness is what makes Emacs treat
 the file as externally changed the next time the buffer is touched.
 Resyncing here, right after the terminal report succeeds, keeps the
-visited-file modtime current so that never happens.  A buffer with unsaved
-edits is left untouched, matching `noema-research-merge-disk-outputs''s own
-safety rule."
+visited-file modtime current so that never happens.  The merge syncs
+unsaved JuText text first and never overwrites it, so a modified buffer is
+resynced too; otherwise its next save would ask about an external change."
   (when-let* ((source (noema-agent-worker--value (noema-agent-worker-spec worker) "source"))
               ((equal (noema-agent-worker--string source "kind") "work-cell"))
               (relative (noema-agent-worker--string source "file"))
@@ -403,7 +403,6 @@ safety rule."
               (buffer (find-buffer-visiting file)))
     (with-current-buffer buffer
       (when (and (derived-mode-p 'noema-research-mode)
-                 (not (buffer-modified-p))
                  (fboundp 'noema-research-merge-disk-outputs))
         (ignore-errors (noema-research-merge-disk-outputs))))))
 

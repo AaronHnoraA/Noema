@@ -78,12 +78,19 @@
   '(("n" . noema-research-graph-continue)
     ("s" . noema-research-graph-sibling)
     ("c" . noema-research-graph-checkpoint)
+    ("N" . noema-research-graph-new-root)
     ("p" . noema-research-graph-lineage-menu)
     ("D" . noema-research-graph-depends-menu)
+    ("m" . noema-research-graph-move-work-node)
     ("r" . noema-research-graph-rename-work-node)
+    ("K" . noema-research-graph-change-kind)
+    ("t" . noema-research-graph-set-state)
+    ("o" . noema-research-graph-set-outcome)
     ("d" . noema-research-graph-mark-done)
     ("x" . noema-research-graph-drop)
     ("R" . noema-research-graph-reopen)
+    ("u" . noema-research-graph-undo)
+    ("U" . noema-research-graph-redo)
     ("TAB" . noema-research-graph-toggle-fold)
     ("f" . noema-research-graph-toggle-focus)
     ("F" . noema-research-graph-run-fork)
@@ -161,20 +168,29 @@ zoom/focus/fold state is never encoded only inside the drawing itself."
     ("f" "focus branch" noema-research-graph-toggle-focus)
     ("z" "semantic zoom" noema-research-graph-cycle-zoom)
     ("g" "refresh data" noema-research-graph-refresh-all)]
-   ["Selected node"
-    ("e" "run" noema-research-graph-execute)
-    ("i" "inspect" noema-research-graph-inspect)
-    ("n" "continue" noema-research-graph-continue)
-    ("s" "sibling" noema-research-graph-sibling)
+   ["Create"
+    ("n" "child work" noema-research-graph-continue)
+    ("s" "sibling work" noema-research-graph-sibling)
     ("c" "checkpoint" noema-research-graph-checkpoint)
-    ("X" "structure" noema-research-graph-structure)]
-   ["State / relations"
+    ("N" "root node" noema-research-graph-new-root)]
+   ["Edit node"
+    ("r" "rename" noema-research-graph-rename-work-node)
+    ("m" "move under parent" noema-research-graph-move-work-node)
+    ("K" "change kind" noema-research-graph-change-kind)
+    ("t" "state" noema-research-graph-set-state)
+    ("o" "outcome" noema-research-graph-set-outcome)
     ("d" "done" noema-research-graph-mark-done)
     ("x" "drop" noema-research-graph-drop)
-    ("R" "reopen" noema-research-graph-reopen)
-    ("r" "rename" noema-research-graph-rename-work-node)
-    ("p" "lineage (rewrite/add/remove)" noema-research-graph-lineage-menu)
-    ("D" "depends (rewrite/add/remove)" noema-research-graph-depends-menu)
+    ("R" "reopen" noema-research-graph-reopen)]
+   ["Links / structure"
+    ("p" "lineage links" noema-research-graph-lineage-menu)
+    ("D" "dependencies" noema-research-graph-depends-menu)
+    ("X" "structure" noema-research-graph-structure)
+    ("u" "undo structure" noema-research-graph-undo)
+    ("U" "redo structure" noema-research-graph-redo)]
+   ["Run / inspect"
+    ("e" "run" noema-research-graph-execute)
+    ("i" "inspect" noema-research-graph-inspect)
     ("a" "Attention" noema-research-attention)]])
 
 (defun noema-research-graph-quit ()
@@ -250,20 +266,36 @@ JuText layout exactly."
   "Return the node id at point or the selected node."
   (or (get-text-property (point) 'noema-research-node)
       noema-research-graph--selected
-      (user-error "No graph node at point")))
+      (user-error "No node selected: move with h/j/k/l, or create a root node with N")))
 
-(defun noema-research-graph--in-source (id function)
-  "Call FUNCTION in the source buffer with point on cell ID."
-  (noema-research-graph--require-materialized id)
-  (let ((graph (current-buffer)))
-    (with-current-buffer noema-research-graph--source
-      (noema-research-mode--sync)
-      (noema-research-goto-cell id)
-      (funcall function))
+(defun noema-research-graph--selected-node ()
+  "Return the selected materialized node id."
+  (let ((id (noema-research-graph--node-at-point)))
+    (noema-research-graph--require-materialized id)
+    id))
+
+(defun noema-research-graph--edit (function)
+  "Call FUNCTION in the source JuText buffer as one Graph Board edit.
+FUNCTION runs with the source buffer current and its document synced.  When
+it returns a WorkNode id, that node becomes the selection.  The board then
+redraws once and stays open."
+  (let ((graph (current-buffer))
+        (source noema-research-graph--source)
+        result)
+    (unless (buffer-live-p source)
+      (user-error "The research notebook buffer is no longer live"))
+    (let ((noema-research--inhibit-graph-notify t))
+      (setq result (with-current-buffer source
+                     (noema-research-mode--sync)
+                     (funcall function))))
     (when (buffer-live-p graph)
       (with-current-buffer graph
-        (setq noema-research-graph--selected id)
-        (noema-research-graph-refresh)))))
+        (when (and (stringp result)
+                   (noema-research-find-work-node
+                    (buffer-local-value 'noema-research--document source) result))
+          (setq noema-research-graph--selected result))
+        (noema-research-graph-refresh)))
+    result))
 
 (defun noema-research-graph--jump-and-call (function)
   "Visit the node at point in its source buffer and call FUNCTION there.
@@ -280,32 +312,6 @@ JuText window instead of leaving a dedicated DAG window behind."
       (noema-research-goto-cell id)
       (when function (funcall function)))))
 
-(defun noema-research-graph--create (function)
-  "Call FUNCTION in the source buffer to create a node from the one at point.
-Unlike `noema-research-graph--jump-and-call' (visiting an existing node),
-creating a new node keeps the Graph Board open so several nodes can be
-sketched in a row; the board resyncs and selects the node FUNCTION created."
-  (let ((id (noema-research-graph--node-at-point))
-        (graph (current-buffer))
-        new-id)
-    (noema-research-graph--require-materialized id)
-    (with-current-buffer noema-research-graph--source
-      (noema-research-mode--sync)
-      (noema-research-goto-cell id)
-      (funcall function)
-      (let ((created (point)))
-        ;; `function' leaves point where the new header's title is typed; a
-        ;; stable WorkNode id is only assigned on the next sync.  That point
-        ;; sits exactly at the header's end boundary, one past the property
-        ;; range the sync tags, so look one character back.
-        (noema-research-mode--sync)
-        (let ((probe (max (point-min) (1- created))))
-          (setq new-id (or (get-text-property probe 'noema-research-work-node-id)
-                           (get-text-property probe 'noema-research-id))))))
-    (when (buffer-live-p graph)
-      (with-current-buffer graph
-        (setq noema-research-graph--selected (or new-id id))
-        (noema-research-graph-refresh)))))
 
 (defun noema-research-graph--save-view ()
   "Persist the board's focus and folds next to the notebook."
@@ -1122,10 +1128,29 @@ Graphviz's coordinate system through a viewBox."
 
 ;;;; Commands
 
+(defun noema-research-graph--prune-view (document)
+  "Forget focus, folds and selection naming WorkNodes absent from DOCUMENT.
+Persist the view again when focus or folds changed."
+  (let ((focus noema-research-graph--focus)
+        (folds noema-research-graph--folds))
+    (unless (noema-research-find-work-node document noema-research-graph--focus)
+      (setq noema-research-graph--focus nil))
+    (setq noema-research-graph--folds
+          (seq-filter (lambda (id) (noema-research-find-work-node document id))
+                      noema-research-graph--folds))
+    (when (and (stringp noema-research-graph--selected)
+               (string-prefix-p "wn_" noema-research-graph--selected)
+               (not (noema-research-find-work-node document noema-research-graph--selected)))
+      (setq noema-research-graph--selected nil))
+    (unless (and (equal focus noema-research-graph--focus)
+                 (equal folds noema-research-graph--folds))
+      (noema-research-graph--save-view))))
+
 (defun noema-research-graph-refresh ()
   "Redraw the Graph Board."
   (interactive)
   (let* ((document (noema-research-graph--document))
+         (_pruned (noema-research-graph--prune-view document))
          (projection (noema-research-graph--with-proposals
                       (noema-research-graph--projection document)
                       document noema-research-graph--proposals))
@@ -1286,104 +1311,234 @@ Graphviz's coordinate system through a viewBox."
   (noema-research-graph-refresh))
 
 (defun noema-research-graph-visit ()
-  "Visit the node at point in its JuText buffer."
+  "Visit the node at point in its JuText buffer.
+A Cell-less WorkNode is offered a new header Cell first."
   (interactive)
-  (noema-research-graph--jump-and-call nil))
+  (let* ((id (noema-research-graph--selected-node))
+         (document (noema-research-graph--document)))
+    (when (and (noema-research-find-work-node document id)
+               (not (noema-research-primary-cell document id)))
+      (let ((label (noema-research-work-node-label document id)))
+        (unless (y-or-n-p (format "“%s” has no Cell; create one? " label))
+          (user-error "“%s” has no Cell" label)))
+      (noema-research-graph--edit (lambda () (noema-research-op-attach-cell id))))
+    (noema-research-graph--jump-and-call nil)))
+
+(defun noema-research-graph--create-from (kind relation)
+  "Create a KIND node as RELATION (`child' or `sibling') of the selection."
+  (let ((id (noema-research-graph--selected-node)))
+    (noema-research-graph--edit
+     (lambda ()
+       (let* ((document noema-research--document)
+              (label (noema-research-work-node-label document id))
+              (parents (if (eq relation 'sibling)
+                           (noema-research-relation-parents document id "lineage")
+                         (list id)))
+              (title (noema-research-read-title
+                      (format (if (eq relation 'sibling)
+                                  "New %s beside “%s”: "
+                                "New %s after “%s”: ")
+                              kind label))))
+         (noema-research-op-create kind title parents id))))))
 
 (defun noema-research-graph-continue ()
-  "Create work continuing from the node at point, keeping the board open."
+  "Create work continuing from the selected node; the board stays open."
   (interactive)
-  (noema-research-graph--create #'noema-research-continue))
+  (noema-research-graph--create-from "work" 'child))
 
 (defun noema-research-graph-sibling ()
-  "Create a sibling of the node at point, keeping the board open."
+  "Create work sharing the selected node's lineage parents; the board stays open."
   (interactive)
-  (noema-research-graph--create #'noema-research-new-sibling))
+  (noema-research-graph--create-from "work" 'sibling))
 
 (defun noema-research-graph-checkpoint ()
-  "Record a checkpoint continuing from the node at point, keeping the board open."
+  "Record a checkpoint after the selected node; the board stays open."
   (interactive)
-  (noema-research-graph--create #'noema-research-new-checkpoint))
+  (noema-research-graph--create-from "checkpoint" 'child))
 
-(defun noema-research-graph-edit-lineage ()
-  "Rewrite the complete lineage parent set of the node at point."
+(defun noema-research-graph-new-root ()
+  "Create a root WorkNode; this also works on an empty graph."
   (interactive)
-  (noema-research-graph--in-source (noema-research-graph--node-at-point)
-                                   #'noema-research-edit-lineage))
-
-(defun noema-research-graph-add-lineage-parent ()
-  "Add one lineage parent to the node at point without touching the rest."
-  (interactive)
-  (noema-research-graph--in-source (noema-research-graph--node-at-point)
-                                   #'noema-research-add-lineage-parent))
-
-(defun noema-research-graph-remove-lineage-parent ()
-  "Remove one lineage parent from the node at point."
-  (interactive)
-  (noema-research-graph--in-source (noema-research-graph--node-at-point)
-                                   #'noema-research-remove-lineage-parent))
-
-(defun noema-research-graph-edit-depends ()
-  "Rewrite the complete hard-dependency set of the node at point."
-  (interactive)
-  (noema-research-graph--in-source (noema-research-graph--node-at-point)
-                                   #'noema-research-edit-depends))
-
-(defun noema-research-graph-add-depends-parent ()
-  "Add one hard dependency to the node at point without touching the rest."
-  (interactive)
-  (noema-research-graph--in-source (noema-research-graph--node-at-point)
-                                   #'noema-research-add-depends-parent))
-
-(defun noema-research-graph-remove-depends-parent ()
-  "Remove one hard dependency from the node at point."
-  (interactive)
-  (noema-research-graph--in-source (noema-research-graph--node-at-point)
-                                   #'noema-research-remove-depends-parent))
+  (noema-research-graph--edit
+   (lambda ()
+     (let* ((kind (noema-research-read-kind "New root node kind: " "question"))
+            (title (noema-research-read-title (format "New root %s: " kind))))
+       (noema-research-op-create kind title nil nil)))))
 
 (defun noema-research-graph-rename-work-node ()
-  "Rename the node at point without changing its identity or edges."
+  "Rename the selected node without changing its identity or edges."
   (interactive)
-  (noema-research-graph--in-source (noema-research-graph--node-at-point)
-                                   #'noema-research-rename-work-node))
+  (let ((id (noema-research-graph--selected-node)))
+    (noema-research-graph--edit
+     (lambda ()
+       (noema-research-op-rename
+        id (noema-research-read-title
+            "New title: " (noema-research-work-node-field
+                           (noema-research-find-work-node noema-research--document id)
+                           "title")))))))
+
+(defun noema-research-graph-move-work-node (&optional stay)
+  "Move the selected node under another lineage parent, or make it a root.
+Its JuText block follows the new parent unless STAY (prefix argument) or
+`noema-research-move-relocates-block' is nil."
+  (interactive "P")
+  (let ((id (noema-research-graph--selected-node)))
+    (noema-research-graph--edit
+     (lambda ()
+       (noema-research-op-move id (noema-research-read-move-parent noema-research--document id)
+                               (and noema-research-move-relocates-block (not stay)))))))
+
+(defun noema-research-graph-change-kind ()
+  "Change the selected node to question, work or checkpoint."
+  (interactive)
+  (let ((id (noema-research-graph--selected-node)))
+    (noema-research-graph--edit
+     (lambda ()
+       (noema-research-op-set-kind
+        id (noema-research-read-kind-change noema-research--document id))))))
+
+(defun noema-research-graph-set-state ()
+  "Set the selected work's state."
+  (interactive)
+  (let ((id (noema-research-graph--selected-node)))
+    (noema-research-graph--edit
+     (lambda ()
+       (let* ((state (completing-read "State: " noema-research-work-states nil t))
+              (reason (when (equal state "dropped") (read-string "Reason (optional): "))))
+         (noema-research-op-set-state id state reason))))))
+
+(defun noema-research-graph-set-outcome ()
+  "Set or clear the selected work's outcome."
+  (interactive)
+  (let ((id (noema-research-graph--selected-node)))
+    (noema-research-graph--edit
+     (lambda ()
+       (noema-research-op-set-outcome
+        id (noema-research-read-outcome noema-research--document id))))))
+
+(defun noema-research-graph-mark-done ()
+  "Mark the selected work done."
+  (interactive)
+  (let ((id (noema-research-graph--selected-node)))
+    (noema-research-graph--edit (lambda () (noema-research-op-set-state id "done")))))
+
+(defun noema-research-graph-drop ()
+  "Drop the selected work, prompting for a reason."
+  (interactive)
+  (let ((id (noema-research-graph--selected-node)))
+    (noema-research-graph--edit
+     (lambda ()
+       (noema-research-op-set-state id "dropped" (read-string "Reason (optional): "))))))
+
+(defun noema-research-graph-reopen ()
+  "Reopen the selected work."
+  (interactive)
+  (let ((id (noema-research-graph--selected-node)))
+    (noema-research-graph--edit (lambda () (noema-research-op-set-state id "open")))))
+
+(defun noema-research-graph--relation (type direction action)
+  "Apply one TYPE link change in DIRECTION with ACTION around the selection."
+  (let ((id (noema-research-graph--selected-node)))
+    (noema-research-graph--edit
+     (lambda ()
+       (noema-research--apply-relation-command
+        noema-research--document id type direction action)))))
+
+(defun noema-research-graph-add-lineage-parent ()
+  "Add one lineage parent to the selected node."
+  (interactive)
+  (noema-research-graph--relation "lineage" 'parent 'add))
+
+(defun noema-research-graph-remove-lineage-parent ()
+  "Remove one lineage parent from the selected node."
+  (interactive)
+  (noema-research-graph--relation "lineage" 'parent 'remove))
+
+(defun noema-research-graph-add-lineage-child ()
+  "Make another node a lineage child of the selected node."
+  (interactive)
+  (noema-research-graph--relation "lineage" 'child 'add))
+
+(defun noema-research-graph-remove-lineage-child ()
+  "Detach one lineage child from the selected node."
+  (interactive)
+  (noema-research-graph--relation "lineage" 'child 'remove))
+
+(defun noema-research-graph-add-depends-parent ()
+  "Add one hard dependency to the selected node."
+  (interactive)
+  (noema-research-graph--relation "depends" 'parent 'add))
+
+(defun noema-research-graph-remove-depends-parent ()
+  "Remove one hard dependency from the selected node."
+  (interactive)
+  (noema-research-graph--relation "depends" 'parent 'remove))
+
+(defun noema-research-graph-add-depends-child ()
+  "Make another node depend on the selected node."
+  (interactive)
+  (noema-research-graph--relation "depends" 'child 'add))
+
+(defun noema-research-graph-remove-depends-child ()
+  "Remove one node's dependency on the selected node."
+  (interactive)
+  (noema-research-graph--relation "depends" 'child 'remove))
+
+(defun noema-research-graph-edit-lineage ()
+  "Rewrite the whole lineage parent set of the selected node."
+  (interactive)
+  (let ((id (noema-research-graph--selected-node)))
+    (noema-research-graph--edit
+     (lambda () (noema-research--rewrite-relation noema-research--document id "lineage")))))
+
+(defun noema-research-graph-edit-depends ()
+  "Rewrite the whole hard-dependency set of the selected node."
+  (interactive)
+  (let ((id (noema-research-graph--selected-node)))
+    (noema-research-graph--edit
+     (lambda () (noema-research--rewrite-relation noema-research--document id "depends")))))
 
 (transient-define-prefix noema-research-graph-lineage-menu ()
-  "Edit the lineage parents of the selected node."
-  [["Lineage"
-    ("p" "rewrite all parents" noema-research-graph-edit-lineage)
-    ("a" "add one parent" noema-research-graph-add-lineage-parent)
-    ("r" "remove one parent" noema-research-graph-remove-lineage-parent)]])
+  "Edit the lineage links of the selected node."
+  [["Parents"
+    ("a" "add parent" noema-research-graph-add-lineage-parent)
+    ("r" "remove parent" noema-research-graph-remove-lineage-parent)
+    ("p" "rewrite all parents" noema-research-graph-edit-lineage)]
+   ["Children"
+    ("c" "add child" noema-research-graph-add-lineage-child)
+    ("x" "remove child" noema-research-graph-remove-lineage-child)]
+   ["Position"
+    ("m" "move under another parent" noema-research-graph-move-work-node)]])
 
 (transient-define-prefix noema-research-graph-depends-menu ()
   "Edit the hard dependencies of the selected node."
-  [["Depends"
-    ("D" "rewrite all dependencies" noema-research-graph-edit-depends)
-    ("a" "add one dependency" noema-research-graph-add-depends-parent)
-    ("r" "remove one dependency" noema-research-graph-remove-depends-parent)]])
+  [["Depends on"
+    ("a" "add dependency" noema-research-graph-add-depends-parent)
+    ("r" "remove dependency" noema-research-graph-remove-depends-parent)
+    ("D" "rewrite all dependencies" noema-research-graph-edit-depends)]
+   ["Required by"
+    ("c" "add dependent" noema-research-graph-add-depends-child)
+    ("x" "remove dependent" noema-research-graph-remove-depends-child)]])
 
-(defun noema-research-graph-mark-done ()
-  "Mark the work at point done."
+(defun noema-research-graph-undo ()
+  "Undo the newest structure edit of the source document."
   (interactive)
-  (noema-research-graph--in-source (noema-research-graph--node-at-point)
-                                   (lambda () (noema-research-set-work-state "done"))))
+  (noema-research-graph--edit (lambda () (noema-research-structure-undo) nil)))
 
-(defun noema-research-graph-drop ()
-  "Drop the work at point, prompting for a reason."
+(defun noema-research-graph-redo ()
+  "Redo the newest undone structure edit of the source document."
   (interactive)
-  (noema-research-graph--in-source (noema-research-graph--node-at-point)
-                                   (lambda () (noema-research-set-work-state "dropped"))))
-
-(defun noema-research-graph-reopen ()
-  "Reopen the work at point."
-  (interactive)
-  (noema-research-graph--in-source (noema-research-graph--node-at-point)
-                                   (lambda () (noema-research-set-work-state "open"))))
+  (noema-research-graph--edit (lambda () (noema-research-structure-redo) nil)))
 
 (defun noema-research-graph-inspect ()
-  "Inspect the node at point."
+  "Inspect the selected node."
   (interactive)
-  (noema-research-graph--in-source (noema-research-graph--node-at-point)
-                                   #'noema-research-inspect))
+  (let ((id (noema-research-graph--selected-node)))
+    (with-current-buffer noema-research-graph--source
+      (noema-research-mode--sync)
+      (save-excursion
+        (noema-research-goto-cell id)
+        (noema-research-inspect)))))
 
 (defun noema-research-graph-toggle-fold ()
   "Fold or unfold the branch below the node at point."
@@ -1428,6 +1583,9 @@ Graphviz's coordinate system through a viewBox."
     (unless (and node (equal (noema-research-work-node-field node "kind") "work")
                  cell (equal (noema-research--get cell "cell_type") "code"))
       (user-error "Agent Run applies only to a materialized work block"))
+    (when (noema-research-work-prompt-empty-p cell)
+      (user-error "“%s” has no prompt yet; visit it (RET) and write what the agent should do"
+                  (noema-research-work-node-label document id)))
     (unless (fboundp 'noema-agent-worker-run-work-cell)
       (require 'noema-agent-worker))
     (with-current-buffer source
@@ -1482,57 +1640,67 @@ Graphviz's coordinate system through a viewBox."
 	["Project Run"
 	 ("p" "run .py / .ipynb" noema-research-graph-run-project-file)]])
 
-(defun noema-research-graph--structure-command (function)
-  "Apply source-buffer structure FUNCTION to the selected materialized node."
-  (let ((id (noema-research-graph--node-at-point))
-        (source noema-research-graph--source))
-    (noema-research-graph--require-materialized id)
-    (with-current-buffer source
-      (noema-research-mode--sync)
-      (noema-research-goto-cell id)
-      (call-interactively function))
-    (setq noema-research-graph--selected nil)
-    (noema-research-graph-refresh)))
-
 (defun noema-research-graph-delete-work-node ()
-  "Delete the selected WorkNode while preserving its cells as notes."
+  "Delete the selected WorkNode; its Cells stay as notes."
   (interactive)
-  (let* ((id (noema-research-graph--node-at-point))
-         (_materialized (noema-research-graph--require-materialized id))
-         (source noema-research-graph--source))
-    (with-current-buffer source
-      (let* ((document (noema-research-mode--sync))
-             (cell (noema-research-primary-cell document id)))
-        (if cell
-            (progn
-              (noema-research-goto-cell id)
-              (call-interactively #'noema-research-delete-current-work-node))
-          (unless (noema-research-find-work-node document id)
-            (user-error "Unknown WorkNode: %s" id))
-          (unless (yes-or-no-p (format "Delete orphan WorkNode %s? " id))
-            (user-error "WorkNode deletion cancelled"))
-          (noema-research-delete-work-node document id)
-          (noema-research--render-structure-mutation))))
-    (setq noema-research-graph--selected nil)
-    (noema-research-graph-refresh)))
+  (let ((id (noema-research-graph--selected-node)))
+    (noema-research-graph--edit
+     (lambda ()
+       (let ((policy (noema-research-read-delete-policy noema-research--document id)))
+         (noema-research-op-delete-node id (eq policy 'reconnect)))))))
+
+(defun noema-research-graph--header-cell (id)
+  "Return the header Cell of WorkNode ID in the current source document."
+  (or (noema-research-primary-cell noema-research--document id)
+      (user-error "“%s” has no Cell"
+                  (noema-research-work-node-label noema-research--document id))))
 
 (defun noema-research-graph-unbind-cell ()
-  "Unbind the selected Cell while preserving its WorkNode."
+  "Unbind the selected node's header Cell; the WorkNode stays."
   (interactive)
-  (noema-research-graph--structure-command #'noema-research-unbind-current-cell))
+  (let ((id (noema-research-graph--selected-node)))
+    (noema-research-graph--edit
+     (lambda ()
+       (let ((cell (noema-research-graph--header-cell id)))
+         (unless (yes-or-no-p
+                  (format "Unbind the Cell of “%s” and keep the WorkNode? "
+                          (noema-research-work-node-label noema-research--document id)))
+           (user-error "Unbind cancelled"))
+         (noema-research-op-unbind-cell (noema-research-cell-id cell)))))))
 
 (defun noema-research-graph-delete-cell ()
-  "Delete the selected Cell while preserving its WorkNode."
+  "Delete the selected node's header Cell; the WorkNode stays."
   (interactive)
-  (noema-research-graph--structure-command #'noema-research-delete-current-cell))
+  (let ((id (noema-research-graph--selected-node)))
+    (noema-research-graph--edit
+     (lambda ()
+       (let ((cell (noema-research-graph--header-cell id)))
+         (unless (yes-or-no-p
+                  (format "Delete the Cell of “%s” and keep the WorkNode? "
+                          (noema-research-work-node-label noema-research--document id)))
+           (user-error "Cell deletion cancelled"))
+         (noema-research-op-delete-cell (noema-research-cell-id cell)))))))
+
+(defun noema-research-graph-attach-cell ()
+  "Create a header Cell for the selected Cell-less WorkNode."
+  (interactive)
+  (let ((id (noema-research-graph--selected-node)))
+    (noema-research-graph--edit (lambda () (noema-research-op-attach-cell id)))))
 
 (transient-define-prefix noema-research-graph-structure ()
-  "Perform identity-safe Graph structure changes."
-  [["Distinct identities"
-    ("w" "delete WorkNode; keep Cell as note" noema-research-graph-delete-work-node)
+  "Change the selected node's identity-bearing structure."
+  [["WorkNode"
+    ("r" "rename (identity/edges unchanged)" noema-research-graph-rename-work-node)
+    ("k" "change kind" noema-research-graph-change-kind)
+    ("m" "move under another parent" noema-research-graph-move-work-node)
+    ("w" "delete WorkNode; keep Cells as notes" noema-research-graph-delete-work-node)]
+   ["Cell"
+    ("b" "create a Cell for a Cell-less node" noema-research-graph-attach-cell)
     ("u" "unbind Cell; keep WorkNode" noema-research-graph-unbind-cell)
-    ("c" "delete Cell; keep WorkNode" noema-research-graph-delete-cell)
-    ("r" "rename WorkNode (identity/edges unchanged)" noema-research-graph-rename-work-node)]])
+    ("c" "delete Cell; keep WorkNode" noema-research-graph-delete-cell)]
+   ["History"
+    ("z" "undo structure edit" noema-research-graph-undo)
+    ("Z" "redo structure edit" noema-research-graph-redo)]])
 
 (defun noema-research-graph-follow-source (source work-node-id)
   "Explicitly attach the singleton DAG to SOURCE and select WORK-NODE-ID."
