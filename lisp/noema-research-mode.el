@@ -34,6 +34,8 @@
                   "init-aaronnote" (payload &optional focus))
 (declare-function my/noema-jupyter-cell--api-sync
                   "init-aaronnote-jupyter-cell" (channel body &optional timeout))
+(declare-function noema-research-graph-follow-source
+                  "noema-research-graph" (source work-node-id))
 (defvar my/noema--ready)
 
 (autoload 'noema-research-graph-open "noema-research-graph" nil t)
@@ -80,6 +82,9 @@
 
 (defvar-local noema-research--decoration-timer nil
   "Pending idle timer that refreshes header decorations.")
+
+(defvar-local noema-research--graph-follow-timer nil
+  "Pending idle timer that mirrors the JuText cursor into Graph Board.")
 
 (defconst noema-research--header-regexp "^%%\\(?:[ \t]+\\(.*?\\)\\)?[ \t]*$"
   "Regexp matching a JuText cell header.")
@@ -350,6 +355,43 @@ together with every relation that referenced them."
                  (with-current-buffer buffer
                    (setq noema-research--decoration-timer nil)
                    (noema-research-mode--refresh-decorations)))))))))
+
+(defun noema-research--graph-buffer-live-p ()
+  "Return non-nil when this JuText buffer has a live Graph Board."
+  (let ((source (current-buffer)))
+    (seq-some
+     (lambda (buffer)
+       (with-current-buffer buffer
+         (and (derived-mode-p 'noema-research-graph-mode)
+              (boundp 'noema-research-graph--source)
+              (eq noema-research-graph--source source))))
+     (buffer-list))))
+
+(defun noema-research--follow-graph-now (source)
+  "Mirror SOURCE's current WorkNode selection into its Graph Board."
+  (when (buffer-live-p source)
+    (with-current-buffer source
+      (setq noema-research--graph-follow-timer nil)
+      (when (and (fboundp 'noema-research-graph-follow-source)
+                 noema-research--document)
+        (let* ((entry (noema-research--entry-at-point (noema-research--scan)))
+               (id (and entry (plist-get entry :work-node-id))))
+          (when id
+            (noema-research-graph-follow-source source id)))))))
+
+(defun noema-research--schedule-graph-follow ()
+  "Debounce JuText-to-Graph selection synchronization."
+  (when (and (not noema-research--graph-follow-timer)
+             (noema-research--graph-buffer-live-p))
+    (setq noema-research--graph-follow-timer
+          (run-with-idle-timer 0.08 nil #'noema-research--follow-graph-now
+                               (current-buffer)))))
+
+(defun noema-research--cancel-graph-follow ()
+  "Cancel this buffer's pending Graph Board synchronization."
+  (when (timerp noema-research--graph-follow-timer)
+    (cancel-timer noema-research--graph-follow-timer))
+  (setq noema-research--graph-follow-timer nil))
 
 ;;;; Loading and saving
 
@@ -791,6 +833,82 @@ With KIND, create that kind of cell instead."
     (set-buffer-modified-p t)
     (noema-research-mode--refresh-decorations)))
 
+(defun noema-research--render-structure-mutation (&optional cell-id)
+  "Render the mutated document and optionally return point to CELL-ID."
+  (let ((inhibit-modification-hooks t))
+    (noema-research--render noema-research--document))
+  (set-buffer-modified-p t)
+  (noema-research-mode--refresh-decorations)
+  (when cell-id
+    (ignore-errors (noema-research-goto-cell cell-id))))
+
+(defun noema-research-unbind-current-cell ()
+  "Unbind the current Cell while preserving its WorkNode.
+A bound work Cell becomes a note and its latest output is removed because
+unbound note cells cannot own Agent Run output."
+  (interactive)
+  (noema-research-mode--sync)
+  (let* ((cell (noema-research--require-cell))
+         (cell-id (noema-research-cell-id cell))
+         (node (noema-research-work-node-for-cell noema-research--document cell))
+         (title (and node (noema-research-work-node-field node "title"))))
+    (unless node (user-error "This Cell is not bound to a WorkNode"))
+    (unless (yes-or-no-p (format "Unbind Cell %s and keep WorkNode %s? "
+                                 cell-id (noema-research-work-node-id node)))
+      (user-error "Unbind cancelled"))
+    (puthash "cell_type" "markdown" cell)
+    (remhash "execution_count" cell)
+    (remhash "outputs" cell)
+    (noema-research-cell-set cell "work_node_id" nil)
+    (noema-research-cell-set cell "kind" nil)
+    (noema-research-cell-set cell "title" title)
+    (noema-research--render-structure-mutation cell-id)))
+
+(defun noema-research-delete-current-cell ()
+  "Delete the current Cell while preserving its WorkNode and DAG edges."
+  (interactive)
+  (noema-research-mode--sync)
+  (let* ((cell (noema-research--require-cell))
+         (cell-id (noema-research-cell-id cell))
+         (cells (noema-research-cells noema-research--document))
+         (index (seq-position cells cell #'eq))
+         (next (or (nth (1+ index) cells) (and (> index 0) (nth (1- index) cells)))))
+    (unless (yes-or-no-p (format "Delete Cell %s and keep its WorkNode? " cell-id))
+      (user-error "Cell deletion cancelled"))
+    (puthash "cells" (vconcat (delq cell (copy-sequence cells)))
+             noema-research--document)
+    (noema-research--render-structure-mutation
+     (and next (noema-research-cell-id next)))))
+
+(defun noema-research-delete-current-work-node ()
+  "Delete the current WorkNode while preserving bound Cells as notes."
+  (interactive)
+  (noema-research-mode--sync)
+  (let* ((cell (noema-research--require-cell))
+         (node (noema-research-work-node-for-cell noema-research--document cell))
+         (id (and node (noema-research-work-node-id node)))
+         (title (and node (noema-research-work-node-field node "title")))
+         (bound (and id
+                     (seq-filter
+                      (lambda (candidate)
+                        (equal (noema-research-cell-work-node-id candidate) id))
+                      (noema-research-cells noema-research--document))))
+         (return-cell (car bound)))
+    (unless node (user-error "This Cell has no WorkNode"))
+    (unless (yes-or-no-p (format "Delete WorkNode %s and keep %d Cell(s) as notes? "
+                                 id (length bound)))
+      (user-error "WorkNode deletion cancelled"))
+    (dolist (candidate bound)
+      (puthash "cell_type" "markdown" candidate)
+      (remhash "execution_count" candidate)
+      (remhash "outputs" candidate)
+      (noema-research-cell-set candidate "work_node_id" nil)
+      (noema-research-cell-set candidate "kind" nil)
+      (noema-research-cell-set candidate "title" title))
+    (noema-research-delete-work-node noema-research--document id)
+    (noema-research--render-structure-mutation
+     (and return-cell (noema-research-cell-id return-cell)))))
+
 (defun noema-research--ancestors (cell)
   "Return the lineage ancestor ids of CELL."
   (let ((seen nil)
@@ -834,11 +952,13 @@ PREDICATE, when non-nil, filters candidate cells."
   "Edit the TYPE relation parents of the cell at point."
   (let* ((cell (noema-research--require-cell))
          (id (noema-research-cell-work-node-id cell))
-         (predicate (when (equal type "depends")
-                      (lambda (other)
-                        (not (noema-research-depends-reaches-p
-                              noema-research--document
-                              (noema-research-cell-work-node-id other) id)))))
+         ;; Both relation types inhabit one WorkNode DAG.  Filter every
+         ;; candidate that would close a lineage, depends, or mixed cycle;
+         ;; the model validator remains the final authority on write.
+         (predicate (lambda (other)
+                      (not (noema-research-dependency-reaches-p
+                            noema-research--document
+                            (noema-research-cell-work-node-id other) id))))
          (candidates (noema-research--candidates cell predicate))
          (current (delq nil
                         (mapcar (lambda (parent)
@@ -1051,6 +1171,9 @@ With a prefix argument, also prompt for OUTCOME (empty clears it)."
     (define-key map (kbd "C-c C-z") #'noema-research-interrupt-current)
     (define-key map (kbd "C-c j x") #'noema-research-clear-current-output)
     (define-key map (kbd "C-c j X") #'noema-research-clear-all-outputs)
+    (define-key map (kbd "C-c j u") #'noema-research-unbind-current-cell)
+    (define-key map (kbd "C-c j d") #'noema-research-delete-current-cell)
+    (define-key map (kbd "C-c j w") #'noema-research-delete-current-work-node)
     (define-key map (kbd "C-c C-b") #'noema-research-bind-current-cell)
     (define-key map (kbd "C-c C-f") #'noema-research-set-document-default-agent)
     (define-key map (kbd "C-c M-m") #'noema-research-migrate-d023)
@@ -1071,6 +1194,8 @@ With a prefix argument, also prompt for OUTCOME (empty clears it)."
             #'noema-research-completion-at-point nil t)
   (add-hook 'write-contents-functions #'noema-research-mode--write-contents nil t)
   (add-hook 'after-change-functions #'noema-research--schedule-decorations nil t)
+  (add-hook 'post-command-hook #'noema-research--schedule-graph-follow nil t)
+  (add-hook 'kill-buffer-hook #'noema-research--cancel-graph-follow nil t)
   (let* ((file buffer-file-name)
          (on-disk (and file (file-exists-p file))))
     (noema-research--load (if on-disk

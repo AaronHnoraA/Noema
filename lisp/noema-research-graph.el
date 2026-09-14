@@ -16,10 +16,15 @@
 (require 'seq)
 (require 'subr-x)
 (require 'svg)
+(require 'transient)
 (require 'noema-research)
 (require 'noema-research-mode)
 
 (declare-function my/noema-api-call "init-aaronnote" (channel args callback &optional timeout))
+(declare-function my/noema--ensure-server "init-aaronnote" (&optional callback))
+(declare-function noema-agent-worker-run-work-cell
+                  "noema-agent-worker" (file cell-id &optional session-policy parent-session-id))
+(declare-function evil-local-set-key "evil-core" (state key def))
 
 (defcustom noema-research-graph-dot-program "dot"
   "Graphviz program used to lay out the research graph."
@@ -35,34 +40,57 @@
 (defvar-local noema-research-graph--folds nil
   "Folded cell ids.")
 
+(defvar-local noema-research-graph--zoom "branch"
+  "Semantic zoom level: overview, branch, or detail.")
+
 (defvar-local noema-research-graph--selected nil
   "Selected cell id, or nil.")
 
 (defvar-local noema-research-graph--proposals nil
   "Pending Proposal rows projected as ghost nodes.")
 
+(defvar-local noema-research-graph--runs nil
+  "Durable Run rows used for status, activity and detail projection.")
+
+(defvar-local noema-research-graph--events nil
+  "Durable research events used to derive WorkNode activity times.")
+
+(defvar-local noema-research-graph--artifacts nil
+  "ArtifactLink rows used by the detail projection.")
+
 (defconst noema-research-graph--fills
-  '(("question" . "#e8f0fe") ("work" . "#e6f4ea") ("checkpoint" . "#fef7e0"))
+  '(("question" . "#e8f0fe") ("work" . "#e6f4ea")
+    ("checkpoint" . "#fef7e0") ("summary" . "#f3e8fd")
+    ("run" . "#f1f3f4") ("artifact" . "#fce8e6"))
   "SVG fill colours by research kind.")
+
+(defconst noema-research-graph--bindings
+  '(("n" . noema-research-graph-continue)
+    ("s" . noema-research-graph-sibling)
+    ("c" . noema-research-graph-checkpoint)
+    ("p" . noema-research-graph-edit-lineage)
+    ("D" . noema-research-graph-edit-depends)
+    ("d" . noema-research-graph-mark-done)
+    ("x" . noema-research-graph-drop)
+    ("R" . noema-research-graph-reopen)
+    ("TAB" . noema-research-graph-toggle-fold)
+    ("f" . noema-research-graph-toggle-focus)
+    ("F" . noema-research-graph-run-fork)
+    ("e" . noema-research-graph-execute)
+    ("z" . noema-research-graph-cycle-zoom)
+    ("X" . noema-research-graph-structure)
+    ("i" . noema-research-graph-inspect)
+    ("a" . noema-research-attention)
+    ("RET" . noema-research-graph-visit)
+    ("g" . noema-research-graph-refresh-all)
+    ("j" . next-line)
+    ("k" . previous-line))
+  "Graph Board keys shared by vanilla Emacs and Evil normal state.")
 
 (defvar noema-research-graph-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "n") #'noema-research-graph-continue)
-    (define-key map (kbd "s") #'noema-research-graph-sibling)
-    (define-key map (kbd "c") #'noema-research-graph-checkpoint)
-    (define-key map (kbd "p") #'noema-research-graph-edit-lineage)
-    (define-key map (kbd "D") #'noema-research-graph-edit-depends)
-    (define-key map (kbd "d") #'noema-research-graph-mark-done)
-    (define-key map (kbd "x") #'noema-research-graph-drop)
-    (define-key map (kbd "R") #'noema-research-graph-reopen)
-    (define-key map (kbd "TAB") #'noema-research-graph-toggle-fold)
-    (define-key map (kbd "f") #'noema-research-graph-toggle-focus)
-    (define-key map (kbd "i") #'noema-research-graph-inspect)
-    (define-key map (kbd "a") #'noema-research-attention)
-    (define-key map (kbd "RET") #'noema-research-graph-visit)
-    (define-key map (kbd "g") #'noema-research-graph-refresh-all)
-    (define-key map (kbd "j") #'next-line)
-    (define-key map (kbd "k") #'previous-line)
+    (dolist (binding noema-research-graph--bindings)
+      (define-key map (kbd (car binding)) (cdr binding)))
     map)
   "Keymap for `noema-research-graph-mode'.")
 
@@ -72,7 +100,12 @@
   "Navigate and edit the lineage graph of a research notebook.
 
 \\{noema-research-graph-mode-map}"
-  (setq-local truncate-lines t))
+  (setq-local truncate-lines t)
+  ;; AaronEmacs uses Evil normal state in special modes.  Its minor-mode map
+  ;; otherwise shadows every single-letter Graph Board command.
+  (when (fboundp 'evil-local-set-key)
+    (dolist (binding noema-research-graph--bindings)
+      (evil-local-set-key 'normal (kbd (car binding)) (cdr binding)))))
 
 ;;;; Source access
 
@@ -113,8 +146,15 @@
 
 (defun noema-research-graph--require-materialized (id)
   "Require graph node ID to be a materialized notebook cell."
-  (when (noema-research-graph--ghost-p id)
-    (user-error "This is a pending Proposal ghost; review it in Attention (a)")))
+  (cond
+   ((noema-research-graph--ghost-p id)
+    (user-error "This is a pending Proposal ghost; review it in Attention (a)"))
+   ((string-prefix-p "noema-summary:" id)
+    (user-error "This is a folded graph summary; expand or change focus first"))
+   ((string-prefix-p "run:" id)
+    (user-error "This is a Run projection; select its WorkNode to edit structure"))
+   ((string-prefix-p "artifact:" id)
+    (user-error "This is an Artifact projection; select its WorkNode to edit structure"))))
 
 (defun noema-research-graph--node-at-point ()
   "Return the node id at point or the selected node."
@@ -150,15 +190,371 @@
   (when-let* ((file (buffer-file-name noema-research-graph--source)))
     (noema-research-view-write
      file (buffer-local-value 'noema-research--document noema-research-graph--source)
-     noema-research-graph--focus noema-research-graph--folds)))
+     noema-research-graph--focus noema-research-graph--folds
+     noema-research-graph--zoom)))
+
+(defun noema-research-graph--lineage-maps (document)
+  "Return (CHILDREN PARENTS) hash tables for DOCUMENT's lineage edges."
+  (let ((children (make-hash-table :test #'equal))
+        (parents (make-hash-table :test #'equal)))
+    (dolist (edge (noema-research-dependencies document))
+      (when (equal (noema-research--get edge "type") "lineage")
+        (let ((from (noema-research--get edge "from"))
+              (to (noema-research--get edge "to")))
+          (puthash from (append (gethash from children) (list to)) children)
+          (puthash to (append (gethash to parents) (list from)) parents))))
+    (list children parents)))
+
+(defun noema-research-graph--walk (start graph)
+  "Return ids reachable below START in adjacency hash GRAPH."
+  (let ((seen (make-hash-table :test #'equal))
+        (stack (copy-sequence (gethash start graph)))
+        result)
+    (while stack
+      (let ((id (pop stack)))
+        (unless (gethash id seen)
+          (puthash id t seen)
+          (push id result)
+          (setq stack (append (gethash id graph) stack)))))
+    (nreverse result)))
+
+(defun noema-research-graph--automatic-folds (document)
+  "Return deterministic semantic folds for the current zoom and selection."
+  (when (equal noema-research-graph--zoom "overview")
+    (pcase-let* ((`(,children ,parents) (noema-research-graph--lineage-maps document))
+                 (anchor (or noema-research-graph--focus
+                             noema-research-graph--selected))
+                 (protected (make-hash-table :test #'equal))
+                 (automatic nil))
+      (when anchor
+        (puthash anchor t protected)
+        (dolist (id (noema-research-graph--walk anchor parents))
+          (puthash id t protected)))
+      (dolist (node (noema-research-work-nodes document))
+        (let* ((id (noema-research-work-node-id node))
+               (state (noema-research-work-node-field node "state"))
+               (descendants (noema-research-graph--walk id children)))
+          (when (and descendants
+                     (member state '("done" "dropped"))
+                     (not (gethash id protected))
+                     (not (seq-some
+                           (lambda (fold)
+                             (member id (noema-research-graph--walk fold children)))
+                           automatic)))
+            (setq automatic (append automatic (list id))))))
+      automatic)))
+
+(defun noema-research-graph--run-time (run)
+  "Return RUN's latest durable timestamp, or nil."
+  (or (noema-research-graph--value run "finishedAt")
+      (noema-research-graph--value run "finished_at")
+      (noema-research-graph--value run "startedAt")
+      (noema-research-graph--value run "started_at")
+      (noema-research-graph--value run "createdAt")
+      (noema-research-graph--value run "created_at")))
+
+(defun noema-research-graph--later-time (left right)
+  "Return the later non-empty ISO timestamp of LEFT and RIGHT."
+  (cond ((not (stringp left)) right)
+        ((not (stringp right)) left)
+        ((string-lessp left right) right)
+        (t left)))
+
+(defun noema-research-graph--runtime-run (work-node-id)
+  "Return the latest durable Run for WORK-NODE-ID."
+  (let (latest latest-time)
+    (dolist (run noema-research-graph--runs latest)
+      (when (equal (or (noema-research-graph--value run "workNodeId")
+                       (noema-research-graph--value run "work_node_id"))
+                   work-node-id)
+        (let ((time (noema-research-graph--run-time run)))
+          (when (or (null latest)
+                    (and (stringp time)
+                         (or (not (stringp latest-time))
+                             (string-lessp latest-time time))))
+            (setq latest run latest-time time)))))))
+
+(defun noema-research-graph--event-time (work-node-id)
+  "Return the latest durable event time for WORK-NODE-ID."
+  (let (latest)
+    (dolist (event noema-research-graph--events latest)
+      (when (equal (or (noema-research-graph--value event "work_node_id")
+                       (noema-research-graph--value event "workNodeId"))
+                   work-node-id)
+        (setq latest
+              (noema-research-graph--later-time
+               latest (noema-research-graph--value event "ts")))))))
+
+(defun noema-research-graph--activity (document work-node-id)
+  "Return latest Run activity plist for WORK-NODE-ID in DOCUMENT."
+  (let* ((cell (noema-research-primary-cell document work-node-id))
+         (persisted (and cell (noema-research-cell-latest-run cell)))
+         (run (noema-research-graph--runtime-run work-node-id))
+         (event-time (noema-research-graph--event-time work-node-id)))
+    (when (or run persisted event-time)
+      (list :run-id (or (and run (noema-research-graph--value run "id"))
+                        (plist-get persisted :id) "")
+            :run-status (or (and run (noema-research-graph--value run "status"))
+                            (plist-get persisted :status) "")
+            :agent (or (and run (or (noema-research-graph--value run "adapter")
+                                    (noema-research-graph--value run "agent")))
+                       (plist-get persisted :agent) "")
+            :last-activity (noema-research-graph--later-time
+                            (noema-research-graph--later-time
+                             (and run (noema-research-graph--run-time run))
+                             (plist-get persisted :finished-at))
+                            event-time)))))
+
+(defun noema-research-graph--count (key counts)
+  "Increment KEY in alist COUNTS and return the alist."
+  (if-let* ((entry (assoc key counts)))
+      (progn (setcdr entry (1+ (cdr entry))) counts)
+    (append counts (list (cons key 1)))))
+
+(defun noema-research-graph--semantic-summary (document ids)
+  "Summarize WorkNode IDS from DOCUMENT for a contraction node."
+  (let (outcomes kinds last-activity)
+    (dolist (id ids)
+      (when-let* ((node (noema-research-find-work-node document id)))
+        (setq kinds (noema-research-graph--count
+                     (noema-research-work-node-field node "kind") kinds))
+        (when-let* ((outcome (noema-research-work-node-field node "outcome")))
+          (setq outcomes (noema-research-graph--count outcome outcomes)))
+        (setq last-activity
+              (noema-research-graph--later-time
+               last-activity
+               (plist-get (noema-research-graph--activity document id)
+                          :last-activity)))))
+    (let* ((ranked (sort (copy-sequence outcomes)
+                         (lambda (left right)
+                           (if (= (cdr left) (cdr right))
+                               (string-lessp (car left) (car right))
+                             (> (cdr left) (cdr right))))))
+           (primary (caar ranked)))
+      (list :nodes (length ids) :kinds kinds :outcomes outcomes
+            :primary-outcome primary :last-activity last-activity))))
+
+(defun noema-research-graph--decorate-projection (projection document)
+  "Add Run activity and rich fold summaries to PROJECTION."
+  (pcase-let ((`(,children ,_parents) (noema-research-graph--lineage-maps document)))
+    (let ((visible (make-hash-table :test #'equal)))
+      (dolist (node (plist-get projection :nodes))
+        (puthash (plist-get node :id) t visible))
+      (dolist (node (plist-get projection :nodes))
+        (let* ((id (plist-get node :id))
+               (work-node (noema-research-find-work-node document id))
+               (activity (noema-research-graph--activity document id)))
+          (when work-node
+            (setq node
+                  (plist-put node :dropped-reason
+                             (noema-research-work-node-field
+                              work-node "dropped_reason"))))
+          (while activity
+            (setq node (plist-put node (pop activity) (pop activity))))
+          (when (numberp (plist-get node :folded))
+            (let ((ids (cons id
+                             (seq-remove (lambda (candidate)
+                                           (gethash candidate visible))
+                                         (noema-research-graph--walk id children)))))
+              (setq node (plist-put node :fold-summary
+                                    (noema-research-graph--semantic-summary
+                                     document ids)))))))
+      projection)))
+
+(defun noema-research-graph--focus-summaries (projection document)
+  "Add visible contraction nodes for branches omitted by the focus lens."
+  (if (not (plist-get projection :focus))
+      projection
+    (pcase-let ((`(,children ,_parents) (noema-research-graph--lineage-maps document)))
+      (let ((visible (make-hash-table :test #'equal))
+            (represented (make-hash-table :test #'equal))
+            (assigned (make-hash-table :test #'equal))
+            (nodes (copy-sequence (plist-get projection :nodes)))
+            (edges (copy-sequence (plist-get projection :edges))))
+        (dolist (node nodes)
+          (unless (or (plist-get node :summary) (plist-get node :run))
+            (puthash (plist-get node :id) t visible))
+          (when (numberp (plist-get node :folded))
+            (dolist (id (noema-research-graph--walk (plist-get node :id) children))
+              (puthash id t represented))))
+        ;; Traverse the projection order instead of hash order so the same
+        ;; notebook and view always produce the same contraction nodes.
+        (dolist (parent-node (copy-sequence nodes))
+          (let ((parent (plist-get parent-node :id))
+                omitted)
+            (when (gethash parent visible)
+              (dolist (child (gethash parent children))
+                (when (and (not (gethash child visible))
+                           (not (gethash child represented))
+                           (not (gethash child assigned)))
+                  (dolist (id (cons child (noema-research-graph--walk child children)))
+                    (when (and (not (gethash id visible))
+                               (not (gethash id represented))
+                               (not (gethash id assigned)))
+                      (puthash id t assigned)
+                      (push id omitted)))))
+              (when omitted
+                (setq omitted (nreverse omitted))
+                (let* ((id (concat "noema-summary:related:"
+                                   (substring (secure-hash 'sha256 parent) 0 12)))
+                       (summary (noema-research-graph--semantic-summary
+                                 document omitted)))
+                  (setq nodes
+                        (append nodes
+                                (list (list :id id :kind "summary"
+                                            :title "Related branches"
+                                            :summary t :parents (list parent)
+                                            :fold-summary summary))))
+                  (setq edges (append edges (list (list parent id "lineage")))))))))
+        (plist-put (plist-put projection :nodes nodes) :edges edges)))))
+
+(defun noema-research-graph--detail-runs (projection)
+  "Project each visible WorkNode's latest Run into DETAIL PROJECTION."
+  (if (not (equal noema-research-graph--zoom "detail"))
+      projection
+    (let ((nodes (copy-sequence (plist-get projection :nodes)))
+          (edges (copy-sequence (plist-get projection :edges))))
+      (dolist (node (copy-sequence nodes))
+        (when-let* ((run-id (plist-get node :run-id))
+                    ((not (string-empty-p run-id))))
+          (let ((id (concat "run:" run-id)))
+            (setq nodes
+                  (append nodes
+                          (list (list :id id :kind "run" :title "Agent Run"
+                                      :state (plist-get node :run-status)
+                                      :agent (plist-get node :agent)
+                                      :last-activity (plist-get node :last-activity)
+                                      :run t :parents (list (plist-get node :id))))))
+            (setq edges (append edges (list (list (plist-get node :id) id "run")))))))
+      (plist-put (plist-put projection :nodes nodes) :edges edges))))
+
+(defun noema-research-graph--detail-artifacts (projection)
+  "Project ArtifactLinks attached to visible WorkNodes into DETAIL PROJECTION."
+  (if (not (equal noema-research-graph--zoom "detail"))
+      projection
+    (let ((nodes (copy-sequence (plist-get projection :nodes)))
+          (edges (copy-sequence (plist-get projection :edges)))
+          (visible (make-hash-table :test #'equal))
+          (projected (make-hash-table :test #'equal)))
+      (dolist (node nodes)
+        (puthash (plist-get node :id) t visible))
+      (dolist (link noema-research-graph--artifacts)
+        (let* ((parent (or (noema-research-graph--value link "workNodeId")
+                           (noema-research-graph--value link "work_node_id")))
+               (artifact (noema-research-graph--value link "artifact"))
+               (artifact-id (and artifact
+                                 (noema-research-graph--value artifact "id")))
+               (source (noema-research-graph--value link "sourceUri"))
+               (relation (or (noema-research-graph--value link "relation")
+                             "produced"))
+               (id (and (stringp parent) (stringp artifact-id)
+                        (format "artifact:%s:%s" artifact-id
+                                (substring (secure-hash 'sha256 parent) 0 8)))))
+          (when (and id (gethash parent visible) (not (gethash id projected)))
+            (puthash id t projected)
+            (setq nodes
+                  (append nodes
+                          (list
+                           (list :id id :kind "artifact"
+                                 :title (if (and (stringp source)
+                                                 (not (string-empty-p source)))
+                                            source
+                                          (format "Artifact %s" artifact-id))
+                                 :relation relation
+                                 :media-type (noema-research-graph--value
+                                              artifact "mediaType")
+                                 :last-activity
+                                 (noema-research-graph--value link "createdAt")
+                                 :artifact t :parents (list parent)))))
+            (setq edges (append edges (list (list parent id "artifact")))))))
+      (plist-put (plist-put projection :nodes nodes) :edges edges))))
+
+(defun noema-research-graph--projection (document)
+  "Return the semantic Graph Board projection for DOCUMENT."
+  (let* ((folds (delete-dups
+                 (append noema-research-graph--folds
+                         (noema-research-graph--automatic-folds document))))
+         (projection (noema-research-projection
+                      document :focus noema-research-graph--focus :folds folds)))
+    (setq projection (noema-research-graph--decorate-projection projection document)
+          projection (noema-research-graph--focus-summaries projection document)
+          projection (noema-research-graph--detail-runs projection)
+          projection (noema-research-graph--detail-artifacts projection))
+    projection))
 
 ;;;; Layout
 
+(defun noema-research-graph--humanize (value)
+  "Return VALUE with storage separators made readable."
+  (and (stringp value) (replace-regexp-in-string "_" " " value)))
+
+(defun noema-research-graph--short-time (value)
+  "Return a compact display form of ISO timestamp VALUE."
+  (when (and (stringp value) (not (string-empty-p value)))
+    (if (string-match
+         "\\`\\([0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}\\)[T ]\\([0-9]\\{2\\}:[0-9]\\{2\\}\\)"
+         value)
+        (format "%s %s" (match-string 1 value) (match-string 2 value))
+      value)))
+
+(defun noema-research-graph--label-lines (node)
+  "Return semantic display lines for projection NODE."
+  (let* ((limit (pcase noema-research-graph--zoom
+                  ("overview" 34) ("detail" 72) (_ 52)))
+         (title (concat (if (plist-get node :ghost) "◇ " "")
+                        (truncate-string-to-width
+                         (or (plist-get node :title) "Untitled") limit nil nil "…")))
+         (fold (plist-get node :fold-summary))
+         (state (noema-research-graph--humanize (plist-get node :state)))
+         (outcome (noema-research-graph--humanize (plist-get node :outcome)))
+         (run-status (noema-research-graph--humanize (plist-get node :run-status)))
+         (agent (plist-get node :agent))
+         lines)
+    (push title lines)
+    (cond
+     (fold
+      (push (string-join
+             (delq nil
+                   (list "▸"
+                         (noema-research-graph--humanize
+                          (plist-get fold :primary-outcome))
+                         (format "%d nodes" (or (plist-get fold :nodes) 0))))
+             " · ")
+            lines)
+      (push (concat "last "
+                    (or (noema-research-graph--short-time
+                         (plist-get fold :last-activity)) "—"))
+            lines))
+     ((plist-get node :run)
+      (push (string-join (delq nil (list agent state)) " · ") lines)
+      (when-let* ((time (noema-research-graph--short-time
+                         (plist-get node :last-activity))))
+        (push time lines)))
+     ((plist-get node :artifact)
+      (push (string-join
+             (delq nil
+                   (list (noema-research-graph--humanize
+                          (plist-get node :relation))
+                         (plist-get node :media-type)))
+             " · ")
+            lines)
+      (when-let* ((time (noema-research-graph--short-time
+                         (plist-get node :last-activity))))
+        (push time lines)))
+     (t
+     (when-let* ((semantic (delq nil (list state outcome
+                                             (and run-status
+                                                  (concat "run " run-status))))))
+        (push (string-join semantic " · ") lines))))
+    (when-let* ((reason (plist-get node :dropped-reason)))
+      (push (truncate-string-to-width reason limit nil nil "…") lines))
+    (nreverse (seq-filter (lambda (line)
+                            (and (stringp line) (not (string-empty-p line))))
+                          lines))))
+
 (defun noema-research-graph--label (node)
-  "Return the drawn label of projection NODE."
-  (concat (if (plist-get node :ghost) "◇ " "")
-          (truncate-string-to-width (plist-get node :title) 36 nil nil "…")
-          (if (plist-get node :folded) (format " (+%d)" (plist-get node :folded)) "")))
+  "Return the complete drawn label of projection NODE."
+  (string-join (noema-research-graph--label-lines node) "\n"))
 
 (defun noema-research-graph--with-proposals (projection document proposals)
   "Merge pending cell PROPOSALS for DOCUMENT into graph PROJECTION."
@@ -216,9 +612,10 @@
 
 (defun noema-research-graph--dot-quote (text)
   "Return TEXT as a quoted Graphviz string."
-  (concat "\"" (replace-regexp-in-string
-                "[\"\\\\]" "\\\\\\&" (replace-regexp-in-string "[\n\r]" " " text))
-          "\""))
+  (let ((escaped (replace-regexp-in-string "[\"\\\\]" "\\\\\\&" text)))
+    (setq escaped (replace-regexp-in-string "\r" "" escaped)
+          escaped (replace-regexp-in-string "\n" "\\\\n" escaped nil t))
+    (concat "\"" escaped "\"")))
 
 (defun noema-research-graph--dot-source (projection)
   "Return (DOT . NAMES) for PROJECTION, NAMES mapping cell ids to node names."
@@ -228,18 +625,24 @@
       (insert "digraph noema {\n  rankdir=TB;\n  nodesep=0.35;\n  ranksep=0.45;\n"
               "  node [shape=box, fontname=\"Helvetica\", fontsize=11, margin=\"0.14,0.07\"];\n")
       (dolist (node (plist-get projection :nodes))
-        (let ((name (format "n%d" index)))
+        (let* ((name (format "n%d" index))
+               (kind (plist-get node :kind))
+               (shape (pcase kind
+                        ("checkpoint" "diamond")
+                        ("run" "ellipse")
+                        (_ "box"))))
           (puthash (plist-get node :id) name names)
           (setq index (1+ index))
-          (insert (format "  %s [label=%s];\n" name
+          (insert (format "  %s [shape=%s, label=%s];\n" name shape
                           (noema-research-graph--dot-quote
                            (noema-research-graph--label node))))))
       (dolist (edge (plist-get projection :edges))
         (insert (format "  %s -> %s%s;\n"
                         (gethash (nth 0 edge) names) (gethash (nth 1 edge) names)
-                        (if (equal (nth 2 edge) "depends")
-                            " [style=dashed, constraint=false]"
-                          ""))))
+                        (pcase (nth 2 edge)
+                          ("depends" " [style=dashed, constraint=false]")
+                          ((or "run" "artifact") " [style=dotted]")
+                          (_ "")))))
       (insert "}\n")
       (cons (buffer-string) names))))
 
@@ -286,9 +689,10 @@ The plist has :width, :height, :nodes (plists :id :x :y :width :height) and
                   (when (member (noema-research--get op "op") '("P" "p"))
                     (setq arrow (noema-research-graph--points
                                  (noema-research--get op "points" []) height))))
-                (push (list :points points :arrow arrow
-                            :dashed (equal (noema-research--get edge "style") "dashed"))
-                      edges)))
+                (let ((style (noema-research--get edge "style")))
+                  (push (list :points points :arrow arrow :style style
+                              :dashed (equal style "dashed"))
+                        edges))))
             (list :width (float (nth 2 bb)) :height height
                   :nodes (nreverse nodes) :edges (nreverse edges))))))))
 
@@ -312,11 +716,13 @@ The plist has :width, :height, :nodes (plists :id :x :y :width :height) and
       (puthash (plist-get node :id) node by-id))
     (dolist (edge (plist-get layout :edges))
       (when-let* ((points (plist-get edge :points)))
-        (dom-append-child
-         svg (dom-node 'path `((d . ,(noema-research-graph--path points margin))
-                               (fill . "none") (stroke . "#80868b") (stroke-width . "1.2")
-                               ,@(when (plist-get edge :dashed)
-                                   '((stroke-dasharray . "5 4")))))))
+        (let ((dash (pcase (plist-get edge :style)
+                      ("dashed" "5 4") ("dotted" "2 4") (_ nil))))
+          (dom-append-child
+           svg (dom-node 'path `((d . ,(noema-research-graph--path points margin))
+                                 (fill . "none") (stroke . "#80868b")
+                                 (stroke-width . "1.2")
+                                 ,@(when dash `((stroke-dasharray . ,dash))))))))
       (when-let* ((arrow (plist-get edge :arrow)))
         (svg-polygon svg (mapcar (lambda (point)
                                    (cons (+ margin (car point)) (+ margin (cdr point))))
@@ -328,26 +734,52 @@ The plist has :width, :height, :nodes (plists :id :x :y :width :height) and
              (width (plist-get box :width))
              (height (plist-get box :height))
              (x0 (+ margin (- (plist-get box :x) (/ width 2.0))))
-             (y0 (+ margin (- (plist-get box :y) (/ height 2.0)))))
-        (svg-rectangle svg x0 y0 width height :rx 6 :ry 6
-                       :fill (or (cdr (assoc (plist-get node :kind)
-                                             noema-research-graph--fills))
-                                 "#f1f3f4")
-                       :stroke (cond ((equal id selected) "#1a73e8")
-                                     ((plist-get node :focus) "#d93025")
-                                     (t "#9aa0a6"))
-                       :stroke-width (if (equal id selected) 2.5 1)
-                       :stroke-dasharray (if (or (plist-get node :ghost)
-                                                 (equal (plist-get node :state) "dropped"))
-                                             "4 3" "none"))
-        (svg-text svg (noema-research-graph--label node)
-                  :x (+ x0 (/ width 2.0)) :y (+ y0 (/ height 2.0) 4)
-                  :text-anchor "middle" :font-size 11 :font-family "Helvetica"
-                  :fill "#202124" :stroke "none")
+             (y0 (+ margin (- (plist-get box :y) (/ height 2.0))))
+             (cx (+ x0 (/ width 2.0)))
+             (cy (+ y0 (/ height 2.0)))
+             (kind (plist-get node :kind))
+             (fill (or (cdr (assoc kind noema-research-graph--fills)) "#f1f3f4"))
+             (stroke (cond ((equal id selected) "#1a73e8")
+                           ((plist-get node :focus) "#d93025")
+                           (t "#9aa0a6")))
+             (stroke-width (if (equal id selected) 2.5 1))
+             (dash (if (or (plist-get node :ghost)
+                           (plist-get node :summary)
+                           (equal (plist-get node :state) "dropped"))
+                       "4 3" "none"))
+             (shape-args (list :fill fill :stroke stroke
+                               :stroke-width stroke-width
+                               :stroke-dasharray dash))
+             (lines (noema-research-graph--label-lines node))
+             (line-height 13)
+             (text-y (+ cy 4 (- (/ (* (1- (length lines)) line-height) 2.0)))))
+        (pcase kind
+          ("checkpoint"
+           (apply #'svg-polygon svg
+                  (list (cons cx y0) (cons (+ x0 width) cy)
+                        (cons cx (+ y0 height)) (cons x0 cy))
+                  shape-args))
+          ("run"
+           (apply #'svg-ellipse svg cx cy (/ width 2.0) (/ height 2.0) shape-args))
+          (_
+           (apply #'svg-rectangle svg x0 y0 width height
+                  :rx (if (equal kind "summary") 12 6)
+                  :ry (if (equal kind "summary") 12 6)
+                  shape-args)))
+        (cl-loop for line in lines
+                 for index from 0
+                 do (svg-text svg line
+                              :x cx :y (+ text-y (* index line-height))
+                              :text-anchor "middle"
+                              :font-size (if (zerop index) 11 9.5)
+                              :font-weight (if (zerop index) "600" "400")
+                              :font-family "Helvetica"
+                              :fill (if (zerop index) "#202124" "#5f6368")
+                              :stroke "none"))
         (push `((rect . ((,(round x0) . ,(round y0))
                          . (,(round (+ x0 width)) . ,(round (+ y0 height)))))
                 ,(intern (concat "noema-node-" id))
-                (pointer hand help-echo ,(plist-get node :title)))
+                (pointer hand help-echo ,(string-join lines " — ")))
               map)))
     (cons svg map)))
 
@@ -400,6 +832,9 @@ The plist has :width, :height, :nodes (plists :id :x :y :width :height) and
                               (pcase (plist-get node :kind)
                                 ("question" "? ")
                                 ("checkpoint" "◆ ")
+                                ("summary" "▸ ")
+                                ("run" "↳ ")
+                                ("artifact" "⧉ ")
                                 (_ "• ")))
                             (plist-get node :title))
                     (when-let* ((state (plist-get node :state)))
@@ -410,8 +845,18 @@ The plist has :width, :height, :nodes (plists :id :x :y :width :height) and
                               "]"))
                     (when (> (gethash id depends 0) 0)
                       (insert (format "  ⇠%d" (gethash id depends))))
-                    (when (plist-get node :folded)
-                      (insert (format "  ▸ %d hidden" (plist-get node :folded))))
+                    (when-let* ((run-status (plist-get node :run-status)))
+                      (insert (format "  {run:%s}" run-status)))
+                    (when-let* ((summary (plist-get node :fold-summary)))
+                      (insert (format "  {%s · %d nodes · last %s}"
+                                      (or (noema-research-graph--humanize
+                                           (plist-get summary :primary-outcome))
+                                          "no outcome")
+                                      (or (plist-get summary :nodes) 0)
+                                      (or (noema-research-graph--short-time
+                                           (plist-get summary :last-activity)) "—"))))
+                    (when-let* ((reason (plist-get node :dropped-reason)))
+                      (insert (format "  — %s" reason)))
                     (when (plist-get node :focus) (insert "  ◎"))
                     (when repeat (insert "  ↩"))
                     (add-text-properties start (point) `(noema-research-node ,id))
@@ -436,9 +881,7 @@ The plist has :width, :height, :nodes (plists :id :x :y :width :height) and
   (interactive)
   (let* ((document (noema-research-graph--document))
          (projection (noema-research-graph--with-proposals
-                      (noema-research-projection document
-                                                 :focus noema-research-graph--focus
-                                                 :folds noema-research-graph--folds)
+                      (noema-research-graph--projection document)
                       document noema-research-graph--proposals))
          (selected noema-research-graph--selected)
          (inhibit-read-only t))
@@ -453,7 +896,10 @@ The plist has :width, :height, :nodes (plists :id :x :y :width :height) and
                                 (length (plist-get projection :folds))
                                 (if (plist-get projection :focus) " · focus lens" ""))
                         'face 'shadow)
-            (propertize "n continue  s sibling  c checkpoint  p lineage  D depends  d done  x drop  R reopen\nTAB fold  f focus  i inspect  a Attention  RET visit  g refresh\n\n"
+            (propertize (format "semantic zoom: %s · z cycles overview / branch / detail\n"
+                                noema-research-graph--zoom)
+                        'face 'shadow)
+            (propertize "n continue  s sibling  c checkpoint  p lineage  D depends  d done  x drop  R reopen\ne run  F fork  TAB fold  f focus  z zoom  X structure  i inspect  a Attention  RET visit  g refresh\n\n"
                         'face 'shadow))
     (when (and (display-images-p) (image-type-available-p 'svg))
       (when (noema-research-graph--insert-image projection)
@@ -494,11 +940,91 @@ The plist has :width, :height, :nodes (plists :id :x :y :width :height) and
                         (noema-research-graph--value result "proposals")))
                  (noema-research-graph-refresh))))))))))
 
+(defun noema-research-graph-refresh-runs ()
+  "Refresh durable Run activity used by the Graph Board."
+  (interactive)
+  (when (and (fboundp 'my/noema-api-call)
+             (buffer-live-p noema-research-graph--source))
+    (let* ((graph (current-buffer))
+           (source noema-research-graph--source)
+           (document (with-current-buffer source (noema-research-mode--sync)))
+           (file (buffer-local-value 'buffer-file-name source))
+           (root (and file (noema-research-repository-root file)))
+           (workstream-id (noema-research--get
+                           (noema-research-notebook-meta document)
+                           "workstream_id" "")))
+      (when root
+        (my/noema-api-call
+         "aaronnote:api:research:run:list"
+         (vector `((cwd . ,root) (workstreamId . ,workstream-id) (limit . 1000)))
+         (lambda (result error-object)
+           (when (and (not error-object) (buffer-live-p graph))
+             (with-current-buffer graph
+               (setq noema-research-graph--runs
+                     (noema-research-graph--sequence
+                      (noema-research-graph--value result "runs")))
+               (noema-research-graph-refresh)))))))))
+
+(defun noema-research-graph-refresh-events ()
+  "Refresh durable WorkNode event times used by fold summaries."
+  (interactive)
+  (when (and (fboundp 'my/noema-api-call)
+             (buffer-live-p noema-research-graph--source))
+    (let* ((graph (current-buffer))
+           (source noema-research-graph--source)
+           (document (with-current-buffer source (noema-research-mode--sync)))
+           (file (buffer-local-value 'buffer-file-name source))
+           (root (and file (noema-research-repository-root file)))
+           (notebook-id (noema-research-notebook-id document)))
+      (when root
+        (my/noema-api-call
+         "aaronnote:api:research:events:list"
+         (vector `((file . ,(expand-file-name file))
+                   (cwd . ,root) (notebookId . ,notebook-id)
+                   (after . 0) (limit . 1000)))
+         (lambda (result error-object)
+           (when (and (not error-object) (buffer-live-p graph))
+             (with-current-buffer graph
+               (setq noema-research-graph--events
+                     (noema-research-graph--sequence
+                      (noema-research-graph--value result "events")))
+               (noema-research-graph-refresh)))))))))
+
+(defun noema-research-graph-refresh-artifacts ()
+  "Refresh ArtifactLinks used by the Graph Board detail projection."
+  (interactive)
+  (when (and (fboundp 'my/noema-api-call)
+             (buffer-live-p noema-research-graph--source))
+    (let* ((graph (current-buffer))
+           (source noema-research-graph--source)
+           (document (with-current-buffer source (noema-research-mode--sync)))
+           (file (buffer-local-value 'buffer-file-name source))
+           (root (and file (noema-research-repository-root file)))
+           (workstream-id (noema-research--get
+                           (noema-research-notebook-meta document)
+                           "workstream_id" ""))
+           (notebook-id (noema-research-notebook-id document)))
+      (when root
+        (my/noema-api-call
+         "aaronnote:api:research:artifact:links"
+         (vector `((cwd . ,root) (workstreamId . ,workstream-id)
+                   (notebookId . ,notebook-id) (limit . 1000)))
+         (lambda (result error-object)
+           (when (and (not error-object) (buffer-live-p graph))
+             (with-current-buffer graph
+               (setq noema-research-graph--artifacts
+                     (noema-research-graph--sequence
+                      (noema-research-graph--value result "links")))
+               (noema-research-graph-refresh)))))))))
+
 (defun noema-research-graph-refresh-all ()
-  "Redraw the Graph Board and refresh its Proposal ghosts."
+  "Redraw the Graph Board and refresh Proposals, Runs and ArtifactLinks."
   (interactive)
   (noema-research-graph-refresh)
-  (noema-research-graph-refresh-proposals))
+  (noema-research-graph-refresh-proposals)
+  (noema-research-graph-refresh-runs)
+  (noema-research-graph-refresh-events)
+  (noema-research-graph-refresh-artifacts))
 
 (defun noema-research-graph--find-node (id &optional start)
   "Return the first outline position of node ID at or after START."
@@ -576,6 +1102,7 @@ The plist has :width, :height, :nodes (plists :id :x :y :width :height) and
   "Fold or unfold the branch below the node at point."
   (interactive)
   (let ((id (noema-research-graph--node-at-point)))
+    (noema-research-graph--require-materialized id)
     (setq noema-research-graph--selected id
           noema-research-graph--folds (if (member id noema-research-graph--folds)
                                           (remove id noema-research-graph--folds)
@@ -587,10 +1114,141 @@ The plist has :width, :height, :nodes (plists :id :x :y :width :height) and
   "Focus the lens on the node at point, or clear the focus."
   (interactive)
   (let ((id (noema-research-graph--node-at-point)))
+    (noema-research-graph--require-materialized id)
     (setq noema-research-graph--selected id
           noema-research-graph--focus (unless (equal id noema-research-graph--focus) id))
     (noema-research-graph--save-view)
     (noema-research-graph-refresh)))
+
+(defun noema-research-graph-cycle-zoom ()
+  "Cycle semantic zoom through overview, branch, and detail."
+  (interactive)
+  (setq noema-research-graph--zoom
+        (pcase noema-research-graph--zoom
+          ("overview" "branch") ("branch" "detail") (_ "overview")))
+  (noema-research-graph--save-view)
+  (noema-research-graph-refresh)
+  (message "Noema Graph semantic zoom: %s" noema-research-graph--zoom))
+
+(defun noema-research-graph--run (session-policy)
+  "Run the selected work using optional SESSION-POLICY."
+  (let* ((id (noema-research-graph--node-at-point))
+         (_materialized (noema-research-graph--require-materialized id))
+         (source noema-research-graph--source)
+         (document (noema-research-graph--document))
+         (node (noema-research-find-work-node document id))
+         (cell (noema-research-primary-cell document id)))
+    (unless (and node (equal (noema-research-work-node-field node "kind") "work")
+                 cell (equal (noema-research--get cell "cell_type") "code"))
+      (user-error "Agent Run applies only to a materialized work block"))
+    (unless (fboundp 'noema-agent-worker-run-work-cell)
+      (require 'noema-agent-worker))
+    (with-current-buffer source
+      (when (buffer-modified-p) (save-buffer))
+      (let ((default-directory
+             (noema-research-repository-root buffer-file-name)))
+        (noema-agent-worker-run-work-cell
+         (expand-file-name buffer-file-name)
+         (noema-research-cell-id cell)
+         session-policy
+         (when (equal session-policy "fork")
+           (read-string "Parent Noema session id: ")))))))
+
+(defun noema-research-graph-run-default ()
+  "Run selected work using its declared or default session route."
+  (interactive)
+  (noema-research-graph--run nil))
+
+(defun noema-research-graph-run-continue ()
+  "Run selected work by continuing its prior session."
+  (interactive)
+  (noema-research-graph--run "continue"))
+
+(defun noema-research-graph-run-fresh ()
+  "Run selected work in a fresh session."
+  (interactive)
+  (noema-research-graph--run "fresh"))
+
+(defun noema-research-graph-run-fork ()
+  "Run selected work by forking a chosen parent session."
+  (interactive)
+  (noema-research-graph--run "fork"))
+
+(transient-define-prefix noema-research-graph-execute ()
+  "Run the selected `.noema' work through an ACP agent."
+  [["Agent Run"
+    ("r" "declared/default route" noema-research-graph-run-default)
+    ("c" "continue" noema-research-graph-run-continue)
+    ("f" "fork" noema-research-graph-run-fork)
+    ("n" "fresh" noema-research-graph-run-fresh)]])
+
+(defun noema-research-graph--structure-command (function)
+  "Apply source-buffer structure FUNCTION to the selected materialized node."
+  (let ((id (noema-research-graph--node-at-point))
+        (source noema-research-graph--source))
+    (noema-research-graph--require-materialized id)
+    (with-current-buffer source
+      (noema-research-mode--sync)
+      (noema-research-goto-cell id)
+      (call-interactively function))
+    (setq noema-research-graph--selected nil)
+    (noema-research-graph-refresh)))
+
+(defun noema-research-graph-delete-work-node ()
+  "Delete the selected WorkNode while preserving its cells as notes."
+  (interactive)
+  (let* ((id (noema-research-graph--node-at-point))
+         (_materialized (noema-research-graph--require-materialized id))
+         (source noema-research-graph--source))
+    (with-current-buffer source
+      (let* ((document (noema-research-mode--sync))
+             (cell (noema-research-primary-cell document id)))
+        (if cell
+            (progn
+              (noema-research-goto-cell id)
+              (call-interactively #'noema-research-delete-current-work-node))
+          (unless (noema-research-find-work-node document id)
+            (user-error "Unknown WorkNode: %s" id))
+          (unless (yes-or-no-p (format "Delete orphan WorkNode %s? " id))
+            (user-error "WorkNode deletion cancelled"))
+          (noema-research-delete-work-node document id)
+          (noema-research--render-structure-mutation))))
+    (setq noema-research-graph--selected nil)
+    (noema-research-graph-refresh)))
+
+(defun noema-research-graph-unbind-cell ()
+  "Unbind the selected Cell while preserving its WorkNode."
+  (interactive)
+  (noema-research-graph--structure-command #'noema-research-unbind-current-cell))
+
+(defun noema-research-graph-delete-cell ()
+  "Delete the selected Cell while preserving its WorkNode."
+  (interactive)
+  (noema-research-graph--structure-command #'noema-research-delete-current-cell))
+
+(transient-define-prefix noema-research-graph-structure ()
+  "Perform identity-safe Graph structure changes."
+  [["Distinct identities"
+    ("w" "delete WorkNode; keep Cell as note" noema-research-graph-delete-work-node)
+    ("u" "unbind Cell; keep WorkNode" noema-research-graph-unbind-cell)
+    ("c" "delete Cell; keep WorkNode" noema-research-graph-delete-cell)]])
+
+(defun noema-research-graph-follow-source (source work-node-id)
+  "Select WORK-NODE-ID in every live Graph Board for SOURCE.
+When a focus lens is active, move that lens as well so the source cursor never
+selects a node hidden by its own Graph view."
+  (dolist (buffer (buffer-list))
+    (when (with-current-buffer buffer
+            (and (derived-mode-p 'noema-research-graph-mode)
+                 (eq noema-research-graph--source source)))
+      (with-current-buffer buffer
+        (when (and work-node-id
+                   (not (equal work-node-id noema-research-graph--selected)))
+          (setq noema-research-graph--selected work-node-id)
+          (when noema-research-graph--focus
+            (setq noema-research-graph--focus work-node-id)
+            (noema-research-graph--save-view))
+          (noema-research-graph-refresh))))))
 
 ;;;###autoload
 (defun noema-research-graph-open ()
@@ -614,10 +1272,24 @@ The plist has :width, :height, :nodes (plists :id :x :y :width :height) and
             (delq nil (mapcar (lambda (id)
                                 (noema-research-resolve-work-node-id document id))
                               (plist-get view :folds)))
+            noema-research-graph--zoom (or (plist-get view :zoom) "branch")
             noema-research-graph--selected
             (and cell (noema-research-cell-work-node-id cell)))
       (noema-research-graph-refresh)
-      (noema-research-graph-refresh-proposals))
+      (if (fboundp 'my/noema--ensure-server)
+          (let ((graph buffer))
+            (my/noema--ensure-server
+             (lambda ()
+               (when (buffer-live-p graph)
+                 (with-current-buffer graph
+                   (noema-research-graph-refresh-proposals)
+                   (noema-research-graph-refresh-runs)
+                   (noema-research-graph-refresh-events)
+                   (noema-research-graph-refresh-artifacts))))))
+        (noema-research-graph-refresh-proposals)
+        (noema-research-graph-refresh-runs)
+        (noema-research-graph-refresh-events)
+        (noema-research-graph-refresh-artifacts)))
     (pop-to-buffer buffer)))
 
 (provide 'noema-research-graph)

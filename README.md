@@ -105,9 +105,23 @@ Key commands include:
 | `C-c C-z` | cancel an active Agent Run |
 | `C-c C-f` | set or clear the document's default agent |
 | `C-c j x` / `C-c j X` | clear current/all outputs |
+| `C-c j u` | unbind the current Cell while preserving its WorkNode |
+| `C-c j d` | delete the current Cell while preserving its WorkNode |
+| `C-c j w` | delete the current WorkNode while preserving its Cells as notes |
 | `C-c M-m` | explicitly migrate a pre-D-023 `.noema` document |
 
 Agent replies stream incrementally into the right-side renderer. A terminal reply replaces that work block's latest `outputs` with Markdown/plain-text MIME plus `application/vnd.noema.run+json`; Run history and transcripts remain in the Run store. Clearing outputs does not delete a Run. Clicking **Open Source in Emacs** sends `scriptFile + cellId`; Emacs resolves the stable Cell identity instead of trusting a projected line number. Agent Runs snapshot newly created or modified ordinary files into the CAS without moving them, persist `ArtifactLink` provenance on the stable WorkNode, and expose those paths through the Emacs Inspector.
+
+The Work DAG opened by `C-c C-g` is a semantic Graph Board rather than a
+static diagram. Work state, outcome, active Run status, dropped reason and
+checkpoint shape are visible on the graph. `TAB` fixes a fold, `f` toggles the
+focus lens, and `z` cycles Overview / Branch / Detail; Detail projects the
+latest Run and linked artifacts. Overview applies deterministic automatic
+folds while preserving the current path, and focus keeps omitted branches as
+summary nodes. The current JuText block and graph selection track each other.
+Use `e` for the Agent Run menu, `F` to fork directly, and `X` for the
+identity-safe WorkNode / Cell structure menu. View state lives under
+`.agent/views/` and does not change the `.noema` document.
 
 `.noema` never starts, attaches, restarts or selects a Jupyter kernel and has no Run All command. Ordinary `.ipynb` and Markdown `@@cell` sidecars retain the complete Jupyter workflow. Programming code and experiments belong in ordinary project files.
 

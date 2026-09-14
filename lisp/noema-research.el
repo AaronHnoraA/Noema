@@ -383,6 +383,29 @@ The id is recorded in TAKEN when TAKEN is non-nil."
   (let ((outputs (noema-research--get cell "outputs")))
     (if (vectorp outputs) (append outputs nil) nil)))
 
+(defun noema-research-cell-latest-run (cell)
+  "Return the latest persisted Agent Run metadata for CELL, or nil.
+The returned plist contains :id, :status, :agent and :finished-at when those
+fields are present.  Output content is data and is deliberately not parsed for
+directives or graph structure."
+  (cl-loop for output in (reverse (noema-research-cell-outputs cell))
+           for data = (noema-research--get output "data")
+           for run = (and (hash-table-p data)
+                          (noema-research--get
+                           data "application/vnd.noema.run+json"))
+           when (hash-table-p run)
+           return (list :id (noema-research--string
+                             (noema-research--get run "run_id"))
+                        :status (noema-research--string
+                                 (noema-research--get run "status"))
+                        :agent (noema-research--string
+                                (noema-research--get run "agent"))
+                        :finished-at
+                        (or (noema-research--string
+                             (noema-research--get run "finished_at"))
+                            (noema-research--string
+                             (noema-research--get run "finishedAt"))))))
+
 (defun noema-research-clear-cell-outputs (document cell-id)
   "Clear the D-023 work CELL-ID outputs in DOCUMENT."
   (let ((cell (or (noema-research-find-cell document cell-id)
@@ -1026,28 +1049,41 @@ The directory ignores itself so repository Git never records runtime state."
                                          (noema-research-repository-root file))))))
 
 (defun noema-research-view-read (file document)
-  "Return the saved view plist (:focus :folds) for DOCUMENT at FILE."
+  "Return the saved view plist for DOCUMENT at FILE.
+The plist always has :focus and :folds.  Newer view files also carry :zoom as
+one of overview, branch, or detail; older files remain valid."
   (let ((path (noema-research-view-file file document)))
     (or (ignore-errors
           (when (file-readable-p path)
             (let ((view (with-temp-buffer
                           (insert-file-contents path)
-                          (noema-research-parse-json (buffer-string)))))
-              (list :focus (noema-research--string (noema-research--get view "focus"))
-                    :folds (seq-filter #'stringp
-                                       (append (noema-research--get view "folds" [])
-                                               nil))))))
+                          (noema-research-parse-json (buffer-string))))
+                  result zoom)
+              (setq result
+                    (list :focus (noema-research--string
+                                  (noema-research--get view "focus"))
+                          :folds (seq-filter #'stringp
+                                             (append (noema-research--get
+                                                      view "folds" []) nil)))
+                    zoom (noema-research--string (noema-research--get view "zoom")))
+              (when (member zoom '("overview" "branch" "detail"))
+                (setq result (plist-put result :zoom zoom)))
+              result)))
         (list :focus nil :folds nil))))
 
-(defun noema-research-view-write (file document focus folds)
-  "Persist FOCUS and FOLDS for DOCUMENT stored at FILE and return the path."
+(defun noema-research-view-write (file document focus folds &optional zoom)
+  "Persist FOCUS, FOLDS and optional ZOOM for DOCUMENT at FILE.
+ZOOM is one of overview, branch, or detail.  Return the view-state path."
+  (when (and zoom (not (member zoom '("overview" "branch" "detail"))))
+    (user-error "Unsupported Graph Board zoom: %s" zoom))
   (noema-research-state-directory file)
   (let ((path (noema-research-view-file file document)))
     (make-directory (file-name-directory path) t)
     (let ((coding-system-for-write 'utf-8-unix))
       (write-region (noema-research-serialize
                      (noema-research--table "focus" (or focus :null)
-                                            "folds" (vconcat folds)))
+                                            "folds" (vconcat folds)
+                                            "zoom" (or zoom :null)))
                     nil path nil 'silent))
     path))
 
