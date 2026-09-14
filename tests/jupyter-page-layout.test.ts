@@ -55,6 +55,16 @@ describe("Noema Jupyter Emacs-owned output surface", () => {
     expect(main).toContain("scriptSnapshot(documentParams(tab))");
   });
 
+  test("renders .noema as kernel-free streamed Work Output", () => {
+    expect(main).toContain('surfaceTitleEl.textContent = research ? "Work Output" : "Jupyter Output"');
+    expect(main).toContain("kernelStatusEl.hidden = research");
+    expect(main).toContain('new EventSource(`/api/noema/research/run/stream?${params}`)');
+    expect(main).toContain('eventType(item) === "run.content.segment"');
+    expect(main).toContain('eventType(item).includes("permission")');
+    expect(main).toContain('"text/markdown": content');
+    expect(main).toContain("after: String(tab.runSeq || 0)");
+  });
+
   test("isolates page, board, panel, and long-output scrolling", () => {
     expect(css).toMatch(/html, body[\s\S]*overflow: hidden/);
     expect(css).toMatch(/body \{ position: fixed; inset: 0; \}/);

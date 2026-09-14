@@ -21,6 +21,7 @@ type DocumentRef = {
   kernelId?: string;
   sessionName?: string;
   sessionId?: string;
+  runId?: string;
 };
 
 type CellSnapshot = {
@@ -54,11 +55,15 @@ type TabState = {
   activeCellId: string;
   loading: boolean;
   error: string;
+  runSeq?: number;
+  runEvents?: Array<Record<string, unknown>>;
+  runTerminal?: boolean;
+  persistedOutputRetries?: number;
 };
 
 declare global {
   interface Window {
-    noemaJupyterOpenDocument?: (payload: Partial<DocumentRef> & { cellId?: string }) => void;
+    noemaJupyterOpenDocument?: (payload: Partial<DocumentRef> & { cellId?: string; runId?: string }) => void;
     noemaJupyterOpenView?: (view: "outputs" | "variables" | "manage") => void;
   }
 }
@@ -73,6 +78,8 @@ let refreshTimer = 0;
 const outputDisposers = new Set<() => void>();
 const cellOutputViews = new Map<string, JupyterOutputView>();
 let dialogOutputDispose: (() => void) | null = null;
+let researchRunSource: EventSource | null = null;
+let researchRunRetry = 0;
 
 const mountWidget: WidgetMountFn = (host, modelId, runtime, messages, widgetOutputs) => {
   (window as Window & { __jupyter_widgets_assets_path__?: string }).__jupyter_widgets_assets_path__ ??=
@@ -99,7 +106,7 @@ app.innerHTML = `
   <header class="noema-jupyter-header">
     <div class="noema-jupyter-brand">
       <span class="noema-jupyter-logo">N</span>
-      <strong>Jupyter Output</strong>
+      <strong data-surface-title>Jupyter Output</strong>
     </div>
     <div class="noema-jupyter-kernel" data-kernel-status></div>
     <button type="button" class="noema-jupyter-open-source" data-action="open-source">Open Source in Emacs</button>
@@ -119,6 +126,7 @@ document.body.append(app);
 const workspaceEl = app.querySelector<HTMLElement>("[data-workspace]")!;
 const statusEl = app.querySelector<HTMLElement>("[data-status]")!;
 const kernelStatusEl = app.querySelector<HTMLElement>("[data-kernel-status]")!;
+const surfaceTitleEl = app.querySelector<HTMLElement>("[data-surface-title]")!;
 const dialogEl = app.querySelector<HTMLDialogElement>("[data-dialog]")!;
 const dialogTitleEl = app.querySelector<HTMLElement>("[data-dialog-title]")!;
 const dialogBodyEl = app.querySelector<HTMLElement>("[data-dialog-body]")!;
@@ -140,6 +148,11 @@ function documentParams(tab: TabState, extra: Record<string, unknown> = {}): Rec
   return { ...tab.ref, ...extra };
 }
 
+function isResearchDocument(value: DocumentRef | string | undefined): boolean {
+  const file = typeof value === "string" ? value : value?.scriptFile;
+  return /\.noema$/i.test(text(file));
+}
+
 function activeTab(): TabState | undefined {
   return currentDocument;
 }
@@ -147,6 +160,17 @@ function activeTab(): TabState | undefined {
 function activeCell(tab = activeTab()): CellSnapshot | undefined {
   if (!tab?.snapshot) return undefined;
   return tab.snapshot.cells.find((cell) => cell.id === tab.activeCellId) || tab.snapshot.cells[0];
+}
+
+function persistedOutputRunId(cell: CellSnapshot | undefined): string {
+  for (const output of cell?.outputs || []) {
+    if (!output || typeof output !== "object") continue;
+    const data = (output as { data?: unknown }).data;
+    if (!data || typeof data !== "object") continue;
+    const run = (data as Record<string, unknown>)["application/vnd.noema.run+json"];
+    if (run && typeof run === "object") return text((run as Record<string, unknown>).run_id);
+  }
+  return "";
 }
 
 function disposeOutputs(): void {
@@ -197,7 +221,9 @@ function updateCellChrome(cell: CellSnapshot): void {
   if (!card) return;
   card.dataset.status = cell.status || "idle";
   const prompt = card.querySelector<HTMLElement>(".noema-jupyter-prompt");
-  if (prompt) prompt.textContent = cell.executionCount == null ? "[ ]" : `[${cell.executionCount}]`;
+  if (prompt) prompt.textContent = isResearchDocument(activeTab()?.ref)
+    ? "Work"
+    : cell.executionCount == null ? "[ ]" : `[${cell.executionCount}]`;
   const status = card.querySelector<HTMLElement>(".noema-jupyter-badges span:first-child");
   if (status) status.textContent = cell.status || "idle";
 }
@@ -215,12 +241,36 @@ async function loadTab(tab: TabState, reveal = true): Promise<void> {
   tab.error = "";
   renderWorkspace();
   try {
+    const liveCell = activeCell(tab);
+    const liveOutputs = liveCell?.outputs;
+    const liveStatus = liveCell?.status;
     const raw = await api.jupyterCell.scriptSnapshot(documentParams(tab));
     const snapshot = raw as unknown as DocumentSnapshot;
     tab.snapshot = snapshot;
     tab.ref = { ...tab.ref, ...snapshot.document };
     if (!snapshot.cells.some((cell) => cell.id === tab.activeCellId)) {
       tab.activeCellId = snapshot.cells[0]?.id || "";
+    }
+    if (isResearchDocument(tab.ref) && tab.ref.runId) {
+      const cell = activeCell(tab);
+      if (tab.runTerminal && persistedOutputRunId(cell) !== tab.ref.runId) {
+        // The terminal Run event is durable before the notebook output write.
+        // Preserve the completed live view while polling the canonical file.
+        if (cell && liveOutputs) {
+          cell.outputs = liveOutputs;
+          cell.status = liveStatus || cell.status;
+        }
+        if ((tab.persistedOutputRetries || 0) < 20) {
+          tab.persistedOutputRetries = (tab.persistedOutputRetries || 0) + 1;
+          window.clearTimeout(refreshTimer);
+          refreshTimer = window.setTimeout(() => void loadTab(tab, false), 250);
+        } else {
+          setStatus("Run completed, but its persisted work output is not available yet.", true);
+        }
+      } else {
+        tab.persistedOutputRetries = 0;
+        startResearchRunStream(tab);
+      }
     }
   } catch (error) {
     tab.error = error instanceof Error ? error.message : String(error);
@@ -239,17 +289,19 @@ async function loadTab(tab: TabState, reveal = true): Promise<void> {
 function normalizeRef(payload: Partial<DocumentRef>): DocumentRef | null {
   const scriptFile = text(payload.scriptFile);
   if (!scriptFile) return null;
+  const research = isResearchDocument(scriptFile);
   return {
     scriptFile,
     sourceFile: text(payload.sourceFile),
     projectRoot: text(payload.projectRoot),
-    language: text(payload.language) || "python",
-    kernel: text(payload.kernel) || "python3",
-    session: text(payload.session) || "default",
-    kernelSpecName: text(payload.kernelSpecName || payload.kernel) || "python3",
+    language: research ? "" : text(payload.language) || "python",
+    kernel: research ? "" : text(payload.kernel) || "python3",
+    session: research ? "" : text(payload.session) || "default",
+    kernelSpecName: research ? "" : text(payload.kernelSpecName || payload.kernel) || "python3",
     kernelId: text(payload.kernelId),
-    sessionName: text(payload.sessionName || payload.session) || "default",
+    sessionName: research ? "" : text(payload.sessionName || payload.session) || "default",
     sessionId: text(payload.sessionId),
+    runId: text(payload.runId),
   };
 }
 
@@ -260,14 +312,101 @@ function openDocument(payload: Partial<DocumentRef> & { cellId?: string }): void
   if (!tab) {
     // The output page is a projection of the Emacs-selected document, not a
     // browser-owned multi-document workspace.
-    tab = { ref, activeCellId: text(payload.cellId), loading: false, error: "" };
+    stopResearchRunStream();
+    tab = { ref, activeCellId: text(payload.cellId), loading: false, error: "", runSeq: 0, runEvents: [] };
   } else {
+    if (ref.runId && ref.runId !== tab.ref.runId) {
+      stopResearchRunStream();
+      tab.runSeq = 0;
+      tab.runEvents = [];
+      tab.runTerminal = false;
+      tab.persistedOutputRetries = 0;
+    }
     tab.ref = { ...tab.ref, ...ref };
     if (payload.cellId) tab.activeCellId = text(payload.cellId);
   }
   currentDocument = tab;
   render();
   void loadTab(tab);
+}
+
+function stopResearchRunStream(): void {
+  window.clearTimeout(researchRunRetry);
+  researchRunRetry = 0;
+  researchRunSource?.close();
+  researchRunSource = null;
+}
+
+function eventType(event: Record<string, unknown>): string {
+  return text(event.type);
+}
+
+function eventPayload(event: Record<string, unknown>): Record<string, unknown> {
+  return event.payload && typeof event.payload === "object" ? event.payload as Record<string, unknown> : {};
+}
+
+function applyResearchRunSnapshot(tab: TabState, snapshot: Record<string, unknown>): void {
+  if (tab !== currentDocument) return;
+  const run = snapshot.run && typeof snapshot.run === "object" ? snapshot.run as Record<string, unknown> : {};
+  const incoming = Array.isArray(snapshot.events) ? snapshot.events.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object")) : [];
+  const seen = new Set((tab.runEvents || []).map((item) => Number(item.seq) || 0));
+  tab.runEvents = [...(tab.runEvents || []), ...incoming.filter((item) => !seen.has(Number(item.seq) || 0))];
+  tab.runSeq = Math.max(Number(snapshot.seq) || 0, tab.runSeq || 0);
+  const cell = activeCell(tab);
+  if (!cell) return;
+  const content = (tab.runEvents || [])
+    .filter((item) => eventType(item) === "run.content.segment")
+    .map((item) => text(eventPayload(item).text)).join("");
+  const activity = (tab.runEvents || []).filter((item) => (
+    eventType(item) === "run.action.updated" || eventType(item).includes("permission")
+  ));
+  const outputs: unknown[] = [];
+  if (content) outputs.push({
+    output_type: "display_data",
+    data: { "text/markdown": content, "text/plain": content },
+    metadata: {},
+  });
+  if (activity.length || !content) outputs.push({
+    output_type: "display_data",
+    data: { "application/vnd.noema.run+json": { ...snapshot, events: tab.runEvents } },
+    metadata: {},
+  });
+  cell.outputs = outputs;
+  cell.status = text(run.status) || "running";
+  const view = ensureCellOutputView(tab, cell);
+  view?.clear();
+  outputs.forEach((output, index) => view?.setOutput(index, output));
+  updateCellChrome(cell);
+  const terminal = ["completed", "cancelled", "failed", "interrupted"].includes(cell.status);
+  tab.runTerminal = terminal;
+  if (terminal) {
+    stopResearchRunStream();
+    window.clearTimeout(refreshTimer);
+    refreshTimer = window.setTimeout(() => void loadTab(tab, false), 90);
+  }
+}
+
+function startResearchRunStream(tab: TabState): void {
+  if (tab !== currentDocument || !tab.ref.runId || tab.runTerminal || researchRunSource) return;
+  const params = new URLSearchParams({
+    root: tab.ref.projectRoot || "",
+    run: tab.ref.runId,
+    after: String(tab.runSeq || 0),
+  });
+  const source = new EventSource(`/api/noema/research/run/stream?${params}`);
+  researchRunSource = source;
+  source.addEventListener("snapshot", (event) => {
+    try { applyResearchRunSnapshot(tab, JSON.parse((event as MessageEvent<string>).data)); }
+    catch (error) { setStatus(error instanceof Error ? error.message : "Invalid Run stream snapshot", true); }
+  });
+  source.addEventListener("error", () => {
+    source.close();
+    if (researchRunSource === source) researchRunSource = null;
+    if (tab === currentDocument && !tab.runTerminal) {
+      window.clearTimeout(researchRunRetry);
+      researchRunRetry = window.setTimeout(() => startResearchRunStream(tab), 500);
+    }
+  });
 }
 
 window.noemaJupyterOpenDocument = openDocument;
@@ -310,6 +449,7 @@ function activateCell(tab: TabState, cellId: string): void {
 }
 
 async function saveOutputUi(tab: TabState, cell: CellSnapshot): Promise<void> {
+  if (isResearchDocument(tab.ref)) return;
   try {
     await api.jupyterCell.saveScriptCellOutputUi(documentParams(tab, {
       cellId: cell.id,
@@ -470,7 +610,9 @@ function renderCell(tab: TabState, cell: CellSnapshot): HTMLElement {
   head.className = "noema-jupyter-cell-header";
   const prompt = document.createElement("span");
   prompt.className = "noema-jupyter-prompt";
-  prompt.textContent = cell.executionCount == null ? "[ ]" : `[${cell.executionCount}]`;
+  prompt.textContent = isResearchDocument(tab.ref)
+    ? "Work"
+    : cell.executionCount == null ? "[ ]" : `[${cell.executionCount}]`;
   const identity = document.createElement("span");
   identity.className = "noema-jupyter-cell-id";
   identity.textContent = cell.id;
@@ -508,11 +650,14 @@ function renderCell(tab: TabState, cell: CellSnapshot): HTMLElement {
 function renderWorkspace(): void {
   disposeOutputs();
   const tab = activeTab();
-  kernelStatusEl.textContent = tab?.snapshot
+  const research = isResearchDocument(tab?.ref);
+  surfaceTitleEl.textContent = research ? "Work Output" : "Jupyter Output";
+  kernelStatusEl.hidden = research;
+  kernelStatusEl.textContent = research ? "" : tab?.snapshot
     ? `${tab.ref.kernel} · ${tab.ref.session} · ${tab.snapshot.kernelStatus}`
     : "No kernel";
   if (!tab) {
-    workspaceEl.innerHTML = `<div class="noema-jupyter-empty"><strong>No output selected</strong><span>Open a .noema code cell in Emacs and press C-c C-o.</span></div>`;
+    workspaceEl.innerHTML = `<div class="noema-jupyter-empty"><strong>No output selected</strong><span>Open a work block in Emacs and run it with C-c C-c.</span></div>`;
     return;
   }
   if (tab.loading && !tab.snapshot) {
@@ -526,7 +671,7 @@ function renderWorkspace(): void {
   }
   const cells = tab.snapshot?.cells || [];
   if (cells.length === 0) {
-    workspaceEl.innerHTML = `<div class="noema-jupyter-empty"><strong>No Cells</strong><span>Add a Cell from Emacs.</span></div>`;
+    workspaceEl.innerHTML = `<div class="noema-jupyter-empty"><strong>No output yet</strong><span>Run a work block from Emacs.</span></div>`;
     return;
   }
   workspaceEl.replaceChildren(...cells.map((cell) => renderCell(tab, cell)));
@@ -681,6 +826,7 @@ const initial = normalizeRef({
   language: query.get("language") || "python",
   kernel: query.get("kernel") || "python3",
   session: query.get("session") || "default",
+  runId: query.get("runId") || "",
 });
 if (initial) {
   openDocument({ ...initial, cellId: query.get("cellId") || "" });
@@ -705,6 +851,7 @@ if (initial) {
 	}
 }
 window.addEventListener("beforeunload", () => {
+  stopResearchRunStream();
   dialogOutputDispose?.();
   disposeOutputs();
   removeB3ComponentSystem();

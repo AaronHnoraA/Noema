@@ -71,7 +71,9 @@ func (s *Store) ReadResearchCell(notebookID, cellID string) (ResearchCellView, e
 		if cell.Disclosure != "local_only" {
 			byID[cell.ID] = cell
 			if cell.WorkNodeID != "" {
-				if current, exists := byNode[cell.WorkNodeID]; !exists || (current.Kind == "result" && cell.Kind != "result") {
+				if current, exists := byNode[cell.WorkNodeID]; !exists ||
+					((cell.Kind == "work" || graphKinds[cell.Kind]) &&
+						!(current.Kind == "work" || graphKinds[current.Kind])) {
 					byNode[cell.WorkNodeID] = cell
 				}
 			}

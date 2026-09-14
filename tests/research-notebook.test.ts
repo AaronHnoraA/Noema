@@ -16,9 +16,11 @@ import {
   readResearchNotebookFile,
   researchCellKind,
   researchGraphProjection,
-  researchWorkNodeForCell,
   setResearchRelation,
   setResearchState,
+  clearResearchOutputs,
+  migrateResearchNotebookD023,
+  migrateResearchNotebookFile,
   upsertResearchRunResult,
   updateResearchCell,
   validateResearchNotebook,
@@ -132,6 +134,14 @@ describe("kernel research provider", () => {
 });
 
 describe("research notebook model", () => {
+  test("validates document default agents", () => {
+    expect(createResearchNotebook({ defaultAgent: "opencode" }).metadata.noema_research.default_agent).toBe("opencode");
+    expect(() => createResearchNotebook({ defaultAgent: "bad agent" })).toThrow(/Invalid default agent/);
+    const invalid = createResearchNotebook();
+    invalid.metadata.noema_research.default_agent = "bad agent";
+    expect(validateResearchNotebook(invalid).errors.map((entry: any) => entry.code)).toContain("default-agent");
+  });
+
   test("deterministically migrates legacy cell-owned graph metadata", () => {
     const legacy = {
       cells: [
@@ -156,7 +166,10 @@ describe("research notebook model", () => {
     const work = first.metadata.noema_research.work_nodes.find((node: any) => node.kind === "work");
     expect(work).toMatchObject({ title: "Try", state: "active" });
     expect(meta(first, "c-w")).toEqual({ work_node_id: work.id });
-    expect(meta(first, "c-r")).toMatchObject({ kind: "result", work_node_id: work.id, run_id: "run_old" });
+    expect(first.cells.some((cell: any) => cell.id === "c-r")).toBe(false);
+    const workCell = first.cells.find((cell: any) => cell.id === "c-w");
+    expect(workCell).toMatchObject({ cell_type: "code", execution_count: null });
+    expect(workCell.outputs[0].data["application/vnd.noema.run+json"]).toMatchObject({ run_id: "run_old" });
     expect(meta(first, "c-w").lineage).toBeUndefined();
     expect(validateResearchNotebook(first).ok).toBe(true);
   });
@@ -167,7 +180,11 @@ describe("research notebook model", () => {
     expect(parsed.metadata.noema).toBeUndefined();
     expect(parsed.metadata.noema_research.schema).toBe("noema.work-document/2");
     expect(parsed.nbformat_minor).toBe(5);
-    expect(parsed.cells.every((cell: any) => cell.cell_type === "markdown")).toBe(true);
+    expect(parsed.metadata.kernelspec).toBeUndefined();
+    expect(parsed.metadata.language_info).toBeUndefined();
+    expect(parsed.cells.find((cell: any) => cell.id === cellIds.w)).toMatchObject({
+      cell_type: "code", execution_count: null, outputs: [],
+    });
     expect(parsed.cells.map((cell: any) => cell.id)).toContain(cellIds.w);
     for (const cell of notebook.cells) expect(cell.id).toMatch(/^c-[0-9a-f]{12}$/);
     expect(meta(notebook, cellIds.w)).toEqual({ work_node_id: ids.w });
@@ -179,31 +196,18 @@ describe("research notebook model", () => {
     }))).toThrow(/research notebook/);
   });
 
-  test("a code Cell participates in a WorkNode without becoming the WorkNode", () => {
+  test("work storage is not a programming-language cell", () => {
     const { notebook, ids } = chain();
-    const created = createResearchCell(notebook, {
-      kind: "code",
-      source: "print('evidence')",
-      workNodeId: ids.w,
-    });
-    expect(created.cell).toMatchObject({
-      kind: "code",
-      workNodeId: ids.w,
-      cellType: "code",
-    });
-    expect(created.workNode).toMatchObject({ id: ids.w, kind: "work", title: "Spectral" });
-    const raw = created.notebook.cells.find((cell: any) => cell.id === created.cell.id);
+    expect(() => createResearchCell(notebook, { kind: "code", source: "print('evidence')", workNodeId: ids.w }))
+      .toThrow(/Unsupported cell kind/);
+    const raw = notebook.cells.find((cell: any) => meta(notebook, cell.id)?.work_node_id === ids.w);
     raw.metadata.noema_research.kind = "work";
-    expect(researchCellKind(raw, created.notebook)).toBe("code");
-    expect(validateResearchNotebook(created.notebook).errors).toContainEqual(expect.objectContaining({
-      code: "cell-graph-metadata", cellId: created.cell.id,
+    expect(researchCellKind(raw, notebook)).toBe("work");
+    expect(validateResearchNotebook(notebook).errors).toContainEqual(expect.objectContaining({
+      code: "cell-graph-metadata", cellId: raw.id,
     }));
-    expect(researchGraphProjection(created.notebook).nodes.filter((node: any) => node.id === ids.w))
-      .toHaveLength(1);
     delete raw.metadata.noema_research.kind;
-    expect(researchGraphProjection(created.notebook).nodes.filter((node: any) => node.id === ids.w))
-      .toHaveLength(1);
-    expect(validateResearchNotebook(created.notebook)).toMatchObject({ ok: true, errors: [] });
+    expect(validateResearchNotebook(notebook)).toMatchObject({ ok: true, errors: [] });
   });
 
   test("renaming a cell keeps every edge that references it", () => {
@@ -231,7 +235,6 @@ describe("research notebook model", () => {
     const dependent = setResearchRelation(withResult, ids.r, "depends", [ids.w]).notebook;
     const detached = deleteResearchCell(dependent, cellIds.w);
     expect(detached.removed).toEqual([cellIds.w]);
-    // A Result remains associated, but it is not a primary work surface.
     expect(detached.orphanedWorkNodeIds).toEqual([ids.w]);
     expect(workNode(detached.notebook, ids.w)).toBeTruthy();
     expect(researchGraphProjection(detached.notebook).edges).toContainEqual({ from: ids.w, to: ids.k, type: "lineage" });
@@ -240,7 +243,7 @@ describe("research notebook model", () => {
 
     const removed = deleteResearchWorkNode(detached.notebook, ids.w);
     expect(removed.removedWorkNodeId).toBe(ids.w);
-    expect(removed.removedCells).toHaveLength(1);
+    expect(removed.removedCells).toHaveLength(0);
     expect(workNode(removed.notebook, ids.w)).toBeUndefined();
     expect(researchGraphProjection(removed.notebook).edges.some((edge: any) => edge.from === ids.w || edge.to === ids.w)).toBe(false);
   });
@@ -256,20 +259,24 @@ describe("research notebook model", () => {
     expect(() => setResearchState(notebook, ids.w, { state: "finished" })).toThrow(/Unsupported/);
   });
 
-  test("terminal runs materialize one immutable-identity result cell", () => {
+  test("terminal runs replace the bound work output without creating Result cells", () => {
     const { notebook, ids } = chain();
     const first = upsertResearchRunResult(notebook, {
       workId: ids.w, runId: "run_0199", status: "completed", content: "The gap is real.",
     }).notebook;
-    const result = first.cells.find((cell: any) => meta(first, cell.id)?.run_id === "run_0199");
-    expect(result).toMatchObject({ cell_type: "markdown", source: expect.stringContaining("The gap is real.") });
-    expect(meta(first, result.id)).toMatchObject({ kind: "result", work_node_id: ids.w, status: "completed" });
-    expect(researchWorkNodeForCell(first, result)?.id).toBe(ids.w);
+    const result = first.cells.find((cell: any) => meta(first, cell.id)?.work_node_id === ids.w);
+    expect(result).toMatchObject({ cell_type: "code", execution_count: null });
+    expect(result.outputs[0].data["text/markdown"]).toContain("The gap is real.");
+    expect(result.outputs[0].data["application/vnd.noema.run+json"]).toMatchObject({ run_id: "run_0199" });
+    expect(first.cells.some((cell: any) => meta(first, cell.id)?.kind === "result")).toBe(false);
     const replaced = upsertResearchRunResult(first, {
       workId: ids.w, runId: "run_0199", status: "completed", content: "The gap is quantified.",
     }).notebook;
-    expect(replaced.cells.filter((cell: any) => meta(replaced, cell.id)?.run_id === "run_0199")).toHaveLength(1);
-    expect(replaced.cells.find((cell: any) => cell.id === result.id)?.source).toContain("quantified");
+    const latest = replaced.cells.find((cell: any) => cell.id === result.id);
+    expect(latest.outputs).toHaveLength(1);
+    expect(latest.outputs[0].data["text/markdown"]).toContain("quantified");
+    const cleared = clearResearchOutputs(replaced, { cellId: result.id });
+    expect(cleared.notebook.cells.find((cell: any) => cell.id === result.id).outputs).toEqual([]);
   });
 
   test("folding contracts only the exclusive subtree and protects the focus path", () => {
@@ -298,12 +305,71 @@ describe("research notebook model", () => {
     broken.cells.push({ cell_type: "markdown", id: "c-r-1", metadata: { noema_research: { kind: "result", work_node_id: ids.q } }, source: "" });
     const report = validateResearchNotebook(broken);
     expect(report.warnings.map((entry: any) => entry.code)).toContain("dangling-relation");
-    expect(report.errors.map((entry: any) => entry.code)).toContain("result-of");
+    expect(report.errors.map((entry: any) => entry.code)).toContain("cell-graph-metadata");
     expect(report.ok).toBe(false);
+  });
+
+  test("D-023 migration extracts programming code and is idempotent", () => {
+    const { notebook, ids, cellIds } = chain();
+    notebook.metadata.kernelspec = { name: "python3" };
+    notebook.metadata.language_info = { name: "python" };
+    const prompt = notebook.cells.find((cell: any) => cell.id === cellIds.w);
+    prompt.cell_type = "markdown";
+    delete prompt.execution_count;
+    delete prompt.outputs;
+    notebook.cells.splice(notebook.cells.indexOf(prompt) + 1, 0, {
+      cell_type: "code", id: "c-demo-scaling", execution_count: 1,
+      metadata: { noema_research: { work_node_id: ids.w } }, outputs: [{ output_type: "stream", text: "ok" }],
+      source: "print('scale')\n",
+    });
+    const migrated = migrateResearchNotebookD023(notebook);
+    expect(migrated.validation.ok).toBe(true);
+    expect(migrated.extractions).toEqual([expect.objectContaining({ path: "experiments/scaling.py", source: "print('scale')\n" })]);
+    expect(migrated.notebook.metadata.kernelspec).toBeUndefined();
+    expect(migrated.notebook.cells.find((cell: any) => cell.id === cellIds.w)).toMatchObject({ cell_type: "code", outputs: [] });
+    expect(migrated.notebook.cells.find((cell: any) => cell.id === "c-demo-scaling").metadata.noema).toBeUndefined();
+    const second = migrateResearchNotebookD023(migrated.notebook);
+    expect(second.changed).toBe(false);
+    expect(second.extractions).toEqual([]);
   });
 });
 
 describe("research notebook files", () => {
+  test("explicitly persists a kernel-free legacy document exactly once", async () => {
+    await withTempDir(async (dir) => {
+      const file = join(dir, "legacy.noema");
+      const legacy = {
+        cells: [
+          { cell_type: "markdown", id: "c-work", metadata: { noema_research: {
+            kind: "work", title: "Legacy work",
+          } }, source: "Do the work." },
+          { cell_type: "markdown", id: "c-result", metadata: { noema_research: {
+            kind: "result", of: "c-work", run_id: "run_legacy",
+          } }, source: "Legacy answer." },
+        ],
+        metadata: { noema_research: {
+          schema: "noema.research-notebook/1", notebook_id: "nb_legacy_file",
+          workstream_id: "ws_legacy_file", title: "Legacy file",
+        } },
+        nbformat: 4, nbformat_minor: 5,
+      };
+      const original = `${JSON.stringify(legacy, null, 2)}\n`;
+      await writeFile(file, original);
+
+      const first = await migrateResearchNotebookFile(file);
+      expect(first).toMatchObject({ migrated: true, backup: `${file}.pre-d023.bak`, extractions: [] });
+      expect(await readFile(`${file}.pre-d023.bak`, "utf8")).toBe(original);
+      const persisted = JSON.parse(await readFile(file, "utf8"));
+      expect(persisted.metadata.noema_research.schema).toBe("noema.work-document/2");
+      expect(persisted.cells).toHaveLength(1);
+      expect(persisted.cells[0]).toMatchObject({ cell_type: "code", execution_count: null });
+      expect(persisted.cells[0].outputs[0].data["application/vnd.noema.run+json"].run_id).toBe("run_legacy");
+
+      const second = await migrateResearchNotebookFile(file);
+      expect(second).toMatchObject({ migrated: false, backup: null, extractions: [] });
+    });
+  });
+
   test("atomic writes detect revision conflicts and keep unknown metadata", async () => {
     await withTempDir(async (dir) => {
       const file = join(dir, "research", "bound.noema");
@@ -352,8 +418,9 @@ describe("research notebook files", () => {
       const service = createResearchNotebookService({ getIndexer: () => indexer });
       const file = join(dir, "research", "bound.noema");
 
-      const created = await service.create({ file, title: "Bound" });
+      const created = await service.create({ file, title: "Bound", defaultAgent: "opencode" });
       expect(created.root).toBe(dir);
+      expect(created.notebook.metadata.noema_research.default_agent).toBe("opencode");
       expect(calls[0]).toEqual(["index", { root: dir, path: "research/bound.noema", actor: "node", reason: "notebook.create" }]);
 
       const cell = await service.createCell({ file, kind: "question", title: "Q", expectedRevision: created.revision, actor: "emacs" });

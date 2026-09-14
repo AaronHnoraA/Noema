@@ -18,6 +18,9 @@
 (require 'magent-runtime-queue)
 
 (declare-function my/noema-api-call "init-aaronnote" (channel args callback &optional timeout))
+(declare-function my/noema--host-file "init-aaronnote" (file))
+(declare-function my/noema-jupyter-output-open-document
+                  "init-aaronnote" (payload &optional focus))
 (declare-function noema-agent-promote--session-spec "noema-agent-promote" (&optional buffer title goal))
 
 (defgroup noema-agent-worker nil
@@ -40,7 +43,7 @@
   :group 'noema-agent-worker)
 
 (defcustom noema-agent-worker-result-max-bytes (* 256 1024)
-  "Maximum assistant text copied into a notebook Result cell."
+  "Maximum assistant text copied into a work block's persisted outputs."
   :type 'integer
   :group 'noema-agent-worker)
 
@@ -433,7 +436,10 @@
     (noema-agent-worker--api
      "aaronnote:api:research:worker:lease"
      (append (noema-agent-worker--worker-body worker)
-             `((ttlMillis . ,(* 1000 (max 5 noema-agent-worker-lease-renew-seconds)))))
+             `((ttlMillis
+                . ,(* 1000
+                      (min 60
+                           (max 30 (* 3 noema-agent-worker-lease-renew-seconds)))))))
      (lambda (result error-object)
        (if error-object
            (progn
@@ -986,6 +992,25 @@ When SUBMISSION is non-nil, fill and dispatch that pre-freeze queue token."
             (noema-agent-worker-pending-permissions worker) nil
             (noema-agent-worker-pending-inputs worker) nil)
       (puthash (noema-agent-worker-run-id worker) worker noema-agent-worker--runs)
+      (when-let* ((source (noema-agent-worker--value spec "source"))
+                  ((equal (noema-agent-worker--string source "kind") "work-cell"))
+                  (relative (noema-agent-worker--string source "file"))
+                  (cell-id (noema-agent-worker--string source "cell_id"))
+                  ((fboundp 'my/noema-jupyter-output-open-document)))
+        (let* ((file (expand-file-name relative (noema-agent-worker-root worker)))
+               (root (noema-agent-worker-root worker))
+               (host-file (if (fboundp 'my/noema--host-file)
+                              (my/noema--host-file file) file))
+               (host-root (if (fboundp 'my/noema--host-file)
+                              (my/noema--host-file root) root)))
+          ;; Open before ACP dispatch so the renderer receives the first live
+          ;; snapshot and every durable segment for this exact Run.
+          (my/noema-jupyter-output-open-document
+           `((scriptFile . ,host-file)
+             (sourceFile . ,host-file)
+             (projectRoot . ,host-root)
+             (cellId . ,cell-id)
+             (runId . ,(noema-agent-worker-run-id worker))) nil)))
       (noema-agent-worker--ledger-init worker)
       (condition-case error-object
           (noema-agent-worker--dispatch worker)

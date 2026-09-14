@@ -9,8 +9,6 @@
 ;;   %% work Title          research work
 ;;   %% checkpoint Title    significant change in understanding
 ;;   %% Title / %%          ordinary note (`%% note Title' when ambiguous)
-;;   %% code python         executable code cell
-;;   %% result ...          read-only result written by a run
 ;;
 ;; Cell ids never appear in the text: they are attached to header lines as text
 ;; properties, so renaming a title keeps every relation.  Source lines that
@@ -18,7 +16,7 @@
 ;; research metadata are edited through commands, never typed as syntax.
 ;;
 ;; Saving writes the `*.noema' directly (so editing works without the Noema host)
-;; and then asks a running host to reindex; the kernel derives the semantic
+;; and then asks a running host to reindex; the Go index derives the semantic
 ;; history by diffing against its previous index.
 
 ;;; Code:
@@ -43,6 +41,7 @@
 (autoload 'noema-research-propose-with-magent "noema-research-synthesis" nil t)
 (autoload 'noema-agent-worker-run-work-cell "noema-agent-worker" nil t)
 (autoload 'noema-agent-worker-cancel-run "noema-agent-worker" nil t)
+(autoload 'noema-agent-acp-known-agents "noema-agent-acp" nil nil)
 
 (defgroup noema-research nil
   "Noema research notebooks."
@@ -51,11 +50,6 @@
 (defcustom noema-research-sync-host t
   "Whether saving a research notebook asks a running Noema host to reindex."
   :type 'boolean
-  :group 'noema-research)
-
-(defcustom noema-research-jupyter-execute-timeout 86400
-  "Seconds an Emacs request may wait for a `.noema' Jupyter execution."
-  :type 'integer
   :group 'noema-research)
 
 (defface noema-research-question-face
@@ -74,14 +68,6 @@
   '((t :inherit font-lock-comment-face))
   "Face for note headers.")
 
-(defface noema-research-code-face
-  '((t :inherit font-lock-constant-face))
-  "Face for code cell headers.")
-
-(defface noema-research-result-face
-  '((t :inherit shadow))
-  "Face for result cells.")
-
 (defface noema-research-decoration-face
   '((t :inherit shadow :slant italic))
   "Face for header decorations.")
@@ -95,23 +81,20 @@
 (defvar-local noema-research--decoration-timer nil
   "Pending idle timer that refreshes header decorations.")
 
-(defvar-local noema-research--kernel-status "not-started"
-  "Last Jupyter kernel state received for this work document.")
-
 (defconst noema-research--header-regexp "^%%\\(?:[ \t]+\\(.*?\\)\\)?[ \t]*$"
   "Regexp matching a JuText cell header.")
 
 (defconst noema-research--header-words
-  '("question" "work" "checkpoint" "result" "code" "note")
+  '("question" "work" "checkpoint" "note")
   "Words with a structural meaning at the start of a header.")
 
 (defconst noema-research--font-lock-keywords
   '(("^%%[ \t]+question\\_>.*$" . 'noema-research-question-face)
     ("^%%[ \t]+work\\_>.*$" . 'noema-research-work-face)
     ("^%%[ \t]+checkpoint\\_>.*$" . 'noema-research-checkpoint-face)
-    ("^%%[ \t]+result\\_>.*$" . 'noema-research-result-face)
-    ("^%%[ \t]+code\\_>.*$" . 'noema-research-code-face)
-    ("^%%\\(?:[ \t].*\\)?$" . 'noema-research-note-face))
+    ("^%%\\(?:[ \t].*\\)?$" . 'noema-research-note-face)
+    ("^@@\\(?:agent\\|session\\|ctx\\|skill\\)([^)\n]+)[ \t]*$"
+     . 'font-lock-preprocessor-face))
   "Font lock keywords for JuText headers.")
 
 ;;;; Projection
@@ -124,31 +107,17 @@
   "Undo `noema-research--escape-source' on TEXT."
   (replace-regexp-in-string "^\\\\\\(\\\\*%%\\)" "\\1" text))
 
-(defun noema-research--notebook-language (document)
-  "Return DOCUMENT's kernel language."
-  (or (noema-research--string
-       (noema-research--get (noema-research--get (noema-research--get document "metadata")
-                                                 "kernelspec")
-                            "language"))
-      "python"))
-
 (defun noema-research--header-text (cell document)
   "Return the JuText header line for CELL in DOCUMENT."
   (let ((kind (noema-research-cell-kind cell document))
         (title (noema-research-cell-title cell document)))
     (pcase kind
-      ("code" (concat "%% code " (noema-research--notebook-language document)))
       ("note"
        (cond
         ((string-empty-p title) "%%")
         ((member (car (split-string title "[ \t]+" t)) noema-research--header-words)
          (concat "%% note " title))
         (t (concat "%% " title))))
-      ("result"
-       (let ((target (noema-research-primary-cell
-                      document (noema-research-cell-work-node-id cell))))
-         (string-trim-right
-          (concat "%% result " (if target (noema-research-cell-label target document) "")))))
       (_ (string-trim-right (concat "%% " kind " " title))))))
 
 (defun noema-research--parse-header (text)
@@ -176,13 +145,7 @@
           (put-text-property start (point) 'noema-research-work-node-id work-node-id))
         (insert "\n")
         (unless (string-empty-p source)
-          (insert (noema-research--escape-source source) "\n"))
-        (when (equal (noema-research-cell-kind cell document) "result")
-          (add-text-properties
-           start (point)
-           '(read-only "Result cells are written by runs"
-                       rear-nonsticky (read-only)
-                       face noema-research-result-face))))))
+          (insert (noema-research--escape-source source) "\n")))))
   (goto-char (point-min)))
 
 (defun noema-research--line-property (beg end property)
@@ -246,26 +209,17 @@ Each entry is a plist with :header-beg, :header-end, :block-end, :text, :id,
 
 (defun noema-research--apply-kind (document cell kind title &optional work-node-id)
   "Make CELL a KIND cell in DOCUMENT while preserving unrelated content."
-  (if (equal kind "code")
-      (unless (equal (gethash "cell_type" cell) "code")
-        (puthash "cell_type" "code" cell)
-        (puthash "execution_count" :null cell)
-        (puthash "outputs" [] cell)
-        (remhash "attachments" cell))
-    (when (equal (gethash "cell_type" cell) "code")
-      (puthash "cell_type" "markdown" cell)
-      (remhash "execution_count" cell)
-      (remhash "outputs" cell)))
   (if (member kind noema-research-graph-kinds)
       (progn
         (noema-research-cell-set cell "kind" nil)
         (noema-research-cell-set cell "title" nil)
         (noema-research-bind-cell document cell kind title work-node-id))
-    (if (equal kind "code")
-        (noema-research-cell-set cell "work_node_id" work-node-id)
-      (noema-research-cell-set cell "work_node_id" nil))
+    (puthash "cell_type" "markdown" cell)
+    (remhash "execution_count" cell)
+    (remhash "outputs" cell)
+    (noema-research-cell-set cell "work_node_id" nil)
     (noema-research-cell-set cell "kind" nil)
-    (noema-research-cell-set cell "title" (unless (equal kind "code") title))))
+    (noema-research-cell-set cell "title" title)))
 
 (defun noema-research-mode--sync ()
   "Merge the JuText buffer into `noema-research--document' and return it.
@@ -278,7 +232,7 @@ together with every relation that referenced them."
         (taken (make-hash-table :test #'equal))
         (seen (make-hash-table :test #'equal))
         (seen-nodes (make-hash-table :test #'equal))
-        cells assignments removed removed-node-candidates context-node)
+        cells assignments removed removed-node-candidates)
     (dolist (cell (noema-research-cells document))
       (puthash (noema-research-cell-id cell) cell old)
       (puthash (noema-research-cell-id cell) t taken))
@@ -291,10 +245,9 @@ together with every relation that referenced them."
                             (gethash claimed old)))
              (claimed-node (or (and existing (noema-research-cell-work-node-id existing))
                                (plist-get entry :work-node-id)
-                               (and (equal kind "code") (not existing) context-node)))
+                               nil))
              (reusable-node (and claimed-node
-                                 (or (equal kind "code")
-                                     (not (gethash claimed-node seen-nodes)))
+                                 (not (gethash claimed-node seen-nodes))
                                  (noema-research-find-work-node document claimed-node)
                                  claimed-node))
              (cell (or existing
@@ -303,24 +256,16 @@ together with every relation that referenced them."
                         "id" (noema-research-new-cell-id taken)
                         "metadata" (make-hash-table :test #'equal)
                         "source" ""))))
-        (cond
-         ((and existing (equal (noema-research-cell-kind existing document) "result"))
-          (setq kind "result"))
-         ((equal kind "result")
-          (setq kind "note")))
-        (unless (equal kind "result")
-          (noema-research--apply-kind document cell kind title reusable-node)
-          (puthash "source" (plist-get entry :body) cell)
-          (when (and (not existing) (plist-get entry :lineage)
-                     (member kind noema-research-graph-kinds))
-            (noema-research-set-relation
-             document (noema-research-cell-work-node-id cell) "lineage"
-             (list (plist-get entry :lineage)))))
+        (noema-research--apply-kind document cell kind title reusable-node)
+        (puthash "source" (plist-get entry :body) cell)
+        (when (and (not existing) (plist-get entry :lineage)
+                   (member kind noema-research-graph-kinds))
+          (noema-research-set-relation
+           document (noema-research-cell-work-node-id cell) "lineage"
+           (list (plist-get entry :lineage))))
         (puthash (noema-research-cell-id cell) t seen)
         (when-let* ((work-node-id (noema-research-cell-work-node-id cell)))
-          (setq context-node work-node-id)
-          (unless (equal kind "code")
-            (puthash work-node-id t seen-nodes)))
+          (puthash work-node-id t seen-nodes))
         (push cell cells)
         (push (list (plist-get entry :header-beg) (plist-get entry :header-end)
                     (noema-research-cell-id cell)
@@ -336,8 +281,7 @@ together with every relation that referenced them."
     (dolist (work-node-id (delete-dups removed-node-candidates))
       (unless (seq-some
                (lambda (cell)
-                 (and (equal (noema-research-cell-work-node-id cell) work-node-id)
-                      (not (equal (noema-research-cell-field cell "kind") "result"))))
+                 (equal (noema-research-cell-work-node-id cell) work-node-id))
                (noema-research-cells document))
         (noema-research-delete-work-node document work-node-id t)))
     (with-silent-modifications
@@ -353,6 +297,14 @@ together with every relation that referenced them."
 
 ;;;; Decorations
 
+(defun noema-research--latest-run-status (cell)
+  "Return the terminal Run status stored in CELL outputs, if any."
+  (cl-loop for output in (reverse (noema-research-cell-outputs cell))
+           for data = (noema-research--get output "data")
+           for run = (noema-research--get data "application/vnd.noema.run+json")
+           for status = (noema-research--string (noema-research--get run "status"))
+           when status return status))
+
 (defun noema-research--decoration (cell)
   "Return the header decoration string for CELL."
   (if (null cell)
@@ -362,10 +314,13 @@ together with every relation that referenced them."
            (depends (length (noema-research-cell-relation cell "depends" noema-research--document)))
            (parts (delq nil (list (noema-research-cell-state cell noema-research--document)
                                   (noema-research-cell-outcome cell noema-research--document)
+                                  (and (equal kind "work")
+                                       (when-let* ((status (noema-research--latest-run-status cell)))
+                                         (concat "run:" status)))
                                   (and (> lineage 0) (format "↑%d" lineage))
                                   (and (> depends 0) (format "⇠%d" depends))))))
       (cond
-       ((member kind '("note" "code" "result")) nil)
+       ((equal kind "note") nil)
        (parts (concat "  · " (string-join parts " · ")))))))
 
 (defun noema-research-mode--refresh-decorations ()
@@ -397,6 +352,85 @@ together with every relation that referenced them."
                    (noema-research-mode--refresh-decorations)))))))))
 
 ;;;; Loading and saving
+
+(defun noema-research-merge-disk-outputs ()
+  "Merge only persisted work outputs into the in-memory JuText document.
+This preserves unsaved prompt edits while an agent Run writes its terminal
+reply to the same `.noema' file."
+  (when (and buffer-file-name noema-research--document
+             (file-exists-p buffer-file-name))
+    (let ((disk (noema-research-read-file buffer-file-name))
+          (memory (make-hash-table :test #'equal)))
+      (dolist (cell (noema-research-cells noema-research--document))
+        (puthash (noema-research-cell-id cell) cell memory))
+      (dolist (disk-cell (noema-research-cells disk))
+        (when-let* ((cell (gethash (noema-research-cell-id disk-cell) memory))
+                    ((equal (noema-research-cell-kind cell noema-research--document) "work"))
+                    ((equal (noema-research-cell-kind disk-cell disk) "work")))
+          (puthash "execution_count" :null cell)
+          (puthash "outputs" (or (noema-research--get disk-cell "outputs") []) cell)))
+      (setq-local noema-research--revision
+                  (noema-research-file-revision buffer-file-name))
+      ;; The disk change was consumed above.  Keep Emacs from prompting before
+      ;; the subsequent save of the still-unsaved JuText source edits.
+      (set-visited-file-modtime)
+      (noema-research-mode--refresh-decorations)))
+  noema-research--document)
+
+(defun noema-research--directive-errors (document)
+  "Return save-time directive errors for work blocks in DOCUMENT."
+  (let (errors)
+    (dolist (cell (noema-research-cells document))
+      (when (equal (noema-research-cell-kind cell document) "work")
+        (let ((lines (split-string (noema-research-cell-source cell) "\n"))
+              (seen (make-hash-table :test #'equal))
+              (saw nil)
+              (body nil))
+          (while (and lines (not body))
+            (let ((line (pop lines)))
+              (cond
+               ((string-match "\\`@@\\([A-Za-z][A-Za-z0-9_-]*\\)(\\(.*\\))[ \t]*\\'" line)
+                (let* ((name (match-string 1 line))
+                       (value (string-trim (match-string 2 line)))
+                       (old (gethash name seen)))
+                  (setq saw t)
+                  (cond
+                   ((not (member name '("agent" "session" "ctx" "skill")))
+                    (push (format "%s: unsupported directive @@%s"
+                                  (noema-research-cell-id cell) name) errors))
+                   ((string-empty-p value)
+                    (push (format "%s: empty @@%s directive"
+                                  (noema-research-cell-id cell) name) errors))
+                   ((and (member name '("agent" "skill"))
+                         (not (string-match-p "\\`[A-Za-z0-9][A-Za-z0-9._-]*\\'" value)))
+                    (push (format "%s: invalid @@%s value" (noema-research-cell-id cell) name) errors))
+                   ((and (equal name "session")
+                         (not (member value '("continue" "fork" "fresh"))))
+                    (push (format "%s: invalid @@session value" (noema-research-cell-id cell)) errors))
+                   ((and (equal name "ctx")
+                         (not
+                          (or (member value '("lineage" "depends" "git.diff"
+                                              "handoff.latest"))
+                              (string-match-p "\\`cell:[A-Za-z0-9_-][A-Za-z0-9_-]*\\'" value)
+                              (string-match-p "\\`result:wn_[A-Za-z0-9_-][A-Za-z0-9_-]*\\'" value)
+                              (string-match-p "\\`file:..*\\'" value)
+                              (string-match-p "\\`note:[A-Za-z0-9_-][A-Za-z0-9_-]*\\'" value)
+                              (string-match-p "\\`artifact:art_[A-Za-z0-9_-][A-Za-z0-9_-]*\\'" value))))
+                    (push (format "%s: unsupported @@ctx reference" (noema-research-cell-id cell)) errors))
+                   ((and (member name '("agent" "session")) old
+                         (not (equal old value)))
+                    (push (format "%s: conflicting @@%s directives"
+                                  (noema-research-cell-id cell) name) errors)))
+                  (unless (equal name "ctx") (puthash name value seen))))
+               ((string-match-p "\\`@@[A-Za-z]" line)
+                (push (format "%s: malformed directive %s"
+                              (noema-research-cell-id cell) line) errors))
+               ((and saw (string-empty-p (string-trim line))))
+               (t (setq body (cons line lines))))))
+          (unless (string-match-p "[^ \t\n]" (mapconcat #'identity (or body nil) "\n"))
+            (push (format "%s: work block needs non-empty body text"
+                          (noema-research-cell-id cell)) errors)))))
+    (nreverse errors)))
 
 (defun noema-research--load (document revision)
   "Render DOCUMENT loaded at REVISION into the current buffer."
@@ -430,15 +464,15 @@ together with every relation that referenced them."
 (defun noema-research-mode--write-contents ()
   "Write the research notebook for `write-contents-functions'."
   (let ((document (noema-research-mode--sync)))
+    (when-let* ((errors (noema-research--directive-errors document)))
+      (user-error "Invalid work directives: %s" (string-join errors "; ")))
+    (when (and noema-research--revision
+               (not (equal noema-research--revision
+                           (noema-research-file-revision buffer-file-name))))
+      (noema-research-merge-disk-outputs))
     (setq noema-research--revision
-          (condition-case nil
-              (noema-research-write-file buffer-file-name document
-                                         noema-research--revision)
-            (noema-research-revision-conflict
-             (unless (yes-or-no-p
-                      "Research notebook changed on disk; overwrite it? ")
-               (user-error "Save cancelled; revert to load the external change"))
-             (noema-research-write-file buffer-file-name document))))
+          (noema-research-write-file buffer-file-name document
+                                     noema-research--revision))
     (set-visited-file-modtime)
     (set-buffer-modified-p nil)
     (noema-research-mode--refresh-decorations)
@@ -461,43 +495,24 @@ NOCONFIRM has the meaning documented by `revert-buffer'."
     (run-hooks 'after-revert-hook)
     t))
 
-;;;; Jupyter execution and rich output
+;;;; Agent execution and rich output
 
-(defun noema-research--jupyter-session (document)
-  "Return the Jupyter session name recorded by DOCUMENT."
-  (or (noema-research--string
-       (noema-research--get
-        (noema-research--get (noema-research--get document "metadata") "noema")
-        "session"))
-      "default"))
-
-(defun noema-research--jupyter-kernel (document)
-  "Return the Jupyter kernelspec name recorded by DOCUMENT."
-  (or (noema-research--string
-       (noema-research--get
-        (noema-research--get (noema-research--get document "metadata") "kernelspec")
-        "name"))
-      "python3"))
-
-(defun noema-research--jupyter-context (&optional require-code)
-  "Return the Jupyter context at point, optionally REQUIRE-CODE.
-The JuText projection is saved first so the runtime reads the canonical
-`.noema' file rather than an unsaved shadow representation."
+(defun noema-research--output-context (&optional require-work)
+  "Return the D-023 output context at point, optionally REQUIRE-WORK.
+The JuText projection is saved first so the runtime reads the canonical file."
   (unless buffer-file-name (user-error "This work document has no file"))
   (when (buffer-modified-p) (save-buffer))
-  (let* ((cell (noema-research--require-cell))
-         (type (noema-research--get cell "cell_type")))
-    (when (and require-code (not (equal type "code")))
-      (user-error "Current Noema cell is not executable code"))
+  (let ((cell (noema-research--require-cell)))
+    (when (and require-work
+               (not (equal (noema-research-cell-kind cell noema-research--document)
+                           "work")))
+      (user-error "C-c C-c only runs a work block"))
     (list :cell-id (noema-research-cell-id cell)
           :script-file (expand-file-name buffer-file-name)
-          :project-root (noema-research-repository-root buffer-file-name)
-          :language (noema-research--notebook-language noema-research--document)
-          :kernel (noema-research--jupyter-kernel noema-research--document)
-          :session (noema-research--jupyter-session noema-research--document))))
+          :project-root (noema-research-repository-root buffer-file-name))))
 
-(defun noema-research--jupyter-payload (context &optional view)
-  "Return browser/runtime payload for Jupyter CONTEXT and optional VIEW."
+(defun noema-research--output-payload (context &optional run-id)
+  "Return right-side renderer payload for CONTEXT and optional RUN-ID."
   (let* ((file (plist-get context :script-file))
          (project-root (plist-get context :project-root))
          (host-file (if (fboundp 'my/noema--host-file)
@@ -510,10 +525,7 @@ The JuText projection is saved first so the runtime reads the canonical
       (sourceFile . ,host-file)
       (projectRoot . ,host-root)
       (cellId . ,(plist-get context :cell-id))
-      (language . ,(plist-get context :language))
-      (kernel . ,(plist-get context :kernel))
-      (session . ,(plist-get context :session))
-      ,@(when view `((view . ,view))))))
+      ,@(when run-id `((runId . ,run-id))))))
 
 (defun noema-research-open-outputs (&optional focus)
   "Show this `.noema' document in Emacs' right-side rich-output view.
@@ -521,212 +533,142 @@ With FOCUS non-nil (interactively, with a prefix), select the output window."
   (interactive "P")
   (unless (fboundp 'my/noema-jupyter-output-open-document)
     (user-error "Noema's Jupyter output renderer is unavailable"))
-  (let ((context (noema-research--jupyter-context)))
+  (let ((context (noema-research--output-context)))
     (my/noema-jupyter-output-open-document
-     (noema-research--jupyter-payload context "outputs") focus)))
+     (noema-research--output-payload context) focus)))
 
-(defun noema-research--jupyter-action (action success-message &optional require-code)
-  "Send Jupyter ACTION for this work document and report SUCCESS-MESSAGE."
-  (unless (and (fboundp 'my/noema-api-call)
-               (fboundp 'my/noema--ensure-server))
-    (user-error "Noema's Jupyter runtime bridge is unavailable"))
-  (let* ((source-buffer (current-buffer))
-         (context (noema-research--jupyter-context require-code))
-         (body `((scriptFile . ,(plist-get context :script-file))
-                 (sourceFile . ,(plist-get context :script-file))
-                 (projectRoot . ,(plist-get context :project-root))
-                 (cellId . ,(plist-get context :cell-id))
-                 (language . ,(plist-get context :language))
-                 (kernel . ,(plist-get context :kernel))
-                 (session . ,(plist-get context :session))
-                 (action . ,action))))
-    (my/noema--ensure-server
-     (lambda ()
-       (when (buffer-live-p source-buffer)
-         (with-current-buffer source-buffer
-           (when (string-prefix-p "run-" action)
-             ;; This is an Emacs-owned view over the execution.  It is opened
-             ;; before the request so subsequent runs stream without changing
-             ;; the user's current work buffer.
-             (my/noema-jupyter-output-open-document
-              (noema-research--jupyter-payload context "outputs") nil))
-           (my/noema-api-call
-            "aaronnote:api:jupyter:script-action" (vector body)
-            (lambda (_result error-object)
-              (if error-object
-                  (message "Noema Jupyter: %s"
-                           (or (and (hash-table-p error-object)
-                                    (gethash "message" error-object))
-                               "request failed"))
-                (message "Noema Jupyter: %s" success-message)))
-            noema-research-jupyter-execute-timeout)))))))
+(defun noema-research--kernel-disabled ()
+  "Explain the D-023 execution boundary."
+  (user-error ".noema has no Jupyter kernel; run a work block through an agent"))
 
 (defun noema-research-execute-current ()
-  "Execute the current `.noema' Cell through its native substrate.
-Code Cells use the Noema-owned Jupyter runtime.  Markdown Cells bound to a
-work WorkNode become durable external-agent Runs.  Cell and WorkNode identity
-remain distinct in either path."
+  "Run the current D-023 work block through the configured ACP agent."
   (interactive)
   (let* ((cell (noema-research--require-cell))
-         (cell-type (noema-research--get cell "cell_type"))
          (node (noema-research-work-node-for-cell
                 noema-research--document cell)))
-    (cond
-     ((equal cell-type "code")
-      (noema-research--jupyter-action "run-current" "cell finished" t))
-     ((and (equal cell-type "markdown")
-           (equal (noema-research-work-node-field node "kind") "work"))
+    (if (and (equal (noema-research--get cell "cell_type") "code")
+             (equal (noema-research-work-node-field node "kind") "work"))
+        (progn
       (unless buffer-file-name
-        (user-error "This Work Cell has no canonical .noema file"))
+            (user-error "This work block has no canonical .noema file"))
       (when (buffer-modified-p) (save-buffer))
       (let ((default-directory
              (noema-research-repository-root buffer-file-name)))
         (noema-agent-worker-run-work-cell
          (expand-file-name buffer-file-name)
-         (noema-research-cell-id cell))))
-     (t
-      (user-error "Only code Cells and Cells bound to a work WorkNode are executable")))))
+             (noema-research-cell-id cell))))
+      (user-error "C-c C-c only runs a work block"))))
 
 (defun noema-research-execute-all ()
-  "Execute every code cell in the current `.noema' work document."
+  "Reject notebook-style run-all for a D-023 work document."
   (interactive)
-  (noema-research--jupyter-action "run-all" "document finished"))
+  (noema-research--kernel-disabled))
 
 (defun noema-research-clear-current-output ()
-  "Clear the current `.noema' code cell's durable Jupyter output."
+  "Clear the current work block's persisted agent output."
   (interactive)
-  (noema-research--jupyter-action "clear-output" "cell output cleared" t))
+  (let ((cell (noema-research--require-cell)))
+    (noema-research-clear-cell-outputs
+     noema-research--document (noema-research-cell-id cell))
+    (set-buffer-modified-p t)
+    (save-buffer)
+    (message "Noema work output cleared")))
 
 (defun noema-research-clear-all-outputs ()
-  "Clear all durable Jupyter outputs in the current `.noema' document."
+  "Clear all persisted agent outputs in the current `.noema' document."
   (interactive)
-  (noema-research--jupyter-action "clear-all-outputs" "document outputs cleared"))
+  (noema-research-mode--sync)
+  (dolist (cell (noema-research-cells noema-research--document))
+    (when (equal (noema-research-cell-kind cell noema-research--document) "work")
+      (puthash "execution_count" :null cell)
+      (puthash "outputs" [] cell)))
+  (set-buffer-modified-p t)
+  (save-buffer)
+  (message "Noema work outputs cleared"))
 
 (defun noema-research-interrupt ()
-  "Interrupt this `.noema' document's Noema-owned Jupyter kernel."
+  "Cancel an active agent Run."
   (interactive)
-  (noema-research--jupyter-action "interrupt" "interrupt requested"))
+  (call-interactively #'noema-agent-worker-cancel-run))
 
 (defun noema-research-interrupt-current ()
-  "Interrupt the current Cell's execution substrate."
+  "Cancel an active agent Run for this work document."
   (interactive)
-  (if (equal (noema-research--get (noema-research--require-cell) "cell_type")
-             "code")
-      (noema-research-interrupt)
-    (call-interactively #'noema-agent-worker-cancel-run)))
+  (call-interactively #'noema-agent-worker-cancel-run))
 
 (defun noema-research-restart-kernel ()
-  "Restart this `.noema' document's Noema-owned Jupyter kernel."
+  "Reject Jupyter restart for `.noema'."
   (interactive)
-  (noema-research--jupyter-action "restart" "kernel restarted"))
+  (noema-research--kernel-disabled))
 
 (defun noema-research-shutdown-kernel ()
-  "Shut down this `.noema' document's Noema-owned Jupyter kernel."
+  "Reject Jupyter shutdown for `.noema'."
   (interactive)
-  (noema-research--jupyter-action "shutdown" "kernel shut down"))
+  (noema-research--kernel-disabled))
 
 (defun noema-research--jupyter-kernel-choices (catalog)
-  "Return display/value choices from Noema Jupyter CATALOG."
-  (cl-labels ((value (table key)
-                (cond
-                 ((hash-table-p table) (gethash key table))
-                 ((listp table)
-                  (or (alist-get (intern key) table)
-                      (alist-get key table nil nil #'string=))))))
-  (let ((entries (append (or (value catalog "selections") []) nil))
-        choices)
-    (dolist (entry entries (nreverse choices))
-      (let* ((kind (or (noema-research--string
-                        (value entry "kind")) "start"))
-             (value (or (noema-research--string
-                         (or (value entry "value")
-                             (value entry "name"))) ""))
-             (label (or (noema-research--string
-                         (value entry "label"))
-                        (format "%s · %s"
-                                (capitalize kind)
-                                (or (noema-research--string
-                                     (value entry "displayName"))
-                                    value)))))
-        (when (or (equal kind "none") (not (string-empty-p value)))
-          (push (cons label (cons kind value)) choices)))))))
+  "Compatibility shim: CATALOG has no meaning for `.noema'."
+  (ignore catalog)
+  nil)
 
 (defun noema-research-select-kernel ()
-  "Select or attach the Jupyter kernel for this `.noema' document in Emacs."
+  "Reject Jupyter session selection for `.noema'."
   (interactive)
-  (unless (fboundp 'my/noema-jupyter-cell--api-sync)
-    (user-error "Noema's Jupyter runtime bridge is unavailable"))
-  (let* ((context (noema-research--jupyter-context))
-         (file (plist-get context :script-file))
-         (project-root (plist-get context :project-root))
-         (catalog (my/noema-jupyter-cell--api-sync
-                   "aaronnote:api:jupyter-cell:kernels"
-                   `((file . ,file) (scriptFile . ,file) (sourceFile . ,file)
-                     (projectRoot . ,project-root)) 30))
-         (choices (noema-research--jupyter-kernel-choices catalog)))
-    (unless choices (user-error "No Jupyter kernels are available"))
-    (let* ((label (completing-read "Noema Jupyter kernel: " choices nil t))
-           (choice (cdr (assoc label choices)))
-           (kind (car choice))
-           (value (cdr choice))
-           (body `((scriptFile . ,file)
-                   (sourceFile . ,file)
-                   (projectRoot . ,project-root)
-                   (kind . ,kind)
-                   ,@(pcase kind
-                       ("start" `((kernelSpecName . ,value)))
-                       ("connect" `((kernelId . ,value))))))
-           (reply (my/noema-jupyter-cell--api-sync
-                   "aaronnote:api:jupyter:session-select" body 60)))
-      (noema-research-accept-jupyter-runtime reply)
-      (message "Noema Jupyter: %s" label))))
+  (noema-research--kernel-disabled))
 
 (defun noema-research-accept-jupyter-runtime (snapshot)
-  "Merge durable Jupyter runtime state from disk after SNAPSHOT.
-Only code-cell outputs and Jupyter-owned metadata are accepted.  JuText text,
-WorkNodes, and dependencies remain owned by the Emacs buffer, so a live run
-cannot clobber edits made while output was streaming."
-  (let ((status (or (noema-research--get snapshot "kernelStatus")
-                    (and (listp snapshot)
-                         (or (alist-get 'kernelStatus snapshot)
-                             (alist-get "kernelStatus" snapshot nil nil #'string=))))))
-    (when status (setq-local noema-research--kernel-status (format "%s" status)))
-    (when (and buffer-file-name (file-exists-p buffer-file-name))
-      (condition-case err
-          (let* ((disk (noema-research-read-file buffer-file-name))
-                 (memory-by-id (make-hash-table :test #'equal))
-                 (disk-metadata (noema-research--get disk "metadata"))
-                 (memory-metadata (noema-research--get noema-research--document "metadata")))
-            (dolist (cell (noema-research-cells noema-research--document))
-              (puthash (noema-research-cell-id cell) cell memory-by-id))
-            (dolist (disk-cell (noema-research-cells disk))
-              (when-let* ((cell (gethash (noema-research-cell-id disk-cell) memory-by-id)))
-                (when (and (equal (noema-research--get cell "cell_type") "code")
-                           (equal (noema-research--get disk-cell "cell_type") "code"))
-                  (puthash "execution_count"
-                           (noema-research--get disk-cell "execution_count" :null) cell)
-                  (puthash "outputs" (or (noema-research--get disk-cell "outputs") []) cell)
-                  (let ((memory-cell-meta (noema-research--get cell "metadata"))
-                        (disk-cell-meta (noema-research--get disk-cell "metadata")))
-                    (when (hash-table-p memory-cell-meta)
-                      (if-let* ((runtime (and (hash-table-p disk-cell-meta)
-                                              (noema-research--get disk-cell-meta "noema"))))
-                          (puthash "noema" runtime memory-cell-meta)
-                        (remhash "noema" memory-cell-meta)))))))
-            (when (and (hash-table-p disk-metadata) (hash-table-p memory-metadata))
-              (dolist (key '("kernelspec" "language_info" "noema"))
-                (if-let* ((value (noema-research--get disk-metadata key)))
-                    (puthash key value memory-metadata)
-                  (remhash key memory-metadata))))
-            (setq-local noema-research--revision
-                        (noema-research-file-revision buffer-file-name))
-            (set-visited-file-modtime)
-            (force-mode-line-update t))
-        (error
-         (message "Noema Jupyter state refresh failed: %s"
-                  (error-message-string err)))))))
+  "Compatibility callback that merges D-023 outputs from disk.
+SNAPSHOT is ignored; the `.noema' file is the sole durable authority."
+  (ignore snapshot)
+  (noema-research-merge-disk-outputs))
 
 ;;;; Commands
+
+(defun noema-research-completion-at-point ()
+  "Complete D-023 directive values on the current line."
+  (let ((line (buffer-substring-no-properties (line-beginning-position) (point))))
+    (when (string-match "\\`[ \t]*@@\\(agent\\|session\\|ctx\\|skill\\)(\\([^)]*\\)\\'" line)
+      (let* ((name (match-string 1 line))
+             (beg (+ (line-beginning-position) (match-beginning 2)))
+             (candidates
+              (pcase name
+                ("agent" (noema-agent-acp-known-agents))
+                ("session" '("continue" "fork" "fresh"))
+                ("ctx" '("lineage" "depends" "git.diff" "handoff.latest"
+                         "cell:" "result:wn_" "file:" "note:" "artifact:art_"))
+                (_ nil))))
+        (when candidates (list beg (point) candidates :exclusive 'no))))))
+
+(defun noema-research-set-document-default-agent (agent)
+  "Set the current work document's default AGENT."
+  (interactive
+   (list (completing-read "Default agent (empty clears): "
+                          (noema-agent-acp-known-agents) nil nil nil nil
+                          (noema-research-default-agent noema-research--document))))
+  (noema-research-mode--sync)
+  (noema-research-set-default-agent noema-research--document agent)
+  (set-buffer-modified-p t)
+  (save-buffer)
+  (message "Noema default agent: %s" (if (string-empty-p agent) "configuration default" agent)))
+
+(defun noema-research-migrate-d023 ()
+  "Explicitly migrate the current legacy work document to D-023."
+  (interactive)
+  (unless buffer-file-name (user-error "This work document has no file"))
+  (when (buffer-modified-p)
+    (user-error "Save or discard edits before migration"))
+  (unless (fboundp 'my/noema-jupyter-cell--api-sync)
+    (user-error "Noema host integration is unavailable"))
+  (let* ((root (noema-research-repository-root buffer-file-name))
+         (result (my/noema-jupyter-cell--api-sync
+                  "aaronnote:api:research:notebook:migrate"
+                  `((file . ,(expand-file-name buffer-file-name))
+                    (cwd . ,root)) 120))
+         (migrated (or (noema-research--get result "migrated")
+                       (and (listp result) (alist-get 'migrated result)))))
+    (revert-buffer :ignore-auto :noconfirm)
+    (message "Noema D-023 migration: %s" (if migrated "completed" "already current"))))
 
 (defun noema-research--entry-at-point (&optional entries)
   "Return the entry of ENTRIES (default: a fresh scan) containing point."
@@ -762,7 +704,6 @@ cannot clobber edits made while output was streaming."
   (let ((kind (noema-research-cell-kind cell noema-research--document)))
     (cond
      ((member kind noema-research-graph-kinds) (noema-research-cell-work-node-id cell))
-     ((equal kind "result") (noema-research-cell-work-node-id cell))
      (t (cl-loop with anchor = nil
                  for other in (noema-research-cells noema-research--document)
                  when (eq other cell) return anchor
@@ -779,14 +720,6 @@ Point is left where the title is typed."
                                                            (plist-get entry :id))))
          (anchor (and anchor-cell (noema-research-cell-work-node-id anchor-cell)))
          (position (if entry (plist-get entry :block-end) (point-max))))
-    (dolist (next entries)
-      (when (= (plist-get next :header-beg) position)
-        (let ((cell (noema-research-find-cell noema-research--document
-                                              (plist-get next :id))))
-          (when (and cell anchor
-                     (equal (noema-research-cell-kind cell noema-research--document) "result")
-                     (equal (noema-research-cell-work-node-id cell) anchor))
-            (setq position (plist-get next :block-end))))))
     (goto-char position)
     (when (and (= position (point-max)) (not (bobp)))
       (unless (bolp) (insert "\n"))
@@ -830,25 +763,9 @@ With KIND, create that kind of cell instead."
   (noema-research--insert-cell "question" nil))
 
 (defun noema-research-insert-code ()
-  "Insert a code cell participating in the current contextual WorkNode."
+  "Reject programming-language blocks in a D-023 work document."
   (interactive)
-  (let* ((cell (noema-research--cell-at-point))
-         (work-node-id (and cell (noema-research--graph-anchor cell)))
-         (entry (noema-research--entry-at-point))
-         (position (if entry (plist-get entry :block-end) (point-max)))
-         (language (noema-research--notebook-language noema-research--document)))
-    (goto-char position)
-    (when (and (= position (point-max)) (not (bobp)))
-      (unless (bolp) (insert "\n"))
-      (unless (save-excursion (forward-line -1) (looking-at-p "^$"))
-        (insert "\n")))
-    (let ((beg (point)))
-      (insert "%% code " language "\n")
-      (when work-node-id
-        (put-text-property beg (1- (point))
-                           'noema-research-work-node-id work-node-id))
-      (save-excursion (insert (if (eobp) "\n" "\n\n"))))
-    (noema-research--schedule-decorations)))
+  (user-error ".noema work documents cannot contain programming-language code"))
 
 (defun noema-research-bind-current-cell ()
   "Bind the current cell to an existing WorkNode chosen by label."
@@ -1132,15 +1049,11 @@ With a prefix argument, also prompt for OUTCOME (empty clears it)."
     (define-key map (kbd "C-c C-c") #'noema-research-execute-current)
     (define-key map (kbd "C-c C-o") #'noema-research-open-outputs)
     (define-key map (kbd "C-c C-z") #'noema-research-interrupt-current)
-    (define-key map (kbd "C-c j a") #'noema-research-execute-all)
     (define-key map (kbd "C-c j x") #'noema-research-clear-current-output)
     (define-key map (kbd "C-c j X") #'noema-research-clear-all-outputs)
-    (define-key map (kbd "C-c j i") #'noema-research-interrupt)
-    (define-key map (kbd "C-c j r") #'noema-research-restart-kernel)
-    (define-key map (kbd "C-c j k") #'noema-research-shutdown-kernel)
-    (define-key map (kbd "C-c j K") #'noema-research-select-kernel)
-    (define-key map (kbd "C-c C-e") #'noema-research-insert-code)
     (define-key map (kbd "C-c C-b") #'noema-research-bind-current-cell)
+    (define-key map (kbd "C-c C-f") #'noema-research-set-document-default-agent)
+    (define-key map (kbd "C-c M-m") #'noema-research-migrate-d023)
     map)
   "Keymap for `noema-research-mode'.")
 
@@ -1154,6 +1067,8 @@ With a prefix argument, also prompt for OUTCOME (empty clears it)."
   (setq-local require-final-newline nil)
   (setq-local buffer-file-coding-system 'utf-8-unix)
   (setq-local revert-buffer-function #'noema-research--revert)
+  (add-hook 'completion-at-point-functions
+            #'noema-research-completion-at-point nil t)
   (add-hook 'write-contents-functions #'noema-research-mode--write-contents nil t)
   (add-hook 'after-change-functions #'noema-research--schedule-decorations nil t)
   (let* ((file buffer-file-name)

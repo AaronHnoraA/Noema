@@ -29,7 +29,6 @@ const (
 var (
 	cellIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 	graphKinds    = map[string]bool{"question": true, "work": true, "checkpoint": true}
-	researchKinds = map[string]bool{"result": true}
 )
 
 // ErrNotResearchNotebook reports a notebook without the research schema.
@@ -52,6 +51,11 @@ type Cell struct {
 	Depends       []string `json:"depends"`
 	Ordinal       int      `json:"ordinal"`
 	SourceSHA256  string   `json:"sourceSha256"`
+	OutputsSHA256 string   `json:"outputsSha256,omitempty"`
+	LatestOutput  string   `json:"latestOutput,omitempty"`
+	LatestRunID   string   `json:"latestRunId,omitempty"`
+	OutputStatus  string   `json:"outputStatus,omitempty"`
+	OutputAgent   string   `json:"outputAgent,omitempty"`
 }
 
 // WorkNode is a durable unit in the project work graph. It is deliberately
@@ -108,8 +112,12 @@ type rawWorkNode struct {
 }
 
 type rawNotebook struct {
-	Metadata struct {
-		Research *struct {
+	NBFormat      int `json:"nbformat"`
+	NBFormatMinor int `json:"nbformat_minor"`
+	Metadata      struct {
+		KernelSpec   json.RawMessage `json:"kernelspec"`
+		LanguageInfo json.RawMessage `json:"language_info"`
+		Research     *struct {
 			Schema       string        `json:"schema"`
 			NotebookID   string        `json:"notebook_id"`
 			WorkstreamID string        `json:"workstream_id"`
@@ -119,10 +127,12 @@ type rawNotebook struct {
 		} `json:"noema_research"`
 	} `json:"metadata"`
 	Cells []struct {
-		ID       string          `json:"id"`
-		CellType string          `json:"cell_type"`
-		Source   json.RawMessage `json:"source"`
-		Metadata struct {
+		ID             string          `json:"id"`
+		CellType       string          `json:"cell_type"`
+		Source         json.RawMessage `json:"source"`
+		Outputs        json.RawMessage `json:"outputs"`
+		ExecutionCount json.RawMessage `json:"execution_count"`
+		Metadata       struct {
 			Research *rawCellMeta `json:"noema_research"`
 		} `json:"metadata"`
 	} `json:"cells"`
@@ -168,6 +178,14 @@ func ParseNotebook(data []byte) (Notebook, error) {
 				legacy = true
 				break
 			}
+		}
+	}
+	if !legacy {
+		if raw.NBFormat != 4 || raw.NBFormatMinor != 5 {
+			return Notebook{}, errors.New("Noema work documents require nbformat 4.5")
+		}
+		if len(raw.Metadata.KernelSpec) > 0 || len(raw.Metadata.LanguageInfo) > 0 {
+			return Notebook{}, errors.New("Noema work documents cannot declare Jupyter kernel metadata")
 		}
 	}
 	nodeByID := map[string]WorkNode{}
@@ -265,8 +283,15 @@ func ParseNotebook(data []byte) (Notebook, error) {
 			SourceSHA256: sha256Hex([]byte(source)),
 			Source:       source,
 		}
+		if len(rawCell.Outputs) > 0 {
+			cell.OutputsSHA256 = sha256Hex(rawCell.Outputs)
+			cell.LatestOutput, cell.LatestRunID, cell.OutputStatus, cell.OutputAgent, err = latestWorkOutput(rawCell.Outputs)
+			if err != nil {
+				return Notebook{}, fmt.Errorf("cell %q: %w", rawCell.ID, err)
+			}
+		}
 		if m := rawCell.Metadata.Research; m != nil {
-			if m.Kind != "" && !researchKinds[m.Kind] && !(legacy && graphKinds[m.Kind]) {
+			if m.Kind != "" && !(legacy && (graphKinds[m.Kind] || m.Kind == "result")) {
 				return Notebook{}, fmt.Errorf("cell %q has unsupported research kind %q", rawCell.ID, m.Kind)
 			}
 			cell.Kind = m.Kind
@@ -278,8 +303,12 @@ func ParseNotebook(data []byte) (Notebook, error) {
 				}
 			}
 			if node, ok := nodeByID[cell.WorkNodeID]; ok {
-				if cell.Kind != "result" && rawCell.CellType != "code" {
-					cell.Kind = node.Kind
+				if cell.Kind != "result" {
+					if rawCell.CellType == "code" && node.Kind == "work" {
+						cell.Kind = "work"
+					} else if rawCell.CellType == "markdown" && node.Kind != "work" {
+						cell.Kind = node.Kind
+					}
 				}
 				cell.Title, cell.State, cell.Outcome = node.Title, node.State, node.Outcome
 				cell.DroppedReason, cell.Disclosure = node.DroppedReason, node.Disclosure
@@ -290,10 +319,28 @@ func ParseNotebook(data []byte) (Notebook, error) {
 				}
 			}
 		}
-		if rawCell.CellType == "code" && cell.Kind != "result" {
-			cell.Kind = "code"
-		}
-		if cell.Kind == "" {
+		if !legacy {
+			switch rawCell.CellType {
+			case "code":
+				node, ok := nodeByID[cell.WorkNodeID]
+				if !ok || node.Kind != "work" {
+					return Notebook{}, fmt.Errorf("cell %q code storage must bind a work WorkNode", rawCell.ID)
+				}
+				if string(rawCell.ExecutionCount) != "null" || len(rawCell.Outputs) == 0 || string(rawCell.Outputs) == "null" {
+					return Notebook{}, fmt.Errorf("cell %q work storage requires null execution_count and outputs", rawCell.ID)
+				}
+				cell.Kind = "work"
+			case "markdown":
+				if len(rawCell.ExecutionCount) > 0 || len(rawCell.Outputs) > 0 {
+					return Notebook{}, fmt.Errorf("cell %q markdown storage cannot carry runtime fields", rawCell.ID)
+				}
+				if cell.Kind == "" {
+					cell.Kind = "note"
+				}
+			default:
+				return Notebook{}, fmt.Errorf("cell %q has unsupported cell_type %q", rawCell.ID, rawCell.CellType)
+			}
+		} else if cell.Kind == "" {
 			if rawCell.CellType == "code" {
 				cell.Kind = "code"
 			} else {
@@ -366,6 +413,43 @@ func notebookSource(raw json.RawMessage) (string, error) {
 		return "", errors.New("source must be a string or an array of strings")
 	}
 	return strings.Join(parts, ""), nil
+}
+
+func latestWorkOutput(raw json.RawMessage) (text, runID, status, agent string, err error) {
+	var outputs []struct {
+		Data map[string]json.RawMessage `json:"data"`
+	}
+	if err = json.Unmarshal(raw, &outputs); err != nil {
+		return "", "", "", "", errors.New("outputs must be an array")
+	}
+	for index := len(outputs) - 1; index >= 0; index-- {
+		data := outputs[index].Data
+		if data == nil {
+			continue
+		}
+		if value := data["text/markdown"]; len(value) > 0 {
+			text, _ = notebookSource(value)
+		}
+		if text == "" {
+			if value := data["text/plain"]; len(value) > 0 {
+				text, _ = notebookSource(value)
+			}
+		}
+		if value := data["application/vnd.noema.run+json"]; len(value) > 0 {
+			var run struct {
+				RunID  string `json:"run_id"`
+				Status string `json:"status"`
+				Agent  string `json:"agent"`
+			}
+			if json.Unmarshal(value, &run) == nil {
+				runID, status, agent = run.RunID, run.Status, run.Agent
+			}
+		}
+		if text != "" || runID != "" {
+			return text, runID, status, agent, nil
+		}
+	}
+	return "", "", "", "", nil
 }
 
 func uniqueStrings(values []string) []string {

@@ -290,11 +290,17 @@ class NoemaRunRenderer extends Widget implements IRenderMime.IRenderer {
     if (typeof raw === "string") {
       try { snapshot = JSON.parse(raw); } catch { snapshot = null; }
     }
-    if (!snapshot || typeof snapshot !== "object" || !snapshot.run) {
+    if (!snapshot || typeof snapshot !== "object") {
       this.node.textContent = "Invalid Noema Run snapshot.";
       return;
     }
-    const run = snapshot.run as Record<string, unknown>;
+    const run = (snapshot.run && typeof snapshot.run === "object"
+      ? snapshot.run
+      : {
+          id: snapshot.run_id,
+          agent: snapshot.agent,
+          status: snapshot.status,
+        }) as Record<string, unknown>;
     const events = Array.isArray(snapshot.events) ? snapshot.events : [];
     const header = document.createElement("header");
     const title = document.createElement("strong");
@@ -322,11 +328,13 @@ class NoemaRunRenderer extends Widget implements IRenderMime.IRenderer {
         ? "No streamed assistant text was recorded."
         : "Waiting for agent output…";
     }
-    const actions = events.filter((event: any) => event?.type === "run.action.updated");
+    const actions = events.filter((event: any) => (
+      event?.type === "run.action.updated" || String(event?.type || "").includes("permission")
+    ));
     if (actions.length > 0) {
       const details = document.createElement("details");
       const summary = document.createElement("summary");
-      summary.textContent = `${actions.length} action update${actions.length === 1 ? "" : "s"}`;
+      summary.textContent = `${actions.length} action / permission update${actions.length === 1 ? "" : "s"}`;
       const pre = document.createElement("pre");
       pre.textContent = JSON.stringify(actions.map((event: any) => event.payload), null, 2);
       details.append(summary, pre);
@@ -447,7 +455,10 @@ export function createBaseRenderMime(options: Pick<RenderMimeOptions, "markdownP
     safe: true,
     mimeTypes: [NOEMA_RUN_MIMETYPE],
     createRenderer: () => new NoemaRunRenderer(),
-  }, 5);
+  // Prefer a persisted text/markdown member when a terminal work output
+  // contains both it and the vendor metadata.  Vendor-only live snapshots
+  // still use this read-only status/action renderer.
+  }, 75);
   registry.addFactory({
     safe: true,
     mimeTypes: ["application/json"],

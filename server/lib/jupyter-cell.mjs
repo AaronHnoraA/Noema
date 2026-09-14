@@ -375,6 +375,16 @@ export function createJupyterCellService({
     runtimeDir,
     ...(process.env.AARONNOTE_JUPYTER_ATTACH_DIRS ? process.env.AARONNOTE_JUPYTER_ATTACH_DIRS.split(delimiter).filter(Boolean) : []),
   ];
+  function researchDocumentRequest(body = {}) {
+    return [body?.scriptFile, body?.sourceFile, body?.file]
+      .some((value) => /\.noema$/i.test(String(value || "").trim()));
+  }
+
+  function rejectResearchKernel(body, operation = "operate a Jupyter kernel") {
+    if (researchDocumentRequest(body)) {
+      throw error(`Cannot ${operation} for a .noema work document; run its work block through an agent`, 400);
+    }
+  }
   const kernelspecCache = new Map();
   const files = {
     atomicWriteP(file) {
@@ -834,6 +844,7 @@ export function createJupyterCellService({
   }
 
   async function kernels(body = {}) {
+    rejectResearchKernel(body, "list Jupyter kernels");
     const file = String(body?.file || "");
     const specs = await listKernelSpecs(file ? safeNoteFile(file) : "");
     const list = specs.map((entry) => ({
@@ -1222,6 +1233,7 @@ export function createJupyterCellService({
   }
 
   async function executePrepared(body, code, cellId, { queued = true } = {}) {
+    rejectResearchKernel(body, "execute code");
     const normalizedCode = normalizeCode(code);
     const normalizedCellId = String(cellId || body?.cellId || body?.id || "");
     const requestedKernel = cleanToken(body?.kernel, "python3");
@@ -1262,6 +1274,7 @@ export function createJupyterCellService({
   }
 
   async function openScript(body) {
+    rejectResearchKernel(body, "create or update Jupyter cells");
     const noteFile = safeNoteFile(body?.file);
     const requestedKernel = cleanToken(body?.kernel, "python3");
     const session = cleanToken(body?.session, "default");
@@ -1365,6 +1378,7 @@ export function createJupyterCellService({
   }
 
   async function readScriptCell(body) {
+    rejectResearchKernel(body, "read a Jupyter code cell");
     const noteFile = safeNoteFile(body?.file);
     const requestedKernel = cleanToken(body?.kernel, "python3");
     let session = cleanToken(body?.session, "default");
@@ -1588,6 +1602,7 @@ export function createJupyterCellService({
   }
 
   async function executeScriptCell(body) {
+    rejectResearchKernel(body, "execute code");
     if (Array.isArray(body?.cells) && body.cells.length > 0) {
       return await executeScriptCellWithContext(body || {});
     }
@@ -1617,6 +1632,7 @@ export function createJupyterCellService({
   }
 
   async function clearScriptCellOutput(body) {
+    rejectResearchKernel(body, "clear Jupyter output");
     const noteFile = safeNoteFile(body?.file);
     const kernel = cleanToken(body?.kernel, "python3");
     const session = cleanToken(body?.session, "default");
@@ -1643,6 +1659,7 @@ export function createJupyterCellService({
   }
 
   async function deleteScriptCell(body) {
+    rejectResearchKernel(body, "delete Jupyter cells");
     const noteFile = safeNoteFile(body?.file);
     const kernel = cleanToken(body?.kernel, "python3");
     const session = cleanToken(body?.session, "default");
@@ -1703,6 +1720,7 @@ export function createJupyterCellService({
   }
 
   async function saveScriptCellOutputUi(body) {
+    rejectResearchKernel(body, "save Jupyter output UI state");
     const noteFile = safeNoteFile(body?.file);
     const kernel = cleanToken(body?.kernel, "python3");
     const session = cleanToken(body?.session, "default");
@@ -1745,6 +1763,7 @@ export function createJupyterCellService({
   }
 
   async function clearAllOutputs(body) {
+    rejectResearchKernel(body, "clear Jupyter output");
     const noteFile = safeNoteFile(body?.file);
     const kernel = cleanToken(body?.kernel, "python3");
     const session = cleanToken(body?.session, "default");
@@ -1764,6 +1783,7 @@ export function createJupyterCellService({
   }
 
   async function variables(body) {
+    rejectResearchKernel(body, "inspect kernel variables");
     const kernel = cleanToken(body?.kernel, "python3");
     if (!/python|sage/i.test(kernel)) {
       return { ok: true, supported: false, kernel, variables: [] };
@@ -1834,6 +1854,7 @@ export function createJupyterCellService({
    * shell channel already serializes them; kernel-requests.mjs bounds the wait.
    */
   async function withLiveKernel(body, run, absent) {
+    rejectResearchKernel(body, "inspect a Jupyter kernel");
     const { record } = await kernelRecordForBody(body || {});
     if (!record?.id || record.status === "dead") {
       return { ok: true, supported: false, ...absent };
@@ -1904,6 +1925,7 @@ export function createJupyterCellService({
   }
 
   async function kernelStatus(body) {
+    rejectResearchKernel(body, "inspect Jupyter kernel status");
     const { kernel, session, key } = runtimeForBody(body || {});
     const registry = await getRegistry();
     const existing = registry.get(key);
@@ -1922,6 +1944,7 @@ export function createJupyterCellService({
   }
 
   async function restart(body) {
+    rejectResearchKernel(body, "restart a Jupyter kernel");
     const registry = await getRegistry();
     const existing = await kernelRecordForBody(body || {});
     let key = existing.key;
@@ -1946,6 +1969,7 @@ export function createJupyterCellService({
   }
 
   async function interrupt(body) {
+    rejectResearchKernel(body, "interrupt a Jupyter kernel");
     // Interrupt the kernel actually running this cell. Going through ensureKernel
     // would spawn a fresh idle kernel when none exists (nothing to interrupt) and
     // could desync state — a source of the flaky interrupt behavior.
@@ -1964,6 +1988,7 @@ export function createJupyterCellService({
   }
 
   async function shutdownKernel(body) {
+    rejectResearchKernel(body, "shut down a Jupyter kernel");
     const { key, record } = await kernelRecordForBody(body || {});
     if (!record?.id) return { ok: true, status: "not-started" };
     const registry = await getRegistry();
@@ -2074,6 +2099,34 @@ export function createJupyterCellService({
     const existing = await readExistingHiddenScript(scriptFile, "", files);
     if (!existing.notebook) throw error(`Jupyter notebook not found: ${scriptFile}`, 404);
     const notebook = existing.notebook;
+    const researchDocument = /\.noema$/i.test(scriptFile);
+    if (researchDocument) {
+      documentSessions.set(scriptFile, {
+        scriptFile,
+        sourceFile: scriptFile,
+        kernel: "",
+        session: "",
+        language: "",
+        sessionId: "",
+        projectRoot,
+        detached: true,
+        researchDocument: true,
+      });
+      return {
+        scriptFile,
+        noteFile: scriptFile,
+        notebook,
+        text: existing.text,
+        kernel: "",
+        portableKernel: "",
+        session: "",
+        language: "",
+        sessionId: "",
+        projectRoot,
+        detached: true,
+        researchDocument: true,
+      };
+    }
     const noema = notebookPrivateMetadata(notebook);
     const kernelspec = notebook.metadata?.kernelspec || {};
     const languageInfo = notebook.metadata?.language_info || {};
@@ -2124,6 +2177,51 @@ export function createJupyterCellService({
 
   async function documentSnapshot(body = {}) {
     const context = await managedDocument(body);
+    if (context.researchDocument) {
+      let line = 1;
+      const cells = [];
+      for (const cell of context.notebook.cells || []) {
+        const source = notebookSource(cell?.source);
+        if (cell?.cell_type === "code") {
+          const run = [...(Array.isArray(cell.outputs) ? cell.outputs : [])].reverse()
+            .map((output) => output?.data?.["application/vnd.noema.run+json"])
+            .find((value) => value && typeof value === "object") || {};
+          cells.push({
+            id: cell.id,
+            index: cells.length,
+            line,
+            revision: codeRevision(source),
+            code: source,
+            stale: false,
+            status: String(run.status || "idle"),
+            executionCount: null,
+            outputs: Array.isArray(cell.outputs) ? cell.outputs : [],
+            widgetMessages: [],
+            widgetOutputs: {},
+            outputUi: {},
+          });
+        }
+        line += source.split("\n").length + 2;
+      }
+      return {
+        ok: true,
+        documentRevision: codeRevision(context.text),
+        document: {
+          scriptFile: context.scriptFile,
+          sourceFile: context.scriptFile,
+          ...(context.projectRoot ? { projectRoot: context.projectRoot } : {}),
+          language: "",
+          kernel: "",
+          session: "",
+          kernelSpecName: "",
+          kernelId: "",
+          sessionName: "",
+          sessionId: "",
+        },
+        kernelStatus: "not-applicable",
+        cells,
+      };
+    }
     const registry = await getRegistry();
     const key = kernelKey({ file: context.scriptFile, kernel: context.kernel });
     const record = context.detached ? undefined : registry.get(key);
@@ -2246,6 +2344,9 @@ export function createJupyterCellService({
 
   async function sessionSelect(body = {}) {
     const context = await managedDocument(body);
+    if (context.researchDocument) {
+      throw error("Cannot select a Jupyter session for a .noema work document", 400);
+    }
     const kind = String(body?.kind || "none");
     if (kind === "none") {
       documentSessions.set(context.scriptFile, {
@@ -2297,6 +2398,7 @@ export function createJupyterCellService({
   }
 
   async function kernelControl(body = {}) {
+    rejectResearchKernel(body, "control a Jupyter kernel");
     const { key, record } = await kernelRecordForBody(body);
     if (!record?.id) return { ok: true, status: "not-started" };
     const registry = await getRegistry();
@@ -2437,14 +2539,14 @@ export function createJupyterCellService({
     try {
       const action = String(body?.action || "");
       const cellId = markerId(body?.cellId || body?.id);
+      if (context.researchDocument) {
+        throw error(`Cannot perform Jupyter action ${action || "(missing)"} for a .noema work document`, 400);
+      }
       if (["insertAbove", "insertBelow", "duplicate", "moveUp", "moveDown", "delete", "split", "mergeAbove", "mergeBelow"].includes(action)) {
         // A `.noema` file is edited through the Emacs-native JuText surface.
         // The browser document page is retained only as the rich Jupyter
         // output renderer; letting it mutate cells would create a second UI
         // authority and bypass WorkNode/dependency invariants.
-        if (/\.noema$/i.test(context.scriptFile)) {
-          throw error("Edit .noema work-document structure in Emacs", 400);
-        }
         return await mutateManagedDocument(context, cellId, action, body);
       }
       const request = managedBody(context, { cellId });
@@ -2494,6 +2596,9 @@ export function createJupyterCellService({
 
   async function managedVariables(body = {}) {
     const context = body?.scriptFile ? await managedDocument(body) : null;
+    if (context?.researchDocument) {
+      throw error("Cannot inspect kernel variables for a .noema work document", 400);
+    }
     return await variables(context ? managedBody(context) : body);
   }
 

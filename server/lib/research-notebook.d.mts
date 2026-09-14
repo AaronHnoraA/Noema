@@ -2,7 +2,7 @@ export const RESEARCH_SCHEMA: "noema.work-document/2";
 export const LEGACY_RESEARCH_SCHEMA: "noema.research-notebook/1";
 export const RESEARCH_NAMESPACE: "noema_research";
 export const GRAPH_KINDS: readonly ["question", "work", "checkpoint"];
-export const RESEARCH_KINDS: readonly ["question", "work", "checkpoint", "result"];
+export const RESEARCH_KINDS: readonly [];
 export const WORK_STATES: readonly ["open", "active", "waiting", "done", "dropped"];
 export const WORK_OUTCOMES: readonly ["supported", "refuted", "inconclusive", "dead_end", "superseded"];
 export const RELATION_TYPES: readonly ["lineage", "depends"];
@@ -114,7 +114,11 @@ export type ResearchNotebookService = {
   deleteWorkNode: ResearchServiceMethod;
   setRelation: ResearchServiceMethod;
   setState: ResearchServiceMethod;
+  setDefaultAgent: ResearchServiceMethod;
+  clearOutputs: ResearchServiceMethod;
+  writeRunOutput: ResearchServiceMethod;
   writeRunResult: ResearchServiceMethod;
+  migrate: ResearchServiceMethod;
   projection: ResearchServiceMethod;
   events: ResearchServiceMethod;
 };
@@ -132,10 +136,14 @@ export function researchCellKind(cell: any, notebook?: ResearchNotebook | null):
 export function newResearchCellId(notebook: ResearchNotebook | null | undefined, prefix?: string): string;
 export function newResearchWorkNodeId(notebook: ResearchNotebook): string;
 export function researchCellSummary(cell: any, ordinal?: number, notebook?: ResearchNotebook | null): ResearchCellSummary;
-export function createResearchNotebook(options?: { title?: string; kernel?: string; language?: string }): ResearchNotebook;
+export function createResearchNotebook(options?: { title?: string; defaultAgent?: string }): ResearchNotebook;
 export function isResearchNotebook(notebook: unknown): boolean;
 export function parseResearchNotebook(text: string): ResearchNotebook;
 export function migrateLegacyResearchNotebook(notebook: ResearchNotebook): ResearchNotebook;
+export function migrateResearchNotebookD023(notebook: ResearchNotebook, options?: {
+  extractionPath?: (cell: any, node: any, suggested: string, ordinal: number) => string;
+  legacyInput?: boolean;
+}): { notebook: ResearchNotebook; extractions: any[]; validation: ResearchValidation; changed: boolean };
 export function findDependsCycle(notebook: ResearchNotebook): string[] | null;
 export function findDependencyCycle(notebook: ResearchNotebook, types?: string[]): string[] | null;
 export function validateResearchNotebook(notebook: ResearchNotebook): ResearchValidation;
@@ -162,8 +170,11 @@ export function setResearchState(
 ): ResearchMutation;
 export function upsertResearchRunResult(
   notebook: ResearchNotebook,
-  result: { workId: string; runId: string; status: "completed" | "cancelled" | "failed" | "interrupted"; content?: string },
+  result: { workId: string; cellId?: string; runId: string; agent?: string; status: "completed" | "cancelled" | "failed" | "interrupted"; content?: string },
 ): ResearchMutation;
+export const upsertResearchRunOutput: typeof upsertResearchRunResult;
+export function clearResearchOutputs(notebook: ResearchNotebook, target?: { cellId?: string; workId?: string; all?: boolean }): { notebook: ResearchNotebook; cleared: string[] };
+export function setResearchDefaultAgent(notebook: ResearchNotebook, agent?: string): { notebook: ResearchNotebook; defaultAgent: string };
 export function researchGraphProjection(
   notebook: ResearchNotebook,
   options?: { focus?: string | null; folds?: string[]; depth?: number },
@@ -176,6 +187,7 @@ export function writeResearchNotebookFile(
   notebook: ResearchNotebook,
   options?: { expectedRevision?: string | null; create?: boolean },
 ): Promise<{ file: string; text: string; revision: string; validation: ResearchValidation }>;
+export function migrateResearchNotebookFile(file: string, options?: { backupSuffix?: string }): Promise<any>;
 export function findResearchRepositoryRoot(file: string): Promise<string | null>;
 export function createResearchNotebookService(options?: {
   getIndexer?: () => ResearchIndexer | null;

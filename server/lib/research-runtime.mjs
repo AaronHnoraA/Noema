@@ -5,6 +5,7 @@ import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { notebookSource } from "./jupyter-notebook-format.mjs";
+import { parseResearchDirectives } from "./research-directives.mjs";
 import {
   createResearchCell,
   isResearchDocumentPath,
@@ -325,45 +326,11 @@ function checkDisclosure(cell, notebook = null) {
 }
 
 export function parseResearchPrompt(text) {
-  const source = String(text || "").replace(/\r\n?/g, "\n");
-  const lines = source.split("\n");
-  const config = { agent: "", context: [], skills: [], workstreamId: "" };
-  let bodyStart = 0;
-  let sawDirective = false;
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    const match = /^@(agent|ctx|skill|workstream)\((.*)\)\s*$/.exec(line);
-    if (match) {
-      sawDirective = true;
-      const value = match[2].trim();
-      if (!value) throw researchError(`Empty @${match[1]} directive`, 422, "ERR_RESEARCH_PROMPT");
-      if (match[1] === "agent") {
-        if (config.agent && config.agent !== value) throw researchError("A .prompt file declares @agent more than once", 422, "ERR_RESEARCH_PROMPT");
-        config.agent = value;
-      } else if (match[1] === "workstream") {
-        if (config.workstreamId && config.workstreamId !== value) throw researchError("A .prompt file declares @workstream more than once", 422, "ERR_RESEARCH_PROMPT");
-        config.workstreamId = value;
-      } else if (match[1] === "ctx") config.context.push(value);
-      else config.skills.push(value);
-      bodyStart = index + 1;
-      continue;
-    }
-    if (/^@[A-Za-z][A-Za-z0-9_-]*\(/.test(line)) {
-      throw researchError(`Unsupported .prompt directive: ${line.trim()}`, 422, "ERR_RESEARCH_PROMPT");
-    }
-    if (sawDirective && line.trim() === "") {
-      bodyStart = index + 1;
-      continue;
-    }
-    bodyStart = index;
-    break;
-  }
-  const prompt = lines.slice(bodyStart).join("\n").trim();
-  if (!prompt) throw researchError("A .prompt file needs non-empty body text", 422, "ERR_RESEARCH_PROMPT");
-  if (config.workstreamId && !config.workstreamId.startsWith("ws_")) {
-    throw researchError("@workstream must contain a durable ws_ id", 422, "ERR_RESEARCH_PROMPT");
-  }
-  return { ...config, prompt };
+  return parseResearchDirectives(text, {
+    allowWorkstream: true,
+    allowLegacySingleAt: true,
+    sourceName: ".prompt file",
+  });
 }
 
 function resultForWork(notebook, workId) {
@@ -371,6 +338,34 @@ function resultForWork(notebook, workId) {
   const matches = (notebook.cells || []).filter((cell) => researchCellKind(cell, notebook) === "result"
     && valueString(researchMeta(cell).work_node_id) === target);
   return matches.at(-1) || null;
+}
+
+function mimeText(value) {
+  if (Array.isArray(value)) return value.join("");
+  return typeof value === "string" ? value : "";
+}
+
+function latestOutputForWork(notebook, workId) {
+  const target = researchWorkNodeId(notebook, workId);
+  const workCell = (notebook.cells || []).find((cell) => (
+    cell?.cell_type === "code" && valueString(researchMeta(cell).work_node_id) === target
+  ));
+  for (const output of [...values(workCell?.outputs)].reverse()) {
+    const data = object(output?.data);
+    const text = mimeText(data["text/markdown"]) || mimeText(data["text/plain"]);
+    if (!text) continue;
+    const run = object(data["application/vnd.noema.run+json"]);
+    return { cell: workCell, text, runId: valueString(run.run_id), agent: valueString(run.agent), status: valueString(run.status), legacy: false };
+  }
+  const legacy = resultForWork(notebook, target);
+  return legacy ? {
+    cell: legacy,
+    text: notebookSource(legacy.source),
+    runId: valueString(researchMeta(legacy).run_id),
+    agent: valueString(researchMeta(legacy).agent),
+    status: valueString(researchMeta(legacy).status),
+    legacy: true,
+  } : null;
 }
 
 function cellById(notebook, id) {
@@ -408,6 +403,17 @@ async function resolveContextItems({ root, notebook, sourceCell, declared, provi
       mediaType: "text/markdown; charset=utf-8",
     });
   };
+  const outputItem = (workId, ref) => {
+    const output = latestOutputForWork(notebook, workId);
+    if (!output) throw researchError(`No work output exists for ${ref}`, 404, "ERR_RESEARCH_CONTEXT");
+    checkDisclosure(output.cell, notebook);
+    return asContextItem({
+      ref,
+      resolvedUri: `noema://work-output/${encodeURIComponent(notebookId)}/${encodeURIComponent(researchWorkNodeId(notebook, workId) || workId)}${output.runId ? `/${encodeURIComponent(output.runId)}` : ""}`,
+      bytes: output.text,
+      mediaType: "text/markdown; charset=utf-8",
+    });
+  };
   const lineage = (depth) => {
     const maxDepth = Number(depth ?? 1);
     if (!Number.isInteger(maxDepth) || maxDepth < 1 || maxDepth > 3) {
@@ -432,8 +438,7 @@ async function resolveContextItems({ root, notebook, sourceCell, declared, provi
   const dependencies = () => {
     const node = researchWorkNodeForCell(notebook, sourceCell);
     for (const workId of (node ? researchWorkNodeSummary(notebook, node.id).depends : [])) {
-      const result = resultForWork(notebook, workId);
-      if (result) append(cellItem(result, `result:${workId}`));
+      if (latestOutputForWork(notebook, workId)) append(outputItem(workId, `result:${workId}`));
     }
   };
   for (const entry of values(declared)) {
@@ -456,9 +461,7 @@ async function resolveContextItems({ root, notebook, sourceCell, declared, provi
     }
     if (ref.startsWith("result:")) {
       if (!notebook) throw researchError(`${ref} is only valid in a research notebook`, 422, "ERR_RESEARCH_CONTEXT");
-      const result = resultForWork(notebook, ref.slice("result:".length));
-      if (!result) throw researchError(`No result exists for ${ref}`, 404, "ERR_RESEARCH_CONTEXT");
-      append(cellItem(result, ref));
+      append(outputItem(ref.slice("result:".length), ref));
       continue;
     }
     if (ref.startsWith("file:")) {
@@ -673,7 +676,7 @@ export function createResearchRuntimeService({
       const cellId = valueString(body.cellId || body.cell_id);
       const cell = cellById(loaded.notebook, cellId);
       const workNode = cell ? researchWorkNodeForCell(loaded.notebook, cell) : null;
-      if (!cell || cell.cell_type !== "markdown" || researchCellKind(cell, loaded.notebook) === "result" || workNode?.kind !== "work") {
+      if (!cell || cell.cell_type !== "code" || researchCellKind(cell, loaded.notebook) !== "work" || workNode?.kind !== "work") {
         throw researchError("Document execution requires an existing work cell", 422, "ERR_RESEARCH_WORK_CELL");
       }
       checkDisclosure(cell, loaded.notebook);
@@ -681,6 +684,7 @@ export function createResearchRuntimeService({
       const workstreamId = valueString(notebookMeta.workstream_id);
       const notebookId = valueString(notebookMeta.notebook_id);
       if (!workstreamId || !notebookId) throw researchError("Research notebook lacks durable identity", 422, "ERR_RESEARCH_FORMAT");
+      const directives = parseResearchDirectives(notebookSource(cell.source), { sourceName: `work cell ${cellId}` });
       return {
         kind: "work-cell",
         workstreamId,
@@ -688,11 +692,17 @@ export function createResearchRuntimeService({
         cellId,
         workNodeId: workNode.id,
         file: relative(root, loaded.file).split(sep).join("/"),
-        prompt: notebookSource(cell.source),
+        prompt: directives.prompt,
         cell,
         notebook: loaded.notebook,
-        executor: object(researchMeta(cell).executor),
-        context: values(researchMeta(cell).context),
+        executor: {
+          ...object(researchMeta(cell).executor),
+          agent: directives.agent,
+          session_policy: directives.session,
+          skills: directives.skills,
+        },
+        defaultAgent: valueString(notebookMeta.default_agent),
+        context: directives.context,
         sourceRef: `noema://cell/${encodeURIComponent(notebookId)}/${encodeURIComponent(cellId)}`,
         notebookRevision: loaded.revision,
         cellSourceSHA256: `sha256:${sha256(notebookSource(cell.source))}`,
@@ -723,6 +733,8 @@ export function createResearchRuntimeService({
         cell: null,
         notebook: null,
         executor: { ...object(body.executor), agent: parsed.agent || object(body.executor).agent, skills: parsed.skills },
+        defaultAgent: "",
+        directiveSession: parsed.session,
         context: parsed.context,
         sourceRef: `noema://file/${prompt.relative.split("/").map(encodeURIComponent).join("/")}`,
         notebookRevision: "",
@@ -733,12 +745,33 @@ export function createResearchRuntimeService({
   }
 
   async function routeRun(root, source, target, body) {
-    const requestedPolicy = valueString(body.sessionPolicy || body.session_policy || source.executor.session_policy);
-    const policy = requestedPolicy || "continue";
+    const requestedPolicy = valueString(source.directiveSession || source.executor.session_policy || body.sessionPolicy || body.session_policy);
+    let policy = requestedPolicy;
     if (!["continue", "fork", "fresh"].includes(policy)) {
-      throw researchError(`Unsupported session policy: ${policy}`, 422, "ERR_RESEARCH_SESSION_POLICY");
+      if (policy) throw researchError(`Unsupported session policy: ${policy}`, 422, "ERR_RESEARCH_SESSION_POLICY");
     }
-    const agent = valueString(body.agent || body.adapter || source.executor.agent) || "codex";
+    const agent = valueString(source.executor.agent)
+      || valueString(source.defaultAgent)
+      || valueString(body.agent || body.adapter || object(body.executor).agent)
+      || "codex";
+    let priorRuns = null;
+    const runsForSource = async () => {
+      if (priorRuns) return priorRuns;
+      const runtimeProvider = provider();
+      const runs = typeof runtimeProvider.runs === "function"
+        ? await runtimeProvider.runs({ root, workstreamId: source.workstreamId, limit: 200 })
+        : [];
+      priorRuns = runs.filter((run) => (
+        source.workNodeId
+          ? valueString(run.workNodeId || run.work_node_id) === source.workNodeId
+          : valueString(run.sourceKind || run.source_kind) === source.kind
+            && valueString(run.cellId || run.cell_id) === source.cellId
+      ));
+      return priorRuns;
+    };
+    if (!policy) {
+      policy = (await runsForSource()).length > 0 ? "continue" : "fresh";
+    }
     const requested = valueString(body.sessionId || body.session_id);
     if (requested) {
       const session = await provider().session({ root, id: requested });
@@ -750,8 +783,25 @@ export function createResearchRuntimeService({
     }
     if (policy === "fresh") return { agent, policy, sessionId: "", mode: "fresh", reason: "explicit fresh policy" };
     if (policy === "fork") {
-      const parentSessionId = valueString(body.parentSessionId || body.parent_session_id);
-      if (!parentSessionId) throw researchError("fork policy requires parentSessionId", 422, "ERR_RESEARCH_SESSION_POLICY");
+      let parentSessionId = valueString(body.parentSessionId || body.parent_session_id);
+      if (!parentSessionId) {
+        const candidates = await provider().sessions({ root, workstreamId: source.workstreamId, adapter: agent, limit: 200 });
+        const eligible = source.workNodeId
+          ? (await runsForSource()).map((run) => candidates.find((candidate) => (
+            valueString(candidate.id) === valueString(run.sessionId || run.session_id)
+          ))).filter(Boolean)
+          : candidates;
+        for (const candidate of eligible) {
+          if (!["active", "warm"].includes(candidate.state)) continue;
+          try {
+            if ((await projectDirectory(root, candidate.executionTarget)) === target) {
+              parentSessionId = valueString(candidate.id);
+              break;
+            }
+          } catch {}
+        }
+      }
+      if (!parentSessionId) throw researchError("fork policy requires an existing same-agent parent Session", 422, "ERR_RESEARCH_SESSION_POLICY");
       const parent = await provider().session({ root, id: parentSessionId });
       const parentTarget = await projectDirectory(root, parent.executionTarget);
       if (parent.workstreamId !== source.workstreamId || parentTarget !== target || valueString(parent.adapter) !== agent) {
@@ -766,8 +816,13 @@ export function createResearchRuntimeService({
         reason: "parent adapter lacks native ACP fork or native session identity" };
     }
     const sessions = await provider().sessions({ root, workstreamId: source.workstreamId, adapter: agent, limit: 200 });
+    const eligible = source.workNodeId
+      ? (await runsForSource()).map((run) => sessions.find((candidate) => (
+        valueString(candidate.id) === valueString(run.sessionId || run.session_id)
+      ))).filter(Boolean)
+      : sessions;
     let session = null;
-    for (const candidate of sessions) {
+    for (const candidate of eligible) {
       if (!["active", "warm"].includes(candidate.state)) continue;
       try {
         if ((await projectDirectory(root, candidate.executionTarget)) === target) {
@@ -831,24 +886,36 @@ export function createResearchRuntimeService({
     async prepareRun(body = {}) {
       const root = await rootFor(body);
       const source = await sourceForRun(root, body);
+      const runtimeProvider = provider();
+      if (source.kind === "work-cell" && typeof runtimeProvider.index === "function") {
+        // A canonical document can be opened before this host's rebuildable
+        // Go index has ever seen it.  Synchronize the file before any
+        // Workstream/Run lookup so first execution works without a dummy save.
+        await runtimeProvider.index({
+          root,
+          path: source.file,
+          actor: "node",
+          reason: "run.prepare",
+        });
+      }
       const target = await projectDirectory(root, body.executionTarget || body.cwd || root);
       const route = await routeRun(root, source, target, body);
-      const declaredContext = Array.isArray(body.context) ? body.context : source.context;
+      const declaredContext = [...values(source.context), ...values(body.context)];
       let reconstruction = null;
       if (route.mode === "fork-reconstructed") {
         reconstruction = await latestParentHandoff(provider(), root, route.parentSessionId);
       }
-      const parentResult = reconstruction?.run && source.notebook
+      const parentOutput = reconstruction?.run && source.notebook
         && valueString(reconstruction.run.notebookId) === source.notebookId
-        && resultForWork(source.notebook, valueString(reconstruction.run.workNodeId || reconstruction.run.cellId));
-      const reconstructedForkContext = parentResult
+        && latestOutputForWork(source.notebook, valueString(reconstruction.run.workNodeId || reconstruction.run.cellId));
+      const reconstructedForkContext = parentOutput
         ? [`result:${valueString(reconstruction.run.workNodeId || reconstruction.run.cellId)}`]
         : [];
       const contextItems = await resolveContextItems({ root, notebook: source.notebook, sourceCell: source.cell,
         declared: [...declaredContext, ...reconstructedForkContext], provider: provider(), sessionId: route.sessionId,
         resolveKnowledgeNote });
       if (reconstruction?.item) contextItems.push(reconstruction.item);
-      const skillIds = values(body.skills ?? source.executor.skills).map(valueString).filter(Boolean);
+      const skillIds = [...values(source.executor.skills), ...values(body.skills)].map(valueString).filter(Boolean);
       const resolvedSkills = await resolveSkills(root, skillIds);
       contextItems.push(...resolvedSkills.items);
       assertContextLimit(contextItems);
@@ -893,7 +960,7 @@ export function createResearchRuntimeService({
       if (route.mode === "fork") spec.fork_mode = "native";
       if (route.mode === "fork-reconstructed") {
         spec.fork_mode = "reconstructed";
-        spec.fork_notice = "No hidden parent conversation was inherited; only frozen source, declared context, available parent Result, and Handoff were provided.";
+        spec.fork_notice = "No hidden parent conversation was inherited; only frozen source, declared context, an available parent work output, and Handoff were provided.";
       }
       const prepared = await provider().prepareRun({
         root,
@@ -913,7 +980,9 @@ export function createResearchRuntimeService({
       const run = object(prepared.run).id ? prepared.run : prepared;
       const frozenSpec = object(prepared.spec).run_id ? prepared.spec : { ...spec, run_id: run.id };
       if (valueString(run.id)) {
-        runFileBaselines.set(valueString(run.id), { root, run, files: await snapshotProjectFiles(root) });
+        runFileBaselines.set(valueString(run.id), {
+          root, run, agent: route.agent, files: await snapshotProjectFiles(root),
+        });
       }
       return { root, run, spec: frozenSpec, contextItems, routing: route };
     },
@@ -1120,12 +1189,16 @@ export function createResearchRuntimeService({
           durableRun ||= await provider().run({ root, id: runId });
           const file = await projectFile(root, notebookFile);
           const notebooks = getNotebookService();
-          if (!notebooks?.writeRunResult) throw researchError("research notebook writer is unavailable", 503, "ERR_RESEARCH_RESULT");
-          result = await notebooks.writeRunResult({
+          const writeRunOutput = notebooks?.writeRunOutput?.bind(notebooks)
+            || notebooks?.writeRunResult?.bind(notebooks);
+          if (!writeRunOutput) throw researchError("research notebook writer is unavailable", 503, "ERR_RESEARCH_RESULT");
+          result = await writeRunOutput({
             file: file.path,
             notebookId: durableRun.notebookId,
             workId: durableRun.workNodeId || durableRun.cellId,
+            cellId: durableRun.cellId,
             runId,
+            agent: baseline?.agent || "",
             status: valueString(terminal.payload?.status),
             content: String(terminal.payload?.result_text || ""),
             actor: "worker",

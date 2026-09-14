@@ -57,7 +57,7 @@ func TestMigrationAddsCellProposalAcceptanceReservationWithoutLosingRows(t *test
 	if _, err := db.Exec(`UPDATE proposals SET kind = 'job.create' WHERE id = 'prop_migration'`); err != nil {
 		t.Fatalf("v9 Proposal kind constraint was not installed: %v", err)
 	}
-	if status != "accepting" || version != "15" {
+	if status != "accepting" || version != "16" {
 		t.Fatalf("unexpected migrated Proposal status=%q schema=%q", status, version)
 	}
 }
@@ -162,7 +162,7 @@ func TestParseNotebookProjectsResearchCells(t *testing.T) {
 	}
 }
 
-func TestParseNotebookKeepsCodeCellRoleSeparateFromWorkNode(t *testing.T) {
+func TestParseNotebookIndexesWorkStorageAndLatestOutput(t *testing.T) {
 	data := []byte(`{
 	  "nbformat": 4, "nbformat_minor": 5,
 	  "metadata": {"noema_research": {
@@ -171,8 +171,9 @@ func TestParseNotebookKeepsCodeCellRoleSeparateFromWorkNode(t *testing.T) {
 	    "dependencies": []
 	  }},
 	  "cells": [
-	    {"id": "c-work", "cell_type": "markdown", "source": "Implement", "metadata": {"noema_research": {"work_node_id": "wn_baseline"}}},
-	    {"id": "c-code", "cell_type": "code", "source": "print(1)", "metadata": {"noema_research": {"work_node_id": "wn_baseline"}}, "outputs": []}
+	    {"id": "c-work", "cell_type": "code", "source": "Implement", "execution_count": null,
+	     "metadata": {"noema_research": {"work_node_id": "wn_baseline"}},
+	     "outputs": [{"output_type":"display_data","data":{"text/markdown":"Done", "application/vnd.noema.run+json":{"run_id":"run_1","agent":"codex","status":"completed"}},"metadata":{}}]}
 	  ]
 	}`)
 	notebook, err := ParseNotebook(data)
@@ -182,8 +183,9 @@ func TestParseNotebookKeepsCodeCellRoleSeparateFromWorkNode(t *testing.T) {
 	if len(notebook.WorkNodes) != 1 || notebook.Cells[0].Kind != "work" {
 		t.Fatalf("unexpected WorkNode projection: %+v", notebook)
 	}
-	if notebook.Cells[1].Kind != "code" || notebook.Cells[1].WorkNodeID != "wn_baseline" {
-		t.Fatalf("code Cell must participate without becoming the WorkNode: %+v", notebook.Cells[1])
+	if notebook.Cells[0].WorkNodeID != "wn_baseline" || notebook.Cells[0].LatestOutput != "Done" ||
+		notebook.Cells[0].LatestRunID != "run_1" || notebook.Cells[0].OutputStatus != "completed" {
+		t.Fatalf("work output projection is incomplete: %+v", notebook.Cells[0])
 	}
 }
 

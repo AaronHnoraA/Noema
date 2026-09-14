@@ -35,6 +35,21 @@
   "Resolve embedded agent-shell configuration IDENTIFIER."
   (copy-tree (agent-shell--resolve-config-designator identifier)))
 
+(defun noema-agent-acp-known-agents ()
+  "Return agent ids for work-directive completion.
+Resolution remains inside this adapter so JuText never depends on
+agent-shell's private configuration representation."
+  (let ((candidates '(("codex" . codex)
+                      ("claude" . claude-code)
+                      ("opencode" . open-code)
+                      ("pi" . pi)))
+        available)
+    (dolist (candidate candidates (or (nreverse available)
+                                      (mapcar #'car candidates)))
+      (when (ignore-errors
+              (noema-agent-acp-resolve-config (cdr candidate)))
+        (push (car candidate) available)))))
+
 (cl-defun noema-agent-acp-start (&key config directory session-id fork-session-id)
   "Start CONFIG in DIRECTORY, optionally resuming or forking a native session."
   (let ((default-directory (file-name-as-directory directory)))

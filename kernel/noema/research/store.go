@@ -22,7 +22,7 @@ import (
 // StateDirName is the repository-local runtime state directory.
 const StateDirName = ".agent"
 
-const schemaVersion = "15"
+const schemaVersion = "16"
 
 var schemaStatements = []string{
 	`CREATE TABLE IF NOT EXISTS schema_meta (
@@ -58,6 +58,11 @@ var schemaStatements = []string{
 		result_of      TEXT NOT NULL DEFAULT '',
 		ordinal        INTEGER NOT NULL,
 		source_sha256  TEXT NOT NULL,
+		outputs_sha256 TEXT NOT NULL DEFAULT '',
+		latest_output  TEXT NOT NULL DEFAULT '',
+		latest_run_id  TEXT NOT NULL DEFAULT '',
+		output_status  TEXT NOT NULL DEFAULT '',
+		output_agent   TEXT NOT NULL DEFAULT '',
 		PRIMARY KEY (notebook_id, cell_id)
 	)`,
 	`CREATE TABLE IF NOT EXISTS edges (
@@ -689,6 +694,11 @@ func migrate(db *sql.DB) error {
 		{"delegations", "request_sha256", `ALTER TABLE delegations ADD COLUMN request_sha256 TEXT NOT NULL DEFAULT ''`},
 		{"runs", "work_node_id", `ALTER TABLE runs ADD COLUMN work_node_id TEXT`},
 		{"events", "work_node_id", `ALTER TABLE events ADD COLUMN work_node_id TEXT`},
+		{"cells", "outputs_sha256", `ALTER TABLE cells ADD COLUMN outputs_sha256 TEXT NOT NULL DEFAULT ''`},
+		{"cells", "latest_output", `ALTER TABLE cells ADD COLUMN latest_output TEXT NOT NULL DEFAULT ''`},
+		{"cells", "latest_run_id", `ALTER TABLE cells ADD COLUMN latest_run_id TEXT NOT NULL DEFAULT ''`},
+		{"cells", "output_status", `ALTER TABLE cells ADD COLUMN output_status TEXT NOT NULL DEFAULT ''`},
+		{"cells", "output_agent", `ALTER TABLE cells ADD COLUMN output_agent TEXT NOT NULL DEFAULT ''`},
 	} {
 		if err := ensureColumn(db, column.table, column.name, column.statement); err != nil {
 			return err
@@ -972,10 +982,12 @@ func (s *Store) IndexNotebook(relPath string, options IndexOptions) (IndexResult
 	}
 	newRelations := map[relationKey]map[string]bool{}
 	for _, cell := range notebook.Cells {
-		if _, err := tx.Exec(`INSERT INTO cells(notebook_id, cell_id, cell_type, kind, title, state, outcome, dropped_reason, result_of, ordinal, source_sha256)
-			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		if _, err := tx.Exec(`INSERT INTO cells(notebook_id, cell_id, cell_type, kind, title, state, outcome, dropped_reason, result_of, ordinal, source_sha256,
+			outputs_sha256, latest_output, latest_run_id, output_status, output_agent)
+			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			notebook.ID, cell.ID, cell.CellType, cell.Kind, cell.Title, cell.State, cell.Outcome,
-			cell.DroppedReason, cell.Of, cell.Ordinal, cell.SourceSHA256); err != nil {
+			cell.DroppedReason, cell.Of, cell.Ordinal, cell.SourceSHA256, cell.OutputsSHA256,
+			cell.LatestOutput, cell.LatestRunID, cell.OutputStatus, cell.OutputAgent); err != nil {
 			return IndexResult{}, err
 		}
 		if cell.WorkNodeID != "" {
@@ -1104,6 +1116,9 @@ func diffEvents(existed bool, notebook Notebook, oldCells map[string]Cell,
 		if old.SourceSHA256 != cell.SourceSHA256 {
 			fields = append(fields, "source")
 		}
+		if old.OutputsSHA256 != cell.OutputsSHA256 {
+			fields = append(fields, "outputs")
+		}
 		if len(fields) > 0 {
 			drafts = append(drafts, eventDraft{typ: "research.cell.updated", cellID: cell.ID, workNodeID: cell.WorkNodeID,
 				payload: map[string]any{"fields": fields, "kind": cell.Kind, "title": cell.Title}})
@@ -1143,7 +1158,8 @@ func setDifference(left, right map[string]bool) []string {
 
 func loadCells(tx *sql.Tx, notebookID string) (map[string]Cell, error) {
 	rows, err := tx.Query(`SELECT c.cell_id, c.cell_type, c.kind, c.title, c.state, c.outcome, c.dropped_reason,
-		c.result_of, c.ordinal, c.source_sha256, COALESCE(b.work_node_id, '')
+		c.result_of, c.ordinal, c.source_sha256, c.outputs_sha256, c.latest_output, c.latest_run_id,
+		c.output_status, c.output_agent, COALESCE(b.work_node_id, '')
 		FROM cells c LEFT JOIN cell_work_nodes b ON b.notebook_id = c.notebook_id AND b.cell_id = c.cell_id
 		WHERE c.notebook_id = ?`, notebookID)
 	if err != nil {
@@ -1154,7 +1170,8 @@ func loadCells(tx *sql.Tx, notebookID string) (map[string]Cell, error) {
 	for rows.Next() {
 		var cell Cell
 		if err := rows.Scan(&cell.ID, &cell.CellType, &cell.Kind, &cell.Title, &cell.State, &cell.Outcome,
-			&cell.DroppedReason, &cell.Of, &cell.Ordinal, &cell.SourceSHA256, &cell.WorkNodeID); err != nil {
+			&cell.DroppedReason, &cell.Of, &cell.Ordinal, &cell.SourceSHA256, &cell.OutputsSHA256,
+			&cell.LatestOutput, &cell.LatestRunID, &cell.OutputStatus, &cell.OutputAgent, &cell.WorkNodeID); err != nil {
 			return nil, err
 		}
 		cells[cell.ID] = cell

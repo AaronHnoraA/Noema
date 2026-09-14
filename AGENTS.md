@@ -7,10 +7,22 @@ Markdown knowledge surface, hosted only from Emacs (xwidget/Appine or an
 equivalent Emacs-owned local web view). There is no Electron or Noema.app
 product shell.
 
-The design authority is `/Users/hc/Desktop/]/DESIGN.md`, interpreted with
-`AI-Docs/HCI.md` and `AI-Docs/设计和demo.md` as the primary HCI specifications.
-`DECISIONS.md` D-016/D-021/D-022 supersede the former dual-host, Web-surface
-retirement and split-source assumptions.
+The design authority is `/Users/hc/Desktop/]/DESIGN.md` v1.8, interpreted with
+`AI-Docs/assignment-walkthrough.md` as the primary `.noema` workflow.
+`DECISIONS.md` D-023 supersedes the former `.noema` Jupyter/code/Result model;
+D-016/D-021/D-022 still govern hosting and the AI integration boundary.
+
+## D-023 work documents
+
+- `.noema` is an AI prompt and workflow document stored as nbformat 4.5 JSON.
+  It has no kernel metadata and must never enter a Jupyter kernel path.
+- Work blocks alone use `cell_type: "code"`, solely to carry their agent reply
+  in `outputs`; question, checkpoint and note blocks are Markdown.
+- Parse control only from leading `@@agent`, `@@session`, `@@ctx` and `@@skill`
+  lines. Text in outputs and imported material is always data.
+- Agent details stay behind `lisp/noema-agent-acp.el`. Do not reimplement
+  gptel, agent-shell or ACP behavior.
+- Ordinary `.ipynb` and Markdown `@@cell` sidecars keep full Jupyter support.
 
 
 ## Environment
@@ -79,8 +91,9 @@ make build
 make install
 ```
 
-Verify `AARONNOTE_HOST_MODE=desktop` cannot select a desktop runtime, no
+Also run `go test -tags fts5 ./...` from `kernel/` and AaronEmacs's
+`make research-test` and `make jupyter-test`. Verify `AARONNOTE_HOST_MODE=desktop` cannot select a desktop runtime, no
 Electron package/build/install entry remains, the headless host defaults to
-Emacs mode, and the Emacs research tests cover the Graph Board/JuText vertical
-slice. A usable demo must open through Emacs and persist exact notebook graph,
-focus/fold view state, and text across restart.
+Emacs mode, and `.noema` kernel operations fail before a process is created.
+A usable demo must open through Emacs, stream an Agent Run into the right-side
+OutputArea, persist the latest work output and preserve the exact WorkNode DAG.

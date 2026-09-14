@@ -27,7 +27,7 @@ This does not mean all rendering is rewritten in Elisp. Existing Web surfaces re
 - Agenda and Configuration views;
 - the right-side Jupyter/agent rich-output renderer, using JupyterLab `OutputArea`, rendermime, ipywidgets and live events.
 
-These surfaces keep their mature editing, graph, filtering, navigation and rendering behavior. They do not become a second product shell or establish a second project, permission or durable-state authority. The Jupyter output renderer specifically displays computation; it does not own `.noema` Cell structure or execution authority.
+These surfaces keep their mature editing, graph, filtering, navigation and rendering behavior. They do not become a second product shell or establish a second project, permission or durable-state authority. The shared output renderer displays agent replies for `.noema` and kernel output for ordinary Jupyter documents; it owns neither `.noema` structure nor execution authority.
 
 ## Core model
 
@@ -49,7 +49,7 @@ document order != dependency order
 
 - `WorkNode` is a structural unit such as a question, work item or checkpoint.
 - `Dependency` connects WorkNodes (`lineage` or `depends`). The combined Work graph is acyclic.
-- `Cell` is a Markdown, code or result unit in a `.noema` document.
+- `Cell` is a question, work, checkpoint or note block in a `.noema` document. A work block uses nbformat `cell_type: "code"` only so it can carry outputs; it is not programming code.
 - a Cell participates in a WorkNode through a stable `work_node_id` binding.
 - `Artifact` refers to an ordinary project file or an immutable execution snapshot.
 - `AgentSession` is an actor/lifecycle, not a WorkNode.
@@ -66,7 +66,7 @@ assignment.noema
 proof-search.noema
 ```
 
-The v1 file remains an inspectable nbformat 4.5 JSON container so the existing Jupyter execution and output machinery round-trips correctly. Noema's WorkNodes, Dependencies and Cell bindings live in the `noema_research` namespace using `noema.work-document/2`.
+The file is an inspectable nbformat 4.5 JSON container so stable Cell IDs, metadata and rich outputs round-trip through mature tooling. It has no `kernelspec`, no `language_info`, no programming-language blocks and no independent Result cells. Noema's WorkNodes, Dependencies and Cell bindings live in the `noema_research` namespace using `noema.work-document/2`.
 
 The extension is Noema's product identity. `.ipynb` is only an interchange/export representation and must not become a shadow second authority. The Emacs textual projection is Noema's **JuText**; Jupytext is not currently used and may only become an optional interoperability adapter.
 
@@ -90,7 +90,7 @@ project/
 
 ## Emacs workflow
 
-Opening `research.noema` visits the real file in `noema-research-mode`. JuText supplies Cell navigation and editing while stable IDs remain hidden. The user can create or bind code Cells under the current contextual WorkNode without typing IDs.
+Opening `research.noema` visits the real file in `noema-research-mode`. JuText supplies block navigation and editing while stable IDs remain hidden. Work prompts may begin with `@@agent(id)`, `@@session(continue|fork|fresh)`, repeated `@@ctx(ref)` and `@@skill(id)` directives. `C-c C-c` strips that leading control region, freezes a RunSpec and dispatches the body through the configured ACP agent.
 
 Key commands include:
 
@@ -99,17 +99,17 @@ Key commands include:
 | `C-c C-n` | continue from current context with a downstream WorkNode |
 | `C-c C-s` | create a sibling WorkNode |
 | `C-c C-g` | open the Work DAG |
-| `C-c C-e` | insert a code Cell in the current WorkNode context |
 | `C-c C-b` | bind the current Cell to a labeled WorkNode |
-| `C-c C-c` | execute by Cell role: code → Jupyter; work → CLI agent Run |
+| `C-c C-c` | run the current work block through its configured agent |
 | `C-c C-o` | open/update the right-side rich-output renderer |
-| `C-c C-z` | interrupt execution |
-| `C-c j a` | run all code Cells |
+| `C-c C-z` | cancel an active Agent Run |
+| `C-c C-f` | set or clear the document's default agent |
 | `C-c j x` / `C-c j X` | clear current/all outputs |
-| `C-c j r` / `C-c j k` | restart/shut down kernel |
-| `C-c j K` | select or attach a kernel in Emacs |
+| `C-c M-m` | explicitly migrate a pre-D-023 `.noema` document |
 
-Execution streams incrementally into the right-side renderer. Clicking **Open Source in Emacs** sends `scriptFile + cellId`; Emacs resolves the stable Cell identity instead of trusting a projected line number. Agent Runs snapshot newly created or modified ordinary files into the CAS without moving them, persist `ArtifactLink` provenance on the stable WorkNode, and expose those paths through the Emacs Inspector.
+Agent replies stream incrementally into the right-side renderer. A terminal reply replaces that work block's latest `outputs` with Markdown/plain-text MIME plus `application/vnd.noema.run+json`; Run history and transcripts remain in the Run store. Clearing outputs does not delete a Run. Clicking **Open Source in Emacs** sends `scriptFile + cellId`; Emacs resolves the stable Cell identity instead of trusting a projected line number. Agent Runs snapshot newly created or modified ordinary files into the CAS without moving them, persist `ArtifactLink` provenance on the stable WorkNode, and expose those paths through the Emacs Inspector.
+
+`.noema` never starts, attaches, restarts or selects a Jupyter kernel and has no Run All command. Ordinary `.ipynb` and Markdown `@@cell` sidecars retain the complete Jupyter workflow. Programming code and experiments belong in ordinary project files.
 
 Agenda, configuration and private Wiki/Graph are not standalone Web products, but their existing Web surfaces are retained. Emacs commands open `/agenda`, `/config`, `/wiki` and `/graph` inside Emacs-owned xwidget/Appine buffers. Source files remain normal Emacs buffers; Markdown remains an ordinary file while the Emacs-hosted CM6 surface supplies its rich editing experience. The retained `jupyter.html` route is the right-side rich-output renderer. Server mode separately restricts Wiki publication to read-only behavior.
 
@@ -150,7 +150,7 @@ Versions and licenses are recorded in [UPSTREAMS.md](UPSTREAMS.md).
                   Noema project model
                   ┌────────┴─────────┐
                   ▼                  ▼
-          Node runtime/Jupyter   Go research store
+          Node runtime/agent     Go research store
                   │                  │
                   └──── agents ──────┘
 ```
@@ -187,7 +187,7 @@ The current end-to-end project is `~/Desktop/Noema-Research-Demo`.
 
 Open `~/Desktop/Noema-Research-Demo/research.noema` normally in Emacs. No project-specific `.command` or launcher file is part of the design.
 
-It opens an Emacs workspace containing a v2 `.noema` WorkDocument, WorkNode DAG and right-side Jupyter output renderer. The demo has a real Python Cell bound to a WorkNode and emits incremental output.
+It opens an Emacs workspace containing a v2 `.noema` WorkDocument, WorkNode DAG and right-side output renderer. `Repair under approximate reversibility` demonstrates `@@agent(codex)` plus `@@ctx(lineage)`. The former Python Cell was migrated to the ordinary `experiments/scaling.py` file, which can be run outside `.noema` and still writes `experiments/scaling.json`.
 
 ## Publishing reader
 
@@ -196,7 +196,8 @@ The repository still contains a read-only server renderer for publishing Markdow
 ## Development map
 
 - `server/lib/research-notebook.mjs`: `.noema` v2 model, migration, validation and graph operations.
-- `server/lib/jupyter-cell.mjs`: Jupyter document/session service and canonical `.noema` output writes.
+- `server/lib/research-runtime.mjs`: directive parsing, deterministic agent/session routing, RunSpec freezing and terminal output write-back.
+- `server/lib/jupyter-cell.mjs`: ordinary Jupyter document/session service plus a kernel-free read-only `.noema` output snapshot.
 - `aaronnote/main.ts`, `wiki-main.ts`, `agenda-main.ts`, `config-main.ts`: Emacs-hosted Markdown and knowledge/work surfaces.
 - `aaronnote/jupyter-main.ts`: Emacs-hosted output-only renderer.
 - `src/jupyter-rendermime.ts`: JupyterLab OutputArea/rendermime integration.

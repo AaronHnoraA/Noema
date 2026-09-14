@@ -2,23 +2,23 @@
 
 ## 当前权威方向（2026-09-14，覆盖下文所有历史记录）
 
-- **设计依据**：以 `/Users/hc/Desktop/]/DESIGN.md` v1.7、`DECISIONS.md` D-018/D-021/D-022 和 `AI-Docs/HCI.md`、`AI-Docs/设计和demo.md` 的研究优先 HCI 为准；AI-Docs 中旧的 `.noema.jupyter`、`.noema/` 存储和多前端文字必须按当前决策解释，不得恢复旧产品边界。
-- **唯一 UI/UX**：Emacs。Graph Board + `.noema` JuText 是主界面；Inspector / Attention、agent-shell、vterm、Jupyter execution 与 CM6 knowledge surface 都由 Emacs 创建、布局、导航和控制。
-- **右侧 Output 的准确边界**：继续继承现有 Web/JupyterLab `rendermime`、OutputArea、ipywidgets 技术栈，但它只是 Emacs-hosted rich-output renderer，不是独立 App 或 `.noema` 文档权威。默认工作区为 Graph 左、JuText 中、按需 Output 右。
+- **设计依据**：以 `/Users/hc/Desktop/]/DESIGN.md` v1.8、`DECISIONS.md` D-023 和 `AI-Docs/assignment-walkthrough.md` 为当前 `.noema` 权威；D-009/D-013/D-018/D-019 中关于 `.noema` Jupyter 执行、编程 code Cell、无 DSL 和独立 Result Cell 的规定已被推翻。D-018 的 WorkNode/Dependency/CellBinding 独立身份与 D-019 的 Run/ArtifactLink 仍有效。
+- **唯一 UI/UX**：Emacs。Graph Board + `.noema` JuText 是主界面；Inspector / Attention、agent-shell、vterm、普通 Jupyter 与 CM6 knowledge surface 都由 Emacs 创建、布局、导航和控制。
+- **右侧 Output 的准确边界**：继续继承现有 Web/JupyterLab `rendermime`、OutputArea、ipywidgets 技术栈，但它只是 Emacs-hosted rich-output renderer，不是独立 App 或 `.noema` 文档权威。`.noema` 在这里显示 Agent Run 流与持久 outputs；普通 `.ipynb`/sidecar 才显示 kernel output。
 - **明确退役**：Electron、`Noema.app`、独立 Web Noema、浏览器内 Research/Agent 控制台、桌面标题栏/菜单/preload/拖放和 Research Orchestration Lab。专门的 Web renderer 不在退役范围。
-- **canonical document**：`research.noema` 取代 `.noema.jupyter`/`.noema.ipynb` 命名，同时保持标准 nbformat 4.5+ JSON、现有 JuText/Jupyter round-trip 与 kernel/output 机制。`.ipynb` 仅作普通 Jupyter/interchange；不和 `.noema` 形成双权威。
-- **domain identity**：WorkNode、Dependency 已从 cell metadata 中独立出来；Cell 只用 `work_node_id` 参与 WorkNode，code Cell 仍是 code Cell。Project-level runtime/index/CAS/view state 使用 `.agent/`，不把 document authority 复制进 SQLite。
-- **当前可测交付**：`/Users/hc/Desktop/Noema-Research-Demo` 是普通 Noema Project；从 Emacs 打开三栏工作区。示例 `.noema` 内含绑定到 `Stress-test small cases` WorkNode 的真实 Python code Cell，可向右侧 renderer 流式执行并持久化 output。
-- **本轮最终门禁已过**：精确 Node 26.5/npm 11.17 下 `make test` 为 229 files passed / 7 skipped、2277 tests passed / 16 skipped；`make build`、`make install` 均通过并只产生 Emacs renderer/headless kernel。Go `go test ./...` 全过。AaronEmacs research 51/51、迁移 interaction 33/33，Jupyter 四组 103+24+18+12 共 157/157。`health-startup` 与 `health-byte` 通过；`.noema` 结构 mutation 被 Web service 明确拒绝，必须回到 Emacs 编辑。
-- **Web output 源码已真正收口**：`jupyter-main.ts` 不再保留隐藏的 Run/Run All、Cell mutation、kernel/session manager、variables inspector、multi-tab 或 Web workspace state；CSS 的 manager/inspector/task shell 也已删除。Emacs mode 接管运行全部、output 清理、中断、kernel 选择/重启/关闭。Output → source 用 `scriptFile + cellId` 稳定跳回 Emacs，不再靠行号。
+- **canonical document**：`research.noema` 是 nbformat 4.5 JSON，但不是 notebook：没有 `kernelspec`/`language_info`、编程语言代码块或 shadow `.ipynb`。work 块只因 nbformat outputs 而存成 `cell_type: "code"`；question/checkpoint/note 是 Markdown。
+- **domain identity**：WorkNode、Dependency 已从 cell metadata 中独立出来；Cell 只用 `work_node_id` 参与 WorkNode。Agent 终态回复保存为 work 块最近一次 outputs，完整历史仍在 Run store/transcript Artifact。Project-level runtime/index/CAS/view state 使用 `.agent/`，不把 document authority 复制进 SQLite。
+- **当前可测交付**：`/Users/hc/Desktop/Noema-Research-Demo` 已显式迁移并保留 9 个 WorkNode 与 12 条 Dependency；原 Python Cell 变成 `experiments/scaling.py`，`Try a coupling route` 展示 `@@agent(codex)` + `@@session(fresh)` + `@@ctx(lineage)`，并已有真实 Agent Run 的持久 output。
+- **D-023 门禁状态**：已完成。Node 26.5.0 / npm 11.17.0 下 `make test` 为 2283 passed / 16 skipped、`make build` 成功，Go FTS5 全包通过；AaronEmacs `make research-test` 为 53+33 全过，`make jupyter-test` 为 104+24+18+12 全过。真实 Emacs.app 走查完成了 C-c C-c 流式回复与同块 outputs 写回、冷重启后的 C-c C-o 恢复、9-node/12-edge Graph Board 恢复，并确认前后没有新增 Jupyter kernel。
+- **Web output 源码已真正收口**：`jupyter-main.ts` 对 `.noema` 不保留 Run/Run All、Cell mutation、kernel/session manager、variables inspector、multi-tab 或 Web workspace state；它按 durable seq 订阅 Agent Run，渲染 content/action/permission，终态回读持久 outputs。Output → source 用 `scriptFile + cellId` 稳定跳回 Emacs。
 - **Work DAG 不变量已纠正**：旧设计只禁止 `depends` 环但允许 `lineage` 环，与“DAG”矛盾；Node、Go、Emacs 现在统一拒绝 `lineage` / `depends` 混合形成的任何 WorkNode 环。
 - **Run/Artifact 纵切已落到 WorkNode**：Run 同时保留发起 `cell_id` 与稳定 `work_node_id`；agent 结束前自动检测有界的普通文件新增/修改，原文件保持原位，CAS snapshot 与 `artifact_links` 保存 provenance，Emacs Inspector 按 WorkNode 查询并用普通 `find-file` 打开。
 - **D-021 已纠正 Web 边界误读**：删除的是 Electron/Noema.app/独立产品壳，不是 Web 技术与页面。CM6 Markdown、私有 `/wiki`/`/graph`、`/agenda`、`/config` 和右侧 `jupyter.html` 均保留为 Emacs-hosted surface；Emacs 负责 buffer/window、项目上下文、执行与权限权威，页面保留其领域内编辑、图形、过滤和导航能力。
 - **D-022 源码与 AI 入口收拢已完成**：原 `/Users/hc/HC/SOURCE/Noema` 工作树整体迁入 `~/.config/emacs/site-lisp/noema/` 后删除，不保留复制品或运行时软链接；Wiki/Markdown/Graph、Agenda/Config、Jupyter、Go/Node runtime、测试和文档全部在内。旧 `site-lisp/ai-workbench/` 与 `ai-workbench-*` 当前命名已退役。gptel、agent-shell、acp.el、shell-maker、Magent 完整源码位于 `upstream/`，Noema 直接复用，不另写替代实现。
 - **规范同步已完成**：`DESIGN.md` v1.4 的旧 Cell=节点/`.ipynb` schema 已改成 WorkDocument v2；D-018、AI-Docs 顶部解释、`BOOTSTRAP.md` 和开发日志同步当前事实。
-- **本轮纵切状态**：`.noema → WorkNode DAG → Jupyter/agent execution → live output → ordinary-file ArtifactLink → Inspector → grouping/synthesis` 已形成可运行闭环。权威 parser 对 Demo 验证为 11 Cells、9 WorkNodes、12 Dependencies、9-node/12-edge projection。旧 `desktop` host-mode 仍强制归一成 `emacs`；Emacs host 必须提供 `/agenda`、`/config`、`/wiki`、`/graph` 与 `/jupyter.html`，同时不恢复 Electron 或独立 Web/App 产品壳。
+- **本轮纵切状态**：`.noema work → @@ 配置 → ACP Agent Run → live output → work outputs/ordinary-file ArtifactLink → Inspector → grouping/synthesis` 已形成实现闭环。权威 parser 对迁移后 Demo 验证为 11 Cells、9 WorkNodes、12 Dependencies、零 kernel 元数据/Result/编程 Cell，二次迁移无副作用。
 
-> 下文保留了迁移历史和当时的验证证据。凡提到 Electron、Noema.app、desktop lab、Web/手机 Attention 或跨端控制的内容均已被 D-016/D-017 推翻，不是待办，也不得据此恢复代码。
+> 下文保留了迁移历史和当时的验证证据。凡提到 Electron、Noema.app、desktop lab、Web/手机 Attention 或跨端控制的内容均已被 D-016/D-017 推翻；凡提到 `.noema` 启动 Jupyter、编程 code Cell、无 DSL 或独立 Result Cell 的内容均已被 D-023 推翻。它们不是待办，也不得据此恢复代码。
 
 > **⚠️ 2026-08-25 起，Go 内核的唯一代码位置是** `~/.config/emacs/site-lisp/noema/kernel/`（Noema 主仓库、`main` 分支）。内核所需的语言、字体、主题与 Server 登录页现明确命名为同级 `kernel-resources/`；它不是应用源码或第二套 UI。原始上游 checkout 只用于迁移期取证，终态不属于 Noema 源树。
 
@@ -37,7 +37,7 @@
 - **Phase B 证据**：Go FTS5 research/API/MCP 广泛测试、Node 15 个聚焦测试、Emacs research 19/19 和 jupyter 103+24+18+12 全过。真实 Node host + Go kernel 在停止、重启后保留 Session/history，并证明 `attached_at` 与原生 `started_at` 独立。Node 全量曾出现两个既有负载型 timing/perf 波动，失败文件立即单独重跑 26/26 全过。
 - **安装方向已纠正**：`make build` 只构建 Emacs 消费的 renderer 与 headless Go kernel；`make install` 只链接 kernel。Electron/`Noema.app` 依赖与构建链已退役。
 - **Emacs-only 收口门禁已通过**：源码资源目录由误导性的 `app/` 改名为 `kernel-resources/`，renderer 内部的 `desktop-knowledge-dock` 也已改成宿主中立的 `knowledge-dock`；旧 `--attach-ui` 与 UI 进程监控、Electron auth 分支、`/research` 路由、artifact/research 独立页面、浏览器注入的研究写控制方法均已移除。旧 `AARONNOTE_HOST_MODE=desktop` 会归一为 `emacs`，owned Go kernel 由 Emacs host 持有；`/research` 返回 404。当前构建继续包含 editor/CM6、Wiki/Graph、Agenda/Config 和 Jupyter rich output，作为 Emacs-hosted surfaces。执行与权限决定入口保持在 Emacs。
-- **当前下一步**：只做真实 Emacs GUI、adapter、Chrome capture 和规模/溯源验证；不做手机/Web 控制验收，不恢复 desktop lab。
+- **当前下一步**：D-023 实现与验收已完成；保持 `.noema` 无 kernel、Agent Run 输出归属 work block 的边界，后续只做用户使用反馈驱动的质量迭代，不恢复手机/Web 控制或 desktop lab。
 
 **Phase C 前置 S-1…S-5 已完成（2026-09-13）**：报告在 `/Users/hc/Desktop/]/research/2026-09-13-acp-validation.md`。本机真实验证了 acp.el 共享 client 的多订阅，agent-shell 的无-advice permission responder，OpenCode 1.18.20 / Codex ACP 1.11.0 / Claude Agent ACP 0.76.0 / Pi ACP 0.8.0 的 initialize 能力，以及四者对真实 Noema HTTP MCP 的 session/new 注入。适配器命令已安装到 Homebrew Node 的全局 bin。L1 边界不再假定为统一：Codex/Claude/OpenCode 有可验证的受控启动策略；Pi 没有 root confinement，必须由外部沙箱或在线 L2 resolver 覆盖强制 deny。现在可以进入 Phase C 的 Go Run/Lease/Permission/CAS、Node RunSpec 和 Emacs Worker 实现。
 

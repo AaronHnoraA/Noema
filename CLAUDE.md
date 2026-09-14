@@ -29,7 +29,8 @@ separate editor implementation.
 | `src/jupyter-rendermime.ts` | Shared JupyterLab render stack for cell output — the same `@jupyterlab/rendermime` + `@jupyterlab/outputarea` pipeline VS Code Jupyter uses. Adds a KaTeX LaTeX typesetter, an HTML renderer that sandboxes script-bearing HTML in an auto-sizing iframe (and routes math-only HTML to KaTeX), and a widget-view renderer bridging to the live kernel manager. Loaded lazily (large). |
 | `src/jupyter-widget-runtime.ts` | ipywidgets frontend: a `KernelWidgetManager` subclass over the live kernel (via `server/lib/jupyter-kernel-ws.mjs`). Mounts kernel-state-first (`restoreWidgets`), replays captured comm messages only as a fallback, and seeds Output widgets with server-captured outputs. Shares the render stack above. Lazy chunk. |
 | `server/jupyter/` | Raw-ZMQ Jupyter kernel stack — logic ported from `microsoft/vscode-jupyter` (MIT) to plain `.mjs`, no build step. `wire-protocol.mjs`/`raw-socket.mjs`/`raw-kernel.mjs` are the ZMQ transport + the kernel_info/first-iopub warmup handshake; `kernel-process.mjs`/`kernel-ports.mjs`/`kernel-env.mjs`/`kernel-finder.mjs` launch and discover kernels; `kernel-registry.mjs` owns per-kernel lifecycle (launch/attach/restart/interrupt/self-heal, `widgetGeneration` bumping, orphan-process sweep); `execution-message-handler.mjs` drives one `execute_request` into aaronnote's output/widget-message shape (plus live output patches, stdin, and `execute_reply` payloads); `kernel-requests.mjs` serves completion/inspect/is_complete/history/comm_info, all time-bounded because the kernel answers the shell channel strictly in order. No Jupyter server process is spawned. `http-client.mjs`/`server-auth.mjs`/`server-connection.mjs`/`server-registry.mjs` are the opt-in *other* path: connecting to a Jupyter server, JupyterHub, or gateway that already exists, over REST + WebSocket. `kernel-registry.mjs` treats all three sources as connectors behind one record shape (`record.kind`). |
-| `server/lib/jupyter-cell.mjs` | Node cell service: single-ipynb persistence through `jupyter-notebook-format.mjs`, execution queueing, and orchestration over `server/jupyter/kernel-registry.mjs`. |
+| `server/lib/jupyter-cell.mjs` | Node cell service for ordinary `.ipynb` and Markdown sidecars: persistence through `jupyter-notebook-format.mjs`, execution queueing, and orchestration over `server/jupyter/kernel-registry.mjs`. For `.noema` it exposes only a kernel-free read-only output snapshot and rejects every Jupyter operation. |
+| `server/lib/research-notebook.mjs`, `server/lib/research-runtime.mjs` | D-023 `.noema` model and execution: nbformat 4.5 storage without a kernel, leading `@@` directives, ACP Agent Runs and terminal replies persisted on work-block outputs. |
 | `server/lib/jupyter-kernel-ws.mjs` | Browser-facing kernel channels WebSocket — bridges each browser connection to its own raw ZMQ socket set against the live kernel's connection info, or relays to the remote server's own `/api/kernels/<id>/channels` for a `server:` kernel (whose handshake needs auth headers a browser WebSocket cannot carry). Serves `/jupyter/nbextensions/*` from disk. |
 | `server/lib/jupyter-output-router.mjs` | Server-side ipywidgets Output-widget output routing (ports VS Code Jupyter's `msgIdsToSwallow`): keeps display output produced inside an Output widget's context out of the top-level cell output and groups it by comm id for the client to seed. Used by `server/jupyter/execution-message-handler.mjs`. |
 | `src/render-html.ts` | Shared Markdown-to-HTML export/publish renderer. |
@@ -79,6 +80,11 @@ authority; the Web surfaces retain their specialized behavior:
 
 Fenced `lean` and `lean4` code blocks render as **static syntax-highlighted
 snippets** in the web editor (no LSP process started from the browser).
+
+The `.noema` path is separate: it contains no programming-language blocks and
+never starts or connects a Jupyter kernel. Its work blocks use nbformat code
+storage only to carry agent outputs. Ordinary `.ipynb` and the `@@cell`
+sidecar flow below retain their full Jupyter behavior.
 
 A `@@cell` with a Lean language never reaches a Jupyter kernel and never stores
 output, so its `.cell/` store is plain Lean source (`<note>.lean4.<session>.lean`)

@@ -3,6 +3,7 @@ import type { ResearchRuntimeProvider } from "./kernel-research-provider.mjs";
 export function findResearchProjectRoot(start: string): Promise<string>;
 export function parseResearchPrompt(text: string): {
   agent: string;
+  session: "" | "continue" | "fork" | "fresh";
   context: string[];
   skills: string[];
   workstreamId: string;
@@ -89,7 +90,8 @@ export function createResearchRuntimeService(options?: {
   getNotebookService?: () => {
 	create?(body?: Record<string, any>): Promise<Record<string, any>>;
 	snapshot?(body?: Record<string, any>): Promise<Record<string, any>>;
-    writeRunResult(body?: Record<string, any>): Promise<Record<string, any>>;
+    writeRunOutput?(body?: Record<string, any>): Promise<Record<string, any>>;
+    writeRunResult?(body?: Record<string, any>): Promise<Record<string, any>>;
     createCell?(body?: Record<string, any>): Promise<Record<string, any>>;
   } | null;
   getRuntimeDescriptor?: () => Record<string, any> | null;

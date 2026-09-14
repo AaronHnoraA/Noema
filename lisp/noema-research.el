@@ -34,8 +34,9 @@
 (defconst noema-research-graph-kinds '("question" "work" "checkpoint")
   "Cell kinds that are nodes of the research graph.")
 
-(defconst noema-research-kinds '("result")
-  "Cell roles stored in `noema_research.kind'.  Graph kinds belong to WorkNodes.")
+(defconst noema-research-kinds nil
+  "Canonical cell roles stored in `noema_research.kind'.
+D-023 derives every role from storage type plus its WorkNode binding.")
 
 (defconst noema-research-work-states '("open" "active" "waiting" "done" "dropped")
   "Allowed work states.")
@@ -188,16 +189,29 @@ The id is recorded in TAKEN when TAKEN is non-nil."
        (noema-research--get (noema-research-notebook-meta document) "title"))
       ""))
 
+(defun noema-research-default-agent (document)
+  "Return DOCUMENT's configured default agent, or the empty string."
+  (or (noema-research--string
+       (noema-research--get (noema-research-notebook-meta document) "default_agent"))
+      ""))
+
+(defun noema-research-set-default-agent (document agent)
+  "Set DOCUMENT's default AGENT; an empty value clears it."
+  (let ((value (string-trim (or agent ""))))
+    (when (and (not (string-empty-p value))
+               (not (string-match-p "\\`[A-Za-z0-9][A-Za-z0-9._-]*\\'" value)))
+      (user-error "Invalid agent id: %s" value))
+    (if (string-empty-p value)
+        (remhash "default_agent" (noema-research-notebook-meta document))
+      (puthash "default_agent" value (noema-research-notebook-meta document))))
+  document)
+
 (defun noema-research-create-document (&optional title)
   "Return a new empty research notebook document titled TITLE."
   (noema-research--table
    "cells" []
    "metadata"
    (noema-research--table
-    "kernelspec" (noema-research--table "display_name" "Python 3"
-                                        "language" "python"
-                                        "name" "python3")
-    "language_info" (noema-research--table "name" "python")
     noema-research-namespace
     (noema-research--table "schema" noema-research-schema
                            "notebook_id" (concat "nb_" (noema-research--uuidv7))
@@ -268,13 +282,17 @@ The id is recorded in TAKEN when TAKEN is non-nil."
          (noema-research-cell-work-node-id (noema-research-find-cell document id)))))
 
 (defun noema-research-primary-cell (document work-node-id)
-  "Return the first non-result cell bound to WORK-NODE-ID, else any bound cell."
-  (let ((bound (seq-filter
+  "Return the canonical cell bound to WORK-NODE-ID, else any bound cell."
+  (let* ((node (noema-research-find-work-node document work-node-id))
+         (kind (noema-research-work-node-field node "kind"))
+         (bound (seq-filter
                 (lambda (cell) (equal (noema-research-cell-work-node-id cell)
                                       work-node-id))
                 (noema-research-cells document))))
-    (or (seq-find (lambda (cell) (not (equal (noema-research-cell-field cell "kind")
-                                              "result"))) bound)
+    (or (seq-find (lambda (cell)
+                    (equal (noema-research--get cell "cell_type")
+                           (if (equal kind "work") "code" "markdown")))
+                  bound)
         (car bound))))
 
 (defun noema-research--dependency-id (from to type)
@@ -309,15 +327,17 @@ The id is recorded in TAKEN when TAKEN is non-nil."
 
 (defun noema-research-cell-kind (cell &optional document)
   "Return CELL's role, resolving its WorkNode in DOCUMENT when available."
-  (or (noema-research-cell-field cell "kind")
-      ;; A cell may be bound to a WorkNode without becoming that WorkNode.
-      ;; Executable code remains a code cell; the binding only records which
-      ;; unit of work it participates in.
-      (and (equal (noema-research--get cell "cell_type") "code") "code")
-      (and document
-           (noema-research-work-node-field
-            (noema-research-work-node-for-cell document cell) "kind"))
-      "note"))
+  (let ((legacy (noema-research-cell-field cell "kind"))
+        (node (and document (noema-research-work-node-for-cell document cell))))
+    (cond
+     ((equal legacy "result") "result")
+     ((and (equal (noema-research--get cell "cell_type") "code")
+           (equal (noema-research-work-node-field node "kind") "work")) "work")
+     ((and (equal (noema-research--get cell "cell_type") "code")) "code")
+     ((member (noema-research-work-node-field node "kind") '("question" "checkpoint"))
+      (noema-research-work-node-field node "kind"))
+     (legacy legacy)
+     (t "note"))))
 
 (defun noema-research-cell-title (cell &optional document)
   "Return CELL's WorkNode title in DOCUMENT, or its local title."
@@ -357,6 +377,21 @@ The id is recorded in TAKEN when TAKEN is non-nil."
           ((vectorp source)
            (mapconcat (lambda (part) (if (stringp part) part "")) source ""))
           (t ""))))
+
+(defun noema-research-cell-outputs (cell)
+  "Return CELL's persisted outputs as a list."
+  (let ((outputs (noema-research--get cell "outputs")))
+    (if (vectorp outputs) (append outputs nil) nil)))
+
+(defun noema-research-clear-cell-outputs (document cell-id)
+  "Clear the D-023 work CELL-ID outputs in DOCUMENT."
+  (let ((cell (or (noema-research-find-cell document cell-id)
+                  (user-error "Unknown research cell: %s" cell-id))))
+    (unless (equal (noema-research-cell-kind cell document) "work")
+      (user-error "Only work blocks have outputs"))
+    (puthash "execution_count" :null cell)
+    (puthash "outputs" [] cell))
+  document)
 
 (defun noema-research-cell-label (cell &optional document)
   "Return a short human label for CELL."
@@ -593,12 +628,22 @@ Reuse WORK-NODE-ID when supplied; otherwise create an independent WorkNode."
           (puthash "state" "open" node))
       (dolist (key '("state" "outcome" "dropped_reason")) (remhash key node)))
     (noema-research-cell-set cell "work_node_id" id)
+    (if (equal kind "work")
+        (progn
+          (puthash "cell_type" "code" cell)
+          (puthash "execution_count" :null cell)
+          (unless (vectorp (noema-research--get cell "outputs"))
+            (puthash "outputs" [] cell))
+          (remhash "attachments" cell))
+      (puthash "cell_type" "markdown" cell)
+      (remhash "execution_count" cell)
+      (remhash "outputs" cell))
     node))
 
 (defun noema-research-delete-work-node (document id &optional delete-cells)
   "Delete WorkNode ID and its dependencies from DOCUMENT.
 When DELETE-CELLS is non-nil, also delete all bound cells; otherwise unbind
-ordinary cells while removing result cells produced for the deleted node."
+the ordinary cells."
   (setq id (or (noema-research-resolve-work-node-id document id) id))
   (noema-research--set-work-nodes
    document (seq-remove (lambda (node) (equal (noema-research-work-node-id node) id))
@@ -608,7 +653,7 @@ ordinary cells while removing result cells produced for the deleted node."
     (dolist (cell (noema-research-cells document))
       (if (not (equal (noema-research-cell-work-node-id cell) id))
           (push cell kept)
-        (if (or delete-cells (equal (noema-research-cell-field cell "kind") "result"))
+        (if delete-cells
             nil
           (noema-research-cell-set cell "work_node_id" nil)
           (push cell kept))))
@@ -628,6 +673,14 @@ Each entry is a cons (ENTITY-ID . MESSAGE)."
     (unless (equal (noema-research--get (noema-research-notebook-meta document) "schema")
                    noema-research-schema)
       (push (cons nil "not a canonical Noema work document") errors))
+    (unless (and (equal (noema-research--get document "nbformat") 4)
+                 (equal (noema-research--get document "nbformat_minor") 5))
+      (push (cons nil "Noema work documents require nbformat 4.5") errors))
+    (let ((metadata (noema-research--get document "metadata")))
+      (when (and (hash-table-p metadata)
+                 (or (gethash "kernelspec" metadata)
+                     (gethash "language_info" metadata)))
+        (push (cons nil ".noema cannot declare kernelspec or language_info") errors)))
     (when (string-empty-p (noema-research-notebook-id document))
       (push (cons nil "notebook_id is required") errors))
     (dolist (cell (noema-research-cells document))
@@ -659,19 +712,25 @@ Each entry is a cons (ENTITY-ID . MESSAGE)."
     (dolist (cell (noema-research-cells document))
       (let* ((id (noema-research-cell-id cell))
              (raw-kind (noema-research--get (noema-research-cell-meta cell) "kind"))
-             (work-node-id (noema-research-cell-work-node-id cell)))
-        (when (and raw-kind (not (member raw-kind noema-research-kinds)))
+             (work-node-id (noema-research-cell-work-node-id cell))
+             (node (gethash work-node-id nodes))
+             (cell-type (noema-research--get cell "cell_type")))
+        (when raw-kind
           (push (cons id "graph kind belongs to a WorkNode, not cell metadata") errors))
-        (when (and raw-kind
-                   (not (equal (noema-research--get cell "cell_type") "markdown")))
-          (push (cons id (format "research %s cells must be markdown cells" raw-kind))
-                errors))
         (when (and work-node-id (not (gethash work-node-id nodes)))
           (push (cons id (format "cell references missing WorkNode %s" work-node-id)) errors))
-        (when (and (equal raw-kind "result")
-                   (not (equal (noema-research-work-node-field
-                                (gethash work-node-id nodes) "kind") "work")))
-          (push (cons id "result cells must reference a work WorkNode") errors))))
+        (cond
+         ((equal cell-type "code")
+          (unless (and node (equal (noema-research-work-node-field node "kind") "work"))
+            (push (cons id "code storage cells must bind a work WorkNode") errors))
+          (unless (eq (noema-research--get cell "execution_count") :null)
+            (push (cons id "work execution_count must be null") errors))
+          (unless (vectorp (noema-research--get cell "outputs"))
+            (push (cons id "work cells must carry an outputs array") errors)))
+         ((equal cell-type "markdown")
+          (when (or (gethash "outputs" cell) (gethash "execution_count" cell))
+            (push (cons id "markdown cells cannot carry runtime fields") errors)))
+         (t (push (cons id (format "unsupported .noema cell_type %S" cell-type)) errors)))))
     (dolist (edge (noema-research-dependencies document))
       (let* ((from (noema-research--get edge "from"))
              (to (noema-research--get edge "to"))

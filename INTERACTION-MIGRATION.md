@@ -41,6 +41,13 @@ Noema directly reuses the complete internalized implementations. It does not
 maintain a renamed gptel fork or a simplified replacement. Research/runtime
 access to agent-shell/acp is centralized in `lisp/noema-agent-acp.el`.
 
+For a D-023 `.noema` work block, `C-c C-c` parses only its leading
+`@@agent`/`@@session`/`@@ctx`/`@@skill` region, freezes the stripped prompt,
+and dispatches through that boundary. The right-side OutputArea follows the
+durable Run stream; the terminal reply is stored as the same work block's
+latest nbformat outputs. There is no Result block and no Jupyter kernel in
+this path. Ordinary `.ipynb` and Markdown sidecars are unchanged.
+
 ## Public entry points
 
 - `M-x noema` / `C-c A W`

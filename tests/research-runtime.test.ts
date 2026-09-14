@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,7 +11,15 @@ import {
   manualTUICommand,
   parseResearchPrompt,
 } from "../server/lib/research-runtime.mjs";
-import { createResearchCell, createResearchNotebook, createResearchNotebookService, readResearchNotebookFile, writeResearchNotebookFile } from "../server/lib/research-notebook.mjs";
+import {
+  createResearchCell,
+  createResearchNotebook,
+  createResearchNotebookService,
+  readResearchNotebookFile,
+  setResearchRelation,
+  upsertResearchRunOutput,
+  writeResearchNotebookFile,
+} from "../server/lib/research-notebook.mjs";
 
 async function withProject<T>(run: (root: string) => Promise<T>): Promise<T> {
   const root = await mkdtemp(join(tmpdir(), "noema-runtime-"));
@@ -70,19 +79,21 @@ describe("research runtime service", () => {
     let notebook = createResearchNotebook({ title: "Bound" });
     const question = createResearchCell(notebook, { kind: "question", title: "Question", source: "Can this be improved?" });
     notebook = question.notebook;
-    const work = createResearchCell(notebook, { kind: "work", title: "Attempt", source: "Try the spectral route.", lineageParent: question.cell.id });
+    const work = createResearchCell(notebook, { kind: "work", title: "Attempt", source: [
+      "@@agent(codex)", "@@session(continue)", "@@ctx(lineage)", "@@ctx(file:notes/known.md)",
+      "@@skill(proof-review)", "", "Try the spectral route.",
+    ].join("\n"), lineageParent: question.cell.id });
     notebook = work.notebook;
-    const workCell = notebook.cells.find((cell: any) => cell.id === work.cell.id);
-    workCell.metadata.noema_research.context = ["lineage", "file:notes/known.md"];
-    workCell.metadata.noema_research.executor = { agent: "codex", skills: ["proof-review"], capabilities: { network: "deny" } };
     const file = join(researchDir, "bound.noema");
     await writeResearchNotebookFile(file, notebook, { create: true });
     const provider = {
+      index: vi.fn(async () => ({ cells: 2 })),
       sessions: vi.fn(async () => [{ id: "ses_warm", state: "warm", executionTarget: root }]),
+      runs: vi.fn(async () => [{ id: "run_previous", sessionId: "ses_warm", workNodeId: work.workNode.id }]),
       prepareRun: vi.fn(async ({ run }) => ({ id: "run_1", ...run })),
     };
     const service = createResearchRuntimeService({ getProvider: () => provider as any });
-    const prepared = await service.prepareRun({ file, cellId: work.cell.id, cwd: root });
+    const prepared = await service.prepareRun({ file, cellId: work.cell.id, cwd: root, capabilities: { network: "deny" } });
     expect(prepared.run).toMatchObject({
       id: "run_1", sessionId: "ses_warm", sourceKind: "work-cell", workNodeId: work.workNode.id,
     });
@@ -97,6 +108,9 @@ describe("research runtime service", () => {
       },
       skills: [expect.objectContaining({ id: "proof-review", path: ".agents/skills/proof-review/SKILL.md" })],
     });
+    expect(prepared.spec.prompt).toBe("Try the spectral route.");
+    expect(prepared.spec.prompt_sha256).toBe(`sha256:${createHash("sha256").update("Try the spectral route.").digest("hex")}`);
+    expect(prepared.spec.prompt_sha256).not.toBe(prepared.spec.source.cell_source_sha256);
     expect(prepared.spec.context).toHaveLength(3);
     expect(prepared.spec.context.map((item: any) => item.ref)).toEqual([`cell:${question.cell.id}`, "file:notes/known.md", "skill:proof-review"]);
     expect(Buffer.from(prepared.contextItems[1].contentBase64, "base64").toString("utf8")).toBe("Known lemma.\n");
@@ -109,6 +123,64 @@ describe("research runtime service", () => {
         contextItems: expect.arrayContaining([expect.objectContaining({ ref: "file:notes/known.md" })]),
       }),
     });
+    expect(provider.index).toHaveBeenCalledWith({
+      root, path: "research/bound.noema", actor: "node", reason: "run.prepare",
+    });
+  }));
+
+  test("selects agents by directive, document default, then request default", async () => withProject(async (root) => {
+    await mkdir(join(root, "research"));
+    let notebook = createResearchNotebook({ title: "Agents", defaultAgent: "opencode" });
+    const directed = createResearchCell(notebook, { kind: "work", title: "Directed", source: "@@agent(claude)\n\nReview it." });
+    notebook = directed.notebook;
+    const inherited = createResearchCell(notebook, { kind: "work", title: "Inherited", source: "Review again." });
+    notebook = inherited.notebook;
+    const file = join(root, "research", "agents.noema");
+    await writeResearchNotebookFile(file, notebook, { create: true });
+    const provider = {
+      runs: vi.fn(async () => []),
+      prepareRun: vi.fn(async ({ run }) => ({ id: `run_${run.cellId}`, ...run })),
+    };
+    const service = createResearchRuntimeService({ getProvider: () => provider as any });
+    const first = await service.prepareRun({ file, cellId: directed.cell.id, cwd: root, agent: "codex" });
+    const second = await service.prepareRun({ file, cellId: inherited.cell.id, cwd: root, agent: "codex" });
+    expect(first.spec.agent.id).toBe("claude");
+    expect(second.spec.agent.id).toBe("opencode");
+  }));
+
+  test("resolves depends and result context from work outputs without parsing output directives", async () => withProject(async (root) => {
+    await mkdir(join(root, "research"));
+    let notebook = createResearchNotebook({ title: "Outputs", defaultAgent: "codex" });
+    const evidence = createResearchCell(notebook, { kind: "work", title: "Evidence", source: "Find evidence." });
+    notebook = evidence.notebook;
+    notebook = upsertResearchRunOutput(notebook, {
+      workId: evidence.workNode.id,
+      runId: "run_evidence",
+      agent: "pi",
+      status: "completed",
+      content: "@@agent(pi)\n\nPersisted evidence.",
+    }).notebook;
+    const synthesis = createResearchCell(notebook, {
+      kind: "work",
+      title: "Synthesis",
+      source: `@@ctx(depends)\n@@ctx(result:${evidence.workNode.id})\n\nSynthesize it.`,
+    });
+    notebook = setResearchRelation(synthesis.notebook, synthesis.workNode.id, "depends", [evidence.workNode.id]).notebook;
+    const file = join(root, "research", "outputs.noema");
+    await writeResearchNotebookFile(file, notebook, { create: true });
+    const provider = {
+      runs: vi.fn(async () => []),
+      prepareRun: vi.fn(async ({ run }) => ({ id: "run_synthesis", ...run })),
+    };
+    const service = createResearchRuntimeService({ getProvider: () => provider as any });
+    const prepared = await service.prepareRun({ file, cellId: synthesis.cell.id, cwd: root, agent: "claude" });
+    expect(prepared.spec.agent.id).toBe("codex");
+    expect(prepared.contextItems.map((item: any) => item.ref)).toEqual([
+      `result:${evidence.workNode.id}`,
+      `result:${evidence.workNode.id}`,
+    ]);
+    expect(prepared.contextItems.map((item: any) => Buffer.from(item.contentBase64, "base64").toString()))
+      .toEqual(["@@agent(pi)\n\nPersisted evidence.", "@@agent(pi)\n\nPersisted evidence."]);
   }));
 
   test("executes only the four strict .prompt directives and treats later lookalikes as data", async () => withProject(async (root) => {
@@ -119,6 +191,7 @@ describe("research runtime service", () => {
     const file = join(root, "prompts", "proof.prompt");
     await writeFile(file, [
       "@agent(codex)",
+      "@session(fresh)",
       "@ctx(file:notes/known.md)",
       "@skill(proof-review)",
       "@workstream(ws_prompt)",
@@ -137,16 +210,19 @@ describe("research runtime service", () => {
       skills: [expect.objectContaining({ id: "proof-review" })],
       source: { kind: "prompt-file", file: "prompts/proof.prompt" },
     });
+    expect(prepared.routing.policy).toBe("fresh");
     expect(prepared.spec.prompt).toBe("Investigate the bound.\n@agent(pi)");
     expect(prepared.contextItems).toHaveLength(2);
     expect(Buffer.from(prepared.contextItems[0].contentBase64, "base64").toString()).toBe("Known input.\n");
     expect(() => parseResearchPrompt("@budget(10)\nBody")).toThrow(/Unsupported/);
+    expect(() => parseResearchPrompt("@@agent(codex)\n@@agent(claude)\nBody")).toThrow(/Conflicting/);
+    expect(parseResearchPrompt("@@agent(codex)\n\nBody\n@@agent(pi)").prompt).toBe("Body\n@@agent(pi)");
   }));
 
   test("freezes note, artifact, and latest Handoff context with one shared limit", async () => withProject(async (root) => {
     await mkdir(join(root, "prompts"));
     const file = join(root, "prompts", "context.prompt");
-    await writeFile(file, "@agent(codex)\n@workstream(ws_context)\n\nUse explicit evidence.");
+    await writeFile(file, "@agent(codex)\n@session(continue)\n@workstream(ws_context)\n\nUse explicit evidence.");
     const readArtifact = vi.fn(async ({ id }) => ({
       artifact: { id, mediaType: "text/markdown; charset=utf-8" },
       dataBase64: Buffer.from(id === "art_evidence" ? "Artifact evidence" : "Latest handoff").toString("base64"),
@@ -184,7 +260,7 @@ describe("research runtime service", () => {
     expect(provider.prepareRun).not.toHaveBeenCalled();
   }));
 
-  test("labels reconstructed forks and freezes the parent Result plus Handoff", async () => withProject(async (root) => {
+  test("keeps legacy Result compatibility for reconstructed forks", async () => withProject(async (root) => {
     const researchDir = join(root, "research");
     await mkdir(researchDir);
     let notebook = createResearchNotebook({ title: "Fork" });
@@ -196,7 +272,7 @@ describe("research runtime service", () => {
       source: "## Result\n\nParent result.",
     });
     const file = join(researchDir, "fork.noema");
-    await writeResearchNotebookFile(file, notebook, { create: true });
+    await writeFile(file, `${JSON.stringify(notebook, null, 2)}\n`);
     const provider = {
       session: vi.fn(async () => ({
         id: "ses_parent", workstreamId: notebook.metadata.noema_research.workstream_id,
@@ -578,7 +654,7 @@ describe("research runtime service", () => {
         id: "run_1", notebookId: "nb_1", cellId: "c-work", workNodeId: "wn-work", status: "completed",
       })),
     };
-    const notebooks = { writeRunResult: vi.fn(async (body) => ({ cell: { id: "c-result" }, ...body })) };
+    const notebooks = { writeRunOutput: vi.fn(async (body) => ({ cell: { id: "c-work" }, ...body })) };
     const service = createResearchRuntimeService({
       getProvider: () => provider as any,
       getNotebookService: () => notebooks,
@@ -587,8 +663,8 @@ describe("research runtime service", () => {
       root, notebookFile: file, runId: "run_1", sessionId: "ses_1", owner: "emacs:1", epoch: 1,
       events: [{ type: "run.status.changed", payload: { status: "completed", result_text: "A bounded proof." } }],
     });
-    expect(reply).toMatchObject({ events: [{ id: "evt_1" }], result: { cell: { id: "c-result" } }, resultError: null });
-    expect(notebooks.writeRunResult).toHaveBeenCalledWith(expect.objectContaining({
+    expect(reply).toMatchObject({ events: [{ id: "evt_1" }], result: { cell: { id: "c-work" } }, resultError: null });
+    expect(notebooks.writeRunOutput).toHaveBeenCalledWith(expect.objectContaining({
       file: await realpath(file), notebookId: "nb_1", workId: "wn-work", runId: "run_1", status: "completed", content: "A bounded proof.",
     }));
   }));
@@ -650,14 +726,13 @@ describe("research runtime service", () => {
     const researchDir = join(root, "research");
     await mkdir(researchDir);
     let notebook = createResearchNotebook({ title: "Bound" });
-    const work = createResearchCell(notebook, { kind: "work", title: "Attempt", source: "Inspect safely." });
+    const work = createResearchCell(notebook, { kind: "work", title: "Attempt", source: "@@agent(pi)\n\nInspect safely." });
     notebook = work.notebook;
-    const cell = notebook.cells.find((candidate: any) => candidate.id === work.cell.id);
-    cell.metadata.noema_research.executor = { agent: "pi", capabilities: { network: "deny" } };
     const file = join(researchDir, "bound.noema");
     await writeResearchNotebookFile(file, notebook, { create: true });
     const service = createResearchRuntimeService({ getProvider: () => ({ sessions: async () => [] }) as any });
-    await expect(service.prepareRun({ file, cellId: work.cell.id, cwd: root })).rejects.toMatchObject({ code: "ERR_RESEARCH_CAPABILITY" });
+    await expect(service.prepareRun({ file, cellId: work.cell.id, cwd: root, capabilities: { network: "deny" } }))
+      .rejects.toMatchObject({ code: "ERR_RESEARCH_CAPABILITY" });
   }));
 
   test("never places a local_only canary in a RunSpec or provider request", async () => withProject(async (root) => {

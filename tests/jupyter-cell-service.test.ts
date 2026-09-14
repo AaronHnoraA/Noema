@@ -497,7 +497,7 @@ describe("jupyter cell service (no kernel)", () => {
     });
   });
 
-  test("uses a .noema work document as Jupyter input without becoming its editor", async () => {
+  test("keeps .noema out of every Jupyter kernel path", async () => {
     await withService(async ({ service, note }) => {
       const notebook = join(dirname(note), "research.noema");
       const workNode = {
@@ -513,11 +513,9 @@ describe("jupyter cell service (no kernel)", () => {
           execution_count: null,
           metadata: { noema_research: { work_node_id: workNode.id } },
           outputs: [],
-          source: "print('baseline')\n",
+          source: "@@agent(codex)\n\nMeasure the baseline.\n",
         }],
         metadata: {
-          kernelspec: { display_name: "Python 3", language: "python", name: "python3" },
-          language_info: { name: "python" },
           noema_research: {
             schema: "noema.work-document/2",
             notebook_id: "nb_test",
@@ -533,24 +531,28 @@ describe("jupyter cell service (no kernel)", () => {
       expect(snapshot.document).toMatchObject({
         scriptFile: notebook,
         sourceFile: notebook,
-        kernelSpecName: "python3",
+        kernel: "",
+        kernelSpecName: "",
       });
-      expect(snapshot.cells[0]).toMatchObject({ id: "cell-code", code: "print('baseline')\n" });
+      expect(snapshot.kernelStatus).toBe("not-applicable");
+      expect(snapshot.cells[0]).toMatchObject({ id: "cell-code", code: "@@agent(codex)\n\nMeasure the baseline.\n" });
 
       await expect(service.scriptAction({
         scriptFile: notebook,
         cellId: "cell-code",
         action: "insertBelow",
-      })).rejects.toThrow("Edit .noema work-document structure in Emacs");
-
-      await service.scriptAction({
-        scriptFile: notebook,
-        cellId: "cell-code",
-        action: "clear-output",
-      });
-      const persisted = JSON.parse(await readFile(notebook, "utf8"));
-      expect(persisted.metadata.noema_research.work_nodes).toEqual([workNode]);
-      expect(persisted.cells[0].metadata.noema_research.work_node_id).toBe(workNode.id);
+      })).rejects.toThrow(/Cannot perform Jupyter action/);
+      await expect(service.execute({ scriptFile: notebook, code: "1+1" })).rejects.toThrow(/\.noema/i);
+      await expect(service.kernels({ scriptFile: notebook })).rejects.toThrow(/Jupyter kernels/i);
+      await expect(service.readScriptCell({ scriptFile: notebook, cellId: "cell-code" })).rejects.toThrow(/Jupyter code cell/i);
+      await expect(service.variables({ scriptFile: notebook })).rejects.toThrow(/kernel variables/i);
+      await expect(service.restart({ scriptFile: notebook })).rejects.toThrow(/Jupyter kernel/i);
+      await expect(service.sessionSelect({ scriptFile: notebook, kind: "start" })).rejects.toThrow(/Jupyter session/i);
+      await expect(service.documentExecute({ scriptFile: notebook, cellId: "cell-code", mode: "all" }))
+        .rejects.toThrow(/Cannot perform Jupyter action/);
+      await expect(service.saveScriptCellOutputUi({ scriptFile: notebook, cellId: "cell-code" }))
+        .rejects.toThrow(/Jupyter output UI state/i);
+      expect((await service.managerSnapshot()).kernels).toEqual([]);
     });
   });
 
@@ -570,13 +572,15 @@ describe("jupyter cell service (no kernel)", () => {
         cell_type: "code",
         id: "cell-code",
         execution_count: null,
-        metadata: {},
+        metadata: { noema_research: { work_node_id: "wn_outside" } },
         outputs: [],
-        source: "print('outside workspace')\n",
+        source: "Review the outside project.\n",
       }],
       metadata: {
-        kernelspec: { display_name: "Python 3", language: "python", name: "python3" },
-        language_info: { name: "python" },
+        noema_research: {
+          schema: "noema.work-document/2", notebook_id: "nb_outside",
+          work_nodes: [{ id: "wn_outside", kind: "work", title: "Outside" }], dependencies: [],
+        },
       },
       nbformat: 4,
       nbformat_minor: 5,
@@ -597,11 +601,11 @@ describe("jupyter cell service (no kernel)", () => {
       // initial manifest-backed authorization check.
       const refreshed = await service.documentSnapshot({ scriptFile: notebook });
       expect(refreshed.document).toMatchObject({ scriptFile: notebook, projectRoot: canonicalProjectRoot });
-      await service.scriptAction({
+      await expect(service.scriptAction({
         scriptFile: notebook,
         cellId: "cell-code",
         action: "clear-output",
-      });
+      })).rejects.toThrow(/Cannot perform Jupyter action/);
     } finally {
       await service.shutdown().catch(() => {});
       await rm(globalRoot, { recursive: true, force: true });

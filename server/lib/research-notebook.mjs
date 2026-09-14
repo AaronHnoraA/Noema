@@ -9,16 +9,17 @@
  * structure; the kernel index is rebuilt from it after every write.
  */
 import { createHash, randomBytes } from "node:crypto";
-import { mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
+import { copyFile, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { v7 as uuidv7 } from "uuid";
 import { notebookSource, parseNotebook, serializeNotebook } from "./jupyter-notebook-format.mjs";
+import { parseResearchDirectives } from "./research-directives.mjs";
 
 export const RESEARCH_SCHEMA = "noema.work-document/2";
 export const LEGACY_RESEARCH_SCHEMA = "noema.research-notebook/1";
 export const RESEARCH_NAMESPACE = "noema_research";
 export const GRAPH_KINDS = Object.freeze(["question", "work", "checkpoint"]);
-export const RESEARCH_KINDS = Object.freeze(["result"]);
+export const RESEARCH_KINDS = Object.freeze([]);
 export const WORK_STATES = Object.freeze(["open", "active", "waiting", "done", "dropped"]);
 export const WORK_OUTCOMES = Object.freeze(["supported", "refuted", "inconclusive", "dead_end", "superseded"]);
 export const RELATION_TYPES = Object.freeze(["lineage", "depends"]);
@@ -27,6 +28,7 @@ export const LEGACY_RESEARCH_SUFFIX = ".noema.ipynb";
 
 const CELL_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const WORK_NODE_ID = /^wn_[A-Za-z0-9_-]{1,80}$/;
+const AGENT_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 function object(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
@@ -130,14 +132,13 @@ export function researchWorkNodeForCell(notebook, cellOrId) {
 
 export function researchCellKind(cell, notebook = null) {
   const kind = researchMeta(cell).kind;
-  // Result is the only structural role owned by Cell metadata. A bound code
-  // Cell stays code even if a legacy producer accidentally left a graph kind
-  // behind; graph identity and kind belong to its WorkNode.
+  // Result exists only as a migration compatibility role. Canonical D-023
+  // cells derive their role from storage type plus the bound WorkNode.
   if (kind === "result") return "result";
-  if (cell?.cell_type === "code") return "code";
-  if (typeof kind === "string" && kind) return kind;
   const node = notebook ? researchWorkNodeForCell(notebook, cell) : null;
-  if (node?.kind) return node.kind;
+  if (cell?.cell_type === "code") return node?.kind === "work" ? "work" : "code";
+  if (node?.kind === "question" || node?.kind === "checkpoint") return node.kind;
+  if (typeof kind === "string" && kind) return kind;
   return "note";
 }
 
@@ -163,7 +164,9 @@ export function researchWorkNodeSummary(notebook, value) {
   const boundCells = (notebook?.cells || [])
     .filter((cell) => researchMeta(cell).work_node_id === id)
   const cellIds = boundCells.map((cell) => cell.id);
-  const primaryCell = boundCells.find((cell) => researchMeta(cell).kind !== "result") || null;
+  const primaryCell = boundCells.find((cell) => (
+    node.kind === "work" ? cell?.cell_type === "code" : cell?.cell_type === "markdown"
+  )) || null;
   const ordinal = primaryCell ? cellIndex(notebook, primaryCell.id) : Number.MAX_SAFE_INTEGER;
   return {
     id,
@@ -205,20 +208,24 @@ export function researchCellSummary(cell, ordinal = 0, notebook = null) {
   };
 }
 
-export function createResearchNotebook({ title = "", kernel = "python3", language = "python" } = {}) {
+export function createResearchNotebook({ title = "", defaultAgent = "" } = {}) {
+  const agent = String(defaultAgent || "").trim();
+  if (agent && !AGENT_ID.test(agent)) {
+    throw researchError(`Invalid default agent: ${agent}`, 422, "ERR_RESEARCH_AGENT");
+  }
+  const documentMeta = {
+    schema: RESEARCH_SCHEMA,
+    notebook_id: `nb_${uuidv7()}`,
+    workstream_id: `ws_${uuidv7()}`,
+    title: String(title || "").trim(),
+    work_nodes: [],
+    dependencies: [],
+  };
+  if (agent) documentMeta.default_agent = agent;
   return {
     cells: [],
     metadata: {
-      kernelspec: { display_name: String(kernel), language: String(language), name: String(kernel) },
-      language_info: { name: String(language) },
-      [RESEARCH_NAMESPACE]: {
-        schema: RESEARCH_SCHEMA,
-        notebook_id: `nb_${uuidv7()}`,
-        workstream_id: `ws_${uuidv7()}`,
-        title: String(title || "").trim(),
-        work_nodes: [],
-        dependencies: [],
-      },
+      [RESEARCH_NAMESPACE]: documentMeta,
     },
     nbformat: 4,
     nbformat_minor: 5,
@@ -242,9 +249,8 @@ function legacyWorkNodeId(notebookId, cellId) {
 }
 
 // v1 stored graph identity, node state, and dependency edges in each cell.
-// Upgrade it deterministically in memory so a legacy document gets the same
-// WorkNode ids on every read until the user next saves the canonical v2 form.
-export function migrateLegacyResearchNotebook(notebook) {
+// Upgrade that graph representation before applying the D-023 storage rules.
+function upgradeLegacyResearchGraph(notebook) {
   const next = adoptCells(structuredClone(notebook));
   const oldMeta = researchDocumentMeta(next);
   if (oldMeta.schema !== LEGACY_RESEARCH_SCHEMA) return next;
@@ -292,10 +298,157 @@ export function migrateLegacyResearchNotebook(notebook) {
   return next;
 }
 
+// Upgrade deterministically in memory so compatibility reads get the same
+// WorkNode ids until the user explicitly persists the canonical form.
+export function migrateLegacyResearchNotebook(notebook) {
+  const legacy = researchDocumentMeta(notebook).schema === LEGACY_RESEARCH_SCHEMA;
+  const next = upgradeLegacyResearchGraph(notebook);
+  return legacy
+    ? migrateResearchNotebookD023(next, { legacyInput: true }).notebook
+    : next;
+}
+
+function readableMigrationName(value, fallback) {
+  const slug = String(value || "").normalize("NFKD").toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 56);
+  return slug || fallback;
+}
+
+function legacyResultContent(cell) {
+  const source = notebookSource(cell?.source).trim();
+  return source.replace(/^##\s+Run\s+run_[^\n]*\n+/i, "").trim() || source;
+}
+
+/**
+ * Deterministically upgrade an in-memory pre-D-023 document. Programming
+ * cells are returned as extraction records and replaced by bound notes; the
+ * caller owns writing those ordinary files before committing the notebook.
+ */
+export function migrateResearchNotebookD023(notebook, {
+  extractionPath = null,
+  legacyInput = false,
+} = {}) {
+  const inputWasLegacy = legacyInput
+    || researchDocumentMeta(notebook).schema === LEGACY_RESEARCH_SCHEMA;
+  const next = adoptCells(structuredClone(notebook));
+  const metadata = object(next.metadata);
+  const documentMeta = researchDocumentMeta(next);
+  const legacyExecution = Object.hasOwn(metadata, "kernelspec")
+    || Object.hasOwn(metadata, "language_info")
+    || inputWasLegacy;
+  delete metadata.kernelspec;
+  delete metadata.language_info;
+  next.metadata = metadata;
+
+  const nodeById = new Map(researchWorkNodes(next).map((node) => [node.id, node]));
+  const latestResults = new Map();
+  for (const cell of next.cells) {
+    if (researchMeta(cell).kind === "result") {
+      const workNodeId = String(researchMeta(cell).work_node_id || "");
+      if (workNodeId) latestResults.set(workNodeId, cell);
+    }
+  }
+
+  const programmingCellIds = new Set();
+  const workStorage = new Set();
+  for (const cell of next.cells) {
+    const workNodeId = String(researchMeta(cell).work_node_id || "");
+    if (cell.cell_type !== "code") continue;
+    const runtimeMeta = object(object(cell.metadata).noema);
+    const pairedLegacyPrompt = next.cells.some((candidate) => (
+      candidate !== cell && candidate.cell_type === "markdown"
+      && researchMeta(candidate).work_node_id === workNodeId
+      && nodeById.get(workNodeId)?.kind === "work"
+    ));
+    const programming = legacyExecution && (
+      Object.keys(runtimeMeta).length > 0 || pairedLegacyPrompt
+      || nodeById.get(workNodeId)?.kind !== "work"
+    );
+    if (programming) programmingCellIds.add(cell.id);
+    else if (nodeById.get(workNodeId)?.kind === "work") workStorage.add(workNodeId);
+  }
+  const extractions = [];
+  const cells = [];
+  for (const cell of next.cells) {
+    const meta = { ...researchMeta(cell) };
+    const workNodeId = String(meta.work_node_id || "");
+    const node = nodeById.get(workNodeId);
+    if (meta.kind === "result") continue;
+    if (cell.cell_type === "code" && programmingCellIds.has(cell.id)) {
+      const ordinal = extractions.length + 1;
+      const fallback = String(cell.id || `cell-${ordinal}`).replace(/^c-/, "");
+      const demoName = /^c-demo-(.+)$/.exec(String(cell.id || ""))?.[1];
+      const suggested = `experiments/${readableMigrationName(demoName || node?.title, fallback)}.py`;
+      const path = typeof extractionPath === "function" ? extractionPath(cell, node, suggested, ordinal) : suggested;
+      extractions.push({
+        cellId: cell.id,
+        workNodeId,
+        path,
+        source: notebookSource(cell.source),
+        outputs: structuredClone(Array.isArray(cell.outputs) ? cell.outputs : []),
+      });
+      cell.cell_type = "markdown";
+      delete cell.execution_count;
+      delete cell.outputs;
+      delete cell.attachments;
+      // `metadata.noema` is the old Jupyter runtime stamp (kernel, session,
+      // saved output UI).  It has no meaning on the replacement note and
+      // must not leave a hidden kernel association in the migrated document.
+      if (object(cell.metadata).noema) delete cell.metadata.noema;
+      delete meta.kind;
+      cell.source = `Programming code migrated to [${path}](${path}).`;
+      setResearchMeta(cell, meta);
+      cells.push(cell);
+      continue;
+    }
+    if (node?.kind === "work" && cell.cell_type === "markdown" && !workStorage.has(workNodeId)) {
+      cell.cell_type = "code";
+      cell.execution_count = null;
+      cell.outputs = [];
+      delete cell.attachments;
+      delete meta.kind;
+      setResearchMeta(cell, meta);
+      workStorage.add(workNodeId);
+    }
+    cells.push(cell);
+  }
+
+  for (const [workNodeId, result] of latestResults) {
+    const target = cells.find((cell) => cell.cell_type === "code" && researchMeta(cell).work_node_id === workNodeId);
+    if (!target) continue;
+    const resultMeta = researchMeta(result);
+    const runId = String(resultMeta.run_id || "").trim();
+    if (!runId.startsWith("run_")) continue;
+    target.outputs = [runOutput({
+      runId,
+      agent: resultMeta.agent,
+      status: String(resultMeta.status || "completed"),
+      content: legacyResultContent(result),
+    })];
+  }
+  next.cells = cells;
+  const report = validateResearchNotebook(next);
+  return {
+    notebook: next,
+    extractions,
+    validation: report,
+    changed: legacyExecution || latestResults.size > 0 || cells.some((cell, index) => cell.cell_type !== notebook.cells?.[index]?.cell_type),
+  };
+}
+
 export function parseResearchNotebook(text) {
   let notebook;
   try {
     notebook = parseNotebook(text);
+    // The ordinary Jupyter reader supplies convenient kernel defaults for
+    // editor-backed .ipynb files.  Those defaults are not on disk and are not
+    // meaningful for a D-023 work document, so remove only the fields the
+    // reader synthesized.  Real legacy kernel metadata remains visible to
+    // validation and migration.
+    const raw = JSON.parse(String(text || "{}"));
+    const rawMetadata = object(raw?.metadata);
+    if (!Object.hasOwn(rawMetadata, "kernelspec")) delete notebook.metadata.kernelspec;
+    if (!Object.hasOwn(rawMetadata, "language_info")) delete notebook.metadata.language_info;
   } catch (error) {
     throw researchError(`Invalid notebook JSON: ${error?.message || error}`, 422, "ERR_RESEARCH_FORMAT");
   }
@@ -360,8 +513,17 @@ export function validateResearchNotebook(notebook) {
   const warnings = [];
   const add = (list, code, cellId, message) => list.push({ code, cellId, message });
   const meta = researchDocumentMeta(notebook);
+  if (notebook?.nbformat !== 4 || notebook?.nbformat_minor !== 5) {
+    add(errors, "nbformat", null, "Noema work documents require nbformat 4.5");
+  }
   if (meta.schema !== RESEARCH_SCHEMA) add(errors, "schema", null, `metadata.${RESEARCH_NAMESPACE}.schema must be ${RESEARCH_SCHEMA}`);
   if (!String(meta.notebook_id || "").trim()) add(errors, "notebook-id", null, `metadata.${RESEARCH_NAMESPACE}.notebook_id is required`);
+  if (meta.default_agent !== undefined && !AGENT_ID.test(String(meta.default_agent || ""))) {
+    add(errors, "default-agent", null, `metadata.${RESEARCH_NAMESPACE}.default_agent is invalid`);
+  }
+  if (Object.hasOwn(object(notebook?.metadata), "kernelspec") || Object.hasOwn(object(notebook?.metadata), "language_info")) {
+    add(errors, "kernel-metadata", null, ".noema work documents cannot declare kernelspec or language_info");
+  }
   const cells = Array.isArray(notebook?.cells) ? notebook.cells : [];
   const summaries = cells.map((cell, index) => researchCellSummary(cell, index, notebook));
   const byId = new Map();
@@ -385,17 +547,47 @@ export function validateResearchNotebook(notebook) {
   }
   for (const cell of summaries) {
     const raw = researchMeta(cells[cell.ordinal]);
-    if (raw.kind !== undefined && raw.kind !== "result") {
+    const sourceCell = cells[cell.ordinal];
+    const node = raw.work_node_id ? nodeById.get(raw.work_node_id) : null;
+    if (raw.kind !== undefined) {
       add(errors, "cell-graph-metadata", cell.id, "Graph kind belongs to a WorkNode, not cell metadata");
-    }
-    if (raw.kind === "result" && cell.cellType !== "markdown") {
-      add(errors, "kind-cell-type", cell.id, `Research ${cell.kind} cells must be markdown cells`);
     }
     if (raw.work_node_id && !nodeById.has(raw.work_node_id)) {
       add(errors, "cell-work-node", cell.id, `Cell references missing WorkNode ${raw.work_node_id}`);
     }
     if (raw.kind === "result" && nodeById.get(raw.work_node_id)?.kind !== "work") {
-      add(errors, "result-of", cell.id, "Result cells must reference an existing work WorkNode");
+      add(errors, "result-cell", cell.id, "Independent Result cells are not allowed; migrate the result into work outputs");
+    }
+    if (!["markdown", "code"].includes(cell.cellType)) {
+      add(errors, "cell-type", cell.id, `Unsupported .noema cell_type: ${cell.cellType}`);
+    } else if (cell.cellType === "code") {
+      if (!node || node.kind !== "work") {
+        add(errors, "work-storage", cell.id, "A code storage cell must bind an existing work WorkNode");
+      }
+      if (sourceCell.execution_count !== null) {
+        add(errors, "execution-count", cell.id, "A .noema work cell execution_count must be null");
+      }
+      if (!Array.isArray(sourceCell.outputs)) {
+        add(errors, "outputs", cell.id, "A .noema work cell must have an outputs array");
+      }
+      if (notebookSource(sourceCell.source).trim()) {
+        try {
+          parseResearchDirectives(notebookSource(sourceCell.source), { sourceName: `work cell ${cell.id}` });
+        } catch (error) {
+          add(errors, "directive", cell.id, String(error?.message || error));
+        }
+      }
+    } else {
+      if (Object.hasOwn(sourceCell, "outputs") || Object.hasOwn(sourceCell, "execution_count")) {
+        add(errors, "markdown-runtime", cell.id, "question, checkpoint, and note cells cannot carry outputs or execution_count");
+      }
+      if (node?.kind === "work" && !cells.some((candidate) => (
+        candidate !== sourceCell
+        && candidate?.cell_type === "code"
+        && researchMeta(candidate).work_node_id === node.id
+      ))) {
+        add(warnings, "work-without-prompt", cell.id, `WorkNode ${node.id} has no executable work cell`);
+      }
     }
   }
   const dependencyKeys = new Set();
@@ -419,7 +611,7 @@ export function validateResearchNotebook(notebook) {
 export function createResearchCell(notebook, spec = {}) {
   const next = structuredClone(notebook);
   const kind = String(spec.kind || "work");
-  if (![...GRAPH_KINDS, "note", "code"].includes(kind)) {
+  if (![...GRAPH_KINDS, "note"].includes(kind)) {
     throw researchError(`Unsupported cell kind: ${kind}`, 422, "ERR_RESEARCH_KIND");
   }
   const requestedId = String(spec.id || spec.cellId || spec.cell_id || "").trim();
@@ -449,7 +641,7 @@ export function createResearchCell(notebook, spec = {}) {
   } else if (title) {
     meta.title = title;
   }
-  const cell = kind === "code"
+  const cell = kind === "work"
     ? { cell_type: "code", execution_count: null, id, metadata: {}, outputs: [], source }
     : { cell_type: "markdown", id, metadata: {}, source };
   setResearchMeta(cell, meta);
@@ -463,11 +655,6 @@ export function createResearchCell(notebook, spec = {}) {
   let index = next.cells.length;
   if (anchor) {
     index = requireCellIndex(next, anchor) + 1;
-    while (index < next.cells.length) {
-      const following = researchMeta(next.cells[index]);
-      if (following.kind !== "result" || following.work_node_id !== (anchorNode || workNodeId)) break;
-      index += 1;
-    }
   }
   next.cells.splice(index, 0, cell);
   let result = { notebook: next, cell: researchCellSummary(cell, index, next), workNode: workNodeId ? researchWorkNodeSummary(next, workNodeId) : null };
@@ -484,11 +671,11 @@ export function updateResearchCell(notebook, cellId, patch = {}) {
   const index = requireCellIndex(next, cellId);
   const cell = next.cells[index];
   const meta = { ...researchMeta(cell) };
-  if (meta.kind === "result") throw researchError("Result cells are written by runs", 409, "ERR_RESEARCH_READONLY");
+  if (meta.kind === "result") throw researchError("Independent Result cells are not editable; migrate this document to D-023", 409, "ERR_RESEARCH_READONLY");
   let workNode = researchWorkNodeForCell(next, cell);
   if (patch.kind !== undefined) {
     const kind = String(patch.kind);
-    if (cell.cell_type !== "markdown" || ![...GRAPH_KINDS, "note"].includes(kind)) {
+    if (![...GRAPH_KINDS, "note"].includes(kind)) {
       throw researchError(`Cannot change cell ${cellId} to kind ${kind}`, 422, "ERR_RESEARCH_KIND");
     }
     if (kind === "note") {
@@ -509,6 +696,16 @@ export function updateResearchCell(notebook, cellId, patch = {}) {
       setDocumentMeta(next, { ...researchDocumentMeta(next), work_nodes: [...researchWorkNodes(next), workNode] });
       meta.work_node_id = id;
     }
+    if (kind === "work") {
+      cell.cell_type = "code";
+      cell.execution_count = null;
+      cell.outputs = Array.isArray(cell.outputs) ? cell.outputs : [];
+      delete cell.attachments;
+    } else {
+      cell.cell_type = "markdown";
+      delete cell.execution_count;
+      delete cell.outputs;
+    }
   }
   if (patch.title !== undefined) {
     const title = String(patch.title ?? "").trim();
@@ -526,8 +723,10 @@ export function deleteResearchCell(notebook, cellId) {
   const index = requireCellIndex(next, cellId);
   const workNodeId = String(researchMeta(next.cells[index]).work_node_id || "");
   next.cells.splice(index, 1);
-  const stillBound = workNodeId && next.cells.some((cell) => (
-    researchMeta(cell).work_node_id === workNodeId && researchMeta(cell).kind !== "result"
+  const node = workNodeId ? researchWorkNodes(next).find((candidate) => candidate.id === workNodeId) : null;
+  const stillBound = node && next.cells.some((cell) => (
+    researchMeta(cell).work_node_id === workNodeId
+    && (node.kind === "work" ? cell.cell_type === "code" : cell.cell_type === "markdown")
   ));
   return { notebook: next, removed: [String(cellId)], orphanedWorkNodeIds: workNodeId && !stillBound ? [workNodeId] : [] };
 }
@@ -544,7 +743,7 @@ export function deleteResearchWorkNode(notebook, value, { deleteBoundCells = fal
   next.cells = next.cells.filter((cell) => {
     const meta = { ...researchMeta(cell) };
     if (meta.work_node_id !== id) return true;
-    if (deleteBoundCells || meta.kind === "result") {
+    if (deleteBoundCells) {
       removedCells.push(cell.id);
       return false;
     }
@@ -595,49 +794,84 @@ export function setResearchState(notebook, workNodeId, { state, outcome, reason 
   return { notebook: next, workNode: summary, cell: cell ? researchCellSummary(cell, cellIndex(next, cell.id), next) : null };
 }
 
-// Result cells are materialized by a terminal Run, never by free-form cell
-// editing. Repeating delivery for the same immutable Run updates that one
-// result instead of creating an ambiguous duplicate.
-export function upsertResearchRunResult(notebook, { workId, runId, status, content = "" } = {}) {
+function runOutput({ runId, agent = "", status, content = "" }) {
+  const text = String(content || "").trim() || `Run ${runId} ${status}.`;
+  return {
+    output_type: "display_data",
+    data: {
+      "text/markdown": text,
+      "text/plain": text,
+      "application/vnd.noema.run+json": {
+        run_id: runId,
+        agent: String(agent || "").trim(),
+        status,
+      },
+    },
+    metadata: {},
+  };
+}
+
+/** Persist the latest terminal agent reply on the Work's canonical code cell. */
+export function upsertResearchRunOutput(notebook, {
+  workId, cellId = "", runId, agent = "", status, content = "",
+} = {}) {
   const next = structuredClone(notebook);
   const resolved = requireWorkNodeIndex(next, String(workId || ""));
   const work = researchWorkNodes(next)[resolved.index];
   if (work.kind !== "work") {
-    throw researchError("Run results can only be attached to a work WorkNode", 422, "ERR_RESEARCH_RESULT");
+    throw researchError("Run outputs can only be attached to a work WorkNode", 422, "ERR_RESEARCH_RESULT");
   }
   const run = String(runId || "").trim();
-  if (!run.startsWith("run_")) throw researchError("Run result requires a durable run id", 422, "ERR_RESEARCH_RESULT");
+  if (!run.startsWith("run_")) throw researchError("Run output requires a durable run id", 422, "ERR_RESEARCH_RESULT");
   const terminal = String(status || "").trim();
   if (!["completed", "cancelled", "failed", "interrupted"].includes(terminal)) {
-    throw researchError("Run result requires a terminal status", 422, "ERR_RESEARCH_RESULT");
+    throw researchError("Run output requires a terminal status", 422, "ERR_RESEARCH_RESULT");
   }
-  const text = String(content || "").trim() || `Run ${run} ${terminal}.`;
-  const source = `## Run ${run}\n\n${text}`;
-  let index = next.cells.findIndex((cell) => {
-    const meta = researchMeta(cell);
-    return meta.kind === "result" && meta.run_id === run;
-  });
-  if (index >= 0) {
-    const cell = next.cells[index];
-    setResearchMeta(cell, { ...researchMeta(cell), kind: "result", work_node_id: work.id, run_id: run, status: terminal });
-    cell.source = source;
-    return { notebook: next, cell: researchCellSummary(cell, index, next), workNode: researchWorkNodeSummary(next, work.id) };
+  const requestedCell = String(cellId || "").trim();
+  const index = requestedCell ? requireCellIndex(next, requestedCell)
+    : cellIndex(next, researchWorkNodeSummary(next, work.id).primaryCellId);
+  if (index < 0) throw researchError(`WorkNode ${work.id} has no executable work cell`, 409, "ERR_RESEARCH_RESULT");
+  const cell = next.cells[index];
+  if (cell.cell_type !== "code" || researchMeta(cell).work_node_id !== work.id) {
+    throw researchError("Run output target is not the bound work cell", 409, "ERR_RESEARCH_RESULT");
   }
-  const primary = researchWorkNodeSummary(next, work.id).primaryCellId;
-  index = primary ? cellIndex(next, primary) + 1 : next.cells.length;
-  while (index < next.cells.length) {
-    const meta = researchMeta(next.cells[index]);
-    if (meta.kind !== "result" || meta.work_node_id !== work.id) break;
-    index += 1;
-  }
-  const cell = {
-    cell_type: "markdown",
-    id: newResearchCellId(next, "c"),
-    metadata: { [RESEARCH_NAMESPACE]: { kind: "result", work_node_id: work.id, run_id: run, status: terminal } },
-    source,
-  };
-  next.cells.splice(index, 0, cell);
+  cell.execution_count = null;
+  cell.outputs = [runOutput({ runId: run, agent, status: terminal, content })];
   return { notebook: next, cell: researchCellSummary(cell, index, next), workNode: researchWorkNodeSummary(next, work.id) };
+}
+
+// Compatibility export for callers compiled against D-019. It now writes
+// outputs and never creates a Result cell.
+export const upsertResearchRunResult = upsertResearchRunOutput;
+
+export function clearResearchOutputs(notebook, { cellId = "", workId = "", all = false } = {}) {
+  const next = structuredClone(notebook);
+  const targetWork = workId ? requireWorkNodeIndex(next, workId).id : "";
+  const cleared = [];
+  for (const cell of next.cells) {
+    if (cell.cell_type !== "code") continue;
+    if (!all && cellId && cell.id !== cellId) continue;
+    if (!all && targetWork && researchMeta(cell).work_node_id !== targetWork) continue;
+    if (!all && !cellId && !targetWork) continue;
+    cell.execution_count = null;
+    cell.outputs = [];
+    cleared.push(cell.id);
+  }
+  if (!all && cleared.length === 0) throw researchError("No matching work cell outputs", 404, "ERR_RESEARCH_CELL");
+  return { notebook: next, cleared };
+}
+
+export function setResearchDefaultAgent(notebook, agent = "") {
+  const next = structuredClone(notebook);
+  const value = String(agent || "").trim();
+  if (value && !AGENT_ID.test(value)) {
+    throw researchError(`Invalid default agent: ${value}`, 422, "ERR_RESEARCH_AGENT");
+  }
+  const meta = { ...researchDocumentMeta(next) };
+  if (value) meta.default_agent = value;
+  else delete meta.default_agent;
+  setDocumentMeta(next, meta);
+  return { notebook: next, defaultAgent: value };
 }
 
 /**
@@ -833,6 +1067,61 @@ export async function writeResearchNotebookFile(file, notebook, { expectedRevisi
   return { file: path, text, revision: researchRevision(text), validation };
 }
 
+export async function migrateResearchNotebookFile(file, { backupSuffix = ".pre-d023.bak" } = {}) {
+  const loaded = await readResearchNotebookFile(file);
+  const root = (await findResearchRepositoryRoot(loaded.file)) || dirname(loaded.file);
+  const raw = JSON.parse(loaded.text);
+  const rawLegacy = researchDocumentMeta(raw).schema === LEGACY_RESEARCH_SCHEMA;
+  const source = rawLegacy
+    ? upgradeLegacyResearchGraph(parseNotebook(loaded.text))
+    : loaded.notebook;
+  const migrated = migrateResearchNotebookD023(source, { legacyInput: rawLegacy });
+  if (!migrated.changed) {
+    return { ...loaded, root, backup: null, extractions: [], migrated: false, validation: validateResearchNotebook(loaded.notebook) };
+  }
+  if (!migrated.validation.ok) {
+    throw Object.assign(
+      researchError(migrated.validation.errors.map((entry) => entry.message).join("; "), 422, "ERR_RESEARCH_MIGRATION"),
+      { validation: migrated.validation },
+    );
+  }
+  const backup = `${loaded.file}${backupSuffix}`;
+  try {
+    await stat(backup);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+    await copyFile(loaded.file, backup);
+  }
+  for (const extraction of migrated.extractions) {
+    const target = resolve(root, extraction.path);
+    const insideRoot = relative(root, target);
+    if (insideRoot === ".." || insideRoot.startsWith(`..${sep}`) || isAbsolute(insideRoot)) {
+      throw researchError(`Migration target escapes the project: ${extraction.path}`, 422, "ERR_RESEARCH_MIGRATION");
+    }
+    await mkdir(dirname(target), { recursive: true });
+    try {
+      await writeFile(target, extraction.source, { encoding: "utf8", flag: "wx", mode: 0o644 });
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      if (await readFile(target, "utf8") !== extraction.source) {
+        throw researchError(`Migration will not overwrite existing file: ${target}`, 409, "ERR_RESEARCH_MIGRATION");
+      }
+    }
+    extraction.file = target;
+  }
+  const written = await writeResearchNotebookFile(loaded.file, migrated.notebook, { expectedRevision: loaded.revision });
+  return {
+    file: loaded.file,
+    root,
+    backup,
+    notebook: migrated.notebook,
+    revision: written.revision,
+    extractions: migrated.extractions,
+    migrated: true,
+    validation: written.validation,
+  };
+}
+
 export async function findResearchRepositoryRoot(file) {
   let dir = dirname(assertResearchFile(file));
   for (;;) {
@@ -913,7 +1202,10 @@ export function createResearchNotebookService({ getIndexer = () => null, allowWr
       guardWrite();
       const location = await locate(body.file);
       return serialized(location.path, async () => {
-        const notebook = createResearchNotebook({ title: body.title });
+        const notebook = createResearchNotebook({
+          title: body.title,
+          defaultAgent: body.agent || body.defaultAgent || body.default_agent,
+        });
         const written = await writeResearchNotebookFile(location.path, notebook, { create: true });
         const index = await syncIndex(location, { actor: actor(body), reason: "notebook.create" });
         return { file: location.path, root: location.root, revision: written.revision, notebook, validation: written.validation, ...index };
@@ -993,18 +1285,48 @@ export function createResearchNotebookService({ getIndexer = () => null, allowWr
         reason: body.reason,
       }));
     },
-    writeRunResult(body = {}) {
-      return mutate(body, "run.result", (notebook) => {
+    setDefaultAgent(body = {}) {
+      return mutate(body, "notebook.default-agent", (notebook) => setResearchDefaultAgent(
+        notebook, body.agent || body.defaultAgent || body.default_agent,
+      ));
+    },
+    clearOutputs(body = {}) {
+      return mutate(body, "run.outputs.clear", (notebook) => clearResearchOutputs(notebook, {
+        cellId: body.cellId || body.cell_id,
+        workId: body.workId || body.work_id,
+        all: Boolean(body.all),
+      }));
+    },
+    writeRunOutput(body = {}) {
+      return mutate(body, "run.output", (notebook) => {
         const notebookId = String(body.notebookId || body.notebook_id || "").trim();
         if (notebookId && String(researchMeta({ metadata: notebook.metadata }).notebook_id || "") !== notebookId) {
-          throw researchError("Run result notebook identity does not match the target file", 409, "ERR_RESEARCH_RESULT");
+          throw researchError("Run output notebook identity does not match the target file", 409, "ERR_RESEARCH_RESULT");
         }
-        return upsertResearchRunResult(notebook, {
+        return upsertResearchRunOutput(notebook, {
           workId: body.workId || body.work_id,
+          cellId: body.cellId || body.cell_id,
           runId: body.runId || body.run_id,
+          agent: body.agent,
           status: body.status,
           content: body.content,
         });
+      });
+    },
+    // Compatibility boundary for workers compiled before D-023.
+    writeRunResult(body = {}) {
+      return this.writeRunOutput(body);
+    },
+
+    async migrate(body = {}) {
+      guardWrite();
+      const location = await locate(body.file);
+      return serialized(location.path, async () => {
+        const migrated = await migrateResearchNotebookFile(location.path);
+        const index = migrated.migrated
+          ? await syncIndex(location, { actor: actor(body), reason: "notebook.migrate-d023" })
+          : { index: null, indexError: null };
+        return { ...migrated, ...index };
       });
     },
 
