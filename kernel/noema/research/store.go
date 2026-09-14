@@ -22,7 +22,7 @@ import (
 // StateDirName is the repository-local runtime state directory.
 const StateDirName = ".agent"
 
-const schemaVersion = "16"
+const schemaVersion = "17"
 
 var schemaStatements = []string{
 	`CREATE TABLE IF NOT EXISTS schema_meta (
@@ -195,7 +195,7 @@ var schemaStatements = []string{
 		notebook_id         TEXT,
 		cell_id             TEXT,
 		work_node_id        TEXT,
-		source_kind         TEXT NOT NULL CHECK (source_kind IN ('work-cell', 'prompt-file', 'promoted-session')),
+		source_kind         TEXT NOT NULL CHECK (source_kind IN ('work-cell', 'project-file', 'prompt-file', 'promoted-session')),
 		execution_target    TEXT NOT NULL,
 		status              TEXT NOT NULL CHECK (status IN ('preparing', 'running', 'waiting_permission', 'waiting_input', 'completed', 'cancelled', 'failed', 'interrupted')),
 		spec_artifact_id    TEXT NOT NULL REFERENCES artifacts(id),
@@ -615,11 +615,15 @@ func Open(root string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open research state: %w", err)
 	}
-	db.SetMaxOpenConns(4)
+	// Schema rebuilds use connection-local SQLite pragmas.  No caller can see
+	// this database yet, so keep migration on one connection and widen the pool
+	// only after it succeeds.
+	db.SetMaxOpenConns(1)
 	if err := migrate(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
+	db.SetMaxOpenConns(4)
 	store := &Store{root: clean, db: db}
 	stores[clean] = store
 	return store, nil
@@ -704,9 +708,90 @@ func migrate(db *sql.DB) error {
 			return err
 		}
 	}
+	// Schema v17 added non-agent project-file Runs.  SQLite cannot alter a
+	// CHECK constraint in place, so rebuild the table after all legacy columns
+	// are present.  legacy_alter_table keeps dependent foreign keys pointed at
+	// the final `runs' name while the old table is renamed.
+	if err := migrateRunSourceSchema(db); err != nil {
+		return err
+	}
 	_, err := db.Exec(`INSERT INTO schema_meta(key, value) VALUES('schema_version', ?)
 		ON CONFLICT(key) DO UPDATE SET value = excluded.value`, schemaVersion)
 	return err
+}
+
+func migrateRunSourceSchema(db *sql.DB) error {
+	var tableSQL string
+	err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'runs'`).Scan(&tableSQL)
+	if errors.Is(err, sql.ErrNoRows) || strings.Contains(tableSQL, "'project-file'") {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect Run source constraint: %w", err)
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+		return fmt.Errorf("disable Run migration foreign keys: %w", err)
+	}
+	defer func() { _, _ = db.Exec(`PRAGMA foreign_keys = ON`) }()
+	if _, err := db.Exec(`PRAGMA legacy_alter_table = ON`); err != nil {
+		return fmt.Errorf("enable legacy Run table migration: %w", err)
+	}
+	defer func() { _, _ = db.Exec(`PRAGMA legacy_alter_table = OFF`) }()
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin Run source migration: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	statements := []string{
+		`DROP INDEX IF EXISTS idx_runs_session_active`,
+		`DROP INDEX IF EXISTS one_open_run_per_session`,
+		`DROP INDEX IF EXISTS idx_runs_workstream_created`,
+		`ALTER TABLE runs RENAME TO runs_before_v17`,
+		`CREATE TABLE runs (
+			id                  TEXT PRIMARY KEY CHECK (id LIKE 'run_%'),
+			workstream_id       TEXT NOT NULL REFERENCES workstreams(id),
+			session_id          TEXT REFERENCES sessions(id),
+			notebook_id         TEXT,
+			cell_id             TEXT,
+			work_node_id        TEXT,
+			source_kind         TEXT NOT NULL CHECK (source_kind IN ('work-cell', 'project-file', 'prompt-file', 'promoted-session')),
+			execution_target    TEXT NOT NULL,
+			status              TEXT NOT NULL CHECK (status IN ('preparing', 'running', 'waiting_permission', 'waiting_input', 'completed', 'cancelled', 'failed', 'interrupted')),
+			spec_artifact_id    TEXT NOT NULL REFERENCES artifacts(id),
+			context_artifact_id TEXT REFERENCES artifacts(id),
+			created_at          INTEGER NOT NULL,
+			started_at          INTEGER,
+			finished_at         INTEGER,
+			failure_reason      TEXT NOT NULL DEFAULT '',
+			version             INTEGER NOT NULL DEFAULT 1
+		)`,
+		`INSERT INTO runs(id, workstream_id, session_id, notebook_id, cell_id, work_node_id, source_kind,
+			execution_target, status, spec_artifact_id, context_artifact_id, created_at, started_at, finished_at,
+			failure_reason, version)
+		 SELECT id, workstream_id, session_id, notebook_id, cell_id, work_node_id, source_kind,
+			execution_target, status, spec_artifact_id, context_artifact_id, created_at, started_at, finished_at,
+			failure_reason, version FROM runs_before_v17`,
+		`DROP TABLE runs_before_v17`,
+		`CREATE INDEX idx_runs_session_active ON runs(session_id, status, created_at DESC)`,
+		`CREATE UNIQUE INDEX one_open_run_per_session ON runs(session_id)
+			WHERE session_id IS NOT NULL AND status IN ('preparing', 'running', 'waiting_permission', 'waiting_input')`,
+		`CREATE INDEX idx_runs_workstream_created ON runs(workstream_id, created_at DESC)`,
+	}
+	for _, statement := range statements {
+		if _, err := tx.Exec(statement); err != nil {
+			return fmt.Errorf("migrate Run source schema: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit Run source migration: %w", err)
+	}
+	var violation string
+	if err := db.QueryRow(`SELECT printf('%s:%s:%s', "table", rowid, parent) FROM pragma_foreign_key_check LIMIT 1`).Scan(&violation); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("verify Run source migration: %w", err)
+	} else if violation != "" {
+		return fmt.Errorf("Run source migration left foreign-key violation %s", violation)
+	}
+	return nil
 }
 
 func migrateProposalSchema(db *sql.DB) error {

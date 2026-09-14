@@ -5,6 +5,7 @@ package tools
 
 import (
 	"encoding/base64"
+	"errors"
 	"strings"
 
 	"github.com/aaronhe/noema/kernel/noema/research"
@@ -55,10 +56,69 @@ var ArtifactTool = &Tool{
 	ActionEffects: map[string]ToolEffects{"search": {LocalRead: true}, "read": {LocalRead: true}, "import": {LocalWrite: true}},
 }
 
+// ProposalCreateTool is the only agent-facing write into the research model.
+// It creates an untrusted pending candidate; accepting or materializing that
+// candidate remains a separate human-authority operation outside MCP.
+var ProposalCreateTool = &Tool{
+	Name: "proposal.create", Description: "Submit an untrusted pending Noema Proposal from the current agent Run. This never edits a .noema document or accepts the Proposal.",
+	InputSchema: ToolSchema{Type: "object", Properties: map[string]Property{
+		"root":            {Type: "string", Description: "Absolute Noema repository root"},
+		"runId":           {Type: "string", Description: "Current durable agent Run id"},
+		"workNodeId":      {Type: "string", Description: "WorkNode owned by that Run"},
+		"clientRequestId": {Type: "string", Description: "Stable idempotency key for this candidate"},
+		"kind":            {Type: "string", Description: "Proposal kind", Enum: []string{"cell.create", "finding.create", "research_ir.create", "problem_model.create", "task.create", "job.create", "delegation.create"}},
+		"payload":         {Type: "object", Description: "Untrusted candidate payload; @@ directives remain data until human acceptance"},
+	}, Required: []string{"root", "runId", "workNodeId", "clientRequestId", "kind", "payload"}},
+	Handler:       proposalCreateHandler,
+	ActionEffects: map[string]ToolEffects{"": {LocalWrite: true}},
+}
+
 func init() {
 	register(ResearchCellTool)
 	register(ResearchRunTool)
 	register(ArtifactTool)
+	register(ProposalCreateTool)
+}
+
+func proposalCreateHandler(args map[string]any) (CallToolResult, error) {
+	store, result := researchToolStore(args)
+	if result != nil {
+		return *result, nil
+	}
+	runID, workNodeID := stringArg(args, "runId"), stringArg(args, "workNodeId")
+	run, err := store.GetRun(runID)
+	if err != nil {
+		return historyResearchError(err), nil
+	}
+	if run.SessionID == "" || run.WorkNodeID == "" || run.WorkNodeID != workNodeID {
+		return historyResearchError(errors.New("proposal provenance does not belong to this agent Run")), nil
+	}
+	if run.Status != "running" && run.Status != "waiting_permission" && run.Status != "waiting_input" {
+		return historyResearchError(errors.New("Proposals can be submitted only while their agent Run is active")), nil
+	}
+	rawPayload, ok := args["payload"].(map[string]any)
+	if !ok || rawPayload == nil {
+		return historyResearchError(errors.New("proposal payload must be an object")), nil
+	}
+	payload := make(map[string]any, len(rawPayload)+1)
+	for key, value := range rawPayload {
+		payload[key] = value
+	}
+	// The tool owns this reserved provenance field.  Agent-supplied values
+	// cannot forge another Run or WorkNode association.
+	payload["provenance"] = map[string]any{"run_id": run.ID, "work_node_id": run.WorkNodeID}
+	proposal, err := store.CreateProposal(research.CreateProposalInput{
+		ClientRequestID: stringArg(args, "clientRequestId"), WorkstreamID: run.WorkstreamID,
+		Kind: stringArg(args, "kind"), Payload: payload,
+		ProposedBy: "agent:run/" + run.ID, SourceAdapter: "noema-mcp",
+	})
+	if err != nil {
+		return historyResearchError(err), nil
+	}
+	if proposal.Status != "pending" {
+		return historyResearchError(errors.New("MCP may create only pending Proposals")), nil
+	}
+	return historyResearchJSON(proposal)
 }
 
 func researchCellHandler(args map[string]any) (CallToolResult, error) {

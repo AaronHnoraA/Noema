@@ -501,7 +501,9 @@ func noemaResearchArtifactLinks(c *gin.Context) {
 		return
 	}
 	var workstreamID, notebookID, workNodeID, runID string
-	var limit int
+	// `util.JsonArg' decodes JSON numbers as float64 before binding.  Convert at
+	// the API boundary; binding directly to int rejects ordinary browser calls.
+	var limit float64
 	if !util.ParseJsonArgs(arg, ret,
 		util.BindJsonArg("workstreamId", &workstreamID, false, false),
 		util.BindJsonArg("notebookId", &notebookID, false, false),
@@ -511,7 +513,7 @@ func noemaResearchArtifactLinks(c *gin.Context) {
 		return
 	}
 	links, err := store.ListArtifactLinks(research.ArtifactLinkFilter{
-		WorkstreamID: workstreamID, NotebookID: notebookID, WorkNodeID: workNodeID, RunID: runID, Limit: limit,
+		WorkstreamID: workstreamID, NotebookID: notebookID, WorkNodeID: workNodeID, RunID: runID, Limit: int(limit),
 	})
 	if err != nil {
 		ret.Code, ret.Msg = -1, err.Error()
@@ -746,6 +748,29 @@ func noemaResearchWorkerStart(c *gin.Context) {
 	ret.Data = run
 }
 
+func noemaResearchLocalRunStart(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+	arg, ok := util.JsonArg(c, ret)
+	if !ok {
+		return
+	}
+	store, ok := noemaResearchStore(arg, ret)
+	if !ok {
+		return
+	}
+	input := research.StartLocalRunInput{}
+	if !decodeResearchInput(arg, "start", &input, ret) {
+		return
+	}
+	run, err := store.StartLocalRun(input)
+	if err != nil {
+		ret.Code, ret.Msg = -1, err.Error()
+		return
+	}
+	ret.Data = run
+}
+
 func noemaResearchWorkerAttach(c *gin.Context) {
 	ret := gulu.Ret.NewResult()
 	defer c.JSON(http.StatusOK, ret)
@@ -785,6 +810,29 @@ func noemaResearchWorkerEvents(c *gin.Context) {
 		return
 	}
 	events, err := store.ReportWorkerEvents(input)
+	if err != nil {
+		ret.Code, ret.Msg = -1, err.Error()
+		return
+	}
+	ret.Data = map[string]any{"events": events}
+}
+
+func noemaResearchLocalRunEvents(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+	arg, ok := util.JsonArg(c, ret)
+	if !ok {
+		return
+	}
+	store, ok := noemaResearchStore(arg, ret)
+	if !ok {
+		return
+	}
+	input := research.ReportLocalRunEventsInput{}
+	if !decodeResearchInput(arg, "events", &input, ret) {
+		return
+	}
+	events, err := store.ReportLocalRunEvents(input)
 	if err != nil {
 		ret.Code, ret.Msg = -1, err.Error()
 		return

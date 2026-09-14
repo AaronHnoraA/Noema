@@ -722,6 +722,85 @@ describe("research runtime service", () => {
     expect(reply.artifactErrors).toEqual([]);
   }));
 
+	test("runs a Python project file without an agent and links generated artifacts", async () => withProject(async (root) => {
+	  const researchDir = join(root, "research");
+	  await mkdir(researchDir);
+	  let notebook = createResearchNotebook({ title: "Local experiment" });
+	  const work = createResearchCell(notebook, { kind: "work", title: "Run experiment", source: "Execute the project experiment." });
+	  notebook = work.notebook;
+	  const file = join(researchDir, "experiment.noema");
+	  await writeResearchNotebookFile(file, notebook, { create: true });
+	  const script = join(root, "experiment.py");
+	  await writeFile(script, "from pathlib import Path\nprint('answer=42')\nPath('generated.txt').write_text('artifact')\n");
+	  let durableRun: any;
+	  const provider = {
+		index: vi.fn(async () => ({})),
+		prepareRun: vi.fn(async ({ run }: any) => {
+		  durableRun = { id: "run_project_py", ...run, status: "preparing" };
+		  return durableRun;
+		}),
+		startLocalRun: vi.fn(async () => ({ ...durableRun, status: "running" })),
+		reportLocalRunEvents: vi.fn(async ({ events }: any) => events.events),
+		importArtifact: vi.fn(async () => ({ id: "art_generated" })),
+	  };
+	  const service = createResearchRuntimeService({ getProvider: () => provider as any });
+	  const started = await service.runProjectFile({
+		file, cellId: work.cell.id, root, projectFile: script, interpreter: "python3", confirmed: true,
+	  });
+	  expect(started).toMatchObject({ run: { id: "run_project_py", sourceKind: "project-file", status: "running" } });
+	  expect(started.spec).toMatchObject({
+		source: { kind: "project-file", file: "experiment.py", notebook_file: "research/experiment.noema",
+		  work_node_id: work.workNode.id },
+		executor: { kind: "python", command: "python3" },
+		capabilities: { execute: "ask", write_project: "ask", network: "deny" },
+	  });
+	  await vi.waitFor(() => expect(provider.reportLocalRunEvents.mock.calls.flatMap((call: any) => call[0].events.events)
+		.some((event: any) => event.type === "run.status.changed" && event.payload.status === "completed")).toBe(true));
+	  const reported = provider.reportLocalRunEvents.mock.calls.flatMap((call: any) => call[0].events.events);
+	  expect(reported.some((event: any) => event.type === "run.content.segment" && event.payload.text.includes("answer=42"))).toBe(true);
+	  expect(reported.some((event: any) => event.type === "run.artifact.detected" && event.payload.path === "generated.txt")).toBe(true);
+	  expect(provider.importArtifact).toHaveBeenCalledWith(expect.objectContaining({
+		artifact: expect.objectContaining({ runId: "run_project_py", sourceUri: "noema://file/generated.txt" }),
+	  }));
+	}));
+
+	test("records Jupyter project-file MIME outputs on the same Run", async () => withProject(async (root) => {
+	  const researchDir = join(root, "research");
+	  await mkdir(researchDir);
+	  let notebook = createResearchNotebook({ title: "Notebook experiment" });
+	  const work = createResearchCell(notebook, { kind: "work", title: "Run notebook", source: "Execute all cells." });
+	  notebook = work.notebook;
+	  const file = join(researchDir, "owner.noema");
+	  const projectNotebook = join(root, "experiment.ipynb");
+	  await writeResearchNotebookFile(file, notebook, { create: true });
+	  await writeFile(projectNotebook, JSON.stringify({ nbformat: 4, nbformat_minor: 5, metadata: {}, cells: [] }));
+	  let durableRun: any;
+	  const provider = {
+		index: vi.fn(async () => ({})),
+		prepareRun: vi.fn(async ({ run }: any) => {
+		  durableRun = { id: "run_project_ipynb", ...run, status: "preparing" };
+		  return durableRun;
+		}),
+		startLocalRun: vi.fn(async () => ({ ...durableRun, status: "running" })),
+		reportLocalRunEvents: vi.fn(async ({ events }: any) => events.events),
+		importArtifact: vi.fn(async () => ({ id: "art_notebook" })),
+	  };
+	  const jupyter = { documentExecute: vi.fn(async () => ({ ok: true, results: [{
+		outputs: [{ output_type: "display_data", data: { "text/html": "<b>42</b>", "text/plain": "42" }, metadata: {} }],
+	  }] })) };
+	  const service = createResearchRuntimeService({
+		getProvider: () => provider as any, getJupyterService: () => jupyter as any,
+	  });
+	  await service.runProjectFile({ file, cellId: work.cell.id, root, projectFile: projectNotebook, confirmed: true });
+	  await vi.waitFor(() => expect(provider.reportLocalRunEvents.mock.calls.flatMap((call: any) => call[0].events.events)
+		.some((event: any) => event.type === "run.status.changed")).toBe(true));
+	  expect(jupyter.documentExecute).toHaveBeenCalledWith(expect.objectContaining({
+		scriptFile: projectNotebook, projectRoot: root, mode: "all",
+	  }));
+	  expect(provider.reportLocalRunEvents.mock.calls.flatMap((call: any) => call[0].events.events))
+		.toContainEqual(expect.objectContaining({ type: "run.jupyter.outputs", payload: { outputs: [expect.objectContaining({ output_type: "display_data" })] } }));
+	}));
+
   test("fails closed for Pi denied capabilities without an external sandbox", async () => withProject(async (root) => {
     const researchDir = join(root, "research");
     await mkdir(researchDir);

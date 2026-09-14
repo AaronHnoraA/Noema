@@ -7,6 +7,7 @@ describe("Emacs host API", () => {
     const received: unknown[] = [];
     const handlers = createEmacsApiHandlers({
       apiOpenInEmacs: () => undefined,
+      apiOpenSurface: () => undefined,
       apiSelectJupyterCell: () => undefined,
       apiCurrentFile: () => undefined,
       apiEmacsInputFocus: () => undefined,
@@ -33,6 +34,7 @@ describe("Emacs host API", () => {
     const received: unknown[] = [];
     const handlers = createEmacsApiHandlers({
       apiOpenInEmacs: () => undefined,
+      apiOpenSurface: () => undefined,
       apiSelectJupyterCell: () => undefined,
       apiCurrentFile: () => undefined,
       apiEmacsInputFocus: async (body: unknown) => {
@@ -55,6 +57,7 @@ describe("Emacs host API", () => {
     const received: unknown[] = [];
     const handlers = createEmacsApiHandlers({
       apiOpenInEmacs: () => undefined,
+      apiOpenSurface: () => undefined,
       apiSelectJupyterCell: async (body: unknown) => {
         received.push(body);
         return { ok: true };
@@ -71,5 +74,30 @@ describe("Emacs host API", () => {
 
     await expect(handlers["aaronnote:api:emacs:jupyter-cell"](body)).resolves.toEqual({ ok: true });
     expect(received).toEqual([body]);
+  });
+
+  test("routes hosted surfaces through the Emacs gateway adapter", async () => {
+    const received: unknown[] = [];
+    const handlers = createEmacsApiHandlers({
+      apiOpenInEmacs: () => undefined,
+      apiOpenSurface: async (body: unknown) => {
+        received.push(body);
+        return { ok: true, path: "/config" };
+      },
+      apiSelectJupyterCell: () => undefined,
+      apiCurrentFile: () => undefined,
+      apiEmacsInputFocus: () => undefined,
+      apiEmacsUiState: () => undefined,
+      apiEmacsKey: () => undefined,
+      apiSystemOpen: () => undefined,
+      apiEmacsZotero: () => undefined,
+      apiChooseNotePath: () => undefined,
+    });
+
+    await expect(handlers["aaronnote:api:emacs:surface"]({ path: "/config" })).resolves.toEqual({
+      ok: true,
+      path: "/config",
+    });
+    expect(received).toEqual([{ path: "/config" }]);
   });
 });

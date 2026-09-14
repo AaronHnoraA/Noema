@@ -141,6 +141,21 @@ type StartRunInput struct {
 	RunID     string `json:"runId"`
 }
 
+// StartLocalRunInput crosses the trusted Node-to-kernel boundary for a
+// project-file Run.  It intentionally has no Session or worker lease: the
+// local project runner is owned by the Noema host, not by an ACP agent.
+type StartLocalRunInput struct {
+	RunID string `json:"runId"`
+}
+
+// ReportLocalRunEventsInput persists normalized output from the trusted local
+// project runner.  The store accepts it only for an unattached project-file
+// Run, so it cannot be used to bypass an ACP worker lease.
+type ReportLocalRunEventsInput struct {
+	RunID  string        `json:"runId"`
+	Events []WorkerEvent `json:"events"`
+}
+
 // FailPreparedRunInput is the trusted pre-dispatch cleanup path. It exists so
 // an adapter/configuration/session bootstrap failure cannot strand the unique
 // open Run slot before a worker has started physical execution.
@@ -266,8 +281,9 @@ func (s *Store) PrepareRun(input PrepareRunInput) (Run, error) {
 	if input.Spec == nil {
 		return Run{}, errors.New("run spec is required")
 	}
-	if input.SourceKind == "work-cell" && (input.NotebookID == "" || input.CellID == "" || !strings.HasPrefix(input.WorkNodeID, "wn_")) {
-		return Run{}, errors.New("work-cell runs require notebook, cell, and WorkNode ids")
+	if (input.SourceKind == "work-cell" || input.SourceKind == "project-file") &&
+		(input.NotebookID == "" || input.CellID == "" || !strings.HasPrefix(input.WorkNodeID, "wn_")) {
+		return Run{}, errors.New("work-cell and project-file runs require notebook, cell, and WorkNode ids")
 	}
 
 	contextItems, contextArtifacts, err := s.freezeContextItems(input.ContextItems)
@@ -375,7 +391,7 @@ func (s *Store) PrepareRun(input PrepareRunInput) (Run, error) {
 		SpecArtifactID: specArtifact.ID, ContextArtifactID: contextArtifact.ID, CreatedAt: formatMillis(nowMs), Version: 1}, nil
 }
 
-var runSourceKinds = map[string]bool{"work-cell": true, "prompt-file": true, "promoted-session": true}
+var runSourceKinds = map[string]bool{"work-cell": true, "project-file": true, "prompt-file": true, "promoted-session": true}
 
 // GetRun returns durable state only; it never asks a worker whether a process
 // still exists.
@@ -844,7 +860,57 @@ func (s *Store) StartRun(input StartRunInput) (Run, error) {
 		return Run{}, err
 	}
 	if _, err := appendEvent(tx, Event{Type: "run.started", WorkstreamID: workstreamID, NotebookID: run.NotebookID, CellID: run.CellID,
-		RunID: run.ID, SessionID: input.SessionID}, nowMs, map[string]any{"owner": input.Owner, "epoch": input.Epoch}); err != nil {
+		WorkNodeID: run.WorkNodeID,
+		RunID:      run.ID, SessionID: input.SessionID}, nowMs, map[string]any{"owner": input.Owner, "epoch": input.Epoch}); err != nil {
+		return Run{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Run{}, err
+	}
+	run.Status, run.StartedAt, run.Version = "running", formatMillis(nowMs), run.Version+1
+	return run, nil
+}
+
+// StartLocalRun starts a non-agent project-file execution.  This narrow
+// trusted path is separate from StartRun so an ACP Run always remains fenced
+// by its current Session lease.
+func (s *Store) StartLocalRun(input StartLocalRunInput) (Run, error) {
+	input.RunID = strings.TrimSpace(input.RunID)
+	if input.RunID == "" {
+		return Run{}, errors.New("local run id is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Run{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	run, err := scanRun(tx.QueryRow(runSelect+` WHERE id = ?`, input.RunID))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Run{}, fmt.Errorf("run %q not found", input.RunID)
+		}
+		return Run{}, err
+	}
+	if run.SourceKind != "project-file" || run.SessionID != "" {
+		return Run{}, errors.New("local execution requires an unattached project-file run")
+	}
+	if run.Status != "preparing" {
+		return Run{}, fmt.Errorf("run %q cannot start locally from %s", run.ID, run.Status)
+	}
+	nowMs := time.Now().UTC().Truncate(time.Millisecond).UnixMilli()
+	result, err := tx.Exec(`UPDATE runs SET status = 'running', started_at = ?, version = version + 1 WHERE id = ? AND version = ?`,
+		nowMs, run.ID, run.Version)
+	if err != nil {
+		return Run{}, err
+	}
+	if changed, _ := result.RowsAffected(); changed != 1 {
+		return Run{}, errors.New("local run changed concurrently")
+	}
+	if _, err := appendEvent(tx, Event{Type: "run.started", WorkstreamID: run.WorkstreamID, NotebookID: run.NotebookID,
+		CellID: run.CellID, WorkNodeID: run.WorkNodeID, RunID: run.ID}, nowMs,
+		map[string]any{"owner": "node:project-runner", "local": true}); err != nil {
 		return Run{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -1060,7 +1126,7 @@ func (s *Store) ReportWorkerEvents(input ReportWorkerEventsInput) ([]Event, erro
 			}
 		}
 		event, err := appendEvent(tx, Event{Type: draft.Type, WorkstreamID: workstreamID, NotebookID: run.NotebookID,
-			CellID: run.CellID, RunID: run.ID, SessionID: input.SessionID}, nowMs, payload)
+			CellID: run.CellID, WorkNodeID: run.WorkNodeID, RunID: run.ID, SessionID: input.SessionID}, nowMs, payload)
 		if err != nil {
 			return nil, err
 		}
@@ -1068,6 +1134,106 @@ func (s *Store) ReportWorkerEvents(input ReportWorkerEventsInput) ([]Event, erro
 	}
 	if _, err := tx.Exec(`UPDATE sessions SET last_seen_at = ?, version = version + 1 WHERE id = ?`, nowMs, input.SessionID); err != nil {
 		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// ReportLocalRunEvents is the durable output path for a Noema-hosted script or
+// notebook process.  It accepts only unattached project-file Runs; agent Runs
+// must continue to use ReportWorkerEvents with a live lease.
+func (s *Store) ReportLocalRunEvents(input ReportLocalRunEventsInput) ([]Event, error) {
+	input.RunID = strings.TrimSpace(input.RunID)
+	if input.RunID == "" || len(input.Events) == 0 {
+		return nil, errors.New("local run events require a run and at least one event")
+	}
+	if len(input.Events) > 200 {
+		return nil, errors.New("local run event batch exceeds 200 events")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	run, err := scanRun(tx.QueryRow(runSelect+` WHERE id = ?`, input.RunID))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("run %q not found", input.RunID)
+		}
+		return nil, err
+	}
+	if run.SourceKind != "project-file" || run.SessionID != "" {
+		return nil, errors.New("local events require an unattached project-file run")
+	}
+	if run.Status != "running" {
+		return nil, fmt.Errorf("local run %q cannot accept events from %s", run.ID, run.Status)
+	}
+	nowMs := time.Now().UTC().Truncate(time.Millisecond).UnixMilli()
+	result := make([]Event, 0, len(input.Events))
+	for _, draft := range input.Events {
+		draft.Type = strings.TrimSpace(draft.Type)
+		if !strings.HasPrefix(draft.Type, "run.") || draft.Type == "run.permission.requested" {
+			return nil, fmt.Errorf("unsupported local run event type %q", draft.Type)
+		}
+		payload := draft.Payload
+		if payload == nil {
+			payload = map[string]any{}
+		}
+		if draft.Type == "run.status.changed" {
+			next, _ := payload["status"].(string)
+			next = strings.TrimSpace(next)
+			if !terminalRunStatuses[next] {
+				return nil, fmt.Errorf("invalid local run status %q", next)
+			}
+			if run, err = updateRunStatusTx(tx, run, next, nowMs, runtimeStringValue(payload["failure_reason"])); err != nil {
+				return nil, err
+			}
+			normalized := make(map[string]any, len(payload))
+			for key, value := range payload {
+				if key != "result_text" && key != "transcript_text" {
+					normalized[key] = value
+				}
+			}
+			for _, pending := range []struct {
+				field, kind, mediaType, resultField string
+			}{
+				{"result_text", "handoff", "text/markdown; charset=utf-8", "handoff_artifact_id"},
+				{"transcript_text", "transcript", "text/plain; charset=utf-8", "transcript_artifact_id"},
+			} {
+				content := runtimeStringValue(payload[pending.field])
+				if content == "" {
+					continue
+				}
+				artifact, artifactErr := s.putArtifactBytes(pending.kind, pending.mediaType, []byte(content))
+				if artifactErr != nil {
+					return nil, artifactErr
+				}
+				artifact, artifactErr = ensureArtifactTx(tx, artifact)
+				if artifactErr != nil {
+					return nil, artifactErr
+				}
+				normalized[pending.resultField] = artifact.ID
+				created, artifactErr := appendEvent(tx, Event{Type: "artifact.created", WorkstreamID: run.WorkstreamID,
+					NotebookID: run.NotebookID, CellID: run.CellID, WorkNodeID: run.WorkNodeID, RunID: run.ID}, nowMs,
+					map[string]any{"artifact_id": artifact.ID, "kind": artifact.Kind, "sha256": artifact.SHA256,
+						"media_type": artifact.MediaType, "byte_count": artifact.ByteCount})
+				if artifactErr != nil {
+					return nil, artifactErr
+				}
+				result = append(result, created)
+			}
+			payload = normalized
+		}
+		event, eventErr := appendEvent(tx, Event{Type: draft.Type, WorkstreamID: run.WorkstreamID,
+			NotebookID: run.NotebookID, CellID: run.CellID, WorkNodeID: run.WorkNodeID, RunID: run.ID}, nowMs, payload)
+		if eventErr != nil {
+			return nil, eventErr
+		}
+		result = append(result, event)
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err

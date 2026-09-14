@@ -181,6 +181,8 @@ func ServeAPI(ginServer *gin.Engine) {
 	ginServer.Handle("POST", "/api/noema/research/run/live", model.CheckAuth, noemaResearchRunLive)
 	ginServer.Handle("POST", "/api/noema/research/run/cancel", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, noemaResearchRunCancel)
 	ginServer.Handle("POST", "/api/noema/research/run/fail-preparing", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, noemaResearchRunFailPreparing)
+	ginServer.Handle("POST", "/api/noema/research/run/local-start", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, noemaResearchLocalRunStart)
+	ginServer.Handle("POST", "/api/noema/research/run/local-events", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, noemaResearchLocalRunEvents)
 	ginServer.Handle("POST", "/api/noema/research/artifact/get", model.CheckAuth, noemaResearchArtifactGet)
 	ginServer.Handle("POST", "/api/noema/research/artifact/read", model.CheckAuth, noemaResearchArtifactRead)
 	ginServer.Handle("POST", "/api/noema/research/artifact/import", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, noemaResearchArtifactImport)

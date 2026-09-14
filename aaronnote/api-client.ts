@@ -665,6 +665,7 @@ type NativeApi = {
   };
   emacs?: {
     open?: (body: { file: string; tag?: string; line?: number; col?: number }) => Promise<unknown>;
+    openSurface?: (body: { path: string }) => Promise<unknown>;
     selectJupyterCell?: (body: { scriptFile: string; cellId: string }) => Promise<unknown>;
     currentFile?: (body: string | { file: string; client?: string }) => Promise<unknown>;
     inputFocus?: (body: { client?: string; file?: string }) => Promise<unknown>;
@@ -1477,6 +1478,13 @@ export const api = {
     },
   },
   emacs: {
+    async openSurface(body: { path: string }): Promise<void> {
+      const call = window.aaronnoteApi?.emacs?.openSurface;
+      const result = call
+        ? await call(body)
+        : await callHttpApi("aaronnote:api:emacs:surface", [body], "Open hosted surface failed");
+      ensureOk(result, "Open hosted surface failed");
+    },
     async chooseNotePath(body: Record<string, unknown>): Promise<{
       ok?: boolean;
       canceled: boolean;

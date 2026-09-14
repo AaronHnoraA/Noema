@@ -217,7 +217,7 @@ func TestNoemaResearchRoutes(t *testing.T) {
 		t.Fatalf("unexpected linked artifact import %v", linkedArtifact)
 	}
 	links := call("/api/noema/research/artifact/link/list", map[string]any{
-		"root": root, "workNodeId": "wn_api_question",
+		"root": root, "workNodeId": "wn_api_question", "limit": 100,
 	})
 	linksData, _ := links["data"].(map[string]any)
 	linkValues, _ := linksData["links"].([]any)

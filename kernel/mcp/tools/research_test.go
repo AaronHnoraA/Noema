@@ -128,3 +128,59 @@ func TestResearchRunToolReturnsDurableOutput(t *testing.T) {
 		t.Fatalf("unexpected Run output: %+v", output)
 	}
 }
+
+func TestProposalCreateToolSubmitsPendingCandidateFromActiveRun(t *testing.T) {
+	root, store := researchToolFixture(t)
+	before, err := os.ReadFile(filepath.Join(root, "tools.noema"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.PromoteSession(research.PromoteSessionInput{WorkstreamID: "ws_tools", Adapter: "codex", Transport: "acp",
+		NativeSessionID: "native-proposal", ExecutionTarget: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.PrepareRun(research.PrepareRunInput{WorkstreamID: "ws_tools", SessionID: session.ID,
+		NotebookID: "nb_tools", CellID: "work", WorkNodeID: "wn_tools_work", SourceKind: "work-cell", ExecutionTarget: root,
+		Spec: map[string]any{"schema": "noema.run-spec/1", "prompt": "Propose the next branch"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := store.AcquireLease(research.AcquireLeaseInput{SessionID: session.ID, Owner: "mcp-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.StartRun(research.StartRunInput{SessionID: session.ID, Owner: lease.Owner, Epoch: lease.Epoch, RunID: run.ID}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := proposalCreateHandler(map[string]any{
+		"root": root, "runId": run.ID, "workNodeId": run.WorkNodeID,
+		"clientRequestId": "agent-proposal-1", "kind": "cell.create",
+		"payload": map[string]any{"cell": map[string]any{"title": "Coupling branch", "source": "@@agent(codex)\nTry coupling."},
+			"provenance": map[string]any{"run_id": "run_forged", "work_node_id": "wn_forged"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var proposal research.Proposal
+	decodeToolJSON(t, result, &proposal)
+	provenance, _ := proposal.Payload["provenance"].(map[string]any)
+	if proposal.Status != "pending" || proposal.WorkstreamID != run.WorkstreamID || proposal.ProposedBy != "agent:run/"+run.ID ||
+		provenance["run_id"] != run.ID || provenance["work_node_id"] != run.WorkNodeID {
+		t.Fatalf("MCP Proposal lost authority or provenance: %+v", proposal)
+	}
+	after, err := os.ReadFile(filepath.Join(root, "tools.noema"))
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("proposal.create mutated the authoritative notebook (%v)", err)
+	}
+	wrong, err := proposalCreateHandler(map[string]any{
+		"root": root, "runId": run.ID, "workNodeId": "wn_other", "clientRequestId": "agent-proposal-2",
+		"kind": "finding.create", "payload": map[string]any{"claim": "forged"},
+	})
+	if err != nil || !wrong.IsError || !strings.Contains(wrong.Content[0].Text, "provenance") {
+		t.Fatalf("forged WorkNode provenance was accepted: %+v (%v)", wrong, err)
+	}
+	if tool := GetTool("proposal.create"); tool == nil || !tool.ActionEffects[""].LocalWrite {
+		t.Fatalf("proposal.create is not exposed with a local-write effect: %+v", tool)
+	}
+}

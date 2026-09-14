@@ -43,6 +43,70 @@ func prepareRuntimeRun(t *testing.T, store *Store, session Session, root string)
 	return run
 }
 
+func TestProjectFileRunUsesTrustedLocalLifecycle(t *testing.T) {
+	store, root := openTestStore(t)
+	session := promoteRuntimeSession(t, store, root)
+	run, err := store.PrepareRun(PrepareRunInput{
+		WorkstreamID: session.WorkstreamID, NotebookID: "nb_project", CellID: "c-project",
+		WorkNodeID: "wn_project", SourceKind: "project-file", ExecutionTarget: root,
+		Spec:            map[string]any{"schema": "noema.run-spec/1", "source": map[string]any{"kind": "project-file", "file": "job.py"}},
+		ContextManifest: map[string]any{"schema": "noema.context-manifest/1", "items": []any{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.SessionID != "" || run.Status != "preparing" || run.SourceKind != "project-file" {
+		t.Fatalf("unexpected prepared local run: %+v", run)
+	}
+	if _, err := store.StartRun(StartRunInput{RunID: run.ID}); err == nil {
+		t.Fatal("project-file Run bypassed the dedicated local lifecycle")
+	}
+	started, err := store.StartLocalRun(StartLocalRunInput{RunID: run.ID})
+	if err != nil || started.Status != "running" {
+		t.Fatalf("start local run: %+v (%v)", started, err)
+	}
+	events, err := store.ReportLocalRunEvents(ReportLocalRunEventsInput{RunID: run.ID, Events: []WorkerEvent{
+		{Type: "run.content.segment", Payload: map[string]any{"stream": "stdout", "text": "answer=42\n"}},
+		{Type: "run.status.changed", Payload: map[string]any{"status": "completed", "transcript_text": "answer=42\n"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 3 || events[len(events)-1].WorkNodeID != "wn_project" {
+		t.Fatalf("local events lost output/provenance: %+v", events)
+	}
+	stored, err := store.GetRun(run.ID)
+	if err != nil || stored.Status != "completed" || stored.FinishedAt == "" {
+		t.Fatalf("terminal local run was not durable: %+v (%v)", stored, err)
+	}
+	if _, err := store.ReportLocalRunEvents(ReportLocalRunEventsInput{RunID: run.ID,
+		Events: []WorkerEvent{{Type: "run.content.segment", Payload: map[string]any{"text": "late"}}}}); err == nil {
+		t.Fatal("terminal local Run accepted a late event")
+	}
+}
+
+func TestEquivalentContextManifestHasStableArtifactIdentity(t *testing.T) {
+	store, root := openTestStore(t)
+	session := promoteRuntimeSession(t, store, root)
+	prepare := func() Run {
+		run, err := store.PrepareRun(PrepareRunInput{
+			WorkstreamID: session.WorkstreamID, SourceKind: "promoted-session", ExecutionTarget: root,
+			Spec:            map[string]any{"schema": "noema.run-spec/1"},
+			ContextManifest: map[string]any{"schema": "noema.context-manifest/1"},
+			ContextItems: []ContextItemInput{{Ref: "file:fact.md", ResolvedURI: "noema://file/fact.md",
+				MediaType: "text/markdown", ContentBase64: base64.StdEncoding.EncodeToString([]byte("same source\n"))}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return run
+	}
+	first, second := prepare(), prepare()
+	if first.ContextArtifactID == "" || first.ContextArtifactID != second.ContextArtifactID {
+		t.Fatalf("equivalent parsing changed manifest identity: %q != %q", first.ContextArtifactID, second.ContextArtifactID)
+	}
+}
+
 func TestRunLifecycleUsesCASLeaseAndVersionedPermissions(t *testing.T) {
 	store, root := openTestStore(t)
 	session := promoteRuntimeSession(t, store, root)
@@ -141,6 +205,15 @@ func TestRunLifecycleUsesCASLeaseAndVersionedPermissions(t *testing.T) {
 	if _, err := store.DecidePermission(DecidePermissionInput{PermissionID: permission.ID, OptionID: "reject_once", ExpectedVersion: 1, DecidedBy: "attention"}); err == nil {
 		t.Fatal("a concurrent second decision must lose after the first resolution")
 	}
+	changed, err := store.RequestPermission(RequestPermissionInput{
+		SessionID: session.ID, Owner: lease.Owner, Epoch: lease.Epoch, RunID: run.ID,
+		NativeRequestID: "acp-request-1-changed",
+		Action:          map[string]any{"kind": "edit", "paths": []any{"notes/changed-after-approval.md"}},
+		Options:         permission.Options,
+	})
+	if err != nil || changed.State != "pending" || changed.ID == permission.ID || changed.ActionSHA256 == permission.ActionSHA256 {
+		t.Fatalf("a changed post-approval toolCall must become a fresh permission request: %+v (%v)", changed, err)
+	}
 	events, err := store.ReportWorkerEvents(ReportWorkerEventsInput{
 		SessionID: session.ID, Owner: lease.Owner, Epoch: lease.Epoch, RunID: run.ID,
 		Events: []WorkerEvent{
@@ -148,7 +221,7 @@ func TestRunLifecycleUsesCASLeaseAndVersionedPermissions(t *testing.T) {
 			{Type: "run.status.changed", Payload: map[string]any{"status": "completed"}},
 		},
 	})
-	if err != nil || len(events) != 2 {
+	if err != nil || len(events) != 3 || events[0].Type != "run.output" || events[1].Type != "permission.expired" || events[2].Type != "run.status.changed" {
 		t.Fatalf("worker events failed: %+v (%v)", events, err)
 	}
 	finished, err := store.GetRun(run.ID)
@@ -324,6 +397,21 @@ func TestExpiredLeaseInterruptsRunAndExpiresPermission(t *testing.T) {
 	if _, err := store.RenewLease(RenewLeaseInput{SessionID: session.ID, Owner: lease.Owner, Epoch: lease.Epoch}); err == nil {
 		t.Fatal("expired deleted lease must not renew")
 	}
+	var runCount int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM runs WHERE session_id = ?`, session.ID).Scan(&runCount); err != nil || runCount != 1 {
+		t.Fatalf("lease recovery must not replay a Run automatically: %d (%v)", runCount, err)
+	}
+	continued := prepareRuntimeRun(t, store, session, root)
+	resumedLease, err := store.AcquireLease(AcquireLeaseInput{SessionID: session.ID, Owner: "emacs:reopened"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started, err := store.StartRun(StartRunInput{SessionID: session.ID, Owner: resumedLease.Owner, Epoch: resumedLease.Epoch, RunID: continued.ID}); err != nil || started.Status != "running" {
+		t.Fatalf("an explicit continue after reopening must start a new Run: %+v (%v)", started, err)
+	}
+	if loaded, err := store.GetRun(run.ID); err != nil || loaded.Status != "interrupted" {
+		t.Fatalf("continuing must not rewrite or replay the interrupted Run: %+v (%v)", loaded, err)
+	}
 }
 
 func TestPermissionPolicyHardDeniesAndRememberedRules(t *testing.T) {
@@ -344,6 +432,13 @@ func TestPermissionPolicyHardDeniesAndRememberedRules(t *testing.T) {
 	})
 	if err != nil || hardDenied.State != "resolved" || hardDenied.OptionID != "reject_once" || hardDenied.DecidedBy != "policy" {
 		t.Fatalf("network must be immediately denied: %+v (%v)", hardDenied, err)
+	}
+	pushDenied, err := store.RequestPermission(RequestPermissionInput{
+		SessionID: session.ID, Owner: lease.Owner, Epoch: lease.Epoch, RunID: run.ID, NativeRequestID: "git-push-1",
+		Action: map[string]any{"kind": "execute", "argv": []any{"git", "push", "origin", "main"}}, Options: options,
+	})
+	if err != nil || pushDenied.State != "resolved" || pushDenied.OptionID != "reject_once" || pushDenied.DecidedBy != "policy" {
+		t.Fatalf("git push must be immediately denied without Attention: %+v (%v)", pushDenied, err)
 	}
 	first, err := store.RequestPermission(RequestPermissionInput{
 		SessionID: session.ID, Owner: lease.Owner, Epoch: lease.Epoch, RunID: run.ID, NativeRequestID: "edit-1",

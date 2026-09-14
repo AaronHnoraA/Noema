@@ -1245,12 +1245,22 @@ function loadWikiCompletionIndex(force = false): Promise<WikiIndex> {
   return wikiIndexPromise;
 }
 
+function openHostedSurface(path: string): void {
+  if (serverReaderMode) {
+    window.location.href = path;
+    return;
+  }
+  void api.emacs.openSurface({ path }).catch((error) => {
+    setStatus(error instanceof Error ? error.message : "Could not open hosted surface", true);
+  });
+}
+
 function openWikiPageCreation(title: string): void {
   const url = new URL("/wiki", location.origin);
   url.searchParams.set("new", "1");
   url.searchParams.set("title", title);
   if (currentFile) url.searchParams.set("source", currentFile);
-  window.open(url, "_blank", "noopener");
+  openHostedSurface(`${url.pathname}${url.search}`);
 }
 
 const BUILTIN_SNIPPET_SOURCE = "aaronnote:builtin";
@@ -8811,7 +8821,7 @@ function renderAgendaTool(): void {
   fullAgenda.type = "button";
   fullAgenda.textContent = "Full Agenda";
   fullAgenda.addEventListener("click", () => {
-    window.location.href = "/agenda?view=agenda";
+    openHostedSurface("/agenda?view=agenda");
   });
   subnav.appendChild(fullAgenda);
   rootEl.appendChild(subnav);
@@ -9285,7 +9295,7 @@ function renderLayoutZoomTool(): HTMLElement {
 
 function openConfigurationPage(): void {
   const url = new URL("/config", window.location.origin);
-  window.open(url.toString(), "_blank", "noopener,noreferrer");
+  openHostedSurface(`${url.pathname}${url.search}`);
   setStatus("Opening configuration");
 }
 

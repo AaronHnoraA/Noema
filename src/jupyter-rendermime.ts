@@ -278,6 +278,8 @@ class AaronnoteJsonRenderer extends Widget implements IRenderMime.IRenderer {
 }
 
 class NoemaRunRenderer extends Widget implements IRenderMime.IRenderer {
+	private richOutput: JupyterOutputView | null = null;
+
   constructor() {
     super();
     this.node.className = "cm-noema-run-output";
@@ -285,6 +287,10 @@ class NoemaRunRenderer extends Widget implements IRenderMime.IRenderer {
   }
 
   async renderModel(model: IRenderMime.IMimeModel): Promise<void> {
+	if (this.richOutput) {
+	  this.richOutput();
+	  this.richOutput = null;
+	}
     const raw = model.data[NOEMA_RUN_MIMETYPE];
     let snapshot: any = raw;
     if (typeof raw === "string") {
@@ -317,16 +323,26 @@ class NoemaRunRenderer extends Widget implements IRenderMime.IRenderer {
     const content = events
       .filter((event: any) => event?.type === "run.content.segment" && typeof event?.payload?.text === "string")
       .map((event: any) => event.payload.text).join("");
+	const richOutputs = events
+	  .filter((event: any) => event?.type === "run.jupyter.outputs")
+	  .flatMap((event: any) => Array.isArray(event?.payload?.outputs) ? event.payload.outputs : []);
     const output = document.createElement("div");
     output.className = "cm-noema-run-content";
     if (content) {
       const pre = document.createElement("pre");
       pre.textContent = content;
       output.append(pre);
-    } else {
+	}
+	if (richOutputs.length) {
+	  const rich = document.createElement("div");
+	  rich.className = "cm-noema-run-rich-output";
+	  output.append(rich);
+	  this.richOutput = renderJupyterOutputs(rich, richOutputs);
+	}
+	if (!content && !richOutputs.length) {
       output.textContent = ["completed", "cancelled", "failed", "interrupted"].includes(String(run.status))
-        ? "No streamed assistant text was recorded."
-        : "Waiting for agent output…";
+		? "No project output was recorded."
+		: "Waiting for Run output…";
     }
     const actions = events.filter((event: any) => (
       event?.type === "run.action.updated" || String(event?.type || "").includes("permission")
@@ -342,6 +358,14 @@ class NoemaRunRenderer extends Widget implements IRenderMime.IRenderer {
     }
     this.node.replaceChildren(header, meta, output);
   }
+
+	dispose(): void {
+	  if (this.richOutput) {
+		this.richOutput();
+		this.richOutput = null;
+	  }
+	  super.dispose();
+	}
 }
 
 function jsonMimeTypesForOutput(output: unknown): string[] {

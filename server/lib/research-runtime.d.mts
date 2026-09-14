@@ -20,6 +20,7 @@ type RuntimeMethod = (body?: Record<string, any>) => Promise<Record<string, any>
 export type ResearchRuntimeService = {
   resolveCell: RuntimeMethod;
   prepareRun: RuntimeMethod;
+  runProjectFile: RuntimeMethod;
   runs: RuntimeMethod;
   run: RuntimeMethod;
   liveRun: RuntimeMethod;
@@ -93,6 +94,9 @@ export function createResearchRuntimeService(options?: {
     writeRunOutput?(body?: Record<string, any>): Promise<Record<string, any>>;
     writeRunResult?(body?: Record<string, any>): Promise<Record<string, any>>;
     createCell?(body?: Record<string, any>): Promise<Record<string, any>>;
+  } | null;
+  getJupyterService?: () => {
+    executeScriptCell?(body?: Record<string, any>): Promise<Record<string, any>>;
   } | null;
   getRuntimeDescriptor?: () => Record<string, any> | null;
   defaultRoot?: string;

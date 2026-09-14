@@ -478,6 +478,7 @@ async function resolveResearchKnowledgeNote(id, root) {
 const researchRuntime = createResearchRuntimeService({
   getProvider: () => kernelResearchProvider,
   getNotebookService: () => researchNotebooks,
+	getJupyterService: () => projectedJupyterCell,
   getRuntimeDescriptor: () => noemaKernel,
   defaultRoot: noteRoot,
   resolveKnowledgeNote: resolveResearchKnowledgeNote,
@@ -1766,6 +1767,31 @@ async function apiOpenInEmacs(file, line = 1, col = 0, tag = "") {
   return { ok: true, ...payload };
 }
 
+async function apiOpenSurface(body) {
+  if (hostMode !== "emacs") {
+    return { ok: false, message: "Hosted surfaces require the Emacs host" };
+  }
+  const raw = String((body && typeof body === "object" ? body.path : body) || "").trim();
+  let url;
+  try {
+    url = new URL(raw, "http://noema.invalid");
+  } catch {
+    const err = new Error("Invalid hosted surface path");
+    err.statusCode = 400;
+    throw err;
+  }
+  if (url.origin !== "http://noema.invalid" || !["/config", "/wiki", "/agenda"].includes(url.pathname)) {
+    const err = new Error("Unsupported hosted surface");
+    err.statusCode = 400;
+    throw err;
+  }
+  const path = `${url.pathname}${url.search}`;
+  const queued = gatewayNotify("aaronnote.event", { type: "surface", payload: { path } });
+  return queued
+    ? { ok: true, queued: true, path }
+    : { ok: false, queued: false, path, message: "Emacs gateway is not connected" };
+}
+
 async function apiSelectJupyterCell(body) {
   const source = body && typeof body === "object" ? body : {};
   const scriptFile = resolveShellPath(String(source.scriptFile || source.file || "").trim());
@@ -2279,6 +2305,7 @@ const apiRouter = new ApiRouter().register({
   "aaronnote:api:shell:show-editor-context-menu": () => ({ ok: true }),
   ...createEmacsApiHandlers({
     apiOpenInEmacs,
+    apiOpenSurface,
     apiSelectJupyterCell,
     apiCurrentFile,
     apiEmacsInputFocus,
@@ -2898,6 +2925,7 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
     },
     emacs: {
       open: function(body) { return call("aaronnote:api:emacs:open", [body || {}]); },
+      openSurface: function(body) { return call("aaronnote:api:emacs:surface", [body || {}]); },
       selectJupyterCell: function(body) {
         return call("aaronnote:api:emacs:jupyter-cell", [body || {}]);
       },

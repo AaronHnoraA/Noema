@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { createHash, randomUUID } from "node:crypto";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
@@ -645,13 +645,17 @@ export async function defaultResearchHistorySources(projectRoot, { userHome = ho
 export function createResearchRuntimeService({
   getProvider = () => null,
   getNotebookService = () => null,
+	getJupyterService = () => null,
   getRuntimeDescriptor = () => null,
   defaultRoot = "",
   resolveKnowledgeNote = null,
   historySources = defaultResearchHistorySources,
   deliverWorkerCommand = () => false,
+	spawnProjectProcess = spawn,
 } = {}) {
   const runFileBaselines = new Map();
+	const localRunProcesses = new Map();
+	const localEventQueues = new Map();
   const provider = () => {
     const value = getProvider();
     if (!value) throw researchError("kernel research runtime is unavailable", 503, "ERR_RESEARCH_INDEX");
@@ -668,7 +672,9 @@ export function createResearchRuntimeService({
   async function sourceForRun(root, body) {
     const file = valueString(body.file);
     const promptFile = valueString(body.promptFile || body.prompt_file);
-    if (file && promptFile) throw researchError("A Run has either a work cell or a prompt file, not both", 422, "ERR_RESEARCH_RUN");
+	const projectFileRef = valueString(body.projectFile || body.project_file);
+	if (promptFile && (file || projectFileRef)) throw researchError("A Run has one source, not both a prompt and a project file", 422, "ERR_RESEARCH_RUN");
+	if (projectFileRef && !file) throw researchError("A project-file Run requires its owning .noema file and work cell", 422, "ERR_RESEARCH_RUN");
     if (file) {
       const loaded = await readResearchNotebookFile(file);
       const loadedRoot = await findResearchProjectRoot(loaded.file);
@@ -685,6 +691,28 @@ export function createResearchRuntimeService({
       const notebookId = valueString(notebookMeta.notebook_id);
       if (!workstreamId || !notebookId) throw researchError("Research notebook lacks durable identity", 422, "ERR_RESEARCH_FORMAT");
       const directives = parseResearchDirectives(notebookSource(cell.source), { sourceName: `work cell ${cellId}` });
+	  if (projectFileRef) {
+		const executable = await projectFile(root, projectFileRef);
+		const lower = executable.relative.toLowerCase();
+		if (!lower.endsWith(".py") && !lower.endsWith(".ipynb")) {
+		  throw researchError("Project-file execution supports .py and .ipynb files", 422, "ERR_RESEARCH_PROJECT_FILE");
+		}
+		if (!(await stat(executable.path)).isFile()) {
+		  throw researchError("Project-file execution requires an existing file", 422, "ERR_RESEARCH_PROJECT_FILE");
+		}
+		const bytes = await readFile(executable.path);
+		return {
+		  kind: "project-file", workstreamId, notebookId, cellId, workNodeId: workNode.id,
+		  file: relative(root, loaded.file).split(sep).join("/"), projectFile: executable.relative,
+		  projectPath: executable.path, projectSHA256: `sha256:${sha256(bytes)}`,
+		  projectType: lower.endsWith(".ipynb") ? "jupyter" : "python",
+		  prompt: "", cell, notebook: loaded.notebook,
+		  executor: { ...object(researchMeta(cell).executor) }, context: [],
+		  sourceRef: `noema://file/${executable.relative.split("/").map(encodeURIComponent).join("/")}`,
+		  notebookRevision: loaded.revision,
+		  cellSourceSHA256: `sha256:${sha256(notebookSource(cell.source))}`,
+		};
+	  }
       return {
         kind: "work-cell",
         workstreamId,
@@ -837,6 +865,158 @@ export function createResearchRuntimeService({
     return { agent, policy: "fresh", sessionId: "", mode: "fresh", reason: "no resumable same-agent session" };
   }
 
+	async function localExecutorDescriptor(source, body) {
+	  if (source.projectType === "jupyter") {
+		return { kind: "jupyter", kernel: valueString(body.kernel) || "python3" };
+	  }
+	  const command = valueString(body.interpreter) || "python3";
+	  if (!/^(?:\/[^\0\n]+|[A-Za-z0-9][A-Za-z0-9._+-]*)$/.test(command)) {
+		throw researchError("Python interpreter must be an absolute path or executable name", 422, "ERR_RESEARCH_PROJECT_FILE");
+	  }
+	  let path = command;
+	  if (!isAbsolute(command)) {
+		try {
+		  path = valueString((await execFileAsync("/usr/bin/which", [command], { timeout: 5000 })).stdout);
+		} catch {
+		  throw researchError(`Python interpreter is not installed: ${command}`, 422, "ERR_RESEARCH_PROJECT_FILE");
+		}
+	  }
+	  let version = "unknown";
+	  try {
+		const checked = await execFileAsync(path, ["--version"], { timeout: 5000 });
+		version = valueString(checked.stdout) || valueString(checked.stderr) || version;
+	  } catch (error) {
+		throw researchError(`Python interpreter is not executable: ${error?.message || path}`, 422, "ERR_RESEARCH_PROJECT_FILE");
+	  }
+	  return { kind: "python", command, path, version };
+	}
+
+	async function prepareProjectFileRun(root, source, body) {
+	  const target = await projectDirectory(root, body.executionTarget || body.cwd || root);
+	  const capabilities = normalizeCapabilities(source.executor.capabilities, body.capabilities);
+	  if (valueString(capabilities.execute) === "deny") {
+		throw researchError("Project-file execution is denied by the capability policy", 403, "ERR_RESEARCH_CAPABILITY");
+	  }
+	  const pending = Object.entries(capabilities).filter(([, decision]) => valueString(decision) === "ask").map(([name]) => name);
+	  if (pending.length && body.confirmed !== true) {
+		throw researchError(`Project-file execution requires confirmation for: ${pending.join(", ")}`, 409, "ERR_RESEARCH_CONFIRMATION");
+	  }
+	  const executor = await localExecutorDescriptor(source, body);
+	  const args = values(body.args).map((value) => String(value));
+	  const spec = {
+		schema: "noema.run-spec/1", project_id: await projectIdentity(root), workstream_id: source.workstreamId,
+		source: {
+		  kind: source.kind, uri: source.sourceRef, file: source.projectFile,
+		  notebook_file: source.file, notebook_id: source.notebookId, cell_id: source.cellId,
+		  work_node_id: source.workNodeId, notebook_revision: source.notebookRevision,
+		  cell_source_sha256: source.cellSourceSHA256, content_sha256: source.projectSHA256,
+		},
+		executor, args, execution_target: target, cwd: target, capabilities,
+		outputs: { stream: "run.content.segment", rich: "run.jupyter.outputs", artifacts: "run-file" },
+		created_at: new Date().toISOString(),
+	  };
+	  const prepared = await provider().prepareRun({ root, run: {
+		workstreamId: source.workstreamId, sessionId: "", notebookId: source.notebookId,
+		cellId: source.cellId, workNodeId: source.workNodeId, sourceKind: source.kind,
+		executionTarget: target, spec,
+		contextManifest: { schema: "noema.context-manifest/1", items: [] }, contextItems: [],
+	  }});
+	  const run = object(prepared.run).id ? prepared.run : prepared;
+	  const frozenSpec = object(prepared.spec).run_id ? prepared.spec : { ...spec, run_id: run.id };
+	  if (valueString(run.id)) {
+		runFileBaselines.set(valueString(run.id), { root, run, agent: "local", files: await snapshotProjectFiles(root) });
+	  }
+	  return { root, run, spec: frozenSpec, contextItems: [], routing: { mode: "local", executor } };
+	}
+
+	function reportLocalEvents(root, runId, events) {
+	  const previous = localEventQueues.get(runId) || Promise.resolve();
+	  const next = previous.catch(() => {}).then(() => provider().reportLocalRunEvents({
+		root, events: { runId, events },
+	  }));
+	  localEventQueues.set(runId, next);
+	  void next.finally(() => {
+		if (localEventQueues.get(runId) === next) localEventQueues.delete(runId);
+	  }).catch(() => {});
+	  return next;
+	}
+
+	async function finishLocalRun(root, run, status, { transcript = "", failureReason = "" } = {}) {
+	  const runId = valueString(run.id);
+	  const baseline = runFileBaselines.get(runId);
+	  let detected = { drafts: [], errors: [] };
+	  if (baseline) detected = await detectRunFileArtifacts({ root, run, before: baseline.files, provider: provider() });
+	  const errorText = detected.errors.length
+		? `\nArtifact capture warnings:\n${detected.errors.map((item) => `${item.path}: ${item.message}`).join("\n")}\n`
+		: "";
+	  const events = [...detected.drafts];
+	  if (errorText) events.push({ type: "run.content.segment", payload: { stream: "stderr", text: errorText } });
+	  events.push({ type: "run.status.changed", payload: {
+		status, ...(failureReason ? { failure_reason: failureReason } : {}),
+		...(transcript ? { transcript_text: transcript } : {}),
+	  }});
+	  try {
+		await reportLocalEvents(root, runId, events);
+	  } finally {
+		runFileBaselines.delete(runId);
+		localRunProcesses.delete(runId);
+	  }
+	}
+
+	async function executeProjectFile(root, run, spec) {
+	  const runId = valueString(run.id);
+	  const source = object(spec.source);
+	  const projectPath = join(root, ...valueString(source.file).split("/"));
+	  let transcript = "";
+	  const appendTranscript = (text) => {
+		if (transcript.length < RUN_ARTIFACT_MAX_BYTES) transcript += text.slice(0, RUN_ARTIFACT_MAX_BYTES - transcript.length);
+	  };
+	  try {
+		if (valueString(object(spec.executor).kind) === "jupyter") {
+		  const jupyter = getJupyterService();
+		  if (typeof jupyter?.documentExecute !== "function") throw new Error("Noema Jupyter service is unavailable");
+		  const execution = await jupyter.documentExecute({
+			file: projectPath, sourceFile: projectPath, scriptFile: projectPath, projectRoot: root,
+			kernel: valueString(object(spec.executor).kernel) || "python3", mode: "all",
+		  });
+		  const outputs = values(execution?.results).flatMap((result) => values(result?.outputs));
+		  if (outputs.length) await reportLocalEvents(root, runId, [{ type: "run.jupyter.outputs", payload: { outputs } }]);
+		  const ok = execution?.ok !== false;
+		  await finishLocalRun(root, run, ok ? "completed" : "failed", {
+			failureReason: ok ? "" : "Jupyter execution returned an error",
+		  });
+		  return;
+		}
+		await new Promise((resolveExecution) => {
+		  const child = spawnProjectProcess(valueString(object(spec.executor).path), [projectPath, ...values(spec.args).map(String)], {
+			cwd: valueString(spec.cwd), env: process.env, stdio: ["ignore", "pipe", "pipe"],
+		  });
+		  const state = { process: child, cancelled: false };
+		  localRunProcesses.set(runId, state);
+		  const stream = (name, chunk) => {
+			const text = Buffer.from(chunk).toString("utf8");
+			appendTranscript(text);
+			void reportLocalEvents(root, runId, [{ type: "run.content.segment", payload: { stream: name, text } }]).catch(() => {});
+		  };
+		  child.stdout?.on("data", (chunk) => stream("stdout", chunk));
+		  child.stderr?.on("data", (chunk) => stream("stderr", chunk));
+		  child.once("error", async (error) => {
+			await finishLocalRun(root, run, "failed", { transcript, failureReason: String(error?.message || error) }).catch(() => {});
+			resolveExecution();
+		  });
+		  child.once("close", async (code, signal) => {
+			if (!localRunProcesses.has(runId)) return resolveExecution();
+			const status = state.cancelled ? "cancelled" : code === 0 ? "completed" : "failed";
+			const failureReason = status === "failed" ? `Project process exited with ${signal ? `signal ${signal}` : `code ${code}`}` : "";
+			await finishLocalRun(root, run, status, { transcript, failureReason }).catch(() => {});
+			resolveExecution();
+		  });
+		});
+	  } catch (error) {
+		await finishLocalRun(root, run, "failed", { transcript, failureReason: String(error?.message || error) }).catch(() => {});
+	  }
+	}
+
 	function schedulerLease(body = {}) {
 	  const nested = Object.keys(object(body.lease)).length ? object(body.lease) : body;
 	  return {
@@ -887,7 +1067,7 @@ export function createResearchRuntimeService({
       const root = await rootFor(body);
       const source = await sourceForRun(root, body);
       const runtimeProvider = provider();
-      if (source.kind === "work-cell" && typeof runtimeProvider.index === "function") {
+	  if ((source.kind === "work-cell" || source.kind === "project-file") && typeof runtimeProvider.index === "function") {
         // A canonical document can be opened before this host's rebuildable
         // Go index has ever seen it.  Synchronize the file before any
         // Workstream/Run lookup so first execution works without a dummy save.
@@ -898,6 +1078,7 @@ export function createResearchRuntimeService({
           reason: "run.prepare",
         });
       }
+	  if (source.kind === "project-file") return prepareProjectFileRun(root, source, body);
       const target = await projectDirectory(root, body.executionTarget || body.cwd || root);
       const route = await routeRun(root, source, target, body);
       const declaredContext = [...values(source.context), ...values(body.context)];
@@ -987,6 +1168,15 @@ export function createResearchRuntimeService({
       return { root, run, spec: frozenSpec, contextItems, routing: route };
     },
 
+	async runProjectFile(body = {}) {
+	  const prepared = await this.prepareRun(body);
+	  const run = await provider().startLocalRun({
+		root: prepared.root, start: { runId: valueString(prepared.run?.id) },
+	  });
+	  void executeProjectFile(prepared.root, run, prepared.spec);
+	  return { ...prepared, run };
+	},
+
     async runs(body = {}) {
       const root = await rootFor(body);
       const runs = await provider().runs({
@@ -1023,7 +1213,12 @@ export function createResearchRuntimeService({
         root,
         cancellation: { runId: valueString(body.id || body.runId || body.run_id), requestedBy },
       });
-      const delivered = Boolean(deliverWorkerCommand({
+	  const local = localRunProcesses.get(valueString(run.id));
+	  if (local?.process) {
+		local.cancelled = true;
+		try { local.process.kill("SIGTERM"); } catch {}
+	  }
+	  const delivered = Boolean(local?.process) || Boolean(deliverWorkerCommand({
         type: "run-cancel", root, runId: run.id, sessionId: run.sessionId, requestedBy,
       }));
       return { root, run, delivered };

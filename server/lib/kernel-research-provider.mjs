@@ -125,6 +125,13 @@ export function createKernelResearchProvider({ baseUrl, fetchImpl = globalThis.f
     startRun({ root, start }) {
       return post("worker/start", { root, start });
     },
+	startLocalRun({ root, start }) {
+	  return post("run/local-start", { root, start });
+	},
+	async reportLocalRunEvents({ root, events }) {
+	  const data = await post("run/local-events", { root, events });
+	  return Array.isArray(data.events) ? data.events : [];
+	},
     async reportWorkerEvents({ root, events }) {
       const data = await post("worker/events", { root, events });
       return Array.isArray(data.events) ? data.events : [];

@@ -600,7 +600,7 @@ export function createJupyterCellService({
     const file = jupyterLogicalPath(value);
     const ext = extname(file).toLowerCase();
     const markdownLike = ext === ".md" || ext === ".markdown" || ext === ".mdown" || ext === ".mkd";
-    const projectDocument = ext === ".noema" && validatedProjectRoot(body, file);
+	const projectDocument = (ext === ".noema" || ext === ".ipynb") && validatedProjectRoot(body, file);
     if (!remoteLogicalPath(file)
         && !inside(notes, file) && !inside(workspace, file)
         && !markdownLike && !projectDocument) {
@@ -2077,9 +2077,7 @@ export function createJupyterCellService({
     if (!/(?:\.ipynb|\.noema)$/i.test(scriptFile)) {
       throw error(`Invalid Jupyter/Noema work document: ${scriptFile}`, 400);
     }
-    const projectRoot = /\.noema$/i.test(scriptFile)
-      ? validatedProjectRoot(body, scriptFile)
-      : "";
+	const projectRoot = validatedProjectRoot(body, scriptFile);
     if (!remoteLogicalPath(scriptFile)
         && !inside(notes, scriptFile) && !inside(workspace, scriptFile)
         && !projectRoot) {

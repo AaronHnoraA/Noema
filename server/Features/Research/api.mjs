@@ -18,6 +18,7 @@ const METHODS = Object.freeze({
   "events:list": "events",
 	"cell:resolve": "resolveCell",
   "run:prepare": "prepareRun",
+	"run:project-file": "runProjectFile",
   "run:list": "runs",
   "run:get": "run",
   "run:cancel": "cancelRun",
