@@ -44,7 +44,7 @@ describe("kernel assets provider", () => {
     }]);
   });
 
-  test("desktop runtime delegates path imports to Go without creating a Node copy", async () => {
+  test("host runtime delegates path imports to Go without creating a Node copy", async () => {
     const root = await mkdtemp(join(tmpdir(), "noema-kernel-assets-runtime-"));
     roots.push(root);
     const notes = join(root, "notes");

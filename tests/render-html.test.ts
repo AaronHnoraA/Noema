@@ -7,6 +7,7 @@ import {
   renderMarkdownHTML,
   renderPublishedNoteHTML,
 } from "../src/render-html.ts";
+import { tikzAssetMarkdownPath } from "../shared/tikz-source.mjs";
 
 describe("shared markdown HTML renderer", () => {
   test("renders Wiki links with optional labels while leaving code untouched", () => {
@@ -362,25 +363,38 @@ y^2
     expect(html).not.toContain("<org-env-block");
   });
 
-  test("renders spaced tikz org env as sandboxed TikZJax iframe fallback", () => {
+  test("renders a tikz org env as its locally compiled svg asset", () => {
     const html = renderMarkdownHTML([
-      "#+ begin tikz axis 20260525-120000",
+      "#+ begin tikz axis",
+      "\\draw (0,0) -- (1,1);",
+      "#+ end tikz",
+    ].join("\n"), { noteFile: "/vault/Notes/demo.md" });
+
+    const expected = tikzAssetMarkdownPath("/vault/Notes/demo.md", "axis", "\\draw (0,0) -- (1,1);");
+    expect(expected).toMatch(/^\.\/images\/demo\/tikz-axis-[0-9a-f]{16}\.svg$/);
+    expect(html).toContain("aaronnote-tikz");
+    expect(html).toContain(`src="${expected}"`);
+    expect(html).not.toContain("tikzjax");
+    expect(html).not.toContain("<iframe");
+    expect(html).not.toContain("<org-env-block");
+  });
+
+  test("emits tikz source instead of a broken image when the note is unknown", () => {
+    const html = renderMarkdownHTML([
+      "#+ begin tikz axis",
       "\\draw (0,0) -- (1,1);",
       "#+ end tikz",
     ].join("\n"));
 
-    expect(html).toContain("aaronnote-tikz");
-    expect(html).toContain('class="aaronnote-tikz-embed aaronnote-visual-embed"');
-    expect(html).toContain('sandbox="allow-scripts"');
-    expect(html).toContain("tikzjax.js");
+    expect(html).toContain("aaronnote-tikz-source");
     expect(html).toContain("\\begin{tikzpicture}");
     expect(html).toContain("\\draw (0,0) -- (1,1);");
-    expect(html).not.toContain("<org-env-block");
+    expect(html).not.toContain("<img");
   });
 
-  test("applies image layout attrs to tikz org env fallback", () => {
+  test("applies image layout attrs to a tikz org env", () => {
     const html = renderMarkdownHTML([
-      "#+ begin tikz axis 20260525-120000 {size:320 align:right wrap}",
+      "#+ begin tikz axis {size:320 align:right wrap}",
       "\\draw (0,0) -- (1,1);",
       "#+ end tikz",
     ].join("\n"));
@@ -446,6 +460,8 @@ Body.
 
     expect(html).toContain('src="aaronnote-asset://media/?file=.%2Fimages%2Fplot.png"');
     expect(html).toContain('alt="plot"');
+    expect(html).toContain("aaronnote-image-align-center");
+    expect(html).toContain('data-aaronnote-image-wrap="false"');
   });
 
   test("keeps parent-directory image URLs for asset resolution", () => {

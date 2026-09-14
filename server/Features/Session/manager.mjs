@@ -76,7 +76,7 @@ export class SessionManager {
       // Emacs split panes have stable client ids. Keep their cursor slots
       // independent so focusing/saving one pane cannot replace the other
       // pane's remembered location. Entries without a client remain the
-      // legacy/global desktop slot and preserve backwards compatibility.
+      // legacy/global compatibility slot and preserve backwards compatibility.
       const client = item && typeof item.client === "string"
         ? item.client.trim().slice(0, 256)
         : "";

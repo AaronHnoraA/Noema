@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [iiintop] — Triple integral operator
-# key: iiintop
-# group: Math · Calculus
-# --
-\iiint$0

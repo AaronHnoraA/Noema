@@ -1,9 +1,9 @@
 # Noema MCP
 
-Noema exposes its live kernel as a Streamable HTTP MCP server. The desktop app
-starts that kernel, registers the repository at `~/Documents/Noema` (or
-`NOEMA_ROOT`), and publishes the current loopback endpoint only after the
-repository is ready.
+Noema exposes its live headless kernel as a Streamable HTTP MCP server.  The
+Emacs Noema integration starts and supervises that kernel, registers the
+repository at `~/Documents/Noema` (or `NOEMA_ROOT`), and publishes the current
+loopback endpoint only after the repository is ready.
 
 On macOS, the endpoint descriptor is normally written to:
 
@@ -11,7 +11,7 @@ On macOS, the endpoint descriptor is normally written to:
 ~/Library/Application Support/Noema/state/runtime/mcp.json
 ```
 
-The exact location follows the desktop application's user-data directory. The
+The exact location follows Noema's host state directory. The
 descriptor is mode `0600`, is replaced atomically when the kernel restarts on a
 new port, and is removed when the host stops or loses kernel health. A typical
 descriptor is:
@@ -29,7 +29,7 @@ descriptor is:
 
 Configure an MCP client with the descriptor's `url` and Streamable HTTP
 transport while Noema is running. Do not save a random port in permanent
-configuration: read the descriptor again after an application restart.
+configuration: read the descriptor again after the Emacs/Noema host restarts.
 
 The `document` tool accepts repository-native Markdown paths for the main
 operations:
@@ -41,6 +41,6 @@ operations:
 - `move`: `notebook`, `source_path`, target `path`
 
 These operations read and write the Markdown files in place and refresh the
-same Noema index used by the desktop and Emacs hosts. The MCP endpoint remains
+same Noema index used by Emacs. The MCP endpoint remains
 loopback-only and uses the kernel's normal authentication, administrator, and
 read-only checks.

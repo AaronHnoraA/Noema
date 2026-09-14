@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [vdash] — Proves / turnstile
-# key: vdash
-# group: Math · Logic
-# --
-\vdash$0

@@ -22,7 +22,7 @@ import {
   shortBlockId,
 } from "../shared/block-identity.mjs";
 import { wikiHrefForTarget } from "../shared/wiki-link.mjs";
-import { renderTikzIframe } from "./tikz-render.ts";
+import { renderTikzFigureBody } from "./tikz-render.ts";
 import {
   metaEntryMap,
   metaRoamIndexed,
@@ -51,6 +51,12 @@ declare global {
 
 export type RenderMarkdownHTMLOptions = {
   assetResolver?: (src: string) => string;
+  /**
+   * Note the markdown came from. TikZ blocks compile to an SVG asset beside the
+   * note, so an export needs the note path to resolve them; without it the TeX
+   * source is emitted instead of a silently missing image.
+   */
+  noteFile?: string;
   /** Allow authored HTML, then pass it through the normal Noema sanitizer. */
   allowHtml?: boolean;
   /** Render @@cell command lines as read-only hydration targets instead of hiding them. */
@@ -69,6 +75,8 @@ export type RenderPublishedNoteOptions = {
   private?: boolean;
   includePrivateContent?: boolean;
   assetResolver?: (src: string) => string;
+  /** Source note path; resolves compiled TikZ assets. */
+  noteFile?: string;
   standalone?: {
     styles: string;
     themeId?: string;
@@ -735,11 +743,13 @@ function joinTokenStyle(token: Token, style: string): void {
 function applyImageAttrs(tokens: Token[], idx: number): void {
   const token = tokens[idx]!;
   const next = tokens[idx + 1];
-  if (!next || next.type !== "text") return;
-  const trailing = readImageTrailingAttrs(next.content, 0);
-  if (!trailing) return;
-  const layout = imageLayoutFromAttrs(trailing.attrs);
-  next.content = next.content.slice(trailing.to);
+  const trailing = next?.type === "text" ? readImageTrailingAttrs(next.content, 0) : null;
+  const layout = imageLayoutFromAttrs(trailing?.attrs ?? {});
+  if (trailing && next) next.content = next.content.slice(trailing.to);
+  // Every rendered Markdown image gets the figure baseline, including images
+  // without authored attrs. This keeps live preview, print and standalone HTML
+  // on one centered/max-width contract instead of leaving published images as
+  // browser-default inline replaced elements.
   token.attrJoin("class", imageLayoutClasses(layout));
   token.attrSet("data-aaronnote-image-align", layout.align);
   token.attrSet("data-aaronnote-image-wrap", layout.wrap ? "true" : "false");
@@ -1069,6 +1079,14 @@ function renderSemanticHeading(tokens: Token[], idx: number): string {
   ].join("");
 }
 
+/** The block id from `#+begin tikz <id> [{attrs}]`; names the compiled asset. */
+function tikzTitleId(title: string): string {
+  const raw = String(title || "").trim();
+  const open = raw.indexOf("{");
+  const head = open < 0 ? raw : raw.slice(0, open);
+  return head.split(/\s+/).filter(Boolean)[0] ?? "";
+}
+
 function tikzTitleLayout(title: string): LayoutAttrs {
   const raw = String(title || "").trim();
   const open = raw.indexOf("{");
@@ -1078,7 +1096,12 @@ function tikzTitleLayout(title: string): LayoutAttrs {
   return imageLayoutFromAttrs(trailing.attrs);
 }
 
-function renderOrgEnv(md: MarkdownIt, tokens: Token[], idx: number): string {
+function renderOrgEnv(
+  md: MarkdownIt,
+  tokens: Token[],
+  idx: number,
+  options: RenderMarkdownHTMLOptions = {},
+): string {
   const meta = tokens[idx]!.meta as OrgEnvTokenMeta;
   const kind = meta.kind;
   if (kind.toLowerCase() === "meta") return renderMetaCover(md, meta.body);
@@ -1086,13 +1109,16 @@ function renderOrgEnv(md: MarkdownIt, tokens: Token[], idx: number): string {
     return meta.body.trim() ? `<div class="aaronnote-html">${meta.body}</div>` : "";
   }
   if (kind.toLowerCase() === "tikz") {
+    if (!meta.body.trim()) return "";
     const layout = tikzTitleLayout(meta.title);
-    const classes = classList("aaronnote-tikz", imageLayoutClasses(layout));
+    const classes = classList("aaronnote-tikz", "aaronnote-visual-attachment", imageLayoutClasses(layout));
     const style = imageLayoutStyle(layout);
     const styleAttr = style ? ` style="${escapeAttr(style)}"` : "";
-    return meta.body.trim()
-      ? `<div class="${escapeAttr(classes)}" data-aaronnote-image-align="${escapeAttr(layout.align)}" data-aaronnote-image-wrap="${layout.wrap ? "true" : "false"}"${styleAttr}>${renderTikzIframe(meta.body)}</div>`
-      : "";
+    const body = renderTikzFigureBody(meta.body, tikzTitleId(meta.title), {
+      noteFile: options.noteFile,
+      assetResolver: options.assetResolver,
+    });
+    return `<figure class="${escapeAttr(classes)}" data-aaronnote-image-align="${escapeAttr(layout.align)}" data-aaronnote-image-wrap="${layout.wrap ? "true" : "false"}"${styleAttr}>${body}</figure>`;
   }
   const title = meta.title;
   const blockId = meta.blockId;
@@ -1396,7 +1422,7 @@ function createMarkdownIt(options: RenderMarkdownHTMLOptions): MarkdownIt {
       "</div>",
     ].join("");
   };
-  md.renderer.rules.org_env_block = (tokens, idx) => renderOrgEnv(md, tokens, idx);
+  md.renderer.rules.org_env_block = (tokens, idx) => renderOrgEnv(md, tokens, idx, options);
   md.renderer.rules.semantic_heading_block = renderSemanticHeading;
   md.renderer.rules.front_matter = (tokens, idx, _opts, _env, _renderer) =>
     `<yaml-block><pre>${escapeHtml(tokens[idx]!.content)}</pre></yaml-block>`;
@@ -1500,7 +1526,7 @@ export function renderPublishedNoteHTML(
   const hidden = Boolean(options.private && !options.includePrivateContent);
   const contentHtml = hidden
     ? '<p class="sealed-note-message">This note has been sealed by the administrator.</p>'
-    : renderMarkdownHTML(markdown, { assetResolver: options.assetResolver });
+    : renderMarkdownHTML(markdown, { assetResolver: options.assetResolver, noteFile: options.noteFile });
   const shellClass = classList(
     "aaronnote-shell",
     "published-note-page",

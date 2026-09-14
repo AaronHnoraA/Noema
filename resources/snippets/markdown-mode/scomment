@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Side comment
-# key: scomment
-# group: Noema blocks
-# --
-@@scomment [$1] $0

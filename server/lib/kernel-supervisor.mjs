@@ -123,7 +123,7 @@ export function resolveKernelLaunchConfig({
     };
   }
 
-  const workingDir = resolve(env.NOEMA_KERNEL_WD || join(runtimeRoot, "app"));
+  const workingDir = resolve(env.NOEMA_KERNEL_WD || join(runtimeRoot, "kernel-resources"));
   if (!existsSync(join(workingDir, "appearance", "langs"))) {
     return {
       enabled: false,

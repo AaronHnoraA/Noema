@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [deriv] — Derivative
-# key: deriv
-# group: Math · Calculus
-# --
-\frac{d${1:f}}{d${2:x}}$0

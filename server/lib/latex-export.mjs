@@ -661,6 +661,7 @@ export function latexMacrosPackage(macros, features = {}) {
     "\\RequirePackage[normalem]{ulem}",
     "\\RequirePackage{xcolor}",
     features.usesTikz ? "\\RequirePackage{tikz}" : "",
+    features.usesWrapfig ? "\\RequirePackage{wrapfig}" : "",
     String.raw`% Pandoc body compatibility
 \makeatletter
 \@ifundefined{c@none}{\newcounter{none}}{}

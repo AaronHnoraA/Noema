@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { realpathSync, statSync } from "node:fs";
 import {
   mkdir as nativeMkdir,
   readFile as nativeReadFile,
@@ -350,9 +351,9 @@ export function createJupyterCellService({
   const jupyterStateRoot = stateRoot
     ? join(resolve(stateRoot), "jupyter")
     : join(jupyterRoot, ".jupyter");
-  // `jupyterRoot` is immutable application source. Desktop state belongs
-  // under the host state root; otherwise an installed App can accidentally
-  // consume or mutate historical `.jupyter` files in the source/Emacs tree.
+  // `jupyterRoot` is immutable source. Runtime state belongs under the host
+  // state root so it cannot consume or mutate historical `.jupyter` files in
+  // the source/Emacs tree.
   const dataDir = join(jupyterStateRoot, "data");
   const runtimeDir = join(jupyterStateRoot, "runtime");
   const kernelIdleTtlMs = durationFromEnv("AARONNOTE_JUPYTER_KERNEL_IDLE_TTL_MS", 10 * 60 * 1000);
@@ -477,7 +478,7 @@ export function createJupyterCellService({
   async function getRegistry() {
     if (!registryPromise) {
       registryPromise = (async () => {
-        // Packaged desktop state starts empty. The connection file and owned
+        // A fresh host state directory starts empty. The connection file and owned
         // kernel sidecar are the first Jupyter writes, so the registry cannot
         // assume its runtime directory was created by an earlier bootstrap.
         await nativeMkdir(runtimeDir, { recursive: true });
@@ -516,9 +517,8 @@ export function createJupyterCellService({
           searchDirs: kernelSearchDirs(),
           allowedNames,
           fallbackKernelDirs: [bundledKernelTemplates],
-          // `stateRoot` is supplied only by the standalone desktop adapter.
-          // Preserve the Emacs broker/generated-spec ordering while reserving
-          // Noema's stable bundled names in the desktop host.
+          // A host-owned state root reserves Noema's stable bundled kernel
+          // names while preserving the broker/generated-spec ordering.
           preferFallbackKernelDirs: Boolean(stateRoot),
           templateVariables: {
             AARONNOTE_JUPYTER_ROOT: jupyterRoot,
@@ -584,14 +584,16 @@ export function createJupyterCellService({
     return `${jupyterLogicalPath(file)}\0${cleanToken(kernel, "python3")}`;
   }
 
-  function safeNoteFile(raw) {
+  function safeNoteFile(raw, body = {}) {
     const value = String(raw || "").trim();
     if (!value) throw error("Missing note file", 400);
     const file = jupyterLogicalPath(value);
     const ext = extname(file).toLowerCase();
     const markdownLike = ext === ".md" || ext === ".markdown" || ext === ".mdown" || ext === ".mkd";
+    const projectDocument = ext === ".noema" && validatedProjectRoot(body, file);
     if (!remoteLogicalPath(file)
-        && !inside(notes, file) && !inside(workspace, file) && !markdownLike) {
+        && !inside(notes, file) && !inside(workspace, file)
+        && !markdownLike && !projectDocument) {
       throw error(`Note file is outside the allowed root: ${file}`, 403);
     }
     return file;
@@ -2025,15 +2027,37 @@ export function createJupyterCellService({
   // over this service's registry/notebook functions; no protocol request is
   // delegated to Emacs.
 
+  function validatedProjectRoot(body, scriptFile) {
+    const requested = String(
+      body?.projectRoot || documentSessions.get(scriptFile)?.projectRoot || "",
+    ).trim();
+    if (!requested || remoteLogicalPath(requested) || remoteLogicalPath(scriptFile)) return "";
+    try {
+      const projectRoot = realpathSync(resolve(requested));
+      const documentFile = realpathSync(resolve(scriptFile));
+      const manifest = realpathSync(join(projectRoot, "noema.toml"));
+      if (!inside(projectRoot, documentFile)
+          || !inside(projectRoot, manifest)
+          || !statSync(manifest).isFile()) return "";
+      return projectRoot;
+    } catch {
+      return "";
+    }
+  }
+
   function managedScriptFile(body = {}) {
     const raw = String(body?.scriptFile || "").trim();
     if (!raw) throw error("Missing Jupyter scriptFile", 400);
     const scriptFile = jupyterLogicalPath(raw);
-    if (!/\.ipynb$/i.test(scriptFile)) {
-      throw error(`Invalid Jupyter scriptFile: ${scriptFile}`, 400);
+    if (!/(?:\.ipynb|\.noema)$/i.test(scriptFile)) {
+      throw error(`Invalid Jupyter/Noema work document: ${scriptFile}`, 400);
     }
+    const projectRoot = /\.noema$/i.test(scriptFile)
+      ? validatedProjectRoot(body, scriptFile)
+      : "";
     if (!remoteLogicalPath(scriptFile)
-        && !inside(notes, scriptFile) && !inside(workspace, scriptFile)) {
+        && !inside(notes, scriptFile) && !inside(workspace, scriptFile)
+        && !projectRoot) {
       throw error(`Notebook is outside the allowed root: ${scriptFile}`, 403);
     }
     return scriptFile;
@@ -2046,13 +2070,14 @@ export function createJupyterCellService({
 
   async function managedDocument(body = {}) {
     const scriptFile = managedScriptFile(body);
+    const projectRoot = validatedProjectRoot(body, scriptFile);
     const existing = await readExistingHiddenScript(scriptFile, "", files);
     if (!existing.notebook) throw error(`Jupyter notebook not found: ${scriptFile}`, 404);
     const notebook = existing.notebook;
     const noema = notebookPrivateMetadata(notebook);
     const kernelspec = notebook.metadata?.kernelspec || {};
     const languageInfo = notebook.metadata?.language_info || {};
-    const noteFile = safeNoteFile(noema.source_file || body?.sourceFile || scriptFile);
+    const noteFile = safeNoteFile(noema.source_file || body?.sourceFile || scriptFile, body);
     const portableKernel = cleanToken(kernelspec.name || body?.kernel, "python3");
     const liveSession = documentSessions.get(scriptFile) || {};
     const kernel = cleanToken(liveSession.kernel || portableKernel, portableKernel);
@@ -2061,7 +2086,8 @@ export function createJupyterCellService({
     const sessionId = `session-${createHash("sha256").update(scriptFile).digest("hex").slice(0, 24)}`;
     const value = {
       scriptFile, noteFile, notebook, text: existing.text, kernel, portableKernel,
-      session, language, sessionId, detached: liveSession.detached === true,
+      session, language, sessionId, projectRoot,
+      detached: liveSession.detached === true,
     };
     rememberDocumentSession(scriptFile, {
       ...liveSession,
@@ -2071,6 +2097,7 @@ export function createJupyterCellService({
       session,
       language,
       sessionId,
+      projectRoot,
     });
     return value;
   }
@@ -2087,6 +2114,7 @@ export function createJupyterCellService({
       file: context.noteFile,
       scriptFile: context.scriptFile,
       sourceFile: context.noteFile,
+      ...(context.projectRoot ? { projectRoot: context.projectRoot } : {}),
       kernel: context.kernel,
       session: context.session,
       language: context.language,
@@ -2108,8 +2136,8 @@ export function createJupyterCellService({
       const revision = codeRevision(code);
       // Notebook metadata persists only a kernelRuntime stamp.  Reattach the
       // live runtime when the same kernel generation still exists so the
-      // standalone Jupyter workspace can restore ipywidget comms just like
-      // Noema's in-editor Cell renderer does.
+      // Emacs-owned Jupyter output view can restore ipywidget comms just like
+      // Noema's in-document Cell renderer does.
       const saved = attachLiveRuntimeFromRecord(
         notebookOutput(cell, { includeRuntimeStamp: true }) || {},
         record,
@@ -2138,6 +2166,7 @@ export function createJupyterCellService({
       document: {
         scriptFile: context.scriptFile,
         sourceFile: context.noteFile,
+        ...(context.projectRoot ? { projectRoot: context.projectRoot } : {}),
         language: context.language,
         kernel: context.detached ? "" : context.kernel,
         session: context.session,
@@ -2409,6 +2438,13 @@ export function createJupyterCellService({
       const action = String(body?.action || "");
       const cellId = markerId(body?.cellId || body?.id);
       if (["insertAbove", "insertBelow", "duplicate", "moveUp", "moveDown", "delete", "split", "mergeAbove", "mergeBelow"].includes(action)) {
+        // A `.noema` file is edited through the Emacs-native JuText surface.
+        // The browser document page is retained only as the rich Jupyter
+        // output renderer; letting it mutate cells would create a second UI
+        // authority and bypass WorkNode/dependency invariants.
+        if (/\.noema$/i.test(context.scriptFile)) {
+          throw error("Edit .noema work-document structure in Emacs", 400);
+        }
         return await mutateManagedDocument(context, cellId, action, body);
       }
       const request = managedBody(context, { cellId });

@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [succeq] — Succeeds or equal
-# key: succeq
-# group: Math · Relations
-# --
-\succeq$0

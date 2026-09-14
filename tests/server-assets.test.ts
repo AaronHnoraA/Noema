@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, test } from "@voidzero-dev/vite-plus-test";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { tmpdir } from "node:os";
 
 // @ts-ignore The server is a Node ESM module outside the TS app graph.
-import { assetRefsFromContent, scanUnusedAssets, storeAssetFromPath } from "../server/lib/assets.mjs";
+import { assetRefsFromContent, renderTikzAsset, scanUnusedAssets, storeAssetFromPath } from "../server/lib/assets.mjs";
+import { tikzAssetFileName } from "../shared/tikz-source.mjs";
 // @ts-ignore The server is a Node ESM module outside the TS app graph.
 import { resolveMediaFile } from "../server/lib/media.mjs";
 // @ts-ignore The server is a Node ESM module outside the TS app graph.
@@ -87,6 +88,33 @@ describe("server asset refs", () => {
     expect(msg.isImage).toBe(true);
     expect(msg.markdownPath).toBe("./images/topic/plot.png");
     expect(await readFile(join(notes, "images", "topic", "plot.png"), "utf8")).toBe("PNGDATA");
+  });
+
+  test("revalidates and reuses a content-addressed TikZ SVG while sweeping stale variants", async () => {
+    const root = await mkdtemp(join(tmpdir(), "noema-tikz-cache-"));
+    roots.push(root);
+    const notes = join(root, "notes");
+    const note = join(notes, "topic.md");
+    const assetDir = join(notes, "images", "topic");
+    const source = "\\draw (0,0) -- (1,1);";
+    const current = tikzAssetFileName("axis", source);
+    const stale = tikzAssetFileName("axis", "\\draw (0,0) -- (2,2);");
+    await mkdir(assetDir, { recursive: true });
+    await writeFile(note, "# Topic\n", "utf8");
+    await writeFile(join(assetDir, current), '<svg width="72pt" height="36pt" viewBox="0 0 72 36"></svg>', "utf8");
+    await writeFile(join(assetDir, stale), '<svg width="20pt" height="20pt"></svg>', "utf8");
+    await writeFile(join(assetDir, "tikz-axis.svg"), '<svg width="20pt" height="20pt"></svg>', "utf8");
+    configure({ root: notes, workspaceRoot: root, stateRoot: join(root, "state"), tmpRoot: join(root, "tmp") });
+
+    const result = await renderTikzAsset({ file: note, id: "axis", source });
+
+    expect(result).toMatchObject({
+      ok: true,
+      rendered: false,
+      markdownPath: `./images/topic/${current}`,
+      intrinsic: { widthEm: 7.227, heightEm: 3.613 },
+    });
+    expect(await readdir(assetDir)).toEqual([current]);
   });
 
   test("resolves parent-directory media paths relative to the current note", async () => {

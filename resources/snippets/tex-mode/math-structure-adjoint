@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [adjoint] — Adjoint
-# key: adjoint
-# group: Math · Recent notes
-# --
-${1:A}^{\dagger}$0

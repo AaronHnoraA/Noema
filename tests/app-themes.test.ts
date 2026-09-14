@@ -11,7 +11,7 @@ import {
 
 const themeRoot = resolve(process.cwd(), "src", "styles", "themes");
 
-describe("packaged Noema themes", () => {
+describe("Noema renderer themes", () => {
   test("discovers selectable themes from the manifest without a JS theme list", () => {
     const manifest = JSON.parse(readFileSync(resolve(themeRoot, "themes.json"), "utf8"));
     expect(NOEMA_APP_THEMES).toEqual(manifest.themes);
@@ -45,7 +45,7 @@ describe("packaged Noema themes", () => {
     for (const id of ["daylight", "midnight"]) {
       const adapter = effectiveThemeCss(resolve(themeRoot, `${id}.css`));
       const source = readFileSync(resolve(
-        process.cwd(), "app", "appearance", "themes", id, "theme.css",
+        process.cwd(), "kernel-resources", "appearance", "themes", id, "theme.css",
       ), "utf8");
       const expected = b3Definitions(source);
       const actual = b3Definitions(adapter);

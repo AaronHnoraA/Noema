@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Blackboard symbol
-# key: bb
-# group: Noema local
-# --
-\mathbb{${1:A}}$0

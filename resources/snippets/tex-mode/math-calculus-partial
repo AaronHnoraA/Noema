@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [partial] — Partial derivative symbol
-# key: partial
-# group: Math · Calculus
-# --
-\partial$0

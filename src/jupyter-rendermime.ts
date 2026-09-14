@@ -24,6 +24,7 @@ import "@jupyterlab/rendermime/style/base.css";
 import "@jupyterlab/outputarea/style/base.css";
 
 const WIDGET_VIEW_MIMETYPE = "application/vnd.jupyter.widget-view+json";
+export const NOEMA_RUN_MIMETYPE = "application/vnd.noema.run+json";
 
 export type JupyterWidgetRuntimeRef = {
   id: string;
@@ -276,6 +277,65 @@ class AaronnoteJsonRenderer extends Widget implements IRenderMime.IRenderer {
   }
 }
 
+class NoemaRunRenderer extends Widget implements IRenderMime.IRenderer {
+  constructor() {
+    super();
+    this.node.className = "cm-noema-run-output";
+    this.node.setAttribute("aria-readonly", "true");
+  }
+
+  async renderModel(model: IRenderMime.IMimeModel): Promise<void> {
+    const raw = model.data[NOEMA_RUN_MIMETYPE];
+    let snapshot: any = raw;
+    if (typeof raw === "string") {
+      try { snapshot = JSON.parse(raw); } catch { snapshot = null; }
+    }
+    if (!snapshot || typeof snapshot !== "object" || !snapshot.run) {
+      this.node.textContent = "Invalid Noema Run snapshot.";
+      return;
+    }
+    const run = snapshot.run as Record<string, unknown>;
+    const events = Array.isArray(snapshot.events) ? snapshot.events : [];
+    const header = document.createElement("header");
+    const title = document.createElement("strong");
+    title.textContent = `Run ${String(run.id || "")}`;
+    const status = document.createElement("span");
+    status.className = "cm-noema-run-status";
+    status.dataset.status = String(run.status || "unknown");
+    status.textContent = String(run.status || "unknown");
+    header.append(title, status);
+    const meta = document.createElement("div");
+    meta.className = "cm-noema-run-meta";
+    meta.textContent = [run.agent, run.sessionId, snapshot.seq ? `seq ${snapshot.seq}` : ""]
+      .filter(Boolean).map(String).join(" · ");
+    const content = events
+      .filter((event: any) => event?.type === "run.content.segment" && typeof event?.payload?.text === "string")
+      .map((event: any) => event.payload.text).join("");
+    const output = document.createElement("div");
+    output.className = "cm-noema-run-content";
+    if (content) {
+      const pre = document.createElement("pre");
+      pre.textContent = content;
+      output.append(pre);
+    } else {
+      output.textContent = ["completed", "cancelled", "failed", "interrupted"].includes(String(run.status))
+        ? "No streamed assistant text was recorded."
+        : "Waiting for agent output…";
+    }
+    const actions = events.filter((event: any) => event?.type === "run.action.updated");
+    if (actions.length > 0) {
+      const details = document.createElement("details");
+      const summary = document.createElement("summary");
+      summary.textContent = `${actions.length} action update${actions.length === 1 ? "" : "s"}`;
+      const pre = document.createElement("pre");
+      pre.textContent = JSON.stringify(actions.map((event: any) => event.payload), null, 2);
+      details.append(summary, pre);
+      output.append(details);
+    }
+    this.node.replaceChildren(header, meta, output);
+  }
+}
+
 function jsonMimeTypesForOutput(output: unknown): string[] {
   const data = output && typeof output === "object" ? (output as { data?: unknown }).data : null;
   if (!data || typeof data !== "object") return [];
@@ -383,6 +443,11 @@ export function createBaseRenderMime(options: Pick<RenderMimeOptions, "markdownP
     mimeTypes: ["text/html"],
     createRenderer: (rendererOptions) => new AaronnoteHtmlRenderer(rendererOptions),
   }, 1);
+  registry.addFactory({
+    safe: true,
+    mimeTypes: [NOEMA_RUN_MIMETYPE],
+    createRenderer: () => new NoemaRunRenderer(),
+  }, 5);
   registry.addFactory({
     safe: true,
     mimeTypes: ["application/json"],

@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [limto] — Limit to
-# key: limto
-# group: Math · Calculus
-# --
-\lim_{${1:x}\to ${2:a}} ${3:f(x)}$0

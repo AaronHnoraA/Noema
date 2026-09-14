@@ -1,5 +1,5 @@
 /**
- * Shared Noema backend for the Emacs/Appine and Tauri adapters.
+ * Headless Noema backend for the Emacs UI and its CM6/Appine surfaces.
  *
  * Noema owns the editable CodeMirror document in the browser.  Emacs only
  * starts this host, opens the local URL in its system webview, and receives
@@ -221,12 +221,23 @@ import { ApiRouter } from "./server/infrastructure/api-router.mjs";
 import { readJson, readText } from "./server/infrastructure/http-body.mjs";
 import { createAssetsApiHandlers } from "./server/Features/Assets/api.mjs";
 import { createEmacsApiHandlers } from "./server/Features/Emacs/api.mjs";
-import { openInVSCode } from "./server/lib/external-editor.mjs";
 import { createFilesystemApiHandlers } from "./server/Features/Filesystem/api.mjs";
 import { createJupyterApiHandlers } from "./server/Features/Jupyter/api.mjs";
 import { createProseApiHandlers } from "./server/Features/Prose/api.mjs";
 import { createSessionApiHandlers } from "./server/Features/Session/api.mjs";
 import { createTasksApiHandlers } from "./server/Features/Tasks/api.mjs";
+import { createResearchApiHandlers } from "./server/Features/Research/api.mjs";
+import { createKernelResearchProvider } from "./server/lib/kernel-research-provider.mjs";
+import { createResearchNotebookService } from "./server/lib/research-notebook.mjs";
+import { createResearchRuntimeService } from "./server/lib/research-runtime.mjs";
+import { pumpResearchRunStream } from "./server/lib/research-run-stream.mjs";
+import { createResearchCaptureService } from "./server/lib/research-capture.mjs";
+import { captureRequestAuthorized, ensureCaptureToken } from "./server/lib/capture-token.mjs";
+import {
+  createResearchNotebookWatchReconciler,
+  researchNotebookWatchDirectory,
+  researchNotebookWatchFile,
+} from "./server/lib/research-watch.mjs";
 
 const ime = createImeSwitcher();
 import { runtimeMkdtemp, sweepRuntimeTmp } from "./server/lib/tmp.mjs";
@@ -258,9 +269,7 @@ const execFileAsync = promisify(execFile);
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const requestedHostMode = String(process.env.AARONNOTE_HOST_MODE || "emacs").trim().toLowerCase();
-const hostMode = requestedHostMode === "desktop" || requestedHostMode === "server"
-  ? requestedHostMode
-  : "emacs";
+const hostMode = requestedHostMode === "server" ? "server" : "emacs";
 const serverConfig = hostMode === "server"
   ? await readServerRuntimeConfig(process.env.NOEMA_SERVER_CONFIG)
   : null;
@@ -274,7 +283,8 @@ const workspaceLayout = serverConfig ? "wiki" : wikiLayout(process.env.NOEMA_WOR
 const publishJsDir = resolve(process.env.AARONNOTE_PUBLISH_JS_DIR || join(runtimeRoot, "js"));
 const stateRoot = serverConfig
   ? resolve(serverConfig.stateRoot, "runtime")
-  : resolve(process.env.AARONNOTE_STATE_DIR || join(workspaceRoot, "var", "aaronnote"));
+  : resolve(process.env.AARONNOTE_STATE_DIR
+    || join(process.env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "noema"));
 const tmpRoot = resolve(process.env.AARONNOTE_TMP_DIR || join(stateRoot, "tmp"));
 const snippetsRoot = resolve(process.env.AARONNOTE_SNIPPETS_ROOT || (serverConfig ? join(runtimeRoot, "resources", "snippets") : join(workspaceRoot, "snippets")));
 const templatesRoot = resolve(process.env.AARONNOTE_TEMPLATES_ROOT || (serverConfig ? join(runtimeRoot, "resources", "templates", "noema") : join(workspaceRoot, "templates", "noema")));
@@ -301,6 +311,7 @@ const liuGongQuanFontCandidates = [
 
 mkdirSync(noteRoot, { recursive: true });
 mkdirSync(tmpRoot, { recursive: true });
+const captureToken = hostMode === "server" ? "" : await ensureCaptureToken(stateRoot);
 
 const serverTheme = serverConfig ? noemaAppTheme(serverConfig.appearance.theme) : null;
 const serverAppConfig = serverConfig ? {
@@ -439,10 +450,50 @@ configure({
 let kernelKnowledgeSearch = null;
 let kernelRelationshipOverlay = null;
 let kernelMarkdownProvider = null;
+let kernelResearchProvider = null;
+// Research notebooks are file-authoritative; the kernel only indexes them.
+// Public server hosts expose them read-only.
+const researchNotebooks = createResearchNotebookService({
+  getIndexer: () => kernelResearchProvider,
+  allowWrite: hostMode !== "server",
+});
+
+async function resolveResearchKnowledgeNote(id, root) {
+  if (resolve(root) !== resolve(noteRoot)) {
+    throw Object.assign(new Error("Knowledge note context must use the active Noema repository"), { statusCode: 403 });
+  }
+  const matches = (await scanRoamNotes()).filter((note) => String(note?.id || "") === String(id));
+  if (matches.length !== 1) {
+    throw Object.assign(new Error(matches.length ? `Knowledge note id is ambiguous: ${id}` : `Knowledge note not found: ${id}`),
+      { statusCode: matches.length ? 409 : 404 });
+  }
+  const opened = await readNote(matches[0].file);
+  const content = String(opened?.content || "");
+  const meta = /^\s*#\+begin\s+meta\s*\r?\n([\s\S]*?)\r?\n\s*#\+end\s+meta\s*$/im.exec(content)?.[1] || "";
+  const disclosure = /^\s*disclosure\s*:\s*['"]?([^\s'"]+)/im.exec(meta)?.[1] || "";
+  return { id, content, disclosure: disclosure.toLowerCase(), uri: `noema://note/${encodeURIComponent(id)}`,
+    mediaType: "text/markdown; charset=utf-8" };
+}
+
+const researchRuntime = createResearchRuntimeService({
+  getProvider: () => kernelResearchProvider,
+  getNotebookService: () => researchNotebooks,
+  getRuntimeDescriptor: () => noemaKernel,
+  defaultRoot: noteRoot,
+  resolveKnowledgeNote: resolveResearchKnowledgeNote,
+  deliverWorkerCommand: (payload) => gatewayNotify("aaronnote.event", { type: "research-worker", payload }),
+});
+const researchCaptures = createResearchCaptureService({
+  getProvider: () => kernelResearchProvider,
+  root: noteRoot,
+});
 
 function applyKernelState(next) {
   noemaKernel = next;
   const ready = next?.state === "listening" && next.box;
+  kernelResearchProvider = next?.state === "listening" && next.baseUrl
+    ? createKernelResearchProvider({ baseUrl: next.baseUrl })
+    : null;
   kernelMarkdownProvider = ready
     ? createKernelMarkdownProvider({ baseUrl: next.baseUrl, box: next.box })
     : null;
@@ -557,48 +608,9 @@ async function rebuildServerPublicCatalog({ sync = false } = {}) {
   return serverPublicCatalog;
 }
 
-/**
- * Remote Jupyter servers for standalone (non-Emacs) host modes, from
- * `AARONNOTE_JUPYTER_SERVERS`: a JSON array of
- * `{ id, displayName, url, kind, auth, token, password, user,
- *    allowUnauthorized, serverName }`.
- *
- * There is no Remote framework here, so every server must already be
- * reachable from this machine; `target` is accepted and ignored so one config
- * can be shared with Emacs host mode.
- */
-function standaloneJupyterServerHost() {
-  const raw = String(process.env.AARONNOTE_JUPYTER_SERVERS || "").trim();
-  if (!raw) return undefined;
-  let entries;
-  try {
-    entries = JSON.parse(raw);
-  } catch (ex) {
-    process.stderr.write(`[aaronnote-jupyter] AARONNOTE_JUPYTER_SERVERS is not valid JSON: ${ex?.message || ex}\n`);
-    return undefined;
-  }
-  if (!Array.isArray(entries) || entries.length === 0) return undefined;
-  const byId = new Map(entries.filter((entry) => entry?.id).map((entry) => [String(entry.id), entry]));
-  return {
-    async listServers() {
-      return Array.from(byId.values()).map((entry) => ({
-        id: String(entry.id),
-        displayName: String(entry.displayName || entry.id),
-        url: String(entry.url || ""),
-        kind: String(entry.kind || "server"),
-        target: "local",
-      }));
-    },
-    async resolveServer(serverId) {
-      return byId.get(String(serverId));
-    },
-    async releaseServer() {},
-  };
-}
-
 const projectedJupyterCell = hostMode === "server" ? null : createJupyterCellService({
   runtimeRoot,
-  ...(hostMode === "desktop" ? { stateRoot } : {}),
+  stateRoot,
   noteRoot,
   workspaceRoot,
   stdout: process.stdout,
@@ -607,8 +619,8 @@ const projectedJupyterCell = hostMode === "server" ? null : createJupyterCellSer
   openFile: ({ file, line, col }) => apiOpenInEmacs(file, line, col),
   toolEnvironment: workspaceEnvironment.environment,
   // Live output and session changes ride the same SSE stream.  Session
-  // snapshots are also forwarded to Emacs so both UIs consume one Noema-owned
-  // document/session authority.
+  // snapshots are also forwarded to Emacs so the host and CM6 consume one
+  // Noema-owned document/session authority.
   publish: (event, payload) => {
     broadcast(event, payload);
     if (event === "jupyter-session") {
@@ -693,11 +705,10 @@ const projectedJupyterCell = hostMode === "server" ? null : createJupyterCellSer
       );
     },
   } : undefined,
-  // Remote Jupyter servers. In Emacs host mode the broker only resolves the
+  // Remote Jupyter servers. The Emacs broker only resolves the
   // configured endpoint, auth-source secret, and Remote route. Noema owns the
-  // server sessions and kernel registry. Standalone desktop mode reads the
-  // same shape from the environment so the two hosts do not diverge.
-  serverHost: hostMode === "emacs" ? {
+  // server sessions and kernel registry.
+  serverHost: {
     async listServers() {
       const result = await gatewayRequest("aaronnote.jupyter.server.list", {}, 30_000);
       return Array.isArray(result?.servers) ? result.servers : [];
@@ -710,7 +721,7 @@ const projectedJupyterCell = hostMode === "server" ? null : createJupyterCellSer
     async releaseServer(serverId) {
       return await gatewayRequest("aaronnote.jupyter.server.release", { serverId }, 30_000);
     },
-  } : standaloneJupyterServerHost(),
+  },
 });
 
 function displayOnlyJupyterService(projection) {
@@ -781,9 +792,9 @@ const serverJupyterProjection = hostMode === "server" ? {
   async shutdown() {},
 } : null;
 
-// Desktop and Emacs-hosted Noema use the same native JS Jupyter service.
-// Emacs may broker filesystem/process placement, but it is never a kernel
-// client and never owns protocol state.
+// The Emacs-owned rich-output renderer uses the native JS Jupyter service.
+// Emacs owns the visible controls and workspace; Node owns Jupyter protocol
+// state and streams rendering events to that specialized right-side view.
 const jupyterCell = projectedJupyterCell
   || (serverJupyterProjection
     ? displayOnlyJupyterService(serverJupyterProjection)
@@ -1007,7 +1018,7 @@ function createWikiAutoSyncScheduler() {
       // Register repositories at boot, but do not checkpoint/fetch every Git
       // working tree merely because either host opened. Local writes call
       // mark(), explicit sync calls syncNow(), and the daily remote pass stays
-      // armed. This is shared host policy for both Noema.app and Emacs.
+      // armed. This is shared policy for the Emacs and public-reader hosts.
       syncOnStart: false,
       maxConcurrency: 2,
       sync: (repositoryId) => syncWikiRepository(noteRoot, repositoryId),
@@ -1144,19 +1155,30 @@ function scheduleNextServerRepositorySync() {
 }
 let serverRepositorySyncTimer = scheduleNextServerRepositorySync();
 
+const researchNotebookWatch = createResearchNotebookWatchReconciler({
+  root: noteRoot,
+  snapshot: (body) => researchNotebooks.snapshot(body),
+  onError(error, file) {
+    process.stderr.write(`[noema-research-watch] ${file}: ${error?.message || error}\n`);
+  },
+});
+
 const noteWatcher = hostMode !== "server" && process.env.AARONNOTE_WATCH !== "0"
   ? startNoteWatcher({
       root: noteRoot,
       isRelevant: (file) =>
         notePathWatchRelevant(file)
         || bibliographyPathWatchRelevant(file)
+        || Boolean(researchNotebookWatchFile(noteRoot, resolve(noteRoot, file)))
         || (workspaceLayout === "wiki" && Boolean(wikiRepositoryIdForFile(file))),
       isDirectoryRelevant: (file) =>
         notePathWatchRelevant(file)
         || bibliographyPathWatchRelevant(file)
+        || Boolean(researchNotebookWatchDirectory(noteRoot, resolve(noteRoot, file)))
         || (workspaceLayout === "wiki" && Boolean(wikiRepositoryIdForFile(file))),
       isSelfWrite: (file) => noteSelfWriteRecently(file),
       onBatch(files) {
+        void researchNotebookWatch.filesChanged(files);
         const noteFiles = files.filter((file) => notePathWatchRelevant(file));
         const bibFiles = files.filter((file) => bibliographyPathWatchRelevant(file));
         for (const file of noteFiles) markNotesDirty(file);
@@ -1173,6 +1195,7 @@ const noteWatcher = hostMode !== "server" && process.env.AARONNOTE_WATCH !== "0"
         }
       },
       onFullRescan() {
+        void researchNotebookWatch.fullRescan();
         markNotesDirty();
         clearBibliographyCache();
         broadcast("command", { command: "notes-index-changed", version: notesIndexVersionValue() });
@@ -1271,8 +1294,8 @@ const appConfigWatcher = hostMode === "server" ? { close() {} } : watch(noemaApp
 });
 
 // SSE keepalives protect Server-mode connections from idle-timeout proxies.
-// Desktop and Emacs connect over loopback, so a heartbeat there only wakes
-// Node, the networking process and the renderer for no liveness benefit.
+// Emacs-owned local renderers connect over loopback, so a heartbeat there
+// only wakes Node, the networking process and the renderer for no benefit.
 let sseHeartbeatInterval = null;
 
 function stopSseHeartbeatIfIdle() {
@@ -1398,6 +1421,7 @@ async function beginShutdown({ reason = "shutdown", exitCode = 0, deadlineMs = 3
         Promise.resolve().then(() => rendererBuildWatcher.close()),
         Promise.resolve().then(() => appConfigWatcher.close()),
         Promise.resolve().then(() => noteWatcher.close()),
+        Promise.resolve().then(() => researchNotebookWatch.close()),
         wikiAutoSync?.close({ flush: true }),
         Promise.resolve().then(() => jupyterKernelWs?.close()),
         jupyterCell?.shutdown(),
@@ -1415,27 +1439,6 @@ async function beginShutdown({ reason = "shutdown", exitCode = 0, deadlineMs = 3
 process.on("SIGTERM", () => beginShutdown({ reason: "SIGTERM", exitCode: 0, deadlineMs: 30_000 }));
 process.on("SIGINT", () => beginShutdown({ reason: "SIGINT", exitCode: 0 }));
 process.on("exit", () => kernelSupervisor?.forceCloseSync());
-
-// Tauri's shell sidecar API does not provide a portable SIGTERM operation.
-// The desktop adapter therefore requests the same graceful path over the
-// sidecar's private stdin pipe and only force-kills after its own watchdog.
-if (hostMode === "desktop") {
-  let desktopControlBuffer = "";
-  process.stdin.setEncoding("utf8");
-  process.stdin.on("data", (chunk) => {
-    desktopControlBuffer = `${desktopControlBuffer}${chunk}`.slice(-1024);
-    for (;;) {
-      const newline = desktopControlBuffer.indexOf("\n");
-      if (newline < 0) break;
-      const command = desktopControlBuffer.slice(0, newline).trim();
-      desktopControlBuffer = desktopControlBuffer.slice(newline + 1);
-      if (command === "shutdown") {
-        void beginShutdown({ reason: "desktop-shutdown", exitCode: 0, deadlineMs: 30_000 });
-      }
-    }
-  });
-  process.stdin.resume();
-}
 
 const MIME = {
   ".css": "text/css; charset=utf-8",
@@ -1757,18 +1760,21 @@ async function openDirectory(body) {
 
 async function apiOpenInEmacs(file, line = 1, col = 0, tag = "") {
   const target = resolveShellPath(file);
-  if (hostMode === "desktop") {
-    const result = await openInVSCode({ file: target, line, col, tag });
-    if (!result.ok) {
-      const error = new Error(result.message || "Open in VS Code failed");
-      error.statusCode = 500;
-      throw error;
-    }
-    return result;
-  }
   const payload = { file: target, line, col };
   if (tag) payload.tag = String(tag);
   gatewayNotify("aaronnote.event", { type: "open", payload });
+  return { ok: true, ...payload };
+}
+
+async function apiSelectJupyterCell(body) {
+  const source = body && typeof body === "object" ? body : {};
+  const scriptFile = resolveShellPath(String(source.scriptFile || source.file || "").trim());
+  const cellId = String(source.cellId || "").trim();
+  if (!scriptFile || !cellId) {
+    throw new Error("Selecting a Jupyter cell requires scriptFile and cellId");
+  }
+  const payload = { scriptFile, cellId };
+  gatewayNotify("aaronnote.event", { type: "jupyter-cell-select", payload });
   return { ok: true, ...payload };
 }
 
@@ -2200,6 +2206,7 @@ const apiRouter = new ApiRouter().register({
     return { type: "core-task-started", ok: true, task };
   },
   ...createTasksApiHandlers(coreTasks),
+  ...createResearchApiHandlers({ ...researchNotebooks, ...researchRuntime }),
   "aaronnote:api:notes:meta-add": async (body) => applyWikiMutationResult(
     await updateCurrentNoteMeta(body || {}, "add"),
   ),
@@ -2272,6 +2279,7 @@ const apiRouter = new ApiRouter().register({
   "aaronnote:api:shell:show-editor-context-menu": () => ({ ok: true }),
   ...createEmacsApiHandlers({
     apiOpenInEmacs,
+    apiSelectJupyterCell,
     apiCurrentFile,
     apiEmacsInputFocus,
     apiEmacsUiState,
@@ -2732,18 +2740,6 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
     }
     return originalFetch(input, init);
   };
-  window.AaronnoteDesktop = {
-    chooseNotePath: function(options) { return call("aaronnote:api:emacs:choose-note-path", [options || {}]); },
-    trashNote: function(file) { return call("aaronnote:api:notes:delete", [String(file || "")]); },
-    exportPdf: function() { return Promise.resolve({ok: false, canceled: true, message: "PDF export is not available in the Emacs web host yet"}); },
-    ready: function() {},
-    onOpenFile: function(handler) {
-      if (typeof handler !== "function") return function() {};
-      var listener = function(event) { handler(String(event.detail && event.detail.file || "")); };
-      window.addEventListener("aaronnote:open-file", listener);
-      return function() { window.removeEventListener("aaronnote:open-file", listener); };
-    }
-  };
   window.aaronnoteApi = {
     connection: {
       status: function() { return currentConnectionStatus(); },
@@ -2835,6 +2831,9 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
       tasks: function() { return call("aaronnote:api:jupyter-cell:tasks", []); },
       cleanup: function(body) { return call("aaronnote:api:jupyter-cell:cleanup", [body || {}]); }
     },
+    research: {
+      resolveCell: function(body) { return call("aaronnote:api:research:cell:resolve", [body || {}]); },
+    },
     latex: {
       defaults: function(body) { return call("aaronnote:api:latex:defaults", [body || {}]); },
       agentStatus: function() { return call("aaronnote:api:latex:agent-status", []); },
@@ -2899,6 +2898,9 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
     },
     emacs: {
       open: function(body) { return call("aaronnote:api:emacs:open", [body || {}]); },
+      selectJupyterCell: function(body) {
+        return call("aaronnote:api:emacs:jupyter-cell", [body || {}]);
+      },
       currentFile: function(file) {
         return call("aaronnote:api:emacs:current-file", [
           file && typeof file === "object" ? file : String(file || "")
@@ -3300,6 +3302,63 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    if (url.pathname === "/api/noema/research/run/stream" && req.method === "GET") {
+      if (hostMode === "server") {
+        sendText(res, 404, "Not found");
+        return;
+      }
+      const runId = String(url.searchParams.get("run") || url.searchParams.get("run_id") || "").trim();
+      if (!runId.startsWith("run_")) {
+        sendJson(res, 400, { ok: false, message: "A durable run id is required" });
+        return;
+      }
+      const root = String(url.searchParams.get("root") || noteRoot);
+      const after = Math.max(0, Number(url.searchParams.get("after")) || 0);
+      let closed = false;
+      req.on("close", () => { closed = true; });
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache, no-transform",
+        "Connection": "keep-alive",
+      });
+      res.write("retry: 1000\n\n");
+      try {
+        await pumpResearchRunStream({
+          service: researchRuntime, root, runId, after, closed: () => closed,
+          write(snapshot) {
+            if (!closed) sendSse(res, "snapshot", snapshot);
+          },
+        });
+      } catch (error) {
+        if (!closed) sendSse(res, "error", { message: String(error?.message || error) });
+      }
+      if (!closed) res.end();
+      return;
+    }
+
+    if ((url.pathname === "/v1/captures" || url.pathname === "/v1/imports/conversations")
+        && hostMode !== "server") {
+      if (!captureRequestAuthorized(req.headers.authorization, captureToken)) {
+        sendJson(res, 401, { ok: false, message: "A valid Noema capture bearer token is required" });
+        return;
+      }
+      if (url.pathname === "/v1/captures" && req.method === "GET") {
+        sendJson(res, 200, { ok: true, ...(await researchCaptures.list({ limit: url.searchParams.get("limit") })) });
+        return;
+      }
+      if (req.method !== "POST") {
+        sendJson(res, 405, { ok: false, message: "Method not allowed" });
+        return;
+      }
+      const body = await readJson(req, url.pathname.includes("imports") ? 44 * 1024 * 1024 : 12 * 1024 * 1024);
+      if (url.pathname === "/v1/captures") {
+        sendJson(res, 201, { ok: true, ...(await researchCaptures.create(body)) });
+      } else {
+        sendJson(res, 201, { ok: true, ...(await researchCaptures.importOfficial(body)) });
+      }
+      return;
+    }
+
     if (url.pathname === "/api/clipboard") {
       if (hostMode === "server") {
         sendText(res, 404, "Not found");
@@ -3333,17 +3392,6 @@ const server = createServer(async (req, res) => {
       }
     }
 
-    if (url.pathname === "/api/desktop-smoke" && req.method === "POST") {
-      if (hostMode !== "desktop" || process.env.NOEMA_DESKTOP_SMOKE !== "1") {
-        sendText(res, 404, "Not found");
-        return;
-      }
-      const report = await readJson(req, 64 * 1024);
-      process.stdout.write(`[noema-desktop-smoke] ${JSON.stringify(report)}\n`);
-      sendJson(res, 200, { ok: true });
-      return;
-    }
-
     if (url.pathname === "/api" && req.method === "POST") {
       const body = await readJson(req);
       const result = await callApi(String(body.channel || ""), body.args);
@@ -3366,16 +3414,11 @@ const server = createServer(async (req, res) => {
         return;
       }
       if (body.type === "jupyter-cell") {
-        const payload = {
-          scriptFile: String(body.scriptFile || ""),
-          cellId: String(body.cellId || ""),
-        };
-        if (!payload.scriptFile || !payload.cellId) {
+        try {
+          sendJson(res, 200, await apiSelectJupyterCell(body));
+        } catch (error) {
           sendJson(res, 400, { ok: false, message: "Missing Jupyter scriptFile or cellId" });
-          return;
         }
-        gatewayNotify("aaronnote.event", { type: "jupyter-cell-select", payload });
-        sendJson(res, 200, { ok: true, ...payload });
         return;
       }
       sendJson(res, 400, { ok: false, message: "Unknown event type" });

@@ -197,7 +197,7 @@ func TestDocumentTemplatesWaitForDatabaseIndex(t *testing.T) {
 	Conf.NotebookCrypto = conf.NewNotebookCrypto()
 	Conf.Sync = conf.NewSync()
 	Conf.Lang = "en"
-	util.WorkingDir = filepath.Clean(filepath.Join("..", "..", "app"))
+	util.WorkingDir = filepath.Clean(filepath.Join("..", "..", "kernel-resources"))
 	initLang()
 
 	box := &Box{ID: "20260728000000-abcdefg"}

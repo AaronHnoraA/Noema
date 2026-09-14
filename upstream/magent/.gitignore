@@ -1,0 +1,41 @@
+# Compiled files
+*.elc
+*.eln
+
+# Package files
+*.tar
+*.tar.gz
+*.zip
+
+# Backup files
+*~
+\#*\#
+.\#*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test artifacts
+test-output/
+coverage/
+docs/_site/
+/_site/
+
+# Session files
+.emacs.desktop
+.emacs.desktop.lock
+auto-save-list
+/.agent-shell/
+/helper/node_modules/
+/helper/package-lock.json
+/.codex
+/magent-autoloads.el
+/magent-pkg.el
+/lisp/magent-autoloads.el

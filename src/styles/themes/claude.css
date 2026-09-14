@@ -1,7 +1,7 @@
 /*
  * Claude — a warm editorial light theme.
  */
-@import "../../../app/appearance/themes/daylight/theme.css";
+@import "../../../kernel-resources/appearance/themes/daylight/theme.css";
 
 :root[data-noema-theme="claude"],
 :root[data-noema-theme="daylight"] {
@@ -110,9 +110,7 @@
   --aaron-radius-2: 10px;
 }
 
-:root[data-noema-theme="claude"] .noema-desktop-titlebar,
 :root[data-noema-theme="claude"] .aaronnote-status-pill,
-:root[data-noema-theme="daylight"] .noema-desktop-titlebar,
 :root[data-noema-theme="daylight"] .aaronnote-status-pill {
   box-shadow: none;
 }

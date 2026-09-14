@@ -8,6 +8,8 @@ export type SelfContainedHtmlOptions = {
   themeId?: string;
   alternateThemeId?: string;
   assetResolver?: (src: string) => string;
+  /** Source note path; resolves compiled TikZ assets. */
+  noteFile?: string;
   document?: Document;
   fetch?: typeof fetch;
   baseUrl?: string;
@@ -126,6 +128,7 @@ export async function createSelfContainedNoteHTML(
     kind: options.kind,
     root: "./",
     assetResolver: options.assetResolver,
+    noteFile: options.noteFile,
     standalone: {
       styles,
       themeId: options.themeId,

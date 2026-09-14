@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [geq] — Greater than or equal
-# key: geq
-# group: Math · Relations
-# --
-\geq$0

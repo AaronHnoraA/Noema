@@ -55,7 +55,6 @@ func IsReleaseVer(ver string) bool {
 var (
 	RunInContainer             = false // 是否运行在容器中
 	SiYuanAccessAuthCodeBypass = false // 是否跳过空锁屏密码检查
-	AttachUI                   = false // 是否绑定桌面 UI 进程生命周期（Electron 拉起时为 true，手动 serve 为 false）
 	EnablePprof                = false // 是否注册未鉴权的调试端点，仅调试时显式开启，切勿在对外开放的实例上使用
 )
 
@@ -127,18 +126,17 @@ func Boot() {
 	readOnly := flag.String("readonly", "false", "read-only mode")
 	accessAuthCode := flag.String("accessAuthCode", "", "access auth code")
 	ssl := flag.Bool("ssl", false, "for https and wss")
-	attachUI := flag.Bool("attach-ui", false, "attach kernel lifecycle to desktop UI process (used by Electron)")
 	lang := flag.String("lang", "", "ar/de/en/es/fr/he/hi/id/it/ja/ko/nl/pl/pt-BR/ru/sk/th/tr/uk/zh-CN/zh-TW")
 	mode := flag.String("mode", "prod", "dev/prod")
 	enablePprof := flag.Bool("enable-pprof", false, "enable unauthenticated /debug/pprof/ endpoints (dev only, never on a network-exposed instance)")
 	safeMode := flag.Bool("safe-mode", false, "boot in safe mode")
 	flag.Parse()
 
-	BootWithFlags(*workspacePath, *wdPath, *port, *readOnly, *accessAuthCode, *lang, *mode, *ssl, *attachUI, *safeMode, *enablePprof)
+	BootWithFlags(*workspacePath, *wdPath, *port, *readOnly, *accessAuthCode, *lang, *mode, *ssl, *safeMode, *enablePprof)
 }
 
 // BootWithFlags 接收已解析好的启动参数，完成环境变量回退、全局变量赋值、工作空间初始化与加锁等启动收尾工作。Boot()（标准库 flag 解析）和 serve 子命令（cobra 解析）都走这个统一入口。
-func BootWithFlags(workspacePath, wdPath, port, readOnly, accessAuthCode, lang, mode string, ssl, attachUI, safeMode, enablePprof bool) {
+func BootWithFlags(workspacePath, wdPath, port, readOnly, accessAuthCode, lang, mode string, ssl, safeMode, enablePprof bool) {
 	SafeMode = safeMode
 	EnablePprof = enablePprof
 	// Fallback to env vars if commandline args are not set
@@ -154,7 +152,6 @@ func BootWithFlags(workspacePath, wdPath, port, readOnly, accessAuthCode, lang, 
 	Mode = mode
 	ServerPort = port
 	ReadOnly, _ = strconv.ParseBool(readOnly)
-	AttachUI = attachUI
 	AccessAuthCode = accessAuthCode
 	AccessAuthCode = RemoveInvalid(AccessAuthCode)
 	AccessAuthCode = strings.TrimSpace(AccessAuthCode)
@@ -171,7 +168,7 @@ func BootWithFlags(workspacePath, wdPath, port, readOnly, accessAuthCode, lang, 
 
 	InitWorkspace(workspacePath, wdPath)
 
-	// 必须在 InitWorkspace 之后：此时 WorkingDir 才被 --wd 参数修正为真实工作目录（如 app\resources），否则会用进程 CWD 误判微软商店版标记文件
+	// 必须在 InitWorkspace 之后：此时 WorkingDir 才被 --wd 参数修正为真实内核资源目录，否则会用进程 CWD 误判微软商店版标记文件
 	msStoreFilePath := filepath.Join(WorkingDir, "ms-store")
 	ISMicrosoftStore = gulu.File.IsExist(msStoreFilePath)
 
@@ -385,7 +382,7 @@ func initWorkspaceDir(workspaceArg string) {
 }
 
 // ensureWorkspaceDir never redirects an explicit --workspace to another
-// application's data. Noema desktop normally pre-creates its kernel workspace,
+// application's data. The Noema host normally pre-creates its kernel workspace,
 // but direct serve invocations must be equally safe when the final directory is
 // absent. Registry/default selections retain the historical fallback behavior.
 func ensureWorkspaceDir(selected, fallback string, explicit bool) (ret string, err error) {

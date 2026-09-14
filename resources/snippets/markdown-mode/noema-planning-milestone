@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Noema planning milestone
-# key: apmile
-# group: Noema planning DSL
-# --
-@@milestone ${1:Milestone} {id: `(my/noema-new-id "block")`}$0

@@ -190,11 +190,8 @@ function targetInHost(host: HTMLElement, target: EventTarget | null): boolean {
 }
 
 function primaryOnly(event: KeyInput): boolean {
-  const windowsDesktop = window.noemaDesktop?.platform === "win32";
-  const primary = windowsDesktop
-    ? event.ctrlKey && !event.metaKey
-    : (event.metaKey && !event.ctrlKey)
-      || (!/Mac/.test(navigator.platform) && event.ctrlKey && !event.metaKey);
+  const primary = (event.metaKey && !event.ctrlKey)
+    || (!/Mac/.test(navigator.platform) && event.ctrlKey && !event.metaKey);
   return primary && !event.altKey;
 }
 
@@ -1428,9 +1425,7 @@ export function setupCopilot(context: Context): () => void {
           const openedUri = res && typeof res === "object" && "openedUri" in res
             ? String((res as { openedUri?: unknown }).openedUri || "")
             : "";
-          if (openedUri && window.noemaDesktop?.openExternal) {
-            await window.noemaDesktop.openExternal(openedUri);
-          }
+          if (openedUri) window.open(openedUri, "_blank", "noopener,noreferrer");
           const code = res && typeof res === "object" && "userCode" in res ? String((res as { userCode?: unknown }).userCode || "") : "";
           if (code) {
             await navigator.clipboard?.writeText(code);

@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [mathfrak] — Fraktur
-# key: mathfrak
-# group: Math · Styles
-# --
-\mathfrak{${1:g}}$0

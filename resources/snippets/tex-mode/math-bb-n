@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [bbN] — Natural numbers
-# key: bbN
-# group: Math · Blackboard
-# --
-\mathbb{N}$0

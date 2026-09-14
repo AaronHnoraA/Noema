@@ -1,7 +1,7 @@
 /*
  * Mediki — a cool, information-dense medical Wiki theme.
  */
-@import "../../../app/appearance/themes/daylight/theme.css";
+@import "../../../kernel-resources/appearance/themes/daylight/theme.css";
 
 :root[data-noema-theme="mediki"] {
   color-scheme: light;

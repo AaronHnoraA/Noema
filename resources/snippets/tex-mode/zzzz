@@ -1,7 +1,0 @@
-# -*- mode: snippet -*-
-# name: Zeta
-# key: zzzz
-# group: Emacs migrated
-# source: /Users/hc/.config/emacs/snippets/tex-mode/zzzz_Zeta
-# --
-\zeta$0

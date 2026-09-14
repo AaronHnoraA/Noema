@@ -14,10 +14,25 @@
   color: var(--aaron-ink, #24201a);
   word-wrap: break-word;
   font-kerning: normal;
-  --note-image-max: 420px;
+  /* Figures fill the measure and are never cropped by height — the rule LaTeX
+   * (`width=\textwidth`) and GitHub/GitLab (`max-width: 100%`) both settle on.
+   * A fixed pixel cap made a figure's size depend on nothing in the document. */
+  --note-image-max: 100%;
+  --note-image-max-height: none;
+  --note-diagram-max: 100%;
+  --note-diagram-max-height: none;
+  /* Text-wrapped figures: LaTeX `wrapfigure` is conventionally ~0.45\textwidth. */
+  --note-float-width: 45%;
+  /* Vertical air around a figure, in prose em so it tracks the type size.
+   * LaTeX's \textfloatsep is 2em; GitHub uses ~1em. */
+  --note-figure-gap-top: 0.72em;
+  --note-figure-gap-bottom: 0.9em;
+  /* Vector figures (TikZ) are compiled as black-on-transparent artwork, so they
+   * need a page-like surface to stay legible on a dark theme. */
+  --note-figure-paper: #fbfaf7;
+  --note-figure-paper-pad: 0.55em;
   --note-table-image-max: 180px;
   --note-table-image-max-height: 160px;
-  --note-diagram-max: 480px;
   --orgenv-pad-left: 0.88rem;
   --orgenv-head-size: 0.9em;
 }

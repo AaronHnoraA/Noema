@@ -1,7 +1,0 @@
-# -*- mode: snippet -*-
-# name: Greater or Equal
-# key: >=
-# group: Emacs migrated
-# source: /Users/hc/.config/emacs/snippets/tex-mode/_Greater_or_Equal
-# --
-\geq$0

@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Noema planning side itodo
-# key: apitodo
-# group: Noema planning DSL
-# --
-@@itodo(${1:todo}) [${2:Task}] {id: `(my/noema-new-id "block")`}$0

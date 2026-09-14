@@ -1,5 +1,32 @@
-const TIKZJAX_CSS = "https://tikzjax.com/v1/fonts.css";
-const TIKZJAX_JS = "https://tikzjax.com/v1/tikzjax.js";
+/**
+ * TikZ rendering for the HTML export/publish path.
+ *
+ * TikZ is compiled locally (pdflatex → dvisvgm) into a cached SVG asset next to
+ * the note; see `shared/tikz-source.mjs` and `renderTikzAsset` in
+ * `server/lib/runtime.mjs`. An export therefore only has to *reference* the
+ * asset the editor already produced — no in-page TeX engine, no CDN, and the
+ * exported page keeps working offline.
+ */
+
+import {
+  classifyTikzSource,
+  stripTexComments,
+  tikzAssetMarkdownPath,
+  type TikzIntrinsicEm,
+} from "../shared/tikz-source.mjs";
+
+export {
+  classifyTikzSource,
+  tikzAssetFileName,
+  tikzAssetMarkdownPath,
+  tikzBasePt,
+  tikzIntrinsicEm,
+  tikzPictureSource,
+  tikzSourceHash,
+  tikzStandaloneDocument,
+  tikzSvgIntrinsicSize,
+  TIKZ_DEFAULT_BASE_PT,
+} from "../shared/tikz-source.mjs";
 
 function escapeHtml(value: string): string {
   return value
@@ -9,62 +36,69 @@ function escapeHtml(value: string): string {
     .replace(/"/g, "&quot;");
 }
 
-function tikzScriptText(value: string): string {
-  return value.replace(/<\/script/gi, "<\\/script");
-}
-
+/** @deprecated Use `stripTexComments`; kept as the historical export name. */
 export function stripTikzComments(source: string): string {
-  return String(source || "")
-    .split(/\r?\n/)
-    .map((line) => {
-      for (let i = 0; i < line.length; i++) {
-        if (line[i] !== "%") continue;
-        let slashCount = 0;
-        for (let j = i - 1; j >= 0 && line[j] === "\\"; j--) slashCount++;
-        if (slashCount % 2 === 0) return line.slice(0, i).trimEnd();
-      }
-      return line;
-    })
-    .join("\n");
+  return stripTexComments(source);
 }
 
+/**
+ * The source as TeX the way TikZ consumers expect it: a document or picture is
+ * left alone, loose picture commands gain a `tikzpicture` wrapper.
+ */
 export function normalizeTikzSource(source: string): string {
-  const trimmed = stripTikzComments(source).trim();
-  if (!trimmed) return "";
-  if (/\\documentclass\b|\\begin\s*\{\s*document\s*\}/.test(trimmed)) return trimmed;
-  if (/\\begin\s*\{\s*tikzpicture\s*\}/.test(trimmed)) return trimmed;
-  return `\\begin{tikzpicture}\n${trimmed}\n\\end{tikzpicture}`;
+  const { kind, body } = classifyTikzSource(source);
+  if (kind === "empty") return "";
+  if (kind === "commands") return `\\begin{tikzpicture}\n${body}\n\\end{tikzpicture}`;
+  return body;
 }
 
-export function tikzSrcdoc(source: string): string {
-  const tikz = tikzScriptText(normalizeTikzSource(source));
-  return `<!doctype html>
-<html>
-<head>
-<meta charset='utf-8'>
-<meta name='viewport' content='width=device-width, initial-scale=1'>
-<link rel='stylesheet' href='${TIKZJAX_CSS}'>
-<script defer src='${TIKZJAX_JS}'></script>
-<style>
-html,body{margin:0;width:100%;height:100%;background:transparent;color:#1f2937}
-body{box-sizing:border-box;display:grid;place-items:center;padding:10px;overflow:hidden}
-svg{display:block;max-width:100%;max-height:100%;height:auto}
-</style>
-</head>
-<body>
-<script type='text/tikz'>${tikz}</script>
-</body>
-</html>`;
+export type TikzAssetOptions = {
+  /** Note file the block belongs to; resolves the compiled asset's directory. */
+  noteFile?: string;
+  /** Rewrites the note-relative asset path into a URL the page can load. */
+  assetResolver?: (src: string) => string;
+  /** Intrinsic size measured at compile time, when the caller has it. */
+  intrinsic?: TikzIntrinsicEm | null;
+};
+
+/**
+ * Inline style pinning the figure to its LaTeX-native size.
+ *
+ * The compiled SVG's size is expressed in `em` of the surrounding prose, so a
+ * picture keeps the same proportion to body text that it had in the PDF instead
+ * of being scaled to an arbitrary pixel box. `max-width` still yields to the
+ * measure on narrow screens.
+ */
+export function tikzIntrinsicStyle(intrinsic: TikzIntrinsicEm | null | undefined): string {
+  const width = Number(intrinsic?.widthEm);
+  if (!Number.isFinite(width) || width <= 0) return "";
+  const height = Number(intrinsic?.heightEm);
+  const ratio = Number.isFinite(height) && height > 0 ? `; aspect-ratio: ${width} / ${height}` : "";
+  return `--aaronnote-tikz-natural-width: ${width}em${ratio}`;
 }
 
-export function renderTikzIframe(source: string, className = "aaronnote-tikz-embed"): string {
-  const srcdoc = escapeHtml(tikzSrcdoc(source));
+/**
+ * The rendered figure body for one `#+begin tikz` block: an `<img>` at the
+ * compiled asset when the note context is known, and the TeX source otherwise
+ * so nothing silently disappears from an export.
+ */
+export function renderTikzFigureBody(
+  source: string,
+  id: string,
+  options: TikzAssetOptions = {},
+): string {
+  const tex = normalizeTikzSource(source);
+  if (!tex) return "";
+  if (!options.noteFile) {
+    return `<pre class="aaronnote-tikz-source"><code>${escapeHtml(tex)}</code></pre>`;
+  }
+  const path = tikzAssetMarkdownPath(options.noteFile, id, source);
+  const src = options.assetResolver?.(path) ?? path;
+  const style = tikzIntrinsicStyle(options.intrinsic ?? null);
   return [
-    `<iframe class="${escapeHtml(className)} aaronnote-visual-embed"`,
-    'title="TikZ diagram"',
-    'loading="lazy"',
-    'sandbox="allow-scripts"',
-    'referrerpolicy="no-referrer"',
-    `srcdoc="${srcdoc}"></iframe>`,
-  ].join(" ");
+    `<img class="cm-image-render aaronnote-tikz-image" src="${escapeHtml(src)}"`,
+    `alt="${escapeHtml(`TikZ ${id}`)}" loading="lazy" decoding="async"`,
+    style ? `style="${escapeHtml(style)}"` : "",
+    "/>",
+  ].filter(Boolean).join(" ");
 }

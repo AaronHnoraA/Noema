@@ -1,9 +1,0 @@
-# -*- mode: snippet -*-
-# name: Quote callout
-# key: quote
-# group: Noema syntax
-# --
-> ${1:Quote.}
-> 
-> -- ${2:Source}
-$0

@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [bigvee] — Big vee
-# key: bigvee
-# group: Math · Operators
-# --
-\bigvee$0

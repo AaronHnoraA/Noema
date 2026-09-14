@@ -1,7 +1,0 @@
-# -*- mode: snippet -*-
-# name: Table of contents
-# key: toc
-# group: Noema syntax
-# --
-[toc]
-$0

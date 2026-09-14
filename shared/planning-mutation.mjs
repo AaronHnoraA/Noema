@@ -20,7 +20,7 @@ function locate(nodes, selector = {}) {
 }
 
 // Pure source contract mirrored by model.MutateMarkdownPlanning. This module
-// is fixture/test-facing; production desktop mutations are executed by Go.
+// is fixture/test-facing; production mutations are executed by Go.
 export function applyPlanningSourceMutation(input, selector = {}, mutation = {}) {
   const source = String(input || "");
   const type = String(mutation.type || "").toLowerCase();

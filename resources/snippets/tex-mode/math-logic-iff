@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [iff] — If and only if
-# key: iff
-# group: Math · Logic
-# --
-\iff$0

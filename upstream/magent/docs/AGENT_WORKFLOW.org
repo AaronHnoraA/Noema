@@ -1,0 +1,268 @@
+#+title: Agent Workflow State Machine
+#+magent_lang: en
+#+magent_alt_url: /AGENT_WORKFLOW.zh.html
+#+options: toc:nil num:nil
+
+Magent now models the agent loop as an explicit ~thread -> turn -> item~
+ledger. This is the source of truth for agent workflow state. Legacy
+session ~messages~ remain as a derived projection for gptel prompt
+construction and migration.
+
+* Codex Alignment
+
+Codex exposes a thread event stream at the SDK/app-server boundary:
+
+- ~thread.started~
+- ~turn.queued~
+- ~turn.started~
+- ~item.started~
+- ~item.updated~
+- ~item.completed~
+- ~turn.completed~ or ~turn.failed~
+
+Magent keeps the same workflow boundary, adapted to Emacs:
+
+- Provider transport still goes through ~gptel-request~.
+- The Magent loop owns tool dispatch, continuation outcomes, abort, and
+  Emacs UI rendering. The turn layer follows Codex-style continuation:
+  tool output drives the next sampling request, while assistant completion
+  ends the turn even when the assistant text is empty.
+- No Codex sandbox, seatbelt, bubblewrap, or shell isolation parity is
+  introduced.
+
+The closest Codex references are:
+
+- ~sdk/typescript/src/events.ts~: SDK event names and turn/item stream
+  contract.
+- ~codex-rs/core/src/session/turn.rs~: core sampling loop, tool
+  continuation, history recording, and follow-up decisions.
+- ~codex-rs/app-server/src/bespoke_event_handling.rs~: app-server
+  conversion from core events into thread/turn notifications.
+- ~codex-rs/app-server-protocol/src/protocol/v2/thread.rs~: thread
+  status shape.
+
+* State Objects
+
+~magent-ledger.el~ defines the canonical ledger:
+
+- ~magent-thread~
+  - statuses: ~not-loaded~, ~idle~, ~active~, ~system-error~, ~closed~
+- ~magent-thread-turn~
+  - statuses: ~queued~, ~in-progress~, ~completed~, ~interrupted~,
+    ~failed~, ~dropped~
+- ~magent-thread-item~
+  - statuses: ~pending~, ~in-progress~, ~completed~, ~failed~,
+    ~cancelled~
+
+Each user prompt creates one turn. Assistant messages, reasoning blocks,
+tool invocations, and tool outputs are items under that turn. Reasoning
+items are never promoted to assistant message text, even when a provider
+finishes with no visible content.
+
+The transition table is explicit:
+
+| Object | Runtime statuses | Terminal statuses |
+|---+---+---|
+| thread | ~not-loaded~, ~idle~, ~active~, ~system-error~, ~closed~ | ~closed~ |
+| turn | ~queued~, ~in-progress~ | ~completed~, ~interrupted~, ~failed~, ~dropped~ |
+| item | ~pending~, ~in-progress~ | ~completed~, ~failed~, ~cancelled~ |
+
+Turn lifecycle:
+
+#+begin_src text
+queued -> in-progress -> completed
+                      -> interrupted
+                      -> failed
+                      -> dropped
+#+end_src
+
+Item lifecycle:
+
+#+begin_src text
+pending -> in-progress -> completed
+                       -> failed
+                       -> cancelled
+#+end_src
+
+* Tool Items
+
+Tool calls and tool results are one item lifecycle, not two persisted
+records.
+
+The item starts when the model asks for the tool:
+
+#+begin_src elisp
+(:type tool :status in-progress :name "grep" :input (:pattern "..."))
+#+end_src
+
+It completes or fails when the tool result is available:
+
+#+begin_src elisp
+(:type tool :status completed :output "...")
+#+end_src
+
+This differs from the older ~tool-call~ plus ~tool-output~ split. For
+prompt reuse, Magent still projects a completed tool item into gptel's
+historical ~(tool . PLIST)~ shape.
+
+If the model asks for a tool and the result arrives later, Magent updates
+the same item by ~call-id~. If an older code path records only a tool
+result, the loop creates a synthetic turn so the item still has a durable
+turn parent.
+
+* Persistence
+
+Persistence is ~snapshot + journal~.
+
+- ~journal~: append-only in-memory event log. It records lifecycle transitions such
+  as ~turn-queued~, ~turn-started~, ~item-started~, ~item-completed~, and
+  ~turn-completed~. Session files retain a bounded recent tail controlled by
+  ~magent-session-journal-max-events~. Tool and permission audit retention is
+  owned separately by ~magent-audit.el~.
+- ~snapshot~: materialized full thread state. It stores the current
+  thread, turns, and items so resume does not need to replay from the
+  beginning every time.
+
+Session JSON now writes both:
+
+#+begin_src json
+{
+  "snapshot": { "id": "...", "turns": [...] },
+  "journal": [{ "type": "turn-started", "...": "..." }]
+}
+#+end_src
+
+Older ~messages~ are kept as a projection for gptel prompt reuse and
+migration. On load, Magent prefers replaying
+~snapshot + journal~; if
+those fields are absent, it migrates legacy ~messages~ into a thread
+ledger.
+
+Replay semantics:
+
+1. Load ~snapshot~ into materialized thread state.
+2. Attach the retained ~journal~ tail for recovery/history visibility.
+3. Apply only events with ~seq > snapshot.last-event-seq~.
+
+This means ~snapshot~ is the fast restore point and the persisted ~journal~
+is a bounded recovery tail. The two are not interchangeable.
+
+* Loop Flow
+
+1. UI submission enters ~magent-runtime-api.el~.
+2. ~magent-runtime-api.el~ creates a queued ledger turn and records the completed
+   user message item immediately.
+3. When the submission actually starts, ~magent-runtime-api.el~ transitions the
+   turn to ~in-progress~.
+4. ~magent-agent-process~ reuses that turn/user item idempotently instead
+   of duplicating the user message.
+5. ~magent-agent-loop~ consumes normalized LLM events.
+6. Text and reasoning deltas update materialized in-progress items in
+   the snapshot without appending one journal event per chunk. Terminal
+   item events carry the final content.
+7. Tool-call events are accumulated until the provider-neutral
+   ~tool-call-batch-end~ event closes the sampling batch.
+8. Tool dispatch starts ~tool~ items, records approval metadata when
+   available, and updates those same items to ~completed~ or ~failed~.
+9. Tool output returns a continuation outcome such as ~tool-output~;
+   ~magent-agent-process~ owns the decision to rebuild the prompt from
+   session history and start the next sampling request.  This keeps tool
+   execution separate from turn continuation policy.
+10. If a post-tool continuation completes with empty assistant text, Magent
+    makes one provider-tools-disabled final-response retry.  If that retry only
+    reasons without producing text, one stricter no-reasoning retry is used;
+    an empty strict response fails the turn.
+11. Assistant completion records an assistant message item and completes
+   the turn.
+12. Abort, failure, and dropped queued submissions transition the turn to
+   ~interrupted~, ~failed~, or ~dropped~; in-progress items under an
+   aborted turn are marked ~cancelled~.
+13. ~magent-max-sampling-requests~ is an optional compatibility safety guard,
+    disabled by default.  Codex does not impose a per-turn sampling cap; when
+    this guard is explicitly enabled, Magent replaces the continuation at the
+    limit with one provider-tools-disabled final request.
+
+Prompt reconstruction is ledger-driven.  When a current turn id is known,
+Magent includes completed history plus that turn only, preventing later
+queued user submissions from leaking into the active model request.
+
+* UI Projection
+
+The supported frontend is agent-shell.  ~magent-agent-shell.el~ creates an
+in-process ACP client implemented by ~magent-acp.el~.  ACP session/prompt
+requests submit to ~magent-runtime-api.el~ and stay pending until the
+corresponding runtime turn completes, fails, or is cancelled.  The runtime
+emits Magent-native observer events; ~magent-acp.el~ converts those events to
+ACP ~session/update~ messages.
+
+~magent-runtime-queue.el~ owns queued/active turn state.  The first
+implementation uses one global active turn at a time, but submissions are
+tagged by runtime session id so cancellation is session-scoped: cancelling one
+ACP session removes that session's queued work and aborts its active turn
+without dropping other sessions' queued turns.
+
+This agent-shell + ACP path is the complete UI projection and public command
+surface. Shared runtime behavior remains frontend-neutral.
+
+* Codex Differences Still Preserved
+
+Magent intentionally still differs from Codex in these loop-adjacent
+areas:
+
+- UI is Emacs-native: supported interaction is agent-shell through an
+  in-process ACP client.
+- Provider streaming is normalized behind ~magent-llm-gptel.el~, but
+  transport remains gptel.
+- Codex core runs a turn as a multi-sampling loop where pending user
+  input, mailbox items, auto-compaction, and tool follow-up can all
+  extend one active turn. Magent keeps request serialization in the
+  runtime queue and uses Codex-style continuation for tool results: tool
+  execution records model-visible output, then the turn layer continues
+  sampling until the model returns assistant completion. Magent does not
+  implement Codex's app-server mailbox, steering queue, stop hooks, or
+  mid-turn auto-compaction.
+- Codex thread status is app-server-facing
+  ~notLoaded/idle/systemError/active{activeFlags}~. Magent keeps the
+  same top-level status idea but also persists explicit local turn and
+  item statuses because the Emacs session file is the durable source of
+  truth.
+- Codex rollout history stores response items and turn context items.
+  Magent stores a ledger ~snapshot + journal~; ~messages~ is the only
+  derived projection retained for gptel prompt reuse and migration.
+- Codex provider/model plumbing is native to codex-core. Magent keeps
+  ~gptel-request~ as the provider transport and normalizes gptel events
+  before the Magent-owned loop consumes them.
+- Tool execution is serialized by Magent's tool queue unless individual
+  tool/runtime support is later added. Codex has richer per-tool runtime,
+  approval, MCP, and process execution machinery; that is outside this
+  workflow goal.
+- Child agents are durable Magent jobs, documented in ~AGENT_JOBS.org~,
+  not Codex app-server threads.
+
+* Backlog / TODO
+
+No open TODO remains from the agent-workflow/UI refactor backlog.  Future
+hardening candidates:
+
+- Add per-tool renderer plugins for additional structured outputs beyond
+  the generic file/path and grep-style link extraction.
+- Add live visual smoke coverage for very large transcripts and long
+  streaming sessions.
+
+* Design Review Summary
+
+After this change, the main agent-loop design gap versus Codex is no
+longer the lack of explicit thread/turn/item lifecycle. Magent now has
+that lifecycle and persists it.
+
+The remaining differences are deliberate product/runtime boundaries:
+
+- Magent does not have Codex's app-server lifecycle manager, subscriber
+  model, unloaded thread cache, or active flags beyond the local ledger
+  status.
+- Magent does not have Codex's same intra-turn input queue/mailbox
+  semantics.
+- Magent does not use Codex rollout files directly; it keeps its own
+  session JSON with ~snapshot + journal~.
+- Magent does not split tool call and tool output as separate source-of-
+  truth records. A tool is one item whose status and output are updated.

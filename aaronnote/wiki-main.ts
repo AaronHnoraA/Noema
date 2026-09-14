@@ -1,4 +1,3 @@
-import "./desktop-bridge.ts";
 import "../src/styles/theme-loader.ts";
 import { installB3ComponentSystem } from "../src/b3-component-system.ts";
 import "./wiki.css";
@@ -13,7 +12,7 @@ import { splitQualifiedWikiTarget } from "../shared/wiki-link.mjs";
 import { createWorkspaceGraph, type WorkspaceGraph, type WorkspaceGraphSettings } from "./workspace-graph.ts";
 import type { GraphNode, GraphPayload } from "./types.ts";
 import { createKnowledgeSearch } from "./knowledge-search.ts";
-import { desktopPlatformLabels } from "../shared/desktop-shell.mjs";
+import { noemaPlatformLabels } from "../src/platform-compat.ts";
 import { createTreeView, type NoemaTreeNode } from "../src/tree-view.ts";
 import { createVersionControlView } from "./wiki-version-control.ts";
 
@@ -22,31 +21,12 @@ if (!root) throw new Error("Missing #wiki-app");
 const removeB3ComponentSystem = installB3ComponentSystem(document.body);
 
 const serverReaderMode = serverMode();
-const desktopPlatform = window.noemaDesktop?.platform || (/Mac/.test(navigator.platform) ? "darwin" : "");
-const platformLabels = desktopPlatformLabels(desktopPlatform);
-document.body.dataset.hostMode = serverReaderMode ? "server" : (window.noemaDesktop ? "desktop" : "browser");
-if (window.noemaDesktop) document.body.dataset.desktopPlatform = desktopPlatform;
+const platformLabels = noemaPlatformLabels();
+document.body.dataset.hostMode = serverReaderMode ? "server" : "emacs";
 
 root.innerHTML = `
-  <header class="noema-desktop-titlebar noema-wiki-titlebar" data-desktop-titlebar data-desktop-drag-region>
-    <div class="noema-wiki-history">
-      <button type="button" class="noema-wiki-panel-toggle" aria-label="Toggle navigation" aria-expanded="false" data-toggle-nav>☰</button>
-      <button type="button" aria-label="Back" title="Back" data-desktop-command="back">←</button>
-      <button type="button" aria-label="Forward" title="Forward" data-desktop-command="forward">→</button>
-      <button type="button" aria-label="Refresh" title="Refresh" data-desktop-command="refresh">↻</button>
-    </div>
-    <strong class="noema-wiki-title-brand"><img src="/Noema.svg" alt="">Noema Wiki</strong>
-    <div class="noema-wiki-title-actions">
-      <button type="button" class="noema-wiki-panel-toggle" aria-label="Toggle tools" aria-expanded="false" data-toggle-tools>Tools</button>
-      <button type="button" aria-label="Editor actions" data-desktop-menu="actions">Editor actions</button>
-      <button type="button" aria-label="Window actions" data-desktop-menu="window">Window actions</button>
-    </div>
-  </header>
-  <div class="noema-wiki-drop-overlay" data-desktop-drop-overlay hidden>
-    <strong>Open Markdown in Noema</strong>
-    <span>Drop to open each document in a managed window</span>
-  </div>
   <header class="noema-wiki-site-header">
+    <button type="button" class="noema-wiki-panel-toggle" aria-label="Toggle navigation" aria-expanded="false" data-toggle-nav>☰</button>
     <button type="button" class="noema-wiki-site-brand" data-view="home" aria-label="Open the Noema Wiki main page">
       <img class="noema-wiki-site-mark" src="/Noema.svg" alt="">
       <span><strong>Noema</strong><small>${serverReaderMode ? "Public knowledge commons" : "Private knowledge commons"}</small></span>
@@ -292,14 +272,8 @@ const folderExpansionKey = "noema-wiki-folder-expansion-v1";
 let folderExpansion: Record<string, boolean> = {};
 
 function reportWikiWindowState(): void {
-  window.noemaDesktop?.updateWindowState({
-    kind: activeView === "graph" ? "graph" : "wiki",
-    title: activeView === "graph" ? "Knowledge Graph" : "Noema Wiki",
-    dirty: false,
-    saveInFlight: false,
-    conflict: Boolean(activeConflict || pendingConflicts.size),
-    busy,
-  });
+  // Emacs owns frame/window state. The CM6 knowledge component reports its
+  // semantic state through the ordinary Noema API instead of a window bridge.
 }
 
 function updateConflictAlert(): void {
@@ -376,17 +350,14 @@ function setStatus(message: string, error = false): void {
 }
 
 function openNote(note: Pick<WikiNote, "file">, options: { newWindow?: boolean } = {}): void {
-  if (window.noemaDesktop) {
-    void window.noemaDesktop.openTarget({
-      file: note.file,
-      source: "wiki",
-      disposition: options.newWindow ? "new" : "",
-    }).catch((error) => setStatus(error instanceof Error ? error.message : "Open failed", true));
+  if (!serverReaderMode) {
+    void api.emacs.open({ file: note.file }).catch((error) => {
+      setStatus(error instanceof Error ? error.message : "Open in Emacs failed", true);
+    });
     return;
   }
   const url = new URL("/", location.origin);
   url.searchParams.set("file", note.file);
-  if (!serverReaderMode) url.searchParams.set("host", window.noemaDesktop ? "desktop" : "browser");
   if (options.newWindow) window.open(url.toString(), "_blank", "noopener");
   else location.assign(url.toString());
 }
@@ -1663,9 +1634,7 @@ async function chooseRepositoryDirectory(
     title: `Choose a folder in ${repository.id}`,
   };
   try {
-    const result = window.noemaDesktop?.chooseDirectory
-      ? await window.noemaDesktop.chooseDirectory(options)
-      : await api.emacs.chooseNotePath({ ...options, kind: "directory" });
+    const result = await api.emacs.chooseNotePath({ ...options, kind: "directory" });
     if (result.message) setStatus(result.message, true);
     if (!result.canceled) input.value = result.relativePath || "";
   } catch (error) {
@@ -1888,8 +1857,7 @@ root.querySelector("[data-git-reload]")?.addEventListener("click", () => {
 });
 root.querySelector("[data-git-browser]")?.addEventListener("click", () => {
   if (!gitUrl) return;
-  if (window.noemaDesktop) void window.noemaDesktop.openExternal(gitUrl);
-  else window.open(gitUrl, "_blank", "noopener,noreferrer");
+  window.open(gitUrl, "_blank", "noopener,noreferrer");
 });
 gitFrame.addEventListener("load", () => {
   if (gitFrame.src !== "about:blank") gitStatus.textContent = "Visual repository ready";
@@ -1935,82 +1903,10 @@ repoForm.addEventListener("submit", (event) => {
   }).catch((error) => setStatus(error instanceof Error ? error.message : String(error), true));
 });
 
-root.querySelectorAll<HTMLElement>("[data-desktop-command]").forEach((control) => {
-  control.addEventListener("click", () => {
-    const command = control.dataset.desktopCommand;
-    if (command === "back") history.back();
-    else if (command === "forward") history.forward();
-    else if (command === "refresh") void load(true);
-  });
-});
-
-function runDesktopCommand(detail: unknown): void {
-  const command = detail && typeof detail === "object"
-    ? String((detail as { command?: unknown }).command || "")
-    : String(detail || "");
-  if (command === "back") history.back();
-  else if (command === "forward") history.forward();
-  else if (command === "refresh") void load(true);
-  else if (command === "knowledge-search" || command === "focus") {
-    searchEl.focus();
-    searchEl.select();
-  } else if (command === "toggle-graph" || command === "workspace-graph") {
-    navigateTo("graph");
-  } else if (command === "wiki-home") {
-    navigateTo("home");
-  } else if (command === "new-page") {
-    showNewPage();
-  } else if (command === "tag-manager") {
-    navigateTo("tags");
-  } else if ([
-    "add-meta", "remove-meta", "hide-roam", "activate-roam",
-    "add-tag", "manage-tags", "rename-tag", "delete-tag",
-  ].includes(command)) {
-    navigateTo("tags");
-  } else if (command === "tag-overlap") {
-    navigateTo("reports");
-  } else if (command === "reload-index") {
-    void load(true);
-  } else if (command === "toggle-tools") {
-    togglePanel("tools");
-  }
-}
-
-const removeDesktopCommandListener = window.noemaDesktop?.onCommand(runDesktopCommand) ?? null;
-const desktopDropOverlay = root.querySelector<HTMLElement>("[data-desktop-drop-overlay]")!;
-const removeDesktopDropListener = window.noemaDesktop?.onFileDrop?.((event) => {
-  if (event.type === "leave") {
-    desktopDropOverlay.hidden = true;
-    return;
-  }
-  if (event.type === "enter" || event.type === "over") {
-    desktopDropOverlay.hidden = false;
-    return;
-  }
-  desktopDropOverlay.hidden = true;
-  const paths = event.paths.filter((path) => /\.(?:md|markdown)$/i.test(path));
-  if (!paths.length) {
-    setStatus("Only Markdown documents can be opened from the Wiki", true);
-    return;
-  }
-  window.noemaDesktop?.openFiles(paths);
-  setStatus(paths.length === 1 ? "Opened document" : `Opened ${paths.length} documents`);
-}) ?? null;
-root.querySelectorAll<HTMLElement>("[data-desktop-menu]").forEach((control) => {
-  control.addEventListener("click", () => {
-    void window.noemaDesktop?.showMenu(control.dataset.desktopMenu === "window" ? "window" : "actions", {
-      x: control.getBoundingClientRect().left,
-      y: control.getBoundingClientRect().bottom,
-    });
-  });
-});
-
 const removeThemeRuntime = installNoemaThemeRuntime();
 window.addEventListener("beforeunload", () => {
   removeB3ComponentSystem();
   removeThemeRuntime();
-  removeDesktopCommandListener?.();
-  removeDesktopDropListener?.();
 }, { once: true });
 const initialQuery = new URLSearchParams(location.search);
 searchEl.value = initialQuery.get("q") || "";

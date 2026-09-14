@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [circledast] — Circled asterisk
-# key: circledast
-# group: Math · Operators
-# --
-\circledast$0

@@ -1,6 +1,6 @@
 /**
  * Normalize the stable renderer client carried by an Emacs xwidget URL.
- * Empty clients are compatibility/broadcast consumers (desktop and older
+ * Empty clients are compatibility/broadcast consumers (older
  * pages); they must never receive a command explicitly addressed to a sibling.
  */
 export function normalizeEventClient(value) {

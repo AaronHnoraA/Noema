@@ -40,14 +40,15 @@ export function imageLayoutToAttrMap(layout: ImageLayoutAttrs): AttrMap {
 }
 
 /**
- * Serialize an image layout into the trailing `{key: value, ...}` attribute text
- * (no leading space). Returns "" when the layout is the default and needs no attrs.
+ * Serialize an image layout into a compact CommonMark-attribute-style suffix.
+ * `width` and `height` then remain meaningful in GitLab/Pandoc as well as Noema;
+ * the parser keeps accepting the historical colon/comma spelling.
  */
 export function imageLayoutToTrailingAttrs(layout: ImageLayoutAttrs): string {
   const attrs = imageLayoutToAttrMap(layout);
   const keys = Object.keys(attrs);
   if (keys.length === 0) return "";
-  return "{" + keys.map((key) => `${key}: ${attrs[key]}`).join(", ") + "}";
+  return "{" + keys.map((key) => `${key}=${attrs[key]}`).join(" ") + "}";
 }
 
 export function imageLayoutClasses(layout: ImageLayoutAttrs): string {

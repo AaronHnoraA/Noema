@@ -325,7 +325,7 @@ func Mount(boxID string) (alreadyMount bool, err error) {
 	return mountBox(boxID, false)
 }
 
-// MountExternalMarkdownBoxAndWait is the desktop/Emacs attach readiness
+// MountExternalMarkdownBoxAndWait is the local-host attach readiness
 // boundary for a standalone repository. Ordinary Mount keeps the upstream
 // asynchronous notebook-open contract; an external registration must not
 // return until its source scan and SQL/FTS commit are complete.

@@ -29,6 +29,7 @@ const REPOSITORY_GITIGNORE = [
   ".DS_Store",
   ".direnv/",
   ".noema/",
+  ".agent/",
   ".lake/",
   ".mypy_cache/",
   ".pytest_cache/",
@@ -41,7 +42,7 @@ const REPOSITORY_GITIGNORE = [
   "",
 ].join("\n");
 const IGNORED_DIRECTORIES = new Set([
-  ".git", ".direnv", ".lake", ".noema", ".venv", "node_modules",
+  ".git", ".direnv", ".lake", ".noema", ".agent", ".venv", "node_modules",
   "__pycache__", ".ipynb_checkpoints", ".pytest_cache", ".mypy_cache", ".ruff_cache",
 ]);
 const IGNORED_FILES = new Set([".DS_Store"]);

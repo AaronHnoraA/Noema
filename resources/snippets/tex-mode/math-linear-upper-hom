@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [Hom] — Hom space
-# key: Hom
-# group: Math · Linear algebra
-# --
-\operatorname{Hom}$0

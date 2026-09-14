@@ -1,0 +1,411 @@
+#+title: Magent 入门导览
+#+magent_lang: zh
+#+magent_alt_url: /ONBOARDING.html
+#+options: toc:nil num:nil
+
+*更新日期：* 2026-07-07
+
+* 项目概览
+
+*Magent* 是一个 Emacs Lisp AI coding agent，包含多 agent 架构、durable turn ledger 和 permission-based tool access。
+
+- *语言：* Emacs Lisp
+- *主要依赖：* [[https://github.com/karthink/gptel][gptel]]，负责全部 LLM 通信
+- *要求：* Emacs 29.1+，gptel，compat，yaml，acp，agent-shell，ripgrep
+- *目标：* 在 live Emacs runtime 内提供 AI-assisted coding，同时保持 provider transport 在 gptel 内，并让工具访问显式、可审计
+
+* 当前 Agent 工作流
+
+Magent 拥有 Magent-owned agent loop 和 durable child-agent lifecycle。Root agent 可以 spawn、message、wait、list、inspect/resume 和 close child-agent jobs。
+
+修改 child-agent behavior、session persistence 或 agent-related tools 之前，先读 ~docs/AGENT_JOBS.org~ 。Codex sandbox behavior 明确不在范围内。
+
+* 架构分层
+
+** 第 1 层：入口与配置
+
+这一层初始化系统并管理设置。
+
+*关键文件：*
+
+- ~magent.el~ ：package entry point 和 lazy runtime initialization。
+- ~magent-agent-shell.el~ ：受支持的 interactive entry points。
+- ~magent-config.el~ ：UI-neutral runtime 与 feature customization。
+- ~magent-pkg.el~ ：package metadata。
+
+*职责：* 第一次调用受支持的 agent-shell 命令时， ~magent--ensure-initialized~ 触发
+lazy initialization；agent registry、skills、slash commands 和 capabilities 等完整
+初始化按需执行。
+
+** 第 2 层：Session 与 Runtime State
+
+这一层管理 conversation history、scoped overlays 和 runtime state。
+
+*关键文件：*
+
+- ~magent-ledger.el~ ：thread/turn/item ledger、状态转移和 snapshot shape。
+- ~magent-session.el~ ：conversation projections、JSON persistence、per-project sessions。
+- ~magent-internal-command.el~ ：由 ~magent-run-*~ 命令调用的 session-backed internal workflows。
+- ~magent-doctor.el~ ：受信任只读 probes 和一次脱敏后的无工具分析请求。
+- ~magent-redaction.el~ ：Magent-owned outbound diagnostics 与 memory 的 fail-closed 脱敏。
+- ~magent-agent-job.el~ ：durable child-agent job records 和 JSON shape。
+- ~magent-command.el~ ：公开的分层 slash-command registry 和 invocation lifecycle。
+- ~magent-runtime.el~ ：静态初始化，以及 agents、skills、commands、capabilities 的 project-local overlay activation。
+- ~magent-runtime-api.el~ ：UI/backend-facing runtime session 和 prompt API。
+- ~magent-runtime-queue.el~ ：全局单执行 runtime queue 和 session-scoped cancellation。
+- ~magent-audit.el~ ：permission 和 sensitive action 的持久 JSONL audit logging。
+
+*职责：* 维护 project-scoped、ledger-backed conversation history，默认持久化到 ~~/.emacs.d/magent/sessions/~ ，在 ~agent-jobs~ 下保存 durable child-agent jobs，并在 scope 变化时加载或卸载 project-local overlays。~magent-run-doctor~ 和 ~magent-run-memory-init~ 这类 internal maintenance workflow 会在 ~magent-session-directory/internal~ 下使用独立 session，而不是 agent-shell slash command。Doctor 是不向模型开放工具的 direct probe pipeline；修改其数据边界或扩展 API 前先读 [[file:DOCTOR.zh.org][DOCTOR.zh.org]]。
+
+** 第 3 层：Agent System
+
+多 agent 架构，为不同任务提供专门 agent。
+
+*关键文件：*
+
+- ~magent-agent.el~ ：核心 agent processing，构造 gptel prompt、应用 overrides、调用 ~gptel-request~ 。
+- ~magent-project-instructions.el~ ：从 project root 到请求相关 resource 有界发现 ~AGENTS.md~ 等 scoped project instructions。
+- ~magent-agent-info.el~ ：agent metadata struct 和 helpers。
+- ~magent-agent-builtins.el~ ：7 个内置 agent definitions。
+- ~magent-agent-registry.el~ ：hash-table registry 和 project overlays。
+- ~magent-agent-file.el~ ：从 ~.magent/agent/*.md~ 加载 custom agents。
+- ~magent-permission.el~ ：rule-based tool access control，支持 allow/deny/ask 和 glob patterns。
+
+*职责：* 提供 ~build~ 、 ~plan~ 、 ~explore~ 、 ~general~ 等 agent。Permission system 按 agent 过滤工具。Custom agents 通过带 YAML frontmatter 的 markdown 文件扩展功能。
+
+*当前行为：* 旧的一次性 ~delegate~ surface 已替换成 durable child-agent jobs，拥有稳定 id、status、transcript/result storage 和 parent/child session relationship。
+
+** 第 4 层：Tools 与 Capabilities
+
+这一层执行 agent 请求的具体动作。
+
+*关键文件：*
+
+- ~magent-repo-summary.el~ ：确定性更新单个 org-roam repository note。
+- ~magent-tools.el~ ：15 个 ~gptel-tool~ structs，包括 file I/O、repository summary writer、grep/glob、bash、emacs_eval、child-agent coordination、skill_invoke 和 web_search。
+- ~magent-skills.el~ ：skill registry、built-in skills、file loading 和 inspection commands。
+- ~magent-skill-manager.el~ ：用户级 skills.sh finder、安全复制安装与永久删除。
+- ~magent-capability.el~ ：capability definitions、resolution 和 file-backed loading。
+- ~magent-approval.el~ ：敏感操作的 user approval prompts。
+
+*职责：* Tools 提供具体动作；skills 扩展 agent 行为；capability resolver 根据上下文自动激活少量 instruction skills；approval system gate dangerous operations。
+
+** 第 5 层：Agent Loop 与 LLM Integration
+
+这一层编排 tool-calling loop 和 LLM communication。
+
+*关键文件：*
+
+- ~magent-agent-loop.el~ ：Magent-owned loop、tool dispatch、serial queueing、abort helpers、continuation outcomes。
+- ~magent-llm.el~ ：provider-neutral request/event protocol。
+- ~magent-llm-gptel.el~ ：薄的 ~gptel-request~ sampling adapter。
+
+*职责：* ~magent-agent-loop.el~ 消费 normalized LLM events，记录 assistant/tool state，经过 ~magent-tool-orchestrator~ 分发工具，并在 model-visible tool output 记录完成后返回 continuation outcome。 ~magent-agent-process~ 决定继续 sampling、在 sampling budget 用 no-tool final response 收尾，或在 post-tool assistant completion 为空时只重试一次。Reasoning 与 assistant text 分开保存。 ~magent-llm-gptel.el~ 仍然调用 ~gptel-request~ ；Magent 不重写 provider transport。
+
+** 第 6 层：受支持的 Frontend
+
+agent-shell 是唯一受支持的 frontend。
+
+*关键文件：*
+
+- ~magent-agent-shell.el~ ：Magent agent-shell config 和 prompt routing。
+- ~magent-acp.el~ ：in-process ACP adapter。
+- ~magent-runtime-api.el~ ：UI/backend-facing runtime API。
+- ~magent-runtime-queue.el~ ：runtime queue 和 session-scoped cancellation。
+- ~magent-file-loader.el~ ：agent/skill/capability 共享 frontmatter parser。
+
+*职责：* Prompt 走 agent-shell 和进程内 ACP adapter。ACP session/prompt request
+提交到 ~magent-runtime-api.el~ ，直到对应 Magent turn 完成才返回。修改该层前先读
+~docs/UI_BACKENDS.org~ 中的 frontend 开发边界。
+
+** 第 7 层：Events
+
+*关键文件：*
+
+- ~magent-lifecycle-events.el~ ：turn、subagent 和 tool call 的 structured lifecycle hooks。
+
+* 核心概念
+
+** Multi-Agent Architecture
+
+内置 agents：
+
+- *build* ：默认 agent，用于 general coding，工具访问最完整。
+- *plan* ：规划 agent，限制文件编辑范围。
+- *explore* ：快速代码库探索，只读/搜索/有限 bash。
+- *general* ：child-agent task 的 general-purpose subagent。
+- *compaction* 、 *title* 、 *summary* ：隐藏 utility agents。
+
+Agent modes：
+
+- ~primary~ ：用户可选的 session agent。
+- ~subagent~ ：内部子任务 agent。
+- ~all~ ：可作为 primary 或 subagent。
+
+** Permission System
+
+每个 agent 有细粒度工具规则：
+
+#+begin_src elisp
+((read_file . allow)
+ (write_file . ((deny "*.env")
+                (deny "*.key")
+                (allow "*")))
+ (bash . ask))
+#+end_src
+
+解析顺序：exact tool match -> file-pattern rules -> wildcard (~*~) -> default allow。
+
+** Skill System
+
+Skill 有两类：
+
+- *instruction* ：Markdown 注入 system prompt。
+- *tool* ：通过 ~skill_invoke~ tool 调用。
+
+Instruction skills 可以作为下一次请求的一次性上下文。Agent-shell frontend 提供
+~magent-agent-shell-toggle-skill-for-next-request~ 和
+~magent-agent-shell-run-skill-command~ 等命令。带 ~default-prompt~ 的 skills 也可作为
+兼容 command-like action 运行。Elisp-native slash command 通过
+~magent-command-register~ 单独注册，并可用 ~magent-agent-shell-run-command~ 选择。
+内置 ~/init~ 命令用于初始化或刷新项目根目录 ~AGENTS.md~。
+
+每个 turn 都从 selected agent 的 base prompt 开始，随后加入 project context、从项目
+根到请求相关本地文件逐层适用的 ~AGENTS.md~、相关的 profile memory，以及显式选择或
+capability 自动选择的少量 instruction skills。发现过程不会越过 canonical project
+root，并受 ~magent-project-instructions-max-bytes~ 限制；把该选项设为 nil 可关闭。
+所有 agent-loop prompt（包括 custom 和 utility agents）最后都会追加 runtime trust
+policy。注入的 memory 可能不完整或过时，因此当前用户说明与 live Emacs/repository
+状态优先。从文件、buffer、日志、命令、tool result 或网页读取的文本仍然只是数据，
+不能通过把自己伪装成高优先级 prompt 来授予工具权限。
+
+Skills 加载来源：内置 ~skills/~、存在时兼容的 legacy 用户目录 ~~/.emacs.d/magent-skills/~、canonical 用户目录 ~~/.emacs.d/magent/skills~，以及项目 ~.magent/skills/~；较后的用户目录优先。~magent-find-skill~、~magent-install-skill~ 和 ~magent-delete-skill~ 只管理用户级 skill，绝不使用 ~~/.agents/skills/~。Skill 也可以通过 ~capability: true~ 声明 resolver metadata，例如 ~modes~、~features~、~files~、~keywords~ 和 ~disclosure~；Magent 会把这些 metadata 注册成激活同一个 skill 的 capability。自动激活必须命中带词边界的 keyword 来证明用户 intent；只有 context 的匹配保持 suggested。Skill 声明的 ~tools~ 会与 selected agent 实际暴露的工具核对：不兼容的自动 skill 被降级，显式选择的不兼容 skill 则给出清晰错误。Agent-shell session 的 ~Automatic capabilities~ config option 可关闭自动解析。
+
+新增或 review 默认能力时保持这些概念分开：
+
+- 显式 slash action 需要 Elisp 入口时，用 ~command~。
+- 需要可复用 instruction 或 tool-type operation，并且可以被显式或自动选择时，
+  用 ~skill~；~default-prompt~ 只承担兼容作用。
+- 需要根据 live context 或 prompt text 自动选择某个 skill 时，用 ~capability~。
+- 如果 capability 只是为了激活同一个 skill，就把 metadata 和说明共址在
+  ~SKILL.md~。只有当触发 metadata 不属于单个 skill，或属于 project overlay 时，
+  才使用独立 ~CAPABILITY.md~。
+
+** Session Scoping
+
+Sessions 是 project-aware：
+
+- 在 project 内：state scoped to that project。
+- 在 project 外：使用 global session fallback。
+- 默认保存到 ~~/.emacs.d/magent/sessions/~ 。
+- ~agent-jobs~ 保存 durable child-agent job metadata、result/error state 和 transcripts。
+
+** Lazy Initialization
+
+启用 mode 很轻量，只更新 modeline。完整初始化在第一次命令通过 ~magent--ensure-initialized~ 触发。
+
+* 代码阅读路线
+
+** Step 0：先读架构边界
+
+先读 ~docs/ARCHITECTURE.org~ ，理解 Magent 的产品边界：provider plumbing 留在 gptel，agent loop 运行在 Emacs Lisp 中，通过 tools 暴露 Emacs runtime context，不实现 Codex-style OS sandbox。
+
+** Step 1：入口
+
+从 ~magent.el~ 了解 package initialization，再读 ~magent-agent-shell.el~ 中受支持的
+interactive entry points。
+
+** Step 2：UI 边界
+
+读 ~docs/UI_BACKENDS.org~ ，再读 ~magent-agent-shell.el~ 、 ~magent-acp.el~ 和
+~magent-runtime-api.el~ 。关键点：agent-shell 是唯一受支持的交互体验，共享行为必须
+留在 runtime API。
+
+** Step 3：请求生命周期
+
+按顺序跟踪一次请求：
+
+1. ~magent-agent.el~ ： ~magent-agent-process~ 构造 prompt。
+2. ~magent-agent-loop.el~ ：normalized events、tool dispatch、queueing、abort 和 continuation outcomes。
+3. ~magent-llm-gptel.el~ ：为一次 sampling 调用 ~gptel-request~ 。
+4. ~magent-tool-orchestrator.el~ / ~magent-tools.el~ ：解析权限并执行 tool implementations。
+5. ~magent-runtime-api.el~ / ~magent-acp.el~ ：backend submissions 和 agent-shell 的 UI-neutral events。
+
+** Step 4：权限
+
+读 ~magent-permission.el~ ，看 ~magent-permission-resolve~ 的解析顺序。再读 ~magent-agent-builtins.el~ ，理解内置 agents 如何定义 permissions。
+
+** Step 5：扩展点
+
+关注：
+
+- ~magent-agent-file.el~ ：custom agents 如何从 ~.magent/agent/*.md~ 加载。
+- ~magent-skills.el~ ：skills 如何扩展 agent 能力。
+- ~magent-file-loader.el~ ：agent、skill、capability 共用的 frontmatter parser。
+
+** Step 6：工具
+
+读 ~magent-tools.el~ ，重点看：
+
+- ~emacs_eval~ ：在 request buffer context 中执行。
+- ~spawn_agent~ / ~send_agent_message~ / ~wait_agent~ / ~list_agents~ / ~close_agent~ ：durable child-agent jobs。
+- ~web_search~ ：通过 ~url-retrieve~ 和 DuckDuckGo 实现。
+
+然后读 ~docs/AGENT_JOBS.org~ ，掌握生命周期 contract 和 persistence boundaries。
+
+** Step 7：测试
+
+看 ~test/magent-test.el~ 。测试用 ~cl-letf~ mock ~gptel-request~ 和 UI functions，并绑定 registry/session 到 fresh state。这是理解 public API surface 的好入口。
+
+* 复杂热点
+
+** 1. ~magent-agent-loop.el~
+
+*复杂原因：* 它拥有 active request/tool loop：normalized event accumulation、tool-call batch completion、serial execution、permission orchestration、UI tool rendering、abort cleanup、tool-result session recording、reasoning separation 和 continuation outcomes。
+
+*修改建议：* 任何 loop state、tool callback ordering 或 abort handling 的改动都可能导致 turn hang 或 session history 损坏。先加 ERT，再在 Emacs 可用时用 tool-use prompts 做 live 验证。
+
+** 2. ~magent-llm-gptel.el~
+
+*复杂原因：* 它是唯一允许触碰 gptel callback/FSM 细节的位置。
+
+*修改建议：* provider transport concern 留在这里，loop behavior 留在 ~magent-agent-loop.el~ 。不要让主 loop 依赖 gptel private FSM handlers。
+
+** 3. Frontend boundary
+
+*复杂原因：* 受支持的 frontend 横跨 ~magent-agent-shell.el~ 、 ~magent-acp.el~ 、
+~magent-runtime-api.el~ 和 ~magent-runtime-queue.el~ 。
+
+*修改建议：* Frontend-neutral 行为放 ~magent-runtime-api.el~ ，ACP conversion 放
+~magent-acp.el~ ，agent-shell-specific 行为放 ~magent-agent-shell.el~ 。
+
+** 4. ~magent-permission.el~
+
+*复杂原因：* file-pattern matching 是 order-dependent，解析顺序是 exact match -> file patterns -> wildcard -> default allow。
+
+*修改建议：* 更具体的 pattern 放在更不具体的前面，并为不同 glob pattern 加测试。
+
+** 5. ~magent-tools.el~
+
+*复杂原因：* 15 个 tool implementation 各自有 side effects、timeout、child-agent runtime state 和 error handling。 ~emacs_eval~ 要在正确 buffer context 中执行。
+
+*修改建议：* timeout handling 必须可靠； ~emacs_eval~ context capture、child-agent status persistence 和 parent/child request-context inheritance 都很关键。
+
+** 6. ~magent-session.el~
+
+*复杂原因：* 它负责 project scoping、global fallback、JSON persistence、ledger-driven UI restoration、child-agent job persistence 和 history trimming。
+
+*修改建议：* session directory 由 project root SHA1 派生。 ~agent-jobs~ 需要为 child transcript inspection 保持无损。
+
+* 开发流程
+
+** 构建与测试
+
+#+begin_src bash
+make compile
+make test
+make test-unit
+make coverage
+make clean
+#+end_src
+
+~make test-live-smoke~ 需要 Emacs server，并使用 stubbed gptel transport。 ~make test-live~ 使用真实 provider，可能消耗 tokens，应在 isolated daemon 中运行。
+
+Magent 除 Elisp 外还会打包 ~prompt/~ 与 ~skills/~ runtime data。每个 bundled Org
+prompt 必须在 ~prompt/manifest.txt~ 中恰好出现一次；unit test 会把 manifest 与目录
+实际内容对照。新增 prompt layer 时同时更新 manifest 和 MELPA/melpazoid package data
+recipe。
+
+** Live Development
+
+#+begin_src bash
+emacsclient --eval '(load "/path/to/magent-foo.el" nil t)'
+emacsclient --eval '(magent-runtime-session-clear (magent-runtime-session-current))'
+emacsclient --eval '(with-current-buffer "*magent-log*" (buffer-string))'
+#+end_src
+
+** Test Prompts
+
+修改后用这些 prompt 验证：
+
+- *Non-tool:* ~"你好"~ ，验证 streaming 和 assistant sections。
+- *Tool-use:* ~"帮我看下 emacs 里面有多少 buffer"~ ，验证 ~emacs_eval~ tool。
+- *Multi-step:* ~"帮我在 emacs 里面打开 magent 的 magit buffer"~ ，验证 chained execution。
+
+检查当前 Magent agent-shell buffer、 ~*magent-log*~ 和 ~*Messages*~ 是否有错误。
+
+* 常见模式
+
+** 新增 Tool
+
+1. 在 ~magent-tools.el~ 定义：
+
+   #+begin_src elisp
+   (defun magent-tools--my-tool (args)
+     ;; Implementation
+     )
+
+   (defvar magent-tools--my-tool-tool
+     (gptel-make-tool :function #'magent-tools--my-tool
+                      :name "my_tool"
+                      :description "What it does"))
+   #+end_src
+
+2. 加入 ~magent-config.el~ 的 ~magent-enable-tools~ default。
+3. 更新 ~magent-agent-builtins.el~ 中的内置 agent permissions。
+
+如果是 ~spawn_agent~ 、 ~send_agent_message~ 、 ~wait_agent~ 、 ~list_agents~ 或 ~close_agent~ 这类 agent lifecycle tools，要同步更新 ~docs/AGENT_JOBS.org~ 和相关测试。
+
+** 创建 Custom Agent
+
+创建 ~.magent/agent/my-agent.md~ ：
+
+#+begin_src markdown
+---
+description: Agent purpose
+mode: primary
+temperature: 0.7
+permissions:
+  read: allow
+  write: ask
+  bash: deny
+---
+
+System prompt goes here.
+#+end_src
+
+请使用 ~read~、~write~、~edit~、~agent~ 这类 permission group key。旧的
+具体 tool name 列表格式仍可读取，但新定义应使用上面的 mapping 格式。
+
+** 新增 Skill
+
+创建 ~skills/my-skill/SKILL.md~ ：
+
+#+begin_src markdown
+---
+name: my-skill
+description: Brief description
+type: instruction
+tools: read_file, grep
+---
+
+Skill instructions for the agent.
+#+end_src
+
+* 获取帮助
+
+- *Documentation:* ~README.org~ 和仓库根目录 ~AGENTS.md~
+- *Child-agent architecture:* ~docs/AGENT_JOBS.org~
+- *Interactive help:* ~M-x magent-run-doctor~
+- *Frontend:* ~M-x magent-start~ 。
+- *Skills:* ~M-x magent-agent-shell-toggle-skill-for-next-request~ 。
+- *Logs:* 使用 ~C-x b~ 打开 ~*magent-log*~ 。
+- *Agent selection:* 在 agent-shell buffer 运行 ~M-x agent-shell-set-session-mode~ 。
+
+* 下一步
+
+1. 先运行 ~make test-unit~ ；跑完整 ~make test~ 前准备 isolated Emacs server。
+2. 运行 ~M-x magent-start~ 。
+3. 按上面的 guided tour 读代码。
+4. 试着创建一个 custom agent 或 skill。
+5. 查看 open issues 并提交 PR。

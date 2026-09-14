@@ -12,7 +12,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-describe("desktop kernel relationship overlay", () => {
+describe("data-kernel relationship overlay", () => {
   test("merges native block refs without removing existing Wiki relationships", async () => {
     const root = await mkdtemp(join(tmpdir(), "noema-kernel-relationships-"));
     const sourceFile = join(root, "source.md");

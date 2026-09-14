@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [mathrm] — Roman math
-# key: mathrm
-# group: Math · Styles
-# --
-\mathrm{${1:X}}$0

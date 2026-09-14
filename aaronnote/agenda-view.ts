@@ -1,9 +1,8 @@
 // Full-screen, vault-wide agenda view (org-agenda-class): week/list/month/
 // log/gantt/projects/clocktable/lints views over the server-computed agenda
-// view-model (`api.notes.agenda`). This is the first-class surface for
-// priority/scheduled/deadline/repeat/dependency/project/clock work across
-// the whole vault — served as its own page (see `agenda.html`/
-// `agenda-main.ts`) as well as embeddable via `openAgendaView`. All edits
+// view-model (`api.notes.agenda`). It can be hosted by Emacs as its own Web
+// surface (see `agenda.html`/`agenda-main.ts`) or embedded in the Markdown
+// surface via `openAgendaView`. All edits
 // round-trip through `api.notes.patchTodo`/`clockIn`/`clockOut`, which write
 // straight back into markdown — this view holds no state that isn't
 // re-derivable from it. See `docs/agenda.md` for the view-model shapes.
@@ -22,16 +21,14 @@ export type AgendaViewDeps = {
   };
   jumpToTodo: (todo: TodoItem) => void | Promise<void>;
   setStatus: (message: string) => void;
-  /** True when mounted as the standalone `/agenda` page: hides the "Close"
-   * button (there is nothing to return to) and syncs `view`/`q` to the URL. */
+  /** True when mounted as the Emacs-hosted `/agenda` surface: hides the Close
+   * button and syncs `view`/`q` to the component URL. */
   pageMode?: boolean;
   onOpenChange?: (open: boolean) => void;
 };
 
 type ViewKind = "week" | "list" | "month" | "log" | "gantt" | "projects" | "clocktable" | "lints";
 
-// Legacy/external view names (e.g. `main.ts`'s Agenda+ link, or a bookmark)
-// map onto the real ones above.
 const VIEW_ALIASES: Record<string, ViewKind> = { agenda: "week", calendar: "month" };
 
 function normalizeView(raw: string | null | undefined): ViewKind {

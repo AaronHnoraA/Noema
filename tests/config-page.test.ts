@@ -6,11 +6,21 @@ function source(path: string): string {
   return readFileSync(resolve(process.cwd(), path), "utf8");
 }
 
-describe("Noema configuration page", () => {
-  test("is a dedicated build entry and server route", () => {
-    expect(source("vite.aaronnote.config.ts")).toContain('config: resolve("aaronnote/config.html")');
-    expect(source("web-host.mjs")).toContain('url.pathname === "/config"');
-    expect(source("web-host.mjs")).toContain('serveStatic("/config.html"');
+describe("Noema Emacs-hosted Web surfaces", () => {
+  test("builds and serves the agenda, configuration, Wiki, and Jupyter components", () => {
+    const vite = source("vite.aaronnote.config.ts");
+    const host = source("web-host.mjs");
+    expect(vite).toContain('agenda: resolve("aaronnote/agenda.html")');
+    expect(vite).toContain('config: resolve("aaronnote/config.html")');
+    expect(vite).toContain('wiki: resolve("aaronnote/wiki.html")');
+    expect(vite).toContain('jupyter: resolve("aaronnote/jupyter.html")');
+    expect(host).toContain('url.pathname === "/agenda"');
+    expect(host).toContain('serveStatic("/agenda.html"');
+    expect(host).toContain('url.pathname === "/config"');
+    expect(host).toContain('serveStatic("/config.html"');
+    expect(host).toContain('url.pathname === "/wiki"');
+    expect(source("src/jupyter-rendermime.ts")).toContain("OutputArea");
+    expect(source("aaronnote/config-main.ts")).not.toContain("desktop-bridge");
   });
 
   test("keeps theme selection out of the compact Tools panel", () => {
@@ -18,6 +28,8 @@ describe("Noema configuration page", () => {
     expect(main).not.toContain("renderThemeTool");
     expect(main).toContain('title: "Configuration"');
     expect(main).toContain('new URL("/config", window.location.origin)');
+    expect(main).toContain('new URL("/wiki", location.origin)');
+    expect(main).toContain('url.searchParams.set("new", "1")');
   });
 
   test("exposes the Git synchronization cadence instead of only the environment override", () => {
@@ -26,7 +38,6 @@ describe("Noema configuration page", () => {
     expect(page).toContain("data-sync-automatic");
     expect(page).toContain("data-sync-interval");
     expect(page).toContain("wiki: { sync: { automatic: syncAutomaticEl.checked, intervalMinutes } }");
-    // The policy takes effect without a restart, unlike the layout section.
     const host = source("web-host.mjs");
     expect(host).toContain("applyWikiSyncPolicy");
     expect(host).toContain("reconfigure({ debounceMs: wikiSyncIntervalMs(), periodicMs: wikiSyncIntervalMs() })");

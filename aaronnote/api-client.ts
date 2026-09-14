@@ -30,6 +30,13 @@ type AssetStoreMsg = {
   markdownPath?: string;
   message?: string;
 };
+type TikzRenderMsg = AssetStoreMsg & {
+  /** false when the cached asset was already current for this source. */
+  rendered?: boolean;
+  /** Picture size in `em` of body text, so the figure scales like it does in a PDF. */
+  intrinsic?: { widthEm?: number; heightEm?: number };
+  basePt?: number;
+};
 type ProseCheckBody = {
   requestId?: string;
   file?: string;
@@ -631,6 +638,9 @@ type NativeApi = {
     tasks?: () => Promise<unknown>;
     cleanup?: (body?: unknown) => Promise<unknown>;
   };
+  research?: {
+    resolveCell?: (body?: Record<string, unknown>) => Promise<unknown>;
+  };
   latex?: {
     defaults?: (body?: Record<string, unknown>) => Promise<unknown>;
     agentStatus?: () => Promise<unknown>;
@@ -655,6 +665,7 @@ type NativeApi = {
   };
   emacs?: {
     open?: (body: { file: string; tag?: string; line?: number; col?: number }) => Promise<unknown>;
+    selectJupyterCell?: (body: { scriptFile: string; cellId: string }) => Promise<unknown>;
     currentFile?: (body: string | { file: string; client?: string }) => Promise<unknown>;
     inputFocus?: (body: { client?: string; file?: string }) => Promise<unknown>;
     uiState?: (body: Record<string, unknown>) => Promise<unknown>;
@@ -680,7 +691,7 @@ type NativeApi = {
   assets?: {
     upload?: (body: { file?: string; name?: string; type?: string; data?: string }) => Promise<unknown>;
     storeFromPath?: (body: { file?: string; path?: string; source?: string; name?: string; type?: string }) => Promise<unknown>;
-    renderTikz?: (body: { file: string; id: string; timestamp: string; source: string }) => Promise<unknown>;
+    renderTikz?: (body: { file: string; id: string; source: string }) => Promise<unknown>;
     scanOrphans?: () => Promise<unknown>;
     trashOrphans?: (files: string[]) => Promise<unknown>;
     inspect?: () => Promise<unknown>;
@@ -1102,71 +1113,8 @@ declare global {
     __noemaKernel?: { state: string; baseUrl: string; box: { id?: string; name?: string; root?: string } | null };
     __noemaRendererBuild?: string;
     AaronnotePrepareRendererReload?: (detail?: { generation?: string }) => Promise<boolean>;
-    __noemaDesktopPrintDocument?: () => { html: string; title: string; defaultPath: string } | null;
-    noemaDesktop?: {
-      platform: string;
-      filePath(file: File): string;
-      openFiles(files: string[]): void;
-      closeWindow(): Promise<void>;
-      startWindowDrag(): Promise<void>;
-      openTarget(target: { file?: string; url?: string; source?: string; disposition?: "" | "new" | "split-right" | "split-down" }): Promise<boolean>;
-      updateWindowState(state: { kind?: string; file?: string; title?: string; dirty?: boolean; saveInFlight?: boolean; conflict?: boolean; busy?: boolean }): void;
-      showMenu(kind: "actions" | "window", point?: { x: number; y: number }): Promise<boolean>;
-      revealPath(file: string): Promise<boolean>;
-      openPath(file: string): Promise<{ ok: boolean; message?: string }>;
-      openExternal(url: string): Promise<{ ok: boolean; message?: string }>;
-      chooseSavePath(options: { title?: string; defaultPath?: string; extension?: string }): Promise<{ canceled: boolean; path: string }>;
-      exportPdf(options: { html: string; title?: string; defaultPath?: string }): Promise<{
-        canceled: boolean;
-        path: string;
-        bytes?: number;
-      }>;
-      exportHtml(options: { html: string; title?: string; defaultPath?: string }): Promise<{
-        canceled: boolean;
-        path: string;
-        bytes?: number;
-      }>;
-      readClipboard(): Promise<
-        | { kind: "empty" }
-        | { kind: "text"; text: string; html?: string }
-        | { kind: "image"; type: "image/png"; data: string }
-      >;
-      chooseDirectory(options: { root: string; defaultPath?: string; title?: string }): Promise<{
-        canceled: boolean;
-        path: string;
-        relativePath?: string;
-        message?: string;
-      }>;
-      selectDirectory(options?: { defaultPath?: string; title?: string }): Promise<{
-        canceled: boolean;
-        path: string;
-      }>;
-      listPlugins(): Promise<NoemaDesktopPlugin[]>;
-      setPluginEnabled(id: string, enabled: boolean): Promise<NoemaDesktopPlugin[]>;
-      notifyAppConfigChanged(revision: string): void;
-      reportSmoke?(report: Record<string, unknown>): Promise<boolean>;
-      onCommand(callback: (detail: unknown) => void): () => void;
-      onFileDrop?(callback: (event: {
-        type: "enter" | "over" | "drop" | "leave";
-        paths: string[];
-        position?: { x: number; y: number };
-      }) => void): () => void;
-      readDroppedFiles?(paths: string[]): Promise<File[]>;
-    };
   }
 }
-
-export type NoemaDesktopPlugin = {
-  id: string;
-  name: string;
-  description: string;
-  version: string;
-  enabled: boolean;
-  active: boolean;
-  builtIn: boolean;
-  configurable: boolean;
-  locked: boolean;
-};
 
 function requireMethod<T extends (...args: any[]) => unknown>(method: T | undefined, feature: string): T {
   if (!method) throw new Error(`${feature} is unavailable`);
@@ -1446,6 +1394,12 @@ export const api = {
       return ensureOk(await call(body) as JupyterTasksResult, "Jupyter cleanup failed");
     },
   },
+  research: {
+    async resolveCell(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().research?.resolveCell, "Research cell link");
+      return ensureOk(await call(body) as Record<string, unknown>, "Research cell link failed");
+    },
+  },
   latex: {
     async defaults(body: Record<string, unknown>): Promise<Record<string, unknown>> {
       const call = requireMethod(nativeApi().latex?.defaults, "LaTeX export defaults");
@@ -1548,6 +1502,13 @@ export const api = {
         ? await call(body)
         : await callHttpApi("aaronnote:api:emacs:open", [body], "Open in Emacs failed");
       ensureOk(result, "Open in Emacs failed");
+    },
+    async selectJupyterCell(body: { scriptFile: string; cellId: string }): Promise<void> {
+      const call = window.aaronnoteApi?.emacs?.selectJupyterCell;
+      const result = call
+        ? await call(body)
+        : await callHttpApi("aaronnote:api:emacs:jupyter-cell", [body], "Select Jupyter cell in Emacs failed");
+      ensureOk(result, "Select Jupyter cell in Emacs failed");
     },
     async currentFile(file: string, client = ""): Promise<void> {
       const call = window.aaronnoteApi?.emacs?.currentFile;
@@ -1700,9 +1661,9 @@ export const api = {
       const call = requireMethod(nativeApi().assets?.storeFromPath, "Asset import");
       return ensureOk(await call(body) as AssetStoreMsg, "Asset import failed");
     },
-    async renderTikz(body: { file: string; id: string; timestamp: string; source: string }) {
+    async renderTikz(body: { file: string; id: string; source: string }): Promise<TikzRenderMsg> {
       const call = requireMethod(nativeApi().assets?.renderTikz, "TikZ render");
-      return ensureOk(await call(body) as { ok?: boolean; file?: string; markdownPath?: string; message?: string }, "TikZ render failed");
+      return ensureOk(await call(body) as TikzRenderMsg, "TikZ render failed");
     },
     async scanOrphans(): Promise<Record<string, unknown> & { assets?: UnusedAsset[]; message?: string }> {
       const call = requireMethod(nativeApi().assets?.scanOrphans, "Asset scan");

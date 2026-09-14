@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Inner product
-# key: minn
-# group: Math symbols
-# --
-\left\langle ${1:x}, ${2:y} \right\rangle$0

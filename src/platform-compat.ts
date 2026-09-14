@@ -1,4 +1,4 @@
-/** Neutral renderer platform seam shared by browser, Emacs/xwidget, and Electron. */
+/** Neutral platform seam shared by Emacs/xwidget and read-only browser pages. */
 
 export type NoemaPlatform = "darwin" | "win32" | "linux" | "unknown";
 
@@ -37,6 +37,42 @@ export function detectNoemaPlatform(explicit = ""): NoemaPlatform {
 export const isMacPlatform = (platform: NoemaPlatform | string = detectNoemaPlatform()): boolean => (
   detectNoemaPlatform(platform) === "darwin"
 );
+
+export function noemaPlatformLabels(platform: NoemaPlatform | string = detectNoemaPlatform()): {
+  primaryModifier: string;
+  alternateModifier: string;
+  fileManager: string;
+  trash: string;
+} {
+  const detected = detectNoemaPlatform(platform);
+  if (detected === "win32") {
+    return {
+      primaryModifier: "Ctrl",
+      alternateModifier: "Alt",
+      fileManager: "File Explorer",
+      trash: "Recycle Bin",
+    };
+  }
+  return {
+    primaryModifier: detected === "darwin" ? "⌘" : "Ctrl",
+    alternateModifier: detected === "darwin" ? "Option" : "Alt",
+    fileManager: detected === "darwin" ? "Finder" : "file manager",
+    trash: "Trash",
+  };
+}
+
+export function markdownDropDisposition(
+  files: Iterable<string>,
+  forceAttachment = false,
+): { type: "open" | "insert"; paths: string[] } {
+  const paths = Array.from(files)
+    .map((file) => String(file || "").trim())
+    .filter(Boolean);
+  const allMarkdown = paths.length > 0 && paths.every((file) => /\.(?:md|markdown)$/i.test(file));
+  return !forceAttachment && allMarkdown
+    ? { type: "open", paths }
+    : { type: "insert", paths };
+}
 
 export function primaryModifierDown(
   event: Pick<KeyboardEvent | MouseEvent, "metaKey" | "ctrlKey">,

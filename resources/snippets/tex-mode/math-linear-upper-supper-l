@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [SL] — Special linear group
-# key: SL
-# group: Math · Linear algebra
-# --
-\operatorname{SL}$0

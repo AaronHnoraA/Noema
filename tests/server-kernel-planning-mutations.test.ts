@@ -24,7 +24,7 @@ function digest(source: string): string {
   return createHash("sha256").update(source).digest("hex");
 }
 
-describe("desktop kernel planning mutations", () => {
+describe("data-kernel planning mutations", () => {
   test("creates a new inbox document through versioned kernel append", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "noema-kernel-create-todo-"));
     const notes = join(workspace, "notes");

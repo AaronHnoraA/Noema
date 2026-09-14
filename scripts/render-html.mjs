@@ -63,7 +63,10 @@ const { renderMarkdownHTML, renderPublishedNoteHTML } = await import("../src/ren
 function renderOne(input) {
   return input.mode === "published-note"
     ? renderPublishedNoteHTML(String(input.markdown ?? ""), input.note ?? {})
-    : renderMarkdownHTML(String(input.markdown ?? ""), { leanRegions: input.leanRegions ?? undefined });
+    : renderMarkdownHTML(String(input.markdown ?? ""), {
+      leanRegions: input.leanRegions ?? undefined,
+      noteFile: input.noteFile ?? undefined,
+    });
 }
 
 const input = JSON.parse(readFileSync(0, "utf8") || "{}");

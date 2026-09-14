@@ -3,8 +3,8 @@
  *
  * Host adapters only report facts such as a hidden surface or a buffer switch.
  * They never pause individual editor subsystems. The renderer owns one state
- * machine and fans each transition out to the same participants for Emacs,
- * Noema.app and the server page.
+ * machine and fans each transition out to the same participants for the Emacs
+ * and public-reader hosts.
  */
 export type RendererActivityState =
   | "active"

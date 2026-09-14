@@ -1,7 +1,0 @@
-# -*- mode: snippet -*-
-# name: \begin{Bmatrix}…\end{Bmatirx}
-# key: bbmatrix
-# --
-\begin{Bmatrix}
-${1:a}
-\end{Bmatrix}$0

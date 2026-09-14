@@ -64,9 +64,7 @@ export async function setNoemaAppTheme(themeId: string): Promise<NoemaAppConfigM
       revision: state?.revision,
     });
     loadSequence += 1;
-    const applied = applyNoemaAppConfig(payload);
-    window.noemaDesktop?.notifyAppConfigChanged(payload.revision);
-    return applied;
+    return applyNoemaAppConfig(payload);
   } catch (error) {
     if (previous) applyNoemaAppConfig(previous);
     throw error;

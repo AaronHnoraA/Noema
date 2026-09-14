@@ -1,8 +1,0 @@
-# -*- mode: snippet -*-
-# name: \ddots
-# key: \ddots
-# uuid: latex-workshop:\ddots
-# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-command&description=%E2%8B%B1
-# group: Math · latex-workshop
-# --
-\ddots$0

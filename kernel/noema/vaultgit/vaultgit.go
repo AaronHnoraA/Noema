@@ -232,7 +232,7 @@ func Status(ctx context.Context, repository string) (StatusResult, error) {
 }
 
 var ignoredPathParts = map[string]bool{
-	".git": true, ".direnv": true, ".lake": true, ".noema": true,
+	".git": true, ".direnv": true, ".lake": true, ".noema": true, ".agent": true,
 	".venv": true, "node_modules": true, "__pycache__": true,
 	".ipynb_checkpoints": true, ".pytest_cache": true, ".mypy_cache": true,
 	".ruff_cache": true,

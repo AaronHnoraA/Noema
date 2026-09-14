@@ -1,379 +1,213 @@
 # Noema
 
-> License: AGPL-3.0-only. The source-editor infrastructure includes attributed
-> adaptations from Overleaf; see [NOTICE](NOTICE) and
-> [the architecture review](docs/architecture/overleaf-source-editor-study.md).
+> An Emacs-native, local-first environment for making the evolving structure of intellectual work explicit, persistent and navigable.
 
-> A Typora-style Markdown editor for the web, Emacs, and macOS.
+Noema is not a chat application, a Jupyter frontend, or a standalone Web/desktop app. Its primary object is the genealogy of work:
 
-This README is package-focused. Emacs links the canonical project at
-`lisp/roam/Noema`; the retired `lisp/roam/aaronnote` project link must not be
-reintroduced. The Emacs entry point remains `lisp/roam/init-aaronnote.el` as a
-wire/file compatibility contract.
+```text
+problem
+→ exploration and branches
+→ experiments and artifacts
+→ decisions and revisions
+→ synthesis
+```
 
-Markdown looks like a finished document while you write it. Italic renders as *italic* the moment you close the asterisks. Headings appear at their final size as soon as you start typing. Source markers like `*` and `#` fade out when the cursor moves away and come back when you click in.
+AI agents, Jupyter kernels, terminals and ordinary programs participate in that structure; none of them defines the product model.
 
-It's also an experiment. Every line of source was written by an AI agent through chat. The human only chats; nothing gets typed directly into source files. To keep the agent productive at this scale, each supported syntax is described as a **spec**: a seed text, an event sequence, and the expected rendered output. Each spec compiles to a test the agent has to make pass. The result is a usable editor and a record of how far agent coding holds up on a serious project.
+## Product boundary
 
+**Emacs is the only supported Noema UI/UX and workspace compositor.** It owns buffers, windows, commands, navigation, DAG edits, execution launch/control, agent permissions and human intervention.
 
-## Try it
+Noema does not build or support Electron, `Noema.app`, or an independent Web product shell. The Node host and Go kernel are headless services; Web technology remains part of the UI when Emacs hosts it.
 
-> If you're reading this on GitHub, the live editing effect won't show. Visit the [live demo](https://yuyz0112.github.io/typora-web/ "live demo") for the actual editor.
+This does not mean all rendering is rewritten in Elisp. Existing Web surfaces remain hosted and composed by Emacs:
 
-Inline marks: **bold**, *italic*, `inline code`, ~~strike~~, ==highlight==, sub like H~2~O, sup like E = mc^2^. Bare URLs in angle brackets become autolinks: <https://codemirror.net>. Regular links work the usual way: [CodeMirror guide](https://codemirror.net/docs/guide/ "CodeMirror Guide"), [CommonMark spec](https://spec.commonmark.org/ "CommonMark"). Emoji shortcodes resolve as you type: :books: :tada: :hourglass: :warning:.s\
+- the private CodeMirror 6 Markdown knowledge surface;
+- private Wiki and Graph views;
+- Agenda and Configuration views;
+- the right-side Jupyter/agent rich-output renderer, using JupyterLab `OutputArea`, rendermime, ipywidgets and live events.
 
-s
+These surfaces keep their mature editing, graph, filtering, navigation and rendering behavior. They do not become a second product shell or establish a second project, permission or durable-state authority. The Jupyter output renderer specifically displays computation; it does not own `.noema` Cell structure or execution authority.
 
+## Core model
 
-ddd
+```text
+Project
+├── ordinary files and durable artifacts
+├── *.noema active-work documents
+├── WorkNode dependency DAG
+├── execution and AgentSession records
+└── explicit human intervention
+```
 
+The identities are deliberately separate:
 
+```text
+Cell != WorkNode != Artifact != AgentSession
+document order != dependency order
+```
 
-Task lists hold their state visually:
+- `WorkNode` is a structural unit such as a question, work item or checkpoint.
+- `Dependency` connects WorkNodes (`lineage` or `depends`). The combined Work graph is acyclic.
+- `Cell` is a Markdown, code or result unit in a `.noema` document.
+- a Cell participates in a WorkNode through a stable `work_node_id` binding.
+- `Artifact` refers to an ordinary project file or an immutable execution snapshot.
+- `AgentSession` is an actor/lifecycle, not a WorkNode.
 
-- [x] inline marks (em, strong, code, strike, highlight, sub/sup)
-- [x] autolinks and reference-style links
-- [x] tables with per-column alignment
-- [x] inline and block math
-- [~] mermaid code-fence preview
+The graph records structure and provenance. It is not automatically an execution scheduler.
 
-Lists nest, and exit on a triple-Enter staircase the way Typora does:
+## Canonical files
 
-1. outer ordered item
+`*.noema` is the canonical active-work document:
 
-   - nested bullet with a `code span`
-   - another, with **bold** in it
+```text
+research.noema
+assignment.noema
+proof-search.noema
+```
 
-     1. third level
-2. back to the outer list
+The v1 file remains an inspectable nbformat 4.5 JSON container so the existing Jupyter execution and output machinery round-trips correctly. Noema's WorkNodes, Dependencies and Cell bindings live in the `noema_research` namespace using `noema.work-document/2`.
 
-> Blockquotes render inline marks just like paragraphs do. You can drop ==highlights==, [links](https://typora.io), or `code` into a quote and the source still round-trips byte for byte.
->
-> Press Enter on an empty quote line to exit.
+The extension is Noema's product identity. `.ipynb` is only an interchange/export representation and must not become a shadow second authority. The Emacs textual projection is Noema's **JuText**; Jupytext is not currently used and may only become an optional interoperability adapter.
 
-Press `⌘/` (or `Ctrl+/`) at any time to toggle between rendered and raw source view.
+Markdown remains the durable knowledge surface. Source code, reports, datasets, figures and logs remain ordinary files usable without Noema.
 
+A typical repository is:
 
-## Desktop app
+```text
+project/
+├── noema.toml
+├── research.noema
+├── notes/
+├── src/
+├── experiments/
+├── report/
+├── .noema/    # existing wiki-sync/vaultgit infrastructure
+└── .agent/    # ignored runtime/index/CAS/view state
+```
+
+`.agent/` never replaces the authoritative `.noema`, Markdown or source files.
+
+## Emacs workflow
+
+Opening `research.noema` visits the real file in `noema-research-mode`. JuText supplies Cell navigation and editing while stable IDs remain hidden. The user can create or bind code Cells under the current contextual WorkNode without typing IDs.
+
+Key commands include:
+
+| Key | Action |
+|---|---|
+| `C-c C-n` | continue from current context with a downstream WorkNode |
+| `C-c C-s` | create a sibling WorkNode |
+| `C-c C-g` | open the Work DAG |
+| `C-c C-e` | insert a code Cell in the current WorkNode context |
+| `C-c C-b` | bind the current Cell to a labeled WorkNode |
+| `C-c C-c` | execute by Cell role: code → Jupyter; work → CLI agent Run |
+| `C-c C-o` | open/update the right-side rich-output renderer |
+| `C-c C-z` | interrupt execution |
+| `C-c j a` | run all code Cells |
+| `C-c j x` / `C-c j X` | clear current/all outputs |
+| `C-c j r` / `C-c j k` | restart/shut down kernel |
+| `C-c j K` | select or attach a kernel in Emacs |
+
+Execution streams incrementally into the right-side renderer. Clicking **Open Source in Emacs** sends `scriptFile + cellId`; Emacs resolves the stable Cell identity instead of trusting a projected line number. Agent Runs snapshot newly created or modified ordinary files into the CAS without moving them, persist `ArtifactLink` provenance on the stable WorkNode, and expose those paths through the Emacs Inspector.
+
+Agenda, configuration and private Wiki/Graph are not standalone Web products, but their existing Web surfaces are retained. Emacs commands open `/agenda`, `/config`, `/wiki` and `/graph` inside Emacs-owned xwidget/Appine buffers. Source files remain normal Emacs buffers; Markdown remains an ordinary file while the Emacs-hosted CM6 surface supplies its rich editing experience. The retained `jupyter.html` route is the right-side rich-output renderer. Server mode separately restricts Wiki publication to read-only behavior.
+
+## Internalized AI implementation
+
+Noema directly carries the complete source of gptel, agent-shell, acp.el,
+shell-maker and Magent under `upstream/`. They are not installed as Noema
+package dependencies, and Noema does not replace them with partial rewrites.
+
+- gptel supplies compose, arbitrary-buffer send, context, transient controls
+  and rewrite/diff review;
+- agent-shell + acp.el supply structured processes, sessions, streaming,
+  permission and input interaction;
+- Magent supplies the local agent, queue, ledger and gptel adapter;
+- Noema supplies the public entry points and Project/WorkNode/Run/Artifact
+  integration.
+
+Noema-specific Emacs code lives in `lisp/`. `noema-agent-acp.el` is the single
+research/runtime coupling boundary to agent-shell/acp implementation details.
+Versions and licenses are recorded in [UPSTREAMS.md](UPSTREAMS.md).
+
+## Architecture
+
+```text
+                         USER
+                           │
+                           ▼
+                        Emacs
+          ┌────────────────┼─────────────────┐
+          ▼                ▼                 ▼
+    .noema / JuText     Work DAG       ordinary files
+          │                │                 │
+          ├──────── Emacs-hosted Web views ─┤
+          │ CM6 · Wiki/Graph · Agenda/Config│
+          │       Jupyter rich output       │
+          └────────────────┬─────────────────┘
+                           ▼
+                  Noema project model
+                  ┌────────┴─────────┐
+                  ▼                  ▼
+          Node runtime/Jupyter   Go research store
+                  │                  │
+                  └──── agents ──────┘
+```
+
+The Node host owns transport, Jupyter processes/events, document services and renderer assets. The Go kernel owns project-local research/runtime indexes, append-only events, CAS and MCP data access. External agents remain independent processes, normally integrated through ACP/agent-shell.
+
+Existing `AARONNOTE_*`, `aaronnote:api:*` and `init-aaronnote.el` names are retained only as wire/file compatibility contracts. New Emacs product commands use `noema-*` or `my/noema-*` names.
+
+## Build and install
+
+Node `26.5.0` and npm `11.17.0` are pinned.
 
 ```sh
 nvm install
 nvm use
 make setup
-make
+make test
+make build
 make install
 ```
 
-Node `26.5.0` and npm `11.17.0` are pinned by `.nvmrc`, `.node-version`,
-`package.json`, and `.npmrc`; `make bootstrap` uses the committed lock file via
-`npm ci`. `make`/`make build` creates the shared App/Emacs renderer and stages
-`Noema.app` under `build/electron/`. `make install` first runs that same full
-build, then installs its fresh App shell into `/Applications`; it is safe to run
-directly after a source or dependency update. A successful shared renderer
-build also notifies running local App and Emacs hosts; clean/local notes are
-saved and their existing page reloads onto the new hashed bundle automatically.
+`make build` creates the renderers consumed by Emacs and the headless Go kernel. `make install` links only `noema-kernel` into `~/.local/bin`; it creates no app bundle and installs nothing under `/Applications`.
 
-The desktop host is independent from Emacs, stores runtime state under the
-app's user-data directory, and opens source-code targets in a new VS Code
-window. Its note root defaults to `~/Documents/Noema` and is created
-automatically. Another machine only needs the development environment above;
-optional locations can be changed through:
+The note root defaults to `~/Documents/Noema`. The runtime can be pointed at another root when Emacs starts the host:
 
 ```sh
 export NOEMA_ROOT="$HOME/Documents/Noema"
 export NOEMA_RESOURCES_ROOT="/path/to/Noema/resources"
-export NOEMA_VSCODE="/path/to/code"
 ```
 
-The default Legacy layout can be switched explicitly to a global
-multi-repository Wiki from Noema Configuration. Wiki layout indexes only
-direct Git repository children of `public/` and `private/`; it never migrates
-or initializes existing directories automatically. Once enabled, edits are
-saved to Markdown first and each affected repository is automatically
-checkpointed locally on shutdown and batch-synchronized at startup and roughly
-once per day. File and metadata mutations refresh `wiki.db` incrementally;
-successful Git refreshes use their changed paths and occasionally run a full
-self-healing rebuild. Conflicts remain isolated for explicit resolution. See
-[the Wiki workspace guide](docs/wiki-workspace.md).
+## Demonstration
 
-Noema.app has a native macOS application menu and a draggable system title
-bar mirroring the Emacs editor header: back, forward, refresh, editor actions,
-window actions, and the current filename. These are two maintained host
-adapters—the App controls do not remove or replace the Emacs header-line.
+The current end-to-end project is `~/Desktop/Noema-Research-Demo`.
 
-The installed app also registers the `noema:` deep-link protocol. Workspace
-links should use an encoded path relative to the configured note root; an
-explicit absolute Markdown file is available for local automation:
+Open `~/Desktop/Noema-Research-Demo/research.noema` normally in Emacs. No project-specific `.command` or launcher file is part of the design.
 
-```text
-noema://open?path=projects%2Fpaper.md#Main%20Result
-noema://open?file=%2FUsers%2Fme%2FNotes%2Fpaper.md&disposition=new
-noema://wiki
-noema://graph
-```
+It opens an Emacs workspace containing a v2 `.noema` WorkDocument, WorkNode DAG and right-side Jupyter output renderer. The demo has a real Python Cell bound to a WorkNode and emits incremental output.
 
-Only existing `.md`/`.markdown` files are accepted. Relative links may not
-escape the note root through `..` or symlinks, hidden paths and unknown query
-parameters are rejected, and `hash`/`dom` targets use the editor's normal
-navigation path rather than a privileged renderer API.
+## Publishing reader
 
-Desktop drag/drop follows the note workflow:
+The repository still contains a read-only server renderer for publishing Markdown. It is an output/publication surface, not a Noema control UI: authoring, Jupyter, permissions, agents, Proposals and Run control are denied. See `server-config/` and `docs/wiki-workspace.md` for that separately scoped service.
 
-- Drop one or more Markdown files to open each in a new Noema window.
-- Hold Option while dropping Markdown to insert it through the attachment
-  pipeline instead.
-- Drop images, other files, links, or text to insert them at the drop cursor.
+## Development map
 
-Desktop plugins are managed from **Noema → Settings… → Plugins** and apply
-after restart. Noema ships the Simplified Chinese UI translation as its first
-built-in, opt-in plugin. Personal plugin packages can be installed under the
-Noema user-data `plugins/` directory; see [Desktop plugins](docs/plugins.md) for
-the manifest, lifecycle API, and launch overrides.
+- `server/lib/research-notebook.mjs`: `.noema` v2 model, migration, validation and graph operations.
+- `server/lib/jupyter-cell.mjs`: Jupyter document/session service and canonical `.noema` output writes.
+- `aaronnote/main.ts`, `wiki-main.ts`, `agenda-main.ts`, `config-main.ts`: Emacs-hosted Markdown and knowledge/work surfaces.
+- `aaronnote/jupyter-main.ts`: Emacs-hosted output-only renderer.
+- `src/jupyter-rendermime.ts`: JupyterLab OutputArea/rendermime integration.
+- `kernel/noema/research/`: Go research/runtime store, indexes, events and CAS.
+- `lisp/noema-research*.el`: JuText, WorkNode model, graph, inspector and synthesis.
+- `lisp/noema-agent*.el`: ACP boundary, AgentSession worker, promotion and takeover paths.
+- `lisp/noema-compose.el`, `lisp/noema-interaction*.el`: gptel UI entry points and migrated interaction/CLI fallback behavior.
+- `upstream/`: complete internalized gptel, agent-shell, acp.el, shell-maker, Magent and existing CLI compatibility sources.
 
-GitHub Copilot is an always-active built-in plugin. Noema.app starts its
-packaged language server lazily; Emacs-started Noema continues using Emacs's
-existing `copilot.el` connection through the gateway and never launches a
-second Copilot server.
+The authoritative product model is maintained in `~/Desktop/]/DESIGN.md`, with decisions in `DECISIONS.md` and the long-running implementation prompt in `BOOTSTRAP.md`.
 
-## Server reader
+## License
 
-Server mode publishes the existing CM6 renderer directly: Markdown stays the
-source of truth and is not converted to a second HTML tree. The editor is
-forced read-only, and authoring, configuration, Git, task, Jupyter, Copilot,
-clipboard, and local-host APIs are denied by the server even if called outside
-the UI. Search, Wiki navigation, graph, themes, and slides reuse the local
-implementation. Server mode defaults to the Wiki's warm light `claude` palette;
-`appearance.theme` can select any packaged theme.
-
-`runtime.json.reader` controls reader-only interaction chrome without changing
-Markdown parsing, CM6 rendering, or the App's content layout: `showSource`,
-`showGraph`, `showSearch`, `showToc`, `showStatus`, `selectionToolbar`, `customContextMenu`, and
-`editingAids` are booleans. Defaults hide Source, status, selection and
-authoring controls while leaving the rendered document identical to the App;
-the graph remains available.
-
-Create the local, ignored configuration directory and edit both files:
-
-```sh
-make server-config-init
-$EDITOR server-config/runtime.json
-$EDITOR server-config/deploy.json
-```
-
-`runtime.json` declares each repository URL as `public` or `private`. Only
-pages in public repositories without `private: true` are projected into the
-browser index, search, graph, backlinks, reports, and asset routes. Private
-repositories may still be mirrored so the internal index can resolve the full
-workspace, but none of their paths or content are returned to clients. Public
-URLs are stable repository-relative references such as
-`/?file=public/math/tensor.md`.
-
-At startup and every `pullIntervalMinutes` (360 / six hours by default), Server mode detects
-the remote HEAD with a `main`, then `master`, fallback and makes each checkout
-an exact remote mirror using fetch, reset, and clean. Local changes inside
-`server-config/repos/` are therefore disposable. Git credentials belong in the
-server's SSH agent or credential helper; embedded credentials in repository
-URLs are rejected.
-
-Run locally or deploy the versioned release over SSH/rsync:
-
-```sh
-make server-start
-make server-build
-make server-deploy
-```
-
-Deployment installs production dependencies, switches the remote `current`
-symlink, links and restarts a systemd user service, verifies `/health`, and
-rolls the symlink back if verification fails. After a successful health check,
-it keeps `retainReleases` releases in total (3 by default, including the active
-release) and removes older version directories. The remote account needs a
-working systemd user manager (and lingering when it must run after logout).
-TLS/reverse-proxy setup such as Nginx is intentionally outside Noema.
-
-Noema owns the assets it consumes under `resources/`: Markdown and TeX
-snippets, Noema/LaTeX templates, KaTeX macros, and the prose word list. The
-Emacs configuration keeps its own `snippets/` and `templates/` roots, linking
-only `snippets/{markdown-mode,tex-mode}` and
-`templates/{noema,latex,tex}` into Noema. The complete
-`etc/katex-macros` and `etc/prose-accepted-words.txt` assets remain links
-because both hosts use them.
-
-Existing `AARONNOTE_*` and `aaronnote:api:*` names remain wire compatibility
-contracts.  Emacs commands and variables use only the `my/noema-*` namespace.
-
-## App configuration and themes
-
-Noema stores user settings in `~/.config/noema/config.json`. The current
-schema keeps the selected packaged theme:
-
-```json
-{
-  "schemaVersion": 1,
-  "appearance": {
-    "theme": "aaronnote"
-  }
-}
-```
-
-Open **Tools → Configuration** (or **Noema → Settings…** in the desktop app)
-to manage these settings on the dedicated configuration page. Changes are
-remembered globally and propagated to open Noema windows.
-
-Themes are bundled with the application rather than copied into the config
-directory. Theme metadata is registered in
-`src/styles/themes/themes.json`, and the build discovers CSS files in that
-directory automatically. Adding a packaged theme means adding its CSS file
-and manifest entry; the config API and Tools picker do not need a new
-hard-coded theme branch.
-
-## Desktop builds
-
-After `npm ci`, `npm run build:desktop` builds the shared renderer and the
-Electron desktop shell. On macOS, `make`/`make build` is the canonical entry
-point used by both Noema.app and the Emacs host. `make install` deliberately
-runs that same build before transactionally updating `/Applications/Noema.app`,
-so it never installs a leftover staging bundle.
-
-## Library install
-
-```sh
-npm install typora-web
-```
-
-## Usage
-
-```ts
-import { createEditor } from "typora-web";
-import "typora-web/widgets.css";
-import "typora-web/theme-typora.css";
-
-const editor = createEditor(document.querySelector("#app")!, {
-  initialContent: "# hello",
-  onChange: (md) => console.log(md),
-});
-```
-
-Controller methods:
-
-
-| Method / field | Description |
-| --- | --- |
-| `editor.getMarkdown()` | current markdown |
-| `editor.setMarkdown(md)` | replace contents |
-| `editor.toggleSource()` | flip rendered ↔ raw view (also bound to `⌘/` / `Ctrl+/`) |
-| `editor.isSourceMode()` | boolean |
-| `editor.focus()` | focus the active surface |
-| `editor.destroy()` | tear down |
-| `editor.view` | underlying CM6 `EditorView`. No stability guarantee on this access. |
-
-Options: `initialContent`, `onChange(md)`, `onFocus()`, `onBlur()`.
-
-Noema ships `typora-web/theme-typora.css` as its default theme. To roll your own, write a stylesheet that targets `.cm-editor` descendants.
-
-## Emacs-embedded app
-
-The vendored app is a focused single-document Markdown editor. Emacs owns note
-selection, filesystem navigation, agenda, Git, Lean interaction, and graph
-launching. The web editor keeps rendering, source mode, saving, native assets,
-and built-in Copilot completion using Emacs's installed language-server binary.
-
-Lean code fences remain static syntax-highlighted snippets. Interactive Lean
-work stays in `lang/lean/`.
-
-## Coverage
-
-Legend: :white\_check\_mark: stable · :yellow\_circle: partial (note explains what's missing) · :pause\_button: todo.
-
-### Block syntax
-
-| Syntax | Status | Notes |
-| --- | :---: | --- |
-| paragraph | :white_check_mark: |  |
-| ATX heading `#`..`######` | :white_check_mark: |  |
-| setext heading (`===` / `---` underline) | :white_check_mark: |  |
-| blockquote `>` | :white_check_mark: |  |
-| bullet list `-` `*` `+` | :white_check_mark: |  |
-| ordered list `1.` | :white_check_mark: |  |
-| nested list | :white_check_mark: |  |
-| task list `- [ ]` / `- [x]` | :white_check_mark: |  |
-| fenced code ```` ``` ```` | :white_check_mark: |  |
-| indented code (4-space) | :white_check_mark: | source shape is preserved byte-for-byte |
-| thematic break `---` | :white_check_mark: |  |
-| table `\\| a \\| b \\|` | :white_check_mark: |  |
-| YAML front matter | :white_check_mark: |  |
-| reference link def `[id]: url` | :white_check_mark: | definition line renders as dimmed `syntax-hint`; `[text][id]` click resolves via on-demand syntax scan |
-| HTML block | :white_check_mark: | block widget; sanitized via `sanitizeEmbeddedHtml` (DOMPurify, forbids script/iframe/object) |
-| math block `\[…\]` | :white_check_mark: | block node, source-preserving parse/serialize, rendered preview |
-
-### Inline syntax
-
-| Syntax | Status | Notes |
-| --- | :---: | --- |
-| em `*x*` / `_x_` | :white_check_mark: |  |
-| strong `**x**` / `__x__` | :white_check_mark: |  |
-| nested `***em+strong***` | :white_check_mark: | CommonMark rule-of-three cases covered |
-| inline code `` `x` `` | :white_check_mark: |  |
-| strike `~~x~~` | :white_check_mark: |  |
-| link `[text](url)` | :white_check_mark: | nested brackets, escaped `\]`, and angle-bracket hrefs with spaces covered |
-| link with title `[t](u "title")` | :white_check_mark: |  |
-| empty-text link `[](url)` | :white_check_mark: |  |
-| image `![alt](src)` | :white_check_mark: |  |
-| autolink `<https://x.com>` | :white_check_mark: |  |
-| reference-style link `[t][id]` | :white_check_mark: | click resolves via on-demand LinkReference scan; def block preserved in source |
-| hard break (2-space + `\n`) | :white_check_mark: |  |
-| soft break (`\n` in para) | :white_check_mark: |  |
-| backslash escape `\*` | :white_check_mark: | delimiter hides outside the cursor span and dims while editing |
-| inline HTML | :white_check_mark: | inline widget; sanitized via `sanitizeEmbeddedHtml` |
-| inline math `\(x\)` | :white_check_mark: | raw TeX preserved; rendered inline preview |
-
-### Typora extensions
-
-| Syntax                            | Status             | Notes                                     |
-| --------------------------------- | :----------------: | ----------------------------------------- |
-| highlight `==x==`                 | :white_check_mark: |                                           |
-| subscript `~x~`                   | :white_check_mark: |                                           |
-| superscript `^x^`                 | :white_check_mark: |                                           |
-| footnotes `[^id]` / `[^id]: text` | :white_check_mark: | auto-number command, reference/definition navigation and HTML backrefs |
-| `[toc]` block                     | :white_check_mark: |                                           |
-| emoji `:smile:`                   | :white_check_mark: |                                           |
-| HTML comment `<!-- -->`           | :white_check_mark: |                                           |
-| inline command `@@cmd(x) [y]{k: v}` | :white_check_mark: | TODO/comment/side-comment plus native `@@revision(style) [original] {advice: "..."; reason: "..."}` with accept/keep/edit and visible HTML/LaTeX export |
-| org command block `#+begin kind`   | :white_check_mark: | rendered through the org-env CM6 widget   |
-| callout block `> [!note]`          | :white_check_mark: | editor shows left-border colour + title bold; HTML export wraps in `.callout` + `.callout-title` |
-| heading fold `zc` / `zo` / `za`   | :white_check_mark: | foldService + chevron (hover-only); state lives in CM6 foldState |
-| diagram fences (mermaid, flow, …) | :yellow_circle:    | `mermaid` preview exists for fenced code blocks; broader diagram families are not implemented |
-
-### Editor behaviors
-
-| Behavior                             | Status             | Notes |
-| ------------------------------------ | :----------------: | ----- |
-| cursor-aware delimiter hinting       | :white_check_mark: | |
-| auto-pair brackets                   | :white_check_mark: | VSCode-style pairing, overtyping, selection wrapping, and paired deletion |
-| math snippets and field navigation   | :white_check_mark: | Shared YAS catalog, local math completion, and bounded Cmd+[ / ]; see [usage](docs/snippets-and-jumps.md) and [catalog maintenance](docs/emacs-snippet-migration.md) |
-| core reconnect                       | :white_check_mark: | Focus, click, typing, or input reconnects a broken event stream; an active retained xwidget can restart core on the same port. No idle retry loop or page refresh. |
-| ordered-list auto-renumber           | :white_check_mark: | move/paste/delete renumbers in same transaction (single undo); `.`/`)` marker preserved |
-| heading fold (`zc`/`zo`/`za`/`zM`/`zR`) | :white_check_mark: | foldService + hover-only chevron; state in CM6 foldState |
-| lossless `parse → serialize → parse` | :white_check_mark: | |
-
-## Current Notes
-
-- Math is no longer a planned feature. The repo already contains parser, serializer, render, and editor tests for inline and display math.
-- Mermaid is partially implemented through fenced-code preview and lazy rendering. The README used to describe it as future work; that is no longer accurate.
-- Complex inline links use a custom Lezer `LinkEnd` parser so nested brackets remain part of the enclosing link text. Reference-definition reload renders the definition block as `syntax-hint`; click-to-jump resolves it via an on-demand scan.
-
-## Spec
-
-Specs are the project's core design choice and the harness the agent works in. Each Typora behavior is captured as a **spec**: a seed text, a sequence of input events, and the rendered output expected at each checkpoint. Every spec runs directly as a test case; the agent ships a behavior by making the test pass. Describing behaviors this way is what makes a project this size tractable for an agent to build.
-
-The catalog lives at the [`/specs`](https://yuyz0112.github.io/typora-web/#/specs "spec catalog") page in the live demo, where each card is a spec you can step through.
-
-## Contributing
-
-Bug reports and feature requests are accepted as specs. If a Typora behavior isn't matched, file an issue with:
-
-- a **seed** (the markdown the editor starts from; can be empty)
-- an **event sequence** (the keys you press; the same DSL existing specs use)
-- the **rendered output** Typora produces
-
-The "report" link on every card in the [live demo's catalog](https://yuyz0112.github.io/typora-web/#/specs "spec catalog") prefills an issue with seed, events, and observed output ready for you to fill in.
+AGPL-3.0-only. The source-editor infrastructure includes attributed adaptations from Overleaf; see `NOTICE` and `docs/architecture/overleaf-source-editor-study.md`.

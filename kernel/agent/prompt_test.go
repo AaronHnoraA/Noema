@@ -71,7 +71,7 @@ func TestSystemPromptUsesAppearanceLanguage(t *testing.T) {
 	kernelModel.Conf.Appearance = kernelConf.NewAppearance()
 	kernelModel.Conf.Appearance.Lang = "zh-CN"
 	_, filename, _, _ := runtime.Caller(0)
-	util.WorkingDir = filepath.Join(filepath.Dir(filename), "..", "..", "app")
+	util.WorkingDir = filepath.Join(filepath.Dir(filename), "..", "..", "kernel-resources")
 	t.Cleanup(func() {
 		kernelModel.Conf = originalConf
 		util.WorkingDir = originalWorkingDir

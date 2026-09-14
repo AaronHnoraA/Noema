@@ -39,7 +39,6 @@ var (
 	serveLang           string
 	serveMode           string
 	serveSSL            bool
-	serveAttachUI       bool
 	serveSafeMode       bool
 	serveEnablePprof    bool
 	serveNoemaSidecar   bool
@@ -64,7 +63,7 @@ var serveCmd = &cobra.Command{
 		// --workspace 优先取 serve 自己的（rootCmd 的 persistent flag），兜底环境变量与默认值交给 util.BootWithFlags 内部处理（与原 Boot() 行为一致）。
 		ws := workspacePath
 
-		util.BootWithFlags(ws, serveWdPath, servePort, serveReadOnly, serveAccessAuthCode, serveLang, serveMode, serveSSL, serveAttachUI, serveSafeMode, serveEnablePprof)
+		util.BootWithFlags(ws, serveWdPath, servePort, serveReadOnly, serveAccessAuthCode, serveLang, serveMode, serveSSL, serveSafeMode, serveEnablePprof)
 
 		model.InitJwtKey()
 		// The Node-owned sidecar discovers optional external tools on first use,
@@ -108,7 +107,7 @@ var serveCmd = &cobra.Command{
 }
 
 func init() {
-	// --wd 默认值取内核可执行文件所在目录的上一级（打包后的 resources/，appearance/、stage/ 所在目录），
+	// --wd 默认值取内核资源目录（appearance/、stage/ 所在目录），
 	// 与 rootCmd.PersistentPreRunE 走同一个 resolveWorkingDir()，确保两条启动路径行为一致。
 	serveCmd.Flags().StringVar(&serveWdPath, "wd", resolveWorkingDir(), "working directory of SiYuan")
 	serveCmd.Flags().StringVar(&servePort, "port", "0", "port of the HTTP server")
@@ -117,7 +116,6 @@ func init() {
 	serveCmd.Flags().StringVar(&serveLang, "lang", "", "ar/de/en/es/fr/he/hi/id/it/ja/ko/nl/pl/pt-BR/ru/sk/th/tr/uk/zh-CN/zh-TW")
 	serveCmd.Flags().StringVar(&serveMode, "mode", "prod", "dev/prod (non-prod values must not be used on network-exposed instances)")
 	serveCmd.Flags().BoolVar(&serveSSL, "ssl", false, "for https and wss")
-	serveCmd.Flags().BoolVar(&serveAttachUI, "attach-ui", false, "attach kernel lifecycle to desktop UI process (used by Electron)")
 	serveCmd.Flags().BoolVar(&serveSafeMode, "safe-mode", false, "boot in safe mode")
 	serveCmd.Flags().BoolVar(&serveEnablePprof, "enable-pprof", false, "register unauthenticated /debug/pprof/ endpoints exposing process memory dumps (dev only, never enable on a network-exposed instance)")
 	serveCmd.Flags().BoolVar(&serveNoemaSidecar, "noema-sidecar", false, "use the Node-owned private loopback transport without SiYuan UI polling, TLS multiplexing, or the fixed-port proxy")

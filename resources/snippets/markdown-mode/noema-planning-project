@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Noema planning project
-# key: approject
-# group: Noema planning DSL
-# --
-@@project(${1:active}) ${2:Project name} {id: `(my/noema-new-id "block")`}$0

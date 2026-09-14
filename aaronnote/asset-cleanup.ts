@@ -1,7 +1,7 @@
 import type { UnusedAsset } from "./types.ts";
 import { formatBytes, formatShortDateTime } from "./ui-format.ts";
 import { api } from "./api-client.ts";
-import { desktopPlatformLabels } from "../shared/desktop-shell.mjs";
+import { noemaPlatformLabels } from "../src/platform-compat.ts";
 
 type ModalField = {
   id: string;
@@ -26,7 +26,7 @@ export function createUnusedAssetsManager(options: {
   setStatus: (text: string) => void;
   openFormModal: (title: string, fields: ModalField[], submitLabel?: string) => Promise<Record<string, string> | null>;
 }): UnusedAssetsManager {
-  const trashLabel = desktopPlatformLabels(window.noemaDesktop?.platform || (/Mac/.test(navigator.platform) ? "darwin" : "")).trash;
+  const trashLabel = noemaPlatformLabels().trash;
   let assets: UnusedAsset[] = [];
   let selected = new Set<string>();
   let loading = false;

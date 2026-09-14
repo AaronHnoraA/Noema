@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [bullet] — Bullet operator
-# key: bullet
-# group: Math · Operators
-# --
-\bullet$0

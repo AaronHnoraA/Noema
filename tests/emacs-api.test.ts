@@ -7,6 +7,7 @@ describe("Emacs host API", () => {
     const received: unknown[] = [];
     const handlers = createEmacsApiHandlers({
       apiOpenInEmacs: () => undefined,
+      apiSelectJupyterCell: () => undefined,
       apiCurrentFile: () => undefined,
       apiEmacsInputFocus: () => undefined,
       apiEmacsUiState: () => undefined,
@@ -32,6 +33,7 @@ describe("Emacs host API", () => {
     const received: unknown[] = [];
     const handlers = createEmacsApiHandlers({
       apiOpenInEmacs: () => undefined,
+      apiSelectJupyterCell: () => undefined,
       apiCurrentFile: () => undefined,
       apiEmacsInputFocus: async (body: unknown) => {
         received.push(body);
@@ -46,6 +48,28 @@ describe("Emacs host API", () => {
     const body = { client: "aaronnote:/notes/a.md", file: "/notes/a.md" };
 
     await expect(handlers["aaronnote:api:emacs:input-focus"](body)).resolves.toEqual({ ok: true });
+    expect(received).toEqual([body]);
+  });
+
+  test("routes stable Jupyter cell identity back to Emacs", async () => {
+    const received: unknown[] = [];
+    const handlers = createEmacsApiHandlers({
+      apiOpenInEmacs: () => undefined,
+      apiSelectJupyterCell: async (body: unknown) => {
+        received.push(body);
+        return { ok: true };
+      },
+      apiCurrentFile: () => undefined,
+      apiEmacsInputFocus: () => undefined,
+      apiEmacsUiState: () => undefined,
+      apiEmacsKey: () => undefined,
+      apiSystemOpen: () => undefined,
+      apiEmacsZotero: () => undefined,
+      apiChooseNotePath: () => undefined,
+    });
+    const body = { scriptFile: "/work/research.noema", cellId: "cell-analysis" };
+
+    await expect(handlers["aaronnote:api:emacs:jupyter-cell"](body)).resolves.toEqual({ ok: true });
     expect(received).toEqual([body]);
   });
 });

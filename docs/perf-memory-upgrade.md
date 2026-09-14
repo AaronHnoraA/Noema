@@ -763,7 +763,7 @@ Emacs 侧 xwidget 后的占位 buffer 维持 inert：不开插件、不接收逃
 - `make test`、`make build`、`make install` 全部成功。
 - 安装后的 `/Applications/Noema.app` smoke：`hostMode: "desktop"`、preload true、54 px 标题栏，
   Back / Forward / Refresh / Editor actions / Window actions 全部存在。
-- Emacs `lisp/roam/Noema` 指向本仓库；snippets、templates、KaTeX macros 和 prose 词表全部解析到
+- Emacs `site-lisp/noema` 指向本仓库；snippets、templates、KaTeX macros 和 prose 词表全部解析到
   `resources/`，已退役的 `lisp/roam/aaronnote` 不存在。
 
 ### 2026-08-29（第十轮）：Node→Go 优化补齐清单，以及 git 水位设计的去向

@@ -2,7 +2,7 @@ import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-describe("Noema Jupyter workspace layout", () => {
+describe("Noema Jupyter Emacs-owned output surface", () => {
   const main = readFileSync(join(process.cwd(), "aaronnote/jupyter-main.ts"), "utf8");
   const css = readFileSync(join(process.cwd(), "aaronnote/jupyter-page.css"), "utf8");
 
@@ -14,12 +14,28 @@ describe("Noema Jupyter workspace layout", () => {
     expect(main).toContain("loadTab(tab, false), 90");
   });
 
-  test("uses one workspace toolbar and a contextual cell menu", () => {
-    expect(main).toContain('data-action="run-current"');
-    expect(main).toContain('data-pane="manager"');
-    expect(main).toContain('data-pane="inspector"');
+  test("retains rich-output actions without becoming a document/control UI", () => {
+    const template = main.slice(main.indexOf("app.innerHTML"), main.indexOf("document.body.append(app)"));
+    expect(template).toContain("Jupyter Output");
+    expect(template).not.toContain('data-action="run-current"');
+    expect(template).not.toContain('data-pane="manager"');
+    expect(template).not.toContain('data-pane="inspector"');
+    expect(template).not.toContain("data-kernel-select");
+    expect(template).not.toContain("data-manager");
+    expect(template).not.toContain("data-inspector");
+    expect(main).not.toContain("managerSnapshot");
+    expect(main).not.toContain("sessionSelect");
+    expect(main).not.toContain("renderJupyterVariablesTable");
     expect(main).toContain('button("•••", "Cell actions"');
     expect(main).toContain('menuItem("Pop Out Output"');
+    const menu = main.slice(main.indexOf("function openCellMenu"), main.indexOf("function appendStdinForm"));
+    expect(menu).not.toContain("Insert Cell");
+    expect(menu).not.toContain("Delete Cell");
+    expect(menu).not.toContain('execute("current")');
+    expect(menu).not.toContain('mutate("');
+    const keys = main.slice(main.indexOf('window.addEventListener("keydown"'), main.indexOf('window.addEventListener("aaronnote:jupyter-cell"'));
+    expect(keys).not.toContain("execute(");
+    expect(keys).not.toContain("mutate(");
   });
 
   test("keeps live OutputAreas stable across execution events", () => {
@@ -32,16 +48,25 @@ describe("Noema Jupyter workspace layout", () => {
     expect(handler).not.toContain("renderWorkspace()");
   });
 
+  test("keeps the Emacs-validated Noema project root on every document refresh", () => {
+    expect(main).toContain("projectRoot?: string");
+    expect(main).toContain('projectRoot: query.get("projectRoot") || ""');
+    expect(main).toContain("projectRoot: text(payload.projectRoot)");
+    expect(main).toContain("scriptSnapshot(documentParams(tab))");
+  });
+
   test("isolates page, board, panel, and long-output scrolling", () => {
     expect(css).toMatch(/html, body[\s\S]*overflow: hidden/);
     expect(css).toMatch(/body \{ position: fixed; inset: 0; \}/);
     expect(css).toMatch(/\.noema-jupyter-page[\s\S]*grid-template-columns: minmax\(0, 1fr\)/);
+    expect(css).toMatch(/\.noema-jupyter-output-surface[\s\S]*grid-template-rows: 38px minmax\(0, 1fr\)/);
     expect(css).toMatch(/\.noema-jupyter-shell[\s\S]*width: 100%; height: 100%/);
-    expect(css).toContain(".noema-jupyter-workspace { grid-column: 2; }");
+    expect(css).not.toContain("data-manager-open");
+    expect(css).not.toContain("data-inspector-open");
     expect(css).toMatch(/\.noema-jupyter-cell[\s\S]*width: 100%; min-width: 0; max-width: 100%/);
     expect(css).toMatch(/\.noema-jupyter-workspace[\s\S]*overscroll-behavior: contain/);
     expect(css).toMatch(/\.noema-jupyter-output\.is-auto-collapsed[^}]*overflow: auto/);
-    expect(css).toContain('grid-template-columns: 0 minmax(0, 1fr) 0');
+    expect(css).toContain('grid-template-columns: minmax(0, 1fr)');
   });
 
   test("applies the dark JupyterLab token surface to widgets and KaTeX", () => {

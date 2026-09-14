@@ -1,5 +1,6 @@
 export function createEmacsApiHandlers({
   apiOpenInEmacs,
+  apiSelectJupyterCell,
   apiCurrentFile,
   apiEmacsInputFocus,
   apiEmacsUiState,
@@ -10,6 +11,7 @@ export function createEmacsApiHandlers({
 }) {
   return {
     "aaronnote:api:emacs:open": (body) => apiOpenInEmacs(body?.file ?? body, body?.line, body?.col, body?.tag),
+    "aaronnote:api:emacs:jupyter-cell": (body) => apiSelectJupyterCell(body),
     "aaronnote:api:emacs:current-file": (file) => apiCurrentFile(file),
     "aaronnote:api:emacs:input-focus": (body) => apiEmacsInputFocus(body),
     "aaronnote:api:emacs:ui-state": (body) => apiEmacsUiState(body),

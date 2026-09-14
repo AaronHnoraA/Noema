@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Fraction
-# key: frac
-# group: Noema local
-# --
-\frac{${1:a}}{${2:b}}$0

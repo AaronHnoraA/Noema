@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Big-O
-# key: tcO
-# group: TCS symbols
-# --
-O\!\left(${1:n}\right)$0

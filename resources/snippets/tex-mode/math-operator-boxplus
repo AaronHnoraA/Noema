@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [boxplus] — Boxed plus
-# key: boxplus
-# group: Math · Operators
-# --
-\boxplus$0

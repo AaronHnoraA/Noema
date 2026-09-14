@@ -11,8 +11,8 @@ import { hostMode } from "./host-mode.ts";
  * web-host process has no such restriction: `POST /api/clipboard` pipes the
  * text through `pbcopy`.
  *
- * Electron already owns a real clipboard, and the read-only server host must
- * not touch the machine running it — both keep the plain browser path.
+ * The read-only server host must not touch the machine running it, so it keeps
+ * the plain browser path.
  */
 export function installHostClipboard(): void {
   if (hostMode() !== "emacs") return;

@@ -3,7 +3,7 @@
 
 // Package katexmacros loads the portable LaTeX preamble subset used by
 // Noema's KaTeX renderers. It mirrors shared/katex-macros.mjs; shared fixtures
-// keep the Go desktop data plane and browser/Emacs fallback aligned.
+// keep the Go data plane and browser/Emacs fallback aligned.
 package katexmacros
 
 import (

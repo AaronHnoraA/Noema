@@ -24,8 +24,7 @@ let hostWriter: SystemClipboardWriter | null = null;
 /**
  * Install (or clear, with null) the host transport used by every copy.
  *
- * Hosts whose clipboard already works — Electron, a normal browser tab —
- * install nothing and keep the browser path below.
+ * A normal browser tab installs nothing and keeps the browser path below.
  */
 export function setSystemClipboardWriter(writer: SystemClipboardWriter | null): void {
   hostWriter = writer;

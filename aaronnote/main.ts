@@ -1,4 +1,3 @@
-import "./desktop-bridge.ts";
 import "../src/styles/widgets.css";
 import "../src/styles/typography.css";
 import { installB3ComponentSystem } from "../src/b3-component-system.ts";
@@ -52,8 +51,7 @@ import { formatMathRenderError } from "../src/math-render.ts";
 import { mathPreviewFitScale } from "./math-preview-fit.ts";
 import { getKatexMacros, setKatexMacros } from "../src/katex-macros.ts";
 import { renderJupyterVariablesTable } from "../src/jupyter-variables-view.ts";
-import { formatCitationLabel, renderPublishedNoteHTML } from "../src/render-html.ts";
-import { createSelfContainedNoteHTML } from "../src/self-contained-html.ts";
+import { formatCitationLabel } from "../src/render-html.ts";
 import { hrefProtocol, safeHref } from "../src/url-safety.ts";
 import {
   api,
@@ -75,7 +73,7 @@ import { Epoch } from "../src/async-epoch.ts";
 import { CoalescedTimer } from "../src/coalesced-timer.ts";
 import { findSlashHint, resolveHintMenuItems } from "../src/hint-core.ts";
 import { matchHotKey } from "../src/hotkey.ts";
-import { primaryModifierDown } from "../src/platform-compat.ts";
+import { noemaPlatformLabels, primaryModifierDown } from "../src/platform-compat.ts";
 import type { HeadingNumberFormat } from "../src/heading-number.ts";
 import { createMenuController, type NoemaMenuItem } from "../src/menu-system.ts";
 import { createTransientSurfaceRegistry } from "../src/transient-surfaces.ts";
@@ -96,7 +94,6 @@ import { normalizeDateValue } from "../src/planning-values.ts";
 import { AARONNOTE_AUTHORING_SNIPPETS } from "../src/authoring-syntax.ts";
 import { patchPlanningNodeRaw, scanPlanningNodes } from "../shared/planning-dsl.mjs";
 import { latexMarkNames, latexMarkSnippetDefinitions } from "../shared/latex-marks.mjs";
-import { desktopDropDisposition, desktopPlatformLabels } from "../shared/desktop-shell.mjs";
 import {
   buildLatexExportScopes,
   latexExportScopesContent,
@@ -209,7 +206,7 @@ import {
   handleXwidgetVimBeforeInput,
   handleXwidgetVimKeydown,
 } from "./xwidget-key-guard.ts";
-import { focusQuiescenceEnabled, serverMode, sourceEditorName, standaloneMode } from "./host-mode.ts";
+import { focusQuiescenceEnabled, serverMode, sourceEditorName } from "./host-mode.ts";
 import { installHostClipboard } from "./host-clipboard.ts";
 import { unionSelectionRect } from "./selection-geometry.ts";
 import { writeSystemClipboard } from "../src/system-clipboard.ts";
@@ -236,9 +233,9 @@ import {
   payloadUpdatesNoteIndex,
 } from "./note-index.ts";
 import {
-  createDesktopKnowledgeDock,
-  type DesktopKnowledgeDock,
-} from "./desktop-knowledge-dock.ts";
+  createKnowledgeDock,
+  type KnowledgeDock,
+} from "./knowledge-dock.ts";
 import { refreshAgendaView } from "./agenda-view.ts";
 
 const removeNoemaThemeRuntime = installNoemaThemeRuntime();
@@ -279,30 +276,17 @@ const injectedServerReader = (window as Window & { __noemaServerReader?: Partial
 const serverReader = { ...serverReaderDefaults, ...(injectedServerReader || {}) };
 const passiveServerReader = serverReaderMode && !serverReader.editingAids;
 const initialReadOnly = serverReaderMode || initialParams.get("readonly") === "1" || initialParams.get("readonly") === "true";
-const desktopMode = standaloneMode() && Boolean(window.noemaDesktop);
 let activeObsidianTaskID = "";
 const jupyterExecutionAvailable = !serverReaderMode;
-const desktopPlatform = window.noemaDesktop?.platform || (/Mac/.test(navigator.platform) ? "darwin" : "");
-const platformLabels = desktopPlatformLabels(desktopPlatform);
-document.body.dataset.hostMode = serverReaderMode ? "server" : desktopMode ? "desktop" : "emacs";
+const platformLabels = noemaPlatformLabels();
+document.body.dataset.hostMode = serverReaderMode ? "server" : "emacs";
 // Must run before the first copy: it decides whether a copy can reach the OS.
 installHostClipboard();
-if (desktopMode) document.body.dataset.desktopPlatform = desktopPlatform;
 if (serverReaderMode) {
   document.body.dataset.serverReaderEditingAids = String(serverReader.editingAids);
 }
 
 root.innerHTML = `
-  <header class="noema-desktop-titlebar" data-desktop-titlebar data-desktop-drag-region ${desktopMode ? "" : "hidden"}>
-    <nav class="noema-desktop-titlebar-controls" aria-label="Note navigation">
-      <button type="button" data-desktop-command="back" title="Back" aria-label="Back">←</button>
-      <button type="button" data-desktop-command="forward" title="Forward" aria-label="Forward">→</button>
-      <button type="button" data-desktop-command="refresh" title="Refresh" aria-label="Refresh">↻</button>
-      <button type="button" data-desktop-menu="actions" title="Editor actions" aria-label="Editor actions">✎</button>
-      <button type="button" data-desktop-menu="window" title="Window actions" aria-label="Window actions">▦</button>
-    </nav>
-    <strong class="noema-desktop-titlebar-name" data-desktop-title>Noema</strong>
-  </header>
   <header class="noema-server-header" data-server-header ${serverReaderMode ? "" : "hidden"}>
     <div class="noema-server-leading">
       <a href="/wiki" class="noema-server-brand" aria-label="Open Noema Public Wiki">
@@ -341,9 +325,6 @@ root.innerHTML = `
     </aside>
     <section class="aaronnote-focused-editor" data-editor></section>
   </main>
-  <div class="noema-desktop-drop-overlay" data-desktop-drop-overlay hidden>
-    <span data-desktop-drop-label>Drop to insert</span>
-  </div>
   <div class="noema-global-search" data-global-search hidden>
     <label><span aria-hidden="true">⌕</span><input type="search" data-global-search-input placeholder="Search notes, tags, namespaces…" aria-label="Search knowledge" autocomplete="off"></label>
   </div>
@@ -351,10 +332,7 @@ root.innerHTML = `
 
 const host = root.querySelector<HTMLElement>("[data-editor]")!;
 const fileLabel = document.createElement("strong");
-const desktopTitleName = root.querySelector<HTMLElement>("[data-desktop-title]")!;
 const serverTitleName = root.querySelector<HTMLElement>("[data-server-title]")!;
-const desktopDropOverlay = root.querySelector<HTMLElement>("[data-desktop-drop-overlay]")!;
-const desktopDropLabel = root.querySelector<HTMLElement>("[data-desktop-drop-label]")!;
 const modeLabel = root.querySelector<HTMLElement>("[data-vim-mode]")!;
 const readOnlyLabel = root.querySelector<HTMLElement>("[data-readonly]")!;
 const statusLabel = document.createElement("span");
@@ -963,7 +941,7 @@ contextMenu.hidden = true;
 contextMenu.setAttribute("role", "menu");
 document.body.appendChild(contextMenu);
 const contextMenuController = createMenuController(contextMenu, {
-  topBoundary: () => desktopMode ? 54 : 6,
+  topBoundary: () => 6,
   onError: (error) => setStatus(error instanceof Error ? error.message : "Context action failed"),
   onClose: () => contextMenu.classList.remove("is-bibliography", "is-math"),
 });
@@ -1091,8 +1069,6 @@ let forceFullEditorSave = false;
 // reopened. The host uses it to reject genuinely out-of-order writes from the
 // same browser client.
 let saveSequence = 0;
-let desktopSaveInFlight = false;
-let desktopSaveConflict = false;
 let applyingContent = false;
 let saveTimer = 0;
 let saveIdleHandle = 0;
@@ -1130,7 +1106,7 @@ let notes: NoteSummary[] = [];
 let notesIndexLoaded = false;
 let pathSuggestions: string[] = [];
 let currentRelationshipSource = "";
-let desktopKnowledgeDock: DesktopKnowledgeDock | null = null;
+let knowledgeDock: KnowledgeDock | null = null;
 // Tracks the index version from the last notesIndexPayload response so we can
 // detect when the server's watcher has bumped the index due to external changes.
 let lastNotesIndexVersion = 0;
@@ -1435,20 +1411,6 @@ async function storePasteAssetFromPath(
 
 async function readSystemClipboardForPaste(): Promise<EditorClipboardPayload | null> {
   try {
-    if (desktopMode && window.noemaDesktop?.readClipboard) {
-      const clipboard = await window.noemaDesktop.readClipboard();
-      if (clipboard.kind === "image") {
-        const asset = await api.assets.upload({
-          file: currentFile,
-          name: "clipboard.png",
-          type: clipboard.type,
-          data: clipboard.data,
-        });
-        return { kind: "asset", asset };
-      }
-      if (clipboard.kind === "text") return clipboard;
-      return { kind: "empty" };
-    }
     const payload = await api.clipboard.read({ file: currentFile }) as EditorClipboardPayload;
     return payload && typeof payload === "object" ? payload : null;
   } catch {
@@ -1457,13 +1419,7 @@ async function readSystemClipboardForPaste(): Promise<EditorClipboardPayload | n
 }
 
 async function openSystemTarget(target: string, base = ""): Promise<void> {
-  const result = await api.emacs.systemOpen(target, base || undefined);
-  if (!desktopMode || !window.noemaDesktop || !result?.target) return;
-  const protocol = hrefProtocol(result.target);
-  const opened = protocol
-    ? await window.noemaDesktop.openExternal(result.target)
-    : await window.noemaDesktop.openPath(result.target);
-  if (!opened.ok) throw new Error(opened.message || `Unable to open ${result.target}`);
+  await api.emacs.systemOpen(target, base || undefined);
 }
 
 function primaryShortcut(key: string): string {
@@ -1587,13 +1543,11 @@ function withBuiltinSnippets(items: readonly SnippetSummary[] = []): SnippetSumm
 }
 snippets = withBuiltinSnippets(snippets);
 
-let lastWindowStateKey = "";
-
 /**
  * Runs on every document change, so it must cost nothing when nothing changed.
  *
  * Only the dirty marker in `document.title` actually varies while typing; the
- * chrome labels are constant for a given note. Writing them anyway dirtied five
+ * chrome labels are constant for a given note. Writing them anyway dirtied
  * text/attribute nodes per keystroke, and in the Emacs xwidget host every
  * resulting repaint is paid twice because Emacs redraws the widget through its
  * own redisplay. Assigning an identical string is not free — it still replaces
@@ -1602,10 +1556,7 @@ let lastWindowStateKey = "";
 function updateTitle(): void {
   const name = currentFile.split(/[\\/]/).at(-1) || "Noema";
   const displayName = serverReaderMode && currentTitle ? currentTitle : name;
-  const fileTitle = currentFile || name;
   if (fileLabel.textContent !== name) fileLabel.textContent = name;
-  if (desktopTitleName.textContent !== name) desktopTitleName.textContent = name;
-  if (desktopTitleName.title !== fileTitle) desktopTitleName.title = fileTitle;
   if (serverTitleName.textContent !== displayName) serverTitleName.textContent = displayName;
   const serverTitle = currentFile || displayName;
   if (serverTitleName.title !== serverTitle) serverTitleName.title = serverTitle;
@@ -1613,22 +1564,6 @@ function updateTitle(): void {
     ? serverReaderMode ? `${displayName} · Noema Wiki` : `${name} (read-only)`
     : revision === savedRevision ? name : `* ${name}`;
   if (document.title !== documentTitle) document.title = documentTitle;
-  if (!window.noemaDesktop) return;
-  const windowState = {
-    kind: "note" as const,
-    file: currentFile,
-    title: name,
-    dirty: !currentReadOnly && revision !== savedRevision,
-    saveInFlight: desktopSaveInFlight,
-    conflict: desktopSaveConflict,
-    busy: false,
-  };
-  // The desktop shell repaints native chrome from this, so an unchanged state
-  // must not cross the preload boundary once per keystroke.
-  const key = JSON.stringify(windowState);
-  if (key === lastWindowStateKey) return;
-  lastWindowStateKey = key;
-  window.noemaDesktop.updateWindowState(windowState);
 }
 
 function renderModeToggleLabel(mode: VimLiteMode): void {
@@ -1704,8 +1639,8 @@ const editor = createEditor(host, {
     scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
   },
   onBlur: () => {
-    // Focus changes are not mode commands.  Desktop controls and Emacs buffer
-    // switches must preserve Insert/Normal/Visual and the live selection.
+    // Focus changes are not mode commands. Emacs buffer switches must preserve
+    // Insert/Normal/Visual and the live selection.
     void flushCursorPosition();
   },
 });
@@ -1717,7 +1652,7 @@ editor.onDocumentReset(() => {
   forceFullEditorSave = false;
 });
 
-type DesktopEditorPerfResult = {
+type EditorPerfResult = {
   iterations: number;
   insertMs: number;
   deleteMs: number;
@@ -1783,14 +1718,14 @@ type DesktopEditorPerfResult = {
   contentRestored: boolean;
 };
 
-const desktopPerfSmokeMode = initialParams.get("desktopPerfSmoke");
-if (desktopPerfSmokeMode === "1" || desktopPerfSmokeMode === "selection") {
+const editorPerfSmokeMode = initialParams.get("editorPerfSmoke");
+if (editorPerfSmokeMode === "1" || editorPerfSmokeMode === "selection") {
   (
     window as Window & {
-      __noemaRunEditorPerfProbe?: () => Promise<DesktopEditorPerfResult>;
+      __noemaRunEditorPerfProbe?: () => Promise<EditorPerfResult>;
     }
   ).__noemaRunEditorPerfProbe = async () => {
-    const iterations = desktopPerfSmokeMode === "selection" ? 0 : 500;
+    const iterations = editorPerfSmokeMode === "selection" ? 0 : 500;
     const original = editor.view.state.doc.toString();
     const originalSelection = editor.view.state.selection.main;
     const longTasks: number[] = [];
@@ -1803,7 +1738,7 @@ if (desktopPerfSmokeMode === "1" || desktopPerfSmokeMode === "selection") {
     try {
       observer?.observe({ entryTypes: ["longtask"] });
     } catch {
-      // Long Tasks is not available in every Chromium execution mode.
+      // Long Tasks is not available in every embedded WebKit execution mode.
     }
 
     const frame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
@@ -3297,8 +3232,8 @@ let pendingKnowledgeInsert: { from: number; to: number; selected: string } | nul
 const hideKnowledgeSearch = (): void => { globalSearchRoot.hidden = true; globalSearchInput.value = ""; pendingKnowledgeInsert = null; editor.focus(); };
 const showKnowledgeSearch = (): void => {
   if (serverReaderMode) { serverSearchInput?.focus(); return; }
-  if (desktopKnowledgeDock && !pendingKnowledgeInsert) {
-    desktopKnowledgeDock.show("search");
+  if (knowledgeDock && !pendingKnowledgeInsert) {
+    knowledgeDock.show("search");
     return;
   }
   globalSearchRoot.hidden = false;
@@ -3369,7 +3304,7 @@ if (!serverReaderMode) {
     open: (note, options) => openNote(note, options),
     limit: 12,
   });
-  desktopKnowledgeDock = createDesktopKnowledgeDock({
+  knowledgeDock = createKnowledgeDock({
     root: graphPanelRoot,
     body: document.body,
     visibilityButton: graphButton,
@@ -3497,7 +3432,7 @@ const graphOverlayActivity = {
 changeHandlers.add(scheduleGraphOverlayUpdate);
 
 graphClose.addEventListener("click", () => {
-  if (desktopKnowledgeDock) desktopKnowledgeDock.collapse();
+  if (knowledgeDock) knowledgeDock.collapse();
   else localGraphPanel.collapse();
 });
 
@@ -5235,7 +5170,6 @@ function restoreEditorSaveChanges(snapshot: EditorSaveSnapshot): void {
 const saveDrain = new SaveDrain<EditorSaveSnapshot, Awaited<ReturnType<typeof api.notes.save>>>({
   capture() {
     if (currentReadOnly || !currentFile || revision === savedRevision) return null;
-    desktopSaveConflict = false;
     updateTitle();
     setStatus("Saving...");
     const changeToken = editorSaveChanges.capture();
@@ -5261,7 +5195,6 @@ const saveDrain = new SaveDrain<EditorSaveSnapshot, Awaited<ReturnType<typeof ap
     }
     if (result.conflict) {
       restoreEditorSaveChanges(snapshot);
-      desktopSaveConflict = true;
       setStatus(result.message || `Save conflict; reopen from ${sourceEditorName()}`);
       return false;
     }
@@ -5284,8 +5217,7 @@ const saveDrain = new SaveDrain<EditorSaveSnapshot, Awaited<ReturnType<typeof ap
     restoreEditorSaveChanges(snapshot);
     setStatus(error instanceof Error ? error.message : "Save failed");
   },
-  active(value) {
-    desktopSaveInFlight = value;
+  active() {
     updateTitle();
   },
 });
@@ -5330,7 +5262,7 @@ function scheduleSave(): void {
   saveTimer = window.setTimeout(() => {
     saveTimer = 0;
     // The large-document idle gate existed to keep whole-document
-    // serialization and JSON encoding away from active typing. Normal desktop
+    // serialization and JSON encoding away from active typing. Normal Emacs
     // and Emacs saves now send only a composed CM6 ChangeSet, so delaying that
     // tiny request can make the editor appear unsaved for another 2.5 seconds
     // without reducing main-thread work. Keep the gate only for a real
@@ -5625,7 +5557,6 @@ function applyOpenedNote(
   syncFormatPainterUi();
   revision = 0;
   savedRevision = 0;
-  desktopSaveConflict = false;
   // Cursor memory restores position, not the transient Source/Markdown tool
   // view. A regular note open should use the file's natural mode (Markdown
   // for notes), otherwise leaving a note in Source makes every later open of
@@ -5966,7 +5897,7 @@ function isEditorCommand(command: string): command is EditorCommand {
 }
 
 function primaryMod(event: KeyboardEvent): boolean {
-  return primaryModifierDown(event, desktopPlatform);
+  return primaryModifierDown(event);
 }
 
 type ProseCheckInput = {
@@ -6295,7 +6226,7 @@ function runProseCheck(automatic = false): void {
 }
 
 function runProseCheckShortcut(event: KeyboardEvent): boolean {
-  if (!matchHotKey("Primary+Shift+C", event, { platform: desktopPlatform })) return false;
+  if (!matchHotKey("Primary+Shift+C", event)) return false;
   event.preventDefault();
   void runProseCheck(false);
   return true;
@@ -6430,7 +6361,7 @@ function applyIndexPayload(payload: { notes?: NoteSummary[]; note?: NoteSummary;
       .sort((a, b) => a.localeCompare(b));
     scheduleAssistUpdate({ toc: true });
     localGraphPanel.invalidate();
-    desktopKnowledgeDock?.refresh();
+    knowledgeDock?.refresh();
     void refreshAgendaView();
   }
   if (presentationChanged) {
@@ -6499,18 +6430,11 @@ async function importObsidianVault(): Promise<void> {
     setStatus("An Obsidian import is already active");
     return;
   }
-  let sourcePath = "";
-  if (window.noemaDesktop?.selectDirectory) {
-    const selection = await window.noemaDesktop.selectDirectory({ title: "Choose Obsidian Vault" });
-    if (selection.canceled) return;
-    sourcePath = selection.path;
-  } else {
-    const values = await openFormModal("Import Obsidian Vault", [{
-      id: "path", label: "Vault folder", required: true,
-      description: "Enter the absolute path to a Vault containing a .obsidian directory.",
-    }], "Analyze");
-    sourcePath = values?.path?.trim() || "";
-  }
+  const values = await openFormModal("Import Obsidian Vault", [{
+    id: "path", label: "Vault folder", required: true,
+    description: "Enter the absolute path to a Vault containing a .obsidian directory.",
+  }], "Analyze");
+  const sourcePath = values?.path?.trim() || "";
   if (!sourcePath) return;
 
   try {
@@ -6982,7 +6906,7 @@ function openExternalUrl(href: string, options: { newWindow?: boolean } = {}): v
       .catch((err) => setStatus(err instanceof Error ? err.message : "Failed to open Maginnote link"));
     return;
   }
-  if (desktopMode && ["http", "https", "mailto"].includes(protocol)) {
+  if (!serverReaderMode && ["noema", "http", "https", "mailto"].includes(protocol)) {
     void openSystemTarget(raw, currentFile)
       .catch((err) => setStatus(err instanceof Error ? err.message : `Cannot open: ${raw}`));
     return;
@@ -8126,100 +8050,6 @@ function openLatexScopeModal(scopes: readonly LatexExportScope[]): Promise<Latex
   });
 }
 
-function currentPrintablePdfDocument(): { html: string; title: string; defaultPath: string } | null {
-  if (!currentFile) return null;
-  const note = currentNote();
-  const title = note?.title || fileNameFromPath(currentFile).replace(/\.[^.]+$/, "") || "Noema";
-  const defaultPath = /\.(?:md|markdown)$/i.test(currentFile)
-    ? currentFile.replace(/\.(?:md|markdown)$/i, ".pdf")
-    : `${currentFile}.pdf`;
-  const html = renderPublishedNoteHTML(currentMarkdownText(), {
-    title,
-    group: note?.groupLabel || note?.groupKey || "Root",
-    date: note?.date || "",
-    kind: note?.kind || currentKind || "default",
-    format: "pdf",
-    root: `${location.origin}/`,
-    assetResolver: (source) => window.AaronnoteResolveAssetUrl?.(source) || source,
-  });
-  return { html, title, defaultPath };
-}
-
-async function currentSelfContainedHtmlDocument(): Promise<{ html: string; title: string; defaultPath: string } | null> {
-  if (!currentFile) return null;
-  const note = currentNote();
-  const title = note?.title || fileNameFromPath(currentFile).replace(/\.[^.]+$/, "") || "Noema";
-  const defaultPath = /\.(?:md|markdown)$/i.test(currentFile)
-    ? currentFile.replace(/\.(?:md|markdown)$/i, ".html")
-    : `${currentFile}.html`;
-  const themeId = document.documentElement.dataset.noemaTheme || "aaronnote";
-  const lightThemes = new Set(["claude", "daylight", "mediki"]);
-  const html = await createSelfContainedNoteHTML(currentMarkdownText(), {
-    title,
-    group: note?.groupLabel || note?.groupKey || "Root",
-    date: note?.date || "",
-    kind: note?.kind || currentKind || "default",
-    themeId,
-    alternateThemeId: lightThemes.has(themeId) ? "aaronnote" : "daylight",
-    assetResolver: (source) => window.AaronnoteResolveAssetUrl?.(source) || source,
-    document,
-    baseUrl: location.href,
-  });
-  return { html, title, defaultPath };
-}
-
-if (desktopMode && initialParams.get("desktopPrintProbe") === "1") {
-  window.__noemaDesktopPrintDocument = currentPrintablePdfDocument;
-}
-
-async function exportPdfTool(): Promise<void> {
-  if (!window.noemaDesktop?.exportPdf) {
-    setStatus("PDF export is available in Noema.app");
-    return;
-  }
-  finishInlineMathEditing(editor.view);
-  const printable = currentPrintablePdfDocument();
-  if (!printable) {
-    setStatus("Open a desktop note before exporting PDF");
-    return;
-  }
-  setStatus("Choose PDF output path…");
-  try {
-    const result = await window.noemaDesktop.exportPdf(printable);
-    if (result.canceled) {
-      setStatus("PDF export canceled");
-      return;
-    }
-    setStatus(`Exported PDF · ${fileNameFromPath(result.path)}`);
-  } catch (error) {
-    setStatus(`PDF export failed: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-async function exportHtmlTool(): Promise<void> {
-  if (!window.noemaDesktop?.exportHtml) {
-    setStatus("Self-contained HTML export is available in Noema.app");
-    return;
-  }
-  finishInlineMathEditing(editor.view);
-  setStatus("Preparing self-contained HTML…");
-  try {
-    const standalone = await currentSelfContainedHtmlDocument();
-    if (!standalone) {
-      setStatus("Open a desktop note before exporting HTML");
-      return;
-    }
-    const result = await window.noemaDesktop.exportHtml(standalone);
-    if (result.canceled) {
-      setStatus("HTML export canceled");
-      return;
-    }
-    setStatus(`Exported HTML · ${fileNameFromPath(result.path)}`);
-  } catch (error) {
-    setStatus(`HTML export failed: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
 async function exportLatexTool(): Promise<void> {
   if (!currentFile) {
     setStatus("Open a note before exporting LaTeX");
@@ -8314,17 +8144,11 @@ async function exportLatexTool(): Promise<void> {
 
     // 3. Choose the output path, then export.
     setStatus("Choose LaTeX output path...");
-    const chosen = desktopPlatform === "win32" && window.noemaDesktop?.chooseSavePath
-      ? await window.noemaDesktop.chooseSavePath({
-        title: "Export LaTeX as",
-        defaultPath: String(defaultInfo.outputPath || ""),
-        extension: "tex",
-      })
-      : await api.latex.chooseOutputPath({
-        file: currentFile,
-        title,
-        defaultPath: defaultInfo.outputPath || "",
-      });
+    const chosen = await api.latex.chooseOutputPath({
+      file: currentFile,
+      title,
+      defaultPath: defaultInfo.outputPath || "",
+    });
     if (chosen.canceled) {
       setStatus("LaTeX export canceled");
       return;
@@ -9219,9 +9043,7 @@ async function trashCurrentNoteTool(): Promise<void> {
       setStatus(`${name} moved to ${platformLabels.trash}`);
       return;
     }
-    const wikiUrl = new URL("/wiki", window.location.origin);
-    if (desktopMode) wikiUrl.searchParams.set("host", "desktop");
-    window.location.assign(wikiUrl);
+    window.location.assign(new URL("/wiki", window.location.origin));
   } catch (error) {
     setStatus(error instanceof Error ? error.message : "Move to Trash failed");
   }
@@ -9335,7 +9157,7 @@ function toolActions(): ToolAction[] {
       group: "maintenance",
       title: "Configuration",
       detail: "Themes and application settings",
-      run: openConfigurationPage,
+      run: () => void openConfigurationPage(),
     },
     { id: "save", group: "document", title: "Save document", detail: "Write current changes to disk", disabled: currentReadOnly || !currentFile, run: () => void save() },
     { id: "refresh", group: "document", title: "Refresh from disk", detail: "Reload the current document", disabled: !currentFile, run: () => void reloadCurrentFilePreservingCursor({ preserveView: true }) },
@@ -9351,16 +9173,6 @@ function toolActions(): ToolAction[] {
         .then(() => setStatus(`Opened in ${sourceEditorName()}`))
         .catch((error) => setStatus(`Open failed: ${String(error)}`)),
     },
-    ...(desktopMode ? [{
-      id: "reveal-current-file",
-      group: "document" as const,
-      title: `Reveal in ${platformLabels.fileManager}`,
-      detail: "Show this document in its folder",
-      disabled: !currentFile,
-      run: () => void window.noemaDesktop?.revealPath(currentFile)
-        .then(() => setStatus(`Revealed document in ${platformLabels.fileManager}`))
-        .catch((error) => setStatus(`Reveal failed: ${String(error)}`)),
-    }] : []),
     { id: "copy-note-path", group: "document", title: "Copy document path", detail: currentFile ? fileNameFromPath(currentFile) : "No document open", disabled: !currentFile, run: () => void copyCurrentNotePath() },
     { id: "trash-note", group: "document", title: `Move document to ${platformLabels.trash}`, detail: "Recoverable deletion from the note root", disabled: currentReadOnly || !currentFile, danger: true, run: () => { runHostCommand({ command: "trash-current-note" }); } },
     ...(offerSlideView ? [{
@@ -10831,7 +10643,7 @@ function chooseSnippetPopupItem(): boolean {
   snippetSuppressedPrefix = "";
   const inserted = insertSnippet(snippet, deleteBefore);
   if (inserted && snippet.provider === "wiki-create") {
-    openWikiPageCreation(String(snippet.source || snippet.key || "").trim());
+    void openWikiPageCreation(String(snippet.source || snippet.key || "").trim());
   }
   return inserted;
 }
@@ -11322,8 +11134,8 @@ function cancelAssistWork(): void {
 function applyPaused(next: boolean): void {
   if (paused === next) return;
   paused = next;
-  // One shared renderer activity gate is used by every host shell. Emacs and
-  // Electron only contribute pause reasons; neither owns rendering behavior.
+  // One shared renderer activity gate is used by the Emacs and public-reader
+  // hosts. The host contributes pause reasons but never owns rendering behavior.
   rendererActivity.setPaused(next);
   document.documentElement.classList.toggle("aaronnote-paused", next);
   if (next) {
@@ -11372,7 +11184,7 @@ function scheduleAssistUpdate(options: AssistUpdateOptions = {}): void {
 
 function updateFloatingToc(): void {
   floatingTocPanel.update();
-  desktopKnowledgeDock?.refresh();
+  knowledgeDock?.refresh();
 }
 
 async function reloadSnippets(silent = false): Promise<void> {
@@ -11447,7 +11259,7 @@ function runHostKey(body: Record<string, unknown>): boolean {
   if (copilotKey.defaultPrevented) return true;
 
   // A focus-escape recovery key must use the exact same document keydown
-  // pipeline as a native Noema.app/xwidget event. Replaying it at CM6 lets the
+  // pipeline as a native xwidget event. Replaying it at CM6 lets the
   // shared source toggle, zoom, history, snippets, clipboard, Vim and CM6
   // keymaps decide ownership in their normal order; this host adapter only
   // supplies the missing browser event.
@@ -11648,15 +11460,15 @@ function runHostCommand(detail: unknown): boolean {
       showKnowledgeSearch();
       return true;
     case "knowledge-backlinks":
-      if (desktopKnowledgeDock) desktopKnowledgeDock.toggle("backlinks");
+      if (knowledgeDock) knowledgeDock.toggle("backlinks");
       else localGraphPanel.toggle();
       return true;
     case "knowledge-mentions":
-      if (desktopKnowledgeDock) desktopKnowledgeDock.toggle("mentions");
-      else setStatus("Unlinked mentions are available in Noema.app Knowledge dock");
+      if (knowledgeDock) knowledgeDock.toggle("mentions");
+      else setStatus("Unlinked mentions are available in the Knowledge dock");
       return true;
     case "knowledge-tags":
-      if (desktopKnowledgeDock) desktopKnowledgeDock.toggle("tags");
+      if (knowledgeDock) knowledgeDock.toggle("tags");
       else void manageCurrentNoteTags();
       return true;
     case "find-next":
@@ -11677,7 +11489,7 @@ function runHostCommand(detail: unknown): boolean {
       return true;
     // Emacs routes Cmd-C/Cmd-X here rather than to the page's own key handling:
     // on the macOS xwidget port a key Emacs owns can never be replayed into
-    // WebKit (see emacs/noema-xwidget-keys.el), so the copy has to be performed
+    // WebKit (see lisp/noema-xwidget-keys.el), so the copy has to be performed
     // by the page itself and written through the host clipboard.
     case "copy":
       void copyEditorSelection();
@@ -11769,7 +11581,7 @@ function runHostCommand(detail: unknown): boolean {
       toggleAgendaSurface();
       return true;
     case "toggle-graph":
-      if (desktopKnowledgeDock) desktopKnowledgeDock.toggle("graph");
+      if (knowledgeDock) knowledgeDock.toggle("graph");
       else localGraphPanel.toggle();
       return true;
     case "toggle-tools":
@@ -11817,14 +11629,13 @@ function runHostCommand(detail: unknown): boolean {
     case "open-config":
     case "configuration":
     case "settings":
-      openConfigurationPage();
+      void openConfigurationPage();
       return true;
     case "task-manager":
       openTaskManager();
       return true;
     case "asset-maintenance":
       openAssetMaintenance({
-        reveal: window.noemaDesktop ? (file) => { void window.noemaDesktop?.revealPath(file); } : undefined,
         setStatus,
       });
       return true;
@@ -11836,12 +11647,6 @@ function runHostCommand(detail: unknown): boolean {
       return true;
     case "open-location":
       openLocationFromHost(body);
-      return true;
-    case "export-html":
-      void exportHtmlTool();
-      return true;
-    case "export-pdf":
-      void exportPdfTool();
       return true;
     case "export-latex":
       void exportLatexTool();
@@ -11856,13 +11661,13 @@ function runHostCommand(detail: unknown): boolean {
         .catch((error) => setStatus(`Open failed: ${String(error)}`));
       return true;
     case "reveal-current-file":
-      if (!currentFile || !window.noemaDesktop) {
-        setStatus("No local note to reveal");
+      if (!currentFile) {
+        setStatus("Open a note first");
         return true;
       }
-      void window.noemaDesktop.revealPath(currentFile)
-        .then(() => setStatus(`Revealed note in ${platformLabels.fileManager}`))
-        .catch((error) => setStatus(`Reveal failed: ${String(error)}`));
+      void api.emacs.open({ file: currentFile })
+        .then(() => setStatus(`Opened in ${sourceEditorName()}`))
+        .catch((error) => setStatus(`Open failed: ${String(error)}`));
       return true;
     case "undo":
       if (rejectReadOnlyAction("Read-only pane")) return true;
@@ -11891,10 +11696,10 @@ function togglePageOutline(): void {
 }
 
 function openKnowledgeDockFromPage(event: MouseEvent): void {
-  if (!desktopKnowledgeDock) return;
+  if (!knowledgeDock) return;
   event.preventDefault();
   if (!toc.classList.contains("is-collapsed")) togglePageOutline();
-  desktopKnowledgeDock.show("backlinks");
+  knowledgeDock.show("backlinks");
 }
 
 tocButton.title = "Single-click Page outline; double-click Knowledge dock";
@@ -11989,7 +11794,7 @@ document.addEventListener("keydown", (event) => {
     editor,
     editorHost: host,
     vim,
-    allowDetachedTarget: !standaloneMode(),
+    allowDetachedTarget: true,
     enabled: modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden,
   })) return;
   // Cmd-/ is a document-surface boundary even while MathLive owns focus: first
@@ -12027,7 +11832,7 @@ document.addEventListener("keydown", (event) => {
     void exportLatexTool();
     return;
   }
-  if (!replayingHostKey && !standaloneMode() && !serverReaderMode
+  if (!replayingHostKey && !serverReaderMode
       && handleXwidgetEmacsKeydown(event, { client: () => currentClient })) return;
   if (runVisualZoomShortcut(event)) {
     return;
@@ -12039,7 +11844,7 @@ document.addEventListener("keydown", (event) => {
     editor,
     editorHost: host,
     vim,
-    allowDetachedTarget: !standaloneMode(),
+    allowDetachedTarget: true,
     enabled: modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden,
   })) {
     scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
@@ -12097,7 +11902,7 @@ document.addEventListener("keydown", (event) => {
     editor,
     editorHost: host,
     vim,
-    allowDetachedTarget: !standaloneMode(),
+    allowDetachedTarget: true,
     enabled: modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden,
   })) {
     if (plainEscapeKey(event)) noteCursorPositionEvent();
@@ -12108,7 +11913,7 @@ document.addEventListener("keydown", (event) => {
     editor,
     editorHost: host,
     vim,
-    allowDetachedTarget: !standaloneMode(),
+    allowDetachedTarget: true,
     enabled: modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden,
   })) {
     if (plainEscapeKey(event)) noteCursorPositionEvent();
@@ -12129,7 +11934,7 @@ document.addEventListener("keydown", (event) => {
     editor,
     editorHost: host,
     vim,
-    allowDetachedTarget: !standaloneMode(),
+    allowDetachedTarget: true,
     enabled: modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden,
   })) {
     scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
@@ -12221,7 +12026,7 @@ document.addEventListener("beforeinput", (event) => {
     editor,
     editorHost: host,
     vim,
-    allowDetachedTarget: !standaloneMode(),
+    allowDetachedTarget: true,
     enabled: modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden,
   })) return;
   if (eventTargetsNativeWidgetInput(event.target)) return;
@@ -12256,7 +12061,7 @@ document.addEventListener("beforeinput", (event) => {
     editor,
     editorHost: host,
     vim,
-    allowDetachedTarget: !standaloneMode(),
+    allowDetachedTarget: true,
     enabled: modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden,
   })) {
     scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
@@ -12266,7 +12071,7 @@ document.addEventListener("beforeinput", (event) => {
     editor,
     editorHost: host,
     vim,
-    allowDetachedTarget: !standaloneMode(),
+    allowDetachedTarget: true,
     enabled: modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden,
   })) {
     scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
@@ -12276,7 +12081,7 @@ document.addEventListener("beforeinput", (event) => {
     editor,
     editorHost: host,
     vim,
-    allowDetachedTarget: !standaloneMode(),
+    allowDetachedTarget: true,
     enabled: modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden,
   })) {
     scheduleAssistUpdate({ mathPreview: true, cursor: true });
@@ -12434,11 +12239,6 @@ window.addEventListener("aaronnote:open-file", (event) => {
   void openFile(detail?.file);
 });
 
-root.querySelectorAll<HTMLButtonElement>("[data-desktop-command]").forEach((button) => {
-  button.addEventListener("click", () => {
-    runHostCommand({ command: button.dataset.desktopCommand });
-  });
-});
 root.querySelectorAll<HTMLButtonElement>("[data-server-command]").forEach((button) => {
   button.addEventListener("click", () => {
     const command = String(button.dataset.serverCommand || "");
@@ -12447,133 +12247,12 @@ root.querySelectorAll<HTMLButtonElement>("[data-server-command]").forEach((butto
     else runHostCommand({ command });
   });
 });
-root.querySelectorAll<HTMLButtonElement>("[data-desktop-menu]").forEach((button) => {
-  button.addEventListener("click", () => {
-    const kind = button.dataset.desktopMenu === "window" ? "window" : "actions";
-    const bounds = button.getBoundingClientRect();
-    void window.noemaDesktop?.showMenu(kind, { x: bounds.left, y: bounds.bottom });
-  });
-});
-
-const removeDesktopCommandListener = desktopMode
-  ? window.noemaDesktop?.onCommand((detail) => runHostCommand(detail)) ?? null
-  : null;
 
 window.addEventListener("aaronnote:command", (event) => {
-  // Client routing lives in runHostCommand so every entry point — SSE, the
-  // desktop bridge, in-page buttons — obeys exactly one rule.
+  // Client routing lives in runHostCommand so every entry point — SSE and
+  // in-page controls — obeys exactly one rule.
   runHostCommand((event as CustomEvent<unknown>).detail);
 });
-
-function desktopExternalDrag(data: DataTransfer | null): boolean {
-  if (!desktopMode || !data) return false;
-  const types = Array.from(data.types || []);
-  if (types.some((type) => type.startsWith("text/x-aaronnote-"))) return false;
-  return data.files.length > 0 || types.includes("Files") || types.includes("text/uri-list");
-}
-
-function desktopDroppedPaths(data: DataTransfer): string[] {
-  if (!window.noemaDesktop) return [];
-  return Array.from(data.files)
-    .map((file) => window.noemaDesktop?.filePath(file) || "")
-    .filter(Boolean);
-}
-
-function updateDesktopDropOverlay(data: DataTransfer, forceAttachment: boolean): void {
-  const disposition = desktopDropDisposition(desktopDroppedPaths(data), forceAttachment);
-  desktopDropLabel.textContent = disposition.type === "open"
-    ? "Open Markdown in a new Noema window"
-    : "Insert files, links, or text at the cursor";
-  desktopDropOverlay.hidden = false;
-}
-
-let desktopDragDepth = 0;
-document.addEventListener("dragenter", (event) => {
-  if (!desktopExternalDrag(event.dataTransfer)) return;
-  desktopDragDepth += 1;
-  updateDesktopDropOverlay(event.dataTransfer!, event.altKey);
-  event.preventDefault();
-}, true);
-document.addEventListener("dragover", (event) => {
-  if (!desktopExternalDrag(event.dataTransfer)) return;
-  updateDesktopDropOverlay(event.dataTransfer!, event.altKey);
-  if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
-  event.preventDefault();
-}, true);
-document.addEventListener("dragleave", (event) => {
-  if (!desktopExternalDrag(event.dataTransfer) && desktopDropOverlay.hidden) return;
-  desktopDragDepth = Math.max(0, desktopDragDepth - 1);
-  if (desktopDragDepth === 0) desktopDropOverlay.hidden = true;
-  event.preventDefault();
-}, true);
-document.addEventListener("drop", (event) => {
-  if (!desktopExternalDrag(event.dataTransfer)) return;
-  event.preventDefault();
-  desktopDragDepth = 0;
-  desktopDropOverlay.hidden = true;
-  const data = event.dataTransfer!;
-  const disposition = desktopDropDisposition(desktopDroppedPaths(data), event.altKey);
-  if (disposition.type === "open") {
-    window.noemaDesktop?.openFiles(disposition.paths);
-    setStatus(disposition.paths.length === 1 ? "Opened note in a new window" : `Opened ${disposition.paths.length} notes`);
-    return;
-  }
-  if (rejectReadOnlyAction("Read-only pane")) return;
-  const position = editor.view.posAtCoords({ x: event.clientX, y: event.clientY });
-  if (typeof position === "number") editor.setMarkdownSelection(position);
-  editor.focus();
-  void editor.pasteFromDataTransfer(data).then((handled) => {
-    if (!handled) {
-      setStatus("This drop type could not be inserted");
-      return;
-    }
-    setStatus("Drop inserted");
-    scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true, toc: true });
-  }).catch((error) => setStatus(`Drop failed: ${String(error)}`));
-}, true);
-
-let desktopOptionHeld = false;
-window.addEventListener("keydown", (event) => { desktopOptionHeld = event.altKey; }, true);
-window.addEventListener("keyup", (event) => { desktopOptionHeld = event.altKey; }, true);
-window.addEventListener("blur", () => { desktopOptionHeld = false; });
-
-const removeNativeDropListener = desktopMode && window.noemaDesktop?.onFileDrop
-  ? window.noemaDesktop.onFileDrop((event) => {
-    const disposition = desktopDropDisposition(event.paths, desktopOptionHeld);
-    if (event.type === "leave") {
-      desktopDropOverlay.hidden = true;
-      return;
-    }
-    if (event.type === "enter" || event.type === "over") {
-      desktopDropLabel.textContent = disposition.type === "open"
-        ? "Open Markdown in a new Noema window"
-        : "Insert files at the cursor";
-      desktopDropOverlay.hidden = false;
-      return;
-    }
-    desktopDropOverlay.hidden = true;
-    if (disposition.type === "open") {
-      window.noemaDesktop?.openFiles(disposition.paths);
-      setStatus(disposition.paths.length === 1 ? "Opened note in a new window" : `Opened ${disposition.paths.length} notes`);
-      return;
-    }
-    if (rejectReadOnlyAction("Read-only pane") || !window.noemaDesktop?.readDroppedFiles) return;
-    void window.noemaDesktop.readDroppedFiles(disposition.paths).then((files) => {
-      const transfer = new DataTransfer();
-      files.forEach((file) => transfer.items.add(file));
-      const position = event.position && editor.view.posAtCoords(event.position);
-      if (typeof position === "number") editor.setMarkdownSelection(position);
-      editor.focus();
-      return editor.pasteFromDataTransfer(transfer);
-    }).then((handled) => {
-      if (!handled) setStatus("This drop type could not be inserted");
-      else {
-        setStatus("Drop inserted");
-        scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true, toc: true });
-      }
-    }).catch((error) => setStatus(`Drop failed: ${String(error)}`));
-  })
-  : null;
 
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
@@ -12594,8 +12273,6 @@ window.addEventListener("beforeunload", () => {
   liveTexPreview?.destroy();
   liveTexPreview = null;
   removeNoemaThemeRuntime();
-  removeDesktopCommandListener?.();
-  removeNativeDropListener?.();
   coreReconnectController?.destroy();
   rendererActivity.destroy();
   focusQuiescence.destroy();

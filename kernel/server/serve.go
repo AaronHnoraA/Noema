@@ -220,7 +220,7 @@ func Serve(fastMode bool, cookieKey string, options ...ServeOptions) {
 	}
 	util.ServerPort = port
 	if !fastMode {
-		// Stable machine-readable discovery line consumed by the Noema Tauri
+		// Stable machine-readable discovery line consumed by the Noema Node
 		// host. Keep this independent of the configured log level and ANSI
 		// formatting so sidecar startup does not depend on human log output.
 		fmt.Printf("[noema-kernel] http://127.0.0.1:%s\n", port)
@@ -668,11 +668,7 @@ func serveAppearance(ginServer *gin.Engine) {
 		siyuanDesktopMode, desktopCookieErr := c.Request.Cookie("siyuan-desktop-mode")
 		if nil == desktopCookieErr {
 			if "true" == siyuanDesktopMode.Value {
-				if strings.Contains(userAgentHeader, "Electron") {
-					location.Path = "/stage/build/app/"
-				} else {
-					location.Path = "/stage/build/desktop/"
-				}
+				location.Path = "/stage/build/desktop/"
 				c.Redirect(302, location.String())
 				return
 			} else if "false" == siyuanDesktopMode.Value {
@@ -682,9 +678,7 @@ func serveAppearance(ginServer *gin.Engine) {
 			}
 		}
 
-		if strings.Contains(userAgentHeader, "Electron") {
-			location.Path = "/stage/build/app/"
-		} else if strings.Contains(userAgentHeader, "Pad") ||
+		if strings.Contains(userAgentHeader, "Pad") ||
 			(strings.ContainsAny(userAgentHeader, "Android") && !strings.Contains(userAgentHeader, "Mobile")) {
 			// Improve detecting Pad device, treat it as desktop device https://github.com/siyuan-note/siyuan/issues/8435 https://github.com/siyuan-note/siyuan/issues/8497
 			location.Path = "/stage/build/desktop/"
@@ -833,7 +827,7 @@ func serveAuthPage(c *gin.Context) {
 		"keymapGeneralToggleWin": keymapHideWindow,
 		"trayMenuLangs":          util.TrayMenuLangs[util.Lang],
 		// 浏览器环境下不返回工作空间绝对路径，避免泄露用户名等敏感信息
-		// 原生客户端（桌面 Electron，授权页 siyuan-init IPC 仅在 Electron 内执行）照常返回真实路径
+		// 受信任的原生客户端照常返回真实路径
 		// REF: https://github.com/siyuan-note/siyuan/issues/17410
 		"workspaceDir": util.WorkspaceDir,
 	}

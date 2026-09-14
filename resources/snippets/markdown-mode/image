@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Markdown image
-# key: img
-# group: Noema syntax
-# --
-![${1:alt}](${2:path})$0

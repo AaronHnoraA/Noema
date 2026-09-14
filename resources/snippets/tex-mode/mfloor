@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Floor
-# key: mfloor
-# group: Math symbols
-# --
-\left\lfloor ${1:x} \right\rfloor$0

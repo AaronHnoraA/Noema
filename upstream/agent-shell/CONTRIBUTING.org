@@ -1,0 +1,249 @@
+* Before Contributing
+
+When submitting a PR, please keep the checkboxes from the [[https://github.com/xenodium/agent-shell/blob/main/.github/PULL_REQUEST_TEMPLATE.md][PR template]] and check them off as applicable.
+
+Before implementing new features, please *file a feature request first* to discuss the proposal. This helps ensure alignment with the project's direction and prevents unnecessary work.
+
+As the maintainer, I must be mindful of all features I accept since I inherit the code to maintain it. Some features may be better suited as separate packages (like [[https://github.com/cmacrae/agent-shell-sidebar][agent-shell-sidebar]]).
+
+I'll gladly promote your package wherever possible.
+
+* Style (or personal preference TBH)
+
+There are lots of ways to accomplish things in elisp. While the following are merely personal preferences, as maintainer, it really simplifies things for me to try to limit the number of ways to accomplish things.
+
+** Maps (use alists)
+
+This project relies on [[https://www.gnu.org/software/emacs/manual/html_node/elisp/Association-Lists.html][alists]] for much of its functionality. Sure, we can also use plists, hashtables, etc.
+
+Unless we have a strong argument to use something else, please stick with =alists= (and =:= keywords).
+
+#+begin_src emacs-lisp
+  '((:species . "Cat")
+    (:name . "Whiskers")
+    (:age . 4)
+    (:color . "Gray")
+    (:favorite-toy . "Feather Wand"))
+#+end_src
+
+** seq.el
+
+Accessing and working with lists? Please prefer =seq.el=, unless we have a strong argument to use an alternative.
+
+#+begin_src emacs-lisp :lexical no
+  (setq animals
+        (list
+         '((:species . "Cat")
+           (:name . "Whiskers")
+           (:age . 4)
+           (:color . "Gray"))
+         '((:species . "Dog")
+           (:name . "Buddy")
+           (:age . 6)
+           (:color . "Brown"))))
+
+  (seq-first animals)
+#+end_src
+
+** map.el
+
+Accessing and working with =alists=? Please prefer =map.el= unless we have a strong argument to use an alternative.
+
+#+begin_src emacs-lisp :lexical no
+  (setq animal (seq-first animals))
+  (map-elt animal :species)
+#+end_src
+
+** Prefer =map-nested-elt= over nested =map-elt=
+
+When accessing nested alist values, use =map-nested-elt= instead of nesting =map-elt= calls.
+
+#+begin_src emacs-lisp :lexical no
+  ;; Avoid
+  (map-elt (map-elt response 'usage) 'totalTokens)
+
+  ;; Prefer
+  (map-nested-elt response '(usage totalTokens))
+#+end_src
+
+** cl-lib (limited to =cl-defun=)
+
+While I'm a fan of =cl-defun=, please limit =cl= usage to =cl-defun= if possible. Nothing against =cl-lib=. I'm just limiting the surface and number of idioms I need to keep in my head to maintain the codebase. Often, =seq.el= and =map.el= can do the job just fine.
+
+=cl-defun=, on the other hand, please do! I'm a fan of named parameters (yay for self-documenting), so use =&key= if possible.
+
+#+begin_src emacs-lisp :lexical no
+  (cl-defun describe (&key animal)
+    "Describe an ANIMAL, which is an alist of properties like :species, :name, :age, :color."
+    (message "This is a %d-year-old %s %s named %s."
+             (map-elt animal :age 0)
+             (map-elt animal :color "Unknown Color")
+             (map-elt animal :species "Unknown Species")
+             (map-elt animal :name "Unnamed")))
+
+  (describe :animal '((:species . "Cat")
+                      (:name . "Whiskers")
+                      (:age . 4)
+                      (:color . "Gray")))
+#+end_src
+
+** Flatten =when/if/let= blocks
+
+Overall, try to flatten things. Look out for unnecessarily nested blocks and flatten if possible. LLMs are specially generous nesting blocks. Please look out for these instances and flatten if possible. For example, prefer =when-let*= over nested =let= + =when= to reduce indentation and improve readability.
+
+#+begin_src emacs-lisp :lexical no
+  ;; Avoid
+  (let ((buffer (get-buffer name)))
+    (when buffer
+      (with-current-buffer buffer
+        (erase-buffer)
+        (insert content))
+      buffer))
+
+  ;; Prefer (flatten let + when into when-let*)
+  (when-let* ((buffer (get-buffer name)))
+    (with-current-buffer buffer
+      (erase-buffer)
+      (insert content))
+    buffer)
+#+end_src
+
+Similarly, flatten =when-let*= + nested =when= by using boolean guard clauses as bindings in =when-let*=.
+
+#+begin_src emacs-lisp :lexical no
+  ;; Avoid
+  (when-let* ((filename (file-name-nondirectory filepath)))
+    (when (not (string-empty-p filename))
+      (do-something filename)))
+
+  ;; Prefer (use boolean binding as guard clause)
+  (when-let* ((filename (file-name-nondirectory filepath))
+              ((not (string-empty-p filename))))
+    (do-something filename))
+#+end_src
+
+** Prefer =let= over =let*=
+
+Only use =let*= when bindings depend on each other. LLMs tend to default to =let*= even when there are no dependencies between bindings.
+
+For conditional bindings, use =when-let*=. The non-star =when-let= is obsolete as of Emacs 31.1.
+
+** Avoid unnecessary =let=/local variables
+
+Prefer inlining single-use expressions rather than binding them to intermediate =let=, unless the offer significant readability improvements. LLM models tend to introduce unnecessary local variables for something like =map-elt= (the equivalent of saving =foo.someField= to a local var in other languages).
+
+#+begin_src emacs-lisp :lexical no
+  ;; Avoid
+  (let* ((usage (map-elt response 'usage))
+         (total-tokens (map-elt usage 'totalTokens)))
+    (do-something total-tokens))
+
+  ;; Prefer
+  (do-something (map-nested-elt response '(usage totalTokens)))
+#+end_src
+
+** Move substantial functionality to separate files
+
+=agent-shell.el= is getting large. When adding substantial new functionality, move helper functions to a dedicated file (e.g. =agent-shell-completion.el=). You can keep the same =agent-shell--= function name prefix. See [[https://github.com/xenodium/agent-shell/commit/c60203934d577e88d03035038a1e247bb1ce0ded][this commit]] for an example of this transition.
+
+** Use =:kebab-case= keywords for internal state
+
+Use =:kebab-case= keyword symbols for internal state keys. Reserve camelCase for ACP protocol data. This makes it easy to spot what's part of the protocol vs internal data.
+
+#+begin_src emacs-lisp :lexical no
+  ;; Internal state — :kebab-case
+  (map-elt state :total-tokens)
+
+  ;; ACP protocol — camelCase
+  (map-elt response 'totalTokens)
+#+end_src
+
+** Avoid premature customization
+
+Don't add =defcustom= for new features right away. Start with opinionated defaults and let the feature settle before opening it up for customization. Every =defcustom= becomes public API to maintain.
+
+** New state fields go through =agent-shell--make-state=
+
+When adding state, declare it in =agent-shell--make-state= so we get an overall picture of all values available in state.
+
+** Hook/event functions receive a single alist parameter
+
+When defining hook functions or callbacks, prefer a single alist/event parameter over multiple positional parameters or =cl-defun= with keys. This makes supporting new features easier while keeping backwards compatibility manageable.
+
+** No LLM-generated comments or emojis
+
+Remove comments obviously by an LLM (e.g. referencing "previous code" or restating the obvious). Avoid emojis in code and output strings.
+
+** Keep PRs small and focused
+
+Prefer smaller PRs whenever possible. They're easier to review and less likely to introduce issues. If a change can be split into independent steps, submit them as separate PRs.
+
+Don't include unrelated changes (whitespace, indentation, formatting) in your PR. If you'd like to do a cleanup, please submit it as a separate PR.
+
+** Code/feature consistency
+
+Please try to look for a similar feature in the code base and replicate an existing pattern usage if possible.
+
+** Include examples in docstrings
+
+When writing docstrings, include concrete input/output examples so readers can understand the function without reading the implementation. This is specially useful for inputs that are converted into some output.
+
+** Prefer =when=/=unless= over single-branch =if=
+
+Use =when= or =unless= instead of =if= when there's only one branch.
+
+#+begin_src emacs-lisp :lexical no
+  ;; Avoid
+  (if (not (file-exists-p path))
+      (user-error "File not found: %s" path))
+
+  ;; Prefer
+  (unless (file-exists-p path)
+    (user-error "File not found: %s" path))
+#+end_src
+
+** Use multi-line strings for readability
+
+When constructing longer strings, prefer multi-line format strings over single-line concatenation.
+
+#+begin_src emacs-lisp :lexical no
+  ;; Avoid
+  (format "Name: %s\nAge: %d\nColor: %s" name age color)
+
+  ;; Prefer
+  (format "Name: %s
+Age: %d
+Color: %s" name age color)
+#+end_src
+
+** Code Checks
+
+Before submitting a PR, please run:
+
+- =M-x checkdoc= - Ensures documentation consistency
+- =M-x byte-compile-file= - Identifies compilation warnings
+
+** Personally review your own code
+
+If you're using LLM-assisted tools to write code, personally review the code yourself before submitting a PR. Make sure you understand the code and are in a position to explain what it does, how it does it, and you will personally vouch for its quality.
+
+** Tests
+
+I'm aware, we're a bit light on tests, but we started adding some tests. If adding a new feature, please try to add tests.
+
+Tests live under the tests directory:
+
+#+begin_src bash
+  ls tests/*tests.el
+#+end_src
+
+#+RESULTS:
+| tests/agent-shell-anthropic-tests.el |
+| tests/agent-shell-openai-tests.el    |
+| tests/agent-shell-tests.el           |
+
+** Running tests
+
+Opening any file under the =tests= directory will load the =agent-shell-run-all-tests= command.
+
+Run tests with =M-x agent-shell-run-all-tests=.

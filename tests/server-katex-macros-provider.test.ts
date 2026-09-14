@@ -14,14 +14,14 @@ afterEach(async () => {
 });
 
 describe("runtime KaTeX macro data plane", () => {
-  test("uses the Go provider in desktop mode", async () => {
+  test("uses the Go provider in local Emacs mode", async () => {
     configureKatexMacrosProvider({
       async load(dir: string) {
         return { dir, macros: { "\\GoMacro": "\\mathbf{G}" }, errors: [] };
       },
     });
-    await expect(loadRuntimeKatexMacros("/desktop/macros")).resolves.toEqual({
-      dir: "/desktop/macros",
+    await expect(loadRuntimeKatexMacros("/local/macros")).resolves.toEqual({
+      dir: "/local/macros",
       macros: { "\\GoMacro": "\\mathbf{G}" },
       errors: [],
       source: "kernel-katex-macros",

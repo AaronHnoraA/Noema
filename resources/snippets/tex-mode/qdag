@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Dagger
-# key: qdag
-# group: QC symbols
-# --
-${1:U}^{\dagger}$0

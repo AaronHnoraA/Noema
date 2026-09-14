@@ -12,7 +12,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-describe("desktop kernel knowledge search", () => {
+describe("data-kernel knowledge search", () => {
   test("routes plain lexical queries but preserves Node-only query modes", () => {
     expect(kernelLexicalSearchEligible({ query: "portable identity", mode: "suggest" })).toBe(true);
     expect(kernelLexicalSearchEligible({ query: "" })).toBe(false);

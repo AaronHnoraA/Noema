@@ -1,9 +1,0 @@
-# -*- mode: snippet -*-
-# name: Example block
-# key: ex
-# group: Noema blocks
-# --
-#+begin example ${1:name}
-${2:Example.}
-#+end example
-$0

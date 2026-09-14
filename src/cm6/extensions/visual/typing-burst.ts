@@ -7,7 +7,7 @@ import { scheduleViewportDecorationRefresh } from "../../viewport-refresh.ts";
  * Cosmetic decoration DOM churn is wasteful in every renderer and is
  * particularly visible when WebKit is embedded in Emacs. Decoration sets are
  * mapped by each participating plugin while text is arriving, then rebuilt
- * once after the burst settles. This is one shared editor policy for Electron,
+ * once after the burst settles. This is one shared editor policy for Emacs,
  * xwidget and browser surfaces—not a host adapter fork.
  */
 export function isCoalescedVisualTyping(update: ViewUpdate): boolean {

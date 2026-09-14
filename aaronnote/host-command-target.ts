@@ -10,7 +10,7 @@
  * who must run the command; a plain `client` on a server-originated broadcast
  * (`client-closed`, index notifications) names who the event is *about* and
  * must never be read as an address, or the broadcast reaches nobody.
- * Untargeted commands stay broadcasts for desktop, server and in-page callers.
+ * Untargeted commands stay broadcasts for server and in-page callers.
  */
 export function hostCommandTargetsClient(
   detail: unknown,

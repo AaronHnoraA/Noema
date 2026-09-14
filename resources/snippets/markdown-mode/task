@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Task item
-# key: todo
-# group: Noema syntax
-# --
-- [ ] ${1:Task}$0

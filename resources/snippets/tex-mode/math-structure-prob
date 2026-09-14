@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [prob] — Probability
-# key: prob
-# group: Math · Recent notes
-# --
-\Pr\!\left[${1:E}\right]$0

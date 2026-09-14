@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Quantum channel
-# key: qchan
-# group: QC symbols
-# --
-\mathcal{${1:N}}\!\left(${2:\rho}\right)$0

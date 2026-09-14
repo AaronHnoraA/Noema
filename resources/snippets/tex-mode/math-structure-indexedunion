@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [indexedunion] — Indexed union
-# key: indexedunion
-# group: Math · Recent notes
-# --
-\bigcup_{${1:i\in I}} ${2:S_i}$0

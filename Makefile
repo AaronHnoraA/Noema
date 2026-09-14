@@ -5,9 +5,6 @@ NOEMA_ROOT ?= $(HOME)/Documents/Noema
 NODE_VERSION := $(shell tr -d '\r\n' < .nvmrc)
 NPM_VERSION := 11.17.0
 NVM_SH ?= $(HOME)/.nvm/nvm.sh
-APP_NAME := Noema
-APP_DEST := /Applications/$(APP_NAME).app
-APP_BUNDLE := build/electron/$(APP_NAME).app
 KERNEL_DIR := kernel
 KERNEL_BIN_NAME := noema-kernel
 KERNEL_GOOS ?= $(shell go env GOOS 2>/dev/null)
@@ -18,10 +15,10 @@ KERNEL_BIN_LINK ?= $(HOME)/.local/bin/$(KERNEL_BIN_NAME)
 
 .DEFAULT_GOAL := build
 
-.PHONY: all bootstrap build build-web check-env check-go clean clean-all clean-cache dev \
+.PHONY: all bootstrap build build-web check-env check-go clean clean-all dev \
 	disk-audit help \
 	init-data install jupyter-bootstrap kernel-build kernel-install \
-	nvm-install prune-desktop-stage prune-legacy-garbage run server-build \
+	nvm-install prune-legacy-garbage server-build \
 	server-config-init server-deploy server-start setup test
 
 all: build
@@ -50,16 +47,11 @@ init-data:
 
 setup: bootstrap init-data
 
-build: check-env check-go prune-legacy-garbage build-web
-	npm run build:desktop-shell
+build: check-env check-go prune-legacy-garbage build-web kernel-build
 
-# Installation always goes through the canonical full build.  Besides keeping
-# a standalone `make install` fresh, this preserves dist/aaronnote as the one
-# renderer consumed through the repository links by both Noema.app and Emacs.
-install: build
-	@test -d "$(APP_BUNDLE)" || (echo "Noema.app was not generated under build/electron" && exit 1)
-	node scripts/install-local-app.mjs "$(CURDIR)/$(APP_BUNDLE)" "$(APP_DEST)" --link
-	@$(MAKE) --no-print-directory prune-desktop-stage
+# Noema has no application bundle. The build produces the headless engine and
+# the CM6 renderer hosted by Emacs xwidget/Appine.
+install: build kernel-install
 
 build-web: check-env
 	npm run build:aaronnote
@@ -82,18 +74,16 @@ kernel-build: check-go
 	@mkdir -p "$(KERNEL_BUILD_DIR)"
 	cd "$(KERNEL_DIR)" && CGO_ENABLED=1 GOOS=$(KERNEL_GOOS) GOARCH=$(KERNEL_GOARCH) \
 		go build -tags fts5 -ldflags "-s -w" -o "$(CURDIR)/$(KERNEL_BIN)" .
-	ln -sfn "$(CURDIR)/app" "$(KERNEL_BUILD_DIR)/app"
+	rm -f "$(KERNEL_BUILD_DIR)/app"
+	ln -sfn "$(CURDIR)/kernel-resources" "$(KERNEL_BUILD_DIR)/kernel-resources"
 
 kernel-install: kernel-build
 	mkdir -p "$(dir $(KERNEL_BIN_LINK))"
 	ln -sfn "$(CURDIR)/$(KERNEL_BIN)" "$(KERNEL_BIN_LINK)"
-	@echo "Linked $(KERNEL_BIN_LINK) -> $(KERNEL_BIN) (binary and app/ assets stay linked, nothing copied)"
+	@echo "Linked $(KERNEL_BIN_LINK) -> $(KERNEL_BIN) (binary and kernel resources stay linked, nothing copied)"
 
 dev: check-env init-data
 	npm run start:vite
-
-run: build
-	open "$(CURDIR)/$(APP_BUNDLE)"
 
 test: check-env
 	npm test
@@ -101,59 +91,40 @@ test: check-env
 prune-legacy-garbage:
 	rm -rf "$(CURDIR)/release"
 
-prune-desktop-stage:
-	rm -rf "$(CURDIR)/build/electron"
-
-clean: prune-legacy-garbage prune-desktop-stage
-	@echo "Preserved linked Electron runtime, Go kernel, renderer, and node_modules required by /Applications/Noema.app."
+clean: prune-legacy-garbage
+	rm -rf "$(CURDIR)/build/kernel" "$(CURDIR)/dist"
+	@echo "Removed generated kernel and renderer output; project state was preserved."
 
 clean-all: clean
-	rm -rf "$(CURDIR)/build" "$(CURDIR)/dist"
-	@echo "Removed linked-app runtime outputs; run 'make build && make install' before launching Noema.app."
-
-clean-cache:
-	@if pgrep -f '/Applications/Noema.app/Contents/MacOS/[E]lectron' >/dev/null; then \
-		echo "Quit Noema.app before clearing its disposable caches"; exit 1; \
-	fi
-	rm -rf "$(HOME)/Library/Caches/com.noema.desktop" \
-		"$(HOME)/Library/WebKit/com.noema.desktop" \
-		"$(HOME)/Library/Application Support/noema"
-	@echo "Removed Electron/WebKit cache and retired lowercase profile; preserved com.noema.desktop state and notes."
+	rm -rf "$(CURDIR)/build"
+	@echo "Removed all generated Noema output; project-local .agent/.noema state was preserved."
 
 disk-audit:
-	@for candidate in release build/electron build/kernel dist node_modules/electron \
-		"$(HOME)/Library/Application Support/com.noema.desktop" \
-		"$(HOME)/Library/Application Support/noema" "$(HOME)/Library/Caches/com.noema.desktop" \
-		"$(HOME)/Library/WebKit/com.noema.desktop"; do \
+	@for candidate in release build/kernel dist "$(HOME)/.local/state/noema"; do \
 		if [ -e "$$candidate" ]; then du -sh "$$candidate"; fi; \
 	done
-	@if [ -d node_modules ] && [ -d "$(APP_DEST)" ]; then \
-		echo "Unique physical accounting (installed Framework hard links counted once):"; \
-		du -sh node_modules "$(APP_DEST)"; \
-	fi
+	@if [ -d node_modules ]; then du -sh node_modules; fi
 
 jupyter-bootstrap:
 	npm run jupyter:bootstrap
 
 help:
 	@echo "Noema build targets"
-	@echo "  make | make build  Build the one shared App/Emacs renderer and standalone Noema.app"
+	@echo "  make | make build  Build the Emacs-hosted CM6 renderer and headless Go engine"
 	@echo "  make setup         Install dependencies and create $(NOEMA_ROOT)"
 	@echo "  make bootstrap     Reproducibly install dependencies with npm ci"
 	@echo "  make nvm-install   Install/use pinned Node and npm through nvm"
 	@echo "  make init-data     Create the Noema notes directory"
-	@echo "  make install       Rebuild the shared App/Emacs output, install Noema.app, then discard staging"
-	@echo "  make run           Build and launch the local app bundle"
-	@echo "  make build-web     Build the shared renderer consumed by both App and Emacs"
+	@echo "  make install       Build and link the headless kernel onto PATH"
+	@echo "  make build-web     Build the renderer consumed by Emacs xwidget/Appine"
 	@echo "  make dev           Run the Vite development server"
 	@echo "  make server-config-init  Create ignored Server mode config files"
 	@echo "  make server-build  Build the rsync-ready Server mode release"
 	@echo "  make server-start  Run Server mode from server-config/runtime.json"
 	@echo "  make server-deploy Build, rsync, and restart the configured user service"
-	@echo "  make kernel-build  Build the Go kernel binary under build/kernel/ (linked to app/)"
+	@echo "  make kernel-build  Build the Go kernel binary under build/kernel/ (linked to kernel-resources/)"
 	@echo "  make kernel-install  Link the kernel binary onto PATH ($(KERNEL_BIN_LINK))"
 	@echo "  make test          Run the test suite"
 	@echo "  make disk-audit    Report disk use for Noema's generated outputs"
-	@echo "  make clean         Remove obsolete Tauri/Rust and disposable Electron staging output"
-	@echo "  make clean-cache   Remove disposable desktop caches; preserve notes and canonical state"
-	@echo "  make clean-all     Remove all generated output (invalidates a linked local App)"
+	@echo "  make clean         Remove generated kernel and renderer output"
+	@echo "  make clean-all     Remove all generated output; preserve project state"

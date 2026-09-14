@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Density operator
-# key: qrho
-# group: QC symbols
-# --
-\rho_{${1:A}}$0

@@ -44,11 +44,8 @@ separate editor implementation.
 | `shared/planning-dsl.mjs` | Structural parser for the `@@todo`/`@@itodo`/`@@project`/`@@milestone`/`@@clock` planning DSL — inline/block shapes, bracket-less titles, parse-time diagnostics, patch/serialize helpers. See `docs/agenda.md`. |
 | `shared/planning-values.mjs` | Value-grammar layer for the planning DSL: dates, repeaters, lead-time, dep-refs, durations, canonical-key aliasing, status normalization. Shared by the server and `src/planning-values.ts` (browser facade) so both validate identically. |
 | `src/styles/*.css` | CM6 editor chrome and swappable Markdown themes. |
-| `aaronnote/main.ts` | Shared editor composition shell used by both Emacs and Noema.app. |
-| `aaronnote/desktop-bridge.ts` | Host-neutral packaged-smoke adapter over the narrow `window.noemaDesktop` preload surface. |
-| `desktop/main.mjs` / `desktop/preload.cjs` | SiYuan-derived Electron system adapter: native windows and menus, dialogs, clipboard, drag/drop, sessions, and startup of the shared Node web host. The preload keeps context isolation and sandboxing enabled. |
-| `aaronnote/agenda.html`/`aaronnote/agenda-main.ts` | Vite entry for the standalone `/agenda` page — mounts `agenda-view.ts` in page mode using the same `api-client.ts` facade the embedded editor uses (`window.aaronnoteApi` is bridged in via `web-host.mjs`'s `adapterScript` for this page too). |
-| `aaronnote/agenda-view.ts` | Full-screen, vault-wide agenda renderer: week/list/month/log/gantt/projects/clocktable/lints views over `api.notes.agenda`. All edits round-trip through `patchTodo`/`clockIn`/`clockOut` — holds no state that isn't re-derivable from markdown. See `docs/agenda.md`. |
+| `aaronnote/main.ts` | CM6 editor composition shell hosted by Emacs; server mode reuses it read-only. |
+| `aaronnote/agenda-view.ts` | Agenda implementation shared by the Emacs-hosted editor panel and `/agenda` surface. It is not an independent product; all edits round-trip through `patchTodo`/`clockIn`/`clockOut`. See `docs/agenda.md`. |
 | `aaronnote/latex-export-scope.ts` | Pure whole-note/selection/heading-subtree range model used by the LaTeX scope picker. |
 | `server/lib/runtime.mjs` | Compatibility facade plus remaining note/index/save/agenda/Copilot implementation. New channel controllers live in `server/Features/`; transport helpers live in `server/infrastructure/`. See `docs/architecture/current-architecture.md`. |
 | `server/lib/latex-export-pandoc.mjs` | Noema-aware preprocessing, fixed Pandoc Markdown profile, typed LaTeX marks, and academic LaTeX postprocessing. Pandoc is required in this fixed environment. |
@@ -66,18 +63,18 @@ separate editor implementation.
 
 ## Emacs handoff
 
-This editor is embedded in Emacs via xwidget/Appine. Panels and subsystems that
-were part of the original desktop app are now delegated to native
-Emacs equivalents:
+This editor and its Wiki/Graph, Agenda/Config and Jupyter companions are hosted
+by Emacs through xwidget/Appine. Emacs owns workspace composition and project
+authority; the Web surfaces retain their specialized behavior:
 
-| Removed subsystem | Emacs equivalent |
+| Capability | Emacs-hosted realization |
 |---|---|
 | Git panel (commit/diff/pull/push) | `magit` |
-| Agenda / todos panel | Server-backed Noema agenda view-model, rendered by the standalone `/agenda` page (`aaronnote/agenda.html`/`agenda-main.ts`, mounting `aaronnote/agenda-view.ts`: week/list/month/log/gantt/projects/clocktable/lints) and opened via Emacs `my/noema-roam-agenda` |
+| Agenda / todos | Emacs commands open the retained `/agenda` Web surface; local CM6 agenda components may share the same model |
 | Filesystem browser ranger | `dired`, roam selector |
 | Lean interactive editor (placeholders, infoview, child editors) | `lang/lean/` (Emacs LSP) |
-| Jupyter panel | Noema `@@cell` |
-| In-editor roam graph | `my/noema-roam-graph` → `/graph` standalone route |
+| Jupyter panel | Emacs controls plus the retained right-side JupyterLab rich-output renderer |
+| Wiki / knowledge graph | Retained `/wiki` and `/graph` Web surfaces opened by Emacs; the separate Noema Work DAG remains the native Graph Board |
 | Plugin runtime + roamlookup | removed; Copilot is a built-in |
 
 Fenced `lean` and `lean4` code blocks render as **static syntax-highlighted
@@ -134,7 +131,7 @@ macro-set version into its cache key. See `etc/katex-macros/README.md`.
    possible, preserving selection and history.
 3. Preview widgets are views over source text. They must map clicks/commands back
    to source ranges rather than storing independent state.
-4. Shared behavior belongs in `src/`; app shell code under `aaronnote/` should use
+4. Shared behavior belongs in `src/`; Emacs-hosted composition code under `aaronnote/` should use
    the public editor facade instead of reaching into widget internals.
 5. Styles should target `.cm-editor` and CM6/widget classes. Do not add legacy
    editor compatibility selectors.

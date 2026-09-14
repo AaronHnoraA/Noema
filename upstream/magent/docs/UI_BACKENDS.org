@@ -1,0 +1,69 @@
+#+title: Magent Frontend Boundary
+#+magent_lang: en
+#+magent_alt_url: /UI_BACKENDS.zh.html
+#+options: toc:nil num:nil
+
+Magent supports one user frontend: ~agent-shell~, connected to the Magent
+runtime through the in-process ACP adapter.  User documentation and examples
+must use the commands exported by ~magent-agent-shell.el~ or agent-shell itself.
+
+* Public Interface
+
+The agent-shell integration is the complete interactive interface.  Magent does
+not maintain a parallel workspace, compose buffer, command menu, or custom
+output-buffer frontend.  New interactive behavior belongs in agent-shell or in
+the ACP adapter; shared behavior belongs in the runtime API.
+
+* Supported Modules
+
+- ~magent-agent-shell.el~ registers the Magent agent-shell configuration and
+  provides the supported interactive entry points.
+- ~magent-acp.el~ implements the in-process ACP request, notification,
+  response, permission, and ~session/update~ adapter.
+- ~magent-runtime-api.el~ is the frontend-neutral runtime and session API.
+- ~magent-runtime-queue.el~ owns the global single-execution queue and
+  session-scoped cancellation.
+
+* Supported Flow
+
+1. Start or reuse Magent with ~M-x magent-start~, or register Magent
+   with ~magent-agent-shell-ensure-config~ and select it from ~M-x agent-shell~.
+2. agent-shell calls the in-process ACP client from ~magent-acp.el~.
+3. ACP normalizes text and resource blocks separately, persists structured
+   blocks in turn metadata, and submits the prompt to ~magent-runtime-api.el~.
+   Local ~file://~ resources also populate scoped request paths; resource bodies
+   remain user-role context when history is reconstructed.
+4. The runtime queue starts exactly one active turn at a time, builds a
+   ~magent-request-context~ with ~:ui-visibility 'none~, and calls
+   ~magent-agent-run-turn~.
+5. The agent loop emits Magent-native observer events; ~magent-acp.el~ converts
+   them to ACP ~session/update~ messages for agent-shell.
+6. ACP prompt requests remain pending until the corresponding Magent turn
+   completes, fails, or is cancelled.
+
+* Configuration
+
+- ~magent-agent-shell-session-strategy~ selects the supported frontend's new,
+  latest, or prompt-based session flow for both Magent entry commands and
+  Magent selected from the generic agent-shell picker.
+
+* Development Boundary
+
+Keep frontend-neutral behavior in ~magent-runtime-api.el~, ACP conversion in
+~magent-acp.el~, and supported frontend behavior in ~magent-agent-shell.el~.
+Do not introduce a second interactive frontend inside the core runtime.
+
+* Current Limitations
+
+- ~agent-shell~ and ~acp~ are hard dependencies of the supported frontend.
+- Runtime execution uses a global single-execution queue.
+- Cancellation is session-scoped: cancelling one ACP session cancels that
+  session's active and queued submissions without removing other sessions'
+  queued work.
+- Per-request instruction skill overrides, Elisp-native slash commands, and
+  compatibility skill commands are supported.
+  Per-request agent overrides are not currently exposed by the supported
+  frontend.
+- ACP session config exposes ~Automatic capabilities~. Disabling it suppresses
+  contextual capability auto-resolution for future turns in that session while
+  retaining explicitly selected instruction skills.

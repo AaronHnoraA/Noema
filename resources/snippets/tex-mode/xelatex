@@ -1,8 +1,0 @@
-# -*- mode: snippet -*-
-# name: Xelatex
-# key: xelatex
-# group: Emacs migrated
-# source: /Users/hc/.config/emacs/snippets/tex-mode/xelatex_Xelatex
-# --
-%! TeX program = xelatex
-$0

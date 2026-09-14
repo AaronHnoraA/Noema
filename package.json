@@ -1,7 +1,7 @@
 {
   "name": "noema",
   "version": "0.3.1",
-  "description": "Noema: a roam-centered Typora-style Markdown editor.",
+  "description": "Noema: an Emacs-native local-first research and work exploration environment.",
   "license": "AGPL-3.0-only",
   "author": "Yanzhen Yu",
   "engines": {
@@ -14,7 +14,6 @@
     "url": "Noema/Noema.git"
   },
   "type": "module",
-  "main": "./desktop/main.mjs",
   "module": "./dist/lib/typora-web.js",
   "exports": {
     ".": {
@@ -36,10 +35,6 @@
     "start:vite": "vp dev --config vite.aaronnote.config.ts --host 127.0.0.1",
     "start:server": "AARONNOTE_HOST_MODE=server node web-host.mjs",
     "build:aaronnote": "tsc && vp build --config vite.aaronnote.config.ts && node scripts/write-renderer-build.mjs",
-    "prepare:electron": "node scripts/prepare-electron-runtime.mjs",
-    "build:desktop-shell": "node --check desktop/main.mjs && node --check desktop/preload.cjs && node --check web-host.mjs && npm run prepare:electron && node scripts/build-electron.mjs",
-    "build:desktop": "npm run build:aaronnote && npm run build:desktop-shell",
-    "electron": "electron",
     "build": "tsc && vp build",
     "build:lib": "tsc && vp build --config vite.lib.config.ts",
     "jupyter:bootstrap": "bash jupyter/scripts/bootstrap-jupyter.sh",
@@ -55,7 +50,6 @@
     "@types/requirejs": "2.1.37",
     "@types/turndown": "^5.0.6",
     "@types/ws": "8.18.1",
-    "electron": "42.9.2",
     "happy-dom": "^20.9.0",
     "postcss": "^8.5.15",
     "typescript": "~6.0.2",
@@ -85,6 +79,7 @@
     "dompurify": "^3.4.4",
     "force-graph": "1.42.4",
     "highlight.js": "^11.11.1",
+    "htmlparser2": "^10.1.0",
     "katex": "^0.16.47",
     "markdown-it": "^14.1.1",
     "markdown-it-emoji": "^3.0.0",
@@ -102,7 +97,6 @@
     "zeromq": "^6.5.0"
   },
   "allowScripts": {
-    "electron@42.9.2": true,
     "zeromq@6.5.0": true
   }
 }

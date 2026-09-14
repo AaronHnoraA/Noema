@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [neq] — Not equal
-# key: neq
-# group: Math · Relations
-# --
-\neq$0

@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [setminus] — Set difference
-# key: setminus
-# group: Math · Sets
-# --
-\setminus$0

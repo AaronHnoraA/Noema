@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [QQ] — Rational numbers
-# key: QQ
-# group: Math · Blackboard
-# --
-\mathbb{Q}$0

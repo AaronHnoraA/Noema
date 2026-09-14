@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [sumfrom] — Indexed sum
-# key: sumfrom
-# group: Math · Calculus
-# --
-\sum_{${1:i=1}}^{${2:n}} ${3:a_i}$0

@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "Noema Capture",
+  "version": "0.1.0",
+  "description": "Explicitly capture a page or selection into the local Noema research store.",
+  "permissions": ["activeTab", "scripting", "contextMenus", "storage"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Capture page in Noema"
+  },
+  "options_page": "options.html"
+}

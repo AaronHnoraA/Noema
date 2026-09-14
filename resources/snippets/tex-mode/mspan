@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Span
-# key: mspan
-# group: Math symbols
-# --
-\operatorname{span}\left\{${1:v_i}\right\}$0

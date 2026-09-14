@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [iintop] — Double integral operator
-# key: iintop
-# group: Math · Calculus
-# --
-\iint$0

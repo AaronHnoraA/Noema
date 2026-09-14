@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [land] — Logical and
-# key: land
-# group: Math · Logic
-# --
-\land$0

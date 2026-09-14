@@ -11,7 +11,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-describe("desktop kernel session provider", () => {
+describe("data-kernel session provider", () => {
   test("maps the absolute-file facade to portable notebook paths", async () => {
     const root = await mkdtemp(join(tmpdir(), "noema-kernel-session-provider-"));
     roots.push(root);

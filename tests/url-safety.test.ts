@@ -12,6 +12,7 @@ describe("URL safety", () => {
     expect(safeHref("mailto:a@example.com")).toBe(true);
     expect(safeHref("roam://node")).toBe(true);
     expect(safeHref("zotero://select/items/1_X")).toBe(true);
+	 expect(safeHref("noema://artifact/art_1")).toBe(true);
   });
 
   test("blocks scriptable protocols for live DOM hrefs", () => {

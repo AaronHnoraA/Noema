@@ -12,7 +12,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-describe("desktop kernel planning provider", () => {
+describe("data-kernel planning provider", () => {
   test("loads one joined workspace projection and rejects mismatched note paths", async () => {
     const root = await mkdtemp(join(tmpdir(), "noema-kernel-workspace-projection-"));
     roots.push(root);

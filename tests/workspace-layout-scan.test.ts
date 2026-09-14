@@ -26,7 +26,13 @@ async function vault(): Promise<string> {
 }
 
 async function scanIds(root: string, workspaceLayout: "wiki" | "legacy"): Promise<string[]> {
-  configure({ root, workspaceLayout });
+  configure({
+    root,
+    workspaceLayout,
+    workspaceRoot: root,
+    stateRoot: join(root, "state"),
+    tmpRoot: join(root, "tmp"),
+  });
   const notes = await scanRoamNotes();
   return notes.map((entry) => entry.id).filter(Boolean).sort() as string[];
 }

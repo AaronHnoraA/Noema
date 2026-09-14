@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [overbrace] — Overbrace
-# key: overbrace
-# group: Math · Structures
-# --
-\overbrace{${1:x}}^{${2:text}}$0

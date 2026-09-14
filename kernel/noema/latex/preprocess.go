@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -61,6 +62,10 @@ var (
 	setextUnderline       = regexp.MustCompile(`^ {0,3}(?:=+|-+)[ \t]*$`)
 	calloutPattern        = regexp.MustCompile(`^(\s*>\s*)\[!([A-Za-z]+)\](?:\s+(.+))?\s*$`)
 	proofTitleWordPattern = regexp.MustCompile(`(?i)^proof\b`)
+	layoutAttrPattern     = regexp.MustCompile(`(?i)([A-Za-z][A-Za-z0-9_-]*)\s*[:=]\s*("[^"]*"|'[^']*'|[^,;\s]+)|([A-Za-z][A-Za-z0-9_-]*)`)
+	layoutDimension       = regexp.MustCompile(`^(\d+(?:\.\d+)?)(%|px|em|rem|vw|vh|ch)?$`)
+	tikzDocumentPattern   = regexp.MustCompile(`(?i)\\documentclass\b|\\begin\s*\{\s*document\s*\}`)
+	tikzPicturePattern    = regexp.MustCompile(`(?is)\\begin\s*\{\s*tikzpicture\s*\}.*\\end\s*\{\s*tikzpicture\s*\}`)
 )
 
 var defaultEnvironment = map[string]string{
@@ -94,6 +99,229 @@ func orgClose(line string) string {
 		return ""
 	}
 	return strings.ToLower(match[1])
+}
+
+type figureLayout struct {
+	Align         string
+	Wrap          bool
+	Width, Height string
+}
+
+func stripTeXComments(source string) string {
+	lines := strings.Split(normalizeNewlines(source), "\n")
+	for lineIndex, line := range lines {
+		for index := 0; index < len(line); index++ {
+			if line[index] != '%' {
+				continue
+			}
+			slashes := 0
+			for back := index - 1; back >= 0 && line[back] == '\\'; back-- {
+				slashes++
+			}
+			if slashes%2 == 0 {
+				lines[lineIndex] = strings.TrimRight(line[:index], " \t")
+				break
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// tikzPictureSource mirrors shared/tikz-source.mjs. A full document contributes
+// its picture but never its document wrapper to an enclosing LaTeX export.
+func tikzPictureSource(source string) string {
+	body := strings.TrimSpace(stripTeXComments(source))
+	if body == "" {
+		return ""
+	}
+	if tikzDocumentPattern.MatchString(body) {
+		return tikzPicturePattern.FindString(body)
+	}
+	if tikzPicturePattern.MatchString(body) {
+		return body
+	}
+	return "\\begin{tikzpicture}\n" + body + "\n\\end{tikzpicture}"
+}
+
+func cleanLayoutValue(value string) string {
+	raw := strings.TrimSpace(value)
+	if len(raw) >= 2 && ((raw[0] == '"' && raw[len(raw)-1] == '"') || (raw[0] == '\'' && raw[len(raw)-1] == '\'')) {
+		raw = raw[1 : len(raw)-1]
+	}
+	return strings.TrimSpace(raw)
+}
+
+func layoutAttrsFromTitle(title string) map[string]string {
+	raw := strings.TrimSpace(title)
+	open := strings.Index(raw, "{")
+	if open < 0 || !strings.HasSuffix(raw, "}") {
+		return map[string]string{}
+	}
+	body := raw[open+1 : len(raw)-1]
+	attrs := map[string]string{}
+	for _, match := range layoutAttrPattern.FindAllStringSubmatch(body, -1) {
+		key, value := match[1], match[2]
+		if key == "" {
+			key, value = match[3], match[3]
+		}
+		key, value = strings.ToLower(key), cleanLayoutValue(value)
+		if key != "" && value != "" {
+			attrs[key] = value
+		}
+	}
+	return attrs
+}
+
+func normalizedLayoutAlign(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "left", "l":
+		return "left"
+	case "right", "r":
+		return "right"
+	case "center", "centre", "middle", "c":
+		return "center"
+	default:
+		return ""
+	}
+}
+
+func layoutTruthy(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "y", "on", "wrap":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizedLayoutDimension(value string) string {
+	raw := strings.ToLower(strings.TrimSpace(value))
+	match := layoutDimension.FindStringSubmatch(raw)
+	if match == nil {
+		return ""
+	}
+	if match[2] == "" {
+		return raw + "px"
+	}
+	return raw
+}
+
+func tikzLayout(title string) figureLayout {
+	attrs := layoutAttrsFromTitle(title)
+	wrapSide := normalizedLayoutAlign(attrs["wrap"])
+	floatSide := normalizedLayoutAlign(attrs["float"])
+	requested := normalizedLayoutAlign(attrs["align"])
+	if requested == "" {
+		requested = normalizedLayoutAlign(attrs["position"])
+	}
+	if requested == "" {
+		requested = normalizedLayoutAlign(attrs["pos"])
+	}
+	wrap := wrapSide != "" || floatSide != "" || layoutTruthy(attrs["wrap"]) || layoutTruthy(attrs["float"])
+	align := wrapSide
+	if align == "" {
+		align = floatSide
+	}
+	if align == "" {
+		align = requested
+	}
+	if align == "" && wrap {
+		align = "right"
+	}
+	if align == "" {
+		align = "center"
+	}
+	width := attrs["size"]
+	if width == "" {
+		width = attrs["width"]
+	}
+	if width == "" {
+		width = attrs["w"]
+	}
+	height := attrs["height"]
+	if height == "" {
+		height = attrs["h"]
+	}
+	return figureLayout{
+		Align: align, Wrap: wrap && align != "center",
+		Width: normalizedLayoutDimension(width), Height: normalizedLayoutDimension(height),
+	}
+}
+
+func roundedLatexNumber(value float64) string {
+	return strconv.FormatFloat(math.Round(value*1000)/1000, 'f', -1, 64)
+}
+
+func layoutLatexLength(value, relativeTo string) string {
+	match := layoutDimension.FindStringSubmatch(strings.ToLower(strings.TrimSpace(value)))
+	if match == nil {
+		return ""
+	}
+	amount, err := strconv.ParseFloat(match[1], 64)
+	if err != nil || amount <= 0 {
+		return ""
+	}
+	unit := match[2]
+	if unit == "" {
+		unit = "px"
+	}
+	switch unit {
+	case "%", "vw":
+		return roundedLatexNumber(math.Min(amount, 100)/100) + relativeTo
+	case "em", "rem", "ch":
+		return roundedLatexNumber(amount) + "em"
+	case "vh":
+		return roundedLatexNumber(math.Min(amount, 100)/100) + "\\textheight"
+	default:
+		return roundedLatexNumber(amount/(96.0/72.27)) + "pt"
+	}
+}
+
+func tikzLatexBlock(source, title string, line int) ([]string, error) {
+	picture := tikzPictureSource(source)
+	if picture == "" {
+		return nil, fmt.Errorf("TikZ block on line %d does not contain a tikzpicture", line)
+	}
+	layout := tikzLayout(title)
+	body := strings.Split(picture, "\n")
+	requestedWidth := layoutLatexLength(layout.Width, "\\textwidth")
+	requestedHeight := layoutLatexLength(layout.Height, "\\textheight")
+	width := requestedWidth
+	if layout.Wrap && (requestedWidth != "" || requestedHeight == "") {
+		width = "\\linewidth"
+	}
+	if width != "" || requestedHeight != "" {
+		if width == "" {
+			width = "!"
+		}
+		if requestedHeight == "" {
+			requestedHeight = "!"
+		}
+		body = append([]string{"\\resizebox{" + width + "}{" + requestedHeight + "}{%"}, body...)
+		body = append(body, "}")
+	}
+	if layout.Wrap {
+		side := "r"
+		if layout.Align == "left" {
+			side = "l"
+		}
+		measure := layoutLatexLength(layout.Width, "\\textwidth")
+		if measure == "" {
+			measure = "0.45\\textwidth"
+		}
+		body = append([]string{"\\begin{wrapfigure}{" + side + "}{" + measure + "}", "\\centering"}, body...)
+		body = append(body, "\\end{wrapfigure}")
+	} else {
+		env := "center"
+		if layout.Align == "left" {
+			env = "flushleft"
+		} else if layout.Align == "right" {
+			env = "flushright"
+		}
+		body = append([]string{"\\begin{" + env + "}"}, body...)
+		body = append(body, "\\end{"+env+"}")
+	}
+	return append([]string{"", "```{=latex}"}, append(body, "```", "")...), nil
 }
 
 func yamlScalar(value string) string {
@@ -926,13 +1154,18 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 	hasSemanticOutline := containsSemanticOutline(lines, frontMatterEnd, hiddenKinds, options)
 	output := []string{}
 	type openedBlock struct{ Kind, Env string }
+	type tikzBlock struct {
+		Title string
+		Line  int
+		Lines []string
+	}
 	stack := []openedBlock{}
 	hidden := ""
 	hiddenDepth := 0
 	var fence *fenceState
 	displayMathDepth := -1
 	displayMathPrefix := ""
-	rawTikz := false
+	var rawTikz *tikzBlock
 	var private *braceState
 	htmlComment := false
 	singletons := map[string]bool{}
@@ -976,12 +1209,16 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 			}
 			continue
 		}
-		if rawTikz {
+		if rawTikz != nil {
 			if orgClose(line) == "tikz" {
-				output = append(output, "\\end{tikzpicture}", "\\end{center}", "```", "")
-				rawTikz = false
+				block, err := tikzLatexBlock(strings.Join(rawTikz.Lines, "\n"), rawTikz.Title, rawTikz.Line)
+				if err != nil {
+					return PrepareResult{}, err
+				}
+				output = append(output, block...)
+				rawTikz = nil
 			} else {
-				output = append(output, line)
+				rawTikz.Lines = append(rawTikz.Lines, line)
 			}
 			continue
 		}
@@ -1095,8 +1332,7 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 				continue
 			}
 			if begin.Kind == "tikz" {
-				output = append(output, "", "```{=latex}", "\\begin{center}", "\\begin{tikzpicture}")
-				rawTikz = true
+				rawTikz = &tikzBlock{Title: begin.Title, Line: lineNumber, Lines: []string{}}
 				continue
 			}
 			opened, env := environmentOpen(begin.Kind, begin.Title, options)
@@ -1154,7 +1390,7 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 	if htmlComment {
 		return PrepareResult{}, errors.New("Unclosed HTML comment")
 	}
-	if rawTikz {
+	if rawTikz != nil {
 		return PrepareResult{}, errors.New("Unclosed Noema block: tikz")
 	}
 	if len(stack) > 0 {

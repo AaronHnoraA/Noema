@@ -134,7 +134,7 @@ export type UnusedAsset = {
 
 export type CursorPosition = {
   file: string;
-  /** Stable Emacs xwidget client. Omitted for the legacy/global desktop slot. */
+  /** Stable Emacs xwidget client. Omitted only for legacy/global compatibility. */
   client?: string;
   mode: "markdown" | "source";
   from: number;

@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [calO] — Calligraphic O
-# key: calO
-# group: Math · Calligraphic
-# --
-\mathcal{O}$0

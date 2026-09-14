@@ -1,0 +1,268 @@
+;;; magent-approval.el --- Approval providers for Magent  -*- lexical-binding: t; -*-
+
+;; Copyright (C) 2026 Jamie Cui
+;; SPDX-License-Identifier: GPL-3.0-or-later
+;; Assisted-by: Codex:GPT-5.6, Magent:deepseek-v4-pro
+
+;;; Commentary:
+
+;; Pluggable approval providers for Magent tool confirmations.
+
+;;; Code:
+
+(require 'cl-lib)
+(require 'subr-x)
+
+(defvar magent-approval-provider-function #'magent-approval-local-request
+  "Function used to request tool approval.
+The function is called with a REQUEST plist that always includes
+`:request-id'.  Providers must eventually resolve the request via
+`magent-approval-resolve-request'.")
+
+(defvar magent-approval-state-change-functions nil
+  "Hook run after approval state changes.
+Each function receives EVENT, REQUEST-ID, and ENTRY.")
+
+(defvar magent-approval--pending-requests (make-hash-table :test 'equal)
+  "Pending approval requests keyed by request id.
+Each value is a plist with keys `:request', `:callback', and `:provider'.")
+
+(defvar magent-approval--completed-requests (make-hash-table :test 'equal)
+  "Completed approval requests keyed by request id.
+Each value is a plist with keys `:request', `:provider', `:decision',
+and `:completed-at'.")
+
+(defvar magent-approval--local-prompt-timers (make-hash-table :test 'equal)
+  "Pending local approval prompt timers keyed by request id.")
+
+(defconst magent-approval--decisions
+  '(allow-once deny-once allow-session deny-session)
+  "Decisions accepted from approval providers.")
+
+(defun magent-approval--copy-string (value)
+  "Return an independent copy of string VALUE, or VALUE when non-string."
+  (if (stringp value) (copy-sequence value) value))
+
+(defun magent-approval--history-identifier (value)
+  "Return bounded scalar VALUE suitable for completed approval history."
+  (cond
+   ((symbolp value) value)
+   ((stringp value)
+    (if (<= (length value) 256)
+        (copy-sequence value)
+      (format "<identifier:%s>"
+              (substring (secure-hash 'sha256 value) 0 12))))))
+
+(defun magent-approval--audit-context-snapshot (value)
+  "Rebuild VALUE as a strict, independent audit attribution snapshot.
+Unknown fields and live values are never retained."
+  (when (and (proper-list-p value)
+             (zerop (% (length value) 2))
+             (eq (plist-get value :attribution-source) 'request-snapshot)
+             (cl-every
+              (lambda (key)
+                (let ((item (plist-get value key)))
+                  (or (null item) (stringp item))))
+              '(:session-id :project-root :project-id :agent
+                :turn-id :subagent-id))
+             (let ((scope (plist-get value :scope)))
+               (or (null scope) (eq scope 'global) (stringp scope))))
+    (list :attribution-source 'request-snapshot
+          :session-id (magent-approval--copy-string
+                       (plist-get value :session-id))
+          :scope (magent-approval--copy-string (plist-get value :scope))
+          :project-root (magent-approval--copy-string
+                         (plist-get value :project-root))
+          :project-id (magent-approval--copy-string
+                       (plist-get value :project-id))
+          :agent (magent-approval--copy-string (plist-get value :agent))
+          :turn-id (magent-approval--copy-string
+                    (plist-get value :turn-id))
+          :subagent-id (magent-approval--copy-string
+                        (plist-get value :subagent-id)))))
+
+(defun magent-approval--normalize-request (request)
+  "Return REQUEST with a stable `:request-id'."
+  (let ((copy (copy-sequence request)))
+    (unless (plist-get copy :request-id)
+      (setq copy (plist-put copy :request-id
+                            (format "approval-%s-%06x"
+                                    (format-time-string "%Y%m%d%H%M%S")
+                                    (random #xFFFFFF)))))
+    copy))
+
+(defun magent-approval--notify-state-change (event request-id entry)
+  "Notify listeners that approval state changed.
+EVENT is a symbol, REQUEST-ID identifies the changed request, and ENTRY
+is the current pending/completed entry when applicable."
+  (run-hook-with-args 'magent-approval-state-change-functions
+                      event request-id entry))
+
+(defun magent-approval--local-clear-prompt-timer (request-id)
+  "Cancel and forget the local prompt timer for REQUEST-ID."
+  (when request-id
+    (when-let* ((timer (gethash request-id magent-approval--local-prompt-timers)))
+      (cancel-timer timer))
+    (remhash request-id magent-approval--local-prompt-timers)))
+
+(defun magent-approval--local-forget-prompt-timer (request-id)
+  "Forget the local prompt timer for REQUEST-ID without cancelling it."
+  (when request-id
+    (remhash request-id magent-approval--local-prompt-timers)))
+
+(defun magent-approval--local-state-changed (event request-id entry)
+  "Clean up local prompt timers after approval state EVENT.
+REQUEST-ID and ENTRY follow `magent-approval-state-change-functions'."
+  (pcase event
+    ((or 'resolved 'dropped)
+     (when (or (null entry)
+               (eq (plist-get entry :provider) #'magent-approval-local-request))
+       (magent-approval--local-clear-prompt-timer request-id)))))
+
+(defun magent-approval-pending-request (request-id)
+  "Return the pending request plist for REQUEST-ID, or nil."
+  (when-let* ((entry (gethash request-id magent-approval--pending-requests)))
+    (plist-get entry :request)))
+
+(defun magent-approval-completed-request (request-id)
+  "Return the completed request entry for REQUEST-ID, or nil."
+  (gethash request-id magent-approval--completed-requests))
+
+(defun magent-approval-pending-count (&optional predicate)
+  "Return the number of pending approval requests.
+When PREDICATE is non-nil, count only requests for which
+`(funcall PREDICATE REQUEST-ID ENTRY)' returns non-nil."
+  (let ((count 0))
+    (maphash (lambda (request-id entry)
+               (when (or (null predicate)
+                         (funcall predicate request-id entry))
+                 (setq count (1+ count))))
+             magent-approval--pending-requests)
+    count))
+
+(defun magent-approval--completed-request-snapshot (request)
+  "Return a fail-closed scalar history snapshot of REQUEST.
+Pending approvals necessarily retain provider and callback state.  Completed
+history must not retain request contexts, sessions, callbacks, provider
+closures, tool arguments, or prompt/command bodies."
+  (let ((audit-context
+         (magent-approval--audit-context-snapshot
+          (plist-get request :audit-context))))
+    (append
+     (list :request-id
+           (magent-approval--history-identifier
+            (plist-get request :request-id))
+           :tool-name
+           (magent-approval--history-identifier
+            (plist-get request :tool-name))
+           :perm-key
+           (magent-approval--history-identifier
+            (plist-get request :perm-key)))
+     (when audit-context
+       (list :audit-context audit-context)))))
+
+(defun magent-approval-resolve-request (request-id decision)
+  "Resolve REQUEST-ID with DECISION and invoke its callback.
+Return non-nil when a pending request was found."
+  (when-let* ((entry (gethash request-id magent-approval--pending-requests)))
+    (unless (memq decision magent-approval--decisions)
+      (error "Invalid Magent approval decision: %S" decision))
+    (let* ((callback (plist-get entry :callback))
+           (provider (plist-get entry :provider))
+           (completed-entry (list :request
+                                  (magent-approval--completed-request-snapshot
+                                   (plist-get entry :request))
+                                  ;; Preserve only a named provider identity;
+                                  ;; an arbitrary closure may retain a live
+                                  ;; backend or request graph indefinitely.
+                                  :provider (and (symbolp provider) provider)
+                                  :decision decision
+                                  :completed-at (float-time))))
+      (remhash request-id magent-approval--pending-requests)
+      (puthash request-id completed-entry magent-approval--completed-requests)
+      (when callback
+        (condition-case err
+            (funcall callback decision)
+          (error
+           (message "Magent approval callback failed: %s"
+                    (error-message-string err)))))
+      (magent-approval--notify-state-change 'resolved request-id completed-entry))
+    t))
+
+(defun magent-approval-drop-requests (&optional predicate)
+  "Discard pending requests matching PREDICATE without invoking callbacks.
+Return the number of dropped requests."
+  (let ((dropped 0)
+        request-ids)
+    (maphash (lambda (request-id entry)
+               (when (or (null predicate)
+                         (funcall predicate request-id entry))
+                 (push request-id request-ids)))
+             magent-approval--pending-requests)
+    (dolist (request-id request-ids)
+      (when-let* ((entry (gethash request-id magent-approval--pending-requests)))
+        (remhash request-id magent-approval--pending-requests)
+        (setq dropped (1+ dropped))
+        (magent-approval--notify-state-change 'dropped request-id entry)))
+    dropped))
+
+(defun magent-approval-request (request callback)
+  "Request approval for REQUEST and deliver the decision to CALLBACK.
+Returns the assigned request id."
+  (let* ((normalized (magent-approval--normalize-request request))
+         (provider (or (plist-get normalized :provider)
+                       magent-approval-provider-function))
+         (request-id (plist-get normalized :request-id)))
+    (puthash request-id
+             (list :request normalized
+                   :callback callback
+                   :provider provider)
+             magent-approval--pending-requests)
+    (condition-case err
+        (progn
+          ;; Notify after the request enters pending state but before calling
+          ;; the provider.  Providers may resolve synchronously; emitting
+          ;; afterwards would invert requested/resolved and lose the payload.
+          (magent-approval--notify-state-change
+           'requested request-id
+           (gethash request-id magent-approval--pending-requests))
+          (funcall provider normalized)
+          request-id)
+      (error
+       (remhash request-id magent-approval--pending-requests)
+       (signal (car err) (cdr err))))))
+
+(defun magent-approval-local-request (request)
+  "Request local approval for REQUEST, then resolve it."
+  (let* ((request-id (plist-get request :request-id))
+         (tool-name (plist-get request :tool-name))
+         (summary (plist-get request :summary))
+         (timer
+          (run-at-time
+           0 nil
+           (lambda (request-id tool-name summary)
+             (magent-approval--local-forget-prompt-timer request-id)
+             (when (magent-approval-pending-request request-id)
+               (let* ((summary (or summary ""))
+                      (prompt (format "magent: allow %s%s? [y]es/[n]o/[A]lways/[D]eny always: "
+                                      tool-name
+                                      (if (string-empty-p summary)
+                                          ""
+                                        (format " (%s)" summary))))
+                      (choice (read-char-choice prompt '(?y ?n ?A ?D))))
+                 (magent-approval-resolve-request
+                  request-id
+                  (pcase choice
+                    (?y 'allow-once)
+                    (?n 'deny-once)
+                    (?A 'allow-session)
+                    (?D 'deny-session))))))
+           request-id tool-name summary)))
+    (when timer
+      (puthash request-id timer magent-approval--local-prompt-timers))))
+
+(add-hook 'magent-approval-state-change-functions
+          #'magent-approval--local-state-changed)
+
+(provide 'magent-approval)
+;;; magent-approval.el ends here

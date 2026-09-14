@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [bigcup] — Big union
-# key: bigcup
-# group: Math · Sets
-# --
-\bigcup$0

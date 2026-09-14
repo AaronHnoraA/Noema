@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [FF] — Field F
-# key: FF
-# group: Math · Blackboard
-# --
-\mathbb{F}$0

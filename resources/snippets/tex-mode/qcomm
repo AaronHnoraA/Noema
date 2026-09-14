@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Commutator
-# key: qcomm
-# group: QC symbols
-# --
-\left[${1:A},${2:B}\right]$0

@@ -19,20 +19,50 @@ describe("imageLayoutToTrailingAttrs", () => {
   });
 
   it("emits align for non-wrapping left/right blocks", () => {
-    expect(imageLayoutToTrailingAttrs({ ...base, align: "left" })).toBe("{align: left}");
-    expect(imageLayoutToTrailingAttrs({ ...base, align: "right" })).toBe("{align: right}");
+    expect(imageLayoutToTrailingAttrs({ ...base, align: "left" })).toBe("{align=left}");
+    expect(imageLayoutToTrailingAttrs({ ...base, align: "right" })).toBe("{align=right}");
   });
 
   it("emits wrap for floated images", () => {
-    expect(imageLayoutToTrailingAttrs({ ...base, align: "left", wrap: true })).toBe("{wrap: left}");
-    expect(imageLayoutToTrailingAttrs({ ...base, align: "right", wrap: true })).toBe("{wrap: right}");
+    expect(imageLayoutToTrailingAttrs({ ...base, align: "left", wrap: true })).toBe("{wrap=left}");
+    expect(imageLayoutToTrailingAttrs({ ...base, align: "right", wrap: true })).toBe("{wrap=right}");
   });
 
   it("emits width / height and combines with align", () => {
-    expect(imageLayoutToTrailingAttrs({ ...base, width: "50%" })).toBe("{width: 50%}");
+    expect(imageLayoutToTrailingAttrs({ ...base, width: "50%" })).toBe("{width=50%}");
     expect(imageLayoutToTrailingAttrs({ ...base, align: "left", width: "50%" })).toBe(
-      "{align: left, width: 50%}",
+      "{align=left width=50%}",
     );
+  });
+
+  it("continues to read historical colon/comma attributes", () => {
+    expect(imageLayoutFromAttrs(parseAttrArgs("{wrap: right, width: 50%}"))).toEqual({
+      ...base,
+      align: "right",
+      wrap: true,
+      width: "50%",
+    });
+  });
+});
+
+describe("LaTeX figure layout", () => {
+  it("maps a wrapped relative width to wrapfigure and its local line width", async () => {
+    const { layoutLatexFigure } = await import("../src/layout-attrs.ts");
+    const figure = layoutLatexFigure(
+      { align: "left", wrap: true, width: "40%", height: "" },
+      ["\\begin{tikzpicture}", "\\end{tikzpicture}"],
+    );
+
+    expect(figure.lines).toEqual([
+      "\\begin{wrapfigure}{l}{0.4\\textwidth}",
+      "\\centering",
+      "\\resizebox{\\linewidth}{!}{%",
+      "\\begin{tikzpicture}",
+      "\\end{tikzpicture}",
+      "}",
+      "\\end{wrapfigure}",
+    ]);
+    expect(figure.packages).toEqual(["graphicx", "wrapfig"]);
   });
 });
 

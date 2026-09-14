@@ -35,7 +35,7 @@ describe("b3 component system", () => {
     const editorBlock = document.createElement("div");
     editorBlock.className = "cm-line";
     const dropOverlay = document.createElement("div");
-    dropOverlay.className = "noema-desktop-drop-overlay";
+    dropOverlay.className = "noema-transient-overlay";
     const themePreview = document.createElement("span");
     themePreview.className = "noema-config-theme-preview";
 
@@ -138,7 +138,7 @@ describe("b3 component system", () => {
     }
   });
 
-  test("ships the adapter on every interactive application route and reports it in packaged smoke", () => {
+  test("ships the component adapter on every Emacs-hosted interactive route", () => {
     for (const entry of [
       "aaronnote/main.ts",
       "aaronnote/wiki-main.ts",
@@ -150,12 +150,6 @@ describe("b3 component system", () => {
       expect(source).toContain("installB3ComponentSystem");
       expect(source).toContain("removeB3ComponentSystem");
     }
-    const bridge = read("aaronnote/desktop-bridge.ts");
-    expect(bridge).toContain("auditB3ComponentSystem(document.body)");
-    expect(bridge).toContain("b3Components");
-    expect(bridge).toContain('knowledgeDock: Boolean(knowledgeDock?.classList.contains("b3-panel"))');
-    expect(bridge).toContain('tocPopover: Boolean(tocPopover?.classList.contains("b3-panel"))');
-    expect(bridge).toContain('agendaSurface: Boolean(agendaSurface?.classList.contains("b3-panel"))');
   });
 
   test("keeps the b3 layer palette-owned while host adapters retain geometry", () => {
@@ -183,7 +177,7 @@ describe("b3 component system", () => {
     const usedVariables = new Set([...css.matchAll(/var\((--b3-[a-z0-9-]+)/g)].map((match) => match[1]));
     expect(usedVariables.size).toBeGreaterThanOrEqual(25);
     for (const theme of ["daylight", "midnight"]) {
-      const themeCss = read(`app/appearance/themes/${theme}/theme.css`);
+      const themeCss = read(`kernel-resources/appearance/themes/${theme}/theme.css`);
       const defined = new Set([...themeCss.matchAll(/(--b3-[a-z0-9-]+)\s*:/g)].map((match) => match[1]));
       expect([...usedVariables].filter((variable) => !defined.has(variable))).toEqual([]);
     }

@@ -20,7 +20,7 @@ async function setupRoot() {
   return root;
 }
 
-describe("desktop kernel Markdown provider", () => {
+describe("data-kernel Markdown provider", () => {
   test("maps only Markdown files inside the registered box", async () => {
     const root = await setupRoot();
     expect(kernelMarkdownPath(root, join(root, "nested", "note.md"))).toBe("/nested/note.md");

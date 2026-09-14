@@ -62,7 +62,7 @@ describe("portable query embeds", () => {
     expect(JSON.stringify(first)).not.toContain("must-not-cross-the-facade");
   });
 
-  test("returns source diagnostics before transport and is explicit when the desktop kernel is absent", async () => {
+  test("returns source diagnostics before transport and is explicit when the data kernel is absent", async () => {
     expect(await buildEmbedQuery({ title: "Unsafe", source: "DELETE FROM blocks" })).toMatchObject({
       evaluationSource: "portable-embed-parser", total: 0,
       diagnostics: [{ kind: "invalid-query" }],

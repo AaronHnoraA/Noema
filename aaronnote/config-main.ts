@@ -1,9 +1,8 @@
-import "./desktop-bridge.ts";
 import "../src/styles/theme-loader.ts";
 import { installB3ComponentSystem } from "../src/b3-component-system.ts";
 import "./config.css";
 
-import type { NoemaAppConfigMsg, NoemaAppTheme, NoemaDesktopPlugin } from "./api-client.ts";
+import type { NoemaAppConfigMsg, NoemaAppTheme } from "./api-client.ts";
 import { api } from "./api-client.ts";
 import {
   installNoemaThemeRuntime,
@@ -16,8 +15,7 @@ const root = document.querySelector<HTMLElement>("#config-app");
 if (!root) throw new Error("Missing #config-app");
 const removeB3ComponentSystem = installB3ComponentSystem(document.body);
 
-document.body.dataset.hostMode = window.noemaDesktop ? "desktop" : "browser";
-if (window.noemaDesktop) document.body.dataset.desktopPlatform = window.noemaDesktop.platform;
+document.body.dataset.hostMode = "emacs";
 
 root.innerHTML = `
   <header class="noema-config-titlebar" data-desktop-drag-region>
@@ -36,14 +34,13 @@ root.innerHTML = `
       <a href="#appearance" class="is-active">Appearance</a>
       <a href="#workspace">Workspace</a>
       <a href="#new-pages">New pages</a>
-      <a href="#plugins">Plugins</a>
       <a href="#configuration-file">Configuration file</a>
     </nav>
     <main class="noema-config-main">
       <section class="noema-config-intro">
-        <p class="noema-config-eyebrow">Application settings</p>
+        <p class="noema-config-eyebrow">Emacs-hosted settings</p>
         <h1>Configuration</h1>
-        <p>Choose how Noema looks. Changes are saved globally and applied to every open window.</p>
+        <p>Choose how Noema looks. Changes are saved globally and applied to every Emacs-hosted view.</p>
       </section>
       <section class="noema-config-section" id="workspace">
         <div class="noema-config-section-head">
@@ -115,16 +112,6 @@ root.innerHTML = `
         </div>
         <div class="noema-config-themes" data-config-themes role="radiogroup" aria-label="Noema theme"></div>
       </section>
-      <section class="noema-config-section" id="plugins">
-        <div class="noema-config-section-head">
-          <div>
-            <p class="noema-config-eyebrow">Extensions</p>
-            <h2>Plugins</h2>
-          </div>
-        </div>
-        <p class="noema-config-copy">Enable or disable desktop plugins. Changes take effect after restarting Noema.</p>
-        <div class="noema-config-plugins" data-config-plugins></div>
-      </section>
       <section class="noema-config-section" id="configuration-file">
         <div class="noema-config-section-head">
           <div>
@@ -134,7 +121,7 @@ root.innerHTML = `
         </div>
         <p class="noema-config-copy">
           Noema stores settings here. Manual edits are watched and reloaded automatically.
-          Packaged theme files stay inside the application.
+          Packaged theme files stay inside the Emacs-hosted renderer.
         </p>
         <code class="noema-config-path" data-config-path>~/.config/noema/config.json</code>
         <div class="noema-config-diagnostics" data-config-diagnostics hidden></div>
@@ -159,13 +146,10 @@ const syncAutomaticEl = root.querySelector<HTMLInputElement>("[data-sync-automat
 const syncIntervalEl = root.querySelector<HTMLInputElement>("[data-sync-interval]")!;
 const syncCopyEl = root.querySelector<HTMLElement>("[data-sync-copy]")!;
 const saveSyncButton = root.querySelector<HTMLButtonElement>("[data-config-save-sync]")!;
-const pluginsEl = root.querySelector<HTMLElement>("[data-config-plugins]")!;
 
 let payload: NoemaAppConfigMsg | null = noemaAppConfigState();
 let statusTimer = 0;
 let savingTheme = "";
-let plugins: NoemaDesktopPlugin[] = [];
-let savingPlugin = "";
 
 function setStatus(message: string, kind: "normal" | "error" = "normal"): void {
   statusEl.textContent = message;
@@ -190,61 +174,6 @@ function themePreview(theme: NoemaAppTheme): HTMLElement {
     <b></b>
   `;
   return preview;
-}
-
-function renderPlugins(): void {
-  pluginsEl.replaceChildren();
-  if (!window.noemaDesktop?.listPlugins) {
-    const unavailable = document.createElement("p");
-    unavailable.className = "noema-config-copy";
-    unavailable.textContent = "Plugin management is available in Noema.app.";
-    pluginsEl.appendChild(unavailable);
-    return;
-  }
-  if (plugins.length === 0) {
-    const empty = document.createElement("p");
-    empty.className = "noema-config-copy";
-    empty.textContent = "No plugins were found.";
-    pluginsEl.appendChild(empty);
-    return;
-  }
-  for (const plugin of plugins) {
-    const row = document.createElement("label");
-    row.className = "noema-config-plugin";
-    const copy = document.createElement("span");
-    copy.className = "noema-config-plugin-copy";
-    const title = document.createElement("strong");
-    title.textContent = plugin.name;
-    const metadata = document.createElement("small");
-    metadata.textContent = `${plugin.id} · ${plugin.version}${plugin.builtIn ? " · Built in" : ""}${plugin.configurable ? "" : " · Always active"}`;
-    const description = document.createElement("span");
-    description.textContent = plugin.description;
-    const state = document.createElement("em");
-    state.textContent = plugin.enabled === plugin.active
-      ? (plugin.active ? "Active" : "Disabled")
-      : "Restart required";
-    copy.append(title, metadata, description, state);
-    const toggle = document.createElement("input");
-    toggle.type = "checkbox";
-    toggle.checked = plugin.enabled;
-    toggle.disabled = Boolean(savingPlugin) || plugin.locked;
-    toggle.setAttribute("aria-label", `${plugin.enabled ? "Disable" : "Enable"} ${plugin.name}`);
-    toggle.addEventListener("change", () => {
-      savingPlugin = plugin.id;
-      renderPlugins();
-      void window.noemaDesktop!.setPluginEnabled(plugin.id, toggle.checked).then((next) => {
-        plugins = next;
-        setStatus(`${plugin.name} changed · restart Noema to apply`);
-      }).catch((error) => {
-        setStatus(error instanceof Error ? error.message : String(error), "error");
-      }).finally(() => {
-        savingPlugin = "";
-        renderPlugins();
-      });
-    });
-    row.append(copy, toggle);
-    pluginsEl.appendChild(row);
-  }
 }
 
 function render(): void {
@@ -317,19 +246,11 @@ function render(): void {
     diagnosticsEl.appendChild(message);
   }
   diagnosticsEl.hidden = payload.diagnostics.length === 0;
-  renderPlugins();
 }
 
 function closeConfiguration(): void {
-  if (window.noemaDesktop?.closeWindow) {
-    void window.noemaDesktop.closeWindow();
-    return;
-  }
-  window.close();
-  window.setTimeout(() => {
-    if (history.length > 1) history.back();
-    else window.location.assign("/");
-  }, 50);
+  if (history.length > 1) history.back();
+  else window.location.assign("/wiki");
 }
 
 closeButton.addEventListener("click", closeConfiguration);
@@ -404,26 +325,9 @@ window.addEventListener("noema:theme-changed", () => {
   payload = noemaAppConfigState();
   render();
 });
-const removeDesktopCommandListener = window.noemaDesktop?.onCommand((detail) => {
-  const command = detail && typeof detail === "object"
-    ? String((detail as { command?: unknown }).command || "")
-    : String(detail || "");
-  if (command === "back" || command === "close") closeConfiguration();
-  else if (command === "refresh") location.reload();
-  else if (command === "wiki-home") {
-    void window.noemaDesktop?.openTarget({ url: "/wiki", source: "config" });
-  }
-}) ?? null;
-const removeDesktopDropListener = window.noemaDesktop?.onFileDrop?.((event) => {
-  if (event.type !== "drop") return;
-  const paths = event.paths.filter((path) => /\.(?:md|markdown)$/i.test(path));
-  if (paths.length) window.noemaDesktop?.openFiles(paths);
-}) ?? null;
 window.addEventListener("beforeunload", () => {
   removeB3ComponentSystem();
   removeThemeRuntime();
-  removeDesktopCommandListener?.();
-  removeDesktopDropListener?.();
 }, { once: true });
 
 void loadNoemaAppConfig().then((next) => {
@@ -432,14 +336,5 @@ void loadNoemaAppConfig().then((next) => {
 }).catch((error) => {
   setStatus(error instanceof Error ? error.message : String(error), "error");
 });
-
-if (window.noemaDesktop?.listPlugins) {
-  void window.noemaDesktop.listPlugins().then((next) => {
-    plugins = next;
-    renderPlugins();
-  }).catch((error) => {
-    setStatus(error instanceof Error ? error.message : String(error), "error");
-  });
-}
 
 render();

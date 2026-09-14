@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [longleftarrow] — Long left arrow
-# key: longleftarrow
-# group: Math · Arrows
-# --
-\longleftarrow$0

@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [otimes] — Tensor product
-# key: otimes
-# group: Math · Operators
-# --
-\otimes$0

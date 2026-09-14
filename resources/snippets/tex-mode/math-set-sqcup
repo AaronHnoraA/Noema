@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [sqcup] — Square union
-# key: sqcup
-# group: Math · Sets
-# --
-\sqcup$0

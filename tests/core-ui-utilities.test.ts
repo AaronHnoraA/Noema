@@ -33,7 +33,7 @@ describe("neutral hotkey and platform seam", () => {
     key: "k", code: "KeyK", metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...overrides,
   }) as KeyboardEvent;
 
-  test("parses symbol and Electron-style chords and matches primary per platform", () => {
+  test("parses symbol-style chords and matches primary per platform", () => {
     expect(parseHotKey("⌥⇧⌘K")).toMatchObject({ key: "k", alt: true, shift: true, meta: true });
     expect(matchHotKey("CmdOrCtrl+Shift+K", event({ metaKey: true, shiftKey: true }), { platform: "darwin" })).toBe(true);
     expect(matchHotKey("Primary+Shift+K", event({ ctrlKey: true, shiftKey: true }), { platform: "linux" })).toBe(true);

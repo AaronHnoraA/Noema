@@ -19,7 +19,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-describe("server facade with desktop kernel persistence", () => {
+describe("server facade with data-kernel persistence", () => {
   test("requires the Go core for canonical notes while preserving standalone compatibility", async () => {
     const root = await mkdtemp(join(tmpdir(), "noema-required-go-core-"));
     const notes = join(root, "notes");
@@ -190,7 +190,7 @@ describe("server facade with desktop kernel persistence", () => {
     const saved = (await saveNote({
       file,
       changes,
-      clientId: "desktop-kernel-incremental",
+      clientId: "data-kernel-incremental",
       seq: 1,
       baseMtimeMs: opened.mtimeMs,
       baseVersion: opened.version,
@@ -309,7 +309,7 @@ describe("server facade with desktop kernel persistence", () => {
     const saved = await saveNote({
       file,
       content: "# Saved through kernel\n\nExact bytes.\n",
-      clientId: "desktop-kernel-test",
+      clientId: "data-kernel-test",
       seq: 1,
       baseMtimeMs: opened.mtimeMs,
       baseVersion: opened.version,
@@ -357,7 +357,7 @@ describe("server facade with desktop kernel persistence", () => {
     const saved = await saveNote({
       file,
       content: "# Local\n",
-      clientId: "desktop-kernel-conflict",
+      clientId: "data-kernel-conflict",
       seq: 1,
       baseMtimeMs: opened.mtimeMs,
       baseVersion: opened.version,
@@ -404,7 +404,7 @@ describe("server facade with desktop kernel persistence", () => {
     const saved = await saveNote({
       file,
       content: "# Local edit\n",
-      clientId: "desktop-kernel-cas",
+      clientId: "data-kernel-cas",
       seq: 1,
       baseMtimeMs: opened.mtimeMs,
       baseVersion: opened.version,
@@ -443,7 +443,7 @@ describe("server facade with desktop kernel persistence", () => {
       saveNote({
         file,
         content: "# Local\n",
-        clientId: "desktop-kernel-outage",
+        clientId: "data-kernel-outage",
         seq: 1,
         force: true,
         refresh: "deferred",

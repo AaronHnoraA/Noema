@@ -36,7 +36,7 @@ func TestCustomFontLifecycle(t *testing.T) {
 	if err := os.MkdirAll(CustomFontDir(), 0755); err != nil {
 		t.Fatal(err)
 	}
-	sourcePath := filepath.Join("..", "..", "app", "appearance", "fonts", "LxgwWenKai-Lite-1.501",
+	sourcePath := filepath.Join("..", "..", "kernel-resources", "appearance", "fonts", "LxgwWenKai-Lite-1.501",
 		"LXGWWenKaiLite-Regular.ttf")
 	tempPath := copyCustomFontForTest(t, sourcePath)
 

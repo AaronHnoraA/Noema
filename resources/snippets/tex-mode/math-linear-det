@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [det] — Determinant operator
-# key: det
-# group: Math · Linear algebra
-# --
-\det$0

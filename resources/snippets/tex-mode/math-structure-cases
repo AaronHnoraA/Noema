@@ -1,9 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [casesmath] — Cases expression
-# key: casesmath
-# group: Math · Structures
-# --
-\begin{cases}
-  ${1:a}, & ${2:\text{if } P}, \\
-  ${3:b}, & ${4:\text{otherwise}}.
-\end{cases}$0

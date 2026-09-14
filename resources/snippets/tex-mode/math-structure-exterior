@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [exterior] — Exterior power
-# key: exterior
-# group: Math · Recent notes
-# --
-\Lambda^{${1:d}}\!\left(${2:V}\right)$0

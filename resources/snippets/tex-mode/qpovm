@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: POVM elements
-# key: qpovm
-# group: QC symbols
-# --
-\{${1:E_i}\}_{${2:i}}$0

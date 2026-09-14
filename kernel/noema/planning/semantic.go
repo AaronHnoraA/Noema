@@ -12,7 +12,7 @@ import (
 	"unicode"
 )
 
-// TodoPatch is the semantic write contract used by the desktop host. Attrs
+// TodoPatch is the semantic write contract used by the headless host. Attrs
 // are canonical keys; a nil value means remove the key. Existing source
 // aliases are retained by PatchTodoSource.
 type TodoPatch struct {

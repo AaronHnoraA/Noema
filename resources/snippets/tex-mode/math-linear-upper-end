@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [End] — Endomorphism algebra
-# key: End
-# group: Math · Linear algebra
-# --
-\operatorname{End}$0

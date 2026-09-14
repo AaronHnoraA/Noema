@@ -1,4 +1,4 @@
-import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync, realpathSync } from "node:fs";
 import { basename, delimiter, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { homedir } from "node:os";
@@ -32,6 +32,17 @@ import {
 } from "./bibliography.mjs";
 import { parseCommandArgs, scanInlineCommands } from "../../shared/command-syntax.mjs";
 import { scanWikiLinks } from "../../shared/wiki-link.mjs";
+import {
+  noteAssetFolderName,
+  tikzAssetFileName,
+  tikzAssetFilePattern,
+  tikzAssetId,
+  tikzBasePt,
+  tikzIntrinsicEm,
+  tikzStandaloneDocument,
+  tikzSourceHash,
+  tikzSvgIntrinsicSize,
+} from "../../shared/tikz-source.mjs";
 import {
   patchPlanningNodeRaw,
   scanPlanningNodes,
@@ -199,7 +210,7 @@ const noteCodeFilePending = new Map();
 let noteCodeFileCacheBytes = 0;
 const pathSuggestionDirListingCache = new Map();
 const contentRootCache = new Map();
-// Schema 2 invalidates payloads/files produced before desktop planning scans
+// Schema 2 invalidates payloads/files produced before planning scans
 // moved to the Go parser. Reusing schema-1 payloads would silently bypass the
 // kernel on the first agenda request after upgrading.
 const AGENDA_CACHE_SCHEMA = 3;
@@ -623,8 +634,9 @@ function resolveNoteCodePath(input, baseDir, allowedRoot = noteRoot) {
 
 function assetFolderName(current) {
   if (!current) return "scratch";
-  const ext = extname(current);
-  return sanitizeAssetName(basename(current, ext), "note");
+  // Shared with the browser: an export has to resolve a note's generated-asset
+  // directory without a round trip, so both sides read the same rule.
+  return noteAssetFolderName(current, "note");
 }
 
 function standaloneAssetRoot(file) {
@@ -728,54 +740,6 @@ export async function storeAssetFromPath(body) {
   };
 }
 
-function tikzVersionMs(value) {
-  const raw = String(value || "").trim();
-  if (!raw) return 0;
-  if (/^\d{13}$/.test(raw)) return Number(raw);
-  if (/^\d{10}$/.test(raw)) return Number(raw) * 1000;
-  const compact = raw.match(/^(\d{4})(\d{2})(\d{2})(?:[-_T]?(\d{2})(\d{2})(\d{2})?)?$/);
-  if (compact) {
-    const [, y, m, d, hh = "00", mm = "00", ss = "00"] = compact;
-    return new Date(Number(y), Number(m) - 1, Number(d), Number(hh), Number(mm), Number(ss)).getTime();
-  }
-  const parsed = Date.parse(raw);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function normalizeTikzForLatex(source) {
-  const cleaned = String(source || "")
-    .split(/\r?\n/)
-    .map((line) => {
-      for (let i = 0; i < line.length; i++) {
-        if (line[i] !== "%") continue;
-        let slashCount = 0;
-        for (let j = i - 1; j >= 0 && line[j] === "\\"; j--) slashCount++;
-        if (slashCount % 2 === 0) return line.slice(0, i).trimEnd();
-      }
-      return line;
-    })
-    .join("\n")
-    .trim();
-  if (!cleaned) return "";
-  if (/\\documentclass\b|\\begin\s*\{\s*document\s*\}/.test(cleaned)) return cleaned;
-  if (/\\begin\s*\{\s*tikzpicture\s*\}/.test(cleaned)) {
-    return [
-      "\\documentclass[tikz,border=2pt]{standalone}",
-      "\\begin{document}",
-      cleaned,
-      "\\end{document}",
-    ].join("\n");
-  }
-  return [
-    "\\documentclass[tikz,border=2pt]{standalone}",
-    "\\begin{document}",
-    "\\begin{tikzpicture}",
-    cleaned,
-    "\\end{tikzpicture}",
-    "\\end{document}",
-  ].join("\n");
-}
-
 function executablePath(command) {
   if (String(command || "").includes(sep) && existsSync(command)) return command;
   const paths = [
@@ -814,6 +778,66 @@ function commandOutputTail(err) {
   return text.split(/\r?\n/).slice(-8).join("\n");
 }
 
+// Intrinsic sizes of already-compiled assets, keyed by absolute path. A cache
+// hit must still report the picture's TeX dimensions so the client can size it
+// like LaTeX would, and re-reading the SVG head on every keystroke-driven
+// revalidation is the cost this avoids.
+const TIKZ_INTRINSIC_CACHE_LIMIT = 256;
+const tikzIntrinsicCache = new Map();
+
+async function readSvgIntrinsicSize(file) {
+  let handle = null;
+  try {
+    const info = await stat(file);
+    const signature = `${info.size}:${info.mtimeMs}`;
+    const cached = tikzIntrinsicCache.get(file);
+    if (cached?.signature === signature) return cached.size;
+    handle = await open(file, "r");
+    const buffer = Buffer.alloc(4096);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    const size = tikzSvgIntrinsicSize(buffer.subarray(0, bytesRead).toString("utf8"));
+    tikzIntrinsicCache.set(file, { signature, size });
+    if (tikzIntrinsicCache.size > TIKZ_INTRINSIC_CACHE_LIMIT) {
+      const oldest = tikzIntrinsicCache.keys().next();
+      if (!oldest.done) tikzIntrinsicCache.delete(oldest.value);
+    }
+    return size;
+  } catch {
+    return { widthPt: 0, heightPt: 0 };
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+}
+
+// Old compilations of the same block, and the pre-content-hash `tikz-<id>.svg`
+// name, are dead the moment a new hash lands. Sweeping them keeps a note's
+// images folder from growing one file per edit.
+async function sweepStaleTikzAssets(targetDir, id, keepName) {
+  const pattern = tikzAssetFilePattern(id);
+  const legacy = `tikz-${tikzAssetId(id)}.svg`;
+  let entries;
+  try {
+    entries = await readdir(targetDir);
+  } catch {
+    return;
+  }
+  await Promise.all(entries
+    .filter((name) => name !== keepName && (pattern.test(name) || name === legacy))
+    .map(async (name) => {
+      const stale = join(targetDir, name);
+      tikzIntrinsicCache.delete(stale);
+      await rm(stale, { force: true }).catch(() => {});
+    }));
+}
+
+/**
+ * Compile one `#+begin tikz` block to an SVG asset beside the note.
+ *
+ * The compiled file is named after a hash of its normalized TeX, so this is
+ * revalidate-always / recompile-only-on-change: an unchanged block costs a
+ * `stat`, a changed block gets a new file name (and therefore a new URL that no
+ * browser or published page can serve stale), and superseded files are swept.
+ */
 export async function renderTikzAsset(body) {
   const current = body.file ? safeOpenFile(body.file) : "";
   if (!current) {
@@ -821,8 +845,14 @@ export async function renderTikzAsset(body) {
     err.statusCode = 400;
     throw err;
   }
-  const id = sanitizeAssetName(body.id || createHash("sha1").update(String(body.source || "")).digest("hex").slice(0, 12), "tikz");
-  const timestamp = String(body.timestamp || body.version || "").trim();
+  const source = String(body.source || "");
+  const tex = tikzStandaloneDocument(source);
+  if (!tex) {
+    const err = new Error("Missing TikZ source");
+    err.statusCode = 400;
+    throw err;
+  }
+  const id = tikzAssetId(body.id || tikzSourceHash(source).slice(0, 12));
   const baseDir = dirname(current);
   const allowedRoot = current && standaloneFile(current) ? contentRootForFile(current) : noteRoot;
   const targetDir = join(baseDir, "images", assetFolderName(current));
@@ -831,27 +861,31 @@ export async function renderTikzAsset(body) {
     err.statusCode = 403;
     throw err;
   }
-  const target = join(targetDir, `tikz-${id}.svg`);
-  const wantedMs = tikzVersionMs(timestamp);
-  const existing = existsSync(target) ? await stat(target) : null;
-  if (existing && (!wantedMs || existing.mtimeMs >= wantedMs)) {
-    return {
-      ok: true,
-      file: target,
-      name: basename(target),
-      type: "image/svg+xml",
-      isImage: true,
-      markdownPath: markdownRelativePath(current, target),
-      rendered: false,
-      mtimeMs: existing.mtimeMs,
-    };
-  }
+  const name = tikzAssetFileName(id, source);
+  const target = join(targetDir, name);
+  const basePt = tikzBasePt(source);
+  const describe = (extra) => ({
+    ok: true,
+    file: target,
+    name,
+    type: "image/svg+xml",
+    isImage: true,
+    markdownPath: markdownRelativePath(current, target),
+    basePt,
+    ...extra,
+  });
 
-  const tex = normalizeTikzForLatex(body.source || "");
-  if (!tex) {
-    const err = new Error("Missing TikZ source");
-    err.statusCode = 400;
-    throw err;
+  if (existsSync(target)) {
+    const size = await readSvgIntrinsicSize(target);
+    // A hash match proves source identity, not file integrity. Validate the SVG
+    // head on every process-level refresh so an interrupted/zero-byte write is
+    // rebuilt instead of becoming a permanent broken-image cache hit.
+    if (size.widthPt > 0 && size.heightPt > 0) {
+      await sweepStaleTikzAssets(targetDir, id, name);
+      return describe({ rendered: false, intrinsic: tikzIntrinsicEm(size, basePt) });
+    }
+    tikzIntrinsicCache.delete(target);
+    await rm(target, { force: true }).catch(() => {});
   }
 
   const tmp = await runtimeMkdtemp("tikz", current);
@@ -908,18 +942,18 @@ export async function renderTikzAsset(body) {
       throw new Error("TikZ SVG conversion did not produce an SVG file");
     }
     await mkdir(targetDir, { recursive: true });
-    await copyFile(renderedSvgFile, target);
-    const info = await stat(target);
-    return {
-      ok: true,
-      file: target,
-      name: basename(target),
-      type: "image/svg+xml",
-      isImage: true,
-      markdownPath: markdownRelativePath(current, target),
-      rendered: true,
-      mtimeMs: info.mtimeMs,
-    };
+    // Publish in one rename. An <img> request can race the compiler, and a
+    // direct copy to the final hash URL lets it observe a partial SVG.
+    const staged = join(targetDir, `.${name}.tmp-${process.pid}-${Date.now()}-${++atomicWriteCounter}`);
+    try {
+      await copyFile(renderedSvgFile, staged);
+      await rename(staged, target);
+    } finally {
+      await rm(staged, { force: true }).catch(() => {});
+    }
+    await sweepStaleTikzAssets(targetDir, id, name);
+    const size = await readSvgIntrinsicSize(target);
+    return describe({ rendered: true, intrinsic: tikzIntrinsicEm(size, basePt) });
   } catch (err) {
     const details = [
       latexError ? `pdflatex: ${commandOutputTail(latexError)}` : "",
@@ -929,7 +963,7 @@ export async function renderTikzAsset(body) {
     return {
       ok: false,
       file: target,
-      name: basename(target),
+      name,
       type: "image/svg+xml",
       isImage: true,
       markdownPath: markdownRelativePath(current, target),
@@ -5015,7 +5049,7 @@ export async function buildEmbedQuery(body = {}) {
     return { ...base, evaluationSource: "portable-embed-parser", items: [], total: 0 };
   }
   if (!file || planningProvider?.owns?.(file) !== true || typeof planningProvider?.searchEmbed !== "function") {
-    throw Object.assign(new Error("Raw-SQL embed queries require the Noema desktop kernel"), { statusCode: 501 });
+    throw Object.assign(new Error("Raw-SQL embed queries require the Noema data kernel"), { statusCode: 501 });
   }
   const embedBlockID = portableEmbedQueryID(file, spec.blockId, spec.statement);
   const result = await planningProvider.searchEmbed({
@@ -5074,7 +5108,7 @@ export async function buildAttributeView(body = {}) {
       }
     } catch (error) {
       providerError = error;
-      // The desktop evaluator is an optimization boundary. Emacs/Server and
+      // The kernel evaluator is an optimization boundary. Emacs/Server and
       // transient kernel outages retain the shared portable JS evaluator.
     }
   }
@@ -6747,8 +6781,15 @@ export async function exportLatex(body = {}) {
   if (!["pdflatex", "xelatex", "lualatex"].includes(engine)) throw new Error(`Unsupported LaTeX engine: ${engine}`);
   const macroResult = await loadRuntimeKatexMacros(katexMacrosRoot);
   const declaredSharedFiles = await latexTemplateSharedFiles(template.file, header.sharedFiles);
+  // `wrapfigure` is emitted inside the prepared body. Infer it here rather than
+  // widening the stable Go/Node feature contract for one standard LaTeX
+  // package; this also remains correct after an optional polish pass.
+  const macroFeatures = {
+    ...converted.features,
+    usesWrapfig: /\\begin\{wrapfigure\}/.test(converted.body),
+  };
   const generatedSharedFiles = template.text.includes("\\usepackage{aaronnote-macros}")
-    ? [{ name: "aaronnote-macros.sty", content: Buffer.from(latexMacrosPackage(macroResult.macros, converted.features), "utf8") }]
+    ? [{ name: "aaronnote-macros.sty", content: Buffer.from(latexMacrosPackage(macroResult.macros, macroFeatures), "utf8") }]
     : [];
   const sharedFiles = [...declaredSharedFiles, ...generatedSharedFiles];
   throwIfAborted(signal);
@@ -7123,7 +7164,7 @@ function copilotDiagnostics() {
 function openExternalUri(uri) {
   if (!/^https?:\/\//i.test(String(uri || ""))) return;
   pushCopilotLog("open-uri", { uri });
-  if (process.platform === "darwin" && process.env.AARONNOTE_HOST_MODE !== "desktop") {
+  if (process.platform === "darwin") {
     execFile("open", [uri], () => {});
   }
   return uri;
@@ -9263,7 +9304,7 @@ export async function loadRuntimeKatexMacros(dir = katexMacrosRoot) {
         source: "kernel-katex-macros",
       };
     } catch {
-      // Emacs/Server and transient desktop kernel outages retain the same
+      // Emacs/Server and transient data-kernel outages retain the same
       // optional local parser; macro loading must not block the first paint.
     }
   }

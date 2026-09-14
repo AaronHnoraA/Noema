@@ -1,9 +1,0 @@
-# -*- mode: snippet -*-
-# name: Exercise block
-# key: exercise
-# group: Noema blocks
-# --
-#+begin exercise ${1:number}
-${2:Problem.}
-#+end exercise
-$0

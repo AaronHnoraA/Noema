@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [wedgepow] — Exterior power symbol
-# key: wedgepow
-# group: Math · Recent notes
-# --
-\bigwedge^{${1:d}} ${2:V}$0

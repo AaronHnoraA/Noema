@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Oracle class
-# key: tcor
-# group: TCS symbols
-# --
-${1:\mathsf{P}}^{${2:A}}$0

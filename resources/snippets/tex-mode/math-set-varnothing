@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [varnothing] — Empty set (round)
-# key: varnothing
-# group: Math · Sets
-# --
-\varnothing$0

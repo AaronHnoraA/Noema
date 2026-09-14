@@ -182,9 +182,8 @@ func RemoveWorkspaceSession(session *SessionData) {
 }
 
 // IsBrowserRequest 判断请求是否来自浏览器（非 SiYuan 原生客户端）。
-// 原生客户端（桌面 Electron、Android/iOS/Harmony）的 User-Agent 均以 "SiYuan/" 开头，
-// 其余视为浏览器。该口径与前端 getFrontend()、electron/main.js 设置的 UA 前缀、
-// 以及 session 鉴权中既有的 HasPrefix(ua, "SiYuan/") 判断保持一致。
+// 受信任的原生客户端 User-Agent 以 "SiYuan/" 开头，
+// 其余视为浏览器，并与 session 鉴权既有的前缀判断保持一致。
 func IsBrowserRequest(c *gin.Context) bool {
 	return !strings.HasPrefix(c.GetHeader("User-Agent"), "SiYuan/")
 }

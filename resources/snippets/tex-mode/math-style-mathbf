@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [mathbf] — Bold math
-# key: mathbf
-# group: Math · Styles
-# --
-\mathbf{${1:X}}$0

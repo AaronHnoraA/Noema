@@ -45,14 +45,13 @@ import (
 //   - Refresh checks (2h/6h) and the Microsoft Defender check (30m) — already
 //     no-op stubs here: cloud is gone, and the Defender check is Windows-only.
 //   - Consume shorthands, every 3s — mobile containers only; Noema has none.
-//   - Hook desktop UI proc, every 30s — a liveness poll for legacy attached UIs.
-//     Noema passes a supervisor PID and uses the process-exit event instead, so
-//     the poll was already switched off for every real Noema host.
+//   - Hook native UI proc, every 30s — the obsolete attached-UI poll was removed.
+//     Noema passes a supervisor PID and uses the process-exit event instead.
 //
 // History pruning does still have to happen, since asset, attribute-view and
 // bookmark edits write into the history directory. It runs once at startup
 // rather than on a 24-hour ticker, which is the same guarantee for a kernel
-// whose lifetime is the app's.
+// whose lifetime is the owning host session's.
 func StartCron(_ ...int) {
 	task.StartQueueConsumer()
 	sql.StartQueueConsumers()

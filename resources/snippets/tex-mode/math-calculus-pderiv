@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [pderiv] — Partial derivative
-# key: pderiv
-# group: Math · Calculus
-# --
-\frac{\partial ${1:f}}{\partial ${2:x}}$0

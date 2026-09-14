@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Noema Capture settings</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main>
+    <h1>Noema Capture</h1>
+    <p>Connect only to the loopback Noema host. The bearer token is stored in Chrome extension-local storage.</p>
+    <label>Host URL <input id="endpoint" type="url" placeholder="http://127.0.0.1:6810" required></label>
+    <label>Capture token <input id="token" type="password" autocomplete="off" required></label>
+    <label>Workstream ID (optional) <input id="workstream" type="text" placeholder="ws_…"></label>
+    <button id="save" type="button">Save</button>
+    <output id="status" aria-live="polite"></output>
+  </main>
+  <script src="options.js"></script>
+</body>
+</html>

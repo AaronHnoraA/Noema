@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Bell state
-# key: qbell
-# group: QC symbols
-# --
-\frac{1}{\sqrt{2}}\left(\ket{00}+\ket{11}\right)$0

@@ -201,7 +201,7 @@ export function runEditorDelete(
     || deleteGraphemes(view, direction);
 }
 
-/** Canonical Enter behavior shared by CM6, desktop and xwidget input. */
+/** Canonical Enter behavior shared by native CM6 and xwidget input. */
 export function runEditorEnter(view: EditorView): boolean {
   if (view.state.readOnly) return true;
 
@@ -231,7 +231,7 @@ export function runEditorEnter(view: EditorView): boolean {
     : run();
 }
 
-/** Canonical Tab behavior shared by native CM6, desktop and xwidget input. */
+/** Canonical Tab behavior shared by native CM6 and xwidget input. */
 export function runEditorTab(view: EditorView, shift = false): boolean {
   if (view.state.readOnly) return true;
   const direction = shift ? -1 : 1;

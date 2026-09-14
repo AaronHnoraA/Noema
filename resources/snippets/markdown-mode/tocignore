@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: toc ignore
-# key: tocignore
-# group: Emacs migrated
-# --
-<!-- omit in toc -->$0

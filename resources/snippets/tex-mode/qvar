@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Variance
-# key: qvar
-# group: QC symbols
-# --
-\operatorname{Var}_{${1:\rho}}\!\left(${2:A}\right)$0

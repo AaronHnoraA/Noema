@@ -121,7 +121,7 @@ function encodePropertyValue(value, quote = "") {
   return selected + text.replace(/\\/g, "\\\\").replace(new RegExp(`\\${selected}`, "g"), `\\${selected}`) + selected;
 }
 
-/** Source-only fallback for Emacs/Server; desktop uses the Go CAS mutation. */
+/** Source-only fallback for Server mode; the local Emacs host uses Go CAS. */
 export function patchBlockPropertySource(source, { id = "", key = "", value = null } = {}) {
   const text = String(source || "");
   const canonicalId = String(id || "").trim().replace(/^#/, "").toLowerCase();

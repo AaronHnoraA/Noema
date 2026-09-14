@@ -1,9 +1,0 @@
-# -*- mode: snippet -*-
-# name: Exercise block with ID
-# key: exercisee
-# group: Noema blocks
-# --
-#+begin exercise ${1:number} {#`(my/noema-new-id "block")`}
-${2:Problem.}
-#+end exercise
-$0

@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [asymp] — Asymptotic
-# key: asymp
-# group: Math · Relations
-# --
-\asymp$0

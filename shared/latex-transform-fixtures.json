@@ -78,6 +78,19 @@
       }
     },
     {
+      "name": "tikz-picture-layout-and-wrap",
+      "markdown": "#+begin tikz graph {width=60% align=right}\n\\begin{tikzpicture}\n\\draw (0,0) -- (1,1);\n\\end{tikzpicture}\n#+end tikz\n\n#+begin tikz wrapped {wrap=left width=40%}\n\\draw (0,0) -- (2,0);\n#+end tikz",
+      "expected": {
+        "meta": {},
+        "markdown": "\n```{=latex}\n\\begin{flushright}\n\\resizebox{0.6\\textwidth}{!}{%\n\\begin{tikzpicture}\n\\draw (0,0) -- (1,1);\n\\end{tikzpicture}\n}\n\\end{flushright}\n```\n\n\n\n```{=latex}\n\\begin{wrapfigure}{l}{0.4\\textwidth}\n\\centering\n\\resizebox{\\linewidth}{!}{%\n\\begin{tikzpicture}\n\\draw (0,0) -- (2,0);\n\\end{tikzpicture}\n}\n\\end{wrapfigure}\n```\n",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": true
+        }
+      }
+    },
+    {
       "name": "unresolved-and-protected",
       "markdown": "[Visible @@comment [secret] label](https://example.com/(a)/@@latexmk(typo))\n\n`@@latexmk(typo)` and \\(x+y\\) and @@cite(missing) [Key].\n\n    @@todo [literal indented]",
       "expected": {

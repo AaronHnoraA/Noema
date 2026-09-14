@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [underset] — Underset
-# key: underset
-# group: Math · Structures
-# --
-\underset{${1:*}}{${2:=}}$0

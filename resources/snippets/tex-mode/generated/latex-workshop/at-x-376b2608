@@ -1,8 +1,0 @@
-# -*- mode: snippet -*-
-# name: Xi
-# key: @X
-# uuid: latex-workshop:@X
-# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=Xi
-# group: Math · latex-workshop
-# --
-\Xi$0

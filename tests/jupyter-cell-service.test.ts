@@ -1,5 +1,5 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createJupyterCellService, durationFromEnv, jupyterWidgetCommOpenP } from "../server/lib/jupyter-cell.mjs";
@@ -137,7 +137,7 @@ describe("jupyter cell service (no kernel)", () => {
     }
   });
 
-  test("desktop state ignores historical source kernelspecs and resolves the bundled launcher", async () => {
+  test("host state ignores historical source kernelspecs and resolves the source-owned launcher", async () => {
     const root = await mkdtemp(join(tmpdir(), "noema-jcell-app-root-"));
     const stateRoot = await mkdtemp(join(tmpdir(), "noema-jcell-app-state-"));
     const stale = join(root, "jupyter", ".jupyter", "data", "kernels", "python3");
@@ -145,7 +145,7 @@ describe("jupyter cell service (no kernel)", () => {
     await mkdir(stale, { recursive: true });
     await mkdir(bundled, { recursive: true });
     await writeFile(join(stale, "kernel.json"), JSON.stringify({
-      argv: ["/Users/example/.emacs.d/lisp/roam/Noema/jupyter/bin/python-jupyter-kernel", "-f", "{connection_file}"],
+      argv: ["/Users/example/.emacs.d/site-lisp/noema/jupyter/bin/python-jupyter-kernel", "-f", "{connection_file}"],
       display_name: "Historical Emacs Python",
       language: "python",
     }));
@@ -495,6 +495,119 @@ describe("jupyter cell service (no kernel)", () => {
       expect(markdownCell).not.toHaveProperty("execution_count");
       expect(markdownCell).not.toHaveProperty("outputs");
     });
+  });
+
+  test("uses a .noema work document as Jupyter input without becoming its editor", async () => {
+    await withService(async ({ service, note }) => {
+      const notebook = join(dirname(note), "research.noema");
+      const workNode = {
+        id: "wn_test",
+        kind: "work",
+        title: "Measure the baseline",
+        state: "active",
+      };
+      await writeFile(notebook, `${JSON.stringify({
+        cells: [{
+          cell_type: "code",
+          id: "cell-code",
+          execution_count: null,
+          metadata: { noema_research: { work_node_id: workNode.id } },
+          outputs: [],
+          source: "print('baseline')\n",
+        }],
+        metadata: {
+          kernelspec: { display_name: "Python 3", language: "python", name: "python3" },
+          language_info: { name: "python" },
+          noema_research: {
+            schema: "noema.work-document/2",
+            notebook_id: "nb_test",
+            work_nodes: [workNode],
+            dependencies: [],
+          },
+        },
+        nbformat: 4,
+        nbformat_minor: 5,
+      }, null, 2)}\n`, "utf8");
+
+      const snapshot = await service.documentSnapshot({ scriptFile: notebook });
+      expect(snapshot.document).toMatchObject({
+        scriptFile: notebook,
+        sourceFile: notebook,
+        kernelSpecName: "python3",
+      });
+      expect(snapshot.cells[0]).toMatchObject({ id: "cell-code", code: "print('baseline')\n" });
+
+      await expect(service.scriptAction({
+        scriptFile: notebook,
+        cellId: "cell-code",
+        action: "insertBelow",
+      })).rejects.toThrow("Edit .noema work-document structure in Emacs");
+
+      await service.scriptAction({
+        scriptFile: notebook,
+        cellId: "cell-code",
+        action: "clear-output",
+      });
+      const persisted = JSON.parse(await readFile(notebook, "utf8"));
+      expect(persisted.metadata.noema_research.work_nodes).toEqual([workNode]);
+      expect(persisted.cells[0].metadata.noema_research.work_node_id).toBe(workNode.id);
+    });
+  });
+
+  test("accepts an explicit manifest-backed Noema project outside the global workspace", async () => {
+    const globalRoot = await mkdtemp(join(tmpdir(), "noema-jcell-global-"));
+    const projectRoot = await mkdtemp(join(tmpdir(), "noema-jcell-project-"));
+    const untrustedRoot = await mkdtemp(join(tmpdir(), "noema-jcell-untrusted-"));
+    const service = createJupyterCellService({
+      runtimeRoot: globalRoot,
+      noteRoot: globalRoot,
+      workspaceRoot: globalRoot,
+    });
+    const notebook = join(projectRoot, "research.noema");
+    await writeFile(join(projectRoot, "noema.toml"), "schema = 1\n", "utf8");
+    await writeFile(notebook, `${JSON.stringify({
+      cells: [{
+        cell_type: "code",
+        id: "cell-code",
+        execution_count: null,
+        metadata: {},
+        outputs: [],
+        source: "print('outside workspace')\n",
+      }],
+      metadata: {
+        kernelspec: { display_name: "Python 3", language: "python", name: "python3" },
+        language_info: { name: "python" },
+      },
+      nbformat: 4,
+      nbformat_minor: 5,
+    }, null, 2)}\n`, "utf8");
+    try {
+      await expect(service.documentSnapshot({ scriptFile: notebook }))
+        .rejects.toThrow("Notebook is outside the allowed root");
+      await expect(service.documentSnapshot({ scriptFile: notebook, projectRoot: untrustedRoot }))
+        .rejects.toThrow("Notebook is outside the allowed root");
+
+      const snapshot = await service.documentSnapshot({ scriptFile: notebook, projectRoot });
+      const canonicalProjectRoot = await realpath(projectRoot);
+      expect(snapshot.document).toMatchObject({ scriptFile: notebook, projectRoot: canonicalProjectRoot });
+      expect(snapshot.cells[0]).toMatchObject({ id: "cell-code" });
+
+      // Once Emacs has established the project boundary, internal publish and
+      // refresh paths may reuse the validated session without weakening the
+      // initial manifest-backed authorization check.
+      const refreshed = await service.documentSnapshot({ scriptFile: notebook });
+      expect(refreshed.document).toMatchObject({ scriptFile: notebook, projectRoot: canonicalProjectRoot });
+      await service.scriptAction({
+        scriptFile: notebook,
+        cellId: "cell-code",
+        action: "clear-output",
+      });
+    } finally {
+      await service.shutdown().catch(() => {});
+      await rm(globalRoot, { recursive: true, force: true });
+      await rm(projectRoot, { recursive: true, force: true });
+      await rm(untrustedRoot, { recursive: true, force: true });
+    }
   });
 
   test("openScript preserves existing notebook cells omitted by a partial context", async () => {

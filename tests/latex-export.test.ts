@@ -84,6 +84,13 @@ describe("LaTeX export", () => {
     expect(result.body).toContain("中文第一行继续第二行");
   });
 
+  test("preserves portable Markdown image widths in LaTeX", async () => {
+    const result = await aaronnoteMarkdownToLatexPandoc("![plot](plot.png){width=50%}");
+
+    expect(result.body).toContain("\\includegraphics[width=0.5\\linewidth");
+    expect(result.body).toContain("{plot.png}");
+  });
+
   test("balances Noema privacy, semantic blocks, math, and visible anchors", async () => {
     const result = await aaronnoteMarkdownToLatexPandoc([
       "#+begin meta", "title: Projector", "#+end meta", "",
@@ -434,6 +441,7 @@ describe("LaTeX export", () => {
     expect(macros).toContain("\\providecommand{\\sidecomment}");
     expect(macros).toContain("\\providecommand{\\aaroncomment}");
     expect(macros).toContain("COMMENT:");
+    expect(latexMacrosPackage({}, { usesWrapfig: true })).toContain("\\RequirePackage{wrapfig}");
   });
 
   test("exports Noema todo titles as annotations and omits their planning attributes", () => {

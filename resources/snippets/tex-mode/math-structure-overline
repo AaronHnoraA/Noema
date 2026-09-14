@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [overline] — Overline / conjugate
-# key: overline
-# group: Math · Recent notes
-# --
-\overline{${1:z}}$0

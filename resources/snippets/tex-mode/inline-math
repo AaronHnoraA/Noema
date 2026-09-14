@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Inline math
-# key: ;
-# group: LaTeX local
-# --
-$${1:a}$ $0

@@ -1,18 +1,85 @@
 # Noema × SiYuan 重构计划
 
-> **⚠️ 2026-08-25 起，Go 内核的唯一代码位置是** `/Users/hc/HC/SOURCE/Noema/kernel/`（Noema 主仓库、`main` 分支）。`app/appearance/`、`app/stage/auth.html` 作为 `kernel/` 的同级目录一起迁入，以保持内核相对路径契约。原始上游 checkout 只用于迁移期取证，终态不属于 Noema 源树。
+## 当前权威方向（2026-09-14，覆盖下文所有历史记录）
+
+- **设计依据**：以 `/Users/hc/Desktop/]/DESIGN.md` v1.7、`DECISIONS.md` D-018/D-021/D-022 和 `AI-Docs/HCI.md`、`AI-Docs/设计和demo.md` 的研究优先 HCI 为准；AI-Docs 中旧的 `.noema.jupyter`、`.noema/` 存储和多前端文字必须按当前决策解释，不得恢复旧产品边界。
+- **唯一 UI/UX**：Emacs。Graph Board + `.noema` JuText 是主界面；Inspector / Attention、agent-shell、vterm、Jupyter execution 与 CM6 knowledge surface 都由 Emacs 创建、布局、导航和控制。
+- **右侧 Output 的准确边界**：继续继承现有 Web/JupyterLab `rendermime`、OutputArea、ipywidgets 技术栈，但它只是 Emacs-hosted rich-output renderer，不是独立 App 或 `.noema` 文档权威。默认工作区为 Graph 左、JuText 中、按需 Output 右。
+- **明确退役**：Electron、`Noema.app`、独立 Web Noema、浏览器内 Research/Agent 控制台、桌面标题栏/菜单/preload/拖放和 Research Orchestration Lab。专门的 Web renderer 不在退役范围。
+- **canonical document**：`research.noema` 取代 `.noema.jupyter`/`.noema.ipynb` 命名，同时保持标准 nbformat 4.5+ JSON、现有 JuText/Jupyter round-trip 与 kernel/output 机制。`.ipynb` 仅作普通 Jupyter/interchange；不和 `.noema` 形成双权威。
+- **domain identity**：WorkNode、Dependency 已从 cell metadata 中独立出来；Cell 只用 `work_node_id` 参与 WorkNode，code Cell 仍是 code Cell。Project-level runtime/index/CAS/view state 使用 `.agent/`，不把 document authority 复制进 SQLite。
+- **当前可测交付**：`/Users/hc/Desktop/Noema-Research-Demo` 是普通 Noema Project；从 Emacs 打开三栏工作区。示例 `.noema` 内含绑定到 `Stress-test small cases` WorkNode 的真实 Python code Cell，可向右侧 renderer 流式执行并持久化 output。
+- **本轮最终门禁已过**：精确 Node 26.5/npm 11.17 下 `make test` 为 229 files passed / 7 skipped、2277 tests passed / 16 skipped；`make build`、`make install` 均通过并只产生 Emacs renderer/headless kernel。Go `go test ./...` 全过。AaronEmacs research 51/51、迁移 interaction 33/33，Jupyter 四组 103+24+18+12 共 157/157。`health-startup` 与 `health-byte` 通过；`.noema` 结构 mutation 被 Web service 明确拒绝，必须回到 Emacs 编辑。
+- **Web output 源码已真正收口**：`jupyter-main.ts` 不再保留隐藏的 Run/Run All、Cell mutation、kernel/session manager、variables inspector、multi-tab 或 Web workspace state；CSS 的 manager/inspector/task shell 也已删除。Emacs mode 接管运行全部、output 清理、中断、kernel 选择/重启/关闭。Output → source 用 `scriptFile + cellId` 稳定跳回 Emacs，不再靠行号。
+- **Work DAG 不变量已纠正**：旧设计只禁止 `depends` 环但允许 `lineage` 环，与“DAG”矛盾；Node、Go、Emacs 现在统一拒绝 `lineage` / `depends` 混合形成的任何 WorkNode 环。
+- **Run/Artifact 纵切已落到 WorkNode**：Run 同时保留发起 `cell_id` 与稳定 `work_node_id`；agent 结束前自动检测有界的普通文件新增/修改，原文件保持原位，CAS snapshot 与 `artifact_links` 保存 provenance，Emacs Inspector 按 WorkNode 查询并用普通 `find-file` 打开。
+- **D-021 已纠正 Web 边界误读**：删除的是 Electron/Noema.app/独立产品壳，不是 Web 技术与页面。CM6 Markdown、私有 `/wiki`/`/graph`、`/agenda`、`/config` 和右侧 `jupyter.html` 均保留为 Emacs-hosted surface；Emacs 负责 buffer/window、项目上下文、执行与权限权威，页面保留其领域内编辑、图形、过滤和导航能力。
+- **D-022 源码与 AI 入口收拢已完成**：原 `/Users/hc/HC/SOURCE/Noema` 工作树整体迁入 `~/.config/emacs/site-lisp/noema/` 后删除，不保留复制品或运行时软链接；Wiki/Markdown/Graph、Agenda/Config、Jupyter、Go/Node runtime、测试和文档全部在内。旧 `site-lisp/ai-workbench/` 与 `ai-workbench-*` 当前命名已退役。gptel、agent-shell、acp.el、shell-maker、Magent 完整源码位于 `upstream/`，Noema 直接复用，不另写替代实现。
+- **规范同步已完成**：`DESIGN.md` v1.4 的旧 Cell=节点/`.ipynb` schema 已改成 WorkDocument v2；D-018、AI-Docs 顶部解释、`BOOTSTRAP.md` 和开发日志同步当前事实。
+- **本轮纵切状态**：`.noema → WorkNode DAG → Jupyter/agent execution → live output → ordinary-file ArtifactLink → Inspector → grouping/synthesis` 已形成可运行闭环。权威 parser 对 Demo 验证为 11 Cells、9 WorkNodes、12 Dependencies、9-node/12-edge projection。旧 `desktop` host-mode 仍强制归一成 `emacs`；Emacs host 必须提供 `/agenda`、`/config`、`/wiki`、`/graph` 与 `/jupyter.html`，同时不恢复 Electron 或独立 Web/App 产品壳。
+
+> 下文保留了迁移历史和当时的验证证据。凡提到 Electron、Noema.app、desktop lab、Web/手机 Attention 或跨端控制的内容均已被 D-016/D-017 推翻，不是待办，也不得据此恢复代码。
+
+> **⚠️ 2026-08-25 起，Go 内核的唯一代码位置是** `~/.config/emacs/site-lisp/noema/kernel/`（Noema 主仓库、`main` 分支）。内核所需的语言、字体、主题与 Server 登录页现明确命名为同级 `kernel-resources/`；它不是应用源码或第二套 UI。原始上游 checkout 只用于迁移期取证，终态不属于 Noema 源树。
 
 ## 工作方式约定（Aaron 明确要求，持久化在这里，不要只留在对话里）
 
-- **本文件（`/Users/hc/HC/SOURCE/Noema/plan.md`）是唯一权威、活的进度记录**，不是快照。每做完一步就更新一步（"每做一步更新一步"）——不要攒到一个大总结再补，也不要让它变成开工前那一版一次性快照后就再也不碰。
-- **代码必须进入 canonical 项目结构，不能靠仓库内的上游副本运行。** 原始 checkout 与 fork 历史只用于迁移期取证，不是产品组成。
-- **最终必须删除整份上游 checkout，让 Noema 彻底独立**（Aaron 2026-08-26 明确要求）。删除前把决定保留的源码、测试、规格和必要版权信息迁入正式树，并证明源码、构建、测试、文档及安装包都不依赖该 checkout。
-- **搬迁方式是增量的，不是一次性大搬家**（"一点点写一点点挪"）：只把实际采用并验证过的部分迁入正式结构。`app/pandoc/`、装饰性 covers 和未采用的 protyle/mobile 前端经审计明确不迁移；这是一项产品决定，不是遗留待办。
+- **本文件（`~/.config/emacs/site-lisp/noema/plan.md`）是唯一权威、活的进度记录**，不是快照。每做完一步就更新一步（"每做一步更新一步"）——不要攒到一个大总结再补，也不要让它变成开工前那一版一次性快照后就再也不碰。
+- **Noema 代码必须进入 canonical 项目结构，不能靠另一份外部 checkout 运行。** 当前唯一源码根是 `~/.config/emacs/site-lisp/noema/`；原 `/Users/hc/HC/SOURCE/Noema` 已在核对后删除。
+- **成熟 AI 基础设施按 D-022 完整内化。** `upstream/` 中的 gptel、agent-shell、acp.el、shell-maker、Magent 是正式源码组成，不是运行时外部 checkout；保留完整源、测试、文档和许可证，按实际工作流决定启用范围。
+- **不要机械改名或重写上游实现。** Noema 自身公共命名和领域适配使用 `noema-*`，上游 feature 保持原名并由 `noema-upstream.el` 确定性加载。
 - 这些要求本身也要留在这份文档里，供以后的会话/协作者直接看到，不用重新问一遍。
+
+## 研究工作台实施进度（2026-09-13，当前工作树）
+
+- **Phase A 已实现但 GUI 人工验收未完成**：标准 ipynb 研究模型、Node 原子写入、Go 差分索引/事件、Emacs JuText/Graph Board/Inspector、视图状态与 `.agent/` 隔离都已进入 canonical Noema / AaronEmacs 工作树。自动化与隔离双进程 E2E 已过；真实 Emacs GUI 的完整点击/折叠/重开流程仍需人工走查，因此不把 Phase A 的验收框全部勾上。
+- **Phase B 已实现并通过三项验收**：Go schema v2 持久化 Session 与原生会话幂等绑定；Node/REST/channels 和 Emacs agent-shell 纳入入口已接通；Magent、Codex、Claude、agent-shell、Noema transcript 由只读适配器进入 `.agent/search.sqlite` FTS5，提供按项目/来源过滤和精确 search/peek/read。未知记录只报告诊断。
+- **Phase B 证据**：Go FTS5 research/API/MCP 广泛测试、Node 15 个聚焦测试、Emacs research 19/19 和 jupyter 103+24+18+12 全过。真实 Node host + Go kernel 在停止、重启后保留 Session/history，并证明 `attached_at` 与原生 `started_at` 独立。Node 全量曾出现两个既有负载型 timing/perf 波动，失败文件立即单独重跑 26/26 全过。
+- **安装方向已纠正**：`make build` 只构建 Emacs 消费的 renderer 与 headless Go kernel；`make install` 只链接 kernel。Electron/`Noema.app` 依赖与构建链已退役。
+- **Emacs-only 收口门禁已通过**：源码资源目录由误导性的 `app/` 改名为 `kernel-resources/`，renderer 内部的 `desktop-knowledge-dock` 也已改成宿主中立的 `knowledge-dock`；旧 `--attach-ui` 与 UI 进程监控、Electron auth 分支、`/research` 路由、artifact/research 独立页面、浏览器注入的研究写控制方法均已移除。旧 `AARONNOTE_HOST_MODE=desktop` 会归一为 `emacs`，owned Go kernel 由 Emacs host 持有；`/research` 返回 404。当前构建继续包含 editor/CM6、Wiki/Graph、Agenda/Config 和 Jupyter rich output，作为 Emacs-hosted surfaces。执行与权限决定入口保持在 Emacs。
+- **当前下一步**：只做真实 Emacs GUI、adapter、Chrome capture 和规模/溯源验证；不做手机/Web 控制验收，不恢复 desktop lab。
+
+**Phase C 前置 S-1…S-5 已完成（2026-09-13）**：报告在 `/Users/hc/Desktop/]/research/2026-09-13-acp-validation.md`。本机真实验证了 acp.el 共享 client 的多订阅，agent-shell 的无-advice permission responder，OpenCode 1.18.20 / Codex ACP 1.11.0 / Claude Agent ACP 0.76.0 / Pi ACP 0.8.0 的 initialize 能力，以及四者对真实 Noema HTTP MCP 的 session/new 注入。适配器命令已安装到 Homebrew Node 的全局 bin。L1 边界不再假定为统一：Codex/Claude/OpenCode 有可验证的受控启动策略；Pi 没有 root confinement，必须由外部沙箱或在线 L2 resolver 覆盖强制 deny。现在可以进入 Phase C 的 Go Run/Lease/Permission/CAS、Node RunSpec 和 Emacs Worker 实现。
+
+**Phase C 权威运行纵切已实现（2026-09-13，当前工作树）**：Go Research Store 现在持有 CAS-backed RunSpec/ContextManifest、Run/Lease/Permission/PermissionRule、单 Session 开放 Run 的数据库约束、租约 fencing/过期中断、终态权限过期、Result/Handoff/Transcript artifacts 和 cursor live snapshot。Node 严格解析 work-cell/`.prompt`，冻结项目/source/prompt/agent/session/context/skills/capabilities/MCP 描述并由 Go 回传与 CAS 字节完全相同的最终 RunSpec；`local_only` 在 provider 之前失败关闭。continue/fresh/native fork 与显式 reconstructed fork（只注入可见 Result + Handoff）已接通。SSE 从持久 seq 续传；独立 Web artifact MIME 页面已随 D-016 退役，Artifact 字节只供 Emacs/后端数据面按显式动作读取。
+
+**Phase C Emacs Worker 纵切已实现（2026-09-13，当前工作树）**：文档执行在 Run 创建前进入 Magent 单执行 arbiter，取消 queued ticket 不产生 Run；运行后由 agent-shell/acp.el 承担物理会话，Noema 只做租约、事件归一化、Magent ledger 投影、权限桥、取消与结果回写。RunSpec 的 HTTP MCP 列表注入 agent-shell；权限只接受 ACP 实际提供的 option，broker 失败时不伪造批准/拒绝。启动、配置、会话提升、租约、attach/start 任一步失败都经专用 `run:fail-preparing` 权威通道落为 `failed` 后才释放队列；如果 start 响应丢失，会先读回 Run，已进入 `running` 时通过原 lease 上报失败，绝不重发 prompt。当前聚焦证据：Go research/API 全过；Node research notebook/runtime/SSE/rendermime 31 项、`tsc --noEmit` 与 syntax checks 全过；Emacs research 32/32 与两个仓库 `git diff --check` 全过。尚欠真实 adapter Run、退出恢复和双界面权限竞态的整链走查，所以本阶段仍保持未完成。
+
+**Phase C 显式上下文种类已补齐（2026-09-13，当前工作树）**：冻结解析器除 cell/lineage/depends/result/file/git.diff/skill 外，现支持 `note:<id>`、`artifact:<id>` 与 `handoff.latest`；三者都把当时精确字节纳入同一个 CAS manifest 和 64 KiB 总上限。知识笔记只按当前 repository 的唯一 portable id 解析，读取 Markdown 后再次检查 meta `disclosure`；`local_only` 在 provider 调用前失败关闭。artifact 从 Go CAS 读回并校验，handoff 只从已路由 Session 的持久终态事件定位，不借隐藏会话状态。新增 Node 回归已与 capture/runtime 19 项、TypeScript、host syntax 和 diff 门禁一起通过。
+
+**Phase D 持久采集第一纵切已实现（2026-09-13，当前工作树）**：新增 Manifest V3 `browser-extension/`，权限精确为 `activeTab`、`scripting`、`contextMenus`、`storage`，常驻 host 权限仅 `http://127.0.0.1/*`；选区/整页只能由 toolbar 或 context menu 显式触发。Node 首次启动生成 0600、32-byte bearer token，`POST /v1/captures` 固定写当前 repository，不接受客户端 root；HTML 经白名单 parser 重建，Markdown 在服务端从清洗结果生成，客户端提供的替代 Markdown 不受信任。Go schema v4 用幂等 `client_request_id` 保存 Capture、主 `web-capture` Markdown CAS、可选 sanitized HTML CAS、completeness 和 `capture.created` 事件；关闭并重开 Store 后记录仍在。官方 ChatGPT/Claude JSON 导出解析和 `/v1/imports/conversations` 也已接到同一持久边界，不调用私有 API。Go research/API 与 Node capture+既有 research 聚焦 36 项、TypeScript、syntax、manifest 权限和 diff 门禁全过；Phase D 尚欠 research/artifact MCP 和真实扩展安装走查，未标完成。
+
+**Phase D research/artifact 拉取工具已实现（2026-09-13，当前工作树）**：Go MCP 新增 `research_cell(read/neighbors)`、`research_run(list/get/output)` 与 `artifact(search/read/import)`；cell 从权威 ipynb 重新读取正文和显式 lineage/depends 邻居，`local_only` 自身及相邻节点都在 pull 边界失败关闭。Run output 通过终态事件定位并校验 Handoff/Transcript CAS；Artifact import 有 8 MiB 上限、保留 kind 防伪、可选 Workstream/provenance，并由现有 MCP effect metadata 标成 local write。聚焦 Go research/MCP/API 全过。Phase D 仍需真实 Chrome 安装/重启验收；`noema://` 桌面 open 协议原有覆盖已存在，但 artifact/cell 深链 UI 仍待补。
+
+**Phase E epoch fencing 与结构化输入纵切已实现（2026-09-13，当前工作树）**：research schema v5 将 Permission 与 InputRequest 固化到发起它们的 Lease epoch；审批/回答事务会读取当前未过期 Lease，epoch 已变或已过期时不落决定。Node 只在事务成功后下发携带 `runId + sessionId + epoch` 的命令，Emacs 再做一次精确匹配，旧 worker 不消费也不移除 pending responder。新增 `worker:input`、`input:get`、`input:respond` channels/REST/provider，输入问题、类型、选项、回答、状态与版本均持久化；首个回答原子生效并将 Run 从 `waiting_input` 恢复到 `running`，终态或租约过期会显式 expire 未决输入。Attention 同时投影详细 InputRequest 与兼容的 waiting Run。当前证据：Go research/API 全过，Node runtime/provider 28 项与 TypeScript/diff 门禁全过，Emacs research 33/33 全过。外部移动控制面已经退役；剩余验收只含 Emacs Attention 和 agent-shell ↔ vterm 接管/交还。
+
+**[已退役历史] Phase E 鉴权移动控制面**：该 listener、token、页面、测试和文档已按 D-017 移除；不再做真实手机验收。
+
+**Phase E agent-shell ↔ vterm 接管/交还已实现（2026-09-13，当前工作树）**：Go schema v6 用 versioned `manual_interventions` 与每 Session 单一 active 约束持久化人工接管；只有没有开放 Run、没有 live Lease 的 Session 才能进入接管，结束后回到 warm。Node 只为本机实际核对过的 Codex (`resume`)、Claude (`--resume`) 与 OpenCode (`--session`) 原生会话生成 argv；Pi 没有经验证的 TUI resume，明确失败关闭。Emacs 先提交 durable begin，关闭 ACP，再以逐参数 shell quoting 启动 vterm；显式交还先停 PTY、提交 durable end，成功后才恢复 ACP，启动失败有补偿交还，buffer 被杀也不会悄悄伪造已交还。Go research/API、Node runtime/notebook 31 项和 Emacs research 34/34 全过。剩余验收是三种实际 CLI 在 Emacs 内的人工端到端走查。
+
+**Phase D artifact/cell 深链接数据面已实现（2026-09-13，当前工作树）**：Go/Node 可以按 notebook/cell/artifact durable id 解析并重新校验权威内容。Electron protocol handler、desktop IPC 和独立 artifact 页面已随 D-016 退役；Emacs 内的深链接路由仍待实现与人工验收。Phase D 还欠真实 Chrome 扩展安装和 service-worker 重启走查。
+
+**Phase F 综合与编排自动化纵切已实现（2026-09-13，当前工作树）**：前置复审记录在 `/Users/hc/Desktop/]/research/2026-09-13-phase-f-validation-review.md`。Research Store schema v8 新增 versioned Proposal、Finding/evidence/relation、不可变 ResearchIR 与 ProblemModel 版本；模型/适配器只能创建 pending Proposal，人工 review 用行版本 CAS 接受或驳回并保留原 payload 与人工编辑 payload。cell 接受额外经过 `pending → accepting → accepted` 预留栅栏：Node 在写 ipynb 前先冻结 reviewer/payload/version，响应丢失可同内容重放，预留后并发拒绝失败；最终 Go 会核对重新索引的 notebook/cell identity、kind/title/source hash、lineage 与 depends，精确已有 cell 才能恢复而不重复写。v7→v8 的旧表约束迁移有保行测试。
+
+Finding 接受逐字读取并重新校验 CAS artifact、byte range 和 span SHA-256，零证据拒绝；精确语义重复合并为已有 Finding，新增 evidence/relation 会推进 aggregate version；epistemic status 与 verification level 分栏，`truth` 标量拒绝。ResearchIR edge 强制标明 semantic/provenance class；ProblemModel 修改只追加版本并绑定既有 ResearchIR、artifact-set/policy hash。每次接受既有 Proposal review event，也有对应 materialization event，保持同事务提交。
+
+Node REST/provider/channels 已接通 Proposal create/get/list/begin-accept/review、Finding、ResearchIR、ProblemModel 与 export。Emacs 新增 `noema-research-propose-with-magent`（`C-c C-r`）：只调用公开 `magent-llm-gptel-sample` 做单次严格 JSON 采样，tools 为 nil、provider tools 显式关闭，引用内容包在 untrusted data 边界内，选区/当前 cell 含 `local_only` 时在 sampler 前失败关闭；它只能创建 Proposal。Emacs Attention 提供人工 Accept/Reject，Graph Board 将 pending/accepting cell Proposal 画成虚线 diamond ghost 并拒绝对 ghost 的编辑。Pi 只有独立 `supervisor:propose` hook，强制 actor/adapter、拒绝 authority 字段且测试证明不调用 review/materializer；本机只有 `pi-acp`、没有可验证 supervisor RPC，所以不宣称真实 Pi 监督已接通。
+
+Workstream export 生成有 128 MiB 上限、内容寻址且可检查的 `noema.workstream-export/1` CAS artifact，包含 notebook、runtime、Proposal、Finding、IR/ProblemModel、event 及引用 artifact 闭包。默认明确排除 `local_only` cell/Finding/Proposal，并保守排除引用被过滤 Finding 的 IR/ProblemModel 版本；omission 全部进入 disclosure manifest。连续未变导出字节和 artifact id 相同，显式 `includeLocalOnly=true` 才包含 canary。用法见 `docs/research-synthesis.md`。
+
+当前门禁：`go test ./noema/... ./api/... ./cli/cmd ./model ./util ./server ./mcp/tools` 全绿；Node 聚焦 11 文件 105 项全绿，仓库级 `npm test` 为 227 files passed / 7 skipped、2264 tests passed / 16 skipped；`tsc --noEmit`、host syntax、`make build`、`make install` 与 Server staging 全绿；Emacs research 39/39、桌面 Demo batch 打开（JuText 10 cells + Graph 15 lines）全绿；两个仓库 `git diff --check` 全绿。Phase F 仍**未完成最终验收**：复审列出的 100–1,000 文档溯源实验、10k/100k 增量规模基准、真实模型质量阈值、真实 Magent GUI、真实 Pi RPC 与完整报告 rubric 尚未执行，不能用单元测试替代这些证据。
+
+**Phase F Task/Job/Invocation/Worker/Delegation authority 已实现；桌面 lab 已退役（2026-09-13，当前工作树）**：Research Store schema v11 新增 durable Task DAG、Job→Job 依赖、显式 Job policy/effect/budget/retry、逻辑 Worker、immutable Invocation + 分离 terminal result、epoch-fenced Worker lease、Job→Artifact 以及 parent Task/Invocation→Delegation→child Task/Jobs→output Artifact 全链。前置 Job 未 completed 时调度器拒绝 claim。`forbidden` 强制零 inference usage；`optional` 必须先持久记录 deterministic unresolved 才能提升；`required` 只允许 inference-capable Worker。按 v1 隐私边界，所有 inference claim 必须携带真实 CAS DisclosureView 且不能超过冻结的 remote disclosure byte budget；ContextSnapshot、DisclosureView 和 resolved resources 中的 Artifact 引用都在 claim 时校验 digest 并登记为该 Invocation 的 `input` 血缘。租约过期后旧 token/epoch 不能提交，只有 `pure`/`idempotent + safe_only` 自动重排，`unknown`/mutating 留在 orphaned 等人工检查。Task/Job/Delegation/claim 的 client request id 都绑定 canonical SHA-256，同内容重放返回原结果，换内容失败关闭。
+
+Task/Job/Delegation Proposal 在人工 accept 的同一事务中真正 materialize；Go REST、Node provider/runtime/channels 与 Emacs 控制面已贯通。浏览器 typed client 只保留 cell 定位，不暴露这些写控制方法。Workstream export 已包含 Tasks/Jobs/Invocations/results/Workers/Delegations、局部 Task 闭包与 redacted Worker leases，永不导出 lease token。曾有独立桌面 Research Orchestration Lab 作为 test-double 探针；该 UI、seed channel 和使用文档已按 D-016 退役，不能作为产品入口。
+
+**[历史证据]** 全新临时 repository + 当时的 desktop-mode Node host 曾跑完整 schema v11 状态流并重启复读；这条记录只证明数据面，不再证明或要求任何 Electron UI。
+
+**[历史证据，产品 lab 已退役] Phase F 编排 lab 门禁（2026-09-13）**：当时的自动化证明 schema v11 数据流与 renderer fixture 可复读；D-016/D-017 后不再保留安装包、桌面 lab 或手机验收含义。
 
 ## Context
 
-Noema 现在是：CM6 编辑器（Markdown 为唯一真相源）+ App/Emacs 共用的 Node web host + Go/SQLite/FTS5 数据 kernel + Emacs xwidget 宿主 + Electron 桌面系统适配层。Electron 只做窗口、菜单、preload、拖放和系统对话框；Jupyter/Copilot、API facade 与 Go supervisor 都只存在于共享 Node host，不在两个宿主重复开发。
+Noema 现在是：Emacs 唯一 UI/UX + Emacs 承载的 CM6 私有 Markdown 组件（Markdown 为唯一真相源）+ Node 无头 host + Go/SQLite/FTS5 数据 kernel。Chrome 扩展只做 capture，public server 只做只读发布。
 
 SiYuan 恰好把这几件事做到了工业级：`.sy` 块树 + `blocktree.db` + `siyuan.db`（FTS5，自定义 tokenizer）+ 601 个 API + 成熟的 b3- 设计系统。但它的存储格式（`.sy` JSON，文件名即块 ID）和编辑器（protyle，contenteditable + 内核回传 HTML 打补丁）都和 Noema 的核心约束互斥。
 
@@ -29,13 +96,13 @@ SiYuan 恰好把这几件事做到了工业级：`.sy` 块树 + `blocktree.db` +
 | 块身份 | 新内容使用 Noema `{#UUIDv7}`；org-env 的身份写在 opening line；旧 SiYuan 时间戳 ID 仅回读兼容 |
 | 块引用 | 新内容使用 `((UUIDv7 "label"))`；旧时间戳引用可读，但 UI/内核不再生成 |
 | 编辑面 | **保留 CM6，删除 `app/src/protyle/`（85,771 行）** |
-| 外壳 | Emacs xwidget + SiYuan-derived Electron 独立窗口；Electron 只承担 UI/系统适配 |
-| 后端 | App/Emacs 统一进入 Node web host；Node 持有 Jupyter/Copilot 与 Go kernel supervisor，Go 负责 Markdown 数据面 |
+| 外壳 | **仅 Emacs**：xwidget/Appine、Graph Board、JuText、Inspector、Attention、agent-shell、vterm |
+| 后端 | Emacs 进入 Node headless host；Node 持有 Jupyter/Copilot 与 Go kernel supervisor，Go 负责 Markdown/研究数据面 |
 | 云 | 全部移除（`cloud_service.go` / `sync.go` / `lan_sync.go` / `repository.go`+dejavu / bazaar 网络层） |
 | 版本历史 | git（沿用现有 `wiki-sync` / `roam-git` 语义），不用 dejavu 快照 |
 | 要吃到的 | 块引用、SQLite/FTS5 索引与搜索、属性视图(attribute view)、b3- 设计系统 |
 
-### Electron 外壳切换（2026-08-25，当前权威状态）
+### [已被 D-016 推翻的历史] Electron 外壳切换（2026-08-25）
 
 此前所有 Tauri/Rust 打包记录保留为历史验收，但不再代表当前架构。用户已明确撤销 “Electron forbidden” 决策，原因是 Rust/Tauri 冷编译慢且 `src-tauri/target` 曾膨胀到 17GB。当前桌面外壳改为复用 SiYuan Electron 的窗口生命周期、菜单和多窗口经验，并保留 Noema 已有的安全边界：`contextIsolation: true`、`nodeIntegration: false`、`sandbox: true`，渲染层只见窄 `window.noemaDesktop` preload API。
 
@@ -79,7 +146,7 @@ Phase 1 早期实现曾把 Lute 生成的 SiYuan 文档/块 IAL 重新格式化�
 - Go kernel 现在与官方 Node 26.5.0 一样作为 `externalBin` 打进 `Noema.app`；`app/` appearance/stage 资源进入 bundle。最初实现曾由 Tauri 先启动 Go 再启动 Node；按后面的“双宿主后端边界重新收敛”，当前 Tauri 只启动 Node web host，Go 的发现、启动、端口、box、重连和退出全部由这份共享 web host 管理。现有页面、Jupyter、Copilot、Emacs adapter 均未删除或替换。
 - 共享 Node supervisor 等待 kernel `bootProgress=100` 后把本地笔记根注册成原地 external Markdown box；`/health` 和 HTML adapter 注入统一报告动态 base/status，markdown-box lab 不要求手填打包态端口。App/Emacs 都使用同一状态机；正常退出与异常失联都会回收 Go，Rust 不再维护重复的 `kernel_status` command 或第二套关机逻辑。
 - `prepare-tauri-sidecar.mjs` 用 `-tags fts5` 构建目标 triple 的 Go sidecar；macOS 构建脚本新增真实 Rust 链接探针，避开“SDK 声称支持 arm64、但固定 Rust 1.85 + macOS 11 实际无法链接”的新版 SDK。正式包已确认同时含 arm64 `noema-node`、`noema-kernel` 与 18MB `Resources/app`。
-- 验收：Rust 6 个宿主单测、TypeScript、Go 聚焦测试、独立双进程 smoke 均通过；`make build`、`make test`（144 files passed / 7 skipped，1503 tests passed / 16 skipped）、`make install` 全过。安装包 smoke 报告 `hostMode: desktop`、`preload: true`、`titlebarVisible: true`、54px、五项标题栏控件齐全，另有 `kernel.state: listening`；默认笔记根没有 `.siyuan`，shadow 只在 App Data 的 kernel workspace。Emacs `lisp/roam/Noema` 和 7 个共享资产入口均解析到本仓库/`resources/`，retired `lisp/roam/aaronnote` 不存在。
+- 验收：Rust 6 个宿主单测、TypeScript、Go 聚焦测试、独立双进程 smoke 均通过；`make build`、`make test`（144 files passed / 7 skipped，1503 tests passed / 16 skipped）、`make install` 全过。安装包 smoke 报告 `hostMode: desktop`、`preload: true`、`titlebarVisible: true`、54px、五项标题栏控件齐全，另有 `kernel.state: listening`；默认笔记根没有 `.siyuan`，shadow 只在 App Data 的 kernel workspace。Emacs `site-lisp/noema` 和 7 个共享资产入口均解析到本仓库/`resources/`，retired `lisp/roam/aaronnote` 不存在。
 
 **生产 Markdown load/save facade 已落地（2026-08-25，当前工作树）**：
 
@@ -806,7 +873,7 @@ AGENTS.md 原样无附加变量 smoke 最终再次报告 `protocolRegistered:tru
 - [x] 手感回归门禁：逐条对拍 vim 模式、排版宽度（4%–8% 自适应 + 95ch）、数学 snippet、bracket 行为、有序列表重编号、heading fold、结构跳转、Emacs 按键桥、5MB 大文档性能（详见下方正式门禁）
 - [x] 安装包生产手感探针：隔离 scratch CM6 通过真实 keydown/input-handler 验证 Enter、bracket/type-over、选区包裹、Unicode grapheme 删除、undo/redo 与 programmatic-load opt-out，且不触碰当前笔记
 
-**Phase 5 sidecar 收口（2026-08-26，当前工作树）**：安装版 Electron runtime 启动 shared `web-host.mjs` 的真实探针发现，desktop Jupyter 曾优先读源码 `jupyter/.jupyter/data` 中由历史 Emacs compatibility link 生成的同名 `python3` kernelspec，`argv` 因而落到 `~/.emacs.d/lisp/roam/Noema/...`；这违反 standalone App 不得运行时依赖 Emacs 的边界。现在 desktop 的 data/config/runtime 全部落到 `<stateRoot>/jupyter`，只在 desktop 模式让 source-owned `python3`/`bash`/`sagemath` 模板先占稳定名称，Emacs broker/generated-spec 顺序保持不变，其他用户 kernelspec 仍可发现。Python/Sage launcher 与 bootstrap/doctor/install-kernelspec 脚本已删除隐式 `EMACS_ROOT`/central Emacs runtime 发现，只接受显式 runtime metadata；三个模板把 Jupyter/IPython/Sage/log/tmp 路径明确注入 host state。隔离 maintenance probe 在精确 Node 26.5.0/npm 11.17.0 下实际完成 Python + Sage bootstrap/doctor，生成的三个 specs 全部指向 canonical Noema launcher 与独立 state，源码 `jupyter/.jupyter` 无新增写入。
+**Phase 5 sidecar 收口（2026-08-26，当前工作树）**：安装版 Electron runtime 启动 shared `web-host.mjs` 的真实探针发现，desktop Jupyter 曾优先读源码 `jupyter/.jupyter/data` 中由历史 Emacs compatibility link 生成的同名 `python3` kernelspec，`argv` 因而落到 `~/.emacs.d/site-lisp/noema/...`；这违反 standalone App 不得运行时依赖 Emacs 的边界。现在 desktop 的 data/config/runtime 全部落到 `<stateRoot>/jupyter`，只在 desktop 模式让 source-owned `python3`/`bash`/`sagemath` 模板先占稳定名称，Emacs broker/generated-spec 顺序保持不变，其他用户 kernelspec 仍可发现。Python/Sage launcher 与 bootstrap/doctor/install-kernelspec 脚本已删除隐式 `EMACS_ROOT`/central Emacs runtime 发现，只接受显式 runtime metadata；三个模板把 Jupyter/IPython/Sage/log/tmp 路径明确注入 host state。隔离 maintenance probe 在精确 Node 26.5.0/npm 11.17.0 下实际完成 Python + Sage bootstrap/doctor，生成的三个 specs 全部指向 canonical Noema launcher 与独立 state，源码 `jupyter/.jupyter` 无新增写入。
 
 修复后再次用 `/Applications/Noema.app/Contents/MacOS/Electron` 的 production Node runtime、隔离 external root/state 和 bundled Go kernel 走公开 Jupyter channel：`open-script` 选择 canonical `jupyter/bin/python-jupyter-kernel`，执行 `value = 6 * 7` 后返回 stdout marker 与 `42`；`.cell/sidecar.python.python3.ipynb` 按 nbformat 4.5 持久化 source、`execution_count:1`、两项 outputs、Noema cell/kernel/session metadata，tasks 明确报告 owned generation 1，shutdown API 随后移除 registry、Python PID、connection file 与 owned sidecar。相同 production host 的 bundled `@github/copilot-language-server` 启动为独立 PID并进入 `Ready/Normal`；完整安装版 smoke 又确认 always-active `noema.copilot@1.0.0` plugin 已加载并注入独立 plugin storage。renderer focus/document/inline/shown/accept/partial-accept/close 与 server/plugin boundary 的 41 项测试全过；实际补全文本仍由用户 GitHub 登录和网络决定，release gate 不以擅自消耗账户配额为条件。
 

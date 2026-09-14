@@ -32,7 +32,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 cd "$PROJECT_ROOT" || exit 1
-AARONNOTE_HOST_MODE=desktop \
+AARONNOTE_HOST_MODE=emacs \
 NOEMA_ROOT="$NOTE_ROOT" \
 AARONNOTE_STATE_DIR="$RUN_DIR/state" \
 NOEMA_KERNEL_WORKSPACE="$RUN_DIR/kernel-workspace" \

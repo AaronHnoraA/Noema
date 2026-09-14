@@ -107,7 +107,7 @@ export function b3SurfaceKind(element: Element): B3SurfaceKind | null {
   // regions whose historical class happens to end in "-panel" (the status
   // HUD and bibliography are the important examples) belong to the shared
   // editor canvas; decorating them as b3 panels creates a second background,
-  // border, and shadow in both Electron and Emacs.
+  // border, and shadow in both Emacs-hosted and public-reader pages.
   if (tokens.some((token) => PANEL_TOKENS.has(token))) {
     return "panel";
   }

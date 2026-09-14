@@ -17,31 +17,44 @@
 package tools
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/aaronhe/noema/kernel/model"
+	"github.com/aaronhe/noema/kernel/noema/research"
 	"github.com/aaronhe/noema/kernel/treenode"
 	"github.com/aaronhe/noema/kernel/util"
 )
 
 var HistoryTool = &Tool{
 	Name:        "history",
-	Description: "Document history operations. Actions: list(query?, notebook?, op?, type?, page?), search(query, notebook?, op?, type?, page?), get(path), rollback(path), clear().",
+	Description: "History operations. Native research history uses search(query, root, projectRoot?, source?, limit?), peek(root, id, maxRunes?), and read(root, id). Legacy document history remains available through list/search/get/rollback/clear without root.",
 	InputSchema: ToolSchema{
 		Type: "object",
 		Properties: map[string]Property{
-			"action":   {Type: "string", Description: "Operation", Enum: []string{"list", "search", "get", "rollback", "clear"}},
-			"query":    {Type: "string", Description: "Search query (for list, search)"},
-			"notebook": {Type: "string", Description: "Notebook ID filter (for list, search)"},
-			"op":       {Type: "string", Description: "Operation filter: delete/update/create (for list, search)"},
-			"type":     {Type: "number", Description: "Search type: 0=name,1=content,2=asset,3=docID,4=database (default 1)"},
-			"page":     {Type: "number", Description: "Page number (default 1)"},
-			"path":     {Type: "string", Description: "History path relative to workspace directory (for get, rollback). Obtained from list/search output, e.g. history/2024-03-15-.../docid/..."},
+			"action":      {Type: "string", Description: "Operation", Enum: []string{"list", "search", "peek", "read", "get", "rollback", "clear"}},
+			"query":       {Type: "string", Description: "Search query (for list, search)"},
+			"notebook":    {Type: "string", Description: "Notebook ID filter (for list, search)"},
+			"op":          {Type: "string", Description: "Operation filter: delete/update/create (for list, search)"},
+			"type":        {Type: "number", Description: "Search type: 0=name,1=content,2=asset,3=docID,4=database (default 1)"},
+			"page":        {Type: "number", Description: "Page number (default 1)"},
+			"path":        {Type: "string", Description: "History path relative to workspace directory (for get, rollback). Obtained from list/search output, e.g. history/2024-03-15-.../docid/..."},
+			"root":        {Type: "string", Description: "Absolute Noema repository root. When present, search uses the repository's read-only native conversation index."},
+			"projectRoot": {Type: "string", Description: "Exact project/cwd filter for native conversation history (defaults to root)."},
+			"source":      {Type: "string", Description: "Native history source filter: magent, agent-shell, codex, claude, or noema-transcript."},
+			"id":          {Type: "string", Description: "Stable hist_ record id returned by native history search (for peek/read)."},
+			"limit":       {Type: "number", Description: "Maximum native history hits (1-100, default 20)."},
+			"maxRunes":    {Type: "number", Description: "Maximum characters returned by peek (default 1200, maximum 8000)."},
 		},
 		Required: []string{"action"},
 	},
 	Handler: historyHandler,
+	ActionEffects: map[string]ToolEffects{
+		"list": {LocalRead: true}, "search": {LocalRead: true}, "peek": {LocalRead: true},
+		"read": {LocalRead: true}, "get": {LocalRead: true},
+		"rollback": {LocalWrite: true}, "clear": {LocalWrite: true},
+	},
 }
 
 func init() {
@@ -54,7 +67,14 @@ func historyHandler(args map[string]any) (CallToolResult, error) {
 	case "list":
 		return historyList(args)
 	case "search":
+		if root, _ := args["root"].(string); strings.TrimSpace(root) != "" {
+			return researchHistorySearch(args)
+		}
 		return historySearch(args)
+	case "peek":
+		return researchHistoryRead(args, true)
+	case "read":
+		return researchHistoryRead(args, false)
 	case "get":
 		return historyGet(args)
 	case "rollback":
@@ -63,9 +83,69 @@ func historyHandler(args map[string]any) (CallToolResult, error) {
 		return historyClear(args)
 	}
 	return CallToolResult{
-		Content: []ContentItem{{Type: "text", Text: "unknown action '" + action + "', expected one of: [list, search, get, rollback, clear]"}},
+		Content: []ContentItem{{Type: "text", Text: "unknown action '" + action + "', expected one of: [list, search, peek, read, get, rollback, clear]"}},
 		IsError: true,
 	}, nil
+}
+
+func researchHistorySearch(args map[string]any) (CallToolResult, error) {
+	root, _ := args["root"].(string)
+	query, _ := args["query"].(string)
+	projectRoot, _ := args["projectRoot"].(string)
+	if projectRoot == "" {
+		projectRoot = root
+	}
+	source, _ := args["source"].(string)
+	limit := 20
+	if value, ok := args["limit"].(float64); ok {
+		limit = int(value)
+	}
+	store, err := research.Open(root)
+	if err != nil {
+		return historyResearchError(err), nil
+	}
+	hits, err := store.SearchHistory(research.HistorySearchOptions{
+		Query: query, ProjectRoot: projectRoot, Source: source, Limit: limit,
+	})
+	if err != nil {
+		return historyResearchError(err), nil
+	}
+	return historyResearchJSON(map[string]any{"hits": hits})
+}
+
+func researchHistoryRead(args map[string]any, peek bool) (CallToolResult, error) {
+	root, _ := args["root"].(string)
+	id, _ := args["id"].(string)
+	store, err := research.Open(root)
+	if err != nil {
+		return historyResearchError(err), nil
+	}
+	var record research.HistoryRecord
+	if peek {
+		maxRunes := 1200
+		if value, ok := args["maxRunes"].(float64); ok {
+			maxRunes = int(value)
+		}
+		record, err = store.PeekHistory(id, maxRunes)
+	} else {
+		record, err = store.ReadHistory(id)
+	}
+	if err != nil {
+		return historyResearchError(err), nil
+	}
+	return historyResearchJSON(record)
+}
+
+func historyResearchJSON(value any) (CallToolResult, error) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return CallToolResult{}, err
+	}
+	return CallToolResult{Content: []ContentItem{{Type: "text", Text: string(data)}}}, nil
+}
+
+func historyResearchError(err error) CallToolResult {
+	return CallToolResult{Content: []ContentItem{{Type: "text", Text: err.Error()}}, IsError: true}
 }
 
 func historyList(args map[string]any) (CallToolResult, error) {

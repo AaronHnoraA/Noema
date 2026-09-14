@@ -3,7 +3,7 @@ import { describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
 // @ts-ignore Server ESM module lives outside the renderer TS graph.
 import { createKernelKatexMacrosProvider } from "../server/lib/kernel-katex-macros-provider.mjs";
 
-describe("desktop kernel KaTeX macros provider", () => {
+describe("data-kernel KaTeX macros provider", () => {
   test("loads the Go endpoint without parsing files in Node", async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
       code: 0,

@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [matrixel] — Quantum matrix element
-# key: matrixel
-# group: Math · Recent notes
-# --
-\left\langle ${1:\phi}\middle|${2:A}\middle|${3:\psi}\right\rangle$0

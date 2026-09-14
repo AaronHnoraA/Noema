@@ -1,8 +1,8 @@
 # Noema Wiki workspace
 
 Noema's default workspace is `~/Documents/Noema` (`NOEMA_ROOT` may override it).
-Configuration lives in `~/.config/noema/config.json`; themes remain bundled with
-the application.
+Configuration lives in `~/.config/noema/config.json`; renderer themes remain
+bundled with the Emacs-hosted Web assets.
 
 ## Layouts
 
@@ -30,9 +30,9 @@ In Wiki layout the workspace is:
     └── project/.git/
 ```
 
-The root toolchain files are user-owned. The desktop app does not require
-direnv. When the root `.envrc` is already authorized, Noema exports it without
-shell evaluation and passes the resulting environment only to tool
+The root toolchain files are user-owned. Noema does not require direnv. When
+the root `.envrc` is already authorized, the Emacs-started host exports it
+without shell evaluation and passes the resulting environment only to tool
 subprocesses, including local Jupyter kernels and LaTeX compilation.
 
 A direct child directory without `.git` metadata is reported but never indexed
@@ -43,7 +43,7 @@ It stores page identity, titles, aliases, tags, links, backlinks, dependencies,
 diagnostics, and Unicode/trigram full-text indexes. It is never committed. The
 legacy `roam.db` and `roam-db.json` are neither read nor written in either
 layout and can be removed. Both the desktop and Emacs adapters use the same
-`wiki.db`; Emacs does not maintain a second database.
+`wiki.db`; the Emacs-hosted renderer does not maintain a second database.
 
 The database, completion, and graph boundaries were also reviewed against
 org-roam and org-roam-ui. Noema adopts stable node identity, normalized

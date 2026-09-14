@@ -1,4 +1,4 @@
-const SAFE_PROTOCOLS = new Set(["http", "https", "mailto", "tel", "file", "zotero", "roam"]);
+const SAFE_PROTOCOLS = new Set(["http", "https", "mailto", "tel", "file", "zotero", "roam", "noema"]);
 const MARGINNOTE_PROTOCOL = /^marginnote(?:\d+)?(?:app)?$/i;
 
 export function hrefProtocol(href: string): string | null {

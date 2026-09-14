@@ -26,7 +26,7 @@ import (
 )
 
 func TestAuthPageActionLayout(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "app", "stage", "auth.html"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "kernel-resources", "stage", "auth.html"))
 	if err != nil {
 		t.Fatal(err)
 	}

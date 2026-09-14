@@ -1,0 +1,280 @@
+#+title: Commands And LLM Workflows
+#+magent_lang: en
+#+magent_alt_url: /COMMANDS.zh.html
+#+magent_permalink: /COMMANDS.html
+#+options: toc:t num:nil
+
+Magent has two distinct command surfaces for LLM-assisted workflows:
+
+- *Slash commands* invoke Elisp-native command handlers in the current
+  agent-shell conversation. Most bundled handlers use one ordinary agent turn.
+- *Internal workflow commands* are explicit Emacs commands that run Magent
+  maintenance or diagnostic work in isolated durable sessions.
+
+The bundled package currently provides eight Elisp-native slash commands and
+four internal workflow commands. Three
+additional Emacs commands inspect or manage the internal workflows.
+
+* Slash Commands
+
+Type a slash command as the prompt in the Magent agent-shell buffer:
+
+#+begin_example
+/review
+/summarize src/session persistence and replay
+/fix focus on the failing session persistence test
+/compact preserve exact filenames and remaining failures
+/clear
+#+end_example
+
+Text following a prompt command or ~/compact~ is passed as its argument. The
+six bundled prompt commands reuse the current session and agent without
+activating a same-name skill. An unknown slash command is submitted as ordinary
+prompt text rather than executed locally.
+
+| Command    | Purpose                                | Expected effect |
+|------------+----------------------------------------+-----------------|
+| ~/explain~ | Explain code, a diff, error, or context | Read-only inspection; does not edit files |
+| ~/fix~     | Diagnose and repair a bug or regression | May edit files and run focused verification |
+| ~/init~    | Create or refresh project ~AGENTS.md~   | May update project instructions after repository inspection |
+| ~/review~  | Review current changes for defects      | Read-only review; leads with findings and test gaps |
+| ~/summarize~ | Summarize the project into org-roam   | Creates or updates one canonical Org note |
+| ~/test~    | Run and interpret relevant tests        | Runs focused tests; may fix an in-scope failure when appropriate |
+| ~/compact~ | Summarize the current conversation      | Replaces older model context with a continuation summary |
+| ~/clear~   | Clear the current conversation           | Cancels pending work and removes live and persisted session context |
+
+** ~/compact~
+
+Uses the hidden, tool-free compaction agent to produce a continuation summary.
+After it succeeds, future turns reuse that summary instead of the older model
+context. The visible transcript remains available in the current agent-shell
+buffer. A failed compaction leaves the previous context unchanged.
+
+** ~/clear~
+
+Cancels active or queued work for the current runtime session, clears its
+messages, tools, child jobs, approvals, selected one-shot skills, and persisted
+transcript, while keeping the agent-shell session handle valid. It does not
+accept an argument.
+
+** ~/explain~
+
+Inspects the relevant buffer, region, file, diff, error, or project context and
+explains the entry points, data flow, state changes, and ownership boundaries.
+It is intended for understanding existing behavior and does not make edits.
+
+#+begin_example
+/explain why this callback can complete twice
+#+end_example
+
+** ~/fix~
+
+Reconstructs the symptom, identifies the smallest plausible root cause, makes a
+focused change, adds or updates a regression test when practical, and runs the
+verification that should catch the problem.
+
+#+begin_example
+/fix reproduce and repair the failing ledger replay test
+#+end_example
+
+** ~/init~
+
+Inspects repository documentation, manifests, tests, and workflows, then
+creates or refreshes the project-root ~AGENTS.md~. Useful existing instructions
+are preserved and unrelated churn should be avoided.
+
+#+begin_example
+/init include the live Emacs verification workflow
+#+end_example
+
+** ~/review~
+
+Reviews the current repository state and diff like a senior code reviewer. It
+prioritizes correctness bugs, regressions, unsafe edge cases, and missing tests,
+with findings ordered by severity. It does not edit files unless explicitly
+asked.
+
+#+begin_example
+/review focus on cancellation and stale callbacks
+#+end_example
+
+** ~/test~
+
+Finds the relevant project test command, starts with the narrowest meaningful
+test, and broadens only when useful. The result records passed, failed, and
+skipped checks plus remaining risk.
+
+#+begin_example
+/test run the focused tests for the files changed in this branch
+#+end_example
+
+** ~/summarize~
+
+Inspects the current Git project and writes a single org-roam note whose title
+is exactly the repository name. With no argument it updates ~* Repository
+Summary~ for the whole workspace. Trailing free-form text selects a path or
+semantic scope and upserts one subtree under ~* Scoped Summaries~ in the same
+file. Global sessions are rejected before an LLM turn is created.
+
+The destination is ~magent-org-roam-directory~, or ~org-roam-directory~ when
+the Magent option is nil. The directory must already exist. The writer owns the
+Org ID, repository path, analyzed Git commit, filename, and atomic update. New
+notes are created through the noninteractive Org-roam capture API when it is
+available; the canonical file-level property drawer always precedes Org
+keywords so Org-roam can recognize and index the node. New filenames follow
+~YYYY-MM-DDtHHMM.org~, matching the default Org-roam capture convention.
+Subsequent runs locate the note by its file-level ~REPO_PATH~, so timestamped,
+legacy, and manually renamed files still receive single-file updates.
+
+#+begin_example
+/summarize
+/summarize only the ACP session lifecycle
+/summarize lisp/magent-session.el
+#+end_example
+
+** Alternate Invocation And Extension
+
+~M-x magent-agent-shell-run-command~ selects and runs any registered slash
+command. The bundled prompt commands are Elisp modules that register through
+the same public API available to third-party packages:
+
+#+begin_src emacs-lisp
+(require 'magent-command)
+
+(magent-command-register
+ "my-review"
+ :description "Run my package-specific review workflow."
+ :handler
+ (magent-command-turn-handler
+  (lambda (_invocation)
+    (magent-command-turn-spec-create
+     :prompt "Review the current changes using my package policy."
+     :context '(:features (code-review))
+     :turn-metadata '(:workflow review))))
+ :owner 'magent-command-my-review
+ :source-layer 'package
+ :tools '(read_file grep bash))
+#+end_src
+
+The turn spec keeps model-visible user prompt text separate from structured
+request context, explicit skills or agent selection, and durable ledger
+metadata. Its builder may inspect the invocation when those values depend on
+the slash argument or runtime session. ~append-argument-p~ defaults to non-nil,
+which appends trailing slash text as an Additional instruction block; set it to
+nil when the builder has already consumed the argument.
+
+An advanced handler may call ~magent-command-progress~ and
+~magent-command-submit-step~, then use ~magent-command-defer~ before returning and
+finish later with ~magent-command-complete~, ~magent-command-fail~, or
+~magent-command-finish~. Cancellation cleanup is registered with
+~magent-command-set-cancel-function~. Handlers are trusted installed Elisp;
+project-local Markdown never receives this execution authority.
+
+If a handler or step callback signals after submitting runtime work, Magent
+first claims the invocation's final ~failed~ result, then runs its registered
+cleanup and cancels every owned runtime submission before publishing
+completion. A synchronous cancellation callback therefore cannot replace the
+original failure or leave background streaming and ledger writes alive.
+
+A step callback still owns the completed runtime turn's FIFO lease. It can
+submit the next step immediately; no unrelated backend turn can advance in
+between. Each submitted turn records both the expanded model prompt and the
+original slash input, command name, argument, and invocation id in ledger
+metadata.
+
+~M-x magent-agent-shell-run-skill-command~ selects and runs any command-like
+instruction skill through the compatibility adapter.
+
+Existing instruction skills with a ~default-prompt~ remain compatible: Magent
+projects them into the same command registry and activates the original skill
+when invoked. Project and user adapters can override installed or bundled
+commands by name; the ~/clear~ and ~/compact~ core names remain reserved.
+
+Project command adapters are retained under their canonical project scope.
+~magent-command-get~, ~magent-command-list~, and ~magent-command-parse~ accept an
+optional scope, and ACP always supplies the runtime session's scope for both
+advertisement and dispatch. Concurrent sessions for different projects can
+therefore expose same-name overrides without leaking commands between menus.
+
+* User Skill Management
+
+~M-x magent-find-skill~ searches skills.sh and displays the ten most-installed
+matches in a dedicated buffer. Press ~RET~ to preview the selected candidate,
+~i~ to install it directly, or ~g~ to run another search. There is no need to
+copy a repository name from the finder.
+
+~M-x magent-install-skill~ also accepts one local skill directory,
+~owner/repo@skill~, or a public GitHub URL. Before writing, Magent shows the
+source, commit when available, description, destination, file count, size, and
+whether the package contains scripts or code. Installation proceeds after one
+~y/n~ confirmation, copies files without executing scripts, accepts instruction
+skills only, and records ~.magent-install.json~ provenance. Same-source managed
+skills can be atomically reinstalled; unmanaged or different-source collisions
+must be deleted first.
+
+~M-x magent-delete-skill~ permanently removes one selected user-level skill
+after one ~y/n~ confirmation. It can remove managed and unmanaged user skills;
+a symbolic-link entry removes only the link. The manager uses Magent's user
+skill directories (normally ~~/.emacs.d/magent/skills/~) and never manages
+project-local ~.magent/skills/~ or ~~/.agents/skills/~.
+
+* Internal Workflow Commands
+
+Internal workflows are invoked through ~M-x~ and are intentionally not exposed
+as agent-shell slash commands. Every run gets an isolated session under
+~magent-session-directory/internal~ and records only a compact breadcrumb in
+the originating conversation.
+
+| Emacs command                  | Workflow | LLM behavior |
+|--------------------------------+----------+--------------|
+| ~magent-run-memory-init~       | Build initial Emacs profile memory | Uses the current gptel provider when ~magent-memory-use-llm~ is non-nil |
+| ~magent-run-memory-refresh~    | Refresh managed profile memory | Uses the current gptel provider when ~magent-memory-use-llm~ is non-nil |
+| ~magent-run-memory-clear~      | Deactivate and clear managed memory | Local operation; does not request an LLM summary |
+| ~magent-run-doctor~            | Diagnose Magent and current runtime state | Sends one sanitized, tool-free analysis request |
+
+** Memory Initialization And Refresh
+
+~M-x magent-run-memory-init~ discovers bounded Emacs configuration sources,
+shows a scan plan for approval, and writes the managed profile memory file.
+~M-x magent-run-memory-refresh~ repeats the scan while preserving user notes.
+
+By default, init and refresh summarize sanitized source excerpts with the
+current gptel provider. Customize ~magent-memory-use-llm~ to ~nil~ to write a
+deterministic skeleton and source index without sending configuration excerpts
+to the provider.
+
+** Memory Clear
+
+~M-x magent-run-memory-clear~ deactivates the managed profile and clears its
+generated content after confirmation. User notes and a snapshot are retained.
+This workflow does not perform an LLM summarization request.
+
+** Doctor
+
+~M-x magent-run-doctor~ collects bounded evidence through trusted read-only
+probes, recursively redacts it, and sends one request without model tools. With
+a prefix argument, ~C-u M-x magent-run-doctor~ lets the user review applicable
+probe selection. See [[file:DOCTOR.html][DOCTOR.org]] for the probe API and security
+boundary.
+
+* Inspecting And Managing Workflows
+
+| Emacs command                     | Purpose |
+|-----------------------------------+---------|
+| ~magent-list-internal-sessions~   | Select a saved internal session and inspect its final result and activity |
+| ~magent-cancel-internal-command~  | Cancel an active internal workflow that exposes cancellation |
+| ~magent-open-memory~              | Open the managed Emacs profile memory file |
+
+Internal session viewers show the final result first and keep detailed activity
+collapsed by default. Cancellation is session-scoped and does not cancel work
+belonging to unrelated Magent conversations.
+
+* Choosing The Right Surface
+
+- Use a slash command when the task belongs to the current coding conversation
+  and should reuse its agent, context, and transcript.
+- Use an internal workflow command for Magent-owned maintenance, profile-memory
+  management, or sanitized diagnosis that needs its own durable session.
+- Use ~magent-start~, ~magent-agent-shell-prompt-region~, and
+  ~magent-agent-shell-ask-at-point~ for free-form requests rather than a
+  predefined workflow.

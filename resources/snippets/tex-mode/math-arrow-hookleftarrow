@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [hookleftarrow] — Left hook arrow
-# key: hookleftarrow
-# group: Math · Arrows
-# --
-\hookleftarrow$0

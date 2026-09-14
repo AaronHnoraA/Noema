@@ -25,37 +25,9 @@ button {
     background-color var(--aaron-motion-fast) ease;
 }
 
-.noema-desktop-titlebar,
 .noema-server-header {
   gap: var(--aaron-space-4);
   box-shadow: none;
-}
-
-.noema-desktop-titlebar {
-  padding: 0 var(--aaron-space-5) 0 82px;
-}
-
-.noema-desktop-titlebar-controls {
-  gap: var(--aaron-space-1);
-}
-
-.noema-desktop-titlebar-controls button {
-  width: 32px;
-  height: 32px;
-  border-radius: var(--aaron-radius-2);
-}
-
-.noema-desktop-titlebar-name {
-  font-family: var(--aaron-font-heading);
-  font-size: 18px;
-  font-weight: 650;
-}
-
-.noema-desktop-drop-overlay {
-  inset: 70px var(--aaron-space-4) var(--aaron-space-4);
-  border-width: var(--aaron-stroke-thin);
-  border-radius: var(--aaron-radius-2);
-  box-shadow: var(--aaron-shadow);
 }
 
 .aaronnote-status-hud {

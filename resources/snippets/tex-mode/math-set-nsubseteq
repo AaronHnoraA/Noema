@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [nsubseteq] — Not subset or equal
-# key: nsubseteq
-# group: Math · Sets
-# --
-\nsubseteq$0

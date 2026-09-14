@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [bigoplus] — Big direct sum
-# key: bigoplus
-# group: Math · Operators
-# --
-\bigoplus$0

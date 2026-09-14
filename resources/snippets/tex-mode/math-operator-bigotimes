@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [bigotimes] — Big tensor product
-# key: bigotimes
-# group: Math · Operators
-# --
-\bigotimes$0

@@ -810,7 +810,7 @@ maybeDescribe("cm6 kernel: getMarkdown / setMarkdown", () => {
       bubbles: true, cancelable: true, button: 0, clientX: 90,
     }));
     await nextTick();
-    expect(editor.getMarkdown()).toContain("{width: 400px}");
+    expect(editor.getMarkdown()).toContain("{width=400px}");
     cleanup();
   });
 
@@ -1326,7 +1326,7 @@ y^2
     const md = [
       "before",
       "",
-      "#+ begin tikz axis 20260525-120000 {size:320 align:right wrap}",
+      "#+ begin tikz axis {size:320 align:right wrap}",
       "\\draw (0,0) -- (1,1);",
       "#+ end tikz",
       "",
@@ -1359,7 +1359,7 @@ y^2
     }
   });
 
-  test("tikz env fills missing id and timestamp on first preview", async () => {
+  test("tikz env fills a missing id on first preview", async () => {
     const originalApi = window.aaronnoteApi;
     const originalCurrentFile = window.AaronnoteCurrentFile;
     window.AaronnoteCurrentFile = () => "/notes/demo.md";
@@ -1381,7 +1381,7 @@ y^2
       editor.setMarkdownSelection(md.length);
       await new Promise((resolve) => window.requestAnimationFrame(resolve));
 
-      expect(editor.getMarkdown()).toMatch(/^#\+ begin tikz tikz-\d{8}-\d{6} \d{8}-\d{6} \{wrap\}/);
+      expect(editor.getMarkdown()).toMatch(/^#\+ begin tikz tikz-\d{8}-\d{6} \{wrap\}\n/);
     } finally {
       cleanup();
       window.aaronnoteApi = originalApi;
@@ -1389,24 +1389,24 @@ y^2
     }
   });
 
-  test("tikz env bumps timestamp after body edits before rerendering", async () => {
+  test("tikz env rerenders from the edited body without touching the source", async () => {
     const originalApi = window.aaronnoteApi;
     const originalCurrentFile = window.AaronnoteCurrentFile;
     window.AaronnoteCurrentFile = () => "/notes/demo.md";
-    const renderCalls: Array<{ timestamp?: string }> = [];
+    const renderCalls: Array<{ id?: string; source?: string }> = [];
     window.aaronnoteApi = {
       assets: {
-        renderTikz: async (body: { timestamp?: string }) => {
+        renderTikz: async (body: { id?: string; source?: string }) => {
           renderCalls.push(body);
           return {
             ok: true,
-            markdownPath: "./images/demo/tikz-axis.svg",
+            markdownPath: `./images/demo/tikz-axis-${renderCalls.length}.svg`,
           };
         },
       },
     } as typeof window.aaronnoteApi;
     const md = [
-      "#+ begin tikz dirty-axis 20260525-120000",
+      "#+ begin tikz dirty-axis",
       "\\draw (0,0) -- (1,1);",
       "#+ end tikz",
       "",
@@ -1416,7 +1416,10 @@ y^2
     try {
       editor.setMarkdownSelection(md.length);
       await new Promise((resolve) => window.setTimeout(resolve, 0));
-      expect(renderCalls.length).toBe(1);
+      const calls = () => renderCalls.filter((call) => call.id === "dirty-axis");
+      expect(calls().length).toBe(1);
+      expect(calls()[0]?.source).toContain("(1,1)");
+      const initialMeasureKey = document.querySelector<HTMLElement>(".cm-tikz-env-widget")?.dataset.cmMeasureKey;
 
       editor.toggleSource();
       const from = editor.getMarkdown().indexOf("(1,1)");
@@ -1425,10 +1428,15 @@ y^2
         selection: { anchor: editor.getMarkdown().length },
       });
       editor.toggleSource();
-      await new Promise((resolve) => window.requestAnimationFrame(resolve));
+      await new Promise((resolve) => window.setTimeout(resolve, 600));
 
-      expect(editor.getMarkdown()).toMatch(/^#\+ begin tikz dirty-axis (?!20260525-120000)\d{8}-\d{6}/);
-      expect(renderCalls.at(-1)?.timestamp).not.toBe("20260525-120000");
+      // Freshness comes from hashing the body, so an edit costs a render but
+      // never a rewrite of the open line.
+      expect(editor.getMarkdown()).toMatch(/^#\+ begin tikz dirty-axis\n/);
+      expect(calls().length).toBe(2);
+      expect(calls().at(-1)?.source).toContain("(2,2)");
+      expect(document.querySelector<HTMLElement>(".cm-tikz-env-widget")?.dataset.cmMeasureKey)
+        .not.toBe(initialMeasureKey);
     } finally {
       cleanup();
       window.aaronnoteApi = originalApi;

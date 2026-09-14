@@ -50,7 +50,7 @@ describe("shared kernel supervisor", () => {
     const stateRoot = join(suite, "state");
     await writeFile(binary, "kernel");
     await chmod(binary, 0o755);
-    await mkdir(join(runtimeRoot, "app", "appearance", "langs"), { recursive: true });
+    await mkdir(join(runtimeRoot, "kernel-resources", "appearance", "langs"), { recursive: true });
 
     const config = resolveKernelLaunchConfig({
       env: { NOEMA_KERNEL_BIN: binary, PATH: "" },
@@ -64,7 +64,7 @@ describe("shared kernel supervisor", () => {
       enabled: true,
       owned: true,
       binary,
-      workingDir: join(runtimeRoot, "app"),
+      workingDir: join(runtimeRoot, "kernel-resources"),
       workspace: join(stateRoot, "kernel-workspace"),
       configDir: join(stateRoot, "kernel-config"),
     });
@@ -126,7 +126,7 @@ describe("shared kernel supervisor", () => {
     const noteRoot = join(suite, "notes");
     await writeFile(binary, "kernel");
     await chmod(binary, 0o755);
-    await mkdir(join(runtimeRoot, "app", "appearance", "langs"), { recursive: true });
+    await mkdir(join(runtimeRoot, "kernel-resources", "appearance", "langs"), { recursive: true });
     await mkdir(noteRoot);
 
     const signals: string[] = [];
@@ -172,7 +172,7 @@ describe("shared kernel supervisor", () => {
     expect(spawnedArgs).toEqual(expect.arrayContaining([
       "serve",
       "--workspace", join(stateRoot, "kernel-workspace"),
-      "--wd", join(runtimeRoot, "app"),
+      "--wd", join(runtimeRoot, "kernel-resources"),
       "--noema-sidecar",
       "--supervisor-pid", "4242",
     ]));
@@ -331,7 +331,7 @@ describe("shared kernel supervisor", () => {
     const noteRoot = join(suite, "notes");
     await writeFile(binary, "kernel");
     await chmod(binary, 0o755);
-    await mkdir(join(runtimeRoot, "app", "appearance", "langs"), { recursive: true });
+    await mkdir(join(runtimeRoot, "kernel-resources", "appearance", "langs"), { recursive: true });
     await mkdir(noteRoot);
 
     let bootProbes = 0;
@@ -394,7 +394,7 @@ describe("shared kernel supervisor", () => {
     const noteRoot = join(suite, "notes");
     await writeFile(binary, "kernel");
     await chmod(binary, 0o755);
-    await mkdir(join(runtimeRoot, "app", "appearance", "langs"), { recursive: true });
+    await mkdir(join(runtimeRoot, "kernel-resources", "appearance", "langs"), { recursive: true });
     await mkdir(noteRoot);
 
     const children: Array<EventEmitter & { stdout: PassThrough; stderr: PassThrough; kill(signal: string): boolean }> = [];

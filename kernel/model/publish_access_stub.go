@@ -24,7 +24,7 @@ import (
 
 // Noema fork: the public-publish feature (model/publish_access.go,
 // publish_resource_access.go, server/proxy/publish.go) is removed — Noema
-// is single-user Emacs+Tauri and publishes through its own existing
+// is single-user Emacs and publishes through its own existing
 // export/render pipeline, not a per-block public-visitor access-control
 // layer. This file keeps every exported symbol the ~20 api/*.go and
 // model/*.go call sites still reference, as always-allow / identity-filter

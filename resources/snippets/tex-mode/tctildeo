@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Soft-O
-# key: tcOt
-# group: TCS symbols
-# --
-\widetilde{O}\!\left(${1:n}\right)$0

@@ -149,7 +149,7 @@ export function clockSourceForTodo(todo, attrs = {}) {
 }
 
 // Test/fixture mirror of the semantic mutation payload accepted by Go. The
-// desktop runtime submits this payload instead of a pre-rendered replacement.
+// host runtime submits this payload instead of a pre-rendered replacement.
 export function applyPlanningSemanticMutation(source, mutation = {}) {
   const type = String(mutation.type || "").toLowerCase();
   const wanted = type === "patch-todo" || type === "insert-clock" ? "todo" : "";

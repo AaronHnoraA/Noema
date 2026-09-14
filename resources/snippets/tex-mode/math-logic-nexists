@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [nexists] — Does not exist
-# key: nexists
-# group: Math · Logic
-# --
-\nexists$0

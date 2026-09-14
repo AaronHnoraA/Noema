@@ -12,7 +12,7 @@ import { highlightCodeForEditor, onCodeHighlightReady } from "../../../../code-h
 import { hasViewportDecorationRefresh, scheduleViewportDecorationRefresh } from "../../../viewport-refresh.ts";
 import { parseNoteCodeLine } from "../../../../../shared/note-code.mjs";
 import { sourceEditorName } from "../../../../../aaronnote/host-mode.ts";
-import { desktopPlatformLabels } from "../../../../../shared/desktop-shell.mjs";
+import { noemaPlatformLabels } from "../../../../platform-compat.ts";
 import { isPointerSelecting, updateHasPointerSelectionEffect } from "../selection.ts";
 import { isCoalescedVisualTyping } from "../typing-burst.ts";
 import { rememberPersistentVisualPluginState, restorePersistentVisualPluginState } from "../visual-mode.ts";
@@ -179,7 +179,7 @@ class NoteCodeWidget extends MeasuredWidget {
     openBtn.type = "button";
     openBtn.className = "cm-note-code-open-btn";
     const sourceEditor = sourceEditorName();
-    const primaryModifier = desktopPlatformLabels(window.noemaDesktop?.platform || (/Mac/.test(navigator.platform) ? "darwin" : "")).primaryModifier;
+    const primaryModifier = noemaPlatformLabels().primaryModifier;
     openBtn.textContent = `Open in ${sourceEditor}`;
     openBtn.title = `${primaryModifier}-click to open in ${sourceEditor}`;
     openBtn.setAttribute("aria-label", `${primaryModifier}-click to open in ${sourceEditor}`);

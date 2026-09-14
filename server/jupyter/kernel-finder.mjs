@@ -73,7 +73,7 @@ export async function findKernelSpecs({
   const seen = new Map();
   const discoveredKernelDirs = searchDirs.map((dir) => path.join(dir, "kernels"));
   // Noema's templates are executable source assets, not generated user
-  // state. Desktop uses them as the stable python/bash/Sage definitions so a
+  // state. The local Emacs host uses them as stable python/bash/Sage definitions so a
   // stale kernelspec installed through the historical Emacs compatibility
   // link cannot become a runtime dependency. Non-bundled user kernels remain
   // discoverable after these names have been claimed.

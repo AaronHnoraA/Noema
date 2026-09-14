@@ -18,10 +18,10 @@ package model
 
 // Noema fork: the auto-updater (model/updater.go, updater_release.go,
 // update_channel.go, /api/system/checkUpdate, /api/system/setUpdateChannel)
-// is removed. Tauri has its own update mechanism.
+// is removed. Noema has no self-updating application shell.
 //
 // skipNewVerInstallPkg/getNewVerInstallPkgPath gate the "hand a downloaded
-// installer path to the desktop host on exit" branches in Close()
+// installer path to a retired native host on exit" branches in Close()
 // (model/conf.go); stubbed so no installer is ever reported ready and those
 // branches stay inert, without editing Close()'s exit-code sequencing.
 func skipNewVerInstallPkg() bool      { return true }

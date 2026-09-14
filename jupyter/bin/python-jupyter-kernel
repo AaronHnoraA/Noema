@@ -6,7 +6,7 @@ JUPYTER_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 RUNTIME_ENV="${AARONNOTE_PYTHON_RUNTIME_ENV:-${AARONNOTE_RUNTIME_ENV:-}}"
 
 if [[ -n "$RUNTIME_ENV" && -r "$RUNTIME_ENV" ]]; then
-  # Optional host-provided metadata; Noema.app never discovers this through
+  # Optional host-provided metadata; the Node host never discovers this through
   # an Emacs repository path.
   # shellcheck disable=SC1090
   source "$RUNTIME_ENV"

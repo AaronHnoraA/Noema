@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Ceiling
-# key: mceil
-# group: Math symbols
-# --
-\left\lceil ${1:x} \right\rceil$0

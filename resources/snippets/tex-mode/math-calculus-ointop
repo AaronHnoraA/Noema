@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [ointop] — Contour integral operator
-# key: ointop
-# group: Math · Calculus
-# --
-\oint$0

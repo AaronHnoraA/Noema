@@ -245,12 +245,12 @@ func resolveWorkingDir() string {
 		}
 		exeDir := filepath.Dir(exePath)
 		candidates := []string{
-			filepath.Join(exeDir, ".."),              // resources/kernel/ → resources/ (production)
-			filepath.Join(exeDir, "..", "app"),       // kernel/cli/ → kernel/ → app/
-			filepath.Join(exeDir, "app"),             // kernel/ → app/
-			filepath.Join(exeDir, "..", "..", "app"), // kernel/cli/cmd/... → .../app/
+			filepath.Join(exeDir, ".."),                           // resources/kernel/ → resources/ (production)
+			filepath.Join(exeDir, "..", "kernel-resources"),       // kernel/cli/ → kernel/ → kernel-resources/
+			filepath.Join(exeDir, "kernel-resources"),             // kernel/ → kernel-resources/
+			filepath.Join(exeDir, "..", "..", "kernel-resources"), // kernel/cli/cmd/... → .../kernel-resources/
 		}
-		// 添加 macOS app bundle 路径
+		// 保留兼容的 macOS bundle resources 探测路径。
 		if runtime.GOOS == "darwin" {
 			candidates = append(candidates,
 				filepath.Join(exeDir, "..", "..", "..", "..", "Resources"),

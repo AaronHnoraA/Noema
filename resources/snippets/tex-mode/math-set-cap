@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [cap] — Intersection
-# key: cap
-# group: Math · Sets
-# --
-\cap$0

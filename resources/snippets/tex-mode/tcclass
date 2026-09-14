@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Complexity class
-# key: tccls
-# group: TCS symbols
-# --
-\mathsf{${1:P}}$0

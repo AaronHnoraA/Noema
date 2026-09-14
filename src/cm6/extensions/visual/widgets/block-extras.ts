@@ -544,6 +544,8 @@ type TikzAssetResult = {
   ok?: boolean;
   markdownPath?: string;
   message?: string;
+  /** Picture size in `em` of body text — see `shared/tikz-source.mjs`. */
+  intrinsic?: { widthEm?: number; heightEm?: number };
 };
 
 type CeilKernelSpec = { name: string; displayName?: string; language?: string; attachable?: boolean };
@@ -637,10 +639,24 @@ function mergeCeilOutputFromServer(saved: CeilExecutionResult | null, current: C
   return mergeCeilOutputUi(saved, current);
 }
 
-const clearTikzDirtyEffect = StateEffect.define<string>();
-const tikzAssetCache = new Map<string, Promise<TikzAssetResult>>();
-const tikzRenderedSourceByAsset = new Map<string, string>();
-const tikzPendingSourceByAsset = new Map<string, string>();
+type TikzPendingRender = { source: string; listeners: Set<(result: TikzAssetResult) => void>; timer: number };
+
+// One compile per pause, not per keystroke: a TikZ body is re-rendered only
+// after edits stop for this long.
+const TIKZ_RENDER_DEBOUNCE_MS = 420;
+
+// Settled compilations, keyed by note+id+source: the answer for one exact TeX
+// body. A widget rebuilt by scrolling or by an unrelated keystroke repaints from
+// here synchronously instead of round-tripping to the render service.
+const tikzAssetResults = new Map<string, TikzAssetResult>();
+// The last image that successfully compiled for a block, keyed by note+id. Shown
+// (dimmed) while a newer body compiles, so editing a diagram never blanks it.
+const tikzLastRendered = new Map<string, TikzAssetResult>();
+const tikzPendingRenders = new Map<string, TikzPendingRender>();
+// Blocks this session has already asked to compile. The first request for a
+// block is immediate — a note full of unchanged diagrams must not sit on a
+// placeholder waiting out a debounce the server would answer from cache.
+const tikzRequestedBlocks = new Set<string>();
 const DEFAULT_CEIL_KERNEL = "python3";
 const DEFAULT_CEIL_SESSION = "default";
 const DEFAULT_CEIL_LANGUAGE = "python";
@@ -702,13 +718,8 @@ function tikzTimestamp(date = new Date()): string {
   ].join("");
 }
 
-function nextTikzTimestamp(previous: string): string {
-  const next = tikzTimestamp();
-  return next === previous ? tikzTimestamp(new Date(Date.now() + 1000)) : next;
-}
-
-function tikzGeneratedId(timestamp: string): string {
-  return `tikz-${timestamp}`;
+function tikzGeneratedId(): string {
+  return `tikz-${tikzTimestamp()}`;
 }
 
 function splitTikzTitle(title: string): { head: string; attrsRaw: string; layout: ImageLayoutAttrs } {
@@ -724,18 +735,23 @@ function splitTikzTitle(title: string): { head: string; attrsRaw: string; layout
   };
 }
 
-function completeTikzTitle(title: string): { id: string; timestamp: string; attrsRaw: string; layout: ImageLayoutAttrs; changed: boolean } {
+/**
+ * Read `#+begin tikz <id> [{attrs}]`.
+ *
+ * Freshness comes from hashing the block body, not from a version stamp in the
+ * title, so the id is the only thing the open line has to carry. Notes written
+ * against the older `<id> <timestamp>` form still parse — the stamp is ignored
+ * rather than rewritten, which keeps opening an old note a read-only act.
+ */
+function completeTikzTitle(title: string): { id: string; attrsRaw: string; layout: ImageLayoutAttrs; changed: boolean } {
   const parsed = splitTikzTitle(title);
-  const parts = parsed.head.split(/\s+/).filter(Boolean);
-  if (parts.length >= 2) return { id: parts[0]!, timestamp: parts[1]!, attrsRaw: parsed.attrsRaw, layout: parsed.layout, changed: false };
-  const timestamp = tikzTimestamp();
-  const id = parts[0] || tikzGeneratedId(timestamp);
-  return { id, timestamp, attrsRaw: parsed.attrsRaw, layout: parsed.layout, changed: true };
-}
-
-function tikzDirtyKeyFromTitle(title: string): string {
-  const parsed = splitTikzTitle(title);
-  return parsed.head.split(/\s+/, 1)[0] || "";
+  const id = parsed.head.split(/\s+/).filter(Boolean)[0] ?? "";
+  return {
+    id: id || tikzGeneratedId(),
+    attrsRaw: parsed.attrsRaw,
+    layout: parsed.layout,
+    changed: !id,
+  };
 }
 
 function currentNoteFile(): string {
@@ -1016,48 +1032,103 @@ function resolveAssetSrc(src: string): string {
   return window.AaronnoteResolveAssetUrl?.(src) ?? src;
 }
 
-function ensureTikzAsset(file: string, id: string, timestamp: string, source: string): Promise<TikzAssetResult> {
-  const key = `${file}\n${id}\n${timestamp}\n${source}`;
-  let existing = tikzAssetCache.get(key);
-  if (!existing) {
-    existing = api.assets.renderTikz({ file, id, timestamp, source })
-      .catch((err: unknown) => ({
-        ok: false,
-        message: err instanceof Error ? err.message : String(err),
-      }));
-    tikzAssetCache.set(key, existing);
-    if (tikzAssetCache.size > 128) {
-      const oldest = tikzAssetCache.keys().next().value as string | undefined;
-      if (oldest) tikzAssetCache.delete(oldest);
-    }
-  }
-  return existing;
-}
-
 function tikzSourceCacheKey(file: string, id: string): string {
   return `${file}\n${id}`;
 }
 
-function scheduleTikzOpenLineUpdate(
-  view: EditorView,
-  from: number,
-  makeTitle: (info: OrgEnvOpenLineInfo) => string | null,
-  effects: StateEffect<unknown>[] = [],
+function tikzResultCacheKey(file: string, id: string, source: string): string {
+  return `${file}\n${id}\n${source}`;
+}
+
+/** Already-settled answer for this exact body, when there is one. */
+function tikzAssetResult(file: string, id: string, source: string): TikzAssetResult | undefined {
+  return tikzAssetResults.get(tikzResultCacheKey(file, id, source));
+}
+
+function rememberTikzRequestedBlock(key: string): void {
+  if (tikzRequestedBlocks.has(key)) tikzRequestedBlocks.delete(key);
+  tikzRequestedBlocks.add(key);
+  if (tikzRequestedBlocks.size <= 256) return;
+  const oldest = tikzRequestedBlocks.values().next();
+  if (!oldest.done) tikzRequestedBlocks.delete(oldest.value);
+}
+
+/**
+ * Compile one block, coalescing edits.
+ *
+ * Every keystroke inside a TikZ body rebuilds the widget, and pdflatex costs
+ * roughly half a second, so an un-debounced call per rebuild would queue a
+ * compile per character. One in-flight render per block, always for the newest
+ * body, keeps the cost proportional to pauses rather than to typing.
+ */
+function requestTikzAsset(
+  file: string,
+  id: string,
+  source: string,
+  onSettled: (result: TikzAssetResult) => void,
 ): void {
+  const blockKey = tikzSourceCacheKey(file, id);
+  const delay = tikzRequestedBlocks.has(blockKey) ? TIKZ_RENDER_DEBOUNCE_MS : 0;
+  rememberTikzRequestedBlock(blockKey);
+  const pending = tikzPendingRenders.get(blockKey);
+  if (pending) {
+    pending.source = source;
+    pending.listeners.add(onSettled);
+    if (pending.timer !== 0) {
+      window.clearTimeout(pending.timer);
+      pending.timer = window.setTimeout(() => runTikzRender(blockKey, file, id), delay);
+    }
+    return;
+  }
+  const next: TikzPendingRender = { source, listeners: new Set([onSettled]), timer: 0 };
+  tikzPendingRenders.set(blockKey, next);
+  next.timer = window.setTimeout(() => runTikzRender(blockKey, file, id), delay);
+}
+
+function runTikzRender(blockKey: string, file: string, id: string): void {
+  const pending = tikzPendingRenders.get(blockKey);
+  if (!pending) return;
+  pending.timer = 0;
+  const source = pending.source;
+  void api.assets.renderTikz({ file, id, source })
+    .catch((err: unknown): TikzAssetResult => ({
+      ok: false,
+      message: err instanceof Error ? err.message : String(err),
+    }))
+    .then((result: TikzAssetResult) => {
+      setBoundedMap(tikzAssetResults, tikzResultCacheKey(file, id, source), result);
+      if (result.ok && result.markdownPath) setBoundedMap(tikzLastRendered, blockKey, result);
+      const current = tikzPendingRenders.get(blockKey);
+      if (!current) return;
+      // A newer body arrived while this compile was in flight: keep the queue
+      // alive for it rather than settling listeners on a stale image.
+      if (current.source !== source) {
+        runTikzRender(blockKey, file, id);
+        return;
+      }
+      tikzPendingRenders.delete(blockKey);
+      for (const listener of current.listeners) listener(result);
+    });
+}
+
+/**
+ * Give a block an id, once.
+ *
+ * This is the only edit the TikZ widget ever makes to the document: a block
+ * needs a stable identity to name its compiled asset, and nothing else about
+ * rendering is stored in the source.
+ */
+function scheduleTikzIdAssignment(view: EditorView, from: number, id: string): void {
   window.requestAnimationFrame(() => {
     if (!view.dom.isConnected) return;
     const line = view.state.doc.lineAt(from);
     const info = parseOrgEnvOpenLine(line.text);
     if (!info || info.kind !== "tikz") return;
-    const title = makeTitle(info);
-    if (!title) return;
+    const current = completeTikzTitle(info.title);
+    if (!current.changed) return;
+    const title = current.attrsRaw ? `${id} ${current.attrsRaw}` : id;
     view.dispatch({
-      changes: {
-        from: line.from,
-        to: line.to,
-        insert: `#+ begin tikz ${title}`,
-      },
-      effects,
+      changes: { from: line.from, to: line.to, insert: `#+ begin tikz ${title}` },
     });
   });
 }
@@ -2905,25 +2976,27 @@ class TikzWidget extends MeasuredWidget {
   body: string;
   from: number;
   to: number;
-  dirty: boolean;
 
-  constructor(title: string, body: string, from: number, to: number, dirty: boolean) {
+  constructor(title: string, body: string, from: number, to: number) {
     super();
     this.title = title;
     this.body = body;
     this.from = from;
     this.to = to;
-    this.dirty = dirty;
   }
 
-  protected measureKey(): string { return "tikz:" + this.title; }
+  // The old timestamp title happened to invalidate the height estimate after a
+  // render. Content hashes now own freshness, so the measured-height key must
+  // include the body explicitly or a radically taller edited diagram inherits
+  // the previous SVG's stale CM height.
+  protected measureKey(): string { return "tikz:" + shortHash(`${this.title}\n${this.body}`); }
 
   protected measureGroupKey(): string { return "tikz"; }
 
   protected estimatedHeightFallback(): number { return 260; }
 
   eq(other: TikzWidget): boolean {
-    return this.title === other.title && this.body === other.body && this.from === other.from && this.to === other.to && this.dirty === other.dirty;
+    return this.title === other.title && this.body === other.body && this.from === other.from && this.to === other.to;
   }
 
   toDOM(view: EditorView): HTMLElement {
@@ -2932,65 +3005,48 @@ class TikzWidget extends MeasuredWidget {
     setSourceRange(figure, this.from, this.to);
     figure.dataset.cmOpenSource = "true";
 
-    const card = document.createElement("div");
-    card.className = "cm-image-render cm-visual-file-card cm-visual-file-card-html cm-tikz-env-card";
-    figure.append(card);
-
     const meta = completeTikzTitle(this.title);
     applyImageLayout(figure, meta.layout);
     const file = currentNoteFile();
+
     if (meta.changed) {
-      card.textContent = "Preparing TikZ...";
-      scheduleTikzOpenLineUpdate(view, this.from, (info) => {
-        const current = completeTikzTitle(info.title);
-        return current.changed ? `${current.id} ${current.timestamp}${current.attrsRaw ? ` ${current.attrsRaw}` : ""}` : null;
-      });
+      figure.append(tikzPlaceholder("Preparing TikZ…"));
+      scheduleTikzIdAssignment(view, this.from, meta.id);
       stopInteractiveWidgetEvents(figure);
       return this.registerMeasured(figure, view);
     }
     if (!file) {
-      card.textContent = "TikZ render needs a saved note file";
+      figure.append(tikzPlaceholder("TikZ render needs a saved note file"));
       stopInteractiveWidgetEvents(figure);
       return this.registerMeasured(figure, view);
     }
 
-    const sourceCacheKey = tikzSourceCacheKey(file, meta.id);
-    const previousRenderedSource = tikzRenderedSourceByAsset.get(sourceCacheKey);
-    const pendingSource = tikzPendingSourceByAsset.get(sourceCacheKey);
-    const bodyChanged = this.dirty || (previousRenderedSource !== undefined && previousRenderedSource !== this.body);
-    if (bodyChanged && pendingSource !== this.body) {
-      card.textContent = "Updating TikZ...";
-      setBoundedMap(tikzPendingSourceByAsset, sourceCacheKey, this.body);
-      scheduleTikzOpenLineUpdate(view, this.from, (info) => {
-        const current = completeTikzTitle(info.title);
-        if (current.changed) return `${current.id} ${current.timestamp}${current.attrsRaw ? ` ${current.attrsRaw}` : ""}`;
-        const timestamp = nextTikzTimestamp(current.timestamp);
-        return `${current.id} ${timestamp}${current.attrsRaw ? ` ${current.attrsRaw}` : ""}`;
-      }, [clearTikzDirtyEffect.of(meta.id)]);
+    const settled = tikzAssetResult(file, meta.id, this.body);
+    if (settled) {
+      figure.append(settled.ok && settled.markdownPath
+        ? tikzImage(settled, meta.id, view, figure)
+        : tikzPlaceholder(settled.message || "TikZ render failed", true));
       stopInteractiveWidgetEvents(figure);
       return this.registerMeasured(figure, view);
     }
 
-    card.textContent = "Rendering TikZ...";
-    void ensureTikzAsset(file, meta.id, meta.timestamp, this.body).then((result) => {
+    // Nothing compiled for *this* body yet. Showing the block's previous image
+    // (dimmed) rather than a spinner keeps a diagram on screen while its source
+    // is being edited, which is what makes live TikZ editing usable at all.
+    const previous = tikzLastRendered.get(tikzSourceCacheKey(file, meta.id));
+    if (previous?.markdownPath) {
+      const stale = tikzImage(previous, meta.id, view, figure);
+      stale.classList.add("is-tikz-stale");
+      figure.append(stale);
+    } else {
+      figure.append(tikzPlaceholder("Rendering TikZ…"));
+    }
+
+    requestTikzAsset(file, meta.id, this.body, (result) => {
       if (!figure.isConnected) return;
-      if (!result.ok || !result.markdownPath) {
-        tikzPendingSourceByAsset.delete(sourceCacheKey);
-        card.textContent = result.message || "TikZ render failed";
-        view.requestMeasure();
-        return;
-      }
-      setBoundedMap(tikzRenderedSourceByAsset, sourceCacheKey, this.body);
-      tikzPendingSourceByAsset.delete(sourceCacheKey);
-      const img = document.createElement("img");
-      img.className = "cm-image-render cm-tikz-env-image";
-      img.src = resolveAssetSrc(result.markdownPath);
-      img.alt = `TikZ ${meta.id}`;
-      img.loading = "lazy";
-      img.decoding = "async";
-      img.addEventListener("load", () => { if (figure.isConnected) view.requestMeasure(); });
-      img.addEventListener("error", () => { if (figure.isConnected) view.requestMeasure(); });
-      figure.replaceChildren(img);
+      figure.replaceChildren(result.ok && result.markdownPath
+        ? tikzImage(result, meta.id, view, figure)
+        : tikzPlaceholder(result.message || "TikZ render failed", true));
       view.requestMeasure();
     });
 
@@ -2999,6 +3055,40 @@ class TikzWidget extends MeasuredWidget {
   }
 
   ignoreEvent(): boolean { return false; }
+}
+
+function tikzPlaceholder(text: string, failed = false): HTMLElement {
+  const card = document.createElement("div");
+  card.className = "cm-image-render cm-visual-file-card cm-visual-file-card-html cm-tikz-env-card";
+  if (failed) card.classList.add("is-tikz-error");
+  card.textContent = text;
+  return card;
+}
+
+function tikzImage(
+  result: TikzAssetResult,
+  id: string,
+  view: EditorView,
+  figure: HTMLElement,
+): HTMLImageElement {
+  const img = document.createElement("img");
+  img.className = "cm-image-render cm-tikz-env-image";
+  img.src = resolveAssetSrc(result.markdownPath || "");
+  img.alt = `TikZ ${id}`;
+  img.loading = "lazy";
+  img.decoding = "async";
+  // The compiled picture's own TeX dimensions, in `em` of body text: a figure
+  // then holds the same proportion to the prose that it holds in a PDF, instead
+  // of being scaled to an arbitrary pixel box.
+  const width = Number(result.intrinsic?.widthEm);
+  const height = Number(result.intrinsic?.heightEm);
+  if (Number.isFinite(width) && width > 0) {
+    img.style.setProperty("--aaronnote-tikz-natural-width", `${width}em`);
+    if (Number.isFinite(height) && height > 0) img.style.aspectRatio = `${width} / ${height}`;
+  }
+  img.addEventListener("load", () => { if (figure.isConnected) view.requestMeasure(); });
+  img.addEventListener("error", () => { if (figure.isConnected) view.requestMeasure(); });
+  return img;
 }
 
 function renderMetaWidget(
@@ -3546,31 +3636,6 @@ const orgEnvBlocksField = StateField.define<readonly OrgEnvBlock[]>({
   },
 });
 
-const createDirtyTikzBlocks = (): ReadonlySet<string> => new Set<string>();
-
-const dirtyTikzBlocksField = StateField.define<ReadonlySet<string>>({
-  create: createDirtyTikzBlocks,
-  update(value, tr) {
-    let next: Set<string> | null = null;
-    for (const effect of tr.effects) {
-      if (!effect.is(clearTikzDirtyEffect)) continue;
-      if (!next) next = new Set(value);
-      next.delete(effect.value);
-    }
-    if (!tr.docChanged) return next ?? value;
-    const blocks = tr.startState.field(orgEnvBlocksField, false) ?? [];
-    for (const block of blocks) {
-      if (block.kind !== "tikz") continue;
-      const key = tikzDirtyKeyFromTitle(block.title);
-      if (!key) continue;
-      if (!changesTouchRange(tr.changes, block.bodyFrom, block.bodyTo)) continue;
-      if (!next) next = new Set(value);
-      next.add(key);
-    }
-    return next ?? value;
-  },
-});
-
 function orgEnvBlocksFromState(state: EditorState): readonly OrgEnvBlock[] {
   return state.field(orgEnvBlocksField, false) ?? scanOrgEnvBlocks(state.doc.toString(), 0, 0, blockExtraExcludedRanges(state));
 }
@@ -3983,11 +4048,9 @@ function addOrgEnvBlockExtraDecos(
     return;
   }
   if (block.kind === "tikz") {
-    const dirtyTikzBlocks = state.field(dirtyTikzBlocksField, false);
-    const dirtyKey = tikzDirtyKeyFromTitle(block.title);
     decos.push(
       Decoration.replace({
-        widget: new TikzWidget(block.title, block.body, block.from, block.to, Boolean(dirtyKey && dirtyTikzBlocks?.has(dirtyKey))),
+        widget: new TikzWidget(block.title, block.body, block.from, block.to),
         block: true,
       }).range(block.from, block.to),
     );
@@ -4477,7 +4540,6 @@ export const blockExtrasExtension: Extension = [
   persistentVisualStateField(blockExtraRangesField, createBlockExtraRanges),
   persistentVisualStateField(tocFoldField, createTocFoldState),
   persistentVisualStateField(orgEnvBlocksField, createOrgEnvBlocks),
-  persistentVisualStateField(dirtyTikzBlocksField, createDirtyTikzBlocks),
   persistentVisualStateField(blockExtrasDecorations, buildBlockExtraDecos),
   persistentVisualStateField(orgEnvBodyLineDecorations, buildOrgEnvBodyLineDecos),
   orgEnvRailExtension,

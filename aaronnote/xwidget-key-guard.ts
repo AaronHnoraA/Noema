@@ -476,7 +476,7 @@ export function handleXwidgetMathBeforeInput(event: InputEvent, context: Xwidget
     ?? specialKeyFromInputEvent(event)
     // xwidget sometimes omits Space keydown entirely and emits only this
     // beforeinput. Route it through Noema's three-state math Space adapter so
-    // Emacs and Noema.app cannot drift into different serialization.
+    // Emacs browser events and forwarded host keys cannot drift in serialization.
     ?? (event.inputType === "insertText" && event.data === " " ? " " : null)
     // As with beforeinput-only Space, legacy xwidget may omit the physical
     // keydown. Route TeX's command introducer explicitly so it cannot become a
@@ -639,7 +639,7 @@ export function emacsKeyFromEvent(event: KeyboardEvent): string | null {
  * Scope: Option(H-) host chords, C-x/C-c prefixes, C-g, and selected Cmd(M-)
  * chords.  Ordinary Ctrl keys stay in the shared renderer: CM6/Vim owns text
  * movement and deletion, Ctrl-Z/R/Y history, Ctrl-[ Escape, and Ctrl-Tab/0
- * visual zoom in both Noema.app and Emacs. Sending those to the inert xwidget
+ * visual zoom in both the CM6 page and Emacs. Sending those to the inert xwidget
  * placeholder would make the same editor behave differently by host.
  */
 export function shouldForwardToEmacs(event: KeyboardEvent): boolean {

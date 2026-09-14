@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Set builder
-# key: mset
-# group: Math symbols
-# --
-\left\{${1:x}\mid ${2:condition}\right\}$0

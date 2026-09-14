@@ -3,7 +3,7 @@
  *
  * The upstream b3 classes own interaction chrome and consume the complete
  * --b3-* theme palette.  Host/page styles continue to own geometry so a
- * floating TOC, a desktop dock, and a full-screen LiveTeX dialog keep their
+ * floating TOC, a knowledge dock, and a full-screen LiveTeX dialog keep their
  * intentionally different layouts.
  */
 

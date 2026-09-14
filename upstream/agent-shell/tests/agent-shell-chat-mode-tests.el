@@ -1,0 +1,268 @@
+;;; agent-shell-chat-mode-tests.el --- Tests for agent-shell-chat-mode -*- lexical-binding: t; -*-
+
+(require 'ert)
+(require 'agent-shell-chat-mode)
+
+;;; Code:
+
+;; Declared special so tests can dynamically bind it (the prompt bar need
+;; not be loaded); chat-mode reads it with `bound-and-true-p'.
+(defvar agent-shell-prompt-bar-mode)
+
+;; A self-contained `:extend' background face, standing in for a code
+;; block panel (whose real face lives in `agent-shell-markdown', not
+;; loaded here).  `:extend' is what chat-mode keys off, not the color.
+(defface agent-shell-chat-mode-tests--panel
+  '((t :extend t :background "gray20"))
+  "An `:extend' background face for tests."
+  :group 'agent-shell)
+
+(defface agent-shell-chat-mode-tests--plain
+  '((t :extend nil))
+  "A face that does not extend, for tests."
+  :group 'agent-shell)
+
+(defun agent-shell-chat-mode-tests--me-overlays ()
+  "Return the `Me' label overlays in the current buffer, ordered by position."
+  (sort (seq-filter (lambda (overlay)
+                      (eq (overlay-get overlay 'category) 'agent-shell-chat-me))
+                    (overlays-in (point-min) (point-max)))
+        (lambda (a b) (< (overlay-start a) (overlay-start b)))))
+
+(defun agent-shell-chat-mode-tests--agent-overlays ()
+  "Return the agent label overlays in the current buffer."
+  (seq-filter (lambda (overlay)
+                (eq (overlay-get overlay 'category) 'agent-shell-chat-agent))
+              (overlays-in (point-min) (point-max))))
+
+(defun agent-shell-chat-mode-tests--prompt (text)
+  "Insert a shell prompt run displaying TEXT, as shell-maker fontifies it."
+  (insert (propertize text 'font-lock-face
+                      '(comint-highlight-prompt comint-highlight-prompt))))
+
+(defun agent-shell-chat-mode-tests--marker ()
+  "Insert the invisible `<shell-maker-end-of-prompt>' marker.
+Carries `shell-maker--marker', as shell-maker's real marker does."
+  (insert (propertize "<shell-maker-end-of-prompt>"
+                      'invisible t 'shell-maker--marker t)))
+
+(defmacro agent-shell-chat-mode-tests--with-shell (&rest body)
+  "Run BODY in a labeled shell buffer named \"Claude\"."
+  (declare (indent 0))
+  `(with-temp-buffer
+     (setq-local agent-shell--state '((:agent-config . ((:mode-line-name . "Claude"))))
+                 agent-shell-chat--labeled t)
+     ,@body))
+
+(ert-deftest agent-shell-chat-prompt-face-p-test ()
+  "Prompt runs are recognized whether the face is a symbol or a list."
+  (should (agent-shell-chat--prompt-face-p 'comint-highlight-prompt))
+  (should (agent-shell-chat--prompt-face-p '(comint-highlight-prompt comint-highlight-prompt)))
+  (should-not (agent-shell-chat--prompt-face-p 'default))
+  (should-not (agent-shell-chat--prompt-face-p nil)))
+
+(ert-deftest agent-shell-chat-agent-name-test ()
+  "The agent label uses `:mode-line-name', falling back to \"Agent\"."
+  (agent-shell-chat-mode-tests--with-shell
+    (should (equal "Claude" (agent-shell-chat--agent-name))))
+  (with-temp-buffer
+    (setq-local agent-shell--state nil)
+    (should (equal "Agent" (agent-shell-chat--agent-name)))))
+
+(ert-deftest agent-shell-chat-labels-submitted-turn-test ()
+  "A submitted turn boxes the prompt as `Me' and the response as the agent."
+  (agent-shell-chat-mode-tests--with-shell
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (insert "hello\n")
+    (agent-shell-chat-mode-tests--marker)
+    (insert "hi there\n")
+    (agent-shell-chat--relabel)
+    (let ((me (agent-shell-chat-mode-tests--me-overlays))
+          (agent (agent-shell-chat-mode-tests--agent-overlays)))
+      (should (= 1 (length me)))
+      (should (string-match-p "Me" (overlay-get (car me) 'display)))
+      (should (= 1 (length agent)))
+      (should (string-match-p "Claude" (overlay-get (car agent) 'before-string))))))
+
+(ert-deftest agent-shell-chat-live-prompt-hidden-with-bar-test ()
+  "The empty live prompt shows `Me', or is hidden when the bar is on."
+  (agent-shell-chat-mode-tests--with-shell
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (let ((agent-shell-prompt-bar-mode nil))
+      (agent-shell-chat--relabel)
+      (should (string-match-p
+               "Me" (overlay-get (car (agent-shell-chat-mode-tests--me-overlays)) 'display))))
+    (let ((agent-shell-prompt-bar-mode t))
+      (agent-shell-chat--relabel)
+      (should (equal
+               "" (overlay-get (car (agent-shell-chat-mode-tests--me-overlays)) 'display))))))
+
+(ert-deftest agent-shell-chat-relabel-idempotent-test ()
+  "Relabeling twice does not duplicate overlays."
+  (agent-shell-chat-mode-tests--with-shell
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (insert "hello\n")
+    (agent-shell-chat-mode-tests--marker)
+    (insert "hi\n")
+    (agent-shell-chat--relabel)
+    (agent-shell-chat--relabel)
+    (should (= 1 (length (agent-shell-chat-mode-tests--me-overlays))))
+    (should (= 1 (length (agent-shell-chat-mode-tests--agent-overlays))))))
+
+(ert-deftest agent-shell-chat-absorbs-leading-blank-lines-test ()
+  "A submitted prompt's overlay swallows the input's leading blank lines."
+  (agent-shell-chat-mode-tests--with-shell
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (let ((input-start (point)))
+      (insert "\n\nPadded\n")
+      (agent-shell-chat-mode-tests--marker)
+      (insert "reply\n")
+      (agent-shell-chat--relabel)
+      (should (= (overlay-end (car (agent-shell-chat-mode-tests--me-overlays)))
+                 (save-excursion
+                   (goto-char input-start)
+                   (skip-chars-forward " \t\n")
+                   (point)))))))
+
+(ert-deftest agent-shell-chat-live-prompt-shows-marker-test ()
+  "The live prompt shows the `❯' marker, faced `default' (not the prompt face)."
+  (agent-shell-chat-mode-tests--with-shell
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (let ((agent-shell-prompt-bar-mode nil))
+      (agent-shell-chat--relabel)
+      (let ((display (overlay-get (car (agent-shell-chat-mode-tests--me-overlays)) 'display)))
+        (should (string-match-p "❯" display))
+        ;; The marker must not inherit the covered prompt face.
+        (should (eq 'default
+                    (get-text-property (string-match "❯" display) 'face display)))))))
+
+(ert-deftest agent-shell-chat-live-prompt-keeps-marker-while-typing-test ()
+  "The live prompt keeps the `❯' marker after text is typed into it.
+The marker is keyed off being the last (live) prompt, not off empty input,
+so it does not vanish mid-type when a relabel runs."
+  (agent-shell-chat-mode-tests--with-shell
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (insert "half-typed input")
+    (let ((agent-shell-prompt-bar-mode nil))
+      (agent-shell-chat--relabel))
+    (let ((me (car (agent-shell-chat-mode-tests--me-overlays))))
+      (should (string-match-p "❯" (overlay-get me 'display)))
+      ;; No indent overlay claims the live prompt's in-progress input.
+      (should-not (seq-filter (lambda (overlay)
+                                (eq (overlay-get overlay 'category)
+                                    'agent-shell-chat-me-input))
+                              (overlays-in (point-min) (point-max)))))))
+
+(ert-deftest agent-shell-chat-submitted-input-indented-test ()
+  "A submitted turn's input carries the response body indent, the live one none."
+  (agent-shell-chat-mode-tests--with-shell
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (insert "hello\n")
+    (agent-shell-chat-mode-tests--marker)
+    (insert "hi there\n")
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (agent-shell-chat--relabel)
+    (let ((input (seq-filter (lambda (overlay)
+                               (eq (overlay-get overlay 'category)
+                                   'agent-shell-chat-me-input))
+                             (overlays-in (point-min) (point-max)))))
+      ;; Only the submitted turn gets an indent overlay; the live prompt does not.
+      (should (= 1 (length input)))
+      (should (equal agent-shell-chat--body-indent
+                     (overlay-get (car input) 'line-prefix))))))
+
+(ert-deftest agent-shell-chat-empty-submission-shows-bare-me-test ()
+  "An empty submission (a prompt with another below it) shows a bare `Me'.
+It claims no input and gets no indent overlay; only the live prompt shows `❯'."
+  (agent-shell-chat-mode-tests--with-shell
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (insert "\n")
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (let ((agent-shell-prompt-bar-mode nil))
+      (agent-shell-chat--relabel))
+    (let ((me (agent-shell-chat-mode-tests--me-overlays)))
+      (should (= 2 (length me)))
+      ;; Stale empty submission: `Me', no `❯'.
+      (should (string-match-p "Me" (overlay-get (nth 0 me) 'display)))
+      (should-not (string-match-p "❯" (overlay-get (nth 0 me) 'display)))
+      ;; Live prompt: `Me' and `❯'.
+      (should (string-match-p "❯" (overlay-get (nth 1 me) 'display)))
+      ;; Neither empty prompt claims input.
+      (should-not (seq-filter (lambda (overlay)
+                                (eq (overlay-get overlay 'category)
+                                    'agent-shell-chat-me-input))
+                              (overlays-in (point-min) (point-max)))))))
+
+(ert-deftest agent-shell-chat-stacked-empty-me-single-blank-test ()
+  "Consecutive empty submissions are separated by exactly one blank line."
+  (agent-shell-chat-mode-tests--with-shell
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (insert "\n")
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (insert "\n")
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (agent-shell-chat--relabel)
+    (let ((me (agent-shell-chat-mode-tests--me-overlays)))
+      ;; The stacked labels drop their leading pad (the previous label's
+      ;; trailing pad already gives the one blank line), so they do not begin
+      ;; with a newline.
+      (should (string-prefix-p " Me" (overlay-get (nth 1 me) 'display)))
+      (should (string-prefix-p " Me" (overlay-get (nth 2 me) 'display))))))
+
+(ert-deftest agent-shell-chat-empty-response-no-overlap-test ()
+  "An empty agent response keeps the agent and `Me' overlays from overlapping.
+The `Me' label drops its leading pad so one blank line separates them."
+  (agent-shell-chat-mode-tests--with-shell
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (insert "hello\n")
+    (agent-shell-chat-mode-tests--marker)
+    (insert "\n\n")
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (agent-shell-chat--relabel)
+    (let* ((agent (car (agent-shell-chat-mode-tests--agent-overlays)))
+           (me (car (last (agent-shell-chat-mode-tests--me-overlays)))))
+      ;; The agent overlay ends where the live `Me' overlay begins: no overlap.
+      (should (<= (overlay-end agent) (overlay-start me)))
+      ;; The `Me' label follows the marker directly, so no leading blank line.
+      (should (string-prefix-p " Me" (overlay-get me 'display))))))
+
+(ert-deftest agent-shell-chat-code-block-padding-preserved-test ()
+  "A prompt after a code block panel keeps the panel's tinted padding.
+The overlay starts past the `:extend' background and drops its `line-prefix'."
+  (agent-shell-chat-mode-tests--with-shell
+    (insert (propertize "code line" 'face 'agent-shell-chat-mode-tests--panel))
+    (let ((panel-end (point)))
+      ;; Tinted padding newlines (part of the panel).
+      (insert (propertize "\n\n" 'face 'agent-shell-chat-mode-tests--panel))
+      (insert "\n")
+      (agent-shell-chat-mode-tests--prompt "Claude> ")
+      (agent-shell-chat--relabel)
+      (let ((me (car (agent-shell-chat-mode-tests--me-overlays))))
+        ;; The overlay does not swallow the panel's tinted padding.
+        (should (>= (overlay-start me) panel-end))
+        (should-not (agent-shell-chat--extends-bg-p
+                     (get-text-property (overlay-start me) 'face)))
+        ;; It drops any inherited tinted gutter.
+        (should (equal "" (overlay-get me 'line-prefix)))))))
+
+(ert-deftest agent-shell-chat-extends-bg-p-test ()
+  "`agent-shell-chat--extends-bg-p' recognizes an `:extend' background face."
+  (should (agent-shell-chat--extends-bg-p 'agent-shell-chat-mode-tests--panel))
+  (should (agent-shell-chat--extends-bg-p '(agent-shell-chat-mode-tests--panel)))
+  (should-not (agent-shell-chat--extends-bg-p 'agent-shell-chat-mode-tests--plain))
+  (should-not (agent-shell-chat--extends-bg-p nil)))
+
+(ert-deftest agent-shell-chat-prompt-runs-test ()
+  "`agent-shell-chat--prompt-runs' collects each prompt run in buffer order."
+  (agent-shell-chat-mode-tests--with-shell
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (insert "hello\n")
+    (agent-shell-chat-mode-tests--marker)
+    (insert "hi\n")
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (let ((runs (agent-shell-chat--prompt-runs)))
+      (should (= 2 (length runs)))
+      (should (< (cdr (nth 0 runs)) (car (nth 1 runs)))))))
+
+(provide 'agent-shell-chat-mode-tests)
+;;; agent-shell-chat-mode-tests.el ends here

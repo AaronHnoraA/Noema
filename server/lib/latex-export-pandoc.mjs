@@ -1,6 +1,12 @@
 import { spawn } from "node:child_process";
 import { scanInlineCommands } from "../../shared/command-syntax.mjs";
 import { LATEX_MARKS, latexMark } from "../../shared/latex-marks.mjs";
+import {
+  layoutFromAttrs,
+  layoutLatexFigure,
+  readLayoutTrailingAttrs,
+} from "../../shared/layout-attrs.mjs";
+import { tikzPictureSource } from "../../shared/tikz-source.mjs";
 import { citeLatex, convertInline, escapeLatexTitle, isDisplayCommentCommand, revisionLatex } from "./latex-export.mjs";
 import { revisionKind } from "../../shared/revision-kinds.mjs";
 
@@ -95,6 +101,22 @@ function orgOpen(line) {
 
 function orgClose(line) {
   return String(line || "").match(/^#\+\s*end\s+([A-Za-z0-9_-]+)\s*$/i)?.[1]?.toLowerCase() || "";
+}
+
+function tikzLayoutFromTitle(title) {
+  const raw = String(title || "").trim();
+  const open = raw.indexOf("{");
+  if (open < 0) return layoutFromAttrs({});
+  const trailing = readLayoutTrailingAttrs(raw, open);
+  if (!trailing || raw.slice(trailing.to).trim()) return layoutFromAttrs({});
+  return layoutFromAttrs(trailing.attrs);
+}
+
+function tikzLatexBlock(source, title, lineNumber) {
+  const picture = tikzPictureSource(source);
+  if (!picture) throw new Error(`TikZ block on line ${lineNumber} does not contain a tikzpicture`);
+  const placed = layoutLatexFigure(tikzLayoutFromTitle(title), picture.split("\n"));
+  return ["", "```{=latex}", ...placed.lines, "```", ""];
 }
 
 function environmentFor(kind, rules) {
@@ -479,7 +501,7 @@ export function preprocessAaronnoteForPandoc(markdown, options = {}) {
   let hiddenDepth = 0;
   let fence = null;
   let displayMath = null;
-  let rawTikz = false;
+  let rawTikz = null;
   let privatePlanning = null;
   let htmlComment = false;
   const singletonMarks = new Set();
@@ -519,9 +541,9 @@ export function preprocessAaronnoteForPandoc(markdown, options = {}) {
     }
     if (rawTikz) {
       if (orgClose(line) === "tikz") {
-        output.push("\\end{tikzpicture}", "\\end{center}", "```", "");
-        rawTikz = false;
-      } else output.push(line);
+        output.push(...tikzLatexBlock(rawTikz.lines.join("\n"), rawTikz.title, rawTikz.line));
+        rawTikz = null;
+      } else rawTikz.lines.push(line);
       continue;
     }
     if (fence && container.quoteDepth !== fence.quoteDepth) {
@@ -623,8 +645,7 @@ export function preprocessAaronnoteForPandoc(markdown, options = {}) {
     if (begin) {
       if (hiddenKinds.has(begin.kind)) { hidden = begin.kind; hiddenDepth = 1; continue; }
       if (begin.kind === "tikz") {
-        output.push("", "```{=latex}", "\\begin{center}", "\\begin{tikzpicture}");
-        rawTikz = true;
+        rawTikz = { title: begin.title, line: lineNumber, lines: [] };
         continue;
       }
       const opened = environmentOpen(begin.kind, begin.title, conversionOptions);
@@ -762,7 +783,8 @@ export async function aaronnoteMarkdownToLatexPandoc(markdown, options = {}) {
   const extensions = [
     "markdown", "fancy_lists", "task_lists", "definition_lists", "footnotes",
     "strikeout", "pipe_tables", "table_captions", "raw_attribute", "raw_tex",
-    "tex_math_dollars", "autolink_bare_uris", "bracketed_spans", "superscript", "subscript", "east_asian_line_breaks", ...maintainedExtensions,
+    "tex_math_dollars", "autolink_bare_uris", "bracketed_spans", "link_attributes",
+    "superscript", "subscript", "east_asian_line_breaks", ...maintainedExtensions,
   ].join("+");
   const from = `${extensions}-implicit_figures-smart-citations`;
   let stdout;

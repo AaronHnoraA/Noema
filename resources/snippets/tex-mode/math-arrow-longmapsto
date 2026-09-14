@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [longmapsto] — Long maps to
-# key: longmapsto
-# group: Math · Arrows
-# --
-\longmapsto$0

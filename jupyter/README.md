@@ -15,8 +15,8 @@ In Emacs host mode, the Remote broker owns kernelspec discovery, process
 placement, connection files, and the atomic five-channel forward group.
 Node retains raw-ZMQ execution and the browser bridge. The kernel, cwd,
 environment, hidden `.cell/` notebooks, and custom widget assets therefore follow
-the note's owning Target. Target `local` uses the same broker path. Standalone
-desktop host mode keeps the direct Node launcher.
+the note's owning Target. Target `local` uses the same broker path; the direct
+Node launcher remains the local fallback when no broker target is attached.
 
 The runtime provides:
 
@@ -25,12 +25,12 @@ The runtime provides:
   `bash_kernel`
 - stable, source-owned `python3`, `bash`, and `sagemath` kernelspec templates;
   their launchers discover installed runtimes or read an explicitly supplied
-  `AARONNOTE_*_RUNTIME_ENV`, so Noema.app never resolves through an Emacs tree
+  `AARONNOTE_*_RUNTIME_ENV`, so the Node host never resolves through an Emacs tree
 - kernelspec discovery matching Jupyter's own search order (this project's
   data dir and — unless disabled — the user's
   `~/Library/Jupyter`/`~/.local/share/jupyter` and system dirs)
 - isolated Jupyter config/data/runtime directories under the host state root
-  (`<stateRoot>/jupyter` in Noema.app); application source remains read-only
+  (`${XDG_STATE_HOME:-~/.local/state}/noema/jupyter` by default); application source remains read-only
 - attaching to an already-running kernel via its connection file (e.g. a
   remembered `kernel-*.json` from an Emacs-managed remote-kernel workflow),
   instead of only ever launching kernels locally
@@ -48,12 +48,21 @@ kernelspec copies under the host state root, run:
 npm run jupyter:bootstrap
 ```
 
-`npm run dev` (or the built app) starts `web-host.mjs`; there is no Jupyter
-server or target-side Noema/Node service to start.
+Emacs starts `web-host.mjs` for normal use (`npm run dev` is available for
+renderer development); there is no Jupyter server or target-side Noema/Node
+service to start.
 
 ## Cell service behavior (`server/lib/jupyter-cell.mjs` + `server/jupyter/*`)
 
 The Node cell service owns kernel lifecycle and each cell run:
+
+- A canonical `*.noema` work document is itself a standard nbformat 4.5+ JSON
+  document, so the service executes its code cells and persists portable
+  outputs in place; there is no shadow `.ipynb` authority.  Its
+  `metadata.noema_research.work_nodes` and `dependencies` pass through
+  unchanged.  Structural cell mutations are rejected on this Web-facing
+  boundary because `.noema` structure is edited by Emacs/JuText, not by a
+  second browser document UI.
 
 - `server/jupyter/kernel-registry.mjs` obtains (or attaches to) a kernel per
   note-script-file + kernel-name key, holding one persistent raw-ZMQ
@@ -79,11 +88,11 @@ The Node cell service owns kernel lifecycle and each cell run:
   ids again when serializing, so managing or saving it does not rewrite all of
   its old cells. Newly inserted/split/duplicated cells still receive persisted
   standard ids. Notebooks without language metadata default to Python.
-- The kernels endpoint publishes one flattened `choices` catalog for both the
-  Web workspace and Emacs. It includes broker-discovered kernelspecs, attach
-  targets, and configured Jupyter-server kernels/running targets; clients do
-  not apply a second language filter. A private running kernel remains
-  connectable only by its owning notebook.
+- The kernels endpoint publishes one flattened `choices` catalog for Emacs and
+  its right-side output renderer. It includes broker-discovered kernelspecs,
+  attach targets, and configured Jupyter-server kernels/running targets;
+  consumers do not apply a second language filter. A private running kernel
+  remains connectable only by its owning notebook.
 - Consecutive `stdout`/`stderr` stream chunks are merged, and total stream text
   is capped so a runaway loop cannot produce an unbounded payload. The inline
   widget view truncates long output further; **Popout** shows the full capped
@@ -118,7 +127,7 @@ bumps the widget generation, and reports `stateLost`. Missing target
 `python3`, `jupyter`, or the exact selected kernelspec is an explicit Doctor
 error—there is no automatic install and no client fallback.
 
-### Frontend rendering (browser)
+### Frontend rendering (Emacs-owned Web view)
 
 Cell output is rendered by the official JupyterLab stack — the same pipeline
 VS Code Jupyter uses — rather than a hand-rolled MIME renderer:
@@ -140,7 +149,9 @@ VS Code Jupyter uses — rather than a hand-rolled MIME renderer:
   cell's initial plot shows *inside* the widget instead of duplicated above it.
 
 Both frontend modules are large and load lazily (their own bundle chunks), so
-they stay out of the main editor bundle until a cell actually produces output.
+they stay out of the main renderer bundle until a cell actually produces
+output.  This renderer is not a standalone Jupyter/Noema application: Emacs
+owns the source buffer, windows, commands, kernel controls, and navigation.
 
 ### Environment variables
 
@@ -165,7 +176,7 @@ they stay out of the main editor bundle until a cell actually produces output.
 | `AARONNOTE_JUPYTER_INTROSPECT_TIMEOUT_MS` | `3000` | Bound on completion/inspection replies (doubled for inspect and history). |
 | `AARONNOTE_JUPYTER_STDIN_TIMEOUT_MS` | `300000` | How long a cell may wait for `input()`; `0` waits forever, as Jupyter does. |
 | `AARONNOTE_JUPYTER_LIVE_FLUSH_MS` | `80` | Coalescing window for live output frames. |
-| `AARONNOTE_JUPYTER_SERVERS` | unset | Standalone-host-mode remote Jupyter servers, as JSON (see below). |
+| `AARONNOTE_JUPYTER_SERVERS` | unset | Server-mode remote Jupyter servers, as JSON (see below). Emacs normally supplies them through its broker. |
 
 Removed: `AARONNOTE_JUPYTER_HOST`/`_PORT`/`_URL`/`_SERVER_IDLE_TTL_MS`. Noema
 still never *starts* a Jupyter server, and pointing one env var at a URL was
@@ -195,7 +206,7 @@ it reads secrets from `auth-source`, and for a server that only exists on a
 Remote target it opens a channel and hands Noema a client-side URL. A target
 that cannot provide a channel is an error, never a client-side connection.
 
-In **standalone host mode** the same shape comes from `AARONNOTE_JUPYTER_SERVERS`,
+In **server host mode** the same shape comes from `AARONNOTE_JUPYTER_SERVERS`,
 a JSON array of `{ id, displayName, url, kind, auth, token, password, user,
 allowUnauthorized, serverName }`. There is no Remote framework here, so every
 server must already be reachable from this machine.

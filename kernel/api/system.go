@@ -33,12 +33,12 @@ import (
 	"github.com/88250/gulu"
 	"github.com/88250/lute"
 	"github.com/88250/lute/html"
-	"github.com/gin-gonic/gin"
-	"github.com/siyuan-note/filelock"
-	"github.com/siyuan-note/logging"
 	"github.com/aaronhe/noema/kernel/conf"
 	"github.com/aaronhe/noema/kernel/model"
 	"github.com/aaronhe/noema/kernel/util"
+	"github.com/gin-gonic/gin"
+	"github.com/siyuan-note/filelock"
+	"github.com/siyuan-note/logging"
 )
 
 func clearTempFiles(c *gin.Context) {
@@ -756,7 +756,7 @@ func getConf(c *gin.Context) {
 	}
 
 	// 浏览器环境下不返回工作空间绝对路径，避免泄露用户名等敏感信息
-	// 原生客户端（桌面 Electron、移动端）UA 以 "SiYuan/" 开头，照常返回真实路径
+	// 受信任的原生客户端 UA 以 "SiYuan/" 开头，照常返回真实路径
 	// REF: https://github.com/siyuan-note/siyuan/issues/17410
 	if util.IsBrowserRequest(c) {
 		maskedConf.System.WorkspaceDir = ""

@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Inline display comment
-# key: iicomment
-# group: Noema blocks
-# --
-@@comment(true) [$1] $0

@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [star] — Star operator
-# key: star
-# group: Math · Operators
-# --
-\star$0

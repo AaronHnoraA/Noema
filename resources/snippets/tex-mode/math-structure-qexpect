@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [qexpect] — Quantum expectation
-# key: qexpect
-# group: Math · Recent notes
-# --
-\left\langle ${1:A}\right\rangle$0

@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Complete problem class
-# key: tccomp
-# group: TCS symbols
-# --
-${1:\mathsf{NP}}\text{-complete}$0

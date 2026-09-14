@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [simeq] — Similar or equal
-# key: simeq
-# group: Math · Relations
-# --
-\simeq$0

@@ -14,7 +14,7 @@ src/cm6/
   languages/markdown/       Lezer Markdown 配置与 Noema 扩展
   utils/tree-operations/    增量 change/viewport 查询
   utils/                    effect 与 projection 基础设施
-  editor-cm6.ts             稳定 Editor facade 与 standalone/embedded shell
+  editor-cm6.ts             稳定 Editor facade 与 Emacs-owned host adapter
 ```
 
 `editor-cm6.ts` 只决定宿主策略（history、editable、DOM event、callback）；语言、
@@ -73,7 +73,7 @@ Meta 只在文档前 12 行识别。共享范围扫描器将内嵌 summary 作�
 字数都不进入外部 TOC/索引/统计。Node 端用保留换行和偏移的等长遮罩，
 浏览器端在已有增量索引 StateField 中跳过该范围；范围外编辑仍走局部修补。
 
-## 浏览器应用
+## Emacs 内的 CM6 组件
 
 ```text
 aaronnote/
@@ -85,26 +85,23 @@ aaronnote/
 Controller 显式返回 `destroy()`；`window.aaronnoteApi`、宿主事件和 xwidget wire
 protocol 保持不变。
 
-### App / Emacs 单一渲染契约
+### Emacs 单一 UI 契约
 
-App 与 Emacs 都由 `web-host.mjs` 提供同一份 `dist/aaronnote`，都只执行一次
-`aaronnote/main.ts -> createEditor(host)`。`data-host-mode` 只允许适配宿主 chrome：
-Electron 显示 54px 系统标题栏、原生菜单、拖放和新窗口；Emacs 保留 header-line、
-xwidget/Appine、buffer、gateway 与按键适配。正文 DOM、CM6 extensions、主题、排版和
-document widgets 不按宿主分叉。
+`web-host.mjs` 向 Emacs xwidget/Appine 提供 `dist/aaronnote`，页面只执行一次
+`aaronnote/main.ts -> createEditor(host)`。Emacs 是唯一第一方 UI/UX：window、buffer、
+minibuffer、Graph Board、JuText、Inspector、Attention、agent-shell、vterm、审批、输入和
+Proposal 复核都由 Emacs 拥有。CM6 只负责私有 Markdown 文档面及其 document widgets，
+不得出现第二套工作流 GUI、应用标题栏、原生窗口菜单或 Electron preload API。
 
-Electron 不在正文外再注入 tab/leaf/左/右/下 dock。Window Actions 的平铺命令创建
-新的原生 Noema 窗口；Knowledge、Agenda、TOC 等只在调用时作为共享浮层出现，不改变
-编辑画布尺寸。B3 组件装饰使用显式 surface 白名单，不能依据 `<aside>` 或 `-panel`
-后缀把 status HUD、References 等正文区域提升成卡片。
+只读 server reader 可以复用同一渲染器，但它是发布面，不是控制面：不能审批、回答、
+复核 Proposal 或控制 run。Chrome 扩展也只有 capture 能力。B3 组件装饰使用显式 surface
+白名单，不能依据 `<aside>` 或 `-panel` 后缀把 status HUD、References 等正文区域提升成卡片。
 
-`make build-web` 生成两宿主共同消费的 renderer；`make`/`make build` 先执行这一步，
-再组装 standalone Noema.app。`make install` 也先走同一条完整构建链，再事务安装 App，
-因此不会安装遗留 staging，也不会另建一份 Emacs UI。renderer 成功构建后会原子写入
-generation 回执；本地 Node host 监听该回执，并让正在运行的 App/xwidget/Appine 在保存
-本地修改后整页 reload。这样长期存活的 Emacs WebKit 页面不会继续执行旧 hashed bundle；
-EventSource 每次重连也会比较当前 generation，休眠或断线期间错过的构建不会遗失。未保存
-的 remote note 或 scratch 会阻止自动 reload，不能以更新为由丢失内容。
+`make build-web` 生成 Emacs 消费的 renderer；`make`/`make build` 再构建 headless Go
+kernel，`make install` 只把 kernel 链接到 `~/.local/bin`。renderer 成功构建后会原子写入
+generation 回执；本地 Node host 监听该回执，并让运行中的 xwidget/Appine 在保存本地修改
+后整页 reload。长期存活的 Emacs WebKit 页面因此不会继续执行旧 hashed bundle；
+EventSource 重连也会比较 generation。未保存的 remote note 或 scratch 会阻止自动 reload。
 
 ## Node host
 
@@ -140,7 +137,7 @@ Graph 和 related Knowledge 共用该投影。standalone 文件打开后仍扫�
 
 Agenda/Todo/Attribute View 的 canonical workspace projection 也只由 Go 生成。kernel 在一次
 request 中联结窄 note metadata、planning nodes 与可选 property blocks；Node 不再先 walk/stat/read
-全库，也不存在旧的 `readMany`/`readPropertyBlocks` 覆盖链。App/Emacs 启动时等待 Go 完成首次
+全库，也不存在旧的 `readMany`/`readPropertyBlocks` 覆盖链。Emacs host 启动时等待 Go 完成首次
 box 注册后才监听，并对 canonical core 声明 `requireGoCore`：后续 provider 缺失或 degraded 时
 失败关闭，不允许静默恢复第二套 Node note/planning/evaluator kernel。server reader 和 note root
 外 standalone 仍使用明确隔离的兼容 parser；它们不属于 Go box 数据面。
@@ -150,14 +147,14 @@ narrow metadata 与 immutable source snapshot 取得 id/title/aliases/resolved r
 Aho–Corasick pass 中排除 fenced/inline code、显式链接、自引用、已链接引用和歧义别名；catalog
 generation 变化会精确清空 10 分钟有界 LRU。Node 只转发窄 mention/path 并做路径验证，renderer
 再用已加载的 rich catalog 按 source id 解析可打开笔记，因此响应不重复携带整份 note row。
-只读 server reader 仍保留自身 Node scanner；desktop/Emacs 缺 Go endpoint 时 503，不回退读盘。
+只读 server reader 仍保留自身 Node scanner；Emacs host 缺 Go endpoint 时 503，不回退读盘。
 
 ## Emacs
 
 ```text
 lisp/roam/init-aaronnote.el
   进程、buffer/session、公开命令和 UI 装配
-lisp/roam/Noema/emacs/noema-xwidget-keys.el
+site-lisp/noema/lisp/noema-xwidget-keys.el
   md/xwidget 输入、焦点、Undo/Redo、Shift-Tab 与 Emacs windmove 焦点修复
 ```
 

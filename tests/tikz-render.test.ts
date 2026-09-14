@@ -1,6 +1,11 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
-import { normalizeTikzSource, stripTikzComments } from "../src/tikz-render.ts";
+import {
+  normalizeTikzSource,
+  stripTikzComments,
+  tikzPictureSource,
+  tikzSourceHash,
+} from "../src/tikz-render.ts";
 
 describe("TikZ render helpers", () => {
   test("wraps bare TikZ commands in a tikzpicture", () => {
@@ -16,9 +21,31 @@ describe("TikZ render helpers", () => {
     expect(normalizeTikzSource(document)).toBe(document);
   });
 
-  test("strips TeX comments before handing source to TikZJax", () => {
+  test("strips TeX comments before local compilation", () => {
     expect(stripTikzComments("  % 坐标点定义\n\\draw (0,0) -- (1,1); % line"))
       .toBe("\n\\draw (0,0) -- (1,1);");
     expect(stripTikzComments("\\node {100\\%};")).toBe("\\node {100\\%};");
+  });
+
+  test("extracts one picture from a complete document for LaTeX export", () => {
+    const document = [
+      "\\documentclass{standalone}",
+      "\\begin{document}",
+      "\\begin{tikzpicture}",
+      "\\draw (0,0) -- (1,1);",
+      "\\end{tikzpicture}",
+      "\\end{document}",
+    ].join("\n");
+
+    expect(tikzPictureSource(document)).toBe([
+      "\\begin{tikzpicture}",
+      "\\draw (0,0) -- (1,1);",
+      "\\end{tikzpicture}",
+    ].join("\n"));
+  });
+
+  test("uses a real 64-bit FNV-1a cache identity", () => {
+    expect(tikzSourceHash("")).toBe("cbf29ce484222325");
+    expect(tikzSourceHash("\\node {中文};")).toMatch(/^[0-9a-f]{16}$/);
   });
 });

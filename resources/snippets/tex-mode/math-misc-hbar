@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [hbar] — Reduced Planck constant
-# key: hbar
-# group: Math · Misc
-# --
-\hbar$0

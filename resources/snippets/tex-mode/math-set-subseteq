@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [subseteq] — Subset or equal
-# key: subseteq
-# group: Math · Sets
-# --
-\subseteq$0

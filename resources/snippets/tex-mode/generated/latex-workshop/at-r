@@ -1,8 +1,0 @@
-# -*- mode: snippet -*-
-# name: rho
-# key: @r
-# uuid: latex-workshop:@r
-# contributor: Noema provider=latex-workshop&priority=180&weight=0&context=math-at&description=rho
-# group: Math · latex-workshop
-# --
-\rho$0

@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [approx] — Approximately equal
-# key: approx
-# group: Math · Relations
-# --
-\approx$0

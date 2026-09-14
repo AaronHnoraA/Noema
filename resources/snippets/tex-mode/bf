@@ -1,7 +1,0 @@
-# -*- mode: snippet -*-
-# name: Bold Face
-# key: bf
-# group: Emacs migrated
-# source: /Users/hc/.config/emacs/snippets/tex-mode/bf_Bold_Face
-# --
-\mathbf{${1:a}}$0

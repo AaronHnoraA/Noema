@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [mathbb] — Blackboard bold
-# key: mathbb
-# group: Math · Styles
-# --
-\mathbb{${1:X}}$0

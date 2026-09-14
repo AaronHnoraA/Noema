@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [span] — Span operator
-# key: span
-# group: Math · Linear algebra
-# --
-\operatorname{span}$0

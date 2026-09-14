@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Inline math
-# key: ;
-# group: Noema local
-# --
-\($1\) $0

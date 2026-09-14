@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Expectation
-# key: mE
-# group: Math symbols
-# --
-\mathbb{E}_{${1:x}}\!\left[${2:f(x)}\right]$0

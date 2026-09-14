@@ -943,9 +943,9 @@ func Close(force, setCurrentWorkspace bool, execInstallPkg int) (exitCode int, i
 	util.IsExiting.Store(true)
 	newVerInstallPkgPath := getNewVerInstallPkgPath()
 	if !skipNewVerInstallPkg() && "" != newVerInstallPkgPath {
-		if 2 == execInstallPkg || (force && 0 == execInstallPkg) { // 将新版本安装包交给桌面宿主执行
+		if 2 == execInstallPkg || (force && 0 == execInstallPkg) { // 上游兼容分支；Noema updater stub 永远不进入
 			installPkgPath = newVerInstallPkgPath
-			logging.LogInfof("the new version install pkg is ready for the desktop host [%s]", newVerInstallPkgPath)
+			logging.LogInfof("the new version install pkg is ready for a native host [%s]", newVerInstallPkgPath)
 		} else if 0 == execInstallPkg { // 新版本安装包已经准备就绪
 			installPkgPath = newVerInstallPkgPath
 			exitCode = 2

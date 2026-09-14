@@ -102,7 +102,7 @@ describe("writeSystemClipboard", () => {
 
 describe("installHostClipboard", () => {
   test("installs a writer that posts to the host in the Emacs xwidget host", async () => {
-    setHostMode(undefined); // No injected mode and no ?host=desktop means Emacs.
+    setHostMode(undefined);
     const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -116,13 +116,16 @@ describe("installHostClipboard", () => {
     }));
   });
 
-  test("leaves the desktop and server hosts on the browser clipboard", () => {
-    for (const mode of ["desktop", "server"]) {
-      setSystemClipboardWriter(null);
-      setHostMode(mode);
-      installHostClipboard();
-      expect(systemClipboardWriter()).toBeNull();
-    }
+  test("normalizes the retired desktop host name to the Emacs clipboard path", () => {
+    setHostMode("desktop");
+    installHostClipboard();
+    expect(systemClipboardWriter()).not.toBeNull();
+  });
+
+  test("leaves the server host on the browser clipboard", () => {
+    setHostMode("server");
+    installHostClipboard();
+    expect(systemClipboardWriter()).toBeNull();
   });
 });
 

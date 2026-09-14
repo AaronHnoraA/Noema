@@ -742,7 +742,7 @@
 
 /* ─── CM6 image widget ───────────────────────────────────────────── */
 .cm-editor img {
-  max-width: min(100%, var(--note-image-max, 560px));
+  max-width: min(100%, var(--note-image-max, 100%));
   height: auto;
 }
 .cm-editor .noema-image-animation-paused,
@@ -759,7 +759,9 @@
   max-width: 100%;
   text-align: center;
   margin: 0 auto;
-  padding: 0.32rem 0 0.42rem;
+  /* Padding, not margin: CM6 measures the widget's border box, so vertical
+   * margins here would be invisible to the height map and drift the caret. */
+  padding: var(--note-figure-gap-top, 0.72em) 0 var(--note-figure-gap-bottom, 0.9em);
   vertical-align: bottom;
 }
 
@@ -842,7 +844,7 @@
   width: fit-content;
   max-width: 100%;
   text-align: center;
-  margin: 0.32rem auto 0.42rem;
+  margin: var(--note-figure-gap-top, 0.72em) auto var(--note-figure-gap-bottom, 0.9em);
   vertical-align: bottom;
 }
 .cm-editor .cm-image-widget.aaronnote-image-align-left {
@@ -868,47 +870,72 @@
 .cm-editor .cm-image-widget.aaronnote-image-wrap.aaronnote-image-align-left {
   float: left;
   width: fit-content;
-  max-width: min(42%, var(--note-image-max, 360px));
-  margin: 0.25rem 1rem 0.7rem 0;
+  max-width: var(--note-float-width, 45%);
+  margin: 0 1em 0.4em 0;
 }
 .aaronnote-visual-attachment.aaronnote-image-wrap.aaronnote-image-align-left {
   float: left;
   width: fit-content;
-  max-width: var(--aaronnote-image-max-width, min(42%, var(--note-image-max, 360px)));
-  margin: 0.25rem 1rem 0.7rem 0;
+  max-width: var(--aaronnote-image-max-width, var(--note-float-width, 45%));
+  margin: 0 1em 0.4em 0;
 }
 .cm-editor .cm-image-widget.aaronnote-image-wrap.aaronnote-image-align-right {
   float: right;
   width: fit-content;
-  max-width: min(42%, var(--note-image-max, 360px));
-  margin: 0.25rem 0 0.7rem 1rem;
+  max-width: var(--note-float-width, 45%);
+  margin: 0 0 0.4em 1em;
 }
 .aaronnote-visual-attachment.aaronnote-image-wrap.aaronnote-image-align-right {
   float: right;
   width: fit-content;
-  max-width: var(--aaronnote-image-max-width, min(42%, var(--note-image-max, 360px)));
-  margin: 0.25rem 0 0.7rem 1rem;
+  max-width: var(--aaronnote-image-max-width, var(--note-float-width, 45%));
+  margin: 0 0 0.4em 1em;
 }
+/* An image is artwork, not a UI card: no frame, no plate, no height crop.
+ * The old 280px `max-height` silently shrank every portrait figure to a third
+ * of its size, which is the single worst default in the old figure layout. */
 .cm-editor .cm-image-render {
   display: block;
   width: var(--aaronnote-image-width, auto);
   height: var(--aaronnote-image-height, auto);
-  max-width: var(--aaronnote-image-max-width, min(100%, var(--note-image-max, 560px)));
-  max-height: var(--aaronnote-image-max-height, 280px);
+  max-width: var(--aaronnote-image-max-width, min(100%, var(--note-image-max, 100%)));
+  max-height: var(--aaronnote-image-max-height, var(--note-image-max-height, none));
   margin: 0 auto;
   object-fit: contain;
-  border: 1px solid color-mix(in srgb, var(--aaron-paper-line, #414b61), var(--aaron-muted, #a9bed3) 12%);
-  border-radius: 3px;
-  background: var(--aaron-paper-soft, #1e2536);
   cursor: pointer;
 }
+/* Static Markdown/HTML export path. The CM widget above owns the same contract
+ * in live visual mode; rendered documents put these classes on the <img>. */
+.cm-editor img.aaronnote-image {
+  display: block;
+  width: var(--aaronnote-image-width, auto);
+  height: var(--aaronnote-image-height, auto);
+  max-width: var(--aaronnote-image-max-width, min(100%, var(--note-image-max, 100%)));
+  max-height: var(--aaronnote-image-max-height, var(--note-image-max-height, none));
+  margin: var(--note-figure-gap-top, 0.72em) auto var(--note-figure-gap-bottom, 0.9em);
+  object-fit: contain;
+}
+.cm-editor img.aaronnote-image.aaronnote-image-align-left { margin-left: 0; margin-right: auto; }
+.cm-editor img.aaronnote-image.aaronnote-image-align-right { margin-left: auto; margin-right: 0; }
+.cm-editor img.aaronnote-image.aaronnote-image-wrap.aaronnote-image-align-left {
+  float: left;
+  max-width: var(--aaronnote-image-max-width, var(--note-float-width, 45%));
+  margin: 0 1em 0.4em 0;
+}
+.cm-editor img.aaronnote-image.aaronnote-image-wrap.aaronnote-image-align-right {
+  float: right;
+  max-width: var(--aaronnote-image-max-width, var(--note-float-width, 45%));
+  margin: 0 0 0.4em 1em;
+}
+/* Embedded live attachments (drawio, HTML) are viewports, not artwork, so they
+ * keep an explicit box — unlike a plain image, they have no intrinsic size. */
 .cm-editor .cm-visual-embed,
 .aaronnote-visual-embed {
   display: block;
-  width: var(--aaronnote-image-width, min(100%, var(--note-image-max, 620px)));
+  width: var(--aaronnote-image-width, min(100%, var(--note-image-max, 100%)));
   min-width: min(100%, 320px);
   height: var(--aaronnote-image-height, min(52vh, 420px));
-  max-width: var(--aaronnote-image-max-width, min(100%, var(--note-image-max, 620px)));
+  max-width: var(--aaronnote-image-max-width, min(100%, var(--note-image-max, 100%)));
   max-height: var(--aaronnote-image-max-height, min(68vh, 560px));
   border: 1px solid color-mix(in srgb, var(--aaron-paper-line, #414b61), var(--aaron-muted, #a9bed3) 12%);
   border-radius: 3px;
@@ -919,10 +946,10 @@
   box-sizing: border-box;
   display: grid;
   place-items: center;
-  width: var(--aaronnote-image-width, min(100%, var(--note-image-max, 620px)));
+  width: var(--aaronnote-image-width, min(100%, var(--note-image-max, 100%)));
   min-width: min(100%, 320px);
   min-height: 120px;
-  max-width: var(--aaronnote-image-max-width, min(100%, var(--note-image-max, 620px)));
+  max-width: var(--aaronnote-image-max-width, min(100%, var(--note-image-max, 100%)));
   padding: 18px;
   color: color-mix(in srgb, var(--aaron-muted, #a9bed3), var(--aaron-ink, #e4ecff) 25%);
   font: 700 0.95em/1.35 var(--aaron-font-sans, system-ui, sans-serif);
@@ -950,15 +977,15 @@
   overflow: visible;
 }
 .cm-editor .cm-image-caption {
-  max-width: min(100%, var(--note-image-max, 560px));
-  margin: 0.2rem auto 0;
+  max-width: min(100%, var(--note-image-max, 100%));
+  margin: 0.45em auto 0;
   color: color-mix(in srgb, var(--aaron-muted, #a9bed3), var(--aaron-ink, #e4ecff) 18%);
   font: 600 0.82em/1.35 var(--aaron-font-sans, system-ui, sans-serif);
   text-align: center;
 }
 .aaronnote-visual-attachment .cm-image-caption {
-  max-width: min(100%, var(--note-image-max, 620px));
-  margin: 0.2rem auto 0;
+  max-width: min(100%, var(--note-image-max, 100%));
+  margin: 0.45em auto 0;
   color: color-mix(in srgb, var(--aaron-muted, #a9bed3), var(--aaron-ink, #e4ecff) 18%);
   font: 600 0.82em/1.35 var(--aaron-font-sans, system-ui, sans-serif);
   text-align: center;
@@ -2096,7 +2123,7 @@
   width: 100%;
   max-width: 100%;
   margin: 0;
-  padding: 0.32rem 0 0.42rem;
+  padding: 0;
 }
 /* Wrap variant: outer is a zero-height non-BFC anchor so CM6 records 0 in the
  * height map; the inner .cm-mermaid-block floats out and text wraps beside it. */
@@ -2106,20 +2133,19 @@
   overflow: visible;
   padding: 0;
 }
+/* A diagram reads as a figure, so it gets the measure and no frame — the same
+ * treatment GitHub/GitLab give a rendered mermaid block. The old 460px height
+ * cap put a scrollbar inside any flowchart taller than a few nodes. */
 .cm-editor .cm-mermaid-block,
 .cm-editor .cm-mermaid-block-preview {
   display: block;
   box-sizing: border-box;
-  width: var(--aaronnote-diagram-width, min(100%, var(--note-diagram-max, 600px)));
+  width: var(--aaronnote-diagram-width, min(100%, var(--note-diagram-max, 100%)));
   max-width: var(--aaronnote-diagram-max-width, 100%);
   height: var(--aaronnote-diagram-height, auto);
-  max-height: var(--aaronnote-diagram-max-height, 460px);
-  margin: 0.6rem auto 0.82rem;
-  padding: 14px 16px;
-  border: 1px solid color-mix(in srgb, var(--aaron-paper-line, #414b61), var(--aaron-muted, #a9bed3) 12%);
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--aaron-paper, #171b28), var(--aaron-accent, #9de7ff) 4%);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 6%);
+  max-height: var(--aaronnote-diagram-max-height, var(--note-diagram-max-height, none));
+  margin: var(--note-figure-gap-top, 0.72em) auto var(--note-figure-gap-bottom, 0.9em);
+  padding: 0.4em 0;
   overflow: auto;
   text-align: center;
   white-space: normal;
@@ -2129,17 +2155,51 @@
 .cm-editor .cm-mermaid-block-preview {
   cursor: default;
 }
+/* Mermaid renders with its light `default` theme, so the diagram needs the same
+ * page-like surface a compiled TikZ figure gets or its #333 strokes vanish into
+ * a dark editor. One surface for every figure also keeps the two consistent. */
+.cm-editor .cm-mermaid-block:not(.cm-diagram-error),
+.cm-editor .cm-mermaid-block-preview:not(.cm-diagram-error),
+.cm-editor pre .cb-diagram-preview:not(.cm-diagram-error) {
+  padding: var(--note-figure-paper-pad, 0.55em);
+  border-radius: 4px;
+  background: var(--note-figure-paper, #fbfaf7);
+}
 .aaronnote-tikz,
 .cm-editor .cm-tikz-env-widget {
   width: fit-content;
   max-width: 100%;
 }
-.aaronnote-tikz-embed {
-  width: var(--aaronnote-image-width, min(100%, var(--note-image-max, 620px)));
-  height: var(--aaronnote-image-height, min(52vh, 420px));
-}
 .cm-editor .cm-tikz-env-widget {
   cursor: pointer;
+}
+/* A compiled TikZ picture carries its own TeX dimensions, handed over as
+ * `--aaronnote-tikz-natural-width` in `em` of body text. Honouring them is what
+ * keeps a diagram the same size relative to the prose that it is in the PDF,
+ * instead of being scaled to whatever pixel box the editor happens to use.
+ * An explicit `{width: …}` on the block still wins. */
+.cm-editor .cm-tikz-env-image,
+.aaronnote-tikz-image {
+  display: block;
+  box-sizing: content-box;
+  width: var(--aaronnote-image-width, var(--aaronnote-tikz-natural-width, auto));
+  max-width: min(100%, var(--note-image-max, 100%));
+  max-height: var(--aaronnote-image-max-height, var(--note-image-max-height, none));
+  margin: 0 auto;
+  /* dvisvgm emits black artwork on transparency, so a dark theme needs a
+   * page-like surface underneath or the picture disappears. */
+  padding: var(--note-figure-paper-pad, 0.55em);
+  border-radius: 4px;
+  background: var(--note-figure-paper, #fbfaf7);
+}
+.cm-editor .cm-tikz-env-image.is-tikz-stale {
+  opacity: 0.55;
+  transition: opacity 120ms ease-out;
+}
+.aaronnote-tikz-source {
+  max-width: 100%;
+  overflow-x: auto;
+  text-align: left;
 }
 .cm-editor .cm-mermaid-widget > .cm-mermaid-block,
 .cm-editor .cm-mermaid-widget > .cm-mermaid-block-preview {
@@ -2159,14 +2219,14 @@
 .cm-editor .cm-mermaid-block.aaronnote-diagram-wrap.aaronnote-diagram-align-left,
 .cm-editor .cm-mermaid-block-preview.aaronnote-diagram-wrap.aaronnote-diagram-align-left {
   float: left;
-  width: var(--aaronnote-diagram-width, min(48%, var(--note-diagram-max, 420px)));
-  margin: 0.25rem 1rem 0.7rem 0;
+  width: var(--aaronnote-diagram-width, var(--note-float-width, 45%));
+  margin: 0 1em 0.4em 0;
 }
 .cm-editor .cm-mermaid-block.aaronnote-diagram-wrap.aaronnote-diagram-align-right,
 .cm-editor .cm-mermaid-block-preview.aaronnote-diagram-wrap.aaronnote-diagram-align-right {
   float: right;
-  width: var(--aaronnote-diagram-width, min(48%, var(--note-diagram-max, 420px)));
-  margin: 0.25rem 0 0.7rem 1rem;
+  width: var(--aaronnote-diagram-width, var(--note-float-width, 45%));
+  margin: 0 0 0.4em 1em;
 }
 .cm-editor .cm-diagram-interactive {
   position: relative;
@@ -2390,8 +2450,8 @@ body.has-diagram-fullscreen {
 .cm-editor .mindmap,
 .cm-editor .mindmap svg {
   display: block;
-  max-width: min(100%, var(--note-diagram-max, 600px));
-  max-height: 420px;
+  max-width: min(100%, var(--note-diagram-max, 100%));
+  max-height: var(--note-diagram-max-height, none);
   height: auto;
   margin: 0 auto;
   touch-action: none;
@@ -3288,6 +3348,37 @@ body.has-diagram-fullscreen {
   overflow-wrap: anywhere;
 }
 
+.cm-noema-run-output {
+  border: 1px solid var(--aaron-ui-border-subtle, color-mix(in srgb, currentColor 18%, transparent));
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--aaron-ui-surface-raised, color-mix(in srgb, currentColor 4%, transparent));
+}
+
+.cm-noema-run-output > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.cm-noema-run-status {
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 0.82em;
+  background: color-mix(in srgb, currentColor 9%, transparent);
+}
+
+.cm-noema-run-meta {
+  margin-top: 3px;
+  color: var(--aaron-ui-text-muted, color-mix(in srgb, currentColor 62%, transparent));
+  font-size: 0.82em;
+}
+
+.cm-noema-run-content {
+  margin-top: 8px;
+}
+
 .cm-editor .cm-ceil-output {
   min-width: 0;
   max-width: 100%;
@@ -3862,10 +3953,10 @@ body.has-diagram-fullscreen {
 .cm-editor img.image-render {
   display: block;
   width: auto;
-  max-width: min(100%, var(--note-image-max, 560px));
-  max-height: 380px;
+  max-width: min(100%, var(--note-image-max, 100%));
+  max-height: var(--note-image-max-height, none);
   object-fit: contain;
-  margin: 0.6rem auto 0.9rem;
+  margin: var(--note-figure-gap-top, 0.72em) auto var(--note-figure-gap-bottom, 0.9em);
 }
 
 /* ─── Task-list checkbox widget ──────────────────────────────────── */
@@ -3962,7 +4053,7 @@ body.has-diagram-fullscreen {
 .cm-editor pre .cb-diagram-preview {
   display: none;
   box-sizing: border-box;
-  width: var(--aaronnote-diagram-width, min(100%, var(--note-diagram-max, 600px)));
+  width: var(--aaronnote-diagram-width, min(100%, var(--note-diagram-max, 100%)));
   max-width: var(--aaronnote-diagram-max-width, 100%);
   height: var(--aaronnote-diagram-height, auto);
   max-height: var(--aaronnote-diagram-max-height, none);
@@ -3979,7 +4070,7 @@ body.has-diagram-fullscreen {
   scrollbar-gutter: stable;
 }
 .cm-editor pre.aaronnote-diagram-code {
-  width: var(--aaronnote-diagram-width, min(100%, var(--note-diagram-max, 600px)));
+  width: var(--aaronnote-diagram-width, min(100%, var(--note-diagram-max, 100%)));
   max-width: var(--aaronnote-diagram-max-width, 100%);
   height: var(--aaronnote-diagram-height, auto);
   max-height: var(--aaronnote-diagram-max-height, none);
@@ -3998,18 +4089,18 @@ body.has-diagram-fullscreen {
 }
 .cm-editor pre.aaronnote-diagram-wrap.aaronnote-diagram-align-left {
   float: left;
-  width: var(--aaronnote-diagram-width, min(48%, var(--note-diagram-max, 420px)));
-  margin: 0.25rem 1rem 0.7rem 0;
+  width: var(--aaronnote-diagram-width, var(--note-float-width, 45%));
+  margin: 0 1em 0.4em 0;
 }
 .cm-editor pre.aaronnote-diagram-wrap.aaronnote-diagram-align-right {
   float: right;
-  width: var(--aaronnote-diagram-width, min(48%, var(--note-diagram-max, 420px)));
-  margin: 0.25rem 0 0.7rem 1rem;
+  width: var(--aaronnote-diagram-width, var(--note-float-width, 45%));
+  margin: 0 0 0.4em 1em;
 }
 .cm-editor pre .cb-diagram-preview svg {
   display: block;
-  max-width: var(--aaronnote-diagram-max-width, min(100%, var(--note-diagram-max, 600px)));
-  max-height: var(--aaronnote-diagram-max-height, 330px);
+  max-width: var(--aaronnote-diagram-max-width, min(100%, var(--note-diagram-max, 100%)));
+  max-height: var(--aaronnote-diagram-max-height, var(--note-diagram-max-height, none));
   width: auto;
   height: auto;
   margin: 0 auto;
@@ -4081,6 +4172,7 @@ body.has-diagram-fullscreen {
   word-break: break-word;
 }
 .cm-editor table img,
+.cm-editor table img.aaronnote-image,
 .cm-editor table .cm-image-render,
 .cm-editor table img.image-render {
   display: block;

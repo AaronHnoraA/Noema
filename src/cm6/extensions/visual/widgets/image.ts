@@ -203,7 +203,10 @@ class ImageWidget extends MeasuredWidget {
       const full = view.state.doc.sliceString(this.from, this.to);
       const base = full.match(IMAGE_RE)?.[0] ?? full;
       const trailing = imageLayoutToTrailingAttrs(next);
-      const insert = trailing ? `${base} ${trailing}` : base;
+      // Keep the attribute list adjacent to the image: this is the portable
+      // GitLab/Pandoc form for width and height, while Noema also reads its
+      // align/wrap additions.
+      const insert = trailing ? `${base}${trailing}` : base;
       if (insert === full) return;
       view.dispatch({ changes: { from: this.from, to: this.to, insert } });
       view.requestMeasure();

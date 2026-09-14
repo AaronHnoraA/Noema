@@ -1,8 +1,16 @@
 # Noema maintenance
 
-Noema is a standalone application. The canonical source tree is this
-repository; Emacs integrates through compatibility links and must never become
-a runtime dependency of the desktop app.
+Noema is an Emacs-centered, local-first research environment. The canonical
+product source tree is this repository; Emacs is the only first-party UI/UX.
+The Node and Go layers are headless services. CM6 remains a first-class private
+Markdown knowledge surface, hosted only from Emacs (xwidget/Appine or an
+equivalent Emacs-owned local web view). There is no Electron or Noema.app
+product shell.
+
+The design authority is `/Users/hc/Desktop/]/DESIGN.md`, interpreted with
+`AI-Docs/HCI.md` and `AI-Docs/设计和demo.md` as the primary HCI specifications.
+`DECISIONS.md` D-016/D-021/D-022 supersede the former dual-host, Web-surface
+retirement and split-source assumptions.
 
 
 ## Environment
@@ -11,60 +19,55 @@ a runtime dependency of the desktop app.
 - Use `nvm install && nvm use`, then `make setup`.
 - Use `npm ci`, not an unlocked dependency install, for reproducible setup.
 - The default note root is `~/Documents/Noema`. `NOEMA_ROOT` may override it.
-- The desktop app must create a missing note root before starting the host.
+- Emacs startup must create a missing note root before starting the host.
 
 ## Shared assets
 
-`resources/` is the source of truth for assets consumed by Noema:
+`resources/` is the source of truth for Noema-owned assets such as:
 
-- `snippets/markdown-mode/` and `snippets/tex-mode/`
 - `templates/noema/`, `templates/latex/`, and `templates/tex/`
 - `katex-macros/` and `prose-accepted-words.txt`
 
-Emacs links only those shared subdirectories from its historical asset roots;
-Emacs-only snippet and template directories stay in the Emacs repository.
-Emacs uses the full-project link at `lisp/roam/Noema`; the retired
-`lisp/roam/aaronnote` compatibility path must not be reintroduced.
+Markdown and TeX snippets are now owned directly by AaronEmacs at
+`~/.config/emacs/snippets/{markdown-mode,tex-mode}`. `resources/snippets` is a
+relative link to that one canonical copy. Do not recreate an external source
+copy or make AaronEmacs link back to one.
 
-## Compatibility
+`site-lisp/noema` is the real project directory inside AaronEmacs, not a
+full-project symlink. The retired `/Users/hc/HC/SOURCE/Noema`,
+`lisp/roam/Noema` and `site-lisp/ai-workbench` paths must not be reintroduced.
 
-The desktop host uses standalone mode and opens source targets in a new VS Code
-window. The Emacs host keeps xwidget/Appine, buffer, gateway, and key-adapter
-behavior. Existing lowercase `aaronnote` paths, `AARONNOTE_*` environment
-variables and API channels remain compatibility contracts.  The Emacs Lisp
-surface has migrated to `my/noema-*`; do not add `my/aaronnote-*` aliases.
+## Internalized AI implementation
 
-## Two host adapters
+The complete gptel, agent-shell, acp.el, shell-maker and Magent source trees
+under `upstream/` are part of the canonical local source. Reuse them directly;
+do not install them as Noema package dependencies, mechanically rename their
+features, or write reduced replacements. Preserve their tests, docs, assets,
+prompts, attribution and licenses until real workflows justify pruning.
 
-Noema must support both host scenes without deleting or visually replacing
-either adapter:
+Noema product entry points and adapters live under `lisp/`. gptel owns the
+composition/context/rewrite UI, agent-shell + acp.el own structured process and
+session interaction, and Magent supplies its local agent/queue/ledger/gptel
+adapter. `noema-agent-acp.el` is the sole research/runtime coupling boundary
+to agent-shell/acp implementation details.
 
-- In Emacs, `init-aaronnote.el` owns the existing header-line, transient menus,
-  buffer integration, and every `my/noema-*` entry point.
-- In Noema.app, `desktop/main.mjs`, `desktop/preload.cjs`, and the
-  `.noema-desktop-titlebar` renderer provide the macOS application menu,
-  window title bar, drag/drop, and VS Code/new-window behavior. This adapter is
-  derived from SiYuan's mature Electron shell, with `contextIsolation`, sandbox,
-  and a narrow preload bridge. Electron starts the same `web-host.mjs` used by
-  Emacs; that Node host owns the Go kernel lifecycle. Do not duplicate backend,
-  Jupyter, Copilot, or kernel-supervisor logic in the Electron adapter.
+## Host and compatibility
 
-The Emacs header-line is the functional reference for the App title bar:
+`init-aaronnote.el` owns the CM6 xwidget/Appine lifecycle, header line, buffer
+integration, gateway, and every `my/noema-*` entry point. Graph Board, JuText,
+Inspector, approvals and project navigation are composed by Emacs. CM6
+Markdown, private Wiki/Graph, Agenda/Config and Jupyter output retain their
+Web implementations as Emacs-hosted surfaces; do not delete or downgrade them,
+and do not add a parallel browser or desktop workflow product.
 
-| Emacs header control | Noema.app system title-bar control |
-| --- | --- |
-| back | Back |
-| forward | Forward |
-| reload | Refresh |
-| pencil/editor actions | native Editor Actions menu |
-| window/layout | native Window Actions menu |
-| buffer name | current note filename |
+Existing lowercase `aaronnote` paths, `AARONNOTE_*` environment variables and
+API channels remain protocol compatibility contracts until separately
+migrated. They do not imply a second product host. The Emacs Lisp public
+surface uses `my/noema-*`; do not add new `my/aaronnote-*` aliases.
 
-Keep these command semantics shared through `runHostCommand`; host-specific UI
-belongs only in its adapter. In the App, dropping only Markdown files opens
-them in new Noema windows, Option-drop forces insertion, and mixed/non-Markdown
-drops use the editor asset/text paste pipeline. Internal editor block dragging
-must not be intercepted.
+Chrome plus the Noema extension is an explicit external capture boundary, not
+a Noema UI. Public server pages are read-only publication surfaces, not an
+authoring/control-plane replacement for Emacs.
 
 ## Required checks
 
@@ -76,12 +79,8 @@ make build
 make install
 ```
 
-Verify the packaged host reports `hostMode: "desktop"` and that Emacs legacy
-asset paths resolve into `resources/`. For a packaged UI check, launch:
-
-```sh
-NOEMA_DESKTOP_SMOKE=1 /Applications/Noema.app/Contents/MacOS/Electron
-```
-
-The report must show `preload: true`, `titlebarVisible: true`, a 54px title bar,
-and the Back, Forward, Refresh, Editor actions, and Window actions controls.
+Verify `AARONNOTE_HOST_MODE=desktop` cannot select a desktop runtime, no
+Electron package/build/install entry remains, the headless host defaults to
+Emacs mode, and the Emacs research tests cover the Graph Board/JuText vertical
+slice. A usable demo must open through Emacs and persist exact notebook graph,
+focus/fold view state, and text across restart.

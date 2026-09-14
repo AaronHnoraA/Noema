@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Math [langle] — Left angle bracket
-# key: langle
-# group: Math · Misc
-# --
-\langle$0

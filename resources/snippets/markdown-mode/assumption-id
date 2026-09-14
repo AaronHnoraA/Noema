@@ -1,9 +1,0 @@
-# -*- mode: snippet -*-
-# name: Assumption block with ID
-# key: assumee
-# group: Noema blocks
-# --
-#+begin assumption ${1:name} {#`(my/noema-new-id "block")`}
-${2:Assumption.}
-#+end assumption
-$0

@@ -32,8 +32,8 @@ describe("local graph", () => {
    * `changeHandlers` schedules an overlay update on every document change. The
    * signature used to fold in the raw Markdown length, which changes on every
    * typed character, so an editing pause forced a full rebuild and cytoscape
-   * layout even though the graph could not differ. Electron absorbs that; the
-   * Emacs xwidget, which repaints the widget through Emacs redisplay, does not.
+   * layout even though the graph could not differ. The Emacs xwidget repaints
+   * through Emacs redisplay, so this otherwise-small mistake is visible.
    * The panel must rebuild for what it draws — refs and tags — and for nothing
    * else. Same code, both hosts.
    */
