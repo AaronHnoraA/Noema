@@ -48,6 +48,36 @@
   :type 'integer
   :group 'noema-agent-worker)
 
+(defvar noema-agent-worker--attention-count 0
+  "Number of permission/input requests currently awaiting a user decision.")
+
+(defconst noema-agent-worker--mode-line-entry
+  '(:eval (noema-agent-worker--attention-lighter))
+  "The `global-mode-string' entry for pending Noema attention items.")
+
+(defun noema-agent-worker--attention-lighter ()
+  "Return the mode-line fragment for pending Noema attention items."
+  (when (> noema-agent-worker--attention-count 0)
+    (format " Noema[%d]" noema-agent-worker--attention-count)))
+
+(unless (member noema-agent-worker--mode-line-entry global-mode-string)
+  (setq global-mode-string
+        (append (or global-mode-string '(""))
+                (list noema-agent-worker--mode-line-entry))))
+
+(defun noema-agent-worker--attention-note (delta)
+  "Adjust the pending-attention count by DELTA and update its indicator.
+A single `message' fires only on the 0->positive transition, so a burst of
+simultaneous requests does not spam the echo area; the running count lives
+in the mode line until Attention (`C-c C-a') or a resolved decision brings
+it back to zero."
+  (let ((previous noema-agent-worker--attention-count))
+    (setq noema-agent-worker--attention-count
+          (max 0 (+ noema-agent-worker--attention-count delta)))
+    (when (and (zerop previous) (> noema-agent-worker--attention-count 0))
+      (message "Noema: agent awaiting a decision (C-c C-a for Attention)"))
+    (force-mode-line-update t)))
+
 (cl-defstruct (noema-agent-worker
                (:constructor noema-agent-worker--create))
   run-id session-id root target agent spec context-items routing buffer epoch
@@ -145,6 +175,15 @@
              (noema-agent-worker--reconcile-bootstrap-failure worker reason))
          (noema-agent-worker--finish-bootstrap-failure worker reason))))))
 
+(defun noema-agent-worker--ledger-warn (label error-object)
+  "Log a non-authoritative local-ledger LABEL failure without echo-area noise.
+The Magent ledger is a UI projection only; its failures must never look
+like a durable Run problem, so they go to `*Warnings*' instead of `message'."
+  (display-warning
+   'noema-agent-worker
+   (format "Noema local ledger %s failed: %s" label (error-message-string error-object))
+   :warning))
+
 (defun noema-agent-worker--ledger-init (worker)
   "Create WORKER's queued Run turn in an ephemeral Magent projection."
   (condition-case error-object
@@ -166,8 +205,7 @@
     (error
      ;; The projection is intentionally non-authoritative.  A UI projection
      ;; failure must not invent or erase a durable Run transition.
-     (message "Noema local ledger projection failed: %s"
-              (error-message-string error-object)))))
+     (noema-agent-worker--ledger-warn "projection" error-object))))
 
 (defun noema-agent-worker--ledger-attach-session (worker)
   "Associate WORKER's projection with its now-known logical Session."
@@ -183,8 +221,7 @@
     (condition-case error-object
         (magent-thread-start-turn (noema-agent-worker-ledger worker)
                                   (noema-agent-worker-ledger-turn-id worker))
-      (error (message "Noema local ledger start failed: %s"
-                      (error-message-string error-object))))))
+      (error (noema-agent-worker--ledger-warn "start" error-object)))))
 
 (defun noema-agent-worker--ledger-segment (worker text)
   "Append assistant TEXT to WORKER's local message item."
@@ -200,8 +237,7 @@
           (setf (noema-agent-worker-ledger-message-item worker) item)
           (magent-thread-append-item-content
            (noema-agent-worker-ledger worker) item text))
-      (error (message "Noema local ledger content failed: %s"
-                      (error-message-string error-object))))))
+      (error (noema-agent-worker--ledger-warn "content" error-object)))))
 
 (defun noema-agent-worker--ledger-action (worker payload)
   "Upsert one normalized tool action PAYLOAD in WORKER's local ledger."
@@ -240,8 +276,7 @@
               :payload (list :item (magent-thread-item-create
                                     :id call-id :turn-id (noema-agent-worker-ledger-turn-id worker)
                                     :type 'tool :status 'in-progress :input (format "%S" payload))))))))
-      (error (message "Noema local ledger action failed: %s"
-                      (error-message-string error-object))))))
+      (error (noema-agent-worker--ledger-warn "action" error-object)))))
 
 (defun noema-agent-worker--ledger-terminal (worker status reason)
   "Project terminal STATUS and REASON for WORKER into its local ledger."
@@ -259,8 +294,7 @@
             ("completed" (magent-thread-complete-turn thread turn-id))
             ("failed" (magent-thread-fail-turn thread turn-id reason))
             (_ (magent-thread-interrupt-turn thread turn-id reason))))
-      (error (message "Noema local ledger terminal failed: %s"
-                      (error-message-string error-object))))))
+      (error (noema-agent-worker--ledger-warn "terminal" error-object)))))
 
 (defun noema-agent-worker--value (object key &optional default)
   "Read string KEY from JSON-like OBJECT, returning DEFAULT when absent."
@@ -352,14 +386,37 @@
                   (noema-agent-worker--error error-object)))
        (when callback (funcall callback result error-object))))))
 
+(defun noema-agent-worker--resync-source-buffer (worker)
+  "Proactively merge disk outputs into WORKER's open source `.noema' buffer.
+Once Node has durably written a work Cell's terminal outputs, an open
+JuText buffer for that file is stale relative to disk until it is next
+saved or reverted.  Left alone, that staleness is what makes Emacs treat
+the file as externally changed the next time the buffer is touched.
+Resyncing here, right after the terminal report succeeds, keeps the
+visited-file modtime current so that never happens.  A buffer with unsaved
+edits is left untouched, matching `noema-research-merge-disk-outputs''s own
+safety rule."
+  (when-let* ((source (noema-agent-worker--value (noema-agent-worker-spec worker) "source"))
+              ((equal (noema-agent-worker--string source "kind") "work-cell"))
+              (relative (noema-agent-worker--string source "file"))
+              (file (expand-file-name relative (noema-agent-worker-root worker)))
+              (buffer (find-buffer-visiting file)))
+    (with-current-buffer buffer
+      (when (and (derived-mode-p 'noema-research-mode)
+                 (not (buffer-modified-p))
+                 (fboundp 'noema-research-merge-disk-outputs))
+        (ignore-errors (noema-research-merge-disk-outputs))))))
+
 (defun noema-agent-worker--terminal (worker status &optional reason)
   "Make the terminal STATUS transition for WORKER exactly once."
   (unless (noema-agent-worker-terminal worker)
     (setf (noema-agent-worker-terminal worker) t)
 	(dolist (permission-id (noema-agent-worker-pending-permissions worker))
-	  (remhash permission-id noema-agent-worker--permissions))
+	  (remhash permission-id noema-agent-worker--permissions)
+	  (noema-agent-worker--attention-note -1))
 	(dolist (request-id (noema-agent-worker-pending-inputs worker))
-	  (remhash request-id noema-agent-worker--inputs))
+	  (remhash request-id noema-agent-worker--inputs)
+	  (noema-agent-worker--attention-note -1))
 	(setf (noema-agent-worker-pending-permissions worker) nil
 	      (noema-agent-worker-pending-inputs worker) nil)
     (when (timerp (noema-agent-worker-segment-timer worker))
@@ -388,6 +445,7 @@
              ;; Do not let a queued Run collide with it in the meantime.
              (run-at-time 31 nil
                           (lambda () (noema-agent-worker--finish-queue worker 'interrupted)))
+           (noema-agent-worker--resync-source-buffer worker)
            (noema-agent-worker--finish-queue worker (intern status))))))
     (noema-agent-worker--ledger-terminal worker status reason)
     ))
@@ -532,7 +590,7 @@
                    (funcall respond automatic)
                  (puthash permission-id (cons worker respond) noema-agent-worker--permissions)
                  (push permission-id (noema-agent-worker-pending-permissions worker))
-                 (message "Noema permission pending: %s (M-x noema-agent-worker-decide-permission)" permission-id))))))
+                 (noema-agent-worker--attention-note 1))))))
         t))))
 
 (defun noema-agent-worker-apply-command (command)
@@ -547,7 +605,7 @@
          (setf (noema-agent-worker-pending-permissions (car entry))
                (delete permission-id (noema-agent-worker-pending-permissions (car entry))))
          (funcall (cdr entry) option-id)
-         (message "Noema permission resolved: %s" permission-id))))
+         (noema-agent-worker--attention-note -1))))
 	("input-response"
 	 (let* ((request-id (noema-agent-worker--string command "requestId"))
 	        (entry (gethash request-id noema-agent-worker--inputs)))
@@ -556,7 +614,7 @@
 	     (setf (noema-agent-worker-pending-inputs (car entry))
 	           (delete request-id (noema-agent-worker-pending-inputs (car entry))))
 	     (funcall (cdr entry) (noema-agent-worker--value command "answer"))
-	     (message "Noema input resolved: %s" request-id))))
+	     (noema-agent-worker--attention-note -1))))
     ("run-cancel"
      (when-let* ((run-id (noema-agent-worker--string command "runId"))
                  (worker (gethash run-id noema-agent-worker--runs)))
@@ -604,7 +662,7 @@ RESPOND receives the eventual JSON answer. Return non-nil when accepted."
 	       (noema-agent-worker--terminal worker "failed" "input broker returned no request id")
 	     (puthash request-id (cons worker respond) noema-agent-worker--inputs)
 	     (push request-id (noema-agent-worker-pending-inputs worker))
-	     (message "Noema input pending: %s" request-id))))))
+	     (noema-agent-worker--attention-note 1))))))
     t))
 
 (defun noema-agent-worker--cancel (worker)
@@ -943,6 +1001,12 @@ made durably failed without sending an ACP prompt."
                   :config config :directory target :session-id native-session-id
                   :fork-session-id fork-session-id)))
     (setf (noema-agent-worker-buffer worker) buffer)
+    ;; Agent-shell buffers back a document Run, not a document a user
+    ;; browses to directly; keep them out of tab-line/tab-bar so they never
+    ;; accumulate into a wall of tabs (they stay reachable through Attention,
+    ;; the Graph Board Agent Run menu, or `switch-to-buffer').
+    (with-current-buffer buffer
+      (setq-local tab-line-exclude t))
     (noema-agent-acp-subscribe
      :buffer buffer :event 'init-session
      :callback (lambda (_event) (noema-agent-worker--on-session-ready worker fresh)))))

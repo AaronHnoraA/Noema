@@ -886,13 +886,29 @@ With KIND, create that kind of cell instead."
   (noema-research-continue "checkpoint"))
 
 (defun noema-research-new-sibling ()
-  "Create work that shares the lineage parent of the cell at point."
+  "Create work that shares every lineage parent of the cell at point."
   (interactive)
   (let* ((cell (noema-research--cell-at-point))
          (anchor (and cell (noema-research--graph-anchor cell)))
-         (anchor-cell (noema-research-primary-cell noema-research--document anchor)))
-    (noema-research--insert-cell
-     "work" (and anchor-cell (car (noema-research-cell-relation anchor-cell "lineage" noema-research--document))))))
+         (anchor-cell (noema-research-primary-cell noema-research--document anchor))
+         (parents (and anchor-cell
+                       (noema-research-cell-relation
+                        anchor-cell "lineage" noema-research--document))))
+    (noema-research--insert-cell "work" (car parents))
+    (when (> (length parents) 1)
+      ;; `noema-research--insert-cell' only stakes a single pending lineage
+      ;; parent as a text property.  When the anchor has several, resync now
+      ;; and set the complete parent set instead of silently dropping the
+      ;; rest of them.
+      (let* ((title-point (point))
+             (document (noema-research-mode--sync))
+             ;; `title-point' sits exactly at the header's end boundary, one
+             ;; past the property range `--insert-cell' tagged; look one
+             ;; character back to land inside the header text itself.
+             (work-node-id (get-text-property (max (point-min) (1- title-point))
+                                              'noema-research-work-node-id)))
+        (when work-node-id
+          (noema-research-set-relation document work-node-id "lineage" parents))))))
 
 (defun noema-research-new-question ()
   "Append a new research question."
@@ -1083,6 +1099,81 @@ PREDICATE, when non-nil, filters candidate cells."
   "Edit the hard dependencies of the cell at point."
   (interactive)
   (noema-research--edit-relation "depends"))
+
+(defun noema-research--relation-add (type)
+  "Add one TYPE relation parent to the cell at point, leaving the rest as is."
+  (let* ((cell (noema-research--require-cell))
+         (id (noema-research-cell-work-node-id cell))
+         (existing (noema-research-cell-relation cell type noema-research--document))
+         (predicate (lambda (other)
+                      (and (not (member (noema-research-cell-work-node-id other) existing))
+                           (not (noema-research-dependency-reaches-p
+                                 noema-research--document
+                                 (noema-research-cell-work-node-id other) id)))))
+         (candidates (noema-research--candidates cell predicate)))
+    (unless candidates (user-error "No eligible %s parent to add" type))
+    (let* ((choice (completing-read (format "Add %s parent: " type) candidates nil t))
+           (parent (noema-research-cell-work-node-id (cdr (assoc choice candidates)))))
+      (noema-research-set-relation
+       noema-research--document id type (append existing (list parent)))
+      (set-buffer-modified-p t)
+      (noema-research-mode--refresh-decorations))))
+
+(defun noema-research--relation-remove (type)
+  "Remove one TYPE relation parent from the cell at point."
+  (let* ((cell (noema-research--require-cell))
+         (id (noema-research-cell-work-node-id cell))
+         (existing (noema-research-cell-relation cell type noema-research--document)))
+    (unless existing (user-error "No %s parents to remove" type))
+    (let* ((labels
+            (mapcar (lambda (parent-id)
+                      (let ((parent-cell (noema-research-primary-cell
+                                          noema-research--document parent-id)))
+                        (cons (if parent-cell
+                                  (noema-research-cell-label parent-cell noema-research--document)
+                                parent-id)
+                              parent-id)))
+                    existing))
+           (choice (completing-read (format "Remove %s parent: " type) labels nil t))
+           (parent (cdr (assoc choice labels))))
+      (noema-research-set-relation
+       noema-research--document id type (remove parent existing))
+      (set-buffer-modified-p t)
+      (noema-research-mode--refresh-decorations))))
+
+(defun noema-research-add-lineage-parent ()
+  "Add one lineage parent to the cell at point without rewriting the rest."
+  (interactive)
+  (noema-research--relation-add "lineage"))
+
+(defun noema-research-remove-lineage-parent ()
+  "Remove one lineage parent from the cell at point."
+  (interactive)
+  (noema-research--relation-remove "lineage"))
+
+(defun noema-research-add-depends-parent ()
+  "Add one hard dependency to the cell at point without rewriting the rest."
+  (interactive)
+  (noema-research--relation-add "depends"))
+
+(defun noema-research-remove-depends-parent ()
+  "Remove one hard dependency from the cell at point."
+  (interactive)
+  (noema-research--relation-remove "depends"))
+
+(defun noema-research-rename-work-node ()
+  "Rename the WorkNode bound to the cell at point.
+Only the title changes; `work_node_id' and every Dependency edge stay the
+same (§5.2: a title change never alters identity)."
+  (interactive)
+  (let* ((cell (noema-research--require-cell))
+         (cell-id (noema-research-cell-id cell))
+         (node (noema-research-work-node-for-cell noema-research--document cell)))
+    (unless node (user-error "This Cell has no WorkNode to rename"))
+    (let* ((current (or (noema-research-work-node-field node "title") ""))
+           (title (read-string "New title: " current)))
+      (noema-research-work-node-set node "title" title)
+      (noema-research--render-structure-mutation cell-id))))
 
 (defun noema-research-set-work-state (state &optional outcome)
   "Set the work cell at point to STATE.
