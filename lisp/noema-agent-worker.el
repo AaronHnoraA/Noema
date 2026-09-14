@@ -18,6 +18,7 @@
 (require 'magent-runtime-queue)
 
 (declare-function my/noema-api-call "init-aaronnote" (channel args callback &optional timeout))
+(declare-function my/noema--ensure-server "init-aaronnote" (&optional callback))
 (declare-function my/noema--host-file "init-aaronnote" (file))
 (declare-function my/noema-jupyter-output-open-document
                   "init-aaronnote" (payload &optional focus))
@@ -1025,6 +1026,35 @@ When SUBMISSION is non-nil, fill and dispatch that pre-freeze queue token."
                                   (format "%s:%s:%s" (float-time) (random) (emacs-pid)))
                      0 16)))
 
+(defun noema-agent-worker--begin-preparation (worker)
+  "Start queued WORKER after the Noema web host is ready."
+  (let ((id (noema-agent-worker-submission-id worker))
+        (target (noema-agent-worker-target worker)))
+    ;; A user can cancel while the host is starting.  In that case its
+    ;; eventual ready callback must not resurrect the Run.
+    (when (and (gethash id noema-agent-worker--submissions)
+               (eq (noema-agent-worker-queue-state worker) 'queued))
+      (let ((disposition
+             (magent-runtime-queue-arbitrate
+              'noema worker id
+              (lambda ()
+                (setf (noema-agent-worker-queue-state worker) 'preparing)
+                (noema-agent-worker--api
+                 "aaronnote:api:research:run:prepare"
+                 (noema-agent-worker-prepare-body worker)
+                 (lambda (result error-object)
+                   (noema-agent-worker--accept-prepared
+                    target result error-object worker))))
+              (lambda (error-object)
+                (setf (noema-agent-worker-queue-state worker) 'failed)
+                (remhash id noema-agent-worker--submissions)
+                (message "Noema queued Run could not start: %s"
+                         (error-message-string error-object)))
+              (lambda ()
+                (memq (noema-agent-worker-queue-state worker)
+                      '(queued preparing running))))))
+        (message "Noema document execution %s (%s)" disposition id)))))
+
 (defun noema-agent-worker--enqueue-preparation (target body)
   "Queue BODY for RunSpec freezing and dispatch at project TARGET."
   (let* ((id (noema-agent-worker--new-submission-id))
@@ -1032,25 +1062,12 @@ When SUBMISSION is non-nil, fill and dispatch that pre-freeze queue token."
                   :submission-id id :prepare-body body :target target
                   :root target :queue-state 'queued)))
     (puthash id worker noema-agent-worker--submissions)
-    (let ((disposition
-           (magent-runtime-queue-arbitrate
-            'noema worker id
-            (lambda ()
-              (setf (noema-agent-worker-queue-state worker) 'preparing)
-              (noema-agent-worker--api
-               "aaronnote:api:research:run:prepare"
-               (noema-agent-worker-prepare-body worker)
-               (lambda (result error-object)
-                 (noema-agent-worker--accept-prepared target result error-object worker))))
-            (lambda (error-object)
-              (setf (noema-agent-worker-queue-state worker) 'failed)
-              (remhash id noema-agent-worker--submissions)
-              (message "Noema queued Run could not start: %s"
-                       (error-message-string error-object)))
-            (lambda ()
-              (memq (noema-agent-worker-queue-state worker)
-                    '(queued preparing running))))))
-      (message "Noema document execution %s (%s)" disposition id))
+    (if (fboundp 'my/noema--ensure-server)
+        (progn
+          (message "Noema document execution waiting for web-host (%s)" id)
+          (my/noema--ensure-server
+           (lambda () (noema-agent-worker--begin-preparation worker))))
+      (noema-agent-worker--begin-preparation worker))
     id))
 
 ;;;###autoload

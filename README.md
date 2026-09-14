@@ -98,10 +98,12 @@ Key commands include:
 |---|---|
 | `C-c C-n` | continue from current context with a downstream WorkNode |
 | `C-c C-s` | create a sibling WorkNode |
-| `C-c C-g` | open the Work DAG |
+| `C-c C-g` | temporarily pop up the Work DAG |
 | `C-c C-b` | bind the current Cell to a labeled WorkNode |
 | `C-c C-c` | run the current work block through its configured agent |
+| `C-c j r` | run a selected project `.py` / `.ipynb` from the current WorkNode |
 | `C-c C-o` | open/update the right-side rich-output renderer |
+| `Cmd-Enter` | sync/activate the right-side OutputArea (same convention as Jupyter) |
 | `C-c C-z` | cancel an active Agent Run |
 | `C-c C-f` | set or clear the document's default agent |
 | `C-c j x` / `C-c j X` | clear current/all outputs |
@@ -113,14 +115,17 @@ Key commands include:
 Agent replies stream incrementally into the right-side renderer. A terminal reply replaces that work block's latest `outputs` with Markdown/plain-text MIME plus `application/vnd.noema.run+json`; Run history and transcripts remain in the Run store. Clearing outputs does not delete a Run. Clicking **Open Source in Emacs** sends `scriptFile + cellId`; Emacs resolves the stable Cell identity instead of trusting a projected line number. Agent Runs snapshot newly created or modified ordinary files into the CAS without moving them, persist `ArtifactLink` provenance on the stable WorkNode, and expose those paths through the Emacs Inspector.
 
 The Work DAG opened by `C-c C-g` is a semantic Graph Board rather than a
-static diagram. Work state, outcome, active Run status, dropped reason and
-checkpoint shape are visible on the graph. `TAB` fixes a fold, `f` toggles the
-focus lens, and `z` cycles Overview / Branch / Detail; Detail projects the
-latest Run and linked artifacts. Overview applies deterministic automatic
-folds while preserving the current path, and focus keeps omitted branches as
-summary nodes. The current JuText block and graph selection track each other.
-Use `e` for the Agent Run menu, `F` to fork directly, and `X` for the
-identity-safe WorkNode / Cell structure menu. View state lives under
+static diagram. It is a temporary pop-up, not a default/dedicated workspace
+window: `RET` or double-click synchronizes its selected node back to JuText
+and closes it; `q` dismisses it. Opening `.noema` instead defaults to JuText
+plus the right-side OutputArea, and it never auto-opens or auto-follows DAG.
+Work state, outcome, active Run status, dropped reason and checkpoint shape
+are visible on the graph. `TAB` fixes a fold, `f` toggles the focus lens, and
+`z` cycles Overview / Branch / Detail; Detail projects the latest Run and
+linked artifacts. Overview and manual folds retain the selected/focused path.
+Use `?` for contextual help, `h/j/k/l` or arrows for geometric graph
+navigation, `e` for the Agent/Project Run menu, `F` to fork directly, and `X`
+for identity-safe WorkNode / Cell structure actions. View state lives under
 `.agent/views/` and does not change the `.noema` document.
 
 `.noema` never starts, attaches, restarts or selects a Jupyter kernel and has no Run All command. Ordinary `.ipynb` and Markdown `@@cell` sidecars retain the complete Jupyter workflow. Programming code and experiments belong in ordinary project files.

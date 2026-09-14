@@ -36,9 +36,14 @@
                   "init-aaronnote-jupyter-cell" (channel body &optional timeout))
 (declare-function noema-research-graph-follow-source
                   "noema-research-graph" (source work-node-id))
+(declare-function noema-research-graph-buffer
+                  "noema-research-graph" (&optional source))
+(declare-function noema-research-graph-pop-buffer
+                  "noema-research-graph" (graph))
 (defvar my/noema--ready)
 
 (autoload 'noema-research-graph-open "noema-research-graph" nil t)
+(autoload 'noema-research-graph-buffer "noema-research-graph" nil nil)
 (autoload 'noema-research-attention "noema-research-inspector" nil t)
 (autoload 'noema-research-propose-with-magent "noema-research-synthesis" nil t)
 (autoload 'noema-agent-worker-run-work-cell "noema-agent-worker" nil t)
@@ -53,6 +58,21 @@
   "Whether saving a research notebook asks a running Noema host to reindex."
   :type 'boolean
   :group 'noema-research)
+
+(defcustom noema-research-open-output-on-visit t
+  "Whether visiting a `.noema' file opens its right-side OutputArea.
+The DAG is intentionally not part of the default layout: `C-c C-g' opens it
+as a temporary pop-up.  On macOS `s-<return>' (Command-Return) syncs OutputArea."
+  :type 'boolean
+  :group 'noema-research)
+
+(defcustom noema-research-python-interpreter "python3"
+  "Interpreter used by non-agent project-file Runs for `.py' files."
+  :type 'string
+  :group 'noema-research)
+
+(defvar-local noema-research--output-timer nil
+  "Pending deferred default OutputArea open for this JuText buffer.")
 
 (defface noema-research-question-face
   '((t :inherit font-lock-keyword-face :weight bold))
@@ -82,9 +102,6 @@
 
 (defvar-local noema-research--decoration-timer nil
   "Pending idle timer that refreshes header decorations.")
-
-(defvar-local noema-research--graph-follow-timer nil
-  "Pending idle timer that mirrors the JuText cursor into Graph Board.")
 
 (defconst noema-research--header-regexp "^%%\\(?:[ \t]+\\(.*?\\)\\)?[ \t]*$"
   "Regexp matching a JuText cell header.")
@@ -356,43 +373,6 @@ together with every relation that referenced them."
                    (setq noema-research--decoration-timer nil)
                    (noema-research-mode--refresh-decorations)))))))))
 
-(defun noema-research--graph-buffer-live-p ()
-  "Return non-nil when this JuText buffer has a live Graph Board."
-  (let ((source (current-buffer)))
-    (seq-some
-     (lambda (buffer)
-       (with-current-buffer buffer
-         (and (derived-mode-p 'noema-research-graph-mode)
-              (boundp 'noema-research-graph--source)
-              (eq noema-research-graph--source source))))
-     (buffer-list))))
-
-(defun noema-research--follow-graph-now (source)
-  "Mirror SOURCE's current WorkNode selection into its Graph Board."
-  (when (buffer-live-p source)
-    (with-current-buffer source
-      (setq noema-research--graph-follow-timer nil)
-      (when (and (fboundp 'noema-research-graph-follow-source)
-                 noema-research--document)
-        (let* ((entry (noema-research--entry-at-point (noema-research--scan)))
-               (id (and entry (plist-get entry :work-node-id))))
-          (when id
-            (noema-research-graph-follow-source source id)))))))
-
-(defun noema-research--schedule-graph-follow ()
-  "Debounce JuText-to-Graph selection synchronization."
-  (when (and (not noema-research--graph-follow-timer)
-             (noema-research--graph-buffer-live-p))
-    (setq noema-research--graph-follow-timer
-          (run-with-idle-timer 0.08 nil #'noema-research--follow-graph-now
-                               (current-buffer)))))
-
-(defun noema-research--cancel-graph-follow ()
-  "Cancel this buffer's pending Graph Board synchronization."
-  (when (timerp noema-research--graph-follow-timer)
-    (cancel-timer noema-research--graph-follow-timer))
-  (setq noema-research--graph-follow-timer nil))
-
 ;;;; Loading and saving
 
 (defun noema-research-merge-disk-outputs ()
@@ -579,6 +559,125 @@ With FOCUS non-nil (interactively, with a prefix), select the output window."
     (my/noema-jupyter-output-open-document
      (noema-research--output-payload context) focus)))
 
+(defun noema-research--project-run-body (context project-file args confirmed)
+  "Return host request for CONTEXT, PROJECT-FILE, ARGS and CONFIRMED policy."
+  (let ((host-path (lambda (path)
+                     (if (fboundp 'my/noema--host-file)
+                         (my/noema--host-file path)
+                       path))))
+    (vector
+     (noema-research--table
+      "file" (funcall host-path (plist-get context :script-file))
+      "cellId" (plist-get context :cell-id)
+      "projectFile" (funcall host-path project-file)
+      "root" (funcall host-path (plist-get context :project-root))
+      "cwd" (funcall host-path (plist-get context :project-root))
+      "interpreter" noema-research-python-interpreter
+      "args" (vconcat args)
+      "confirmed" (and confirmed t)))))
+
+;;;###autoload
+(defun noema-research-run-project-file (project-file &optional args)
+  "Run repository PROJECT-FILE from the current Work without an agent.
+`.py' stdout/stderr streams into the Run OutputArea; `.ipynb' MIME outputs use
+the same JupyterLab renderer as ordinary notebook cells.  Generated or changed
+project files are linked back to the Work as immutable Artifacts."
+  (interactive
+   (let* ((context (noema-research--output-context t))
+          (root (plist-get context :project-root))
+          (file
+           (read-file-name
+            "Run project .py or .ipynb: " root nil t nil
+            (lambda (candidate)
+              (or (file-directory-p candidate)
+                  (string-match-p "\\.\\(?:py\\|ipynb\\)\\'" candidate)))))
+          (arguments (if (string-suffix-p ".py" file t)
+                         (split-string-and-unquote (read-string "Python arguments: "))
+                       nil)))
+     (list file arguments)))
+  (let* ((context (noema-research--output-context t))
+         (root (file-truename (plist-get context :project-root)))
+         (project-file (file-truename (expand-file-name project-file))))
+    (unless (file-in-directory-p project-file root)
+      (user-error "Project-file Run must stay inside %s" root))
+    (unless (string-match-p "\\.\\(?:py\\|ipynb\\)\\'" project-file)
+      (user-error "Project-file Run supports only .py and .ipynb"))
+    (unless (yes-or-no-p
+             (format "Run %s locally? It may execute code and modify project files. The frozen Run will record the default capability policy. "
+                     (file-relative-name project-file root)))
+      (user-error "Project-file Run cancelled"))
+    (unless (and (fboundp 'my/noema--ensure-server)
+                 (fboundp 'my/noema-api-call))
+      (user-error "Noema web-host integration is unavailable"))
+    (let ((request (noema-research--project-run-body context project-file args t)))
+      (message "Noema project-file Run waiting for web-host")
+      (my/noema--ensure-server
+       (lambda ()
+         (my/noema-api-call
+          "aaronnote:api:research:run:project-file" request
+          (lambda (result error-object)
+            (if error-object
+                (message "Noema project-file Run failed: %s"
+                         (or (and (hash-table-p error-object) (gethash "message" error-object))
+                             (and (listp error-object) (alist-get 'message error-object))
+                             "request failed"))
+              (let* ((run (and (hash-table-p result) (gethash "run" result)))
+                     (run-id (and (hash-table-p run) (gethash "id" run))))
+                (when (fboundp 'my/noema-jupyter-output-open-document)
+                  (my/noema-jupyter-output-open-document
+                   (noema-research--output-payload context run-id) nil))
+                (message "Noema project-file Run started%s"
+                         (if run-id (format ": %s" run-id) "")))))
+          30000))))))
+
+;;;###autoload
+(defun noema-research-open-workspace (&optional focus-graph)
+  "Compatibility name for opening the temporary Graph pop-up.
+FOCUS-GRAPH is accepted for callers from the earlier workspace layout."
+  (interactive "P")
+  (unless (derived-mode-p 'noema-research-mode)
+    (user-error "Not in a research notebook"))
+  (ignore focus-graph)
+  (noema-research-graph-open))
+
+(defun noema-research-sync-graph ()
+  "Explicitly sync the singleton DAG to this JuText block.
+This is intentionally the only cursor-to-DAG synchronization path."
+  (interactive)
+  (unless (derived-mode-p 'noema-research-mode)
+    (user-error "Not in a research notebook"))
+  (let* ((entry (noema-research--entry-at-point (noema-research--scan)))
+         (id (and entry (plist-get entry :work-node-id)))
+         (source (current-buffer)))
+    (noema-research-graph-pop-buffer
+     (noema-research-graph-follow-source source id))
+    (message "Noema DAG synced%s"
+             (if id (format " to %s" id) " to this document"))))
+
+(defun noema-research--schedule-default-output ()
+  "Open this document's OutputArea after the visiting window has settled."
+  (when (timerp noema-research--output-timer)
+    (cancel-timer noema-research--output-timer))
+  (let ((source (current-buffer)))
+    (setq noema-research--output-timer
+          (run-at-time
+           0 nil
+           (lambda ()
+             (when (buffer-live-p source)
+               (with-current-buffer source
+                 (setq noema-research--output-timer nil)
+                 (condition-case error-object
+                     (noema-research-open-outputs nil)
+                   (error
+                    (message "Noema default OutputArea unavailable: %s"
+                             (error-message-string error-object)))))))))))
+
+(defun noema-research--cancel-output-timer ()
+  "Cancel this buffer's pending default OutputArea open."
+  (when (timerp noema-research--output-timer)
+    (cancel-timer noema-research--output-timer))
+  (setq noema-research--output-timer nil))
+
 (defun noema-research--kernel-disabled ()
   "Explain the D-023 execution boundary."
   (user-error ".noema has no Jupyter kernel; run a work block through an agent"))
@@ -758,9 +857,6 @@ SNAPSHOT is ignored; the `.noema' file is the sole durable authority."
 Point is left where the title is typed."
   (let* ((entries (noema-research--scan))
          (entry (noema-research--entry-at-point entries))
-         (anchor-cell (and entry (noema-research-find-cell noema-research--document
-                                                           (plist-get entry :id))))
-         (anchor (and anchor-cell (noema-research-cell-work-node-id anchor-cell)))
          (position (if entry (plist-get entry :block-end) (point-max))))
     (goto-char position)
     (when (and (= position (point-max)) (not (bobp)))
@@ -1162,11 +1258,15 @@ With a prefix argument, also prompt for OUTCOME (empty clears it)."
     (define-key map (kbd "C-c C-p") #'noema-research-edit-lineage)
     (define-key map (kbd "C-c C-d") #'noema-research-edit-depends)
     (define-key map (kbd "C-c C-t") #'noema-research-set-work-state)
-    (define-key map (kbd "C-c C-i") #'noema-research-inspect)
+    (define-key map (kbd "C-c C-i") #'noema-research-open-outputs)
     (define-key map (kbd "C-c C-a") #'noema-research-attention)
     (define-key map (kbd "C-c C-r") #'noema-research-propose-with-magent)
     (define-key map (kbd "C-c C-g") #'noema-research-graph-open)
+    ;; On macOS `s-<return>' is Command-Return.  It mirrors Jupyter's
+    ;; OutputArea action; graph synchronization stays an explicit C-c C-g.
+    (define-key map (kbd "s-<return>") #'noema-research-open-outputs)
     (define-key map (kbd "C-c C-c") #'noema-research-execute-current)
+	(define-key map (kbd "C-c j r") #'noema-research-run-project-file)
     (define-key map (kbd "C-c C-o") #'noema-research-open-outputs)
     (define-key map (kbd "C-c C-z") #'noema-research-interrupt-current)
     (define-key map (kbd "C-c j x") #'noema-research-clear-current-output)
@@ -1174,6 +1274,7 @@ With a prefix argument, also prompt for OUTCOME (empty clears it)."
     (define-key map (kbd "C-c j u") #'noema-research-unbind-current-cell)
     (define-key map (kbd "C-c j d") #'noema-research-delete-current-cell)
     (define-key map (kbd "C-c j w") #'noema-research-delete-current-work-node)
+    (define-key map (kbd "C-c j i") #'noema-research-inspect)
     (define-key map (kbd "C-c C-b") #'noema-research-bind-current-cell)
     (define-key map (kbd "C-c C-f") #'noema-research-set-document-default-agent)
     (define-key map (kbd "C-c M-m") #'noema-research-migrate-d023)
@@ -1194,8 +1295,7 @@ With a prefix argument, also prompt for OUTCOME (empty clears it)."
             #'noema-research-completion-at-point nil t)
   (add-hook 'write-contents-functions #'noema-research-mode--write-contents nil t)
   (add-hook 'after-change-functions #'noema-research--schedule-decorations nil t)
-  (add-hook 'post-command-hook #'noema-research--schedule-graph-follow nil t)
-  (add-hook 'kill-buffer-hook #'noema-research--cancel-graph-follow nil t)
+  (add-hook 'kill-buffer-hook #'noema-research--cancel-output-timer nil t)
   (let* ((file buffer-file-name)
          (on-disk (and file (file-exists-p file))))
     (noema-research--load (if on-disk
@@ -1205,7 +1305,9 @@ With a prefix argument, also prompt for OUTCOME (empty clears it)."
                           (and on-disk (noema-research-file-revision file)))
     (when on-disk
       (set-visited-file-modtime)
-      (noema-research-notify-host file "jutext.open"))))
+      (noema-research-notify-host file "jutext.open")
+      (when (and noema-research-open-output-on-visit (not noninteractive))
+        (noema-research--schedule-default-output)))))
 
 (provide 'noema-research-mode)
 

@@ -789,14 +789,15 @@ Each entry is a cons (ENTITY-ID . MESSAGE)."
               (setq queue (append queue (list (cons next (1+ distance))))))))))
     (nreverse result)))
 
-(cl-defun noema-research-projection (document &key focus folds (depth 2))
+(cl-defun noema-research-projection (document &key focus folds protect (depth 2))
   "Return the lineage-first graph projection of DOCUMENT.
 The result is a plist with :nodes, :edges, :focus and :folds.  Each node is a
 plist with :id, :kind, :title, :state, :outcome, :focus, :folded (the number of
 contracted nodes, or nil) and :parents (visible lineage parents).  Each edge is
 a list (FROM TO TYPE).  FOLDS contract descendants that are only reachable
-through the folded node; FOCUS and its ancestors are never hidden.  With
-FOCUS, the lens keeps ancestors, descendants up to DEPTH, and siblings."
+through the folded node.  FOCUS and every id in PROTECT, together with their
+ancestors, are never hidden.  With FOCUS, the lens keeps ancestors,
+descendants up to DEPTH, and siblings."
   (let ((nodes (make-hash-table :test #'equal))
         (children (make-hash-table :test #'equal))
         (parents (make-hash-table :test #'equal))
@@ -822,10 +823,15 @@ FOCUS, the lens keeps ancestors, descendants up to DEPTH, and siblings."
            (hidden-by (make-hash-table :test #'equal))
            (roots (seq-filter (lambda (id) (null (gethash id parents))) order))
            lens effective-folds)
+      (dolist (anchor (delete-dups
+                       (delq nil
+                             (append (and focus-id (list focus-id))
+                                     (if (listp protect) protect (list protect))))))
+        (when (gethash anchor nodes)
+          (puthash anchor t protected)
+          (dolist (id (noema-research--walk anchor parents))
+            (puthash id t protected))))
       (when focus-id
-        (puthash focus-id t protected)
-        (dolist (id (noema-research--walk focus-id parents))
-          (puthash id t protected))
         (setq lens (copy-hash-table protected))
         (dolist (id (noema-research--walk focus-id children depth))
           (puthash id t lens))
@@ -892,7 +898,13 @@ FOCUS, the lens keeps ancestors, descendants up to DEPTH, and siblings."
                   (to (representative (nth 1 edge)))
                   (type (nth 2 edge)))
               (unless (or (equal from to) (not (visible from)) (not (visible to))
-                          (gethash (list from to type) seen))
+                          (gethash (list from to type) seen)
+                          ;; A protected node can stay visible below a fold.
+                          ;; Its edges into that fold's hidden descendants
+                          ;; would be redirected to the fold owner, an
+                          ;; ancestor, and draw a false cycle.  Drop them.
+                          (and (not (equal to (nth 1 edge)))
+                               (member from (noema-research--walk to children))))
                 (puthash (list from to type) t seen)
                 (push (list from to type) out-edges))))
           (list :nodes (nreverse out-nodes)

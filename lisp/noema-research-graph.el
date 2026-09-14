@@ -4,10 +4,11 @@
 ;;
 ;; The Graph Board is an interactive projection of a research notebook's
 ;; lineage graph.  Graphviz computes the layout (`dot -Tjson'); Noema draws its
-;; own SVG scene with clickable nodes and always renders a navigable outline,
-;; so the board also works in terminals and without Graphviz.  Every command is
-;; a semantic edit applied to the notebook through its JuText buffer; folding
-;; and focus are view state stored under `<repository>/.agent/views/'.
+;; own SVG scene with clickable nodes.  The buffer deliberately contains only
+;; the DAG; discoverable commands live behind `?', and keyboard navigation is
+;; geometric rather than an additional text outline.  Every command is a
+;; semantic edit applied to the notebook through its JuText buffer; folding and
+;; focus are view state stored under `<repository>/.agent/views/'.
 
 ;;; Code:
 
@@ -58,6 +59,15 @@
 (defvar-local noema-research-graph--artifacts nil
   "ArtifactLink rows used by the detail projection.")
 
+(defvar-local noema-research-graph--layout-cache nil
+  "Latest Graphviz layout, used for geometric keyboard navigation.")
+
+(defvar-local noema-research-graph--window-size nil
+  "Last pixel size used to fit this DAG buffer.")
+
+(defconst noema-research-graph-buffer-name "*Noema DAG*"
+  "Name of the single reusable research DAG buffer.")
+
 (defconst noema-research-graph--fills
   '(("question" . "#e8f0fe") ("work" . "#e6f4ea")
     ("checkpoint" . "#fef7e0") ("summary" . "#f3e8fd")
@@ -82,9 +92,17 @@
     ("i" . noema-research-graph-inspect)
     ("a" . noema-research-attention)
     ("RET" . noema-research-graph-visit)
+    ("q" . noema-research-graph-quit)
     ("g" . noema-research-graph-refresh-all)
-    ("j" . next-line)
-    ("k" . previous-line))
+    ("?" . noema-research-graph-help)
+    ("h" . noema-research-graph-move-left)
+    ("j" . noema-research-graph-move-down)
+    ("k" . noema-research-graph-move-up)
+    ("l" . noema-research-graph-move-right)
+    ("<left>" . noema-research-graph-move-left)
+    ("<down>" . noema-research-graph-move-down)
+    ("<up>" . noema-research-graph-move-up)
+    ("<right>" . noema-research-graph-move-right))
   "Graph Board keys shared by vanilla Emacs and Evil normal state.")
 
 (defvar noema-research-graph-mode-map
@@ -106,6 +124,55 @@
   (when (fboundp 'evil-local-set-key)
     (dolist (binding noema-research-graph--bindings)
       (evil-local-set-key 'normal (kbd (car binding)) (cdr binding)))))
+
+(transient-define-prefix noema-research-graph-help ()
+  "Show the Graph Board's contextual command reference."
+  [["Navigate"
+    ("h/←" "left" noema-research-graph-move-left)
+    ("j/↓" "down" noema-research-graph-move-down)
+    ("k/↑" "up" noema-research-graph-move-up)
+    ("l/→" "right" noema-research-graph-move-right)
+    ("RET" "visit selected node" noema-research-graph-visit)
+    ("q" "close graph" noema-research-graph-quit)]
+   ["View"
+    ("TAB" "fold branch" noema-research-graph-toggle-fold)
+    ("f" "focus branch" noema-research-graph-toggle-focus)
+    ("z" "semantic zoom" noema-research-graph-cycle-zoom)
+    ("g" "refresh data" noema-research-graph-refresh-all)]
+   ["Selected node"
+    ("e" "run" noema-research-graph-execute)
+    ("i" "inspect" noema-research-graph-inspect)
+    ("n" "continue" noema-research-graph-continue)
+    ("s" "sibling" noema-research-graph-sibling)
+    ("c" "checkpoint" noema-research-graph-checkpoint)
+    ("X" "structure" noema-research-graph-structure)]
+   ["State / relations"
+    ("d" "done" noema-research-graph-mark-done)
+    ("x" "drop" noema-research-graph-drop)
+    ("R" "reopen" noema-research-graph-reopen)
+    ("p" "lineage" noema-research-graph-edit-lineage)
+    ("D" "depends" noema-research-graph-edit-depends)
+    ("a" "Attention" noema-research-attention)]])
+
+(defun noema-research-graph-quit ()
+  "Dismiss the temporary Graph pop-up and return to JuText."
+  (interactive)
+  (quit-window nil (selected-window)))
+
+(defun noema-research-graph-pop-buffer (graph)
+  "Show GRAPH as a temporary pop-up and return it.
+This deliberately uses `display-buffer-pop-up-window' rather than a side or
+dedicated workspace window, so `q' and visiting a node restore the prior
+JuText layout exactly."
+  (pop-to-buffer
+   graph
+   '((display-buffer-reuse-window display-buffer-pop-up-window)
+     (inhibit-same-window . t)
+     (window-height . 0.42)))
+  ;; Initial rendering can happen before the pop-up has dimensions.
+  (with-current-buffer graph
+    (noema-research-graph-refresh))
+  graph)
 
 ;;;; Source access
 
@@ -176,14 +243,19 @@
         (noema-research-graph-refresh)))))
 
 (defun noema-research-graph--jump-and-call (function)
-  "Visit the node at point in its source buffer and call FUNCTION there."
+  "Visit the node at point in its source buffer and call FUNCTION there.
+The Graph Board is a temporary pop-up: visiting a node restores the prior
+JuText window instead of leaving a dedicated DAG window behind."
   (let ((id (noema-research-graph--node-at-point))
-        (source noema-research-graph--source))
+        (source noema-research-graph--source)
+        (graph-window (selected-window)))
     (noema-research-graph--require-materialized id)
+    (quit-window nil graph-window)
     (pop-to-buffer source)
-    (noema-research-mode--sync)
-    (noema-research-goto-cell id)
-    (when function (funcall function))))
+    (with-current-buffer source
+      (noema-research-mode--sync)
+      (noema-research-goto-cell id)
+      (when function (funcall function)))))
 
 (defun noema-research-graph--save-view ()
   "Persist the board's focus and folds next to the notebook."
@@ -328,11 +400,35 @@
     (let* ((ranked (sort (copy-sequence outcomes)
                          (lambda (left right)
                            (if (= (cdr left) (cdr right))
-                               (string-lessp (car left) (car right))
+                               (< (or (seq-position noema-research-work-outcomes
+                                                    (car left) #'equal)
+                                      most-positive-fixnum)
+                                  (or (seq-position noema-research-work-outcomes
+                                                    (car right) #'equal)
+                                      most-positive-fixnum))
                              (> (cdr left) (cdr right))))))
            (primary (caar ranked)))
       (list :nodes (length ids) :kinds kinds :outcomes outcomes
             :primary-outcome primary :last-activity last-activity))))
+
+(defun noema-research-graph--summary-outcome (summary)
+  "Return an honest outcome label for fold SUMMARY.
+When the leading outcomes are tied, show every tied outcome and its count
+instead of choosing an arbitrary winner."
+  (let* ((outcomes (plist-get summary :outcomes))
+         (highest (and outcomes (apply #'max (mapcar #'cdr outcomes))))
+         (leaders (seq-filter (lambda (entry) (= (cdr entry) highest)) outcomes)))
+    (if (> (length leaders) 1)
+        (mapconcat
+         (lambda (outcome)
+           (format "%s %d" (noema-research-graph--humanize (car outcome))
+                   (cdr outcome)))
+         (seq-filter
+          (lambda (entry) (assoc (car entry) leaders))
+          (mapcar (lambda (name) (cons name (or (cdr (assoc name outcomes)) 0)))
+                  noema-research-work-outcomes))
+         " · ")
+      (noema-research-graph--humanize (plist-get summary :primary-outcome)))))
 
 (defun noema-research-graph--decorate-projection (projection document)
   "Add Run activity and rich fold summaries to PROJECTION."
@@ -356,9 +452,19 @@
                              (seq-remove (lambda (candidate)
                                            (gethash candidate visible))
                                          (noema-research-graph--walk id children)))))
-              (setq node (plist-put node :fold-summary
-                                    (noema-research-graph--semantic-summary
-                                     document ids)))))))
+              (setq node
+                    (plist-put
+                     node :fold-summary
+                     (let ((summary (noema-research-graph--semantic-summary
+                                     document ids))
+                           (anchor (or noema-research-graph--focus
+                                       noema-research-graph--selected)))
+                       (when (and anchor
+                                  (member id noema-research-graph--folds)
+                                  (member anchor
+                                          (noema-research-graph--walk id children)))
+                         (setq summary (plist-put summary :path-preserved t)))
+                       summary)))))))
       projection)))
 
 (defun noema-research-graph--focus-summaries (projection document)
@@ -475,7 +581,9 @@
                  (append noema-research-graph--folds
                          (noema-research-graph--automatic-folds document))))
          (projection (noema-research-projection
-                      document :focus noema-research-graph--focus :folds folds)))
+                      document :focus noema-research-graph--focus :folds folds
+                      :protect (delq nil (list noema-research-graph--focus
+                                               noema-research-graph--selected)))))
     (setq projection (noema-research-graph--decorate-projection projection document)
           projection (noema-research-graph--focus-summaries projection document)
           projection (noema-research-graph--detail-runs projection)
@@ -502,6 +610,7 @@
   (let* ((limit (pcase noema-research-graph--zoom
                   ("overview" 34) ("detail" 72) (_ 52)))
          (title (concat (if (plist-get node :ghost) "◇ " "")
+                        (if (equal (plist-get node :kind) "question") "? " "")
                         (truncate-string-to-width
                          (or (plist-get node :title) "Untitled") limit nil nil "…")))
          (fold (plist-get node :fold-summary))
@@ -513,18 +622,20 @@
     (push title lines)
     (cond
      (fold
-      (push (string-join
+     (push (string-join
              (delq nil
-                   (list "▸"
-                         (noema-research-graph--humanize
-                          (plist-get fold :primary-outcome))
+                   (list (concat "▸"
+                                 (when-let* ((summary-outcome
+                                              (noema-research-graph--summary-outcome fold)))
+                                   (concat " " summary-outcome)))
                          (format "%d nodes" (or (plist-get fold :nodes) 0))))
              " · ")
             lines)
-      (push (concat "last "
-                    (or (noema-research-graph--short-time
-                         (plist-get fold :last-activity)) "—"))
-            lines))
+      (when (plist-get fold :path-preserved)
+        (push "current path preserved" lines))
+      (when-let* ((time (noema-research-graph--short-time
+                         (plist-get fold :last-activity))))
+        (push (concat "last " time) lines)))
      ((plist-get node :run)
       (push (string-join (delq nil (list agent state)) " · ") lines)
       (when-let* ((time (noema-research-graph--short-time
@@ -614,7 +725,10 @@
   "Return TEXT as a quoted Graphviz string."
   (let ((escaped (replace-regexp-in-string "[\"\\\\]" "\\\\\\&" text)))
     (setq escaped (replace-regexp-in-string "\r" "" escaped)
-          escaped (replace-regexp-in-string "\n" "\\\\n" escaped nil t))
+          ;; Graphviz uses one backslash followed by n for a centred line
+          ;; break.  With LITERAL non-nil the replacement must contain exactly
+          ;; that pair, not a doubled backslash that Graphviz prints verbatim.
+          escaped (replace-regexp-in-string "\n" "\\n" escaped nil t))
     (concat "\"" escaped "\"")))
 
 (defun noema-research-graph--dot-source (projection)
@@ -623,7 +737,11 @@
         (index 0))
     (with-temp-buffer
       (insert "digraph noema {\n  rankdir=TB;\n  nodesep=0.35;\n  ranksep=0.45;\n"
-              "  node [shape=box, fontname=\"Helvetica\", fontsize=11, margin=\"0.14,0.07\"];\n")
+              ;; Graphviz must reserve room for the largest face used by our
+              ;; SVG painter.  The first line is 11px semibold and later
+              ;; lines are smaller, so sizing every line as Helvetica Bold 11
+              ;; is deliberately conservative and prevents text overflow.
+              "  node [shape=box, fontname=\"Helvetica Bold\", fontsize=11, margin=\"0.14,0.10\"];\n")
       (dolist (node (plist-get projection :nodes))
         (let* ((name (format "n%d" index))
                (kind (plist-get node :kind))
@@ -705,11 +823,28 @@ The plist has :width, :height, :nodes (plists :id :x :y :width :height) and
                          points)))
     (concat "M " (car shifted) " C " (string-join (cdr shifted) " "))))
 
-(defun noema-research-graph--svg (projection layout selected)
-  "Return (SVG . MAP) drawing PROJECTION with LAYOUT, highlighting SELECTED."
+(defun noema-research-graph--fit-scale (layout)
+  "Return a scale that fits LAYOUT in the displayed Graph window."
+  (if-let* ((window (get-buffer-window (current-buffer) t))
+            (available-width (max 120 (- (window-body-width window t) 12)))
+            (available-height (max 120 (- (window-body-height window t) 12))))
+      (min 1.0
+           (/ (float available-width) (+ 16.0 (plist-get layout :width)))
+           (/ (float available-height) (+ 16.0 (plist-get layout :height))))
+    1.0))
+
+(defun noema-research-graph--svg (projection layout selected &optional scale)
+  "Return (SVG . MAP) drawing PROJECTION with LAYOUT, highlighting SELECTED.
+SCALE changes the SVG viewport and its image-map coordinates while preserving
+Graphviz's coordinate system through a viewBox."
   (let* ((margin 8)
-         (svg (svg-create (ceiling (+ (* 2 margin) (plist-get layout :width)))
-                          (ceiling (+ (* 2 margin) (plist-get layout :height)))))
+         (scale (or scale 1.0))
+         (natural-width (ceiling (+ (* 2 margin) (plist-get layout :width))))
+         (natural-height (ceiling (+ (* 2 margin) (plist-get layout :height))))
+         (svg (svg-create (max 1 (round (* scale natural-width)))
+                          (max 1 (round (* scale natural-height)))
+                          :viewBox (format "0 0 %d %d" natural-width natural-height)
+                          :preserveAspectRatio "xMidYMid meet"))
          (by-id (make-hash-table :test #'equal))
          map)
     (dolist (node (plist-get projection :nodes))
@@ -776,8 +911,9 @@ The plist has :width, :height, :nodes (plists :id :x :y :width :height) and
                               :font-family "Helvetica"
                               :fill (if (zerop index) "#202124" "#5f6368")
                               :stroke "none"))
-        (push `((rect . ((,(round x0) . ,(round y0))
-                         . (,(round (+ x0 width)) . ,(round (+ y0 height)))))
+        (push `((rect . ((,(round (* scale x0)) . ,(round (* scale y0)))
+                         . (,(round (* scale (+ x0 width)))
+                            . ,(round (* scale (+ y0 height))))))
                 ,(intern (concat "noema-node-" id))
                 (pointer hand help-echo ,(string-join lines " — ")))
               map)))
@@ -787,9 +923,12 @@ The plist has :width, :height, :nodes (plists :id :x :y :width :height) and
   "Insert the Graphviz drawing of PROJECTION; return non-nil on success."
   (when-let* ((layout (and (plist-get projection :nodes)
                            (noema-research-graph--layout projection))))
-    (pcase-let ((`(,svg . ,map)
-                 (noema-research-graph--svg projection layout
-                                            noema-research-graph--selected)))
+    (setq noema-research-graph--layout-cache layout)
+    (let ((scale (noema-research-graph--fit-scale layout)))
+      (pcase-let ((`(,svg . ,map)
+                   (noema-research-graph--svg projection layout
+                                              noema-research-graph--selected
+                                              scale)))
       (let ((keymap (make-sparse-keymap)))
         (dolist (area map)
           (let* ((symbol (nth 1 area))
@@ -804,7 +943,64 @@ The plist has :width, :height, :nodes (plists :id :x :y :width :height) and
         (set-keymap-parent keymap noema-research-graph-mode-map)
         (use-local-map keymap))
       (insert-image (svg-image svg :map map))
-      t)))
+      t))))
+
+(defun noema-research-graph--layout-node (id)
+  "Return the cached layout node identified by ID."
+  (seq-find (lambda (node) (equal (plist-get node :id) id))
+            (plist-get noema-research-graph--layout-cache :nodes)))
+
+(defun noema-research-graph--move (direction)
+  "Move the DAG selection geometrically in DIRECTION."
+  (unless noema-research-graph--layout-cache
+    (user-error "The DAG has no Graphviz layout"))
+  (let* ((nodes (plist-get noema-research-graph--layout-cache :nodes))
+         (current (or (noema-research-graph--layout-node
+                       noema-research-graph--selected)
+                      (car (sort (copy-sequence nodes)
+                                 (lambda (left right)
+                                   (if (= (plist-get left :y) (plist-get right :y))
+                                       (< (plist-get left :x) (plist-get right :x))
+                                     (< (plist-get left :y) (plist-get right :y))))))))
+         (cx (and current (plist-get current :x)))
+         (cy (and current (plist-get current :y)))
+         best best-score)
+    (unless current
+      (user-error "The DAG has no nodes"))
+    (dolist (candidate nodes)
+      (unless (eq candidate current)
+        (let* ((dx (- (plist-get candidate :x) cx))
+               (dy (- (plist-get candidate :y) cy))
+               (primary (if (memq direction '(left right)) (abs dx) (abs dy)))
+               (secondary (if (memq direction '(left right)) (abs dy) (abs dx)))
+               (eligible (pcase direction
+                           ('left (< dx -0.5))
+                           ('right (> dx 0.5))
+                           ('up (< dy -0.5))
+                           ('down (> dy 0.5))))
+               ;; Prefer the requested axis, then the closest adjacent lane.
+               (score (+ primary (* secondary 2.0))))
+          (when (and eligible (or (null best-score) (< score best-score)))
+            (setq best candidate best-score score)))))
+    (setq noema-research-graph--selected
+          (plist-get (or best current) :id))
+    (noema-research-graph-refresh)))
+
+(defun noema-research-graph-move-left ()
+  "Select the nearest DAG node to the left." (interactive)
+  (noema-research-graph--move 'left))
+
+(defun noema-research-graph-move-right ()
+  "Select the nearest DAG node to the right." (interactive)
+  (noema-research-graph--move 'right))
+
+(defun noema-research-graph-move-up ()
+  "Select the nearest DAG node above." (interactive)
+  (noema-research-graph--move 'up))
+
+(defun noema-research-graph-move-down ()
+  "Select the nearest DAG node below." (interactive)
+  (noema-research-graph--move 'down))
 
 (defun noema-research-graph--insert-outline (projection)
   "Insert the navigable lineage outline of PROJECTION."
@@ -887,29 +1083,14 @@ The plist has :width, :height, :nodes (plists :id :x :y :width :height) and
          (inhibit-read-only t))
     (use-local-map noema-research-graph-mode-map)
     (erase-buffer)
-    (insert (propertize (let ((title (noema-research-notebook-title document)))
-                          (if (string-empty-p title) "Research graph" title))
-                        'face 'bold)
-            "\n"
-            (propertize (format "%d nodes · %d folded%s\n"
-                                (length (plist-get projection :nodes))
-                                (length (plist-get projection :folds))
-                                (if (plist-get projection :focus) " · focus lens" ""))
-                        'face 'shadow)
-            (propertize (format "semantic zoom: %s · z cycles overview / branch / detail\n"
-                                noema-research-graph--zoom)
-                        'face 'shadow)
-            (propertize "n continue  s sibling  c checkpoint  p lineage  D depends  d done  x drop  R reopen\ne run  F fork  TAB fold  f focus  z zoom  X structure  i inspect  a Attention  RET visit  g refresh\n\n"
-                        'face 'shadow))
-    (when (and (display-images-p) (image-type-available-p 'svg))
-      (when (noema-research-graph--insert-image projection)
-        (insert "\n\n")))
-    (let ((outline-start (point)))
-      (noema-research-graph--insert-outline projection)
-      (goto-char outline-start)
-      (when-let* ((position (and selected
-                                 (noema-research-graph--find-node selected outline-start))))
-        (goto-char position)))))
+    (setq noema-research-graph--layout-cache nil)
+    (if (and (display-images-p) (image-type-available-p 'svg)
+             (noema-research-graph--insert-image projection))
+        (goto-char (point-min))
+      (insert (propertize
+               "DAG rendering requires a graphical Emacs with SVG and Graphviz."
+               'face 'warning)))
+    (setq noema-research-graph--selected selected)))
 
 (defun noema-research-graph-refresh-proposals ()
   "Refresh pending Proposal ghosts from the Noema authority."
@@ -931,7 +1112,10 @@ The plist has :width, :height, :nodes (plists :id :x :y :width :height) and
          "aaronnote:api:research:proposal:list"
          (vector `((cwd . ,root) (workstreamId . ,workstream-id) (limit . 1000)))
          (lambda (result error-object)
-           (when (buffer-live-p graph)
+           (when (and (buffer-live-p graph)
+                      (eq (buffer-local-value
+                           'noema-research-graph--source graph)
+                          source))
              (with-current-buffer graph
                (if error-object
                    (message "Noema Proposal ghost refresh failed")
@@ -958,7 +1142,10 @@ The plist has :width, :height, :nodes (plists :id :x :y :width :height) and
          "aaronnote:api:research:run:list"
          (vector `((cwd . ,root) (workstreamId . ,workstream-id) (limit . 1000)))
          (lambda (result error-object)
-           (when (and (not error-object) (buffer-live-p graph))
+           (when (and (not error-object) (buffer-live-p graph)
+                      (eq (buffer-local-value
+                           'noema-research-graph--source graph)
+                          source))
              (with-current-buffer graph
                (setq noema-research-graph--runs
                      (noema-research-graph--sequence
@@ -983,7 +1170,10 @@ The plist has :width, :height, :nodes (plists :id :x :y :width :height) and
                    (cwd . ,root) (notebookId . ,notebook-id)
                    (after . 0) (limit . 1000)))
          (lambda (result error-object)
-           (when (and (not error-object) (buffer-live-p graph))
+           (when (and (not error-object) (buffer-live-p graph)
+                      (eq (buffer-local-value
+                           'noema-research-graph--source graph)
+                          source))
              (with-current-buffer graph
                (setq noema-research-graph--events
                      (noema-research-graph--sequence
@@ -1010,7 +1200,10 @@ The plist has :width, :height, :nodes (plists :id :x :y :width :height) and
          (vector `((cwd . ,root) (workstreamId . ,workstream-id)
                    (notebookId . ,notebook-id) (limit . 1000)))
          (lambda (result error-object)
-           (when (and (not error-object) (buffer-live-p graph))
+           (when (and (not error-object) (buffer-live-p graph)
+                      (eq (buffer-local-value
+                           'noema-research-graph--source graph)
+                          source))
              (with-current-buffer graph
                (setq noema-research-graph--artifacts
                      (noema-research-graph--sequence
@@ -1174,13 +1367,26 @@ The plist has :width, :height, :nodes (plists :id :x :y :width :height) and
   (interactive)
   (noema-research-graph--run "fork"))
 
+(defun noema-research-graph-run-project-file ()
+  "Run a repository script or notebook from the selected Work."
+  (interactive)
+  (let ((id (noema-research-graph--node-at-point))
+        (source noema-research-graph--source))
+    (noema-research-graph--require-materialized id)
+    (pop-to-buffer source)
+    (noema-research-mode--sync)
+    (noema-research-goto-cell id)
+    (call-interactively #'noema-research-run-project-file)))
+
 (transient-define-prefix noema-research-graph-execute ()
-  "Run the selected `.noema' work through an ACP agent."
+  "Run the selected `.noema' work through an agent or project file."
   [["Agent Run"
     ("r" "declared/default route" noema-research-graph-run-default)
     ("c" "continue" noema-research-graph-run-continue)
     ("f" "fork" noema-research-graph-run-fork)
-    ("n" "fresh" noema-research-graph-run-fresh)]])
+	("n" "fresh" noema-research-graph-run-fresh)]
+	["Project Run"
+	 ("p" "run .py / .ipynb" noema-research-graph-run-project-file)]])
 
 (defun noema-research-graph--structure-command (function)
   "Apply source-buffer structure FUNCTION to the selected materialized node."
@@ -1234,35 +1440,39 @@ The plist has :width, :height, :nodes (plists :id :x :y :width :height) and
     ("c" "delete Cell; keep WorkNode" noema-research-graph-delete-cell)]])
 
 (defun noema-research-graph-follow-source (source work-node-id)
-  "Select WORK-NODE-ID in every live Graph Board for SOURCE.
-When a focus lens is active, move that lens as well so the source cursor never
-selects a node hidden by its own Graph view."
-  (dolist (buffer (buffer-list))
-    (when (with-current-buffer buffer
-            (and (derived-mode-p 'noema-research-graph-mode)
-                 (eq noema-research-graph--source source)))
-      (with-current-buffer buffer
-        (when (and work-node-id
-                   (not (equal work-node-id noema-research-graph--selected)))
-          (setq noema-research-graph--selected work-node-id)
-          (when noema-research-graph--focus
-            (setq noema-research-graph--focus work-node-id)
-            (noema-research-graph--save-view))
-          (noema-research-graph-refresh))))))
+  "Explicitly attach the singleton DAG to SOURCE and select WORK-NODE-ID."
+  (let ((graph (noema-research-graph-buffer source)))
+    (with-current-buffer graph
+      (when work-node-id
+        (setq noema-research-graph--selected work-node-id)
+        (noema-research-graph-refresh)))
+    graph))
 
 ;;;###autoload
-(defun noema-research-graph-open ()
-  "Open the Graph Board of the current research notebook."
-  (interactive)
-  (unless (derived-mode-p 'noema-research-mode)
-    (user-error "Not in a research notebook"))
-  (let* ((source (current-buffer))
-         (cell (ignore-errors (noema-research--cell-at-point)))
-         (document noema-research--document)
-         (view (if buffer-file-name
-                   (noema-research-view-read buffer-file-name document)
+(defun noema-research-graph-buffer (&optional source)
+  "Return the initialized Graph Board buffer for JuText SOURCE.
+The same buffer is reused across every `.noema' source.  It is a temporary
+pop-up; merely selecting a different JuText window never retargets it."
+  (setq source (or source (current-buffer)))
+  (unless (buffer-live-p source)
+    (user-error "The research notebook buffer is no longer live"))
+  (with-current-buffer source
+    (unless (derived-mode-p 'noema-research-mode)
+      (user-error "Not in a research notebook")))
+  (let* ((cell (with-current-buffer source
+                 (ignore-errors (noema-research--cell-at-point))))
+         (document (buffer-local-value 'noema-research--document source))
+         (file (buffer-local-value 'buffer-file-name source))
+         (view (if file
+                   (noema-research-view-read file document)
                  (list :focus nil :folds nil)))
-         (buffer (get-buffer-create (format "*Noema Graph: %s*" (buffer-name source)))))
+         (buffer (get-buffer-create noema-research-graph-buffer-name)))
+    ;; Retire buffers created by versions that named one board per source.
+    (dolist (candidate (buffer-list))
+      (when (and (not (eq candidate buffer))
+                 (with-current-buffer candidate
+                   (derived-mode-p 'noema-research-graph-mode)))
+        (kill-buffer candidate)))
     (with-current-buffer buffer
       (noema-research-graph-mode)
       (setq noema-research-graph--source source
@@ -1280,7 +1490,10 @@ selects a node hidden by its own Graph view."
           (let ((graph buffer))
             (my/noema--ensure-server
              (lambda ()
-               (when (buffer-live-p graph)
+               (when (and (buffer-live-p graph)
+                          (eq (buffer-local-value
+                               'noema-research-graph--source graph)
+                              source))
                  (with-current-buffer graph
                    (noema-research-graph-refresh-proposals)
                    (noema-research-graph-refresh-runs)
@@ -1290,7 +1503,29 @@ selects a node hidden by its own Graph view."
         (noema-research-graph-refresh-runs)
         (noema-research-graph-refresh-events)
         (noema-research-graph-refresh-artifacts)))
-    (pop-to-buffer buffer)))
+    buffer))
+
+;;;###autoload
+(defun noema-research-graph-open ()
+  "Open the single reusable Graph Board for the current research notebook."
+  (interactive)
+  (noema-research-graph-pop-buffer
+   (noema-research-graph-buffer (current-buffer))))
+
+(defun noema-research-graph--window-size-changed (&optional frame)
+  "Refit the displayed singleton DAG after a window resize in FRAME."
+  (when-let* ((graph (get-buffer noema-research-graph-buffer-name))
+              (window (get-buffer-window graph (or frame t))))
+    (let ((size (cons (window-body-width window t)
+                      (window-body-height window t))))
+      (with-current-buffer graph
+        (unless (equal size noema-research-graph--window-size)
+          (setq noema-research-graph--window-size size)
+          (when (buffer-live-p noema-research-graph--source)
+            (noema-research-graph-refresh)))))))
+
+(add-hook 'window-size-change-functions
+          #'noema-research-graph--window-size-changed)
 
 (provide 'noema-research-graph)
 
