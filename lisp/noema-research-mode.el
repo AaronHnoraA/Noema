@@ -52,6 +52,9 @@
 (autoload 'noema-research-settings "noema-research-settings" nil t)
 (autoload 'noema-research-graph-dock "noema-research-graph")
 (autoload 'noema-agent-worker-run-work-cell "noema-agent-worker" nil t)
+(autoload 'noema-sessions "noema-sessions" nil t)
+(declare-function file-notify-add-watch "filenotify" (file flags callback))
+(declare-function file-notify-rm-watch "filenotify" (descriptor))
 (autoload 'noema-agent-worker-cancel-run "noema-agent-worker" nil t)
 (autoload 'noema-agent-acp-known-agents "noema-agent-acp" nil nil)
 
@@ -630,13 +633,245 @@ the edit created."
     (dolist (entry (noema-research--scan))
       (let* ((id (plist-get entry :id))
              (cell (noema-research-find-cell noema-research--document id))
-             (text (noema-research--decoration cell)))
-        (when text
+             (text (noema-research--decoration cell))
+             (session (noema-research--session-decoration cell)))
+        (when (or text session)
           (let ((overlay (make-overlay (plist-get entry :header-end)
                                        (plist-get entry :header-end))))
             (overlay-put overlay 'noema-research-decoration t)
             (overlay-put overlay 'after-string
-                         (propertize text 'face 'noema-research-decoration-face))))))))
+                         (concat (and text (propertize text 'face 'noema-research-decoration-face))
+                                 session))))))))
+
+;;;; D-031 session routes shown on work blocks
+
+(defface noema-research-session-face
+  '((t :inherit font-lock-comment-face :slant normal))
+  "Face for the named session a work block will run in."
+  :group 'noema-research)
+
+(defvar-local noema-research--session-labels nil
+  "Cell id to the D-031 session route the host resolved for this document.")
+
+(defvar-local noema-research--session-names nil
+  "Session names known in this document's project, for completion.")
+
+(defvar-local noema-research--session-timer nil
+  "Idle timer that refreshes work-block session routes.")
+
+(defvar noema-research-session-keywords)
+
+(defun noema-research--route-field (object key)
+  "Read string KEY from a JSON-like host OBJECT."
+  (let ((value (cond ((hash-table-p object) (gethash key object))
+                     ((listp object) (cdr (or (assoc key object) (assq (intern key) object)))))))
+    (unless (memq value '(:null :false))
+      (if (and (stringp value) (string-empty-p value)) nil value))))
+
+(defun noema-research--session-decoration (cell)
+  "Return the session label of work CELL, or nil."
+  (when-let* ((cell cell)
+              ((hash-table-p noema-research--session-labels))
+              (route (gethash (noema-research-cell-id cell) noema-research--session-labels)))
+    (if-let* ((problem (noema-research--route-field route "error")))
+        (propertize "  ⟨session ✗⟩" 'face 'error 'help-echo problem)
+      (when-let* ((name (noema-research--route-field route "name")))
+        (let ((parent (noema-research--route-field route "parentName")))
+          (propertize (format "  ⟨%s%s · %s%s⟩" name
+                              (if parent (format " ⇠ %s" parent) "")
+                              (or (noema-research--route-field route "agent") "")
+                              (if (noema-research--route-field route "busy") " ●" ""))
+                      'face 'noema-research-session-face
+                      'help-echo (noema-research--route-field route "reason")))))))
+
+(defun noema-research-refresh-session-routes ()
+  "Ask the host which named session each saved work block will run in."
+  (interactive)
+  (when (and buffer-file-name noema-research--document
+             (fboundp 'my/noema-api-call) (bound-and-true-p my/noema--ready))
+    (let* ((buffer (current-buffer))
+           (root (noema-research-repository-root buffer-file-name))
+           (cell-ids (delq nil (mapcar (lambda (cell)
+                                         (and (equal (noema-research-cell-kind cell noema-research--document) "work")
+                                              (noema-research-cell-id cell)))
+                                       (noema-research-cells noema-research--document)))))
+      (my/noema-api-call
+       "aaronnote:api:research:session:names" (vector `((cwd . ,root)))
+       (lambda (result error-object)
+         (when (and (buffer-live-p buffer) (not error-object))
+           (with-current-buffer buffer
+             (setq noema-research--session-names
+                   (delq nil (mapcar (lambda (entry) (noema-research--route-field entry "name"))
+                                     (append (noema-research--route-field result "names") nil)))))))
+       30)
+      (when cell-ids
+        (my/noema-api-call
+         "aaronnote:api:research:session:resolve"
+         (vector `((file . ,(expand-file-name buffer-file-name)) (cwd . ,root)
+                   (cellIds . ,(vconcat cell-ids))))
+         (lambda (result error-object)
+           (when (and (buffer-live-p buffer) (not error-object))
+             (with-current-buffer buffer
+               (let ((labels (make-hash-table :test #'equal)))
+                 (dolist (route (append (noema-research--route-field result "sessions") nil))
+                   (puthash (noema-research--route-field route "cellId") route labels))
+                 (setq noema-research--session-labels labels)
+                 (noema-research-mode--refresh-decorations)))))
+         30)))))
+
+(defun noema-research--schedule-session-routes ()
+  "Refresh the work-block session routes once Emacs is idle."
+  (when (and buffer-file-name noema-research-sync-host (not noninteractive)
+             (not (timerp noema-research--session-timer)))
+    (let ((buffer (current-buffer)))
+      (setq noema-research--session-timer
+            (run-with-idle-timer
+             0.8 nil
+             (lambda ()
+               (when (buffer-live-p buffer)
+                 (with-current-buffer buffer
+                   (setq noema-research--session-timer nil)
+                   (noema-research-refresh-session-routes)))))))))
+
+(defun noema-research--directive-lines (entry)
+  "Return (BEG . END) of each leading `@@' line in the body of scan ENTRY."
+  (save-excursion
+    (let ((limit (plist-get entry :block-end))
+          lines saw)
+      (goto-char (min limit (1+ (plist-get entry :header-end))))
+      (catch 'done
+        (while (< (point) limit)
+          (let ((line (buffer-substring-no-properties (line-beginning-position) (line-end-position))))
+            (cond ((string-match-p "\\`@@[A-Za-z]" line)
+                   (setq saw t)
+                   (push (cons (line-beginning-position) (line-end-position)) lines))
+                  ((and saw (string-blank-p line)))
+                  (t (throw 'done nil))))
+          (unless (zerop (forward-line 1)) (throw 'done nil))))
+      (nreverse lines))))
+
+(defun noema-research--work-entry-p (entry)
+  "Return non-nil when scan ENTRY is a work block."
+  (when-let* ((cell (noema-research-find-cell noema-research--document (plist-get entry :id))))
+    (equal (noema-research-cell-kind cell noema-research--document) "work")))
+
+(defun noema-research-pin-session (name)
+  "Pin the work block at point to session NAME with a leading `@@session' line.
+An existing `@@session' line is replaced.  This is an ordinary, undoable text
+edit: a person's explicit binding always outranks Pi and DAG derivation."
+  (interactive
+   (list (completing-read "Session (name, parent:child or keyword): "
+                          (append noema-research-session-keywords noema-research--session-names))))
+  (unless (noema-research-session-directive-valid-p name)
+    (user-error "Invalid @@session value: %s" name))
+  (noema-research-mode--sync)
+  (let ((entry (or (noema-research--entry-at-point) (user-error "No block at point"))))
+    (unless (noema-research--work-entry-p entry)
+      (user-error "Only a work block runs in a session"))
+    (let ((existing (seq-find (lambda (line)
+                                (string-prefix-p "@@session("
+                                                 (buffer-substring-no-properties (car line) (cdr line))))
+                              (noema-research--directive-lines entry)))
+          (text (format "@@session(%s)" name)))
+      (save-excursion
+        (cond
+         (existing
+          (goto-char (car existing))
+          (delete-region (car existing) (cdr existing))
+          (insert text))
+         ((>= (plist-get entry :header-end) (point-max))
+          (goto-char (point-max))
+          (insert "\n" text))
+         (t
+          (goto-char (1+ (plist-get entry :header-end)))
+          (insert text "\n"))))
+      (message "Work block pinned to session %s (save to apply)" name))))
+
+(defun noema-research-rename-session-directives (old new)
+  "Rename session OLD to NEW in the leading `@@session' lines of work blocks.
+Text after a block's directive region is data and is left alone.  Return the
+number of lines changed."
+  (let ((count 0))
+    (when noema-research--document
+      (noema-research-mode--sync)
+      (save-excursion
+        (dolist (entry (reverse (noema-research--scan)))
+          (when (noema-research--work-entry-p entry)
+            (dolist (line (reverse (noema-research--directive-lines entry)))
+              (let ((text (buffer-substring-no-properties (car line) (cdr line))))
+                (when (string-match "\\`@@session(\\([^)]*\\))[ \t]*\\'" text)
+                  (let* ((value (match-string 1 text))
+                         (renamed (mapconcat (lambda (part) (if (equal (string-trim part) old) new part))
+                                             (split-string value ":") ":")))
+                    (unless (equal renamed value)
+                      (goto-char (car line))
+                      (delete-region (car line) (cdr line))
+                      (insert (format "@@session(%s)" renamed))
+                      (setq count (1+ count)))))))))))
+    count))
+
+;;;; D-034 disk sync owned by the buffer
+
+(defvar-local noema-research--file-watch nil
+  "File-notify descriptor watching this document's directory.")
+
+(defvar-local noema-research--disk-sync-timer nil
+  "Debounce timer for merging another Noema writer's change.")
+
+(defun noema-research--unwatch-file ()
+  "Stop watching this document on disk."
+  (when noema-research--file-watch
+    (ignore-errors (file-notify-rm-watch noema-research--file-watch))
+    (setq noema-research--file-watch nil))
+  (when (timerp noema-research--disk-sync-timer)
+    (cancel-timer noema-research--disk-sync-timer))
+  (setq noema-research--disk-sync-timer nil))
+
+(defun noema-research--sync-from-disk (buffer)
+  "Merge another Noema writer's change into BUFFER without any prompt."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq noema-research--disk-sync-timer nil)
+      (when (and buffer-file-name noema-research--document
+                 (file-exists-p buffer-file-name)
+                 (not (equal (noema-research-file-revision buffer-file-name)
+                             noema-research--revision)))
+        (condition-case error-object
+            (progn
+              (noema-research-merge-disk-outputs)
+              (noema-research--schedule-session-routes))
+          (error
+           (display-warning 'noema-research
+                            (format "Could not merge %s from disk: %s"
+                                    (buffer-name) (error-message-string error-object))
+                            :warning)))))))
+
+(defun noema-research--schedule-disk-sync (buffer)
+  "Merge BUFFER's document from disk shortly, coalescing bursts of events."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when (timerp noema-research--disk-sync-timer)
+        (cancel-timer noema-research--disk-sync-timer))
+      (setq noema-research--disk-sync-timer
+            (run-at-time 0.2 nil #'noema-research--sync-from-disk buffer)))))
+
+(defun noema-research--watch-file ()
+  "Watch this document so Run outputs and Proposals merge in place.
+The directory is watched because atomic writes replace the file."
+  (noema-research--unwatch-file)
+  (when (and buffer-file-name (fboundp 'file-notify-add-watch)
+             (not (file-remote-p buffer-file-name)))
+    (let ((buffer (current-buffer))
+          (file (expand-file-name buffer-file-name)))
+      (setq noema-research--file-watch
+            (ignore-errors
+              (file-notify-add-watch
+               (file-name-directory file) '(change)
+               (lambda (event)
+                 (when (seq-some (lambda (path)
+                                   (and (stringp path) (string= (expand-file-name path) file)))
+                                 (cddr event))
+                   (noema-research--schedule-disk-sync buffer)))))))))
 
 (defun noema-research--schedule-decorations (&rest _)
   "Refresh decorations once Emacs is idle."
@@ -716,7 +951,12 @@ text is synced first and, like local structure edits, always wins.
 Afterwards the buffer is current with disk, so saving never asks about
 external changes."
   (when (and buffer-file-name noema-research--document
-             (file-exists-p buffer-file-name))
+             (file-exists-p buffer-file-name)
+             ;; Idempotent: the Run resync and the file watch may both fire
+             ;; for one write; an unchanged revision only refreshes modtime.
+             (or (not (equal noema-research--revision
+                             (noema-research-file-revision buffer-file-name)))
+                 (progn (set-visited-file-modtime) nil)))
     (let ((modified (buffer-modified-p))
           (disk (noema-research-read-file buffer-file-name))
           (memory (make-hash-table :test #'equal))
@@ -746,6 +986,31 @@ external changes."
       (noema-research-mode--refresh-decorations)))
   noema-research--document)
 
+(defconst noema-research-session-keywords '("continue" "fork" "fresh")
+  "`@@session' keywords; every other value is a D-031 session name.")
+
+(defun noema-research--session-name-valid-p (name &optional allow-pi)
+  "Return non-nil when NAME is a valid session name.
+The reserved coordinator name `pi' is accepted only with ALLOW-PI."
+  (and (stringp name)
+       (<= (length name) 80)
+       (string-match-p "\\`[[:alnum:]][[:alnum:]._/@-]*\\'" name)
+       (not (member name noema-research-session-keywords))
+       (or allow-pi (not (equal name "pi")))))
+
+(defun noema-research-session-directive-valid-p (value)
+  "Return non-nil when VALUE is a valid D-031 `@@session' argument.
+It is a keyword, a name, or parent:child (parent may be empty)."
+  (cond
+   ((member value noema-research-session-keywords) t)
+   ((string-match "\\`\\([^:]*\\):\\([^:]*\\)\\'" value)
+    (let ((parent (string-trim (match-string 1 value)))
+          (child (string-trim (match-string 2 value))))
+      (and (or (string-empty-p parent) (noema-research--session-name-valid-p parent t))
+           (noema-research--session-name-valid-p child))))
+   (t (and (not (string-search ":" value))
+           (noema-research--session-name-valid-p value)))))
+
 (defun noema-research--directive-errors (document)
   "Return save-time directive errors for work blocks in DOCUMENT."
   (let (errors)
@@ -774,7 +1039,7 @@ external changes."
                          (not (string-match-p "\\`[A-Za-z0-9][A-Za-z0-9._-]*\\'" value)))
                     (push (format "%s: invalid @@%s value" (noema-research-cell-id cell) name) errors))
                    ((and (equal name "session")
-                         (not (member value '("continue" "fork" "fresh"))))
+                         (not (noema-research-session-directive-valid-p value)))
                     (push (format "%s: invalid @@session value" (noema-research-cell-id cell)) errors))
                    ((and (equal name "ctx")
                          (not
@@ -856,6 +1121,7 @@ An empty work block is a valid sketch of the DAG; it just cannot run yet."
     (set-visited-file-modtime)
     (set-buffer-modified-p nil)
     (noema-research-mode--refresh-decorations)
+    (noema-research--schedule-session-routes)
     (noema-research-notify-host buffer-file-name "jutext.save")
     t))
 
@@ -1148,7 +1414,8 @@ SNAPSHOT is ignored; the `.noema' file is the sole durable authority."
              (candidates
               (pcase name
                 ("agent" (noema-agent-acp-known-agents))
-                ("session" '("continue" "fork" "fresh"))
+                ("session" (append noema-research-session-keywords
+                                   noema-research--session-names))
                 ("ctx" '("lineage" "depends" "git.diff" "handoff.latest"
                          "cell:" "result:wn_" "file:" "note:" "artifact:art_"))
                 (_ nil))))
@@ -2129,6 +2396,8 @@ explains a drop and is recorded on ID.  Return ID."
     (define-key map (kbd "C-c j o") #'noema-research-set-work-outcome)
     (define-key map (kbd "C-c j B") #'noema-research-branch-menu)
     (define-key map (kbd "C-c j ,") #'noema-research-settings)
+    (define-key map (kbd "C-c j S") #'noema-sessions)
+    (define-key map (kbd "C-c j s") #'noema-research-pin-session)
     (define-key map (kbd "M-<up>") #'noema-research-move-block-up)
     (define-key map (kbd "M-<down>") #'noema-research-move-block-down)
     (define-key map (kbd "C-c C-/") #'noema-research-structure-undo)
@@ -2160,6 +2429,11 @@ explains a drop and is recorded on ID.  Return ID."
     (dolist (state '(normal insert visual))
       (dolist (binding noema-research--command-return-bindings)
         (evil-local-set-key state (kbd (car binding)) (cdr binding)))))
+  ;; D-034: this buffer owns its disk sync.  Other Noema writers (Run
+  ;; outputs, accepted Proposals) merge in place through a file watch, never
+  ;; through auto-revert's reload or the stale-file prompt.
+  (setq-local global-auto-revert-ignore-buffer t)
+  (add-hook 'kill-buffer-hook #'noema-research--unwatch-file nil t)
   (let* ((file buffer-file-name)
          (on-disk (and file (file-exists-p file))))
     (noema-research--load (if on-disk
@@ -2170,6 +2444,8 @@ explains a drop and is recorded on ID.  Return ID."
     (when on-disk
       (set-visited-file-modtime)
       (noema-research-notify-host file "jutext.open")
+      (noema-research--watch-file)
+      (noema-research--schedule-session-routes)
       (when (and (or noema-research-open-output-on-visit
                      noema-research-open-graph-on-visit)
                  (not noninteractive))

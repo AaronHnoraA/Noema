@@ -2569,9 +2569,9 @@ to a summary, as in Drop Branch of the assignment walkthrough."
         (noema-agent-worker-run-work-cell
          (expand-file-name buffer-file-name)
          (noema-research-cell-id cell)
-         session-policy
-         (when (equal session-policy "fork")
-           (read-string "Parent Noema session id: ")))))))
+         ;; D-031: the policy is a `@@session' value; a fork parent is a
+         ;; session name, never a machine id.
+         session-policy nil)))))
 
 (defun noema-research-graph-run-default ()
   "Run selected work using its declared or default session route."
@@ -2588,10 +2588,21 @@ to a summary, as in Drop Branch of the assignment walkthrough."
   (interactive)
   (noema-research-graph--run "fresh"))
 
-(defun noema-research-graph-run-fork ()
-  "Run selected work by forking a chosen parent session."
+(defun noema-research-graph-run-fork (target)
+  "Run selected work in a session forked as TARGET.
+TARGET is `parent:child' (or `:child' to fork the inherited session); empty
+forks the inherited session under a derived child name."
+  (interactive (list (read-string "Fork as parent:child (empty derives both): ")))
+  (let ((target (string-trim target)))
+    (unless (or (string-empty-p target) (noema-research-session-directive-valid-p target))
+      (user-error "Invalid session fork: %s" target))
+    (noema-research-graph--run (if (string-empty-p target) "fork" target))))
+
+(defun noema-research-graph-sessions ()
+  "List the named agent sessions of the Graph Board's document."
   (interactive)
-  (noema-research-graph--run "fork"))
+  (with-current-buffer (or noema-research-graph--source (current-buffer))
+    (noema-sessions)))
 
 (defun noema-research-graph-run-project-file ()
   "Run a repository script or notebook from the selected Work."
