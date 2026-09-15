@@ -50,6 +50,7 @@
 (autoload 'noema-research-attention "noema-research-inspector" nil t)
 (autoload 'noema-research-propose-with-magent "noema-research-synthesis" nil t)
 (autoload 'noema-research-settings "noema-research-settings" nil t)
+(autoload 'noema-research-graph-dock "noema-research-graph")
 (autoload 'noema-agent-worker-run-work-cell "noema-agent-worker" nil t)
 (autoload 'noema-agent-worker-cancel-run "noema-agent-worker" nil t)
 (autoload 'noema-agent-acp-known-agents "noema-agent-acp" nil nil)
@@ -65,8 +66,15 @@
 
 (defcustom noema-research-open-output-on-visit t
   "Whether visiting a `.noema' file opens its right-side OutputArea.
-The DAG is intentionally not part of the default layout: `C-c C-g' opens it
-as a temporary pop-up.  On macOS `s-<return>' (Command-Return) syncs OutputArea."
+Command-Return (`s-<return>', or `M-<return>' with Command as Meta) syncs
+OutputArea to the block at point."
+  :type 'boolean
+  :group 'noema-research)
+
+(defcustom noema-research-open-graph-on-visit t
+  "Whether visiting a `.noema' file docks its DAG below JuText.
+The DAG never follows the cursor.  Command-Shift-Return (`s-S-<return>' or
+`M-S-<return>') or the right-click menu syncs it to the block at point."
   :type 'boolean
   :group 'noema-research)
 
@@ -991,21 +999,25 @@ FOCUS-GRAPH is accepted for callers from the earlier workspace layout."
   (noema-research-graph-open))
 
 (defun noema-research-sync-graph ()
-  "Explicitly sync the singleton DAG to this JuText block.
-This is intentionally the only cursor-to-DAG synchronization path."
+  "Sync the DAG to this JuText block, docking the DAG when it is not shown.
+This is the only cursor-to-DAG path: the DAG never follows the cursor on its
+own.  Focus stays in JuText."
   (interactive)
   (unless (derived-mode-p 'noema-research-mode)
     (user-error "Not in a research notebook"))
   (let* ((entry (noema-research--entry-at-point (noema-research--scan)))
          (id (and entry (plist-get entry :work-node-id)))
          (source (current-buffer)))
-    (noema-research-graph-pop-buffer
-     (noema-research-graph-follow-source source id))
+    (noema-research-graph-dock source)
+    (noema-research-graph-follow-source source id)
     (message "Noema DAG synced%s"
-             (if id (format " to %s" id) " to this document"))))
+             (if id
+                 (format " to “%s”" (noema-research-work-node-label
+                                     noema-research--document id))
+               " to this document"))))
 
 (defun noema-research--schedule-default-output ()
-  "Open this document's OutputArea after the visiting window has settled."
+  "Open this document's default DAG and OutputArea once its window settles."
   (when (timerp noema-research--output-timer)
     (cancel-timer noema-research--output-timer))
   (let ((source (current-buffer)))
@@ -1016,11 +1028,20 @@ This is intentionally the only cursor-to-DAG synchronization path."
              (when (buffer-live-p source)
                (with-current-buffer source
                  (setq noema-research--output-timer nil)
-                 (condition-case error-object
-                     (noema-research-open-outputs nil)
-                   (error
-                    (message "Noema default OutputArea unavailable: %s"
-                             (error-message-string error-object)))))))))))
+                 ;; Dock the DAG first so OutputArea then splits the whole
+                 ;; JuText/DAG column and the DAG stays bottom-left.
+                 (when noema-research-open-graph-on-visit
+                   (condition-case error-object
+                       (noema-research-graph-dock source)
+                     (error
+                      (message "Noema default DAG unavailable: %s"
+                               (error-message-string error-object)))))
+                 (when noema-research-open-output-on-visit
+                   (condition-case error-object
+                       (noema-research-open-outputs nil)
+                     (error
+                      (message "Noema default OutputArea unavailable: %s"
+                               (error-message-string error-object))))))))))))
 
 (defun noema-research--cancel-output-timer ()
   "Cancel this buffer's pending default OutputArea open."
@@ -2033,6 +2054,47 @@ explains a drop and is recorded on ID.  Return ID."
     ("x" "drop branch" noema-research-branch-drop)
     ("o" "reopen branch" noema-research-branch-reopen)]])
 
+(defconst noema-research--command-return-bindings
+  '(("s-<return>" . noema-research-open-outputs)
+    ("M-<return>" . noema-research-open-outputs)
+    ("s-S-<return>" . noema-research-sync-graph)
+    ("M-S-<return>" . noema-research-sync-graph))
+  "Command-Return keys.  AaronEmacs maps Command to Meta, so both spellings.")
+
+(defun noema-research--context-menu-map ()
+  "Return the JuText right-click menu for the block at point."
+  (let ((map (make-sparse-keymap "Noema")))
+    (define-key-after map [noema-sync-dag]
+      '(menu-item "Sync DAG to this block" noema-research-sync-graph
+                  :keys "Cmd-Shift-RET"))
+    (define-key-after map [noema-sync-output]
+      '(menu-item "Sync OutputArea to this block" noema-research-open-outputs
+                  :keys "Cmd-RET"))
+    (define-key-after map [noema-separator] menu-bar-separator)
+    (define-key-after map [noema-run]
+      '(menu-item "Run work block" noema-research-execute-current))
+    (define-key-after map [noema-branch]
+      '(menu-item "Branch…" noema-research-branch-menu))
+    (define-key-after map [noema-inspect]
+      '(menu-item "Inspect" noema-research-inspect))
+    (define-key-after map [noema-settings]
+      '(menu-item "Settings" noema-research-settings))
+    map))
+
+(defun noema-research-context-menu (event)
+  "Move point to mouse EVENT and pop up the JuText block menu."
+  (interactive "e")
+  (mouse-set-point event)
+  (popup-menu (noema-research--context-menu-map) event))
+
+(defun noema-research--context-menu-function (menu click)
+  "Add JuText block actions to `context-menu-mode' MENU for CLICK."
+  (mouse-set-point click)
+  (define-key-after menu [noema-context-separator] menu-bar-separator)
+  (map-keymap (lambda (key binding) (define-key-after menu (vector key) binding))
+              (noema-research--context-menu-map))
+  menu)
+
 (defvar noema-research-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c C-n") #'noema-research-continue)
@@ -2046,9 +2108,11 @@ explains a drop and is recorded on ID.  Return ID."
     (define-key map (kbd "C-c C-a") #'noema-research-attention)
     (define-key map (kbd "C-c C-r") #'noema-research-propose-with-magent)
     (define-key map (kbd "C-c C-g") #'noema-research-graph-open)
-    ;; On macOS `s-<return>' is Command-Return.  It mirrors Jupyter's
-    ;; OutputArea action; graph synchronization stays an explicit C-c C-g.
-    (define-key map (kbd "s-<return>") #'noema-research-open-outputs)
+    ;; Command-Return syncs OutputArea (Jupyter's convention);
+    ;; Command-Shift-Return syncs the DAG, which never follows the cursor.
+    (dolist (binding noema-research--command-return-bindings)
+      (define-key map (kbd (car binding)) (cdr binding)))
+    (define-key map [mouse-3] #'noema-research-context-menu)
     (define-key map (kbd "C-c C-c") #'noema-research-execute-current)
 	(define-key map (kbd "C-c j r") #'noema-research-run-project-file)
     (define-key map (kbd "C-c C-o") #'noema-research-open-outputs)
@@ -2090,6 +2154,12 @@ explains a drop and is recorded on ID.  Return ID."
   (add-hook 'write-contents-functions #'noema-research-mode--write-contents nil t)
   (add-hook 'after-change-functions #'noema-research--schedule-decorations nil t)
   (add-hook 'kill-buffer-hook #'noema-research--cancel-output-timer nil t)
+  (add-hook 'context-menu-functions #'noema-research--context-menu-function nil t)
+  ;; Evil state maps would otherwise shadow Command-Return in JuText.
+  (when (fboundp 'evil-local-set-key)
+    (dolist (state '(normal insert visual))
+      (dolist (binding noema-research--command-return-bindings)
+        (evil-local-set-key state (kbd (car binding)) (cdr binding)))))
   (let* ((file buffer-file-name)
          (on-disk (and file (file-exists-p file))))
     (noema-research--load (if on-disk
@@ -2100,7 +2170,9 @@ explains a drop and is recorded on ID.  Return ID."
     (when on-disk
       (set-visited-file-modtime)
       (noema-research-notify-host file "jutext.open")
-      (when (and noema-research-open-output-on-visit (not noninteractive))
+      (when (and (or noema-research-open-output-on-visit
+                     noema-research-open-graph-on-visit)
+                 (not noninteractive))
         (noema-research--schedule-default-output)))))
 
 (provide 'noema-research-mode)

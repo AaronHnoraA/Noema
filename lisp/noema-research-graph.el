@@ -369,6 +369,28 @@ JuText layout exactly."
     (noema-research-graph-refresh))
   graph)
 
+(defun noema-research-graph-dock (source)
+  "Show SOURCE's DAG docked below its JuText window, without selecting it.
+This is the default workspace position: JuText above, the DAG in the
+bottom-left and OutputArea on the right.  A visible DAG is reused.  Docking
+never follows the cursor; `noema-research-sync-graph' is the explicit
+cursor-to-DAG action.  Return the DAG window."
+  (let* ((graph (noema-research-graph--buffer-for source))
+         (source-window (get-buffer-window source))
+         (window (or (get-buffer-window graph)
+                     (display-buffer
+                      graph
+                      `((display-buffer-in-direction)
+                        (direction . below)
+                        (window . ,(or source-window 'main))
+                        (inhibit-same-window . t)
+                        (window-height
+                         . ,(noema-research-setting
+                             'noema-research-graph-window-height)))))))
+    (with-current-buffer graph
+      (noema-research-graph-refresh))
+    window))
+
 ;;;; Source access
 
 (defun noema-research-graph--document ()
@@ -461,16 +483,16 @@ redraws once and stays open."
 
 (defun noema-research-graph--jump-and-call (function)
   "Visit the node at point in its source buffer and call FUNCTION there.
-The Graph Board is a temporary pop-up: visiting a node restores the prior
-JuText window instead of leaving a dedicated DAG window behind."
+The DAG stays where it is (docked by default); focus moves to the JuText
+window, reusing it when it is visible."
   (let ((id (noema-research-graph--node-at-point))
-        (source noema-research-graph--source)
-        (graph-window (selected-window)))
+        (source noema-research-graph--source))
     (noema-research-graph--require-materialized id)
     (noema-research-graph--flush-view-save)
     (noema-research-graph--restore-size)
-    (quit-window nil graph-window)
-    (pop-to-buffer source)
+    (if-let* ((window (get-buffer-window source)))
+        (select-window window)
+      (pop-to-buffer source))
     (with-current-buffer source
       (noema-research-mode--sync)
       (noema-research-goto-cell id)
@@ -2654,13 +2676,29 @@ to a summary, as in Drop Branch of the assignment walkthrough."
     ("z" "undo structure edit" noema-research-graph-undo)
     ("Z" "redo structure edit" noema-research-graph-redo)]])
 
+(defun noema-research-graph--buffer-for (source)
+  "Return the DAG buffer already attached to SOURCE, or initialize one.
+Reusing the attached board keeps its focus, folds, viewport and caches."
+  (let ((existing (get-buffer noema-research-graph-buffer-name)))
+    (if (and existing
+             (eq (buffer-local-value 'noema-research-graph--source existing) source)
+             (with-current-buffer existing
+               (derived-mode-p 'noema-research-graph-mode)))
+        existing
+      (noema-research-graph-buffer source))))
+
 (defun noema-research-graph-follow-source (source work-node-id)
-  "Explicitly attach the singleton DAG to SOURCE and select WORK-NODE-ID."
-  (let ((graph (noema-research-graph-buffer source)))
+  "Explicitly attach the singleton DAG to SOURCE and select WORK-NODE-ID.
+When the DAG is displayed, the selected node is centered."
+  (let ((graph (noema-research-graph--buffer-for source)))
     (with-current-buffer graph
       (when work-node-id
         (setq noema-research-graph--selected work-node-id)
-        (noema-research-graph-refresh)))
+        (noema-research-graph-refresh)
+        (when-let* (((get-buffer-window graph t))
+                    (view noema-research-graph--view)
+                    (centered (noema-research-graph--centered-view view work-node-id)))
+          (noema-research-graph--set-view centered))))
     graph))
 
 ;;;###autoload

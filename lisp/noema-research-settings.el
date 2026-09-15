@@ -167,8 +167,10 @@ Each element is (MODIFIERS . PIXELS), as in el-easydraw's
      :section "Structure" :scope global :type boolean)
     (noema-research-python-interpreter
      :section "Runs & host" :scope global :type string)
+    (noema-research-open-graph-on-visit
+     :section "Workspace" :scope global :type boolean)
     (noema-research-open-output-on-visit
-     :section "Runs & host" :scope global :type boolean)
+     :section "Workspace" :scope global :type boolean)
     (noema-research-sync-host
      :section "Runs & host" :scope global :type boolean))
   "Every Noema research setting: (VARIABLE . PROPERTIES).
