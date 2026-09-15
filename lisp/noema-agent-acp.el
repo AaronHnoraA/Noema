@@ -46,7 +46,9 @@
 (defun noema-agent-acp-mark-session-buffer (buffer name agent directory)
   "Mark BUFFER as the one agent buffer for session NAME of AGENT in DIRECTORY.
 D-033: the buffer stays out of tab-line/tab-bar and carries a stable,
-recognizable name, so the session manager and switcher can find it."
+recognizable name, so the session manager and switcher can find it.
+D-035: another live buffer still holding NAME in the same project served an
+older physical session; it gives the name up so lookups stay unambiguous."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (setq-local tab-line-exclude t)
@@ -54,6 +56,16 @@ recognizable name, so the session manager and switcher can find it."
         (setq-local noema-agent-acp-session-root
                     (file-name-as-directory (expand-file-name directory))))
       (when (and (stringp name) (not (string-empty-p name)))
+        (let ((root noema-agent-acp-session-root))
+          (dolist (other (buffer-list))
+            (when (and (not (eq other buffer))
+                       (noema-agent-acp-agent-buffer-p other)
+                       (equal (buffer-local-value 'noema-agent-acp-session-name other) name)
+                       (equal (buffer-local-value 'noema-agent-acp-session-root other) root))
+              (with-current-buffer other
+                (setq-local noema-agent-acp-session-name nil)
+                (unless (string-suffix-p " (retired)" (buffer-name))
+                  (rename-buffer (concat (buffer-name) " (retired)") t))))))
         (setq-local noema-agent-acp-session-name name
                     noema-agent-acp-session-agent agent)
         (let ((wanted (format "⟪%s⟫ %s @ %s" name (or agent "agent")
@@ -85,6 +97,24 @@ recognizable name, so the session manager and switcher can find it."
                       ((or "open-code" "opencode") 'opencode)
                       (name (intern name)))))
     (ignore-errors (noema-agent-acp-resolve-config identifier))))
+
+(defvar agent-shell-pi-environment)
+(declare-function agent-shell-pi-make-client "agent-shell-pi" (&rest args))
+
+(defun noema-agent-acp-pi-config (environment)
+  "Return a Pi agent-shell configuration whose client runs with ENVIRONMENT.
+ENVIRONMENT is a list of \"NAME=VALUE\" strings.  They are added every time
+agent-shell builds the client, so a restart or resume keeps them (D-035).
+Return nil when Pi is not available."
+  (require 'agent-shell-pi nil t)
+  (when-let* ((config (noema-agent-acp-config-for "pi"))
+              ((fboundp 'agent-shell-pi-make-client)))
+    (setf (alist-get :client-maker config)
+          (lambda (buffer)
+            (let ((agent-shell-pi-environment
+                   (append environment (bound-and-true-p agent-shell-pi-environment))))
+              (agent-shell-pi-make-client :buffer buffer))))
+    config))
 
 (defun noema-agent-acp-known-agents ()
   "Return agent ids for work-directive completion.

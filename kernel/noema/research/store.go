@@ -22,7 +22,22 @@ import (
 // StateDirName is the repository-local runtime state directory.
 const StateDirName = ".agent"
 
-const schemaVersion = "18"
+const schemaVersion = "19"
+
+// coordinatorRequestsTable is shared by fresh databases and the v19 rebuild.
+// D-032 queued Runs for the Pi coordinator; D-035 lets the Pi manager also ask
+// Emacs to cancel a session's open Run or close its idle agent process.
+const coordinatorRequestsTable = `CREATE TABLE IF NOT EXISTS coordinator_requests (
+		id          TEXT PRIMARY KEY CHECK (id LIKE 'creq_%'),
+		kind        TEXT NOT NULL CHECK (kind IN ('run.start', 'session.cancel', 'session.close')),
+		payload_json TEXT NOT NULL,
+		actor       TEXT NOT NULL,
+		state       TEXT NOT NULL CHECK (state IN ('pending', 'claimed')),
+		claimed_by  TEXT NOT NULL DEFAULT '',
+		created_at  INTEGER NOT NULL,
+		claimed_at  INTEGER,
+		version     INTEGER NOT NULL DEFAULT 1
+	)`
 
 var schemaStatements = []string{
 	`CREATE TABLE IF NOT EXISTS schema_meta (
@@ -49,19 +64,9 @@ var schemaStatements = []string{
 		alias TEXT PRIMARY KEY,
 		name  TEXT NOT NULL REFERENCES session_names(name) ON UPDATE CASCADE ON DELETE CASCADE
 	)`,
-	// D-032: durable requests from the Pi coordinator.  Emacs claims them and
-	// runs them through the ordinary worker, so Pi never drives a process.
-	`CREATE TABLE IF NOT EXISTS coordinator_requests (
-		id          TEXT PRIMARY KEY CHECK (id LIKE 'creq_%'),
-		kind        TEXT NOT NULL CHECK (kind IN ('run.start')),
-		payload_json TEXT NOT NULL,
-		actor       TEXT NOT NULL,
-		state       TEXT NOT NULL CHECK (state IN ('pending', 'claimed')),
-		claimed_by  TEXT NOT NULL DEFAULT '',
-		created_at  INTEGER NOT NULL,
-		claimed_at  INTEGER,
-		version     INTEGER NOT NULL DEFAULT 1
-	)`,
+	// D-032: durable requests from the Pi manager.  Emacs claims them and
+	// carries them out through the ordinary worker, so Pi never drives a process.
+	coordinatorRequestsTable,
 	`CREATE INDEX IF NOT EXISTS idx_coordinator_requests_pending ON coordinator_requests(state, created_at)`,
 	`CREATE TABLE IF NOT EXISTS run_session_names (
 		run_id      TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
@@ -757,9 +762,50 @@ func migrate(db *sql.DB) error {
 	if err := migrateRunSourceSchema(db); err != nil {
 		return err
 	}
+	// Schema v19 (D-035) lets the Pi manager ask Emacs to cancel a session's
+	// Run or close its idle agent process.
+	if err := migrateCoordinatorRequestKinds(db); err != nil {
+		return err
+	}
 	_, err := db.Exec(`INSERT INTO schema_meta(key, value) VALUES('schema_version', ?)
 		ON CONFLICT(key) DO UPDATE SET value = excluded.value`, schemaVersion)
 	return err
+}
+
+// migrateCoordinatorRequestKinds rebuilds a v18 coordinator_requests table,
+// whose CHECK allowed only run.start.  Nothing references the table, so a
+// plain rename-copy-drop keeps every pending and claimed request.
+func migrateCoordinatorRequestKinds(db *sql.DB) error {
+	var tableSQL string
+	err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'coordinator_requests'`).Scan(&tableSQL)
+	if errors.Is(err, sql.ErrNoRows) || strings.Contains(tableSQL, "'session.close'") {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect coordinator request kinds: %w", err)
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin coordinator request migration: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, statement := range []string{
+		`DROP INDEX IF EXISTS idx_coordinator_requests_pending`,
+		`ALTER TABLE coordinator_requests RENAME TO coordinator_requests_before_v19`,
+		coordinatorRequestsTable,
+		`INSERT INTO coordinator_requests(id, kind, payload_json, actor, state, claimed_by, created_at, claimed_at, version)
+		 SELECT id, kind, payload_json, actor, state, claimed_by, created_at, claimed_at, version FROM coordinator_requests_before_v19`,
+		`DROP TABLE coordinator_requests_before_v19`,
+		`CREATE INDEX IF NOT EXISTS idx_coordinator_requests_pending ON coordinator_requests(state, created_at)`,
+	} {
+		if _, err := tx.Exec(statement); err != nil {
+			return fmt.Errorf("migrate coordinator request kinds: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit coordinator request migration: %w", err)
+	}
+	return nil
 }
 
 func migrateRunSourceSchema(db *sql.DB) error {

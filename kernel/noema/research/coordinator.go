@@ -11,9 +11,9 @@ import (
 	"time"
 )
 
-// CoordinatorRequest is a durable ask from the Pi coordinator (D-032).  It
-// never starts work itself: the Emacs worker claims it exactly once and runs
-// it through the same frozen-RunSpec, lease and permission path as a human.
+// CoordinatorRequest is a durable ask from the Pi manager (D-032, D-035).  It
+// never acts by itself: the Emacs worker claims it exactly once and carries it
+// out through the same frozen-RunSpec, lease and ACP path as a human.
 type CoordinatorRequest struct {
 	ID        string         `json:"id"`
 	Kind      string         `json:"kind"`
@@ -26,10 +26,13 @@ type CoordinatorRequest struct {
 	Version   int64          `json:"version"`
 }
 
+// coordinatorRequestKinds are the only asks Pi can make of Emacs.
+var coordinatorRequestKinds = map[string]bool{"run.start": true, "session.cancel": true, "session.close": true}
+
 // CreateCoordinatorRequest records one pending request.
 func (s *Store) CreateCoordinatorRequest(kind string, payload map[string]any, actor string) (CoordinatorRequest, error) {
 	kind, actor = strings.TrimSpace(kind), strings.TrimSpace(actor)
-	if kind != "run.start" {
+	if !coordinatorRequestKinds[kind] {
 		return CoordinatorRequest{}, fmt.Errorf("unsupported coordinator request %q", kind)
 	}
 	if actor == "" {

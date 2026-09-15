@@ -29,9 +29,14 @@ const CONTEXT_LIMIT_BYTES = 64 * 1024;
 const RUN_ARTIFACT_MAX_BYTES = 8 * 1024 * 1024;
 const RUN_ARTIFACT_MAX_FILES = 5000;
 const RUN_ARTIFACT_MAX_CHANGES = 32;
+// Runtime state, agent-shell transcripts and Pi's own directory are never
+// work products of a Run (D-035).
 const RUN_ARTIFACT_IGNORED_DIRECTORIES = new Set([
-  ".agent", ".git", "node_modules", "dist", "build", ".cache", ".venv", "__pycache__",
+  ".agent", ".agent-shell", ".pi", ".git", "node_modules", "dist", "build", ".cache", ".venv", "__pycache__",
 ]);
+// A `.noema' document changes during a Run only by Noema's own writers or the
+// person's edits; it is the work record, not an artifact of the work.
+const RUN_ARTIFACT_IGNORED_EXTENSIONS = Object.freeze([".noema"]);
 const execFileAsync = promisify(execFile);
 const DEFAULT_CAPABILITIES = Object.freeze({
   read_project: "allow",
@@ -205,6 +210,7 @@ async function snapshotProjectFiles(root) {
         continue;
       }
       if (!entry.isFile()) continue;
+      if (RUN_ARTIFACT_IGNORED_EXTENSIONS.some((extension) => entry.name.endsWith(extension))) continue;
       const path = join(directory, entry.name);
       try {
         const info = await stat(path);
@@ -1196,6 +1202,17 @@ export function createResearchRuntimeService({
       }
 	  if (source.kind === "project-file") return prepareProjectFileRun(root, source, body);
       const target = await projectDirectory(root, body.executionTarget || body.cwd || root);
+      if (typeof runtimeProvider.expireLeases === "function") {
+        // D-035: a worker that vanished (Emacs crashed or was killed) leaves an
+        // expired lease.  Recover it before routing so its session is neither
+        // reported busy nor resumed as if it were still held.  Leases released
+        // by finished Runs are skipped by the kernel without any event.
+        try {
+          await runtimeProvider.expireLeases({ root });
+        } catch {
+          // Recovery is best effort; routing still reports a truly busy session.
+        }
+      }
       const route = await routeRun(root, source, target, body);
       const declaredContext = [...values(source.context), ...values(body.context)];
       // A derived branch carries its lineage as explicit context, never as a

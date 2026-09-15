@@ -691,6 +691,12 @@ describe("research runtime service", () => {
     await writeFile(join(root, "src", "baseline.py"), "print('baseline')\n");
     await mkdir(join(root, ".agent"), { recursive: true });
     await writeFile(join(root, ".agent", "runtime-noise.log"), "ignore me\n");
+    // D-035: agent-shell transcripts, Pi state and work documents are not work products.
+    await mkdir(join(root, ".agent-shell", "transcripts"), { recursive: true });
+    await writeFile(join(root, ".agent-shell", "transcripts", "2026-09-15.md"), "transcript\n");
+    await mkdir(join(root, ".pi"), { recursive: true });
+    await writeFile(join(root, ".pi", "settings.json"), "{}\n");
+    await writeFile(join(root, "scratch.noema"), "{}\n");
 
     const reply = await service.workerEvents({
       root, runId: prepared.run.id, sessionId: "ses_artifacts", owner: "emacs:1", epoch: 1,

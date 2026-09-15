@@ -53,6 +53,7 @@
 (autoload 'noema-research-graph-dock "noema-research-graph")
 (autoload 'noema-agent-worker-run-work-cell "noema-agent-worker" nil t)
 (autoload 'noema-sessions "noema-sessions" nil t)
+(declare-function noema-pi-router-note-visit "noema-pi-router" (&optional buffer))
 (declare-function file-notify-add-watch "filenotify" (file flags callback))
 (declare-function file-notify-rm-watch "filenotify" (descriptor))
 (autoload 'noema-agent-worker-cancel-run "noema-agent-worker" nil t)
@@ -2445,6 +2446,10 @@ explains a drop and is recorded on ID.  Return ID."
       (set-visited-file-modtime)
       (noema-research-notify-host file "jutext.open")
       (noema-research--watch-file)
+      ;; D-035: the project's Pi manager starts with its first document and
+      ;; stops after the project's last document closes.
+      (when (require 'noema-pi-router nil t)
+        (noema-pi-router-note-visit (current-buffer)))
       (noema-research--schedule-session-routes)
       (when (and (or noema-research-open-output-on-visit
                      noema-research-open-graph-on-visit)

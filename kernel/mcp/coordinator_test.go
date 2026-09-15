@@ -69,6 +69,32 @@ func TestCoordinatorRunStartQueuesOnlyProjectWorkDocuments(t *testing.T) {
 	}
 }
 
+func TestCoordinatorSessionControlQueuesOnlyWhatCanApply(t *testing.T) {
+	root := t.TempDir()
+	t.Cleanup(research.CloseAll)
+	store, err := research.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DeclareSessionName(research.SessionNameIntent{Name: "baseline", Agent: "codex", Origin: "user"}); err != nil {
+		t.Fatal(err)
+	}
+	if result, _ := coordinatorSessionCancel(map[string]any{"root": root, "name": "baseline"}); !result.IsError {
+		t.Fatal("cancel needs an open Run")
+	}
+	if result, _ := coordinatorSessionClose(map[string]any{"root": root, "name": "missing"}); !result.IsError {
+		t.Fatal("close needs an existing name")
+	}
+	result, _ := coordinatorSessionClose(map[string]any{"root": root, "name": "baseline"})
+	if result.IsError || !strings.Contains(coordinatorText(result), "creq_") {
+		t.Fatalf("close of an idle session should queue: %s", coordinatorText(result))
+	}
+	claimed, err := store.ClaimCoordinatorRequests("emacs:test", 10)
+	if err != nil || len(claimed) != 1 || claimed[0].Kind != "session.close" || claimed[0].Payload["name"] != "baseline" {
+		t.Fatalf("unexpected queued control request: %+v %v", claimed, err)
+	}
+}
+
 func TestCoordinatorCannotChangeUserPinnedNames(t *testing.T) {
 	root := t.TempDir()
 	t.Cleanup(research.CloseAll)

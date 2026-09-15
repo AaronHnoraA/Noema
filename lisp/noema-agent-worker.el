@@ -120,13 +120,18 @@ it back to zero."
 (defvar noema-agent-worker--submissions (make-hash-table :test #'equal)
   "Local submission id to queued or active Noema worker token.")
 
+(defvar noema-agent-worker-run-finished-functions nil
+  "Abnormal hook run with a worker and its final local queue state.
+D-035: the Pi manager uses it to stop an agent that outlived its project.")
+
 (defun noema-agent-worker--finish-queue (worker state)
   "Release WORKER's Magent arbiter ticket with terminal local STATE."
   (when (noema-agent-worker-submission-id worker)
     (setf (noema-agent-worker-queue-state worker) state)
     (remhash (noema-agent-worker-submission-id worker) noema-agent-worker--submissions)
     (magent-runtime-queue-arbiter-finish 'noema worker))
-  (noema-agent-worker--wake-waiting))
+  (noema-agent-worker--wake-waiting)
+  (run-hook-with-args 'noema-agent-worker-run-finished-functions worker state))
 
 (defun noema-agent-worker--finish-bootstrap-failure (worker reason)
   "Finish WORKER locally after the kernel accepted bootstrap failure REASON."
@@ -530,7 +535,9 @@ resynced too; otherwise its next save would ask about an external change."
                            (max 30 (* 3 noema-agent-worker-lease-renew-seconds)))))))
      (lambda (result error-object)
        (if error-object
-           (progn
+           ;; D-035: a finished Run releases its lease; a renewal that was
+           ;; already in flight then fails, which is not a lost lease.
+           (unless (noema-agent-worker-terminal worker)
              (message "Noema Run %s lost its worker lease: %s"
                       (noema-agent-worker-run-id worker)
                       (noema-agent-worker--error error-object))
@@ -1265,11 +1272,63 @@ work DAG.  No ACP prompt is sent until its frozen RunSpec is stored."
        ,@(when (and parent-session-id (not (string-empty-p parent-session-id)))
            `((parentSessionId . ,parent-session-id)))))))
 
+(defun noema-agent-worker-buffer-busy-p (buffer)
+  "Return non-nil when a non-terminal Noema Run is using agent BUFFER."
+  (seq-some (lambda (worker)
+              (and (eq (noema-agent-worker-buffer worker) buffer)
+                   (not (noema-agent-worker-terminal worker))))
+            (hash-table-values noema-agent-worker--runs)))
+
+(defun noema-agent-worker-cancel-buffer (buffer)
+  "Cancel every active Noema Run using agent BUFFER."
+  (dolist (worker (hash-table-values noema-agent-worker--runs))
+    (when (and (eq (noema-agent-worker-buffer worker) buffer)
+               (not (noema-agent-worker-terminal worker)))
+      (noema-agent-worker--cancel worker))))
+
+(defun noema-agent-worker-stop-buffer (buffer)
+  "Stop agent BUFFER's process and kill it, unless a Run is using it.
+Return non-nil when BUFFER was stopped.  Its session name and native id stay
+in the registry, so the next Run or visit resumes the conversation (D-035)."
+  (when (and (noema-agent-acp-agent-buffer-p buffer)
+             (not (noema-agent-worker-buffer-busy-p buffer)))
+    (ignore-errors (noema-agent-acp-shutdown buffer))
+    (when (buffer-live-p buffer)
+      (let ((kill-buffer-query-functions nil))
+        (kill-buffer buffer)))
+    t))
+
+(defun noema-agent-worker--session-worker (payload)
+  "Return the active worker that coordinator PAYLOAD names, or nil."
+  (let ((run-id (noema-agent-worker--string payload "runId"))
+        (session-id (noema-agent-worker--string payload "sessionId"))
+        (name (noema-agent-worker--string payload "name")))
+    (seq-find (lambda (worker)
+                (and (not (noema-agent-worker-terminal worker))
+                     (or (and run-id (equal run-id (noema-agent-worker-run-id worker)))
+                         (and session-id (equal session-id (noema-agent-worker-session-id worker)))
+                         (and name (equal name (noema-agent-worker--session-name worker))))))
+              (hash-table-values noema-agent-worker--runs))))
+
+(defun noema-agent-worker--claim-close (root payload)
+  "Stop the idle agent process of the session coordinator PAYLOAD names in ROOT."
+  (let* ((name (noema-agent-worker--string payload "name"))
+         (session-id (noema-agent-worker--string payload "sessionId"))
+         (buffer (or (and name (noema-agent-acp-session-buffer name root))
+                     (and session-id (noema-agent-worker--existing-buffer session-id)))))
+    (when (and buffer (not (noema-agent-worker-stop-buffer buffer)))
+      (display-warning 'noema-agent-worker
+                       (format "Pi asked to close %s while a Run is using it; it stays open"
+                               (or name session-id))
+                       :warning))))
+
 ;;;###autoload
 (defun noema-agent-worker-claim-coordinator-requests (root)
-  "Claim pending Pi coordinator requests for project ROOT and run them.
-D-032: Pi only records requests; each one becomes an ordinary queued Run
-here, through the same frozen RunSpec, lease and permission path."
+  "Claim pending Pi manager requests for project ROOT and carry them out.
+D-032/D-035: Pi only records requests.  A `run.start' becomes an ordinary
+queued Run through the frozen RunSpec, lease and permission path;
+`session.cancel' cancels that session's Run over ACP; `session.close' stops
+an idle session's agent process and keeps its name and history."
   (interactive (list (expand-file-name default-directory)))
   (noema-agent-worker--api
    "aaronnote:api:research:coordinator:claim"
@@ -1281,15 +1340,25 @@ here, through the same frozen RunSpec, lease and permission path."
                                   (noema-agent-worker--error error-object))
                           :warning)
        (dolist (request (append (noema-agent-worker--value result "requests") nil))
-         (when (equal (noema-agent-worker--string request "kind") "run.start")
-           (let* ((payload (noema-agent-worker--value request "payload"))
-                  (file (noema-agent-worker--string payload "file"))
-                  (cell-id (noema-agent-worker--string payload "cellId")))
-             (when (and file cell-id)
-               (let ((default-directory (file-name-as-directory root)))
-                 (noema-agent-worker-run-work-cell
-                  file cell-id nil nil
-                  (noema-agent-worker--string payload "sessionName")))))))))))
+         (let ((payload (noema-agent-worker--value request "payload")))
+           (pcase (noema-agent-worker--string request "kind")
+             ("run.start"
+              (let ((file (noema-agent-worker--string payload "file"))
+                    (cell-id (noema-agent-worker--string payload "cellId")))
+                (when (and file cell-id)
+                  (let ((default-directory (file-name-as-directory root)))
+                    (noema-agent-worker-run-work-cell
+                     file cell-id nil nil
+                     (noema-agent-worker--string payload "sessionName"))))))
+             ("session.cancel"
+              (if-let* ((worker (noema-agent-worker--session-worker payload)))
+                  (noema-agent-worker--cancel worker)
+                (display-warning 'noema-agent-worker
+                                 (format "Pi asked to cancel %s, which has no Run in this Emacs"
+                                         (or (noema-agent-worker--string payload "name") "a session"))
+                                 :warning)))
+             ("session.close"
+              (noema-agent-worker--claim-close root payload)))))))))
 
 ;;;###autoload
 (defun noema-agent-worker-run-prompt-file (file &optional session-policy parent-session-id)

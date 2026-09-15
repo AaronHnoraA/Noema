@@ -20,11 +20,12 @@ import (
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// D-032: Pi reaches Noema through this endpoint.  Its tools are the same
-// deterministic session operations Emacs uses, executed with actor "pi", so
-// Pi can never override what the user pinned.  The server instructions are
-// appended to Pi's system prompt by pi-acp, which is how the coordinator role
-// is deployed without touching the user's Pi configuration.
+// D-032/D-035: Pi is the project's session manager and reaches Noema only
+// through this endpoint.  Its tools are the same deterministic session
+// operations Emacs uses, executed with actor "pi", so Pi can never override
+// what the user pinned.  Anything that touches a live agent (start, cancel,
+// close) is a durable request Emacs carries out over ACP.  pi-acp appends the
+// server instructions to Pi's system prompt.
 
 //go:embed coordinator.md
 var coordinatorInstructions string
@@ -108,7 +109,64 @@ func CoordinatorTools() []*tools.Tool {
 			Handler:       coordinatorRunStart,
 			ActionEffects: map[string]tools.ToolEffects{"": {LocalWrite: true}},
 		},
+		{
+			Name: "session.cancel", Description: "Ask Emacs to cancel the Run currently open in a session.",
+			InputSchema: tools.ToolSchema{Type: "object", Properties: map[string]tools.Property{
+				"root": coordinatorRootProperty(),
+				"name": {Type: "string", Description: "Session name"},
+			}, Required: []string{"root", "name"}},
+			Handler:       coordinatorSessionCancel,
+			ActionEffects: map[string]tools.ToolEffects{"": {LocalWrite: true}},
+		},
+		{
+			Name: "session.close", Description: "Ask Emacs to stop an idle session's agent process. The name and history stay; the next Run resumes it.",
+			InputSchema: tools.ToolSchema{Type: "object", Properties: map[string]tools.Property{
+				"root": coordinatorRootProperty(),
+				"name": {Type: "string", Description: "Session name"},
+			}, Required: []string{"root", "name"}},
+			Handler:       coordinatorSessionClose,
+			ActionEffects: map[string]tools.ToolEffects{"": {LocalWrite: true}},
+		},
 	}
+}
+
+func coordinatorSessionCancel(args map[string]any) (tools.CallToolResult, error) {
+	return coordinatorSessionControl("session.cancel", args)
+}
+
+func coordinatorSessionClose(args map[string]any) (tools.CallToolResult, error) {
+	return coordinatorSessionControl("session.close", args)
+}
+
+// coordinatorSessionControl queues a live-agent action only when it can
+// apply: cancel needs an open Run, close needs an idle session, and Pi never
+// acts on its own `pi' session.
+func coordinatorSessionControl(kind string, args map[string]any) (tools.CallToolResult, error) {
+	store, err := coordinatorStore(args)
+	if err != nil {
+		return coordinatorFailure(err), nil
+	}
+	name, err := store.GetSessionName(coordinatorString(args, "name"))
+	if err != nil {
+		return coordinatorFailure(err), nil
+	}
+	switch {
+	case name.Name == research.PiSessionName:
+		return coordinatorFailure(errors.New("the pi session is managed by Emacs, not by Pi")), nil
+	case kind == "session.cancel" && !name.OpenRun:
+		return coordinatorFailure(fmt.Errorf("session %s has no open Run", name.Name)), nil
+	case kind == "session.close" && name.OpenRun:
+		return coordinatorFailure(fmt.Errorf("session %s is running a Run; cancel it first", name.Name)), nil
+	}
+	payload := map[string]any{"name": name.Name, "sessionId": name.SessionID}
+	if kind == "session.cancel" && name.LastRun != nil {
+		payload["runId"] = name.LastRun.ID
+	}
+	request, err := store.CreateCoordinatorRequest(kind, payload, coordinatorActor)
+	if err != nil {
+		return coordinatorFailure(err), nil
+	}
+	return coordinatorResult(map[string]any{"request": request, "note": "Queued for Emacs."}), nil
 }
 
 func coordinatorString(args map[string]any, key string) string {

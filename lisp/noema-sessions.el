@@ -426,7 +426,7 @@ From a `.noema' buffer the list starts scoped to that file; SCOPE may be
                       (fboundp 'my/noema--api-call-sync)
                       (ignore-errors
                         (my/noema--api-call-sync "aaronnote:api:research:session:names"
-                                                 (vector `((cwd . ,root))) 10))))
+                                                 (vector `((cwd . ,root))) 2))))
          (choices (noema-sessions--switch-candidates
                    (noema-sessions--list (noema-sessions--get result "names")) root)))
     (unless choices (user-error "No Noema agent sessions or buffers"))

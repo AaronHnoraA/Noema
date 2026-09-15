@@ -1163,6 +1163,16 @@ func (s *Store) ReportWorkerEvents(input ReportWorkerEventsInput) ([]Event, erro
 					return nil, err
 				}
 				result = append(result, inputExpired...)
+				// D-035: a finished Run releases its session.  The lease keeps its
+				// epoch for fencing but expires now, so the next Run acquires a
+				// newer epoch and the session reads as resumable, not held.
+				if _, err := tx.Exec(`UPDATE leases SET expires_at = ? WHERE session_id = ? AND expires_at > ?`,
+					nowMs, input.SessionID, nowMs); err != nil {
+					return nil, err
+				}
+				if _, err := tx.Exec(`UPDATE sessions SET state = 'warm' WHERE id = ? AND state = 'active'`, input.SessionID); err != nil {
+					return nil, err
+				}
 			}
 		}
 		event, err := appendEvent(tx, Event{Type: draft.Type, WorkstreamID: workstreamID, NotebookID: run.NotebookID,
@@ -1835,6 +1845,18 @@ func (s *Store) ExpireLeases() ([]Run, error) {
 	}
 	interrupted := []Run{}
 	for _, lease := range expired {
+		// D-035: a lease a finished Run released is not a lost worker.  Keep
+		// its row (and epoch) and record nothing.
+		var held, open int
+		if err := tx.QueryRow(`SELECT (SELECT COUNT(*) FROM sessions WHERE id = ? AND state = 'active'),
+			(SELECT COUNT(*) FROM runs WHERE session_id = ? AND status IN ('preparing', 'running', 'waiting_permission', 'waiting_input'))
+			+ (SELECT COUNT(*) FROM permissions WHERE session_id = ? AND state = 'pending')`,
+			lease.sessionID, lease.sessionID, lease.sessionID).Scan(&held, &open); err != nil {
+			return nil, err
+		}
+		if held == 0 && open == 0 {
+			continue
+		}
 		activeRows, err := tx.Query(runSelect+` WHERE session_id = ? AND status IN ('preparing', 'running', 'waiting_permission', 'waiting_input')`, lease.sessionID)
 		if err != nil {
 			return nil, err
