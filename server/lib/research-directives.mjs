@@ -1,3 +1,5 @@
+import { parseSessionDirective } from "./research-session-routing.mjs";
+
 const AGENT_OR_SKILL_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const CONTEXT_REF = /^(?:lineage|depends|git\.diff|handoff\.latest|cell:[A-Za-z0-9_-]+|result:wn_[A-Za-z0-9_-]+|file:.+|note:[A-Za-z0-9_-]+|artifact:art_[A-Za-z0-9_-]+)$/;
 
@@ -35,8 +37,13 @@ export function parseResearchDirectives(text, {
       if ((name === "agent" || name === "skill") && !AGENT_OR_SKILL_ID.test(value)) {
         throw directiveError(`Invalid ${match[1]}${name} value in ${sourceName}: ${value}`);
       }
-      if (name === "session" && !["continue", "fork", "fresh"].includes(value)) {
-        throw directiveError(`@@session must be continue, fork, or fresh (got ${value})`);
+      if (name === "session") {
+        // D-031: continue|fork|fresh, a project session name, or parent:child.
+        try {
+          parseSessionDirective(value);
+        } catch (error) {
+          throw directiveError(`@@session(${value}): ${error.message}`);
+        }
       }
       if (name === "ctx" && !CONTEXT_REF.test(value)) {
         throw directiveError(`Unsupported v1 context reference: ${value}`);

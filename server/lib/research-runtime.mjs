@@ -7,6 +7,13 @@ import { promisify } from "node:util";
 import { notebookSource } from "./jupyter-notebook-format.mjs";
 import { parseResearchDirectives } from "./research-directives.mjs";
 import {
+  deriveSessionRoute,
+  parseSessionDirective,
+  PI_SESSION_NAME,
+  SESSION_KEYWORDS,
+  validateSessionName,
+} from "./research-session-routing.mjs";
+import {
   createResearchCell,
   isResearchDocumentPath,
   readResearchNotebookFile,
@@ -772,7 +779,116 @@ export function createResearchRuntimeService({
     throw researchError("Run preparation needs file + cellId or promptFile", 422, "ERR_RESEARCH_RUN");
   }
 
-  async function routeRun(root, source, target, body) {
+  async function sessionNamesFor(root) {
+    const runtimeProvider = provider();
+    return typeof runtimeProvider.sessionNames === "function"
+      ? values(await runtimeProvider.sessionNames({ root }))
+      : [];
+  }
+
+  // D-031: every conversation a work block reaches has a project-scoped name.
+  // An explicit directive wins, then a coordinator-requested name, then the
+  // lineage-derived default.  Explicit session/parent ids from older callers
+  // keep their original route.
+  async function routeRun(root, source, target, body, { dryRun = false } = {}) {
+    const agent = valueString(source.executor.agent)
+      || valueString(source.defaultAgent)
+      || valueString(body.agent || body.adapter || object(body.executor).agent)
+      || "codex";
+    const rawDirective = valueString(source.directiveSession || source.executor.session_policy)
+      || valueString(body.sessionPolicy || body.session_policy);
+    const directive = parseSessionDirective(rawDirective);
+    const explicitIds = valueString(body.sessionId || body.session_id)
+      || valueString(body.parentSessionId || body.parent_session_id);
+    if (explicitIds || (source.kind === "prompt-file" && directive.kind !== "name" && directive.kind !== "fork")) {
+      const keyword = SESSION_KEYWORDS.includes(rawDirective) ? rawDirective : "";
+      return legacyRouteRun(root, { ...source, directiveSession: keyword,
+        executor: { ...source.executor, session_policy: keyword } }, target, { ...body, sessionPolicy: keyword });
+    }
+    const runtimeProvider = provider();
+    const [names, runs] = await Promise.all([
+      sessionNamesFor(root),
+      typeof runtimeProvider.runs === "function" ? runtimeProvider.runs({ root, limit: 1000 }) : [],
+    ]);
+    const decision = deriveSessionRoute({
+      notebook: source.notebook, workNodeId: source.workNodeId, agent, directive,
+      requestedName: valueString(body.sessionName || body.session_name), runs: values(runs), names,
+    });
+    const byName = new Map();
+    for (const entry of names) {
+      byName.set(valueString(entry.name), entry);
+      for (const alias of values(entry.aliases)) byName.set(valueString(alias), entry);
+    }
+    const intent = { name: decision.name, agent, parentName: decision.parentName, forkMode: decision.forkMode, origin: decision.origin };
+    const base = {
+      agent, sessionName: intent, autoContext: decision.autoContext,
+      derivation: { rule: decision.rule, from_work_node: decision.fromWorkNodeId, reason: decision.reason },
+    };
+    const onTarget = async (session) => {
+      try {
+        return (await projectDirectory(root, session.executionTarget)) === target;
+      } catch {
+        return false;
+      }
+    };
+    const fresh = (reason) => ({ ...base, policy: "fresh", sessionId: "", mode: "fresh", reason });
+
+    if (decision.action === "adopt") {
+      const sessions = await runtimeProvider.sessions({ root, workstreamId: source.workstreamId, adapter: agent, limit: 200 });
+      const legacy = values(sessions).find((candidate) => valueString(candidate.id) === decision.legacySessionId);
+      if (legacy && ["active", "warm"].includes(legacy.state) && await onTarget(legacy)) {
+        return { ...base, policy: "continue", sessionId: legacy.id, mode: "continued", session: legacy };
+      }
+      return fresh("no resumable same-agent session");
+    }
+    let action = decision.action;
+    let parentName = decision.parentName;
+    if (action === "continue") {
+      const entry = byName.get(decision.name);
+      if (entry && valueString(entry.sessionId)) {
+        if (entry.openRun && !dryRun) {
+          throw researchError(`Session ${entry.name} is busy with another Run`, 409, "ERR_RESEARCH_SESSION_BUSY");
+        }
+        const session = await runtimeProvider.session({ root, id: entry.sessionId });
+        if (!(await onTarget(session))) {
+          throw researchError(`Session ${entry.name} belongs to another execution target`, 422, "ERR_RESEARCH_SESSION");
+        }
+        if (["active", "warm"].includes(valueString(session.state))) {
+          return { ...base, policy: "continue", sessionId: session.id, mode: "continued", session, busy: Boolean(entry.openRun) };
+        }
+        // The native conversation is gone; keep the name and rebuild from
+        // its latest Handoff instead of pretending it survived.
+        return { ...base, policy: "continue", sessionId: "", mode: "fork-reconstructed", parentSessionId: session.id,
+          parent: session, reason: `session ${entry.name} was ${session.state}; rebuilt from its Handoff` };
+      }
+      if (entry && valueString(entry.parentName)) {
+        action = "fork";
+        parentName = valueString(entry.parentName);
+      } else {
+        return fresh(decision.reason);
+      }
+    }
+    if (action === "fork") {
+      const parentEntry = byName.get(parentName);
+      if (!parentEntry || !valueString(parentEntry.sessionId)) {
+        return fresh(`${parentName} has no conversation yet; started fresh`);
+      }
+      const parent = await runtimeProvider.session({ root, id: parentEntry.sessionId });
+      if (!(await onTarget(parent))) {
+        throw researchError(`Session ${parentEntry.name} belongs to another execution target`, 422, "ERR_RESEARCH_SESSION");
+      }
+      const native = decision.allowNative && object(parent.capabilities).sessionFork === true
+        && valueString(parent.nativeSessionId) && valueString(parent.adapter) === agent;
+      return {
+        ...base, sessionName: { ...intent, parentName: parentEntry.name, forkMode: native ? "native" : "reconstructed" },
+        policy: "fork", sessionId: "", mode: native ? "fork" : "fork-reconstructed", parentSessionId: parent.id, parent,
+        reason: native ? decision.reason : `${decision.reason}; no hidden parent conversation is inherited`,
+      };
+    }
+    return fresh(decision.reason);
+  }
+
+  async function legacyRouteRun(root, source, target, body) {
     const requestedPolicy = valueString(source.directiveSession || source.executor.session_policy || body.sessionPolicy || body.session_policy);
     let policy = requestedPolicy;
     if (!["continue", "fork", "fresh"].includes(policy)) {
@@ -1082,6 +1198,11 @@ export function createResearchRuntimeService({
       const target = await projectDirectory(root, body.executionTarget || body.cwd || root);
       const route = await routeRun(root, source, target, body);
       const declaredContext = [...values(source.context), ...values(body.context)];
+      // A derived branch carries its lineage as explicit context, never as a
+      // hidden conversation (D-031).
+      for (const ref of values(route.autoContext)) {
+        if (!declaredContext.some((entry) => contextRef(entry).ref === ref)) declaredContext.push(ref);
+      }
       let reconstruction = null;
       if (route.mode === "fork-reconstructed") {
         reconstruction = await latestParentHandoff(provider(), root, route.parentSessionId);
@@ -1126,6 +1247,8 @@ export function createResearchRuntimeService({
           policy: route.policy,
           session_id: route.sessionId || "",
           native_session_id: valueString(route.session?.nativeSessionId),
+          ...(route.sessionName ? { name: route.sessionName.name, parent_name: route.sessionName.parentName || undefined } : {}),
+          ...(route.derivation ? { derivation: route.derivation } : {}),
         },
         session_policy: route.policy,
         execution_target: target,
@@ -1148,6 +1271,7 @@ export function createResearchRuntimeService({
         run: {
           workstreamId: source.workstreamId,
           sessionId: route.sessionId,
+          ...(route.sessionName ? { sessionName: route.sessionName } : {}),
           notebookId: source.notebookId,
           cellId: source.cellId,
           workNodeId: source.workNodeId,
@@ -1176,6 +1300,87 @@ export function createResearchRuntimeService({
 	  void executeProjectFile(prepared.root, run, prepared.spec);
 	  return { ...prepared, run };
 	},
+
+    async sessionNames(body = {}) {
+      const root = await rootFor(body);
+      return { root, names: await provider().sessionNames({ root, includeArchived: Boolean(body.includeArchived) }) };
+    },
+
+    async sessionName(body = {}) {
+      const root = await rootFor(body);
+      return { root, name: await provider().sessionName({ root, name: valueString(body.name) }) };
+    },
+
+    async declareSessionName(body = {}) {
+      const root = await rootFor(body);
+      const origin = valueString(body.origin) === "pi" ? "pi" : "user";
+      const intent = {
+        name: validateSessionName(body.name), agent: valueString(body.agent).toLowerCase(),
+        parentName: valueString(body.parentName || body.parent_name), forkMode: "reconstructed", origin,
+      };
+      return { root, name: await provider().declareSessionName({ root, intent }) };
+    },
+
+    // Bind a name to an already-promoted Session: the per-project Pi
+    // coordinator (origin system) or a human naming a live agent buffer.
+    async bindSessionName(body = {}) {
+      const root = await rootFor(body);
+      const name = validateSessionName(body.name, { allowPi: true });
+      const sessionId = valueString(body.sessionId || body.session_id);
+      if (!sessionId.startsWith("ses_")) throw researchError("Binding a session name needs a promoted Session", 422, "ERR_RESEARCH_SESSION_NAME");
+      const intent = { name, agent: valueString(body.agent).toLowerCase(), origin: name === PI_SESSION_NAME ? "system" : "user" };
+      return { root, name: await provider().bindSessionName({ root, intent, sessionId }) };
+    },
+
+    async renameSessionName(body = {}) {
+      const root = await rootFor(body);
+      return { root, name: await provider().renameSessionName({ root, rename: {
+        name: valueString(body.name), newName: validateSessionName(body.newName || body.new_name),
+        actor: valueString(body.actor) || "emacs",
+      } }) };
+    },
+
+    async archiveSessionName(body = {}) {
+      const root = await rootFor(body);
+      return { root, name: await provider().archiveSessionName({ root, archive: {
+        name: valueString(body.name), archived: body.archived !== false, actor: valueString(body.actor) || "emacs",
+      } }) };
+    },
+
+    // Dry-run the D-031 route for visible work blocks so JuText can show which
+    // conversation each block will use before anything runs.
+    async resolveSessions(body = {}) {
+      const root = await rootFor(body);
+      const file = valueString(body.file);
+      const target = await projectDirectory(root, body.executionTarget || body.cwd || root);
+      const sessions = [];
+      for (const cellId of values(body.cellIds).map(valueString).filter(Boolean)) {
+        try {
+          const source = await sourceForRun(root, { file, cellId });
+          const route = await routeRun(root, source, target, {}, { dryRun: true });
+          sessions.push({
+            cellId, agent: route.agent, mode: route.mode, name: valueString(route.sessionName?.name),
+            parentName: valueString(route.sessionName?.parentName), rule: valueString(route.derivation?.rule),
+            reason: valueString(route.derivation?.reason || route.reason), busy: Boolean(route.busy),
+          });
+        } catch (error) {
+          sessions.push({ cellId, error: String(error?.message || error) });
+        }
+      }
+      return { root, sessions };
+    },
+
+    // Where Pi reaches Noema: the shared MCP endpoint plus the D-032
+    // coordinator endpoint served by the same kernel.
+    async coordinatorEndpoint() {
+      const mcpUrl = valueString(object(getRuntimeDescriptor()).mcpUrl);
+      return { mcpUrl, coordinatorUrl: mcpUrl ? `${mcpUrl}/coordinator` : "" };
+    },
+
+    async claimCoordinatorRequests(body = {}) {
+      const root = await rootFor(body);
+      return { root, requests: await provider().claimCoordinatorRequests({ root, owner: valueString(body.owner) || "emacs" }) };
+    },
 
     async runs(body = {}) {
       const root = await rootFor(body);

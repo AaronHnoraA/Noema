@@ -56,6 +56,13 @@ func Serve(ginServer *gin.Engine) {
 	ginServer.POST("/mcp", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, serveHTTP(handler))
 	ginServer.GET("/mcp", model.CheckAuth, model.CheckAdminRole, serveHTTP(handler))
 	ginServer.DELETE("/mcp", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, serveHTTP(handler))
+
+	// D-032: the Pi coordinator gets its own narrow endpoint.  Every caller of
+	// this path acts as "pi", which can only narrow authority.
+	coordinator := getCoordinatorHandler()
+	ginServer.POST("/mcp/coordinator", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, serveHTTP(coordinator))
+	ginServer.GET("/mcp/coordinator", model.CheckAuth, model.CheckAdminRole, serveHTTP(coordinator))
+	ginServer.DELETE("/mcp/coordinator", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, serveHTTP(coordinator))
 }
 
 func getHTTPHandler() http.Handler {

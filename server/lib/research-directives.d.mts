@@ -1,6 +1,7 @@
 export type ResearchDirectives = {
   agent: string;
-  session: "" | "continue" | "fork" | "fresh";
+  /** D-031: a keyword, a project session name, or parent:child. */
+  session: string;
   context: string[];
   skills: string[];
   workstreamId: string;

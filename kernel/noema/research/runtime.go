@@ -67,6 +67,8 @@ type Run struct {
 	FinishedAt        string `json:"finishedAt,omitempty"`
 	FailureReason     string `json:"failureReason,omitempty"`
 	Version           int64  `json:"version"`
+	// SessionName is the D-031 name this Run was routed to, if any.
+	SessionName string `json:"sessionName,omitempty"`
 }
 
 // PrepareRunInput is intentionally a JSON object rather than an adapter-
@@ -83,6 +85,9 @@ type PrepareRunInput struct {
 	Spec            map[string]any     `json:"spec"`
 	ContextManifest map[string]any     `json:"contextManifest"`
 	ContextItems    []ContextItemInput `json:"contextItems"`
+	// SessionName is the D-031 logical name Node's router chose.  A Run with
+	// a session is bound immediately; a fresh Run binds when it attaches.
+	SessionName *SessionNameIntent `json:"sessionName,omitempty"`
 }
 
 // ContextItemInput carries bytes over the trusted Node-to-kernel boundary.
@@ -315,8 +320,25 @@ func (s *Store) PrepareRun(input PrepareRunInput) (Run, error) {
 			}
 			return Run{}, err
 		}
-		if sessionWorkstream != input.WorkstreamID || filepath.Clean(sessionTarget) != filepath.Clean(input.ExecutionTarget) {
+		named, err := sessionHasNameTx(tx, input.SessionID)
+		if err != nil {
+			return Run{}, err
+		}
+		// A named logical session serves every workstream of its repository
+		// (D-031); an anonymous one stays inside the workstream it began in.
+		if (sessionWorkstream != input.WorkstreamID && !named) || filepath.Clean(sessionTarget) != filepath.Clean(input.ExecutionTarget) {
 			return Run{}, errors.New("run session does not belong to the workstream and execution target")
+		}
+	}
+	var sessionIntent SessionNameIntent
+	if input.SessionName != nil {
+		if sessionIntent, err = checkIntentTx(tx, *input.SessionName); err != nil {
+			return Run{}, err
+		}
+		if row, found, err := loadNameRowTx(tx, sessionIntent.Name); err != nil {
+			return Run{}, err
+		} else if found && input.SessionID != "" && row.sessionID != "" && row.sessionID != input.SessionID {
+			return Run{}, fmt.Errorf("session name %q is bound to another session", sessionIntent.Name)
 		}
 	}
 	for index, artifact := range contextArtifacts {
@@ -382,6 +404,16 @@ func (s *Store) PrepareRun(input PrepareRunInput) (Run, error) {
 		"source_kind": input.SourceKind, "spec_artifact_id": specArtifact.ID, "context_artifact_id": contextArtifact.ID,
 	}); err != nil {
 		return Run{}, err
+	}
+	if input.SessionName != nil {
+		if err := recordRunSessionNameTx(tx, runID, sessionIntent); err != nil {
+			return Run{}, err
+		}
+		if input.SessionID != "" {
+			if err := bindSessionNameTx(tx, sessionIntent, input.SessionID, input.WorkstreamID, nowMs); err != nil {
+				return Run{}, err
+			}
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return Run{}, err
@@ -641,14 +673,15 @@ func (s *Store) ListRuns(filter RunFilter) ([]Run, error) {
 
 const runSelect = `SELECT id, workstream_id, COALESCE(session_id, ''), COALESCE(notebook_id, ''), COALESCE(cell_id, ''), COALESCE(work_node_id, ''),
 	source_kind, execution_target, status, spec_artifact_id, COALESCE(context_artifact_id, ''), created_at,
-	COALESCE(started_at, 0), COALESCE(finished_at, 0), failure_reason, version FROM runs`
+	COALESCE(started_at, 0), COALESCE(finished_at, 0), failure_reason, version,
+	COALESCE((SELECT name FROM run_session_names WHERE run_session_names.run_id = runs.id), '') FROM runs`
 
 func scanRun(row rowScanner) (Run, error) {
 	var run Run
 	var createdAt, startedAt, finishedAt int64
 	err := row.Scan(&run.ID, &run.WorkstreamID, &run.SessionID, &run.NotebookID, &run.CellID, &run.WorkNodeID, &run.SourceKind,
 		&run.ExecutionTarget, &run.Status, &run.SpecArtifactID, &run.ContextArtifactID, &createdAt, &startedAt, &finishedAt,
-		&run.FailureReason, &run.Version)
+		&run.FailureReason, &run.Version, &run.SessionName)
 	if err != nil {
 		return Run{}, err
 	}
@@ -841,7 +874,7 @@ func (s *Store) StartRun(input StartRunInput) (Run, error) {
 		}
 		return Run{}, err
 	}
-	if run.SessionID != input.SessionID || run.WorkstreamID != workstreamID {
+	if run.SessionID != input.SessionID || !leaseCoversWorkstreamTx(tx, input.SessionID, run.WorkstreamID, workstreamID) {
 		return Run{}, errors.New("run is not attached to this leased session")
 	}
 	if run.Status != "preparing" {
@@ -995,7 +1028,7 @@ func (s *Store) AttachRunToSession(input AttachRunInput) (Run, error) {
 	if run.Status != "preparing" || run.SessionID != "" {
 		return Run{}, fmt.Errorf("run %q is already attached or no longer preparing", input.RunID)
 	}
-	if run.WorkstreamID != workstreamID {
+	if !leaseCoversWorkstreamTx(tx, input.SessionID, run.WorkstreamID, workstreamID) {
 		return Run{}, errors.New("run does not belong to the leased session workstream")
 	}
 	var target string
@@ -1012,6 +1045,13 @@ func (s *Store) AttachRunToSession(input AttachRunInput) (Run, error) {
 	if _, err := appendEvent(tx, Event{Type: "run.session.attached", WorkstreamID: run.WorkstreamID, NotebookID: run.NotebookID,
 		CellID: run.CellID, RunID: run.ID, SessionID: input.SessionID}, nowMs, map[string]any{"owner": input.Owner, "epoch": input.Epoch}); err != nil {
 		return Run{}, err
+	}
+	if intent, found, err := runSessionNameTx(tx, run.ID); err != nil {
+		return Run{}, err
+	} else if found {
+		if err := bindSessionNameTx(tx, intent, input.SessionID, run.WorkstreamID, nowMs); err != nil {
+			return Run{}, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return Run{}, err
@@ -1051,7 +1091,7 @@ func (s *Store) ReportWorkerEvents(input ReportWorkerEventsInput) ([]Event, erro
 		}
 		return nil, err
 	}
-	if run.SessionID != input.SessionID || run.WorkstreamID != workstreamID {
+	if run.SessionID != input.SessionID || !leaseCoversWorkstreamTx(tx, input.SessionID, run.WorkstreamID, workstreamID) {
 		return nil, errors.New("run is not attached to this leased session")
 	}
 	if terminalRunStatuses[run.Status] {
@@ -1353,7 +1393,7 @@ func (s *Store) RequestPermission(input RequestPermissionInput) (Permission, err
 		}
 		return Permission{}, err
 	}
-	if run.SessionID != input.SessionID || run.WorkstreamID != workstreamID || run.Status != "running" {
+	if run.SessionID != input.SessionID || !leaseCoversWorkstreamTx(tx, input.SessionID, run.WorkstreamID, workstreamID) || run.Status != "running" {
 		return Permission{}, errors.New("permission can only be requested by a running leased run")
 	}
 	decision, err := policyDecisionForTx(tx, run, input.Action, input.Options)
@@ -1582,7 +1622,7 @@ func (s *Store) RequestInput(input RequestInputInput) (InputRequest, error) {
 		}
 		return InputRequest{}, err
 	}
-	if run.SessionID != input.SessionID || run.WorkstreamID != workstreamID || run.Status != "running" {
+	if run.SessionID != input.SessionID || !leaseCoversWorkstreamTx(tx, input.SessionID, run.WorkstreamID, workstreamID) || run.Status != "running" {
 		return InputRequest{}, errors.New("input can only be requested by a running leased run")
 	}
 	requestID, err := prefixedUUID("input_")

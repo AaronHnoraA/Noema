@@ -55,10 +55,30 @@
   '(:eval (noema-agent-worker--attention-lighter))
   "The `global-mode-string' entry for pending Noema attention items.")
 
+(defvar noema-agent-worker--runs)
+
+(defcustom noema-agent-worker-busy-retry-seconds 15
+  "Seconds before a Run waiting on a busy named session retries preparation.
+A waiting Run is also retried as soon as a local Run finishes."
+  :type 'number
+  :group 'noema-agent-worker)
+
+(defvar noema-agent-worker--busy-waiting nil
+  "Queued workers whose named session had another open Run (D-031).")
+
 (defun noema-agent-worker--attention-lighter ()
-  "Return the mode-line fragment for pending Noema attention items."
-  (when (> noema-agent-worker--attention-count 0)
-    (format " Noema[%d]" noema-agent-worker--attention-count)))
+  "Return the mode-line fragment for running Runs and pending decisions.
+D-034: this replaces per-Run echo-area messages."
+  (let ((running (if (hash-table-p noema-agent-worker--runs)
+                     (hash-table-count noema-agent-worker--runs)
+                   0))
+        (pending noema-agent-worker--attention-count))
+    (when (or (> running 0) (> pending 0))
+      (concat " Noema["
+              (if (> running 0) (format "▶%d" running) "")
+              (if (and (> running 0) (> pending 0)) " " "")
+              (if (> pending 0) (format "!%d" pending) "")
+              "]"))))
 
 (unless (member noema-agent-worker--mode-line-entry global-mode-string)
   (setq global-mode-string
@@ -105,7 +125,8 @@ it back to zero."
   (when (noema-agent-worker-submission-id worker)
     (setf (noema-agent-worker-queue-state worker) state)
     (remhash (noema-agent-worker-submission-id worker) noema-agent-worker--submissions)
-    (magent-runtime-queue-arbiter-finish 'noema worker)))
+    (magent-runtime-queue-arbiter-finish 'noema worker))
+  (noema-agent-worker--wake-waiting))
 
 (defun noema-agent-worker--finish-bootstrap-failure (worker reason)
   "Finish WORKER locally after the kernel accepted bootstrap failure REASON."
@@ -439,12 +460,21 @@ resynced too; otherwise its next save would ask about an external change."
        (lambda (_result error-object)
          (noema-agent-worker--stop-renewal worker)
          (remhash (noema-agent-worker-run-id worker) noema-agent-worker--runs)
+         (force-mode-line-update t)
          (if error-object
              ;; The authoritative Run remains non-terminal until lease expiry.
              ;; Do not let a queued Run collide with it in the meantime.
              (run-at-time 31 nil
                           (lambda () (noema-agent-worker--finish-queue worker 'interrupted)))
            (noema-agent-worker--resync-source-buffer worker)
+           ;; D-034: a finished Run shows in its output area; only a failure
+           ;; earns one echo-area line.
+           (when (equal status "failed")
+             (message "Noema Run%s failed: %s"
+                      (if-let* ((name (noema-agent-worker--session-name worker)))
+                          (format " in %s" name)
+                        "")
+                      (or reason "unknown reason")))
            (noema-agent-worker--finish-queue worker (intern status))))))
     (noema-agent-worker--ledger-terminal worker status reason)
     ))
@@ -1000,12 +1030,10 @@ made durably failed without sending an ACP prompt."
                   :config config :directory target :session-id native-session-id
                   :fork-session-id fork-session-id)))
     (setf (noema-agent-worker-buffer worker) buffer)
-    ;; Agent-shell buffers back a document Run, not a document a user
-    ;; browses to directly; keep them out of tab-line/tab-bar so they never
-    ;; accumulate into a wall of tabs (they stay reachable through Attention,
-    ;; the Graph Board Agent Run menu, or `switch-to-buffer').
-    (with-current-buffer buffer
-      (setq-local tab-line-exclude t))
+    ;; D-033: one hidden, recognizably named buffer per session name.  A Run
+    ;; never displays it; `C-c A b' and `C-c A S' find it again.
+    (noema-agent-acp-mark-session-buffer
+     buffer (noema-agent-worker--session-name worker) (noema-agent-worker-agent worker) target)
     (noema-agent-acp-subscribe
      :buffer buffer :event 'init-session
      :callback (lambda (_event) (noema-agent-worker--on-session-ready worker fresh)))))
@@ -1025,6 +1053,9 @@ made durably failed without sending an ACP prompt."
         (progn
           (setf (noema-agent-worker-buffer worker) buffer
                 (noema-agent-worker-session-id worker) logical)
+          (noema-agent-acp-mark-session-buffer
+           buffer (noema-agent-worker--session-name worker) (noema-agent-worker-agent worker)
+           (noema-agent-worker-target worker))
           (noema-agent-worker--on-session-ready worker nil))
       (progn
         (setf (noema-agent-worker-session-id worker) logical)
@@ -1034,7 +1065,9 @@ made durably failed without sending an ACP prompt."
   "Dispatch a frozen RESULT rooted at TARGET, or report ERROR-OBJECT.
 When SUBMISSION is non-nil, fill and dispatch that pre-freeze queue token."
   (if error-object
-      (progn
+      (if (and submission (noema-agent-worker--busy-error-p error-object))
+          ;; The named session is serving another Run: wait, never fork.
+          (noema-agent-worker--wait-for-session submission)
         (message "Noema Run preparation failed: %s" (noema-agent-worker--error error-object))
         (when submission (noema-agent-worker--finish-queue submission 'failed)))
     (let* ((run (noema-agent-worker--value result "run"))
@@ -1056,6 +1089,7 @@ When SUBMISSION is non-nil, fill and dispatch that pre-freeze queue token."
             (noema-agent-worker-pending-permissions worker) nil
             (noema-agent-worker-pending-inputs worker) nil)
       (puthash (noema-agent-worker-run-id worker) worker noema-agent-worker--runs)
+      (force-mode-line-update t)
       (when-let* ((source (noema-agent-worker--value spec "source"))
                   ((equal (noema-agent-worker--string source "kind") "work-cell"))
                   (relative (noema-agent-worker--string source "file"))
@@ -1082,6 +1116,41 @@ When SUBMISSION is non-nil, fill and dispatch that pre-freeze queue token."
          (noema-agent-worker--fail-prepared
           worker (format "ACP dispatch failed: %s" (error-message-string error-object))))))))
 
+(defun noema-agent-worker--session-name (worker)
+  "Return the D-031 session name WORKER's Run was routed to, or nil."
+  (let ((intent (noema-agent-worker--value (noema-agent-worker-routing worker) "sessionName"))
+        (session (noema-agent-worker--value (noema-agent-worker-spec worker) "session")))
+    (or (noema-agent-worker--string intent "name")
+        (noema-agent-worker--string session "name"))))
+
+(defun noema-agent-worker--busy-error-p (error-object)
+  "Return non-nil when ERROR-OBJECT says the named session has an open Run."
+  (or (equal (noema-agent-worker--string error-object "code") "ERR_RESEARCH_SESSION_BUSY")
+      (string-match-p "is busy with another Run" (noema-agent-worker--error error-object))))
+
+(defun noema-agent-worker--wait-for-session (worker)
+  "Put WORKER back in the queue until its busy session is free."
+  (magent-runtime-queue-arbiter-finish 'noema worker)
+  (setf (noema-agent-worker-queue-state worker) 'queued)
+  (cl-pushnew worker noema-agent-worker--busy-waiting)
+  (unless (timerp (noema-agent-worker-cleanup-timer worker))
+    (setf (noema-agent-worker-cleanup-timer worker)
+          (run-at-time noema-agent-worker-busy-retry-seconds nil
+                       #'noema-agent-worker--retry-waiting worker))))
+
+(defun noema-agent-worker--retry-waiting (worker)
+  "Try again to prepare WORKER, which was waiting on a busy session."
+  (setq noema-agent-worker--busy-waiting (delq worker noema-agent-worker--busy-waiting))
+  (when (timerp (noema-agent-worker-cleanup-timer worker))
+    (cancel-timer (noema-agent-worker-cleanup-timer worker)))
+  (setf (noema-agent-worker-cleanup-timer worker) nil)
+  (noema-agent-worker--begin-preparation worker))
+
+(defun noema-agent-worker--wake-waiting ()
+  "Retry every Run waiting on a busy session shortly after a Run ends."
+  (dolist (worker noema-agent-worker--busy-waiting)
+    (run-at-time 0.5 nil #'noema-agent-worker--retry-waiting worker)))
+
 (defun noema-agent-worker--new-submission-id ()
   "Return a process-local identity for a pre-freeze queue entry."
   (concat "noema-submission:"
@@ -1097,7 +1166,7 @@ When SUBMISSION is non-nil, fill and dispatch that pre-freeze queue token."
     ;; eventual ready callback must not resurrect the Run.
     (when (and (gethash id noema-agent-worker--submissions)
                (eq (noema-agent-worker-queue-state worker) 'queued))
-      (let ((disposition
+      (progn
              (magent-runtime-queue-arbitrate
               'noema worker id
               (lambda ()
@@ -1115,8 +1184,9 @@ When SUBMISSION is non-nil, fill and dispatch that pre-freeze queue token."
                          (error-message-string error-object)))
               (lambda ()
                 (memq (noema-agent-worker-queue-state worker)
-                      '(queued preparing running))))))
-        (message "Noema document execution %s (%s)" disposition id)))))
+                      '(queued preparing running))))
+        ;; D-034: queue position is not echoed; the mode line counts Runs.
+        nil))))
 
 (defun noema-agent-worker--enqueue-preparation (target body)
   "Queue BODY for RunSpec freezing and dispatch at project TARGET."
@@ -1126,10 +1196,8 @@ When SUBMISSION is non-nil, fill and dispatch that pre-freeze queue token."
                   :root target :queue-state 'queued)))
     (puthash id worker noema-agent-worker--submissions)
     (if (fboundp 'my/noema--ensure-server)
-        (progn
-          (message "Noema document execution waiting for web-host (%s)" id)
-          (my/noema--ensure-server
-           (lambda () (noema-agent-worker--begin-preparation worker))))
+        (my/noema--ensure-server
+         (lambda () (noema-agent-worker--begin-preparation worker)))
       (noema-agent-worker--begin-preparation worker))
     id))
 
@@ -1150,6 +1218,9 @@ When SUBMISSION is non-nil, fill and dispatch that pre-freeze queue token."
     (unless (and worker (eq (noema-agent-worker-queue-state worker) 'queued))
       (user-error "No queued Noema execution %s" submission-id))
     (magent-runtime-queue-arbiter-cancel 'noema worker)
+    (setq noema-agent-worker--busy-waiting (delq worker noema-agent-worker--busy-waiting))
+    (when (timerp (noema-agent-worker-cleanup-timer worker))
+      (cancel-timer (noema-agent-worker-cleanup-timer worker)))
     (setf (noema-agent-worker-queue-state worker) 'cancelled)
     (remhash submission-id noema-agent-worker--submissions)
     (message "Cancelled %s before RunSpec freezing" submission-id)))
@@ -1169,11 +1240,13 @@ When SUBMISSION is non-nil, fill and dispatch that pre-freeze queue token."
     (message "Noema Agent Run %s cancellation requested" run-id)))
 
 ;;;###autoload
-(defun noema-agent-worker-run-work-cell (file cell-id &optional session-policy parent-session-id)
+(defun noema-agent-worker-run-work-cell (file cell-id &optional session-policy parent-session-id session-name)
   "Prepare and execute work CELL-ID in research notebook FILE.
-SESSION-POLICY is one of continue, fork, or fresh; a fork needs
-PARENT-SESSION-ID.  Absent policy uses the notebook declaration/default route.
-No ACP prompt is sent until its frozen RunSpec is stored by the Go kernel."
+SESSION-POLICY is a D-031 `@@session' value (continue, fork, fresh, a name
+or parent:child); PARENT-SESSION-ID is the legacy explicit fork parent.
+SESSION-NAME is a coordinator-requested name, used only when the block has
+no `@@session' of its own.  Absent both, Noema derives the session from the
+work DAG.  No ACP prompt is sent until its frozen RunSpec is stored."
   (interactive
    (let* ((file (read-file-name "Research notebook: " nil nil t nil
                                 (lambda (path) (string-match-p "\\.noema\\'" path))))
@@ -1185,10 +1258,38 @@ No ACP prompt is sent until its frozen RunSpec is stored by the Go kernel."
     (noema-agent-worker--enqueue-preparation
      target
      `((file . ,(expand-file-name file)) (cellId . ,cell-id) (cwd . ,target)
+       ,@(when (and session-name (not (string-empty-p session-name)))
+           `((sessionName . ,session-name)))
        ,@(when (and session-policy (not (string-empty-p session-policy)))
            `((sessionPolicy . ,session-policy)))
        ,@(when (and parent-session-id (not (string-empty-p parent-session-id)))
            `((parentSessionId . ,parent-session-id)))))))
+
+;;;###autoload
+(defun noema-agent-worker-claim-coordinator-requests (root)
+  "Claim pending Pi coordinator requests for project ROOT and run them.
+D-032: Pi only records requests; each one becomes an ordinary queued Run
+here, through the same frozen RunSpec, lease and permission path."
+  (interactive (list (expand-file-name default-directory)))
+  (noema-agent-worker--api
+   "aaronnote:api:research:coordinator:claim"
+   `((cwd . ,root) (owner . ,(format "emacs:%s" (emacs-pid))))
+   (lambda (result error-object)
+     (if error-object
+         (display-warning 'noema-agent-worker
+                          (format "Noema coordinator requests could not be claimed: %s"
+                                  (noema-agent-worker--error error-object))
+                          :warning)
+       (dolist (request (append (noema-agent-worker--value result "requests") nil))
+         (when (equal (noema-agent-worker--string request "kind") "run.start")
+           (let* ((payload (noema-agent-worker--value request "payload"))
+                  (file (noema-agent-worker--string payload "file"))
+                  (cell-id (noema-agent-worker--string payload "cellId")))
+             (when (and file cell-id)
+               (let ((default-directory (file-name-as-directory root)))
+                 (noema-agent-worker-run-work-cell
+                  file cell-id nil nil
+                  (noema-agent-worker--string payload "sessionName")))))))))))
 
 ;;;###autoload
 (defun noema-agent-worker-run-prompt-file (file &optional session-policy parent-session-id)

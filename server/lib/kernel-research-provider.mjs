@@ -49,6 +49,29 @@ export function createKernelResearchProvider({ baseUrl, fetchImpl = globalThis.f
     session({ root, id }) {
       return post("session/get", { root, id });
     },
+	async sessionNames({ root, includeArchived = false }) {
+	  const data = await post("session/names", { root, includeArchived });
+	  return Array.isArray(data.names) ? data.names : [];
+	},
+	sessionName({ root, name }) {
+	  return post("session/name/get", { root, name });
+	},
+	declareSessionName({ root, intent }) {
+	  return post("session/name/declare", { root, intent });
+	},
+	bindSessionName({ root, intent, sessionId }) {
+	  return post("session/name/bind", { root, intent, sessionId });
+	},
+	renameSessionName({ root, rename }) {
+	  return post("session/name/rename", { root, rename });
+	},
+	archiveSessionName({ root, archive }) {
+	  return post("session/name/archive", { root, archive });
+	},
+	async claimCoordinatorRequests({ root, owner }) {
+	  const data = await post("coordinator/claim", { root, owner });
+	  return Array.isArray(data.requests) ? data.requests : [];
+	},
 	beginManualIntervention({ root, intervention }) {
 	  return post("session/manual/begin", { root, intervention });
 	},

@@ -22,12 +22,54 @@ import (
 // StateDirName is the repository-local runtime state directory.
 const StateDirName = ".agent"
 
-const schemaVersion = "17"
+const schemaVersion = "18"
 
 var schemaStatements = []string{
 	`CREATE TABLE IF NOT EXISTS schema_meta (
 		key   TEXT PRIMARY KEY,
 		value TEXT NOT NULL
+	)`,
+	// Schema v18 (D-031): project-scoped human names for logical sessions.
+	// A name outlives any one physical Session; generation counts rebinds.
+	`CREATE TABLE IF NOT EXISTS session_names (
+		name        TEXT PRIMARY KEY,
+		session_id  TEXT REFERENCES sessions(id),
+		agent       TEXT NOT NULL,
+		parent_name TEXT NOT NULL DEFAULT '',
+		fork_mode   TEXT NOT NULL DEFAULT '',
+		origin      TEXT NOT NULL CHECK (origin IN ('user', 'derived', 'pi', 'system')),
+		state       TEXT NOT NULL DEFAULT 'active' CHECK (state IN ('active', 'archived')),
+		generation  INTEGER NOT NULL DEFAULT 0,
+		created_at  INTEGER NOT NULL,
+		updated_at  INTEGER NOT NULL,
+		version     INTEGER NOT NULL DEFAULT 1
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_session_names_session ON session_names(session_id)`,
+	`CREATE TABLE IF NOT EXISTS session_name_aliases (
+		alias TEXT PRIMARY KEY,
+		name  TEXT NOT NULL REFERENCES session_names(name) ON UPDATE CASCADE ON DELETE CASCADE
+	)`,
+	// D-032: durable requests from the Pi coordinator.  Emacs claims them and
+	// runs them through the ordinary worker, so Pi never drives a process.
+	`CREATE TABLE IF NOT EXISTS coordinator_requests (
+		id          TEXT PRIMARY KEY CHECK (id LIKE 'creq_%'),
+		kind        TEXT NOT NULL CHECK (kind IN ('run.start')),
+		payload_json TEXT NOT NULL,
+		actor       TEXT NOT NULL,
+		state       TEXT NOT NULL CHECK (state IN ('pending', 'claimed')),
+		claimed_by  TEXT NOT NULL DEFAULT '',
+		created_at  INTEGER NOT NULL,
+		claimed_at  INTEGER,
+		version     INTEGER NOT NULL DEFAULT 1
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_coordinator_requests_pending ON coordinator_requests(state, created_at)`,
+	`CREATE TABLE IF NOT EXISTS run_session_names (
+		run_id      TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+		name        TEXT NOT NULL,
+		agent       TEXT NOT NULL,
+		parent_name TEXT NOT NULL DEFAULT '',
+		fork_mode   TEXT NOT NULL DEFAULT '',
+		origin      TEXT NOT NULL
 	)`,
 	`CREATE TABLE IF NOT EXISTS workstreams (
 		id          TEXT PRIMARY KEY CHECK (id LIKE 'ws_%'),

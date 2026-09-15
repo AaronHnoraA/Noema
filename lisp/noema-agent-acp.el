@@ -31,9 +31,60 @@
   (and (buffer-live-p buffer)
        (with-current-buffer buffer (derived-mode-p 'agent-shell-mode))))
 
+(defvar-local noema-agent-acp-session-name nil
+  "D-031 session name served by this agent-shell buffer, or nil.")
+(put 'noema-agent-acp-session-name 'permanent-local t)
+
+(defvar-local noema-agent-acp-session-agent nil
+  "Agent id of the session served by this agent-shell buffer.")
+(put 'noema-agent-acp-session-agent 'permanent-local t)
+
+(defvar-local noema-agent-acp-session-root nil
+  "Project root of the session served by this agent-shell buffer.")
+(put 'noema-agent-acp-session-root 'permanent-local t)
+
+(defun noema-agent-acp-mark-session-buffer (buffer name agent directory)
+  "Mark BUFFER as the one agent buffer for session NAME of AGENT in DIRECTORY.
+D-033: the buffer stays out of tab-line/tab-bar and carries a stable,
+recognizable name, so the session manager and switcher can find it."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq-local tab-line-exclude t)
+      (when directory
+        (setq-local noema-agent-acp-session-root
+                    (file-name-as-directory (expand-file-name directory))))
+      (when (and (stringp name) (not (string-empty-p name)))
+        (setq-local noema-agent-acp-session-name name
+                    noema-agent-acp-session-agent agent)
+        (let ((wanted (format "⟪%s⟫ %s @ %s" name (or agent "agent")
+                              (file-name-nondirectory
+                               (directory-file-name (or noema-agent-acp-session-root
+                                                        default-directory))))))
+          (unless (string-prefix-p wanted (buffer-name))
+            (rename-buffer wanted t)))))
+    buffer))
+
+(defun noema-agent-acp-session-buffer (name root)
+  "Return the live agent buffer serving session NAME in project ROOT."
+  (let ((root (and root (file-name-as-directory (expand-file-name root)))))
+    (seq-find (lambda (buffer)
+                (and (noema-agent-acp-agent-buffer-p buffer)
+                     (equal (buffer-local-value 'noema-agent-acp-session-name buffer) name)
+                     (or (null root)
+                         (equal (buffer-local-value 'noema-agent-acp-session-root buffer) root))))
+              (buffer-list))))
+
 (defun noema-agent-acp-resolve-config (identifier)
   "Resolve embedded agent-shell configuration IDENTIFIER."
   (copy-tree (agent-shell--resolve-config-designator identifier)))
+
+(defun noema-agent-acp-config-for (agent)
+  "Resolve Noema AGENT id to an agent-shell configuration, or nil."
+  (let ((identifier (pcase (downcase (format "%s" (or agent "codex")))
+                      ((or "claude" "claude-code") 'claude-code)
+                      ((or "open-code" "opencode") 'opencode)
+                      (name (intern name)))))
+    (ignore-errors (noema-agent-acp-resolve-config identifier))))
 
 (defun noema-agent-acp-known-agents ()
   "Return agent ids for work-directive completion.
@@ -50,10 +101,12 @@ agent-shell's private configuration representation."
               (noema-agent-acp-resolve-config (cdr candidate)))
         (push (car candidate) available)))))
 
-(cl-defun noema-agent-acp-start (&key config directory session-id fork-session-id)
-  "Start CONFIG in DIRECTORY, optionally resuming or forking a native session."
+(cl-defun noema-agent-acp-start (&key config directory session-id fork-session-id focus)
+  "Start CONFIG in DIRECTORY, optionally resuming or forking a native session.
+The buffer is displayed only when FOCUS is non-nil (D-033): a document Run
+never pops its agent buffer; the person opens it on purpose."
   (let ((default-directory (file-name-as-directory directory)))
-    (agent-shell--start :config config :no-focus nil :new-session t
+    (agent-shell--start :config config :no-focus (not focus) :new-session t
                         :session-strategy 'new :session-id session-id
                         :fork-session-id fork-session-id)))
 

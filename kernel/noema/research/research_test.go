@@ -57,7 +57,7 @@ func TestMigrationAddsCellProposalAcceptanceReservationWithoutLosingRows(t *test
 	if _, err := db.Exec(`UPDATE proposals SET kind = 'job.create' WHERE id = 'prop_migration'`); err != nil {
 		t.Fatalf("v9 Proposal kind constraint was not installed: %v", err)
 	}
-	if status != "accepting" || version != "17" {
+	if status != "accepting" || version != schemaVersion {
 		t.Fatalf("unexpected migrated Proposal status=%q schema=%q", status, version)
 	}
 }
