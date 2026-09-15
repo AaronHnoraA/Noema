@@ -180,7 +180,7 @@ func TestRunLifecycleUsesCASLeaseAndVersionedPermissions(t *testing.T) {
 	}
 	permission, err := store.RequestPermission(RequestPermissionInput{
 		SessionID: session.ID, Owner: lease.Owner, Epoch: lease.Epoch, RunID: run.ID, NativeRequestID: "acp-request-1",
-		Action:  map[string]any{"kind": "edit", "paths": []any{"notes/result.md"}},
+		Action:  map[string]any{"kind": "edit", "paths": []any{"../result.md"}},
 		Options: []map[string]any{{"optionId": "allow_once", "label": "Allow once"}, {"optionId": "reject_once", "label": "Reject"}},
 	})
 	if err != nil || permission.State != "pending" || permission.Version != 1 {
@@ -188,7 +188,7 @@ func TestRunLifecycleUsesCASLeaseAndVersionedPermissions(t *testing.T) {
 	}
 	if _, err := store.RequestPermission(RequestPermissionInput{
 		SessionID: session.ID, Owner: lease.Owner, Epoch: lease.Epoch, RunID: run.ID, NativeRequestID: "acp-request-1",
-		Action: map[string]any{"kind": "edit", "paths": []any{"notes/changed-after-approval.md"}}, Options: permission.Options,
+		Action: map[string]any{"kind": "edit", "paths": []any{"../changed-after-approval.md"}}, Options: permission.Options,
 	}); err == nil || !stringsContains(err.Error(), "different action") {
 		t.Fatalf("changed toolCall content must become a new native permission request, got %v", err)
 	}
@@ -208,7 +208,7 @@ func TestRunLifecycleUsesCASLeaseAndVersionedPermissions(t *testing.T) {
 	changed, err := store.RequestPermission(RequestPermissionInput{
 		SessionID: session.ID, Owner: lease.Owner, Epoch: lease.Epoch, RunID: run.ID,
 		NativeRequestID: "acp-request-1-changed",
-		Action:          map[string]any{"kind": "edit", "paths": []any{"notes/changed-after-approval.md"}},
+		Action:          map[string]any{"kind": "edit", "paths": []any{"../changed-after-approval.md"}},
 		Options:         permission.Options,
 	})
 	if err != nil || changed.State != "pending" || changed.ID == permission.ID || changed.ActionSHA256 == permission.ActionSHA256 {
@@ -291,7 +291,7 @@ func TestRunCancellationRecordsIntentButNeverFakesThePhysicalOutcome(t *testing.
 	}
 	permission, err := store.RequestPermission(RequestPermissionInput{
 		SessionID: session.ID, Owner: lease.Owner, Epoch: lease.Epoch, RunID: run.ID, NativeRequestID: "cancel-pending",
-		Action:  map[string]any{"kind": "execute", "argv": []any{"go", "test"}},
+		Action:  map[string]any{"kind": "fetch", "network": true},
 		Options: []map[string]any{{"optionId": "allow_once"}, {"optionId": "reject_once"}},
 	})
 	if err != nil {
@@ -333,6 +333,8 @@ func TestTerminalOutputCreatesHandoffArtifactAndLiveSnapshot(t *testing.T) {
 	}
 	events, err := store.ReportWorkerEvents(ReportWorkerEventsInput{
 		SessionID: session.ID, Owner: lease.Owner, Epoch: lease.Epoch, RunID: run.ID,
+		SessionUsage: &SessionUsage{TotalTokens: 800, InputTokens: 700, OutputTokens: 100,
+			ContextUsed: 850, ContextSize: 1000},
 		Events: []WorkerEvent{{Type: "run.status.changed", Payload: map[string]any{
 			"status": "completed", "result_text": "A concise handoff.", "transcript_text": "Complete assistant stream.",
 		}}},
@@ -364,6 +366,18 @@ func TestTerminalOutputCreatesHandoffArtifactAndLiveSnapshot(t *testing.T) {
 	if err != nil || len(tail.Events) != 0 || tail.Seq != live.Seq {
 		t.Fatalf("live cursor must be stable at the tail: %+v (%v)", tail, err)
 	}
+	context, err := store.GetSessionContext(session.ID)
+	if err != nil || context.Usage.ContextUsed != 850 || context.Usage.ContextSize != 1000 {
+		t.Fatalf("session context usage was not retained: %+v (%v)", context, err)
+	}
+	compaction, err := store.RequestSessionCompaction(session.ID)
+	if err != nil || compaction.Status != "pending" || compaction.OldNativeSessionID != session.NativeSessionID {
+		t.Fatalf("checkpoint rollover was not queued: %+v (%v)", compaction, err)
+	}
+	again, err := store.RequestSessionCompaction(session.ID)
+	if err != nil || again.ID != compaction.ID {
+		t.Fatalf("compaction request must be idempotent: %+v (%v)", again, err)
+	}
 }
 
 func TestExpiredLeaseInterruptsRunAndExpiresPermission(t *testing.T) {
@@ -379,7 +393,7 @@ func TestExpiredLeaseInterruptsRunAndExpiresPermission(t *testing.T) {
 	}
 	permission, err := store.RequestPermission(RequestPermissionInput{
 		SessionID: session.ID, Owner: lease.Owner, Epoch: lease.Epoch, RunID: run.ID, NativeRequestID: "acp-request-2",
-		Action: map[string]any{"kind": "edit"}, Options: []map[string]any{{"optionId": "allow_once"}},
+		Action: map[string]any{"kind": "fetch", "network": true}, Options: []map[string]any{{"optionId": "allow_once"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -414,7 +428,7 @@ func TestExpiredLeaseInterruptsRunAndExpiresPermission(t *testing.T) {
 	}
 }
 
-func TestPermissionPolicyHardDeniesAndRememberedRules(t *testing.T) {
+func TestPermissionPolicyApprovesProjectWorkAndAsksBeyondIt(t *testing.T) {
 	store, root := openTestStore(t)
 	session := promoteRuntimeSession(t, store, root)
 	run := prepareRuntimeRun(t, store, session, root)
@@ -425,27 +439,58 @@ func TestPermissionPolicyHardDeniesAndRememberedRules(t *testing.T) {
 	if _, err := store.StartRun(StartRunInput{SessionID: session.ID, Owner: lease.Owner, Epoch: lease.Epoch, RunID: run.ID}); err != nil {
 		t.Fatal(err)
 	}
-	options := []map[string]any{{"optionId": "allow_once"}, {"optionId": "reject_once"}}
-	hardDenied, err := store.RequestPermission(RequestPermissionInput{
-		SessionID: session.ID, Owner: lease.Owner, Epoch: lease.Epoch, RunID: run.ID, NativeRequestID: "fetch-1",
-		Action: map[string]any{"kind": "fetch", "network": true}, Options: options,
-	})
-	if err != nil || hardDenied.State != "resolved" || hardDenied.OptionID != "reject_once" || hardDenied.DecidedBy != "policy" {
-		t.Fatalf("network must be immediately denied: %+v (%v)", hardDenied, err)
+	options := []map[string]any{{"optionId": "allow_always"}, {"optionId": "allow_once"}, {"optionId": "reject_once"}}
+	request := func(id string, action map[string]any) Permission {
+		t.Helper()
+		permission, err := store.RequestPermission(RequestPermissionInput{
+			SessionID: session.ID, Owner: lease.Owner, Epoch: lease.Epoch, RunID: run.ID, NativeRequestID: id,
+			Action: action, Options: options,
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", id, err)
+		}
+		return permission
 	}
-	pushDenied, err := store.RequestPermission(RequestPermissionInput{
-		SessionID: session.ID, Owner: lease.Owner, Epoch: lease.Epoch, RunID: run.ID, NativeRequestID: "git-push-1",
-		Action: map[string]any{"kind": "execute", "argv": []any{"git", "push", "origin", "main"}}, Options: options,
-	})
-	if err != nil || pushDenied.State != "resolved" || pushDenied.OptionID != "reject_once" || pushDenied.DecidedBy != "policy" {
-		t.Fatalf("git push must be immediately denied without Attention: %+v (%v)", pushDenied, err)
+	type probe struct {
+		id     string
+		action map[string]any
 	}
-	first, err := store.RequestPermission(RequestPermissionInput{
-		SessionID: session.ID, Owner: lease.Owner, Epoch: lease.Epoch, RunID: run.ID, NativeRequestID: "edit-1",
-		Action: map[string]any{"kind": "edit", "paths": []any{"notes/result.md"}}, Options: []map[string]any{{"optionId": "allow_always"}, {"optionId": "reject_once"}},
-	})
-	if err != nil || first.State != "pending" {
-		t.Fatalf("ordinary project edit must ask first: %+v (%v)", first, err)
+	for _, denied := range []probe{
+		{"push", map[string]any{"kind": "execute", "argv": []any{"git", "push", "origin", "main"}}},
+		{"sudo", map[string]any{"kind": "execute", "argv": []any{"sudo", "rm", "-rf", "build"}}},
+		{"credential", map[string]any{"kind": "credential"}},
+	} {
+		if got := request(denied.id, denied.action); got.State != "resolved" || got.OptionID != "reject_once" || got.DecidedBy != "policy" {
+			t.Fatalf("%s must always be denied without Attention: %+v", denied.id, got)
+		}
+	}
+	for _, inside := range []probe{
+		{"read", map[string]any{"kind": "read", "paths": []any{"notes/result.md"}}},
+		{"edit", map[string]any{"kind": "edit", "paths": []any{"notes/result.md", filepath.Join(root, "src", "main.go")}}},
+		{"test", map[string]any{"kind": "execute", "argv": []any{"bash", "-lc", "go test ./... 2>/dev/null"}}},
+	} {
+		if got := request(inside.id, inside.action); got.State != "resolved" || got.OptionID != "allow_once" || got.DecidedBy != "policy" {
+			t.Fatalf("%s inside the project must be approved automatically: %+v", inside.id, got)
+		}
+	}
+	for _, beyond := range []probe{
+		{"network", map[string]any{"kind": "fetch", "network": true}},
+		{"curl", map[string]any{"kind": "execute", "argv": []any{"curl", "https://example.com"}}},
+		{"outside-read", map[string]any{"kind": "read", "paths": []any{"/etc/hosts"}}},
+		{"home", map[string]any{"kind": "execute", "argv": []any{"cat", "~/.ssh/config"}}},
+	} {
+		got := request(beyond.id, beyond.action)
+		if got.State != "pending" {
+			t.Fatalf("%s beyond the project must ask a person: %+v", beyond.id, got)
+		}
+		if _, err := store.DecidePermission(DecidePermissionInput{PermissionID: got.ID, OptionID: "reject_once", ExpectedVersion: got.Version, DecidedBy: "user"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	outsideEdit := map[string]any{"kind": "edit", "paths": []any{"../outside.md"}}
+	first := request("outside-1", outsideEdit)
+	if first.State != "pending" {
+		t.Fatalf("outside-project edit must ask first: %+v", first)
 	}
 	if _, err := store.DecidePermission(DecidePermissionInput{PermissionID: first.ID, OptionID: "allow_always", ExpectedVersion: first.Version, DecidedBy: "user"}); err != nil {
 		t.Fatal(err)
@@ -454,19 +499,35 @@ func TestPermissionPolicyHardDeniesAndRememberedRules(t *testing.T) {
 	if err := store.db.QueryRow(`SELECT COUNT(*) FROM permission_rules WHERE scope = 'session' AND scope_id = ? AND effect = 'allow'`, session.ID).Scan(&rules); err != nil || rules != 1 {
 		t.Fatalf("allow_always must create a narrow session rule: %d (%v)", rules, err)
 	}
-	autoAllowed, err := store.RequestPermission(RequestPermissionInput{
-		SessionID: session.ID, Owner: lease.Owner, Epoch: lease.Epoch, RunID: run.ID, NativeRequestID: "edit-2",
-		Action: map[string]any{"kind": "edit", "paths": []any{"notes/result.md"}}, Options: options,
-	})
-	if err != nil || autoAllowed.State != "resolved" || autoAllowed.OptionID != "allow_once" || !strings.HasPrefix(autoAllowed.DecidedBy, "policy-rule:") {
-		t.Fatalf("matching remembered decision must be automatic: %+v (%v)", autoAllowed, err)
+	if remembered := request("outside-2", outsideEdit); remembered.State != "resolved" || remembered.OptionID != "allow_once" || !strings.HasPrefix(remembered.DecidedBy, "policy-rule:") {
+		t.Fatalf("matching remembered decision must be automatic and one-time: %+v", remembered)
 	}
-	outside, err := store.RequestPermission(RequestPermissionInput{
-		SessionID: session.ID, Owner: lease.Owner, Epoch: lease.Epoch, RunID: run.ID, NativeRequestID: "outside-1",
-		Action: map[string]any{"kind": "edit", "paths": []any{"../outside.md"}}, Options: options,
-	})
-	if err != nil || outside.OptionID != "reject_once" || outside.DecidedBy != "policy" {
-		t.Fatalf("outside-project write must be denied even with allow rule: %+v (%v)", outside, err)
+	if other := request("outside-3", map[string]any{"kind": "edit", "paths": []any{"../elsewhere.md"}}); other.State != "pending" {
+		t.Fatalf("a remembered rule must not widen to other outside paths: %+v", other)
+	}
+}
+
+func TestCancellingAPreparingRunStopsItBeforeDispatch(t *testing.T) {
+	store, root := openTestStore(t)
+	session := promoteRuntimeSession(t, store, root)
+	run := prepareRuntimeRun(t, store, session, root)
+	cancelled, err := store.RequestRunCancellation(CancelRunInput{RunID: run.ID, RequestedBy: "web"})
+	if err != nil || cancelled.Status != "cancelled" {
+		t.Fatalf("a preparing Run has no worker to observe cancellation and must end now: %+v (%v)", cancelled, err)
+	}
+	lease, err := store.AcquireLease(AcquireLeaseInput{SessionID: session.ID, Owner: "emacs:late"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.StartRun(StartRunInput{SessionID: session.ID, Owner: lease.Owner, Epoch: lease.Epoch, RunID: run.ID}); err == nil ||
+		!strings.Contains(err.Error(), "cancelled before it started") {
+		t.Fatalf("a late worker must not start a cancelled Run: %v", err)
+	}
+	if failed, err := store.FailPreparedRun(FailPreparedRunInput{RunID: run.ID, FailureReason: "worker start failed"}); err != nil || failed.Status != "cancelled" {
+		t.Fatalf("a worker reporting the refused start must keep the cancellation: %+v (%v)", failed, err)
+	}
+	if _, err := store.RequestRunCancellation(CancelRunInput{RunID: run.ID, RequestedBy: "web"}); err == nil {
+		t.Fatal("cancelling a finished Run again must report that it already ended")
 	}
 }
 
@@ -546,7 +607,7 @@ func TestAttentionIsDerivedFromPendingPermissionsAndInputRuns(t *testing.T) {
 	}
 	permission, err := store.RequestPermission(RequestPermissionInput{
 		SessionID: session.ID, Owner: lease.Owner, Epoch: lease.Epoch, RunID: run.ID, NativeRequestID: "attention-1",
-		Action:  map[string]any{"kind": "edit", "paths": []any{"notes/result.md"}},
+		Action:  map[string]any{"kind": "edit", "paths": []any{"../result.md"}},
 		Options: []map[string]any{{"optionId": "allow_once"}, {"optionId": "reject_once"}},
 	})
 	if err != nil {
@@ -650,7 +711,7 @@ func TestPermissionDecisionRejectsAChangedWorkerEpoch(t *testing.T) {
 	}
 	permission, err := store.RequestPermission(RequestPermissionInput{
 		SessionID: session.ID, Owner: first.Owner, Epoch: first.Epoch, RunID: run.ID, NativeRequestID: "epoch-permission",
-		Action:  map[string]any{"kind": "edit", "paths": []any{"notes/proof.md"}},
+		Action:  map[string]any{"kind": "edit", "paths": []any{"../proof.md"}},
 		Options: []map[string]any{{"optionId": "allow_once"}, {"optionId": "reject_once"}},
 	})
 	if err != nil {

@@ -44,3 +44,12 @@ These operations read and write the Markdown files in place and refresh the
 same Noema index used by Emacs. The MCP endpoint remains
 loopback-only and uses the kernel's normal authentication, administrator, and
 read-only checks.
+
+## Project MCP selection
+
+The supervised Noema endpoint is also the built-in `noema` capability. Projects
+may define additional stdio, HTTP or SSE MCP servers, enable/disable them and
+patch their configuration in `noema-capabilities.json`. Run preparation copies
+the resolved active definitions into the immutable RunSpec; the Emacs ACP worker
+does not rediscover them. Persistent definition/configuration is separate from
+live runtime state. See [Project Skills and MCP capabilities](capabilities.md).

@@ -23,6 +23,7 @@
 (declare-function my/noema-jupyter-output-open-document
                   "init-aaronnote" (payload &optional focus))
 (declare-function noema-agent-promote--session-spec "noema-agent-promote" (&optional buffer title goal))
+(declare-function noema-sessions-open-reference "noema-sessions" (root &optional name session-id))
 
 (defgroup noema-agent-worker nil
   "Noema document execution through ACP and agent-shell."
@@ -47,6 +48,34 @@
   "Maximum assistant text copied into a work block's persisted outputs."
   :type 'integer
   :group 'noema-agent-worker)
+
+(defcustom noema-agent-worker-buffer-max-bytes (* 4 1024 1024)
+  "Maximum persisted conversation text retained in a Noema agent buffer."
+  :type 'integer
+  :group 'noema-agent-worker)
+
+(defcustom noema-agent-worker-warm-buffer-limit 8
+  "Maximum number of idle resumable Noema agent buffers kept per project."
+  :type 'integer
+  :group 'noema-agent-worker)
+
+(defcustom noema-agent-worker-warm-idle-seconds (* 30 60)
+  "Seconds an idle resumable agent buffer remains warm."
+  :type 'integer
+  :group 'noema-agent-worker)
+
+(defcustom noema-agent-worker-context-warning-ratio 0.70
+  "Context-window ratio at which Noema warns once per physical Session."
+  :type 'number
+  :group 'noema-agent-worker)
+
+(defcustom noema-agent-worker-context-rollover-ratio 0.85
+  "Context-window ratio at which the next Run uses a checkpoint generation."
+  :type 'number
+  :group 'noema-agent-worker)
+
+(defvar noema-agent-worker--warm-sweep-timer nil
+  "Periodic timer that hibernates old resumable Session buffers.")
 
 (defvar noema-agent-worker--attention-count 0
   "Number of permission/input requests currently awaiting a user decision.")
@@ -101,9 +130,12 @@ it back to zero."
 (cl-defstruct (noema-agent-worker
                (:constructor noema-agent-worker--create))
   run-id session-id root target agent spec context-items routing buffer epoch
-  renew-timer segment-timer cancel-timer segments result-parts pending-permissions pending-inputs started terminal
+  renew-timer segment-timer cancel-timer segments result-parts result-bytes
+  result-truncated subscriptions kill-hook pending-permissions pending-inputs started terminal
   l1-mode preflight-failure ledger ledger-turn-id ledger-message-item action-items
-  submission-id prepare-body queue-state bootstrap-failing cleanup-timer)
+  submission-id prepare-body queue-state bootstrap-failing cleanup-timer
+  terminal-status terminal-reason terminal-events terminal-acked terminal-reporting
+  terminal-attempts completion-timer report-queue report-busy)
 
 (defvar noema-agent-worker--runs (make-hash-table :test #'equal)
   "Run id to `noema-agent-worker' mapping.")
@@ -189,9 +221,9 @@ D-035: the Pi manager uses it to stop an agent that outlived its project.")
     (setf (noema-agent-worker-bootstrap-failing worker) t)
     (noema-agent-worker--api
      "aaronnote:api:research:run:fail-preparing"
-     `((root . ,(noema-agent-worker-root worker))
-       (runId . ,(noema-agent-worker-run-id worker))
-       (failureReason . ,reason))
+     ;; The worker body carries notebookFile, so Node persists the failure as
+     ;; this Run's cell output instead of leaving OutputArea waiting for it.
+     (noema-agent-worker--worker-body worker `(failureReason . ,reason))
      (lambda (_result error-object)
        (if error-object
            (progn
@@ -365,52 +397,187 @@ like a durable Run problem, so they go to `*Warnings*' instead of `message'."
          (notebook-relative (and (equal (noema-agent-worker--string source "kind") "work-cell")
                                  (noema-agent-worker--string source "file")))
          (notebook-file (and notebook-relative (not (string-empty-p notebook-relative))
-                             (expand-file-name notebook-relative (noema-agent-worker-root worker)))))
+                             (expand-file-name notebook-relative (noema-agent-worker-root worker))))
+	 (session-spec (noema-agent-worker--value (noema-agent-worker-spec worker) "session"))
+	 (compaction-id (noema-agent-worker--string session-spec "compaction_id"))
+	 (usage (noema-agent-worker--session-usage worker)))
     (append `((root . ,(noema-agent-worker-root worker))
             (sessionId . ,(or (noema-agent-worker-session-id worker) ""))
             (owner . ,(format "emacs:%s" (emacs-pid)))
             (epoch . ,(or (noema-agent-worker-epoch worker) 0))
             (runId . ,(noema-agent-worker-run-id worker))
             ,@(when notebook-file `((notebookFile . ,notebook-file)))
+			,@(when compaction-id `((compactionId . ,compaction-id)))
+			,@(when usage `((sessionUsage . ,usage)))
             ,@(when-let* ((cell-id (noema-agent-worker--string source "cell_id")))
                 `((cellId . ,cell-id))))
             entries)))
 
+(defun noema-agent-worker--session-usage (worker)
+  "Return normalized ACP usage for WORKER's physical Session, if known."
+  (when-let* ((buffer (noema-agent-worker-buffer worker))
+		  ((buffer-live-p buffer)))
+    (with-current-buffer buffer
+      (when-let* ((state (and (boundp 'agent-shell--state) agent-shell--state))
+		      (usage (map-elt state :usage)))
+	(let ((number (lambda (key) (let ((value (map-elt usage key)))
+					 (if (numberp value) (max 0 (truncate value)) 0)))))
+	  `((totalTokens . ,(funcall number :total-tokens))
+	    (inputTokens . ,(funcall number :input-tokens))
+	    (outputTokens . ,(funcall number :output-tokens))
+	    (thoughtTokens . ,(funcall number :thought-tokens))
+	    (cachedTokens . ,(+ (funcall number :cached-read-tokens)
+				  (funcall number :cached-write-tokens)))
+	    (contextUsed . ,(funcall number :context-used))
+	    (contextSize . ,(funcall number :context-size))))))))
+
+(defun noema-agent-worker--check-context-pressure (worker event)
+  "Warn once when the ACP usage in turn-complete EVENT is near its limit."
+  (when-let* ((buffer (noema-agent-worker-buffer worker))
+		  ((buffer-live-p buffer))
+		  (usage (map-elt (map-elt event :data) :usage))
+		  (used (map-elt usage :context-used))
+		  (size (map-elt usage :context-size))
+		  ((numberp used)) ((numberp size)) ((> size 0)))
+    (let* ((ratio (/ (float used) size))
+	   (level (cond ((>= ratio noema-agent-worker-context-rollover-ratio) 2)
+			((>= ratio noema-agent-worker-context-warning-ratio) 1)
+			(t 0))))
+      (with-current-buffer buffer
+	(when (> level noema-agent-acp-context-warning-level)
+	  (setq-local noema-agent-acp-context-warning-level level)
+	  (message
+	   (if (= level 2)
+	       "Noema Session context is %.0f%%; its next Run will roll over from the latest durable handoff"
+	     "Noema Session context is %.0f%%; consider M-x noema-agent-worker-compact-session")
+	   (* ratio 100)))))))
+
 (defun noema-agent-worker--result-text (worker)
   "Return bounded assistant output accumulated for WORKER."
-  (let ((text (mapconcat #'identity (nreverse (copy-sequence (noema-agent-worker-result-parts worker))) "")))
-    (if (> (string-bytes text) noema-agent-worker-result-max-bytes)
-        (let ((low 0)
-              (high (length text)))
-          (while (< low high)
-            (let ((middle (/ (+ low high 1) 2)))
-              (if (<= (string-bytes (substring text 0 middle))
-                      noema-agent-worker-result-max-bytes)
-                  (setq low middle)
-                (setq high (1- middle)))))
-          (concat (substring text 0 low)
-                  "\n\n[Result truncated by Noema]"))
-      text)))
+  (concat
+   (mapconcat #'identity
+              (nreverse (copy-sequence (noema-agent-worker-result-parts worker))) "")
+   (when (noema-agent-worker-result-truncated worker)
+     "\n\n[Result truncated by Noema]")))
 
 (defun noema-agent-worker--transcript-text (worker)
-  "Return the complete assistant stream accumulated for WORKER."
-  (mapconcat #'identity
-             (nreverse (copy-sequence (noema-agent-worker-result-parts worker))) ""))
+  "Return WORKER's bounded assistant stream.
+
+Full content remains in durable Run events.  Keeping another unbounded copy in
+Emacs made long-running sessions consume memory twice."
+  (noema-agent-worker--result-text worker))
+
+(defun noema-agent-worker--prefix-within-bytes (text limit)
+  "Return the longest prefix of TEXT whose encoded size is at most LIMIT."
+  (let ((low 0)
+        (high (length text)))
+    (while (< low high)
+      (let ((middle (/ (+ low high 1) 2)))
+        (if (<= (string-bytes (substring text 0 middle)) limit)
+            (setq low middle)
+          (setq high (1- middle)))))
+    (substring text 0 low)))
+
+(defun noema-agent-worker--cleanup-subscriptions (worker)
+  "Detach per-Run callbacks owned by WORKER from its reusable shell buffer."
+  (when-let* ((buffer (noema-agent-worker-buffer worker))
+              ((buffer-live-p buffer)))
+    (dolist (subscription (noema-agent-worker-subscriptions worker))
+      (ignore-errors
+        (noema-agent-acp-unsubscribe :buffer buffer :subscription subscription)))
+    (when-let* ((hook (noema-agent-worker-kill-hook worker)))
+      (with-current-buffer buffer
+        (remove-hook 'kill-buffer-hook hook t)))
+    (noema-agent-acp-set-permission-responder buffer nil))
+  (setf (noema-agent-worker-subscriptions worker) nil
+        (noema-agent-worker-kill-hook worker) nil))
 
 (defun noema-agent-worker--report (worker events &optional callback)
   "Append normalized EVENTS for WORKER without blocking the ACP process."
   (when (and (noema-agent-worker-started worker)
              (noema-agent-worker-epoch worker)
              events)
-    (noema-agent-worker--api
-     "aaronnote:api:research:worker:events"
-     (noema-agent-worker--worker-body worker (cons 'events (vconcat events)))
-     (lambda (result error-object)
-       (when error-object
-         (message "Noema Run %s event delivery failed: %s"
-                  (noema-agent-worker-run-id worker)
-                  (noema-agent-worker--error error-object)))
-       (when callback (funcall callback result error-object))))))
+    (setf (noema-agent-worker-report-queue worker)
+          (nconc (noema-agent-worker-report-queue worker) (list (cons events callback))))
+    (noema-agent-worker--drain-reports worker)))
+
+(defun noema-agent-worker--drain-reports (worker)
+  "Serialize event appends so a terminal batch cannot overtake its content."
+  (when (and (not (noema-agent-worker-report-busy worker))
+             (noema-agent-worker-report-queue worker))
+    (let* ((job (pop (noema-agent-worker-report-queue worker)))
+           (events (car job)) (callback (cdr job)) settled)
+      (setf (noema-agent-worker-report-busy worker) t)
+      (let ((finish
+             (lambda (result error-object)
+               (unless settled
+                 (setq settled t)
+                 (when error-object
+                   (message "Noema Run %s event delivery failed: %s"
+                            (noema-agent-worker-run-id worker)
+                            (noema-agent-worker--error error-object)))
+                 (when-let* ((result-error (and (not error-object)
+                                               (noema-agent-worker--string result "resultError"))))
+                   (message "Noema Run %s output writeback is pending: %s"
+                            (noema-agent-worker-run-id worker) result-error))
+                 (setf (noema-agent-worker-report-busy worker) nil)
+                 (unwind-protect
+                     (when callback (noema-agent-worker--best-effort callback result error-object))
+                   (noema-agent-worker--drain-reports worker))))))
+        (condition-case error-object
+            (noema-agent-worker--api
+             "aaronnote:api:research:worker:events"
+             (noema-agent-worker--worker-body worker (cons 'events (vconcat events)))
+             finish)
+          (error (funcall finish nil (error-message-string error-object))))))))
+
+(defun noema-agent-worker--best-effort (function &rest args)
+  "Run optional presentation/cleanup FUNCTION without losing durable status."
+  (condition-case error-object
+      (apply function args)
+    (error (message "Noema completion cleanup (%s): %s"
+                    function (error-message-string error-object)) nil)))
+
+(defun noema-agent-worker--completion-retry (worker)
+  "Reconcile an unacknowledged terminal report; never resend the agent prompt."
+  (unless (or (noema-agent-worker-terminal-acked worker)
+              (timerp (noema-agent-worker-completion-timer worker)))
+    (let ((attempt (or (noema-agent-worker-terminal-attempts worker) 0)))
+      (when (< attempt 4)
+        (setf (noema-agent-worker-completion-timer worker)
+              (run-at-time (min 8 (expt 2 attempt)) nil
+                           (lambda ()
+                             (setf (noema-agent-worker-completion-timer worker) nil)
+                             (noema-agent-worker-check-completion worker))))))))
+
+(defun noema-agent-worker--ack-terminal (worker status)
+  "Release WORKER only after its terminal state is acknowledged by the host."
+  (unless (noema-agent-worker-terminal-acked worker)
+    (setf (noema-agent-worker-terminal-acked worker) t)
+    (noema-agent-worker--stop-renewal worker)
+    (remhash (noema-agent-worker-run-id worker) noema-agent-worker--runs)
+    (noema-agent-worker--best-effort #'force-mode-line-update t)
+    (noema-agent-worker--best-effort #'noema-agent-worker--resync-source-buffer worker)
+    (noema-agent-worker--best-effort #'noema-agent-worker--refresh-run-views worker)
+    (when-let* ((buffer (noema-agent-worker-buffer worker)) ((buffer-live-p buffer)))
+      (noema-agent-worker--best-effort #'noema-agent-acp-touch buffer)
+      (noema-agent-worker--best-effort #'noema-agent-acp-trim-buffer buffer noema-agent-worker-buffer-max-bytes))
+    (noema-agent-worker--best-effort #'noema-agent-worker--finish-queue worker (intern status))))
+
+(defun noema-agent-worker--submit-terminal (worker)
+  "Submit WORKER's frozen terminal facts once, retaining them until ACK."
+  (unless (or (noema-agent-worker-terminal-acked worker)
+              (noema-agent-worker-terminal-reporting worker))
+    (setf (noema-agent-worker-terminal-reporting worker) t
+          (noema-agent-worker-terminal-attempts worker)
+          (1+ (or (noema-agent-worker-terminal-attempts worker) 0)))
+    (noema-agent-worker--report
+     worker (noema-agent-worker-terminal-events worker)
+     (lambda (_result error-object)
+       (setf (noema-agent-worker-terminal-reporting worker) nil)
+       (if error-object
+           (noema-agent-worker--completion-retry worker)
+         (noema-agent-worker--ack-terminal worker (noema-agent-worker-terminal-status worker)))))))
 
 (defun noema-agent-worker--resync-source-buffer (worker)
   "Proactively merge disk outputs into WORKER's open source `.noema' buffer.
@@ -425,32 +592,41 @@ resynced too; otherwise its next save would ask about an external change."
   (when-let* ((source (noema-agent-worker--value (noema-agent-worker-spec worker) "source"))
               ((equal (noema-agent-worker--string source "kind") "work-cell"))
               (relative (noema-agent-worker--string source "file"))
-              (file (expand-file-name relative (noema-agent-worker-root worker)))
-              (buffer (find-buffer-visiting file)))
+              (file (expand-file-name relative (noema-agent-worker-root worker))))
+    (noema-agent-worker--resync-file-buffer file)))
+
+(defun noema-agent-worker--refresh-run-views (worker)
+  "Refresh source and graph projections when WORKER changes durable state."
+  (when-let* ((source (noema-agent-worker--value (noema-agent-worker-spec worker) "source"))
+              (file (noema-agent-worker--string source "file"))
+              (buffer (find-buffer-visiting (expand-file-name file (noema-agent-worker-root worker)))))
+    (with-current-buffer buffer
+      (when (fboundp 'noema-research--schedule-session-routes)
+        (noema-research--schedule-session-routes)))
+    (when-let* ((graph (get-buffer "*Noema DAG*"))
+                ((eq (buffer-local-value 'noema-research-graph--source graph) buffer)))
+      (with-current-buffer graph (noema-research-graph-refresh-runs)))))
+
+(defun noema-agent-worker--resync-file-buffer (file)
+  "Merge canonical outputs from FILE into its live research buffer, if any."
+  (when-let* ((file (and (stringp file) (expand-file-name file)))
+	      (buffer (find-buffer-visiting file)))
     (with-current-buffer buffer
       (when (and (derived-mode-p 'noema-research-mode)
                  (fboundp 'noema-research-merge-disk-outputs))
         (ignore-errors (noema-research-merge-disk-outputs))))))
 
-(defun noema-agent-worker--terminal (worker status &optional reason)
+(defun noema-agent-worker--terminal (worker status &optional reason stop-client)
   "Make the terminal STATUS transition for WORKER exactly once."
   (unless (noema-agent-worker-terminal worker)
-    (setf (noema-agent-worker-terminal worker) t)
-	(dolist (permission-id (noema-agent-worker-pending-permissions worker))
-	  (remhash permission-id noema-agent-worker--permissions)
-	  (noema-agent-worker--attention-note -1))
-	(dolist (request-id (noema-agent-worker-pending-inputs worker))
-	  (remhash request-id noema-agent-worker--inputs)
-	  (noema-agent-worker--attention-note -1))
-	(setf (noema-agent-worker-pending-permissions worker) nil
-	      (noema-agent-worker-pending-inputs worker) nil)
-    (when (timerp (noema-agent-worker-segment-timer worker))
-      (cancel-timer (noema-agent-worker-segment-timer worker)))
-    (setf (noema-agent-worker-segment-timer worker) nil)
-    (let* ((parts (nreverse (noema-agent-worker-segments worker)))
-           (text (mapconcat #'identity parts ""))
-           (events
-            `(,@(when (not (string-empty-p text))
+    (setf (noema-agent-worker-terminal worker) t
+          (noema-agent-worker-terminal-status worker) status
+          (noema-agent-worker-terminal-reason worker) reason)
+    ;; Freeze completion before presentation hooks, which may throw on a
+    ;; package reload or a renderer failure. The receipt survives those errors.
+    (let ((text (mapconcat #'identity (reverse (noema-agent-worker-segments worker)) "")))
+      (setf (noema-agent-worker-terminal-events worker)
+            `(,@(unless (string-empty-p text)
                   `(((type . "run.content.segment")
                      (payload . ((stream . "assistant") (text . ,text))))))
               ((type . "run.status.changed")
@@ -459,30 +635,58 @@ resynced too; otherwise its next save would ask about an external change."
                            (transcript_text . ,(noema-agent-worker--transcript-text worker))
                            ,@(when (and reason (not (string-empty-p reason)))
                                `((failure_reason . ,reason)))))))))
-      (setf (noema-agent-worker-segments worker) nil)
-      (noema-agent-worker--report
-       worker events
-       (lambda (_result error-object)
-         (noema-agent-worker--stop-renewal worker)
-         (remhash (noema-agent-worker-run-id worker) noema-agent-worker--runs)
-         (force-mode-line-update t)
-         (if error-object
-             ;; The authoritative Run remains non-terminal until lease expiry.
-             ;; Do not let a queued Run collide with it in the meantime.
-             (run-at-time 31 nil
-                          (lambda () (noema-agent-worker--finish-queue worker 'interrupted)))
-           (noema-agent-worker--resync-source-buffer worker)
-           ;; D-034: a finished Run shows in its output area; only a failure
-           ;; earns one echo-area line.
-           (when (equal status "failed")
-             (message "Noema Run%s failed: %s"
-                      (if-let* ((name (noema-agent-worker--session-name worker)))
-                          (format " in %s" name)
-                        "")
-                      (or reason "unknown reason")))
-           (noema-agent-worker--finish-queue worker (intern status))))))
-    (noema-agent-worker--ledger-terminal worker status reason)
-    ))
+    (setf (noema-agent-worker-segments worker) nil)
+    (noema-agent-worker--best-effort #'noema-agent-worker--cleanup-subscriptions worker)
+	(dolist (permission-id (noema-agent-worker-pending-permissions worker))
+	  (remhash permission-id noema-agent-worker--permissions)
+	  (noema-agent-worker--best-effort #'noema-agent-worker--attention-note -1))
+	(dolist (request-id (noema-agent-worker-pending-inputs worker))
+	  (remhash request-id noema-agent-worker--inputs)
+	  (noema-agent-worker--best-effort #'noema-agent-worker--attention-note -1))
+	(setf (noema-agent-worker-pending-permissions worker) nil
+	      (noema-agent-worker-pending-inputs worker) nil)
+    (when (timerp (noema-agent-worker-segment-timer worker))
+      (cancel-timer (noema-agent-worker-segment-timer worker)))
+    (setf (noema-agent-worker-segment-timer worker) nil)
+    (when-let* ((buffer (noema-agent-worker-buffer worker)) ((buffer-live-p buffer)))
+      (when stop-client
+        (noema-agent-worker--best-effort #'noema-agent-acp-shutdown buffer))
+      (noema-agent-worker--best-effort #'noema-agent-acp-restore-prompt buffer))
+    (noema-agent-worker--best-effort #'noema-agent-worker--ledger-terminal worker status reason)
+    (noema-agent-worker--submit-terminal worker)
+    (when (equal status "failed")
+      (message "Noema Run %s failed: %s" (noema-agent-worker-run-id worker) reason))))
+
+(defun noema-agent-worker-check-completion (worker)
+  "Reconcile WORKER from ACP receipts and durable status, never from prose."
+  (let* ((receipt (noema-agent-acp-prompt-receipt
+                   (noema-agent-worker-buffer worker) (noema-agent-worker-run-id worker)))
+         (state (plist-get receipt :status)))
+    (cond
+     ((noema-agent-worker-terminal-acked worker) 'finished)
+     ((and (noema-agent-worker-terminal worker)
+           (noema-agent-worker-terminal-events worker))
+      (unless (noema-agent-worker-terminal-reporting worker)
+        (noema-agent-worker--api
+         "aaronnote:api:research:run:get"
+         `((root . ,(noema-agent-worker-root worker)) (runId . ,(noema-agent-worker-run-id worker)))
+         (lambda (result error-object)
+           (let ((status (noema-agent-worker--string (noema-agent-worker--value result "run") "status")))
+             (cond (error-object
+                    (cl-incf (noema-agent-worker-terminal-attempts worker))
+                    (noema-agent-worker--completion-retry worker))
+                   ((member status '("completed" "cancelled" "failed" "interrupted"))
+                    (noema-agent-worker--ack-terminal worker status))
+                   (t (noema-agent-worker--submit-terminal worker)))))))
+      'reconciling)
+     ((eq state 'completed)
+      (let ((reason (format "%s" (or (map-elt (plist-get receipt :response) 'stopReason) ""))))
+        (noema-agent-worker--terminal worker (if (equal reason "cancelled") "cancelled" "completed") reason))
+      'finished)
+     ((eq state 'failed)
+      (noema-agent-worker--terminal worker "failed" (format "%s" (plist-get receipt :error)))
+      'finished)
+     (t 'pending))))
 
 (defun noema-agent-worker--flush-segments (worker)
   "Persist a coalesced assistant content segment for WORKER."
@@ -503,7 +707,17 @@ resynced too; otherwise its next save would ask about an external change."
   (when (and (noema-agent-worker-started worker) (not (noema-agent-worker-terminal worker))
              (stringp text) (not (string-empty-p text)))
     (push text (noema-agent-worker-segments worker))
-    (push text (noema-agent-worker-result-parts worker))
+    (let* ((used (or (noema-agent-worker-result-bytes worker) 0))
+           (remaining (max 0 (- noema-agent-worker-result-max-bytes used)))
+           (kept (if (<= (string-bytes text) remaining)
+                     text
+                   (noema-agent-worker--prefix-within-bytes text remaining))))
+      (unless (string-empty-p kept)
+        (push kept (noema-agent-worker-result-parts worker))
+        (setf (noema-agent-worker-result-bytes worker)
+              (+ used (string-bytes kept))))
+      (when (< (length kept) (length text))
+        (setf (noema-agent-worker-result-truncated worker) t)))
     (noema-agent-worker--ledger-segment worker text)
     (unless (timerp (noema-agent-worker-segment-timer worker))
       (setf (noema-agent-worker-segment-timer worker)
@@ -515,15 +729,20 @@ resynced too; otherwise its next save would ask about an external change."
   (dolist (timer (list (noema-agent-worker-renew-timer worker)
                        (noema-agent-worker-segment-timer worker)
                        (noema-agent-worker-cancel-timer worker)
-                       (noema-agent-worker-cleanup-timer worker)))
+                       (noema-agent-worker-cleanup-timer worker)
+                       (noema-agent-worker-completion-timer worker)))
     (when (timerp timer) (cancel-timer timer)))
   (setf (noema-agent-worker-renew-timer worker) nil
         (noema-agent-worker-segment-timer worker) nil
         (noema-agent-worker-cancel-timer worker) nil
-        (noema-agent-worker-cleanup-timer worker) nil))
+        (noema-agent-worker-cleanup-timer worker) nil
+        (noema-agent-worker-completion-timer worker) nil))
 
 (defun noema-agent-worker--renew (worker)
   "Renew WORKER's lease; never replay a Run when renewal has failed."
+  (when (and (noema-agent-worker-started worker)
+             (not (noema-agent-worker-terminal worker)))
+    (noema-agent-worker-check-completion worker))
   (when (and (not (noema-agent-worker-terminal worker))
              (noema-agent-worker-epoch worker))
     (noema-agent-worker--api
@@ -580,6 +799,23 @@ resynced too; otherwise its next save would ask about an external change."
                       `((argv . ,(vconcat (mapcar (lambda (part) (format "%s" part)) argv)))))))
       action)))
 
+(declare-function noema-research-attention "noema-research-inspector" (&optional origin))
+(declare-function noema-research-attention-refresh "noema-research-inspector" ())
+
+(defun noema-agent-worker--show-permission-request (worker)
+  "Put WORKER's pending permission request in front of the person.
+Work inside the project is approved by the kernel; a request that reaches
+this point goes beyond the project, so Attention opens to decide it."
+  (let ((root (noema-agent-worker-root worker)))
+    (run-at-time
+     0 nil
+     (lambda ()
+       (when (require 'noema-research-inspector nil t)
+         (let ((buffer (get-buffer "*Noema Attention*")))
+           (if (and (buffer-live-p buffer) (get-buffer-window buffer t))
+               (with-current-buffer buffer (noema-research-attention-refresh))
+             (noema-research-attention root))))))))
+
 (defun noema-agent-worker--permission-responder (worker permission)
   "Broker a native ACP PERMISSION callback through Noema's authority."
   (let* ((tool-call (map-elt permission :tool-call))
@@ -619,14 +855,18 @@ resynced too; otherwise its next save would ask about an external change."
                     worker "failed" "permission broker failed and ACP offered no reject option")))
              (let* ((stored (or (noema-agent-worker--value result "permission") result))
                     (permission-id (noema-agent-worker--string stored "id"))
-                    (automatic (noema-agent-worker--string result "autoDecision"))
-                    (automatic (if (string-empty-p automatic)
-                                   (noema-agent-worker--string stored "optionId") automatic)))
-               (if (not (string-empty-p automatic))
+                    ;; The kernel omits an empty optionId: a pending request
+                    ;; carries no decision at all, not an empty one.
+                    (automatic (seq-find (lambda (value)
+                                           (and (stringp value) (not (string-empty-p value))))
+                                         (list (noema-agent-worker--string result "autoDecision")
+                                               (noema-agent-worker--string stored "optionId")))))
+               (if automatic
                    (funcall respond automatic)
                  (puthash permission-id (cons worker respond) noema-agent-worker--permissions)
                  (push permission-id (noema-agent-worker-pending-permissions worker))
-                 (noema-agent-worker--attention-note 1))))))
+                 (noema-agent-worker--attention-note 1)
+                 (noema-agent-worker--show-permission-request worker))))))
         t))))
 
 (defun noema-agent-worker-apply-command (command)
@@ -651,10 +891,19 @@ resynced too; otherwise its next save would ask about an external change."
 	           (delete request-id (noema-agent-worker-pending-inputs (car entry))))
 	     (funcall (cdr entry) (noema-agent-worker--value command "answer"))
 	     (noema-agent-worker--attention-note -1))))
+	("notebook-writeback"
+	 (when-let* ((file (noema-agent-worker--string command "file")))
+	   (noema-agent-worker--resync-file-buffer file)))
     ("run-cancel"
      (when-let* ((run-id (noema-agent-worker--string command "runId"))
                  (worker (gethash run-id noema-agent-worker--runs)))
-       (noema-agent-worker--cancel worker)))))
+       (noema-agent-worker--cancel worker)))
+    ("run-check-completion"
+     (when-let* ((run-id (noema-agent-worker--string command "runId"))
+                 (worker (gethash run-id noema-agent-worker--runs))
+                 ((equal (noema-agent-worker-session-id worker)
+                         (noema-agent-worker--string command "sessionId"))))
+       (message "Noema completion check: %s" (noema-agent-worker-check-completion worker))))))
 
 (defun noema-agent-worker--command-current-p (worker command)
   "Return non-nil when COMMAND targets WORKER's exact leased execution."
@@ -703,6 +952,8 @@ RESPOND receives the eventual JSON answer. Return non-nil when accepted."
 
 (defun noema-agent-worker--cancel (worker)
   "Send ACP cancellation for WORKER, then terminate it after the grace period."
+  ;; Completion may already have arrived but failed to reach the host.
+  (noema-agent-worker--best-effort #'noema-agent-worker-check-completion worker)
   (unless (noema-agent-worker-terminal worker)
     (when-let* ((buffer (noema-agent-worker-buffer worker))
                 ((buffer-live-p buffer)))
@@ -713,11 +964,8 @@ RESPOND receives the eventual JSON answer. Return non-nil when accepted."
           (run-at-time noema-agent-worker-cancel-grace-seconds nil
                        (lambda ()
                          (unless (noema-agent-worker-terminal worker)
-                           (when-let* ((buffer (noema-agent-worker-buffer worker))
-                                       ((buffer-live-p buffer)))
-                             (ignore-errors (noema-agent-acp-shutdown buffer)))
                            (noema-agent-worker--terminal
-                            worker "cancelled" "ACP cancellation grace period elapsed; worker stopped")))))))
+                            worker "cancelled" "ACP cancellation grace period elapsed; worker stopped" t)))))))
 
 ;;;###autoload
 (defun noema-agent-worker-decide-permission (permission-id option-id)
@@ -743,40 +991,60 @@ RESPOND receives the eventual JSON answer. Return non-nil when accepted."
 (defun noema-agent-worker--subscribe (worker)
   "Subscribe WORKER to agent-shell facts after a session is ready."
   (let ((buffer (noema-agent-worker-buffer worker)))
+    ;; A physical agent buffer is a Session resource.  Run callbacks are not:
+    ;; tear down any stale bridge before installing the next sequential Run.
+    (noema-agent-worker--cleanup-subscriptions worker)
     (noema-agent-acp-set-permission-responder
      buffer (lambda (permission) (noema-agent-worker--permission-responder worker permission)))
-    (noema-agent-acp-subscribe
-     :buffer buffer :event 'agent-message-chunk
-     :callback (lambda (event)
-                 (noema-agent-worker--queue-segment worker
-                                                    (or (map-elt (map-elt event :data) :text-chunk) ""))))
-    (noema-agent-acp-subscribe
-     :buffer buffer :event 'tool-call-update
-     :callback (lambda (event)
-                 (when (and (noema-agent-worker-started worker)
-                            (not (noema-agent-worker-terminal worker)))
-                   (noema-agent-worker--ledger-action
-                    worker (or (map-elt event :data) '()))
-                   (noema-agent-worker--report
-                    worker (list `((type . "run.action.updated")
-                                   (payload . ,(or (map-elt event :data) '()))))))))
-    (noema-agent-acp-subscribe
-     :buffer buffer :event 'turn-complete
-     :callback (lambda (event)
-                 (let ((reason (format "%s" (or (map-elt (map-elt event :data) :stop-reason) ""))))
-                   (noema-agent-worker--terminal
-                    worker (if (equal reason "cancelled") "cancelled" "completed") reason))))
-    (noema-agent-acp-subscribe
-     :buffer buffer :event 'error
-     :callback (lambda (event)
-                 (when (noema-agent-worker-started worker)
-                   (noema-agent-worker--terminal worker "failed"
-                                                 (format "%s" (or (map-elt (map-elt event :data) :message) "ACP error"))))))
-    (with-current-buffer buffer
-      (add-hook 'kill-buffer-hook
-                (lambda ()
+    (cl-labels
+        ((subscribe (event callback)
+           (push (noema-agent-acp-subscribe
+                  :buffer buffer :event event :callback callback)
+                 (noema-agent-worker-subscriptions worker))))
+      (subscribe
+       'agent-message-chunk
+       (lambda (event)
+         (noema-agent-worker--queue-segment
+          worker (or (map-elt (map-elt event :data) :text-chunk) ""))))
+      (subscribe
+       'tool-call-update
+       (lambda (event)
+         (when (and (noema-agent-worker-started worker)
+                    (not (noema-agent-worker-terminal worker)))
+           (noema-agent-worker--ledger-action worker (or (map-elt event :data) '()))
+           (noema-agent-worker--report
+            worker (list `((type . "run.action.updated")
+                           (payload . ,(or (map-elt event :data) '()))))))))
+      (subscribe
+       'turn-complete
+       (lambda (event)
+	 (noema-agent-worker--check-context-pressure worker event)
+         (let ((reason (format "%s" (or (map-elt (map-elt event :data) :stop-reason) ""))))
+           (noema-agent-worker--terminal
+            worker (if (equal reason "cancelled") "cancelled" "completed") reason))))
+      (subscribe
+       'error
+       (lambda (event)
+         (when (noema-agent-worker-started worker)
+           (noema-agent-worker--terminal
+            worker "failed"
+            (format "%s" (or (map-elt (map-elt event :data) :message) "ACP error")))))))
+    (let ((hook (lambda ()
                   (when (noema-agent-worker-started worker)
-                    (noema-agent-worker--terminal worker "interrupted" "agent-shell buffer closed"))) nil t))))
+                    (noema-agent-worker--terminal
+                     worker "interrupted" "agent-shell buffer closed")))))
+      (setf (noema-agent-worker-kill-hook worker) hook)
+      (with-current-buffer buffer
+        (add-hook 'kill-buffer-hook hook nil t)))))
+
+(defun noema-agent-worker--context-text (item)
+  "Return the text of frozen context ITEM as a multibyte string.
+`base64-decode-string' yields raw UTF-8 bytes; a unibyte string holding
+non-ASCII bytes (a Chinese title, say) is not a JSON value, so the ACP
+request would fail to serialize."
+  (decode-coding-string
+   (base64-decode-string (noema-agent-worker--string item "contentBase64"))
+   'utf-8))
 
 (defun noema-agent-worker--content-blocks (worker)
   "Return exact prompt blocks for WORKER, embedding frozen context if able."
@@ -789,7 +1057,7 @@ RESPOND receives the eventual JSON answer. Return non-nil when accepted."
         (append
          (list `((type . "text") (text . ,prompt)))
          (mapcar (lambda (item)
-                   (let ((text (base64-decode-string (noema-agent-worker--string item "contentBase64"))))
+                   (let ((text (noema-agent-worker--context-text item)))
                      `((type . "resource")
                        (resource . ((uri . ,(noema-agent-worker--string item "resolvedUri"))
                                     (text . ,text)
@@ -799,7 +1067,7 @@ RESPOND receives the eventual JSON answer. Return non-nil when accepted."
         (dolist (item items)
           (setq fallback (concat fallback "\n\n[Noema context: "
                                  (noema-agent-worker--string item "ref") "]\n"
-                                 (base64-decode-string (noema-agent-worker--string item "contentBase64")))))
+                                 (noema-agent-worker--context-text item))))
         (list `((type . "text") (text . ,fallback)))))))
 
 (defun noema-agent-worker--capability (worker name &optional default)
@@ -808,10 +1076,15 @@ RESPOND receives the eventual JSON answer. Return non-nil when accepted."
     (downcase (format "%s" (noema-agent-worker--value capabilities name (or default ""))))))
 
 (defun noema-agent-worker--requires-l1-p (worker)
-  "Return non-nil if WORKER's frozen capability envelope contains a deny."
-  (seq-some (lambda (name) (equal (noema-agent-worker--capability worker name) "deny"))
-            '("read_project" "write_project" "execute" "network"
-              "write_outside_project" "credentials")))
+  "Return non-nil if WORKER's frozen capability envelope needs native L1.
+A denied project capability needs the adapter's restrictive mode.  Network,
+writes outside the project and credentials are enforced by the kernel broker
+on every permission request, so they need L1 only when the adapter cannot
+answer permission requests."
+  (cl-flet ((denied (name) (equal (noema-agent-worker--capability worker name) "deny")))
+    (or (seq-some #'denied '("read_project" "write_project" "execute"))
+        (and (not (noema-agent-worker--permission-resolve-p worker))
+             (seq-some #'denied '("network" "write_outside_project" "credentials"))))))
 
 (defun noema-agent-worker--external-sandbox-p (worker)
   "Return non-nil if the RunSpec declares an independently enforced sandbox."
@@ -889,6 +1162,7 @@ made durably failed without sending an ACP prompt."
   "Send the frozen RunSpec prompt only after its lease/state transition." 
   (noema-agent-acp-prompt
    :buffer (noema-agent-worker-buffer worker)
+   :run-id (noema-agent-worker-run-id worker)
    :content (noema-agent-worker--content-blocks worker)
    :on-success (lambda (response)
                  (let ((reason (format "%s" (or (map-elt response 'stopReason) ""))))
@@ -898,6 +1172,23 @@ made durably failed without sending an ACP prompt."
    :on-failure (lambda (_error raw)
                  (noema-agent-worker--terminal worker "failed" (format "%s" raw)))))
 
+(defun noema-agent-worker--cancelled-before-start-p (error-object)
+  "Return non-nil when ERROR-OBJECT says the Run was cancelled before it started."
+  (string-match-p "cancelled before it started"
+                  (format "%s" (or (noema-agent-worker--error error-object) ""))))
+
+(defun noema-agent-worker--finish-cancelled-before-start (worker)
+  "Finish WORKER locally: its Run was cancelled before any ACP prompt was sent.
+The kernel already recorded the cancellation, so this is not a failure."
+  (unless (noema-agent-worker-terminal worker)
+    (setf (noema-agent-worker-terminal worker) t)
+    (noema-agent-worker--cleanup-subscriptions worker)
+    (noema-agent-worker--stop-renewal worker)
+    (remhash (noema-agent-worker-run-id worker) noema-agent-worker--runs)
+    (force-mode-line-update t)
+    (noema-agent-worker--resync-source-buffer worker)
+    (noema-agent-worker--finish-queue worker 'cancelled)))
+
 (defun noema-agent-worker--start-run (worker)
   "Tell the kernel physical execution is starting, then prompt the ACP agent."
   (noema-agent-worker--api
@@ -905,15 +1196,20 @@ made durably failed without sending an ACP prompt."
    (noema-agent-worker--worker-body worker)
    (lambda (_result error-object)
      (if error-object
-         (noema-agent-worker--fail-prepared
-          worker (format "worker start failed: %s" (noema-agent-worker--error error-object)))
+         (if (noema-agent-worker--cancelled-before-start-p error-object)
+             (noema-agent-worker--finish-cancelled-before-start worker)
+           (noema-agent-worker--fail-prepared
+            worker (format "worker start failed: %s" (noema-agent-worker--error error-object))))
        (setf (noema-agent-worker-started worker) t)
        (setf (noema-agent-worker-queue-state worker) 'running)
        (noema-agent-worker--ledger-start worker)
        (noema-agent-worker--start-renewal worker)
+       (noema-agent-worker--best-effort #'noema-agent-worker--refresh-run-views worker)
        (if (noema-agent-worker-preflight-failure worker)
            (noema-agent-worker--terminal worker "failed" (noema-agent-worker-preflight-failure worker))
-         (noema-agent-worker--send-prompt worker))))))
+         (condition-case err
+             (noema-agent-worker--send-prompt worker)
+           (error (noema-agent-worker--terminal worker "failed" (error-message-string err)))))))))
 
 (defun noema-agent-worker--attach-and-start (worker)
   "Attach a pre-dispatch fresh Run to WORKER's new logical Session if needed."
@@ -923,8 +1219,15 @@ made durably failed without sending an ACP prompt."
        (noema-agent-worker--worker-body worker)
        (lambda (_result error-object)
          (if error-object
-             (noema-agent-worker--fail-prepared
-              worker (format "session attachment failed: %s" (noema-agent-worker--error error-object)))
+             (if (noema-agent-worker--cancelled-before-start-p error-object)
+                 (noema-agent-worker--finish-cancelled-before-start worker)
+               (noema-agent-worker--fail-prepared
+                worker (format "session attachment failed: %s" (noema-agent-worker--error error-object))))
+	   (noema-agent-acp-mark-session-buffer
+	    (noema-agent-worker-buffer worker)
+	    (noema-agent-worker--session-name worker)
+	    (noema-agent-worker-agent worker)
+	    (noema-agent-worker-root worker))
            (noema-agent-worker--start-run worker))))
     (noema-agent-worker--start-run worker)))
 
@@ -980,10 +1283,18 @@ made durably failed without sending an ACP prompt."
   "Return frozen RunSpec MCP servers in agent-shell's ACP shape."
   (mapcar
    (lambda (server)
-     `((name . ,(noema-agent-worker--string server "name" "noema"))
-       (type . ,(noema-agent-worker--string server "type" "http"))
-       (url . ,(noema-agent-worker--string server "url"))
-       (headers . ())))
+     (let* ((name (noema-agent-worker--string server "name" "noema"))
+            (type (noema-agent-worker--string server "type"))
+            (http-p (member type '("http" "sse"))))
+       (if http-p
+           `((name . ,name)
+             (type . ,type)
+             (url . ,(noema-agent-worker--string server "url"))
+             (headers . ,(or (noema-agent-worker--value server "headers") [])))
+         `((name . ,name)
+           (command . ,(noema-agent-worker--string server "command"))
+           (args . ,(or (noema-agent-worker--value server "args") []))
+           (env . ,(or (noema-agent-worker--value server "env") []))))))
    (append (noema-agent-worker--value (noema-agent-worker-spec worker) "mcp_servers" []) nil)))
 
 (defun noema-agent-worker--config (worker)
@@ -1006,6 +1317,7 @@ made durably failed without sending an ACP prompt."
   (seq-find (lambda (buffer)
               (with-current-buffer buffer
                 (and (derived-mode-p 'agent-shell-mode)
+                     (bound-and-true-p noema-agent-acp-session-name)
                      (boundp 'noema-agent-promote--session-id)
                      (equal noema-agent-promote--session-id session-id))))
             (buffer-list)))
@@ -1037,13 +1349,33 @@ made durably failed without sending an ACP prompt."
                   :config config :directory target :session-id native-session-id
                   :fork-session-id fork-session-id)))
     (setf (noema-agent-worker-buffer worker) buffer)
-    ;; D-033: one hidden, recognizably named buffer per session name.  A Run
-    ;; never displays it; `C-c A b' and `C-c A S' find it again.
-    (noema-agent-acp-mark-session-buffer
-     buffer (noema-agent-worker--session-name worker) (noema-agent-worker-agent worker) target)
-    (noema-agent-acp-subscribe
-     :buffer buffer :event 'init-session
-     :callback (lambda (_event) (noema-agent-worker--on-session-ready worker fresh)))))
+    ;; Physical Session state stays isolated, while all Sessions of the
+    ;; repository are exposed as tabs in its one Agent workspace.
+	(noema-agent-acp-mark-session-buffer
+	 buffer (unless fresh (noema-agent-worker--session-name worker))
+	 (noema-agent-worker-agent worker) (noema-agent-worker-root worker))
+    ;; A resumed buffer serves an existing logical Session.  Bind its id now,
+    ;; as promotion does for a fresh one, so the next Run of that Session
+    ;; reuses this live buffer instead of resuming a second, retiring copy.
+    (unless (or fresh (string-empty-p (or (noema-agent-worker-session-id worker) "")))
+      (with-current-buffer buffer
+        (setq-local noema-agent-promote--session-id
+                    (noema-agent-worker-session-id worker))))
+    (let (subscription)
+      (setq subscription
+            (noema-agent-acp-subscribe
+             ;; init-session precedes the upstream default model/mode RPCs.
+             ;; Starting a prompt there races configuration and prompt cleanup.
+             :buffer buffer :event 'init-finished
+             :callback
+             (lambda (_event)
+               (ignore-errors
+                 (noema-agent-acp-unsubscribe
+                  :buffer buffer :subscription subscription))
+               (setf (noema-agent-worker-subscriptions worker)
+                     (delq subscription (noema-agent-worker-subscriptions worker)))
+               (noema-agent-worker--on-session-ready worker fresh))))
+      (push subscription (noema-agent-worker-subscriptions worker)))))
 
 (defun noema-agent-worker--dispatch (worker)
   "Use a live shell, resume a logical session, or create a fresh ACP session."
@@ -1058,11 +1390,12 @@ made durably failed without sending an ACP prompt."
          (buffer (and (not (string-empty-p logical)) (noema-agent-worker--existing-buffer logical))))
     (if buffer
         (progn
+          (noema-agent-acp-touch buffer)
           (setf (noema-agent-worker-buffer worker) buffer
                 (noema-agent-worker-session-id worker) logical)
           (noema-agent-acp-mark-session-buffer
            buffer (noema-agent-worker--session-name worker) (noema-agent-worker-agent worker)
-           (noema-agent-worker-target worker))
+           (noema-agent-worker-root worker))
           (noema-agent-worker--on-session-ready worker nil))
       (progn
         (setf (noema-agent-worker-session-id worker) logical)
@@ -1093,6 +1426,10 @@ When SUBMISSION is non-nil, fill and dispatch that pre-freeze queue token."
             (noema-agent-worker-routing worker) routing
             (noema-agent-worker-segments worker) nil
             (noema-agent-worker-result-parts worker) nil
+            (noema-agent-worker-result-bytes worker) 0
+            (noema-agent-worker-result-truncated worker) nil
+            (noema-agent-worker-subscriptions worker) nil
+            (noema-agent-worker-kill-hook worker) nil
             (noema-agent-worker-pending-permissions worker) nil
             (noema-agent-worker-pending-inputs worker) nil)
       (puthash (noema-agent-worker-run-id worker) worker noema-agent-worker--runs)
@@ -1115,7 +1452,10 @@ When SUBMISSION is non-nil, fill and dispatch that pre-freeze queue token."
              (sourceFile . ,host-file)
              (projectRoot . ,host-root)
              (cellId . ,cell-id)
-             (runId . ,(noema-agent-worker-run-id worker))) nil)))
+             (runId . ,(noema-agent-worker-run-id worker))
+             (sessionId . ,(or (noema-agent-worker-session-id worker) ""))
+             (sessionName . ,(or (noema-agent-worker--session-name worker) ""))
+             (agent . ,(or (noema-agent-worker-agent worker) ""))) nil)))
       (noema-agent-worker--ledger-init worker)
       (condition-case error-object
           (noema-agent-worker--dispatch worker)
@@ -1182,8 +1522,12 @@ When SUBMISSION is non-nil, fill and dispatch that pre-freeze queue token."
                  "aaronnote:api:research:run:prepare"
                  (noema-agent-worker-prepare-body worker)
                  (lambda (result error-object)
-                   (noema-agent-worker--accept-prepared
-                    target result error-object worker))))
+                   (if (eq (noema-agent-worker-queue-state worker) 'cancelling)
+                       ;; Cancelled while its RunSpec was being frozen.
+                       (noema-agent-worker--abandon-cancelled-preparation
+                        worker (and (not error-object) result))
+                     (noema-agent-worker--accept-prepared
+                      target result error-object worker)))))
               (lambda (error-object)
                 (setf (noema-agent-worker-queue-state worker) 'failed)
                 (remhash id noema-agent-worker--submissions)
@@ -1272,6 +1616,59 @@ work DAG.  No ACP prompt is sent until its frozen RunSpec is stored."
        ,@(when (and parent-session-id (not (string-empty-p parent-session-id)))
            `((parentSessionId . ,parent-session-id)))))))
 
+;;; Cancelling a work cell
+
+(defun noema-agent-worker--run-cell-p (worker file cell-id)
+  "Return non-nil when WORKER's Run executes work CELL-ID of FILE."
+  (when-let* ((source (noema-agent-worker--value (noema-agent-worker-spec worker) "source"))
+              (relative (noema-agent-worker--string source "file"))
+              (root (noema-agent-worker-root worker)))
+    (and (equal (noema-agent-worker--string source "cell_id") cell-id)
+         (equal (expand-file-name relative root) file))))
+
+(defun noema-agent-worker--submission-cell-p (worker file cell-id)
+  "Return non-nil when queued WORKER was submitted for CELL-ID of FILE."
+  (let ((body (noema-agent-worker-prepare-body worker)))
+    (and (equal (noema-agent-worker--string body "cellId") cell-id)
+         (equal (expand-file-name (or (noema-agent-worker--string body "file") "")) file))))
+
+(defun noema-agent-worker--abandon-cancelled-preparation (worker result)
+  "Finish WORKER, cancelled while preparing, without dispatching RESULT's Run.
+When RESULT froze a Run, record its cancellation so the document shows it."
+  (when-let* ((run-id (noema-agent-worker--string (noema-agent-worker--value result "run") "id")))
+    (noema-agent-worker--api
+     "aaronnote:api:research:run:cancel"
+     `((root . ,(or (noema-agent-worker--string result "root") (noema-agent-worker-root worker)))
+       (runId . ,run-id) (requestedBy . "emacs"))
+     (lambda (_result error-object)
+       (when error-object
+         (message "Noema could not record the cancellation of %s: %s"
+                  run-id (noema-agent-worker--error error-object))))))
+  (noema-agent-worker--finish-queue worker 'cancelled))
+
+;;;###autoload
+(defun noema-agent-worker-cancel-cell (file cell-id)
+  "Cancel the Noema execution of work CELL-ID in FILE, wherever it is.
+A running Run is cancelled over ACP; a queued execution is dropped; one
+whose RunSpec is being frozen is cancelled as soon as it exists.  Return
+`run', `queued', `preparing', or nil when the cell has no execution."
+  (let ((file (expand-file-name file)))
+    (if-let* ((worker (seq-find (lambda (worker)
+                                  (and (not (noema-agent-worker-terminal worker))
+                                       (noema-agent-worker--run-cell-p worker file cell-id)))
+                                (hash-table-values noema-agent-worker--runs))))
+        (progn (noema-agent-worker--cancel worker) 'run)
+      (when-let* ((worker (seq-find (lambda (worker)
+                                      (noema-agent-worker--submission-cell-p worker file cell-id))
+                                    (hash-table-values noema-agent-worker--submissions))))
+        (pcase (noema-agent-worker-queue-state worker)
+          ('queued
+           (noema-agent-worker-cancel-queued (noema-agent-worker-submission-id worker))
+           'queued)
+          ('preparing
+           (setf (noema-agent-worker-queue-state worker) 'cancelling)
+           'preparing))))))
+
 (defun noema-agent-worker-buffer-busy-p (buffer)
   "Return non-nil when a non-terminal Noema Run is using agent BUFFER."
   (seq-some (lambda (worker)
@@ -1298,17 +1695,146 @@ in the registry, so the next Run or visit resumes the conversation (D-035)."
         (kill-buffer buffer)))
     t))
 
+(defun noema-agent-worker--resumable-buffer-p (buffer)
+  "Return non-nil when BUFFER has a native Session that can be reopened."
+  (and (noema-agent-acp-agent-buffer-p buffer)
+       (stringp (noema-agent-acp-state-value buffer '(:session :id)))
+       (not (string-empty-p (noema-agent-acp-state-value buffer '(:session :id) "")))
+       (or (noema-agent-acp-state-value buffer '(:supports-session-load))
+           (noema-agent-acp-state-value buffer '(:supports-session-resume)))))
+
+(defun noema-agent-worker-sweep-warm-buffers ()
+  "Hibernate idle or excess resumable Noema Session buffers.
+
+Only idle buffers with a verified native resume capability are stopped."
+  (interactive)
+  (let ((by-root (make-hash-table :test #'equal))
+        (now (float-time)))
+    (dolist (buffer (buffer-list))
+      (when (and (noema-agent-worker--resumable-buffer-p buffer)
+                 (not (noema-agent-worker-buffer-busy-p buffer)))
+        (let ((root (buffer-local-value 'noema-agent-acp-session-root buffer)))
+          (push buffer (gethash root by-root)))))
+    (maphash
+     (lambda (_root buffers)
+       (let ((ordered
+              (sort buffers
+                    (lambda (left right)
+                      (> (or (buffer-local-value 'noema-agent-acp-last-used-at left) 0)
+                         (or (buffer-local-value 'noema-agent-acp-last-used-at right) 0))))))
+         (cl-loop for buffer in ordered
+                  for index from 0
+                  for last-used = (or (buffer-local-value
+                                       'noema-agent-acp-last-used-at buffer) 0)
+                  when (or (>= index (max 0 noema-agent-worker-warm-buffer-limit))
+                           (> (- now last-used) noema-agent-worker-warm-idle-seconds))
+                  do (noema-agent-worker-stop-buffer buffer))))
+     by-root)))
+
+(unless (timerp noema-agent-worker--warm-sweep-timer)
+  (setq noema-agent-worker--warm-sweep-timer
+        (run-at-time 300 300 #'noema-agent-worker-sweep-warm-buffers)))
+
 (defun noema-agent-worker--session-worker (payload)
   "Return the active worker that coordinator PAYLOAD names, or nil."
   (let ((run-id (noema-agent-worker--string payload "runId"))
         (session-id (noema-agent-worker--string payload "sessionId"))
         (name (noema-agent-worker--string payload "name")))
-    (seq-find (lambda (worker)
-                (and (not (noema-agent-worker-terminal worker))
-                     (or (and run-id (equal run-id (noema-agent-worker-run-id worker)))
-                         (and session-id (equal session-id (noema-agent-worker-session-id worker)))
-                         (and name (equal name (noema-agent-worker--session-name worker))))))
-              (hash-table-values noema-agent-worker--runs))))
+    ;; A supplied Run id is exact authority.  Never let a stale Run command
+    ;; fall through to a newer worker merely because the Session name matches.
+    (cond
+     (run-id (gethash run-id noema-agent-worker--runs))
+     (session-id
+      (seq-find (lambda (worker)
+                  (and (not (noema-agent-worker-terminal worker))
+                       (equal session-id (noema-agent-worker-session-id worker))))
+                (hash-table-values noema-agent-worker--runs)))
+     (name
+      (seq-find (lambda (worker)
+                  (and (not (noema-agent-worker-terminal worker))
+                       (equal name (noema-agent-worker--session-name worker))))
+                (hash-table-values noema-agent-worker--runs))))))
+
+(defun noema-agent-worker-open-session (payload)
+  "Show the reusable agent buffer identified by browser PAYLOAD.
+
+An exact active Run wins.  Otherwise resolve the logical Session id or its
+project-scoped name without starting a second physical agent session."
+  (let* ((root (noema-agent-worker--string payload "root"))
+         (name (noema-agent-worker--string payload "name"))
+         (session-id (noema-agent-worker--string payload "sessionId"))
+         (worker (noema-agent-worker--session-worker payload))
+         (buffer (or (and worker (noema-agent-worker-buffer worker))
+                     (and session-id (noema-agent-worker--existing-buffer session-id))
+                     (and name (noema-agent-acp-session-buffer name root)))))
+    (if (buffer-live-p buffer)
+        (noema-agent-acp-show-buffer buffer)
+      (require 'noema-sessions)
+      (noema-sessions-open-reference root name session-id))))
+
+;;;###autoload
+(defun noema-agent-worker-compact-session (&optional buffer)
+  "Request checkpoint rollover for the logical Session served by BUFFER.
+
+The current conversation remains interactive and unchanged.  Its next Run
+creates a new physical generation with the same project-scoped name and the
+latest durable handoff as explicit context."
+  (interactive)
+  (let* ((candidates
+	  (seq-filter
+	   (lambda (candidate)
+	     (and (noema-agent-acp-agent-buffer-p candidate)
+		  (buffer-local-value 'noema-agent-acp-session-name candidate)
+		  (buffer-local-value 'noema-agent-promote--session-id candidate)))
+	   (buffer-list)))
+	 (buffer
+	  (or buffer
+	      (and (memq (current-buffer) candidates) (current-buffer))
+	      (let* ((names (mapcar #'buffer-name candidates))
+		     (selected (and names (completing-read "Compact Noema Session: " names nil t))))
+		(and selected (get-buffer selected))))))
+    (unless (buffer-live-p buffer)
+      (user-error "No resumable Noema Session buffer"))
+    (let ((root (buffer-local-value 'noema-agent-acp-session-root buffer))
+	  (session-id (buffer-local-value 'noema-agent-promote--session-id buffer)))
+      (noema-agent-worker--api
+	"aaronnote:api:research:session:compact"
+	`((cwd . ,root) (sessionId . ,session-id))
+	(lambda (result error-object)
+	  (if error-object
+	      (message "Noema Session compaction request failed: %s"
+		       (noema-agent-worker--error error-object))
+	    (with-current-buffer buffer
+	      (setq-local noema-agent-acp-context-warning-level 2))
+	    (message "Noema Session rollover queued for its next Run (%s)"
+		     (or (noema-agent-worker--string
+			  (noema-agent-worker--value result "compaction") "id")
+			 "checkpoint"))))))))
+
+;;;###autoload
+(defun noema-agent-worker-maintain-cache (&optional root)
+  "Run conservative cache maintenance for Noema project ROOT.
+
+Registered artifacts and durable session state are never deleted."
+  (interactive)
+  (let ((root (or root
+		  (locate-dominating-file default-directory "noema.toml")
+		  (user-error "No containing Noema project"))))
+    (noema-agent-worker--api
+     "aaronnote:api:research:cache:maintain"
+     `((cwd . ,root))
+     (lambda (result error-object)
+       (if error-object
+	   (message "Noema cache maintenance failed: %s"
+		    (noema-agent-worker--error error-object))
+	 (let* ((cache (noema-agent-worker--value result "cache"))
+		(removed (or (noema-agent-worker--value cache "removedBytes") 0))
+		(total (or (noema-agent-worker--value cache "totalBytes") 0)))
+	   (message "Noema cache: removed %.1f MiB; %.1f MiB remain%s"
+		    (/ removed 1048576.0) (/ total 1048576.0)
+		    (if (noema-agent-worker--true-p
+			 (noema-agent-worker--value cache "pressure"))
+				" (durable data retained above threshold)" ""))))))))
 
 (defun noema-agent-worker--claim-close (root payload)
   "Stop the idle agent process of the session coordinator PAYLOAD names in ROOT."
@@ -1321,6 +1847,23 @@ in the registry, so the next Run or visit resumes the conversation (D-035)."
                        (format "Pi asked to close %s while a Run is using it; it stays open"
                                (or name session-id))
                        :warning))))
+
+(defun noema-agent-worker--ack-coordinator-request (root request state &optional reason)
+  "Acknowledge coordinator REQUEST in ROOT with terminal STATE and REASON."
+  (noema-agent-worker--api
+   "aaronnote:api:research:coordinator:complete"
+   `((cwd . ,root)
+     (id . ,(noema-agent-worker--string request "id"))
+     (owner . ,(format "emacs:%s" (emacs-pid)))
+     (state . ,state)
+     (reason . ,(or reason "")))
+   (lambda (_result error-object)
+     (when error-object
+       (display-warning
+        'noema-agent-worker
+        (format "Noema coordinator acknowledgement failed: %s"
+                (noema-agent-worker--error error-object))
+        :warning)))))
 
 ;;;###autoload
 (defun noema-agent-worker-claim-coordinator-requests (root)
@@ -1341,24 +1884,28 @@ an idle session's agent process and keeps its name and history."
                           :warning)
        (dolist (request (append (noema-agent-worker--value result "requests") nil))
          (let ((payload (noema-agent-worker--value request "payload")))
-           (pcase (noema-agent-worker--string request "kind")
-             ("run.start"
-              (let ((file (noema-agent-worker--string payload "file"))
-                    (cell-id (noema-agent-worker--string payload "cellId")))
-                (when (and file cell-id)
-                  (let ((default-directory (file-name-as-directory root)))
-                    (noema-agent-worker-run-work-cell
-                     file cell-id nil nil
-                     (noema-agent-worker--string payload "sessionName"))))))
-             ("session.cancel"
-              (if-let* ((worker (noema-agent-worker--session-worker payload)))
-                  (noema-agent-worker--cancel worker)
-                (display-warning 'noema-agent-worker
-                                 (format "Pi asked to cancel %s, which has no Run in this Emacs"
-                                         (or (noema-agent-worker--string payload "name") "a session"))
-                                 :warning)))
-             ("session.close"
-              (noema-agent-worker--claim-close root payload)))))))))
+           (condition-case request-error
+               (progn
+                 (pcase (noema-agent-worker--string request "kind")
+                   ("run.start"
+                    (let ((file (noema-agent-worker--string payload "file"))
+                          (cell-id (noema-agent-worker--string payload "cellId")))
+                      (unless (and file cell-id)
+                        (error "run.start lacks file or cellId"))
+                      (let ((default-directory (file-name-as-directory root)))
+                        (noema-agent-worker-run-work-cell
+                         file cell-id nil nil
+                         (noema-agent-worker--string payload "sessionName")))))
+                   ("session.cancel"
+                    (if-let* ((worker (noema-agent-worker--session-worker payload)))
+                        (noema-agent-worker--cancel worker)
+                      (error "the requested Session has no Run in this Emacs")))
+                   ("session.close"
+                    (noema-agent-worker--claim-close root payload)))
+                 (noema-agent-worker--ack-coordinator-request root request "done"))
+             (error
+              (noema-agent-worker--ack-coordinator-request
+               root request "failed" (error-message-string request-error))))))))))
 
 ;;;###autoload
 (defun noema-agent-worker-run-prompt-file (file &optional session-policy parent-session-id)
@@ -1378,6 +1925,24 @@ an idle session's agent process and keeps its name and history."
            `((sessionPolicy . ,session-policy)))
        ,@(when (and parent-session-id (not (string-empty-p parent-session-id)))
            `((parentSessionId . ,parent-session-id)))))))
+
+(defun noema-agent-worker--buffer-worker (buffer)
+  "Return the active worker whose Run uses agent BUFFER, or nil."
+  (seq-find (lambda (worker)
+              (and (eq (noema-agent-worker-buffer worker) buffer)
+                   (not (noema-agent-worker-terminal worker))))
+            (hash-table-values noema-agent-worker--runs)))
+
+(defun noema-agent-worker--stop-buffer (buffer)
+  "Cancel the Noema Run using agent BUFFER; return non-nil when one did."
+  (when-let* ((worker (noema-agent-worker--buffer-worker buffer)))
+    (noema-agent-worker--cancel worker)
+    t))
+
+;; The Agent window asks through these hooks, so the ACP boundary does not
+;; depend on the worker.
+(add-hook 'noema-agent-acp-busy-functions #'noema-agent-worker--buffer-worker)
+(add-hook 'noema-agent-acp-stop-functions #'noema-agent-worker--stop-buffer)
 
 (provide 'noema-agent-worker)
 ;;; noema-agent-worker.el ends here

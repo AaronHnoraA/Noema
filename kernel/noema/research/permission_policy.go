@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"unicode"
 )
 
 // PermissionRule is a deliberately narrow, structured remembered decision.
@@ -33,9 +34,12 @@ type policyDecision struct {
 
 // policyDecisionForTx uses a deny-first ordering. Hard denials are derived in
 // the kernel from the normalized action and target, so an untrusted worker
-// cannot bypass them by merely labelling a callback as safe.
+// cannot bypass them by merely labelling a callback as safe.  Remembered rules
+// come next.  Work that stays inside the project is then approved
+// automatically; anything reaching outside it or the network waits for a
+// person in Attention.
 func policyDecisionForTx(tx *sql.Tx, run Run, action map[string]any, options []map[string]any) (policyDecision, error) {
-	if reason := hardDenyReason(run.ExecutionTarget, action); reason != "" {
+	if reason := hardDenyReason(action); reason != "" {
 		return policyDecision{OptionID: matchingOption(options, "reject"), DecidedBy: "policy", Reason: reason}, nil
 	}
 	rules, err := matchingPermissionRulesTx(tx, run, action)
@@ -47,36 +51,21 @@ func policyDecisionForTx(tx *sql.Tx, run Run, action map[string]any, options []m
 			return policyDecision{OptionID: matchingOption(options, "reject"), DecidedBy: "policy-rule:" + rule.ID, Reason: "matched reject rule"}, nil
 		}
 		if rule.Effect == "allow" {
-			return policyDecision{OptionID: matchingOption(options, "allow"), DecidedBy: "policy-rule:" + rule.ID, Reason: "matched allow rule"}, nil
+			return policyDecision{OptionID: preferredAllowOption(options), DecidedBy: "policy-rule:" + rule.ID, Reason: "matched allow rule"}, nil
+		}
+	}
+	if reason := projectAutoAllowReason(run.ExecutionTarget, action); reason != "" {
+		if option := preferredAllowOption(options); option != "" {
+			return policyDecision{OptionID: option, DecidedBy: "policy", Reason: reason}, nil
 		}
 	}
 	return policyDecision{}, nil
 }
 
-func hardDenyReason(target string, action map[string]any) string {
+func hardDenyReason(action map[string]any) string {
 	kind := strings.ToLower(strings.TrimSpace(runtimeStringValue(action["kind"])))
-	if kind == "fetch" || kind == "network" || actionBool(action, "network") {
-		return "network is denied by the project default policy"
-	}
 	if kind == "credential" || kind == "elevate" || kind == "privilege" {
 		return "credentials and privilege elevation are always denied"
-	}
-	for _, path := range actionStringSlice(action["paths"]) {
-		path = strings.TrimSpace(path)
-		if path == "" {
-			continue
-		}
-		if filepath.IsAbs(path) {
-			rel, err := filepath.Rel(filepath.Clean(target), filepath.Clean(path))
-			if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-				return "writes outside the project are always denied"
-			}
-			continue
-		}
-		clean := filepath.Clean(path)
-		if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-			return "writes outside the project are always denied"
-		}
 	}
 	argv := strings.ToLower(strings.Join(actionStringSlice(action["argv"]), " "))
 	if argv == "" {
@@ -87,10 +76,127 @@ func hardDenyReason(target string, action map[string]any) string {
 		strings.Contains(argv, "git branch -f") {
 		return "remote push and git history rewriting are always denied"
 	}
-	if strings.HasPrefix(argv, "sudo ") || strings.HasPrefix(argv, "doas ") || strings.HasPrefix(argv, "su ") {
+	if strings.HasPrefix(argv, "sudo ") || strings.HasPrefix(argv, "doas ") || strings.HasPrefix(argv, "su ") ||
+		strings.Contains(argv, " sudo ") {
 		return "privilege elevation is always denied"
 	}
 	return ""
+}
+
+// projectAutoAllowReason returns why ACTION may proceed without asking: it
+// reads, edits or executes only inside TARGET and reaches no network.  An
+// action it cannot place inside the project returns "" and waits for a person.
+func projectAutoAllowReason(target string, action map[string]any) string {
+	kind := strings.ToLower(strings.TrimSpace(runtimeStringValue(action["kind"])))
+	if kind == "fetch" || kind == "network" || actionBool(action, "network") {
+		return ""
+	}
+	for _, path := range actionStringSlice(action["paths"]) {
+		if !pathInsideProject(target, path) {
+			return ""
+		}
+	}
+	argv := actionStringSlice(action["argv"])
+	if len(argv) == 0 {
+		argv = actionStringSlice(action["command"])
+	}
+	if commandLeavesProject(target, argv) {
+		return ""
+	}
+	return "work inside the project is approved by the project default policy"
+}
+
+func pathInsideProject(target, path string) bool {
+	path = strings.Trim(strings.TrimSpace(path), `"'`)
+	if path == "" {
+		return true
+	}
+	if strings.HasPrefix(path, "~") || strings.HasPrefix(path, "$HOME") {
+		return false
+	}
+	if filepath.IsAbs(path) {
+		if strings.TrimSpace(target) == "" {
+			return false
+		}
+		rel, err := filepath.Rel(filepath.Clean(target), filepath.Clean(path))
+		return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	}
+	clean := filepath.Clean(path)
+	return clean != ".." && !strings.HasPrefix(clean, ".."+string(filepath.Separator))
+}
+
+// networkCommands reach the network whatever their arguments.
+var networkCommands = map[string]bool{
+	"curl": true, "wget": true, "ssh": true, "scp": true, "sftp": true, "rsync": true,
+	"nc": true, "ncat": true, "telnet": true, "ftp": true,
+}
+
+// networkSubcommands reach the network through these subcommands.
+var networkSubcommands = map[string][]string{
+	"git":  {"clone", "fetch", "pull", "ls-remote", "submodule"},
+	"npm":  {"install", "i", "ci", "add", "update", "publish"},
+	"pnpm": {"install", "i", "add", "update", "publish"},
+	"yarn": {"install", "add", "upgrade", "publish"},
+	"bun":  {"install", "add", "update", "publish"},
+	"pip":  {"install", "download"}, "pip3": {"install", "download"},
+	"uv":    {"add", "sync", "pip"},
+	"brew":  {"install", "upgrade", "update", "tap"},
+	"cargo": {"install", "add", "update", "fetch", "publish"},
+	"go":    {"get", "install", "mod"},
+	"gem":   {"install", "update"},
+	"apt":   {"install", "update", "upgrade"}, "apt-get": {"install", "update", "upgrade"},
+}
+
+// commandLeavesProject reports whether ARGV, possibly one shell string, names
+// a path outside TARGET or runs a command that reaches the network.
+func commandLeavesProject(target string, argv []string) bool {
+	tokens := []string{}
+	for _, part := range argv {
+		tokens = append(tokens, strings.FieldsFunc(part, func(r rune) bool {
+			return unicode.IsSpace(r) || strings.ContainsRune(";&|()`<>\"'", r)
+		})...)
+	}
+	for index, token := range tokens {
+		lower := strings.ToLower(token)
+		if strings.Contains(lower, "://") || strings.HasPrefix(lower, "git@") {
+			return true
+		}
+		base := filepath.Base(lower)
+		if networkCommands[base] {
+			return true
+		}
+		if subcommands, ok := networkSubcommands[base]; ok && index+1 < len(tokens) {
+			next := strings.ToLower(tokens[index+1])
+			for _, subcommand := range subcommands {
+				if next == subcommand {
+					return true
+				}
+			}
+		}
+		if token == "/dev/null" || strings.HasPrefix(token, "-") {
+			continue
+		}
+		if value := token; strings.HasPrefix(value, "/") || strings.HasPrefix(value, "~") ||
+			strings.HasPrefix(value, "$HOME") || strings.Contains(value, "..") {
+			if !pathInsideProject(target, value) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// preferredAllowOption picks a one-time approval when the agent offers one, so
+// an automatic decision never silently remembers a broader rule.
+func preferredAllowOption(options []map[string]any) string {
+	for _, option := range options {
+		for _, key := range []string{"optionId", "option_id", "id"} {
+			if value := strings.TrimSpace(runtimeStringValue(option[key])); strings.EqualFold(value, "allow_once") {
+				return value
+			}
+		}
+	}
+	return matchingOption(options, "allow")
 }
 
 func matchingOption(options []map[string]any, prefix string) string {

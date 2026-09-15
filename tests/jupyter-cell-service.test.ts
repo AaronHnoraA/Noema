@@ -499,6 +499,8 @@ describe("jupyter cell service (no kernel)", () => {
 
   test("keeps .noema out of every Jupyter kernel path", async () => {
     await withService(async ({ service, note }) => {
+      const projectRoot = dirname(note);
+      await writeFile(join(projectRoot, "noema.toml"), 'schema = 1\nrepository_id = "test"\n', "utf8");
       const notebook = join(dirname(note), "research.noema");
       const workNode = {
         id: "wn_test",
@@ -527,7 +529,7 @@ describe("jupyter cell service (no kernel)", () => {
         nbformat_minor: 5,
       }, null, 2)}\n`, "utf8");
 
-      const snapshot = await service.documentSnapshot({ scriptFile: notebook });
+      const snapshot = await service.documentSnapshot({ scriptFile: notebook, projectRoot });
       expect(snapshot.document).toMatchObject({
         scriptFile: notebook,
         sourceFile: notebook,
@@ -550,8 +552,13 @@ describe("jupyter cell service (no kernel)", () => {
       await expect(service.sessionSelect({ scriptFile: notebook, kind: "start" })).rejects.toThrow(/Jupyter session/i);
       await expect(service.documentExecute({ scriptFile: notebook, cellId: "cell-code", mode: "all" }))
         .rejects.toThrow(/Cannot perform Jupyter action/);
-      await expect(service.saveScriptCellOutputUi({ scriptFile: notebook, cellId: "cell-code" }))
-        .rejects.toThrow(/Jupyter output UI state/i);
+      await expect(service.saveScriptCellOutputUi({
+        scriptFile: notebook, projectRoot, cellId: "cell-code", liveOutput: true,
+      })).resolves.toMatchObject({ ok: true, cellId: "cell-code" });
+      const refreshed = await service.documentSnapshot({ scriptFile: notebook, projectRoot });
+      expect(refreshed.cells[0].outputUi).toMatchObject({ liveOutput: true });
+      expect(JSON.parse(await readFile(join(projectRoot, ".agent", "views", "nb_test.json"), "utf8")))
+        .toMatchObject({ cells: { "cell-code": { liveOutput: true } } });
       expect((await service.managerSnapshot()).kernels).toEqual([]);
     });
   });

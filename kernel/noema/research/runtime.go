@@ -132,11 +132,12 @@ type WorkerEvent struct {
 }
 
 type ReportWorkerEventsInput struct {
-	SessionID string        `json:"sessionId"`
-	Owner     string        `json:"owner"`
-	Epoch     int64         `json:"epoch"`
-	RunID     string        `json:"runId"`
-	Events    []WorkerEvent `json:"events"`
+	SessionID    string        `json:"sessionId"`
+	Owner        string        `json:"owner"`
+	Epoch        int64         `json:"epoch"`
+	RunID        string        `json:"runId"`
+	Events       []WorkerEvent `json:"events"`
+	SessionUsage *SessionUsage `json:"sessionUsage,omitempty"`
 }
 
 type StartRunInput struct {
@@ -183,10 +184,11 @@ type CancelRunInput struct {
 // created or resumed. This preserves the invariant that a RunSpec reaches CAS
 // before physical ACP work begins, without inventing a native session id.
 type AttachRunInput struct {
-	SessionID string `json:"sessionId"`
-	Owner     string `json:"owner"`
-	Epoch     int64  `json:"epoch"`
-	RunID     string `json:"runId"`
+	SessionID    string `json:"sessionId"`
+	Owner        string `json:"owner"`
+	Epoch        int64  `json:"epoch"`
+	RunID        string `json:"runId"`
+	CompactionID string `json:"compactionId,omitempty"`
 }
 
 // Permission is an append-only audit record whose optimistic Version prevents
@@ -464,10 +466,24 @@ func (s *Store) RequestRunCancellation(input CancelRunInput) (Run, error) {
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM events WHERE run_id = ? AND type = 'run.cancel.requested'`, run.ID).Scan(&prior); err != nil {
 		return Run{}, err
 	}
+	nowMs := time.Now().UTC().Truncate(time.Millisecond).UnixMilli()
 	if prior == 0 {
-		nowMs := time.Now().UTC().Truncate(time.Millisecond).UnixMilli()
 		if _, err := appendEvent(tx, Event{Type: "run.cancel.requested", WorkstreamID: run.WorkstreamID, NotebookID: run.NotebookID,
 			CellID: run.CellID, RunID: run.ID, SessionID: run.SessionID}, nowMs, map[string]any{"requested_by": input.RequestedBy}); err != nil {
+			return Run{}, err
+		}
+	}
+	// No ACP prompt has been sent while a Run is preparing, so there is no
+	// worker to observe the cancellation: it is terminal now, and a worker
+	// that later tries to attach or start it is refused.
+	if run.Status == "preparing" {
+		reason := "cancelled before dispatch"
+		if run, err = updateRunStatusTx(tx, run, "cancelled", nowMs, reason); err != nil {
+			return Run{}, err
+		}
+		if _, err := appendEvent(tx, Event{Type: "run.status.changed", WorkstreamID: run.WorkstreamID, NotebookID: run.NotebookID,
+			CellID: run.CellID, RunID: run.ID, SessionID: run.SessionID}, nowMs,
+			map[string]any{"status": "cancelled", "failure_reason": reason, "phase": "preparing"}); err != nil {
 			return Run{}, err
 		}
 	}
@@ -877,6 +893,9 @@ func (s *Store) StartRun(input StartRunInput) (Run, error) {
 	if run.SessionID != input.SessionID || !leaseCoversWorkstreamTx(tx, input.SessionID, run.WorkstreamID, workstreamID) {
 		return Run{}, errors.New("run is not attached to this leased session")
 	}
+	if run.Status == "cancelled" {
+		return Run{}, fmt.Errorf("run %q was cancelled before it started", input.RunID)
+	}
 	if run.Status != "preparing" {
 		return Run{}, fmt.Errorf("run %q cannot start from %s", input.RunID, run.Status)
 	}
@@ -975,7 +994,7 @@ func (s *Store) FailPreparedRun(input FailPreparedRunInput) (Run, error) {
 		}
 		return Run{}, err
 	}
-	if run.Status == "failed" {
+	if run.Status == "failed" || run.Status == "cancelled" {
 		return run, nil
 	}
 	if run.Status != "preparing" {
@@ -1002,6 +1021,7 @@ func (s *Store) FailPreparedRun(input FailPreparedRunInput) (Run, error) {
 // Emacs process from attaching a freshly-created native session incorrectly.
 func (s *Store) AttachRunToSession(input AttachRunInput) (Run, error) {
 	input.SessionID, input.Owner, input.RunID = strings.TrimSpace(input.SessionID), strings.TrimSpace(input.Owner), strings.TrimSpace(input.RunID)
+	input.CompactionID = strings.TrimSpace(input.CompactionID)
 	if input.SessionID == "" || input.Owner == "" || input.Epoch < 1 || input.RunID == "" {
 		return Run{}, errors.New("run attachment requires a run and current worker lease")
 	}
@@ -1024,6 +1044,9 @@ func (s *Store) AttachRunToSession(input AttachRunInput) (Run, error) {
 			return Run{}, fmt.Errorf("run %q not found", input.RunID)
 		}
 		return Run{}, err
+	}
+	if run.Status == "cancelled" {
+		return Run{}, fmt.Errorf("run %q was cancelled before it started", input.RunID)
 	}
 	if run.Status != "preparing" || run.SessionID != "" {
 		return Run{}, fmt.Errorf("run %q is already attached or no longer preparing", input.RunID)
@@ -1050,6 +1073,27 @@ func (s *Store) AttachRunToSession(input AttachRunInput) (Run, error) {
 		return Run{}, err
 	} else if found {
 		if err := bindSessionNameTx(tx, intent, input.SessionID, run.WorkstreamID, nowMs); err != nil {
+			return Run{}, err
+		}
+	}
+	if input.CompactionID != "" {
+		var oldSessionID, status, oldWorkstreamID, newNativeID string
+		if err := tx.QueryRow(`SELECT c.session_id, c.status, old.workstream_id, fresh.native_session_id
+			FROM session_compactions c JOIN sessions old ON old.id = c.session_id
+			JOIN sessions fresh ON fresh.id = ? WHERE c.id = ?`, input.SessionID, input.CompactionID).
+			Scan(&oldSessionID, &status, &oldWorkstreamID, &newNativeID); err != nil {
+			return Run{}, fmt.Errorf("resolve session compaction: %w", err)
+		}
+		if status != "pending" || oldSessionID == input.SessionID || oldWorkstreamID != run.WorkstreamID {
+			return Run{}, errors.New("session compaction does not match this replacement session")
+		}
+		if _, err := tx.Exec(`UPDATE session_compactions SET status = 'completed', new_native_session_id = ?,
+			finished_at = ? WHERE id = ? AND status = 'pending'`, newNativeID, nowMs, input.CompactionID); err != nil {
+			return Run{}, err
+		}
+		if _, err := appendEvent(tx, Event{Type: "session.compacted", WorkstreamID: run.WorkstreamID,
+			RunID: run.ID, SessionID: input.SessionID}, nowMs,
+			map[string]any{"compaction_id": input.CompactionID, "previous_session_id": oldSessionID}); err != nil {
 			return Run{}, err
 		}
 	}
@@ -1184,6 +1228,11 @@ func (s *Store) ReportWorkerEvents(input ReportWorkerEventsInput) ([]Event, erro
 	}
 	if _, err := tx.Exec(`UPDATE sessions SET last_seen_at = ?, version = version + 1 WHERE id = ?`, nowMs, input.SessionID); err != nil {
 		return nil, err
+	}
+	if input.SessionUsage != nil {
+		if err := recordSessionUsageTx(tx, input.SessionID, *input.SessionUsage, nowMs); err != nil {
+			return nil, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err

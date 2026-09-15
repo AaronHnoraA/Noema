@@ -1,4 +1,6 @@
 export declare const SESSION_KEYWORDS: readonly ["continue", "fork", "fresh"];
+export declare const SESSION_KEYWORD_LOOKALIKES: Readonly<Record<string, "continue" | "fork" | "fresh">>;
+export declare function sessionKeywordSuggestion(value: unknown): "" | "continue" | "fork" | "fresh";
 export declare const PI_SESSION_NAME: "pi";
 
 export type SessionDirective =
@@ -29,7 +31,8 @@ export declare function deriveSessionRoute(input: {
   notebook?: unknown;
   workNodeId?: string;
   title?: string;
-  agent: string;
+  agent?: string;
+  defaultAgent?: string;
   directive?: SessionDirective;
   requestedName?: string;
   runs?: unknown[];

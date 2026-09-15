@@ -1804,6 +1804,20 @@ async function apiSelectJupyterCell(body) {
   return { ok: true, ...payload };
 }
 
+async function apiOpenResearchSession(body) {
+  const source = body && typeof body === "object" ? body : {};
+  const runId = String(source.runId || "").trim();
+  const sessionId = String(source.sessionId || "").trim();
+  const name = String(source.name || source.sessionName || "").trim();
+  const root = resolveShellPath(String(source.root || source.projectRoot || "").trim());
+  if (!runId && !sessionId && !name) {
+    throw new Error("Opening an agent buffer requires a Run, Session, or session name");
+  }
+  const payload = { runId, sessionId, name, root };
+  gatewayNotify("aaronnote.event", { type: "research-agent-buffer", payload });
+  return { ok: true, ...payload };
+}
+
 async function apiCurrentFile(body) {
   const raw = String((body && typeof body === "object" ? body.file : body) || "").trim();
   const client = String((body && typeof body === "object" ? body.client : "") || "").trim();
@@ -2307,6 +2321,7 @@ const apiRouter = new ApiRouter().register({
     apiOpenInEmacs,
     apiOpenSurface,
     apiSelectJupyterCell,
+    apiOpenResearchSession,
     apiCurrentFile,
     apiEmacsInputFocus,
     apiEmacsUiState,
@@ -2860,6 +2875,7 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
     },
     research: {
       resolveCell: function(body) { return call("aaronnote:api:research:cell:resolve", [body || {}]); },
+      cancelRun: function(body) { return call("aaronnote:api:research:run:cancel", [body || {}]); },
     },
     latex: {
       defaults: function(body) { return call("aaronnote:api:latex:defaults", [body || {}]); },
@@ -2928,6 +2944,9 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
       openSurface: function(body) { return call("aaronnote:api:emacs:surface", [body || {}]); },
       selectJupyterCell: function(body) {
         return call("aaronnote:api:emacs:jupyter-cell", [body || {}]);
+      },
+      openResearchSession: function(body) {
+        return call("aaronnote:api:emacs:research-session", [body || {}]);
       },
       currentFile: function(file) {
         return call("aaronnote:api:emacs:current-file", [
@@ -3342,6 +3361,7 @@ const server = createServer(async (req, res) => {
       }
       const root = String(url.searchParams.get("root") || noteRoot);
       const after = Math.max(0, Number(url.searchParams.get("after")) || 0);
+      const detail = url.searchParams.get("detail") === "full" ? "full" : "status";
       let closed = false;
       req.on("close", () => { closed = true; });
       res.writeHead(200, {
@@ -3352,7 +3372,8 @@ const server = createServer(async (req, res) => {
       res.write("retry: 1000\n\n");
       try {
         await pumpResearchRunStream({
-          service: researchRuntime, root, runId, after, closed: () => closed,
+          service: researchRuntime, root, runId, after, detail,
+          pollMs: detail === "status" ? 500 : 150, closed: () => closed,
           write(snapshot) {
             if (!closed) sendSse(res, "snapshot", snapshot);
           },

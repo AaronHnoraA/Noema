@@ -2,10 +2,8 @@
 
 ;;; Commentary:
 ;;
-;; Noema internalizes the complete source trees of gptel, acp.el,
-;; shell-maker, agent-shell and Magent.  This module is the single place that
-;; exposes those trees to Emacs.  They are not package-manager dependencies and
-;; must not be resolved from `package-user-dir'.
+;; gptel and Magent remain embedded.  agent-shell, acp.el and shell-maker are
+;; pristine package-vc dependencies; never put their retired copies on load-path.
 
 ;;; Code:
 
@@ -19,9 +17,6 @@
 
 (defconst noema-upstream-load-paths
   '("upstream/gptel"
-    "upstream/acp"
-    "upstream/shell-maker"
-    "upstream/agent-shell"
     "upstream/magent/lisp"
     "upstream/codex-cli"
     "upstream/claude-code-ide")
@@ -29,6 +24,13 @@
 
 (defun noema-upstream-activate ()
   "Put Noema's embedded upstream source trees before external packages."
+  ;; Also remove obsolete paths on config reload; do not unload live sessions.
+  (dolist (name '("acp" "shell-maker" "agent-shell"))
+    (let ((retired (expand-file-name (concat "upstream/" name) noema-upstream-root)))
+      (setq load-path
+            (cl-remove-if (lambda (path)
+                            (and path (equal (directory-file-name (expand-file-name path)) retired)))
+                          load-path))))
   (dolist (relative (reverse noema-upstream-load-paths))
     (let ((directory (file-name-as-directory
                       (expand-file-name relative noema-upstream-root))))

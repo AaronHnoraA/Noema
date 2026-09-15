@@ -3,7 +3,7 @@
 ;;; Commentary:
 ;;
 ;; Emacs is Noema's product host.  Embedded gptel supplies composition UX;
-;; embedded agent-shell/acp supplies structured agent sessions; embedded Magent
+;; package-managed agent-shell/acp supplies structured agent sessions; embedded Magent
 ;; supplies the local runtime, queue, ledger and optional gptel-backed agent.
 
 ;;; Code:
@@ -11,6 +11,8 @@
 (require 'noema-upstream)
 (require 'noema-compose)
 (require 'noema-agent-acp)
+(require 'noema-api)
+(require 'noema-capability-ui)
 
 ;;;###autoload
 (defun noema ()

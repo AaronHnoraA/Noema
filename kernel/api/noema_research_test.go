@@ -260,7 +260,7 @@ func TestNoemaResearchRoutes(t *testing.T) {
 		"root": root,
 		"permission": map[string]any{
 			"sessionId": sessionID, "owner": "emacs:api", "epoch": epoch, "runId": runID, "nativeRequestId": "request-api-1",
-			"action":  map[string]any{"kind": "edit", "paths": []any{"notes/a.md"}},
+			"action":  map[string]any{"kind": "edit", "paths": []any{"../a.md"}},
 			"options": []any{map[string]any{"optionId": "allow_once"}, map[string]any{"optionId": "reject_once"}},
 		},
 	})

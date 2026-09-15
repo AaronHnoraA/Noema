@@ -25,6 +25,9 @@ export function createKernelResearchProvider({ baseUrl, fetchImpl = globalThis.f
   }
 
   return {
+    probeMCP({ root, config, scope }) {
+      return post("mcp/probe", { root, config, ...(scope ? { scope } : {}) });
+    },
     index({ root, path, actor = "node", reason = "" }) {
       return post("index", { root, path, actor, reason });
     },
@@ -35,6 +38,22 @@ export function createKernelResearchProvider({ baseUrl, fetchImpl = globalThis.f
       const data = await post("events", { root, notebookId, after, limit });
       return Array.isArray(data.events) ? data.events : [];
     },
+	cacheStatus({ root }) {
+	  return post("cache/status", { root });
+	},
+	maintainCache({ root, policy = undefined }) {
+	  return post("cache/maintain", { root, ...(policy ? { policy } : {}) });
+	},
+	queueNotebookWriteback({ root, writeback }) {
+	  return post("writeback/queue", { root, writeback });
+	},
+	async claimNotebookWritebacks({ root }) {
+	  const data = await post("writeback/claim", { root });
+	  return Array.isArray(data.writebacks) ? data.writebacks : [];
+	},
+	completeNotebookWriteback({ root, writeback }) {
+	  return post("writeback/complete", { root, writeback });
+	},
 	resolveCell({ root, notebookId, cellId }) {
 	  return post("cell/resolve", { root, notebookId, cellId });
 	},
@@ -49,6 +68,12 @@ export function createKernelResearchProvider({ baseUrl, fetchImpl = globalThis.f
     session({ root, id }) {
       return post("session/get", { root, id });
     },
+	sessionContext({ root, sessionId }) {
+	  return post("session/context", { root, sessionId });
+	},
+	requestSessionCompaction({ root, sessionId }) {
+	  return post("session/compact", { root, sessionId });
+	},
 	async sessionNames({ root, includeArchived = false }) {
 	  const data = await post("session/names", { root, includeArchived });
 	  return Array.isArray(data.names) ? data.names : [];
@@ -71,6 +96,9 @@ export function createKernelResearchProvider({ baseUrl, fetchImpl = globalThis.f
 	async claimCoordinatorRequests({ root, owner }) {
 	  const data = await post("coordinator/claim", { root, owner });
 	  return Array.isArray(data.requests) ? data.requests : [];
+	},
+	completeCoordinatorRequest({ root, id, owner, state, reason = "" }) {
+	  return post("coordinator/complete", { root, id, owner, state, reason });
 	},
 	beginManualIntervention({ root, intervention }) {
 	  return post("session/manual/begin", { root, intervention });

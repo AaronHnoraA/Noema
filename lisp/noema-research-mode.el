@@ -27,6 +27,8 @@
 (require 'url-util)
 (require 'transient)
 (require 'noema-research)
+(require 'noema-api)
+(require 'noema-research-completion)
 
 (declare-function my/noema-api-call "init-aaronnote" (channel args callback &optional timeout))
 (declare-function my/noema--ensure-server "init-aaronnote" (&optional callback))
@@ -50,13 +52,16 @@
 (autoload 'noema-research-attention "noema-research-inspector" nil t)
 (autoload 'noema-research-propose-with-magent "noema-research-synthesis" nil t)
 (autoload 'noema-research-settings "noema-research-settings" nil t)
+(autoload 'noema-capability-manager "noema-capability-ui" nil t)
+(autoload 'noema-skill-manager "noema-capability-ui" nil t)
+(autoload 'noema-mcp-manager "noema-capability-ui" nil t)
 (autoload 'noema-research-graph-dock "noema-research-graph")
-(autoload 'noema-agent-worker-run-work-cell "noema-agent-worker" nil t)
 (autoload 'noema-sessions "noema-sessions" nil t)
 (declare-function noema-pi-router-note-visit "noema-pi-router" (&optional buffer))
 (declare-function file-notify-add-watch "filenotify" (file flags callback))
 (declare-function file-notify-rm-watch "filenotify" (descriptor))
 (autoload 'noema-agent-worker-cancel-run "noema-agent-worker" nil t)
+(autoload 'noema-agent-worker-cancel-cell "noema-agent-worker")
 (autoload 'noema-agent-acp-known-agents "noema-agent-acp" nil nil)
 
 (defgroup noema-research nil
@@ -598,12 +603,16 @@ the edit created."
 ;;;; Decorations
 
 (defun noema-research--latest-run-status (cell)
-  "Return the terminal Run status stored in CELL outputs, if any."
-  (cl-loop for output in (reverse (noema-research-cell-outputs cell))
-           for data = (noema-research--get output "data")
-           for run = (noema-research--get data "application/vnd.noema.run+json")
-           for status = (noema-research--string (noema-research--get run "status"))
-           when status return status))
+  "Return CELL's latest known Run status, without reviving a finished Run."
+  (let* ((persisted (noema-research-cell-latest-run cell))
+         (route (and (boundp 'noema-research--session-labels)
+                     (hash-table-p noema-research--session-labels)
+                     (gethash (noema-research-cell-id cell) noema-research--session-labels)))
+         (live (noema-research--route-field route "latestRun")))
+    (if (and live (not (and (equal (noema-research--route-field live "id") (plist-get persisted :id))
+                            (member (plist-get persisted :status) '("completed" "cancelled" "failed" "interrupted")))))
+        (noema-research--route-field live "status")
+      (plist-get persisted :status))))
 
 (defun noema-research--decoration (cell)
   "Return the header decoration string for CELL."
@@ -691,11 +700,21 @@ the edit created."
   (when (and buffer-file-name noema-research--document
              (fboundp 'my/noema-api-call) (bound-and-true-p my/noema--ready))
     (let* ((buffer (current-buffer))
+           (preview (copy-hash-table (noema-research-mode--sync)))
+           (tick (buffer-chars-modified-tick))
            (root (noema-research-repository-root buffer-file-name))
            (cell-ids (delq nil (mapcar (lambda (cell)
                                          (and (equal (noema-research-cell-kind cell noema-research--document) "work")
                                               (noema-research-cell-id cell)))
                                        (noema-research-cells noema-research--document)))))
+      ;; Routing needs source/structure, not a second copy of large outputs.
+      (puthash "cells" (vconcat
+                         (mapcar (lambda (cell)
+                                   (let ((copy (copy-hash-table cell)))
+                                     (when (equal (gethash "cell_type" copy) "code")
+                                       (puthash "outputs" [] copy))
+                                     copy))
+                                 (noema-research-cells preview))) preview)
       (my/noema-api-call
        "aaronnote:api:research:session:names" (vector `((cwd . ,root)))
        (lambda (result error-object)
@@ -709,9 +728,11 @@ the edit created."
         (my/noema-api-call
          "aaronnote:api:research:session:resolve"
          (vector `((file . ,(expand-file-name buffer-file-name)) (cwd . ,root)
+                   (notebook . ,preview)
                    (cellIds . ,(vconcat cell-ids))))
          (lambda (result error-object)
-           (when (and (buffer-live-p buffer) (not error-object))
+           (when (and (buffer-live-p buffer) (not error-object)
+                      (= tick (buffer-chars-modified-tick buffer)))
              (with-current-buffer buffer
                (let ((labels (make-hash-table :test #'equal)))
                  (dolist (route (append (noema-research--route-field result "sessions") nil))
@@ -876,6 +897,7 @@ The directory is watched because atomic writes replace the file."
 
 (defun noema-research--schedule-decorations (&rest _)
   "Refresh decorations once Emacs is idle."
+  (noema-research--schedule-session-routes)
   (unless noema-research--decoration-timer
     (let ((buffer (current-buffer)))
       (setq noema-research--decoration-timer
@@ -984,11 +1006,29 @@ external changes."
       (setq-local noema-research--revision (noema-research-file-revision buffer-file-name))
       (setq-local noema-research--base (noema-research-serialize disk))
       (set-visited-file-modtime)
-      (noema-research-mode--refresh-decorations)))
+      (noema-research-mode--refresh-decorations)
+      (noema-research--notify-graph)
+      (noema-research--schedule-session-routes)))
   noema-research--document)
 
 (defconst noema-research-session-keywords '("continue" "fork" "fresh")
   "`@@session' keywords; every other value is a D-031 session name.")
+
+(defconst noema-research-session-keyword-lookalikes
+  '(("refresh" . "fresh") ("renew" . "fresh") ("new" . "fresh") ("reset" . "fresh")
+    ("restart" . "fresh") ("resume" . "continue") ("cont" . "continue")
+    ("continued" . "continue") ("same" . "continue") ("forked" . "fork"))
+  "Words written for a `@@session' keyword, refused as names.
+A mistyped keyword then fails loudly instead of silently creating a named
+session.  The table is shared with Node and the Go kernel.")
+
+(defun noema-research-session-keyword-suggestion (value)
+  "Return the `@@session' keyword VALUE was probably meant to be, or nil."
+  (when (stringp value)
+    (let ((word (downcase (string-trim value))))
+      (if (member word noema-research-session-keywords)
+          word
+        (cdr (assoc word noema-research-session-keyword-lookalikes))))))
 
 (defun noema-research--session-name-valid-p (name &optional allow-pi)
   "Return non-nil when NAME is a valid session name.
@@ -996,7 +1036,7 @@ The reserved coordinator name `pi' is accepted only with ALLOW-PI."
   (and (stringp name)
        (<= (length name) 80)
        (string-match-p "\\`[[:alnum:]][[:alnum:]._/@-]*\\'" name)
-       (not (member name noema-research-session-keywords))
+       (not (noema-research-session-keyword-suggestion name))
        (or allow-pi (not (equal name "pi")))))
 
 (defun noema-research-session-directive-valid-p (value)
@@ -1041,7 +1081,11 @@ It is a keyword, a name, or parent:child (parent may be empty)."
                     (push (format "%s: invalid @@%s value" (noema-research-cell-id cell) name) errors))
                    ((and (equal name "session")
                          (not (noema-research-session-directive-valid-p value)))
-                    (push (format "%s: invalid @@session value" (noema-research-cell-id cell)) errors))
+                    (push (if-let* ((meant (noema-research-session-keyword-suggestion value)))
+                              (format "%s: @@session(%s) is not a keyword; did you mean @@session(%s)?"
+                                      (noema-research-cell-id cell) value meant)
+                            (format "%s: invalid @@session value" (noema-research-cell-id cell)))
+                          errors))
                    ((and (equal name "ctx")
                          (not
                           (or (member value '("lineage" "depends" "git.diff"
@@ -1257,7 +1301,7 @@ project files are linked back to the Work as immutable Artifacts."
 
 ;;;###autoload
 (defun noema-research-open-workspace (&optional focus-graph)
-  "Compatibility name for opening the temporary Graph pop-up.
+  "Compatibility name for opening the Graph dock below JuText.
 FOCUS-GRAPH is accepted for callers from the earlier workspace layout."
   (interactive "P")
   (unless (derived-mode-p 'noema-research-mode)
@@ -1323,23 +1367,7 @@ own.  Focus stays in JuText."
 (defun noema-research-execute-current ()
   "Run the current D-023 work block through the configured ACP agent."
   (interactive)
-  (let* ((cell (noema-research--require-cell))
-         (node (noema-research-work-node-for-cell
-                noema-research--document cell)))
-    (if (and (equal (noema-research--get cell "cell_type") "code")
-             (equal (noema-research-work-node-field node "kind") "work"))
-        (progn
-      (when (noema-research-work-prompt-empty-p cell)
-        (user-error "This work block has no prompt yet; write what the agent should do"))
-      (unless buffer-file-name
-            (user-error "This work block has no canonical .noema file"))
-      (when (buffer-modified-p) (save-buffer))
-      (let ((default-directory
-             (noema-research-repository-root buffer-file-name)))
-        (noema-agent-worker-run-work-cell
-         (expand-file-name buffer-file-name)
-             (noema-research-cell-id cell))))
-      (user-error "C-c C-c only runs a work block"))))
+  (noema-run-cell))
 
 (defun noema-research-execute-all ()
   "Reject notebook-style run-all for a D-023 work document."
@@ -1374,9 +1402,19 @@ own.  Focus stays in JuText."
   (call-interactively #'noema-agent-worker-cancel-run))
 
 (defun noema-research-interrupt-current ()
-  "Cancel an active agent Run for this work document."
+  "Cancel the Noema execution of the work cell at point.
+A running Run is cancelled, a queued one is dropped, and one still being
+prepared is cancelled as soon as it exists."
   (interactive)
-  (call-interactively #'noema-agent-worker-cancel-run))
+  (let* ((cell (noema-research--require-cell))
+         (what (and buffer-file-name
+                    (noema-agent-worker-cancel-cell buffer-file-name
+                                                    (noema-research-cell-id cell)))))
+    (pcase what
+      ('run (message "Cancelling this cell's Run"))
+      ('queued (message "Dropped this cell's queued execution"))
+      ('preparing (message "This cell's Run will be cancelled as soon as it is prepared"))
+      (_ (user-error "This cell has no running or queued Noema execution")))))
 
 (defun noema-research-restart-kernel ()
   "Reject Jupyter restart for `.noema'."
@@ -1405,22 +1443,6 @@ SNAPSHOT is ignored; the `.noema' file is the sole durable authority."
   (noema-research-merge-disk-outputs))
 
 ;;;; Commands
-
-(defun noema-research-completion-at-point ()
-  "Complete D-023 directive values on the current line."
-  (let ((line (buffer-substring-no-properties (line-beginning-position) (point))))
-    (when (string-match "\\`[ \t]*@@\\(agent\\|session\\|ctx\\|skill\\)(\\([^)]*\\)\\'" line)
-      (let* ((name (match-string 1 line))
-             (beg (+ (line-beginning-position) (match-beginning 2)))
-             (candidates
-              (pcase name
-                ("agent" (noema-agent-acp-known-agents))
-                ("session" (append noema-research-session-keywords
-                                   noema-research--session-names))
-                ("ctx" '("lineage" "depends" "git.diff" "handoff.latest"
-                         "cell:" "result:wn_" "file:" "note:" "artifact:art_"))
-                (_ nil))))
-        (when candidates (list beg (point) candidates :exclusive 'no))))))
 
 (defun noema-research-set-document-default-agent (agent)
   "Set the current work document's default AGENT."
@@ -1963,16 +1985,16 @@ DIRECTION is `parent' or `child'; ACTION is `add' or `remove'."
          (let ((other (noema-research-read-work-node
                        (format "Add %s of “%s”: " noun label) choices)))
            (if (eq direction 'parent)
-               (noema-research-op-link other id type)
-             (noema-research-op-link id other type)))))
+               (noema-link other id type)
+             (noema-link id other type)))))
       ('remove
        (unless linked (user-error "“%s” has no %s" label noun))
        (let ((other (noema-research-read-work-node
                      (format "Remove %s of “%s”: " noun label)
                      (noema-research--link-choices document id linked))))
          (if (eq direction 'parent)
-             (noema-research-op-unlink other id type)
-           (noema-research-op-unlink id other type)))))
+             (noema-unlink other id type)
+           (noema-unlink id other type)))))
     id))
 
 (defun noema-research--rewrite-relation (document id type)
@@ -2093,7 +2115,7 @@ With a prefix argument, also prompt for OUTCOME (empty clears it)."
   (let* ((id (noema-research--node-at-point))
          (reason (when (equal state "dropped")
                    (read-string "Reason (optional): "))))
-    (noema-research-op-set-state id state reason outcome)))
+    (noema-set-node-state id state reason outcome)))
 
 (defun noema-research--shift-block-at-point (direction)
   "Move the block at point one block in DIRECTION, keeping point inside it."
@@ -2278,6 +2300,8 @@ With a prefix argument, also prompt for OUTCOME (empty clears it)."
                                   (concat file ".noema")))))
     (when (file-exists-p path)
       (user-error "%s already exists" path))
+    (unless (locate-dominating-file (file-name-directory path) "noema.toml")
+      (noema-project-enable (file-name-directory path)))
     (noema-research-write-file path (noema-research-create-document title))
     (find-file path)
     (unless (derived-mode-p 'noema-research-mode)
@@ -2345,6 +2369,8 @@ explains a drop and is recorded on ID.  Return ID."
       '(menu-item "Branch…" noema-research-branch-menu))
     (define-key-after map [noema-inspect]
       '(menu-item "Inspect" noema-research-inspect))
+    (define-key-after map [noema-capabilities]
+      '(menu-item "Skill/MCP libraries…" noema-capability-manager))
     (define-key-after map [noema-settings]
       '(menu-item "Settings" noema-research-settings))
     map))
@@ -2382,7 +2408,7 @@ explains a drop and is recorded on ID.  Return ID."
       (define-key map (kbd (car binding)) (cdr binding)))
     (define-key map [mouse-3] #'noema-research-context-menu)
     (define-key map (kbd "C-c C-c") #'noema-research-execute-current)
-	(define-key map (kbd "C-c j r") #'noema-research-run-project-file)
+	(define-key map (kbd "C-c j r") #'noema-run-project-file)
     (define-key map (kbd "C-c C-o") #'noema-research-open-outputs)
     (define-key map (kbd "C-c C-z") #'noema-research-interrupt-current)
     (define-key map (kbd "C-c j x") #'noema-research-clear-current-output)
@@ -2396,6 +2422,7 @@ explains a drop and is recorded on ID.  Return ID."
     (define-key map (kbd "C-c j k") #'noema-research-change-work-node-kind)
     (define-key map (kbd "C-c j o") #'noema-research-set-work-outcome)
     (define-key map (kbd "C-c j B") #'noema-research-branch-menu)
+    (define-key map (kbd "C-c j C") #'noema-capability-manager)
     (define-key map (kbd "C-c j ,") #'noema-research-settings)
     (define-key map (kbd "C-c j S") #'noema-sessions)
     (define-key map (kbd "C-c j s") #'noema-research-pin-session)
@@ -2418,9 +2445,17 @@ explains a drop and is recorded on ID.  Return ID."
   (setq-local imenu-create-index-function #'noema-research--imenu-index)
   (setq-local require-final-newline nil)
   (setq-local buffer-file-coding-system 'utf-8-unix)
-  (setq-local revert-buffer-function #'noema-research--revert)
+  (setq-local revert-buffer-function #'noema-research--revert))
+
+(defun noema-research--initialize-document ()
+  "Initialize a real JuText editing buffer after its mode hooks are enabled.
+Preview consumers such as Company/Yasnippet use `delay-mode-hooks' to
+borrow syntax highlighting.  They must not load the visited document,
+register file watches, start agents, or rearrange the workspace."
   (add-hook 'completion-at-point-functions
             #'noema-research-completion-at-point nil t)
+  (add-hook 'kill-buffer-hook #'noema-research-completion--cancel nil t)
+  (noema-research-completion-refresh)
   (add-hook 'write-contents-functions #'noema-research-mode--write-contents nil t)
   (add-hook 'after-change-functions #'noema-research--schedule-decorations nil t)
   (add-hook 'kill-buffer-hook #'noema-research--cancel-output-timer nil t)
@@ -2455,6 +2490,9 @@ explains a drop and is recorded on ID.  Return ID."
                      noema-research-open-graph-on-visit)
                  (not noninteractive))
         (noema-research--schedule-default-output)))))
+
+;; Run before ordinary user hooks, but respect syntax-only mode activation.
+(add-hook 'noema-research-mode-hook #'noema-research--initialize-document -100)
 
 (provide 'noema-research-mode)
 

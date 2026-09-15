@@ -640,6 +640,8 @@ type NativeApi = {
   };
   research?: {
     resolveCell?: (body?: Record<string, unknown>) => Promise<unknown>;
+    cancelRun?: (body?: Record<string, unknown>) => Promise<unknown>;
+    checkRunCompletion?: (body?: Record<string, unknown>) => Promise<unknown>;
   };
   latex?: {
     defaults?: (body?: Record<string, unknown>) => Promise<unknown>;
@@ -667,6 +669,7 @@ type NativeApi = {
     open?: (body: { file: string; tag?: string; line?: number; col?: number }) => Promise<unknown>;
     openSurface?: (body: { path: string }) => Promise<unknown>;
     selectJupyterCell?: (body: { scriptFile: string; cellId: string }) => Promise<unknown>;
+    openResearchSession?: (body: Record<string, unknown>) => Promise<unknown>;
     currentFile?: (body: string | { file: string; client?: string }) => Promise<unknown>;
     inputFocus?: (body: { client?: string; file?: string }) => Promise<unknown>;
     uiState?: (body: Record<string, unknown>) => Promise<unknown>;
@@ -1396,9 +1399,22 @@ export const api = {
     },
   },
   research: {
+    async checkRunCompletion(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+      const call = window.aaronnoteApi?.research?.checkRunCompletion;
+      const result = call ? await call(body)
+        : await callHttpApi("aaronnote:api:research:run:check-completion", [body], "Run completion check failed");
+      return ensureOk(result as Record<string, unknown>, "Run completion check failed");
+    },
     async resolveCell(body: Record<string, unknown>): Promise<Record<string, unknown>> {
       const call = requireMethod(nativeApi().research?.resolveCell, "Research cell link");
       return ensureOk(await call(body) as Record<string, unknown>, "Research cell link failed");
+    },
+    async cancelRun(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+      const call = window.aaronnoteApi?.research?.cancelRun;
+      const result = call
+        ? await call(body)
+        : await callHttpApi("aaronnote:api:research:run:cancel", [body], "Cancel Research Run failed");
+      return ensureOk(result as Record<string, unknown>, "Cancel Research Run failed");
     },
   },
   latex: {
@@ -1517,6 +1533,13 @@ export const api = {
         ? await call(body)
         : await callHttpApi("aaronnote:api:emacs:jupyter-cell", [body], "Select Jupyter cell in Emacs failed");
       ensureOk(result, "Select Jupyter cell in Emacs failed");
+    },
+    async openResearchSession(body: Record<string, unknown>): Promise<void> {
+      const call = window.aaronnoteApi?.emacs?.openResearchSession;
+      const result = call
+        ? await call(body)
+        : await callHttpApi("aaronnote:api:emacs:research-session", [body], "Open agent buffer failed");
+      ensureOk(result, "Open agent buffer failed");
     },
     async currentFile(file: string, client = ""): Promise<void> {
       const call = window.aaronnoteApi?.emacs?.currentFile;

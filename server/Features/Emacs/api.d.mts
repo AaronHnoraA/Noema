@@ -2,6 +2,7 @@ export interface EmacsApiDependencies {
   apiOpenInEmacs: (file: unknown, line?: unknown, col?: unknown, tag?: unknown) => unknown;
   apiOpenSurface: (body: unknown) => unknown;
   apiSelectJupyterCell: (body: unknown) => unknown;
+	apiOpenResearchSession?: (body: unknown) => unknown;
   apiCurrentFile: (file: unknown) => unknown;
   apiEmacsInputFocus: (body: unknown) => unknown;
   apiEmacsUiState: (body: unknown) => unknown;

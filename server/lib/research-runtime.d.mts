@@ -19,13 +19,23 @@ export function manualTUICommand(session: Record<string, any>): string[];
 type RuntimeMethod = (body?: Record<string, any>) => Promise<Record<string, any>>;
 
 export type ResearchRuntimeService = {
+	cacheStatus: RuntimeMethod;
+	maintainCache: RuntimeMethod;
   resolveCell: RuntimeMethod;
+  capabilities: RuntimeMethod;
+  capabilityConfig: RuntimeMethod;
+  installSkill: RuntimeMethod;
+  prepareSkill: RuntimeMethod;
+  capabilityFiles: RuntimeMethod;
+  probeMCP: RuntimeMethod;
+  mutateCapability: RuntimeMethod;
   prepareRun: RuntimeMethod;
   runProjectFile: RuntimeMethod;
   runs: RuntimeMethod;
   run: RuntimeMethod;
   liveRun: RuntimeMethod;
   cancelRun: RuntimeMethod;
+  checkRunCompletion: RuntimeMethod;
   failPreparingRun: RuntimeMethod;
   readArtifact: RuntimeMethod;
   importArtifact: RuntimeMethod;
@@ -79,6 +89,8 @@ export type ResearchRuntimeService = {
   promoteSession: RuntimeMethod;
   sessions: RuntimeMethod;
   session: RuntimeMethod;
+	sessionContext: RuntimeMethod;
+	compactSession: RuntimeMethod;
   sessionNames: RuntimeMethod;
   sessionName: RuntimeMethod;
   declareSessionName: RuntimeMethod;
@@ -88,6 +100,7 @@ export type ResearchRuntimeService = {
   resolveSessions: RuntimeMethod;
   coordinatorEndpoint: RuntimeMethod;
   claimCoordinatorRequests: RuntimeMethod;
+	completeCoordinatorRequest: RuntimeMethod;
   takeoverSession: RuntimeMethod;
   handbackSession: RuntimeMethod;
   indexHistory: RuntimeMethod;

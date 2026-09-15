@@ -1,4 +1,9 @@
 # Dependencies and generated output
+# Local, transitional symlinks for Emacs sessions started before package migration.
+# The source trees are retired; clean startup uses package-vc under elpa/.
+/upstream/agent-shell
+/upstream/acp
+/upstream/shell-maker
 node_modules/
 build/
 dist/

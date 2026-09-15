@@ -7,6 +7,7 @@ Noema is the source of truth for the static assets it consumes:
 - `templates/noema/`, `templates/latex/`, and `templates/tex/`: note and
   LaTeX templates shared by Noema and Emacs
 - `katex-macros/`: global TeX macros used by KaTeX
+- `skills/`: built-in agent Skills discovered by the Noema capability resolver
 - `prose-accepted-words.txt`: accepted words for prose diagnostics
 
 The Emacs configuration links these shared subdirectories from its historical

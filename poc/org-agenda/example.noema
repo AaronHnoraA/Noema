@@ -1,0 +1,124 @@
+{
+  "cells": [
+    {
+      "cell_type": "markdown",
+      "id": "cell_question",
+      "metadata": {
+        "noema_research": {
+          "work_node_id": "wn_question"
+        }
+      },
+      "source": "Research prompt; no scheduling control is sent to the agent."
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "cell_alternative",
+      "metadata": {
+        "noema_research": {
+          "work_node_id": "wn_alternative"
+        }
+      },
+      "outputs": [],
+      "source": "Research prompt; no scheduling control is sent to the agent."
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "cell_proof",
+      "metadata": {
+        "noema_research": {
+          "work_node_id": "wn_proof"
+        }
+      },
+      "outputs": [],
+      "source": "Research prompt; no scheduling control is sent to the agent."
+    },
+    {
+      "cell_type": "markdown",
+      "id": "cell_review",
+      "metadata": {
+        "noema_research": {
+          "work_node_id": "wn_review"
+        }
+      },
+      "source": "Research prompt; no scheduling control is sent to the agent."
+    }
+  ],
+  "metadata": {
+    "noema_research": {
+      "schema": "noema.work-document/2",
+      "notebook_id": "nb_agenda_poc",
+      "workstream_id": "ws_agenda_poc",
+      "title": "Spectral research DAG",
+      "work_nodes": [
+        {
+          "id": "wn_question",
+          "kind": "question",
+          "title": "Can we improve the bound?"
+        },
+        {
+          "id": "wn_proof",
+          "kind": "work",
+          "title": "Ask the agent to explore the spectral proof",
+          "state": "open",
+          "agenda": {
+            "sche": "2026-09-15",
+            "ddl": "2026-09-17",
+            "prio": "A",
+            "project": "Spectral research"
+          }
+        },
+        {
+          "id": "wn_alternative",
+          "kind": "work",
+          "title": "Explore a coupling argument",
+          "state": "open",
+          "agenda": {
+            "sche": "2026-09-16",
+            "prio": "B",
+            "project": "Spectral research"
+          }
+        },
+        {
+          "id": "wn_review",
+          "kind": "checkpoint",
+          "title": "Review the evidence and choose a branch",
+          "agenda": {
+            "sche": "2026-09-18",
+            "prio": "A",
+            "project": "Spectral research"
+          }
+        }
+      ],
+      "dependencies": [
+        {
+          "id": "dep_73b491885b0b2a67ac56b46a",
+          "from": "wn_question",
+          "to": "wn_proof",
+          "type": "lineage"
+        },
+        {
+          "id": "dep_95bba68e082507b45ee38692",
+          "from": "wn_question",
+          "to": "wn_alternative",
+          "type": "lineage"
+        },
+        {
+          "id": "dep_1dc08bbe1f6af9dc09ad5ab5",
+          "from": "wn_proof",
+          "to": "wn_review",
+          "type": "lineage"
+        },
+        {
+          "id": "dep_94fe6c7a5fa0ea7c7136b1ee",
+          "from": "wn_proof",
+          "to": "wn_review",
+          "type": "depends"
+        }
+      ]
+    }
+  },
+  "nbformat": 4,
+  "nbformat_minor": 5
+}

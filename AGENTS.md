@@ -49,13 +49,15 @@ copy or make AaronEmacs link back to one.
 full-project symlink. The retired `/Users/hc/HC/SOURCE/Noema`,
 `lisp/roam/Noema` and `site-lisp/ai-workbench` paths must not be reintroduced.
 
-## Internalized AI implementation
+## AI implementation ownership (updated by user-authorized migration, 2026-09-15)
 
-The complete gptel, agent-shell, acp.el, shell-maker and Magent source trees
-under `upstream/` are part of the canonical local source. Reuse them directly;
-do not install them as Noema package dependencies, mechanically rename their
-features, or write reduced replacements. Preserve their tests, docs, assets,
-prompts, attribution and licenses until real workflows justify pruning.
+gptel and Magent remain complete internalized source trees under `upstream/`.
+agent-shell, acp.el and shell-maker are pristine package-vc dependencies;
+their audited revisions are declared in AaronEmacs `init-ai-ide.el` and
+`package-lock.el`. Do not re-vendor or modify their package source. Preserve
+upstream features and complete implementations rather than writing replacements.
+The optional bounded hidden-render adapter is `lisp/noema-agent-render.el`,
+owned by the ACP boundary. Run its contract tests when upgrading the group.
 
 Noema product entry points and adapters live under `lisp/`. gptel owns the
 composition/context/rewrite UI, agent-shell + acp.el own structured process and

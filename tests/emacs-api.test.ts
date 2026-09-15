@@ -3,6 +3,26 @@ import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 import { createEmacsApiHandlers } from "../server/Features/Emacs/api.mjs";
 
 describe("Emacs host API", () => {
+  test("routes a Run to its interactive agent buffer", async () => {
+    const received: unknown[] = [];
+    const handlers = createEmacsApiHandlers({
+      apiOpenInEmacs: () => undefined,
+      apiOpenSurface: () => undefined,
+      apiSelectJupyterCell: () => undefined,
+      apiOpenResearchSession: async (body: unknown) => { received.push(body); return { ok: true }; },
+      apiCurrentFile: () => undefined,
+      apiEmacsInputFocus: () => undefined,
+      apiEmacsUiState: () => undefined,
+      apiEmacsKey: () => undefined,
+      apiSystemOpen: () => undefined,
+      apiEmacsZotero: () => undefined,
+      apiChooseNotePath: () => undefined,
+    });
+    const body = { runId: "run_1", sessionId: "ses_1", root: "/project" };
+    await expect(handlers["aaronnote:api:emacs:research-session"](body)).resolves.toEqual({ ok: true });
+    expect(received).toEqual([body]);
+  });
+
   test("delegates note-path selection to the Emacs gateway adapter", async () => {
     const received: unknown[] = [];
     const handlers = createEmacsApiHandlers({

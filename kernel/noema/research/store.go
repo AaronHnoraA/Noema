@@ -22,7 +22,7 @@ import (
 // StateDirName is the repository-local runtime state directory.
 const StateDirName = ".agent"
 
-const schemaVersion = "19"
+const schemaVersion = "20"
 
 // coordinatorRequestsTable is shared by fresh databases and the v19 rebuild.
 // D-032 queued Runs for the Pi coordinator; D-035 lets the Pi manager also ask
@@ -32,10 +32,13 @@ const coordinatorRequestsTable = `CREATE TABLE IF NOT EXISTS coordinator_request
 		kind        TEXT NOT NULL CHECK (kind IN ('run.start', 'session.cancel', 'session.close')),
 		payload_json TEXT NOT NULL,
 		actor       TEXT NOT NULL,
-		state       TEXT NOT NULL CHECK (state IN ('pending', 'claimed')),
+		state       TEXT NOT NULL CHECK (state IN ('pending', 'claimed', 'done', 'failed')),
 		claimed_by  TEXT NOT NULL DEFAULT '',
 		created_at  INTEGER NOT NULL,
 		claimed_at  INTEGER,
+		lease_expires_at INTEGER,
+		finished_at INTEGER,
+		failure_reason TEXT NOT NULL DEFAULT '',
 		version     INTEGER NOT NULL DEFAULT 1
 	)`
 
@@ -68,6 +71,60 @@ var schemaStatements = []string{
 	// carries them out through the ordinary worker, so Pi never drives a process.
 	coordinatorRequestsTable,
 	`CREATE INDEX IF NOT EXISTS idx_coordinator_requests_pending ON coordinator_requests(state, created_at)`,
+	`CREATE TABLE IF NOT EXISTS run_stream_cache (
+		run_id      TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+		seq         INTEGER NOT NULL,
+		payload_json TEXT NOT NULL,
+		byte_count  INTEGER NOT NULL CHECK (byte_count >= 0),
+		created_at  INTEGER NOT NULL,
+		expires_at  INTEGER NOT NULL,
+		PRIMARY KEY (run_id, seq)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_run_stream_cache_expiry ON run_stream_cache(expires_at)`,
+	`CREATE TABLE IF NOT EXISTS artifact_references (
+		artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+		owner_kind  TEXT NOT NULL,
+		owner_id    TEXT NOT NULL,
+		created_at  INTEGER NOT NULL,
+		PRIMARY KEY (artifact_id, owner_kind, owner_id)
+	)`,
+	`CREATE TABLE IF NOT EXISTS notebook_writebacks (
+		run_id       TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+		notebook_path TEXT NOT NULL,
+		cell_id      TEXT NOT NULL,
+		output_json  TEXT NOT NULL,
+		expected_revision TEXT NOT NULL DEFAULT '',
+		state        TEXT NOT NULL CHECK (state IN ('pending', 'writing', 'done', 'conflict', 'failed')),
+		attempts     INTEGER NOT NULL DEFAULT 0,
+		next_attempt INTEGER NOT NULL,
+		last_error   TEXT NOT NULL DEFAULT '',
+		updated_at   INTEGER NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_notebook_writebacks_due ON notebook_writebacks(state, next_attempt)`,
+	`CREATE TABLE IF NOT EXISTS session_compactions (
+		id              TEXT PRIMARY KEY CHECK (id LIKE 'compact_%'),
+		session_id      TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+		generation      INTEGER NOT NULL,
+		mode            TEXT NOT NULL CHECK (mode IN ('native', 'checkpoint')),
+		status          TEXT NOT NULL CHECK (status IN ('pending', 'completed', 'failed')),
+		old_native_session_id TEXT NOT NULL DEFAULT '',
+		new_native_session_id TEXT NOT NULL DEFAULT '',
+		checkpoint_artifact_id TEXT REFERENCES artifacts(id),
+		failure_reason  TEXT NOT NULL DEFAULT '',
+		created_at      INTEGER NOT NULL,
+		finished_at     INTEGER
+	)`,
+	`CREATE TABLE IF NOT EXISTS session_usage (
+		session_id    TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+		total_tokens  INTEGER NOT NULL DEFAULT 0,
+		input_tokens  INTEGER NOT NULL DEFAULT 0,
+		output_tokens INTEGER NOT NULL DEFAULT 0,
+		thought_tokens INTEGER NOT NULL DEFAULT 0,
+		cached_tokens INTEGER NOT NULL DEFAULT 0,
+		context_used  INTEGER NOT NULL DEFAULT 0,
+		context_size  INTEGER NOT NULL DEFAULT 0,
+		updated_at    INTEGER NOT NULL
+	)`,
 	`CREATE TABLE IF NOT EXISTS run_session_names (
 		run_id      TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
 		name        TEXT NOT NULL,
@@ -762,23 +819,30 @@ func migrate(db *sql.DB) error {
 	if err := migrateRunSourceSchema(db); err != nil {
 		return err
 	}
-	// Schema v19 (D-035) lets the Pi manager ask Emacs to cancel a session's
-	// Run or close its idle agent process.
+	// Schema v19 added cancel/close; v20 adds claim leases and terminal acks.
 	if err := migrateCoordinatorRequestKinds(db); err != nil {
 		return err
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_coordinator_requests_lease
+		ON coordinator_requests(state, lease_expires_at)`); err != nil {
+		return fmt.Errorf("migrate coordinator request lease index: %w", err)
 	}
 	_, err := db.Exec(`INSERT INTO schema_meta(key, value) VALUES('schema_version', ?)
 		ON CONFLICT(key) DO UPDATE SET value = excluded.value`, schemaVersion)
 	return err
 }
 
-// migrateCoordinatorRequestKinds rebuilds a v18 coordinator_requests table,
-// whose CHECK allowed only run.start.  Nothing references the table, so a
-// plain rename-copy-drop keeps every pending and claimed request.
+// migrateCoordinatorRequestKinds rebuilds pre-v20 coordinator requests.
+// Nothing references the table, so a rename-copy-drop keeps every request.
 func migrateCoordinatorRequestKinds(db *sql.DB) error {
 	var tableSQL string
 	err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'coordinator_requests'`).Scan(&tableSQL)
-	if errors.Is(err, sql.ErrNoRows) || strings.Contains(tableSQL, "'session.close'") {
+	// Looking for the terminal state names is insufficient: a test or an
+	// intermediate schema can already allow `done' while retaining the old
+	// request-kind CHECK.  The lease column is the unambiguous v20 marker.
+	if errors.Is(err, sql.ErrNoRows) ||
+		(strings.Contains(tableSQL, "kind IN ('run.start', 'session.cancel', 'session.close')") &&
+			strings.Contains(tableSQL, "lease_expires_at")) {
 		return nil
 	}
 	if err != nil {

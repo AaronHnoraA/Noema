@@ -60,20 +60,24 @@ describe("D-031 named session routing in prepareRun", () => {
     });
   }));
 
-  test("a busy named session is refused for a Run but reported by the dry run", async () => withProject(async (root) => {
+  test("a busy lineage session queues instead of forking and is reported by the dry run", async () => withProject(async (root) => {
     const { file, a, b } = await lineageDocument(root);
     const names = await providerFor(root, a).sessionNames();
     names[0].openRun = true;
     names[0].lastRun = { workNodeId: a.workNode.id };
     const provider = providerFor(root, a, { sessionNames: vi.fn(async () => names) });
     const service = createResearchRuntimeService({ getProvider: () => provider as any });
-    // A busy head makes a lineage child branch instead of queueing behind it.
-    const branched = await service.prepareRun({ file, cellId: b.cell.id, cwd: root });
-    expect(branched.routing.sessionName).toMatchObject({ name: "baseline/add-features", parentName: "baseline" });
+    // Keep one conversation for a straight lineage.  The Emacs worker treats
+    // this typed error as a queue/retry signal; it must not escape into an
+    // unrelated per-cell conversation merely because the parent is running.
+    await expect(service.prepareRun({ file, cellId: b.cell.id, cwd: root }))
+      .rejects.toMatchObject({ code: "ERR_RESEARCH_SESSION_BUSY" });
     await expect(service.prepareRun({ file, cellId: b.cell.id, cwd: root, sessionPolicy: "baseline" }))
       .rejects.toMatchObject({ code: "ERR_RESEARCH_SESSION_BUSY" });
     const resolved = await service.resolveSessions({ file, cwd: root, cellIds: [b.cell.id] });
-    expect(resolved.sessions[0]).toMatchObject({ cellId: b.cell.id, name: "baseline/add-features", mode: "fork-reconstructed" });
+    expect(resolved.sessions[0]).toMatchObject({
+      cellId: b.cell.id, name: "baseline", mode: "continued", busy: true,
+    });
   }));
 
   test("a sibling branch forks with lineage context and a lost session is rebuilt under its name", async () => withProject(async (root) => {
@@ -91,10 +95,25 @@ describe("D-031 named session routing in prepareRun", () => {
     const lost = providerFor(root, a, {
       session: vi.fn(async () => ({ id: "ses_a", state: "lost", executionTarget: root, adapter: "codex", capabilities: {} })),
     });
+    // Continuing a named session whose native conversation is gone rebuilds it.
     const rebuilt = await createResearchRuntimeService({ getProvider: () => lost as any })
-      .prepareRun({ file, cellId: a.cell.id, cwd: root });
+      .prepareRun({ file, cellId: a.cell.id, cwd: root, sessionPolicy: "baseline" });
     expect(rebuilt.routing).toMatchObject({ mode: "fork-reconstructed", parentSessionId: "ses_a" });
     expect(rebuilt.routing.sessionName.name).toBe("baseline");
+  }));
+
+  test("a re-run restarts the block's own session under its name with project context", async () => withProject(async (root) => {
+    const { file, a } = await lineageDocument(root);
+    const provider = providerFor(root, a);
+    const service = createResearchRuntimeService({ getProvider: () => provider as any });
+    const rerun = await service.prepareRun({ file, cellId: a.cell.id, cwd: root });
+    expect(rerun.routing).toMatchObject({ mode: "fresh", sessionId: "" });
+    expect(rerun.spec.session).toMatchObject({ name: "baseline", derivation: { rule: "rerun" } });
+    expect(rerun.spec.context.map((item: any) => item.ref)[0]).toBe("project");
+    const project = Buffer.from(rerun.contextItems[0].contentBase64, "base64").toString("utf8");
+    expect(project).toContain(`Project root and working directory: ${root}`);
+    expect(project).toContain("Research document: work.noema");
+    expect(project).toContain("Work block: Baseline");
   }));
 
   test("a written @@session outranks a coordinator-requested name", async () => withProject(async (root) => {

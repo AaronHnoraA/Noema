@@ -7,6 +7,16 @@ import { promisify } from "node:util";
 import { notebookSource } from "./jupyter-notebook-format.mjs";
 import { parseResearchDirectives } from "./research-directives.mjs";
 import {
+  installProjectSkill,
+  prepareProjectSkill,
+  assertRunnableCapabilities,
+  mutateProjectCapability,
+  projectCapabilityConfig,
+  resolveProjectCapabilities,
+  resolvedMCPServersForRun,
+  resolvedSkillsForRun,
+} from "./noema-capabilities.mjs";
+import {
   deriveSessionRoute,
   parseSessionDirective,
   PI_SESSION_NAME,
@@ -23,9 +33,11 @@ import {
   researchWorkNodeForCell,
   researchWorkNodeId,
   researchWorkNodeSummary,
+  validateResearchNotebook,
 } from "./research-notebook.mjs";
 
 const CONTEXT_LIMIT_BYTES = 64 * 1024;
+const COMPACTION_CHECKPOINT_MAX_BYTES = 16 * 1024;
 const RUN_ARTIFACT_MAX_BYTES = 8 * 1024 * 1024;
 const RUN_ARTIFACT_MAX_FILES = 5000;
 const RUN_ARTIFACT_MAX_CHANGES = 32;
@@ -38,12 +50,24 @@ const RUN_ARTIFACT_IGNORED_DIRECTORIES = new Set([
 // person's edits; it is the work record, not an artifact of the work.
 const RUN_ARTIFACT_IGNORED_EXTENSIONS = Object.freeze([".noema"]);
 const execFileAsync = promisify(execFile);
+
+function capabilityScope(body) {
+  const scope = body.scope ?? "project";
+  if (scope !== "global" && scope !== "project") {
+    throw researchError("Capability scope must be global or project", 400, "ERR_NOEMA_CAPABILITY_SCOPE");
+  }
+  return scope;
+}
+
+// Work inside the project runs without asking; the kernel broker approves it.
+// Reaching outside the project or the network asks a person in Attention, and
+// credentials and privilege elevation are always refused.
 const DEFAULT_CAPABILITIES = Object.freeze({
   read_project: "allow",
-  write_project: "ask",
-  execute: "ask",
-  network: "deny",
-  write_outside_project: "deny",
+  write_project: "allow",
+  execute: "allow",
+  network: "ask",
+  write_outside_project: "ask",
   credentials: "deny",
 });
 
@@ -320,6 +344,21 @@ function asContextItem({ ref, resolvedUri, bytes, mediaType, truncated = false }
   };
 }
 
+function boundedContextItem(item, maxBytes) {
+  const bytes = Buffer.from(item.contentBase64, "base64");
+  if (bytes.byteLength <= maxBytes) return item;
+  const marker = Buffer.from("\n\n[Noema: compacted checkpoint truncated at 16 KiB]\n");
+  const prefixLimit = Math.max(0, maxBytes - marker.byteLength);
+  let prefix = bytes.subarray(0, prefixLimit).toString("utf8").replace(/\uFFFD$/, "");
+  while (Buffer.byteLength(prefix) > prefixLimit) prefix = prefix.slice(0, -1);
+  const bounded = Buffer.concat([Buffer.from(prefix), marker]);
+  return {
+    ...item,
+    contentBase64: bounded.toString("base64"),
+    truncated: true,
+  };
+}
+
 function publicContextItem(item) {
   const bytes = Buffer.from(item.contentBase64, "base64");
   return {
@@ -385,6 +424,29 @@ function cellById(notebook, id) {
   return (notebook.cells || []).find((cell) => cell?.id === id) || null;
 }
 
+/** Describe where a new conversation runs: project root, document and block. */
+function projectContextItem({ root, source }) {
+  const title = valueString(researchWorkNodeForCell(source.notebook, source.cell)?.title);
+  const lines = [
+    "# Noema project",
+    "",
+    `- Project root and working directory: ${root}`,
+    `- Research document: ${source.file} (${join(root, source.file)})`,
+    `- Work block: ${title || source.cellId}`,
+    "",
+    "Relative paths are relative to the project root. The research document holds the question and work this request belongs to; attached upstream blocks give its context.",
+    "For local files, use filesystem tools from this working directory. Research document/cell IDs are not knowledge-base notebook IDs; use Noema knowledge tools only when the task needs that store.",
+    "Attached context is already supplied: do not fetch it again unless missing or stale. Read only what the task requires; when asked to read all files, read each relevant file once, continuing at the next unread offset for paginated files.",
+    "",
+  ];
+  return asContextItem({
+    ref: "project",
+    resolvedUri: `noema://project/${encodeURIComponent(source.notebookId)}`,
+    bytes: lines.join("\n"),
+    mediaType: "text/markdown; charset=utf-8",
+  });
+}
+
 function contextRef(entry) {
   if (typeof entry === "string") return { ref: entry.trim() };
   const value = object(entry);
@@ -395,9 +457,13 @@ async function resolveContextItems({ root, notebook, sourceCell, declared, provi
   const notebookMeta = notebook ? researchMeta({ metadata: notebook.metadata }) : {};
   const notebookId = valueString(notebookMeta.notebook_id);
   const output = [];
+  const seen = new Set();
   let total = 0;
   const append = (item) => {
     const bytes = Buffer.from(item.contentBase64, "base64");
+    const key = JSON.stringify([item.resolvedUri, item.mediaType, sha256(bytes)]);
+    if (seen.has(key)) return;
+    seen.add(key);
     total += bytes.byteLength;
     if (total > CONTEXT_LIMIT_BYTES) {
       throw researchError("Declared Run context exceeds 64 KiB; narrow the explicit references", 422, "ERR_RESEARCH_CONTEXT_LIMIT");
@@ -551,39 +617,13 @@ function assertContextLimit(items) {
   }
 }
 
-async function resolveSkills(root, requested) {
-  const seen = new Set();
-  const skills = [];
-  const items = [];
-  for (const raw of requested) {
-    const id = valueString(raw);
-    if (!id || seen.has(id)) continue;
-    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id)) {
-      throw researchError(`Invalid project skill id: ${id}`, 422, "ERR_RESEARCH_SKILL");
-    }
-    seen.add(id);
-    const relativePath = `.agents/skills/${id}/SKILL.md`;
-    let file;
-    try {
-      file = await projectFile(root, relativePath);
-    } catch (error) {
-      if (error?.code === "ENOENT") throw researchError(`Project skill not found: ${id}`, 404, "ERR_RESEARCH_SKILL");
-      throw error;
-    }
-    const bytes = await readFile(file.path);
-    skills.push({ id, path: file.relative, sha256: `sha256:${sha256(bytes)}` });
-    items.push(asContextItem({
-      ref: `skill:${id}`,
-      resolvedUri: `noema://skill/${encodeURIComponent(id)}/${sha256(bytes)}`,
-      bytes,
-      mediaType: "text/markdown; charset=utf-8",
-    }));
-  }
-  return { skills, items };
-}
-
-async function latestParentHandoff(provider, root, sessionId) {
-  const runs = await provider.runs({ root, sessionId, limit: 200 });
+async function latestParentHandoff(provider, root, sessionId, workNodeId = "") {
+  // A re-run or branch reconstructs from the upstream block's own Run, never
+  // from a later attempt that happens to share the conversation.
+  const sessionRuns = await provider.runs({ root, sessionId, limit: 200 });
+  const runs = workNodeId
+    ? values(sessionRuns).filter((run) => valueString(run?.workNodeId ?? run?.work_node_id) === workNodeId)
+    : values(sessionRuns);
   for (const run of runs) {
     if (!valueString(run?.id)) continue;
     let after = 0;
@@ -669,6 +709,10 @@ export function createResearchRuntimeService({
   const runFileBaselines = new Map();
 	const localRunProcesses = new Map();
 	const localEventQueues = new Map();
+	const cacheMaintenanceAt = new Map();
+	const writebackDrains = new Map();
+	const writebackRetryTimers = new Map();
+	const writebackRecoveryRoots = new Set();
   const provider = () => {
     const value = getProvider();
     if (!value) throw researchError("kernel research runtime is unavailable", 503, "ERR_RESEARCH_INDEX");
@@ -679,17 +723,177 @@ export function createResearchRuntimeService({
     if (!candidate || !isAbsolute(candidate)) {
       throw researchError("A project root or absolute cwd is required", 400, "ERR_RESEARCH_ROOT");
     }
-    return findResearchProjectRoot(candidate);
+	const root = await findResearchProjectRoot(candidate);
+	if (!writebackRecoveryRoots.has(root)) {
+	  writebackRecoveryRoots.add(root);
+	  const timer = setTimeout(() => {
+		void drainNotebookWritebacks(root).catch(() => {});
+		void maybeMaintainCache(root).catch(() => {});
+	  }, 0);
+	  timer.unref?.();
+	}
+	return root;
   };
+	const maybeMaintainCache = async (root, force = false) => {
+	  const runtimeProvider = provider();
+	  if (typeof runtimeProvider.maintainCache !== "function") return null;
+	  const now = Date.now();
+	  if (!force && now - Number(cacheMaintenanceAt.get(root) || 0) < 60 * 60 * 1000) return null;
+	  cacheMaintenanceAt.set(root, now);
+	  return runtimeProvider.maintainCache({ root });
+	};
+	const writebackDelay = (attempts) => [1_000, 2_000, 5_000, 10_000, 30_000, 60_000, 300_000][Math.min(6, Math.max(0, Number(attempts) - 1))];
+	const scheduleWritebackDrain = (root, delay) => {
+	  const prior = writebackRetryTimers.get(root);
+	  if (prior) clearTimeout(prior);
+	  const timer = setTimeout(() => {
+		writebackRetryTimers.delete(root);
+		void drainNotebookWritebacks(root).catch(() => {});
+	  }, Math.max(250, Number(delay) || 1_000));
+	  timer.unref?.();
+	  writebackRetryTimers.set(root, timer);
+	};
+  const leaseChecks = new Map();
+  async function repairRunOutput(root, run) {
+    const runtime = provider();
+    if (!run?.cellId || !run?.notebookId || !runtime.resolveCell || !runtime.queueNotebookWriteback) return null;
+    if (runtime.runs) {
+      const latest = (await runtime.runs({ root, workstreamId: run.workstreamId, limit: 1000 }))
+        .find((candidate) => candidate.notebookId === run.notebookId && candidate.cellId === run.cellId);
+      if (latest && latest.id !== run.id) return { skipped: "newer-run" };
+    }
+    const cell = await runtime.resolveCell({ root, notebookId: run.notebookId, cellId: run.cellId });
+    const file = await projectFile(root, valueString(cell?.path));
+    let content = "";
+    let terminalText;
+    let after = 0;
+    if (runtime.liveRun) {
+      for (;;) {
+        const page = await runtime.liveRun({ root, id: run.id, after, limit: 200 });
+        const events = values(page.events);
+        for (const event of events) {
+          if (event.type === "run.content.segment" && event.payload?.stream === "assistant") {
+            content = (content + String(event.payload.text || "")).slice(0, 256 * 1024);
+          }
+          if (event.type === "run.status.changed" && typeof event.payload?.result_text === "string") {
+            terminalText = event.payload.result_text;
+          }
+        }
+        const next = Number(page.seq) || 0;
+        if (events.length < 200 || next <= after) break;
+        after = next;
+      }
+    }
+    await runtime.queueNotebookWriteback({ root, writeback: {
+      runId: run.id, notebookPath: file.relative, cellId: run.cellId,
+      output: { notebookId: run.notebookId, workId: run.workNodeId || run.cellId,
+        agent: valueString(run.agent), status: run.status,
+        content: terminalText ?? (content || `Run ${run.status}. ${run.failureReason || ""}`.trim()) },
+    } });
+    let completed = await drainNotebookWritebacks(root);
+    if (!completed.has(run.id)) completed = await drainNotebookWritebacks(root);
+    return completed.get(run.id) || null;
+  }
 
-  async function sourceForRun(root, body) {
+  async function refreshExpiredLeases(root, force = false) {
+    if (!provider().expireLeases) return;
+    const previous = leaseChecks.get(root);
+    if (previous?.pending) return previous.pending;
+    if (!force && previous && Date.now() - previous.at < 5000) return;
+    const entry = { at: Date.now(), pending: null };
+    leaseChecks.set(root, entry);
+    entry.pending = (async () => {
+      const result = await provider().expireLeases({ root });
+      for (const run of values(result?.interrupted)) {
+        // Expired authority means interrupted, not inferred successful output.
+        await repairRunOutput(root, run).catch(() => {});
+      }
+    })();
+    try { await entry.pending; } finally { entry.pending = null; }
+  }
+
+	async function drainNotebookWritebacks(root) {
+	  if (writebackDrains.has(root)) return writebackDrains.get(root);
+	  const operation = (async () => {
+		const runtimeProvider = provider();
+		if (typeof runtimeProvider.claimNotebookWritebacks !== "function") return new Map();
+		const completed = new Map();
+		for (const item of await runtimeProvider.claimNotebookWritebacks({ root })) {
+		  const output = object(item.output);
+		  try {
+			const file = await projectFile(root, valueString(item.notebookPath));
+			const notebooks = getNotebookService();
+			const writeRunOutput = notebooks?.writeRunOutput?.bind(notebooks)
+			  || notebooks?.writeRunResult?.bind(notebooks);
+			if (!writeRunOutput) throw researchError("research notebook writer is unavailable", 503, "ERR_RESEARCH_RESULT");
+			const result = await writeRunOutput({
+			  file: file.path,
+			  notebookId: valueString(output.notebookId),
+			  workId: valueString(output.workId),
+			  cellId: valueString(item.cellId),
+			  runId: valueString(item.runId),
+			  agent: valueString(output.agent),
+			  status: valueString(output.status),
+			  content: String(output.content || ""),
+			  actor: "worker",
+			});
+			await runtimeProvider.completeNotebookWriteback({ root, writeback: { runId: item.runId, state: "done" } });
+			deliverWorkerCommand({ type: "notebook-writeback", root, file: file.path, runId: item.runId });
+			completed.set(valueString(item.runId), result);
+		  } catch (error) {
+			const conflict = Number(error?.statusCode || error?.status) === 409;
+			const delay = writebackDelay(item.attempts);
+			await runtimeProvider.completeNotebookWriteback({ root, writeback: {
+			  runId: item.runId, state: conflict ? "conflict" : "failed",
+			  lastError: String(error?.message || error), retryAfterMillis: conflict ? 0 : delay,
+			} });
+			completed.set(valueString(item.runId), { error: String(error?.message || error), pending: !conflict });
+			if (!conflict) scheduleWritebackDrain(root, delay);
+		  }
+		}
+		return completed;
+	  })();
+	  writebackDrains.set(root, operation);
+	  try {
+		return await operation;
+	  } finally {
+		writebackDrains.delete(root);
+	  }
+	}
+	async function compactRouteIfNeeded(root, route) {
+	  const runtimeProvider = provider();
+	  const sessionId = valueString(route.sessionId);
+	  if (!sessionId || !["continued", "selected"].includes(valueString(route.mode))
+		  || typeof runtimeProvider.sessionContext !== "function") return route;
+	  const context = await runtimeProvider.sessionContext({ root, sessionId });
+	  const usage = object(context.usage);
+	  const size = Number(usage.contextSize) || 0;
+	  const ratio = size > 0 ? (Number(usage.contextUsed) || 0) / size : 0;
+	  let compaction = object(context.compaction);
+	  if (!valueString(compaction.id) && ratio >= 0.85 && typeof runtimeProvider.requestSessionCompaction === "function") {
+		compaction = object(await runtimeProvider.requestSessionCompaction({ root, sessionId }));
+	  }
+	  if (!valueString(compaction.id)) return route;
+	  return {
+		...route,
+		policy: "fork",
+		sessionId: "",
+		mode: "fork-reconstructed",
+		parentSessionId: sessionId,
+		parent: route.session,
+		compaction,
+		reason: `context rollover from ${Math.round(ratio * 100)}%; rebuilt from the latest durable handoff`,
+	  };
+	}
+
+  async function sourceForRun(root, body, preview = null) {
     const file = valueString(body.file);
     const promptFile = valueString(body.promptFile || body.prompt_file);
 	const projectFileRef = valueString(body.projectFile || body.project_file);
 	if (promptFile && (file || projectFileRef)) throw researchError("A Run has one source, not both a prompt and a project file", 422, "ERR_RESEARCH_RUN");
 	if (projectFileRef && !file) throw researchError("A project-file Run requires its owning .noema file and work cell", 422, "ERR_RESEARCH_RUN");
     if (file) {
-      const loaded = await readResearchNotebookFile(file);
+      const loaded = preview || await readResearchNotebookFile(file);
       const loadedRoot = await findResearchProjectRoot(loaded.file);
       if (resolve(loadedRoot) !== resolve(root)) throw researchError("Research notebook is outside the selected project", 403, "ERR_RESEARCH_ROOT");
       const cellId = valueString(body.cellId || body.cell_id);
@@ -796,11 +1000,8 @@ export function createResearchRuntimeService({
   // An explicit directive wins, then a coordinator-requested name, then the
   // lineage-derived default.  Explicit session/parent ids from older callers
   // keep their original route.
-  async function routeRun(root, source, target, body, { dryRun = false } = {}) {
-    const agent = valueString(source.executor.agent)
-      || valueString(source.defaultAgent)
-      || valueString(body.agent || body.adapter || object(body.executor).agent)
-      || "codex";
+  async function routeRun(root, source, target, body, { dryRun = false, snapshot = null } = {}) {
+    let agent = valueString(source.executor.agent);
     const rawDirective = valueString(source.directiveSession || source.executor.session_policy)
       || valueString(body.sessionPolicy || body.session_policy);
     const directive = parseSessionDirective(rawDirective);
@@ -812,14 +1013,16 @@ export function createResearchRuntimeService({
         executor: { ...source.executor, session_policy: keyword } }, target, { ...body, sessionPolicy: keyword });
     }
     const runtimeProvider = provider();
-    const [names, runs] = await Promise.all([
+    const [names, runs] = snapshot || await Promise.all([
       sessionNamesFor(root),
       typeof runtimeProvider.runs === "function" ? runtimeProvider.runs({ root, limit: 1000 }) : [],
     ]);
     const decision = deriveSessionRoute({
-      notebook: source.notebook, workNodeId: source.workNodeId, agent, directive,
+      notebook: source.notebook, workNodeId: source.workNodeId, agent,
+      defaultAgent: valueString(source.defaultAgent) || valueString(body.agent || body.adapter || object(body.executor).agent), directive,
       requestedName: valueString(body.sessionName || body.session_name), runs: values(runs), names,
     });
+    agent = decision.agent;
     const byName = new Map();
     for (const entry of names) {
       byName.set(valueString(entry.name), entry);
@@ -846,6 +1049,20 @@ export function createResearchRuntimeService({
         return { ...base, policy: "continue", sessionId: legacy.id, mode: "continued", session: legacy };
       }
       return fresh("no resumable same-agent session");
+    }
+    if (decision.action === "rebind") {
+      // A re-run keeps the block's own session name under a new generation.
+      const rebound = { ...base, sessionName: { ...intent, parentName: "", forkMode: "" } };
+      const upstreamEntry = decision.parentName ? byName.get(decision.parentName) : null;
+      if (upstreamEntry && valueString(upstreamEntry.sessionId)) {
+        const parent = await runtimeProvider.session({ root, id: upstreamEntry.sessionId });
+        if (!(await onTarget(parent))) {
+          throw researchError(`Session ${upstreamEntry.name} belongs to another execution target`, 422, "ERR_RESEARCH_SESSION");
+        }
+        return { ...rebound, policy: "continue", sessionId: "", mode: "fork-reconstructed", parentSessionId: parent.id, parent,
+          reconstructFromWorkNode: decision.fromWorkNodeId, reason: `${decision.reason}; the earlier attempt is not inherited` };
+      }
+      return { ...rebound, policy: "fresh", sessionId: "", mode: "fresh", reason: decision.reason };
     }
     let action = decision.action;
     let parentName = decision.parentName;
@@ -888,6 +1105,7 @@ export function createResearchRuntimeService({
       return {
         ...base, sessionName: { ...intent, parentName: parentEntry.name, forkMode: native ? "native" : "reconstructed" },
         policy: "fork", sessionId: "", mode: native ? "fork" : "fork-reconstructed", parentSessionId: parent.id, parent,
+        reconstructFromWorkNode: decision.fromWorkNodeId,
         reason: native ? decision.reason : `${decision.reason}; no hidden parent conversation is inherited`,
       };
     }
@@ -1162,6 +1380,16 @@ export function createResearchRuntimeService({
 	}
 
   return {
+	async cacheStatus(body = {}) {
+	  const root = await rootFor(body);
+	  return { root, cache: await provider().cacheStatus({ root }) };
+	},
+
+	async maintainCache(body = {}) {
+	  const root = await rootFor(body);
+	  return { root, cache: await maybeMaintainCache(root, true) };
+	},
+
 	async resolveCell(body = {}) {
 	  const root = await rootFor(body);
 	  const notebookId = valueString(body.notebookId || body.notebook_id);
@@ -1182,6 +1410,86 @@ export function createResearchRuntimeService({
 	  return {
 		root, notebookId, cellId, file: resolved.path, path: resolved.relative,
 		revision: loaded.revision, indexedRevision: valueString(location.revision),
+	  };
+	},
+
+	async capabilities(body = {}) {
+	  const scope = capabilityScope(body);
+	  const root = scope === "global" ? null : await rootFor(body);
+	  return {
+		root,
+		capabilities: await resolveProjectCapabilities({
+		  root, scope,
+		  requestedSkills: values(body.requestedSkills || body.requested_skills),
+		  runtimeDescriptor: object(getRuntimeDescriptor()),
+		}),
+	  };
+	},
+
+	async capabilityConfig(body = {}) {
+	  const scope = capabilityScope(body);
+	  const root = scope === "global" ? null : await rootFor(body);
+	  return { root, capabilityConfig: await projectCapabilityConfig(root, { scope }) };
+	},
+
+    async installSkill(body = {}) {
+      const scope = capabilityScope(body);
+      const root = scope === "global" ? null : await rootFor(body);
+      const skill = await installProjectSkill({ root, scope,
+        id: valueString(body.id), description: valueString(body.description),
+        sourceDirectory: valueString(body.sourceDirectory) });
+      return { root, skill, capabilities: await resolveProjectCapabilities({ root, scope,
+        runtimeDescriptor: object(getRuntimeDescriptor()) }) };
+    },
+
+    async prepareSkill(body = {}) {
+      const root = await rootFor(body);
+      const skill = await prepareProjectSkill({ root, id: valueString(body.id), operation: valueString(body.operation) });
+      return { root, skill, capabilities: await resolveProjectCapabilities({ root,
+        runtimeDescriptor: object(getRuntimeDescriptor()) }) };
+    },
+
+    async capabilityFiles(body = {}) {
+      const root = await rootFor(body);
+      const directory = await projectDirectory(root, valueString(body.directory) || ".");
+      const entries = await readdir(directory, { withFileTypes: true });
+      const files = entries.filter((entry) => ![".git", ".agent", "node_modules"].includes(entry.name))
+        .map((entry) => entry.name + (entry.isDirectory() ? "/" : "")).sort();
+      return { root, files: files.slice(0, 2000), truncated: files.length > 2000 };
+    },
+
+    async probeMCP(body = {}) {
+      const scope = capabilityScope(body);
+      const root = scope === "global" ? null : await rootFor(body);
+      const environment = await resolveProjectCapabilities({ root, scope, runtimeDescriptor: object(getRuntimeDescriptor()) });
+      const record = environment.mcps.find((item) => item.id === valueString(body.id));
+      if (!record || !record.validation.valid) {
+        throw researchError(record?.validation.errors.join("; ") || "Unknown MCP", 422, "ERR_NOEMA_MCP");
+      }
+      const [config] = resolvedMCPServersForRun({ ...environment, mcps: [{ ...record, enabled: true }] });
+      return { root, id: record.id, probe: await provider().probeMCP({
+        root: root || dirname(environment.configFile), config,
+        ...(scope === "global" ? { scope } : {}),
+      }) };
+    },
+
+	async mutateCapability(body = {}) {
+	  const scope = capabilityScope(body);
+	  const root = scope === "global" ? null : await rootFor(body);
+	  const mutation = await mutateProjectCapability({
+		root, scope,
+		type: valueString(body.type),
+		id: valueString(body.id),
+		enabled: typeof body.enabled === "boolean" ? body.enabled : undefined,
+		patch: Object.hasOwn(body, "patch") ? body.patch : undefined,
+		definition: Object.hasOwn(body, "definition") ? body.definition : undefined,
+	  });
+	  return {
+		root,
+		mutation,
+		capabilities: await resolveProjectCapabilities({
+		  root, scope, runtimeDescriptor: object(getRuntimeDescriptor()),
+		}),
 	  };
 	},
 
@@ -1213,7 +1521,8 @@ export function createResearchRuntimeService({
           // Recovery is best effort; routing still reports a truly busy session.
         }
       }
-      const route = await routeRun(root, source, target, body);
+	  let route = await routeRun(root, source, target, body);
+	  route = await compactRouteIfNeeded(root, route);
       const declaredContext = [...values(source.context), ...values(body.context)];
       // A derived branch carries its lineage as explicit context, never as a
       // hidden conversation (D-031).
@@ -1222,27 +1531,51 @@ export function createResearchRuntimeService({
       }
       let reconstruction = null;
       if (route.mode === "fork-reconstructed") {
-        reconstruction = await latestParentHandoff(provider(), root, route.parentSessionId);
+        reconstruction = await latestParentHandoff(provider(), root, route.parentSessionId,
+          valueString(route.reconstructFromWorkNode));
       }
       const parentOutput = reconstruction?.run && source.notebook
         && valueString(reconstruction.run.notebookId) === source.notebookId
         && latestOutputForWork(source.notebook, valueString(reconstruction.run.workNodeId || reconstruction.run.cellId));
-      const reconstructedForkContext = parentOutput
+      const reconstructedForkContext = parentOutput && !valueString(route.compaction?.id)
         ? [`result:${valueString(reconstruction.run.workNodeId || reconstruction.run.cellId)}`]
         : [];
       const contextItems = await resolveContextItems({ root, notebook: source.notebook, sourceCell: source.cell,
         declared: [...declaredContext, ...reconstructedForkContext], provider: provider(), sessionId: route.sessionId,
         resolveKnowledgeNote });
-      if (reconstruction?.item) contextItems.push(reconstruction.item);
+      if (route.mode !== "continued" && source.kind === "work-cell") {
+        // A new conversation knows nothing yet: say where it runs.
+        contextItems.unshift(projectContextItem({ root, source }));
+      }
+      if (reconstruction?.item) {
+        contextItems.push(valueString(route.compaction?.id)
+          ? boundedContextItem(reconstruction.item, COMPACTION_CHECKPOINT_MAX_BYTES)
+          : reconstruction.item);
+      }
       const skillIds = [...values(source.executor.skills), ...values(body.skills)].map(valueString).filter(Boolean);
-      const resolvedSkills = await resolveSkills(root, skillIds);
+      const capabilityEnvironment = assertRunnableCapabilities(await resolveProjectCapabilities({
+        root,
+        requestedSkills: skillIds,
+        runtimeDescriptor: object(getRuntimeDescriptor()),
+        includeContent: true,
+      }));
+      const resolvedSkills = resolvedSkillsForRun(capabilityEnvironment);
       contextItems.push(...resolvedSkills.items);
       assertContextLimit(contextItems);
       const capabilities = normalizeCapabilities(source.executor.capabilities, body.capabilities);
       assertCapabilityEnvelope(route.agent, capabilities, body, source.executor);
       const externalSandbox = Boolean(body.externalSandbox ?? body.external_sandbox ?? source.executor.external_sandbox);
-      const runtimeDescriptor = object(getRuntimeDescriptor());
-      const mcpUrl = valueString(runtimeDescriptor.mcpUrl);
+      const mcpServers = resolvedMCPServersForRun(capabilityEnvironment);
+      const capabilitySnapshot = structuredClone(capabilityEnvironment);
+      capabilitySnapshot.skills = values(capabilitySnapshot.skills).filter((item) => item.enabled);
+      capabilitySnapshot.mcps = values(capabilitySnapshot.mcps).filter((item) => item.enabled);
+      const activeKeys = new Set([
+        ...capabilitySnapshot.skills.map((item) => `skill:${item.id}`),
+        ...capabilitySnapshot.mcps.map((item) => `mcp:${item.id}`),
+      ]);
+      capabilitySnapshot.diagnostics = values(capabilitySnapshot.diagnostics)
+        .filter((item) => activeKeys.has(`${item.type}:${item.id}`));
+      for (const skill of capabilitySnapshot.skills) delete object(skill.effective).content;
       const spec = {
         schema: "noema.run-spec/1",
         project_id: await projectIdentity(root),
@@ -1266,6 +1599,7 @@ export function createResearchRuntimeService({
           native_session_id: valueString(route.session?.nativeSessionId),
           ...(route.sessionName ? { name: route.sessionName.name, parent_name: route.sessionName.parentName || undefined } : {}),
           ...(route.derivation ? { derivation: route.derivation } : {}),
+		  ...(valueString(route.compaction?.id) ? { compaction_id: valueString(route.compaction.id) } : {}),
         },
         session_policy: route.policy,
         execution_target: target,
@@ -1274,10 +1608,12 @@ export function createResearchRuntimeService({
         capabilities,
         external_sandbox: externalSandbox,
         context: contextItems.map(publicContextItem),
-        mcp_servers: mcpUrl ? [{ name: "noema", type: "http", url: mcpUrl }] : [],
+        mcp_servers: mcpServers,
+        capability_environment: capabilitySnapshot,
         created_at: new Date().toISOString(),
       };
       if (route.parentSessionId) spec.parent_session_id = route.parentSessionId;
+	  if (valueString(route.compaction?.id)) spec.compaction = structuredClone(route.compaction);
       if (route.mode === "fork") spec.fork_mode = "native";
       if (route.mode === "fork-reconstructed") {
         spec.fork_mode = "reconstructed";
@@ -1328,6 +1664,20 @@ export function createResearchRuntimeService({
       return { root, name: await provider().sessionName({ root, name: valueString(body.name) }) };
     },
 
+	async sessionContext(body = {}) {
+	  const root = await rootFor(body);
+	  return { root, context: await provider().sessionContext({
+		root, sessionId: valueString(body.sessionId || body.session_id),
+	  }) };
+	},
+
+	async compactSession(body = {}) {
+	  const root = await rootFor(body);
+	  return { root, compaction: await provider().requestSessionCompaction({
+		root, sessionId: valueString(body.sessionId || body.session_id),
+	  }) };
+	},
+
     async declareSessionName(body = {}) {
       const root = await rootFor(body);
       const origin = valueString(body.origin) === "pi" ? "pi" : "user";
@@ -1370,15 +1720,26 @@ export function createResearchRuntimeService({
       const root = await rootFor(body);
       const file = valueString(body.file);
       const target = await projectDirectory(root, body.executionTarget || body.cwd || root);
+      const loaded = await readResearchNotebookFile(file);
+      if (body.notebook) {
+        const validation = validateResearchNotebook(body.notebook);
+        if (!validation.ok) throw researchError("Invalid route preview document", 422, "ERR_RESEARCH_FORMAT");
+        loaded.notebook = body.notebook;
+      }
+      await refreshExpiredLeases(root);
+      const snapshot = await Promise.all([sessionNamesFor(root),
+        typeof provider().runs === "function" ? provider().runs({ root, limit: 1000 }) : []]);
       const sessions = [];
       for (const cellId of values(body.cellIds).map(valueString).filter(Boolean)) {
         try {
-          const source = await sourceForRun(root, { file, cellId });
-          const route = await routeRun(root, source, target, {}, { dryRun: true });
+          const source = await sourceForRun(root, { file, cellId }, loaded);
+          const route = await routeRun(root, source, target, {}, { dryRun: true, snapshot });
+          const latestRun = values(snapshot[1]).find((run) => run.notebookId === source.notebookId && run.cellId === cellId);
           sessions.push({
             cellId, agent: route.agent, mode: route.mode, name: valueString(route.sessionName?.name),
             parentName: valueString(route.sessionName?.parentName), rule: valueString(route.derivation?.rule),
             reason: valueString(route.derivation?.reason || route.reason), busy: Boolean(route.busy),
+            latestRun: latestRun ? { id: latestRun.id, status: latestRun.status } : null,
           });
         } catch (error) {
           sessions.push({ cellId, error: String(error?.message || error) });
@@ -1399,8 +1760,23 @@ export function createResearchRuntimeService({
       return { root, requests: await provider().claimCoordinatorRequests({ root, owner: valueString(body.owner) || "emacs" }) };
     },
 
+    async completeCoordinatorRequest(body = {}) {
+      const root = await rootFor(body);
+      return {
+        root,
+        request: await provider().completeCoordinatorRequest({
+          root,
+          id: valueString(body.id || body.requestId || body.request_id),
+          owner: valueString(body.owner) || "emacs",
+          state: valueString(body.state),
+          reason: valueString(body.reason),
+        }),
+      };
+    },
+
     async runs(body = {}) {
       const root = await rootFor(body);
+      await refreshExpiredLeases(root);
       const runs = await provider().runs({
         root,
         workstreamId: valueString(body.workstreamId || body.workstream_id),
@@ -1412,11 +1788,13 @@ export function createResearchRuntimeService({
 
     async run(body = {}) {
       const root = await rootFor(body);
+      await refreshExpiredLeases(root);
       return { root, run: await provider().run({ root, id: valueString(body.id || body.runId || body.run_id) }) };
     },
 
     async liveRun(body = {}) {
       const root = await rootFor(body);
+      await refreshExpiredLeases(root);
       return {
         root,
         ...(await provider().liveRun({
@@ -1428,13 +1806,45 @@ export function createResearchRuntimeService({
       };
     },
 
+    async checkRunCompletion(body = {}) {
+      const root = await rootFor(body);
+      let runId = valueString(body.runId || body.id);
+      let source;
+      if (body.file && body.cellId) {
+        source = await sourceForRun(root, { file: body.file, cellId: body.cellId });
+        if (!runId) {
+          const runs = await provider().runs({ root, workstreamId: source.workstreamId, limit: 1000 });
+          runId = valueString(runs.find((run) => run.notebookId === source.notebookId && run.cellId === source.cellId)?.id);
+        }
+      }
+      if (!runId) return { root, run: null, detection: "no-run", delivered: false };
+      let run = await provider().run({ root, id: runId });
+      if (source && (run.cellId !== source.cellId || run.notebookId !== source.notebookId)) {
+        throw researchError("Run does not belong to this output cell", 409, "ERR_RESEARCH_RUN");
+      }
+      await refreshExpiredLeases(root, true);
+      run = await provider().run({ root, id: runId });
+      const terminal = ["completed", "cancelled", "failed", "interrupted"].includes(run.status);
+      if (terminal) return { root, run, detection: "terminal", delivered: false, result: await repairRunOutput(root, run) };
+      const delivered = Boolean(deliverWorkerCommand({ type: "run-check-completion", root, runId, sessionId: run.sessionId }));
+      return { root, run, detection: delivered ? "requested" : "worker-unavailable", delivered };
+    },
+
     async cancelRun(body = {}) {
       const root = await rootFor(body);
+      await refreshExpiredLeases(root, true);
       const requestedBy = valueString(body.requestedBy || body.requested_by) || "node";
-      const run = await provider().requestRunCancellation({
-        root,
-        cancellation: { runId: valueString(body.id || body.runId || body.run_id), requestedBy },
-      });
+      const runId = valueString(body.id || body.runId || body.run_id);
+      let run;
+      try {
+        run = await provider().requestRunCancellation({ root, cancellation: { runId, requestedBy } });
+      } catch (error) {
+        // Completion or lease expiry can win the cancellation race.
+        if (!provider().run) throw error;
+        run = await provider().run({ root, id: runId });
+        if (!["completed", "cancelled", "failed", "interrupted"].includes(run.status)) throw error;
+        return { root, run, delivered: false, result: await repairRunOutput(root, run) };
+      }
 	  const local = localRunProcesses.get(valueString(run.id));
 	  if (local?.process) {
 		local.cancelled = true;
@@ -1443,19 +1853,74 @@ export function createResearchRuntimeService({
 	  const delivered = Boolean(local?.process) || Boolean(deliverWorkerCommand({
         type: "run-cancel", root, runId: run.id, sessionId: run.sessionId, requestedBy,
       }));
-      return { root, run, delivered };
+      // A Run cancelled before dispatch ends in the kernel at once and no
+      // worker will report it: persist that outcome as the cell output so
+      // the document and OutputArea stop waiting for it.
+      let result = null;
+      let resultError = null;
+      if (valueString(run.status) === "cancelled" && valueString(run.cellId) && valueString(run.notebookId)
+          && typeof provider().resolveCell === "function") {
+        try {
+          const cell = await provider().resolveCell({ root, notebookId: run.notebookId, cellId: run.cellId });
+          const file = await projectFile(root, valueString(cell?.path));
+          await provider().queueNotebookWriteback({ root, writeback: {
+            runId: run.id,
+            notebookPath: file.relative,
+            cellId: run.cellId,
+            output: {
+              notebookId: run.notebookId,
+              workId: run.workNodeId || run.cellId,
+              agent: "",
+              status: "cancelled",
+              content: `Run ${run.id} was cancelled before it started.`,
+            },
+          } });
+          let completed = await drainNotebookWritebacks(root);
+          if (!completed.has(run.id)) completed = await drainNotebookWritebacks(root);
+          result = completed.get(run.id) || null;
+          if (result?.error) resultError = result.error;
+        } catch (error) {
+          resultError = String(error?.message || error);
+        }
+      }
+      return { root, run, delivered, result, resultError };
     },
 
     async failPreparingRun(body = {}) {
       const root = await rootFor(body);
-      const run = await provider().failPreparedRun({
-        root,
-        failure: {
-          runId: valueString(body.id || body.runId || body.run_id),
-          failureReason: valueString(body.failureReason || body.failure_reason) || "worker bootstrap failed",
-        },
-      });
-      return { root, run };
+      const runId = valueString(body.id || body.runId || body.run_id);
+      const failureReason = valueString(body.failureReason || body.failure_reason) || "worker bootstrap failed";
+      const run = await provider().failPreparedRun({ root, failure: { runId, failureReason } });
+      // A Run that failed before dispatch never emits a terminal worker event.
+      // Persist its failure as the cell output like any other terminal Run, so
+      // OutputArea does not wait forever for this Run's writeback.
+      let result = null;
+      let resultError = null;
+      const notebookFile = valueString(body.notebookFile || body.notebook_file);
+      if (notebookFile && valueString(run?.cellId)) {
+        try {
+          const file = await projectFile(root, notebookFile);
+          await provider().queueNotebookWriteback({ root, writeback: {
+            runId,
+            notebookPath: file.relative,
+            cellId: run.cellId,
+            output: {
+              notebookId: run.notebookId,
+              workId: run.workNodeId || run.cellId,
+              agent: valueString(body.agent),
+              status: "failed",
+              content: failureReason,
+            },
+          } });
+          let completed = await drainNotebookWritebacks(root);
+          if (!completed.has(runId)) completed = await drainNotebookWritebacks(root);
+          result = completed.get(runId) || null;
+          if (result?.error) resultError = result.error;
+        } catch (error) {
+          resultError = String(error?.message || error);
+        }
+      }
+      return { root, run, result, resultError };
     },
 
     async readArtifact(body = {}) {
@@ -1553,6 +2018,7 @@ export function createResearchRuntimeService({
         attachment: {
           sessionId: valueString(body.sessionId || body.session_id), owner: valueString(body.owner),
           epoch: Number(body.epoch) || 0, runId: valueString(body.runId || body.run_id),
+		  compactionId: valueString(body.compactionId || body.compaction_id),
         },
       });
       return { root, run };
@@ -1583,18 +2049,23 @@ export function createResearchRuntimeService({
       let durableRun = baseline?.run || null;
       let reportedDrafts = drafts;
       if (terminal && baseline) {
-        const detected = await detectRunFileArtifacts({
-          root, run: durableRun, before: baseline.files, provider: provider(),
-        });
-        reportedDrafts = [...detected.drafts, ...drafts];
-        artifactErrors = detected.errors;
+        try {
+          const detected = await detectRunFileArtifacts({ root, run: durableRun, before: baseline.files, provider: provider() });
+          reportedDrafts = [...detected.drafts, ...drafts];
+          artifactErrors = detected.errors;
+        } catch (error) {
+          // Artifact discovery is auxiliary; it must never eat completion.
+          artifactErrors = [String(error?.message || error)];
+        }
       }
+	  const sessionUsage = object(body.sessionUsage || body.session_usage);
       const events = await provider().reportWorkerEvents({
         root,
         events: {
           sessionId: valueString(body.sessionId || body.session_id), owner: valueString(body.owner),
           epoch: Number(body.epoch) || 0, runId,
-          events: reportedDrafts,
+		  events: reportedDrafts,
+		  ...(Object.keys(sessionUsage).length ? { sessionUsage } : {}),
         },
       });
       if (terminal) runFileBaselines.delete(runId);
@@ -1605,27 +2076,31 @@ export function createResearchRuntimeService({
         try {
           durableRun ||= await provider().run({ root, id: runId });
           const file = await projectFile(root, notebookFile);
-          const notebooks = getNotebookService();
-          const writeRunOutput = notebooks?.writeRunOutput?.bind(notebooks)
-            || notebooks?.writeRunResult?.bind(notebooks);
-          if (!writeRunOutput) throw researchError("research notebook writer is unavailable", 503, "ERR_RESEARCH_RESULT");
-          result = await writeRunOutput({
-            file: file.path,
-            notebookId: durableRun.notebookId,
-            workId: durableRun.workNodeId || durableRun.cellId,
-            cellId: durableRun.cellId,
-            runId,
-            agent: baseline?.agent || "",
-            status: valueString(terminal.payload?.status),
-            content: String(terminal.payload?.result_text || ""),
-            actor: "worker",
-          });
+		  await provider().queueNotebookWriteback({ root, writeback: {
+			runId,
+			notebookPath: file.relative,
+			cellId: durableRun.cellId,
+			output: {
+			  notebookId: durableRun.notebookId,
+			  workId: durableRun.workNodeId || durableRun.cellId,
+			  agent: baseline?.agent || "",
+			  status: valueString(terminal.payload?.status),
+			  content: String(terminal.payload?.result_text || ""),
+			},
+		  } });
+		  let completed = await drainNotebookWritebacks(root);
+		  // A startup recovery drain may already have claimed its batch before
+		  // this terminal Run queued.  One exact second pass closes that race.
+		  if (!completed.has(runId)) completed = await drainNotebookWritebacks(root);
+		  result = completed.get(runId) || null;
+		  if (result?.error) resultError = result.error;
         } catch (error) {
           // The Run event is already authoritative and must not be rolled back
           // when the human-edited notebook has concurrently changed.
           resultError = String(error?.message || error);
         }
       }
+	  if (terminal) void maybeMaintainCache(root).catch(() => {});
       return { root, events, result, resultError, artifactErrors };
     },
 

@@ -77,11 +77,13 @@ A typical repository is:
 ```text
 project/
 ├── noema.toml
+├── noema-capabilities.json       # optional Skill/MCP selections and patches
 ├── research.noema
 ├── notes/
 ├── src/
 ├── experiments/
 ├── report/
+├── .agents/skills/               # optional versioned project Skills
 ├── .noema/    # existing wiki-sync/vaultgit infrastructure
 └── .agent/    # ignored runtime/index/CAS/view state
 ```
@@ -91,6 +93,12 @@ project/
 ## Emacs workflow
 
 Opening `research.noema` visits the real file in `noema-research-mode`. JuText supplies block navigation and editing while stable IDs remain hidden. Work prompts may begin with `@@agent(id)`, `@@session(continue|fork|fresh)`, repeated `@@ctx(ref)` and `@@skill(id)` directives. `C-c C-c` strips that leading control region, freezes a RunSpec and dispatches the body through the configured ACP agent.
+
+Project Skills and MCPs are resolved from built-in, global, explicitly shared
+and project scopes before that RunSpec is frozen. `M-x noema-capability-manager`
+shows effective state, source, patches, validation and MCP runtime state. See
+[Project Skills and MCP capabilities](docs/capabilities.md) and the
+[semantic Elisp API](docs/noema-elisp-api.md).
 
 Key commands include:
 
@@ -104,15 +112,44 @@ Key commands include:
 | `C-c j r` | run a selected project `.py` / `.ipynb` from the current WorkNode |
 | `C-c C-o` | open/update the right-side rich-output renderer |
 | `Cmd-Enter` | sync/activate the right-side OutputArea (same convention as Jupyter) |
-| `C-c C-z` | cancel an active Agent Run |
+| `C-c C-z` | cancel the Noema execution of the cell at point, whether running, queued or still being prepared |
 | `C-c C-f` | set or clear the document's default agent |
 | `C-c j x` / `C-c j X` | clear current/all outputs |
 | `C-c j u` | unbind the current Cell while preserving its WorkNode |
 | `C-c j d` | delete the current Cell while preserving its WorkNode |
 | `C-c j w` | delete the current WorkNode while preserving its Cells as notes |
+| `C-c j C` | inspect and manage effective project Skills/MCPs |
 | `C-c M-m` | explicitly migrate a pre-D-023 `.noema` document |
 
-Agent replies stream incrementally into the right-side renderer. A terminal reply replaces that work block's latest `outputs` with Markdown/plain-text MIME plus `application/vnd.noema.run+json`; Run history and transcripts remain in the Run store. Clearing outputs does not delete a Run. Clicking **Open Source in Emacs** sends `scriptFile + cellId`; Emacs resolves the stable Cell identity instead of trusting a projected line number. Agent Runs snapshot newly created or modified ordinary files into the CAS without moving them, persist `ArtifactLink` provenance on the stable WorkNode, and expose those paths through the Emacs Inspector.
+While a Run is active, OutputArea shows a lightweight status card and updates
+the durable result only when the Run finishes.  A cell's context menu can opt
+that cell into provisional live output.  **Open Agent** reuses or resumes the
+exact named Session in the one bottom-right Agent window; a project's
+conversations appear there as tabs instead of opening additional panes, and
+each tab is that Session's own interactive agent-shell buffer
+(`C-c C-a`/`C-c C-n`/`C-c C-p` switch sessions; right-click a tab to stop,
+restart, close, rename, fork or archive it; `?` lists every key).  A finished
+Run leaves a fresh input prompt (`C-c C-e`).  `@@session` keywords are exactly
+`continue`, `fork` and `fresh`; lookalikes such as `refresh` are rejected with a
+suggestion instead of silently naming a session.  Re-running a block restarts it
+from the document and its upstream state instead of stacking a second attempt:
+a session only that block uses keeps its name under a new generation, a shared
+one branches.  Every new conversation receives the project root, document path,
+work title and its lineage blocks.  The kernel approves reads, edits and commands
+inside the project; anything outside it or on the network opens Attention for a
+decision, and credentials, privilege elevation, `git push` and history rewrites
+are always refused.  Straight lineage
+continues one Session (and queues while it is busy), while an actual DAG branch
+gets a separate named conversation.  A terminal reply replaces that work
+block's latest `outputs` with Markdown/plain-text MIME plus
+`application/vnd.noema.run+json`; Run history remains in the Run store and the
+optional agent-shell Markdown transcript is disabled for Noema Runs.  Clearing
+outputs does not delete a Run. Clicking **Open Source in Emacs** sends
+`scriptFile + cellId`; Emacs resolves the stable Cell identity instead of
+trusting a projected line number. Agent Runs snapshot newly created or modified
+ordinary files into the CAS without moving them, persist `ArtifactLink`
+provenance on the stable WorkNode, and expose those paths through the Emacs
+Inspector.
 
 The Work DAG opened by `C-c C-g` is a semantic Graph Board rather than a
 static diagram. It is a temporary pop-up, not a default/dedicated workspace
@@ -216,15 +253,17 @@ The repository still contains a read-only server renderer for publishing Markdow
 
 - `server/lib/research-notebook.mjs`: `.noema` v2 model, migration, validation and graph operations.
 - `server/lib/research-runtime.mjs`: directive parsing, deterministic agent/session routing, RunSpec freezing and terminal output write-back.
+- `server/lib/noema-capabilities.mjs`: Skill/MCP discovery, scope resolution, patches, validation and provenance.
 - `server/lib/jupyter-cell.mjs`: ordinary Jupyter document/session service plus a kernel-free read-only `.noema` output snapshot.
 - `aaronnote/main.ts`, `wiki-main.ts`, `agenda-main.ts`, `config-main.ts`: Emacs-hosted Markdown and knowledge/work surfaces.
 - `aaronnote/jupyter-main.ts`: Emacs-hosted output-only renderer.
 - `src/jupyter-rendermime.ts`: JupyterLab OutputArea/rendermime integration.
 - `kernel/noema/research/`: Go research/runtime store, indexes, events and CAS.
 - `lisp/noema-research*.el`: JuText, WorkNode model, graph, inspector and synthesis.
+- `lisp/noema-api.el`, `lisp/noema-capability-ui.el`: public semantic API and Emacs capability manager.
 - `lisp/noema-agent*.el`: ACP boundary, AgentSession worker, promotion and takeover paths.
 - `lisp/noema-compose.el`, `lisp/noema-interaction*.el`: gptel UI entry points and migrated interaction/CLI fallback behavior.
-- `upstream/`: complete internalized gptel, agent-shell, acp.el, shell-maker, Magent and existing CLI compatibility sources.
+- `upstream/`: complete internalized gptel, Magent and existing CLI compatibility sources. agent-shell, acp.el and shell-maker are pristine package-vc dependencies (see `UPSTREAMS.md`).
 
 The authoritative product model is maintained in `~/Desktop/]/DESIGN.md`, with decisions in `DECISIONS.md` and the long-running implementation prompt in `BOOTSTRAP.md`.
 

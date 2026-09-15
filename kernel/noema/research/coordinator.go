@@ -15,15 +15,18 @@ import (
 // never acts by itself: the Emacs worker claims it exactly once and carries it
 // out through the same frozen-RunSpec, lease and ACP path as a human.
 type CoordinatorRequest struct {
-	ID        string         `json:"id"`
-	Kind      string         `json:"kind"`
-	Payload   map[string]any `json:"payload"`
-	Actor     string         `json:"actor"`
-	State     string         `json:"state"`
-	ClaimedBy string         `json:"claimedBy,omitempty"`
-	CreatedAt string         `json:"createdAt"`
-	ClaimedAt string         `json:"claimedAt,omitempty"`
-	Version   int64          `json:"version"`
+	ID             string         `json:"id"`
+	Kind           string         `json:"kind"`
+	Payload        map[string]any `json:"payload"`
+	Actor          string         `json:"actor"`
+	State          string         `json:"state"`
+	ClaimedBy      string         `json:"claimedBy,omitempty"`
+	CreatedAt      string         `json:"createdAt"`
+	ClaimedAt      string         `json:"claimedAt,omitempty"`
+	LeaseExpiresAt string         `json:"leaseExpiresAt,omitempty"`
+	FinishedAt     string         `json:"finishedAt,omitempty"`
+	FailureReason  string         `json:"failureReason,omitempty"`
+	Version        int64          `json:"version"`
 }
 
 // coordinatorRequestKinds are the only asks Pi can make of Emacs.
@@ -88,6 +91,15 @@ func (s *Store) ClaimCoordinatorRequests(owner string, limit int) ([]Coordinator
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	nowMs := time.Now().UTC().UnixMilli()
+	// A claimant may disappear after changing state but before dispatch.  Its
+	// request becomes available again after the bounded claim lease.
+	if _, err := tx.Exec(`UPDATE coordinator_requests
+		SET state = 'pending', claimed_by = '', claimed_at = NULL,
+		    lease_expires_at = NULL, version = version + 1
+		WHERE state = 'claimed' AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?`, nowMs); err != nil {
+		return nil, err
+	}
 	rows, err := tx.Query(`SELECT id, kind, payload_json, actor, created_at, version FROM coordinator_requests
 		WHERE state = 'pending' ORDER BY created_at, id LIMIT ?`, limit)
 	if err != nil {
@@ -110,17 +122,53 @@ func (s *Store) ClaimCoordinatorRequests(owner string, limit int) ([]Coordinator
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	nowMs := time.Now().UTC().UnixMilli()
+	leaseExpiresAt := nowMs + 60_000
 	for index := range claimed {
-		if _, err := tx.Exec(`UPDATE coordinator_requests SET state = 'claimed', claimed_by = ?, claimed_at = ?, version = version + 1
-			WHERE id = ? AND state = 'pending'`, owner, nowMs, claimed[index].ID); err != nil {
+		if _, err := tx.Exec(`UPDATE coordinator_requests SET state = 'claimed', claimed_by = ?, claimed_at = ?,
+			lease_expires_at = ?, version = version + 1 WHERE id = ? AND state = 'pending'`,
+			owner, nowMs, leaseExpiresAt, claimed[index].ID); err != nil {
 			return nil, err
 		}
 		claimed[index].State, claimed[index].ClaimedBy = "claimed", owner
 		claimed[index].ClaimedAt, claimed[index].Version = formatMillis(nowMs), claimed[index].Version+1
+		claimed[index].LeaseExpiresAt = formatMillis(leaseExpiresAt)
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return claimed, nil
+}
+
+// CompleteCoordinatorRequest acknowledges a claimed request exactly once.
+func (s *Store) CompleteCoordinatorRequest(id, owner, state, reason string) (CoordinatorRequest, error) {
+	id, owner, state = strings.TrimSpace(id), strings.TrimSpace(owner), strings.TrimSpace(state)
+	if id == "" || owner == "" || (state != "done" && state != "failed") {
+		return CoordinatorRequest{}, errors.New("coordinator completion needs id, owner and done/failed state")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	nowMs := time.Now().UTC().UnixMilli()
+	result, err := s.db.Exec(`UPDATE coordinator_requests SET state = ?, finished_at = ?,
+		failure_reason = ?, lease_expires_at = NULL, version = version + 1
+		WHERE id = ? AND state = 'claimed' AND claimed_by = ?`, state, nowMs, strings.TrimSpace(reason), id, owner)
+	if err != nil {
+		return CoordinatorRequest{}, err
+	}
+	changed, _ := result.RowsAffected()
+	if changed != 1 {
+		return CoordinatorRequest{}, errors.New("coordinator request is not claimed by this owner")
+	}
+	var request CoordinatorRequest
+	var payload string
+	var createdAt, claimedAt int64
+	if err := s.db.QueryRow(`SELECT id, kind, payload_json, actor, state, claimed_by, created_at,
+		COALESCE(claimed_at, 0), version FROM coordinator_requests WHERE id = ?`, id).Scan(
+		&request.ID, &request.Kind, &payload, &request.Actor, &request.State, &request.ClaimedBy,
+		&createdAt, &claimedAt, &request.Version); err != nil {
+		return CoordinatorRequest{}, err
+	}
+	_ = json.Unmarshal([]byte(payload), &request.Payload)
+	request.CreatedAt, request.ClaimedAt = formatMillis(createdAt), formatMillis(claimedAt)
+	request.FinishedAt, request.FailureReason = formatMillis(nowMs), strings.TrimSpace(reason)
+	return request, nil
 }

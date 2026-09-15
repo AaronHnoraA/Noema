@@ -24,8 +24,6 @@
 
 (declare-function my/noema-api-call "init-aaronnote" (channel args callback &optional timeout))
 (declare-function my/noema--ensure-server "init-aaronnote" (&optional callback))
-(declare-function noema-agent-worker-run-work-cell
-                  "noema-agent-worker" (file cell-id &optional session-policy parent-session-id))
 (declare-function evil-local-set-key "evil-core" (state key def))
 
 (defcustom noema-research-graph-dot-program "dot"
@@ -356,18 +354,10 @@ indicator, not an outline: view state is never encoded only in the drawing."
   (quit-window nil (selected-window)))
 
 (defun noema-research-graph-pop-buffer (graph)
-  "Show GRAPH as a temporary pop-up and return it.
-This deliberately uses `display-buffer-pop-up-window' rather than a side or
-dedicated workspace window, so `q' and visiting a node restore the prior
-JuText layout exactly."
-  (pop-to-buffer
-   graph
-   `((display-buffer-reuse-window display-buffer-pop-up-window)
-     (inhibit-same-window . t)
-     (window-height . ,(noema-research-setting 'noema-research-graph-window-height))))
-  ;; Initial rendering can happen before the pop-up has dimensions.
-  (with-current-buffer graph
-    (noema-research-graph-refresh))
+  "Show and select GRAPH in the same dock used at document initialization."
+  (let ((source (buffer-local-value 'noema-research-graph--source graph)))
+    (unless (buffer-live-p source) (user-error "The graph's JuText source was closed"))
+    (select-window (noema-research-graph-dock source)))
   graph)
 
 (defun noema-research-graph-dock (source)
@@ -377,8 +367,17 @@ bottom-left and OutputArea on the right.  A visible DAG is reused.  Docking
 never follows the cursor; `noema-research-sync-graph' is the explicit
 cursor-to-DAG action.  Return the DAG window."
   (let* ((graph (noema-research-graph--buffer-for source))
-         (source-window (get-buffer-window source))
-         (window (or (get-buffer-window graph)
+         (source-window (or (get-buffer-window source) (display-buffer source)))
+         (existing (get-buffer-window graph))
+         ;; Relocate only an old misplaced graph popup, preserving other panes.
+         (_relocate
+          (when (and existing (window-live-p source-window)
+                     (not (and (eq existing (window-in-direction 'below source-window))
+                               (= (car (window-edges existing)) (car (window-edges source-window)))
+                               (= (nth 2 (window-edges existing)) (nth 2 (window-edges source-window))))))
+            (delete-window existing)
+            (setq existing nil)))
+         (window (or existing
                      (display-buffer
                       graph
                       `((display-buffer-in-direction)
@@ -671,7 +670,11 @@ contracted."
     (when (or run persisted event-time)
       (list :run-id (or (and run (noema-research-graph--value run "id"))
                         (plist-get persisted :id) "")
-            :run-status (or (and run (noema-research-graph--value run "status"))
+            :run-status (or (and run
+                                 (equal (noema-research-graph--value run "id") (plist-get persisted :id))
+                                 (member (plist-get persisted :status) '("completed" "cancelled" "failed" "interrupted"))
+                                 (plist-get persisted :status))
+                            (and run (noema-research-graph--value run "status"))
                             (plist-get persisted :status) "")
             :agent (or (and run (or (noema-research-graph--value run "adapter")
                                     (noema-research-graph--value run "agent")))
@@ -2073,7 +2076,7 @@ branches' summary the focus moves up to its parent instead."
                                   "New %s beside “%s”: "
                                 "New %s after “%s”: ")
                               kind label))))
-         (noema-research-op-create kind title parents id))))))
+         (noema-create-node kind title parents id))))))
 
 (defun noema-research-graph-continue ()
   "Create work continuing from the selected node; the board stays open."
@@ -2097,7 +2100,7 @@ branches' summary the focus moves up to its parent instead."
    (lambda ()
      (let* ((kind (noema-research-read-kind "New root node kind: " "question"))
             (title (noema-research-read-title (format "New root %s: " kind))))
-       (noema-research-op-create kind title nil nil)))))
+       (noema-create-node kind title nil nil)))))
 
 (defun noema-research-graph-rename-work-node ()
   "Rename the selected node without changing its identity or edges."
@@ -2139,7 +2142,7 @@ Its JuText block follows the new parent unless STAY (prefix argument) or
      (lambda ()
        (let* ((state (completing-read "State: " noema-research-work-states nil t))
               (reason (when (equal state "dropped") (read-string "Reason (optional): "))))
-         (noema-research-op-set-state id state reason))))))
+         (noema-set-node-state id state reason))))))
 
 (defun noema-research-graph-set-outcome ()
   "Set or clear the selected work's outcome."
@@ -2154,7 +2157,7 @@ Its JuText block follows the new parent unless STAY (prefix argument) or
   "Mark the selected work done."
   (interactive)
   (let ((id (noema-research-graph--selected-node)))
-    (noema-research-graph--edit (lambda () (noema-research-op-set-state id "done")))))
+    (noema-research-graph--edit (lambda () (noema-set-node-state id "done")))))
 
 (defun noema-research-graph-drop ()
   "Drop the selected work, prompting for a reason."
@@ -2162,13 +2165,13 @@ Its JuText block follows the new parent unless STAY (prefix argument) or
   (let ((id (noema-research-graph--selected-node)))
     (noema-research-graph--edit
      (lambda ()
-       (noema-research-op-set-state id "dropped" (read-string "Reason (optional): "))))))
+       (noema-set-node-state id "dropped" (read-string "Reason (optional): "))))))
 
 (defun noema-research-graph-reopen ()
   "Reopen the selected work."
   (interactive)
   (let ((id (noema-research-graph--selected-node)))
-    (noema-research-graph--edit (lambda () (noema-research-op-set-state id "open")))))
+    (noema-research-graph--edit (lambda () (noema-set-node-state id "open")))))
 
 (defun noema-research-graph--relation (type direction action)
   "Apply one TYPE link change in DIRECTION with ACTION around the selection."
@@ -2561,18 +2564,10 @@ to a summary, as in Drop Branch of the assignment walkthrough."
     (when (noema-research-work-prompt-empty-p cell)
       (user-error "“%s” has no prompt yet; visit it (RET) and write what the agent should do"
                   (noema-research-work-node-label document id)))
-    (unless (fboundp 'noema-agent-worker-run-work-cell)
-      (require 'noema-agent-worker))
     (with-current-buffer source
-      (when (buffer-modified-p) (save-buffer))
-      (let ((default-directory
-             (noema-research-repository-root buffer-file-name)))
-        (noema-agent-worker-run-work-cell
-         (expand-file-name buffer-file-name)
-         (noema-research-cell-id cell)
-         ;; D-031: the policy is a `@@session' value; a fork parent is a
-         ;; session name, never a machine id.
-         session-policy nil)))))
+      ;; D-031: SESSION-POLICY is a `@@session' value; a fork parent is a
+      ;; session name, never a machine id.
+      (noema-run-cell cell session-policy))))
 
 (defun noema-research-graph-run-default ()
   "Run selected work using its declared or default session route."

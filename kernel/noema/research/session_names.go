@@ -24,6 +24,25 @@ var sessionNamePattern = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N}._/@-]*$`)
 // ReservedSessionNames are directive keywords and can never be names.
 var ReservedSessionNames = map[string]bool{"fresh": true, "continue": true, "fork": true}
 
+// SessionKeywordLookalikes are words written for a keyword.  They are refused
+// as names so a mistyped keyword fails loudly instead of silently creating a
+// named session.  The table is shared with Node and Emacs.
+var SessionKeywordLookalikes = map[string]string{
+	"refresh": "fresh", "renew": "fresh", "new": "fresh", "reset": "fresh", "restart": "fresh",
+	"resume": "continue", "cont": "continue", "continued": "continue", "same": "continue",
+	"forked": "fork",
+}
+
+// SessionKeywordSuggestion returns the keyword NAME was probably meant to be,
+// or "" when NAME is an ordinary session name.
+func SessionKeywordSuggestion(name string) string {
+	word := strings.ToLower(strings.TrimSpace(name))
+	if ReservedSessionNames[word] {
+		return word
+	}
+	return SessionKeywordLookalikes[word]
+}
+
 // PiSessionName is the per-project coordinator conversation (D-032).
 const PiSessionName = "pi"
 
@@ -83,6 +102,9 @@ func ValidateSessionName(name string) error {
 	}
 	if ReservedSessionNames[name] {
 		return fmt.Errorf("%q is a reserved @@session keyword, not a name", name)
+	}
+	if meant := SessionKeywordSuggestion(name); meant != "" {
+		return fmt.Errorf("%q is not an @@session keyword; did you mean @@session(%s)?", name, meant)
 	}
 	if !sessionNamePattern.MatchString(name) {
 		return fmt.Errorf("invalid session name %q", name)

@@ -369,7 +369,7 @@ ENDPOINT carries the coordinator URL.  Display the buffer when FOCUS."
                       (remhash root noema-pi-router--buffers)))
                   nil t))
       (noema-agent-acp-subscribe
-       :buffer buffer :event 'init-session
+       :buffer buffer :event 'init-finished
        :callback (lambda (_event)
                    (noema-pi-router--adopt root buffer)
                    ;; Requests queued while no Pi was running are not lost.
@@ -435,7 +435,7 @@ under the project's `pi' session name, or starts a fresh one."
          (live (noema-pi-router-buffer root)))
     (remhash root noema-pi-router--closing)
     (if live
-        (pop-to-buffer live)
+        (noema-agent-acp-show-buffer live)
       (noema-pi-router--launch root t))))
 
 ;;;; Lifecycle

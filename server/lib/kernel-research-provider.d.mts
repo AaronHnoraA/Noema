@@ -1,10 +1,18 @@
 import type { ResearchIndexer } from "./research-notebook.mjs";
 
 export type ResearchRuntimeProvider = {
+  probeMCP(args: { root: string; scope?: "global" | "project"; config: Record<string, any> }): Promise<Record<string, any>>;
+	cacheStatus(args: { root: string }): Promise<Record<string, any>>;
+	maintainCache(args: { root: string; policy?: Record<string, any> }): Promise<Record<string, any>>;
+	queueNotebookWriteback(args: { root: string; writeback: Record<string, any> }): Promise<Record<string, any>>;
+	claimNotebookWritebacks(args: { root: string }): Promise<Record<string, any>[]>;
+	completeNotebookWriteback(args: { root: string; writeback: Record<string, any> }): Promise<Record<string, any>>;
 	resolveCell(args: { root: string; notebookId: string; cellId: string }): Promise<{ notebookId: string; cellId: string; path: string; revision: string }>;
   promoteSession(args: { root: string; session: Record<string, any> }): Promise<Record<string, any>>;
   sessions(args: { root: string; workstreamId?: string; adapter?: string; limit?: number }): Promise<Record<string, any>[]>;
   session(args: { root: string; id: string }): Promise<Record<string, any>>;
+	sessionContext(args: { root: string; sessionId: string }): Promise<Record<string, any>>;
+	requestSessionCompaction(args: { root: string; sessionId: string }): Promise<Record<string, any>>;
   beginManualIntervention(args: { root: string; intervention: Record<string, any> }): Promise<Record<string, any>>;
   endManualIntervention(args: { root: string; intervention: Record<string, any> }): Promise<Record<string, any>>;
   manualIntervention(args: { root: string; id: string }): Promise<Record<string, any>>;

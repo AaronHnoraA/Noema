@@ -1720,7 +1720,29 @@ export function createJupyterCellService({
   }
 
   async function saveScriptCellOutputUi(body) {
-    rejectResearchKernel(body, "save Jupyter output UI state");
+    if (researchDocumentRequest(body)) {
+      const context = await managedDocument(body || {});
+      const cellId = markerId(body?.cellId || body?.id);
+      if (!cellId) throw error("Missing Noema work cell id", 400);
+      if (!(context.notebook.cells || []).some((cell) => cell?.id === cellId)) {
+        throw error(`Unknown Noema work cell: ${cellId}`, 404);
+      }
+      const viewFile = researchViewFile(context);
+      return await withMirrorLock(viewFile, async () => {
+        const view = await readResearchView(context);
+        const cells = view.cells && typeof view.cells === "object" && !Array.isArray(view.cells)
+          ? { ...view.cells } : {};
+        const current = cells[cellId] && typeof cells[cellId] === "object" ? cells[cellId] : {};
+        cells[cellId] = {
+          ...current,
+          outputFolded: body?.outputFolded === true,
+          outputExpanded: body?.outputExpanded === true,
+          liveOutput: body?.liveOutput === true,
+        };
+        await writeResearchView(context, { ...view, cells });
+        return { ok: true, file: viewFile, cellId, ui: cells[cellId] };
+      });
+    }
     const noteFile = safeNoteFile(body?.file);
     const kernel = cleanToken(body?.kernel, "python3");
     const session = cleanToken(body?.session, "default");
@@ -2091,6 +2113,33 @@ export function createJupyterCellService({
     return metadata.noema && typeof metadata.noema === "object" ? metadata.noema : {};
   }
 
+  function researchViewFile(context) {
+    if (!context?.researchDocument || !context.projectRoot) return "";
+    const metadata = context.notebook?.metadata?.noema_research;
+    const rawId = String(metadata?.notebook_id || "notebook");
+    const id = rawId.replace(/[^A-Za-z0-9_-]/g, "-") || "notebook";
+    return join(context.projectRoot, ".agent", "views", `${id}.json`);
+  }
+
+  async function readResearchView(context) {
+    const file = researchViewFile(context);
+    if (!file) return {};
+    try {
+      const parsed = JSON.parse(await files.readFile(file, "utf8"));
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch (errorObject) {
+      if (errorObject?.code !== "ENOENT" && !(errorObject instanceof SyntaxError)) throw errorObject;
+      return {};
+    }
+  }
+
+  async function writeResearchView(context, view) {
+    const file = researchViewFile(context);
+    if (!file) throw error("A .noema view requires an initialized project", 400);
+    await writeNotebookFile(file, `${JSON.stringify(view, null, 2)}\n`, files);
+    return file;
+  }
+
   async function managedDocument(body = {}) {
     const scriptFile = managedScriptFile(body);
     const projectRoot = validatedProjectRoot(body, scriptFile);
@@ -2176,6 +2225,9 @@ export function createJupyterCellService({
   async function documentSnapshot(body = {}) {
     const context = await managedDocument(body);
     if (context.researchDocument) {
+      const view = await readResearchView(context);
+      const cellViews = view.cells && typeof view.cells === "object" && !Array.isArray(view.cells)
+        ? view.cells : {};
       let line = 1;
       const cells = [];
       for (const cell of context.notebook.cells || []) {
@@ -2196,7 +2248,8 @@ export function createJupyterCellService({
             outputs: Array.isArray(cell.outputs) ? cell.outputs : [],
             widgetMessages: [],
             widgetOutputs: {},
-            outputUi: {},
+            outputUi: cellViews[cell.id] && typeof cellViews[cell.id] === "object"
+              ? cellViews[cell.id] : {},
           });
         }
         line += source.split("\n").length + 2;

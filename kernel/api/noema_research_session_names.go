@@ -131,6 +131,52 @@ func noemaResearchSessionNameBind(c *gin.Context) {
 	ret.Data = bound
 }
 
+func noemaResearchSessionContext(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+	arg, ok := util.JsonArg(c, ret)
+	if !ok {
+		return
+	}
+	store, ok := noemaResearchStore(arg, ret)
+	if !ok {
+		return
+	}
+	var sessionID string
+	if !util.ParseJsonArgs(arg, ret, util.BindJsonArg("sessionId", &sessionID, true, true)) {
+		return
+	}
+	context, err := store.GetSessionContext(sessionID)
+	if err != nil {
+		ret.Code, ret.Msg = -1, err.Error()
+		return
+	}
+	ret.Data = context
+}
+
+func noemaResearchSessionCompact(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+	arg, ok := util.JsonArg(c, ret)
+	if !ok {
+		return
+	}
+	store, ok := noemaResearchStore(arg, ret)
+	if !ok {
+		return
+	}
+	var sessionID string
+	if !util.ParseJsonArgs(arg, ret, util.BindJsonArg("sessionId", &sessionID, true, true)) {
+		return
+	}
+	compaction, err := store.RequestSessionCompaction(sessionID)
+	if err != nil {
+		ret.Code, ret.Msg = -1, err.Error()
+		return
+	}
+	ret.Data = compaction
+}
+
 // noemaResearchCoordinatorClaim hands pending Pi coordinator requests to the
 // Emacs worker exactly once (D-032).
 func noemaResearchCoordinatorClaim(c *gin.Context) {
@@ -154,6 +200,33 @@ func noemaResearchCoordinatorClaim(c *gin.Context) {
 		return
 	}
 	ret.Data = map[string]any{"requests": requests}
+}
+
+func noemaResearchCoordinatorComplete(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+	arg, ok := util.JsonArg(c, ret)
+	if !ok {
+		return
+	}
+	store, ok := noemaResearchStore(arg, ret)
+	if !ok {
+		return
+	}
+	var id, owner, state, reason string
+	if !util.ParseJsonArgs(arg, ret,
+		util.BindJsonArg("id", &id, true, true),
+		util.BindJsonArg("owner", &owner, true, true),
+		util.BindJsonArg("state", &state, true, true),
+		util.BindJsonArg("reason", &reason, false, false)) {
+		return
+	}
+	request, err := store.CompleteCoordinatorRequest(id, owner, state, reason)
+	if err != nil {
+		ret.Code, ret.Msg = -1, err.Error()
+		return
+	}
+	ret.Data = request
 }
 
 func noemaResearchSessionNameArchive(c *gin.Context) {
