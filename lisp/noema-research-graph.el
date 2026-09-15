@@ -20,6 +20,7 @@
 (require 'transient)
 (require 'noema-research)
 (require 'noema-research-mode)
+(require 'noema-research-settings)
 
 (declare-function my/noema-api-call "init-aaronnote" (channel args callback &optional timeout))
 (declare-function my/noema--ensure-server "init-aaronnote" (&optional callback))
@@ -63,16 +64,86 @@
   "Latest Graphviz layout, used for geometric keyboard navigation.")
 
 (defvar-local noema-research-graph--window-size nil
-  "Last pixel size used to fit this DAG buffer.")
+  "Last window body pixel size (WIDTH . HEIGHT) the board was drawn for.")
+
+(defvar-local noema-research-graph--unfolds nil
+  "WorkNode ids the user expanded against Smart Fold.")
+
+(defvar-local noema-research-graph--focus-depth nil
+  "Descendant levels of the focus lens, or nil for the setting.")
+
+(defvar-local noema-research-graph--focus-history nil
+  "Earlier focus ids, newest first; a nil entry means no focus.")
+
+(defvar-local noema-research-graph--settings nil
+  "Document setting overrides of the source, as (VARIABLE . VALUE).")
+
+(defvar-local noema-research-graph--view nil
+  "Viewport transform (:dx DX :dy DY :scale SCALE), or nil before placement.
+As in el-easydraw's scroll transform, the scene point (X, Y) is drawn at
+\(SCALE·X + DX, SCALE·Y + DY) in the window-sized image.")
+
+(defvar-local noema-research-graph--view-provisional nil
+  "Non-nil when the view was placed before the board had a window.
+The first redraw in a real window places it again for that window's size.")
+
+(defvar-local noema-research-graph--projection-cache nil
+  "Projection drawn by the current scene.")
+
+(defvar-local noema-research-graph--dot-cache nil
+  "(DOT-SOURCE . NAMES) whose Graphviz layout is cached.")
+
+(defvar-local noema-research-graph--scene nil
+  "SVG scene plist: :svg :group :nodes :selected :width :height :key.")
+
+(defvar-local noema-research-graph--image nil
+  "Displayed image, flushed before it is replaced.")
+
+(defvar-local noema-research-graph--redraw-timer nil
+  "Pending coalesced redraw.")
+
+(defvar-local noema-research-graph--view-timer nil
+  "Pending save of the viewport.")
+
+(defvar-local noema-research-graph--fold-cycle 0
+  "Position in the global fold cycle of `noema-research-graph-cycle-folds'.")
+
+(defvar-local noema-research-graph--maximized nil
+  "Window configuration saved by `noema-research-graph-toggle-maximize'.")
+
+(defconst noema-research-graph--margin 8
+  "Scene margin around the Graphviz drawing, in scene pixels.")
+
+(defconst noema-research-graph--scale-range '(0.1 . 4.0)
+  "Smallest and largest geometric zoom.")
 
 (defconst noema-research-graph-buffer-name "*Noema DAG*"
   "Name of the single reusable research DAG buffer.")
 
-(defconst noema-research-graph--fills
-  '(("question" . "#e8f0fe") ("work" . "#e6f4ea")
-    ("checkpoint" . "#fef7e0") ("summary" . "#f3e8fd")
-    ("run" . "#f1f3f4") ("artifact" . "#fce8e6"))
-  "SVG fill colours by research kind.")
+(defconst noema-research-graph--palettes
+  '((light :fills (("question" . "#e8f0fe") ("work" . "#e6f4ea")
+                   ("checkpoint" . "#fef7e0") ("summary" . "#f3e8fd")
+                   ("run" . "#f1f3f4") ("artifact" . "#fce8e6"))
+           :default-fill "#f1f3f4" :stroke "#9aa0a6" :edge "#80868b"
+           :title "#202124" :text "#5f6368" :selected "#1a73e8" :focus "#d93025")
+    (dark :fills (("question" . "#1c3a5e") ("work" . "#1d3d2c")
+                  ("checkpoint" . "#4a3e14") ("summary" . "#3a2850")
+                  ("run" . "#303134") ("artifact" . "#4d2626"))
+          :default-fill "#303134" :stroke "#5f6368" :edge "#9aa0a6"
+          :title "#e8eaed" :text "#bdc1c6" :selected "#8ab4f8" :focus "#f28b82"))
+  "Graph Board palettes by theme.")
+
+(defun noema-research-graph--setting (variable)
+  "Return setting VARIABLE's effective value for this board's document."
+  (noema-research-setting variable noema-research-graph--settings))
+
+(defun noema-research-graph--palette ()
+  "Return the active palette plist."
+  (alist-get (pcase (noema-research-graph--setting 'noema-research-graph-theme)
+               ('dark 'dark)
+               ('light 'light)
+               (_ (if (eq (frame-parameter nil 'background-mode) 'dark) 'dark 'light)))
+             noema-research-graph--palettes))
 
 (defconst noema-research-graph--bindings
   '(("n" . noema-research-graph-continue)
@@ -103,6 +174,42 @@
     ("q" . noema-research-graph-quit)
     ("g" . noema-research-graph-refresh-all)
     ("?" . noema-research-graph-help)
+    ("B" . noema-research-graph-branch-menu)
+    ("v" . noema-research-graph-view-menu)
+    ("<backtab>" . noema-research-graph-cycle-folds)
+    ("[" . noema-research-graph-focus-shallower)
+    ("]" . noema-research-graph-focus-deeper)
+    ("b" . noema-research-graph-focus-back)
+    ("+" . noema-research-graph-zoom-in)
+    ("-" . noema-research-graph-zoom-out)
+    ("0" . noema-research-graph-zoom-reset)
+    ("=" . noema-research-graph-fit)
+    ("." . noema-research-graph-center)
+    ("SPC" . noema-research-graph-interactive-scroll)
+    ("w" . noema-research-graph-toggle-maximize)
+    ("," . noema-research-settings)
+    ("S-<left>" . noema-research-graph-pan-left)
+    ("S-<right>" . noema-research-graph-pan-right)
+    ("S-<up>" . noema-research-graph-pan-up)
+    ("S-<down>" . noema-research-graph-pan-down)
+    ("C-S-<left>" . noema-research-graph-pan-left)
+    ("C-S-<right>" . noema-research-graph-pan-right)
+    ("C-S-<up>" . noema-research-graph-pan-up)
+    ("C-S-<down>" . noema-research-graph-pan-down)
+    ("<down-mouse-1>" . noema-research-graph-mouse-down)
+    ("<down-mouse-2>" . noema-research-graph-mouse-down)
+    ("<mouse-1>" . ignore)
+    ("<mouse-2>" . ignore)
+    ("<double-down-mouse-1>" . ignore)
+    ("<double-mouse-1>" . noema-research-graph-mouse-visit)
+    ("<wheel-up>" . noema-research-graph-wheel)
+    ("<wheel-down>" . noema-research-graph-wheel)
+    ("<wheel-left>" . noema-research-graph-wheel)
+    ("<wheel-right>" . noema-research-graph-wheel)
+    ("S-<wheel-up>" . noema-research-graph-wheel)
+    ("S-<wheel-down>" . noema-research-graph-wheel)
+    ("C-<wheel-up>" . noema-research-graph-wheel)
+    ("C-<wheel-down>" . noema-research-graph-wheel)
     ("h" . noema-research-graph-move-left)
     ("j" . noema-research-graph-move-down)
     ("k" . noema-research-graph-move-up)
@@ -122,11 +229,28 @@
 
 (autoload 'noema-research-attention "noema-research-inspector" nil t)
 
+(defun noema-research-graph--overflow ()
+  "Return arrows naming the viewport edges the drawing continues beyond."
+  (when-let* ((view noema-research-graph--view)
+              (scene noema-research-graph--scene))
+    (pcase-let* ((`(,width . ,height) (noema-research-graph--view-size))
+                 (scale (plist-get view :scale))
+                 (dx (plist-get view :dx))
+                 (dy (plist-get view :dy))
+                 (right (+ dx (* scale (plist-get scene :width))))
+                 (bottom (+ dy (* scale (plist-get scene :height))))
+                 (arrows (concat (if (< dx -1) "←" "") (if (> right (1+ width)) "→" "")
+                                 (if (< dy -1) "↑" "") (if (> bottom (1+ height)) "↓" ""))))
+      (unless (string-empty-p arrows) arrows))))
+
 (defun noema-research-graph--header-line ()
-  "Return the Graph Board's status line: zoom, focus and fold count.
-This is a plain status indicator, not a persistent outline; it exists so
-zoom/focus/fold state is never encoded only inside the drawing itself."
+  "Return the Graph Board's status line.
+It reports semantic zoom, geometric scale, focus with its depth, the fold
+count and the viewport edges the drawing continues beyond.  This is a status
+indicator, not an outline: view state is never encoded only in the drawing."
   (let* ((zoom (capitalize (or noema-research-graph--zoom "branch")))
+         (view noema-research-graph--view)
+         (overflow (noema-research-graph--overflow))
          (document (and (buffer-live-p noema-research-graph--source)
                         (buffer-local-value 'noema-research--document
                                             noema-research-graph--source)))
@@ -138,9 +262,16 @@ zoom/focus/fold state is never encoded only inside the drawing itself."
                                     (noema-research-work-node-field focus-node "title"))
                                noema-research-graph--focus)))
          (folds (length noema-research-graph--folds)))
-    (concat " " zoom
-            (when focus-label (format "  ·  focus: %s" focus-label))
-            (when (> folds 0) (format "  ·  %d folded" folds)))))
+    ;; `header-line-format' treats `%' as a construct; titles may contain it.
+    (string-replace
+     "%" "%%"
+     (concat " " zoom
+            (when view (format "  ·  %d%%" (round (* 100 (plist-get view :scale)))))
+            (when focus-label
+              (format "  ·  focus: %s ±%d" focus-label
+                      (noema-research-graph--effective-focus-depth)))
+            (when (> folds 0) (format "  ·  %d folded" folds))
+            (when overflow (format "  ·  more %s" overflow))))))
 
 (define-derived-mode noema-research-graph-mode special-mode "Noema-Graph"
   "Navigate and edit the lineage graph of a research notebook.
@@ -148,6 +279,14 @@ zoom/focus/fold state is never encoded only inside the drawing itself."
 \\{noema-research-graph-mode-map}"
   (setq-local truncate-lines t)
   (setq-local header-line-format '(:eval (noema-research-graph--header-line)))
+  ;; The buffer holds one window-sized image; panning happens in the SVG
+  ;; transform, so Emacs scrolling, the cursor and wheel coalescing are off.
+  (setq-local cursor-type nil)
+  (setq-local scroll-margin 0)
+  (setq-local auto-hscroll-mode nil)
+  (setq-local mwheel-coalesce-scroll-events nil)
+  (add-hook 'change-major-mode-hook #'noema-research-graph--retire nil t)
+  (add-hook 'kill-buffer-hook #'noema-research-graph--retire nil t)
   ;; AaronEmacs uses Evil normal state in special modes.  Its minor-mode map
   ;; otherwise shadows every single-letter Graph Board command.
   (when (fboundp 'evil-local-set-key)
@@ -163,11 +302,25 @@ zoom/focus/fold state is never encoded only inside the drawing itself."
     ("l/→" "right" noema-research-graph-move-right)
     ("RET" "visit selected node" noema-research-graph-visit)
     ("q" "close graph" noema-research-graph-quit)]
+   ["Viewport"
+    ("S-←" "pan (S-arrows; C-S- farther)" noema-research-graph-pan-left)
+    ("+" "zoom in" noema-research-graph-zoom-in)
+    ("-" "zoom out" noema-research-graph-zoom-out)
+    ("0" "100%" noema-research-graph-zoom-reset)
+    ("=" "fit whole DAG" noema-research-graph-fit)
+    ("." "center selection" noema-research-graph-center)
+    ("SPC" "pan/zoom mode (drag, wheel)" noema-research-graph-interactive-scroll)
+    ("w" "enlarge / restore" noema-research-graph-toggle-maximize)]
    ["View"
     ("TAB" "fold branch" noema-research-graph-toggle-fold)
+    ("S-TAB" "cycle levels" noema-research-graph-cycle-folds)
     ("f" "focus branch" noema-research-graph-toggle-focus)
+    ("]" "focus deeper ([ shallower)" noema-research-graph-focus-deeper)
+    ("b" "previous focus" noema-research-graph-focus-back)
+    ("v" "view menu" noema-research-graph-view-menu)
     ("z" "semantic zoom" noema-research-graph-cycle-zoom)
-    ("g" "refresh data" noema-research-graph-refresh-all)]
+    ("g" "refresh data" noema-research-graph-refresh-all)
+    ("," "settings" noema-research-settings)]
    ["Create"
     ("n" "child work" noema-research-graph-continue)
     ("s" "sibling work" noema-research-graph-sibling)
@@ -186,6 +339,7 @@ zoom/focus/fold state is never encoded only inside the drawing itself."
     ("p" "lineage links" noema-research-graph-lineage-menu)
     ("D" "dependencies" noema-research-graph-depends-menu)
     ("X" "structure" noema-research-graph-structure)
+    ("B" "branch" noema-research-graph-branch-menu)
     ("u" "undo structure" noema-research-graph-undo)
     ("U" "redo structure" noema-research-graph-redo)]
    ["Run / inspect"
@@ -196,6 +350,8 @@ zoom/focus/fold state is never encoded only inside the drawing itself."
 (defun noema-research-graph-quit ()
   "Dismiss the temporary Graph pop-up and return to JuText."
   (interactive)
+  (noema-research-graph--flush-view-save)
+  (noema-research-graph--restore-size)
   (quit-window nil (selected-window)))
 
 (defun noema-research-graph-pop-buffer (graph)
@@ -205,9 +361,9 @@ dedicated workspace window, so `q' and visiting a node restore the prior
 JuText layout exactly."
   (pop-to-buffer
    graph
-   '((display-buffer-reuse-window display-buffer-pop-up-window)
+   `((display-buffer-reuse-window display-buffer-pop-up-window)
      (inhibit-same-window . t)
-     (window-height . 0.42)))
+     (window-height . ,(noema-research-setting 'noema-research-graph-window-height))))
   ;; Initial rendering can happen before the pop-up has dimensions.
   (with-current-buffer graph
     (noema-research-graph-refresh))
@@ -263,10 +419,16 @@ JuText layout exactly."
     (user-error "This is an Artifact projection; select its WorkNode to edit structure"))))
 
 (defun noema-research-graph--node-at-point ()
-  "Return the node id at point or the selected node."
-  (or (get-text-property (point) 'noema-research-node)
-      noema-research-graph--selected
-      (user-error "No node selected: move with h/j/k/l, or create a root node with N")))
+  "Return the selected node id."
+  (or noema-research-graph--selected
+      (user-error "No node selected: click one, move with h/j/k/l, or create a root node with N")))
+
+(defun noema-research-graph--related-parent (id)
+  "Return the visible parent of `Related branches' summary ID, or nil."
+  (when (and (stringp id) (string-prefix-p "noema-summary:related:" id))
+    (car (plist-get (seq-find (lambda (node) (equal (plist-get node :id) id))
+                              (plist-get noema-research-graph--projection-cache :nodes))
+                    :parents))))
 
 (defun noema-research-graph--selected-node ()
   "Return the selected materialized node id."
@@ -305,6 +467,8 @@ JuText window instead of leaving a dedicated DAG window behind."
         (source noema-research-graph--source)
         (graph-window (selected-window)))
     (noema-research-graph--require-materialized id)
+    (noema-research-graph--flush-view-save)
+    (noema-research-graph--restore-size)
     (quit-window nil graph-window)
     (pop-to-buffer source)
     (with-current-buffer source
@@ -314,12 +478,60 @@ JuText window instead of leaving a dedicated DAG window behind."
 
 
 (defun noema-research-graph--save-view ()
-  "Persist the board's focus and folds next to the notebook."
-  (when-let* ((file (buffer-file-name noema-research-graph--source)))
-    (noema-research-view-write
-     file (buffer-local-value 'noema-research--document noema-research-graph--source)
-     noema-research-graph--focus noema-research-graph--folds
-     noema-research-graph--zoom)))
+  "Persist the board's focus, folds, zoom and viewport next to the notebook."
+  (when-let* ((source noema-research-graph--source)
+              ((buffer-live-p source))
+              (file (buffer-file-name source)))
+    (let ((focus noema-research-graph--focus)
+          (folds noema-research-graph--folds)
+          (zoom noema-research-graph--zoom)
+          (unfolds noema-research-graph--unfolds)
+          (depth noema-research-graph--focus-depth)
+          (view noema-research-graph--view))
+      (noema-research-view-update
+       file (buffer-local-value 'noema-research--document source)
+       (lambda (object)
+         (puthash "focus" (or focus :null) object)
+         (puthash "folds" (vconcat folds) object)
+         (puthash "zoom" (or zoom :null) object)
+         (puthash "unfolds" (vconcat unfolds) object)
+         (puthash "focus_depth" (or depth :null) object)
+         (puthash "viewport"
+                  (if view
+                      (noema-research--table
+                       "dx" (round (plist-get view :dx))
+                       "dy" (round (plist-get view :dy))
+                       "scale" (/ (fround (* 10000 (plist-get view :scale))) 10000))
+                    :null)
+                  object))))))
+
+(defun noema-research-graph--schedule-view-save ()
+  "Save the viewport once panning and zooming pause."
+  (when (timerp noema-research-graph--view-timer)
+    (cancel-timer noema-research-graph--view-timer))
+  (let ((graph (current-buffer)))
+    (setq noema-research-graph--view-timer
+          (run-with-idle-timer
+           1 nil
+           (lambda ()
+             (when (buffer-live-p graph)
+               (with-current-buffer graph
+                 (setq noema-research-graph--view-timer nil)
+                 (noema-research-graph--save-view))))))))
+
+(defun noema-research-graph--flush-view-save ()
+  "Save a pending viewport change now."
+  (when (timerp noema-research-graph--view-timer)
+    (cancel-timer noema-research-graph--view-timer)
+    (setq noema-research-graph--view-timer nil)
+    (noema-research-graph--save-view)))
+
+(defun noema-research-graph--retire ()
+  "Save pending view state and cancel this board's timers."
+  (noema-research-graph--flush-view-save)
+  (when (timerp noema-research-graph--redraw-timer)
+    (cancel-timer noema-research-graph--redraw-timer))
+  (setq noema-research-graph--redraw-timer nil))
 
 (defun noema-research-graph--lineage-maps (document)
   "Return (CHILDREN PARENTS) hash tables for DOCUMENT's lineage edges."
@@ -346,31 +558,45 @@ JuText window instead of leaving a dedicated DAG window behind."
           (setq stack (append (gethash id graph) stack)))))
     (nreverse result)))
 
+(defun noema-research-graph--smart-folds (document &optional unprotected)
+  "Return the branches Smart Fold contracts in DOCUMENT.
+A branch contracts when its head's state is in
+`noema-research-graph-auto-fold-states', it has descendants, the user has
+not expanded it (`noema-research-graph--unfolds') and no earlier Smart Fold
+already hides it.  Unless UNPROTECTED, the selected or focused path is never
+contracted."
+  (pcase-let* ((`(,children ,parents) (noema-research-graph--lineage-maps document))
+               (states (noema-research-graph--setting
+                        'noema-research-graph-auto-fold-states))
+               (anchor (and (not unprotected)
+                            (or noema-research-graph--focus
+                                noema-research-graph--selected)))
+               (protected (make-hash-table :test #'equal))
+               (automatic nil))
+    (when anchor
+      (puthash anchor t protected)
+      (dolist (id (noema-research-graph--walk anchor parents))
+        (puthash id t protected)))
+    (dolist (node (noema-research-work-nodes document))
+      (let* ((id (noema-research-work-node-id node))
+             (state (noema-research-work-node-field node "state"))
+             (descendants (noema-research-graph--walk id children)))
+        (when (and descendants
+                   (member state states)
+                   (not (gethash id protected))
+                   (not (member id noema-research-graph--unfolds))
+                   (not (seq-some
+                         (lambda (fold)
+                           (member id (noema-research-graph--walk fold children)))
+                         automatic)))
+          (setq automatic (append automatic (list id))))))
+    automatic))
+
 (defun noema-research-graph--automatic-folds (document)
-  "Return deterministic semantic folds for the current zoom and selection."
-  (when (equal noema-research-graph--zoom "overview")
-    (pcase-let* ((`(,children ,parents) (noema-research-graph--lineage-maps document))
-                 (anchor (or noema-research-graph--focus
-                             noema-research-graph--selected))
-                 (protected (make-hash-table :test #'equal))
-                 (automatic nil))
-      (when anchor
-        (puthash anchor t protected)
-        (dolist (id (noema-research-graph--walk anchor parents))
-          (puthash id t protected)))
-      (dolist (node (noema-research-work-nodes document))
-        (let* ((id (noema-research-work-node-id node))
-               (state (noema-research-work-node-field node "state"))
-               (descendants (noema-research-graph--walk id children)))
-          (when (and descendants
-                     (member state '("done" "dropped"))
-                     (not (gethash id protected))
-                     (not (seq-some
-                           (lambda (fold)
-                             (member id (noema-research-graph--walk fold children)))
-                           automatic)))
-            (setq automatic (append automatic (list id))))))
-      automatic)))
+  "Return Smart Fold contractions for the current zoom and selection."
+  (when (member noema-research-graph--zoom
+                (noema-research-graph--setting 'noema-research-graph-auto-fold-zooms))
+    (noema-research-graph--smart-folds document)))
 
 (defun noema-research-graph--run-time (run)
   "Return RUN's latest durable timestamp, or nil."
@@ -632,14 +858,24 @@ instead of choosing an arbitrary winner."
       (plist-put (plist-put projection :nodes nodes) :edges edges))))
 
 (defun noema-research-graph--projection (document)
-  "Return the semantic Graph Board projection for DOCUMENT."
+  "Return the semantic Graph Board projection for DOCUMENT.
+Lookups are indexed for the pass, so projecting stays linear in the size of
+the document instead of rescanning every Cell for every node."
+  (noema-research-with-lookup document
+    (noema-research-graph--projection-1 document)))
+
+(defun noema-research-graph--projection-1 (document)
+  "Compute `noema-research-graph--projection' for DOCUMENT."
   (let* ((folds (delete-dups
                  (append noema-research-graph--folds
                          (noema-research-graph--automatic-folds document))))
          (projection (noema-research-projection
                       document :focus noema-research-graph--focus :folds folds
                       :protect (delq nil (list noema-research-graph--focus
-                                               noema-research-graph--selected)))))
+                                               noema-research-graph--selected))
+                      :depth (noema-research-graph--effective-focus-depth)
+                      :siblings (noema-research-graph--setting
+                                 'noema-research-graph-focus-siblings))))
     (setq projection (noema-research-graph--decorate-projection projection document)
           projection (noema-research-graph--focus-summaries projection document)
           projection (noema-research-graph--detail-runs projection)
@@ -792,7 +1028,13 @@ instead of choosing an arbitrary winner."
   (let ((names (make-hash-table :test #'equal))
         (index 0))
     (with-temp-buffer
-      (insert "digraph noema {\n  rankdir=TB;\n  nodesep=0.35;\n  ranksep=0.45;\n"
+      (insert (format "digraph noema {\n  rankdir=%s;\n  nodesep=%s;\n  ranksep=%s;\n"
+                      (if (equal (noema-research-graph--setting
+                                  'noema-research-graph-rankdir)
+                                 "LR")
+                          "LR" "TB")
+                      (noema-research-graph--setting 'noema-research-graph-nodesep)
+                      (noema-research-graph--setting 'noema-research-graph-ranksep))
               ;; Graphviz must reserve room for the largest face used by our
               ;; SVG painter.  The first line is 11px semibold and later
               ;; lines are smaller, so sizing every line as Helvetica Bold 11
@@ -825,50 +1067,61 @@ instead of choosing an arbitrary winner."
   (mapcar (lambda (point) (cons (float (aref point 0)) (- height (aref point 1))))
           (append points nil)))
 
+(defun noema-research-graph--run-dot (source)
+  "Return Graphviz JSON for DOT SOURCE, or nil when Graphviz is unavailable."
+  (when-let* ((program (executable-find
+                        (noema-research-graph--setting
+                         'noema-research-graph-dot-program))))
+    (with-temp-buffer
+      (insert source)
+      (when (zerop (call-process-region (point-min) (point-max) program t t nil "-Tjson"))
+        (noema-research-parse-json (buffer-string))))))
+
 (defun noema-research-graph--layout (projection)
   "Return a Graphviz layout plist for PROJECTION, or nil without Graphviz.
 The plist has :width, :height, :nodes (plists :id :x :y :width :height) and
 :edges (plists :points :arrow :dashed), in top-left coordinates."
-  (when-let* ((program (executable-find noema-research-graph-dot-program)))
-    (pcase-let ((`(,source . ,names) (noema-research-graph--dot-source projection)))
-      (with-temp-buffer
-        (insert source)
-        (when (zerop (call-process-region (point-min) (point-max) program t t nil "-Tjson"))
-          (let* ((json (noema-research-parse-json (buffer-string)))
-                 (bb (mapcar #'string-to-number
-                             (split-string (noema-research--get json "bb" "0,0,0,0") ",")))
-                 (height (float (nth 3 bb)))
-                 (ids (make-hash-table :test #'equal))
-                 nodes edges)
-            (maphash (lambda (id name) (puthash name id ids)) names)
-            (seq-doseq (object (noema-research--get json "objects" []))
-              (when-let* ((id (gethash (noema-research--get object "name") ids))
-                          (pos (noema-research--get object "pos")))
-                (let ((xy (mapcar #'string-to-number (split-string pos ","))))
-                  (push (list :id id
-                              :x (float (nth 0 xy))
-                              :y (- height (nth 1 xy))
-                              :width (* 72 (string-to-number
-                                            (format "%s" (noema-research--get object "width" "0"))))
-                              :height (* 72 (string-to-number
-                                             (format "%s" (noema-research--get object "height" "0")))))
-                        nodes))))
-            (seq-doseq (edge (noema-research--get json "edges" []))
-              (let (points arrow)
-                (seq-doseq (op (noema-research--get edge "_draw_" []))
-                  (when (member (noema-research--get op "op") '("b" "B"))
-                    (setq points (noema-research-graph--points
-                                  (noema-research--get op "points" []) height))))
-                (seq-doseq (op (noema-research--get edge "_hdraw_" []))
-                  (when (member (noema-research--get op "op") '("P" "p"))
-                    (setq arrow (noema-research-graph--points
-                                 (noema-research--get op "points" []) height))))
-                (let ((style (noema-research--get edge "style")))
-                  (push (list :points points :arrow arrow :style style
-                              :dashed (equal style "dashed"))
-                        edges))))
-            (list :width (float (nth 2 bb)) :height height
-                  :nodes (nreverse nodes) :edges (nreverse edges))))))))
+  (pcase-let ((`(,source . ,names) (noema-research-graph--dot-source projection)))
+    (noema-research-graph--layout-from-source source names)))
+
+(defun noema-research-graph--layout-from-source (source names)
+  "Lay out DOT SOURCE whose NAMES map node ids to DOT names.
+Return the plist described in `noema-research-graph--layout', or nil."
+  (when-let* ((json (noema-research-graph--run-dot source)))
+    (let* ((bb (mapcar #'string-to-number
+                       (split-string (noema-research--get json "bb" "0,0,0,0") ",")))
+           (height (float (nth 3 bb)))
+           (ids (make-hash-table :test #'equal))
+           nodes edges)
+      (maphash (lambda (id name) (puthash name id ids)) names)
+      (seq-doseq (object (noema-research--get json "objects" []))
+        (when-let* ((id (gethash (noema-research--get object "name") ids))
+                    (pos (noema-research--get object "pos")))
+          (let ((xy (mapcar #'string-to-number (split-string pos ","))))
+            (push (list :id id
+                        :x (float (nth 0 xy))
+                        :y (- height (nth 1 xy))
+                        :width (* 72 (string-to-number
+                                      (format "%s" (noema-research--get object "width" "0"))))
+                        :height (* 72 (string-to-number
+                                       (format "%s" (noema-research--get object "height" "0")))))
+                  nodes))))
+      (seq-doseq (edge (noema-research--get json "edges" []))
+        (let (points arrow)
+          (seq-doseq (op (noema-research--get edge "_draw_" []))
+            (when (member (noema-research--get op "op") '("b" "B"))
+              (setq points (noema-research-graph--points
+                            (noema-research--get op "points" []) height))))
+          (seq-doseq (op (noema-research--get edge "_hdraw_" []))
+            (when (member (noema-research--get op "op") '("P" "p"))
+              (setq arrow (noema-research-graph--points
+                           (noema-research--get op "points" []) height))))
+          (let ((style (noema-research--get edge "style")))
+            (push (list :points points :arrow arrow :style style
+                        :dashed (equal style "dashed"))
+                  edges))))
+      (list :width (float (nth 2 bb)) :height height
+            :nodes (nreverse nodes) :edges (nreverse edges)))))
 
 ;;;; Drawing
 
@@ -879,30 +1132,26 @@ The plist has :width, :height, :nodes (plists :id :x :y :width :height) and
                          points)))
     (concat "M " (car shifted) " C " (string-join (cdr shifted) " "))))
 
-(defun noema-research-graph--fit-scale (layout)
-  "Return a scale that fits LAYOUT in the displayed Graph window."
-  (if-let* ((window (get-buffer-window (current-buffer) t))
-            (available-width (max 120 (- (window-body-width window t) 12)))
-            (available-height (max 120 (- (window-body-height window t) 12))))
-      (min 1.0
-           (/ (float available-width) (+ 16.0 (plist-get layout :width)))
-           (/ (float available-height) (+ 16.0 (plist-get layout :height))))
-    1.0))
+(defun noema-research-graph--style-shape (shape selected base-stroke palette)
+  "Stroke SHAPE as SELECTED, or with BASE-STROKE, using PALETTE."
+  (dom-set-attribute shape 'stroke (if selected (plist-get palette :selected) base-stroke))
+  (dom-set-attribute shape 'stroke-width (if selected 2.5 1)))
 
-(defun noema-research-graph--svg (projection layout selected &optional scale)
-  "Return (SVG . MAP) drawing PROJECTION with LAYOUT, highlighting SELECTED.
-SCALE changes the SVG viewport and its image-map coordinates while preserving
-Graphviz's coordinate system through a viewBox."
-  (let* ((margin 8)
-         (scale (or scale 1.0))
-         (natural-width (ceiling (+ (* 2 margin) (plist-get layout :width))))
-         (natural-height (ceiling (+ (* 2 margin) (plist-get layout :height))))
-         (svg (svg-create (max 1 (round (* scale natural-width)))
-                          (max 1 (round (* scale natural-height)))
-                          :viewBox (format "0 0 %d %d" natural-width natural-height)
-                          :preserveAspectRatio "xMidYMid meet"))
+(defun noema-research-graph--svg (projection layout selected)
+  "Return (SVG . SHAPES) drawing PROJECTION with LAYOUT, highlighting SELECTED.
+SVG is a complete drawing at its natural size whose content lives in the
+group `noema-scene'.  SHAPES maps node ids to (SHAPE . BASE-STROKE), so a
+selection change restyles two shapes instead of rebuilding the scene."
+  (let* ((margin noema-research-graph--margin)
+         (palette (noema-research-graph--palette))
+         (fills (plist-get palette :fills))
+         (dim (noema-research-graph--setting 'noema-research-graph-dim-states))
+         (svg (svg-create (ceiling (+ (* 2 margin) (plist-get layout :width)))
+                          (ceiling (+ (* 2 margin) (plist-get layout :height)))))
+         (group (dom-node 'g '((id . "noema-scene"))))
          (by-id (make-hash-table :test #'equal))
-         map)
+         (shapes (make-hash-table :test #'equal)))
+    (dom-append-child svg group)
     (dolist (node (plist-get projection :nodes))
       (puthash (plist-get node :id) node by-id))
     (dolist (edge (plist-get layout :edges))
@@ -910,15 +1159,15 @@ Graphviz's coordinate system through a viewBox."
         (let ((dash (pcase (plist-get edge :style)
                       ("dashed" "5 4") ("dotted" "2 4") (_ nil))))
           (dom-append-child
-           svg (dom-node 'path `((d . ,(noema-research-graph--path points margin))
-                                 (fill . "none") (stroke . "#80868b")
-                                 (stroke-width . "1.2")
-                                 ,@(when dash `((stroke-dasharray . ,dash))))))))
+           group (dom-node 'path `((d . ,(noema-research-graph--path points margin))
+                                   (fill . "none") (stroke . ,(plist-get palette :edge))
+                                   (stroke-width . "1.2")
+                                   ,@(when dash `((stroke-dasharray . ,dash))))))))
       (when-let* ((arrow (plist-get edge :arrow)))
-        (svg-polygon svg (mapcar (lambda (point)
-                                   (cons (+ margin (car point)) (+ margin (cdr point))))
-                                 arrow)
-                     :fill "#80868b" :stroke "#80868b")))
+        (svg-polygon group (mapcar (lambda (point)
+                                     (cons (+ margin (car point)) (+ margin (cdr point))))
+                                   arrow)
+                     :fill (plist-get palette :edge) :stroke (plist-get palette :edge))))
     (dolist (box (plist-get layout :nodes))
       (let* ((id (plist-get box :id))
              (node (gethash id by-id))
@@ -929,77 +1178,521 @@ Graphviz's coordinate system through a viewBox."
              (cx (+ x0 (/ width 2.0)))
              (cy (+ y0 (/ height 2.0)))
              (kind (plist-get node :kind))
-             (fill (or (cdr (assoc kind noema-research-graph--fills)) "#f1f3f4"))
-             (stroke (cond ((equal id selected) "#1a73e8")
-                           ((plist-get node :focus) "#d93025")
-                           (t "#9aa0a6")))
-             (stroke-width (if (equal id selected) 2.5 1))
+             (state (plist-get node :state))
+             (base-stroke (if (plist-get node :focus)
+                              (plist-get palette :focus)
+                            (plist-get palette :stroke)))
              (dash (if (or (plist-get node :ghost)
                            (plist-get node :summary)
-                           (equal (plist-get node :state) "dropped"))
+                           (equal state "dropped"))
                        "4 3" "none"))
-             (shape-args (list :fill fill :stroke stroke
-                               :stroke-width stroke-width
+             (shape-args (list :fill (or (cdr (assoc kind fills))
+                                         (plist-get palette :default-fill))
                                :stroke-dasharray dash))
+             (item (dom-node 'g (when (and state (member state dim))
+                                  '((opacity . "0.45")))))
              (lines (noema-research-graph--label-lines node))
              (line-height 13)
              (text-y (+ cy 4 (- (/ (* (1- (length lines)) line-height) 2.0)))))
         (pcase kind
           ("checkpoint"
-           (apply #'svg-polygon svg
+           (apply #'svg-polygon item
                   (list (cons cx y0) (cons (+ x0 width) cy)
                         (cons cx (+ y0 height)) (cons x0 cy))
                   shape-args))
           ("run"
-           (apply #'svg-ellipse svg cx cy (/ width 2.0) (/ height 2.0) shape-args))
+           (apply #'svg-ellipse item cx cy (/ width 2.0) (/ height 2.0) shape-args))
           (_
-           (apply #'svg-rectangle svg x0 y0 width height
+           (apply #'svg-rectangle item x0 y0 width height
                   :rx (if (equal kind "summary") 12 6)
                   :ry (if (equal kind "summary") 12 6)
                   shape-args)))
+        (let ((shape (car (dom-children item))))
+          (noema-research-graph--style-shape shape (equal id selected) base-stroke palette)
+          (puthash id (cons shape base-stroke) shapes))
         (cl-loop for line in lines
                  for index from 0
-                 do (svg-text svg line
+                 do (svg-text item line
                               :x cx :y (+ text-y (* index line-height))
                               :text-anchor "middle"
                               :font-size (if (zerop index) 11 9.5)
                               :font-weight (if (zerop index) "600" "400")
                               :font-family "Helvetica"
-                              :fill (if (zerop index) "#202124" "#5f6368")
+                              :fill (plist-get palette (if (zerop index) :title :text))
                               :stroke "none"))
-        (push `((rect . ((,(round (* scale x0)) . ,(round (* scale y0)))
-                         . (,(round (* scale (+ x0 width)))
-                            . ,(round (* scale (+ y0 height))))))
-                ,(intern (concat "noema-node-" id))
-                (pointer hand help-echo ,(string-join lines " — ")))
-              map)))
-    (cons svg map)))
+        (dom-append-child group item)))
+    (cons svg shapes)))
 
-(defun noema-research-graph--insert-image (projection)
-  "Insert the Graphviz drawing of PROJECTION; return non-nil on success."
-  (when-let* ((layout (and (plist-get projection :nodes)
-                           (noema-research-graph--layout projection))))
-    (setq noema-research-graph--layout-cache layout)
-    (let ((scale (noema-research-graph--fit-scale layout)))
-      (pcase-let ((`(,svg . ,map)
-                   (noema-research-graph--svg projection layout
-                                              noema-research-graph--selected
-                                              scale)))
-      (let ((keymap (make-sparse-keymap)))
-        (dolist (area map)
-          (let* ((symbol (nth 1 area))
-                 (id (string-remove-prefix "noema-node-" (symbol-name symbol))))
-            (define-key keymap (vector symbol 'mouse-1)
-                        (lambda () (interactive) (noema-research-graph-select id)))
-            (define-key keymap (vector symbol 'double-mouse-1)
-                        (lambda ()
-                          (interactive)
-                          (setq noema-research-graph--selected id)
-                          (noema-research-graph-visit)))))
-        (set-keymap-parent keymap noema-research-graph-mode-map)
-        (use-local-map keymap))
-      (insert-image (svg-image svg :map map))
-      t))))
+(defun noema-research-graph--scene-key (projection)
+  "Return what the drawn scene of PROJECTION depends on besides selection."
+  (list (car noema-research-graph--dot-cache)
+        (noema-research-graph--palette)
+        (noema-research-graph--setting 'noema-research-graph-dim-states)
+        (mapcar (lambda (node)
+                  (list (plist-get node :id) (plist-get node :kind)
+                        (plist-get node :state) (plist-get node :focus)
+                        (plist-get node :ghost) (plist-get node :summary)))
+                (plist-get projection :nodes))))
+
+(defun noema-research-graph--build-scene (projection)
+  "Draw PROJECTION with the cached layout and return the scene plist."
+  (pcase-let* ((layout noema-research-graph--layout-cache)
+               (`(,svg . ,shapes) (noema-research-graph--svg
+                                   projection layout noema-research-graph--selected)))
+    (list :svg svg
+          :group (seq-find (lambda (child) (and (consp child) (eq (dom-tag child) 'g)))
+                           (dom-children svg))
+          :nodes shapes
+          :selected noema-research-graph--selected
+          :width (+ (* 2 noema-research-graph--margin) (plist-get layout :width))
+          :height (+ (* 2 noema-research-graph--margin) (plist-get layout :height))
+          :key (noema-research-graph--scene-key projection))))
+
+(defun noema-research-graph--restyle-selection (old new)
+  "Move the current scene's selection highlight from node OLD to NEW."
+  (let ((palette (noema-research-graph--palette))
+        (shapes (plist-get noema-research-graph--scene :nodes)))
+    (dolist (id (delete-dups (delq nil (list old new))))
+      (when-let* ((entry (gethash id shapes)))
+        (noema-research-graph--style-shape (car entry) (equal id new) (cdr entry) palette)))
+    (setq noema-research-graph--scene
+          (plist-put noema-research-graph--scene :selected new))))
+
+;;;; Viewport
+;;
+;; Modelled on el-easydraw's editor view (`edraw-scroll-transform-xy',
+;; `edraw-update-root-transform', `edraw-zoom'): the image always has the
+;; window's size, the scene sits in one group with a
+;; translate(DX DY) scale(SCALE) transform, and panning or zooming only
+;; changes that transform.  Pointer positions are mapped back through the
+;; transform and hit-tested against the Graphviz boxes.
+
+(defun noema-research-graph--view-size ()
+  "Return the (WIDTH . HEIGHT) in pixels of the image this board draws.
+The image fills the window body, so a long DAG is never shrunk to fit; the
+view transform decides which part of it shows."
+  (if-let* ((window (get-buffer-window (current-buffer) t)))
+      (cons (max 120 (- (window-body-width window t) 2))
+            (max 80 (- (window-body-height window t) 2)))
+    (if-let* ((size noema-research-graph--window-size))
+        (cons (max 120 (- (car size) 2)) (max 80 (- (cdr size) 2)))
+      (cons 800 480))))
+
+(defun noema-research-graph--clamp-view (view)
+  "Return VIEW with its scale in range and part of the drawing kept visible."
+  (pcase-let* ((`(,width . ,height) (noema-research-graph--view-size))
+               (scene noema-research-graph--scene)
+               (keep (max 16 (noema-research-graph--setting
+                              'noema-research-graph-follow-margin)))
+               (scale (min (cdr noema-research-graph--scale-range)
+                           (max (car noema-research-graph--scale-range)
+                                (float (plist-get view :scale)))))
+               (drawn-width (* scale (plist-get scene :width)))
+               (drawn-height (* scale (plist-get scene :height))))
+    (list :dx (round (max (- keep drawn-width) (min (- width keep) (plist-get view :dx))))
+          :dy (round (max (- keep drawn-height) (min (- height keep) (plist-get view :dy))))
+          :scale scale)))
+
+(defun noema-research-graph--fit-view ()
+  "Return the view showing the whole drawing, centered, at most at 100%."
+  (pcase-let* ((`(,width . ,height) (noema-research-graph--view-size))
+               (scene-width (plist-get noema-research-graph--scene :width))
+               (scene-height (plist-get noema-research-graph--scene :height))
+               (scale (min 1.0 (/ (float width) scene-width)
+                           (/ (float height) scene-height))))
+    (list :dx (/ (- width (* scale scene-width)) 2.0)
+          :dy (/ (- height (* scale scene-height)) 2.0)
+          :scale scale)))
+
+(defun noema-research-graph--node-center (view id)
+  "Return the viewport pixel (X . Y) of node ID's center under VIEW, or nil."
+  (when-let* ((box (noema-research-graph--layout-node id)))
+    (let ((scale (plist-get view :scale)))
+      (cons (+ (plist-get view :dx)
+               (* scale (+ noema-research-graph--margin (plist-get box :x))))
+            (+ (plist-get view :dy)
+               (* scale (+ noema-research-graph--margin (plist-get box :y))))))))
+
+(defun noema-research-graph--centered-view (view id)
+  "Return VIEW panned so node ID sits in the middle, or nil if ID is not drawn."
+  (when-let* ((center (noema-research-graph--node-center view id)))
+    (pcase-let ((`(,width . ,height) (noema-research-graph--view-size)))
+      (list :dx (+ (plist-get view :dx) (- (/ width 2.0) (car center)))
+            :dy (+ (plist-get view :dy) (- (/ height 2.0) (cdr center)))
+            :scale (plist-get view :scale)))))
+
+(defun noema-research-graph--revealed-view (view id)
+  "Return VIEW minimally panned so node ID lies within the follow margin."
+  (if-let* ((box (noema-research-graph--layout-node id))
+            (center (noema-research-graph--node-center view id)))
+      (pcase-let* ((`(,width . ,height) (noema-research-graph--view-size))
+                   (scale (plist-get view :scale))
+                   (margin (noema-research-graph--setting
+                            'noema-research-graph-follow-margin))
+                   (half-width (/ (* scale (plist-get box :width)) 2.0))
+                   (half-height (/ (* scale (plist-get box :height)) 2.0)))
+        (cl-flet ((shift (low high limit)
+                    (cond ((< low margin) (- margin low))
+                          ((> high (- limit margin))
+                           (- (min (- high (- limit margin)) (- low margin))))
+                          (t 0))))
+          (list :dx (+ (plist-get view :dx)
+                       (shift (- (car center) half-width)
+                              (+ (car center) half-width) width))
+                :dy (+ (plist-get view :dy)
+                       (shift (- (cdr center) half-height)
+                              (+ (cdr center) half-height) height))
+                :scale scale)))
+    view))
+
+(defun noema-research-graph--zoomed-view (view magnification x y)
+  "Return VIEW zoomed by MAGNIFICATION around viewport pixel X, Y.
+The drawing point under X, Y stays in place, as in el-easydraw's `edraw-zoom'."
+  (let* ((old (float (plist-get view :scale)))
+         (new (min (cdr noema-research-graph--scale-range)
+                   (max (car noema-research-graph--scale-range) (* old magnification))))
+         (ratio (/ new old)))
+    (list :dx (- (* ratio (plist-get view :dx)) (* (- ratio 1) x))
+          :dy (- (* ratio (plist-get view :dy)) (* (- ratio 1) y))
+          :scale new)))
+
+(defun noema-research-graph--top-node ()
+  "Return the id of the topmost, then leftmost, laid-out node."
+  (plist-get (car (sort (copy-sequence (plist-get noema-research-graph--layout-cache :nodes))
+                        (lambda (left right)
+                          (if (= (plist-get left :y) (plist-get right :y))
+                              (< (plist-get left :x) (plist-get right :x))
+                            (< (plist-get left :y) (plist-get right :y))))))
+             :id))
+
+(defun noema-research-graph--initial-view ()
+  "Return the view a newly drawn DAG opens with.
+The whole DAG is fitted when that keeps it at least at
+`noema-research-graph-min-readable-scale'.  A larger DAG opens at 100%,
+centered on the selection, or with its top node at the top of the window."
+  (let ((fit (noema-research-graph--fit-view)))
+    (if (>= (plist-get fit :scale)
+            (noema-research-graph--setting 'noema-research-graph-min-readable-scale))
+        fit
+      (let* ((selected (and (noema-research-graph--layout-node
+                             noema-research-graph--selected)
+                            noema-research-graph--selected))
+             (id (or selected (noema-research-graph--top-node)))
+             (view (noema-research-graph--centered-view (list :dx 0 :dy 0 :scale 1.0) id)))
+        (cond ((null view) (list :dx 0 :dy 0 :scale 1.0))
+              (selected view)
+              (t (let ((box (noema-research-graph--layout-node id)))
+                   (plist-put view :dy
+                              (- (noema-research-graph--setting
+                                  'noema-research-graph-follow-margin)
+                                 noema-research-graph--margin
+                                 (- (plist-get box :y) (/ (plist-get box :height) 2.0)))))))))))
+
+(defun noema-research-graph--node-at (x y)
+  "Return the id of the node drawn at viewport pixel X, Y, or nil.
+The pixel is mapped back through the view transform and hit-tested against
+the Graphviz boxes; the smallest enclosing box wins."
+  (when-let* ((view noema-research-graph--view)
+              (layout noema-research-graph--layout-cache))
+    (let* ((scale (float (plist-get view :scale)))
+           (layout-x (- (/ (- x (plist-get view :dx)) scale) noema-research-graph--margin))
+           (layout-y (- (/ (- y (plist-get view :dy)) scale) noema-research-graph--margin))
+           best best-area)
+      (dolist (node (plist-get layout :nodes))
+        (let ((width (plist-get node :width))
+              (height (plist-get node :height)))
+          (when (and (<= (abs (- layout-x (plist-get node :x))) (/ width 2.0))
+                     (<= (abs (- layout-y (plist-get node :y))) (/ height 2.0))
+                     (or (null best-area) (< (* width height) best-area)))
+            (setq best node best-area (* width height)))))
+      (and best (plist-get best :id)))))
+
+(defun noema-research-graph--apply-view ()
+  "Size the scene's SVG to the viewport and apply the view transform."
+  (pcase-let ((`(,width . ,height) (noema-research-graph--view-size))
+              (svg (plist-get noema-research-graph--scene :svg))
+              (view noema-research-graph--view))
+    (dom-set-attribute svg 'width width)
+    (dom-set-attribute svg 'height height)
+    (dom-set-attribute svg 'viewBox (format "0 0 %d %d" width height))
+    (dom-set-attribute (plist-get noema-research-graph--scene :group) 'transform
+                       (format "translate(%.2f %.2f) scale(%.4f)"
+                               (plist-get view :dx) (plist-get view :dy)
+                               (plist-get view :scale)))))
+
+(defun noema-research-graph--display (&optional notice)
+  "Show the scene as one window-sized image, or NOTICE when there is none."
+  (let ((inhibit-read-only t))
+    (with-silent-modifications
+      (erase-buffer)
+      (when noema-research-graph--image
+        (ignore-errors (image-flush noema-research-graph--image))
+        (setq noema-research-graph--image nil))
+      (if (and noema-research-graph--scene noema-research-graph--view
+               (display-images-p) (image-type-available-p 'svg))
+          (progn
+            (noema-research-graph--apply-view)
+            ;; Read the scene before `with-temp-buffer': it is buffer-local.
+            ;; `:scale 1.0' cancels `image-scaling-factor', so image pixels
+            ;; are viewport pixels (el-easydraw does the same).
+            (let ((svg (plist-get noema-research-graph--scene :svg)))
+              (setq noema-research-graph--image
+                    (create-image (with-temp-buffer
+                                    (svg-print svg)
+                                    (buffer-string))
+                                  'svg t :scale 1.0)))
+            (insert (propertize " " 'display noema-research-graph--image)))
+        (insert (propertize
+                 (or notice
+                     "DAG rendering requires a graphical Emacs with SVG and Graphviz.")
+                 'face 'warning))))
+    (goto-char (point-min))))
+
+(defun noema-research-graph--set-view (view)
+  "Install VIEW, kept in range, redisplay the board and schedule saving it."
+  (setq noema-research-graph--view (noema-research-graph--clamp-view view)
+        noema-research-graph--view-provisional nil)
+  (noema-research-graph--display)
+  (force-mode-line-update)
+  (noema-research-graph--schedule-view-save))
+
+(defun noema-research-graph--require-scene ()
+  "Signal a `user-error' unless the board shows a drawing."
+  (unless (and noema-research-graph--scene noema-research-graph--view)
+    (user-error "The DAG has no drawing to move")))
+
+(defun noema-research-graph--pan-distance (event)
+  "Return the pixels one pan key EVENT moves, chosen by its modifiers."
+  (let ((modifiers (seq-difference (event-modifiers event)
+                                   '(click double triple drag down))))
+    (or (cdr (seq-find (lambda (entry) (seq-set-equal-p (car entry) modifiers))
+                       (noema-research-graph--setting
+                        'noema-research-graph-scroll-distance)))
+        80)))
+
+(defun noema-research-graph--pan (dx dy)
+  "Move the drawing by DX, DY viewport pixels."
+  (noema-research-graph--require-scene)
+  (let ((view noema-research-graph--view))
+    (noema-research-graph--set-view
+     (list :dx (+ (plist-get view :dx) dx)
+           :dy (+ (plist-get view :dy) dy)
+           :scale (plist-get view :scale)))))
+
+(defun noema-research-graph-pan-left ()
+  "Show more of the DAG to the left."
+  (interactive)
+  (noema-research-graph--pan (noema-research-graph--pan-distance last-input-event) 0))
+
+(defun noema-research-graph-pan-right ()
+  "Show more of the DAG to the right."
+  (interactive)
+  (noema-research-graph--pan (- (noema-research-graph--pan-distance last-input-event)) 0))
+
+(defun noema-research-graph-pan-up ()
+  "Show more of the DAG above."
+  (interactive)
+  (noema-research-graph--pan 0 (noema-research-graph--pan-distance last-input-event)))
+
+(defun noema-research-graph-pan-down ()
+  "Show more of the DAG below."
+  (interactive)
+  (noema-research-graph--pan 0 (- (noema-research-graph--pan-distance last-input-event))))
+
+(defun noema-research-graph--zoom-by (magnification &optional x y)
+  "Zoom by MAGNIFICATION around viewport pixel X, Y.
+Without X and Y, zoom around the selected node when it is visible, else
+around the middle of the window."
+  (noema-research-graph--require-scene)
+  (pcase-let* ((view noema-research-graph--view)
+               (`(,width . ,height) (noema-research-graph--view-size))
+               (selected (and noema-research-graph--selected
+                              (noema-research-graph--node-center
+                               view noema-research-graph--selected)))
+               (anchor (or (and x y (cons x y))
+                           (and selected
+                                (<= 0 (car selected) width)
+                                (<= 0 (cdr selected) height)
+                                selected)
+                           (cons (/ width 2.0) (/ height 2.0)))))
+    (noema-research-graph--set-view
+     (noema-research-graph--zoomed-view view magnification (car anchor) (cdr anchor)))))
+
+(defun noema-research-graph-zoom-in ()
+  "Magnify the DAG around the selection."
+  (interactive)
+  (noema-research-graph--zoom-by
+   (noema-research-graph--setting 'noema-research-graph-zoom-step)))
+
+(defun noema-research-graph-zoom-out ()
+  "Shrink the DAG around the selection."
+  (interactive)
+  (noema-research-graph--zoom-by
+   (/ 1.0 (noema-research-graph--setting 'noema-research-graph-zoom-step))))
+
+(defun noema-research-graph-zoom-reset ()
+  "Show the DAG at 100%, where every title is legible."
+  (interactive)
+  (noema-research-graph--require-scene)
+  (noema-research-graph--zoom-by (/ 1.0 (plist-get noema-research-graph--view :scale))))
+
+(defun noema-research-graph-fit ()
+  "Fit the whole DAG into the window."
+  (interactive)
+  (noema-research-graph--require-scene)
+  (noema-research-graph--set-view (noema-research-graph--fit-view)))
+
+(defun noema-research-graph-center ()
+  "Center the selected node in the window."
+  (interactive)
+  (noema-research-graph--require-scene)
+  (noema-research-graph--set-view
+   (or (noema-research-graph--centered-view noema-research-graph--view
+                                            (noema-research-graph--node-at-point))
+       (user-error "The selected node is not drawn"))))
+
+(defun noema-research-graph--event-xy (event)
+  "Return the viewport pixel (X . Y) of mouse EVENT, or nil."
+  (let ((xy (posn-x-y (event-start event))))
+    (and (consp xy) (numberp (car xy)) (numberp (cdr xy)) xy)))
+
+(defun noema-research-graph-mouse-down (event)
+  "Select the node under EVENT on a click, or pan the DAG by dragging.
+Dragging follows el-easydraw's `edraw-editor-scroll-by-dragging': the new
+offset is the offset at the press plus the pointer's movement since."
+  (interactive "e")
+  (when-let* ((window (posn-window (event-start event)))
+              ((windowp window)))
+    (select-window window))
+  (when-let* ((start (and noema-research-graph--view
+                          (noema-research-graph--event-xy event))))
+    (let ((origin noema-research-graph--view)
+          moved done)
+      (track-mouse
+        (setq track-mouse 'dragging)
+        (while (not done)
+          (let ((next (read-event)))
+            (if (mouse-movement-p next)
+                (when-let* ((xy (noema-research-graph--event-xy next)))
+                  (when (or moved
+                            (> (+ (abs (- (car xy) (car start)))
+                                  (abs (- (cdr xy) (cdr start))))
+                               3))
+                    (setq moved t)
+                    (noema-research-graph--set-view
+                     (list :dx (+ (plist-get origin :dx) (- (car xy) (car start)))
+                           :dy (+ (plist-get origin :dy) (- (cdr xy) (cdr start)))
+                           :scale (plist-get origin :scale)))))
+              (setq done t)
+              (unless (memq (event-basic-type next) '(mouse-1 mouse-2 mouse-3))
+                (push next unread-command-events))))))
+      (unless moved
+        (when-let* ((id (noema-research-graph--node-at (car start) (cdr start))))
+          (noema-research-graph-select id))))))
+
+(defun noema-research-graph-mouse-visit (event)
+  "Visit the node double-clicked with EVENT."
+  (interactive "e")
+  (when-let* ((xy (noema-research-graph--event-xy event))
+              (id (noema-research-graph--node-at (car xy) (cdr xy))))
+    (setq noema-research-graph--selected id)
+    (noema-research-graph-visit)))
+
+(defun noema-research-graph-wheel (event)
+  "Pan or zoom the DAG with wheel EVENT.
+Vertical wheels pan up and down, horizontal wheels and trackpad swipes pan
+sideways, `S-' turns a vertical wheel sideways and `C-' zooms around the
+pointer.  With `noema-research-graph-wheel-action' set to `zoom' the plain
+vertical wheel zooms too.  Precise trackpad deltas are used when present."
+  (interactive "e")
+  (noema-research-graph--require-scene)
+  (let* ((type (event-basic-type event))
+         (modifiers (event-modifiers event))
+         (vertical (memq type '(wheel-up wheel-down)))
+         (delta (nth 4 event))
+         (precise (and (consp delta) (numberp (car delta)) (numberp (cdr delta))
+                       (abs (if vertical (cdr delta) (car delta)))))
+         (clicks (if (numberp (nth 2 event)) (max 1 (nth 2 event)) 1))
+         (pixels (if (and precise (> precise 0))
+                     precise
+                   (* clicks (noema-research-graph--setting
+                              'noema-research-graph-wheel-step))))
+         (xy (noema-research-graph--event-xy event)))
+    (cond
+     ((and vertical
+           (or (memq 'control modifiers)
+               (and (not (memq 'shift modifiers))
+                    (eq (noema-research-graph--setting 'noema-research-graph-wheel-action)
+                        'zoom))))
+      (let ((step (expt (noema-research-graph--setting 'noema-research-graph-zoom-step)
+                        (min 1.0 (/ pixels 40.0)))))
+        (noema-research-graph--zoom-by (if (eq type 'wheel-up) step (/ 1.0 step))
+                                       (car xy) (cdr xy))))
+     ((and vertical (not (memq 'shift modifiers)))
+      (noema-research-graph--pan 0 (if (eq type 'wheel-up) pixels (- pixels))))
+     (t
+      (let ((reveal-left (if vertical
+                             (eq type 'wheel-up)
+                           (eq type (if mouse-wheel-flip-direction 'wheel-left 'wheel-right)))))
+        (noema-research-graph--pan (if reveal-left pixels (- pixels)) 0))))))
+
+(defun noema-research-graph-interactive-scroll ()
+  "Pan and zoom until SPC, q or a right click, as in el-easydraw.
+Drag pans, the wheel and + / - zoom, arrows pan (S- and C- for farther),
+0 shows 100% and = fits the whole DAG."
+  (interactive)
+  (noema-research-graph--require-scene)
+  (let (done)
+    (while (not done)
+      (let ((event (read-event
+                    "DAG view: drag pan · wheel/+/- zoom · arrows pan · 0 100% · = fit · SPC/q done")))
+        (cond
+         ((memq (car-safe event) '(down-mouse-1 down-mouse-2))
+          (noema-research-graph-mouse-down event))
+         ((memq (car-safe event) '(wheel-up wheel-down))
+          (let ((xy (noema-research-graph--event-xy event))
+                (step (noema-research-graph--setting 'noema-research-graph-zoom-step)))
+            (noema-research-graph--zoom-by (if (eq (car event) 'wheel-up) step (/ 1.0 step))
+                                           (car xy) (cdr xy))))
+         ((memq (car-safe event) '(wheel-left wheel-right))
+          (noema-research-graph-wheel event))
+         ((or (memq event '(?q ?\s)) (eq (car-safe event) 'mouse-3))
+          (setq done t))
+         ((eq event ?+) (noema-research-graph-zoom-in))
+         ((eq event ?-) (noema-research-graph-zoom-out))
+         ((eq event ?0) (noema-research-graph-zoom-reset))
+         ((eq event ?=) (noema-research-graph-fit))
+         ((memq (event-basic-type event) '(left right up down))
+          (let ((distance (noema-research-graph--pan-distance event)))
+            (pcase (event-basic-type event)
+              ('left (noema-research-graph--pan distance 0))
+              ('right (noema-research-graph--pan (- distance) 0))
+              ('up (noema-research-graph--pan 0 distance))
+              ('down (noema-research-graph--pan 0 (- distance)))))))))
+    (message nil)))
+
+(defun noema-research-graph--restore-size ()
+  "Restore the window layout saved when the DAG pop-up was enlarged."
+  (when-let* ((configuration noema-research-graph--maximized))
+    (setq noema-research-graph--maximized nil)
+    (set-window-configuration configuration)))
+
+(defun noema-research-graph-toggle-maximize ()
+  "Let the DAG fill the frame, or restore the layout it popped up in.
+This works for stacked and side-by-side pop-ups alike; `q' and visiting a
+node restore the layout first."
+  (interactive)
+  (cond
+   (noema-research-graph--maximized
+    (noema-research-graph--restore-size)
+    (when-let* ((window (get-buffer-window (current-buffer))))
+      (select-window window)))
+   ((one-window-p t)
+    (user-error "The DAG already fills the frame; q closes it"))
+   (t
+    (let ((configuration (current-window-configuration)))
+      (delete-other-windows)
+      (setq noema-research-graph--maximized configuration)))))
 
 (defun noema-research-graph--layout-node (id)
   "Return the cached layout node identified by ID."
@@ -1038,9 +1731,7 @@ Graphviz's coordinate system through a viewBox."
                (score (+ primary (* secondary 2.0))))
           (when (and eligible (or (null best-score) (< score best-score)))
             (setq best candidate best-score score)))))
-    (setq noema-research-graph--selected
-          (plist-get (or best current) :id))
-    (noema-research-graph-refresh)))
+    (noema-research-graph-select (plist-get (or best current) :id))))
 
 (defun noema-research-graph-move-left ()
   "Select the nearest DAG node to the left." (interactive)
@@ -1058,114 +1749,123 @@ Graphviz's coordinate system through a viewBox."
   "Select the nearest DAG node below." (interactive)
   (noema-research-graph--move 'down))
 
-(defun noema-research-graph--insert-outline (projection)
-  "Insert the navigable lineage outline of PROJECTION."
-  (let ((nodes (plist-get projection :nodes))
-        (by-id (make-hash-table :test #'equal))
-        (children (make-hash-table :test #'equal))
-        (depends (make-hash-table :test #'equal))
-        (printed (make-hash-table :test #'equal)))
-    (dolist (node nodes)
-      (puthash (plist-get node :id) node by-id))
-    (dolist (node nodes)
-      (dolist (parent (plist-get node :parents))
-        (puthash parent (append (gethash parent children) (list (plist-get node :id)))
-                 children)))
-    (dolist (edge (plist-get projection :edges))
-      (when (equal (nth 2 edge) "depends")
-        (puthash (nth 1 edge) (1+ (gethash (nth 1 edge) depends 0)) depends)))
-    (cl-labels ((emit (id depth)
-                  (let ((node (gethash id by-id))
-                        (repeat (gethash id printed))
-                        (start (point)))
-                    (insert (make-string (* 2 depth) ?\s)
-                            (if (plist-get node :ghost)
-                                "◇ "
-                              (pcase (plist-get node :kind)
-                                ("question" "? ")
-                                ("checkpoint" "◆ ")
-                                ("summary" "▸ ")
-                                ("run" "↳ ")
-                                ("artifact" "⧉ ")
-                                (_ "• ")))
-                            (plist-get node :title))
-                    (when-let* ((state (plist-get node :state)))
-                      (insert " [" state
-                              (if (plist-get node :outcome)
-                                  (concat "/" (plist-get node :outcome))
-                                "")
-                              "]"))
-                    (when (> (gethash id depends 0) 0)
-                      (insert (format "  ⇠%d" (gethash id depends))))
-                    (when-let* ((run-status (plist-get node :run-status)))
-                      (insert (format "  {run:%s}" run-status)))
-                    (when-let* ((summary (plist-get node :fold-summary)))
-                      (insert (format "  {%s · %d nodes · last %s}"
-                                      (or (noema-research-graph--humanize
-                                           (plist-get summary :primary-outcome))
-                                          "no outcome")
-                                      (or (plist-get summary :nodes) 0)
-                                      (or (noema-research-graph--short-time
-                                           (plist-get summary :last-activity)) "—"))))
-                    (when-let* ((reason (plist-get node :dropped-reason)))
-                      (insert (format "  — %s" reason)))
-                    (when (plist-get node :focus) (insert "  ◎"))
-                    (when repeat (insert "  ↩"))
-                    (add-text-properties start (point) `(noema-research-node ,id))
-                    (when (equal id noema-research-graph--selected)
-                      (add-face-text-property start (point) 'highlight))
-                    (insert "\n")
-                    (unless repeat
-                      (puthash id t printed)
-                      (dolist (child (gethash id children))
-                        (emit child (1+ depth)))))))
-      (dolist (node nodes)
-        (unless (plist-get node :parents)
-          (emit (plist-get node :id) 0)))
-      (dolist (node nodes)
-        (unless (gethash (plist-get node :id) printed)
-          (emit (plist-get node :id) 0))))))
-
 ;;;; Commands
 
 (defun noema-research-graph--prune-view (document)
   "Forget focus, folds and selection naming WorkNodes absent from DOCUMENT.
 Persist the view again when focus or folds changed."
   (let ((focus noema-research-graph--focus)
-        (folds noema-research-graph--folds))
+        (folds noema-research-graph--folds)
+        (unfolds noema-research-graph--unfolds)
+        (live (lambda (id) (noema-research-find-work-node document id))))
     (unless (noema-research-find-work-node document noema-research-graph--focus)
       (setq noema-research-graph--focus nil))
-    (setq noema-research-graph--folds
-          (seq-filter (lambda (id) (noema-research-find-work-node document id))
-                      noema-research-graph--folds))
+    (setq noema-research-graph--folds (seq-filter live noema-research-graph--folds)
+          noema-research-graph--unfolds (seq-filter live noema-research-graph--unfolds)
+          noema-research-graph--focus-history
+          (seq-filter (lambda (id) (or (null id) (funcall live id)))
+                      noema-research-graph--focus-history))
     (when (and (stringp noema-research-graph--selected)
                (string-prefix-p "wn_" noema-research-graph--selected)
                (not (noema-research-find-work-node document noema-research-graph--selected)))
       (setq noema-research-graph--selected nil))
     (unless (and (equal focus noema-research-graph--focus)
-                 (equal folds noema-research-graph--folds))
+                 (equal folds noema-research-graph--folds)
+                 (equal unfolds noema-research-graph--unfolds))
       (noema-research-graph--save-view))))
 
-(defun noema-research-graph-refresh ()
-  "Redraw the Graph Board."
-  (interactive)
-  (let* ((document (noema-research-graph--document))
+(defun noema-research-graph--cached-document ()
+  "Return the source document without re-syncing its text."
+  (unless (buffer-live-p noema-research-graph--source)
+    (user-error "The research notebook buffer is no longer live"))
+  (or (buffer-local-value 'noema-research--document noema-research-graph--source)
+      (noema-research-graph--document)))
+
+(defun noema-research-graph--redraw (&optional sync)
+  "Redisplay the board, redoing only what changed.
+With SYNC, first sync the source JuText text.  As with el-easydraw's
+invalidated UI parts, work happens in layers: Graphviz runs only when the
+DOT source changed, the SVG scene is rebuilt only when its drawn content
+changed, a selection change restyles two shapes, and the view transform is
+applied last.  A new selection or a new layout is scrolled into view."
+  (let* ((document (if sync
+                       (noema-research-graph--document)
+                     (noema-research-graph--cached-document)))
          (_pruned (noema-research-graph--prune-view document))
          (projection (noema-research-graph--with-proposals
                       (noema-research-graph--projection document)
                       document noema-research-graph--proposals))
-         (selected noema-research-graph--selected)
-         (inhibit-read-only t))
-    (use-local-map noema-research-graph-mode-map)
-    (erase-buffer)
-    (setq noema-research-graph--layout-cache nil)
-    (if (and (display-images-p) (image-type-available-p 'svg)
-             (noema-research-graph--insert-image projection))
-        (goto-char (point-min))
-      (insert (propertize
-               "DAG rendering requires a graphical Emacs with SVG and Graphviz."
-               'face 'warning)))
-    (setq noema-research-graph--selected selected)))
+         (previous (plist-get noema-research-graph--scene :selected))
+         (relaid nil)
+         (notice nil))
+    (setq noema-research-graph--projection-cache projection)
+    (if (null (plist-get projection :nodes))
+        (setq noema-research-graph--layout-cache nil
+              noema-research-graph--dot-cache nil
+              noema-research-graph--scene nil
+              notice "No WorkNodes yet · ? lists commands")
+      (pcase-let ((`(,source . ,names) (noema-research-graph--dot-source projection)))
+        (unless (and noema-research-graph--layout-cache
+                     (equal source (car noema-research-graph--dot-cache)))
+          (setq noema-research-graph--layout-cache
+                (noema-research-graph--layout-from-source source names)
+                noema-research-graph--dot-cache (cons source names)
+                noema-research-graph--scene nil
+                relaid t)))
+      (cond
+       ((null noema-research-graph--layout-cache)
+        (setq noema-research-graph--dot-cache nil
+              notice "Drawing the DAG requires Graphviz (dot)."))
+       ((and noema-research-graph--scene
+             (equal (plist-get noema-research-graph--scene :key)
+                    (noema-research-graph--scene-key projection)))
+        (unless (equal previous noema-research-graph--selected)
+          (noema-research-graph--restyle-selection previous noema-research-graph--selected)))
+       (t
+        (setq noema-research-graph--scene (noema-research-graph--build-scene projection)))))
+    (when noema-research-graph--scene
+      (let* ((displayed (get-buffer-window (current-buffer) t))
+             (view (if (and noema-research-graph--view
+                            (not (and displayed noema-research-graph--view-provisional)))
+                       noema-research-graph--view
+                     (setq noema-research-graph--view-provisional (not displayed))
+                     (noema-research-graph--initial-view))))
+        ;; A new layout that fits the window at the current scale is centered,
+        ;; so folding a large DAG down does not leave it in a corner.
+        (when relaid
+          (pcase-let* ((`(,width . ,height) (noema-research-graph--view-size))
+                       (scale (plist-get view :scale))
+                       (drawn-width (* scale (plist-get noema-research-graph--scene :width)))
+                       (drawn-height (* scale (plist-get noema-research-graph--scene :height))))
+            (when (and (<= drawn-width width) (<= drawn-height height))
+              (setq view (list :dx (/ (- width drawn-width) 2.0)
+                               :dy (/ (- height drawn-height) 2.0)
+                               :scale scale)))))
+        (when (and noema-research-graph--selected
+                   (or relaid (not (equal previous noema-research-graph--selected))))
+          (setq view (noema-research-graph--revealed-view view noema-research-graph--selected)))
+        (setq noema-research-graph--view (noema-research-graph--clamp-view view))))
+    (noema-research-graph--display notice)
+    (force-mode-line-update)))
+
+(defun noema-research-graph--schedule-redraw ()
+  "Redraw once after the pending Noema data callbacks have arrived."
+  (unless (timerp noema-research-graph--redraw-timer)
+    (let ((graph (current-buffer)))
+      (setq noema-research-graph--redraw-timer
+            (run-with-timer
+             0 nil
+             (lambda ()
+               (when (buffer-live-p graph)
+                 (with-current-buffer graph
+                   (setq noema-research-graph--redraw-timer nil)
+                   (when (buffer-live-p noema-research-graph--source)
+                     (noema-research-graph--redraw))))))))))
+
+(defun noema-research-graph-refresh ()
+  "Sync the source document and redraw the Graph Board."
+  (interactive)
+  (noema-research-graph--redraw t))
 
 (defun noema-research-graph-refresh-proposals ()
   "Refresh pending Proposal ghosts from the Noema authority."
@@ -1197,7 +1897,7 @@ Persist the view again when focus or folds changed."
                  (setq noema-research-graph--proposals
                        (noema-research-graph--sequence
                         (noema-research-graph--value result "proposals")))
-                 (noema-research-graph-refresh))))))))))
+                 (noema-research-graph--schedule-redraw))))))))))
 
 (defun noema-research-graph-refresh-runs ()
   "Refresh durable Run activity used by the Graph Board."
@@ -1225,7 +1925,7 @@ Persist the view again when focus or folds changed."
                (setq noema-research-graph--runs
                      (noema-research-graph--sequence
                       (noema-research-graph--value result "runs")))
-               (noema-research-graph-refresh)))))))))
+               (noema-research-graph--schedule-redraw)))))))))
 
 (defun noema-research-graph-refresh-events ()
   "Refresh durable WorkNode event times used by fold summaries."
@@ -1253,7 +1953,7 @@ Persist the view again when focus or folds changed."
                (setq noema-research-graph--events
                      (noema-research-graph--sequence
                       (noema-research-graph--value result "events")))
-               (noema-research-graph-refresh)))))))))
+               (noema-research-graph--schedule-redraw)))))))))
 
 (defun noema-research-graph-refresh-artifacts ()
   "Refresh ArtifactLinks used by the Graph Board detail projection."
@@ -1283,7 +1983,7 @@ Persist the view again when focus or folds changed."
                (setq noema-research-graph--artifacts
                      (noema-research-graph--sequence
                       (noema-research-graph--value result "links")))
-               (noema-research-graph-refresh)))))))))
+               (noema-research-graph--schedule-redraw)))))))))
 
 (defun noema-research-graph-refresh-all ()
   "Redraw the Graph Board and refresh Proposals, Runs and ArtifactLinks."
@@ -1294,35 +1994,46 @@ Persist the view again when focus or folds changed."
   (noema-research-graph-refresh-events)
   (noema-research-graph-refresh-artifacts))
 
-(defun noema-research-graph--find-node (id &optional start)
-  "Return the first outline position of node ID at or after START."
-  (let ((position (or start (point-min)))
-        found)
-    (while (and (not found) (< position (point-max)))
-      (if (equal (get-text-property position 'noema-research-node) id)
-          (setq found position)
-        (setq position (next-single-property-change
-                        position 'noema-research-node nil (point-max)))))
-    found))
+(defun noema-research-graph--selection-affects-projection-p ()
+  "Return non-nil when moving the selection can change the drawn DAG.
+The selection only protects its path from folds, so without manual folds and
+outside Smart Fold's zoom levels the projection is independent of it."
+  (or noema-research-graph--folds
+      (member noema-research-graph--zoom
+              (noema-research-graph--setting 'noema-research-graph-auto-fold-zooms))))
 
 (defun noema-research-graph-select (id)
-  "Select graph node ID."
+  "Select graph node ID and keep it inside the viewport.
+When the selection cannot change the projection, only the two strokes and
+the view transform change; otherwise the board redraws."
   (setq noema-research-graph--selected id)
-  (noema-research-graph-refresh))
+  (if (and noema-research-graph--scene noema-research-graph--view
+           (gethash id (plist-get noema-research-graph--scene :nodes))
+           (not (noema-research-graph--selection-affects-projection-p)))
+      (progn
+        (noema-research-graph--restyle-selection
+         (plist-get noema-research-graph--scene :selected) id)
+        (noema-research-graph--set-view
+         (noema-research-graph--revealed-view noema-research-graph--view id)))
+    (noema-research-graph--redraw)))
 
 (defun noema-research-graph-visit ()
-  "Visit the node at point in its JuText buffer.
-A Cell-less WorkNode is offered a new header Cell first."
+  "Visit the selected node in its JuText buffer.
+A Cell-less WorkNode is offered a new header Cell first.  On a `Related
+branches' summary the focus moves up to its parent instead."
   (interactive)
-  (let* ((id (noema-research-graph--selected-node))
-         (document (noema-research-graph--document)))
-    (when (and (noema-research-find-work-node document id)
-               (not (noema-research-primary-cell document id)))
-      (let ((label (noema-research-work-node-label document id)))
-        (unless (y-or-n-p (format "“%s” has no Cell; create one? " label))
-          (user-error "“%s” has no Cell" label)))
-      (noema-research-graph--edit (lambda () (noema-research-op-attach-cell id))))
-    (noema-research-graph--jump-and-call nil)))
+  (if-let* ((parent (noema-research-graph--related-parent
+                     noema-research-graph--selected)))
+      (noema-research-graph--refocus parent)
+    (let* ((id (noema-research-graph--selected-node))
+           (document (noema-research-graph--document)))
+      (when (and (noema-research-find-work-node document id)
+                 (not (noema-research-primary-cell document id)))
+        (let ((label (noema-research-work-node-label document id)))
+          (unless (y-or-n-p (format "“%s” has no Cell; create one? " label))
+            (user-error "“%s” has no Cell" label)))
+        (noema-research-graph--edit (lambda () (noema-research-op-attach-cell id))))
+      (noema-research-graph--jump-and-call nil))))
 
 (defun noema-research-graph--create-from (kind relation)
   "Create a KIND node as RELATION (`child' or `sibling') of the selection."
@@ -1540,27 +2251,199 @@ Its JuText block follows the new parent unless STAY (prefix argument) or
         (noema-research-goto-cell id)
         (noema-research-inspect)))))
 
+;;;; Folding
+
+(defun noema-research-graph--smart-fold-candidate-p (document id)
+  "Return non-nil when Smart Fold would contract ID if it were not selected."
+  (let ((noema-research-graph--unfolds (remove id noema-research-graph--unfolds)))
+    (member id (noema-research-graph--smart-folds document t))))
+
+(defun noema-research-graph--apply-view-change (&optional note)
+  "Persist the view state, redraw, and echo NOTE."
+  (noema-research-graph--save-view)
+  (noema-research-graph--redraw)
+  (when note (message "%s" note)))
+
 (defun noema-research-graph-toggle-fold ()
-  "Fold or unfold the branch below the node at point."
+  "Fold or expand the branch below the selected node.
+Expanding a branch Smart Fold would contract records the expansion, so it
+stays open after the selection moves on.  On a `Related branches' summary
+the focus moves up to its parent instead."
   (interactive)
   (let ((id (noema-research-graph--node-at-point)))
-    (noema-research-graph--require-materialized id)
-    (setq noema-research-graph--selected id
-          noema-research-graph--folds (if (member id noema-research-graph--folds)
-                                          (remove id noema-research-graph--folds)
-                                        (append noema-research-graph--folds (list id))))
-    (noema-research-graph--save-view)
-    (noema-research-graph-refresh)))
+    (if-let* ((parent (noema-research-graph--related-parent id)))
+        (noema-research-graph--refocus parent)
+      (noema-research-graph--require-materialized id)
+      (let ((document (noema-research-graph--cached-document)))
+        (unless (noema-research-branch-ids document id)
+          (user-error "“%s” has no branch to fold"
+                      (noema-research-work-node-label document id)))
+        (setq noema-research-graph--selected id)
+        (if (member id noema-research-graph--folds)
+            (progn
+              (setq noema-research-graph--folds (remove id noema-research-graph--folds))
+              (when (noema-research-graph--smart-fold-candidate-p document id)
+                (setq noema-research-graph--unfolds
+                      (append (remove id noema-research-graph--unfolds) (list id))))
+              (noema-research-graph--apply-view-change "Branch expanded"))
+          (setq noema-research-graph--unfolds (remove id noema-research-graph--unfolds)
+                noema-research-graph--folds (append noema-research-graph--folds (list id)))
+          (noema-research-graph--apply-view-change "Branch folded"))))))
+
+(defun noema-research-graph--node-ids (document)
+  "Return DOCUMENT's WorkNode ids in document order."
+  (mapcar #'noema-research-work-node-id (noema-research-work-nodes document)))
+
+(defun noema-research-graph-fold-finished ()
+  "Fold every branch Smart Fold contracts, in every zoom level."
+  (interactive)
+  (let* ((document (noema-research-graph--cached-document))
+         (ids (let ((noema-research-graph--unfolds nil))
+                (noema-research-graph--smart-folds document t))))
+    (unless ids (user-error "No finished branch to fold"))
+    (setq noema-research-graph--folds (delete-dups (append noema-research-graph--folds ids))
+          noema-research-graph--unfolds (seq-difference noema-research-graph--unfolds ids))
+    (noema-research-graph--apply-view-change
+     (format "%d finished branch%s folded" (length ids) (if (cdr ids) "es" "")))))
+
+(defun noema-research-graph-unfold-all ()
+  "Expand every branch, including ones Smart Fold would contract."
+  (interactive)
+  (let ((document (noema-research-graph--cached-document)))
+    (setq noema-research-graph--folds nil
+          noema-research-graph--unfolds (let ((noema-research-graph--unfolds nil))
+                                          (noema-research-graph--smart-folds document t))
+          noema-research-graph--fold-cycle 0)
+    (noema-research-graph--apply-view-change "Every branch expanded")))
+
+(defun noema-research-graph--lineage-depths (document)
+  "Return a hash table of each WorkNode's shortest lineage depth in DOCUMENT."
+  (pcase-let* ((`(,children ,_parents ,roots) (noema-research-lineage-maps document))
+               (depths (make-hash-table :test #'equal))
+               (queue (mapcar (lambda (root) (cons root 0)) roots)))
+    (while queue
+      (pcase-let ((`(,id . ,depth) (pop queue)))
+        (unless (gethash id depths)
+          (puthash id depth depths)
+          (dolist (child (gethash id children))
+            (setq queue (append queue (list (cons child (1+ depth)))))))))
+    depths))
+
+(defun noema-research-graph-fold-to-level (level)
+  "Show LEVEL lineage levels and fold every branch below them."
+  (interactive (list (read-number "Show lineage levels: " 2)))
+  (unless (and (integerp level) (> level 0))
+    (user-error "Levels must be a positive integer"))
+  (let* ((document (noema-research-graph--cached-document))
+         (depths (noema-research-graph--lineage-depths document)))
+    (setq noema-research-graph--folds
+          (seq-filter (lambda (id)
+                        (and (eql (gethash id depths) (1- level))
+                             (noema-research-branch-ids document id)))
+                      (noema-research-graph--node-ids document))
+          noema-research-graph--unfolds
+          (let ((noema-research-graph--unfolds nil))
+            (noema-research-graph--smart-folds document t)))
+    (noema-research-graph--apply-view-change
+     (format "Showing %d lineage level%s" level (if (= level 1) "" "s")))))
+
+(defun noema-research-graph-fold-others ()
+  "Fold every branch beside the selected node's lineage path."
+  (interactive)
+  (let ((id (noema-research-graph--selected-node))
+        (document (noema-research-graph--cached-document))
+        ids)
+    (pcase-let* ((`(,children ,parents ,roots) (noema-research-lineage-maps document))
+                 (path (cons id (noema-research--walk id parents))))
+      (dolist (candidate (append roots
+                                 (mapcan (lambda (node) (copy-sequence (gethash node children)))
+                                         path)))
+        (when (and (not (member candidate path))
+                   (not (member candidate ids))
+                   (noema-research-branch-ids document candidate))
+          (push candidate ids))))
+    (unless ids (user-error "Nothing beside this path to fold"))
+    (setq ids (nreverse ids)
+          noema-research-graph--folds (delete-dups (append noema-research-graph--folds ids))
+          noema-research-graph--unfolds (seq-difference noema-research-graph--unfolds ids))
+    (noema-research-graph--apply-view-change
+     (format "%d branch%s beside the path folded" (length ids) (if (cdr ids) "es" "")))))
+
+(defun noema-research-graph-cycle-folds ()
+  "Cycle the whole DAG through one level, two levels and everything."
+  (interactive)
+  (pcase noema-research-graph--fold-cycle
+    (0 (noema-research-graph-fold-to-level 1)
+       (setq noema-research-graph--fold-cycle 1))
+    (1 (noema-research-graph-fold-to-level 2)
+       (setq noema-research-graph--fold-cycle 2))
+    (_ (noema-research-graph-unfold-all)
+       (setq noema-research-graph--fold-cycle 0))))
+
+;;;; Focus
+
+(defun noema-research-graph--effective-focus-depth ()
+  "Return the descendant depth of the focus lens."
+  (or noema-research-graph--focus-depth
+      (noema-research-graph--setting 'noema-research-graph-focus-depth)
+      2))
+
+(defun noema-research-graph--center-on (id)
+  "Center the viewport on node ID when it is drawn."
+  (when-let* ((view noema-research-graph--view)
+              (centered (and id (noema-research-graph--centered-view view id))))
+    (noema-research-graph--set-view centered)))
+
+(defun noema-research-graph--refocus (id)
+  "Focus the lens on ID, or clear it when ID is nil, remembering the old focus."
+  (unless (equal id noema-research-graph--focus)
+    (setq noema-research-graph--focus-history
+          (seq-take (cons noema-research-graph--focus noema-research-graph--focus-history)
+                    20)))
+  (setq noema-research-graph--focus id)
+  (when id (setq noema-research-graph--selected id))
+  (noema-research-graph--apply-view-change)
+  (noema-research-graph--center-on (or id noema-research-graph--selected)))
 
 (defun noema-research-graph-toggle-focus ()
-  "Focus the lens on the node at point, or clear the focus."
+  "Focus the lens on the selected node, or clear the focus.
+On a `Related branches' summary the focus moves up to its parent."
   (interactive)
   (let ((id (noema-research-graph--node-at-point)))
-    (noema-research-graph--require-materialized id)
-    (setq noema-research-graph--selected id
-          noema-research-graph--focus (unless (equal id noema-research-graph--focus) id))
-    (noema-research-graph--save-view)
-    (noema-research-graph-refresh)))
+    (if-let* ((parent (noema-research-graph--related-parent id)))
+        (noema-research-graph--refocus parent)
+      (noema-research-graph--require-materialized id)
+      (noema-research-graph--refocus (unless (equal id noema-research-graph--focus) id)))))
+
+(defun noema-research-graph-focus-back ()
+  "Return to the previous focus."
+  (interactive)
+  (unless noema-research-graph--focus-history
+    (user-error "No earlier focus"))
+  (let ((previous (pop noema-research-graph--focus-history)))
+    (setq noema-research-graph--focus previous)
+    (when previous (setq noema-research-graph--selected previous))
+    (noema-research-graph--apply-view-change)
+    (noema-research-graph--center-on (or previous noema-research-graph--selected))))
+
+(defun noema-research-graph--change-focus-depth (delta)
+  "Change the focus lens depth by DELTA levels."
+  (unless noema-research-graph--focus
+    (user-error "No focus: press f on a node first"))
+  (setq noema-research-graph--focus-depth
+        (max 1 (min 12 (+ (noema-research-graph--effective-focus-depth) delta))))
+  (noema-research-graph--apply-view-change
+   (format "Focus depth: %d" noema-research-graph--focus-depth)))
+
+(defun noema-research-graph-focus-deeper ()
+  "Show one more descendant level below the focus."
+  (interactive)
+  (noema-research-graph--change-focus-depth 1))
+
+(defun noema-research-graph-focus-shallower ()
+  "Show one descendant level fewer below the focus."
+  (interactive)
+  (noema-research-graph--change-focus-depth -1))
 
 (defun noema-research-graph-cycle-zoom ()
   "Cycle semantic zoom through overview, branch, and detail."
@@ -1568,9 +2451,78 @@ Its JuText block follows the new parent unless STAY (prefix argument) or
   (setq noema-research-graph--zoom
         (pcase noema-research-graph--zoom
           ("overview" "branch") ("branch" "detail") (_ "overview")))
-  (noema-research-graph--save-view)
-  (noema-research-graph-refresh)
-  (message "Noema Graph semantic zoom: %s" noema-research-graph--zoom))
+  (noema-research-graph--apply-view-change
+   (format "Noema Graph semantic zoom: %s" noema-research-graph--zoom)))
+
+;;;; Branch organization
+
+(defun noema-research-graph-branch-done ()
+  "Mark the selected work and its branch done, as one structure edit."
+  (interactive)
+  (let ((id (noema-research-graph--selected-node)))
+    (noema-research-graph--edit (lambda () (noema-research-op-set-branch-state id "done")))))
+
+(defun noema-research-graph-branch-reopen ()
+  "Reopen the selected work and its branch, and expand it."
+  (interactive)
+  (let ((id (noema-research-graph--selected-node)))
+    (noema-research-graph--edit (lambda () (noema-research-op-set-branch-state id "open")))
+    (setq noema-research-graph--folds (remove id noema-research-graph--folds))
+    (noema-research-graph--apply-view-change)))
+
+(defun noema-research-graph-drop-branch ()
+  "Drop the selected branch with a reason, then fold it and select its parent.
+The DAG keeps the branch; `noema-research-graph-fold-on-drop' contracts it
+to a summary, as in Drop Branch of the assignment walkthrough."
+  (interactive)
+  (let* ((id (noema-research-graph--selected-node))
+         (reason (read-string "Reason (optional): ")))
+    (noema-research-graph--edit
+     (lambda () (noema-research-op-set-branch-state id "dropped" reason)))
+    (let ((document (noema-research-graph--cached-document)))
+      (when (and (noema-research-graph--setting 'noema-research-graph-fold-on-drop)
+                 (noema-research-branch-ids document id))
+        (setq noema-research-graph--folds
+              (append (remove id noema-research-graph--folds) (list id))
+              noema-research-graph--unfolds (remove id noema-research-graph--unfolds))
+        (when-let* ((parent (car (noema-research-relation-parents document id "lineage"))))
+          (setq noema-research-graph--selected parent))
+        (noema-research-graph--apply-view-change "Branch dropped and folded")))))
+
+(transient-define-prefix noema-research-graph-branch-menu ()
+  "Organize the selected branch."
+  [["State (one undo step)"
+    ("d" "mark branch done" noema-research-graph-branch-done)
+    ("x" "drop branch and fold it" noema-research-graph-drop-branch)
+    ("o" "reopen branch" noema-research-graph-branch-reopen)]
+   ["View"
+    ("TAB" "fold / expand branch" noema-research-graph-toggle-fold)
+    ("f" "focus branch" noema-research-graph-toggle-focus)
+    ("O" "fold others" noema-research-graph-fold-others)]])
+
+(transient-define-prefix noema-research-graph-view-menu ()
+  "Change what the Graph Board shows and where it looks."
+  [["Fold"
+    ("a" "fold finished branches" noema-research-graph-fold-finished)
+    ("A" "expand everything" noema-research-graph-unfold-all)
+    ("l" "show N levels" noema-research-graph-fold-to-level)
+    ("o" "fold others" noema-research-graph-fold-others)
+    ("TAB" "fold / expand branch" noema-research-graph-toggle-fold :transient t)]
+   ["Focus"
+    ("f" "focus / clear" noema-research-graph-toggle-focus)
+    ("[" "shallower" noema-research-graph-focus-shallower :transient t)
+    ("]" "deeper" noema-research-graph-focus-deeper :transient t)
+    ("b" "previous focus" noema-research-graph-focus-back)]
+   ["Viewport"
+    ("+" "zoom in" noema-research-graph-zoom-in :transient t)
+    ("-" "zoom out" noema-research-graph-zoom-out :transient t)
+    ("0" "100%" noema-research-graph-zoom-reset)
+    ("=" "fit whole DAG" noema-research-graph-fit)
+    ("." "center selection" noema-research-graph-center)
+    ("w" "enlarge / restore" noema-research-graph-toggle-maximize)]
+   ["Board"
+    ("z" "semantic zoom" noema-research-graph-cycle-zoom :transient t)
+    ("," "settings" noema-research-settings)]])
 
 (defun noema-research-graph--run (session-policy)
   "Run the selected work using optional SESSION-POLICY."
@@ -1746,6 +2698,14 @@ pop-up; merely selecting a different JuText window never retargets it."
                                 (noema-research-resolve-work-node-id document id))
                               (plist-get view :folds)))
             noema-research-graph--zoom (or (plist-get view :zoom) "branch")
+            noema-research-graph--unfolds
+            (delq nil (mapcar (lambda (id)
+                                (noema-research-resolve-work-node-id document id))
+                              (plist-get view :unfolds)))
+            noema-research-graph--focus-depth (plist-get view :focus-depth)
+            noema-research-graph--view (plist-get view :viewport)
+            noema-research-graph--settings
+            (and file (noema-research-settings-document-overrides file document))
             noema-research-graph--selected
             (and cell (noema-research-cell-work-node-id cell)))
       (noema-research-graph-refresh)
@@ -1776,19 +2736,49 @@ pop-up; merely selecting a different JuText window never retargets it."
    (noema-research-graph-buffer (current-buffer))))
 
 (defun noema-research-graph--window-size-changed (&optional frame)
-  "Refit the displayed singleton DAG after a window resize in FRAME."
+  "Keep the DAG's viewport on the same drawing point after a resize in FRAME.
+Only the image size and transform change; Graphviz does not run."
   (when-let* ((graph (get-buffer noema-research-graph-buffer-name))
               (window (get-buffer-window graph (or frame t))))
     (let ((size (cons (window-body-width window t)
                       (window-body-height window t))))
       (with-current-buffer graph
         (unless (equal size noema-research-graph--window-size)
-          (setq noema-research-graph--window-size size)
-          (when (buffer-live-p noema-research-graph--source)
-            (noema-research-graph-refresh)))))))
+          (let ((old noema-research-graph--window-size)
+                (view noema-research-graph--view))
+            (setq noema-research-graph--window-size size)
+            (when (buffer-live-p noema-research-graph--source)
+              (if (and old view noema-research-graph--scene
+                       (not noema-research-graph--view-provisional))
+                  (progn
+                    (setq noema-research-graph--view
+                          (noema-research-graph--clamp-view
+                           (list :dx (+ (plist-get view :dx) (/ (- (car size) (car old)) 2.0))
+                                 :dy (+ (plist-get view :dy) (/ (- (cdr size) (cdr old)) 2.0))
+                                 :scale (plist-get view :scale))))
+                    (noema-research-graph--display))
+                (noema-research-graph--redraw)))))))))
 
 (add-hook 'window-size-change-functions
           #'noema-research-graph--window-size-changed)
+
+(defun noema-research-graph--settings-changed (_variable _scope source)
+  "Reload document settings and redraw the board showing SOURCE."
+  (when-let* ((graph (get-buffer noema-research-graph-buffer-name)))
+    (with-current-buffer graph
+      (when (and (buffer-live-p noema-research-graph--source)
+                 (or (null source) (eq source noema-research-graph--source)))
+        (let ((file (buffer-file-name noema-research-graph--source)))
+          (setq noema-research-graph--settings
+                (and file (noema-research-settings-document-overrides
+                           file (buffer-local-value 'noema-research--document
+                                                    noema-research-graph--source)))
+                noema-research-graph--dot-cache nil
+                noema-research-graph--scene nil))
+        (noema-research-graph--redraw)))))
+
+(add-hook 'noema-research-settings-changed-functions
+          #'noema-research-graph--settings-changed)
 
 (provide 'noema-research-graph)
 

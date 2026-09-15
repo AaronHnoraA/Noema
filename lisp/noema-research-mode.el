@@ -49,6 +49,7 @@
 (autoload 'noema-research-graph-buffer "noema-research-graph" nil nil)
 (autoload 'noema-research-attention "noema-research-inspector" nil t)
 (autoload 'noema-research-propose-with-magent "noema-research-synthesis" nil t)
+(autoload 'noema-research-settings "noema-research-settings" nil t)
 (autoload 'noema-agent-worker-run-work-cell "noema-agent-worker" nil t)
 (autoload 'noema-agent-worker-cancel-run "noema-agent-worker" nil t)
 (autoload 'noema-agent-acp-known-agents "noema-agent-acp" nil nil)
@@ -445,7 +446,10 @@ unrelated undo history survive; header identities are then reattached."
             (widen)
             (let ((inhibit-read-only t))
               (unless (string= text (buffer-substring-no-properties (point-min) (point-max)))
-                (replace-buffer-contents target 0.2))
+                ;; Obsolete in Emacs 31 in favour of `replace-region-contents',
+                ;; whose signature differs on Emacs 30; keep one call for both.
+                (with-suppressed-warnings ((obsolete replace-buffer-contents))
+                  (replace-buffer-contents target 0.2)))
               (with-silent-modifications
                 (remove-text-properties (point-min) (point-max)
                                         '(noema-research-id nil
@@ -1990,6 +1994,45 @@ With a prefix argument, also prompt for OUTCOME (empty clears it)."
     (unless (derived-mode-p 'noema-research-mode)
       (noema-research-mode))))
 
+(defun noema-research-op-set-branch-state (id state &optional reason)
+  "Set STATE on work ID and its branch as one structure edit.
+The affected WorkNodes are `noema-research-branch-state-targets'.  REASON
+explains a drop and is recorded on ID.  Return ID."
+  (noema-research-structure-edit
+   (format "set branch state %s" state)
+   (lambda (document)
+     (let ((targets (noema-research-branch-state-targets document id state)))
+       (unless targets
+         (user-error "“%s” has no work whose state can become %s"
+                     (noema-research-work-node-label document id) state))
+       (dolist (target targets)
+         (noema-research-set-state document target state
+                                   (and (equal target id) reason))))
+     id)))
+
+(defun noema-research-branch-done ()
+  "Mark the work at point and its branch done."
+  (interactive)
+  (noema-research-op-set-branch-state (noema-research--node-at-point) "done"))
+
+(defun noema-research-branch-drop ()
+  "Drop the work at point and its branch, prompting for a reason."
+  (interactive)
+  (let ((id (noema-research--node-at-point)))
+    (noema-research-op-set-branch-state id "dropped" (read-string "Reason (optional): "))))
+
+(defun noema-research-branch-reopen ()
+  "Reopen the work at point and its branch."
+  (interactive)
+  (noema-research-op-set-branch-state (noema-research--node-at-point) "open"))
+
+(transient-define-prefix noema-research-branch-menu ()
+  "Change the state of the branch at point as one structure edit."
+  [["Branch"
+    ("d" "mark branch done" noema-research-branch-done)
+    ("x" "drop branch" noema-research-branch-drop)
+    ("o" "reopen branch" noema-research-branch-reopen)]])
+
 (defvar noema-research-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c C-n") #'noema-research-continue)
@@ -2020,6 +2063,8 @@ With a prefix argument, also prompt for OUTCOME (empty clears it)."
     (define-key map (kbd "C-c j m") #'noema-research-move-work-node)
     (define-key map (kbd "C-c j k") #'noema-research-change-work-node-kind)
     (define-key map (kbd "C-c j o") #'noema-research-set-work-outcome)
+    (define-key map (kbd "C-c j B") #'noema-research-branch-menu)
+    (define-key map (kbd "C-c j ,") #'noema-research-settings)
     (define-key map (kbd "M-<up>") #'noema-research-move-block-up)
     (define-key map (kbd "M-<down>") #'noema-research-move-block-down)
     (define-key map (kbd "C-c C-/") #'noema-research-structure-undo)

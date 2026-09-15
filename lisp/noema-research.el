@@ -253,11 +253,44 @@ The id is recorded in TAKEN when TAKEN is non-nil."
   "Return NODE's durable id."
   (noema-research--get node "id"))
 
+(defvar noema-research--lookup nil
+  "While non-nil, (DOCUMENT NODES CELLS) indexing DOCUMENT for lookups.
+NODES maps WorkNode ids to WorkNodes; CELLS maps them to bound Cells in
+document order.  Bound only around passes that do not change structure.")
+
+(defun noema-research--lookup-for (document)
+  "Return the active lookup index when it indexes DOCUMENT."
+  (and noema-research--lookup (eq (car noema-research--lookup) document)
+       noema-research--lookup))
+
+(defun noema-research--build-lookup (document)
+  "Return a lookup index for DOCUMENT."
+  (let ((nodes (make-hash-table :test #'equal))
+        (cells (make-hash-table :test #'equal)))
+    (dolist (node (noema-research-work-nodes document))
+      (puthash (noema-research-work-node-id node) node nodes))
+    (dolist (cell (reverse (noema-research-cells document)))
+      (when-let* ((id (noema-research-cell-work-node-id cell)))
+        (push cell (gethash id cells))))
+    (list document nodes cells)))
+
+(defmacro noema-research-with-lookup (document &rest body)
+  "Run BODY with constant-time WorkNode and bound-Cell lookups for DOCUMENT.
+BODY must not add, remove or rebind WorkNodes or Cells of DOCUMENT."
+  (declare (indent 1) (debug t))
+  (let ((value (make-symbol "document")))
+    `(let* ((,value ,document)
+            (noema-research--lookup (or (noema-research--lookup-for ,value)
+                                        (noema-research--build-lookup ,value))))
+       ,@body)))
+
 (defun noema-research-find-work-node (document id)
   "Return WorkNode ID in DOCUMENT, or nil."
   (and id
-       (seq-find (lambda (node) (equal (noema-research-work-node-id node) id))
-                 (noema-research-work-nodes document))))
+       (if-let* ((lookup (noema-research--lookup-for document)))
+           (gethash id (nth 1 lookup))
+         (seq-find (lambda (node) (equal (noema-research-work-node-id node) id))
+                   (noema-research-work-nodes document)))))
 
 (defun noema-research-work-node-field (node key)
   "Return non-empty string KEY from WorkNode NODE."
@@ -290,11 +323,7 @@ supporting notes; they keep a Cell-level title, which is how a question or
 checkpoint primary is told apart from a supporting note in the same storage."
   (let* ((node (noema-research-find-work-node document work-node-id))
          (kind (noema-research-work-node-field node "kind"))
-         (bound (and work-node-id
-                     (seq-filter
-                      (lambda (cell) (equal (noema-research-cell-work-node-id cell)
-                                            work-node-id))
-                      (noema-research-cells document))))
+         (bound (noema-research-work-node-cells document work-node-id))
          (matching (seq-filter (lambda (cell)
                                  (equal (noema-research--get cell "cell_type")
                                         (if (equal kind "work") "code" "markdown")))
@@ -316,8 +345,10 @@ checkpoint primary is told apart from a supporting note in the same storage."
 (defun noema-research-work-node-cells (document id)
   "Return every Cell of DOCUMENT bound to WorkNode ID, in document order."
   (and id
-       (seq-filter (lambda (cell) (equal (noema-research-cell-work-node-id cell) id))
-                   (noema-research-cells document))))
+       (if-let* ((lookup (noema-research--lookup-for document)))
+           (gethash id (nth 2 lookup))
+         (seq-filter (lambda (cell) (equal (noema-research-cell-work-node-id cell) id))
+                     (noema-research-cells document)))))
 
 (defun noema-research-work-node-label (document id)
   "Return a human label for WorkNode ID in DOCUMENT; never a machine id."
@@ -1086,7 +1117,68 @@ Each entry is a cons (ENTITY-ID . MESSAGE)."
               (setq queue (append queue (list (cons next (1+ distance))))))))))
     (nreverse result)))
 
-(cl-defun noema-research-projection (document &key focus folds protect (depth 2))
+(defun noema-research--exclusive-descendants (id children roots)
+  "Return lineage descendants of ID that no root reaches without passing ID.
+CHILDREN maps an id to its lineage children; ROOTS are the lineage roots."
+  (let ((reachable (make-hash-table :test #'equal))
+        (stack (remove id roots)))
+    (while stack
+      (let ((next (pop stack)))
+        (unless (gethash next reachable)
+          (puthash next t reachable)
+          (dolist (child (gethash next children))
+            (unless (equal child id)
+              (push child stack))))))
+    (seq-remove (lambda (candidate) (gethash candidate reachable))
+                (noema-research--walk id children))))
+
+(defun noema-research-lineage-maps (document)
+  "Return (CHILDREN PARENTS ROOTS) for DOCUMENT's lineage edges.
+CHILDREN and PARENTS are hash tables of id lists; ROOTS lists, in document
+order, the WorkNodes without a lineage parent."
+  (let ((children (make-hash-table :test #'equal))
+        (parents (make-hash-table :test #'equal))
+        (known (make-hash-table :test #'equal))
+        order)
+    (dolist (node (noema-research-work-nodes document))
+      (let ((id (noema-research-work-node-id node)))
+        (puthash id t known)
+        (push id order)))
+    (dolist (edge (noema-research-dependencies document))
+      (let ((from (noema-research--get edge "from"))
+            (to (noema-research--get edge "to")))
+        (when (and (equal (noema-research--get edge "type") "lineage")
+                   (gethash from known) (gethash to known) (not (equal from to)))
+          (puthash from (append (gethash from children) (list to)) children)
+          (puthash to (append (gethash to parents) (list from)) parents))))
+    (list children parents
+          (seq-filter (lambda (id) (null (gethash id parents))) (nreverse order)))))
+
+(defun noema-research-branch-ids (document id)
+  "Return the WorkNodes of DOCUMENT reachable only through ID's lineage branch."
+  (pcase-let ((`(,children ,_parents ,roots) (noema-research-lineage-maps document)))
+    (noema-research--exclusive-descendants id children roots)))
+
+(defun noema-research-branch-state-targets (document id state)
+  "Return the work WorkNodes a branch-wide STATE change on ID sets.
+The branch is ID and every WorkNode reachable only through it; only work
+nodes carry state.  ID itself always changes.  Inside the branch, marking it
+done keeps dropped work dropped, dropping it keeps finished work done, and
+any other state applies to every work node."
+  (seq-filter
+   (lambda (node-id)
+     (when-let* ((node (noema-research-find-work-node document node-id)))
+       (and (equal (noema-research-work-node-field node "kind") "work")
+            (let ((current (noema-research-work-node-field node "state")))
+              (or (equal node-id id)
+                  (pcase state
+                    ("done" (not (equal current "dropped")))
+                    ("dropped" (not (equal current "done")))
+                    (_ t)))))))
+   (cons id (noema-research-branch-ids document id))))
+
+(cl-defun noema-research-projection (document &key focus folds protect (depth 2)
+                                              (siblings t))
   "Return the lineage-first graph projection of DOCUMENT.
 The result is a plist with :nodes, :edges, :focus and :folds.  Each node is a
 plist with :id, :kind, :title, :state, :outcome, :focus, :folded (the number of
@@ -1094,7 +1186,7 @@ contracted nodes, or nil) and :parents (visible lineage parents).  Each edge is
 a list (FROM TO TYPE).  FOLDS contract descendants that are only reachable
 through the folded node.  FOCUS and every id in PROTECT, together with their
 ancestors, are never hidden.  With FOCUS, the lens keeps ancestors,
-descendants up to DEPTH, and siblings."
+descendants up to DEPTH, and, when SIBLINGS is non-nil, siblings."
   (let ((nodes (make-hash-table :test #'equal))
         (children (make-hash-table :test #'equal))
         (parents (make-hash-table :test #'equal))
@@ -1132,25 +1224,16 @@ descendants up to DEPTH, and siblings."
         (setq lens (copy-hash-table protected))
         (dolist (id (noema-research--walk focus-id children depth))
           (puthash id t lens))
-        (dolist (parent (gethash focus-id parents))
-          (dolist (sibling (gethash parent children))
-            (puthash sibling t lens))))
+        (when siblings
+          (dolist (parent (gethash focus-id parents))
+            (dolist (sibling (gethash parent children))
+              (puthash sibling t lens)))))
       (dolist (fold (delete-dups (copy-sequence folds)))
         (when (gethash fold nodes)
-          (let ((reachable (make-hash-table :test #'equal))
-                (stack (remove fold roots)))
-            (while stack
-              (let ((id (pop stack)))
-                (unless (gethash id reachable)
-                  (puthash id t reachable)
-                  (dolist (child (gethash id children))
-                    (unless (equal child fold)
-                      (push child stack))))))
-            (dolist (id (noema-research--walk fold children))
-              (unless (or (gethash id reachable) (gethash id protected)
-                          (gethash id hidden-by))
-                (puthash id fold hidden-by)))
-            (push fold effective-folds))))
+          (dolist (id (noema-research--exclusive-descendants fold children roots))
+            (unless (or (gethash id protected) (gethash id hidden-by))
+              (puthash id fold hidden-by)))
+          (push fold effective-folds)))
       (setq effective-folds (nreverse effective-folds))
       (cl-labels ((representative (id)
                     (let ((current id) (guard 0))
@@ -1357,44 +1440,84 @@ The directory ignores itself so repository Git never records runtime state."
                        (expand-file-name noema-research-state-directory
                                          (noema-research-repository-root file))))))
 
+(defun noema-research--view-object (path)
+  "Return the JSON view object stored at PATH, or nil."
+  (ignore-errors
+    (when (file-readable-p path)
+      (let ((view (with-temp-buffer
+                    (insert-file-contents path)
+                    (noema-research-parse-json (buffer-string)))))
+        (and (hash-table-p view) view)))))
+
 (defun noema-research-view-read (file document)
   "Return the saved view plist for DOCUMENT at FILE.
-The plist always has :focus and :folds.  Newer view files also carry :zoom as
-one of overview, branch, or detail; older files remain valid."
-  (let ((path (noema-research-view-file file document)))
-    (or (ignore-errors
-          (when (file-readable-p path)
-            (let ((view (with-temp-buffer
-                          (insert-file-contents path)
-                          (noema-research-parse-json (buffer-string))))
-                  result zoom)
-              (setq result
-                    (list :focus (noema-research--string
+The plist always has :focus and :folds.  Newer view files may also carry
+:zoom (overview, branch or detail), :unfolds (WorkNodes expanded against
+Smart Fold), :focus-depth, :viewport (a plist :dx :dy :scale) and :settings
+(an alist of document setting overrides by name).  Keys absent from the
+file are absent from the plist, so older files remain valid."
+  (if-let* ((view (noema-research--view-object
+                   (noema-research-view-file file document))))
+      (let ((result (list :focus (noema-research--string
                                   (noema-research--get view "focus"))
                           :folds (seq-filter #'stringp
                                              (append (noema-research--get
-                                                      view "folds" []) nil)))
-                    zoom (noema-research--string (noema-research--get view "zoom")))
-              (when (member zoom '("overview" "branch" "detail"))
-                (setq result (plist-put result :zoom zoom)))
-              result)))
-        (list :focus nil :folds nil))))
+                                                      view "folds" [])
+                                                     nil))))
+            (zoom (noema-research--string (noema-research--get view "zoom")))
+            (unfolds (noema-research--get view "unfolds"))
+            (depth (noema-research--get view "focus_depth"))
+            (viewport (noema-research--get view "viewport"))
+            (settings (noema-research--get view "settings")))
+        (when (member zoom '("overview" "branch" "detail"))
+          (setq result (plist-put result :zoom zoom)))
+        (when (vectorp unfolds)
+          (setq result (plist-put result :unfolds
+                                  (seq-filter #'stringp (append unfolds nil)))))
+        (when (and (natnump depth) (> depth 0))
+          (setq result (plist-put result :focus-depth depth)))
+        (when (hash-table-p viewport)
+          (let ((dx (noema-research--get viewport "dx"))
+                (dy (noema-research--get viewport "dy"))
+                (scale (noema-research--get viewport "scale")))
+            (when (and (numberp dx) (numberp dy) (numberp scale) (> scale 0))
+              (setq result (plist-put result :viewport
+                                      (list :dx dx :dy dy :scale scale))))))
+        (when (hash-table-p settings)
+          (let (alist)
+            (maphash (lambda (key value) (push (cons key value) alist)) settings)
+            (when alist
+              (setq result (plist-put result :settings (nreverse alist))))))
+        result)
+    (list :focus nil :folds nil)))
+
+(defun noema-research-view-update (file document function)
+  "Apply FUNCTION to DOCUMENT's saved view object at FILE and persist it.
+FUNCTION receives the view as a hash table and changes it in place.  Keys it
+leaves alone, including ones written by newer Noema versions, are kept.
+Return the view-state path."
+  (noema-research-state-directory file)
+  (let* ((path (noema-research-view-file file document))
+         (view (or (noema-research--view-object path)
+                   (make-hash-table :test #'equal))))
+    (funcall function view)
+    (make-directory (file-name-directory path) t)
+    (let ((coding-system-for-write 'utf-8-unix))
+      (write-region (noema-research-serialize view) nil path nil 'silent))
+    path))
 
 (defun noema-research-view-write (file document focus folds &optional zoom)
   "Persist FOCUS, FOLDS and optional ZOOM for DOCUMENT at FILE.
-ZOOM is one of overview, branch, or detail.  Return the view-state path."
+ZOOM is one of overview, branch, or detail.  Other saved view keys are kept.
+Return the view-state path."
   (when (and zoom (not (member zoom '("overview" "branch" "detail"))))
     (user-error "Unsupported Graph Board zoom: %s" zoom))
-  (noema-research-state-directory file)
-  (let ((path (noema-research-view-file file document)))
-    (make-directory (file-name-directory path) t)
-    (let ((coding-system-for-write 'utf-8-unix))
-      (write-region (noema-research-serialize
-                     (noema-research--table "focus" (or focus :null)
-                                            "folds" (vconcat folds)
-                                            "zoom" (or zoom :null)))
-                    nil path nil 'silent))
-    path))
+  (noema-research-view-update
+   file document
+   (lambda (view)
+     (puthash "focus" (or focus :null) view)
+     (puthash "folds" (vconcat folds) view)
+     (puthash "zoom" (or zoom :null) view))))
 
 (provide 'noema-research)
 
