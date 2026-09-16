@@ -12,6 +12,8 @@ These do not start external work:
 | Function | Result |
 |---|---|
 | `noema-current-project` | containing project root for a path or buffer |
+| `noema-project-root` | nearest `noema.toml` root above a path, or nil; never writes |
+| `noema-project-ensure` | that root, or one created after the user confirms the proposed workspace root |
 | `noema-current-document` | current semantic WorkDocument |
 | `noema-current-cell` | Cell at point |
 | `noema-current-node` | WorkNode at point |

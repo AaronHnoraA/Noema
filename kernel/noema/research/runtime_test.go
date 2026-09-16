@@ -43,6 +43,75 @@ func prepareRuntimeRun(t *testing.T, store *Store, session Session, root string)
 	return run
 }
 
+func TestListRunsLatestPerWorkNodeKeepsOldConversationsReachable(t *testing.T) {
+	store, root := openTestStore(t)
+	prepare := func(native, workNode string, withSession bool) Run {
+		t.Helper()
+		session, err := store.PromoteSession(PromoteSessionInput{Title: native, Adapter: "magent", Transport: "acp",
+			NativeSessionID: native, ExecutionTarget: root})
+		if err != nil {
+			t.Fatal(err)
+		}
+		input := PrepareRunInput{WorkstreamID: session.WorkstreamID, NotebookID: "nb_latest", CellID: "c-" + workNode,
+			WorkNodeID: workNode, SourceKind: "work-cell", ExecutionTarget: root,
+			Spec: map[string]any{"schema": "noema.run-spec/1"}}
+		if withSession {
+			input.SessionID = session.ID
+		}
+		run, err := store.PrepareRun(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return run
+	}
+	older := prepare("native-a-old", "wn_a", true)
+	newer := prepare("native-a-new", "wn_a", true)
+	branch := prepare("native-b", "wn_b", true)
+	// A Run that never reached a conversation must not hide the one before it.
+	prepare("native-a-fresh", "wn_a", false)
+	runs, err := store.ListRuns(RunFilter{LatestPerWorkNode: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byNode := map[string]string{}
+	for _, run := range runs {
+		if _, duplicate := byNode[run.WorkNodeID]; duplicate {
+			t.Fatalf("one Run per WorkNode expected: %+v", runs)
+		}
+		byNode[run.WorkNodeID] = run.ID
+	}
+	if len(byNode) != 2 || byNode["wn_a"] != newer.ID || byNode["wn_b"] != branch.ID || byNode["wn_a"] == older.ID {
+		t.Fatalf("latest conversation Run per WorkNode expected: %+v", byNode)
+	}
+}
+
+func TestLatestWorkNodeActivityReportsTheNewestEventPerWorkNode(t *testing.T) {
+	store, _ := openTestStore(t)
+	insert := func(id, notebook, workNode string, ts int64) {
+		t.Helper()
+		if _, err := store.db.Exec(`INSERT INTO events(id, type, ts, notebook_id, work_node_id, payload_json)
+			VALUES(?, 'test.event', ?, ?, ?, '{}')`, id, ts, notebook, workNode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert("evt_a_old", "nb_one", "wn_a", 1000)
+	insert("evt_b", "nb_one", "wn_b", 2000)
+	insert("evt_a_new", "nb_one", "wn_a", 3000)
+	insert("evt_other_notebook", "nb_two", "wn_c", 4000)
+	insert("evt_no_node", "nb_one", "", 5000)
+	events, err := store.LatestWorkNodeActivity("nb_one")
+	if err != nil || len(events) != 2 {
+		t.Fatalf("one activity row per WorkNode of the notebook expected: %+v (%v)", events, err)
+	}
+	times := map[string]string{}
+	for _, event := range events {
+		times[event.WorkNodeID] = event.TS
+	}
+	if times["wn_a"] != formatMillis(3000) || times["wn_b"] != formatMillis(2000) {
+		t.Fatalf("newest event time per WorkNode expected: %+v", times)
+	}
+}
+
 func TestProjectFileRunUsesTrustedLocalLifecycle(t *testing.T) {
 	store, root := openTestStore(t)
 	session := promoteRuntimeSession(t, store, root)
@@ -351,6 +420,10 @@ func TestTerminalOutputCreatesHandoffArtifactAndLiveSnapshot(t *testing.T) {
 	transcript, transcriptData, err := store.ReadArtifact(transcriptID)
 	if err != nil || transcript.Kind != "transcript" || string(transcriptData) != "Complete assistant stream." {
 		t.Fatalf("transcript must be immutable and readable: %+v %q (%v)", transcript, transcriptData, err)
+	}
+	if gotHandoff, gotTranscript, err := store.RunTerminalArtifactIDs(run.ID); err != nil ||
+		gotHandoff != handoffID || gotTranscript != transcriptID {
+		t.Fatalf("terminal artifact lookup must not page Run content: %q %q (%v)", gotHandoff, gotTranscript, err)
 	}
 	if _, leaked := events[2].Payload["result_text"]; leaked {
 		t.Fatal("large handoff bytes belong in CAS, not the event ledger")

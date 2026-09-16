@@ -51,6 +51,24 @@ func TestFreshRunBindsItsSessionNameWhenAttached(t *testing.T) {
 	if name.SessionID != fresh.ID || name.Generation != 1 || name.NativeSessionID != "native-fresh" || !name.OpenRun {
 		t.Fatalf("unexpected bound name: %+v", name)
 	}
+	if name.Usage != nil {
+		t.Fatalf("a Session without a usage report must not invent one: %+v", name.Usage)
+	}
+	tx, err := store.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recordSessionUsageTx(tx, fresh.ID, SessionUsage{TotalTokens: 1200, ContextUsed: 600, ContextSize: 1000}, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := store.ListSessionNames(false)
+	if err != nil || len(listed) != 1 || listed[0].Usage == nil ||
+		listed[0].Usage.ContextUsed != 600 || listed[0].Usage.ContextSize != 1000 || listed[0].Usage.TotalTokens != 1200 {
+		t.Fatalf("session names must carry the bound Session's latest usage: %+v (%v)", listed, err)
+	}
 }
 
 func TestNamedSessionServesOtherWorkstreamsButAnonymousDoesNot(t *testing.T) {

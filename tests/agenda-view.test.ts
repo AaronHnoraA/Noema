@@ -1,3 +1,5 @@
+// @ts-ignore Shared headless capture catalogue.
+import {createAgendaCaptureTemplates} from "../server/lib/agenda-capture-templates.mjs";
 import { afterEach, describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
 
 import { closeAgendaView, openAgendaView, refreshAgendaView } from "../aaronnote/agenda-view.ts";
@@ -15,6 +17,10 @@ const emptyAgenda: AgendaMsg = {
 
 const projectAgenda: AgendaMsg = {
   type: "agenda",
+  scopes: [
+    { id: "knowledge", root: "/vault", kind: "knowledge" },
+    { id: "project:demo", root: "/work/demo", kind: "project" },
+  ],
   range: { from: "2026-07-07", to: "2026-07-07", today: "2026-07-07" },
   days: [{
     date: "2026-07-07",
@@ -67,6 +73,18 @@ const projectAgenda: AgendaMsg = {
     lanes: [
       { key: "alpha", name: "Alpha Project", childTaskIds: ["alpha-todo"] },
       { key: "beta", name: "Beta Project", childTaskIds: ["beta-todo"] },
+    ],
+  },
+  dag: {
+    nodes: [
+      { id: "alpha-todo", todoId: "alpha-todo", title: "Alpha task", status: "todo", sourceKind: "markdown", project: "alpha", scopeId: "project:demo", scopeLabel: "Demo" },
+      { id: "beta-todo", todoId: "beta-todo", title: "Beta task", status: "todo", sourceKind: "markdown", project: "beta", scopeId: "project:demo", scopeLabel: "Demo" },
+      { id: "work-without-agenda", title: "Research branch", status: "doing", sourceKind: "work-node", nodeKind: "work", file: "/demo/work.noema", scopeId: "project:demo", scopeLabel: "Demo", hasAgenda: false },
+      { id: "roam-node", title: "Resident knowledge", status: "done", sourceKind: "markdown", scopeId: "knowledge", scopeLabel: "Knowledge" },
+    ],
+    edges: [
+      { id: "edge-one", from: "work-without-agenda", to: "alpha-todo", type: "lineage" },
+      { id: "edge-two", from: "alpha-todo", to: "beta-todo", type: "depends" },
     ],
   },
   lints: [
@@ -235,6 +253,41 @@ describe("agenda keyboard handling", () => {
     expect(agenda).toHaveBeenCalledTimes(3);
   });
 
+  test("hides completed tasks by default and toggles them with Done or dot", async () => {
+    const d = deps();
+    const completedAgenda: AgendaMsg = {
+      ...emptyAgenda,
+      days: [{
+        date: "2026-07-07",
+        entries: [
+          { kind: "scheduled", label: "Scheduled", todoId: "open", date: "2026-07-07" },
+          { kind: "deadline", label: "Deadline", todoId: "done", date: "2026-07-07" },
+        ],
+      }],
+      todos: [
+        { id: "open", file: "demo.md", noteTitle: "Demo", text: "Open task", status: "todo" },
+        { id: "done", file: "demo.md", noteTitle: "Demo", text: "Finished task", status: "done" },
+      ],
+      stats: { open: 1, doing: 0, done: 1, cancelled: 0, blocked: 0, overdue: 0 },
+    };
+    d.api.notes.agenda = async () => completedAgenda;
+    await openAgendaView(d);
+
+    expect(document.body.textContent).toContain("Open task");
+    expect(document.body.textContent).not.toContain("Finished task");
+    const button = [...document.querySelectorAll<HTMLButtonElement>(".aaronnote-agenda-full-header button")]
+      .find((item) => item.textContent === "Done")!;
+    expect(button.getAttribute("aria-pressed")).toBe("false");
+    button.click();
+    expect(document.body.textContent).toContain("Finished task");
+    expect(document.body.textContent).toContain("1 done");
+
+    const key = new KeyboardEvent("keydown", { key: ".", code: "Period", bubbles: true, cancelable: true });
+    document.dispatchEvent(key);
+    expect(key.defaultPrevented).toBe(true);
+    expect(document.body.textContent).not.toContain("Finished task");
+  });
+
   test("? opens the keyboard shortcut help in the agenda", async () => {
     await openAgendaView(deps());
     const overlay = document.querySelector<HTMLElement>(".aaronnote-agenda-full")!;
@@ -285,7 +338,7 @@ describe("agenda keyboard handling", () => {
     expect(document.querySelector("[data-agenda-help]")).toBeTruthy();
   });
 
-  test("project filter supports Any and multi-select across the agenda", async () => {
+  test("project filter supports current scopes and multi-select across the agenda", async () => {
     const d = deps();
     d.api.notes.agenda = async () => projectAgenda;
     await openAgendaView(d);
@@ -294,7 +347,7 @@ describe("agenda keyboard handling", () => {
     expect(document.body.textContent).toContain("Beta task");
 
     const projectButton = [...document.querySelectorAll<HTMLButtonElement>(".aaronnote-agenda-full-project-filter > button")]
-      .find((button) => button.textContent === "Project: Any")!;
+      .find((button) => button.textContent === "Scope: Roam + demo")!;
     projectButton.click();
 
     const alpha = document.querySelector<HTMLButtonElement>("[data-project-key='alpha']")!;
@@ -311,9 +364,9 @@ describe("agenda keyboard handling", () => {
     expect(document.body.textContent).toContain("Beta task");
 
     const any = [...document.querySelectorAll<HTMLButtonElement>(".aaronnote-agenda-full-project-menu button")]
-      .find((button) => button.textContent === "Any")!;
+      .find((button) => button.textContent === "Current scopes")!;
     any.click();
-    expect(document.body.textContent).toContain("Project: Any");
+    expect(document.body.textContent).toContain("Scope: Roam + demo");
     expect(document.body.textContent).toContain("Alpha task");
     expect(document.body.textContent).toContain("Beta task");
   });
@@ -483,7 +536,7 @@ describe("agenda keyboard handling", () => {
     expect(patchTodo).toHaveBeenCalledTimes(1);
     expect(agenda).toHaveBeenCalledTimes(2);
 
-    await refreshAgendaView();
+    await refreshAgendaView({ files: ["alpha.md"] });
     expect(agenda).toHaveBeenCalledTimes(2);
   });
 
@@ -581,4 +634,198 @@ describe("agenda keyboard handling", () => {
     expect(taskTitles()).not.toContain("Alpha task");
     expect(taskTitles()).toContain("Beta task");
   });
+
+  test("DAG lays out only the current or explicitly selected project", async () => {
+    const d = deps();
+    d.api.notes.agenda = async () => projectAgenda;
+    d.jumpToTodo = vi.fn();
+    await openAgendaView(d);
+
+    const dagTab = [...document.querySelectorAll<HTMLButtonElement>(".aaronnote-agenda-full-tabs button")]
+      .find((button) => button.textContent === "DAG")!;
+    dagTab.click();
+    await flushAsync();
+
+    expect(document.querySelectorAll(".aaronnote-agenda-dag-node")).toHaveLength(3);
+    expect(document.querySelectorAll(".aaronnote-agenda-dag-edge")).toHaveLength(2);
+    expect(document.querySelector(".aaronnote-agenda-dag-toolbar")?.textContent).toContain("Current project graph");
+
+    document.querySelector<SVGGElement>("[data-dag-node-id='work-without-agenda']")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(d.jumpToTodo).toHaveBeenCalledWith(expect.objectContaining({ file: "/demo/work.noema", sourceKind: "work-node" }));
+
+    const search = document.querySelector<HTMLInputElement>(".aaronnote-agenda-full-header input[type='search']")!;
+    search.value = "Alpha";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(document.querySelectorAll(".aaronnote-agenda-dag-node")).toHaveLength(3);
+    expect(document.querySelectorAll(".aaronnote-agenda-dag-node.is-match")).toHaveLength(1);
+    expect(document.querySelectorAll(".aaronnote-agenda-dag-node.is-muted")).toHaveLength(2);
+
+    search.value = "";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    document.querySelector<HTMLButtonElement>(".aaronnote-agenda-full-project-filter > button")!.click();
+    document.querySelector<HTMLButtonElement>("[data-project-key='alpha']")!.click();
+    expect(document.querySelectorAll(".aaronnote-agenda-dag-node")).toHaveLength(1);
+    expect(document.querySelectorAll(".aaronnote-agenda-dag-edge")).toHaveLength(0);
+    expect(document.querySelector("[data-dag-node-id='alpha-todo']")).toBeTruthy();
+    expect(document.querySelector("[data-dag-node-id='beta-todo']")).toBeNull();
+    expect(document.querySelector("[data-dag-node-id='work-without-agenda']")).toBeNull();
+    expect(document.querySelector(".aaronnote-agenda-dag-toolbar")?.textContent).toContain("Selected project graph");
+  });
+
+  test("DAG hard-switches to a selected project from another requested scope", async () => {
+    const knowledgeProject = "knowledge::iso";
+    const snapshot: AgendaMsg = {
+      ...projectAgenda,
+      todos: [...(projectAgenda.todos || []), {
+        id: "iso-todo", file: "/vault/iso.md", noteTitle: "ISO", text: "ISO proof",
+        status: "todo", scopeId: "knowledge", projectKey: knowledgeProject,
+      }],
+      projectModel: [...(projectAgenda.projectModel || []), {
+        key: knowledgeProject, scopeId: "knowledge", title: "Knowledge · ISO paper",
+        total: 1, open: 1, progress: 0, childTodoIds: ["iso-todo"],
+      }],
+      dag: {
+        nodes: [...(projectAgenda.dag?.nodes || []), {
+          id: "iso-todo", todoId: "iso-todo", title: "ISO proof", status: "todo",
+          sourceKind: "markdown", project: knowledgeProject,
+          scopeId: "knowledge", scopeLabel: "Knowledge",
+        }],
+        edges: [...(projectAgenda.dag?.edges || [])],
+      },
+    };
+    const d = deps();
+    d.api.notes.agenda = async () => snapshot;
+    await openAgendaView(d);
+
+    [...document.querySelectorAll<HTMLButtonElement>(".aaronnote-agenda-full-tabs button")]
+      .find((button) => button.textContent === "DAG")!.click();
+    await flushAsync();
+    document.querySelector<HTMLButtonElement>(".aaronnote-agenda-full-project-filter > button")!.click();
+    document.querySelector<HTMLButtonElement>(`[data-project-key='${knowledgeProject}']`)!.click();
+
+    expect(document.querySelectorAll(".aaronnote-agenda-dag-node")).toHaveLength(1);
+    expect(document.querySelector("[data-dag-node-id='iso-todo']")).toBeTruthy();
+    expect(document.querySelector("[data-dag-node-id='alpha-todo']")).toBeNull();
+    expect(document.querySelector("[data-dag-node-id='work-without-agenda']")).toBeNull();
+  });
+
+  test("Web Agenda requests named scopes instead of every active lease", async () => {
+    const d = deps();
+    const agenda = vi.fn(async () => emptyAgenda);
+    d.api.notes.agenda = agenda;
+    history.replaceState(null, "", "/agenda?view=agenda&scope=knowledge&scope=project%3Ademo");
+
+    await openAgendaView({ ...d, pageMode: true });
+
+    expect(agenda).toHaveBeenCalledWith(expect.objectContaining({
+      scopes: ["knowledge", "project:demo"],
+    }));
+  });
+});
+
+
+describe("native Agenda Web integration", () => {
+  test("pending clock stops show deferred times and only active sources offer retry or resolution", async () => {
+    const d = deps();
+    d.api.notes.retryClocks = vi.fn(async () => ({}));
+    d.api.notes.keepClockSource = vi.fn(async () => ({}));
+    d.api.notes.agenda = async () => ({ ...emptyAgenda, clocktable: { pendingWrites: [
+      { uid: "active-clock", revision: "rev-one", text: "Active proof", from: "2026-09-16 09:00", to: "2026-09-16 10:00", inactive: false },
+      { uid: "inactive-clock", revision: "rev-two", text: "Inactive proof", from: "2026-09-16 09:00", to: "2026-09-16 10:30", inactive: true },
+    ] } });
+    await openAgendaView(d);
+    const button = (text: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].find((node) => node.textContent === text)!;
+    button("2 clock stop(s) awaiting source write").click();
+    expect(document.body.textContent).toContain("Waiting for project entry");
+    expect(document.body.textContent).toContain("2026-09-16 10:30");
+    expect([...document.querySelectorAll("button")].filter((node) => node.textContent === "Retry source write")).toHaveLength(1);
+    button("Retry source write").click(); await flushAsync();
+    expect(d.api.notes.retryClocks).toHaveBeenCalledWith({ uid: "active-clock", revision: "rev-one" });
+    button("Keep source state").click(); await flushAsync();
+    expect(d.api.notes.keepClockSource).toHaveBeenCalledWith({ uid: "active-clock", revision: "rev-one" });
+  });
+
+  test("native selections use one revision-guarded batch, preserving per-source identity", async () => {
+    const d = deps();
+    const snapshot = structuredClone(projectAgenda);
+    snapshot.scopes = [{ id: "knowledge", root: "/vault", kind: "knowledge" }];
+    snapshot.todos = snapshot.todos!.map((todo) => ({ ...todo, uid: todo.id, scopeId: "knowledge", sourceRef: { revision: "version" } }));
+    d.api.notes.agenda = vi.fn(async () => snapshot);
+    d.api.notes.batchTodos = vi.fn(async () => ({ succeeded: 2 }));
+    d.api.notes.patchTodo = vi.fn(async () => ({}));
+    vi.spyOn(window, "prompt").mockReturnValue("done");
+    await openAgendaView(d);
+    document.querySelectorAll<HTMLElement>(".aaronnote-agenda-full-mark")[0].click();
+    document.querySelectorAll<HTMLElement>(".aaronnote-agenda-full-mark")[1].click();
+    document.querySelector<HTMLButtonElement>(".aaronnote-agenda-full-bulk")!.click();
+    await flushAsync();
+    expect(d.api.notes.batchTodos).toHaveBeenCalledWith({ items: [
+      expect.objectContaining({ uid: "alpha-todo", scopeId: "knowledge", revision: "version" }),
+      expect.objectContaining({ uid: "beta-todo", scopeId: "knowledge", revision: "version" }),
+    ], patch: { op: "complete" } });
+    expect(d.api.notes.patchTodo).not.toHaveBeenCalled();
+  });
+
+  test("capture beside a WorkNode selects its scope without appending Markdown to JSON", async () => {
+    const d = deps();
+    const snapshot = agendaWithTodo("work", "Prove theorem");
+    snapshot.scopes = [{ id: "project:test", root: "/project", kind: "project" }];
+    Object.assign(snapshot.todos![0], { uid: "work", scopeId: "project:test", file: "/project/work.noema", sourceKind: "work-node", projectKey: "project:test::paper" });
+    snapshot.projectModel = [{ key: "project:test::paper", sourceKey: "paper", scopeId: "project:test", title: "Paper" }];
+    d.api.notes.agenda = async () => snapshot;
+    d.api.notes.createTodo = vi.fn(async () => ({}));
+    vi.spyOn(window, "prompt").mockReturnValue("Follow up");
+    await openAgendaView(d);
+    document.querySelector<HTMLButtonElement>(".aaronnote-agenda-full-primary")!.click();
+    await flushAsync();
+    expect(d.api.notes.createTodo).toHaveBeenCalledWith({ text: "Follow up", scopeId: "project:test", project: "paper" });
+  });
+
+  test("native source errors remain visible and scope events are not suppressed by a recent edit", async () => {
+    const d = deps();
+    const snapshot = agendaWithTodo("work", "Prove theorem");
+    snapshot.scopes = [{ id: "knowledge", root: "/vault", kind: "knowledge" }];
+    snapshot.errors = [{ file: "/vault/bad.noema", message: "Invalid DAG" }];
+    d.api.notes.agenda = vi.fn(async () => snapshot);
+    await openAgendaView(d);
+    expect(document.querySelector(".aaronnote-agenda-full-lints")?.textContent).toContain("Invalid DAG");
+    await refreshAgendaView();
+    expect(d.api.notes.agenda).toHaveBeenCalledTimes(2);
+  });
+
+  test("global attention reads its journal without requesting a source scan", async () => {
+    const d = deps();
+    d.api.notes.agenda = vi.fn(async () => projectAgenda);
+    d.api.notes.patchTodo = vi.fn(async () => ({}));
+    d.api.notes.attention = vi.fn(async () => ({ revision: 0, items: [] }));
+    await openAgendaView(d);
+    const sourceCalls = vi.mocked(d.api.notes.agenda).mock.calls.length;
+    [...document.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent === "Global attention")!.click();
+    await flushAsync();
+    expect(d.api.notes.attention).toHaveBeenCalledTimes(1);
+    expect(d.api.notes.agenda).toHaveBeenCalledTimes(sourceCalls);
+    document.dispatchEvent(new KeyboardEvent("keydown", {key:"t",bubbles:true}));
+    document.dispatchEvent(new KeyboardEvent("keydown", {key:"g",bubbles:true}));
+    await flushAsync();
+    expect(d.api.notes.patchTodo).not.toHaveBeenCalled();
+    expect(d.api.notes.attention).toHaveBeenCalledTimes(2);
+    expect(d.api.notes.agenda).toHaveBeenCalledTimes(sourceCalls);
+  });
+});
+
+
+test('capture dialog owns its keys and closes with Agenda',async()=>{
+  const d=deps();d.api.notes.agenda=async()=>({...agendaWithTodo('one','Existing'),scopes:[{id:'knowledge',kind:'knowledge',root:'/vault'}]});
+  d.api.notes.captureTemplates=async()=>createAgendaCaptureTemplates().catalog();
+  d.api.notes.patchTodo=vi.fn(async()=>({}));d.api.notes.createTodo=vi.fn(async()=>({}));
+  await openAgendaView(d);
+  document.dispatchEvent(new KeyboardEvent('keydown',{key:'n',bubbles:true,cancelable:true}));
+  await flushAsync();
+  const dialog=document.querySelector<HTMLDialogElement>('.aaronnote-agenda-capture')!;
+  expect(dialog).not.toBeNull();
+  dialog.querySelector('button')!.dispatchEvent(new KeyboardEvent('keydown',{key:'t',bubbles:true,cancelable:true}));
+  expect(d.api.notes.patchTodo).not.toHaveBeenCalled();
+  closeAgendaView();await flushAsync();
+  expect(dialog.isConnected).toBe(false);expect(d.api.notes.createTodo).not.toHaveBeenCalled();
 });

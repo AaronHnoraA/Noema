@@ -44,6 +44,23 @@ describe("D-031 session directive grammar", () => {
     expect(() => parseResearchDirectives("@@session(bad name)\n\nGo.")).toThrow(/@@session\(bad name\)/);
   });
 
+  test("visible Agenda is parsed for the UI and removed from the Agent prompt", () => {
+    const parsed = parseResearchDirectives([
+      "@@agent(codex)",
+      "@@todo [Plan the proof] {",
+      "  sche: 2026-09-16 10:30",
+      "  prio: A",
+      "}",
+      "@@clock [Plan the proof] {id=focus_1, from=\"2026-09-16 09:00\", to=\"2026-09-16 10:00\"}",
+      "",
+      "Write the proof.",
+      "@@todo [this later text is data]",
+    ].join("\n"));
+    expect(parsed.agenda).toMatchObject({ sche: "2026-09-16 10:30", prio: "A",
+      clocks: [{ id: "focus_1", from: "2026-09-16 09:00", to: "2026-09-16 10:00" }] });
+    expect(parsed.prompt).toBe("Write the proof.\n@@todo [this later text is data]");
+  });
+
   test("slugs are readable, never reserved, and fall back to work", () => {
     expect(sessionNameSlug("  Hello World! 实验 ")).toBe("hello-world-实验");
     expect(sessionNameSlug("fresh")).toBe("work");
@@ -82,6 +99,10 @@ describe("D-031 DAG-derived session routes", () => {
     notebook = setResearchRelation(notebook, c, "lineage", [a, b]).notebook;
     expect(() => deriveSessionRoute({ notebook, workNodeId: c })).toThrow(/different agents/);
     expect(deriveSessionRoute({ notebook, workNodeId: c, agent: "codex" }).agent).toBe("codex");
+    // A document default agent is an explicit choice and settles the merge.
+    notebook.metadata.noema_research.default_agent = "claude";
+    expect(deriveSessionRoute({ notebook, workNodeId: c }).agent).toBe("claude");
+    delete notebook.metadata.noema_research.default_agent;
     notebook = setResearchRelation(notebook, c, "lineage", []).notebook;
     notebook = setResearchRelation(notebook, c, "depends", [a]).notebook;
     expect(deriveSessionRoute({ notebook, workNodeId: c }).agent).toBe("codex");

@@ -56,9 +56,9 @@
 
 (defun noema-sessions--project-root (&optional directory)
   "Return the project root (nearest `noema.toml') of DIRECTORY."
-  (let* ((directory (file-name-as-directory (expand-file-name (or directory default-directory))))
-         (root (locate-dominating-file directory "noema.toml")))
-    (file-name-as-directory (expand-file-name (or root directory)))))
+  (let ((directory (or directory default-directory)))
+    (or (noema-project-root directory)
+        (file-name-as-directory (expand-file-name directory)))))
 
 (defun noema-sessions--api (channel body callback)
   "Call Noema CHANNEL with BODY asynchronously; CALLBACK gets (RESULT ERROR)."
@@ -105,6 +105,25 @@
   (or (ignore-errors (format-time-string "%m-%d %H:%M" (date-to-time timestamp)))
       ""))
 
+(defun noema-sessions--tokens (count)
+  "Return token COUNT in a compact human form."
+  (cond ((>= count 1000000) (format "%.1fM" (/ count 1000000.0)))
+        ((>= count 1000) (format "%.1fk" (/ count 1000.0)))
+        (t (format "%d" count))))
+
+(defun noema-sessions--usage (entry)
+  "Return ENTRY's context-window use and token total, or an empty string.
+The kernel keeps the latest usage the agent reported for the bound Session."
+  (let* ((usage (noema-sessions--get entry "usage"))
+         (used (and usage (noema-sessions--get usage "contextUsed")))
+         (size (and usage (noema-sessions--get usage "contextSize")))
+         (total (and usage (noema-sessions--get usage "totalTokens"))))
+    (string-join
+     (delq nil (list (and (numberp used) (numberp size) (> size 0)
+                          (format "%d%%" (round (* 100.0 (/ (float used) size)))))
+                     (and (numberp total) (> total 0) (noema-sessions--tokens total))))
+     " ")))
+
 (defun noema-sessions--row (entry root)
   "Return the `tabulated-list-entries' row for session ENTRY in ROOT."
   (let* ((name (noema-sessions--string entry "name"))
@@ -114,6 +133,7 @@
           (vector (if aliases (format "%s (was %s)" name (string-join aliases ", ")) name)
                   (or (noema-sessions--string entry "agent") "")
                   (noema-sessions--status entry root)
+                  (noema-sessions--usage entry)
                   (if (noema-sessions--live-buffer entry root) "yes" "")
                   (if last
                       (format "%s %s" (noema-sessions--time (noema-sessions--string last "createdAt"))
@@ -507,18 +527,38 @@ Its conversation starts on the first Run that uses it."
     (define-key map (kbd "j") #'noema-sessions-jump)
     (define-key map (kbd "t") #'noema-sessions-toggle-scope)
     (define-key map (kbd "P") #'noema-sessions-open-pi)
+    (define-key map (kbd "c") #'noema-sessions-compact)
     map)
   "Keymap for `noema-sessions-mode'.")
+
+(defun noema-sessions-compact ()
+  "Roll the session on this line over to its latest Handoff at its next Run.
+The name, history and Handoffs stay; the next Run starts a new conversation
+from the durable Handoff, freeing a context window before it fills up."
+  (interactive)
+  (let* ((name (noema-sessions--name-at-point))
+         (entry (noema-sessions--entry name))
+         (session-id (and entry (noema-sessions--string entry "sessionId"))))
+    (unless session-id
+      (user-error "Session %s has no conversation to compact yet" name))
+    (noema-sessions--api
+     "aaronnote:api:research:session:compact"
+     `((cwd . ,noema-sessions--root) (sessionId . ,session-id))
+     (lambda (_result error-object)
+       (if error-object
+           (message "Noema sessions: %s" (noema-sessions--error error-object))
+         (message "Session %s rolls over to its latest Handoff at its next Run" name))))))
 
 (define-derived-mode noema-sessions-mode tabulated-list-mode "Noema-Sessions"
   "List the named agent sessions of a Noema project.
 
 RET switch to (or resume) the session's buffer   r rename   F fork
 a archive/restore   k kill buffer   i pin into the source work block
-j jump to latest work block   t file/project scope   P Pi   g refresh
+j jump to latest work block   t file/project scope   c compact context
+P Pi   g refresh
 
 \\{noema-sessions-mode-map}"
-  (setq tabulated-list-format [("Name" 30 t) ("Agent" 9 t) ("State" 10 t) ("Buffer" 7 t)
+  (setq tabulated-list-format [("Name" 30 t) ("Agent" 9 t) ("State" 10 t) ("Context" 11 t) ("Buffer" 7 t)
                                ("Last Run" 22 t) ("Origin" 8 t) ("Parent" 20 t)])
   (setq-local revert-buffer-function (lambda (&rest _) (noema-sessions-refresh)))
   (tabulated-list-init-header))

@@ -1,0 +1,19 @@
+{
+  "reviewedAt": "2026-09-15",
+  "orgMode": {
+    "repository": "https://git.savannah.gnu.org/git/emacs/org-mode.git",
+    "revision": "9f8be52a3b58516b1b6d829fea4e0ee68db6b602",
+    "version": "10.0-pre",
+    "localPath": "upstream/org-mode",
+    "cloneCommand": "git clone --depth 1 https://git.savannah.gnu.org/git/emacs/org-mode.git upstream/org-mode",
+    "role": "research-only checkout; not on production load-path"
+  },
+  "orgRemindersCLI": {
+    "repository": "https://github.com/ginqi7/org-reminders-cli.git",
+    "revision": "97391515bc6a4ad81c2577f5ced7bd69fc9cd78f",
+    "localPath": "var/research/org-reminders-cli",
+    "role": "source review only; no EventKit access requested"
+  },
+  "localEmacs": "31.0.91",
+  "bundledOrg": "9.8.7"
+}

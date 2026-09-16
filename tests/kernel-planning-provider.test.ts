@@ -13,6 +13,20 @@ afterEach(async () => {
 });
 
 describe("data-kernel planning provider", () => {
+  test("computes supplied source without a Markdown box file or local path", async () => {
+    const requests: any[] = [];
+    const provider = createKernelPlanningProvider({
+      baseUrl: "http://127.0.0.1:6806", box: { id: "box", root: "/unused/root" },
+      fetchImpl: async (url: string, options: any) => {
+        requests.push({ url, body: JSON.parse(options.body) });
+        return { ok: true, json: async () => ({ code: 0, data: { nodes: [] } }) };
+      },
+    });
+    await provider.computeSource({ content: "@@todo [remote source]" });
+    expect(requests).toEqual([{ url: "http://127.0.0.1:6806/api/noema/agenda/source",
+      body: { content: "@@todo [remote source]" } }]);
+  });
+
   test("loads one joined workspace projection and rejects mismatched note paths", async () => {
     const root = await mkdtemp(join(tmpdir(), "noema-kernel-workspace-projection-"));
     roots.push(root);
@@ -141,6 +155,7 @@ describe("data-kernel planning provider", () => {
     }], 1787623200000, {
       projects: [{ id: "#p", status: "active", title: "P", file: join(root, "a.md"), index: 0, line: 1, source: "@@project P {}", canon: { project: "p" } }],
       milestones: [],
+      clocks: [{ id: "clock-a", file: join(root, "work.noema"), nativeTodoId: "native-node", args: { from: "2026-09-16 09:00" } }],
       includeGantt: true,
     });
     expect(url).toBe("http://127.0.0.1:6806/api/noema/agenda/evaluate");
@@ -151,7 +166,8 @@ describe("data-kernel planning provider", () => {
       includeView: true,
       from: "",
       days: 7,
-      clocks: [],
+      clocks: [{ id: "clock-a", status: "", title: "", text: "", file: join(root, "work.noema"), index: 0, line: 0,
+        source: "", canon: {}, args: { from: "2026-09-16 09:00" }, nativeTodoId: "native-node" }],
       projects: [{ id: "#p", status: "active", title: "P", text: "P", file: join(root, "a.md"), index: 0, line: 1, source: "@@project P {}", canon: { project: "p" }, args: {} }],
       milestones: [],
       todos: [{ id: "#a", status: "todo", text: "A", file: join(root, "a.md"), noteTitle: "A", index: 4, line: 2, source: "", canon: { prio: "D" } }],

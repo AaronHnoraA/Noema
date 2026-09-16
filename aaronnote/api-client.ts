@@ -1,3 +1,4 @@
+import type {CaptureCatalog} from "./agenda-capture-view.ts";
 import type { CursorPosition, GraphPayload, Inbound, SnippetSummary, UnusedAsset } from "./types.ts";
 import type { CoreConnectionStatus, CoreReconnectReason } from "./active-core-reconnect.ts";
 
@@ -333,8 +334,13 @@ export type JupyterTasksResult = {
   removed?: Array<{ key?: string; kernel?: string; session?: string; reason?: string }>;
   scheduled?: boolean;
 };
-export type TodoItem = Record<string, unknown> & {
+export type AgendaLocator = { uid?: string; scopeId?: string; revision?: string; sourceKind?: string };
+export type TodoItem = Record<string, unknown> & AgendaLocator & {
   id?: string;
+  projectKey?: string;
+  workNodeId?: string;
+  cellIds?: string[];
+  sourceRef?: { id?: string; revision?: string };
   file?: string;
   path?: string;
   note?: string;
@@ -486,14 +492,14 @@ export type GanttTask = {
   end?: string;
   dependencies?: string[];
   progress?: number;
-  source?: { file?: string; index?: number; line?: number; source?: string; text?: string };
+  source?: AgendaLocator & { file?: string; index?: number; line?: number; source?: string; text?: string };
 };
 export type GanttMilestone = {
   id?: string;
   name?: string;
   project?: string;
   date?: string;
-  source?: { file?: string; index?: number; line?: number; source?: string; text?: string };
+  source?: AgendaLocator & { file?: string; index?: number; line?: number; source?: string; text?: string };
 };
 export type GanttLane = { id?: string; key?: string; name?: string; start?: string; end?: string; childTaskIds?: string[] };
 export type GanttMsg = {
@@ -503,8 +509,42 @@ export type GanttMsg = {
   lanes?: GanttLane[];
   lints?: TodoLint[];
 };
+export type AgendaDagNode = AgendaLocator & {
+  id: string;
+  todoId?: string;
+  workNodeId?: string;
+  notebookId?: string;
+  sourceKind?: "work-node" | "markdown" | string;
+  nodeKind?: string;
+  title?: string;
+  text?: string;
+  file?: string;
+  path?: string;
+  line?: number;
+  index?: number;
+  cellIds?: string[];
+  status?: string;
+  declaredStatus?: string;
+  priority?: string;
+  scheduled?: string;
+  deadline?: string;
+  project?: string;
+  tags?: string[];
+  scopeLabel?: string;
+  hasAgenda?: boolean;
+};
+export type AgendaDagEdge = AgendaLocator & {
+  id: string;
+  from: string;
+  to: string;
+  type: "depends" | "lineage" | string;
+  blocked?: boolean;
+};
+export type AgendaDag = { nodes?: AgendaDagNode[]; edges?: AgendaDagEdge[] };
 export type ProjectRollup = {
   id?: string;
+  scopeId?: string;
+  sourceKey?: string;
   key?: string;
   title?: string;
   status?: string;
@@ -534,14 +574,21 @@ export type AgendaEntry = {
 };
 export type AgendaDay = { date?: string; entries?: AgendaEntry[] };
 export type ClockTask = { todoId?: string; text?: string; file?: string; minutes?: number; effortMinutes?: number };
+export type ClockReference = AgendaLocator & { todoId?: string; text?: string; file?: string; from?: string; to?: string;
+  minutesSoFar?: number; inactive?: boolean; pending?: boolean; message?: string };
 export type ClockModel = {
   tasks?: ClockTask[];
   byDay?: Record<string, number>;
   byProject?: Record<string, number>;
-  running?: { todoId?: string; text?: string; file?: string; from?: string; minutesSoFar?: number } | null;
+  running?: ClockReference | null;
+  runningClocks?: ClockReference[];
+  pendingWrites?: ClockReference[];
 };
 export type AgendaMsg = {
   type?: string;
+  scopes?: Array<{ id: string; root: string; kind: string }>;
+  version?: number;
+  errors?: Array<{ file: string; message: string }>;
   evaluationSource?: string;
   range?: { from?: string; to?: string; today?: string };
   days?: AgendaDay[];
@@ -552,6 +599,7 @@ export type AgendaMsg = {
   clocktable?: ClockModel;
   projectModel?: ProjectRollup[];
   gantt?: GanttMsg;
+  dag?: AgendaDag;
   lints?: TodoLint[];
   logByDay?: Record<string, number>;
   stats?: { open?: number; doing?: number; done?: number; cancelled?: number; blocked?: number; overdue?: number };
@@ -581,10 +629,18 @@ type NativeApi = {
     embedQuery?: (body: Record<string, unknown>) => Promise<unknown>;
     attributeView?: (body: Record<string, unknown>) => Promise<unknown>;
     attributeViewCellPatch?: (body: Record<string, unknown>) => Promise<unknown>;
+    captureTemplates?: () => Promise<unknown>;
     createTodo?: (body: Record<string, unknown>) => Promise<unknown>;
     patchTodo?: (body: Record<string, unknown>) => Promise<unknown>;
     clockIn?: (body: Record<string, unknown>) => Promise<unknown>;
     clockOut?: (body: Record<string, unknown>) => Promise<unknown>;
+    retryClocks?: (body: Record<string, unknown>) => Promise<unknown>;
+    attention?: () => Promise<unknown>;
+    attentionAction?: (operation: string, body: Record<string, unknown>) => Promise<unknown>;
+    keepClockSource?: (body: Record<string, unknown>) => Promise<unknown>;
+    visitAgenda?: (body: Record<string, unknown>) => Promise<unknown>;
+    batchTodos?: (body: Record<string, unknown>) => Promise<unknown>;
+    linkTodos?: (body: Record<string, unknown>) => Promise<unknown>;
     todoDepRef?: (body: Record<string, unknown>) => Promise<unknown>;
   };
   completions?: {
@@ -1245,6 +1301,10 @@ export const api = {
       const call = requireMethod(nativeApi().notes?.attributeViewCellPatch, "Attribute view cell edit");
       return ensureOk(await call(body) as Record<string, unknown>, "Attribute view cell edit failed");
     },
+    async captureTemplates(): Promise<CaptureCatalog> {
+      const call = requireMethod(nativeApi().notes?.captureTemplates, "Capture templates");
+      return ensureOk(await call() as CaptureCatalog, "Capture templates unavailable");
+    },
     async createTodo(body: Record<string, unknown>): Promise<Record<string, unknown>> {
       const call = requireMethod(nativeApi().notes?.createTodo, "Todo create");
       return ensureOk(await call(body) as Record<string, unknown>, "Todo create failed");
@@ -1260,6 +1320,32 @@ export const api = {
     async clockOut(body: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
       const call = requireMethod(nativeApi().notes?.clockOut, "Clock out");
       return ensureOk(await call(body) as Record<string, unknown>, "Clock out failed");
+    },
+    async retryClocks(body: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().notes?.retryClocks, "Retry clock stops");
+      return ensureOk(await call(body) as Record<string, unknown>, "Clock retry failed");
+    },
+    async attention(): Promise<import('./agenda-attention-view.ts').AttentionSnapshot> {
+      return await requireMethod(nativeApi().notes?.attention,'Global attention')() as import('./agenda-attention-view.ts').AttentionSnapshot;
+    },
+    async attentionAction(operation: import('./agenda-attention-view.ts').AttentionOperation, body:Record<string,unknown>):Promise<unknown> {
+      return ensureOk(await requireMethod(nativeApi().notes?.attentionAction,'Global attention')(operation,body) as Record<string,unknown>,'Attention operation failed');
+    },
+    async keepClockSource(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().notes?.keepClockSource, "Keep source clock state");
+      return ensureOk(await call(body) as Record<string, unknown>, "Clock resolution failed");
+    },
+    async visitAgenda(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().notes?.visitAgenda, "Agenda source");
+      return ensureOk(await call(body) as Record<string, unknown>, "Agenda source visit failed");
+    },
+    async batchTodos(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().notes?.batchTodos, "Agenda batch");
+      return ensureOk(await call(body) as Record<string, unknown>, "Agenda batch failed");
+    },
+    async linkTodos(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().notes?.linkTodos, "Agenda dependency");
+      return ensureOk(await call(body) as Record<string, unknown>, "Agenda dependency failed");
     },
     async todoDepRef(body: Record<string, unknown>): Promise<{ type?: string; ref?: string }> {
       const call = requireMethod(nativeApi().notes?.todoDepRef, "Todo dependency reference");

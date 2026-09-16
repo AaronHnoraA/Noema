@@ -34,8 +34,9 @@ export function createKernelResearchProvider({ baseUrl, fetchImpl = globalThis.f
     status({ root, path }) {
       return post("status", { root, path });
     },
-    async events({ root, notebookId = "", after = 0, limit = 200 }) {
-      const data = await post("events", { root, notebookId, after, limit });
+    async events({ root, notebookId = "", after = 0, limit = 200, latestPerWorkNode = false }) {
+      const data = await post("events", { root, notebookId, after, limit,
+        ...(latestPerWorkNode ? { latestPerWorkNode: true } : {}) });
       return Array.isArray(data.events) ? data.events : [];
     },
 	cacheStatus({ root }) {
@@ -112,12 +113,16 @@ export function createKernelResearchProvider({ baseUrl, fetchImpl = globalThis.f
     prepareRun({ root, run }) {
       return post("run/prepare", { root, run });
     },
-    async runs({ root, workstreamId = "", sessionId = "", limit = 200 }) {
-      const data = await post("run/list", { root, workstreamId, sessionId, limit });
+    async runs({ root, workstreamId = "", sessionId = "", limit = 200, latestPerWorkNode = false }) {
+      const data = await post("run/list", { root, workstreamId, sessionId, limit,
+        ...(latestPerWorkNode ? { latestPerWorkNode: true } : {}) });
       return Array.isArray(data.runs) ? data.runs : [];
     },
     run({ root, id }) {
       return post("run/get", { root, id });
+    },
+    runHandoff({ root, id }) {
+      return post("run/handoff", { root, id });
     },
     liveRun({ root, id, after = 0, limit = 200 }) {
       return post("run/live", { root, id, after, limit });

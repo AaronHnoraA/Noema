@@ -11,7 +11,7 @@ export type PlanningNode = {
 };
 
 export const PLANNING_KINDS: Set<string>;
-export function scanPlanningNodes(input: string, options?: { kind?: string }): PlanningNode[];
+export function scanPlanningNodes(input: string, options?: { kind?: string; excludedRanges?:Array<{from:number;to:number}> }): PlanningNode[];
 export function serializePlanningValue(value: unknown): string;
 export function serializeInlineAttrs(attrs: Record<string, unknown>): string;
 export function serializeBlockAttrs(attrs: Record<string, unknown>): string;

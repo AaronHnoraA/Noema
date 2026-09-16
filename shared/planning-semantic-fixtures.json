@@ -67,5 +67,17 @@
       }
     },
     "expectedSource": "@@clock [Task]{from: 2026-08-25 12:00, task: #t1}"
+  },
+  {
+    "name": "native title patch escapes brackets and preserves attributes",
+    "input": "@@todo(doing) [旧标题] {id: abc123, ddl: 2026-09-16}",
+    "mutation": {
+      "type": "patch-todo",
+      "todo": {
+        "title": "手机 ] \\ 🚀",
+        "status": "done"
+      }
+    },
+    "expectedSource": "@@todo(done) [手机 \\] \\\\ 🚀] {id=abc123, ddl=2026-09-16}"
   }
 ]

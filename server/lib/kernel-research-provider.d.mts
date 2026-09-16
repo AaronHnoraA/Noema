@@ -17,8 +17,9 @@ export type ResearchRuntimeProvider = {
   endManualIntervention(args: { root: string; intervention: Record<string, any> }): Promise<Record<string, any>>;
   manualIntervention(args: { root: string; id: string }): Promise<Record<string, any>>;
   prepareRun(args: { root: string; run: Record<string, any> }): Promise<Record<string, any>>;
-  runs(args: { root: string; workstreamId?: string; sessionId?: string; limit?: number }): Promise<Record<string, any>[]>;
+  runs(args: { root: string; workstreamId?: string; sessionId?: string; limit?: number; latestPerWorkNode?: boolean }): Promise<Record<string, any>[]>;
   run(args: { root: string; id: string }): Promise<Record<string, any>>;
+  runHandoff?(args: { root: string; id: string }): Promise<{ handoffArtifactId: string; transcriptArtifactId: string }>;
   liveRun(args: { root: string; id: string; after?: number; limit?: number }): Promise<Record<string, any>>;
   requestRunCancellation(args: { root: string; cancellation: Record<string, any> }): Promise<Record<string, any>>;
   failPreparedRun(args: { root: string; failure: Record<string, any> }): Promise<Record<string, any>>;

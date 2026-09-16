@@ -24,6 +24,7 @@
                   "init-aaronnote" (payload &optional focus))
 (declare-function noema-agent-promote--session-spec "noema-agent-promote" (&optional buffer title goal))
 (declare-function noema-sessions-open-reference "noema-sessions" (root &optional name session-id))
+(declare-function noema-research-graph-refresh-runs "noema-research-graph" ())
 
 (defgroup noema-agent-worker nil
   "Noema document execution through ACP and agent-shell."
@@ -85,6 +86,13 @@
   "The `global-mode-string' entry for pending Noema attention items.")
 
 (defvar noema-agent-worker--runs)
+
+(defcustom noema-agent-worker-ledger-turn-limit 16
+  "Turns a Session's local Magent ledger projection keeps before it rotates.
+The projection is a UI view only and the durable Run history stays in the
+kernel, so rotation only bounds what a long-lived Emacs keeps in memory."
+  :type 'natnum
+  :group 'noema-agent-worker)
 
 (defcustom noema-agent-worker-busy-retry-seconds 15
   "Seconds before a Run waiting on a busy named session retries preparation.
@@ -270,6 +278,12 @@ like a durable Run problem, so they go to `*Warnings*' instead of `message'."
   (when-let* ((thread (noema-agent-worker-ledger worker))
               (session-id (noema-agent-worker-session-id worker)))
     (setf (magent-thread-session-id thread) session-id)
+    ;; A fresh Run was projected under its Run id until the Session existed.
+    ;; Drop that key so every fresh Run does not leave a thread behind.
+    (let ((run-id (noema-agent-worker-run-id worker)))
+      (when (and run-id (not (equal run-id session-id))
+                 (eq (gethash run-id noema-agent-worker--ledgers) thread))
+        (remhash run-id noema-agent-worker--ledgers)))
     (puthash session-id thread noema-agent-worker--ledgers)))
 
 (defun noema-agent-worker--ledger-start (worker)
@@ -351,8 +365,20 @@ like a durable Run problem, so they go to `*Warnings*' instead of `message'."
           (pcase status
             ("completed" (magent-thread-complete-turn thread turn-id))
             ("failed" (magent-thread-fail-turn thread turn-id reason))
-            (_ (magent-thread-interrupt-turn thread turn-id reason))))
+            (_ (magent-thread-interrupt-turn thread turn-id reason)))
+          (when (>= (length (magent-thread-turns thread))
+                    (max 1 noema-agent-worker-ledger-turn-limit))
+            (noema-agent-worker--rotate-ledger thread)))
       (error (noema-agent-worker--ledger-warn "terminal" error-object)))))
+
+(defun noema-agent-worker--rotate-ledger (thread)
+  "Forget THREAD so its Session's next Run projects into a fresh ledger.
+Workers that still hold THREAD keep using it until they finish."
+  (let (keys)
+    (maphash (lambda (key value) (when (eq value thread) (push key keys)))
+             noema-agent-worker--ledgers)
+    (dolist (key keys)
+      (remhash key noema-agent-worker--ledgers))))
 
 (defun noema-agent-worker--value (object key &optional default)
   "Read string KEY from JSON-like OBJECT, returning DEFAULT when absent."
@@ -1609,6 +1635,9 @@ work DAG.  No ACP prompt is sent until its frozen RunSpec is stored."
     (noema-agent-worker--enqueue-preparation
      target
      `((file . ,(expand-file-name file)) (cellId . ,cell-id) (cwd . ,target)
+       ;; The same ratio that raises the context warning rolls the
+       ;; conversation over to its Handoff before the next Run (D-036).
+       (contextRolloverRatio . ,noema-agent-worker-context-rollover-ratio)
        ,@(when (and session-name (not (string-empty-p session-name)))
            `((sessionName . ,session-name)))
        ,@(when (and session-policy (not (string-empty-p session-policy)))

@@ -74,6 +74,9 @@ type SessionName struct {
 	Aliases         []string       `json:"aliases"`
 	LastRun         *Run           `json:"lastRun,omitempty"`
 	OpenRun         bool           `json:"openRun"`
+	// Usage is the latest token and context-window report of the bound
+	// Session, so a person can see which conversation is near its limit.
+	Usage *SessionUsage `json:"usage,omitempty"`
 	CreatedAt       string         `json:"createdAt"`
 	UpdatedAt       string         `json:"updatedAt"`
 	Version         int64          `json:"version"`
@@ -442,6 +445,18 @@ func (s *Store) enrichSessionName(name *SessionName) error {
 	}
 	if name.SessionID == "" {
 		return nil
+	}
+	var usage SessionUsage
+	var usageUpdatedAt int64
+	err = s.db.QueryRow(`SELECT total_tokens, input_tokens, output_tokens, thought_tokens, cached_tokens,
+		context_used, context_size, updated_at FROM session_usage WHERE session_id = ?`, name.SessionID).
+		Scan(&usage.TotalTokens, &usage.InputTokens, &usage.OutputTokens, &usage.ThoughtTokens, &usage.CachedTokens,
+			&usage.ContextUsed, &usage.ContextSize, &usageUpdatedAt)
+	if err == nil {
+		usage.SessionID, usage.UpdatedAt = name.SessionID, formatMillis(usageUpdatedAt)
+		name.Usage = &usage
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return err
 	}
 	run, err := scanRun(s.db.QueryRow(runSelect+` WHERE session_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`, name.SessionID))
 	if errors.Is(err, sql.ErrNoRows) {

@@ -1,3 +1,4 @@
+import type { WorkAgenda, WorkAgendaPatch } from "../../shared/work-agenda.mjs";
 export const RESEARCH_SCHEMA: "noema.work-document/2";
 export const LEGACY_RESEARCH_SCHEMA: "noema.research-notebook/1";
 export const RESEARCH_NAMESPACE: "noema_research";
@@ -42,6 +43,7 @@ export type ResearchWorkNodeSummary = {
   outcome: string | null;
   droppedReason: string | null;
   disclosure: string | null;
+  agenda: WorkAgenda | null;
   lineage: string[];
   depends: string[];
   cellIds: string[];
@@ -83,7 +85,7 @@ export type ResearchGraphProjection = {
 export type ResearchIndexer = {
   index(args: { root: string; path: string; actor?: string; reason?: string }): Promise<any>;
   status(args: { root: string; path: string }): Promise<any>;
-  events(args: { root: string; notebookId?: string; after?: number; limit?: number }): Promise<any[]>;
+  events(args: { root: string; notebookId?: string; after?: number; limit?: number; latestPerWorkNode?: boolean }): Promise<any[]>;
 };
 
 export type ResearchMutation = { notebook: ResearchNotebook; cell: ResearchCellSummary | null; workNode?: ResearchWorkNodeSummary | null };
@@ -114,6 +116,7 @@ export type ResearchNotebookService = {
   deleteWorkNode: ResearchServiceMethod;
   setRelation: ResearchServiceMethod;
   setState: ResearchServiceMethod;
+  setAgenda: ResearchServiceMethod;
   setDefaultAgent: ResearchServiceMethod;
   clearOutputs: ResearchServiceMethod;
   writeRunOutput: ResearchServiceMethod;
@@ -163,6 +166,9 @@ export function updateResearchCell(
 export function deleteResearchCell(notebook: ResearchNotebook, cellId: string): { notebook: ResearchNotebook; removed: string[]; orphanedWorkNodeIds: string[] };
 export function deleteResearchWorkNode(notebook: ResearchNotebook, workNodeId: string, options?: { deleteBoundCells?: boolean }): { notebook: ResearchNotebook; removedWorkNodeId: string; removedCells: string[] };
 export function setResearchRelation(notebook: ResearchNotebook, cellId: string, type: string, parents?: string[]): ResearchMutation;
+export function setResearchAgenda(
+  notebook: ResearchNotebook, workNodeId: string, patch?: WorkAgendaPatch | null, nowMs?: number,
+): { notebook: ResearchNotebook; workNode: ResearchWorkNodeSummary };
 export function setResearchState(
   notebook: ResearchNotebook,
   cellId: string,

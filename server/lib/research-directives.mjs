@@ -1,7 +1,10 @@
 import { parseSessionDirective } from "./research-session-routing.mjs";
+import { parseWorkAgendaCommand, validateWorkAgenda } from "../../shared/work-agenda.mjs";
 
 const AGENT_OR_SKILL_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-const CONTEXT_REF = /^(?:lineage|depends|git\.diff|handoff\.latest|cell:[A-Za-z0-9_-]+|result:wn_[A-Za-z0-9_-]+|file:.+|note:[A-Za-z0-9_-]+|artifact:art_[A-Za-z0-9_-]+)$/;
+// `lineage:N` widens the ancestor walk to N (1-3) levels; `none` turns off the
+// context Noema would otherwise attach automatically (D-036).
+const CONTEXT_REF = /^(?:none|lineage(?::[1-3])?|depends|git\.diff|handoff\.latest|cell:[A-Za-z0-9_-]+|result:wn_[A-Za-z0-9_-]+|file:.+|note:[A-Za-z0-9_-]+|artifact:art_[A-Za-z0-9_-]+)$/;
 
 function directiveError(message) {
   return Object.assign(new Error(message), { statusCode: 422, code: "ERR_RESEARCH_DIRECTIVE" });
@@ -15,16 +18,40 @@ function directiveError(message) {
 export function parseResearchDirectives(text, {
   allowWorkstream = false,
   allowLegacySingleAt = false,
+  allowAgenda = true,
+  agendaKind = "work",
   sourceName = "work cell",
 } = {}) {
   const source = String(text || "").replace(/\r\n?/g, "\n");
   const lines = source.split("\n");
-  const config = { agent: "", session: "", context: [], skills: [], workstreamId: "" };
+  const config = { agent: "", session: "", context: [], skills: [], workstreamId: "", agenda: null };
   let bodyStart = 0;
   let sawDirective = false;
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
+    if (/^@@(?:todo|clock)\b/.test(line)) {
+      if (!allowAgenda) throw directiveError(`Unsupported ${sourceName} directive: ${line.trim()}`);
+      let parsed;
+      try {
+        parsed = parseWorkAgendaCommand(lines, index, { kind: agendaKind, sourceName });
+      } catch (error) {
+        throw directiveError(error.message);
+      }
+      if (parsed.type === "todo") {
+        if (config.agenda !== null) throw directiveError(`Only one leading @@todo is allowed in ${sourceName}`);
+        config.agenda = parsed.agenda;
+      } else {
+        if (config.agenda === null) throw directiveError(`@@clock requires a leading @@todo in ${sourceName}`);
+        config.agenda.clocks = [...(config.agenda.clocks || []), parsed.clock];
+        const errors = validateWorkAgenda(config.agenda, agendaKind);
+        if (errors.length) throw directiveError(errors.join("; "));
+      }
+      sawDirective = true;
+      bodyStart = parsed.end;
+      index = parsed.end - 1;
+      continue;
+    }
     const match = /^(@@|@)([A-Za-z][A-Za-z0-9_-]*)\((.*)\)\s*$/.exec(line);
     if (match) {
       const legacy = match[1] === "@";

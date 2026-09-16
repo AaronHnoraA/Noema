@@ -95,6 +95,17 @@ import {
 import { createKernelRelationshipOverlay } from "./server/lib/kernel-relationships.mjs";
 import { createKernelSupervisor } from "./server/lib/kernel-supervisor.mjs";
 import { startNoteWatcher } from "./server/lib/watch.mjs";
+import { workAgendaPlanning } from "./shared/work-agenda.mjs";
+import { validateResearchNotebook } from "./server/lib/research-notebook.mjs";
+import { createAgendaService } from "./server/lib/agenda-service.mjs";
+import { createAgendaSourceTransport } from "./server/lib/agenda-source-transport.mjs";
+import { createAgendaSourceWriter } from "./server/lib/agenda-source-writer.mjs";
+import { createAgendaClockStore } from "./server/lib/agenda-clock-store.mjs";
+import { createAgendaAttentionStore } from "./server/lib/agenda-attention-store.mjs";
+import { createAgendaAttention } from "./server/lib/agenda-attention.mjs";
+import { createAgendaAttentionSources } from "./server/lib/agenda-attention-source.mjs";
+import { webAgendaProjection } from "./server/lib/agenda-projection.mjs";
+import { agendaMarkdownDocument, buildAgendaFromPlanning, inspectAgendaDocument } from "./server/lib/runtime.mjs";
 import { createRendererBuildWatcher } from "./server/lib/renderer-build-watch.mjs";
 import {
   clientLifecycleReplay,
@@ -930,6 +941,7 @@ function applyWikiMutationResult(result, options = {}) {
   if (result?.changed === false || result?.rendered === false) return result;
   const files = wikiMutationFiles(result, options.files || []);
   if (options.full || files.length > 0) {
+    if (options.agenda !== false) agendaIndex.invalidate(options.full ? null : files);
     if (options.full) markNotesDirty();
     else for (const file of files) markNotesDirty(file);
     // Tag the origin so the page that caused the change can coalesce its own
@@ -1164,6 +1176,84 @@ const researchNotebookWatch = createResearchNotebookWatchReconciler({
   },
 });
 
+const agendaSources = createAgendaSourceTransport({
+  request: gatewayRequest,
+  excludePatterns: JSON.parse(process.env.NOEMA_AGENDA_EXCLUDE || "[]"),
+  nativeWatch: process.env.AARONNOTE_WATCH === "0" ? null : startNoteWatcher,
+});
+const agendaWriters = createAgendaSourceWriter({ transport: agendaSources, native: {
+  async mutate(todo, patch) {
+    const result = todo.sourceKind === "work-node"
+      ? await researchNotebooks.setAgenda({ file: todo.file, workNodeId: todo.workNodeId,
+          expectedRevision: `sha256:${todo.sourceRef.revision}`, patch })
+      : await patchTodo({ ...patch, file: todo.file, selectorId: todo.id.startsWith("#") ? todo.id : "",
+          index: todo.index, source: todo.source, expectedSource: todo.source, expectedRevision: todo.sourceRef.revision });
+    return result;
+  },
+  create: (body, options) => createTodo(body, options),
+  ensureId: (todo, options) => ensureTodoId({ file: todo.file, selectorId: todo.id.startsWith("#") ? todo.id : "",
+    index: todo.index, source: todo.source, expectedSource: todo.source, expectedRevision: todo.sourceRef.revision }, options),
+  linkNodes: (source, target) => researchNotebooks.setRelation({ file: source.file, workNodeId: source.workNodeId,
+    type: "depends", parents: [...new Set([...(source.nativeDepends || []), target.workNodeId])],
+    expectedRevision: `sha256:${source.sourceRef.revision}` }),
+  startClock: (todo, options) => todo.sourceKind === "work-node"
+    ? researchNotebooks.setAgenda({ file: todo.file, workNodeId: todo.workNodeId,
+        expectedRevision: `sha256:${todo.sourceRef.revision}`, patch: { op: "clock-in", clockId: options.clockId, at: options.at } })
+    : clockIn({ file: todo.file, selectorId: todo.id.startsWith("#") ? todo.id : "",
+    index: todo.index, source: todo.source, expectedSource: todo.source, expectedRevision: todo.sourceRef.revision }, options),
+  stopClock: (body, options) => body.sourceKind === "work-node"
+    ? researchNotebooks.setAgenda({ file: body.file, workNodeId: body.workNodeId,
+        expectedRevision: `sha256:${body.revision}`, patch: { op: "clock-out", clockId: body.clockId, at: options.at } })
+    : clockOut(body, options),
+}});
+
+let agendaAttention = null;
+async function agendaSourceProtected(file) {
+  if (!gatewayUrl) return false;
+  const state = await gatewayRequest("aaronnote.agenda.protected-sources", {files:[file]});
+  return (state?.files || []).includes(file);
+}
+const agendaIndex = createAgendaService({
+  clockStore: createAgendaClockStore(join(stateRoot, "agenda-clocks.sqlite")),
+  captureTemplates: JSON.parse(process.env.NOEMA_AGENDA_CAPTURE_TEMPLATES || "[]"),
+  isSourceProtected: agendaSourceProtected,
+  knowledgeRoot: noteRoot,
+  excludePatterns: JSON.parse(process.env.NOEMA_AGENDA_EXCLUDE || "[]"),
+  // Reuse the vault watcher already owned by this host.
+  watchKnowledge: false,
+  watch: agendaSources.watch,
+  list: agendaSources.list, read: agendaSources.read, canonicalRoot: agendaSources.canonicalRoot,
+  async parseDocument(document) {
+    if (document.file.toLowerCase().endsWith(".noema")) {
+      const notebook = JSON.parse(document.content);
+      const validation = validateResearchNotebook(notebook);
+      if (validation.errors.length) throw new Error(validation.errors.map((entry) => entry.message).join("; "));
+      return workAgendaPlanning(notebook, document);
+    }
+    return agendaMarkdownDocument(document);
+  },
+  evaluate: (planning, body, options) => buildAgendaFromPlanning(planning, body, options),
+  ...agendaWriters,
+  // Only knowledge-vault mutations invalidate its Wiki index. An ordinary
+  // project (including one on this machine) owns a separate source scope.
+  onMutation: (result) => result.file && isWithin(noteRoot, result.file)
+    ? applyWikiMutationResult(result, { agenda: false }) : result,
+  onChange(payload) {
+    agendaAttention?.signal({files:payload.files?.length?payload.files:undefined,fetchApple:false});
+    gatewayNotify("aaronnote.event", { type: "agenda-changed", payload });
+    broadcast("command", { command: "agenda-changed", ...payload });
+  },
+});
+agendaAttention = createAgendaAttention({
+  store: createAgendaAttentionStore(join(stateRoot,"agenda-attention.sqlite")),
+  sources: createAgendaAttentionSources({index:agendaIndex,isProtected:agendaSourceProtected}),
+  apple: (body) => gatewayRequest("aaronnote.agenda.apple",body),
+  onChange(payload) {
+    gatewayNotify("aaronnote.event",{type:"agenda-attention-changed",payload});
+    broadcast("command",{command:"agenda-attention-changed",...payload});
+  },
+});
+
 const noteWatcher = hostMode !== "server" && process.env.AARONNOTE_WATCH !== "0"
   ? startNoteWatcher({
       root: noteRoot,
@@ -1179,6 +1269,7 @@ const noteWatcher = hostMode !== "server" && process.env.AARONNOTE_WATCH !== "0"
         || (workspaceLayout === "wiki" && Boolean(wikiRepositoryIdForFile(file))),
       isSelfWrite: (file) => noteSelfWriteRecently(file),
       onBatch(files) {
+        agendaIndex.invalidate(files);
         void researchNotebookWatch.filesChanged(files);
         const noteFiles = files.filter((file) => notePathWatchRelevant(file));
         const bibFiles = files.filter((file) => bibliographyPathWatchRelevant(file));
@@ -1196,6 +1287,7 @@ const noteWatcher = hostMode !== "server" && process.env.AARONNOTE_WATCH !== "0"
         }
       },
       onFullRescan() {
+        agendaIndex.invalidate();
         void researchNotebookWatch.fullRescan();
         markNotesDirty();
         clearBibliographyCache();
@@ -1422,6 +1514,7 @@ async function beginShutdown({ reason = "shutdown", exitCode = 0, deadlineMs = 3
         Promise.resolve().then(() => rendererBuildWatcher.close()),
         Promise.resolve().then(() => appConfigWatcher.close()),
         Promise.resolve().then(() => noteWatcher.close()),
+        Promise.resolve().then(async () => { await agendaAttention.close(); await agendaIndex.close(); }),
         Promise.resolve().then(() => researchNotebookWatch.close()),
         wikiAutoSync?.close({ flush: true }),
         Promise.resolve().then(() => jupyterKernelWs?.close()),
@@ -2102,7 +2195,50 @@ const apiRouter = new ApiRouter().register({
     broadcast("command", { command: "agenda-changed", version: notesIndexVersionValue() });
     return result.changed === false ? result : applyWikiMutationResult(result);
   },
-  "aaronnote:api:notes:agenda": (body) => buildAgenda(body || {}),
+  "aaronnote:api:notes:agenda": async (body) => hostMode === "server"
+    ? buildAgenda(body || {}) : webAgendaProjection(await agendaIndex.query({
+        ...(body || {}),
+        // The Web surface must name its source scopes.  A direct/legacy page
+        // therefore falls back to resident Roam only, never every leased
+        // project left active by other clients.
+        scopes: Array.isArray(body?.scopes) && body.scopes.length ? body.scopes : ["knowledge"],
+      })),
+  "aaronnote:api:agenda:visit": async (body) => {
+    const todo = await agendaIndex.lookup(body || {}, false);
+    gatewayNotify("aaronnote.event", { type: "agenda-visit", payload: todo });
+    return { ok: true };
+  },
+  "aaronnote:api:agenda:query": (body) => agendaIndex.query(body || {}),
+  "aaronnote:api:agenda:query-active": (body) => agendaIndex.queryActive(body || {}),
+  "aaronnote:api:agenda:document": (body) => inspectAgendaDocument(body || {}),
+  "aaronnote:api:agenda:attention": () => agendaAttention.list(),
+  "aaronnote:api:agenda:attention-collections": (body) => agendaAttention.collections(body?.kind),
+  "aaronnote:api:agenda:attention-promote": (body) => agendaAttention.promote(body || {}),
+  "aaronnote:api:agenda:attention-sync": (body) => agendaAttention.sync({...body,retrySource:true}),
+  "aaronnote:api:agenda:attention-remove": (body) => agendaAttention.remove(body || {}),
+  "aaronnote:api:agenda:attention-resolve": (body) => agendaAttention.resolve(body || {}),
+  "aaronnote:api:agenda:attention-visit": (body) => {
+    const item=agendaAttention.list().items.find(item=>item.id===body?.id);
+    if(!item)throw new Error("Attention binding is no longer active");
+    gatewayNotify("aaronnote.event",{type:"agenda-attention-visit",payload:item.ref});
+    return {ok:true};
+  },
+  "aaronnote:api:agenda:enter": (body) => agendaIndex.enter(body || {}),
+  "aaronnote:api:agenda:leave": (body) => agendaIndex.leave(body || {}),
+  "aaronnote:api:agenda:patch": (body) => agendaIndex.patch(body || {}),
+  "aaronnote:api:agenda:batch": (body) => agendaIndex.batch(body || {}),
+  "aaronnote:api:agenda:capture-templates": () => agendaIndex.captureTemplates(),
+  "aaronnote:api:agenda:capture": (body) => agendaIndex.capture(body || {}),
+  "aaronnote:api:agenda:dependency": (body) => agendaIndex.dependency(body || {}),
+  "aaronnote:api:agenda:clock-in": (body) => agendaIndex.clockIn(body || {}),
+  "aaronnote:api:agenda:clock-out": (body) => agendaIndex.clockOut(body || {}),
+  "aaronnote:api:agenda:clock-retry": (body) => agendaIndex.retryClocks(body || {}),
+  "aaronnote:api:agenda:clock-keep-source": (body) => agendaIndex.keepClockSource(body || {}),
+  "aaronnote:api:agenda:invalidate": (body) => {
+    agendaIndex.invalidate(Array.isArray(body?.files) ? body.files : null);
+    return { ok: true };
+  },
+  "aaronnote:api:agenda:status": () => agendaIndex.status(),
   "aaronnote:api:notes:resolve-block": (body) => resolveBlockReference(body || {}),
   "aaronnote:api:notes:embed-query": (body) => buildEmbedQuery(body || {}),
   "aaronnote:api:notes:attribute-view": (body) => buildAttributeView(body || {}),
@@ -2112,21 +2248,28 @@ const apiRouter = new ApiRouter().register({
     return result.changed === false ? result : applyWikiMutationResult(result);
   },
   "aaronnote:api:notes:create-todo": async (body) => {
+    if (body?.scopeId) return agendaIndex.capture(body);
     const result = await createTodo(body || {});
     broadcast("command", { command: "agenda-changed", version: notesIndexVersionValue() });
     return applyWikiMutationResult(result);
   },
   "aaronnote:api:notes:patch-todo": async (body) => {
+    if (body?.uid) {
+      const { file, id, index, source, text, uid, scopeId, revision, sourceKind, ...patch } = body;
+      return agendaIndex.patch({ uid, scopeId, revision, patch });
+    }
     const result = await patchTodo(body || {});
     broadcast("command", { command: "agenda-changed", version: notesIndexVersionValue() });
     return result.changed === false ? result : applyWikiMutationResult(result);
   },
   "aaronnote:api:notes:clock-in": async (body) => {
+    if (body?.uid) return agendaIndex.clockIn(body);
     const result = await clockIn(body || {});
     broadcast("command", { command: "agenda-changed", version: notesIndexVersionValue() });
     return applyWikiMutationResult(result);
   },
   "aaronnote:api:notes:clock-out": async (body) => {
+    if (body?.uid) return agendaIndex.clockOut(body);
     const result = await clockOut(body || {});
     broadcast("command", { command: "agenda-changed", version: notesIndexVersionValue() });
     return applyWikiMutationResult(result);
@@ -2435,7 +2578,18 @@ async function handleGatewayRequest(message) {
   const hasId = Object.prototype.hasOwnProperty.call(message || {}, "id");
   try {
     let result;
-    if (message.method === "aaronnote.command") {
+    if (message.method === "aaronnote.agenda.source-event") {
+      agendaSources.event(message.params || {});
+      result = { ok: true };
+    } else if (message.method === "aaronnote.agenda.apple-event") {
+      if (message.params?.event === "disconnected") {
+        agendaAttention.connectionChanged({state:"unavailable",message:message.params.message || "Apple helper disconnected; showing saved receipts"});
+      } else {
+        agendaAttention.connectionChanged({state:"connected",message:""});
+        agendaAttention.signal();
+      }
+      result = {ok:true};
+    } else if (message.method === "aaronnote.command") {
       result = await handleEmacsCommand(message.params || {});
     } else if (message.method === "aaronnote.api") {
       result = await callApi(
@@ -2480,6 +2634,14 @@ function handleGatewayMessage(raw) {
         `[aaronnote-web] gateway registration failed: ${message.error.message}\n`,
       );
     } else {
+      agendaSources.reconnect();
+      // Subscribe without starting EventKit or requesting access. A later
+      // explicit enable emits ready and resumes the persisted binding set.
+      gatewayRequest("aaronnote.agenda.apple",{op:"status"}).then((state)=>{
+        agendaAttention.connectionChanged(state?.error
+          ?{state:"unavailable",message:state.error.message}:{state:"connected",message:""});
+        if(!state?.error)agendaAttention.signal();
+      }).catch((error)=>agendaAttention.connectionChanged({state:"unavailable",message:String(error.message||error)}));
       gatewayNotify("aaronnote.event", {
         type: "ready",
         payload: { port: gatewayEndpointPort },
@@ -2537,6 +2699,8 @@ function connectGateway(port) {
       reject(new Error("Emacs gateway disconnected"));
     }
     gatewayPending.clear();
+    agendaSources.disconnected();
+    agendaAttention.connectionChanged({state:"unavailable",message:"Emacs gateway disconnected; showing saved receipts"});
     gatewayRetryTimer = setTimeout(() => connectGateway(port), 1000);
     gatewayRetryTimer.unref?.();
   });
@@ -2816,10 +2980,21 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
       embedQuery: function(body) { return call("aaronnote:api:notes:embed-query", [body || {}]); },
       attributeView: function(body) { return call("aaronnote:api:notes:attribute-view", [body || {}]); },
       attributeViewCellPatch: function(body) { return call("aaronnote:api:notes:attribute-view-cell-patch", [body || {}]); },
+      captureTemplates: function() { return call("aaronnote:api:agenda:capture-templates", []); },
       createTodo: function(body) { return call("aaronnote:api:notes:create-todo", [body || {}]); },
       patchTodo: function(body) { return call("aaronnote:api:notes:patch-todo", [body || {}]); },
       clockIn: function(body) { return call("aaronnote:api:notes:clock-in", [body || {}]); },
       clockOut: function(body) { return call("aaronnote:api:notes:clock-out", [body || {}]); },
+      retryClocks: function(body) { return call("aaronnote:api:agenda:clock-retry", [body || {}]); },
+      attention: function() { return call("aaronnote:api:agenda:attention", []); },
+      attentionAction: function(operation, body) {
+        if (["collections", "promote", "sync", "remove", "resolve", "visit"].indexOf(operation) < 0) throw new Error("Unknown attention operation");
+        return call("aaronnote:api:agenda:attention-" + operation, [body || {}]);
+      },
+      keepClockSource: function(body) { return call("aaronnote:api:agenda:clock-keep-source", [body || {}]); },
+      visitAgenda: function(body) { return call("aaronnote:api:agenda:visit", [body || {}]); },
+      batchTodos: function(body) { return call("aaronnote:api:agenda:batch", [body || {}]); },
+      linkTodos: function(body) { return call("aaronnote:api:agenda:dependency", [body || {}]); },
       todoDepRef: function(body) { return call("aaronnote:api:notes:todo-dep-ref", [body || {}]); }
     },
     completions: {

@@ -1,7 +1,7 @@
-;;; noema-agenda-poc.el --- Isolated native Org Agenda experiment -*- lexical-binding: t; -*-
+;;; noema-agenda-poc.el --- Native Noema data in Org Agenda UI -*- lexical-binding: t; -*-
 
-;; Research only. No startup hooks, global advice, or production write APIs.
-;; Org is used as a rendering/query engine over a disposable projection.
+;; Research only. No Org text, Org source buffers, startup hooks, global advice,
+;; production mutations, or background polling.
 (require 'org-agenda)
 (require 'json)
 (require 'cl-lib)
@@ -11,74 +11,35 @@
   (file-name-directory (or load-file-name buffer-file-name)))
 (defvar noema-agenda-poc-node "node")
 (defvar-local noema-agenda-poc--snapshot nil)
-(defvar-local noema-agenda-poc--projection nil)
-(put 'noema-agenda-poc--snapshot 'permanent-local t)
-(put 'noema-agenda-poc--projection 'permanent-local t)
-
-(defun noema-agenda-poc--attach ()
-  "Reattach this buffer's adapter after Org regenerates its major mode."
-  (when noema-agenda-poc--projection
-    (setq-local org-agenda-files (list noema-agenda-poc--projection))
-    (setq-local org-agenda-buffer-tmp-name "*Noema Agenda Prototype*")
-    (use-local-map (copy-keymap org-agenda-mode-map))
-    (local-set-key (kbd "RET") #'noema-agenda-poc-visit)
-    (local-set-key (kbd "t") #'noema-agenda-poc-completion-intent)
-    (local-set-key (kbd "q") #'noema-agenda-poc-close)
-    (setq-local header-line-format " Noema research prototype · RET source · t request preview · q close")))
-(put 'noema-agenda-poc--attach 'permanent-local-hook t)
+(defvar-local noema-agenda-poc--start-day nil)
 
 (defun noema-agenda-poc--literal (value)
-  "Flatten VALUE and prevent Org links/diary expressions in display labels."
-  (let ((text (replace-regexp-in-string "[\n\r\t]" " " (format "%s" (or value "")))))
-    (dolist (pair '(("[" . "［") ("]" . "］") ("<" . "‹") (">" . "›")))
-      (setq text (string-replace (car pair) (cdr pair) text)))
-    text))
+  "Keep VALUE on one display line; never interpret it as source code."
+  (replace-regexp-in-string "[\n\r\t]" " " (format "%s" (or value ""))))
 
-(defun noema-agenda-poc--timestamp (value)
-  "Render only a canonical Noema wall date/time as an Org timestamp."
-  (when (and (stringp value)
-             (string-match-p "\\`[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}\\(?: [0-9]\\{2\\}:[0-9]\\{2\\}\\)?\\'" value))
-    (concat "<" value ">")))
-
-(defun noema-agenda-poc--org (snapshot)
-  "Project SNAPSHOT into Org without exposing an editable Org authority."
-  (concat
-   "#+TITLE: Noema Agenda research prototype\n"
-   "#+TODO: TODO DOING BLOCKED | DONE CANCELLED\n"
-   "#+PRIORITIES: A F D\n\n"
-   (mapconcat
-    (lambda (item)
-      (let* ((status (upcase (or (alist-get 'status item) "todo")))
-             (priority (alist-get 'priority item))
-             (scheduled (noema-agenda-poc--timestamp (alist-get 'scheduled item)))
-             (deadline (noema-agenda-poc--timestamp (alist-get 'deadline item))))
-        (unless (member status '("TODO" "DOING" "BLOCKED" "DONE" "CANCELLED"))
-          (error "Unknown prototype task status: %s" status))
-        (unless (and (stringp priority) (string-match-p "\\`[A-F]\\'" priority))
-          (error "Invalid prototype priority"))
-        (concat "* " status " [#" priority "] "
-                (noema-agenda-poc--literal (alist-get 'title item)) "\n"
-                (if (or scheduled deadline)
-                    (concat (if scheduled (concat "SCHEDULED: " scheduled " ") "")
-                            (if deadline (concat "DEADLINE: " deadline) "") "\n") "")
-                ":PROPERTIES:\n:NOEMA_UID: " (noema-agenda-poc--literal (alist-get 'uid item))
-                "\n:CATEGORY: " (noema-agenda-poc--literal (alist-get 'project item))
-                "\n:NOEMA_KIND: " (noema-agenda-poc--literal (alist-get 'kind item))
-                "\n:END:\n")))
-    (alist-get 'items snapshot) "\n")))
-
-(defun noema-agenda-poc--deny-write (&rest _)
-  "Reject writes even when an Org command binds `inhibit-read-only'."
-  (user-error "Disposable Noema projection: source mutations require the Noema adapter"))
+(defun noema-agenda-poc--entry (item kind date absolute-day)
+  "Format a native ITEM using upstream Org's item formatter."
+  (let* ((state (upcase (or (alist-get 'status item) "todo")))
+         (priority (or (alist-get 'priority item) "D"))
+         (title (format "%s [#%s] %s" state priority
+                        (noema-agenda-poc--literal (alist-get 'title item))))
+         (time (and (stringp date) (> (length date) 10) (substring date 11)))
+         (entry (org-agenda-format-item
+                 (concat kind ": ") title nil
+                 (noema-agenda-poc--literal (alist-get 'project item)) nil
+                 (and time (concat time " ")))))
+    (add-text-properties
+     0 (length entry)
+     (list 'noema-item item 'day absolute-day 'type kind
+           'todo-state state 'priority (- 1000 (string-to-char priority))
+           'org-todo-regexp (regexp-opt '("TODO" "DOING" "BLOCKED" "DONE" "CANCELLED") t))
+     entry)
+    entry))
 
 (defun noema-agenda-poc-item-at-point ()
-  "Resolve the native agenda marker through its stable Noema UID."
-  (let* ((marker (or (org-get-at-bol 'org-hd-marker) (org-get-at-bol 'org-marker)))
-         (uid (and (markerp marker) (marker-buffer marker)
-                   (org-with-point-at marker (org-entry-get nil "NOEMA_UID")))))
-    (or (cl-find uid (alist-get 'items noema-agenda-poc--snapshot)
-                 :key (lambda (item) (alist-get 'uid item)) :test #'equal)
-        (user-error "No Noema item on this line"))))
+  "Return this line's typed Noema record, without Org source markers."
+  (or (get-text-property (line-beginning-position) 'noema-item)
+      (user-error "No Noema item on this line")))
 
 (defun noema-agenda-poc-completion-intent ()
   "Return an inspectable completion request; do not execute a mutation."
@@ -106,8 +67,18 @@
         (display-buffer (current-buffer))))
     request))
 
+(defun noema-agenda-poc-read-sources (files)
+  "Read explicitly supplied FILES using the existing Noema parser.
+Production will use the already running host's scoped API."
+  (with-temp-buffer
+    (let ((status (apply #'call-process noema-agenda-poc-node nil t nil
+                         (expand-file-name "snapshot.mjs" noema-agenda-poc--directory) files)))
+      (unless (equal status 0) (error "Noema snapshot failed: %s" (buffer-string))))
+    (json-parse-string (buffer-string) :object-type 'alist :array-type 'list
+                       :null-object nil :false-object nil)))
+
 (defun noema-agenda-poc-visit ()
-  "Visit Markdown or a WorkNode from the agenda using source identity."
+  "Visit Markdown or a WorkNode using native source identity."
   (interactive)
   (let* ((item (noema-agenda-poc-item-at-point))
          (file (alist-get 'file item)))
@@ -117,7 +88,6 @@
             (user-error "Load Noema's semantic API to navigate WorkNodes"))
           (find-file-other-window file)
           (noema-open-node (alist-get 'id item)))
-      ;; Re-extract the file: a saved edit above this task must not misdirect RET.
       (let* ((fresh (noema-agenda-poc-read-sources (list file)))
              (matches (cl-remove-if-not
                        (lambda (entry)
@@ -135,59 +105,96 @@
           (goto-char (point-min))
           (forward-line (1- (alist-get 'line (car matches)))))))))
 
-(defun noema-agenda-poc-read-sources (files)
-  "Read FILES through the existing Noema parser into a transient snapshot."
-  (with-temp-buffer
-    (let ((status (apply #'call-process noema-agenda-poc-node nil t nil
-                         (expand-file-name "snapshot.mjs" noema-agenda-poc--directory) files)))
-      (unless (equal status 0) (error "Noema snapshot failed: %s" (buffer-string))))
-    (json-parse-string (buffer-string) :object-type 'alist :array-type 'list
-                       :null-object nil :false-object nil)))
+(defun noema-agenda-poc-redraw ()
+  "Redraw this snapshot without source reads or an Org scan."
+  (interactive)
+  (noema-agenda-poc-open noema-agenda-poc--snapshot noema-agenda-poc--start-day))
 
-(defun noema-agenda-poc-open (snapshot &optional start-day)
-  "Show SNAPSHOT in native Org Agenda, optionally beginning on START-DAY.
-This prototype projects current dates only: repeat/dependency/clock parity
-  is deliberately left to the production design and is not claimed here."
-  (when-let* ((old (get-buffer "*Noema Agenda Prototype*")))
-    (with-current-buffer old (noema-agenda-poc-close)))
-  (let* ((file (make-temp-file "noema-agenda-poc-" nil ".org"))
-         (org-agenda-files (list file))
-         (org-agenda-buffer-name "*Noema Agenda Prototype*")
-         (org-agenda-buffer-tmp-name "*Noema Agenda Prototype*")
-         (org-agenda-window-setup 'current-window)
-         (org-agenda-start-on-weekday nil)
-         (org-agenda-include-diary nil)
-         (org-agenda-entry-types '(:deadline :scheduled :timestamp))
-         (org-agenda-inhibit-startup t)
-         (org-agenda-use-time-grid nil)
-         (org-agenda-show-all-dates t))
-    (with-temp-file file (insert (noema-agenda-poc--org snapshot)))
-    (org-agenda-list nil (or start-day "2026-09-15") 7)
-    (setq-local noema-agenda-poc--snapshot snapshot)
-    (setq-local noema-agenda-poc--projection file)
-    ;; org-agenda-redo retains its own generating settings. Explicit local
-    ;; files also scope native TODO/tags view switches to this projection.
-    (add-hook 'org-agenda-mode-hook #'noema-agenda-poc--attach nil t)
-    (noema-agenda-poc--attach)
-    (with-current-buffer (find-buffer-visiting file)
-      (setq buffer-read-only t)
-      (add-hook 'before-change-functions #'noema-agenda-poc--deny-write nil t))
-    (current-buffer)))
+(defun noema-agenda-poc-next-week ()
+  (interactive)
+  (noema-agenda-poc-open noema-agenda-poc--snapshot (+ noema-agenda-poc--start-day 7)))
+
+(defun noema-agenda-poc-previous-week ()
+  (interactive)
+  (noema-agenda-poc-open noema-agenda-poc--snapshot (- noema-agenda-poc--start-day 7)))
+
+(defun noema-agenda-poc-filter (regexp)
+  "Filter native rows with REGEXP using Org's text visibility properties."
+  (interactive "sFilter regexp (empty clears): ")
+  (let ((inhibit-read-only t))
+    (remove-text-properties (point-min) (point-max) '(invisible nil org-filter-type nil)))
+  (unless (string-empty-p regexp)
+    (save-excursion
+      (goto-char (point-min))
+      (while (not (eobp))
+        (when-let* ((item (get-text-property (point) 'noema-item)))
+          (unless (string-match-p regexp (alist-get 'title item))
+            (org-agenda-filter-hide-line 'regexp)))
+        (forward-line 1)))))
 
 (defun noema-agenda-poc-close ()
-  "Remove only this prototype's temporary projection and agenda buffer."
+  "Close the display buffer; there is no temporary source file."
   (interactive)
-  (let ((file noema-agenda-poc--projection))
-    (when file
-      (when-let* ((buffer (find-buffer-visiting file)))
-        (with-current-buffer buffer (set-buffer-modified-p nil))
-        (kill-buffer buffer))
-      (delete-file file))
-    (kill-buffer (current-buffer))))
+  (kill-buffer (current-buffer)))
+
+(defun noema-agenda-poc-open (snapshot &optional start-day)
+  "Render native SNAPSHOT records directly in `org-agenda-mode'.
+START-DAY is an ISO date or an absolute calendar day. No Org text is produced.
+Only current scheduled/deadline occurrences are demonstrated in this prototype."
+  (let* ((day (if (integerp start-day) start-day
+                (time-to-days (org-read-date nil t (or start-day "2026-09-15")))))
+         (buffer (get-buffer-create "*Noema Agenda Prototype*")))
+    (pop-to-buffer buffer)
+    (org-agenda-mode)
+    (setq-local noema-agenda-poc--snapshot snapshot)
+    (setq-local noema-agenda-poc--start-day day)
+    (setq-local org-agenda-type 'agenda)
+    (setq-local org-agenda-follow-mode nil)
+    (let ((inhibit-read-only t)
+          (org-agenda-prefix-format "  %-20:c %?-10t %s")
+          (org-agenda-sorting-strategy-selected '(time-up priority-down alpha-up))
+          (org-agenda-dim-blocked-tasks nil)
+          (org-agenda-max-entries nil) (org-agenda-max-tags nil)
+          (org-agenda-max-todos nil) (org-agenda-max-effort nil)
+          (org-priority-highest ?A) (org-priority-lowest ?F)
+          (org-done-keywords '("DONE" "CANCELLED"))
+          (org-todo-keyword-faces '(("DOING" . warning) ("BLOCKED" . error))))
+      (remove-overlays)
+      (erase-buffer)
+      (org-compile-prefix-format 'agenda)
+      (insert (propertize "Noema Week Agenda\n" 'face 'org-agenda-structure))
+      (dotimes (offset 7)
+        (let* ((absolute (+ day offset))
+               (date (calendar-gregorian-from-absolute absolute))
+               (iso (format "%04d-%02d-%02d" (nth 2 date) (car date) (cadr date)))
+               (entries nil))
+          (insert (propertize (org-agenda-format-date-aligned date)
+                              'face 'org-agenda-date 'day absolute) "\n")
+          (dolist (item (alist-get 'items snapshot))
+            (dolist (field '(scheduled deadline))
+              (let ((value (alist-get field item)))
+                (when (and (stringp value) (string-prefix-p iso value))
+                  (push (noema-agenda-poc--entry item (symbol-name field) value absolute) entries)))))
+          (when entries
+            (insert (org-agenda-finalize-entries entries 'agenda) "\n"))))
+      (goto-char (point-min)))
+    ;; Audited subset: Org source-mutating commands must not touch an unrelated
+    ;; org-clock or attempt to parse Markdown as Org. No fake source markers.
+    (use-local-map (make-sparse-keymap))
+    (dolist (binding '(("n" . org-agenda-next-line) ("p" . org-agenda-previous-line)
+                       ("j" . org-agenda-next-line) ("k" . org-agenda-previous-line)
+                       ("g" . noema-agenda-poc-redraw) ("f" . noema-agenda-poc-next-week)
+                       ("b" . noema-agenda-poc-previous-week) ("/" . noema-agenda-poc-filter)
+                       ("RET" . noema-agenda-poc-visit) ("t" . noema-agenda-poc-completion-intent)
+                       ("q" . noema-agenda-poc-close)))
+      (local-set-key (kbd (car binding)) (cdr binding)))
+    (setq-local header-line-format " Native Noema data · n/p · f/b week · / filter · t request preview · RET source")
+    (setq buffer-read-only t)
+    buffer))
 
 ;;;###autoload
 (defun noema-agenda-poc-demo ()
-  "Open the included Markdown and proposed DAG planning examples."
+  "Show example Markdown and DAG records in native Org Agenda UI."
   (interactive)
   (noema-agenda-poc-open
    (noema-agenda-poc-read-sources

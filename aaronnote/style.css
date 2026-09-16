@@ -2459,6 +2459,27 @@ body[data-host-mode="server"][data-server-reader-editing-aids="false"] :is(
   background: color-mix(in srgb, var(--aaron-red-dark), transparent 90%);
 }
 
+.aaronnote-attention-item {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--aaron-paper-line);
+  overflow-wrap: anywhere;
+}
+
+.aaronnote-attention-item h3 { margin: 0 0 6px; }
+.aaronnote-attention-item p { margin: 6px 0; }
+.aaronnote-attention-item .aaronnote-agenda-full-tabs { flex-wrap: wrap; }
+.aaronnote-attention-item button {
+  padding: 6px 10px;
+  border: 1px solid var(--aaron-paper-line);
+  border-radius: 3px;
+  background: var(--aaron-paper);
+  color: var(--aaron-ink);
+  font: inherit;
+  cursor: pointer;
+}
+.aaronnote-attention-item button:disabled { opacity: .5; cursor: default; }
+.aaronnote-attention-connection { color: var(--aaron-red-dark); }
+
 .aaronnote-agenda-full-header > button.is-active {
   border-color: var(--aaron-accent);
   color: var(--aaron-accent);
@@ -3103,6 +3124,130 @@ body[data-host-mode="server"][data-server-reader-editing-aids="false"] :is(
 
 .aaronnote-agenda-full-clocktable-running button {
   margin-left: auto;
+}
+
+.aaronnote-agenda-full-dag {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
+
+.aaronnote-agenda-dag-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid var(--aaron-paper-line);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--aaron-paper-soft), transparent 12%);
+  color: var(--aaron-muted);
+  font: 11px/1.3 var(--aaron-font-mono);
+}
+
+.aaronnote-agenda-dag-toolbar strong {
+  color: var(--aaron-ink);
+}
+
+.aaronnote-agenda-dag-legend {
+  margin-left: auto;
+  color: var(--aaron-accent);
+}
+
+.aaronnote-agenda-dag-viewport {
+  overflow: auto;
+  max-width: 100%;
+  min-height: 300px;
+  border: 1px solid var(--aaron-paper-line);
+  border-radius: 7px;
+  background:
+    radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--aaron-paper-line), transparent 35%) 1px, transparent 0) 0 0 / 20px 20px,
+    var(--aaron-paper);
+}
+
+.aaronnote-agenda-dag-viewport svg {
+  display: block;
+  min-width: 100%;
+}
+
+.aaronnote-agenda-dag-edge {
+  fill: none;
+  stroke: color-mix(in srgb, var(--aaron-muted), transparent 20%);
+  stroke-width: 1.6;
+}
+
+.aaronnote-agenda-dag-edge.is-lineage {
+  stroke-dasharray: 5 5;
+  stroke: color-mix(in srgb, var(--aaron-accent), transparent 22%);
+}
+
+.aaronnote-agenda-dag-edge.is-blocked {
+  stroke: var(--aaron-red-dark);
+  stroke-width: 2.2;
+}
+
+.aaronnote-agenda-dag-arrow {
+  fill: color-mix(in srgb, var(--aaron-muted), transparent 10%);
+}
+
+.aaronnote-agenda-dag-arrow.lineage {
+  fill: var(--aaron-accent);
+}
+
+.aaronnote-agenda-dag-node {
+  cursor: pointer;
+  outline: none;
+  transition: opacity 120ms ease;
+}
+
+.aaronnote-agenda-dag-node rect {
+  fill: color-mix(in srgb, var(--aaron-paper-soft), var(--aaron-paper) 28%);
+  stroke: var(--aaron-paper-line);
+  stroke-width: 1.2;
+}
+
+.aaronnote-agenda-dag-node:hover rect,
+.aaronnote-agenda-dag-node:focus rect,
+.aaronnote-agenda-dag-node.is-cursor rect {
+  stroke: var(--aaron-accent);
+  stroke-width: 2;
+}
+
+.aaronnote-agenda-dag-node.is-doing rect {
+  fill: color-mix(in srgb, var(--aaron-accent), var(--aaron-paper) 90%);
+}
+
+.aaronnote-agenda-dag-node.is-blocked rect {
+  fill: color-mix(in srgb, var(--aaron-red-dark), var(--aaron-paper) 91%);
+  stroke: color-mix(in srgb, var(--aaron-red-dark), var(--aaron-paper-line) 35%);
+}
+
+.aaronnote-agenda-dag-node.is-done rect,
+.aaronnote-agenda-dag-node.is-cancelled rect {
+  fill: color-mix(in srgb, var(--aaron-green, #6fba86), var(--aaron-paper) 90%);
+}
+
+.aaronnote-agenda-dag-node.no-agenda rect {
+  stroke-dasharray: 4 3;
+}
+
+.aaronnote-agenda-dag-node.is-muted {
+  opacity: 0.2;
+}
+
+.aaronnote-agenda-dag-title {
+  fill: var(--aaron-ink);
+  font: 700 12px/1 var(--aaron-font-sans);
+  pointer-events: none;
+}
+
+.aaronnote-agenda-dag-meta,
+.aaronnote-agenda-dag-source {
+  fill: var(--aaron-muted);
+  font: 10px/1 var(--aaron-font-mono);
+  pointer-events: none;
 }
 
 .aaronnote-agenda-full-gantt {
@@ -5123,3 +5268,21 @@ html.aaronnote-paused *::after {
 body[data-noema-format-painter] .cm-content {
   cursor: copy;
 }
+
+
+.aaronnote-agenda-capture {
+  color: var(--b3-theme-on-background, #d8dee9);
+  background: var(--b3-theme-background, #171b24);
+  border: 1px solid var(--b3-border-color, #485166);
+  border-radius: 12px;
+  padding: 24px;
+  width: min(520px, calc(100vw - 48px));
+  max-height: 85vh;
+  overflow: auto;
+}
+.aaronnote-agenda-capture::backdrop { background: #0008; }
+.aaronnote-agenda-capture h2 { margin: 0 0 16px; }
+.aaronnote-agenda-capture label { display: grid; grid-template-columns: 100px 1fr; gap: 12px; align-items: center; margin: 12px 0; }
+.aaronnote-agenda-capture input, .aaronnote-agenda-capture select { min-width: 0; padding: 8px; color: inherit; background: transparent; border: 1px solid var(--b3-border-color, #485166); border-radius: 6px; font: inherit; }
+.aaronnote-agenda-capture-destination { overflow-wrap: anywhere; opacity: .75; font-size: 12px; }
+.aaronnote-agenda-capture-buttons { display: flex; justify-content: flex-end; gap: 12px; margin-top: 20px; }

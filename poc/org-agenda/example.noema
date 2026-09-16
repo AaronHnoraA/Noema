@@ -20,7 +20,7 @@
         }
       },
       "outputs": [],
-      "source": "Research prompt; no scheduling control is sent to the agent."
+      "source": "@@todo [Explore a coupling argument] {\n  sche: 2026-09-16\n  prio: B\n  project: Spectral research\n}\n\nResearch prompt; no scheduling control is sent to the agent."
     },
     {
       "cell_type": "code",
@@ -32,7 +32,7 @@
         }
       },
       "outputs": [],
-      "source": "Research prompt; no scheduling control is sent to the agent."
+      "source": "@@todo [Ask the agent to explore the spectral proof] {\n  sche: 2026-09-15\n  ddl: 2026-09-17\n  prio: A\n  project: Spectral research\n}\n\nResearch prompt; no scheduling control is sent to the agent."
     },
     {
       "cell_type": "markdown",
@@ -42,7 +42,7 @@
           "work_node_id": "wn_review"
         }
       },
-      "source": "Research prompt; no scheduling control is sent to the agent."
+      "source": "@@todo [Review the evidence and choose a branch] {\n  sche: 2026-09-18\n  prio: A\n  project: Spectral research\n}\n\nResearch prompt; no scheduling control is sent to the agent."
     }
   ],
   "metadata": {
@@ -61,34 +61,18 @@
           "id": "wn_proof",
           "kind": "work",
           "title": "Ask the agent to explore the spectral proof",
-          "state": "open",
-          "agenda": {
-            "sche": "2026-09-15",
-            "ddl": "2026-09-17",
-            "prio": "A",
-            "project": "Spectral research"
-          }
+          "state": "open"
         },
         {
           "id": "wn_alternative",
           "kind": "work",
           "title": "Explore a coupling argument",
-          "state": "open",
-          "agenda": {
-            "sche": "2026-09-16",
-            "prio": "B",
-            "project": "Spectral research"
-          }
+          "state": "open"
         },
         {
           "id": "wn_review",
           "kind": "checkpoint",
-          "title": "Review the evidence and choose a branch",
-          "agenda": {
-            "sche": "2026-09-18",
-            "prio": "A",
-            "project": "Spectral research"
-          }
+          "title": "Review the evidence and choose a branch"
         }
       ],
       "dependencies": [

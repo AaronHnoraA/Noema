@@ -179,6 +179,12 @@ The first redraw in a real window places it again for that window's size.")
     ("[" . noema-research-graph-focus-shallower)
     ("]" . noema-research-graph-focus-deeper)
     ("b" . noema-research-graph-focus-back)
+    ("^" . noema-research-graph-focus-up)
+    ("H" . noema-research-graph-select-parent)
+    ("L" . noema-research-graph-select-child)
+    ("{" . noema-research-graph-select-previous-sibling)
+    ("}" . noema-research-graph-select-next-sibling)
+    ("/" . noema-research-graph-goto)
     ("+" . noema-research-graph-zoom-in)
     ("-" . noema-research-graph-zoom-out)
     ("0" . noema-research-graph-zoom-reset)
@@ -257,9 +263,9 @@ indicator, not an outline: view state is never encoded only in the drawing."
                           (noema-research-find-work-node
                            document noema-research-graph--focus)))
          (focus-label (and noema-research-graph--focus
-                           (or (and focus-node
-                                    (noema-research-work-node-field focus-node "title"))
-                               noema-research-graph--focus)))
+                           (if focus-node
+                               (noema-research-graph--focus-trail document)
+                             noema-research-graph--focus)))
          (folds (length noema-research-graph--folds)))
     ;; `header-line-format' treats `%' as a construct; titles may contain it.
     (string-replace
@@ -267,7 +273,7 @@ indicator, not an outline: view state is never encoded only in the drawing."
      (concat " " zoom
             (when view (format "  ·  %d%%" (round (* 100 (plist-get view :scale)))))
             (when focus-label
-              (format "  ·  focus: %s ±%d" focus-label
+              (format "  ·  focus: %s ↓%d" focus-label
                       (noema-research-graph--effective-focus-depth)))
             (when (> folds 0) (format "  ·  %d folded" folds))
             (when overflow (format "  ·  more %s" overflow))))))
@@ -299,6 +305,10 @@ indicator, not an outline: view state is never encoded only in the drawing."
     ("j/↓" "down" noema-research-graph-move-down)
     ("k/↑" "up" noema-research-graph-move-up)
     ("l/→" "right" noema-research-graph-move-right)
+    ("H" "lineage parent" noema-research-graph-select-parent)
+    ("L" "first child" noema-research-graph-select-child)
+    ("}" "next sibling ({ previous)" noema-research-graph-select-next-sibling)
+    ("/" "go to node by title" noema-research-graph-goto)
     ("RET" "visit selected node" noema-research-graph-visit)
     ("q" "close graph" noema-research-graph-quit)]
    ["Viewport"
@@ -313,7 +323,8 @@ indicator, not an outline: view state is never encoded only in the drawing."
    ["View"
     ("TAB" "fold branch" noema-research-graph-toggle-fold)
     ("S-TAB" "cycle levels" noema-research-graph-cycle-folds)
-    ("f" "focus branch" noema-research-graph-toggle-focus)
+    ("f" "focus: node as root" noema-research-graph-toggle-focus)
+    ("^" "focus parent" noema-research-graph-focus-up)
     ("]" "focus deeper ([ shallower)" noema-research-graph-focus-deeper)
     ("b" "previous focus" noema-research-graph-focus-back)
     ("v" "view menu" noema-research-graph-view-menu)
@@ -446,7 +457,7 @@ cursor-to-DAG action.  Return the DAG window."
       (user-error "No node selected: click one, move with h/j/k/l, or create a root node with N")))
 
 (defun noema-research-graph--related-parent (id)
-  "Return the visible parent of `Related branches' summary ID, or nil."
+  "Return the visible parent of `Deeper branches' summary ID, or nil."
   (when (and (stringp id) (string-prefix-p "noema-summary:related:" id))
     (car (plist-get (seq-find (lambda (node) (equal (plist-get node :id) id))
                               (plist-get noema-research-graph--projection-cache :nodes))
@@ -474,10 +485,13 @@ redraws once and stays open."
                      (funcall function))))
     (when (buffer-live-p graph)
       (with-current-buffer graph
-        (when (and (stringp result)
-                   (noema-research-find-work-node
-                    (buffer-local-value 'noema-research--document source) result))
-          (setq noema-research-graph--selected result))
+        (let ((document (buffer-local-value 'noema-research--document source)))
+          (when (and (stringp result) (noema-research-find-work-node document result))
+            (setq noema-research-graph--selected result)
+            ;; A new sibling of the focus root, or a child past the lens
+            ;; depth, must not be created invisibly.
+            (when (noema-research-graph--keep-in-focus document result)
+              (noema-research-graph--save-view))))
         (noema-research-graph-refresh)))
     result))
 
@@ -636,30 +650,53 @@ contracted."
         ((string-lessp left right) right)
         (t left)))
 
+(defvar-local noema-research-graph--activity-index nil
+  "((RUNS . EVENTS) . (RUN-TABLE . TIME-TABLE)) for the fetched activity lists.")
+
+(defun noema-research-graph--activity-tables ()
+  "Return (RUN-TABLE . TIME-TABLE) keyed by WorkNode id.
+RUN-TABLE holds each WorkNode's latest durable Run and TIME-TABLE its latest
+event time.  Both are rebuilt only when the fetched Run or event list is
+replaced, so decorating a projection is linear in nodes plus history instead
+of rescanning the history for every node and fold summary."
+  (let ((runs noema-research-graph--runs)
+        (events noema-research-graph--events))
+    (unless (and noema-research-graph--activity-index
+                 (eq (caar noema-research-graph--activity-index) runs)
+                 (eq (cdar noema-research-graph--activity-index) events))
+      (let ((run-table (make-hash-table :test #'equal))
+            (time-table (make-hash-table :test #'equal)))
+        (dolist (run runs)
+          (when-let* ((id (or (noema-research-graph--value run "workNodeId")
+                              (noema-research-graph--value run "work_node_id")))
+                      ((stringp id)))
+            (let* ((latest (gethash id run-table))
+                   (latest-time (and latest (noema-research-graph--run-time latest)))
+                   (time (noema-research-graph--run-time run)))
+              (when (or (null latest)
+                        (and (stringp time)
+                             (or (not (stringp latest-time))
+                                 (string-lessp latest-time time))))
+                (puthash id run run-table)))))
+        (dolist (event events)
+          (when-let* ((id (or (noema-research-graph--value event "work_node_id")
+                              (noema-research-graph--value event "workNodeId")))
+                      ((stringp id)))
+            (puthash id (noema-research-graph--later-time
+                         (gethash id time-table)
+                         (noema-research-graph--value event "ts"))
+                     time-table)))
+        (setq noema-research-graph--activity-index
+              (cons (cons runs events) (cons run-table time-table)))))
+    (cdr noema-research-graph--activity-index)))
+
 (defun noema-research-graph--runtime-run (work-node-id)
   "Return the latest durable Run for WORK-NODE-ID."
-  (let (latest latest-time)
-    (dolist (run noema-research-graph--runs latest)
-      (when (equal (or (noema-research-graph--value run "workNodeId")
-                       (noema-research-graph--value run "work_node_id"))
-                   work-node-id)
-        (let ((time (noema-research-graph--run-time run)))
-          (when (or (null latest)
-                    (and (stringp time)
-                         (or (not (stringp latest-time))
-                             (string-lessp latest-time time))))
-            (setq latest run latest-time time)))))))
+  (gethash work-node-id (car (noema-research-graph--activity-tables))))
 
 (defun noema-research-graph--event-time (work-node-id)
   "Return the latest durable event time for WORK-NODE-ID."
-  (let (latest)
-    (dolist (event noema-research-graph--events latest)
-      (when (equal (or (noema-research-graph--value event "work_node_id")
-                       (noema-research-graph--value event "workNodeId"))
-                   work-node-id)
-        (setq latest
-              (noema-research-graph--later-time
-               latest (noema-research-graph--value event "ts")))))))
+  (gethash work-node-id (cdr (noema-research-graph--activity-tables))))
 
 (defun noema-research-graph--activity (document work-node-id)
   "Return latest Run activity plist for WORK-NODE-ID in DOCUMENT."
@@ -776,7 +813,9 @@ instead of choosing an arbitrary winner."
       projection)))
 
 (defun noema-research-graph--focus-summaries (projection document)
-  "Add visible contraction nodes for branches omitted by the focus lens."
+  "Add visible contraction nodes for branches omitted by the focus lens.
+The lens is the focused branch cut at its depth, so every contraction hangs
+below a drawn node and stands for the levels past that depth."
   (if (not (plist-get projection :focus))
       projection
     (pcase-let ((`(,children ,_parents) (noema-research-graph--lineage-maps document)))
@@ -816,7 +855,7 @@ instead of choosing an arbitrary winner."
                   (setq nodes
                         (append nodes
                                 (list (list :id id :kind "summary"
-                                            :title "Related branches"
+                                            :title "Deeper branches"
                                             :summary t :parents (list parent)
                                             :fold-summary summary))))
                   (setq edges (append edges (list (list parent id "lineage")))))))))
@@ -899,9 +938,7 @@ the document instead of rescanning every Cell for every node."
                       document :focus noema-research-graph--focus :folds folds
                       :protect (delq nil (list noema-research-graph--focus
                                                noema-research-graph--selected))
-                      :depth (noema-research-graph--effective-focus-depth)
-                      :siblings (noema-research-graph--setting
-                                 'noema-research-graph-focus-siblings))))
+                      :depth (noema-research-graph--effective-focus-depth))))
     (setq projection (noema-research-graph--decorate-projection projection document)
           projection (noema-research-graph--focus-summaries projection document)
           projection (noema-research-graph--detail-runs projection)
@@ -1775,6 +1812,78 @@ node restore the layout first."
   "Select the nearest DAG node below." (interactive)
   (noema-research-graph--move 'down))
 
+;;;; Structural navigation
+
+;; h/j/k/l follow the drawing; these follow the lineage tree, as outline and
+;; mind-map editors do, so a wide or folded layout never hides a relative.
+
+(defun noema-research-graph--select-structural (id)
+  "Select WorkNode ID, widening the focus lens when it would hide ID."
+  (let ((document (noema-research-graph--cached-document)))
+    (when (noema-research-graph--keep-in-focus document id)
+      (noema-research-graph--save-view))
+    (noema-research-graph-select id)))
+
+(defun noema-research-graph-select-parent ()
+  "Select the first lineage parent of the selected WorkNode.
+At the focus root the focus moves up together with the selection."
+  (interactive)
+  (pcase-let* ((id (noema-research-graph--selected-node))
+               (document (noema-research-graph--cached-document))
+               (`(,_children ,parents ,_roots) (noema-research-lineage-maps document))
+               (parent (car (gethash id parents))))
+    (cond ((not parent)
+           (user-error "“%s” is a lineage root" (noema-research-work-node-label document id)))
+          ((equal id noema-research-graph--focus) (noema-research-graph--refocus parent))
+          (t (noema-research-graph--select-structural parent)))))
+
+(defun noema-research-graph-select-child ()
+  "Select the first lineage child of the selected WorkNode."
+  (interactive)
+  (pcase-let* ((id (noema-research-graph--selected-node))
+               (document (noema-research-graph--cached-document))
+               (`(,children ,_parents ,_roots) (noema-research-lineage-maps document))
+               (child (car (gethash id children))))
+    (unless child
+      (user-error "“%s” has no lineage child" (noema-research-work-node-label document id)))
+    (noema-research-graph--select-structural child)))
+
+(defun noema-research-graph--select-sibling (offset)
+  "Select the lineage sibling OFFSET places from the selected WorkNode.
+Siblings share the first lineage parent; lineage roots are siblings too."
+  (pcase-let* ((id (noema-research-graph--selected-node))
+               (document (noema-research-graph--cached-document))
+               (`(,children ,parents ,roots) (noema-research-lineage-maps document))
+               (parent (car (gethash id parents)))
+               (siblings (if parent (gethash parent children) roots))
+               (index (+ (or (seq-position siblings id #'equal) 0) offset)))
+    (unless (and (>= index 0) (< index (length siblings)))
+      (user-error "No %s sibling" (if (> offset 0) "next" "previous")))
+    (noema-research-graph--select-structural (nth index siblings))))
+
+(defun noema-research-graph-select-next-sibling ()
+  "Select the next lineage sibling of the selected WorkNode."
+  (interactive)
+  (noema-research-graph--select-sibling 1))
+
+(defun noema-research-graph-select-previous-sibling ()
+  "Select the previous lineage sibling of the selected WorkNode."
+  (interactive)
+  (noema-research-graph--select-sibling -1))
+
+(defun noema-research-graph-goto (id)
+  "Select WorkNode ID, chosen by title, and center it.
+A focus lens or fold that hides the node is widened or bypassed."
+  (interactive
+   (let* ((document (noema-research-graph--cached-document))
+          (near (and (stringp noema-research-graph--selected)
+                     (noema-research-find-work-node document noema-research-graph--selected)
+                     noema-research-graph--selected)))
+     (list (noema-research-read-work-node
+            "Go to node: " (noema-research-work-node-choices document :near near)))))
+  (noema-research-graph--select-structural id)
+  (noema-research-graph--center-on id))
+
 ;;;; Commands
 
 (defun noema-research-graph--prune-view (document)
@@ -1969,7 +2078,9 @@ applied last.  A new selection or a new layout is scrolled into view."
          "aaronnote:api:research:events:list"
          (vector `((file . ,(expand-file-name file))
                    (cwd . ,root) (notebookId . ,notebook-id)
-                   (after . 0) (limit . 1000)))
+                   ;; One newest event per WorkNode.  Paging from seq 0 returned
+                   ;; the oldest events, so long notebooks showed stale activity.
+                   (latestPerWorkNode . t)))
          (lambda (result error-object)
            (when (and (not error-object) (buffer-live-p graph)
                       (eq (buffer-local-value
@@ -2045,8 +2156,8 @@ the view transform change; otherwise the board redraws."
 
 (defun noema-research-graph-visit ()
   "Visit the selected node in its JuText buffer.
-A Cell-less WorkNode is offered a new header Cell first.  On a `Related
-branches' summary the focus moves up to its parent instead."
+A Cell-less WorkNode is offered a new header Cell first.  On a `Deeper
+branches' summary the focus moves to its parent instead."
   (interactive)
   (if-let* ((parent (noema-research-graph--related-parent
                      noema-research-graph--selected)))
@@ -2293,8 +2404,8 @@ Its JuText block follows the new parent unless STAY (prefix argument) or
 (defun noema-research-graph-toggle-fold ()
   "Fold or expand the branch below the selected node.
 Expanding a branch Smart Fold would contract records the expansion, so it
-stays open after the selection moves on.  On a `Related branches' summary
-the focus moves up to its parent instead."
+stays open after the selection moves on.  On a `Deeper branches' summary
+the focus moves to its parent instead."
   (interactive)
   (let ((id (noema-research-graph--node-at-point)))
     (if-let* ((parent (noema-research-graph--related-parent id)))
@@ -2420,20 +2531,97 @@ the focus moves up to its parent instead."
               (centered (and id (noema-research-graph--centered-view view id))))
     (noema-research-graph--set-view centered)))
 
+(defun noema-research-graph--remember-focus ()
+  "Push the current focus onto the bounded focus history."
+  (setq noema-research-graph--focus-history
+        (seq-take (cons noema-research-graph--focus noema-research-graph--focus-history)
+                  20)))
+
+(defun noema-research-graph--focus-trail (document)
+  "Return the breadcrumb from a lineage root down to the focus of DOCUMENT.
+Each step follows the first lineage parent; long trails keep their last
+three steps."
+  (pcase-let ((`(,_children ,parents ,_roots) (noema-research-lineage-maps document)))
+    (let ((id noema-research-graph--focus)
+          (seen (make-hash-table :test #'equal))
+          trail)
+      (while (and id (not (gethash id seen)))
+        (puthash id t seen)
+        (push (truncate-string-to-width
+               (noema-research-work-node-label document id) 28 nil nil "…")
+              trail)
+        (setq id (car (gethash id parents))))
+      (string-join (if (> (length trail) 3)
+                       (cons "…" (last trail 3))
+                     trail)
+                   " › "))))
+
+(defun noema-research-graph--focus-distance (document id)
+  "Return how many lineage levels ID lies below the focus in DOCUMENT.
+Return 0 for the focus itself and nil when ID is outside the focused branch."
+  (when-let* ((focus noema-research-graph--focus))
+    (if (equal id focus)
+        0
+      (pcase-let ((`(,children ,_parents ,_roots) (noema-research-lineage-maps document)))
+        (let ((seen (make-hash-table :test #'equal))
+              (frontier (list focus))
+              (level 0)
+              found)
+          (puthash focus t seen)
+          (while (and frontier (not found))
+            (setq level (1+ level))
+            (let (next)
+              (dolist (parent frontier)
+                (dolist (child (gethash parent children))
+                  (unless (gethash child seen)
+                    (puthash child t seen)
+                    (when (equal child id) (setq found level))
+                    (push child next))))
+              (setq frontier next)))
+          found)))))
+
+(defun noema-research-graph--keep-in-focus (document id)
+  "Widen the focus lens of DOCUMENT so node ID stays drawn.
+A node below the focus but past the lens depth deepens the lens; a node
+outside the focused branch clears the focus, which stays in the focus
+history.  Return non-nil when the view state changed."
+  (when (and noema-research-graph--focus document (stringp id)
+             (noema-research-find-work-node document id))
+    (let ((distance (noema-research-graph--focus-distance document id)))
+      (cond ((null distance)
+             (noema-research-graph--remember-focus)
+             (setq noema-research-graph--focus nil)
+             t)
+            ((> distance (noema-research-graph--effective-focus-depth))
+             (setq noema-research-graph--focus-depth distance)
+             t)))))
+
 (defun noema-research-graph--refocus (id)
   "Focus the lens on ID, or clear it when ID is nil, remembering the old focus."
   (unless (equal id noema-research-graph--focus)
-    (setq noema-research-graph--focus-history
-          (seq-take (cons noema-research-graph--focus noema-research-graph--focus-history)
-                    20)))
+    (noema-research-graph--remember-focus))
   (setq noema-research-graph--focus id)
   (when id (setq noema-research-graph--selected id))
   (noema-research-graph--apply-view-change)
   (noema-research-graph--center-on (or id noema-research-graph--selected)))
 
+(defun noema-research-graph-focus-up ()
+  "Move the focus root one lineage level up, or clear it at a root.
+A node with several lineage parents moves to the first one."
+  (interactive)
+  (unless noema-research-graph--focus
+    (user-error "No focus: press f on a node first"))
+  (pcase-let* ((document (noema-research-graph--cached-document))
+               (`(,_children ,parents ,_roots) (noema-research-lineage-maps document))
+               (parent (car (gethash noema-research-graph--focus parents))))
+    (noema-research-graph--refocus parent)
+    (unless parent (message "Focus cleared: the focused node is a root"))))
+
 (defun noema-research-graph-toggle-focus ()
-  "Focus the lens on the selected node, or clear the focus.
-On a `Related branches' summary the focus moves up to its parent."
+  "Make the selected node the root of the drawing, or clear the focus.
+The lens shows that node and its lineage descendants down to the focus
+depth.  On a `Deeper branches' summary the focus moves to the summary's
+parent, continuing the branch below the current lens."
   (interactive)
   (let ((id (noema-research-graph--node-at-point)))
     (if-let* ((parent (noema-research-graph--related-parent id)))
@@ -2536,6 +2724,7 @@ to a summary, as in Drop Branch of the assignment walkthrough."
     ("TAB" "fold / expand branch" noema-research-graph-toggle-fold :transient t)]
    ["Focus"
     ("f" "focus / clear" noema-research-graph-toggle-focus)
+    ("^" "focus parent" noema-research-graph-focus-up :transient t)
     ("[" "shallower" noema-research-graph-focus-shallower :transient t)
     ("]" "deeper" noema-research-graph-focus-deeper :transient t)
     ("b" "previous focus" noema-research-graph-focus-back)]
@@ -2701,6 +2890,9 @@ When the DAG is displayed, the selected node is centered."
     (with-current-buffer graph
       (when work-node-id
         (setq noema-research-graph--selected work-node-id)
+        (when (noema-research-graph--keep-in-focus
+               (buffer-local-value 'noema-research--document source) work-node-id)
+          (noema-research-graph--save-view))
         (noema-research-graph-refresh)
         (when-let* (((get-buffer-window graph t))
                     (view noema-research-graph--view)

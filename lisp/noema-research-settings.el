@@ -94,11 +94,6 @@ Each element is (MODIFIERS . PIXELS), as in el-easydraw's
   :type 'natnum
   :group 'noema-research-graph)
 
-(defcustom noema-research-graph-focus-siblings t
-  "Whether the focus lens also keeps the focused node's siblings."
-  :type 'boolean
-  :group 'noema-research-graph)
-
 (defcustom noema-research-graph-auto-fold-states '("done" "dropped")
   "Work states whose branches Smart Fold contracts automatically."
   :type '(repeat string)
@@ -148,8 +143,6 @@ Each element is (MODIFIERS . PIXELS), as in el-easydraw's
      :section "Navigation" :scope global :type natnum)
     (noema-research-graph-focus-depth
      :section "Focus & fold" :scope both :type natnum)
-    (noema-research-graph-focus-siblings
-     :section "Focus & fold" :scope both :type boolean)
     (noema-research-graph-auto-fold-states
      :section "Focus & fold" :scope both :type string-list
      :choices noema-research-work-states)

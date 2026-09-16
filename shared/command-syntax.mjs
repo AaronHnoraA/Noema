@@ -138,7 +138,7 @@ export function findInlineCommandClose(text, open, closeChar) {
   return -1;
 }
 
-function isEscapedCommandStart(text, from) {
+export function isEscapedCommandStart(text, from) {
   let slashes = 0;
   for (let index = from - 1; index >= 0 && text[index] === "\\"; index -= 1) slashes += 1;
   return slashes % 2 === 1;
@@ -213,10 +213,11 @@ export function scanInlineCommands(input, name = "") {
   while ((match = re.exec(text))) {
     const commandName = match[1].toLowerCase();
     if (!match[3] && commandName !== "cite") continue;
-    // A single (or otherwise odd) escaping backslash makes @@cite literal.
+    // A single (or otherwise odd) escaping backslash makes a citation or planning command literal.
     // Even backslashes leave the command active, matching normal escaping
     // parity rather than rejecting every command preceded by a backslash.
-    if (commandName === "cite" && isEscapedCommandStart(text, match.index)) continue;
+    if (["cite", "todo", "itodo", "project", "milestone", "clock"].includes(commandName)
+        && isEscapedCommandStart(text, match.index)) continue;
     if (commandName === "latexmk") continue;
     const open = re.lastIndex - 1;
     const close = findInlineCommandClose(text, open, "]");
@@ -229,6 +230,7 @@ export function scanInlineCommands(input, name = "") {
   const bareTodoRe = /@@(todo|itodo)(?:\(([^)\n]*)\))?[ \t]+(?!\[)([^\n]+)/gi;
   let bare;
   while ((bare = bareTodoRe.exec(text))) {
+    if (isEscapedCommandStart(text, bare.index)) continue;
     const bodyFrom = bare.index + bare[0].length - bare[3].length;
     const lineEnd = bare.index + bare[0].length;
     const meta = trailingMetaBeforeLineEnd(text, bodyFrom, lineEnd);

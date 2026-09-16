@@ -15,6 +15,7 @@ import { agentAvailable, loadAgentRules, normalizeAgentTitle, polishBodyWithAgen
 import { loadKatexMacros } from "./katex-macros.mjs";
 import { durationFromEnv } from "./jupyter-cell.mjs";
 import { moveWindowsPathToRecycleBin } from "./windows-shell.mjs";
+import { scanPlanningDocument, planningSourceIsLive } from "../../shared/planning-document.mjs";
 import { maskMetaSummaryContent } from "../../shared/meta-summary.mjs";
 import { BLOCK_ID_SOURCE, isBlockReferenceId, parseOrgEnvIdentityTitle } from "../../shared/block-identity.mjs";
 import { blockPropertyItemsForDocument, patchBlockPropertySource } from "../../shared/block-properties.mjs";
@@ -3528,12 +3529,66 @@ export function planningItemsFromNodes(inputNodes, note, updatedAt, content = ""
 }
 
 export function extractTodos(content, note, updatedAt) {
-  const nodes = scanPlanningNodes(maskMetaSummaryContent(content));
+  const nodes = scanPlanningDocument(content);
   return planningItemsFromNodes(nodes, note, updatedAt, content).todos;
 }
 
+// A source-local projection for Agenda scopes; never changes scan roots.
+export async function computeAgendaSource(body) {
+  if (!planningProvider?.computeSource) throw Object.assign(new Error("Native source computation is unavailable"), { statusCode: 503 });
+  return planningProvider.computeSource(body);
+}
+
+/** Read-only navigation over the editor's supplied snapshot. No source IO,
+ * scope entry, index publication, ID allocation or persisted mutation. */
+export async function inspectAgendaDocument({content, file = "untitled.md"} = {}) {
+  if (typeof content !== "string" || typeof file !== "string" || !/\.(?:md|markdown)$/i.test(file)) {
+    throw Object.assign(new Error("Agenda document requires Markdown content and a Markdown file identity"), {statusCode:400});
+  }
+  if (Buffer.byteLength(content, "utf8") > 16 * 1024 * 1024) {
+    throw Object.assign(new Error("Agenda source exceeds 16 MiB"), {statusCode:413});
+  }
+  const snapshot = await computeAgendaSource({content});
+  for (const node of snapshot.nodes || []) {
+    if (content.slice(node.span.from, node.span.to) !== node.raw) {
+      throw Object.assign(new Error("Native planning returned an invalid source position"), {statusCode:502});
+    }
+  }
+  const meta = noteMetadata(content);
+  const note = {file, path:basename(file), key:String(meta.id || file), id:String(meta.id || ""),
+    title:String(meta.title || basename(file)), project:String(meta.project || meta.proj || ""),
+    tags:Array.isArray(meta.tags) ? meta.tags : []};
+  return {type:"agenda-document", contentRevision:createHash("sha256").update(content).digest("hex"),
+    ...planningItemsFromNodes(snapshot.nodes, note, 0, content)};
+}
+
+export async function agendaMarkdownDocument({ content, file, root, mtimeMs }) {
+  const meta = noteMetadata(content);
+  const note = {
+    file, path: relative(root, file), key: String(meta.id || file),
+    id: String(meta.id || ""), title: String(meta.title || basename(file)),
+    project: String(meta.project || meta.proj || ""),
+    tags: Array.isArray(meta.tags) ? meta.tags : [],
+  };
+  if (planningProvider?.computeSource || planningProvider?.owns?.(file)) {
+    // The scope owner already read a revision-checked snapshot. Compute from
+    // those bytes: the kernel neither reopens it nor interprets remote paths.
+    const snapshot = planningProvider.computeSource
+      ? await planningProvider.computeSource({ content })
+      : await planningProvider.read(file);
+    for (const node of snapshot.nodes || []) {
+      if (content.slice(node.span.from, node.span.to) !== node.raw) {
+        throw Object.assign(new Error("Planning source changed while indexing; refresh Agenda"), { statusCode: 409 });
+      }
+    }
+    return planningItemsFromNodes(snapshot.nodes, note, mtimeMs, content);
+  }
+  assertGoCoreCapability(file, false, "agenda planning projection");
+  return extractPlanningItems(content, note, mtimeMs);
+}
+
 export function extractPlanningItems(content, note, updatedAt) {
-  const nodes = scanPlanningNodes(maskMetaSummaryContent(content));
+  const nodes = scanPlanningDocument(content);
   return planningItemsFromNodes(nodes, note, updatedAt, content);
 }
 
@@ -3615,17 +3670,18 @@ function patchTodoSource(source, body = {}) {
   return replaceTodoArgsInSource(next, command.attrsRaw || "", serializeTodoArgs(args));
 }
 
-// Shared todo locator: index+source match, then a line-anchored regex scan,
-// then a full re-extract match by id/source/text. Used by updateTodoStatus
-// and the newer patchTodo/completeTodo so both tolerate unsaved editor drift
-// the same way.
+// All locators share one document-aware scan. A stale offset must never
+// bypass literal-source exclusions, even when its raw text still matches.
 function locateTodoInContent(content, body, file) {
+  const nodes = scanPlanningDocument(content, {kind:"todo"});
+  let projected;
+  const todos = () => projected ||= planningItemsFromNodes(nodes,
+    {file,path:displayPathForFile(file),key:"",id:"",title:""},0,content).todos;
   const source = String(body.source || "");
   const wantedText = String(body.text || "");
   const selectorId = String(body.selectorId || "");
   if (selectorId) {
-    const todos = extractTodos(content, { file, path: displayPathForFile(file), key: "", id: "", title: "" }, 0);
-    const selected = todos.find((todo) => todo.id === selectorId);
+    const selected = todos().find((todo) => todo.id === selectorId);
     return selected ? { from: selected.index, to: selected.index + selected.source.length } : null;
   }
   const hasIndex = body.index !== undefined && body.index !== null && String(body.index) !== "";
@@ -3636,10 +3692,10 @@ function locateTodoInContent(content, body, file) {
   if (Number.isInteger(rawIndex) && rawIndex >= 0 && rawIndex < content.length) {
     const lineStart = content.lastIndexOf("\n", rawIndex - 1) + 1;
     const lineEnd = content.indexOf("\n", rawIndex);
-    const line = content.slice(lineStart, lineEnd < 0 ? content.length : lineEnd);
-    const match = line.match(/@@(?:todo|itodo)(?:\([^)\n]*\))?[ \t]+/i);
-    if (match) {
-      const candidateFrom = lineStart + (match.index || 0);
+    const node = nodes.find((candidate) => candidate.span.from >= lineStart
+      && candidate.span.from <= (lineEnd < 0 ? content.length : lineEnd));
+    if (node) {
+      const candidateFrom = node.span.from;
       // Always parse the actual node at this position (unbounded — a
       // block-shape node can span multiple lines) instead of trusting a raw
       // `source`-length substring compare. A stale `source` can be an exact
@@ -3647,29 +3703,25 @@ function locateTodoInContent(content, body, file) {
       // trailing `{...}` block — and a plain `content.slice(candidateFrom,
       // candidateFrom + source.length) === source` check would accept that
       // truncated match and silently drop everything after it on write.
-      const commands = scanPlanningNodes(content.slice(candidateFrom), { kind: "todo" });
-      if (commands.length > 0 && commands[0].span.from === 0) {
-        const candidateTo = candidateFrom + commands[0].span.to;
-        const nodeRaw = content.slice(candidateFrom, candidateTo);
-        // A text hint is the more stable signal — it survives any edit to
-        // the node's attrs (including one that makes `source` stale), so it
-        // wins whenever provided; an unchecked position-only hit previously
-        // let a drifted `index` silently patch a *different* todo that now
-        // happens to sit on that line. With neither hint, preserve the old
-        // lenient index-only behavior.
-        const ok = wantedText ? (commands[0].title || "") === wantedText : (!source || nodeRaw === source);
-        if (ok) {
-          from = candidateFrom;
-          to = candidateTo;
-        }
+      const candidateTo = node.span.to;
+      const nodeRaw = content.slice(candidateFrom, candidateTo);
+      // A text hint is the more stable signal — it survives any edit to
+      // the node's attrs (including one that makes `source` stale), so it
+      // wins whenever provided; an unchecked position-only hit previously
+      // let a drifted `index` silently patch a *different* todo that now
+      // happens to sit on that line. With neither hint, preserve the old
+      // lenient index-only behavior.
+      const ok = wantedText ? (node.title || "") === wantedText : (!source || nodeRaw === source);
+      if (ok) {
+        from = candidateFrom;
+        to = candidateTo;
       }
     }
   }
 
   if (from < 0 || to <= from) {
-    const todos = extractTodos(content, { file, path: displayPathForFile(file), key: "", id: "", title: "" }, 0);
     const wantedId = String(body.selectorId || body.id || "");
-    const match = todos.find((todo) =>
+    const match = todos().find((todo) =>
       (wantedId && todo.id === wantedId)
       || (source && todo.source === source)
       || (wantedText && todo.text === wantedText));
@@ -3718,7 +3770,7 @@ function planningSemanticValue(value) {
   return value === null || value === undefined || value === false ? null : String(value);
 }
 
-function todoSemanticMutation(body = {}, nowMs = Date.now()) {
+export function todoSemanticMutation(body = {}, nowMs = Date.now()) {
   const attrs = {};
   for (const key of CANON_PATCH_KEYS) {
     if (bodyHasOwn(body, key)) attrs[key] = planningSemanticValue(body[key]);
@@ -3732,6 +3784,7 @@ function todoSemanticMutation(body = {}, nowMs = Date.now()) {
     nowMs,
   };
   if (bodyHasOwn(body, "status")) todo.status = String(body.status ?? "");
+  if (bodyHasOwn(body, "title")) todo.title = String(body.title ?? "");
   if (bodyHasOwn(body, "afterAdd")) todo.afterAdd = String(body.afterAdd ?? "");
   return { type: "patch-todo", todo };
 }
@@ -3740,11 +3793,17 @@ async function mutatePlanningNodeThroughProvider(file, kind, body, transformOrMu
   let lastConflict = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     const snapshot = await planningProvider.read(file);
+    if (body.expectedRevision && createHash("sha256").update(await readMarkdownFile(file)).digest("hex") !== String(body.expectedRevision).replace(/^sha256:/, "")) {
+      throw Object.assign(new Error("Agenda source changed; refresh before editing"), { statusCode: 409 });
+    }
     const node = locateProviderPlanningNode(snapshot?.nodes, body, kind);
     if (!node) {
       const err = new Error(kind === "todo" ? "Todo source was not found" : "Planning source was not found");
       err.statusCode = 404;
       throw err;
+    }
+    if (Object.hasOwn(body, "expectedSource") && body.expectedSource !== node.raw) {
+      throw Object.assign(new Error("Agenda task changed; refresh before editing"), { statusCode: 409 });
     }
     let mutation = transformOrMutation;
     if (typeof transformOrMutation === "function") {
@@ -4287,7 +4346,7 @@ export function todoUrgency(todo, todayMs = Date.now()) {
   return prioWeight * 1000 + dateScore + doingBonus - blockedPenalty;
 }
 
-async function evaluateTodoAgenda(todos, todayMs, { projects = [], milestones = [], clocks = [], includePlanning = false, includeGantt = false, from = "", days = 7 } = {}) {
+async function evaluateTodoAgenda(todos, todayMs, { projects = [], milestones = [], clocks = [], includePlanning = false, includeGantt = false, from = "", days = 7, requireKernel = requireGoCore && noteScanRoot === noteRoot } = {}) {
   let providerError = null;
   if (typeof planningProvider?.evaluateAgenda === "function") {
     try {
@@ -4326,7 +4385,7 @@ async function evaluateTodoAgenda(todos, todayMs, { projects = [], milestones = 
       // agenda in Emacs/Server-compatible sessions during staged migration.
     }
   }
-  if (requireGoCore && noteScanRoot === noteRoot) {
+  if (requireKernel) {
     throw providerError || goCoreUnavailable("agenda evaluation");
   }
   const { lints } = resolveTodoDeps(todos);
@@ -4650,6 +4709,12 @@ export function resolveClockRefs(clocks, todos) {
   }
   for (const clock of clocks) {
     clock.todoId = "";
+    if (clock.nativeTodoId) {
+      const target = byId.get(clock.nativeTodoId);
+      if (target && target.file === clock.file) clock.todoId = target.id;
+      else lints.push({ file: clock.file, line: clock.line, kind: "broken-clock-ref", ref: clock.nativeTodoId, message: "No matching native WorkNode clock target" });
+      continue;
+    }
     const taskRef = clock.args?.task ? parseDepRefs(clock.args.task)[0] : null;
     if (taskRef?.id) {
       const target = byId.get(`#${taskRef.id}`);
@@ -4696,18 +4761,18 @@ export function resolveClockRefs(clocks, todos) {
 
 // Minutes spent in a clock span; open-ended (`from` with no `to`) is timed
 // against now, so a running clock's elapsed time is always current.
-function clockMinutes(clock) {
+function clockMinutes(clock, nowMs = Date.now()) {
   const fromRaw = clock.args?.from;
   if (!fromRaw) return 0;
   const from = parseDateValue(fromRaw);
   if (!from) return 0;
   const toRaw = clock.args?.to;
   const to = toRaw ? parseDateValue(toRaw) : null;
-  const endMs = to ? to.time : Date.now();
+  const endMs = to ? to.time : nowMs;
   return Math.max(0, Math.round((endMs - from.time) / 60_000));
 }
 
-export function buildClockModel(clocks, todos, projects) {
+export function buildClockModel(clocks, todos, projects, nowMs = Date.now()) {
   const todoById = new Map(todos.map((t) => [t.id, t]));
   const byTask = new Map();
   const byDay = new Map();
@@ -4715,7 +4780,7 @@ export function buildClockModel(clocks, todos, projects) {
   let running = null;
 
   for (const clock of clocks) {
-    const minutes = clockMinutes(clock);
+    const minutes = clockMinutes(clock, nowMs);
     if (clock.args?.from && !clock.args?.to && !running) {
       running = { todoId: clock.todoId || "", text: clock.title || clock.text || "", file: clock.file, from: clock.args.from, minutesSoFar: minutes };
     }
@@ -4836,11 +4901,28 @@ export async function buildAgenda(body = {}) {
   if (cachedPayload) return cachedPayload;
 
   const planning = includePlanning ? await scanPlanningItems() : null;
-  const todos = includePlanning ? planning.todos : await scanTodos();
-  const projects = includePlanning ? planning.projects : [];
-  const milestones = includePlanning ? planning.milestones : [];
-  const clocks = includePlanning ? planning.clocks : [];
+  const payload = await buildAgendaFromPlanning(
+    planning || { todos: await scanTodos() }, body,
+    { todayMs, requireKernel: requireGoCore && noteScanRoot === noteRoot },
+  );
+  await rememberAgendaPayload(body, todayKey, payload);
+  return payload;
+}
+
+// Native source adapters supply records directly. This path performs no file
+// discovery, Org conversion, or changes to the process-wide noteScanRoot.
+export async function buildAgendaFromPlanning(planning, body = {}, {
+  todayMs = Date.now(), requireKernel = requireGoCore,
+} = {}) {
+  const includePlanning = body.includePlanning === true || body.includeGantt === true;
+  const todayMid = midnightMs(new Date(todayMs));
+  const todayKey = formatDateValue(todayMid, false);
+  const todos = planning.todos || [];
+  const projects = planning.projects || [];
+  const milestones = planning.milestones || [];
+  const clocks = planning.clocks || [];
   const evaluation = await evaluateTodoAgenda(todos, todayMs, {
+    requireKernel,
     projects,
     milestones,
     clocks,
@@ -4849,6 +4931,12 @@ export async function buildAgenda(body = {}) {
     from: String(body.from || ""),
     days: Number(body.days || 7),
   });
+  for (const todo of todos) {
+    if (todo.sourceKind === "work-node") {
+      todo.deps = todo.nativeDepends || [];
+      todo.blockedBy = todo.status === "blocked" ? todo.nativeBlockedBy || [] : [];
+    }
+  }
   const { lints } = evaluation;
   let dayBuckets;
   let logByDay;
@@ -4991,10 +5079,49 @@ export async function buildAgenda(body = {}) {
     } else {
       const { lints: clockLints } = resolveClockRefs(clocks, todos);
       const clockQualityLints = lintClocks(clocks);
-      payload.clocktable = buildClockModel(clocks, todos, projects);
+      payload.clocktable = buildClockModel(clocks, todos, projects, todayMs);
       payload.projectModel = buildProjectModel(projects, todos, clocks);
       payload.lints = [...lints, ...clockLints, ...clockQualityLints];
     }
+    const nodes = new Map();
+    for (const raw of planning.dag?.nodes || []) nodes.set(raw.id, { ...raw });
+    const todoIds = new Map(todos.map((todo) => [todo.id, todo.uid || todo.id]));
+    for (const todo of todos) {
+      const existing = nodes.get(todo.id);
+      const node = {
+        ...(existing || {}),
+        id: todo.id,
+        todoId: todo.id,
+        title: todo.text || existing?.title || todo.id,
+        text: todo.text || existing?.text || todo.id,
+        file: todo.file,
+        path: todo.path || todo.file,
+        index: todo.index,
+        line: todo.line,
+        sourceKind: todo.sourceKind || "markdown",
+        status: todo.effectiveStatus || todo.status || existing?.status || "todo",
+        declaredStatus: todo.status || existing?.declaredStatus || "todo",
+        priority: todo.canon?.prio || "",
+        scheduled: todo.canon?.sche || "",
+        deadline: todo.canon?.ddl || "",
+        project: todo.canon?.project || "",
+        tags: todo.tags || [],
+        hasAgenda: true,
+      };
+      nodes.set(todo.id, node);
+    }
+    const edges = [...(planning.dag?.edges || []).map((edge) => ({ ...edge }))];
+    const edgeKeys = new Set(edges.map((edge) => `${edge.type}:${edge.from}:${edge.to}`));
+    for (const todo of todos) for (const dependency of todo.deps || []) {
+      const from = todo.sourceKind === "work-node" ? `${todo.file}#${dependency}` : dependency;
+      const key = `depends:${from}:${todo.id}`;
+      if (edgeKeys.has(key)) continue;
+      edgeKeys.add(key);
+      edges.push({ id: key, from, to: todo.id, type: "depends",
+        blocked: (todo.blockedBy || []).includes(dependency) });
+    }
+    payload.dag = { nodes: [...nodes.values()], edges,
+      todoIds: Object.fromEntries(todoIds) };
   }
   if (body.includeGantt === true) {
     payload.gantt = evaluation.source === "kernel-agenda" && evaluation.gantt
@@ -5002,7 +5129,6 @@ export async function buildAgenda(body = {}) {
       : buildGanttModel(todos, projects, milestones);
     payload.lints = [...payload.lints, ...(payload.gantt.lints || [])];
   }
-  await rememberAgendaPayload(body, todayKey, payload);
   return payload;
 }
 
@@ -5227,12 +5353,12 @@ function defaultTodoFileTitle(file) {
   return stem ? stem.replace(/\b\w/g, (ch) => ch.toUpperCase()) : "Inbox";
 }
 
-function resolveTodoCreateFile(rawInput) {
+function resolveTodoCreateFile(rawInput, captureRoot = noteRoot) {
   const raw = String(rawInput || "").trim();
   const file = raw
-    ? resolveInputPath(raw, noteRoot)
-    : join(noteRoot, "inbox.md");
-  if (!inside(file, noteRoot)) {
+    ? resolveInputPath(raw, captureRoot)
+    : join(captureRoot, "inbox.md");
+  if (!inside(file, captureRoot)) {
     const err = new Error(`Todo target is outside note root: ${file}`);
     err.statusCode = 403;
     throw err;
@@ -5288,8 +5414,8 @@ async function existingPlanningIds() {
   return existing;
 }
 
-async function generatePlanningId() {
-  const existing = await existingPlanningIds();
+export async function generatePlanningId(planningIds = null) {
+  const existing = planningIds ? new Set(planningIds) : await existingPlanningIds();
   const unavailable = new Set(existing);
   for (const id of reservedPlanningIds) {
     if (existing.has(id)) reservedPlanningIds.delete(id);
@@ -5348,7 +5474,7 @@ function todoSourceFromCreateBody(body = {}, id = "") {
   return `@@todo${statusPart} [${escapePlanningTitle(text)}]${args ? ` ${args}` : ""}`;
 }
 
-function todoCreateSemanticFromBody(body = {}) {
+export function todoCreateSemanticFromBody(body = {}) {
   const attrs = {};
   const rawValue = (value) => value === null || value === undefined || value === false ? "" : String(value);
   for (const key of CREATE_TODO_KEYS) {
@@ -5365,7 +5491,7 @@ function todoCreateSemanticFromBody(body = {}) {
   };
 }
 
-function initialTodoFileContent(file) {
+export function initialTodoFileContent(file) {
   const title = defaultTodoFileTitle(file);
   return [
     buildMetaBlock({
@@ -5381,8 +5507,8 @@ function initialTodoFileContent(file) {
   ].join("\n");
 }
 
-export async function createTodo(body = {}) {
-  const file = resolveTodoCreateFile(body.file || body.path || "");
+export async function createTodo(body = {}, { planningIds = null, captureRoot = noteRoot } = {}) {
+  const file = resolveTodoCreateFile(body.file || body.path || "", captureRoot);
   return enqueueSaveWrite(file, async () => {
     const existed = existsSync(file);
     if (planningMutationProviderOwns(file)) {
@@ -5438,7 +5564,7 @@ export async function createTodo(body = {}) {
       };
     }
 
-    const id = await generatePlanningId();
+    const id = await generatePlanningId(planningIds);
     const source = todoSourceFromCreateBody(body, id);
     await mkdir(dirname(file), { recursive: true });
     let content = existed ? await readFile(file, "utf8") : initialTodoFileContent(file);
@@ -5446,20 +5572,24 @@ export async function createTodo(body = {}) {
     const prefix = base ? "\n\n" : "";
     const nextContent = `${base}${prefix}${source}\n`;
     const index = base.length + prefix.length;
+    const nodes = scanPlanningDocument(nextContent);
+    if (!nodes.some((node) => node.span.from === index && node.raw === source)) {
+      throw Object.assign(new Error("Capture would enter literal or excluded source; close its code block or choose another file"), {statusCode:409});
+    }
     await atomicWriteFile(file, nextContent, "utf8");
     markNotesDirty(file);
     let mtimeMs = 0;
     try { mtimeMs = (await stat(file)).mtimeMs; } catch {}
     const meta = noteMetadata(nextContent);
     const noteTitle = String(meta.title || defaultTodoFileTitle(file));
-    const todos = extractTodos(nextContent, {
+    const todos = planningItemsFromNodes(nodes, {
       file,
       path: displayPathForFile(file),
       key: noteTitle,
       id: String(meta.id || ""),
       title: noteTitle,
       project: String(meta.project || meta.proj || "").trim(),
-    }, mtimeMs);
+    }, mtimeMs, nextContent).todos;
     const created = todos.find((todo) => todo.index === index) || null;
     return {
       type: "todo-created",
@@ -5479,6 +5609,10 @@ export async function createTodo(body = {}) {
 
 async function patchTodoInFile(file, body) {
   const nowMs = Date.now();
+  const observed = body.expectedRevision ? await readMarkdownFile(file) : null;
+  if (observed !== null && createHash("sha256").update(observed).digest("hex") !== String(body.expectedRevision).replace(/^sha256:/, "")) {
+    throw Object.assign(new Error("Agenda source changed; refresh before editing"), { statusCode: 409 });
+  }
   if (planningMutationProviderOwns(file)) {
     const result = await mutatePlanningNodeThroughProvider(file, "todo", body,
       todoSemanticMutation(body, nowMs));
@@ -5487,9 +5621,11 @@ async function patchTodoInFile(file, body) {
       changed: result.changed === true, from: result.from, to: result.to,
       source: result.source, nextSource: result.nextSource,
       mtimeMs: Number(result.mtimeMs || 0), version: result.version || "",
+      contentRevision: observed === null ? undefined : createHash("sha256").update(result.changed
+        ? observed.slice(0, result.from) + result.nextSource + observed.slice(result.from + result.source.length) : observed).digest("hex"),
     };
   }
-  const content = await readFile(file, "utf8");
+  const content = observed ?? await readFile(file, "utf8");
   const loc = locateTodoInContent(content, body, file);
   if (!loc) {
     const err = new Error("Todo source was not found");
@@ -5498,19 +5634,26 @@ async function patchTodoInFile(file, body) {
   }
   const { from, to } = loc;
   const oldSource = content.slice(from, to);
+  if (Object.hasOwn(body, "expectedSource") && body.expectedSource !== oldSource) {
+    throw Object.assign(new Error("Agenda task changed; refresh before editing"), { statusCode: 409 });
+  }
   const next = nextTodoSourceForPatch(oldSource, body, nowMs);
 
   if (next === oldSource) {
     let mtimeMs = 0;
     try { mtimeMs = (await stat(file)).mtimeMs; } catch {}
-    return { type: "todo-patched", ok: true, file, changed: false, from, to, source: oldSource, mtimeMs };
+    return { type: "todo-patched", ok: true, file, changed: false, from, to, source: oldSource, mtimeMs, contentRevision: createHash("sha256").update(content).digest("hex") };
   }
 
-  await atomicWriteFile(file, content.slice(0, from) + next + content.slice(to), "utf8");
+  const nextContent = content.slice(0, from) + next + content.slice(to);
+  if (!planningSourceIsLive(nextContent, from, next)) {
+    throw Object.assign(new Error("Planning edit would enter literal or excluded source"), {statusCode:409});
+  }
+  await atomicWriteFile(file, nextContent, "utf8");
   markNotesDirty(file);
   let mtimeMs = 0;
   try { mtimeMs = (await stat(file)).mtimeMs; } catch {}
-  return { type: "todo-patched", ok: true, file, changed: true, from, to, source: oldSource, nextSource: next, mtimeMs };
+  return { type: "todo-patched", ok: true, file, changed: true, from, to, source: oldSource, nextSource: next, mtimeMs, contentRevision: createHash("sha256").update(nextContent).digest("hex") };
 }
 
 // Serialized against editor saves and every other agenda mutation on the
@@ -5533,7 +5676,10 @@ export async function completeTodo(body = {}) {
 // pipeline directly (not the queued `patchTodo` export) — calling the queued
 // wrapper here would deadlock, since this function itself already runs
 // inside this file's queue.
-async function ensureTodoIdInFile(file, body) {
+async function ensureTodoIdInFile(file, body, planningIds = null) {
+  if (body.expectedRevision && createHash("sha256").update(await readMarkdownFile(file)).digest("hex") !== String(body.expectedRevision).replace(/^sha256:/, "")) {
+    throw Object.assign(new Error("Agenda source changed; refresh before editing"), { statusCode: 409 });
+  }
   if (planningMutationProviderOwns(file)) {
     const snapshot = await planningProvider.read(file);
     const node = locateProviderPlanningNode(snapshot?.nodes, body, "todo");
@@ -5542,6 +5688,7 @@ async function ensureTodoIdInFile(file, body) {
       err.statusCode = 404;
       throw err;
     }
+    if (body.expectedSource !== undefined && body.expectedSource !== node.raw) throw Object.assign(new Error("Agenda task changed"), { statusCode: 409 });
     const existingId = String(node.attrs?.id || "");
     if (existingId) {
       return {
@@ -5551,7 +5698,7 @@ async function ensureTodoIdInFile(file, body) {
         mtimeMs: Number(snapshot.mtimeMs || 0), version: snapshot.version || "",
       };
     }
-    const id = await generatePlanningId();
+    const id = await generatePlanningId(planningIds);
     const result = await patchTodoInFile(file, { ...body, file, id });
     return { ...result, type: "todo-id", id: `#${id}` };
   }
@@ -5564,20 +5711,21 @@ async function ensureTodoIdInFile(file, body) {
   }
   const { from, to } = loc;
   const oldSource = content.slice(from, to);
+  if (body.expectedSource !== undefined && body.expectedSource !== oldSource) throw Object.assign(new Error("Agenda task changed"), { statusCode: 409 });
   const existingId = planningNodeArgs(oldSource).id;
   if (existingId) {
     let mtimeMs = 0;
     try { mtimeMs = (await stat(file)).mtimeMs; } catch {}
     return { type: "todo-id", ok: true, file, id: `#${existingId}`, changed: false, from, to, source: oldSource, mtimeMs };
   }
-  const id = await generatePlanningId();
+  const id = await generatePlanningId(planningIds);
   const result = await patchTodoInFile(file, { ...body, file, id });
   return { ...result, type: "todo-id", id: `#${id}` };
 }
 
-export async function ensureTodoId(body = {}) {
+export async function ensureTodoId(body = {}, { planningIds = null } = {}) {
   const file = safeOpenFile(body.file || "");
-  return enqueueSaveWrite(file, () => ensureTodoIdInFile(file, body));
+  return enqueueSaveWrite(file, () => ensureTodoIdInFile(file, body, planningIds));
 }
 
 // --- clock-in / clock-out -----------------------------------------------
@@ -5590,7 +5738,7 @@ function escapeBracketTitle(text) {
 // clock the caller means), else the first open clock (`from` set, no `to`)
 // in this file's content.
 function findClockNode(content, locator = {}) {
-  const nodes = scanPlanningNodes(content, { kind: "clock" });
+  const nodes = scanPlanningDocument(content, { kind: "clock" });
   const { index, source } = locator;
   if (typeof index === "number" && source) {
     const exact = nodes.find((n) => n.span.from === index && n.raw === source);
@@ -5600,6 +5748,9 @@ function findClockNode(content, locator = {}) {
 }
 
 async function closeClockInFileUnlocked(file, locator, toIso) {
+  if (locator.expectedRevision && createHash("sha256").update(await readMarkdownFile(file)).digest("hex") !== locator.expectedRevision) {
+    throw Object.assign(new Error("Agenda clock source changed; refresh before editing"), { statusCode: 409 });
+  }
   if (planningMutationProviderOwns(file)) {
     try {
       const result = await mutatePlanningNodeThroughProvider(file, "clock", { ...locator, open: true }, {
@@ -5615,6 +5766,7 @@ async function closeClockInFileUnlocked(file, locator, toIso) {
   const content = await readFile(file, "utf8");
   const node = findClockNode(content, locator);
   if (!node) return false;
+  if (locator.expectedSource !== undefined && node.raw !== locator.expectedSource) throw Object.assign(new Error("Agenda clock changed"), { statusCode: 409 });
   const patched = patchPlanningNodeRaw(node, { attrs: { to: toIso } });
   if (patched === node.raw) return false;
   await atomicWriteFile(file, content.slice(0, node.span.from) + patched + content.slice(node.span.to), "utf8");
@@ -5652,17 +5804,20 @@ async function findRunningClock() {
 // bracket title stays human-readable text, `task:` is the durable link (see
 // `resolveClockRefs`). Only one clock may run at a time vault-wide, so any
 // currently-running clock is auto-closed first — mirroring org's clock-in.
-async function clockInUnlocked(body = {}) {
+async function clockInUnlocked(body = {}, { planningIds = null, runningClocks = null, clockId = "", at } = {}) {
   const file = safeOpenFile(body.file || "");
-  const nowIso = formatDateValue(Date.now(), true);
+  const nowIso = at === undefined ? formatDateValue(Date.now(), true) : normalizeDateValue(at);
+  if (!nowIso || !/ \d{2}:\d{2}$/.test(nowIso) || (clockId && !/^[A-Za-z0-9_-]{1,128}$/.test(clockId))) {
+    throw Object.assign(new Error("Invalid clock ID or start time"), { statusCode: 422 });
+  }
 
   // Step 1: close any running clock first, fully awaited (queued and
   // serialized on its own file) before touching `file` below — if the
   // running clock happens to live in `file` itself, this ordering (rather
   // than nesting) is what keeps the two writes from deadlocking on the same
   // per-file queue.
-  const running = await findRunningClock();
-  if (running) await closeClockInFile(running.file, { index: running.index, source: running.source }, nowIso);
+  const running = runningClocks ?? [await findRunningClock()].filter(Boolean);
+  for (const clock of running) await closeClockInFile(clock.file, { index: clock.index, source: clock.source }, nowIso);
 
   // Step 2: id-mint and clock-line insert happen inside a *single* queued
   // task on `file`, so no concurrent editor save can land between the
@@ -5673,7 +5828,7 @@ async function clockInUnlocked(body = {}) {
   // re-locating with the now-stale pre-mutation `body.source` could fail to
   // text-match the changed line.
   return enqueueSaveWrite(file, async () => {
-    const idResult = await ensureTodoIdInFile(file, body);
+    const idResult = await ensureTodoIdInFile(file, body, planningIds);
     const from = idResult.from;
     const to = idResult.changed ? idResult.from + idResult.nextSource.length : idResult.to;
 
@@ -5688,7 +5843,7 @@ async function clockInUnlocked(body = {}) {
             file,
             expectedVersion,
             selector: { kind: "todo", id: idResult.id, title: todoNode?.title || "" },
-            mutation: { type: "insert-clock", attrs: { from: nowIso, task: idResult.id } },
+            mutation: { type: "insert-clock", attrs: { from: nowIso, task: idResult.id, ...(clockId ? { id: clockId } : {}) } },
           });
           break;
         } catch (error) {
@@ -5715,29 +5870,35 @@ async function clockInUnlocked(body = {}) {
     const lineEnd = content.indexOf("\n", to);
     const insertAt = lineEnd < 0 ? content.length : lineEnd + 1;
     const needsLeadingNewline = lineEnd < 0 && content.length > 0 && !content.endsWith("\n");
-    const clockLine = `${needsLeadingNewline ? "\n" : ""}@@clock [${title}]{from: ${nowIso}, task: ${idResult.id}}\n`;
+    const clockLine = `${needsLeadingNewline ? "\n" : ""}@@clock [${title}]{from: ${nowIso}, task: ${idResult.id}${clockId ? `, id: ${clockId}` : ""}}\n`;
 
-    await atomicWriteFile(file, content.slice(0, insertAt) + clockLine + content.slice(insertAt), "utf8");
+    const nextContent = content.slice(0, insertAt) + clockLine + content.slice(insertAt);
+    if (!planningSourceIsLive(nextContent, insertAt, clockLine)) {
+      throw Object.assign(new Error("Clock insertion would enter literal or excluded source"), {statusCode:409});
+    }
+    await atomicWriteFile(file, nextContent, "utf8");
     markNotesDirty(file);
     return { type: "clock-in", ok: true, file, from: insertAt, to: insertAt + clockLine.length, source: clockLine, todoId: idResult.id };
   });
 }
 
-export async function clockIn(body = {}) {
-  return enqueueClockMutation(() => clockInUnlocked(body));
+export async function clockIn(body = {}, options = {}) {
+  return enqueueClockMutation(() => clockInUnlocked(body, options));
 }
 
 // Stops a clock: closes the clock named by `body.file`+index/source if
 // given, else whichever clock is running vault-wide.
-async function clockOutUnlocked(body = {}) {
-  const nowIso = formatDateValue(Date.now(), true);
+async function clockOutUnlocked(body = {}, { strict = false, at } = {}) {
+  const nowIso = at === undefined ? formatDateValue(Date.now(), true) : normalizeDateValue(at);
+  if (!nowIso || !/ \d{2}:\d{2}$/.test(nowIso)) throw Object.assign(new Error("Invalid clock stop time"), { statusCode: 422 });
 
   if (body.file) {
     const file = safeOpenFile(body.file);
-    const closed = await closeClockInFile(file, { index: body.index, source: body.source }, nowIso);
+    const closed = await closeClockInFile(file, { index: body.index, source: body.source, ...(strict ? { expectedSource: body.source, expectedRevision: body.revision } : {}) }, nowIso);
     if (closed) return { type: "clock-out", ok: true, file, to: nowIso };
   }
 
+  if (strict) throw Object.assign(new Error("Selected clock is no longer running"), { statusCode: 409 });
   const running = await findRunningClock();
   if (!running) {
     const err = new Error("No running clock");
@@ -5749,8 +5910,8 @@ async function clockOutUnlocked(body = {}) {
   return { type: "clock-out", ok: true, file, to: nowIso };
 }
 
-export async function clockOut(body = {}) {
-  return enqueueClockMutation(() => clockOutUnlocked(body));
+export async function clockOut(body = {}, options = {}) {
+  return enqueueClockMutation(() => clockOutUnlocked(body, options));
 }
 
 // Generates the shortest word-boundary-unique text reference to `target`

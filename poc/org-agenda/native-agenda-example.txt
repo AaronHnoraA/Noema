@@ -1,0 +1,17 @@
+Noema Week Agenda
+Tuesday    15 September 2026
+  Spectral research:    scheduled: TODO [#A] Ask the agent to explore the spectral proof
+  Spectral paper:       scheduled: DOING [#A] Check the theorem assumptions
+  example.md:           deadline: DONE [#D] Collect baseline references
+Wednesday  16 September 2026
+  example.md:          10:00...... scheduled: TODO [#B] Read the comparison paper
+  Spectral research:    scheduled: TODO [#B] Explore a coupling argument
+Thursday   17 September 2026
+  Spectral research:    deadline: TODO [#A] Ask the agent to explore the spectral proof
+  Spectral paper:       deadline: DOING [#A] Check the theorem assumptions
+Friday     18 September 2026
+  Spectral research:    scheduled: TODO [#A] Review the evidence and choose a branch
+  example.md:           scheduled: TODO [#D] Review research notes
+Saturday   19 September 2026
+Sunday     20 September 2026
+Monday     21 September 2026 W39

@@ -1,6 +1,7 @@
 export {
   isBlockCommandCloseLine,
   findInlineCommandClose,
+  isEscapedCommandStart,
   parseBlockCommandOpenLine,
   parseBlockCommandText,
   parseCommandArgs,

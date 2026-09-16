@@ -19,7 +19,7 @@ KERNEL_BIN_LINK ?= $(HOME)/.local/bin/$(KERNEL_BIN_NAME)
 	disk-audit help \
 	init-data install jupyter-bootstrap kernel-build kernel-install \
 	nvm-install prune-legacy-garbage server-build \
-	server-config-init server-deploy server-start setup test
+	server-config-init server-deploy server-start setup test agenda-apple-build agenda-apple-test
 
 all: build
 
@@ -48,6 +48,23 @@ init-data:
 setup: bootstrap init-data
 
 build: check-env check-go prune-legacy-garbage build-web kernel-build
+
+# Optional macOS integration helper, not a second product shell. It requests
+# access only when the user invokes authorization through Noema.
+agenda-apple-build: build/apple/noema-agenda-eventkit
+
+build/apple/noema-agenda-eventkit: apple/AgendaEventKit.swift apple/Info.plist
+	@test "$$(uname -s)" = Darwin || (echo "EventKit requires macOS" && exit 1)
+	mkdir -p build/apple
+	xcrun swiftc -swift-version 5 -O -target "$$(uname -m)-apple-macosx14.0" \
+	  -framework EventKit -framework AppKit \
+	  -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker apple/Info.plist \
+	  apple/AgendaEventKit.swift -o "$@"
+	codesign --force --sign - --identifier org.noema.agenda.eventkit "$@"
+
+agenda-apple-test: check-env agenda-apple-build
+	build/apple/noema-agenda-eventkit --self-test
+	node scripts/check-agenda-apple.mjs
 
 # Noema has no application bundle. The build produces the headless engine and
 # the CM6 renderer hosted by Emacs xwidget/Appine.

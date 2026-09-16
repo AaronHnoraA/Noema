@@ -28,17 +28,18 @@ type Todo struct {
 }
 
 type PlanningItem struct {
-	ID     string            `json:"id"`
-	Status string            `json:"status"`
-	Title  string            `json:"title"`
-	Text   string            `json:"text"`
-	File   string            `json:"file"`
-	Index  int               `json:"index"`
-	Line   int               `json:"line"`
-	Source string            `json:"source"`
-	Canon  map[string]string `json:"canon"`
-	Args   map[string]string `json:"args,omitempty"`
-	TodoID string            `json:"todoId,omitempty"`
+	ID           string            `json:"id"`
+	Status       string            `json:"status"`
+	Title        string            `json:"title"`
+	Text         string            `json:"text"`
+	File         string            `json:"file"`
+	Index        int               `json:"index"`
+	Line         int               `json:"line"`
+	Source       string            `json:"source"`
+	Canon        map[string]string `json:"canon"`
+	Args         map[string]string `json:"args,omitempty"`
+	TodoID       string            `json:"todoId,omitempty"`
+	NativeTodoID string            `json:"nativeTodoId,omitempty"`
 }
 
 type Evaluation struct {
@@ -836,6 +837,14 @@ func resolveClockReferences(clocks []PlanningItem, todos []*evaluatedTodo) []Lin
 	for index := range clocks {
 		clock := &clocks[index]
 		clock.TodoID = ""
+		if clock.NativeTodoID != "" {
+			if target := byID[clock.NativeTodoID]; target != nil && target.File == clock.File {
+				clock.TodoID = target.ID
+			} else {
+				lints = append(lints, Lint{File: clock.File, Line: clock.Line, Kind: "broken-clock-ref", Ref: clock.NativeTodoID, Message: "No matching native WorkNode clock target"})
+			}
+			continue
+		}
 		refs := parseDepRefs(clock.Args["task"])
 		if len(refs) > 0 && refs[0].id != "" {
 			ref := refs[0]

@@ -92,7 +92,8 @@ import { createFloatingTocPanel, inlineTagAnchorsFromText, markdownHeadingsFromT
 import { createSlideDeckController, type SlideDeckController } from "./slide-deck.ts";
 import { normalizeDateValue } from "../src/planning-values.ts";
 import { AARONNOTE_AUTHORING_SNIPPETS } from "../src/authoring-syntax.ts";
-import { patchPlanningNodeRaw, scanPlanningNodes } from "../shared/planning-dsl.mjs";
+import { patchPlanningNodeRaw } from "../shared/planning-dsl.mjs";
+import { scanPlanningDocument, planningSourceIsLive } from "../shared/planning-document.mjs";
 import { latexMarkNames, latexMarkSnippetDefinitions } from "../shared/latex-marks.mjs";
 import {
   buildLatexExportScopes,
@@ -236,7 +237,7 @@ import {
   createKnowledgeDock,
   type KnowledgeDock,
 } from "./knowledge-dock.ts";
-import { refreshAgendaView } from "./agenda-view.ts";
+import { refreshAgendaView, refreshAgendaAttention } from "./agenda-view.ts";
 
 const removeNoemaThemeRuntime = installNoemaThemeRuntime();
 const root = document.querySelector<HTMLElement>("#app");
@@ -7574,7 +7575,7 @@ const AGENDA_ARG_ALIASES: Record<string, string[]> = {
 const AGENDA_DATE_FIELDS = new Set(["ddl", "sche", "end", "date", "from", "to"]);
 
 function agendaNodes(): PlanningNodeLike[] {
-  return scanPlanningNodes(currentMarkdownText()) as PlanningNodeLike[];
+  return scanPlanningDocument(currentMarkdownText()) as PlanningNodeLike[];
 }
 
 function agendaArgValue(attrs: Record<string, string> | undefined, canon: string): string {
@@ -7881,6 +7882,16 @@ async function openAgendaEditPop(target: PlanningEditTarget): Promise<void> {
   const nextRaw = patchPlanningNodeRaw(node, patch);
   if (nextRaw === node.raw) {
     setStatus("Agenda unchanged");
+    return;
+  }
+  const current = currentMarkdownText();
+  if (current.slice(node.span.from, node.span.to) !== node.raw
+      || !scanPlanningDocument(current).some(candidate => candidate.span.from === node.span.from && candidate.raw === node.raw)) {
+    setStatus("Task source changed; reopen its Agenda form");
+    return;
+  }
+  if (!planningSourceIsLive(current.slice(0, node.span.from) + nextRaw + current.slice(node.span.to), node.span.from, nextRaw)) {
+    setStatus("Planning edit would enter a code example; check the surrounding Markdown");
     return;
   }
   editor.replaceMarkdownRange(node.span.from, node.span.to, nextRaw, "end");
@@ -11336,6 +11347,7 @@ function runHostCommand(detail: unknown): boolean {
     error?: string;
     message?: string;
     notifyError?: boolean;
+    files?: unknown[];
   };
   const command = String(body.command || "").trim().toLowerCase();
   if (!command) return false;
@@ -11364,7 +11376,10 @@ function runHostCommand(detail: unknown): boolean {
       return true;
     }
     case "agenda-changed":
-      void refreshAgendaView();
+      void refreshAgendaView(body);
+      return true;
+    case "agenda-attention-changed":
+      void refreshAgendaAttention();
       return true;
     case "wiki-index-changed": {
       wikiIndexCache = null;

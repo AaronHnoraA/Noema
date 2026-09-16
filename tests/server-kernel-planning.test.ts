@@ -7,6 +7,10 @@ import { tmpdir } from "node:os";
 import { configure, configurePlanningProvider } from "../server/lib/state.mjs";
 // @ts-ignore Server facade modules live outside the TS app graph.
 import { buildAgenda, buildAttributeView, getTodos } from "../server/lib/index.mjs";
+// @ts-ignore Runtime source projection accepts snapshots independent of storage.
+import { agendaMarkdownDocument } from "../server/lib/runtime.mjs";
+// @ts-ignore Parser fixture for the transport contract.
+import { scanPlanningNodes } from "../shared/planning-dsl.mjs";
 
 const roots: string[] = [];
 
@@ -16,6 +20,28 @@ afterEach(async () => {
 });
 
 describe("production todo/agenda kernel planning projection", () => {
+  test("projects supplied native snapshots through Go without opening any target path", async () => {
+    const content = "# Remote\n@@todo [计划🚀] {id=abc123, prio=A}\n";
+    let calls = 0;
+    configurePlanningProvider({
+      owns() { throw new Error("path ownership must not gate source computation"); },
+      read() { throw new Error("must not reopen a source snapshot"); },
+      async computeSource(body: any) {
+        calls++;
+        expect(body).toEqual({ content });
+        return { nodes: scanPlanningNodes(content) };
+      },
+    });
+    for (const root of ["/fs:box:/work", "/tmp/project"] ) {
+      const result = await agendaMarkdownDocument({ content, root, file: `${root}/tasks.md`, mtimeMs: 1 });
+      expect(result.todos[0]).toMatchObject({ text: "计划🚀", file: `${root}/tasks.md`, id: "#abc123" });
+    }
+    expect(calls).toBe(2);
+    configurePlanningProvider({ computeSource() { throw new Error("kernel disconnected"); } });
+    await expect(agendaMarkdownDocument({ content, root: "/fs:box:/work", file: "/fs:box:/work/tasks.md" }))
+      .rejects.toThrow("kernel disconnected");
+  });
+
   test("does not revive the canonical Node planning kernel when Go is unavailable", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "noema-required-go-planning-"));
     const notes = join(workspace, "notes");

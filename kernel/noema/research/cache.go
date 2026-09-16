@@ -19,6 +19,9 @@ const (
 	defaultCacheTargetBytes    = int64(4 * 1024 * 1024 * 1024)
 	defaultCacheOrphanAge      = 24 * time.Hour
 	defaultCacheWALBytes       = int64(64 * 1024 * 1024)
+	// Streamed content segments only serve a live OutputArea.  A finished
+	// Run keeps its text in the Transcript artifact and the notebook output.
+	defaultSegmentRetention = 7 * 24 * time.Hour
 )
 
 // CachePolicy is deliberately conservative.  Only CAS blobs which have no
@@ -28,6 +31,9 @@ type CachePolicy struct {
 	TargetBytes    int64 `json:"targetBytes"`
 	OrphanAgeMS    int64 `json:"orphanAgeMillis"`
 	WALBytes       int64 `json:"walBytes"`
+	// SegmentRetentionMS is how long streamed content events of a finished
+	// Run are kept once its Transcript and notebook writeback are durable.
+	SegmentRetentionMS int64 `json:"segmentRetentionMillis"`
 }
 
 // CacheStatus describes repository-local derived/runtime storage.
@@ -44,12 +50,15 @@ type CacheStatus struct {
 	Pressure        bool   `json:"pressure"`
 	CheckpointedWAL bool   `json:"checkpointedWal"`
 	LimitedReason   string `json:"limitedReason,omitempty"`
+	// PrunedSegments counts streamed content events removed this pass.
+	PrunedSegments int64 `json:"prunedSegments"`
 }
 
 // DefaultCachePolicy returns the bounded automatic maintenance policy.
 func DefaultCachePolicy() CachePolicy {
 	return CachePolicy{HighWaterBytes: defaultCacheHighWaterBytes, TargetBytes: defaultCacheTargetBytes,
-		OrphanAgeMS: defaultCacheOrphanAge.Milliseconds(), WALBytes: defaultCacheWALBytes}
+		OrphanAgeMS: defaultCacheOrphanAge.Milliseconds(), WALBytes: defaultCacheWALBytes,
+		SegmentRetentionMS: defaultSegmentRetention.Milliseconds()}
 }
 
 func normalizedCachePolicy(policy CachePolicy) CachePolicy {
@@ -68,6 +77,9 @@ func normalizedCachePolicy(policy CachePolicy) CachePolicy {
 	}
 	if policy.WALBytes <= 0 {
 		policy.WALBytes = defaults.WALBytes
+	}
+	if policy.SegmentRetentionMS <= 0 {
+		policy.SegmentRetentionMS = defaults.SegmentRetentionMS
 	}
 	return policy
 }
@@ -156,6 +168,22 @@ func (s *Store) MaintainCache(requested CachePolicy) (CacheStatus, error) {
 	if _, err := s.db.Exec(`DELETE FROM run_stream_cache WHERE expires_at <= ?`, time.Now().UTC().UnixMilli()); err != nil {
 		return CacheStatus{}, fmt.Errorf("prune expired run stream cache: %w", err)
 	}
+	// Streamed segments are the largest unbounded table.  Remove them only for
+	// Runs that finished long enough ago, whose notebook writeback is done and
+	// whose terminal event names a Transcript artifact holding the full text.
+	segmentCutoff := time.Now().UTC().Add(-time.Duration(policy.SegmentRetentionMS) * time.Millisecond).UnixMilli()
+	pruned, err := s.db.Exec(`DELETE FROM events WHERE type = 'run.content.segment' AND run_id IN (
+		SELECT r.id FROM runs r
+		WHERE r.status IN ('completed', 'cancelled', 'failed', 'interrupted')
+		AND COALESCE(r.finished_at, 0) > 0 AND r.finished_at <= ?
+		AND NOT EXISTS (SELECT 1 FROM notebook_writebacks w WHERE w.run_id = r.id AND w.state != 'done')
+		AND EXISTS (SELECT 1 FROM events terminal WHERE terminal.run_id = r.id
+			AND terminal.type = 'run.status.changed'
+			AND COALESCE(json_extract(terminal.payload_json, '$.transcript_artifact_id'), '') != ''))`, segmentCutoff)
+	if err != nil {
+		return CacheStatus{}, fmt.Errorf("prune finished run segments: %w", err)
+	}
+	prunedSegments, _ := pruned.RowsAffected()
 	registered, err := s.registeredArtifactDigests()
 	if err != nil {
 		return CacheStatus{}, fmt.Errorf("read artifact registry: %w", err)
@@ -196,6 +224,7 @@ func (s *Store) MaintainCache(requested CachePolicy) (CacheStatus, error) {
 			_ = os.Remove(filepath.Dir(orphan.path))
 		}
 	}
+	status.PrunedSegments = prunedSegments
 	status.Pressure = status.TotalBytes > policy.HighWaterBytes
 	if status.Pressure {
 		status.LimitedReason = "only old CAS objects absent from the artifact registry are safe to remove"

@@ -130,10 +130,7 @@
   "Return the Noema project root for CONTEXT.
 CONTEXT may be a buffer or path and defaults to the current buffer.  This is a
 query and does not create a project or runtime state."
-  (let* ((path (expand-file-name (noema--project-context-path context)))
-         (directory (if (file-directory-p path) path (file-name-directory path)))
-         (root (locate-dominating-file directory "noema.toml")))
-    (and root (file-name-as-directory (expand-file-name root)))))
+  (noema-project-root (noema--project-context-path context)))
 
 ;;;###autoload
 (defun noema-current-document (&optional buffer)
@@ -226,6 +223,13 @@ TYPE defaults to `lineage'.  The mutation is validated and undoable."
   (noema-research-op-unlink (noema-node-id from) (noema-node-id to) (or type "lineage")))
 
 ;;;###autoload
+(defun noema-set-node-agenda (node patch)
+  "Patch NODE's native Agenda metadata, preserving its DAG and outputs.
+PATCH is a hash table of canonical planning fields; nil removes inclusion."
+  (unless (fboundp 'noema-research-op-set-agenda) (require 'noema-research-mode))
+  (noema-research-op-set-agenda (noema-node-id node) patch))
+
+;;;###autoload
 (defun noema-set-node-state (node state &optional reason outcome)
   "Set work NODE to STATE, with optional REASON and OUTCOME."
   (unless (fboundp 'noema-research-op-set-state) (require 'noema-research-mode))
@@ -256,7 +260,9 @@ effects and returns the local queued submission id."
     (unless buffer-file-name (user-error "This WorkDocument has no canonical file"))
     (when (buffer-modified-p) (save-buffer))
     (unless (fboundp 'noema-agent-worker-run-work-cell) (require 'noema-agent-worker))
-    (let ((default-directory (or (noema-current-project) default-directory)))
+    ;; The runtime resolves everything against `noema.toml'; settle it here,
+    ;; where the user is asking for work, rather than when the file is visited.
+    (let ((default-directory (noema-project-ensure buffer-file-name)))
       (let ((file (expand-file-name buffer-file-name))
             (cell-id (noema-research-cell-id cell)))
         (cond

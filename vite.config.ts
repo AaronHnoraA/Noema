@@ -19,6 +19,8 @@ export default defineConfig(({ command }) => ({
     // Keep the retired upstream checkout out of Noema's canonical test collection.
     root: ".",
     include: ["tests/**/*.test.ts"],
+    // Keep the host machine's global Skills/MCPs out of every suite.
+    setupFiles: ["tests/setup/global-capability-scope.ts"],
     environment: "happy-dom",
   },
 }));

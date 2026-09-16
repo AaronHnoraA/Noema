@@ -39,3 +39,37 @@ func TestSharedAgendaEvaluationFixtures(t *testing.T) {
 		})
 	}
 }
+
+func TestNativeClockIdentitySurvivesRenameAndDoesNotFallBackToTitle(t *testing.T) {
+	file := "/project/work.noema"
+	result := Evaluate(EvaluateRequest{
+		Todos: []Todo{
+			{ID: file + "#first", File: file, Text: "Renamed", Status: "todo", Canon: map[string]string{}},
+			{ID: file + "#second", File: file, Text: "Old title", Status: "todo", Canon: map[string]string{}},
+		},
+		Clocks: []PlanningItem{
+			{ID: "clock-a", File: file, Text: "Old title", NativeTodoID: file + "#first", Args: map[string]string{"from": "2026-09-16 09:00", "to": "2026-09-16 10:15"}},
+			{ID: "clock-b", File: file, Text: "Old title", NativeTodoID: file + "#missing", Args: map[string]string{"from": "2026-09-16 10:00", "to": "2026-09-16 10:15"}},
+			{ID: "clock-c", File: "/other/work.noema", Text: "Renamed", NativeTodoID: file + "#first", Args: map[string]string{"from": "2026-09-16 10:00", "to": "2026-09-16 10:15"}},
+		},
+		IncludePlanning: true, TodayMs: time.Date(2026, 9, 16, 12, 0, 0, 0, time.Local).UnixMilli(),
+	})
+	if result.Clocks[0].TodoID != file+"#first" || result.Clocks[1].TodoID != "" || result.Clocks[2].TodoID != "" {
+		t.Fatalf("native clock reference fell back to a title or another file: %+v", result.Clocks)
+	}
+	brokenRefs := 0
+	for _, lint := range result.ClockLints {
+		if lint.Kind == "broken-clock-ref" {
+			brokenRefs++
+		}
+	}
+	if brokenRefs != 2 {
+		t.Fatalf("missing invalid-reference diagnostics: %+v", result.ClockLints)
+	}
+	for _, task := range result.Clocktable.Tasks {
+		if task.TodoID == file+"#first" && task.Minutes == 75 {
+			return
+		}
+	}
+	t.Fatalf("missing 75 minute native task total: %+v", result.Clocktable.Tasks)
+}

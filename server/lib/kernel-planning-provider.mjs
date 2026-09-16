@@ -39,6 +39,11 @@ export function createKernelPlanningProvider({ baseUrl, box, fetchImpl = globalT
   const post = (endpoint, body) => request(`/api/noema/markdown/${endpoint}`, body);
 
   return {
+    // Pure computation over a source snapshot; never asks the kernel to open
+    // a target-native path on the client machine.
+    computeSource(body) {
+      return request("/api/noema/agenda/source", body);
+    },
     owns(file) {
       return Boolean(pathFor(file));
     },
@@ -145,6 +150,7 @@ export function createKernelPlanningProvider({ baseUrl, box, fetchImpl = globalT
         title: String(item?.title || item?.text || ""), text: String(item?.text || item?.title || ""),
         file: String(item?.file || ""), index: Number(item?.index || 0), line: Number(item?.line || 0),
         source: String(item?.source || ""),
+        ...(item?.nativeTodoId ? { nativeTodoId: String(item.nativeTodoId) } : {}),
         canon: item?.canon && typeof item.canon === "object" ? item.canon : {},
         args: item?.args && typeof item.args === "object" ? item.args : {},
       });

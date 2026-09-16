@@ -128,12 +128,17 @@ export function nextTodoSourceForPatch(oldSource, body = {}, nowMs = Date.now())
   }
 
   let next = String(oldSource || "");
+  if (bodyHasOwn(body, "title")) {
+    next = next.replace(/^(\s*@@(?:i?todo)(?:\([^\n)]*\))?\s+\[)((?:\\.|[^\]\\])*)\]/i,
+      (_match, prefix) => `${prefix}${escapePlanningTitle(String(body.title).replace(/[\r\n]/g, " "))}]`);
+  }
   if (statusPatch) {
     const command = next.match(/^@@(todo|itodo)(?:\([^\)\n]*\))?[ \t]+/i)?.[1] || "todo";
     const prefix = statusPatch === "todo" ? `@@${command.toLowerCase()} ` : `@@${command.toLowerCase()}(${statusPatch}) `;
     next = next.replace(/^@@(?:todo|itodo)(?:\([^\)\n]*\))?[ \t]+/i, prefix);
   }
-  if (Object.keys(canonPatch).length > 0) next = patchTodoSourceCanonical(next, canonPatch);
+  // Title edits use the same canonical attribute serialization as the Go writer.
+  if (Object.keys(canonPatch).length > 0 || bodyHasOwn(body, "title")) next = patchTodoSourceCanonical(next, canonPatch);
   return next;
 }
 
@@ -145,7 +150,8 @@ export function clockSourceForTodo(todo, attrs = {}) {
   const title = escapePlanningTitle(typeof todo === "string" ? todo : todo?.title || "");
   const from = String(attrs.from || "").trim();
   const task = String(attrs.task || "").trim();
-  return `@@clock [${title}]{from: ${from}, task: ${task}}`;
+  const id = String(attrs.id || "").trim();
+  return `@@clock [${title}]{from: ${from}, task: ${task}${id ? `, id: ${id}` : ""}}`;
 }
 
 // Test/fixture mirror of the semantic mutation payload accepted by Go. The
@@ -160,6 +166,7 @@ export function applyPlanningSemanticMutation(source, mutation = {}) {
     const body = { ...(semantic.attrs || {}) };
     if (semantic.op) body.op = semantic.op;
     if (Object.prototype.hasOwnProperty.call(semantic, "status")) body.status = semantic.status;
+    if (Object.prototype.hasOwnProperty.call(semantic, "title")) body.title = semantic.title;
     if (Object.prototype.hasOwnProperty.call(semantic, "afterAdd")) body.afterAdd = semantic.afterAdd;
     return nextTodoSourceForPatch(node.raw, body, Number(semantic.nowMs || Date.now()));
   }

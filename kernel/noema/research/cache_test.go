@@ -53,6 +53,54 @@ func TestMaintainCacheDeletesOnlyOldUnregisteredObjects(t *testing.T) {
 	}
 }
 
+func TestMaintainCachePrunesStreamedSegmentsOnlyOfOldFinishedRuns(t *testing.T) {
+	store, root := openTestStore(t)
+	session := promoteRuntimeSession(t, store, root)
+	run := prepareRuntimeRun(t, store, session, root)
+	lease, err := store.AcquireLease(AcquireLeaseInput{SessionID: session.ID, Owner: "emacs:test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.StartRun(StartRunInput{SessionID: session.ID, Owner: lease.Owner, Epoch: lease.Epoch, RunID: run.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ReportWorkerEvents(ReportWorkerEventsInput{SessionID: session.ID, Owner: lease.Owner,
+		Epoch: lease.Epoch, RunID: run.ID, Events: []WorkerEvent{
+			{Type: "run.content.segment", Payload: map[string]any{"stream": "assistant", "text": "part one "}},
+			{Type: "run.content.segment", Payload: map[string]any{"stream": "assistant", "text": "part two"}},
+		}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ReportWorkerEvents(ReportWorkerEventsInput{SessionID: session.ID, Owner: lease.Owner,
+		Epoch: lease.Epoch, RunID: run.ID, Events: []WorkerEvent{{Type: "run.status.changed",
+			Payload: map[string]any{"status": "completed", "result_text": "done", "transcript_text": "part one part two"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	count := func(kind string) int {
+		t.Helper()
+		var total int
+		if err := store.db.QueryRow(`SELECT COUNT(*) FROM events WHERE run_id = ? AND type = ?`, run.ID, kind).Scan(&total); err != nil {
+			t.Fatal(err)
+		}
+		return total
+	}
+	policy := CachePolicy{HighWaterBytes: 1 << 60, TargetBytes: 1 << 59, WALBytes: 1 << 60, SegmentRetentionMS: time.Hour.Milliseconds()}
+	// A Run that just finished keeps its stream for a live or reopened OutputArea.
+	if status, err := store.MaintainCache(policy); err != nil || status.PrunedSegments != 0 || count("run.content.segment") != 2 {
+		t.Fatalf("recent segments must survive: %+v (%v)", status, err)
+	}
+	if _, err := store.db.Exec(`UPDATE runs SET finished_at = ? WHERE id = ?`, time.Now().Add(-2*time.Hour).UnixMilli(), run.ID); err != nil {
+		t.Fatal(err)
+	}
+	status, err := store.MaintainCache(policy)
+	if err != nil || status.PrunedSegments != 2 || count("run.content.segment") != 0 || count("run.status.changed") == 0 {
+		t.Fatalf("old finished segments must go and status events stay: %+v (%v)", status, err)
+	}
+	if output, err := store.ReadRunOutput(run.ID, true); err != nil || output.TranscriptText != "part one part two" {
+		t.Fatalf("the Transcript must still hold the full text: %+v (%v)", output, err)
+	}
+}
+
 func TestNotebookWritebackOutboxRecoversAWriterLease(t *testing.T) {
 	store, root := openTestStore(t)
 	session := promoteRuntimeSession(t, store, root)

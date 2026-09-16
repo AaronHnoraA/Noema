@@ -1,4 +1,4 @@
-import { scanPlanningNodes } from "./planning-dsl.mjs";
+import { scanPlanningDocument, planningSourceIsLive } from "./planning-document.mjs";
 
 function locate(nodes, selector = {}) {
   const kind = String(selector.kind || "").toLowerCase();
@@ -30,15 +30,17 @@ export function applyPlanningSourceMutation(input, selector = {}, mutation = {})
     const prefix = base ? "\n\n" : "";
     const nextSource = String(mutation.source || "");
     const from = (base + prefix).length;
+    if (!planningSourceIsLive(base + prefix + nextSource + "\n", from, nextSource)) return null;
     return {
       content: base + prefix + nextSource + "\n",
       from, to: from + nextSource.length, source: "", nextSource,
     };
   }
-  const node = locate(scanPlanningNodes(source), selector);
+  const node = locate(scanPlanningDocument(source), selector);
   if (!node) return null;
   if (type === "replace") {
     const nextSource = String(mutation.source || "");
+    if (!planningSourceIsLive(source.slice(0, node.span.from) + nextSource + source.slice(node.span.to), node.span.from, nextSource)) return null;
     return {
       content: source.slice(0, node.span.from) + nextSource + source.slice(node.span.to),
       from: node.span.from, to: node.span.from + nextSource.length,
@@ -51,6 +53,7 @@ export function applyPlanningSourceMutation(input, selector = {}, mutation = {})
     let nextSource = String(mutation.source || "");
     if (newline < 0 && source && !source.endsWith("\n")) nextSource = "\n" + nextSource;
     if (!nextSource.endsWith("\n")) nextSource += "\n";
+    if (!planningSourceIsLive(source.slice(0, from) + nextSource + source.slice(from), from, nextSource)) return null;
     return {
       content: source.slice(0, from) + nextSource + source.slice(from),
       from, to: from + nextSource.length, source: "", nextSource,

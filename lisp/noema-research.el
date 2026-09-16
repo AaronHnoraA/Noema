@@ -574,9 +574,258 @@ does not create identity drift.  DOCUMENT is mutated and returned."
   "Return DOCUMENT in the canonical WorkNode-based schema."
   (unless (noema-research-notebook-p document)
     (user-error "Not a Noema work document"))
-  (noema-research-migrate-legacy-document document))
+  (setq document (noema-research-migrate-legacy-document document))
+  ;; Agenda used to be hidden under work_nodes[].agenda.  Move that legacy
+  ;; value into the primary Cell, then keep the visible directive as the only
+  ;; authority.  A WorkNode without a primary Cell is not an Agenda task.
+  (dolist (node (noema-research-work-nodes document))
+    (unless (eq (gethash "agenda" node :absent) :absent)
+      (when-let* ((cell (noema-research-primary-cell
+                         document (noema-research-work-node-id node)))
+                  ((null (noema-research-agenda-directive
+                          (noema-research-cell-source cell)
+                          (noema-research-work-node-field node "kind")))))
+        (puthash "source"
+                 (noema-research-replace-agenda-directive
+                  (noema-research-cell-source cell) (gethash "agenda" node)
+                  (noema-research-work-node-field node "kind")
+                  (noema-research-work-node-field node "title"))
+                 cell))
+      (remhash "agenda" node)))
+  document)
 
 ;;;; Relations and state
+
+(defconst noema-research-agenda-keys
+  '("sche" "ddl" "end" "prio" "effort" "tags" "context" "project" "status" "done" "progress" "clocks"))
+
+(defun noema-research--agenda-clock-date-p (value)
+  (and (stringp value)
+       (string-match-p "\\`[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\} [0-9]\\{2\\}:[0-9]\\{2\\}\\'" value)
+       (condition-case nil
+           (let* ((parts (parse-time-string value))
+                  (time (encode-time 0 (nth 1 parts) (nth 2 parts) (nth 3 parts) (nth 4 parts) (nth 5 parts) t)))
+             (equal value (format-time-string "%F %H:%M" time t)))
+         (error nil))))
+
+(defun noema-research-agenda-clock-errors (clocks)
+  "Validate native WorkNode clock records in CLOCKS."
+  (if (not (vectorp clocks)) '("agenda.clocks must be an array")
+    (let ((ids (make-hash-table :test #'equal)) (running 0) errors)
+      (mapc
+       (lambda (clock)
+         (if (not (hash-table-p clock)) (push "agenda clock must be an object" errors)
+           (let ((id (gethash "id" clock)) (from (gethash "from" clock)) (to (gethash "to" clock :absent)))
+             (maphash (lambda (key _value)
+                        (unless (member key '("id" "from" "to")) (push "unsupported agenda clock field" errors))) clock)
+             (unless (and (stringp id) (string-match-p "\\`[A-Za-z0-9_-]\\{1,128\\}\\'" id) (not (gethash id ids)))
+               (push "invalid or duplicate agenda clock ID" errors))
+             (puthash id t ids)
+             (unless (noema-research--agenda-clock-date-p from) (push "agenda clock.from requires a canonical date and time" errors))
+             (if (eq to :absent) (cl-incf running)
+               (unless (and (noema-research--agenda-clock-date-p to)
+                            (stringp from) (not (string-lessp to from)))
+                 (push "agenda clock.to must be at or after from" errors)))))) clocks)
+      (when (> running 1) (push "a WorkNode may have only one running clock" errors))
+      (nreverse errors))))
+
+(defun noema-research-agenda-errors (agenda kind)
+  "Return validation errors for native WorkNode AGENDA metadata of KIND."
+  (if (not (hash-table-p agenda)) '("agenda must be an object")
+    (let (errors)
+      (maphash
+       (lambda (key value)
+         (cond
+          ((not (member key noema-research-agenda-keys))
+           (push (format "unsupported agenda field: %s" key) errors))
+          ((equal key "clocks") (setq errors (append (noema-research-agenda-clock-errors value) errors)))
+          ((not (stringp value)) (push (format "agenda.%s must be a string" key) errors))
+          ((and (member key '("sche" "ddl" "end" "done")) (not (string-empty-p value)))
+           (unless (condition-case nil
+                       (and (string-match-p "\\`[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}\\(?: [0-9]\\{2\\}:[0-9]\\{2\\}\\)?\\'" value)
+                            (let* ((parts (parse-time-string value))
+                                   (time (encode-time 0 (or (nth 1 parts) 0) (or (nth 2 parts) 0)
+                                                      (nth 3 parts) (nth 4 parts) (nth 5 parts) t)))
+                              (equal value (format-time-string (if (> (length value) 10) "%F %H:%M" "%F") time t))))
+                     (error nil))
+             (push (format "invalid agenda.%s canonical date" key) errors)))
+          ((equal key "prio")
+           (unless (or (string-empty-p value) (string-match-p "\\`[A-Z]\\'" value))
+             (push "invalid agenda priority" errors)))
+          ((equal key "effort")
+           (let ((case-fold-search t))
+             (unless (or (string-empty-p value)
+                         (string-match-p "\\`\\(?:[0-9]+:[0-5][0-9]\\|[0-9]+\\(?:\\.[0-9]+\\)?[ \t]*\\(?:d\\|day\\|days\\|h\\|hour\\|hours\\|m\\|min\\|mins\\|minute\\|minutes\\)?\\)\\'" (string-trim value)))
+               (push "invalid agenda effort" errors))))
+          ((equal key "progress")
+           (unless (or (string-empty-p value)
+                       (and (string-match-p "\\`[0-9]+\\(?:\\.[0-9]+\\)?\\'" value)
+                            (<= (string-to-number value) 100)))
+             (push "agenda.progress must be between 0 and 100" errors)))
+          ((equal key "status")
+           (when (or (equal kind "work") (not (member value '("todo" "doing" "blocked" "done" "cancelled"))))
+             (push "invalid agenda status; work nodes use state" errors))))) agenda)
+      (nreverse errors))))
+
+(defun noema-research--agenda-directive-location (source kind)
+  "Return (BEG END AGENDA) for leading Markdown planning commands in SOURCE."
+  (with-temp-buffer
+    (insert (or source ""))
+    (goto-char (point-min))
+    (let ((agenda nil) clocks beg end done
+          (aliases '(("due" . "ddl") ("deadline" . "ddl")
+                     ("scheduled" . "sche") ("start" . "sche")
+                     ("priority" . "prio") ("proj" . "project")
+                     ("ctx" . "context") ("pct" . "progress")
+                     ("finish" . "end"))))
+      (cl-labels
+          ((canonical-key (key)
+             (or (cdr (assoc key aliases)) key))
+           (parse-pair (text table)
+             (setq text (string-trim (string-remove-suffix "," text)))
+             (unless (or (string-empty-p text) (string-prefix-p "#" text)
+                         (string-prefix-p "//" text))
+               (unless (string-match "\\`\\([A-Za-z][A-Za-z0-9_-]*\\)[ \t]*[:=][ \t]*\\(.*\\)\\'" text)
+                 (user-error "Malformed planning attribute: %s" text))
+               (let* ((key (canonical-key (downcase (match-string 1 text))))
+                      (value (string-trim (match-string 2 text) "[\"']+" "[\"']+")))
+                 (when (gethash key table) (user-error "Duplicate agenda field: %s" key))
+                 (unless (string-empty-p value) (puthash key value table)))))
+           (parse-attrs (raw block)
+             (let ((table (make-hash-table :test #'equal)))
+               (if block
+                   (progn
+                     (forward-line 1)
+                     (let (closed)
+                       (while (and (not closed) (not (eobp)))
+                         (if (looking-at "^[ \t]*}[ \t]*$")
+                             (progn (forward-line 1) (setq closed t))
+                           (parse-pair (buffer-substring-no-properties
+                                        (line-beginning-position) (line-end-position)) table)
+                           (forward-line 1)))
+                       (unless closed (user-error "Unclosed planning attribute block"))))
+                 (dolist (part (split-string (string-trim raw "{" "}") "," t))
+                   (parse-pair part table))
+                 (forward-line 1))
+               table)))
+        (while (and (not done) (not (eobp)))
+          (cond
+           ((looking-at "^[ \t]*$") (forward-line 1))
+           ((looking-at "^@@\\(todo\\|clock\\)\\(?:([^)]*)\\)?[ \t]+\\[.*\\][ \t]*\\({.*\\)$")
+            (let* ((command (match-string-no-properties 1))
+                   (command-line (match-string-no-properties 0))
+                   (raw (match-string-no-properties 2))
+                   (status (and (equal command "todo")
+                                (when (string-match "^@@todo(\\([^)]*\\))" command-line)
+                                  (match-string 1 command-line))))
+                   (block (equal (string-trim raw) "{"))
+                   (command-beg (line-beginning-position))
+                   (attrs (parse-attrs raw block)))
+              (unless beg (setq beg command-beg))
+              (setq end (point))
+              (if (equal command "todo")
+                  (progn
+                    (when agenda (user-error "Only one leading @@todo is allowed"))
+                    (setq agenda attrs)
+                    (when (and status (not (string-empty-p status)) (not (equal kind "work")))
+                      (puthash "status" status agenda)))
+                (unless agenda (user-error "@@clock requires a leading @@todo"))
+                (push (apply #'noema-research--table
+                             (append (list "id" (or (gethash "id" attrs) "")
+                                           "from" (or (gethash "from" attrs) ""))
+                                     (and (gethash "to" attrs) (list "to" (gethash "to" attrs)))))
+                      clocks))))
+           ((and (null agenda) (looking-at "^@@[A-Za-z][A-Za-z0-9_-]*(.*)[ \t]*$"))
+            (forward-line 1))
+           (t (setq done t))))
+      (when agenda
+        (when clocks (puthash "clocks" (vconcat (nreverse clocks)) agenda))
+        (when-let* ((errors (noema-research-agenda-errors agenda kind)))
+          (user-error "%s" (string-join errors "; ")))
+        (list beg end agenda))))))
+
+(defun noema-research-agenda-directive (source kind)
+  "Return SOURCE's visible leading Agenda object for WorkNode KIND, or nil."
+  (nth 2 (noema-research--agenda-directive-location source kind)))
+
+(defun noema-research-format-agenda-directive (agenda kind &optional title)
+  "Format AGENDA as Markdown planning commands for WorkNode KIND and TITLE."
+  (when-let* ((errors (noema-research-agenda-errors agenda kind)))
+    (user-error "%s" (string-join errors "; ")))
+  (let* ((safe-title (replace-regexp-in-string "[]\\\\]" "\\\\&" (or title "WorkNode")))
+         (status (and (not (equal kind "work")) (gethash "status" agenda)))
+         (lines (list (format "@@todo%s [%s] {" (if (and status (not (equal status "todo")))
+                                                      (format "(%s)" status) "") safe-title))))
+    (dolist (key (remove "clocks" (remove "status" noema-research-agenda-keys)))
+      (when-let* ((value (gethash key agenda)) ((not (string-empty-p value))))
+        (setq lines (append lines (list (format "  %s: %s" key value))))))
+    (setq lines (append lines '("}")))
+    (mapc (lambda (clock)
+            (setq lines
+                  (append lines
+                          (list (format "@@clock [%s] {id: %s, from: \"%s\"%s}"
+                                        safe-title (gethash "id" clock) (gethash "from" clock)
+                                        (if-let* ((to (gethash "to" clock)))
+                                            (format ", to: \"%s\"" to) ""))))))
+          (append (gethash "clocks" agenda) nil))
+    (string-join lines "\n")))
+
+(defun noema-research-replace-agenda-directive (source agenda kind &optional title)
+  "Replace SOURCE's leading Agenda block with AGENDA for KIND.
+When AGENDA is nil, remove the block."
+  (let* ((source (or source ""))
+         (location (noema-research--agenda-directive-location source kind)))
+    (if location
+        (let* ((beg (1- (nth 0 location)))
+               (end (1- (nth 1 location)))
+               (prefix (substring source 0 beg))
+               (suffix (substring source end))
+               (middle (and agenda (noema-research-format-agenda-directive agenda kind title))))
+          (when (and (null agenda) (string-prefix-p "\n" suffix)
+                     (or (string-empty-p prefix) (string-suffix-p "\n" prefix)))
+            ;; Insertion separates visible planning commands from the prompt
+            ;; with a blank line.  Removing those commands owns that separator
+            ;; as well, including when the block starts at byte zero.
+            (setq suffix (substring suffix 1)))
+          (concat prefix (or middle "") suffix))
+      (if (null agenda) source
+        (concat (noema-research-format-agenda-directive agenda kind title)
+                (if (string-empty-p source) "" "\n\n") source)))))
+
+(defun noema-research-set-agenda (document id patch)
+  "Patch the visible Agenda directive of WorkNode ID in DOCUMENT.
+PATCH is a string-keyed hash table. Nil removes the node from Agenda.
+The node, DAG, prompt and Agent outputs retain their existing identities."
+  (let* ((node (or (noema-research-find-work-node document
+                                               (noema-research-resolve-work-node-id document id))
+                   (user-error "Unknown WorkNode: %s" id)))
+         (kind (noema-research-work-node-field node "kind"))
+         (cell (or (noema-research-primary-cell document (noema-research-work-node-id node))
+                   (user-error "A WorkNode needs a primary Cell before it can join Agenda")))
+         (agenda (copy-hash-table (or (noema-research-agenda-directive
+                                       (noema-research-cell-source cell) kind)
+                                      (make-hash-table :test #'equal)))))
+    (when (and (null patch)
+               (seq-some (lambda (clock) (eq (gethash "to" clock :absent) :absent))
+                         (append (gethash "clocks" agenda) nil)))
+      (user-error "Stop the running clock before removing Agenda metadata"))
+    (if (null patch)
+        (puthash "source" (noema-research-replace-agenda-directive
+                           (noema-research-cell-source cell) nil kind
+                           (noema-research-work-node-field node "title")) cell)
+      (unless (hash-table-p patch) (user-error "Agenda patch must be a hash table"))
+      (maphash (lambda (key value)
+                 (if (or (null value) (equal value "")) (remhash key agenda)
+                   (puthash key (if (and (equal key "clocks") (vectorp value))
+                                    (vconcat (mapcar (lambda (clock) (if (hash-table-p clock) (copy-hash-table clock) clock)) value))
+                                  value) agenda))) patch)
+      (when-let* ((errors (noema-research-agenda-errors agenda kind)))
+        (user-error "%s" (string-join errors "; ")))
+      (puthash "source" (noema-research-replace-agenda-directive
+                         (noema-research-cell-source cell) agenda kind
+                         (noema-research-work-node-field node "title")) cell))
+    (remhash "agenda" node)
+    node))
 
 (defun noema-research--work-node-table (document)
   "Return a hash from WorkNode id to WorkNode for DOCUMENT."
@@ -1056,6 +1305,8 @@ Each entry is a cons (ENTITY-ID . MESSAGE)."
          (t (puthash id node nodes)))
         (unless (member kind noema-research-graph-kinds)
           (push (cons id (format "unsupported WorkNode kind %S" kind)) errors))
+        (unless (eq (gethash "agenda" node :absent) :absent)
+          (push (cons id "Agenda belongs in the primary Cell's visible @@todo / @@clock commands") errors))
         (when (and state (not (member state noema-research-work-states)))
           (push (cons id (format "unsupported work state %s" state)) errors))
         (when (and outcome (not (member outcome noema-research-work-outcomes)))
@@ -1066,6 +1317,12 @@ Each entry is a cons (ENTITY-ID . MESSAGE)."
              (work-node-id (noema-research-cell-work-node-id cell))
              (node (gethash work-node-id nodes))
              (cell-type (noema-research--get cell "cell_type")))
+        (when (and node (eq cell (noema-research-primary-cell document work-node-id)))
+          (condition-case err
+              (noema-research-agenda-directive
+               (noema-research-cell-source cell)
+               (noema-research-work-node-field node "kind"))
+            (error (push (cons id (error-message-string err)) errors))))
         (when raw-kind
           (push (cons id "graph kind belongs to a WorkNode, not cell metadata") errors))
         (when (and work-node-id (not (gethash work-node-id nodes)))
@@ -1104,9 +1361,12 @@ Each entry is a cons (ENTITY-ID . MESSAGE)."
 
 (defun noema-research--walk (start graph &optional limit)
   "Return ids reachable from START in hash GRAPH, at most LIMIT steps away."
-  (let ((seen (make-hash-table :test #'equal))
-        (queue (list (cons start 0)))
-        result)
+  (let* ((seen (make-hash-table :test #'equal))
+         (queue (list (cons start 0)))
+         (tail queue)
+         result)
+    ;; A tail pointer keeps the breadth-first walk linear; appending to the
+    ;; queue on every step made large DAG projections quadratic.
     (while queue
       (pcase-let ((`(,id . ,distance) (pop queue)))
         (when (or (null limit) (< distance limit))
@@ -1114,7 +1374,9 @@ Each entry is a cons (ENTITY-ID . MESSAGE)."
             (unless (or (equal next start) (gethash next seen))
               (puthash next t seen)
               (push next result)
-              (setq queue (append queue (list (cons next (1+ distance))))))))))
+              (let ((cell (list (cons next (1+ distance)))))
+                (if queue (setcdr tail cell) (setq queue cell))
+                (setq tail cell)))))))
     (nreverse result)))
 
 (defun noema-research--exclusive-descendants (id children roots)
@@ -1177,16 +1439,17 @@ any other state applies to every work node."
                     (_ t)))))))
    (cons id (noema-research-branch-ids document id))))
 
-(cl-defun noema-research-projection (document &key focus folds protect (depth 2)
-                                              (siblings t))
+(cl-defun noema-research-projection (document &key focus folds protect (depth 2))
   "Return the lineage-first graph projection of DOCUMENT.
 The result is a plist with :nodes, :edges, :focus and :folds.  Each node is a
 plist with :id, :kind, :title, :state, :outcome, :focus, :folded (the number of
 contracted nodes, or nil) and :parents (visible lineage parents).  Each edge is
 a list (FROM TO TYPE).  FOLDS contract descendants that are only reachable
 through the folded node.  FOCUS and every id in PROTECT, together with their
-ancestors, are never hidden.  With FOCUS, the lens keeps ancestors,
-descendants up to DEPTH, and, when SIBLINGS is non-nil, siblings."
+ancestors, are never hidden by a fold.  FOCUS makes its node the root of the
+drawing: the lens keeps FOCUS and its lineage descendants up to DEPTH levels,
+and nothing above or beside it.  A fold on FOCUS itself is ignored, since
+focusing a node asks to see its branch."
   (let ((nodes (make-hash-table :test #'equal))
         (children (make-hash-table :test #'equal))
         (parents (make-hash-table :test #'equal))
@@ -1221,15 +1484,12 @@ descendants up to DEPTH, and, when SIBLINGS is non-nil, siblings."
           (dolist (id (noema-research--walk anchor parents))
             (puthash id t protected))))
       (when focus-id
-        (setq lens (copy-hash-table protected))
+        (setq lens (make-hash-table :test #'equal))
+        (puthash focus-id t lens)
         (dolist (id (noema-research--walk focus-id children depth))
-          (puthash id t lens))
-        (when siblings
-          (dolist (parent (gethash focus-id parents))
-            (dolist (sibling (gethash parent children))
-              (puthash sibling t lens)))))
+          (puthash id t lens)))
       (dolist (fold (delete-dups (copy-sequence folds)))
-        (when (gethash fold nodes)
+        (when (and (gethash fold nodes) (not (equal fold focus-id)))
           (dolist (id (noema-research--exclusive-descendants fold children roots))
             (unless (or (gethash id protected) (gethash id hidden-by))
               (puthash id fold hidden-by)))
@@ -1262,6 +1522,12 @@ descendants up to DEPTH, and, when SIBLINGS is non-nil, siblings."
                             :title (noema-research-work-node-label document id)
                             :state (noema-research-work-node-field node "state")
                             :outcome (noema-research-work-node-field node "outcome")
+                            :agenda (and cell
+                                         (condition-case nil
+                                             (noema-research-agenda-directive
+                                              (noema-research-cell-source cell)
+                                              (noema-research-work-node-field node "kind"))
+                                           (error nil)))
                             :focus (equal id focus-id)
                             :folded (and (member id effective-folds)
                                          (gethash id hidden-counts 0))
@@ -1380,19 +1646,58 @@ and FILE no longer has that revision."
                ".agent/\n")))
     file))
 
+(defun noema-project--directory (path)
+  "Return PATH itself when it is a directory, else its parent directory."
+  (let ((path (expand-file-name path)))
+    (if (file-directory-p path)
+        (file-name-as-directory path)
+      (file-name-directory path))))
+
+(defun noema-project-root (path)
+  "Return the root of the Noema project containing PATH, or nil.
+PATH may name a directory or a file that does not exist yet.  The nearest
+ancestor holding `noema.toml' wins.  This is a query and never writes."
+  (when-let* ((root (locate-dominating-file (noema-project--directory path)
+                                            "noema.toml")))
+    (file-name-as-directory (expand-file-name root))))
+
+(defun noema-project-default-root (directory)
+  "Return the root a new Noema project for DIRECTORY should use.
+The `project.el' root containing DIRECTORY wins, so the Noema project shares
+its workspace's identity; outside any project DIRECTORY itself is used."
+  (let ((project (project-current nil directory)))
+    (file-name-as-directory
+     (expand-file-name (if project (project-root project) directory)))))
+
+(defun noema-project-ensure (path)
+  "Return the Noema project root for PATH, asking before creating one.
+An enclosing project is reused silently.  Otherwise the user confirms or edits
+the root proposed by `noema-project-default-root', which must contain PATH.
+Nothing is written unless the user accepts; quitting propagates."
+  (or (noema-project-root path)
+      (let* ((directory (noema-project--directory path))
+             (proposed (noema-project-default-root directory))
+             (root (file-name-as-directory
+                    (expand-file-name
+                     (read-directory-name "Create Noema project at: "
+                                          proposed proposed t)))))
+        (unless (file-in-directory-p directory root)
+          (user-error "Noema project %s does not contain %s"
+                      (abbreviate-file-name root)
+                      (abbreviate-file-name (expand-file-name path))))
+        (plist-get (noema-project-enable root) :root))))
+
 ;;;###autoload
 (defun noema-project-enable (&optional directory)
   "Give DIRECTORY a durable Noema Project identity.
 Create `noema.toml' with a UUIDv7 repository id and ensure `.agent/' is
 ignored by Git.  Existing manifests and unrelated ignore rules are preserved.
-Interactively, DIRECTORY defaults to the current project root."
+Interactively, DIRECTORY defaults to `noema-project-default-root'."
   (interactive)
-  (let* ((project (and (null directory) (project-current nil)))
-         (root (file-name-as-directory
+  (let* ((root (file-name-as-directory
                 (expand-file-name
                  (or directory
-                     (and project (project-root project))
-                     default-directory))))
+                     (noema-project-default-root default-directory)))))
          (manifest (expand-file-name "noema.toml" root))
          (created nil))
     (unless (file-directory-p root)
@@ -1414,9 +1719,8 @@ Interactively, DIRECTORY defaults to the current project root."
 (defun noema-research-repository-root (file)
   "Return the Noema repository root containing FILE.
 The root is the nearest directory with `noema.toml', else FILE's directory."
-  (let* ((directory (file-name-directory (expand-file-name file)))
-         (root (locate-dominating-file directory "noema.toml")))
-    (file-name-as-directory (expand-file-name (or root directory)))))
+  (or (noema-project-root file)
+      (noema-project--directory file)))
 
 (defun noema-research-state-directory (file)
   "Return the `.agent/' directory of FILE's repository, creating it.

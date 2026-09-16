@@ -1,22 +1,34 @@
-// Full-screen, vault-wide agenda view (org-agenda-class): week/list/month/
+import {promptAgendaCapture, type CaptureCatalog} from "./agenda-capture-view.ts";
+// Full-screen Agenda over resident knowledge and explicitly active projects:
+// week/list/month/
 // log/gantt/projects/clocktable/lints views over the server-computed agenda
 // view-model (`api.notes.agenda`). It can be hosted by Emacs as its own Web
 // surface (see `agenda.html`/`agenda-main.ts`) or embedded in the Markdown
 // surface via `openAgendaView`. All edits
 // round-trip through `api.notes.patchTodo`/`clockIn`/`clockOut`, which write
-// straight back into markdown — this view holds no state that isn't
+// straight back into native Markdown/WorkNode sources — this view holds no state that isn't
 // re-derivable from it. See `docs/agenda.md` for the view-model shapes.
-import type { AgendaEntry, AgendaMsg, GanttMilestone, GanttTask, ProjectRollup, TodoItem, TodoLint } from "./api-client.ts";
+import type { AgendaDagEdge, AgendaDagNode, AgendaEntry, AgendaMsg, ClockReference, GanttMilestone, GanttTask, ProjectRollup, TodoItem, TodoLint } from "./api-client.ts";
+import {renderAttention} from './agenda-attention-view.ts';
+import type {AttentionSnapshot,AttentionAction} from './agenda-attention-view.ts';
 
 export type AgendaViewDeps = {
   api: {
     notes: {
       agenda: (body: Record<string, unknown>) => Promise<AgendaMsg>;
+      captureTemplates?: () => Promise<CaptureCatalog>;
       createTodo: (body: Record<string, unknown>) => Promise<Record<string, unknown>>;
       patchTodo: (body: Record<string, unknown>) => Promise<Record<string, unknown>>;
+      visitAgenda?: (body: Record<string, unknown>) => Promise<Record<string, unknown>>;
+      batchTodos?: (body: Record<string, unknown>) => Promise<Record<string, unknown>>;
+      linkTodos?: (body: Record<string, unknown>) => Promise<Record<string, unknown>>;
       todoDepRef: (body: Record<string, unknown>) => Promise<{ ref?: string }>;
       clockIn: (body: Record<string, unknown>) => Promise<Record<string, unknown>>;
       clockOut: (body: Record<string, unknown>) => Promise<Record<string, unknown>>;
+      retryClocks?: (body: Record<string, unknown>) => Promise<Record<string, unknown>>;
+      keepClockSource?: (body: Record<string, unknown>) => Promise<Record<string, unknown>>;
+      attention?: () => Promise<AttentionSnapshot>;
+      attentionAction?: AttentionAction;
     };
   };
   jumpToTodo: (todo: TodoItem) => void | Promise<void>;
@@ -27,14 +39,15 @@ export type AgendaViewDeps = {
   onOpenChange?: (open: boolean) => void;
 };
 
-type ViewKind = "week" | "list" | "month" | "log" | "gantt" | "projects" | "clocktable" | "lints";
+type ViewKind = "week" | "list" | "month" | "log" | "gantt" | "dag" | "projects" | "clocktable" | "lints" | "attention";
+let attentionData:AttentionSnapshot|null=null;
 
 const VIEW_ALIASES: Record<string, ViewKind> = { agenda: "week", calendar: "month" };
 
 function normalizeView(raw: string | null | undefined): ViewKind {
   const v = String(raw || "").trim().toLowerCase();
   if (VIEW_ALIASES[v]) return VIEW_ALIASES[v];
-  const known: ViewKind[] = ["week", "list", "month", "log", "gantt", "projects", "clocktable", "lints"];
+  const known: ViewKind[] = ["week", "list", "month", "log", "gantt", "dag", "projects", "clocktable", "lints", "attention"];
   return (known as string[]).includes(v) ? (v as ViewKind) : "week";
 }
 
@@ -50,12 +63,15 @@ let data: AgendaMsg | null = null;
 let view: ViewKind = "week";
 let anchorMs = midnight(Date.now());
 let query = "";
+let showCompleted = false;
 let cursorId = "";
 let selection = new Set<string>();
 let loading = false;
+let captureController:AbortController|null=null;
 let helpOpen = false;
 let projectPickerOpen = false;
 let projectFilter = new Set<string>();
+let agendaScopes = ["knowledge"];
 let keydownInstalled = false;
 let documentClickInstalled = false;
 
@@ -67,8 +83,9 @@ let fetchGeneration = 0;
 // Set immediately before a local edit's own fetchAgenda() call. The SSE
 // `agenda-changed`/`notes-index-changed` handler (refreshAgendaView) skips a
 // refresh triggered inside this window — that broadcast is an echo of the
-// edit we already issued our own refetch for, so acting on it too just
-// duplicates the request.
+// edit we already issued our own refetch for. This suppression is limited
+// to legacy payloads: native scope events may also represent a project switch
+// or another writer and must not be dropped based only on elapsed time.
 let lastLocalMutationMs = 0;
 const LOCAL_MUTATION_SUPPRESS_MS = 800;
 
@@ -101,7 +118,8 @@ const SHORTCUT_GROUPS: Array<[string, Array<[string, string]>]> = [
     ["k / ↑", "Previous item"],
     ["Enter / Tab", "Jump to item"],
     ["f / b", "Next / previous range"],
-    [".", "Today"],
+    [".", "Show / hide completed"],
+    ["0", "Today"],
     ["v", "Next view"],
   ]],
   ["Edit", [
@@ -216,6 +234,7 @@ function ensureProjectChildIndex(): Map<string, string> {
 }
 
 function projectForTodo(todo: TodoItem): string {
+  if (todo.projectKey) return todo.projectKey;
   const canon = (todo.canon as Record<string, string> | undefined) || {};
   const explicit = normalizeProjectKey(canon.project || canon.proj || (todo as Record<string, unknown>).project || (todo as Record<string, unknown>).proj);
   if (explicit) return explicit;
@@ -264,8 +283,17 @@ function matchesQuery(todo: TodoItem): boolean {
   return q.split(/\s+/).every((term) => todoHaystack(todo).includes(term));
 }
 
-function matchesTodo(todo: TodoItem): boolean {
+function todoIsCompleted(todo: TodoItem): boolean {
+  const status = String(todo.status || todo.effectiveStatus || "").toLowerCase();
+  return status === "done" || status === "cancelled";
+}
+
+function matchesTodoBase(todo: TodoItem): boolean {
   return matchesProject(todo) && matchesQuery(todo);
+}
+
+function matchesTodo(todo: TodoItem): boolean {
+  return matchesTodoBase(todo) && (showCompleted || !todoIsCompleted(todo));
 }
 
 // Rebuilt only when the `data` object identity changes (i.e. once per
@@ -367,13 +395,15 @@ function visibleLints(): TodoLint[] {
   return (data?.lints || []).filter(matchesLint);
 }
 
-const WIDE_VIEWS = new Set<ViewKind>(["gantt", "projects", "clocktable", "lints"]);
+const WIDE_VIEWS = new Set<ViewKind>(["gantt", "dag", "projects", "clocktable", "lints"]);
 
 function syncPageUrl(): void {
   if (!deps?.pageMode || typeof history === "undefined") return;
   const params = new URLSearchParams();
   params.set("view", view);
   if (query) params.set("q", query);
+  if (showCompleted) params.set("done", "1");
+  for (const scope of agendaScopes) params.append("scope", scope);
   for (const key of projectFilter) params.append("project", key);
   history.replaceState(null, "", `/agenda?${params.toString()}`);
 }
@@ -416,16 +446,23 @@ async function fetchAgenda(): Promise<void> {
   loading = true;
   render();
   try {
+    if (view === "attention") {
+      if (!deps.api.notes.attention) throw new Error("Global attention unavailable");
+      const snapshot = await deps.api.notes.attention();
+      if (gen === fetchGeneration) attentionData = snapshot;
+      return;
+    }
     const wide = WIDE_VIEWS.has(view);
     const from = wide ? fmtDate(midnight(Date.now())) : view === "month" ? fmtDate(calendarGridStart(anchorMs)) : fmtDate(anchorMs);
     const days = wide ? 60 : view === "month" ? 42 : view === "week" ? 7 : view === "list" ? 30 : 60;
-    const next = await deps.api.notes.agenda({ from, days, includePlanning: true, includeGantt: true });
+    const next = await deps.api.notes.agenda({ scopes: agendaScopes, from, days, includePlanning: true, includeGantt: true });
     if (gen !== fetchGeneration) return;
     data = next;
     if (overlay) overlay.dataset.agendaSource = String(next.evaluationSource || "");
   } catch (error) {
     if (gen !== fetchGeneration) return;
     deps.setStatus(error instanceof Error ? error.message : "Agenda failed");
+    attentionData=null;
     data = null;
     if (overlay) delete overlay.dataset.agendaSource;
   } finally {
@@ -440,12 +477,23 @@ async function fetchAgenda(): Promise<void> {
 
 function todoPatchBase(todo: TodoItem): Record<string, unknown> {
   return {
+    ...(todo.uid ? { uid: todo.uid, scopeId: todo.scopeId, revision: todo.sourceRef?.revision } : {}),
     file: todoField(todo, "file"),
     id: todoField(todo, "id"),
     index: todo.index,
     source: todoField(todo, "source"),
     text: todoText(todo),
   };
+}
+
+async function visitTodo(todo: TodoItem): Promise<void> {
+  if (!deps) return;
+  try {
+    if (todo.uid && deps.api.notes.visitAgenda) await deps.api.notes.visitAgenda(todoPatchBase(todo));
+    else await deps.jumpToTodo(todo);
+  } catch (error) {
+    deps.setStatus(error instanceof Error ? error.message : "Source visit failed");
+  }
 }
 
 async function applyPatch(todo: TodoItem, patch: Record<string, unknown>): Promise<void> {
@@ -494,21 +542,39 @@ async function createTodoFromPrompt(): Promise<void> {
   if (!deps) return;
   const current = cursorId ? todoById(cursorId) : undefined;
   const singleProject = projectFilter.size === 1 ? [...projectFilter][0] : "";
-  const project = singleProject || (current ? projectForTodo(current) : "");
-  const raw = window.prompt("New todo: task | project=paper | ddl=today | sche=+1d | prio=A | file=inbox.md", "");
-  if (raw === null) return;
-  const body = parseQuickTodo(raw);
-  if (!String(body.text || "").trim()) return;
-  if (!body.file && current?.file) body.file = current.file;
-  if (!body.project && project) body.project = project;
+  const projectKey = singleProject || (current ? projectForTodo(current) : "");
+  const projectModel = data?.projectModel?.find((item) => item.key === projectKey);
+  const project = projectModel?.sourceKey ?? projectKey;
+  if(captureController)return;
+  const owner=deps, controller=new AbortController();captureController=controller;
   try {
-    const result = await deps.api.notes.createTodo(body);
-    const todo = result.todo as TodoItem | undefined;
+    let body:Record<string,unknown>|null;
+    let result:Awaited<ReturnType<typeof owner.api.notes.createTodo>>;
+    if(owner.api.notes.captureTemplates){
+      const catalog=await owner.api.notes.captureTemplates();
+      if(controller.signal.aborted||deps!==owner)return;
+      body=await promptAgendaCapture(catalog,data?.scopes||[],projectModel?.scopeId||current?.scopeId||"knowledge",controller.signal,
+        async submission=>{result=await owner.api.notes.createTodo(submission);});
+      if(!body||controller.signal.aborted||deps!==owner)return;
+    }else{
+      const raw=window.prompt("New todo: task | project=paper | ddl=today | sche=+1d | prio=A | file=inbox.md", "");
+      if(raw===null)return;
+      body=parseQuickTodo(raw);
+      if(!String(body.text||"").trim())return;
+      if(data?.scopes)body.scopeId=projectModel?.scopeId||current?.scopeId||"knowledge";
+      if(!body.file&&current?.file&&current.sourceKind!=="work-node"&&(!projectModel?.scopeId||projectModel.scopeId===current.scopeId))body.file=current.file;
+      if(!body.project&&project)body.project=project;
+      result=await owner.api.notes.createTodo(body);
+    }
+    if(controller.signal.aborted||deps!==owner)return;
+    const todo = result!.todo as TodoItem | undefined;
     if (todo?.id) cursorId = String(todo.id);
     lastLocalMutationMs = Date.now();
     await fetchAgenda();
   } catch (error) {
-    deps.setStatus(error instanceof Error ? error.message : "Todo create failed");
+    if(!controller.signal.aborted&&deps===owner)owner.setStatus(error instanceof Error ? error.message : "Todo create failed");
+  } finally {
+    controller.abort();if(captureController===controller)captureController=null;
   }
 }
 
@@ -526,7 +592,7 @@ function applyProjectFilter(keys: Iterable<string>, options: { keepPicker?: bool
   render();
   if (options.announce) {
     const label = projectFilter.size === 0
-      ? "Any project"
+      ? "Current scopes"
       : [...projectFilter].map(projectTitleForKey).join(", ");
     deps?.setStatus(`Project filter: ${label}`);
   }
@@ -611,7 +677,9 @@ async function addDependency(todo: TodoItem): Promise<void> {
   // count — matching what the prompt actually lists, so a number beyond the
   // displayed 200 is rejected instead of silently resolving to an unlisted
   // todo.
-  const shown = (data.todos || []).filter((t) => t.id !== todo.id).slice(0, 200);
+  const shown = (data.todos || []).filter((t) => t.id !== todo.id
+    && (!todo.uid || (t.scopeId === todo.scopeId && t.sourceKind === todo.sourceKind
+      && (todo.sourceKind !== "work-node" || t.file === todo.file)))).slice(0, 200);
   const label = shown
     .map((t, i) => `${i + 1}. [${todoNote(t)}] ${todoText(t)}`)
     .join("\n");
@@ -624,6 +692,12 @@ async function addDependency(todo: TodoItem): Promise<void> {
   }
   const target = shown[n - 1];
   try {
+    if (todo.uid && deps.api.notes.linkTodos) {
+      await deps.api.notes.linkTodos({ source: todoPatchBase(todo), target: todoPatchBase(target) });
+      lastLocalMutationMs = Date.now();
+      await fetchAgenda();
+      return;
+    }
     const { ref } = await deps.api.notes.todoDepRef({ targetId: target.id, sourceId: todo.id });
     if (!ref) throw new Error("Could not build a dependency reference");
     await applyPatch(todo, { afterAdd: ref });
@@ -646,7 +720,7 @@ async function clockInTodo(todo: TodoItem): Promise<void> {
 async function clockOutRunning(): Promise<void> {
   if (!deps) return;
   try {
-    await deps.api.notes.clockOut({});
+    await deps.api.notes.clockOut(data?.clocktable?.running?.uid ? { ...data.clocktable.running } : {});
     lastLocalMutationMs = Date.now();
     await fetchAgenda();
   } catch (error) {
@@ -670,6 +744,19 @@ async function bulkStatus(): Promise<void> {
   const status = value.trim().toLowerCase();
   const ids = [...selection];
   selection.clear();
+  const selected = ids.map(todoById).filter((todo): todo is TodoItem => !!todo);
+  if (selected.every((todo) => todo.uid) && deps.api.notes.batchTodos) {
+    try {
+      const result = await deps.api.notes.batchTodos({ items: selected.map(todoPatchBase),
+        patch: status === "done" ? { op: "complete" } : { status } });
+      lastLocalMutationMs = Date.now();
+      await fetchAgenda();
+      deps.setStatus(`Bulk update: ${result.succeeded}/${selected.length} succeeded`);
+    } catch (error) {
+      deps.setStatus(error instanceof Error ? error.message : "Bulk update failed");
+    }
+    return;
+  }
   const touchedFiles = new Set<string>();
   let failed = 0;
   for (const id of ids) {
@@ -764,7 +851,12 @@ function syncHelpPanel(): void {
 }
 
 function projectFilterLabel(): string {
-  if (projectFilter.size === 0) return "Project: Any";
+  if (projectFilter.size === 0) {
+    const current = data?.scopes?.find((scope) => scope.kind === "project");
+    const root = String(current?.root || "").replace(/[\\/]+$/, "");
+    const title = root.split(/[\\/]/).pop();
+    return title ? `Scope: Roam + ${title}` : "Scope: Roam";
+  }
   if (projectFilter.size === 1) return `Project: ${projectTitleForKey([...projectFilter][0])}`;
   return `Projects: ${projectFilter.size}`;
 }
@@ -794,7 +886,7 @@ function renderProjectFilter(): HTMLElement {
   const any = document.createElement("button");
   any.type = "button";
   any.className = projectFilter.size === 0 ? "is-selected" : "";
-  any.textContent = "Any";
+  any.textContent = "Current scopes";
   any.addEventListener("click", () => applyProjectFilter([], { keepPicker: true }));
   menu.appendChild(any);
 
@@ -913,11 +1005,34 @@ function buildRow(todo: TodoItem, opts: { badge?: string } = {}): HTMLElement {
   }
 
   row.append(mark, status, prio, clock, badge, body);
+  if(todo.uid&&deps?.api.notes.attentionAction){
+    const promote=document.createElement('button');promote.type='button';promote.textContent='Promote';
+    promote.addEventListener('click',(event)=>{event.stopPropagation();void promoteAttention(todo);});row.append(promote);
+  }
   row.addEventListener("click", () => {
     cursorId = String(todo.id || "");
-    if (deps) void deps.jumpToTodo(todo);
+    if (deps) void visitTodo(todo);
   });
   return row;
+}
+
+async function promoteAttention(todo:TodoItem):Promise<void>{
+  if(!deps?.api.notes.attentionAction)return;
+  const kind=window.prompt('Global attention: reminder or event','reminder');
+  if(kind===null)return;
+  if(!['reminder','event'].includes(kind)){deps.setStatus('Choose reminder or event');return;}
+  try {
+    const result=await deps.api.notes.attentionAction('collections',{kind}) as {collections:Array<{id:string;title:string;sourceTitle:string;writable:boolean}>;timeZone:string};
+    const choices=result.collections.filter(item=>item.writable);
+    if(!choices.length)throw new Error('No writable Apple destination; enable access in Emacs first');
+    const raw=window.prompt(choices.map((item,index)=>`${index+1}. ${item.title} (${item.sourceTitle})`).join('\n'),'1');
+    if(raw===null)return;
+    const selected=Number(raw);
+    if(!Number.isInteger(selected)||selected<1||selected>choices.length)throw new Error('Choose a listed destination');
+    await deps.api.notes.attentionAction('promote',{...todoPatchBase(todo),kind,calendarId:choices[selected-1].id,
+      timeZone:result.timeZone,dateField:todo.canon?.ddl?'ddl':'sche'});
+    view='attention';syncPageUrl();await fetchAgenda();
+  }catch(error){deps.setStatus(error instanceof Error?error.message:String(error));}
 }
 
 function lintDetail(lint: TodoLint): string {
@@ -930,11 +1045,13 @@ function lintDetail(lint: TodoLint): string {
 
 function renderLints(): HTMLElement | null {
   const lints = visibleLints();
-  if (lints.length === 0) return null;
+  const errors = data?.errors || [];
+  if (lints.length === 0 && errors.length === 0) return null;
   const wrap = document.createElement("div");
   wrap.className = "aaronnote-agenda-full-lints";
   wrap.textContent = `${lints.length} issue${lints.length === 1 ? "" : "s"}: `;
   wrap.textContent += lints.slice(0, 6).map(lintDetail).join(", ");
+  if (errors.length) wrap.textContent += ` ${errors.length} unreadable source(s): ${errors.map((error) => `${error.file}: ${error.message}`).join("; ")}`;
   return wrap;
 }
 
@@ -972,9 +1089,7 @@ function renderWeek(): HTMLElement {
 function renderList(): HTMLElement {
   const wrap = document.createElement("div");
   wrap.className = "aaronnote-agenda-full-list";
-  const todos = (data?.todos || [])
-    .filter((t) => t.status !== "done" && t.status !== "cancelled")
-    .filter(matchesTodo);
+  const todos = (data?.todos || []).filter(matchesTodo);
   const byNote = new Map<string, TodoItem[]>();
   for (const todo of todos) {
     const key = todoNote(todo);
@@ -1103,7 +1218,7 @@ function renderCalendarEvent(entry: AgendaEntry, dayDate: string): HTMLElement |
   pill.addEventListener("click", (event) => {
     event.stopPropagation();
     cursorId = String(todo.id || "");
-    if (deps) void deps.jumpToTodo(todo);
+    if (deps) void visitTodo(todo);
   });
   if (field) {
     pill.addEventListener("dragstart", (event) => {
@@ -1236,7 +1351,7 @@ function renderLog(): HTMLElement {
     const closed = (day.entries || []).filter((e) => {
       if (e.kind !== "log") return false;
       const todo = e.todoId ? todoById(e.todoId) : undefined;
-      return todo ? matchesTodo(todo) : projectFilter.size === 0 && !query.trim();
+      return todo ? matchesTodoBase(todo) : projectFilter.size === 0 && !query.trim();
     });
     if (closed.length === 0) continue;
     const head = document.createElement("div");
@@ -1281,7 +1396,7 @@ function ganttRange(tasks: GanttTask[], milestones: GanttMilestone[] = []): { mi
 
 function ganttPatchBase(task: GanttTask, patch: Record<string, unknown>): Record<string, unknown> {
   const source = (task.source || {}) as Record<string, unknown>;
-  return { file: source.file, index: source.index, source: source.source, text: source.text, ...patch };
+  return { ...source, ...patch };
 }
 
 async function patchGanttProgress(task: GanttTask, progress: number): Promise<void> {
@@ -1466,7 +1581,7 @@ function renderGanttBar(task: GanttTask, range: { min: number; days: number; pxP
   const sub = document.createElement("small");
   const dates = `${task.start || ""}${task.end ? ` -> ${task.end}` : ""}`;
   const depCount = Array.isArray(task.dependencies) ? task.dependencies.length : 0;
-  sub.textContent = [task.project || "No project", dates, depCount ? `${depCount} dep` : ""].filter(Boolean).join(" · ");
+  sub.textContent = [projectTitleForKey(task.project || "") || "No project", dates, depCount ? `${depCount} dep` : ""].filter(Boolean).join(" · ");
   name.append(actions, label, document.createElement("br"), sub);
 
   const timeline = document.createElement("div");
@@ -1502,7 +1617,7 @@ function renderGanttBar(task: GanttTask, range: { min: number; days: number; pxP
   bar.addEventListener("dblclick", (event) => {
     event.stopPropagation();
     const source = (task.source || {}) as Record<string, unknown>;
-    if (deps) void deps.jumpToTodo({ file: source.file, line: source.line } as unknown as TodoItem);
+    if (deps) void visitTodo({ ...source } as TodoItem);
   });
   timeline.appendChild(bar);
 
@@ -1661,7 +1776,7 @@ function renderGanttMilestoneRow(milestone: GanttMilestone, range: { min: number
     marker.style.left = `${Math.round((parseYmd(milestone.date) - range.min) / DAY_MS) * range.pxPerDay}px`;
     marker.addEventListener("click", () => {
       const source = (milestone.source || {}) as Record<string, unknown>;
-      if (deps) void deps.jumpToTodo({ file: source.file, line: source.line } as unknown as TodoItem);
+      if (deps) void visitTodo({ ...source } as TodoItem);
     });
     timeline.appendChild(marker);
   }
@@ -1763,6 +1878,249 @@ function renderGantt(): HTMLElement {
   return wrap;
 }
 
+// --- Project DAG ---
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+const DAG_NODE_WIDTH = 220;
+const DAG_NODE_HEIGHT = 76;
+const DAG_COLUMN_GAP = 78;
+const DAG_ROW_GAP = 26;
+
+function dagNodeTodo(node: AgendaDagNode): TodoItem | undefined {
+  return node.todoId ? todoById(node.todoId) : undefined;
+}
+
+function matchesDagNode(node: AgendaDagNode): boolean {
+  const todo = dagNodeTodo(node);
+  if (todo) return matchesTodo(todo);
+  const projectMatch = projectFilter.size === 0 || projectMatchesFilter(node.project);
+  if (!projectMatch) return false;
+  return matchesPlainText([node.status, node.priority, node.scopeLabel, node.nodeKind,
+    node.title, node.text, node.file, ...(node.tags || [])]);
+}
+
+function matchesDagProject(node: AgendaDagNode): boolean {
+  const todo = dagNodeTodo(node);
+  return todo ? matchesProject(todo) : projectMatchesFilter(node.project);
+}
+
+function dagLayout(nodes: AgendaDagNode[], edges: AgendaDagEdge[]): {
+  positions: Map<string, { x: number; y: number }>;
+  width: number;
+  height: number;
+} {
+  const ids = new Set(nodes.map((node) => node.id));
+  const outgoing = new Map<string, string[]>();
+  const indegree = new Map(nodes.map((node) => [node.id, 0]));
+  for (const edge of edges) {
+    if (!ids.has(edge.from) || !ids.has(edge.to) || edge.from === edge.to) continue;
+    const list = outgoing.get(edge.from) || [];
+    list.push(edge.to);
+    outgoing.set(edge.from, list);
+    indegree.set(edge.to, (indegree.get(edge.to) || 0) + 1);
+  }
+  const depth = new Map(nodes.map((node) => [node.id, 0]));
+  const queue = nodes.filter((node) => (indegree.get(node.id) || 0) === 0)
+    .sort((a, b) => String(a.title || a.id).localeCompare(String(b.title || b.id)))
+    .map((node) => node.id);
+  const seen = new Set<string>();
+  while (queue.length) {
+    const id = queue.shift()!;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    for (const target of outgoing.get(id) || []) {
+      depth.set(target, Math.max(depth.get(target) || 0, (depth.get(id) || 0) + 1));
+      indegree.set(target, (indegree.get(target) || 0) - 1);
+      if ((indegree.get(target) || 0) === 0) queue.push(target);
+    }
+  }
+  // Cycles are invalid planning data, but retaining their nodes in a final
+  // column makes the source repairable from the same complete project view.
+  const resolvedMax = Math.max(0, ...depth.values());
+  for (const node of nodes) if (!seen.has(node.id)) depth.set(node.id, resolvedMax + 1);
+  const columns = new Map<number, AgendaDagNode[]>();
+  for (const node of nodes) {
+    const column = depth.get(node.id) || 0;
+    const items = columns.get(column) || [];
+    items.push(node);
+    columns.set(column, items);
+  }
+  for (const items of columns.values()) items.sort((a, b) =>
+    String(a.scopeLabel || "").localeCompare(String(b.scopeLabel || ""))
+    || String(a.title || a.id).localeCompare(String(b.title || b.id)));
+  const positions = new Map<string, { x: number; y: number }>();
+  let maxRows = 1;
+  for (const [column, items] of columns) {
+    maxRows = Math.max(maxRows, items.length);
+    items.forEach((node, row) => positions.set(node.id, {
+      x: 28 + column * (DAG_NODE_WIDTH + DAG_COLUMN_GAP),
+      y: 28 + row * (DAG_NODE_HEIGHT + DAG_ROW_GAP),
+    }));
+  }
+  return {
+    positions,
+    width: Math.max(560, 56 + columns.size * DAG_NODE_WIDTH + Math.max(0, columns.size - 1) * DAG_COLUMN_GAP),
+    height: Math.max(240, 56 + maxRows * DAG_NODE_HEIGHT + Math.max(0, maxRows - 1) * DAG_ROW_GAP),
+  };
+}
+
+function dagSvgElement<K extends keyof SVGElementTagNameMap>(name: K): SVGElementTagNameMap[K] {
+  return document.createElementNS(SVG_NS, name);
+}
+
+function dagShort(value: unknown, length = 31): string {
+  const text = String(value || "").trim();
+  return text.length > length ? `${text.slice(0, length - 1)}…` : text;
+}
+
+function renderDag(): HTMLElement {
+  const wrap = document.createElement("div");
+  wrap.className = "aaronnote-agenda-full-dag";
+  const projectScope = data?.scopes?.find((scope) => scope.kind === "project");
+  const allNodes = data?.dag?.nodes || [];
+  // Project selection is a hard graph boundary, not a visual highlight: do
+  // not pay layout/DOM costs for unselected graphs. Without an explicit
+  // selection, scoped payloads default to the one entered project; legacy
+  // payloads retain their original complete graph.
+  const nodes = projectFilter.size > 0
+    ? allNodes.filter(matchesDagProject)
+    : data?.scopes
+      ? projectScope ? allNodes.filter((node) => node.scopeId === projectScope.id) : []
+      : allNodes;
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const edges = (data?.dag?.edges || []).filter((edge) => nodeIds.has(edge.from) && nodeIds.has(edge.to));
+
+  const toolbar = document.createElement("div");
+  toolbar.className = "aaronnote-agenda-dag-toolbar";
+  const summary = document.createElement("strong");
+  summary.textContent = `${nodes.length} nodes · ${edges.length} edges`;
+  const hint = document.createElement("span");
+  hint.textContent = `${projectFilter.size > 0 ? "Selected" : "Current"} project graph · search highlights matches`;
+  const legend = document.createElement("span");
+  legend.className = "aaronnote-agenda-dag-legend";
+  legend.textContent = "━━ depends   ┄┄ lineage";
+  toolbar.append(summary, hint, legend);
+  wrap.appendChild(toolbar);
+
+  if (!nodes.length) {
+    const empty = document.createElement("div");
+    empty.className = "aaronnote-empty";
+    empty.textContent = projectFilter.size > 0
+      ? "No DAG nodes in the selected project"
+      : projectScope ? "No DAG nodes in the current project" : "Enter a project to view its DAG";
+    wrap.appendChild(empty);
+    return wrap;
+  }
+
+  const viewport = document.createElement("div");
+  viewport.className = "aaronnote-agenda-dag-viewport";
+  const svg = dagSvgElement("svg");
+  const layout = dagLayout(nodes, edges);
+  svg.setAttribute("viewBox", `0 0 ${layout.width} ${layout.height}`);
+  svg.setAttribute("width", String(layout.width));
+  svg.setAttribute("height", String(layout.height));
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "Agenda dependency graph for the current project");
+
+  const defs = dagSvgElement("defs");
+  for (const [id, className] of [["agenda-dag-arrow", "depends"], ["agenda-dag-lineage-arrow", "lineage"]] as const) {
+    const marker = dagSvgElement("marker");
+    marker.id = id;
+    marker.setAttribute("markerWidth", "8");
+    marker.setAttribute("markerHeight", "8");
+    marker.setAttribute("refX", "7");
+    marker.setAttribute("refY", "4");
+    marker.setAttribute("orient", "auto");
+    const path = dagSvgElement("path");
+    path.setAttribute("d", "M 0 0 L 8 4 L 0 8 z");
+    path.setAttribute("class", `aaronnote-agenda-dag-arrow ${className}`);
+    marker.appendChild(path);
+    defs.appendChild(marker);
+  }
+  svg.appendChild(defs);
+
+  const edgeLayer = dagSvgElement("g");
+  edgeLayer.setAttribute("class", "aaronnote-agenda-dag-edges");
+  for (const edge of edges) {
+    const from = layout.positions.get(edge.from);
+    const to = layout.positions.get(edge.to);
+    if (!from || !to) continue;
+    const x1 = from.x + DAG_NODE_WIDTH;
+    const y1 = from.y + DAG_NODE_HEIGHT / 2;
+    const x2 = to.x;
+    const y2 = to.y + DAG_NODE_HEIGHT / 2;
+    const bend = Math.max(24, Math.abs(x2 - x1) * 0.45);
+    const path = dagSvgElement("path");
+    path.setAttribute("d", `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`);
+    path.setAttribute("class", `aaronnote-agenda-dag-edge is-${edge.type}${edge.blocked ? " is-blocked" : ""}`);
+    path.setAttribute("marker-end", `url(#${edge.type === "lineage" ? "agenda-dag-lineage-arrow" : "agenda-dag-arrow"})`);
+    edgeLayer.appendChild(path);
+  }
+  svg.appendChild(edgeLayer);
+
+  const nodeLayer = dagSvgElement("g");
+  nodeLayer.setAttribute("class", "aaronnote-agenda-dag-nodes");
+  for (const node of nodes) {
+    const pos = layout.positions.get(node.id);
+    if (!pos) continue;
+    const todo = dagNodeTodo(node);
+    const status = String(node.status || "todo").toLowerCase().replace(/[^a-z0-9_-]/g, "-");
+    const group = dagSvgElement("g");
+    group.setAttribute("transform", `translate(${pos.x} ${pos.y})`);
+    group.setAttribute("class", `aaronnote-agenda-dag-node is-${status}${todo ? " has-agenda" : " no-agenda"}${matchesDagNode(node) ? " is-match" : " is-muted"}`);
+    group.dataset.dagNodeId = node.id;
+    if (node.todoId) group.dataset.todoId = node.todoId;
+    group.setAttribute("tabindex", "0");
+    group.setAttribute("role", "button");
+    if (node.todoId === cursorId) group.classList.add("is-cursor");
+
+    const rect = dagSvgElement("rect");
+    rect.setAttribute("width", String(DAG_NODE_WIDTH));
+    rect.setAttribute("height", String(DAG_NODE_HEIGHT));
+    rect.setAttribute("rx", "8");
+    const title = dagSvgElement("text");
+    title.setAttribute("x", "12");
+    title.setAttribute("y", "23");
+    title.setAttribute("class", "aaronnote-agenda-dag-title");
+    title.textContent = dagShort(node.title || node.text || node.id);
+    const meta = dagSvgElement("text");
+    meta.setAttribute("x", "12");
+    meta.setAttribute("y", "45");
+    meta.setAttribute("class", "aaronnote-agenda-dag-meta");
+    meta.textContent = dagShort([String(node.status || "todo").toUpperCase(), node.priority ? `#${node.priority}` : "",
+      node.nodeKind || (node.sourceKind === "work-node" ? "work" : "markdown")].filter(Boolean).join(" · "), 36);
+    const source = dagSvgElement("text");
+    source.setAttribute("x", "12");
+    source.setAttribute("y", "64");
+    source.setAttribute("class", "aaronnote-agenda-dag-source");
+    source.textContent = dagShort([node.scopeLabel, node.scheduled || node.deadline].filter(Boolean).join(" · "), 37);
+    const tooltip = dagSvgElement("title");
+    tooltip.textContent = [node.title || node.text, node.file, node.scheduled && `Scheduled ${node.scheduled}`,
+      node.deadline && `Deadline ${node.deadline}`, todo ? "Open/edit Agenda task" : "Open WorkNode source"].filter(Boolean).join("\n");
+    group.append(rect, title, meta, source, tooltip);
+    const activate = () => {
+      if (todo) {
+        cursorId = String(todo.id || "");
+        setCursorHighlight(cursorId);
+        void visitTodo(todo);
+      } else if (deps) {
+        void deps.jumpToTodo(node as TodoItem);
+      }
+    };
+    group.addEventListener("click", activate);
+    group.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      activate();
+    });
+    nodeLayer.appendChild(group);
+  }
+  svg.appendChild(nodeLayer);
+  viewport.appendChild(svg);
+  wrap.appendChild(viewport);
+  return wrap;
+}
+
 // --- Projects ---
 
 function matchesProjectRollup(project: ProjectRollup): boolean {
@@ -1826,6 +2184,19 @@ function matchesClockTask(task: { todoId?: string; text?: string; file?: string 
   return matchesPlainText([task.text, task.file]);
 }
 
+function appendKeepClockSource(row: HTMLElement, receipt: ClockReference): void {
+  if (receipt.inactive || !deps?.api.notes.keepClockSource) return;
+  const keep = document.createElement("button");
+  keep.type = "button";
+  keep.textContent = "Keep source state";
+  keep.title = "Discard this pending request and use the saved source file's clock state";
+  keep.addEventListener("click", () => {
+    void deps?.api.notes.keepClockSource?.({ uid: receipt.uid, revision: receipt.revision })
+      .then(() => fetchAgenda()).catch((error) => deps?.setStatus(error instanceof Error ? error.message : "Clock resolution failed"));
+  });
+  row.appendChild(keep);
+}
+
 function renderClocktable(): HTMLElement {
   const wrap = document.createElement("div");
   wrap.className = "aaronnote-agenda-full-list";
@@ -1844,13 +2215,33 @@ function renderClocktable(): HTMLElement {
       const running = document.createElement("div");
       running.className = "aaronnote-agenda-full-clocktable-running";
       running.textContent = `● Running: ${model.running.text || ""} (${model.running.minutesSoFar ?? 0}m)`;
+      if (model.running.inactive) running.appendChild(document.createTextNode(" · Project inactive"));
+      if (model.running.message) running.appendChild(document.createTextNode(` · ${model.running.message}`));
       const stop = document.createElement("button");
       stop.type = "button";
       stop.textContent = "Clock out";
       stop.addEventListener("click", () => void clockOutRunning());
       running.appendChild(stop);
+      if (model.running.pending) appendKeepClockSource(running, model.running);
       wrap.appendChild(running);
     }
+  }
+  for (const receipt of model.pendingWrites || []) {
+    const row = document.createElement("div");
+    row.className = "aaronnote-agenda-full-clocktable-running";
+    row.textContent = `Stopped: ${receipt.text || ""} · ${receipt.file || ""} · ${receipt.from || ""} → ${receipt.to || ""} · ${receipt.inactive ? "Waiting for project entry" : receipt.message || "Awaiting source write"}`;
+    if (!receipt.inactive && deps?.api.notes.retryClocks) {
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.textContent = "Retry source write";
+      retry.addEventListener("click", () => {
+        void deps?.api.notes.retryClocks?.({ uid: receipt.uid, revision: receipt.revision })
+          .then(() => fetchAgenda()).catch((error) => deps?.setStatus(error instanceof Error ? error.message : "Clock retry failed"));
+      });
+      row.appendChild(retry);
+    }
+    appendKeepClockSource(row, receipt);
+    wrap.appendChild(row);
   }
   const tasksHead = document.createElement("div");
   tasksHead.className = "aaronnote-agenda-full-group-head";
@@ -2006,9 +2397,11 @@ function renderHeader(): void {
     ["month", "Month"],
     ["log", "Log"],
     ["gantt", "Gantt"],
+    ["dag", "DAG"],
     ["projects", "Projects"],
     ["clocktable", "Clock"],
     ["lints", "Lints"],
+    ["attention", "Global attention"],
   ];
   const tabs = document.createElement("div");
   tabs.className = "aaronnote-agenda-full-tabs";
@@ -2025,6 +2418,15 @@ function renderHeader(): void {
     tabs.appendChild(button);
   }
   headerEl.appendChild(tabs);
+  if (view === "attention") {
+    const refresh = document.createElement("button");
+    refresh.type = "button";
+    refresh.textContent = "Refresh";
+    refresh.disabled = loading;
+    refresh.addEventListener("click", () => { void fetchAgenda(); });
+    tabs.appendChild(refresh);
+    return;
+  }
 
   if (!WIDE_VIEWS.has(view)) {
     const nav = document.createElement("div");
@@ -2055,6 +2457,21 @@ function renderHeader(): void {
   }
 
   headerEl.appendChild(renderProjectFilter());
+
+  const completed = document.createElement("button");
+  completed.type = "button";
+  completed.className = showCompleted ? "is-active" : "";
+  completed.textContent = "Done";
+  completed.title = `${showCompleted ? "Hide" : "Show"} completed tasks (.)`;
+  completed.setAttribute("aria-pressed", String(showCompleted));
+  completed.addEventListener("click", () => {
+    showCompleted = !showCompleted;
+    cursorId = "";
+    syncPageUrl();
+    render();
+    focusAgenda();
+  });
+  headerEl.appendChild(completed);
 
   const search = document.createElement("input");
   search.type = "search";
@@ -2114,6 +2531,14 @@ function renderHeader(): void {
     headerEl.appendChild(clockBadge);
   }
 
+  if (data?.clocktable?.pendingWrites?.length) {
+    const pending = document.createElement("button");
+    pending.type = "button";
+    pending.textContent = `${data.clocktable.pendingWrites.length} clock stop(s) awaiting source write`;
+    pending.addEventListener("click", () => { view = "clocktable"; syncPageUrl(); render(); });
+    headerEl.appendChild(pending);
+  }
+
   if (!deps?.pageMode) {
     const close = document.createElement("button");
     close.type = "button";
@@ -2134,7 +2559,8 @@ function statsText(): string {
   if (!data) return "";
   const s = visibleStats();
   const filterLabel = projectFilter.size > 0 ? `${projectFilter.size} project${projectFilter.size === 1 ? "" : "s"} · ` : "";
-  return `${filterLabel}${s.open || 0} open · ${s.doing || 0} doing · ${s.blocked || 0} blocked · ${s.overdue || 0} overdue`;
+  const completed = showCompleted ? ` · ${s.done || 0} done · ${s.cancelled || 0} cancelled` : "";
+  return `${filterLabel}${s.open || 0} open · ${s.doing || 0} doing · ${s.blocked || 0} blocked · ${s.overdue || 0} overdue${completed}`;
 }
 
 // Rewrites just the stats text in place — used by the search-input handler,
@@ -2155,6 +2581,10 @@ function renderBody(): void {
     syncHelpPanel();
     return;
   }
+  if(view==='attention'){
+    listEl.appendChild(renderAttention(attentionData,deps?.api.notes.attentionAction,fetchAgenda,(message)=>deps?.setStatus(message)));
+    syncHelpPanel();return;
+  }
   if (!data) {
     const empty = document.createElement("div");
     empty.className = "aaronnote-empty";
@@ -2164,7 +2594,7 @@ function renderBody(): void {
     return;
   }
   rebuildLintsByTodoId();
-  if (view !== "lints") {
+  if (view !== "lints" || data.errors?.length) {
     const lints = renderLints();
     if (lints) listEl.appendChild(lints);
   }
@@ -2173,6 +2603,7 @@ function renderBody(): void {
   else if (view === "month") listEl.appendChild(renderMonth());
   else if (view === "log") listEl.appendChild(renderLog());
   else if (view === "gantt") listEl.appendChild(renderGantt());
+  else if (view === "dag") listEl.appendChild(renderDag());
   else if (view === "projects") listEl.appendChild(renderProjects());
   else if (view === "clocktable") listEl.appendChild(renderClocktable());
   else listEl.appendChild(renderLintsView());
@@ -2217,7 +2648,7 @@ function isNativeActivationTarget(target: EventTarget | null): boolean {
 }
 
 function handleKeydown(event: KeyboardEvent): void {
-  if (!overlay || overlay.hidden) return;
+  if (!overlay || overlay.hidden || captureController) return;
   if (hasCommandModifier(event)) return;
   if (projectPickerOpen && event.key === "Escape") {
     event.preventDefault();
@@ -2243,6 +2674,10 @@ function handleKeydown(event: KeyboardEvent): void {
     return;
   }
   if ((event.key === "Enter" || event.key === " " || event.key === "Spacebar") && isNativeActivationTarget(event.target)) return;
+  if (view === "attention" && !["Escape", "q"].includes(event.key)) {
+    if (event.key === "g") { event.preventDefault(); void fetchAgenda(); }
+    return;
+  }
   const todo = cursorId ? todoById(cursorId) : undefined;
   switch (event.key) {
     case "Escape":
@@ -2263,7 +2698,7 @@ function handleKeydown(event: KeyboardEvent): void {
     case "Enter":
     case "Tab":
       event.preventDefault();
-      if (todo && deps) void deps.jumpToTodo(todo);
+      if (todo && deps) void visitTodo(todo);
       break;
     case "t":
       event.preventDefault();
@@ -2315,12 +2750,20 @@ function handleKeydown(event: KeyboardEvent): void {
       break;
     case ".":
       event.preventDefault();
+      showCompleted = !showCompleted;
+      cursorId = "";
+      syncPageUrl();
+      render();
+      focusAgenda();
+      break;
+    case "0":
+      event.preventDefault();
       anchorMs = midnight(Date.now());
       void fetchAgenda();
       break;
     case "v": {
       event.preventDefault();
-      const order: ViewKind[] = ["week", "list", "month", "log", "gantt", "projects", "clocktable", "lints"];
+      const order: ViewKind[] = ["week", "list", "month", "log", "gantt", "dag", "projects", "clocktable", "lints"];
       view = order[(order.indexOf(view) + 1) % order.length];
       syncPageUrl();
       void fetchAgenda();
@@ -2362,6 +2805,7 @@ function ensureOverlay(): void {
 }
 
 export function closeAgendaView(): void {
+  captureController?.abort();captureController=null;
   const wasOpen = Boolean(overlay && !overlay.hidden);
   helpOpen = false;
   projectPickerOpen = false;
@@ -2380,10 +2824,14 @@ export function isAgendaViewOpen(): boolean {
 // Re-fetches without resetting view/anchor/cursor — for SSE-driven refresh
 // (`agenda-changed`/`notes-index-changed`) so a background edit doesn't
 // yank the user back to today's view.
-export async function refreshAgendaView(): Promise<void> {
+export async function refreshAgendaView(change?: { files?: unknown[] }): Promise<void> {
   if (!overlay || overlay.hidden) return;
-  if (Date.now() - lastLocalMutationMs < LOCAL_MUTATION_SUPPRESS_MS) return;
+  if (Date.now() - lastLocalMutationMs < LOCAL_MUTATION_SUPPRESS_MS
+      && (!data?.scopes || Boolean(change?.files?.length))) return;
   await fetchAgenda();
+}
+export async function refreshAgendaAttention():Promise<void>{
+  if(overlay&&!overlay.hidden&&view==='attention')await fetchAgenda();
 }
 
 export async function openAgendaView(nextDeps: AgendaViewDeps): Promise<void> {
@@ -2403,10 +2851,15 @@ export async function openAgendaView(nextDeps: AgendaViewDeps): Promise<void> {
     const params = new URLSearchParams(location.search);
     view = normalizeView(params.get("view"));
     query = params.get("q") || "";
+    showCompleted = params.get("done") === "1";
+    agendaScopes = [...new Set(params.getAll("scope").filter(Boolean))];
+    if (agendaScopes.length === 0) agendaScopes = ["knowledge"];
     projectFilter = new Set(params.getAll("project").flatMap((value) => value.split(",")).map(normalizeProjectKey).filter(Boolean));
   } else {
     view = "week";
     query = "";
+    showCompleted = false;
+    agendaScopes = ["knowledge"];
     projectFilter = new Set();
   }
   await fetchAgenda();

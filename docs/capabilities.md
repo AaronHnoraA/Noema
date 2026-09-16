@@ -236,6 +236,18 @@ retain their Evil meanings):
 | `C-c g` | re-read files, validate patches and resolve again |
 
 Use `M-x noema-skill-manager` or `M-x noema-mcp-manager` for a filtered view.
+In an `agent-shell` buffer — the platform session or a popup vterm one — the
+same three commands are a read-only lookup instead, because the manager's
+scoped writes reach Noema Runs, not a running external client. `M-x
+noema-capability-lookup` is the explicit name. The lookup resolves the same
+host capability model (the opening buffer's project, otherwise global), offers
+the filtered candidates with state, scope and description, and drafts one line
+naming the selected capability's resolved source at the agent's input. It
+enables, patches, installs and submits nothing; review the draft and send it
+yourself. Skills draft their absolute `SKILL.md` and resource directory, so the
+external agent reads the same file Noema would freeze; MCPs draft the
+configuration file that owns the server.
+
 The unified manager also supports:
 
 | Key | Action |
@@ -286,7 +298,9 @@ In a work block's leading control region, type `@@` to choose `@@agent`,
 explicitly disabled Skills are excluded, while available Skills do not need
 to be enabled for the whole project. `@@ctx(file:` completes project paths,
 `@@ctx(cell:` completes document Cell ids, and `@@ctx(result:` completes work
-output references. Session names and `parent:child` prefixes are supported.
+output references; the bare `@@ctx(` list also offers `lineage:2`,
+`lineage:3` and `none` (turn off automatic context). Session names and
+`parent:child` prefixes are supported.
 Knowledge-note and artifact ids remain explicit references.
 
 The typing path reads memory only. Capabilities are prefetched on idle and
@@ -312,3 +326,18 @@ snapshot because the bytes already exist in the frozen context item.
 The Emacs worker consumes only this frozen `mcp_servers` list and preserves
 stdio, HTTP and SSE fields in the ACP configuration. It does not rediscover
 project Skills or MCPs.
+
+## Test isolation
+
+Global scope is machine state: whatever the developer has enabled in
+`etc/noema/capabilities.json`, including Skills contributed by linked native
+libraries, is resolved for every project run. Suites must not inherit it, or
+an unrelated host Skill joins the prepared RunSpec's context and any exact
+assertion on Skills, context refs or diagnostics fails on that machine only.
+
+`tests/setup/global-capability-scope.ts` runs before every suite and points
+`NOEMA_GLOBAL_CAPABILITIES` and `NOEMA_GLOBAL_SKILLS` at an empty temporary
+directory, so only what a test installs is visible. A test that needs a
+populated global scope stubs those variables itself, and a test that injects a
+fake `userHome` must also pass `environment: {}` to the resolver, because the
+environment is checked before `userHome`.

@@ -18,7 +18,7 @@ import {
 import { MeasuredWidget } from "./measured-widget.ts";
 import { decodeRevisionAttribute, decodeRevisionContext } from "../../../../authoring-syntax.ts";
 import { revisionKindOf } from "../../../../revision-kinds.ts";
-import { findInlineCommandClose, parseCommandArgs, scanInlineCommands, type InlineCommand } from "../../../../command-syntax.ts";
+import { findInlineCommandClose, isEscapedCommandStart, parseCommandArgs, scanInlineCommands, type InlineCommand } from "../../../../command-syntax.ts";
 import { renderMarkdownHTML } from "../../../../render-html.ts";
 import type { Range } from "@codemirror/state";
 import { blockMathRangesOverlapping, mergeOverlappingRanges, positionInsideAnyRange } from "../../../math-ranges.ts";
@@ -231,7 +231,9 @@ function visibleInlineCommands(text: string): PlanningUiCommand[] {
     // across line breaks, and viewport slices may end before the block closes.
     return true;
   });
-  return [...blocks, ...inline].sort((a, b) => a.fullFrom - b.fullFrom || a.fullTo - b.fullTo);
+  return [...blocks, ...inline]
+    .filter((command) => !isEscapedCommandStart(text, command.fullFrom))
+    .sort((a, b) => a.fullFrom - b.fullFrom || a.fullTo - b.fullTo);
 }
 
 function appendTodoPill(meta: HTMLElement, key: string, value: string): void {

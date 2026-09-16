@@ -1,4 +1,4 @@
-/** Research prototype: existing Markdown parser + proposed WorkNode.agenda.
+/** Read-only prototype: existing Markdown parser + native WorkNode.agenda.
  * Reads explicitly supplied files only. Never writes a source document.
  */
 import { readFile } from "node:fs/promises";
@@ -36,8 +36,8 @@ export function workItems(document, file) {
   if (validation.errors.length) throw new Error(JSON.stringify(validation.errors));
   const meta = document.metadata.noema_research;
   const states = { open: "todo", active: "doing", waiting: "blocked", done: "done", dropped: "cancelled" };
-  // agenda is a PROPOSED extension, read only in this isolated prototype.
-  // Its production Go/Elisp serialization and migration are not implemented.
+  // This isolated prototype reads Agenda metadata but never mutates it.
+  // Production source adapters and the native UI live under server/ and lisp/.
   return meta.work_nodes.filter(node => node.agenda && typeof node.agenda === "object")
     .map(node => item("work-node", file, node.id, node.title,
       states[node.state || "open"], node.agenda, {

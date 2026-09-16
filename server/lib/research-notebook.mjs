@@ -13,6 +13,8 @@ import { copyFile, mkdir, open, readFile, rename, rm, stat, writeFile } from "no
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { v7 as uuidv7 } from "uuid";
 import { notebookSource, parseNotebook, serializeNotebook } from "./jupyter-notebook-format.mjs";
+import { extractWorkAgendaDirective, replaceWorkAgendaDirective, validateWorkAgenda } from "../../shared/work-agenda.mjs";
+import { formatDateValue, normalizeDateValue } from "../../shared/planning-values.mjs";
 import { parseResearchDirectives } from "./research-directives.mjs";
 
 export const RESEARCH_SCHEMA = "noema.work-document/2";
@@ -177,6 +179,9 @@ export function researchWorkNodeSummary(notebook, value) {
     outcome: typeof node.outcome === "string" ? node.outcome : null,
     droppedReason: typeof node.dropped_reason === "string" ? node.dropped_reason : null,
     disclosure: typeof node.disclosure === "string" ? node.disclosure : null,
+    agenda: primaryCell ? extractWorkAgendaDirective(notebookSource(primaryCell.source), {
+      kind: node.kind, sourceName: `WorkNode ${id}`,
+    }) : null,
     lineage: relationParents(notebook, id, "lineage"),
     depends: relationParents(notebook, id, "depends"),
     cellIds,
@@ -241,6 +246,26 @@ export function isResearchNotebook(notebook) {
 // ids, so every cell is adopted as a fresh object without that memory.
 function adoptCells(notebook) {
   notebook.cells = (Array.isArray(notebook.cells) ? notebook.cells : []).map((cell) => ({ ...cell }));
+  return notebook;
+}
+
+// Pre-directive builds stored Agenda fields invisibly on WorkNodes.  Migrate
+// those fields into the primary Cell as it is read, then remove the duplicate
+// metadata.  A node without a primary Cell cannot be an Agenda task.
+function migrateLegacyAgendaMetadata(notebook) {
+  for (const node of researchWorkNodes(notebook)) {
+    if (!Object.hasOwn(node, "agenda")) continue;
+    const primary = (notebook.cells || []).find((cell) => researchMeta(cell).work_node_id === node.id
+      && (node.kind === "work" ? cell.cell_type === "code" : cell.cell_type === "markdown"));
+    if (primary && extractWorkAgendaDirective(notebookSource(primary.source), {
+      kind: node.kind, sourceName: `WorkNode ${node.id}`,
+    }) === null) {
+      primary.source = replaceWorkAgendaDirective(notebookSource(primary.source), structuredClone(node.agenda), {
+        kind: node.kind, title: node.title, sourceName: `WorkNode ${node.id}`,
+      });
+    }
+    delete node.agenda;
+  }
   return notebook;
 }
 
@@ -455,9 +480,10 @@ export function parseResearchNotebook(text) {
   if (!isResearchNotebook(notebook)) {
     throw researchError("Not a Noema research notebook", 422, "ERR_RESEARCH_FORMAT");
   }
-  return researchDocumentMeta(notebook).schema === LEGACY_RESEARCH_SCHEMA
+  const parsed = researchDocumentMeta(notebook).schema === LEGACY_RESEARCH_SCHEMA
     ? migrateLegacyResearchNotebook(notebook)
     : adoptCells(notebook);
+  return migrateLegacyAgendaMetadata(parsed);
 }
 
 function cellIndex(notebook, cellId) {
@@ -540,6 +566,8 @@ export function validateResearchNotebook(notebook) {
     else nodeById.set(id, raw);
     if (!GRAPH_KINDS.includes(raw?.kind)) add(errors, "work-node-kind", id || null, `Unsupported WorkNode kind: ${String(raw?.kind)}`);
     if (raw?.state !== undefined && !WORK_STATES.includes(raw.state)) add(errors, "state", id || null, `Unsupported work state: ${raw.state}`);
+    if (Object.hasOwn(raw || {}, "agenda")) add(errors, "work-agenda-storage", id || null,
+      "Agenda belongs in the primary Cell's visible @@todo / @@clock commands");
     if (raw?.outcome !== undefined && !WORK_OUTCOMES.includes(raw.outcome)) add(errors, "outcome", id || null, `Unsupported work outcome: ${raw.outcome}`);
     if ((raw?.state !== undefined || raw?.outcome !== undefined) && raw?.kind !== "work") {
       add(warnings, "state-non-work", id || null, "State and outcome only apply to work WorkNodes");
@@ -558,6 +586,16 @@ export function validateResearchNotebook(notebook) {
     if (raw.kind === "result" && nodeById.get(raw.work_node_id)?.kind !== "work") {
       add(errors, "result-cell", cell.id, "Independent Result cells are not allowed; migrate the result into work outputs");
     }
+    if (node && sourceCell === cells.find((candidate) => researchMeta(candidate).work_node_id === node.id
+      && (node.kind === "work" ? candidate.cell_type === "code" : candidate.cell_type === "markdown"))) {
+      try {
+        extractWorkAgendaDirective(notebookSource(sourceCell.source), {
+          kind: node.kind, sourceName: `WorkNode ${node.id}`,
+        });
+      } catch (error) {
+        add(errors, "work-agenda", cell.id, String(error?.message || error));
+      }
+    }
     if (!["markdown", "code"].includes(cell.cellType)) {
       add(errors, "cell-type", cell.id, `Unsupported .noema cell_type: ${cell.cellType}`);
     } else if (cell.cellType === "code") {
@@ -572,7 +610,9 @@ export function validateResearchNotebook(notebook) {
       }
       if (notebookSource(sourceCell.source).trim()) {
         try {
-          parseResearchDirectives(notebookSource(sourceCell.source), { sourceName: `work cell ${cell.id}` });
+          parseResearchDirectives(notebookSource(sourceCell.source), {
+            agendaKind: node?.kind || "work", sourceName: `work cell ${cell.id}`,
+          });
         } catch (error) {
           add(errors, "directive", cell.id, String(error?.message || error));
         }
@@ -792,6 +832,82 @@ export function setResearchState(notebook, workNodeId, { state, outcome, reason 
   const summary = researchWorkNodeSummary(next, id);
   const cell = summary.primaryCellId ? next.cells[cellIndex(next, summary.primaryCellId)] : null;
   return { notebook: next, workNode: summary, cell: cell ? researchCellSummary(cell, cellIndex(next, cell.id), next) : null };
+}
+
+export function setResearchAgenda(notebook, workNodeId, patch = {}, nowMs = Date.now()) {
+  let next = structuredClone(notebook);
+  const { id, index } = requireWorkNodeIndex(next, workNodeId);
+  let node = researchWorkNodes(next)[index];
+  const primaryId = researchWorkNodeSummary(next, id).primaryCellId;
+  if (!primaryId) throw researchError("A WorkNode needs a primary Cell before it can join Agenda", 422, "ERR_RESEARCH_AGENDA");
+  let primary = next.cells[requireCellIndex(next, primaryId)];
+  const currentAgenda = () => extractWorkAgendaDirective(notebookSource(primary.source), {
+    kind: node.kind, sourceName: `WorkNode ${id}`,
+  });
+  const writeAgenda = (value) => {
+    primary.source = replaceWorkAgendaDirective(notebookSource(primary.source), value, {
+      kind: node.kind, title: node.title, sourceName: `WorkNode ${id}`,
+    });
+    delete node.agenda;
+  };
+  if (patch === null) {
+    if (currentAgenda()?.clocks?.some((clock) => !clock.to)) throw researchError("Stop the running clock before removing Agenda", 409);
+    writeAgenda(null);
+    return { notebook: next, workNode: researchWorkNodeSummary(next, id) };
+  }
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw researchError("Agenda patch must be an object", 422);
+  if (["clock-in", "clock-out"].includes(patch.op)) {
+    if (Object.keys(patch).some((key) => !["op", "clockId", "at"].includes(key))) throw researchError("Invalid clock operation field", 422);
+    const agenda = currentAgenda() || {};
+    const clocks = structuredClone(agenda.clocks || []);
+    const at = patch.at === undefined ? formatDateValue(nowMs, true) : normalizeDateValue(patch.at);
+    if (!at || !/ \d{2}:\d{2}$/.test(at)) throw researchError("Clock requires a date and time", 422);
+    if (patch.op === "clock-in") {
+      const clockId = patch.clockId || `clk_${uuidv7()}`;
+      if (clocks.some((clock) => !clock.to)) throw researchError("WorkNode already has a running clock", 409);
+      clocks.push({ id: clockId, from: at });
+    } else {
+      const clock = clocks.find((item) => item.id === patch.clockId);
+      if (!clock || clock.to) throw researchError("Selected WorkNode clock is no longer running", 409);
+      clock.to = at;
+    }
+    const value = { ...agenda, clocks };
+    const errors = validateWorkAgenda(value, node.kind);
+    if (errors.length) throw researchError(errors.join("; "), 422, "ERR_RESEARCH_AGENDA");
+    writeAgenda(value);
+    return { notebook: next, workNode: researchWorkNodeSummary(next, id) };
+  }
+  if (patch.op !== undefined && !["patch", "complete"].includes(patch.op)) throw researchError("Invalid Agenda operation", 422);
+  const fields = { ...patch };
+  if (Object.hasOwn(fields, "title")) {
+    if (typeof fields.title !== "string" || !fields.title.trim()) throw researchError("Agenda title must be nonempty", 422);
+    node.title = fields.title.trim();
+    delete fields.title;
+  }
+  const status = fields.op === "complete" ? "done" : fields.status;
+  delete fields.op;
+  if (status !== undefined && node.kind === "work") {
+    const states = { todo: "open", doing: "active", blocked: "waiting", done: "done", cancelled: "dropped" };
+    if (!states[status]) throw researchError("Invalid Agenda task status", 422);
+    next = setResearchState(next, id, { state: states[status] }).notebook;
+    node = researchWorkNodes(next)[index];
+    primary = next.cells[requireCellIndex(next, primaryId)];
+    delete fields.status;
+  } else if (status !== undefined) fields.status = status;
+  const agenda = { ...(currentAgenda() || {}) };
+  for (const [key, value] of Object.entries(fields)) {
+    if (value === null || value === "") delete agenda[key];
+    else if (key === "clocks") agenda[key] = structuredClone(value);
+    else if (key === "progress" && typeof value === "number") agenda[key] = String(value);
+    else agenda[key] = ["sche", "ddl", "end", "done"].includes(key) && typeof value === "string"
+      ? normalizeDateValue(value) || value : value;
+  }
+  if (status === "done") agenda.done = formatDateValue(nowMs, false);
+  else if (status !== undefined) delete agenda.done;
+  const errors = validateWorkAgenda(agenda, node.kind);
+  if (errors.length) throw researchError(errors.join("; "), 422, "ERR_RESEARCH_AGENDA");
+  writeAgenda(agenda);
+  return { notebook: next, workNode: researchWorkNodeSummary(next, id) };
 }
 
 function runOutput({ runId, agent = "", status, content = "" }) {
@@ -1285,6 +1401,11 @@ export function createResearchNotebookService({ getIndexer = () => null, allowWr
         reason: body.reason,
       }));
     },
+    setAgenda(body = {}) {
+      return mutate(body, "work-node.agenda", (notebook) => setResearchAgenda(
+        notebook, body.workNodeId || body.work_node_id, body.patch === null ? null : body.patch || {},
+      ));
+    },
     setDefaultAgent(body = {}) {
       return mutate(body, "notebook.default-agent", (notebook) => setResearchDefaultAgent(
         notebook, body.agent || body.defaultAgent || body.default_agent,
@@ -1350,6 +1471,8 @@ export function createResearchNotebookService({ getIndexer = () => null, allowWr
         notebookId,
         after: Math.max(0, Number(body.after) || 0),
         limit: Math.min(1000, Math.max(1, Number(body.limit) || 200)),
+        // One newest event per WorkNode, for "last activity" projections.
+        ...(body.latestPerWorkNode === true ? { latestPerWorkNode: true } : {}),
       });
       return { file: location.path, notebookId, events };
     },

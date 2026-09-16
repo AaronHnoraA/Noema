@@ -1,0 +1,184 @@
+[
+  {
+    "name": "fenced examples of every planning kind",
+    "input": "```markdown\n@@todo [fake]{id: example}\n@@project [fake] {id: project}\n@@clock [fake] {from: 2026-09-16 10:00}\n```\n@@todo [live]",
+    "expected": [
+      "@@todo [live]"
+    ]
+  },
+  {
+    "name": "shorter and mixed closing fences stay literal",
+    "input": "````md\n@@todo [one]\n```\n@@todo [two]\n~~~~\n@@todo [three]\n````\n@@todo [live]",
+    "expected": [
+      "@@todo [live]"
+    ]
+  },
+  {
+    "name": "closing fence with info is not a close",
+    "input": "~~~md\n@@todo [one]\n~~~ info\n@@todo [two]\n~~~\n@@todo [live]",
+    "expected": [
+      "@@todo [live]"
+    ]
+  },
+  {
+    "name": "unclosed fence stays literal to end",
+    "input": "Before\n```\n@@todo [fake]\n",
+    "expected": []
+  },
+  {
+    "name": "fence info is literal",
+    "input": "~~~ @@todo [fake]\ntext\n~~~\n@@todo [live]",
+    "expected": [
+      "@@todo [live]"
+    ]
+  },
+  {
+    "name": "quote container fence",
+    "input": "> ```md\n> @@todo [fake]\n> ```\n\n@@todo [live]",
+    "expected": [
+      "@@todo [live]"
+    ]
+  },
+  {
+    "name": "list container fence",
+    "input": "- ```md\n  @@todo [fake]\n  ```\n\n@@todo [live]",
+    "expected": [
+      "@@todo [live]"
+    ]
+  },
+  {
+    "name": "unclosed quote fence does not swallow following prose",
+    "input": "> ```\n> @@todo [fake]\n\n@@todo [live]",
+    "expected": [
+      "@@todo [live]"
+    ]
+  },
+  {
+    "name": "indented code and tab code",
+    "input": "    @@todo [fake]\n\n\t@@todo [also fake]\n\n@@todo [live]",
+    "expected": [
+      "@@todo [live]"
+    ]
+  },
+  {
+    "name": "indent cannot interrupt paragraph",
+    "input": "Paragraph\n    @@todo [live]\n",
+    "expected": [
+      "@@todo [live]"
+    ]
+  },
+  {
+    "name": "list continuation is prose, not indented code",
+    "input": "- Context\n\n    @@todo [live]\n",
+    "expected": [
+      "@@todo [live]"
+    ]
+  },
+  {
+    "name": "single and double backtick spans",
+    "input": "Use `@@todo [fake]` or ``@@todo [also fake] `inside` ``.\n\n@@todo [live]",
+    "expected": [
+      "@@todo [live]"
+    ]
+  },
+  {
+    "name": "inline code can cross a soft line break",
+    "input": "Code `\n@@todo [fake]\n`\n\n@@todo [live]",
+    "expected": [
+      "@@todo [live]"
+    ]
+  },
+  {
+    "name": "inline code cannot cross separate paragraphs",
+    "input": "Code `\n\n@@todo [live]\n\n`",
+    "expected": [
+      "@@todo [live]"
+    ]
+  },
+  {
+    "name": "unmatched backtick is prose",
+    "input": "` @@todo [live]",
+    "expected": [
+      "@@todo [live]"
+    ]
+  },
+  {
+    "name": "task title retains inline code verbatim",
+    "input": "@@todo [Read `@@todo [example]` carefully]{id: real}",
+    "expected": [
+      "@@todo [Read `@@todo [example]` carefully]{id: real}"
+    ]
+  },
+  {
+    "name": "escaped command and even slash parity",
+    "input": "\\@@todo [fake]\n\\\\@@todo [live]",
+    "expected": [
+      "@@todo [live]"
+    ]
+  },
+  {
+    "name": "escaped bare planning commands",
+    "input": "\\@@itodo fake\n\\@@project fake {id: fake}\n@@todo [live]",
+    "expected": [
+      "@@todo [live]"
+    ]
+  },
+  {
+    "name": "code example cannot consume a later block",
+    "input": "```\n@@project [fake] {\n```\n@@project [live] {\n  id: live\n}\n",
+    "expected": [
+      "@@project [live] {\n  id: live\n}"
+    ]
+  },
+  {
+    "name": "org environment keeps native task body",
+    "input": "#+begin proof\nWe still need:\n@@todo [live]{id: proof}\n#+end proof",
+    "expected": [
+      "@@todo [live]{id: proof}"
+    ]
+  },
+  {
+    "name": "summary range containing inline code remains wholly descriptive",
+    "input": "#+begin meta\n#+begin summary\n`@@todo [fake]`\n@@todo [also fake]\n#+end summary\n#+end meta\n@@todo [live]",
+    "expected": [
+      "@@todo [live]"
+    ]
+  },
+  {
+    "name": "Unicode and CRLF offsets stay exact",
+    "input": "前缀😀\r\n```\r\n@@todo [示例🚀]\r\n```\r\n正文🚀 @@todo [live]{id: 活跃}\r\n",
+    "expected": [
+      "@@todo [live]{id: 活跃}"
+    ]
+  },
+  {
+    "name": "multiple tasks on one Unicode line keep source columns",
+    "input": "前😀 @@todo [One]{id: one} 后🚀 @@todo [Two]{id: two}\n@@todo [Three]{id: three}",
+    "expected": [
+      "@@todo [One]{id: one}",
+      "@@todo [Two]{id: two}",
+      "@@todo [Three]{id: three}"
+    ]
+  },
+  {
+    "name": "a literal meta opener cannot hide a following task",
+    "input": "```\n#+begin meta\n```\n#+begin summary\n@@todo [live]\n#+end summary",
+    "expected": [
+      "@@todo [live]"
+    ]
+  },
+  {
+    "name": "literal summary end does not close the real summary",
+    "input": "#+begin meta\n#+begin summary\n```\n#+end summary\n```\n@@todo [fake]\n#+end summary\n#+end meta\n@@todo [live]",
+    "expected": [
+      "@@todo [live]"
+    ]
+  },
+  {
+    "name": "literal preamble is ignored before real metadata",
+    "input": "```\n#+begin meta\n#+begin summary\n@@todo [fake]\n#+end summary\n#+end meta\n```\n#+begin meta\n#+begin summary\n@@todo [also fake]\n#+end summary\n#+end meta\n@@todo [live]",
+    "expected": [
+      "@@todo [live]"
+    ]
+  }
+]

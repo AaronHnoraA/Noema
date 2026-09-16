@@ -7,11 +7,12 @@ const META_CLOSE_RE = /^[ \t]*#\+\s*end\s+meta[ \t]*$/i;
 const SUMMARY_OPEN_RE = /^[ \t]*#\+\s*begin\s+summary(?:[ \t]+[^\r\n]*)?[ \t]*$/i;
 const SUMMARY_CLOSE_RE = /^[ \t]*#\+\s*end\s+summary[ \t]*$/i;
 
-export function orgMetaSummaryRangeFromLines(doc) {
+export function orgMetaSummaryRangeFromLines(doc, { isExcluded = () => false } = {}) {
   let metaLine = 0;
   const preambleEnd = Math.min(doc.lines, ORG_META_PREAMBLE_LINE_LIMIT);
   for (let lineNumber = 1; lineNumber <= preambleEnd; lineNumber++) {
-    if (META_OPEN_RE.test(doc.line(lineNumber).text)) {
+    const line = doc.line(lineNumber);
+    if (!isExcluded(line.from + line.text.search(/\S|$/)) && META_OPEN_RE.test(line.text)) {
       metaLine = lineNumber;
       break;
     }
@@ -23,6 +24,7 @@ export function orgMetaSummaryRangeFromLines(doc) {
   let summaryBodyFrom = -1;
   for (let lineNumber = metaLine + 1; lineNumber <= doc.lines; lineNumber++) {
     const line = doc.line(lineNumber);
+    if (isExcluded(line.from + line.text.search(/\S|$/))) continue;
     if (summaryDepth > 0) {
       if (SUMMARY_OPEN_RE.test(line.text)) summaryDepth++;
       else if (SUMMARY_CLOSE_RE.test(line.text)) summaryDepth--;
@@ -59,8 +61,8 @@ function stringLineDocument(source) {
 }
 
 /** Return the first nested meta summary range in a Markdown string. */
-export function orgMetaSummaryRange(markdown) {
-  return orgMetaSummaryRangeFromLines(stringLineDocument(String(markdown || "")));
+export function orgMetaSummaryRange(markdown, options) {
+  return orgMetaSummaryRangeFromLines(stringLineDocument(String(markdown || "")), options);
 }
 
 /** Blank summary source while preserving every offset and line break. */

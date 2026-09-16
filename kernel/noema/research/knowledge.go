@@ -168,21 +168,20 @@ func (s *Store) ListArtifacts(filter ArtifactFilter) ([]Artifact, error) {
 	return result, rows.Err()
 }
 
-func (s *Store) ReadRunOutput(runID string, includeTranscript bool) (RunOutput, error) {
-	run, err := s.GetRun(strings.TrimSpace(runID))
+// RunTerminalArtifactIDs returns the Handoff and Transcript artifact ids the
+// newest status events of RUN-ID name.  It reads only that Run's status
+// events, so callers never page through its streamed content.
+func (s *Store) RunTerminalArtifactIDs(runID string) (handoffID, transcriptID string, err error) {
+	rows, err := s.db.Query(`SELECT payload_json FROM events WHERE run_id = ? AND type = 'run.status.changed' ORDER BY seq DESC`,
+		strings.TrimSpace(runID))
 	if err != nil {
-		return RunOutput{}, err
-	}
-	rows, err := s.db.Query(`SELECT payload_json FROM events WHERE run_id = ? AND type = 'run.status.changed' ORDER BY seq DESC`, run.ID)
-	if err != nil {
-		return RunOutput{}, err
+		return "", "", err
 	}
 	defer rows.Close()
-	var handoffID, transcriptID string
 	for rows.Next() {
 		var payloadJSON string
 		if err := rows.Scan(&payloadJSON); err != nil {
-			return RunOutput{}, err
+			return "", "", err
 		}
 		payload := map[string]any{}
 		if json.Unmarshal([]byte(payloadJSON), &payload) != nil {
@@ -198,7 +197,16 @@ func (s *Store) ReadRunOutput(runID string, includeTranscript bool) (RunOutput, 
 			break
 		}
 	}
-	if err := rows.Err(); err != nil {
+	return handoffID, transcriptID, rows.Err()
+}
+
+func (s *Store) ReadRunOutput(runID string, includeTranscript bool) (RunOutput, error) {
+	run, err := s.GetRun(strings.TrimSpace(runID))
+	if err != nil {
+		return RunOutput{}, err
+	}
+	handoffID, transcriptID, err := s.RunTerminalArtifactIDs(run.ID)
+	if err != nil {
 		return RunOutput{}, err
 	}
 	output := RunOutput{Run: run}

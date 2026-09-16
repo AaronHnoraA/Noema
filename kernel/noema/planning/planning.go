@@ -9,8 +9,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"unicode/utf16"
-	"unicode/utf8"
 )
 
 var planningKinds = map[string]bool{
@@ -98,6 +96,10 @@ type commandHeader struct {
 // Scan returns all planning nodes, or only the requested kind. "todo"
 // intentionally includes both @@todo and @@itodo for compatibility.
 func Scan(source, wanted string) []Node {
+	return scan(source, wanted, nil)
+}
+
+func scan(source, wanted string, excluded []sourceRange) []Node {
 	text := source
 	wanted = strings.ToLower(strings.TrimSpace(wanted))
 	lineStarts := byteLineStarts(text)
@@ -109,6 +111,19 @@ func Scan(source, wanted string) []Node {
 			break
 		}
 		from := cursor + rel
+		skip := sort.Search(len(excluded), func(i int) bool { return excluded[i].to > from })
+		if skip < len(excluded) && excluded[skip].from <= from {
+			cursor = excluded[skip].to
+			continue
+		}
+		slashes := 0
+		for i := from - 1; i >= 0 && text[i] == '\\'; i-- {
+			slashes++
+		}
+		if slashes%2 == 1 {
+			cursor = from + 2
+			continue
+		}
 		header, ok := parseHeader(text, from)
 		if !ok || !planningKinds[header.kind] {
 			cursor = from + 2
@@ -144,37 +159,35 @@ func Scan(source, wanted string) []Node {
 		return found[i].from < found[j].from
 	})
 	ret := make([]Node, 0, len(found))
+	byteOffset, unitOffset, previousLine, lineUnits := 0, 0, -1, 0
 	for _, item := range found {
-		item.node.Span = Span{
-			From:   utf16Length(text[:item.from]),
-			To:     utf16Length(text[:item.to]),
-			Line:   lineForByte(lineStarts, item.from),
-			Column: utf16Length(text[item.lineStart:item.from]) + 1,
+		fromUnits := unitOffset + utf16Length(text[byteOffset:item.from])
+		toUnits := fromUnits + utf16Length(text[item.from:item.to])
+		if item.lineStart != previousLine {
+			lineUnits = fromUnits - utf16Length(text[item.lineStart:item.from])
+			previousLine = item.lineStart
 		}
+		item.node.Span = Span{
+			From:   fromUnits,
+			To:     toUnits,
+			Line:   lineForByte(lineStarts, item.from),
+			Column: fromUnits - lineUnits + 1,
+		}
+		byteOffset, unitOffset = item.to, toUnits
 		item.node.Raw = text[item.from:item.to]
 		ret = append(ret, item.node)
 	}
 	return ret
 }
 
-// ScanDocument applies the same leading meta-summary exclusion used by the
-// Node note index. Summary prose may contain examples such as @@todo, but
-// those examples are descriptive metadata rather than live planning items.
-// Filtering the source range (instead of rewriting it) preserves UTF-8 bytes
-// while retaining JavaScript-compatible UTF-16 offsets after non-ASCII text.
+// ScanDocument excludes Markdown code and meta summaries before recognizing
+// native commands. Input bytes and JavaScript-compatible UTF-16 spans remain
+// unchanged. Both reads and mutations must use this document-aware entry.
 func ScanDocument(source, wanted string) []Node {
-	nodes := Scan(source, wanted)
-	from, to, ok := metaSummaryUTF16Range(source)
-	if !ok {
-		return nodes
+	if !strings.Contains(source, "@@") {
+		return []Node{}
 	}
-	ret := make([]Node, 0, len(nodes))
-	for _, node := range nodes {
-		if node.Span.To <= from || node.Span.From >= to {
-			ret = append(ret, node)
-		}
-	}
-	return ret
+	return scan(source, wanted, documentExcludedRanges(source))
 }
 
 type sourceLine struct {
@@ -182,7 +195,16 @@ type sourceLine struct {
 	text     string
 }
 
-func metaSummaryUTF16Range(source string) (from, to int, ok bool) {
+func metaSummaryUTF16Range(source string, excluded []sourceRange) (from, to int, ok bool) {
+	isExcluded := func(line sourceLine) bool {
+		start := line.from + len(line.text) - len(strings.TrimLeft(line.text, " \t"))
+		for _, r := range excluded {
+			if r.from <= start && start < r.to {
+				return true
+			}
+		}
+		return false
+	}
 	lines := sourceLines(source)
 	metaLine := -1
 	limit := len(lines)
@@ -190,7 +212,7 @@ func metaSummaryUTF16Range(source string) (from, to int, ok bool) {
 		limit = 12
 	}
 	for i := 0; i < limit; i++ {
-		if metaOpenPattern.MatchString(lines[i].text) {
+		if !isExcluded(lines[i]) && metaOpenPattern.MatchString(lines[i].text) {
 			metaLine = i
 			break
 		}
@@ -200,6 +222,9 @@ func metaSummaryUTF16Range(source string) (from, to int, ok bool) {
 	}
 	depth, summaryLine := 0, -1
 	for i := metaLine + 1; i < len(lines); i++ {
+		if isExcluded(lines[i]) {
+			continue
+		}
 		if depth > 0 {
 			if summaryOpenPattern.MatchString(lines[i].text) {
 				depth++
@@ -840,18 +865,13 @@ func lineForByte(starts []int, index int) int {
 }
 
 func utf16Length(text string) int {
-	if text == "" {
-		return 0
-	}
 	count := 0
-	for len(text) > 0 {
-		r, size := utf8.DecodeRuneInString(text)
-		text = text[size:]
-		if r == utf8.RuneError && size == 1 {
+	for _, r := range text {
+		if r > 0xffff {
+			count += 2
+		} else {
 			count++
-			continue
 		}
-		count += len(utf16.Encode([]rune{r}))
 	}
 	return count
 }

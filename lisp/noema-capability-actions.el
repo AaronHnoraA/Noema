@@ -24,6 +24,7 @@
 (declare-function noema-capability-ui--after-mutation "noema-capability-ui" (buffer result error-object))
 (declare-function noema-research--entry-at-point "noema-research-mode" (&optional entries))
 (declare-function noema-research--require-cell "noema-research-mode" ())
+(declare-function vterm-send-string "vterm" (string &optional paste-p))
 
 (defun noema-capability-ui--open-right (path &optional directory manager)
   "Open PATH to the right of MANAGER without replacing the manager window.
@@ -402,6 +403,99 @@ No request is sent until the user reviews the draft and presses RET."
         (goto-char (point-min))
         (special-mode))
       (display-buffer (current-buffer)))))
+
+;;; Agent-shell lookup
+;;
+;; An agent-shell session is an external client with its own capability
+;; installation; the manager's scoped writes do not reach it.  There the same
+;; command is a read-only lookup that drafts a reference to the resolved
+;; source, and nothing is enabled, patched, installed or submitted.
+
+(defun noema-capability-lookup--agent-buffer ()
+  "Return the current buffer when it is an agent input surface, or nil."
+  (and (or (derived-mode-p 'agent-shell-mode) (derived-mode-p 'vterm-mode))
+       (current-buffer)))
+
+(defun noema-capability-lookup--reference (record project)
+  "Return the one-line reference drafted for RECORD, resolved against PROJECT.
+The text stays on one line so a terminal never submits it on insertion."
+  (let* ((id (noema--value record "id"))
+         (path (noema--value (noema--value record "source") "path"))
+         (file (and (stringp path) (not (string-prefix-p "builtin:" path))
+                    (expand-file-name path (or project default-directory)))))
+    (if (equal (noema--value record "type") "skill")
+        (if file
+            (format "Noema Skill %s — read and follow %S; resolve its relative resources from %S."
+                    id file (directory-file-name (file-name-directory file)))
+          (format "Noema Skill %s — %s" id (or (noema--value record "description") "")))
+      (format "Noema MCP %s — use its tools%s."
+              id (if file (format "; configured in %S" file) "")))))
+
+(defun noema-capability-lookup--read (records type)
+  "Read one record from RECORDS, annotated with scope, state and description.
+TYPE is the manager's filter, or nil when both kinds are offered."
+  (unless records (user-error "No capabilities resolved for this directory"))
+  (let* ((table (mapcar (lambda (record)
+                          (cons (if type (noema--value record "id")
+                                  (format "%s:%s" (noema--value record "type")
+                                          (noema--value record "id")))
+                                record))
+                        records))
+         (annotate
+          (lambda (key)
+            (let ((record (cdr (assoc key table))))
+              (format "  %s · %s · %s"
+                      (if (eq t (noema--value record "enabled")) "enabled" "available")
+                      (or (noema--value (noema--value record "source") "scope") "")
+                      (or (noema--value record "description") "")))))
+         (key (completing-read
+               (format "Look up %s: " (or type "capability"))
+               (lambda (string predicate action)
+                 (if (eq action 'metadata)
+                     `(metadata (annotation-function . ,annotate)
+                                (category . noema-capability))
+                   (complete-with-action action table string predicate)))
+               nil t)))
+    (cdr (assoc key table))))
+
+(defun noema-capability-lookup--draft (buffer text)
+  "Draft TEXT in BUFFER's agent input; never submit it."
+  (if (with-current-buffer buffer (derived-mode-p 'agent-shell-mode))
+      (progn (require 'noema-agent-acp)
+             (noema-agent-acp-draft buffer text))
+    (with-current-buffer buffer
+      (if (derived-mode-p 'vterm-mode) (vterm-send-string text) (insert text)))))
+
+;;;###autoload
+(defun noema-capability-lookup (&optional type buffer)
+  "Look up a Skill or MCP and draft its reference in agent input BUFFER.
+TYPE filters the candidates.  This is a lookup: it resolves the same host
+capability model as the manager and writes nothing to any scope."
+  (interactive)
+  (let* ((target (or buffer (noema-capability-lookup--agent-buffer) (current-buffer)))
+         (project (noema-current-project target)))
+    (apply
+     #'noema-capability-list
+     (append
+      (if project (list :project project) (list :scope 'global))
+      (list
+       :callback
+       (lambda (resolution error-object)
+         (cond
+          (error-object (noema-capability-ui--show-error error-object))
+          ((not (buffer-live-p target))
+           (message "Noema: the agent buffer closed before the lookup finished"))
+          (t
+           (let* ((records (seq-filter
+                            (lambda (record)
+                              (or (null type) (equal (noema--value record "type") type)))
+                            (append (noema--sequence (noema--value resolution "skills"))
+                                    (noema--sequence (noema--value resolution "mcps")))))
+                  (record (noema-capability-lookup--read records type)))
+             (noema-capability-lookup--draft
+              target (noema-capability-lookup--reference record project))
+             (message "Noema: drafted %s; review before sending"
+                      (noema--value record "id")))))))))))
 
 (provide 'noema-capability-actions)
 ;;; noema-capability-actions.el ends here

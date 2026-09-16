@@ -527,6 +527,9 @@ type RunFilter struct {
 	WorkstreamID string
 	SessionID    string
 	Limit        int
+	// LatestPerWorkNode returns, for every WorkNode, only its newest Run
+	// that reached a conversation (a session id or a session name).
+	LatestPerWorkNode bool
 }
 
 // RunLive is a durable snapshot for read-only web/Emacs projections.
@@ -657,10 +660,24 @@ func (s *Store) LiveRun(id string, after int64, limit int) (RunLive, error) {
 
 func (s *Store) ListRuns(filter RunFilter) ([]Run, error) {
 	limit := filter.Limit
-	if limit <= 0 || limit > 1000 {
+	if filter.LatestPerWorkNode {
+		// One row per WorkNode: session routing must see a WorkNode's
+		// conversation however far back its last Run is.
+		if limit <= 0 || limit > 10000 {
+			limit = 10000
+		}
+	} else if limit <= 0 || limit > 1000 {
 		limit = 200
 	}
 	query, args := runSelect+` WHERE 1 = 1`, []any{}
+	if filter.LatestPerWorkNode {
+		query += ` AND id IN (SELECT id FROM (SELECT r.id, ROW_NUMBER() OVER (
+			PARTITION BY r.work_node_id ORDER BY r.created_at DESC, r.id DESC) AS position
+			FROM runs r WHERE COALESCE(r.work_node_id, '') != ''
+			AND (COALESCE(r.session_id, '') != ''
+				OR EXISTS (SELECT 1 FROM run_session_names n WHERE n.run_id = r.id)))
+			WHERE position = 1)`
+	}
 	if value := strings.TrimSpace(filter.WorkstreamID); value != "" {
 		query += ` AND workstream_id = ?`
 		args = append(args, value)

@@ -174,7 +174,10 @@ apart from structure this buffer deleted.")
     ("^%%[ \t]+checkpoint\\_>.*$" . 'noema-research-checkpoint-face)
     ("^%%\\(?:[ \t].*\\)?$" . 'noema-research-note-face)
     ("^@@\\(?:agent\\|session\\|ctx\\|skill\\)([^)\n]+)[ \t]*$"
-     . 'font-lock-preprocessor-face))
+     . 'font-lock-preprocessor-face)
+    ("^@@\\(?:todo\\|clock\\)\\(?:([^)]*)\\)?[ \t]+\\[.*\\]" . 'font-lock-preprocessor-face)
+    ("^[ \t]+\\(?:sche\\|ddl\\|end\\|prio\\|effort\\|tags\\|context\\|project\\|status\\|done\\|progress\\|clock\\):"
+     . 'font-lock-keyword-face))
   "Font lock keywords for JuText headers.")
 
 ;;;; Projection
@@ -505,16 +508,55 @@ unrelated undo history survive; header identities are then reattached."
           (error (message "Noema DAG refresh failed: %s"
                           (error-message-string error-object))))))))
 
+(defun noema-research--changed-source-cell-ids (before after)
+  "Return Cell ids whose source changed from serialized BEFORE to AFTER.
+Only Cells present in both documents are returned.  Created and removed Cells
+are already represented by the structural snapshot itself."
+  (let ((sources (make-hash-table :test #'equal)) changed)
+    (dolist (cell (noema-research-cells
+                   (noema-research-normalize-document
+                    (noema-research-parse-json before))))
+      (puthash (noema-research-cell-id cell)
+               (noema-research-cell-source cell) sources))
+    (dolist (cell (noema-research-cells after) (nreverse changed))
+      (let ((id (noema-research-cell-id cell)))
+        (when (and (gethash id sources)
+                   (not (equal (gethash id sources)
+                               (noema-research-cell-source cell))))
+          (push id changed))))))
+
+(defun noema-research--restore-owned-agenda-source (restored cell live-cell)
+  "Restore CELL's Agenda region from RESTORED while keeping LIVE-CELL prose.
+Structure history owns the visible planning commands it changed.  Prompt text
+typed after that edit remains live across undo and redo."
+  (let* ((kind (noema-research-cell-kind cell restored))
+         (node (noema-research-work-node-for-cell restored cell))
+         (title (noema-research-work-node-field node "title"))
+         (target-source (noema-research-cell-source cell))
+         (live-source (noema-research-cell-source live-cell))
+         (target-agenda (noema-research-agenda-directive target-source kind))
+         (live-agenda (noema-research-agenda-directive live-source kind)))
+    (if (or target-agenda live-agenda)
+        (noema-research-replace-agenda-directive
+         live-source target-agenda kind title)
+      live-source)))
+
 (defun noema-research--record-structure (label pre)
   "Reproject and record the edit from document text PRE under LABEL.
 Return non-nil when the document changed."
   (noema-research--reproject)
   (let* ((document (noema-research-mode--sync))
-         (changed (not (equal pre (noema-research-serialize document)))))
+         (serialized (noema-research-serialize document))
+         (changed (not (equal pre serialized)))
+         (source-cell-ids (and changed
+                               (noema-research--changed-source-cell-ids
+                                pre document))))
     (when changed
       (set-buffer-modified-p t)
       (setq noema-research--structure-undo
-            (seq-take (cons (list label pre (noema-research--structure-fingerprint document))
+            (seq-take (cons (list label pre
+                                  (noema-research--structure-fingerprint document)
+                                  source-cell-ids)
                             noema-research--structure-undo)
                       noema-research-structure-history-limit)
             noema-research--structure-redo nil))
@@ -555,7 +597,10 @@ changed afterwards, or when it would discard text written in a Cell that
 the edit created."
   (let ((entry (car (symbol-value from))))
     (unless entry (user-error "No structure edit to %s" verb))
-    (pcase-let* ((`(,label ,target ,expected) entry)
+    (pcase-let* ((label (nth 0 entry))
+                 (target (nth 1 entry))
+                 (expected (nth 2 entry))
+                 (source-cell-ids (nth 3 entry))
                  (document (noema-research-mode--sync)))
       (unless (equal (noema-research--structure-fingerprint document) expected)
         (user-error "Cannot %s “%s”: the structure changed afterwards" verb label))
@@ -566,7 +611,12 @@ the edit created."
           (puthash (noema-research-cell-id cell) cell live))
         (dolist (cell (noema-research-cells restored))
           (when-let* ((now (gethash (noema-research-cell-id cell) live)))
-            (puthash "source" (noema-research-cell-source now) cell)
+            (puthash "source"
+                     (if (member (noema-research-cell-id cell) source-cell-ids)
+                         (noema-research--restore-owned-agenda-source
+                          restored cell now)
+                       (noema-research-cell-source now))
+                     cell)
             (when (and (equal (noema-research--get cell "cell_type") "code")
                        (equal (noema-research--get now "cell_type") "code"))
               (puthash "outputs" (or (noema-research--get now "outputs") []) cell))
@@ -580,7 +630,9 @@ the edit created."
         (setq noema-research--document restored)
         (noema-research--reproject)
         (let ((synced (noema-research-mode--sync)))
-          (set to (cons (list label current (noema-research--structure-fingerprint synced))
+          (set to (cons (list label current
+                              (noema-research--structure-fingerprint synced)
+                              source-cell-ids)
                         (symbol-value to))))
         (set-buffer-modified-p t)
         (noema-research-mode--refresh-decorations)
@@ -1057,7 +1109,20 @@ It is a keyword, a name, or parent:child (parent may be empty)."
   (let (errors)
     (dolist (cell (noema-research-cells document))
       (when (equal (noema-research-cell-kind cell document) "work")
-        (let ((lines (split-string (noema-research-cell-source cell) "\n"))
+        (let* ((source (noema-research-cell-source cell))
+               ;; Visible WorkNode planning is parsed and validated by
+               ;; `noema-research-agenda-directive'.  Remove that leading
+               ;; region before validating Agent control directives so a
+               ;; valid @@todo block and its @@clock rows are not mistaken
+               ;; for malformed @@agent/@@ctx commands.
+               (location (condition-case nil
+                             (noema-research--agenda-directive-location source "work")
+                           (error nil)))
+               (source (if location
+                           (concat (substring source 0 (1- (nth 0 location)))
+                                   (substring source (1- (nth 1 location))))
+                         source))
+               (lines (split-string source "\n"))
               (seen (make-hash-table :test #'equal))
               (saw nil)
               (body nil))
@@ -1088,8 +1153,9 @@ It is a keyword, a name, or parent:child (parent may be empty)."
                           errors))
                    ((and (equal name "ctx")
                          (not
-                          (or (member value '("lineage" "depends" "git.diff"
+                          (or (member value '("none" "lineage" "depends" "git.diff"
                                               "handoff.latest"))
+                              (string-match-p "\\`lineage:[1-3]\\'" value)
                               (string-match-p "\\`cell:[A-Za-z0-9_-][A-Za-z0-9_-]*\\'" value)
                               (string-match-p "\\`result:wn_[A-Za-z0-9_-][A-Za-z0-9_-]*\\'" value)
                               (string-match-p "\\`file:..*\\'" value)
@@ -1190,7 +1256,9 @@ NOCONFIRM has the meaning documented by `revert-buffer'."
 
 (defun noema-research--output-context (&optional require-work)
   "Return the D-023 output context at point, optionally REQUIRE-WORK.
-The JuText projection is saved first so the runtime reads the canonical file."
+The JuText projection is saved first so the runtime reads the canonical file.
+A Run (REQUIRE-WORK) needs a real Noema project and asks to create one; merely
+showing outputs keeps the file's directory as a fallback root."
   (unless buffer-file-name (user-error "This work document has no file"))
   (when (buffer-modified-p) (save-buffer))
   (let ((cell (noema-research--require-cell)))
@@ -1200,7 +1268,9 @@ The JuText projection is saved first so the runtime reads the canonical file."
       (user-error "C-c C-c only runs a work block"))
     (list :cell-id (noema-research-cell-id cell)
           :script-file (expand-file-name buffer-file-name)
-          :project-root (noema-research-repository-root buffer-file-name))))
+          :project-root (if require-work
+                            (noema-project-ensure buffer-file-name)
+                          (noema-research-repository-root buffer-file-name)))))
 
 (defun noema-research--output-payload (context &optional run-id)
   "Return right-side renderer payload for CONTEXT and optional RUN-ID."
@@ -1368,6 +1438,80 @@ own.  Focus stays in JuText."
   "Run the current D-023 work block through the configured ACP agent."
   (interactive)
   (noema-run-cell))
+
+(defun noema-research--show-context-preview (title result)
+  "Show context preview RESULT for the work block titled TITLE.
+Return the preview buffer."
+  (let* ((field #'noema-research--route-field)
+         (routing (funcall field result "routing"))
+         (items (append (funcall field result "context") nil))
+         (omitted (append (funcall field result "omitted") nil))
+         (buffer (get-buffer-create "*Noema Context*")))
+    (with-current-buffer buffer
+      (special-mode)
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (propertize (format "Context for “%s”\n\n" title) 'face 'bold))
+        (insert (format "Agent    %s\n" (or (funcall field routing "agent") "")))
+        (insert (format "Session  %s%s%s\n"
+                        (or (funcall field routing "name") (funcall field routing "mode") "")
+                        (if-let* ((parent (funcall field routing "parentName")))
+                            (format " ⇠ %s" parent)
+                          "")
+                        (if (funcall field routing "rollover")
+                            "  (rolls over to its latest Handoff)"
+                          "")))
+        (insert (format "Route    %s — %s\n\n"
+                        (or (funcall field routing "rule") "")
+                        (or (funcall field routing "reason") "")))
+        (insert (format "%-10s %9s  %s\n" "" "bytes" "reference"))
+        (dolist (item items)
+          (insert (format "%-10s %9d  %s\n"
+                          (string-join
+                           (delq nil (list (and (funcall field item "automatic") "auto")
+                                           (and (funcall field item "truncated") "cut")))
+                           ",")
+                          (or (funcall field item "bytes") 0)
+                          (funcall field item "ref"))))
+        (when omitted
+          (insert "\nOmitted by the context budget\n")
+          (dolist (item omitted)
+            (insert (format "%-10s %9d  %s\n" ""
+                            (or (funcall field item "bytes") 0) (funcall field item "ref")))))
+        (insert (format "\nTotal %d of %d bytes (prompt %d bytes)\n"
+                        (or (funcall field result "totalBytes") 0)
+                        (or (funcall field result "limitBytes") 0)
+                        (or (funcall field result "promptBytes") 0)))
+        (goto-char (point-min))))
+    (display-buffer buffer)
+    buffer))
+
+(defun noema-research-preview-context ()
+  "Show the agent, session and context the work block at point would run with.
+Nothing is frozen, compacted or dispatched: Noema resolves the route and the
+context from the unsaved document as a Run would, including automatic
+context and the budget it has to fit into."
+  (interactive)
+  (let* ((cell (noema-research--require-cell))
+         (document (noema-research-mode--sync))
+         (title (noema-research-cell-title cell document))
+         (root (and buffer-file-name (noema-research-repository-root buffer-file-name))))
+    (unless (equal (noema-research-cell-kind cell document) "work")
+      (user-error "Only work blocks run with context"))
+    (unless (and root (fboundp 'my/noema-api-call))
+      (user-error "This document has no Noema host"))
+    (my/noema-api-call
+     "aaronnote:api:research:run:context-preview"
+     (vector `((file . ,(expand-file-name buffer-file-name)) (cwd . ,root)
+               (cellId . ,(noema-research-cell-id cell)) (notebook . ,document)
+               ,@(when (boundp 'noema-agent-worker-context-rollover-ratio)
+                   `((contextRolloverRatio . ,noema-agent-worker-context-rollover-ratio)))))
+     (lambda (result error-object)
+       (if error-object
+           (message "Noema context preview failed: %s"
+                    (or (noema-research--route-field error-object "message") error-object))
+         (noema-research--show-context-preview title result)))
+     30)))
 
 (defun noema-research-execute-all ()
   "Reject notebook-style run-all for a D-023 work document."
@@ -1940,6 +2084,12 @@ its own title."
         document id :after (and parent (noema-research-work-node-block-end document parent)))
        id))))
 
+(defun noema-research-op-set-agenda (id patch)
+  "Set WorkNode ID's native Agenda metadata from PATCH."
+  (noema-research-structure-edit
+   "plan a WorkNode"
+   (lambda (document) (noema-research-set-agenda document id patch) id)))
+
 (defun noema-research-op-set-state (id state &optional reason outcome)
   "Set work ID's STATE; REASON explains a drop.  Non-nil OUTCOME is set too."
   (noema-research-structure-edit
@@ -2300,8 +2450,7 @@ With a prefix argument, also prompt for OUTCOME (empty clears it)."
                                   (concat file ".noema")))))
     (when (file-exists-p path)
       (user-error "%s already exists" path))
-    (unless (locate-dominating-file (file-name-directory path) "noema.toml")
-      (noema-project-enable (file-name-directory path)))
+    (noema-project-ensure path)
     (noema-research-write-file path (noema-research-create-document title))
     (find-file path)
     (unless (derived-mode-p 'noema-research-mode)
@@ -2365,6 +2514,9 @@ explains a drop and is recorded on ID.  Return ID."
     (define-key-after map [noema-separator] menu-bar-separator)
     (define-key-after map [noema-run]
       '(menu-item "Run work block" noema-research-execute-current))
+    (define-key-after map [noema-preview-context]
+      '(menu-item "Preview context" noema-research-preview-context
+                  :keys "C-c j p"))
     (define-key-after map [noema-branch]
       '(menu-item "Branch…" noema-research-branch-menu))
     (define-key-after map [noema-inspect]
@@ -2426,6 +2578,7 @@ explains a drop and is recorded on ID.  Return ID."
     (define-key map (kbd "C-c j ,") #'noema-research-settings)
     (define-key map (kbd "C-c j S") #'noema-sessions)
     (define-key map (kbd "C-c j s") #'noema-research-pin-session)
+    (define-key map (kbd "C-c j p") #'noema-research-preview-context)
     (define-key map (kbd "M-<up>") #'noema-research-move-block-up)
     (define-key map (kbd "M-<down>") #'noema-research-move-block-down)
     (define-key map (kbd "C-c C-/") #'noema-research-structure-undo)

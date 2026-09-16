@@ -1,5 +1,6 @@
 import {
   findInlineCommandClose,
+  isEscapedCommandStart,
   parseCommandArgs,
   scanInlineCommands,
 } from "./command-syntax.mjs";
@@ -111,11 +112,12 @@ function kindMatchesWanted(kind, wanted) {
   return kind === wanted;
 }
 
-function scanBlockPlanningCommands(text, lineStarts) {
+function scanBlockPlanningCommands(text, lineStarts, excluded) {
   const nodes = [];
   const re = /@@([A-Za-z][\w-]*)(?:\(([^)\n]*)\))?[ \t]+\[/g;
   let match;
   while ((match = re.exec(text))) {
+    if (excluded(match.index)) continue;
     const kind = match[1].toLowerCase();
     if (!PLANNING_KINDS.has(kind)) continue;
     const openBracket = re.lastIndex - 1;
@@ -166,11 +168,12 @@ function scanBlockPlanningCommands(text, lineStarts) {
   return nodes;
 }
 
-function scanTitlePlanningCommands(text, lineStarts) {
+function scanTitlePlanningCommands(text, lineStarts, excluded) {
   const nodes = [];
   const re = /@@(project|milestone|clock)(?:\(([^)\n]*)\))?[ \t]+/gi;
   let match;
   while ((match = re.exec(text))) {
+    if (excluded(match.index)) continue;
     const kind = match[1].toLowerCase();
     if (!TITLE_PLANNING_KINDS.has(kind)) continue;
     const titleFrom = re.lastIndex;
@@ -225,8 +228,16 @@ export function scanPlanningNodes(input, options = {}) {
   const text = String(input || "");
   const wanted = options.kind ? String(options.kind).toLowerCase() : "";
   const lineStarts = lineStartsFor(text);
+  const ranges = options.excludedRanges || [];
+  const excluded = (from) => {
+    if (isEscapedCommandStart(text, from)) return true;
+    let low = 0, high = ranges.length;
+    while (low < high) { const mid = (low + high) >>> 1; if (ranges[mid].from <= from) low = mid + 1; else high = mid; }
+    return low > 0 && from < ranges[low - 1].to;
+  };
   const blockLikeSpans = [];
   const inline = scanInlineCommands(text)
+    .filter((cmd) => !excluded(cmd.fullFrom))
     .filter((cmd) => PLANNING_KINDS.has(cmd.name))
     .filter((cmd) => {
       let pos = cmd.fullTo;
@@ -240,8 +251,8 @@ export function scanPlanningNodes(input, options = {}) {
     })
     .map((cmd) => nodeFromInline(cmd, text, lineStarts));
   const blocks = [
-    ...scanBlockPlanningCommands(text, lineStarts),
-    ...scanTitlePlanningCommands(text, lineStarts),
+    ...scanBlockPlanningCommands(text, lineStarts, excluded),
+    ...scanTitlePlanningCommands(text, lineStarts, excluded),
   ];
   const blockSpans = [...blocks.map((node) => node.span), ...blockLikeSpans];
   const nodes = [

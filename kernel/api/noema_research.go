@@ -88,17 +88,25 @@ func noemaResearchEvents(c *gin.Context) {
 	}
 	var notebookID string
 	var after, limit float64
+	var latestPerWorkNode bool
 	if !util.ParseJsonArgs(arg, ret,
 		util.BindJsonArg("notebookId", &notebookID, false, false),
 		util.BindJsonArg("after", &after, false, false),
-		util.BindJsonArg("limit", &limit, false, false)) {
+		util.BindJsonArg("limit", &limit, false, false),
+		util.BindJsonArg("latestPerWorkNode", &latestPerWorkNode, false, false)) {
 		return
 	}
 	store, ok := noemaResearchStore(arg, ret)
 	if !ok {
 		return
 	}
-	events, err := store.Events(notebookID, int64(after), int(limit))
+	var events []research.Event
+	var err error
+	if latestPerWorkNode {
+		events, err = store.LatestWorkNodeActivity(notebookID)
+	} else {
+		events, err = store.Events(notebookID, int64(after), int(limit))
+	}
 	if err != nil {
 		ret.Code = -1
 		ret.Msg = err.Error()
@@ -310,18 +318,44 @@ func noemaResearchRuns(c *gin.Context) {
 	}
 	var workstreamID, sessionID string
 	var limit float64
+	var latestPerWorkNode bool
 	if !util.ParseJsonArgs(arg, ret,
 		util.BindJsonArg("workstreamId", &workstreamID, false, false),
 		util.BindJsonArg("sessionId", &sessionID, false, false),
-		util.BindJsonArg("limit", &limit, false, false)) {
+		util.BindJsonArg("limit", &limit, false, false),
+		util.BindJsonArg("latestPerWorkNode", &latestPerWorkNode, false, false)) {
 		return
 	}
-	runs, err := store.ListRuns(research.RunFilter{WorkstreamID: workstreamID, SessionID: sessionID, Limit: int(limit)})
+	runs, err := store.ListRuns(research.RunFilter{WorkstreamID: workstreamID, SessionID: sessionID, Limit: int(limit),
+		LatestPerWorkNode: latestPerWorkNode})
 	if err != nil {
 		ret.Code, ret.Msg = -1, err.Error()
 		return
 	}
 	ret.Data = map[string]any{"runs": runs}
+}
+
+func noemaResearchRunHandoff(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+	arg, ok := util.JsonArg(c, ret)
+	if !ok {
+		return
+	}
+	store, ok := noemaResearchStore(arg, ret)
+	if !ok {
+		return
+	}
+	var id string
+	if !util.ParseJsonArgs(arg, ret, util.BindJsonArg("id", &id, true, true)) {
+		return
+	}
+	handoffID, transcriptID, err := store.RunTerminalArtifactIDs(id)
+	if err != nil {
+		ret.Code, ret.Msg = -1, err.Error()
+		return
+	}
+	ret.Data = map[string]any{"handoffArtifactId": handoffID, "transcriptArtifactId": transcriptID}
 }
 
 func noemaResearchRunGet(c *gin.Context) {

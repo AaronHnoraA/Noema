@@ -14,6 +14,7 @@ export type InlineCommand = {
 export type BlockCommand = { name: string; title: string; content: string };
 
 export function parseCommandArgs(raw?: string): Record<string, string>;
+export function isEscapedCommandStart(text:string,from:number):boolean;
 export function findInlineCommandClose(text: string, open: number, closeChar: "]" | "}"): number;
 export function scanInlineCommands(text: unknown, name?: string): InlineCommand[];
 export function parseBlockCommandOpenLine(line: unknown): { name: string; title: string } | null;

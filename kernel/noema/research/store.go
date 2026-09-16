@@ -22,7 +22,7 @@ import (
 // StateDirName is the repository-local runtime state directory.
 const StateDirName = ".agent"
 
-const schemaVersion = "20"
+const schemaVersion = "21"
 
 // coordinatorRequestsTable is shared by fresh databases and the v19 rebuild.
 // D-032 queued Runs for the Pi coordinator; D-035 lets the Pi manager also ask
@@ -399,6 +399,8 @@ var schemaStatements = []string{
 		payload_json  TEXT NOT NULL DEFAULT '{}'
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_events_notebook_seq ON events(notebook_id, seq)`,
+	// Terminal-artifact lookups and segment retention read one Run's events by type.
+	`CREATE INDEX IF NOT EXISTS idx_events_run_type ON events(run_id, type)`,
 	`CREATE INDEX IF NOT EXISTS idx_edges_dst ON edges(notebook_id, dst_cell_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_sessions_workstream ON sessions(workstream_id, attached_at DESC)`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS sessions_native_binding
@@ -806,6 +808,7 @@ func migrate(db *sql.DB) error {
 		{"cells", "latest_output", `ALTER TABLE cells ADD COLUMN latest_output TEXT NOT NULL DEFAULT ''`},
 		{"cells", "latest_run_id", `ALTER TABLE cells ADD COLUMN latest_run_id TEXT NOT NULL DEFAULT ''`},
 		{"cells", "output_status", `ALTER TABLE cells ADD COLUMN output_status TEXT NOT NULL DEFAULT ''`},
+		{"work_nodes", "agenda_json", `ALTER TABLE work_nodes ADD COLUMN agenda_json TEXT NOT NULL DEFAULT ''`},
 		{"cells", "output_agent", `ALTER TABLE cells ADD COLUMN output_agent TEXT NOT NULL DEFAULT ''`},
 	} {
 		if err := ensureColumn(db, column.table, column.name, column.statement); err != nil {
@@ -1211,9 +1214,9 @@ func (s *Store) IndexNotebook(relPath string, options IndexOptions) (IndexResult
 	}
 
 	for _, node := range notebook.WorkNodes {
-		if _, err := tx.Exec(`INSERT INTO work_nodes(notebook_id, work_node_id, kind, title, state, outcome, dropped_reason, disclosure)
-			VALUES(?, ?, ?, ?, ?, ?, ?, ?)`, notebook.ID, node.ID, node.Kind, node.Title, node.State,
-			node.Outcome, node.DroppedReason, node.Disclosure); err != nil {
+		if _, err := tx.Exec(`INSERT INTO work_nodes(notebook_id, work_node_id, kind, title, state, outcome, dropped_reason, disclosure, agenda_json)
+			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`, notebook.ID, node.ID, node.Kind, node.Title, node.State,
+			node.Outcome, node.DroppedReason, node.Disclosure, string(node.Agenda)); err != nil {
 			return IndexResult{}, err
 		}
 	}
@@ -1461,6 +1464,34 @@ func (s *Store) Status(relPath string) (Status, error) {
 }
 
 // Events lists events after seq, optionally limited to one notebook.
+// LatestWorkNodeActivity returns one event per WorkNode of NOTEBOOK-ID carrying
+// its newest event time and sequence.  Projections that only need "last
+// activity" read this instead of paging the notebook's oldest events.
+func (s *Store) LatestWorkNodeActivity(notebookID string) ([]Event, error) {
+	query := `SELECT work_node_id, MAX(ts), MAX(seq) FROM events WHERE COALESCE(work_node_id, '') != ''`
+	args := []any{}
+	if notebookID != "" {
+		query += ` AND notebook_id = ?`
+		args = append(args, notebookID)
+	}
+	rows, err := s.db.Query(query+` GROUP BY work_node_id ORDER BY MAX(seq)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	events := []Event{}
+	for rows.Next() {
+		var event Event
+		var ts int64
+		if err := rows.Scan(&event.WorkNodeID, &ts, &event.Seq); err != nil {
+			return nil, err
+		}
+		event.Type, event.NotebookID, event.TS, event.Payload = "work-node.activity", notebookID, formatMillis(ts), map[string]any{}
+		events = append(events, event)
+	}
+	return events, rows.Err()
+}
+
 func (s *Store) Events(notebookID string, after int64, limit int) ([]Event, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 200

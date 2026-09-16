@@ -17,6 +17,7 @@ import (
 // aliases are retained by PatchTodoSource.
 type TodoPatch struct {
 	Op       string             `json:"op,omitempty"`
+	Title    *string            `json:"title,omitempty"`
 	Status   *string            `json:"status,omitempty"`
 	Attrs    map[string]*string `json:"attrs,omitempty"`
 	AfterAdd *string            `json:"afterAdd,omitempty"`
@@ -203,6 +204,17 @@ func PatchTodoSource(node Node, patch TodoPatch) string {
 	if status != "" {
 		statusPtr = &status
 	}
+	if patch.Title != nil {
+		if header, ok := parseHeader(node.Raw, 0); ok {
+			open := strings.IndexByte(node.Raw[header.body:], '[') + header.body
+			if open >= header.body {
+				if close := findClose(node.Raw, open, ']'); close >= 0 {
+					title := strings.NewReplacer(`\`, `\\`, `]`, `\]`, "\n", " ", "\r", " ").Replace(*patch.Title)
+					node.Raw = node.Raw[:open+1] + title + node.Raw[close:]
+				}
+			}
+		}
+	}
 	return renderSemanticNode(node, attrs, order, statusPtr)
 }
 
@@ -240,7 +252,11 @@ func ClockSourceForTodo(todo Node, attrs map[string]*string) string {
 		return ""
 	}
 	title := strings.NewReplacer(`\`, `\\`, `]`, `\]`).Replace(todo.Title)
-	return "@@clock [" + title + "]{from: " + value("from") + ", task: " + value("task") + "}"
+	id := ""
+	if value("id") != "" {
+		id = ", id: " + value("id")
+	}
+	return "@@clock [" + title + "]{from: " + value("from") + ", task: " + value("task") + id + "}"
 }
 
 func semanticNodeAttrs(node Node) (map[string]string, []string) {

@@ -1,5 +1,145 @@
 # Agenda / Planning DSL
 
+## Native Noema Agenda
+
+`M-x my/noema-agenda` (also `my/noema-roam-agenda`) opens the native Emacs
+Agenda. It formats native task records with Org Agenda's presentation code;
+it never creates Org source text or files. Markdown remains Markdown.
+
+Keys: `n/p` move, `f/b` next/previous range, `.` show/hide completed tasks,
+`v .` today, `v d` day, `v w` week, `v t` open tasks, `v c` custom blocks,
+`/` text filter, `\\` tag filter, `t` complete, `T` state, `s` schedule,
+`d` deadline, `#` priority, `r` refresh, `R` show/hide resident Roam/knowledge
+tasks, `v r` Markdown repeat, `e` effort, `%` progress, and `RET` original
+source. `C-u r` explicitly rescans active scopes. Writes check source revisions and refuse to overwrite
+modified Emacs source buffers.
+
+Additional native commands:
+
+| Keys | Action |
+|---|---|
+| `c` / `C-u c` | Choose a shared capture template / choose another Markdown destination. Failed drafts prefill the next capture. |
+| `m` / `u` / `U` | Mark task / unmark task / clear all marks. Multiple occurrences share one mark. |
+| `B` | Apply completion, state, dates, priority, effort, progress or repeat to marked tasks. Failed tasks remain marked. |
+| `D` | Add a dependency within the same scope; WorkNode edges remain inside their `.noema` document. |
+| `I` / `O` | Start a Markdown or WorkNode task clock / stop a selected running clock. |
+| `R` | Show/hide the resident Roam/knowledge scope while retaining the entered project. |
+| `v R` | Retry pending clock stops in active projects after saving source buffers. |
+| `K` | Resolve a pending clock request by keeping the saved source file's state. |
+| `v l` / `v k` / `v p` | Completion logbook / clock report / projects. |
+| `E` / `P` / `v a` | Set event end / explicitly promote to Apple / open global attention. |
+| `?` | Native command reference. |
+
+`s` and `d` reuse Org's calendar picker; a time is optional. `C-u s` and
+`C-u d` clear their dates. The picker returns native date strings, never Org
+source. Clock reports show all recorded time as hours:minutes; refresh with `r`
+for updated running totals. Marking, filters and block changes perform no source
+IO. Clock switching stops the previous tracked clock before starting the selected
+task. Pressing `I` again on the sole running task keeps its current interval.
+
+### Clocks when leaving a project
+
+A running clock remains available in the clock report after leaving its project
+or restarting the host. The project task itself stays out of the daily/task
+lists. Stopping that clock records the stop time without reading the inactive
+project. Starting a task in another project also records this deferred stop.
+
+On re-entry, Agenda writes the recorded stop time to the original clock after
+checking its identity, start time and task reference. Unrelated source edits are
+preserved. Modified Emacs buffers defer that write; save them and use `v R` to
+retry. A changed or missing clock remains visible as a conflict. `K` explicitly
+discards the pending request and adopts the saved source file's clock state.
+The Web Clock view offers the same retry and resolution actions for active
+projects. Neither action silently activates an inactive project.
+
+Pending stops show their original start and stop times. Active task/project
+totals use that stop time while source writeback is pending. Unconfirmed start
+requests remain visible after errors; inspect the Clock view before starting
+another task. They can be resolved with `K` after entering the source project.
+
+The host keeps a small SQLite journal at `agenda-clocks.sqlite` inside its state
+directory (`AARONNOTE_STATE_DIR`). It commits an intent before changing a source
+and acknowledges it only after observing the result. A lost acknowledgement is
+reconciled by clock identity instead of creating another interval. The journal
+contains clock references and pending operations, not project documents or a
+global task index. No periodic scanning or polling is added. Calendar dates
+currently use local minute precision; cross-timezone/DST semantics and Remote
+project ownership remain part of the unfinished integration work.
+
+The knowledge scope is resident. Local projects entered through project switch
+are leased only while active; nested scopes share a watcher and deduplicate
+files. Only notifications and explicit actions cause invalidation. Hidden native
+Agenda buffers wait until displayed to refresh.
+
+Use `my/noema-roam-agenda-web` for the Emacs-hosted Web Agenda and its
+calendar/Gantt/DAG/clock views. Emacs opens it with explicit source scopes: the
+resident knowledge vault plus the single project currently entered through the
+project lifecycle. A direct page load defaults to knowledge only; neither path
+implicitly queries every active lease. With no project filter, the DAG tab
+projects every WorkNode and every `depends`/`lineage` edge from that one entered
+project, including nodes without an Agenda task. An explicit project selection
+hard-crops the graph across the requested scopes before layout and DOM creation;
+unselected nodes and their edges are not rendered. Search still highlights
+matches inside that bounded graph. Web also hides completed tasks by default and
+exposes the same `Done`/`.` toggle. Native and Web Agenda share the scoped service
+and versioned source writers. See [implementation status](architecture/agenda-implementation.md)
+for remaining integrations, including Apple and remote projects.
+
+### WorkNode planning
+
+WorkNode planning is written visibly in the primary JuText cell with the same
+native planning commands used by Markdown. There is no `@@agenda` command and
+no JSON-only compatibility form. For example:
+
+```text
+@@todo [Explore spectral proof] {
+  sche: 2026-09-16 10:30
+  ddl: 2026-09-18
+  prio: A
+  effort: 2h
+}
+
+Continue from the reversible-operator assumptions…
+```
+
+JuText can edit this text directly. Noema recognizes only the leading visible
+planning region of the primary cell, keeps the remaining prompt intact, and
+never sends `@@todo`/`@@clock` lines to the Agent. Removing `@@todo` removes the
+node from task rows while preserving the WorkNode and project DAG. Fields are
+`sche`, `ddl`, `end`, `prio`, `effort`, `tags`, `context`, `project`, `done` and
+`progress`; dates are canonical `YYYY-MM-DD` or `YYYY-MM-DD HH:MM`. A following
+visible `@@clock [title] {id: ..., from: ..., to: ...}` line records time.
+
+`progress` is a percentage string from `"0"` to `"100"`, allowing decimals.
+The patch API also accepts a number and stores its string form. Progress changes
+do not change WorkNode state or scientific outcome. Both Emacs `%` and Web Gantt
+use the same native source writer.
+
+Visible `@@clock` commands store time intervals for the WorkNode:
+
+```text
+@@clock [Explore spectral proof] {
+  id: clock_a
+  from: 2026-09-16 09:00
+  to: 2026-09-16 10:15
+}
+```
+
+Clock IDs are stable and unique within the node; times are local
+`YYYY-MM-DD HH:MM`. An interval without `to` is running. A node can have at most
+one running interval. Clock totals follow node identity through title changes
+and work with identical titles. Completion retains clock history. Removing the
+visible planning region removes its task and closed clock history; the Agenda
+removal command refuses while a clock is running.
+
+Only `depends` blocks scheduling; lineage remains graph ancestry. Dropped parents
+do not satisfy dependencies. Multiple cells still project one task, and a node
+without cells opens in Graph Board. Completion preserves prompts, outputs and
+scientific outcomes. WorkNode repeats require an occurrence model and are
+currently rejected rather than resetting historical work.
+
+## Markdown planning reference
+
 Canonical reference for the `@@todo`/`@@itodo`/`@@project`/`@@milestone`/`@@clock`
 planning DSL and the server-side agenda engine built on top of it. This is
 the "grammar spec" referenced from `server/lib/runtime.mjs`'s agenda-engine
@@ -385,3 +525,95 @@ project rollup cards.
 
 @@todo(doing) [blocking task] {blocks: "second pass"}
 ```
+
+### Project lifetime
+
+In Emacs, explicit project switch/workbench, file/recent-file/buffer navigation,
+root directory, Magit and project terminal commands activate the selected
+project after opening succeeds. Recorded Perspective switches restore the
+associated project; temporary package switches do not activate sources.
+`M-x my/project-leave` (project menu `l`) releases the current project and its
+Perspective association while retaining buffers. Closing its Remote workspace
+also releases the project. Knowledge stays resident; clock references persist.
+
+Project identities use the Remote framework, whose placement API resolves
+client-accessible sources for the current host. Otherwise the logical source
+uses a workspace-owned target helper through the Emacs gateway. The helper
+lists, reads, watches and writes native sources; Go computes Markdown changes
+from content, and shared WorkNode functions preserve the DAG and outputs.
+Writes require the observed source revision and respect unsaved Emacs buffers.
+Leaving the scope closes its helper. Gateway loss removes stale tasks; recovery
+reopens active leases only. Target Node 26.5 is required. Real gateway and helper
+integration is verified on a logical local target; live SSH parity remains open.
+
+Run `node scripts/check-routed-agenda.mjs` from the Noema repository to check
+this path with disposable sources, including native Emacs actions and a host
+restart while a project's source directory is unavailable.
+
+### Apple bridge status
+
+The native EventKit helper, explicit promotion, durable reconciliation and
+native/Web global attention views are connected. `P` selects a Reminder list or
+Calendar; `v a` opens the saved global binding view. Only explicit promotion
+creates Apple items. Calendar requires a scheduled start and later end.
+
+Global attention refresh does not scan inactive projects. External changes are
+saved as lightweight receipts until source entry; writes check current identity,
+revision and unsaved Emacs buffers. Conflicting fields retain both values.
+Helper/gateway loss is shown as saved receipts, with no polling for recovery.
+The real host/Go/Emacs path is verified with a disposable Apple protocol
+substitute, **not live Apple data or device sync**. See the
+[Apple workflow, protocol and remaining boundaries](../apple/README.md).
+
+### Source exclusions
+
+Agenda prunes hidden paths (`.lake/`, `.git/`, `.github/`, `.noema/`, etc.) and
+`node_modules/`, `vendor/`, `build/`, `dist/`, `__pycache__/` before descending
+into them. File notifications use the same exclusions. This prevents Lean
+package READMEs and other dependency files from entering the task index.
+The filter is relative to each active root: a project explicitly entered under
+`~/.config/` still works.
+
+Additional exclusions are Emacs settings, shared by native and Web Agenda:
+
+```elisp
+(config-set 'my/noema-agenda-exclude-patterns
+            '("archive/**" "**/*.generated.md" "scratch.md"))
+```
+
+The setting is also available in `M-x config-board` and persists in the Emacs
+config store. Patterns match paths relative to each scope root. `archive/**` also prevents
+walking that directory. Restart the Noema host (`M-x my/noema-stop`, then
+reopen Agenda) after changing this setting. Headless host integrations can set
+`NOEMA_AGENDA_EXCLUDE` to the equivalent JSON array. Excluded files are not
+capture destinations. Source errors in eligible notes remain visible.
+
+
+### Markdown code examples and capture
+
+Agenda recognizes native planning commands in Markdown prose. Fenced code,
+indented code, inline code, escaped commands and metadata summaries do not
+create tasks, projects or running clocks. Code inside a real task's title
+remains part of its original source. Ordinary prose in a proof environment
+continues to support tasks.
+
+The same source boundary applies when locating a task to edit. If an editor
+moves a task into code, an old Agenda selector cannot modify that example.
+Capture refuses to append inside an unclosed code fence and leaves the file
+unchanged; close the fence or choose another capture destination. No Markdown
+is converted to Org or regenerated from a rendered tree.
+
+
+### Read-only editor snapshots
+
+`agenda:document` accepts a Markdown file identity and the editor's current
+`content`. It uses Go's native document parser over supplied bytes only and
+returns the shared planning projection, with UTF-16 positions and a content
+revision. It never reads that file, enters its project, allocates task IDs,
+mutates source or publishes the snapshot to Agenda. The 16 MiB source bound
+applies before computation. `.noema` documents use WorkNode metadata and are
+not accepted by this Markdown endpoint.
+
+Roam's `F` entry uses this snapshot instead of scanning the vault or falling
+back to regexes. Roam's task list uses `agenda:query-active` and the same scoped
+writes as the main Agenda, including protected buffers and repeat completion.

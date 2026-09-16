@@ -90,13 +90,17 @@ project/
 
 `.agent/` never replaces the authoritative `.noema`, Markdown or source files.
 
+`noema.toml` marks the project root. Pi, sessions, views and the wiki repository all use the nearest manifest above a file. Visiting a `.noema` never creates a project, because previews and programs visit files too. Creating a `.noema` outside any project, or running its first work block, asks where to create the manifest. The prompt proposes the enclosing `project.el` workspace root, or the file's own directory when there is none. Declining writes nothing. `M-x noema-project-enable` uses the same default.
+
 ## Emacs workflow
 
-Opening `research.noema` visits the real file in `noema-research-mode`. JuText supplies block navigation and editing while stable IDs remain hidden. Work prompts may begin with `@@agent(id)`, `@@session(continue|fork|fresh)`, repeated `@@ctx(ref)` and `@@skill(id)` directives. `C-c C-c` strips that leading control region, freezes a RunSpec and dispatches the body through the configured ACP agent.
+Opening `research.noema` visits the real file in `noema-research-mode`. JuText supplies block navigation and editing while stable IDs remain hidden. Work prompts may begin with `@@agent(id)`, `@@session(continue|fork|fresh|name|parent:child)`, repeated `@@ctx(ref)` and `@@skill(id)` directives. `@@ctx(lineage:N)` widens the ancestor context to N (1–3) levels and `@@ctx(none)` turns off the context Noema attaches automatically; automatic context (derived lineage and upstream outputs) only uses the 64 KiB budget declared context leaves, and anything it cannot fit is recorded as `context_omitted` in the RunSpec. `C-c C-c` strips that leading control region, freezes a RunSpec and dispatches the body through the configured ACP agent.
 
 Project Skills and MCPs are resolved from built-in, global, explicitly shared
 and project scopes before that RunSpec is frozen. `M-x noema-capability-manager`
-shows effective state, source, patches, validation and MCP runtime state. See
+shows effective state, source, patches, validation and MCP runtime state; in an
+agent-shell buffer the same command becomes a read-only lookup that drafts a
+reference to the selected capability's source. See
 [Project Skills and MCP capabilities](docs/capabilities.md) and the
 [semantic Elisp API](docs/noema-elisp-api.md).
 
@@ -157,7 +161,8 @@ window: `RET` or double-click synchronizes its selected node back to JuText
 and closes it; `q` dismisses it. Opening `.noema` instead defaults to JuText
 plus the right-side OutputArea, and it never auto-opens or auto-follows DAG.
 Work state, outcome, active Run status, dropped reason and checkpoint shape
-are visible on the graph. `TAB` fixes a fold, `f` toggles the focus lens, and
+are visible on the graph. `TAB` fixes a fold, `f` makes the selected node the
+root of the drawing (`^` moves that root up, `[`/`]` change its depth), and
 `z` cycles Overview / Branch / Detail; Detail projects the latest Run and
 linked artifacts. Overview and manual folds retain the selected/focused path.
 Use `?` for contextual help, `h/j/k/l` or arrows for geometric graph

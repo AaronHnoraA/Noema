@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleIdentifier</key><string>org.noema.agenda.eventkit</string>
+  <key>CFBundleName</key><string>Noema Agenda</string>
+  <key>NSRemindersFullAccessUsageDescription</key><string>Sync tasks you explicitly promote to selected Reminders lists with Noema Agenda.</string>
+  <key>NSCalendarsFullAccessUsageDescription</key><string>Sync time blocks you explicitly promote to selected calendars with Noema Agenda.</string>
+</dict></plist>

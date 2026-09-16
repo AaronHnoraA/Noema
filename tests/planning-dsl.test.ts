@@ -218,6 +218,9 @@ describe("planning value grammar", () => {
       { id: "abc123", noteTitle: null, text: "", raw: "#abc123" },
       { id: null, noteTitle: null, text: "other task", raw: "other task" },
     ]);
+    expect(parseDepRefs("#demo-native-source")).toEqual([
+      { id: "demo-native-source", noteTitle: null, text: "", raw: "#demo-native-source" },
+    ]);
   });
 
   test("parseDuration reads h/m/d/H:MM forms; d is an 8-hour workday", () => {

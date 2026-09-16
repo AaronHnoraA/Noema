@@ -233,7 +233,7 @@ export function parseDepRefs(raw) {
     .split("&")
     .map((part) => {
       const piece = part.trim();
-      const idMatch = piece.match(/^#([A-Za-z0-9]+)$/);
+      const idMatch = piece.match(/^#([A-Za-z0-9][A-Za-z0-9_-]*)$/);
       if (idMatch) return { id: idMatch[1], noteTitle: null, text: "", raw: piece };
       const m = piece.match(/^\[\[([^\]]+)\]\]::(.*)$/);
       if (m) return { id: null, noteTitle: m[1].trim(), text: m[2].trim(), raw: piece };

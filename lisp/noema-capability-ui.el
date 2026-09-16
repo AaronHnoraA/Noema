@@ -15,6 +15,8 @@
 (require 'tabulated-list)
 (require 'button)
 (require 'noema-api)
+(declare-function noema-capability-lookup "noema-capability-actions" (&optional type buffer))
+(declare-function noema-capability-lookup--agent-buffer "noema-capability-actions" ())
 
 (defvar-local noema-capability-ui--project nil)
 (defvar-local noema-capability-ui--view 'global)
@@ -480,24 +482,28 @@ project; they never prompt for a directory.  Changes apply to the active page."
 (defun noema-capability-manager (&optional project type)
   "Open the global Skill/MCP manager, optionally filtered by TYPE.
 PROJECT or the opening buffer's project is only context for the optional
-project pages.  It never changes the initial global view."
+project pages.  It never changes the initial global view.  In an agent
+shell the same command is a read-only lookup, because the manager's scoped
+writes do not reach a running external client."
   (interactive)
-  (let* ((root (or (and (null project) noema-capability-ui--project)
-                    (noema-current-project project)))
-         (origin (if (derived-mode-p 'noema-research-mode) (point-marker)
-                   noema-capability-ui--origin))
-         (buffer (get-buffer-create (format "*Noema %s: %s*" (or type "capabilities")
-                                          "Global"))))
-    (with-current-buffer buffer
-      (noema-capability-ui-mode)
-      (setq noema-capability-ui--project root
-            default-directory (or root default-directory)
-            noema-capability-ui--base-filter type
-            noema-capability-ui--filter type
-            noema-capability-ui--origin origin
-            noema-capability-ui--probes (make-hash-table :test #'equal))
-      (noema-capability-ui-global))
-    (pop-to-buffer buffer)))
+  (if (and (null project) (noema-capability-lookup--agent-buffer))
+      (noema-capability-lookup type)
+    (let* ((root (or (and (null project) noema-capability-ui--project)
+                     (noema-current-project project)))
+           (origin (if (derived-mode-p 'noema-research-mode) (point-marker)
+                     noema-capability-ui--origin))
+           (buffer (get-buffer-create (format "*Noema %s: %s*" (or type "capabilities")
+                                              "Global"))))
+      (with-current-buffer buffer
+        (noema-capability-ui-mode)
+        (setq noema-capability-ui--project root
+              default-directory (or root default-directory)
+              noema-capability-ui--base-filter type
+              noema-capability-ui--filter type
+              noema-capability-ui--origin origin
+              noema-capability-ui--probes (make-hash-table :test #'equal))
+        (noema-capability-ui-global))
+      (pop-to-buffer buffer))))
 
 ;;;###autoload
 (defun noema-skill-manager (&optional project)

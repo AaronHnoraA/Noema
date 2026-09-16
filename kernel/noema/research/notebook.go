@@ -13,8 +13,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/aaronhe/noema/kernel/noema/planning"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -27,8 +30,10 @@ const (
 )
 
 var (
-	cellIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
-	graphKinds    = map[string]bool{"question": true, "work": true, "checkpoint": true}
+	cellIDPattern         = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+	agendaProgressPattern = regexp.MustCompile(`^[0-9]+(?:\.[0-9]+)?$`)
+	agendaClockIDPattern  = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+	graphKinds            = map[string]bool{"question": true, "work": true, "checkpoint": true}
 )
 
 // ErrNotResearchNotebook reports a notebook without the research schema.
@@ -58,16 +63,17 @@ type Cell struct {
 	OutputAgent   string   `json:"outputAgent,omitempty"`
 }
 
-// WorkNode is a durable unit in the project work graph. It is deliberately
-// independent of Cell: one node may bind several cells or no cell at all.
+// WorkNode is a durable unit in the project work graph. Agenda is projected
+// from its primary Cell's visible @@todo / @@clock commands.
 type WorkNode struct {
-	ID            string `json:"id"`
-	Kind          string `json:"kind"`
-	Title         string `json:"title"`
-	State         string `json:"state,omitempty"`
-	Outcome       string `json:"outcome,omitempty"`
-	DroppedReason string `json:"droppedReason,omitempty"`
-	Disclosure    string `json:"disclosure,omitempty"`
+	ID            string          `json:"id"`
+	Kind          string          `json:"kind"`
+	Title         string          `json:"title"`
+	State         string          `json:"state,omitempty"`
+	Outcome       string          `json:"outcome,omitempty"`
+	DroppedReason string          `json:"droppedReason,omitempty"`
+	Disclosure    string          `json:"disclosure,omitempty"`
+	Agenda        json.RawMessage `json:"agenda,omitempty"`
 }
 
 // Dependency is one explicit WorkNode relationship.
@@ -102,13 +108,14 @@ type rawCellMeta struct {
 }
 
 type rawWorkNode struct {
-	ID            string `json:"id"`
-	Kind          string `json:"kind"`
-	Title         string `json:"title"`
-	State         string `json:"state"`
-	Outcome       string `json:"outcome"`
-	DroppedReason string `json:"dropped_reason"`
-	Disclosure    string `json:"disclosure"`
+	ID            string          `json:"id"`
+	Kind          string          `json:"kind"`
+	Title         string          `json:"title"`
+	State         string          `json:"state"`
+	Outcome       string          `json:"outcome"`
+	DroppedReason string          `json:"dropped_reason"`
+	Disclosure    string          `json:"disclosure"`
+	Agenda        json.RawMessage `json:"agenda,omitempty"`
 }
 
 type rawNotebook struct {
@@ -189,6 +196,7 @@ func ParseNotebook(data []byte) (Notebook, error) {
 		}
 	}
 	nodeByID := map[string]WorkNode{}
+	nodeIndex := map[string]int{}
 	if !legacy {
 		for _, item := range meta.WorkNodes {
 			id := strings.TrimSpace(item.ID)
@@ -201,8 +209,12 @@ func ParseNotebook(data []byte) (Notebook, error) {
 			if !graphKinds[item.Kind] {
 				return Notebook{}, fmt.Errorf("WorkNode %q has unsupported kind %q", id, item.Kind)
 			}
+			if len(item.Agenda) > 0 && string(item.Agenda) != "null" {
+				return Notebook{}, fmt.Errorf("WorkNode %q: Agenda belongs in the primary Cell's visible @@todo / @@clock commands", id)
+			}
 			node := WorkNode{ID: id, Kind: item.Kind, Title: item.Title, State: item.State,
 				Outcome: item.Outcome, DroppedReason: item.DroppedReason, Disclosure: item.Disclosure}
+			nodeIndex[id] = len(notebook.WorkNodes)
 			notebook.WorkNodes = append(notebook.WorkNodes, node)
 			nodeByID[id] = node
 		}
@@ -229,6 +241,7 @@ func ParseNotebook(data []byte) (Notebook, error) {
 			legacyBindings[rawCell.ID] = id
 			node := WorkNode{ID: id, Kind: m.Kind, Title: m.Title, State: m.State, Outcome: m.Outcome,
 				DroppedReason: m.DroppedReason, Disclosure: m.Disclosure}
+			nodeIndex[id] = len(notebook.WorkNodes)
 			notebook.WorkNodes = append(notebook.WorkNodes, node)
 			nodeByID[id] = node
 		}
@@ -349,7 +362,134 @@ func ParseNotebook(data []byte) (Notebook, error) {
 		}
 		notebook.Cells = append(notebook.Cells, cell)
 	}
+	primarySeen := map[string]bool{}
+	for _, cell := range notebook.Cells {
+		node, ok := nodeByID[cell.WorkNodeID]
+		if !ok || primarySeen[node.ID] || (node.Kind == "work") != (cell.CellType == "code") {
+			continue
+		}
+		primarySeen[node.ID] = true
+		agenda, present, err := parseWorkAgendaDirective(cell.Source, node.Kind)
+		if err != nil {
+			return Notebook{}, fmt.Errorf("WorkNode %q: %w", node.ID, err)
+		}
+		if present {
+			node.Agenda = agenda
+			notebook.WorkNodes[nodeIndex[node.ID]] = node
+			nodeByID[node.ID] = node
+		}
+	}
 	return notebook, nil
+}
+
+// parseWorkAgendaDirective reads leading Markdown @@todo / @@clock commands.
+// Planning commands after ordinary body text remain user content.
+func parseWorkAgendaDirective(source, kind string) (json.RawMessage, bool, error) {
+	lines := strings.Split(strings.ReplaceAll(strings.ReplaceAll(source, "\r\n", "\n"), "\r", "\n"), "\n")
+	values := map[string]any{}
+	clocks := []map[string]string{}
+	found := false
+	aliases := map[string]string{"due": "ddl", "deadline": "ddl", "scheduled": "sche", "start": "sche", "priority": "prio", "proj": "project", "ctx": "context", "pct": "progress", "finish": "end"}
+	parseAttrs := func(parts []string) (map[string]string, error) {
+		attrs := map[string]string{}
+		for _, part := range parts {
+			part = strings.TrimSpace(strings.TrimSuffix(part, ","))
+			if part == "" || strings.HasPrefix(part, "#") || strings.HasPrefix(part, "//") {
+				continue
+			}
+			pair := regexp.MustCompile(`^([A-Za-z][A-Za-z0-9_-]*)\s*[:=]\s*(.*?)\s*$`).FindStringSubmatch(part)
+			if pair == nil {
+				return nil, fmt.Errorf("malformed planning attribute: %s", part)
+			}
+			key, value := strings.ToLower(pair[1]), strings.Trim(strings.TrimSpace(pair[2]), `"'`)
+			if canonical := aliases[key]; canonical != "" {
+				key = canonical
+			}
+			if _, exists := attrs[key]; exists {
+				return nil, fmt.Errorf("duplicate agenda field: %s", key)
+			}
+			if value != "" {
+				attrs[key] = value
+			}
+		}
+		return attrs, nil
+	}
+	command := regexp.MustCompile(`^@@(todo|clock)(?:\(([^)\n]*)\))?\s+\[(.*)\]\s*(\{.*)$`)
+	for i := 0; i < len(lines); {
+		line := lines[i]
+		if strings.TrimSpace(line) == "" {
+			i++
+			continue
+		}
+		if regexp.MustCompile(`^@@[A-Za-z][A-Za-z0-9_-]*\(.*\)\s*$`).MatchString(line) {
+			i++
+			continue
+		}
+		match := command.FindStringSubmatch(line)
+		if match == nil {
+			break
+		}
+		commandKind, status, rawAttrs := match[1], strings.TrimSpace(match[2]), strings.TrimSpace(match[4])
+		var attrParts []string
+		if strings.HasSuffix(rawAttrs, "}") {
+			attrParts = strings.Split(strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(rawAttrs, "{"), "}")), ",")
+			i++
+		} else if rawAttrs == "{" {
+			closed := false
+			for i = i + 1; i < len(lines); i++ {
+				if strings.TrimSpace(lines[i]) == "}" {
+					closed = true
+					i++
+					break
+				}
+				attrParts = append(attrParts, lines[i])
+			}
+			if !closed {
+				return nil, false, errors.New("unclosed planning attribute block")
+			}
+		} else {
+			return nil, false, errors.New("malformed planning attribute block")
+		}
+		attrs, err := parseAttrs(attrParts)
+		if err != nil {
+			return nil, false, err
+		}
+		if commandKind == "todo" {
+			if found {
+				return nil, false, errors.New("only one leading @@todo is allowed")
+			}
+			found = true
+			for key, value := range attrs {
+				values[key] = value
+			}
+			if kind != "work" && status != "" && status != "todo" {
+				values["status"] = status
+			}
+		} else {
+			if !found {
+				return nil, false, errors.New("@@clock requires a leading @@todo")
+			}
+			clock := map[string]string{"id": attrs["id"], "from": attrs["from"]}
+			if attrs["to"] != "" {
+				clock["to"] = attrs["to"]
+			}
+			clocks = append(clocks, clock)
+		}
+	}
+	if !found {
+		return nil, false, nil
+	}
+	if len(clocks) > 0 {
+		values["clocks"] = clocks
+	}
+	raw, err := json.Marshal(values)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := validateWorkAgenda(raw, kind); err != nil {
+		return nil, false, err
+	}
+	return raw, true, nil
 }
 
 func validateWorkDAG(nodes map[string]WorkNode, dependencies []Dependency) error {
@@ -469,4 +609,117 @@ func uniqueStrings(values []string) []string {
 func sha256Hex(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
+}
+
+// Agenda is parsed from the primary Cell's visible @@todo / @@clock commands. The raw
+// object is retained only in the in-memory index projection.
+func validateWorkAgenda(raw json.RawMessage, kind string) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &values); err != nil || values == nil {
+		return errors.New("agenda must be an object")
+	}
+	for key, entry := range values {
+		if key == "clocks" {
+			if err := validateWorkClocks(entry); err != nil {
+				return err
+			}
+			continue
+		}
+		var value string
+		if string(entry) == "null" {
+			return fmt.Errorf("agenda.%s must be a string", key)
+		}
+		if err := json.Unmarshal(entry, &value); err != nil {
+			return fmt.Errorf("agenda.%s must be a string", key)
+		}
+		switch key {
+		case "sche", "ddl", "end", "done":
+			if value == "" {
+				continue
+			}
+			date, hasTime, ok := planning.ParseDateValue(value, time.Now())
+			layout := "2006-01-02"
+			if hasTime {
+				layout += " 15:04"
+			}
+			if !ok || date.Format(layout) != value {
+				return fmt.Errorf("invalid agenda.%s canonical date", key)
+			}
+		case "prio":
+			if value != "" && !regexp.MustCompile(`^[A-Z]$`).MatchString(value) {
+				return errors.New("invalid agenda priority")
+			}
+		case "effort":
+			if value != "" && !regexp.MustCompile(`(?i)^(?:[0-9]+:[0-5][0-9]|[0-9]+(?:\.[0-9]+)?\s*(?:d|day|days|h|hour|hours|m|min|mins|minute|minutes)?)$`).MatchString(strings.TrimSpace(value)) {
+				return errors.New("invalid agenda effort")
+			}
+		case "progress":
+			if value != "" {
+				progress, err := strconv.ParseFloat(value, 64)
+				if err != nil || !agendaProgressPattern.MatchString(value) || progress < 0 || progress > 100 {
+					return errors.New("agenda.progress must be between 0 and 100")
+				}
+			}
+		case "status":
+			if kind == "work" || (value != "todo" && value != "doing" && value != "blocked" && value != "done" && value != "cancelled") {
+				return errors.New("invalid agenda status; work nodes use state")
+			}
+		case "tags", "context", "project":
+		default:
+			return fmt.Errorf("unsupported agenda field: %s", key)
+		}
+	}
+	return nil
+}
+
+func validateWorkClocks(raw json.RawMessage) error {
+	var clocks []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &clocks); err != nil || clocks == nil {
+		return errors.New("agenda.clocks must be an array")
+	}
+	ids := map[string]bool{}
+	running := 0
+	for _, clock := range clocks {
+		if clock == nil {
+			return errors.New("agenda clock must be an object")
+		}
+		for key := range clock {
+			if key != "id" && key != "from" && key != "to" {
+				return errors.New("unsupported agenda clock field")
+			}
+		}
+		var id string
+		if err := json.Unmarshal(clock["id"], &id); err != nil || !agendaClockIDPattern.MatchString(id) || ids[id] {
+			return errors.New("invalid or duplicate agenda clock ID")
+		}
+		ids[id] = true
+		var from string
+		for _, key := range []string{"from", "to"} {
+			entry, exists := clock[key]
+			if key == "to" && !exists {
+				running++
+				continue
+			}
+			var value string
+			if err := json.Unmarshal(entry, &value); err != nil {
+				return fmt.Errorf("agenda clock.%s requires a canonical date and time", key)
+			}
+			date, hasTime, ok := planning.ParseDateValue(value, time.Now())
+			if !ok || !hasTime || date.Format("2006-01-02 15:04") != value {
+				return fmt.Errorf("agenda clock.%s requires a canonical date and time", key)
+			}
+			if key == "from" {
+				from = value
+			} else if value < from {
+				return errors.New("agenda clock.to is before from")
+			}
+		}
+	}
+	if running > 1 {
+		return errors.New("a WorkNode may have only one running clock")
+	}
+	return nil
 }

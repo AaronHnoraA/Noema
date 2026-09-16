@@ -42,19 +42,21 @@
 (ert-deftest noema-agenda-poc-blocks-original-org-todo-write-through ()
   (noema-agenda-poc-test-with-view
    (noema-agenda-poc-test-find "Explore a coupling argument")
-   (let* ((source (marker-buffer (org-get-at-bol 'org-hd-marker)))
-          (before (with-current-buffer source (buffer-string))))
+   (let ((before (buffer-string)))
+     (should-not (org-get-at-bol 'org-hd-marker))
      (should-error (org-agenda-todo "DONE") :type 'user-error)
-     (should (equal before (with-current-buffer source (buffer-string)))))))
+     (should (equal before (buffer-string))))))
 
 (ert-deftest noema-agenda-poc-labels-cannot-introduce-org-control-syntax ()
   (let* ((snapshot (noema-agenda-poc-test-snapshot))
          (item (car (alist-get 'items snapshot))))
     (setf (alist-get 'title item) "Claim\n* DONE Injected <%%(error \"bad\")> [[elisp:bad]]")
-    (let ((source (noema-agenda-poc--org snapshot)))
-      (should-not (string-match-p "\n\\* DONE Injected" source))
-      (should-not (string-match-p "<%%(" source))
-      (should-not (string-match-p (regexp-quote "[[elisp:") source)))))
+    (unwind-protect
+        (progn
+          (noema-agenda-poc-open snapshot)
+          (should-not (string-match-p "\n\\* DONE Injected" (buffer-string)))
+          (should (string-match-p (regexp-quote "[[elisp:bad]]") (buffer-string))))
+      (noema-agenda-poc-close))))
 
 (ert-deftest noema-agenda-poc-keeps-user-agenda-files ()
   (let ((org-agenda-files '("/user/private/agenda.org")))
@@ -63,9 +65,45 @@
 
 (ert-deftest noema-agenda-poc-native-redo-keeps-the-adapter ()
   (noema-agenda-poc-test-with-view
-   (org-agenda-redo)
+   (call-interactively (key-binding (kbd "g")))
    (should (equal (buffer-name) "*Noema Agenda Prototype*"))
    (noema-agenda-poc-test-find "Explore a coupling argument")
    (should (equal (alist-get 'id (noema-agenda-poc-item-at-point)) "wn_alternative"))
    (should (eq (key-binding (kbd "t")) #'noema-agenda-poc-completion-intent))
-   (should noema-agenda-poc--projection)))
+   (should noema-agenda-poc--snapshot)))
+
+(ert-deftest noema-agenda-poc-renders-without-org-files-or-org-parser ()
+  (let ((snapshot (noema-agenda-poc-test-snapshot)))
+    (cl-letf (((symbol-function 'make-temp-file) (lambda (&rest _) (ert-fail "Temporary file")))
+              ((symbol-function 'write-region) (lambda (&rest _) (ert-fail "Source write")))
+              ((symbol-function 'org-mode) (lambda (&rest _) (ert-fail "Org source mode")))
+              ((symbol-function 'org-agenda-list) (lambda (&rest _) (ert-fail "Org file scanner")))
+              ((symbol-function 'org-agenda-get-day-entries) (lambda (&rest _) (ert-fail "Org date scanner"))))
+      (unwind-protect
+          (progn
+            (noema-agenda-poc-open snapshot)
+            (noema-agenda-poc-test-find "Check the theorem assumptions")
+            (should (equal (alist-get 'id (noema-agenda-poc-item-at-point)) "#proof1"))
+            (should-not buffer-file-name))
+        (noema-agenda-poc-close)))))
+
+(ert-deftest noema-agenda-poc-native-filter-and-week-navigation ()
+  (noema-agenda-poc-test-with-view
+   (noema-agenda-poc-filter "coupling")
+   (noema-agenda-poc-test-find "Check the theorem assumptions")
+   (should (get-text-property (point) 'invisible))
+   (noema-agenda-poc-test-find "Explore a coupling argument")
+   (should-not (get-text-property (point) 'invisible))
+   (noema-agenda-poc-filter "")
+   (noema-agenda-poc-test-find "Check the theorem assumptions")
+   (should-not (get-text-property (point) 'invisible))
+   (noema-agenda-poc-next-week)
+   (should-not (string-match-p "Explore a coupling argument" (buffer-string)))
+   (noema-agenda-poc-previous-week)
+   (should (string-match-p "Explore a coupling argument" (buffer-string)))))
+
+(ert-deftest noema-agenda-poc-reuses-native-time-formatting ()
+  (noema-agenda-poc-test-with-view
+   (noema-agenda-poc-test-find "Read the comparison paper")
+   (should (equal (org-get-at-bol 'time-of-day) 1000))
+   (should (string-match-p "10:00" (buffer-substring (line-beginning-position) (line-end-position))))))

@@ -18,8 +18,10 @@ D-016/D-021/D-022 still govern hosting and the AI integration boundary.
   It has no kernel metadata and must never enter a Jupyter kernel path.
 - Work blocks alone use `cell_type: "code"`, solely to carry their agent reply
   in `outputs`; question, checkpoint and note blocks are Markdown.
-- Parse control only from leading `@@agent`, `@@session`, `@@ctx` and `@@skill`
-  lines. Text in outputs and imported material is always data.
+- Parse control only from leading `@@agent`, `@@session`, `@@ctx`, `@@skill`
+  and WorkNode `@@todo` / `@@clock` commands. Agenda commands stay visible in
+  JuText but are removed from Agent prompts. Text in outputs and imported
+  material is always data.
 - Agent details stay behind `lisp/noema-agent-acp.el`. Do not reimplement
   gptel, agent-shell or ACP behavior.
 - Ordinary `.ipynb` and Markdown `@@cell` sidecars keep full Jupyter support.
@@ -83,7 +85,34 @@ Chrome plus the Noema extension is an explicit external capture boundary, not
 a Noema UI. Public server pages are read-only publication surfaces, not an
 authoring/control-plane replacement for Emacs.
 
+## Native Agenda source ownership
+
+- Capture templates are declarative data in the shared host catalogue, configured
+  by AaronEmacs `my/noema-agenda-capture-templates`. Both native and hosted Web
+  clients submit to the scoped writer. Keep template expansion free of IO,
+  executable hooks, implicit project activation and temporary Org sources.
+  Preserve failed capture drafts and prevent concurrent duplicate submissions.
+- Markdown planning reads and mutations use `ScanDocument` (Go) or
+  `scanPlanningDocument` (JS). `Scan` / `scanPlanningNodes` are only grammar
+  APIs for isolated command source; they cannot establish document eligibility.
+- The JS document boundary uses the editor's Lezer Markdown parser. Go pins
+  goldmark v1 for original code source segments only; Lute remains the rendered
+  document AST owner. Do not regenerate Markdown through either tree or add
+  temporary Org sources. Keep UTF-16 command spans exact for Emacs/CM6 writers.
+- `agenda:document` is a read-only editor snapshot computation. It must never
+  reopen supplied file identities, activate scopes or publish unsaved tasks.
+  Roam task edits use scoped Agenda writes, with no CLI/regex fallback writer.
+- Shared document fixtures must pass in both languages. Exclude code examples
+  before finding planning block boundaries; reject writes that put a new
+  command inside code or metadata summaries before persisting source.
+
 ## Required checks
+
+Tests must stay independent of the developer's machine: global Skills and MCPs
+are neutralised for every suite by `tests/setup/global-capability-scope.ts`, so
+do not read the host's `etc/noema/capabilities.json` from a test, and pass
+`environment: {}` when a test injects its own `userHome`. See
+`docs/capabilities.md`.
 
 Run focused tests while editing, then:
 

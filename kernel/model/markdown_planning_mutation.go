@@ -12,11 +12,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/aaronhe/noema/kernel/conf"
@@ -36,23 +34,8 @@ var newMarkdownPlanningDocumentID = func() (string, error) {
 	return id.String(), err
 }
 
-type MarkdownPlanningSelector struct {
-	Kind   string `json:"kind"`
-	Index  *int   `json:"index,omitempty"`
-	Source string `json:"source,omitempty"`
-	ID     string `json:"id,omitempty"`
-	Title  string `json:"title,omitempty"`
-	Open   bool   `json:"open,omitempty"`
-}
-
-type MarkdownPlanningMutation struct {
-	Type           string                    `json:"type"`
-	Source         string                    `json:"source"`
-	InitialContent string                    `json:"initialContent,omitempty"`
-	Create         *noemaplanning.TodoCreate `json:"create,omitempty"`
-	Todo           *noemaplanning.TodoPatch  `json:"todo,omitempty"`
-	Attrs          map[string]*string        `json:"attrs,omitempty"`
-}
+type MarkdownPlanningSelector = noemaplanning.Selector
+type MarkdownPlanningMutation = noemaplanning.Mutation
 
 type MarkdownPlanningMutationRequest struct {
 	Notebook        string                   `json:"notebook"`
@@ -116,94 +99,26 @@ func MutateMarkdownPlanning(request MarkdownPlanningMutationRequest) (ret *Markd
 	}
 
 	ret = &MarkdownPlanningMutationResult{Path: path, Version: currentVersion}
-	nextContent := content
-	if mutationType == "append" || mutationType == "append-todo" {
-		source := request.Mutation.Source
-		initialContent := request.Mutation.InitialContent
-		if mutationType == "append-todo" {
-			var id string
-			if id, err = mintMarkdownPlanningTodoID(boxID); nil != err {
+	// Allocate IDs and initial note metadata at the storage boundary.
+	if mutationType == "append-todo" {
+		request.Mutation.ID, err = mintMarkdownPlanningTodoID(boxID)
+		if err != nil {
+			return nil, err
+		}
+		if content == "" {
+			request.Mutation.InitialContent, err = initialMarkdownPlanningTodoContent(path, *request.Mutation.Create)
+			if err != nil {
 				return nil, err
 			}
-			if source, err = noemaplanning.CreateTodoSource(*request.Mutation.Create, id); nil != err {
-				return nil, err
-			}
-			if content == "" {
-				if initialContent, err = initialMarkdownPlanningTodoContent(path, *request.Mutation.Create); nil != err {
-					return nil, err
-				}
-			}
-		}
-		baseContent := content
-		if baseContent == "" && initialContent != "" {
-			baseContent = initialContent
-		}
-		base := strings.TrimRightFunc(baseContent, unicode.IsSpace)
-		prefix := ""
-		if base != "" {
-			prefix = "\n\n"
-		}
-		ret.From = utf16SourceLength(base + prefix)
-		ret.To = ret.From + utf16SourceLength(source)
-		ret.NextSource = source
-		nextContent = base + prefix + source + "\n"
-	} else {
-		nodes := noemaplanning.ScanDocument(content, "")
-		node := locateMarkdownPlanningNode(nodes, request.Selector)
-		if nil == node {
-			return nil, fmt.Errorf("planning source was not found")
-		}
-		fromByte, ok := utf16OffsetToByte(content, node.Span.From)
-		if !ok {
-			return nil, fmt.Errorf("invalid planning start offset [%d]", node.Span.From)
-		}
-		toByte, ok := utf16OffsetToByte(content, node.Span.To)
-		if !ok {
-			return nil, fmt.Errorf("invalid planning end offset [%d]", node.Span.To)
-		}
-		ret.Source = node.Raw
-		nextSource := request.Mutation.Source
-		effectiveType := mutationType
-		switch mutationType {
-		case "patch-todo":
-			if nil == request.Mutation.Todo {
-				return nil, fmt.Errorf("patch-todo requires todo semantics")
-			}
-			nextSource = noemaplanning.PatchTodoSource(*node, *request.Mutation.Todo)
-			effectiveType = "replace"
-		case "patch-node":
-			nextSource = noemaplanning.PatchNodeSource(*node, request.Mutation.Attrs, nil)
-			effectiveType = "replace"
-		case "insert-clock":
-			nextSource = noemaplanning.ClockSourceForTodo(*node, request.Mutation.Attrs)
-			effectiveType = "insert-after"
-		}
-		if effectiveType == "replace" {
-			ret.From = node.Span.From
-			ret.To = node.Span.From + utf16SourceLength(nextSource)
-			ret.NextSource = nextSource
-			nextContent = content[:fromByte] + nextSource + content[toByte:]
-		} else {
-			insertByte := toByte
-			if rel := strings.IndexByte(content[toByte:], '\n'); rel >= 0 {
-				insertByte = toByte + rel + 1
-			} else {
-				insertByte = len(content)
-			}
-			inserted := nextSource
-			if insertByte == len(content) && content != "" && !strings.HasSuffix(content, "\n") {
-				inserted = "\n" + inserted
-			}
-			if !strings.HasSuffix(inserted, "\n") {
-				inserted += "\n"
-			}
-			ret.From = utf16SourceLength(content[:insertByte])
-			ret.To = ret.From + utf16SourceLength(inserted)
-			ret.Source = ""
-			ret.NextSource = inserted
-			nextContent = content[:insertByte] + inserted + content[insertByte:]
 		}
 	}
+	transformed, err := noemaplanning.TransformSource(content, request.Selector, request.Mutation)
+	if err != nil {
+		return nil, err
+	}
+	ret.From, ret.To = transformed.From, transformed.To
+	ret.Source, ret.NextSource, ret.Node = transformed.Source, transformed.NextSource, transformed.Node
+	nextContent := transformed.Content
 
 	ret.Changed = nextContent != content
 	if ret.Changed {
@@ -214,13 +129,6 @@ func MutateMarkdownPlanning(request MarkdownPlanningMutationRequest) (ret *Markd
 	ret.Version = markdownPlanningVersion([]byte(nextContent))
 	if info, statErr := os.Stat(absPath); nil == statErr {
 		ret.MtimeMs = float64(info.ModTime().UnixNano()) / 1e6
-	}
-	for _, candidate := range noemaplanning.ScanDocument(nextContent, "") {
-		if candidate.Span.From == ret.From {
-			candidate := candidate
-			ret.Node = &candidate
-			break
-		}
 	}
 	return ret, nil
 }
@@ -311,85 +219,4 @@ func defaultMarkdownPlanningTodoFileTitle(path string) string {
 		}
 	}
 	return strings.Join(words, " ")
-}
-
-func locateMarkdownPlanningNode(nodes []noemaplanning.Node, selector MarkdownPlanningSelector) *noemaplanning.Node {
-	kind := strings.ToLower(strings.TrimSpace(selector.Kind))
-	matchesKind := func(node noemaplanning.Node) bool {
-		if kind == "" {
-			return true
-		}
-		if kind == "todo" {
-			return node.Kind == "todo" || node.Kind == "itodo"
-		}
-		return node.Kind == kind
-	}
-	acceptHints := func(node noemaplanning.Node) bool {
-		if selector.Title != "" {
-			return node.Title == selector.Title
-		}
-		return selector.Source == "" || node.Raw == selector.Source
-	}
-	if nil != selector.Index {
-		for i := range nodes {
-			if matchesKind(nodes[i]) && nodes[i].Span.From == *selector.Index && acceptHints(nodes[i]) {
-				return &nodes[i]
-			}
-		}
-	}
-	wantedID := strings.TrimPrefix(strings.TrimSpace(selector.ID), "#")
-	for i := range nodes {
-		node := &nodes[i]
-		if !matchesKind(*node) {
-			continue
-		}
-		if wantedID != "" && (node.Attrs["id"] == wantedID || strings.HasSuffix(selector.ID, ":"+strconv.Itoa(node.Span.From))) {
-			return node
-		}
-		if selector.Source != "" && node.Raw == selector.Source {
-			return node
-		}
-		if selector.Title != "" && node.Title == selector.Title {
-			return node
-		}
-		if selector.Open && node.Attrs["from"] != "" && node.Attrs["to"] == "" {
-			return node
-		}
-	}
-	return nil
-}
-
-func utf16SourceLength(source string) int {
-	length := 0
-	for _, r := range source {
-		if r > 0xffff {
-			length += 2
-		} else {
-			length++
-		}
-	}
-	return length
-}
-
-func utf16OffsetToByte(source string, offset int) (int, bool) {
-	if offset < 0 {
-		return 0, false
-	}
-	units := 0
-	for byteAt := 0; byteAt < len(source); {
-		if units == offset {
-			return byteAt, true
-		}
-		r, size := utf8.DecodeRuneInString(source[byteAt:])
-		step := 1
-		if r > 0xffff {
-			step = 2
-		}
-		if units+step > offset {
-			return 0, false
-		}
-		units += step
-		byteAt += size
-	}
-	return len(source), units == offset
 }

@@ -139,11 +139,19 @@ export function deriveSessionRoute({
       let selected = cell ? text(parseResearchDirectives(notebookSource(cell.source)).agent) : "";
       if (!selected) {
         const parents = [...new Set(lineageParents(id).map(inheritedAgent).filter(Boolean))];
-        if (parents.length > 1) throw nameError("lineage parents use different agents; choose @@agent(...) explicitly");
-        selected = parents[0] || "";
+        if (parents.length > 1) {
+          // Parents disagree.  The document's default agent is an explicit
+          // choice that applies to any block without @@agent (DESIGN §5.6),
+          // so it settles the merge; without one the choice stays the user's.
+          const documentAgent = text(notebook?.metadata?.noema_research?.default_agent);
+          if (!documentAgent) throw nameError("lineage parents use different agents; choose @@agent(...) explicitly");
+          selected = documentAgent;
+        } else {
+          selected = parents[0] || "";
+        }
       }
       if (!selected) {
-        const prior = runs.find((run) => text(run.workNodeId ?? run.work_node_id) === id);
+        const prior = (Array.isArray(runs) ? runs : []).find((run) => text(run.workNodeId ?? run.work_node_id) === id);
         const entry = prior && (byName.get(text(prior.sessionName)) || bySession.get(text(prior.sessionId ?? prior.session_id)));
         selected = text(entry?.agent || prior?.agent || prior?.adapter);
       }
@@ -157,10 +165,18 @@ export function deriveSessionRoute({
     agent = text(namedAgent) || inheritedAgent(workNodeId) || text(defaultAgent) || "codex";
   }
 
+  // Runs arrive newest first.  Index them by WorkNode once, so derivation stays
+  // linear in the Run history instead of rescanning it for every node.
+  const runsByNode = new Map();
+  for (const run of Array.isArray(runs) ? runs : []) {
+    const id = text(run?.workNodeId ?? run?.work_node_id);
+    if (!id) continue;
+    if (!runsByNode.has(id)) runsByNode.set(id, []);
+    runsByNode.get(id).push(run);
+  }
   // Newest Run of a WorkNode that has a reachable conversation.
   const conversationOf = (id) => {
-    for (const run of Array.isArray(runs) ? runs : []) {
-      if (text(run?.workNodeId ?? run?.work_node_id) !== id) continue;
+    for (const run of runsByNode.get(id) || []) {
       const named = byName.get(text(run.sessionName)) || bySession.get(text(run.sessionId ?? run.session_id));
       if (named) return { entry: named };
       if (text(run.sessionId ?? run.session_id)) return { legacySessionId: text(run.sessionId ?? run.session_id) };
@@ -287,11 +303,7 @@ export function deriveSessionRoute({
   // Work nodes answering from ENTRY: a node belongs to its newest Run's conversation.
   const ownersOf = (entry) => {
     const owners = new Set();
-    const visited = new Set();
-    for (const run of Array.isArray(runs) ? runs : []) {
-      const id = text(run?.workNodeId ?? run?.work_node_id);
-      if (!id || visited.has(id)) continue;
-      visited.add(id);
+    for (const id of runsByNode.keys()) {
       if (conversationOf(id)?.entry === entry) owners.add(id);
     }
     return owners;

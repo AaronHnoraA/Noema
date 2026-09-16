@@ -40,7 +40,10 @@ const CONTEXT_LIMIT_BYTES = 64 * 1024;
 const COMPACTION_CHECKPOINT_MAX_BYTES = 16 * 1024;
 const RUN_ARTIFACT_MAX_BYTES = 8 * 1024 * 1024;
 const RUN_ARTIFACT_MAX_FILES = 5000;
+const ROUTING_RUN_WINDOW = 1000;
 const RUN_ARTIFACT_MAX_CHANGES = 32;
+// Files of one directory are stat'ed concurrently, in bounded chunks.
+const SNAPSHOT_STAT_CONCURRENCY = 64;
 // Runtime state, agent-shell transcripts and Pi's own directory are never
 // work products of a Run (D-035).
 const RUN_ARTIFACT_IGNORED_DIRECTORIES = new Set([
@@ -226,24 +229,36 @@ async function snapshotProjectFiles(root) {
       return;
     }
     entries.sort((left, right) => left.name.localeCompare(right.name));
+    // Every Run takes this snapshot before dispatch, so a directory's files are
+    // stat'ed concurrently.  Insertion still follows the sorted walk order.
+    let pending = [];
+    const flush = async () => {
+      const batch = pending;
+      pending = [];
+      for (let start = 0; start < batch.length; start += SNAPSHOT_STAT_CONCURRENCY) {
+        const chunk = batch.slice(start, start + SNAPSHOT_STAT_CONCURRENCY);
+        // Concurrent file removal is normal during an agent Run.
+        const infos = await Promise.all(chunk.map((path) => stat(path).catch(() => null)));
+        chunk.forEach((path, index) => {
+          const info = infos[index];
+          if (!info || snapshot.size >= RUN_ARTIFACT_MAX_FILES) return;
+          snapshot.set(relative(root, path).split(sep).join("/"), { size: info.size, mtimeMs: info.mtimeMs });
+        });
+      }
+    };
     for (const entry of entries) {
-      if (snapshot.size >= RUN_ARTIFACT_MAX_FILES) break;
+      if (snapshot.size + pending.length >= RUN_ARTIFACT_MAX_FILES) break;
       if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) {
+        await flush();
         if (!RUN_ARTIFACT_IGNORED_DIRECTORIES.has(entry.name)) await walk(join(directory, entry.name));
         continue;
       }
       if (!entry.isFile()) continue;
       if (RUN_ARTIFACT_IGNORED_EXTENSIONS.some((extension) => entry.name.endsWith(extension))) continue;
-      const path = join(directory, entry.name);
-      try {
-        const info = await stat(path);
-        const relativePath = relative(root, path).split(sep).join("/");
-        snapshot.set(relativePath, { size: info.size, mtimeMs: info.mtimeMs });
-      } catch {
-        // Concurrent file removal is normal during an agent Run.
-      }
+      pending.push(join(directory, entry.name));
     }
+    await flush();
   };
   await walk(root);
   return snapshot;
@@ -344,10 +359,14 @@ function asContextItem({ ref, resolvedUri, bytes, mediaType, truncated = false }
   };
 }
 
-function boundedContextItem(item, maxBytes) {
+// Automatic context is truncated only while at least this much room is left;
+// a smaller fragment helps nobody and is omitted instead.
+const AUTO_CONTEXT_MIN_TRUNCATED_BYTES = 1024;
+
+function boundedContextItem(item, maxBytes, note = "compacted checkpoint truncated at 16 KiB") {
   const bytes = Buffer.from(item.contentBase64, "base64");
   if (bytes.byteLength <= maxBytes) return item;
-  const marker = Buffer.from("\n\n[Noema: compacted checkpoint truncated at 16 KiB]\n");
+  const marker = Buffer.from(`\n\n[Noema: ${note}]\n`);
   const prefixLimit = Math.max(0, maxBytes - marker.byteLength);
   let prefix = bytes.subarray(0, prefixLimit).toString("utf8").replace(/\uFFFD$/, "");
   while (Buffer.byteLength(prefix) > prefixLimit) prefix = prefix.slice(0, -1);
@@ -381,6 +400,7 @@ export function parseResearchPrompt(text) {
   return parseResearchDirectives(text, {
     allowWorkstream: true,
     allowLegacySingleAt: true,
+    allowAgenda: false,
     sourceName: ".prompt file",
   });
 }
@@ -448,9 +468,52 @@ function projectContextItem({ root, source }) {
 }
 
 function contextRef(entry) {
-  if (typeof entry === "string") return { ref: entry.trim() };
+  if (typeof entry === "string") {
+    const ref = entry.trim();
+    const lineage = /^lineage:([1-3])$/.exec(ref);
+    return lineage ? { ref: "lineage", depth: Number(lineage[1]) } : { ref };
+  }
   const value = object(entry);
-  return { ref: valueString(value.ref), depth: value.depth };
+  const nested = contextRef(valueString(value.ref));
+  return { ref: nested.ref, depth: value.depth ?? nested.depth, auto: value.auto === true };
+}
+
+/**
+ * Fit automatically attached context into what the declared context leaves.
+ * Declared context stays a hard 64 KiB contract; automatic items (marked
+ * `auto`) are kept whole in priority order while they fit; the ones that do
+ * not are truncated into a useful remainder or omitted and reported, instead of
+ * failing a Run nobody configured (D-036).
+ */
+function fitAutomaticContext(items, limit = CONTEXT_LIMIT_BYTES) {
+  const size = (item) => Buffer.from(item.contentBase64, "base64").byteLength;
+  const required = items.filter((item) => !item.auto).reduce((sum, item) => sum + size(item), 0);
+  if (required > limit) {
+    throw researchError("Declared Run context exceeds 64 KiB; narrow the explicit references", 422, "ERR_RESEARCH_CONTEXT_LIMIT");
+  }
+  let remaining = limit - required;
+  const plain = items.map(({ auto: _auto, ...item }) => item);
+  const chosen = items.map((item, index) => (item.auto ? undefined : plain[index]));
+  // Whole items first, in priority order, so one large output cannot push out
+  // every small item after it; then cut what still waits into the remainder.
+  items.forEach((item, index) => {
+    if (item.auto && size(plain[index]) <= remaining) {
+      remaining -= size(plain[index]);
+      chosen[index] = plain[index];
+    }
+  });
+  const omitted = [];
+  items.forEach((item, index) => {
+    if (!item.auto || chosen[index]) return;
+    if (remaining >= AUTO_CONTEXT_MIN_TRUNCATED_BYTES) {
+      chosen[index] = boundedContextItem(plain[index], remaining, "automatic context truncated to fit the Run context budget");
+      remaining -= size(chosen[index]);
+    } else {
+      chosen[index] = null;
+      omitted.push({ ref: plain[index].ref, resolved_uri: plain[index].resolvedUri, bytes: size(plain[index]), reason: "context budget" });
+    }
+  });
+  return { items: chosen.filter(Boolean), omitted };
 }
 
 async function resolveContextItems({ root, notebook, sourceCell, declared, provider, sessionId, resolveKnowledgeNote }) {
@@ -459,11 +522,18 @@ async function resolveContextItems({ root, notebook, sourceCell, declared, provi
   const output = [];
   const seen = new Set();
   let total = 0;
+  // Automatic entries are resolved after every declared one, so a declared
+  // reference always owns content both would attach.
+  let automatic = false;
   const append = (item) => {
     const bytes = Buffer.from(item.contentBase64, "base64");
     const key = JSON.stringify([item.resolvedUri, item.mediaType, sha256(bytes)]);
     if (seen.has(key)) return;
     seen.add(key);
+    if (automatic) {
+      output.push({ ...item, auto: true });
+      return;
+    }
     total += bytes.byteLength;
     if (total > CONTEXT_LIMIT_BYTES) {
       throw researchError("Declared Run context exceeds 64 KiB; narrow the explicit references", 422, "ERR_RESEARCH_CONTEXT_LIMIT");
@@ -520,9 +590,12 @@ async function resolveContextItems({ root, notebook, sourceCell, declared, provi
       if (latestOutputForWork(notebook, workId)) append(outputItem(workId, `result:${workId}`));
     }
   };
-  for (const entry of values(declared)) {
-    const { ref, depth } = contextRef(entry);
+  const entries = values(declared).map(contextRef);
+  for (const { ref, depth, auto } of [...entries.filter((entry) => !entry.auto), ...entries.filter((entry) => entry.auto)]) {
+    automatic = Boolean(auto);
     if (!ref) throw researchError("Context entries need a ref", 422, "ERR_RESEARCH_CONTEXT");
+    // `none' only switches automatic context off; prepareRun honours it.
+    if (ref === "none") continue;
     if (ref === "lineage") {
       if (!notebook || !sourceCell) throw researchError("lineage context is only valid in a research notebook", 422, "ERR_RESEARCH_CONTEXT");
       lineage(depth);
@@ -610,13 +683,6 @@ async function resolveContextItems({ root, notebook, sourceCell, declared, provi
   return output;
 }
 
-function assertContextLimit(items) {
-  const total = items.reduce((sum, item) => sum + Buffer.from(item.contentBase64, "base64").byteLength, 0);
-  if (total > CONTEXT_LIMIT_BYTES) {
-    throw researchError("Declared Run context exceeds 64 KiB; narrow the explicit references", 422, "ERR_RESEARCH_CONTEXT_LIMIT");
-  }
-}
-
 async function latestParentHandoff(provider, root, sessionId, workNodeId = "") {
   // A re-run or branch reconstructs from the upstream block's own Run, never
   // from a later attempt that happens to share the conversation.
@@ -624,8 +690,27 @@ async function latestParentHandoff(provider, root, sessionId, workNodeId = "") {
   const runs = workNodeId
     ? values(sessionRuns).filter((run) => valueString(run?.workNodeId ?? run?.work_node_id) === workNodeId)
     : values(sessionRuns);
+  const handoffItem = async (run, artifactId) => {
+    const stored = await provider.readArtifact({ root, id: artifactId });
+    return {
+      run,
+      item: asContextItem({
+        ref: `handoff:${run.id}`,
+        resolvedUri: `noema://artifact/${encodeURIComponent(artifactId)}`,
+        bytes: Buffer.from(valueString(stored.dataBase64), "base64"),
+        mediaType: valueString(stored.artifact?.mediaType) || "text/markdown; charset=utf-8",
+      }),
+    };
+  };
   for (const run of runs) {
     if (!valueString(run?.id)) continue;
+    if (typeof provider.runHandoff === "function") {
+      // The kernel reads only the Run's status events; streamed content of a
+      // long Run is never paged just to find its Handoff.
+      const artifactId = valueString((await provider.runHandoff({ root, id: run.id }))?.handoffArtifactId);
+      if (artifactId) return handoffItem(run, artifactId);
+      continue;
+    }
     let after = 0;
     for (;;) {
       const live = await provider.liveRun({ root, id: run.id, after, limit: 1000 });
@@ -707,6 +792,17 @@ export function createResearchRuntimeService({
 	spawnProjectProcess = spawn,
 } = {}) {
   const runFileBaselines = new Map();
+  // A baseline normally ends with its Run's terminal worker event.  Runs that
+  // end elsewhere (cancelled before dispatch, failed while preparing, or
+  // interrupted by lease expiry) forget theirs there; this sweep bounds what a
+  // vanished worker leaves in a long-lived host.
+  const RUN_FILE_BASELINE_TTL_MS = 24 * 60 * 60 * 1000;
+  const forgetRunFileBaseline = (runId) => runFileBaselines.delete(valueString(runId));
+  const sweepRunFileBaselines = (now = Date.now()) => {
+    for (const [runId, baseline] of [...runFileBaselines]) {
+      if (now - Number(baseline?.createdAt || 0) > RUN_FILE_BASELINE_TTL_MS) runFileBaselines.delete(runId);
+    }
+  };
 	const localRunProcesses = new Map();
 	const localEventQueues = new Map();
 	const cacheMaintenanceAt = new Map();
@@ -755,6 +851,7 @@ export function createResearchRuntimeService({
 	};
   const leaseChecks = new Map();
   async function repairRunOutput(root, run) {
+    forgetRunFileBaseline(run?.id);
     const runtime = provider();
     if (!run?.cellId || !run?.notebookId || !runtime.resolveCell || !runtime.queueNotebookWriteback) return null;
     if (runtime.runs) {
@@ -860,7 +957,13 @@ export function createResearchRuntimeService({
 		writebackDrains.delete(root);
 	  }
 	}
-	async function compactRouteIfNeeded(root, route) {
+	// Emacs sends the ratio its context warning uses (D-036); anything
+	// outside a sane range falls back to the D-035 default.
+	const rolloverRatio = (body) => {
+	  const ratio = Number(body?.contextRolloverRatio ?? body?.context_rollover_ratio);
+	  return Number.isFinite(ratio) && ratio >= 0.5 && ratio <= 0.99 ? ratio : 0.85;
+	};
+	async function compactRouteIfNeeded(root, route, body = {}, { dryRun = false } = {}) {
 	  const runtimeProvider = provider();
 	  const sessionId = valueString(route.sessionId);
 	  if (!sessionId || !["continued", "selected"].includes(valueString(route.mode))
@@ -870,8 +973,13 @@ export function createResearchRuntimeService({
 	  const size = Number(usage.contextSize) || 0;
 	  const ratio = size > 0 ? (Number(usage.contextUsed) || 0) / size : 0;
 	  let compaction = object(context.compaction);
-	  if (!valueString(compaction.id) && ratio >= 0.85 && typeof runtimeProvider.requestSessionCompaction === "function") {
-		compaction = object(await runtimeProvider.requestSessionCompaction({ root, sessionId }));
+	  if (!valueString(compaction.id) && ratio >= rolloverRatio(body)) {
+		// A preview reports the rollover the next Run would request without
+		// creating a pending compaction.
+		if (dryRun) compaction = { id: "preview", status: "preview" };
+		else if (typeof runtimeProvider.requestSessionCompaction === "function") {
+		  compaction = object(await runtimeProvider.requestSessionCompaction({ root, sessionId }));
+		}
 	  }
 	  if (!valueString(compaction.id)) return route;
 	  return {
@@ -996,6 +1104,36 @@ export function createResearchRuntimeService({
       : [];
   }
 
+  // Routing reads the newest Runs.  A project with a longer history also reads
+  // each WorkNode's latest conversation Run, so work that last ran long ago
+  // still continues its own conversation instead of silently branching (D-036).
+  async function routingRunsFor(root) {
+    const runtimeProvider = provider();
+    if (typeof runtimeProvider.runs !== "function") return [];
+    const recent = values(await runtimeProvider.runs({ root, limit: ROUTING_RUN_WINDOW }));
+    if (recent.length < ROUTING_RUN_WINDOW) return recent;
+    const seen = new Set(recent.map((run) => valueString(run?.id)));
+    const older = values(await runtimeProvider.runs({ root, latestPerWorkNode: true }).catch(() => []))
+      .filter((run) => valueString(run?.id) && !seen.has(valueString(run.id)))
+      .sort((left, right) => String(right?.createdAt || "").localeCompare(String(left?.createdAt || "")));
+    return [...recent, ...older];
+  }
+
+  // JuText previews routes on idle after edits.  Consecutive previews within a
+  // moment share one kernel snapshot; a Run never uses this cache, and any Run
+  // or name change drops it (D-036).
+  const PREVIEW_SNAPSHOT_TTL_MS = 2000;
+  const previewSnapshots = new Map();
+  const forgetPreviewSnapshot = (root) => previewSnapshots.delete(root);
+  function previewRoutingSnapshot(root) {
+    const cached = previewSnapshots.get(root);
+    if (cached && Date.now() - cached.at < PREVIEW_SNAPSHOT_TTL_MS) return cached.pending;
+    const pending = Promise.all([sessionNamesFor(root), routingRunsFor(root)]);
+    previewSnapshots.set(root, { at: Date.now(), pending });
+    pending.catch(() => { if (previewSnapshots.get(root)?.pending === pending) previewSnapshots.delete(root); });
+    return pending;
+  }
+
   // D-031: every conversation a work block reaches has a project-scoped name.
   // An explicit directive wins, then a coordinator-requested name, then the
   // lineage-derived default.  Explicit session/parent ids from older callers
@@ -1013,10 +1151,7 @@ export function createResearchRuntimeService({
         executor: { ...source.executor, session_policy: keyword } }, target, { ...body, sessionPolicy: keyword });
     }
     const runtimeProvider = provider();
-    const [names, runs] = snapshot || await Promise.all([
-      sessionNamesFor(root),
-      typeof runtimeProvider.runs === "function" ? runtimeProvider.runs({ root, limit: 1000 }) : [],
-    ]);
+    const [names, runs] = snapshot || await Promise.all([sessionNamesFor(root), routingRunsFor(root)]);
     const decision = deriveSessionRoute({
       notebook: source.notebook, workNodeId: source.workNodeId, agent,
       defaultAgent: valueString(source.defaultAgent) || valueString(body.agent || body.adapter || object(body.executor).agent), directive,
@@ -1493,11 +1628,23 @@ export function createResearchRuntimeService({
 	  };
 	},
 
-    async prepareRun(body = {}) {
+    async prepareRun(body = {}, { dryRun = false } = {}) {
       const root = await rootFor(body);
-      const source = await sourceForRun(root, body);
+      let preview = null;
+      if (dryRun && body.notebook && valueString(body.file)) {
+        // Preview what the unsaved document would run with.
+        preview = await readResearchNotebookFile(valueString(body.file));
+        if (!validateResearchNotebook(body.notebook).ok) {
+          throw researchError("Invalid context preview document", 422, "ERR_RESEARCH_FORMAT");
+        }
+        preview.notebook = body.notebook;
+      }
+      const source = await sourceForRun(root, body, preview);
       const runtimeProvider = provider();
-	  if ((source.kind === "work-cell" || source.kind === "project-file") && typeof runtimeProvider.index === "function") {
+      if (dryRun && source.kind !== "work-cell") {
+        throw researchError("Context preview needs a work cell", 422, "ERR_RESEARCH_RUN");
+      }
+	  if (!dryRun && (source.kind === "work-cell" || source.kind === "project-file") && typeof runtimeProvider.index === "function") {
         // A canonical document can be opened before this host's rebuildable
         // Go index has ever seen it.  Synchronize the file before any
         // Workstream/Run lookup so first execution works without a dummy save.
@@ -1510,7 +1657,7 @@ export function createResearchRuntimeService({
       }
 	  if (source.kind === "project-file") return prepareProjectFileRun(root, source, body);
       const target = await projectDirectory(root, body.executionTarget || body.cwd || root);
-      if (typeof runtimeProvider.expireLeases === "function") {
+      if (!dryRun && typeof runtimeProvider.expireLeases === "function") {
         // D-035: a worker that vanished (Emacs crashed or was killed) leaves an
         // expired lease.  Recover it before routing so its session is neither
         // reported busy nor resumed as if it were still held.  Leases released
@@ -1521,13 +1668,25 @@ export function createResearchRuntimeService({
           // Recovery is best effort; routing still reports a truly busy session.
         }
       }
-	  let route = await routeRun(root, source, target, body);
-	  route = await compactRouteIfNeeded(root, route);
-      const declaredContext = [...values(source.context), ...values(body.context)];
+	  if (!dryRun) forgetPreviewSnapshot(root);
+	  let route = await routeRun(root, source, target, body, { dryRun });
+	  route = await compactRouteIfNeeded(root, route, body, { dryRun });
+      const requestedContext = [...values(source.context), ...values(body.context)];
+      // `@@ctx(none)` keeps only what the block declares: no derived lineage and
+      // no upstream outputs are attached automatically (D-036).
+      const automaticContext = !requestedContext.some((entry) => contextRef(entry).ref === "none");
+      const declaredContext = requestedContext.filter((entry) => contextRef(entry).ref !== "none");
       // A derived branch carries its lineage as explicit context, never as a
-      // hidden conversation (D-031).
-      for (const ref of values(route.autoContext)) {
-        if (!declaredContext.some((entry) => contextRef(entry).ref === ref)) declaredContext.push(ref);
+      // hidden conversation (D-031).  The direct parents' latest outputs come
+      // first: a new conversation needs what upstream concluded, not only what
+      // upstream was asked (D-036).  Everything here is automatic context and
+      // yields to the declared context budget.
+      const automaticRefs = [];
+      if (automaticContext && values(route.autoContext).length && source.notebook && source.workNodeId) {
+        for (const parentId of researchWorkNodeSummary(source.notebook, source.workNodeId).lineage) {
+          if (latestOutputForWork(source.notebook, parentId)) automaticRefs.push({ ref: `result:${parentId}`, auto: true });
+        }
+        for (const ref of values(route.autoContext)) automaticRefs.push({ ref, auto: true });
       }
       let reconstruction = null;
       if (route.mode === "fork-reconstructed") {
@@ -1537,18 +1696,21 @@ export function createResearchRuntimeService({
       const parentOutput = reconstruction?.run && source.notebook
         && valueString(reconstruction.run.notebookId) === source.notebookId
         && latestOutputForWork(source.notebook, valueString(reconstruction.run.workNodeId || reconstruction.run.cellId));
+      // The reconstructed parent's output substitutes for the conversation a
+      // fork does not inherit, so `@@ctx(none)` keeps it; it still yields to
+      // declared context when the budget is short.
       const reconstructedForkContext = parentOutput && !valueString(route.compaction?.id)
-        ? [`result:${valueString(reconstruction.run.workNodeId || reconstruction.run.cellId)}`]
+        ? [{ ref: `result:${valueString(reconstruction.run.workNodeId || reconstruction.run.cellId)}`, auto: true }]
         : [];
-      const contextItems = await resolveContextItems({ root, notebook: source.notebook, sourceCell: source.cell,
-        declared: [...declaredContext, ...reconstructedForkContext], provider: provider(), sessionId: route.sessionId,
-        resolveKnowledgeNote });
+      const candidateContext = await resolveContextItems({ root, notebook: source.notebook, sourceCell: source.cell,
+        declared: [...declaredContext, ...reconstructedForkContext, ...automaticRefs], provider: provider(),
+        sessionId: route.sessionId, resolveKnowledgeNote });
       if (route.mode !== "continued" && source.kind === "work-cell") {
         // A new conversation knows nothing yet: say where it runs.
-        contextItems.unshift(projectContextItem({ root, source }));
+        candidateContext.unshift(projectContextItem({ root, source }));
       }
       if (reconstruction?.item) {
-        contextItems.push(valueString(route.compaction?.id)
+        candidateContext.push(valueString(route.compaction?.id)
           ? boundedContextItem(reconstruction.item, COMPACTION_CHECKPOINT_MAX_BYTES)
           : reconstruction.item);
       }
@@ -1560,8 +1722,9 @@ export function createResearchRuntimeService({
         includeContent: true,
       }));
       const resolvedSkills = resolvedSkillsForRun(capabilityEnvironment);
-      contextItems.push(...resolvedSkills.items);
-      assertContextLimit(contextItems);
+      candidateContext.push(...resolvedSkills.items);
+      const automaticContextRefs = new Set(candidateContext.filter((item) => item.auto).map((item) => item.ref));
+      const { items: contextItems, omitted: omittedContext } = fitAutomaticContext(candidateContext);
       const capabilities = normalizeCapabilities(source.executor.capabilities, body.capabilities);
       assertCapabilityEnvelope(route.agent, capabilities, body, source.executor);
       const externalSandbox = Boolean(body.externalSandbox ?? body.external_sandbox ?? source.executor.external_sandbox);
@@ -1608,6 +1771,7 @@ export function createResearchRuntimeService({
         capabilities,
         external_sandbox: externalSandbox,
         context: contextItems.map(publicContextItem),
+        ...(omittedContext.length ? { context_omitted: omittedContext } : {}),
         mcp_servers: mcpServers,
         capability_environment: capabilitySnapshot,
         created_at: new Date().toISOString(),
@@ -1618,6 +1782,26 @@ export function createResearchRuntimeService({
       if (route.mode === "fork-reconstructed") {
         spec.fork_mode = "reconstructed";
         spec.fork_notice = "No hidden parent conversation was inherited; only frozen source, declared context, an available parent work output, and Handoff were provided.";
+      }
+      if (dryRun) {
+        const size = (item) => Buffer.from(item.contentBase64, "base64").byteLength;
+        return {
+          root,
+          routing: {
+            agent: route.agent, mode: route.mode, policy: route.policy,
+            name: valueString(route.sessionName?.name), parentName: valueString(route.sessionName?.parentName),
+            rule: valueString(route.derivation?.rule), reason: valueString(route.derivation?.reason || route.reason),
+            busy: Boolean(route.busy), rollover: valueString(route.compaction?.id) !== "",
+          },
+          context: contextItems.map((item) => ({
+            ref: item.ref, resolvedUri: item.resolvedUri, mediaType: item.mediaType,
+            bytes: size(item), truncated: Boolean(item.truncated), automatic: automaticContextRefs.has(item.ref),
+          })),
+          omitted: omittedContext,
+          totalBytes: contextItems.reduce((sum, item) => sum + size(item), 0),
+          limitBytes: CONTEXT_LIMIT_BYTES,
+          promptBytes: Buffer.byteLength(source.prompt),
+        };
       }
       const prepared = await provider().prepareRun({
         root,
@@ -1638,11 +1822,18 @@ export function createResearchRuntimeService({
       const run = object(prepared.run).id ? prepared.run : prepared;
       const frozenSpec = object(prepared.spec).run_id ? prepared.spec : { ...spec, run_id: run.id };
       if (valueString(run.id)) {
+        sweepRunFileBaselines();
         runFileBaselines.set(valueString(run.id), {
-          root, run, agent: route.agent, files: await snapshotProjectFiles(root),
+          root, run, agent: route.agent, files: await snapshotProjectFiles(root), createdAt: Date.now(),
         });
       }
       return { root, run, spec: frozenSpec, contextItems, routing: route };
+    },
+
+    // Resolve the route and context a work block would run with, without
+    // freezing a RunSpec, requesting compaction or dispatching (D-036).
+    async previewRunContext(body = {}) {
+      return this.prepareRun(body, { dryRun: true });
     },
 
 	async runProjectFile(body = {}) {
@@ -1680,6 +1871,7 @@ export function createResearchRuntimeService({
 
     async declareSessionName(body = {}) {
       const root = await rootFor(body);
+      forgetPreviewSnapshot(root);
       const origin = valueString(body.origin) === "pi" ? "pi" : "user";
       const intent = {
         name: validateSessionName(body.name), agent: valueString(body.agent).toLowerCase(),
@@ -1692,6 +1884,7 @@ export function createResearchRuntimeService({
     // coordinator (origin system) or a human naming a live agent buffer.
     async bindSessionName(body = {}) {
       const root = await rootFor(body);
+      forgetPreviewSnapshot(root);
       const name = validateSessionName(body.name, { allowPi: true });
       const sessionId = valueString(body.sessionId || body.session_id);
       if (!sessionId.startsWith("ses_")) throw researchError("Binding a session name needs a promoted Session", 422, "ERR_RESEARCH_SESSION_NAME");
@@ -1701,6 +1894,7 @@ export function createResearchRuntimeService({
 
     async renameSessionName(body = {}) {
       const root = await rootFor(body);
+      forgetPreviewSnapshot(root);
       return { root, name: await provider().renameSessionName({ root, rename: {
         name: valueString(body.name), newName: validateSessionName(body.newName || body.new_name),
         actor: valueString(body.actor) || "emacs",
@@ -1709,6 +1903,7 @@ export function createResearchRuntimeService({
 
     async archiveSessionName(body = {}) {
       const root = await rootFor(body);
+      forgetPreviewSnapshot(root);
       return { root, name: await provider().archiveSessionName({ root, archive: {
         name: valueString(body.name), archived: body.archived !== false, actor: valueString(body.actor) || "emacs",
       } }) };
@@ -1727,8 +1922,7 @@ export function createResearchRuntimeService({
         loaded.notebook = body.notebook;
       }
       await refreshExpiredLeases(root);
-      const snapshot = await Promise.all([sessionNamesFor(root),
-        typeof provider().runs === "function" ? provider().runs({ root, limit: 1000 }) : []]);
+      const snapshot = await previewRoutingSnapshot(root);
       const sessions = [];
       for (const cellId of values(body.cellIds).map(valueString).filter(Boolean)) {
         try {
@@ -1853,6 +2047,7 @@ export function createResearchRuntimeService({
 	  const delivered = Boolean(local?.process) || Boolean(deliverWorkerCommand({
         type: "run-cancel", root, runId: run.id, sessionId: run.sessionId, requestedBy,
       }));
+      if (["completed", "cancelled", "failed", "interrupted"].includes(valueString(run.status))) forgetRunFileBaseline(run.id);
       // A Run cancelled before dispatch ends in the kernel at once and no
       // worker will report it: persist that outcome as the cell output so
       // the document and OutputArea stop waiting for it.
@@ -1891,6 +2086,7 @@ export function createResearchRuntimeService({
       const runId = valueString(body.id || body.runId || body.run_id);
       const failureReason = valueString(body.failureReason || body.failure_reason) || "worker bootstrap failed";
       const run = await provider().failPreparedRun({ root, failure: { runId, failureReason } });
+      forgetRunFileBaseline(runId);
       // A Run that failed before dispatch never emits a terminal worker event.
       // Persist its failure as the cell output like any other terminal Run, so
       // OutputArea does not wait forever for this Run's writeback.
@@ -2068,7 +2264,10 @@ export function createResearchRuntimeService({
 		  ...(Object.keys(sessionUsage).length ? { sessionUsage } : {}),
         },
       });
-      if (terminal) runFileBaselines.delete(runId);
+      if (terminal) {
+        runFileBaselines.delete(runId);
+        forgetPreviewSnapshot(root);
+      }
       let result = null;
       let resultError = null;
       const notebookFile = valueString(body.notebookFile || body.notebook_file);

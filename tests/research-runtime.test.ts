@@ -413,6 +413,156 @@ describe("research runtime service", () => {
     expect(Buffer.from(prepared.contextItems[1].contentBase64, "base64").byteLength).toBe(35_000);
   }));
 
+  test("fits automatic lineage context into the budget and honours @@ctx(none) and lineage:N", async () => withProject(async (root) => {
+    await mkdir(join(root, "research"));
+    let notebook = createResearchNotebook({ title: "Merge", defaultAgent: "codex" });
+    const origin = createResearchCell(notebook, { kind: "question", title: "Origin", source: "Why?" });
+    notebook = origin.notebook;
+    const left = createResearchCell(notebook, { kind: "work", title: "Left", source: "Try left.", lineageParent: origin.workNode.id });
+    notebook = left.notebook;
+    const right = createResearchCell(notebook, { kind: "work", title: "Right", source: "Try right.", lineageParent: origin.workNode.id });
+    notebook = right.notebook;
+    for (const [node, text] of [[left.workNode.id, "L".repeat(30_000)], [right.workNode.id, "R".repeat(30_000)]]) {
+      notebook = upsertResearchRunOutput(notebook, { workId: node, runId: `run_${node}`, agent: "codex", status: "completed", content: text }).notebook;
+    }
+    const merge = createResearchCell(notebook, { kind: "work", title: "Merge", source: "@@ctx(file:brief.md)\n\nMerge both routes.", lineageParent: left.workNode.id });
+    notebook = setResearchRelation(merge.notebook, merge.workNode.id, "lineage", [left.workNode.id, right.workNode.id]).notebook;
+    const quiet = createResearchCell(notebook, { kind: "work", title: "Quiet", source: "@@ctx(none)\n@@ctx(lineage:2)\n\nOnly what I ask for.", lineageParent: left.workNode.id });
+    notebook = quiet.notebook;
+    const file = join(root, "research", "merge.noema");
+    await writeResearchNotebookFile(file, notebook, { create: true });
+    await writeFile(join(root, "brief.md"), "b".repeat(20_000));
+    const provider = { runs: vi.fn(async () => []), prepareRun: vi.fn(async ({ run }) => ({ id: `run_${run.cellId}`, ...run })) };
+    const service = createResearchRuntimeService({ getProvider: () => provider as any });
+    const size = (item: any) => Buffer.from(item.contentBase64, "base64").byteLength;
+
+    // A merge sees what both parents concluded, not only what they were asked.
+    // Automatic context yields to the declared file instead of failing the Run:
+    // whole items that fit are kept, and the one that does not is truncated.
+    const merged = await service.prepareRun({ file, cellId: merge.cell.id, cwd: root });
+    expect(merged.routing.derivation.rule).toBe("lineage-merge");
+    const byRef = new Map<string, any>(merged.contextItems.map((item: any) => [item.ref, item]));
+    expect([...byRef.keys()]).toEqual(["project", "file:brief.md", `result:${left.workNode.id}`,
+      `result:${right.workNode.id}`, `cell:${left.cell.id}`, `cell:${right.cell.id}`]);
+    expect(size(byRef.get("file:brief.md"))).toBe(20_000);
+    expect(byRef.get(`result:${left.workNode.id}`).truncated).toBe(false);
+    expect(byRef.get(`result:${right.workNode.id}`).truncated).toBe(true);
+    expect(merged.contextItems.reduce((sum: number, item: any) => sum + size(item), 0)).toBeLessThanOrEqual(64 * 1024);
+    expect(merged.spec.context_omitted).toBeUndefined();
+
+    // With almost no room left, the output that cannot be cut usefully is
+    // omitted and reported in the frozen RunSpec.
+    await writeFile(join(root, "brief.md"), "b".repeat(60_000));
+    const tight = await service.prepareRun({ file, cellId: merge.cell.id, cwd: root });
+    expect(tight.spec.context_omitted).toEqual([expect.objectContaining({
+      ref: `result:${right.workNode.id}`, bytes: 30_000, reason: "context budget" })]);
+    expect(tight.contextItems.reduce((sum: number, item: any) => sum + size(item), 0)).toBeLessThanOrEqual(64 * 1024);
+
+    // Declared context is still a hard contract.
+    await writeFile(join(root, "brief.md"), "b".repeat(70_000));
+    await expect(service.prepareRun({ file, cellId: merge.cell.id, cwd: root }))
+      .rejects.toMatchObject({ code: "ERR_RESEARCH_CONTEXT_LIMIT" });
+
+    // @@ctx(none) drops automatic lineage and outputs; lineage:2 widens the walk.
+    const quietRun = await service.prepareRun({ file, cellId: quiet.cell.id, cwd: root });
+    expect(quietRun.contextItems.map((item: any) => item.ref)).toEqual(["project", `cell:${left.cell.id}`, `cell:${origin.cell.id}`]);
+  }));
+
+  test("previews route and context from the unsaved document without freezing, compacting or dispatching", async () => withProject(async (root) => {
+    await mkdir(join(root, "research"));
+    let notebook = createResearchNotebook({ title: "Preview", defaultAgent: "codex" });
+    const parent = createResearchCell(notebook, { kind: "work", title: "Parent", source: "Look." });
+    notebook = upsertResearchRunOutput(parent.notebook, {
+      workId: parent.workNode.id, runId: "run_parent", agent: "codex", status: "completed", content: "Found it.",
+    }).notebook;
+    const child = createResearchCell(notebook, { kind: "work", title: "Child", source: "Use it.", lineageParent: parent.workNode.id });
+    notebook = child.notebook;
+    const file = join(root, "research", "preview.noema");
+    await writeResearchNotebookFile(file, notebook, { create: true });
+    await writeFile(join(root, "notes.md"), "Notes.");
+    // Only the unsaved document declares the file.
+    const unsaved = structuredClone(notebook);
+    unsaved.cells.find((cell: any) => cell.id === child.cell.id)!.source = "@@ctx(file:notes.md)\n\nUse it.";
+    const provider = {
+      index: vi.fn(), expireLeases: vi.fn(), requestSessionCompaction: vi.fn(), prepareRun: vi.fn(),
+      runs: vi.fn(async () => []),
+    };
+    const service = createResearchRuntimeService({ getProvider: () => provider as any });
+    const preview = await service.previewRunContext({ file, cellId: child.cell.id, cwd: root, notebook: unsaved });
+    expect(preview.context.map((item: any) => [item.ref, item.automatic])).toEqual([
+      ["project", false], ["file:notes.md", false], [`result:${parent.workNode.id}`, true], [`cell:${parent.cell.id}`, true],
+    ]);
+    expect(preview.routing).toMatchObject({ agent: "codex", rule: "lineage-new", rollover: false });
+    expect(preview.totalBytes).toBeLessThanOrEqual(preview.limitBytes);
+    expect(preview.promptBytes).toBe(Buffer.byteLength("Use it."));
+    for (const call of [provider.prepareRun, provider.index, provider.expireLeases, provider.requestSessionCompaction]) {
+      expect(call).not.toHaveBeenCalled();
+    }
+  }));
+
+  test("idle route previews share a short kernel snapshot that name changes drop", async () => withProject(async (root) => {
+    const notebook = createResearchCell(createResearchNotebook({ title: "Idle", defaultAgent: "codex" }), {
+      kind: "work", title: "Work", source: "Do it." });
+    const file = join(root, "idle.noema");
+    await writeResearchNotebookFile(file, notebook.notebook, { create: true });
+    const provider = {
+      runs: vi.fn(async () => []),
+      sessionNames: vi.fn(async () => []),
+      declareSessionName: vi.fn(async ({ intent }: { intent: Record<string, string> }) => ({ name: intent.name })),
+    };
+    const service = createResearchRuntimeService({ getProvider: () => provider as any });
+    const body = { root, file, cellIds: [notebook.cell.id] };
+    await service.resolveSessions(body);
+    await service.resolveSessions(body);
+    expect(provider.sessionNames).toHaveBeenCalledTimes(1);
+    await service.declareSessionName({ root, name: "idle-work", agent: "codex" });
+    await service.resolveSessions(body);
+    expect(provider.sessionNames).toHaveBeenCalledTimes(2);
+  }));
+
+  test("finds a Handoff through the kernel status-event lookup without paging the Run stream", async () => withProject(async (root) => {
+    await mkdir(join(root, "prompts"));
+    const file = join(root, "prompts", "handoff.prompt");
+    await writeFile(file, "@agent(codex)\n@session(continue)\n@workstream(ws_context)\n\nContinue.");
+    const liveRun = vi.fn(async () => { throw new Error("the Run stream must not be paged"); });
+    const provider = {
+      sessions: vi.fn(async () => [{ id: "ses_context", state: "warm", executionTarget: root }]),
+      runs: vi.fn(async () => [{ id: "run_newer", status: "failed" }, { id: "run_previous", status: "completed" }]),
+      runHandoff: vi.fn(async ({ id }: { id: string }) => ({ handoffArtifactId: id === "run_previous" ? "art_handoff" : "" })),
+      liveRun,
+      readArtifact: vi.fn(async () => ({
+        artifact: { id: "art_handoff", mediaType: "text/markdown" }, dataBase64: Buffer.from("Handoff").toString("base64"),
+      })),
+      prepareRun: vi.fn(async ({ run }) => ({ id: "run_context", ...run })),
+    };
+    const service = createResearchRuntimeService({ getProvider: () => provider as any });
+    const prepared = await service.prepareRun({ promptFile: file, cwd: root, context: ["handoff.latest"] });
+    expect(prepared.contextItems.map((item: any) => Buffer.from(item.contentBase64, "base64").toString())).toEqual(["Handoff"]);
+    expect(provider.runHandoff).toHaveBeenCalledTimes(2);
+    expect(liveRun).not.toHaveBeenCalled();
+  }));
+
+  test("routing still finds a WorkNode's own conversation beyond the newest 1000 Runs", async () => withProject(async (root) => {
+    let notebook = createResearchNotebook({ title: "Long history", defaultAgent: "codex" });
+    const old = createResearchCell(notebook, { kind: "work", title: "Old work", source: "Revisit it." });
+    notebook = old.notebook;
+    const file = join(root, "history.noema");
+    await writeResearchNotebookFile(file, notebook, { create: true });
+    const recent = Array.from({ length: 1000 }, (_, index) => ({ id: `run_${index}`, workNodeId: "wn_elsewhere" }));
+    const runs = vi.fn(async ({ latestPerWorkNode }: { latestPerWorkNode?: boolean }) => (latestPerWorkNode
+      ? [{ id: "run_old", workNodeId: old.workNode.id, sessionId: "ses_old", sessionName: "old-work", createdAt: "2020-01-01T00:00:00Z" }]
+      : recent));
+    const provider = {
+      runs,
+      sessionNames: vi.fn(async () => [{ name: "old-work", agent: "codex", sessionId: "ses_old", state: "active",
+        aliases: [], lastRun: { workNodeId: old.workNode.id } }]),
+    };
+    const service = createResearchRuntimeService({ getProvider: () => provider as any });
+    const result = await service.resolveSessions({ root, file, cellIds: [old.cell.id] });
+    expect(result.sessions[0]).toMatchObject({ name: "old-work", rule: "rerun" });
+    expect(runs).toHaveBeenCalledWith(expect.objectContaining({ latestPerWorkNode: true }));
+  }));
+
   test("executes only the four strict .prompt directives and treats later lookalikes as data", async () => withProject(async (root) => {
     await mkdir(join(root, "prompts"));
     await mkdir(join(root, "notes"));

@@ -30,6 +30,7 @@ export type ResearchRuntimeService = {
   probeMCP: RuntimeMethod;
   mutateCapability: RuntimeMethod;
   prepareRun: RuntimeMethod;
+  previewRunContext: RuntimeMethod;
   runProjectFile: RuntimeMethod;
   runs: RuntimeMethod;
   run: RuntimeMethod;

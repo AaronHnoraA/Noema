@@ -10,7 +10,7 @@ import "../src/styles/theme-loader.ts";
 import { installB3ComponentSystem } from "../src/b3-component-system.ts";
 import { api } from "./api-client.ts";
 import type { TodoItem } from "./api-client.ts";
-import { openAgendaView, refreshAgendaView } from "./agenda-view.ts";
+import { openAgendaView, refreshAgendaView, refreshAgendaAttention } from "./agenda-view.ts";
 import { installNoemaThemeRuntime, loadNoemaAppConfig } from "./theme-runtime.ts";
 
 const removeNoemaThemeRuntime = installNoemaThemeRuntime();
@@ -47,10 +47,11 @@ async function jumpToTodo(todo: TodoItem): Promise<void> {
 void openAgendaView({ api, jumpToTodo, setStatus, pageMode: true });
 
 window.addEventListener("aaronnote:command", (event) => {
-  const detail = (event as CustomEvent<{ command?: string }>).detail;
-  if (detail?.command === "agenda-changed" || detail?.command === "notes-index-changed") {
-    void refreshAgendaView();
+  const detail = (event as CustomEvent<{ command?: string; files?: unknown[] }>).detail;
+  if (detail?.command === "agenda-changed") {
+    void refreshAgendaView(detail);
   }
+  if(detail?.command==='agenda-attention-changed')void refreshAgendaAttention();
 });
 window.addEventListener("beforeunload", () => {
   removeB3ComponentSystem();

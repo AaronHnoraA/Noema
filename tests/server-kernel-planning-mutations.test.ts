@@ -163,7 +163,12 @@ describe("data-kernel planning mutations", () => {
     await clockOut({ file });
     expect(await readFile(file, "utf8")).toMatch(/@@clock \[ship kernel writes\].+to=/);
     const beforeComplete = (await getTodos("")).todos[0];
-    await completeTodo({ file, id: beforeComplete.id, index: beforeComplete.index, source: beforeComplete.source, text: beforeComplete.text });
+    const completed = await completeTodo({ file, id: beforeComplete.id, index: beforeComplete.index,
+      source: beforeComplete.source, text: beforeComplete.text,
+      expectedRevision: digest(await readFile(file, "utf8")) });
+    // Go reports `to` in the resulting source. Reconstructing the document
+    // hash must remove the original source length, including surrounding clocks.
+    expect(completed.contentRevision).toBe(digest(await readFile(file, "utf8")));
     expect(await readFile(file, "utf8")).toMatch(/@@todo\(done\) \[ship kernel writes\]/);
     expect(calls.map((call) => call.mutation.type)).toEqual(["patch-todo", "patch-todo", "insert-clock", "patch-node", "patch-todo"]);
     expect(calls.filter((call) => call.mutation.type === "patch-todo").every((call) => call.mutation.source === undefined)).toBe(true);
