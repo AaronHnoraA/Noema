@@ -174,6 +174,18 @@ function proposalDocument(payload, key) {
   return Object.keys(object(source[key])).length ? object(source[key]) : source;
 }
 
+/**
+ * Normalize a `graph.declare` payload into the cell specs it declares.
+ * A plan names a file, an expected revision and a notebook once, and then a
+ * list of blocks; the blocks may name each other by `cellId`, which is why
+ * they are only meaningful together.
+ */
+function planCellSpecs(payload) {
+  const plan = proposalDocument(payload, "plan");
+  const cells = values(plan.cells).map((entry) => object(entry));
+  return { plan, cells };
+}
+
 function proposedCellId(clientRequestId) {
   return `c-prop-${sha256(valueString(clientRequestId)).slice(0, 20)}`;
 }
@@ -2474,6 +2486,72 @@ export function createResearchRuntimeService({
         ? structuredClone(editedPayload) : structuredClone(object(proposal.payload));
       let acceptedRef = "";
       let materialized = null;
+      if (decision === "accept" && valueString(proposal.kind) === "graph.declare") {
+        if (["accepting", "accepted"].includes(valueString(proposal.status))) {
+          reviewedPayload = editedPayload && typeof editedPayload === "object" && !Array.isArray(editedPayload)
+            ? structuredClone(editedPayload)
+            : structuredClone(Object.keys(object(proposal.reviewedPayload)).length
+              ? object(proposal.reviewedPayload) : object(proposal.payload));
+        }
+        let { plan, cells } = planCellSpecs(reviewedPayload);
+        if (!cells.length) {
+          throw researchError("A plan Proposal declares no cells", 422, "ERR_RESEARCH_PROPOSAL");
+        }
+        let file = await projectFile(root, valueString(plan.file));
+        if (!isResearchDocumentPath(file.path)) {
+          throw researchError("A plan Proposal must target a repository .noema work document", 422, "ERR_RESEARCH_PROPOSAL");
+        }
+        let expectedRevision = valueString(plan.expectedRevision || plan.expected_revision);
+        let notebookId = valueString(plan.notebookId || plan.notebook_id);
+        if (!expectedRevision || !notebookId.startsWith("nb_") || cells.some((cell) => !valueString(cell.id || cell.cellId || cell.cell_id))) {
+          throw researchError("A plan Proposal requires expectedRevision, notebookId and a deterministic id per cell", 422, "ERR_RESEARCH_PROPOSAL");
+        }
+        let loaded = await readResearchNotebookFile(file.path);
+        if (valueString(researchMeta({ metadata: loaded.notebook.metadata }).notebook_id) !== notebookId) {
+          throw researchError("Plan Proposal notebook identity does not match its target file", 409, "ERR_RESEARCH_PROPOSAL");
+        }
+        const planCellIds = cells.map((cell) => valueString(cell.id || cell.cellId || cell.cell_id));
+        const alreadyThere = planCellIds.filter((id) => cellById(loaded.notebook, id));
+        if (alreadyThere.length === planCellIds.length) {
+          // The whole plan is already on disk; acceptance is idempotent.
+          materialized = { file: file.path, revision: loaded.revision, reconciled: true,
+            cells: planCellIds.map((id) => cellById(loaded.notebook, id)) };
+        } else {
+          if (alreadyThere.length) {
+            throw researchError("Part of this plan already exists; accept or reject it as one unit", 409, "ERR_RESEARCH_PROPOSAL");
+          }
+          if (loaded.revision !== expectedRevision) {
+            throw researchError("Research notebook changed before Proposal acceptance", 409, "ERR_RESEARCH_REVISION");
+          }
+          // Dry-run the whole plan on one in-memory clone, so a block may
+          // anchor on an earlier block of the same plan.
+          let rehearsal = loaded.notebook;
+          for (const cell of cells) {
+            rehearsal = createResearchCell(rehearsal, cell).notebook;
+          }
+          const reservation = await provider().beginProposalAcceptance({
+            root,
+            review: {
+              proposalId, expectedVersion, reviewedBy,
+              ...(reviewedPayload && typeof reviewedPayload === "object" && !Array.isArray(reviewedPayload)
+                ? { editedPayload: reviewedPayload } : {}),
+            },
+          });
+          proposal = object(reservation.proposal);
+          reviewedPayload = structuredClone(object(proposal.reviewedPayload));
+          ({ plan, cells } = planCellSpecs(reviewedPayload));
+          file = await projectFile(root, valueString(plan.file));
+          expectedRevision = valueString(plan.expectedRevision || plan.expected_revision);
+          const notebooks = getNotebookService();
+          if (!notebooks?.createCells) {
+            throw researchError("research notebook writer is unavailable", 503, "ERR_RESEARCH_PROPOSAL");
+          }
+          materialized = await notebooks.createCells({
+            file: file.path, cells, expectedRevision, actor: reviewedBy,
+          });
+        }
+        acceptedRef = `noema://plan/${notebookId}/${proposalId}`;
+      }
       if (decision === "accept" && valueString(proposal.kind) === "cell.create") {
         if (["accepting", "accepted"].includes(valueString(proposal.status))) {
           reviewedPayload = editedPayload && typeof editedPayload === "object" && !Array.isArray(editedPayload)
@@ -2596,7 +2674,7 @@ export function createResearchRuntimeService({
         review: {
           proposalId,
           decision,
-          expectedVersion: valueString(proposal.kind) === "cell.create" && decision === "accept"
+          expectedVersion: ["cell.create", "graph.declare"].includes(valueString(proposal.kind)) && decision === "accept"
             ? Number(proposal.version) : expectedVersion,
           reviewedBy,
           reason: valueString(body.reason),

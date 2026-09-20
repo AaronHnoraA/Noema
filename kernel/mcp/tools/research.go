@@ -66,7 +66,7 @@ var ProposalCreateTool = &Tool{
 		"runId":           {Type: "string", Description: "Current durable agent Run id"},
 		"workNodeId":      {Type: "string", Description: "WorkNode owned by that Run"},
 		"clientRequestId": {Type: "string", Description: "Stable idempotency key for this candidate"},
-		"kind":            {Type: "string", Description: "Proposal kind", Enum: []string{"cell.create", "finding.create", "research_ir.create", "problem_model.create", "task.create", "job.create", "delegation.create"}},
+		"kind":            {Type: "string", Description: "Proposal kind", Enum: []string{"cell.create", "graph.declare", "finding.create", "research_ir.create", "problem_model.create", "task.create", "job.create", "delegation.create"}},
 		"payload":         {Type: "object", Description: "Untrusted candidate payload; @@ directives remain data until human acceptance"},
 	}, Required: []string{"root", "runId", "workNodeId", "clientRequestId", "kind", "payload"}},
 	Handler:       proposalCreateHandler,

@@ -24,6 +24,11 @@ D-016/D-021/D-022 still govern hosting and the AI integration boundary.
   material is always data.
 - Agent details stay behind `lisp/noema-agent-acp.el`. Do not reimplement
   gptel, agent-shell or ACP behavior.
+- A whole plan is one Proposal: `graph.declare` carries the blocks and the
+  references between them, is accepted or rejected as one unit, and is written
+  by `createCells` under a single revision compare-and-swap. A half-agreed
+  plan must never reach the document, so do not materialize its cells one
+  call at a time. `cell.create` remains the single-block form.
 - A Run may report the state of the WorkNode it owns, and nothing else. The
   `research_state` MCP tool does not apply that report: it records a durable
   `worknode.state` coordinator request, and Emacs claims it and applies it

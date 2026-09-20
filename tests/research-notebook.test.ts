@@ -259,6 +259,49 @@ describe("research notebook model", () => {
     expect(() => setResearchState(notebook, ids.w, { state: "finished" })).toThrow(/Unsupported/);
   });
 
+  test("a declared plan is written whole, or not at all", async () => {
+    await withTempDir(async (dir) => {
+      const service = createResearchNotebookService({ getIndexer: () => ({ index: async () => ({}) }) });
+      const file = join(dir, "plan.noema");
+      const created = await service.create({ file, title: "Plan" });
+      const question = await service.createCell({
+        file, kind: "question", title: "Root", expectedRevision: created.revision, actor: "emacs",
+      });
+
+      // Blocks of one plan may anchor on each other, which only works because
+      // they are applied to a single loaded notebook.
+      const written = await service.createCells({
+        file, expectedRevision: question.revision, actor: "emacs",
+        cells: [
+          { id: "p-base", kind: "work", title: "Read the fixture", lineageParent: question.cell.id },
+          { id: "p-top", kind: "work", title: "Assemble", lineageParent: "p-base" },
+        ],
+      });
+      expect(written.cells.map((cell: any) => cell.id)).toEqual(["p-base", "p-top"]);
+      expect(written.revision).not.toBe(question.revision);
+
+      const loaded = await readResearchNotebookFile(file);
+      expect(loaded.notebook.cells.map((cell: any) => cell.id)).toContain("p-base");
+      expect(loaded.notebook.cells.map((cell: any) => cell.id)).toContain("p-top");
+
+      // A plan whose second block is invalid leaves nothing behind: one write,
+      // one compare-and-swap, so a half-applied plan cannot reach disk.
+      const before = await readFile(file, "utf8");
+      await expect(service.createCells({
+        file, expectedRevision: written.revision, actor: "emacs",
+        cells: [
+          { id: "p-good", kind: "work", title: "Fine", lineageParent: question.cell.id },
+          { id: "p-bad", kind: "not-a-kind", title: "Broken" },
+        ],
+      })).rejects.toMatchObject({ statusCode: 422 });
+      expect(await readFile(file, "utf8")).toBe(before);
+
+      await expect(service.createCells({
+        file, expectedRevision: written.revision, actor: "emacs", cells: [],
+      })).rejects.toMatchObject({ statusCode: 422 });
+    });
+  });
+
   test("a regression records what broke in the same reason slot", () => {
     const { notebook, ids } = chain();
     const done = setResearchState(notebook, ids.w, { state: "done" }).notebook;

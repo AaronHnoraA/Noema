@@ -424,7 +424,7 @@ var schemaStatements = []string{
 		id                    TEXT PRIMARY KEY CHECK (id LIKE 'prop_%'),
 		client_request_id     TEXT NOT NULL UNIQUE,
 		workstream_id         TEXT NOT NULL REFERENCES workstreams(id),
-		kind                  TEXT NOT NULL CHECK (kind IN ('cell.create', 'finding.create', 'research_ir.create', 'problem_model.create', 'task.create', 'job.create', 'delegation.create')),
+		kind                  TEXT NOT NULL CHECK (kind IN ('cell.create', 'finding.create', 'research_ir.create', 'problem_model.create', 'task.create', 'job.create', 'delegation.create', 'graph.declare')),
 		payload_json          TEXT NOT NULL,
 		payload_sha256        TEXT NOT NULL,
 		status                TEXT NOT NULL CHECK (status IN ('pending', 'accepting', 'accepted', 'rejected')),
@@ -957,7 +957,8 @@ func migrateProposalSchema(db *sql.DB) error {
 	var tableSQL string
 	err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'proposals'`).Scan(&tableSQL)
 	if errors.Is(err, sql.ErrNoRows) || (strings.Contains(tableSQL, "'accepting'") &&
-		strings.Contains(tableSQL, "'job.create'") && strings.Contains(tableSQL, "'delegation.create'")) {
+		strings.Contains(tableSQL, "'job.create'") && strings.Contains(tableSQL, "'delegation.create'") &&
+		strings.Contains(tableSQL, "'graph.declare'")) {
 		return nil
 	}
 	if err != nil {
@@ -976,7 +977,7 @@ func migrateProposalSchema(db *sql.DB) error {
 			id                    TEXT PRIMARY KEY CHECK (id LIKE 'prop_%'),
 			client_request_id     TEXT NOT NULL UNIQUE,
 			workstream_id         TEXT NOT NULL REFERENCES workstreams(id),
-			kind                  TEXT NOT NULL CHECK (kind IN ('cell.create', 'finding.create', 'research_ir.create', 'problem_model.create', 'task.create', 'job.create', 'delegation.create')),
+			kind                  TEXT NOT NULL CHECK (kind IN ('cell.create', 'finding.create', 'research_ir.create', 'problem_model.create', 'task.create', 'job.create', 'delegation.create', 'graph.declare')),
 			payload_json          TEXT NOT NULL,
 			payload_sha256        TEXT NOT NULL,
 			status                TEXT NOT NULL CHECK (status IN ('pending', 'accepting', 'accepted', 'rejected')),

@@ -30,7 +30,7 @@ var synthesisKindPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 var proposalKinds = map[string]bool{
 	"cell.create": true, "finding.create": true, "research_ir.create": true,
 	"problem_model.create": true, "task.create": true, "job.create": true,
-	"delegation.create": true,
+	"delegation.create": true, "graph.declare": true,
 }
 
 var findingStatuses = map[string]bool{
@@ -509,6 +509,14 @@ func (s *Store) ReviewProposal(input ReviewProposalInput) (ReviewProposalResult,
 		case "cell.create":
 			if err := verifyAcceptedCellTx(tx, proposal.WorkstreamID, reviewedPayload, input.AcceptedRef); err != nil {
 				return ReviewProposalResult{}, err
+			}
+			acceptedRef = input.AcceptedRef
+		case "graph.declare":
+			// The whole plan is written by the notebook authority under one
+			// revision compare-and-swap, so there is no per-cell reference to
+			// verify here — only that one was recorded.
+			if strings.TrimSpace(input.AcceptedRef) == "" {
+				return ReviewProposalResult{}, errors.New("accepting a plan Proposal requires its materialized reference")
 			}
 			acceptedRef = input.AcceptedRef
 		default:

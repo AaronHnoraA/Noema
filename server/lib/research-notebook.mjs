@@ -1379,6 +1379,26 @@ export function createResearchNotebookService({ getIndexer = () => null, allowWr
     createCell(body = {}) {
       return mutate(body, "cell.create", (notebook) => createResearchCell(notebook, body));
     },
+    // A declared plan is accepted whole or not at all: every cell is applied
+    // to one loaded notebook and written once, under one revision
+    // compare-and-swap.  Applying them one call at a time would leave half a
+    // plan on disk when the third of five is rejected, and would also break
+    // references between the plan's own blocks, which do not exist yet.
+    createCells(body = {}) {
+      return mutate(body, "cell.create.batch", (notebook) => {
+        let current = notebook;
+        const cells = [];
+        for (const spec of (Array.isArray(body.cells) ? body.cells : [])) {
+          const outcome = createResearchCell(current, spec);
+          current = outcome.notebook;
+          cells.push(outcome.cell);
+        }
+        if (!cells.length) {
+          throw researchError("A plan Proposal declares no cells", 422, "ERR_RESEARCH_PROPOSAL");
+        }
+        return { notebook: current, cells };
+      });
+    },
     updateCell(body = {}) {
       return mutate(body, "cell.update", (notebook) => updateResearchCell(notebook, body.cellId, object(body.patch)));
     },

@@ -18,24 +18,33 @@ list, not for what the project knows.
 
 Declare the intended shape first, while it is still cheap to reject.
 
-Submit one `proposal.create` per planned block, `kind: "cell.create"`, each
-naming its `lineageParent`. They appear on the person's Graph Board as dashed
-ghost nodes. Then stop and let them respond. Do not start building a design
+Submit the whole plan as one `proposal.create`, `kind: "graph.declare"`. It
+appears on the person's Graph Board as dashed ghost nodes with the shape you
+declared. Then stop and let them respond. Do not start building a design
 nobody has agreed to.
 
 ```json
 { "root": "/abs/project", "runId": "<your run>", "workNodeId": "<your node>",
-  "clientRequestId": "plan-3-parser",
-  "kind": "cell.create",
-  "payload": { "cell": { "notebookId": "<nb>", "cellId": "<stable-id>",
-                         "kind": "work", "title": "Parse the fence grammar",
-                         "lineageParent": "<parent work node>" } } }
+  "clientRequestId": "plan-parser",
+  "kind": "graph.declare",
+  "payload": { "plan": {
+    "notebookId": "<nb>", "file": "<document>.noema",
+    "expectedRevision": "<revision you read>",
+    "cells": [
+      { "id": "p-lex",   "kind": "work", "title": "Tokenize the fence",
+        "lineageParent": "<an existing work node>" },
+      { "id": "p-parse", "kind": "work", "title": "Parse the grammar",
+        "lineageParent": "p-lex" },
+      { "id": "p-render","kind": "work", "title": "Render the block",
+        "lineageParent": "p-parse", "depends": ["p-lex"] }
+    ] } } }
 ```
 
-Blocks of one plan may name each other: a `lineageParent` or a `depends`
-entry can be the `cellId` of another block in the same plan, declared in any
-order. The board draws the plan with its own shape rather than as a row of
-loose ghosts, which is the point of declaring it up front.
+Blocks name each other by `id`, in any order, which is how the plan keeps its
+shape. The whole plan is accepted or rejected as one unit and is written under
+a single revision compare-and-swap, so a half-agreed plan never reaches the
+document. `kind: "cell.create"` remains for adding one block to work that has
+already been agreed.
 
 Skip this only for work small enough to finish in one step.
 

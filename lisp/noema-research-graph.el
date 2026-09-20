@@ -433,13 +433,15 @@ cursor-to-DAG action.  Return the DAG window."
         (t nil)))
 
 (defun noema-research-graph--ghost-p (id)
-  "Return non-nil when ID names a pending Proposal ghost."
+  "Return non-nil when ID names a block of a pending Proposal.
+A declared plan contributes several blocks, so this asks the same question of
+one proposed cell and of every block of a plan."
   (seq-some
    (lambda (proposal)
-     (let* ((payload (or (noema-research-graph--value proposal "reviewedPayload")
-                         (noema-research-graph--value proposal "payload")))
-            (cell (or (noema-research-graph--value payload "cell") payload)))
-       (equal id (noema-research-graph--value cell "cellId"))))
+     (seq-some (lambda (cell)
+                 (equal id (or (noema-research-graph--value cell "cellId")
+                               (noema-research-graph--value cell "id"))))
+               (noema-research-graph--proposal-cells proposal)))
    noema-research-graph--proposals))
 
 (defun noema-research-graph--require-materialized (id)
@@ -1036,11 +1038,29 @@ shape it was declared to show."
     (or (noema-research-resolve-work-node-id document reference)
         (and (gethash reference ids) reference))))
 
-(defun noema-research-graph--proposal-cell (proposal)
-  "Return the cell payload PROPOSAL describes, reviewed version first."
-  (let ((payload (or (noema-research-graph--value proposal "reviewedPayload")
-                     (noema-research-graph--value proposal "payload"))))
-    (or (noema-research-graph--value payload "cell") payload)))
+(defun noema-research-graph--proposal-cells (proposal)
+  "Return the cell payloads PROPOSAL describes, reviewed version first.
+A `cell.create' describes one block; a `graph.declare' describes a whole
+declared plan, whose blocks are drawn together or not at all."
+  (let* ((payload (or (noema-research-graph--value proposal "reviewedPayload")
+                      (noema-research-graph--value proposal "payload")))
+         (kind (noema-research-graph--value proposal "kind")))
+    (cond
+     ((equal kind "graph.declare")
+      (let ((plan (or (noema-research-graph--value payload "plan") payload)))
+        (noema-research-graph--sequence (noema-research-graph--value plan "cells"))))
+     ((equal kind "cell.create")
+      (list (or (noema-research-graph--value payload "cell") payload))))))
+
+(defun noema-research-graph--proposal-notebook (proposal)
+  "Return the notebook id PROPOSAL targets."
+  (let* ((payload (or (noema-research-graph--value proposal "reviewedPayload")
+                      (noema-research-graph--value proposal "payload"))))
+    (if (equal (noema-research-graph--value proposal "kind") "graph.declare")
+        (let ((plan (or (noema-research-graph--value payload "plan") payload)))
+          (noema-research-graph--value plan "notebookId"))
+      (let ((cell (or (noema-research-graph--value payload "cell") payload)))
+        (noema-research-graph--value cell "notebookId")))))
 
 (defun noema-research-graph--with-proposals (projection document proposals)
   "Merge pending cell PROPOSALS for DOCUMENT into graph PROJECTION."
@@ -1053,15 +1073,16 @@ shape it was declared to show."
     ;; First pass: learn every ghost id, so the second pass can resolve
     ;; references between ghosts as well as into the document.
     (dolist (proposal proposals)
-      (let* ((status (noema-research-graph--value proposal "status" ""))
-             (cell (noema-research-graph--proposal-cell proposal))
-             (id (noema-research-graph--value cell "cellId")))
+      (let ((status (noema-research-graph--value proposal "status" "")))
         (when (and (member status '("pending" "accepting"))
-                   (equal (noema-research-graph--value proposal "kind") "cell.create")
-                   (equal (noema-research-graph--value cell "notebookId") notebook-id)
-                   (stringp id) (not (string-empty-p id)) (not (gethash id ids)))
-          (puthash id t ids)
-          (push (list id status cell (noema-research-graph--value proposal "id")) pending))))
+                   (equal (noema-research-graph--proposal-notebook proposal) notebook-id))
+          (dolist (cell (noema-research-graph--proposal-cells proposal))
+            (let ((id (or (noema-research-graph--value cell "cellId")
+                          (noema-research-graph--value cell "id"))))
+              (when (and (stringp id) (not (string-empty-p id)) (not (gethash id ids)))
+                (puthash id t ids)
+                (push (list id status cell (noema-research-graph--value proposal "id"))
+                      pending)))))))
     (setq pending (nreverse pending))
     (let (ghosts)
       (dolist (entry pending)
