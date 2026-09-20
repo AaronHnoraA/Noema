@@ -27,11 +27,14 @@
                (alist-get :message error-object)))
       "request failed"))
 
-(defun noema-agent-promote--session-spec (&optional buffer title goal)
+(defun noema-agent-promote--session-spec (&optional buffer title goal root)
   "Return the promotion payload for agent-shell BUFFER.
 TITLE and GOAL describe the Workstream created when this is the first
-promotion.  The ACP session id remains the native id; Noema assigns its own
-logical Session id on the host."
+promotion.  ROOT overrides the working directory the Session is recorded
+under, which is how a session registered by `noema-agent-acp-adopt' lands in
+its project rather than in whatever directory its process runs in.  The ACP
+session id remains the native id; Noema assigns its own logical Session id on
+the host."
   (with-current-buffer (or buffer (current-buffer))
     (unless (noema-agent-acp-agent-buffer-p (current-buffer))
       (user-error "Current buffer is not an agent-shell session"))
@@ -40,7 +43,8 @@ logical Session id on the host."
            (config (noema-agent-acp-state-value buffer '(:agent-config)))
            (identifier (map-elt config :identifier))
            (session-title (noema-agent-acp-state-value buffer '(:session :title)))
-           (cwd (expand-file-name default-directory)))
+           (cwd (file-name-as-directory
+                 (expand-file-name (or root default-directory)))))
       (unless (and (stringp native-id) (not (string-empty-p native-id)))
         (user-error "The agent-shell session has no native session id yet"))
       `((cwd . ,cwd)
@@ -106,6 +110,46 @@ the host and never changes native history files."
        (message "Noema history indexed: %s records"
                 (or (and (hash-table-p result) (gethash "records" result))
                     0))))))
+
+(defun noema-agent-promote-bind-session-name (buffer name &optional callback)
+  "Record agent BUFFER in its project registry under session NAME.
+Promotion gives the live native conversation a logical Session id; binding
+attaches NAME to it, which is what makes a popup, manual or foreign session
+appear beside a Run's session in `noema-sessions'.
+
+This is best effort: without a running host, or on any host error, the
+session stays registered on the Emacs side alone and nothing is signalled.
+CALLBACK, when given, receives the Session id or nil."
+  (let ((done (lambda (id) (when callback (funcall callback id)))))
+    (if (not (and (buffer-live-p buffer)
+                  (fboundp 'my/noema-api-call)
+                  (bound-and-true-p my/noema--ready)))
+        (funcall done nil)
+      (let* ((root (buffer-local-value 'noema-agent-acp-session-root buffer))
+             (agent (or (buffer-local-value 'noema-agent-acp-session-agent buffer) ""))
+             (payload (ignore-errors
+                        (noema-agent-promote--session-spec buffer name nil root))))
+        (if (not payload)
+            (funcall done nil)
+          (my/noema-api-call
+           "aaronnote:api:research:session:promote" (vector payload)
+           (lambda (result error-object)
+             (let ((id (and (not error-object) (hash-table-p result) (gethash "id" result))))
+               (cond
+                ((not id)
+                 (funcall done nil))
+                (t
+                 (when (buffer-live-p buffer)
+                   (with-current-buffer buffer
+                     (setq noema-agent-promote--session-id id)))
+                 (my/noema-api-call
+                  "aaronnote:api:research:session:name:bind"
+                  (vector `((cwd . ,root) (name . ,name) (agent . ,agent) (sessionId . ,id)))
+                  (lambda (_bound bind-error)
+                    (when bind-error
+                      (message "Noema could not name this session in the project registry: %s"
+                               (noema-agent-promote--error-message bind-error)))
+                    (funcall done id)))))))))))))
 
 (provide 'noema-agent-promote)
 ;;; noema-agent-promote.el ends here

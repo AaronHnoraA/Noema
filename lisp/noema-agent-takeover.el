@@ -75,7 +75,8 @@ REASON is stored in the durable handback event."
                  (let* ((default-directory root)
 		 (resumed
 			 (noema-agent-acp-start
-                          :config config :directory root :session-id native-id)))
+                          :config config :directory root :session-id native-id
+                          :origin 'takeover)))
 		   (when (buffer-live-p resumed)
 		     (with-current-buffer resumed
 		       (setq-local noema-agent-promote--session-id session-id)))))

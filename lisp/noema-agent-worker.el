@@ -1373,7 +1373,7 @@ The kernel already recorded the cancellation, so this is not a failure."
          (fresh (not (and native-session-id (not (string-empty-p native-session-id)))))
          (buffer (noema-agent-acp-start
                   :config config :directory target :session-id native-session-id
-                  :fork-session-id fork-session-id)))
+                  :fork-session-id fork-session-id :origin 'run)))
     (setf (noema-agent-worker-buffer worker) buffer)
     ;; Physical Session state stays isolated, while all Sessions of the
     ;; repository are exposed as tabs in its one Agent workspace.

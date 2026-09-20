@@ -11,6 +11,7 @@
 
 (require 'map)
 (require 'json)
+(require 'project)
 (require 'seq)
 (require 'simple)
 (require 'tab-line)
@@ -141,6 +142,13 @@
 (defvar-local noema-agent-acp-session-root nil
   "Project root of the session served by this agent-shell buffer.")
 (put 'noema-agent-acp-session-root 'permanent-local t)
+
+(defvar-local noema-agent-acp-session-origin nil
+  "How this agent-shell buffer was started.
+One of `run', `popup', `manual', `foreign', `pi', `takeover' or `probe'.
+Every entry point records it through `noema-agent-acp-adopt' so one project
+view can list and manage sessions whatever opened them.")
+(put 'noema-agent-acp-session-origin 'permanent-local t)
 
 (defvar-local noema-agent-acp-display-buffer-function nil
   "Optional Emacs-owned display function for this agent buffer.
@@ -767,6 +775,171 @@ older physical session; it gives the name up so lookups stay unambiguous."
                          (equal (buffer-local-value 'noema-agent-acp-session-root buffer) root))))
               (buffer-list))))
 
+
+;;; ── One project-wide registry of live agent sessions ──────────────────────
+;;
+;; A `.noema' Run, the popup pool, `noema-agent-start' and a bare
+;; `M-x agent-shell' all produce the same kind of resource, so they are all
+;; registered the same way: one project root, one session name, one origin.
+;; Buffer-local identity stays the source of truth — this adds the single
+;; entry point and the merged view over it.  Registration only ever reads the
+;; project: opening an agent never creates a `noema.toml'.
+
+(defgroup noema-agent-session nil
+  "Noema's project-wide registry of live agent sessions."
+  :group 'applications)
+
+(defcustom noema-agent-acp-adopt-foreign-sessions t
+  "Whether agent-shell buffers Noema did not start join its session registry.
+When non-nil, a bare `M-x agent-shell' session is given a project root and a
+session name like every other session, so one view lists them all.  Set this
+to nil to leave such buffers exactly as upstream created them."
+  :type 'boolean
+  :group 'noema-agent-session)
+
+(declare-function noema-project-root "noema-research" (&optional directory))
+(declare-function noema-agent-promote-bind-session-name "noema-agent-promote"
+                  (buffer name &optional callback))
+(declare-function projectile-project-root "projectile" (&optional directory))
+(defvar noema-agent-promote--session-id)
+
+(defun noema-agent-acp-project-root (&optional directory)
+  "Return the project root agent sessions of DIRECTORY are registered under.
+The nearest `noema.toml' wins, then the ordinary project of that directory,
+then the directory itself.  This is a query: it never enables a project."
+  (let ((directory (file-name-as-directory
+                    (expand-file-name (or directory default-directory)))))
+    (noema-agent-acp--workspace-root
+     (or (and (require 'noema-research nil t) (noema-project-root directory))
+         (and (fboundp 'projectile-project-root)
+              (ignore-errors (projectile-project-root directory)))
+         (when-let* ((project (project-current nil directory)))
+           (project-root project))
+         directory))))
+
+(defun noema-agent-acp--claimed-names (root)
+  "Return the session names live agent buffers of ROOT already hold."
+  (delq nil (mapcar (lambda (buffer)
+                      (and (noema-agent-acp-agent-buffer-p buffer)
+                           (equal (buffer-local-value 'noema-agent-acp-session-root buffer)
+                                  root)
+                           (buffer-local-value 'noema-agent-acp-session-name buffer)))
+                    (buffer-list))))
+
+(defun noema-agent-acp--unique-name (base root)
+  "Return BASE, or BASE plus a counter, unclaimed by a live session of ROOT.
+The coordinator name \"pi\" is reserved and is never generated here."
+  (let ((taken (cons "pi" (noema-agent-acp--claimed-names root)))
+        (candidate base)
+        (index 1))
+    (while (member candidate taken)
+      (setq index (1+ index)
+            candidate (format "%s-%d" base index)))
+    candidate))
+
+(defun noema-agent-acp--buffer-agent-id (buffer)
+  "Return the agent id agent-shell configured BUFFER with, as a string."
+  (let ((identifier (noema-agent-acp-state-value buffer '(:agent-config :identifier))))
+    (cond ((stringp identifier) identifier)
+          ((and identifier (symbolp identifier)) (symbol-name identifier)))))
+
+(defun noema-agent-acp--register-durable (buffer name root)
+  "Bind NAME to BUFFER's conversation in ROOT's durable registry, if it has one.
+Only a directory that already is a Noema project has one.  The work waits for
+ACP initialization and then runs asynchronously; failing to reach the host
+leaves the session registered on the Emacs side alone."
+  (when (and (require 'noema-research nil t)
+             (noema-project-root root)
+             (require 'noema-agent-promote nil t))
+    (if (noema-agent-acp-state-value buffer '(:session :id))
+        (noema-agent-promote-bind-session-name buffer name)
+      (let (subscription)
+        (setq subscription
+              (noema-agent-acp-subscribe
+               :buffer buffer :event 'init-finished
+               :callback
+               (lambda (_event)
+                 (ignore-errors
+                   (noema-agent-acp-unsubscribe :buffer buffer :subscription subscription))
+                 (when (buffer-live-p buffer)
+                   (noema-agent-promote-bind-session-name buffer name)))))))))
+
+(cl-defun noema-agent-acp-adopt (buffer &key agent origin name root)
+  "Register agent BUFFER as a named session of its project, and return it.
+ORIGIN records which entry point started it.  NAME defaults to a unique local
+name built from ORIGIN and the agent id; ROOT defaults to
+`noema-agent-acp-project-root' of the buffer's own directory.
+
+When ROOT already is a Noema project and its host is running, the session is
+also promoted and bound in the durable registry, asynchronously."
+  (when (noema-agent-acp-agent-buffer-p buffer)
+    (let* ((origin (or origin
+                       (buffer-local-value 'noema-agent-acp-session-origin buffer)
+                       'manual))
+           (root (noema-agent-acp--workspace-root
+                  (or root
+                      (noema-agent-acp-project-root
+                       (or (buffer-local-value 'noema-agent-acp-session-root buffer)
+                           (buffer-local-value 'default-directory buffer))))))
+           (agent (or (and agent (format "%s" agent))
+                      (buffer-local-value 'noema-agent-acp-session-agent buffer)
+                      (noema-agent-acp--buffer-agent-id buffer)
+                      "agent"))
+           (name (or name
+                     (buffer-local-value 'noema-agent-acp-session-name buffer)
+                     (noema-agent-acp--unique-name (format "%s/%s" origin agent) root))))
+      (with-current-buffer buffer
+        (setq-local noema-agent-acp-session-origin origin))
+      (noema-agent-acp-mark-session-buffer buffer name agent root)
+      (noema-agent-acp--register-durable buffer name root)
+      buffer)))
+
+(defun noema-agent-acp-sessions (&optional root)
+  "Return one plist per live agent session, restricted to ROOT when given.
+Keys are :buffer, :name, :agent, :origin, :root, :native-session-id,
+:session-id, :busy and :last-used.  Popup sessions are included; they are
+presented in their own window but are the same managed resource."
+  (let ((root (and root (noema-agent-acp--workspace-root root))))
+    (delq nil
+          (mapcar
+           (lambda (buffer)
+             (when (and (noema-agent-acp-agent-buffer-p buffer)
+                        (or (null root)
+                            (equal (buffer-local-value 'noema-agent-acp-session-root buffer)
+                                   root)))
+               (list :buffer buffer
+                     :name (buffer-local-value 'noema-agent-acp-session-name buffer)
+                     :agent (buffer-local-value 'noema-agent-acp-session-agent buffer)
+                     :origin (buffer-local-value 'noema-agent-acp-session-origin buffer)
+                     :root (buffer-local-value 'noema-agent-acp-session-root buffer)
+                     :native-session-id (noema-agent-acp-state-value buffer '(:session :id))
+                     :session-id (and (boundp 'noema-agent-promote--session-id)
+                                      (buffer-local-value 'noema-agent-promote--session-id buffer))
+                     :busy (and (noema-agent-acp-busy-p buffer) t)
+                     :last-used (buffer-local-value 'noema-agent-acp-last-used-at buffer))))
+           (buffer-list)))))
+
+(defun noema-agent-acp--adopt-foreign-h ()
+  "Register an agent-shell session Noema itself did not start.
+Every Noema entry point sets `noema-agent-acp-session-origin' as it starts the
+buffer, so a buffer without one came from upstream.  The work waits one
+command, because upstream returns the buffer before its caller can name it."
+  (when noema-agent-acp-adopt-foreign-sessions
+    (let ((buffer (current-buffer)))
+      (run-at-time
+       0 nil
+       (lambda ()
+         (when (and (buffer-live-p buffer)
+                    (noema-agent-acp-agent-buffer-p buffer)
+                    (not (buffer-local-value 'noema-agent-acp-session-origin buffer))
+                    (not (buffer-local-value 'noema-agent-acp-session-name buffer)))
+           (condition-case error-object
+               (noema-agent-acp-adopt buffer :origin 'foreign)
+             (error (message "Noema could not register this agent session: %s"
+                             (error-message-string error-object))))))))))
+
+(add-hook 'agent-shell-mode-hook #'noema-agent-acp--adopt-foreign-h)
+
 (defun noema-agent-acp-resolve-config (identifier)
   "Resolve embedded agent-shell configuration IDENTIFIER."
   (copy-tree (agent-shell--resolve-config-designator identifier)))
@@ -846,10 +1019,13 @@ Never pass an unresolved /fs: identity to a native agent process."
     (file-name-as-directory client)))
 
 (cl-defun noema-agent-acp-start (&key config directory session-id fork-session-id focus
-                                      (render-policy 'visible))
+                                      (origin 'manual) (render-policy 'visible))
   "Start CONFIG in DIRECTORY, optionally resuming or forking a native session.
 The buffer is displayed only when FOCUS is non-nil (D-033): a document Run
 never pops its agent buffer; the person opens it on purpose.
+
+ORIGIN records which entry point owns the session, so the project-wide
+registry can list it and `noema-agent-acp--adopt-foreign-h' leaves it alone.
 
 Noema disables agent-shell's duplicate Markdown transcript and defaults to a
 visible-only render policy.  Neither setting affects ACP transport or events."
@@ -872,6 +1048,7 @@ visible-only render policy.  Neither setting affects ACP transport or events."
                     ;; record and the conversation both survive it.
                     agent-shell-confirm-interrupt nil
                     noema-agent-render-policy render-policy
+                    noema-agent-acp-session-origin origin
                     noema-agent-acp-session-root
                     (file-name-as-directory (expand-file-name directory)))
         (noema-agent-acp--install-workspace-tabs buffer))
@@ -970,6 +1147,8 @@ from transport and preserves any draft at the native input prompt."
                   (or (map-elt block 'text) "")
                 (format "[Context: %s]"
                         (or (map-nested-elt block '(resource uri))
+                            ;; A `resource_link' carries its uri at top level.
+                            (map-elt block 'uri)
                             (map-elt block 'type)))))
             content "\n\n")
      :expanded t :above-last-prompt t)))
@@ -1033,6 +1212,29 @@ from transport and preserves any draft at the native input prompt."
                          (when on-failure (funcall on-failure error raw))
                        (noema-agent-acp--finish-prompt buffer receipt)))))))
 
+(defun noema-agent-acp-file-uri (file)
+  "Return FILE as the `file://' uri agent-shell would put in a content block.
+Path resolution honours `agent-shell-path-resolver-function', so a session
+running behind a resolver sees the same path its own attachments use."
+  (concat "file://" (agent-shell--resolve-path (expand-file-name file))))
+
+(defun noema-agent-acp-file-metadata (file)
+  "Return (:mime-type MIME :size BYTES) for FILE, or nil when unreadable.
+Only metadata is read; the file contents are never loaded."
+  (when-let* ((file (expand-file-name file))
+              ((file-readable-p file))
+              (meta (ignore-errors
+                      (agent-shell--read-file-content :file-path file :shallow t))))
+    (list :mime-type (map-elt meta :mime-type)
+          :size (map-elt meta :size))))
+
+(defun noema-agent-acp-enqueue (buffer text)
+  "Queue TEXT as BUFFER's next turn through agent-shell's pending queue.
+Used when a session is mid-turn: upstream sends the queued prompt itself once
+the running turn finishes."
+  (with-current-buffer buffer
+    (agent-shell--prompt-queue-enqueue :prompt text)))
+
 (defun noema-agent-acp-interrupt (buffer &optional force)
   "Interrupt the active request in BUFFER; FORCE skips confirmation."
   (when (noema-agent-acp-agent-buffer-p buffer)
@@ -1058,29 +1260,38 @@ from transport and preserves any draft at the native input prompt."
 ;;;###autoload
 (defun noema-agent-start (&optional agent)
   "Open an embedded structured AGENT session.
-Interactively select Magent, Codex, Claude Code, OpenCode or Pi."
+Interactively select Magent, Codex, Claude Code, OpenCode or Pi.
+
+The session joins its project's registry like a Run's or the popup pool's,
+so it can be listed, switched to and given buffer context by name."
   (interactive
    (list (intern
           (completing-read "Noema agent: "
                            '("magent" "codex" "claude" "opencode" "pi")
                            nil t nil nil "magent"))))
-  (pcase (or agent 'magent)
-    ('magent
-     (require 'magent-agent-shell)
-     (magent-start))
-    ('codex
-     (require 'agent-shell-openai)
-     (agent-shell-openai-start-codex))
-    ('claude
-     (require 'agent-shell-anthropic)
-     (agent-shell-anthropic-start-claude-code))
-    ('opencode
-     (require 'agent-shell-opencode)
-     (agent-shell-opencode-start-agent))
-    ('pi
-     (require 'agent-shell-pi)
-     (agent-shell-pi-start-agent))
-    (_ (user-error "Unsupported Noema agent: %s" agent))))
+  (let* ((agent (or agent 'magent))
+         (root (noema-agent-acp-project-root))
+         (config (and (memq agent '(codex claude opencode))
+                      (noema-agent-acp-config-for agent)))
+         (buffer
+          (pcase agent
+            ;; Magent and Pi own extra client setup in their own starters.
+            ('magent
+             (require 'magent-agent-shell)
+             (magent-start))
+            ('pi
+             (require 'agent-shell-pi)
+             (agent-shell-pi-start-agent))
+            ((or 'codex 'claude 'opencode)
+             (unless config
+               (user-error "No agent-shell configuration for %s" agent))
+             (noema-agent-acp-start :config config :directory root
+                                    :origin 'manual :focus t))
+            (_ (user-error "Unsupported Noema agent: %s" agent)))))
+    (when (noema-agent-acp-agent-buffer-p buffer)
+      (noema-agent-acp-adopt buffer :agent agent :origin 'manual
+                             :root (and (memq agent '(codex claude opencode)) root)))
+    buffer))
 
 (noema-agent-acp--retire-transcript-workspace)
 

@@ -358,7 +358,8 @@ ENDPOINT carries the coordinator URL.  Display the buffer when FOCUS."
                      (user-error "Pi (pi-acp) is not configured; run M-x noema-pi-doctor"))))
     (setf (alist-get :mcp-servers config) servers)
     (let ((buffer (noema-agent-acp-start :config config :directory root
-                                         :session-id native :focus focus)))
+                                         :session-id native :focus focus
+                                         :origin 'pi)))
       (noema-agent-acp-mark-session-buffer buffer noema-pi-router-session-name "pi" root)
       (puthash root buffer noema-pi-router--buffers)
       (with-current-buffer buffer

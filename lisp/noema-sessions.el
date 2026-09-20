@@ -34,6 +34,10 @@
 (defvar-local noema-sessions--scope 'project "Either `project' or `file'.")
 (defvar-local noema-sessions--source nil "JuText buffer the list was opened from.")
 (defvar-local noema-sessions--names nil "Session name objects currently shown.")
+(defvar-local noema-sessions--local nil
+  "Live agent sessions of this project with no durable registry record.
+A popup, manual or foreign session is registered on the Emacs side even when
+its project is not a Noema project, so it is listed here beside the rest.")
 
 (defun noema-sessions--get (object key &optional default)
   "Read string KEY from JSON-like OBJECT, returning DEFAULT when absent."
@@ -90,6 +94,33 @@
                               (equal (buffer-local-value 'noema-agent-promote--session-id buffer)
                                      session-id)))
                        (buffer-list))))))
+
+(defun noema-sessions--local-sessions (names root)
+  "Return live agent sessions of ROOT that no durable entry in NAMES covers."
+  (let ((covered (make-hash-table :test #'eq)))
+    (dolist (entry names)
+      (when-let* ((buffer (noema-sessions--live-buffer entry root)))
+        (puthash buffer t covered)))
+    (seq-remove (lambda (session) (gethash (plist-get session :buffer) covered))
+                (noema-agent-acp-sessions root))))
+
+(defun noema-sessions--local-label (session)
+  "Return the row id and display name of local SESSION."
+  (or (plist-get session :name)
+      (string-trim (buffer-name (plist-get session :buffer)))))
+
+(defun noema-sessions--local-row (session)
+  "Return the `tabulated-list-entries' row for local SESSION."
+  (let ((name (noema-sessions--local-label session)))
+    (list name
+          (vector name
+                  (or (plist-get session :agent) "")
+                  "local"
+                  ""
+                  "yes"
+                  ""
+                  (format "%s" (or (plist-get session :origin) ""))
+                  ""))))
 
 (defun noema-sessions--status (entry root)
   "Return the display status of session ENTRY in ROOT."
@@ -179,12 +210,19 @@ The kernel keeps the latest usage the agent reported for the bound Session."
   "Render NAMES (filtered by RUNS in file scope) into sessions BUFFER."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
-      (let ((visible (if (eq noema-sessions--scope 'file)
-                         (noema-sessions--in-file names runs noema-sessions--source)
-                       names)))
+      (let* ((visible (if (eq noema-sessions--scope 'file)
+                          (noema-sessions--in-file names runs noema-sessions--source)
+                        names))
+             ;; A file-scoped list answers "which conversations does this
+             ;; document use", which a local session never does.
+             (local (unless (eq noema-sessions--scope 'file)
+                      (noema-sessions--local-sessions names noema-sessions--root))))
         (setq noema-sessions--names visible
-              tabulated-list-entries (mapcar (lambda (entry) (noema-sessions--row entry noema-sessions--root))
-                                             visible)
+              noema-sessions--local local
+              tabulated-list-entries
+              (append (mapcar (lambda (entry) (noema-sessions--row entry noema-sessions--root))
+                              visible)
+                      (mapcar #'noema-sessions--local-row local))
               mode-name (format "Noema-Sessions[%s]" noema-sessions--scope))
         (tabulated-list-print t)))))
 
@@ -218,6 +256,18 @@ The kernel keeps the latest usage the agent reported for the bound Session."
   "Return the session name on the current row."
   (or (tabulated-list-get-id) (user-error "No session on this line")))
 
+(defun noema-sessions--local (name)
+  "Return the shown local session called NAME, or nil."
+  (seq-find (lambda (session) (equal (noema-sessions--local-label session) name))
+            noema-sessions--local))
+
+(defun noema-sessions--durable (name)
+  "Return the durable session object called NAME, or refuse a local-only row."
+  (or (noema-sessions--entry name)
+      (if (noema-sessions--local name)
+          (user-error "“%s” is a live local session with no project record yet" name)
+        (user-error "No session called “%s”" name))))
+
 (defun noema-sessions--resume (entry root)
   "Open ENTRY's recorded conversation in a hidden agent buffer, without a Run."
   (let* ((name (noema-sessions--string entry "name"))
@@ -225,6 +275,7 @@ The kernel keeps the latest usage the agent reported for the bound Session."
          (config (or (noema-agent-acp-config-for agent)
                      (user-error "No agent-shell configuration for %s" agent)))
          (buffer (noema-agent-acp-start :config config :directory root :focus t
+                                        :origin 'run
                                         :session-id (noema-sessions--string entry "nativeSessionId"))))
     (noema-agent-acp-mark-session-buffer buffer name agent root)
     (with-current-buffer buffer
@@ -283,8 +334,11 @@ and resume the native conversation into the same project Agent workspace."
 (defun noema-sessions-visit ()
   "Switch to the agent buffer of the session on this line."
   (interactive)
-  (noema-sessions--visit-entry (noema-sessions--entry (noema-sessions--name-at-point))
-                               noema-sessions--root))
+  (let* ((name (noema-sessions--name-at-point))
+         (local (noema-sessions--local name)))
+    (if local
+        (noema-agent-acp-show-buffer (plist-get local :buffer))
+      (noema-sessions--visit-entry (noema-sessions--durable name) noema-sessions--root))))
 
 (defun noema-sessions--project-jutext-buffers (root)
   "Return live JuText buffers of files under ROOT."
@@ -328,6 +382,7 @@ ordinary, undoable edits.  DONE is called with non-nil on success."
 ordinary, undoable edits."
   (interactive
    (let ((name (noema-sessions--name-at-point)))
+     (noema-sessions--durable name)
      (list name (read-string (format "Rename %s to: " name) name))))
   (noema-sessions--rename noema-sessions--root name new-name
                           (noema-sessions--refresher (current-buffer))))
@@ -349,9 +404,10 @@ DONE is called with non-nil on success."
 Its conversation starts on the first Run that uses it."
   (interactive
    (let ((name (noema-sessions--name-at-point)))
+     (noema-sessions--durable name)
      (list name (read-string (format "Fork %s as: " name) (concat name "/")))))
   (noema-sessions--fork noema-sessions--root parent child
-                        (noema-sessions--string (noema-sessions--entry parent) "agent")
+                        (noema-sessions--string (noema-sessions--durable parent) "agent")
                         (noema-sessions--refresher (current-buffer))))
 
 (defun noema-sessions--archive (root name archived &optional done)
@@ -369,14 +425,16 @@ Its conversation starts on the first Run that uses it."
   (interactive (list (noema-sessions--name-at-point)))
   (noema-sessions--archive
    noema-sessions--root name
-   (not (equal (noema-sessions--string (noema-sessions--entry name) "state") "archived"))
+   (not (equal (noema-sessions--string (noema-sessions--durable name) "state") "archived"))
    (noema-sessions--refresher (current-buffer))))
 
 (defun noema-sessions-kill-buffer (name)
   "Kill the agent buffer of session NAME; the name and history remain."
   (interactive (list (noema-sessions--name-at-point)))
-  (let* ((entry (noema-sessions--entry name))
-         (buffer (or (noema-sessions--live-buffer entry noema-sessions--root)
+  (let* ((local (noema-sessions--local name))
+         (entry (unless local (noema-sessions--durable name)))
+         (buffer (or (and local (plist-get local :buffer))
+                     (noema-sessions--live-buffer entry noema-sessions--root)
                      (user-error "“%s” has no live buffer" name))))
     (when (or (not (noema-sessions--get entry "openRun"))
               (yes-or-no-p (format "“%s” is running a Run; interrupt it by killing the buffer? " name)))
@@ -386,6 +444,7 @@ Its conversation starts on the first Run that uses it."
 (defun noema-sessions-pin (name)
   "Write `@@session(NAME)' into the work block at point of the source JuText."
   (interactive (list (noema-sessions--name-at-point)))
+  (noema-sessions--durable name)
   (let ((source noema-sessions--source))
     (unless (buffer-live-p source)
       (user-error "Open the session list from a .noema buffer to pin a session"))
@@ -419,7 +478,7 @@ Its conversation starts on the first Run that uses it."
   "Visit the work block of session NAME's latest Run."
   (interactive (list (noema-sessions--name-at-point)))
   (noema-sessions--jump-to-run noema-sessions--root name
-                               (noema-sessions--get (noema-sessions--entry name) "lastRun")))
+                               (noema-sessions--get (noema-sessions--durable name) "lastRun")))
 
 ;;; Agent window tab commands
 
@@ -537,7 +596,7 @@ The name, history and Handoffs stay; the next Run starts a new conversation
 from the durable Handoff, freeing a context window before it fills up."
   (interactive)
   (let* ((name (noema-sessions--name-at-point))
-         (entry (noema-sessions--entry name))
+         (entry (noema-sessions--durable name))
          (session-id (and entry (noema-sessions--string entry "sessionId"))))
     (unless session-id
       (user-error "Session %s has no conversation to compact yet" name))
@@ -584,42 +643,98 @@ From a `.noema' buffer the list starts scoped to that file; SCOPE may be
      (lambda () (when (buffer-live-p buffer) (with-current-buffer buffer (noema-sessions-refresh)))))
     buffer))
 
+(defun noema-sessions--unique-choices (choices)
+  "Return CHOICES with duplicate labels disambiguated for `completing-read'."
+  (let ((seen (make-hash-table :test #'equal))
+        result)
+    (dolist (choice choices (nreverse result))
+      (let* ((label (car choice))
+             (count (gethash label seen 0)))
+        (puthash label (1+ count) seen)
+        (push (cons (if (zerop count) label (format "%s <%d>" label (1+ count)))
+                    (cdr choice))
+              result)))))
+
 (defun noema-sessions--switch-candidates (names root)
-  "Return (LABEL . (ENTRY . BUFFER)) choices for NAMES and orphan agent buffers."
-  (let ((choices (mapcar (lambda (entry)
-                           (cons (format "%s  %s · %s" (noema-sessions--string entry "name")
-                                         (or (noema-sessions--string entry "agent") "")
-                                         (noema-sessions--status entry root))
-                                 (cons entry nil)))
-                         (seq-remove (lambda (entry)
-                                       (equal (noema-sessions--string entry "state") "archived"))
-                                     names))))
-    (dolist (buffer (buffer-list))
-      (when (and (noema-agent-acp-agent-buffer-p buffer)
-                 (not (seq-some (lambda (choice)
-                                  (eq (noema-sessions--live-buffer (cadr choice) root) buffer))
-                                choices)))
-        (push (cons (format "%s  (unnamed buffer)" (buffer-name buffer)) (cons nil buffer)) choices)))
-    (nreverse choices)))
+  "Return (LABEL . (ENTRY . BUFFER)) choices for project ROOT.
+Durable session names come first, then ROOT's live sessions that have no
+durable record yet, then live sessions of other projects.  A popup, manual or
+foreign session is registered like any other, so one prompt reaches them all."
+  (noema-sessions--unique-choices
+   (append
+    (mapcar (lambda (entry)
+              (cons (format "%s  %s · %s" (noema-sessions--string entry "name")
+                            (or (noema-sessions--string entry "agent") "")
+                            (noema-sessions--status entry root))
+                    (cons entry nil)))
+            (seq-remove (lambda (entry)
+                          (equal (noema-sessions--string entry "state") "archived"))
+                        names))
+    (mapcar (lambda (session)
+              (cons (format "%s  %s · local (%s)"
+                            (noema-sessions--local-label session)
+                            (or (plist-get session :agent) "")
+                            (or (plist-get session :origin) "session"))
+                    (cons nil (plist-get session :buffer))))
+            (noema-sessions--local-sessions names root))
+    (delq nil
+          (mapcar (lambda (session)
+                    (unless (equal (plist-get session :root) root)
+                      (cons (format "%s  %s · in %s"
+                                    (noema-sessions--local-label session)
+                                    (or (plist-get session :agent) "")
+                                    (file-name-nondirectory
+                                     (directory-file-name (or (plist-get session :root) "/"))))
+                            (cons nil (plist-get session :buffer)))))
+                  (noema-agent-acp-sessions))))))
+
+(defun noema-sessions--entry-buffer (entry root)
+  "Return a live agent buffer for durable ENTRY of ROOT, resuming when needed."
+  (noema-sessions--visit-entry entry root)
+  (or (noema-sessions--live-buffer entry root)
+      (user-error "“%s” has no live conversation"
+                  (noema-sessions--string entry "name"))))
+
+(defun noema-sessions--start-new (root)
+  "Start a new agent session in ROOT, register it and return its buffer."
+  (let* ((agent (completing-read "Agent: " (noema-agent-acp-known-agents) nil t))
+         (config (or (noema-agent-acp-config-for agent)
+                     (user-error "No agent-shell configuration for %s" agent)))
+         (buffer (noema-agent-acp-start :config config :directory root
+                                        :origin 'manual)))
+    (noema-agent-acp-adopt buffer :agent agent :origin 'manual :root root)
+    buffer))
 
 ;;;###autoload
-(defun noema-sessions-switch ()
-  "Switch to a named agent session of this project, or any live agent buffer."
-  (interactive)
-  (let* ((root (noema-sessions--project-root))
+(cl-defun noema-sessions-read (&key prompt root allow-new)
+  "Read one agent session of ROOT and return its live agent buffer.
+PROMPT overrides the minibuffer prompt.  With ALLOW-NEW the choices also
+include starting a new session.  Resuming a recorded conversation or starting
+a new one happens here, so the caller always receives a live buffer."
+  (let* ((root (noema-sessions--project-root root))
          (result (and (bound-and-true-p my/noema--ready)
                       (fboundp 'my/noema--api-call-sync)
                       (ignore-errors
                         (my/noema--api-call-sync "aaronnote:api:research:session:names"
                                                  (vector `((cwd . ,root))) 2))))
          (choices (noema-sessions--switch-candidates
-                   (noema-sessions--list (noema-sessions--get result "names")) root)))
+                   (noema-sessions--list (noema-sessions--get result "names")) root))
+         (new-label "+ Start a new session"))
+    (when allow-new
+      (setq choices (append choices (list (cons new-label 'new)))))
     (unless choices (user-error "No Noema agent sessions or buffers"))
-    (let* ((label (completing-read "Noema session: " choices nil t))
-           (choice (cdr (assoc label choices))))
-      (if (cdr choice)
-          (noema-agent-acp-show-buffer (cdr choice))
-        (noema-sessions--visit-entry (car choice) root)))))
+    (let ((choice (cdr (assoc (completing-read (or prompt "Noema session: ")
+                                               choices nil t)
+                              choices))))
+      (cond ((eq choice 'new) (noema-sessions--start-new root))
+            ((cdr choice) (cdr choice))
+            (t (noema-sessions--entry-buffer (car choice) root))))))
+
+;;;###autoload
+(defun noema-sessions-switch ()
+  "Switch to any live agent session, named by its project or by this one."
+  (interactive)
+  (noema-agent-acp-show-buffer (noema-sessions-read)))
 
 (provide 'noema-sessions)
 ;;; noema-sessions.el ends here

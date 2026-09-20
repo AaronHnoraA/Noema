@@ -67,6 +67,23 @@ session interaction, and Magent supplies its local agent/queue/ledger/gptel
 adapter. `noema-agent-acp.el` is the sole research/runtime coupling boundary
 to agent-shell/acp implementation details.
 
+`noema-context.el` hands editor context to one chosen live session. It reuses
+gptel's selection whole -- the `gptel-context' variable, its region overlays
+and its `*gptel-context*' review buffer -- so there is one selection, not two.
+What it sends is always a reference: a `path:START-END' line in the prompt
+text plus one `resource_link' block per file. Do not add an embedded
+`resource' or inlined file text to this path; the point is that attaching a
+file costs a line rather than a copy. Reach agent-shell internals only through
+`noema-agent-acp-file-uri', `-file-metadata' and `-enqueue'.
+
+Every agent session is registered per project by `noema-agent-acp-adopt',
+whatever started it: a Run, the popup pool, `noema-agent-start' or a bare
+`M-x agent-shell'. `noema-agent-acp-start' records the entry point as
+`:origin'. Root resolution (`noema-agent-acp-project-root') is a query and
+must stay one: registering a session never creates a `noema.toml'. A project
+that already has one also gets a durable `session:promote' + `session:name:bind';
+elsewhere the session is listed from Emacs alone.
+
 ## Host and compatibility
 
 `init-aaronnote.el` owns the CM6 xwidget/Appine lifecycle, header line, buffer

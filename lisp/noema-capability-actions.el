@@ -178,7 +178,9 @@ No request is sent until the user reviews the draft and presses RET."
           request (read-string "Skill refinement: "))
     (require 'noema-agent-acp)
     (let ((buffer (noema-agent-acp-start :config (noema-agent-acp-config-for agent)
-                                       :directory (file-name-directory path) :focus t)))
+                                       :directory (file-name-directory path) :focus t
+                                       :origin 'probe)))
+      (noema-agent-acp-adopt buffer :agent agent :origin 'probe)
       (noema-agent-acp-draft
        buffer (concat
                (if (string-suffix-p ".patch" path)
