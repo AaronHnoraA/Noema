@@ -38,7 +38,8 @@
   "Canonical cell roles stored in `noema_research.kind'.
 D-023 derives every role from storage type plus its WorkNode binding.")
 
-(defconst noema-research-work-states '("open" "active" "waiting" "done" "dropped")
+(defconst noema-research-work-states
+  '("open" "active" "waiting" "done" "regressed" "dropped")
   "Allowed work states.")
 
 (defconst noema-research-work-outcomes
@@ -985,13 +986,15 @@ TYPES defaults to every relation type in the work DAG."
     node))
 
 (defun noema-research-set-state (document id state &optional reason)
-  "Set work cell ID's STATE in DOCUMENT; REASON explains a drop."
+  "Set work cell ID's STATE in DOCUMENT; REASON explains a drop or a regression.
+The reason keeps its historical `dropped_reason' storage key, so existing
+documents, the Go mirror and the SQLite columns all stay as they are."
   (let ((node (noema-research--require-work document id)))
     (unless (member state noema-research-work-states)
       (user-error "Unsupported work state: %s" state))
     (noema-research-work-node-set node "state" state)
     (noema-research-work-node-set node "dropped_reason"
-                                  (and (equal state "dropped") reason
+                                  (and (member state '("dropped" "regressed")) reason
                                        (string-trim reason)))
     node))
 
@@ -1415,6 +1418,36 @@ order, the WorkNodes without a lineage parent."
           (puthash to (append (gethash to parents) (list from)) parents))))
     (list children parents
           (seq-filter (lambda (id) (null (gethash id parents))) (nreverse order)))))
+
+(defun noema-research--descendant-map (document &optional types)
+  "Return a hash mapping each WorkNode of DOCUMENT to its TYPES children.
+TYPES defaults to every relation type, so the result is the combined work DAG
+rather than the lineage tree alone."
+  (let ((types (or types noema-research-relation-types))
+        (known (noema-research--work-node-table document))
+        (children (make-hash-table :test #'equal)))
+    (dolist (edge (noema-research-dependencies document) children)
+      (let ((from (noema-research--get edge "from"))
+            (to (noema-research--get edge "to")))
+        (when (and (member (noema-research--get edge "type") types)
+                   (gethash from known) (gethash to known) (not (equal from to)))
+          (puthash from (append (gethash from children) (list to)) children))))))
+
+(defun noema-research-regression-targets (document id)
+  "Return the WorkNodes a regression on ID calls into question.
+ID itself, then every work descendant in the combined work DAG that currently
+claims `done'.  Both edge types carry it: a conclusion drawn from a broken
+parent is as suspect as one that declares a hard `depends' on it.  Work that
+is already regressed, still in progress, or dropped is left alone — a
+regression reopens finished claims, it does not restart abandoned ones."
+  (let ((children (noema-research--descendant-map document)))
+    (cons id
+          (seq-filter
+           (lambda (node-id)
+             (when-let* ((node (noema-research-find-work-node document node-id)))
+               (and (equal (noema-research-work-node-field node "kind") "work")
+                    (equal (noema-research-work-node-field node "state") "done"))))
+           (noema-research--walk id children)))))
 
 (defun noema-research-branch-ids (document id)
   "Return the WorkNodes of DOCUMENT reachable only through ID's lineage branch."

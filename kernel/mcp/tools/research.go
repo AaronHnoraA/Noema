@@ -73,11 +73,71 @@ var ProposalCreateTool = &Tool{
 	ActionEffects: map[string]ToolEffects{"": {LocalWrite: true}},
 }
 
+// ResearchStateTool lets a Run keep the DAG honest about itself.  It is the
+// one write that is not a Proposal, and it is narrow by construction: a Run
+// may move the WorkNode it owns and nothing else, it cannot restructure the
+// document, and it does not apply the change here.  The request is durable;
+// Emacs claims it and applies it through the same validated, undoable
+// transaction a person's edit uses, so the document keeps one authority.
+var ResearchStateTool = &Tool{
+	Name: "research_state", Description: "Report the state of the WorkNode this agent Run owns: active while working, done once verification passed, regressed when previously finished work broke. Records the reason and, for regressed, carries it to the finished work below. Cannot touch any other node.",
+	InputSchema: ToolSchema{Type: "object", Properties: map[string]Property{
+		"root":       {Type: "string", Description: "Absolute Noema repository root"},
+		"runId":      {Type: "string", Description: "Current durable agent Run id"},
+		"workNodeId": {Type: "string", Description: "WorkNode owned by that Run"},
+		"state":      {Type: "string", Description: "New state", Enum: research.WorkStates},
+		"reason":     {Type: "string", Description: "Why: the evidence for done, or what broke for regressed"},
+	}, Required: []string{"root", "runId", "workNodeId", "state"}},
+	Handler:       researchStateHandler,
+	ActionEffects: map[string]ToolEffects{"": {LocalWrite: true}},
+}
+
 func init() {
 	register(ResearchCellTool)
 	register(ResearchRunTool)
 	register(ArtifactTool)
 	register(ProposalCreateTool)
+	register(ResearchStateTool)
+}
+
+func researchStateHandler(args map[string]any) (CallToolResult, error) {
+	store, result := researchToolStore(args)
+	if result != nil {
+		return *result, nil
+	}
+	state := strings.TrimSpace(stringArg(args, "state"))
+	if !research.ValidWorkState(state) {
+		return historyResearchError(errors.New("unsupported work state " + state)), nil
+	}
+	run, err := store.GetRun(stringArg(args, "runId"))
+	if err != nil {
+		return historyResearchError(err), nil
+	}
+	if run.WorkNodeID == "" || run.WorkNodeID != stringArg(args, "workNodeId") {
+		return historyResearchError(errors.New("a Run may report only on the WorkNode it owns")), nil
+	}
+	if run.Status != "running" && run.Status != "waiting_permission" && run.Status != "waiting_input" {
+		return historyResearchError(errors.New("work state can be reported only while the agent Run is active")), nil
+	}
+	if run.NotebookID == "" {
+		return historyResearchError(errors.New("this Run does not come from a work document")), nil
+	}
+	notebook, err := store.NotebookPath(run.NotebookID)
+	if err != nil {
+		return historyResearchError(err), nil
+	}
+	request, err := store.CreateCoordinatorRequest("worknode.state", map[string]any{
+		"file": notebook, "workNodeId": run.WorkNodeID, "state": state,
+		"reason": strings.TrimSpace(stringArg(args, "reason")), "runId": run.ID,
+	}, "agent:run/"+run.ID)
+	if err != nil {
+		return historyResearchError(err), nil
+	}
+	return historyResearchJSON(map[string]any{
+		"requestId": request.ID, "state": state, "workNodeId": run.WorkNodeID,
+		"applied": false,
+		"note":    "Recorded. The editor applies it as an ordinary document edit; read the node back if you need to confirm.",
+	})
 }
 
 func proposalCreateHandler(args map[string]any) (CallToolResult, error) {

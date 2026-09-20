@@ -29,7 +29,7 @@ const schemaVersion = "21"
 // Emacs to cancel a session's open Run or close its idle agent process.
 const coordinatorRequestsTable = `CREATE TABLE IF NOT EXISTS coordinator_requests (
 		id          TEXT PRIMARY KEY CHECK (id LIKE 'creq_%'),
-		kind        TEXT NOT NULL CHECK (kind IN ('run.start', 'session.cancel', 'session.close')),
+		kind        TEXT NOT NULL CHECK (kind IN ('run.start', 'session.cancel', 'session.close', 'worknode.state')),
 		payload_json TEXT NOT NULL,
 		actor       TEXT NOT NULL,
 		state       TEXT NOT NULL CHECK (state IN ('pending', 'claimed', 'done', 'failed')),
@@ -835,7 +835,8 @@ func migrate(db *sql.DB) error {
 	return err
 }
 
-// migrateCoordinatorRequestKinds rebuilds pre-v20 coordinator requests.
+// migrateCoordinatorRequestKinds rebuilds a coordinator_requests table
+// whose kind CHECK predates the current set of request kinds.
 // Nothing references the table, so a rename-copy-drop keeps every request.
 func migrateCoordinatorRequestKinds(db *sql.DB) error {
 	var tableSQL string
@@ -843,8 +844,11 @@ func migrateCoordinatorRequestKinds(db *sql.DB) error {
 	// Looking for the terminal state names is insufficient: a test or an
 	// intermediate schema can already allow `done' while retaining the old
 	// request-kind CHECK.  The lease column is the unambiguous v20 marker.
+	// Match the whole current kind list, not one member of it: a database
+	// carrying some other subset must still be rebuilt.  The lease column
+	// distinguishes the current table shape from an older one.
 	if errors.Is(err, sql.ErrNoRows) ||
-		(strings.Contains(tableSQL, "kind IN ('run.start', 'session.cancel', 'session.close')") &&
+		(strings.Contains(tableSQL, "kind IN ('run.start', 'session.cancel', 'session.close', 'worknode.state')") &&
 			strings.Contains(tableSQL, "lease_expires_at")) {
 		return nil
 	}
@@ -858,11 +862,11 @@ func migrateCoordinatorRequestKinds(db *sql.DB) error {
 	defer func() { _ = tx.Rollback() }()
 	for _, statement := range []string{
 		`DROP INDEX IF EXISTS idx_coordinator_requests_pending`,
-		`ALTER TABLE coordinator_requests RENAME TO coordinator_requests_before_v19`,
+		`ALTER TABLE coordinator_requests RENAME TO coordinator_requests_before_rebuild`,
 		coordinatorRequestsTable,
 		`INSERT INTO coordinator_requests(id, kind, payload_json, actor, state, claimed_by, created_at, claimed_at, version)
-		 SELECT id, kind, payload_json, actor, state, claimed_by, created_at, claimed_at, version FROM coordinator_requests_before_v19`,
-		`DROP TABLE coordinator_requests_before_v19`,
+		 SELECT id, kind, payload_json, actor, state, claimed_by, created_at, claimed_at, version FROM coordinator_requests_before_rebuild`,
+		`DROP TABLE coordinator_requests_before_rebuild`,
 		`CREATE INDEX IF NOT EXISTS idx_coordinator_requests_pending ON coordinator_requests(state, created_at)`,
 	} {
 		if _, err := tx.Exec(statement); err != nil {

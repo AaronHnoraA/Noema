@@ -184,3 +184,81 @@ func TestProposalCreateToolSubmitsPendingCandidateFromActiveRun(t *testing.T) {
 		t.Fatalf("proposal.create is not exposed with a local-write effect: %+v", tool)
 	}
 }
+
+func TestResearchStateToolRecordsARequestAndNeverEditsTheDocument(t *testing.T) {
+	root, store := researchToolFixture(t)
+	before, err := os.ReadFile(filepath.Join(root, "tools.noema"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.PromoteSession(research.PromoteSessionInput{WorkstreamID: "ws_tools", Adapter: "codex", Transport: "acp",
+		NativeSessionID: "native-state", ExecutionTarget: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.PrepareRun(research.PrepareRunInput{WorkstreamID: "ws_tools", SessionID: session.ID,
+		NotebookID: "nb_tools", CellID: "work", WorkNodeID: "wn_tools_work", SourceKind: "work-cell", ExecutionTarget: root,
+		Spec: map[string]any{"schema": "noema.run-spec/1", "prompt": "Report progress"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := store.AcquireLease(research.AcquireLeaseInput{SessionID: session.ID, Owner: "mcp-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.StartRun(research.StartRunInput{SessionID: session.ID, Owner: lease.Owner, Epoch: lease.Epoch, RunID: run.ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := researchStateHandler(map[string]any{
+		"root": root, "runId": run.ID, "workNodeId": run.WorkNodeID,
+		"state": "done", "reason": "go test ./noema/research: ok",
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("reporting work state failed: %+v (%v)", result, err)
+	}
+	// The kernel records the report; it does not apply it.  Emacs owns the
+	// document, so the file on disk must be untouched.
+	after, err := os.ReadFile(filepath.Join(root, "tools.noema"))
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("research_state mutated the authoritative notebook (%v)", err)
+	}
+	requests, err := store.ClaimCoordinatorRequests("emacs-test", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found *research.CoordinatorRequest
+	for index := range requests {
+		if requests[index].Kind == "worknode.state" {
+			found = &requests[index]
+		}
+	}
+	if found == nil {
+		t.Fatalf("no worknode.state request was recorded: %+v", requests)
+	}
+	if found.Actor != "agent:run/"+run.ID ||
+		found.Payload["workNodeId"] != run.WorkNodeID ||
+		found.Payload["state"] != "done" ||
+		found.Payload["reason"] != "go test ./noema/research: ok" ||
+		found.Payload["file"] != "tools.noema" {
+		t.Fatalf("worknode.state request lost its provenance or payload: %+v", found)
+	}
+
+	// A Run may report only on the node it owns, only while it is active,
+	// and only with a state a WorkNode can actually hold.
+	forged, err := researchStateHandler(map[string]any{
+		"root": root, "runId": run.ID, "workNodeId": "wn_other", "state": "done",
+	})
+	if err != nil || !forged.IsError || !strings.Contains(forged.Content[0].Text, "owns") {
+		t.Fatalf("a foreign WorkNode was accepted: %+v (%v)", forged, err)
+	}
+	bogus, err := researchStateHandler(map[string]any{
+		"root": root, "runId": run.ID, "workNodeId": run.WorkNodeID, "state": "finished",
+	})
+	if err != nil || !bogus.IsError || !strings.Contains(bogus.Content[0].Text, "unsupported work state") {
+		t.Fatalf("an unknown state was accepted: %+v (%v)", bogus, err)
+	}
+	if tool := GetTool("research_state"); tool == nil || !tool.ActionEffects[""].LocalWrite {
+		t.Fatalf("research_state is not exposed with a local-write effect: %+v", tool)
+	}
+}

@@ -259,6 +259,20 @@ describe("research notebook model", () => {
     expect(() => setResearchState(notebook, ids.w, { state: "finished" })).toThrow(/Unsupported/);
   });
 
+  test("a regression records what broke in the same reason slot", () => {
+    const { notebook, ids } = chain();
+    const done = setResearchState(notebook, ids.w, { state: "done" }).notebook;
+    expect(workNode(done, ids.w).dropped_reason).toBeUndefined();
+    const broken = setResearchState(done, ids.w, { state: "regressed", reason: "lemma 4 no longer holds" }).notebook;
+    expect(workNode(broken, ids.w)).toMatchObject({
+      state: "regressed",
+      dropped_reason: "lemma 4 no longer holds",
+    });
+    // Re-verifying clears the reason, exactly as reopening a drop does.
+    const repaired = setResearchState(broken, ids.w, { state: "done" }).notebook;
+    expect(workNode(repaired, ids.w).dropped_reason).toBeUndefined();
+  });
+
   test("terminal runs replace the bound work output without creating Result cells", () => {
     const { notebook, ids } = chain();
     const first = upsertResearchRunResult(notebook, {

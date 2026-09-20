@@ -161,7 +161,12 @@ window: `RET` or double-click synchronizes its selected node back to JuText
 and closes it; `q` dismisses it. Opening `.noema` instead defaults to JuText
 plus the right-side OutputArea, and it never auto-opens or auto-follows DAG.
 Work state, outcome, active Run status, dropped reason and checkpoint shape
-are visible on the graph. `TAB` fixes a fold, `f` makes the selected node the
+are visible on the graph.  Work that was verified and has since been broken is
+marked `regressed` (`!` on the board, `✗` on the node, a warning stroke): the
+state records what broke, and it travels to every `done` descendant in the
+combined work DAG — lineage and `depends` alike — so a finished claim resting
+on a broken foundation has to be made again rather than inherited.  A
+regressed node is never dimmed or auto-folded; being visible is its purpose. `TAB` fixes a fold, `f` makes the selected node the
 root of the drawing (`^` moves that root up, `[`/`]` change its depth), and
 `z` cycles Overview / Branch / Detail; Detail projects the latest Run and
 linked artifacts. Overview and manual folds retain the selected/focused path.

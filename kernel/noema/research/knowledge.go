@@ -45,6 +45,22 @@ type RunOutput struct {
 	TranscriptText string    `json:"transcriptText,omitempty"`
 }
 
+// NotebookPath returns the repository-relative path of notebookID.
+func (s *Store) NotebookPath(notebookID string) (string, error) {
+	notebookID = strings.TrimSpace(notebookID)
+	if notebookID == "" {
+		return "", errors.New("a notebook path lookup needs a notebook id")
+	}
+	var rel string
+	if err := s.db.QueryRow(`SELECT path FROM notebooks WHERE id = ?`, notebookID).Scan(&rel); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", fmt.Errorf("research notebook %q not found", notebookID)
+		}
+		return "", err
+	}
+	return rel, nil
+}
+
 func (s *Store) ReadResearchCell(notebookID, cellID string) (ResearchCellView, error) {
 	notebookID, cellID = strings.TrimSpace(notebookID), strings.TrimSpace(cellID)
 	if notebookID == "" || cellID == "" {

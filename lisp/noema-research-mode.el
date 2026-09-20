@@ -2091,13 +2091,22 @@ its own title."
    (lambda (document) (noema-research-set-agenda document id patch) id)))
 
 (defun noema-research-op-set-state (id state &optional reason outcome)
-  "Set work ID's STATE; REASON explains a drop.  Non-nil OUTCOME is set too."
-  (noema-research-structure-edit
-   (format "set state %s" state)
-   (lambda (document)
-     (noema-research-set-state document id state reason)
-     (when outcome (noema-research-set-outcome document id outcome))
-     id)))
+  "Set work ID's STATE; REASON explains a drop or a regression.
+Non-nil OUTCOME is set too.  `regressed' is never a lone node property: it
+travels to the finished work resting on ID, so this delegates rather than
+letting a second path set the state without the consequence."
+  (if (and (equal state "regressed") (not outcome))
+      (noema-research-op-set-regressed id reason)
+    (noema-research-structure-edit
+     (format "set state %s" state)
+     (lambda (document)
+       (if (equal state "regressed")
+           (dolist (target (noema-research-regression-targets document id))
+             (noema-research-set-state document target state
+                                       (and (equal target id) reason)))
+         (noema-research-set-state document id state reason))
+       (when outcome (noema-research-set-outcome document id outcome))
+       id))))
 
 (defun noema-research-op-set-outcome (id outcome)
   "Set work ID's OUTCOME; the empty string clears it."
@@ -2263,8 +2272,9 @@ With a prefix argument, also prompt for OUTCOME (empty clears it)."
            (completing-read "Outcome (empty clears): "
                             noema-research-work-outcomes nil nil))))
   (let* ((id (noema-research--node-at-point))
-         (reason (when (equal state "dropped")
-                   (read-string "Reason (optional): "))))
+         (reason (pcase state
+                   ("dropped" (read-string "Reason (optional): "))
+                   ("regressed" (read-string "What broke (optional): ")))))
     (noema-set-node-state id state reason outcome)))
 
 (defun noema-research--shift-block-at-point (direction)
@@ -2470,6 +2480,20 @@ explains a drop and is recorded on ID.  Return ID."
        (dolist (target targets)
          (noema-research-set-state document target state
                                    (and (equal target id) reason))))
+     id)))
+
+(defun noema-research-op-set-regressed (id &optional reason)
+  "Mark work ID regressed and carry that to the finished work resting on it.
+The targets are `noema-research-regression-targets'.  REASON is recorded on
+ID.  A descendant that turns out to be unaffected is marked done again by
+hand, on purpose: the claim has to be re-made rather than inherited.
+Return ID."
+  (noema-research-structure-edit
+   "mark regressed"
+   (lambda (document)
+     (dolist (target (noema-research-regression-targets document id))
+       (noema-research-set-state document target "regressed"
+                                 (and (equal target id) reason)))
      id)))
 
 (defun noema-research-branch-done ()

@@ -24,6 +24,18 @@ D-016/D-021/D-022 still govern hosting and the AI integration boundary.
   material is always data.
 - Agent details stay behind `lisp/noema-agent-acp.el`. Do not reimplement
   gptel, agent-shell or ACP behavior.
+- A Run may report the state of the WorkNode it owns, and nothing else. The
+  `research_state` MCP tool does not apply that report: it records a durable
+  `worknode.state` coordinator request, and Emacs claims it and applies it
+  through the same validated, undoable structure transaction a person's edit
+  uses. Keep it that way — the document has exactly one authority, and the
+  kernel is not it. Structure changes (new nodes, new edges) remain
+  Proposals. Agent tool activity schedules the claim, so a Run's bookkeeping
+  does not wait for Pi.
+- `regressed` is never a lone node property. Every path that sets it goes
+  through `noema-research-op-set-state`, which delegates to
+  `noema-research-op-set-regressed` so the state always carries to the `done`
+  work below it. Do not add a second way to set it.
 - Ordinary `.ipynb` and Markdown `@@cell` sidecars keep full Jupyter support.
 
 

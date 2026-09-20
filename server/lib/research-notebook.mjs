@@ -22,7 +22,7 @@ export const LEGACY_RESEARCH_SCHEMA = "noema.research-notebook/1";
 export const RESEARCH_NAMESPACE = "noema_research";
 export const GRAPH_KINDS = Object.freeze(["question", "work", "checkpoint"]);
 export const RESEARCH_KINDS = Object.freeze([]);
-export const WORK_STATES = Object.freeze(["open", "active", "waiting", "done", "dropped"]);
+export const WORK_STATES = Object.freeze(["open", "active", "waiting", "done", "regressed", "dropped"]);
 export const WORK_OUTCOMES = Object.freeze(["supported", "refuted", "inconclusive", "dead_end", "superseded"]);
 export const RELATION_TYPES = Object.freeze(["lineage", "depends"]);
 export const RESEARCH_SUFFIX = ".noema";
@@ -821,8 +821,10 @@ export function setResearchState(notebook, workNodeId, { state, outcome, reason 
     if (!WORK_STATES.includes(state)) throw researchError(`Unsupported work state: ${state}`, 422, "ERR_RESEARCH_STATE");
     node.state = state;
     const text = String(reason ?? "").trim();
-    if (state === "dropped" && text) node.dropped_reason = text;
-    else if (state !== "dropped") delete node.dropped_reason;
+    // The reason slot keeps its historical key; it now also explains a
+    // regression, so a broken node can say what broke without a new column.
+    if ((state === "dropped" || state === "regressed") && text) node.dropped_reason = text;
+    else if (state !== "dropped" && state !== "regressed") delete node.dropped_reason;
   }
   if (outcome !== undefined) {
     if (outcome === null || outcome === "") delete node.outcome;

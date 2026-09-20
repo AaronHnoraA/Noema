@@ -29,8 +29,30 @@ type CoordinatorRequest struct {
 	Version        int64          `json:"version"`
 }
 
-// coordinatorRequestKinds are the only asks Pi can make of Emacs.
-var coordinatorRequestKinds = map[string]bool{"run.start": true, "session.cancel": true, "session.close": true}
+// coordinatorRequestKinds are the only asks that reach Emacs this way.  The
+// session verbs belong to Pi; "worknode.state" belongs to an ordinary agent
+// Run reporting on the WorkNode it owns.  Neither acts by itself: Emacs
+// claims the request and applies it through its own validated, undoable
+// document transaction, so the document keeps exactly one authority.
+var coordinatorRequestKinds = map[string]bool{
+	"run.start": true, "session.cancel": true, "session.close": true,
+	"worknode.state": true,
+}
+
+// WorkStates are the states a WorkNode may hold.  The list mirrors
+// `noema-research-work-states' in Emacs and WORK_STATES in the Node
+// notebook authority; all three must move together.
+var WorkStates = []string{"open", "active", "waiting", "done", "regressed", "dropped"}
+
+// ValidWorkState reports whether state is one a WorkNode may hold.
+func ValidWorkState(state string) bool {
+	for _, candidate := range WorkStates {
+		if candidate == state {
+			return true
+		}
+	}
+	return false
+}
 
 // CreateCoordinatorRequest records one pending request.
 func (s *Store) CreateCoordinatorRequest(kind string, payload map[string]any, actor string) (CoordinatorRequest, error) {

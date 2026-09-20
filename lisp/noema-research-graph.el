@@ -123,12 +123,14 @@ The first redraw in a real window places it again for that window's size.")
                    ("checkpoint" . "#fef7e0") ("summary" . "#f3e8fd")
                    ("run" . "#f1f3f4") ("artifact" . "#fce8e6"))
            :default-fill "#f1f3f4" :stroke "#9aa0a6" :edge "#80868b"
-           :title "#202124" :text "#5f6368" :selected "#1a73e8" :focus "#d93025")
+           :title "#202124" :text "#5f6368" :selected "#1a73e8" :focus "#d93025"
+           :regressed "#b3261e")
     (dark :fills (("question" . "#1c3a5e") ("work" . "#1d3d2c")
                   ("checkpoint" . "#4a3e14") ("summary" . "#3a2850")
                   ("run" . "#303134") ("artifact" . "#4d2626"))
           :default-fill "#303134" :stroke "#5f6368" :edge "#9aa0a6"
-          :title "#e8eaed" :text "#bdc1c6" :selected "#8ab4f8" :focus "#f28b82"))
+          :title "#e8eaed" :text "#bdc1c6" :selected "#8ab4f8" :focus "#f28b82"
+          :regressed "#f9a19a"))
   "Graph Board palettes by theme.")
 
 (defun noema-research-graph--setting (variable)
@@ -344,6 +346,7 @@ indicator, not an outline: view state is never encoded only in the drawing."
     ("o" "outcome" noema-research-graph-set-outcome)
     ("d" "done" noema-research-graph-mark-done)
     ("x" "drop" noema-research-graph-drop)
+    ("!" "regressed" noema-research-graph-mark-regressed)
     ("R" "reopen" noema-research-graph-reopen)]
    ["Links / structure"
     ("p" "lineage links" noema-research-graph-lineage-menu)
@@ -965,6 +968,7 @@ the document instead of rescanning every Cell for every node."
   (let* ((limit (pcase noema-research-graph--zoom
                   ("overview" 34) ("detail" 72) (_ 52)))
          (title (concat (if (plist-get node :ghost) "◇ " "")
+                        (if (equal (plist-get node :state) "regressed") "✗ " "")
                         (if (equal (plist-get node :kind) "question") "? " "")
                         (truncate-string-to-width
                          (or (plist-get node :title) "Untitled") limit nil nil "…")))
@@ -1022,58 +1026,64 @@ the document instead of rescanning every Cell for every node."
   "Return the complete drawn label of projection NODE."
   (string-join (noema-research-graph--label-lines node) "\n"))
 
+(defun noema-research-graph--resolve-ghost-ref (document reference ids)
+  "Resolve REFERENCE to a drawn node id in DOCUMENT, else to a pending ghost.
+A plan is declared one block at a time, so its blocks name each other before
+any of them exists in the document.  Resolving only against the document
+would draw the plan as a handful of disconnected ghosts and lose the very
+shape it was declared to show."
+  (when (and (stringp reference) (not (string-empty-p reference)))
+    (or (noema-research-resolve-work-node-id document reference)
+        (and (gethash reference ids) reference))))
+
+(defun noema-research-graph--proposal-cell (proposal)
+  "Return the cell payload PROPOSAL describes, reviewed version first."
+  (let ((payload (or (noema-research-graph--value proposal "reviewedPayload")
+                     (noema-research-graph--value proposal "payload"))))
+    (or (noema-research-graph--value payload "cell") payload)))
+
 (defun noema-research-graph--with-proposals (projection document proposals)
   "Merge pending cell PROPOSALS for DOCUMENT into graph PROJECTION."
   (let ((notebook-id (noema-research-notebook-id document))
         (nodes (copy-sequence (plist-get projection :nodes)))
         (edges (copy-sequence (plist-get projection :edges)))
         (ids (make-hash-table :test #'equal))
-        ghosts)
+        pending)
     (dolist (node nodes) (puthash (plist-get node :id) t ids))
+    ;; First pass: learn every ghost id, so the second pass can resolve
+    ;; references between ghosts as well as into the document.
     (dolist (proposal proposals)
       (let* ((status (noema-research-graph--value proposal "status" ""))
-             (payload (if (equal status "accepting")
-                          (or (noema-research-graph--value proposal "reviewedPayload")
-                              (noema-research-graph--value proposal "payload"))
-                        (noema-research-graph--value proposal "payload")))
-             (cell (or (noema-research-graph--value payload "cell") payload))
-             (id (noema-research-graph--value cell "cellId"))
-             (parent (noema-research-resolve-work-node-id
-                      document (noema-research-graph--value cell "lineageParent")))
-             (kind (noema-research-graph--value cell "kind" "work"))
-             (title (noema-research-graph--value cell "title" "Untitled Proposal")))
+             (cell (noema-research-graph--proposal-cell proposal))
+             (id (noema-research-graph--value cell "cellId")))
         (when (and (member status '("pending" "accepting"))
                    (equal (noema-research-graph--value proposal "kind") "cell.create")
                    (equal (noema-research-graph--value cell "notebookId") notebook-id)
                    (stringp id) (not (string-empty-p id)) (not (gethash id ids)))
           (puthash id t ids)
-          (push (list :id id :kind kind :title title :state status
-                      :parents (and (stringp parent) (list parent))
-                      :ghost t
-                      :proposal-id (noema-research-graph--value proposal "id"))
-                ghosts))))
-    (setq ghosts (nreverse ghosts)
-          nodes (append nodes ghosts))
-    (dolist (node ghosts)
-      (let ((id (plist-get node :id)))
-        (dolist (parent (plist-get node :parents))
-          (when (gethash parent ids)
-            (setq edges (append edges (list (list parent id "lineage"))))))
-        (let* ((proposal (seq-find
-                          (lambda (candidate)
-                            (let* ((payload (or (noema-research-graph--value candidate "reviewedPayload")
-                                                (noema-research-graph--value candidate "payload")))
-                                   (cell (or (noema-research-graph--value payload "cell") payload)))
-                              (equal id (noema-research-graph--value cell "cellId"))))
-                          proposals))
-               (payload (or (noema-research-graph--value proposal "reviewedPayload")
-                            (noema-research-graph--value proposal "payload")))
-               (cell (or (noema-research-graph--value payload "cell") payload)))
-          (dolist (dependency (noema-research-graph--sequence
-                               (noema-research-graph--value cell "depends")))
-            (let ((resolved (noema-research-resolve-work-node-id document dependency)))
-              (when (and resolved (gethash resolved ids))
-                (setq edges (append edges (list (list resolved id "depends"))))))))))
+          (push (list id status cell (noema-research-graph--value proposal "id")) pending))))
+    (setq pending (nreverse pending))
+    (let (ghosts)
+      (dolist (entry pending)
+        (pcase-let ((`(,id ,status ,cell ,proposal-id) entry))
+          (let ((parent (noema-research-graph--resolve-ghost-ref
+                         document (noema-research-graph--value cell "lineageParent") ids)))
+            (push (list :id id
+                        :kind (noema-research-graph--value cell "kind" "work")
+                        :title (noema-research-graph--value cell "title" "Untitled Proposal")
+                        :state status
+                        :parents (and parent (list parent))
+                        :ghost t
+                        :proposal-id proposal-id)
+                  ghosts)
+            (when parent
+              (setq edges (append edges (list (list parent id "lineage")))))
+            (dolist (dependency (noema-research-graph--sequence
+                                 (noema-research-graph--value cell "depends")))
+              (when-let* ((resolved (noema-research-graph--resolve-ghost-ref
+                                     document dependency ids)))
+                (setq edges (append edges (list (list resolved id "depends")))))))))
+      (setq nodes (append nodes (nreverse ghosts))))
     (plist-put (plist-put (copy-sequence projection) :nodes nodes) :edges edges)))
 
 (defun noema-research-graph--dot-quote (text)
@@ -1195,10 +1205,12 @@ Return the plist described in `noema-research-graph--layout', or nil."
                          points)))
     (concat "M " (car shifted) " C " (string-join (cdr shifted) " "))))
 
-(defun noema-research-graph--style-shape (shape selected base-stroke palette)
-  "Stroke SHAPE as SELECTED, or with BASE-STROKE, using PALETTE."
+(defun noema-research-graph--style-shape (shape selected base-stroke palette &optional emphasis)
+  "Stroke SHAPE as SELECTED, or with BASE-STROKE, using PALETTE.
+Non-nil EMPHASIS thickens an unselected shape, which is how a regressed node
+stays visible without borrowing the selection colour."
   (dom-set-attribute shape 'stroke (if selected (plist-get palette :selected) base-stroke))
-  (dom-set-attribute shape 'stroke-width (if selected 2.5 1)))
+  (dom-set-attribute shape 'stroke-width (cond (selected 2.5) (emphasis 2.0) (t 1))))
 
 (defun noema-research-graph--svg (projection layout selected)
   "Return (SVG . SHAPES) drawing PROJECTION with LAYOUT, highlighting SELECTED.
@@ -1242,9 +1254,10 @@ selection change restyles two shapes instead of rebuilding the scene."
              (cy (+ y0 (/ height 2.0)))
              (kind (plist-get node :kind))
              (state (plist-get node :state))
-             (base-stroke (if (plist-get node :focus)
-                              (plist-get palette :focus)
-                            (plist-get palette :stroke)))
+             (base-stroke (cond ((plist-get node :focus) (plist-get palette :focus))
+                                ((equal state "regressed")
+                                 (plist-get palette :regressed))
+                                (t (plist-get palette :stroke))))
              (dash (if (or (plist-get node :ghost)
                            (plist-get node :summary)
                            (equal state "dropped"))
@@ -1271,8 +1284,9 @@ selection change restyles two shapes instead of rebuilding the scene."
                   :ry (if (equal kind "summary") 12 6)
                   shape-args)))
         (let ((shape (car (dom-children item))))
-          (noema-research-graph--style-shape shape (equal id selected) base-stroke palette)
-          (puthash id (cons shape base-stroke) shapes))
+          (noema-research-graph--style-shape shape (equal id selected) base-stroke palette
+                                             (equal state "regressed"))
+          (puthash id (list shape base-stroke (equal state "regressed")) shapes))
         (cl-loop for line in lines
                  for index from 0
                  do (svg-text item line
@@ -1317,7 +1331,8 @@ selection change restyles two shapes instead of rebuilding the scene."
         (shapes (plist-get noema-research-graph--scene :nodes)))
     (dolist (id (delete-dups (delq nil (list old new))))
       (when-let* ((entry (gethash id shapes)))
-        (noema-research-graph--style-shape (car entry) (equal id new) (cdr entry) palette)))
+        (noema-research-graph--style-shape (nth 0 entry) (equal id new) (nth 1 entry)
+                                           palette (nth 2 entry))))
     (setq noema-research-graph--scene
           (plist-put noema-research-graph--scene :selected new))))
 
@@ -2252,7 +2267,9 @@ Its JuText block follows the new parent unless STAY (prefix argument) or
     (noema-research-graph--edit
      (lambda ()
        (let* ((state (completing-read "State: " noema-research-work-states nil t))
-              (reason (when (equal state "dropped") (read-string "Reason (optional): "))))
+              (reason (pcase state
+                        ("dropped" (read-string "Reason (optional): "))
+                        ("regressed" (read-string "What broke (optional): ")))))
          (noema-set-node-state id state reason))))))
 
 (defun noema-research-graph-set-outcome ()
@@ -2277,6 +2294,17 @@ Its JuText block follows the new parent unless STAY (prefix argument) or
     (noema-research-graph--edit
      (lambda ()
        (noema-set-node-state id "dropped" (read-string "Reason (optional): "))))))
+
+(defun noema-research-graph-mark-regressed ()
+  "Mark the selected work regressed, and the finished work that rests on it.
+Record what broke before fixing it: the reason is kept on this node, and every
+`done' descendant in the combined work DAG drops to `regressed' until its
+claim is made again."
+  (interactive)
+  (let ((id (noema-research-graph--selected-node)))
+    (noema-research-graph--edit
+     (lambda ()
+       (noema-set-node-state id "regressed" (read-string "What broke (optional): "))))))
 
 (defun noema-research-graph-reopen ()
   "Reopen the selected work."

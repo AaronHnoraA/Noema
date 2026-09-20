@@ -100,6 +100,13 @@ A waiting Run is also retried as soon as a local Run finishes."
   :type 'number
   :group 'noema-agent-worker)
 
+(defvar noema-agent-worker--claim-timers (make-hash-table :test #'equal)
+  "Project root to its pending debounced coordinator-claim timer.
+Pi schedules a claim after its own tool activity.  An ordinary Run records
+coordinator requests too — `research_state' is one — so its tool activity
+has to schedule a claim as well, or a Run\='s own bookkeeping would sit
+pending until somebody opened Pi.")
+
 (defvar noema-agent-worker--busy-waiting nil
   "Queued workers whose named session had another open Run (D-031).")
 
@@ -1014,6 +1021,28 @@ RESPOND receives the eventual JSON answer. Return non-nil when accepted."
            ;; racing a web decision with a local direct callback.
            (message "Noema permission decision recorded")))))))
 
+(defun noema-agent-worker--schedule-claim (root)
+  "Claim ROOT\='s coordinator requests shortly, coalescing repeated calls.
+Tool activity arrives in bursts; one claim after the burst is enough."
+  (when (and (stringp root) (not (string-empty-p root)))
+    (let ((root (file-name-as-directory (expand-file-name root))))
+      (when-let* ((pending (gethash root noema-agent-worker--claim-timers)))
+        (cancel-timer pending))
+      (puthash root
+               (run-at-time
+                1 nil
+                (lambda ()
+                  (remhash root noema-agent-worker--claim-timers)
+                  (condition-case claim-error
+                      (noema-agent-worker-claim-coordinator-requests root)
+                    (error
+                     (display-warning
+                      'noema-agent-worker
+                      (format "Noema could not claim coordinator requests: %s"
+                              (error-message-string claim-error))
+                      :warning)))))
+               noema-agent-worker--claim-timers))))
+
 (defun noema-agent-worker--subscribe (worker)
   "Subscribe WORKER to agent-shell facts after a session is ready."
   (let ((buffer (noema-agent-worker-buffer worker)))
@@ -1037,6 +1066,9 @@ RESPOND receives the eventual JSON answer. Return non-nil when accepted."
        (lambda (event)
          (when (and (noema-agent-worker-started worker)
                     (not (noema-agent-worker-terminal worker)))
+           ;; The agent may have just recorded a coordinator request of its
+           ;; own; pick it up without waiting for Pi.
+           (noema-agent-worker--schedule-claim (noema-agent-worker-root worker))
            (noema-agent-worker--ledger-action worker (or (map-elt event :data) '()))
            (noema-agent-worker--report
             worker (list `((type . "run.action.updated")
@@ -1877,6 +1909,34 @@ Registered artifacts and durable session state are never deleted."
                                (or name session-id))
                        :warning))))
 
+(defun noema-agent-worker--claim-set-state (root payload)
+  "Apply a coordinator `worknode.state' request to its work document.
+A Run reports on the WorkNode it owns; the kernel only records that report.
+The edit lands here, as Emacs\='s ordinary validated and undoable structure
+transaction, so an agent bookkeeping its own progress uses the same document
+authority a person does — including regression carrying to the finished work
+below.  A document nobody has open is visited and saved."
+  (require 'noema-research-mode)
+  (let ((file (noema-agent-worker--string payload "file"))
+        (node-id (noema-agent-worker--string payload "workNodeId"))
+        (state (noema-agent-worker--string payload "state"))
+        (reason (noema-agent-worker--string payload "reason")))
+    (unless (and file node-id state)
+      (error "worknode.state lacks file, workNodeId or state"))
+    (let* ((path (expand-file-name file root))
+           (visiting (find-buffer-visiting path))
+           (buffer (or visiting (find-file-noselect path))))
+      (with-current-buffer buffer
+        (unless (derived-mode-p 'noema-research-mode)
+          (error "%s is not a Noema work document" file))
+        (unless (noema-research-find-work-node noema-research--document node-id)
+          (error "%s has no WorkNode %s" file node-id))
+        (noema-research-mode--sync)
+        (noema-set-node-state node-id state reason)
+        ;; A document the person already had open keeps its unsaved state;
+        ;; one opened only to apply this is written back and left tidy.
+        (unless visiting (save-buffer))))))
+
 (defun noema-agent-worker--ack-coordinator-request (root request state &optional reason)
   "Acknowledge coordinator REQUEST in ROOT with terminal STATE and REASON."
   (noema-agent-worker--api
@@ -1930,7 +1990,9 @@ an idle session's agent process and keeps its name and history."
                         (noema-agent-worker--cancel worker)
                       (error "the requested Session has no Run in this Emacs")))
                    ("session.close"
-                    (noema-agent-worker--claim-close root payload)))
+                    (noema-agent-worker--claim-close root payload))
+                   ("worknode.state"
+                    (noema-agent-worker--claim-set-state root payload)))
                  (noema-agent-worker--ack-coordinator-request root request "done"))
              (error
               (noema-agent-worker--ack-coordinator-request

@@ -21,11 +21,17 @@ func TestCoordinatorRequestsAreClaimedExactlyOnce(t *testing.T) {
 			t.Fatalf("%s should be accepted: %v", kind, err)
 		}
 	}
+	// An ordinary agent Run reports on the WorkNode it owns through the same
+	// durable queue, under its own actor rather than Pi's.
+	if _, err := store.CreateCoordinatorRequest("worknode.state",
+		map[string]any{"workNodeId": "wn_1", "state": "done"}, "agent:run/run_1"); err != nil {
+		t.Fatalf("worknode.state should be accepted: %v", err)
+	}
 	claimed, err := store.ClaimCoordinatorRequests("emacs:1", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(claimed) != 3 || claimed[0].ID != created.ID || claimed[0].State != "claimed" || claimed[0].Payload["cellId"] != "c-1" {
+	if len(claimed) != 4 || claimed[0].ID != created.ID || claimed[0].State != "claimed" || claimed[0].Payload["cellId"] != "c-1" {
 		t.Fatalf("unexpected claim: %+v", claimed)
 	}
 	again, err := store.ClaimCoordinatorRequests("emacs:2", 10)
@@ -58,10 +64,14 @@ func TestCoordinatorRequestKindsMigrateFromV18(t *testing.T) {
 	}
 	if _, err := db.Exec(`INSERT INTO coordinator_requests(id, kind, payload_json, actor, state, created_at)
 		VALUES('creq_new', 'session.close', '{}', 'pi', 'pending', 2)`); err != nil {
-		t.Fatalf("v19 must accept session.close: %v", err)
+		t.Fatalf("the rebuilt table must accept session.close: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO coordinator_requests(id, kind, payload_json, actor, state, created_at)
+		VALUES('creq_state', 'worknode.state', '{}', 'agent:run/run_1', 'pending', 3)`); err != nil {
+		t.Fatalf("the rebuilt table must accept worknode.state: %v", err)
 	}
 	var count int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM coordinator_requests`).Scan(&count); err != nil || count != 2 {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM coordinator_requests`).Scan(&count); err != nil || count != 3 {
 		t.Fatalf("migration must keep existing requests: %d %v", count, err)
 	}
 }
