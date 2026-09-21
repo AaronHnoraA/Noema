@@ -1358,7 +1358,79 @@ Each entry is a cons (ENTITY-ID . MESSAGE)."
         (puthash key t edges)))
     (when (noema-research-dependency-cycle-p document)
       (push (cons nil "work dependencies form a cycle") errors))
-    (list :errors (nreverse errors) :warnings (nreverse warnings))))
+    (setq warnings (append (nreverse warnings) (noema-research--claim-warnings document)))
+    (list :errors (nreverse errors) :warnings warnings)))
+
+;;;; Claim warnings
+;;
+;; Structural corruption is an error and is refused.  These are a different
+;; kind of problem: the document is well formed, but a claim in it is not
+;; supported by anything the document itself records.  They stay warnings on
+;; purpose -- `noema-research-structure-edit' only rolls back newly introduced
+;; *errors*, so noticing a lapse never blocks the edit that caused it.  When
+;; to call work finished is discipline, not something a tool should decide;
+;; the tool's job is to stop the lapse from being invisible.
+
+(defun noema-research--ancestor-map (document)
+  "Return a hash mapping each WorkNode of DOCUMENT to its combined-DAG parents."
+  (let ((known (noema-research--work-node-table document))
+        (parents (make-hash-table :test #'equal)))
+    (dolist (edge (noema-research-dependencies document) parents)
+      (let ((from (noema-research--get edge "from"))
+            (to (noema-research--get edge "to")))
+        (when (and (member (noema-research--get edge "type") noema-research-relation-types)
+                   (gethash from known) (gethash to known) (not (equal from to)))
+          (puthash to (cons from (gethash to parents)) parents))))))
+
+(defun noema-research--claim-warnings (document)
+  "Return (ID . MESSAGE) warnings for claims DOCUMENT does not support."
+  (let ((parents (noema-research--ancestor-map document))
+        (states (make-hash-table :test #'equal))
+        warnings)
+    (dolist (node (noema-research-work-nodes document))
+      (puthash (noema-research-work-node-id node)
+               (noema-research-work-node-field node "state") states))
+    (dolist (node (noema-research-work-nodes document) (nreverse warnings))
+      (let* ((id (noema-research-work-node-id node))
+             (state (noema-research-work-node-field node "state"))
+             (outcome (noema-research-work-node-field node "outcome"))
+             (cell (noema-research-primary-cell document id))
+             (run (and cell (noema-research-cell-latest-run cell)))
+             (status (plist-get run :status)))
+        (when (equal (noema-research-work-node-field node "kind") "work")
+          (cond
+           ((and (equal state "done") (null run) (not outcome))
+            (push (cons id (concat "done-without-basis: nothing in this document "
+                                   "supports the claim -- no Run and no outcome"))
+                  warnings))
+           ((and (equal state "done") status
+                 (member status '("failed" "cancelled" "interrupted")))
+            (push (cons id (format "done-run-mismatch: marked done, but its last Run %s"
+                                   status))
+                  warnings)))
+          (when (and (equal state "active") (null run))
+            (push (cons id "active-without-run: marked active, but no Run is recorded")
+                  warnings))
+          (when (equal state "done")
+            (when-let* ((broken (noema-research--regressed-ancestor
+                                 id parents states)))
+              (push (cons id (format "done-over-regressed: rests on %s, which is regressed"
+                                     broken))
+                    warnings))))))))
+
+(defun noema-research--regressed-ancestor (id parents states)
+  "Return an ancestor of ID in PARENTS whose state in STATES is regressed."
+  (let ((seen (make-hash-table :test #'equal))
+        (stack (gethash id parents))
+        found)
+    (while (and stack (not found))
+      (let ((next (pop stack)))
+        (unless (gethash next seen)
+          (puthash next t seen)
+          (if (equal (gethash next states) "regressed")
+              (setq found next)
+            (setq stack (append (gethash next parents) stack))))))
+    found))
 
 ;;;; Projection
 

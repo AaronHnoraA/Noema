@@ -281,9 +281,15 @@ No request is sent until the user reviews the draft and presses RET."
   (interactive)
   (let ((record (noema-capability-ui--record-at-point)))
     (unless (equal (noema--value record "type") "mcp") (user-error "Select an MCP"))
-    (when (equal (noema--value record "id") "noema")
-      (user-error "The built-in endpoint is managed by Noema; use p to override configuration"))
+    (when (member (noema--value record "id") noema-capability-builtin-mcp-ids)
+      (user-error "The built-in endpoints are managed by Noema; use p to override configuration"))
     (noema-capability-ui--mcp-form record)))
+
+(defconst noema-capability-builtin-mcp-ids '("noema-knowledge" "noema-research")
+  "MCP ids Noema supervises itself.
+The knowledge base and the AI workflow are two surfaces on two endpoints; the
+historical single id `noema' stays reserved so an old configuration cannot
+collide with a user-defined server.")
 
 (defun noema-capability-ui--mcp-form (&optional record)
   "Build an Emacs widget form, optionally initialized from RECORD."
@@ -330,7 +336,8 @@ No request is sent until the user reviews the draft and presses RET."
                                 (args . ,(vconcat (widget-value args))) (env . ,entries))
                             `((type . ,kind) (url . ,(string-trim (widget-value url))) (headers . ,entries)))))
          (unless (string-match-p "\\`[A-Za-z0-9][A-Za-z0-9._-]*\\'" identity) (user-error "Invalid MCP id"))
-         (when (equal identity "noema") (user-error "The id noema is reserved for the built-in endpoint"))
+         (when (member identity (cons "noema" noema-capability-builtin-mcp-ids))
+           (user-error "The id %s is reserved for a built-in endpoint" identity))
          (when (and (equal kind "stdio") (string-empty-p (noema--value definition "command")))
            (user-error "Command is required"))
          (when (and (not (equal kind "stdio"))

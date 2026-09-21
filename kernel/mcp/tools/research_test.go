@@ -258,7 +258,44 @@ func TestResearchStateToolRecordsARequestAndNeverEditsTheDocument(t *testing.T) 
 	if err != nil || !bogus.IsError || !strings.Contains(bogus.Content[0].Text, "unsupported work state") {
 		t.Fatalf("an unknown state was accepted: %+v (%v)", bogus, err)
 	}
-	if tool := GetTool("research_state"); tool == nil || !tool.ActionEffects[""].LocalWrite {
+	if tool := GetTool("research_state"); tool == nil || !tool.ActionEffects["report"].LocalWrite {
 		t.Fatalf("research_state is not exposed with a local-write effect: %+v", tool)
+	}
+
+	// Recorded is not applied, and the agent must be able to tell which it is
+	// rather than assuming the document changed.
+	var requestID string
+	decodeToolJSON(t, result, &struct {
+		RequestID *string `json:"requestId"`
+	}{RequestID: &requestID})
+	pending, err := researchStateHandler(map[string]any{
+		"action": "status", "root": root, "requestId": requestID,
+	})
+	if err != nil || pending.IsError {
+		t.Fatalf("status lookup failed: %+v (%v)", pending, err)
+	}
+	if !strings.Contains(pending.Content[0].Text, `"applied": false`) &&
+		!strings.Contains(pending.Content[0].Text, `"applied":false`) {
+		t.Fatalf("a request nobody has applied must not report applied: %s", pending.Content[0].Text)
+	}
+	// The request was claimed above but not carried out, and the status has to
+	// distinguish those: "the editor is applying it" is not "applied".
+	if !strings.Contains(pending.Content[0].Text, "claimed") {
+		t.Fatalf("status must say where the report actually is: %s", pending.Content[0].Text)
+	}
+
+	// Once the editor carries it out, the same lookup says so.
+	if _, err := store.CompleteCoordinatorRequest(requestID, "emacs-test", "done", ""); err != nil {
+		t.Fatal(err)
+	}
+	applied, err := researchStateHandler(map[string]any{
+		"action": "status", "root": root, "requestId": requestID,
+	})
+	if err != nil || applied.IsError {
+		t.Fatalf("status lookup after completion failed: %+v (%v)", applied, err)
+	}
+	if !strings.Contains(applied.Content[0].Text, "applied") ||
+		!strings.Contains(applied.Content[0].Text, "true") {
+		t.Fatalf("a completed request must report applied: %s", applied.Content[0].Text)
 	}
 }

@@ -4,6 +4,7 @@
 package research
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -192,5 +193,48 @@ func (s *Store) CompleteCoordinatorRequest(id, owner, state, reason string) (Coo
 	_ = json.Unmarshal([]byte(payload), &request.Payload)
 	request.CreatedAt, request.ClaimedAt = formatMillis(createdAt), formatMillis(claimedAt)
 	request.FinishedAt, request.FailureReason = formatMillis(nowMs), strings.TrimSpace(reason)
+	return request, nil
+}
+
+// CoordinatorRequest returns one durable request by id.
+//
+// An agent that reported something needs to be able to find out whether the
+// report was actually carried out.  Without this it can only assume, and an
+// assumed write that silently failed is worse than no write: the agent goes
+// on to reason about a state the document does not have.
+func (s *Store) CoordinatorRequest(id string) (CoordinatorRequest, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return CoordinatorRequest{}, errors.New("a coordinator request lookup needs an id")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var request CoordinatorRequest
+	var payload string
+	var createdAt int64
+	var claimedAt, leaseExpiresAt, finishedAt sql.NullInt64
+	err := s.db.QueryRow(`SELECT id, kind, payload_json, actor, state, claimed_by,
+		created_at, claimed_at, lease_expires_at, finished_at, failure_reason, version
+		FROM coordinator_requests WHERE id = ?`, id).Scan(
+		&request.ID, &request.Kind, &payload, &request.Actor, &request.State, &request.ClaimedBy,
+		&createdAt, &claimedAt, &leaseExpiresAt, &finishedAt, &request.FailureReason, &request.Version)
+	if errors.Is(err, sql.ErrNoRows) {
+		return CoordinatorRequest{}, fmt.Errorf("coordinator request %q not found", id)
+	}
+	if err != nil {
+		return CoordinatorRequest{}, err
+	}
+	request.Payload = map[string]any{}
+	_ = json.Unmarshal([]byte(payload), &request.Payload)
+	request.CreatedAt = formatMillis(createdAt)
+	if claimedAt.Valid {
+		request.ClaimedAt = formatMillis(claimedAt.Int64)
+	}
+	if leaseExpiresAt.Valid {
+		request.LeaseExpiresAt = formatMillis(leaseExpiresAt.Int64)
+	}
+	if finishedAt.Valid {
+		request.FinishedAt = formatMillis(finishedAt.Int64)
+	}
 	return request, nil
 }

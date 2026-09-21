@@ -37,6 +37,26 @@ D-016/D-021/D-022 still govern hosting and the AI integration boundary.
   kernel is not it. Structure changes (new nodes, new edges) remain
   Proposals. Agent tool activity schedules the claim, so a Run's bookkeeping
   does not wait for Pi.
+- **Refuse, warn, or leave to judgement.** Structural corruption is refused:
+  cycles, unknown states, duplicate ids, a Run reporting on a node it does not
+  own, a plan materialized in halves. An unsupported *claim* is a different
+  thing and is only warned about — `done` with no Run and no outcome, a `done`
+  node whose last Run failed, a `done` node above a `regressed` one, an
+  `active` node with no Run. Warnings go through the `:warnings` channel of
+  `noema-research-validate`, which `noema-research-structure-edit` never
+  diffs, so a notice can never become a gate. Modelling judgement — whether a
+  block is a unit of work, whether an edge really means "uses" — is neither,
+  and belongs in a Skill. When adding a check, decide which of the three it is
+  first; a timing rule enforced as a refusal teaches people to lie to the
+  system.
+- **Report, do not decide.** `SourceChanges` answers "have the files this
+  claim was verified against moved?" from `artifact_links` and the
+  content-addressed digests the Runs already wrote. It never changes a
+  WorkNode's state, and neither should anything built on it.
+- **Recorded is not applied.** `research_state` writes a durable request; the
+  editor applies it. Say so in the result and give the agent
+  `{action: "status"}` to find out, rather than letting it assume the document
+  changed.
 - `regressed` is never a lone node property. Every path that sets it goes
   through `noema-research-op-set-state`, which delegates to
   `noema-research-op-set-regressed` so the state always carries to the `done`
@@ -100,6 +120,44 @@ whatever started it: a Run, the popup pool, `noema-agent-start' or a bare
 must stay one: registering a session never creates a `noema.toml'. A project
 that already has one also gets a durable `session:promote' + `session:name:bind';
 elsewhere the session is listed from Emacs alone.
+
+## Skills
+
+Skills live in two places, and the split is about versioning, not taste:
+
+- `resources/skills/` — Skills that describe **Noema's own mechanisms**
+  (`noema-work-dag`, `noema-elisp-api`). They ship with the code because they
+  are only correct for the code they ship with.
+- `<NOEMA_ROOT>/public/Skills/` — the growable library, wired through
+  `NOEMA_GLOBAL_SKILLS` (defaulted by `my/noema-skills-directory` in
+  AaronEmacs). Skills are knowledge: they live beside the notes, are versioned
+  by the same git, found by the same search, and can be added to without a
+  Noema release.
+
+One convention for both, the portable one: `<kebab-id>/SKILL.md` with YAML
+`name` and `description`, so a skill from another project drops in unchanged.
+Depth belongs in `references/<topic>.md`, which the resolver lists and the
+agent reads on demand — a SKILL.md that must be read in full on every Run
+taxes every Run, and over ~8 KiB the resolver says so. Keep the rules a
+mechanism now carries *out* of the Skill; a Skill that repeats what the system
+enforces gives two sources of truth for one rule.
+
+## Two MCP surfaces
+
+The knowledge base and the AI workflow are separate capabilities on separate
+endpoints, and must not be conflated:
+
+| Endpoint | Tools | Capability id |
+|---|---|---|
+| `/mcp` | notes, search, blocks, tags, templates | `noema-knowledge` |
+| `/mcp/research` | `research_cell`, `research_run`, `research_state`, `artifact`, `proposal.create` | `noema-research` |
+| `/mcp/coordinator` | Pi's session verbs | — |
+
+One registry still; the endpoints differ only by their projection predicate
+(`tools.SurfaceForTool`). A tool without a `Surface` is knowledge, so adding
+one cannot silently widen the research surface. The historical single id
+`noema` is expanded to both wherever a config mentions it, because a project
+that disabled `noema` meant all of it.
 
 ## Host and compatibility
 

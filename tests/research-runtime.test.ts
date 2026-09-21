@@ -17,6 +17,7 @@ import {
   createResearchNotebookService,
   readResearchNotebookFile,
   setResearchRelation,
+  setResearchState,
   upsertResearchRunOutput,
   writeResearchNotebookFile,
 } from "../server/lib/research-notebook.mjs";
@@ -327,14 +328,16 @@ describe("research runtime service", () => {
     })]);
     expect(prepared.spec.prompt).toBe("Apply the project method.");
     expect(prepared.spec.mcp_servers).toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: "noema", type: "http" }),
+      expect.objectContaining({ name: "noema-knowledge", type: "http" }),
+      expect.objectContaining({ name: "noema-research", type: "http" }),
       expect.objectContaining({ name: "project-tools", command: "/usr/bin/env" }),
     ]));
     expect(prepared.spec.capability_environment.active).toEqual({
-      skills: ["project-method"], mcps: ["noema", "project-tools"],
+      skills: ["project-method"], mcps: ["noema-knowledge", "noema-research", "project-tools"],
     });
     expect(prepared.spec.capability_environment.skills.map((item: any) => item.id)).toEqual(["project-method"]);
-    expect(prepared.spec.capability_environment.mcps.map((item: any) => item.id).sort()).toEqual(["noema", "project-tools"]);
+    expect(prepared.spec.capability_environment.mcps.map((item: any) => item.id).sort())
+      .toEqual(["noema-knowledge", "noema-research", "project-tools"]);
     expect(prepared.contextItems.map((item: any) => item.ref)).toContain("skill:project-method");
     expect(Buffer.from(prepared.contextItems.find((item: any) => item.ref === "skill:project-method").contentBase64, "base64").toString())
       .toContain("company review rubric");
@@ -498,6 +501,60 @@ describe("research runtime service", () => {
     for (const call of [provider.prepareRun, provider.index, provider.expireLeases, provider.requestSessionCompaction]) {
       expect(call).not.toHaveBeenCalled();
     }
+  }));
+
+  test("the preview says what the block is resting on, and still lets it run", async () => withProject(async (root) => {
+    await mkdir(join(root, "research"));
+    let notebook = createResearchNotebook({ title: "Readiness", defaultAgent: "codex" });
+    const base = createResearchCell(notebook, { kind: "work", title: "Base", source: "Ground." });
+    notebook = base.notebook;
+    const broken = createResearchCell(notebook, { kind: "work", title: "Broken", source: "Was fine." });
+    notebook = broken.notebook;
+    const child = createResearchCell(notebook, {
+      kind: "work", title: "Child", source: "Build on them.",
+      lineageParent: base.workNode.id, depends: [base.workNode.id, broken.workNode.id],
+    });
+    notebook = child.notebook;
+    // One dependency never finished; the other was verified and then broke.
+    notebook = setResearchState(notebook, broken.workNode.id, { state: "done" }).notebook;
+    notebook = setResearchState(notebook, broken.workNode.id, { state: "regressed", reason: "broke" }).notebook;
+
+    const file = join(root, "research", "readiness.noema");
+    await writeResearchNotebookFile(file, notebook, { create: true });
+    const provider = {
+      index: vi.fn(), expireLeases: vi.fn(), requestSessionCompaction: vi.fn(), prepareRun: vi.fn(),
+      runs: vi.fn(async () => []),
+    };
+    const service = createResearchRuntimeService({ getProvider: () => provider as any });
+    const preview = await service.previewRunContext({ file, cellId: child.cell.id, cwd: root });
+
+    expect(preview.routing.readiness.pending).toEqual([base.workNode.id]);
+    expect(preview.routing.readiness.regressed).toEqual([broken.workNode.id]);
+    expect(preview.routing.readiness.notices.join("; ")).toMatch(/regressed/);
+    expect(preview.routing.readiness.rerun).toBe(false);
+
+    // Advisory, not a gate: preparation still reaches the provider. Building
+    // above unfinished work is a legitimate choice, and a tool that refused it
+    // would be deciding the order of someone else's work.
+    await service.prepareRun({ file, cellId: child.cell.id, cwd: root }).catch(() => {});
+    expect(provider.prepareRun).toHaveBeenCalled();
+  }));
+
+  test("a block already marked done says so before it is re-run", async () => withProject(async (root) => {
+    await mkdir(join(root, "research"));
+    let notebook = createResearchNotebook({ title: "Rerun", defaultAgent: "codex" });
+    const only = createResearchCell(notebook, { kind: "work", title: "Only", source: "Done already." });
+    notebook = setResearchState(only.notebook, only.workNode.id, { state: "done" }).notebook;
+    const file = join(root, "research", "rerun.noema");
+    await writeResearchNotebookFile(file, notebook, { create: true });
+    const provider = {
+      index: vi.fn(), expireLeases: vi.fn(), requestSessionCompaction: vi.fn(), prepareRun: vi.fn(),
+      runs: vi.fn(async () => []),
+    };
+    const service = createResearchRuntimeService({ getProvider: () => provider as any });
+    const preview = await service.previewRunContext({ file, cellId: only.cell.id, cwd: root });
+    expect(preview.routing.readiness.rerun).toBe(true);
+    expect(preview.routing.readiness.notices).toContain("already marked done");
   }));
 
   test("idle route previews share a short kernel snapshot that name changes drop", async () => withProject(async (root) => {

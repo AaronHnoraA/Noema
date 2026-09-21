@@ -645,7 +645,80 @@ export function validateResearchNotebook(notebook) {
   }
   const cycle = findDependencyCycle(notebook);
   if (cycle) add(errors, "dependency-cycle", cycle[0], `work dependencies form a cycle: ${cycle.join(" -> ")}`);
+  for (const warning of claimWarnings(notebook)) add(warnings, warning.code, warning.id, warning.message);
   return { ok: errors.length === 0, errors, warnings };
+}
+
+/**
+ * Warn about claims the document itself does not support.
+ *
+ * Structural corruption is an error and is refused; this is a different kind
+ * of problem — the document is well formed, but something in it claims more
+ * than it can show. These stay warnings on purpose: when to call work
+ * finished is judgement, and a timing rule enforced as a refusal only teaches
+ * people to route around it. Mirrors `noema-research--claim-warnings' in
+ * Emacs; the two must agree.
+ */
+function claimWarnings(notebook) {
+  const nodes = researchWorkNodes(notebook);
+  const stateById = new Map(nodes.map((node) => [node.id, String(node.state || "")]));
+  const parents = new Map();
+  const known = new Set(nodes.map((node) => node.id));
+  for (const edge of researchDependencies(notebook)) {
+    if (!RELATION_TYPES.includes(edge.type)) continue;
+    if (!known.has(edge.from) || !known.has(edge.to) || edge.from === edge.to) continue;
+    if (!parents.has(edge.to)) parents.set(edge.to, []);
+    parents.get(edge.to).push(edge.from);
+  }
+  const regressedAncestor = (id) => {
+    const seen = new Set([id]);
+    const stack = [...(parents.get(id) || [])];
+    while (stack.length) {
+      const next = stack.pop();
+      if (seen.has(next)) continue;
+      seen.add(next);
+      if (stateById.get(next) === "regressed") return next;
+      stack.push(...(parents.get(next) || []));
+    }
+    return null;
+  };
+  const out = [];
+  for (const node of nodes) {
+    if (node.kind !== "work") continue;
+    const state = String(node.state || "");
+    const summary = researchWorkNodeSummary(notebook, node.id);
+    const primaryIndex = summary.primaryCellId ? cellIndex(notebook, summary.primaryCellId) : -1;
+    const primary = primaryIndex >= 0 ? notebook.cells[primaryIndex] : null;
+    const run = primary ? latestRunOf(primary) : null;
+    if (state === "done" && !run && !String(node.outcome || "")) {
+      out.push({ code: "done-without-basis", id: node.id,
+        message: "Marked done, but nothing in this document supports it: no Run and no outcome" });
+    } else if (state === "done" && run && ["failed", "cancelled", "interrupted"].includes(run.status)) {
+      out.push({ code: "done-run-mismatch", id: node.id,
+        message: `Marked done, but its last Run ${run.status}` });
+    }
+    if (state === "active" && !run) {
+      out.push({ code: "active-without-run", id: node.id,
+        message: "Marked active, but no Run is recorded" });
+    }
+    if (state === "done") {
+      const broken = regressedAncestor(node.id);
+      if (broken) {
+        out.push({ code: "done-over-regressed", id: node.id,
+          message: `Marked done, but it rests on ${broken}, which is regressed` });
+      }
+    }
+  }
+  return out;
+}
+
+/** Return the latest persisted Run recorded on CELL's outputs, or null. */
+function latestRunOf(cell) {
+  for (const output of [...(Array.isArray(cell?.outputs) ? cell.outputs : [])].reverse()) {
+    const run = object(object(output?.data)["application/vnd.noema.run+json"]);
+    if (Object.keys(run).length) return { id: String(run.run_id || ""), status: String(run.status || "") };
+  }
+  return null;
 }
 
 export function createResearchCell(notebook, spec = {}) {
@@ -812,6 +885,52 @@ export function setResearchRelation(notebook, workNodeId, type, parents = []) {
   return { notebook: next, workNode: node, cell: cell ? researchCellSummary(cell, cellIndex(next, cell.id), next) : null };
 }
 
+/**
+ * Map each WorkNode to its children across TYPES, defaulting to the combined
+ * work DAG rather than the lineage tree alone.
+ */
+function descendantMap(notebook, types = RELATION_TYPES) {
+  const known = new Set(researchWorkNodes(notebook).map((node) => node.id));
+  const children = new Map();
+  for (const edge of researchDependencies(notebook)) {
+    if (!types.includes(edge.type)) continue;
+    if (!known.has(edge.from) || !known.has(edge.to) || edge.from === edge.to) continue;
+    if (!children.has(edge.from)) children.set(edge.from, []);
+    children.get(edge.from).push(edge.to);
+  }
+  return children;
+}
+
+/**
+ * Return the WorkNodes a regression on WORKNODEID calls into question: itself,
+ * then every work descendant in the combined work DAG that currently claims
+ * `done`. Both edge types carry it — a conclusion drawn from a broken parent is
+ * as suspect as one that declares a hard `depends` on it. Work that is already
+ * regressed, still in progress, or dropped is left alone.
+ *
+ * This mirrors `noema-research-regression-targets' in Emacs, which is the
+ * authority for the semantics; the two are covered by a shared fixture test.
+ * Traversal itself is unfiltered, so a `done` grandchild under an `active`
+ * child is still reached.
+ */
+export function researchRegressionTargets(notebook, workNodeId) {
+  const children = descendantMap(notebook);
+  const nodes = new Map(researchWorkNodes(notebook).map((node) => [node.id, node]));
+  const seen = new Set([workNodeId]);
+  const queue = [workNodeId];
+  const targets = [workNodeId];
+  while (queue.length) {
+    for (const next of children.get(queue.shift()) || []) {
+      if (seen.has(next)) continue;
+      seen.add(next);
+      queue.push(next);
+      const node = nodes.get(next);
+      if (node?.kind === "work" && node.state === "done") targets.push(next);
+    }
+  }
+  return targets;
+}
+
 export function setResearchState(notebook, workNodeId, { state, outcome, reason } = {}) {
   const next = structuredClone(notebook);
   const { id, index } = requireWorkNodeIndex(next, workNodeId);
@@ -819,12 +938,27 @@ export function setResearchState(notebook, workNodeId, { state, outcome, reason 
   if (node.kind !== "work") throw researchError("State only applies to work WorkNodes", 422, "ERR_RESEARCH_STATE");
   if (state !== undefined) {
     if (!WORK_STATES.includes(state)) throw researchError(`Unsupported work state: ${state}`, 422, "ERR_RESEARCH_STATE");
-    node.state = state;
     const text = String(reason ?? "").trim();
     // The reason slot keeps its historical key; it now also explains a
     // regression, so a broken node can say what broke without a new column.
-    if ((state === "dropped" || state === "regressed") && text) node.dropped_reason = text;
-    else if (state !== "dropped" && state !== "regressed") delete node.dropped_reason;
+    const applyTo = (item, isOrigin) => {
+      item.state = state;
+      if ((state === "dropped" || state === "regressed") && isOrigin && text) item.dropped_reason = text;
+      else delete item.dropped_reason;
+    };
+    if (state === "regressed") {
+      // `regressed` is never a lone node property: it travels to the finished
+      // work resting on this node, exactly as it does on the Emacs side. A
+      // host-side write that skipped the cascade would let the same document
+      // mean two different things depending on which path changed it.
+      const byId = new Map(researchWorkNodes(next).map((item) => [item.id, item]));
+      for (const target of researchRegressionTargets(next, id)) {
+        const item = byId.get(target);
+        if (item) applyTo(item, target === id);
+      }
+    } else {
+      applyTo(node, true);
+    }
   }
   if (outcome !== undefined) {
     if (outcome === null || outcome === "") delete node.outcome;

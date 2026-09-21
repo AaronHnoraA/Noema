@@ -18,6 +18,7 @@ package mcp
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -37,9 +38,14 @@ const protocolVersion20260728 = "2026-07-28"
 var (
 	httpHandlerOnce          sync.Once
 	httpHandler              http.Handler
+	researchHandlerOnce      sync.Once
+	researchHandler          http.Handler
 	externalToolProjectionMu sync.RWMutex
 	externalToolProjection   *toolProjection
 )
+
+//go:embed research.md
+var researchInstructions string
 
 type toolProjection struct {
 	mu      sync.RWMutex
@@ -63,12 +69,21 @@ func Serve(ginServer *gin.Engine) {
 	ginServer.POST("/mcp/coordinator", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, serveHTTP(coordinator))
 	ginServer.GET("/mcp/coordinator", model.CheckAuth, model.CheckAdminRole, serveHTTP(coordinator))
 	ginServer.DELETE("/mcp/coordinator", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, serveHTTP(coordinator))
+
+	// The AI workflow is its own surface.  The knowledge base and the work DAG
+	// are two different capabilities: a project that only gathers literature
+	// should not have to take research_* tools, and an agent running a work
+	// block should not receive thirty knowledge-base tools it will never call.
+	research := getResearchHandler()
+	ginServer.POST("/mcp/research", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, serveHTTP(research))
+	ginServer.GET("/mcp/research", model.CheckAuth, model.CheckAdminRole, serveHTTP(research))
+	ginServer.DELETE("/mcp/research", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, serveHTTP(research))
 }
 
 func getHTTPHandler() http.Handler {
 	httpHandlerOnce.Do(func() {
 		server := newServer()
-		projection := newToolProjection(server, externalMCPToolAllowed)
+		projection := newToolProjection(server, knowledgeMCPToolAllowed)
 		externalToolProjectionMu.Lock()
 		externalToolProjection = projection
 		externalToolProjectionMu.Unlock()
@@ -78,6 +93,26 @@ func getHTTPHandler() http.Handler {
 		httpHandler = newHTTPHandler(server)
 	})
 	return httpHandler
+}
+
+// getResearchHandler serves only the AI-workflow tools.  It reuses the same
+// registry and the same live projection as /mcp; only the predicate differs.
+func getResearchHandler() http.Handler {
+	researchHandlerOnce.Do(func() {
+		server := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "Noema Research", Version: util.Ver},
+			&mcpsdk.ServerOptions{Instructions: researchInstructions, Capabilities: &mcpsdk.ServerCapabilities{}})
+		server.AddReceivingMiddleware(privateCacheMiddleware())
+		projection := newToolProjection(server, researchMCPToolAllowed)
+		tools.ObserveRegistry(func(name string, tool *tools.Tool) {
+			projection.sync(name, tool)
+		})
+		researchHandler = newHTTPHandler(server)
+	})
+	return researchHandler
+}
+
+func researchMCPToolAllowed(tool *tools.Tool) bool {
+	return tools.SurfaceForTool(tool) == tools.SurfaceResearch && externalMCPToolAllowed(tool)
 }
 
 func newToolProjection(server *mcpsdk.Server, allows func(*tools.Tool) bool) *toolProjection {
@@ -144,6 +179,12 @@ func RefreshToolExposure() {
 	if projection != nil {
 		projection.refresh()
 	}
+}
+
+// knowledgeMCPToolAllowed is the predicate for the default /mcp endpoint: the
+// knowledge base, i.e. everything that is not the AI workflow.
+func knowledgeMCPToolAllowed(tool *tools.Tool) bool {
+	return tools.SurfaceForTool(tool) != tools.SurfaceResearch && externalMCPToolAllowed(tool)
 }
 
 func externalMCPToolAllowed(tool *tools.Tool) bool {

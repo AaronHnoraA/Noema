@@ -1,118 +1,67 @@
 ---
 name: noema-work-dag
-description: Keep a Noema work DAG honest while building: declare the intended work before writing code, advance the WorkNode you own as you go, mark done only with evidence, and mark regressed before repairing something you broke. Use when a Noema Run gives you a `runId` and a `workNodeId` and the task is large enough that its structure matters.
+description: Work in a Noema project's work DAG — declare the intended work before building, report the WorkNode you own, and keep the record honest about what has actually been verified. Use when a Noema Run gives you a `runId` and a `workNodeId`.
 ---
 
 # Noema work DAG
 
-The DAG is a ledger, not a judge. The tools refuse structural corruption; *when*
-to declare, start or finish work is your discipline. A DAG that shows a broken
-foundation under work in progress is doing its job — that is the most useful
-status report there is.
+The DAG is a ledger, not a judge. Noema refuses structural corruption and
+*notices* unsupported claims, but **when** to declare, start or finish work is
+your judgement. A DAG showing a broken foundation under work in progress is
+doing its job.
 
-Work grows upward: a block of work can only stand on the work below it. Do not
-report progress as a flat checklist; `todo_write` is for a session's scratch
-list, not for what the project knows.
+Work grows upward: a block can only stand on the work below it. `todo_write`
+is a scratch list for one session; it is not what the project knows.
 
-## Before building
+## What the system already does
 
-Declare the intended shape first, while it is still cheap to reject.
+You do not have to remember these; they happen whether or not you do.
 
-Submit the whole plan as one `proposal.create`, `kind: "graph.declare"`. It
-appears on the person's Graph Board as dashed ghost nodes with the shape you
-declared. Then stop and let them respond. Do not start building a design
-nobody has agreed to.
+- **Regression travels.** Marking a node `regressed` carries it to every
+  `done` node resting on it, across lineage and `depends` alike. You do not
+  walk the graph yourself.
+- **Unsupported claims are flagged.** A node marked `done` with no Run and no
+  outcome, a node whose last Run failed, a `done` node above a `regressed`
+  one, an `active` node with no Run — each raises a warning the person sees.
+  Warnings never block an edit; they make a lapse visible.
+- **Staleness is answerable.** `research_cell {action: "changes"}` reports
+  which files a node's Runs touched have moved since. It only reports.
+- **Reports are confirmable.** `research_state` records; the editor applies.
+  `research_state {action: "status", requestId}` tells you which of those has
+  actually happened. Do not assume a report landed.
+- **The preview says what you are resting on.** Unfinished or regressed
+  dependencies, and re-running something already `done`, appear in the run
+  preview. None of it blocks the Run.
 
-```json
-{ "root": "/abs/project", "runId": "<your run>", "workNodeId": "<your node>",
-  "clientRequestId": "plan-parser",
-  "kind": "graph.declare",
-  "payload": { "plan": {
-    "notebookId": "<nb>", "file": "<document>.noema",
-    "expectedRevision": "<revision you read>",
-    "cells": [
-      { "id": "p-lex",   "kind": "work", "title": "Tokenize the fence",
-        "lineageParent": "<an existing work node>" },
-      { "id": "p-parse", "kind": "work", "title": "Parse the grammar",
-        "lineageParent": "p-lex" },
-      { "id": "p-render","kind": "work", "title": "Render the block",
-        "lineageParent": "p-parse", "depends": ["p-lex"] }
-    ] } } }
-```
+## What remains yours
 
-Blocks name each other by `id`, in any order, which is how the plan keeps its
-shape. The whole plan is accepted or rejected as one unit and is written under
-a single revision compare-and-swap, so a half-agreed plan never reaches the
-document. `kind: "cell.create"` remains for adding one block to work that has
-already been agreed.
+**Declare before building.** Submit the plan as one `proposal.create`,
+`kind: "graph.declare"` — blocks may reference each other by id, and the whole
+plan is accepted or rejected together. Then stop and let the person respond.
+Do not build a design nobody has agreed to. `cell.create` adds a single block
+to work already agreed.
 
-Skip this only for work small enough to finish in one step.
+**Attach work to the right parent.** This is the one mistake the tools cannot
+catch: they refuse cycles, not bad judgement. Read
+`research_cell {action: "neighbors"}` before declaring.
 
-## While building
+**Say what you verified, not that you verified.** Put the command and its
+result in `reason` — `go test ./...: ok, 41 tests`, not "tests pass". Import
+what you checked with `artifact {action: "import"}` when it is worth keeping.
+Unverified work is `active`; "it compiles" is evidence for compiling.
 
-Work bottom-up. Finish what a block rests on before the block itself. Siblings
-that rest on the same work can go in any order. If you must build above
-something unfinished, say so in the conversation and say why.
+**Mark `regressed` before you repair.** Record what broke first, then fix it.
+Afterwards restore each affected node only as its own verification passes
+again — one at a time, not in a sweep. Re-greening a node you have not re-run
+is the lie the whole ledger exists to prevent.
 
-Report your own node as you move, with `research_state`:
+**Work bottom-up.** Finish what a block rests on first. Siblings on the same
+footing can go in any order. If you deliberately build above something
+unfinished, say why in the conversation — the preview will have told you.
 
-| State | When |
-|---|---|
-| `active` | you have started this work |
-| `waiting` | you are blocked on something outside this Run |
-| `done` | verification actually passed — see below |
-| `regressed` | work that was finished is now broken |
-| `dropped` | this approach is abandoned; say why in `reason` |
+## Boundaries
 
-```json
-{ "root": "/abs/project", "runId": "<your run>", "workNodeId": "<your node>",
-  "state": "done", "reason": "go test ./noema/research: ok, 41 tests" }
-```
-
-`research_state` moves the WorkNode your Run owns and nothing else. It records
-the report; the editor applies it. Read the node back with `research_cell` if
-you need to confirm it landed.
-
-## No evidence, no done
-
-Mark `done` only when verification actually passed, and put what passed in
-`reason` — the command and its result, not a claim that it should work.
-`reason` is free text; when the evidence is a file or a command transcript
-worth keeping, import it with `artifact` first and name the artifact.
-
-Unverified work is `active`. Work you believe is correct but have not run is
-`active`. "It compiles" is evidence for compiling, not for behaving.
-
-## Regression comes before repair
-
-When you break work that was finished:
-
-1. Mark it `regressed` **first**, with what broke in `reason`.
-2. Then fix it.
-
-Marking a node `regressed` carries that to every `done` node below it in the
-combined work DAG — lineage and `depends` alike. Those nodes are not wrong,
-they are unverified again: a finished claim resting on a broken foundation has
-to be re-made, not inherited. Re-verify each one and mark it `done` again with
-fresh evidence, or explain in the conversation why it was unaffected.
-
-Never repair quietly and leave the DAG green. A green DAG that is wrong is
-worse than a red one that is right.
-
-## Reading the DAG
-
-- `research_cell {action: "read"}` — one cell
-- `research_cell {action: "neighbors"}` — its explicit lineage and dependency
-  neighbours, which is how you find what rests on what
-- `research_run {action: "list" | "get" | "output"}` — what has already run
-- `artifact {action: "search" | "read"}` — the evidence behind earlier claims
-
-Read the neighbours before declaring new work. Attaching a block to the wrong
-parent is the one mistake the tools cannot catch for you: they refuse cycles,
-they do not know your intent.
-
-## What the tools refuse
-
-Cycles across lineage and `depends`; a state a WorkNode cannot hold; reporting
-on a node your Run does not own; editing the document directly. Everything
-else is yours to get right.
+`research_state` moves the WorkNode your Run owns and nothing else. Structure
+changes are Proposals. Nothing here edits a `.noema` document directly, and
+the knowledge base — notes, search, tags — is a different surface on a
+different endpoint.

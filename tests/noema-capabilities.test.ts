@@ -166,7 +166,8 @@ describe("Noema capability resolution", () => {
     const project = await resolveCapabilities({ ...options, root, scope: "project" });
     expect(project.skills.find((item) => item.id === "proof")?.enabled).toBe(false);
     expect(project.skills.find((item) => item.id === "local-only")).toBeDefined();
-    expect(project.mcps.find((item) => item.id === "noema")).toBeDefined();
+    expect(project.mcps.find((item) => item.id === "noema-knowledge")).toBeDefined();
+    expect(project.mcps.find((item) => item.id === "noema-research")).toBeDefined();
   }));
 
   test("reads linked native libraries without copying configs or inheriting automatic MCP startup", async () => withTree(async ({ root, home, builtin }) => {
@@ -309,16 +310,82 @@ describe("Noema capability resolution", () => {
       root, userHome: home, builtinSkillDirectory: builtin, runtimeDescriptor: { mcpUrl: "http://127.0.0.1:43128/mcp" },
     });
     const local = resolution.mcps.find((item: any) => item.id === "local-tools") as any;
-    const noema = resolution.mcps.find((item: any) => item.id === "noema") as any;
+    const noema = resolution.mcps.find((item: any) => item.id === "noema-knowledge") as any;
     expect(local).toMatchObject({ enabled: true, runtime: {
       state: "not-observed", availability: "available", running: null, observed: false,
     } });
     expect(local.effective.config).toMatchObject({ command: "/usr/bin/env", args: ["node", "patched.mjs"] });
     expect(noema).toMatchObject({ enabled: true, runtime: { state: "available", observed: true } });
     expect(resolvedMCPServersForRun(resolution)).toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: "noema", type: "http" }),
+      expect.objectContaining({ name: "noema-knowledge", type: "http" }),
+      expect.objectContaining({ name: "noema-research", type: "http" }),
       expect.objectContaining({ name: "local-tools", command: "/usr/bin/env" }),
     ]));
+    // The two surfaces are two endpoints, not one url served twice.
+    const urls = resolvedMCPServersForRun(resolution)
+      .filter((server: any) => String(server.name).startsWith("noema-"))
+      .map((server: any) => server.url);
+    expect(new Set(urls).size).toBe(2);
+  }));
+
+  test("a skill carries its directory and its reference documents", async () => withTree(async ({ root, home, builtin }) => {
+    // Progressive disclosure: SKILL.md says what decides, references/ holds
+    // the depth. The agent reads reference files itself, so the resolved
+    // record must name the directory, not only the SKILL.md inside it.
+    const globals = join(home, ".emacs.d", "etc", "noema", "skills");
+    await writeSkill(globals, "compute", "Pick a backend, then read its reference.");
+    await mkdir(join(globals, "compute", "references"), { recursive: true });
+    await writeFile(join(globals, "compute", "references", "slurm.md"), "# slurm\n");
+    await writeFile(join(globals, "compute", "references", "ray.md"), "# ray\n");
+    await writeFile(join(globals, "compute", "references", "notes.txt"), "ignored\n");
+
+    const resolution = await resolveCapabilities({
+      root, userHome: home, builtinSkillDirectory: builtin, environment: {}, includeContent: true,
+    });
+    const skill = resolution.skills.find((item: any) => item.id === "compute") as any;
+    expect(skill.effective.directory).toBe(join(globals, "compute"));
+    // Only Markdown references are listed, and they are sorted so the listing
+    // is stable across filesystems.
+    expect(skill.effective.references).toEqual([
+      "references/ray.md", "references/slurm.md",
+    ]);
+    // A skill with no references/ is not an error, just an empty list.
+    await writeSkill(globals, "plain", "No depth needed.");
+    const second = await resolveCapabilities({
+      root, userHome: home, builtinSkillDirectory: builtin, environment: {}, includeContent: true,
+    });
+    const plain = second.skills.find((item: any) => item.id === "plain") as any;
+    expect(plain.effective.references).toEqual([]);
+    expect(plain.validation.errors).toEqual([]);
+  }));
+
+  test("a long SKILL.md is advised to split rather than refused", async () => withTree(async ({ root, home, builtin }) => {
+    const globals = join(home, ".emacs.d", "etc", "noema", "skills");
+    await writeSkill(globals, "verbose", "x".repeat(9 * 1024));
+    const resolution = await resolveCapabilities({
+      root, userHome: home, builtinSkillDirectory: builtin, environment: {},
+    });
+    const skill = resolution.skills.find((item: any) => item.id === "verbose") as any;
+    expect(skill.validation.errors).toEqual([]);
+    expect(skill.validation.warnings.join(" ")).toMatch(/references\//);
+  }));
+
+  test("a legacy `noema` reference still means the whole Noema surface", async () => withTree(async ({ root, home, builtin }) => {
+    // The knowledge base and the AI workflow shipped as one capability id.
+    // A project that disabled `noema` meant all of it, so the reference has to
+    // keep meaning both rather than silently switching off only one half.
+    await writeJSON(join(root, "noema-capabilities.json"), {
+      schema: "noema.capabilities/1",
+      skills: {},
+      mcp: { disabled: ["noema"] },
+    });
+    const resolution = await resolveCapabilities({
+      root, userHome: home, builtinSkillDirectory: builtin,
+      runtimeDescriptor: { mcpUrl: "http://127.0.0.1:43128/mcp" },
+    });
+    expect(resolution.active.mcps).not.toContain("noema-knowledge");
+    expect(resolution.active.mcps).not.toContain("noema-research");
+    expect(resolvedMCPServersForRun(resolution)).toEqual([]);
   }));
 
   test("a narrower shared patch can repair an inherited MCP definition", async () => withTree(async ({ root, home, builtin }) => {
@@ -347,20 +414,23 @@ describe("Noema capability resolution", () => {
 
   test("reports unavailable runtime state and permits an explicit project disable", async () => withTree(async ({ root, home, builtin }) => {
     const unavailable = await resolveCapabilities({ root, userHome: home, builtinSkillDirectory: builtin });
-    expect(unavailable.mcps.find((item: any) => item.id === "noema")).toMatchObject({
+    expect(unavailable.mcps.find((item: any) => item.id === "noema-knowledge")).toMatchObject({
       enabled: true, runtime: { state: "unavailable", availability: "unavailable", observed: true },
     });
     expect(resolvedMCPServersForRun(unavailable)).toEqual([]);
 
-    await mutateProjectCapability({ root, type: "mcp", id: "noema", enabled: false });
+    await mutateProjectCapability({ root, type: "mcp", id: "noema-knowledge", enabled: false });
     const disabled = await resolveCapabilities({
       root, userHome: home, builtinSkillDirectory: builtin,
       runtimeDescriptor: { mcpUrl: "http://127.0.0.1:43128/mcp" },
     });
-    expect(disabled.mcps.find((item: any) => item.id === "noema")).toMatchObject({
+    expect(disabled.mcps.find((item: any) => item.id === "noema-knowledge")).toMatchObject({
       enabled: false, runtime: { state: "available" },
     });
-    expect(disabled.active.mcps).not.toContain("noema");
+    expect(disabled.active.mcps).not.toContain("noema-knowledge");
+    // Disabling one surface leaves the other alone — that is the point of
+    // splitting them.
+    expect(disabled.active.mcps).toContain("noema-research");
   }));
 
   test("blocks an enabled stdio MCP whose executable is unavailable", async () => withTree(async ({ root, home, builtin }) => {
@@ -428,7 +498,7 @@ describe("Noema capability resolution", () => {
     });
   }));
 
-  test("surfaces unknown ids declared only in project configuration", async () => withTree(async ({ root, home, builtin }) => {
+  test("skips unavailable configured Skills without blocking the Run", async () => withTree(async ({ root, home, builtin }) => {
     await writeJSON(join(root, "noema-capabilities.json"), {
       schema: "noema.capabilities/1",
       skills: { enabled: ["not-installed"] },
@@ -436,10 +506,35 @@ describe("Noema capability resolution", () => {
     });
     const resolution = await resolveCapabilities({ root, userHome: home, builtinSkillDirectory: builtin });
     expect(resolution.skills).toEqual([expect.objectContaining({
-      id: "not-installed", enabled: true, validation: expect.objectContaining({ valid: false }),
-      diagnostics: expect.arrayContaining([expect.objectContaining({ code: "unknown-capability" })]),
+      id: "not-installed", enabled: false, selectable: false,
+      validation: expect.objectContaining({ valid: false, errors: [] }),
+      diagnostics: expect.arrayContaining([expect.objectContaining({
+        severity: "warning", code: "unavailable-skill",
+      })]),
     })]);
-    expect(() => assertRunnableCapabilities(resolution)).toThrow(/not-installed/);
+    expect(resolution.active.skills).not.toContain("not-installed");
+    expect(resolution.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({
+      severity: "warning", code: "unavailable-skill", id: "not-installed",
+    })]));
+    expect(() => assertRunnableCapabilities(resolution)).not.toThrow();
+    expect(resolvedSkillsForRun(resolution)).toEqual({ skills: [], items: [] });
+  }));
+
+  test("still rejects an enabled Skill whose installed definition is empty", async () => withTree(async ({ root, home, builtin }) => {
+    const directory = join(root, ".agents", "skills", "broken");
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, "SKILL.md"), "");
+    await writeJSON(join(root, "noema-capabilities.json"), {
+      schema: "noema.capabilities/1",
+      skills: { enabled: ["broken"] },
+      mcp: {},
+    });
+    const resolution = await resolveCapabilities({ root, userHome: home, builtinSkillDirectory: builtin });
+    expect(resolution.skills.find((item: any) => item.id === "broken")).toMatchObject({
+      enabled: true,
+      validation: { valid: false, errors: expect.arrayContaining(["effective skill content is empty"]) },
+    });
+    expect(() => assertRunnableCapabilities(resolution)).toThrow(/effective skill content is empty/);
   }));
 
   test("rejects malformed project configuration with source and field", async () => withTree(async ({ root, home, builtin }) => {

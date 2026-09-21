@@ -201,6 +201,70 @@ func TestExternalMCPToolsAreNotReexposed(t *testing.T) {
 	}
 }
 
+func TestKnowledgeAndResearchSurfacesDoNotMix(t *testing.T) {
+	// The knowledge base and the AI workflow are two capabilities. An agent
+	// running a work block should not receive thirty note-taking tools, and a
+	// project that only gathers literature should not have to take research_*.
+	knowledge := &tools.Tool{Name: "document"}
+	research := &tools.Tool{Name: "research_state", Surface: tools.SurfaceResearch}
+
+	if !knowledgeMCPToolAllowed(knowledge) {
+		t.Fatal("a knowledge tool must stay on the default endpoint")
+	}
+	if knowledgeMCPToolAllowed(research) {
+		t.Fatal("an AI-workflow tool leaked onto the knowledge endpoint")
+	}
+	if !researchMCPToolAllowed(research) {
+		t.Fatal("an AI-workflow tool is missing from its own endpoint")
+	}
+	if researchMCPToolAllowed(knowledge) {
+		t.Fatal("a knowledge tool leaked onto the AI-workflow endpoint")
+	}
+
+	// An unmarked tool is knowledge by default, so adding a tool without
+	// thinking about surfaces cannot silently widen the research endpoint.
+	if surface := tools.SurfaceForTool(&tools.Tool{Name: "unmarked"}); surface != tools.SurfaceKnowledge {
+		t.Fatalf("an unmarked tool defaulted to %q", surface)
+	}
+	// External MCP tools stay off both endpoints.
+	remote := &tools.Tool{Name: "remote", Source: "mcp", Runtime: "mcp", Surface: tools.SurfaceResearch}
+	if researchMCPToolAllowed(remote) || knowledgeMCPToolAllowed(remote) {
+		t.Fatal("an external MCP capability was re-exposed")
+	}
+
+	// Every tool that reaches an agent must belong to exactly one surface.
+	for _, tool := range tools.GetAllTools() {
+		onKnowledge := knowledgeMCPToolAllowed(tool)
+		onResearch := researchMCPToolAllowed(tool)
+		if onKnowledge && onResearch {
+			t.Fatalf("tool %q is exposed on both surfaces", tool.Name)
+		}
+	}
+}
+
+func TestResearchSurfaceHoldsExactlyTheWorkflowTools(t *testing.T) {
+	want := map[string]bool{
+		"research_cell": true, "research_run": true, "research_state": true,
+		"artifact": true, "proposal.create": true,
+	}
+	got := map[string]bool{}
+	for _, tool := range tools.GetAllTools() {
+		if tools.SurfaceForTool(tool) == tools.SurfaceResearch {
+			got[tool.Name] = true
+		}
+	}
+	for name := range want {
+		if !got[name] {
+			t.Errorf("%s is missing from the AI-workflow surface", name)
+		}
+	}
+	for name := range got {
+		if !want[name] {
+			t.Errorf("%s was added to the AI-workflow surface without review", name)
+		}
+	}
+}
+
 func toolListContains(toolList []*mcpsdk.Tool, name string) bool {
 	for _, tool := range toolList {
 		if tool.Name == name {

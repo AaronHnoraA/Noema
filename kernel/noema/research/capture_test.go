@@ -1,7 +1,11 @@
 package research
 
 import (
+	"database/sql"
 	"encoding/base64"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -76,5 +80,66 @@ func TestArtifactImportIsCASBacked(t *testing.T) {
 	_, loaded, err := store.ReadArtifact(artifact.ID)
 	if err != nil || string(loaded) != string(content) {
 		t.Fatalf("imported artifact bytes changed: %q (%v)", loaded, err)
+	}
+}
+
+func TestSourceChangesReportsDriftWithoutTouchingState(t *testing.T) {
+	store, root := openTestStore(t)
+	session := promoteRuntimeSession(t, store, root)
+	run := prepareRuntimeRun(t, store, session, root)
+
+	body := []byte("verified contents\n")
+	if err := os.MkdirAll(filepath.Join(root, "notes"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "notes", "result.md"), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ImportArtifact(ImportArtifactInput{
+		Kind: "run-file", MediaType: "text/plain; charset=utf-8",
+		ContentBase64: base64.StdEncoding.EncodeToString(body),
+		RunID:         run.ID, SourceURI: "noema://file/notes/result.md",
+		Metadata: map[string]any{"change": "created"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	unchanged, err := store.SourceChanges(ArtifactLinkFilter{WorkNodeID: run.WorkNodeID})
+	if err != nil || len(unchanged) != 1 {
+		t.Fatalf("expected one recorded source: %+v (%v)", unchanged, err)
+	}
+	if unchanged[0].Path != "notes/result.md" || unchanged[0].State != "unchanged" {
+		t.Fatalf("a file that has not moved must read unchanged: %+v", unchanged[0])
+	}
+
+	// The foundation moves.
+	if err := os.WriteFile(filepath.Join(root, "notes", "result.md"), []byte("edited\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := store.SourceChanges(ArtifactLinkFilter{WorkNodeID: run.WorkNodeID})
+	if err != nil || len(changed) != 1 || changed[0].State != "changed" {
+		t.Fatalf("a changed file must be reported as changed: %+v (%v)", changed, err)
+	}
+	if changed[0].SHA256 == "" {
+		t.Fatal("the digest recorded at verification time must be reported")
+	}
+
+	// Reporting must not decide anything: the WorkNode is untouched.
+	var state string
+	if err := store.db.QueryRow(`SELECT state FROM work_nodes WHERE work_node_id = ?`,
+		run.WorkNodeID).Scan(&state); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		t.Fatal(err)
+	}
+	if state == "regressed" {
+		t.Fatal("SourceChanges must only report; it changed a WorkNode's state")
+	}
+
+	// A file that disappeared is distinguished from one that was edited.
+	if err := os.Remove(filepath.Join(root, "notes", "result.md")); err != nil {
+		t.Fatal(err)
+	}
+	missing, err := store.SourceChanges(ArtifactLinkFilter{WorkNodeID: run.WorkNodeID})
+	if err != nil || len(missing) != 1 || missing[0].State != "missing" {
+		t.Fatalf("a deleted file must be reported as missing: %+v (%v)", missing, err)
 	}
 }

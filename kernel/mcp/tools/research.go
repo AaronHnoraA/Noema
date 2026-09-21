@@ -12,15 +12,17 @@ import (
 )
 
 var ResearchCellTool = &Tool{
-	Name: "research_cell", Description: "Read a Noema research cell and its explicit lineage/dependency neighbors. local_only cells are never returned.",
+	Name: "research_cell", Description: "Read a Noema research cell, its explicit lineage/dependency neighbors, or whether the files its Runs touched have changed since. local_only cells are never returned.",
 	InputSchema: ToolSchema{Type: "object", Properties: map[string]Property{
-		"action":     {Type: "string", Description: "Operation", Enum: []string{"read", "neighbors"}},
+		"action":     {Type: "string", Description: "Operation", Enum: []string{"read", "neighbors", "changes"}},
 		"root":       {Type: "string", Description: "Absolute Noema repository root"},
 		"notebookId": {Type: "string", Description: "Research notebook id"},
 		"cellId":     {Type: "string", Description: "Research cell id"},
-	}, Required: []string{"action", "root", "notebookId", "cellId"}},
+		"workNodeId": {Type: "string", Description: "WorkNode id for changes; defaults to the one bound to cellId"},
+	}, Required: []string{"action", "root", "notebookId"}},
+	Surface:       SurfaceResearch,
 	Handler:       researchCellHandler,
-	ActionEffects: map[string]ToolEffects{"read": {LocalRead: true}, "neighbors": {LocalRead: true}},
+	ActionEffects: map[string]ToolEffects{"read": {LocalRead: true}, "neighbors": {LocalRead: true}, "changes": {LocalRead: true}},
 }
 
 var ResearchRunTool = &Tool{
@@ -34,6 +36,7 @@ var ResearchRunTool = &Tool{
 		"limit":             {Type: "number", Description: "Maximum Runs for list (1-1000)"},
 		"includeTranscript": {Type: "boolean", Description: "Include transcript text for output"},
 	}, Required: []string{"action", "root"}},
+	Surface:       SurfaceResearch,
 	Handler:       researchRunHandler,
 	ActionEffects: map[string]ToolEffects{"list": {LocalRead: true}, "get": {LocalRead: true}, "output": {LocalRead: true}},
 }
@@ -52,6 +55,7 @@ var ArtifactTool = &Tool{
 		"workstreamId":  {Type: "string", Description: "Optional Workstream attachment for import"},
 		"sourceUri":     {Type: "string", Description: "Optional provenance URI for import"},
 	}, Required: []string{"action", "root"}},
+	Surface:       SurfaceResearch,
 	Handler:       artifactHandler,
 	ActionEffects: map[string]ToolEffects{"search": {LocalRead: true}, "read": {LocalRead: true}, "import": {LocalWrite: true}},
 }
@@ -69,6 +73,7 @@ var ProposalCreateTool = &Tool{
 		"kind":            {Type: "string", Description: "Proposal kind", Enum: []string{"cell.create", "graph.declare", "finding.create", "research_ir.create", "problem_model.create", "task.create", "job.create", "delegation.create"}},
 		"payload":         {Type: "object", Description: "Untrusted candidate payload; @@ directives remain data until human acceptance"},
 	}, Required: []string{"root", "runId", "workNodeId", "clientRequestId", "kind", "payload"}},
+	Surface:       SurfaceResearch,
 	Handler:       proposalCreateHandler,
 	ActionEffects: map[string]ToolEffects{"": {LocalWrite: true}},
 }
@@ -80,16 +85,19 @@ var ProposalCreateTool = &Tool{
 // Emacs claims it and applies it through the same validated, undoable
 // transaction a person's edit uses, so the document keeps one authority.
 var ResearchStateTool = &Tool{
-	Name: "research_state", Description: "Report the state of the WorkNode this agent Run owns: active while working, done once verification passed, regressed when previously finished work broke. Records the reason and, for regressed, carries it to the finished work below. Cannot touch any other node.",
+	Name: "research_state", Description: "Report the state of the WorkNode this agent Run owns: active while working, done once verification passed, regressed when previously finished work broke. Records the reason and, for regressed, carries it to the finished work below. Cannot touch any other node. Use action \"status\" to confirm an earlier report was actually applied.",
 	InputSchema: ToolSchema{Type: "object", Properties: map[string]Property{
+		"action":     {Type: "string", Description: "Operation; defaults to report", Enum: []string{"report", "status"}},
 		"root":       {Type: "string", Description: "Absolute Noema repository root"},
 		"runId":      {Type: "string", Description: "Current durable agent Run id"},
 		"workNodeId": {Type: "string", Description: "WorkNode owned by that Run"},
 		"state":      {Type: "string", Description: "New state", Enum: research.WorkStates},
 		"reason":     {Type: "string", Description: "Why: the evidence for done, or what broke for regressed"},
-	}, Required: []string{"root", "runId", "workNodeId", "state"}},
+		"requestId":  {Type: "string", Description: "Request id from an earlier report, for action status"},
+	}, Required: []string{"root"}},
+	Surface:       SurfaceResearch,
 	Handler:       researchStateHandler,
-	ActionEffects: map[string]ToolEffects{"": {LocalWrite: true}},
+	ActionEffects: map[string]ToolEffects{"": {LocalWrite: true}, "report": {LocalWrite: true}, "status": {LocalRead: true}},
 }
 
 func init() {
@@ -100,10 +108,52 @@ func init() {
 	register(ResearchStateTool)
 }
 
-func researchStateHandler(args map[string]any) (CallToolResult, error) {
+// researchStateStatusHandler answers whether an earlier report was carried
+// out.  Reporting and applying are separate on purpose -- the kernel never
+// writes a `.noema` document -- so "recorded" is not "applied", and an agent
+// that cannot tell the difference will reason about a state the document does
+// not have.
+func researchStateStatusHandler(args map[string]any) (CallToolResult, error) {
 	store, result := researchToolStore(args)
 	if result != nil {
 		return *result, nil
+	}
+	request, err := store.CoordinatorRequest(stringArg(args, "requestId"))
+	if err != nil {
+		return historyResearchError(err), nil
+	}
+	if request.Kind != "worknode.state" {
+		return historyResearchError(errors.New("that request is not a work state report")), nil
+	}
+	applied := request.State == "done"
+	summary := map[string]string{
+		"pending": "recorded; the editor has not picked it up yet",
+		"claimed": "the editor is applying it now",
+		"done":    "applied to the document",
+		"failed":  "the editor could not apply it",
+	}[request.State]
+	return historyResearchJSON(map[string]any{
+		"requestId": request.ID, "state": request.State, "applied": applied,
+		"workNodeId": request.Payload["workNodeId"], "reportedState": request.Payload["state"],
+		"failureReason": request.FailureReason, "summary": summary,
+	})
+}
+
+func researchStateHandler(args map[string]any) (CallToolResult, error) {
+	if stringArg(args, "action") == "status" {
+		return researchStateStatusHandler(args)
+	}
+	if action := stringArg(args, "action"); action != "" && action != "report" {
+		return researchUnknownAction("research_state", action, "report, status"), nil
+	}
+	store, result := researchToolStore(args)
+	if result != nil {
+		return *result, nil
+	}
+	for _, required := range []string{"runId", "workNodeId", "state"} {
+		if strings.TrimSpace(stringArg(args, required)) == "" {
+			return historyResearchError(errors.New("reporting work state requires " + required)), nil
+		}
 	}
 	state := strings.TrimSpace(stringArg(args, "state"))
 	if !research.ValidWorkState(state) {
@@ -135,8 +185,10 @@ func researchStateHandler(args map[string]any) (CallToolResult, error) {
 	}
 	return historyResearchJSON(map[string]any{
 		"requestId": request.ID, "state": state, "workNodeId": run.WorkNodeID,
+		// Recorded is not applied. Say so plainly and give the agent the way
+		// to find out, rather than letting it assume the document changed.
 		"applied": false,
-		"note":    "Recorded. The editor applies it as an ordinary document edit; read the node back if you need to confirm.",
+		"note":    "Recorded, not yet applied. The editor applies it as an ordinary document edit; confirm with research_state {action: \"status\", requestId}.",
 	})
 }
 
@@ -181,7 +233,58 @@ func proposalCreateHandler(args map[string]any) (CallToolResult, error) {
 	return historyResearchJSON(proposal)
 }
 
+// researchChangesHandler answers "is this still verified against the code that
+// is there now?".  Every Run snapshots the files it created or modified into
+// the content-addressed store and links them to its WorkNode, so the question
+// is answerable from what was already recorded.
+//
+// It only reports.  A changed foundation does not move a WorkNode's state:
+// deciding what the change means for the claim is the person's judgement, and
+// a tool that silently re-opened finished work would be guessing.
+func researchChangesHandler(args map[string]any) (CallToolResult, error) {
+	store, result := researchToolStore(args)
+	if result != nil {
+		return *result, nil
+	}
+	notebookID := stringArg(args, "notebookId")
+	workNodeID := strings.TrimSpace(stringArg(args, "workNodeId"))
+	if workNodeID == "" {
+		cellID := stringArg(args, "cellId")
+		if strings.TrimSpace(cellID) == "" {
+			return historyResearchError(errors.New("changes needs a workNodeId or a cellId")), nil
+		}
+		view, err := store.ReadResearchCell(notebookID, cellID)
+		if err != nil {
+			return historyResearchError(err), nil
+		}
+		workNodeID = view.Cell.WorkNodeID
+		if strings.TrimSpace(workNodeID) == "" {
+			return historyResearchError(errors.New("that cell is not bound to a WorkNode")), nil
+		}
+	}
+	changes, err := store.SourceChanges(research.ArtifactLinkFilter{
+		NotebookID: notebookID, WorkNodeID: workNodeID,
+	})
+	if err != nil {
+		return historyResearchError(err), nil
+	}
+	stale := 0
+	for _, change := range changes {
+		if change.State != "unchanged" {
+			stale++
+		}
+	}
+	return historyResearchJSON(map[string]any{
+		"notebookId": notebookID, "workNodeId": workNodeID,
+		"sources": changes, "changed": stale,
+		"note": "Reported only; no WorkNode state was altered.",
+	})
+}
+
 func researchCellHandler(args map[string]any) (CallToolResult, error) {
+	if stringArg(args, "action") == "changes" {
+		return researchChangesHandler(args)
+	}
 	store, result := researchToolStore(args)
 	if result != nil {
 		return *result, nil
@@ -196,7 +299,7 @@ func researchCellHandler(args map[string]any) (CallToolResult, error) {
 	if stringArg(args, "action") == "neighbors" {
 		return historyResearchJSON(view)
 	}
-	return researchUnknownAction("research_cell", stringArg(args, "action"), "read, neighbors"), nil
+	return researchUnknownAction("research_cell", stringArg(args, "action"), "read, neighbors, changes"), nil
 }
 
 func researchRunHandler(args map[string]any) (CallToolResult, error) {

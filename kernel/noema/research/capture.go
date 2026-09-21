@@ -4,12 +4,16 @@
 package research
 
 import (
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
+	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -406,4 +410,81 @@ func containsSecretMetadata(value any) bool {
 		}
 	}
 	return false
+}
+
+// SourceChange reports whether one file a Run recorded for a WorkNode still
+// holds the bytes it held when that Run ran.
+type SourceChange struct {
+	Path       string `json:"path"`
+	SourceURI  string `json:"sourceUri"`
+	Relation   string `json:"relation"`
+	RunID      string `json:"runId"`
+	WorkNodeID string `json:"workNodeId,omitempty"`
+	// SHA256 is the digest recorded at the time of the Run.
+	SHA256 string `json:"sha256"`
+	// State is unchanged, changed, missing, or unreadable.
+	State string `json:"state"`
+}
+
+// sourceURIPath turns a noema://file/<encoded path> uri back into a
+// repository-relative path.  Anything else is not a project file and has no
+// on-disk counterpart to compare.
+func sourceURIPath(sourceURI string) string {
+	const prefix = "noema://file/"
+	raw := strings.TrimSpace(sourceURI)
+	if !strings.HasPrefix(raw, prefix) {
+		return ""
+	}
+	parts := strings.Split(strings.TrimPrefix(raw, prefix), "/")
+	for index, part := range parts {
+		decoded, err := url.PathUnescape(part)
+		if err != nil {
+			return ""
+		}
+		parts[index] = decoded
+	}
+	return path.Join(parts...)
+}
+
+// SourceChanges reports which files a WorkNode's recorded Runs touched have
+// moved since.  It answers "was this verified against the code that is there
+// now?" from data the Runs already wrote: every created or modified file is
+// snapshotted into the content-addressed store and linked to its WorkNode.
+//
+// It only reports.  Deciding what a changed foundation means for a claim is
+// the person's judgement, so nothing here changes a WorkNode's state.
+func (s *Store) SourceChanges(filter ArtifactLinkFilter) ([]SourceChange, error) {
+	links, err := s.ListArtifactLinks(filter)
+	if err != nil {
+		return nil, err
+	}
+	changes := make([]SourceChange, 0, len(links))
+	seen := map[string]bool{}
+	for _, link := range links {
+		if link.Relation != "created" && link.Relation != "modified" {
+			continue
+		}
+		relative := sourceURIPath(link.SourceURI)
+		if relative == "" || seen[relative] {
+			continue
+		}
+		seen[relative] = true
+		change := SourceChange{
+			Path: relative, SourceURI: link.SourceURI, Relation: link.Relation,
+			RunID: link.RunID, WorkNodeID: link.WorkNodeID, SHA256: link.Artifact.SHA256,
+		}
+		bytes, readErr := os.ReadFile(filepath.Join(s.root, filepath.FromSlash(relative)))
+		switch {
+		case errors.Is(readErr, os.ErrNotExist):
+			change.State = "missing"
+		case readErr != nil:
+			change.State = "unreadable"
+		case fmt.Sprintf("%x", sha256.Sum256(bytes)) == link.Artifact.SHA256:
+			change.State = "unchanged"
+		default:
+			change.State = "changed"
+		}
+		changes = append(changes, change)
+	}
+	return changes, nil
 }

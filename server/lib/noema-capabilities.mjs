@@ -312,6 +312,27 @@ function normalizeMCPDefinitions(section, scope) {
   });
 }
 
+// A SKILL.md longer than this is advised to split; it is a nudge, not a limit.
+const SKILL_BODY_ADVISORY_BYTES = 8 * 1024;
+
+/**
+ * Return the relative names of a skill's reference documents, if it has any.
+ * Only the listing is read here — the contents are the agent's to fetch when
+ * a particular reference turns out to matter.
+ */
+async function readSkillReferences(directoryPath) {
+  try {
+    const entries = await readdir(join(directoryPath, "references"), { withFileTypes: true });
+    return entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+      .map((entry) => `references/${entry.name}`)
+      .sort();
+  } catch (error) {
+    if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") throw error;
+    return [];
+  }
+}
+
 async function discoverSkills(directory, scope, projectRoot) {
   let entries;
   try {
@@ -356,6 +377,14 @@ async function discoverSkills(directory, scope, projectRoot) {
     if (parsed.error) errors.push(parsed.error);
     if (!parsed.fields.name) warnings.push("SKILL.md has no name frontmatter; directory name is the stable id");
     if (!parsed.fields.description) warnings.push("SKILL.md has no description frontmatter");
+    // Progressive disclosure: a skill keeps its depth in `references/` and
+    // loads it on demand.  A skill whose SKILL.md must be read in full on
+    // every Run taxes every Run, so say so once it gets long.
+    if (bytes.byteLength > SKILL_BODY_ADVISORY_BYTES) {
+      warnings.push(`SKILL.md is ${Math.round(bytes.byteLength / 1024)} KiB; `
+        + "move the detail into references/ and keep SKILL.md to what decides");
+    }
+    const references = await readSkillReferences(directoryPath);
     definitions.push({
       id, aliases: id === entry.name ? [] : [entry.name], type: "skill",
       title: String(parsed.fields.title || id),
@@ -364,6 +393,10 @@ async function discoverSkills(directory, scope, projectRoot) {
         content,
         configuration: {},
         path: displayPath(projectRoot, skillPath),
+        // The agent reads reference files itself, so it needs the directory,
+        // not only the SKILL.md inside it.
+        directory: displayPath(projectRoot, directoryPath),
+        references,
         content_sha256: `sha256:${sha256(bytes)}`,
       },
       defaultEnabled: parsed.fields.default_enabled === "true",
@@ -468,8 +501,18 @@ async function resolveType(type, scopes, definitions, runtimeSelections = []) {
       duplicateScopes.set(key, (duplicateScopes.get(key) || 0) + 1);
     }
     const base = candidates.at(-1);
+    const requestedByRun = runtimeSelections.includes(id)
+      || values(base?.aliases).some((alias) => runtimeSelections.includes(alias));
+    // Shared Skill libraries can disappear independently of Noema when a
+    // plugin is upgraded, uninstalled, or its cache is cleaned.  Keep the
+    // stale selection visible for repair, but do not let it take down an
+    // otherwise runnable session.  An explicit @@skill request is different:
+    // the Run asked for that capability, so its absence remains fatal.
+    const unavailableConfiguredSkill = type === "skill" && !base && !requestedByRun;
     const diagnostics = [];
-    if (!base) diagnostics.push({ severity: "error", code: "unknown-capability", message: `Unknown ${type} ${id}` });
+    if (!base) diagnostics.push(unavailableConfiguredSkill
+      ? { severity: "warning", code: "unavailable-skill", message: `Configured Skill ${id} is unavailable and will be skipped` }
+      : { severity: "error", code: "unknown-capability", message: `Unknown ${type} ${id}` });
     for (const [key, count] of duplicateScopes) {
       if (count > 1) diagnostics.push({ severity: "error", code: "duplicate-definition", message: `Duplicate ${type} ${id} definitions in scope ${key.split(":").slice(1).join(":")}` });
     }
@@ -533,7 +576,7 @@ async function resolveType(type, scopes, definitions, runtimeSelections = []) {
         selectedBy.push({ scope: scope.name, scopeId: scope.id, enabled: selected, reason: `${type} selection` });
       }
     }
-    if (runtimeSelections.includes(id) || values(base?.aliases).some((alias) => runtimeSelections.includes(alias))) {
+    if (requestedByRun) {
       if (explicitEnabled === false) {
         diagnostics.push({ severity: "error", code: "disabled-capability-requested", message: `Skill ${id} is requested by @@skill but disabled by effective project configuration` });
         selectedBy.push({ scope: "run", scopeId: "directive", enabled: false, reason: "@@skill blocked by explicit disable" });
@@ -542,7 +585,14 @@ async function resolveType(type, scopes, definitions, runtimeSelections = []) {
         selectedBy.push({ scope: "run", scopeId: "directive", enabled: true, reason: "@@skill directive" });
       }
     }
-    const validation = validationAfterPatch(type, effective, base?.validation, base);
+    if (unavailableConfiguredSkill) {
+      enabled = false;
+      selectedBy.push({ scope: "resolution", scopeId: "noema", enabled: false,
+        reason: "unavailable configured Skill skipped" });
+    }
+    const validation = unavailableConfiguredSkill
+      ? { valid: false, errors: [], warnings: [] }
+      : validationAfterPatch(type, effective, base?.validation, base);
     if (diagnostics.some((item) => item.severity === "error")) validation.valid = false;
     if (type === "skill" && effective.content !== undefined) {
       effective.content_sha256 = `sha256:${sha256(effective.content)}`;
@@ -558,7 +608,43 @@ async function resolveType(type, scopes, definitions, runtimeSelections = []) {
   return resolved;
 }
 
+// The knowledge base and the AI workflow used to ship as one capability id.
+// They are two surfaces now, on two endpoints.
+const LEGACY_NOEMA_MCP_ID = "noema";
+export const NOEMA_MCP_IDS = Object.freeze(["noema-knowledge", "noema-research"]);
+
+/**
+ * Expand a legacy `noema` MCP reference into the two ids it became.
+ * A config that enabled or disabled `noema` meant the whole Noema tool
+ * surface, so it has to keep meaning both — resolving it to one of them
+ * would silently leave the other half switched the wrong way.
+ */
+function expandLegacyNoemaMCP(config) {
+  const mcp = object(config?.mcp);
+  const mentions = (list) => strings(list).includes(LEGACY_NOEMA_MCP_ID);
+  const patched = Object.keys(object(mcp.patches)).includes(LEGACY_NOEMA_MCP_ID);
+  if (!mentions(mcp.enabled) && !mentions(mcp.disabled) && !patched) return config;
+  const expand = (list) => {
+    const kept = strings(list).filter((entry) => entry !== LEGACY_NOEMA_MCP_ID);
+    return [...new Set([...kept, ...NOEMA_MCP_IDS])];
+  };
+  const next = { ...config, mcp: { ...mcp } };
+  if (mentions(mcp.enabled)) next.mcp.enabled = expand(mcp.enabled);
+  if (mentions(mcp.disabled)) next.mcp.disabled = expand(mcp.disabled);
+  if (patched) {
+    const patches = { ...object(mcp.patches) };
+    const legacy = patches[LEGACY_NOEMA_MCP_ID];
+    delete patches[LEGACY_NOEMA_MCP_ID];
+    for (const id of NOEMA_MCP_IDS) {
+      if (patches[id] === undefined) patches[id] = legacy;
+    }
+    next.mcp.patches = patches;
+  }
+  return next;
+}
+
 async function scopeFromConfig({ name, id, rank, path, config, projectRoot, defaultSkillDirectories = [] }) {
+  config = expandLegacyNoemaMCP(config);
   if (!SCOPE_PATTERN.test(name)) {
     throw capabilityError(`Invalid capability scope name: ${name}`, "ERR_NOEMA_CAPABILITY_SCOPE", { source: path, scope: name });
   }
@@ -594,6 +680,13 @@ async function scopeFromConfig({ name, id, rank, path, config, projectRoot, defa
   return scope;
 }
 
+/** Return the endpoint url for a Noema MCP SURFACE, defaulting to the base one. */
+function noemaMCPUrl(runtimeDescriptor, surface) {
+  const base = String(runtimeDescriptor?.mcpUrl || "");
+  if (!surface || !base) return base;
+  return `${base.replace(/\/+$/, "")}/${surface}`;
+}
+
 async function buildScopes({ root, runtimeDescriptor, environment, userHome, builtinSkillDirectory, globalConfigPath, globalSkillDirectory }) {
   const projectPath = root ? join(root, NOEMA_CAPABILITY_FILE) : null;
   const projectSource = root ? await readConfig(projectPath, { optional: true }) : null;
@@ -605,9 +698,19 @@ async function buildScopes({ root, runtimeDescriptor, environment, userHome, bui
     schema: NOEMA_CAPABILITY_SCHEMA,
     skills: {},
     mcp: {
+      // Two surfaces, two endpoints: the knowledge base (notes, search, blocks,
+      // tags) and the AI workflow (the work DAG, Runs, artifacts, Proposals).
+      // A project that only gathers literature can take the first without the
+      // second, and an agent running a work block is not handed thirty
+      // note-taking tools it will never call.
       servers: root ? [{
-        id: "noema", name: "noema", title: "Noema MCP", description: "Project-local Noema semantic and research tools",
-        type: "http", url: String(runtimeDescriptor?.mcpUrl || ""), default_enabled: true, runtime_optional: true,
+        id: "noema-knowledge", name: "noema-knowledge", title: "Noema Knowledge",
+        description: "Noema knowledge base: notes, search, blocks, tags and templates",
+        type: "http", url: noemaMCPUrl(runtimeDescriptor), default_enabled: true, runtime_optional: true,
+      }, {
+        id: "noema-research", name: "noema-research", title: "Noema Research",
+        description: "Noema AI workflow: the work DAG, durable Runs, artifacts and Proposals",
+        type: "http", url: noemaMCPUrl(runtimeDescriptor, "research"), default_enabled: true, runtime_optional: true,
       }] : [],
     },
   };
@@ -695,7 +798,7 @@ export async function resolveProjectCapabilities({
   const mcps = await resolveType("mcp", scopes, definitions);
   for (const mcp of mcps) {
     const config = object(mcp.effective?.config);
-    if (mcp.id === "noema") {
+    if (NOEMA_MCP_IDS.includes(mcp.id)) {
       const availability = config.url ? "available" : "unavailable";
       mcp.runtime = { state: availability, availability, running: Boolean(config.url), connected: null, observed: true };
     } else {
@@ -746,7 +849,7 @@ export function assertRunnableCapabilities(environment) {
       throw capabilityError(`Enabled ${capability.type} ${capability.id} is invalid: ${reason}`,
         `ERR_NOEMA_${capability.type.toUpperCase()}`, { capability: capability.id, type: capability.type, source: capability.source });
     }
-    if (capability.type === "mcp" && capability.id !== "noema"
+    if (capability.type === "mcp" && !NOEMA_MCP_IDS.includes(capability.id)
         && capability.runtime?.availability === "unavailable") {
       throw capabilityError(`Enabled MCP ${capability.id} is unavailable`, "ERR_NOEMA_MCP", { capability: capability.id });
     }

@@ -98,7 +98,10 @@ describe("native WorkNode Agenda", () => {
   test("completion preserves DAG, all prompts, outputs and the scientific outcome", () => {
     const { notebook, first } = fixture();
     const before = structuredClone(notebook);
-    const next = setResearchAgenda(notebook, first, { op: "complete" }).notebook;
+    // Pin the clock: completion stamps the day it happened, so asserting a
+    // literal date made this test fail once the date passed.
+    const completedAt = new Date(2026, 8, 16, 12, 0, 0);
+    const next = setResearchAgenda(notebook, first, { op: "complete" }, completedAt.getTime()).notebook;
     expect(next.cells[0].outputs).toEqual(before.cells[0].outputs);
     expect(next.cells[0].source).toContain("done: 2026-09-16");
     expect(next.metadata.noema_research.dependencies).toEqual(before.metadata.noema_research.dependencies);

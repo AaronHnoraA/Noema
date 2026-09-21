@@ -32,6 +32,7 @@ import {
   researchMeta,
   researchWorkNodeForCell,
   researchWorkNodeId,
+  researchWorkNodes,
   researchWorkNodeSummary,
   validateResearchNotebook,
 } from "./research-notebook.mjs";
@@ -184,6 +185,35 @@ function planCellSpecs(payload) {
   const plan = proposalDocument(payload, "plan");
   const cells = values(plan.cells).map((entry) => object(entry));
   return { plan, cells };
+}
+
+/**
+ * Describe whether a work block is resting on finished work.
+ * Returns the unfinished and regressed `depends` parents, and whether the
+ * block itself already claims to be done — the two things worth knowing
+ * before starting a Run that nothing else reports.
+ */
+function workReadiness(notebook, workNode) {
+  if (!workNode) return null;
+  const summary = researchWorkNodeSummary(notebook, workNode.id);
+  const pending = [];
+  const regressed = [];
+  for (const parentId of values(summary.depends)) {
+    const parent = researchWorkNodes(notebook).find((node) => node.id === parentId);
+    if (!parent || parent.kind !== "work") continue;
+    const state = valueString(parent.state);
+    if (state === "regressed") regressed.push(parentId);
+    else if (state !== "done" && state !== "dropped") pending.push(parentId);
+  }
+  const notices = [];
+  if (regressed.length) {
+    notices.push(`rests on ${regressed.length} regressed dependenc${regressed.length === 1 ? "y" : "ies"}`);
+  }
+  if (pending.length) {
+    notices.push(`rests on ${pending.length} unfinished dependenc${pending.length === 1 ? "y" : "ies"}`);
+  }
+  if (valueString(workNode.state) === "done") notices.push("already marked done");
+  return { pending, regressed, rerun: valueString(workNode.state) === "done", notices };
 }
 
 function proposedCellId(clientRequestId) {
@@ -1023,6 +1053,10 @@ export function createResearchRuntimeService({
         throw researchError("Document execution requires an existing work cell", 422, "ERR_RESEARCH_WORK_CELL");
       }
       checkDisclosure(cell, loaded.notebook);
+      // Advisory, never a gate. Building above unfinished work is a legitimate
+      // choice; building above it without noticing is not. A refusal here
+      // would be a tool deciding the order of someone else's work.
+      const readiness = workReadiness(loaded.notebook, workNode);
       const notebookMeta = researchMeta({ metadata: loaded.notebook.metadata });
       const workstreamId = valueString(notebookMeta.workstream_id);
       const notebookId = valueString(notebookMeta.notebook_id);
@@ -1052,6 +1086,7 @@ export function createResearchRuntimeService({
 	  }
       return {
         kind: "work-cell",
+        readiness,
         workstreamId,
         notebookId,
         cellId,
@@ -1804,6 +1839,9 @@ export function createResearchRuntimeService({
             name: valueString(route.sessionName?.name), parentName: valueString(route.sessionName?.parentName),
             rule: valueString(route.derivation?.rule), reason: valueString(route.derivation?.reason || route.reason),
             busy: Boolean(route.busy), rollover: valueString(route.compaction?.id) !== "",
+            // What the DAG says about starting this block now. Advisory: the
+            // Run is not blocked by any of it.
+            readiness: source.readiness || null,
           },
           context: contextItems.map((item) => ({
             ref: item.ref, resolvedUri: item.resolvedUri, mediaType: item.mediaType,

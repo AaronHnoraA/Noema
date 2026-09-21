@@ -146,9 +146,26 @@ func notifyRegistryObservers(name string, tool *Tool) {
 	}
 }
 
+// MCP 端点面。一个工具只属于一个面；registry 仍然只有一个，端点靠投影谓词区分。
+const (
+	SurfaceKnowledge = "knowledge"
+	SurfaceResearch  = "research"
+)
+
+// SurfaceForTool 返回 t 所属的端点面，空值按知识库处理。
+func SurfaceForTool(t *Tool) string {
+	if t == nil || strings.TrimSpace(t.Surface) == "" {
+		return SurfaceKnowledge
+	}
+	return strings.TrimSpace(t.Surface)
+}
+
 func register(t *Tool) {
 	if t.Source == "" {
 		t.Source = "native"
+	}
+	if t.Surface == "" {
+		t.Surface = SurfaceKnowledge
 	}
 	if t.CapabilityID == "" {
 		t.CapabilityID = BuildCapabilityID("native", "backend", t.Name)

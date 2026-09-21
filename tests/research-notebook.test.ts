@@ -16,11 +16,14 @@ import {
   readResearchNotebookFile,
   researchCellKind,
   researchGraphProjection,
+  researchRegressionTargets,
+  researchWorkNodeSummary,
   setResearchRelation,
   setResearchState,
   clearResearchOutputs,
   migrateResearchNotebookD023,
   migrateResearchNotebookFile,
+  upsertResearchRunOutput,
   upsertResearchRunResult,
   updateResearchCell,
   validateResearchNotebook,
@@ -300,6 +303,94 @@ describe("research notebook model", () => {
         file, expectedRevision: written.revision, actor: "emacs", cells: [],
       })).rejects.toMatchObject({ statusCode: 422 });
     });
+  });
+
+  test("validation warns about claims the document cannot support", () => {
+    // Mirrors `noema-research--claim-warnings' in Emacs. Structural corruption
+    // is refused; an unsupported claim is only noticed, so the notice can
+    // never become a gate people route around.
+    let notebook = createResearchNotebook({ title: "Claims" });
+    const add = (id: string, lineageParent?: string) => {
+      notebook = createResearchCell(notebook, { id, kind: "work", title: id, lineageParent }).notebook;
+      return researchWorkNodeSummary(notebook, id).id;
+    };
+    const base = add("c-base");
+    const above = add("c-above", "c-base");
+
+    notebook = setResearchState(notebook, base, { state: "done" }).notebook;
+    const codes = (book: any) =>
+      validateResearchNotebook(book).warnings.map((item: any) => item.code);
+    expect(codes(notebook)).toContain("done-without-basis");
+
+    // An outcome is a basis the document itself records.
+    notebook = setResearchState(notebook, base, { state: "done", outcome: "supported" }).notebook;
+    expect(codes(notebook)).not.toContain("done-without-basis");
+
+    // A done node above a regressed one is what the cascade exists to prevent,
+    // so a hand re-greened node is worth noticing.
+    notebook = setResearchState(notebook, above, { state: "done", outcome: "supported" }).notebook;
+    notebook = setResearchState(notebook, base, { state: "regressed", reason: "broke" }).notebook;
+    notebook = setResearchState(notebook, above, { state: "done", outcome: "supported" }).notebook;
+    expect(codes(notebook)).toContain("done-over-regressed");
+
+    // Active with nothing running, and done while the last Run failed.
+    notebook = setResearchState(notebook, above, { state: "active" }).notebook;
+    expect(codes(notebook)).toContain("active-without-run");
+    notebook = upsertResearchRunOutput(notebook, {
+      workId: above, runId: "run_1", agent: "codex", status: "failed", content: "no",
+    }).notebook;
+    notebook = setResearchState(notebook, above, { state: "done" }).notebook;
+    expect(codes(notebook)).toContain("done-run-mismatch");
+
+    // None of it is an error: the document stays writable.
+    expect(validateResearchNotebook(notebook).errors).toEqual([]);
+  });
+
+  test("a regression carries to the finished work below it", () => {
+    // Mirrors the Emacs fixture in test/noema-research-tests.el
+    // (`noema-research-test--regression-document'). Both sides must agree on
+    // which nodes a regression invalidates, or the same document means two
+    // different things depending on which path wrote it.
+    let notebook = createResearchNotebook({ title: "Regression" });
+    const add = (id: string, lineageParent?: string, depends?: string[]) => {
+      notebook = createResearchCell(notebook, {
+        id, kind: "work", title: id, lineageParent, depends,
+      }).notebook;
+      return researchWorkNodeSummary(notebook, id).id;
+    };
+    const root = add("c-root");
+    const lineageChild = add("c-lineage", "c-root");
+    const dependsChild = add("c-depends", undefined, [root]);
+    const grandchild = add("c-grand", "c-depends");
+    const running = add("c-running", "c-root");
+    const abandoned = add("c-abandoned", "c-root");
+
+    for (const id of [root, lineageChild, dependsChild, grandchild]) {
+      notebook = setResearchState(notebook, id, { state: "done" }).notebook;
+    }
+    notebook = setResearchState(notebook, running, { state: "active" }).notebook;
+    notebook = setResearchState(notebook, abandoned, { state: "dropped", reason: "superseded" }).notebook;
+
+    const targets = researchRegressionTargets(notebook, root);
+    expect(targets[0]).toBe(root);
+    for (const id of [lineageChild, dependsChild, grandchild]) expect(targets).toContain(id);
+    // In flight and abandoned work is untouched: a regression reopens finished
+    // claims, it does not restart everything.
+    expect(targets).not.toContain(running);
+    expect(targets).not.toContain(abandoned);
+
+    const broken = setResearchState(notebook, root, {
+      state: "regressed", reason: "lemma 4 no longer holds",
+    }).notebook;
+    const stateOf = (id: string) => researchWorkNodeSummary(broken, id).state;
+    for (const id of [root, lineageChild, dependsChild, grandchild]) {
+      expect(stateOf(id)).toBe("regressed");
+    }
+    expect(stateOf(running)).toBe("active");
+    expect(stateOf(abandoned)).toBe("dropped");
+    // What broke is recorded on the node that broke, not on everything it reached.
+    expect(workNode(broken, root).dropped_reason).toBe("lemma 4 no longer holds");
+    expect(workNode(broken, grandchild).dropped_reason).toBeUndefined();
   });
 
   test("a regression records what broke in the same reason slot", () => {

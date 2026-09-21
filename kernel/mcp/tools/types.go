@@ -55,6 +55,11 @@ type Tool struct {
 	OwnerName string `json:"ownerName,omitempty"`
 	// Runtime 描述执行位置：kernel、plugin-worker 或 mcp。
 	Runtime string `json:"runtime,omitempty"`
+	// Surface 决定工具出现在哪个 MCP 端点。知识库工具（document、search、block…）
+	// 与 AI 流程工具（research_*、artifact、proposal.create）是两类不同的能力，
+	// 混在一个 tools/list 里会让 agent 一次收到三十多个不相干的工具，项目也无法
+	// 只启用其中一半。空值按 SurfaceKnowledge 处理。
+	Surface string `json:"surface,omitempty"`
 	// ReadOnlyHint 仅在外部工具明确声明只读时为 true；未声明时按可能写入处理并要求确认。
 	ReadOnlyHint bool `json:"readOnlyHint,omitempty"`
 	// EffectScope 描述写操作影响范围，用于判断本地数据仓库快照是否具有回滚价值。
