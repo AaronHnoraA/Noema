@@ -128,11 +128,14 @@ Skills live in two places, and the split is about versioning, not taste:
 - `resources/skills/` — Skills that describe **Noema's own mechanisms**
   (`noema-work-dag`, `noema-elisp-api`). They ship with the code because they
   are only correct for the code they ship with.
-- `<NOEMA_ROOT>/public/README/Skills/` — the growable library, wired through
-  `NOEMA_GLOBAL_SKILLS` (defaulted by `my/noema-skills-directory` in
+- `<NOEMA_ROOT>/public/README/Skills/skills/` — the growable library, wired
+  through `NOEMA_GLOBAL_SKILLS` (defaulted by `my/noema-skills-directory` in
   AaronEmacs). Skills are knowledge: they live beside the notes, are versioned
   by the same git, found by the same search, and can be added to without a
-  Noema release.
+  Noema release. The library is laid out as a Portable Agent Plugin
+  (`plugin.json`, `mcp.json`, `skills/<id>/SKILL.md`, optional per-skill
+  `references/`, `assets/`, `scripts/`, `agents/openai.yaml`), so a skill from
+  another project drops in and this one is portable out.
 
 One convention for both, the portable one: `<kebab-id>/SKILL.md` with YAML
 `name` and `description`, so a skill from another project drops in unchanged.
