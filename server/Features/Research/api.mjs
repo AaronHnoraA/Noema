@@ -45,6 +45,7 @@ const METHODS = Object.freeze({
 	"artifact:read": "readArtifact",
 	"artifact:import": "importArtifact",
 	"artifact:links": "artifactLinks",
+	"source:changes": "sourceChanges",
 	"corpus:index": "indexArtifactCorpus",
 	"corpus:index-files": "indexArtifactFiles",
 	"corpus:search": "searchArtifactBlocks",

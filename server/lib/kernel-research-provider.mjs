@@ -146,6 +146,10 @@ export function createKernelResearchProvider({ baseUrl, fetchImpl = globalThis.f
       const data = await post("artifact/link/list", { root, workstreamId, notebookId, workNodeId, runId, limit });
       return Array.isArray(data.links) ? data.links : [];
     },
+    async sourceChanges({ root, workstreamId = "", notebookId = "", workNodeId = "", runId = "", limit = 200 }) {
+      const data = await post("source/changes", { root, workstreamId, notebookId, workNodeId, runId, limit });
+      return Array.isArray(data.sources) ? data.sources : [];
+    },
 	indexArtifactCorpus({ root, index }) {
 	  return post("corpus/index", { root, index });
 	},

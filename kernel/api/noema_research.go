@@ -556,6 +556,40 @@ func noemaResearchArtifactLinks(c *gin.Context) {
 	ret.Data = map[string]any{"links": links}
 }
 
+// noemaResearchSourceChanges answers "have the files this claim was verified
+// against moved?".  It only reports: a changed foundation is a judgement for
+// the person, not something a query should decide.
+func noemaResearchSourceChanges(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+	arg, ok := util.JsonArg(c, ret)
+	if !ok {
+		return
+	}
+	store, ok := noemaResearchStore(arg, ret)
+	if !ok {
+		return
+	}
+	var workstreamID, notebookID, workNodeID, runID string
+	var limit float64
+	if !util.ParseJsonArgs(arg, ret,
+		util.BindJsonArg("workstreamId", &workstreamID, false, false),
+		util.BindJsonArg("notebookId", &notebookID, false, false),
+		util.BindJsonArg("workNodeId", &workNodeID, false, false),
+		util.BindJsonArg("runId", &runID, false, false),
+		util.BindJsonArg("limit", &limit, false, false)) {
+		return
+	}
+	changes, err := store.SourceChanges(research.ArtifactLinkFilter{
+		WorkstreamID: workstreamID, NotebookID: notebookID, WorkNodeID: workNodeID, RunID: runID, Limit: int(limit),
+	})
+	if err != nil {
+		ret.Code, ret.Msg = -1, err.Error()
+		return
+	}
+	ret.Data = map[string]any{"sources": changes}
+}
+
 func noemaResearchCorpusIndex(c *gin.Context) {
 	ret := gulu.Ret.NewResult()
 	defer c.JSON(http.StatusOK, ret)

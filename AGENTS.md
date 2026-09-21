@@ -49,6 +49,13 @@ D-016/D-021/D-022 still govern hosting and the AI integration boundary.
   and belongs in a Skill. When adding a check, decide which of the three it is
   first; a timing rule enforced as a refusal teaches people to lie to the
   system.
+- **Two projections, two meanings of focus.** `noema-research-projection'
+  (Emacs, drives the Graph Board) keeps only the focus and its descendants;
+  `researchGraphProjection` (Node, rides on every notebook snapshot for the
+  web surface) also keeps the focus's ancestors and siblings. Both are
+  asserted by tests. This is a product decision nobody has made, not a bug to
+  quietly fix on one side: changing either changes what a person sees, so
+  decide first and move both sides and their tests together.
 - **Report, do not decide.** `SourceChanges` answers "have the files this
   claim was verified against moved?" from `artifact_links` and the
   content-addressed digests the Runs already wrote. It never changes a

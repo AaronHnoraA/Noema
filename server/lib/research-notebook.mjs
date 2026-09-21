@@ -1168,6 +1168,14 @@ export function researchGraphProjection(notebook, { focus = null, folds = [], de
   };
   const focusId = focus && nodes.has(focus) ? focus : null;
   const protectedIds = new Set(focusId ? [focusId, ...walk(focusId, parents).keys()] : []);
+  // NOTE: this lens deliberately differs from `noema-research-projection' in
+  // Emacs, which keeps only the focus and its descendants ("makes its node the
+  // root of the drawing ... nothing above or beside it"). This one also keeps
+  // the focus's ancestors and siblings, so the web surface shows where the
+  // focused node sits. Both behaviours are asserted by tests. They are two
+  // answers to "what does focus mean", not one of them being a bug -- do not
+  // unify them without deciding which the product wants, and update both
+  // sides plus their tests together when you do.
   let lens = null;
   if (focusId) {
     lens = new Set([...protectedIds, ...walk(focusId, children, depth).keys()]);

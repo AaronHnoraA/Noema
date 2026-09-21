@@ -204,6 +204,7 @@ func ServeAPI(ginServer *gin.Engine) {
 	ginServer.Handle("POST", "/api/noema/research/artifact/read", model.CheckAuth, noemaResearchArtifactRead)
 	ginServer.Handle("POST", "/api/noema/research/artifact/import", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, noemaResearchArtifactImport)
 	ginServer.Handle("POST", "/api/noema/research/artifact/link/list", model.CheckAuth, noemaResearchArtifactLinks)
+	ginServer.Handle("POST", "/api/noema/research/source/changes", model.CheckAuth, noemaResearchSourceChanges)
 	ginServer.Handle("POST", "/api/noema/research/corpus/index", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, noemaResearchCorpusIndex)
 	ginServer.Handle("POST", "/api/noema/research/corpus/index-files", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, noemaResearchCorpusIndexFiles)
 	ginServer.Handle("POST", "/api/noema/research/corpus/search", model.CheckAuth, noemaResearchCorpusSearch)

@@ -1554,7 +1554,13 @@ through the folded node.  FOCUS and every id in PROTECT, together with their
 ancestors, are never hidden by a fold.  FOCUS makes its node the root of the
 drawing: the lens keeps FOCUS and its lineage descendants up to DEPTH levels,
 and nothing above or beside it.  A fold on FOCUS itself is ignored, since
-focusing a node asks to see its branch."
+focusing a node asks to see its branch.
+
+The Node mirror `researchGraphProjection\=' answers focus differently: it also
+keeps the focus\='s ancestors and siblings, so the web surface shows where the
+focused node sits.  Both behaviours are asserted by tests; they are two
+answers to \"what does focus mean\", not one of them being a bug.  Do not
+unify them without deciding which the product wants."
   (let ((nodes (make-hash-table :test #'equal))
         (children (make-hash-table :test #'equal))
         (parents (make-hash-table :test #'equal))

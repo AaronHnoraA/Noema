@@ -115,6 +115,15 @@ The DAG never follows the cursor.  Command-Shift-Return (`s-S-<return>' or
   '((t :inherit shadow :slant italic))
   "Face for header decorations.")
 
+(defface noema-research-claim-warning-face
+  '((t :inherit warning))
+  "Face for the marker on a block whose claim the document does not support.")
+
+(defvar noema-research--decoration-warnings nil
+  "Entity id to claim warnings, bound while decorations refresh.
+Validation walks the whole document, so it runs once per refresh rather than
+once per block.  Unbound means the caller did not ask for claim markers.")
+
 (defvar-local noema-research--document nil
   "Research notebook document backing the current JuText buffer.")
 
@@ -673,13 +682,22 @@ the edit created."
     (let* ((kind (noema-research-cell-kind cell noema-research--document))
            (lineage (length (noema-research-cell-relation cell "lineage" noema-research--document)))
            (depends (length (noema-research-cell-relation cell "depends" noema-research--document)))
+           (warnings (and noema-research--decoration-warnings
+                          (gethash (noema-research-cell-work-node-id cell)
+                                   noema-research--decoration-warnings)))
            (parts (delq nil (list (noema-research-cell-state cell noema-research--document)
                                   (noema-research-cell-outcome cell noema-research--document)
                                   (and (equal kind "work")
                                        (when-let* ((status (noema-research--latest-run-status cell)))
                                          (concat "run:" status)))
                                   (and (> lineage 0) (format "↑%d" lineage))
-                                  (and (> depends 0) (format "⇠%d" depends))))))
+                                  (and (> depends 0) (format "⇠%d" depends))
+                                  ;; A claim the document cannot support is
+                                  ;; worth seeing while writing, not only when
+                                  ;; the Inspector is opened on that one node.
+                                  (when warnings
+                                    (propertize "⚠" 'face 'noema-research-claim-warning-face
+                                                'help-echo (string-join (reverse warnings) "\n")))))))
       (cond
        ((equal kind "note")
         (when-let* ((node (noema-research-work-node-for-cell noema-research--document cell)))
@@ -688,22 +706,42 @@ the edit created."
                               (noema-research-work-node-id node)))))
        (parts (concat "  · " (string-join parts " · ")))))))
 
+(defun noema-research--decorate-face (text)
+  "Return TEXT in the decoration face, keeping faces it already carries.
+The claim marker sets its own face; a blanket `propertize' would erase it."
+  (let ((faced (copy-sequence text)))
+    (add-face-text-property 0 (length faced) 'noema-research-decoration-face t faced)
+    faced))
+
+(defun noema-research--claim-warning-map (document)
+  "Return a hash of entity id to the claim warnings DOCUMENT reports."
+  (let ((map (make-hash-table :test #'equal)))
+    (dolist (entry (plist-get (noema-research-validate document) :warnings) map)
+      (when (car entry)
+        (puthash (car entry) (cons (cdr entry) (gethash (car entry) map)) map)))))
+
 (defun noema-research-mode--refresh-decorations ()
   "Refresh the header decorations of the current JuText buffer."
   (when noema-research--document
     (remove-overlays (point-min) (point-max) 'noema-research-decoration t)
-    (dolist (entry (noema-research--scan))
-      (let* ((id (plist-get entry :id))
-             (cell (noema-research-find-cell noema-research--document id))
-             (text (noema-research--decoration cell))
-             (session (noema-research--session-decoration cell)))
-        (when (or text session)
-          (let ((overlay (make-overlay (plist-get entry :header-end)
-                                       (plist-get entry :header-end))))
-            (overlay-put overlay 'noema-research-decoration t)
-            (overlay-put overlay 'after-string
-                         (concat (and text (propertize text 'face 'noema-research-decoration-face))
-                                 session))))))))
+    (let ((noema-research--decoration-warnings
+           (noema-research--claim-warning-map noema-research--document)))
+      (noema-research--refresh-decoration-overlays))))
+
+(defun noema-research--refresh-decoration-overlays ()
+  "Draw one decoration overlay per block of the current JuText buffer."
+  (dolist (entry (noema-research--scan))
+    (let* ((id (plist-get entry :id))
+           (cell (noema-research-find-cell noema-research--document id))
+           (text (noema-research--decoration cell))
+           (session (noema-research--session-decoration cell)))
+      (when (or text session)
+        (let ((overlay (make-overlay (plist-get entry :header-end)
+                                     (plist-get entry :header-end))))
+          (overlay-put overlay 'noema-research-decoration t)
+          (overlay-put overlay 'after-string
+                       (concat (and text (noema-research--decorate-face text))
+                               session)))))))
 
 ;;;; D-031 session routes shown on work blocks
 
@@ -2356,6 +2394,81 @@ With a prefix argument, also prompt for OUTCOME (empty clears it)."
                     (if (string-empty-p digest) ""
                       (format " · %.12s" digest))))))
 
+(defface noema-research-stale-face
+  '((t :inherit warning))
+  "Face for a source file that has moved since the claim was verified.")
+
+(defun noema-research--insert-source-change (change root)
+  "Insert one source CHANGE line, relative to ROOT."
+  (let* ((path (noema-research--string (noema-research--get change "path")))
+         (state (or (noema-research--string (noema-research--get change "state")) "unknown"))
+         (stale (not (equal state "unchanged")))
+         (absolute (and path (expand-file-name path root))))
+    (insert "  ")
+    (insert (propertize (format "%-9s " state)
+                        'face (and stale 'noema-research-stale-face)))
+    (if (and absolute (file-exists-p absolute))
+        (insert-text-button
+         path 'follow-link t
+         'help-echo "Visit the ordinary project file"
+         'action (lambda (_button) (find-file absolute)))
+      (insert (or path "?")))
+    (insert "\n")))
+
+(defun noema-research--load-inspector-sources
+    (buffer start-marker end-marker root notebook-id work-node-id)
+  "Load WORK-NODE-ID source staleness into BUFFER between two markers.
+Answers whether this claim was verified against the files that are there now.
+It only reports: what a changed foundation means is the person\='s judgement."
+  (if (not (and (fboundp 'my/noema-api-call)
+                (bound-and-true-p my/noema--ready)))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (let ((inhibit-read-only t))
+            (goto-char start-marker)
+            (delete-region start-marker end-marker)
+            (insert "Runtime index unavailable.\n"))))
+    (my/noema-api-call
+     "aaronnote:api:research:source:changes"
+     (vector (noema-research--table
+              "cwd" root "notebookId" notebook-id
+              "workNodeId" work-node-id "limit" 100))
+     (lambda (result error-object)
+       (when (buffer-live-p buffer)
+         (with-current-buffer buffer
+           (let ((inhibit-read-only t))
+             (goto-char start-marker)
+             (delete-region start-marker end-marker)
+             (cond
+              (error-object
+               (insert (format "Source state unavailable: %s\n"
+                               (or (noema-research--string
+                                    (and (hash-table-p error-object)
+                                         (gethash "message" error-object)))
+                                   "request failed"))))
+              (t
+               (let* ((sources (append (or (noema-research--get result "sources") []) nil))
+                      (changed (seq-remove
+                                (lambda (item)
+                                  (equal (noema-research--string
+                                          (noema-research--get item "state"))
+                                         "unchanged"))
+                                sources)))
+                 (cond
+                  ((null sources)
+                   (insert "No Run of this block recorded a source file.\n"))
+                  (changed
+                   (insert (propertize
+                            (format "%d of %d files moved since this was verified.\n\n"
+                                    (length changed) (length sources))
+                            'face 'noema-research-stale-face))
+                   (dolist (change sources)
+                     (noema-research--insert-source-change change root)))
+                  (t
+                   (insert (format "All %d recorded source files are unchanged.\n"
+                                   (length sources))))))))))))
+     20)))
+
 (defun noema-research--load-inspector-artifacts
     (buffer start-marker end-marker root notebook-id work-node-id)
   "Load WORK-NODE-ID artifact provenance into BUFFER between two markers."
@@ -2432,6 +2545,12 @@ With a prefix argument, also prompt for OUTCOME (empty clears it)."
             (when (member (car entry) (list id cell-id))
               (insert (format "%-16s %s\n" (if (eq kind :errors) "Error" "Warning")
                               (cdr entry))))))
+        (insert "\n" (propertize "Verified against" 'face 'bold) "\n\n")
+        (let ((start (copy-marker (point) nil)))
+          (insert "Checking whether the recorded sources still hold…\n")
+          (let ((end (copy-marker (point) t)))
+            (noema-research--load-inspector-sources
+             buffer start end root notebook-id id)))
         (insert "\n" (propertize "Artifacts" 'face 'bold) "\n\n")
         (let ((start (copy-marker (point) nil)))
           (insert "Loading WorkNode artifact provenance…\n")

@@ -2192,6 +2192,21 @@ export function createResearchRuntimeService({
 	  return { root, artifact };
 	},
 
+	// Which files a WorkNode's Runs touched have moved since they ran.  Report
+	// only: nothing here changes a WorkNode's state.
+	async sourceChanges(body = {}) {
+	  const root = await rootFor(body);
+	  const sources = await provider().sourceChanges({
+		root,
+		workstreamId: valueString(body.workstreamId || body.workstream_id),
+		notebookId: valueString(body.notebookId || body.notebook_id),
+		workNodeId: valueString(body.workNodeId || body.work_node_id),
+		runId: valueString(body.runId || body.run_id),
+		limit: Math.min(1000, Math.max(1, Number(body.limit) || 200)),
+	  });
+	  return { root, sources, changed: sources.filter((item) => item.state !== "unchanged").length };
+	},
+
 	async artifactLinks(body = {}) {
 	  const root = await rootFor(body);
 	  const links = await provider().artifactLinks({
