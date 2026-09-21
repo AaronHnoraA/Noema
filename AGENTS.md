@@ -128,7 +128,7 @@ Skills live in two places, and the split is about versioning, not taste:
 - `resources/skills/` — Skills that describe **Noema's own mechanisms**
   (`noema-work-dag`, `noema-elisp-api`). They ship with the code because they
   are only correct for the code they ship with.
-- `<NOEMA_ROOT>/public/Skills/` — the growable library, wired through
+- `<NOEMA_ROOT>/public/README/Skills/` — the growable library, wired through
   `NOEMA_GLOBAL_SKILLS` (defaulted by `my/noema-skills-directory` in
   AaronEmacs). Skills are knowledge: they live beside the notes, are versioned
   by the same git, found by the same search, and can be added to without a
