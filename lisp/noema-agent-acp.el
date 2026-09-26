@@ -227,8 +227,13 @@ process through this buffer-local name, so it must follow every rename."
     (setq-local shell-maker--buffer-name-override (buffer-name))))
 
 (defun noema-agent-acp--workspace-root (root)
-  "Normalize project ROOT for workspace identity."
-  (file-name-as-directory (expand-file-name (or root default-directory))))
+  "Normalize project ROOT for workspace identity.
+A logical /fs: spelling and the native one name the same project, so both
+normalize to the native path the Noema host uses."
+  (let ((root (file-name-as-directory (expand-file-name (or root default-directory)))))
+    (or (and (fboundp 'noema-project-client-path)
+             (noema-project-client-path root))
+        root)))
 
 (defun noema-agent-acp--tab-key (buffer)
   "Return agent BUFFER's stable tab key: coordinator, named, then retired."
@@ -834,6 +839,8 @@ to nil to leave such buffers exactly as upstream created them."
   :group 'noema-agent-session)
 
 (declare-function noema-project-root "noema-research" (&optional directory))
+(declare-function noema-project-client-path "noema-research" (path))
+(declare-function noema-project-workspace "noema-research" (root))
 (declare-function noema-agent-promote-bind-session-name "noema-agent-promote"
                   (buffer name &optional callback))
 (declare-function projectile-project-root "projectile" (&optional directory))
@@ -1374,7 +1381,10 @@ so it can be listed, switched to and given buffer context by name."
             ((or 'codex 'claude 'opencode)
              (unless config
                (user-error "No agent-shell configuration for %s" agent))
-             (noema-agent-acp-start :config config :directory root
+             (noema-agent-acp-start :config config
+                                    :directory (if (and root (require 'noema-research nil t))
+                                                   (noema-project-workspace root)
+                                                 root)
                                     :origin 'manual :focus t))
             (_ (user-error "Unsupported Noema agent: %s" agent)))))
     (when (noema-agent-acp-agent-buffer-p buffer)

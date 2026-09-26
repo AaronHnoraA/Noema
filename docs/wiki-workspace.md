@@ -108,6 +108,12 @@ namespace = "Mathematics"
 namespace_aliases = ["Math", "数学"]
 ```
 
+This manifest makes the directory a Wiki repository only. It is not a
+research Project: a vault's `.noema` documents belong to the nearest manifest
+with a `[project]` table, usually one per research topic inside the vault (see
+README, D-038). Adding `[project]` to the repository manifest makes the whole
+repository one Project when that is really wanted.
+
 A page can override the repository default without moving the Markdown file:
 
 ```text

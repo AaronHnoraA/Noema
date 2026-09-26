@@ -90,7 +90,42 @@ project/
 
 `.agent/` never replaces the authoritative `.noema`, Markdown or source files.
 
-`noema.toml` marks the project root. Pi, sessions, views and the wiki repository all use the nearest manifest above a file. Visiting a `.noema` never creates a project, because previews and programs visit files too. Creating a `.noema` outside any project, or running its first work block, asks where to create the manifest. The prompt proposes the enclosing `project.el` workspace root, or the file's own directory when there is none. Declining writes nothing. `M-x noema-project-enable` uses the same default.
+### Projects, repositories and workspaces (D-038)
+
+`noema.toml` can declare two independent things:
+
+```toml
+schema = 1
+repository_id = "019…"     # a Wiki repository: the Git sync unit
+[project]
+id = "019…"                 # a research Project: Runs, Sessions, Pi, .agent/
+workspace = "~/code/lce"    # optional: where its agents execute
+```
+
+A **repository** is how the Wiki syncs a vault with Git; registration writes
+its manifest automatically. A **Project** is the unit of research work and is
+not tied to Git: a vault holds as many Projects as it has research topics, a
+code repository can be one, and so can a plain directory. Only a `[project]`
+table makes one, so a vault's repository manifest never swallows the
+documents inside it. A manifest recorded before D-038 still counts when
+`.agent/state.sqlite` shows Runs beside it, and keeps its `repository_id` as
+the Project id.
+
+The Project of a file is the nearest ancestor whose manifest has `[project]`.
+Its **workspace** is where agents run, what `git.diff` shows and where Run file
+changes are detected; it defaults to the Project root and may be a code
+repository elsewhere (`M-x noema-project-set-workspace`). Context may name
+`file:path` (Project-relative) or `workspace:path`; nothing outside the two is
+readable.
+
+Visiting a `.noema` never creates a Project, because previews and programs
+visit files too. Creating a `.noema` outside any Project, or running its first
+work block, asks where to root it, offering the file's directory and its
+ancestors. Inside a code repository the repository root is proposed; inside a
+vault (a repository that already has a manifest) the file's own directory is.
+Declining writes nothing, and no Git configuration is touched: `.agent/`
+ignores itself. Paths reach the Noema host as native paths; a logical `/fs:`
+name is projected first, and one this machine cannot reach is refused.
 
 ## Emacs workflow
 

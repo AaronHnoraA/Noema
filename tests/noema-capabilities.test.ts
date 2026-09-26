@@ -22,7 +22,7 @@ async function withTree(run: (tree: { root: string; home: string; builtin: strin
   const builtin = join(parent, "builtin");
   try {
     await Promise.all([mkdir(root), mkdir(home), mkdir(builtin)]);
-    await writeFile(join(root, "noema.toml"), 'schema = 1\nrepository_id = "0199"\n');
+    await writeFile(join(root, "noema.toml"), 'schema = 1\n[project]\nid = "0199"\n');
     await run({ root, home, builtin });
   } finally {
     await rm(parent, { recursive: true, force: true });

@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { realpathSync, statSync } from "node:fs";
+import { isResearchProjectRootSync } from "./research-project.mjs";
 import {
   mkdir as nativeMkdir,
   readFile as nativeReadFile,
@@ -12,6 +13,8 @@ import { homedir } from "node:os";
 import { basename, delimiter, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createKernelRegistry, sweepOrphanKernels } from "../jupyter/kernel-registry.mjs";
 import { createServerRegistry } from "../jupyter/server-registry.mjs";
+import { createContentsFiles, jupyterContentsLocation } from "../jupyter/contents-files.mjs";
+import { createNotebookDebugAdapter } from "../jupyter/notebook-debug.mjs";
 import { defaultKernelSearchDirs, findKernelSpecs, findAttachableConnectionFiles, resolveAttachToken } from "../jupyter/kernel-finder.mjs";
 import { executeOnKernel, jupyterWidgetCommOpenP } from "../jupyter/execution-message-handler.mjs";
 import {
@@ -392,34 +395,42 @@ export function createJupyterCellService({
   const kernelspecCache = new Map();
   const files = {
     atomicWriteP(file) {
+      // ContentsManager owns persistence; no hidden temporary HTTP resource.
+      if (jupyterContentsLocation(file)) return true;
       return Boolean(remoteLogicalPath(file) && fileHost);
     },
     readFile(file, encoding) {
+      if (jupyterContentsLocation(file)) return contentsFiles.readFile(file, encoding);
       return remoteLogicalPath(file) && fileHost
         ? fileHost.readFile(file, encoding)
         : nativeReadFile(file, encoding);
     },
     writeFile(file, data, encoding) {
+      if (jupyterContentsLocation(file)) return contentsFiles.writeFile(file, data, encoding);
       return remoteLogicalPath(file) && fileHost
         ? fileHost.writeFile(file, data, encoding)
         : nativeWriteFile(file, data, encoding);
     },
     mkdir(file, options) {
+      if (jupyterContentsLocation(file)) return contentsFiles.mkdir(file, options);
       return remoteLogicalPath(file) && fileHost
         ? fileHost.mkdir(file, options)
         : nativeMkdir(file, options);
     },
     rename(from, to) {
+      if (jupyterContentsLocation(from)) return contentsFiles.rename(from, to);
       return remoteLogicalPath(from) && fileHost
         ? fileHost.rename(from, to)
         : nativeRename(from, to);
     },
     rm(file, options) {
+      if (jupyterContentsLocation(file)) return contentsFiles.rm(file, options);
       return remoteLogicalPath(file) && fileHost
         ? fileHost.rm(file, options)
         : nativeRm(file, options);
     },
     stat(file) {
+      if (jupyterContentsLocation(file)) return contentsFiles.stat(file);
       return remoteLogicalPath(file) && fileHost
         ? fileHost.stat(file)
         : nativeStat(file);
@@ -437,6 +448,8 @@ export function createJupyterCellService({
       })
     : null;
 
+  const contentsFiles = createContentsFiles({ servers });
+
   let cleanupTimer = null;
   let cleanupRunning = false;
   let registryPromise = null;
@@ -447,6 +460,7 @@ export function createJupyterCellService({
   // notebook metadata: choosing "No Kernel" is live manager state, while the
   // notebook keeps its last portable kernelspec.
   const documentSessions = new Map();
+  const notebookDebuggers = new Map();
   const documentSessionLimit = durationFromEnv("AARONNOTE_JUPYTER_MAX_DOCUMENT_SESSIONS", 512);
 
   /**
@@ -523,6 +537,8 @@ export function createJupyterCellService({
   }
 
   async function listKernelSpecs(file = "") {
+    const contents = jupyterContentsLocation(file);
+    if (contents) return await servers.listKernelSpecs(contents.serverId);
     const key = String(file || "local");
     const cached = kernelspecCache.get(key);
     if (cached && cached.expiresAt > Date.now()) return cached.value;
@@ -817,16 +833,20 @@ export function createJupyterCellService({
     const { noteFile, scriptFile, kernel, session, language, key } = runtimeForBody(body || {});
     const registry = await getRegistry();
     let record;
-    const serverTarget = parseServerKernelName(kernel);
+    const contents = jupyterContentsLocation(scriptFile || noteFile);
+    const serverTarget = parseServerKernelName(kernel)
+      || (contents && !kernel.startsWith("attach:")
+          ? { serverId: contents.serverId, kernelSpecName: kernel } : null);
     if (serverTarget) {
       if (!servers) throw error("No Jupyter servers are configured", 400);
       record = await registry.ensureServer(key, kernel, {
         ...serverTarget,
         // The session path is what the server shows in its own UI and what
-        // sets the kernel's working directory. Only the note's base name is
-        // used: the server has its own filesystem, and a client-side path
-        // would point at a directory that does not exist there.
-        path: `${basename(noteFile).replace(/\.[^.]*$/, "")}.ipynb`,
+        // sets the kernel's working directory. A Contents notebook has the
+        // exact server-relative path. Other storage placements supply only
+        // a basename, since their directories need not exist on the server.
+        path: contents?.serverId === serverTarget.serverId ? contents.path
+          : `${basename(noteFile).replace(/\.[^.]*$/, "")}.ipynb`,
         name: basename(noteFile),
       });
     } else if (kernel.startsWith("attach:")) {
@@ -858,17 +878,19 @@ export function createJupyterCellService({
 
   async function kernels(body = {}) {
     rejectResearchKernel(body, "list Jupyter kernels");
+    if (body.refresh === true) kernelspecCache.clear();
     const file = String(body?.file || "");
+    const contents = jupyterContentsLocation(file);
     const specs = await listKernelSpecs(file ? safeNoteFile(file, body) : "");
     const list = specs.map((entry) => ({
       name: entry.name,
       displayName: entry.spec.display_name || entry.name,
       language: entry.spec.language || "",
     }));
-    if (!list.some((item) => item.name === "lean4")) {
+    if (!contents && !list.some((item) => item.name === "lean4")) {
       list.push({ name: "lean4", displayName: "Lean 4", language: "lean4" });
     }
-    const attachable = kernelHost?.listConnections && file
+    const attachable = !body.includeConnections || contents ? [] : kernelHost?.listConnections && file
       ? await kernelHost.listConnections(safeNoteFile(file, body))
       : kernelHost ? [] : await findAttachableConnectionFiles(attachDirs);
     const attachableChoices = attachable.map((item) => ({
@@ -881,10 +903,11 @@ export function createJupyterCellService({
     // workspace and the Emacs header.  Keep the older grouped fields for API
     // compatibility, but do not make either UI reconstruct policy itself.
     const choices = [
-      ...list.map((item) => ({ ...item, kind: "start", group: "Kernel Specs" })),
+      ...list.map((item) => ({ ...item, kind: "start",
+        group: contents ? `Server: ${contents.serverId}` : "Kernel Specs" })),
       ...attachableChoices.map((item) => ({ ...item, kind: "start", group: "Attach" })),
       ...serverGroups.flatMap((server) => [
-        ...(server.kernels || []).map((item) => ({
+        ...(contents?.serverId === server.id ? [] : server.kernels || []).map((item) => ({
           ...item, kind: "start", group: `Server: ${server.displayName}`,
         })),
         ...(server.running || []).map((item) => ({
@@ -903,7 +926,8 @@ export function createJupyterCellService({
       ...choices.map((item) => ({
         ...item,
         value: item.name,
-        label: `Start · ${item.group} · ${item.displayName || item.name}  [${item.name}]`,
+        label: item.name.startsWith("attach:") ? `Connect · ${item.name.slice(7)}`
+          : `Start · ${item.group} · ${item.displayName || item.name}  [${item.name}]`,
       })),
       ...registry.list()
         .filter((record) => scriptFile && record.scriptFile === scriptFile && record.id)
@@ -927,6 +951,7 @@ export function createJupyterCellService({
       default: "python3",
       kernels: list.sort((a, b) => a.name.localeCompare(b.name)),
       attachable: attachableChoices,
+      supportsConnectionFiles: !contents,
       servers: serverGroups,
       choices,
       selections,
@@ -2107,7 +2132,8 @@ export function createJupyterCellService({
       const manifest = realpathSync(join(projectRoot, "noema.toml"));
       if (!inside(projectRoot, documentFile)
           || !inside(projectRoot, manifest)
-          || !statSync(manifest).isFile()) return "";
+          || !statSync(manifest).isFile()
+          || !isResearchProjectRootSync(projectRoot)) return "";
       return projectRoot;
     } catch {
       return "";
@@ -2667,6 +2693,71 @@ export function createJupyterCellService({
     return await scriptAction({ ...body, action: `run-${String(body?.mode || "current")}` });
   }
 
+  async function debugStart(body = {}) {
+    rejectResearchKernel(body, "debug a notebook");
+    const context = await managedDocument(body);
+    if (context.researchDocument) throw error("Work documents cannot use a Jupyter debugger", 400);
+    const cellId = String(body.cellId || "");
+    const codeCells = context.notebook.cells.filter(cell => cell.cell_type === "code");
+    const projection = Array.isArray(body.projection) ? body.projection : [];
+    const cells = codeCells.map(cell => {
+      const mapped = projection.find(item => item.id === cell.id);
+      const code = notebookSource(cell.source);
+      if (!mapped || mapped.code !== code || !Number.isSafeInteger(mapped.line) || mapped.line < 1) {
+        throw error("Notebook debug source is stale; save and start debugging again", 409);
+      }
+      return { id: cell.id, code, line: mapped.line };
+    });
+    if (!cells.some(cell => cell.id === cellId && cell.code.trim())) throw error("Select a nonempty code cell", 400);
+    for (let index = 1; index < cells.length; index += 1) {
+      const previous = cells[index - 1];
+      if (cells[index].line < previous.line + previous.code.split("\n").length) {
+        throw error("Notebook debug source ranges overlap", 400);
+      }
+    }
+    const { record, key } = await ensureKernel(managedBody(context));
+    if (notebookDebuggers.has(record.id)) throw error("This kernel already has a notebook debugger", 409);
+    const id = randomUUID();
+    const holder = { id, scriptFile: context.scriptFile, adapter: null };
+    notebookDebuggers.set(record.id, holder);
+    try {
+      const adapter = await createNotebookDebugAdapter({
+        kernel: record.kernel, info: record.kernelInfo, sourceFile: context.scriptFile,
+        cells, cellId, runByLine: body.runByLine === true,
+        execute: async () => {
+          const current = await managedDocument(body);
+          const currentCells = current.notebook.cells.filter(cell => cell.cell_type === "code");
+          if (currentCells.length !== cells.length || currentCells
+              .some((cell, index) => cells[index].id !== cell.id || cells[index].code !== notebookSource(cell.source))) {
+            throw error("Notebook changed while configuring the debugger; start again", 409);
+          }
+          try { return await executeScriptCell(managedBody(context, { cellId })); }
+          finally { await publishDocumentSession(context.scriptFile).catch(() => {}); }
+        },
+        interrupt: async () => (await getRegistry()).interrupt(key),
+        onClose: () => {
+          if (notebookDebuggers.get(record.id) === holder) notebookDebuggers.delete(record.id);
+          if (typeof publish === "function") {
+            try { publish("jupyter-debug-ended", { id, scriptFile: context.scriptFile }); } catch { /* host may be closing */ }
+          }
+        },
+      });
+      holder.adapter = adapter;
+      return { ok: true, id, host: adapter.host, port: adapter.port,
+        scriptFile: context.scriptFile, cellId, runByLine: body.runByLine === true };
+    } catch (err) {
+      if (notebookDebuggers.get(record.id) === holder) notebookDebuggers.delete(record.id);
+      throw err;
+    }
+  }
+
+  async function debugStop(body = {}) {
+    const holder = [...notebookDebuggers.values()].find(value => value.id === body.id);
+    await holder?.adapter?.close();
+    const snapshot = holder ? await publishDocumentSession(holder.scriptFile).catch(() => null) : null;
+    return { ok: true, snapshot };
+  }
+
   async function managedVariables(body = {}) {
     const context = body?.scriptFile ? await managedDocument(body) : null;
     if (context?.researchDocument) {
@@ -2677,6 +2768,7 @@ export function createJupyterCellService({
 
   async function shutdown() {
     cancelCleanupTimer();
+    await Promise.all([...notebookDebuggers.values()].map(value => value.adapter?.close()));
     // Release anything blocked on a prompt first: shutdownAll() sends
     // shutdown_request and waits, and a kernel parked in raw_input() will not
     // service it until stdin is answered.
@@ -2686,10 +2778,11 @@ export function createJupyterCellService({
     if (registryPromise) {
       const registry = await registryPromise;
       await registry.shutdownAll();
-      await servers?.forgetAll().catch(() => {});
       process.off("exit", onProcessExit);
       registrySync = null;
     }
+    // File browsing can initialize server managers without a kernel registry.
+    await servers?.forgetAll().catch(() => {});
   }
 
   /** Kernel connection info for a live kernel id, for the browser-facing WS bridge. Undefined if not live. */
@@ -2778,6 +2871,13 @@ export function createJupyterCellService({
     return { ok: true, serverId, path: String(model.path ?? path), lastModified: String(model.last_modified || "") };
   }
 
+  async function serverFile(body) {
+    try { return await contentsFiles.request(body || {}); }
+    catch (err) {
+      return { ok: false, error: { code: err.code || "EIO", message: String(err.message || "Contents request failed") } };
+    }
+  }
+
   /**
    * Serve a custom (non-core) ipywidgets RequireJS module asset requested at
    * `/jupyter/nbextensions/<relative>`. Scans the same search dirs kernelspecs
@@ -2826,6 +2926,8 @@ export function createJupyterCellService({
     documentSnapshot,
     documentMutate,
     documentExecute,
+    debugStart,
+    debugStop,
     managerSnapshot,
     scriptAction,
     sessionSelect,
@@ -2852,6 +2954,7 @@ export function createJupyterCellService({
     serverList,
     serverRead,
     serverWrite,
+    serverFile,
     resolveConnectionInfoById,
     resolveKernelChannelById,
     readNbextensionAsset,

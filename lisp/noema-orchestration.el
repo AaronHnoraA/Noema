@@ -24,7 +24,7 @@
 
 (declare-function my/noema-api-call "init-aaronnote" (channel args callback &optional timeout))
 (declare-function my/noema--ensure-server "init-aaronnote" (&optional callback))
-(declare-function noema-project-root "noema-research" (&optional directory))
+(declare-function noema-project-scope "noema-research" (path))
 (defvar my/noema--ready)
 
 (defgroup noema-orchestration nil
@@ -297,8 +297,9 @@ t tasks   j jobs   w workers   d delegations   e events   g refresh
   "Open the orchestration board of DIRECTORY's project."
   (interactive)
   (let* ((directory (or directory default-directory))
-         (root (or (and (require 'noema-research nil t) (noema-project-root directory))
-                   (file-name-as-directory (expand-file-name directory))))
+         (root (if (require 'noema-research nil t)
+                   (noema-project-scope directory)
+                 (file-name-as-directory (expand-file-name directory))))
          (buffer (get-buffer-create
                   (format "*Noema Orchestration: %s*"
                           (file-name-nondirectory (directory-file-name root))))))

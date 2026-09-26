@@ -820,7 +820,7 @@ The claim marker sets its own face; a blanket `propertize' would erase it."
       (when cell-ids
         (my/noema-api-call
          "aaronnote:api:research:session:resolve"
-         (vector `((file . ,(expand-file-name buffer-file-name)) (cwd . ,root)
+         (vector `((file . ,(noema-project-host-file buffer-file-name)) (cwd . ,root)
                    (notebook . ,preview)
                    (cellIds . ,(vconcat cell-ids))))
          (lambda (result error-object)
@@ -1240,12 +1240,15 @@ An empty work block is a valid sketch of the DAG; it just cannot run yet."
 
 (defun noema-research-notify-host (file reason)
   "Ask a running Noema host to reindex FILE because of REASON."
-  (when (and noema-research-sync-host file
-             (fboundp 'my/noema-api-call)
-             (bound-and-true-p my/noema--ready))
+  ;; The host indexes files on this machine; one it cannot reach has no
+  ;; index to refresh, so it is skipped rather than reported as missing.
+  (when-let* ((noema-research-sync-host)
+              (file (and file (noema-project-client-path file)))
+              ((fboundp 'my/noema-api-call))
+              ((bound-and-true-p my/noema--ready)))
     (my/noema-api-call
      "aaronnote:api:research:notebook:sync"
-     (vector (noema-research--table "file" (expand-file-name file)
+     (vector (noema-research--table "file" file
                                     "actor" "emacs"
                                     "reason" reason))
      (lambda (_result error-object)
@@ -1543,7 +1546,7 @@ context and the budget it has to fit into."
       (user-error "This document has no Noema host"))
     (my/noema-api-call
      "aaronnote:api:research:run:context-preview"
-     (vector `((file . ,(expand-file-name buffer-file-name)) (cwd . ,root)
+     (vector `((file . ,(noema-project-host-file buffer-file-name)) (cwd . ,root)
                (cellId . ,(noema-research-cell-id cell)) (notebook . ,document)
                ,@(when (boundp 'noema-agent-worker-context-rollover-ratio)
                    `((contextRolloverRatio . ,noema-agent-worker-context-rollover-ratio)))))
@@ -1652,7 +1655,7 @@ SNAPSHOT is ignored; the `.noema' file is the sole durable authority."
   (let* ((root (noema-research-repository-root buffer-file-name))
          (result (my/noema-jupyter-cell--api-sync
                   "aaronnote:api:research:notebook:migrate"
-                  `((file . ,(expand-file-name buffer-file-name))
+                  `((file . ,(noema-project-host-file buffer-file-name))
                     (cwd . ,root)) 120))
          (migrated (or (noema-research--get result "migrated")
                        (and (listp result) (alist-get 'migrated result)))))

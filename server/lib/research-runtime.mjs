@@ -36,6 +36,9 @@ import {
   researchWorkNodeSummary,
   validateResearchNotebook,
 } from "./research-notebook.mjs";
+import { findResearchProjectRoot, readProjectLayout } from "./research-project.mjs";
+
+export { findResearchProjectRoot };
 
 const CONTEXT_LIMIT_BYTES = 64 * 1024;
 const COMPACTION_CHECKPOINT_MAX_BYTES = 16 * 1024;
@@ -260,7 +263,12 @@ function pathIsInside(root, path) {
   return part === "" || (!part.startsWith(`..${sep}`) && part !== ".." && !isAbsolute(part));
 }
 
+// A Run may write into the Project and into its workspace; both are
+// snapshotted, keyed root-relative (D-038).  A workspace inside the root is
+// already covered by the root's walk.
 async function snapshotProjectFiles(root) {
+  const workspace = (await readProjectLayout(root)).workspace;
+  const starts = pathIsInside(root, workspace) ? [root] : [root, workspace];
   const snapshot = new Map();
   const walk = async (directory) => {
     if (snapshot.size >= RUN_ARTIFACT_MAX_FILES) return;
@@ -302,7 +310,7 @@ async function snapshotProjectFiles(root) {
     }
     await flush();
   };
-  await walk(root);
+  for (const start of starts) await walk(start);
   return snapshot;
 }
 
@@ -354,13 +362,18 @@ async function detectRunFileArtifacts({ root, run, before, provider }) {
   return { drafts, errors };
 }
 
-async function projectFile(root, value) {
+// A Project's files are those under its root or under its declared workspace
+// (D-038).  RELATIVE is always root-relative, so a workspace outside the root
+// yields `../` paths that the kernel's content-addressed links resolve alike.
+async function projectFile(root, value, { base = "root" } = {}) {
   const requested = String(value || "").trim();
   if (!requested) throw researchError("Context file reference is empty", 422, "ERR_RESEARCH_CONTEXT");
+  const layout = await readProjectLayout(root);
   const realRoot = await realpath(root);
-  const path = await realpath(resolve(root, requested));
-  if (!pathIsInside(realRoot, path)) {
-    throw researchError("Context file escapes the project", 403, "ERR_RESEARCH_CONTEXT");
+  const realWorkspace = await realpath(layout.workspace);
+  const path = await realpath(resolve(base === "workspace" ? layout.workspace : root, requested));
+  if (!pathIsInside(realRoot, path) && !pathIsInside(realWorkspace, path)) {
+    throw researchError("Context file escapes the project and its workspace", 403, "ERR_RESEARCH_CONTEXT");
   }
   return { path, root: realRoot, relative: relative(realRoot, path).split(sep).join("/") };
 }
@@ -373,11 +386,16 @@ async function projectDirectory(root, value) {
   return candidate.path;
 }
 
+// Where a Run's agent executes.  `executionTarget' is the only explicit
+// choice; `cwd' merely locates the Project, so without a target the Run goes
+// to the Project's workspace (D-038).
+async function executionTargetFor(root, body = {}) {
+  const explicit = valueString(body.executionTarget || body.execution_target);
+  return projectDirectory(root, explicit || (await readProjectLayout(root)).workspace);
+}
+
 async function projectIdentity(root) {
-  const manifest = await readFile(join(root, "noema.toml"), "utf8");
-  const match = /^\s*repository_id\s*=\s*["']([^"']+)["']\s*$/m.exec(manifest);
-  if (!match?.[1]?.trim()) throw researchError("noema.toml lacks repository_id", 422, "ERR_RESEARCH_PROJECT_ID");
-  return match[1].trim();
+  return (await readProjectLayout(root)).id;
 }
 
 function contentMediaType(path = "") {
@@ -487,16 +505,19 @@ function cellById(notebook, id) {
 }
 
 /** Describe where a new conversation runs: project root, document and block. */
-function projectContextItem({ root, source }) {
+function projectContextItem({ root, target, source }) {
   const title = valueString(researchWorkNodeForCell(source.notebook, source.cell)?.title);
+  const location = !target
+    ? [`- Project root and working directory: ${root}`]
+    : [`- Project root (research documents): ${root}`, `- Working directory (workspace): ${target}`];
   const lines = [
     "# Noema project",
     "",
-    `- Project root and working directory: ${root}`,
+    ...location,
     `- Research document: ${source.file} (${join(root, source.file)})`,
     `- Work block: ${title || source.cellId}`,
     "",
-    "Relative paths are relative to the project root. The research document holds the question and work this request belongs to; attached upstream blocks give its context.",
+    "Relative paths in the research document are relative to the project root. The research document holds the question and work this request belongs to; attached upstream blocks give its context.",
     "For local files, use filesystem tools from this working directory. Research document/cell IDs are not knowledge-base notebook IDs; use Noema knowledge tools only when the task needs that store.",
     "Attached context is already supplied: do not fetch it again unless missing or stale. Read only what the task requires; when asked to read all files, read each relevant file once, continuing at the next unread offset for paginated files.",
     "",
@@ -658,8 +679,10 @@ async function resolveContextItems({ root, notebook, sourceCell, declared, provi
       append(outputItem(ref.slice("result:".length), ref));
       continue;
     }
-    if (ref.startsWith("file:")) {
-      const file = await projectFile(root, ref.slice("file:".length));
+    if (ref.startsWith("file:") || ref.startsWith("workspace:")) {
+      const workspaceRef = ref.startsWith("workspace:");
+      const file = await projectFile(root, ref.slice((workspaceRef ? "workspace:" : "file:").length),
+        { base: workspaceRef ? "workspace" : "root" });
       append(asContextItem({
         ref,
         resolvedUri: `noema://file/${file.relative.split("/").map(encodeURIComponent).join("/")}`,
@@ -707,7 +730,7 @@ async function resolveContextItems({ root, notebook, sourceCell, declared, provi
     if (ref === "git.diff") {
       let stdout;
       try {
-        ({ stdout } = await execFileAsync("git", ["-C", root, "diff", "--no-ext-diff", "--binary", "HEAD", "--"], {
+        ({ stdout } = await execFileAsync("git", ["-C", (await readProjectLayout(root)).workspace, "diff", "--no-ext-diff", "--binary", "HEAD", "--"], {
           encoding: "buffer", maxBuffer: CONTEXT_LIMIT_BYTES + 1,
         }));
       } catch (error) {
@@ -787,30 +810,12 @@ async function existingDirectory(path) {
   }
 }
 
-export async function findResearchProjectRoot(start) {
-  let current = resolve(String(start || ""));
-  try {
-    if (!(await stat(current)).isDirectory()) current = dirname(current);
-  } catch {
-    throw researchError(`Research project path does not exist: ${current}`, 404, "ERR_RESEARCH_ROOT");
-  }
-  for (;;) {
-    try {
-      if ((await stat(join(current, "noema.toml"))).isFile()) return current;
-    } catch {
-      // Walk to the filesystem root.
-    }
-    const parent = dirname(current);
-    if (parent === current) {
-      throw researchError(`No noema.toml found above ${start}`, 404, "ERR_RESEARCH_ROOT");
-    }
-    current = parent;
-  }
-}
-
-export async function defaultResearchHistorySources(projectRoot, { userHome = homedir(), env = process.env } = {}) {
+export async function defaultResearchHistorySources(projectRoot, { userHome = homedir(), env = process.env, workspace = "" } = {}) {
   const candidates = [
     { kind: "agent-shell", path: join(projectRoot, ".agent-shell", "transcripts") },
+    // agent-shell writes transcripts under the directory its agent runs in.
+    ...(workspace && resolve(workspace) !== resolve(projectRoot)
+      ? [{ kind: "agent-shell", path: join(workspace, ".agent-shell", "transcripts") }] : []),
     { kind: "magent", path: join(userHome, ".config", "emacs", "var", "noema-interaction", "magent", "sessions") },
     { kind: "codex", path: join(String(env.CODEX_HOME || join(userHome, ".codex")), "sessions") },
     { kind: "claude", path: join(userHome, ".claude", "projects") },
@@ -1414,7 +1419,7 @@ export function createResearchRuntimeService({
 	}
 
 	async function prepareProjectFileRun(root, source, body) {
-	  const target = await projectDirectory(root, body.executionTarget || body.cwd || root);
+	  const target = await executionTargetFor(root, body);
 	  const capabilities = normalizeCapabilities(source.executor.capabilities, body.capabilities);
 	  if (valueString(capabilities.execute) === "deny") {
 		throw researchError("Project-file execution is denied by the capability policy", 403, "ERR_RESEARCH_CAPABILITY");
@@ -1703,7 +1708,7 @@ export function createResearchRuntimeService({
         });
       }
 	  if (source.kind === "project-file") return prepareProjectFileRun(root, source, body);
-      const target = await projectDirectory(root, body.executionTarget || body.cwd || root);
+      const target = await executionTargetFor(root, body);
       if (!dryRun && typeof runtimeProvider.expireLeases === "function") {
         // D-035: a worker that vanished (Emacs crashed or was killed) leaves an
         // expired lease.  Recover it before routing so its session is neither
@@ -1754,7 +1759,8 @@ export function createResearchRuntimeService({
         sessionId: route.sessionId, resolveKnowledgeNote });
       if (route.mode !== "continued" && source.kind === "work-cell") {
         // A new conversation knows nothing yet: say where it runs.
-        candidateContext.unshift(projectContextItem({ root, source }));
+        candidateContext.unshift(projectContextItem({
+          root, target: (await realpath(root)) === target ? "" : target, source }));
       }
       if (reconstruction?.item) {
         candidateContext.push(valueString(route.compaction?.id)
@@ -1964,7 +1970,7 @@ export function createResearchRuntimeService({
     async resolveSessions(body = {}) {
       const root = await rootFor(body);
       const file = valueString(body.file);
-      const target = await projectDirectory(root, body.executionTarget || body.cwd || root);
+      const target = await executionTargetFor(root, body);
       const loaded = await readResearchNotebookFile(file);
       if (body.notebook) {
         const validation = validateResearchNotebook(body.notebook);
@@ -3046,7 +3052,7 @@ export function createResearchRuntimeService({
       const root = await rootFor(body);
       const sources = Array.isArray(body.sources) && body.sources.length > 0
         ? body.sources
-        : await historySources(root);
+        : await historySources(root, { workspace: (await readProjectLayout(root)).workspace });
       if (sources.length === 0) {
         throw researchError("No native history directories are available", 404, "ERR_RESEARCH_HISTORY_SOURCE");
       }

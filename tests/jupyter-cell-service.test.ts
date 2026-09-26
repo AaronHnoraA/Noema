@@ -219,10 +219,15 @@ describe("jupyter cell service (no kernel)", () => {
     });
     try {
       const catalog = await service.kernels({ file: note });
+      expect(catalog.attachable).toEqual([]);
+      expect(catalog.selections.some((item: any) => item.value.startsWith("attach:"))).toBe(false);
       expect(catalog.choices).toEqual(expect.arrayContaining([
         expect.objectContaining({ kind: "start", name: "python3", group: "Kernel Specs" }),
         expect.objectContaining({ kind: "start", name: "lean4", group: "Kernel Specs" }),
-        expect.objectContaining({ kind: "start", name: "attach:kernel-remote.json", group: "Attach" }),
+      ]));
+      const connections = await service.kernels({ file: note, includeConnections: true });
+      expect(connections.selections).toEqual(expect.arrayContaining([
+        expect.objectContaining({ value: "attach:kernel-remote.json", label: "Connect · kernel-remote.json" }),
       ]));
       expect(catalog.selections).toEqual(expect.arrayContaining([
         expect.objectContaining({ kind: "none", value: "", label: "No Kernel" }),
@@ -504,7 +509,7 @@ describe("jupyter cell service (no kernel)", () => {
   test("keeps .noema out of every Jupyter kernel path", async () => {
     await withService(async ({ service, note }) => {
       const projectRoot = dirname(note);
-      await writeFile(join(projectRoot, "noema.toml"), 'schema = 1\nrepository_id = "test"\n', "utf8");
+      await writeFile(join(projectRoot, "noema.toml"), 'schema = 1\n[project]\nid = "test"\n', "utf8");
       const notebook = join(dirname(note), "research.noema");
       const workNode = {
         id: "wn_test",
@@ -553,6 +558,7 @@ describe("jupyter cell service (no kernel)", () => {
       await expect(service.readScriptCell({ scriptFile: notebook, cellId: "cell-code" })).rejects.toThrow(/Jupyter code cell/i);
       await expect(service.variables({ scriptFile: notebook })).rejects.toThrow(/kernel variables/i);
       await expect(service.restart({ scriptFile: notebook })).rejects.toThrow(/Jupyter kernel/i);
+      await expect(service.debugStart({ scriptFile: notebook, cellId: "cell-code" })).rejects.toThrow(/\.noema/i);
       await expect(service.sessionSelect({ scriptFile: notebook, kind: "start" })).rejects.toThrow(/Jupyter session/i);
       await expect(service.documentExecute({ scriptFile: notebook, cellId: "cell-code", mode: "all" }))
         .rejects.toThrow(/Cannot perform Jupyter action/);
@@ -577,7 +583,7 @@ describe("jupyter cell service (no kernel)", () => {
       workspaceRoot: globalRoot,
     });
     const notebook = join(projectRoot, "research.noema");
-    await writeFile(join(projectRoot, "noema.toml"), "schema = 1\n", "utf8");
+    await writeFile(join(projectRoot, "noema.toml"), "schema = 1\n[project]\nid = \"outside\"\n", "utf8");
     await writeFile(notebook, `${JSON.stringify({
       cells: [{
         cell_type: "code",

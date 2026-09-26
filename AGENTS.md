@@ -71,6 +71,32 @@ D-016/D-021/D-022 still govern hosting and the AI integration boundary.
 - Ordinary `.ipynb` and Markdown `@@cell` sidecars keep full Jupyter support.
 
 
+## D-038 Project model
+
+- `noema.toml` declares a Wiki **repository** (top-level `repository_id`,
+  written by Wiki registration into every vault Git repository) and,
+  independently, a research **Project** (a `[project]` table with `id` and an
+  optional `workspace`). Never treat a repository manifest as a Project: that
+  is how a whole vault used to become one research project.
+- One rule, two implementations kept in step: `noema-project-root` (Elisp)
+  and `server/lib/research-project.mjs` (Node) both take the nearest manifest
+  with `[project]`, or a pre-D-038 manifest with `.agent/state.sqlite` beside
+  it. Every other resolver delegates: grouping outside a Project uses
+  `noema-project-scope`, never its own fallback chain.
+- Paths reaching the host are native. Elisp projects `/fs:` names through
+  `noema-project-client-path`; Node refuses logical and TRAMP names with
+  `ERR_RESEARCH_ROOT` rather than guessing.
+- A Project is not a Git concept. Do not derive it from `project.el` except as
+  the *proposal* for a new one in a code repository, and do not edit a
+  person's `.gitignore`; `.agent/` ignores itself.
+- `cwd` in a request only locates the Project; send `root` when the caller
+  knows it. A Run executes in `executionTarget`, else the Project workspace.
+  Files are readable only under the root or the workspace, and artifact paths
+  stay root-relative (a workspace outside yields `../` paths, which the
+  kernel's content-addressed links resolve unchanged).
+- Resumed sessions start in their recorded `executionTarget`: an agent finds a
+  native conversation by the directory it ran in.
+
 ## Environment
 
 - Node is exactly `26.5.0`; npm is exactly `11.17.0`.
@@ -124,7 +150,7 @@ Every agent session is registered per project by `noema-agent-acp-adopt',
 whatever started it: a Run, the popup pool, `noema-agent-start' or a bare
 `M-x agent-shell'. `noema-agent-acp-start' records the entry point as
 `:origin'. Root resolution (`noema-agent-acp-project-root') is a query and
-must stay one: registering a session never creates a `noema.toml'. A project
+must stay one: registering a session never creates a Project. A project
 that already has one also gets a durable `session:promote' + `session:name:bind';
 elsewhere the session is listed from Emacs alone.
 

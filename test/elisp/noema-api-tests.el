@@ -16,7 +16,7 @@
      (unwind-protect
          (progn
            (with-temp-file (expand-file-name "noema.toml" ,root)
-             (insert "schema = 1\nrepository_id = \"test\"\n"))
+             (insert "schema = 1\n[project]\nid = \"test\"\n"))
            ,@body)
        (delete-directory ,root t))))
 

@@ -60,9 +60,7 @@ its project is not a Noema project, so it is listed here beside the rest.")
 
 (defun noema-sessions--project-root (&optional directory)
   "Return the project root (nearest `noema.toml') of DIRECTORY."
-  (let ((directory (or directory default-directory)))
-    (or (noema-project-root directory)
-        (file-name-as-directory (expand-file-name directory)))))
+  (noema-project-scope (or directory default-directory)))
 
 (defun noema-sessions--api (channel body callback)
   "Call Noema CHANNEL with BODY asynchronously; CALLBACK gets (RESULT ERROR)."
@@ -274,7 +272,12 @@ The kernel keeps the latest usage the agent reported for the bound Session."
          (agent (noema-sessions--string entry "agent"))
          (config (or (noema-agent-acp-config-for agent)
                      (user-error "No agent-shell configuration for %s" agent)))
-         (buffer (noema-agent-acp-start :config config :directory root :focus t
+         ;; An agent finds a native conversation by the directory it ran in.
+         (target (noema-sessions--string entry "executionTarget"))
+         (directory (if (and target (file-directory-p target))
+                        target
+                      (noema-project-workspace root)))
+         (buffer (noema-agent-acp-start :config config :directory directory :focus t
                                         :origin 'run
                                         :session-id (noema-sessions--string entry "nativeSessionId"))))
     (noema-agent-acp-mark-session-buffer buffer name agent root)
@@ -700,7 +703,8 @@ foreign session is registered like any other, so one prompt reaches them all."
   (let* ((agent (completing-read "Agent: " (noema-agent-acp-known-agents) nil t))
          (config (or (noema-agent-acp-config-for agent)
                      (user-error "No agent-shell configuration for %s" agent)))
-         (buffer (noema-agent-acp-start :config config :directory root
+         (buffer (noema-agent-acp-start :config config
+                                        :directory (noema-project-workspace root)
                                         :origin 'manual)))
     (noema-agent-acp-adopt buffer :agent agent :origin 'manual :root root)
     buffer))

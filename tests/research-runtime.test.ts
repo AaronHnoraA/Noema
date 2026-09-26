@@ -25,7 +25,7 @@ import {
 async function withProject<T>(run: (root: string) => Promise<T>): Promise<T> {
   const root = await mkdtemp(join(tmpdir(), "noema-runtime-"));
   try {
-    await writeFile(join(root, "noema.toml"), "schema = 1\nrepository_id = \"0199\"\n");
+    await writeFile(join(root, "noema.toml"), "schema = 1\n[project]\nid = \"0199\"\n");
     await mkdir(join(root, "nested"));
     return await run(root);
   } finally {

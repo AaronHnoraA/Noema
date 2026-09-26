@@ -12,6 +12,9 @@
 (require 'subr-x)
 (require 'noema-agent-acp)
 
+(declare-function noema-project-client-path "noema-research" (path))
+(declare-function noema-project-host-file "noema-research" (file))
+
 (declare-function my/noema-api-call "init-aaronnote"
                   (channel args callback &optional timeout))
 (defvar my/noema--ready)
@@ -43,12 +46,20 @@ the host."
            (config (noema-agent-acp-state-value buffer '(:agent-config)))
            (identifier (map-elt config :identifier))
            (session-title (noema-agent-acp-state-value buffer '(:session :title)))
-           (cwd (file-name-as-directory
-                 (expand-file-name (or root default-directory)))))
+           (client (lambda (directory)
+                     (let ((directory (file-name-as-directory (expand-file-name directory))))
+                       (or (and (fboundp 'noema-project-client-path)
+                                (noema-project-client-path directory))
+                           directory))))
+           ;; ROOT locates the Project; the Session records where its agent
+           ;; really runs, which a workspace may put outside ROOT (D-038).
+           (cwd (funcall client (or root default-directory)))
+           (target (funcall client default-directory)))
       (unless (and (stringp native-id) (not (string-empty-p native-id)))
         (user-error "The agent-shell session has no native session id yet"))
-      `((cwd . ,cwd)
-        (executionTarget . ,cwd)
+      `((root . ,cwd)
+        (cwd . ,cwd)
+        (executionTarget . ,target)
         (agent . ,(if identifier (symbol-name identifier) "agent-shell"))
         (transport . "acp")
         (nativeSessionId . ,native-id)
@@ -102,7 +113,10 @@ the host and never changes native history files."
     (user-error "Noema web-host is not ready"))
   (my/noema-api-call
    "aaronnote:api:research:history:index"
-   (vector `((cwd . ,(expand-file-name (or directory default-directory)))))
+   (vector `((cwd . ,(let ((directory (or directory default-directory)))
+                        (if (fboundp 'noema-project-host-file)
+                            (noema-project-host-file directory)
+                          (expand-file-name directory))))))
    (lambda (result error-object)
      (if error-object
          (message "Noema history indexing failed: %s"

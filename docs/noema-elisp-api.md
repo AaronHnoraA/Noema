@@ -12,8 +12,12 @@ These do not start external work:
 | Function | Result |
 |---|---|
 | `noema-current-project` | containing project root for a path or buffer |
-| `noema-project-root` | nearest `noema.toml` root above a path, or nil; never writes |
-| `noema-project-ensure` | that root, or one created after the user confirms the proposed workspace root |
+| `noema-project-root` | nearest Project root (a `noema.toml` with `[project]`) above a path, native even for `/fs:` input, or nil; never writes |
+| `noema-project-scope` | that root, else the path's own directory: the one key for state kept outside a Project |
+| `noema-project-ensure` | that root, or one created after the user picks it among the file's directory and ancestors |
+| `noema-project-workspace` | directory the Project's agents execute in; defaults to the root |
+| `noema-project-set-workspace` | declare or clear that workspace |
+| `noema-project-client-path` | a path as the Noema host sees it, or nil when this machine cannot reach it |
 | `noema-current-document` | current semantic WorkDocument |
 | `noema-current-cell` | Cell at point |
 | `noema-current-node` | WorkNode at point |

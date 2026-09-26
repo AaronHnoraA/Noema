@@ -28,6 +28,9 @@ export interface JupyterCellServiceOptions {
 }
 
 export interface JupyterCellService {
+  debugStart(body?: Record<string, unknown>): Promise<Record<string, any>>;
+  debugStop(body?: Record<string, unknown>): Promise<Record<string, any>>;
+  serverFile(body?: Record<string, unknown>): Promise<Record<string, any>>;
   execute(body?: Record<string, unknown>): Promise<Record<string, any>>;
   kernels(body?: Record<string, unknown>): Promise<Record<string, any>>;
   documentSnapshot(body?: Record<string, unknown>): Promise<Record<string, any>>;

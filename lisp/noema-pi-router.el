@@ -167,8 +167,7 @@ export default function (pi: any) {
   "Return the normalized project root that owns Pi for DIRECTORY.
 Like `noema-research-repository-root', the nearest `noema.toml' wins;
 otherwise DIRECTORY itself is the root."
-  (or (noema-project-root directory)
-      (file-name-as-directory (expand-file-name directory))))
+  (noema-project-scope directory))
 
 ;;;###autoload
 (defun noema-pi-project-root (&optional directory)

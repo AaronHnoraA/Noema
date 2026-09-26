@@ -14,6 +14,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'noema-agent-acp)
+(require 'noema-research)
 (require 'magent-ledger)
 (require 'magent-runtime-queue)
 
@@ -632,7 +633,8 @@ resynced too; otherwise its next save would ask about an external change."
   "Refresh source and graph projections when WORKER changes durable state."
   (when-let* ((source (noema-agent-worker--value (noema-agent-worker-spec worker) "source"))
               (file (noema-agent-worker--string source "file"))
-              (buffer (find-buffer-visiting (expand-file-name file (noema-agent-worker-root worker)))))
+              (buffer (noema-agent-worker--file-buffer
+                       (expand-file-name file (noema-agent-worker-root worker)))))
     (with-current-buffer buffer
       (when (fboundp 'noema-research--schedule-session-routes)
         (noema-research--schedule-session-routes)))
@@ -640,10 +642,21 @@ resynced too; otherwise its next save would ask about an external change."
                 ((eq (buffer-local-value 'noema-research-graph--source graph) buffer)))
       (with-current-buffer graph (noema-research-graph-refresh-runs)))))
 
+(defun noema-agent-worker--file-buffer (file)
+  "Return the live buffer visiting native FILE, whatever its spelling.
+Run paths are native; the buffer may visit the logical /fs: name of the same
+file."
+  (let ((file (expand-file-name file)))
+    (or (find-buffer-visiting file)
+        (seq-find (lambda (buffer)
+                    (when-let* ((name (buffer-local-value 'buffer-file-name buffer)))
+                      (equal (noema-project-client-path name) file)))
+                  (buffer-list)))))
+
 (defun noema-agent-worker--resync-file-buffer (file)
   "Merge canonical outputs from FILE into its live research buffer, if any."
   (when-let* ((file (and (stringp file) (expand-file-name file)))
-	      (buffer (find-buffer-visiting file)))
+	      (buffer (noema-agent-worker--file-buffer file)))
     (with-current-buffer buffer
       (when (and (derived-mode-p 'noema-research-mode)
                  (fboundp 'noema-research-merge-disk-outputs))
@@ -1311,7 +1324,8 @@ The kernel already recorded the cancellation, so this is not a failure."
       (user-error "ACP session initialization produced no native session id"))
     (noema-agent-worker--api
      "aaronnote:api:research:session:promote"
-     `((cwd . ,(noema-agent-worker-target worker))
+     `((root . ,(noema-agent-worker-root worker))
+       (cwd . ,(noema-agent-worker-root worker))
        (executionTarget . ,(noema-agent-worker-target worker))
        (agent . ,(noema-agent-worker-agent worker))
        (transport . "acp") (nativeSessionId . ,native)
@@ -1663,10 +1677,15 @@ work DAG.  No ACP prompt is sent until its frozen RunSpec is stored."
           (policy (completing-read "Session policy (empty = default): " '("" "continue" "fork" "fresh") nil t)))
      (list file cell-id policy
            (when (equal policy "fork") (read-string "Parent Noema session id: ")))))
-  (let ((target (expand-file-name default-directory)))
+  ;; The host runs on this machine: every path it receives is native, never
+  ;; a logical /fs: name.  `cwd' only locates the Project; the Run executes
+  ;; in its workspace unless a target is given (D-038).
+  (let* ((local (or (noema-project-client-path file)
+                    (user-error "Noema cannot reach %s from this machine" file)))
+         (target (noema-project-scope local)))
     (noema-agent-worker--enqueue-preparation
      target
-     `((file . ,(expand-file-name file)) (cellId . ,cell-id) (cwd . ,target)
+     `((file . ,local) (cellId . ,cell-id) (root . ,target) (cwd . ,target)
        ;; The same ratio that raises the context warning rolls the
        ;; conversation over to its Handoff before the next Run (D-036).
        (contextRolloverRatio . ,noema-agent-worker-context-rollover-ratio)
@@ -1713,7 +1732,7 @@ When RESULT froze a Run, record its cancellation so the document shows it."
 A running Run is cancelled over ACP; a queued execution is dropped; one
 whose RunSpec is being frozen is cancelled as soon as it exists.  Return
 `run', `queued', `preparing', or nil when the cell has no execution."
-  (let ((file (expand-file-name file)))
+  (let ((file (or (noema-project-client-path file) (expand-file-name file))))
     (if-let* ((worker (seq-find (lambda (worker)
                                   (and (not (noema-agent-worker-terminal worker))
                                        (noema-agent-worker--run-cell-p worker file cell-id)))
@@ -1882,7 +1901,7 @@ latest durable handoff as explicit context."
 Registered artifacts and durable session state are never deleted."
   (interactive)
   (let ((root (or root
-		  (locate-dominating-file default-directory "noema.toml")
+		  (noema-project-root default-directory)
 		  (user-error "No containing Noema project"))))
     (noema-agent-worker--api
      "aaronnote:api:research:cache:maintain"
@@ -1927,7 +1946,7 @@ below.  A document nobody has open is visited and saved."
     (unless (and file node-id state)
       (error "worknode.state lacks file, workNodeId or state"))
     (let* ((path (expand-file-name file root))
-           (visiting (find-buffer-visiting path))
+           (visiting (noema-agent-worker--file-buffer path))
            (buffer (or visiting (find-file-noselect path))))
       (with-current-buffer buffer
         (unless (derived-mode-p 'noema-research-mode)
@@ -2011,10 +2030,12 @@ an idle session's agent process and keeps its name and history."
                                    '("" "continue" "fork" "fresh") nil t)))
      (list file policy
            (when (equal policy "fork") (read-string "Parent Noema session id: ")))))
-  (let ((target (expand-file-name default-directory)))
+  (let* ((local (or (noema-project-client-path file)
+                    (user-error "Noema cannot reach %s from this machine" file)))
+         (target (noema-project-scope local)))
     (noema-agent-worker--enqueue-preparation
      target
-     `((promptFile . ,(expand-file-name file)) (cwd . ,target)
+     `((promptFile . ,local) (root . ,target) (cwd . ,target)
        ,@(when (and session-policy (not (string-empty-p session-policy)))
            `((sessionPolicy . ,session-policy)))
        ,@(when (and parent-session-id (not (string-empty-p parent-session-id)))

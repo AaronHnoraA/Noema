@@ -548,7 +548,7 @@ describe("research notebook files", () => {
 
   test("the service writes, indexes, and reconciles stale indexes", async () => {
     await withTempDir(async (dir) => {
-      await writeFile(join(dir, "noema.toml"), "schema = 1\nrepository_id = \"019fb75f-96ce-733d-8d29-0e1555a1cba6\"\n");
+      await writeFile(join(dir, "noema.toml"), "schema = 1\n[project]\nid = \"019fb75f-96ce-733d-8d29-0e1555a1cba6\"\n");
       const calls: any[] = [];
       let stale = false;
       const indexer = {

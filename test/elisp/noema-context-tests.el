@@ -203,7 +203,7 @@ that machine cannot reach is refused rather than sent as a dead path."
           (should (equal (noema-agent-acp-project-root root)
                          (noema-agent-acp--workspace-root root)))
           (should-not (file-exists-p (expand-file-name "noema.toml" root)))
-          (with-temp-file (expand-file-name "noema.toml" root) (insert "\n"))
+          (with-temp-file (expand-file-name "noema.toml" root) (insert "[project]\nid = \"t\"\n"))
           (let ((nested (expand-file-name "deep/deeper/" root)))
             (make-directory nested t)
             (should (equal (noema-agent-acp-project-root nested)

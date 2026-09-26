@@ -16,6 +16,7 @@ import { notebookSource, parseNotebook, serializeNotebook } from "./jupyter-note
 import { extractWorkAgendaDirective, replaceWorkAgendaDirective, validateWorkAgenda } from "../../shared/work-agenda.mjs";
 import { formatDateValue, normalizeDateValue } from "../../shared/planning-values.mjs";
 import { parseResearchDirectives } from "./research-directives.mjs";
+import { isResearchProjectRootSync } from "./research-project.mjs";
 
 export const RESEARCH_SCHEMA = "noema.work-document/2";
 export const LEGACY_RESEARCH_SCHEMA = "noema.research-notebook/1";
@@ -1382,14 +1383,12 @@ export async function migrateResearchNotebookFile(file, { backupSuffix = ".pre-d
   };
 }
 
+// The research index lives with the Project (D-038): a Wiki repository
+// manifest alone does not claim the document.
 export async function findResearchRepositoryRoot(file) {
   let dir = dirname(assertResearchFile(file));
   for (;;) {
-    try {
-      if ((await stat(join(dir, "noema.toml"))).isFile()) return dir;
-    } catch {
-      // keep walking upward
-    }
+    if (isResearchProjectRootSync(dir)) return dir;
     const parent = dirname(dir);
     if (parent === dir) return null;
     dir = parent;

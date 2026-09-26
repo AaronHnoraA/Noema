@@ -24,6 +24,8 @@
 (defvar-local noema-agent-takeover--intervention-id nil)
 (defvar-local noema-agent-takeover--intervention-version nil)
 (defvar-local noema-agent-takeover--root nil)
+(defvar-local noema-agent-takeover--directory nil
+  "Directory the taken-over agent ran in; the TUI and its handback resume there.")
 (defvar-local noema-agent-takeover--native-session-id nil)
 (defvar-local noema-agent-takeover--session-id nil)
 (defvar-local noema-agent-takeover--agent-config nil)
@@ -51,6 +53,7 @@ REASON is stored in the durable handback event."
       (unless noema-agent-takeover--handback-started
         (setq noema-agent-takeover--handback-started t)
         (let ((root noema-agent-takeover--root)
+              (directory (or noema-agent-takeover--directory noema-agent-takeover--root))
               (intervention-id noema-agent-takeover--intervention-id)
               (version noema-agent-takeover--intervention-version)
               (native-id noema-agent-takeover--native-session-id)
@@ -72,10 +75,10 @@ REASON is stored in the durable handback event."
 		 (with-current-buffer buffer
 		   (setq noema-agent-takeover--intervention-id nil)))
                (when (and restart config native-id)
-                 (let* ((default-directory root)
+                 (let* ((default-directory directory)
 		 (resumed
 			 (noema-agent-acp-start
-                          :config config :directory root :session-id native-id
+                          :config config :directory directory :session-id native-id
                           :origin 'takeover)))
 		   (when (buffer-live-p resumed)
 		     (with-current-buffer resumed
@@ -114,6 +117,13 @@ REASON is stored in the durable handback event."
          (id (noema-agent-takeover--value intervention "id"))
          (version (noema-agent-takeover--value intervention "version"))
          (root (noema-agent-takeover--value result "root"))
+         ;; The agent finds its conversation by the directory it ran in,
+         ;; which is the Project's workspace, not necessarily its root.
+         (directory (file-name-as-directory
+                     (or (noema-agent-takeover--value session "executionTarget")
+                         (and (buffer-live-p origin)
+                              (buffer-local-value 'default-directory origin))
+                         root)))
 	 (session-id (noema-agent-takeover--value session "id"))
          (native-id (noema-agent-takeover--value session "nativeSessionId"))
          (config (and (buffer-live-p origin)
@@ -126,7 +136,7 @@ REASON is stored in the durable handback event."
     (require 'vterm)
     (when (buffer-live-p origin)
       (noema-agent-acp-shutdown origin))
-    (let* ((default-directory (file-name-as-directory root))
+    (let* ((default-directory directory)
            (vterm-shell (mapconcat #'shell-quote-argument command " "))
            (vterm-kill-buffer-on-exit nil)
            (buffer (vterm (generate-new-buffer-name (format "*noema-takeover:%s*" id)))))
@@ -134,6 +144,7 @@ REASON is stored in the durable handback event."
         (setq-local noema-agent-takeover--intervention-id id
                     noema-agent-takeover--intervention-version version
                     noema-agent-takeover--root root
+                    noema-agent-takeover--directory directory
 		    noema-agent-takeover--session-id session-id
                     noema-agent-takeover--native-session-id native-id
                     noema-agent-takeover--agent-config config
@@ -151,7 +162,10 @@ REASON is stored in the durable handback event."
   (unless (and (derived-mode-p 'agent-shell-mode) noema-agent-promote--session-id)
     (user-error "Current agent-shell buffer is not attached to a Noema Session"))
   (let ((origin (current-buffer))
-        (root (expand-file-name default-directory))
+        ;; The Session belongs to the Project the buffer was registered under;
+        ;; the agent's own directory may be a workspace outside it.
+        (root (or (bound-and-true-p noema-agent-acp-session-root)
+                  (expand-file-name default-directory)))
         (session-id noema-agent-promote--session-id))
     (my/noema-api-call
      "aaronnote:api:research:session:takeover"

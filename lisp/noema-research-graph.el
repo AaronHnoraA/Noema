@@ -2112,7 +2112,7 @@ applied last.  A new selection or a new layout is scrolled into view."
       (when root
         (my/noema-api-call
          "aaronnote:api:research:events:list"
-         (vector `((file . ,(expand-file-name file))
+         (vector `((file . ,(noema-project-host-file file))
                    (cwd . ,root) (notebookId . ,notebook-id)
                    ;; One newest event per WorkNode.  Paging from seq 0 returned
                    ;; the oldest events, so long notebooks showed stale activity.

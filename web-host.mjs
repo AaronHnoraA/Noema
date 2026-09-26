@@ -635,8 +635,8 @@ const projectedJupyterCell = hostMode === "server" ? null : createJupyterCellSer
   // Noema-owned document/session authority.
   publish: (event, payload) => {
     broadcast(event, payload);
-    if (event === "jupyter-session") {
-      gatewayNotify("aaronnote.event", { type: "jupyter-session", payload });
+    if (event === "jupyter-session" || event === "jupyter-debug-ended") {
+      gatewayNotify("aaronnote.event", { type: event, payload });
     }
   },
   fileHost: hostMode === "emacs" ? {
@@ -685,7 +685,7 @@ const projectedJupyterCell = hostMode === "server" ? null : createJupyterCellSer
     },
     async listConnections(file) {
       const result = await gatewayRequest(
-        "aaronnote.jupyter.kernels", { file }, 30_000,
+        "aaronnote.jupyter.kernels", { file, includeConnections: true }, 30_000,
       );
       return Array.isArray(result?.connections) ? result.connections : [];
     },

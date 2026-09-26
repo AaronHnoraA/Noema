@@ -1720,6 +1720,206 @@ and FILE no longer has that revision."
 
 ;;;; Repository state
 
+;; D-038.  `noema.toml' may declare a Wiki repository (top-level
+;; `repository_id', the Git sync unit that Wiki registration writes into every
+;; vault repository) and, independently, a research Project (a `[project]'
+;; table).  Only the second scopes Runs, Sessions, Pi and `.agent/'.  A
+;; Project need not be a Git repository, a vault may hold several, and its
+;; agents may execute in a `workspace' outside it.  The same rules are
+;; implemented by `server/lib/research-project.mjs'.
+
+(defconst noema-project-manifest "noema.toml"
+  "File name of the manifest that declares repositories and Projects.")
+
+(declare-function remote-client-file-name "remote-fs" (file-name &optional adapter))
+
+(defun noema-project-client-path (path)
+  "Return PATH as a native path on this machine, or nil.
+The Noema host runs here, so every path handed to it must be one this
+machine's processes can open.  A logical /fs: name is projected through the
+host's file routing; a name whose files are not reachable here yields nil."
+  (let ((path (expand-file-name path)))
+    (cond
+     ((string-prefix-p "/fs:" path)
+      (when-let* (((fboundp 'remote-client-file-name))
+                  (client (ignore-errors (remote-client-file-name path)))
+                  ((not (string-prefix-p "/fs:" client)))
+                  ((not (file-remote-p client))))
+        (if (directory-name-p path) (file-name-as-directory client) client)))
+     ;; A TRAMP name is an Emacs compatibility input, never a host path.
+     ((file-remote-p path) nil)
+     (t path))))
+
+(defun noema-project-host-file (file)
+  "Return FILE as the path to send to the Noema host.
+That is its native spelling when this machine can reach it; otherwise FILE
+unchanged, so the host reports the file it could not open."
+  (or (noema-project-client-path file) (expand-file-name file)))
+
+(defun noema-project--directory (path)
+  "Return PATH itself when it is a directory, else its parent directory."
+  (let ((path (expand-file-name path)))
+    (if (file-directory-p path)
+        (file-name-as-directory path)
+      (file-name-directory path))))
+
+(defun noema-project--toml-string (raw)
+  "Return the TOML basic or literal string at the start of RAW, or nil."
+  (let ((text (string-trim (or raw ""))))
+    (cond
+     ((string-match "\\`\"\\(\\(?:[^\"\\\\]\\|\\\\.\\)*\\)\"" text)
+      (replace-regexp-in-string "\\\\\\([\"\\\\]\\)" "\\1" (match-string 1 text)))
+     ((string-match "\\`'\\([^']*\\)'" text)
+      (match-string 1 text)))))
+
+(defun noema-project--parse-manifest (text)
+  "Parse the subset of manifest TEXT that the Project model reads.
+Return a plist with :repository-id, :project-p, :project-id and :workspace."
+  (let ((table "") top project project-p)
+    (dolist (line (split-string (or text "") "\r?\n"))
+      (cond
+       ((string-match "\\`[ \t]*\\[[ \t]*\\([^]]+?\\)[ \t]*\\][ \t]*\\(?:#.*\\)?\\'" line)
+        (setq table (match-string 1 line))
+        (when (equal table "project") (setq project-p t)))
+       ((string-match "\\`[ \t]*\\([A-Za-z0-9_-]+\\)[ \t]*=[ \t]*\\(.+?\\)[ \t]*\\'" line)
+        (let ((pair (cons (match-string 1 line) (match-string 2 line))))
+          (cond ((equal table "") (push pair top))
+                ((equal table "project") (push pair project)))))))
+    (list :repository-id (noema-project--toml-string (cdr (assoc "repository_id" top)))
+          :project-p project-p
+          :project-id (noema-project--toml-string (cdr (assoc "id" project)))
+          :workspace (noema-project--toml-string (cdr (assoc "workspace" project))))))
+
+(defun noema-project--manifest (directory)
+  "Return the parsed manifest in DIRECTORY, or nil when it has none."
+  (let ((file (expand-file-name noema-project-manifest directory)))
+    (when (file-regular-p file)
+      (noema-project--parse-manifest
+       (with-temp-buffer
+         (let ((coding-system-for-read 'utf-8-unix))
+           (insert-file-contents file))
+         (buffer-string))))))
+
+(defun noema-project--legacy-p (directory)
+  "Return non-nil when DIRECTORY holds Runs recorded before D-038."
+  (file-exists-p (expand-file-name ".agent/state.sqlite" directory)))
+
+(defun noema-project--root-p (directory)
+  "Return non-nil when DIRECTORY is a Noema Project root.
+A manifest with a `[project]' table is one; a manifest without it is only a
+Wiki repository, unless Runs were already recorded beside it."
+  (when-let* ((manifest (noema-project--manifest directory)))
+    (or (plist-get manifest :project-p)
+        (noema-project--legacy-p directory))))
+
+(defun noema-project-root (path)
+  "Return the root of the Noema Project containing PATH, or nil.
+PATH may name a directory, a file that does not exist yet, or a logical /fs:
+name; the root is always a native path on this machine.  The nearest
+ancestor whose manifest declares a Project wins.  This is a query and never
+writes."
+  (when-let* ((local (noema-project-client-path path))
+              (root (locate-dominating-file (noema-project--directory local)
+                                            #'noema-project--root-p)))
+    (file-name-as-directory (expand-file-name root))))
+
+(defun noema-project-scope (path)
+  "Return the root that Noema state for PATH is keyed by.
+That is PATH's Project root, else PATH's directory as a native path.  Use
+this, not an ad hoc fallback, wherever state must be grouped even outside a
+Project, so one Project never ends up under two keys."
+  (or (noema-project-root path)
+      (noema-project--directory (or (noema-project-client-path path) path))))
+
+(defun noema-project-id (root)
+  "Return the durable id of Project ROOT.
+A pre-D-038 manifest keeps its `repository_id', which its Runs recorded."
+  (let ((manifest (noema-project--manifest root)))
+    (seq-find (lambda (id) (and id (not (string-empty-p id))))
+              (list (plist-get manifest :project-id)
+                    (plist-get manifest :repository-id)))))
+
+(defun noema-project-workspace (root)
+  "Return the directory Project ROOT's agents execute in.
+It is the manifest's `[project] workspace', relative to ROOT or starting with
+`~', and defaults to ROOT."
+  (let ((value (plist-get (noema-project--manifest root) :workspace)))
+    (file-name-as-directory
+     (if (and value (not (string-empty-p value)))
+         (expand-file-name value root)
+       (expand-file-name root)))))
+
+(defun noema-project--boundary (directory)
+  "Return the directory above which no new Project is proposed for DIRECTORY.
+That is the nearest enclosing manifest or `project.el' root, else home."
+  (let ((project (project-current nil directory)))
+    (or (locate-dominating-file directory noema-project-manifest)
+        (and project (noema-project-client-path (project-root project)))
+        (let ((home (file-name-as-directory (expand-file-name "~"))))
+          (and (file-in-directory-p directory home) home))
+        (file-name-as-directory "/"))))
+
+(defun noema-project-candidate-roots (directory)
+  "Return DIRECTORY and its ancestors up to its boundary, nearest first."
+  (let* ((directory (file-name-as-directory (expand-file-name directory)))
+         (boundary (file-name-as-directory
+                    (expand-file-name (noema-project--boundary directory))))
+         (current directory)
+         candidates)
+    (while current
+      (push current candidates)
+      (let ((parent (file-name-directory (directory-file-name current))))
+        (setq current (and (not (equal current boundary))
+                           (not (equal parent current))
+                           parent))))
+    (nreverse candidates)))
+
+(defun noema-project-default-root (directory)
+  "Return the root a new Noema Project for DIRECTORY should be proposed at.
+Inside a code repository, the `project.el' root, so agents see the whole
+code base.  Inside a notes vault -- a repository that already carries a
+manifest -- DIRECTORY itself: a vault usually holds many Projects, so the
+Project never silently grows to the vault."
+  (let* ((directory (file-name-as-directory (expand-file-name directory)))
+         (project (project-current nil directory))
+         (root (and project (noema-project-client-path (project-root project)))))
+    (file-name-as-directory
+     (if (and root
+              (file-in-directory-p directory root)
+              (not (file-exists-p (expand-file-name noema-project-manifest root))))
+         (expand-file-name root)
+       directory))))
+
+(defun noema-project--read-root (directory)
+  "Ask where a new Project for DIRECTORY should be rooted."
+  (let* ((proposed (noema-project-default-root directory))
+         (candidates (mapcar #'abbreviate-file-name
+                             (noema-project-candidate-roots directory)))
+         (default (abbreviate-file-name proposed)))
+    (file-name-as-directory
+     (expand-file-name
+      (completing-read (format-prompt "Create Noema project at" default)
+                       candidates nil nil nil nil default)))))
+
+(defun noema-project-ensure (path)
+  "Return the Noema Project root for PATH, asking before creating one.
+An enclosing Project is reused silently; one recorded before D-038 gains its
+`[project]' table on the way.  Otherwise the user picks the root among PATH's
+directory and its ancestors, proposed by `noema-project-default-root'.  Nothing
+is written unless the user accepts; quitting propagates."
+  (let ((local (or (noema-project-client-path path)
+                   (user-error "Noema projects live on this machine; %s is not reachable here"
+                               path))))
+    (if-let* ((root (noema-project-root local)))
+        (plist-get (noema-project-enable root) :root)
+      (let* ((directory (noema-project--directory local))
+             (root (noema-project--read-root directory)))
+        (unless (file-in-directory-p directory root)
+          (user-error "Noema project %s does not contain %s"
+                      (abbreviate-file-name root)
+                      (abbreviate-file-name local)))
+        (plist-get (noema-project-enable root) :root)))))
+
 (defun noema-project--atomic-write (file text)
   "Atomically replace FILE with TEXT."
   (let* ((path (expand-file-name file))
@@ -1737,101 +1937,133 @@ and FILE no longer has that revision."
       (when (file-exists-p temporary)
         (ignore-errors (delete-file temporary))))))
 
-(defun noema-project--ensure-agent-ignore (root)
-  "Ensure ROOT's `.gitignore' excludes the local `.agent/' directory."
-  (let* ((file (expand-file-name ".gitignore" root))
-         (text (if (file-readable-p file)
-                   (with-temp-buffer
-                     (insert-file-contents file)
-                     (buffer-string))
-                 ""))
-         (ignored (seq-some
-                   (lambda (line)
-                     (member (string-trim line) '(".agent" ".agent/" "/.agent" "/.agent/")))
-                   (split-string text "\n"))))
-    (unless ignored
-      (noema-project--atomic-write
-       file
-       (concat text
-               (unless (or (string-empty-p text) (string-suffix-p "\n" text)) "\n")
-               ".agent/\n")))
-    file))
+(defun noema-project--toml-quote (value)
+  "Return VALUE as a TOML basic string."
+  (format "\"%s\"" (replace-regexp-in-string "[\"\\\\]" "\\\\\\&" value)))
 
-(defun noema-project--directory (path)
-  "Return PATH itself when it is a directory, else its parent directory."
-  (let ((path (expand-file-name path)))
-    (if (file-directory-p path)
-        (file-name-as-directory path)
-      (file-name-directory path))))
-
-(defun noema-project-root (path)
-  "Return the root of the Noema project containing PATH, or nil.
-PATH may name a directory or a file that does not exist yet.  The nearest
-ancestor holding `noema.toml' wins.  This is a query and never writes."
-  (when-let* ((root (locate-dominating-file (noema-project--directory path)
-                                            "noema.toml")))
-    (file-name-as-directory (expand-file-name root))))
-
-(defun noema-project-default-root (directory)
-  "Return the root a new Noema project for DIRECTORY should use.
-The `project.el' root containing DIRECTORY wins, so the Noema project shares
-its workspace's identity; outside any project DIRECTORY itself is used."
-  (let ((project (project-current nil directory)))
-    (file-name-as-directory
-     (expand-file-name (if project (project-root project) directory)))))
-
-(defun noema-project-ensure (path)
-  "Return the Noema project root for PATH, asking before creating one.
-An enclosing project is reused silently.  Otherwise the user confirms or edits
-the root proposed by `noema-project-default-root', which must contain PATH.
-Nothing is written unless the user accepts; quitting propagates."
-  (or (noema-project-root path)
-      (let* ((directory (noema-project--directory path))
-             (proposed (noema-project-default-root directory))
-             (root (file-name-as-directory
-                    (expand-file-name
-                     (read-directory-name "Create Noema project at: "
-                                          proposed proposed t)))))
-        (unless (file-in-directory-p directory root)
-          (user-error "Noema project %s does not contain %s"
-                      (abbreviate-file-name root)
-                      (abbreviate-file-name (expand-file-name path))))
-        (plist-get (noema-project-enable root) :root))))
+(defun noema-project--manifest-text (file)
+  "Return FILE's text, or the empty string when it does not exist."
+  (if (file-exists-p file)
+      (with-temp-buffer
+        (let ((coding-system-for-read 'utf-8-unix))
+          (insert-file-contents file))
+        (buffer-string))
+    ""))
 
 ;;;###autoload
-(defun noema-project-enable (&optional directory)
-  "Give DIRECTORY a durable Noema Project identity.
-Create `noema.toml' with a UUIDv7 repository id and ensure `.agent/' is
-ignored by Git.  Existing manifests and unrelated ignore rules are preserved.
-Interactively, DIRECTORY defaults to `noema-project-default-root'."
-  (interactive)
+(defun noema-project-enable (&optional directory workspace)
+  "Make DIRECTORY a Noema Project and return (:root :manifest :created).
+Add a `[project]' table with a UUIDv7 id to DIRECTORY's `noema.toml',
+creating the file when needed and preserving everything already in it; a
+Wiki repository manifest stays a repository as well.  A manifest recorded
+before D-038 keeps its `repository_id' as the Project id, so its Runs stay
+attributed.  WORKSPACE, when non-nil, becomes the directory agents execute
+in.  `.agent/' ignores itself, so no Git configuration is touched.
+Interactively, DIRECTORY is chosen as `noema-project-ensure' would."
+  (interactive
+   (list (noema-project--read-root
+          (noema-project--directory
+           (or (noema-project-client-path default-directory)
+               (user-error "Noema projects live on this machine"))))))
   (let* ((root (file-name-as-directory
                 (expand-file-name
-                 (or directory
-                     (noema-project-default-root default-directory)))))
-         (manifest (expand-file-name "noema.toml" root))
+                 (or directory (noema-project-default-root default-directory)))))
+         (manifest (expand-file-name noema-project-manifest root))
+         (parsed (noema-project--manifest root))
          (created nil))
     (unless (file-directory-p root)
       (user-error "Project directory does not exist: %s" root))
-    (unless (file-exists-p manifest)
-      (noema-project--atomic-write
-       manifest
-       (format "schema = 1\nrepository_id = \"%s\"\n"
-               (noema-research--uuidv7)))
-      (setq created t))
-    (unless (file-regular-p manifest)
+    (when (and (file-exists-p manifest) (not (file-regular-p manifest)))
       (user-error "Noema project manifest is not a regular file: %s" manifest))
-    (noema-project--ensure-agent-ignore root)
+    (unless (plist-get parsed :project-p)
+      (let* ((text (noema-project--manifest-text manifest))
+             (legacy-id (and (noema-project--legacy-p root)
+                             (plist-get parsed :repository-id)))
+             (id (if (and legacy-id (not (string-empty-p legacy-id)))
+                     legacy-id
+                   (noema-research--uuidv7))))
+        (noema-project--atomic-write
+         manifest
+         (concat (if (string-empty-p text) "schema = 1\n" text)
+                 (unless (or (string-empty-p text) (string-suffix-p "\n" text)) "\n")
+                 "\n[project]\nid = " (noema-project--toml-quote id) "\n"))
+        (setq created (not legacy-id))))
+    (noema-research-state-directory manifest)
+    (when workspace (noema-project-set-workspace root workspace))
     (when (called-interactively-p 'interactive)
-      (message "%s Noema project: %s"
-               (if created "Enabled" "Already enabled") root))
+      (message "%s Noema project: %s" (if created "Enabled" "Already enabled") root))
     (list :root root :manifest manifest :created created)))
 
+(defun noema-project--workspace-value (root workspace)
+  "Return how WORKSPACE is written in ROOT's manifest.
+Inside ROOT it is relative; elsewhere it is abbreviated, so `~/…' survives a
+move to another machine with the same home layout."
+  (let ((workspace (file-name-as-directory (expand-file-name workspace))))
+    (directory-file-name
+     (if (file-in-directory-p workspace root)
+         (file-relative-name workspace root)
+       (abbreviate-file-name workspace)))))
+
+;;;###autoload
+(defun noema-project-set-workspace (root workspace)
+  "Make Project ROOT's agents execute in WORKSPACE.
+WORKSPACE nil or ROOT itself removes the declaration, so agents run in ROOT.
+Other Runs, Sessions and state stay with ROOT; the workspace only decides
+where agents work, what `git.diff' shows and which files a Run changed."
+  (interactive
+   (let ((root (or (noema-project-root default-directory)
+                   (user-error "Not inside a Noema project"))))
+     (list root (read-directory-name "Agent workspace: "
+                                     (noema-project-workspace root) nil t))))
+  (let* ((root (file-name-as-directory (expand-file-name root)))
+         (local (and workspace
+                     (or (noema-project-client-path workspace)
+                         (user-error "A workspace must be reachable on this machine: %s"
+                                     workspace))))
+         (value (and local
+                     (not (equal (file-name-as-directory local) root))
+                     (noema-project--workspace-value root local)))
+         (manifest (expand-file-name noema-project-manifest root)))
+    (unless (plist-get (noema-project--manifest root) :project-p)
+      (user-error "%s is not a Noema project" (abbreviate-file-name root)))
+    (when (and local (not (file-directory-p local)))
+      (user-error "Workspace directory does not exist: %s" local))
+    (let ((lines (split-string (noema-project--manifest-text manifest) "\n"))
+          (table "")
+          output written)
+      (dolist (line lines)
+        (let ((header (and (string-match "\\`[ \t]*\\[[ \t]*\\([^]]+?\\)[ \t]*\\]" line)
+                           (match-string 1 line))))
+          (when (and header (equal table "project") value (not written))
+            (push (concat "workspace = " (noema-project--toml-quote value)) output)
+            (setq written t))
+          (when header (setq table header))
+          (cond
+           ((and (equal table "project")
+                 (string-match-p "\\`[ \t]*workspace[ \t]*=" line))
+            (when (and value (not written))
+              (push (concat "workspace = " (noema-project--toml-quote value)) output)
+              (setq written t)))
+           (t (push line output)))))
+      (setq output (nreverse output))
+      (when (and value (not written))
+        ;; The `[project]' table is last: insert before the trailing newline.
+        (if (equal (car (last output)) "")
+            (setq output (append (butlast output)
+                                 (list (concat "workspace = " (noema-project--toml-quote value)) "")))
+          (setq output (append output
+                               (list (concat "workspace = " (noema-project--toml-quote value)))))))
+      (noema-project--atomic-write manifest (string-join output "\n")))
+    (when (called-interactively-p 'interactive)
+      (message "Noema project %s now works in %s"
+               (abbreviate-file-name root)
+               (abbreviate-file-name (noema-project-workspace root))))
+    (noema-project-workspace root)))
+
 (defun noema-research-repository-root (file)
-  "Return the Noema repository root containing FILE.
-The root is the nearest directory with `noema.toml', else FILE's directory."
-  (or (noema-project-root file)
-      (noema-project--directory file)))
+  "Return the root Noema research state for FILE is kept under.
+See `noema-project-scope'."
+  (noema-project-scope file))
 
 (defun noema-research-state-directory (file)
   "Return the `.agent/' directory of FILE's repository, creating it.

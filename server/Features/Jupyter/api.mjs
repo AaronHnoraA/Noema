@@ -1,5 +1,7 @@
 export function createJupyterApiHandlers(service) {
   return {
+    "aaronnote:api:jupyter:debug-start": (body) => service.debugStart(body || {}),
+    "aaronnote:api:jupyter:debug-stop": (body) => service.debugStop(body || {}),
     "aaronnote:api:jupyter-cell:kernels": (body) => service.kernels(body || {}),
     "aaronnote:api:jupyter-cell:execute": (body) => service.execute(body || {}),
     "aaronnote:api:jupyter-cell:open-script": (body) => service.openScript(body || {}),
@@ -32,6 +34,7 @@ export function createJupyterApiHandlers(service) {
     "aaronnote:api:jupyter-cell:server-list": (body) => service.serverList(body || {}),
     "aaronnote:api:jupyter-cell:server-read": (body) => service.serverRead(body || {}),
     "aaronnote:api:jupyter-cell:server-write": (body) => service.serverWrite(body || {}),
+    "aaronnote:api:jupyter-cell:server-file": (body) => service.serverFile(body || {}),
     "aaronnote:api:jupyter-cell:tasks": () => service.listTasks(),
     "aaronnote:api:jupyter-cell:cleanup": (body) => service.cleanup(body || {}),
   };
