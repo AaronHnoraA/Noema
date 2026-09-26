@@ -260,15 +260,15 @@ func run(fileCount, changeCount, findingCount, samples int, keep bool) error {
 }
 
 func seedWorkstream(root string) error {
-	notebook := `{"nbformat":4,"nbformat_minor":5,"metadata":{"noema_research":{"schema":"noema.research-notebook/1","notebook_id":"nb_corpus_benchmark","workstream_id":"ws_corpus_benchmark","title":"Corpus benchmark"}},"cells":[]}`
-	if err := os.WriteFile(filepath.Join(root, "benchmark.noema.ipynb"), []byte(notebook), 0o600); err != nil {
+	notebook := `{"nbformat":4,"nbformat_minor":5,"metadata":{"noema_research":{"schema":"noema.work-document/2","notebook_id":"nb_corpus_benchmark","workstream_id":"ws_corpus_benchmark","title":"Corpus benchmark","work_nodes":[],"dependencies":[]}},"cells":[]}`
+	if err := os.WriteFile(filepath.Join(root, "benchmark.noema"), []byte(notebook), 0o600); err != nil {
 		return err
 	}
 	store, err := research.Open(root)
 	if err != nil {
 		return err
 	}
-	_, err = store.IndexNotebook("benchmark.noema.ipynb", research.IndexOptions{Actor: "benchmark", Reason: "fixture"})
+	_, err = store.IndexNotebook("benchmark.noema", research.IndexOptions{Actor: "benchmark", Reason: "fixture"})
 	return err
 }
 

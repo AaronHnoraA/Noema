@@ -50,16 +50,16 @@
 (declare-function gptel--to-string "gptel-request")
 (declare-function gptel--to-number "gptel-request")
 (declare-function gptel--intern "gptel-request")
-(declare-function gptel-backend-name "gptel-request")
+(declare-function gptel-backend-name "gptel-request" nil t)
 (declare-function gptel--parse-buffer "gptel-request")
 (declare-function gptel--parse-directive "gptel-request")
-(declare-function gptel--with-buffer-copy "gptel-request")
+(declare-function gptel--with-buffer-copy "gptel-request" nil t)
 (declare-function gptel--file-binary-p "gptel-request")
 (declare-function gptel--get-buffer-bounds "gptel")
 (declare-function gptel--restore-props "gptel")
 (declare-function org-entry-get "org")
 (declare-function org-entry-put "org")
-(declare-function org-with-wide-buffer "org-macs")
+(declare-function org-with-wide-buffer "org-macs" nil t)
 (declare-function org-set-property "org")
 (declare-function org-property-values "org")
 (declare-function org-open-line "org")
@@ -96,7 +96,7 @@ of Org."
   (if (fboundp 'org-element-begin)
       (progn (declare-function org-element-begin "org-element")
              (declare-function org-element-end "org-element")
-             (declare-function org-element-parent "org-element")
+             (declare-function org-element-parent "org-element-ast")
              (defalias 'gptel-org--element-begin 'org-element-begin)
              (defalias 'gptel-org--element-end 'org-element-end)
              (defalias 'gptel-org--element-parent 'org-element-parent))
@@ -416,20 +416,20 @@ first nil value in REST is guaranteed to be correct."
                         (member link-type '("http" "https" "ftp")) 'url)))
               (path (org-element-property :path link))
               (user-check (funcall gptel-org-validate-link link))
-              (readablep (or (eq resource-type 'url)
+              (readablep (or (eq resource-type 'url) ;Assume URLs are reachable
                              (file-remote-p default-directory)
                              (file-remote-p path)
                              (file-readable-p path)))
               (mime-valid
-               (or (eq resource-type 'url)
-                   (and (with-memoization
-                            (alist-get (expand-file-name path)
-                                       gptel--link-type-cache
-                                       nil nil #'string=)
-                          (if (gptel--file-binary-p path) t))
-                        (setq mime (mailcap-file-name-to-mime-type path))
-                        (gptel--model-mime-capable-p mime))
-                   t)))
+               (if (or (eq resource-type 'url)
+                       (with-memoization
+                           (alist-get (expand-file-name path)
+                                      gptel--link-type-cache
+                                      nil nil #'string=)
+                         (gptel--file-binary-p path)))
+                   (progn (setq mime (mailcap-file-name-to-mime-type path))
+                          (gptel--model-mime-capable-p mime))
+                 t)))
         (list t link-type path resource-type user-check readablep mime-valid mime)
       (list nil link-type path resource-type user-check readablep mime-valid mime))))
 
@@ -585,9 +585,9 @@ ARGS are the original function call arguments."
         (progn
           (when-let* ((bounds (org-entry-get (point-min) "GPTEL_BOUNDS")))
             (gptel--restore-props (read bounds)))
-          (pcase-let ((`(,preset ,system ,backend ,model ,temperature ,tokens ,num ,tools)
+          (pcase-let ((`(,presets ,system ,backend ,model ,temperature ,tokens ,num ,tools)
                        (gptel-org--entry-properties (point-min))))
-            (when preset
+            (dolist (preset presets)
               (if (gptel-get-preset preset)
                   (progn (gptel--apply-preset
                           preset (lambda (sym val) (set (make-local-variable sym) val)))
@@ -688,8 +688,9 @@ send in queries.  (See `gptel--num-messages-to-send' for the last one.)"
                            ;; first value of ((prop . ((beg end val)...))...)
                            (offset (caadar bounds))
                            (offset-marker (set-marker (make-marker) offset)))
-                 (org-entry-put (point-min) "GPTEL_BOUNDS"
-                                (prin1-to-string (gptel--get-buffer-bounds)))
+                 (let ((print-length))
+                   (org-entry-put (point-min) "GPTEL_BOUNDS"
+                                  (prin1-to-string (gptel--get-buffer-bounds))))
                  (when (and (not (= (marker-position offset-marker) offset))
                             (> attempts 0))
                    (funcall write-bounds (1- attempts)))))))

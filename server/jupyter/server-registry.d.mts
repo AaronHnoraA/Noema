@@ -7,14 +7,17 @@ export interface RemoteKernelHandle {
   /** Empty for gateway kernels, which have no session. */
   sessionId: string;
   kernel: Kernel.IKernelConnection;
+  /** Private signature of the resolved provider endpoint and credentials. */
+  connectionVersion: string;
 }
 
 export interface JupyterServerRegistry {
   config(serverId: string): Promise<JupyterServerConfig & { kind: "server" | "gateway"; baseUrl: string }>;
+  refresh(serverId: string): Promise<{ changed: boolean; version: string }>;
   listKernelSpecs(serverId: string): Promise<KernelSpecEntry[]>;
   listRunning(serverId: string): Promise<Kernel.IModel[]>;
   startKernel(serverId: string, options: { kernelName: string; path?: string; name?: string }): Promise<RemoteKernelHandle>;
-  connectKernel(serverId: string, kernelId: string): Promise<RemoteKernelHandle>;
+  connectKernel(serverId: string, kernelId: string, options?: { refresh?: boolean }): Promise<RemoteKernelHandle>;
   interruptKernel(serverId: string, kernelId: string): Promise<void>;
   restartKernel(serverId: string, kernelId: string): Promise<void>;
   shutdownKernel(serverId: string, target: { kernelId?: string; sessionId?: string }): Promise<void>;
@@ -27,6 +30,7 @@ export interface JupyterServerRegistry {
     serverName: string;
   }>;
   forget(serverId: string): Promise<void>;
+  retain(serverIds: Iterable<string>): Promise<void>;
   forgetAll(): Promise<void>;
 }
 

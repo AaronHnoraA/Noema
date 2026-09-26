@@ -1784,7 +1784,7 @@ export function createResearchRuntimeService({
         ...capabilitySnapshot.mcps.map((item) => `mcp:${item.id}`),
       ]);
       capabilitySnapshot.diagnostics = values(capabilitySnapshot.diagnostics)
-        .filter((item) => activeKeys.has(`${item.type}:${item.id}`));
+        .filter((item) => activeKeys.has(`${item.type}:${item.id}`) || item.code === "unavailable-skill");
       for (const skill of capabilitySnapshot.skills) delete object(skill.effective).content;
       const spec = {
         schema: "noema.run-spec/1",

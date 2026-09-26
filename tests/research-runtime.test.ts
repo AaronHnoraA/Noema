@@ -345,6 +345,37 @@ describe("research runtime service", () => {
       .toContain("patched project invariant");
   }));
 
+  test("skips an unavailable configured Skill and records the degraded Run", async () => withProject(async (root) => {
+    await writeFile(join(root, "noema-capabilities.json"), `${JSON.stringify({
+      schema: "noema.capabilities/1",
+      skills: { enabled: ["plugin-skill"] },
+      mcp: {},
+    }, null, 2)}\n`);
+    let notebook = createResearchNotebook({ title: "Degraded capabilities", defaultAgent: "codex" });
+    const work = createResearchCell(notebook, {
+      kind: "work", title: "Continue safely", source: "Continue without the unavailable optional Skill.",
+    });
+    notebook = work.notebook;
+    const file = join(root, "degraded.noema");
+    await writeResearchNotebookFile(file, notebook, { create: true });
+    const provider = {
+      runs: vi.fn(async () => []),
+      prepareRun: vi.fn(async ({ run }) => ({ id: "run_degraded", ...run })),
+    };
+    const service = createResearchRuntimeService({ getProvider: () => provider as any });
+    const prepared = await service.prepareRun({ file, cellId: work.cell.id, cwd: root });
+    expect(prepared.spec.skills).toEqual([]);
+    expect(prepared.spec.capability_environment.active.skills).toEqual([]);
+    expect(prepared.spec.capability_environment.skills).toEqual([]);
+    expect(prepared.spec.capability_environment.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        severity: "warning", code: "unavailable-skill", id: "plugin-skill", type: "skill",
+      }),
+    ]));
+    expect(prepared.contextItems.map((item: any) => item.ref)).not.toContain("skill:plugin-skill");
+    expect(provider.prepareRun).toHaveBeenCalledTimes(1);
+  }));
+
   test("selects agents by directive, document default, then request default", async () => withProject(async (root) => {
     await mkdir(join(root, "research"));
     let notebook = createResearchNotebook({ title: "Agents", defaultAgent: "opencode" });

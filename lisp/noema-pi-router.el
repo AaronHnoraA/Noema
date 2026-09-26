@@ -24,7 +24,9 @@
 ;;   the project's last `.noema' buffer has been gone for
 ;;   `noema-pi-stop-delay' seconds, or `noema-pi-close-project' runs, Pi and
 ;;   the project's idle agent processes stop; an agent still running a Run
-;;   stops once the Run ends.  Session names and native ids stay, so the next
+;;   stops once the Run ends.  The automatic close spares every session
+;;   `noema-agent-acp-auto-stoppable-p' refuses (one a person opened, one on
+;;   screen, one mid-turn).  Session names and native ids stay, so the next
 ;;   visit resumes them.
 
 ;;; Code:
@@ -511,7 +513,12 @@ under the project's `pi' session name, or starts a fresh one."
 Session names and native ids stay, so reopening the project resumes them.
 An agent still running a Run keeps going and stops when the Run ends; with
 INTERRUPT (asked interactively) those Runs are cancelled first.  Return the
-number of agent buffers stopped now."
+number of agent buffers stopped now.
+
+Called from Lisp -- the delayed close after the last `.noema' document goes,
+or a perspective being killed -- this is an automatic stop: agents that
+`noema-agent-acp-auto-stoppable-p' refuses, such as a session a person opened
+or one still on screen, keep running."
   (interactive
    (let* ((root (noema-pi-router--root default-directory))
           (busy (length (noema-pi-router--busy-agents root))))
@@ -521,6 +528,7 @@ number of agent buffers stopped now."
                                           (abbreviate-file-name root)
                                           (if (= busy 1) "it" "them")))))))
   (let ((root (noema-pi-router--root (or directory default-directory)))
+        (automatic (not (called-interactively-p 'any)))
         (agents nil)
         (stopped 0))
     (noema-pi-router--cancel-stop root)
@@ -529,11 +537,13 @@ number of agent buffers stopped now."
     (when agents
       (require 'noema-agent-worker)
       (dolist (buffer agents)
-        (if (noema-agent-worker-buffer-busy-p buffer)
-            (when interrupt
-              (noema-agent-worker-cancel-buffer buffer))
-          (when (noema-agent-worker-stop-buffer buffer)
-            (cl-incf stopped)))))
+        (cond
+         ((noema-agent-worker-buffer-busy-p buffer)
+          (when interrupt
+            (noema-agent-worker-cancel-buffer buffer)))
+         ((and automatic (not (noema-agent-acp-auto-stoppable-p buffer))))
+         ((noema-agent-worker-stop-buffer buffer)
+          (cl-incf stopped)))))
     (unless (buffer-live-p (gethash root noema-pi-router--buffers))
       (remhash root noema-pi-router--buffers))
     (when (called-interactively-p 'interactive)
@@ -549,7 +559,7 @@ number of agent buffers stopped now."
               ((gethash root noema-pi-router--closing))
               ((not (noema-pi-router--project-documents root))))
     (run-at-time 0 nil (lambda ()
-                         (when (buffer-live-p buffer)
+                         (when (noema-agent-acp-auto-stoppable-p buffer)
                            (noema-agent-worker-stop-buffer buffer))))))
 
 (with-eval-after-load 'noema-agent-worker

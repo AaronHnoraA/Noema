@@ -1,5 +1,15 @@
 # Noema × SiYuan 重构计划
 
+## 2026-09-25 科研工作流升级（实施中）
+
+- 用户选择了“整体规划、分阶段落地”，首条验收主线是“文献 → 实验/推导 → 论文”；阶段内自动推进，选题、重要结论、结构变更、投稿准备由人复核。首要痛点是功能分散、流程难串联。
+- P0 已完成：对齐 `research-notebook.d.mts` 的回归传播和批量 Cell 接口；Skill frontmatter 改用标准 YAML 解析，读取 `noema.domain`/`noema.requires` 并解析依赖闭包，显式禁用或缺失依赖阻止 Run。Node capability 27/27、`tsc --noEmit` 通过；原有未提交改动保留。
+- P1 代码完成：新增 Emacs 原生 `noema-project-overview`，汇集 Tasks、Runs、Sessions、Attention 和 Skills/MCP，保留各对象权威 API，可跳回原有页面、Run 来源 WorkBlock，或直接恢复指定 Agent 会话；`g` 刷新及异步过期响应防护。新 ERT 3/3 通过，GUI 尚未人工验收。
+- P2 进行中：新增实证/理论两套完整 `.noema` 模板、创建前预览、单次验证写入、下一阶段导航与人工关口签核；从公共 `noema-run-cell` 入口阻止越过未完成阶段/未复核关口的 Agent Run。新增 `experiment-design`、`proof-plan`、`proof-review` 三个全局研究 Skill，并验证 `proof-review → claim-precision` 依赖自动解析。模板 ERT 2/2、Noema 能力解析有效。通用 Codex Skill validator 不接受既有 Noema 自定义 `noema:` frontmatter，故以 Noema 自身解析器和运行前校验为此库的权威门禁。
+- P3 代码完成：新增 Emacs 原生项目作用域 FTS5 Agent 原生历史搜索，支持来源过滤、限长预览、显式全文读取与显式重建索引；不修改原生 transcript。新增只读 Finding 看板展示人工接受的主张、verification level、证据关系与 content-addressed 字节范围。异步响应和同名项目缓冲区按根目录隔离，并以跨 mode-reset 单调请求 id 防陈旧回调。四组新 ERT 最新聚焦 11/11 通过并纳入顶层 `make research-test`。项目摘要按 Go Task 实际 `open`/`blocked` 状态计数，而非虚构 `active` 状态。
+- 本轮性能证据：修正 corpus benchmark 的旧 `.noema.ipynb`/v1 fixture 为当前 `.noema`/v2；1k/10k/100k 合成 Markdown 文档基准全部通过，100k 初始解析 63.4 秒、未变重扫 6.7 秒且 0 文件重解析、1k 定向改动 984 ms，常见 FTS 查询 p95 104 ms（10 样本），全部 100 个 Finding 保留不可变证据。数字仅代表本机合成基准，不推断真实论文质量或设备性能。
+- 本轮门禁：Node 最终 `make test` 为 248 files passed / 7 skipped、2516 tests passed / 16 skipped（依赖回归聚焦 28/28）；`make build`、`make install`、`go test -tags fts5 ./...`、顶层 `make research-test`（最后一轮 84/84，之后新增 1 个摘要测试聚焦 5/5）与 `make jupyter-test` 全绿；冷启动懒加载 2/2，新 Elisp 严格 byte-compile 无警告。仍需真实 Emacs GUI 人工操作走查和真实 Agent/文献质量验收，不能用单元测试替代。
+
 ## 当前权威方向（2026-09-14，覆盖下文所有历史记录）
 
 - **设计依据**：以 `/Users/hc/Desktop/]/DESIGN.md` v1.8、`DECISIONS.md` D-023 和 `AI-Docs/assignment-walkthrough.md` 为当前 `.noema` 权威；D-009/D-013/D-018/D-019 中关于 `.noema` Jupyter 执行、编程 code Cell、无 DSL 和独立 Result Cell 的规定已被推翻。D-018 的 WorkNode/Dependency/CellBinding 独立身份与 D-019 的 Run/ArtifactLink 仍有效。

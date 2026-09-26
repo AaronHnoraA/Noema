@@ -22,6 +22,15 @@
       (noema-capability-ui--render '((skills . [((id . "inherited") (type . "skill") (patches . []))])))
       (should-not tabulated-list-entries))))
 
+(ert-deftest noema-capability-unavailable-skill-is-a-warning-not-an-error-label ()
+  (let ((record '((id . "plugin-skill") (type . "skill")
+                  (validation . ((valid . :false) (errors . []) (warnings . [])))
+                  (diagnostics . [((severity . "warning")
+                                   (code . "unavailable-skill"))]))))
+    (should (equal (substring-no-properties
+                    (noema-capability-ui--validation record))
+                   "unavailable"))))
+
 (ert-deftest noema-capability-evil-keeps-normal-editing-and-safe-command-prefix ()
   (skip-unless (require 'evil nil t))
   (with-temp-buffer

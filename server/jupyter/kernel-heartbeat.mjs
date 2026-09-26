@@ -5,9 +5,11 @@
 // `RawSocket` only opens iopub/shell/control/stdin. Liveness therefore had a
 // single source — OS process exit — which exists only for a kernel this Node
 // process spawned itself. A kernel placed on a Remote target by the Emacs
-// broker, or one we merely attached to, had no death signal at all: its record
-// stayed `idle` forever and an execute() against it never settled, which also
-// blocked every later cell sharing that kernel's execution queue.
+// broker, or one we merely attached to, had no unresponsive-channel signal at
+// all: its record stayed `idle` forever and an execute() against it never
+// settled, which also blocked every later cell sharing that kernel's queue.
+// For broker-hosted records the registry combines this signal with the host's
+// process probe; a heartbeat miss alone is never treated as process death.
 //
 // `hb` is an echo socket (ipykernel binds a REP that returns whatever it
 // receives), so a round trip proves the kernel process is alive and its event
@@ -22,6 +24,8 @@ export const DEFAULT_HEARTBEAT_MAX_MISSES = 3;
 
 /**
  * Watch one kernel's `hb` channel and call `onDead` once it stops answering.
+ * The callback name is historical: callers decide whether that means kernel
+ * death or only a broken transport.
  *
  * Returns a handle with `start()` and `stop()`. `stop()` is idempotent and
  * safe to call from a dispose path; `onDead` fires at most once.
@@ -32,6 +36,7 @@ export function createKernelHeartbeat({
   intervalMs = DEFAULT_HEARTBEAT_INTERVAL_MS,
   timeoutMs = DEFAULT_HEARTBEAT_TIMEOUT_MS,
   maxMisses = DEFAULT_HEARTBEAT_MAX_MISSES,
+  onAlive,
   onDead,
   stderr = process.stderr,
 }) {
@@ -78,12 +83,17 @@ export function createKernelHeartbeat({
         throw new Error("heartbeat echo did not match the ping");
       }
       misses = 0;
+      try {
+        onAlive?.();
+      } catch (handlerError) {
+        log.error("kernel heartbeat onAlive handler threw", handlerError);
+      }
     } catch (ex) {
       closeSocket();
       misses += 1;
       if (!stopped && misses >= maxMisses) {
         log.warn(
-          `kernel heartbeat missed ${misses} consecutive replies on ${endpoint}; treating the kernel as dead`,
+          `kernel heartbeat missed ${misses} consecutive replies on ${endpoint}; channel is unresponsive`,
         );
         stop();
         if (!fired) {

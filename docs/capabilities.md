@@ -152,7 +152,20 @@ A fuller example is:
 
 `skills.directories` may add Skill directories relative to that configuration
 file. A Skill remains a directory containing `SKILL.md`; its frontmatter should
-contain `name` and `description`.
+contain `name` and `description`. Noema also reads standard YAML frontmatter
+and the optional `noema` mapping:
+
+```yaml
+noema:
+  domain: research
+  requires: [claim-precision]
+```
+
+Selecting this Skill for a Run also selects its dependency closure. A missing,
+disabled, invalid, or cyclic dependency prevents Run preparation; an explicit
+project disable cannot be bypassed by a dependent Skill. The effective Skill
+content, including project patches, determines the dependency list that is
+frozen for the Run.
 
 MCP definitions use ACP's three shapes:
 
@@ -319,9 +332,13 @@ validation and runtime state.
 
 `run:prepare` resolves capabilities once. Enabled Skill content is added to the
 same frozen context budget as other context. Enabled valid MCP definitions are
-copied into `mcp_servers`. An active-only provenance snapshot is stored in
-`capability_environment`; Skill content itself is omitted from this duplicate
-snapshot because the bytes already exist in the frozen context item.
+copied into `mcp_servers`. A configured Skill whose definition has disappeared
+with an external plugin or cache is marked unavailable and skipped with a
+warning instead of blocking the whole Run. An explicit `@@skill` request for
+that missing Skill remains an error. The active provenance snapshot is stored
+in `capability_environment`, together with any unavailable-Skill warnings;
+Skill content itself is omitted from this duplicate snapshot because the bytes
+already exist in the frozen context item.
 
 The Emacs worker consumes only this frozen `mcp_servers` list and preserves
 stdio, HTTP and SSE fields in the ACP configuration. It does not rediscover

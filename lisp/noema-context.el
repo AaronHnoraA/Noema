@@ -41,7 +41,6 @@
 (declare-function gptel-context--buffer-setup "gptel-context"
                   (&optional ignore-auto noconfirm context-alist))
 (declare-function gptel-context-remove "gptel-context" (&optional context))
-(declare-function remote-client-file-name "remote-fs" (file-name &optional adapter))
 (declare-function which-function "which-func" ())
 (defvar gptel-context)
 
@@ -69,20 +68,13 @@ Off by default: the same selection usually serves several questions, and
 
 ;;;; ── Turning the shared selection into references ─────────────────────────
 
-(defun noema-context--client-file (file)
-  "Return FILE as a path the agent process can open, or signal.
-Logical `/fs:' identities are projected the same way agent directories are;
-anything the client cannot reach is an error rather than a path the agent
-would silently fail to read."
-  (let* ((expanded (expand-file-name file))
-         (client (if (string-prefix-p "/fs:" expanded)
-                     (or (and (fboundp 'remote-client-file-name)
-                              (remote-client-file-name expanded))
-                         (user-error "Context is not reachable by the agent: %s" file))
-                   expanded)))
-    (when (or (string-prefix-p "/fs:" client) (file-remote-p client))
-      (user-error "Context must be a file this agent can open: %s" file))
-    client))
+(defun noema-context--agent-file (file session)
+  "Return FILE as the path SESSION's agent opens, or signal.
+SESSION nil means an agent on this machine.  A file on a machine that agent
+cannot reach -- a local file for an agent on a server, or the reverse -- is
+an error rather than a path the agent would silently fail to read."
+  (or (noema-agent-acp-agent-file file session)
+      (user-error "Context is not reachable by the agent: %s" file)))
 
 (defun noema-context--relative (file root)
   "Return FILE relative to ROOT when it is inside it, else its absolute path.
@@ -140,19 +132,25 @@ A region that stops at the beginning of a line does not include that line."
            (and (<= (car (car regions)) (point-min))
                 (>= (cdr (car regions)) (point-max)))))))
 
-(defun noema-context--reference (file root &optional buffer region)
-  "Return the reference plist for FILE, limited to REGION of BUFFER when given."
-  (let ((client (noema-context--client-file file)))
-    (append (list :file client
-                  :relative (noema-context--relative client root)
+(defun noema-context--reference (file root &optional buffer region session)
+  "Return the reference plist for FILE, limited to REGION of BUFFER when given.
+:file is FILE's Emacs name, :agent-file the path SESSION's agent opens, and
+:relative is relative to ROOT when FILE is inside it, else :agent-file."
+  (let* ((file (expand-file-name file))
+         (agent-file (noema-context--agent-file file session))
+         (relative (noema-context--relative file root)))
+    (append (list :file file
+                  :agent-file agent-file
+                  :relative (if (equal relative file) agent-file relative)
                   :kind (if region 'region 'file))
             (when region
               (list :line-start (with-current-buffer buffer
                                   (line-number-at-pos (car region) t))
                     :line-end (noema-context--end-line buffer (cdr region)))))))
 
-(defun noema-context--resolve (&optional context root)
+(defun noema-context--resolve (&optional context root session)
   "Return (REFERENCES . SKIPPED) for CONTEXT, relative to session ROOT.
+Paths are the ones SESSION's agent opens; nil means an agent on this machine.
 CONTEXT defaults to the shared gptel selection.  SKIPPED describes entries
 that cannot be referenced -- a buffer with no file, or one left unsaved --
 because a reference to text that is not on disk would mislead the agent."
@@ -167,9 +165,10 @@ because a reference to text that is not on disk would mislead the agent."
               (let ((regions (gptel-context--collect-regions source spec)))
                 (if (or (null regions)
                         (noema-context--whole-buffer-p source regions))
-                    (push (noema-context--reference file root) references)
+                    (push (noema-context--reference file root nil nil session)
+                          references)
                   (dolist (region regions)
-                    (push (noema-context--reference file root source region)
+                    (push (noema-context--reference file root source region session)
                           references))))
             (push (format "%s (%s)" (buffer-name source)
                           (if (buffer-local-value 'buffer-file-name source)
@@ -178,15 +177,18 @@ because a reference to text that is not on disk would mislead the agent."
                   skipped)))
          ((stringp source)
           (if (file-readable-p source)
-              (push (noema-context--reference source root) references)
+              (push (noema-context--reference source root nil nil session)
+                    references)
             (push (format "%s (unreadable)" source) skipped))))))
     (cons (nreverse references) (nreverse skipped))))
 
-(defun noema-context-references (&optional context root)
+(defun noema-context-references (&optional context root session)
   "Return the reference plists for CONTEXT relative to session ROOT.
-Each has :file, :relative and :kind, plus :line-start and :line-end for a
-region.  See `noema-context--resolve' for what cannot be referenced."
-  (car (noema-context--resolve context root)))
+Each has :file, :agent-file, :relative and :kind, plus :line-start and
+:line-end for a region.  SESSION is the agent buffer the paths are for; nil
+means an agent on this machine.  See `noema-context--resolve' for what
+cannot be referenced."
+  (car (noema-context--resolve context root session)))
 
 
 ;;;; ── Reference blocks: a link and a line, never a copy ────────────────────
@@ -214,7 +216,8 @@ capability gate on resource links, so every agent understands them."
           (let ((meta (noema-agent-acp-file-metadata file)))
             (push (delq nil
                         (list (cons 'type "resource_link")
-                              (cons 'uri (noema-agent-acp-file-uri file))
+                              (cons 'uri (concat "file://"
+                                                 (plist-get reference :agent-file)))
                               (cons 'name (plist-get reference :relative))
                               (when-let* ((mime (plist-get meta :mime-type)))
                                 (cons 'mimeType mime))
@@ -303,7 +306,7 @@ PICK asks which session to use instead of reusing the project's last one.
 DRAFT puts the turn in the session's input without submitting it."
   (let* ((buffer (noema-context--session pick))
          (root (buffer-local-value 'noema-agent-acp-session-root buffer))
-         (resolved (noema-context--resolve nil root))
+         (resolved (noema-context--resolve nil root buffer))
          (references (car resolved))
          (prompt (or prompt
                      (read-string
@@ -392,8 +395,8 @@ argument PICK, choose the session."
                          (ignore-errors (add-log-current-defun))))
          (buffer (noema-context--session pick))
          (root (buffer-local-value 'noema-agent-acp-session-root buffer))
-         (client (noema-context--client-file file))
-         (where (format "%s:%d:%d" (noema-context--relative client root) line column))
+         (reference (noema-context--reference file root nil nil buffer))
+         (where (format "%s:%d:%d" (plist-get reference :relative) line column))
          (prompt (read-string (format "Ask about %s: " where)))
          (blocks (list (list (cons 'type "text")
                              (cons 'text (concat prompt "\n\nPoint is at " where
@@ -401,8 +404,7 @@ argument PICK, choose the session."
                                                      (format ", in `%s'" defun-name)
                                                    "")
                                                  ".\n")))
-                       (car (noema-context--file-blocks
-                             (list (noema-context--reference client root)))))))
+                       (car (noema-context--file-blocks (list reference))))))
     (when (string-empty-p (string-trim prompt))
       (user-error "Nothing to ask"))
     (noema-context--deliver buffer blocks)))

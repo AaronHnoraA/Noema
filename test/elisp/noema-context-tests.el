@@ -124,6 +124,33 @@ SPEC is a list of (NAME . CONTENT) files created in it and bound to
 
 ;;;; ── Content blocks ───────────────────────────────────────────────────────
 
+(ert-deftest noema-context-paths-are-the-session-agents-own ()
+  "A session's agent receives the path its own machine uses for a file.
+The host maps files through `noema-agent-acp-agent-file-function'; a file
+that machine cannot reach is refused rather than sent as a dead path."
+  (noema-context-tests--with-project '(("a.txt" . "alpha\n"))
+    (let* ((path (alist-get "a.txt" files nil nil #'equal))
+           (session (generate-new-buffer " *noema-context-session*"))
+           (gptel-context (list (list path)))
+           (noema-agent-acp-agent-file-function
+            (lambda (file agent)
+              (and (eq agent session)
+                   (concat "/srv/agent" file)))))
+      (unwind-protect
+          (let* ((inside (car (noema-context-references nil root session)))
+                 (outside (car (noema-context-references nil "/elsewhere/" session)))
+                 (link (cadr (noema-context-content-blocks "Q" (list inside)))))
+            (should (equal (plist-get inside :file) path))
+            (should (equal (plist-get inside :agent-file) (concat "/srv/agent" path)))
+            (should (equal (plist-get inside :relative) "a.txt"))
+            ;; Outside the root the agent's own absolute path is shown.
+            (should (equal (plist-get outside :relative) (concat "/srv/agent" path)))
+            (should (equal (map-elt link 'uri) (concat "file:///srv/agent" path)))
+            ;; Size still comes from the file through Emacs.
+            (should (integerp (map-elt link 'size)))
+            (should-error (noema-context-references nil root nil) :type 'user-error))
+        (kill-buffer session)))))
+
 (ert-deftest noema-context-blocks-link-instead-of-copying ()
   "Two regions of one file and a second file produce links and no content."
   (noema-context-tests--with-project '(("a.txt" . "alpha\nbravo\ncharlie\ndelta\necho\n")

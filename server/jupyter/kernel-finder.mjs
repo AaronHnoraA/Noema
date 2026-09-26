@@ -12,6 +12,16 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+const CONNECTION_PORTS = ["hb_port", "control_port", "shell_port", "stdin_port", "iopub_port"];
+
+function validConnectionInfo(info) {
+  return Boolean(
+    info && info.transport === "tcp" && typeof info.ip === "string"
+    && typeof info.key === "string" && typeof info.signature_scheme === "string"
+    && CONNECTION_PORTS.every((name) => Number.isInteger(info[name]) && info[name] > 0 && info[name] < 65536),
+  );
+}
+
 /** Search directories to scan for `<dir>/kernels/<name>/kernel.json`, in priority order (first match per name wins). */
 export function defaultKernelSearchDirs({
   dataDir,
@@ -136,7 +146,7 @@ export async function findAttachableConnectionFiles(attachDirs) {
       try {
         const raw = await fs.readFile(filePath, "utf8");
         const info = JSON.parse(raw);
-        if (!info || typeof info.shell_port !== "number" || typeof info.iopub_port !== "number") continue;
+        if (!validConnectionInfo(info)) continue;
         const stat = await fs.stat(filePath);
         results.push({ token: entry.name, path: filePath, mtimeMs: stat.mtimeMs, connectionInfo: info });
       } catch {

@@ -2,7 +2,11 @@ import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { defaultKernelSearchDirs, findKernelSpecs } from "../server/jupyter/kernel-finder.mjs";
+import {
+  defaultKernelSearchDirs,
+  findAttachableConnectionFiles,
+  findKernelSpecs,
+} from "../server/jupyter/kernel-finder.mjs";
 
 async function writeKernel(root: string, name: string, displayName: string): Promise<void> {
   const directory = join(root, "kernels", name);
@@ -15,6 +19,29 @@ async function writeKernel(root: string, name: string, displayName: string): Pro
 }
 
 describe("Jupyter kernelspec discovery", () => {
+  test("attach discovery rejects partial connection files", async () => {
+    const runtime = await mkdtemp(join(tmpdir(), "noema-connections-"));
+    const valid = {
+      transport: "tcp",
+      ip: "127.0.0.1",
+      key: "secret",
+      signature_scheme: "hmac-sha256",
+      hb_port: 41001,
+      control_port: 41002,
+      shell_port: 41003,
+      stdin_port: 41004,
+      iopub_port: 41005,
+    };
+    await writeFile(join(runtime, "kernel-valid.json"), JSON.stringify(valid));
+    await writeFile(join(runtime, "kernel-partial.json"), JSON.stringify({
+      shell_port: 41003,
+      iopub_port: 41005,
+    }));
+
+    const found = await findAttachableConnectionFiles([runtime]);
+    expect(found.map((entry) => entry.token)).toEqual(["kernel-valid.json"]);
+  });
+
   test("uses Windows Jupyter data roots without Unix or macOS directories", () => {
     expect(defaultKernelSearchDirs({
       dataDir: "C:\\Noema\\jupyter",

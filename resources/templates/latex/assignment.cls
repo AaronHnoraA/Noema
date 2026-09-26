@@ -303,12 +303,20 @@
 \DeclareMathOperator{\arccosh}{arccosh}% 反双曲余弦 Inverse hyperbolic cosine
 \DeclareMathOperator{\arctanh}{arctanh}% 反双曲正切 Inverse hyperbolic tangent
 \DeclareMathOperator{\re}{Re}% 复数的实部 Real part of complex number
-\DeclareMathOperator{\im}{Im}% 复数的虚部或映射的像 Imaginary part of complex number or image of mapping
-\DeclareMathOperator{\sgn}{sgn}% 符号函数 Sign function
 \DeclareMathOperator{\sinc}{sinc}% 辛格函数 Sinc function
 \DeclareMathOperator{\rect}{rect}% 矩形函数 Rectangular function
-\DeclareMathOperator{\tr}{Tr}% 矩阵的迹 Trace of matrix
 \DeclareMathOperator{\res}{Res}% 留数 Residue
+% \im、\tr、\sgn 不在这里定义 Not defined here: \im, \tr, \sgn
+%
+% 它们由 resources/katex-macros/ 提供,经 aaronnote-macros.sty 注入,
+% 并且那份定义会覆盖本文件 —— 之前 .cls 里的 \tr{A} 会被静默渲染成转置
+% 而不是迹。编辑器预览、导出 PDF 与本模板现在只有一个来源。
+% They come from resources/katex-macros/ via the generated
+% aaronnote-macros.sty, whose definitions override this file anyway: a
+% \tr{A} written for this class used to render silently as a transpose
+% instead of a trace. Editor preview, exported PDF and this template now
+% share one source.
+%   \tr  transpose, one argument   \Tr  trace   \im  image (lowercase)
 
 % 题目和题解风格 Problem and solution style
 \newtheoremstyle{Problem}% Theorem style name

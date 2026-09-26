@@ -52,12 +52,14 @@ describe("kernel heartbeat", () => {
   test("stays quiet while the kernel keeps echoing", async () => {
     const responder = await startEchoResponder();
     let deaths = 0;
+    let successes = 0;
     const heartbeat = createKernelHeartbeat({
       connection: connectionFor(responder.port),
       zmq,
       intervalMs: 20,
       timeoutMs: 200,
       maxMisses: 2,
+      onAlive: () => { successes += 1; },
       onDead: () => { deaths += 1; },
     });
 
@@ -65,6 +67,7 @@ describe("kernel heartbeat", () => {
       heartbeat.start();
       await settle(300);
       expect(deaths).toBe(0);
+      expect(successes).toBeGreaterThan(0);
     } finally {
       heartbeat.stop();
       await responder.stop();

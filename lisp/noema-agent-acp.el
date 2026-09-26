@@ -378,6 +378,42 @@ the real agent-shell buffer, so it accepts input and interrupts directly."
   (or (buffer-local-value 'shell-maker--busy buffer)
       (run-hook-with-args-until-success 'noema-agent-acp-busy-functions buffer)))
 
+(defcustom noema-agent-acp-auto-stop-origins '(run probe pi)
+  "Session origins whose idle, hidden agents may be stopped automatically.
+Automatic stops are the periodic warm-buffer sweep and closing a project when
+its last `.noema' document goes.  Sessions a person opened -- `manual',
+`takeover', `foreign' (a bare `M-x agent-shell') -- are never stopped behind
+their back; close them with \\[noema-agent-acp-close] instead."
+  :type '(repeat symbol)
+  :group 'noema-agent-session)
+
+(defun noema-agent-acp-note-activity (&rest _)
+  "Record that the current agent buffer changed: input, output or a prompt.
+Idle time is measured from real activity, not from when the session was
+last shown, so a conversation typed directly into the buffer stays warm."
+  (setq noema-agent-acp-last-used-at (float-time)))
+
+(defun noema-agent-acp--track-activity-h ()
+  "Measure this agent buffer's idle time from every change to it."
+  (add-hook 'after-change-functions #'noema-agent-acp-note-activity nil t)
+  (unless noema-agent-acp-last-used-at
+    (noema-agent-acp-note-activity)))
+
+(add-hook 'agent-shell-mode-hook #'noema-agent-acp--track-activity-h)
+(dolist (buffer (buffer-list))
+  (when (noema-agent-acp-agent-buffer-p buffer)
+    (with-current-buffer buffer (noema-agent-acp--track-activity-h))))
+
+(defun noema-agent-acp-auto-stoppable-p (buffer)
+  "Return non-nil when an automatic lifecycle may stop agent BUFFER.
+It must be idle, shown in no window of any frame, and started by an origin in
+`noema-agent-acp-auto-stop-origins'.  Every automatic stop path asks this."
+  (and (noema-agent-acp-agent-buffer-p buffer)
+       (memq (buffer-local-value 'noema-agent-acp-session-origin buffer)
+             noema-agent-acp-auto-stop-origins)
+       (not (noema-agent-acp-busy-p buffer))
+       (not (get-buffer-window buffer t))))
+
 (defun noema-agent-acp-confirm-stop (buffer action)
   "Return non-nil when ACTION may stop agent BUFFER, asking while it is busy."
   (or (not (noema-agent-acp-busy-p buffer))
@@ -1003,20 +1039,70 @@ Return the stderr buffer when it was renamed."
       (rename-buffer (concat " " (buffer-name)) t))
     stderr))
 
+(defvar noema-agent-acp-process-directory-function nil
+  "Function mapping a session directory to its agent process directory.
+It receives an expanded directory and returns the directory the agent process
+starts in, or nil when no process can run there.  A host with its own file
+routing, such as a logical /fs: layer, sets this so Noema and a bare
+`agent-shell' agree on placement.  nil uses Emacs's own file handlers.")
+
+(defun noema-agent-acp--default-process-directory (directory)
+  "Return DIRECTORY for an agent process through Emacs file handlers.
+A logical /fs: name becomes its client-accessible spelling when there is one;
+a remote name stays, and `make-process' routes the agent to that host."
+  (let ((client (and (string-prefix-p "/fs:" directory)
+                     (fboundp 'remote-client-file-name)
+                     (remote-client-file-name directory))))
+    (cond (client client)
+          ((file-remote-p directory) directory)
+          ((not (string-prefix-p "/fs:" directory)) directory))))
+
+(defvar noema-agent-acp-agent-file-function nil
+  "Function mapping (FILE SESSION) to the path the SESSION's agent opens.
+FILE is an expanded Emacs file name; SESSION is an agent buffer or nil for an
+agent on this machine.  Return nil when that agent's machine cannot reach
+FILE.  A host with its own file routing sets this alongside
+`noema-agent-acp-process-directory-function'.  nil uses Emacs's own handlers.")
+
+(defun noema-agent-acp--default-agent-file (file session)
+  "Return FILE as SESSION's agent sees it, through Emacs file handlers."
+  (let ((agent-host (and session
+                         (file-remote-p
+                          (buffer-local-value 'default-directory session))))
+        (client (if (string-prefix-p "/fs:" file)
+                    (and (fboundp 'remote-client-file-name)
+                         (remote-client-file-name file))
+                  file)))
+    (cond ((and agent-host (equal agent-host (file-remote-p file)))
+           (file-local-name file))
+          ((and (not agent-host) client (not (file-remote-p client))
+                (not (string-prefix-p "/fs:" client)))
+           client))))
+
+(defun noema-agent-acp-agent-file (file &optional session)
+  "Return FILE as the path the agent of SESSION opens, or nil.
+SESSION nil means an agent running on this machine.  nil means the agent's
+machine cannot reach FILE, such as a local file for an agent on a server."
+  (funcall (or noema-agent-acp-agent-file-function
+               #'noema-agent-acp--default-agent-file)
+           (expand-file-name file) session))
+
 (defun noema-agent-acp--client-directory (directory)
-  "Translate a logical local DIRECTORY before crossing the ACP boundary.
-Never pass an unresolved /fs: identity to a native agent process."
+  "Return the directory an agent process for DIRECTORY starts in.
+Never hand an unresolved identity to a process: signal when neither this
+machine nor a routed host can run the agent there."
   (let* ((expanded (expand-file-name directory))
-         (client (if (string-prefix-p "/fs:" expanded)
-                     (or (and (fboundp 'remote-client-file-name)
-                              (remote-client-file-name expanded))
-                         (user-error "Agent requires a client-accessible directory: %s" directory))
-                   expanded)))
-    (when (or (string-prefix-p "/fs:" client) (file-remote-p client))
-      (user-error "Agent requires a local directory: %s" directory))
-    (unless (file-directory-p client)
-      (user-error "Agent directory does not exist: %s" client))
-    (file-name-as-directory client)))
+         (process (funcall (or noema-agent-acp-process-directory-function
+                               #'noema-agent-acp--default-process-directory)
+                           expanded)))
+    (unless process
+      (user-error "No machine can run an agent in: %s" directory))
+    (unless (condition-case error-object
+                (file-directory-p process)
+              (error (user-error "Agent directory is unreachable: %s (%s)"
+                                 process (error-message-string error-object))))
+      (user-error "Agent directory does not exist: %s" process))
+    (file-name-as-directory process)))
 
 (cl-defun noema-agent-acp-start (&key config directory session-id fork-session-id focus
                                       (origin 'manual) (render-policy 'visible))
@@ -1212,11 +1298,14 @@ from transport and preserves any draft at the native input prompt."
                          (when on-failure (funcall on-failure error raw))
                        (noema-agent-acp--finish-prompt buffer receipt)))))))
 
-(defun noema-agent-acp-file-uri (file)
+(defun noema-agent-acp-file-uri (file &optional session)
   "Return FILE as the `file://' uri agent-shell would put in a content block.
-Path resolution honours `agent-shell-path-resolver-function', so a session
-running behind a resolver sees the same path its own attachments use."
-  (concat "file://" (agent-shell--resolve-path (expand-file-name file))))
+With SESSION, the path is the one that session's agent opens (see
+`noema-agent-acp-agent-file'), so a remote agent gets its own machine's path.
+Otherwise path resolution honours `agent-shell-path-resolver-function'."
+  (concat "file://"
+          (or (and session (noema-agent-acp-agent-file file session))
+              (agent-shell--resolve-path (expand-file-name file)))))
 
 (defun noema-agent-acp-file-metadata (file)
   "Return (:mime-type MIME :size BYTES) for FILE, or nil when unreadable.

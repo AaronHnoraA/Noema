@@ -49,6 +49,54 @@ async function writeSkill(directory: string, id: string, body: string): Promise<
 }
 
 describe("Noema capability resolution", () => {
+  test("nested Skill metadata selects dependencies and reports unavailable dependencies", async () => withTree(async ({ root, home, builtin }) => {
+    await writeFile(join(root, "noema-capabilities.json"), JSON.stringify({
+      schema: "noema.capabilities/1", skills: { disabled: [] }, mcp: {},
+    }));
+    for (const id of ["evidence", "claims"]) await mkdir(join(builtin, id));
+    await writeFile(join(builtin, "evidence", "SKILL.md"),
+      "---\nname: evidence\ndescription: >-\n  Synthesize evidence after reading sources.\nnoema:\n  domain: research\n  requires: [claims]\n---\n\nRecord a source-backed finding.\n");
+    await writeFile(join(builtin, "claims", "SKILL.md"),
+      "---\nname: claims\ndescription: Check every claim.\n---\n\nMake the claim precise.\n");
+    const options = { root, userHome: home, builtinSkillDirectory: builtin, environment: {}, requestedSkills: ["evidence"] };
+    const selected = await resolveCapabilities(options);
+    expect(selected.active.skills).toEqual(["claims", "evidence"]);
+    expect(selected.skills.find((skill) => skill.id === "evidence")?.effective).toMatchObject({
+      domain: "research", requires: ["claims"],
+    });
+    expect(selected.skills.find((skill) => skill.id === "evidence")?.description).toBe("Synthesize evidence after reading sources.");
+    expect(() => assertRunnableCapabilities(selected)).not.toThrow();
+    await writeJSON(join(root, "noema-capabilities.json"), {
+      schema: "noema.capabilities/1", skills: { disabled: ["claims"] }, mcp: {},
+    });
+    const blocked = await resolveCapabilities(options);
+    expect(blocked.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "skill-dependency-unavailable", id: "evidence" }),
+    ]));
+    expect(() => assertRunnableCapabilities(blocked)).toThrow(/requires unavailable or disabled Skill claims/);
+  }));
+
+  test("missing and cyclic Skill dependencies fail closed before a Run", async () => withTree(async ({ root, home, builtin }) => {
+    for (const id of ["alpha", "beta", "orphan"]) await mkdir(join(builtin, id));
+    await writeFile(join(builtin, "alpha", "SKILL.md"),
+      "---\nname: alpha\ndescription: A\nnoema:\n  requires: [beta]\n---\nA\n");
+    await writeFile(join(builtin, "beta", "SKILL.md"),
+      "---\nname: beta\ndescription: B\nnoema:\n  requires: [alpha]\n---\nB\n");
+    await writeFile(join(builtin, "orphan", "SKILL.md"),
+      "---\nname: orphan\ndescription: O\nnoema:\n  requires: [absent]\n---\nO\n");
+    const options = { root, userHome: home, builtinSkillDirectory: builtin, environment: {} };
+    const cycle = await resolveCapabilities({ ...options, requestedSkills: ["alpha"] });
+    expect(cycle.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "skill-dependency-cycle", id: "alpha" }),
+    ]));
+    expect(() => assertRunnableCapabilities(cycle)).toThrow(/invalid/);
+    const missing = await resolveCapabilities({ ...options, requestedSkills: ["orphan"] });
+    expect(missing.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "skill-dependency-missing", id: "orphan" }),
+    ]));
+    expect(() => assertRunnableCapabilities(missing)).toThrow(/requires missing Skill absent/);
+  }));
+
   test("unified diffs preserve global sources, apply with patch and freeze at run resolution", async () => withTree(async ({ root, home, builtin }) => {
     const globals = join(home, ".emacs.d", "etc", "noema", "skills");
     await writeSkill(globals, "proof", "Shared proof rules");

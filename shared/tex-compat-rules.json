@@ -1,0 +1,10 @@
+{
+  "$comment": "Single source of truth for TeX constructs the KaTeX-compatible renderers do not implement natively. Consumed by shared/tex-compat.mjs (browser + server) and by the Emacs RaTeX preview via lisp/lang/tex/init-latex.el, so the editor preview and the published note agree on what renders.",
+  "environments": {
+    "multline": "gathered",
+    "multline*": "gathered"
+  },
+  "macros": {
+    "\\displaylines": "\\begin{gathered}#1\\end{gathered}"
+  }
+}

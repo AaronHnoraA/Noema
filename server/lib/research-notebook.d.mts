@@ -111,6 +111,7 @@ export type ResearchNotebookService = {
   sync: ResearchServiceMethod;
   save: ResearchServiceMethod;
   createCell: ResearchServiceMethod;
+  createCells: ResearchServiceMethod;
   updateCell: ResearchServiceMethod;
   deleteCell: ResearchServiceMethod;
   deleteWorkNode: ResearchServiceMethod;
@@ -149,6 +150,7 @@ export function migrateResearchNotebookD023(notebook: ResearchNotebook, options?
 }): { notebook: ResearchNotebook; extractions: any[]; validation: ResearchValidation; changed: boolean };
 export function findDependsCycle(notebook: ResearchNotebook): string[] | null;
 export function findDependencyCycle(notebook: ResearchNotebook, types?: string[]): string[] | null;
+export function researchRegressionTargets(notebook: ResearchNotebook, workNodeId: string): string[];
 export function validateResearchNotebook(notebook: ResearchNotebook): ResearchValidation;
 export function createResearchCell(
   notebook: ResearchNotebook,

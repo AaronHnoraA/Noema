@@ -1,6 +1,7 @@
 import katex from "katex";
 import katexCssText from "katex/dist/katex.min.css?inline";
 import { getKatexMacros, getKatexMacrosVersion, type KatexMacroMap } from "./katex-macros.ts";
+import { COMPAT_MACROS } from "../shared/tex-compat.mjs";
 import { katexCompatibleLatex } from "./tex-compat.ts";
 
 type KatexRenderOptions = {
@@ -22,9 +23,10 @@ let mathHtmlCacheBytes = 0;
 // Plain TeX/amsmath compatibility commands that have direct KaTeX
 // environment equivalents. Keep these at render time so the note's TeX source
 // remains unchanged and round-trips through the visual editor verbatim.
-const KATEX_COMPAT_MACROS: KatexMacroMap = {
-  "\\displaylines": "\\begin{gathered}#1\\end{gathered}",
-};
+//
+// Defined in `shared/tex-compat-rules.json`, which the Emacs RaTeX preview
+// reads too, so both renderers accept exactly the same set of commands.
+const KATEX_COMPAT_MACROS: KatexMacroMap = { ...COMPAT_MACROS };
 
 export function formatMathRenderError(error: unknown, maxLength = MATH_RENDER_ERROR_MAX_LENGTH): string {
   const raw = error instanceof Error ? error.message : String(error ?? "");

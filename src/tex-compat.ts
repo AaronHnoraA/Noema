@@ -1,3 +1,5 @@
+import { rewriteCompatEnvironments } from "../shared/tex-compat.mjs";
+
 export function normalizeVisualTexLatex(source: string): string {
   return source
     .replace(/\r\n?/g, "\n")
@@ -6,12 +8,14 @@ export function normalizeVisualTexLatex(source: string): string {
 }
 
 /**
- * KaTeX does not implement amsmath's `multline` environment. Render it as the
- * closest supported unnumbered multi-row environment while leaving the note's
+ * KaTeX does not implement every amsmath environment (`multline`, ...). Render
+ * each one as the closest supported equivalent while leaving the note's
  * standard TeX source untouched for MathLive and LaTeX export.
+ *
+ * The substitution table lives in `shared/tex-compat-rules.json` because the
+ * Emacs RaTeX preview applies the same rewrites; a second copy here is how the
+ * preview and the published note would start disagreeing.
  */
 export function katexCompatibleLatex(source: string): string {
-  return normalizeVisualTexLatex(source)
-    .replace(/\\begin\{multline\*?\}/g, "\\begin{gathered}")
-    .replace(/\\end\{multline\*?\}/g, "\\end{gathered}");
+  return rewriteCompatEnvironments(normalizeVisualTexLatex(source));
 }

@@ -683,6 +683,25 @@ const projectedJupyterCell = hostMode === "server" ? null : createJupyterCellSer
       );
       return Array.isArray(result?.specs) ? result.specs : [];
     },
+    async listConnections(file) {
+      const result = await gatewayRequest(
+        "aaronnote.jupyter.kernels", { file }, 30_000,
+      );
+      return Array.isArray(result?.connections) ? result.connections : [];
+    },
+    async attach(body) {
+      return await gatewayRequest("aaronnote.jupyter.attach", body, 60_000);
+    },
+    async attachmentStatus(attachmentId) {
+      return await gatewayRequest(
+        "aaronnote.jupyter.attachment.status", { attachmentId }, 30_000,
+      );
+    },
+    async releaseAttachment(attachmentId) {
+      return await gatewayRequest(
+        "aaronnote.jupyter.attachment.release", { attachmentId }, 30_000,
+      );
+    },
     async launch(body) {
       return await gatewayRequest("aaronnote.jupyter.launch", body, 60_000);
     },

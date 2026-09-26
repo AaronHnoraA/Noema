@@ -264,7 +264,9 @@ describe("research notebook model", () => {
 
   test("a declared plan is written whole, or not at all", async () => {
     await withTempDir(async (dir) => {
-      const service = createResearchNotebookService({ getIndexer: () => ({ index: async () => ({}) }) });
+      const service = createResearchNotebookService({ getIndexer: () => ({
+        index: async () => ({}), status: async () => ({}), events: async () => [],
+      }) });
       const file = join(dir, "plan.noema");
       const created = await service.create({ file, title: "Plan" });
       const question = await service.createCell({

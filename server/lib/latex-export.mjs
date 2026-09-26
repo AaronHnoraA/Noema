@@ -1,25 +1,32 @@
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { scanInlineCommands } from "../../shared/command-syntax.mjs";
 import { REVISION_KINDS, revisionKind } from "../../shared/revision-kinds.mjs";
 
-const DEFAULT_TEMPLATE = `\\documentclass[11pt]{article}
+// The bundled article template is the single source for the default export
+// preamble. It used to be duplicated as a literal here and had already
+// drifted: the literal was missing microtype, enumitem, titlesec, xcolor and
+// hypersetup that the real template gained. Read the shipped file instead and
+// keep only a minimal last-resort literal for the case where even that is
+// unreadable.
+const BUNDLED_ARTICLE_TEMPLATE = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+  "resources",
+  "templates",
+  "latex",
+  "noema-article.tex",
+);
+
+const MINIMAL_TEMPLATE = `\\documentclass[11pt]{article}
 \\usepackage[a4paper,margin=1in]{geometry}
-\\usepackage{amsmath,amssymb,amsthm,mathtools}
 \\usepackage{CJKutf8}
 \\usepackage{graphicx}
 \\usepackage{hyperref}
 \\AtBeginDocument{\\begin{CJK*}{UTF8}{gbsn}}
 \\AtEndDocument{\\end{CJK*}}
-
-\\newtheorem{theorem}{Theorem}
-\\newtheorem{lemma}{Lemma}
-\\newtheorem{proposition}{Proposition}
-\\newtheorem{corollary}{Corollary}
-\\newtheorem{definition}{Definition}
-\\theoremstyle{remark}
-\\newtheorem{remark}{Remark}
-\\newtheorem{example}{Example}
 
 \\usepackage{aaronnote-macros}
 
@@ -33,6 +40,18 @@ const DEFAULT_TEMPLATE = `\\documentclass[11pt]{article}
 
 \\end{document}
 `;
+
+let defaultTemplateCache = null;
+
+async function defaultTemplateText() {
+  if (defaultTemplateCache !== null) return defaultTemplateCache;
+  try {
+    defaultTemplateCache = await readFile(BUNDLED_ARTICLE_TEMPLATE, "utf8");
+  } catch {
+    defaultTemplateCache = MINIMAL_TEMPLATE;
+  }
+  return defaultTemplateCache;
+}
 
 const ENV_MAP = new Map([
   ["definition", "definition"],
@@ -563,7 +582,7 @@ export function bibliographyReferencesToLatex(references = [], citationKeyById =
 }
 
 export function applyLatexTemplate(template, vars) {
-  const source = String(template || DEFAULT_TEMPLATE);
+  const source = String(template || MINIMAL_TEMPLATE);
   return source.replace(/\{\{\s*([A-Za-z][\w-]*)\s*\}\}/g, (_m, key) => {
     if (!Object.prototype.hasOwnProperty.call(vars, key)) throw new Error(`Unknown LaTeX template placeholder: {{${key}}}`);
     return String(vars[key] ?? "");
@@ -732,7 +751,7 @@ export async function readLatexTemplate(templatesRoot, templatePath = "") {
       return { file: candidate, text: await readFile(candidate, "utf8") };
     } catch {}
   }
-  return { file: "", text: DEFAULT_TEMPLATE };
+  return { file: "", text: await defaultTemplateText() };
 }
 
 export function defaultLatexOutputPath(sourceFile, title = "") {

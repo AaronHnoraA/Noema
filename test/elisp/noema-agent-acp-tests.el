@@ -31,7 +31,9 @@
             (should (eq (shell-maker--process) (get-buffer-process buffer)))
             (agent-shell--update-text :state agent-shell--state :block-id "answer"
                                       :text "\nFinished answer.\n" :create-new t)
-            (should-not (noema-agent-acp--live-input-p))
+            ;; agent-shell >= 0.79 inserts output above the prompt, so a
+            ;; plain reply leaves the input prompt live.
+            (should (noema-agent-acp--live-input-p))
             ;; Reproduce an already-open session with the old stale mapping
             ;; and busy flag.  Focus input must repair these as well.
             (setq-local shell-maker--buffer-name-override original-name

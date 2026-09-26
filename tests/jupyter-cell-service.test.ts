@@ -209,6 +209,9 @@ describe("jupyter cell service (no kernel)", () => {
             resourceDir: "/runtime/kernels/python3",
           }];
         },
+        async listConnections() {
+          return [{ token: "kernel-remote.json", mtimeMs: 42 }];
+        },
       },
       openFile(payload: { file: string; line: number; col: number }) {
         opened.push(payload);
@@ -219,6 +222,7 @@ describe("jupyter cell service (no kernel)", () => {
       expect(catalog.choices).toEqual(expect.arrayContaining([
         expect.objectContaining({ kind: "start", name: "python3", group: "Kernel Specs" }),
         expect.objectContaining({ kind: "start", name: "lean4", group: "Kernel Specs" }),
+        expect.objectContaining({ kind: "start", name: "attach:kernel-remote.json", group: "Attach" }),
       ]));
       expect(catalog.selections).toEqual(expect.arrayContaining([
         expect.objectContaining({ kind: "none", value: "", label: "No Kernel" }),

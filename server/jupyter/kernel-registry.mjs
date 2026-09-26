@@ -239,25 +239,90 @@ export function createKernelRegistry({
     persistSidecar();
   }
 
+  function markRecordDisconnected(record, reason) {
+    if (record.disposed || record.status === "dead") return;
+    record.status = "disconnected";
+    record.lastError = reason;
+    record.needsRebind = true;
+    // Disposing our client connection rejects every in-flight future, but it
+    // does not signal or restart the target kernel. This keeps the kernel's
+    // state while preventing an execution queue from hanging forever on a
+    // transport generation that can no longer answer.
+    try { record.kernel?.dispose(); } catch { /* already disconnected */ }
+    try { record.socket?.dispose(); } catch { /* already disconnected */ }
+  }
+
+  async function handleHeartbeatFailure(record, token, error) {
+    if (record.disposed || record.heartbeatToken !== token) return;
+    const reason = error?.message || "kernel stopped answering its heartbeat";
+    if (!record.hosted || !kernelHost) {
+      log.warn(`kernel for ${record.key} stopped answering its heartbeat; marking dead`);
+      markRecordDead(record, reason);
+      return;
+    }
+
+    // A hosted kernel's heartbeat crosses one or more Remote forwards. A
+    // missed echo proves that this transport generation is unusable, not that
+    // the target process died. The broker's tri-state process probe is the
+    // authority for that distinction.
+    try {
+      await refreshHostedRecord(record);
+      // A generation change rebinds the connection and installs a new token.
+      if (record.heartbeatToken !== token || record.disposed || record.status === "dead") return;
+      markRecordDisconnected(record, reason);
+    } catch (probeError) {
+      if (record.heartbeatToken !== token || record.disposed) return;
+      markRecordDisconnected(
+        record,
+        `Remote transport unavailable while probing kernel: ${probeError?.message || probeError}`,
+      );
+    }
+
+    // Keep probing the same stable client endpoint. Workspace recovery can
+    // repair it in place; the next successful echo clears `disconnected`.
+    if (record.heartbeatToken === token && !record.disposed && record.status !== "dead") {
+      startHeartbeat(record, record.connectionInfo);
+    }
+  }
+
   /**
    * Watch a raw-ZMQ record's `hb` channel.
    *
    * Locally spawned kernels also get one: process exit tells us a kernel is
    * gone, but not that a live process has stopped servicing its sockets. For
-   * hosted (Emacs-broker) and attached kernels this is the *only* death
-   * signal there is — their process handles cannot report an exit.
+   * hosted (Emacs-broker) and attached kernels this is the serviceability
+   * signal; the broker separately decides whether target process death was
+   * actually confirmed.
    */
   function startHeartbeat(record, connectionInfo) {
     if (record.kind === "server") return;
     if (!connectionInfo?.hb_port) return;
+    stopHeartbeat(record);
+    const token = Symbol("kernel-heartbeat");
+    record.heartbeatToken = token;
     record.heartbeat = createKernelHeartbeat({
       connection: connectionInfo,
       zmq,
       ...(heartbeatIntervalMs ? { intervalMs: heartbeatIntervalMs } : {}),
       stderr,
-      onDead: () => {
-        log.warn(`kernel for ${record.key} stopped answering its heartbeat; marking dead`);
-        markRecordDead(record, "kernel stopped answering its heartbeat");
+      onAlive: () => {
+        if (record.heartbeatToken !== token || record.disposed) return;
+        if (record.status === "disconnected" && !record.reconnectPromise) {
+          record.reconnectPromise = refreshHostedRecord(record)
+            .catch((reconnectError) => {
+              if (!record.disposed && record.status !== "dead") {
+                record.lastError = reconnectError?.message || String(reconnectError);
+              }
+            })
+            .finally(() => {
+              record.reconnectPromise = undefined;
+            });
+        }
+      },
+      onDead: (heartbeatError) => {
+        void handleHeartbeatFailure(record, token, heartbeatError).catch((handlerError) => {
+          log.error("kernel heartbeat failure handler threw", handlerError);
+        });
       },
     });
     record.heartbeat.start();
@@ -270,6 +335,7 @@ export function createKernelRegistry({
       /* ignore */
     }
     record.heartbeat = undefined;
+    record.heartbeatToken = undefined;
   }
 
   /** The bookkeeping every connector's record shares; `base` supplies the connector-specific half. */
@@ -295,6 +361,9 @@ export function createKernelRegistry({
       lastError: undefined,
       disposed: false,
       heartbeat: undefined,
+      heartbeatToken: undefined,
+      reconnectPromise: undefined,
+      needsRebind: false,
       // `kernel_info_reply` content, captured during the readiness handshake:
       // language_info (file extension, codemirror mode), banner, help_links.
       kernelInfo: null,
@@ -442,7 +511,7 @@ export function createKernelRegistry({
     }
   }
 
-  async function attachTo(key, kernelName, connectionFilePathOrInfo) {
+  async function attachTo(key, kernelName, connectionFilePathOrInfo, hosted) {
     const connectionInfo =
       typeof connectionFilePathOrInfo === "string"
         ? JSON.parse(await fs.readFile(connectionFilePathOrInfo, "utf8"))
@@ -453,6 +522,9 @@ export function createKernelRegistry({
       key,
       kind: "attached",
       attached: true,
+      hosted: Boolean(hosted),
+      hostAttachmentId: hosted?.attachmentId,
+      hostGeneration: Number(hosted?.generation || 1),
       kernelName,
       kernelSpec: { argv: [], language: undefined, interrupt_mode: "message" },
       connectionInfo,
@@ -498,6 +570,10 @@ export function createKernelRegistry({
       serverId,
       serverKernelId: String(started.model?.id || ""),
       serverSessionId: String(started.sessionId || ""),
+      // A model selected from listRunning() is only adopted. Disconnecting
+      // Noema must not kill a server process owned by another client/session.
+      serverOwned: !kernelId,
+      serverConnectionVersion: started.connectionVersion,
       connectionInfo: undefined,
       kernel: started.kernel,
       socket: undefined,
@@ -531,13 +607,17 @@ export function createKernelRegistry({
     } catch {
       /* ignore */
     }
-    if (record.kind === "server" && serverRegistry) {
+    if (record.kind === "server" && record.serverOwned && serverRegistry) {
       // No process to signal: ask the server to stop it, and remove the
       // session too so it does not linger in the server's own UI.
       await serverRegistry.shutdownKernel(record.serverId, {
         kernelId: record.serverKernelId,
         sessionId: record.serverSessionId,
       }).catch(noop);
+    }
+    if (record.kind === "attached" && record.hostAttachmentId
+        && typeof kernelHost?.releaseAttachment === "function") {
+      await kernelHost.releaseAttachment(record.hostAttachmentId).catch(noop);
     }
     if (record.owned && record.process) {
       await record.process.dispose().catch(noop);
@@ -546,26 +626,90 @@ export function createKernelRegistry({
   }
 
   async function refreshHostedRecord(record) {
-    if (!kernelHost || !record?.hostRuntimeId || record.disposed) return record;
-    const status = await kernelHost.status(record.hostRuntimeId);
-    if (!status?.alive) {
-      await kernelHost.shutdown(record.hostRuntimeId).catch(noop);
-      record.status = "dead";
-      record.lastError = status?.message || "Remote kernel is not alive";
+    if (!kernelHost || !record?.hosted || record.disposed) return record;
+    const attached = Boolean(record.hostAttachmentId);
+    const status = attached
+      ? await kernelHost.attachmentStatus(record.hostAttachmentId)
+      : record.hostRuntimeId ? await kernelHost.status(record.hostRuntimeId) : null;
+    if (!status) return record;
+    // Only a literal false is permission to discard kernel state. Attached
+    // kernels have no owned PID to probe, so their broker reports "unknown"
+    // and the heartbeat remains the liveness authority.
+    if (status?.alive === false) {
+      if (!attached) await kernelHost.shutdown(record.hostRuntimeId).catch(noop);
+      markRecordDead(record, status?.message || "Remote kernel is not alive");
       return record;
     }
     const generation = Number(status.generation || 1);
-    if (generation === Number(record.hostGeneration || 1)) return record;
+    if (generation === Number(record.hostGeneration || 1) && !record.needsRebind) return record;
     rebindHostedConnection(record, {
-      connectionInfo: status.connectionInfo,
+      connectionInfo: status.connectionInfo || record.connectionInfo,
       generation,
-      stateLost: Boolean(status.stateLost),
+      stateLost: attached ? false : Boolean(status.stateLost),
     });
     try {
       return await readyRecord(record, `reconnecting to hosted kernel "${record.kernelName}"`);
     } catch (ex) {
-      record.status = "dead";
+      markRecordDisconnected(
+        record,
+        `Failed to rebind remote kernel transport: ${ex?.message || ex}`,
+      );
+      startHeartbeat(record, record.connectionInfo);
       throw ex;
+    }
+  }
+
+  async function refreshServerRecord(record) {
+    if (!serverRegistry || record?.kind !== "server" || record.disposed) return record;
+    const refreshed = await serverRegistry.refresh(record.serverId);
+    const disconnected = record.kernel?.connectionStatus === "disconnected";
+    // `changed` compares with the registry's immediately previous resolve,
+    // which another catalog/contents call may already have refreshed. Compare
+    // the record's own binding version so that such a refresh cannot hide a
+    // stale WebSocket route.
+    const versionChanged = Boolean(
+      refreshed?.version
+      && refreshed.version !== record.serverConnectionVersion,
+    );
+    if (!versionChanged && !disconnected && !record.needsRebind) return record;
+    let connected;
+    try {
+      connected = await serverRegistry.connectKernel(
+        record.serverId, record.serverKernelId,
+      );
+    } catch (error) {
+      if (error?.code === "JUPYTER_KERNEL_NOT_FOUND") {
+        markRecordDead(record, error?.message || "Remote server kernel no longer exists");
+      } else {
+        markRecordDisconnected(
+          record,
+          `Cannot reconnect to Jupyter server kernel: ${error?.message || error}`,
+        );
+      }
+      throw error;
+    }
+    try { record.kernel?.dispose(); } catch { /* stale provider connection */ }
+    record.kernel = connected.kernel;
+    record.serverConnectionVersion = connected.connectionVersion || refreshed.version;
+    record.widgetGeneration += 1;
+    record.id = newId();
+    record.status = "starting";
+    record.needsRebind = false;
+    record.kernelInfo = null;
+    try {
+      return await readyRecord(
+        record,
+        `reconnecting to kernel on Jupyter server ${record.serverId}`,
+      );
+    } catch (error) {
+      // A failed handshake says the provider route or WebSocket is unusable;
+      // it does not say that the server-side kernel process is gone. Preserve
+      // the record and retry this same kernel id on the next ensure().
+      markRecordDisconnected(
+        record,
+        `Failed to reconnect to Jupyter server kernel: ${error?.message || error}`,
+      );
+      throw error;
     }
   }
 
@@ -607,7 +751,9 @@ export function createKernelRegistry({
     /** Existing live (non-dead) record for `key`, or undefined. */
     get(key) {
       const record = records.get(key);
-      return record && record.status !== "dead" ? record : undefined;
+      return record && record.status !== "dead" && record.status !== "disconnected"
+        ? record
+        : undefined;
     },
 
     /**
@@ -645,7 +791,10 @@ export function createKernelRegistry({
      */
     async ensureServer(key, kernelName, target) {
       const existing = records.get(key);
-      if (existing && existing.status !== "dead") return existing;
+      if (existing && existing.status !== "dead") {
+        await refreshServerRecord(existing);
+        if (existing.status !== "dead") return existing;
+      }
 
       const record = await connectServer(key, kernelName, target);
       if (existing) {
@@ -673,6 +822,29 @@ export function createKernelRegistry({
       return record;
     },
 
+    /** Attach through the Emacs broker, which owns target placement and all five forwards. */
+    async ensureHostedAttachment(key, kernelName, { sourceFile, token }) {
+      if (typeof kernelHost?.attach !== "function"
+          || typeof kernelHost?.attachmentStatus !== "function"
+          || typeof kernelHost?.releaseAttachment !== "function") {
+        throw new Error("The kernel host does not provide the complete remote attachment lifecycle");
+      }
+      const existing = records.get(key);
+      if (existing && existing.status !== "dead") {
+        await refreshHostedRecord(existing);
+        if (existing.status !== "dead") return existing;
+      }
+
+      const hosted = await kernelHost.attach({ sourceFile, token, kernelName });
+      const record = await attachTo(key, kernelName, hosted.connectionInfo, hosted);
+      if (existing) {
+        record.widgetGeneration = existing.widgetGeneration + 1;
+        await disposeRecord(existing, { graceful: false }).catch(noop);
+      }
+      records.set(key, record);
+      return record;
+    },
+
     touch(key) {
       const record = records.get(key);
       if (record) record.lastActivity = Date.now();
@@ -684,21 +856,17 @@ export function createKernelRegistry({
       if (!record) throw new Error(`No kernel to restart for ${key}`);
       if (record.attached) throw new Error("Cannot restart an attached kernel");
       if (record.kind === "server") {
-        // The server restarts the process in place and keeps the kernel id,
-        // so the existing connection stays valid — but in-kernel state is
-        // gone, and any browser widget connection must not be reused.
+        // The server keeps the kernel id, but a provider refresh may have
+        // replaced the forwarded HTTP/WebSocket endpoint. Always establish a
+        // fresh client after the REST restart instead of trusting the old
+        // KernelConnection to migrate itself across routes.
         if (!serverRegistry) throw new Error("No Jupyter server registry is configured");
         await serverRegistry.restartKernel(record.serverId, record.serverKernelId);
-        record.widgetGeneration += 1;
         record.stateLost = true;
         record.executionCount = null;
         record.variableBaseline = null;
-        record.kernelInfo = null;
-        record.status = "starting";
-        return await markDeadOnFailure(
-          record,
-          readyRecord(record, `restarting kernel on Jupyter server ${record.serverId}`),
-        );
+        record.needsRebind = true;
+        return await refreshServerRecord(record);
       }
       if (record.hosted && typeof kernelHost?.restart === "function") {
         // The broker owns placement, so let it relaunch on the target and

@@ -361,6 +361,10 @@ export function createJupyterCellService({
   const execTimeoutMs = durationFromEnv("AARONNOTE_JUPYTER_EXEC_TIMEOUT_MS", 0);
   const interruptGraceMs = durationFromEnv("AARONNOTE_JUPYTER_INTERRUPT_GRACE_MS", 5000);
   const shutdownGraceMs = durationFromEnv("AARONNOTE_JUPYTER_SHUTDOWN_GRACE_MS", 2000);
+  // Remote kernels may need to establish an SSH hop or wait in a scheduler
+  // queue before they can answer kernel_info. Fifteen seconds made a healthy
+  // remote_ikernel look dead during ordinary connection setup.
+  const kernelLaunchTimeoutMs = durationFromEnv("AARONNOTE_JUPYTER_KERNEL_LAUNCH_TIMEOUT_MS", 60_000);
   const introspectTimeoutMs = durationFromEnv("AARONNOTE_JUPYTER_INTROSPECT_TIMEOUT_MS", 3000);
   const liveFlushMs = durationFromEnv("AARONNOTE_JUPYTER_LIVE_FLUSH_MS", 80);
   // Jupyter itself waits for stdin indefinitely. We put a ceiling on it
@@ -500,6 +504,7 @@ export function createJupyterCellService({
           cwd: workspace,
           zmq,
           serverRegistry: servers,
+          launchTimeoutMs: kernelLaunchTimeoutMs,
           shutdownGraceMs,
           stderr,
           kernelHost,
@@ -610,7 +615,7 @@ export function createJupyterCellService({
   }
 
   function runtimeForBody(body) {
-    const noteFile = safeNoteFile(body?.file);
+    const noteFile = safeNoteFile(body?.file, body);
     const kernel = cleanToken(body?.kernel, "python3");
     const session = cleanToken(body?.session, "default");
     const language = languageForKernel(kernel, body?.language || body?.lang);
@@ -724,7 +729,9 @@ export function createJupyterCellService({
       kernel: record?.kernelName || "",
       session: record?.session || "default",
       language: record?.language || record?.kernelSpec?.language || "",
-      status: record?.status === "dead" ? "dead" : (running > 0 ? "running" : (record?.lastStatus || "idle")),
+      status: record?.status === "dead" || record?.status === "disconnected"
+        ? record.status
+        : (running > 0 ? "running" : (record?.lastStatus || "idle")),
       running,
       owned: Boolean(record?.owned),
       attached: Boolean(record?.attached),
@@ -824,9 +831,15 @@ export function createJupyterCellService({
       });
     } else if (kernel.startsWith("attach:")) {
       const token = kernel.slice("attach:".length);
-      const connectionFilePath = await resolveAttachToken(token, attachDirs);
-      if (!connectionFilePath) throw error(`No attachable kernel connection file found for "${token}"`, 404);
-      record = await registry.ensureAttached(key, kernel, connectionFilePath);
+      if (kernelHost?.attach) {
+        record = await registry.ensureHostedAttachment(
+          key, kernel, { sourceFile: noteFile, token },
+        );
+      } else {
+        const connectionFilePath = await resolveAttachToken(token, attachDirs);
+        if (!connectionFilePath) throw error(`No attachable kernel connection file found for "${token}"`, 404);
+        record = await registry.ensureAttached(key, kernel, connectionFilePath);
+      }
     } else {
       if (leanRuntimeP(language, kernel)) {
         throw error("Lean cells do not use a Jupyter kernel", 400);
@@ -846,7 +859,7 @@ export function createJupyterCellService({
   async function kernels(body = {}) {
     rejectResearchKernel(body, "list Jupyter kernels");
     const file = String(body?.file || "");
-    const specs = await listKernelSpecs(file ? safeNoteFile(file) : "");
+    const specs = await listKernelSpecs(file ? safeNoteFile(file, body) : "");
     const list = specs.map((entry) => ({
       name: entry.name,
       displayName: entry.spec.display_name || entry.name,
@@ -855,7 +868,9 @@ export function createJupyterCellService({
     if (!list.some((item) => item.name === "lean4")) {
       list.push({ name: "lean4", displayName: "Lean 4", language: "lean4" });
     }
-    const attachable = await findAttachableConnectionFiles(attachDirs);
+    const attachable = kernelHost?.listConnections && file
+      ? await kernelHost.listConnections(safeNoteFile(file, body))
+      : kernelHost ? [] : await findAttachableConnectionFiles(attachDirs);
     const attachableChoices = attachable.map((item) => ({
       name: `attach:${item.token}`,
       displayName: `Attach: ${item.token}`,
@@ -934,6 +949,12 @@ export function createJupyterCellService({
       stderr.write(`[aaronnote-jupyter] failed to list Jupyter servers: ${err?.message || err}\n`);
       return [];
     }
+    // A successful list is authoritative. Release cached providers (and their
+    // Remote forwards) that were removed from configuration; a failed list is
+    // not authoritative and deliberately preserves the last usable routes.
+    await servers.retain(
+      (configured || []).map((entry) => String(entry?.id || "")).filter(Boolean),
+    );
     return await Promise.all((configured || []).map(async (entry) => {
       const serverId = String(entry?.id || "");
       const base = {
@@ -1275,7 +1296,7 @@ export function createJupyterCellService({
 
   async function openScript(body) {
     rejectResearchKernel(body, "create or update Jupyter cells");
-    const noteFile = safeNoteFile(body?.file);
+    const noteFile = safeNoteFile(body?.file, body);
     const requestedKernel = cleanToken(body?.kernel, "python3");
     const session = cleanToken(body?.session, "default");
     const requestedLanguage = languageForKernel(
@@ -1379,7 +1400,7 @@ export function createJupyterCellService({
 
   async function readScriptCell(body) {
     rejectResearchKernel(body, "read a Jupyter code cell");
-    const noteFile = safeNoteFile(body?.file);
+    const noteFile = safeNoteFile(body?.file, body);
     const requestedKernel = cleanToken(body?.kernel, "python3");
     let session = cleanToken(body?.session, "default");
     const requestedLanguage = languageForKernel(
@@ -1511,7 +1532,7 @@ export function createJupyterCellService({
   }
 
   async function executeScriptCellWithContext(body) {
-    const noteFile = safeNoteFile(body?.file);
+    const noteFile = safeNoteFile(body?.file, body);
     const requestedKernel = cleanToken(body?.kernel, "python3");
     const session = cleanToken(body?.session, "default");
     const requestedLanguage = languageForKernel(
@@ -1607,7 +1628,7 @@ export function createJupyterCellService({
       return await executeScriptCellWithContext(body || {});
     }
     const read = await readScriptCell(body || {});
-    const noteFile = safeNoteFile(body?.file);
+    const noteFile = safeNoteFile(body?.file, body);
     const result = await execute({
       ...(body || {}),
       file: body?.file,
@@ -1633,7 +1654,7 @@ export function createJupyterCellService({
 
   async function clearScriptCellOutput(body) {
     rejectResearchKernel(body, "clear Jupyter output");
-    const noteFile = safeNoteFile(body?.file);
+    const noteFile = safeNoteFile(body?.file, body);
     const kernel = cleanToken(body?.kernel, "python3");
     const session = cleanToken(body?.session, "default");
     const language = languageForKernel(kernel, body?.language || body?.lang);
@@ -1660,7 +1681,7 @@ export function createJupyterCellService({
 
   async function deleteScriptCell(body) {
     rejectResearchKernel(body, "delete Jupyter cells");
-    const noteFile = safeNoteFile(body?.file);
+    const noteFile = safeNoteFile(body?.file, body);
     const kernel = cleanToken(body?.kernel, "python3");
     const session = cleanToken(body?.session, "default");
     const language = languageForKernel(kernel, body?.language || body?.lang);
@@ -1743,7 +1764,7 @@ export function createJupyterCellService({
         return { ok: true, file: viewFile, cellId, ui: cells[cellId] };
       });
     }
-    const noteFile = safeNoteFile(body?.file);
+    const noteFile = safeNoteFile(body?.file, body);
     const kernel = cleanToken(body?.kernel, "python3");
     const session = cleanToken(body?.session, "default");
     const language = languageForKernel(kernel, body?.language || body?.lang);
@@ -1786,7 +1807,7 @@ export function createJupyterCellService({
 
   async function clearAllOutputs(body) {
     rejectResearchKernel(body, "clear Jupyter output");
-    const noteFile = safeNoteFile(body?.file);
+    const noteFile = safeNoteFile(body?.file, body);
     const kernel = cleanToken(body?.kernel, "python3");
     const session = cleanToken(body?.session, "default");
     const language = languageForKernel(kernel, body?.language || body?.lang);
@@ -2043,6 +2064,7 @@ export function createJupyterCellService({
         if (record.attached) continue;
         const running = Number(record?.running || 0) > 0;
         const isDead = record.status === "dead";
+        if (!force && record.status === "disconnected") continue;
         const idleMs = now - Number(record?.lastActivity || now);
         if (!force && !isDead && (running || idleMs < kernelIdleTtlMs)) continue;
         await registry.shutdown(record.key).catch(() => {});
@@ -2674,7 +2696,9 @@ export function createJupyterCellService({
   async function resolveConnectionInfoById(id) {
     const registry = await getRegistry();
     const record = registry.list().find((item) => item.id === id);
-    return record && record.status !== "dead" ? record.connectionInfo : undefined;
+    return record && record.status !== "dead" && record.status !== "disconnected"
+      ? record.connectionInfo
+      : undefined;
   }
 
   /**
@@ -2685,7 +2709,7 @@ export function createJupyterCellService({
   async function resolveKernelChannelById(id) {
     const registry = await getRegistry();
     const record = registry.list().find((item) => item.id === id);
-    if (!record || record.status === "dead") return undefined;
+    if (!record || record.status === "dead" || record.status === "disconnected") return undefined;
     if (record.kind === "server") {
       if (!servers) return undefined;
       return { kind: "server", upstream: await servers.kernelChannelTarget(record.serverId, record.serverKernelId) };

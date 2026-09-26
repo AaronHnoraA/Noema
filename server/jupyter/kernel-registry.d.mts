@@ -2,6 +2,7 @@ import type { Kernel } from "@jupyterlab/services";
 import type { KernelSpecEntry } from "./kernel-finder.d.mts";
 import type { KernelProcessHandle } from "./kernel-process.d.mts";
 import type { RawSocket } from "./raw-socket.d.mts";
+import type { JupyterServerRegistry } from "./server-registry.d.mts";
 
 /**
  * Which connector produced a record. Lifecycle verbs branch on this, never on
@@ -9,8 +10,9 @@ import type { RawSocket } from "./raw-socket.d.mts";
  *
  *   "owned"    — we (or the Emacs broker) launched the process; signalable.
  *   "attached" — reached through an existing connection file; never killed.
+ *   "server"   — reached through a Jupyter Server REST/WebSocket provider.
  */
-export type KernelRecordKind = "owned" | "attached";
+export type KernelRecordKind = "owned" | "attached" | "server";
 
 /**
  * The Emacs broker, when Noema runs in `emacs` host mode. It owns kernel
@@ -19,6 +21,7 @@ export type KernelRecordKind = "owned" | "attached";
  */
 export interface KernelHost {
   listKernelSpecs(file: string): Promise<KernelSpecEntry[]>;
+  listConnections?(file: string): Promise<Array<{ token: string; mtimeMs?: number }>>;
   launch(body: {
     key: string;
     sourceFile?: string;
@@ -26,6 +29,17 @@ export interface KernelHost {
     kernelSpec: KernelSpecEntry["spec"];
   }): Promise<HostedRuntime>;
   status(runtimeId: string): Promise<HostedRuntime & { alive: boolean; message?: string }>;
+  attach?(body: {
+    sourceFile?: string;
+    token: string;
+    kernelName: string;
+  }): Promise<HostedAttachment>;
+  attachmentStatus?(attachmentId: string): Promise<HostedAttachment & {
+    alive: boolean | "unknown";
+    connectionFilePresent?: boolean;
+    message?: string;
+  }>;
+  releaseAttachment?(attachmentId: string): Promise<unknown>;
   interrupt(runtimeId: string): Promise<unknown>;
   restart?(runtimeId: string): Promise<HostedRuntime>;
   shutdown(runtimeId: string): Promise<unknown>;
@@ -37,6 +51,13 @@ export interface HostedRuntime {
   pid: number;
   generation: number;
   stateLost?: boolean;
+  connectionFile?: string;
+  connectionInfo: unknown;
+}
+
+export interface HostedAttachment {
+  attachmentId: string;
+  generation: number;
   connectionFile?: string;
   connectionInfo: unknown;
 }
@@ -53,15 +74,22 @@ export interface KernelRecord {
   /** True when the process lives on a Remote target and is owned by the Emacs broker. */
   hosted: boolean;
   hostRuntimeId?: string;
+  hostAttachmentId?: string;
   hostGeneration?: number;
+  serverId?: string;
+  serverKernelId?: string;
+  serverSessionId?: string;
+  serverOwned?: boolean;
+  serverConnectionVersion?: string;
+  needsRebind?: boolean;
   stateLost?: boolean;
   connectionInfo: unknown;
   connectionFilePath: string | undefined;
   ports: number[];
   kernel: Kernel.IKernelConnection;
-  socket: RawSocket;
+  socket: RawSocket | undefined;
   widgetGeneration: number;
-  status: "starting" | "idle" | "busy" | "dead";
+  status: "starting" | "idle" | "busy" | "disconnected" | "dead";
   createdAt: number;
   lastActivity: number;
   running: number;
@@ -94,6 +122,7 @@ export function createKernelRegistry(options: {
   venvBinDir?: string;
   cwd?: string;
   zmq: unknown;
+  serverRegistry?: JupyterServerRegistry;
   launchTimeoutMs?: number;
   /** Grace period for a `shutdown_request` before signalling an owned kernel; 0 disables. */
   shutdownGraceMs?: number;
@@ -103,7 +132,23 @@ export function createKernelRegistry(options: {
 }): {
   get(key: string): KernelRecord | undefined;
   ensure(key: string, kernelSpecEntry: KernelSpecEntry): Promise<KernelRecord>;
+  ensureServer(
+    key: string,
+    kernelName: string,
+    target: {
+      serverId: string;
+      kernelSpecName?: string;
+      kernelId?: string;
+      path?: string;
+      name?: string;
+    },
+  ): Promise<KernelRecord>;
   ensureAttached(key: string, kernelName: string, connectionFilePath: string): Promise<KernelRecord>;
+  ensureHostedAttachment(
+    key: string,
+    kernelName: string,
+    target: { sourceFile?: string; token: string },
+  ): Promise<KernelRecord>;
   touch(key: string): void;
   restart(key: string): Promise<KernelRecord>;
   interrupt(key: string): Promise<boolean>;

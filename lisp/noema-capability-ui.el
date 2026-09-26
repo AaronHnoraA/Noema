@@ -140,8 +140,14 @@
   "Return a compact validation label for RECORD."
   (let* ((validation (noema--value record "validation"))
          (errors (noema--sequence (noema--value validation "errors")))
-         (warnings (noema--sequence (noema--value validation "warnings"))))
+         (warnings (noema--sequence (noema--value validation "warnings")))
+         (diagnostics (noema--sequence (noema--value record "diagnostics")))
+         (unavailable
+          (seq-some (lambda (item)
+                      (equal (noema--value item "code") "unavailable-skill"))
+                    diagnostics)))
     (cond
+     (unavailable (propertize "unavailable" 'face 'warning))
      (errors (propertize (format "error (%d)" (length errors)) 'face 'error))
      ((eq :false (noema--value validation "valid")) (propertize "error" 'face 'error))
      (warnings (propertize (format "warning (%d)" (length warnings)) 'face 'warning))

@@ -19,6 +19,8 @@ export function createKernelHeartbeat(options: {
   intervalMs?: number;
   timeoutMs?: number;
   maxMisses?: number;
+  /** Called after every successful heartbeat echo. */
+  onAlive?: () => void;
   /** Called at most once, after `maxMisses` consecutive round trips fail. */
   onDead?: (reason: unknown) => void;
   stderr?: NodeJS.WritableStream;

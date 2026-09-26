@@ -1749,7 +1749,8 @@ whose RunSpec is being frozen is cancelled as soon as it exists.  Return
 Return non-nil when BUFFER was stopped.  Its session name and native id stay
 in the registry, so the next Run or visit resumes the conversation (D-035)."
   (when (and (noema-agent-acp-agent-buffer-p buffer)
-             (not (noema-agent-worker-buffer-busy-p buffer)))
+             ;; Also an interactive turn outside any Run: never cut an answer.
+             (not (noema-agent-acp-busy-p buffer)))
     (ignore-errors (noema-agent-acp-shutdown buffer))
     (when (buffer-live-p buffer)
       (let ((kill-buffer-query-functions nil))
@@ -1767,13 +1768,15 @@ in the registry, so the next Run or visit resumes the conversation (D-035)."
 (defun noema-agent-worker-sweep-warm-buffers ()
   "Hibernate idle or excess resumable Noema Session buffers.
 
-Only idle buffers with a verified native resume capability are stopped."
+Only buffers `noema-agent-acp-auto-stoppable-p' allows -- idle, hidden,
+started by a background origin -- with a verified native resume capability
+are stopped.  Idle time counts from the buffer's last change."
   (interactive)
   (let ((by-root (make-hash-table :test #'equal))
         (now (float-time)))
     (dolist (buffer (buffer-list))
       (when (and (noema-agent-worker--resumable-buffer-p buffer)
-                 (not (noema-agent-worker-buffer-busy-p buffer)))
+                 (noema-agent-acp-auto-stoppable-p buffer))
         (let ((root (buffer-local-value 'noema-agent-acp-session-root buffer)))
           (push buffer (gethash root by-root)))))
     (maphash

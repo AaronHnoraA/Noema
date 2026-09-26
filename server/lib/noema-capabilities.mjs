@@ -4,6 +4,7 @@ import { access, cp, mkdir, readFile, readdir, realpath, rename, rm, stat, write
 import { homedir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import YAML from "yaml";
 import { loadExternalSource, validateExternalSources } from "./noema-external-capabilities.mjs";
 import { applySkillDiff, createSkillDiff } from "./noema-skill-diff.mjs";
 
@@ -169,17 +170,32 @@ function parseFrontmatter(text) {
   if (!source.startsWith("---\n")) return { fields: {}, body: source.trim() };
   const end = source.indexOf("\n---", 4);
   if (end < 0) return { fields: {}, body: source.trim(), error: "unterminated YAML frontmatter" };
-  const fields = {};
-  for (const line of source.slice(4, end).split("\n")) {
-    const match = /^([A-Za-z0-9_-]+)\s*:\s*(.*?)\s*$/.exec(line);
-    if (!match) continue;
-    let value = match[2];
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
+  try {
+    const document = YAML.parseDocument(source.slice(4, end), { uniqueKeys: true, maxAliasCount: 16 });
+    if (document.errors.length) throw new Error(document.errors[0].message);
+    const fields = document.toJS({ maxAliasCount: 16 });
+    if (!fields || typeof fields !== "object" || Array.isArray(fields)) {
+      throw new Error("frontmatter must be a YAML mapping");
     }
-    fields[match[1].replaceAll("-", "_")] = value;
+    return { fields, body: source.slice(end + 4).trim() };
+  } catch (error) {
+    return { fields: {}, body: source.slice(end + 4).trim(), error: `invalid YAML frontmatter: ${error.message}` };
   }
-  return { fields, body: source.slice(end + 4).trim() };
+}
+
+function skillMetadata(parsed) {
+  const noema = parsed.fields.noema;
+  if (noema === undefined) return { domain: "", requires: [], error: "" };
+  if (!noema || typeof noema !== "object" || Array.isArray(noema)) {
+    return { domain: "", requires: [], error: "noema metadata must be a mapping" };
+  }
+  const domain = noema.domain ?? "";
+  const requires = noema.requires ?? [];
+  if (typeof domain !== "string" || !Array.isArray(requires)
+      || requires.some((id) => typeof id !== "string" || !ID_PATTERN.test(id))) {
+    return { domain: "", requires: [], error: "noema.domain must be a string and noema.requires a list of Skill ids" };
+  }
+  return { domain, requires: [...new Set(requires)], error: "" };
 }
 
 async function readConfig(path, { optional = false } = {}) {
@@ -370,11 +386,13 @@ async function discoverSkills(directory, scope, projectRoot) {
     }
     const content = bytes.toString("utf8");
     const parsed = parseFrontmatter(content);
+    const metadata = skillMetadata(parsed);
     const id = String(parsed.fields.name || entry.name).trim();
     const errors = [];
     const warnings = [];
     if (!ID_PATTERN.test(id)) errors.push(`invalid skill id: ${id || "<empty>"}`);
     if (parsed.error) errors.push(parsed.error);
+    if (metadata.error) errors.push(metadata.error);
     if (!parsed.fields.name) warnings.push("SKILL.md has no name frontmatter; directory name is the stable id");
     if (!parsed.fields.description) warnings.push("SKILL.md has no description frontmatter");
     // Progressive disclosure: a skill keeps its depth in `references/` and
@@ -397,9 +415,11 @@ async function discoverSkills(directory, scope, projectRoot) {
         // not only the SKILL.md inside it.
         directory: displayPath(projectRoot, directoryPath),
         references,
+        domain: metadata.domain,
+        requires: metadata.requires,
         content_sha256: `sha256:${sha256(bytes)}`,
       },
-      defaultEnabled: parsed.fields.default_enabled === "true",
+      defaultEnabled: parsed.fields.default_enabled === true || parsed.fields.default_enabled === "true",
       source: { scope: scope.name, scopeId: scope.id, path: displayPath(projectRoot, skillPath) },
       rank: scope.rank, validation: { valid: errors.length === 0, errors, warnings },
     });
@@ -593,6 +613,17 @@ async function resolveType(type, scopes, definitions, runtimeSelections = []) {
     const validation = unavailableConfiguredSkill
       ? { valid: false, errors: [], warnings: [] }
       : validationAfterPatch(type, effective, base?.validation, base);
+    if (type === "skill" && typeof effective.content === "string") {
+      // A project diff may change frontmatter. Resolve dependencies from the
+      // effective content that this Run will actually receive.
+      const parsed = parseFrontmatter(effective.content);
+      const metadata = skillMetadata(parsed);
+      if (parsed.error) validation.errors.push(parsed.error);
+      if (metadata.error) validation.errors.push(metadata.error);
+      effective.domain = metadata.domain;
+      effective.requires = metadata.requires;
+      if (validation.errors.length) validation.valid = false;
+    }
     if (diagnostics.some((item) => item.severity === "error")) validation.valid = false;
     if (type === "skill" && effective.content !== undefined) {
       effective.content_sha256 = `sha256:${sha256(effective.content)}`;
@@ -606,6 +637,55 @@ async function resolveType(type, scopes, definitions, runtimeSelections = []) {
     });
   }
   return resolved;
+}
+
+function applySkillDependencies(skills, definitions) {
+  const byID = new Map(skills.map((skill) => [skill.id, skill]));
+  const aliases = new Map();
+  for (const definition of definitions.filter((item) => item.type === "skill")) {
+    for (const alias of values(definition.aliases)) aliases.set(alias, definition.id);
+  }
+  const visited = new Set();
+  const visiting = new Set();
+  const report = (skill, code, message) => {
+    if (skill.diagnostics.some((diagnostic) => diagnostic.code === code && diagnostic.message === message)) return;
+    skill.diagnostics.push({ severity: "error", code, message });
+    skill.validation.errors.push(message);
+    skill.validation.valid = false;
+    skill.selectable = false;
+  };
+  const visit = (skill, path = []) => {
+    if (visited.has(skill.id)) return;
+    if (visiting.has(skill.id)) {
+      report(skill, "skill-dependency-cycle", `Skill dependency cycle: ${[...path, skill.id].join(" -> ")}`);
+      return;
+    }
+    visiting.add(skill.id);
+    for (const requested of values(skill.effective?.requires)) {
+      const id = canonicalID(requested, aliases);
+      const dependency = byID.get(id);
+      if (!dependency || !dependency.source) {
+        report(skill, "skill-dependency-missing", `Skill ${skill.id} requires missing Skill ${requested}`);
+        continue;
+      }
+      if (!dependency.selectable) {
+        report(skill, "skill-dependency-unavailable", `Skill ${skill.id} requires unavailable or disabled Skill ${id}`);
+        continue;
+      }
+      if (!dependency.enabled) {
+        dependency.enabled = true;
+        dependency.selectedBy.push({ scope: "dependency", scopeId: skill.id, enabled: true,
+          reason: `required by Skill ${skill.id}` });
+      }
+      visit(dependency, [...path, skill.id]);
+      if (!dependency.validation.valid) {
+        report(skill, "skill-dependency-invalid", `Skill ${skill.id} requires invalid Skill ${id}`);
+      }
+    }
+    visiting.delete(skill.id);
+    visited.add(skill.id);
+  };
+  for (const skill of skills.filter((item) => item.enabled)) visit(skill);
 }
 
 // The knowledge base and the AI workflow used to ship as one capability id.
@@ -795,6 +875,7 @@ export async function resolveProjectCapabilities({
   });
   const definitions = scopes.flatMap((scope) => scope.definitions);
   const skills = await resolveType("skill", scopes, definitions, strings(requestedSkills));
+  applySkillDependencies(skills, definitions);
   const mcps = await resolveType("mcp", scopes, definitions);
   for (const mcp of mcps) {
     const config = object(mcp.effective?.config);
