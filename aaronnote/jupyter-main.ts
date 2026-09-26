@@ -834,7 +834,7 @@ function renderWorkspace(): void {
   surfaceTitleEl.textContent = research ? "Work Output" : "Jupyter Output";
   kernelStatusEl.hidden = research;
   kernelStatusEl.textContent = research ? "" : tab?.snapshot
-    ? `${tab.ref.kernel} · ${tab.ref.session} · ${tab.snapshot.kernelStatus}`
+    ? `${tab.ref.kernel} · ${tab.ref.session} · ${tab.snapshot.kernelStatus === "error" ? "last run error" : tab.snapshot.kernelStatus}`
     : "No kernel";
   if (!tab) {
     workspaceEl.innerHTML = `<div class="noema-jupyter-empty"><strong>No output selected</strong><span>Open a work block in Emacs and run it with C-c C-c.</span></div>`;
