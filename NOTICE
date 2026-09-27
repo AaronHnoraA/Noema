@@ -61,6 +61,9 @@ reviewed upstream revision is:
   https://github.com/paulhe666/visualtex
   commit 5e3ed2a56ba53643a463c6ea4c2cf1a5675e691c
 
+Its MathLive source-safety limits were adapted at commit
+1deb334220a6acb4dd04cec0d51000d6855d954a.
+
 The editor bundles the MathLive mathfield runtime, copyright 2017--present
 Arno Gourdol, licensed under the MIT License:
 

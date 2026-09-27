@@ -39,6 +39,22 @@ describe("LiveTeX custom macro writeback", () => {
     document.body.replaceChildren();
   });
 
+  test("keeps MathLive's built-in macros next to Noema's", () => {
+    const field = new MathfieldElement();
+    patchHappyDomMathfieldHostSelector(field);
+    const source = String.raw`\argmin_x f\iff\nicefrac{1}{2}\in\R`;
+    initializeNoemaMathfield(field, source, { "\\R": String.raw`\mathbb{R}` });
+    document.body.append(field);
+
+    const atoms = (field as unknown as { _mathfield: { model: { atoms: { type: string; command: string }[] } } })
+      ._mathfield.model.atoms;
+    expect(atoms.filter((atom) => atom.type === "error").map((atom) => atom.command)).toEqual([]);
+    expect(Object.keys(field.macros)).toEqual(expect.arrayContaining(["argmin", "iff", "nicefrac", "R"]));
+    // Argument-free built-ins never expand into the saved source.
+    expect(field.getValue("latex-expanded")).toContain(String.raw`\iff`);
+    expect(visualTexMathfieldLatex(field)).toBe(String.raw`\argmin_{x}f\iff\nicefrac{1}{2}\in\R`);
+  });
+
   test("fills a Noema macro snippet without persisting its stale placeholder arguments", () => {
     const field = new MathfieldElement();
     patchHappyDomMathfieldHostSelector(field);
@@ -592,14 +608,13 @@ describe("LiveTeX custom macro writeback", () => {
     host.remove();
   });
 
-  test("rebuilds the mirror when MathLive keeps an atom the source no longer has", async () => {
+  test("applies a typed-then-deleted accent in place", async () => {
     const { host, preview, currentField, type } = await mountLivePreview("sssss");
     const field = currentField();
     const quiet = visualTexPreviewRecoveryCount();
 
-    // Typing an accent and deleting it again. MathLive's replaceAll leaves the
-    // `\bar` atom in the model no matter how the assignment is made, which is
-    // the stray overline the source no longer contains.
+    // MathLive before 0.110 (#2964) kept the half-typed `\bar` atom after
+    // `replaceAll`, leaving a stray overline that only a rebuild removed.
     for (const latex of [
       String.raw`sssss\b`,
       String.raw`sssss\ba`,
@@ -612,6 +627,28 @@ describe("LiveTeX custom macro writeback", () => {
     ]) {
       await type(latex);
     }
+
+    expect(currentField()).toBe(field);
+    expect(field.getValue("latex").replace(/\s+/g, "")).toBe("sssssss");
+    expect(field.getValue("latex-expanded")).not.toContain("\\bar");
+    expect(visualTexPreviewRecoveryCount()).toBe(quiet);
+    preview.destroy();
+    host.remove();
+  });
+
+  test("rebuilds the mirror when MathLive keeps an atom the source no longer has", async () => {
+    const { host, preview, currentField, type } = await mountLivePreview("sssss");
+    const field = currentField();
+    const quiet = visualTexPreviewRecoveryCount();
+
+    // Pin the stale-model fault the verification guards against, independent
+    // of whichever MathLive release currently reproduces it.
+    const getValue = field.getValue.bind(field);
+    field.getValue = ((...args: Parameters<typeof field.getValue>) => (
+      args[0] === "latex" ? String.raw`sssss\bar` : getValue(...args)
+    )) as typeof field.getValue;
+    await type("ssssss");
+    await type("sssssss");
 
     const recovered = currentField();
     expect(recovered.getValue("latex").replace(/\s+/g, "")).toBe("sssssss");

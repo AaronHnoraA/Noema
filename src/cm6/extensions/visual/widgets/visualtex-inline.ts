@@ -11,6 +11,7 @@
 import type { MathfieldElement, Selector } from "mathlive";
 import "mathlive/fonts.css";
 import { normalizeVisualTexLatex } from "../../../../tex-compat.ts";
+import { assertMathLiveSourceSafe } from "./mathlive-source-safety.ts";
 
 export { normalizeVisualTexLatex } from "../../../../tex-compat.ts";
 
@@ -184,6 +185,19 @@ let mathLivePromise: Promise<MathLiveModule> | null = null;
 function loadMathLive(): Promise<MathLiveModule> {
   mathLivePromise ??= import("mathlive");
   return mathLivePromise;
+}
+
+/**
+ * Refuse source that would overflow MathLive's recursive parser before any
+ * field sees it; editors then fall back to plain source through onUnavailable.
+ */
+function loadMathLiveForSource(source: string): Promise<MathLiveModule> {
+  try {
+    assertMathLiveSourceSafe(source);
+  } catch (error) {
+    return Promise.reject(error);
+  }
+  return loadMathLive();
 }
 
 function isEscaped(source: string, index: number): boolean {
@@ -2014,6 +2028,50 @@ type NoemaMathfieldInitializationTarget = Pick<MathfieldElement, "setValue" | "r
   macros: MathfieldElement["macros"];
 };
 
+let visualTexMathLiveDefaultMacroCache: MathfieldElement["macros"] | null = null;
+
+/**
+ * MathLive's `macros` setter replaces its whole built-in dictionary, which
+ * turns `\argmin`, `\iff`, `\nicefrac`, `\coloneqq`, `\braket` and friends into
+ * error atoms (VisualTeX upstream hit the same trap in its markup path). The
+ * dictionary is private, and a field only receives it when it mounts, so read
+ * it once from a throwaway mounted field of the same class.
+ *
+ * Argument-free built-ins are pinned to compact serialization: they have no
+ * editable body, and once a field switches to expanded writeback they would
+ * otherwise rewrite `\iff` into its `\;\Longleftrightarrow\;` body.
+ */
+export function visualTexMathLiveDefaultMacros(field: object): MathfieldElement["macros"] {
+  if (visualTexMathLiveDefaultMacroCache) return visualTexMathLiveDefaultMacroCache;
+  const Constructor = field.constructor as (new () => MathfieldElement) | undefined;
+  if (
+    typeof Constructor !== "function"
+    || typeof document === "undefined"
+    || typeof HTMLElement === "undefined"
+    || !(Constructor.prototype instanceof HTMLElement)
+  ) return {};
+  let probe: MathfieldElement | null = null;
+  try {
+    probe = new Constructor();
+    probe.hidden = true;
+    document.body.append(probe);
+    const result: Record<string, unknown> = {};
+    for (const [name, definition] of Object.entries(probe.macros ?? {})) {
+      result[name] = definition && typeof definition === "object" && !(definition as { args?: number }).args
+        ? { ...definition, expand: false }
+        : definition;
+    }
+    if (Object.keys(result).length > 0) {
+      visualTexMathLiveDefaultMacroCache = result as MathfieldElement["macros"];
+    }
+    return result as MathfieldElement["macros"];
+  } catch {
+    return {};
+  } finally {
+    probe?.remove();
+  }
+}
+
 /**
  * Install Noema's macro dictionary before parsing the note source. MathLive
  * does not reparse atoms when `macros` changes, so reversing this order turns
@@ -2041,6 +2099,7 @@ export function initializeNoemaMathfield(
     installVisualTexHistoryInputBridge(field as MathfieldElement);
   }
   field.macros = {
+    ...visualTexMathLiveDefaultMacros(field),
     ...visualTexMathLiveMacros(macros),
     [VISUAL_TEX_SOURCE_SPACE_MACRO_NAME]: VISUAL_TEX_SOURCE_SPACE_MACRO,
     [VISUAL_TEX_SNIPPET_START_MACRO_NAME]: VISUAL_TEX_SNIPPET_MARKER_MACRO,
@@ -3202,13 +3261,12 @@ export function mountVisualTexPreview(
   /**
    * Whether MathLive actually holds the value it was last given.
    *
-   * It does not always. `setValue(…, { insertionMode: "replaceAll" })` can leave
-   * an atom from the previous content behind — an accent whose argument was
-   * still being typed is the reproducible case: after `sssss\bar` → `sssss`,
-   * `getValue()` comes back as `sssss\bar`, so the stray overline stays on
-   * screen forever. Clearing the field first, collapsing the selection, or
-   * selecting all before the assignment all fail to dislodge it; only a fresh
-   * element does. `mathfield.dirty` is checked alongside because
+   * It has not always. Before 0.110 (#2964) `setValue(…, { insertionMode:
+   * "replaceAll" })` left an atom from the previous content behind — an accent
+   * whose argument was still being typed: after `sssss\bar` → `sssss`,
+   * `getValue()` came back as `sssss\bar`, so the stray overline stayed on
+   * screen forever, and only a fresh element dislodged it. Keep the check as a
+   * guard against the same class of model/render desynchronization. `mathfield.dirty` is checked alongside because
    * `requestUpdate()` refuses to schedule any repaint while it is set and only
    * clears it at the very end of `render()`, so an interrupted render freezes
    * the DOM the same way.
@@ -3297,6 +3355,7 @@ export function mountVisualTexPreview(
         overlayLayoutInvalidated = true;
       }
       if (draft.latex !== valueKey) {
+        assertMathLiveSourceSafe(draft.latex);
         visualTexPreviewValueCommits++;
         setVisualTexPreviewValue(active, draft.latex);
         positionIndex = null;
@@ -3360,6 +3419,7 @@ export function mountVisualTexPreview(
           pending.placeholders,
           pending.selection,
         );
+        assertMathLiveSourceSafe(renderedDraft.latex);
         replaceField(renderedDraft.latex, pending.display);
         valueKey = renderedDraft.latex;
         awaitingCommitVerification = true;
@@ -3394,6 +3454,12 @@ export function mountVisualTexPreview(
           pending.placeholders,
           pending.selection,
         );
+        try {
+          assertMathLiveSourceSafe(renderedDraft.latex);
+        } catch (error) {
+          options.onUnavailable?.(error);
+          return;
+        }
         replaceField(renderedDraft.latex, pending.display);
         valueKey = renderedDraft.latex;
         awaitingCommitVerification = true;
@@ -3548,7 +3614,7 @@ export function mountVisualTexInlineEditor(
     closeCompletion(host);
   };
 
-  const ready = loadMathLive()
+  const ready = loadMathLiveForSource(draft)
     .then((module) => {
       if (destroyed) return;
       const Constructor = module.MathfieldElement;
@@ -3719,7 +3785,7 @@ function mountVisualTexSingleDisplayEditor(
     mountedPalette = null;
   };
 
-  const ready = loadMathLive()
+  const ready = loadMathLiveForSource(draft)
     .then((module) => {
       if (destroyed) return;
       const Constructor = module.MathfieldElement;
@@ -4111,7 +4177,7 @@ function mountVisualTexAdvancedDisplayEditor(
     mountedPalette = null;
   };
 
-  const ready = loadMathLive()
+  const ready = loadMathLiveForSource(draft)
     .then((module) => {
       if (destroyed) return;
       const Constructor = module.MathfieldElement;

@@ -21,3 +21,29 @@ the package source has no local modifications.
 Each upstream directory retains its own license, history-facing documentation,
 tests and source layout. Noema-specific code lives in `lisp/`; upstream symbols
 remain intact so mature behavior is reused instead of imperfectly rewritten.
+
+## Web editor upstreams
+
+LiveTeX (`src/cm6/extensions/visual/widgets/visualtex-inline.ts`) adapts
+VisualTeX's MathLive editor; each adapted file records its revision, and
+`NOTICE` lists them.  On 2026-09-27 LiveTeX was aligned with VisualTeX
+`1deb334220a6acb4dd04cec0d51000d6855d954a` and MathLive 0.110.0:
+
+- MathLive 0.110.0 carries the `\text{}` markup/MathML escaping fix
+  (CVE-2026-54705) and the `replaceAll` stale-atom fix (#2964) that VisualTeX
+  still patches into 0.109.2 at build time.  Noema does not patch MathLive.
+- Assigning `field.macros` replaces MathLive's built-in dictionary; LiveTeX
+  merges it back (`visualTexMathLiveDefaultMacros`), as VisualTeX does in its
+  markup path, so `\argmin`, `\iff`, `\nicefrac` and `\coloneqq` stay valid.
+- `mathlive-source-safety.ts` is VisualTeX's recursion guard: oversized or
+  over-nested formulas fall back to source editing instead of reaching MathLive.
+
+VisualTeX's remaining MathLive build patches (matrix hit testing, bold upright
+Greek serialization, empty-model option writes) and its Office/OCR/keypad
+features were reviewed and not adopted.
+
+`dompurify` is pinned to 3.4.4.  `scripts/render-html.mjs` sanitizes
+export/publish HTML under happy-dom, and from 3.4.8 DOMPurify no longer
+sanitizes correctly there (allowed tags are dropped while `<script>` survives;
+upstream declares happy-dom unsupported).  Unpin only after that path runs on
+a supported DOM.
