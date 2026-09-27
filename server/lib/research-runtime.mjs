@@ -1965,6 +1965,14 @@ export function createResearchRuntimeService({
       } }) };
     },
 
+    // Reading clears `unread' only; a failure stays until a later Run succeeds.
+    async readSessionName(body = {}) {
+      const root = await rootFor(body);
+      return { root, name: await provider().readSessionName({ root, read: {
+        name: valueString(body.name), actor: valueString(body.actor) || "emacs",
+      } }) };
+    },
+
     // Dry-run the D-031 route for visible work blocks so JuText can show which
     // conversation each block will use before anything runs.
     async resolveSessions(body = {}) {

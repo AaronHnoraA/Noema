@@ -4941,6 +4941,26 @@ html.aaronnote-paused *::after {
 }
 
 /* ── Selection pop-up toolbar ─────────────────────────────────────── */
+.aaronnote-window-hint {
+  position: fixed;
+  z-index: 2147483647;
+  top: 12px;
+  left: 12px;
+  min-width: 1.6em;
+  padding: 5px 9px;
+  border-radius: 5px;
+  color: #fff;
+  background: #a02720;
+  box-shadow: 0 2px 12px rgb(0 0 0 / 25%);
+  font: 700 22px/1.2 ui-monospace, monospace;
+  pointer-events: none;
+}
+
+.aaronnote-window-hint[hidden],
+.aaronnote-selection-tool button[hidden] {
+  display: none;
+}
+
 .aaronnote-selection-tool {
   position: fixed;
   z-index: 60;

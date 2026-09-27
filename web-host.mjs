@@ -1974,6 +1974,22 @@ async function apiEmacsKey(body) {
   return { ok: true };
 }
 
+async function apiEmacsSelection(body) {
+  const client = String(body?.client || "").trim();
+  const file = String(body?.file || "").trim();
+  const lineStart = Number(body?.lineStart);
+  const lineEnd = Number(body?.lineEnd);
+  if (!client || !file || !Number.isSafeInteger(lineStart) || !Number.isSafeInteger(lineEnd)
+      || lineStart < 1 || lineEnd < lineStart) {
+    return { ok: false, message: "Invalid editor selection" };
+  }
+  gatewayNotify("aaronnote.event", {
+    type: "selection-to-agent",
+    payload: { client, file, lineStart, lineEnd },
+  });
+  return { ok: true };
+}
+
 async function apiSystemOpen(body) {
   const value = String((body && typeof body === "object" ? body.target : body) || "").trim();
   const base = String((body && typeof body === "object" ? body.base : "") || "");
@@ -2488,6 +2504,7 @@ const apiRouter = new ApiRouter().register({
     apiEmacsInputFocus,
     apiEmacsUiState,
     apiEmacsKey,
+    apiEmacsSelection,
     apiSystemOpen,
     apiEmacsZotero,
     apiChooseNotePath,
@@ -3154,6 +3171,7 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
           k && typeof k === "object" ? k : String(k || "")
         ]);
       },
+      sendSelection: function(body) { return call("aaronnote:api:emacs:selection", [body || {}]); },
       systemOpen: function(target, base) {
         return call("aaronnote:api:emacs:system-open", [
           base ? {target: String(target || ""), base: String(base || "")} : String(target || "")

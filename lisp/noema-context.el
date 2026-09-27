@@ -353,11 +353,45 @@ With a prefix argument PICK, choose the session."
 Only `file:LINE-LINE' travels; the agent reads the lines itself.  With a
 prefix argument PICK, choose the session."
   (interactive "P")
-  (unless (use-region-p) (user-error "No active region"))
-  (require 'gptel-context)
-  (gptel-context--add-region (current-buffer) (region-beginning) (region-end) t)
-  (deactivate-mark)
-  (noema-context--send :pick pick))
+  (if (and (fboundp 'my/noema--xwidget-buffer-p)
+           (my/noema--xwidget-buffer-p))
+      (progn
+        (unless (fboundp 'my/noema-command)
+          (user-error "Noema browser command bridge is unavailable"))
+        (my/noema-command "send-selection-to-agent"))
+    (unless (use-region-p) (user-error "No active region"))
+    (require 'gptel-context)
+    (gptel-context--add-region (current-buffer) (region-beginning) (region-end) t)
+    (deactivate-mark)
+    (noema-context--send :pick pick)))
+
+(defun noema-context-send-noema-selection (file line-start line-end)
+  "Add FILE lines LINE-START through LINE-END to shared context and send."
+  (unless (and (stringp file) (file-readable-p file)
+               (integerp line-start) (integerp line-end)
+               (<= 1 line-start line-end))
+    (user-error "Noema selection is not a readable file range"))
+  (let ((buffer (find-file-noselect file)))
+    (with-current-buffer buffer
+      (when (buffer-modified-p)
+        (user-error "Save Emacs edits in %s before sending Noema's selection" file))
+      (unless (verify-visited-file-modtime buffer)
+        (revert-buffer t t))
+      (save-excursion
+        (save-restriction
+          (widen)
+          (when (> line-end (line-number-at-pos (point-max) t))
+            (user-error "Noema selection is newer than the file on disk"))
+          (goto-char (point-min))
+          (forward-line (1- line-start))
+          (let ((begin (point)))
+            (forward-line (- line-end line-start))
+            (end-of-line)
+            (let ((end (min (point-max) (1+ (point)))))
+              (require 'gptel-context)
+              (gptel-context--add-region buffer begin end t))))))
+    (with-current-buffer buffer
+      (noema-context--send))))
 
 ;;;###autoload
 (defun noema-context-send-buffer (&optional pick)

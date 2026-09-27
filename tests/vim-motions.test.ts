@@ -88,6 +88,16 @@ describe("count prefixes", () => {
     s.done();
   });
 
+  test("2dd from the middle of a line removes complete source lines", () => {
+    const s = mount("before\nfirst line\nsecond line\nafter", 10);
+    s.keys("2", "d", "d");
+    expect(s.markdown()).toBe("before\nafter");
+    expect(s.head()).toBe(7);
+    const register = (window as unknown as { __aaronoteVimRegister?: { text: string } }).__aaronoteVimRegister;
+    expect(register?.text).toBe("first line\nsecond line\n");
+    s.done();
+  });
+
   test("d3d is the same as 3dd", () => {
     const s = mount("a\nb\nc\nd", 0);
     s.keys("d", "3", "d");

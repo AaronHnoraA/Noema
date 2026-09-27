@@ -62,8 +62,8 @@
     ("<next>" . "PageDown"))
   "Noema document keys that must recover a dropped xwidget edit mode.")
 
-(defconst my/noema--xwidget-emacs-meta-keys '(?x ?w ?q)
-  "Unshifted Command keys deliberately forwarded to Emacs by the renderer.")
+(defconst my/noema--xwidget-emacs-meta-keys '(?x ?w ?q ?o ?O)
+  "Command keys deliberately forwarded to Emacs by the renderer.")
 
 (defconst my/noema--xwidget-emacs-control-keys '(?x ?c ?g)
   "Ctrl host prefixes deliberately kept by Emacs instead of the renderer.")
@@ -144,7 +144,7 @@
     (dotimes (offset 95)
       (let ((character (+ 32 offset)))
         (define-key map (char-to-string character) binding)
-        ;; The renderer forwards only unshifted Cmd-X/W/Q to Emacs. Every
+        ;; The renderer forwards Cmd-X/W/Q and Cmd-O/Shift-O to Emacs. Every
         ;; other Command+printable chord belongs to the shared web editor
         ;; (source toggle, history, formatting, find, save, zoom, CM6, ...).
         (unless (memq character my/noema--xwidget-emacs-meta-keys)

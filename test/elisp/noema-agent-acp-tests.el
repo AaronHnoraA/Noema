@@ -417,5 +417,34 @@
         (when (buffer-live-p buffer) (kill-buffer buffer)))
       (delete-directory root t))))
 
+;; Adopted from Pisper's resident-runtime protection: queued intent keeps a
+;; session alive exactly like a running turn does.
+(ert-deftest noema-agent-acp-queued-prompts-protect-a-session-from-auto-stop ()
+  (with-temp-buffer
+    (setq-local major-mode 'agent-shell-mode
+                shell-maker--busy nil
+                noema-agent-acp-session-origin 'run
+                agent-shell--state (list (cons :pending-prompts nil)))
+    (let ((buffer (current-buffer)))
+      (should (= (noema-agent-acp-pending-prompt-count buffer) 0))
+      (should (noema-agent-acp-auto-stoppable-p buffer))
+      (setf (map-elt agent-shell--state :pending-prompts) (list "next" "after"))
+      (should (= (noema-agent-acp-pending-prompt-count buffer) 2))
+      (should-not (noema-agent-acp-auto-stoppable-p buffer)))))
+
+;; Adopted from Pisper's temporary side chat.
+(ert-deftest noema-agent-acp-side-chats-stay-out-of-the-durable-registry ()
+  (let (durable)
+    (cl-letf (((symbol-function 'noema-agent-acp--register-durable)
+               (lambda (_buffer name _root) (push name durable))))
+      (dolist (origin '(side manual))
+        (with-temp-buffer
+          (setq-local major-mode 'agent-shell-mode
+                      noema-agent-acp-session-origin origin)
+          (noema-agent-acp-adopt (current-buffer) :agent "codex" :origin origin
+                                 :root "/tmp/p/" :name (format "%s-chat" origin)))))
+    (should (equal durable '("manual-chat")))
+    (should (memq 'side noema-agent-acp-auto-stop-origins))))
+
 (provide 'noema-agent-acp-tests)
 ;;; noema-agent-acp-tests.el ends here

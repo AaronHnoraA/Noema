@@ -66,7 +66,11 @@ type Run struct {
 	StartedAt         string `json:"startedAt,omitempty"`
 	FinishedAt        string `json:"finishedAt,omitempty"`
 	FailureReason     string `json:"failureReason,omitempty"`
-	Version           int64  `json:"version"`
+	// FailureKind and Retryable classify a failed or interrupted Run; see
+	// ClassifyRunFailure.  They are derived from FailureReason on read.
+	FailureKind string `json:"failureKind,omitempty"`
+	Retryable   bool   `json:"retryable,omitempty"`
+	Version     int64  `json:"version"`
 	// SessionName is the D-031 name this Run was routed to, if any.
 	SessionName string `json:"sessionName,omitempty"`
 }
@@ -208,6 +212,9 @@ type Permission struct {
 	ResolvedAt      string           `json:"resolvedAt,omitempty"`
 	Epoch           int64            `json:"epoch"`
 	Version         int64            `json:"version"`
+	// PolicyReason says why the policy decided this request, or why it left
+	// it to a person (for example a concurrent edit of the same path).
+	PolicyReason string `json:"policyReason,omitempty"`
 }
 
 type RequestPermissionInput struct {
@@ -724,6 +731,9 @@ func scanRun(row rowScanner) (Run, error) {
 	}
 	if finishedAt > 0 {
 		run.FinishedAt = formatMillis(finishedAt)
+	}
+	if run.Status == "failed" || run.Status == "interrupted" {
+		run.FailureKind, run.Retryable = ClassifyRunFailure(run.FailureReason)
 	}
 	return run, nil
 }
@@ -1405,6 +1415,9 @@ func updateRunStatusTx(tx *sql.Tx, run Run, next string, nowMs int64, failureRea
 	if terminalRunStatuses[next] {
 		finished = nowMs
 	}
+	// A failure reason is often an upstream error body; it is kept, shown and
+	// searched, so credentials in it are redacted before it is stored.
+	failureReason = RedactSecrets(failureReason)
 	if _, err := tx.Exec(`UPDATE runs SET status = ?, finished_at = ?, failure_reason = ?, version = version + 1 WHERE id = ? AND version = ?`,
 		next, finished, failureReason, run.ID, run.Version); err != nil {
 		return Run{}, err
@@ -1489,9 +1502,9 @@ func (s *Store) RequestPermission(input RequestPermissionInput) (Permission, err
 		state, optionID, decidedBy, resolvedAt = "resolved", decision.OptionID, decision.DecidedBy, nowMs
 	}
 	if _, err := tx.Exec(`INSERT INTO permissions(id, run_id, session_id, native_request_id, action_sha256, action_json, options_json,
-		state, option_id, decided_by, created_at, resolved_at, lease_epoch) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		state, option_id, decided_by, created_at, resolved_at, lease_epoch, policy_reason) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		permissionID, run.ID, input.SessionID, input.NativeRequestID, actionSHA, string(actionJSON), string(optionsJSON), state,
-		optionID, decidedBy, nowMs, resolvedAt, input.Epoch); err != nil {
+		optionID, decidedBy, nowMs, resolvedAt, input.Epoch, decision.Reason); err != nil {
 		return Permission{}, err
 	}
 	if state == "pending" {
@@ -1517,7 +1530,8 @@ func (s *Store) RequestPermission(input RequestPermissionInput) (Permission, err
 	}
 	return Permission{ID: permissionID, RunID: run.ID, SessionID: input.SessionID, NativeRequestID: input.NativeRequestID,
 		ActionSHA256: actionSHA, Action: input.Action, Options: input.Options, State: state, OptionID: optionID, DecidedBy: decidedBy,
-		CreatedAt: formatMillis(nowMs), ResolvedAt: formatOptionalMillis(resolvedAt), Epoch: input.Epoch, Version: 1}, nil
+		CreatedAt: formatMillis(nowMs), ResolvedAt: formatOptionalMillis(resolvedAt), Epoch: input.Epoch, Version: 1,
+		PolicyReason: decision.Reason}, nil
 }
 
 func (s *Store) GetPermission(id string) (Permission, error) {
@@ -1602,14 +1616,15 @@ func (s *Store) DecidePermission(input DecidePermissionInput) (Permission, error
 }
 
 const permissionSelect = `SELECT id, run_id, session_id, native_request_id, action_sha256, action_json, options_json, state,
-	option_id, decided_by, created_at, COALESCE(resolved_at, 0), lease_epoch, version FROM permissions`
+	option_id, decided_by, created_at, COALESCE(resolved_at, 0), lease_epoch, version, policy_reason FROM permissions`
 
 func scanPermission(row rowScanner) (Permission, error) {
 	var permission Permission
 	var action, options string
 	var createdAt, resolvedAt int64
 	err := row.Scan(&permission.ID, &permission.RunID, &permission.SessionID, &permission.NativeRequestID, &permission.ActionSHA256,
-		&action, &options, &permission.State, &permission.OptionID, &permission.DecidedBy, &createdAt, &resolvedAt, &permission.Epoch, &permission.Version)
+		&action, &options, &permission.State, &permission.OptionID, &permission.DecidedBy, &createdAt, &resolvedAt, &permission.Epoch, &permission.Version,
+		&permission.PolicyReason)
 	if err != nil {
 		return Permission{}, err
 	}

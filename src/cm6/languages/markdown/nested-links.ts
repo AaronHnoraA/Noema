@@ -287,6 +287,42 @@ function parseSpacedFragmentLink(cx: InlineContext, next: number, start: number)
   return cx.addElement(cx.elt("Link", start, destinationClose + 1, children));
 }
 
+/** Recognize authored local destinations such as [note](Draft Notes.md). */
+function parseSpacedLocalLink(cx: InlineContext, next: number, start: number): number {
+  if (next !== 91 /* [ */) return -1;
+  const close = balancedLabelClose(cx, start);
+  if (close < 0 || cx.char(close + 1) !== 40 /* ( */) return -1;
+  const hrefFrom = close + 2;
+  let depth = 0;
+  let escaped = false;
+  for (let pos = hrefFrom; pos < cx.end; pos++) {
+    const ch = cx.char(pos);
+    if (ch === 10 || ch === 13) return -1;
+    if (escaped) { escaped = false; continue; }
+    if (ch === 92 /* \\ */) { escaped = true; continue; }
+    if (ch === 40 /* ( */) depth++;
+    else if (ch === 41 /* ) */) {
+      if (depth > 0) { depth--; continue; }
+      const raw = cx.slice(hrefFrom, pos).trim();
+      // Leave normal Markdown destinations and optional quoted titles to the
+      // stock parser. This extension is for unquoted local paths with spaces.
+      if (!raw || !/\s/u.test(raw) || /["'<>]/u.test(raw)
+          || /^[a-z][\w+.-]*:/iu.test(raw) || raw.startsWith("#")) return -1;
+      const urlFrom = hrefFrom + cx.slice(hrefFrom, pos).indexOf(raw);
+      const children: Element[] = [
+        cx.elt("LinkMark", start, start + 1),
+        ...labelChildrenWithoutNestedLinks(cx, start + 1, close),
+        cx.elt("LinkMark", close, close + 1),
+        cx.elt("LinkMark", close + 1, close + 2),
+        cx.elt("URL", urlFrom, urlFrom + raw.length),
+        cx.elt("LinkMark", pos, pos + 1),
+      ];
+      return cx.addElement(cx.elt("Link", start, pos + 1, children));
+    }
+  }
+  return -1;
+}
+
 export const nestingAwareLinkExtension: MarkdownConfig = {
   parseInline: [
     {
@@ -298,6 +334,11 @@ export const nestingAwareLinkExtension: MarkdownConfig = {
       name: "SpacedFragmentLink",
       before: "Link",
       parse: parseSpacedFragmentLink,
+    },
+    {
+      name: "SpacedLocalLink",
+      before: "Link",
+      parse: parseSpacedLocalLink,
     },
   ],
 };

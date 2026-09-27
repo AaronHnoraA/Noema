@@ -7,6 +7,7 @@ export interface EmacsApiDependencies {
   apiEmacsInputFocus: (body: unknown) => unknown;
   apiEmacsUiState: (body: unknown) => unknown;
   apiEmacsKey: (key: unknown) => unknown;
+  apiEmacsSelection?: (body: unknown) => unknown;
   apiSystemOpen: (target: unknown) => unknown;
   apiEmacsZotero: (body: unknown, eventName?: string) => unknown;
   apiChooseNotePath: (body: unknown) => unknown;

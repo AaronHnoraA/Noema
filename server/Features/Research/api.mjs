@@ -103,6 +103,7 @@ const METHODS = Object.freeze({
 	"session:name:bind": "bindSessionName",
 	"session:name:rename": "renameSessionName",
 	"session:name:archive": "archiveSessionName",
+	"session:name:read": "readSessionName",
 	"session:resolve": "resolveSessions",
 	"coordinator:claim": "claimCoordinatorRequests",
 	"coordinator:complete": "completeCoordinatorRequest",

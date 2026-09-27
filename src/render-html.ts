@@ -928,6 +928,40 @@ function spacedFragmentLinkRule(state: StateInline, silent: boolean): boolean {
   return true;
 }
 
+function spacedLocalLinkRule(state: StateInline, silent: boolean): boolean {
+  const start = state.pos;
+  if (state.src.charCodeAt(start) !== 0x5b /* [ */) return false;
+  const closeLabel = spacedFragmentLabelCloses(state).get(start) ?? -1;
+  if (closeLabel < 0 || state.src[closeLabel + 1] !== "(") return false;
+  const hrefFrom = closeLabel + 2;
+  let parenDepth = 0;
+  let escaped = false;
+  for (let pos = hrefFrom; pos < state.posMax; pos++) {
+    const ch = state.src[pos] ?? "";
+    if (ch === "\n" || ch === "\r") return false;
+    if (escaped) { escaped = false; continue; }
+    if (ch === "\\") { escaped = true; continue; }
+    if (ch === "(") parenDepth++;
+    else if (ch === ")") {
+      if (parenDepth > 0) { parenDepth--; continue; }
+      const href = state.src.slice(hrefFrom, pos).trim();
+      // Standard links, titled links and fragments remain owned by their
+      // existing rules. Accept only an unquoted local path with spaces.
+      if (!href || !/\s/u.test(href) || /["'<>]/u.test(href)
+          || /^[a-z][\w+.-]*:/iu.test(href) || href.startsWith("#")
+          || !safeHref(href)) return false;
+      if (silent) return true;
+      const open = state.push("link_open", "a", 1);
+      open.attrs = [["href", href.replace(/[ \t]+/g, (space) => encodeURIComponent(space))]];
+      state.md.inline.parse(state.src.slice(start + 1, closeLabel), state.md, state.env, state.tokens);
+      state.push("link_close", "a", -1);
+      state.pos = pos + 1;
+      return true;
+    }
+  }
+  return false;
+}
+
 type InlineDelimiterCursor = { close: number };
 
 const nextLinkLabelCloseCache = new WeakMap<StateInline, InlineDelimiterCursor>();
@@ -1377,6 +1411,7 @@ function createMarkdownIt(options: RenderMarkdownHTMLOptions): MarkdownIt {
   md.inline.ruler.before("link", "empty_html_link_embed", emptyHtmlLinkEmbedRule);
   md.inline.ruler.before("link", "spaced_fragment_link", spacedFragmentLinkRule);
   md.inline.ruler.before("link", "jupyter_link", jupyterLinkRule);
+  md.inline.ruler.before("link", "spaced_local_link", spacedLocalLinkRule);
   md.inline.ruler.before("link", "wiki_link", wikiLinkRule);
   md.inline.ruler.before("link", "footnote_reference", footnoteReferenceRule);
   // Must run before `escape`: otherwise the backslash escape rule consumes the

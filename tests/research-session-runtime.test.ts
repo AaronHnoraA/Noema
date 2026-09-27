@@ -142,3 +142,13 @@ describe("D-031 named session routing in prepareRun", () => {
       .rejects.toMatchObject({ code: "ERR_RESEARCH_SESSION_NAME" });
   }));
 });
+
+describe("session attention", () => {
+  test("reading a session name forwards only the name and actor", async () => withProject(async (root) => {
+    const readSessionName = vi.fn(async ({ read }) => ({ name: read.name, unread: false, failed: true }));
+    const service = createResearchRuntimeService({ getProvider: () => ({ readSessionName }) as any });
+    const result = await service.readSessionName({ cwd: root, name: "baseline", extra: "ignored" });
+    expect(readSessionName).toHaveBeenCalledWith({ root, read: { name: "baseline", actor: "emacs" } });
+    expect(result.name).toMatchObject({ name: "baseline", unread: false, failed: true });
+  }));
+});

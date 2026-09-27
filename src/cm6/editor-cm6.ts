@@ -241,7 +241,7 @@ function hrefFromLinkNode(state: EditorState, from: number, to: number): string 
     enter(node) {
       if (href) return false;
       if (node.name !== "URL") return;
-      href = markdownLinkDestination(state.doc.sliceString(node.from, node.to));
+      href = markdownLinkDestination(state.doc.sliceString(node.from, node.to), { stripTitle: false });
       return false;
     },
   });
@@ -289,7 +289,7 @@ function resolveRefLinkHref(state: EditorState, linkFrom: number, linkTo: number
           defLabel = state.doc.sliceString(child.from, child.to).replace(/^\[|\]$/g, "").trim().toLowerCase();
         }
         if (child.name === "URL") {
-          defUrl = markdownLinkDestination(state.doc.sliceString(child.from, child.to));
+          defUrl = markdownLinkDestination(state.doc.sliceString(child.from, child.to), { stripTitle: false });
         }
       });
       if (defLabel === label && defUrl) resolved = defUrl;
@@ -343,7 +343,7 @@ export function markdownHrefAt(state: EditorState, pos: number): string | null {
         }
       }
       if (node.name === "URL") {
-        const href = markdownLinkDestination(state.doc.sliceString(node.from, node.to));
+        const href = markdownLinkDestination(state.doc.sliceString(node.from, node.to), { stripTitle: false });
         if (href) {
           if (jupyterHref(href)) {
             const lineHref = markdownHrefFromLineAt(state, clamped);

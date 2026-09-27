@@ -110,7 +110,7 @@ describe("optimal Visual-mode line breaking", () => {
     editor.destroy();
   });
 
-  test("merges Markdown soft newlines visually but preserves hard breaks and source offsets", async () => {
+  test("keeps source newlines visually distinct and preserves source offsets", async () => {
     installLayoutMocks();
     const source = "第一行中文English mixed prose\n第二行继续参与同一个段落  \n第三行必须从硬换行后开始";
     const host = document.createElement("div");
@@ -119,11 +119,32 @@ describe("optimal Visual-mode line breaking", () => {
     const editor = createEditor(host, { initialContent: source });
     await settleLayout();
 
-    expect(host.querySelector(".cm-kp-spacer-soft-newline")).not.toBeNull();
+    expect(host.querySelector(".cm-kp-spacer-soft-newline")).toBeNull();
+    expect(host.querySelectorAll(".cm-kp-paragraph").length).toBeGreaterThan(1);
     expect(editor.getMarkdown()).toBe(source);
     const hardBreak = source.lastIndexOf("\n") + 1;
     editor.setSelection(hardBreak);
     expect(editor.getSelection()).toEqual({ from: hardBreak, to: hardBreak });
+    editor.destroy();
+  });
+
+  test("typing in the blank line before prose does not join it to the next line", async () => {
+    installLayoutMocks();
+    const host = document.createElement("div");
+    document.body.append(host);
+    const editor = createEditor(host, { initialContent: "\nExample of a stable Markdown paragraph with several words." });
+    await settleLayout();
+
+    editor.view.dispatch({ changes: { from: 0, insert: "s" }, selection: { anchor: 1 }, userEvent: "input.type" });
+    expect(editor.getMarkdown()).toBe("s\nExample of a stable Markdown paragraph with several words.");
+    expect(host.querySelector(".cm-kp-spacer-soft-newline")).toBeNull();
+    const sourceLines = () => [...host.querySelectorAll<HTMLElement>(".cm-line")];
+    expect(sourceLines()[0]?.textContent).toBe("s");
+    expect(sourceLines()[1]?.textContent).toContain("Example");
+    await settleLayout();
+    expect(host.querySelector(".cm-kp-spacer-soft-newline")).toBeNull();
+    expect(sourceLines()[0]?.textContent).toBe("s");
+    expect(sourceLines()[1]?.textContent).toContain("Example");
     editor.destroy();
   });
 
@@ -139,6 +160,24 @@ describe("optimal Visual-mode line breaking", () => {
 
     expect(host.querySelector(".cm-kp-paragraph")).toBeNull();
     expect(editor.getMarkdown()).toContain("**强调文字**");
+    editor.destroy();
+  });
+
+  test("keeps repeated source spaces on the native layout path", async () => {
+    installLayoutMocks();
+    const source = "Keep both spaces while typing English and 中文 prose.";
+    const host = document.createElement("div");
+    document.body.append(host);
+    const editor = createEditor(host, { initialContent: source });
+    await settleLayout();
+
+    const space = source.indexOf(" ");
+    editor.view.dispatch({ changes: { from: space, insert: " " }, userEvent: "input.type" });
+    await settleLayout();
+
+    expect(host.querySelector(".cm-kp-paragraph")).toBeNull();
+    expect(host.querySelector(".cm-line")?.textContent).toContain("Keep  both spaces");
+    expect(editor.getMarkdown()).toBe("Keep  both spaces while typing English and 中文 prose.");
     editor.destroy();
   });
 
@@ -183,8 +222,9 @@ describe("optimal Visual-mode line breaking", () => {
     resetOptimalLinebreakAudit();
     const editor = createEditor(host, { initialContent: source });
 
-    await settleLayout();
-    await settleLayout();
+    for (let pass = 0; pass < 8 && optimalLinebreakAudit().paragraphLayouts < 3; pass++) {
+      await settleLayout();
+    }
     const measured = optimalLinebreakAudit();
     expect(measured.deferredPasses).toBeGreaterThan(0);
     expect(measured.paragraphLayouts).toBeGreaterThan(1);
@@ -199,6 +239,7 @@ describe("optimal Visual-mode line breaking", () => {
     const editor = createEditor(host, {
       initialContent: "缓存命中的中文English段落不应重新排序全部装饰范围。".repeat(8),
     });
+    await settleLayout();
     await settleLayout();
     resetOptimalLinebreakAudit();
 

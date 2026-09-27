@@ -98,6 +98,7 @@ export type ResearchRuntimeService = {
   bindSessionName: RuntimeMethod;
   renameSessionName: RuntimeMethod;
   archiveSessionName: RuntimeMethod;
+  readSessionName: RuntimeMethod;
   resolveSessions: RuntimeMethod;
   coordinatorEndpoint: RuntimeMethod;
   claimCoordinatorRequests: RuntimeMethod;

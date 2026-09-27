@@ -64,6 +64,16 @@ reviewed upstream revision is:
 Its MathLive source-safety limits were adapted at commit
 1deb334220a6acb4dd04cec0d51000d6855d954a.
 
+The kernel's secret redaction patterns (kernel/noema/research/redact.go) and
+Run failure classification (run_failure.go) adapt rules from Pisper,
+copyright 2026 kongran Ling and Pisper contributors, licensed under the MIT
+License. The reviewed upstream revision is:
+
+  https://github.com/ling-kong-ran/pisper
+  commit c40db63214ec66b65e12e4a3b6da15e7fe7f53f9
+
+See docs/pisper-agent-lifecycle-study.md for what was adopted.
+
 The editor bundles the MathLive mathfield runtime, copyright 2017--present
 Arno Gourdol, licensed under the MIT License:
 

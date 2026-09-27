@@ -46,13 +46,25 @@ func policyDecisionForTx(tx *sql.Tx, run Run, action map[string]any, options []m
 	if err != nil {
 		return policyDecision{}, err
 	}
+	conflict, err := concurrentEditReasonTx(tx, run, action)
+	if err != nil {
+		return policyDecision{}, err
+	}
 	for _, rule := range rules {
 		if rule.Effect == "reject" {
 			return policyDecision{OptionID: matchingOption(options, "reject"), DecidedBy: "policy-rule:" + rule.ID, Reason: "matched reject rule"}, nil
 		}
+		if conflict != "" {
+			continue
+		}
 		if rule.Effect == "allow" {
 			return policyDecision{OptionID: preferredAllowOption(options), DecidedBy: "policy-rule:" + rule.ID, Reason: "matched allow rule"}, nil
 		}
+	}
+	if conflict != "" {
+		// Two open Runs editing one file is how parallel work corrupts it.
+		// Nothing is refused: a person may mean it, so the request waits.
+		return policyDecision{Reason: conflict}, nil
 	}
 	if reason := projectAutoAllowReason(run.ExecutionTarget, action); reason != "" {
 		if option := preferredAllowOption(options); option != "" {
@@ -60,6 +72,73 @@ func policyDecisionForTx(tx *sql.Tx, run Run, action map[string]any, options []m
 		}
 	}
 	return policyDecision{}, nil
+}
+
+// editKinds are the ACP tool kinds that change a file.
+var editKinds = map[string]bool{"edit": true, "delete": true, "move": true, "write": true}
+
+// concurrentEditReasonTx reports whether ACTION edits a path another open Run
+// of the same execution target was already allowed to edit.  Adopted from
+// Pisper's team file ownership, where parallel tasks may not share a write
+// scope; Noema has no declared scopes, so the granted edits of open Runs are
+// the scope.
+func concurrentEditReasonTx(tx *sql.Tx, run Run, action map[string]any) (string, error) {
+	if !editKinds[strings.ToLower(strings.TrimSpace(runtimeStringValue(action["kind"])))] {
+		return "", nil
+	}
+	wanted := map[string]bool{}
+	for _, path := range actionStringSlice(action["paths"]) {
+		if key := projectPathKey(run.ExecutionTarget, path); key != "" {
+			wanted[key] = true
+		}
+	}
+	if len(wanted) == 0 {
+		return "", nil
+	}
+	rows, err := tx.Query(`SELECT p.run_id, COALESCE(n.name, ''), p.action_json FROM permissions p
+		JOIN runs r ON r.id = p.run_id LEFT JOIN run_session_names n ON n.run_id = p.run_id
+		WHERE p.run_id != ? AND r.execution_target = ? AND p.state = 'resolved' AND lower(p.option_id) LIKE 'allow%'
+		AND r.status IN ('preparing', 'running', 'waiting_permission', 'waiting_input')
+		ORDER BY p.created_at`, run.ID, run.ExecutionTarget)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var otherRun, otherName, actionJSON string
+		if err := rows.Scan(&otherRun, &otherName, &actionJSON); err != nil {
+			return "", err
+		}
+		var other map[string]any
+		if json.Unmarshal([]byte(actionJSON), &other) != nil ||
+			!editKinds[strings.ToLower(strings.TrimSpace(runtimeStringValue(other["kind"])))] {
+			continue
+		}
+		for _, path := range actionStringSlice(other["paths"]) {
+			if key := projectPathKey(run.ExecutionTarget, path); key != "" && wanted[key] {
+				owner := otherRun
+				if otherName != "" {
+					owner = fmt.Sprintf("%s (session %s)", otherRun, otherName)
+				}
+				return fmt.Sprintf("%s is also being edited by open Run %s", path, owner), nil
+			}
+		}
+	}
+	return "", rows.Err()
+}
+
+// projectPathKey returns PATH relative to TARGET for comparison, or "".
+func projectPathKey(target, path string) string {
+	path = strings.Trim(strings.TrimSpace(path), `"'`)
+	if path == "" {
+		return ""
+	}
+	if filepath.IsAbs(path) && strings.TrimSpace(target) != "" {
+		if rel, err := filepath.Rel(filepath.Clean(target), filepath.Clean(path)); err == nil {
+			return filepath.ToSlash(rel)
+		}
+	}
+	return filepath.ToSlash(filepath.Clean(path))
 }
 
 func hardDenyReason(action map[string]any) string {

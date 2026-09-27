@@ -702,7 +702,9 @@ func makeHistoryRecord(source, project, sessionID, nativeID, role, path string, 
 	return indexedHistoryRecord{HistoryRecord: HistoryRecord{
 		ID: id, Source: source, ProjectRoot: project, SessionID: sessionID, NativeSessionID: nativeID,
 		Role: role, Timestamp: formatMillis(timestamp.UnixMilli()), SourcePath: path, Ordinal: ordinal,
-		Content: content, Locator: map[string]any{"path": path, "record": ordinal},
+		// The index is a searchable copy; the native transcript keeps the
+		// exact text.  The id stays derived from the original content.
+		Content: RedactSecrets(content), Locator: map[string]any{"path": path, "record": ordinal},
 	}, timestampMs: timestamp.UnixMilli()}
 }
 

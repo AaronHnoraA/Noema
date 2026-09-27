@@ -648,8 +648,9 @@ export function shouldForwardToEmacs(event: KeyboardEvent): boolean {
   if (event.altKey && !event.metaKey && !event.ctrlKey) {
     return codeToBaseKey(event.code, event.shiftKey) !== null;
   }
-  // M-x (Cmd+X), M-w (kill-ring-save), and M-q (fill-paragraph).
+  // M-x, M-w, M-q, and M-o/M-O (ace-window and window swap).
   // Cmd+Arrow is deliberately left to CodeMirror/WebKit for native editing.
+  if (event.metaKey && !event.ctrlKey && !event.altKey && event.code === "KeyO") return true;
   if (event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
     return event.code === "KeyX" || event.code === "KeyW" || event.code === "KeyQ";
   }

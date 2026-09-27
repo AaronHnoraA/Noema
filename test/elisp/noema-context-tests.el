@@ -48,6 +48,27 @@ SPEC is a list of (NAME . CONTENT) files created in it and bound to
       (forward-line (1- line))
       (point))))
 
+(ert-deftest noema-context-xwidget-region-asks-its-page-for-selection ()
+  "The Emacs region command targets the Noema page when it has focus."
+  (let (sent)
+    (cl-letf (((symbol-function 'my/noema--xwidget-buffer-p) (lambda (&optional _) t))
+              ((symbol-function 'my/noema-command)
+               (lambda (command &optional detail) (setq sent (list command detail)))))
+      (noema-context-send-region)
+      (should (equal sent '("send-selection-to-agent" nil))))))
+
+(ert-deftest noema-context-browser-lines-use-shared-gptel-selection ()
+  "Browser line numbers become a normal gptel region before sending."
+  (noema-context-tests--with-project '(("a.txt" . "alpha\nbravo\ncharlie\ndelta\n"))
+    (let ((file (alist-get "a.txt" files nil nil #'equal))
+          (sent nil))
+      (cl-letf (((symbol-function 'noema-context--send)
+                 (lambda (&rest _) (setq sent (noema-context-references nil root)))))
+        (noema-context-send-noema-selection file 2 3))
+      (push (find-buffer-visiting file) opened)
+      (should (= (length sent) 1))
+      (should (equal (noema-context--reference-line (car sent)) "a.txt:2-3")))))
+
 
 ;;;; ── References ───────────────────────────────────────────────────────────
 

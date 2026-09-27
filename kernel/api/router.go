@@ -185,6 +185,7 @@ func ServeAPI(ginServer *gin.Engine) {
 	ginServer.Handle("POST", "/api/noema/research/session/name/declare", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, noemaResearchSessionNameDeclare)
 	ginServer.Handle("POST", "/api/noema/research/session/name/rename", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, noemaResearchSessionNameRename)
 	ginServer.Handle("POST", "/api/noema/research/session/name/archive", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, noemaResearchSessionNameArchive)
+	ginServer.Handle("POST", "/api/noema/research/session/name/read", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, noemaResearchSessionNameRead)
 	ginServer.Handle("POST", "/api/noema/research/session/name/bind", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, noemaResearchSessionNameBind)
 	ginServer.Handle("POST", "/api/noema/research/coordinator/claim", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, noemaResearchCoordinatorClaim)
 	ginServer.Handle("POST", "/api/noema/research/coordinator/complete", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, noemaResearchCoordinatorComplete)

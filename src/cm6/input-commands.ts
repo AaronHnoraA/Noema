@@ -40,10 +40,8 @@ import {
 import { nextGraphemePosition, previousGraphemePosition } from "./text-boundaries.ts";
 import {
   activateInlineMathFromArrow,
-  isVisualMode,
   moveInsertLineWithDisplayMathEntry,
 } from "./extensions/visual/index.ts";
-import { preserveEditorViewport } from "./viewport-stability.ts";
 
 export type EditorDeleteDirection = "backward" | "forward";
 export type EditorMovementKey =
@@ -217,18 +215,7 @@ export function runEditorEnter(view: EditorView): boolean {
       || insertNewlineAndIndent(view);
   };
 
-  const selection = view.state.selection.main;
-  const line = view.state.doc.lineAt(selection.head);
-  // In Preview an empty source line has a projected height. A second Enter
-  // changes both the document and which line owns that height. CM6's command
-  // requests scrollIntoView using its pre-measure height estimate; WebKit then
-  // used to correct the outer host after measuring the projection, producing
-  // a visible down-then-up twitch. Preserve the shared outer viewport across
-  // this one structural transaction. The first Enter on a content line and
-  // every Source-mode Enter retain native scrollIntoView behavior.
-  return isVisualMode(view) && selection.empty && line.text.trim().length === 0
-    ? preserveEditorViewport(view, run, selection.head)
-    : run();
+  return run();
 }
 
 /** Canonical Tab behavior shared by native CM6 and xwidget input. */

@@ -828,6 +828,7 @@ selectionTool.innerHTML = `
   <button type="button" data-selection-command="link" title="Link">@</button>
   <span aria-hidden="true"></span>
   <button type="button" data-selection-command="copy" title="Copy">Copy</button>
+  <button type="button" data-selection-command="send-to-agent" title="Send selected lines to an Emacs agent">Agent</button>
   <button type="button" data-selection-command="more" title="More actions">...</button>
   <div class="aaronnote-selection-more" data-selection-more hidden>
     <button type="button" data-selection-command="insert-roam-idlink">Insert roam idlink...</button>
@@ -843,6 +844,13 @@ selectionTool.innerHTML = `
 `;
 selectionTool.hidden = true;
 document.body.appendChild(selectionTool);
+selectionTool.querySelector<HTMLButtonElement>("[data-selection-command='send-to-agent']")!.hidden = !rendererClient;
+
+const windowHint = document.createElement("div");
+windowHint.className = "aaronnote-window-hint";
+windowHint.hidden = true;
+windowHint.setAttribute("aria-hidden", "true");
+document.body.appendChild(windowHint);
 const selectionMore = selectionTool.querySelector<HTMLElement>("[data-selection-more]")!;
 const selectionRoamIdlink = selectionTool.querySelector<HTMLButtonElement>("[data-selection-command='insert-roam-idlink']")!;
 const selectionRevisionForm = selectionTool.querySelector<HTMLFormElement>("[data-revision-form]")!;
@@ -11073,7 +11081,50 @@ async function copyActiveSelection(): Promise<void> {
   closeSelectionTool();
 }
 
+async function sendSelectionToAgent(): Promise<void> {
+  const selection = editor.getSelection();
+  let from = Math.min(selection.from, selection.to);
+  let to = Math.max(selection.from, selection.to);
+  if (from === to) {
+    const native = window.getSelection();
+    const content = editor.view.contentDOM;
+    if (native && !native.isCollapsed && native.anchorNode && native.focusNode
+        && content.contains(native.anchorNode) && content.contains(native.focusNode)) {
+      try {
+        const anchor = editor.view.posAtDOM(native.anchorNode, native.anchorOffset);
+        const focus = editor.view.posAtDOM(native.focusNode, native.focusOffset);
+        from = Math.min(anchor, focus);
+        to = Math.max(anchor, focus);
+      } catch { /* A rendered widget has no mappable source selection. */ }
+    }
+  }
+  if (!currentFile || !rendererClient || from === to) {
+    setStatus("Select note text to send to an agent");
+    return;
+  }
+  const doc = editor.view.state.doc;
+  const lineStart = doc.lineAt(from).number;
+  const lineEnd = doc.lineAt(Math.max(from, to - 1)).number;
+  const file = currentFile;
+  try {
+    await save();
+    if (file !== currentFile || revision !== savedRevision) {
+      setStatus("Save the note before sending its selection");
+      return;
+    }
+    await api.emacs.sendSelection({ client: rendererClient, file, lineStart, lineEnd });
+    closeSelectionTool();
+    setStatus(`Selected lines ${lineStart}–${lineEnd} sent to Emacs`);
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "Send selection to agent failed");
+  }
+}
+
 function runSelectionCommand(command: string): void {
+  if (command === "send-to-agent") {
+    void sendSelectionToAgent();
+    return;
+  }
   if (command === "copy") {
     void copyActiveSelection();
     return;
@@ -11341,6 +11392,7 @@ function runHostCommand(detail: unknown): boolean {
     mtimeMs?: number;
     clientId?: string;
     settings?: LanguageToolSettings;
+    label?: string;
     settingsRevision?: string;
     repositoryId?: string;
     phase?: string;
@@ -11353,6 +11405,14 @@ function runHostCommand(detail: unknown): boolean {
   if (!command) return false;
 
   switch (command) {
+    case "window-hint":
+      windowHint.textContent = String(body.label || "").slice(0, 8);
+      windowHint.hidden = !windowHint.textContent;
+      return true;
+    case "window-hint-clear":
+      windowHint.hidden = true;
+      windowHint.textContent = "";
+      return true;
     case "notes-index-changed": {
       const version = typeof body.version === "number" ? body.version : 0;
       // Ignore stale broadcasts (e.g. replayed on reconnect).
@@ -11442,6 +11502,9 @@ function runHostCommand(detail: unknown): boolean {
     case "save":
       if (rejectReadOnlyAction("Read-only pane")) return true;
       void save();
+      return true;
+    case "send-selection-to-agent":
+      void sendSelectionToAgent();
       return true;
     case "trash-current-note":
     case "delete-current-note":

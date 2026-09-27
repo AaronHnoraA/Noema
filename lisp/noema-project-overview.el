@@ -15,6 +15,7 @@
 (declare-function my/noema-api-call "init-aaronnote" (channel args callback &optional timeout))
 (declare-function my/noema--ensure-server "init-aaronnote" (&optional callback))
 (declare-function noema-sessions "noema-sessions" (&optional scope))
+(declare-function noema-agent-inbox "noema-agent-inbox" ())
 (declare-function noema-sessions-open-reference "noema-sessions" (root &optional name session-id))
 (declare-function noema-orchestration "noema-orchestration" (&optional directory))
 (declare-function noema-capability-manager "noema-capability-ui" (&optional project type))
@@ -113,6 +114,9 @@
             root "\n\n")
     (noema-project-overview--button "Sessions" (lambda () (noema-project-overview--open
                                                               (lambda () (require 'noema-sessions) (noema-sessions 'project)))))
+    (insert "   ")
+    (noema-project-overview--button "All agents" (lambda () (require 'noema-agent-inbox)
+                                                   (noema-agent-inbox)))
     (insert "   ")
     (noema-project-overview--button "Skills / MCP" (lambda () (noema-project-overview--open
                                                                   (lambda () (require 'noema-capability-ui)

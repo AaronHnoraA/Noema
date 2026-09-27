@@ -1452,6 +1452,38 @@ describe("xwidget key guard", () => {
     });
   });
 
+  test("forwards M-o and M-O for Emacs window commands", () => {
+    withForwardedEmacsKeys((forwarded) => {
+      for (const shiftKey of [false, true]) {
+        const event = new KeyboardEvent("keydown", {
+          key: shiftKey ? "O" : "o",
+          code: "KeyO",
+          metaKey: true,
+          shiftKey,
+          bubbles: true,
+          cancelable: true,
+        });
+        expect(handleXwidgetEmacsKeydown(event)).toBe(true);
+        expect(event.defaultPrevented).toBe(true);
+      }
+      expect(forwarded).toEqual(["M-o", "M-O"]);
+    });
+  });
+
+  test("forwards the Emacs agent prefix from the Noema page", () => {
+    withForwardedEmacsKeys((forwarded) => {
+      const prefix = new KeyboardEvent("keydown", {
+        key: "c", code: "KeyC", ctrlKey: true, bubbles: true, cancelable: true,
+      });
+      const agent = new KeyboardEvent("keydown", {
+        key: "A", code: "KeyA", shiftKey: true, bubbles: true, cancelable: true,
+      });
+      expect(handleXwidgetEmacsKeydown(prefix)).toBe(true);
+      expect(handleXwidgetEmacsKeydown(agent)).toBe(true);
+      expect(forwarded).toEqual(["C-c A"]);
+    });
+  });
+
   test("keeps non-reserved Cmd authoring shortcuts in the shared renderer", () => {
     withForwardedEmacsKeys((forwarded) => {
       for (const [key, code] of [

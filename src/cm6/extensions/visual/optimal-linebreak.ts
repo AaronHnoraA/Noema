@@ -166,14 +166,16 @@ function topLevelPlainParagraph(node: { node: { parent: { name: string } | null;
 function visibleParagraphs(view: EditorView): ParagraphSyntax[] {
   const tree = syntaxTree(view.state);
   const paragraphs = new Map<string, ParagraphSyntax>();
+  const seenParagraphs = new Set<string>();
   for (const visible of view.visibleRanges) {
     tree.iterate({
       from: visible.from,
       to: visible.to,
       enter(node) {
         if (node.name !== "Paragraph" || !topLevelPlainParagraph(node)) return;
-        const key = `${node.from}:${node.to}`;
-        if (paragraphs.has(key)) return false;
+        const paragraphKey = `${node.from}:${node.to}`;
+        if (seenParagraphs.has(paragraphKey)) return false;
+        seenParagraphs.add(paragraphKey);
         const hardBreakEnds = new Set<number>();
         const hiddenRanges: Array<{ from: number; to: number }> = [];
         node.node.cursor().iterate((child) => {
@@ -182,7 +184,27 @@ function visibleParagraphs(view: EditorView): ParagraphSyntax[] {
             if (child.to - child.from > 1) hiddenRanges.push({ from: child.from, to: child.to - 1 });
           }
         });
-        paragraphs.set(key, { from: node.from, to: node.to, hardBreakEnds, hiddenRanges });
+        // A source newline is a real editing boundary. Replacing it with a
+        // measured spacer made typing into a blank line join the next line
+        // visually ("s\nExample" appeared as "sExample") until the next
+        // layout pass. Keep each source line independent while still choosing
+        // optimal breaks within long lines.
+        let line = view.state.doc.lineAt(node.from);
+        while (line.from <= node.to) {
+          const from = Math.max(node.from, line.from);
+          const to = Math.min(node.to, line.to);
+          if (to > from) {
+            const key = `${from}:${to}`;
+            paragraphs.set(key, {
+              from,
+              to,
+              hardBreakEnds: new Set([...hardBreakEnds].filter((end) => end >= from && end <= to)),
+              hiddenRanges: hiddenRanges.filter((range) => range.from >= from && range.to <= to),
+            });
+          }
+          if (line.number === view.state.doc.lines) break;
+          line = view.state.doc.line(line.number + 1);
+        }
         return false;
       },
     });
@@ -473,7 +495,10 @@ class OptimalLinebreakPlugin {
       }
       audit.paragraphVisits += 1;
       const text = state.doc.sliceString(paragraph.from, paragraph.to);
-      if (!text || text.length > MAX_PARAGRAPH_CHARS) {
+      // The measured layout may replace a breakable source space with a <br>.
+      // Preserve author-entered space runs in the native CM6 layout, where
+      // every space remains a visible, editable position.
+      if (!text || text.length > MAX_PARAGRAPH_CHARS || / {2,}(?=\S|$)|\t/u.test(text)) {
         audit.fallbacks += 1;
         continue;
       }

@@ -32,6 +32,7 @@
 (declare-function noema-sessions-agent-restart "noema-sessions" (&optional buffer))
 (declare-function noema-sessions-agent-rename "noema-sessions" (&optional buffer new-name))
 (declare-function noema-sessions-agent-fork "noema-sessions" (&optional buffer child))
+(declare-function noema-sessions-agent-side-chat "noema-sessions" (&optional buffer))
 (declare-function noema-sessions-agent-archive "noema-sessions" (&optional buffer))
 (declare-function noema-sessions-agent-jump "noema-sessions" (&optional buffer))
 (declare-function noema-sessions-agent-list "noema-sessions" (&optional buffer))
@@ -145,7 +146,8 @@
 
 (defvar-local noema-agent-acp-session-origin nil
   "How this agent-shell buffer was started.
-One of `run', `popup', `manual', `foreign', `pi', `takeover' or `probe'.
+One of `run', `popup', `manual', `foreign', `pi', `takeover', `probe' or
+`side' (an ephemeral side chat, see `noema-agent-acp-ephemeral-origins').
 Every entry point records it through `noema-agent-acp-adopt' so one project
 view can list and manage sessions whatever opened them.")
 (put 'noema-agent-acp-session-origin 'permanent-local t)
@@ -184,6 +186,7 @@ The function receives the live agent buffer and owns only its presentation.")
                    ("C-c M-k" . noema-agent-acp-close-others)
                    ("C-c C-w" . noema-sessions-agent-rename)
                    ("C-c C-f" . noema-sessions-agent-fork)
+                   ("C-c C-q" . noema-sessions-agent-side-chat)
                    ("C-c C-d" . noema-sessions-agent-archive)
                    ("C-c C-j" . noema-sessions-agent-jump)
                    ("C-c C-l" . noema-sessions-agent-list)
@@ -383,7 +386,28 @@ the real agent-shell buffer, so it accepts input and interrupts directly."
   (or (buffer-local-value 'shell-maker--busy buffer)
       (run-hook-with-args-until-success 'noema-agent-acp-busy-functions buffer)))
 
-(defcustom noema-agent-acp-auto-stop-origins '(run probe pi)
+(defun noema-agent-acp-pending-prompt-count (buffer)
+  "Return how many prompts the person queued in agent BUFFER.
+agent-shell owns the queue (`agent-shell-prompt-queue', steering and
+removal); Noema only reads its length so lists can show queued intent."
+  (if (buffer-live-p buffer)
+      (length (ignore-errors
+                (map-elt (buffer-local-value 'agent-shell--state buffer) :pending-prompts)))
+    0))
+
+(defcustom noema-agent-acp-ephemeral-origins '(side)
+  "Session origins that never enter a project's durable session registry.
+A side chat asks a quick question beside a session without becoming one of
+the project's conversations; it is listed while it lives and then goes.
+Adopted from Pisper's temporary side chat."
+  :type '(repeat symbol)
+  :group 'noema-agent-session)
+
+(defvar-local noema-agent-acp-side-parent nil
+  "Name of the session this ephemeral side chat was opened beside.")
+(put 'noema-agent-acp-side-parent 'permanent-local t)
+
+(defcustom noema-agent-acp-auto-stop-origins '(run probe pi side)
   "Session origins whose idle, hidden agents may be stopped automatically.
 Automatic stops are the periodic warm-buffer sweep and closing a project when
 its last `.noema' document goes.  Sessions a person opened -- `manual',
@@ -411,12 +435,15 @@ last shown, so a conversation typed directly into the buffer stays warm."
 
 (defun noema-agent-acp-auto-stoppable-p (buffer)
   "Return non-nil when an automatic lifecycle may stop agent BUFFER.
-It must be idle, shown in no window of any frame, and started by an origin in
+It must be idle, hold no queued prompt, shown in no window of any frame, and
+started by an origin in
 `noema-agent-acp-auto-stop-origins'.  Every automatic stop path asks this."
   (and (noema-agent-acp-agent-buffer-p buffer)
        (memq (buffer-local-value 'noema-agent-acp-session-origin buffer)
              noema-agent-acp-auto-stop-origins)
        (not (noema-agent-acp-busy-p buffer))
+       ;; Queued prompts are the person's intent still waiting to be sent.
+       (zerop (noema-agent-acp-pending-prompt-count buffer))
        (not (get-buffer-window buffer t))))
 
 (defun noema-agent-acp-confirm-stop (buffer action)
@@ -573,6 +600,7 @@ renders.  Return non-nil when a prompt was written now."
       ["Restart session" (noema-sessions-agent-restart ,buffer) :active ,named]
       ["Rename session..." (noema-sessions-agent-rename ,buffer) :active ,named]
       ["Fork session..." (noema-sessions-agent-fork ,buffer) :active ,named]
+      ["Side chat beside it" (noema-sessions-agent-side-chat ,buffer) :active ,named]
       ["Jump to latest work block" (noema-sessions-agent-jump ,buffer) :active ,named]
       ["Archive session" (noema-sessions-agent-archive ,buffer) :active ,named]
       "--"
@@ -616,6 +644,7 @@ Mouse
   \\[noema-agent-acp-close-others]\tclose the other tabs
   \\[noema-sessions-agent-rename]\trename the session
   \\[noema-sessions-agent-fork]\tfork the session
+  \\[noema-sessions-agent-side-chat]\tside chat: ask beside it without interrupting
   \\[noema-sessions-agent-archive]\tarchive the session and close its tab
   \\[noema-sessions-agent-jump]\tjump to its latest work block
   \\[noema-sessions-agent-list]\tsession list
@@ -934,7 +963,8 @@ also promoted and bound in the durable registry, asynchronously."
       (with-current-buffer buffer
         (setq-local noema-agent-acp-session-origin origin))
       (noema-agent-acp-mark-session-buffer buffer name agent root)
-      (noema-agent-acp--register-durable buffer name root)
+      (unless (memq origin noema-agent-acp-ephemeral-origins)
+        (noema-agent-acp--register-durable buffer name root))
       buffer)))
 
 (defun noema-agent-acp-sessions (&optional root)

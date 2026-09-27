@@ -73,6 +73,14 @@ describe("dd leaves a legal Normal-mode cursor", () => {
     s.done();
   });
 
+  test("dd from the middle of a Markdown line deletes that whole line", () => {
+    const s = mount("# Before\nparagraph text\n# After", 15);
+    s.keys("d", "d");
+    expect(s.markdown()).toBe("# Before\n# After");
+    expect(s.head()).toBe(9);
+    s.done();
+  });
+
   test("deleting the only line leaves the caret at the start of the empty document", () => {
     const s = mount("aaa", 1);
     s.keys("d", "d");

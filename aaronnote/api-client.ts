@@ -730,6 +730,7 @@ type NativeApi = {
     inputFocus?: (body: { client?: string; file?: string }) => Promise<unknown>;
     uiState?: (body: Record<string, unknown>) => Promise<unknown>;
     key?: (body: string | { key: string; client?: string }) => Promise<unknown>;
+    sendSelection?: (body: { client: string; file: string; lineStart: number; lineEnd: number }) => Promise<unknown>;
     systemOpen?: (target: string, base?: string) => Promise<unknown>;
     zotero?: (body: Record<string, unknown>) => Promise<unknown>;
     zoteroImport?: (body: Record<string, unknown>) => Promise<unknown>;
@@ -1655,6 +1656,13 @@ export const api = {
       if (!call) return;
       const body = client ? { key: keyString, client } : keyString;
       await call(body).catch(() => {});
+    },
+    async sendSelection(body: { client: string; file: string; lineStart: number; lineEnd: number }): Promise<void> {
+      const call = window.aaronnoteApi?.emacs?.sendSelection;
+      const result = call
+        ? await call(body)
+        : await callHttpApi("aaronnote:api:emacs:selection", [body], "Send selection to agent failed");
+      ensureOk(result, "Send selection to agent failed");
     },
     async systemOpen(target: string, base?: string): Promise<{ ok?: boolean; target?: string } | void> {
       const call = window.aaronnoteApi?.emacs?.systemOpen;

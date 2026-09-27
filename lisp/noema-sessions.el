@@ -111,23 +111,62 @@ its project is not a Noema project, so it is listed here beside the rest.")
   "Return the `tabulated-list-entries' row for local SESSION."
   (let ((name (noema-sessions--local-label session)))
     (list name
-          (vector name
+          (vector ""
+                  name
                   (or (plist-get session :agent) "")
                   "local"
                   ""
-                  "yes"
+                  (noema-sessions--buffer-cell (plist-get session :buffer))
                   ""
                   (format "%s" (or (plist-get session :origin) ""))
                   ""))))
 
+(defcustom noema-sessions-idle-threshold 30
+  "Seconds without agent activity after which a running session shows idle.
+A running session that has gone quiet is how a stuck agent looks; the list
+says so instead of letting \"running\" hide it.  Adopted from Pisper."
+  :type 'natnum
+  :group 'noema-agent-session)
+
+(defun noema-sessions--running-status (buffer)
+  "Return \"running\", with how long live BUFFER has been quiet if long."
+  (let* ((last (and buffer (buffer-local-value 'noema-agent-acp-last-used-at buffer)))
+         (idle (and last (- (float-time) last))))
+    (if (and idle (>= idle noema-sessions-idle-threshold))
+        (format "running, idle %s"
+                (if (< idle 120) (format "%ds" idle) (format "%dm" (/ idle 60))))
+      "running")))
+
 (defun noema-sessions--status (entry root)
   "Return the display status of session ENTRY in ROOT."
   (cond ((equal (noema-sessions--string entry "state") "archived") "archived")
-        ((noema-sessions--get entry "openRun") "running")
+        ((noema-sessions--get entry "openRun")
+         (noema-sessions--running-status (noema-sessions--live-buffer entry root)))
         ((noema-sessions--live-buffer entry root) "live")
         ((not (noema-sessions--string entry "sessionId")) "declared")
         ((member (noema-sessions--string entry "sessionState") '("active" "warm")) "resumable")
         (t "lost")))
+
+(defun noema-sessions--true-p (value)
+  "Return non-nil when JSON VALUE is true."
+  (and value (not (eq value :false)) (not (eq value :json-false))))
+
+(defun noema-sessions--attention (entry)
+  "Return the attention mark of session ENTRY.
+The kernel derives it from the latest Run: a pending permission or input
+request, then a failure, then an unread settled Run.  Reading clears only
+the last; a failure stays until a later Run succeeds."
+  (pcase (noema-sessions--string entry "attentionReason")
+    ("permission" "!approve")
+    ("input" "!input")
+    ("failed" (if (noema-sessions--true-p (noema-sessions--get entry "unread")) "!failed" "failed"))
+    (_ (if (noema-sessions--true-p (noema-sessions--get entry "unread")) "new" ""))))
+
+(defun noema-sessions--attention-rank (entry)
+  "Return ENTRY's sort rank: 0 needs the person now, 1 is unread, 2 is quiet."
+  (cond ((noema-sessions--true-p (noema-sessions--get entry "needsAttention")) 0)
+        ((noema-sessions--true-p (noema-sessions--get entry "unread")) 1)
+        (t 2)))
 
 (defun noema-sessions--time (timestamp)
   "Return a compact local rendering of RFC 3339 TIMESTAMP."
@@ -153,21 +192,38 @@ The kernel keeps the latest usage the agent reported for the bound Session."
                      (and (numberp total) (> total 0) (noema-sessions--tokens total))))
      " ")))
 
+(defun noema-sessions--buffer-cell (buffer)
+  "Return the Buffer cell for live agent BUFFER, with its queued prompts."
+  (cond ((not buffer) "")
+        ((zerop (noema-agent-acp-pending-prompt-count buffer)) "yes")
+        (t (format "yes +%dq" (noema-agent-acp-pending-prompt-count buffer)))))
+
+(defun noema-sessions--last-run (run)
+  "Return the Last Run cell for RUN: its time, status and failure kind.
+A retryable kind (rate limit, network, lost lease) ends in \"retry\": the
+same Run may succeed later unchanged.  Auth, quota and context failures need
+the person first."
+  (let ((kind (noema-sessions--string run "failureKind")))
+    (concat (noema-sessions--time (noema-sessions--string run "createdAt")) " "
+            (or (noema-sessions--string run "status") "")
+            (if kind
+                (format " (%s%s)" (string-replace "_" " " kind)
+                        (if (noema-sessions--true-p (noema-sessions--get run "retryable")) ", retry" ""))
+              ""))))
+
 (defun noema-sessions--row (entry root)
   "Return the `tabulated-list-entries' row for session ENTRY in ROOT."
   (let* ((name (noema-sessions--string entry "name"))
          (last (noema-sessions--get entry "lastRun"))
          (aliases (noema-sessions--list (noema-sessions--get entry "aliases"))))
     (list name
-          (vector (if aliases (format "%s (was %s)" name (string-join aliases ", ")) name)
+          (vector (noema-sessions--attention entry)
+                  (if aliases (format "%s (was %s)" name (string-join aliases ", ")) name)
                   (or (noema-sessions--string entry "agent") "")
                   (noema-sessions--status entry root)
                   (noema-sessions--usage entry)
-                  (if (noema-sessions--live-buffer entry root) "yes" "")
-                  (if last
-                      (format "%s %s" (noema-sessions--time (noema-sessions--string last "createdAt"))
-                              (or (noema-sessions--string last "status") ""))
-                    "")
+                  (noema-sessions--buffer-cell (noema-sessions--live-buffer entry root))
+                  (if last (noema-sessions--last-run last) "")
                   (or (noema-sessions--string entry "origin") "")
                   (or (noema-sessions--string entry "parentName") "")))))
 
@@ -214,7 +270,10 @@ The kernel keeps the latest usage the agent reported for the bound Session."
              ;; A file-scoped list answers "which conversations does this
              ;; document use", which a local session never does.
              (local (unless (eq noema-sessions--scope 'file)
-                      (noema-sessions--local-sessions names noema-sessions--root))))
+                      (noema-sessions--local-sessions names noema-sessions--root)))
+             ;; What needs the person comes first; the kernel's recency
+             ;; order is kept inside each rank.
+             (visible (seq-sort-by #'noema-sessions--attention-rank #'< visible)))
         (setq noema-sessions--names visible
               noema-sessions--local local
               tabulated-list-entries
@@ -285,10 +344,48 @@ The kernel keeps the latest usage the agent reported for the bound Session."
       (setq-local noema-agent-promote--session-id (noema-sessions--string entry "sessionId")))
     buffer))
 
+(defun noema-sessions--mark-read (root name &optional done)
+  "Record that the person has seen session NAME of ROOT, then call DONE."
+  (noema-sessions--api
+   "aaronnote:api:research:session:name:read"
+   `((cwd . ,root) (name . ,name))
+   (lambda (_result error-object)
+     (when error-object
+       (message "Noema: %s" (noema-sessions--error error-object)))
+     (when done (funcall done (not error-object))))))
+
+(defun noema-sessions--note-read (entry root)
+  "Mark ENTRY of ROOT read when it has unread news, refreshing open lists."
+  (when (noema-sessions--true-p (noema-sessions--get entry "unread"))
+    (noema-sessions--mark-read root (noema-sessions--string entry "name")
+                               (lambda (_ok) (noema-sessions--refresh-lists root)))))
+
+(defun noema-sessions-mark-read (name)
+  "Mark session NAME read.  A failure stays until a later Run succeeds."
+  (interactive (list (noema-sessions--name-at-point)))
+  (noema-sessions--durable name)
+  (noema-sessions--mark-read noema-sessions--root name
+                             (noema-sessions--refresher (current-buffer))))
+
+(defun noema-sessions-next-attention ()
+  "Move to the next session that needs the person or has unread news."
+  (interactive)
+  (let ((start (point)) found)
+    (forward-line 1)
+    (while (and (not found) (not (eobp)))
+      (if (equal (aref (or (tabulated-list-get-entry) [""]) 0) "")
+          (forward-line 1)
+        (setq found t)))
+    (unless found
+      (goto-char start)
+      (message "No other session needs attention"))))
+
 (defun noema-sessions--visit-entry (entry root)
-  "Show session ENTRY of ROOT, resuming its conversation when needed."
+  "Show session ENTRY of ROOT, resuming its conversation when needed.
+Showing it is reading it."
   (let ((live (noema-sessions--live-buffer entry root))
         (name (noema-sessions--string entry "name")))
+    (noema-sessions--note-read entry root)
     (cond
      (live (noema-agent-acp-show-buffer live))
      ((equal name "pi") (noema-pi-router-open root))
@@ -333,6 +430,51 @@ and resume the native conversation into the same project Agent workspace."
                     (error (message "Open Agent failed: %s"
                                     (error-message-string open-error))))
                 (message "Open Agent: the requested Session is no longer resumable"))))))))))
+
+(defun noema-sessions--side-buffer (root parent)
+  "Return the live side chat of session PARENT in ROOT, or nil."
+  (seq-find (lambda (buffer)
+              (and (noema-agent-acp-agent-buffer-p buffer)
+                   (equal (buffer-local-value 'noema-agent-acp-side-parent buffer) parent)
+                   (equal (buffer-local-value 'noema-agent-acp-session-root buffer) root)))
+            (buffer-list)))
+
+(defun noema-sessions--open-side-chat (root parent agent directory)
+  "Show the side chat beside session PARENT of ROOT, starting AGENT in DIRECTORY.
+One side chat per session: opening it again returns to the same one.  It
+starts empty -- the parent's history is not copied and its Runs are not
+touched -- and never enters the durable registry.  Once idle and hidden it is
+stopped by the same sweep as a Run's warm session."
+  (let ((buffer (noema-sessions--side-buffer root parent)))
+    (unless buffer
+      (let ((config (or (noema-agent-acp-config-for agent)
+                        (user-error "No agent-shell configuration for %s" agent))))
+        (setq buffer (noema-agent-acp-start :config config :directory directory :origin 'side))
+        (with-current-buffer buffer
+          (setq-local noema-agent-acp-side-parent parent))
+        (noema-agent-acp-adopt buffer :agent agent :origin 'side :root root
+                               :name (noema-agent-acp--unique-name (format "side/%s" parent) root))))
+    (noema-agent-acp-show-buffer buffer)
+    buffer))
+
+(defun noema-sessions-side-chat (name)
+  "Open a side chat beside session NAME to ask without interrupting it.
+It uses the same agent and working directory, starts without NAME's
+history, and goes away on its own once idle and hidden."
+  (interactive (list (noema-sessions--name-at-point)))
+  (let* ((entry (noema-sessions--durable name))
+         (target (noema-sessions--string entry "executionTarget")))
+    (noema-sessions--open-side-chat
+     noema-sessions--root name (noema-sessions--string entry "agent")
+     (if (and target (file-directory-p target)) target (noema-project-workspace noema-sessions--root)))))
+
+(defun noema-sessions-agent-side-chat (&optional buffer)
+  "Open a side chat beside the session of agent BUFFER."
+  (interactive)
+  (pcase-let ((`(,buffer ,root ,name) (noema-sessions--agent-target buffer)))
+    (noema-sessions--open-side-chat
+     root name (buffer-local-value 'noema-agent-acp-session-agent buffer)
+     (buffer-local-value 'default-directory buffer))))
 
 (defun noema-sessions-visit ()
   "Switch to the agent buffer of the session on this line."
@@ -454,8 +596,9 @@ Its conversation starts on the first Run that uses it."
     (pop-to-buffer source)
     (noema-research-pin-session name)))
 
-(defun noema-sessions--jump-to-run (root name last)
-  "Visit the work block of LAST, the latest Run of session NAME in ROOT."
+(defun noema-sessions--jump-to-run (root name last &optional then)
+  "Visit the work block of LAST, the latest Run of session NAME in ROOT.
+THEN, when non-nil, is called with point on that work block."
   (unless last
     (user-error "“%s” has not run yet" name))
   (let ((notebook-id (noema-sessions--string last "notebookId"))
@@ -475,13 +618,33 @@ Its conversation starts on the first Run that uses it."
                                       (window-list nil 'nomini))))
            (select-window other))
          (find-file (noema-sessions--string result "file"))
-         (noema-research-goto-cell cell-id))))))
+         (noema-research-goto-cell cell-id)
+         (when then (funcall then)))))))
+
+(declare-function noema-research-execute-current "noema-research-mode" ())
+
+(defun noema-sessions-retry (name)
+  "Run again the work block of session NAME's latest Run, which failed.
+The kernel says whether the failure is retryable; for one that is not --
+authentication, quota, context -- this asks first, since the same Run will
+most likely fail the same way."
+  (interactive (list (noema-sessions--name-at-point)))
+  (let* ((entry (noema-sessions--durable name))
+         (last (noema-sessions--get entry "lastRun")))
+    (unless (and last (member (noema-sessions--string last "status") '("failed" "interrupted")))
+      (user-error "The latest Run of “%s” did not fail" name))
+    (when (or (noema-sessions--true-p (noema-sessions--get last "retryable"))
+              (yes-or-no-p (format "“%s” failed with %s, which retrying rarely fixes; run it again? "
+                                   name (or (noema-sessions--string last "failureKind") "an error"))))
+      (noema-sessions--jump-to-run noema-sessions--root name last #'noema-research-execute-current)
+      (noema-sessions--note-read entry noema-sessions--root))))
 
 (defun noema-sessions-jump (name)
   "Visit the work block of session NAME's latest Run."
   (interactive (list (noema-sessions--name-at-point)))
-  (noema-sessions--jump-to-run noema-sessions--root name
-                               (noema-sessions--get (noema-sessions--durable name) "lastRun")))
+  (let ((entry (noema-sessions--durable name)))
+    (noema-sessions--jump-to-run noema-sessions--root name (noema-sessions--get entry "lastRun"))
+    (noema-sessions--note-read entry noema-sessions--root)))
 
 ;;; Agent window tab commands
 
@@ -590,6 +753,10 @@ Its conversation starts on the first Run that uses it."
     (define-key map (kbd "t") #'noema-sessions-toggle-scope)
     (define-key map (kbd "P") #'noema-sessions-open-pi)
     (define-key map (kbd "c") #'noema-sessions-compact)
+    (define-key map (kbd "u") #'noema-sessions-mark-read)
+    (define-key map (kbd "s") #'noema-sessions-side-chat)
+    (define-key map (kbd "R") #'noema-sessions-retry)
+    (define-key map (kbd "!") #'noema-sessions-next-attention)
     map)
   "Keymap for `noema-sessions-mode'.")
 
@@ -617,11 +784,17 @@ from the durable Handoff, freeing a context window before it fills up."
 RET switch to (or resume) the session's buffer   r rename   F fork
 a archive/restore   k kill buffer   i pin into the source work block
 j jump to latest work block   t file/project scope   c compact context
+u mark read   ! next session needing attention   s side chat beside it
+R rerun the work block of a failed latest Run
 P Pi   g refresh
 
+The first column is attention: !approve and !input wait on you now,
+failed means the latest Run failed (reading does not clear it), new marks a
+settled Run you have not opened.  Rows needing you sort first.
+
 \\{noema-sessions-mode-map}"
-  (setq tabulated-list-format [("Name" 30 t) ("Agent" 9 t) ("State" 10 t) ("Context" 11 t) ("Buffer" 7 t)
-                               ("Last Run" 22 t) ("Origin" 8 t) ("Parent" 20 t)])
+  (setq tabulated-list-format [("Attn" 8 t) ("Name" 30 t) ("Agent" 9 t) ("State" 17 t) ("Context" 11 t) ("Buffer" 9 t)
+                               ("Last Run" 32 t) ("Origin" 8 t) ("Parent" 20 t)])
   (setq-local revert-buffer-function (lambda (&rest _) (noema-sessions-refresh)))
   (tabulated-list-init-header))
 

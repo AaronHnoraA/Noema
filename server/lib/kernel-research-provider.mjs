@@ -94,6 +94,9 @@ export function createKernelResearchProvider({ baseUrl, fetchImpl = globalThis.f
 	archiveSessionName({ root, archive }) {
 	  return post("session/name/archive", { root, archive });
 	},
+	readSessionName({ root, read }) {
+	  return post("session/name/read", { root, read });
+	},
 	async claimCoordinatorRequests({ root, owner }) {
 	  const data = await post("coordinator/claim", { root, owner });
 	  return Array.isArray(data.requests) ? data.requests : [];

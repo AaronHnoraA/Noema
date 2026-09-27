@@ -249,6 +249,16 @@ y^2
     expect(html).not.toContain("(#step 1)");
   });
 
+  test("renders an unquoted local path containing spaces as one link", () => {
+    const html = renderMarkdownHTML("See [Draft](Draft Notes.md) here.");
+    expect(html).toContain('<a href="Draft%20Notes.md">Draft</a>');
+    expect(html).not.toContain("(Draft Notes.md)");
+    expect(renderMarkdownHTML("[year](My Note (2026))"))
+      .toContain('<a href="My%20Note%20(2026)">year</a>');
+    expect(renderMarkdownHTML('[Draft](notes.md "optional title")'))
+      .toContain('<a href="notes.md" title="optional title">Draft</a>');
+  });
+
   test("keeps adversarial unmatched link labels linear in practice", () => {
     // Linearity is a claim about growth, so measure growth. A wall-clock
     // ceiling on one size says as much about how busy the test runner is as

@@ -43,7 +43,7 @@
     (setq noema-project-overview--root "/tmp/noema-overview-test/"
           noema-project-overview--responses (make-hash-table :test 'eq))
     (noema-project-overview--render)
-    (dolist (label '("Sessions" "Skills / MCP" "Work queue" "Attention" "Agenda"
+    (dolist (label '("Sessions" "All agents" "Skills / MCP" "Work queue" "Attention" "Agenda"
                      "New workflow" "History search" "Findings"))
       (goto-char (point-min))
       (search-forward label)

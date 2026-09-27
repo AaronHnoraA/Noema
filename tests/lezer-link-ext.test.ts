@@ -42,6 +42,15 @@ describe("complete nested-link parser", () => {
       .toBe(parser.parse("[Step 1](#step 1").toString());
   });
 
+  test("claims an unquoted local path containing spaces", () => {
+    expect(extended.parse("[Draft](Draft Notes.md)").toString())
+      .toContain("Link(LinkMark,LinkMark,LinkMark,URL,LinkMark)");
+    expect(extended.parse("[Draft](Draft Notes.md").toString())
+      .toBe(parser.parse("[Draft](Draft Notes.md").toString());
+    expect(extended.parse('[Draft](notes.md "optional title")').toString())
+      .toBe(parser.parse('[Draft](notes.md "optional title")').toString());
+  });
+
   test("keeps adversarial unmatched brackets linear in practice", () => {
     const source = "[".repeat(100_000) + " plain";
     const started = performance.now();

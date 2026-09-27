@@ -154,6 +154,38 @@ must stay one: registering a session never creates a Project. A project
 that already has one also gets a durable `session:promote' + `session:name:bind';
 elsewhere the session is listed from Emacs alone.
 
+## Agent lifecycle and attention (adopted from Pisper, 2026-09-28)
+
+See `docs/pisper-agent-lifecycle-study.md` for every accept/reject decision.
+
+- **Attention is derived, never stored.** A session name's `unread`,
+  `failed`, `needsAttention` and `attentionReason` are projected by the kernel
+  from its latest Run and `read_at`; only reading is a write. Reading clears
+  `unread` and nothing else: a failure stays until a later Run succeeds, and a
+  pending permission or input outranks it. Never infer attention from file
+  mtimes or UI state.
+- **Failure kinds are projections of the reason.** `ClassifyRunFailure` sets
+  `failureKind`/`retryable` on read. Only rate limit, network and lost lease
+  are retryable. Nothing retries a Run automatically: a Run has side effects,
+  so a retry is the person's `R`, which asks first for non-retryable kinds.
+- **Freezing is serial, execution is bounded-parallel.** A Run holds the
+  Magent queue ticket only until it is dispatched
+  (`noema-agent-worker--release-arbiter`); `noema-agent-worker--slot-free-p`
+  is checked by the ticket holder, the only code that adds to
+  `noema-agent-worker--runs`, so the cap cannot be overshot.
+- **Concurrent edits wait; they are not refused.** `concurrentEditReasonTx`
+  withdraws auto-approval when another open Run of the same target was
+  allowed to edit the path, and records why in `policyReason`. Remembered
+  allow rules do not bypass it; reject rules still win.
+- **Redact copies, not originals.** `RedactSecrets` applies where Noema keeps
+  a copy that outlives the moment: stored failure reasons and the history
+  index. Native transcripts and CAS evidence stay exact.
+- **Side chats are ephemeral.** Origins in
+  `noema-agent-acp-ephemeral-origins` never reach the durable registry and
+  are auto-stoppable. Queued agent-shell prompts protect a session from every
+  automatic stop, as a running turn does. agent-shell owns the prompt queue
+  and steering; Noema only reads the queue length.
+
 ## Skills
 
 Skills live in two places, and the split is about versioning, not taste:

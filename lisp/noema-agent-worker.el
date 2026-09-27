@@ -111,18 +111,57 @@ pending until somebody opened Pi.")
 (defvar noema-agent-worker--busy-waiting nil
   "Queued workers whose named session had another open Run (D-031).")
 
+(defcustom noema-agent-worker-max-concurrent-runs 3
+  "How many Noema Runs may execute at once, across every project.
+Freezing a RunSpec stays one at a time on the shared Magent queue so every
+snapshot is taken in a definite order; once a Run is dispatched its ticket is
+released and the next Run can freeze while it works.  A Run beyond this
+limit waits, in order, for a slot.  1 restores fully serial Runs.  Parallel
+Runs in one workspace may edit the same files; a named session never serves
+two Runs at once (D-031).  Adopted from Pisper's bounded agent slots."
+  :type 'natnum
+  :group 'noema-agent-worker)
+
+(defcustom noema-agent-worker-notify-function #'noema-agent-worker-notify-default
+  "Function called with TITLE and BODY to notify the person outside Emacs.
+It fires only while no Emacs frame has focus, when an agent starts waiting on
+a decision and when a Run ends.  nil turns system notifications off.
+Adopted from Pisper's completion and awaiting-confirmation notifications."
+  :type '(choice (const :tag "Off" nil) function)
+  :group 'noema-agent-worker)
+
+(defun noema-agent-worker-notify-default (title body)
+  "Send TITLE and BODY through the host's `notify-send', when it has one."
+  (when (fboundp 'notify-send)
+    (funcall 'notify-send :title title :body body)))
+
+(defun noema-agent-worker--notify (title body)
+  "Notify the person of TITLE and BODY unless they are looking at Emacs."
+  (when (and noema-agent-worker-notify-function
+             (not (seq-some (lambda (frame) (eq (frame-focus-state frame) t))
+                            (frame-list))))
+    (condition-case nil
+        (funcall noema-agent-worker-notify-function title body)
+      (error nil))))
+
+(defvar noema-agent-worker--slot-waiting nil
+  "Workers, oldest first, waiting for a free execution slot.")
+
 (defun noema-agent-worker--attention-lighter ()
   "Return the mode-line fragment for running Runs and pending decisions.
 D-034: this replaces per-Run echo-area messages."
   (let ((running (if (hash-table-p noema-agent-worker--runs)
                      (hash-table-count noema-agent-worker--runs)
                    0))
-        (pending noema-agent-worker--attention-count))
-    (when (or (> running 0) (> pending 0))
+        (pending noema-agent-worker--attention-count)
+        (waiting (length (bound-and-true-p noema-agent-worker--slot-waiting))))
+    (when (or (> running 0) (> pending 0) (> waiting 0))
       (concat " Noema["
-              (if (> running 0) (format "▶%d" running) "")
-              (if (and (> running 0) (> pending 0)) " " "")
-              (if (> pending 0) (format "!%d" pending) "")
+              (string-join
+               (delq nil (list (and (> running 0) (format "▶%d" running))
+                               (and (> waiting 0) (format "⋯%d" waiting))
+                               (and (> pending 0) (format "!%d" pending))))
+               " ")
               "]"))))
 
 (unless (member noema-agent-worker--mode-line-entry global-mode-string)
@@ -140,7 +179,8 @@ it back to zero."
     (setq noema-agent-worker--attention-count
           (max 0 (+ noema-agent-worker--attention-count delta)))
     (when (and (zerop previous) (> noema-agent-worker--attention-count 0))
-      (message "Noema: agent awaiting a decision (C-c C-a for Attention)"))
+      (message "Noema: agent awaiting a decision (C-c C-a for Attention)")
+      (noema-agent-worker--notify "Noema" "An agent is waiting for your decision"))
     (force-mode-line-update t)))
 
 (cl-defstruct (noema-agent-worker
@@ -151,10 +191,31 @@ it back to zero."
   l1-mode preflight-failure ledger ledger-turn-id ledger-message-item action-items
   submission-id prepare-body queue-state bootstrap-failing cleanup-timer
   terminal-status terminal-reason terminal-events terminal-acked terminal-reporting
-  terminal-attempts completion-timer report-queue report-busy)
+  terminal-attempts completion-timer report-queue report-busy arbiter-released)
 
 (defvar noema-agent-worker--runs (make-hash-table :test #'equal)
   "Run id to `noema-agent-worker' mapping.")
+
+(defvar noema-agent-worker--previews (make-hash-table :test #'equal)
+  "Pending permission id to the file changes its tool call would make.
+A preview is presentation only: the kernel decides on the normalized action,
+never on these bytes.  Adopted from Pisper's approval-card diff preview.")
+
+(defun noema-agent-worker--diff-preview (tool-call)
+  "Return (:file :old :new) plists for the changes TOOL-CALL proposes."
+  (delq nil
+        (mapcar (lambda (diff)
+                  (when-let* ((file (map-elt diff :file))
+                              (new (map-elt diff :new)))
+                    (list :file (format "%s" file)
+                          :old (format "%s" (or (map-elt diff :old) ""))
+                          :new (format "%s" new))))
+                (or (map-elt tool-call :diffs)
+                    (and (map-elt tool-call :diff) (list (map-elt tool-call :diff)))))))
+
+(defun noema-agent-worker-permission-preview (permission-id)
+  "Return the proposed file changes of pending PERMISSION-ID, or nil."
+  (gethash permission-id noema-agent-worker--previews))
 
 (defvar noema-agent-worker--permissions (make-hash-table :test #'equal)
   "Permission id to (WORKER . ACP-RESPONDER) mapping.")
@@ -172,12 +233,47 @@ it back to zero."
   "Abnormal hook run with a worker and its final local queue state.
 D-035: the Pi manager uses it to stop an agent that outlived its project.")
 
+(defun noema-agent-worker--release-arbiter (worker)
+  "Release WORKER's Magent queue ticket once; later calls do nothing."
+  (unless (noema-agent-worker-arbiter-released worker)
+    (setf (noema-agent-worker-arbiter-released worker) t)
+    (magent-runtime-queue-arbiter-finish 'noema worker)))
+
+(defun noema-agent-worker--executing-count ()
+  "Return how many Runs hold an execution slot."
+  (hash-table-count noema-agent-worker--runs))
+
+(defun noema-agent-worker--slot-free-p ()
+  "Return non-nil when another Run may start executing."
+  (< (noema-agent-worker--executing-count)
+     (max 1 noema-agent-worker-max-concurrent-runs)))
+
+(defun noema-agent-worker--wait-for-slot (worker)
+  "Park WORKER until an execution slot frees, keeping its place in line."
+  (setf (noema-agent-worker-queue-state worker) 'queued)
+  (noema-agent-worker--release-arbiter worker)
+  (setq noema-agent-worker--slot-waiting
+        (append (delq worker noema-agent-worker--slot-waiting) (list worker))))
+
+(defun noema-agent-worker--wake-slot-waiting ()
+  "Start the oldest workers waiting for a slot while slots are free."
+  (let ((free (- (max 1 noema-agent-worker-max-concurrent-runs)
+                 (noema-agent-worker--executing-count))))
+    (while (and (> free 0) noema-agent-worker--slot-waiting)
+      (let ((worker (pop noema-agent-worker--slot-waiting)))
+        (when (eq (noema-agent-worker-queue-state worker) 'queued)
+          (setq free (1- free))
+          (setf (noema-agent-worker-arbiter-released worker) nil)
+          (run-at-time 0 nil #'noema-agent-worker--begin-preparation worker))))))
+
 (defun noema-agent-worker--finish-queue (worker state)
   "Release WORKER's Magent arbiter ticket with terminal local STATE."
   (when (noema-agent-worker-submission-id worker)
     (setf (noema-agent-worker-queue-state worker) state)
     (remhash (noema-agent-worker-submission-id worker) noema-agent-worker--submissions)
-    (magent-runtime-queue-arbiter-finish 'noema worker))
+    (noema-agent-worker--release-arbiter worker))
+  (setq noema-agent-worker--slot-waiting (delq worker noema-agent-worker--slot-waiting))
+  (noema-agent-worker--wake-slot-waiting)
   (noema-agent-worker--wake-waiting)
   (run-hook-with-args 'noema-agent-worker-run-finished-functions worker state))
 
@@ -596,6 +692,14 @@ Emacs made long-running sessions consume memory twice."
     (when-let* ((buffer (noema-agent-worker-buffer worker)) ((buffer-live-p buffer)))
       (noema-agent-worker--best-effort #'noema-agent-acp-touch buffer)
       (noema-agent-worker--best-effort #'noema-agent-acp-trim-buffer buffer noema-agent-worker-buffer-max-bytes))
+    ;; A cancel is the person's own act and is not news.
+    (unless (equal status "cancelled")
+      (noema-agent-worker--best-effort
+       #'noema-agent-worker--notify
+       (format "Noema Run %s" status)
+     (string-join (delq nil (list (noema-agent-worker--session-name worker)
+                                  (noema-agent-worker-terminal-reason worker)))
+                  " · ")))
     (noema-agent-worker--best-effort #'noema-agent-worker--finish-queue worker (intern status))))
 
 (defun noema-agent-worker--submit-terminal (worker)
@@ -685,6 +789,7 @@ file."
     (noema-agent-worker--best-effort #'noema-agent-worker--cleanup-subscriptions worker)
 	(dolist (permission-id (noema-agent-worker-pending-permissions worker))
 	  (remhash permission-id noema-agent-worker--permissions)
+	  (remhash permission-id noema-agent-worker--previews)
 	  (noema-agent-worker--best-effort #'noema-agent-worker--attention-note -1))
 	(dolist (request-id (noema-agent-worker-pending-inputs worker))
 	  (remhash request-id noema-agent-worker--inputs)
@@ -910,6 +1015,8 @@ this point goes beyond the project, so Attention opens to decide it."
                (if automatic
                    (funcall respond automatic)
                  (puthash permission-id (cons worker respond) noema-agent-worker--permissions)
+                 (when-let* ((preview (noema-agent-worker--diff-preview tool-call)))
+                   (puthash permission-id preview noema-agent-worker--previews))
                  (push permission-id (noema-agent-worker-pending-permissions worker))
                  (noema-agent-worker--attention-note 1)
                  (noema-agent-worker--show-permission-request worker))))))
@@ -924,6 +1031,7 @@ this point goes beyond the project, so Attention opens to decide it."
             (entry (gethash permission-id noema-agent-worker--permissions)))
 	   (when (and entry (noema-agent-worker--command-current-p (car entry) command))
          (remhash permission-id noema-agent-worker--permissions)
+         (remhash permission-id noema-agent-worker--previews)
          (setf (noema-agent-worker-pending-permissions (car entry))
                (delete permission-id (noema-agent-worker-pending-permissions (car entry))))
          (funcall (cdr entry) option-id)
@@ -1505,6 +1613,9 @@ When SUBMISSION is non-nil, fill and dispatch that pre-freeze queue token."
             (noema-agent-worker-pending-permissions worker) nil
             (noema-agent-worker-pending-inputs worker) nil)
       (puthash (noema-agent-worker-run-id worker) worker noema-agent-worker--runs)
+      ;; The RunSpec is frozen and the Run holds a slot: let the next Run
+      ;; freeze while this one executes.
+      (noema-agent-worker--release-arbiter worker)
       (force-mode-line-update t)
       (when-let* ((source (noema-agent-worker--value spec "source"))
                   ((equal (noema-agent-worker--string source "kind") "work-cell"))
@@ -1549,7 +1660,7 @@ When SUBMISSION is non-nil, fill and dispatch that pre-freeze queue token."
 
 (defun noema-agent-worker--wait-for-session (worker)
   "Put WORKER back in the queue until its busy session is free."
-  (magent-runtime-queue-arbiter-finish 'noema worker)
+  (noema-agent-worker--release-arbiter worker)
   (setf (noema-agent-worker-queue-state worker) 'queued)
   (cl-pushnew worker noema-agent-worker--busy-waiting)
   (unless (timerp (noema-agent-worker-cleanup-timer worker))
@@ -1562,7 +1673,8 @@ When SUBMISSION is non-nil, fill and dispatch that pre-freeze queue token."
   (setq noema-agent-worker--busy-waiting (delq worker noema-agent-worker--busy-waiting))
   (when (timerp (noema-agent-worker-cleanup-timer worker))
     (cancel-timer (noema-agent-worker-cleanup-timer worker)))
-  (setf (noema-agent-worker-cleanup-timer worker) nil)
+  (setf (noema-agent-worker-cleanup-timer worker) nil
+        (noema-agent-worker-arbiter-released worker) nil)
   (noema-agent-worker--begin-preparation worker))
 
 (defun noema-agent-worker--wake-waiting ()
@@ -1589,6 +1701,11 @@ When SUBMISSION is non-nil, fill and dispatch that pre-freeze queue token."
              (magent-runtime-queue-arbitrate
               'noema worker id
               (lambda ()
+                (if (not (noema-agent-worker--slot-free-p))
+                    ;; Only the ticket holder adds Runs, so the count is exact
+                    ;; here; parking releases the ticket for nobody else to
+                    ;; overshoot it.
+                    (noema-agent-worker--wait-for-slot worker)
                 (setf (noema-agent-worker-queue-state worker) 'preparing)
                 (noema-agent-worker--api
                  "aaronnote:api:research:run:prepare"
@@ -1599,7 +1716,7 @@ When SUBMISSION is non-nil, fill and dispatch that pre-freeze queue token."
                        (noema-agent-worker--abandon-cancelled-preparation
                         worker (and (not error-object) result))
                      (noema-agent-worker--accept-prepared
-                      target result error-object worker)))))
+                      target result error-object worker))))))
               (lambda (error-object)
                 (setf (noema-agent-worker-queue-state worker) 'failed)
                 (remhash id noema-agent-worker--submissions)
@@ -1641,7 +1758,8 @@ When SUBMISSION is non-nil, fill and dispatch that pre-freeze queue token."
     (unless (and worker (eq (noema-agent-worker-queue-state worker) 'queued))
       (user-error "No queued Noema execution %s" submission-id))
     (magent-runtime-queue-arbiter-cancel 'noema worker)
-    (setq noema-agent-worker--busy-waiting (delq worker noema-agent-worker--busy-waiting))
+    (setq noema-agent-worker--busy-waiting (delq worker noema-agent-worker--busy-waiting)
+          noema-agent-worker--slot-waiting (delq worker noema-agent-worker--slot-waiting))
     (when (timerp (noema-agent-worker-cleanup-timer worker))
       (cancel-timer (noema-agent-worker-cleanup-timer worker)))
     (setf (noema-agent-worker-queue-state worker) 'cancelled)

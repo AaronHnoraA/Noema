@@ -22,7 +22,7 @@ import (
 // StateDirName is the repository-local runtime state directory.
 const StateDirName = ".agent"
 
-const schemaVersion = "21"
+const schemaVersion = "22"
 
 // coordinatorRequestsTable is shared by fresh databases and the v19 rebuild.
 // D-032 queued Runs for the Pi coordinator; D-035 lets the Pi manager also ask
@@ -60,7 +60,8 @@ var schemaStatements = []string{
 		generation  INTEGER NOT NULL DEFAULT 0,
 		created_at  INTEGER NOT NULL,
 		updated_at  INTEGER NOT NULL,
-		version     INTEGER NOT NULL DEFAULT 1
+		version     INTEGER NOT NULL DEFAULT 1,
+		read_at     INTEGER NOT NULL DEFAULT 0
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_session_names_session ON session_names(session_id)`,
 	`CREATE TABLE IF NOT EXISTS session_name_aliases (
@@ -352,6 +353,7 @@ var schemaStatements = []string{
 		resolved_at       INTEGER,
 		lease_epoch      INTEGER NOT NULL DEFAULT 0,
 		version           INTEGER NOT NULL DEFAULT 1,
+		policy_reason     TEXT NOT NULL DEFAULT '',
 		UNIQUE(session_id, native_request_id)
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_permissions_run_state ON permissions(run_id, state, created_at)`,
@@ -810,6 +812,11 @@ func migrate(db *sql.DB) error {
 		{"cells", "output_status", `ALTER TABLE cells ADD COLUMN output_status TEXT NOT NULL DEFAULT ''`},
 		{"work_nodes", "agenda_json", `ALTER TABLE work_nodes ADD COLUMN agenda_json TEXT NOT NULL DEFAULT ''`},
 		{"cells", "output_agent", `ALTER TABLE cells ADD COLUMN output_agent TEXT NOT NULL DEFAULT ''`},
+		// Schema v22: when a person last read a named session.  0 means never,
+		// so a settled Run of an existing name shows as unread once.
+		{"session_names", "read_at", `ALTER TABLE session_names ADD COLUMN read_at INTEGER NOT NULL DEFAULT 0`},
+		// Schema v22: why the policy decided, or declined to decide, a request.
+		{"permissions", "policy_reason", `ALTER TABLE permissions ADD COLUMN policy_reason TEXT NOT NULL DEFAULT ''`},
 	} {
 		if err := ensureColumn(db, column.table, column.name, column.statement); err != nil {
 			return err

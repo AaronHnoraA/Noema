@@ -1328,13 +1328,19 @@ function deleteLines(editor: Editor, count = 1): string[] {
   const revealed = state.selection.ranges.length === 1
     ? revealedFormulaAt(editor, state.selection.main.head)
     : null;
-  const logical = state.selection.ranges.map((range) => (
-    selectedLogicalLine(
+  const logical = state.selection.ranges.map((range) => {
+    // A count is linewise even when the Normal-mode caret is in the middle of
+    // its source line. Starting the selected span at range.from would leave
+    // the text before the caret behind and join it to the following line.
+    const first = logicalLineAt(editor, range.from);
+    return selectedLogicalLine(
       editor,
-      range.from,
-      count > 1 && range.empty ? countedLineSpanEnd(state.doc, range.from, count) : range.to,
-    )
-  ));
+      count > 1 && range.empty ? first.selectionFrom : range.from,
+      count > 1 && range.empty
+        ? countedLineSpanEnd(state.doc, range.from, count)
+        : range.to,
+    );
+  });
   const keyed = new Map<string, VimLogicalLine>();
   for (const line of logical) keyed.set(`${line.deleteFrom}:${line.deleteTo}`, line);
   const lines = [...keyed.values()].sort((left, right) => left.deleteFrom - right.deleteFrom);

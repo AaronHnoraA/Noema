@@ -943,6 +943,19 @@ y^2
     cleanup();
   });
 
+  test("renders and resolves an unquoted local path containing spaces", () => {
+    const md = "See [Draft](Draft Notes.md) and [year](My Note (2026)).";
+    const { editor, cleanup } = mountCM6(md);
+    editor.setMarkdownSelection(md.length);
+    expect(markdownHrefAt(editor.view.state, md.indexOf("Draft"))).toBe("Draft Notes.md");
+    expect(markdownHrefAt(editor.view.state, md.indexOf("year"))).toBe("My Note (2026)");
+    expect(document.querySelector(".cm-link-text")).toBeTruthy();
+    expect(Array.from(document.querySelectorAll<HTMLElement>(".syntax-hidden"))
+      .map((element) => element.textContent || "").join(""))
+      .toContain("Draft Notes.md");
+    cleanup();
+  });
+
   test("renders and resolves a local heading fragment containing spaces", () => {
     const md = "1. [Step 1](#step 1):\n\n## step 1";
     const { editor, cleanup } = mountCM6(md);

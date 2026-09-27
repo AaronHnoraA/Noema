@@ -1687,6 +1687,8 @@ p(1)=\operatorname{tr}(M_1\rho).
 
 ## 3.8. Table of recurring structures
 
+This is something good here. I will change the result so that 
+
 | Object | Mathematical form | Computational question | Typical invariant |
 | --- | --- | --- | --- |
 | Pure state | vector in Hilbert space | state equivalence | inner product |

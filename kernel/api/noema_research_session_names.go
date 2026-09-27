@@ -251,3 +251,26 @@ func noemaResearchSessionNameArchive(c *gin.Context) {
 	}
 	ret.Data = archived
 }
+
+func noemaResearchSessionNameRead(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+	arg, ok := util.JsonArg(c, ret)
+	if !ok {
+		return
+	}
+	store, ok := noemaResearchStore(arg, ret)
+	if !ok {
+		return
+	}
+	input := research.ReadSessionNameInput{}
+	if !decodeResearchInput(arg, "read", &input, ret) {
+		return
+	}
+	name, err := store.MarkSessionNameRead(input)
+	if err != nil {
+		ret.Code, ret.Msg = -1, err.Error()
+		return
+	}
+	ret.Data = name
+}

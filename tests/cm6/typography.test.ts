@@ -23,6 +23,12 @@ function blankLines(): HTMLElement[] {
   return Array.from(document.querySelectorAll<HTMLElement>(".cm-line.cm-prose-blank-line"));
 }
 
+function blankLayoutClasses(): string[] {
+  return blankLines().map((line) => [...line.classList]
+    .filter((name) => name.startsWith("cm-prose-blank-"))
+    .join(" "));
+}
+
 function pressEnter(editor: ReturnType<typeof createEditor>): void {
   editor.view.contentDOM.dispatchEvent(
     new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
@@ -71,57 +77,48 @@ describe("Visual typography kernel", () => {
     cleanup();
   });
 
-  test("gives one compact visual rhythm to an inactive authored blank run", () => {
+  test("marks repeated source blanks for softer paragraph spacing", () => {
     const { cleanup } = mount("Alpha\n\n\nBeta");
     const lines = blankLines();
     expect(lines).toHaveLength(2);
-    expect(lines[0]!.classList.contains("cm-prose-paragraph-gap")).toBe(true);
-    expect(lines[1]!.classList.contains("cm-prose-blank-collapsed")).toBe(true);
+    expect(lines[0]!.className).toBe("cm-line cm-prose-blank-line");
+    expect(lines[1]!.classList.contains("cm-prose-blank-line-continued")).toBe(true);
     cleanup();
   });
 
-  test("lets semantic blocks own their adjacent vertical spacing", () => {
+  test("keeps authored blank lines beside semantic blocks", () => {
     const { cleanup } = mount("Alpha\n\n\n# Heading");
     const lines = blankLines();
     expect(lines).toHaveLength(2);
-    expect(lines[0]!.classList.contains("cm-prose-blank-absorbed")).toBe(true);
-    expect(lines[1]!.classList.contains("cm-prose-blank-collapsed")).toBe(true);
+    expect(lines.every((line) => line.classList.contains("cm-prose-blank-line"))).toBe(true);
     cleanup();
   });
 
-  test("expands only the real caret line inside a blank run", () => {
+  test("moving the caret does not change blank-line decorations", () => {
     const { editor, cleanup } = mount("Alpha\n\n\nBeta");
+    const before = blankLayoutClasses();
     editor.setMarkdownSelection(6);
-    const lines = blankLines();
-    expect(lines).toHaveLength(2);
-    expect(lines[0]!.classList.contains("cm-prose-blank-active")).toBe(true);
-    expect(lines[1]!.classList.contains("cm-prose-blank-collapsed")).toBe(true);
-
+    expect(blankLayoutClasses()).toEqual(before);
+    expect(blankLines().some((line) => /cm-prose-blank-(?:active|collapsed|absorbed)/.test(line.className))).toBe(false);
     editor.setMarkdownSelection(0);
-    expect(blankLines()[0]!.classList.contains("cm-prose-paragraph-gap")).toBe(true);
-    expect(blankLines()[1]!.classList.contains("cm-prose-blank-collapsed")).toBe(true);
+    expect(blankLayoutClasses()).toEqual(before);
     cleanup();
   });
 
-  test("keeps a long authored blank run visually bounded around its caret", () => {
+  test("retains long authored blank runs", () => {
     const authoredBlankLines = 40;
     const { editor, cleanup } = mount(`Alpha${"\n".repeat(authoredBlankLines + 1)}Beta`);
     const activeLine = 24;
     editor.setMarkdownSelection(editor.view.state.doc.line(activeLine).from);
 
     const lines = blankLines();
-    // CM6 may virtualize zero-height source-only lines, so assert the mounted
-    // projection rather than requiring every authored newline to own a DOM
-    // node. Markdown fidelity is covered by editor.getMarkdown() below.
     expect(editor.getMarkdown()).toBe(`Alpha${"\n".repeat(authoredBlankLines + 1)}Beta`);
     expect(lines.length).toBeGreaterThan(2);
-    expect(lines.filter((line) => line.classList.contains("cm-prose-blank-active"))).toHaveLength(1);
-    expect(lines.filter((line) => line.classList.contains("cm-prose-paragraph-gap"))).toHaveLength(1);
-    expect(lines.filter((line) => line.classList.contains("cm-prose-blank-collapsed"))).toHaveLength(lines.length - 2);
+    expect(lines.every((line) => line.classList.contains("cm-prose-blank-line"))).toBe(true);
     cleanup();
   });
 
-  test("real Enter atomically transfers the active blank-line projection", () => {
+  test("real Enter adds one visible blank line each time", () => {
     const { editor, cleanup } = mount("Alpha\nBeta");
     editor.setMarkdownSelection(5);
 
@@ -129,32 +126,41 @@ describe("Visual typography kernel", () => {
     expect(editor.getMarkdown()).toBe("Alpha\n\nBeta");
     expect(editor.getMarkdownSelection().from).toBe(6);
     expect(blankLines()).toHaveLength(1);
-    expect(blankLines()[0]!.className).toContain("cm-prose-blank-active");
-    expect(blankLines()[0]!.className).not.toContain("cm-prose-paragraph-gap");
-    expect(blankLines()[0]!.className).not.toContain("cm-prose-blank-absorbed");
+    expect(blankLines()[0]!.classList.contains("cm-prose-blank-line")).toBe(true);
 
     pressEnter(editor);
     expect(editor.getMarkdown()).toBe("Alpha\n\n\nBeta");
     expect(editor.getMarkdownSelection().from).toBe(7);
     const lines = blankLines();
     expect(lines).toHaveLength(2);
-    expect(lines[0]!.className).toContain("cm-prose-paragraph-gap");
-    expect(lines[0]!.className).not.toContain("cm-prose-blank-active");
-    expect(lines[1]!.className).toContain("cm-prose-blank-active");
-    expect(lines[1]!.className).not.toContain("cm-prose-paragraph-gap");
-    expect(lines[1]!.className).not.toContain("cm-prose-blank-absorbed");
+    expect(lines.every((line) => line.classList.contains("cm-prose-blank-line"))).toBe(true);
     cleanup();
   });
 
-  test("an Enter-created caret line is never absorbed by an adjacent semantic block", () => {
+  test("Enter beside a heading keeps its blank line", () => {
     const { editor, cleanup } = mount("Alpha\n# Heading");
     editor.setMarkdownSelection(5);
     pressEnter(editor);
 
     const lines = blankLines();
     expect(lines).toHaveLength(1);
-    expect(lines[0]!.className).toContain("cm-prose-blank-active");
-    expect(lines[0]!.className).not.toContain("cm-prose-blank-absorbed");
+    expect(lines[0]!.classList.contains("cm-prose-blank-line")).toBe(true);
+    cleanup();
+  });
+
+  test("typing into a blank line updates its height class immediately", () => {
+    const { editor, cleanup } = mount("\nExample\n\nAfter");
+    editor.setMarkdownSelection(0);
+    editor.view.dispatch(editor.view.state.update(
+      editor.view.state.replaceSelection("s"),
+      { userEvent: "input.type", scrollIntoView: true },
+    ));
+
+    expect(editor.getMarkdown()).toBe("s\nExample\n\nAfter");
+    const lines = [...editor.view.contentDOM.querySelectorAll<HTMLElement>(".cm-line")];
+    expect(lines[0]!.classList.contains("cm-prose-blank-line")).toBe(false);
+    expect(lines[2]!.classList.contains("cm-prose-blank-line")).toBe(true);
+    expect(lines[2]!.classList.contains("cm-prose-blank-line-continued")).toBe(false);
     cleanup();
   });
 });

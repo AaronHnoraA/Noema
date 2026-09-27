@@ -79,6 +79,8 @@
   position: relative;
   margin: 0;
   padding: 0;
+  /* Keep every typed space, including runs at a wrap boundary, visible. */
+  white-space: break-spaces;
 }
 .cm-editor.cm-focused { outline: none; }
 .cm-editor .cm-selectionBackground,

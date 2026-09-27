@@ -77,15 +77,27 @@ type SessionName struct {
 	// Usage is the latest token and context-window report of the bound
 	// Session, so a person can see which conversation is near its limit.
 	Usage *SessionUsage `json:"usage,omitempty"`
-	CreatedAt       string         `json:"createdAt"`
-	UpdatedAt       string         `json:"updatedAt"`
-	Version         int64          `json:"version"`
+	// Attention is derived, never stored: see sessionAttention.
+	Unread          bool   `json:"unread"`
+	Failed          bool   `json:"failed"`
+	NeedsAttention  bool   `json:"needsAttention"`
+	AttentionReason string `json:"attentionReason,omitempty"`
+	LastCompletedAt string `json:"lastCompletedAt,omitempty"`
+	ReadAt          string `json:"readAt,omitempty"`
+	CreatedAt       string `json:"createdAt"`
+	UpdatedAt       string `json:"updatedAt"`
+	Version         int64  `json:"version"`
 }
 
 type RenameSessionNameInput struct {
 	Name    string `json:"name"`
 	NewName string `json:"newName"`
 	Actor   string `json:"actor"`
+}
+
+type ReadSessionNameInput struct {
+	Name  string `json:"name"`
+	Actor string `json:"actor"`
 }
 
 type ArchiveSessionNameInput struct {
@@ -160,7 +172,7 @@ func resolveNameTx(q interface {
 
 type sessionNameRow struct {
 	name, sessionID, agent, parent, forkMode, origin, state string
-	generation, createdAt, updatedAt, version            int64
+	generation, createdAt, updatedAt, version               int64
 }
 
 func loadNameRowTx(q interface {
@@ -393,7 +405,7 @@ func (s *Store) ListSessionNames(includeArchived bool) ([]SessionName, error) {
 
 func (s *Store) listSessionNames(where string, args ...any) ([]SessionName, error) {
 	rows, err := s.db.Query(`SELECT n.name, COALESCE(n.session_id, ''), n.agent, n.parent_name, n.fork_mode, n.origin, n.state,
-		n.generation, n.created_at, n.updated_at, n.version,
+		n.generation, n.created_at, n.updated_at, n.version, n.read_at,
 		COALESCE(se.native_session_id, ''), COALESCE(se.state, ''), COALESCE(se.execution_target, ''), COALESCE(se.capabilities_json, '{}')
 		FROM session_names n LEFT JOIN sessions se ON se.id = n.session_id `+where+` ORDER BY n.updated_at DESC, n.name`, args...)
 	if err != nil {
@@ -402,15 +414,18 @@ func (s *Store) listSessionNames(where string, args ...any) ([]SessionName, erro
 	result := []SessionName{}
 	for rows.Next() {
 		var name SessionName
-		var createdAt, updatedAt int64
+		var createdAt, updatedAt, readAt int64
 		var capabilities string
 		if err := rows.Scan(&name.Name, &name.SessionID, &name.Agent, &name.ParentName, &name.ForkMode, &name.Origin, &name.State,
-			&name.Generation, &createdAt, &updatedAt, &name.Version,
+			&name.Generation, &createdAt, &updatedAt, &name.Version, &readAt,
 			&name.NativeSessionID, &name.SessionState, &name.ExecutionTarget, &capabilities); err != nil {
 			_ = rows.Close()
 			return nil, err
 		}
 		name.CreatedAt, name.UpdatedAt = formatMillis(createdAt), formatMillis(updatedAt)
+		if readAt > 0 {
+			name.ReadAt = formatMillis(readAt)
+		}
 		name.Capabilities = map[string]any{}
 		_ = json.Unmarshal([]byte(capabilities), &name.Capabilities)
 		result = append(result, name)
@@ -468,7 +483,45 @@ func (s *Store) enrichSessionName(name *SessionName) error {
 	name.LastRun = &run
 	name.OpenRun = run.Status == "preparing" || run.Status == "running" ||
 		run.Status == "waiting_permission" || run.Status == "waiting_input"
+	sessionAttention(name, run)
 	return nil
+}
+
+// sessionAttention derives what a person must know about NAME from its latest
+// Run alone, so the state can never drift from the Runs it summarises:
+//
+//   - unread: a Run settled (completed, failed or interrupted) after the name
+//     was last read.  A cancel is the person's own act and is not news.
+//   - failed: the latest Run failed or was interrupted.  Reading does not
+//     clear it; only a later Run that succeeds does.
+//   - needsAttention: something is blocked on the person right now (a
+//     permission or an input request), or the latest Run failed.  A pending
+//     request outranks a failure.
+func sessionAttention(name *SessionName, run Run) {
+	switch run.Status {
+	case "completed", "failed", "interrupted":
+		name.LastCompletedAt = run.FinishedAt
+		finished, err := time.Parse(time.RFC3339Nano, run.FinishedAt)
+		name.Unread = err == nil && (name.ReadAt == "" || finished.After(parseTimestamp(name.ReadAt)))
+	}
+	name.Failed = run.Status == "failed" || run.Status == "interrupted"
+	switch {
+	case run.Status == "waiting_permission":
+		name.AttentionReason = "permission"
+	case run.Status == "waiting_input":
+		name.AttentionReason = "input"
+	case name.Failed:
+		name.AttentionReason = "failed"
+	}
+	name.NeedsAttention = name.AttentionReason != ""
+}
+
+func parseTimestamp(value string) time.Time {
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed
 }
 
 // RenameSessionName renames NAME and keeps the old spelling as an alias, so
@@ -528,6 +581,25 @@ func (s *Store) RenameSessionName(input RenameSessionNameInput) (SessionName, er
 		return SessionName{}, err
 	}
 	return s.GetSessionName(input.NewName)
+}
+
+// MarkSessionNameRead records that a person has seen NAME's latest Run.  It
+// changes neither updated_at (reading is not activity) nor the failure state.
+func (s *Store) MarkSessionNameRead(input ReadSessionNameInput) (SessionName, error) {
+	s.mu.Lock()
+	canonical, err := resolveNameTx(s.db, input.Name)
+	if err == nil && canonical == "" {
+		err = fmt.Errorf("session name %q not found", strings.TrimSpace(input.Name))
+	}
+	if err == nil {
+		_, err = s.db.Exec(`UPDATE session_names SET read_at = ?, version = version + 1 WHERE name = ?`,
+			time.Now().UTC().UnixMilli(), canonical)
+	}
+	s.mu.Unlock()
+	if err != nil {
+		return SessionName{}, err
+	}
+	return s.GetSessionName(canonical)
 }
 
 // ArchiveSessionName hides or restores NAME without deleting its history.

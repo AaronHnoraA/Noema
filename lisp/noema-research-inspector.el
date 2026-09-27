@@ -14,6 +14,8 @@
 (require 'json)
 (require 'map)
 (require 'seq)
+(require 'diff)
+(require 'cl-lib)
 (require 'subr-x)
 
 (declare-function my/noema-api-call "init-aaronnote" (channel args callback &optional timeout))
@@ -73,6 +75,43 @@
        (when (buffer-live-p buffer)
          (with-current-buffer buffer (noema-research-attention-refresh)))))))
 
+(declare-function noema-agent-worker-permission-preview "noema-agent-worker" (permission-id))
+
+(defun noema-research-attention--line-count (text)
+  "Return the number of lines in TEXT, 0 when empty."
+  (if (string-empty-p text) 0 (1+ (cl-count ?\n (string-trim-right text "\n")))))
+
+(defun noema-research-attention--insert-preview (permission-id)
+  "Insert the file changes PERMISSION-ID would make, with a diff button.
+The preview comes from the live tool call; the decision still applies to the
+kernel's normalized action."
+  (when-let* ((changes (and (fboundp 'noema-agent-worker-permission-preview)
+                            (noema-agent-worker-permission-preview permission-id))))
+    (dolist (change changes)
+      (insert (format "  change: %s  +%d -%d  "
+                      (plist-get change :file)
+                      (noema-research-attention--line-count (plist-get change :new))
+                      (noema-research-attention--line-count (plist-get change :old))))
+      (insert-text-button "diff" 'follow-link t 'help-echo "Show the proposed change"
+                          'action (lambda (_button) (noema-research-attention--show-diff change)))
+      (insert "\n"))))
+
+(defun noema-research-attention--show-diff (change)
+  "Show a unified diff of proposed CHANGE, a (:file :old :new) plist."
+  (let ((old (generate-new-buffer " *noema-old*"))
+        (new (generate-new-buffer " *noema-new*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer old (insert (plist-get change :old)))
+          (with-current-buffer new (insert (plist-get change :new)))
+          (let ((diff (diff-no-select old new "-u" t
+                                      (get-buffer-create
+                                       (format "*Noema proposed change: %s*"
+                                               (file-name-nondirectory (plist-get change :file)))))))
+            (display-buffer diff)))
+      (kill-buffer old)
+      (kill-buffer new))))
+
 (defun noema-research-attention--insert-permission (permission)
   "Insert one pending PERMISSION and its versioned decision buttons."
   (let* ((id (noema-research-attention--string permission "id" "unknown"))
@@ -85,6 +124,11 @@
     (insert (propertize (format "%s · %s" kind id) 'face 'bold) "\n")
     (when paths (insert "  paths: " (mapconcat (lambda (value) (format "%s" value)) paths ", ") "\n"))
     (when argv (insert "  command: " (mapconcat (lambda (value) (format "%s" value)) argv " ") "\n"))
+    (noema-research-attention--insert-preview id)
+    ;; Why the policy left this to a person, e.g. a concurrent edit.
+    (when-let* ((reason (noema-research-attention--string permission "policyReason"))
+                ((not (string-empty-p reason))))
+      (insert "  " (propertize (concat "why: " reason) 'face 'warning) "\n"))
     (insert "  ")
     (dolist (option (noema-research-attention--list
                      (noema-research-attention--value permission "options")))
