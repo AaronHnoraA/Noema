@@ -142,10 +142,16 @@ function escapedAt(text: string, index: number): boolean {
   return escapes % 2 === 1;
 }
 
-function slashBoundary(line: string, offset: number): boolean {
+const CJK_TEXT_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\u3000-\u303f\uff01-\uff60]/u;
+
+function slashBoundary(line: string, offset: number, key: string): boolean {
   if (offset === 0) return true;
-  const previous = line[offset - 1] ?? "";
-  return /[\s([{>"']/.test(previous);
+  const previous = Array.from(line.slice(Math.max(0, offset - 2), offset)).pop() ?? "";
+  if (/[\s([{>"']/.test(previous)) return true;
+  // CJK prose has no word spaces, so `/` straight after CJK text still opens
+  // the menu (as in MarkWright).  `、` stays boundary-only: after CJK text it
+  // is ordinary enumeration punctuation.
+  return key === "/" && CJK_TEXT_RE.test(previous);
 }
 
 /**
@@ -174,7 +180,7 @@ export function findHintTrigger(
       : line.lastIndexOf(definition.key);
     if (offset < 0 || escapedAt(line, offset)) continue;
     if ((definition.kind === "slash" || definition.key === "/" || definition.key === "、")
-      && !slashBoundary(line, offset)) continue;
+      && !slashBoundary(line, offset, definition.key)) continue;
     if (best && offset < best.offset) continue;
     const query = line.slice(offset + definition.key.length);
     if (query.includes("\t")) continue;

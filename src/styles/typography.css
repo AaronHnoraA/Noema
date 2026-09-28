@@ -250,4 +250,16 @@
     --aaron-prose-leading: 1.2;
     --aaron-prose-paragraph-gap: 0.45em;
   }
+
+  /* Pagination for printed/PDF published notes (from MarkWright's export
+     CSS): keep a heading with the text after it and avoid splitting short
+     blocks.  Tables keep rows whole instead, so a long table still flows
+     across pages rather than leaving a blank gap before it. */
+  .published-note-page #content :is(h1, h2, h3, h4, h5, h6) {
+    break-after: avoid;
+    break-inside: avoid;
+  }
+  .published-note-page #content :is(pre, blockquote, figure, math-block, .katex-display, tr) {
+    break-inside: avoid;
+  }
 }

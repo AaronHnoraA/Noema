@@ -92,6 +92,14 @@ describe("slash hint context", () => {
     expect(findSlashHint("\\/literal", "")).toBeNull();
   });
 
+  test("opens after CJK text without a space, but keeps 、 as punctuation there", () => {
+    expect(findSlashHint("中文段落/bt", "")).toMatchObject({ key: "/", query: "bt", offset: 4 });
+    expect(findSlashHint("かな/h", "")).toMatchObject({ key: "/", query: "h" });
+    expect(findSlashHint("中文：/fg", "")).toMatchObject({ key: "/", query: "fg" });
+    expect(findSlashHint("苹果、香蕉", "")).toBeNull();
+    expect(findSlashHint("a/b", "")).toBeNull();
+  });
+
   test("limits matching to the current line", () => {
     expect(findSlashHint("/old\nplain", "")).toBeNull();
     expect(findSlashHint("/old\n  /new", "")).toMatchObject({ query: "new", offset: 2 });

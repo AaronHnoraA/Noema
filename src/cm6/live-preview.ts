@@ -430,8 +430,47 @@ function collectLivePreviewTokens(
   addWikiLinkTokens(tokens, doc, ranges, allExcluded);
   addJupyterLinkTokens(tokens, doc, ranges, allExcluded);
   addHighlightTokens(tokens, doc, ranges, allExcluded, codeRanges);
+  addPairedHtmlTokens(tokens, doc);
 
   return tokens;
+}
+
+/**
+ * Lezer emits `<kbd>` and `</kbd>` as two unrelated HTMLTag nodes, so the text
+ * between them never sits inside a real element.  Pair same-line open/close
+ * tags of the inline formatting set and mark their content, so `<kbd>`,
+ * `<sub>`, `<sup>`, `<mark>`, `<u>`/`<ins>` and `<small>` render in place.
+ */
+const PAIRED_INLINE_HTML = new Set(["kbd", "sub", "sup", "mark", "u", "ins", "small"]);
+const HTML_OPEN_TAG_RE = /^<([a-z]+)(?:\s[^>]*)?>$/i;
+const HTML_CLOSE_TAG_RE = /^<\/([a-z]+)\s*>$/i;
+
+function addPairedHtmlTokens(tokens: LivePreviewToken[], doc: Text): void {
+  const tags = tokens
+    .filter((token): token is Extract<LivePreviewToken, { kind: "html-inline" }> => token.kind === "html-inline")
+    .sort((a, b) => a.from - b.from);
+  const open: { name: string; to: number; line: number }[] = [];
+  for (const tag of tags) {
+    const line = doc.lineAt(tag.from).number;
+    const opening = HTML_OPEN_TAG_RE.exec(tag.source);
+    if (opening) {
+      const name = opening[1]!.toLowerCase();
+      if (PAIRED_INLINE_HTML.has(name)) open.push({ name, to: tag.to, line });
+      continue;
+    }
+    const closing = HTML_CLOSE_TAG_RE.exec(tag.source);
+    if (!closing) continue;
+    const name = closing[1]!.toLowerCase();
+    for (let index = open.length - 1; index >= 0; index--) {
+      const candidate = open[index]!;
+      if (candidate.name !== name) continue;
+      open.splice(index);
+      if (candidate.line === line && candidate.to < tag.from) {
+        tokens.push({ kind: "static", from: candidate.to, to: tag.from, cls: `cm-html-${name}` });
+      }
+      break;
+    }
+  }
 }
 
 function addWikiLinkTokens(

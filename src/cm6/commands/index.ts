@@ -332,6 +332,33 @@ function insertBlock(view: EditorView, text: string, cursorOffset: number): void
   }
 }
 
+/**
+ * Insert `---` on its own paragraph.  A `---` line directly below text is a
+ * setext H2 underline, so a blank line is always kept above the rule; the
+ * cursor lands on a fresh line below it.
+ */
+function insertThematicBreak(view: EditorView): void {
+  const doc = view.state.doc;
+  const line = doc.lineAt(view.state.selection.main.from);
+  let from: number;
+  let to: number;
+  let insert: string;
+  if (line.text.trim().length === 0) {
+    const previous = line.number > 1 ? doc.line(line.number - 1).text : "";
+    from = line.from;
+    to = line.to;
+    insert = `${previous.trim().length > 0 ? "\n" : ""}---\n`;
+  } else {
+    from = to = line.to;
+    insert = "\n\n---\n";
+  }
+  view.dispatch({
+    changes: { from, to, insert },
+    selection: { anchor: from + insert.length },
+    scrollIntoView: true,
+  });
+}
+
 function nearestJupyterCellArgs(view: EditorView): string {
   const doc = view.state.doc;
   const cursorLineNumber = doc.lineAt(view.state.selection.main.from).number;
@@ -1113,6 +1140,11 @@ export function runCommandCM6(view: EditorView, command: EditorCommand, value = 
     return true;
   }
 
+  if (command === "insert-horizontal-rule") {
+    insertThematicBreak(view);
+    return true;
+  }
+
   if (command === "insert-org-env") {
     const kind = (value || "note").trim() || "note";
     const open = `#+begin ${kind}`;
@@ -1222,7 +1254,9 @@ export function createQuickInsertRegistry(): QuickInsertRegistry {
       ];
       const byId = new Map<string, QuickInsertItem>();
       for (const item of items) if (!byId.has(item.id)) byId.set(item.id, item);
-      return [...byId.values()].slice(0, 18);
+      // Callers filter with their own aliases (e.g. pinyin) before capping
+      // the popup; truncating here would hide later items from any query.
+      return [...byId.values()];
     },
 
     run(view, item) {

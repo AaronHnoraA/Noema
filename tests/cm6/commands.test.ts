@@ -497,3 +497,35 @@ maybeDescribe("CM6 quick insert", () => {
     ed.destroy();
   });
 });
+
+maybeDescribe("CM6 insert-horizontal-rule", () => {
+  const cases: Array<[string, string, number, string]> = [
+    ["after a text line keeps a blank line (no setext H2)", "Title", 5, "Title\n\n---\n"],
+    ["on a blank line under text", "Title\n", 6, "Title\n\n---\n"],
+    ["on a blank line already separated", "Title\n\n\nNext", 7, "Title\n\n---\n\nNext"],
+    ["in an empty document", "", 0, "---\n"],
+  ];
+  for (const [name, initialContent, at, expected] of cases) {
+    it(name, async () => {
+      const { createEditorCM6 } = await import("../../src/cm6/editor-cm6.ts");
+      const host = document.createElement("div");
+      const ed = createEditorCM6(host, { initialContent });
+      ed.setSelection(at, at);
+      ed.runCommand("insert-horizontal-rule");
+      expect(ed.getMarkdown()).toBe(expected);
+      const md = ed.getMarkdown();
+      const cursor = ed.getMarkdownSelection().from;
+      expect(md.slice(cursor - 4, cursor)).toBe("---\n");
+      ed.destroy();
+    });
+  }
+
+  it("quick insert lists every built-in item a query can reach", async () => {
+    const { createEditorCM6 } = await import("../../src/cm6/editor-cm6.ts");
+    const host = document.createElement("div");
+    const ed = createEditorCM6(host, { initialContent: "" });
+    const ids = ed.getQuickInsertItems("").map((item) => item.id);
+    expect(ids).toEqual(expect.arrayContaining(["heading-6", "horizontal-rule", "org-env-note"]));
+    ed.destroy();
+  });
+});

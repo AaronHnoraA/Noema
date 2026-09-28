@@ -4478,6 +4478,21 @@ body.has-diagram-fullscreen {
 .cm-editor .cm-html-inline-widget {
   display: inline;
 }
+/* Content between paired inline HTML tags (see addPairedHtmlTokens). */
+.cm-editor .cm-html-kbd {
+  padding: 0.05em 0.4em;
+  font-family: var(--aaron-font-mono, ui-monospace, monospace);
+  font-size: 0.85em;
+  border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: color-mix(in srgb, currentColor 5%, transparent);
+}
+.cm-editor .cm-html-sub { vertical-align: sub; font-size: 0.75em; }
+.cm-editor .cm-html-sup { vertical-align: super; font-size: 0.75em; }
+.cm-editor .cm-html-mark { background: var(--aaron-highlight, rgb(249 226 175 / 22%)); border-radius: 2px; }
+.cm-editor :is(.cm-html-u, .cm-html-ins) { text-decoration: underline; text-underline-offset: 0.15em; }
+.cm-editor .cm-html-small { font-size: 0.85em; }
 .cm-attribute-view {
   box-sizing: border-box;
   margin: 0;

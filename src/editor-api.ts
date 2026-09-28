@@ -74,6 +74,7 @@ export type EditorCommand =
   | "insert-table"
   | "insert-math-block"
   | "insert-toc"
+  | "insert-horizontal-rule"
   | "insert-org-env"
   | "jupyter-cell"
   | "image-edit"
@@ -172,6 +173,9 @@ export function blockCommands(type: string): EditorCommand[] {
     "heading-1",
     "heading-2",
     "heading-3",
+    "heading-4",
+    "heading-5",
+    "heading-6",
     "blockquote",
     "bullet-list",
     "ordered-list",
@@ -180,6 +184,7 @@ export function blockCommands(type: string): EditorCommand[] {
     "insert-table",
     "insert-math-block",
     "insert-toc",
+    "insert-horizontal-rule",
     "insert-org-env",
     "jupyter-cell",
   ];
@@ -241,6 +246,27 @@ const builtInQuickInsertItems: QuickInsertItem[] = [
     detail: "###",
     command: "heading-3",
     keywords: ["subsection", "h3"],
+  },
+  {
+    id: "heading-4",
+    label: "Heading 4",
+    detail: "####",
+    command: "heading-4",
+    keywords: ["h4"],
+  },
+  {
+    id: "heading-5",
+    label: "Heading 5",
+    detail: "#####",
+    command: "heading-5",
+    keywords: ["h5"],
+  },
+  {
+    id: "heading-6",
+    label: "Heading 6",
+    detail: "######",
+    command: "heading-6",
+    keywords: ["h6"],
   },
   {
     id: "bullet-list",
@@ -395,6 +421,13 @@ const builtInQuickInsertItems: QuickInsertItem[] = [
     detail: "[toc]",
     command: "insert-toc",
     keywords: ["outline"],
+  },
+  {
+    id: "horizontal-rule",
+    label: "Horizontal rule",
+    detail: "---",
+    command: "insert-horizontal-rule",
+    keywords: ["hr", "divider", "separator", "thematic break"],
   },
   {
     id: "org-env-proof",
