@@ -200,6 +200,44 @@ SPEC is a list of (NAME . CONTENT) files created in it and bound to
                        '("a.md:2-2")))))))
 
 
+(ert-deftest noema-md-bridge-agent-send-leaves-no-note-buffer ()
+  "Reading a note for an agent send must not leave a buffer that captures
+the next open of the note (which would then show raw Markdown)."
+  (noema-context-tests--with-project '(("a.md" . "one\ntwo\n"))
+    (let ((file (alist-get "a.md" files nil nil #'equal)))
+      (cl-letf (((symbol-function 'noema-context--send)
+                 (lambda (&rest arguments)
+                   (funcall (plist-get arguments :references) root nil)
+                   nil)))
+        (pcase-let ((`(,buffer ,begin . ,end)
+                     (noema-md-bridge-region file '(:line-start 1 :line-end 1))))
+          (should (string-prefix-p " " (buffer-name buffer)))
+          (noema-md-bridge-run "agent" buffer begin end)))
+      (should-not (find-buffer-visiting file)))))
+
+(ert-deftest noema-md-bridge-hidden-copy-hands-a-later-open-to-noema ()
+  "A kept hidden copy (it holds gptel context) sends a later open to Noema."
+  (noema-context-tests--with-project '(("a.md" . "one\ntwo\n"))
+    (let ((file (alist-get "a.md" files nil nil #'equal))
+          handed)
+      (pcase-let ((`(,buffer ,begin . ,end)
+                   (noema-md-bridge-region file '(:line-start 1 :line-end 1))))
+        (push buffer opened)
+        (noema-md-bridge-run "context" buffer begin end)
+        (should (buffer-live-p buffer))
+        (cl-letf (((symbol-function 'my/noema-open-file)
+                   (lambda (target) (push target handed))))
+          (save-window-excursion
+            (let ((before (window-buffer (selected-window))))
+              (switch-to-buffer buffer)
+              (noema-md-bridge--surface-hidden (selected-window))
+              (should (eq (window-buffer (selected-window)) before))))
+          (sleep-for 0.02))
+        (should (seq-some (lambda (target) (file-equal-p target file)) handed))
+        ;; Claimed (C-c A e, raw open) it is an ordinary visible buffer.
+        (noema-md-bridge-claim buffer)
+        (should-not (string-prefix-p " " (buffer-name buffer)))))))
+
 ;;;; ── References ───────────────────────────────────────────────────────────
 
 (ert-deftest noema-context-region-becomes-a-line-range ()

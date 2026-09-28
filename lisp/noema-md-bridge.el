@@ -38,6 +38,7 @@
 (declare-function my/noema--release-xwidget-input-buffer "noema-xwidget-keys" (&optional buffer))
 (declare-function my/noema--focus-minibuffer-if-active "noema-xwidget-keys" ())
 (declare-function my/noema-command "init-aaronnote" (command &optional detail))
+(declare-function my/noema-open-file "init-aaronnote" (file))
 (declare-function gptel-context--add-region "gptel-context"
                   (buffer region-beginning region-end &optional advance))
 (declare-function gptel-rewrite "gptel-rewrite" ())
@@ -196,7 +197,61 @@ visit is marked programmatic.  A leftover redirect placeholder is replaced."
                    (bound-and-true-p my/noema--markdown-redirected))
                  (not (buffer-modified-p existing)))
         (kill-buffer existing)))
-    (find-file-noselect file)))
+    (let ((existing (find-buffer-visiting file))
+          (buffer (find-file-noselect file)))
+      (unless existing (noema-md-bridge--hide buffer))
+      buffer)))
+
+;;;; Hidden source buffers
+;;
+;; A note the bridge opened only to read is not a buffer the person opened.
+;; Left as an ordinary buffer it would capture the next open of the note --
+;; Emacs reuses a buffer already visiting a file, so the Markdown→Noema
+;; redirect never runs and the note appears as raw Markdown.  Such a buffer is
+;; hidden (a leading-space name), dropped after an agent send, and, when
+;; something displays it later, hands that open to Noema.
+
+(defvar-local noema-md-bridge--hidden nil
+  "Non-nil in a note buffer the bridge opened only to read.")
+
+(defun noema-md-bridge--hide (buffer)
+  "Mark BUFFER as a hidden read-only-use copy of its note."
+  (with-current-buffer buffer
+    (setq noema-md-bridge--hidden t)
+    (unless (string-prefix-p " " (buffer-name))
+      (rename-buffer (concat " " (buffer-name)) t))
+    (add-hook 'window-buffer-change-functions
+              #'noema-md-bridge--surface-hidden nil t)))
+
+;;;###autoload
+(defun noema-md-bridge-claim (&optional buffer)
+  "Make BUFFER (default current) an ordinary buffer the person uses."
+  (with-current-buffer (or buffer (current-buffer))
+    (when noema-md-bridge--hidden
+      (setq noema-md-bridge--hidden nil)
+      (remove-hook 'window-buffer-change-functions
+                   #'noema-md-bridge--surface-hidden t)
+      (when (and buffer-file-name (string-prefix-p " " (buffer-name)))
+        (rename-buffer (file-name-nondirectory buffer-file-name) t)))))
+
+(defun noema-md-bridge--surface-hidden (window)
+  "Hand an open of a hidden note shown in WINDOW back to Noema."
+  (let ((buffer (and (window-live-p window) (window-buffer window))))
+    (when (and buffer
+               (buffer-local-value 'noema-md-bridge--hidden buffer)
+               (not (buffer-local-value 'noema-md-bridge-source-mode buffer)))
+      (let ((file (buffer-local-value 'buffer-file-name buffer)))
+        (switch-to-prev-buffer window t)
+        (when (and file (fboundp 'my/noema-open-file))
+          (run-at-time 0 nil #'my/noema-open-file file))))))
+
+(defun noema-md-bridge--drop-hidden (buffer)
+  "Kill hidden BUFFER when nothing uses it any more."
+  (when (and (buffer-live-p buffer)
+             (buffer-local-value 'noema-md-bridge--hidden buffer)
+             (not (buffer-modified-p buffer))
+             (not (get-buffer-window buffer t)))
+    (kill-buffer buffer)))
 
 (defun noema-md-bridge-source-buffer (file)
   "Return FILE's Emacs buffer holding exactly the text on disk.
@@ -264,6 +319,8 @@ The pane keeps its window; focus moves to Emacs so the region can be used."
           (my/noema--select-emacs-window window)
         (select-window window)))
     (with-current-buffer buffer
+      ;; Shown on purpose: it is the person's buffer from now on.
+      (noema-md-bridge-claim)
       (noema-md-bridge-source-mode 1)
       (goto-char begin)
       (push-mark end t t)
@@ -302,7 +359,9 @@ The pane keeps its window; focus moves to Emacs so the region can be used."
          (if (fboundp 'my/noema--select-emacs-window)
              (my/noema--select-emacs-window window)
            (select-window window))
-         (with-current-buffer session (goto-char (point-max))))))
+         (with-current-buffer session (goto-char (point-max))))
+       ;; References name the file; the agent needs no Emacs buffer.
+       (noema-md-bridge--drop-hidden buffer)))
     ("context"
      (noema-md-bridge--add-context buffer begin end))
     ("compose"

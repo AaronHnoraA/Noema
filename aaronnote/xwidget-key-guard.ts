@@ -648,9 +648,12 @@ export function shouldForwardToEmacs(event: KeyboardEvent): boolean {
   if (event.altKey && !event.metaKey && !event.ctrlKey) {
     return codeToBaseKey(event.code, event.shiftKey) !== null;
   }
-  // M-x, M-w, M-q, and M-o/M-O (ace-window and window swap).
+  // M-x, M-w, M-W, M-q, and M-o/M-O (ace-window and window swap).
   // Cmd+Arrow is deliberately left to CodeMirror/WebKit for native editing.
   if (event.metaKey && !event.ctrlKey && !event.altKey && event.code === "KeyO") return true;
+  // M-W (Cmd-Shift-W) kills the buffer through Perspective; the page has no
+  // Cmd-Shift-W of its own.
+  if (event.metaKey && !event.ctrlKey && !event.altKey && event.shiftKey && event.code === "KeyW") return true;
   if (event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
     return event.code === "KeyX" || event.code === "KeyW" || event.code === "KeyQ";
   }

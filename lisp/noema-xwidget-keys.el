@@ -63,7 +63,7 @@
     ("<next>" . "PageDown"))
   "Noema document keys that must recover a dropped xwidget edit mode.")
 
-(defconst my/noema--xwidget-emacs-meta-keys '(?x ?w ?q ?o ?O)
+(defconst my/noema--xwidget-emacs-meta-keys '(?x ?w ?W ?q ?o ?O)
   "Command keys deliberately forwarded to Emacs by the renderer.")
 
 (defconst my/noema--xwidget-emacs-control-keys '(?x ?c ?g)

@@ -1438,6 +1438,21 @@ describe("xwidget key guard", () => {
     });
   });
 
+  test("forwards M-W (Cmd-Shift-W) to Emacs' kill-buffer", () => {
+    withForwardedEmacsKeys((forwarded) => {
+      const event = new KeyboardEvent("keydown", {
+        key: "W",
+        code: "KeyW",
+        metaKey: true,
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      expect(handleXwidgetEmacsKeydown(event)).toBe(true);
+      expect(forwarded).toEqual(["M-W"]);
+    });
+  });
+
   test("forwards M-w so the app keeps Emacs kill-ring-save semantics", () => {
     withForwardedEmacsKeys((forwarded) => {
       const event = new KeyboardEvent("keydown", {
