@@ -1968,9 +1968,16 @@ async function apiEmacsUiState(body) {
 async function apiEmacsKey(body) {
   const k = String((body && typeof body === "object" ? body.key : body) || "").trim();
   const client = String((body && typeof body === "object" ? body.client : "") || "").trim();
-  if (!k || k.length > 32) return { ok: false, message: "Invalid key" };
-  const payload = { key: k };
+  const hostOwned = Boolean(body && typeof body === "object" && body.hostOwned === true);
+  // A host-owned key may be plain text typed into Emacs (see
+  // `handleHostOwnedKey`); it carries the characters instead of a key name.
+  const text = hostOwned && typeof body.text === "string" ? body.text.slice(0, 16) : "";
+  if ((!k && !text) || k.length > 32) return { ok: false, message: "Invalid key" };
+  const payload = text ? { key: "", text } : { key: k };
   if (client) payload.client = client;
+  // A key WebKit received after Emacs took the keyboard: run it where Emacs
+  // is, without moving back to the page's pane.
+  if (body && typeof body === "object" && body.hostOwned === true) payload.hostOwned = true;
   gatewayNotify("aaronnote.event", { type: "key", payload });
   return { ok: true };
 }

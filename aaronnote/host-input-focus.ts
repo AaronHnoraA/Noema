@@ -22,8 +22,32 @@ const FOREGROUND_PROOF_EVENTS = new Set([
   "paste",
 ]);
 
+/**
+ * Whether the host has taken the keyboard from this page.
+ *
+ * Emacs says so when it runs a command forwarded from the page or otherwise
+ * moves focus elsewhere.  On macOS WKWebView still receives some keys then
+ * (arrows and other function keys are offered to it before Emacs), so while
+ * released a keyboard event is not proof of focus: only a real pointer press
+ * in the page, or the host's own `focus` command, takes the keyboard back.
+ */
+let keyboardReleased = false;
+
+export function releaseHostInputFocus(): void {
+  keyboardReleased = true;
+}
+
+export function reclaimHostInputFocus(): void {
+  keyboardReleased = false;
+}
+
+export function hostInputFocusReleased(): boolean {
+  return keyboardReleased;
+}
+
 export function provesHostInputFocus(event: Pick<Event, "type" | "isTrusted">): boolean {
-  return event.isTrusted === true && FOREGROUND_PROOF_EVENTS.has(event.type);
+  if (event.isTrusted !== true || !FOREGROUND_PROOF_EVENTS.has(event.type)) return false;
+  return !keyboardReleased || event.type === "pointerdown";
 }
 
 export const hostInputFocusEventTypes: readonly string[] = [...FOREGROUND_PROOF_EVENTS];

@@ -9,6 +9,7 @@ import {
 } from "../src/cm6/input-commands.ts";
 import { normalizedEditorKey } from "../src/cm6/focus-quiescence.ts";
 import { historyChordKind } from "../src/keymap/shortcut-router.ts";
+import { hostInputFocusReleased, releaseHostInputFocus } from "./host-input-focus.ts";
 
 type XwidgetControlKey = "Escape" | "Delete" | "Backspace";
 type XwidgetSpecialKey =
@@ -690,12 +691,93 @@ export function claimsXwidgetEmacsKeyEarly(event: KeyboardEvent, editor: HTMLEle
   return !visualMathEditingTarget(event.target);
 }
 
-function forwardEmacsKey(keyString: string, options?: EmacsKeyForwardOptions): void {
+type EmacsKeyPayload = string | { key: string; text?: string; client?: string; hostOwned?: boolean };
+
+function forwardEmacsKey(keyString: string, options?: EmacsKeyForwardOptions, hostOwned = false): void {
   const client = options?.client?.() || "";
-  const payload = client ? { key: keyString, client } : keyString;
-  void (window.aaronnoteApi as { emacs?: { key?: (k: string | { key: string; client?: string }) => unknown } })
+  const payload: EmacsKeyPayload = client || hostOwned
+    ? { key: keyString, ...(client ? { client } : {}), ...(hostOwned ? { hostOwned: true } : {}) }
+    : keyString;
+  void (window.aaronnoteApi as { emacs?: { key?: (k: EmacsKeyPayload) => unknown } })
     ?.emacs?.key?.(payload);
 }
+
+const HOST_OWNED_NAMED_KEYS: Record<string, string> = {
+  Enter: "RET",
+  Backspace: "DEL",
+  Tab: "TAB",
+  Escape: "<escape>",
+  Delete: "<deletechar>",
+  ArrowUp: "<up>",
+  ArrowDown: "<down>",
+  ArrowLeft: "<left>",
+  ArrowRight: "<right>",
+  Home: "<home>",
+  End: "<end>",
+  PageUp: "<prior>",
+  PageDown: "<next>",
+};
+
+const MODIFIER_ONLY_KEYS = new Set([
+  "Shift", "Control", "Alt", "Meta", "OS", "Super", "Hyper", "CapsLock",
+  "Fn", "FnLock", "NumLock", "ScrollLock", "AltGraph", "Dead", "Process",
+  "Unidentified", "Compose",
+]);
+
+type HostOwnedKey = { key: string } | { text: string };
+
+/** The Emacs form of EVENT for a host that owns the keyboard, or null. */
+export function hostOwnedKeyFromEvent(event: KeyboardEvent): HostOwnedKey | null {
+  if (event.isComposing || MODIFIER_ONLY_KEYS.has(event.key)) return null;
+  const fkey = /^F(\d{1,2})$/u.exec(event.key);
+  const named = HOST_OWNED_NAMED_KEYS[event.key] ?? (fkey ? `<f${fkey[1]}>` : undefined);
+  const chord = event.ctrlKey || event.metaKey || event.altKey;
+  const prefix = [
+    event.ctrlKey ? "C-" : "",
+    event.metaKey ? "M-" : "",
+    event.altKey ? "H-" : "",
+  ].join("");
+  if (named) {
+    return { key: prefix + (event.shiftKey ? "S-" : "") + named };
+  }
+  if (chord) {
+    // Physical key, as the Emacs chord gate does: Option turns letters into
+    // diacritics.  Other printable keys keep their character.
+    const plainCtrl = event.ctrlKey && !event.metaKey && !event.altKey;
+    const base = codeToBaseKey(event.code, event.shiftKey && !plainCtrl)
+      ?? (event.key.length === 1 ? event.key : null);
+    return base ? { key: prefix + (base === " " ? "SPC" : base) } : null;
+  }
+  // Plain text, including non-ASCII characters WebKit delivered as one key.
+  return event.key && [...event.key].length === 1 ? { text: event.key } : null;
+}
+
+/**
+ * Give Emacs a key WebKit received after Emacs took the keyboard.
+ *
+ * On macOS a clicked WKWebView stays the window's first responder: nothing
+ * Emacs can do from Lisp takes the keyboard back, so once Emacs owns it (a
+ * forwarded command opened vterm, an agent, the minibuffer...; see
+ * `releaseHostInputFocus`) every key still arrives here.  Handled by the page
+ * it would edit the note; instead it runs in Emacs' selected window.  Native
+ * inputs inside the page (find, dialogs) keep their own keys.
+ */
+export function handleHostOwnedKey(event: KeyboardEvent, options?: EmacsKeyForwardOptions): boolean {
+  if (!hostInputFocusReleased() || !event.isTrusted) return false;
+  const target = targetElement(event.target);
+  if (target?.closest("input, textarea, select, [contenteditable='true']")) return false;
+  const owned = hostOwnedKeyFromEvent(event);
+  if (!owned) return false;
+  hardStop(event);
+  pendingPrefix = null;
+  const client = options?.client?.() || "";
+  void (window.aaronnoteApi as { emacs?: { key?: (k: EmacsKeyPayload) => unknown } })
+    ?.emacs?.key?.({ ...owned, key: "key" in owned ? owned.key : "", ...(client ? { client } : {}), hostOwned: true });
+  return true;
+}
+
+/** Compatibility name: navigation keys are a subset of host-owned keys. */
+export const handleStrayHostNavigationKey = handleHostOwnedKey;
 
 function releaseWebInputFocus(): void {
   const active = document.activeElement;
@@ -724,6 +806,7 @@ function releaseWebInputFocus(): void {
 function forwardEmacsKeyAndReleaseInput(event: KeyboardEvent, keyString: string, options?: EmacsKeyForwardOptions): void {
   hardStop(event);
   releaseWebInputFocus();
+  releaseHostInputFocus();
   forwardEmacsKey(keyString, options);
 }
 

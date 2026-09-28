@@ -81,7 +81,12 @@ import { blobToBase64 } from "../src/paste.ts";
 import { collectFindMatches, createFindPattern, type FindMatch } from "./find.ts";
 import { AssistScheduler, type AssistUpdateFlags, type AssistUpdateOptions } from "./assist-scheduler.ts";
 import { hostCommandTargetsClient } from "./host-command-target.ts";
-import { hostInputFocusEventTypes, provesHostInputFocus } from "./host-input-focus.ts";
+import {
+  hostInputFocusEventTypes,
+  provesHostInputFocus,
+  reclaimHostInputFocus,
+  releaseHostInputFocus,
+} from "./host-input-focus.ts";
 import {
   ProseCheckLifecycle,
   type ProseCheckContext,
@@ -200,6 +205,7 @@ import {
   handleXwidgetControlKeydown,
   handleXwidgetEmacsKeydown,
   claimsXwidgetEmacsKeyEarly,
+  handleHostOwnedKey,
   handleXwidgetHistoryKeydown,
   handleXwidgetMathBeforeInput,
   handleXwidgetMathKeydown,
@@ -11365,6 +11371,10 @@ function recoverFromStaleHostPause(event: Event): void {
 for (const type of hostInputFocusEventTypes) {
   document.addEventListener(type, recoverFromStaleHostPause, true);
 }
+// A real press in the page takes the keyboard back from Emacs.
+document.addEventListener("pointerdown", (event) => {
+  if (event.isTrusted) reclaimHostInputFocus();
+}, true);
 
 function scheduleAssistUpdate(options: AssistUpdateOptions = {}): void {
   assistScheduler.schedule(options);
@@ -11734,7 +11744,13 @@ function runHostCommand(detail: unknown): boolean {
       else gotoFindMatch(findIndex - 1);
       return true;
     case "focus":
+      reclaimHostInputFocus();
       editor.focus();
+      return true;
+    // Emacs took the keyboard (a forwarded command, another window): stray
+    // WebKit keys must no longer claim this pane; see host-input-focus.ts.
+    case "host-owns-keyboard":
+      releaseHostInputFocus();
       return true;
     case "paste":
       if (rejectReadOnlyAction("Read-only pane")) return true;
@@ -12048,6 +12064,7 @@ function eventTargetsNativeWidgetInput(target: EventTarget | null): boolean {
 // Everything else keeps the ordering of the bubble-phase handler below.
 window.addEventListener("keydown", (event) => {
   if (replayingHostKey || serverReaderMode) return;
+  if (handleHostOwnedKey(event, { client: () => currentClient })) return;
   if (!claimsXwidgetEmacsKeyEarly(event, editor.view.dom)) return;
   handleXwidgetEmacsKeydown(event, { client: () => currentClient });
 }, { capture: true });

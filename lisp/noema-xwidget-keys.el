@@ -339,7 +339,11 @@ normal result rather than a gateway error."
                (fboundp 'xwidget-webkit-edit-mode))
       (with-current-buffer buffer
         (when (eq major-mode 'xwidget-webkit-mode)
-          (ignore-errors (xwidget-webkit-edit-mode -1)))))))
+          (ignore-errors (xwidget-webkit-edit-mode -1))
+          ;; Tell the page too: macOS still offers WebKit arrows and other
+          ;; function keys, which must not pull the keyboard back to it.
+          (when my/noema--client-id
+            (my/noema-command "host-owns-keyboard")))))))
 
 (defun my/noema--focus-xwidget-window (window)
   "Focus Noema xwidget WINDOW like a direct window click."
@@ -513,11 +517,25 @@ KEY-STRING is used only for diagnostics."
                (my/noema--xwidget-buffer-p (window-buffer window))
                window)))))
 
-(defun my/noema--run-emacs-key (key-string &optional client)
+(defun my/noema--run-emacs-text (text)
+  "Type TEXT into Emacs' selected window, as if typed there.
+The Noema page forwards characters it received while Emacs owned the
+keyboard; macOS keeps a clicked WebKit view as the keyboard's target."
+  (setq unread-command-events
+        (nconc (string-to-list text) unread-command-events)))
+
+(defun my/noema--run-emacs-key (key-string &optional client host-owned)
   "Execute Emacs key KEY-STRING forwarded from the Noema browser.
-CLIENT, when non-nil, identifies the Noema xwidget that sent the key."
+CLIENT, when non-nil, identifies the Noema xwidget that sent the key.
+HOST-OWNED means WebKit received the key although Emacs owns the keyboard
+\(macOS offers it arrows first); it runs where Emacs is, without moving to
+the page's pane."
   (condition-case err
       (let ((keys (ignore-errors (kbd key-string))))
+        (when (and keys (> (length keys) 0) host-owned)
+          (setq unread-command-events
+                (nconc (listify-key-sequence keys) unread-command-events))
+          (setq keys nil))
         (when (and keys (> (length keys) 0))
           (let ((source-buffer (my/noema--key-source-buffer client))
                 (win (my/noema--key-source-window client)))
