@@ -6,6 +6,7 @@ import { createVimLite } from "../aaronnote/vim-lite.ts";
 import {
   guardXwidgetControlBeforeInput,
   handleXwidgetEmacsKeydown,
+  claimsXwidgetEmacsKeyEarly,
   handleXwidgetControlBeforeInput,
   guardXwidgetControlKeydown,
   handleXwidgetControlKeydown,
@@ -1576,5 +1577,65 @@ describe("xwidget key guard", () => {
       expect(event.defaultPrevented).toBe(true);
       expect(forwarded).toEqual([{ key: "M-w", client: "split-client" }]);
     });
+  });
+});
+
+describe("early Emacs chord claim", () => {
+  function editorHost(): { editor: HTMLElement; content: HTMLElement; native: HTMLInputElement; outside: HTMLElement } {
+    const editor = document.createElement("div");
+    const content = document.createElement("div");
+    content.contentEditable = "true";
+    const nativeHost = document.createElement("div");
+    nativeHost.dataset.aaronnoteVim = "native";
+    const native = document.createElement("input");
+    nativeHost.append(native);
+    editor.append(content, nativeHost);
+    const outside = document.createElement("div");
+    document.body.append(editor, outside);
+    return { editor, content, native, outside };
+  }
+
+  function keydown(target: HTMLElement, init: KeyboardEventInit): KeyboardEvent {
+    let seen: KeyboardEvent | null = null;
+    const listener = (event: Event): void => { seen = event as KeyboardEvent; };
+    target.addEventListener("keydown", listener, { once: true });
+    target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }));
+    return seen!;
+  }
+
+  test("a prefix's next key is forwarded before CM6 can run it", () => {
+    withForwardedEmacsKeys((forwarded) => {
+      const { editor, content } = editorHost();
+      const cmHandled: string[] = [];
+      // Stands in for CM6's contentDOM keymap (Ctrl-e is line end on macOS).
+      content.addEventListener("keydown", (event) => cmHandled.push(event.key));
+      const capture = (event: KeyboardEvent): void => {
+        if (claimsXwidgetEmacsKeyEarly(event, editor)) handleXwidgetEmacsKeydown(event);
+      };
+      window.addEventListener("keydown", capture, true);
+      try {
+        content.dispatchEvent(new KeyboardEvent("keydown", { key: "c", code: "KeyC", ctrlKey: true, bubbles: true, cancelable: true }));
+        content.dispatchEvent(new KeyboardEvent("keydown", { key: "e", code: "KeyE", ctrlKey: true, bubbles: true, cancelable: true }));
+      } finally {
+        window.removeEventListener("keydown", capture, true);
+        editor.remove();
+      }
+      expect(forwarded).toEqual(["C-c C-e"]);
+      expect(cmHandled).toEqual([]);
+    });
+  });
+
+  test("Option chords in the editor are claimed; native inputs and other surfaces are not", () => {
+    const { editor, content, native, outside } = editorHost();
+    try {
+      expect(claimsXwidgetEmacsKeyEarly(keydown(content, { key: "¬", code: "KeyL", altKey: true }), editor)).toBe(true);
+      expect(claimsXwidgetEmacsKeyEarly(keydown(native, { key: "¬", code: "KeyL", altKey: true }), editor)).toBe(false);
+      expect(claimsXwidgetEmacsKeyEarly(keydown(outside, { key: "¬", code: "KeyL", altKey: true }), editor)).toBe(false);
+      // Ordinary editing Ctrl keys stay with the renderer.
+      expect(claimsXwidgetEmacsKeyEarly(keydown(content, { key: "e", code: "KeyE", ctrlKey: true }), editor)).toBe(false);
+    } finally {
+      editor.remove();
+      outside.remove();
+    }
   });
 });

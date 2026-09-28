@@ -1984,10 +1984,25 @@ async function apiEmacsSelection(body) {
       || lineStart < 1 || lineEnd < lineStart) {
     return { ok: false, message: "Invalid editor selection" };
   }
-  gatewayNotify("aaronnote.event", {
-    type: "selection-to-agent",
-    payload: { client, file, lineStart, lineEnd },
-  });
+  const payload = { client, file, lineStart, lineEnd };
+  // Optional: what Emacs should do with the range, and its exact character
+  // bounds.  Absent fields keep the original "send these lines to an agent".
+  const action = String(body?.action || "agent");
+  if (!["agent", "context", "rewrite", "compose", "source"].includes(action)) {
+    return { ok: false, message: "Invalid editor selection action" };
+  }
+  payload.action = action;
+  const scope = String(body?.scope || "selection");
+  if (["selection", "line", "document"].includes(scope)) payload.scope = scope;
+  const fromLine = Number(body?.fromLine);
+  const fromColumn = Number(body?.fromColumn);
+  const toLine = Number(body?.toLine);
+  const toColumn = Number(body?.toColumn);
+  if ([fromLine, fromColumn, toLine, toColumn].every(Number.isSafeInteger)
+      && fromLine >= 1 && toLine >= fromLine && fromColumn >= 0 && toColumn >= 0) {
+    Object.assign(payload, { fromLine, fromColumn, toLine, toColumn });
+  }
+  gatewayNotify("aaronnote.event", { type: "selection-to-agent", payload });
   return { ok: true };
 }
 

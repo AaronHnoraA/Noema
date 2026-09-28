@@ -48,6 +48,20 @@ type ProseCheckBody = {
   allowLocalFallback?: boolean;
   interactive?: boolean;
 };
+/** A saved page range handed to Emacs; see `sendSelectionToEmacs`. */
+export type EmacsSelectionReport = {
+  client: string;
+  file: string;
+  lineStart: number;
+  lineEnd: number;
+  action?: "agent" | "context" | "rewrite" | "compose" | "source";
+  scope?: "selection" | "line" | "any" | "document";
+  fromLine?: number;
+  fromColumn?: number;
+  toLine?: number;
+  toColumn?: number;
+};
+
 export type LanguageToolPerformanceProfile = "responsive" | "balanced" | "quiet";
 export type LanguageToolSettings = {
   automaticEnabled: boolean;
@@ -730,7 +744,7 @@ type NativeApi = {
     inputFocus?: (body: { client?: string; file?: string }) => Promise<unknown>;
     uiState?: (body: Record<string, unknown>) => Promise<unknown>;
     key?: (body: string | { key: string; client?: string }) => Promise<unknown>;
-    sendSelection?: (body: { client: string; file: string; lineStart: number; lineEnd: number }) => Promise<unknown>;
+    sendSelection?: (body: EmacsSelectionReport) => Promise<unknown>;
     systemOpen?: (target: string, base?: string) => Promise<unknown>;
     zotero?: (body: Record<string, unknown>) => Promise<unknown>;
     zoteroImport?: (body: Record<string, unknown>) => Promise<unknown>;
@@ -1657,7 +1671,7 @@ export const api = {
       const body = client ? { key: keyString, client } : keyString;
       await call(body).catch(() => {});
     },
-    async sendSelection(body: { client: string; file: string; lineStart: number; lineEnd: number }): Promise<void> {
+    async sendSelection(body: EmacsSelectionReport): Promise<void> {
       const call = window.aaronnoteApi?.emacs?.sendSelection;
       const result = call
         ? await call(body)

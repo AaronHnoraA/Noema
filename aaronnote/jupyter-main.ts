@@ -10,6 +10,9 @@ import type { JupyterMarkdownParser, JupyterOutputView, WidgetMountFn } from "..
 import type { JupyterWidgetKernelMessage } from "../src/jupyter-widget-runtime.ts";
 import { renderMarkdownHTML } from "../src/render-html.ts";
 import { installNoemaThemeRuntime, loadNoemaAppConfig } from "./theme-runtime.ts";
+import { installHostClipboard } from "./host-clipboard.ts";
+import { hostCommandTargetsClient } from "./host-command-target.ts";
+import { writeSystemClipboard } from "../src/system-clipboard.ts";
 
 type DocumentRef = {
   scriptFile: string;
@@ -77,6 +80,8 @@ declare global {
 }
 
 const removeThemeRuntime = installNoemaThemeRuntime();
+installHostClipboard();
+const pageClient = new URLSearchParams(window.location.search).get("client") || "";
 const removeB3ComponentSystem = installB3ComponentSystem(document.body);
 void loadNoemaAppConfig().catch(() => {});
 
@@ -679,6 +684,62 @@ async function checkResearchCompletion(tab: TabState, cell: CellSnapshot): Promi
   else setStatus("Completion check sent to worker; waiting for protocol confirmation");
 }
 
+/** The page's current non-empty text selection, if any. */
+function pageSelectionText(): string {
+  const selection = window.getSelection();
+  return selection && !selection.isCollapsed ? selection.toString() : "";
+}
+
+/** Plain text of CELL's rendered output, as a reader would copy it. */
+function cellOutputText(cell: CellSnapshot | undefined): string {
+  const output = cell ? cellCard(cell)?.querySelector<HTMLElement>(".noema-jupyter-output") : null;
+  return (output?.innerText || output?.textContent || "").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/**
+ * Copy the page selection, or the active cell's whole output when nothing is
+ * selected.  Emacs routes Cmd-C here: on the macOS xwidget port WebKit never
+ * receives a key Emacs owns, so the page must perform the copy itself.
+ */
+async function copyOutput(cell = activeCell()): Promise<void> {
+  const selected = pageSelectionText();
+  const text = selected || cellOutputText(cell);
+  if (!text) {
+    setStatus("Nothing to copy");
+    return;
+  }
+  const copied = await writeSystemClipboard(text);
+  setStatus(copied ? (selected ? "Selection copied" : "Output copied") : "Copy failed", !copied);
+}
+
+/** Select the active cell's output text, so the next copy takes all of it. */
+function selectActiveOutput(): void {
+  const cell = activeCell();
+  const output = cell ? cellCard(cell)?.querySelector<HTMLElement>(".noema-jupyter-output") : null;
+  const selection = window.getSelection();
+  if (!output || !selection) return;
+  const range = document.createRange();
+  range.selectNodeContents(output);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+window.addEventListener("aaronnote:command", (event) => {
+  const detail = (event as CustomEvent<{ command?: string }>).detail;
+  if (!detail || !hostCommandTargetsClient(detail, pageClient)) return;
+  switch (String(detail.command || "").toLowerCase()) {
+    case "copy":
+    case "cut":
+      void copyOutput();
+      break;
+    case "select-all":
+      selectActiveOutput();
+      break;
+    default:
+      break;
+  }
+});
+
 function openCellMenu(tab: TabState, cell: CellSnapshot, x: number, y: number): void {
   activateCell(tab, cell.id);
   const menuItem = (
@@ -694,7 +755,14 @@ function openCellMenu(tab: TabState, cell: CellSnapshot, x: number, y: number): 
     result.setAttribute("role", "menuitem");
     return result;
   };
+  const selected = pageSelectionText();
   contextMenuEl.replaceChildren(
+    ...(selected ? [menuItem("Copy", "Copy the selected text", () => copyOutput(cell))] : []),
+    menuItem("Copy Output", "Copy this cell's whole output as plain text", async () => {
+      const text = cellOutputText(cell);
+      const copied = text ? await writeSystemClipboard(text) : false;
+      setStatus(copied ? "Output copied" : text ? "Copy failed" : "No output to copy", !copied && Boolean(text));
+    }),
     menuItem("Open Source in Emacs", "Jump to source", () => openSource(cell)),
     ...(isResearchDocument(tab.ref) ? [
       menuItem("Recheck Completion", "重新检测结束：核对 ACP 完成回执、Run 状态和输出回写，不重新执行任务", () => checkResearchCompletion(tab, cell)),
@@ -774,7 +842,9 @@ function renderCell(tab: TabState, cell: CellSnapshot): HTMLElement {
     // Do not steal DOM focus from live ipywidgets, stdin, links, or rendered
     // HTML controls.  The card becomes active, while the interactive output
     // keeps owning keyboard/pointer input.
-    if (!target?.closest("button, input, select, textarea, a, [contenteditable='true'], .jupyter-widgets")) {
+    // A click that ends a text drag must leave that selection for copying.
+    if (!pageSelectionText()
+        && !target?.closest("button, input, select, textarea, a, [contenteditable='true'], .jupyter-widgets")) {
       card.focus({ preventScroll: true });
     }
   });

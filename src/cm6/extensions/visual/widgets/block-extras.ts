@@ -52,6 +52,7 @@ import {
 import { applyImageLayout, imageLayoutFromAttrs, readImageTrailingAttrs, type ImageLayoutAttrs } from "../../../../image-attrs.ts";
 import { supportedDiagramLang } from "../../../../diagram-langs.ts";
 import { api } from "../../../../../aaronnote/api-client.ts";
+import { writeSystemClipboard } from "../../../../system-clipboard.ts";
 import { hostMode } from "../../../../../aaronnote/host-mode.ts";
 import { renderJupyterVariablesTable } from "../../../../jupyter-variables-view.ts";
 import { tocIndexFromState, type MarkdownHeading } from "../../../toc-index.ts";
@@ -532,6 +533,33 @@ function enhanceRenderedMarkdown(root: HTMLElement): void {
     renderDiagramPreview(code.textContent ?? "", lang, div);
     pre.replaceWith(div);
   });
+}
+
+/**
+ * Read-only text inside a `@@cell` widget: rendered output and the cell's
+ * highlighted source.  It must stay selectable and copyable like any page
+ * text, so the editor must not claim pointer or selection events there.
+ */
+export const CEIL_READONLY_TEXT_SELECTOR = ".cm-ceil-output, .cm-ceil-source, .cm-ceil-output-popover-body";
+
+function nodeElement(node: Node | null | undefined): Element | null {
+  if (!node) return null;
+  return node instanceof Element ? node : node.parentElement;
+}
+
+/** Whether EVENT concerns a selection in `@@cell` read-only text. */
+export function ceilReadOnlyTextEvent(event: Event): boolean {
+  if (event.type === "selectionchange") {
+    const selection = document.getSelection();
+    return Boolean(nodeElement(selection?.anchorNode)?.closest(CEIL_READONLY_TEXT_SELECTOR));
+  }
+  const target = event.target instanceof Node ? nodeElement(event.target) : null;
+  return Boolean(target?.closest(CEIL_READONLY_TEXT_SELECTOR));
+}
+
+/** Plain text of a rendered output area, as a reader would copy it. */
+export function ceilOutputPlainText(output: HTMLElement): string {
+  return (output.innerText || output.textContent || "").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 function stopInteractiveWidgetEvents(root: HTMLElement): void {
@@ -2668,6 +2696,22 @@ class CeilCommandWidget extends MeasuredWidget {
       requestMeasurePreservingCeilScroll(view);
     });
     const popoutButton = makeButton("Popout", "Show output in a separate panel", () => openCeilOutputPopup(lastResult));
+    // A selection inside the output copies only what is selected; with none,
+    // the whole rendered output is copied as plain text.
+    const copyOutputButton = makeButton("Copy", "Copy the selected output, or all of it", async () => {
+      const selection = document.getSelection();
+      const selected = selection && !selection.isCollapsed && output.contains(selection.anchorNode)
+        ? selection.toString()
+        : "";
+      const text = selected || ceilOutputPlainText(output);
+      if (!text) {
+        setStatus("No output to copy");
+        return;
+      }
+      const copied = await writeSystemClipboard(text);
+      setStatus(copied ? (selected ? "Selection copied" : "Output copied") : "Copy failed");
+      window.setTimeout(() => setStatus(ceilResultStatusLabel(meta, lastResult)), 1500);
+    });
 
     if (hostMode() === "server") {
       const reason = "Jupyter execution and Cell editing are unavailable in reader mode";
@@ -2703,7 +2747,7 @@ class CeilCommandWidget extends MeasuredWidget {
     }
     foldButton.textContent = outputWrap.classList.contains("is-folded") ? "Show" : "Fold";
     expandButton.textContent = outputWrap.classList.contains("is-expanded") ? "Collapse" : "Expand";
-    outputTools.append(refreshButton, foldButton, expandButton, popoutButton);
+    outputTools.append(copyOutputButton, refreshButton, foldButton, expandButton, popoutButton);
     outputHeader.append(outputTitle, outputTools);
     outputWrap.append(outputHeader, output);
     header.append(label, languageInput, kernelSelect, sessionWrap, status, buttonBar);
@@ -2717,7 +2761,10 @@ class CeilCommandWidget extends MeasuredWidget {
     return this.registerMeasured(block, view);
   }
 
-  ignoreEvent(): boolean { return false; }
+  // Output and source text are read-only page text: let the browser own their
+  // selection (drag, double-click, select-all within) instead of CM6 mapping
+  // it to the widget boundary and collapsing it.  Controls keep editor events.
+  ignoreEvent(event: Event): boolean { return ceilReadOnlyTextEvent(event); }
 }
 
 class MetaWidget extends MeasuredWidget {

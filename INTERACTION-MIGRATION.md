@@ -56,6 +56,9 @@ this path. Ordinary `.ipynb` and Markdown sidecars are unchanged.
 - `C-c A s`, `C-c A m`, `C-c A .`, `C-c A r`
 - `C-c A p` to promote the current agent-shell session into Noema research
 - `C-c A i r/b/f` for the migrated region/buffer/file interaction helpers
+- In a Noema Markdown pane, `C-c A v/B/@`, `C-c A ./c/s/r` and `C-c A e` ask
+  the page to save and report its selection, then `lisp/noema-md-bridge.el`
+  runs the agent or gptel UI on the note's Emacs source buffer
 
 ## Required gates
 

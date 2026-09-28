@@ -662,6 +662,31 @@ export function shouldForwardToEmacs(event: KeyboardEvent): boolean {
   return false;
 }
 
+/** True while a C-x / C-c prefix waits for its next key. */
+export function xwidgetEmacsPrefixPending(): boolean {
+  return pendingPrefix !== null;
+}
+
+/**
+ * Whether the Emacs gate must see EVENT in the capture phase, before CM6.
+ *
+ * On macOS CM6's default keymap binds Emacs-style Ctrl-a/e/f/b/n/p/d/k/t/v/o
+ * and Option-l/u/A.  In the bubble phase such a chord has already moved the
+ * cursor (or selected a line) by the time it is forwarded, so `C-c C-e` ran
+ * both CM6's line-end and the Emacs command, and `H-l`/`H-u` ran twice.  A
+ * pending prefix always claims its next key.  A top-level chord is claimed
+ * only from inside the CM6 editor (EDITOR), and never from a native widget
+ * input or an active visual-math editor, which keep their own key ownership.
+ */
+export function claimsXwidgetEmacsKeyEarly(event: KeyboardEvent, editor: HTMLElement): boolean {
+  if (pendingPrefix !== null) return true;
+  if (!shouldForwardToEmacs(event)) return false;
+  const target = targetElement(event.target);
+  if (!target || !editor.contains(target)) return false;
+  if (target.closest("[data-aaronnote-vim='native'], input, textarea, select")) return false;
+  return !visualMathEditingTarget(event.target);
+}
+
 function forwardEmacsKey(keyString: string, options?: EmacsKeyForwardOptions): void {
   const client = options?.client?.() || "";
   const payload = client ? { key: keyString, client } : keyString;

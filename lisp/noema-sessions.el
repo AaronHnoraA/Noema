@@ -883,11 +883,36 @@ foreign session is registered like any other, so one prompt reaches them all."
     buffer))
 
 ;;;###autoload
-(cl-defun noema-sessions-read (&key prompt root allow-new)
+(defvar noema-sessions-last-label nil
+  "Label of the session most recently chosen in `noema-sessions-read'.")
+
+(defun noema-sessions--choice-label (choices default)
+  "Return the label in CHOICES that DEFAULT names, or nil.
+DEFAULT is a live agent buffer or a label remembered from an earlier read.  A
+buffer matches the live choice that owns it and the durable entry it serves."
+  (cond
+   ((stringp default)
+    (car (assoc default choices)))
+   ((buffer-live-p default)
+    (car (seq-find
+          (lambda (choice)
+            (let ((value (cdr choice)))
+              (and (consp value)
+                   (or (eq (cdr value) default)
+                       (and (car value)
+                            (when-let* ((name (buffer-local-value
+                                               'noema-agent-acp-session-name default)))
+                              (equal (noema-sessions--string (car value) "name")
+                                     name)))))))
+          choices)))))
+
+(cl-defun noema-sessions-read (&key prompt root allow-new default)
   "Read one agent session of ROOT and return its live agent buffer.
 PROMPT overrides the minibuffer prompt.  With ALLOW-NEW the choices also
-include starting a new session.  Resuming a recorded conversation or starting
-a new one happens here, so the caller always receives a live buffer."
+include starting a new session.  DEFAULT, a live agent buffer or a label from
+`noema-sessions-last-label', is listed first and preselected.  Resuming a
+recorded conversation or starting a new one happens here, so the caller always
+receives a live buffer."
   (let* ((root (noema-sessions--project-root root))
          (result (and (bound-and-true-p my/noema--ready)
                       (fboundp 'my/noema--api-call-sync)
@@ -900,9 +925,25 @@ a new one happens here, so the caller always receives a live buffer."
     (when allow-new
       (setq choices (append choices (list (cons new-label 'new)))))
     (unless choices (user-error "No Noema agent sessions or buffers"))
-    (let ((choice (cdr (assoc (completing-read (or prompt "Noema session: ")
-                                               choices nil t)
-                              choices))))
+    (let* ((default-label (noema-sessions--choice-label choices default))
+           (choices (if default-label
+                        (cons (assoc default-label choices)
+                              (seq-remove (lambda (choice)
+                                            (equal (car choice) default-label))
+                                          choices))
+                      choices))
+           (label (completing-read (or prompt "Noema session: ")
+                                   ;; Keep the preselected session first even
+                                   ;; for completion UIs that re-sort.
+                                   (lambda (string predicate action)
+                                     (if (eq action 'metadata)
+                                         '(metadata (display-sort-function . identity)
+                                                    (cycle-sort-function . identity))
+                                       (complete-with-action action choices
+                                                             string predicate)))
+                                   nil t nil nil default-label))
+           (choice (cdr (assoc label choices))))
+      (setq noema-sessions-last-label label)
       (cond ((eq choice 'new) (noema-sessions--start-new root))
             ((cdr choice) (cdr choice))
             (t (noema-sessions--entry-buffer (car choice) root))))))

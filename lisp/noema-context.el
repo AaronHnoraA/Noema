@@ -29,6 +29,7 @@
 (require 'subr-x)
 (require 'noema-agent-acp)
 (require 'noema-sessions)
+(require 'noema-md-bridge)
 
 (declare-function gptel-context-add "gptel-context" (&optional arg confirm))
 (declare-function gptel-context-add-file "gptel-context" (path))
@@ -56,6 +57,15 @@ skips the entry and says so."
   :type '(choice (const :tag "Ask to save" ask)
                  (const :tag "Save without asking" t)
                  (const :tag "Skip unsaved buffers" nil))
+  :group 'noema-context)
+
+(defcustom noema-context-always-ask-session t
+  "Whether every send asks which agent session receives it.
+When non-nil the prompt always appears, with the session this project last
+used listed first and preselected, so RET repeats the previous choice.  When
+nil the project's last session is reused silently and only a prefix argument
+asks."
+  :type 'boolean
   :group 'noema-context)
 
 (defcustom noema-context-clear-after-send nil
@@ -251,18 +261,29 @@ file content is ever put in the request."
   (make-hash-table :test #'equal :weakness 'value)
   "Project root to the agent buffer its editor context last went to.")
 
+(defvar noema-context--last-label nil
+  "Session label the most recent send chose, in any project.
+The fallback default when this project has no live remembered session.")
+
 (defun noema-context--session (&optional pick)
   "Return the agent buffer editor context goes to.
-The project's last target is reused until PICK, so repeated sends do not ask
-again.  Starting or resuming a session happens in `noema-sessions-read'."
+With `noema-context-always-ask-session' (the default) every send asks, and the
+session this project used last -- or, failing that, the last one chosen
+anywhere -- is preselected.  Otherwise the project's last session is reused
+until PICK.  Starting or resuming a session happens in `noema-sessions-read'."
   (let* ((root (noema-agent-acp-project-root))
          (remembered (gethash root noema-context--last-session))
-         (buffer (if (and (not pick)
-                          (buffer-live-p remembered)
-                          (noema-agent-acp-agent-buffer-p remembered))
-                     remembered
-                   (noema-sessions-read :prompt "Send context to session: "
-                                        :root root :allow-new t))))
+         (live (and (buffer-live-p remembered)
+                    (noema-agent-acp-agent-buffer-p remembered)
+                    remembered))
+         (buffer (if (and live (not pick) (not noema-context-always-ask-session))
+                     live
+                   (prog1 (noema-sessions-read
+                           :prompt "Send context to session: "
+                           :root root :allow-new t
+                           :default (or live noema-context--last-label))
+                     (setq noema-context--last-label
+                           (bound-and-true-p noema-sessions-last-label))))))
     (puthash root buffer noema-context--last-session)
     buffer))
 
@@ -300,13 +321,18 @@ again.  Starting or resuming a session happens in `noema-sessions-read'."
              (if (= (length skipped) 1) "y" "ies")
              (string-join skipped "; "))))
 
-(cl-defun noema-context--send (&key prompt pick draft)
-  "Send the shared selection to a session, reading PROMPT when it is nil.
-PICK asks which session to use instead of reusing the project's last one.
-DRAFT puts the turn in the session's input without submitting it."
+(cl-defun noema-context--send (&key prompt pick draft references)
+  "Send editor context to a session, reading PROMPT when it is nil.
+The context is the shared gptel selection unless REFERENCES is given: a
+function of (ROOT SESSION) returning the reference plists for exactly what the
+command names, such as one region, so a send never drags along whatever was
+gathered earlier.  PICK asks which session to use when sessions are not always
+asked for.  DRAFT puts the turn in the session's input without submitting it."
   (let* ((buffer (noema-context--session pick))
          (root (buffer-local-value 'noema-agent-acp-session-root buffer))
-         (resolved (noema-context--resolve nil root buffer))
+         (resolved (if references
+                       (cons (funcall references root buffer) nil)
+                     (noema-context--resolve nil root buffer)))
          (references (car resolved))
          (prompt (or prompt
                      (read-string
@@ -323,10 +349,26 @@ DRAFT puts the turn in the session's input without submitting it."
         (progn (noema-agent-acp-draft buffer (noema-context--prompt-text prompt references))
                (noema-agent-acp-show-buffer buffer))
       (noema-context--deliver buffer blocks))
-    (when noema-context-clear-after-send
+    (when (and noema-context-clear-after-send (not references))
       (require 'gptel-context)
       (gptel-context-remove-all))
     buffer))
+
+(defun noema-context--region-references (buffer begin end)
+  "Return a REFERENCES function naming only BEGIN..END of BUFFER.
+A region covering the whole buffer is a plain file reference."
+  (let ((file (or (noema-context--buffer-file buffer)
+                  (user-error "%s is not a saved file" (buffer-name buffer)))))
+    (lambda (root session)
+      (list (if (noema-context--whole-buffer-p buffer (list (cons begin end)))
+                (noema-context--reference file root nil nil session)
+              (noema-context--reference file root buffer (cons begin end)
+                                        session))))))
+
+(defun noema-context--file-references (file)
+  "Return a REFERENCES function naming only FILE."
+  (lambda (root session)
+    (list (noema-context--reference file root nil nil session))))
 
 
 ;;;; ── Commands ─────────────────────────────────────────────────────────────
@@ -349,67 +391,51 @@ With a prefix argument PICK, choose the session."
 
 ;;;###autoload
 (defun noema-context-send-region (&optional pick)
-  "Add the active region to the selection and send it to a session.
-Only `file:LINE-LINE' travels; the agent reads the lines itself.  With a
-prefix argument PICK, choose the session."
+  "Send exactly the active region to a session.
+Only `file:LINE-LINE' travels; the agent reads the lines itself.  The shared
+gptel selection is left alone: this sends the region, not everything gathered
+so far (that is `noema-context-send').  In a Noema Markdown pane the page's own
+selection is used.  PICK is as for `noema-context-send'."
   (interactive "P")
-  (if (and (fboundp 'my/noema--xwidget-buffer-p)
-           (my/noema--xwidget-buffer-p))
-      (progn
-        (unless (fboundp 'my/noema-command)
-          (user-error "Noema browser command bridge is unavailable"))
-        (my/noema-command "send-selection-to-agent"))
+  (if (noema-md-bridge-pane-p)
+      (noema-md-bridge-request "agent" "selection")
     (unless (use-region-p) (user-error "No active region"))
-    (require 'gptel-context)
-    (gptel-context--add-region (current-buffer) (region-beginning) (region-end) t)
-    (deactivate-mark)
-    (noema-context--send :pick pick)))
+    (let ((references (noema-context--region-references
+                       (current-buffer) (region-beginning) (region-end))))
+      (deactivate-mark)
+      (noema-context--send :pick pick :references references))))
 
 (defun noema-context-send-noema-selection (file line-start line-end)
-  "Add FILE lines LINE-START through LINE-END to shared context and send."
-  (unless (and (stringp file) (file-readable-p file)
-               (integerp line-start) (integerp line-end)
-               (<= 1 line-start line-end))
-    (user-error "Noema selection is not a readable file range"))
-  (let ((buffer (find-file-noselect file)))
+  "Send only FILE lines LINE-START through LINE-END to a chosen session."
+  (pcase-let ((`(,buffer ,begin . ,end)
+               (noema-md-bridge-region
+                file (list :line-start line-start :line-end line-end))))
     (with-current-buffer buffer
-      (when (buffer-modified-p)
-        (user-error "Save Emacs edits in %s before sending Noema's selection" file))
-      (unless (verify-visited-file-modtime buffer)
-        (revert-buffer t t))
-      (save-excursion
-        (save-restriction
-          (widen)
-          (when (> line-end (line-number-at-pos (point-max) t))
-            (user-error "Noema selection is newer than the file on disk"))
-          (goto-char (point-min))
-          (forward-line (1- line-start))
-          (let ((begin (point)))
-            (forward-line (- line-end line-start))
-            (end-of-line)
-            (let ((end (min (point-max) (1+ (point)))))
-              (require 'gptel-context)
-              (gptel-context--add-region buffer begin end t))))))
-    (with-current-buffer buffer
-      (noema-context--send))))
+      (noema-context--send
+       :references (noema-context--region-references buffer begin end)))))
 
 ;;;###autoload
 (defun noema-context-send-buffer (&optional pick)
-  "Add the whole current buffer to the selection and send it to a session.
-With a prefix argument PICK, choose the session."
+  "Send the current buffer's file, and nothing else, to a session.
+In a Noema Markdown pane this is the note the pane shows.  PICK is as for
+`noema-context-send'."
   (interactive "P")
-  (require 'gptel-context)
-  (gptel-context--add-buffer (current-buffer))
-  (noema-context--send :pick pick))
+  (if (noema-md-bridge-pane-p)
+      (noema-md-bridge-request "agent" "document")
+    (noema-context--send
+     :pick pick
+     :references (noema-context--file-references
+                  (or (noema-context--buffer-file (current-buffer))
+                    (user-error "%s is not a saved file" (buffer-name)))))))
 
 ;;;###autoload
 (defun noema-context-send-file (file &optional pick)
-  "Add FILE to the selection and send it to a session.
-With a prefix argument PICK, choose the session."
+  "Send FILE, and nothing else, to a session.
+PICK is as for `noema-context-send'."
   (interactive (list (read-file-name "Reference file: " nil nil t) current-prefix-arg))
-  (require 'gptel-context)
-  (gptel-context-add-file (expand-file-name file))
-  (noema-context--send :pick pick))
+  (noema-context--send
+   :pick pick
+   :references (noema-context--file-references (expand-file-name file))))
 
 ;;;###autoload
 (defun noema-context-send-at-point (&optional pick)
@@ -418,6 +444,14 @@ The turn names the file, line, column and enclosing definition, so a question
 like \"why does this branch run?\" has somewhere to land.  With a prefix
 argument PICK, choose the session."
   (interactive "P")
+  (if (noema-md-bridge-pane-p)
+      ;; The page owns the cursor: it reports its line as a one-line range.
+      (noema-md-bridge-request "agent" "line")
+    (noema-context--send-at-point pick)))
+
+(defun noema-context--send-at-point (pick)
+  "Send point's location in this file buffer to a session.
+PICK is as for `noema-context-send-at-point'."
   ;; Read point before anything else: choosing a session can start one and
   ;; show its buffer, which would move `point' out from under us.
   (let* ((file (or (noema-context--buffer-file (current-buffer))

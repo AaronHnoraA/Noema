@@ -177,6 +177,7 @@ import type { CursorPosition, NoteSummary, SnippetSummary } from "./types.ts";
 import { createVimLite, type VimLiteKey, type VimLiteMode } from "./vim-lite.ts";
 import { ceilCommandGeneratedId, ceilLanguageForKernel } from "../src/cm6/extensions/visual/widgets/ceil-shared.ts";
 import {
+  CEIL_READONLY_TEXT_SELECTOR,
   getOrgEnvBlockIdentities,
   orgEnvBlockIdentityAtPosition,
   orgEnvBlockIdentityPosition,
@@ -198,6 +199,7 @@ import {
   handleXwidgetControlBeforeInput,
   handleXwidgetControlKeydown,
   handleXwidgetEmacsKeydown,
+  claimsXwidgetEmacsKeyEarly,
   handleXwidgetHistoryKeydown,
   handleXwidgetMathBeforeInput,
   handleXwidgetMathKeydown,
@@ -828,9 +830,13 @@ selectionTool.innerHTML = `
   <button type="button" data-selection-command="link" title="Link">@</button>
   <span aria-hidden="true"></span>
   <button type="button" data-selection-command="copy" title="Copy">Copy</button>
-  <button type="button" data-selection-command="send-to-agent" title="Send selected lines to an Emacs agent">Agent</button>
+  <button type="button" data-selection-command="send-to-agent" data-emacs-only title="Ask an agent session about the selection (C-c A v)">Agent</button>
+  <button type="button" data-selection-command="ai-rewrite" data-emacs-only title="Rewrite the selection with gptel in Emacs, reviewed as a diff (C-c A r)">Rewrite</button>
   <button type="button" data-selection-command="more" title="More actions">...</button>
   <div class="aaronnote-selection-more" data-selection-more hidden>
+    <button type="button" data-selection-command="ai-context" data-emacs-only>Add to AI context (C-c A .)</button>
+    <button type="button" data-selection-command="ai-compose" data-emacs-only>Ask in a gptel compose buffer (C-c A c)</button>
+    <button type="button" data-selection-command="emacs-source" data-emacs-only>Select in the Emacs source buffer (C-c A e)</button>
     <button type="button" data-selection-command="insert-roam-idlink">Insert roam idlink...</button>
   </div>
   <form class="aaronnote-revision-form" data-revision-form hidden>
@@ -844,7 +850,9 @@ selectionTool.innerHTML = `
 `;
 selectionTool.hidden = true;
 document.body.appendChild(selectionTool);
-selectionTool.querySelector<HTMLButtonElement>("[data-selection-command='send-to-agent']")!.hidden = !rendererClient;
+for (const button of selectionTool.querySelectorAll<HTMLButtonElement>("[data-emacs-only]")) {
+  button.hidden = !rendererClient;
+}
 
 const windowHint = document.createElement("div");
 windowHint.className = "aaronnote-window-hint";
@@ -7262,7 +7270,25 @@ function closeFindPanel(): void {
   editor.focus();
 }
 
+/** A non-empty DOM selection inside `@@cell` output or source text, if any. */
+function readOnlyOutputSelectionText(): string {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return "";
+  const anchor = selection.anchorNode;
+  const element = anchor instanceof Element ? anchor : anchor?.parentElement;
+  if (!element?.closest(CEIL_READONLY_TEXT_SELECTOR)) return "";
+  return selection.toString();
+}
+
 async function copyEditorSelection(cut = false): Promise<boolean> {
+  // Output text is not document text: copy exactly what is selected there,
+  // and never let a cut remove document source for it.
+  const outputText = readOnlyOutputSelectionText();
+  if (outputText) {
+    const copied = await writeSystemClipboard(outputText);
+    setStatus(copied ? "Output selection copied" : "Copy failed");
+    return copied;
+  }
   const active = activeEditorSelection();
   let text = active ? active.text() : "";
   if (!text) {
@@ -11074,6 +11100,10 @@ function updateSelectionTool(active = activeEditorSelection()): void {
 }
 
 async function copyActiveSelection(): Promise<void> {
+  if (readOnlyOutputSelectionText()) {
+    await copyEditorSelection();
+    return;
+  }
   const active = activeEditorSelection();
   if (!active) return;
   const copied = await writeSystemClipboard(active.text());
@@ -11081,7 +11111,13 @@ async function copyActiveSelection(): Promise<void> {
   closeSelectionTool();
 }
 
-async function sendSelectionToAgent(): Promise<void> {
+type EmacsSelectionAction = "agent" | "context" | "rewrite" | "compose" | "source";
+type EmacsSelectionScope = "selection" | "line" | "any" | "document";
+const EMACS_SELECTION_ACTIONS = new Set<EmacsSelectionAction>(["agent", "context", "rewrite", "compose", "source"]);
+const EMACS_SELECTION_SCOPES = new Set<EmacsSelectionScope>(["selection", "line", "any", "document"]);
+
+/** Source range of the current selection, including a native DOM selection. */
+function editorSourceSelectionRange(): { from: number; to: number } {
   const selection = editor.getSelection();
   let from = Math.min(selection.from, selection.to);
   let to = Math.max(selection.from, selection.to);
@@ -11098,13 +11134,46 @@ async function sendSelectionToAgent(): Promise<void> {
       } catch { /* A rendered widget has no mappable source selection. */ }
     }
   }
-  if (!currentFile || !rendererClient || from === to) {
-    setStatus("Select note text to send to an agent");
+  return { from, to };
+}
+
+/** 1-based line and code-point column of source offset POS (Emacs counts characters). */
+function emacsSourcePosition(pos: number): { line: number; column: number } {
+  const line = editor.view.state.doc.lineAt(pos);
+  return { line: line.number, column: [...line.text.slice(0, pos - line.from)].length };
+}
+
+/**
+ * Save, then hand the current selection (or line, or whole note) to Emacs.
+ *
+ * The page owns the live document and selection, so Emacs-side tools -- the
+ * agent session picker, gptel context and rewrite, the source buffer -- work on
+ * the saved file at the exact range reported here.  Emacs never has to wait for
+ * the page inside a command.
+ */
+async function sendSelectionToEmacs(
+  action: EmacsSelectionAction = "agent",
+  scope: EmacsSelectionScope = "selection",
+): Promise<void> {
+  const doc = editor.view.state.doc;
+  let { from, to } = editorSourceSelectionRange();
+  if (scope === "document" || (scope === "any" && from === to)) {
+    scope = "document";
+    from = 0;
+    to = doc.length;
+  } else if (from === to && scope === "line") {
+    const line = doc.lineAt(editor.view.state.selection.main.head);
+    from = line.from;
+    to = line.to;
+  }
+  if (!currentFile || !rendererClient || (from === to && scope !== "document")) {
+    setStatus(scope === "line" ? "Place the cursor in the note first" : "Select note text first");
     return;
   }
-  const doc = editor.view.state.doc;
   const lineStart = doc.lineAt(from).number;
   const lineEnd = doc.lineAt(Math.max(from, to - 1)).number;
+  const start = emacsSourcePosition(from);
+  const end = emacsSourcePosition(to);
   const file = currentFile;
   try {
     await save();
@@ -11112,17 +11181,40 @@ async function sendSelectionToAgent(): Promise<void> {
       setStatus("Save the note before sending its selection");
       return;
     }
-    await api.emacs.sendSelection({ client: rendererClient, file, lineStart, lineEnd });
+    await api.emacs.sendSelection({
+      client: rendererClient,
+      file,
+      lineStart,
+      lineEnd,
+      action,
+      scope,
+      fromLine: start.line,
+      fromColumn: start.column,
+      toLine: end.line,
+      toColumn: end.column,
+    });
     closeSelectionTool();
-    setStatus(`Selected lines ${lineStart}–${lineEnd} sent to Emacs`);
+    const what = scope === "document" ? "Note" : `Lines ${lineStart}–${lineEnd}`;
+    setStatus(`${what} sent to Emacs (${action})`);
   } catch (error) {
-    setStatus(error instanceof Error ? error.message : "Send selection to agent failed");
+    setStatus(error instanceof Error ? error.message : "Send selection to Emacs failed");
   }
+}
+
+async function sendSelectionToAgent(): Promise<void> {
+  await sendSelectionToEmacs("agent", "selection");
 }
 
 function runSelectionCommand(command: string): void {
   if (command === "send-to-agent") {
     void sendSelectionToAgent();
+    return;
+  }
+  if (command === "ai-rewrite" || command === "ai-context" || command === "ai-compose" || command === "emacs-source") {
+    const action: EmacsSelectionAction = command === "ai-rewrite" ? "rewrite"
+      : command === "ai-context" ? "context"
+        : command === "ai-compose" ? "compose" : "source";
+    void sendSelectionToEmacs(action, "selection");
     return;
   }
   if (command === "copy") {
@@ -11506,6 +11598,17 @@ function runHostCommand(detail: unknown): boolean {
     case "send-selection-to-agent":
       void sendSelectionToAgent();
       return true;
+    case "emacs-selection": {
+      const request = body as { action?: unknown; scope?: unknown };
+      const action = String(request.action || "agent") as EmacsSelectionAction;
+      const scope = String(request.scope || "selection") as EmacsSelectionScope;
+      if (!EMACS_SELECTION_ACTIONS.has(action) || !EMACS_SELECTION_SCOPES.has(scope)) {
+        setStatus(`Unknown Emacs selection request: ${action}/${scope}`);
+        return true;
+      }
+      void sendSelectionToEmacs(action, scope);
+      return true;
+    }
     case "trash-current-note":
     case "delete-current-note":
       if (rejectReadOnlyAction("Read-only pane")) return true;
@@ -11525,6 +11628,45 @@ function runHostCommand(detail: unknown): boolean {
     case "refresh":
     case "reload":
       void reloadCurrentFilePreservingCursor({ preserveView: true });
+      return true;
+    // Explicit "take the file on disk", e.g. after an agent edited it.  Unlike
+    // `refresh` it never saves this pane's draft over the newer file: a pane
+    // with unsaved text refuses unless asked to discard it.
+    case "refresh-file": {
+      if (!currentReadOnly && revision !== savedRevision) {
+        if (String(body.value || "") !== "discard") {
+          setStatus("Unsaved edits in this pane; refresh-file with C-u discards them");
+          return true;
+        }
+        savedRevision = revision;
+      }
+      void reloadCurrentFilePreservingCursor({ preserveView: true });
+      return true;
+    }
+    // Emacs saved this file (a bridged source buffer, an accepted rewrite):
+    // reload at once when this pane has nothing unsaved, else keep the draft
+    // and let the normal external-save rule decide on the next focus.
+    case "reload-if-clean": {
+      const savedFile = String(body.file || "");
+      if (!currentFile || (savedFile && savedFile !== currentFile)) return true;
+      pendingExternalSave = { file: currentFile, mtimeMs: 0 };
+      void refreshPendingExternalSaveOnFocus();
+      return true;
+    }
+    case "goto-line": {
+      const doc = editor.view.state.doc;
+      const number = Math.min(Math.max(1, Math.trunc(Number(body.value) || 1)), doc.lines);
+      pushNavigationBackLocation();
+      editor.view.dispatch({
+        selection: { anchor: doc.line(number).from },
+        scrollIntoView: true,
+      });
+      editor.focus();
+      return true;
+    }
+    case "select-all":
+      editor.focus();
+      editor.view.dispatch({ selection: { anchor: 0, head: editor.view.state.doc.length } });
       return true;
     case "prose-check":
     case "spell-check":
@@ -11876,6 +12018,15 @@ function eventTargetsNativeWidgetInput(target: EventTarget | null): boolean {
       : null;
   return Boolean(element?.closest("[data-aaronnote-vim='native']"));
 }
+
+// Emacs host chords must reach the gate before CM6's own keymap, which binds
+// Emacs-style Ctrl/Option keys on macOS; see `claimsXwidgetEmacsKeyEarly`.
+// Everything else keeps the ordering of the bubble-phase handler below.
+window.addEventListener("keydown", (event) => {
+  if (replayingHostKey || serverReaderMode) return;
+  if (!claimsXwidgetEmacsKeyEarly(event, editor.view.dom)) return;
+  handleXwidgetEmacsKeydown(event, { client: () => currentClient });
+}, { capture: true });
 
 document.addEventListener("keydown", (event) => {
   if (handleXwidgetMathKeydown(event, {

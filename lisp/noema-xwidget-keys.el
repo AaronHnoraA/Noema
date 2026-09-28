@@ -128,7 +128,7 @@
 
 (defun my/noema-xwidget-recover-key (event)
   "Deliver EVENT after a Noema xwidget pane has dropped edit focus."
-  (interactive "e")
+  (interactive (list last-command-event))
   (when-let* ((detail (my/noema--xwidget-recovery-detail event)))
     (run-at-time 0 nil #'my/noema--forward-recovery-key
                  (current-buffer) detail)
@@ -540,17 +540,17 @@ there is nothing to pass on."
 
 (defun my/noema-xwidget-undo (event)
   "Route Command-z / Meta-z from Noema xwidget to web undo."
-  (interactive "e")
+  (interactive (list last-command-event))
   (my/noema--xwidget-editor-command event "undo"))
 
 (defun my/noema-xwidget-redo (event)
   "Route Command-Shift-z / Meta-Shift-z from Noema xwidget to web redo."
-  (interactive "e")
+  (interactive (list last-command-event))
   (my/noema--xwidget-editor-command event "redo"))
 
 (defun my/noema-xwidget-shift-tab (event)
   "Route Shift-Tab to Noema in xwidget without losing the Shift modifier."
-  (interactive "e")
+  (interactive (list last-command-event))
   (my/noema--xwidget-editor-command
    event
    "key"
@@ -569,7 +569,7 @@ there is nothing to pass on."
 
 (defun my/noema-xwidget-copy (event)
   "Route Command-c / Meta-c from a Noema xwidget to the page's copy."
-  (interactive "e")
+  (interactive (list last-command-event))
   (my/noema--xwidget-editor-command event "copy"))
 
 (defun my/noema-xwidget-cut (&optional event)
@@ -582,8 +582,93 @@ can be run by name until a key is chosen for it."
 
 (defun my/noema-xwidget-paste (event)
   "Route Command-v / Meta-v from a Noema xwidget to the page's paste."
-  (interactive "e")
+  (interactive (list last-command-event))
   (my/noema--xwidget-editor-command event "paste"))
+
+;; `(interactive "e")' demands a parameterized (mouse-style) event, so every
+;; keyboard binding of the commands above used to signal "must be bound to an
+;; event with parameters" -- Cmd-C/V/Z never reached the page.  They read
+;; `last-command-event' instead, which is also what the pass-through needs.
+
+;;;; Pane commands: Emacs text commands, performed by the page
+;;
+;; The placeholder buffer has no text, so an Emacs command that reads or edits
+;; "the buffer" does nothing there.  `my/noema-keys-mode-map' remaps the common
+;; ones onto these, which ask the page to do the same thing.
+
+(defun my/noema-refresh-file (&optional discard)
+  "Reload this Noema pane's note from disk, e.g. after an agent edited it.
+Unlike a plain refresh this never writes the pane's draft over the file.  A
+pane with unsaved edits refuses; with prefix argument DISCARD it drops them."
+  (interactive "P")
+  (my/noema-command "refresh-file"
+                    (when discard '((value . "discard")))))
+
+(defun my/noema-outline ()
+  "Toggle the Noema page's live outline."
+  (interactive)
+  (my/noema-command "toggle-toc"))
+
+(defun my/noema--pane-headings (file)
+  "Return (LABEL . LINE) for each ATX heading of FILE on disk.
+Fenced code blocks are skipped.  The page autosaves, so disk trails the page
+by at most its autosave delay."
+  (with-temp-buffer
+    (insert-file-contents file)
+    (goto-char (point-min))
+    (let (headings fence)
+      (while (not (eobp))
+        (cond
+         ((looking-at "^[ \t]*\\(```\\|~~~\\)")
+          (setq fence (not fence)))
+         ((and (not fence) (looking-at "^\\(#\\{1,6\\}\\)[ \t]+\\(.*?\\)[ \t#]*$"))
+          (push (cons (concat (make-string (* 2 (1- (length (match-string 1)))) ?\s)
+                              (match-string 2))
+                      (line-number-at-pos))
+                headings)))
+        (forward-line 1))
+      (nreverse headings))))
+
+(defun my/noema-goto-heading ()
+  "Jump the Noema page to a heading chosen in the minibuffer."
+  (interactive)
+  (let* ((file (or my/noema-buffer-file-name
+                   (user-error "This Noema pane shows no file")))
+         (headings (or (my/noema--pane-headings file)
+                       (user-error "No headings in %s" (file-name-nondirectory file))))
+         (label (completing-read "Heading: "
+                                 (lambda (string predicate action)
+                                   (if (eq action 'metadata)
+                                       '(metadata (display-sort-function . identity))
+                                     (complete-with-action action headings string predicate)))
+                                 nil t)))
+    (my/noema-command "goto-line"
+                      `((value . ,(cdr (assoc label headings)))))))
+
+(defun my/noema-find ()
+  "Open the Noema page's find panel."
+  (interactive)
+  (my/noema-command "find"))
+
+(defun my/noema-select-all ()
+  "Select the whole note in the Noema page."
+  (interactive)
+  (my/noema-command "select-all"))
+
+(defun my/noema-pane-copy ()
+  "Copy the Noema page's selection (a Jupyter output selection included)."
+  (interactive)
+  (my/noema-xwidget-copy last-command-event))
+
+(defun my/noema-pane-paste ()
+  "Paste into the Noema page."
+  (interactive)
+  (my/noema-xwidget-paste last-command-event))
+
+(defun my/noema-pane-cut ()
+  "Cut the Noema page's selection."
+  (interactive)
+  (my/noema-xwidget-cut last-command-event))
 
 (defun my/noema--install-xwidget-keys ()
   "Install Noema's xwidget key routing on the shared xwidget keymaps.

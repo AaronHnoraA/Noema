@@ -3391,6 +3391,16 @@ body.has-diagram-fullscreen {
   overflow-anchor: none;
 }
 
+/* Cell output and source are read-only page text: always selectable, even
+   inside CM6's non-editable widget island. */
+.cm-editor .cm-ceil-output,
+.cm-editor .cm-ceil-source,
+.cm-ceil-output-popover-body {
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: text;
+}
+
 .cm-editor .cm-ceil-output-toolbar {
   display: flex;
   align-items: center;

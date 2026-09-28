@@ -55,19 +55,97 @@ SPEC is a list of (NAME . CONTENT) files created in it and bound to
               ((symbol-function 'my/noema-command)
                (lambda (command &optional detail) (setq sent (list command detail)))))
       (noema-context-send-region)
-      (should (equal sent '("send-selection-to-agent" nil))))))
+      (should (equal sent '("emacs-selection"
+                            ((action . "agent") (scope . "selection"))))))))
 
-(ert-deftest noema-context-browser-lines-use-shared-gptel-selection ()
-  "Browser line numbers become a normal gptel region before sending."
+(ert-deftest noema-context-region-send-carries-only-the-region ()
+  "Sending a region never drags along context gathered earlier."
+  (noema-context-tests--with-project '(("a.txt" . "alpha\nbravo\ncharlie\ndelta\n")
+                                       ("b.txt" . "other\n"))
+    (let ((buffer (find-file-noselect (alist-get "a.txt" files nil nil #'equal)))
+          sent)
+      (push buffer opened)
+      ;; Something already gathered in the shared selection.
+      (setq gptel-context (list (list (alist-get "b.txt" files nil nil #'equal))))
+      (cl-letf (((symbol-function 'noema-context--send)
+                 (lambda (&rest arguments)
+                   (setq sent (funcall (plist-get arguments :references) root nil)))))
+        (with-current-buffer buffer
+          (transient-mark-mode 1)
+          (goto-char (noema-context-tests--line-pos buffer 2))
+          (push-mark (noema-context-tests--line-pos buffer 4) t t)
+          (noema-context-send-region)))
+      (should (equal (mapcar #'noema-context--reference-line sent) '("a.txt:2-3")))
+      (should (= (length gptel-context) 1)))))
+
+(ert-deftest noema-context-always-asks-with-last-session-preselected ()
+  "Every send asks for the session; the project's last one is the default."
+  (let* ((noema-context-always-ask-session t)
+         (noema-context--last-session (make-hash-table :test #'equal))
+         (previous (generate-new-buffer " *noema-context-previous*"))
+         asked)
+    (unwind-protect
+        (cl-letf (((symbol-function 'noema-agent-acp-project-root) (lambda () "/p/"))
+                  ((symbol-function 'noema-agent-acp-agent-buffer-p) (lambda (_) t))
+                  ((symbol-function 'noema-sessions-read)
+                   (lambda (&rest arguments)
+                     (push (plist-get arguments :default) asked)
+                     previous)))
+          (puthash "/p/" previous noema-context--last-session)
+          (should (eq (noema-context--session) previous))
+          (should (eq (noema-context--session) previous))
+          (should (equal asked (list previous previous))))
+      (kill-buffer previous))))
+
+(ert-deftest noema-context-browser-lines-send-only-that-range ()
+  "Browser line numbers become exactly one region reference."
   (noema-context-tests--with-project '(("a.txt" . "alpha\nbravo\ncharlie\ndelta\n"))
     (let ((file (alist-get "a.txt" files nil nil #'equal))
           (sent nil))
       (cl-letf (((symbol-function 'noema-context--send)
-                 (lambda (&rest _) (setq sent (noema-context-references nil root)))))
+                 (lambda (&rest arguments)
+                   (setq sent (funcall (plist-get arguments :references) root nil)))))
         (noema-context-send-noema-selection file 2 3))
       (push (find-buffer-visiting file) opened)
       (should (= (length sent) 1))
       (should (equal (noema-context--reference-line (car sent)) "a.txt:2-3")))))
+
+
+;;;; ── Noema pane bridge ────────────────────────────────────────────────────
+
+(ert-deftest noema-md-bridge-exact-columns-select-characters ()
+  "A page range with columns maps to exactly those characters, CJK included."
+  (noema-context-tests--with-project '(("a.md" . "# 标题\nalpha 数学 beta\n"))
+    (let ((file (alist-get "a.md" files nil nil #'equal)))
+      (pcase-let ((`(,buffer ,begin . ,end)
+                   (noema-md-bridge-region
+                    file '(:from-line 2 :from-column 6 :to-line 2 :to-column 8))))
+        (push buffer opened)
+        (should (equal (with-current-buffer buffer
+                         (buffer-substring-no-properties begin end))
+                       "数学"))))))
+
+(ert-deftest noema-md-bridge-refuses-unsaved-emacs-edits ()
+  "The page's range is never applied over Emacs edits it cannot see."
+  (noema-context-tests--with-project '(("a.md" . "one\ntwo\n"))
+    (let* ((file (alist-get "a.md" files nil nil #'equal))
+           (buffer (find-file-noselect file)))
+      (push buffer opened)
+      (with-current-buffer buffer (goto-char (point-max)) (insert "three\n"))
+      (should-error (noema-md-bridge-region file '(:line-start 1 :line-end 1))
+                    :type 'user-error))))
+
+(ert-deftest noema-md-bridge-context-action-adds-region ()
+  "The context action adds exactly the reported range to gptel's selection."
+  (noema-context-tests--with-project '(("a.md" . "one\ntwo\nthree\n"))
+    (let ((file (alist-get "a.md" files nil nil #'equal)))
+      (pcase-let ((`(,buffer ,begin . ,end)
+                   (noema-md-bridge-region file '(:line-start 2 :line-end 2))))
+        (push buffer opened)
+        (noema-md-bridge-run "context" buffer begin end)
+        (should (equal (mapcar #'noema-context--reference-line
+                               (noema-context-references nil root))
+                       '("a.md:2-2")))))))
 
 
 ;;;; ── References ───────────────────────────────────────────────────────────
