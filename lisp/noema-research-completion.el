@@ -14,6 +14,7 @@
 (defvar noema-research-completion--files (make-hash-table :test #'equal))
 (defvar-local noema-research-completion--skill-resolution nil)
 (defvar-local noema-research-completion--skill-pairs nil)
+(defvar-local noema-research-completion--company-source nil)
 
 (defun noema-research-completion--skills ()
   "Reuse candidate metadata until the project resolution changes."
@@ -144,11 +145,34 @@
         ("file:" . "Project file") ("note:" . "Knowledge note id")
         ("artifact:" . "Artifact id")))))
 
+(defun noema-research-completion--directive-p ()
+  "Return non-nil when point is in a work block's control directive."
+  (and (derived-mode-p 'noema-research-mode)
+       (save-excursion (beginning-of-line) (looking-at "@@"))
+       (noema-research-completion--control-start)))
+
+(defun noema-research-company-backend (command &optional arg &rest args)
+  "Route control directives only to CAPF; use prose completion elsewhere.
+Company must not fall through to Yasnippet or dabbrev while the user types
+an `@@skill' id, including while its asynchronous candidate list is empty."
+  (if (eq command 'prefix)
+      (let ((source (if (noema-research-completion--directive-p)
+                        'company-capf 'company-dabbrev)))
+        (setq noema-research-completion--company-source source)
+        (apply source command arg args))
+    (when noema-research-completion--company-source
+      (apply noema-research-completion--company-source command arg args))))
+
+(defun noema-research-completion-setup ()
+  "Keep JuText directives and prose on separate Company completion routes."
+  (setq-local company-backends '(noema-research-company-backend))
+  (setq-local company-dabbrev-other-buffers nil)
+  (setq-local company-tooltip-align-annotations nil)
+  (setq-local company-tooltip-width-grow-only nil))
+
 (defun noema-research-completion-at-point ()
   "Complete directive names and values in a work block's control region."
-  (when (and (derived-mode-p 'noema-research-mode)
-             (save-excursion (beginning-of-line) (looking-at "@@"))
-             (noema-research-completion--control-start))
+  (when (noema-research-completion--directive-p)
     (let ((line (buffer-substring-no-properties (line-beginning-position) (point)))
           beg end name pairs names)
       (cond
@@ -178,11 +202,18 @@
                    (noema-research-completion--skills)))))))
       (when pairs
         (list beg end (mapcar #'car pairs)
-              :exclusive 'no :company-prefix-length t
+              :exclusive t :company-prefix-length t
+              :company-kind (lambda (_candidate)
+                              (pcase name
+                                ("skill" 'module)
+                                ("ctx" 'file)
+                                ("agent" 'function)
+                                ("session" 'variable)
+                                (_ 'keyword)))
               :annotation-function (lambda (candidate)
                                      (concat "  " (truncate-string-to-width
                                                    (replace-regexp-in-string "[\n\r]+" " "
-                                                                             (or (cdr (assoc candidate pairs)) "")) 100)))
+                                                                             (or (cdr (assoc candidate pairs)) "")) 56)))
               :company-doc-buffer
               (lambda (candidate)
                 (with-current-buffer (get-buffer-create " *Noema completion help*")

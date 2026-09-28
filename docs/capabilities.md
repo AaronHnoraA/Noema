@@ -33,6 +33,12 @@ that name and source then appear in provenance:
 }
 ```
 
+JuText keeps its `@@skill` completion on this resolver's selectable project
+records. The manager also shows invalid, disabled and unavailable records for
+repair; those cannot be inserted as a runnable Skill. While the asynchronous
+resolution is pending, Company does not substitute prose or Yasnippet entries
+for Skill ids. Its prose completion and manual snippets remain separate.
+
 Every definition has a stable id. A Skill's `name` frontmatter is its id, with
 the directory name retained as a reference alias. An MCP uses its `id`.
 

@@ -106,6 +106,89 @@
     (setq-local completion-at-point-functions '(noema-research-completion-at-point))
     (should (equal (company-capf 'prefix) '("" "" t)))))
 
+(ert-deftest noema-completion-company-routes-skill-ids-without-snippets ()
+  (skip-unless (require 'company-capf nil t))
+  (let ((noema-capability--cache (make-hash-table :test #'equal)))
+    (dolist (resolution-present '(nil t))
+      (clrhash noema-capability--cache)
+      (when resolution-present
+        (puthash "/project/"
+                 '(:resolution ((skills . [((id . "lean-proof") (selectable . t)
+                                            (description . "Check proofs"))
+                                          ((id . "lean4") (selectable . t)
+                                           (description . "Lean tools"))])))
+                 noema-capability--cache))
+      (noema-completion-test--buffer "%% work Review\n@@skill(le"
+        (setq-local completion-at-point-functions '(noema-research-completion-at-point))
+        (noema-research-completion-setup)
+        (should (equal company-backends '(noema-research-company-backend)))
+        (cl-letf (((symbol-function 'company-yasnippet)
+                   (lambda (&rest _) (ert-fail "A snippet leaked into @@skill")))
+                  ((symbol-function 'company-dabbrev)
+                   (lambda (&rest _) (ert-fail "Prose completion leaked into @@skill"))))
+          (should (equal (noema-research-company-backend 'prefix)
+                         (and resolution-present '("le" "" t))))
+          (should (eq noema-research-completion--company-source 'company-capf))
+          (when resolution-present
+            (should (equal (noema-research-company-backend 'candidates "le" "")
+                           '("lean-proof" "lean4")))))))))
+
+(ert-deftest noema-completion-prose-uses-only-prose-backend ()
+  (skip-unless (require 'company nil t))
+  (noema-completion-test--buffer "%% work Review\nSummary of le"
+    (noema-research-completion-setup)
+    (noema-research-company-backend 'prefix)
+    (should (eq noema-research-completion--company-source 'company-dabbrev))))
+
+(ert-deftest noema-completion-font-lock-colors-work-controls-only ()
+  (with-temp-buffer
+    (insert "%% work Review\n@@skill(lean4)\n@@skill(lean\nPrompt\n%% note Example\n@@skill(lean4)\n")
+    (delay-mode-hooks (noema-research-mode))
+    (font-lock-ensure)
+    (goto-char (point-min))
+    (search-forward "@@skill(lean4)")
+    (search-backward "lean4")
+    (should (eq (get-text-property (point) 'face)
+                'noema-research-control-value-face))
+    (search-forward "@@skill(lean")
+    (search-backward "lean")
+    (should (eq (get-text-property (point) 'face)
+                'noema-research-control-value-face))
+    (search-forward "@@skill(lean4)")
+    (search-backward "lean4")
+    (should-not (eq (get-text-property (point) 'face)
+                    'noema-research-control-value-face))))
+
+(ert-deftest noema-research-flymake-maps-validation-to-cell-header ()
+  (let* ((document (noema-research-create-document "Diagnostics"))
+         (id (noema-research-create-work-node document "work" "Review"))
+         (node (noema-research-find-work-node document id)))
+    (puthash "state" "unsupported" node)
+    (with-temp-buffer
+      (setq-local major-mode 'noema-research-mode
+                  noema-research--document document)
+      (noema-research--render document)
+      (let (reported)
+        (noema-research-flymake (lambda (diagnostics) (setq reported diagnostics)))
+        (should (seq-some
+                 (lambda (diagnostic)
+                   (and (eq (flymake-diagnostic-type diagnostic) :error)
+                        (string-match-p "unsupported work state"
+                                        (flymake-diagnostic-text diagnostic))
+                        (= (flymake-diagnostic-beg diagnostic) (point-min))))
+                 reported))))))
+
+(ert-deftest noema-research-mode-installs-scoped-editor-tools ()
+  (with-temp-buffer
+    (insert (noema-research-serialize
+             (noema-research-create-document "Editor tools")))
+    (noema-research-mode)
+    (should (equal company-backends '(noema-research-company-backend)))
+    (should (memq #'noema-research-completion-at-point
+                  completion-at-point-functions))
+    (should (memq #'noema-research-flymake flymake-diagnostic-functions))
+    (should flymake-mode)))
+
 (ert-deftest noema-completion-file-request-failure-does-not-stick-pending ()
   (let ((noema-research-completion--files (make-hash-table :test #'equal)))
     (noema-completion-test--buffer "%% work W\n@@ctx(file:"

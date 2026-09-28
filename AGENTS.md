@@ -210,6 +210,13 @@ taxes every Run, and over ~8 KiB the resolver says so. Keep the rules a
 mechanism now carries *out* of the Skill; a Skill that repeats what the system
 enforces gives two sources of truth for one rule.
 
+JuText `@@skill` candidates come only from the project's effective selectable
+Skill records. Its Company backend keeps directive completion separate from
+prose and manual Yasnippet templates, including while the capability request
+is pending. `.noema` has no language server; Flymake projects the existing
+document validator onto cell headers. RaTeX previews math in JuText prose,
+excluding control lines and fenced or inline code.
+
 ## Two MCP surfaces
 
 The knowledge base and the AI workflow are separate capabilities on separate

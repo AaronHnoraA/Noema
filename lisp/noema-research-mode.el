@@ -29,6 +29,7 @@
 (require 'noema-research)
 (require 'noema-api)
 (require 'noema-research-completion)
+(require 'flymake)
 
 (declare-function my/noema-api-call "init-aaronnote" (channel args callback &optional timeout))
 (declare-function my/noema--ensure-server "init-aaronnote" (&optional callback))
@@ -118,6 +119,14 @@ The DAG never follows the cursor.  Command-Shift-Return (`s-S-<return>' or
   '((t :inherit shadow :slant italic))
   "Face for header decorations.")
 
+(defface noema-research-control-face
+  '((t :inherit font-lock-preprocessor-face :weight bold))
+  "Face for a work block control directive.")
+
+(defface noema-research-control-value-face
+  '((t :inherit font-lock-string-face))
+  "Face for the value of a work block control directive.")
+
 (defface noema-research-claim-warning-face
   '((t :inherit warning))
   "Face for the marker on a block whose claim the document does not support.")
@@ -180,13 +189,30 @@ apart from structure this buffer deleted.")
   '("question" "work" "checkpoint" "note")
   "Words with a structural meaning at the start of a header.")
 
+(defun noema-research--font-lock-control (limit)
+  "Find the next valid work control line before LIMIT."
+  (catch 'found
+    (while (re-search-forward
+            "^@@\\(agent\\|session\\|ctx\\|skill\\)(\\([^)\n]*\\)\\(?:)\\)?[ \t]*$"
+            limit t)
+      (let ((end (match-end 0))
+            (beg (match-beginning 0)))
+        (when (save-match-data
+                (save-excursion
+                  (goto-char beg)
+                  (noema-research-completion--control-start)))
+          (goto-char end)
+          (throw 'found t))))
+    nil))
+
 (defconst noema-research--font-lock-keywords
   '(("^%%[ \t]+question\\_>.*$" . 'noema-research-question-face)
     ("^%%[ \t]+work\\_>.*$" . 'noema-research-work-face)
     ("^%%[ \t]+checkpoint\\_>.*$" . 'noema-research-checkpoint-face)
     ("^%%\\(?:[ \t].*\\)?$" . 'noema-research-note-face)
-    ("^@@\\(?:agent\\|session\\|ctx\\|skill\\)([^)\n]+)[ \t]*$"
-     . 'font-lock-preprocessor-face)
+    (noema-research--font-lock-control
+     (0 'noema-research-control-face)
+     (2 'noema-research-control-value-face t))
     ("^@@\\(?:todo\\|clock\\)\\(?:([^)]*)\\)?[ \t]+\\[.*\\]" . 'font-lock-preprocessor-face)
     ("^[ \t]+\\(?:sche\\|ddl\\|end\\|prio\\|effort\\|tags\\|context\\|project\\|status\\|done\\|progress\\|clock\\):"
      . 'font-lock-keyword-face))
@@ -2756,6 +2782,34 @@ Return ID."
   (setq-local buffer-file-coding-system 'utf-8-unix)
   (setq-local revert-buffer-function #'noema-research--revert))
 
+(defun noema-research-flymake (report-fn &rest _args)
+  "Report the document validator's errors and warnings on their cell headers."
+  (condition-case err
+      (let* ((document (noema-research-mode--sync))
+             (validation (noema-research-validate document))
+             (entries (noema-research--scan))
+             diagnostics)
+        (dolist (group '((:errors . :error) (:warnings . :warning)))
+          (dolist (issue (plist-get validation (car group)))
+            (let* ((entry (seq-find
+                           (lambda (item)
+                             (or (equal (plist-get item :id) (car issue))
+                                 (equal (plist-get item :work-node-id) (car issue))))
+                           entries))
+                   (beg (or (plist-get entry :header-beg) (point-min)))
+                   (end (or (plist-get entry :header-end)
+                            (min (point-max) (1+ beg)))))
+              (push (flymake-make-diagnostic
+                     (current-buffer) beg end (cdr group) (cdr issue))
+                    diagnostics))))
+        (funcall report-fn (nreverse diagnostics)))
+    (error
+     (funcall report-fn
+              (list (flymake-make-diagnostic
+                     (current-buffer) (point-min)
+                     (min (point-max) (1+ (point-min)))
+                     :error (error-message-string err)))))))
+
 (defun noema-research--initialize-document ()
   "Initialize a real JuText editing buffer after its mode hooks are enabled.
 Preview consumers such as Company/Yasnippet use `delay-mode-hooks' to
@@ -2763,6 +2817,7 @@ borrow syntax highlighting.  They must not load the visited document,
 register file watches, start agents, or rearrange the workspace."
   (add-hook 'completion-at-point-functions
             #'noema-research-completion-at-point nil t)
+  (noema-research-completion-setup)
   (add-hook 'kill-buffer-hook #'noema-research-completion--cancel nil t)
   (noema-research-completion-refresh)
   (add-hook 'write-contents-functions #'noema-research-mode--write-contents nil t)
@@ -2798,7 +2853,9 @@ register file watches, start agents, or rearrange the workspace."
       (when (and (or noema-research-open-output-on-visit
                      noema-research-open-graph-on-visit)
                  (not noninteractive))
-        (noema-research--schedule-default-output)))))
+        (noema-research--schedule-default-output))))
+  (add-hook 'flymake-diagnostic-functions #'noema-research-flymake nil t)
+  (flymake-mode 1))
 
 ;; Run before ordinary user hooks, but respect syntax-only mode activation.
 (add-hook 'noema-research-mode-hook #'noema-research--initialize-document -100)
