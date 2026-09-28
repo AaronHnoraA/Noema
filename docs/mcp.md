@@ -45,6 +45,23 @@ same Noema index used by Emacs. The MCP endpoint remains
 loopback-only and uses the kernel's normal authentication, administrator, and
 read-only checks.
 
+## Public Server mode MCP
+
+Server mode exposes a separate, unauthenticated Streamable HTTP endpoint at
+`https://wiki.pwo101.top/mcp` (or `/mcp` on another Server mode host). It reads
+the same published catalog as the public Wiki. It provides four read-only
+tools: `search_notes`, `list_notes`, `read_note` and `list_tags`. A note path is
+the public path returned by search or list, such as
+`public/Public-README/example.md`. Hidden pages and private repositories are
+absent from this catalog. Server mode does not start the Go kernel or expose
+its writable `/mcp/research` and `/mcp/coordinator` surfaces.
+
+From AaronEmacs, `make noema-server-deploy` builds, uploads, restarts and
+checks the configured remote service. The ignored local files
+`server-config/runtime.json` and `server-config/deploy.json` in the Noema tree
+hold the site and SSH settings; initialize examples with
+`make noema-server-config-init`.
+
 ## Project MCP selection
 
 The supervised Noema endpoint is also the built-in `noema` capability. Projects

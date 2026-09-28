@@ -258,6 +258,7 @@ import { jupyterDefaultsFromEnv } from "./server/lib/jupyter-defaults.mjs";
 import { sweepGlobalOrphanKernels } from "./server/jupyter/kernel-registry.mjs";
 import { installJupyterKernelWebSocket } from "./server/lib/jupyter-kernel-ws.mjs";
 import { readServerRuntimeConfig } from "./server/lib/server-config.mjs";
+import { handleServerPublicMcp } from "./server/lib/server-public-mcp.mjs";
 import {
   readServerRepositoryState,
   syncServerRepositories,
@@ -3510,6 +3511,11 @@ const server = createServer(async (req, res) => {
 
     if (shuttingDown && url.pathname !== "/events") {
       sendJson(res, 503, { ok: false, message: "Noema host is shutting down" });
+      return;
+    }
+
+    if (hostMode === "server" && url.pathname === "/mcp") {
+      await handleServerPublicMcp(req, res, currentServerCatalog);
       return;
     }
 

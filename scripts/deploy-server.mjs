@@ -70,7 +70,7 @@ const temporary = await mkdtemp(join(tmpdir(), "noema-server-deploy-"));
 let previousRelease = "";
 
 const unit = `[Unit]
-Description=Noema read-only Markdown server
+Description=Noema public Wiki and read-only MCP server
 After=network-online.target
 Wants=network-online.target
 
@@ -109,14 +109,14 @@ try {
   const healthHost = runtime.listen.host === "0.0.0.0" || runtime.listen.host === "::"
     ? "127.0.0.1"
     : runtime.listen.host;
-  const healthProgram = `(async()=>{let last;for(let i=0;i<20;i++){try{const r=await fetch('http://${healthHost}:${runtime.listen.port}/health');const j=await r.json();if(r.ok&&j.hostMode==='server'&&j.ok){console.log(JSON.stringify(j));return}last=new Error(JSON.stringify(j))}catch(e){last=e}await new Promise(r=>setTimeout(r,500))}throw last||new Error('health timeout')})()`;
+  const healthProgram = `(async()=>{let last;const base='http://${healthHost}:${runtime.listen.port}';for(let i=0;i<20;i++){try{const r=await fetch(base+'/health');const j=await r.json();if(r.ok&&j.hostMode==='server'&&j.ok){const m=await fetch(base+'/mcp',{method:'POST',headers:{'content-type':'application/json','accept':'application/json, text/event-stream'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2025-06-18',capabilities:{},clientInfo:{name:'noema-deploy',version:'1.0.0'}}})});const v=await m.json();if(!m.ok||!v.result?.capabilities?.tools)throw new Error('MCP initialization failed: '+JSON.stringify(v));console.log(JSON.stringify({health:j,mcp:v.result.serverInfo}));return}last=new Error(JSON.stringify(j))}catch(e){last=e}await new Promise(r=>setTimeout(r,500))}throw last||new Error('health timeout')})()`;
   await ssh(deploy, `${remoteCommand(deploy.nodeBin, ["-e", healthProgram])}`, { timeout: 30_000 });
   const cleanup = await ssh(deploy, remoteCommand(deploy.nodeBin, [
     "-e",
     releaseCleanupProgram(deploy.remoteRoot, deploy.retainReleases),
   ]));
   process.stdout.write(`Release retention: ${String(cleanup.stdout || "").trim()}\n`);
-  process.stdout.write(`Deployed ${releaseId} and verified Server mode health.\n`);
+  process.stdout.write(`Deployed ${releaseId} and verified Server mode health and MCP.\n`);
 } catch (error) {
   if (previousRelease) {
     process.stderr.write(`Deployment failed; restoring ${previousRelease}.\n`);

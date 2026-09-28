@@ -292,7 +292,7 @@ It opens an Emacs workspace containing a v2 `.noema` WorkDocument, WorkNode DAG 
 
 ## Publishing reader
 
-The repository still contains a read-only server renderer for publishing Markdown. It is an output/publication surface, not a Noema control UI: authoring, Jupyter, permissions, agents, Proposals and Run control are denied. See `server-config/` and `docs/wiki-workspace.md` for that separately scoped service.
+The repository still contains a read-only server renderer for publishing Markdown. It is an output/publication surface, not a Noema control UI: authoring, Jupyter, permissions, agents, Proposals and Run control are denied. Server mode also exposes the published notes as an unauthenticated, read-only Streamable HTTP MCP endpoint at `/mcp`; it uses the same public catalog as the reader. See `server-config/`, `docs/mcp.md` and `docs/wiki-workspace.md` for that separately scoped service.
 
 ## Development map
 
