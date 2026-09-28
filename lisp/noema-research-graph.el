@@ -292,6 +292,9 @@ indicator, not an outline: view state is never encoded only in the drawing."
   (setq-local scroll-margin 0)
   (setq-local auto-hscroll-mode nil)
   (setq-local mwheel-coalesce-scroll-events nil)
+  ;; `revert-buffer' (and `refresh-file') reloads the notebook from disk --
+  ;; e.g. after an agent edited it -- and redraws.
+  (setq-local revert-buffer-function #'noema-research-graph--revert)
   (add-hook 'change-major-mode-hook #'noema-research-graph--retire nil t)
   (add-hook 'kill-buffer-hook #'noema-research-graph--retire nil t)
   ;; AaronEmacs uses Evil normal state in special modes.  Its minor-mode map
@@ -2037,6 +2040,16 @@ applied last.  A new selection or a new layout is scrolled into view."
   "Sync the source document and redraw the Graph Board."
   (interactive)
   (noema-research-graph--redraw t))
+
+(defun noema-research-graph--revert (&optional _ignore-auto noconfirm)
+  "Reload the source notebook from disk and redraw everything.
+The notebook's own revert asks before discarding unsaved edits, unless
+NOCONFIRM."
+  (let ((source noema-research-graph--source))
+    (when (buffer-live-p source)
+      (with-current-buffer source
+        (revert-buffer t noconfirm)))
+    (noema-research-graph-refresh-all)))
 
 (defun noema-research-graph-refresh-proposals ()
   "Refresh pending Proposal ghosts from the Noema authority."

@@ -1978,6 +1978,17 @@ async function apiEmacsKey(body) {
 async function apiEmacsSelection(body) {
   const client = String(body?.client || "").trim();
   const file = String(body?.file || "").trim();
+  const requestId = String(body?.requestId || "").slice(0, 128);
+  const failure = String(body?.error || "").slice(0, 500);
+  // The page answers an Emacs request even when it has no range to give, so
+  // the waiting command can say why instead of staying silent.
+  if (client && failure) {
+    gatewayNotify("aaronnote.event", {
+      type: "selection-to-agent",
+      payload: { client, file, requestId, error: failure, action: String(body?.action || "agent") },
+    });
+    return { ok: true };
+  }
   const lineStart = Number(body?.lineStart);
   const lineEnd = Number(body?.lineEnd);
   if (!client || !file || !Number.isSafeInteger(lineStart) || !Number.isSafeInteger(lineEnd)
@@ -1985,6 +1996,7 @@ async function apiEmacsSelection(body) {
     return { ok: false, message: "Invalid editor selection" };
   }
   const payload = { client, file, lineStart, lineEnd };
+  if (requestId) payload.requestId = requestId;
   // Optional: what Emacs should do with the range, and its exact character
   // bounds.  Absent fields keep the original "send these lines to an agent".
   const action = String(body?.action || "agent");

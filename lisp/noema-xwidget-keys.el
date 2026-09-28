@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'seq)
 (require 'subr-x)
 
 (defvar my/noema--app-buffer)
@@ -413,6 +414,71 @@ Noema and the target is a normal Emacs window, restore Emacs frame focus."
   "Exit Noema xwidget edit mode before Emacs handles forwarded keys."
   (my/noema--release-xwidget-input-buffer my/noema--app-buffer))
 
+(defvar my/noema--forwarded-command nil
+  "While a key forwarded from a Noema page runs: (SOURCE-WINDOW . SNAPSHOT).
+SNAPSHOT maps each window to the buffer it showed before the command.")
+
+(defconst my/noema--forwarded-command-patience 6
+  "Commands to wait for a forwarded command to settle before giving up.
+Prefix arguments and transient menus take several commands to finish.")
+
+(defvar my/noema--forwarded-command-countdown 0
+  "Commands left before `my/noema--after-forwarded-command' gives up.")
+
+(defun my/noema--window-snapshot ()
+  "Return (WINDOW . BUFFER) for every window of the selected frame."
+  (mapcar (lambda (window) (cons window (window-buffer window)))
+          (window-list nil 'no-minibuf)))
+
+(defun my/noema--forwarded-result-window (source snapshot)
+  "Return the ordinary window a forwarded command opened or changed, or nil.
+SOURCE is the Noema pane's window and SNAPSHOT the windows before the command.
+Internal buffers (a leading space) and Noema pages are never a result."
+  (let ((ordinary (lambda (window)
+                    (let ((buffer (window-buffer window)))
+                      (and (not (eq window source))
+                           (not (string-prefix-p " " (buffer-name buffer)))
+                           (not (my/noema--xwidget-buffer-p buffer)))))))
+    (if (funcall ordinary (selected-window))
+        (selected-window)
+      (seq-find (lambda (window)
+                  (and (funcall ordinary window)
+                       (not (eq (cdr (assq window snapshot)) (window-buffer window)))))
+                (window-list nil 'no-minibuf)))))
+
+(defun my/noema--after-forwarded-command ()
+  "Give the keyboard to what a command forwarded from a Noema page opened.
+A key sent from the page (M-x, C-c A ..., H-...) runs in Emacs; when it shows
+an agent session, a compose buffer, Treemacs, a terminal, ..., focus follows
+it there instead of returning to the page's editor.  Waits out a pending
+prefix argument, minibuffer or transient menu."
+  (cond
+   ;; Typing in the minibuffer (an M-x name, a prompt) is part of the same
+   ;; command and may take any number of keys.
+   ((active-minibuffer-window))
+   ((or prefix-arg (bound-and-true-p transient--prefix))
+    (when (<= (cl-decf my/noema--forwarded-command-countdown) 0)
+      (my/noema--forget-forwarded-command)))
+   (t
+    (pcase-let ((`(,source . ,snapshot) my/noema--forwarded-command))
+      (my/noema--forget-forwarded-command)
+      (when-let* ((window (my/noema--forwarded-result-window source snapshot)))
+        (when (and (window-live-p source)
+                   (my/noema--xwidget-buffer-p (window-buffer source)))
+          (my/noema--release-xwidget-input-buffer (window-buffer source)))
+        (my/noema--select-emacs-window window))))))
+
+(defun my/noema--forget-forwarded-command ()
+  "Stop following the last forwarded command."
+  (setq my/noema--forwarded-command nil)
+  (remove-hook 'post-command-hook #'my/noema--after-forwarded-command))
+
+(defun my/noema--follow-forwarded-command (source)
+  "Follow the next command's result on behalf of Noema pane window SOURCE."
+  (setq my/noema--forwarded-command (cons source (my/noema--window-snapshot))
+        my/noema--forwarded-command-countdown my/noema--forwarded-command-patience)
+  (add-hook 'post-command-hook #'my/noema--after-forwarded-command))
+
 (defun my/noema--queue-emacs-key (keys key-string)
   "Queue KEYS forwarded from Noema for Emacs' normal command loop.
 KEY-STRING is used only for diagnostics."
@@ -422,6 +488,7 @@ KEY-STRING is used only for diagnostics."
       (setq unread-command-events
             (nconc (listify-key-sequence keys)
                    unread-command-events))
+      (my/noema--follow-forwarded-command (selected-window))
       (run-at-time 0.05 nil #'my/noema--focus-forwarded-key-target
                    (selected-window)))
      (t

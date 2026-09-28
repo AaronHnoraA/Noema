@@ -11154,7 +11154,24 @@ function emacsSourcePosition(pos: number): { line: number; column: number } {
 async function sendSelectionToEmacs(
   action: EmacsSelectionAction = "agent",
   scope: EmacsSelectionScope = "selection",
+  requestId = "",
 ): Promise<void> {
+  // An Emacs command is waiting on this answer, and page statuses only reach
+  // its echo area as errors.  Every way out therefore answers Emacs: with the
+  // range, or with the reason there is none.
+  const fail = async (reason: string): Promise<void> => {
+    setStatus(reason);
+    if (!requestId || !rendererClient) return;
+    await api.emacs.sendSelection({
+      client: rendererClient,
+      file: currentFile || "",
+      lineStart: 1,
+      lineEnd: 1,
+      action,
+      requestId,
+      error: reason,
+    }).catch(() => {});
+  };
   const doc = editor.view.state.doc;
   let { from, to } = editorSourceSelectionRange();
   if (scope === "document" || (scope === "any" && from === to)) {
@@ -11166,8 +11183,14 @@ async function sendSelectionToEmacs(
     from = line.from;
     to = line.to;
   }
-  if (!currentFile || !rendererClient || (from === to && scope !== "document")) {
-    setStatus(scope === "line" ? "Place the cursor in the note first" : "Select note text first");
+  if (!currentFile || !rendererClient) {
+    await fail("This Noema pane has no saved note to send");
+    return;
+  }
+  if (from === to && scope !== "document") {
+    await fail(scope === "line"
+      ? "Place the cursor in the note first"
+      : "No selection in the Noema page; select text first (C-c A @ sends the cursor line)");
     return;
   }
   const lineStart = doc.lineAt(from).number;
@@ -11178,7 +11201,7 @@ async function sendSelectionToEmacs(
   try {
     await save();
     if (file !== currentFile || revision !== savedRevision) {
-      setStatus("Save the note before sending its selection");
+      await fail("The note could not be saved, so its selection was not sent");
       return;
     }
     await api.emacs.sendSelection({
@@ -11188,6 +11211,7 @@ async function sendSelectionToEmacs(
       lineEnd,
       action,
       scope,
+      requestId,
       fromLine: start.line,
       fromColumn: start.column,
       toLine: end.line,
@@ -11197,7 +11221,7 @@ async function sendSelectionToEmacs(
     const what = scope === "document" ? "Note" : `Lines ${lineStart}–${lineEnd}`;
     setStatus(`${what} sent to Emacs (${action})`);
   } catch (error) {
-    setStatus(error instanceof Error ? error.message : "Send selection to Emacs failed");
+    await fail(`Sending the selection to Emacs failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -11599,14 +11623,14 @@ function runHostCommand(detail: unknown): boolean {
       void sendSelectionToAgent();
       return true;
     case "emacs-selection": {
-      const request = body as { action?: unknown; scope?: unknown };
+      const request = body as { action?: unknown; scope?: unknown; requestId?: unknown };
       const action = String(request.action || "agent") as EmacsSelectionAction;
       const scope = String(request.scope || "selection") as EmacsSelectionScope;
       if (!EMACS_SELECTION_ACTIONS.has(action) || !EMACS_SELECTION_SCOPES.has(scope)) {
         setStatus(`Unknown Emacs selection request: ${action}/${scope}`);
         return true;
       }
-      void sendSelectionToEmacs(action, scope);
+      void sendSelectionToEmacs(action, scope, String(request.requestId || ""));
       return true;
     }
     case "trash-current-note":

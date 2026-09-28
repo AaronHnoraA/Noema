@@ -1288,6 +1288,10 @@ NOCONFIRM has the meaning documented by `revert-buffer'."
     (user-error "Revert cancelled"))
   (let ((line (line-number-at-pos)))
     (run-hooks 'before-revert-hook)
+    ;; Adopt the disk modtime first: reloading rewrites the buffer text, and
+    ;; with a stale modtime that first change asks "changed on disk; really
+    ;; edit?" -- the very change this revert is meant to take.
+    (set-visited-file-modtime)
     (noema-research--load (noema-research-read-file buffer-file-name)
                           (noema-research-file-revision buffer-file-name))
     (goto-char (point-min))

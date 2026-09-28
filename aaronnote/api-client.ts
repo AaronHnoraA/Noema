@@ -60,6 +60,10 @@ export type EmacsSelectionReport = {
   fromColumn?: number;
   toLine?: number;
   toColumn?: number;
+  /** Echoes the Emacs request this answers. */
+  requestId?: string;
+  /** Set instead of a usable range: why the page could not produce one. */
+  error?: string;
 };
 
 export type LanguageToolPerformanceProfile = "responsive" | "balanced" | "quiet";

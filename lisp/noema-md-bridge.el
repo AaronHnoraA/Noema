@@ -27,12 +27,16 @@
 (defvar my/noema-buffer-file-name)
 (defvar gptel-context)
 (defvar noema-md-bridge-source-mode)
+(defvar my/programmatic-file-visit)
+(defvar my/noema--inhibit-redirect)
 
 (declare-function my/noema--xwidget-buffer-p "noema-xwidget-keys" (&optional buffer))
 (declare-function my/noema--jupyter-xwidget-buffer-p "noema-xwidget-keys" (&optional buffer))
 (declare-function my/noema--buffer-for-client "init-aaronnote" (client))
 (declare-function my/noema--host-file "init-aaronnote" (file))
 (declare-function my/noema--select-emacs-window "noema-xwidget-keys" (&optional window))
+(declare-function my/noema--release-xwidget-input-buffer "noema-xwidget-keys" (&optional buffer))
+(declare-function my/noema--focus-minibuffer-if-active "noema-xwidget-keys" ())
 (declare-function my/noema-command "init-aaronnote" (command &optional detail))
 (declare-function gptel-context--add-region "gptel-context"
                   (buffer region-beginning region-end &optional advance))
@@ -73,17 +77,72 @@ document   the whole note")
          (not (and (fboundp 'my/noema--jupyter-xwidget-buffer-p)
                    (my/noema--jupyter-xwidget-buffer-p buffer))))))
 
+(defcustom noema-md-bridge-answer-timeout 4
+  "Seconds to wait for a Noema page to answer a selection request.
+When it does not, Emacs says so instead of leaving the command silent."
+  :type 'number
+  :group 'noema-md-bridge)
+
+(defvar noema-md-bridge--pending (make-hash-table :test #'equal)
+  "Request id -> timeout timer for page selection requests still unanswered.")
+
+(defvar noema-md-bridge--request-counter 0
+  "Counter making selection request ids unique within this Emacs.")
+
+(defun noema-md-bridge--timeout (id action)
+  "Report that the page never answered request ID for ACTION."
+  (when (gethash id noema-md-bridge--pending)
+    (remhash id noema-md-bridge--pending)
+    (message "Noema: the page did not answer the %s request.  Reload the page \
+(H-o r), or rebuild it (H-o B) if Noema was just updated" action)))
+
+(defun noema-md-bridge--settle (id)
+  "Forget request ID; return non-nil when it was still pending.
+An answer without an id comes from a web host older than request ids; it
+settles every pending request, since only one is normally outstanding."
+  (if (and (stringp id) (not (string-empty-p id)))
+      (when-let* ((timer (gethash id noema-md-bridge--pending)))
+        (cancel-timer timer)
+        (remhash id noema-md-bridge--pending)
+        t)
+    (let (settled)
+      (maphash (lambda (_ timer) (cancel-timer timer) (setq settled t))
+               noema-md-bridge--pending)
+      (clrhash noema-md-bridge--pending)
+      settled)))
+
 (defun noema-md-bridge-request (action scope)
   "Ask the current Noema pane to save and report SCOPE for ACTION.
 This only queues a notification; the answer arrives as a host event and is
-handled by `noema-md-bridge-handle-selection'."
+handled by `noema-md-bridge-handle-selection'.  The page always answers, with
+a range or with the reason it cannot; no answer within
+`noema-md-bridge-answer-timeout' seconds is reported too.
+
+The whole note needs no answer: SCOPE \"document\" asks the page to save and
+runs ACTION on the pane's file at once."
   (unless (member action noema-md-bridge-actions)
     (error "Unknown Noema bridge action: %s" action))
   (unless (member scope noema-md-bridge-scopes)
     (error "Unknown Noema bridge scope: %s" scope))
   (unless (fboundp 'my/noema-command)
     (user-error "Noema browser command bridge is unavailable"))
-  (my/noema-command "emacs-selection" `((action . ,action) (scope . ,scope))))
+  (if (equal scope "document")
+      (let ((file (or my/noema-buffer-file-name
+                      (user-error "This Noema pane shows no file"))))
+        (my/noema-command "save")
+        (let ((buffer (noema-md-bridge-source-buffer file)))
+          (noema-md-bridge-run action buffer
+                               (with-current-buffer buffer (point-min))
+                               (with-current-buffer buffer (point-max)))))
+    (let ((id (format "emacs-%d-%d" (emacs-pid)
+                      (cl-incf noema-md-bridge--request-counter))))
+      (puthash id (run-at-time noema-md-bridge-answer-timeout nil
+                               #'noema-md-bridge--timeout id action)
+               noema-md-bridge--pending)
+      (message "Noema: asking the page for its %s…"
+               (if (equal scope "line") "selection or cursor line" "selection"))
+      (my/noema-command "emacs-selection"
+                        `((action . ,action) (scope . ,scope) (requestId . ,id))))))
 
 (defmacro noema-md-bridge-define-pane-command (name action scope doc)
   "Define command NAME asking the current pane for SCOPE and running ACTION.
@@ -125,13 +184,27 @@ DOC is its documentation."
     (and (stringp a) (stringp b)
          (equal (funcall canonical a) (funcall canonical b)))))
 
+(defun noema-md-bridge--visit (file)
+  "Visit Markdown FILE as an ordinary Emacs buffer, never as a Noema page.
+Called from an interactive command, a plain `find-file-noselect' would hand the
+file to Noema (the Markdown redirect) and return a blank placeholder, so the
+visit is marked programmatic.  A leftover redirect placeholder is replaced."
+  (let ((my/programmatic-file-visit t)
+        (my/noema--inhibit-redirect t))
+    (when-let* ((existing (find-buffer-visiting file)))
+      (when (and (with-current-buffer existing
+                   (bound-and-true-p my/noema--markdown-redirected))
+                 (not (buffer-modified-p existing)))
+        (kill-buffer existing)))
+    (find-file-noselect file)))
+
 (defun noema-md-bridge-source-buffer (file)
   "Return FILE's Emacs buffer holding exactly the text on disk.
 The page saved before reporting, so disk is authoritative.  A buffer with
 unsaved Emacs edits is refused rather than overwritten."
   (unless (and (stringp file) (file-readable-p file))
     (user-error "Noema note is not a readable file: %s" file))
-  (let ((buffer (find-file-noselect file)))
+  (let ((buffer (noema-md-bridge--visit file)))
     (with-current-buffer buffer
       (when (buffer-modified-p)
         (user-error "Save or revert the Emacs edits in %s first" (buffer-name)))
@@ -219,9 +292,17 @@ The pane keeps its window; focus moves to Emacs so the region can be used."
   (pcase action
     ("agent"
      (require 'noema-context)
-     (with-current-buffer buffer
-       (noema-context--send
-        :references (noema-context--region-references buffer begin end))))
+     (let ((session (with-current-buffer buffer
+                      (noema-context--send
+                       :references (noema-context--region-references
+                                    buffer begin end)))))
+       ;; Asked from a Noema page: continue in the session, not the page.
+       (when-let* ((window (and (buffer-live-p session)
+                                (get-buffer-window session 'visible))))
+         (if (fboundp 'my/noema--select-emacs-window)
+             (my/noema--select-emacs-window window)
+           (select-window window))
+         (with-current-buffer session (goto-char (point-max))))))
     ("context"
      (noema-md-bridge--add-context buffer begin end))
     ("compose"
@@ -253,15 +334,47 @@ report whose pane no longer shows that file is refused."
   (let* ((client (alist-get 'client event))
          (file (alist-get 'file event))
          (action (or (alist-get 'action event) "agent"))
+         (failure (alist-get 'error event))
          (pane (and (fboundp 'my/noema--buffer-for-client)
                     (my/noema--buffer-for-client client))))
+    (noema-md-bridge--settle (alist-get 'requestId event))
+    ;; The page could not produce a range (nothing selected, save failed...).
+    ;; Say why here: page statuses only reach the echo area as errors.
+    (when (and (stringp failure) (not (string-empty-p failure)))
+      (user-error "Noema: %s" failure))
+    (message nil)
     (unless (and (buffer-live-p pane)
                  (noema-md-bridge--same-file-p
                   (buffer-local-value 'my/noema-buffer-file-name pane) file))
       (user-error "Noema selection no longer matches its pane"))
     (pcase-let ((`(,buffer ,begin . ,end)
                  (noema-md-bridge-region file (noema-md-bridge--event-range event))))
-      (noema-md-bridge-run action buffer begin end))))
+      ;; The action prompts (which session, what to ask) and may open a
+      ;; transient.  Run it as its own step, not inside the host-event queue:
+      ;; a prompt there blocks every later Noema event until answered.
+      (run-at-time 0 nil #'noema-md-bridge--run-interactively
+                   pane action buffer begin end))))
+
+(defun noema-md-bridge--run-interactively (pane action buffer begin end)
+  "Run ACTION on BEGIN..END of BUFFER with the keyboard on Emacs, not PANE.
+The Noema page kept WebKit's keyboard focus when it answered; without this
+the session prompt appears but every key goes to the page."
+  (when (buffer-live-p buffer)
+    (when (and (buffer-live-p pane)
+               (fboundp 'my/noema--release-xwidget-input-buffer))
+      (my/noema--release-xwidget-input-buffer pane))
+    (when (fboundp 'my/noema--select-emacs-window)
+      (my/noema--select-emacs-window))
+    (let ((minibuffer-setup-hook
+           (if (fboundp 'my/noema--focus-minibuffer-if-active)
+               (cons #'my/noema--focus-minibuffer-if-active minibuffer-setup-hook)
+             minibuffer-setup-hook)))
+      (condition-case failure
+          (noema-md-bridge-run action buffer begin end)
+        (quit (message "Noema: %s cancelled" action))
+        (user-error (message "%s" (error-message-string failure)))
+        (error (message "Noema %s failed: %s" action
+                        (error-message-string failure)))))))
 
 
 ;;;; ── Keeping panes and source buffers in step ─────────────────────────────
