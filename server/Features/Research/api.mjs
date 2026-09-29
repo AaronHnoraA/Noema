@@ -33,6 +33,10 @@ const METHODS = Object.freeze({
   "capability:global:mutate": "mutateCapability",
   "capability:global:skill:install": "installSkill",
   "capability:global:probe": "probeMCP",
+  // Upstream version control exists only for the shared global library.
+  "capability:global:skill:upstream:status": "skillUpstreamStatus",
+  "capability:global:skill:upstream:install": "installUpstreamSkill",
+  "capability:global:skill:upstream:update": "updateUpstreamSkill",
   "run:prepare": "prepareRun",
   "run:context-preview": "previewRunContext",
 	"run:project-file": "runProjectFile",

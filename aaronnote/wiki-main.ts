@@ -15,6 +15,11 @@ import { createKnowledgeSearch } from "./knowledge-search.ts";
 import { noemaPlatformLabels } from "../src/platform-compat.ts";
 import { createTreeView, type NoemaTreeNode } from "../src/tree-view.ts";
 import { createVersionControlView } from "./wiki-version-control.ts";
+import { installHostKeyboardBridge, pageClientFromLocation } from "./host-keyboard.ts";
+
+// Emacs host keys, host-owned keys and focus handoff: the rule every Noema
+// page shares (see host-keyboard.ts).
+installHostKeyboardBridge({ client: () => pageClientFromLocation() });
 
 const root = document.querySelector<HTMLElement>("#wiki-app");
 if (!root) throw new Error("Missing #wiki-app");

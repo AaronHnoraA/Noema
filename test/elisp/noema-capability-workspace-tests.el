@@ -135,3 +135,123 @@
         (delete-file file)))))
 
 (provide 'noema-capability-workspace-tests)
+
+(defconst noema-capability-test--pack-resolution
+  '((skills . [((id . "proof-plan") (type . "skill") (enabled . :false) (selectable . t)
+                (source . ((scope . "global") (path . "skills/proof-plan/SKILL.md"))))
+               ((id . "lean4") (type . "skill") (enabled . :false) (selectable . t)
+                (source . ((scope . "global"))))])
+    (packs . [((id . "math-verification") (type . "pack") (enabled . :false) (selectable . t)
+               (source . ((scope . "global") (path . "capabilities.json")))
+               (members . [((id . "proof-plan") (state . "available"))
+                           ((id . "lean4") (state . "available"))]))
+              ((id . "quantum") (type . "pack") (enabled . :false) (selectable . :false)
+               (source . ((scope . "global")))
+               (patches . [((scope . "project"))])
+               (members . [((id . "qiskit") (state . "missing"))]))])))
+
+(ert-deftest noema-capability-packs-page-expands-member-links ()
+  (with-temp-buffer
+    (noema-capability-ui-mode)
+    (setq noema-capability-ui--view 'packs noema-capability-ui--filter "pack"
+          tabulated-list-sort-key nil)
+    (noema-capability-ui--render noema-capability-test--pack-resolution)
+    (should (equal (mapcar #'car tabulated-list-entries)
+                   '(("pack" . "math-verification") ("pack" . "quantum"))))
+    (should (equal (aref (cadr (car tabulated-list-entries)) 7) "2 skills"))
+    (goto-char (point-min))
+    (while (not (equal (tabulated-list-get-id) '("pack" . "math-verification"))) (forward-line 1))
+    (noema-capability-ui-visit)
+    (should (equal (mapcar #'car tabulated-list-entries)
+                   '(("pack" . "math-verification")
+                     (member "math-verification" "proof-plan")
+                     (member "math-verification" "lean4")
+                     ("pack" . "quantum"))))
+    ;; A member row acts on the ordinary flat Skill record.
+    (forward-line 1)
+    (should (equal (tabulated-list-get-id) '(member "math-verification" "proof-plan")))
+    (should (equal (noema--value (noema-capability-ui--record-at-point) "type") "skill"))
+    (should (equal (noema--value (noema-capability-ui--record-at-point) "id") "proof-plan"))
+    (forward-line -1)
+    (noema-capability-ui-visit)
+    (should (= (length tabulated-list-entries) 2))))
+
+(ert-deftest noema-capability-project-patch-page-lists-patched-packs-for-skill-managers ()
+  (with-temp-buffer
+    (noema-capability-ui-mode)
+    (setq noema-capability-ui--project "/project/" noema-capability-ui--filter "skill"
+          noema-capability-ui--view 'patches)
+    (noema-capability-ui--render noema-capability-test--pack-resolution)
+    (should (equal (mapcar #'car tabulated-list-entries) '(("pack" . "quantum"))))))
+
+(ert-deftest noema-capability-packs-page-is-global-and-keyed ()
+  (with-temp-buffer
+    (noema-capability-ui-mode)
+    (setq noema-capability-ui--view 'packs)
+    (should (eq (noema-capability-ui--scope) 'global))
+    (should (equal (noema-capability-ui--scope-label) "Packs · etc/noema"))
+    (should (eq (key-binding (kbd "C-c 4")) #'noema-capability-ui-packs))
+    (should (eq (key-binding (kbd "C-c U")) #'noema-skill-upstream))
+    (should (eq (key-binding (kbd "RET")) #'noema-capability-ui-visit))))
+
+(ert-deftest noema-capability-pack-project-patch-writes-membership-delta ()
+  (with-temp-buffer
+    (noema-capability-ui-mode)
+    (setq noema-capability-ui--project "/project/" noema-capability-ui--view 'packs
+          noema-capability-ui--resolution noema-capability-test--pack-resolution)
+    (let (written answers)
+      (setq answers (list '("lean4") '("qiskit")))
+      (cl-letf (((symbol-function 'noema-capability-config)
+                 (lambda (&rest args)
+                   (should (equal (plist-get args :project) "/project/"))
+                   (funcall (plist-get args :callback) '((config . ((packs . ((patches . nil)))))) nil)))
+                ((symbol-function 'completing-read-multiple) (lambda (&rest _) (pop answers)))
+                ((symbol-function 'read-string) (lambda (&rest _) "Prefer Qiskit."))
+                ((symbol-function 'noema-capability-set-patch)
+                 (lambda (type id patch &rest args)
+                   (setq written (list type id patch (plist-get args :scope))))))
+        (noema-capability-ui--pack-project-patch
+         (seq-find (lambda (r) (equal (noema--value r "id") "math-verification"))
+                   (noema--sequence (noema--value noema-capability-test--pack-resolution "packs")))))
+      (should (equal written '("pack" "math-verification"
+                               ((members_remove . ["lean4"]) (members_add . ["qiskit"])
+                                (preamble_append . "Prefer Qiskit."))
+                               project))))))
+
+(ert-deftest noema-skill-upstream-view-renders-lock-state-and-uses-global-channels ()
+  (require 'noema-skill-upstream-ui)
+  (with-temp-buffer
+    (noema-skill-upstream-mode)
+    (noema-skill-upstream--render
+     '((lockFile . "/etc/noema/skills.lock.json") (checked . t)
+       (skills . [((id . "qiskit") (local . "clean") (commit . "0123456789abcdef0123")
+                   (latest . "fedcba9876543210fedc") (updateAvailable . t) (ref . "HEAD")
+                   (repository . "K-Dense-AI/claude-scientific-skills") (path . "skills/qiskit")
+                   (history . []))
+                  ((id . "math-prose") (local . "modified") (commit . "71ece05af05a") (ref . "HEAD")
+                   (repository . "TianhuaGao/math-prose") (path . ".") (history . [((commit . "aa"))]))])))
+    (should (equal (sort (mapcar #'car tabulated-list-entries) #'string<) '("math-prose" "qiskit")))
+    (let ((row (cadr (assoc "qiskit" tabulated-list-entries))))
+      (should (equal (substring-no-properties (aref row 3)) "fedcba987654"))
+      (should (equal (aref row 2) "0123456789ab")))
+    (should (string-match-p "1 updates · 1 edited locally" (car header-line-format)))
+    (should (eq (key-binding (kbd "C-c u")) #'noema-skill-upstream-ui-update)))
+  (let ((my/noema--ready t) calls)
+    (cl-letf (((symbol-function 'noema--host-call-now)
+               (lambda (channel body _callback &optional timeout) (push (list channel body timeout) calls))))
+      (noema-skill-upstream-status :check t :callback #'ignore)
+      (noema-skill-upstream-update "qiskit" :dry-run t :callback #'ignore))
+    (should (equal (mapcar #'car calls)
+                   '("aaronnote:api:research:capability:global:skill:upstream:update"
+                     "aaronnote:api:research:capability:global:skill:upstream:status")))
+    (should (equal (mapcar #'caddr calls) (list noema-skill-upstream-timeout noema-skill-upstream-timeout)))))
+
+(ert-deftest noema-capability-gateway-json-false-renders-disabled ()
+  "The remote gateway decodes JSON false as `:json-false'."
+  (should-not (noema-capability-ui--truth-p :json-false))
+  (let ((entry (noema-capability-ui--entry
+                '((id . "p") (type . "pack") (enabled . :json-false)
+                  (validation . ((valid . :json-false) (errors . []) (warnings . [])))
+                  (members . [])))))
+    (should (equal (substring-no-properties (aref (cadr entry) 2)) "no"))
+    (should (equal (substring-no-properties (aref (cadr entry) 6)) "error"))))

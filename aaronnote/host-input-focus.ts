@@ -33,8 +33,63 @@ const FOREGROUND_PROOF_EVENTS = new Set([
  */
 let keyboardReleased = false;
 
+type NativeKeyboardHandler = { postMessage?: (message: string) => void };
+
+/**
+ * Give the native keyboard back to the Emacs view.
+ *
+ * Emacs' macOS xwidget (`nsxwidget.m`) installs a `keyDown` script message
+ * handler whose "C-g" message runs `makeFirstResponder:` on the Emacs view
+ * without relaying any key.  It is the only way to take the keyboard from a
+ * clicked WKWebView, and afterwards every key reaches Emacs natively and in
+ * order instead of being relayed through the page.  Other hosts lack the
+ * handler; there the page keeps relaying host-owned keys.
+ */
+export function handOffNativeKeyboard(): boolean {
+  const handler = (window as unknown as {
+    webkit?: { messageHandlers?: { keyDown?: NativeKeyboardHandler } };
+  }).webkit?.messageHandlers?.keyDown;
+  if (typeof handler?.postMessage !== "function") return false;
+  try {
+    handler.postMessage("C-g");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether the page holds the native keyboard focus (WebKit is first responder).
+ *
+ * While it does not, macOS still offers the page key equivalents — Ctrl and
+ * Cmd chords, arrows and other function keys — before the Emacs view that
+ * owns the keyboard.  Such a key is Emacs', whatever it is.
+ */
+export function pageHasNativeKeyboard(): boolean {
+  return typeof document.hasFocus !== "function" || document.hasFocus();
+}
+
+/**
+ * Leave a key the page was only offered to Emacs.
+ *
+ * Installed first, in the capture phase, on every Noema page.  A key that
+ * arrives while the page lacks native focus is stopped before any page
+ * handler (CM6, Vim, the Emacs chord gate) can act on it, and is deliberately
+ * not default-prevented, so WebKit declines it and Emacs handles it natively.
+ * There is no list of keys: every key follows the native focus.
+ */
+export function installNativeKeyboardYield(target: Window = window): () => void {
+  const controller = new AbortController();
+  target.addEventListener("keydown", (event) => {
+    if (pageHasNativeKeyboard()) return;
+    event.stopImmediatePropagation();
+  }, { capture: true, signal: controller.signal });
+  return () => controller.abort();
+}
+
 export function releaseHostInputFocus(): void {
   keyboardReleased = true;
+  handOffNativeKeyboard();
 }
 
 export function reclaimHostInputFocus(): void {
@@ -47,7 +102,9 @@ export function hostInputFocusReleased(): boolean {
 
 export function provesHostInputFocus(event: Pick<Event, "type" | "isTrusted">): boolean {
   if (event.isTrusted !== true || !FOREGROUND_PROOF_EVENTS.has(event.type)) return false;
-  return !keyboardReleased || event.type === "pointerdown";
+  if (event.type === "pointerdown") return true;
+  // A key only offered to an unfocused page proves nothing.
+  return !keyboardReleased && pageHasNativeKeyboard();
 }
 
 export const hostInputFocusEventTypes: readonly string[] = [...FOREGROUND_PROOF_EVENTS];

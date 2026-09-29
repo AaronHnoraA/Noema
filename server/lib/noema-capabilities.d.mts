@@ -10,12 +10,12 @@ export type CapabilityDiagnostic = {
   code: string;
   message: string;
   id?: string;
-  type?: "skill" | "mcp";
+  type?: "skill" | "mcp" | "pack";
 };
 
 export type ResolvedCapability = {
   id: string;
-  type: "skill" | "mcp";
+  type: "skill" | "mcp" | "pack";
   title: string;
   description: string;
   enabled: boolean;
@@ -27,6 +27,8 @@ export type ResolvedCapability = {
   shadowedDefinitions: CapabilitySource[];
   validation: { valid: boolean; errors: string[]; warnings: string[] };
   diagnostics: CapabilityDiagnostic[];
+  /** Packs only: the resolved link list with each member Skill's state. */
+  members?: Array<{ id: string; reference: string; state: "available" | "disabled" | "invalid" | "missing"; description: string }>;
   runtime?: {
     state: string;
     availability: "available" | "unavailable" | "unknown";
@@ -45,7 +47,8 @@ export type CapabilityEnvironment = {
   libraries?: Array<{ id: string; scope: string; format: string; configFile: string; skillDirectories: string[]; state: string; count: number }>;
   skills: ResolvedCapability[];
   mcps: ResolvedCapability[];
-  active: { skills: string[]; mcps: string[] };
+  packs: ResolvedCapability[];
+  active: { skills: string[]; mcps: string[]; packs: string[] };
   diagnostics: CapabilityDiagnostic[];
 };
 
@@ -56,6 +59,7 @@ export function resolveProjectCapabilities(options: {
   root?: string | null;
   scope?: "global" | "project";
   requestedSkills?: string[];
+  requestedPacks?: string[];
   runtimeDescriptor?: Record<string, any>;
   environment?: Record<string, string | undefined>;
   userHome?: string;
@@ -70,6 +74,10 @@ export function resolvedSkillsForRun(environment: CapabilityEnvironment): {
   skills: Record<string, any>[];
   items: Record<string, any>[];
 };
+export function resolvedPacksForRun(environment: CapabilityEnvironment): {
+  packs: Record<string, any>[];
+  items: Record<string, any>[];
+};
 export function resolvedMCPServersForRun(environment: CapabilityEnvironment): Record<string, any>[];
 
 export function mutateProjectCapability(options: {
@@ -78,11 +86,11 @@ export function mutateProjectCapability(options: {
   globalConfigPath?: string;
   environment?: Record<string, string | undefined>;
   userHome?: string;
-  type: "skill" | "mcp";
+  type: "skill" | "mcp" | "pack";
   id: string;
   enabled?: boolean;
   patch?: Record<string, any> | null;
-  definition?: Record<string, any>;
+  definition?: Record<string, any> | null;
 }): Promise<Record<string, any>>;
 
 export function projectCapabilityConfig(root?: string | null, options?: {

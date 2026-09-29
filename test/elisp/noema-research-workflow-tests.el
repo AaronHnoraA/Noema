@@ -76,3 +76,15 @@
 
 (provide 'noema-research-workflow-tests)
 ;;; noema-research-workflow-tests.el ends here
+
+(ert-deftest noema-research-directives-accept-pack ()
+  (require 'noema-research-mode)
+  (let* ((document (noema-research-workflow-build "theoretical" "Packs"))
+         (cell (seq-find (lambda (cell) (equal (noema-research-cell-kind cell document) "work"))
+                         (gethash "cells" document)))
+         (check (lambda (source)
+                  (puthash "source" source cell)
+                  (noema-research--directive-errors document))))
+    (should-not (funcall check "@@pack(math-verification)\n@@skill(lean4)\n@@pack(quantum-computing)\n\nCheck the lemma."))
+    (should (string-match-p "invalid @@pack" (car (funcall check "@@pack(../x)\n\nCheck."))))
+    (should (string-match-p "unsupported directive @@skills" (car (funcall check "@@skills(x)\n\nCheck."))))))

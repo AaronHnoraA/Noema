@@ -18,6 +18,9 @@
 (declare-function noema-capability-ui--scope "noema-capability-ui" ())
 (declare-function noema-capability-ui--scope-label "noema-capability-ui" ())
 (declare-function noema-capability-ui--record-at-point "noema-capability-ui" ())
+(declare-function noema-capability-ui--records "noema-capability-ui" ())
+(declare-function noema-capability-ui-packs "noema-capability-ui" ())
+(declare-function noema-skill-upstream "noema-skill-upstream-ui" ())
 (declare-function noema-capability-ui--render "noema-capability-ui" (resolution))
 (declare-function noema-capability-ui-refresh "noema-capability-ui" ())
 (declare-function noema-capability-ui--show-error "noema-capability-ui" (error-object))
@@ -47,7 +50,9 @@ manager; do not steal an unrelated work, DAG or output window."
   (interactive)
   (when (eq noema-capability-ui--view 'local-skills)
     (user-error "This page only shows project-local Skills; use 1 or 2 for other capabilities"))
-  (let ((type (completing-read "Show: " '("all" "skill" "mcp") nil t)))
+  (when (eq noema-capability-ui--view 'packs)
+    (user-error "This page only shows packs; use 1 for Skills and MCPs"))
+  (let ((type (completing-read "Show: " '("all" "skill" "mcp" "pack") nil t)))
     (setq noema-capability-ui--filter (unless (equal type "all") type))
     (noema-capability-ui--render noema-capability-ui--resolution)))
 
@@ -129,15 +134,143 @@ manager; do not steal an unrelated work, DAG or output window."
   (interactive)
   (unless noema-capability-ui--project (user-error "Open the global manager from your target project first"))
   (let ((record (noema-capability-ui--record-at-point)))
-    (if (equal (noema--value record "type") "skill")
+    (pcase (noema--value record "type")
+      ("pack" (noema-capability-ui--pack-project-patch record))
+      ("skill"
         (noema-skill-prepare
          (noema--value record "id") "patch" :project noema-capability-ui--project
-         :callback (apply-partially #'noema-capability-ui--prepared (current-buffer) "patch"))
-      (noema-capability-set-patch
-       "mcp" (noema--value record "id")
-       (noema-capability-ui--read-json-object nil "Create this project's MCP patch")
-       :project noema-capability-ui--project :scope 'project
-       :callback (apply-partially #'noema-capability-ui--prepared (current-buffer) "patch")))))
+         :callback (apply-partially #'noema-capability-ui--prepared (current-buffer) "patch")))
+      (_
+       (noema-capability-set-patch
+        "mcp" (noema--value record "id")
+        (noema-capability-ui--read-json-object nil "Create this project's MCP patch")
+        :project noema-capability-ui--project :scope 'project
+        :callback (apply-partially #'noema-capability-ui--prepared (current-buffer) "patch"))))))
+
+;;; Skill packs
+;;
+;; A pack is a link list of flat Skill ids with an optional preamble.  The
+;; library definition lives in the global configuration; a project adjusts
+;; it with a patch of `members_add', `members_remove' and `preamble_append'.
+;; Neither ever edits member Skill content.
+
+(defun noema-capability-ui--skill-ids ()
+  "Return the Skill ids in the page's resolution, for pack membership."
+  (mapcar (lambda (record) (noema--value record "id"))
+          (seq-filter (lambda (record) (equal (noema--value record "type") "skill"))
+                      (noema-capability-ui--records))))
+
+(defun noema-capability-ui--read-members (prompt candidates &optional initial)
+  "Read Skill ids from CANDIDATES under PROMPT, starting from INITIAL."
+  (seq-uniq
+   (seq-filter (lambda (id) (string-match-p "\\`[A-Za-z0-9][A-Za-z0-9._-]*\\'" id))
+               (completing-read-multiple prompt candidates nil nil
+                                         (and initial (string-join initial ","))))))
+
+(defun noema-capability-ui-create-pack ()
+  "Define a new pack in the global library from existing Skill ids."
+  (interactive)
+  (unless (eq noema-capability-ui--view 'packs) (noema-capability-ui--switch 'packs))
+  (let* ((manager (current-buffer))
+         (id (string-trim (read-string "Pack id: ")))
+         (existing (seq-find (lambda (record)
+                               (and (equal (noema--value record "type") "pack")
+                                    (equal (noema--value record "id") id)))
+                             (noema-capability-ui--records))))
+    (unless (string-match-p "\\`[A-Za-z0-9][A-Za-z0-9._-]*\\'" id) (user-error "Invalid pack id"))
+    (when existing (user-error "Pack %s exists; use Members to edit it" id))
+    (let* ((description (read-string "Description: "))
+           (members (noema-capability-ui--read-members
+                     "Member Skills (comma-separated): "
+                     (noema-capability-ui--skill-ids-in manager)))
+           (preamble (read-string "Preamble shared by the pack (optional): ")))
+      (unless members (user-error "A pack needs at least one member Skill"))
+      (noema-pack-define
+       id `((description . ,description) (members . ,(vconcat members))
+            ,@(unless (string-empty-p (string-trim preamble)) `((preamble . ,preamble))))
+       :scope 'global
+       :callback (apply-partially #'noema-capability-ui--after-mutation manager)))))
+
+(defun noema-capability-ui--skill-ids-in (manager)
+  "Return Skill ids known to MANAGER's resolution."
+  (with-current-buffer manager (noema-capability-ui--skill-ids)))
+
+(defun noema-capability-ui--pack-at-point ()
+  "Return the pack of the current row, including a member row's pack."
+  (let ((identity (tabulated-list-get-id)))
+    (or (seq-find (lambda (record)
+                    (and (equal (noema--value record "type") "pack")
+                         (equal (noema--value record "id")
+                                (if (eq (car-safe identity) 'member) (nth 1 identity) (cdr-safe identity)))))
+                  (noema-capability-ui--records))
+        (user-error "Select a pack"))))
+
+(defun noema-capability-ui-edit-pack-members ()
+  "Edit the member link list of the selected pack's global definition."
+  (interactive)
+  (unless (eq noema-capability-ui--view 'packs)
+    (user-error "Edit pack definitions on the Packs page (C-c 4)"))
+  (let* ((manager (current-buffer))
+         (record (noema-capability-ui--pack-at-point))
+         (id (noema--value record "id")))
+    (unless (equal (noema--value (noema--value record "source") "scope") "global")
+      (user-error "Pack %s is not defined in the global library; patch it from its own scope" id))
+    (noema-capability-config
+     :scope 'global
+     :callback
+     (lambda (result error-object)
+       (if error-object (noema-capability-ui--show-error error-object)
+         (let* ((definition (noema--value (noema--value (noema--value (noema--value result "config") "packs")
+                                                       "definitions")
+                                          id))
+                (members (noema-capability-ui--read-members
+                          (format "Members of %s: " id) (noema-capability-ui--skill-ids-in manager)
+                          (noema--sequence (noema--value definition "members"))))
+                (preamble (read-string "Preamble: " (or (noema--value definition "preamble") ""))))
+           (unless members (user-error "A pack needs at least one member; remove the pack instead"))
+           (noema-pack-define
+            id `((description . ,(or (noema--value definition "description") ""))
+                 ,@(when-let* ((title (noema--value definition "title"))) `((title . ,title)))
+                 (members . ,(vconcat members))
+                 ,@(unless (string-empty-p (string-trim preamble)) `((preamble . ,preamble))))
+            :scope 'global
+            :callback (apply-partially #'noema-capability-ui--after-mutation manager))))))))
+
+(defun noema-capability-ui--pack-project-patch (record)
+  "Edit this project's membership patch for pack RECORD."
+  (let* ((manager (current-buffer))
+         (project noema-capability-ui--project)
+         (id (noema--value record "id"))
+         (current (mapcar (lambda (member) (noema--value member "id"))
+                          (noema--sequence (noema--value record "members")))))
+    (noema-capability-config
+     :project project
+     :callback
+     (lambda (result error-object)
+       (if error-object (noema-capability-ui--show-error error-object)
+         (let* ((old (noema--value (noema--value (noema--value (noema--value result "config") "packs")
+                                                "patches")
+                                   id))
+                (old (if (vectorp old) (user-error "Pack %s has a patch sequence; edit it as JSON (C-c j)" id) old))
+                (remove (noema-capability-ui--read-members
+                         (format "Remove from %s in this project: " id) current
+                         (noema--sequence (noema--value old "members_remove"))))
+                (add (noema-capability-ui--read-members
+                      (format "Add to %s in this project: " id) (noema-capability-ui--skill-ids-in manager)
+                      (noema--sequence (noema--value old "members_add"))))
+                (append (read-string "Append to the preamble in this project: "
+                                     (or (noema--value old "preamble_append") "")))
+                (patch `(,@(when remove `((members_remove . ,(vconcat remove))))
+                         ,@(when add `((members_add . ,(vconcat add))))
+                         ,@(unless (string-empty-p (string-trim append)) `((preamble_append . ,append))))))
+           (noema-capability-set-patch
+            "pack" id patch :project project :scope 'project
+            :callback (lambda (result error-object)
+                        (if error-object (noema-capability-ui--show-error error-object)
+                          (with-current-buffer manager
+                            (if (eq noema-capability-ui--view 'patches)
+                                (noema-capability-ui--after-mutation manager result nil)
+                              (message "Noema: saved the project patch for %s; see Project Patch (C-c 2)" id))))))))))))
 
 (defun noema-capability-ui-copy-global-skill ()
   "Copy a global Skill and its resources into independent project-local files."
@@ -195,13 +328,16 @@ No request is sent until the user reviews the draft and presses RET."
     ("1" "Global" noema-capability-ui-global)
     ("2" "Project patches" noema-capability-ui-project-patches)
     ("3" "Local Skills" noema-capability-ui-local-skills)
+    ("4" "Packs" noema-capability-ui-packs)
     ("g" "Refresh" noema-capability-ui-refresh)]
    ["Create / refine"
     ("a" "Add" noema-capability-ui-add)
     ("p" "Create project Patch" noema-capability-ui-create-project-patch)
     ("y" "Copy global to Local" noema-capability-ui-copy-global-skill)
     ("s" "Edit with agent-shell" noema-capability-ui-edit-with-agent)
-    ("I" "Import directory" noema-capability-ui-import-skill)]
+    ("I" "Import directory" noema-capability-ui-import-skill)
+    ("N" "New pack" noema-capability-ui-create-pack)
+    ("m" "Pack members" noema-capability-ui-edit-pack-members)]
    ["Edit / inspect"
     ("f" "Edit file" noema-capability-ui-open-source)
     ("o" "Open directory" noema-capability-ui-open-directory)
@@ -212,7 +348,7 @@ No request is sent until the user reviews the draft and presses RET."
    ["Selection / MCP"
     ("e" "Enable" noema-capability-ui-enable)
     ("d" "Disable" noema-capability-ui-disable)
-    ("u" "Use @@skill" noema-capability-ui-insert-skill)
+    ("u" "Use @@skill / @@pack" noema-capability-ui-insert-skill)
     ("E" "Edit MCP" noema-capability-ui-edit-mcp)
     ("t" "Test MCP" noema-capability-ui-probe-mcp)
     ("l" "Test details" noema-capability-ui-probe-details)]]
@@ -221,7 +357,8 @@ No request is sent until the user reviews the draft and presses RET."
     ("c" "Scope config" noema-capability-ui-edit-config)
     ("G" "Global config" noema-capability-ui-edit-global-config)
     ("D" "Global directory" noema-capability-ui-open-global-skills)
-    ("L" "Linked libraries" noema-capability-ui-libraries)]] )
+    ("L" "Linked libraries" noema-capability-ui-libraries)
+    ("U" "Upstream versions" noema-skill-upstream)]] )
 
 (defun noema-capability-ui-insert-skill ()
   "Insert the selected Skill into the work block that opened this manager."
@@ -230,22 +367,22 @@ No request is sent until the user reviews the draft and presses RET."
          (origin noema-capability-ui--origin)
          (manager-window (get-buffer-window (current-buffer) (selected-frame)))
          (id (noema--value record "id")))
-    (unless (equal (noema--value record "type") "skill") (user-error "Select a Skill"))
+    (unless (member (noema--value record "type") '("skill" "pack")) (user-error "Select a Skill or pack"))
     (unless (eq t (noema--value record "selectable"))
-      (user-error "This Skill is disabled or invalid; inspect or enable it first"))
+      (user-error "This %s is disabled or invalid; inspect or enable it first" (noema--value record "type")))
     (unless (and (markerp origin) (marker-buffer origin))
       (user-error "Open the manager from the destination JuText work block"))
     (with-current-buffer (marker-buffer origin)
       (goto-char origin)
       (let* ((cell (noema-research--require-cell))
              (entry (noema-research--entry-at-point))
-             (directive (format "@@skill(%s)" id)))
+             (directive (format "@@%s(%s)" (noema--value record "type") id)))
 	(unless (equal (noema-research-cell-kind cell (noema-current-document)) "work")
           (user-error "Skills can only be inserted into a work block"))
 	(goto-char (1+ (plist-get entry :header-end)))
 	(let ((start (point)) found seen)
           (while (and (< (point) (plist-get entry :block-end))
-                      (or (looking-at "@@\\(?:agent\\|session\\|ctx\\|skill\\)([^)\n]+)[ \t]*$")
+                      (or (looking-at "@@\\(?:agent\\|session\\|ctx\\|skill\\|pack\\)([^)\n]+)[ \t]*$")
                           (and seen (looking-at "[ \t]*$"))))
             (when (looking-at (concat (regexp-quote directive) "[ \t]*$")) (setq found t))
             (setq seen t)

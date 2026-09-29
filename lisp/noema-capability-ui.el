@@ -2,9 +2,11 @@
 
 ;;; Commentary:
 ;;
-;; This tabulated projection displays the authoritative Skill/MCP resolution
-;; returned by the Noema host.  It deliberately contains no precedence or
-;; patch logic of its own.
+;; This tabulated projection displays the authoritative Skill/MCP/pack
+;; resolution returned by the Noema host.  It deliberately contains no
+;; precedence or patch logic of its own.  The Packs page shows each pack as a
+;; link list: expanding a pack lists its member Skills, whose rows act on the
+;; ordinary flat Skill records.
 
 ;;; Code:
 
@@ -17,6 +19,7 @@
 (require 'noema-api)
 (declare-function noema-capability-lookup "noema-capability-actions" (&optional type buffer))
 (declare-function noema-capability-lookup--agent-buffer "noema-capability-actions" ())
+(autoload 'noema-skill-upstream "noema-skill-upstream-ui" nil t)
 
 (defvar-local noema-capability-ui--project nil)
 (defvar-local noema-capability-ui--view 'global)
@@ -25,16 +28,21 @@
 (defvar-local noema-capability-ui--filter nil)
 (defvar-local noema-capability-ui--origin nil)
 (defvar-local noema-capability-ui--probes nil)
+(defvar-local noema-capability-ui--expanded nil
+  "Pack ids whose member link lists are shown on the Packs page.")
 (defvar-local noema-capability-ui--generation 0)
 (put 'noema-capability-ui--generation 'permanent-local t)
 
 (defun noema-capability-ui--scope ()
-  "Return the write/query scope of the current page."
-  (if (eq noema-capability-ui--view 'global) 'global 'project))
+  "Return the write/query scope of the current page.
+The Packs page shows the global pack library; project pack patches are
+created from it and listed on the Project Patch page."
+  (if (memq noema-capability-ui--view '(global packs)) 'global 'project))
 
 (defun noema-capability-ui--scope-label ()
   "Describe where this page's changes are saved."
-  (if (eq (noema-capability-ui--scope) 'global) "Global · etc/noema"
+  (if (eq (noema-capability-ui--scope) 'global)
+      (if (eq noema-capability-ui--view 'packs) "Packs · etc/noema" "Global · etc/noema")
     (format "%s · %s" (if (eq noema-capability-ui--view 'local-skills) "Local Skills" "Project Patch")
             (abbreviate-file-name noema-capability-ui--project))))
 
@@ -43,7 +51,7 @@
   (mapcar
    (lambda (tab)
      (let* ((view (nth 0 tab)) (command (nth 2 tab))
-            (available (or (eq view 'global) noema-capability-ui--project))
+            (available (or (memq view '(global packs)) noema-capability-ui--project))
             (map (make-sparse-keymap)))
        (define-key map [tab-line mouse-1]
                    (lambda (event)
@@ -56,7 +64,8 @@
                    'help-echo (if available "Switch manager page" "Open the manager from a Noema project to use this page"))))
    '((global " Global " noema-capability-ui-global)
      (patches " Project Patch " noema-capability-ui-project-patches)
-     (local-skills " Local Skills " noema-capability-ui-local-skills))))
+     (local-skills " Local Skills " noema-capability-ui-local-skills)
+     (packs " Packs " noema-capability-ui-packs))))
 
 (defun noema-capability-ui--project-modified-p (record)
   "Whether RECORD has explicit project overrides, not merely inherited ones."
@@ -79,16 +88,21 @@
 
 (defun noema-capability-ui--switch (view)
   "Switch to VIEW, consulting only the project captured when opened."
-  (unless (or (eq view 'global) noema-capability-ui--project)
+  (unless (or (memq view '(global packs)) noema-capability-ui--project)
     (user-error "No project context; open this manager from a Noema project to use project pages"))
   (setq noema-capability-ui--view view
-        noema-capability-ui--filter (if (eq view 'local-skills) "skill" noema-capability-ui--base-filter)
+        noema-capability-ui--filter (pcase view
+                                      ('local-skills "skill")
+                                      ('packs "pack")
+                                      (_ noema-capability-ui--base-filter))
         noema-capability-ui--probes (make-hash-table :test #'equal)
         noema-capability-ui--resolution nil
+        ;; Member rows follow their pack; sorting would detach them.
+        tabulated-list-sort-key (unless (eq view 'packs) '("Type" . nil))
         tabulated-list-entries nil)
   (cl-incf noema-capability-ui--generation)
   (tabulated-list-print t)
-  (let* ((key (if (eq view 'global) :global noema-capability-ui--project))
+  (let* ((key (if (memq view '(global packs)) :global noema-capability-ui--project))
          (entry (gethash key noema-capability--cache)))
     (when (plist-get entry :resolution)
       (noema-capability-ui--render (plist-get entry :resolution)))
@@ -111,22 +125,37 @@
   (interactive)
   (noema-capability-ui--switch 'local-skills))
 
+(defun noema-capability-ui-packs ()
+  "Show the global Skill pack library; RET expands a pack's members."
+  (interactive)
+  (noema-capability-ui--switch 'packs))
+
 (defun noema-capability-ui--truth-p (value)
   "Return non-nil when JSON-like VALUE represents true."
-  (and value (not (memq value '(nil :false :null)))))
+  ;; The remote gateway decodes JSON false as `:json-false'; local
+  ;; `json-parse-string' callers use `:false'.  Both mean false here.
+  (and value (not (memq value '(nil :false :json-false :null)))))
 
 (defun noema-capability-ui--records ()
   "Return all records in the current capability resolution."
   (append (noema--sequence (noema--value noema-capability-ui--resolution "skills"))
-          (noema--sequence (noema--value noema-capability-ui--resolution "mcps"))))
+          (noema--sequence (noema--value noema-capability-ui--resolution "mcps"))
+          (noema--sequence (noema--value noema-capability-ui--resolution "packs"))))
+
+(defun noema-capability-ui--member-row-p (identity)
+  "Return non-nil when tabulated IDENTITY is a pack member row."
+  (eq (car-safe identity) 'member))
 
 (defun noema-capability-ui--record-id (record)
   "Return the tabulated identity for RECORD."
   (cons (noema--value record "type") (noema--value record "id")))
 
 (defun noema-capability-ui--record-at-point ()
-  "Return the capability record represented by the current row."
+  "Return the capability record represented by the current row.
+A pack member row stands for its flat Skill record."
   (let ((identity (tabulated-list-get-id)))
+    (when (noema-capability-ui--member-row-p identity)
+      (setq identity (cons "skill" (nth 2 identity))))
     (or (seq-find (lambda (record)
                     (equal (noema-capability-ui--record-id record) identity))
                   (noema-capability-ui--records))
@@ -149,12 +178,14 @@
     (cond
      (unavailable (propertize "unavailable" 'face 'warning))
      (errors (propertize (format "error (%d)" (length errors)) 'face 'error))
-     ((eq :false (noema--value validation "valid")) (propertize "error" 'face 'error))
+     ((memq (noema--value validation "valid") '(:false :json-false)) (propertize "error" 'face 'error))
      (warnings (propertize (format "warning (%d)" (length warnings)) 'face 'warning))
      (t (propertize "valid" 'face 'success)))))
 
 (defun noema-capability-ui--runtime (record)
-  "Return RECORD's runtime-state label."
+  "Return RECORD's runtime-state label, or a pack's member count."
+  (if (equal (noema--value record "type") "pack")
+      (format "%d skills" (length (noema--sequence (noema--value record "members"))))
   (if (equal (noema--value record "type") "mcp")
       (let* ((runtime (noema--value record "runtime"))
              (state (or (noema--value runtime "state") "unknown"))
@@ -163,7 +194,28 @@
                  (not (equal state availability)))
             (format "%s/%s" state availability)
           state))
-    "—"))
+    "—")))
+
+(defun noema-capability-ui--member-entry (pack member)
+  "Build the link-list row for MEMBER of PACK."
+  (let* ((id (noema--value member "id"))
+         (state (or (noema--value member "state") "missing"))
+         (skill (seq-find (lambda (record)
+                            (and (equal (noema--value record "type") "skill")
+                                 (equal (noema--value record "id") id)))
+                          (noema-capability-ui--records))))
+    (list
+     (list 'member (noema--value pack "id") id)
+     (vector
+      "  ↳"
+      (propertize id 'face 'link 'help-echo "RET: show this Skill in the flat library")
+      (propertize (if (noema-capability-ui--truth-p (noema--value skill "enabled")) "yes" "no")
+                  'face 'shadow)
+      (if skill (noema-capability-ui--source-scope skill) "—")
+      (or (noema--value (noema--value skill "source") "path") "—")
+      (if skill (number-to-string (length (noema--sequence (noema--value skill "patches")))) "—")
+      (propertize state 'face (if (equal state "available") 'success 'error))
+      "—" "—"))))
 
 (defun noema-capability-ui--entry (record)
   "Build a `tabulated-list-mode' entry for RECORD."
@@ -189,10 +241,19 @@
   "Render authoritative RESOLUTION in the current buffer."
   (setq noema-capability-ui--resolution resolution
         tabulated-list-entries
-        (mapcar #'noema-capability-ui--entry
+        (mapcan (lambda (record)
+                  (cons (noema-capability-ui--entry record)
+                        (when (and (eq noema-capability-ui--view 'packs)
+                                   (member (noema--value record "id") noema-capability-ui--expanded))
+                          (mapcar (apply-partially #'noema-capability-ui--member-entry record)
+                                  (noema--sequence (noema--value record "members"))))))
                 (seq-filter (lambda (record)
                               (and (or (null noema-capability-ui--filter)
-                                       (equal noema-capability-ui--filter (noema--value record "type")))
+                                       (equal noema-capability-ui--filter (noema--value record "type"))
+                                       ;; Project pack patches belong on the patch page
+                                       ;; even when the manager was opened for Skills.
+                                       (and (eq noema-capability-ui--view 'patches)
+                                            (equal (noema--value record "type") "pack")))
                                    (or (not (eq noema-capability-ui--view 'local-skills))
                                        (equal (noema-capability-ui--source-scope record) "project"))
                                    (or (not (eq noema-capability-ui--view 'patches))
@@ -207,11 +268,16 @@
                         (noema-capability-ui--scope-label)
                         (or noema-capability-ui--filter "all")
                         (length tabulated-list-entries) errors)
-                (noema-capability-ui--toolbar-button "Add" #'noema-capability-ui-add)
+                (if (eq noema-capability-ui--view 'packs)
+                    (noema-capability-ui--toolbar-button "New pack" #'noema-capability-ui-create-pack)
+                  (noema-capability-ui--toolbar-button "Add" #'noema-capability-ui-add))
+                (when (eq noema-capability-ui--view 'packs)
+                  (noema-capability-ui--toolbar-button "Members" #'noema-capability-ui-edit-pack-members))
                 (noema-capability-ui--toolbar-button "Patch → Project" #'noema-capability-ui-create-project-patch)
                 (noema-capability-ui--toolbar-button "Copy → Local" #'noema-capability-ui-copy-global-skill)
                 (noema-capability-ui--toolbar-button "Refine · Agent" #'noema-capability-ui-edit-with-agent)
                 (noema-capability-ui--toolbar-button "Folder" #'noema-capability-ui-open-directory)
+                (noema-capability-ui--toolbar-button "Upstream" #'noema-skill-upstream)
                 (noema-capability-ui--toolbar-button "Edit" #'noema-capability-ui-open-source)
                 (noema-capability-ui--toolbar-button "Actions C-c C-a" #'noema-capability-ui-menu))))
   (tabulated-list-print t)
@@ -266,6 +332,36 @@
         (goto-char (point-min))
         (special-mode)))
     (pop-to-buffer buffer)))
+
+(defun noema-capability-ui--show-skill (id)
+  "Show flat Skill ID on the Global page, clearing a filter that hides it."
+  (noema-capability-ui--switch 'global)
+  (unless (member noema-capability-ui--filter '(nil "skill"))
+    (setq noema-capability-ui--filter nil)
+    (noema-capability-ui--render noema-capability-ui--resolution))
+  (goto-char (point-min))
+  (let ((target (cons "skill" id)))
+    (while (and (not (equal (tabulated-list-get-id) target)) (not (eobp)))
+      (forward-line 1))
+    (unless (equal (tabulated-list-get-id) target)
+      (goto-char (point-min))
+      (message "Noema: Skill %s is not in the global library" id))))
+
+(defun noema-capability-ui-visit ()
+  "Expand or collapse a pack, follow a member link, or inspect a record."
+  (interactive)
+  (let ((identity (tabulated-list-get-id)))
+    (cond
+     ((noema-capability-ui--member-row-p identity)
+      (noema-capability-ui--show-skill (nth 2 identity)))
+     ((and (eq noema-capability-ui--view 'packs) (equal (car-safe identity) "pack"))
+      (let ((id (cdr identity)))
+        (setq noema-capability-ui--expanded
+              (if (member id noema-capability-ui--expanded)
+                  (delete id noema-capability-ui--expanded)
+                (cons id noema-capability-ui--expanded)))
+        (noema-capability-ui--render noema-capability-ui--resolution)))
+     (t (noema-capability-ui-inspect)))))
 
 (defun noema-capability-ui--after-mutation (buffer result error-object)
   "Refresh BUFFER after a mutation, or display ERROR-OBJECT."
@@ -437,11 +533,14 @@
 (set-keymap-parent noema-capability-ui-mode-map tabulated-list-mode-map)
 ;; Remove bindings from earlier loads as well; Evil keeps motions, operators,
 ;; search, counts and undo.  Commands live under C-c and the mouse toolbar.
-(dolist (key '("1" "2" "3" "i" "e" "d" "p" "P" "a" "n" "I" "f" "u" "E" "t" "l" "/" "?" "c" "G" "D" "L" "g"))
+(dolist (key '("1" "2" "3" "4" "i" "e" "d" "p" "P" "a" "n" "I" "f" "u" "E" "t" "l" "/" "?" "c" "G" "D" "L" "g"))
   (define-key noema-capability-ui-mode-map (kbd key) nil))
 (defvar noema-capability-ui-command-map (make-sparse-keymap))
 (dolist (binding '(("1" . noema-capability-ui-global) ("2" . noema-capability-ui-project-patches)
-                   ("3" . noema-capability-ui-local-skills) ("C-a" . noema-capability-ui-menu)
+                   ("3" . noema-capability-ui-local-skills) ("4" . noema-capability-ui-packs)
+                   ("C-a" . noema-capability-ui-menu)
+                   ("N" . noema-capability-ui-create-pack) ("m" . noema-capability-ui-edit-pack-members)
+                   ("U" . noema-skill-upstream)
                    ("a" . noema-capability-ui-add) ("n" . noema-capability-ui-create-skill)
                    ("I" . noema-capability-ui-import-skill) ("p" . noema-capability-ui-create-project-patch)
                    ("y" . noema-capability-ui-copy-global-skill) ("s" . noema-capability-ui-edit-with-agent)
@@ -458,17 +557,19 @@
                    ("?" . describe-mode)))
   (define-key noema-capability-ui-command-map (kbd (car binding)) (cdr binding)))
 (define-key noema-capability-ui-mode-map (kbd "C-c") noema-capability-ui-command-map)
-(define-key noema-capability-ui-mode-map (kbd "RET") #'noema-capability-ui-inspect)
+(define-key noema-capability-ui-mode-map (kbd "RET") #'noema-capability-ui-visit)
 
 (with-eval-after-load 'evil
   (evil-set-initial-state 'noema-capability-ui-mode 'normal)
   (evil-define-key* '(normal visual motion) noema-capability-ui-mode-map
     (kbd "C-c") noema-capability-ui-command-map
-    (kbd "RET") #'noema-capability-ui-inspect))
+    (kbd "RET") #'noema-capability-ui-visit))
 
 (define-derived-mode noema-capability-ui-mode tabulated-list-mode "Noema-Capabilities"
   "Manage the global Skill/MCP library and optional project overlays.
 C-c 1: global library.  C-c 2: project patches.  C-c 3: local Skills.
+C-c 4: Skill packs; RET expands a pack's member links, and RET on a member
+shows that Skill in the flat library.  C-c U: upstream versions of Skills.
 C-c C-a opens the action menu.  Evil's normal navigation and editing keys
 are preserved; no state or mode is disabled.
 C-c q closes the manager and restores the buffer it temporarily covered.

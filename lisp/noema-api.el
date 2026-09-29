@@ -110,11 +110,11 @@
         (t nil)))
 
 (defun noema--capability-type (type)
-  "Normalize capability TYPE to `skill' or `mcp' wire text."
+  "Normalize capability TYPE to `skill', `mcp' or `pack' wire text."
   (let ((name (string-remove-prefix ":" (format "%s" type))))
-    (if (member name '("skill" "mcp"))
+    (if (member name '("skill" "mcp" "pack"))
         name
-      (user-error "Noema capability type must be skill or mcp: %S" type))))
+      (user-error "Noema capability type must be skill, mcp or pack: %S" type))))
 
 (defun noema--project-context-path (context)
   "Return a local path represented by CONTEXT."
@@ -305,17 +305,19 @@ runtime effect and retains the explicit local-execution confirmation."
       (noema-research-run-project-file project-file args)
     (call-interactively #'noema-research-run-project-file)))
 
-(defun noema--host-call-now (channel body callback)
-  "Call host CHANNEL with BODY and CALLBACK after readiness was checked."
+(defun noema--host-call-now (channel body callback &optional timeout)
+  "Call host CHANNEL with BODY and CALLBACK after readiness was checked.
+TIMEOUT defaults to 30 seconds."
   (if (and (bound-and-true-p my/noema--ready) (fboundp 'my/noema-api-call))
-      (my/noema-api-call channel (vector body) callback 30)
+      (my/noema-api-call channel (vector body) callback (or timeout 30))
     (funcall callback nil '((code . "offline")
                             (message . "Noema web-host is not ready")))))
 
-(defun noema--host-call (channel body callback)
+(defun noema--host-call (channel body callback &optional timeout)
   "Call semantic host CHANNEL with BODY and CALLBACK.
 CALLBACK receives (RESULT ERROR).  Starting the local host is the only effect
-performed before the requested query or mutation."
+performed before the requested query or mutation.  TIMEOUT, in seconds, is
+for channels that do network work, such as upstream Skill fetches."
   (unless (functionp callback) (user-error "Noema async API requires a callback"))
   ;; Dedicated global channels fail closed on an older host which would
   ;; otherwise ignore scope and fall back to its default project for writes.
@@ -326,8 +328,8 @@ performed before the requested query or mutation."
   (if (and (fboundp 'my/noema--ensure-server)
            (not (bound-and-true-p my/noema--ready)))
       (my/noema--ensure-server
-       (lambda () (noema--host-call-now channel body callback)))
-    (noema--host-call-now channel body callback)))
+       (lambda () (apply #'noema--host-call-now channel body callback (and timeout (list timeout)))))
+    (apply #'noema--host-call-now channel body callback (and timeout (list timeout)))))
 
 (defun noema-capability--target (project scope)
   "Return the cache/request identity for PROJECT and SCOPE.
@@ -480,6 +482,53 @@ OPERATION is `patch' or `copy'.  Never writes the global source."
     (noema--host-call "aaronnote:api:research:capability:skill:prepare"
                      `((cwd . ,root) (id . ,id) (operation . ,operation))
                      (apply-partially #'noema-capability--after-write root callback))))
+
+;;;###autoload
+(cl-defun noema-pack-define (id definition &key project scope callback)
+  "Define Skill pack ID with DEFINITION in SCOPE; nil DEFINITION removes it.
+DEFINITION is an alist with `members' (a vector of Skill ids) and optional
+`description', `title' and `preamble'.  A pack only links Skills by id."
+  (let ((root (noema-capability--target project scope)))
+    (noema--host-call
+     "aaronnote:api:research:capability:mutate"
+     (noema-capability--body root `((type . "pack") (id . ,id) (definition . ,(or definition :null))))
+     (apply-partially #'noema-capability--after-write root callback))))
+
+(defconst noema-skill-upstream-timeout 180
+  "Seconds allowed for an upstream Skill fetch through the host.")
+
+;;;###autoload
+(cl-defun noema-skill-upstream-status (&key check callback)
+  "Report locked global Skills; with CHECK, also query their upstreams.
+CALLBACK receives the status object and an error object."
+  (noema--host-call
+   "aaronnote:api:research:capability:global:skill:upstream:status"
+   `((scope . "global") (check . ,(if check t :false)))
+   (lambda (result error-object)
+     (funcall callback (and result (noema--value result "upstream")) error-object))
+   (and check noema-skill-upstream-timeout)))
+
+;;;###autoload
+(cl-defun noema-skill-upstream-install (repository &key path ref license callback)
+  "Install a global Skill from REPOSITORY at PATH and REF, and lock it."
+  (noema--host-call
+   "aaronnote:api:research:capability:global:skill:upstream:install"
+   `((scope . "global") (repository . ,repository) (path . ,(or path "."))
+     (ref . ,(or ref "HEAD")) (license . ,(or license "")))
+   (apply-partially #'noema-capability--after-write :global callback)
+   noema-skill-upstream-timeout))
+
+;;;###autoload
+(cl-defun noema-skill-upstream-update (id &key commit force dry-run callback)
+  "Move locked global Skill ID to its upstream head, or to COMMIT.
+With DRY-RUN, only report the diff.  FORCE discards local edits."
+  (noema--host-call
+   "aaronnote:api:research:capability:global:skill:upstream:update"
+   `((scope . "global") (id . ,id) ,@(when commit `((commit . ,commit)))
+     (force . ,(if force t :false)) (dryRun . ,(if dry-run t :false)))
+   (if dry-run callback
+     (apply-partially #'noema-capability--after-write :global callback))
+   noema-skill-upstream-timeout))
 
 (defun noema-capability-cached-skill-ids (&optional project)
   "Return selectable Skill ids from PROJECT's authoritative resolution."

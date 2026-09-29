@@ -34,6 +34,28 @@
                          (noema--sequence (noema--value resolution "skills"))))))
     noema-research-completion--skill-pairs))
 
+(defvar-local noema-research-completion--pack-resolution nil)
+(defvar-local noema-research-completion--pack-pairs nil)
+
+(defun noema-research-completion--packs ()
+  "Selectable packs with their member links, cached per project resolution."
+  (let ((resolution (plist-get (gethash noema-research-completion--project noema-capability--cache)
+                              :resolution)))
+    (unless (eq resolution noema-research-completion--pack-resolution)
+      (setq noema-research-completion--pack-resolution resolution
+            noema-research-completion--pack-pairs
+            (mapcar
+             (lambda (record)
+               (cons (noema--value record "id")
+                     (format "%s · %s · %s"
+                             (if (eq t (noema--value record "enabled")) "enabled" "available")
+                             (or (noema--value record "description") "")
+                             (mapconcat (lambda (member) (noema--value member "id"))
+                                        (noema--sequence (noema--value record "members")) ", "))))
+             (seq-filter (lambda (record) (eq t (noema--value record "selectable")))
+                         (noema--sequence (noema--value resolution "packs"))))))
+    noema-research-completion--pack-pairs))
+
 (defun noema-research-completion--wake ()
   "Offer refreshed candidates in the selected Company buffer."
   (when (and (eq (current-buffer) (window-buffer (selected-window)))
@@ -106,7 +128,7 @@
         (let ((start (point)) seen (valid t))
           (while (and valid (< (point) line-start))
             (cond
-             ((looking-at "@@\\(?:agent\\|session\\|ctx\\|skill\\)([^)\n]+)[ \t]*$")
+             ((looking-at "@@\\(?:agent\\|session\\|ctx\\|skill\\|pack\\)([^)\n]+)[ \t]*$")
               (setq seen t))
              ((and seen (looking-at "[ \t]*$")))
              (t (setq valid nil)))
@@ -180,8 +202,9 @@ an `@@skill' id, including while its asynchronous candidate list is empty."
         (setq names t beg (line-beginning-position)
               end (save-excursion (skip-chars-forward "a-z") (point))
               pairs '(("@@agent" . "Choose agent") ("@@session" . "Choose session")
-                      ("@@ctx" . "Add context") ("@@skill" . "Use Skill"))))
-       ((string-match "\\`@@\\(agent\\|session\\|ctx\\|skill\\)(\\([^)]*\\)\\'" line)
+                      ("@@ctx" . "Add context") ("@@skill" . "Use Skill")
+                      ("@@pack" . "Use a Skill pack"))))
+       ((string-match "\\`@@\\(agent\\|session\\|ctx\\|skill\\|pack\\)(\\([^)]*\\)\\'" line)
         (setq name (match-string 1 line)
               beg (+ (line-beginning-position) (match-beginning 2))
               end (save-excursion (skip-chars-forward "^)\n") (point)))
@@ -199,13 +222,17 @@ an `@@skill' id, including while its asynchronous candidate list is empty."
                   ("ctx" (noema-research-completion--context value))
                   ("skill"
                    (noema-research-completion-refresh)
-                   (noema-research-completion--skills)))))))
+                   (noema-research-completion--skills))
+                  ("pack"
+                   (noema-research-completion-refresh)
+                   (noema-research-completion--packs)))))))
       (when pairs
         (list beg end (mapcar #'car pairs)
               :exclusive t :company-prefix-length t
               :company-kind (lambda (_candidate)
                               (pcase name
                                 ("skill" 'module)
+                                ("pack" 'folder)
                                 ("ctx" 'file)
                                 ("agent" 'function)
                                 ("session" 'variable)

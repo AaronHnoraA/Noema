@@ -443,3 +443,22 @@
           (when (buffer-live-p form) (kill-buffer form)))))))
 
 (provide 'noema-completion-tests)
+
+(ert-deftest noema-completion-pack-directive-offers-selectable-packs ()
+  (let ((noema-capability--cache (make-hash-table :test #'equal)))
+    (puthash "/project/"
+             '(:resolution ((packs . [((id . "math-writing") (selectable . t) (description . "Prose")
+                                       (members . [((id . "math-prose"))]))
+                                      ((id . "broken") (selectable . :false))])))
+             noema-capability--cache)
+    (noema-completion-test--buffer "%% work Review\n@@pa"
+      (should (member "@@pack" (nth 2 (noema-research-completion-at-point)))))
+    (noema-completion-test--buffer "%% work Review\n@@pack(ma"
+      (cl-letf (((symbol-function 'noema-research-completion-refresh) #'ignore))
+        (let ((capf (noema-research-completion-at-point)))
+          (should (equal (nth 2 capf) '("math-writing")))
+          (should (string-match-p "math-prose"
+                                  (funcall (plist-get (nthcdr 3 capf) :annotation-function) "math-writing"))))))
+    ;; A leading @@pack keeps the control region open for the next directive.
+    (noema-completion-test--buffer "%% work Review\n@@pack(math-writing)\n@@sk"
+      (should (member "@@skill" (nth 2 (noema-research-completion-at-point)))))))

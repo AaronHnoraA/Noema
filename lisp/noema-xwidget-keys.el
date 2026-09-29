@@ -171,10 +171,14 @@
           ;; renderer's Emacs chord gate, with or without these modifiers.
           (dolist (modifiers '(nil (shift) (meta) (meta shift) (control)
                                 (control shift)))
-            (define-key map
-                        (vector (event-convert-list
-                                 (append modifiers (list basic))))
-                        binding)))))
+            ;; M-<arrow> is windmove in every Emacs window, a Noema pane
+            ;; included: the page forwards Cmd+Arrow for the same reason.
+            (unless (and (equal modifiers '(meta))
+                         (memq basic '(left right up down)))
+              (define-key map
+                          (vector (event-convert-list
+                                   (append modifiers (list basic))))
+                          binding))))))
     map)
   "Conditional recovery keys for a Noema xwidget pane.")
 
@@ -190,7 +194,8 @@
              'my/noema--xwidget-recovery-emulation-alist)
 
 (define-minor-mode my/noema-xwidget-recovery-mode
-  "Recover Noema document keys only when xwidget edit mode drops."
+  "Deliver Noema document keys that reach Emacs instead of the page.
+Emacs receives a pane's keys only while WebKit lacks the native keyboard."
   :init-value nil
   :lighter nil
   :keymap my/noema-xwidget-recovery-mode-map)
@@ -246,12 +251,16 @@ shared CM6 renderer. This buffer retains only xwidget identity/chrome modes."
         (set-buffer-modified-p nil)))))
 
 (defun my/noema--sync-xwidget-recovery-mode (&rest _)
-  "Enable recovery keys exactly while this Noema xwidget is not editing.
-This is driven by `xwidget-webkit-edit-mode' transitions, so there is no
-timer, polling, or per-key mode detection on the normal typing path."
+  "Keep recovery keys on in every Noema xwidget pane.
+Emacs sees a pane's keys only while WebKit lacks the native keyboard: the
+page hands it to Emacs whenever Emacs takes the keyboard, and on macOS Emacs
+cannot give it back (`xwidget-webkit-pass-command-event' is GTK-only), so a
+pane entered from the keyboard receives its keys through this map until it
+is clicked.  While WebKit holds the keyboard, Emacs never sees them, so the
+map costs nothing on the normal typing path.  Driven by
+`xwidget-webkit-edit-mode' transitions; no timer or polling."
   (when (my/noema--xwidget-buffer-p)
-    (my/noema-xwidget-recovery-mode
-     (if (bound-and-true-p xwidget-webkit-edit-mode) -1 1))))
+    (my/noema-xwidget-recovery-mode 1)))
 
 (defun my/noema--identity-random-hex ()
   "Return 20 hexadecimal random digits for a Noema UUIDv7."
@@ -342,8 +351,9 @@ normal result rather than a gateway error."
           (ignore-errors (xwidget-webkit-edit-mode -1))
           ;; Tell the page too: macOS still offers WebKit arrows and other
           ;; function keys, which must not pull the keyboard back to it.
-          (when my/noema--client-id
-            (my/noema-command "host-owns-keyboard")))))))
+          ;; Every Noema page honours this (aaronnote/host-keyboard.ts); a
+          ;; pane without a client id receives it as a broadcast.
+          (my/noema-command "host-owns-keyboard"))))))
 
 (defun my/noema--focus-xwidget-window (window)
   "Focus Noema xwidget WINDOW like a direct window click."
@@ -466,11 +476,60 @@ prefix argument, minibuffer or transient menu."
    (t
     (pcase-let ((`(,source . ,snapshot) my/noema--forwarded-command))
       (my/noema--forget-forwarded-command)
-      (when-let* ((window (my/noema--forwarded-result-window source snapshot)))
-        (when (and (window-live-p source)
+      (if-let* ((window (my/noema--forwarded-result-window source snapshot)))
+          (my/noema--give-keyboard-to-result source window)
+        ;; Nothing visible changed yet.  The pane keeps the keyboard, and a
+        ;; window the command shows later (a process starting an agent, a
+        ;; terminal, a compose buffer) still takes it within the grace period.
+        (when (and (eq (selected-window) source)
                    (my/noema--xwidget-buffer-p (window-buffer source)))
-          (my/noema--release-xwidget-input-buffer (window-buffer source)))
-        (my/noema--select-emacs-window window))))))
+          (my/noema--focus-xwidget-window source))
+        (my/noema--await-forwarded-result source snapshot))))))
+
+(defun my/noema--give-keyboard-to-result (source window)
+  "Move the keyboard from Noema pane window SOURCE to result WINDOW."
+  (when (and (window-live-p source)
+             (my/noema--xwidget-buffer-p (window-buffer source)))
+    (my/noema--release-xwidget-input-buffer (window-buffer source)))
+  (my/noema--select-emacs-window window))
+
+(defvar my/noema-forwarded-command-grace 2.0
+  "Seconds a forwarded command may take to show its result window.
+Commands that start a process display their buffer after they return; the
+keyboard follows such a window only while the originating pane is still
+selected, so a person who has moved on is never pulled back.")
+
+(defvar my/noema--forwarded-await nil
+  "(SOURCE SNAPSHOT TIMER) while waiting for a late forwarded result.")
+
+(defun my/noema--stop-awaiting-forwarded-result ()
+  "Stop waiting for a late forwarded result."
+  (when-let* ((timer (nth 2 my/noema--forwarded-await)))
+    (cancel-timer timer))
+  (setq my/noema--forwarded-await nil)
+  (remove-hook 'window-buffer-change-functions #'my/noema--forwarded-result-appeared))
+
+(defun my/noema--await-forwarded-result (source snapshot)
+  "Follow a window shown late on behalf of pane SOURCE, given SNAPSHOT."
+  (my/noema--stop-awaiting-forwarded-result)
+  (when (and (window-live-p source) (> my/noema-forwarded-command-grace 0))
+    (setq my/noema--forwarded-await
+          (list source snapshot
+                (run-at-time my/noema-forwarded-command-grace nil
+                             #'my/noema--stop-awaiting-forwarded-result)))
+    (add-hook 'window-buffer-change-functions #'my/noema--forwarded-result-appeared)))
+
+(defun my/noema--forwarded-result-appeared (&optional _frame)
+  "Give the keyboard to a window a forwarded command showed late."
+  (pcase-let ((`(,source ,snapshot ,_timer) my/noema--forwarded-await))
+    (cond
+     ((not (and (window-live-p source) (eq (selected-window) source)))
+      (my/noema--stop-awaiting-forwarded-result))
+     ((active-minibuffer-window))
+     (t
+      (when-let* ((window (my/noema--forwarded-result-window source snapshot)))
+        (my/noema--stop-awaiting-forwarded-result)
+        (my/noema--give-keyboard-to-result source window))))))
 
 (defun my/noema--forget-forwarded-command ()
   "Stop following the last forwarded command."
@@ -479,6 +538,7 @@ prefix argument, minibuffer or transient menu."
 
 (defun my/noema--follow-forwarded-command (source)
   "Follow the next command's result on behalf of Noema pane window SOURCE."
+  (my/noema--stop-awaiting-forwarded-result)
   (setq my/noema--forwarded-command (cons source (my/noema--window-snapshot))
         my/noema--forwarded-command-countdown my/noema--forwarded-command-patience)
   (add-hook 'post-command-hook #'my/noema--after-forwarded-command))

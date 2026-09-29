@@ -16,6 +16,11 @@ const SCOPE_PATTERN = /^[A-Za-z][A-Za-z0-9._-]*$/;
 const BUILTIN_SKILL_DIRECTORY = resolve(dirname(fileURLToPath(import.meta.url)), "../../resources/skills");
 const mutationQueues = new Map();
 
+/** Where the global library lives; the upstream lock is its sibling. */
+export function globalCapabilityPaths(options) {
+  return globalPaths(options);
+}
+
 function globalPaths({ environment = process.env, userHome = homedir(), globalConfigPath, globalSkillDirectory } = {}) {
   const configFile = resolve(globalConfigPath || environment.NOEMA_GLOBAL_CAPABILITIES
     || join(userHome, ".emacs.d", "etc", "noema", "capabilities.json"));
@@ -277,10 +282,67 @@ function validateConfigShape(config, path) {
       }
     }
   }
+  validatePackSection(config.packs, path);
   const servers = config.mcp?.servers;
   if (servers !== undefined && (!servers || typeof servers !== "object")) {
     throw capabilityError(`Capability configuration ${path} field mcp.servers must be an array or object`,
       "ERR_NOEMA_CAPABILITY_CONFIG", { source: path, field: "mcp.servers", value: servers });
+  }
+}
+
+function validPackMembers(value) {
+  return Array.isArray(value) && value.every((id) => typeof id === "string" && ID_PATTERN.test(id));
+}
+
+/** A pack groups flat Skills by id; it never carries a copy of their content. */
+function validatePackDefinition(definition, path, field) {
+  const fail = (message) => {
+    throw capabilityError(`Pack ${field} in ${path} ${message}`, "ERR_NOEMA_CAPABILITY_CONFIG",
+      { source: path, field, value: definition });
+  };
+  if (!definition || typeof definition !== "object" || Array.isArray(definition)) fail("must be an object");
+  if (!validPackMembers(definition.members)) fail("needs a members array of Skill ids");
+  for (const key of ["title", "description", "preamble"]) {
+    if (definition[key] !== undefined && typeof definition[key] !== "string") fail(`field ${key} must be a string`);
+  }
+}
+
+function validatePackSection(section, path) {
+  if (section === undefined) return;
+  const fail = (field, message, value) => {
+    throw capabilityError(`Capability configuration ${path} field ${field} ${message}`,
+      "ERR_NOEMA_CAPABILITY_CONFIG", { source: path, field, value });
+  };
+  if (!section || typeof section !== "object" || Array.isArray(section)) fail("packs", "must be an object", section);
+  for (const field of ["enabled", "disabled"]) {
+    if (section[field] !== undefined && !validPackMembers(section[field])) {
+      fail(`packs.${field}`, "must be an array of pack ids", section[field]);
+    }
+  }
+  for (const field of ["definitions", "patches"]) {
+    const value = section[field];
+    if (value !== undefined && (!value || typeof value !== "object" || Array.isArray(value))) {
+      fail(`packs.${field}`, "must be an object", value);
+    }
+  }
+  for (const [id, definition] of Object.entries(object(section.definitions))) {
+    if (!ID_PATTERN.test(id)) fail(`packs.definitions.${id}`, "has an invalid pack id", id);
+    validatePackDefinition(definition, path, `packs.definitions.${id}`);
+  }
+  for (const [id, patch] of Object.entries(object(section.patches))) {
+    if (!ID_PATTERN.test(id)) fail(`packs.patches.${id}`, "has an invalid pack id", id);
+    for (const item of Array.isArray(patch) ? patch : [patch]) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        throw capabilityError(`Patch packs.${id} in ${path} must be an object or array of objects`,
+          "ERR_NOEMA_CAPABILITY_PATCH", { source: path, field: `packs.patches.${id}`, value: patch });
+      }
+      for (const key of ["members", "members_add", "members_remove"]) {
+        if (item[key] !== undefined && !validPackMembers(item[key])) {
+          throw capabilityError(`Patch packs.${id}.${key} in ${path} must be an array of Skill ids`,
+            "ERR_NOEMA_CAPABILITY_PATCH", { source: path, field: `packs.patches.${id}.${key}`, value: item[key] });
+        }
+      }
+    }
   }
 }
 
@@ -688,6 +750,138 @@ function applySkillDependencies(skills, definitions) {
   for (const skill of skills.filter((item) => item.enabled)) visit(skill);
 }
 
+function skillMemberState(skill) {
+  if (!skill || !skill.source) return "missing";
+  if (skill.selectable) return "available";
+  return skill.validation?.valid ? "disabled" : "invalid";
+}
+
+/**
+ * Resolve Skill packs over already-resolved flat Skills.  A pack is a curated
+ * link list: its members stay ordinary Skills with their own definitions,
+ * patches and selection.  Pack patches change membership and the pack's own
+ * preamble only, never member content, so one Skill id always has one
+ * effective content regardless of which pack selected it.
+ */
+function resolvePacks(scopes, skills, definitions, requestedPacks = []) {
+  const skillAliases = new Map();
+  for (const definition of definitions.filter((item) => item.type === "skill")) {
+    for (const alias of values(definition.aliases)) skillAliases.set(alias, definition.id);
+  }
+  const skillsByID = new Map(skills.map((skill) => [skill.id, skill]));
+  const byID = new Map();
+  const noAliases = new Map();
+  for (const scope of scopes) {
+    for (const definition of values(scope.packDefinitions)) {
+      if (!byID.has(definition.id)) byID.set(definition.id, []);
+      byID.get(definition.id).push(definition);
+    }
+    const section = object(scope.config.packs);
+    for (const reference of [...strings(section.enabled), ...strings(section.disabled), ...Object.keys(object(section.patches))]) {
+      if (!byID.has(reference)) byID.set(reference, []);
+    }
+  }
+  for (const requested of requestedPacks) if (!byID.has(requested)) byID.set(requested, []);
+  const resolved = [];
+  for (const [id, candidates] of [...byID.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+    candidates.sort((left, right) => left.rank - right.rank || left.source.path.localeCompare(right.source.path));
+    const base = candidates.at(-1);
+    const requestedByRun = requestedPacks.includes(id);
+    const diagnostics = [];
+    if (!base) diagnostics.push(requestedByRun
+      ? { severity: "error", code: "unknown-capability", message: `Unknown pack ${id}` }
+      : { severity: "warning", code: "unavailable-pack", message: `Configured pack ${id} has no definition and will be skipped` });
+    let effective = clone(base?.definition || { title: id, description: "", members: [], preamble: "" });
+    let enabled = false;
+    let explicitEnabled;
+    const selectedBy = [];
+    const appliedPatches = [];
+    for (const scope of scopes) {
+      if (base && scope.rank < base.rank) continue;
+      const section = object(scope.config.packs);
+      const enabledHere = strings(section.enabled).includes(id);
+      const disabledHere = strings(section.disabled).includes(id);
+      if (enabledHere && disabledHere) {
+        diagnostics.push({ severity: "error", code: "selection-conflict", message: `pack ${id} is both enabled and disabled in scope ${scope.name}` });
+      }
+      for (const patch of patchesFor(section, id, noAliases)) {
+        const raw = clone(object(patch));
+        const add = strings(raw.members_add);
+        const remove = new Set(strings(raw.members_remove));
+        const append = String(raw.preamble_append || "");
+        delete raw.members_add;
+        delete raw.members_remove;
+        delete raw.preamble_append;
+        const patchEnabled = typeof raw.enabled === "boolean" ? raw.enabled : undefined;
+        delete raw.enabled;
+        for (const reserved of ["id", "type", "source", "provenance", "validation"]) {
+          if (Object.hasOwn(raw, reserved)) {
+            diagnostics.push({ severity: "error", code: "invalid-patch", message: `Patch for pack ${id} cannot replace ${reserved}` });
+            delete raw[reserved];
+          }
+        }
+        effective = mergePatch(effective, raw);
+        const members = strings(effective.members).filter((member) => !remove.has(member));
+        for (const member of add) if (!members.includes(member)) members.push(member);
+        effective.members = members;
+        if (append.trim()) effective.preamble = `${String(effective.preamble || "").trimEnd()}\n\n${append.trim()}`.trim();
+        if (patchEnabled !== undefined) enabled = explicitEnabled = patchEnabled;
+        appliedPatches.push({ scope: scope.name, scopeId: scope.id, source: scope.path, patch: clone(patch) });
+      }
+      const selected = disabledHere ? false : enabledHere ? true : undefined;
+      if (selected !== undefined) {
+        enabled = explicitEnabled = selected;
+        selectedBy.push({ scope: scope.name, scopeId: scope.id, enabled: selected, reason: "pack selection" });
+      }
+    }
+    if (requestedByRun) {
+      if (explicitEnabled === false) {
+        diagnostics.push({ severity: "error", code: "disabled-capability-requested", message: `Pack ${id} is requested by @@pack but disabled by effective project configuration` });
+        selectedBy.push({ scope: "run", scopeId: "directive", enabled: false, reason: "@@pack blocked by explicit disable" });
+      } else {
+        enabled = true;
+        selectedBy.push({ scope: "run", scopeId: "directive", enabled: true, reason: "@@pack directive" });
+      }
+    }
+    if (!base && !requestedByRun) enabled = false;
+    const errors = [];
+    const members = strings(effective.members).map((reference) => {
+      const memberID = canonicalID(reference, skillAliases);
+      const skill = skillsByID.get(memberID);
+      return { id: memberID, reference, state: skillMemberState(skill), description: skill?.description || "" };
+    });
+    effective.members = members.map((member) => member.id);
+    if (base && !members.length) errors.push(`pack ${id} has no members`);
+    for (const member of members.filter((item) => item.state !== "available")) {
+      const message = member.state === "missing"
+        ? `Pack ${id} member ${member.id} is not an installed Skill`
+        : member.state === "disabled"
+          ? `Pack ${id} member ${member.id} is disabled; re-enable it or remove it with a members_remove patch`
+          : `Pack ${id} member ${member.id} is invalid`;
+      errors.push(message);
+      diagnostics.push({ severity: enabled ? "error" : "warning", code: `pack-member-${member.state}`, message });
+    }
+    if (effective.preamble) effective.preamble_sha256 = `sha256:${sha256(effective.preamble)}`;
+    const valid = Boolean(base) && errors.length === 0
+      && !diagnostics.some((item) => item.severity === "error" && item.code !== "disabled-capability-requested");
+    if (enabled && valid) {
+      for (const member of members) {
+        const skill = skillsByID.get(member.id);
+        if (!skill.enabled) skill.enabled = true;
+        skill.selectedBy.push({ scope: "pack", scopeId: id, enabled: true, reason: `member of pack ${id}` });
+      }
+    }
+    resolved.push({
+      id, type: "pack", title: effective.title || id, description: effective.description || "", enabled,
+      selectable: valid && explicitEnabled !== false,
+      source: clone(base?.source || null), effective, members, patches: appliedPatches, selectedBy,
+      shadowedDefinitions: candidates.slice(0, -1).map((item) => clone(item.source)),
+      validation: { valid, errors, warnings: [] }, diagnostics,
+    });
+  }
+  return resolved;
+}
+
 // The knowledge base and the AI workflow used to ship as one capability id.
 // They are two surfaces now, on two endpoints.
 const LEGACY_NOEMA_MCP_ID = "noema";
@@ -757,6 +951,16 @@ async function scopeFromConfig({ name, id, rank, path, config, projectRoot, defa
     scope.definitions.push(...await discoverSkills(absolute, scope, projectRoot));
   }
   scope.definitions.push(...normalizeMCPDefinitions(object(config.mcp), scope));
+  scope.packDefinitions = Object.entries(object(object(config.packs).definitions)).map(([packID, definition]) => ({
+    id: packID, type: "pack", rank,
+    source: { scope: name, scopeId: id, path },
+    definition: {
+      title: String(definition.title || packID),
+      description: String(definition.description || ""),
+      members: strings(definition.members),
+      preamble: String(definition.preamble || ""),
+    },
+  }));
   return scope;
 }
 
@@ -861,6 +1065,7 @@ export async function resolveProjectCapabilities({
   root,
   scope = "project",
   requestedSkills = [],
+  requestedPacks = [],
   runtimeDescriptor = {},
   environment = process.env,
   userHome = homedir(),
@@ -875,6 +1080,9 @@ export async function resolveProjectCapabilities({
   });
   const definitions = scopes.flatMap((scope) => scope.definitions);
   const skills = await resolveType("skill", scopes, definitions, strings(requestedSkills));
+  // Packs enable their members before the dependency closure is taken, so
+  // a member's `requires` is selected exactly as for a direct @@skill.
+  const packs = resolvePacks(scopes, skills, definitions, strings(requestedPacks));
   applySkillDependencies(skills, definitions);
   const mcps = await resolveType("mcp", scopes, definitions);
   for (const mcp of mcps) {
@@ -890,7 +1098,7 @@ export async function resolveProjectCapabilities({
       mcp.runtime = { state: "not-observed", availability, running: null, connected: null, observed: false };
     }
   }
-  const all = [...skills, ...mcps];
+  const all = [...skills, ...mcps, ...packs];
   const diagnostics = all.flatMap((capability) => [
     ...capability.diagnostics.map((item) => ({ ...item, id: capability.id, type: capability.type })),
     ...capability.validation.errors.map((message) => ({ severity: "error", code: "invalid-definition", message, id: capability.id, type: capability.type })),
@@ -906,9 +1114,11 @@ export async function resolveProjectCapabilities({
     libraries,
     skills: skills.map((item) => publicCapability(item, includeContent)),
     mcps: mcps.map((item) => publicCapability(item, includeContent)),
+    packs: packs.map((item) => clone(item)),
     active: {
       skills: skills.filter((item) => item.enabled).map((item) => item.id),
       mcps: mcps.filter((item) => item.enabled).map((item) => item.id),
+      packs: packs.filter((item) => item.enabled).map((item) => item.id),
     },
     diagnostics: [...diagnostics, ...libraries.filter((library) => library.state === "error").map((library) => ({
       severity: "warning", code: "external-library-error", message: `Cannot read or parse ${library.id} configuration`,
@@ -923,7 +1133,7 @@ export function assertRunnableCapabilities(environment) {
     throw capabilityError(blockedRequest.message, "ERR_NOEMA_SKILL",
       { capability: blockedRequest.id, type: blockedRequest.type });
   }
-  for (const capability of [...values(environment.skills), ...values(environment.mcps)]) {
+  for (const capability of [...values(environment.packs), ...values(environment.skills), ...values(environment.mcps)]) {
     if (!capability.enabled) continue;
     if (!capability.validation?.valid) {
       const reason = capability.validation?.errors?.[0] || capability.diagnostics?.[0]?.message || "invalid configuration";
@@ -973,6 +1183,36 @@ export function resolvedSkillsForRun(environment) {
   return { skills, items };
 }
 
+/** Freeze enabled packs: their resolved membership and optional preamble. */
+export function resolvedPacksForRun(environment) {
+  const packs = [];
+  const items = [];
+  for (const pack of values(environment.packs).filter((item) => item.enabled)) {
+    const preamble = String(pack.effective?.preamble || "");
+    packs.push({
+      id: pack.id,
+      members: clone(values(pack.effective?.members)),
+      ...(preamble ? { preamble_sha256: pack.effective.preamble_sha256 || `sha256:${sha256(preamble)}` } : {}),
+      source: clone(pack.source),
+      scope: pack.source?.scope || "",
+      patches: clone(pack.patches || []),
+    });
+    if (!preamble.trim()) continue;
+    const delivered = `Noema Skill pack: ${pack.id}\nMembers: ${values(pack.effective?.members).join(", ")}\n\n${preamble.trim()}\n`;
+    const digest = `sha256:${sha256(delivered)}`;
+    items.push({
+      ref: `pack:${pack.id}`,
+      resolvedUri: `noema://pack/${encodeURIComponent(pack.id)}/${digest.replace(/^sha256:/, "")}`,
+      contentBase64: Buffer.from(delivered).toString("base64"),
+      mediaType: "text/markdown; charset=utf-8",
+      sha256: digest,
+      bytes: Buffer.byteLength(delivered),
+      truncated: false,
+    });
+  }
+  return { packs, items };
+}
+
 export function resolvedMCPServersForRun(environment) {
   return values(environment.mcps)
     .filter((item) => item.enabled && item.validation?.valid
@@ -997,7 +1237,7 @@ function updateSelection(section, id, enabled) {
 
 export async function mutateProjectCapability({ root, scope = "project", type, id, enabled, patch, definition, ...options } = {}) {
   const projectRoot = scope === "global" ? null : await realpath(resolve(root || "."));
-  const capabilityType = type === "mcp" ? "mcp" : type === "skill" ? "skill" : "";
+  const capabilityType = ["mcp", "skill", "pack"].includes(type) ? type : "";
   const capabilityID = String(id || "").trim();
   if (!capabilityType || !ID_PATTERN.test(capabilityID)) {
     throw capabilityError(`Capability mutation needs a valid type and id`, "ERR_NOEMA_CAPABILITY_MUTATION",
@@ -1008,7 +1248,7 @@ export async function mutateProjectCapability({ root, scope = "project", type, i
   const operation = previous.catch(() => {}).then(async () => {
     const source = await readConfig(path, { optional: true });
     const config = source?.config || defaultConfig();
-    const key = capabilityType === "skill" ? "skills" : "mcp";
+    const key = { skill: "skills", mcp: "mcp", pack: "packs" }[capabilityType];
     config[key] = object(config[key]);
     const section = config[key];
     if (typeof enabled === "boolean") updateSelection(section, capabilityID, enabled);
@@ -1023,6 +1263,14 @@ export async function mutateProjectCapability({ root, scope = "project", type, i
       section.patches = object(section.patches);
       section.patches[capabilityID] = clone(patch);
     }
+    if (capabilityType === "pack" && definition !== undefined) {
+      section.definitions = object(section.definitions);
+      if (definition === null) delete section.definitions[capabilityID];
+      else {
+        validatePackDefinition(definition, path, `packs.definitions.${capabilityID}`);
+        section.definitions[capabilityID] = { ...clone(definition), members: strings(definition.members) };
+      }
+    }
     if (capabilityType === "mcp" && definition !== undefined) {
       if (!definition || typeof definition !== "object" || Array.isArray(definition)) {
         throw capabilityError(`MCP definition ${capabilityID} must be an object`, "ERR_NOEMA_MCP", { id: capabilityID });
@@ -1033,6 +1281,8 @@ export async function mutateProjectCapability({ root, scope = "project", type, i
       section.servers = [...servers.filter((item) => String(item?.id || item?.name || "") !== capabilityID),
         { ...clone(definition), id: capabilityID }];
     }
+    // Never persist a document that the next resolution would refuse.
+    validateConfigShape(config, path);
     await writeConfigAtomically(path, config);
     return { projectRoot, configFile: path, mutation: { type: capabilityType, id: capabilityID, enabled, patch, definition } };
   });

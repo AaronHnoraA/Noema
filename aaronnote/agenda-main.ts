@@ -12,6 +12,11 @@ import { api } from "./api-client.ts";
 import type { TodoItem } from "./api-client.ts";
 import { openAgendaView, refreshAgendaView, refreshAgendaAttention } from "./agenda-view.ts";
 import { installNoemaThemeRuntime, loadNoemaAppConfig } from "./theme-runtime.ts";
+import { installHostKeyboardBridge, pageClientFromLocation } from "./host-keyboard.ts";
+
+// Emacs host keys, host-owned keys and focus handoff: the rule every Noema
+// page shares (see host-keyboard.ts).
+installHostKeyboardBridge({ client: () => pageClientFromLocation() });
 
 const removeNoemaThemeRuntime = installNoemaThemeRuntime();
 const removeB3ComponentSystem = installB3ComponentSystem(document.body);

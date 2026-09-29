@@ -14,8 +14,10 @@ import {
   projectCapabilityConfig,
   resolveProjectCapabilities,
   resolvedMCPServersForRun,
+  resolvedPacksForRun,
   resolvedSkillsForRun,
 } from "./noema-capabilities.mjs";
+import { installUpstreamSkill, skillUpstreamStatus, updateUpstreamSkill } from "./noema-skill-upstream.mjs";
 import {
   deriveSessionRoute,
   parseSessionDirective,
@@ -1105,6 +1107,7 @@ export function createResearchRuntimeService({
           agent: directives.agent,
           session_policy: directives.session,
           skills: directives.skills,
+          packs: directives.packs,
         },
         defaultAgent: valueString(notebookMeta.default_agent),
         context: directives.context,
@@ -1137,7 +1140,7 @@ export function createResearchRuntimeService({
         prompt: parsed.prompt,
         cell: null,
         notebook: null,
-        executor: { ...object(body.executor), agent: parsed.agent || object(body.executor).agent, skills: parsed.skills },
+        executor: { ...object(body.executor), agent: parsed.agent || object(body.executor).agent, skills: parsed.skills, packs: parsed.packs },
         defaultAgent: "",
         directiveSession: parsed.session,
         context: parsed.context,
@@ -1608,6 +1611,7 @@ export function createResearchRuntimeService({
 		capabilities: await resolveProjectCapabilities({
 		  root, scope,
 		  requestedSkills: values(body.requestedSkills || body.requested_skills),
+		  requestedPacks: values(body.requestedPacks || body.requested_packs),
 		  runtimeDescriptor: object(getRuntimeDescriptor()),
 		}),
 	  };
@@ -1627,6 +1631,29 @@ export function createResearchRuntimeService({
         sourceDirectory: valueString(body.sourceDirectory) });
       return { root, skill, capabilities: await resolveProjectCapabilities({ root, scope,
         runtimeDescriptor: object(getRuntimeDescriptor()) }) };
+    },
+
+    async skillUpstreamStatus(body = {}) {
+      const ids = values(body.ids).map(valueString).filter(Boolean);
+      return { upstream: await skillUpstreamStatus({ check: body.check === true, ...(ids.length ? { ids } : {}) }) };
+    },
+
+    async installUpstreamSkill(body = {}) {
+      const skill = await installUpstreamSkill({
+        repository: valueString(body.repository), ref: valueString(body.ref) || "HEAD",
+        path: valueString(body.path) || ".", license: valueString(body.license),
+      });
+      return { skill, capabilities: await resolveProjectCapabilities({ root: null, scope: "global",
+        runtimeDescriptor: object(getRuntimeDescriptor()) }) };
+    },
+
+    async updateUpstreamSkill(body = {}) {
+      const update = await updateUpstreamSkill({
+        id: valueString(body.id), ...(valueString(body.commit) ? { commit: valueString(body.commit) } : {}),
+        force: body.force === true, dryRun: body.dryRun === true,
+      });
+      return { update, ...(update.updated ? { capabilities: await resolveProjectCapabilities({ root: null, scope: "global",
+        runtimeDescriptor: object(getRuntimeDescriptor()) }) } : {}) };
     },
 
     async prepareSkill(body = {}) {
@@ -1768,14 +1795,17 @@ export function createResearchRuntimeService({
           : reconstruction.item);
       }
       const skillIds = [...values(source.executor.skills), ...values(body.skills)].map(valueString).filter(Boolean);
+      const packIds = [...values(source.executor.packs), ...values(body.packs)].map(valueString).filter(Boolean);
       const capabilityEnvironment = assertRunnableCapabilities(await resolveProjectCapabilities({
         root,
         requestedSkills: skillIds,
+        requestedPacks: packIds,
         runtimeDescriptor: object(getRuntimeDescriptor()),
         includeContent: true,
       }));
       const resolvedSkills = resolvedSkillsForRun(capabilityEnvironment);
-      candidateContext.push(...resolvedSkills.items);
+      const resolvedPacks = resolvedPacksForRun(capabilityEnvironment);
+      candidateContext.push(...resolvedPacks.items, ...resolvedSkills.items);
       const automaticContextRefs = new Set(candidateContext.filter((item) => item.auto).map((item) => item.ref));
       const { items: contextItems, omitted: omittedContext } = fitAutomaticContext(candidateContext);
       const capabilities = normalizeCapabilities(source.executor.capabilities, body.capabilities);
@@ -1785,7 +1815,9 @@ export function createResearchRuntimeService({
       const capabilitySnapshot = structuredClone(capabilityEnvironment);
       capabilitySnapshot.skills = values(capabilitySnapshot.skills).filter((item) => item.enabled);
       capabilitySnapshot.mcps = values(capabilitySnapshot.mcps).filter((item) => item.enabled);
+      capabilitySnapshot.packs = values(capabilitySnapshot.packs).filter((item) => item.enabled);
       const activeKeys = new Set([
+        ...capabilitySnapshot.packs.map((item) => `pack:${item.id}`),
         ...capabilitySnapshot.skills.map((item) => `skill:${item.id}`),
         ...capabilitySnapshot.mcps.map((item) => `mcp:${item.id}`),
       ]);
@@ -1821,6 +1853,7 @@ export function createResearchRuntimeService({
         execution_target: target,
         cwd: target,
         skills: resolvedSkills.skills,
+        ...(resolvedPacks.packs.length ? { packs: resolvedPacks.packs } : {}),
         capabilities,
         external_sandbox: externalSandbox,
         context: contextItems.map(publicContextItem),

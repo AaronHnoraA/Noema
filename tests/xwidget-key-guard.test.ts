@@ -1558,24 +1558,37 @@ describe("xwidget key guard", () => {
     });
   });
 
-  test("leaves Cmd+Arrow keys to native CodeMirror/WebKit editing", () => {
+  test("Cmd+Arrow moves between Emacs windows; Shift/Option arrows stay in the page", () => {
     withForwardedEmacsKeys((forwarded) => {
-      for (const shiftKey of [false, true]) {
-        for (const arrowKey of ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"]) {
-          const event = new KeyboardEvent("keydown", {
-            key: arrowKey,
-            code: arrowKey,
-            metaKey: true,
-            shiftKey,
-            bubbles: true,
-            cancelable: true,
-          });
-          expect(handleXwidgetEmacsKeydown(event)).toBe(false);
-          expect(event.defaultPrevented).toBe(false);
-        }
+      const arrows = { ArrowLeft: "<left>", ArrowRight: "<right>", ArrowUp: "<up>", ArrowDown: "<down>" };
+      for (const [arrowKey, emacs] of Object.entries(arrows)) {
+        const event = new KeyboardEvent("keydown", {
+          key: arrowKey, code: arrowKey, metaKey: true, bubbles: true, cancelable: true,
+        });
+        expect(handleXwidgetEmacsKeydown(event)).toBe(true);
+        expect(event.defaultPrevented).toBe(true);
+        expect(forwarded.at(-1)).toBe(`M-${emacs}`);
       }
+      // Shift+Cmd+Arrow selects to a line/document boundary; Option+Arrow
+      // moves by word.  Both remain native editing.
+      for (const init of [{ metaKey: true, shiftKey: true }, { altKey: true }]) {
+        const event = new KeyboardEvent("keydown", {
+          key: "ArrowLeft", code: "ArrowLeft", ...init, bubbles: true, cancelable: true,
+        });
+        expect(handleXwidgetEmacsKeydown(event)).toBe(false);
+        expect(event.defaultPrevented).toBe(false);
+      }
+      expect(forwarded).toHaveLength(4);
+    });
+  });
 
-      expect(forwarded).toEqual([]);
+  test("an arrow completes a C-x prefix", () => {
+    withForwardedEmacsKeys((forwarded) => {
+      const prefix = new KeyboardEvent("keydown", { key: "x", code: "KeyX", ctrlKey: true, bubbles: true, cancelable: true });
+      expect(handleXwidgetEmacsKeydown(prefix)).toBe(true);
+      const arrow = new KeyboardEvent("keydown", { key: "ArrowLeft", code: "ArrowLeft", bubbles: true, cancelable: true });
+      expect(handleXwidgetEmacsKeydown(arrow)).toBe(true);
+      expect(forwarded).toEqual(["C-x <left>"]);
     });
   });
 

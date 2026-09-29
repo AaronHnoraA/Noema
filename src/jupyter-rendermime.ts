@@ -14,6 +14,7 @@
 //     manager (lazily imported so the heavy manager stays out of the main
 //     bundle).
 
+import { FRAME_KEY_RELAY_SCRIPT } from "./frame-key-relay.ts";
 import { OutputArea, OutputAreaModel } from "@jupyterlab/outputarea";
 import { RenderMimeRegistry, standardRendererFactories } from "@jupyterlab/rendermime";
 import type { IRenderMime } from "@jupyterlab/rendermime";
@@ -189,7 +190,8 @@ function makeScriptHtmlFrame(html: string): HTMLIFrameElement {
     : /<html[\s>]/i.test(html)
       ? html.replace(/<html([^>]*)>/i, `<html$1><head>${HTML_FRAME_STYLE}</head>`)
       : `<!doctype html><html><head>${HTML_FRAME_STYLE}</head><body>${html}</body></html>`;
-  frame.srcdoc = withHead + HTML_FRAME_AUTOSIZE;
+  // The relay keeps Emacs keys working while an output has focus.
+  frame.srcdoc = withHead + HTML_FRAME_AUTOSIZE + FRAME_KEY_RELAY_SCRIPT;
   autoHeightFrames.add(frame);
   return frame;
 }

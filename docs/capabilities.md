@@ -18,7 +18,7 @@ The ordered scopes are:
    `skills/` directory (override with `NOEMA_GLOBAL_SKILLS`);
 4. each explicitly named shared scope in project `extends`, in listed order;
 5. `project`: `.agents/skills/` and `noema-capabilities.json` in the project;
-6. a Run's `@@skill(id)` selection.
+6. a Run's `@@skill(id)` and `@@pack(id)` selections.
 
 Emacs completion uses `company-mode` through CAPF; it is unrelated to scope
 precedence. A team can optionally name an explicit shared scope `company`;
@@ -187,6 +187,90 @@ process/connection state remains `not-observed` until a runtime integration
 supplies live health, so project configuration alone never claims it is running
 or connected.
 
+## Skill packs
+
+Skills stay a flat library.  A *pack* is a named link list over it: an id,
+optional `title`/`description`, an ordered `members` array of Skill ids, and an
+optional `preamble` the pack contributes to a Run.  A pack never contains a
+copy of a Skill; every member keeps its own definition, patches, selection and
+dependencies.  Packs live under `packs` in any capabilities document:
+
+```json
+{
+  "schema": "noema.capabilities/1",
+  "packs": {
+    "definitions": {
+      "math-verification": {
+        "description": "Proof planning and audit, Lean, symbolic checks",
+        "members": ["proof-plan", "proof-review", "lean4", "sympy"],
+        "preamble": "Symbolic computation is evidence, not proof."
+      }
+    },
+    "enabled": [],
+    "disabled": [],
+    "patches": {
+      "math-verification": {
+        "members_remove": ["lean4"],
+        "members_add": ["claim-precision"],
+        "preamble_append": "This project uses Lean only for Section 3."
+      }
+    }
+  }
+}
+```
+
+Pack resolution follows the Skill rules: the highest-precedence definition is
+the base, patches at that scope and every narrower one apply in order, and an
+explicit enable/disable at a narrower scope wins.  A pack patch is a JSON Merge
+Patch over the definition plus three list operations — `members_remove`,
+`members_add` (appended, de-duplicated) and `preamble_append`.  A project
+therefore adjusts a global pack without copying it.  Pack patches never change
+member content: a Skill has one effective content no matter which pack
+selected it, and refining a member is an ordinary Skill patch.
+
+An enabled or `@@pack`-requested pack enables each member (recorded in the
+member's `selectedBy` as `scope: "pack"`) before the dependency closure is
+taken, so members' `noema.requires` are selected exactly as for `@@skill`.
+Every member must be an installed, selectable Skill.  A missing, invalid or
+explicitly disabled member makes the pack invalid: it is a warning while the
+pack is unused and an error that blocks Run preparation once the pack is used,
+naming the `members_remove` repair.  An explicit pack disable blocks a
+`@@pack` request with `disabled-capability-requested`.
+
+The resolution returns `packs` beside `skills` and `mcps`, each with its
+resolved `members` link list (`id`, `state` of `available`, `disabled`,
+`invalid` or `missing`) and `active.packs`.  The RunSpec freezes `packs`
+(id, members, preamble hash, source and patches), and a non-empty preamble is
+delivered as the context item `pack:<id>`, ahead of the member Skills.
+
+## Upstream versions
+
+`skills.lock.json` beside the global Skill library directory (the parent of
+`NOEMA_GLOBAL_SKILLS`; `noema.skill-library-lock/1`) records where each global
+Skill came from:
+`repository` (`owner/repo` means GitHub; any git URL or path works), tracked
+`ref` (default `HEAD`), pinned `commit`, `path` in the repository, `license`,
+and `skill_sha256`/`tree_sha256` of the installed files.  The library itself
+is a plain tree versioned by the repository that holds it (the vault by
+default); the lock is the upstream record.  Skills authored in that repository
+are their own source and have no lock entry.  `server/lib/noema-skill-upstream.mjs` owns it:
+
+- install fetches one Skill directory at a ref into a temporary checkout
+  (`git fetch --depth 1 --filter=blob:none`, no shell), refuses symlinks and
+  an existing directory, adds the repository licence when the Skill directory
+  has none, and appends a lock entry;
+- status compares installed files with the lock (`clean`, `modified`,
+  `missing`) and, only when asked, runs `git ls-remote` per repository/ref to
+  report `latest` and `updateAvailable`;
+- update and rollback replace the directory atomically with the ref head or a
+  given commit, push the previous commit onto a bounded `history`, and refuse a
+  locally modified Skill unless forced — local refinements belong in project
+  patches.  A dry run returns the SKILL.md diff and added/removed/changed files.
+
+Network access happens only on these explicit requests, never during
+resolution, completion or redisplay.  A lock entry's `helpers` (a separate
+vendor checkout) is reported but not updated.
+
 ## Patch model
 
 Patches are JSON Merge Patch objects applied to the effective definition. A
@@ -200,13 +284,14 @@ runtime state remain distinct.
 
 ## Work-cell syntax
 
-Noema preserves the documented four leading directives:
+Noema parses these leading directives:
 
 ```text
 @@agent(codex)
 @@session(continue)
 @@ctx(lineage)
 @@skill(proof-review)
+@@pack(math-verification)
 
 Check the disputed lemma.
 ```
@@ -217,8 +302,11 @@ path, content hash, source scope, effective configuration, and applied patches.
 The effective Skill content is a frozen context item, with a small source-path
 header so agents can find relative supporting resources. The Skill's source
 hash and the delivered context item's wrapper hash are kept distinct. Later `@@skill(...)` text
-is prompt data. There is intentionally no new `@@mcp` or patch DSL: MCP selection
-and persistent patching belong in `noema-capabilities.json`.
+is prompt data. `@@pack(id)` follows the same rules and selects a pack, which
+expands to its members as described above; it is deliberately not spelled
+`@@skills`, which a one-letter typo would confuse with `@@skill`. There is
+intentionally no `@@mcp` or patch DSL: MCP selection and persistent patching
+belong in `noema-capabilities.json`.
 
 ## Diagnostics and inspection
 
@@ -229,7 +317,10 @@ scope where available. An enabled invalid capability prevents Run preparation.
 
 Use `M-x noema-capability-manager` anywhere. It always opens the global library
 without a project prompt. `C-c 1` selects Global; `C-c 2` selects Project Patch;
-`C-c 3` selects Local Skills (only project-owned definitions). The latter two use
+`C-c 3` selects Local Skills (only project-owned definitions). `C-c 4` selects
+Packs, the global pack library: `RET` on a pack expands its member link list,
+and `RET` on a member shows that Skill in the flat Global list; member rows act
+on the ordinary Skill record. Project Patch and Local Skills use
 the project captured from the opening buffer and are unavailable outside a
 project. Queries and writes on Global never discover or initialize a project;
 new Skills go to `etc/noema/skills`, and configuration to `etc/noema/capabilities.json`
@@ -245,7 +336,7 @@ retain their Evil meanings):
 
 | Key | Action |
 |---|---|
-| `RET` / `C-c i` | inspect the full effective value and resolver provenance |
+| `RET` / `C-c i` | inspect the full effective value and resolver provenance (on Packs, `RET` expands or follows a member link) |
 | `C-c e` / `C-c d` | enable or disable at the active page's scope |
 | `C-c p` / `C-c P` | create or remove a project patch |
 | `C-c y` | independently copy a global Skill and resources to Local |
@@ -253,6 +344,10 @@ retain their Evil meanings):
 | `C-c a` | add a Skill or MCP in the current view |
 | `C-c c` | visit the active scope's canonical configuration |
 | `C-c g` | re-read files, validate patches and resolve again |
+| `C-c N` / `C-c m` | create a global pack / edit its members and preamble |
+| `C-c p` on a pack | patch this project's membership (`members_remove`, `members_add`, `preamble_append`) |
+| `C-c u` | insert `@@skill(id)` or `@@pack(id)` into the originating work block |
+| `C-c U` | upstream versions: `C-c g` check, `RET`/`C-c =` diff, `C-c u` update, `C-c R` pin/rollback, `C-c i` install, `C-c l` VC log |
 
 Use `M-x noema-skill-manager` or `M-x noema-mcp-manager` for a filtered view.
 In an `agent-shell` buffer — the platform session or a popup vterm one — the
@@ -312,7 +407,8 @@ launch an authorization flow or manage a running agent's connections.
 ## Company completion
 
 In a work block's leading control region, type `@@` to choose `@@agent`,
-`@@session`, `@@ctx` or `@@skill`. Selecting a name inserts parentheses.
+`@@session`, `@@ctx`, `@@skill` or `@@pack`. Selecting a name inserts parentheses.
+`@@pack(` offers selectable packs with their description and member list.
 `@@skill(` offers valid selectable Skills with description, scope and state;
 explicitly disabled Skills are excluded, while available Skills do not need
 to be enabled for the whole project. `@@ctx(file:` completes project paths,

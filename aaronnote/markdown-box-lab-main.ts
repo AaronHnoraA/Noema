@@ -15,6 +15,11 @@ import "../src/styles/aaron-ui-elegant.css";
 import { createEditor } from "../src/editor-api.ts";
 import type { Editor } from "../src/editor-api.ts";
 import { markdownBlockSourceOffset } from "./markdown-box-lab-navigation.ts";
+import { installHostKeyboardBridge, pageClientFromLocation } from "./host-keyboard.ts";
+
+// Emacs host keys, host-owned keys and focus handoff: the rule every Noema
+// page shares (see host-keyboard.ts).
+installHostKeyboardBridge({ client: () => pageClientFromLocation() });
 
 interface MarkdownBlockRef {
   id: string;

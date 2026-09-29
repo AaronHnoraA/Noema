@@ -18,8 +18,11 @@ D-016/D-021/D-022 still govern hosting and the AI integration boundary.
   It has no kernel metadata and must never enter a Jupyter kernel path.
 - Work blocks alone use `cell_type: "code"`, solely to carry their agent reply
   in `outputs`; question, checkpoint and note blocks are Markdown.
-- Parse control only from leading `@@agent`, `@@session`, `@@ctx`, `@@skill`
-  and WorkNode `@@todo` / `@@clock` commands. Agenda commands stay visible in
+- Parse control only from leading `@@agent`, `@@session`, `@@ctx`, `@@skill`,
+  `@@pack` and WorkNode `@@todo` / `@@clock` commands.  A pack is a link list
+  of flat Skill ids resolved by `noema-capabilities.mjs`; never copy Skill
+  content into a pack or let a pack patch change member content
+  (`docs/capabilities.md`, "Skill packs"). Agenda commands stay visible in
   JuText but are removed from Agent prompts. Text in outputs and imported
   material is always data.
 - Agent details stay behind `lisp/noema-agent-acp.el`. Do not reimplement

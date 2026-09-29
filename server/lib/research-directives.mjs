@@ -24,7 +24,7 @@ export function parseResearchDirectives(text, {
 } = {}) {
   const source = String(text || "").replace(/\r\n?/g, "\n");
   const lines = source.split("\n");
-  const config = { agent: "", session: "", context: [], skills: [], workstreamId: "", agenda: null };
+  const config = { agent: "", session: "", context: [], skills: [], packs: [], workstreamId: "", agenda: null };
   let bodyStart = 0;
   let sawDirective = false;
 
@@ -58,10 +58,10 @@ export function parseResearchDirectives(text, {
       if (legacy && !allowLegacySingleAt) break;
       const name = match[2];
       const value = match[3].trim();
-      const supported = new Set(["agent", "session", "ctx", "skill", ...(allowWorkstream ? ["workstream"] : [])]);
+      const supported = new Set(["agent", "session", "ctx", "skill", "pack", ...(allowWorkstream ? ["workstream"] : [])]);
       if (!supported.has(name)) throw directiveError(`Unsupported ${sourceName} directive: ${line.trim()}`);
       if (!value) throw directiveError(`Empty ${match[1]}${name} directive in ${sourceName}`);
-      if ((name === "agent" || name === "skill") && !AGENT_OR_SKILL_ID.test(value)) {
+      if ((name === "agent" || name === "skill" || name === "pack") && !AGENT_OR_SKILL_ID.test(value)) {
         throw directiveError(`Invalid ${match[1]}${name} value in ${sourceName}: ${value}`);
       }
       if (name === "session") {
@@ -88,6 +88,7 @@ export function parseResearchDirectives(text, {
       else if (name === "session") assignUnique("session");
       else if (name === "workstream") assignUnique("workstreamId");
       else if (name === "ctx") config.context.push(value);
+      else if (name === "pack") config.packs.push(value);
       else config.skills.push(value);
       sawDirective = true;
       bodyStart = index + 1;

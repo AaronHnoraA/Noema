@@ -44,6 +44,15 @@ describe("D-031 session directive grammar", () => {
     expect(() => parseResearchDirectives("@@session(bad name)\n\nGo.")).toThrow(/@@session\(bad name\)/);
   });
 
+  test("@@pack is a leading control directive like @@skill", () => {
+    const parsed = parseResearchDirectives("@@pack(math-writing)\n@@skill(lean4)\n@@pack(quantum-computing)\n\nCheck it.\n@@pack(later-is-data)");
+    expect(parsed.packs).toEqual(["math-writing", "quantum-computing"]);
+    expect(parsed.skills).toEqual(["lean4"]);
+    expect(parsed.prompt).toBe("Check it.\n@@pack(later-is-data)");
+    expect(() => parseResearchDirectives("@@pack(../x)\n\nGo.")).toThrow(/Invalid @@pack value/);
+    expect(() => parseResearchDirectives("@@skills(x)\n\nGo.")).toThrow(/Unsupported/);
+  });
+
   test("visible Agenda is parsed for the UI and removed from the Agent prompt", () => {
     const parsed = parseResearchDirectives([
       "@@agent(codex)",

@@ -9,7 +9,8 @@ import {
 } from "../src/cm6/input-commands.ts";
 import { normalizedEditorKey } from "../src/cm6/focus-quiescence.ts";
 import { historyChordKind } from "../src/keymap/shortcut-router.ts";
-import { hostInputFocusReleased, releaseHostInputFocus } from "./host-input-focus.ts";
+import { hostInputFocusReleased, pageHasNativeKeyboard, releaseHostInputFocus } from "./host-input-focus.ts";
+import { FRAME_KEY_RELAY_MESSAGE } from "../src/frame-key-relay.ts";
 
 type XwidgetControlKey = "Escape" | "Delete" | "Backspace";
 type XwidgetSpecialKey =
@@ -603,7 +604,16 @@ export function guardXwidgetControlBeforeInput(event: InputEvent): boolean {
 // We use event.code (physical key) not event.key because Option turns letters
 // into diacritics (Option+O → "œ").
 
+const ARROW_KEYS: Record<string, string> = {
+  ArrowLeft: "<left>",
+  ArrowRight: "<right>",
+  ArrowUp: "<up>",
+  ArrowDown: "<down>",
+};
+
 function codeToBaseKey(code: string, shifted: boolean): string | null {
+  // Arrows complete `C-x <left>` and form the Cmd+Arrow window chords.
+  if (ARROW_KEYS[code]) return ARROW_KEYS[code];
   const m = /^Key([A-Z])$/.exec(code);
   if (m) return shifted ? m[1].toUpperCase() : m[1].toLowerCase();
   const d = /^Digit(\d)$/.exec(code);
@@ -637,8 +647,9 @@ export function emacsKeyFromEvent(event: KeyboardEvent): string | null {
 /**
  * Returns true when this keystroke should be forwarded to Emacs.
  *
- * Scope: Option(H-) host chords, C-x/C-c prefixes, C-g, and selected Cmd(M-)
- * chords.  Ordinary Ctrl keys stay in the shared renderer: CM6/Vim owns text
+ * Scope: Option(H-) host chords, C-x/C-c prefixes, C-g, selected Cmd(M-)
+ * chords, and plain Cmd+Arrow, which Emacs binds to windmove so every Noema
+ * pane moves between Emacs windows the same way.  Ordinary Ctrl keys stay in the shared renderer: CM6/Vim owns text
  * movement and deletion, Ctrl-Z/R/Y history, Ctrl-[ Escape, and Ctrl-Tab/0
  * visual zoom in both the CM6 page and Emacs. Sending those to the inert xwidget
  * placeholder would make the same editor behave differently by host.
@@ -647,10 +658,15 @@ export function shouldForwardToEmacs(event: KeyboardEvent): boolean {
   if (event.isComposing) return false;
   // Option = Hyper: forward all H- chords
   if (event.altKey && !event.metaKey && !event.ctrlKey) {
-    return codeToBaseKey(event.code, event.shiftKey) !== null;
+    // Option+Arrow stays with the page (word movement); only letters/digits.
+    return !ARROW_KEYS[event.code] && codeToBaseKey(event.code, event.shiftKey) !== null;
+  }
+  // Cmd+Arrow switches Emacs windows (windmove on M-<arrow>).  Shift+Cmd+Arrow
+  // keeps its selection meaning in the page.
+  if (event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && ARROW_KEYS[event.code]) {
+    return true;
   }
   // M-x, M-w, M-W, M-q, and M-o/M-O (ace-window and window swap).
-  // Cmd+Arrow is deliberately left to CodeMirror/WebKit for native editing.
   if (event.metaKey && !event.ctrlKey && !event.altKey && event.code === "KeyO") return true;
   // M-W (Cmd-Shift-W) kills the buffer through Perspective; the page has no
   // Cmd-Shift-W of its own.
@@ -664,6 +680,44 @@ export function shouldForwardToEmacs(event: KeyboardEvent): boolean {
     return event.code === "KeyX" || event.code === "KeyC" || event.code === "KeyG";
   }
   return false;
+}
+
+// ── Output frames ────────────────────────────────────────────────────────────
+// Sandboxed output frames run `FRAME_KEY_RELAY_SOURCE` (src/frame-key-relay.ts),
+// which mirrors the chord and prefix gates above; this side forwards what they
+// relay.
+
+type RelayedFrameKey = {
+  key?: unknown; code?: unknown;
+  ctrlKey?: unknown; metaKey?: unknown; altKey?: unknown; shiftKey?: unknown;
+};
+
+/**
+ * Forward keys relayed by this page's output frames to Emacs.
+ *
+ * Only messages from an iframe in this document are accepted.  Each relayed
+ * key runs through `handleXwidgetEmacsKeydown`, so a prefix typed in an
+ * output and completed there follows the page's own rules.
+ */
+export function installFrameKeyRelay(options: EmacsKeyForwardOptions, target: Window = window): () => void {
+  const controller = new AbortController();
+  target.addEventListener("message", (event: MessageEvent) => {
+    const data = event.data as (RelayedFrameKey & Record<string, unknown>) | null;
+    if (!data || data[FRAME_KEY_RELAY_MESSAGE] !== true) return;
+    const fromOwnFrame = Array.from(target.document.querySelectorAll("iframe"))
+      .some((frame) => frame.contentWindow !== null && frame.contentWindow === event.source);
+    if (!fromOwnFrame) return;
+    handleXwidgetEmacsKeydown(new KeyboardEvent("keydown", {
+      key: String(data.key ?? ""),
+      code: String(data.code ?? ""),
+      ctrlKey: data.ctrlKey === true,
+      metaKey: data.metaKey === true,
+      altKey: data.altKey === true,
+      shiftKey: data.shiftKey === true,
+      cancelable: true,
+    }), options);
+  }, { signal: controller.signal });
+  return () => controller.abort();
 }
 
 /** True while a C-x / C-c prefix waits for its next key. */
@@ -726,6 +780,22 @@ const MODIFIER_ONLY_KEYS = new Set([
 
 type HostOwnedKey = { key: string } | { text: string };
 
+/**
+ * The Emacs spelling of the key that completes a `C-x`/`C-c` prefix.
+ *
+ * Letters, digits and arrows use the physical key, as the chord gate does;
+ * every other key uses its named form or its character, so `C-x -`,
+ * `C-x ^`, `C-c .`, `C-x RET` and `C-x SPC` all reach Emacs.
+ */
+function prefixFollowerFromEvent(event: KeyboardEvent): string | null {
+  const physical = keyStringFromEvent(event);
+  if (physical) return physical;
+  const owned = hostOwnedKeyFromEvent(event);
+  if (!owned) return null;
+  if ("key" in owned) return owned.key;
+  return owned.text === " " ? "SPC" : owned.text;
+}
+
 /** The Emacs form of EVENT for a host that owns the keyboard, or null. */
 export function hostOwnedKeyFromEvent(event: KeyboardEvent): HostOwnedKey | null {
   if (event.isComposing || MODIFIER_ONLY_KEYS.has(event.key)) return null;
@@ -764,6 +834,9 @@ export function hostOwnedKeyFromEvent(event: KeyboardEvent): HostOwnedKey | null
  */
 export function handleHostOwnedKey(event: KeyboardEvent, options?: EmacsKeyForwardOptions): boolean {
   if (!hostInputFocusReleased() || !event.isTrusted) return false;
+  // Without native focus the page was only offered this key; Emacs gets it
+  // natively once the page declines it (see `installNativeKeyboardYield`).
+  if (!pageHasNativeKeyboard()) return false;
   const target = targetElement(event.target);
   if (target?.closest("input, textarea, select, [contenteditable='true']")) return false;
   const owned = hostOwnedKeyFromEvent(event);
@@ -821,6 +894,13 @@ let pendingPrefix: { key: string; client: string } | null = null;
  * Prefix keys (C-x, C-c) accumulate the following key before forwarding.
  */
 export function handleXwidgetEmacsKeydown(event: KeyboardEvent, options?: EmacsKeyForwardOptions): boolean {
+  // A chord offered to a page without native focus belongs to Emacs, which
+  // receives it natively: holding `C-x` here as a prefix while the next plain
+  // key went straight to Emacs split one sequence across two paths.
+  if (!pageHasNativeKeyboard()) {
+    pendingPrefix = null;
+    return false;
+  }
   if (pendingPrefix !== null) {
     const client = options?.client?.() || "";
     // Prefix state belongs to the pane that received its first chord. A click
@@ -835,9 +915,16 @@ export function handleXwidgetEmacsKeydown(event: KeyboardEvent, options?: EmacsK
         forwardEmacsKeyAndReleaseInput(event, "C-g", options);
         return true;
       }
-      // Any other key: complete the prefix sequence
+      // Pressing Ctrl again for `C-x C-f`, or Shift for `C-x B`, is not the
+      // next key; keep waiting for it.
+      if (MODIFIER_ONLY_KEYS.has(event.key)) {
+        hardStop(event);
+        return true;
+      }
+      // Any other key completes the sequence: letters, digits, punctuation
+      // (`C-x -`, `C-c .`), named keys (`C-x RET`, `C-x SPC`) and arrows.
       if (!event.isComposing) {
-        const nextKey = keyStringFromEvent(event);
+        const nextKey = prefixFollowerFromEvent(event);
         if (nextKey) {
           const fullKey = pendingPrefix.key + " " + nextKey;
           pendingPrefix = null;
@@ -845,7 +932,7 @@ export function handleXwidgetEmacsKeydown(event: KeyboardEvent, options?: EmacsK
           return true;
         }
       }
-      // Unmappable key (modifier-only, etc.): cancel prefix silently
+      // A key with no Emacs spelling (IME composition): cancel silently.
       pendingPrefix = null;
       return false;
     }

@@ -4,6 +4,8 @@ export type ResearchDirectives = {
   session: string;
   context: string[];
   skills: string[];
+  /** `@@pack(id)` selections; each expands to its member Skills. */
+  packs: string[];
   workstreamId: string;
   /** Visible native Agenda fields; excluded from prompt text. */
   agenda: Record<string, unknown> | null;

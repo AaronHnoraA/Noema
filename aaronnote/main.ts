@@ -83,6 +83,7 @@ import { AssistScheduler, type AssistUpdateFlags, type AssistUpdateOptions } fro
 import { hostCommandTargetsClient } from "./host-command-target.ts";
 import {
   hostInputFocusEventTypes,
+  installNativeKeyboardYield,
   provesHostInputFocus,
   reclaimHostInputFocus,
   releaseHostInputFocus,
@@ -206,6 +207,7 @@ import {
   handleXwidgetEmacsKeydown,
   claimsXwidgetEmacsKeyEarly,
   handleHostOwnedKey,
+  installFrameKeyRelay,
   handleXwidgetHistoryKeydown,
   handleXwidgetMathBeforeInput,
   handleXwidgetMathKeydown,
@@ -247,6 +249,9 @@ import {
 } from "./knowledge-dock.ts";
 import { refreshAgendaView, refreshAgendaAttention } from "./agenda-view.ts";
 
+// Before every other key listener: a key offered to this page while it lacks
+// native focus is Emacs' (see host-input-focus.ts).
+installNativeKeyboardYield();
 const removeNoemaThemeRuntime = installNoemaThemeRuntime();
 const root = document.querySelector<HTMLElement>("#app");
 if (!root) throw new Error("Missing #app");
@@ -12066,6 +12071,9 @@ function eventTargetsNativeWidgetInput(target: EventTarget | null): boolean {
 // Emacs host chords must reach the gate before CM6's own keymap, which binds
 // Emacs-style Ctrl/Option keys on macOS; see `claimsXwidgetEmacsKeyEarly`.
 // Everything else keeps the ordering of the bubble-phase handler below.
+// Emacs keys typed inside a sandboxed output frame (src/frame-key-relay.ts).
+if (!serverReaderMode) installFrameKeyRelay({ client: () => currentClient });
+
 window.addEventListener("keydown", (event) => {
   if (replayingHostKey || serverReaderMode) return;
   if (handleHostOwnedKey(event, { client: () => currentClient })) return;

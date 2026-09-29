@@ -12,6 +12,7 @@ import {
   prepareProjectSkill,
   resolveProjectCapabilities,
   resolvedMCPServersForRun,
+  resolvedPacksForRun,
   resolvedSkillsForRun,
 } from "../server/lib/noema-capabilities.mjs";
 
@@ -623,5 +624,113 @@ describe("Noema capability resolution", () => {
       expect.objectContaining({ id: "existing", command: "existing-server" }),
       expect.objectContaining({ id: "added", command: "added-server" }),
     ]));
+  }));
+});
+
+describe("Noema Skill packs", () => {
+  const packOptions = (tree: { root: string; home: string; builtin: string }) => ({
+    root: tree.root, userHome: tree.home, builtinSkillDirectory: tree.builtin, environment: {},
+    globalConfigPath: join(tree.home, "global", "capabilities.json"),
+    globalSkillDirectory: join(tree.home, "global", "skills"),
+  });
+
+  test("a pack is a link list: @@pack selects member Skills, their dependencies and a frozen preamble", async () => withTree(async (tree) => {
+    const options = packOptions(tree);
+    await writeSkill(options.globalSkillDirectory, "proof-plan", "Plan the proof.");
+    await writeSkill(options.globalSkillDirectory, "claims", "Make the claim precise.");
+    await mkdir(join(options.globalSkillDirectory, "proof-review"), { recursive: true });
+    await writeFile(join(options.globalSkillDirectory, "proof-review", "SKILL.md"),
+      "---\nname: proof-review\ndescription: Review.\nnoema:\n  requires: [claims]\n---\n\nAudit the proof.\n");
+    await writeSkill(options.globalSkillDirectory, "unrelated", "Other.");
+    await writeJSON(options.globalConfigPath, {
+      schema: "noema.capabilities/1",
+      packs: { definitions: { "math-verification": {
+        description: "Proof checking", members: ["proof-plan", "proof-review"], preamble: "Use Nielsen-Chuang notation.",
+      } } },
+    });
+    const idle = await resolveCapabilities(options);
+    expect(idle.active).toMatchObject({ skills: [], packs: [] });
+    expect(idle.packs[0]).toMatchObject({ id: "math-verification", enabled: false, selectable: true,
+      source: { scope: "global" },
+      members: [{ id: "proof-plan", state: "available" }, { id: "proof-review", state: "available" }] });
+
+    const run = assertRunnableCapabilities(await resolveCapabilities({ ...options, includeContent: true, requestedPacks: ["math-verification"] }));
+    expect(run.active.packs).toEqual(["math-verification"]);
+    expect(run.active.skills).toEqual(["claims", "proof-plan", "proof-review"]);
+    expect(run.skills.find((item: any) => item.id === "proof-plan")?.selectedBy).toEqual(
+      expect.arrayContaining([expect.objectContaining({ scope: "pack", scopeId: "math-verification" })]));
+    const frozen = resolvedPacksForRun(run);
+    expect(frozen.packs).toEqual([expect.objectContaining({ id: "math-verification",
+      members: ["proof-plan", "proof-review"], preamble_sha256: expect.stringMatching(/^sha256:/) })]);
+    expect(Buffer.from(frozen.items[0].contentBase64, "base64").toString()).toContain("Use Nielsen-Chuang notation.");
+    expect(resolvedSkillsForRun(run).skills.map((item) => item.id)).toEqual(["claims", "proof-plan", "proof-review"]);
+  }));
+
+  test("project pack patches change membership and preamble, never member content", async () => withTree(async (tree) => {
+    const options = packOptions(tree);
+    for (const id of ["lean4", "sympy", "proof-review"]) await writeSkill(options.globalSkillDirectory, id, `${id} body`);
+    await writeJSON(options.globalConfigPath, {
+      schema: "noema.capabilities/1",
+      packs: { definitions: { verify: { members: ["lean4", "proof-review"], preamble: "Global." } } },
+    });
+    await mutateProjectCapability({ root: tree.root, type: "pack", id: "verify", enabled: true,
+      patch: { members_remove: ["lean4"], members_add: ["sympy"], preamble_append: "Project note." } });
+    const stored = JSON.parse(await readFile(join(tree.root, "noema-capabilities.json"), "utf8"));
+    expect(stored.packs).toMatchObject({ enabled: ["verify"], patches: { verify: { members_add: ["sympy"] } } });
+    const project = await resolveCapabilities({ ...options, includeContent: true });
+    const pack = project.packs.find((item: any) => item.id === "verify");
+    expect(pack).toMatchObject({ enabled: true, effective: { members: ["proof-review", "sympy"], preamble: "Global.\n\nProject note." },
+      patches: [{ scope: "project" }] });
+    expect(project.active.skills).toEqual(["proof-review", "sympy"]);
+    expect(project.skills.find((item: any) => item.id === "sympy")?.effective.content).toContain("sympy body");
+    // The global view is untouched by the project patch.
+    const global = await resolveCapabilities({ ...options, scope: "global" });
+    expect(global.packs[0].effective.members).toEqual(["lean4", "proof-review"]);
+  }));
+
+  test("a disabled or missing member fails closed and names the repair", async () => withTree(async (tree) => {
+    const options = packOptions(tree);
+    for (const id of ["a", "b"]) await writeSkill(options.globalSkillDirectory, id, id);
+    await writeJSON(options.globalConfigPath, {
+      schema: "noema.capabilities/1",
+      packs: { definitions: { group: { members: ["a", "b"] }, ghost: { members: ["nope"] } } },
+    });
+    await writeJSON(join(tree.root, "noema-capabilities.json"), {
+      schema: "noema.capabilities/1", skills: { disabled: ["b"] },
+    });
+    const idle = await resolveCapabilities(options);
+    expect(idle.packs.find((item: any) => item.id === "group")).toMatchObject({ selectable: false,
+      members: [{ id: "a", state: "available" }, { id: "b", state: "disabled" }] });
+    expect(idle.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "pack", id: "group", severity: "warning", code: "pack-member-disabled" })]));
+    expect(() => assertRunnableCapabilities(idle)).not.toThrow();
+    const requested = await resolveCapabilities({ ...options, requestedPacks: ["group"] });
+    expect(() => assertRunnableCapabilities(requested)).toThrow(/member b is disabled.*members_remove/);
+    expect(requested.skills.find((item: any) => item.id === "a")?.enabled).toBe(false);
+    const ghost = await resolveCapabilities({ ...options, requestedPacks: ["ghost"] });
+    expect(() => assertRunnableCapabilities(ghost)).toThrow(/member nope is not an installed Skill/);
+    const unknown = await resolveCapabilities({ ...options, requestedPacks: ["absent"] });
+    expect(() => assertRunnableCapabilities(unknown)).toThrow(/pack absent is invalid/i);
+    await writeJSON(join(tree.root, "noema-capabilities.json"), {
+      schema: "noema.capabilities/1", packs: { disabled: ["group"] },
+    });
+    const blocked = await resolveCapabilities({ ...options, requestedPacks: ["group"] });
+    expect(() => assertRunnableCapabilities(blocked)).toThrow(/requested by @@pack but disabled/);
+  }));
+
+  test("pack definitions and patches are validated before they are written", async () => withTree(async (tree) => {
+    const options = packOptions(tree);
+    await expect(mutateProjectCapability({ root: tree.root, type: "pack", id: "bad", definition: { members: "a" } }))
+      .rejects.toThrow(/members array/);
+    await expect(mutateProjectCapability({ root: tree.root, type: "pack", id: "bad", patch: { members_add: ["../x"] } }))
+      .rejects.toThrow(/members_add/);
+    await mutateProjectCapability({ root: tree.root, type: "pack", id: "local", definition: { members: ["a"], description: "Local pack" } });
+    await writeSkill(join(tree.root, ".agents", "skills"), "a", "local a");
+    const resolution = await resolveCapabilities(options);
+    expect(resolution.packs.find((item: any) => item.id === "local")).toMatchObject({ source: { scope: "project" }, selectable: true });
+    await mutateProjectCapability({ root: tree.root, type: "pack", id: "local", definition: null });
+    expect((await resolveCapabilities(options)).packs.find((item: any) => item.id === "local")).toBeUndefined();
+    await writeJSON(join(tree.root, "noema-capabilities.json"), { schema: "noema.capabilities/1", packs: { definitions: { x: {} } } });
+    await expect(resolveCapabilities(options)).rejects.toThrow(/needs a members array/);
   }));
 });

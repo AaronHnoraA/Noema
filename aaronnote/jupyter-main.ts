@@ -13,6 +13,11 @@ import { installNoemaThemeRuntime, loadNoemaAppConfig } from "./theme-runtime.ts
 import { installHostClipboard } from "./host-clipboard.ts";
 import { hostCommandTargetsClient } from "./host-command-target.ts";
 import { writeSystemClipboard } from "../src/system-clipboard.ts";
+import { installHostKeyboardBridge, pageClientFromLocation } from "./host-keyboard.ts";
+
+// Emacs host keys, host-owned keys and focus handoff: the rule every Noema
+// page shares (see host-keyboard.ts).
+installHostKeyboardBridge({ client: () => pageClientFromLocation() });
 
 type DocumentRef = {
   scriptFile: string;

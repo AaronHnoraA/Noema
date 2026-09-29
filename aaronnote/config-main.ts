@@ -10,6 +10,11 @@ import {
   noemaAppConfigState,
   setNoemaAppTheme,
 } from "./theme-runtime.ts";
+import { installHostKeyboardBridge, pageClientFromLocation } from "./host-keyboard.ts";
+
+// Emacs host keys, host-owned keys and focus handoff: the rule every Noema
+// page shares (see host-keyboard.ts).
+installHostKeyboardBridge({ client: () => pageClientFromLocation() });
 
 const root = document.querySelector<HTMLElement>("#config-app");
 if (!root) throw new Error("Missing #config-app");

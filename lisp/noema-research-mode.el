@@ -56,6 +56,7 @@
 (autoload 'noema-capability-manager "noema-capability-ui" nil t)
 (autoload 'noema-skill-manager "noema-capability-ui" nil t)
 (autoload 'noema-mcp-manager "noema-capability-ui" nil t)
+(autoload 'noema-skill-upstream "noema-skill-upstream-ui" nil t)
 (autoload 'noema-research-graph-dock "noema-research-graph")
 (autoload 'noema-sessions "noema-sessions" nil t)
 (autoload 'noema-research-workflow-preview "noema-research-workflow" nil t)
@@ -193,7 +194,7 @@ apart from structure this buffer deleted.")
   "Find the next valid work control line before LIMIT."
   (catch 'found
     (while (re-search-forward
-            "^@@\\(agent\\|session\\|ctx\\|skill\\)(\\([^)\n]*\\)\\(?:)\\)?[ \t]*$"
+            "^@@\\(agent\\|session\\|ctx\\|skill\\|pack\\)(\\([^)\n]*\\)\\(?:)\\)?[ \t]*$"
             limit t)
       (let ((end (match-end 0))
             (beg (match-beginning 0)))
@@ -1202,13 +1203,13 @@ It is a keyword, a name, or parent:child (parent may be empty)."
                        (old (gethash name seen)))
                   (setq saw t)
                   (cond
-                   ((not (member name '("agent" "session" "ctx" "skill")))
+                   ((not (member name '("agent" "session" "ctx" "skill" "pack")))
                     (push (format "%s: unsupported directive @@%s"
                                   (noema-research-cell-id cell) name) errors))
                    ((string-empty-p value)
                     (push (format "%s: empty @@%s directive"
                                   (noema-research-cell-id cell) name) errors))
-                   ((and (member name '("agent" "skill"))
+                   ((and (member name '("agent" "skill" "pack"))
                          (not (string-match-p "\\`[A-Za-z0-9][A-Za-z0-9._-]*\\'" value)))
                     (push (format "%s: invalid @@%s value" (noema-research-cell-id cell) name) errors))
                    ((and (equal name "session")

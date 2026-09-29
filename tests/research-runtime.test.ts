@@ -333,6 +333,7 @@ describe("research runtime service", () => {
       expect.objectContaining({ name: "project-tools", command: "/usr/bin/env" }),
     ]));
     expect(prepared.spec.capability_environment.active).toEqual({
+      packs: [],
       skills: ["project-method"], mcps: ["noema-knowledge", "noema-research", "project-tools"],
     });
     expect(prepared.spec.capability_environment.skills.map((item: any) => item.id)).toEqual(["project-method"]);
