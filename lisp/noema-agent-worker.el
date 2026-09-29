@@ -545,21 +545,15 @@ Workers that still hold THREAD keep using it until they finish."
 
 (defun noema-agent-worker--session-usage (worker)
   "Return normalized ACP usage for WORKER's physical Session, if known."
-  (when-let* ((buffer (noema-agent-worker-buffer worker))
-		  ((buffer-live-p buffer)))
-    (with-current-buffer buffer
-      (when-let* ((state (and (boundp 'agent-shell--state) agent-shell--state))
-		      (usage (map-elt state :usage)))
-	(let ((number (lambda (key) (let ((value (map-elt usage key)))
-					 (if (numberp value) (max 0 (truncate value)) 0)))))
-	  `((totalTokens . ,(funcall number :total-tokens))
-	    (inputTokens . ,(funcall number :input-tokens))
-	    (outputTokens . ,(funcall number :output-tokens))
-	    (thoughtTokens . ,(funcall number :thought-tokens))
-	    (cachedTokens . ,(+ (funcall number :cached-read-tokens)
-				  (funcall number :cached-write-tokens)))
-	    (contextUsed . ,(funcall number :context-used))
-	    (contextSize . ,(funcall number :context-size))))))))
+  (when-let* ((usage (noema-agent-acp-usage (noema-agent-worker-buffer worker))))
+    `((totalTokens . ,(plist-get usage :total))
+      (inputTokens . ,(plist-get usage :input))
+      (outputTokens . ,(plist-get usage :output))
+      (thoughtTokens . ,(plist-get usage :thought))
+      (cachedTokens . ,(+ (plist-get usage :cached-read)
+                          (plist-get usage :cached-write)))
+      (contextUsed . ,(plist-get usage :context-used))
+      (contextSize . ,(plist-get usage :context-size)))))
 
 (defun noema-agent-worker--check-context-pressure (worker event)
   "Warn once when the ACP usage in turn-complete EVENT is near its limit."

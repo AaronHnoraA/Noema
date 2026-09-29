@@ -395,6 +395,194 @@ removal); Noema only reads its length so lists can show queued intent."
                 (map-elt (buffer-local-value 'agent-shell--state buffer) :pending-prompts)))
     0))
 
+(declare-function agent-shell-get-model-name "agent-shell" (state))
+
+(defvar-local noema-agent-acp--context-last 0
+  "Context tokens this session's agent reported last.")
+(put 'noema-agent-acp--context-last 'permanent-local t)
+
+(defvar-local noema-agent-acp--context-peak 0
+  "Most context tokens this session's agent has reported.")
+(put 'noema-agent-acp--context-peak 'permanent-local t)
+
+(defvar-local noema-agent-acp--compactions 0
+  "Context compactions seen in this session, see `noema-agent-acp--note-context'.")
+(put 'noema-agent-acp--compactions 'permanent-local t)
+
+(defconst noema-agent-acp--compaction-ratio 0.7
+  "A context report below this share of the previous one counts as a compaction.")
+
+(defconst noema-agent-acp--compaction-floor 10000
+  "Context below this many tokens is too small for a drop to mean compaction.")
+
+(defvar noema-agent-acp-rate-limits-file
+  (locate-user-emacs-file "var/noema/agent-rate-limits.json")
+  "Last subscription rate limits the agents reported, kept across restarts.")
+
+(defvar noema-agent-acp--rate-limits nil
+  "Table \"AGENT/WINDOW\" -> plist, loaded from the file on first use.")
+
+(defun noema-agent-acp-rate-limits ()
+  "Return the latest subscription rate limit per agent and window.
+A table from \"AGENT/WINDOW\" to a plist with :agent, :window, :utilization
+\(0.0-1.0 or nil), :status, :resets-at (epoch seconds or nil) and
+:updated-at.  Filled from the `_claude/rateLimit' metadata claude-agent-acp
+attaches to `usage_update', and kept in `noema-agent-acp-rate-limits-file'
+so the last value survives a restart; :updated-at shows its age."
+  (or noema-agent-acp--rate-limits
+      (setq noema-agent-acp--rate-limits
+            (let ((table (make-hash-table :test #'equal)))
+              (dolist (limit (condition-case nil
+                                 (with-temp-buffer
+                                   (insert-file-contents noema-agent-acp-rate-limits-file)
+                                   (json-parse-buffer :object-type 'plist :array-type 'list
+                                                      :null-object nil))
+                               (error nil)))
+                (when (and (plist-get limit :agent) (plist-get limit :window))
+                  (puthash (format "%s/%s" (plist-get limit :agent) (plist-get limit :window))
+                           limit table)))
+              table))))
+
+(defun noema-agent-acp--save-rate-limits ()
+  "Write the rate-limit table as data."
+  (condition-case err
+      (let (limits)
+        (maphash (lambda (_key limit)
+                   (push (cl-loop for (key value) on limit by #'cddr
+                                  when value append (list key value))
+                         limits))
+                 (noema-agent-acp-rate-limits))
+        (make-directory (file-name-directory noema-agent-acp-rate-limits-file) t)
+        (with-temp-file noema-agent-acp-rate-limits-file
+          (insert (json-serialize (vconcat limits)))))
+    (error (message "Could not save agent rate limits: %s" (error-message-string err)))))
+
+(defvar noema-agent-acp-changed-functions nil
+  "Abnormal hook run with an agent buffer after its visible state changed.
+It runs after agent-shell stores reported usage, after every full header
+update (session start, model or mode change, turn start and end) -- not
+after the busy animation's cached ticks -- and when the buffer is killed.
+Listeners should coalesce; several changes arrive together.")
+
+(defun noema-agent-acp--changed ()
+  "Tell `noema-agent-acp-changed-functions' the current agent buffer changed."
+  (run-hook-with-args 'noema-agent-acp-changed-functions (current-buffer)))
+
+(defun noema-agent-acp--header-updated-a (&rest args)
+  "Report a full agent-shell header update; ARGS are its keyword arguments."
+  (unless (plist-get args :cache-enabled)
+    (noema-agent-acp--changed)))
+
+(advice-add 'agent-shell--update-header-and-mode-line :after
+            #'noema-agent-acp--header-updated-a)
+
+(defun noema-agent-acp--note-context (used)
+  "Record the context size USED just reported by the current agent buffer.
+The agent computes USED itself, so a sharp drop from a sizeable context is a
+compaction or a cleared conversation rather than cache variance (abtop
+additionally checks cache reads because it derives context from them)."
+  (when (and (numberp used) (> used 0))
+    (when (and (>= noema-agent-acp--context-last noema-agent-acp--compaction-floor)
+               (< used (* noema-agent-acp--compaction-ratio noema-agent-acp--context-last)))
+      (cl-incf noema-agent-acp--compactions))
+    (setq noema-agent-acp--context-last used
+          noema-agent-acp--context-peak (max noema-agent-acp--context-peak used))))
+
+(defvar noema-agent-acp--rate-limits-saved-at 0
+  "When the rate-limit file was last written.")
+
+(defconst noema-agent-acp--rate-limits-save-interval 300
+  "Seconds after which an unchanged rate limit is rewritten, to keep its age.")
+
+(defun noema-agent-acp-put-rate-limit (agent window utilization &rest properties)
+  "Record that AGENT's WINDOW is UTILIZATION used, a fraction 0.0-1.0 or nil.
+PROPERTIES may give :status and :resets-at (epoch seconds).  The file is
+written only when a value changed, or after
+`noema-agent-acp--rate-limits-save-interval' to keep its age true."
+  (let* ((key (format "%s/%s" agent window))
+         (utilization (and (numberp utilization) utilization))
+         (limit (list :agent agent :window window :utilization utilization
+                      :status (plist-get properties :status)
+                      :resets-at (let ((value (plist-get properties :resets-at)))
+                                   (and (numberp value) value))
+                      :updated-at (float-time)))
+         (old (gethash key (noema-agent-acp-rate-limits))))
+    (puthash key limit (noema-agent-acp-rate-limits))
+    (when (or (not (equal (plist-get old :utilization) utilization))
+              (not (equal (plist-get old :resets-at) (plist-get limit :resets-at)))
+              (not (equal (plist-get old :status) (plist-get limit :status)))
+              (> (- (float-time) noema-agent-acp--rate-limits-saved-at)
+                 noema-agent-acp--rate-limits-save-interval))
+      (setq noema-agent-acp--rate-limits-saved-at (float-time))
+      (noema-agent-acp--save-rate-limits))))
+
+(defun noema-agent-acp--note-rate-limit (agent info)
+  "Record claude-agent-acp rate-limit INFO reported by AGENT.
+INFO names the window it concerns; newer Claude Code versions also attach
+`unifiedWindows' with every window's utilization at once."
+  (when-let* ((window (map-elt info 'rateLimitType)))
+    (noema-agent-acp-put-rate-limit agent window (map-elt info 'utilization)
+                                    :status (map-elt info 'status)
+                                    :resets-at (map-elt info 'resetsAt)))
+  (pcase-dolist (`(,window . ,value) (map-elt info 'unifiedWindows))
+    (when (consp value)
+      (noema-agent-acp-put-rate-limit agent (symbol-name window) (map-elt value 'utilization)
+                                      :resets-at (map-elt value 'resetsAt)))))
+
+(defun noema-agent-acp--usage-updated-a (&rest args)
+  "After agent-shell stores reported usage, record what Noema tracks with it.
+ARGS are agent-shell's keyword arguments; the notification form carries the
+context size and, from claude-agent-acp, rate-limit metadata."
+  (let* ((state (plist-get args :state))
+         (buffer (map-elt state :buffer)))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (when-let* ((update (plist-get args :acp-update)))
+          (noema-agent-acp--note-context (map-elt update 'used))
+          (when-let* ((info (map-nested-elt update '(_meta _claude/rateLimit))))
+            (noema-agent-acp--note-rate-limit
+             (or noema-agent-acp-session-agent "agent") info))))
+      (with-current-buffer buffer (noema-agent-acp--changed)))))
+
+(advice-add 'agent-shell--update-usage-from-notification :after
+            #'noema-agent-acp--usage-updated-a)
+(advice-add 'agent-shell--save-usage :after #'noema-agent-acp--usage-updated-a)
+
+(defun noema-agent-acp-usage (buffer)
+  "Return what agent BUFFER's ACP connection reported about its usage.
+A plist with :model, :model-id, :context-used, :context-size, :context-peak,
+:compactions, :input, :output, :thought, :cached-read, :cached-write, :total,
+:cost, :currency and :turns.  Counts are non-negative integers, zero when
+never reported; :cost is nil until the agent reports one.
+
+agent-shell already records these from `usage_update' notifications and
+PromptResponse usage, so this only reads that state: no process scan, no
+request, no timer.  It is the one place Noema reads agent-shell's usage."
+  (when (noema-agent-acp-agent-buffer-p buffer)
+    (let* ((state (buffer-local-value 'agent-shell--state buffer))
+           (usage (map-elt state :usage))
+           (count (lambda (key)
+                    (let ((value (map-elt usage key)))
+                      (if (numberp value) (max 0 (truncate value)) 0)))))
+      (list :model (ignore-errors (agent-shell-get-model-name state))
+            :model-id (map-nested-elt state '(:session :model-id))
+            :context-used (funcall count :context-used)
+            :context-size (funcall count :context-size)
+            :context-peak (buffer-local-value 'noema-agent-acp--context-peak buffer)
+            :compactions (buffer-local-value 'noema-agent-acp--compactions buffer)
+            :input (funcall count :input-tokens)
+            :output (funcall count :output-tokens)
+            :thought (funcall count :thought-tokens)
+            :cached-read (funcall count :cached-read-tokens)
+            :cached-write (funcall count :cached-write-tokens)
+            :total (funcall count :total-tokens)
+            ;; agent-shell starts every session at 0, so zero means unreported.
+            :cost (let ((amount (map-elt usage :cost-amount)))
+                    (and (numberp amount) (> amount 0) amount))
+            :currency (map-elt usage :cost-currency)
+            :turns (let ((turns (map-elt state :request-count)))
+                     (if (natnump turns) turns 0))))))
+
 (defcustom noema-agent-acp-ephemeral-origins '(side)
   "Session origins that never enter a project's durable session registry.
 A side chat asks a quick question beside a session without becoming one of
@@ -423,8 +611,9 @@ last shown, so a conversation typed directly into the buffer stays warm."
   (setq noema-agent-acp-last-used-at (float-time)))
 
 (defun noema-agent-acp--track-activity-h ()
-  "Measure this agent buffer's idle time from every change to it."
+  "Measure this agent buffer's idle time and report when it goes."
   (add-hook 'after-change-functions #'noema-agent-acp-note-activity nil t)
+  (add-hook 'kill-buffer-hook #'noema-agent-acp--changed nil t)
   (unless noema-agent-acp-last-used-at
     (noema-agent-acp-note-activity)))
 
