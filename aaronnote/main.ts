@@ -11778,10 +11778,15 @@ function runHostCommand(detail: unknown): boolean {
       void copyEditorSelection(true);
       return true;
     case "escape":
+      if (clearFormatPainter()) return true;
+      vim.handleKey({ key: "Escape" });
+      editor.focus();
+      return true;
     case "normal":
     case "vim-normal":
       if (clearFormatPainter()) return true;
-      vim.setMode("normal");
+      vim.handleKey({ key: "Escape" });
+      if (vim.mode() !== "normal") vim.handleKey({ key: "Escape" });
       editor.focus();
       return true;
     case "insert":

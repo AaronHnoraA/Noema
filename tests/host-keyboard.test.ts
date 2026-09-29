@@ -105,19 +105,28 @@ describe("shared Noema host keyboard bridge", () => {
   });
 
   test("a key Emacs recovered for the page is replayed to the page's own handlers", () => {
-    withBridge("aaronnote-jupyter", () => {
-      const seen: string[] = [];
-      const pageHandler = (event: KeyboardEvent) => { seen.push(event.key); };
-      window.addEventListener("keydown", pageHandler);
-      try {
-        window.dispatchEvent(new CustomEvent("aaronnote:command", {
-          detail: { command: "key", key: "ArrowDown", code: "ArrowDown", targetClient: "aaronnote-jupyter" },
-        }));
-      } finally {
-        window.removeEventListener("keydown", pageHandler);
-      }
-      expect(seen).toEqual(["ArrowDown"]);
-    });
+    const hasFocus = document.hasFocus;
+    document.hasFocus = () => false;
+    try {
+      withBridge("aaronnote-jupyter", () => {
+        const seen: string[] = [];
+        const pageHandler = (event: KeyboardEvent) => { seen.push(event.key); };
+        window.addEventListener("keydown", pageHandler);
+        try {
+          window.dispatchEvent(new CustomEvent("aaronnote:command", {
+            detail: { command: "key", key: "ArrowDown", code: "ArrowDown", targetClient: "aaronnote-jupyter" },
+          }));
+          window.dispatchEvent(new CustomEvent("aaronnote:command", {
+            detail: { command: "key", key: " ", code: "Space", targetClient: "aaronnote-jupyter" },
+          }));
+        } finally {
+          window.removeEventListener("keydown", pageHandler);
+        }
+        expect(seen).toEqual(["ArrowDown", " "]);
+      });
+    } finally {
+      document.hasFocus = hasFocus;
+    }
   });
 
   test("reads the client Emacs addresses from the page URL", () => {

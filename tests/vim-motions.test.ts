@@ -150,6 +150,71 @@ describe("count prefixes", () => {
   });
 });
 
+describe("Unicode character keys", () => {
+  test("f accepts a digit as its target after a count", () => {
+    const s = mount("a7b7c", 0);
+    s.keys("2", "f", "7");
+    expect(s.head()).toBe(3);
+    s.done();
+  });
+
+  test("f accepts one emoji grapheme", () => {
+    const s = mount("a👨‍👩‍👧b", 0);
+    s.keys("f", "👨‍👩‍👧");
+    expect(s.head()).toBe(1);
+    s.done();
+  });
+
+  test("t and T stop on grapheme boundaries", () => {
+    const s = mount("a🦊👨‍👩‍👧b", 0);
+    s.keys("t", "👨‍👩‍👧");
+    expect(s.head()).toBe(1);
+    s.keys("$", "T", "🦊");
+    expect(s.head()).toBe(3);
+    s.done();
+  });
+
+  test("an unbound emoji cannot insert text in Normal mode", () => {
+    const s = mount("abc", 0);
+    expect(s.vim.handleKey({ key: "🍌" })).toBe(true);
+    expect(s.markdown()).toBe("abc");
+    expect(s.unhandled).toContain("🍌");
+    s.done();
+  });
+});
+
+describe("Vim word boundaries in prose", () => {
+  test("w and b land at word starts; e and ge land at word ends", () => {
+    const s = mount("LCE (Linear Code Equivalence) is", 0);
+    s.keys("w");
+    expect(s.head()).toBe(4); // punctuation is a separate word
+    s.keys("w");
+    expect(s.head()).toBe(5);
+    s.keys("e");
+    expect(s.head()).toBe(10);
+    s.keys("w");
+    expect(s.head()).toBe(12);
+    s.keys("b");
+    expect(s.head()).toBe(5);
+    s.keys("g", "e");
+    expect(s.head()).toBe(4);
+    s.done();
+  });
+
+  test("an empty line counts as one word for w and b", () => {
+    const s = mount("one\n\nnext", 0);
+    s.keys("w");
+    expect(s.head()).toBe(4);
+    s.keys("w");
+    expect(s.head()).toBe(5);
+    s.keys("b");
+    expect(s.head()).toBe(4);
+    s.keys("b");
+    expect(s.head()).toBe(0);
+    s.done();
+  });
+});
+
 describe("G and gg take a line number", () => {
   test("G alone goes to the end", () => {
     const s = mount("a\nb\nc", 0);
@@ -395,12 +460,12 @@ describe("D, C and Y act on the rest of the line", () => {
     s.done();
   });
 
-  test("Y yanks to the end of the line without changing it", () => {
+  test("Y yanks the whole line without changing it", () => {
     const s = mount("abcdef", 2);
     s.keys("Y");
     expect(s.markdown()).toBe("abcdef");
     const register = (window as unknown as { __aaronoteVimRegister?: { text: string } }).__aaronoteVimRegister;
-    expect(register?.text).toBe("cdef");
+    expect(register?.text).toBe("abcdef\n");
     s.done();
   });
 

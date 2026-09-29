@@ -131,8 +131,10 @@ export function selectJumpCandidates(
   return orderedPositions(positions, cursor, direction).slice(0, max);
 }
 
-export function previewVimJump(view: EditorView, needle: string, direction: VimJumpDirection): number {
-  const cursor = view.state.selection.main.head;
+export function previewVimJump(
+  view: EditorView, needle: string, direction: VimJumpDirection,
+  cursor = view.state.selection.main.head,
+): number {
   const positions = orderedPositions(candidatePositions(view, needle), cursor, direction);
   view.dispatch({
     effects: setVimJumpHints.of(positions.map((from) => ({
@@ -144,8 +146,10 @@ export function previewVimJump(view: EditorView, needle: string, direction: VimJ
   return positions.length;
 }
 
-export function beginVimJump(view: EditorView, needle: string, direction: VimJumpDirection): VimJumpSession {
-  const cursor = view.state.selection.main.head;
+export function beginVimJump(
+  view: EditorView, needle: string, direction: VimJumpDirection,
+  cursor = view.state.selection.main.head,
+): VimJumpSession {
   const positions = selectJumpCandidates(candidatePositions(view, needle), cursor, direction, MAX_SCAN_MATCHES);
   const labels = buildVimJumpLabels(positions.length);
   const candidates = positions

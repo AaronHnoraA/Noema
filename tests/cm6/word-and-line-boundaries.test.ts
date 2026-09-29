@@ -12,10 +12,10 @@
  * stepped one row. `0`/`$` now use the visual row too.
  */
 
-import { EditorSelection } from "@codemirror/state";
 import { describe, expect, it } from "@voidzero-dev/vite-plus-test";
 
 import { isWordChar } from "../../src/cm6/text-boundaries.ts";
+import { fixedWidthRowLayout, setVimRowLayoutForTesting } from "../../aaronnote/vim-rows.ts";
 
 describe("isWordChar is the single word definition", () => {
   it("treats a hyphen as a separator, like Vim and CodeMirror's categorizer", () => {
@@ -143,36 +143,21 @@ describe("Vim 0/$ resolve against the visual row", () => {
     return { editor, vim, host };
   }
 
-  it("asks CodeMirror for the wrapped-row boundary when layout is available", async () => {
+  it("uses the wrapped-row boundary when layout is available", async () => {
     const { editor, vim, host } = await setup("aaaa bbbb cccc dddd");
-    // happy-dom reports a zero-size box, so stand in for a laid-out editor and
-    // pretend the row wraps after "aaaa bbbb".
-    Object.defineProperty(editor.view.contentDOM, "getBoundingClientRect", {
-      configurable: true,
-      value: () => ({ width: 400, height: 200, left: 0, top: 0, right: 400, bottom: 200 }),
-    });
-    const asked: Array<{ pos: number; forward: boolean }> = [];
-    Object.defineProperty(editor.view, "moveToLineBoundary", {
-      configurable: true,
-      value: (range: { head: number }, forward: boolean) => {
-        asked.push({ pos: range.head, forward });
-        return EditorSelection.cursor(forward ? 9 : 0);
-      },
-    });
-
-    editor.setSelection(6, 6);
-    vim.handleKey({ key: "$" });
-    expect(asked).toEqual([{ pos: 6, forward: true }]);
-    expect(editor.getMarkdownSelection().from).toBe(9);
-
-    asked.length = 0;
-    vim.handleKey({ key: "0" });
-    expect(asked).toEqual([{ pos: 9, forward: false }]);
-    expect(editor.getMarkdownSelection().from).toBe(0);
-
-    vim.destroy();
-    editor.destroy();
-    host.remove();
+    const restore = setVimRowLayoutForTesting(fixedWidthRowLayout(10));
+    try {
+      editor.setSelection(6, 6);
+      vim.handleKey({ key: "$" });
+      expect(editor.getMarkdownSelection().from).toBe(9);
+      vim.handleKey({ key: "0" });
+      expect(editor.getMarkdownSelection().from).toBe(0);
+    } finally {
+      restore();
+      vim.destroy();
+      editor.destroy();
+      host.remove();
+    }
   });
 
   it("falls back to the source line when the editor has no layout", async () => {

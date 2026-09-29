@@ -43,6 +43,17 @@ function mount(text: string, at = 0) {
   };
 }
 
+describe("dot replay", () => {
+  test("a counted dot keeps the original change for the next dot", () => {
+    const s = mount("abcdef", 0);
+    s.keys("x", "3", ".");
+    expect(s.markdown()).toBe("ef");
+    s.keys(".");
+    expect(s.markdown()).toBe("f");
+    s.done();
+  });
+});
+
 describe("r takes a count", () => {
   test("3r replaces three characters", () => {
     const s = mount("abcdef", 0);
@@ -84,6 +95,13 @@ describe("r takes a count", () => {
     const s = mount("abcdef", 0);
     s.keys("2", "r", "7");
     expect(s.markdown()).toBe("77cdef");
+    s.done();
+  });
+
+  test("r accepts a multi-code-unit emoji as one replacement character", () => {
+    const s = mount("abc", 1);
+    s.keys("r", "🦊");
+    expect(s.markdown()).toBe("a🦊c");
     s.done();
   });
 

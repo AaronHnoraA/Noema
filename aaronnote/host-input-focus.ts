@@ -32,6 +32,12 @@ const FOREGROUND_PROOF_EVENTS = new Set([
  * in the page, or the host's own `focus` command, takes the keyboard back.
  */
 let keyboardReleased = false;
+const recoveredKeyboardEvents = new WeakSet<KeyboardEvent>();
+
+/** Let only keys explicitly replayed by the Emacs host through the focus gate. */
+export function markRecoveredKeyboardEvent(event: KeyboardEvent): void {
+  recoveredKeyboardEvents.add(event);
+}
 
 type NativeKeyboardHandler = { postMessage?: (message: string) => void };
 
@@ -81,7 +87,7 @@ export function pageHasNativeKeyboard(): boolean {
 export function installNativeKeyboardYield(target: Window = window): () => void {
   const controller = new AbortController();
   target.addEventListener("keydown", (event) => {
-    if (pageHasNativeKeyboard()) return;
+    if (pageHasNativeKeyboard() || recoveredKeyboardEvents.has(event)) return;
     event.stopImmediatePropagation();
   }, { capture: true, signal: controller.signal });
   return () => controller.abort();

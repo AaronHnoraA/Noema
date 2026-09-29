@@ -32,10 +32,12 @@ async function press(text: string, at: number, keys: string[], jumpTimeoutMs = 2
     await settle();
   }
   await settle(jumpTimeoutMs + 60);
+  const selection = editor.getMarkdownSelection();
   const result = {
     markdown: editor.getMarkdown(),
     head: editor.getMarkdownSelectionRange().head,
     mode: vim.mode(),
+    selected: editor.getMarkdown().slice(selection.from, selection.to),
   };
   vim.destroy();
   editor.destroy();
@@ -116,6 +118,11 @@ describe("s and S jump to a character", () => {
     expect(r.head).toBe(0);
   });
 
+  test("an unsuccessful timed jump does not become part of the next dot change", { timeout: 20_000 }, async () => {
+    const r = await press("alpha beta", 0, ["s", "z", "x", "."]);
+    expect(r.markdown).toBe("pha beta");
+  });
+
   test("Escape abandons the jump", { timeout: 20_000 }, async () => {
     const r = await press("alpha beta", 0, ["s", "Escape"]);
     expect(r.head).toBe(0);
@@ -126,5 +133,42 @@ describe("s and S jump to a character", () => {
     const r = await press("aa bb aa", 0, ["s", "a"]);
     expect(r.head).toBe(0);
     expect(r.mode).toBe("normal");
+  });
+
+  test("Visual s extends the selection to the jump target", { timeout: 20_000 }, async () => {
+    const r = await press("alpha beta gamma", 0, ["v", "s", "g"]);
+    expect(r.mode).toBe("visual");
+    expect(r.selected).toBe("alpha beta g");
+    expect(r.markdown).toBe("alpha beta gamma");
+  });
+
+  test("Visual s includes its target after an exclusive word motion", { timeout: 20_000 }, async () => {
+    const r = await press("foo bar gamma", 0, ["v", "w", "s", "g"]);
+    expect(r.mode).toBe("visual");
+    expect(r.selected).toBe("foo bar g");
+  });
+
+  test("Visual S jumps backward without replacing the selection", { timeout: 20_000 }, async () => {
+    const r = await press("gamma alpha beta", 14, ["v", "S", "g"]);
+    expect(r.mode).toBe("visual");
+    expect(r.selected).toBe("gamma alpha bet");
+  });
+
+  test("Visual jump labels retain the selection anchor", { timeout: 20_000 }, async () => {
+    const r = await press("a x a", 0, ["v", "s", "a", "a"]);
+    expect(r.mode).toBe("visual");
+    expect(r.selected).toBe("a x a");
+  });
+
+  test("Visual-line s extends by whole rows", { timeout: 20_000 }, async () => {
+    const r = await press("first\nsecond\nthird", 0, ["V", "s", "h"]);
+    expect(r.mode).toBe("visual-line");
+    expect(r.selected).toBe("first\nsecond\nthird");
+  });
+
+  test("Escape cancels a Visual jump and retains the selection", { timeout: 20_000 }, async () => {
+    const r = await press("alpha beta", 0, ["v", "s", "Escape"]);
+    expect(r.mode).toBe("visual");
+    expect(r.selected).toBe("a");
   });
 });

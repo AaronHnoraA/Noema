@@ -1,22 +1,14 @@
 /**
  * `j`/`k` in Normal mode, including the widget-snapping the pixel path does.
  *
- * `moveScreenLine` has two halves. With real layout it moves by wrapped screen
- * row through `EditorView.moveVertically` and then asks `crossedVisualEntry`
- * whether the motion stepped over something the Visual layer collapsed — a
- * display formula, an org-env heading, or a blank line absorbed to zero height.
- * With no layout to measure it falls back to logical lines.
- *
- * A headless DOM reports a zero-sized content box, so the suite only ever
- * reached the fallback and the snapping logic was never executed. It measures
- * nothing itself, so it is tested here directly against an explicit start and
- * target.
+ * The headless DOM cannot measure wrapped rows, but real key handling still
+ * traverses the visible formula and heading rows as one Vim line each.
  */
 
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
 import { createEditor } from "../src/editor-api.ts";
-import { createVimLite, crossedVisualEntry } from "../aaronnote/vim-lite.ts";
+import { createVimLite } from "../aaronnote/vim-lite.ts";
 import { getBlockMathRanges } from "../src/cm6/math-ranges.ts";
 
 function mount(text: string, at = 0) {
@@ -36,44 +28,30 @@ function mount(text: string, at = 0) {
   };
 }
 
-function entries(text: string) {
-  const host = document.createElement("div");
-  document.body.append(host);
-  const editor = createEditor(host, { kernel: "cm6", initialContent: text });
-  const at = (start: number, target: number, dir: -1 | 1) =>
-    crossedVisualEntry(editor, start, target, dir);
-  return {
-    editor,
-    at,
-    mathRanges: () => getBlockMathRanges(editor.view.state).map((r) => [r.from, r.to]),
-    done: () => { editor.destroy(); host.remove(); },
-  };
-}
-
 describe("a vertical motion snaps onto a collapsed display formula", () => {
   const DOC = "aaa\n\\[\nx^2\n\\]\nbbb";
 
   test("the formula is one collapsed range", () => {
-    const e = entries(DOC);
-    expect(e.mathRanges()).toEqual([[4, 13]]);
+    const e = mount(DOC);
+    expect(getBlockMathRanges(e.editor.view.state).map((r) => [r.from, r.to])).toEqual([[4, 13]]);
     e.done();
   });
 
-  test("moving down over it lands on its start, not past it", () => {
-    const e = entries(DOC);
-    expect(e.at(1, 16, 1)).toBe(4);
+  test("moving down stops on the formula before the following line", () => {
+    const e = mount(DOC, 1);
+    e.keys("j");
+    expect(e.head()).toBe(4);
+    e.keys("j");
+    expect(e.head()).toBe(15);
     e.done();
   });
 
-  test("moving up over it lands on its start too", () => {
-    const e = entries(DOC);
-    expect(e.at(16, 1, -1)).toBe(4);
-    e.done();
-  });
-
-  test("a motion that stops short of it does not snap", () => {
-    const e = entries(DOC);
-    expect(e.at(1, 5, 1)).toBe(null);
+  test("moving up stops on the formula before the preceding line", () => {
+    const e = mount(DOC, 15);
+    e.keys("k");
+    expect(e.head()).toBe(4);
+    e.keys("k");
+    expect(e.head()).toBe(1);
     e.done();
   });
 });
@@ -82,44 +60,49 @@ describe("a vertical motion snaps onto an org-env heading", () => {
   const DOC = "aaa\n#+begin theorem T\nBody.\n#+end theorem\nbbb";
 
   test("downward", () => {
-    const e = entries(DOC);
-    expect(e.at(1, 42, 1)).toBe(20);
+    const e = mount(DOC, 1);
+    e.keys("j");
+    expect(e.head()).toBe(20);
     e.done();
   });
 
   test("upward", () => {
-    const e = entries(DOC);
-    expect(e.at(42, 1, -1)).toBe(20);
+    const e = mount(DOC, 22);
+    e.keys("k");
+    expect(e.head()).toBe(20);
     e.done();
   });
 });
 
 describe("a blank line a block absorbed is still a stop", () => {
   test("downward and upward both land on it", () => {
-    const e = entries("aaa\n\nbbb");
-    expect(e.at(1, 6, 1)).toBe(4);
-    expect(e.at(6, 1, -1)).toBe(4);
+    const e = mount("aaa\n\nbbb", 1);
+    e.keys("j");
+    expect(e.head()).toBe(4);
+    e.keys("j", "k");
+    expect(e.head()).toBe(4);
     e.done();
   });
 
-  test("ordinary lines with nothing collapsed never snap", () => {
-    const e = entries("aaa\nbbb\nccc");
-    expect(e.at(1, 5, 1)).toBe(null);
-    expect(e.at(5, 1, -1)).toBe(null);
+  test("ordinary lines move one row at a time", () => {
+    const e = mount("aaa\nbbb\nccc", 1);
+    e.keys("j", "j", "k");
+    expect(e.head()).toBe(5);
     e.done();
   });
 
-  test("a motion inside one line never snaps", () => {
-    const e = entries("aaa\n\nbbb");
-    expect(e.at(6, 7, 1)).toBe(null);
-    expect(e.at(1, 0, -1)).toBe(null);
+  test("horizontal motion stays on its line", () => {
+    const e = mount("aaa\n\nbbb", 6);
+    e.keys("l");
+    expect(e.head()).toBe(7);
     e.done();
   });
 
-  test("Source mode has nothing collapsed, so it never snaps", () => {
-    const e = entries("aaa\n\nbbb");
+  test("Source mode keeps ordinary source lines", () => {
+    const e = mount("aaa\n\nbbb", 1);
     e.editor.view.dom.classList.remove("aaronnote-visual-typography");
-    expect(e.at(1, 6, 1)).toBe(null);
+    e.keys("j");
+    expect(e.head()).toBe(4);
     e.done();
   });
 });

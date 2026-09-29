@@ -8,6 +8,7 @@
 
 import { syntaxTree } from "@codemirror/language";
 import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from "@codemirror/view";
+import { vimKeepsRenderedObjects } from "../vim-objects.ts";
 import type { Range, Text } from "@codemirror/state";
 import { blockMathRangesOverlapping, mergeOverlappingRanges, rangeInsideAny } from "../../../math-ranges.ts";
 import { scanInlineMathRanges } from "../../../../inline-math.ts";
@@ -212,9 +213,11 @@ function buildFootnoteDecorations(view: EditorView): DecorationSet {
       if (definition && definitionEnd > 0) {
         const from = line.from + definition[0]!.indexOf("[^");
         const to = line.from + definitionEnd;
-        if (!rangeInsideAny(from, to, excluded) && !selectionTouches(view, from, to)) {
+        if (!rangeInsideAny(from, to, excluded)
+          && (vimKeepsRenderedObjects(view) || !selectionTouches(view, from, to))) {
           decorations.push(Decoration.replace({
             widget: new FootnoteDefinitionWidget(definition[1]!),
+            vimAtomic: true,
           }).range(from, to));
           count++;
         }
@@ -226,9 +229,11 @@ function buildFootnoteDecorations(view: EditorView): DecorationSet {
         if (definition && match.index < definitionEnd) continue;
         const from = line.from + match.index;
         const to = from + match[0].length;
-        if (rangeInsideAny(from, to, excluded) || selectionTouches(view, from, to)) continue;
+        if (rangeInsideAny(from, to, excluded)
+          || (!vimKeepsRenderedObjects(view) && selectionTouches(view, from, to))) continue;
         decorations.push(Decoration.replace({
           widget: new FootnoteReferenceWidget(match[1]!, from),
+          vimAtomic: true,
         }).range(from, to));
         count++;
       }

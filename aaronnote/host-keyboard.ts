@@ -20,6 +20,7 @@
 import { handleHostOwnedKey, handleXwidgetEmacsKeydown, installFrameKeyRelay } from "./xwidget-key-guard.ts";
 import {
   installNativeKeyboardYield,
+  markRecoveredKeyboardEvent,
   reclaimHostInputFocus,
   releaseHostInputFocus,
 } from "./host-input-focus.ts";
@@ -51,7 +52,7 @@ function replayRecoveredKey(detail: RecoveredKey): void {
   const key = String(detail.key ?? "");
   if (!key) return;
   const target = document.activeElement instanceof HTMLElement ? document.activeElement : document.body;
-  target.dispatchEvent(new KeyboardEvent("keydown", {
+  const event = new KeyboardEvent("keydown", {
     key,
     code: String(detail.code ?? ""),
     metaKey: detail.metaKey === true,
@@ -60,7 +61,9 @@ function replayRecoveredKey(detail: RecoveredKey): void {
     shiftKey: detail.shiftKey === true,
     bubbles: true,
     cancelable: true,
-  }));
+  });
+  markRecoveredKeyboardEvent(event);
+  target.dispatchEvent(event);
 }
 
 /** Run host keyboard COMMAND for this page; return whether it was one. */

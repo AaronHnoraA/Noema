@@ -11,6 +11,7 @@
 import { syntaxTree } from "@codemirror/language";
 import type { Range } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from "@codemirror/view";
+import { vimKeepsRenderedObjects } from "../vim-objects.ts";
 import { BLOCK_ANCHOR_SOURCE, shortBlockId } from "../../../../../shared/block-identity.mjs";
 import { scanInlineMathRanges } from "../../../../inline-math.ts";
 import { blockMathRangesOverlapping, mergeOverlappingRanges, rangeInsideAny } from "../../../math-ranges.ts";
@@ -100,8 +101,12 @@ function buildBlockAnchorDecorations(view: EditorView): DecorationSet {
       while (count < MAX_VIEWPORT_BADGES && (match = BLOCK_ANCHOR_RE.exec(line.text)) !== null) {
         const from = line.from + match.index;
         const to = from + match[0].length;
-        if (rangeInsideAny(from, to, excluded) || selectionTouches(view, from, to)) continue;
-        decorations.push(Decoration.replace({ widget: new BlockAnchorWidget(match[1]!) }).range(from, to));
+        if (rangeInsideAny(from, to, excluded)
+          || (!vimKeepsRenderedObjects(view) && selectionTouches(view, from, to))) continue;
+        decorations.push(Decoration.replace({
+          widget: new BlockAnchorWidget(match[1]!),
+          vimAtomic: true,
+        }).range(from, to));
         count++;
       }
     }

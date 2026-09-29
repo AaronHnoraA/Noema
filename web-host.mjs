@@ -1913,7 +1913,9 @@ async function apiSelectJupyterCell(body) {
     throw new Error("Selecting a Jupyter cell requires scriptFile and cellId");
   }
   const payload = { scriptFile, cellId };
-  gatewayNotify("aaronnote.event", { type: "jupyter-cell-select", payload });
+  if (!gatewayNotify("aaronnote.event", { type: "jupyter-cell-select", payload })) {
+    throw new Error("Emacs gateway is not connected");
+  }
   return { ok: true, ...payload };
 }
 

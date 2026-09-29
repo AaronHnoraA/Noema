@@ -43,6 +43,7 @@ import { scanTexSource, texTokenClass } from "../../../tex-highlight.ts";
 import { orgEnvContextForRange, type OrgEnvContext } from "./block-extras.ts";
 import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
 import { isCoalescedVisualTyping } from "../typing-burst.ts";
+import { vimKeepsRenderedObjects } from "../vim-objects.ts";
 import {
   isPointerSelecting,
   transactionHasPointerSelection,
@@ -1548,14 +1549,16 @@ class MathBlockPlugin {
     // Revealing a display formula's source changes the height of everything
     // below it. Mid-drag that moves the document out from under the pointer,
     // so wait for the gesture to finish and enter once from where it ended.
-    if (this.pendingActivation || view.state.readOnly || isPointerSelecting(view.state)) return;
+    if (this.pendingActivation || view.state.readOnly || isPointerSelecting(view.state)
+        || vimKeepsRenderedObjects(view)) return;
     const field = view.state.field(mathBlockField, false);
     const range = blockMathAtSelection(view.state);
     if (!range || field?.suppressedKey === blockMathKey(range)) return;
     this.pendingActivation = true;
     queueMicrotask(() => {
       this.pendingActivation = false;
-      if (!view.dom.isConnected || view.state.field(mathBlockField, false)?.active) return;
+      if (!view.dom.isConnected || view.state.field(mathBlockField, false)?.active
+          || vimKeepsRenderedObjects(view)) return;
       const current = blockMathAtSelection(view.state);
       if (!current) return;
       if (view.state.field(mathBlockField, false)?.suppressedKey === blockMathKey(current)) return;
@@ -1763,7 +1766,9 @@ class MathInlinePlugin {
     }
     const selected = inlineMathAtSelection(view.state);
     this.selectionKey = selected ? `${selected.from}:${selected.to}` : "";
-    if (selected && !view.state.readOnly) this.suppressedKey = this.selectionKey;
+    if (selected && !view.state.readOnly && !vimKeepsRenderedObjects(view)) {
+      this.suppressedKey = this.selectionKey;
+    }
     ({ decorations: this.decorations, atomicRanges: this.atomicRanges } = buildInlineMathDecos(
       view,
       this.active,
@@ -1854,7 +1859,8 @@ class MathInlinePlugin {
         this.scheduleCommit(update.view);
         rebuild = true;
       }
-    } else if (!aborted && selected && !update.view.state.readOnly && nextSelectionKey !== this.suppressedKey) {
+    } else if (!aborted && selected && !update.view.state.readOnly
+        && !vimKeepsRenderedObjects(update.view) && nextSelectionKey !== this.suppressedKey) {
       this.suppressedKey = nextSelectionKey;
       rebuild = true;
     }

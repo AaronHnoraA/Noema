@@ -83,6 +83,47 @@ describe("Visual mode grows and shrinks with h and l", () => {
   });
 });
 
+describe("Visual word motions stop before the next word", () => {
+  test("vw excludes the next word's first character; ve ends the current word", () => {
+    const w = mount("LCE (Linear Code Equivalence) is", 0, "v");
+    w.keys("w");
+    expect(w.picked()).toBe("LCE ");
+    w.keys("w");
+    expect(w.picked()).toBe("LCE (");
+    w.keys("b");
+    expect(w.picked()).toBe("LCE (");
+    w.keys("b");
+    expect(w.picked()).toBe("L");
+    w.done();
+
+    const e = mount("LCE (Linear Code Equivalence) is", 0, "v");
+    e.keys("e");
+    expect(e.picked()).toBe("LCE");
+    e.done();
+  });
+
+  test("repeated vw advances through whole words without including the next initial", () => {
+    const s = mount("foo bar baz", 0, "v");
+    s.keys("w");
+    expect(s.picked()).toBe("foo ");
+    s.vim.syncSelectionFromEditor(); // host reconciles each internal CM6 selection
+    s.keys("w");
+    expect(s.picked()).toBe("foo bar ");
+    s.keys("o");
+    expect(s.picked()).toBe("foo bar ");
+    s.done();
+  });
+
+  test("vb from a word tail selects back to that word's first character", () => {
+    const s = mount("foo bar baz", 6, "v");
+    s.keys("b");
+    expect(s.picked()).toBe("bar");
+    s.keys("b");
+    expect(s.picked()).toBe("foo bar");
+    s.done();
+  });
+});
+
 describe("Visual mode j and k span lines", () => {
   test("j reaches the same column on the next line", () => {
     const s = mount("abcdef\nabcdef", 1, "v");

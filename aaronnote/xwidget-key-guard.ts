@@ -86,7 +86,8 @@ const XWIDGET_SPECIAL_KEYS = new Set<XwidgetSpecialKey>([
 ]);
 const XWIDGET_SHIFT_TAB_KEYS = new Set(["Backtab", "ISO_Left_Tab", "Shift-Tab"]);
 const DUPLICATE_BEFOREINPUT_MS = 80;
-let lastHandledKeydown: { editor: Editor; key: string; at: number } | null = null;
+const MODE_ENTRY_BEFOREINPUT_MS = 25;
+let lastHandledKeydown: { editor: Editor; key: string; at: number; enteredInsert: boolean } | null = null;
 type MathBeforeInputExpectation = {
   editor: Editor;
   at: number;
@@ -264,8 +265,8 @@ function nowMs(): number {
   return globalThis.performance?.now?.() ?? Date.now();
 }
 
-function noteHandledKeydown(editor: Editor, key: string): void {
-  lastHandledKeydown = { editor, key, at: nowMs() };
+function noteHandledKeydown(editor: Editor, key: string, enteredInsert = false): void {
+  lastHandledKeydown = { editor, key, at: nowMs(), enteredInsert };
 }
 
 function recentlyHandledKeydown(editor: Editor, key: string): boolean {
@@ -275,6 +276,13 @@ function recentlyHandledKeydown(editor: Editor, key: string): boolean {
       && lastHandledKeydown.key === key
       && nowMs() - lastHandledKeydown.at < DUPLICATE_BEFOREINPUT_MS,
   );
+}
+
+function recentlyEnteredInsertWithKey(editor: Editor, key: string): boolean {
+  return Boolean(lastHandledKeydown?.enteredInsert
+    && lastHandledKeydown.editor === editor
+    && lastHandledKeydown.key === key
+    && nowMs() - lastHandledKeydown.at < MODE_ENTRY_BEFOREINPUT_MS);
 }
 
 function recentMathBeforeInputExpectation(editor: Editor): MathBeforeInputExpectation | null {
@@ -527,6 +535,7 @@ export function handleXwidgetControlKeydown(
 export function handleXwidgetVimKeydown(event: KeyboardEvent, context: XwidgetKeyContext): boolean {
   if (!shouldHandleXwidgetVimKey(event, context)) return false;
   const key = normalizedEditorKey(event);
+  const beforeMode = context.vim.mode();
   const handled = context.vim.handleKey({
     key,
     ctrlKey: event.ctrlKey,
@@ -538,7 +547,7 @@ export function handleXwidgetVimKeydown(event: KeyboardEvent, context: XwidgetKe
   if (!handled) return false;
 
   hardStop(event);
-  noteHandledKeydown(context.editor, key);
+  noteHandledKeydown(context.editor, key, beforeMode !== "insert" && context.vim.mode() === "insert");
   restoreEditorFocusAfterCommand(context.editor);
   return true;
 }
@@ -569,12 +578,33 @@ export function handleXwidgetSpecialBeforeInput(event: InputEvent, context: Xwid
 }
 
 export function handleXwidgetVimBeforeInput(event: InputEvent, context: XwidgetKeyContext): boolean {
+  // WebKit can deliver the printable beforeinput paired with a consumed Vim
+  // entry key after that key has already switched Normal to Insert. It still
+  // belongs to the modal command; otherwise pressing `a` inserts a literal
+  // "a" before the user has typed anything in Insert.
+  if (context.vim.mode() === "insert"
+      && event.inputType === "insertText"
+      && typeof event.data === "string"
+      && recentlyEnteredInsertWithKey(context.editor, event.data)
+      && context.enabled !== false
+      && !event.defaultPrevented
+      && !event.isComposing
+      && !isTextEditingTarget(event.target, context.editorHost)
+      && !isTextEditingTarget(document.activeElement, context.editorHost)
+      && eventOwnedByEditor(event, context.editorHost, context.allowDetachedTarget !== false)) {
+    lastHandledKeydown = null;
+    hardStop(event);
+    return true;
+  }
   if (!shouldHandleXwidgetVimKey(event, context)) return false;
   if (!event.inputType.startsWith("insert") || typeof event.data !== "string" || event.data.length === 0) return false;
   hardStop(event);
-  if (event.data.length === 1 && !recentlyHandledKeydown(context.editor, event.data)) {
-    context.vim.handleKey({ key: event.data });
-    restoreEditorFocusAfterCommand(context.editor);
+  if (event.data.length === 1) {
+    if (recentlyHandledKeydown(context.editor, event.data)) lastHandledKeydown = null;
+    else {
+      context.vim.handleKey({ key: event.data });
+      restoreEditorFocusAfterCommand(context.editor);
+    }
   }
   return true;
 }

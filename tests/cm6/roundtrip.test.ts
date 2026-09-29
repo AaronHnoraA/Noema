@@ -24,6 +24,7 @@ import {
 import { setKnownRoamRefs } from "../../src/cm6/roam-link-status.ts";
 import { MATH_RENDER_ERROR_MAX_LENGTH, renderMathHTML } from "../../src/math-render.ts";
 import { createVimLite } from "../../aaronnote/vim-lite.ts";
+import { fixedWidthRowLayout, setVimRowLayoutForTesting } from "../../aaronnote/vim-rows.ts";
 import { SnippetSession } from "../../aaronnote/snippets.ts";
 import { indentMarkdownBlock } from "../../src/cm6/commands/index.ts";
 import { runEditorMovement } from "../../src/cm6/input-commands.ts";
@@ -2405,6 +2406,9 @@ Line two
     editor.setMarkdownSelection(md.indexOf("Line one"));
     const event = new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true });
     expect(vim.handleKeyDown(event)).toBe(false);
+    expect(editor.isSourceMode()).toBe(false);
+    expect(document.querySelector(".cm-org-env-body-line")).toBeTruthy();
+    vim.setMode("normal");
     expect(document.querySelector(".cm-org-env-body-line")).toBeTruthy();
     cleanup();
   });
@@ -3063,6 +3067,10 @@ after
     editor.setMarkdownSelection(editor.getMarkdownSelection().from - 1);
     expect(document.querySelector(".cm-math-inline")).toBeNull();
     expect(toggleFormulaSourceAtSelection(editor.view)).toBe(true);
+    vim.setMode("normal");
+    expect(editor.isSourceMode()).toBe(false);
+    editor.setMarkdownSelection(editor.getMarkdown().length);
+    expect(host.querySelector(".cm-math-inline")).toBeTruthy();
     expect(document.querySelector(".cm-math-inline-editor")).toBeNull();
     vim.destroy();
     cleanup();
@@ -3846,16 +3854,9 @@ maybeDescribe("cm6 kernel: selection", () => {
     cleanup();
   });
 
-  test("vim-lite j/k use CM6 screen rows and preserve its pixel goal column", () => {
+  test("vim-lite j/k use screen rows and preserve the goal column", () => {
     const { editor, cleanup } = mountCM6("a very long physical line that wraps");
-    const content = editor.view.contentDOM;
-    const rect = vi.spyOn(content, "getBoundingClientRect").mockReturnValue({
-      x: 0, y: 0, top: 0, left: 0, right: 320, bottom: 240,
-      width: 320, height: 240, toJSON: () => ({}),
-    } as DOMRect);
-    const move = vi.spyOn(editor.view, "moveVertically")
-      .mockReturnValueOnce(EditorSelection.cursor(12, 0, undefined, 73))
-      .mockReturnValueOnce(EditorSelection.cursor(4, 0, undefined, 73));
+    const restore = setVimRowLayoutForTesting(fixedWidthRowLayout(10));
     const vim = createVimLite(editor, document.body);
 
     editor.setMarkdownSelection(2);
@@ -3863,10 +3864,9 @@ maybeDescribe("cm6 kernel: selection", () => {
     expect(vim.handleKey({ key: "j" })).toBe(true);
     expect(editor.getMarkdownSelection()).toEqual({ from: 12, to: 12 });
     expect(vim.handleKey({ key: "k" })).toBe(true);
-    expect(move.mock.calls[1]![0].goalColumn).toBe(73);
-    expect(editor.getMarkdownSelection()).toEqual({ from: 4, to: 4 });
+    expect(editor.getMarkdownSelection()).toEqual({ from: 2, to: 2 });
 
-    rect.mockRestore();
+    restore();
     cleanup();
   });
 
@@ -3946,11 +3946,10 @@ After`;
     cleanup();
   });
 
-  test("vim insert entry and Escape keep inline formula source open across Normal and Visual", () => {
+  test("vim uses local inline expansion, then treats the collapsed formula as one object", () => {
     const md = "a \\(x+y\\) b";
     const formulaFrom = md.indexOf("\\(");
-    const contentFrom = md.indexOf("x+y");
-    const contentTo = contentFrom + "x+y".length;
+    const formulaTo = md.indexOf("\\)") + 2;
 
     for (const key of ["i", "a"] as const) {
       const { editor, cleanup } = mountCM6(md);
@@ -3962,23 +3961,27 @@ After`;
       expect(document.querySelector(".cm-math-inline-editor")).toBeNull();
       expect(document.querySelector(".cm-math-inline")).toBeNull();
       expect(editor.getMarkdownSelection().from).toBeGreaterThan(formulaFrom);
+      expect(editor.isSourceMode()).toBe(false);
       expect(vim.handleKey({ key: "Escape" })).toBe(true);
       expect(vim.mode()).toBe("normal");
-      expect(editor.getMarkdownSelection().from).toBeGreaterThanOrEqual(contentFrom);
-      expect(editor.getMarkdownSelection().from).toBeLessThan(contentTo);
-      expect(document.querySelector(".cm-math-inline")).toBeNull();
+      const contentCaret = md.indexOf(key === "i" ? "x" : "y");
+      expect(editor.getMarkdownSelection()).toEqual({ from: contentCaret, to: contentCaret });
+      expect(editor.isSourceMode()).toBe(false);
 
       expect(vim.handleKey({ key: "v" })).toBe(true);
       expect(vim.mode()).toBe("visual");
-      expect(editor.getMarkdownSelection().from).toBeGreaterThanOrEqual(contentFrom);
-      expect(editor.getMarkdownSelection().to).toBeLessThanOrEqual(contentTo);
-      expect(document.querySelector(".cm-math-inline")).toBeNull();
+      expect(editor.getMarkdownSelection()).toEqual({ from: contentCaret, to: contentCaret + 1 });
 
       expect(vim.handleKey({ key: "Escape" })).toBe(true);
       expect(vim.mode()).toBe("normal");
-      expect(editor.getMarkdownSelection().from).toBeGreaterThanOrEqual(contentFrom);
-      expect(editor.getMarkdownSelection().from).toBeLessThan(contentTo);
-      expect(document.querySelector(".cm-math-inline")).toBeNull();
+      editor.setMarkdownSelection(0);
+      vim.syncSelectionFromEditor();
+      editor.setMarkdownSelection(formulaFrom);
+      vim.syncSelectionFromEditor();
+      expect(editor.getMarkdownSelection()).toEqual({ from: formulaFrom, to: formulaFrom });
+      expect(document.querySelector(".cm-math-inline")).toBeTruthy();
+      expect(vim.handleKey({ key: "v" })).toBe(true);
+      expect(editor.getMarkdownSelection()).toEqual({ from: formulaFrom, to: formulaTo });
       cleanup();
     }
 
@@ -3986,9 +3989,9 @@ After`;
     const vim = createVimLite(editor, document.body);
     editor.setMarkdownSelection(formulaFrom);
     vim.setMode("insert");
-    expect(vim.handleKey({ key: "ArrowRight" })).toBe(true);
+    expect(vim.handleKey({ key: "ArrowRight" })).toBe(false);
     expect(document.querySelector(".cm-math-inline-editor")).toBeNull();
-    expect(document.querySelector(".cm-math-inline")).toBeNull();
+    expect(editor.isSourceMode()).toBe(false);
     cleanup();
   });
 
@@ -4000,9 +4003,9 @@ After`;
     const { editor, cleanup } = mountCM6(md);
     const vim = createVimLite(editor, document.body);
 
+    vim.setMode("normal");
     expect(revealFormulaSource(editor.view, formulaFrom, formulaTo, 0)).toBe(true);
     editor.setMarkdownSelection(contentFrom);
-    vim.setMode("normal");
     expect(vim.handleKey({ key: "Escape" })).toBe(true);
     expect(document.querySelector(".cm-math-block")).toBeNull();
 
@@ -4044,11 +4047,10 @@ After`;
     cleanup();
   });
 
-  test("vim Escape keeps display formula source open across Normal and Visual", () => {
+  test("vim Insert keeps the display formula's local editor in Markdown view", async () => {
     const md = ["Before", "", "\\[", "x+y", "\\]", "", "After"].join("\n");
     const formulaFrom = md.indexOf("\\[");
-    const contentFrom = md.indexOf("x+y");
-    const contentTo = contentFrom + "x+y".length;
+    const formulaTo = md.indexOf("\\]") + 2;
     const { editor, cleanup } = mountCM6(md);
     const vim = createVimLite(editor, document.body);
 
@@ -4056,24 +4058,30 @@ After`;
     vim.setMode("normal");
     expect(vim.handleKey({ key: "a" })).toBe(true);
     expect(vim.mode()).toBe("insert");
+    expect(editor.isSourceMode()).toBe(false);
+    await nextTick();
     expect(document.querySelector(".cm-math-block")).toBeNull();
-    expect(document.querySelectorAll(".cm-math-source-line")).toHaveLength(3);
+    expect(editor.view.contentDOM.textContent).toContain("x+y");
 
     expect(vim.handleKey({ key: "Escape" })).toBe(true);
     expect(vim.mode()).toBe("normal");
-    expect(editor.getMarkdownSelection().from).toBeGreaterThanOrEqual(contentFrom);
-    expect(editor.getMarkdownSelection().from).toBeLessThan(contentTo);
-    expect(document.querySelector(".cm-math-block")).toBeNull();
+    expect(editor.isSourceMode()).toBe(false);
 
     expect(vim.handleKey({ key: "v" })).toBe(true);
     expect(vim.mode()).toBe("visual");
-    expect(editor.getMarkdownSelection()).toEqual({ from: contentTo - 1, to: contentTo });
-    expect(document.querySelector(".cm-math-block")).toBeNull();
+    const expandedCaret = md.indexOf("y");
+    expect(editor.getMarkdownSelection()).toEqual({ from: expandedCaret, to: expandedCaret + 1 });
 
     expect(vim.handleKey({ key: "Escape" })).toBe(true);
     expect(vim.mode()).toBe("normal");
-    expect(editor.getMarkdownSelection()).toEqual({ from: contentTo - 1, to: contentTo - 1 });
-    expect(document.querySelector(".cm-math-block")).toBeNull();
+    editor.setMarkdownSelection(0);
+    vim.syncSelectionFromEditor();
+    editor.setMarkdownSelection(formulaFrom);
+    vim.syncSelectionFromEditor();
+    expect(editor.getMarkdownSelection()).toEqual({ from: formulaFrom, to: formulaFrom });
+    expect(document.querySelector(".cm-math-block")).toBeTruthy();
+    expect(vim.handleKey({ key: "v" })).toBe(true);
+    expect(editor.getMarkdownSelection()).toEqual({ from: formulaFrom, to: formulaTo });
     cleanup();
   });
 
@@ -4876,7 +4884,7 @@ After`;
 
     editor.setMarkdownSelection(0);
     expect(vim.handleKey({ key: "G" })).toBe(true);
-    expect(editor.getMarkdownSelection()).toEqual({ from: formulaFrom, to: formulaFrom });
+    expect(editor.getMarkdownSelection()).toEqual({ from: 0, to: 0 });
 
     editor.setMarkdownSelection(0);
     expect(vim.handleKey({ key: "v" })).toBe(true);

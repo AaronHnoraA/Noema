@@ -21,6 +21,7 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import { MeasuredWidget } from "./measured-widget.ts";
+import { vimKeepsRenderedObjects } from "../vim-objects.ts";
 import { syntaxTree } from "@codemirror/language";
 import type { Range } from "@codemirror/state";
 import { blockMathRangesOverlapping, mergeOverlappingRanges, rangeInsideAny } from "../../../math-ranges.ts";
@@ -407,7 +408,8 @@ function buildImageDecorations(view: EditorView): DecorationSet {
         const line = doc.lineAt(node.to);
         const trailing = readImageTrailingAttrs(doc.sliceString(node.to, line.to), 0);
         const fullTo = trailing ? node.to + trailing.to : node.to;
-        const cursorInside = sel.from <= fullTo && sel.to >= node.from;
+        const cursorInside = !vimKeepsRenderedObjects(view)
+          && sel.from <= fullTo && sel.to >= node.from;
         if (cursorInside) return false; // editable source
 
         const raw = doc.sliceString(node.from, node.to);
@@ -421,6 +423,7 @@ function buildImageDecorations(view: EditorView): DecorationSet {
         decos.push(
           Decoration.replace({
             widget: new ImageWidget(src, alt, node.from, fullTo, layout),
+            vimAtomic: true,
           }).range(node.from, fullTo),
         );
         occupied.push({ from: node.from, to: fullTo });
@@ -446,12 +449,14 @@ function buildImageDecorations(view: EditorView): DecorationSet {
           if (rangeInsideAny(from, to, excludedRanges) || rangeOverlaps(from, to, occupied)) continue;
           const trailing = readImageTrailingAttrs(doc.sliceString(to, line.to), 0);
           const fullTo = trailing ? to + trailing.to : to;
-          const cursorInside = sel.from <= fullTo && sel.to >= from;
+          const cursorInside = !vimKeepsRenderedObjects(view)
+            && sel.from <= fullTo && sel.to >= from;
           if (cursorInside) continue;
           const layout = imageLayoutFromAttrs(trailing?.attrs ?? {});
           decos.push(
             Decoration.replace({
               widget: new ImageWidget(src, alt, from, fullTo, layout),
+              vimAtomic: true,
             }).range(from, fullTo),
           );
           occupied.push({ from, to: fullTo });

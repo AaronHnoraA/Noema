@@ -14,6 +14,8 @@ import { installHostClipboard } from "./host-clipboard.ts";
 import { hostCommandTargetsClient } from "./host-command-target.ts";
 import { writeSystemClipboard } from "../src/system-clipboard.ts";
 import { installHostKeyboardBridge, pageClientFromLocation } from "./host-keyboard.ts";
+import { releaseHostInputFocus } from "./host-input-focus.ts";
+import { outputDialogEnterCloses, outputShortcut } from "./jupyter-output-keys.ts";
 
 // Emacs host keys, host-owned keys and focus handoff: the rule every Noema
 // page shares (see host-keyboard.ts).
@@ -95,7 +97,10 @@ let statusTimer = 0;
 let refreshTimer = 0;
 const outputDisposers = new Set<() => void>();
 const cellOutputViews = new Map<string, JupyterOutputView>();
+const outputFoldObservers = new WeakMap<HTMLElement, ResizeObserver>();
+const outputFoldDisposalRegistered = new WeakSet<HTMLElement>();
 let dialogOutputDispose: (() => void) | null = null;
+let dialogReturnFocus: HTMLElement | null = null;
 let researchRunSource: EventSource | null = null;
 let researchRunRetry = 0;
 
@@ -127,7 +132,8 @@ app.innerHTML = `
       <strong data-surface-title>Jupyter Output</strong>
     </div>
     <div class="noema-jupyter-kernel" data-kernel-status></div>
-    <button type="button" class="noema-jupyter-open-source" data-action="open-source">Open Source in Emacs</button>
+    <button type="button" class="noema-jupyter-shortcuts" data-action="shortcuts" title="Output keyboard shortcuts" aria-label="Output keyboard shortcuts">?</button>
+    <button type="button" class="noema-jupyter-open-source" data-action="open-source" title="⌘Enter · Open source in Emacs">Open Source in Emacs</button>
   </header>
   <div class="noema-jupyter-shell">
     <section class="noema-jupyter-workspace" data-workspace></section>
@@ -252,11 +258,10 @@ function updateCellChrome(cell: CellSnapshot): void {
 }
 
 function selectCell(tab: TabState, cellId: string, focus = false): void {
-  tab.activeCellId = cellId;
-  renderWorkspace();
+  activateCell(tab, cellId);
   const card = workspaceEl.querySelector<HTMLElement>(`[data-cell-id="${CSS.escape(cellId)}"]`);
   card?.scrollIntoView({ block: "center", behavior: "smooth" });
-  if (focus) card?.focus();
+  if (focus) card?.focus({ preventScroll: true });
 }
 
 async function loadTab(tab: TabState, reveal = true): Promise<void> {
@@ -577,7 +582,12 @@ function openDialog(title: string): void {
 async function openSource(cell = activeCell()): Promise<void> {
   const tab = activeTab();
   if (!tab || !cell) return;
-  await api.emacs.selectJupyterCell({ scriptFile: tab.ref.scriptFile, cellId: cell.id });
+  try {
+    await api.emacs.selectJupyterCell({ scriptFile: tab.ref.scriptFile, cellId: cell.id });
+    releaseHostInputFocus();
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "Could not open source in Emacs", true);
+  }
 }
 
 function activateCell(tab: TabState, cellId: string): void {
@@ -625,29 +635,49 @@ function outputRenderOptions(cell: CellSnapshot) {
 }
 
 function installAutomaticOutputFold(tab: TabState, cell: CellSnapshot, output: HTMLElement): void {
-  if (output.hidden || cell.outputUi?.outputExpanded === true) return;
-  let observer: ResizeObserver | null = null;
+  if (cell.outputUi?.outputExpanded === true || outputFoldObservers.has(output)
+      || output.classList.contains("is-auto-collapsed")) return;
   const collapseIfLong = () => {
-    if (!output.isConnected || output.hidden || output.classList.contains("is-auto-collapsed")) return;
+    if (!output.isConnected || output.hidden || cell.outputUi?.outputExpanded === true
+        || output.classList.contains("is-auto-collapsed")) return;
     if (output.scrollHeight <= 360) return;
     output.classList.add("is-auto-collapsed");
-    const expand = button("Show full output", "Expand long output", async () => {
-      output.classList.remove("is-auto-collapsed");
-      expand.remove();
-      observer?.disconnect();
-      cell.outputUi = { ...cell.outputUi, outputExpanded: true, outputFolded: false };
-      await saveOutputUi(tab, cell);
-    }, "noema-jupyter-output-expander");
+    const expand = button("Show full output", "Expand long output (Space)",
+      () => setCellOutputExpanded(tab, cell, true), "noema-jupyter-output-expander");
     output.append(expand);
-    observer?.disconnect();
+    stopAutomaticOutputFold(output);
   };
-  observer = new ResizeObserver(collapseIfLong);
+  const observer = new ResizeObserver(collapseIfLong);
+  outputFoldObservers.set(output, observer);
   observer.observe(output);
-  outputDisposers.add(() => observer?.disconnect());
+  if (!outputFoldDisposalRegistered.has(output)) {
+    outputFoldDisposalRegistered.add(output);
+    outputDisposers.add(() => stopAutomaticOutputFold(output));
+  }
   requestAnimationFrame(collapseIfLong);
 }
 
+function stopAutomaticOutputFold(output: HTMLElement): void {
+  outputFoldObservers.get(output)?.disconnect();
+  outputFoldObservers.delete(output);
+}
+
+async function setCellOutputExpanded(tab: TabState, cell: CellSnapshot, expanded: boolean): Promise<void> {
+  const output = cellCard(cell)?.querySelector<HTMLElement>(".noema-jupyter-output");
+  if (!output) return;
+  cell.outputUi = { ...cell.outputUi, outputExpanded: expanded, outputFolded: false };
+  output.hidden = false;
+  stopAutomaticOutputFold(output);
+  output.classList.remove("is-auto-collapsed");
+  output.querySelector(".noema-jupyter-output-expander")?.remove();
+  if (!expanded) installAutomaticOutputFold(tab, cell, output);
+  await saveOutputUi(tab, cell);
+}
+
 function popoutCellOutput(cell: CellSnapshot): void {
+  const focused = document.activeElement;
+  dialogReturnFocus = focused instanceof HTMLElement && workspaceEl.contains(focused)
+    ? focused : cellCard(cell);
   dialogOutputDispose?.();
   dialogOutputDispose = null;
   dialogBodyEl.replaceChildren();
@@ -658,6 +688,15 @@ function popoutCellOutput(cell: CellSnapshot): void {
     return;
   }
   dialogOutputDispose = renderJupyterOutputs(dialogBodyEl, cell.outputs, outputRenderOptions(cell));
+}
+
+async function toggleCellOutput(tab: TabState, cell: CellSnapshot): Promise<void> {
+  const output = cellCard(cell)?.querySelector<HTMLElement>(".noema-jupyter-output");
+  if (!output) return;
+  const folded = !cell.outputUi?.outputFolded;
+  cell.outputUi = { ...cell.outputUi, outputFolded: folded };
+  output.hidden = folded;
+  await saveOutputUi(tab, cell);
 }
 
 function closeCellMenu(): void {
@@ -740,6 +779,12 @@ window.addEventListener("aaronnote:command", (event) => {
     case "select-all":
       selectActiveOutput();
       break;
+    case "focus": {
+      if (dialogEl.open) break;
+      const cell = activeCell();
+      if (cell) cellCard(cell)?.focus({ preventScroll: true });
+      break;
+    }
     default:
       break;
   }
@@ -777,19 +822,11 @@ function openCellMenu(tab: TabState, cell: CellSnapshot, x: number, y: number): 
         () => toggleResearchLiveOutput(tab, cell),
       ),
     ] : []),
-    menuItem("Pop Out Output", "Open full output in a resizable dialog", () => popoutCellOutput(cell)),
-    menuItem(cell.outputUi?.outputFolded ? "Show Output" : "Fold Output", "Toggle output visibility", async () => {
-      cell.outputUi = { ...cell.outputUi, outputFolded: !cell.outputUi?.outputFolded };
-      await saveOutputUi(tab, cell);
-      renderWorkspace();
-    }),
-    ...(cell.outputUi?.outputExpanded ? [
-      menuItem("Use Compact Output", "Limit long output to its own scroll area", async () => {
-        cell.outputUi = { ...cell.outputUi, outputExpanded: false, outputFolded: false };
-        await saveOutputUi(tab, cell);
-        renderWorkspace();
-      }),
-    ] : []),
+    menuItem("Pop Out Output", "Open full output in a larger window", () => popoutCellOutput(cell)),
+    menuItem(cell.outputUi?.outputFolded ? "Show Output" : "Fold Output", "Toggle output visibility (Tab)", () => toggleCellOutput(tab, cell)),
+    menuItem(cell.outputUi?.outputExpanded ? "Use Compact Output" : "Show Full Output",
+      "Toggle full and compact output (Space)",
+      () => setCellOutputExpanded(tab, cell, cell.outputUi?.outputExpanded !== true)),
   );
   contextMenuEl.hidden = false;
   const width = contextMenuEl.offsetWidth;
@@ -936,15 +973,27 @@ function render(): void {
   renderWorkspace();
 }
 
+function showOutputShortcuts(): void {
+  setStatus("↑/↓ choose output · Tab fold/show · Space full/compact · Enter popout/close · ⌘Enter source · Esc close");
+}
+
 app.querySelector("[data-action='open-source']")?.addEventListener("click", () => void openSource());
+app.querySelector("[data-action='shortcuts']")?.addEventListener("click", showOutputShortcuts);
 function closeDialog(): void {
+  const returnFocus = dialogReturnFocus;
+  dialogReturnFocus = null;
   dialogOutputDispose?.();
   dialogOutputDispose = null;
   dialogBodyEl.classList.remove("noema-jupyter-popout-output");
   dialogEl.close();
+  if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
 }
 
 app.querySelector("[data-dialog-close]")?.addEventListener("click", closeDialog);
+dialogEl.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  closeDialog();
+});
 dialogEl.addEventListener("click", (event) => {
   if (event.target === dialogEl) closeDialog();
 });
@@ -955,26 +1004,39 @@ window.addEventListener("pointerdown", (event) => {
 });
 
 window.addEventListener("keydown", (event) => {
+  if (dialogEl.open) {
+    if (event.key === "Escape" || outputDialogEnterCloses(event, dialogBodyEl)) {
+      event.preventDefault();
+      closeDialog();
+    }
+    return;
+  }
   if (event.key === "Escape" && !contextMenuEl.hidden) {
     event.preventDefault();
     closeCellMenu();
     return;
   }
-  const target = event.target as HTMLElement | null;
-  if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
+  if (!contextMenuEl.hidden) return;
+  const shortcut = outputShortcut(event);
+  if (!shortcut) return;
   const tab = activeTab();
   const cell = activeCell(tab);
   if (!tab || !cell) return;
-  if (event.metaKey && event.key === "Enter") {
-    event.preventDefault();
-    void openSource(cell);
-    return;
-  }
-  if (event.key === "ArrowUp" || event.key === "ArrowDown") {
-    event.preventDefault();
-    const next = tab.snapshot?.cells[cell.index + (event.key === "ArrowUp" ? -1 : 1)];
-    if (next) selectCell(tab, next.id, true);
-    return;
+  event.preventDefault();
+  switch (shortcut) {
+    case "previous":
+    case "next": {
+      const cells = tab.snapshot?.cells || [];
+      const index = cells.findIndex((item) => item.id === cell.id);
+      const next = cells[index + (shortcut === "previous" ? -1 : 1)];
+      if (next) selectCell(tab, next.id, true);
+      break;
+    }
+    case "fold": void toggleCellOutput(tab, cell); break;
+    case "expand": void setCellOutputExpanded(tab, cell, cell.outputUi?.outputExpanded !== true); break;
+    case "source": void openSource(cell); break;
+    case "popout": popoutCellOutput(cell); break;
+    case "help": showOutputShortcuts(); break;
   }
 });
 

@@ -1,6 +1,30 @@
+/**
+ * Vim-lite: the modal layer of the Noema editor.
+ *
+ * Semantics follow Evil with `evil-respect-visual-line-mode`, which is how the
+ * Emacs side of this configuration runs: Vim lines are the rows the reader
+ * sees (`vim-rows.ts`), not raw Markdown source lines.  `j`/`k`, `0`/`^`/`$`,
+ * `dd`/`yy`/`cc`, `V`, `D`/`C`/`Y`, `A`/`I`, `H`/`M`/`L` and `f`/`t` all act on
+ * screen rows, and columns are pixel columns.  The `g` forms (`gj`, `gk`,
+ * `g0`, `g^`, `g$`) and the line-number motions (`gg`, `G`, `+`, `-`, `_`)
+ * keep their source-line meaning.  `docs/vim.md` is the user-facing contract;
+ * keep it in step with this file.
+ *
+ * Key handling is one small parser shared by Normal, Visual and
+ * operator-pending state: an optional count, an optional prefix (`g`, `z`,
+ * `r`, `f`/`F`/`t`/`T`, `i`/`a`), then a token that names a motion, a text
+ * object, an operator or a command.  Every motion is a pure position function
+ * reused by all three states, so `dj`, `vj` and `j` can never disagree about
+ * what a line is.
+ */
+
 import type { Editor } from "../src/lib.ts";
-import { EditorSelection, findClusterBreak, type Text } from "@codemirror/state";
+import { EditorSelection, findClusterBreak, type EditorState, type Text, type TransactionSpec } from "@codemirror/state";
+import { EditorView, type DecorationSet } from "@codemirror/view";
+import { matchBrackets } from "@codemirror/language";
+import { parser as markdownParser } from "@lezer/markdown";
 import {
+  isolateHistory,
   selectCharLeft,
   selectCharRight,
   selectLineDown,
@@ -12,19 +36,18 @@ import {
   previousGraphemePosition,
 } from "../src/cm6/text-boundaries.ts";
 import { markdownContinuationPrefix } from "../src/cm6/commands/index.ts";
-import { scanCodeRanges } from "../src/cm6/code-ranges.ts";
+import { getFencedCodeRanges, scanCodeRanges } from "../src/cm6/code-ranges.ts";
+import { readImageTrailingAttrs } from "../src/image-attrs.ts";
 import { writeSystemClipboard } from "../src/system-clipboard.ts";
-import { getBlockMathRanges, rangeOverlapsAny } from "../src/cm6/math-ranges.ts";
+import { getBlockMathRanges, rangeAtPosition, rangeOverlapsAny } from "../src/cm6/math-ranges.ts";
 import { scanInlineMathRanges } from "../src/inline-math.ts";
 import { getOrgEnvHeadingRanges } from "../src/cm6/extensions/visual/widgets/block-extras.ts";
 import { cancelPointerSelection } from "../src/cm6/extensions/visual/selection.ts";
+import { refreshViewportDecorations } from "../src/cm6/viewport-refresh.ts";
 import {
-  activateBlockMath,
   formulaRangeAtWidgetPosition,
   formulaSourceRangeAtPosition,
   revealFormulaSource,
-  activateInlineMath,
-  activateInlineMathFromArrow,
   type FormulaWidgetRange,
 } from "../src/cm6/extensions/visual/widgets/math.ts";
 import {
@@ -40,6 +63,18 @@ import {
   captureEditorPasteTarget,
   releaseEditorPasteTarget,
 } from "../src/cm6/paste-target.ts";
+import {
+  screenColumnAt,
+  screenPosAtColumn,
+  screenRowAt,
+} from "./vim-rows.ts";
+import {
+  bracketObject,
+  paragraphObject,
+  quoteObject,
+  wordObject,
+  type TextObjectRange,
+} from "./vim-text-objects.ts";
 
 export type VimLiteMode = "insert" | "normal" | "visual" | "visual-line";
 export type VimLiteFoldAction = "close" | "open" | "toggle" | "close-all" | "open-all";
@@ -70,6 +105,12 @@ type VimLiteOptions = {
   onFold?: (action: VimLiteFoldAction) => boolean;
   onFind?: () => boolean;
   /**
+   * `n`/`N` after a `/` search: the start of the next match from FROM in
+   * DIRECTION (wrapping), or null.  The host owns the find panel's query
+   * syntax, so Vim asks rather than re-implementing it.
+   */
+  searchNext?: (from: number, direction: 1 | -1) => number | null;
+  /**
    * A chord that Normal/Visual mode consumed as modal input but has no binding
    * for. Swallowing it silently is indistinguishable from a dropped keystroke,
    * which is the most disorienting thing a modal editor can do.
@@ -77,6 +118,9 @@ type VimLiteOptions = {
   onUnhandledKey?: (sequence: string) => void;
   jumpTimeoutMs?: number;
 };
+
+export type VimOperator = "d" | "c" | "y" | ">" | "<" | "g~" | "gu" | "gU";
+export type VimFindKind = "f" | "F" | "t" | "T";
 
 type VimRegisterKind = "linewise" | "characterwise";
 
@@ -86,11 +130,67 @@ type VimRegister = {
   fragments: readonly string[];
 };
 
-type LineInfo = {
-  start: number;
-  end: number;
-  column: number;
+type Scope = { from: number; to: number };
+type RenderedObject = Scope & { block: boolean };
+
+/**
+ * One Vim line: a screen row, a source line (`logical`), or a whole collapsed
+ * display formula.  `to` excludes the newline.  `lineStart`/`lineEnd` say
+ * whether the row begins/ends its source line (or its formula scope), which is
+ * what decides whether a linewise operation owns a newline.
+ */
+type VimRow = {
+  from: number;
+  to: number;
+  lineStart: boolean;
+  lineEnd: boolean;
+  scope: Scope | null;
+  logical: boolean;
 };
+
+/** Everything a linewise operator needs to know about a run of Vim lines. */
+type LineSpan = {
+  /** Half-open range shown by Visual-line and yanked by `yy`. */
+  from: number;
+  to: number;
+  /** Range removed by `dd`; may borrow the preceding newline at the end of a scope. */
+  deleteFrom: number;
+  deleteTo: number;
+  /** Range replaced by `cc`: keeps the indentation and the final newline. */
+  changeFrom: number;
+  changeTo: number;
+  register: string;
+  /** True when the span starts and ends on source-line boundaries. */
+  wholeLines: boolean;
+};
+
+type OpRange =
+  | { kind: "char"; from: number; to: number }
+  | { kind: "line"; span: LineSpan };
+
+type VerticalGoal =
+  | { kind: "pixel"; value: number }
+  | { kind: "column"; value: number }
+  | { kind: "eol" };
+
+type MotionKind = "exclusive" | "inclusive" | "linewise";
+
+type MotionResult = {
+  pos: number;
+  kind: MotionKind;
+  /** Linewise motions over source lines rather than screen rows. */
+  logical?: boolean;
+  /** Vertical motions carry their goal column to the next repetition. */
+  goal?: VerticalGoal;
+  /** Forward exclusive motions that obey Vim's `:h exclusive-linewise` rules. */
+  exclusiveAdjust?: boolean;
+};
+
+type FindSpec = { kind: VimFindKind; target: string };
+
+type SearchSpec =
+  | { source: "word"; word: string; forward: boolean }
+  | { source: "host"; forward: boolean };
 
 type VimJumpInput = {
   direction: VimJumpDirection;
@@ -98,28 +198,44 @@ type VimJumpInput = {
   timer: number | null;
 };
 
-type VerticalGoal = {
-  kind: "pixel" | "column";
-  value: number;
+type VisualState = {
+  anchor: number;
+  head: number;
+  scope: Scope | null;
+  /** `w`/`W` keep the cursor at the next word start without selecting it. */
+  exclusiveWordEnd?: boolean;
 };
 
-type VimLogicalLine = {
-  /** Text owned by the logical line, excluding its terminating newline. */
-  from: number;
-  to: number;
-  /** Half-open range used by Visual-line/yank. */
-  selectionFrom: number;
-  selectionTo: number;
-  /** Range removed by a linewise delete. May borrow the preceding newline. */
-  deleteFrom: number;
-  deleteTo: number;
-  cursor: number;
-  registerText: string;
-  formulaScope: { from: number; to: number } | null;
-};
+type InsertReplay = { deleteBefore: number; deleteAfter: number; text: string };
+
+type LastChange = { keys: readonly string[]; insert: InsertReplay | null };
 
 const AVY_TIMEOUT_MS = 500;
 const MAX_VIM_COUNT = 10_000;
+const OPERATOR_KEYS = new Set(["d", "c", "y", ">", "<"]);
+const G_OPERATOR_KEYS = new Set(["~", "u", "U"]);
+const BRACKET_OBJECTS: Record<string, [string, string]> = {
+  "(": ["(", ")"], ")": ["(", ")"], b: ["(", ")"],
+  "[": ["[", "]"], "]": ["[", "]"],
+  "{": ["{", "}"], "}": ["{", "}"], B: ["{", "}"],
+  "<": ["<", ">"], ">": ["<", ">"],
+};
+const QUOTE_OBJECTS = new Set(["\"", "'", "`"]);
+/** Motions that keep (and `$` that sets) the goal column for the next `j`/`k`. */
+const VERTICAL_TOKENS = new Set(["j", "k", "gj", "gk", "$", "g$"]);
+
+/** Plain-key aliases; applied when a key becomes a token, never to count digits. */
+const KEY_ALIASES: Record<string, string> = {
+  ArrowLeft: "h",
+  ArrowRight: "l",
+  ArrowDown: "j",
+  ArrowUp: "k",
+  Backspace: "h",
+  " ": "l",
+  Home: "0",
+  End: "$",
+  Enter: "+",
+};
 
 function hasCommandModifier(event: VimLiteKey): boolean {
   return Boolean(event.metaKey || event.altKey || event.ctrlKey);
@@ -131,6 +247,11 @@ function isEscape(event: VimLiteKey): boolean {
 
 function isUppercaseAsciiLetter(key: string): boolean {
   return /^[A-Z]$/.test(key);
+}
+
+/** KeyboardEvent.key may be a multi-code-unit emoji but still one Vim character. */
+function isSingleGrapheme(key: string): boolean {
+  return key.length > 0 && findClusterBreak(key, 0, true) === key.length;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -189,9 +310,9 @@ function doc(editor: Editor): Text {
   return editor.view.state.doc;
 }
 
-function docLineInfo(text: Text, pos: number): LineInfo {
-  const line = text.lineAt(clamp(pos, 0, text.length));
-  return { start: line.from, end: line.to, column: clamp(pos, line.from, line.to) - line.from };
+/** Every Vim edit is its own undo step, however quickly the next one follows. */
+function dispatchEdit(editor: Editor, spec: TransactionSpec): void {
+  editor.view.dispatch({ ...spec, annotations: isolateHistory.of("full") });
 }
 
 function revealedFormulaAt(editor: Editor, pos: number): FormulaWidgetRange | null {
@@ -214,103 +335,9 @@ function restoreRevealedFormula(editor: Editor, previous: FormulaWidgetRange | n
   );
 }
 
-function boundedLogicalLine(
-  text: Text,
-  pos: number,
-  boundaryFrom: number,
-  boundaryTo: number,
-  formulaScope: { from: number; to: number } | null,
-): VimLogicalLine {
-  const empty = boundaryFrom >= boundaryTo;
-  const safePos = empty
-    ? boundaryFrom
-    : clamp(pos, boundaryFrom, Math.max(boundaryFrom, boundaryTo - 1));
-  const line = text.lineAt(safePos);
-  const from = Math.max(boundaryFrom, line.from);
-  const to = Math.min(boundaryTo, line.to);
-  const hasFollowingNewline = to < boundaryTo && text.sliceString(to, to + 1) === "\n";
-  const selectionTo = hasFollowingNewline ? to + 1 : to;
-  const deleteFrom = !hasFollowingNewline && from > boundaryFrom
-    && text.sliceString(from - 1, from) === "\n"
-    ? from - 1
-    : from;
-  const raw = text.sliceString(from, to);
-  return {
-    from,
-    to,
-    selectionFrom: from,
-    selectionTo,
-    deleteFrom,
-    deleteTo: selectionTo,
-    cursor: from,
-    registerText: `${raw}\n`,
-    formulaScope,
-  };
-}
-
-/**
- * Vim's line is a visual/logical object, not always a raw Markdown source line.
- * A collapsed display formula is one line; a revealed formula owns only its
- * TeX body lines, so linewise commands can never eat `\(`/`\)` or `\[`/`\]`.
- */
-function logicalLineAt(editor: Editor, pos: number): VimLogicalLine {
-  const text = doc(editor);
-  const revealed = revealedFormulaAt(editor, pos);
-  if (revealed) {
-    return boundedLogicalLine(
-      text,
-      pos,
-      revealed.contentFrom,
-      revealed.contentTo,
-      { from: revealed.contentFrom, to: revealed.contentTo },
-    );
-  }
-
-  const object = staticMathObjectAtPosition(editor, pos);
-  const formula = object
-    ? formulaRangeAtWidgetPosition(editor.view.state, object.from)
-    : null;
-  if (object && formula?.display) {
-    const hasFollowingNewline = object.to < text.length
-      && text.sliceString(object.to, object.to + 1) === "\n";
-    const selectionTo = hasFollowingNewline ? object.to + 1 : object.to;
-    const deleteFrom = !hasFollowingNewline && object.from > 0
-      && text.sliceString(object.from - 1, object.from) === "\n"
-      ? object.from - 1
-      : object.from;
-    return {
-      from: object.from,
-      to: object.to,
-      selectionFrom: object.from,
-      selectionTo,
-      deleteFrom,
-      deleteTo: selectionTo,
-      cursor: object.from,
-      registerText: `${text.sliceString(object.from, object.to)}\n`,
-      formulaScope: null,
-    };
-  }
-
-  return boundedLogicalLine(text, pos, 0, text.length, null);
-}
-
-function logicalLineSelectionRange(
-  editor: Editor,
-  anchor: number,
-  head: number,
-  scope: { from: number; to: number } | null = null,
-): { from: number; to: number } {
-  const text = doc(editor);
-  const a = scope
-    ? boundedLogicalLine(text, anchor, scope.from, scope.to, scope)
-    : logicalLineAt(editor, anchor);
-  const h = scope
-    ? boundedLogicalLine(text, head, scope.from, scope.to, scope)
-    : logicalLineAt(editor, head);
-  return {
-    from: Math.min(a.selectionFrom, h.selectionFrom),
-    to: Math.max(a.selectionTo, h.selectionTo),
-  };
+function singleRevealedFormula(editor: Editor): FormulaWidgetRange | null {
+  const state = editor.view.state;
+  return state.selection.ranges.length === 1 ? revealedFormulaAt(editor, state.selection.main.head) : null;
 }
 
 function visualCharEndPosition(text: Text, pos: number): number {
@@ -322,53 +349,146 @@ function visualCharEndPosition(text: Text, pos: number): number {
   return end;
 }
 
+type FormulaIndex = {
+  blocks: ReturnType<typeof getBlockMathRanges>;
+  inlineByLine: Map<number, readonly Scope[]>;
+};
+const formulaIndexes = new WeakMap<EditorState, FormulaIndex>();
+
+function formulaIndex(state: EditorState): FormulaIndex {
+  let index = formulaIndexes.get(state);
+  if (!index) {
+    index = { blocks: getBlockMathRanges(state), inlineByLine: new Map() };
+    formulaIndexes.set(state, index);
+  }
+  return index;
+}
+
 function staticMathObjectAtPosition(
   editor: Editor,
   pos: number,
-): { from: number; to: number } | null {
+): RenderedObject | null {
   if (!editor.view.dom.classList.contains("aaronnote-visual-typography")) return null;
   const state = editor.view.state;
   const safePos = clamp(pos, 0, state.doc.length);
-  if (formulaSourceRangeAtPosition(editor.view, safePos)) return null;
-  const blockRanges = getBlockMathRanges(state);
-  const block = blockRanges.find((range) => safePos >= range.from && safePos < range.to);
-  if (block) return block;
+  const index = formulaIndex(state);
+  const block = rangeAtPosition(safePos, index.blocks);
+  if (block) return formulaSourceRangeAtPosition(editor.view, safePos)
+    ? null : { from: block.from, to: block.to, block: true };
   const line = state.doc.lineAt(safePos);
-  const codeRanges = scanCodeRanges(state, [{ from: line.from, to: line.to }]);
-  return scanInlineMathRanges(line.text, line.from).find((range) => (
-    safePos >= range.from
-      && safePos < range.to
-      && !rangeOverlapsAny(range.from, range.to, blockRanges)
+  let ranges = index.inlineByLine.get(line.from);
+  if (!ranges) {
+    const codeRanges = scanCodeRanges(state, [{ from: line.from, to: line.to }]);
+    ranges = scanInlineMathRanges(line.text, line.from).filter((range) => (
+      !rangeOverlapsAny(range.from, range.to, index.blocks)
       && !rangeOverlapsAny(range.from, range.to, codeRanges)
-  )) ?? null;
+    ));
+    index.inlineByLine.set(line.from, ranges);
+  }
+  const inline = ranges.find((range) => safePos >= range.from && safePos < range.to);
+  return inline && !formulaSourceRangeAtPosition(editor.view, safePos)
+    ? { from: inline.from, to: inline.to, block: false } : null;
+}
+
+type WidgetIndex = {
+  state: EditorState;
+  from: number;
+  to: number;
+  objects: RenderedObject[];
+  maxTo: number[];
+};
+const widgetIndexes = new WeakMap<EditorView, WidgetIndex>();
+const offscreenImageIndexes = new WeakMap<Text, Map<number, RenderedObject[]>>();
+
+/** Resolve standard images on an unmounted line without parsing the whole note. */
+function offscreenImageAtPosition(editor: Editor, pos: number): RenderedObject | null {
+  const state = editor.view.state;
+  const line = state.doc.lineAt(pos);
+  let byLine = offscreenImageIndexes.get(state.doc);
+  if (!byLine) {
+    byLine = new Map();
+    offscreenImageIndexes.set(state.doc, byLine);
+  }
+  let objects = byLine.get(line.from);
+  if (!objects) {
+    objects = [];
+    if (line.text.includes("![")
+        && !rangeAtPosition(line.from, getFencedCodeRanges(state))) {
+      const tree = markdownParser.parse(line.text);
+      tree.iterate({
+        enter(node) {
+          if (node.name !== "Image") return;
+          const trailing = readImageTrailingAttrs(line.text.slice(node.to), 0);
+          objects!.push({
+            from: line.from + node.from,
+            to: line.from + node.to + (trailing?.to ?? 0),
+            block: false,
+          });
+        },
+      });
+    }
+    if (byLine.size >= 128) byLine.delete(byLine.keys().next().value!);
+    byLine.set(line.from, objects);
+  }
+  return objects.find((object) => pos >= object.from && pos < object.to) ?? null;
+}
+
+/** Whitelisted rendered objects: math and image widgets, not inline code. */
+function renderedObjectAtPosition(editor: Editor, pos: number): RenderedObject | null {
+  const formula = staticMathObjectAtPosition(editor, pos);
+  if (formula) return formula;
+  const view = editor.view;
+  if (!view.dom.classList.contains("aaronnote-visual-typography")) return null;
+  if (pos < view.viewport.from || pos >= view.viewport.to) {
+    return offscreenImageAtPosition(editor, pos);
+  }
+  let index = widgetIndexes.get(view);
+  if (!index || index.state !== view.state
+    || index.from !== view.viewport.from || index.to !== view.viewport.to) {
+    const objects: RenderedObject[] = [];
+    for (const source of view.state.facet(EditorView.decorations)) {
+      const decorations: DecorationSet = typeof source === "function" ? source(view) : source;
+      decorations.between(view.viewport.from, view.viewport.to, (from, to, value) => {
+        if (value.spec.vimAtomic === true) objects.push({ from, to, block: Boolean(value.spec.block) });
+      });
+    }
+    objects.sort((left, right) => left.from - right.from || right.to - left.to);
+    const maxTo: number[] = [];
+    let maximum = 0;
+    for (const object of objects) {
+      maximum = Math.max(maximum, object.to);
+      maxTo.push(maximum);
+    }
+    index = { state: view.state, from: view.viewport.from, to: view.viewport.to, objects, maxTo };
+    widgetIndexes.set(view, index);
+  }
+  let low = 0;
+  let high = index.objects.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (index.objects[middle]!.from <= pos) low = middle + 1;
+    else high = middle;
+  }
+  let found: RenderedObject | null = null;
+  for (let at = low - 1; at >= 0 && index.maxTo[at]! > pos; at--) {
+    const object = index.objects[at]!;
+    if (pos < object.to && (!found || object.to - object.from > found.to - found.from)) found = object;
+  }
+  return found;
 }
 
 function visualObjectEndPosition(editor: Editor, pos: number): number {
-  const object = staticMathObjectAtPosition(editor, pos);
+  const object = renderedObjectAtPosition(editor, pos);
   return object?.from === pos ? object.to : visualCharEndPosition(doc(editor), pos);
 }
 
-function enterStaticMathObject(
-  editor: Editor,
-  entry: "start" | "end",
-): boolean {
-  const object = staticMathObjectAtPosition(editor, currentHead(editor));
-  if (!object) return false;
-  const visualEntry = { kind: entry } as const;
-  const block = getBlockMathRanges(editor.view.state)
-    .find((range) => range.from === object.from && range.to === object.to);
-  return block
-    ? activateBlockMath(editor.view, block.from, block.to, visualEntry)
-    : activateInlineMath(editor.view, object.from, object.to, visualEntry);
-}
-
-function snapStaticMathMotion(
+function snapRenderedObjectMotion(
   editor: Editor,
   start: number,
   target: number,
   dir: -1 | 1,
 ): number {
-  const object = staticMathObjectAtPosition(editor, target);
+  const object = renderedObjectAtPosition(editor, target);
   if (!object) return target;
   if (dir > 0 && start < object.from) return object.from;
   return dir > 0 ? object.to : object.from;
@@ -386,29 +506,59 @@ function wordCategory(ch: string, bigWord = false): "space" | "word" | "punctuat
   return "punctuation";
 }
 
-function wordMotionPosition(text: Text, start: number, dir: -1 | 1, bigWord = false): number {
+/** Vim treats an empty source line as one word for w/W/b/B. */
+function emptyLineWordAt(text: Text, pos: number): boolean {
+  const line = text.lineAt(pos);
+  return line.from === line.to && pos === line.from;
+}
+
+function graphemeAfter(text: Text, pos: number): number {
+  return Math.min(text.length, Math.max(pos + 1, graphemeEndPosition(text, pos)));
+}
+
+type WordObjectAt = (pos: number) => Scope | null;
+
+function wordKindAt(text: Text, pos: number, bigWord: boolean, objectAt?: WordObjectAt): string {
+  const object = objectAt?.(pos);
+  return object ? `object:${object.from}` : wordCategory(docCluster(text, pos), bigWord);
+}
+
+function wordStepAfter(text: Text, pos: number, objectAt?: WordObjectAt): number {
+  return objectAt?.(pos)?.to ?? graphemeAfter(text, pos);
+}
+
+function wordStepBefore(text: Text, pos: number, objectAt?: WordObjectAt): number {
+  const previous = previousGraphemePosition(text, pos);
+  return objectAt?.(previous)?.from ?? previous;
+}
+
+function wordMotionPosition(
+  text: Text, start: number, dir: -1 | 1, bigWord = false, objectAt?: WordObjectAt,
+): number {
   let pos = clamp(start, 0, text.length);
   if (dir > 0) {
-    const initial = wordCategory(docCluster(text, pos), bigWord);
+    const initial = wordKindAt(text, pos, bigWord, objectAt);
     if (initial !== "space") {
-      while (pos < text.length && wordCategory(docCluster(text, pos), bigWord) === initial) {
-        pos = Math.max(pos + 1, graphemeEndPosition(text, pos));
+      while (pos < text.length && wordKindAt(text, pos, bigWord, objectAt) === initial) {
+        pos = wordStepAfter(text, pos, objectAt);
       }
     }
-    while (pos < text.length && wordCategory(docCluster(text, pos), bigWord) === "space") {
-      pos = Math.max(pos + 1, graphemeEndPosition(text, pos));
+    while (pos < text.length && wordKindAt(text, pos, bigWord, objectAt) === "space") {
+      if (pos > start && emptyLineWordAt(text, pos)) return pos;
+      pos = wordStepAfter(text, pos, objectAt);
     }
     return pos;
   }
 
-  pos = previousGraphemePosition(text, pos);
-  while (pos > 0 && wordCategory(docCluster(text, pos), bigWord) === "space") {
-    pos = previousGraphemePosition(text, pos);
+  pos = wordStepBefore(text, pos, objectAt);
+  while (pos > 0 && wordKindAt(text, pos, bigWord, objectAt) === "space") {
+    if (emptyLineWordAt(text, pos)) return pos;
+    pos = wordStepBefore(text, pos, objectAt);
   }
-  const target = wordCategory(docCluster(text, pos), bigWord);
+  const target = wordKindAt(text, pos, bigWord, objectAt);
   while (pos > 0) {
-    const previous = previousGraphemePosition(text, pos);
-    if (wordCategory(docCluster(text, previous), bigWord) !== target) break;
+    const previous = wordStepBefore(text, pos, objectAt);
+    if (wordKindAt(text, previous, bigWord, objectAt) !== target) break;
     pos = previous;
   }
   return pos;
@@ -419,19 +569,59 @@ function wordMotionPosition(text: Text, start: number, dir: -1 | 1, bigWord = fa
  * when the caret already sits on that last character. Unlike `w` this lands
  * *on* a character, so Normal mode never needs to clamp the result back.
  */
-function wordEndPosition(text: Text, start: number, bigWord = false): number {
+function wordEndPosition(
+  text: Text, start: number, bigWord = false, objectAt?: WordObjectAt,
+): number {
   const limit = text.length;
   let pos = clamp(start, 0, limit);
-  const advance = (from: number): number => Math.max(from + 1, graphemeEndPosition(text, from));
-
-  pos = advance(pos);
-  while (pos < limit && wordCategory(docCluster(text, pos), bigWord) === "space") pos = advance(pos);
-  if (pos >= limit) return previousGraphemePosition(text, limit);
-  const category = wordCategory(docCluster(text, pos), bigWord);
+  pos = wordStepAfter(text, pos, objectAt);
+  while (pos < limit && wordKindAt(text, pos, bigWord, objectAt) === "space") {
+    pos = wordStepAfter(text, pos, objectAt);
+  }
+  if (pos >= limit) return wordStepBefore(text, limit, objectAt);
+  if (objectAt?.(pos)?.from === pos) return pos;
+  const category = wordKindAt(text, pos, bigWord, objectAt);
   let end = pos;
   while (true) {
-    const next = advance(end);
-    if (next >= limit || wordCategory(docCluster(text, next), bigWord) !== category) break;
+    const next = wordStepAfter(text, end, objectAt);
+    if (next >= limit || wordKindAt(text, next, bigWord, objectAt) !== category) break;
+    end = next;
+  }
+  return end;
+}
+
+/** Vim's `ge`/`gE`: the last character of the previous word. */
+function wordEndBackwardPosition(text: Text, start: number, bigWord = false, objectAt?: WordObjectAt): number {
+  let pos = clamp(start, 0, text.length);
+  const category = wordKindAt(text, pos, bigWord, objectAt);
+  if (category !== "space") {
+    while (pos > 0) {
+      const previous = wordStepBefore(text, pos, objectAt);
+      if (wordKindAt(text, previous, bigWord, objectAt) !== category) break;
+      pos = previous;
+    }
+  }
+  if (pos === 0) return 0;
+  pos = wordStepBefore(text, pos, objectAt);
+  while (pos > 0 && wordKindAt(text, pos, bigWord, objectAt) === "space") {
+    pos = wordStepBefore(text, pos, objectAt);
+  }
+  return pos;
+}
+
+/**
+ * End of the word the caret is standing in, without first stepping off it —
+ * which is what separates `cw` (this) from `e` (wordEndPosition).
+ */
+function currentWordEnd(text: Text, pos: number, bigWord: boolean, objectAt?: WordObjectAt): number {
+  if (objectAt?.(pos)?.from === pos) return pos;
+  const category = wordKindAt(text, pos, bigWord, objectAt);
+  if (category === "space") return pos;
+  let end = pos;
+  while (end < text.length) {
+    const next = wordStepAfter(text, end, objectAt);
+    if (next === end || next >= text.length) break;
+    if (wordKindAt(text, next, bigWord, objectAt) !== category) break;
     end = next;
   }
   return end;
@@ -468,11 +658,16 @@ function firstNonBlankPosition(text: Text, pos: number): number {
   return first < 0 ? line.from : line.from + first;
 }
 
-export type VimFindKind = "f" | "F" | "t" | "T";
+/** First non-blank inside [FROM, TO), or TO when there is none. */
+function firstNonBlankIn(text: Text, from: number, to: number): number {
+  const first = text.sliceString(from, to).search(/\S/u);
+  return first < 0 ? to : from + first;
+}
 
 /**
- * Vim's `f`/`F`/`t`/`T`: search only within the caret's own line. `t`/`T` stop
- * one character short of the target, which is what makes `dt,` useful.
+ * Vim's `f`/`F`/`t`/`T`: search only within BOUNDS — the caret's screen row.
+ * `t`/`T` stop one character short of the target, which is what makes `dt,`
+ * useful.
  */
 function findCharPosition(
   text: Text,
@@ -480,35 +675,34 @@ function findCharPosition(
   kind: VimFindKind,
   target: string,
   count: number,
-  skipAdjacent = false,
+  skipAdjacent: boolean,
+  bounds: { from: number; to: number },
+  objectAt?: WordObjectAt,
 ): number | null {
-  const line = text.lineAt(clamp(start, 0, text.length));
+  const source = text.sliceString(bounds.from, bounds.to);
   const forward = kind === "f" || kind === "t";
-  let index = clamp(start, line.from, line.to) - line.from;
+  let index = clamp(start, bounds.from, bounds.to) - bounds.from;
   for (let hit = 0; hit < count; hit++) {
     // A repeated `t`/`T` already sits beside its target, so it must start one
     // character further out or it would match the same neighbour forever.
     const step = hit === 0 && skipAdjacent ? 2 : 1;
     const from = forward ? index + step : index - step;
-    if (from < 0 || from > line.text.length) return null;
-    const found = forward ? line.text.indexOf(target, from) : line.text.lastIndexOf(target, from);
+    if (from < 0 || from > source.length) return null;
+    let found = forward ? source.indexOf(target, from) : source.lastIndexOf(target, from);
+    while (found >= 0 && objectAt?.(bounds.from + found)) {
+      found = forward
+        ? source.indexOf(target, found + target.length)
+        : found > 0 ? source.lastIndexOf(target, found - 1) : -1;
+    }
     if (found < 0) return null;
     index = found;
   }
-  const offset = kind === "t" ? index - 1 : kind === "T" ? index + 1 : index;
-  if (offset < 0 || offset > line.text.length) return null;
-  return line.from + offset;
-}
-
-function selectionClusterCount(text: Text, from: number, to: number): number {
-  let count = 0;
-  let pos = clamp(from, 0, text.length);
-  const end = clamp(to, pos, text.length);
-  while (pos < end) {
-    pos = Math.max(pos + 1, graphemeEndPosition(text, pos));
-    count += 1;
-  }
-  return count;
+  const targetPos = bounds.from + index;
+  const pos = kind === "t" ? previousGraphemePosition(text, targetPos)
+    : kind === "T" ? graphemeEndPosition(text, targetPos)
+      : targetPos;
+  if (pos < bounds.from || pos >= bounds.to) return null;
+  return objectAt?.(pos)?.from ?? pos;
 }
 
 function currentHead(editor: Editor): number {
@@ -549,7 +743,7 @@ function normalEditorPosition(editor: Editor, pos: number): number {
     return normalCharPosition(text, Math.max(revealed.contentFrom, contentPos));
   }
   const normalized = normalCharPosition(text, pos);
-  return staticMathObjectAtPosition(editor, normalized)?.from ?? normalized;
+  return renderedObjectAtPosition(editor, normalized)?.from ?? normalized;
 }
 
 function moveNormalCharPosition(text: Text, pos: number, dir: -1 | 1): number {
@@ -586,10 +780,15 @@ function setNormalCursorPositions(
   });
 }
 
-function setCursorPositions(editor: Editor, positions: readonly number[]): void {
+/** Insert-mode carets; ASSOC keeps a caret at a soft-wrap boundary on the earlier row. */
+function setInsertCursors(
+  editor: Editor,
+  cursors: ReadonlyArray<{ pos: number; assoc?: -1 | 1 }>,
+): void {
   const state = editor.view.state;
-  const candidates = positions.map((position, index) => ({
-    position: clamp(position, 0, state.doc.length),
+  const candidates = cursors.map((cursor, index) => ({
+    position: clamp(cursor.pos, 0, state.doc.length),
+    assoc: cursor.assoc ?? 1,
     main: index === state.selection.mainIndex,
   })).sort((left, right) => left.position - right.position);
   const unique = candidates.filter((candidate, index) => (
@@ -600,319 +799,11 @@ function setCursorPositions(editor: Editor, positions: readonly number[]): void 
   if (mainIndex < 0) mainIndex = Math.min(state.selection.mainIndex, unique.length - 1);
   editor.view.dispatch({
     selection: EditorSelection.create(
-      unique.map((candidate) => EditorSelection.cursor(candidate.position)),
+      unique.map((candidate) => EditorSelection.cursor(candidate.position, candidate.assoc)),
       mainIndex,
     ),
     scrollIntoView: true,
   });
-}
-
-function moveChar(editor: Editor, dir: -1 | 1): void {
-  const text = doc(editor);
-  setNormalCursorPositions(editor, editor.view.state.selection.ranges.map((range) => {
-    const pos = range.head;
-    const target = moveNormalCharPosition(text, pos, dir);
-    return snapStaticMathMotion(editor, pos, target, dir);
-  }));
-}
-
-function nearestCrossedRange<T extends { from: number; to: number }>(
-  ranges: readonly T[],
-  start: number,
-  target: number,
-  dir: -1 | 1,
-): T | null {
-  let low = 0;
-  let high = ranges.length;
-  if (dir > 0) {
-    // First range whose opening boundary is strictly below the current source
-    // position.  Sorted, non-overlapping state fields make later candidates
-    // farther away, so only this nearest one can be the next visual entry.
-    while (low < high) {
-      const mid = (low + high) >> 1;
-      if (ranges[mid]!.from <= start) low = mid + 1;
-      else high = mid;
-    }
-    const range = ranges[low];
-    return range && target >= range.to ? range : null;
-  }
-
-  // Last range whose closing boundary is strictly above the current source
-  // position.
-  while (low < high) {
-    const mid = (low + high) >> 1;
-    if (ranges[mid]!.to < start) low = mid + 1;
-    else high = mid;
-  }
-  const range = ranges[low - 1];
-  return range && target <= range.from ? range : null;
-}
-
-/**
- * Where a vertical motion should land when it steps over something the Visual
- * layer collapses — a display formula, an org-env heading, or a blank line a
- * semantic block absorbed to zero height.
- *
- * Exported for testing: this runs only on `moveScreenLine`'s pixel path, which
- * needs real layout and so never executes under a headless DOM. The function
- * itself measures nothing, so it can be exercised directly with an explicit
- * start and target.
- */
-export function crossedVisualEntry(
-  editor: Editor,
-  start: number,
-  target: number,
-  dir: -1 | 1,
-): number | null {
-  // Source mode has no collapsed block widgets.  Besides avoiding unnecessary
-  // work, this guard ensures the cached Visual fields never fall back to a
-  // document scan during ordinary source navigation.
-  if (!editor.view.dom.classList.contains("aaronnote-visual-typography")) return null;
-
-  const state = editor.view.state;
-  const entries: Array<{ from: number; to: number; target: number }> = [];
-  const mathRanges = getBlockMathRanges(state).filter((range) => (
-    !formulaSourceRangeAtPosition(editor.view, range.from)
-  ));
-
-  const mathRange = nearestCrossedRange(mathRanges, start, target, dir);
-  if (mathRange) {
-    entries.push({
-      from: mathRange.from,
-      to: mathRange.to,
-      target: mathRange.from,
-    });
-  }
-
-  const orgHeading = nearestCrossedRange(getOrgEnvHeadingRanges(state), start, target, dir);
-  if (orgHeading) {
-    entries.push({ from: orgHeading.from, to: orgHeading.to, target: orgHeading.anchor });
-  }
-
-  // A semantic block may absorb its adjacent blank line to zero visual height.
-  // CM6's pixel motion can then cross that document line going down even though
-  // the reverse motion happens to land on it.  Treat the first crossed blank as
-  // an explicit visual entry in both directions.  Stop before the nearest
-  // replacement widget so a large formula never turns this into a source scan.
-  const startLine = state.doc.lineAt(start).number;
-  const targetLine = state.doc.lineAt(target).number;
-  const nearestReplacement = entries.length === 0
-    ? null
-    : entries.reduce((nearest, entry) => {
-        if (!nearest) return entry;
-        return dir > 0
-          ? (entry.from < nearest.from ? entry : nearest)
-          : (entry.to > nearest.to ? entry : nearest);
-      }, null as { from: number; to: number; target: number } | null);
-  const replacementLine = nearestReplacement == null
-    ? null
-    : state.doc.lineAt(dir > 0 ? nearestReplacement.from : nearestReplacement.to).number;
-  const lastLine = dir > 0
-    ? Math.min(targetLine, replacementLine == null ? targetLine : replacementLine - 1)
-    : Math.max(targetLine, replacementLine == null ? targetLine : replacementLine + 1);
-
-  for (
-    let lineNumber = startLine + dir;
-    dir > 0 ? lineNumber <= lastLine : lineNumber >= lastLine;
-    lineNumber += dir
-  ) {
-    const line = state.doc.line(lineNumber);
-    if (line.text.trim().length !== 0) continue;
-    entries.push({ from: line.from, to: line.to, target: line.from });
-    break;
-  }
-
-  if (entries.length === 0) return null;
-  entries.sort((left, right) => dir > 0 ? left.from - right.from : right.to - left.to);
-  return entries[0]!.target;
-}
-
-function moveScreenLine(
-  editor: Editor,
-  dir: -1 | 1,
-  goals: readonly (VerticalGoal | null)[] | null,
-): VerticalGoal[] {
-  const selections = editor.view.state.selection.ranges;
-  const rect = editor.view.contentDOM.getBoundingClientRect();
-  // A detached/hidden editor has no usable layout. Preserve keyboard access
-  // with a logical-line fallback until CM6 can measure real screen rows.
-  if (rect.width <= 0 || rect.height <= 0) {
-    const text = doc(editor);
-    const nextGoals: VerticalGoal[] = [];
-    const targets = selections.map((range, index) => {
-      const line = docLineInfo(text, normalCharPosition(text, range.head));
-      const goal = goals?.[index];
-      const desired = goal?.kind === "column" ? goal.value : line.column;
-      nextGoals.push({ kind: "column", value: desired });
-      if (dir < 0 && line.start > 0) {
-        const previous = docLineInfo(text, line.start - 1);
-        return Math.min(previous.start + desired, previous.end);
-      }
-      if (dir > 0 && line.end < text.length) {
-        const next = docLineInfo(text, line.end + 1);
-        return Math.min(next.start + desired, next.end);
-      }
-      return range.head;
-    });
-    setNormalCursorPositions(editor, targets);
-    return nextGoals;
-  }
-
-  const text = doc(editor);
-  const nextGoals: VerticalGoal[] = [];
-  const targets = selections.map((selection, index) => {
-    const start = normalCharPosition(text, selection.head);
-    const coords = editor.view.coordsAtPos(start);
-    const goal = goals?.[index];
-    const pixelGoal = goal?.kind === "pixel"
-      ? goal.value
-      : coords
-        ? coords.left - rect.left
-        : editor.view.defaultCharacterWidth * docLineInfo(text, start).column;
-    const moved = editor.view.moveVertically(
-      EditorSelection.cursor(start, 0, undefined, pixelGoal),
-      dir > 0,
-    );
-    nextGoals.push({ kind: "pixel", value: moved.goalColumn ?? pixelGoal });
-    return crossedVisualEntry(editor, start, moved.head, dir) ?? moved.head;
-  });
-  setNormalCursorPositions(editor, targets);
-  return nextGoals;
-}
-
-/**
- * Boundary of the *visual* row rather than the source line.
- *
- * `j`/`k` already move by wrapped row (`moveScreenLine`), and Insert mode's
- * Home/End already resolve against CodeMirror's visual line boundaries. Having
- * `0`/`$` use the source line made those three disagree in the single most
- * common Markdown case: inside a wrapped paragraph `j` stepped one row while
- * `$` jumped to the end of the entire paragraph, and `Home` and `0` landed in
- * different places. A detached editor has no layout to measure, so fall back
- * to the source line there.
- */
-function visualRowBoundary(editor: Editor, pos: number, which: "start" | "end"): number {
-  const rect = editor.view.contentDOM.getBoundingClientRect();
-  if (rect.width <= 0 || rect.height <= 0) {
-    const line = docLineInfo(doc(editor), pos);
-    return which === "start" ? line.start : line.end;
-  }
-  return editor.view.moveToLineBoundary(EditorSelection.cursor(pos), which === "end").head;
-}
-
-function lineBoundary(editor: Editor, which: "start" | "end"): void {
-  const text = doc(editor);
-  setNormalCursorPositions(editor, editor.view.state.selection.ranges.map((range) => (
-    visualRowBoundary(editor, normalCharPosition(text, range.head), which)
-  )));
-}
-
-function lineEndInsertBoundary(editor: Editor): void {
-  const text = doc(editor);
-  setCursorPositions(editor, editor.view.state.selection.ranges.map((range) => (
-    text.lineAt(clamp(range.head, 0, text.length)).to
-  )));
-}
-
-function lineFirstNonBlankPositions(editor: Editor): number[] {
-  const text = doc(editor);
-  return editor.view.state.selection.ranges.map((range) => {
-    const line = text.lineAt(clamp(range.head, 0, text.length));
-    const first = line.text.search(/\S/u);
-    return first < 0 ? line.from : line.from + first;
-  });
-}
-
-function docBoundary(editor: Editor, which: "start" | "end"): void {
-  const target = which === "start" ? 0 : doc(editor).length;
-  setNormalCursorPositions(editor, editor.view.state.selection.ranges.map(() => target));
-}
-
-function moveWord(editor: Editor, dir: -1 | 1, bigWord = false): void {
-  const text = doc(editor);
-  setNormalCursorPositions(editor, editor.view.state.selection.ranges.map((range) => {
-    const start = range.head;
-    const target = wordMotionPosition(text, start, dir, bigWord);
-    return snapStaticMathMotion(editor, start, target, dir);
-  }));
-}
-
-function moveWordEnd(editor: Editor, bigWord: boolean, count: number): void {
-  const text = doc(editor);
-  setNormalCursorPositions(editor, editor.view.state.selection.ranges.map((range) => {
-    let target = range.head;
-    for (let step = 0; step < count; step++) target = wordEndPosition(text, target, bigWord);
-    return snapStaticMathMotion(editor, range.head, target, 1);
-  }));
-}
-
-function moveParagraph(editor: Editor, dir: -1 | 1, count: number): void {
-  const text = doc(editor);
-  setNormalCursorPositions(editor, editor.view.state.selection.ranges.map((range) => {
-    let target = range.head;
-    for (let step = 0; step < count; step++) target = paragraphPosition(text, target, dir);
-    return target;
-  }));
-}
-
-function moveFirstNonBlank(editor: Editor): void {
-  const text = doc(editor);
-  setNormalCursorPositions(editor, editor.view.state.selection.ranges.map((range) => (
-    firstNonBlankPosition(text, range.head)
-  )));
-}
-
-function moveToLine(editor: Editor, lineNumber: number): void {
-  const text = doc(editor);
-  const line = text.line(clamp(lineNumber, 1, text.lines));
-  setNormalCursorPositions(
-    editor,
-    editor.view.state.selection.ranges.map(() => firstNonBlankPosition(text, line.from)),
-  );
-}
-
-/** Returns false when no cursor found the target, so the caller can report it. */
-function moveFindChar(
-  editor: Editor,
-  kind: VimFindKind,
-  target: string,
-  count: number,
-  skipAdjacent = false,
-): boolean {
-  const text = doc(editor);
-  let found = false;
-  setNormalCursorPositions(editor, editor.view.state.selection.ranges.map((range) => {
-    const hit = findCharPosition(text, range.head, kind, target, count, skipAdjacent);
-    if (hit == null) return range.head;
-    found = true;
-    return hit;
-  }));
-  return found;
-}
-
-function characterRangeAt(
-  editor: Editor,
-  from: number,
-  to: number,
-  backward = false,
-): { from: number; to: number } | null {
-  const text = doc(editor);
-  if (from !== to) return { from, to };
-  const start = from === to ? normalCharPosition(text, from) : from;
-  const line = text.lineAt(start);
-  if (backward) {
-    if (start <= line.from) return null;
-    const previousObject = staticMathObjectAtPosition(editor, Math.max(line.from, start - 1));
-    return {
-      from: previousObject?.to === start
-        ? previousObject.from
-        : previousGraphemePosition(text, start),
-      to: start,
-    };
-  }
-  const object = staticMathObjectAtPosition(editor, start);
-  const end = object?.from === start ? object.to : Math.min(graphemeEndPosition(text, start), line.to);
-  return start < end ? { from: start, to: end } : null;
 }
 
 function uniqueRanges(ranges: readonly { from: number; to: number }[]): Array<{ from: number; to: number }> {
@@ -928,443 +819,206 @@ function uniqueRanges(ranges: readonly { from: number; to: number }[]): Array<{ 
   return merged;
 }
 
-function deleteChars(editor: Editor, backward = false): string[] {
-  const state = editor.view.state;
-  const text = doc(editor);
-  const revealed = state.selection.ranges.length === 1
-    ? revealedFormulaAt(editor, state.selection.main.head)
-    : null;
-  const ranges = uniqueRanges(state.selection.ranges.flatMap((selection) => {
-    const range = characterRangeAt(editor, selection.from, selection.to, backward);
-    return range ? [range] : [];
-  }));
-  if (ranges.length === 0) return [];
-  const fragments = ranges.map((range) => text.sliceString(range.from, range.to));
-  const changes = state.changes(ranges.map(({ from, to }) => ({ from, to })));
-  const cursors = ranges.map((range) => EditorSelection.cursor(changes.mapPos(range.from, -1)));
-  editor.view.dispatch(state.update({
-    changes,
-    selection: EditorSelection.create(cursors, Math.min(state.selection.mainIndex, cursors.length - 1)),
-    scrollIntoView: true,
-  }));
-  restoreRevealedFormula(editor, revealed);
-  return fragments;
+function mainIndexFor(editor: Editor, length: number): number {
+  return Math.min(editor.view.state.selection.mainIndex, Math.max(0, length - 1));
+}
+
+// ---------------------------------------------------------------------------
+// Vim lines
+// ---------------------------------------------------------------------------
+
+function revealedScope(editor: Editor, pos: number): Scope | null {
+  const revealed = revealedFormulaAt(editor, pos);
+  return revealed ? { from: revealed.contentFrom, to: revealed.contentTo } : null;
 }
 
 /**
- * End of the word the caret is standing in, without first stepping off it —
- * which is what separates `cw` (this) from `e` (wordEndPosition).
+ * The Vim line holding POS.
+ *
+ * SCOPE bounds rows to a revealed formula's TeX body so linewise commands can
+ * never eat `\(`/`\)` or `\[`/`\]`; `undefined` detects it from POS, `null`
+ * ignores it (a vertical motion must be able to leave the formula).  LOGICAL
+ * asks for the source line instead of the screen row.
  */
-function currentWordEnd(text: Text, pos: number, bigWord: boolean): number {
-  const category = wordCategory(docCluster(text, pos), bigWord);
-  if (category === "space") return pos;
-  let end = pos;
-  while (end < text.length) {
-    const next = graphemeAfter(text, end);
-    if (next === end || next >= text.length) break;
-    if (wordCategory(docCluster(text, next), bigWord) !== category) break;
-    end = next;
+function vimRowAt(
+  editor: Editor,
+  pos: number,
+  assoc: -1 | 1 = 1,
+  options: { scope?: Scope | null; logical?: boolean } = {},
+): VimRow {
+  const text = doc(editor);
+  const safe = clamp(pos, 0, text.length);
+  const logical = Boolean(options.logical);
+  const scope = options.scope !== undefined ? options.scope : revealedScope(editor, safe);
+  if (scope) {
+    const empty = scope.from >= scope.to;
+    const at = empty ? scope.from : clamp(safe, scope.from, Math.max(scope.from, scope.to - 1));
+    const line = text.lineAt(at);
+    const lineFrom = Math.max(scope.from, line.from);
+    const lineTo = Math.min(scope.to, line.to);
+    let from = lineFrom;
+    let to = lineTo;
+    if (!logical && !empty) {
+      const row = screenRowAt(editor.view, at, assoc);
+      from = clamp(row.from, lineFrom, lineTo);
+      to = clamp(row.to, from, lineTo);
+    }
+    return { from, to, lineStart: from === lineFrom, lineEnd: to === lineTo, scope, logical };
   }
-  return end;
-}
 
-export type VimOperator = "d" | "c" | "y";
-
-type OperatorMotionRange = { from: number; to: number; linewise: boolean };
-
-function graphemeAfter(text: Text, pos: number): number {
-  return Math.min(text.length, Math.max(pos + 1, graphemeEndPosition(text, pos)));
-}
-
-function wholeLineSpan(text: Text, from: number, to: number): OperatorMotionRange {
-  const first = text.lineAt(clamp(Math.min(from, to), 0, text.length));
-  const last = text.lineAt(clamp(Math.max(from, to), 0, text.length));
-  const end = last.to < text.length ? last.to + 1 : last.to;
+  const line = text.lineAt(safe);
+  const object = renderedObjectAtPosition(editor, assoc < 0 && safe > line.from ? safe - 1 : safe);
+  if (object?.block) {
+    return { from: object.from, to: object.to, lineStart: true, lineEnd: true, scope: null, logical };
+  }
+  const row = logical ? { from: line.from, to: line.to } : screenRowAt(editor.view, safe, assoc);
   return {
-    // A span that runs to the end of the document has no trailing newline to
-    // own, so it borrows the preceding one instead — otherwise a linewise
-    // delete leaves the empty line its own newline used to terminate.
-    from: end >= text.length && first.from > 0 ? first.from - 1 : first.from,
-    to: end,
-    linewise: true,
+    from: row.from,
+    to: row.to,
+    lineStart: row.from === text.lineAt(row.from).from,
+    lineEnd: row.to === text.lineAt(row.to).to,
+    scope: null,
+    logical,
   };
 }
 
-/**
- * The text an operator acts on for one caret, or null when KEY is not a motion
- * this operator knows.
- *
- * Vim's exclusive/inclusive distinction is the whole game here: `dw` stops
- * before the next word while `de` eats the word's last character, and getting
- * that backwards is the difference between `dw` and a corrupted document.
- */
-function operatorMotionRange(
+function nextVimRow(editor: Editor, row: VimRow): VimRow | null {
+  const text = doc(editor);
+  const ceiling = row.scope ? row.scope.to : text.length;
+  if (row.to >= ceiling) return null;
+  const start = row.lineEnd ? row.to + 1 : row.to;
+  if (row.scope ? start >= row.scope.to : start > text.length) return null;
+  let next = vimRowAt(editor, start, 1, { scope: row.scope, logical: row.logical });
+  if (next.from <= row.from) {
+    // A measuring failure must not trap a count loop on one row.
+    if (row.logical) return null;
+    next = vimRowAt(editor, start, 1, { scope: row.scope, logical: true });
+    if (next.from <= row.from) return null;
+  }
+  return next;
+}
+
+function prevVimRow(editor: Editor, row: VimRow): VimRow | null {
+  const floor = row.scope ? row.scope.from : 0;
+  if (row.from <= floor) return null;
+  const end = row.lineStart ? row.from - 1 : row.from;
+  let previous = vimRowAt(editor, end, -1, { scope: row.scope, logical: row.logical });
+  if (previous.from >= row.from) {
+    if (row.logical) return null;
+    previous = vimRowAt(editor, end, -1, { scope: row.scope, logical: true });
+    if (previous.from >= row.from) return null;
+  }
+  return previous;
+}
+
+function stepRows(editor: Editor, row: VimRow, count: number, dir: -1 | 1): { row: VimRow; steps: number } {
+  let current = row;
+  let steps = 0;
+  for (; steps < count; steps++) {
+    const next = dir > 0 ? nextVimRow(editor, current) : prevVimRow(editor, current);
+    if (!next) break;
+    current = next;
+  }
+  return { row: current, steps };
+}
+
+function lastCharOfRow(text: Text, row: VimRow): number {
+  return row.to > row.from ? Math.max(row.from, previousGraphemePosition(text, row.to)) : row.from;
+}
+
+/** `^` on a row: the first non-blank, or the row start when it is blank. */
+function rowFirstNonBlank(text: Text, row: VimRow): number {
+  const first = firstNonBlankIn(text, row.from, row.to);
+  return first < row.to ? first : row.from;
+}
+
+function lineSpan(editor: Editor, first: VimRow, last: VimRow): LineSpan {
+  const text = doc(editor);
+  const scope = first.scope ?? last.scope;
+  const floor = scope ? scope.from : 0;
+  const ceiling = scope ? scope.to : text.length;
+  const newlineAfter = last.lineEnd
+    && last.to < ceiling
+    && text.sliceString(last.to, last.to + 1) === "\n";
+  const to = newlineAfter ? last.to + 1 : last.to;
+  // The last line of a document or scope has no newline of its own to take,
+  // so deleting it takes the preceding one instead — otherwise `dd` there
+  // leaves the empty line that newline used to terminate.
+  const deleteFrom = last.lineEnd && !newlineAfter && first.lineStart && first.from > floor
+    && text.sliceString(first.from - 1, first.from) === "\n"
+    ? first.from - 1
+    : first.from;
+  const raw = text.sliceString(first.from, to);
+  return {
+    from: first.from,
+    to,
+    deleteFrom,
+    deleteTo: to,
+    changeFrom: first.lineStart ? Math.min(firstNonBlankIn(text, first.from, first.to), last.to) : first.from,
+    changeTo: last.to,
+    register: raw.endsWith("\n") ? raw : `${raw}\n`,
+    wholeLines: first.lineStart && last.lineEnd,
+  };
+}
+
+function spanBetween(
   editor: Editor,
-  operator: VimOperator,
-  head: number,
-  key: string,
-  count: number,
-  find: { kind: VimFindKind; target: string } | null,
-): OperatorMotionRange | null {
-  const text = doc(editor);
-  const start = normalCharPosition(text, head);
-  const line = text.lineAt(start);
-  const charwise = (from: number, to: number): OperatorMotionRange => ({
-    from: Math.min(from, to),
-    to: Math.max(from, to),
-    linewise: false,
-  });
-
-  switch (key) {
-    case "h":
-    case "ArrowLeft": {
-      let to = start;
-      for (let step = 0; step < count && to > line.from; step++) to = previousGraphemePosition(text, to);
-      return charwise(to, start);
-    }
-    case "l":
-    case " ":
-    case "ArrowRight": {
-      let to = start;
-      for (let step = 0; step < count && to < line.to; step++) to = graphemeAfter(text, to);
-      return charwise(start, Math.min(to, line.to));
-    }
-    case "w":
-    case "W": {
-      // `cw` is Vim's famous exception: on a non-blank it behaves like `ce`,
-      // changing to the end of the word instead of up to the start of the next
-      // one, so it never eats the space that separates them.
-      if (operator === "c" && wordCategory(docCluster(text, start), key === "W") !== "space") {
-        let end = currentWordEnd(text, start, key === "W");
-        for (let step = 1; step < count; step++) end = wordEndPosition(text, end, key === "W");
-        return charwise(start, graphemeAfter(text, end));
-      }
-      let to = start;
-      for (let step = 0; step < count; step++) to = wordMotionPosition(text, to, 1, key === "W");
-      // Stopping at the start of a later line would swallow the newline, which
-      // Vim never does for `dw` on the last word of a line.
-      const target = text.lineAt(to);
-      if (target.number > line.number && to === target.from) {
-        const previous = text.line(target.number - 1);
-        return charwise(start, Math.max(start, previous.to));
-      }
-      return charwise(start, to);
-    }
-    case "b":
-    case "B": {
-      let to = start;
-      for (let step = 0; step < count; step++) to = wordMotionPosition(text, to, -1, key === "B");
-      return charwise(to, start);
-    }
-    case "e":
-    case "E": {
-      let to = start;
-      for (let step = 0; step < count; step++) to = wordEndPosition(text, to, key === "E");
-      return charwise(start, graphemeAfter(text, to));
-    }
-    case "$":
-      return charwise(start, line.to);
-    case "0":
-      return charwise(line.from, start);
-    case "^":
-      return charwise(firstNonBlankPosition(text, start), start);
-    case "{":
-    case "}": {
-      let to = start;
-      const dir = key === "}" ? 1 : -1;
-      for (let step = 0; step < count; step++) to = paragraphPosition(text, to, dir);
-      return charwise(start, to);
-    }
-    case "f":
-    case "F":
-    case "t":
-    case "T":
-    case ";":
-    case ",": {
-      if (!find) return null;
-      const hit = findCharPosition(
-        text,
-        start,
-        find.kind,
-        find.target,
-        count,
-        (key === ";" || key === ",") && (find.kind === "t" || find.kind === "T"),
-      );
-      if (hit == null) return null;
-      // A forward find is inclusive of where it lands; a backward one stops
-      // before the caret's own character.
-      return find.kind === "f" || find.kind === "t"
-        ? charwise(start, graphemeAfter(text, hit))
-        : charwise(hit, start);
-    }
-    case "j":
-    case "ArrowDown": {
-      const last = text.line(Math.min(text.lines, line.number + count));
-      return wholeLineSpan(text, line.from, last.from);
-    }
-    case "k":
-    case "ArrowUp": {
-      const first = text.line(Math.max(1, line.number - count));
-      return wholeLineSpan(text, first.from, line.from);
-    }
-    case "G": {
-      const target = text.line(clamp(count, 1, text.lines));
-      return wholeLineSpan(text, line.from, target.from);
-    }
-    default:
-      return null;
-  }
+  a: number,
+  b: number,
+  options: { scope?: Scope | null; logical?: boolean } = {},
+): LineSpan {
+  const first = vimRowAt(editor, Math.min(a, b), 1, options);
+  const last = vimRowAt(editor, Math.max(a, b), 1, { ...options, scope: options.scope ?? first.scope });
+  return lineSpan(editor, first, last);
 }
 
-/**
- * `3x` deletes three characters as one operation, so the register holds all
- * three — repeating `deleteChars` would leave only the last one behind.
- */
-function deleteCharsCounted(editor: Editor, count: number, backward: boolean): string[] {
-  if (count <= 1) return deleteChars(editor, backward);
-  const carets = editor.view.state.selection.ranges.length;
-  const fragments: string[] = new Array(carets).fill("");
-  for (let step = 0; step < count; step++) {
-    const deleted = deleteChars(editor, backward);
-    // Once any caret stops producing a fragment the results no longer line up
-    // with the carets, and guessing the mapping would put one caret's text in
-    // another's register entry. Stopping early is the honest answer.
-    if (deleted.length !== carets) break;
-    for (let index = 0; index < carets; index++) {
-      const piece = deleted[index] ?? "";
-      fragments[index] = backward ? piece + fragments[index]! : fragments[index]! + piece;
-    }
-  }
-  return fragments.filter(Boolean);
-}
-
-/**
- * The `D`/`C`/`Y` range: caret to end of line, honouring the same logical-line
- * bounds as `dd` so a revealed formula's `\[`/`\]` can never be swallowed.
- */
-function lineTailRange(editor: Editor, head: number): { from: number; to: number } {
-  const line = logicalLineAt(editor, head);
-  return { from: clamp(head, line.from, line.to), to: line.to };
-}
-
-function deleteToLineEnd(editor: Editor, andEnterInsert: boolean): string[] {
-  const state = editor.view.state;
-  const text = doc(editor);
-  const ranges = uniqueRanges(state.selection.ranges.map((range) => (
-    range.empty ? lineTailRange(editor, range.head) : { from: range.from, to: range.to }
-  ))).filter((range) => range.from < range.to);
-  if (ranges.length === 0) return [];
-  const fragments = ranges.map((range) => text.sliceString(range.from, range.to));
-  const changes = state.changes(ranges.map(({ from, to }) => ({ from, to })));
-  const emptied = changes.apply(state.doc);
-  const cursors = ranges.map((range) => {
-    const at = changes.mapPos(range.from, -1);
-    // `D` leaves Normal mode on the new last character; `C` opens Insert where
-    // the deleted text was, which is a legal Insert position past it.
-    return EditorSelection.cursor(andEnterInsert ? at : normalCharPosition(emptied, at));
-  });
-  editor.view.dispatch(state.update({
-    changes,
-    selection: EditorSelection.create(cursors, Math.min(state.selection.mainIndex, cursors.length - 1)),
-    scrollIntoView: true,
-  }));
-  return fragments;
-}
-
-function yankToLineEnd(editor: Editor): string[] {
-  const text = doc(editor);
-  return editor.view.state.selection.ranges.map((range) => {
-    const tail = range.empty ? lineTailRange(editor, range.head) : { from: range.from, to: range.to };
-    return text.sliceString(tail.from, tail.to);
-  }).filter(Boolean);
-}
-
-/**
- * Vim's `J`: join the following line onto this one, collapsing its leading
- * indentation into a single separating space. No space is added when the
- * current line already ends in one, or when the next line is empty.
- */
-function joinLines(editor: Editor, count: number): boolean {
-  const state = editor.view.state;
-  const text = state.doc;
-  const changes: Array<{ from: number; to: number; insert: string }> = [];
-  const cursors: number[] = [];
-  for (const range of state.selection.ranges) {
-    let line = text.lineAt(clamp(range.head, 0, text.length));
-    // Vim counts the lines involved, not the joins: `3J` makes two joins.
-    const joins = Math.max(1, count - 1);
-    const from = line.to;
-    let insert = "";
-    let joined = 0;
-    for (let step = 0; step < joins && line.number < text.lines; step++) {
-      const next = text.line(line.number + 1);
-      const trimmed = next.text.replace(/^\s+/u, "");
-      const separator = insert.endsWith(" ") || (step === 0 && /\s$/u.test(line.text)) || !trimmed
-        ? ""
-        : " ";
-      insert += separator + trimmed;
-      line = next;
-      joined++;
-    }
-    if (joined === 0) continue;
-    changes.push({ from, to: line.to, insert });
-    cursors.push(from);
-  }
-  if (changes.length === 0) return false;
-  const change = state.changes(changes);
-  const applied = change.apply(state.doc);
-  editor.view.dispatch(state.update({
-    changes: change,
-    selection: EditorSelection.create(
-      cursors.map((pos) => EditorSelection.cursor(normalCharPosition(applied, change.mapPos(pos, -1)))),
-      Math.min(state.selection.mainIndex, cursors.length - 1),
-    ),
-    scrollIntoView: true,
-  }));
-  return true;
-}
-
-function swapCase(value: string): string {
-  return value.replace(/\p{L}/gu, (ch) => {
-    const upper = ch.toUpperCase();
-    return ch === upper ? ch.toLowerCase() : upper;
-  });
-}
-
-/**
- * Vim's `~`: swap the case of COUNT characters and step past them. Applies to
- * the selection instead when one is active, which is what Visual `~` means.
- */
-function toggleCaseForward(editor: Editor, count: number): boolean {
-  const state = editor.view.state;
-  const text = state.doc;
-  const ranges = uniqueRanges(state.selection.ranges.map((range) => {
-    if (!range.empty) return { from: range.from, to: range.to };
-    const line = text.lineAt(clamp(range.head, 0, text.length));
-    let to = clamp(range.head, line.from, line.to);
-    for (let step = 0; step < count && to < line.to; step++) {
-      to = Math.max(to + 1, graphemeEndPosition(text, to));
-    }
-    return { from: clamp(range.head, line.from, line.to), to: Math.min(to, line.to) };
-  })).filter((range) => range.from < range.to);
-  if (ranges.length === 0) return false;
-  const specs = ranges.map((range) => ({
-    from: range.from,
-    to: range.to,
-    insert: swapCase(text.sliceString(range.from, range.to)),
-  }));
-  if (specs.every((spec) => spec.insert === text.sliceString(spec.from, spec.to))) return false;
-  const change = state.changes(specs);
-  const applied = change.apply(state.doc);
-  editor.view.dispatch(state.update({
-    changes: change,
-    selection: EditorSelection.create(
-      specs.map((spec) => EditorSelection.cursor(
-        normalCharPosition(applied, change.mapPos(spec.to, -1)),
-      )),
-      Math.min(state.selection.mainIndex, specs.length - 1),
-    ),
-    scrollIntoView: true,
-  }));
-  return true;
-}
-
-function selectedLogicalLine(
-  editor: Editor,
-  from: number,
-  to: number,
-): VimLogicalLine {
-  const text = doc(editor);
-  const line = logicalLineAt(editor, from);
-  if (to <= from) return line;
-  let deleteFrom = line.deleteFrom;
-  let deleteTo = line.deleteTo;
-  let registerText = line.registerText;
-  registerText = text.sliceString(from, to);
-  if (!registerText.endsWith("\n")) registerText += "\n";
-  deleteFrom = from;
-  deleteTo = to;
-  // A final whole-line selection has no trailing newline to own. Borrow its
-  // preceding newline for deletion while keeping the register linewise.
-  if (to >= text.length && from > 0 && text.sliceString(from - 1, from) === "\n") {
-    deleteFrom = from - 1;
-  } else if (line.formulaScope && to >= line.formulaScope.to
-      && from > line.formulaScope.from
-      && text.sliceString(from - 1, from) === "\n") {
-    deleteFrom = from - 1;
-  }
-  return { ...line, deleteFrom, deleteTo, registerText };
+function countedSpan(editor: Editor, pos: number, count: number, logical = false): LineSpan {
+  const first = vimRowAt(editor, pos, 1, { logical });
+  const { row: last } = stepRows(editor, first, count - 1, 1);
+  return lineSpan(editor, first, last);
 }
 
 /**
  * Where Vim leaves the caret after a linewise delete: the first non-blank of
- * the line that moved up into the deleted one.
- *
- * Mapping the deleted range's start is not enough. When the delete borrowed the
- * *preceding* newline — which is what happens on the last line of the document —
- * the mapped position is the end of the surviving line, which Normal mode has
- * no legal cursor position for: `i` then opens Insert past the last character
- * and `x` deletes the wrong grapheme.
+ * the line that moved up into the deleted one.  When the delete borrowed the
+ * *preceding* newline, the mapped start is the end of the surviving line, which
+ * Normal mode has no legal cursor position for.
  */
 function linewiseLandingPosition(text: Text, pos: number): number {
-  const line = text.lineAt(clamp(pos, 0, text.length));
-  const first = line.text.search(/\S/u);
-  return first < 0 ? line.from : line.from + first;
+  return firstNonBlankPosition(text, pos);
 }
+
+// ---------------------------------------------------------------------------
+// Editing primitives
+// ---------------------------------------------------------------------------
 
 /**
- * End of the COUNT-line span starting at FROM, including the trailing newline
- * the way Visual-line's own selection does — otherwise `3dd` in the middle of a
- * document would leave a stray empty line where the third line was.
+ * COUNT characters from HEAD for `x`/`X`/`dl`/`dh`: never past the caret's
+ * source line, and a collapsed formula counts as one character.
  */
-function countedLineSpanEnd(text: Text, from: number, count: number): number {
-  const startLine = text.lineAt(clamp(from, 0, text.length)).number;
-  const line = text.line(Math.min(text.lines, startLine + count - 1));
-  return line.to < text.length ? line.to + 1 : line.to;
-}
-
-function deleteLines(editor: Editor, count = 1): string[] {
-  const state = editor.view.state;
-  const revealed = state.selection.ranges.length === 1
-    ? revealedFormulaAt(editor, state.selection.main.head)
-    : null;
-  const logical = state.selection.ranges.map((range) => {
-    // A count is linewise even when the Normal-mode caret is in the middle of
-    // its source line. Starting the selected span at range.from would leave
-    // the text before the caret behind and join it to the following line.
-    const first = logicalLineAt(editor, range.from);
-    return selectedLogicalLine(
-      editor,
-      count > 1 && range.empty ? first.selectionFrom : range.from,
-      count > 1 && range.empty
-        ? countedLineSpanEnd(state.doc, range.from, count)
-        : range.to,
-    );
-  });
-  const keyed = new Map<string, VimLogicalLine>();
-  for (const line of logical) keyed.set(`${line.deleteFrom}:${line.deleteTo}`, line);
-  const lines = [...keyed.values()].sort((left, right) => left.deleteFrom - right.deleteFrom);
-  const ranges = uniqueRanges(lines.map((line) => ({ from: line.deleteFrom, to: line.deleteTo })));
-  if (ranges.length === 0) return [];
-  const changes = state.changes(ranges.map(({ from, to }) => ({ from, to })));
-  const deleted = changes.apply(state.doc);
-  const cursors = ranges.map((range) => EditorSelection.cursor(
-    linewiseLandingPosition(deleted, changes.mapPos(range.from, -1)),
-  ));
-  editor.view.dispatch(state.update({
-    changes,
-    selection: EditorSelection.create(cursors, Math.min(state.selection.mainIndex, cursors.length - 1)),
-    scrollIntoView: true,
-  }));
-  restoreRevealedFormula(editor, revealed);
-  return lines.map((line) => line.registerText);
-}
-
-function currentSelectionTexts(editor: Editor): string[] {
+function characterSpan(
+  editor: Editor,
+  head: number,
+  count: number,
+  backward: boolean,
+): { from: number; to: number } | null {
   const text = doc(editor);
-  return editor.view.state.selection.ranges
-    .filter((range) => range.from < range.to)
-    .map((range) => text.sliceString(range.from, range.to));
+  const start = normalCharPosition(text, head);
+  const line = text.lineAt(start);
+  if (backward) {
+    let from = start;
+    for (let step = 0; step < count && from > line.from; step++) {
+      const previousObject = renderedObjectAtPosition(editor, Math.max(line.from, from - 1));
+      from = previousObject?.to === from ? previousObject.from : previousGraphemePosition(text, from);
+    }
+    return from < start ? { from, to: start } : null;
+  }
+  let to = start;
+  for (let step = 0; step < count && to < line.to; step++) {
+    const object = renderedObjectAtPosition(editor, to);
+    to = object?.from === to ? object.to : Math.min(graphemeAfter(text, to), line.to);
+  }
+  return to > start ? { from: start, to } : null;
 }
 
 /**
@@ -1374,75 +1028,186 @@ function currentSelectionTexts(editor: Editor): string[] {
  */
 function countedCharacterRange(
   editor: Editor,
-  selection: { from: number; to: number; empty: boolean },
+  head: number,
   count: number,
 ): { from: number; to: number } | null {
-  if (!selection.empty || count <= 1) {
-    return characterRangeAt(editor, selection.from, selection.to);
-  }
   const text = doc(editor);
-  const start = normalCharPosition(text, selection.from);
+  const start = normalCharPosition(text, head);
   const line = text.lineAt(start);
   let to = start;
   for (let step = 0; step < count; step++) {
     if (to >= line.to) return null;
-    to = Math.max(to + 1, graphemeEndPosition(text, to));
+    const object = renderedObjectAtPosition(editor, to);
+    to = object?.from === to ? object.to : graphemeAfter(text, to);
   }
-  return { from: start, to: Math.min(to, line.to) };
+  return { from: start, to };
 }
 
-function replaceChars(editor: Editor, ch: string, count = 1): number | null {
-  const state = editor.view.state;
+/** Replace every grapheme in RANGES with CH, keeping line breaks where they are. */
+function replaceSpecs(
+  editor: Editor,
+  ranges: readonly { from: number; to: number }[],
+  ch: string,
+): Array<{ from: number; to: number; insert: string }> {
   const text = doc(editor);
-  const revealed = state.selection.ranges.length === 1
-    ? revealedFormulaAt(editor, state.selection.main.head)
-    : null;
-  const ranges = uniqueRanges(state.selection.ranges.flatMap((selection) => {
-    const range = countedCharacterRange(editor, selection, count);
-    return range ? [range] : [];
-  }));
-  if (ranges.length === 0) return null;
-  const specs = ranges.map((range) => {
-    const object = staticMathObjectAtPosition(editor, range.from);
-    const replacingObject = Boolean(object?.from === range.from && object.to === range.to);
-    return {
-      from: range.from,
-      to: range.to,
-      insert: ch.repeat(replacingObject ? 1 : Math.max(1, selectionClusterCount(text, range.from, range.to))),
-    };
+  return uniqueRanges(ranges).map((range) => {
+    let at = range.from;
+    let insert = "";
+    while (at < range.to) {
+      const object = renderedObjectAtPosition(editor, at);
+      if (object?.from === at && object.to <= range.to) {
+        insert += ch;
+        at = object.to;
+      } else {
+        insert += docCluster(text, at) === "\n" ? "\n" : ch;
+        at = Math.min(range.to, graphemeAfter(text, at));
+      }
+    }
+    return { from: range.from, to: range.to, insert };
   });
-  const changes = state.changes(specs);
-  // Vim leaves Normal cursors on the replaced character, not after it — and on
-  // the *last* one when a count replaced several. Stepping one grapheme back
-  // from the mapped end covers both, since a single replacement's end is one
-  // grapheme past its start.
-  const replaced = changes.apply(state.doc);
-  const replacedPositions = specs.map((range) => (
-    previousGraphemePosition(replaced, changes.mapPos(range.to, -1))
-  ));
-  const cursors = replacedPositions.map((position) => EditorSelection.cursor(position));
-  editor.view.dispatch(state.update({
-    changes,
-    selection: EditorSelection.create(cursors, Math.min(state.selection.mainIndex, cursors.length - 1)),
-    scrollIntoView: true,
-  }));
-  restoreRevealedFormula(editor, revealed);
-  return replacedPositions[Math.min(state.selection.mainIndex, replacedPositions.length - 1)]
-    ?? replacedPositions[0]!;
 }
 
+function swapCase(value: string): string {
+  return value.replace(/\p{L}/gu, (ch) => {
+    const upper = ch.toUpperCase();
+    return ch === upper ? ch.toLowerCase() : upper;
+  });
+}
+
+function transformCase(op: "g~" | "gu" | "gU", value: string): string {
+  if (op === "gu") return value.toLowerCase();
+  if (op === "gU") return value.toUpperCase();
+  return swapCase(value);
+}
+
+/** Case commands skip the hidden Markdown backing a rendered Vim object. */
+function caseChangeSpecs(
+  editor: Editor,
+  ranges: readonly { from: number; to: number }[],
+  op: "g~" | "gu" | "gU",
+): Array<{ from: number; to: number; insert: string }> {
+  const text = doc(editor);
+  const specs: Array<{ from: number; to: number; insert: string }> = [];
+  const addPlain = (from: number, to: number) => {
+    if (from >= to) return;
+    const original = text.sliceString(from, to);
+    const insert = transformCase(op, original);
+    if (insert !== original) specs.push({ from, to, insert });
+  };
+  for (const range of uniqueRanges(ranges)) {
+    let at = range.from;
+    let plainFrom = at;
+    while (at < range.to) {
+      const object = renderedObjectAtPosition(editor, at);
+      if (object && object.to > at) {
+        addPlain(plainFrom, at);
+        at = Math.min(range.to, object.to);
+        plainFrom = at;
+      } else {
+        at = Math.min(range.to, graphemeAfter(text, at));
+      }
+    }
+    addPlain(plainFrom, range.to);
+  }
+  return specs;
+}
+
+/**
+ * Vim's `J`/`gJ`: join JOINS following lines onto the line at each position.
+ * `J` collapses the next line's indentation into one separating space — none
+ * when the current line already ends in whitespace or the next line is empty;
+ * `gJ` joins the raw text.  The caret lands on the last join point.
+ */
+function joinLines(
+  editor: Editor,
+  specs: ReadonlyArray<{ pos: number; joins: number }>,
+  spaces: boolean,
+): boolean {
+  const state = editor.view.state;
+  const text = state.doc;
+  const changes: Array<{ from: number; to: number; insert: string }> = [];
+  const cursors: number[] = [];
+  const seen = new Set<number>();
+  for (const spec of specs) {
+    let line = text.lineAt(clamp(spec.pos, 0, text.length));
+    if (seen.has(line.number)) continue;
+    seen.add(line.number);
+    const from = line.to;
+    let insert = "";
+    let joined = 0;
+    let lastJoin = from;
+    for (let step = 0; step < spec.joins && line.number < text.lines; step++) {
+      const next = text.line(line.number + 1);
+      if (spaces) {
+        const trimmed = next.text.replace(/^\s+/u, "");
+        const endsInSpace = insert ? /\s$/u.test(insert) : /\s$/u.test(line.text);
+        const separator = endsInSpace || !trimmed || trimmed.startsWith(")") ? "" : " ";
+        lastJoin = from + insert.length;
+        insert += separator + trimmed;
+      } else {
+        lastJoin = from + insert.length;
+        insert += next.text;
+      }
+      line = next;
+      joined++;
+    }
+    if (joined === 0) continue;
+    changes.push({ from, to: line.to, insert });
+    cursors.push(lastJoin);
+  }
+  if (changes.length === 0) return false;
+  const change = state.changes(changes);
+  const applied = change.apply(state.doc);
+  dispatchEdit(editor, {
+    changes: change,
+    selection: EditorSelection.create(
+      cursors.map((pos) => EditorSelection.cursor(normalCharPosition(applied, change.mapPos(pos, 1)))),
+      Math.min(state.selection.mainIndex, cursors.length - 1),
+    ),
+    scrollIntoView: true,
+  });
+  return true;
+}
+
+/**
+ * Vim's `~`: swap the case of COUNT characters and step past them, never
+ * beyond the caret's source line.
+ */
+function toggleCaseForward(editor: Editor, count: number): boolean {
+  const state = editor.view.state;
+  const ranges = uniqueRanges(state.selection.ranges.flatMap((range) => {
+    const span = characterSpan(editor, range.head, count, false);
+    return span ? [span] : [];
+  }));
+  if (ranges.length === 0) return false;
+  const specs = caseChangeSpecs(editor, ranges, "g~");
+  if (specs.length === 0) {
+    setNormalCursorPositions(editor, ranges.map((range) => range.to));
+    return true;
+  }
+  const change = state.changes(specs);
+  const applied = change.apply(state.doc);
+  dispatchEdit(editor, {
+    changes: change,
+    selection: EditorSelection.create(
+      ranges.map((range) => EditorSelection.cursor(
+        normalCharPosition(applied, change.mapPos(range.to, -1)),
+      )),
+      Math.min(state.selection.mainIndex, ranges.length - 1),
+    ),
+    scrollIntoView: true,
+  });
+  return true;
+}
+
+/** `o`/`O` open a source line, continuing a list, task or quote the way Enter would. */
 function openLine(editor: Editor, where: "above" | "below"): void {
   const state = editor.view.state;
   const text = state.doc;
-  const revealed = state.selection.ranges.length === 1
-    ? revealedFormulaAt(editor, state.selection.main.head)
-    : null;
+  const revealed = singleRevealedFormula(editor);
   const candidates = state.selection.ranges.map((selection, index) => {
-    const line = logicalLineAt(editor, selection.head);
-    const raw = text.sliceString(line.from, line.to);
-    // `o` opens a line the way Enter would, so it continues a list, task or
-    // quote rather than only copying the indentation.
-    const prefix = markdownContinuationPrefix(raw);
+    const line = vimRowAt(editor, selection.head, 1, { logical: true });
+    const prefix = markdownContinuationPrefix(text.sliceString(line.from, line.to));
     return {
       from: where === "above" ? line.from : line.to,
       insert: where === "above" ? `${prefix}\n` : `\n${prefix}`,
@@ -1463,12 +1228,68 @@ function openLine(editor: Editor, where: "above" | "below"): void {
   });
   let mainIndex = unique.findIndex((candidate) => candidate.main);
   if (mainIndex < 0) mainIndex = Math.min(state.selection.mainIndex, unique.length - 1);
-  editor.view.dispatch(state.update({
+  dispatchEdit(editor, {
     changes,
     selection: EditorSelection.create(ranges, mainIndex),
     scrollIntoView: true,
-  }));
+  });
   restoreRevealedFormula(editor, revealed);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+/** Word under or after the caret on its line, for `*`/`#`. */
+function searchWordAt(text: Text, pos: number, objectAt?: WordObjectAt): string | null {
+  const line = text.lineAt(pos);
+  let at = clamp(pos, line.from, line.to);
+  if (objectAt?.(at)) return null;
+  while (at < line.to && !isWordChar(docCluster(text, at))) {
+    at = objectAt?.(at)?.to ?? graphemeAfter(text, at);
+  }
+  if (at >= line.to) return null;
+  const range = wordObject(text, at, 1, true, false);
+  return range ? text.sliceString(range.from, range.to) : null;
+}
+
+const wordSearchCache = new WeakMap<Text, Map<string, number[]>>();
+
+/** Start of the COUNT-th whole-word match of WORD from POS, wrapping around. */
+function searchWord(
+  text: Text, pos: number, word: string, forward: boolean, count: number,
+  objectAt?: WordObjectAt,
+): number | null {
+  let words = wordSearchCache.get(text);
+  if (!words) {
+    words = new Map();
+    wordSearchCache.set(text, words);
+  }
+  let rawStarts = words.get(word);
+  if (!rawStarts) {
+    const pattern = new RegExp(`(?<![\\p{L}\\p{N}_])${escapeRegExp(word)}(?![\\p{L}\\p{N}_])`, "gu");
+    const source = text.toString();
+    rawStarts = [];
+    for (let match = pattern.exec(source); match; match = pattern.exec(source)) {
+      rawStarts.push(match.index);
+    }
+    if (words.size >= 8) words.delete(words.keys().next().value!);
+    words.set(word, rawStarts);
+  }
+  const starts = objectAt ? rawStarts.filter((start) => !objectAt(start)) : rawStarts;
+  if (starts.length === 0) return null;
+  let low = 0;
+  let high = starts.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (starts[middle]! < pos || (forward && starts[middle] === pos)) low = middle + 1;
+    else high = middle;
+  }
+  const length = starts.length;
+  const index = forward
+    ? (low + count - 1) % length
+    : ((low - count) % length + length) % length;
+  return starts[index]!;
 }
 
 export function createVimLite(
@@ -1477,28 +1298,35 @@ export function createVimLite(
   options: VimLiteOptions = {},
 ): VimLiteController {
   let mode: VimLiteMode = "insert";
-  let normalGoalColumns: VerticalGoal[] | null = null;
-  let visualGoalColumns: VerticalGoal[] | null = null;
-  let pending = "";
+  editor.view.dom.dataset.vimMode = mode;
+  /** Per-caret goal columns of the last vertical motion; cleared by any other motion. */
+  let goals: VerticalGoal[] | null = null;
   let countBuffer = "";
-  /** Count captured when an operator key was pressed, replayed when it completes. */
-  let pendingCount = 1;
-  /** Operator waiting for its motion (`d`, `c`, `y`). */
-  let pendingOperator: VimOperator | null = null;
-  /** Set while an operator is waiting for a `g` motion's second key. */
-  let pendingOperatorGoto: number | null = null;
-  /** Find chord waiting for its target character. */
-  let pendingFindKind: VimFindKind | null = null;
+  /** Second key a prefix is waiting for: `g`, `z`, `r`, a find, or a text object's `i`/`a`. */
+  let prefix = "";
+  let pendingOperator: { op: VimOperator; count: number; explicit: boolean } | null = null;
   /** Last `f`/`F`/`t`/`T` target, replayed by `;` and reversed by `,`. */
-  let lastFind: { kind: VimFindKind; target: string } | null = null;
+  let lastFind: FindSpec | null = null;
+  let lastSearch: SearchSpec | null = null;
   let jumpInput: VimJumpInput | null = null;
   let jumpSession: VimJumpSession | null = null;
   let jumpLabelPrefix = "";
-  let visualAnchor: number | null = null;
   let visualHead: number | null = null;
-  let visualLineStates: VisualLineState[] | null = null;
+  /** Visual-word motions need a logical head beyond CM6's half-open selection. */
+  let visualCharStates: VisualState[] | null = null;
+  let visualCharSelection: EditorSelection | null = null;
+  let visualCharDoc: Text | null = null;
+  /** Authoritative Visual-line state: CM6 cannot encode a column in a whole-row range. */
+  let visualLineStates: VisualState[] | null = null;
+  let lastVisual: { mode: "visual" | "visual-line"; states: VisualState[] } | null = null;
   let insertEntry: { doc: Text; boundary: number; returnPos: number } | null = null;
+  /** The Insert session a Normal command opened, for counts and `.`. */
+  let insertSession: { doc: Text; head: number; count: number } | null = null;
   let register: VimRegister = { text: "", kind: "characterwise", fragments: [] };
+  let recording: { keys: string[]; changed: boolean } | null = null;
+  let pendingInsertChange: readonly string[] | null = null;
+  let lastChange: LastChange | null = null;
+  let replaying = false;
   let destroyed = false;
   let asyncEpoch = 0;
   const jumpTimeoutMs = Math.max(0, options.jumpTimeoutMs ?? AVY_TIMEOUT_MS);
@@ -1526,6 +1354,14 @@ export function createVimLite(
     pendingClipboardWrite = yankToSystemClipboard(registerText);
   }
 
+  function markChange(): void {
+    if (recording) recording.changed = true;
+  }
+
+  // -------------------------------------------------------------------------
+  // Count and parser state
+  // -------------------------------------------------------------------------
+
   /**
    * Consume the pending count prefix, defaulting to Vim's implicit 1.
    *
@@ -1540,127 +1376,9 @@ export function createVimLite(
     return clamp(Number.parseInt(raw, 10) || 1, 1, MAX_VIM_COUNT);
   }
 
-  /**
-   * Total repetitions for an operator chord. Vim multiplies the count typed
-   * before the operator by the one typed before its motion: `2d3d` is 6 lines.
-   */
-  function operatorCount(): number {
-    const banked = pendingCount;
-    pendingCount = 1;
-    return clamp(banked * takeCount(), 1, MAX_VIM_COUNT);
-  }
-
-  /** Chords whose next key is a literal argument, never a count digit. */
-  function pendingTakesLiteralKey(): boolean {
-    return pending === "r" || pendingFindKind !== null;
-  }
-
-  /**
-   * Run OPERATOR over the range each caret's MOTION selects.
-   *
-   * Returns false when KEY is not a motion, so the caller can report the chord
-   * instead of silently eating it.
-   */
-  function applyOperatorMotion(
-    operator: VimOperator,
-    key: string,
-    count: number,
-    find: { kind: VimFindKind; target: string } | null,
-  ): boolean {
-    const state = editor.view.state;
-    const text = state.doc;
-    const resolved = state.selection.ranges.map((range) => (
-      operatorMotionRange(editor, operator, range.head, key, count, find)
-    ));
-    if (resolved.some((range) => range == null)) return false;
-    const found = resolved as OperatorMotionRange[];
-    const linewise = found.some((range) => range.linewise);
-    const ranges = uniqueRanges(found.map(({ from, to }) => ({ from, to })))
-      .filter((range) => range.from < range.to);
-
-    resetMotionMemory();
-    if (ranges.length === 0) {
-      // A motion that selects nothing is still a completed command; `c` still
-      // opens Insert where Vim would, the others simply do nothing.
-      if (operator === "c") enterInsert();
-      return true;
-    }
-
-    const fragments = ranges.map((range) => {
-      const value = text.sliceString(range.from, range.to);
-      return linewise && !value.endsWith("\n") ? `${value}\n` : value;
-    });
-    yank(fragments, linewise ? "linewise" : "characterwise");
-    if (operator === "y") {
-      // Vim parks the caret at the start of what it yanked.
-      setNormalCursorPositions(editor, ranges.map((range) => range.from));
-      return true;
-    }
-
-    const changes = state.changes(ranges.map(({ from, to }) => ({ from, to })));
-    const applied = changes.apply(state.doc);
-    const cursors = ranges.map((range) => {
-      const at = changes.mapPos(range.from, -1);
-      if (operator === "c") return EditorSelection.cursor(at);
-      return EditorSelection.cursor(
-        linewise ? linewiseLandingPosition(applied, at) : normalCharPosition(applied, at),
-      );
-    });
-    editor.view.dispatch(state.update({
-      changes,
-      selection: EditorSelection.create(cursors, Math.min(state.selection.mainIndex, cursors.length - 1)),
-      scrollIntoView: true,
-    }));
-    if (operator === "c") enterInsert();
-    return true;
-  }
-
-  /**
-   * Feed KEY to a waiting operator. Handles the doubled form (`dd`), the find
-   * chords that need one more key (`dt,`), and every plain motion.
-   */
-  function continueOperator(operator: VimOperator, key: string): boolean {
-    if (isFindKind(key)) {
-      pendingOperator = operator;
-      pendingFindKind = key;
-      pendingCount = clamp(pendingCount * takeCount(), 1, MAX_VIM_COUNT);
-      return true;
-    }
-    if (key === operator) {
-      const count = operatorCount();
-      if (operator === "y") yankLine(count);
-      else if (operator === "d") deleteLineCommand(count);
-      else {
-        // `cc` clears the line's text but keeps the line and its indentation,
-        // which is what Vim does with autoindent on.
-        resetMotionMemory();
-        setCursorPositions(editor, lineFirstNonBlankPositions(editor));
-        yank(deleteToLineEnd(editor, true), "characterwise");
-        enterInsert();
-      }
-      return true;
-    }
-    const explicitCount = countBuffer.length > 0 || pendingCount > 1;
-    const count = operatorCount();
-    if (key === "g") {
-      // Only `gg` is a motion here; bank the count for it.
-      pendingOperator = operator;
-      pendingOperatorGoto = count;
-      return true;
-    }
-    if (key === "G") {
-      // Bare `dG` reaches the last line; `d5G` reaches line 5.
-      const line = explicitCount ? count : doc(editor).lines;
-      return applyOperatorMotion(operator, "G", line, null);
-    }
-    if (applyOperatorMotion(operator, key, count, lastFind)) return true;
-    if (key !== "Escape") reportUnhandled(`${operator}${key}`);
-    return true;
-  }
-
   /** Accumulate a count digit. `0` is a motion until a count is already open. */
   function consumeCountDigit(key: string): boolean {
-    if (pendingTakesLiteralKey()) return false;
+    if (prefix) return false;
     if (!/^[0-9]$/u.test(key)) return false;
     if (key === "0" && !countBuffer) return false;
     // Keep the buffer short; takeCount() clamps the value anyway.
@@ -1668,19 +1386,14 @@ export function createVimLite(
     return true;
   }
 
-  function applyFindChar(kind: VimFindKind, target: string, count: number): boolean {
-    resetMotionMemory();
-    lastFind = { kind, target };
-    return moveFindChar(editor, kind, target, count);
+  function resetParser(): void {
+    countBuffer = "";
+    prefix = "";
+    pendingOperator = null;
   }
 
-  /** `;` repeats the last find; `,` runs its mirror image. */
-  function repeatFindChar(reverse: boolean, count: number): boolean {
-    if (!lastFind) return false;
-    const mirrored: Record<VimFindKind, VimFindKind> = { f: "F", F: "f", t: "T", T: "t" };
-    const kind = reverse ? mirrored[lastFind.kind] : lastFind.kind;
-    resetMotionMemory();
-    return moveFindChar(editor, kind, lastFind.target, count, kind === "t" || kind === "T");
+  function parserIdle(): boolean {
+    return !countBuffer && !prefix && !pendingOperator && !jumpInput && !jumpSession;
   }
 
   function reportUnhandled(sequence: string): void {
@@ -1688,9 +1401,12 @@ export function createVimLite(
   }
 
   function resetMotionMemory(): void {
-    normalGoalColumns = null;
-    visualGoalColumns = null;
+    goals = null;
   }
+
+  // -------------------------------------------------------------------------
+  // s/S jump
+  // -------------------------------------------------------------------------
 
   function clearJumpInputTimer(): void {
     if (jumpInput?.timer != null) {
@@ -1701,17 +1417,37 @@ export function createVimLite(
 
   function cancelJump(): void {
     const hadJump = jumpInput !== null || jumpSession !== null;
-    pending = "";
-    countBuffer = "";
-    pendingOperator = null;
-    pendingOperatorGoto = null;
-    pendingFindKind = null;
-    pendingCount = 1;
+    resetParser();
     clearJumpInputTimer();
     jumpInput = null;
     jumpSession = null;
     jumpLabelPrefix = "";
     if (hadJump) clearVimJump(editor.view);
+  }
+
+  function jumpCursor(): number {
+    return (mode === "visual" || mode === "visual-line")
+      ? (visualHead ?? currentHead(editor)) : currentHead(editor);
+  }
+
+  function applyJumpSelection(session: VimJumpSession, label: string): boolean {
+    if (mode !== "visual" && mode !== "visual-line") {
+      return applyVimJump(editor.view, session, label);
+    }
+    const candidate = session.candidates.find((entry) => entry.label === label);
+    clearVimJump(editor.view);
+    if (!candidate || editor.view.state.doc !== session.doc) return false;
+    const states = visualStates();
+    const mainIndex = Math.min(editor.view.state.selection.mainIndex, states.length - 1);
+    states[mainIndex] = {
+      ...states[mainIndex]!,
+      head: normalEditorPosition(editor, candidate.from),
+      scope: null,
+      exclusiveWordEnd: false,
+    };
+    renderVisualStates(states);
+    editor.view.focus();
+    return true;
   }
 
   function finishJumpInput(): boolean {
@@ -1724,13 +1460,13 @@ export function createVimLite(
       return true;
     }
 
-    const session = beginVimJump(editor.view, input.needle, input.direction);
+    const session = beginVimJump(editor.view, input.needle, input.direction, jumpCursor());
     if (session.candidates.length === 0) {
       clearVimJump(editor.view);
       return true;
     }
     if (session.candidates.length === 1) {
-      applyVimJump(editor.view, session, session.candidates[0]!.label);
+      applyJumpSelection(session, session.candidates[0]!.label);
       return true;
     }
     jumpSession = session;
@@ -1750,10 +1486,14 @@ export function createVimLite(
       clearVimJump(editor.view);
       return;
     }
-    previewVimJump(editor.view, input.needle, input.direction);
+    previewVimJump(editor.view, input.needle, input.direction, jumpCursor());
   }
 
   function startJumpInput(direction: VimJumpDirection): void {
+    // A timed jump is navigation, not part of the next repeatable edit. Its
+    // input may finish without another key, so keeping the current recording
+    // open would accidentally prepend the jump to a later `x`/`d`/`c`.
+    recording = null;
     cancelJump();
     jumpInput = { direction, needle: "", timer: null };
     resetMotionMemory();
@@ -1784,6 +1524,671 @@ export function createVimLite(
     scheduleJumpInputTimeout(input);
     return true;
   }
+
+  function handleJumpSessionKey(key: string): boolean {
+    const session = jumpSession!;
+    if (key.length !== 1 || isUppercaseAsciiLetter(key)) {
+      cancelJump();
+      return true;
+    }
+    jumpLabelPrefix += key;
+    const exact = session.candidates.find((candidate) => candidate.label === jumpLabelPrefix);
+    if (exact) {
+      jumpSession = null;
+      jumpLabelPrefix = "";
+      applyJumpSelection(session, exact.label);
+    } else {
+      const candidates = narrowVimJump(editor.view, session, jumpLabelPrefix);
+      if (candidates.length === 0) cancelJump();
+    }
+    return true;
+  }
+
+  // -------------------------------------------------------------------------
+  // Motions
+  // -------------------------------------------------------------------------
+
+  function verticalGoalFor(head: number, row: VimRow): VerticalGoal {
+    if (!row.logical) {
+      const x = screenColumnAt(editor.view, head);
+      if (x != null) return { kind: "pixel", value: x };
+    }
+    return { kind: "column", value: Math.max(0, head - row.from) };
+  }
+
+  function positionAtGoal(row: VimRow, goal: VerticalGoal): number {
+    const text = doc(editor);
+    if (row.from >= row.to) return row.from;
+    const last = lastCharOfRow(text, row);
+    let pos: number;
+    if (goal.kind === "eol") pos = last;
+    else if (goal.kind === "pixel") pos = screenPosAtColumn(editor.view, row, goal.value);
+    else pos = row.from + goal.value;
+    return normalCharPosition(text, clamp(pos, row.from, last));
+  }
+
+  /**
+   * An org-env heading's source line is replaced by its rendered title; a
+   * vertical motion that lands in it belongs on the title anchor.
+   */
+  function snapVerticalLanding(pos: number): number {
+    if (!editor.view.dom.classList.contains("aaronnote-visual-typography")) return pos;
+    const heading = getOrgEnvHeadingRanges(editor.view.state)
+      .find((range) => pos >= range.from && pos <= range.to);
+    return heading ? heading.anchor : pos;
+  }
+
+  function verticalMotion(
+    head: number,
+    dir: -1 | 1,
+    count: number,
+    goal: VerticalGoal | null,
+    logical: boolean,
+    scope: Scope | null,
+  ): MotionResult | null {
+    const start = vimRowAt(editor, head, 1, { scope, logical });
+    const resolved = goal ?? verticalGoalFor(head, start);
+    const { row, steps } = stepRows(editor, start, count, dir);
+    if (steps === 0) return null;
+    return {
+      pos: snapVerticalLanding(positionAtGoal(row, resolved)),
+      kind: "linewise",
+      logical,
+      goal: resolved,
+    };
+  }
+
+  /** H/M/L: a row of the visible viewport, or of the document without layout. */
+  function viewportRow(which: "top" | "middle" | "bottom", count: number): VimRow | null {
+    const view = editor.view;
+    const text = doc(editor);
+    const content = view.contentDOM.getBoundingClientRect();
+    if (content.width <= 0 || content.height <= 0) {
+      const number = which === "top"
+        ? Math.min(count, text.lines)
+        : which === "bottom"
+          ? Math.max(1, text.lines - count + 1)
+          : Math.floor((1 + text.lines) / 2);
+      return vimRowAt(editor, text.line(number).from, 1, { scope: null });
+    }
+    const scroller = view.scrollDOM.getBoundingClientRect();
+    const top = Math.max(scroller.top, content.top);
+    const bottom = Math.min(scroller.bottom, content.bottom);
+    if (bottom <= top) return null;
+    const y = which === "top" ? top + 2 : which === "bottom" ? bottom - 2 : (top + bottom) / 2;
+    const pos = view.posAtCoords({ x: content.left + 1, y }, false);
+    const row = vimRowAt(editor, pos, 1, { scope: null });
+    if (which === "middle") return row;
+    return stepRows(editor, row, count - 1, which === "top" ? 1 : -1).row;
+  }
+
+  function rowLanding(row: VimRow): number {
+    return row.lineStart ? rowFirstNonBlank(doc(editor), row) : row.from;
+  }
+
+  function lineNumberLanding(lineNumber: number): number {
+    const text = doc(editor);
+    return firstNonBlankPosition(text, text.line(clamp(lineNumber, 1, text.lines)).from);
+  }
+
+  function bracketMatch(head: number): number | null {
+    const state = editor.view.state;
+    const line = state.doc.lineAt(head);
+    for (let at = head; at < line.to; at++) {
+      const object = renderedObjectAtPosition(editor, at);
+      if (object) {
+        at = object.to - 1;
+        continue;
+      }
+      const ch = state.doc.sliceString(at, at + 1);
+      if (!"()[]{}".includes(ch)) continue;
+      const opening = "([{".includes(ch);
+      const match = opening ? matchBrackets(state, at, 1) : matchBrackets(state, at + 1, -1);
+      if (!match?.matched || !match.end) return null;
+      if (renderedObjectAtPosition(editor, match.end.from)) return null;
+      return match.end.from;
+    }
+    return null;
+  }
+
+  function runSearch(head: number, forward: boolean, count: number): number | null {
+    const spec = lastSearch;
+    if (!spec) return null;
+    const direction = spec.forward === forward;
+    if (spec.source === "word") return searchWord(
+      doc(editor), head, spec.word, direction, count,
+      (at) => renderedObjectAtPosition(editor, at),
+    );
+    let pos: number | null = head;
+    for (let step = 0; step < count && pos != null; step++) {
+      pos = options.searchNext?.(pos, direction ? 1 : -1) ?? null;
+    }
+    return pos;
+  }
+
+  /**
+   * The position TOKEN moves HEAD to, or null when the motion fails (`f` with
+   * no target, `j` on the last row).  Returns undefined for a token that is not
+   * a motion at all.
+   */
+  function motion(
+    token: string,
+    head: number,
+    context: {
+      count: number;
+      explicit: boolean;
+      goal: VerticalGoal | null;
+      find: FindSpec | null;
+      scope: Scope | null;
+    },
+  ): MotionResult | null | undefined {
+    const text = doc(editor);
+    const { count } = context;
+    switch (token) {
+      case "h": {
+        let pos = head;
+        for (let step = 0; step < count; step++) {
+          const target = moveNormalCharPosition(text, pos, -1);
+          pos = snapRenderedObjectMotion(editor, pos, target, -1);
+        }
+        return { pos, kind: "exclusive" };
+      }
+      case "l": {
+        let pos = head;
+        for (let step = 0; step < count; step++) {
+          const target = moveNormalCharPosition(text, pos, 1);
+          pos = snapRenderedObjectMotion(editor, pos, target, 1);
+        }
+        return { pos, kind: "exclusive" };
+      }
+      case "j":
+      case "k":
+        return verticalMotion(head, token === "j" ? 1 : -1, count, context.goal, false, context.scope);
+      case "gj":
+      case "gk":
+        return verticalMotion(head, token === "gj" ? 1 : -1, count, context.goal, true, context.scope);
+      case "0":
+        return { pos: vimRowAt(editor, head, 1, { scope: context.scope }).from, kind: "exclusive" };
+      case "g0":
+        return { pos: vimRowAt(editor, head, 1, { scope: context.scope, logical: true }).from, kind: "exclusive" };
+      case "^":
+        return {
+          pos: rowFirstNonBlank(text, vimRowAt(editor, head, 1, { scope: context.scope, logical: true })),
+          kind: "exclusive",
+        };
+      case "g^":
+        return {
+          pos: rowFirstNonBlank(text, vimRowAt(editor, head, 1, { scope: context.scope })),
+          kind: "exclusive",
+        };
+      case "$":
+      case "g$": {
+        const logical = token === "g$";
+        const start = vimRowAt(editor, head, 1, { scope: context.scope, logical });
+        const { row } = stepRows(editor, start, count - 1, 1);
+        return { pos: lastCharOfRow(text, row), kind: "inclusive", goal: { kind: "eol" } };
+      }
+      case "w":
+      case "W": {
+        let pos = head;
+        const objectAt = (at: number) => renderedObjectAtPosition(editor, at);
+        for (let step = 0; step < count; step++) {
+          const target = wordMotionPosition(text, pos, 1, token === "W", objectAt);
+          pos = snapRenderedObjectMotion(editor, pos, target, 1);
+        }
+        return { pos, kind: "exclusive" };
+      }
+      case "b":
+      case "B": {
+        let pos = head;
+        const objectAt = (at: number) => renderedObjectAtPosition(editor, at);
+        for (let step = 0; step < count; step++) {
+          const target = wordMotionPosition(text, pos, -1, token === "B", objectAt);
+          pos = snapRenderedObjectMotion(editor, pos, target, -1);
+        }
+        return { pos, kind: "exclusive" };
+      }
+      case "e":
+      case "E": {
+        let pos = head;
+        const objectAt = (at: number) => renderedObjectAtPosition(editor, at);
+        for (let step = 0; step < count; step++) {
+          pos = wordEndPosition(text, pos, token === "E", objectAt);
+        }
+        return { pos: snapRenderedObjectMotion(editor, head, pos, 1), kind: "inclusive" };
+      }
+      case "ge":
+      case "gE": {
+        let pos = head;
+        const objectAt = (at: number) => renderedObjectAtPosition(editor, at);
+        for (let step = 0; step < count; step++) {
+          pos = wordEndBackwardPosition(text, pos, token === "gE", objectAt);
+        }
+        return { pos: snapRenderedObjectMotion(editor, head, pos, -1), kind: "inclusive" };
+      }
+      case "{":
+      case "}": {
+        let pos = head;
+        for (let step = 0; step < count; step++) pos = paragraphPosition(text, pos, token === "}" ? 1 : -1);
+        return { pos, kind: "exclusive", exclusiveAdjust: true };
+      }
+      case "gg":
+        return { pos: lineNumberLanding(context.explicit ? count : 1), kind: "linewise", logical: true };
+      case "G":
+        return { pos: lineNumberLanding(context.explicit ? count : text.lines), kind: "linewise", logical: true };
+      case "+":
+      case "-": {
+        const line = text.lineAt(head).number + (token === "+" ? count : -count);
+        if (line < 1 || line > text.lines) return null;
+        return { pos: lineNumberLanding(line), kind: "linewise", logical: true };
+      }
+      case "_": {
+        const line = text.lineAt(head).number + count - 1;
+        return { pos: lineNumberLanding(Math.min(line, text.lines)), kind: "linewise", logical: true };
+      }
+      case "H":
+      case "M":
+      case "L": {
+        const row = viewportRow(token === "H" ? "top" : token === "L" ? "bottom" : "middle", count);
+        return row ? { pos: rowLanding(row), kind: "linewise" } : null;
+      }
+      case "%": {
+        if (context.explicit) {
+          const line = Math.ceil((count * text.lines) / 100);
+          return { pos: lineNumberLanding(clamp(line, 1, text.lines)), kind: "linewise", logical: true };
+        }
+        const pos = bracketMatch(head);
+        return pos == null ? null : { pos, kind: "inclusive" };
+      }
+      case "f":
+      case "F":
+      case "t":
+      case "T":
+      case ";":
+      case ",": {
+        let find = context.find;
+        let skipAdjacent = false;
+        if (token === ";" || token === ",") {
+          if (!lastFind) return null;
+          const mirrored: Record<VimFindKind, VimFindKind> = { f: "F", F: "f", t: "T", T: "t" };
+          find = { kind: token === "," ? mirrored[lastFind.kind] : lastFind.kind, target: lastFind.target };
+          skipAdjacent = find.kind === "t" || find.kind === "T";
+        }
+        if (!find) return null;
+        const row = vimRowAt(editor, head, 1, { scope: context.scope });
+        const pos = findCharPosition(
+          text, head, find.kind, find.target, count, skipAdjacent, row,
+          (at) => renderedObjectAtPosition(editor, at),
+        );
+        if (pos == null) return null;
+        return { pos, kind: find.kind === "f" || find.kind === "t" ? "inclusive" : "exclusive" };
+      }
+      case "n":
+      case "N": {
+        const pos = runSearch(head, token === "n", count);
+        return pos == null ? null : { pos, kind: "exclusive", exclusiveAdjust: true };
+      }
+      case "*":
+      case "#": {
+        const objectAt = (at: number) => renderedObjectAtPosition(editor, at);
+        const word = searchWordAt(text, head, objectAt);
+        if (!word) return null;
+        lastSearch = { source: "word", word, forward: token === "*" };
+        const pos = searchWord(text, head, word, token === "*", count, objectAt);
+        return pos == null ? null : { pos, kind: "exclusive", exclusiveAdjust: true };
+      }
+      default:
+        return undefined;
+    }
+  }
+
+  function textObject(token: string, head: number, count: number): TextObjectRange | null | undefined {
+    if (token.length !== 2) return undefined;
+    const kind = token[0];
+    const object = token[1]!;
+    if (kind !== "i" && kind !== "a") return undefined;
+    const inner = kind === "i";
+    const text = doc(editor);
+    if (object === "w" || object === "W") {
+      const rendered = renderedObjectAtPosition(editor, head);
+      if (!rendered) return wordObject(text, head, count, inner, object === "W");
+      const objectAt = (at: number) => renderedObjectAtPosition(editor, at);
+      let to = rendered.to;
+      for (let step = 1; step < count; step++) {
+        const next = wordMotionPosition(text, to, 1, object === "W", objectAt);
+        if (next <= to || next >= text.length) break;
+        const nextObject = objectAt(next);
+        to = nextObject?.to ?? visualCharEndPosition(text, currentWordEnd(text, next, object === "W", objectAt));
+      }
+      let from = rendered.from;
+      if (!inner) {
+        const trailing = to;
+        while (to < text.length && /\s/u.test(docCluster(text, to))) to = graphemeAfter(text, to);
+        if (to === trailing) {
+          while (from > 0 && /\s/u.test(docCluster(text, previousGraphemePosition(text, from)))) {
+            from = previousGraphemePosition(text, from);
+          }
+        }
+      }
+      return { from, to, linewise: false };
+    }
+    if (object === "p") return paragraphObject(text, head, count, inner);
+    if (QUOTE_OBJECTS.has(object)) return quoteObject(text, head, object, inner);
+    const brackets = BRACKET_OBJECTS[object];
+    if (brackets) return bracketObject(text, head, brackets[0], brackets[1], inner, count);
+    return undefined;
+  }
+
+  // -------------------------------------------------------------------------
+  // Operators
+  // -------------------------------------------------------------------------
+
+  /**
+   * The range OPERATOR acts on for one caret after MOTION.  Vim's
+   * exclusive/inclusive distinction is the whole game here: `dw` stops before
+   * the next word while `de` eats the word's last character.
+   */
+  function operatorRange(
+    op: VimOperator,
+    token: string,
+    head: number,
+    result: MotionResult,
+    count: number,
+  ): OpRange {
+    const text = doc(editor);
+    const start = normalCharPosition(text, head);
+    if (result.kind === "linewise" || op === ">" || op === "<") {
+      return { kind: "line", span: spanBetween(editor, start, result.pos, { logical: result.logical, scope: null }) };
+    }
+    if (token === "l" || token === "h") {
+      const span = characterSpan(editor, start, count, token === "h");
+      return { kind: "char", from: span?.from ?? start, to: span?.to ?? start };
+    }
+    if (token === "w" || token === "W") {
+      const big = token === "W";
+      // `cw` is Vim's famous exception: on a non-blank it behaves like `ce`,
+      // changing to the end of the word instead of up to the start of the next
+      // one, so it never eats the space that separates them.
+      if (op === "c" && wordCategory(docCluster(text, start), big) !== "space") {
+        const objectAt = (at: number) => renderedObjectAtPosition(editor, at);
+        let end = currentWordEnd(text, start, big, objectAt);
+        for (let step = 1; step < count; step++) end = wordEndPosition(text, end, big, objectAt);
+        return { kind: "char", from: start, to: visualObjectEndPosition(editor, end) };
+      }
+      // Stopping at the start of a later line would swallow the newline, which
+      // Vim never does for `dw` on the last word of a line.
+      const line = text.lineAt(start);
+      const target = text.lineAt(result.pos);
+      if (target.number > line.number && result.pos === target.from) {
+        return { kind: "char", from: start, to: Math.max(start, text.line(target.number - 1).to) };
+      }
+      return { kind: "char", from: Math.min(start, result.pos), to: Math.max(start, result.pos) };
+    }
+    const from = Math.min(start, result.pos);
+    const max = Math.max(start, result.pos);
+    if (result.kind === "inclusive") {
+      // An inclusive motion owns the character it lands on — but never the
+      // newline of an empty line, which is how `d$` there keeps the line.
+      const end = max < text.lineAt(max).to ? visualObjectEndPosition(editor, max) : max;
+      return { kind: "char", from, to: end };
+    }
+    if (result.exclusiveAdjust && result.pos > start) {
+      // `:h exclusive-linewise`: an exclusive motion ending in column 0 ends at
+      // the previous line's end instead, and becomes linewise when it also
+      // started at or before the first non-blank.
+      const endLine = text.lineAt(result.pos);
+      if (result.pos === endLine.from && endLine.number > text.lineAt(start).number) {
+        const previous = text.line(endLine.number - 1);
+        if (start <= firstNonBlankPosition(text, start)) {
+          return { kind: "line", span: spanBetween(editor, start, previous.from, { logical: true, scope: null }) };
+        }
+        return { kind: "char", from, to: previous.to };
+      }
+    }
+    return { kind: "char", from, to: max };
+  }
+
+  function textObjectRange(range: TextObjectRange): OpRange {
+    if (range.linewise) {
+      return { kind: "line", span: spanBetween(editor, range.from, range.to, { logical: true, scope: null }) };
+    }
+    return { kind: "char", from: range.from, to: range.to };
+  }
+
+  function mergeSpans(spans: readonly LineSpan[]): LineSpan[] {
+    const text = doc(editor);
+    const sorted = [...spans].sort((left, right) => left.deleteFrom - right.deleteFrom);
+    const merged: LineSpan[] = [];
+    for (const span of sorted) {
+      const previous = merged[merged.length - 1];
+      if (previous && span.deleteFrom < previous.deleteTo) {
+        const from = Math.min(previous.from, span.from);
+        const to = Math.max(previous.to, span.to);
+        const raw = text.sliceString(from, to);
+        merged[merged.length - 1] = {
+          from,
+          to,
+          deleteFrom: Math.min(previous.deleteFrom, span.deleteFrom),
+          deleteTo: Math.max(previous.deleteTo, span.deleteTo),
+          changeFrom: Math.min(previous.changeFrom, span.changeFrom),
+          changeTo: Math.max(previous.changeTo, span.changeTo),
+          register: raw.endsWith("\n") ? raw : `${raw}\n`,
+          wholeLines: previous.wholeLines && span.wholeLines,
+        };
+      } else {
+        merged.push(span);
+      }
+    }
+    return merged;
+  }
+
+  /**
+   * Apply OP to RANGES (all charwise or all linewise).  HEADS are the carets
+   * before the command, used where Vim leaves the cursor in place.
+   */
+  function applyOperator(
+    op: VimOperator,
+    ranges: readonly OpRange[],
+    heads: readonly number[],
+    count = 1,
+  ): void {
+    resetMotionMemory();
+    const state = editor.view.state;
+    const text = state.doc;
+    const linewise = ranges.some((range) => range.kind === "line");
+    const spans = linewise
+      ? mergeSpans(ranges.flatMap((range) => range.kind === "line" ? [range.span] : []))
+      : [];
+    const chars = linewise
+      ? []
+      : uniqueRanges(ranges.flatMap((range) => range.kind === "char" ? [range] : []));
+    const revealed = singleRevealedFormula(editor);
+
+    if (op === ">" || op === "<") {
+      const lineRanges = linewise
+        ? spans.map((span) => ({ from: span.from, to: Math.max(span.from, span.to - (span.to > span.from && text.sliceString(span.to - 1, span.to) === "\n" ? 1 : 0)) }))
+        : chars;
+      if (lineRanges.length === 0) return;
+      markChange();
+      const firstLine = text.lineAt(lineRanges[0]!.from).from;
+      editor.view.dispatch({
+        selection: EditorSelection.create(lineRanges.map((range) => EditorSelection.range(
+          text.lineAt(range.from).from,
+          text.lineAt(Math.max(range.from, range.to)).to,
+        ))),
+      });
+      for (let step = 0; step < count; step++) options.onIndent?.(op === ">" ? 1 : -1);
+      setNormalCursorPositions(editor, [firstNonBlankPosition(doc(editor), firstLine)], 0);
+      return;
+    }
+
+    if (op === "y") {
+      if (linewise) {
+        yank(spans.map((span) => span.register), "linewise");
+        setNormalCursorPositions(editor, heads.map((head, index) => {
+          const span = spans[Math.min(index, spans.length - 1)]!;
+          return head >= span.from && head < Math.max(span.to, span.from + 1)
+            ? head
+            : firstNonBlankPosition(text, span.from);
+        }));
+      } else {
+        yank(chars.map((range) => text.sliceString(range.from, range.to)));
+        // Vim parks the caret at the start of what it yanked.
+        if (chars.length > 0) setNormalCursorPositions(editor, chars.map((range) => range.from));
+      }
+      return;
+    }
+
+    if (op === "g~" || op === "gu" || op === "gU") {
+      const targets = linewise ? spans.map((span) => ({ from: span.from, to: span.to })) : chars;
+      if (targets.length === 0) return;
+      const specs = caseChangeSpecs(editor, targets, op);
+      if (specs.length === 0) return;
+      markChange();
+      const change = state.changes(specs);
+      dispatchEdit(editor, {
+        changes: change,
+        selection: EditorSelection.create(
+          targets.map((target, index) => {
+            const head = heads[index] ?? target.from;
+            const at = linewise && head >= target.from && head < target.to ? head : target.from;
+            return EditorSelection.cursor(change.mapPos(at, -1));
+          }),
+          mainIndexFor(editor, targets.length),
+        ),
+      });
+      normalizeNormalSelections(false);
+      return;
+    }
+
+    // d and c
+    if (linewise) {
+      if (spans.length === 0) return;
+      markChange();
+      yank(spans.map((span) => span.register), "linewise");
+      if (op === "c") {
+        // A linewise change keeps one line — and its indentation — to type into.
+        const change = state.changes(spans.map((span) => ({ from: span.changeFrom, to: span.changeTo })));
+        dispatchEdit(editor, {
+          changes: change,
+          selection: EditorSelection.create(
+            spans.map((span) => EditorSelection.cursor(change.mapPos(span.changeFrom, -1))),
+            mainIndexFor(editor, spans.length),
+          ),
+          scrollIntoView: true,
+        });
+        restoreRevealedFormula(editor, revealed);
+        enterInsert();
+        return;
+      }
+      const change = state.changes(spans.map((span) => ({ from: span.deleteFrom, to: span.deleteTo })));
+      const applied = change.apply(text);
+      dispatchEdit(editor, {
+        changes: change,
+        selection: EditorSelection.create(
+          spans.map((span) => {
+            const at = change.mapPos(span.deleteFrom, -1);
+            return EditorSelection.cursor(
+              span.wholeLines ? linewiseLandingPosition(applied, at) : normalCharPosition(applied, at),
+            );
+          }),
+          mainIndexFor(editor, spans.length),
+        ),
+        scrollIntoView: true,
+      });
+      restoreRevealedFormula(editor, revealed);
+      return;
+    }
+
+    if (chars.length === 0) {
+      // A motion that selects nothing is still a completed command; `c` still
+      // opens Insert where Vim would, the others simply do nothing.
+      if (op === "c") {
+        markChange();
+        enterInsert();
+      }
+      return;
+    }
+    markChange();
+    yank(chars.map((range) => text.sliceString(range.from, range.to)));
+    const change = state.changes(chars.map((range) => ({ from: range.from, to: range.to })));
+    const applied = change.apply(text);
+    dispatchEdit(editor, {
+      changes: change,
+      selection: EditorSelection.create(
+        chars.map((range) => {
+          const at = change.mapPos(range.from, -1);
+          return EditorSelection.cursor(op === "c" ? at : normalCharPosition(applied, at));
+        }),
+        mainIndexFor(editor, chars.length),
+      ),
+      scrollIntoView: true,
+    });
+    restoreRevealedFormula(editor, revealed);
+    if (op === "c") enterInsert();
+  }
+
+  function heads(): number[] {
+    return editor.view.state.selection.ranges.map((range) => range.head);
+  }
+
+  function runOperatorMotion(
+    operator: { op: VimOperator; count: number; explicit: boolean },
+    token: string,
+    find: FindSpec | null,
+  ): void {
+    const explicit = operator.explicit || countBuffer.length > 0;
+    const count = clamp(operator.count * takeCount(), 1, MAX_VIM_COUNT);
+    const sequence = `${operator.op}${token}${find ? find.target : ""}`;
+    const doubled = token === operator.op
+      || (operator.op.length === 2 && token === operator.op[1]);
+    const carets = heads();
+    if (doubled) {
+      // `dd`, `3yy`, `cc`, `>>`, `guu`: COUNT Vim lines from each caret.
+      applyOperator(
+        operator.op,
+        carets.map((head) => ({ kind: "line", span: countedSpan(editor, head, count) })),
+        carets,
+      );
+      return;
+    }
+
+    const object = textObject(token, carets[0] ?? 0, count);
+    if (object !== undefined) {
+      const ranges = carets.map((head) => textObject(token, head, count));
+      if (ranges.some((range) => range == null)) {
+        reportUnhandled(sequence);
+        return;
+      }
+      applyOperator(operator.op, (ranges as TextObjectRange[]).map(textObjectRange), carets);
+      return;
+    }
+
+    const results = carets.map((head) => motion(token, head, {
+      count,
+      explicit,
+      goal: null,
+      find,
+      scope: null,
+    }));
+    if (results[0] === undefined) {
+      reportUnhandled(sequence);
+      return;
+    }
+    if (results.some((result) => result == null)) {
+      reportUnhandled(sequence);
+      return;
+    }
+    applyOperator(
+      operator.op,
+      carets.map((head, index) => operatorRange(operator.op, token, head, results[index]!, count)),
+      carets,
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Mode transitions
+  // -------------------------------------------------------------------------
 
   function normalizeNormalSelections(
     collapse: boolean,
@@ -1832,17 +2237,39 @@ export function createVimLite(
     if (!same) editor.view.dispatch({ selection, scrollIntoView: true });
   }
 
+  function rememberVisual(): void {
+    if (mode === "visual-line" && visualLineStates) {
+      lastVisual = { mode, states: visualLineStates.map((state) => ({ ...state })) };
+    } else if (mode === "visual") {
+      lastVisual = { mode, states: currentVisualCharStates().map((state) => ({ ...state, scope: null })) };
+    }
+  }
+
   function setMode(next: VimLiteMode): void {
     const previous = mode;
     const changed = mode !== next;
     const leavingVisual = previous === "visual" || previous === "visual-line";
     const exitHead = leavingVisual ? (visualHead ?? currentHead(editor)) : currentHead(editor);
+    if (leavingVisual && next !== previous) rememberVisual();
     mode = next;
+    editor.view.dom.dataset.vimMode = next;
+    if (changed && (next === "insert" || previous === "insert")) {
+      // Vim state is independent of the reader's Source/Markdown choice. The
+      // local widgets still need one update when Insert changes whether the
+      // object under the caret shows its editable Markdown source.
+      editor.view.dispatch({ effects: refreshViewportDecorations.of(editor.view.visibleRanges) });
+    }
     cancelJump();
-    visualAnchor = null;
     visualHead = null;
+    visualCharStates = null;
+    visualCharSelection = null;
+    visualCharDoc = null;
     visualLineStates = null;
-    if (next !== "insert" || previous !== "insert") insertEntry = null;
+    if (next !== "insert" || previous !== "insert") {
+      insertEntry = null;
+      insertSession = null;
+      pendingInsertChange = null;
+    }
     resetMotionMemory();
     if (leavingVisual && next !== "visual" && next !== "visual-line") {
       if (next === "normal") normalizeNormalSelections(true, exitHead);
@@ -1856,6 +2283,25 @@ export function createVimLite(
     if (changed) options.onModeChange?.(mode);
   }
 
+  /**
+   * Leave Visual for a command that sets its own carets: the selection is left
+   * for the command's transaction to replace instead of being collapsed first.
+   */
+  function leaveVisualForCommand(): void {
+    rememberVisual();
+    const changed = mode !== "normal";
+    mode = "normal";
+    editor.view.dom.dataset.vimMode = mode;
+    cancelJump();
+    visualHead = null;
+    visualCharStates = null;
+    visualCharSelection = null;
+    visualCharDoc = null;
+    visualLineStates = null;
+    resetMotionMemory();
+    if (changed) options.onModeChange?.(mode);
+  }
+
   function insertExitPosition(text: Text, pos: number): number {
     const cursor = clamp(pos, 0, text.length);
     const line = text.lineAt(cursor);
@@ -1863,7 +2309,7 @@ export function createVimLite(
     return previousGraphemePosition(text, Math.min(cursor, line.to));
   }
 
-  function enterInsert(returnPosWhenUnchanged: number | null = null): void {
+  function enterInsert(returnPosWhenUnchanged: number | null = null, count = 1): void {
     setMode("insert");
     insertEntry = returnPosWhenUnchanged == null
       ? null
@@ -1872,10 +2318,62 @@ export function createVimLite(
           boundary: currentHead(editor),
           returnPos: normalCharPosition(doc(editor), returnPosWhenUnchanged),
         };
+    insertSession = { doc: doc(editor), head: currentHead(editor), count };
+  }
+
+  /**
+   * What the Insert session typed, as a replayable edit around the caret it
+   * started at, or null when it cannot be expressed that way (the caret was
+   * moved elsewhere and edited there).
+   */
+  function insertSessionEdit(): InsertReplay | null {
+    const session = insertSession;
+    if (!session) return null;
+    const before = session.doc.toString();
+    const after = doc(editor).toString();
+    if (before === after) return { deleteBefore: 0, deleteAfter: 0, text: "" };
+    const limit = Math.min(before.length, after.length);
+    let prefixLength = 0;
+    while (prefixLength < limit && before[prefixLength] === after[prefixLength]) prefixLength++;
+    prefixLength = Math.min(prefixLength, session.head);
+    let suffixLength = 0;
+    const suffixLimit = limit - prefixLength;
+    while (suffixLength < suffixLimit
+        && before[before.length - 1 - suffixLength] === after[after.length - 1 - suffixLength]) {
+      suffixLength++;
+    }
+    const removedTo = before.length - suffixLength;
+    if (removedTo < session.head) return null;
+    return {
+      deleteBefore: session.head - prefixLength,
+      deleteAfter: removedTo - session.head,
+      text: after.slice(prefixLength, after.length - suffixLength),
+    };
+  }
+
+  /** `3ifoo<Esc>` types `foo` three times. */
+  function repeatInsertedText(edit: InsertReplay, times: number): void {
+    if (times <= 0 || !edit.text || edit.deleteBefore || edit.deleteAfter) return;
+    const state = editor.view.state;
+    const insert = edit.text.repeat(times);
+    dispatchEdit(editor, {
+      changes: state.selection.ranges.map((range) => ({ from: range.head, insert })),
+      selection: EditorSelection.create(
+        state.selection.ranges.map((range, index) => EditorSelection.cursor(
+          range.head + insert.length * (index + 1),
+        )),
+        state.selection.mainIndex,
+      ),
+    });
   }
 
   function escapeToNormal(): void {
     const leavingInsert = mode === "insert";
+    if (leavingInsert && insertSession) {
+      const edit = insertSessionEdit();
+      if (edit && insertSession.count > 1) repeatInsertedText(edit, insertSession.count - 1);
+      if (pendingInsertChange && edit) lastChange = { keys: pendingInsertChange, insert: edit };
+    }
     const visualExitPositions = mode === "visual-line"
       ? visualLineStates?.map((state) => state.head) ?? null
       : mode === "visual"
@@ -1892,10 +2390,8 @@ export function createVimLite(
         const contentFrom = formula?.contentFrom ?? source.from;
         const contentTo = formula?.contentTo ?? source.to;
         const candidate = insertExitPosition(text, currentHead(editor));
-        // Esc is a Vim mode transition, not a request to commit/collapse the
-        // locally revealed TeX source. Keep the Normal cursor on formula
-        // content (never on a \( / \[ fence), including display math whose
-        // closing fence begins on the next line.
+        // Keep the candidate inside TeX content. Returning to Normal restores
+        // rendered mode and then snaps it onto the whole formula object.
         target = candidate >= contentTo && contentTo > contentFrom
           ? previousGraphemePosition(text, contentTo)
           : clamp(candidate, contentFrom, contentTo);
@@ -1919,17 +2415,27 @@ export function createVimLite(
     }
   }
 
-  type VisualCharState = { anchor: number; head: number };
-  type VisualLineState = VisualCharState & {
-    scope: { from: number; to: number } | null;
-  };
+  // -------------------------------------------------------------------------
+  // Visual mode
+  // -------------------------------------------------------------------------
 
-  function currentVisualCharStates(): VisualCharState[] {
+  function currentVisualCharStates(): VisualState[] {
+    if (mode === "visual" && visualCharStates && visualCharDoc === doc(editor)
+        && visualCharSelection?.eq(editor.view.state.selection)) {
+      return visualCharStates.map((state) => ({ ...state }));
+    }
+    visualCharStates = null;
+    visualCharSelection = null;
+    visualCharDoc = null;
+    return readVisualCharStatesFromSelection();
+  }
+
+  function readVisualCharStatesFromSelection(): VisualState[] {
     const text = doc(editor);
     return editor.view.state.selection.ranges.map((range) => {
       if (range.empty) {
         const pos = normalEditorPosition(editor, range.head);
-        return { anchor: pos, head: pos };
+        return { anchor: pos, head: pos, scope: null };
       }
       const forward = range.head > range.anchor;
       const rawAnchor = normalCharPosition(
@@ -1941,10 +2447,17 @@ export function createVimLite(
         forward ? previousGraphemePosition(text, range.head) : range.head,
       );
       return {
-        anchor: staticMathObjectAtPosition(editor, rawAnchor)?.from ?? rawAnchor,
-        head: staticMathObjectAtPosition(editor, rawHead)?.from ?? rawHead,
+        anchor: renderedObjectAtPosition(editor, rawAnchor)?.from ?? rawAnchor,
+        head: renderedObjectAtPosition(editor, rawHead)?.from ?? rawHead,
+        scope: null,
       };
     });
+  }
+
+  function visualStates(): VisualState[] {
+    return mode === "visual-line" && visualLineStates
+      ? visualLineStates.map((state) => ({ ...state }))
+      : currentVisualCharStates();
   }
 
   /**
@@ -1963,92 +2476,88 @@ export function createVimLite(
       : { selection, scrollIntoView: true });
   }
 
-  function renderVisualCharStates(states: readonly VisualCharState[]): void {
+  function renderVisualCharStates(states: readonly VisualState[]): void {
     if (states.length === 0) return;
     const mainIndex = Math.min(editor.view.state.selection.mainIndex, states.length - 1);
-    const main = states[mainIndex]!;
-    visualAnchor = main.anchor;
-    visualHead = main.head;
-    dispatchVisualSelection(EditorSelection.create(states.map((state) => (
-      state.head >= state.anchor
-        ? EditorSelection.range(state.anchor, visualObjectEndPosition(editor, state.head))
-        : EditorSelection.range(visualObjectEndPosition(editor, state.anchor), state.head)
-    )), mainIndex));
-  }
-
-  function setVisualHead(head: number): void {
-    const states = currentVisualCharStates();
-    const mainIndex = Math.min(editor.view.state.selection.mainIndex, states.length - 1);
-    const normalized = normalCharPosition(doc(editor), head);
-    states[mainIndex] = {
-      anchor: states[mainIndex]?.anchor ?? normalized,
-      head: staticMathObjectAtPosition(editor, normalized)?.from ?? normalized,
-    };
-    renderVisualCharStates(states);
-  }
-
-  function swapVisualEnds(): void {
-    renderVisualCharStates(currentVisualCharStates().map((state) => ({
-      anchor: state.head,
-      head: state.anchor,
-    })));
-  }
-
-  function renderVisualLineStates(states: readonly VisualLineState[]): void {
-    if (states.length === 0) return;
-    const mainIndex = Math.min(editor.view.state.selection.mainIndex, states.length - 1);
+    visualHead = states[mainIndex]!.head;
     const selection = EditorSelection.create(states.map((state) => {
-      const range = logicalLineSelectionRange(editor, state.anchor, state.head, state.scope);
+      if (state.exclusiveWordEnd && state.head !== state.anchor) {
+        return state.head > state.anchor
+          ? EditorSelection.range(state.anchor, state.head)
+          : EditorSelection.range(
+            visualObjectEndPosition(editor, state.anchor),
+            visualObjectEndPosition(editor, state.head),
+          );
+      }
       return state.head >= state.anchor
-        ? EditorSelection.range(range.from, range.to)
-        : EditorSelection.range(range.to, range.from);
+        ? EditorSelection.range(state.anchor, visualObjectEndPosition(editor, state.head))
+        : EditorSelection.range(visualObjectEndPosition(editor, state.anchor), state.head);
     }), mainIndex);
-    const text = doc(editor);
-    // CM6 merges overlapping ranges. Rebuild our motion state from that
-    // normalized selection so cursors that meet stay merged instead of
-    // mysteriously reappearing on the next j/k.
-    visualLineStates = selection.ranges.map((range) => {
-      const forward = range.head >= range.anchor;
-      const anchorPos = forward
-        ? range.from
-        : previousGraphemePosition(text, range.to);
-      const headPos = forward
-        ? previousGraphemePosition(text, range.to)
-        : range.from;
-      const anchor = logicalLineAt(editor, anchorPos).cursor;
-      const headLine = logicalLineAt(editor, headPos);
-      return { anchor, head: headLine.cursor, scope: headLine.formulaScope };
-    });
-    const normalizedMainIndex = selection.mainIndex;
-    const main = visualLineStates[normalizedMainIndex]!;
-    visualAnchor = main.anchor;
-    visualHead = main.head;
+    visualCharStates = states.map((state) => ({ ...state }));
+    visualCharSelection = selection;
+    visualCharDoc = doc(editor);
     dispatchVisualSelection(selection);
   }
 
-  function lineStatesFromCharStates(states: readonly VisualCharState[]): VisualLineState[] {
-    return states.map((state) => ({
-      ...state,
-      scope: logicalLineAt(editor, state.head).formulaScope,
-    }));
+  function renderVisualLineStates(states: readonly VisualState[]): void {
+    if (states.length === 0) return;
+    const mainIndex = Math.min(editor.view.state.selection.mainIndex, states.length - 1);
+    const spans = states.map((state) => spanBetween(editor, state.anchor, state.head, { scope: state.scope }));
+    const selection = EditorSelection.create(states.map((state, index) => {
+      const span = spans[index]!;
+      return state.head >= state.anchor
+        ? EditorSelection.range(span.from, span.to)
+        : EditorSelection.range(span.to, span.from);
+    }), mainIndex);
+    // CM6 merges overlapping ranges. Keep the states of carets that met merged
+    // too, or they would mysteriously reappear on the next j/k.
+    let kept = [...states];
+    if (selection.ranges.length < states.length) {
+      kept = selection.ranges.map((range) => {
+        const inside = states.filter((state) => state.head >= range.from && state.head <= range.to);
+        const owner = inside[0] ?? states[0]!;
+        const forward = range.head >= range.anchor;
+        const all = inside.length > 0 ? inside : states;
+        const low = Math.min(...all.map((state) => Math.min(state.anchor, state.head)));
+        const high = Math.max(...all.map((state) => Math.max(state.anchor, state.head)));
+        return forward
+          ? { anchor: low, head: Math.max(owner.head, high), scope: owner.scope }
+          : { anchor: high, head: Math.min(owner.head, low), scope: owner.scope };
+      });
+    }
+    visualLineStates = kept;
+    visualHead = kept[Math.min(selection.mainIndex, kept.length - 1)]!.head;
+    dispatchVisualSelection(selection);
+  }
+
+  function renderVisualStates(states: readonly VisualState[]): void {
+    if (mode === "visual-line") renderVisualLineStates(states);
+    else renderVisualCharStates(states);
   }
 
   function switchToVisualLine(): void {
-    const states = lineStatesFromCharStates(currentVisualCharStates());
+    const states = visualStates().map((state) => ({
+      ...state,
+      scope: vimRowAt(editor, state.head).scope,
+    }));
     const changed = mode !== "visual-line";
     mode = "visual-line";
+    editor.view.dom.dataset.vimMode = mode;
     resetMotionMemory();
     renderVisualLineStates(states);
     if (changed) options.onModeChange?.(mode);
   }
 
   function switchToVisualChar(): void {
-    const states = visualLineStates?.map(({ anchor, head }) => ({
-      anchor: normalCharPosition(doc(editor), anchor),
-      head: normalCharPosition(doc(editor), head),
-    })) ?? currentVisualCharStates();
+    const text = doc(editor);
+    const states = visualStates().map(({ anchor, head }) => ({
+      anchor: normalCharPosition(text, anchor),
+      head: normalCharPosition(text, head),
+      scope: null,
+    }));
     const changed = mode !== "visual";
     mode = "visual";
+    editor.view.dom.dataset.vimMode = mode;
     visualLineStates = null;
     resetMotionMemory();
     renderVisualCharStates(states);
@@ -2067,189 +2576,182 @@ export function createVimLite(
   }
 
   function enterVisualLine(): void {
-    const states = currentVisualCharStates().map((state) => {
-      const line = logicalLineAt(editor, state.head);
-      return { anchor: line.cursor, head: line.cursor, scope: line.formulaScope };
-    });
+    const states = currentVisualCharStates().map((state) => ({
+      anchor: state.head,
+      head: state.head,
+      scope: vimRowAt(editor, state.head).scope,
+    }));
     setMode("visual-line");
     renderVisualLineStates(states);
   }
 
-  function visualMoveChar(dir: -1 | 1): void {
-    resetMotionMemory();
-    const text = doc(editor);
-    renderVisualCharStates(currentVisualCharStates().map((state) => {
-      const target = moveNormalCharPosition(text, state.head, dir);
-      return { ...state, head: snapStaticMathMotion(editor, state.head, target, dir) };
+  function reselectLastVisual(): boolean {
+    const previous = lastVisual;
+    if (!previous || previous.states.length === 0) return false;
+    const length = doc(editor).length;
+    const states = previous.states.map((state) => ({
+      anchor: clamp(state.anchor, 0, length),
+      head: clamp(state.head, 0, length),
+      scope: previous.mode === "visual-line" ? vimRowAt(editor, clamp(state.head, 0, length)).scope : null,
     }));
+    setMode(previous.mode);
+    renderVisualStates(states);
+    return true;
   }
 
-  function visualMoveLine(dir: -1 | 1): void {
-    const text = doc(editor);
-    const states = currentVisualCharStates();
-    const rect = editor.view.contentDOM.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) {
-      const nextGoals: VerticalGoal[] = [];
-      const next = states.map((state, index) => {
-        const line = docLineInfo(text, normalCharPosition(text, state.head));
-        const goal = visualGoalColumns?.[index];
-        const desired = goal?.kind === "column" ? goal.value : line.column;
-        nextGoals.push({ kind: "column", value: desired });
-        if (dir < 0 && line.start > 0) {
-          const previous = docLineInfo(text, line.start - 1);
-          return { ...state, head: Math.min(previous.start + desired, previous.end) };
-        }
-        if (dir > 0 && line.end < text.length) {
-          const following = docLineInfo(text, line.end + 1);
-          return { ...state, head: Math.min(following.start + desired, following.end) };
-        }
-        return state;
+  function visualMove(token: string, count: number, explicit: boolean, find: FindSpec | null): boolean {
+    const states = visualStates();
+    const nextGoals: VerticalGoal[] = [];
+    let moved = false;
+    let known = true;
+    const next = states.map((state, index) => {
+      const result = motion(token, state.head, {
+        count,
+        explicit,
+        goal: goals?.[index] ?? null,
+        find,
+        scope: mode === "visual-line" ? state.scope : null,
       });
-      visualGoalColumns = nextGoals;
-      renderVisualCharStates(next);
+      if (result === undefined) { known = false; return state; }
+      if (result == null) return state;
+      moved = true;
+      if (result.goal) nextGoals.push(result.goal);
+      let head = normalCharPosition(doc(editor), result.pos);
+      if (mode === "visual") head = renderedObjectAtPosition(editor, head)?.from ?? head;
+      if (state.scope && mode === "visual-line") {
+        head = clamp(head, state.scope.from, Math.max(state.scope.from, state.scope.to - 1));
+      }
+      return { ...state, head, exclusiveWordEnd: mode === "visual" && (token === "w" || token === "W") };
+    });
+    if (!known) return false;
+    goals = nextGoals.length === states.length ? nextGoals : null;
+    if (moved) renderVisualStates(next);
+    return true;
+  }
+
+  function selectVisualTextObject(token: string, count: number): boolean {
+    const states = visualStates();
+    const ranges = states.map((state) => textObject(token, state.head, count));
+    if (ranges[0] === undefined) return false;
+    if (ranges.some((range) => range == null)) {
+      reportUnhandled(token);
+      return true;
+    }
+    const objects = ranges as TextObjectRange[];
+    const linewise = objects.some((range) => range.linewise);
+    const text = doc(editor);
+    const next = states.map((state, index) => {
+      const range = objects[index]!;
+      const low = Math.min(state.anchor, state.head);
+      const high = Math.max(state.anchor, state.head);
+      const extend = state.anchor !== state.head;
+      const from = extend ? Math.min(low, range.from) : range.from;
+      const lastChar = range.linewise
+        ? range.to
+        : range.to > range.from ? previousGraphemePosition(text, range.to) : range.from;
+      const to = extend ? Math.max(high, lastChar) : lastChar;
+      return { anchor: from, head: to, scope: null };
+    });
+    if (linewise && mode !== "visual-line") {
+      mode = "visual-line";
+      editor.view.dom.dataset.vimMode = mode;
+      options.onModeChange?.(mode);
+    }
+    resetMotionMemory();
+    renderVisualStates(next);
+    return true;
+  }
+
+  /** The ranges a Visual command acts on; LINEWISE forces whole rows (`D`, `Y`, `C`). */
+  function visualOpRanges(linewise: boolean): OpRange[] {
+    if (mode === "visual-line" || linewise) {
+      return visualStates().map((state) => ({
+        kind: "line",
+        span: spanBetween(editor, state.anchor, state.head, {
+          scope: mode === "visual-line" ? state.scope : vimRowAt(editor, state.head).scope,
+        }),
+      }));
+    }
+    return editor.view.state.selection.ranges
+      .filter((range) => !range.empty)
+      .map((range) => ({ kind: "char", from: range.from, to: range.to }));
+  }
+
+  function visualOperator(op: VimOperator, linewise: boolean, count = 1): void {
+    const ranges = visualOpRanges(linewise);
+    const starts = visualStates().map((state) => Math.min(state.anchor, state.head));
+    leaveVisualForCommand();
+    if (op === "y") {
+      if (ranges[0]?.kind === "line") {
+        yank(ranges.flatMap((range) => range.kind === "line" ? [range.span.register] : []), "linewise");
+      } else {
+        const text = doc(editor);
+        yank(ranges.flatMap((range) => range.kind === "char" ? [text.sliceString(range.from, range.to)] : []));
+      }
+      setNormalCursorPositions(editor, starts);
       return;
     }
-    const nextGoals: VerticalGoal[] = [];
-    const next = states.map((state, index) => {
-      const start = normalCharPosition(text, state.head);
-      const coords = editor.view.coordsAtPos(start);
-      const goal = visualGoalColumns?.[index];
-      const pixelGoal = goal?.kind === "pixel"
-        ? goal.value
-        : coords
-          ? coords.left - rect.left
-          : editor.view.defaultCharacterWidth * docLineInfo(text, start).column;
-      const moved = editor.view.moveVertically(
-        EditorSelection.cursor(start, 0, undefined, pixelGoal),
-        dir > 0,
-      );
-      nextGoals.push({ kind: "pixel", value: moved.goalColumn ?? pixelGoal });
-      return { ...state, head: crossedVisualEntry(editor, start, moved.head, dir) ?? moved.head };
+    applyOperator(op, ranges, starts, count);
+  }
+
+  function visualReplace(ch: string): void {
+    const ranges = visualOpRanges(false).map((range) => (
+      range.kind === "line" ? { from: range.span.from, to: range.span.to } : range
+    ));
+    const starts = visualStates().map((state) => Math.min(state.anchor, state.head));
+    leaveVisualForCommand();
+    const specs = replaceSpecs(editor, ranges, ch);
+    if (specs.length === 0) return;
+    markChange();
+    const change = editor.view.state.changes(specs);
+    dispatchEdit(editor, { changes: change });
+    setNormalCursorPositions(editor, starts.map((start) => change.mapPos(start, -1)));
+  }
+
+  function visualJoin(spaces: boolean): void {
+    const text = doc(editor);
+    const specs = visualStates().map((state) => {
+      const first = text.lineAt(Math.min(state.anchor, state.head)).number;
+      const last = text.lineAt(Math.max(state.anchor, state.head)).number;
+      return { pos: text.line(first).from, joins: Math.max(1, last - first) };
     });
-    visualGoalColumns = nextGoals;
-    renderVisualCharStates(next);
+    leaveVisualForCommand();
+    if (joinLines(editor, specs, spaces)) markChange();
+    else normalizeNormalSelections(false);
   }
 
-  function visualLineMove(dir: -1 | 1): void {
+  /** Visual `I`/`A`: Insert at the selection's start/end, one caret per line in Visual-line. */
+  function visualInsert(where: "start" | "end"): void {
     const text = doc(editor);
-    const states = visualLineStates ?? lineStatesFromCharStates(currentVisualCharStates());
-    renderVisualLineStates(states.map((state) => {
-      const current = state.scope
-        ? boundedLogicalLine(text, state.head, state.scope.from, state.scope.to, state.scope)
-        : logicalLineAt(editor, state.head);
-      let nextPos = dir > 0 ? current.selectionTo : current.selectionFrom - 1;
-      if (state.scope) {
-        if (dir > 0 && nextPos >= state.scope.to) return state;
-        if (dir < 0 && nextPos < state.scope.from) return state;
-      } else if ((dir > 0 && nextPos >= text.length) || (dir < 0 && nextPos < 0)) {
-        return state;
+    const cursors: Array<{ pos: number; assoc?: -1 | 1 }> = [];
+    const lineMode = mode === "visual-line";
+    for (const state of visualStates()) {
+      const low = Math.min(state.anchor, state.head);
+      const high = Math.max(state.anchor, state.head);
+      if (!lineMode) {
+        cursors.push({ pos: where === "start" ? low : visualObjectEndPosition(editor, high) });
+        continue;
       }
-      nextPos = clamp(nextPos, state.scope?.from ?? 0, state.scope?.to ?? text.length);
-      const next = state.scope
-        ? boundedLogicalLine(text, nextPos, state.scope.from, state.scope.to, state.scope)
-        : logicalLineAt(editor, nextPos);
-      return { ...state, head: next.cursor };
-    }));
-  }
-
-  function visualLineBoundary(which: "start" | "end"): void {
-    resetMotionMemory();
-    const text = doc(editor);
-    renderVisualCharStates(currentVisualCharStates().map((state) => ({
-      ...state,
-      head: normalCharPosition(text, visualRowBoundary(editor, state.head, which)),
-    })));
-  }
-
-  function visualDocumentBoundary(which: "start" | "end"): void {
-    resetMotionMemory();
-    const target = which === "start" ? 0 : doc(editor).length;
-    renderVisualCharStates(currentVisualCharStates().map((state) => ({ ...state, head: target })));
-  }
-
-  function visualLineDocumentBoundary(which: "start" | "end"): void {
-    resetMotionMemory();
-    const text = doc(editor);
-    const states = visualLineStates ?? lineStatesFromCharStates(currentVisualCharStates());
-    renderVisualLineStates(states.map((state) => {
-      const boundary = state.scope
-        ? which === "start" ? state.scope.from : state.scope.to
-        : which === "start" ? 0 : text.length;
-      const target = state.scope && which === "end" && boundary > state.scope.from
-        ? boundary - 1
-        : boundary;
-      const head = (state.scope
-        ? boundedLogicalLine(text, target, state.scope.from, state.scope.to, state.scope)
-        : logicalLineAt(editor, target)).cursor;
-      return { ...state, head };
-    }));
-  }
-
-  function visualMoveWord(dir: -1 | 1, bigWord = false): void {
-    resetMotionMemory();
-    const text = doc(editor);
-    renderVisualCharStates(currentVisualCharStates().map((state) => {
-      const target = wordMotionPosition(text, state.head, dir, bigWord);
-      return {
-        ...state,
-        head: normalCharPosition(text, snapStaticMathMotion(editor, state.head, target, dir)),
-      };
-    }));
-  }
-
-  function visualMoveWordEnd(bigWord: boolean, count: number): void {
-    resetMotionMemory();
-    const text = doc(editor);
-    renderVisualCharStates(currentVisualCharStates().map((state) => {
-      let target = state.head;
-      for (let step = 0; step < count; step++) target = wordEndPosition(text, target, bigWord);
-      return {
-        ...state,
-        head: normalCharPosition(text, snapStaticMathMotion(editor, state.head, target, 1)),
-      };
-    }));
-  }
-
-  function visualMoveParagraph(dir: -1 | 1, count: number): void {
-    resetMotionMemory();
-    const text = doc(editor);
-    renderVisualCharStates(currentVisualCharStates().map((state) => {
-      let target = state.head;
-      for (let step = 0; step < count; step++) target = paragraphPosition(text, target, dir);
-      return { ...state, head: normalCharPosition(text, target) };
-    }));
-  }
-
-  function visualMoveFirstNonBlank(): void {
-    resetMotionMemory();
-    const text = doc(editor);
-    renderVisualCharStates(currentVisualCharStates().map((state) => ({
-      ...state,
-      head: firstNonBlankPosition(text, state.head),
-    })));
-  }
-
-  function visualFindChar(
-    kind: VimFindKind,
-    target: string,
-    count: number,
-    skipAdjacent = false,
-  ): boolean {
-    resetMotionMemory();
-    const text = doc(editor);
-    let found = false;
-    renderVisualCharStates(currentVisualCharStates().map((state) => {
-      const hit = findCharPosition(text, state.head, kind, target, count, skipAdjacent);
-      if (hit == null) return state;
-      found = true;
-      return { ...state, head: hit };
-    }));
-    return found;
+      const first = text.lineAt(low).number;
+      const last = text.lineAt(high).number;
+      for (let number = first; number <= last; number++) {
+        const line = text.line(number);
+        cursors.push({ pos: where === "start" ? firstNonBlankPosition(text, line.from) : line.to });
+      }
+    }
+    leaveVisualForCommand();
+    setInsertCursors(editor, cursors);
+    enterInsert();
   }
 
   function syncSelectionFromEditor(): void {
     const text = doc(editor);
     const { anchor, head } = editor.getMarkdownSelectionRange();
+    if (mode === "visual" && visualCharStates && visualCharDoc === text
+        && visualCharSelection?.eq(editor.view.state.selection)) return;
+    visualCharStates = null;
+    visualCharSelection = null;
+    visualCharDoc = null;
     if (anchor === head) {
       if (mode === "visual" || mode === "visual-line") {
         visualHead = head;
@@ -2264,56 +2766,30 @@ export function createVimLite(
     const forward = head > anchor;
     const rawAnchor = normalCharPosition(text, forward ? anchor : previousGraphemePosition(text, anchor));
     const rawHead = normalCharPosition(text, forward ? previousGraphemePosition(text, head) : head);
-    visualAnchor = staticMathObjectAtPosition(editor, rawAnchor)?.from ?? rawAnchor;
-    visualHead = staticMathObjectAtPosition(editor, rawHead)?.from ?? rawHead;
+    const visualAnchor = renderedObjectAtPosition(editor, rawAnchor)?.from ?? rawAnchor;
     const changed = mode !== "visual";
-    mode = "visual";
+    if (changed) setMode("visual");
+    visualHead = renderedObjectAtPosition(editor, rawHead)?.from ?? rawHead;
+    visualLineStates = null;
     resetMotionMemory();
-    if (changed) options.onModeChange?.(mode);
-    if (visualAnchor !== rawAnchor || visualHead !== rawHead) setVisualHead(visualHead);
-  }
-
-  function deleteLineCommand(count = 1): void {
-    resetMotionMemory();
-    const revealed = editor.view.state.selection.ranges.length === 1
-      ? revealedFormulaAt(editor, currentHead(editor))
-      : null;
-    yank(deleteLines(editor, count), "linewise");
-    if (mode === "visual" || mode === "visual-line") visualHead = currentHead(editor);
-    setMode("normal");
-    restoreRevealedFormula(editor, revealed);
-  }
-
-  function yankSelection(kind: VimRegisterKind = "characterwise"): void {
-    resetMotionMemory();
-    const start = editor.getMarkdownSelection().from;
-    yank(currentSelectionTexts(editor), kind);
-    visualHead = start;
-    setMode("normal");
-  }
-
-  function yankLine(count = 1): void {
-    resetMotionMemory();
-    const text = doc(editor);
-    const ranges = new Map<string, VimLogicalLine>();
-    for (const selection of editor.view.state.selection.ranges) {
-      const range = count > 1
-        ? selectedLogicalLine(editor, selection.from, countedLineSpanEnd(text, selection.from, count))
-        : logicalLineAt(editor, selection.from);
-      ranges.set(`${range.selectionFrom}:${range.selectionTo}`, range);
+    if (visualAnchor !== rawAnchor || visualHead !== rawHead) {
+      const states = currentVisualCharStates();
+      const mainIndex = Math.min(editor.view.state.selection.mainIndex, states.length - 1);
+      states[mainIndex] = { anchor: visualAnchor, head: visualHead, scope: null };
+      renderVisualCharStates(states);
     }
-    yank(
-      [...ranges.values()]
-        .sort((left, right) => left.selectionFrom - right.selectionFrom)
-        .map((range) => range.registerText),
-      "linewise",
-    );
-    setMode("normal");
   }
 
-  function paste(where: "before" | "after"): void {
+  // -------------------------------------------------------------------------
+  // Commands shared by Normal and Visual
+  // -------------------------------------------------------------------------
+
+  function paste(where: "before" | "after", yankReplaced: boolean): void {
     resetMotionMemory();
+    markChange();
     const replacingVisual = mode === "visual" || mode === "visual-line";
+    const replaced = replacingVisual ? visualOpRanges(false) : [];
+    const replacedText = doc(editor);
     const selectedRanges = editor.view.state.selection.ranges.map((range) => {
       if (replacingVisual || register.kind === "linewise") {
         return { from: range.from, to: range.to };
@@ -2330,25 +2806,37 @@ export function createVimLite(
         : { kind: "character" as const, where };
     // Visual paste is a command completion, so leave Visual immediately.  The
     // captured range remains mapped while the clipboard read is pending.
-    if (replacingVisual) setMode("normal");
+    if (replacingVisual) leaveVisualForCommand();
     const target = captureEditorPasteTarget(editor.view, selectedRanges, {
       fragments: register.fragments.length > 0 ? register.fragments : [register.text],
       clipboardText: register.text,
     });
     // Capture the current register in case it changes before the async path runs.
     const localRegister = register;
-    const pending = pendingClipboardWrite;
+    const pendingWrite = pendingClipboardWrite;
     const epoch = asyncEpoch;
     window.setTimeout(() => {
       if (destroyed || epoch !== asyncEpoch) return;
       void (async () => {
         // Wait for any in-flight clipboard write to land before reading back.
         // 400 ms guard prevents a stalled write from blocking paste indefinitely.
-        await Promise.race([pending, new Promise<void>((r) => setTimeout(r, 400))]);
+        await Promise.race([pendingWrite, new Promise<void>((r) => setTimeout(r, 400))]);
         if (destroyed || epoch !== asyncEpoch) return;
         const handled = await editor.pasteFromClipboard({ placement, target });
         if (!handled && localRegister.text) {
           editor.pastePlainText(localRegister.text, { placement, target });
+        }
+        // Visual `p` puts what it replaced in the register (Evil's
+        // `evil-kill-on-visual-paste`); `P` leaves the register alone.  Only
+        // after the read, or the clipboard would hand back the replaced text.
+        if (yankReplaced && replaced.length > 0) {
+          if (replaced[0]!.kind === "line") {
+            yank(replaced.flatMap((range) => range.kind === "line" ? [range.span.register] : []), "linewise");
+          } else {
+            yank(replaced.flatMap((range) => (
+              range.kind === "char" ? [replacedText.sliceString(range.from, range.to)] : []
+            )));
+          }
         }
         // Paste APIs naturally leave insertion-boundary carets. If the user
         // has not switched modes while the clipboard was pending, restore
@@ -2361,41 +2849,616 @@ export function createVimLite(
     }, 0);
   }
 
-  /**
-   * `3>>` indents three lines, not the current line three levels. The host's
-   * indent command works on the selection, so a count is expressed by widening
-   * the selection over those lines and restoring a Normal caret afterwards —
-   * on the first non-blank of the first line, where Vim leaves it.
-   */
-  function indentLines(direction: 1 | -1, count: number): boolean {
-    resetMotionMemory();
-    if (count <= 1) return options.onIndent?.(direction) ?? true;
-    const text = doc(editor);
-    const first = text.lineAt(clamp(currentHead(editor), 0, text.length));
-    const last = text.line(Math.min(text.lines, first.number + count - 1));
-    const lineStart = first.from;
-    editor.view.dispatch({ selection: EditorSelection.single(lineStart, last.to) });
-    const handled = options.onIndent?.(direction) ?? true;
-    setNormalCursorPositions(editor, [firstNonBlankPosition(doc(editor), lineStart)]);
-    return handled;
-  }
-
   function foldCommand(action: VimLiteFoldAction): boolean {
     resetMotionMemory();
     return options.onFold?.(action) ?? true;
   }
 
+  function scrollCommand(where: "center" | "start" | "end"): void {
+    editor.view.dispatch({ effects: EditorView.scrollIntoView(currentHead(editor), { y: where }) });
+  }
+
+  /** `z` commands shared by Normal and Visual. */
+  function zCommand(key: string): boolean {
+    switch (key) {
+      case "c": return foldCommand("close");
+      case "o": return foldCommand("open");
+      case "a": return foldCommand("toggle");
+      case "M": return foldCommand("close-all");
+      case "R": return foldCommand("open-all");
+      case "z": scrollCommand("center"); return true;
+      case "t": scrollCommand("start"); return true;
+      case "b": scrollCommand("end"); return true;
+      default: return false;
+    }
+  }
+
   function appendChar(): void {
     const text = doc(editor);
-    setCursorPositions(editor, editor.view.state.selection.ranges.map((range) => {
+    setInsertCursors(editor, editor.view.state.selection.ranges.map((range) => {
       const pos = normalCharPosition(text, range.head);
       const object = staticMathObjectAtPosition(editor, pos);
-      if (object?.from === pos) return object.to;
-      const line = docLineInfo(text, pos);
-      return Math.min(line.end, graphemeEndPosition(text, pos));
+      if (object?.from === pos) return { pos: object.to };
+      return { pos: Math.min(text.lineAt(pos).to, graphemeEndPosition(text, pos)) };
     }));
-    enterInsert();
   }
+
+  // -------------------------------------------------------------------------
+  // Normal mode
+  // -------------------------------------------------------------------------
+
+  function moveNormal(token: string, count: number, explicit: boolean, find: FindSpec | null): boolean {
+    const ranges = editor.view.state.selection.ranges;
+    const nextGoals: VerticalGoal[] = [];
+    let failed = false;
+    const positions = ranges.map((range, index) => {
+      const result = motion(token, range.head, {
+        count,
+        explicit,
+        goal: goals?.[index] ?? null,
+        find,
+        scope: null,
+      });
+      if (result === undefined) return undefined;
+      if (result == null) { failed = true; return range.head; }
+      if (result.goal) nextGoals.push(result.goal);
+      return result.pos;
+    });
+    if (positions[0] === undefined) return false;
+    goals = nextGoals.length === ranges.length ? nextGoals : null;
+    setNormalCursorPositions(editor, positions as number[]);
+    if (failed && ranges.length === 1) reportUnhandled(`${token}${find?.target ?? ""}`);
+    return true;
+  }
+
+  /** `D`/`C`/`Y`: from the caret to the end of its row, COUNT-1 rows further for a count. */
+  function rowTailRanges(count: number): Array<{ from: number; to: number; row: VimRow }> {
+    return editor.view.state.selection.ranges.map((range) => {
+      const row = vimRowAt(editor, range.head);
+      const { row: last } = stepRows(editor, row, count - 1, 1);
+      return { from: clamp(range.head, row.from, row.to), to: last.to, row };
+    });
+  }
+
+  function deleteToRowEnd(count: number, andInsert: boolean): void {
+    const state = editor.view.state;
+    const text = state.doc;
+    const tails = rowTailRanges(count).filter((tail) => tail.from < tail.to);
+    if (tails.length === 0) {
+      if (andInsert) {
+        markChange();
+        enterInsert();
+      }
+      return;
+    }
+    markChange();
+    yank(tails.map((tail) => text.sliceString(tail.from, tail.to)));
+    const change = state.changes(tails.map((tail) => ({ from: tail.from, to: tail.to })));
+    const applied = change.apply(text);
+    const revealed = singleRevealedFormula(editor);
+    dispatchEdit(editor, {
+      changes: change,
+      selection: EditorSelection.create(
+        tails.map((tail) => {
+          const at = change.mapPos(tail.from, -1);
+          if (andInsert) return EditorSelection.cursor(at, tail.from > tail.row.from ? -1 : 1);
+          // `D` leaves Normal mode on the new last character of the row.
+          return EditorSelection.cursor(tail.from > tail.row.from
+            ? previousGraphemePosition(applied, at)
+            : normalCharPosition(applied, at));
+        }),
+        mainIndexFor(editor, tails.length),
+      ),
+      scrollIntoView: true,
+    });
+    restoreRevealedFormula(editor, revealed);
+    if (andInsert) enterInsert();
+  }
+
+  function deleteCharacters(count: number, backward: boolean): void {
+    const state = editor.view.state;
+    const text = state.doc;
+    const revealed = singleRevealedFormula(editor);
+    const ranges = uniqueRanges(state.selection.ranges.flatMap((range) => {
+      const span = characterSpan(editor, range.head, count, backward);
+      return span ? [span] : [];
+    }));
+    if (ranges.length === 0) return;
+    markChange();
+    yank(ranges.map((range) => text.sliceString(range.from, range.to)));
+    const change = state.changes(ranges.map(({ from, to }) => ({ from, to })));
+    const applied = change.apply(text);
+    dispatchEdit(editor, {
+      changes: change,
+      selection: EditorSelection.create(
+        ranges.map((range) => EditorSelection.cursor(normalCharPosition(applied, change.mapPos(range.from, -1)))),
+        mainIndexFor(editor, ranges.length),
+      ),
+      scrollIntoView: true,
+    });
+    restoreRevealedFormula(editor, revealed);
+    normalizeNormalSelections(false);
+  }
+
+  function replaceCharacters(ch: string, count: number): void {
+    const state = editor.view.state;
+    const revealed = singleRevealedFormula(editor);
+    const ranges = state.selection.ranges.flatMap((range) => {
+      const span = countedCharacterRange(editor, range.head, count);
+      return span ? [span] : [];
+    });
+    const specs = replaceSpecs(editor, ranges, ch);
+    if (specs.length === 0) {
+      reportUnhandled(`r${ch}`);
+      return;
+    }
+    markChange();
+    const change = state.changes(specs);
+    const applied = change.apply(state.doc);
+    // Vim leaves Normal cursors on the (last) replaced character, not after it.
+    dispatchEdit(editor, {
+      changes: change,
+      selection: EditorSelection.create(
+        specs.map((spec) => EditorSelection.cursor(previousGraphemePosition(applied, change.mapPos(spec.to, -1)))),
+        mainIndexFor(editor, specs.length),
+      ),
+      scrollIntoView: true,
+    });
+    restoreRevealedFormula(editor, revealed);
+  }
+
+  function insertCommand(key: string, count: number): void {
+    const text = doc(editor);
+    switch (key) {
+      case "i": {
+        const object = renderedObjectAtPosition(editor, currentHead(editor));
+        const formula = object ? formulaRangeAtWidgetPosition(editor.view.state, object.from) : null;
+        const returnPos = object?.from ?? normalCharPosition(text, currentHead(editor));
+        enterInsert(returnPos, count);
+        if (formula) {
+          setPos(editor, formula.contentFrom);
+          insertEntry = { doc: doc(editor), boundary: currentHead(editor), returnPos };
+          insertSession = { doc: doc(editor), head: currentHead(editor), count };
+        }
+        return;
+      }
+      case "a": {
+        const object = renderedObjectAtPosition(editor, currentHead(editor));
+        if (object) {
+          const formula = formulaRangeAtWidgetPosition(editor.view.state, object.from);
+          enterInsert(object.from, count);
+          setPos(editor, formula?.contentTo ?? object.to);
+          insertEntry = { doc: doc(editor), boundary: currentHead(editor), returnPos: object.from };
+          insertSession = { doc: doc(editor), head: currentHead(editor), count };
+          return;
+        }
+        appendChar();
+        enterInsert(null, count);
+        return;
+      }
+      case "I": {
+        // Evil's `I` with visual lines: the first non-blank on the first row,
+        // the row start on a continuation row.
+        setInsertCursors(editor, editor.view.state.selection.ranges.map((range) => {
+          const row = vimRowAt(editor, range.head);
+          return { pos: row.lineStart ? Math.min(firstNonBlankIn(text, row.from, row.to), row.to) : row.from };
+        }));
+        enterInsert(normalCharPosition(doc(editor), currentHead(editor)), count);
+        return;
+      }
+      case "A": {
+        // End of the row; a continuation row keeps its caret on that row.
+        setInsertCursors(editor, editor.view.state.selection.ranges.map((range) => {
+          const row = vimRowAt(editor, range.head);
+          return { pos: row.to, assoc: row.lineEnd ? 1 : -1 };
+        }));
+        enterInsert(null, count);
+        return;
+      }
+      case "o":
+      case "O":
+        markChange();
+        openLine(editor, key === "o" ? "below" : "above");
+        enterInsert();
+        return;
+    }
+  }
+
+  function repeatLastChange(count: number | null): void {
+    const change = lastChange;
+    if (!change) {
+      reportUnhandled(".");
+      return;
+    }
+    // A count typed before `.` has already started a command recording. The
+    // replay edits must not replace the stored change with `3.` itself, which
+    // would make the next dot recursively replay dots.
+    recording = null;
+    let keys = [...change.keys];
+    if (count != null) {
+      // A count on `.` replaces the original one, wherever it was typed.
+      while (keys.length > 0 && /^[0-9]$/u.test(keys[0]!)) keys.shift();
+      const operatorAt = keys[0] === "g" ? 2 : 1;
+      if (OPERATOR_KEYS.has(keys[0] ?? "") || (keys[0] === "g" && G_OPERATOR_KEYS.has(keys[1] ?? ""))) {
+        while (keys.length > operatorAt && /^[0-9]$/u.test(keys[operatorAt]!)) keys.splice(operatorAt, 1);
+      }
+      keys = [...String(count).split(""), ...keys];
+    }
+    replaying = true;
+    try {
+      for (const key of keys) normalKey(key);
+      if (mode === "insert") {
+        if (change.insert) {
+          const edit = change.insert;
+          const state = editor.view.state;
+          const changes = state.selection.ranges.map((range) => ({
+            from: clamp(range.head - edit.deleteBefore, 0, state.doc.length),
+            to: clamp(range.head + edit.deleteAfter, 0, state.doc.length),
+            insert: edit.text,
+          }));
+          const applied = state.changes(changes);
+          editor.view.dispatch({
+            changes: applied,
+            selection: EditorSelection.create(
+              changes.map((spec) => EditorSelection.cursor(applied.mapPos(spec.from, -1) + edit.text.length)),
+              state.selection.mainIndex,
+            ),
+          });
+        }
+        escapeToNormal();
+      }
+    } finally {
+      replaying = false;
+    }
+  }
+
+  function gCommand(key: string, count: number, explicit: boolean): boolean {
+    switch (key) {
+      case "v":
+        if (!reselectLastVisual()) reportUnhandled("gv");
+        return true;
+      case "J":
+        resetMotionMemory();
+        if (joinLines(editor, editor.view.state.selection.ranges.map((range) => ({
+          pos: range.head,
+          joins: Math.max(1, count - 1),
+        })), false)) markChange();
+        else reportUnhandled("gJ");
+        return true;
+      default: {
+        const token = `g${key}`;
+        if (!moveNormal(token, count, explicit, null)) reportUnhandled(token);
+        else if (!VERTICAL_TOKENS.has(token)) resetMotionMemory();
+        return true;
+      }
+    }
+  }
+
+  /** Resolve one complete Normal-mode token. */
+  function normalToken(token: string, find: FindSpec | null = null): boolean {
+    const explicit = countBuffer.length > 0;
+    if (pendingOperator) {
+      const operator = pendingOperator;
+      pendingOperator = null;
+      runOperatorMotion(operator, token, find);
+      return true;
+    }
+    if (OPERATOR_KEYS.has(token) || (token.length === 2 && token[0] === "g" && G_OPERATOR_KEYS.has(token[1]!))) {
+      pendingOperator = { op: token as VimOperator, count: takeCount(), explicit };
+      return true;
+    }
+    const count = takeCount();
+    if (token.length === 2 && token[0] === "g") return gCommand(token[1]!, count, explicit);
+    if (token.length === 2 && token[0] === "z") {
+      if (!zCommand(token[1]!)) reportUnhandled(token);
+      return true;
+    }
+    if (moveNormal(token, count, explicit, find)) {
+      if (!VERTICAL_TOKENS.has(token)) resetMotionMemory();
+      return true;
+    }
+    resetMotionMemory();
+    switch (token) {
+      case "i":
+      case "a":
+      case "I":
+      case "A":
+      case "o":
+      case "O":
+        insertCommand(token, count);
+        return true;
+      case "v":
+        enterVisual();
+        return true;
+      case "V":
+        enterVisualLine();
+        return true;
+      case "x":
+      case "Delete":
+        deleteCharacters(count, false);
+        return true;
+      case "X":
+        deleteCharacters(count, true);
+        return true;
+      case "D":
+        deleteToRowEnd(count, false);
+        return true;
+      case "C":
+        deleteToRowEnd(count, true);
+        return true;
+      case "Y": {
+        const carets = heads();
+        applyOperator("y", carets.map((head) => ({
+          kind: "line",
+          span: countedSpan(editor, head, count),
+        })), carets);
+        return true;
+      }
+      case "J":
+        if (joinLines(editor, editor.view.state.selection.ranges.map((range) => ({
+          pos: range.head,
+          joins: Math.max(1, count - 1),
+        })), true)) markChange();
+        else reportUnhandled(token);
+        return true;
+      case "~":
+        if (toggleCaseForward(editor, count)) markChange();
+        else reportUnhandled(token);
+        return true;
+      case "p":
+      case "P":
+        paste(token === "p" ? "after" : "before", false);
+        return true;
+      case "u":
+        for (let step = 0; step < count; step++) options.onUndo?.();
+        normalizeNormalSelections(false);
+        return true;
+      case ".":
+        repeatLastChange(explicit ? count : null);
+        return true;
+      case "s":
+      case "S":
+        startJumpInput(token === "s" ? 1 : -1);
+        return true;
+      case "/":
+        lastSearch = { source: "host", forward: true };
+        options.onFind?.();
+        return true;
+      case "Escape":
+        setMode("normal");
+        return true;
+      default:
+        if (!isSingleGrapheme(token)) return false;
+        reportUnhandled(token);
+        return true;
+    }
+  }
+
+  /** Normal-mode key parser: count, prefix, then a token. */
+  function normalKey(key: string): boolean {
+    if (jumpSession) return handleJumpSessionKey(key);
+    if (jumpInput) return handleJumpInputKey(key);
+    // Before the chord table so `3dd`, `d3d` and `3d3d` all count, but after
+    // the jump reader, whose labels may themselves be digits.
+    if (consumeCountDigit(key)) return true;
+
+    if (prefix) {
+      const first = prefix;
+      prefix = "";
+      if (key === "Escape") {
+        resetParser();
+        return true;
+      }
+      if (first === "r") {
+        if (!isSingleGrapheme(key)) {
+          resetParser();
+          reportUnhandled(`r${key}`);
+          return true;
+        }
+        const count = takeCount();
+        resetMotionMemory();
+        replaceCharacters(key, count);
+        return true;
+      }
+      if (isFindKind(first)) {
+        if (!isSingleGrapheme(key)) {
+          const sequence = `${pendingOperator?.op ?? ""}${first}${key}`;
+          resetParser();
+          reportUnhandled(sequence);
+          return true;
+        }
+        lastFind = { kind: first, target: key };
+        return normalToken(first, lastFind);
+      }
+      if (first === "i" || first === "a") {
+        if (!pendingOperator) {
+          resetParser();
+          reportUnhandled(`${first}${key}`);
+          return true;
+        }
+        return normalToken(`${first}${key}`);
+      }
+      if (first === "z" && pendingOperator) {
+        const sequence = `${pendingOperator.op}z${key}`;
+        resetParser();
+        reportUnhandled(sequence);
+        return true;
+      }
+      return normalToken(`${first}${key}`);
+    }
+
+    if (key === "g" || key === "z" || isFindKind(key)
+        || (key === "r" && !pendingOperator)
+        || ((key === "i" || key === "a") && pendingOperator)) {
+      prefix = key;
+      return true;
+    }
+    if (key === "Escape") {
+      const wasPending = !parserIdle();
+      resetParser();
+      if (!wasPending) setMode("normal");
+      return true;
+    }
+    const token = KEY_ALIASES[key] ?? (key === "Delete" && !pendingOperator ? "x" : key);
+    if (normalToken(token)) return true;
+    resetParser();
+    return false;
+  }
+
+  // -------------------------------------------------------------------------
+  // Visual mode
+  // -------------------------------------------------------------------------
+
+  function visualToken(token: string, find: FindSpec | null = null): boolean {
+    const explicit = countBuffer.length > 0;
+    const count = takeCount();
+    if (textObject(token, 0, 1) !== undefined) return selectVisualTextObject(token, count);
+    if (token.length === 2 && token[0] === "z") {
+      if (!zCommand(token[1]!)) reportUnhandled(token);
+      return true;
+    }
+    const lineMode = mode === "visual-line";
+    switch (token) {
+      case "d":
+      case "x":
+      case "Delete":
+        visualOperator("d", false);
+        return true;
+      case "X":
+      case "D":
+        visualOperator("d", true);
+        return true;
+      case "y":
+        visualOperator("y", false);
+        return true;
+      case "Y":
+        visualOperator("y", true);
+        return true;
+      case "c":
+        visualOperator("c", false);
+        return true;
+      case "C":
+      case "R":
+        visualOperator("c", true);
+        return true;
+      case "s":
+      case "S":
+        startJumpInput(token === "s" ? 1 : -1);
+        return true;
+      case ">":
+      case "<":
+        visualOperator(token, true, count);
+        return true;
+      case "~":
+      case "g~":
+        visualOperator("g~", false);
+        return true;
+      case "u":
+      case "gu":
+        visualOperator("gu", false);
+        return true;
+      case "U":
+      case "gU":
+        visualOperator("gU", false);
+        return true;
+      case "J":
+      case "gJ":
+        visualJoin(token === "J");
+        return true;
+      case "p":
+      case "P":
+        paste("after", token === "p");
+        return true;
+      case "o":
+      case "O":
+        resetMotionMemory();
+        renderVisualStates((mode === "visual" ? readVisualCharStatesFromSelection() : visualStates())
+          .map((state) => ({ ...state, anchor: state.head, head: state.anchor, exclusiveWordEnd: false })));
+        return true;
+      case "I":
+      case "A":
+        markChange();
+        visualInsert(token === "I" ? "start" : "end");
+        return true;
+      case "v":
+        if (lineMode) switchToVisualChar();
+        else setMode("normal");
+        return true;
+      case "V":
+        if (lineMode) setMode("normal");
+        else switchToVisualLine();
+        return true;
+      case "/":
+        resetMotionMemory();
+        lastSearch = { source: "host", forward: true };
+        options.onFind?.();
+        return true;
+      case "Escape":
+        setMode("normal");
+        return true;
+      default:
+        break;
+    }
+    if (visualMove(token, count, explicit, find)) {
+      if (!VERTICAL_TOKENS.has(token)) resetMotionMemory();
+      return true;
+    }
+    if (!isSingleGrapheme(token)) {
+      if (token.length === 2 && (token[0] === "g" || token[0] === "i" || token[0] === "a")) {
+        reportUnhandled(token);
+        return true;
+      }
+      return false;
+    }
+    reportUnhandled(token);
+    return true;
+  }
+
+  function visualKey(key: string): boolean {
+    if (jumpSession) return handleJumpSessionKey(key);
+    if (jumpInput) return handleJumpInputKey(key);
+    if (consumeCountDigit(key)) return true;
+    if (prefix) {
+      const first = prefix;
+      prefix = "";
+      if (key === "Escape") {
+        resetParser();
+        return true;
+      }
+      if (first === "r") {
+        countBuffer = "";
+        if (!isSingleGrapheme(key)) {
+          reportUnhandled(`r${key}`);
+          return true;
+        }
+        resetMotionMemory();
+        visualReplace(key);
+        return true;
+      }
+      if (isFindKind(first)) {
+        if (!isSingleGrapheme(key)) {
+          countBuffer = "";
+          reportUnhandled(`${first}${key}`);
+          return true;
+        }
+        lastFind = { kind: first, target: key };
+        return visualToken(first, lastFind);
+      }
+      return visualToken(`${first}${key}`);
+    }
+    if (key === "g" || key === "z" || key === "r" || key === "i" || key === "a" || isFindKind(key)) {
+      prefix = key;
+      return true;
+    }
+    const token = KEY_ALIASES[key] ?? key;
+    if (visualToken(token)) return true;
+    resetParser();
+    return false;
+  }
+
+  // -------------------------------------------------------------------------
+  // Embedded editables
+  // -------------------------------------------------------------------------
 
   function editableNormalCommand(key: string, editable: HTMLElement): boolean {
     if (!isRichEditable(editable)) {
@@ -2403,14 +3466,14 @@ export function createVimLite(
         enterInsert();
         return true;
       }
-      pending = "";
+      prefix = "";
       // Normal mode must not destroy text. Printable keys are already
       // swallowed by the length check below, but Backspace and Delete are not
       // printable and would reach the control natively — so an embedded input
       // lost a character to a key Vim treats as a plain leftward motion, and
       // the rich-editable branch below already treats that way.
       if (key === "Backspace" || key === "Delete") return true;
-      return key.length === 1;
+      return isSingleGrapheme(key);
     }
 
     const move = (
@@ -2464,617 +3527,26 @@ export function createVimLite(
         setMode("normal");
         return true;
       default:
-        pending = "";
-        if (key.length !== 1) return false;
+        prefix = "";
+        if (!isSingleGrapheme(key)) return false;
         reportUnhandled(key);
         return true;
     }
   }
 
-  function normalCommand(key: string): boolean {
-    if (jumpSession) {
-      const session = jumpSession;
-      if (key.length !== 1 || isUppercaseAsciiLetter(key)) {
-        cancelJump();
-        return true;
-      }
-      jumpLabelPrefix += key;
-      const exact = session.candidates.find((candidate) => candidate.label === jumpLabelPrefix);
-      if (exact) {
-        jumpSession = null;
-        jumpLabelPrefix = "";
-        applyVimJump(editor.view, session, exact.label);
-      } else {
-        const candidates = narrowVimJump(editor.view, session, jumpLabelPrefix);
-        if (candidates.length === 0) cancelJump();
-      }
-      return true;
+  /** Normal-mode entry with `.` recording around one complete command. */
+  function recordedNormalKey(key: string): boolean {
+    if (replaying) return normalKey(key);
+    if (!recording && parserIdle() && key !== ".") recording = { keys: [], changed: false };
+    recording?.keys.push(key);
+    const handled = normalKey(key);
+    const record = recording;
+    if (record && parserIdle()) {
+      recording = null;
+      if (mode === "insert") pendingInsertChange = record.keys;
+      else if (record.changed) lastChange = { keys: record.keys, insert: null };
     }
-    if (jumpInput) return handleJumpInputKey(key);
-    // Before the chord table so `3dd`, `d3d` and `3d3d` all count, but after
-    // the jump reader, whose labels may themselves be digits.
-    if (consumeCountDigit(key)) return true;
-    if (pendingFindKind) {
-      const kind = pendingFindKind;
-      const operator = pendingOperator;
-      const count = pendingCount;
-      pendingFindKind = null;
-      pendingOperator = null;
-      pendingCount = 1;
-      if (key.length !== 1) {
-        if (key !== "Escape") reportUnhandled(`${operator ?? ""}${kind}${key}`);
-        return true;
-      }
-      lastFind = { kind, target: key };
-      const done = operator
-        ? applyOperatorMotion(operator, kind, count, lastFind)
-        : applyFindChar(kind, key, count);
-      if (!done) reportUnhandled(`${operator ?? ""}${kind}${key}`);
-      return true;
-    }
-    if (pendingOperator && pendingOperatorGoto != null) {
-      const operator = pendingOperator;
-      const banked = pendingOperatorGoto;
-      pendingOperator = null;
-      pendingOperatorGoto = null;
-      if (key === "g") {
-        // `dgg` / `ygg`: linewise from here to line `banked` (line 1 by default).
-        applyOperatorMotion(operator, "G", banked, null);
-      } else if (key !== "Escape") {
-        reportUnhandled(`${operator}g${key}`);
-      }
-      return true;
-    }
-    if (pendingOperator) {
-      const operator = pendingOperator;
-      pendingOperator = null;
-      return continueOperator(operator, key);
-    }
-    if (pending === "r") {
-      const banked = pendingCount;
-      pendingCount = 1;
-      pending = "";
-      if (key.length === 1) {
-        resetMotionMemory();
-        replaceChars(editor, key, banked);
-        setMode("normal");
-      } else if (key !== "Escape") {
-        reportUnhandled(`r${key}`);
-      }
-      return true;
-    }
-    if (pending === "g") {
-      const banked = pendingCount;
-      pendingCount = 1;
-      pending = "";
-      if (key === "g") {
-        resetMotionMemory();
-        if (banked > 1) moveToLine(editor, banked);
-        else docBoundary(editor, "start");
-      } else {
-        reportUnhandled(`g${key}`);
-      }
-      return true;
-    }
-    if (pending === "z") {
-      pending = "";
-      switch (key) {
-        case "c":
-          return foldCommand("close");
-        case "o":
-          return foldCommand("open");
-        case "a":
-          return foldCommand("toggle");
-        case "M":
-          return foldCommand("close-all");
-        case "R":
-          return foldCommand("open-all");
-        default:
-          reportUnhandled(`z${key}`);
-          return true;
-      }
-    }
-    if (pending === ">" || pending === "<") {
-      const direction = pending === ">" ? 1 : -1;
-      const chord = pending;
-      const banked = pendingCount;
-      pendingCount = 1;
-      pending = "";
-      if (key === chord) {
-        indentLines(direction, banked);
-      } else if (key !== "Escape") {
-        reportUnhandled(`${chord}${key}`);
-      }
-      return true;
-    }
-    const hadCount = countBuffer.length > 0;
-    const count = takeCount();
-    switch (key) {
-      case "h":
-      case "ArrowLeft":
-      case "Backspace":
-        resetMotionMemory();
-        for (let step = 0; step < count; step++) moveChar(editor, -1);
-        return true;
-      case "l":
-      case "ArrowRight":
-      case " ":
-        resetMotionMemory();
-        for (let step = 0; step < count; step++) moveChar(editor, 1);
-        return true;
-      case "j":
-      case "ArrowDown":
-        for (let step = 0; step < count; step++) {
-          normalGoalColumns = moveScreenLine(editor, 1, normalGoalColumns);
-        }
-        return true;
-      case "k":
-      case "ArrowUp":
-        for (let step = 0; step < count; step++) {
-          normalGoalColumns = moveScreenLine(editor, -1, normalGoalColumns);
-        }
-        return true;
-      case "0":
-        resetMotionMemory();
-        lineBoundary(editor, "start");
-        return true;
-      case "^":
-        resetMotionMemory();
-        moveFirstNonBlank(editor);
-        return true;
-      case "$":
-        resetMotionMemory();
-        lineBoundary(editor, "end");
-        return true;
-      case "w":
-        resetMotionMemory();
-        for (let step = 0; step < count; step++) moveWord(editor, 1);
-        return true;
-      case "W":
-        resetMotionMemory();
-        for (let step = 0; step < count; step++) moveWord(editor, 1, true);
-        return true;
-      case "b":
-        resetMotionMemory();
-        for (let step = 0; step < count; step++) moveWord(editor, -1);
-        return true;
-      case "B":
-        resetMotionMemory();
-        for (let step = 0; step < count; step++) moveWord(editor, -1, true);
-        return true;
-      case "e":
-        resetMotionMemory();
-        moveWordEnd(editor, false, count);
-        return true;
-      case "E":
-        resetMotionMemory();
-        moveWordEnd(editor, true, count);
-        return true;
-      case "{":
-        resetMotionMemory();
-        moveParagraph(editor, -1, count);
-        return true;
-      case "}":
-        resetMotionMemory();
-        moveParagraph(editor, 1, count);
-        return true;
-      case "f":
-      case "F":
-      case "t":
-      case "T":
-        pendingCount = count;
-        pendingFindKind = key;
-        return true;
-      case ";":
-        if (!repeatFindChar(false, count)) reportUnhandled(key);
-        return true;
-      case ",":
-        if (!repeatFindChar(true, count)) reportUnhandled(key);
-        return true;
-      case "u":
-        options.onUndo?.();
-        return true;
-      case "g":
-        pendingCount = count;
-        pending = "g";
-        return true;
-      case "z":
-        pending = "z";
-        return true;
-      case "G":
-        resetMotionMemory();
-        // A count turns `G` into "go to line N", which is why it cannot just
-        // repeat the document-end motion.
-        if (hadCount) moveToLine(editor, count);
-        else docBoundary(editor, "end");
-        return true;
-      case "i":
-        {
-          const returnPos = staticMathObjectAtPosition(editor, currentHead(editor))?.from
-            ?? normalCharPosition(doc(editor), currentHead(editor));
-          enterInsert(returnPos);
-          if (enterStaticMathObject(editor, "start")) {
-            insertEntry = {
-              doc: doc(editor),
-              boundary: currentHead(editor),
-              returnPos,
-            };
-          }
-        }
-        return true;
-      case "v":
-        enterVisual();
-        return true;
-      case "V":
-        enterVisualLine();
-        return true;
-      case "a":
-        if (staticMathObjectAtPosition(editor, currentHead(editor))) {
-          const returnPos = staticMathObjectAtPosition(editor, currentHead(editor))!.from;
-          enterInsert(returnPos);
-          if (enterStaticMathObject(editor, "end")) {
-            insertEntry = { doc: doc(editor), boundary: currentHead(editor), returnPos };
-          }
-        } else appendChar();
-        return true;
-      case "I":
-        resetMotionMemory();
-        setCursorPositions(editor, lineFirstNonBlankPositions(editor));
-        enterInsert(normalCharPosition(doc(editor), currentHead(editor)));
-        return true;
-      case "A":
-        resetMotionMemory();
-        lineEndInsertBoundary(editor);
-        enterInsert();
-        return true;
-      case "o":
-        resetMotionMemory();
-        openLine(editor, "below");
-        enterInsert();
-        return true;
-      case "O":
-        resetMotionMemory();
-        openLine(editor, "above");
-        enterInsert();
-        return true;
-      case "x":
-      case "Delete":
-        resetMotionMemory();
-        yank(deleteCharsCounted(editor, count, false));
-        normalizeNormalSelections(false);
-        return true;
-      case "X":
-        resetMotionMemory();
-        yank(deleteCharsCounted(editor, count, true));
-        normalizeNormalSelections(false);
-        return true;
-      case "D":
-        resetMotionMemory();
-        yank(deleteToLineEnd(editor, false));
-        return true;
-      case "C":
-        resetMotionMemory();
-        yank(deleteToLineEnd(editor, true));
-        enterInsert();
-        return true;
-      case "Y":
-        resetMotionMemory();
-        yank(yankToLineEnd(editor));
-        return true;
-      case "J":
-        resetMotionMemory();
-        if (!joinLines(editor, count)) reportUnhandled(key);
-        return true;
-      case "~":
-        resetMotionMemory();
-        if (!toggleCaseForward(editor, count)) reportUnhandled(key);
-        return true;
-      case "p":
-        paste("after");
-        return true;
-      case "P":
-        paste("before");
-        return true;
-      case "s":
-      case "S":
-        startJumpInput(key === "s" ? 1 : -1);
-        return true;
-      case "/":
-        resetMotionMemory();
-        options.onFind?.();
-        return true;
-      case "r":
-        pendingCount = count;
-        pending = "r";
-        return true;
-      case "d":
-      case "c":
-      case "y":
-        pendingCount = count;
-        pendingOperator = key;
-        return true;
-      case ">":
-      case "<":
-        pendingCount = count;
-        pending = key;
-        return true;
-      case "Escape":
-        setMode("normal");
-        return true;
-      default:
-        pending = "";
-        countBuffer = "";
-        pendingCount = 1;
-        pendingOperator = null;
-        pendingOperatorGoto = null;
-        if (key.length !== 1) return false;
-        reportUnhandled(key);
-        return true;
-    }
-  }
-
-  function visualCommand(key: string): boolean {
-    if (consumeCountDigit(key)) return true;
-    if (pendingFindKind) {
-      const kind = pendingFindKind;
-      const count = pendingCount;
-      pendingFindKind = null;
-      pendingCount = 1;
-      if (key.length !== 1) {
-        if (key !== "Escape") reportUnhandled(`${kind}${key}`);
-        return true;
-      }
-      lastFind = { kind, target: key };
-      if (!visualFindChar(kind, key, count, false)) reportUnhandled(`${kind}${key}`);
-      return true;
-    }
-    if (pending === "d") {
-      pending = "";
-      if (key === "d") {
-        deleteLineCommand();
-        return true;
-      }
-      reportUnhandled(`d${key}`);
-      return true;
-    }
-    if (pending === "r") {
-      pending = "";
-      if (key.length === 1) {
-        resetMotionMemory();
-        const replacedFrom = replaceChars(editor, key);
-        if (replacedFrom != null) visualHead = replacedFrom;
-      } else {
-        reportUnhandled(`r${key}`);
-      }
-      setMode("normal");
-      return true;
-    }
-    if (pending === "g") {
-      pending = "";
-      if (key === "g") visualDocumentBoundary("start");
-      else reportUnhandled(`g${key}`);
-      return true;
-    }
-    const count = takeCount();
-    switch (key) {
-      case "h":
-      case "ArrowLeft":
-      case "Backspace":
-        for (let step = 0; step < count; step++) visualMoveChar(-1);
-        return true;
-      case "l":
-      case "ArrowRight":
-      case " ":
-        for (let step = 0; step < count; step++) visualMoveChar(1);
-        return true;
-      case "j":
-      case "ArrowDown":
-        for (let step = 0; step < count; step++) visualMoveLine(1);
-        return true;
-      case "k":
-      case "ArrowUp":
-        for (let step = 0; step < count; step++) visualMoveLine(-1);
-        return true;
-      case "0":
-        visualLineBoundary("start");
-        return true;
-      case "^":
-        visualMoveFirstNonBlank();
-        return true;
-      case "$":
-        visualLineBoundary("end");
-        return true;
-      case "g":
-        pending = "g";
-        return true;
-      case "G":
-        visualDocumentBoundary("end");
-        return true;
-      case "w":
-        for (let step = 0; step < count; step++) visualMoveWord(1);
-        return true;
-      case "W":
-        for (let step = 0; step < count; step++) visualMoveWord(1, true);
-        return true;
-      case "b":
-        for (let step = 0; step < count; step++) visualMoveWord(-1);
-        return true;
-      case "B":
-        for (let step = 0; step < count; step++) visualMoveWord(-1, true);
-        return true;
-      case "e":
-        visualMoveWordEnd(false, count);
-        return true;
-      case "E":
-        visualMoveWordEnd(true, count);
-        return true;
-      case "{":
-        visualMoveParagraph(-1, count);
-        return true;
-      case "}":
-        visualMoveParagraph(1, count);
-        return true;
-      case "f":
-      case "F":
-      case "t":
-      case "T":
-        pendingCount = count;
-        pendingFindKind = key;
-        return true;
-      case ";":
-      case ",": {
-        if (!lastFind) { reportUnhandled(key); return true; }
-        const mirrored: Record<VimFindKind, VimFindKind> = { f: "F", F: "f", t: "T", T: "t" };
-        const kind = key === "," ? mirrored[lastFind.kind] : lastFind.kind;
-        if (!visualFindChar(kind, lastFind.target, count, kind === "t" || kind === "T")) {
-          reportUnhandled(key);
-        }
-        return true;
-      }
-      case "~":
-        resetMotionMemory();
-        toggleCaseForward(editor, 1);
-        setMode("normal");
-        return true;
-      case "J":
-        resetMotionMemory();
-        joinLines(editor, count);
-        setMode("normal");
-        return true;
-      case "x":
-      case "X":
-      case "Delete":
-      case "d":
-        resetMotionMemory();
-        yank(deleteChars(editor));
-        visualHead = currentHead(editor);
-        setMode("normal");
-        return true;
-      case "y":
-        yankSelection();
-        return true;
-      case "p":
-        paste("after");
-        return true;
-      case "P":
-        paste("before");
-        return true;
-      case "o":
-        swapVisualEnds();
-        return true;
-      case "V":
-        switchToVisualLine();
-        return true;
-      case "r":
-        pending = "r";
-        return true;
-      case "/":
-        resetMotionMemory();
-        options.onFind?.();
-        return true;
-      case "v":
-      case "Escape":
-        setMode("normal");
-        return true;
-      default:
-        pending = "";
-        countBuffer = "";
-        pendingCount = 1;
-        pendingOperator = null;
-        pendingOperatorGoto = null;
-        if (key.length !== 1) return false;
-        reportUnhandled(key);
-        return true;
-    }
-  }
-
-  function visualLineCommand(key: string): boolean {
-    if (consumeCountDigit(key)) return true;
-    if (pending === "g") {
-      pending = "";
-      if (key === "g") visualLineDocumentBoundary("start");
-      return true;
-    }
-    const count = takeCount();
-    switch (key) {
-      case "h":
-      case "l":
-      case "ArrowLeft":
-      case "ArrowRight":
-      case "Backspace":
-      case " ":
-      case "0":
-      case "$":
-        // Visual-line owns whole logical rows. Horizontal input must not fall
-        // through to CM6 and collapse the selection behind Vim's back.
-        return true;
-      case "j":
-      case "ArrowDown":
-        for (let step = 0; step < count; step++) visualLineMove(1);
-        return true;
-      case "k":
-      case "ArrowUp":
-        for (let step = 0; step < count; step++) visualLineMove(-1);
-        return true;
-      case "x":
-      case "X":
-      case "d":
-      case "Delete":
-        deleteLineCommand();
-        return true;
-      case "J":
-        resetMotionMemory();
-        joinLines(editor, count);
-        setMode("normal");
-        return true;
-      case "~":
-        resetMotionMemory();
-        toggleCaseForward(editor, 1);
-        setMode("normal");
-        return true;
-      case "y":
-        yankSelection("linewise");
-        return true;
-      case "p":
-        paste("after");
-        return true;
-      case "P":
-        paste("before");
-        return true;
-      case "g":
-        pending = "g";
-        return true;
-      case "G":
-        visualLineDocumentBoundary("end");
-        return true;
-      case "o":
-        renderVisualLineStates((visualLineStates ?? []).map((state) => ({
-          ...state,
-          anchor: state.head,
-          head: state.anchor,
-        })));
-        return true;
-      case "v":
-        switchToVisualChar();
-        return true;
-      case "/":
-        resetMotionMemory();
-        options.onFind?.();
-        return true;
-      case "V":
-      case "Escape":
-        setMode("normal");
-        return true;
-      default:
-        pending = "";
-        countBuffer = "";
-        pendingCount = 1;
-        pendingOperator = null;
-        pendingOperatorGoto = null;
-        if (key.length !== 1) return false;
-        reportUnhandled(key);
-        return true;
-    }
+    return handled;
   }
 
   return {
@@ -3085,7 +3557,12 @@ export function createVimLite(
       if (destroyed) return false;
       if (event.isComposing) return false;
       if (isEscape(event)) {
+        if (jumpInput || jumpSession) {
+          cancelJump();
+          return true;
+        }
         cancelJump();
+        recording = null;
         escapeToNormal();
         return true;
       }
@@ -3093,11 +3570,6 @@ export function createVimLite(
       if (mode === "insert") {
         // Let CM6's native cursor commands own insert-mode movement. They use
         // visual wrapped lines and preserve the pixel goal column.
-        if (!hasCommandModifier(event)
-          && !event.shiftKey
-          && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
-          return activateInlineMathFromArrow(editor.view, event.key);
-        }
         return false;
       }
       if (mode === "normal"
@@ -3114,7 +3586,10 @@ export function createVimLite(
         return true;
       }
       if (event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "r") {
-        options.onRedo?.();
+        const count = takeCount();
+        resetParser();
+        for (let step = 0; step < count; step++) options.onRedo?.();
+        if (mode === "normal") normalizeNormalSelections(false);
         return true;
       }
       if (hasCommandModifier(event)) {
@@ -3122,12 +3597,8 @@ export function createVimLite(
         return false;
       }
 
-      const handled = mode === "visual-line"
-        ? visualLineCommand(event.key)
-        : mode === "visual"
-          ? visualCommand(event.key)
-          : normalCommand(event.key);
-      return handled;
+      if (mode === "normal") return recordedNormalKey(event.key);
+      return visualKey(event.key);
     },
     handleKeyDown(event: KeyboardEvent): boolean {
       if (destroyed) return false;
@@ -3139,6 +3610,11 @@ export function createVimLite(
       if (targetUsesNativeInput(host, event.target)) return false;
       if (isEscape(event)) {
         event.preventDefault();
+        if (jumpInput || jumpSession) {
+          cancelJump();
+          return true;
+        }
+        recording = null;
         escapeToNormal();
         return true;
       }
@@ -3168,6 +3644,7 @@ export function createVimLite(
     destroy(): void {
       if (destroyed) return;
       destroyed = true;
+      delete editor.view.dom.dataset.vimMode;
       asyncEpoch += 1;
       cancelJump();
     },

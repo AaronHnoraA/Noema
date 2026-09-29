@@ -844,13 +844,12 @@ describe("xwidget key guard", () => {
     }
   });
 
-  test("insert vertical arrows enter display math at its source row", () => {
+  test("insert vertical arrows enter the crossed display formula locally", () => {
     const host = withMounted(document.createElement("section"));
     const markdown = "Before\n\\[\nx + y\n\\]\nAfter";
     const editor = createEditor(host, { initialContent: markdown });
     const vim = createVimLite(editor, host);
     const before = markdown.indexOf("Before");
-    const contentFrom = markdown.indexOf("x + y");
     const after = markdown.indexOf("After");
     const move = vi.spyOn(editor.view, "moveVertically")
       .mockReturnValue(EditorSelection.cursor(after));
@@ -862,10 +861,12 @@ describe("xwidget key guard", () => {
       expect(handleXwidgetSpecialKeydown(down, { editor, editorHost: host, vim })).toBe(true);
       expect(down.defaultPrevented).toBe(true);
       expect(move).toHaveBeenCalledTimes(1);
-      expect(editor.getMarkdownSelection()).toEqual({ from: contentFrom, to: contentFrom });
+      const contentStart = markdown.indexOf("x + y");
+      expect(editor.getMarkdownSelection()).toEqual({ from: contentStart, to: contentStart });
+      expect(editor.isSourceMode()).toBe(false);
       expect(document.querySelector(".cm-math-block-editor")).toBeNull();
       expect(document.querySelector(".cm-math-block")).toBeNull();
-      expect(document.querySelectorAll(".cm-math-source-line")).toHaveLength(3);
+      expect(editor.view.contentDOM.textContent).toContain("x + y");
     } finally {
       move.mockRestore();
       editor.destroy();
@@ -873,13 +874,12 @@ describe("xwidget key guard", () => {
     }
   });
 
-  test("insert ArrowUp enters display source from below and another move exits above", () => {
+  test("insert ArrowUp enters the display formula without changing document view", () => {
     const host = withMounted(document.createElement("section"));
     const markdown = "Before\n\\[\nx + y\n\\]\nAfter";
     const editor = createEditor(host, { initialContent: markdown });
     const vim = createVimLite(editor, host);
     const before = markdown.indexOf("Before");
-    const contentTo = markdown.indexOf("\\]");
     const after = markdown.indexOf("After");
     const move = vi.spyOn(editor.view, "moveVertically")
       .mockReturnValue(EditorSelection.cursor(before));
@@ -889,15 +889,14 @@ describe("xwidget key guard", () => {
       const up = new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true });
       Object.defineProperty(up, "target", { value: document.body });
       expect(handleXwidgetSpecialKeydown(up, { editor, editorHost: host, vim })).toBe(true);
-      expect(editor.getMarkdownSelection()).toEqual({ from: contentTo, to: contentTo });
+      const contentEnd = markdown.indexOf("\\]");
+      expect(editor.getMarkdownSelection()).toEqual({ from: contentEnd, to: contentEnd });
+      expect(editor.isSourceMode()).toBe(false);
       expect(document.querySelector(".cm-math-block-editor")).toBeNull();
       expect(document.querySelector(".cm-math-block")).toBeNull();
 
-      const exit = new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true });
-      Object.defineProperty(exit, "target", { value: document.body });
-      expect(handleXwidgetSpecialKeydown(exit, { editor, editorHost: host, vim })).toBe(true);
-      expect(editor.getMarkdownSelection()).toEqual({ from: before, to: before });
-      expect(document.querySelector(".cm-math-block")).toBeTruthy();
+      vim.setMode("normal");
+      expect(editor.isSourceMode()).toBe(false);
     } finally {
       move.mockRestore();
       editor.destroy();
@@ -983,7 +982,7 @@ describe("xwidget key guard", () => {
     }
   });
 
-  test("routes insert-mode ArrowLeft into adjacent inline formula source", () => {
+  test("routes insert-mode ArrowLeft through expanded inline formula source", () => {
     const host = withMounted(document.createElement("section"));
     const markdown = "before \\(x\\) after";
     const editor = createEditor(host, { initialContent: markdown });
@@ -991,7 +990,7 @@ describe("xwidget key guard", () => {
     vim.setMode("insert");
     editor.setMarkdownSelection(markdown.indexOf("\\(x\\)") + "\\(x\\)".length);
     try {
-      expect(host.querySelector(".cm-math-inline")).toBeTruthy();
+      expect(host.querySelector(".cm-math-inline")).not.toBeNull();
       const event = new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true, cancelable: true });
       Object.defineProperty(event, "target", { value: document.body });
       expect(handleXwidgetSpecialKeydown(event, { editor, editorHost: host, vim })).toBe(true);
@@ -1252,6 +1251,44 @@ describe("xwidget key guard", () => {
     } finally {
       editor.destroy();
       host.remove();
+    }
+  });
+
+  test("entry keys consume only their paired beforeinput after switching to Insert", () => {
+    for (const key of ["a", "i", "A", "I"]) {
+      const host = withMounted(document.createElement("section"));
+      const editor = createEditor(host, { initialContent: "abc" });
+      const vim = createVimLite(editor, host);
+      vim.setMode("normal");
+      editor.setMarkdownSelection(0);
+      try {
+        const down = new KeyboardEvent("keydown", {
+          key, shiftKey: key !== key.toLowerCase(), bubbles: true, cancelable: true,
+        });
+        Object.defineProperty(down, "target", { value: document.body });
+        expect(handleXwidgetVimKeydown(down, { editor, editorHost: host, vim })).toBe(true);
+        expect(vim.mode()).toBe("insert");
+        expect(editor.isSourceMode()).toBe(false);
+
+        const paired = new InputEvent("beforeinput", {
+          inputType: "insertText", data: key, bubbles: true, cancelable: true,
+        });
+        Object.defineProperty(paired, "target", { value: document.body });
+        expect(handleXwidgetVimBeforeInput(paired, { editor, editorHost: host, vim })).toBe(true);
+        expect(paired.defaultPrevented).toBe(true);
+        expect(editor.getMarkdown()).toBe("abc");
+
+        const typed = new InputEvent("beforeinput", {
+          inputType: "insertText", data: key, bubbles: true, cancelable: true,
+        });
+        Object.defineProperty(typed, "target", { value: document.body });
+        expect(handleXwidgetVimBeforeInput(typed, { editor, editorHost: host, vim })).toBe(false);
+        expect(typed.defaultPrevented).toBe(false);
+      } finally {
+        vim.destroy();
+        editor.destroy();
+        host.remove();
+      }
     }
   });
 

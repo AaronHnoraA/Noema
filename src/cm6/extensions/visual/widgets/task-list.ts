@@ -21,6 +21,7 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import { MeasuredWidget } from "./measured-widget.ts";
+import { vimKeepsRenderedObjects } from "../vim-objects.ts";
 import { syntaxTree } from "@codemirror/language";
 import type { Range } from "@codemirror/state";
 import { getBlockMathRanges, rangeInsideAny } from "../../../math-ranges.ts";
@@ -100,7 +101,7 @@ function buildTaskDecorations(view: EditorView): DecorationSet {
         if (rangeInsideAny(node.from, node.to, blockMathRanges)) return false;
         if (node.name !== "TaskMarker") return;
         // Keep raw source when cursor is on the same line
-        if (doc.lineAt(node.from).number === cursorLine) return false;
+        if (!vimKeepsRenderedObjects(view) && doc.lineAt(node.from).number === cursorLine) return false;
 
         const raw = doc.sliceString(node.from, node.to);
         const checked = /\[x\]/i.test(raw);
@@ -109,6 +110,7 @@ function buildTaskDecorations(view: EditorView): DecorationSet {
         decos.push(
           Decoration.replace({
             widget: new TaskCheckboxWidget(checked, node.from, to),
+            vimAtomic: true,
           }).range(node.from, to),
         );
         return false;
@@ -123,6 +125,7 @@ function buildTaskDecorations(view: EditorView): DecorationSet {
 const TASK_MARKER_LINE_RE = /^\s*(?:[-+*]|\d+[.)])\s+\[[ xX]\]/;
 
 function activeTaskMarkerLineKey(view: EditorView): string {
+  if (vimKeepsRenderedObjects(view)) return "";
   const line = view.state.doc.lineAt(view.state.selection.main.from);
   return TASK_MARKER_LINE_RE.test(line.text) ? String(line.number) : "";
 }
