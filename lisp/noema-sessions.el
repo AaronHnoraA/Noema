@@ -84,14 +84,24 @@ its project is not a Noema project, so it is listed here beside the rest.")
   "Return the live agent buffer of session ENTRY in ROOT, or nil."
   (let ((name (noema-sessions--string entry "name"))
         (session-id (noema-sessions--string entry "sessionId")))
-    (or (and name (noema-agent-acp-session-buffer name root))
+    (or (and name
+             (let ((buffer (noema-agent-acp-session-buffer name root)))
+               (and (noema-sessions--execution-live-p buffer) buffer)))
         (and session-id
              (seq-find (lambda (buffer)
-                         (and (noema-agent-acp-agent-buffer-p buffer)
+                         (and (noema-sessions--execution-live-p buffer)
+                              (equal (buffer-local-value 'noema-agent-acp-session-root buffer)
+                                     (file-name-as-directory (expand-file-name root)))
                               (local-variable-p 'noema-agent-promote--session-id buffer)
                               (equal (buffer-local-value 'noema-agent-promote--session-id buffer)
                                      session-id)))
                        (buffer-list))))))
+
+(defun noema-sessions--execution-live-p (buffer)
+  "Return non-nil if BUFFER has an ACP client process still running."
+  (and (noema-agent-acp-agent-buffer-p buffer)
+       (let ((process (noema-agent-acp-state-value buffer '(:client :process))))
+         (and (processp process) (process-live-p process)))))
 
 (defun noema-sessions--local-sessions (names root)
   "Return live agent sessions of ROOT that no durable entry in NAMES covers."

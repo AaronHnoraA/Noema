@@ -190,6 +190,19 @@ ordinary files into the CAS without moving them, persist `ArtifactLink`
 provenance on the stable WorkNode, and expose those paths through the Emacs
 Inspector.
 
+The project's `pi` tab manages agent sessions. Its model pool is ordered as
+Codex Luna, DeepSeek V4 Flash, Codex Sol, Codex Astra, and Claude Sonnet 5.
+In that tab, `C-c C-m` picks from authenticated models in the pool and
+`C-c M-m` cycles to the next one; the tab menu has both actions. Pi's own
+`enabledModels` uses the same order. `M-x noema-pi-doctor` reports credential
+and deployment status. Configure the list with `noema-pi-model-pool`; leaving
+`noema-pi-model` empty seeds the first model on initial deployment and keeps
+a later saved default. If the local Codex CLI is logged in, Noema's Pi reads its
+access token on demand through a command in its own `models.json`; this makes
+the Codex models usable without a second login or a copied token. Noema then
+keeps a private Pi credential store for DeepSeek and other logins, leaving the
+person's Pi credentials unchanged. Keys are never written to project files.
+
 The Work DAG opened by `C-c C-g` is a semantic Graph Board rather than a
 static diagram. It is a temporary pop-up, not a default/dedicated workspace
 window: `RET` or double-click synchronizes its selected node back to JuText

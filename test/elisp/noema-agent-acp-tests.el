@@ -212,6 +212,26 @@
   (cl-letf (((symbol-function 'agent-shell--state) (lambda () '((:active-requests . (prompt))))))
     (should-error (noema-agent-acp--select-model (lambda (&rest _) (ert-fail "changed busy model"))) :type 'user-error)))
 
+(ert-deftest noema-agent-acp-pool-model-change-validates-and-uses-acp ()
+  (with-temp-buffer
+    (setq-local agent-shell--state '((:session . ((:id . "session-1")))))
+    (let (selected)
+      (cl-letf (((symbol-function 'agent-shell--state)
+                 (lambda () agent-shell--state))
+                ((symbol-function 'noema-agent-acp-available-model-ids)
+                 (lambda (&optional _) '("provider/one" "provider/two")))
+                ((symbol-function 'noema-agent-acp-current-model-id)
+                 (lambda (&optional _) "provider/one"))
+                ((symbol-function 'agent-shell--config-option-set-model-id)
+                 (lambda (&rest args) (setq selected (plist-get args :model-id)))))
+        (should-error (noema-agent-acp-set-model "provider/unknown") :type 'user-error)
+        (should-not selected)
+        (noema-agent-acp-set-model "provider/two")
+        (should (equal selected "provider/two"))
+        (setq-local agent-shell--state '((:active-requests . (prompt))
+                                        (:session . ((:id . "session-1")))))
+        (should-error (noema-agent-acp-set-model "provider/one") :type 'user-error)))))
+
 (ert-deftest noema-agent-acp-receipt-precedes-consumer-and-is-run-scoped ()
   (with-temp-buffer
     (setq-local agent-shell--state '((:session . ((:id . "s")))))

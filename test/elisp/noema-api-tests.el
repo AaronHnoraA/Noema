@@ -201,25 +201,29 @@
 (ert-deftest noema-agent-worker-reuses-a-resumed-session-buffer ()
   (noema-api-test--with-project root
     (let ((shell (generate-new-buffer " noema-agent-resumed"))
+          (process (make-pipe-process :name "noema-agent-resumed-test" :noquery t))
           (worker (noema-agent-worker--create
                    :root root :target root :agent "opencode" :session-id "ses_test"
                    :routing '((sessionName . ((name . "test")))))))
       (unwind-protect
           (progn
             (with-current-buffer shell
-              (setq major-mode 'agent-shell-mode))
+              (setq major-mode 'agent-shell-mode)
+              (setq-local agent-shell--state
+                          `((:client . ((:process . ,process))))))
             (cl-letf (((symbol-function 'noema-agent-worker--config) #'ignore)
                       ((symbol-function 'noema-agent-acp-start) (lambda (&rest _) shell))
                       ((symbol-function 'noema-agent-acp-subscribe) (lambda (&rest _) 'subscription)))
               (noema-agent-worker--start-shell worker "native-test"))
             ;; The next Run of the same logical Session finds this live buffer.
-            (should (eq shell (noema-agent-worker--existing-buffer "ses_test")))
+            (should (eq shell (noema-agent-worker--existing-buffer "ses_test" root)))
             (should (equal (noema-agent-acp--tab-label shell) "test · opencode"))
             ;; A buffer retired by a newer physical Session keeps a readable tab.
             (with-current-buffer shell
               (setq-local noema-agent-acp-session-name nil)
               (rename-buffer " *Noema Agent · test · opencode @ demo* (retired)" t))
             (should (equal (noema-agent-acp--tab-label shell) "test · opencode (retired)")))
+        (when (process-live-p process) (delete-process process))
         (when (buffer-live-p shell) (kill-buffer shell))))))
 
 (ert-deftest noema-agent-worker-sends-non-ascii-context-as-json ()

@@ -1486,14 +1486,20 @@ The kernel already recorded the cancellation, so this is not a failure."
         (setf (alist-get :mcp-servers config) servers))
       config)))
 
-(defun noema-agent-worker--existing-buffer (session-id)
-  "Find the live agent-shell buffer attached to logical SESSION-ID."
+(defun noema-agent-worker--existing-buffer (session-id &optional root)
+  "Find a live ACP buffer attached to logical SESSION-ID in ROOT."
   (seq-find (lambda (buffer)
-              (with-current-buffer buffer
-                (and (derived-mode-p 'agent-shell-mode)
-                     (bound-and-true-p noema-agent-acp-session-name)
-                     (boundp 'noema-agent-promote--session-id)
-                     (equal noema-agent-promote--session-id session-id))))
+              (and (noema-agent-acp-agent-buffer-p buffer)
+                   (with-current-buffer buffer
+                     (let ((process (noema-agent-acp-state-value buffer
+                                                                 '(:client :process))))
+                       (and (processp process) (process-live-p process)
+                            (bound-and-true-p noema-agent-acp-session-name)
+                            (or (null root)
+                                (equal noema-agent-acp-session-root
+                                       (file-name-as-directory (expand-file-name root))))
+                            (boundp 'noema-agent-promote--session-id)
+                            (equal noema-agent-promote--session-id session-id))))))
             (buffer-list)))
 
 (defun noema-agent-worker--on-session-ready (worker fresh)
@@ -1561,7 +1567,9 @@ The kernel already recorded the cancellation, so this is not a failure."
          (parent (noema-agent-worker--value routing "parent"))
          (fork-native (and (equal mode "fork")
                            (noema-agent-worker--string parent "nativeSessionId")))
-         (buffer (and (not (string-empty-p logical)) (noema-agent-worker--existing-buffer logical))))
+         (buffer (and (not (string-empty-p logical))
+                      (noema-agent-worker--existing-buffer
+                       logical (noema-agent-worker-root worker)))))
     (if buffer
         (progn
           (noema-agent-acp-touch buffer)
@@ -1960,7 +1968,8 @@ project-scoped name without starting a second physical agent session."
          (session-id (noema-agent-worker--string payload "sessionId"))
          (worker (noema-agent-worker--session-worker payload))
          (buffer (or (and worker (noema-agent-worker-buffer worker))
-                     (and session-id (noema-agent-worker--existing-buffer session-id))
+                     (and session-id root
+                          (noema-agent-worker--existing-buffer session-id root))
                      (and name (noema-agent-acp-session-buffer name root)))))
     (if (buffer-live-p buffer)
         (noema-agent-acp-show-buffer buffer)
@@ -2036,7 +2045,8 @@ Registered artifacts and durable session state are never deleted."
   (let* ((name (noema-agent-worker--string payload "name"))
          (session-id (noema-agent-worker--string payload "sessionId"))
          (buffer (or (and name (noema-agent-acp-session-buffer name root))
-                     (and session-id (noema-agent-worker--existing-buffer session-id)))))
+                     (and session-id root
+                          (noema-agent-worker--existing-buffer session-id root)))))
     (when (and buffer (not (noema-agent-worker-stop-buffer buffer)))
       (display-warning 'noema-agent-worker
                        (format "Pi asked to close %s while a Run is using it; it stays open"

@@ -13,8 +13,9 @@
 ;;   `noema-pi-model'; `SYSTEM.md' replaces Pi's coding prompt with a few
 ;;   manager lines; a generated extension keeps only the coordinator MCP tools
 ;;   active, blocks every other tool and drops project context files from the
-;;   prompt.  The person's own Pi setup is untouched; credentials are shared
-;;   through a link to `noema-pi-credentials-file'.
+;;   prompt.  The person's own Pi setup is untouched.  Credentials are linked
+;;   from `noema-pi-credentials-file', or copied into a private store when a
+;;   local Codex login can provide the first pool model.
 ;; - Authority.  Pi's only tools are `/mcp/coordinator'.  They run as actor
 ;;   `pi' and cannot touch names the person pinned.  Anything that touches a
 ;;   live agent (`run.start', `session.cancel', `session.close') is a durable
@@ -75,16 +76,38 @@ Noema owns its manager keys in `settings.json', `SYSTEM.md' and the
   :group 'noema-pi-router)
 
 (defcustom noema-pi-credentials-file "~/.pi/agent/auth.json"
-  "Pi credential store linked into `noema-pi-agent-directory'.
-Logging in once with Pi is then enough for the Noema manager too."
+  "Pi credential store shared with `noema-pi-agent-directory' when possible.
+When Noema bridges a Codex login, it makes a private copy so the person's
+Pi credential store is never changed."
+  :type 'file
+  :group 'noema-pi-router)
+
+(defcustom noema-pi-codex-auth-file "~/.codex/auth.json"
+  "Codex CLI login that Noema's Pi may use for openai-codex models.
+Noema reads only its access token through a command; it does not copy the
+token or refresh token into Pi's credential store."
   :type 'file
   :group 'noema-pi-router)
 
 (defcustom noema-pi-model ""
   "Model the Pi manager uses, as \"provider/model-id\".
 Session management needs little reasoning, so a small, cheap model is right.
-Empty keeps Pi's own default."
+Empty uses the first pool model on initial deployment, then keeps Pi's saved
+choice."
   :type 'string
+  :group 'noema-pi-router)
+
+(defcustom noema-pi-model-pool
+  '("openai-codex/gpt-5.6-luna"
+    "deepseek/deepseek-v4-flash"
+    "openai-codex/gpt-5.6-sol"
+    "openai-codex/gpt-6-astra"
+    "anthropic/claude-sonnet-5")
+  "Ordered model choices for Noema's Pi manager.
+Pi uses this list for native model cycling, and Noema uses it for its quick
+model picker.  A model appears in the live ACP picker only when Pi advertises
+it and its provider is authenticated."
+  :type '(repeat string)
   :group 'noema-pi-router)
 
 (defcustom noema-pi-thinking-level "off"
@@ -113,7 +136,8 @@ Emacs command that does it."
   :group 'noema-pi-router)
 
 (defconst noema-pi-router--api-key-variables
-  '("ANTHROPIC_API_KEY" "OPENAI_API_KEY" "GEMINI_API_KEY" "XAI_API_KEY" "OPENROUTER_API_KEY")
+  '("ANTHROPIC_API_KEY" "OPENAI_API_KEY" "DEEPSEEK_API_KEY"
+    "GEMINI_API_KEY" "XAI_API_KEY" "OPENROUTER_API_KEY")
   "Provider keys pi-acp reads from its environment.")
 
 (defconst noema-pi-router--extension
@@ -162,6 +186,65 @@ export default function (pi: any) {
 
 (defvar-local noema-pi-router--claim-timer nil
   "Debounce timer for claiming coordinator requests after Pi tool calls.")
+
+(defvar noema-pi-router-model-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c C-m") #'noema-pi-select-model)
+    (define-key map (kbd "C-c M-m") #'noema-pi-cycle-model)
+    map)
+  "Keys for switching models in the Noema Pi session.")
+
+(define-minor-mode noema-pi-router-model-mode
+  "Provide a small model picker and keyboard cycling in Noema Pi buffers."
+  :lighter nil
+  :keymap noema-pi-router-model-mode-map)
+
+(defun noema-pi-router--pool ()
+  "Return the validated, ordered Pi model pool."
+  (unless (and noema-pi-model-pool
+               (cl-every (lambda (model)
+                           (and (stringp model)
+                                (string-match-p "\\`[^/[:space:]]+/[^/[:space:]]+\\'" model)))
+                         noema-pi-model-pool)
+               (= (length noema-pi-model-pool)
+                  (length (delete-dups (copy-sequence noema-pi-model-pool)))))
+    (user-error "Pi model pool needs unique provider/model-id entries"))
+  noema-pi-model-pool)
+
+(defun noema-pi-router--available-pool ()
+  "Return Pi pool entries the current ACP session advertises."
+  (seq-filter (lambda (model)
+                (member model (noema-agent-acp-available-model-ids)))
+              (noema-pi-router--pool)))
+
+;;;###autoload
+(defun noema-pi-select-model ()
+  "Quickly choose an available model from the Noema Pi pool."
+  (interactive)
+  (unless (and (bound-and-true-p noema-pi-router-model-mode)
+               (equal noema-agent-acp-session-agent "pi"))
+    (user-error "Select a Noema Pi session first"))
+  (let ((available (noema-pi-router--available-pool)))
+    (unless available
+      (user-error "No Pi pool models are available; check Pi provider logins"))
+    (noema-agent-acp-set-model
+     (completing-read "Pi model: " available nil t nil nil
+                      (and (member (noema-agent-acp-current-model-id) available)
+                           (noema-agent-acp-current-model-id))))))
+
+;;;###autoload
+(defun noema-pi-cycle-model ()
+  "Select the next available model in the Noema Pi pool."
+  (interactive)
+  (unless (and (bound-and-true-p noema-pi-router-model-mode)
+               (equal noema-agent-acp-session-agent "pi"))
+    (user-error "Select a Noema Pi session first"))
+  (let* ((available (noema-pi-router--available-pool))
+         (position (cl-position (noema-agent-acp-current-model-id) available :test #'equal)))
+    (unless available
+      (user-error "No Pi pool models are available; check Pi provider logins"))
+    (noema-agent-acp-set-model
+     (nth (mod (1+ (or position -1)) (length available)) available))))
 
 (defun noema-pi-router--root (directory)
   "Return the normalized project root that owns Pi for DIRECTORY.
@@ -238,10 +321,15 @@ Keys Noema does not own are kept, so choices made inside Pi survive."
                         (let ((parsed (noema-research-parse-json (noema-pi-router--read-file file))))
                           (and (hash-table-p parsed) parsed)))
                       (make-hash-table :test #'equal)))
-        (model (string-trim (or noema-pi-model ""))))
+        (model (string-trim (or noema-pi-model "")))
+        (pool (noema-pi-router--pool)))
     (puthash "defaultTools" [] settings)
     (puthash "enableSkillCommands" :false settings)
     (puthash "defaultThinkingLevel" noema-pi-thinking-level settings)
+    (puthash "enabledModels" (vconcat pool) settings)
+    (when (and (string-empty-p model)
+               (not (noema-pi-router--string settings "defaultModel")))
+      (setq model (car pool)))
     (unless (string-empty-p model)
       (if-let* ((slash (string-search "/" model)))
           (progn
@@ -261,6 +349,76 @@ Keys Noema does not own are kept, so choices made inside Pi survive."
                            (file-truename directory))))
       (make-symbolic-link source target))))
 
+(defun noema-pi-router--codex-login-p ()
+  "Return non-nil when the configured Codex CLI has an access token."
+  (when-let* ((content (noema-pi-router--read-file
+                        (expand-file-name noema-pi-codex-auth-file)))
+              (auth (ignore-errors (noema-research-parse-json content)))
+              (tokens (noema-pi-router--value auth "tokens")))
+    (and (equal (noema-pi-router--string auth "auth_mode") "chatgpt")
+         (noema-pi-router--string tokens "access_token"))))
+
+(defun noema-pi-router--codex-token-command ()
+  "Return Pi's command reference to the local Codex access token."
+  (when-let* ((node (executable-find "node"))
+              (library (locate-library "noema-pi-router"))
+              (script (expand-file-name "../scripts/noema-codex-token.mjs"
+                                        (file-name-directory library)))
+              (_ (file-readable-p script)))
+    (concat "!" (shell-quote-argument node) " "
+            (shell-quote-argument script) " "
+            (shell-quote-argument (expand-file-name noema-pi-codex-auth-file)))))
+
+(defun noema-pi-router--private-credentials (directory)
+  "Give DIRECTORY its own Pi auth store when using the Codex CLI login.
+Existing provider entries are preserved.  Never write through the shared
+credential symlink or store the Codex access token in Pi's auth file."
+  (when-let* ((_ (noema-pi-router--codex-login-p))
+              (command (noema-pi-router--codex-token-command)))
+    (let* ((target (expand-file-name "auth.json" directory))
+           (auth (or (ignore-errors
+                       (let ((parsed (noema-research-parse-json
+                                      (noema-pi-router--read-file target))))
+                         (and (hash-table-p parsed) parsed)))
+                     (make-hash-table :test #'equal)))
+           (entry (gethash "openai-codex" auth))
+           (old-bridge (and (equal (noema-pi-router--string entry "type") "api_key")
+                            (equal (noema-pi-router--string entry "key") command))))
+      (when (or (file-symlink-p target) old-bridge)
+        (when old-bridge
+          (remhash "openai-codex" auth))
+        (let ((temporary (make-temp-file (expand-file-name ".auth-" directory))))
+          (unwind-protect
+              (progn
+                (set-file-modes temporary #o600)
+                (let ((coding-system-for-write 'utf-8-unix))
+                  (write-region (noema-pi-router--json auth) nil temporary nil 'silent))
+                (rename-file temporary target t))
+            (when (file-exists-p temporary)
+              (delete-file temporary))))))))
+
+(defun noema-pi-router--configure-codex-model-auth (directory)
+  "Configure DIRECTORY's built-in Codex models to read the CLI login.
+Pi's built-in `openai-codex' provider is OAuth-only.  Its `models.json'
+`apiKey' override enables the supported command credential path without
+copying the token into Pi configuration."
+  (when-let* ((_ (noema-pi-router--codex-login-p))
+              (command (noema-pi-router--codex-token-command)))
+    (let* ((file (expand-file-name "models.json" directory))
+           (models (or (ignore-errors
+                         (let ((parsed (noema-research-parse-json
+                                        (noema-pi-router--read-file file))))
+                           (and (hash-table-p parsed) parsed)))
+                       (make-hash-table :test #'equal)))
+           (providers (or (gethash "providers" models)
+                          (make-hash-table :test #'equal)))
+           (codex (or (gethash "openai-codex" providers)
+                      (make-hash-table :test #'equal))))
+      (puthash "apiKey" command codex)
+      (puthash "openai-codex" codex providers)
+      (puthash "providers" providers models)
+      (noema-pi-router--write-file file (noema-pi-router--json models)))))
+
 ;;;###autoload
 (defun noema-pi-deploy ()
   "Write Noema's Pi manager setup into `noema-pi-agent-directory'.
@@ -276,6 +434,8 @@ not rewritten and settings Noema does not own are kept."
     (noema-pi-router--write-file (expand-file-name "extensions/noema-manager/index.ts" directory)
                                  noema-pi-router--extension)
     (noema-pi-router--link-credentials directory)
+    (noema-pi-router--private-credentials directory)
+    (noema-pi-router--configure-codex-model-auth directory)
     (when (called-interactively-p 'interactive)
       (message "Noema Pi manager deployed in %s" (abbreviate-file-name directory)))
     (list (concat "PI_CODING_AGENT_DIR=" (directory-file-name directory))
@@ -362,6 +522,7 @@ ENDPOINT carries the coordinator URL.  Display the buffer when FOCUS."
                                          :session-id native :focus focus
                                          :origin 'pi)))
       (noema-agent-acp-mark-session-buffer buffer noema-pi-router-session-name "pi" root)
+      (with-current-buffer buffer (noema-pi-router-model-mode 1))
       (puthash root buffer noema-pi-router--buffers)
       (with-current-buffer buffer
         (add-hook 'kill-buffer-hook
@@ -588,7 +749,16 @@ or one still on screen, keep running."
 (defun noema-pi-router--credentials ()
   "Describe the credentials the Pi manager can use, or return nil.
 An `auth.json' that holds no provider entry does not count."
-  (or (seq-find (lambda (name)
+  (or (when-let* ((_ (noema-pi-router--codex-login-p))
+                  (command (noema-pi-router--codex-token-command))
+                  (content (noema-pi-router--read-file
+                            (expand-file-name "models.json" noema-pi-agent-directory)))
+                  (models (ignore-errors (noema-research-parse-json content)))
+                  (providers (noema-pi-router--value models "providers"))
+                  (codex (noema-pi-router--value providers "openai-codex"))
+                  ((equal (noema-pi-router--string codex "apiKey") command)))
+        "Codex CLI login")
+      (seq-find (lambda (name)
                   (let ((value (getenv name)))
                     (and value (not (string-empty-p value)))))
                 noema-pi-router--api-key-variables)
@@ -642,8 +812,9 @@ An `auth.json' that holds no provider entry does not count."
              "written when Pi first starts (M-x noema-pi-deploy)"))
      (list t "manager model"
            (if (string-empty-p (string-trim (or noema-pi-model "")))
-               "Pi default (set noema-pi-model to a small model)"
+               (format "pool default: %s" (car (noema-pi-router--pool)))
              noema-pi-model))
+     (list t "model pool" (string-join (noema-pi-router--pool) ", "))
      (list (bound-and-true-p my/noema--ready) "Noema host"
            (if (bound-and-true-p my/noema--ready) "ready" "not started (it starts on first use)")))))
 

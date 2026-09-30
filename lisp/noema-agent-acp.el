@@ -36,6 +36,8 @@
 (declare-function noema-sessions-agent-archive "noema-sessions" (&optional buffer))
 (declare-function noema-sessions-agent-jump "noema-sessions" (&optional buffer))
 (declare-function noema-sessions-agent-list "noema-sessions" (&optional buffer))
+(declare-function noema-pi-select-model "noema-pi-router" ())
+(declare-function noema-pi-cycle-model "noema-pi-router" ())
 (defvar shell-maker--busy)
 (defvar agent-shell-confirm-interrupt)
 (defvar shell-maker--config)
@@ -126,6 +128,31 @@
                         (when success (funcall success)))))))
 
 (advice-add 'agent-shell--config-option-set-model-id :around #'noema-agent-acp--set-model)
+
+(defun noema-agent-acp-available-model-ids (&optional buffer)
+  "Return model IDs advertised by the ACP session in BUFFER."
+  (with-current-buffer (or buffer (current-buffer))
+    (mapcar (lambda (model) (map-elt model :model-id))
+            (agent-shell--get-available-models (agent-shell--state)))))
+
+(defun noema-agent-acp-current-model-id (&optional buffer)
+  "Return the selected ACP model ID in BUFFER."
+  (with-current-buffer (or buffer (current-buffer))
+    (agent-shell--current-model-id (agent-shell--state))))
+
+(defun noema-agent-acp-set-model (model-id &optional buffer)
+  "Select MODEL-ID in BUFFER through ACP after checking session state."
+  (with-current-buffer (or buffer (current-buffer))
+    (unless (map-nested-elt (agent-shell--state) '(:session :id))
+      (user-error "No active agent session"))
+    (when (or (map-elt (agent-shell--state) :active-requests)
+              (and (fboundp 'noema-agent-worker-buffer-busy-p)
+                   (noema-agent-worker-buffer-busy-p (current-buffer))))
+      (user-error "Agent is starting or running; finish/cancel the current turn before changing model"))
+    (unless (member model-id (noema-agent-acp-available-model-ids))
+      (user-error "Model is not available in this session: %s" model-id))
+    (unless (equal model-id (noema-agent-acp-current-model-id))
+      (agent-shell--config-option-set-model-id :model-id model-id))))
 
 (defun noema-agent-acp-agent-buffer-p (buffer)
   "Return non-nil when BUFFER is an embedded agent-shell session."
@@ -780,9 +807,13 @@ renders.  Return non-nil when a prompt was written now."
 
 (defun noema-agent-acp--menu-items (buffer)
   "Return the easy-menu items managing agent BUFFER."
-  (let ((named (and (buffer-local-value 'noema-agent-acp-session-name buffer) t)))
+  (let ((named (and (buffer-local-value 'noema-agent-acp-session-name buffer) t))
+        (pi (equal (buffer-local-value 'noema-agent-acp-session-agent buffer) "pi")))
     `(["Show" (noema-agent-acp-show-buffer ,buffer)]
       ["Focus input" (noema-agent-acp-focus-input ,buffer)]
+      ,@(when pi
+          `(["Choose Pi pool model..." (with-current-buffer ,buffer (noema-pi-select-model))]
+            ["Next Pi pool model" (with-current-buffer ,buffer (noema-pi-cycle-model))]))
       ["Choose model..." (with-current-buffer ,buffer (call-interactively #'agent-shell-set-session-model))]
       ["Stop current work" (noema-agent-acp-stop ,buffer)]
       "--"
@@ -844,7 +875,14 @@ Mouse
   \\[agent-shell-interrupt]\tinterrupt the current turn
   \\[agent-shell-set-session-mode]\tsession mode
   \\[agent-shell-set-session-model]\tmodel
-"))))
+"))
+    (when (equal noema-agent-acp-session-agent "pi")
+      (princ
+       (substitute-command-keys
+        "\n\\<noema-pi-router-model-mode-map>Pi model pool
+  \\[noema-pi-select-model]\tchoose an available pool model
+  \\[noema-pi-cycle-model]\tselect the next available pool model
+")))))
 
 (defun noema-agent-acp-help-or-insert ()
   "Insert `?' in the prompt input; elsewhere describe the Agent window."
@@ -1348,30 +1386,41 @@ visible-only render policy.  Neither setting affects ACP transport or events."
         (agent-shell-cwd-function (lambda () directory))
         (agent-shell-transcript-file-path-function nil)
         (noema-agent-render-policy render-policy))
-    (let ((buffer
-           (agent-shell--start :config config :no-focus t :new-session t
-                               :session-strategy 'new :session-id session-id
-                               :fork-session-id fork-session-id)))
-      (with-current-buffer buffer
-        (setq-local agent-shell-transcript-file-path-function nil
-                    agent-shell-cwd-function (lambda () directory)
-                    agent-shell--transcript-file nil
-                    ;; Interrupting a Noema session stops at once; the Run
-                    ;; record and the conversation both survive it.
-                    agent-shell-confirm-interrupt nil
-                    noema-agent-render-policy render-policy
-                    noema-agent-acp-session-origin origin
-                    noema-agent-acp-session-root
-                    (file-name-as-directory (expand-file-name directory)))
-        (noema-agent-acp--install-workspace-tabs buffer))
-      ;; acp.el starts the client process for the asynchronous handshake.
-      (noema-agent-acp-subscribe
-       :buffer buffer :event 'init-handshake
-       :callback (lambda (_event) (noema-agent-acp-hide-client-stderr buffer)))
-      (noema-agent-acp-hide-client-stderr buffer)
-      (when focus
-        (noema-agent-acp-show-buffer buffer))
-      buffer)))
+    ;; An ACP session already executing in this Emacs is an attachment, not
+    ;; another client to initialize or subscribe.  The shared lookup includes
+    ;; both the agent and execution target/workspace.
+    (if-let* ((existing (and session-id
+                             (eq (map-elt config :identifier) 'codex)
+                             (fboundp 'my/agent-shell--find-execution)
+                             (my/agent-shell--find-execution
+                              session-id config directory))))
+        (progn
+          (when focus (noema-agent-acp-show-buffer existing))
+          existing)
+      (let ((buffer
+             (agent-shell--start :config config :no-focus t :new-session t
+                                 :session-strategy 'new :session-id session-id
+                                 :fork-session-id fork-session-id)))
+        (with-current-buffer buffer
+          (setq-local agent-shell-transcript-file-path-function nil
+                      agent-shell-cwd-function (lambda () directory)
+                      agent-shell--transcript-file nil
+                      ;; Interrupting a Noema session stops at once; the Run
+                      ;; record and the conversation both survive it.
+                      agent-shell-confirm-interrupt nil
+                      noema-agent-render-policy render-policy
+                      noema-agent-acp-session-origin origin
+                      noema-agent-acp-session-root
+                      (file-name-as-directory (expand-file-name directory)))
+          (noema-agent-acp--install-workspace-tabs buffer))
+        ;; acp.el starts the client process for the asynchronous handshake.
+        (noema-agent-acp-subscribe
+         :buffer buffer :event 'init-handshake
+         :callback (lambda (_event) (noema-agent-acp-hide-client-stderr buffer)))
+        (noema-agent-acp-hide-client-stderr buffer)
+        (when focus
+          (noema-agent-acp-show-buffer buffer))
+        buffer))))
 
 (cl-defun noema-agent-acp-subscribe (&key buffer event callback)
   "Subscribe CALLBACK to EVENT in agent-shell BUFFER."
