@@ -841,13 +841,39 @@ From a `.noema' buffer the list starts scoped to that file; SCOPE may be
                     (cdr choice))
               result)))))
 
-(defun noema-sessions--switch-candidates (names root)
+(defun noema-sessions--switch-candidates (names root &optional live-only)
   "Return (LABEL . (ENTRY . BUFFER)) choices for project ROOT.
 Durable session names come first, then ROOT's live sessions that have no
 durable record yet, then live sessions of other projects.  A popup, manual or
-foreign session is registered like any other, so one prompt reaches them all."
+foreign session is registered like any other, so one prompt reaches them all.
+With LIVE-ONLY, include only buffers with a running ACP process, putting ROOT
+first; a context send must never revive a recorded conversation."
   (noema-sessions--unique-choices
-   (append
+   (if live-only
+       (let* ((sessions (seq-filter
+                         (lambda (session)
+                           (noema-sessions--execution-live-p
+                            (plist-get session :buffer)))
+                         (noema-agent-acp-sessions)))
+              (local (seq-filter (lambda (session)
+                                   (equal (plist-get session :root) root))
+                                 sessions))
+              (other (seq-remove (lambda (session)
+                                   (equal (plist-get session :root) root))
+                                 sessions)))
+         (mapcar (lambda (session)
+                   (cons (format "%s  %s · %s"
+                                 (noema-sessions--local-label session)
+                                 (or (plist-get session :agent) "")
+                                 (if (equal (plist-get session :root) root)
+                                     "current project"
+                                   (format "in %s"
+                                           (file-name-nondirectory
+                                            (directory-file-name
+                                             (or (plist-get session :root) "/"))))))
+                         (cons nil (plist-get session :buffer))))
+                 (append local other)))
+     (append
     (mapcar (lambda (entry)
               (cons (format "%s  %s · %s" (noema-sessions--string entry "name")
                             (or (noema-sessions--string entry "agent") "")
@@ -872,7 +898,7 @@ foreign session is registered like any other, so one prompt reaches them all."
                                     (file-name-nondirectory
                                      (directory-file-name (or (plist-get session :root) "/"))))
                             (cons nil (plist-get session :buffer)))))
-                  (noema-agent-acp-sessions))))))
+                  (noema-agent-acp-sessions)))))))
 
 (defun noema-sessions--entry-buffer (entry root)
   "Return a live agent buffer for durable ENTRY of ROOT, resuming when needed."
@@ -880,6 +906,35 @@ foreign session is registered like any other, so one prompt reaches them all."
   (or (noema-sessions--live-buffer entry root)
       (user-error "“%s” has no live conversation"
                   (noema-sessions--string entry "name"))))
+
+(defun noema-sessions--native-entry (native-id root)
+  "Return ROOT's durable entry for NATIVE-ID, if registered."
+  (when-let* ((root (and root (noema-project-root root)))
+              ((bound-and-true-p my/noema--ready))
+              ((fboundp 'my/noema--api-call-sync))
+              (result (ignore-errors
+                        (my/noema--api-call-sync
+                         "aaronnote:api:research:session:names"
+                         (vector `((cwd . ,root))) 2)))
+              (entry (seq-find
+                      (lambda (candidate)
+                        (equal (noema-sessions--string candidate "nativeSessionId")
+                               native-id))
+                      (noema-sessions--list (noema-sessions--get result "names")))))
+    entry))
+
+(defun noema-sessions-native-binding (native-id root)
+  "Return Noema name and logical ID for NATIVE-ID in ROOT, if registered."
+  (when-let* ((entry (noema-sessions--native-entry native-id root)))
+    (list :name (noema-sessions--string entry "name")
+          :session-id (noema-sessions--string entry "sessionId"))))
+
+(defun noema-sessions-resume-native-id (native-id root)
+  "Resume NATIVE-ID under its existing Noema name in ROOT, if registered.
+Return the agent buffer, or nil when this native conversation has no name here.
+The ACP agent remains the authority for the actual conversation history."
+  (when-let* ((entry (noema-sessions--native-entry native-id root)))
+    (noema-sessions--visit-entry entry (noema-project-root root))))
 
 (defun noema-sessions--start-new (root)
   "Start a new agent session in ROOT, register it and return its buffer."
@@ -916,25 +971,31 @@ buffer matches the live choice that owns it and the durable entry it serves."
                                      name)))))))
           choices)))))
 
-(cl-defun noema-sessions-read (&key prompt root allow-new default)
+(cl-defun noema-sessions-read (&key prompt root allow-new default live-only)
   "Read one agent session of ROOT and return its live agent buffer.
 PROMPT overrides the minibuffer prompt.  With ALLOW-NEW the choices also
 include starting a new session.  DEFAULT, a live agent buffer or a label from
 `noema-sessions-last-label', is listed first and preselected.  Resuming a
 recorded conversation or starting a new one happens here, so the caller always
-receives a live buffer."
+receives a live buffer.  LIVE-ONLY restricts choices to running ACP processes
+and never queries or resumes the durable registry."
   (let* ((root (noema-sessions--project-root root))
-         (result (and (bound-and-true-p my/noema--ready)
+         (result (and (not live-only)
+                      (bound-and-true-p my/noema--ready)
                       (fboundp 'my/noema--api-call-sync)
                       (ignore-errors
                         (my/noema--api-call-sync "aaronnote:api:research:session:names"
                                                  (vector `((cwd . ,root))) 2))))
          (choices (noema-sessions--switch-candidates
-                   (noema-sessions--list (noema-sessions--get result "names")) root))
+                   (noema-sessions--list (noema-sessions--get result "names"))
+                   root live-only))
          (new-label "+ Start a new session"))
     (when allow-new
       (setq choices (append choices (list (cons new-label 'new)))))
-    (unless choices (user-error "No Noema agent sessions or buffers"))
+    (unless choices
+      (user-error (if live-only
+                      "No open agent sessions; start an agent in this project first"
+                    "No Noema agent sessions or buffers")))
     (let* ((default-label (noema-sessions--choice-label choices default))
            (choices (if default-label
                         (cons (assoc default-label choices)

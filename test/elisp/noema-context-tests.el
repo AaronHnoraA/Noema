@@ -138,16 +138,70 @@ SPEC is a list of (NAME . CONTENT) files created in it and bound to
          asked)
     (unwind-protect
         (cl-letf (((symbol-function 'noema-agent-acp-project-root) (lambda () "/p/"))
-                  ((symbol-function 'noema-agent-acp-agent-buffer-p) (lambda (_) t))
+                  ((symbol-function 'noema-sessions--execution-live-p) (lambda (_) t))
                   ((symbol-function 'noema-sessions-read)
                    (lambda (&rest arguments)
                      (push (plist-get arguments :default) asked)
+                     (should (plist-get arguments :live-only))
+                     (should-not (plist-get arguments :allow-new))
                      previous)))
+          (with-current-buffer previous
+            (setq-local noema-agent-acp-session-root "/p/"))
           (puthash "/p/" previous noema-context--last-session)
           (should (eq (noema-context--session) previous))
           (should (eq (noema-context--session) previous))
           (should (equal asked (list previous previous))))
       (kill-buffer previous))))
+
+(ert-deftest noema-context-picker-lists-only-open-sessions-current-project-first ()
+  "Recorded sessions and dead ACP buffers never appear in context sends."
+  (let ((local (generate-new-buffer " *context-local*"))
+        (other (generate-new-buffer " *context-other*"))
+        (dead (generate-new-buffer " *context-dead*")))
+    (unwind-protect
+        (let ((sessions (list (list :buffer other :name "other" :agent "claude"
+                                    :root "/other/")
+                              (list :buffer dead :name "old" :agent "codex"
+                                    :root "/project/")
+                              (list :buffer local :name "current" :agent "codex"
+                                    :root "/project/"))))
+          (cl-letf (((symbol-function 'noema-agent-acp-sessions)
+                     (lambda (&optional _) sessions))
+                    ((symbol-function 'noema-sessions--execution-live-p)
+                     (lambda (buffer) (not (eq buffer dead)))))
+            (let ((choices (noema-sessions--switch-candidates
+                            '(((name . "old-stored") (agent . "codex")))
+                            "/project/" t)))
+              (should (equal (mapcar (lambda (choice) (cdr (cdr choice))) choices)
+                             (list local other)))
+              (should (string-match-p "current project" (caar choices)))
+              (should-not (seq-some (lambda (choice)
+                                      (string-match-p "old" (car choice)))
+                                    choices)))))
+      (mapc #'kill-buffer (list local other dead)))))
+
+(ert-deftest noema-sessions-native-resume-keeps-the-recorded-name ()
+  "A session chosen from official history reuses its Noema name."
+  (let ((my/noema--ready t)
+        (entry '((name . "saved-name")
+                 (sessionId . "logical-id")
+                 (nativeSessionId . "native-id")))
+        visited)
+    (cl-letf (((symbol-function 'noema-project-root)
+               (lambda (&optional _) "/project/"))
+              ((symbol-function 'my/noema--api-call-sync)
+               (lambda (&rest _) `((names . (,entry)))))
+              ((symbol-function 'noema-sessions--visit-entry)
+               (lambda (selected root)
+                 (setq visited (cons selected root))
+                 'restored-buffer)))
+      (should (equal (noema-sessions-native-binding "native-id" "/project/")
+                     '(:name "saved-name" :session-id "logical-id")))
+      (should-not visited)
+      (should (eq (noema-sessions-resume-native-id "native-id" "/project/")
+                  'restored-buffer))
+      (should (equal visited (cons entry "/project/")))
+      (should-not (noema-sessions-resume-native-id "different" "/project/")))))
 
 (ert-deftest noema-context-browser-lines-send-only-that-range ()
   "Browser line numbers become exactly one region reference."

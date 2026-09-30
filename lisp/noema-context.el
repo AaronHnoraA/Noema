@@ -261,29 +261,24 @@ file content is ever put in the request."
   (make-hash-table :test #'equal :weakness 'value)
   "Project root to the agent buffer its editor context last went to.")
 
-(defvar noema-context--last-label nil
-  "Session label the most recent send chose, in any project.
-The fallback default when this project has no live remembered session.")
-
 (defun noema-context--session (&optional pick)
   "Return the agent buffer editor context goes to.
 With `noema-context-always-ask-session' (the default) every send asks, and the
-session this project used last -- or, failing that, the last one chosen
-anywhere -- is preselected.  Otherwise the project's last session is reused
-until PICK.  Starting or resuming a session happens in `noema-sessions-read'."
+session this project used last is preselected.  Otherwise that live session is
+reused until PICK.  Only running ACP sessions are offered; this command does
+not resume a recorded conversation or start a new agent."
   (let* ((root (noema-agent-acp-project-root))
          (remembered (gethash root noema-context--last-session))
          (live (and (buffer-live-p remembered)
-                    (noema-agent-acp-agent-buffer-p remembered)
+                    (noema-sessions--execution-live-p remembered)
+                    (equal (buffer-local-value 'noema-agent-acp-session-root remembered)
+                           root)
                     remembered))
          (buffer (if (and live (not pick) (not noema-context-always-ask-session))
                      live
-                   (prog1 (noema-sessions-read
-                           :prompt "Send context to session: "
-                           :root root :allow-new t
-                           :default (or live noema-context--last-label))
-                     (setq noema-context--last-label
-                           (bound-and-true-p noema-sessions-last-label))))))
+                   (noema-sessions-read
+                    :prompt "Send context to session: "
+                    :root root :live-only t :default live))))
     (puthash root buffer noema-context--last-session)
     buffer))
 
