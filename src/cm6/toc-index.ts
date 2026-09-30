@@ -44,6 +44,11 @@ type LineScan = {
   hasSemanticHeading: boolean;
 };
 
+let sourceLinesScanned = 0;
+
+/** Source lines visited by outline rebuilds and regional patches. */
+export function tocIndexSourceLinesScanned(): number { return sourceLinesScanned; }
+
 const FENCE_LINE_RE = /^\s*(```|~~~)/;
 const OMIT_IN_TOC_RE = /<!--\s*omit\s+(?:in|from)\s+toc\s*-->\s*$/i;
 
@@ -143,6 +148,17 @@ function sortAnchors(items: InlineTagAnchor[]): InlineTagAnchor[] {
   return items.sort((a, b) => a.pos - b.pos || a.to - b.to || a.tag.localeCompare(b.tag));
 }
 
+function firstAtOrAfter<T>(items: readonly T[], position: number, start: (item: T) => number): number {
+  let low = 0;
+  let high = items.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (start(items[middle]!) < position) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
 function headingSignature(headings: readonly MarkdownHeading[]): string {
   return headings.map((heading) => `${heading.source || "markdown"}:${heading.level}:${heading.pos}:${heading.text}:${heading.slug || ""}:${heading.omit ? 1 : 0}`).join("\n");
 }
@@ -155,9 +171,10 @@ function buildTocIndex(
   headings: MarkdownHeading[],
   anchors: InlineTagAnchor[],
   fenceRanges: Array<{ from: number; to: number }>,
+  sorted = false,
 ): TocIndex {
-  const sortedHeadings = sortHeadings(headings);
-  const sortedAnchors = sortAnchors(anchors);
+  const sortedHeadings = sorted ? headings : sortHeadings(headings);
+  const sortedAnchors = sorted ? anchors : sortAnchors(anchors);
   return {
     headings: sortedHeadings,
     anchors: sortedAnchors,
@@ -260,6 +277,7 @@ export function inlineTagAnchorsFromText(doc: Text | string): InlineTagAnchor[] 
 }
 
 function collectTocIndex(doc: Text): TocIndex {
+  sourceLinesScanned += doc.lines;
   const headings: MarkdownHeading[] = [];
   const anchors: InlineTagAnchor[] = [];
   const fenceRanges: Array<{ from: number; to: number }> = [];
@@ -343,6 +361,20 @@ function oldWindowTouchesFence(doc: Text, window: { startLine: number; endLine: 
   return false;
 }
 
+function fenceWindowStructureStable(
+  oldDoc: Text,
+  nextDoc: Text,
+  oldWindow: { startLine: number; endLine: number },
+  nextWindow: { startLine: number; endLine: number },
+): boolean {
+  if (oldWindow.endLine - oldWindow.startLine !== nextWindow.endLine - nextWindow.startLine) return false;
+  for (let offset = 0; offset <= oldWindow.endLine - oldWindow.startLine; offset += 1) {
+    if (FENCE_LINE_RE.test(oldDoc.line(oldWindow.startLine + offset).text)
+        !== FENCE_LINE_RE.test(nextDoc.line(nextWindow.startLine + offset).text)) return false;
+  }
+  return true;
+}
+
 function lineInsideFence(from: number, to: number, fenceRanges: readonly { from: number; to: number }[]): boolean {
   return fenceRanges.some((range) => from >= range.from && to <= range.to);
 }
@@ -373,6 +405,53 @@ function mapAnchor(anchor: InlineTagAnchor, changes: ChangeSet): InlineTagAnchor
   };
 }
 
+function patchTocIndexFromFenceLine(
+  index: TocIndex,
+  oldDoc: Text,
+  nextDoc: Text,
+  from: number,
+): TocIndex {
+  const lineFrom = oldDoc.lineAt(Math.min(from, oldDoc.length)).from;
+  const enclosing = index.fenceRanges.find((range) => range.from <= lineFrom && range.to >= lineFrom);
+  const rescanFrom = enclosing?.from ?? lineFrom;
+  const headings = index.headings.filter((heading) => heading.pos < rescanFrom);
+  const anchors = index.anchors.filter((anchor) => anchor.lineFrom < rescanFrom);
+  const fenceRanges = index.fenceRanges.filter((range) => range.to < rescanFrom);
+  const metaSummaryRange = orgMetaSummaryRangeFromLines(nextDoc);
+  let inFence = false;
+  let fenceFrom = -1;
+  const startLine = nextDoc.lineAt(Math.min(rescanFrom, nextDoc.length)).number;
+  sourceLinesScanned += nextDoc.lines - startLine + 1;
+  for (let lineNo = startLine;
+       lineNo <= nextDoc.lines; lineNo += 1) {
+    const line = nextDoc.line(lineNo);
+    if (lineInsideSourceRange(line, metaSummaryRange)) continue;
+    const scan = scanLine(line.text, line.from, inFence);
+    headings.push(...scan.headings);
+    anchors.push(...scan.anchors);
+    if (scan.fenceToggle) {
+      if (!inFence) fenceFrom = line.from;
+      else if (fenceFrom >= 0) {
+        fenceRanges.push({ from: fenceFrom, to: line.to });
+        fenceFrom = -1;
+      }
+      inFence = !inFence;
+    }
+  }
+  if (inFence && fenceFrom >= 0) fenceRanges.push({ from: fenceFrom, to: nextDoc.length });
+
+  // Semantic headings change the level of Markdown headings across the whole
+  // note. Recompute that one derived number from the indexed headings instead
+  // of scanning every source line a second time.
+  const hasSemantic = headings.some((heading) => heading.source === "semantic");
+  const normalized = headings.map((heading) => {
+    if (heading.source !== "markdown") return heading;
+    const level = semanticMarkdownLevel(heading.renderLevel ?? heading.level, hasSemantic);
+    return level === heading.level ? heading : { ...heading, level };
+  });
+  return buildTocIndex(normalized, anchors, fenceRanges);
+}
+
 function patchTocIndex(index: TocIndex, startDoc: Text, nextDoc: Text, changes: ChangeSet): TocIndex | null {
   const range = changedRange(startDoc, changes);
   if (!range) return index;
@@ -382,12 +461,15 @@ function patchTocIndex(index: TocIndex, startDoc: Text, nextDoc: Text, changes: 
     (oldMetaSummary && range.oldFrom <= oldMetaSummary.to)
     || (nextMetaSummary && range.newFrom <= nextMetaSummary.to)
   ) return null;
-  if (range.textTouchesFence || range.textTouchesHeading) return null;
-
   const oldWindow = lineWindow(startDoc, range.oldFrom, range.oldTo);
-  if (oldWindowTouchesFence(startDoc, oldWindow)) return null;
   const nextWindow = lineWindow(nextDoc, range.newFrom, range.newTo);
+  const stableFences = fenceWindowStructureStable(startDoc, nextDoc, oldWindow, nextWindow);
+  if (!stableFences && (range.textTouchesFence || oldWindowTouchesFence(startDoc, oldWindow))) {
+    return patchTocIndexFromFenceLine(index, startDoc, nextDoc, range.oldFrom);
+  }
+  if (range.textTouchesHeading) return null;
   const nextFenceRanges = index.fenceRanges.map((fenceRange) => mapFenceRange(fenceRange, changes));
+  sourceLinesScanned += nextWindow.endLine - nextWindow.startLine + 1;
 
   const headings = index.headings
     .filter((heading) => heading.pos < oldWindow.from || heading.pos > oldWindow.to)
@@ -396,16 +478,33 @@ function patchTocIndex(index: TocIndex, startDoc: Text, nextDoc: Text, changes: 
     .filter((anchor) => anchor.lineFrom < oldWindow.from || anchor.lineFrom > oldWindow.to)
     .map((anchor) => anchor.lineFrom < oldWindow.from ? anchor : mapAnchor(anchor, changes));
 
+  const rescannedHeadings: MarkdownHeading[] = [];
+  const rescannedAnchors: InlineTagAnchor[] = [];
+  const hasSemanticHeading = index.headings.some((heading) => heading.source === "semantic");
   for (let lineNo = nextWindow.startLine; lineNo <= nextWindow.endLine; lineNo += 1) {
     const line = nextDoc.line(lineNo);
-    const scan = scanLine(line.text, line.from, lineInsideFence(line.from, line.to, nextFenceRanges), index.headings.some((heading) => heading.source === "semantic"));
-    if (scan.fenceToggle) return null;
-    if (scan.hasSemanticHeading && !index.headings.some((heading) => heading.source === "semantic")) return null;
-    headings.push(...scan.headings);
-    anchors.push(...scan.anchors);
+    const scan = scanLine(line.text, line.from, lineInsideFence(line.from, line.to, nextFenceRanges), hasSemanticHeading);
+    if (scan.fenceToggle && !stableFences) {
+      return patchTocIndexFromFenceLine(index, startDoc, nextDoc, range.oldFrom);
+    }
+    if (scan.hasSemanticHeading && !hasSemanticHeading) return null;
+    rescannedHeadings.push(...scan.headings);
+    rescannedAnchors.push(...scan.anchors);
   }
-
-  return buildTocIndex(headings, anchors, nextFenceRanges);
+  // Removing the final semantic heading restores the original Markdown
+  // outline levels everywhere, including headings outside this line window.
+  if (hasSemanticHeading && !headings.some((heading) => heading.source === "semantic")
+      && !rescannedHeadings.some((heading) => heading.source === "semantic")) return null;
+  // Mapping preserves the order of untouched entries. Only the changed line
+  // window needs sorting; splice it back at its source position instead of
+  // sorting every heading and tag in a multi-megabyte note on each keystroke.
+  sortHeadings(rescannedHeadings);
+  sortAnchors(rescannedAnchors);
+  const headingInsert = firstAtOrAfter(headings, nextWindow.from, (heading) => heading.pos);
+  const anchorInsert = firstAtOrAfter(anchors, nextWindow.from, (anchor) => anchor.lineFrom);
+  const nextHeadings = headings.slice(0, headingInsert).concat(rescannedHeadings, headings.slice(headingInsert));
+  const nextAnchors = anchors.slice(0, anchorInsert).concat(rescannedAnchors, anchors.slice(anchorInsert));
+  return buildTocIndex(nextHeadings, nextAnchors, nextFenceRanges, true);
 }
 
 const tocIndexField = StateField.define<TocIndex>({

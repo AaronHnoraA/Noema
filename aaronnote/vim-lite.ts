@@ -43,7 +43,6 @@ import { getBlockMathRanges, rangeAtPosition, rangeOverlapsAny } from "../src/cm
 import { scanInlineMathRanges } from "../src/inline-math.ts";
 import { getOrgEnvHeadingRanges, setTikzSourceEditing } from "../src/cm6/extensions/visual/widgets/block-extras.ts";
 import { cancelPointerSelection } from "../src/cm6/extensions/visual/selection.ts";
-import { refreshViewportDecorations } from "../src/cm6/viewport-refresh.ts";
 import {
   formulaRangeAtWidgetPosition,
   formulaSourceRangeAtPosition,
@@ -2273,13 +2272,9 @@ export function createVimLite(
     mode = next;
     editor.view.dom.dataset.vimMode = next;
     if (changed && (next === "insert" || previous === "insert")) {
-      // Vim state is independent of the reader's Source/Markdown choice. The
-      // local widgets still need one update when Insert changes whether the
-      // object under the caret shows its editable Markdown source.
-      editor.view.dispatch({ effects: [
-        setTikzSourceEditing.of(next === "insert"),
-        refreshViewportDecorations.of(editor.view.visibleRanges),
-      ] });
+      // Only the TikZ block under the caret changes between its source and
+      // widget. The block-extra field patches that block for this effect.
+      editor.view.dispatch({ effects: setTikzSourceEditing.of(next === "insert") });
     }
     cancelJump();
     visualHead = null;

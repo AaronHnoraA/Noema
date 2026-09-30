@@ -88,6 +88,24 @@
     (should (= 0.07 (plist-get (car limits) :utilization)))
     (should (numberp (plist-get (car limits) :updated-at)))))
 
+(ert-deftest noema-agent-abtop-selects-newest-codex-file ()
+  "Select by modification time even when the filename order differs."
+  (let* ((root (make-temp-file "abtop-codex-" t))
+         (day (expand-file-name "sessions/2026/09/30" root))
+         (earlier (expand-file-name "rollout-z.jsonl" day))
+         (latest (expand-file-name "rollout-a.jsonl" day)))
+    (unwind-protect
+        (progn
+          (make-directory day t)
+          (with-temp-file earlier (insert "old\n"))
+          (with-temp-file latest (insert "new\n"))
+          (set-file-times earlier (seconds-to-time 100))
+          (set-file-times latest (seconds-to-time 200))
+          (cl-letf (((symbol-function 'noema-agent-abtop--codex-home)
+                     (lambda () root)))
+            (should (equal (noema-agent-abtop--codex-file) latest))))
+      (delete-directory root t))))
+
 (ert-deftest noema-agent-abtop-renders-sessions-and-detail ()
   "The board lists the session with a context bar and shows its detail."
   (let ((noema-agent-acp--rate-limits (make-hash-table :test #'equal))

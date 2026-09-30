@@ -57,6 +57,45 @@ describe("browser TikZ rendering", () => {
     }
   });
 
+  test("shows a completed render while its disk cache write is pending", async () => {
+    const db = {
+      objectStoreNames: { contains: () => true },
+      transaction: (_store: string, mode: string) => mode === "readonly"
+        ? { objectStore: () => ({ get: () => {
+          const request: { result?: unknown; onsuccess?: () => void } = {};
+          queueMicrotask(() => request.onsuccess?.());
+          return request;
+        } }) }
+        : { objectStore: () => ({
+          put: () => {},
+          count: () => {
+            const request: { result?: number; onsuccess?: () => void } = {};
+            queueMicrotask(() => { request.result = 0; request.onsuccess?.(); });
+            return request;
+          },
+        }) }, // The write transaction deliberately never completes.
+    };
+    vi.stubGlobal("indexedDB", { open: () => {
+      const request: { result?: typeof db; onsuccess?: () => void } = {};
+      queueMicrotask(() => { request.result = db; request.onsuccess?.(); });
+      return request;
+    } });
+    vi.resetModules();
+    const isolated = await import("../src/tikz-browser.ts");
+    isolated.setTikzRendererForTests(async () => SVG);
+    try {
+      const result = await Promise.race([
+        isolated.renderTikzBrowser("\\draw (0,0) -- (3,3);"),
+        new Promise<"timed out">((resolve) => setTimeout(() => resolve("timed out"), 100)),
+      ]);
+      expect(result).not.toBe("timed out");
+      expect(result).toMatchObject({ ok: true, svg: SVG });
+    } finally {
+      isolated.setTikzRendererForTests(null);
+      vi.unstubAllGlobals();
+    }
+  });
+
   test("freezes TikZ into standalone HTML without a local SVG reference", async () => {
     setTikzRendererForTests(async () => SVG);
     try {

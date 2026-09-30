@@ -2228,6 +2228,24 @@ After`;
     cleanup();
   });
 
+  test("a new code fence hides and restoring it reveals later block extras", () => {
+    const md = "lead\n\n---\n\ntail";
+    const { editor, cleanup } = mountCM6(md);
+    try {
+      editor.setMarkdownSelection(md.length);
+      expect(document.querySelector(".cm-horizontal-rule")).toBeTruthy();
+      const beforeRule = md.indexOf("---");
+      editor.view.dispatch({ changes: { from: beforeRule, insert: "```\n" } });
+      editor.setMarkdownSelection(editor.getMarkdown().length);
+      expect(document.querySelector(".cm-horizontal-rule")).toBeNull();
+      editor.view.dispatch({ changes: { from: beforeRule, to: beforeRule + 4 } });
+      editor.setMarkdownSelection(editor.getMarkdown().length);
+      expect(document.querySelector(".cm-horizontal-rule")).toBeTruthy();
+    } finally {
+      cleanup();
+    }
+  });
+
   test("renders CM6 toc from document headings and jumps on click", () => {
     const md = "# Title\n\n[toc]\n\n## Child\n\nBody";
     const { editor, cleanup } = mountCM6(md);

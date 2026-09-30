@@ -235,10 +235,17 @@ listed rather than the whole tree."
   (when-let* ((year (noema-agent-abtop--newest-child
                      (expand-file-name "sessions" (noema-agent-abtop--codex-home))))
               (month (noema-agent-abtop--newest-child year))
-              (day (noema-agent-abtop--newest-child month))
-              (files (ignore-errors
-                       (directory-files day t "\\`rollout-.*\\.jsonl\\'"))))
-    (car (sort files #'file-newer-than-file-p))))
+              (day (noema-agent-abtop--newest-child month)))
+    ;; Sorting with `file-newer-than-file-p' stats the same files repeatedly.
+    ;; Read each file's attributes once and select the latest in one pass.
+    (let (newest newest-time)
+      (dolist (entry (ignore-errors
+                       (directory-files-and-attributes
+                        day t "\\`rollout-.*\\.jsonl\\'" t)))
+        (let ((mtime (file-attribute-modification-time (cdr entry))))
+          (when (or (null newest-time) (time-less-p newest-time mtime))
+            (setq newest (car entry) newest-time mtime))))
+      newest)))
 
 (defconst noema-agent-abtop--codex-tail-bytes 131072
   "Bytes read from the end of a Codex session file to find its last quota.")

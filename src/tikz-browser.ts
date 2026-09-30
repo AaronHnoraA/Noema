@@ -174,7 +174,9 @@ export function renderTikzBrowser(source: string): Promise<BrowserTikzResult> {
       const svg = await runWorker(normalized);
       const result = fromSvg(svg);
       remember(key, result);
-      await writeCache(key, svg).catch(() => {});
+      // Persistence is best effort. Waiting for an IndexedDB transaction here
+      // holds the finished diagram (and every coalesced caller) off screen.
+      void writeCache(key, svg).catch(() => {});
       return result;
     } catch (error) {
       return { ok: false, message: error instanceof Error ? error.message : String(error) };

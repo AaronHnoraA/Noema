@@ -25,9 +25,9 @@ const BOUNDED_CEILING_MS = 480;
 // tighter Enter-specific ceiling still rejects the previous 610-650 ms
 // full-document block-extra scan while allowing the measured 480-500 ms path.
 const NEWLINE_CEILING_MS = 520;
-// KNOWN-SCAN: diagram fences still trigger a full-document collection. We only
-// guard against a runaway (e.g. an accidental second full pass), not against
-// that pre-existing scan itself.
+// A real fence line changes syntax for a suffix of the document. This ceiling
+// guards the necessary suffix work while the outline and block-extra indexes
+// retain the unaffected prefix.
 const KNOWN_SCAN_CEILING_MS = 2000;
 
 function medianEditLatency(
@@ -67,6 +67,7 @@ describe("large-document bounded editing", () => {
     ["table pipe", "|"],
     ["heading marker", "#"],
     ["block math fence", "\\["],
+    ["inline triple backticks", "```"],
   ];
   for (const [name, insert, ceiling = BOUNDED_CEILING_MS] of boundedCases) {
     test(`bounded latency for ${name} edits in the 5 MB fixture`, () => {
@@ -81,18 +82,14 @@ describe("large-document bounded editing", () => {
     expect(medianEditLatency(identityContent, "x", position)).toBeLessThan(BOUNDED_CEILING_MS);
   }, 20_000);
 
-  const knownScanCases: Array<[name: string, insert: string]> = [
-    ["code fence", "```"],
-    // "(" forces a full block-extra redecoration (canMapBlockExtraDecos bails on
-    // it), which rebuilds every @@cell decoration in the doc. The fixture now
-    // contains @@cell blocks, so this guards against that rebuild becoming
-    // super-linear (e.g. an accidental O(cells·doc) scan) rather than the
-    // full-doc pass itself, which is a known trade-off.
+  const lineStart = content.lastIndexOf("\n", Math.floor(content.length / 2)) + 1;
+  const knownScanCases: Array<[name: string, insert: string, position?: number]> = [
+    ["code fence at a line start", "```\n", lineStart],
     ["paren over @@cell blocks", "("],
   ];
-  for (const [name, insert] of knownScanCases) {
+  for (const [name, insert, position] of knownScanCases) {
     test(`no runaway latency for ${name} edits in the 5 MB fixture`, () => {
-      expect(medianEditLatency(content, insert)).toBeLessThan(KNOWN_SCAN_CEILING_MS);
+      expect(medianEditLatency(content, insert, position)).toBeLessThan(KNOWN_SCAN_CEILING_MS);
     }, 20_000);
   }
 

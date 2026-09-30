@@ -25,12 +25,12 @@ import { StateEffect, StateField, type ChangeSet, type EditorState, type Extensi
 import type { Range as CMRange } from "@codemirror/state";
 import {
   getBlockMathRanges,
-  mergeOverlappingRanges,
   positionInsideAnyRange,
   rangeOverlapsAny,
 } from "../../../math-ranges.ts";
 import {
   changesMightAffectFencedCodeRanges,
+  fencedCodeRescanStart,
   fencedCodeRangesExtension,
   getFencedCodeRanges,
 } from "../../../code-ranges.ts";
@@ -298,14 +298,31 @@ function orgEnvBoundaryRe(kind: string, boundary: "begin" | "end"): RegExp {
   return new RegExp(`^[ \\t]*#\\+\\s*end\\s+${escapedKind}[ \\t]*$`, "i");
 }
 
-function combineExcludedRanges(
-  ...lists: Array<ReadonlyArray<{ from: number; to: number }>>
-): Array<{ from: number; to: number }> {
-  return mergeOverlappingRanges(lists.flatMap((list) => Array.from(list)));
-}
+const blockExtraExcludedCache = new WeakMap<EditorState, Array<{ from: number; to: number }>>();
 
 function blockExtraExcludedRanges(state: EditorState): Array<{ from: number; to: number }> {
-  return combineExcludedRanges(getBlockMathRanges(state), getFencedCodeRanges(state));
+  const cached = blockExtraExcludedCache.get(state);
+  if (cached) return cached;
+  // Both source indexes are already sorted. Merge them once per immutable
+  // editor state instead of sorting and copying every range on each of the
+  // several decoration updates triggered by one keystroke.
+  const math = getBlockMathRanges(state);
+  const fenced = getFencedCodeRanges(state);
+  const merged: Array<{ from: number; to: number }> = [];
+  let mathIndex = 0;
+  let fencedIndex = 0;
+  while (mathIndex < math.length || fencedIndex < fenced.length) {
+    const next = fencedIndex >= fenced.length
+      || (mathIndex < math.length && math[mathIndex]!.from <= fenced[fencedIndex]!.from)
+      ? math[mathIndex++]!
+      : fenced[fencedIndex++]!;
+    if (next.from >= next.to) continue;
+    const previous = merged[merged.length - 1];
+    if (previous && next.from <= previous.to) previous.to = Math.max(previous.to, next.to);
+    else merged.push({ from: next.from, to: next.to });
+  }
+  blockExtraExcludedCache.set(state, merged);
+  return merged;
 }
 
 // Depth-aware scanner: handles nested #+begin <kind> … #+end <kind>.
@@ -1475,6 +1492,24 @@ const blockExtraRangesField = StateField.define<BlockExtraRanges>({
   create: createBlockExtraRanges,
   update(ranges, tr) {
     if (tr.docChanged) {
+      if (changesMightAffectFencedCodeRanges(tr.startState.doc, tr.changes)) {
+        const start = fencedCodeRescanStart(
+          tr.startState.doc, getFencedCodeRanges(tr.startState), tr.changes,
+        );
+        const doc = tr.state.doc;
+        const scanned = scanBlockExtraLineRanges(
+          doc, doc.lineAt(Math.min(start, doc.length)).number, doc.lines,
+          blockExtraExcludedRanges(tr.state),
+        );
+        return {
+          toc: ranges.toc.filter((range) => range.to < start).concat(scanned.toc),
+          semanticHeadings: ranges.semanticHeadings.filter((range) => range.to < start).concat(scanned.semanticHeadings),
+          ceilCommands: ranges.ceilCommands.filter((range) => range.to < start).concat(scanned.ceilCommands),
+          hrs: ranges.hrs.filter((range) => range.to < start).concat(scanned.hrs),
+          frontMatter: start === 0 || (ranges.frontMatter && start <= ranges.frontMatter.to)
+            ? scanFrontMatter(doc) : ranges.frontMatter,
+        };
+      }
       return canMapBlockExtraRanges(tr.startState.doc, tr.changes, ranges)
         ? mapBlockExtraRanges(ranges, tr.changes)
         : canPatchBlockExtraRangesNearChanges(tr.startState.doc, tr.changes, ranges)
@@ -4555,6 +4590,13 @@ const blockExtrasDecorations = StateField.define<DecorationSet>({
       // creates a new MetaWidget bibliography epoch while eq() preserves all
       // unrelated block widgets.
       return buildBlockExtraDecos(tr.state);
+    }
+    if (tr.effects.some((effect) => effect.is(setTikzSourceEditing))) {
+      const oldKey = activeBlockExtraKey(tr.startState);
+      const newKey = activeBlockExtraKey(tr.state);
+      return oldKey === newKey
+        ? value
+        : patchBlockExtraDecosForSelectionChange(tr.state, value, oldKey, newKey);
     }
     if (tr.docChanged) {
       if (canMapBlockExtraDecos(tr.startState, tr.changes)) {

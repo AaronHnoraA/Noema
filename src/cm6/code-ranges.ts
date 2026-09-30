@@ -48,10 +48,6 @@ export function isFencedCodeFenceLine(line: string): boolean {
   return FENCE_LINE_RE.test(line);
 }
 
-function textHasFencedCodeFenceLine(text: string): boolean {
-  return text.split("\n").some(isFencedCodeFenceLine);
-}
-
 function fenceInfo(line: string): { char: "`" | "~"; length: number } | null {
   const match = FENCE_LINE_RE.exec(line);
   const marker = match?.[1];
@@ -59,14 +55,23 @@ function fenceInfo(line: string): { char: "`" | "~"; length: number } | null {
   return { char: marker[0] as "`" | "~", length: marker.length };
 }
 
+function fenceLineShape(line: string): string {
+  const match = FENCE_LINE_RE.exec(line);
+  const marker = match?.[1];
+  if (!marker) return "";
+  // An opener's marker and a possible closer's trailing whitespace determine
+  // pairing. Editing the language name after an opener leaves both unchanged.
+  return `${marker[0]}:${marker.length}:${line.slice(match[0].length).trim() === ""}`;
+}
+
 function closingFenceRe(info: { char: "`" | "~"; length: number }): RegExp {
   const ch = info.char === "`" ? "`" : "~";
   return new RegExp(`^[ \\t]{0,3}${ch}{${info.length},}[ \\t]*$`);
 }
 
-export function scanFencedCodeRangesInDoc(doc: Text): SourceRange[] {
+function scanFencedCodeRangesFromLine(doc: Text, startLine: number): SourceRange[] {
   const ranges: SourceRange[] = [];
-  let lineNum = 1;
+  let lineNum = startLine;
   while (lineNum <= doc.lines) {
     const openLine = doc.line(lineNum);
     const info = fenceInfo(openLine.text);
@@ -95,6 +100,10 @@ export function scanFencedCodeRangesInDoc(doc: Text): SourceRange[] {
   return ranges;
 }
 
+export function scanFencedCodeRangesInDoc(doc: Text): SourceRange[] {
+  return scanFencedCodeRangesFromLine(doc, 1);
+}
+
 export function changesMightAffectFencedCodeRanges(doc: Text, changes: ChangeSet): boolean {
   let might = false;
   changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
@@ -110,9 +119,26 @@ export function changesMightAffectFencedCodeRanges(doc: Text, changes: ChangeSet
     const relFrom = Math.max(0, fromA - fromLine.from);
     const relTo = Math.max(relFrom, toA - fromLine.from);
     const nextText = oldText.slice(0, relFrom) + added + oldText.slice(relTo);
-    might = textHasFencedCodeFenceLine(oldText) || textHasFencedCodeFenceLine(nextText);
+    const oldLines = oldText.split("\n");
+    const nextLines = nextText.split("\n");
+    might = oldLines.length !== nextLines.length
+      ? oldLines.some(isFencedCodeFenceLine) || nextLines.some(isFencedCodeFenceLine)
+      : oldLines.some((line, index) => fenceLineShape(line) !== fenceLineShape(nextLines[index]!));
   });
   return might;
+}
+
+/** First unchanged line that must be replayed when fence pairing changes. */
+export function fencedCodeRescanStart(
+  doc: Text,
+  ranges: readonly SourceRange[],
+  changes: ChangeSet,
+): number {
+  let firstChanged = doc.length;
+  changes.iterChanges((fromA) => { firstChanged = Math.min(firstChanged, fromA); });
+  const changedLineFrom = doc.lineAt(firstChanged).from;
+  const enclosing = ranges.find((range) => range.from <= changedLineFrom && range.to >= changedLineFrom);
+  return enclosing?.from ?? changedLineFrom;
 }
 
 const fencedCodeRangesField = StateField.define<readonly SourceRange[]>({
@@ -120,7 +146,13 @@ const fencedCodeRangesField = StateField.define<readonly SourceRange[]>({
   update(ranges, tr) {
     if (!tr.docChanged) return ranges;
     if (changesMightAffectFencedCodeRanges(tr.startState.doc, tr.changes)) {
-      return scanFencedCodeRangesInDoc(tr.state.doc);
+      const rescanFrom = fencedCodeRescanStart(tr.startState.doc, ranges, tr.changes);
+      // Fence pairing before this line is unaffected. An edit inside a fence
+      // restarts at its opener; the suffix may change all the way to EOF.
+      const prefix = ranges.filter((range) => range.to < rescanFrom);
+      return prefix.concat(scanFencedCodeRangesFromLine(
+        tr.state.doc, tr.state.doc.lineAt(Math.min(rescanFrom, tr.state.doc.length)).number,
+      ));
     }
     return ranges.map((range) => ({
       from: tr.changes.mapPos(range.from, -1),
