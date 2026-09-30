@@ -130,8 +130,8 @@ export function visualTexBracketDirection(
 
 /**
  * Ask the owning document snippet to accept a move beyond LiveTeX's root.
- * Preventing this event is an explicit acknowledgement; without one the math
- * editor remains clamped at its boundary.
+ * Tab requires this acknowledgement before leaving; Cmd-brackets explicitly
+ * leave the formula at its root even when no document snippet is active.
  */
 export function requestVisualTexSnippetBoundaryHandoff(
   host: HTMLElement,
@@ -3679,8 +3679,8 @@ export function mountVisualTexInlineEditor(
         if (bracketDirection) {
           const backward = bracketDirection === "backward";
           const result = moveWithinFormula(active, backward);
-          if (result === "boundary"
-            && requestVisualTexSnippetBoundaryHandoff(host, backward)) {
+          if (result === "boundary") {
+            requestVisualTexSnippetBoundaryHandoff(host, backward);
             syncDraft();
             options.onCommit(backward ? "backward" : "forward");
           }
@@ -4061,8 +4061,8 @@ function mountVisualTexSingleDisplayEditor(
             suppressMoveOutCommit = false;
           }
           closeCompletion(host);
-          if (result === "boundary"
-            && requestVisualTexSnippetBoundaryHandoff(host, backward)) {
+          if (result === "boundary") {
+            requestVisualTexSnippetBoundaryHandoff(host, backward);
             emitDraft();
             options.onCommit(backward ? "backward" : "forward");
           }

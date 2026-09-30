@@ -72,6 +72,8 @@ The extension is Noema's product identity. `.ipynb` is only an interchange/expor
 
 Markdown remains the durable knowledge surface. Source code, reports, datasets, figures and logs remain ordinary files usable without Noema.
 
+TikZ diagrams in Markdown use `#+begin tikz <id>` and `#+end tikz` on their own lines. The `tikz` snippet generates the block ID automatically. Noema renders the source in a browser Worker using the vendored [TikZ Editor](https://github.com/DominikPeters/tikz-editor) engine; the diagram has a transparent background and follows the note's text color. Rendered SVG is cached by source hash and renderer version in memory and IndexedDB, so reopening or scrolling to an unchanged block does not render it again. The HTML exporter embeds the SVG directly.
+
 A typical repository is:
 
 ```text
@@ -183,7 +185,9 @@ gets a separate named conversation.  A terminal reply replaces that work
 block's latest `outputs` with Markdown/plain-text MIME plus
 `application/vnd.noema.run+json`; Run history remains in the Run store and the
 optional agent-shell Markdown transcript is disabled for Noema Runs.  Clearing
-outputs does not delete a Run. Clicking **Open Source in Emacs** sends
+outputs does not delete a Run. Work Output renders agent Markdown math written
+as `$...$` or `$$...$$` with the same KaTeX renderer as Noema notes; these
+delimiters are enabled for outputs only. Clicking **Open Source in Emacs** sends
 `scriptFile + cellId`; Emacs resolves the stable Cell identity instead of
 trusting a projected line number. Agent Runs snapshot newly created or modified
 ordinary files into the CAS without moving them, persist `ArtifactLink`

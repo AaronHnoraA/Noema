@@ -1,15 +1,8 @@
 /*
- * Canonical TikZ source handling shared by the browser widget, the Node render
- * service, the HTML exporter and the LaTeX exporter.
- *
- * Every consumer must agree on three things or the compiled-asset cache breaks:
- *   1. how a `#+begin tikz` body is normalized into a standalone document,
- *   2. the content hash that names the compiled asset, and
- *   3. how the compiled SVG's intrinsic TeX size maps back onto note typography.
- *
- * Keeping all three here is what lets the editor, `render-html` and a publish
- * run resolve the *same* `images/<note>/tikz-<id>-<hash>.svg` without talking to
- * each other.
+ * Canonical TikZ source handling shared by the browser renderer, HTML
+ * exporter and LaTeX exporter. Browser renders are cached by the normalized
+ * source hash; the older file-name and dvisvgm size helpers remain for notes
+ * and callers that still refer to historical local SVG assets.
  */
 
 /** Base font size (in TeX pt) that `standalone` uses when none is requested. */

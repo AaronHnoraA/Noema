@@ -1,0 +1,10 @@
+import { buildSnapContext, resolveSnapSettings } from "./context.js";
+import { pickGridStepPt, snapToNextMultiple } from "./grid-snaps.js";
+import type { SnapHandlePositionInput, SnapKeyboardNudgeInput, SnapResult, SnapSelectionTranslationInput, SnapToolPointerInput } from "./types.js";
+export { buildSnapContext, pickGridStepPt, resolveSnapSettings, snapToNextMultiple };
+export { boundsFromPoints, collectSelectionGeometry, collectSelectionGeometryFromBounds, collectSourceWorldBounds, selectionSnapPointsFromBounds } from "./geometry.js";
+export type * from "./types.js";
+export declare function snapSelectionTranslation(input: SnapSelectionTranslationInput): SnapResult;
+export declare function snapHandlePosition(input: SnapHandlePositionInput): SnapResult;
+export declare function snapKeyboardNudge(input: SnapKeyboardNudgeInput): SnapResult;
+export declare function snapToolPointer(input: SnapToolPointerInput): SnapResult;

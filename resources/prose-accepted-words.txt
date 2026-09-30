@@ -126,6 +126,7 @@ hypergraph
 ibuffer
 icomplete
 ielm
+iff
 IMAP
 IMAPS
 imenu

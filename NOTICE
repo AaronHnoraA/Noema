@@ -79,6 +79,13 @@ Arno Gourdol, licensed under the MIT License:
 
   https://github.com/arnog/mathlive
 
+The TikZ browser renderer vendors the TikZ Editor core and Lezer grammar,
+copyright Dominik Peters and contributors, under the MIT License. Its source,
+built modules, license, and reviewed revision are in vendor/tikz-editor/:
+
+  https://github.com/DominikPeters/tikz-editor
+  commit be197d85e278bf76c5fc052931b7902942e274e7
+
 The Node dependency set includes GitHub's Copilot Language Server, licensed
 under the MIT License:
 

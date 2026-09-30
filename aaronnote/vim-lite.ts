@@ -41,7 +41,7 @@ import { readImageTrailingAttrs } from "../src/image-attrs.ts";
 import { writeSystemClipboard } from "../src/system-clipboard.ts";
 import { getBlockMathRanges, rangeAtPosition, rangeOverlapsAny } from "../src/cm6/math-ranges.ts";
 import { scanInlineMathRanges } from "../src/inline-math.ts";
-import { getOrgEnvHeadingRanges } from "../src/cm6/extensions/visual/widgets/block-extras.ts";
+import { getOrgEnvHeadingRanges, setTikzSourceEditing } from "../src/cm6/extensions/visual/widgets/block-extras.ts";
 import { cancelPointerSelection } from "../src/cm6/extensions/visual/selection.ts";
 import { refreshViewportDecorations } from "../src/cm6/viewport-refresh.ts";
 import {
@@ -1588,10 +1588,29 @@ export function createVimLite(
   ): MotionResult | null {
     const start = vimRowAt(editor, head, 1, { scope, logical });
     const resolved = goal ?? verticalGoalFor(head, start);
-    const { row, steps } = stepRows(editor, start, count, dir);
+    let { row, steps } = stepRows(editor, start, count, dir);
     if (steps === 0) return null;
+    let landing = snapVerticalLanding(positionAtGoal(row, resolved));
+    let visible = normalEditorPosition(editor, landing);
+    // A wrapped row can hit-test into the hidden source of an inline formula.
+    // Normal mode snaps that position back to the formula's first character,
+    // which may be exactly where this motion started. Continue past such rows
+    // so j/k cannot become a permanent no-op at a rendered object.
+    while (dir > 0 ? visible <= head : visible >= head) {
+      const object = renderedObjectAtPosition(editor, landing);
+      const beyond = dir > 0 && object?.from === visible && object.to > row.to
+        ? vimRowAt(editor, object.to, 1, { scope, logical })
+        : null;
+      const next = beyond && beyond.from > row.from
+        ? beyond
+        : dir > 0 ? nextVimRow(editor, row) : prevVimRow(editor, row);
+      if (!next) return null;
+      row = next;
+      landing = snapVerticalLanding(positionAtGoal(row, resolved));
+      visible = normalEditorPosition(editor, landing);
+    }
     return {
-      pos: snapVerticalLanding(positionAtGoal(row, resolved)),
+      pos: visible,
       kind: "linewise",
       logical,
       goal: resolved,
@@ -2257,7 +2276,10 @@ export function createVimLite(
       // Vim state is independent of the reader's Source/Markdown choice. The
       // local widgets still need one update when Insert changes whether the
       // object under the caret shows its editable Markdown source.
-      editor.view.dispatch({ effects: refreshViewportDecorations.of(editor.view.visibleRanges) });
+      editor.view.dispatch({ effects: [
+        setTikzSourceEditing.of(next === "insert"),
+        refreshViewportDecorations.of(editor.view.visibleRanges),
+      ] });
     }
     cancelJump();
     visualHead = null;
@@ -3038,9 +3060,13 @@ export function createVimLite(
       }
       case "I": {
         // Evil's `I` with visual lines: the first non-blank on the first row,
-        // the row start on a continuation row.
+        // the row start on a continuation row. Unlike linewise operators,
+        // insert entry must use the whole row when the cursor is inside a
+        // revealed formula, so I can leave its TeX body.
         setInsertCursors(editor, editor.view.state.selection.ranges.map((range) => {
-          const row = vimRowAt(editor, range.head);
+          const formula = revealedFormulaAt(editor, range.head);
+          if (formula?.display) return { pos: formula.from };
+          const row = vimRowAt(editor, range.head, 1, { scope: null });
           return { pos: row.lineStart ? Math.min(firstNonBlankIn(text, row.from, row.to), row.to) : row.from };
         }));
         enterInsert(normalCharPosition(doc(editor), currentHead(editor)), count);
@@ -3048,8 +3074,11 @@ export function createVimLite(
       }
       case "A": {
         // End of the row; a continuation row keeps its caret on that row.
+        // Do not clamp A to the revealed formula's content boundary.
         setInsertCursors(editor, editor.view.state.selection.ranges.map((range) => {
-          const row = vimRowAt(editor, range.head);
+          const formula = revealedFormulaAt(editor, range.head);
+          if (formula?.display) return { pos: formula.to };
+          const row = vimRowAt(editor, range.head, 1, { scope: null });
           return { pos: row.to, assoc: row.lineEnd ? 1 : -1 };
         }));
         enterInsert(null, count);

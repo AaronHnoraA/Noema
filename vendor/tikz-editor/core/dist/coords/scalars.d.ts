@@ -1,0 +1,25 @@
+declare const scalarBrand: unique symbol;
+type Brand<T, B extends string> = T & {
+    readonly [scalarBrand]: B;
+};
+export type Pt = Brand<number, "Pt">;
+export type Cm = Brand<number, "Cm">;
+export type Px = Brand<number, "Px">;
+export type Deg = Brand<number, "Deg">;
+export type Scalar = Pt | Cm | Px | Deg;
+export declare function pt(value: number): Pt;
+export declare function cm(value: number): Cm;
+export declare function px(value: number): Px;
+export declare function deg(value: number): Deg;
+export declare function scalarValue(value: Scalar): number;
+export declare function addScalar<TScalar extends Scalar>(left: TScalar, right: TScalar): TScalar;
+export declare function subScalar<TScalar extends Scalar>(left: TScalar, right: TScalar): TScalar;
+export declare function scaleScalar<TScalar extends Scalar>(value: TScalar, factor: number): TScalar;
+export declare function divScalar<TScalar extends Scalar>(value: TScalar, divisor: number): TScalar;
+export declare function absScalar<TScalar extends Scalar>(value: TScalar): TScalar;
+export declare function minScalar<TScalar extends Scalar>(left: TScalar, right: TScalar): TScalar;
+export declare function maxScalar<TScalar extends Scalar>(left: TScalar, right: TScalar): TScalar;
+export declare function clampScalar<TScalar extends Scalar>(value: TScalar, min: TScalar, max: TScalar): TScalar;
+export declare function negScalar<TScalar extends Scalar>(value: TScalar): TScalar;
+export type CoordinateBrand<T extends string> = Brand<number, T>;
+export {};

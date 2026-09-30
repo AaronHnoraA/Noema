@@ -20,6 +20,7 @@ import { parserWatcher } from "./parser-watcher.ts";
 import {
   createVisualMarkdownEditingExtensions,
   createVisualMarkdownExtensions,
+  orgEnvBlocksExtension,
   visualMode,
 } from "./visual/index.ts";
 
@@ -38,6 +39,7 @@ export function createMarkdownFeatureExtensions(
     orderedListRenumber,
     headingFoldExtension,
     createVisualMarkdownEditingExtensions(),
+    orgEnvBlocksExtension,
     visualMode(options.initialVisualMode, createVisualMarkdownExtensions()),
     findHighlightExtension,
     roamLinkStatusExtension,

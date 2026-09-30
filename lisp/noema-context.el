@@ -262,11 +262,12 @@ file content is ever put in the request."
   "Project root to the agent buffer its editor context last went to.")
 
 (defun noema-context--session (&optional pick)
-  "Return the agent buffer editor context goes to.
+  "Return the agent buffer editor context goes to, or `clipboard'.
 With `noema-context-always-ask-session' (the default) every send asks, and the
 session this project used last is preselected.  Otherwise that live session is
 reused until PICK.  Only running ACP sessions are offered; this command does
-not resume a recorded conversation or start a new agent."
+not resume a recorded conversation or start a new agent.  The clipboard choice
+is always last and does not replace the remembered session."
   (let* ((root (noema-agent-acp-project-root))
          (remembered (gethash root noema-context--last-session))
          (live (and (buffer-live-p remembered)
@@ -278,8 +279,10 @@ not resume a recorded conversation or start a new agent."
                      live
                    (noema-sessions-read
                     :prompt "Send context to session: "
-                    :root root :live-only t :default live))))
-    (puthash root buffer noema-context--last-session)
+                    :root root :live-only t :default live
+                    :copy-to-clipboard t))))
+    (unless (eq buffer 'clipboard)
+      (puthash root buffer noema-context--last-session))
     buffer))
 
 (defun noema-context--deliver (buffer blocks)
@@ -317,37 +320,45 @@ not resume a recorded conversation or start a new agent."
              (string-join skipped "; "))))
 
 (cl-defun noema-context--send (&key prompt pick draft references)
-  "Send editor context to a session, reading PROMPT when it is nil.
+  "Send editor context to a session or copy it, reading PROMPT when nil.
 The context is the shared gptel selection unless REFERENCES is given: a
 function of (ROOT SESSION) returning the reference plists for exactly what the
 command names, such as one region, so a send never drags along whatever was
 gathered earlier.  PICK asks which session to use when sessions are not always
 asked for.  DRAFT puts the turn in the session's input without submitting it."
   (let* ((buffer (noema-context--session pick))
-         (root (buffer-local-value 'noema-agent-acp-session-root buffer))
+         (clipboard (eq buffer 'clipboard))
+         (root (if clipboard
+                   (noema-agent-acp-project-root)
+                 (buffer-local-value 'noema-agent-acp-session-root buffer)))
          (resolved (if references
-                       (cons (funcall references root buffer) nil)
-                     (noema-context--resolve nil root buffer)))
+                       (cons (funcall references root (unless clipboard buffer)) nil)
+                     (noema-context--resolve nil root (unless clipboard buffer))))
          (references (car resolved))
          (prompt (or prompt
                      (read-string
                       (format "Ask %s (%d reference%s): "
-                              (or (buffer-local-value 'noema-agent-acp-session-name buffer)
-                                  "the agent")
+                              (if clipboard "clipboard"
+                                (or (buffer-local-value 'noema-agent-acp-session-name buffer)
+                                    "the agent"))
                               (length references)
-                              (if (= (length references) 1) "" "s")))))
-         (blocks (noema-context-content-blocks prompt references)))
+                              (if (= (length references) 1) "" "s"))))))
     (noema-context--report-skipped (cdr resolved))
     (when (and (string-empty-p (string-trim prompt)) (null references))
       (user-error "Nothing to send: no question and no context"))
-    (if draft
-        (progn (noema-agent-acp-draft buffer (noema-context--prompt-text prompt references))
-               (noema-agent-acp-show-buffer buffer))
-      (noema-context--deliver buffer blocks))
-    (when (and noema-context-clear-after-send (not references))
+    (cond
+     (clipboard
+      (kill-new (noema-context--prompt-text prompt references))
+      (message "Noema: prompt copied to clipboard"))
+     (draft
+      (noema-agent-acp-draft buffer (noema-context--prompt-text prompt references))
+      (noema-agent-acp-show-buffer buffer))
+     (t (noema-context--deliver
+         buffer (noema-context-content-blocks prompt references))))
+    (when (and (not clipboard) noema-context-clear-after-send (not references))
       (require 'gptel-context)
       (gptel-context-remove-all))
-    buffer))
+    (unless clipboard buffer)))
 
 (defun noema-context--region-references (buffer begin end)
   "Return a REFERENCES function naming only BEGIN..END of BUFFER.
@@ -457,20 +468,24 @@ PICK is as for `noema-context-send-at-point'."
                               (ignore-errors (which-function)))
                          (ignore-errors (add-log-current-defun))))
          (buffer (noema-context--session pick))
-         (root (buffer-local-value 'noema-agent-acp-session-root buffer))
-         (reference (noema-context--reference file root nil nil buffer))
+         (clipboard (eq buffer 'clipboard))
+         (root (if clipboard (noema-agent-acp-project-root)
+                 (buffer-local-value 'noema-agent-acp-session-root buffer)))
+         (reference (noema-context--reference file root nil nil
+                                               (unless clipboard buffer)))
          (where (format "%s:%d:%d" (plist-get reference :relative) line column))
          (prompt (read-string (format "Ask about %s: " where)))
-         (blocks (list (list (cons 'type "text")
-                             (cons 'text (concat prompt "\n\nPoint is at " where
-                                                 (if defun-name
-                                                     (format ", in `%s'" defun-name)
-                                                   "")
-                                                 ".\n")))
-                       (car (noema-context--file-blocks (list reference))))))
+         (text (concat prompt "\n\nPoint is at " where
+                       (if defun-name (format ", in `%s'" defun-name) "")
+                       ".\n")))
     (when (string-empty-p (string-trim prompt))
       (user-error "Nothing to ask"))
-    (noema-context--deliver buffer blocks)))
+    (if clipboard
+        (progn (kill-new text)
+               (message "Noema: prompt copied to clipboard"))
+      (noema-context--deliver
+       buffer (list (list (cons 'type "text") (cons 'text text))
+                    (car (noema-context--file-blocks (list reference))))))))
 
 (defvar noema-context-review-mode-map
   (let ((map (make-sparse-keymap)))

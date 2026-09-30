@@ -45,6 +45,20 @@ describe("Evil visual-line-mode row mappings", () => {
     s.done();
   });
 
+  test("j does not get trapped when a wrapped row lands inside rendered math", () => {
+    const text = String.raw`prefix \(averylongformulathatspansrows\) suffix` + "\nnext";
+    const formula = text.indexOf(String.raw`\(`);
+    const s = mount(text, formula, 12);
+    try {
+      s.keys("j");
+      expect(s.head()).toBeGreaterThan(formula);
+      s.keys("ArrowDown");
+      expect(s.head()).toBeGreaterThan(formula);
+    } finally {
+      s.done();
+    }
+  });
+
   test("gj and gk use source lines", () => {
     const s = mount("abcdefghij\nxyz", 1);
     s.keys("g", "j");

@@ -1,0 +1,21 @@
+import type { ArrowTipKind } from "../types.js";
+export declare const NAMED_COLORS: Set<string>;
+export declare const COLOR_HEX: Record<string, string>;
+export declare const NON_STYLE_OPTION_KEYS: Set<string>;
+export declare const NON_STYLE_OPTION_FLAGS: Set<string>;
+export declare const PT_PER_CM: number;
+export declare const DEFAULT_TEXT_FONT_SIZE = 9.96264;
+export declare const FONT_SIZE_COMMAND_FACTORS: Record<string, number>;
+export declare const DEFAULT_DOUBLE_DISTANCE = 0.6;
+export declare const DEFAULT_ARROW_LENGTH = 8;
+export declare const DEFAULT_ARROW_WIDTH = 6;
+export declare const DEFAULT_AXIS_TOP_COLOR: string;
+export declare const DEFAULT_AXIS_MIDDLE_COLOR = "#c0c0c0";
+export declare const DEFAULT_AXIS_BOTTOM_COLOR: string;
+export declare const DEFAULT_BALL_COLOR: string;
+export declare const DEFAULT_RADIAL_INNER_COLOR: string;
+export declare const DEFAULT_RADIAL_OUTER_COLOR: string;
+export declare const ARROW_NAME_ALIASES: {
+    name: string;
+    kind: ArrowTipKind;
+}[];

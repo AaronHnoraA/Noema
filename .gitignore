@@ -7,6 +7,8 @@
 node_modules/
 build/
 dist/
+!vendor/tikz-editor/core/dist/
+!vendor/tikz-editor/lezer-tikz/dist/
 release/
 src-tauri/binaries/
 src-tauri/gen/

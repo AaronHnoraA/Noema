@@ -23,6 +23,7 @@ import {
 } from "../shared/block-identity.mjs";
 import { wikiHrefForTarget } from "../shared/wiki-link.mjs";
 import { renderTikzFigureBody } from "./tikz-render.ts";
+import "./tikz-browser.ts";
 import {
   metaEntryMap,
   metaRoamIndexed,
@@ -51,11 +52,7 @@ declare global {
 
 export type RenderMarkdownHTMLOptions = {
   assetResolver?: (src: string) => string;
-  /**
-   * Note the markdown came from. TikZ blocks compile to an SVG asset beside the
-   * note, so an export needs the note path to resolve them; without it the TeX
-   * source is emitted instead of a silently missing image.
-   */
+  /** Source note path for other note-relative assets. */
   noteFile?: string;
   /** Allow authored HTML, then pass it through the normal Noema sanitizer. */
   allowHtml?: boolean;
@@ -75,7 +72,7 @@ export type RenderPublishedNoteOptions = {
   private?: boolean;
   includePrivateContent?: boolean;
   assetResolver?: (src: string) => string;
-  /** Source note path; resolves compiled TikZ assets. */
+  /** Source note path for other note-relative assets. */
   noteFile?: string;
   standalone?: {
     styles: string;
@@ -1113,7 +1110,7 @@ function renderSemanticHeading(tokens: Token[], idx: number): string {
   ].join("");
 }
 
-/** The block id from `#+begin tikz <id> [{attrs}]`; names the compiled asset. */
+/** The block id from `#+begin tikz <id> [{attrs}]`; labels the figure. */
 function tikzTitleId(title: string): string {
   const raw = String(title || "").trim();
   const open = raw.indexOf("{");
@@ -1134,7 +1131,7 @@ function renderOrgEnv(
   md: MarkdownIt,
   tokens: Token[],
   idx: number,
-  options: RenderMarkdownHTMLOptions = {},
+  _options: RenderMarkdownHTMLOptions = {},
 ): string {
   const meta = tokens[idx]!.meta as OrgEnvTokenMeta;
   const kind = meta.kind;
@@ -1148,10 +1145,7 @@ function renderOrgEnv(
     const classes = classList("aaronnote-tikz", "aaronnote-visual-attachment", imageLayoutClasses(layout));
     const style = imageLayoutStyle(layout);
     const styleAttr = style ? ` style="${escapeAttr(style)}"` : "";
-    const body = renderTikzFigureBody(meta.body, tikzTitleId(meta.title), {
-      noteFile: options.noteFile,
-      assetResolver: options.assetResolver,
-    });
+    const body = renderTikzFigureBody(meta.body, tikzTitleId(meta.title));
     return `<figure class="${escapeAttr(classes)}" data-aaronnote-image-align="${escapeAttr(layout.align)}" data-aaronnote-image-wrap="${layout.wrap ? "true" : "false"}"${styleAttr}>${body}</figure>`;
   }
   const title = meta.title;

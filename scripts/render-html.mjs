@@ -6,6 +6,20 @@ import { fileURLToPath } from "node:url";
 import { Window } from "happy-dom";
 import { loadKatexMacros } from "../server/lib/katex-macros.mjs";
 
+const input = JSON.parse(readFileSync(0, "utf8") || "{}");
+const items = Array.isArray(input.batch) ? input.batch : [input];
+const hasTikz = items.some((item) => /#\+\s*begin\s+tikz(?:\s|$)/im.test(String(item?.markdown ?? "")));
+// Initialize MathJax before the HTML shim installs window/document so the
+// upstream core chooses its local Node runtime, never its CDN browser loader.
+const tikzCore = hasTikz ? await import("@tikz-editor/core/dist/render/index.js") : null;
+const tikzTextEngine = hasTikz
+  ? await (await import("@tikz-editor/core/dist/text/mathjax-engine.js"))
+    .createMathJaxNodeTextEngine().catch(() => null)
+  : null;
+// A batch may contain the same figure in several notes. Cache the in-flight
+// render too, so concurrent notes do not compile it repeatedly.
+const tikzCache = new Map();
+
 // Stub CSS imports (e.g. "katex/dist/katex.min.css?url") so Node.js ESM doesn't
 // try to load them as modules. Vite handles ?url imports at build time; Node doesn't.
 registerHooks({
@@ -59,6 +73,8 @@ const { setKatexMacros } = await import("../src/katex-macros.ts");
 setKatexMacros(loadKatexMacros(macrosDir).macros);
 
 const { renderMarkdownHTML, renderPublishedNoteHTML } = await import("../src/render-html.ts");
+const { normalizeTikzSource } = await import("../src/tikz-render.ts");
+const { sanitizedTikzSvg } = await import("../src/tikz-browser.ts");
 
 function renderOne(input) {
   return input.mode === "published-note"
@@ -69,8 +85,42 @@ function renderOne(input) {
     });
 }
 
-const input = JSON.parse(readFileSync(0, "utf8") || "{}");
+async function inlineTikz(html) {
+  if (!tikzCore || !html.includes("<noema-tikz")) return html;
+  const fullDocument = /^\s*<!doctype|^\s*<html\b/i.test(html);
+  const root = fullDocument
+    ? new window.DOMParser().parseFromString(html, "text/html")
+    : window.document.createElement("div");
+  if (!fullDocument) root.innerHTML = html;
+  for (const element of root.querySelectorAll("noema-tikz[data-source]")) {
+    const source = element.getAttribute("data-source") || "";
+    try {
+      let render = tikzCache.get(source);
+      if (!render) {
+        render = tikzCore.renderTikzToSvgAsync(normalizeTikzSource(source), {
+          textEngine: tikzTextEngine,
+        }).then((result) => {
+          const error = [...result.parse.diagnostics, ...result.semantic.diagnostics, ...result.svg.diagnostics]
+            .find((diagnostic) => diagnostic.severity === "error");
+          if (error) throw new Error(error.message);
+          return result.svg.svg;
+        });
+        tikzCache.set(source, render);
+      }
+      const svg = await render;
+      element.innerHTML = sanitizedTikzSvg(svg);
+      element.querySelector("svg")?.classList.add("aaronnote-tikz-image");
+      element.removeAttribute("data-source");
+    } catch (error) {
+      // One unsupported diagram must not abort the rest of an export batch.
+      element.textContent = error instanceof Error ? error.message : String(error);
+      element.classList.add("is-tikz-error");
+    }
+  }
+  return fullDocument ? `<!DOCTYPE html>\n${root.documentElement.outerHTML}` : root.innerHTML;
+}
+
 const html = Array.isArray(input.batch)
-  ? input.batch.map((item) => renderOne(item ?? {}))
-  : renderOne(input);
+  ? await Promise.all(input.batch.map((item) => inlineTikz(renderOne(item ?? {}))))
+  : await inlineTikz(renderOne(input));
 process.stdout.write(JSON.stringify({ html }));

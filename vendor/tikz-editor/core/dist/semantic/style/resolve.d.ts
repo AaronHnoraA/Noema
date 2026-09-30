@@ -1,0 +1,13 @@
+import type { WorldPoint } from "../../coords/points.js";
+import type { WorldTransform } from "../../coords/transforms.js";
+import type { ResolvedStyle } from "../types.js";
+import { type ResolvedStyleTrace, type StyleChainEntry, type StyleTraceLayerInput } from "../style-chain.js";
+import type { ColorAliasResolver } from "./colors.js";
+import type { CustomStyleRegistry } from "./custom-styles.js";
+import { commandDefaultStyle, defaultStyle, DEFAULT_TEXT_FONT_SIZE } from "./defaults.js";
+import { extractCircleRadius } from "./extract-circle-radius.js";
+import { parseStyleValueAsOptionList } from "./option-utils.js";
+export type ResolvedContextDelta = ResolvedStyleTrace;
+export type CoordinateResolver = (raw: string) => WorldPoint | null;
+export declare function resolveContextDelta(baseStyle: ResolvedStyle, baseTransform: WorldTransform, optionLayers: StyleTraceLayerInput[], customStyles?: CustomStyleRegistry, resolveCoordinate?: CoordinateResolver, baseChain?: StyleChainEntry[], resolveColorAliasValue?: ColorAliasResolver): ResolvedContextDelta;
+export { DEFAULT_TEXT_FONT_SIZE, defaultStyle, commandDefaultStyle, extractCircleRadius, parseStyleValueAsOptionList };

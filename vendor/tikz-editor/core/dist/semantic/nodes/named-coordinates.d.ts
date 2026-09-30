@@ -1,0 +1,10 @@
+import type { CoordinateItem, PathItem } from "../../ast/types.js";
+import { type SemanticContext } from "../context.js";
+import { type WorldPoint } from "../../coords/points.js";
+export declare function collectScopedNodeNames(name: string | undefined, aliases: string[] | undefined, context: SemanticContext): string[];
+export declare function maybeResolveTrailingCoordinateFromNodeName(name: string | undefined): string | null;
+export declare function shouldCaptureStandaloneNodeNameCoordinate(items: PathItem[], coordinateIndex: number): boolean;
+export declare function applyNameScope(name: string, context: SemanticContext): string;
+export declare function maybeResolveNamedCoordinateBorderPoint(coordinate: Pick<CoordinateItem, "form" | "x">, fallbackWorldPoint: WorldPoint, fromWorldPoint: WorldPoint | null, context: SemanticContext): WorldPoint;
+export declare function maybeResolveNamedCoordinateBorderPointFromRaw(rawCoordinate: string, fallbackWorldPoint: WorldPoint, fromWorldPoint: WorldPoint | null, context: SemanticContext): WorldPoint;
+export declare function maybeResolveNamedCoordinateBorderPointFromRawAlongAngle(rawCoordinate: string, fallbackWorldPoint: WorldPoint, angleDegrees: number, context: SemanticContext): WorldPoint;

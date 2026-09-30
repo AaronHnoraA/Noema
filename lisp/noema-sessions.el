@@ -971,14 +971,16 @@ buffer matches the live choice that owns it and the durable entry it serves."
                                      name)))))))
           choices)))))
 
-(cl-defun noema-sessions-read (&key prompt root allow-new default live-only)
+(cl-defun noema-sessions-read (&key prompt root allow-new default live-only
+                                   copy-to-clipboard)
   "Read one agent session of ROOT and return its live agent buffer.
 PROMPT overrides the minibuffer prompt.  With ALLOW-NEW the choices also
 include starting a new session.  DEFAULT, a live agent buffer or a label from
 `noema-sessions-last-label', is listed first and preselected.  Resuming a
-recorded conversation or starting a new one happens here, so the caller always
-receives a live buffer.  LIVE-ONLY restricts choices to running ACP processes
-and never queries or resumes the durable registry."
+recorded conversation or starting a new one happens here, so a session choice
+always returns a live buffer.  LIVE-ONLY restricts choices to running ACP processes
+and never queries or resumes the durable registry.  With COPY-TO-CLIPBOARD,
+append a clipboard choice after every session and return `clipboard' for it."
   (let* ((root (noema-sessions--project-root root))
          (result (and (not live-only)
                       (bound-and-true-p my/noema--ready)
@@ -992,6 +994,10 @@ and never queries or resumes the durable registry."
          (new-label "+ Start a new session"))
     (when allow-new
       (setq choices (append choices (list (cons new-label 'new)))))
+    (when copy-to-clipboard
+      (setq choices (append choices
+                            (list (cons "Copy prompt to clipboard"
+                                        'clipboard)))))
     (unless choices
       (user-error (if live-only
                       "No open agent sessions; start an agent in this project first"
@@ -1014,8 +1020,10 @@ and never queries or resumes the durable registry."
                                                              string predicate)))
                                    nil t nil nil default-label))
            (choice (cdr (assoc label choices))))
-      (setq noema-sessions-last-label label)
+      (unless (eq choice 'clipboard)
+        (setq noema-sessions-last-label label))
       (cond ((eq choice 'new) (noema-sessions--start-new root))
+            ((eq choice 'clipboard) 'clipboard)
             ((cdr choice) (cdr choice))
             (t (noema-sessions--entry-buffer (car choice) root))))))
 

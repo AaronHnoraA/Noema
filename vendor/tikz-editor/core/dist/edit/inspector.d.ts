@@ -1,0 +1,12 @@
+import type { EditParseOptions } from "./parse-options.js";
+import type { SceneElement } from "../semantic/types.js";
+import { type InspectorTargetResolver } from "./inspector/target-resolver.js";
+import type { InspectorDescriptor, InspectorSnapshot } from "./inspector/types.js";
+export { TIKZPICTURE_GLOBAL_TARGET_ID } from "./property-target.js";
+export type { ArrowTipWriteTarget, InspectorDescriptor, InspectorProperty, InspectorSection, InspectorSnapshot, NodeTextAlignInspectorValue, SetPropertyWriteTarget } from "./inspector/types.js";
+export type { ArrowTipPresetId, ArrowTipPresetOption, ArrowTipSide, DashStylePresetId, DashStylePresetOption, FillModePresetId, FillModePresetOption, FillPatternMetaFamilyId, FillPatternMetaOptionKey, FillPatternMetaValues, FillPatternPresetId, FillPatternPresetOption, FillShadingPresetId, FillShadingPresetOption, LineCapPresetId, LineCapPresetOption, LineJoinPresetId, LineJoinPresetOption, NodeFontFamilyId, NodeFontSizePresetId, NodeFontSizePresetOption, NodeShapePresetId, NodeShapePresetOption, PathMorphingDecorationPresetId, PathMorphingDecorationPresetOption, ShadowPresetId, ShadowPresetOption } from "./inspector/presets.js";
+export { DASH_STYLE_OPTIONS, FILL_MODE_OPTIONS, FILL_PATTERN_OPTIONS, FILL_SHADING_OPTIONS, LINE_CAP_OPTIONS, LINE_JOIN_OPTIONS, LINE_WIDTH_PRESETS, NODE_INNER_SEP_DEFAULT, NODE_SHAPE_OPTIONS, ROUNDED_CORNERS_DEFAULT_RADIUS, SHADOW_PRESET_DEFAULTS, SHADOW_PRESET_OPTIONS } from "./inspector/presets.js";
+export { dashStylePresetFromStyle, fillPatternPresetFromRaw, fillPatternPresetFromResolvedPattern, fillShadingPresetFromStyleName, lineCapPresetFromStyle, lineJoinPresetFromStyle, lineWidthPresetLabel } from "./inspector/preset-values.js";
+export declare function buildMatrixInspectorDescriptor(source: string, matrixId: string, parseOptions?: EditParseOptions, resolveTarget?: InspectorTargetResolver): InspectorDescriptor | null;
+export declare function buildTreeInspectorDescriptor(source: string, sourceId: string, element: SceneElement | null, parseOptions?: EditParseOptions, resolveTarget?: InspectorTargetResolver): InspectorDescriptor | null;
+export declare function getInspectorDescriptor(element: SceneElement, snapshot: InspectorSnapshot, resolveTarget?: InspectorTargetResolver): InspectorDescriptor;

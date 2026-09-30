@@ -1,0 +1,27 @@
+declare const transformBrand: unique symbol;
+type AffineTransform<Brand extends string> = Readonly<{
+    a: number;
+    b: number;
+    c: number;
+    d: number;
+    e: number;
+    f: number;
+    [transformBrand]: Brand;
+}>;
+export type FrameToWorldTransform = AffineTransform<"transform:frame-to-world">;
+export type WorldToFrameTransform = AffineTransform<"transform:world-to-frame">;
+export type WorldToSvgTransform = AffineTransform<"transform:world-to-svg">;
+export type SvgToWorldTransform = AffineTransform<"transform:svg-to-world">;
+export type AnchorToWorldTransform = AffineTransform<"transform:anchor-to-world">;
+export type WorldTransform = AffineTransform<"transform:world-to-world">;
+export type FrameTransform = FrameToWorldTransform;
+export type AnchorTransform = AnchorToWorldTransform;
+export type SvgTransform = WorldToSvgTransform;
+export declare function frameToWorldTransform(a: number, b: number, c: number, d: number, e: number, f: number): FrameToWorldTransform;
+export declare const frameTransform: typeof frameToWorldTransform;
+export declare function worldToFrameTransform(a: number, b: number, c: number, d: number, e: number, f: number): WorldToFrameTransform;
+export declare function worldToSvgTransform(a: number, b: number, c: number, d: number, e: number, f: number): WorldToSvgTransform;
+export declare function svgToWorldTransform(a: number, b: number, c: number, d: number, e: number, f: number): SvgToWorldTransform;
+export declare function anchorToWorldTransform(a: number, b: number, c: number, d: number, e: number, f: number): AnchorToWorldTransform;
+export declare function worldTransform(a: number, b: number, c: number, d: number, e: number, f: number): WorldTransform;
+export {};

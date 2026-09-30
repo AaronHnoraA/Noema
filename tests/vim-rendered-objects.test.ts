@@ -4,6 +4,7 @@ import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 import { createEditor } from "../src/editor-api.ts";
 import { createVimLite } from "../aaronnote/vim-lite.ts";
 import { isVisualMode, setVisualMode } from "../src/cm6/extensions/visual/visual-mode.ts";
+import { revealFormulaSource } from "../src/cm6/extensions/visual/widgets/math.ts";
 
 function mount(text: string, at = 0) {
   const host = document.createElement("div");
@@ -131,6 +132,45 @@ describe("collapsed formulas as words", () => {
     s.keys("Escape");
     expect(isVisualMode(s.editor.view)).toBe(true);
     s.done();
+  });
+
+  test("I and A leave a revealed formula for the row edges", () => {
+    const text = String.raw`start \(x+y\) end`;
+    for (const [key, target] of [["I", 0], ["A", text.length]] as const) {
+      const s = mount(text, text.indexOf("x+y"));
+      try {
+        const from = text.indexOf(String.raw`\(`);
+        expect(revealFormulaSource(s.editor.view, from, text.indexOf(String.raw`\)`) + 2, 0)).toBe(true);
+        s.editor.setSelection(text.indexOf("x+y") + 1);
+        s.vim.syncSelectionFromEditor();
+        s.keys(key);
+        expect(s.vim.mode()).toBe("insert");
+        expect(s.head()).toBe(target);
+      } finally {
+        s.done();
+      }
+    }
+  });
+
+  test("I and A leave a revealed display formula across its fence lines", () => {
+    const text = "before\n\\[\nx+y\n\\]\nafter";
+    for (const [key, target] of [
+      ["I", text.indexOf(String.raw`\[`) ],
+      ["A", text.indexOf(String.raw`\]`) + 2],
+    ] as const) {
+      const s = mount(text, text.indexOf("x+y"));
+      try {
+        const from = text.indexOf(String.raw`\[`);
+        expect(revealFormulaSource(s.editor.view, from, text.indexOf(String.raw`\]`) + 2, 0)).toBe(true);
+        s.editor.setSelection(text.indexOf("x+y") + 1);
+        s.vim.syncSelectionFromEditor();
+        s.keys(key);
+        expect(s.vim.mode()).toBe("insert");
+        expect(s.head()).toBe(target);
+      } finally {
+        s.done();
+      }
+    }
   });
 
   test("a on plain prose keeps nearby rendered objects and only moves one character", () => {

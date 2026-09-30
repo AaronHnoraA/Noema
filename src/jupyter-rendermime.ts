@@ -16,10 +16,12 @@
 
 import { FRAME_KEY_RELAY_SCRIPT } from "./frame-key-relay.ts";
 import { OutputArea, OutputAreaModel } from "@jupyterlab/outputarea";
-import { RenderMimeRegistry, standardRendererFactories } from "@jupyterlab/rendermime";
+import { RenderedMarkdown, RenderMimeRegistry, standardRendererFactories } from "@jupyterlab/rendermime";
 import type { IRenderMime } from "@jupyterlab/rendermime";
 import { Widget } from "@lumino/widgets";
-import { renderMathHTML } from "./math-render.ts";
+import { KatexTypesetter, renderKatexInto } from "./jupyter-output-math.ts";
+
+export { renderKatexInto } from "./jupyter-output-math.ts";
 
 import "@jupyterlab/rendermime/style/base.css";
 import "@jupyterlab/outputarea/style/base.css";
@@ -63,91 +65,6 @@ function mimeToString(value: unknown): string {
   if (typeof value === "string") return value;
   if (Array.isArray(value)) return value.map((item) => String(item ?? "")).join("");
   return "";
-}
-
-// ---------------------------------------------------------------------------
-// KaTeX LaTeX typesetter
-// ---------------------------------------------------------------------------
-
-function stripMathDelimiters(raw: string): { body: string; displayMode: boolean } | null {
-  const text = raw.trim();
-  if (text.startsWith("\\[") && text.endsWith("\\]")) return { body: text.slice(2, -2), displayMode: true };
-  if (text.startsWith("\\(") && text.endsWith("\\)")) return { body: text.slice(2, -2), displayMode: false };
-  if (text.startsWith("$$") && text.endsWith("$$")) return { body: text.slice(2, -2), displayMode: true };
-  if (text.length > 1 && text.startsWith("$") && text.endsWith("$")) return { body: text.slice(1, -1), displayMode: false };
-  return null;
-}
-
-export function renderKatexInto(host: HTMLElement, raw: string): void {
-  const stripped = stripMathDelimiters(raw) ?? { body: raw.trim(), displayMode: false };
-  const { html, error } = renderMathHTML(stripped.body.trim(), { displayMode: stripped.displayMode });
-  if (error || !html) {
-    host.textContent = raw;
-    return;
-  }
-  const div = document.createElement("div");
-  div.className = "cm-ceil-output-latex";
-  if (stripped.displayMode) div.dataset.display = "true";
-  div.innerHTML = html;
-  host.replaceChildren(div);
-}
-
-const INLINE_MATH_RE = /\\\((.+?)\\\)|\\\[([\s\S]+?)\\\]/g;
-
-class KatexTypesetter implements IRenderMime.ILatexTypesetter {
-  typeset(host: HTMLElement): void {
-    // text/latex renderer sets the whole element text to a single delimited
-    // expression; render it as one block.
-    const raw = (host.textContent ?? "").trim();
-    if (host.childElementCount === 0 && stripMathDelimiters(raw)) {
-      renderKatexInto(host, raw);
-      return;
-    }
-    // Otherwise scan text nodes for inline/display math (markdown/html output).
-    this.scanTextNodes(host);
-  }
-
-  private scanTextNodes(root: HTMLElement): void {
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-      acceptNode: (node) => {
-        const parent = node.parentElement;
-        if (!parent) return NodeFilter.FILTER_REJECT;
-        if (parent.closest("script,style,code,pre,.cm-ceil-output-latex")) return NodeFilter.FILTER_REJECT;
-        INLINE_MATH_RE.lastIndex = 0;
-        return INLINE_MATH_RE.test(node.nodeValue ?? "") ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
-      },
-    });
-    const targets: Text[] = [];
-    for (let node = walker.nextNode(); node; node = walker.nextNode()) targets.push(node as Text);
-    for (const text of targets) this.replaceMathInTextNode(text);
-  }
-
-  private replaceMathInTextNode(node: Text): void {
-    const source = node.nodeValue ?? "";
-    INLINE_MATH_RE.lastIndex = 0;
-    const frag = document.createDocumentFragment();
-    let last = 0;
-    let match: RegExpExecArray | null;
-    while ((match = INLINE_MATH_RE.exec(source))) {
-      if (match.index > last) frag.append(source.slice(last, match.index));
-      const inline = match[1];
-      const display = match[2];
-      const body = inline ?? display ?? "";
-      const { html, error } = renderMathHTML(body.trim(), { displayMode: display != null });
-      if (error || !html) {
-        frag.append(match[0]);
-      } else {
-        const span = document.createElement(display != null ? "div" : "span");
-        span.className = "cm-ceil-output-latex";
-        if (display != null) span.dataset.display = "true";
-        span.innerHTML = html;
-        frag.append(span);
-      }
-      last = match.index + match[0].length;
-    }
-    if (last < source.length) frag.append(source.slice(last));
-    node.replaceWith(frag);
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -214,6 +131,15 @@ function htmlMathOnly(html: string): string | null {
 // ---------------------------------------------------------------------------
 
 const stockHtmlFactory = standardRendererFactories.find((factory) => factory.mimeTypes.includes("text/html"));
+
+class AaronnoteMarkdownRenderer extends RenderedMarkdown {
+  async renderModel(model: IRenderMime.IMimeModel): Promise<void> {
+    await super.renderModel(model);
+    // OutputArea inserts its node directly into the host, so Lumino's
+    // after-attach hook does not run for this nested Markdown renderer.
+    katexTypesetter().typeset(this.node);
+  }
+}
 
 class AaronnoteHtmlRenderer extends Widget implements IRenderMime.IRenderer {
   private readonly options: IRenderMime.IRendererOptions;
@@ -477,6 +403,11 @@ export function createBaseRenderMime(options: Pick<RenderMimeOptions, "markdownP
     mimeTypes: ["text/html"],
     createRenderer: (rendererOptions) => new AaronnoteHtmlRenderer(rendererOptions),
   }, 1);
+  registry.addFactory({
+    safe: true,
+    mimeTypes: ["text/markdown"],
+    createRenderer: (rendererOptions) => new AaronnoteMarkdownRenderer(rendererOptions),
+  }, 60);
   registry.addFactory({
     safe: true,
     mimeTypes: [NOEMA_RUN_MIMETYPE],

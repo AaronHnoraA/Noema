@@ -181,6 +181,20 @@ export function texUnitBoundaries(source: string, baseOffset = 0): number[] {
 export function texUnitJumpTarget(view: EditorView, direction: 1 | -1): number | null {
   const selection = view.state.selection.main;
   const cursor = direction > 0 ? selection.to : selection.from;
+  // The TeX body ends before its Markdown delimiter. At that boundary there
+  // is no next TeX unit, so let the same chord leave the formula instead of
+  // repeatedly returning null while the caret sits before `\)` or `\]`.
+  const block = blockMathRangeAt(view.state, cursor);
+  if (block) {
+    if (direction > 0 && cursor === block.contentTo) return block.to;
+    if (direction < 0 && cursor === block.contentFrom) return block.from;
+  } else {
+    const line = view.state.doc.lineAt(cursor);
+    const inline = scanInlineMathRanges(line.text, line.from).find((range) => (
+      direction > 0 ? cursor === range.to - 2 : cursor === range.from + 2
+    ));
+    if (inline) return direction > 0 ? inline.to : inline.from;
+  }
   const scope = jumpScope(view, cursor);
   if (!scope.math) return null;
   const boundaries = texUnitBoundaries(

@@ -7,7 +7,6 @@ import {
   renderMarkdownHTML,
   renderPublishedNoteHTML,
 } from "../src/render-html.ts";
-import { tikzAssetMarkdownPath } from "../shared/tikz-source.mjs";
 
 describe("shared markdown HTML renderer", () => {
   test("renders Wiki links with optional labels while leaving code untouched", () => {
@@ -373,17 +372,16 @@ y^2
     expect(html).not.toContain("<org-env-block");
   });
 
-  test("renders a tikz org env as its locally compiled svg asset", () => {
+  test("emits a browser TikZ hydration target without a local asset", () => {
     const html = renderMarkdownHTML([
       "#+ begin tikz axis",
       "\\draw (0,0) -- (1,1);",
       "#+ end tikz",
     ].join("\n"), { noteFile: "/vault/Notes/demo.md" });
 
-    const expected = tikzAssetMarkdownPath("/vault/Notes/demo.md", "axis", "\\draw (0,0) -- (1,1);");
-    expect(expected).toMatch(/^\.\/images\/demo\/tikz-axis-[0-9a-f]{16}\.svg$/);
     expect(html).toContain("aaronnote-tikz");
-    expect(html).toContain(`src="${expected}"`);
+    expect(html).toContain('<noema-tikz data-source="\\draw (0,0) -- (1,1);"');
+    expect(html).not.toContain('src="./images/');
     expect(html).not.toContain("tikzjax");
     expect(html).not.toContain("<iframe");
     expect(html).not.toContain("<org-env-block");

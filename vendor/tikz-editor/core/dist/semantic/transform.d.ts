@@ -1,0 +1,10 @@
+import type { WorldPoint, WorldVector } from "../coords/points.js";
+import type { WorldTransform } from "../coords/transforms.js";
+export declare function identityMatrix(): WorldTransform;
+export declare function multiplyMatrix(left: WorldTransform, right: WorldTransform): WorldTransform;
+export declare function applyMatrix(matrix: WorldTransform, point: WorldPoint): WorldPoint;
+export declare function applyMatrixToVector(matrix: Pick<WorldTransform, "a" | "b" | "c" | "d">, point: Pick<WorldPoint, "x" | "y">): WorldVector;
+export declare function translationMatrix(tx: number, ty: number): WorldTransform;
+export declare function scaleMatrix(sx: number, sy: number): WorldTransform;
+export declare function rotationMatrix(degrees: number): WorldTransform;
+export declare function inverseMatrix(matrix: WorldTransform): WorldTransform | null;

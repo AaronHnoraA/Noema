@@ -1,0 +1,12 @@
+export { KnuthPlassVisitor } from './KnuthPlassVisitor.js';
+export { DEFAULT_PARAGRAPH_ALIGNMENT, TEX_INTERWORD_SHRINK_EM, TEX_INTERWORD_SPACE_EM, TEX_INTERWORD_STRETCH_EM, TIKZ_RAGGED_SKIP_STRETCH_EM, buildAlignmentProfile, normalizeParagraphAlignment, } from './alignment.js';
+export { installKnuthPlassVisitor, getKnuthPlassReportsFromOutputJax, setKnuthPlassOptionsOnOutputJax, getKnuthPlassCaretFromPoint, getKnuthPlassLineRangeFromPoint, getKnuthPlassPointFromOffset, getKnuthPlassSelectionRects, clearKnuthPlassCaretMappingCache, } from './install.js';
+export { runsToItems, getBreakableRunIndices, } from './paragraph/items.js';
+export { createMeasurementService } from './paragraph/measure.js';
+export { flattenParagraph } from './paragraph/tokenize.js';
+export { greedyBreakParagraph } from './paragraph/greedy.js';
+export { breakWithDp } from './paragraph/dp.js';
+export { createEnglishHyphenator, EnglishHyphenator } from './paragraph/hyphenate.js';
+export { englishDefaults, ENGLISH_LANGUAGE_CODE } from './languages/en.js';
+export { parseSourceSpans, } from './editor/sourceParser.js';
+export { stabilizePrefixForMeasurement, scanTeXPrefixState, hasDanglingMathScriptOperator, createMathPrefixCache, normalizeMathSourceForCache, seedPrefixWidthTable, finalizePrefixWidthTable, readPrefixUnitsFromTable, findNearestPrefixIndexFromTable, } from './editor/mathPrefix.js';

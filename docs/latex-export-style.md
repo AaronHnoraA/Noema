@@ -27,6 +27,9 @@ than failing.
    `\[...\]` (and `$$...$$` → `\[...\]`) exactly as written. Never escape
    backslashes inside math. Macros such as `\rank`, `\ket`, `\abs` are provided
    globally — use them, never redefine them.
+5. **Preserve TikZ verbatim.** A `#+begin tikz` block becomes a real LaTeX
+   `tikzpicture`, with TikZ and its `calc` library loaded by the host. Do not
+   replace the figure with a web preview or SVG, and do not edit its commands.
 
 ## Construct mapping
 
@@ -50,6 +53,7 @@ than failing.
 | `@@scomment [text]` | `\\sidecomment{text}` — an orange margin note with no prefix |
 | `@@project` / `@@milestone` / `@@clock` | **dropped** (planning bookkeeping, never exported) |
 | `#+begin meta ... #+end meta` | consumed for title/date/`annotations`; not emitted |
+| `#+begin tikz [id] ... #+end tikz` | native `tikzpicture` in the LaTeX body |
 
 ### Review annotations
 

@@ -1,0 +1,26 @@
+{
+  "name": "@tikz-editor/lezer-tikz",
+  "version": "0.5.2",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./grammar/tikz-parser": {
+      "types": "./dist/grammar/tikz-parser.d.ts",
+      "import": "./dist/grammar/tikz-parser.js"
+    },
+    "./grammar/tikz-parser.terms": {
+      "types": "./dist/grammar/tikz-parser.terms.d.ts",
+      "import": "./dist/grammar/tikz-parser.terms.js"
+    }
+  },
+  "dependencies": {
+    "@lezer/common": "^1.5.1",
+    "@lezer/lr": "^1.4.8"
+  }
+}

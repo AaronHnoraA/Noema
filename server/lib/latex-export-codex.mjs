@@ -122,6 +122,7 @@ function protectedPayloads(text) {
     resources: [...source.matchAll(/\\href\{((?:\\.|[^{}])*)\}|\\includegraphics(?:\[([^\]]*)\])?\{([^}]*)\}/g)]
       .map((match) => match[1] ?? `${match[3] || ""}\0${String(match[2] || "").match(/\balt\s*=\s*\{([^}]*)\}/)?.[1] || ""}`),
     anchors: [...source.matchAll(/\\(?:label|hypertarget)\{([^}]*)\}/g)].map((match) => match[1]),
+    tikz: [...source.matchAll(/\\begin\{tikzpicture\}(?:\[[^\]]*\])?[\s\S]*?\\end\{tikzpicture\}/g)].map((match) => match[0]),
   };
 }
 
@@ -306,7 +307,7 @@ export function strictFidelityIssues(draftBody, polishedBody) {
   }
   const draftProtected = protectedPayloads(draftBody);
   const polishedProtected = protectedPayloads(polishedBody);
-  for (const key of ["math", "code", "citations", "resources", "anchors"]) {
+  for (const key of ["math", "code", "citations", "resources", "anchors", "tikz"]) {
     if (JSON.stringify(draftProtected[key]) !== JSON.stringify(polishedProtected[key])) issues.push(`${key} payloads changed or were reordered`);
   }
   return issues;
@@ -320,7 +321,7 @@ function criticalFidelityIssues(draftBody, polishedBody) {
   const issues = [];
   const draftProtected = protectedPayloads(draftBody);
   const polishedProtected = protectedPayloads(polishedBody);
-  for (const key of ["code", "citations", "resources", "anchors"]) {
+  for (const key of ["code", "citations", "resources", "anchors", "tikz"]) {
     if (JSON.stringify(draftProtected[key]) !== JSON.stringify(polishedProtected[key])) {
       issues.push(`${key} payloads changed or were reordered`);
     }
@@ -471,6 +472,8 @@ function buildPrompt({ retryLog, needsTitle = true, sourceTitle = "", documentRo
     "Use `applied` only when body.tex contains a corresponding markup change.",
     "Fidelity is the hard gate: if a formatting improvement might change text or",
     "meaning, do not make it. It is correct to leave already-faithful markup alone.",
+    "Treat every tikzpicture as an opaque LaTeX figure. Preserve its complete",
+    "source verbatim; the host supplies TikZ and the calc library.",
     "",
     "Edit body.tex so that it compiles when the host inserts it into template.tex",
     "and its formatting follows this contract. Do NOT add, remove, translate, or reword",
@@ -832,6 +835,7 @@ export async function polishBodyWithAgent(opts) {
     latexBin = "",
     backend = "codex",
     agentBin = "",
+    agentRunner,
     model = "",
     sourceDir = "",
     makeWorkdir,
@@ -856,7 +860,7 @@ export async function polishBodyWithAgent(opts) {
   if (!compileEnabled) {
     return { ...base, usedAgent: false, compiled: false, warnings: ["compile not verified; skipped agent polish"] };
   }
-  if (!agentAvailable(agentBin)) {
+  if (typeof agentRunner !== "function" && !agentAvailable(agentBin)) {
     return { ...base, usedAgent: false, compiled: false, warnings: [`${backend} unavailable; used Pandoc draft`] };
   }
 
@@ -934,7 +938,7 @@ export async function polishBodyWithAgent(opts) {
         writeFile(join(workdir, "review.json"), `${JSON.stringify(reviewTemplate, null, 2)}\n`, "utf8"),
       ]);
       const agentStartedAt = Date.now();
-      const run = await runAgent({
+      const runOptions = {
         backend,
         bin: agentBin,
         workdir,
@@ -947,7 +951,10 @@ export async function polishBodyWithAgent(opts) {
         hardTimeoutMs: Math.max(agentTimeoutMs, agentHardTimeoutMs),
         signal,
         onProgress,
-      });
+      };
+      const run = typeof agentRunner === "function"
+        ? await agentRunner({ ...runOptions, prompt: buildPrompt(runOptions) })
+        : await runAgent(runOptions);
       agentElapsedMs += Date.now() - agentStartedAt;
       agentSummary = String(run.summary || "").trim();
       if (!run.ok) {

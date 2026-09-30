@@ -1,0 +1,12 @@
+import type { FrameLocalPoint, FrameLocalVector, WorldPoint, WorldVector } from "./points.js";
+import type { FrameToWorldTransform, WorldToFrameTransform } from "./transforms.js";
+export declare function applyFrameToWorldPoint(transform: FrameToWorldTransform, point: FrameLocalPoint): WorldPoint;
+export declare function applyFrameToWorldVector(transform: Pick<FrameToWorldTransform, "a" | "b" | "c" | "d">, vector: FrameLocalVector): WorldVector;
+export declare function invertFrameToWorldTransform(transform: FrameToWorldTransform): WorldToFrameTransform | null;
+export declare function applyWorldToFramePoint(transform: WorldToFrameTransform, point: WorldPoint): FrameLocalPoint;
+export declare function applyWorldToFrameVector(transform: Pick<WorldToFrameTransform, "a" | "b" | "c" | "d">, vector: WorldVector): FrameLocalVector;
+export declare function worldToFrameLocal(point: WorldPoint, transform: FrameToWorldTransform): FrameLocalPoint | null;
+export declare function worldVectorToFrameLocal(vector: WorldVector, transform: FrameToWorldTransform): FrameLocalVector | null;
+export declare const applyFrameTransform: typeof applyFrameToWorldPoint;
+export declare const applyFrameVector: typeof applyFrameToWorldVector;
+export declare const invertFrameTransform: typeof invertFrameToWorldTransform;

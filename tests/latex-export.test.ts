@@ -442,6 +442,34 @@ describe("LaTeX export", () => {
     expect(macros).toContain("\\providecommand{\\aaroncomment}");
     expect(macros).toContain("COMMENT:");
     expect(latexMacrosPackage({}, { usesWrapfig: true })).toContain("\\RequirePackage{wrapfig}");
+    expect(latexMacrosPackage({}, { usesTikz: true })).toContain("\\usetikzlibrary{calc}");
+  });
+
+  test("exports TikZ as native LaTeX and loads calc for templates without shared macros", async () => {
+    const { root, notes } = await setupRoot();
+    const templatePath = join(root, "templates", "latex", "tikz-minimal.tex");
+    await writeFile(templatePath, [
+      "\\documentclass{article}",
+      "\\begin{document}",
+      "{{body}}",
+      "\\end{document}",
+    ].join("\n"));
+    const note = join(notes, "figure.md");
+    await writeFile(note, [
+      "#+begin tikz generated-id",
+      "\\begin{tikzpicture}",
+      "\\node (a) at (0,0) {A};",
+      "\\node at ($(a)+(1,0)$) {B};",
+      "\\end{tikzpicture}",
+      "#+end tikz",
+    ].join("\n"));
+    const out = join(notes, "figure.tex");
+    await exportLatex({ file: note, outputPath: out, templatePath });
+    const tex = await readFile(out, "utf8");
+    expect(tex).toContain("\\usepackage{tikz}");
+    expect(tex).toContain("\\usetikzlibrary{calc}");
+    expect(tex).toContain("\\node at ($(a)+(1,0)$) {B};");
+    expect(tex).not.toContain(".svg");
   });
 
   test("exports Noema todo titles as annotations and omits their planning attributes", () => {

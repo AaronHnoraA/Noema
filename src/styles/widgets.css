@@ -2157,9 +2157,8 @@
 .cm-editor .cm-mermaid-block-preview {
   cursor: default;
 }
-/* Mermaid renders with its light `default` theme, so the diagram needs the same
- * page-like surface a compiled TikZ figure gets or its #333 strokes vanish into
- * a dark editor. One surface for every figure also keeps the two consistent. */
+/* Mermaid uses its light default theme, so its #333 strokes need a light
+ * surface in a dark editor. TikZ uses theme colors and stays transparent. */
 .cm-editor .cm-mermaid-block:not(.cm-diagram-error),
 .cm-editor .cm-mermaid-block-preview:not(.cm-diagram-error),
 .cm-editor pre .cb-diagram-preview:not(.cm-diagram-error) {
@@ -2171,11 +2170,15 @@
 .cm-editor .cm-tikz-env-widget {
   width: fit-content;
   max-width: 100%;
+  color: var(--aaron-ink, currentColor);
+}
+noema-tikz {
+  display: block;
 }
 .cm-editor .cm-tikz-env-widget {
   cursor: pointer;
 }
-/* A compiled TikZ picture carries its own TeX dimensions, handed over as
+/* A rendered TikZ picture carries its own dimensions, handed over as
  * `--aaronnote-tikz-natural-width` in `em` of body text. Honouring them is what
  * keeps a diagram the same size relative to the prose that it is in the PDF,
  * instead of being scaled to whatever pixel box the editor happens to use.
@@ -2188,11 +2191,27 @@
   max-width: min(100%, var(--note-image-max, 100%));
   max-height: var(--aaronnote-image-max-height, var(--note-image-max-height, none));
   margin: 0 auto;
-  /* dvisvgm emits black artwork on transparency, so a dark theme needs a
-   * page-like surface underneath or the picture disappears. */
   padding: var(--note-figure-paper-pad, 0.55em);
   border-radius: 4px;
-  background: var(--note-figure-paper, #fbfaf7);
+  background: transparent;
+}
+/* TikZ Editor emits black as an SVG presentation attribute for the default
+ * pen. Follow the note theme for that pen, while preserving authored colors. */
+.cm-editor .cm-tikz-env-image [stroke="black"],
+.cm-editor .cm-tikz-env-image [stroke="#000000"],
+.aaronnote-tikz-image [stroke="black"],
+.aaronnote-tikz-image [stroke="#000000"] {
+  stroke: currentColor;
+}
+.cm-editor .cm-tikz-env-image [fill="black"],
+.cm-editor .cm-tikz-env-image [fill="#000000"],
+.aaronnote-tikz-image [fill="black"],
+.aaronnote-tikz-image [fill="#000000"] {
+  fill: currentColor;
+}
+.cm-editor .cm-tikz-env-image [color="#000000"],
+.aaronnote-tikz-image [color="#000000"] {
+  color: inherit;
 }
 .cm-editor .cm-tikz-env-image.is-tikz-stale {
   opacity: 0.55;

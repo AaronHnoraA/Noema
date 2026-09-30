@@ -1,4 +1,4 @@
-import { copyFile, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync, realpathSync } from "node:fs";
 import { basename, delimiter, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { homedir } from "node:os";
@@ -33,17 +33,7 @@ import {
 } from "./bibliography.mjs";
 import { parseCommandArgs, scanInlineCommands } from "../../shared/command-syntax.mjs";
 import { scanWikiLinks } from "../../shared/wiki-link.mjs";
-import {
-  noteAssetFolderName,
-  tikzAssetFileName,
-  tikzAssetFilePattern,
-  tikzAssetId,
-  tikzBasePt,
-  tikzIntrinsicEm,
-  tikzStandaloneDocument,
-  tikzSourceHash,
-  tikzSvgIntrinsicSize,
-} from "../../shared/tikz-source.mjs";
+import { noteAssetFolderName } from "../../shared/tikz-source.mjs";
 import {
   patchPlanningNodeRaw,
   scanPlanningNodes,
@@ -766,214 +756,6 @@ function executablePath(command) {
     }
   }
   return command;
-}
-
-function commandOutputTail(err) {
-  const parts = [
-    err?.message,
-    err?.stderr,
-    err?.stdout,
-  ].filter(Boolean).map((part) => String(part).trim()).filter(Boolean);
-  const text = parts.join("\n");
-  if (!text) return "";
-  return text.split(/\r?\n/).slice(-8).join("\n");
-}
-
-// Intrinsic sizes of already-compiled assets, keyed by absolute path. A cache
-// hit must still report the picture's TeX dimensions so the client can size it
-// like LaTeX would, and re-reading the SVG head on every keystroke-driven
-// revalidation is the cost this avoids.
-const TIKZ_INTRINSIC_CACHE_LIMIT = 256;
-const tikzIntrinsicCache = new Map();
-
-async function readSvgIntrinsicSize(file) {
-  let handle = null;
-  try {
-    const info = await stat(file);
-    const signature = `${info.size}:${info.mtimeMs}`;
-    const cached = tikzIntrinsicCache.get(file);
-    if (cached?.signature === signature) return cached.size;
-    handle = await open(file, "r");
-    const buffer = Buffer.alloc(4096);
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    const size = tikzSvgIntrinsicSize(buffer.subarray(0, bytesRead).toString("utf8"));
-    tikzIntrinsicCache.set(file, { signature, size });
-    if (tikzIntrinsicCache.size > TIKZ_INTRINSIC_CACHE_LIMIT) {
-      const oldest = tikzIntrinsicCache.keys().next();
-      if (!oldest.done) tikzIntrinsicCache.delete(oldest.value);
-    }
-    return size;
-  } catch {
-    return { widthPt: 0, heightPt: 0 };
-  } finally {
-    await handle?.close().catch(() => {});
-  }
-}
-
-// Old compilations of the same block, and the pre-content-hash `tikz-<id>.svg`
-// name, are dead the moment a new hash lands. Sweeping them keeps a note's
-// images folder from growing one file per edit.
-async function sweepStaleTikzAssets(targetDir, id, keepName) {
-  const pattern = tikzAssetFilePattern(id);
-  const legacy = `tikz-${tikzAssetId(id)}.svg`;
-  let entries;
-  try {
-    entries = await readdir(targetDir);
-  } catch {
-    return;
-  }
-  await Promise.all(entries
-    .filter((name) => name !== keepName && (pattern.test(name) || name === legacy))
-    .map(async (name) => {
-      const stale = join(targetDir, name);
-      tikzIntrinsicCache.delete(stale);
-      await rm(stale, { force: true }).catch(() => {});
-    }));
-}
-
-/**
- * Compile one `#+begin tikz` block to an SVG asset beside the note.
- *
- * The compiled file is named after a hash of its normalized TeX, so this is
- * revalidate-always / recompile-only-on-change: an unchanged block costs a
- * `stat`, a changed block gets a new file name (and therefore a new URL that no
- * browser or published page can serve stale), and superseded files are swept.
- */
-export async function renderTikzAsset(body) {
-  const current = body.file ? safeOpenFile(body.file) : "";
-  if (!current) {
-    const err = new Error("Missing current note file");
-    err.statusCode = 400;
-    throw err;
-  }
-  const source = String(body.source || "");
-  const tex = tikzStandaloneDocument(source);
-  if (!tex) {
-    const err = new Error("Missing TikZ source");
-    err.statusCode = 400;
-    throw err;
-  }
-  const id = tikzAssetId(body.id || tikzSourceHash(source).slice(0, 12));
-  const baseDir = dirname(current);
-  const allowedRoot = current && standaloneFile(current) ? contentRootForFile(current) : noteRoot;
-  const targetDir = join(baseDir, "images", assetFolderName(current));
-  if (!inside(targetDir, noteRoot) && !inside(targetDir, allowedRoot)) {
-    const err = new Error(`Asset directory is outside the current document folder: ${targetDir}`);
-    err.statusCode = 403;
-    throw err;
-  }
-  const name = tikzAssetFileName(id, source);
-  const target = join(targetDir, name);
-  const basePt = tikzBasePt(source);
-  const describe = (extra) => ({
-    ok: true,
-    file: target,
-    name,
-    type: "image/svg+xml",
-    isImage: true,
-    markdownPath: markdownRelativePath(current, target),
-    basePt,
-    ...extra,
-  });
-
-  if (existsSync(target)) {
-    const size = await readSvgIntrinsicSize(target);
-    // A hash match proves source identity, not file integrity. Validate the SVG
-    // head on every process-level refresh so an interrupted/zero-byte write is
-    // rebuilt instead of becoming a permanent broken-image cache hit.
-    if (size.widthPt > 0 && size.heightPt > 0) {
-      await sweepStaleTikzAssets(targetDir, id, name);
-      return describe({ rendered: false, intrinsic: tikzIntrinsicEm(size, basePt) });
-    }
-    tikzIntrinsicCache.delete(target);
-    await rm(target, { force: true }).catch(() => {});
-  }
-
-  const tmp = await runtimeMkdtemp("tikz", current);
-  let latexError = null;
-  let dvisvgmError = null;
-  let mutoolError = null;
-  try {
-    const texFile = join(tmp, "main.tex");
-    const pdfFile = join(tmp, "main.pdf");
-    const svgFile = join(tmp, "out.svg");
-    await writeFile(texFile, tex, "utf8");
-    try {
-      await execFileAsync(executablePath("pdflatex"), [
-        "-interaction=nonstopmode",
-        "-halt-on-error",
-        `-output-directory=${tmp}`,
-        texFile,
-      ], { timeout: 20_000, maxBuffer: 8 * 1024 * 1024 });
-    } catch (err) {
-      latexError = err;
-      throw err;
-    }
-
-    try {
-      await execFileAsync(executablePath("dvisvgm"), [
-        "--pdf",
-        "--no-fonts",
-        "--exact",
-        "--bbox=min",
-        "-o",
-        svgFile,
-        pdfFile,
-      ], { timeout: 20_000, maxBuffer: 8 * 1024 * 1024 });
-    } catch (err) {
-      dvisvgmError = err;
-      try {
-        await execFileAsync(executablePath("mutool"), [
-          "convert",
-          "-o",
-          svgFile,
-          pdfFile,
-        ], { timeout: 20_000, maxBuffer: 8 * 1024 * 1024 });
-      } catch (fallbackErr) {
-        mutoolError = fallbackErr;
-        throw fallbackErr;
-      }
-    }
-    const renderedSvgFile = existsSync(svgFile)
-      ? svgFile
-      : existsSync(join(tmp, "out1.svg"))
-        ? join(tmp, "out1.svg")
-        : svgFile;
-    if (!existsSync(renderedSvgFile)) {
-      throw new Error("TikZ SVG conversion did not produce an SVG file");
-    }
-    await mkdir(targetDir, { recursive: true });
-    // Publish in one rename. An <img> request can race the compiler, and a
-    // direct copy to the final hash URL lets it observe a partial SVG.
-    const staged = join(targetDir, `.${name}.tmp-${process.pid}-${Date.now()}-${++atomicWriteCounter}`);
-    try {
-      await copyFile(renderedSvgFile, staged);
-      await rename(staged, target);
-    } finally {
-      await rm(staged, { force: true }).catch(() => {});
-    }
-    await sweepStaleTikzAssets(targetDir, id, name);
-    const size = await readSvgIntrinsicSize(target);
-    return describe({ rendered: true, intrinsic: tikzIntrinsicEm(size, basePt) });
-  } catch (err) {
-    const details = [
-      latexError ? `pdflatex: ${commandOutputTail(latexError)}` : "",
-      dvisvgmError ? `dvisvgm: ${commandOutputTail(dvisvgmError)}` : "",
-      mutoolError ? `mutool: ${commandOutputTail(mutoolError)}` : "",
-    ].filter(Boolean).join("\n\n");
-    return {
-      ok: false,
-      file: target,
-      name,
-      type: "image/svg+xml",
-      isImage: true,
-      markdownPath: markdownRelativePath(current, target),
-      rendered: false,
-      message: details || (err instanceof Error ? err.message : String(err)),
-    };
-  } finally {
-    await rm(tmp, { recursive: true, force: true });
-  }
 }
 
 function pathSuggestionDirectoryPrefix(value) {
@@ -6949,6 +6731,13 @@ export async function exportLatex(body = {}) {
     ...converted.features,
     usesWrapfig: /\\begin\{wrapfigure\}/.test(converted.body),
   };
+  const templateText = macroFeatures.usesTikz && !template.text.includes("\\usepackage{aaronnote-macros}")
+    ? template.text.replace(/\\begin\{document\}/, (begin) => [
+      /\\(?:usepackage|RequirePackage)(?:\[[^\]]*\])?\{tikz\}/.test(template.text) ? "" : "\\usepackage{tikz}",
+      "\\usetikzlibrary{calc}",
+      begin,
+    ].filter(Boolean).join("\n"))
+    : template.text;
   const generatedSharedFiles = template.text.includes("\\usepackage{aaronnote-macros}")
     ? [{ name: "aaronnote-macros.sty", content: Buffer.from(latexMacrosPackage(macroResult.macros, macroFeatures), "utf8") }]
     : [];
@@ -6977,7 +6766,7 @@ export async function exportLatex(body = {}) {
   }
   const templateKeys = [...Object.keys(extraVars), "title", "date", "source", "body"];
   const templatePlan = typeof latexProvider?.planTemplate === "function"
-    ? await latexProvider.planTemplate(template.text, templateKeys)
+    ? await latexProvider.planTemplate(templateText, templateKeys)
     : null;
   const assemble = (bodyLatex, titleOverride = "") => {
     const vars = {
@@ -6989,7 +6778,7 @@ export async function exportLatex(body = {}) {
     };
     return templatePlan && typeof latexProvider?.renderTemplate === "function"
       ? latexProvider.renderTemplate(templatePlan, vars)
-      : applyLatexTemplate(template.text, vars);
+      : applyLatexTemplate(templateText, vars);
   };
 
   // 2. Optional agent polish of the draft, gated on compilation, with fallback.
@@ -7002,6 +6791,7 @@ export async function exportLatex(body = {}) {
   const warnings = Array.isArray(converted.warnings) ? [...converted.warnings] : [];
   const backend = ["codex", "claude", "opencode"].includes(latexExportAgent) ? latexExportAgent : "codex";
   const agentBin = executablePath(backend === "claude" ? latexClaudeBin : backend === "opencode" ? latexOpencodeBin : latexCodexBin);
+  const agentRunner = typeof body.agentRunner === "function" ? body.agentRunner : null;
   const wantAgent = latexExportEngine !== "mechanical" && String(body.engine || "").toLowerCase() !== "mechanical";
   // The polish pass runs by default and can be turned off per export. It is no
   // longer all-or-nothing: a pass that fails its gates falls back to the
@@ -7009,7 +6799,7 @@ export async function exportLatex(body = {}) {
   // Only an explicit request fails loudly when the agent is missing.
   const polishVerifiedDraft = body.polish !== false;
   const polishRequested = body.polish === true;
-  if (wantAgent && polishRequested && !agentAvailable(agentBin)) {
+  if (wantAgent && polishRequested && !agentRunner && !agentAvailable(agentBin)) {
     const error = new Error(`Configured LaTeX polish agent is unavailable: ${backend} (${agentBin || "no executable"})`);
     error.statusCode = 503;
     throw error;
@@ -7019,7 +6809,7 @@ export async function exportLatex(body = {}) {
     const result = await polishBodyWithAgent({
       sourceMarkdown: content,
       draftBody: bodyLatex,
-      templateText: template.text,
+      templateText,
       styleDoc: join(appDir, "docs", "latex-export-style.md"),
       syntaxDoc: join(appDir, "docs", "typora-syntax-survey.md"),
       agentsDoc: join(latexAgentDir, "AGENTS.md"),
@@ -7028,6 +6818,7 @@ export async function exportLatex(body = {}) {
       latexBin,
       backend,
       agentBin,
+      agentRunner,
       model: latexExportModel || (backend === "codex" ? latexCodexModel : ""),
       needsTitle: false,
       sourceTitle: sourceNameTitle,

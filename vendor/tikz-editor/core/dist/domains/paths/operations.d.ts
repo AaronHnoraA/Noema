@@ -1,0 +1,13 @@
+import type { SyntaxNode } from "@lezer/common";
+import type { ChildOperationItem, CoordinateOperationItem, DecorateOperationItem, EdgeOperationItem, EdgeFromParentOperationItem, LetOperationItem, PathForeachItem, PicOperationItem, SvgOperationItem, ToOperationItem } from "../../ast/types.js";
+export declare function mapToOperationItem(node: SyntaxNode, source: string, statementIndex: number, itemIndex: number): ToOperationItem;
+export declare function mapEdgeOperationItem(node: SyntaxNode, source: string, statementIndex: number, itemIndex: number): EdgeOperationItem;
+export declare function mapChildOperationItem(node: SyntaxNode, source: string, statementIndex: number, itemIndex: number): ChildOperationItem;
+export declare function mapEdgeFromParentOperationItem(node: SyntaxNode, source: string, statementIndex: number, itemIndex: number): EdgeFromParentOperationItem;
+export declare function mapSvgOperationItem(node: SyntaxNode, source: string, statementIndex: number, itemIndex: number): SvgOperationItem;
+export declare function mapLetOperationItem(node: SyntaxNode, source: string, statementIndex: number, itemIndex: number): LetOperationItem;
+export declare function mapCoordinateOperationItem(node: SyntaxNode, source: string, statementIndex: number, itemIndex: number): CoordinateOperationItem;
+export declare function mapDecorateOperationItem(keywordNode: SyntaxNode, optionsNode: SyntaxNode | null, subpathNode: SyntaxNode, source: string, statementIndex: number, itemIndex: number): DecorateOperationItem;
+export declare function mapDecorateOperationNode(node: SyntaxNode, source: string, statementIndex: number, itemIndex: number): DecorateOperationItem;
+export declare function mapPathForeachOperationItem(node: SyntaxNode, source: string, statementIndex: number, itemIndex: number): PathForeachItem;
+export declare function mapPicOperationItem(node: SyntaxNode, source: string, statementIndex: number, itemIndex: number): PicOperationItem;

@@ -1,0 +1,265 @@
+import type { WorldTransform } from "../coords/transforms.js";
+import type { WorldPoint, WorldBounds } from "../coords/points.js";
+import type { OptionListAst } from "../options/types.js";
+import type { NodeTextEngine } from "../text/types.js";
+import type { MacroBinding, MacroExpansionTraceEvent } from "../macros/index.js";
+import type { EditHandle, ResolvedStyle, SceneClipPath, SceneElement, SceneLayer } from "./types.js";
+import type { CustomStyleRegistry } from "./style/custom-styles.js";
+import type { PicDefinitionRegistry } from "./pics/registry.js";
+import type { StyleChainEntry, StyleSourceRef } from "./style-chain.js";
+import { PersistentMap, type PersistentMapSnapshot } from "./persistent-map.js";
+import { SemanticDependencyGraphBuilder, type SemanticDependencyGraphBuilderState, type SemanticDependencyOpaqueReason, type SemanticDependencyResourceKind } from "./dependencies.js";
+import { type SemanticSymbolDefinition, type SemanticSymbolDependencyEdge, type SemanticSymbolKind, type SemanticSymbolResolver, type SemanticUnresolvedSymbol, type SemanticSymbolResolverState } from "./symbol-resolver.js";
+import { type PgfRandom } from "./pgfmath/rng.js";
+export type NodeLayerMode = "front" | "behind";
+export type NodeDistanceValue = {
+    kind: "dimension";
+    value: number;
+} | {
+    kind: "number";
+    value: number;
+};
+export type NodeDistanceSpec = {
+    kind: "single";
+    value: NodeDistanceValue;
+} | {
+    kind: "pair";
+    vertical: NodeDistanceValue;
+    horizontal: NodeDistanceValue;
+};
+export type NodeQuotesMode = "label" | "pin";
+export type NamedNodeGeometry = {
+    sourceId?: string;
+    shape: "rectangle" | "rounded rectangle" | "chamfered rectangle" | "cross out" | "strike out" | "circle" | "magnifying glass" | "circle split" | "circle solidus" | "ellipse split" | "diamond split" | "rectangle split" | "ellipse" | "diamond" | "trapezium" | "semicircle" | "regular polygon" | "star" | "isosceles triangle" | "kite" | "dart" | "circular sector" | "cylinder" | "cloud" | "starburst" | "signal" | "tape" | "rectangle callout" | "ellipse callout" | "cloud callout" | "single arrow" | "double arrow" | "coordinate";
+    center: WorldPoint;
+    anchorTransform?: WorldTransform;
+    anchorHalfWidth: number;
+    anchorHalfHeight: number;
+    anchorRadius: number;
+    diamondAspect?: number;
+    trapeziumLeftAngle?: number;
+    trapeziumRightAngle?: number;
+    shapeBorderRotate?: number;
+    trapeziumStretches?: boolean;
+    trapeziumStretchesBody?: boolean;
+    anchorPolygon?: WorldPoint[];
+};
+export type ProvenanceOptionList = {
+    options: OptionListAst;
+    sourceRef: StyleSourceRef;
+};
+export type SemanticContextFrame = {
+    style: ResolvedStyle;
+    styleChain: StyleChainEntry[];
+    transform: WorldTransform;
+    layer: string;
+    clipChain: SceneClipPath[];
+    pictureSizeRelevant: boolean;
+    customStyles: CustomStyleRegistry;
+    picDefinitions: PicDefinitionRegistry;
+    colorAliases: Map<string, string>;
+    macroBindings: Map<string, MacroBinding>;
+    namePrefix: string;
+    nameSuffix: string;
+    nodeLayerMode: NodeLayerMode;
+    onGrid: boolean;
+    nodeDistance: NodeDistanceSpec;
+    nodeQuotesMode: NodeQuotesMode;
+    labelPosition: string;
+    pinPosition: string;
+    labelDistancePt: number;
+    pinDistancePt: number;
+    pinEdgeRaw: string | null;
+    transformShape: boolean;
+    everyNodeStyles: ProvenanceOptionList[];
+    everyTextNodePartStyles: ProvenanceOptionList[];
+    everyFitStyles: ProvenanceOptionList[];
+    everyPicStyles: ProvenanceOptionList[];
+    everyRectangleNodeStyles: ProvenanceOptionList[];
+    everyCircleNodeStyles: ProvenanceOptionList[];
+    everyDiamondNodeStyles: ProvenanceOptionList[];
+    everyTrapeziumNodeStyles: ProvenanceOptionList[];
+    everyIsoscelesTriangleNodeStyles: ProvenanceOptionList[];
+    everyKiteNodeStyles: ProvenanceOptionList[];
+    everyDartNodeStyles: ProvenanceOptionList[];
+    everyCircularSectorNodeStyles: ProvenanceOptionList[];
+    everyCylinderNodeStyles: ProvenanceOptionList[];
+    everyCloudNodeStyles: ProvenanceOptionList[];
+    everyStarburstNodeStyles: ProvenanceOptionList[];
+    everySignalNodeStyles: ProvenanceOptionList[];
+    everyTapeNodeStyles: ProvenanceOptionList[];
+    everyRectangleCalloutNodeStyles: ProvenanceOptionList[];
+    everyEllipseCalloutNodeStyles: ProvenanceOptionList[];
+    everyCloudCalloutNodeStyles: ProvenanceOptionList[];
+    everySingleArrowNodeStyles: ProvenanceOptionList[];
+    everyDoubleArrowNodeStyles: ProvenanceOptionList[];
+    treeLevel: number;
+    treeLevelDistancePt: number;
+    treeSiblingDistancePt: number;
+    treeCurrentLevelSiblingDistancePt: number | null;
+    treeGrowDirectionDegrees: number;
+    treeGrowReverse: boolean;
+    treeGrowthParentAnchor: string;
+    treeParentAnchor: string;
+    treeChildAnchor: string;
+    treeMissing: boolean;
+    treeEveryChildStyles: ProvenanceOptionList[];
+    treeEveryChildNodeStyles: ProvenanceOptionList[];
+    treeLevelStyleTemplateLayers: ProvenanceOptionList[];
+    treeLevelStyleLayers: Array<{
+        level: number;
+        layers: ProvenanceOptionList[];
+    }>;
+    treeDeferredGrowthFunction: boolean;
+    treeDeferredEdgeFromParentPath: boolean;
+    treeDeferredEdgeFromParentMacro: boolean;
+};
+export type SemanticContext = {
+    stack: SemanticContextFrame[];
+    source: string;
+    sourceFingerprint: string;
+    layers: Map<string, SceneLayer>;
+    backgroundState: SemanticBackgroundState;
+    pictureBounds: WorldBounds | null;
+    namedCoordinates: PersistentMap<string, WorldPoint>;
+    namedNodeSets: PersistentMap<string, Set<string>>;
+    namedCoordinateRewriteHandles: PersistentMap<string, string>;
+    namedNodeGeometries: PersistentMap<string, NamedNodeGeometry>;
+    namedPaths: PersistentMap<string, SceneElement[]>;
+    currentPoint: WorldPoint | null;
+    pathStartPoint: WorldPoint | null;
+    textEngine: NodeTextEngine | null;
+    macroTraceCollector: MacroExpansionTraceEvent[] | null;
+    picEvaluationStack: string[];
+    editHandles: EditHandle[];
+    dependencyBuilder: SemanticDependencyGraphBuilder;
+    dependencyActiveSourceId: string | null;
+    statementEffectTracker: SemanticStatementEffectTracker | null;
+    symbolResolver: SemanticSymbolResolver;
+    mathRandom: PgfRandom;
+};
+export type SemanticBackgroundHookKind = "rectangle" | "grid" | "top" | "bottom" | "left" | "right";
+export type SemanticBackgroundHook = {
+    kind: SemanticBackgroundHookKind;
+    sourceRef: StyleSourceRef;
+    sequence: number;
+};
+export type SemanticBackgroundState = {
+    used: boolean;
+    innerFrameXSep: number;
+    innerFrameYSep: number;
+    outerFrameXSep: number;
+    outerFrameYSep: number;
+    hooks: SemanticBackgroundHook[];
+    nextHookSequence: number;
+};
+export type SemanticStatementConsumedResource = {
+    kind: SemanticDependencyResourceKind;
+    key: string;
+};
+export type SemanticStatementSuffixSkipKind = "safe" | "scope-safe" | "foreach-origin-safe" | "unsafe";
+export type SemanticStatementEffectSummary = {
+    producesNamedCoordinates: Array<{
+        key: string;
+        point: WorldPoint;
+    }>;
+    producesNamedNodeGeometries: Array<{
+        key: string;
+        geometry: NamedNodeGeometry;
+    }>;
+    producesNamedPaths: string[];
+    consumesNamedResources: SemanticStatementConsumedResource[];
+    mutatesCurrentPoint: boolean;
+    nextCurrentPoint: WorldPoint | null;
+    mutatesPathStartPoint: boolean;
+    nextPathStartPoint: WorldPoint | null;
+    requiresSequentialContext: boolean;
+    suffixSkipKind: SemanticStatementSuffixSkipKind;
+    opaque: boolean;
+    opaqueReasons: SemanticDependencyOpaqueReason[];
+};
+export type SemanticContextSnapshot = {
+    stack: SemanticContextFrame[];
+    layers: SceneLayer[];
+    backgroundState: SemanticBackgroundState;
+    pictureBounds: WorldBounds | null;
+    namedCoordinatesState: PersistentMapSnapshot<string, WorldPoint>;
+    namedNodeSetsState: PersistentMapSnapshot<string, Set<string>>;
+    namedCoordinateRewriteHandlesState: PersistentMapSnapshot<string, string>;
+    namedNodeGeometriesState: PersistentMapSnapshot<string, NamedNodeGeometry>;
+    namedPathsState: PersistentMapSnapshot<string, SceneElement[]>;
+    currentPoint: WorldPoint | null;
+    pathStartPoint: WorldPoint | null;
+    editHandles: EditHandle[] | null;
+    editHandlesLength: number;
+    dependencyBuilderState: SemanticDependencyGraphBuilderState;
+    dependencyActiveSourceId: string | null;
+    symbolResolverState: SemanticSymbolResolverState;
+    mathRandomSeed: number;
+};
+export type SnapshotSemanticContextOptions = {
+    editHandlesMode?: "clone" | "length";
+};
+export type RestoreSemanticContextOptions = {
+    editHandleSource?: readonly EditHandle[];
+};
+type SemanticStatementEffectTracker = {
+    producedNamedCoordinates: Map<string, WorldPoint>;
+    producedNamedNodeGeometries: Map<string, NamedNodeGeometry>;
+    producedNamedPaths: Set<string>;
+    consumedNamedResources: Map<string, SemanticStatementConsumedResource>;
+    opaqueReasons: Set<SemanticDependencyOpaqueReason>;
+};
+export declare function createSemanticContext(initialStyle: ResolvedStyle, initialTransform: WorldTransform, textEngine?: NodeTextEngine | null, source?: string, sourceFingerprint?: string): SemanticContext;
+export declare function createDefaultSemanticBackgroundState(): SemanticBackgroundState;
+export declare function markBackgroundLayerUsed(context: SemanticContext): void;
+export declare function listContextSceneLayers(context: SemanticContext): SceneLayer[];
+export declare function currentFrame(context: SemanticContext): SemanticContextFrame;
+export declare function pushFrame(context: SemanticContext, frame: SemanticContextFrame): void;
+export declare function popFrame(context: SemanticContext): void;
+export declare function snapshotSemanticContext(context: SemanticContext, options?: SnapshotSemanticContextOptions): SemanticContextSnapshot;
+export declare function restoreSemanticContext(context: SemanticContext, snapshot: SemanticContextSnapshot, options?: RestoreSemanticContextOptions): void;
+export declare function retargetEditHandlesSourceFingerprint(handles: EditHandle[], sourceFingerprint: string): void;
+export declare function withDependencySource<T>(context: SemanticContext, sourceId: string, fn: () => T): T;
+export declare function defineContextSymbol(context: SemanticContext, definition: SemanticSymbolDefinition): void;
+export declare function resolveContextSymbol(context: SemanticContext, kind: SemanticSymbolKind, name: string, explicitConsumerStatementId?: string | null): SemanticSymbolDefinition | null;
+export declare function requireContextLibrary(context: SemanticContext, libraryName: string, explicitConsumerStatementId?: string | null): void;
+export declare function listContextSymbolDependencyEdges(context: SemanticContext): SemanticSymbolDependencyEdge[];
+export declare function listContextUnresolvedSymbols(context: SemanticContext): SemanticUnresolvedSymbol[];
+export declare function listContextRequiredLibraries(context: SemanticContext): string[];
+export declare function writeContextMacroBinding(context: SemanticContext, name: string, binding: MacroBinding, definition?: {
+    statementId: string;
+    span: {
+        from: number;
+        to: number;
+    };
+}): void;
+export declare function readContextMacroBinding(context: SemanticContext, name: string, explicitConsumerStatementId?: string | null): MacroBinding | undefined;
+export declare function deleteContextMacroBinding(context: SemanticContext, name: string): void;
+export declare function writeContextColorAlias(context: SemanticContext, name: string, value: string, definition?: {
+    statementId: string;
+    span: {
+        from: number;
+        to: number;
+    };
+}): void;
+export declare function resolveContextColorAliasValue(context: SemanticContext, rawColorName: string, explicitConsumerStatementId?: string | null): string | null;
+export declare function recordDependencyProducer(context: SemanticContext, resourceKind: SemanticDependencyResourceKind, resourceKey: string, explicitSourceId?: string): void;
+export declare function recordDependencyConsumer(context: SemanticContext, resourceKind: SemanticDependencyResourceKind, resourceKey: string, explicitSourceId?: string): void;
+export declare function markDependencyOpaque(context: SemanticContext, sourceId: string, reason: SemanticDependencyOpaqueReason): void;
+export declare function writeNamedCoordinate(context: SemanticContext, name: string, point: WorldPoint, explicitSourceId?: string): void;
+export declare function readNamedCoordinate(context: SemanticContext, name: string, explicitSourceId?: string): WorldPoint | undefined;
+export declare function writeNamedNodeGeometry(context: SemanticContext, name: string, geometry: NamedNodeGeometry, explicitSourceId?: string): void;
+export declare function readNamedNodeGeometry(context: SemanticContext, name: string, explicitSourceId?: string): NamedNodeGeometry | undefined;
+export declare function appendNamedPathElements(context: SemanticContext, name: string, elements: SceneElement[], producerSourceIds: Iterable<string>): void;
+export declare function readNamedPath(context: SemanticContext, name: string, explicitSourceId?: string): SceneElement[] | undefined;
+export declare function beginStatementEffectTracking(context: SemanticContext): void;
+export declare function endStatementEffectTracking(context: SemanticContext, options: {
+    beforeCurrentPoint: WorldPoint | null;
+    beforePathStartPoint: WorldPoint | null;
+    requiresSequentialContext: boolean;
+}): SemanticStatementEffectSummary;
+export declare function applyStatementEffectSummary(context: SemanticContext, summary: SemanticStatementEffectSummary, options?: {
+    sourceId?: string;
+}): void;
+export {};

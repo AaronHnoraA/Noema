@@ -1,0 +1,23 @@
+import type { WorldPoint } from "../../coords/points.js";
+import type { CoordinateItem, NodeItem, PathItem } from "../../ast/types.js";
+import type { SemanticContext } from "../context.js";
+import type { EvaluatedCoordinate } from "../coords/evaluate.js";
+import type { ScenePathCommand } from "../types.js";
+import type { PlacementSegment } from "./types.js";
+export declare function parseBezierFromItems(items: PathItem[], startIndex: number, context: SemanticContext): {
+    consumedIndex: number;
+    control1: WorldPoint;
+    control2: WorldPoint;
+    control1Coordinate: CoordinateItem;
+    control1Evaluation: EvaluatedCoordinate;
+    control2Coordinate?: CoordinateItem;
+    control2Evaluation?: EvaluatedCoordinate;
+    nodes: NodeItem[];
+    endPoint: WorldPoint | null;
+    endCoordinate?: CoordinateItem;
+    endEvaluation?: EvaluatedCoordinate;
+    endAdvancesCurrentPoint: boolean;
+    endClosesPath: boolean;
+    usedAnd: boolean;
+} | null;
+export declare function appendSinCosSegment(commands: ScenePathCommand[], from: WorldPoint, to: WorldPoint, mode: "sin" | "cos"): PlacementSegment;

@@ -66,7 +66,7 @@ export function createVisualMarkdownEditingExtensions(): Extension {
   ];
 }
 
-export { orgEnvExitTarget } from "./widgets/block-extras.ts";
+export { orgEnvBlocksExtension, orgEnvExitTarget } from "./widgets/block-extras.ts";
 export {
   activateBlockMath,
   activateInlineMath,

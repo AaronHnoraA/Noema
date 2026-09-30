@@ -1,4 +1,5 @@
 import { renderPublishedNoteHTML } from "./render-html.ts";
+import { inlineTikzFigures } from "./tikz-browser.ts";
 
 export type SelfContainedHtmlOptions = {
   title: string;
@@ -8,7 +9,7 @@ export type SelfContainedHtmlOptions = {
   themeId?: string;
   alternateThemeId?: string;
   assetResolver?: (src: string) => string;
-  /** Source note path; resolves compiled TikZ assets. */
+  /** Source note path for note-relative assets. */
   noteFile?: string;
   document?: Document;
   fetch?: typeof fetch;
@@ -135,5 +136,5 @@ export async function createSelfContainedNoteHTML(
       alternateThemeId: options.alternateThemeId,
     },
   });
-  return inlineDocumentImages(html, baseUrl, fetcher);
+  return inlineDocumentImages(await inlineTikzFigures(html), baseUrl, fetcher);
 }

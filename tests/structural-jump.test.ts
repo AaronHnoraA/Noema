@@ -118,4 +118,57 @@ describe("region-bounded structural jumps", () => {
       mount.remove();
     }
   });
+
+  test("Cmd-brackets cross an inline formula's delimiters at its content edges", () => {
+    const mount = document.createElement("div");
+    document.body.appendChild(mount);
+    const markdown = String.raw`before \(x\)] after`;
+    const editor = createEditor(mount, { initialContent: markdown });
+    try {
+      editor.setSelection(markdown.indexOf(String.raw`\)`));
+      expect(texUnitJumpTarget(editor.view, 1)).toBe(markdown.indexOf(String.raw`\)`) + 2);
+      expect(jumpTexUnit(editor.view, 1)).toBe(true);
+      expect(editor.getSelection().from).toBe(markdown.indexOf("]"));
+
+      editor.setSelection(markdown.indexOf("x"));
+      expect(texUnitJumpTarget(editor.view, -1)).toBe(markdown.indexOf(String.raw`\(`));
+    } finally {
+      editor.destroy();
+      mount.remove();
+    }
+  });
+
+  test("a final TeX group stops before the inline closing delimiter", () => {
+    const mount = document.createElement("div");
+    document.body.appendChild(mount);
+    const markdown = String.raw`equivalent. \(\frac{asdas}{asds} + asda sadas^{6}_{asdas}\) next`;
+    const editor = createEditor(mount, { initialContent: markdown });
+    try {
+      const close = markdown.indexOf(String.raw`\)`);
+      editor.setSelection(close - 1);
+      expect(jumpTexUnit(editor.view, 1)).toBe(true);
+      expect(editor.getSelection().from).toBe(close);
+      expect(jumpTexUnit(editor.view, 1)).toBe(true);
+      expect(editor.getSelection().from).toBe(close + 2);
+    } finally {
+      editor.destroy();
+      mount.remove();
+    }
+  });
+
+  test("Cmd-brackets cross display math fences at content edges", () => {
+    const mount = document.createElement("div");
+    document.body.appendChild(mount);
+    const markdown = "before\n\\[\nx\n\\]\nafter";
+    const editor = createEditor(mount, { initialContent: markdown });
+    try {
+      editor.setSelection(markdown.indexOf(String.raw`\]`));
+      expect(texUnitJumpTarget(editor.view, 1)).toBe(markdown.indexOf(String.raw`\]`) + 2);
+      editor.setSelection(markdown.indexOf("x"));
+      expect(texUnitJumpTarget(editor.view, -1)).toBe(markdown.indexOf(String.raw`\[`));
+    } finally {
+      editor.destroy();
+      mount.remove();
+    }
+  });
 });

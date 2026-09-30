@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "@voidzero-dev/vite-plus-test";
-import { access, chmod, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -38,6 +38,42 @@ describe("latex-export-codex helpers", () => {
     expect(codexAvailable("codex")).toBe(true);
     expect(codexAvailable("")).toBe(false);
     expect(codexAvailable("/definitely/not/here/codex")).toBe(false);
+  });
+
+  test("accepts an Emacs ACP runner without a CLI and protects TikZ source", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aaronnote-emacs-acp-"));
+    roots.push(root);
+    const workdir = join(root, "work");
+    await mkdir(workdir);
+    const compiler = await oneShotLayoutCompiler(root);
+    const draft = "\\begin{tikzpicture}\\draw (0,0)--(1,1);\\end{tikzpicture}\n";
+    let called = false;
+    const result = await polishBodyWithAgent({
+      sourceMarkdown: "#+begin tikz figure\n\\draw (0,0)--(1,1);\n#+end tikz",
+      draftBody: draft,
+      templateText: "{{body}}",
+      assemble: (body: string) => body,
+      latexBin: compiler,
+      agentBin: "/nonexistent/cli",
+      backend: "codex",
+      needsTitle: false,
+      makeWorkdir: async () => workdir,
+      polishVerifiedDraft: true,
+      agentRunner: async ({ prompt }: { prompt: string }) => {
+        called = true;
+        expect(prompt).toContain("Preserve its complete");
+        const review = JSON.parse(await readFile(join(workdir, "review.json"), "utf8"));
+        review.decisions = review.decisions.map((decision: { id: string }) => ({
+          id: decision.id, action: "kept", reason: "The draft already preserves the original TikZ figure and layout.",
+        }));
+        await writeFile(join(workdir, "review.json"), JSON.stringify(review));
+        await writeFile(join(workdir, "body.tex"), draft.replace("(1,1)", "(2,2)"));
+        return { ok: true };
+      },
+    });
+    expect(called).toBe(true);
+    expect(result.body).toBe(draft);
+    expect(result.warnings.some((warning: string) => warning.includes("tikz payloads changed"))).toBe(true);
   });
 
   test("proseFidelityWarnings ignores formatting but flags dropped and added prose", () => {

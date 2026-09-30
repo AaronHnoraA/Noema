@@ -9273,7 +9273,7 @@ function toolActions(): ToolAction[] {
     { id: "format-apply", group: "writing", title: "Apply copied format", detail: formatPainterDetail(), disabled: currentReadOnly || !editor.getFormatPainterState(), run: applyFormatPainter },
     { id: "format-cancel", group: "writing", title: "Cancel format painter", detail: formatPainterDetail(), disabled: !editor.getFormatPainterState(), run: () => clearFormatPainter() },
     { id: "export-latex", group: "publish", title: "Export LaTeX", detail: "Write selection, heading, or document to a .tex file", run: () => void exportLatexTool() },
-    { id: "latex-export-agent", group: "publish", title: "Switch export agent", detail: "Choose Codex, Claude, or OpenCode for LaTeX polish", run: () => void switchLatexExportAgentTool() },
+    { id: "latex-export-agent", group: "publish", title: "Switch export agent", detail: "Choose the Emacs ACP agent for LaTeX polish", run: () => void switchLatexExportAgentTool() },
     { id: "copilot-trigger", group: "writing", title: "Copilot suggestion", detail: "Request an inline completion at the cursor", disabled: currentReadOnly, run: () => runCopilotAction("trigger") },
     { id: "copilot-diagnostics", group: "maintenance", title: "Copilot diagnostics", detail: "Report whether Copilot is reachable and what is blocking it", run: () => runCopilotAction("diagnostics") },
     { id: "copilot-sign-in", group: "maintenance", title: "Copilot sign in", detail: "Start the GitHub device-code login", run: () => runCopilotAction("sign-in") },
@@ -10183,6 +10183,10 @@ function showSnippetPopup(
   rect: { left: number; top: number; bottom: number } | null,
   chooseHandler: ((snippet: SnippetSummary) => boolean) | null = null,
 ): void {
+  // Completion owns the cursor's floating surface while it is visible.
+  // Keeping LiveTeX open at the same time makes both surfaces chase the same
+  // caret and lets the preview cover selectable completion rows.
+  if (rect && (!mathPreview.hidden || mathPreviewSession)) hideMathPreview();
   const matchKey = `${prefix}\n${items.map((snippet) => `${snippet.kind}:${snippet.mode}:${snippet.group}:${snippet.key}:${snippet.name}`).join("\n")}`;
   snippetDeleteBefore = deleteBefore;
   if (matchKey !== snippetPopupMatchKey) {
@@ -10363,13 +10367,24 @@ function scheduleAsyncCompletion(
     }
     return;
   }
-  // New context: start a fresh epoch; keep old popup visible while request is in flight.
+  // A menu from the old cursor context must not remain actionable while a
+  // fresh request is pending. Its Tab handler may otherwise apply an old
+  // candidate to a new prefix (or fail after the menu was visibly offered).
+  hideSnippetPopup();
   completionContextKey = contextKey;
   completionPendingItems = null;
   const run = completionEpoch.begin();
+  const requestSelection = editor.view.state.selection.main;
+  const requestDoc = editor.view.state.doc;
   completionTimer.schedule(() => {
     void fetchFn().then((items) => {
       if (!run.current) return;
+      if (editor.view.state.selection.main.head !== requestSelection.head
+        || editor.view.state.selection.main.anchor !== requestSelection.anchor
+        || editor.view.state.doc !== requestDoc) {
+        clearCompletionCache();
+        return;
+      }
       completionPendingItems = items;
       if (items.length > 0) {
         showSnippetPopup(renderPrefix, items, deleteBefore, rect);
@@ -10770,6 +10785,7 @@ function handleSnippetPopupKey(event: KeyboardEvent): boolean {
   }));
   if (handled) {
     event.preventDefault();
+    if (snippetPopup.hidden) scheduleAssistUpdate({ mathPreview: true });
   }
   return handled;
 }
@@ -10948,7 +10964,7 @@ function updateMathPreview(
   allowNewPreview: boolean,
   activeMath: ReturnType<typeof mathAtCursor> = mathAtCursor(ctx),
 ): void {
-  if (visualMathEditorActive) {
+  if (visualMathEditorActive || !snippetPopup.hidden) {
     if (!mathPreview.hidden || mathPreviewSession) hideMathPreview();
     return;
   }
@@ -12161,10 +12177,14 @@ document.addEventListener("keydown", (event) => {
         : 0
     : 0;
   if (texBracketDirection) {
-    const snippetMoved = texBracketDirection > 0 ? jumpSnippetTabstop() : jumpSnippetTabstopBack();
-    const handled = snippetMoved || (texBracketDirection > 0
-      ? jumpTexUnit(editor.view, 1) || jumpStructuralDelimiter(editor.view, 1)
-      : jumpTexUnit(editor.view, -1) || jumpStructuralDelimiter(editor.view, -1));
+    // In TeX source, the first chord must finish the formula's content before
+    // a snippet's next field can pull the caret past its closing delimiter.
+    // Tab remains the direct way to advance snippet fields.
+    const texMoved = jumpTexUnit(editor.view, texBracketDirection);
+    const snippetMoved = !texMoved && (texBracketDirection > 0
+      ? jumpSnippetTabstop() : jumpSnippetTabstopBack());
+    const handled = texMoved || snippetMoved
+      || jumpStructuralDelimiter(editor.view, texBracketDirection);
     event.preventDefault();
     event.stopPropagation();
     if (handled) {

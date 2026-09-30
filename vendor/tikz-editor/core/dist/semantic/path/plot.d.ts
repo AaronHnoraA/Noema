@@ -1,0 +1,22 @@
+import type { OptionListAst } from "../../options/types.js";
+import type { MacroBinding } from "../../macros/index.js";
+import type { StyleChainEntry } from "../style-chain.js";
+export type PlotSettings = {
+    handler: "sharp" | "sharp-cycle" | "smooth" | "smooth-cycle" | "const-left" | "const-right" | "const-mid" | "jump-left" | "jump-right" | "jump-mid" | "ycomb" | "xcomb" | "polar-comb" | "ybar" | "xbar" | "ybar-interval" | "xbar-interval" | "only-marks";
+    domainStart: number;
+    domainEnd: number;
+    samples: number;
+    samplesAt: number[] | null;
+    variable: string;
+    mark: string | null;
+    tension: number;
+    barWidth: number;
+    barShift: number;
+    barIntervalWidth: number;
+    barIntervalShift: number;
+};
+export declare function createDefaultPlotSettings(): PlotSettings;
+export declare function applyPlotSettingsFromStyleChain(base: PlotSettings, styleChain: StyleChainEntry[], bindings: ReadonlyMap<string, MacroBinding>): PlotSettings;
+export declare function applyPlotOptionLists(base: PlotSettings, optionLists: OptionListAst[], bindings: ReadonlyMap<string, MacroBinding>): PlotSettings;
+export declare function resolvePlotSampleValues(settings: PlotSettings): number[];
+export declare function formatPlotSampleValue(value: number): string;

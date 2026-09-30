@@ -1,7 +1,6 @@
 export {
   storeAsset,
   storeAssetFromPath,
-  renderTikzAsset,
   scanUnusedAssets,
   trashUnusedAssets,
   inspectAssets,

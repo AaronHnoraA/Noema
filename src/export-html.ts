@@ -250,6 +250,7 @@ export function cleanEditorHTML(root: HTMLElement): string {
       "annotation",
       "math-block",
       "org-env-block",
+      "noema-tikz",
       "mark-comment",
       "ref-def",
       "ref-label",

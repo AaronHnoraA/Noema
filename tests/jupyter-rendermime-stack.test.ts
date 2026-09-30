@@ -13,6 +13,13 @@ describe("Noema Jupyter MIME stack", () => {
     expect(source).toContain('mimeTypes: ["text/html"]');
   });
 
+  test("typesets Markdown after rendering even without a Lumino attach event", () => {
+    expect(source).toContain("class AaronnoteMarkdownRenderer extends RenderedMarkdown");
+    expect(source).toContain("await super.renderModel(model)");
+    expect(source).toContain("katexTypesetter().typeset(this.node)");
+    expect(source).toContain('mimeTypes: ["text/markdown"]');
+  });
+
   test("renders standard and extension JSON bundles without hiding text fallbacks", () => {
     expect(source).toContain("class AaronnoteJsonRenderer");
     expect(source).toContain('mimeTypes: ["application/json"]');

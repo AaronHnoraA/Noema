@@ -31,13 +31,6 @@ type AssetStoreMsg = {
   markdownPath?: string;
   message?: string;
 };
-type TikzRenderMsg = AssetStoreMsg & {
-  /** false when the cached asset was already current for this source. */
-  rendered?: boolean;
-  /** Picture size in `em` of body text, so the figure scales like it does in a PDF. */
-  intrinsic?: { widthEm?: number; heightEm?: number };
-  basePt?: number;
-};
 type ProseCheckBody = {
   requestId?: string;
   file?: string;
@@ -770,7 +763,6 @@ type NativeApi = {
   assets?: {
     upload?: (body: { file?: string; name?: string; type?: string; data?: string }) => Promise<unknown>;
     storeFromPath?: (body: { file?: string; path?: string; source?: string; name?: string; type?: string }) => Promise<unknown>;
-    renderTikz?: (body: { file: string; id: string; source: string }) => Promise<unknown>;
     scanOrphans?: () => Promise<unknown>;
     trashOrphans?: (files: string[]) => Promise<unknown>;
     inspect?: () => Promise<unknown>;
@@ -1803,10 +1795,6 @@ export const api = {
     async storeFromPath(body: { file?: string; path?: string; source?: string; name?: string; type?: string }): Promise<AssetStoreMsg> {
       const call = requireMethod(nativeApi().assets?.storeFromPath, "Asset import");
       return ensureOk(await call(body) as AssetStoreMsg, "Asset import failed");
-    },
-    async renderTikz(body: { file: string; id: string; source: string }): Promise<TikzRenderMsg> {
-      const call = requireMethod(nativeApi().assets?.renderTikz, "TikZ render");
-      return ensureOk(await call(body) as TikzRenderMsg, "TikZ render failed");
     },
     async scanOrphans(): Promise<Record<string, unknown> & { assets?: UnusedAsset[]; message?: string }> {
       const call = requireMethod(nativeApi().assets?.scanOrphans, "Asset scan");

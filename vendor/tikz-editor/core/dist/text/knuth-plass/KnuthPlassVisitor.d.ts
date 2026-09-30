@@ -1,0 +1,53 @@
+import { LinebreakVisitor } from '@mathjax/src/cjs/output/common/LinebreakVisitor.js';
+import { type ParagraphAlignment } from './alignment.js';
+import { type ParagraphLayoutReport } from './paragraph/report.js';
+import type { AnyWrapper } from './paragraph/types.js';
+import type { KnuthPlassLayoutMode, WrappedTextGap } from './install.js';
+interface KnuthPlassLinebreakOptions {
+    alignment?: ParagraphAlignment;
+    layoutMode?: KnuthPlassLayoutMode;
+    wrappedTextGaps?: WrappedTextGap[];
+    pretolerance?: number;
+    tolerance?: number;
+    linepenalty?: number;
+    hyphenpenalty?: number;
+    exhyphenpenalty?: number;
+    adjdemerits?: number;
+    doublehyphendemerits?: number;
+    finalhyphendemerits?: number;
+    lefthyphenmin?: number;
+    righthyphenmin?: number;
+}
+export declare class KnuthPlassVisitor extends LinebreakVisitor<any, any, any, any, any, any, any, any, any, any, any, any> {
+    private static readonly patchedWrapperPrototypes;
+    private static readonly patchedMrowPlaceLinePrototypes;
+    private static configuredOptions;
+    static configure(options: KnuthPlassLinebreakOptions | null | undefined): void;
+    static getConfiguredOptions(): KnuthPlassLinebreakOptions;
+    private readonly reportByWrapper;
+    private readonly paragraphIdByWrapper;
+    private readonly originalMtextTextByWrapper;
+    private readonly originalMspaceWidthByWrapper;
+    private nextParagraphNumber;
+    readonly reports: ParagraphLayoutReport[];
+    constructor(factory: any);
+    getReports(): ParagraphLayoutReport[];
+    private patchMpaddedWrapperComputeBBox;
+    private patchMrowWrapperPlaceLines;
+    getLatestReport(): ParagraphLayoutReport | null;
+    getReportFor(wrapper: AnyWrapper | null | undefined): ParagraphLayoutReport | null;
+    breakToWidth(wrapper: AnyWrapper, width: number): void;
+    private getKnuthPlassOptions;
+    private resolveKnuthPlassOptions;
+    private captureOriginalMtextStateFromRuns;
+    private captureOriginalMspaceStateFromRuns;
+    private captureOriginalMtextState;
+    private restoreParagraphWrapperState;
+    private restoreMtextWrapper;
+    private restoreMspaceWrapper;
+    private saveReport;
+    private getParagraphId;
+    private readLineMetrics;
+    private isEligibleParboxParagraph;
+}
+export {};

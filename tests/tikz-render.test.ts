@@ -21,7 +21,7 @@ describe("TikZ render helpers", () => {
     expect(normalizeTikzSource(document)).toBe(document);
   });
 
-  test("strips TeX comments before local compilation", () => {
+  test("strips TeX comments before rendering", () => {
     expect(stripTikzComments("  % 坐标点定义\n\\draw (0,0) -- (1,1); % line"))
       .toBe("\n\\draw (0,0) -- (1,1);");
     expect(stripTikzComments("\\node {100\\%};")).toBe("\\node {100\\%};");

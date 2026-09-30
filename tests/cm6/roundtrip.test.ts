@@ -16,6 +16,7 @@ import { describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
 import { foldedRanges, syntaxTree } from "@codemirror/language";
 import { EditorSelection, type EditorState } from "@codemirror/state";
 import { createEditor } from "../../src/editor-api.ts";
+import { setTikzRendererForTests } from "../../src/tikz-browser.ts";
 import {
   calibrateWrappedLayoutClick,
   markdownHrefAt,
@@ -1322,21 +1323,10 @@ y^2
     cleanup();
   });
 
-  test("tikz env stays previewed as a stable rendered svg asset", async () => {
-    const originalApi = window.aaronnoteApi;
+  test("tikz env stays previewed as a browser rendered SVG", async () => {
     const originalCurrentFile = window.AaronnoteCurrentFile;
-    const originalResolveAssetUrl = window.AaronnoteResolveAssetUrl;
     window.AaronnoteCurrentFile = () => "/notes/demo.md";
-    window.AaronnoteResolveAssetUrl = (src: string) => `asset://${src}`;
-    window.aaronnoteApi = {
-      assets: {
-        renderTikz: async (body: unknown) => ({
-          ok: true,
-          markdownPath: "./images/demo/tikz-axis.svg",
-          body,
-        }),
-      },
-    } as typeof window.aaronnoteApi;
+    setTikzRendererForTests(async () => '<svg viewBox="0 0 20 10"><path d="M0 0L20 10"/></svg>');
     const md = [
       "before",
       "",
@@ -1359,32 +1349,47 @@ y^2
       expect(view.contentDOM.textContent).not.toContain("#+ begin tikz");
 
       await new Promise((resolve) => window.setTimeout(resolve, 0));
-      const img = document.querySelector<HTMLImageElement>(".cm-tikz-env-widget img");
-      expect(img).toBeTruthy();
-      expect(img!.src).toBe("asset://./images/demo/tikz-axis.svg");
+      const svg = document.querySelector<SVGSVGElement>(".cm-tikz-env-widget svg");
+      expect(svg).toBeTruthy();
+      expect(svg?.getAttribute("viewBox")).toBe("0 0 20 10");
 
       editor.toggleSource();
       expect(view.contentDOM.textContent).toContain("#+ begin tikz");
     } finally {
       cleanup();
-      window.aaronnoteApi = originalApi;
       window.AaronnoteCurrentFile = originalCurrentFile;
-      window.AaronnoteResolveAssetUrl = originalResolveAssetUrl;
+      setTikzRendererForTests(null);
+    }
+  });
+
+  test("Vim opens TikZ source in Insert and previews it in Normal", () => {
+    const md = "before\n#+begin tikz axis\n\\draw (0,0) -- (1,1);\n#+end tikz\nafter";
+    const { editor, cleanup } = mountCM6(md);
+    const vim = createVimLite(editor, document.body);
+    try {
+      const block = md.indexOf("#+begin tikz");
+      editor.setMarkdownSelection(block);
+      vim.setMode("normal");
+      expect(document.querySelector(".cm-tikz-env-widget")).toBeTruthy();
+      expect(editor.view.contentDOM.textContent).not.toContain("\\draw (0,0)");
+
+      expect(vim.handleKey({ key: "i" })).toBe(true);
+      expect(vim.mode()).toBe("insert");
+      expect(document.querySelector(".cm-tikz-env-widget")).toBeNull();
+      expect(editor.view.contentDOM.textContent).toContain("\\draw (0,0)");
+
+      expect(vim.handleKey({ key: "Escape" })).toBe(true);
+      expect(document.querySelector(".cm-tikz-env-widget")).toBeTruthy();
+    } finally {
+      vim.destroy();
+      cleanup();
     }
   });
 
   test("tikz env fills a missing id on first preview", async () => {
-    const originalApi = window.aaronnoteApi;
     const originalCurrentFile = window.AaronnoteCurrentFile;
     window.AaronnoteCurrentFile = () => "/notes/demo.md";
-    window.aaronnoteApi = {
-      assets: {
-        renderTikz: async () => ({
-          ok: true,
-          markdownPath: "./images/demo/tikz-auto.svg",
-        }),
-      },
-    } as typeof window.aaronnoteApi;
+    setTikzRendererForTests(async () => '<svg viewBox="0 0 20 10"/>');
     const md = [
       "#+ begin tikz {wrap}",
       "\\draw (0,0) -- (1,1);",
@@ -1395,30 +1400,127 @@ y^2
       editor.setMarkdownSelection(md.length);
       await new Promise((resolve) => window.requestAnimationFrame(resolve));
 
-      expect(editor.getMarkdown()).toMatch(/^#\+ begin tikz tikz-\d{8}-\d{6} \{wrap\}\n/);
+      expect(editor.getMarkdown()).toMatch(/^#\+ begin tikz [0-9a-f-]{36} \{wrap\}\n/);
     } finally {
       cleanup();
-      window.aaronnoteApi = originalApi;
       window.AaronnoteCurrentFile = originalCurrentFile;
+      setTikzRendererForTests(null);
+    }
+  });
+
+  test("TikZ stays idle during source edits and unrelated edits keep the same preview", async () => {
+    const originalCurrentFile = window.AaronnoteCurrentFile;
+    window.AaronnoteCurrentFile = () => "/notes/lazy-tikz.md";
+    const renderCalls: string[] = [];
+    setTikzRendererForTests(async (source) => {
+      renderCalls.push(source);
+      return '<svg viewBox="0 0 20 10"><path d="M0 0L20 10"/></svg>';
+    });
+    const md = [
+      "before", "#+begin tikz cursor-test", "\\draw (0,0) -- (1,1);", "#+end tikz", "after",
+    ].join("\n");
+    const { editor, cleanup } = mountCM6(md);
+    try {
+      editor.setMarkdownSelection(0);
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+      expect(renderCalls).toHaveLength(1);
+      const preview = document.querySelector<HTMLElement>(".cm-tikz-env-widget");
+      expect(preview).toBeTruthy();
+      preview?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, clientX: 1 }));
+      expect(document.querySelector(".cm-tikz-env-widget")).toBeNull();
+      const number = md.indexOf("(1,1)") + 1;
+      for (const value of ["2", "3", "4"]) {
+        editor.view.dispatch({ changes: { from: number, to: number + 1, insert: value }, selection: { anchor: number + 1 } });
+      }
+      expect(editor.view.contentDOM.textContent).toContain("\\draw (0,0) -- (4,1);");
+      await new Promise((resolve) => window.setTimeout(resolve, 500));
+      expect(renderCalls).toHaveLength(1);
+      editor.setMarkdownSelection(md.length);
+      expect(document.querySelector(".cm-tikz-env-widget")).toBeTruthy();
+      await new Promise((resolve) => window.setTimeout(resolve, 500));
+      expect(renderCalls).toHaveLength(2);
+      expect(renderCalls.at(-1)).toContain("(4,1)");
+      const updatedPreview = document.querySelector<HTMLElement>(".cm-tikz-env-widget");
+      editor.view.dispatch({ changes: { from: 0, insert: "!" }, selection: { anchor: 0 } });
+      expect(document.querySelector(".cm-tikz-env-widget")).toBe(updatedPreview);
+      expect(renderCalls).toHaveLength(2);
+      // The prose line immediately before a TikZ block is a common editing
+      // position. Every key must leave the existing preview DOM in place.
+      for (const key of ["s", "s", "s"]) {
+        const beforeBlock = editor.getMarkdown().indexOf("\n#+begin tikz");
+        editor.view.dispatch({
+          changes: { from: beforeBlock, insert: key },
+          selection: { anchor: beforeBlock + 1 },
+        });
+        expect(document.querySelector(".cm-tikz-env-widget")).toBe(updatedPreview);
+        expect(renderCalls).toHaveLength(2);
+      }
+      const outsideEdit = editor.getMarkdown().indexOf("(4,1)") + 1;
+      editor.view.dispatch({
+        changes: { from: outsideEdit, to: outsideEdit + 1, insert: "5" },
+        selection: { anchor: 0 },
+      });
+      await new Promise((resolve) => window.setTimeout(resolve, 500));
+      expect(renderCalls).toHaveLength(2);
+      editor.setMarkdownSelection(outsideEdit);
+      editor.view.dispatch({
+        changes: { from: outsideEdit, to: outsideEdit + 1, insert: "6" },
+        selection: { anchor: outsideEdit + 1 },
+      });
+      editor.setMarkdownSelection(editor.getMarkdown().length);
+      await new Promise((resolve) => window.setTimeout(resolve, 500));
+      expect(renderCalls).toHaveLength(3);
+      expect(renderCalls.at(-1)).toContain("(6,1)");
+    } finally {
+      cleanup();
+      window.AaronnoteCurrentFile = originalCurrentFile;
+      setTikzRendererForTests(null);
+    }
+  });
+
+  test("typing after math immediately above TikZ preserves its preview node", async () => {
+    const md = [
+      "# Graphs", "", "A paragraph with \\(k(n+1)\\) before TikZ.",
+      "#+begin tikz adjacent-graph", "\\begin{tikzpicture}",
+      "\\draw (0,0) -- (1,1);", "\\end{tikzpicture}",
+      "#+end tikz", "After the diagram.",
+    ].join("\n");
+    const originalCurrentFile = window.AaronnoteCurrentFile;
+    window.AaronnoteCurrentFile = () => "/notes/adjacent-graph.md";
+    const renderCalls: string[] = [];
+    setTikzRendererForTests(async (source) => {
+      renderCalls.push(source);
+      return '<svg viewBox="0 0 20 10"><path d="M0 0L20 10"/></svg>';
+    });
+    const { editor, cleanup } = mountCM6(md);
+    try {
+      const anchor = md.indexOf(" before TikZ.") + " before TikZ.".length;
+      editor.setMarkdownSelection(anchor);
+      await nextTick();
+      const preview = document.querySelector<HTMLElement>(".cm-tikz-env-widget");
+      expect(preview).toBeTruthy();
+      expect(renderCalls).toHaveLength(1);
+      for (const c of ["x", "y", "z"]) {
+        editor.view.dispatch({ changes: { from: editor.view.state.selection.main.head, insert: c }, selection: { anchor: editor.view.state.selection.main.head + 1 } });
+        expect(document.querySelector(".cm-tikz-env-widget")).toBe(preview);
+        expect(editor.view.contentDOM.textContent).not.toContain("#+begin tikz adjacent-graph");
+        expect(renderCalls).toHaveLength(1);
+      }
+    } finally {
+      cleanup();
+      window.AaronnoteCurrentFile = originalCurrentFile;
+      setTikzRendererForTests(null);
     }
   });
 
   test("tikz env rerenders from the edited body without touching the source", async () => {
-    const originalApi = window.aaronnoteApi;
     const originalCurrentFile = window.AaronnoteCurrentFile;
     window.AaronnoteCurrentFile = () => "/notes/demo.md";
-    const renderCalls: Array<{ id?: string; source?: string }> = [];
-    window.aaronnoteApi = {
-      assets: {
-        renderTikz: async (body: { id?: string; source?: string }) => {
-          renderCalls.push(body);
-          return {
-            ok: true,
-            markdownPath: `./images/demo/tikz-axis-${renderCalls.length}.svg`,
-          };
-        },
-      },
-    } as typeof window.aaronnoteApi;
+    const renderCalls: string[] = [];
+    setTikzRendererForTests(async (source) => {
+      renderCalls.push(source);
+      return '<svg viewBox="0 0 20 10"><path d="M0 0L20 10"/></svg>';
+    });
     const md = [
       "#+ begin tikz dirty-axis",
       "\\draw (0,0) -- (1,1);",
@@ -1430,31 +1532,32 @@ y^2
     try {
       editor.setMarkdownSelection(md.length);
       await new Promise((resolve) => window.setTimeout(resolve, 0));
-      const calls = () => renderCalls.filter((call) => call.id === "dirty-axis");
-      expect(calls().length).toBe(1);
-      expect(calls()[0]?.source).toContain("(1,1)");
+      expect(renderCalls.length).toBe(1);
+      expect(renderCalls[0]).toContain("(1,1)");
       const initialMeasureKey = document.querySelector<HTMLElement>(".cm-tikz-env-widget")?.dataset.cmMeasureKey;
 
       editor.toggleSource();
       const from = editor.getMarkdown().indexOf("(1,1)");
+      editor.setMarkdownSelection(from + 2);
       editor.view.dispatch({
         changes: { from, to: from + "(1,1)".length, insert: "(2,2)" },
-        selection: { anchor: editor.getMarkdown().length },
+        selection: { anchor: from + "(2,2)".length },
       });
       editor.toggleSource();
+      editor.setMarkdownSelection(editor.getMarkdown().length);
       await new Promise((resolve) => window.setTimeout(resolve, 600));
 
       // Freshness comes from hashing the body, so an edit costs a render but
       // never a rewrite of the open line.
       expect(editor.getMarkdown()).toMatch(/^#\+ begin tikz dirty-axis\n/);
-      expect(calls().length).toBe(2);
-      expect(calls().at(-1)?.source).toContain("(2,2)");
+      expect(renderCalls.length).toBe(2);
+      expect(renderCalls.at(-1)).toContain("(2,2)");
       expect(document.querySelector<HTMLElement>(".cm-tikz-env-widget")?.dataset.cmMeasureKey)
         .not.toBe(initialMeasureKey);
     } finally {
       cleanup();
-      window.aaronnoteApi = originalApi;
       window.AaronnoteCurrentFile = originalCurrentFile;
+      setTikzRendererForTests(null);
     }
   });
 

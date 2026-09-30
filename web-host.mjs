@@ -119,7 +119,6 @@ import { saveNote } from "./server/lib/save.mjs";
 import {
   storeAsset,
   storeAssetFromPath,
-  renderTikzAsset,
   scanUnusedAssets,
   trashUnusedAssets,
   inspectAssets,
@@ -863,6 +862,37 @@ function gatewayRequest(method, params = {}, timeoutMs = 30_000) {
     gatewayPending.set(id, { resolve, reject, timer });
     gatewaySend({ jsonrpc: "2.0", id, method, params });
   });
+}
+
+async function emacsLatexAgentStatus() {
+  const status = await latexExportAgentStatus();
+  if (hostMode !== "emacs") return status;
+  const configured = await gatewayRequest("aaronnote.latex.agent-status", {}, 10_000);
+  const available = new Map((configured.agents || []).map((agent) => [agent.id, agent.available === true]));
+  return {
+    ...status,
+    transport: "emacs-acp",
+    agents: status.agents.map((agent) => ({ ...agent, available: available.get(agent.id) === true })),
+  };
+}
+
+let latexAgentRequestNumber = 0;
+async function runEmacsLatexAgent({ backend, workdir, prompt, hardTimeoutMs, signal }) {
+  const requestId = `latex-${process.pid}-${++latexAgentRequestNumber}`;
+  const cancel = () => gatewayNotify("aaronnote.latex.agent-cancel", { requestId });
+  if (signal?.aborted) return { ok: false, message: "aborted" };
+  signal?.addEventListener("abort", cancel, { once: true });
+  try {
+    const result = await gatewayRequest("aaronnote.latex.agent-run", {
+      requestId, backend, workdir, prompt,
+    }, hardTimeoutMs + 15_000);
+    return { ok: result?.ok === true, summary: String(result?.summary || ""), message: String(result?.message || "") };
+  } catch (error) {
+    cancel();
+    return { ok: false, message: String(error?.message || error) };
+  } finally {
+    signal?.removeEventListener("abort", cancel);
+  }
 }
 
 configureExternalFileProvider({
@@ -2428,8 +2458,11 @@ const apiRouter = new ApiRouter().register({
   "aaronnote:api:notes:templates": (force) => templatesPayload(force === true),
   "aaronnote:api:notes:snippets": () => snippetsPayload(true),
   "aaronnote:api:latex:defaults": (body) => latexExportDefaults(body || {}),
-  "aaronnote:api:latex:agent-status": () => latexExportAgentStatus(),
-  "aaronnote:api:latex:set-agent": (body) => setLatexExportAgent(body || {}),
+  "aaronnote:api:latex:agent-status": () => emacsLatexAgentStatus(),
+  "aaronnote:api:latex:set-agent": async (body) => {
+    await setLatexExportAgent(body || {});
+    return emacsLatexAgentStatus();
+  },
   "aaronnote:api:latex:templates": () => listLatexTemplates(),
   "aaronnote:api:latex:choose-output-path": (body) => chooseLatexOutputPath(body || {}),
   "aaronnote:api:latex:export": (body) => {
@@ -2454,7 +2487,19 @@ const apiRouter = new ApiRouter().register({
         templatePath: String(request.templatePath || ""),
         engine: String(request.engine || ""),
       },
-      run: ({ signal, progress }) => exportLatex({ ...request, signal, onProgress: progress }),
+      run: async ({ signal, progress }) => {
+        if (hostMode === "emacs" && request.polish === true) {
+          const status = await emacsLatexAgentStatus();
+          if (status.engine !== "mechanical"
+              && !status.agents.some((agent) => agent.id === status.agent && agent.available)) {
+            throw new Error(`Emacs ACP LaTeX agent is unavailable: ${status.agent}`);
+          }
+        }
+        return exportLatex({
+          ...request, signal, onProgress: progress,
+          ...(hostMode === "emacs" ? { agentRunner: runEmacsLatexAgent } : {}),
+        });
+      },
       restartable: true,
       exclusiveKey: outputPath ? `latex-export:${outputPath}` : "",
     });
@@ -2478,7 +2523,6 @@ const apiRouter = new ApiRouter().register({
     noteRoot,
     storeAsset,
     storeAssetFromPath,
-    renderTikzAsset,
     scanUnusedAssets,
     trashUnusedAssets,
     inspectAssets,
@@ -3149,7 +3193,6 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
     assets: {
       upload: function(body) { return call("aaronnote:api:assets:upload", [body || {}]); },
       storeFromPath: function(body) { return call("aaronnote:api:assets:store-from-path", [body || {}]); },
-      renderTikz: function(body) { return call("aaronnote:api:assets:render-tikz", [body || {}]); },
       scanOrphans: function() { return call("aaronnote:api:assets:scan-orphans", []); },
       trashOrphans: function(files) { return call("aaronnote:api:assets:trash-orphans", [files || []]); },
       inspect: function() { return call("aaronnote:api:assets:inspect", []); },

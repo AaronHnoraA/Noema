@@ -1909,13 +1909,16 @@ in the registry, so the next Run or visit resumes the conversation (D-035)."
 
 Only buffers `noema-agent-acp-auto-stoppable-p' allows -- idle, hidden,
 started by a background origin -- with a verified native resume capability
-are stopped.  Idle time counts from the buffer's last change."
+are stopped.  Pi manages the project while it is open, so the warm sweep
+never hibernates it.  Idle time counts from the buffer's last change."
   (interactive)
   (let ((by-root (make-hash-table :test #'equal))
         (now (float-time)))
     (dolist (buffer (buffer-list))
       (when (and (noema-agent-worker--resumable-buffer-p buffer)
-                 (noema-agent-acp-auto-stoppable-p buffer))
+                 (noema-agent-acp-auto-stoppable-p buffer)
+                 (not (eq (buffer-local-value 'noema-agent-acp-session-origin buffer)
+                          'pi)))
         (let ((root (buffer-local-value 'noema-agent-acp-session-root buffer)))
           (push buffer (gethash root by-root)))))
     (maphash

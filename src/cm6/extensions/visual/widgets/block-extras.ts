@@ -78,12 +78,26 @@ import { AttributeViewWidget } from "./attribute-view.ts";
 import { EmbedQueryWidget } from "./embed-query.ts";
 import { getKatexMacrosVersion } from "../../../../katex-macros.ts";
 import { renderTocInlineMath } from "../../../../toc-inline-math.ts";
+import { renderTikzBrowser, sanitizedTikzSvg, type BrowserTikzResult } from "../../../../tikz-browser.ts";
+import { newNoemaId } from "../../../../../shared/identity.mjs";
 
 // ---------------------------------------------------------------------------
 // TOC fold state (session-level, not editor history)
 // ---------------------------------------------------------------------------
 
 export const tocFoldEffect = StateEffect.define<{ key: string; folded: boolean }>();
+
+/** Vim toggles this when entering/leaving Insert; editors without Vim edit normally. */
+export const setTikzSourceEditing = StateEffect.define<boolean>();
+const tikzSourceEditingField = StateField.define<boolean>({
+  create: () => true,
+  update(value, transaction) {
+    for (const effect of transaction.effects) {
+      if (effect.is(setTikzSourceEditing)) value = effect.value;
+    }
+    return value;
+  },
+});
 
 function tocFoldReducer(state: Map<string, boolean>, effects: readonly StateEffect<unknown>[]): Map<string, boolean> {
   let next: Map<string, boolean> | undefined;
@@ -568,13 +582,7 @@ function stopInteractiveWidgetEvents(root: HTMLElement): void {
   }
 }
 
-type TikzAssetResult = {
-  ok?: boolean;
-  markdownPath?: string;
-  message?: string;
-  /** Picture size in `em` of body text — see `shared/tikz-source.mjs`. */
-  intrinsic?: { widthEm?: number; heightEm?: number };
-};
+type TikzAssetResult = BrowserTikzResult;
 
 type CeilKernelSpec = { name: string; displayName?: string; language?: string; attachable?: boolean };
 
@@ -667,23 +675,31 @@ function mergeCeilOutputFromServer(saved: CeilExecutionResult | null, current: C
   return mergeCeilOutputUi(saved, current);
 }
 
-type TikzPendingRender = { source: string; listeners: Set<(result: TikzAssetResult) => void>; timer: number };
+type TikzPendingRender = {
+  source: string;
+  listeners: Set<(result: TikzAssetResult) => void>;
+  timer: number;
+  inFlightSource: string | null;
+  renderAfter: number;
+};
 
-// One compile per pause, not per keystroke: a TikZ body is re-rendered only
+// One render per pause, not per keystroke: a TikZ body is re-rendered only
 // after edits stop for this long.
 const TIKZ_RENDER_DEBOUNCE_MS = 420;
 
-// Settled compilations, keyed by note+id+source: the answer for one exact TeX
+// Settled renders, keyed by note+id+source: the answer for one exact TeX
 // body. A widget rebuilt by scrolling or by an unrelated keystroke repaints from
 // here synchronously instead of round-tripping to the render service.
 const tikzAssetResults = new Map<string, TikzAssetResult>();
-// The last image that successfully compiled for a block, keyed by note+id. Shown
-// (dimmed) while a newer body compiles, so editing a diagram never blanks it.
+// The last image that rendered for a block, keyed by note+id. Shown dimmed
+// while a newer body renders, so editing a diagram never blanks it.
 const tikzLastRendered = new Map<string, TikzAssetResult>();
 const tikzPendingRenders = new Map<string, TikzPendingRender>();
-// Blocks this session has already asked to compile. The first request for a
-// block is immediate — a note full of unchanged diagrams must not sit on a
-// placeholder waiting out a debounce the server would answer from cache.
+// A previously seen figure becomes eligible for another render only after an
+// edit made with the selection in that TikZ source region.
+const tikzDirtyBlocks = new Set<string>();
+// Blocks this session has already requested. The first request is immediate;
+// browser memory and IndexedDB satisfy unchanged diagrams without re-rendering.
 const tikzRequestedBlocks = new Set<string>();
 const DEFAULT_CEIL_KERNEL = "python3";
 const DEFAULT_CEIL_SESSION = "default";
@@ -730,24 +746,8 @@ function clearCeilCachesForFile(file: string): void {
   }
 }
 
-function pad2(value: number): string {
-  return String(value).padStart(2, "0");
-}
-
-function tikzTimestamp(date = new Date()): string {
-  return [
-    String(date.getFullYear()),
-    pad2(date.getMonth() + 1),
-    pad2(date.getDate()),
-    "-",
-    pad2(date.getHours()),
-    pad2(date.getMinutes()),
-    pad2(date.getSeconds()),
-  ].join("");
-}
-
 function tikzGeneratedId(): string {
-  return `tikz-${tikzTimestamp()}`;
+  return newNoemaId("block");
 }
 
 function splitTikzTitle(title: string): { head: string; attrsRaw: string; layout: ImageLayoutAttrs } {
@@ -1056,10 +1056,6 @@ function highlightedCeilCode(code: string, language: string): HTMLElement {
   return pre;
 }
 
-function resolveAssetSrc(src: string): string {
-  return window.AaronnoteResolveAssetUrl?.(src) ?? src;
-}
-
 function tikzSourceCacheKey(file: string, id: string): string {
   return `${file}\n${id}`;
 }
@@ -1081,12 +1077,19 @@ function rememberTikzRequestedBlock(key: string): void {
   if (!oldest.done) tikzRequestedBlocks.delete(oldest.value);
 }
 
+function markTikzDirty(key: string): void {
+  if (tikzDirtyBlocks.has(key)) tikzDirtyBlocks.delete(key);
+  tikzDirtyBlocks.add(key);
+  if (tikzDirtyBlocks.size <= 256) return;
+  const oldest = tikzDirtyBlocks.values().next();
+  if (!oldest.done) tikzDirtyBlocks.delete(oldest.value);
+}
+
 /**
- * Compile one block, coalescing edits.
+ * Render one block, coalescing edits.
  *
- * Every keystroke inside a TikZ body rebuilds the widget, and pdflatex costs
- * roughly half a second, so an un-debounced call per rebuild would queue a
- * compile per character. One in-flight render per block, always for the newest
+ * Every keystroke inside a TikZ body rebuilds the widget. One in-flight render
+ * per block, always for the newest
  * body, keeps the cost proportional to pauses rather than to typing.
  */
 function requestTikzAsset(
@@ -1102,39 +1105,56 @@ function requestTikzAsset(
   if (pending) {
     pending.source = source;
     pending.listeners.add(onSettled);
-    if (pending.timer !== 0) {
+    pending.renderAfter = Date.now() + delay;
+    if (!pending.inFlightSource) {
       window.clearTimeout(pending.timer);
       pending.timer = window.setTimeout(() => runTikzRender(blockKey, file, id), delay);
     }
     return;
   }
-  const next: TikzPendingRender = { source, listeners: new Set([onSettled]), timer: 0 };
+  const next: TikzPendingRender = {
+    source, listeners: new Set([onSettled]), timer: 0,
+    inFlightSource: null, renderAfter: Date.now() + delay,
+  };
   tikzPendingRenders.set(blockKey, next);
   next.timer = window.setTimeout(() => runTikzRender(blockKey, file, id), delay);
 }
 
 function runTikzRender(blockKey: string, file: string, id: string): void {
   const pending = tikzPendingRenders.get(blockKey);
-  if (!pending) return;
+  if (!pending || pending.inFlightSource) return;
   pending.timer = 0;
+  const wait = pending.renderAfter - Date.now();
+  if (wait > 0) {
+    pending.timer = window.setTimeout(() => runTikzRender(blockKey, file, id), wait);
+    return;
+  }
   const source = pending.source;
-  void api.assets.renderTikz({ file, id, source })
+  pending.inFlightSource = source;
+  void renderTikzBrowser(source)
     .catch((err: unknown): TikzAssetResult => ({
       ok: false,
       message: err instanceof Error ? err.message : String(err),
     }))
     .then((result: TikzAssetResult) => {
       setBoundedMap(tikzAssetResults, tikzResultCacheKey(file, id, source), result);
-      if (result.ok && result.markdownPath) setBoundedMap(tikzLastRendered, blockKey, result);
+      if (result.ok && result.svg) setBoundedMap(tikzLastRendered, blockKey, result);
       const current = tikzPendingRenders.get(blockKey);
       if (!current) return;
-      // A newer body arrived while this compile was in flight: keep the queue
-      // alive for it rather than settling listeners on a stale image.
+      current.inFlightSource = null;
+      // Wait for the user's latest pause after the old compile completes.
+      // Starting the next render immediately here caused a compile per key
+      // when the worker was faster than a typing burst.
       if (current.source !== source) {
-        runTikzRender(blockKey, file, id);
+        window.clearTimeout(current.timer);
+        current.timer = window.setTimeout(
+          () => runTikzRender(blockKey, file, id),
+          Math.max(0, current.renderAfter - Date.now()),
+        );
         return;
       }
       tikzPendingRenders.delete(blockKey);
+      tikzDirtyBlocks.delete(blockKey);
       for (const listener of current.listeners) listener(result);
     });
 }
@@ -1142,9 +1162,8 @@ function runTikzRender(blockKey: string, file: string, id: string): void {
 /**
  * Give a block an id, once.
  *
- * This is the only edit the TikZ widget ever makes to the document: a block
- * needs a stable identity to name its compiled asset, and nothing else about
- * rendering is stored in the source.
+ * This is the only edit the TikZ widget makes to the document: a block needs
+ * a stable identity for editor state, and rendering data stays outside source.
  */
 function scheduleTikzIdAssignment(view: EditorView, from: number, id: string): void {
   window.requestAnimationFrame(() => {
@@ -3046,6 +3065,14 @@ class TikzWidget extends MeasuredWidget {
     return this.title === other.title && this.body === other.body && this.from === other.from && this.to === other.to;
   }
 
+  updateDOM(dom: HTMLElement, _view: EditorView, previous: TikzWidget): boolean {
+    if (this.title !== previous.title || this.body !== previous.body) return false;
+    // Edits before the block shift its source offsets, but the picture is
+    // unchanged. Keep the same SVG node and only update click navigation.
+    setSourceRange(dom, this.from, this.to);
+    return true;
+  }
+
   toDOM(view: EditorView): HTMLElement {
     const figure = document.createElement("figure");
     figure.className = "cm-image-widget cm-visual-attachment cm-visual-attachment-html cm-tikz-env-widget aaronnote-tikz";
@@ -3062,16 +3089,10 @@ class TikzWidget extends MeasuredWidget {
       stopInteractiveWidgetEvents(figure);
       return this.registerMeasured(figure, view);
     }
-    if (!file) {
-      figure.append(tikzPlaceholder("TikZ render needs a saved note file"));
-      stopInteractiveWidgetEvents(figure);
-      return this.registerMeasured(figure, view);
-    }
-
     const settled = tikzAssetResult(file, meta.id, this.body);
     if (settled) {
-      figure.append(settled.ok && settled.markdownPath
-        ? tikzImage(settled, meta.id, view, figure)
+      figure.append(settled.ok && settled.svg
+        ? tikzSvgElement(settled, view, figure)
         : tikzPlaceholder(settled.message || "TikZ render failed", true));
       stopInteractiveWidgetEvents(figure);
       return this.registerMeasured(figure, view);
@@ -3081,21 +3102,24 @@ class TikzWidget extends MeasuredWidget {
     // (dimmed) rather than a spinner keeps a diagram on screen while its source
     // is being edited, which is what makes live TikZ editing usable at all.
     const previous = tikzLastRendered.get(tikzSourceCacheKey(file, meta.id));
-    if (previous?.markdownPath) {
-      const stale = tikzImage(previous, meta.id, view, figure);
+    if (previous?.svg) {
+      const stale = tikzSvgElement(previous, view, figure);
       stale.classList.add("is-tikz-stale");
       figure.append(stale);
     } else {
       figure.append(tikzPlaceholder("Rendering TikZ…"));
     }
 
-    requestTikzAsset(file, meta.id, this.body, (result) => {
-      if (!figure.isConnected) return;
-      figure.replaceChildren(result.ok && result.markdownPath
-        ? tikzImage(result, meta.id, view, figure)
-        : tikzPlaceholder(result.message || "TikZ render failed", true));
-      view.requestMeasure();
-    });
+    const blockKey = tikzSourceCacheKey(file, meta.id);
+    if (!tikzRequestedBlocks.has(blockKey) || tikzDirtyBlocks.has(blockKey) || !previous?.svg) {
+      requestTikzAsset(file, meta.id, this.body, (result) => {
+        if (!figure.isConnected) return;
+        figure.replaceChildren(result.ok && result.svg
+          ? tikzSvgElement(result, view, figure)
+          : tikzPlaceholder(result.message || "TikZ render failed", true));
+        view.requestMeasure();
+      });
+    }
 
     stopInteractiveWidgetEvents(figure);
     return this.registerMeasured(figure, view);
@@ -3112,30 +3136,26 @@ function tikzPlaceholder(text: string, failed = false): HTMLElement {
   return card;
 }
 
-function tikzImage(
+function tikzSvgElement(
   result: TikzAssetResult,
-  id: string,
   view: EditorView,
   figure: HTMLElement,
-): HTMLImageElement {
-  const img = document.createElement("img");
-  img.className = "cm-image-render cm-tikz-env-image";
-  img.src = resolveAssetSrc(result.markdownPath || "");
-  img.alt = `TikZ ${id}`;
-  img.loading = "lazy";
-  img.decoding = "async";
-  // The compiled picture's own TeX dimensions, in `em` of body text: a figure
-  // then holds the same proportion to the prose that it holds in a PDF, instead
-  // of being scaled to an arbitrary pixel box.
+): Element {
+  const container = document.createElement("div");
+  container.innerHTML = sanitizedTikzSvg(result.svg || "");
+  const svg = container.querySelector("svg");
+  if (!svg) return tikzPlaceholder("TikZ rendering produced no SVG", true);
+  svg.classList.add("cm-image-render", "cm-tikz-env-image");
+  svg.setAttribute("role", "img");
+  // The browser renderer's own viewBox dimensions stay relative to body text.
   const width = Number(result.intrinsic?.widthEm);
   const height = Number(result.intrinsic?.heightEm);
   if (Number.isFinite(width) && width > 0) {
-    img.style.setProperty("--aaronnote-tikz-natural-width", `${width}em`);
-    if (Number.isFinite(height) && height > 0) img.style.aspectRatio = `${width} / ${height}`;
+    svg.style.setProperty("--aaronnote-tikz-natural-width", `${width}em`);
+    if (Number.isFinite(height) && height > 0) svg.style.aspectRatio = `${width} / ${height}`;
   }
-  img.addEventListener("load", () => { if (figure.isConnected) view.requestMeasure(); });
-  img.addEventListener("error", () => { if (figure.isConnected) view.requestMeasure(); });
-  return img;
+  queueMicrotask(() => { if (figure.isConnected) view.requestMeasure(); });
+  return svg;
 }
 
 function renderMetaWidget(
@@ -3624,6 +3644,12 @@ function selectionTouchesRange(state: EditorState, from: number, to: number): bo
   return sel.from < to && sel.to > from;
 }
 
+function tikzSourceActive(state: EditorState, block: OrgEnvBlock): boolean {
+  const sel = state.selection.main;
+  return (state.field(tikzSourceEditingField, false) ?? true)
+    && sel.empty && sel.from >= block.from && sel.from < block.to;
+}
+
 function orgEnvCloseBoundaryActive(state: EditorState, block: OrgEnvBlock): boolean {
   return selectionTouchesRange(state, block.closeFrom, block.closeTo)
     && state.selection.main.from > block.closeFrom;
@@ -3675,6 +3701,7 @@ const orgEnvBlocksField = StateField.define<readonly OrgEnvBlock[]>({
   create: createOrgEnvBlocks,
   update(blocks, tr) {
     if (!tr.docChanged) return blocks;
+    markEditedTikzBlocks(tr.startState, tr.changes, blocks);
     if (!canMapOrgEnvBlocks(tr.startState.doc, blocks, tr.changes)) {
       return patchOrgEnvBlocksForTitleChange(tr.startState.doc, tr.state.doc, blocks, tr.changes)?.blocks
         ?? scanOrgEnvBlocks(tr.state.doc.toString(), 0, 0, blockExtraExcludedRanges(tr.state));
@@ -3682,6 +3709,10 @@ const orgEnvBlocksField = StateField.define<readonly OrgEnvBlock[]>({
     return mapOrgEnvBlocks(blocks, tr.changes, tr.state.doc);
   },
 });
+
+// Source mode keeps this incremental block index so TikZ edits can be tracked
+// without scanning the whole note when Preview returns.
+export const orgEnvBlocksExtension: Extension = [tikzSourceEditingField, orgEnvBlocksField];
 
 function orgEnvBlocksFromState(state: EditorState): readonly OrgEnvBlock[] {
   return state.field(orgEnvBlocksField, false) ?? scanOrgEnvBlocks(state.doc.toString(), 0, 0, blockExtraExcludedRanges(state));
@@ -4094,7 +4125,7 @@ function addOrgEnvBlockExtraDecos(
     occupied?.push([block.from, block.to]);
     return;
   }
-  if (block.kind === "tikz") {
+  if (block.kind === "tikz" && !tikzSourceActive(state, block)) {
     decos.push(
       Decoration.replace({
         widget: new TikzWidget(block.title, block.body, block.from, block.to),
@@ -4280,6 +4311,17 @@ function changesTouchRange(changes: ChangeSet, from: number, to: number): boolea
   return touched;
 }
 
+function markEditedTikzBlocks(state: EditorState, changes: ChangeSet, blocks: readonly OrgEnvBlock[]): void {
+  const selection = state.selection.main;
+  for (const block of blocks) {
+    if (block.from > selection.to) break;
+    if (block.kind !== "tikz" || !selectionTouchesRange(state, block.from, block.to)
+        || !changesTouchRange(changes, block.from, block.to)) continue;
+    const id = splitTikzTitle(block.title).head.split(/\s+/)[0];
+    if (id) markTikzDirty(tikzSourceCacheKey(currentNoteFile(), id));
+  }
+}
+
 function activeBlockExtraKey(state: EditorState): string {
   const sel = state.selection.main;
   // A range selection is selecting rendered content, not asking thousands of
@@ -4307,7 +4349,8 @@ function activeBlockExtraKey(state: EditorState): string {
     if (sel.from >= range.from && sel.from <= range.to) parts.push(`hr:${range.from}:${range.to}`);
   }
   for (const block of blocks) {
-    if ((block.kind === "comment" || block.kind === "fold" || block.kind === "av" || block.kind === "embed") && selectionTouchesRange(state, block.from, block.to)) {
+    if (((block.kind === "comment" || block.kind === "fold" || block.kind === "av" || block.kind === "embed") && selectionTouchesRange(state, block.from, block.to))
+        || (block.kind === "tikz" && tikzSourceActive(state, block))) {
       parts.push(`${block.kind}:${block.from}:${block.to}`);
       continue;
     }
@@ -4427,7 +4470,14 @@ function patchBlockExtraDecosNearChanges(
     // instead of adding duplicates beyond the filtered patch range.
     .filter((range) => range.from >= affectedFrom && range.to <= affectedTo);
   return mapped
-    .update({ filterFrom: affectedFrom, filterTo: affectedTo, filter: () => false })
+    // RangeSet's bounded filter still visits a whole-block widget whose start
+    // falls inside this window. Keep any decoration that spans the edge: the
+    // bounded rebuild above deliberately does not recreate it.
+    .update({
+      filterFrom: affectedFrom,
+      filterTo: affectedTo,
+      filter: (from, to) => from < affectedFrom || to > affectedTo,
+    })
     .update({ add, sort: true });
 }
 
@@ -4442,7 +4492,7 @@ function patchBlockExtraDecosForOrgEnvTitleChange(
 
   const fullBlockWidgetActive = block.kind === "meta"
     || block.kind === "html"
-    || block.kind === "tikz"
+    || (block.kind === "tikz" && !tikzSourceActive(state, block))
     || (block.kind === "av" && !selectionTouchesRange(state, block.from, block.to))
     || (block.kind === "embed" && !selectionTouchesRange(state, block.from, block.to))
     || ((block.kind === "comment" || block.kind === "fold") && !selectionTouchesRange(state, block.from, block.to));
@@ -4586,7 +4636,6 @@ export const blockExtrasExtension: Extension = [
   fencedCodeRangesExtension,
   persistentVisualStateField(blockExtraRangesField, createBlockExtraRanges),
   persistentVisualStateField(tocFoldField, createTocFoldState),
-  persistentVisualStateField(orgEnvBlocksField, createOrgEnvBlocks),
   persistentVisualStateField(blockExtrasDecorations, buildBlockExtraDecos),
   persistentVisualStateField(orgEnvBodyLineDecorations, buildOrgEnvBodyLineDecos),
   orgEnvRailExtension,

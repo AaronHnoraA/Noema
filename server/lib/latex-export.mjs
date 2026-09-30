@@ -680,6 +680,7 @@ export function latexMacrosPackage(macros, features = {}) {
     "\\RequirePackage[normalem]{ulem}",
     "\\RequirePackage{xcolor}",
     features.usesTikz ? "\\RequirePackage{tikz}" : "",
+    features.usesTikz ? "\\usetikzlibrary{calc}" : "",
     features.usesWrapfig ? "\\RequirePackage{wrapfig}" : "",
     String.raw`% Pandoc body compatibility
 \makeatletter

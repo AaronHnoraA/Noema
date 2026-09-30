@@ -1,17 +1,8 @@
-/**
- * TikZ rendering for the HTML export/publish path.
- *
- * TikZ is compiled locally (pdflatex → dvisvgm) into a cached SVG asset next to
- * the note; see `shared/tikz-source.mjs` and `renderTikzAsset` in
- * `server/lib/runtime.mjs`. An export therefore only has to *reference* the
- * asset the editor already produced — no in-page TeX engine, no CDN, and the
- * exported page keeps working offline.
- */
+/** TikZ source and the HTML hydration target shared by preview and export. */
 
 import {
   classifyTikzSource,
   stripTexComments,
-  tikzAssetMarkdownPath,
   type TikzIntrinsicEm,
 } from "../shared/tikz-source.mjs";
 
@@ -52,15 +43,6 @@ export function normalizeTikzSource(source: string): string {
   return body;
 }
 
-export type TikzAssetOptions = {
-  /** Note file the block belongs to; resolves the compiled asset's directory. */
-  noteFile?: string;
-  /** Rewrites the note-relative asset path into a URL the page can load. */
-  assetResolver?: (src: string) => string;
-  /** Intrinsic size measured at compile time, when the caller has it. */
-  intrinsic?: TikzIntrinsicEm | null;
-};
-
 /**
  * Inline style pinning the figure to its LaTeX-native size.
  *
@@ -78,27 +60,12 @@ export function tikzIntrinsicStyle(intrinsic: TikzIntrinsicEm | null | undefined
 }
 
 /**
- * The rendered figure body for one `#+begin tikz` block: an `<img>` at the
- * compiled asset when the note context is known, and the TeX source otherwise
- * so nothing silently disappears from an export.
+ * Synchronous Markdown rendering emits a hydration target. The browser's
+ * custom element renders it on connection; static export replaces it with
+ * inline SVG before writing HTML.
  */
-export function renderTikzFigureBody(
-  source: string,
-  id: string,
-  options: TikzAssetOptions = {},
-): string {
+export function renderTikzFigureBody(source: string, id: string): string {
   const tex = normalizeTikzSource(source);
   if (!tex) return "";
-  if (!options.noteFile) {
-    return `<pre class="aaronnote-tikz-source"><code>${escapeHtml(tex)}</code></pre>`;
-  }
-  const path = tikzAssetMarkdownPath(options.noteFile, id, source);
-  const src = options.assetResolver?.(path) ?? path;
-  const style = tikzIntrinsicStyle(options.intrinsic ?? null);
-  return [
-    `<img class="cm-image-render aaronnote-tikz-image" src="${escapeHtml(src)}"`,
-    `alt="${escapeHtml(`TikZ ${id}`)}" loading="lazy" decoding="async"`,
-    style ? `style="${escapeHtml(style)}"` : "",
-    "/>",
-  ].filter(Boolean).join(" ");
+  return `<noema-tikz data-source="${escapeHtml(source)}" aria-label="${escapeHtml(`TikZ ${id}`)}"><pre class="aaronnote-tikz-source"><code>${escapeHtml(tex)}</code></pre></noema-tikz>`;
 }
