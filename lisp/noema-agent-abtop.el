@@ -24,6 +24,7 @@
 (require 'subr-x)
 (require 'aaron-ui-board)
 (require 'url)
+(require 'comint)
 (require 'noema-agent-acp)
 
 (declare-function noema-sessions-agent-restart "noema-sessions" (&optional buffer))
@@ -46,7 +47,40 @@
   "Seconds to coalesce session changes before re-rendering a visible board.")
 
 (defvar-local noema-agent-abtop--folded nil
-  "Panels (`quota', `sessions', `session') currently folded.")
+  "Panels (`quota', `remote', `cache', `sessions', `session') currently folded.")
+
+(defvar-local noema-agent-abtop--default-root nil
+  "Project directory from which the board was opened.")
+
+(defvar noema-agent-abtop--codex-remote-state nil
+  "Codex Remote state: on, off, error, checking, or nil before the first probe.")
+
+(defvar noema-agent-abtop--codex-remote-note nil
+  "Short diagnostic from the last Codex Remote command.")
+
+(defvar noema-agent-abtop--codex-remote-checked-at 0
+  "Time of the last Codex Remote state probe.")
+
+(defvar noema-agent-abtop--codex-remote-baseline 'unknown
+  "Whether Codex Remote was enabled before abtop changed it.")
+
+(defvar noema-agent-abtop--codex-remote-owned nil
+  "Non-nil after abtop starts a Codex Remote state-changing command.")
+
+(defvar noema-agent-abtop--codex-remote-last-requested nil
+  "Last enabled or disabled Codex Remote state requested by abtop.")
+
+(defvar noema-agent-abtop--codex-remote-process nil
+  "Codex Remote command currently running for abtop, if any.")
+
+(defvar noema-agent-abtop--shutting-down nil
+  "Non-nil while abtop cleans up Remote Control during Emacs exit.")
+
+(defvar noema-agent-abtop--claude-remotes (make-hash-table :test #'equal)
+  "Project directory to live Claude Remote Control process.")
+
+(defvar noema-agent-abtop--claude-remote-errors (make-hash-table :test #'equal)
+  "Project directory to the last Claude Remote exit and its console buffer.")
 
 ;;; Faces
 ;;
@@ -512,6 +546,446 @@ nobody has reported yet shows as such rather than disappearing."
 
 ;;; Rendering
 
+(defun noema-agent-abtop--cache-metrics (usage)
+  "Return reported fresh input, cache reads, writes and read share for USAGE.
+ACP reports these as separate categories; the share is over their sum."
+  (let* ((fresh (or (plist-get usage :input) 0))
+         (read (or (plist-get usage :cached-read) 0))
+         (write (or (plist-get usage :cached-write) 0))
+         (total (+ fresh read write)))
+    (list fresh read write (and (> total 0) (/ (float read) total)))))
+
+(defun noema-agent-abtop--cache-summary (rows)
+  "Return aggregate cache metrics for ROWS, each a (SESSION . USAGE)."
+  (let ((fresh 0) (read 0) (write 0))
+    (dolist (row rows)
+      (pcase-let ((`(,f ,r ,w ,_) (noema-agent-abtop--cache-metrics (cdr row))))
+        (cl-incf fresh f) (cl-incf read r) (cl-incf write w)))
+    (noema-agent-abtop--cache-metrics
+     (list :input fresh :cached-read read :cached-write write))))
+
+(defun noema-agent-abtop--cache-description (metrics)
+  "Describe cache METRICS in terms useful for comparing sessions."
+  (pcase-let ((`(,fresh ,read ,write ,share) metrics))
+    (format "read %s · fresh %s · write %s · reuse %s%s"
+            (noema-agent-abtop--tokens read)
+            (noema-agent-abtop--tokens fresh)
+            (noema-agent-abtop--tokens write)
+            (if share (format "%.0f%%" (* 100 share)) "?")
+            (if (> write 0)
+                (format " · read/write %.1fx" (/ (float read) write)) ""))))
+
+(defun noema-agent-abtop--insert-cache (rows)
+  "Insert the cache panel for ROWS."
+  (when (noema-agent-abtop--panel-open 'cache "prompt cache" "ACP reported tokens")
+    (noema-agent-abtop--panel-line
+     (noema-agent-abtop--field "all" (noema-agent-abtop--cache-description
+                                      (noema-agent-abtop--cache-summary rows))))
+    (dolist (row rows)
+      (let* ((session (car row))
+             (name (or (plist-get session :name)
+                       (buffer-name (plist-get session :buffer)))))
+        (noema-agent-abtop--panel-line
+         (noema-agent-abtop--field
+          (truncate-string-to-width name 9 nil nil "…")
+          (noema-agent-abtop--cache-description
+           (noema-agent-abtop--cache-metrics (cdr row)))))))
+    (noema-agent-abtop--panel-close)))
+
+;;; Remote Control
+
+(defun noema-agent-abtop--remote-redraw ()
+  "Redraw a visible board after a remote process changes state."
+  (unless noema-agent-abtop--shutting-down
+    (when-let* ((board (get-buffer noema-agent-abtop--buffer-name))
+                (window (get-buffer-window board 'visible)))
+      (with-selected-window window (noema-agent-abtop-refresh)))))
+
+(defun noema-agent-abtop--codex-remote-classify (message exit-code)
+  "Classify a Codex status MESSAGE with EXIT-CODE.
+An enabled daemon is only `on' after the CLI confirms its connection."
+  (let ((case-fold-search t))
+    (cond
+     ((string-match-p "errored\\|\"status\"[[:space:]]*:[[:space:]]*\"error"
+                      message) 'error)
+     ((and (zerop exit-code)
+           (or (string-match-p
+                "\"status\"[[:space:]]*:[[:space:]]*\"connected\""
+                message)
+               (string-match-p "Remote control is .*connected" message))) 'on)
+     ((string-match-p
+       "not enabled\\|disabled\\|\"status\"[[:space:]]*:[[:space:]]*\"stopped\""
+       message) 'off)
+     ((string-match-p
+       "connecting\\|\"status\"[[:space:]]*:[[:space:]]*\"connecting\""
+       message) 'connecting)
+     (t 'error))))
+
+(defun noema-agent-abtop--codex-remote-enabled-state (state message)
+  "Return `enabled', `disabled', or `unknown' from STATE and MESSAGE."
+  (pcase state
+    ('off 'disabled)
+    ((or 'on 'connecting) 'enabled)
+    ('error (if (string-match-p
+                 "\\benabled\\b\\|\\\"status\\\"[[:space:]]*:[[:space:]]*\\\"errored\\\""
+                 (or message ""))
+                'enabled 'unknown))
+    (_ 'unknown)))
+
+(defun noema-agent-abtop--codex-remote-command (action)
+  "Return the Codex command for Remote Control ACTION."
+  (let ((codex (or (executable-find "codex")
+                   (user-error "codex executable not found"))))
+    (pcase action
+      ('enable (list codex "app-server" "daemon" "enable-remote-control"))
+      ('disable (list codex "app-server" "daemon" "disable-remote-control"))
+      ('retry (list codex "remote-control" "--json" "start"))
+      (_ (list codex "remote-control" "--json")))))
+
+(defun noema-agent-abtop--codex-remote-prepare-action (action)
+  "Remember Codex's original state before abtop runs mutating ACTION."
+  (when (memq action '(enable disable retry))
+    (when (eq noema-agent-abtop--codex-remote-baseline 'unknown)
+      (setq noema-agent-abtop--codex-remote-baseline
+            (noema-agent-abtop--codex-remote-enabled-state
+             noema-agent-abtop--codex-remote-state
+             noema-agent-abtop--codex-remote-note)))
+    (when (eq noema-agent-abtop--codex-remote-baseline 'unknown)
+      (user-error "Codex Remote's original state is unknown; refresh before changing it"))))
+
+(defun noema-agent-abtop--codex-remote-run-actual (action)
+  "Run Codex Remote Control ACTION asynchronously."
+  (noema-agent-abtop--codex-remote-prepare-action action)
+  (let* ((command (noema-agent-abtop--codex-remote-command action))
+         (output (generate-new-buffer " *noema-codex-remote*"))
+         (errors (generate-new-buffer " *noema-codex-remote-errors*")))
+    (setq noema-agent-abtop--codex-remote-state 'checking
+          noema-agent-abtop--codex-remote-note nil)
+    (noema-agent-abtop--remote-redraw)
+    (condition-case err
+        (let ((process
+               (make-process
+         :name "noema-codex-remote"
+         :buffer output :stderr errors :noquery t :command command
+         :sentinel
+         (lambda (process _event)
+           (unless (process-live-p process)
+             (when (eq process noema-agent-abtop--codex-remote-process)
+               (setq noema-agent-abtop--codex-remote-process nil))
+             (let ((message (string-trim
+                             (concat (with-current-buffer output (buffer-string))
+                                     "\n" (with-current-buffer errors (buffer-string))))))
+               (kill-buffer output)
+               (kill-buffer errors)
+               (setq noema-agent-abtop--codex-remote-checked-at (float-time))
+               (cond
+                ((process-get process 'noema-agent-abtop--timed-out)
+                 (setq noema-agent-abtop--codex-remote-state 'error
+                       noema-agent-abtop--codex-remote-note
+                       "Codex Remote command timed out; checking current state")
+                 (unless (eq action 'status)
+                   (run-at-time 2 nil #'noema-agent-abtop--codex-remote-run 'status)))
+                ((zerop (process-exit-status process))
+                   (if (eq action 'status)
+                       (setq noema-agent-abtop--codex-remote-state
+                             (noema-agent-abtop--codex-remote-classify message 0)
+                             noema-agent-abtop--codex-remote-note
+                             (unless (eq noema-agent-abtop--codex-remote-state 'on)
+                               (car (last (split-string message "\n" t)))))
+                     ;; An enable/retry can report success before the persistent
+                     ;; daemon loses its connection.  Verify its actual state.
+                     (setq noema-agent-abtop--codex-remote-state 'checking)
+                     (run-at-time 2 nil #'noema-agent-abtop--codex-remote-run 'status)))
+                (t
+                 (setq noema-agent-abtop--codex-remote-state
+                       (noema-agent-abtop--codex-remote-classify
+                        message (process-exit-status process))
+                       noema-agent-abtop--codex-remote-note
+                       (if (string-match-p "enabled.*errored" message)
+                           "enabled, but the connection is errored"
+                         (car (last (split-string message "\n" t)))))))
+               (when (and (eq action 'status)
+                          (not noema-agent-abtop--codex-remote-owned)
+                          (eq noema-agent-abtop--codex-remote-baseline 'unknown))
+                 (setq noema-agent-abtop--codex-remote-baseline
+                       (noema-agent-abtop--codex-remote-enabled-state
+                        noema-agent-abtop--codex-remote-state message)))
+               (noema-agent-abtop--remote-redraw)))))))
+          (setq noema-agent-abtop--codex-remote-process process)
+          (when (memq action '(enable disable retry))
+            (setq noema-agent-abtop--codex-remote-owned t
+                  noema-agent-abtop--codex-remote-last-requested
+                  (if (eq action 'disable) 'disabled 'enabled)))
+          (run-at-time 20 nil
+                       (lambda ()
+                         (when (process-live-p process)
+                           (process-put process 'noema-agent-abtop--timed-out t)
+                           (delete-process process)))))
+      (error (kill-buffer output)
+             (kill-buffer errors)
+             (setq noema-agent-abtop--codex-remote-state 'error
+                   noema-agent-abtop--codex-remote-note (error-message-string err))
+             (noema-agent-abtop--remote-redraw)))))
+
+(defun noema-agent-abtop--codex-remote-run (action)
+  "Run Codex Remote ACTION unless Emacs is shutting down."
+  (unless noema-agent-abtop--shutting-down
+    (noema-agent-abtop--codex-remote-run-actual action)))
+
+(defun noema-agent-abtop--codex-remote-probe ()
+  "Refresh Codex Remote state if its last result is stale."
+  (when (and (not (eq noema-agent-abtop--codex-remote-state 'checking))
+             (> (- (float-time) noema-agent-abtop--codex-remote-checked-at) 30))
+    (noema-agent-abtop--codex-remote-run 'status)))
+
+(defun noema-agent-abtop-codex-remote-toggle ()
+  "Enable, retry, or disable machine-wide Codex Remote Control."
+  (interactive)
+  (when (eq noema-agent-abtop--codex-remote-state 'checking)
+    (user-error "Codex Remote Control is still checking"))
+  (noema-agent-abtop--codex-remote-run
+   (pcase noema-agent-abtop--codex-remote-state
+     ('on 'disable) ('error 'retry) (_ 'enable))))
+
+(defun noema-agent-abtop--project-directory ()
+  "Return the selected session's project or the board's opening project."
+  (let ((buffer (get-text-property (point) 'aaron-ui-board--item-id)))
+    (or (and (buffer-live-p buffer)
+             (buffer-local-value 'noema-agent-acp-session-root buffer))
+        noema-agent-abtop--root noema-agent-abtop--default-root default-directory)))
+
+(defun noema-agent-abtop--claude-remote-scan (tail chunk)
+  "Read Claude connection state and web URL from TAIL followed by CHUNK.
+Return a plist with :tail, :state, and :url.  Claude redraws a terminal
+screen, so the last status word in the newest output is authoritative."
+  (let ((text (concat (or tail "") chunk))
+        (from 0)
+        state url)
+    (while (string-match
+            "\\b\\(Connected\\|Connecting\\|Reconnecting\\|Disconnected\\)\\b"
+            text from)
+      (setq state (pcase (match-string 1 text)
+                    ("Connected" 'connected)
+                    ("Disconnected" 'disconnected)
+                    (_ 'connecting))
+            from (match-end 0)))
+    (when (string-match
+           (concat (regexp-quote "https://claude.ai/code?environment=")
+                   "[[:alnum:]_]+") text)
+      (setq url (substring-no-properties (match-string 0 text))))
+    (list :tail (substring text (max 0 (- (length text) 256)))
+          :state state :url url)))
+
+(defun noema-agent-abtop--claude-remote-filter (process chunk)
+  "Record Claude Remote connection updates in PROCESS from CHUNK."
+  (comint-output-filter process chunk)
+  (let* ((scan (noema-agent-abtop--claude-remote-scan
+                (process-get process 'noema-agent-abtop--tail) chunk))
+         (state (or (plist-get scan :state)
+                    (process-get process 'noema-agent-abtop--state)))
+         (url (or (plist-get scan :url)
+                  (process-get process 'noema-agent-abtop--url)))
+         (changed (or (not (eq state (process-get process 'noema-agent-abtop--state)))
+                      (not (equal url (process-get process 'noema-agent-abtop--url))))))
+    (process-put process 'noema-agent-abtop--tail (plist-get scan :tail))
+    (process-put process 'noema-agent-abtop--state state)
+    (process-put process 'noema-agent-abtop--url url)
+    (when changed (noema-agent-abtop--remote-redraw))))
+
+(defun noema-agent-abtop--claude-remote-failure (buffer exit-code)
+  "Extract the CLI error in BUFFER, or describe EXIT-CODE."
+  (let* ((text (and (buffer-live-p buffer)
+                    (with-current-buffer buffer
+                      (buffer-substring-no-properties
+                       (max (point-min) (- (point-max) 8192)) (point-max)))))
+         (plain (and text (replace-regexp-in-string
+                           "\e\\[[0-9;?]*[[:alpha:]]" "" text)))
+         (from 0)
+         reason)
+    (while (and plain (string-match "Error:[ \t]*\\([^\r\n]+\\)" plain from))
+      (setq reason (string-trim (match-string 1 plain))
+            from (match-end 0)))
+    (or reason (format "exit %s" exit-code))))
+
+(defun noema-agent-abtop-claude-remote-start (directory)
+  "Start Claude Remote Control for DIRECTORY and show it in the board."
+  (interactive (list (read-directory-name "Claude Remote project: "
+                                           (noema-agent-abtop--project-directory))))
+  (unless (executable-find "claude") (user-error "claude executable not found"))
+  (let* ((directory (file-name-as-directory (file-truename directory)))
+         (existing (gethash directory noema-agent-abtop--claude-remotes)))
+    (when (process-live-p existing)
+      (user-error "Claude Remote Control is already running for %s" directory))
+    (when-let* ((previous (gethash directory noema-agent-abtop--claude-remote-errors))
+                (buffer (plist-get previous :buffer)))
+      (when (buffer-live-p buffer) (kill-buffer buffer)))
+    (remhash directory noema-agent-abtop--claude-remote-errors)
+    (let ((default-directory directory)
+          (output (generate-new-buffer
+                   (format "*Claude Remote: %s*"
+                           (file-name-nondirectory (directory-file-name directory))))))
+      (with-current-buffer output (comint-mode))
+      (let ((process
+             (make-process
+              :name "noema-claude-remote" :buffer output :noquery t
+              :connection-type 'pty :filter #'noema-agent-abtop--claude-remote-filter
+              :command (list (executable-find "claude") "remote-control" "--name"
+                             (file-name-nondirectory (directory-file-name directory))
+                             "--spawn" "same-dir")
+              :sentinel (lambda (process _event)
+                          (unless (process-live-p process)
+                            (remhash directory noema-agent-abtop--claude-remotes)
+                            (if (process-get process 'noema-agent-abtop--stopping)
+                                (progn
+                                  (remhash directory noema-agent-abtop--claude-remote-errors)
+                                  (when (buffer-live-p output) (kill-buffer output)))
+                              (puthash directory
+                                       (list :reason
+                                             (noema-agent-abtop--claude-remote-failure
+                                              output (process-exit-status process))
+                                             :buffer output)
+                                       noema-agent-abtop--claude-remote-errors))
+                            (noema-agent-abtop--remote-redraw))))))
+        (process-put process 'noema-agent-abtop--state 'connecting)
+        (puthash directory process noema-agent-abtop--claude-remotes))
+      (noema-agent-abtop--remote-redraw))))
+
+(defun noema-agent-abtop-claude-remote-stop (&optional directory)
+  "Stop Claude Remote Control for DIRECTORY, or dismiss a closed project."
+  (interactive)
+  (let* ((paths (delete-dups
+                 (append (hash-table-keys noema-agent-abtop--claude-remotes)
+                         (hash-table-keys noema-agent-abtop--claude-remote-errors))))
+         (directory (or directory
+                        (get-text-property (point) 'noema-agent-abtop--remote-root)
+                        (and (= (length paths) 1) (car paths))
+                        (and paths (completing-read "Stop Claude Remote project: " paths nil t)))))
+    (unless directory (user-error "No Claude Remote Control projects are listed"))
+    (let ((process (gethash directory noema-agent-abtop--claude-remotes)))
+      (cond ((process-live-p process)
+             (process-put process 'noema-agent-abtop--stopping t)
+             (process-put process 'noema-agent-abtop--state 'stopping)
+             (interrupt-process process)
+             (run-at-time 3 nil (lambda ()
+                                  (when (process-live-p process)
+                                    (delete-process process))))
+             (noema-agent-abtop--remote-redraw))
+            ((gethash directory noema-agent-abtop--claude-remote-errors)
+             (when-let* ((result (gethash directory noema-agent-abtop--claude-remote-errors))
+                         (buffer (and (listp result) (plist-get result :buffer))))
+               (when (buffer-live-p buffer) (kill-buffer buffer)))
+             (remhash directory noema-agent-abtop--claude-remote-errors)
+             (noema-agent-abtop--remote-redraw))
+            (t (user-error "Claude Remote Control is not listed for %s" directory))))))
+
+(defun noema-agent-abtop-claude-remote-console (directory)
+  "Show the interactive Claude Remote Control console for DIRECTORY."
+  (interactive (list (or (get-text-property (point) 'noema-agent-abtop--remote-root)
+                         (user-error "Move to an open Claude Remote project"))))
+  (let* ((process (gethash directory noema-agent-abtop--claude-remotes))
+         (buffer (and (process-live-p process) (process-buffer process))))
+    (unless (buffer-live-p buffer) (user-error "Claude Remote Control is not running"))
+    (pop-to-buffer buffer)))
+
+(defun noema-agent-abtop--button (label action)
+  "Make LABEL an actionable board button calling ACTION."
+  (let ((map (make-sparse-keymap)))
+    (define-key map [mouse-1] (lambda () (interactive) (funcall action)))
+    (define-key map (kbd "RET") (lambda () (interactive) (funcall action)))
+    (propertize label 'face 'noema-agent-abtop-key 'mouse-face 'highlight
+                'help-echo "RET or click" 'follow-link t 'keymap map)))
+
+(defun noema-agent-abtop--insert-remote ()
+  "Insert global Codex and per-project Claude Remote Control switches."
+  (when (noema-agent-abtop--panel-open 'remote "remote control")
+    (noema-agent-abtop--panel-line
+     (noema-agent-abtop--field
+      "codex" (pcase noema-agent-abtop--codex-remote-state
+                ('on "connected") ('error "enabled · connection error")
+                ('off "disabled") ('connecting "connecting")
+                ('checking "checking") (_ "unknown")))
+     "   "
+     (noema-agent-abtop--button
+      (pcase noema-agent-abtop--codex-remote-state
+        ('on "[E disable]") ('error "[E retry]")
+        ('checking "[checking]") (_ "[E enable]"))
+      #'noema-agent-abtop-codex-remote-toggle)
+     (when (eq noema-agent-abtop--codex-remote-state 'error)
+       (concat "  " (noema-agent-abtop--button
+                      "[disable]"
+                      (lambda () (noema-agent-abtop--codex-remote-run 'disable))))))
+    (when noema-agent-abtop--codex-remote-note
+      (noema-agent-abtop--panel-line
+       (noema-agent-abtop--field
+        "" (truncate-string-to-width
+             noema-agent-abtop--codex-remote-note
+             (max 20 (- (noema-agent-abtop--width) 14)) nil nil "…")
+        'noema-agent-abtop-faint)))
+    (noema-agent-abtop--panel-line
+     (noema-agent-abtop--field "claude" "one server per project")
+     "   " (noema-agent-abtop--button "[P open project]"
+                                       (lambda () (call-interactively
+                                                   #'noema-agent-abtop-claude-remote-start))))
+    (if (= (hash-table-count noema-agent-abtop--claude-remotes) 0)
+        (noema-agent-abtop--panel-line
+         (propertize "  No active Claude Remote projects"
+                     'face 'noema-agent-abtop-faint))
+      (maphash
+       (lambda (directory process)
+         (let ((start (point)))
+           (noema-agent-abtop--panel-line
+            (noema-agent-abtop--field
+             "  path"
+             (truncate-string-to-width
+              (abbreviate-file-name directory)
+              (max 20 (- (noema-agent-abtop--width) 15)) nil nil "…")
+             'noema-agent-abtop-faint))
+           (noema-agent-abtop--panel-line
+            (noema-agent-abtop--field
+             "  state" (if (process-live-p process)
+                             (or (process-get process 'noema-agent-abtop--state)
+                                 'connecting)
+                           'stopped))
+            "   "
+            (noema-agent-abtop--button
+             "[console]" (lambda () (noema-agent-abtop-claude-remote-console directory)))
+            (when-let* ((url (process-get process 'noema-agent-abtop--url)))
+              (concat " " (noema-agent-abtop--button
+                            "[open Claude]" (lambda () (browse-url url)))))
+            " "
+            (noema-agent-abtop--button
+             "[D stop]" (lambda () (noema-agent-abtop-claude-remote-stop directory))))
+           (add-text-properties start (point)
+                                `(noema-agent-abtop--remote-root ,directory))))
+       noema-agent-abtop--claude-remotes))
+    (maphash (lambda (directory result)
+               (let ((start (point)))
+                 (noema-agent-abtop--panel-line
+                  (noema-agent-abtop--field
+                   "  closed"
+                   (truncate-string-to-width
+                    (abbreviate-file-name directory)
+                    (max 20 (- (noema-agent-abtop--width) 31)) nil nil "…")
+                   'noema-agent-abtop-faint)
+                  "   "
+                  (when-let* ((buffer (and (listp result) (plist-get result :buffer)))
+                              (_ (buffer-live-p buffer)))
+                    (noema-agent-abtop--button
+                     "[log]" (lambda () (pop-to-buffer buffer))))
+                  " " (noema-agent-abtop--button
+                       "[D clear]" (lambda () (noema-agent-abtop-claude-remote-stop directory))))
+                 (noema-agent-abtop--panel-line
+                  (noema-agent-abtop--field
+                   "  reason"
+                   (truncate-string-to-width
+                    (if (stringp result) result (or (plist-get result :reason) "unknown"))
+                    (max 20 (- (noema-agent-abtop--width) 15)) nil nil "…")
+                   'noema-agent-abtop-dim))
+                 (add-text-properties start (point)
+                                      `(noema-agent-abtop--remote-root ,directory))))
+             noema-agent-abtop--claude-remote-errors)
+    (noema-agent-abtop--panel-close)))
+
 (defun noema-agent-abtop--sessions ()
   "Return (SESSION . USAGE) for every live session in the board's scope."
   (delq nil
@@ -738,6 +1212,11 @@ width then widens Session and Model."
                 (noema-agent-abtop--tokens (plist-get usage :cached-write))
                 (noema-agent-abtop--tokens (plist-get usage :total)))))
       (noema-agent-abtop--panel-line
+       (noema-agent-abtop--field
+        "cache"
+        (noema-agent-abtop--cache-description
+         (noema-agent-abtop--cache-metrics usage))))
+      (noema-agent-abtop--panel-line
        (noema-agent-abtop--field "cost" (noema-agent-abtop--cost (plist-get usage :cost)
                                                                  (plist-get usage :currency)))
        "   "
@@ -749,6 +1228,7 @@ width then widens Session and Model."
 (defconst noema-agent-abtop--key-hints
   '(("RET" . "open") ("s" . "stop") ("K" . "kill") ("x" . "close")
     ("R" . "restart") ("r" . "rename") ("C" . "compact") ("l" . "sessions")
+    ("E" . "codex remote") ("P" . "claude remote") ("D" . "stop remote")
     ("TAB" . "fold") ("t" . "scope") ("g" . "refresh"))
   "Keys shown under the board.")
 
@@ -764,7 +1244,15 @@ width then widens Session and Model."
 (defun noema-agent-abtop--render ()
   "Render the whole board into the current buffer."
   (noema-agent-abtop--apply-faces)
-  (let* ((rows (noema-agent-abtop--sessions))
+  (let* ((remote-root (get-text-property (point) 'noema-agent-abtop--remote-root))
+         (remote-start (and remote-root
+                            (text-property-any (point-min) (point-max)
+                                               'noema-agent-abtop--remote-root remote-root)))
+         (remote-line (and remote-start
+                           (- (line-number-at-pos (point))
+                              (line-number-at-pos remote-start))))
+         (remote-column (current-column))
+         (rows (noema-agent-abtop--sessions))
          (id (get-text-property (point) 'aaron-ui-board--item-id))
          (current (or (assq id (mapcar (lambda (row) (cons (plist-get (car row) :buffer) row))
                                        rows))
@@ -779,10 +1267,21 @@ width then widens Session and Model."
     (aaron-ui-board-render
      (lambda ()
        (noema-agent-abtop--insert-quota)
+       (noema-agent-abtop--insert-remote)
+       (noema-agent-abtop--insert-cache rows)
        (noema-agent-abtop--insert-sessions rows)
        (noema-agent-abtop--insert-detail (cdr current))
        (noema-agent-abtop--insert-key-hints)))
-    (unless (get-text-property (point) 'aaron-ui-board--item-id)
+    (when remote-root
+      (when-let* ((start (text-property-any
+                          (point-min) (point-max)
+                          'noema-agent-abtop--remote-root remote-root)))
+        (goto-char start)
+        (forward-line (or remote-line 0))
+        (move-to-column remote-column)))
+    (unless (or (get-text-property (point) 'aaron-ui-board--item-id)
+                (get-text-property (point) 'noema-agent-abtop--remote-root)
+                (get-text-property (point) 'keymap))
       (aaron-ui-board--goto-item-id noema-agent-abtop--shown-id))))
 
 (defun noema-agent-abtop-refresh ()
@@ -795,6 +1294,7 @@ width then widens Session and Model."
   "Re-render the board, first asking for the Claude quota if it is stale."
   (interactive)
   (noema-agent-abtop--claude-fetch)
+  (noema-agent-abtop--codex-remote-probe)
   (noema-agent-abtop-refresh))
 
 (defun noema-agent-abtop--follow-point ()
@@ -849,6 +1349,8 @@ A board nobody can see stops listening until it is shown again (see
 
 (defun noema-agent-abtop--session-at-point ()
   "Return the session on this line, else the one in the detail panel."
+  (when (get-text-property (point) 'noema-agent-abtop--remote-root)
+    (user-error "This is a Claude Remote project; use RET to open or D to stop it"))
   (let ((buffer (or (get-text-property (point) 'aaron-ui-board--item-id)
                     noema-agent-abtop--shown-id)))
     (unless (buffer-live-p buffer)
@@ -872,9 +1374,21 @@ A board nobody can see stops listening until it is shown again (see
   (noema-agent-acp-show-buffer buffer))
 
 (defun noema-agent-abtop-visit ()
-  "Show the session on this line."
+  "Show the Claude Remote console or agent session on this line."
   (interactive)
-  (noema-agent-abtop--visit (noema-agent-abtop--session-at-point)))
+  (if-let* ((directory (get-text-property (point) 'noema-agent-abtop--remote-root)))
+      (let ((result (gethash directory noema-agent-abtop--claude-remote-errors)))
+        (if (and (listp result) (buffer-live-p (plist-get result :buffer)))
+            (pop-to-buffer (plist-get result :buffer))
+          (noema-agent-abtop-claude-remote-console directory)))
+    (noema-agent-abtop--visit (noema-agent-abtop--session-at-point))))
+
+(defun noema-agent-abtop-mouse-visit (event)
+  "Open a Claude Remote row clicked with EVENT."
+  (interactive "e")
+  (mouse-set-point event)
+  (when (get-text-property (point) 'noema-agent-abtop--remote-root)
+    (noema-agent-abtop-visit)))
 
 (noema-agent-abtop--define-action noema-agent-abtop-stop
     "Stop the session's current work: cancel its Run, else interrupt its turn."
@@ -961,12 +1475,18 @@ Elsewhere, move to the next session row."
   "r" #'noema-agent-abtop-rename
   "C" #'noema-agent-abtop-compact
   "l" #'noema-agent-abtop-sessions
+  "E" #'noema-agent-abtop-codex-remote-toggle
+  "P" #'noema-agent-abtop-claude-remote-start
+  "D" #'noema-agent-abtop-claude-remote-stop
+  "<mouse-1>" #'noema-agent-abtop-mouse-visit
   "t" #'noema-agent-abtop-toggle-scope
   "TAB" #'noema-agent-abtop-toggle-panel
   "<tab>" #'noema-agent-abtop-toggle-panel
   "1" (lambda () (interactive) (noema-agent-abtop-toggle-panel 'quota))
   "2" (lambda () (interactive) (noema-agent-abtop-toggle-panel 'sessions))
-  "3" (lambda () (interactive) (noema-agent-abtop-toggle-panel 'session)))
+  "3" (lambda () (interactive) (noema-agent-abtop-toggle-panel 'session))
+  "4" (lambda () (interactive) (noema-agent-abtop-toggle-panel 'remote))
+  "5" (lambda () (interactive) (noema-agent-abtop-toggle-panel 'cache)))
 
 (define-derived-mode noema-agent-abtop-mode aaron-ui-board-mode "Agent-Top"
   "Live agent sessions: quota, model, state, context, tokens, cost.
@@ -983,16 +1503,84 @@ Elsewhere, move to the next session row."
   "Show every live agent session: quota, model, context, tokens and cost.
 With prefix argument PROJECT, show only the current project's sessions."
   (interactive "P")
-  (let ((root (and project (noema-agent-acp-project-root default-directory)))
+  (let ((opening-root (noema-agent-acp-project-root default-directory))
+        (root (and project (noema-agent-acp-project-root default-directory)))
         (buffer (get-buffer-create noema-agent-abtop--buffer-name)))
     (pop-to-buffer buffer)
     (with-current-buffer buffer
       (unless (derived-mode-p 'noema-agent-abtop-mode)
         (noema-agent-abtop-mode))
-      (setq noema-agent-abtop--root root)
+      (setq noema-agent-abtop--root root
+            noema-agent-abtop--default-root opening-root)
       (noema-agent-abtop--claude-fetch)
+      (noema-agent-abtop--codex-remote-probe)
       (noema-agent-abtop--render)
       (aaron-ui-board--goto-item-id noema-agent-abtop--shown-id))))
+
+(defun noema-agent-abtop--stop-claude-on-exit ()
+  "Stop Claude Remote processes started by abtop before Emacs exits."
+  (let (processes)
+    (maphash (lambda (_directory process)
+               (when (process-live-p process)
+                 (push process processes)))
+             noema-agent-abtop--claude-remotes)
+    (dolist (process processes)
+      (process-put process 'noema-agent-abtop--stopping t)
+      (condition-case nil
+          (interrupt-process process)
+        (error (delete-process process))))
+    (let ((deadline (+ (float-time) 3)))
+      (while (and (cl-some #'process-live-p processes)
+                  (< (float-time) deadline))
+        (accept-process-output nil 0.05)))
+    (dolist (process processes)
+      (when (process-live-p process)
+        (delete-process process)))
+    (clrhash noema-agent-abtop--claude-remotes)))
+
+(defun noema-agent-abtop--run-before-exit (command)
+  "Run COMMAND before Emacs exits, waiting at most five seconds."
+  (let ((process (make-process :name "noema-remote-restore"
+                               :command command :noquery t))
+        (deadline (+ (float-time) 5)))
+    (while (and (process-live-p process) (< (float-time) deadline))
+      (accept-process-output process 0.05))
+    (if (process-live-p process)
+        (progn (delete-process process) nil)
+      (and (eq (process-status process) 'exit)
+           (zerop (process-exit-status process))))))
+
+(defun noema-agent-abtop--restore-codex-on-exit ()
+  "Restore Codex Remote's original enabled state if abtop changed it."
+  (when-let* ((process noema-agent-abtop--codex-remote-process))
+    (when (process-live-p process)
+      (set-process-sentinel process #'ignore)
+      (delete-process process))
+    (setq noema-agent-abtop--codex-remote-process nil))
+  (when (and noema-agent-abtop--codex-remote-owned
+             (memq noema-agent-abtop--codex-remote-baseline '(enabled disabled))
+             (not (eq noema-agent-abtop--codex-remote-baseline
+                      noema-agent-abtop--codex-remote-last-requested)))
+    (unless (noema-agent-abtop--run-before-exit
+             (noema-agent-abtop--codex-remote-command
+              (if (eq noema-agent-abtop--codex-remote-baseline 'enabled)
+                  'enable 'disable)))
+      (message "abtop: Codex Remote could not be restored before Emacs exit"))))
+
+(defun noema-agent-abtop--shutdown ()
+  "Release abtop's Remote Control changes before Emacs exits."
+  (unless noema-agent-abtop--shutting-down
+    (setq noema-agent-abtop--shutting-down t)
+    (condition-case err
+        (noema-agent-abtop--stop-claude-on-exit)
+      (error (message "abtop: Claude Remote shutdown failed: %s"
+                      (error-message-string err))))
+    (condition-case err
+        (noema-agent-abtop--restore-codex-on-exit)
+      (error (message "abtop: Codex Remote restore failed: %s"
+                      (error-message-string err))))))
+
+(add-hook 'kill-emacs-hook #'noema-agent-abtop--shutdown)
 
 (provide 'noema-agent-abtop)
 ;;; noema-agent-abtop.el ends here
