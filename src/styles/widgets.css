@@ -2178,6 +2178,21 @@ noema-tikz {
 .cm-editor .cm-tikz-env-widget {
   cursor: pointer;
 }
+/* A floated SVG cannot size its fit-content parent through a percentage
+ * max-width: WebKit collapses that cycle to roughly one em. Give the float a
+ * definite measure, and size the SVG inside that measure only once. */
+.cm-editor .cm-image-widget.cm-tikz-env-widget.aaronnote-image-wrap {
+  width: var(--aaronnote-image-width, var(--note-float-width, 45%));
+  max-width: var(--aaronnote-image-max-width, min(100%, var(--note-float-width, 45%)));
+}
+.cm-editor .cm-tikz-env-widget.aaronnote-image-wrap .cm-tikz-env-image {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+}
+.cm-editor .cm-line:has(.cm-tikz-env-widget.aaronnote-image-wrap) {
+  min-height: 1.65em;
+}
 /* A rendered TikZ picture carries its own dimensions, handed over as
  * `--aaronnote-tikz-natural-width` in `em` of body text. Honouring them is what
  * keeps a diagram the same size relative to the prose that it is in the PDF,
