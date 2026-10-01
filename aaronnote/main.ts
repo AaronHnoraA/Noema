@@ -76,6 +76,7 @@ import { matchHotKey } from "../src/hotkey.ts";
 import { noemaPlatformLabels, primaryModifierDown } from "../src/platform-compat.ts";
 import type { HeadingNumberFormat } from "../src/heading-number.ts";
 import { createMenuController, type NoemaMenuItem } from "../src/menu-system.ts";
+import { figureLayoutMenuItems, figureLayoutTarget } from "../src/cm6/figure-layout-menu.ts";
 import { createTransientSurfaceRegistry } from "../src/transient-surfaces.ts";
 import { blobToBase64 } from "../src/paste.ts";
 import { collectFindMatches, createFindPattern, type FindMatch } from "./find.ts";
@@ -4977,6 +4978,7 @@ function showContextMenu(event: MouseEvent, target: Partial<AaronContextMenuTarg
   const revisionTarget = revisionEditTargetFromPointer(event);
   const cell = target.cell !== undefined ? target.cell : jupyterCellFromPointer(event, false);
   const mathTarget = mathTargetFromPointer(event);
+  const layoutTarget = figureLayoutTarget(editor.view, event.target);
   const contextVimMode = vim.mode();
   contextMenu.classList.toggle("is-math", Boolean(mathTarget));
   const href = cleanHref(target.href || markdownHrefFromPointer(event));
@@ -4984,6 +4986,13 @@ function showContextMenu(event: MouseEvent, target: Partial<AaronContextMenuTarg
     ? isLeanJupyterCell(cell) ? `${cell.language} / ${cell.session}` : `${cell.language} / ${cell.kernel} / ${cell.session}`
     : "";
   const items: AaronContextMenuItem[] = [];
+  if (layoutTarget && !serverReaderMode) {
+    items.push({
+      label: "Layout",
+      detail: layoutTarget.kind,
+      submenu: figureLayoutMenuItems(editor.view, layoutTarget, currentReadOnly),
+    }, { separator: true, label: "" });
+  }
 
   if (serverReaderMode) {
     if (href) {

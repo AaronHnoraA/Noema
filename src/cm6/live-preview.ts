@@ -1226,6 +1226,7 @@ class TableWidget extends MeasuredWidget {
     wrap.className = "cm-table-block cm-table-editable-block";
     wrap.dataset.cmSourceFrom = String(this.from);
     wrap.dataset.cmSourceTo = String(this.to);
+    wrap.dataset.cmSourceBaseTo = String(this.sourceTo);
     wrap.dataset.cmOpenSource = "false";
     applyLayoutAttrs(wrap, "table", this.layout);
     const stopWidgetMouseEvent = (event: Event): void => {

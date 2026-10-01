@@ -29,11 +29,11 @@ import { scanInlineMathRanges } from "../../../../inline-math.ts";
 import {
   applyImageLayout,
   imageLayoutFromAttrs,
-  imageLayoutToTrailingAttrs,
   readImageTrailingAttrs,
   type ImageAlign,
   type ImageLayoutAttrs,
 } from "../../../../image-attrs.ts";
+import { applyFigureLayout } from "../../../figure-layout-menu.ts";
 import { markdownLinkDestination } from "../../../../markdown-link.ts";
 import {
   VISUAL_ATTACHMENT_IFRAME_ALLOW,
@@ -97,14 +97,16 @@ class ImageWidget extends MeasuredWidget {
   src: string;
   alt: string;
   from: number;
+  baseTo: number;
   to: number;
   layout: ImageLayoutAttrs;
 
-  constructor(src: string, alt: string, from: number, to: number, layout: ImageLayoutAttrs) {
+  constructor(src: string, alt: string, from: number, baseTo: number, to: number, layout: ImageLayoutAttrs) {
     super();
     this.src = src;
     this.alt = alt;
     this.from = from;
+    this.baseTo = baseTo;
     this.to = to;
     this.layout = layout;
   }
@@ -132,6 +134,7 @@ class ImageWidget extends MeasuredWidget {
     return this.src === other.src &&
       this.alt === other.alt &&
       this.from === other.from &&
+      this.baseTo === other.baseTo &&
       this.to === other.to &&
       this.layout.align === other.layout.align &&
       this.layout.wrap === other.layout.wrap &&
@@ -144,6 +147,7 @@ class ImageWidget extends MeasuredWidget {
     let resizableImage: HTMLImageElement | null = null;
     wrap.className = "cm-image-widget";
     setSourceRange(wrap, this.from, this.to);
+    wrap.dataset.cmSourceBaseTo = String(this.baseTo);
     applyImageLayout(wrap, this.layout);
 
     if (this.src) {
@@ -201,16 +205,7 @@ class ImageWidget extends MeasuredWidget {
     // `{...}` layout attrs on the image source, preserving the base markdown
     // (including any title) so the change round-trips byte-for-byte.
     const applyLayout = (next: ImageLayoutAttrs): void => {
-      const full = view.state.doc.sliceString(this.from, this.to);
-      const base = full.match(IMAGE_RE)?.[0] ?? full;
-      const trailing = imageLayoutToTrailingAttrs(next);
-      // Keep the attribute list adjacent to the image: this is the portable
-      // GitLab/Pandoc form for width and height, while Noema also reads its
-      // align/wrap additions.
-      const insert = trailing ? `${base}${trailing}` : base;
-      if (insert === full) return;
-      view.dispatch({ changes: { from: this.from, to: this.to, insert } });
-      view.requestMeasure();
+      applyFigureLayout(view, { kind: "image", from: this.from, baseTo: this.baseTo, to: this.to, layout: this.layout, document: view.state.doc }, next);
     };
     wrap.append(buildImageToolbar(this.layout, applyLayout));
     if (resizableImage) {
@@ -422,7 +417,7 @@ function buildImageDecorations(view: EditorView): DecorationSet {
 
         decos.push(
           Decoration.replace({
-            widget: new ImageWidget(src, alt, node.from, fullTo, layout),
+            widget: new ImageWidget(src, alt, node.from, node.to, fullTo, layout),
             vimAtomic: true,
           }).range(node.from, fullTo),
         );
@@ -455,7 +450,7 @@ function buildImageDecorations(view: EditorView): DecorationSet {
           const layout = imageLayoutFromAttrs(trailing?.attrs ?? {});
           decos.push(
             Decoration.replace({
-              widget: new ImageWidget(src, alt, from, fullTo, layout),
+              widget: new ImageWidget(src, alt, from, to, fullTo, layout),
               vimAtomic: true,
             }).range(from, fullTo),
           );

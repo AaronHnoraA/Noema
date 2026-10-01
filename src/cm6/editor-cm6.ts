@@ -457,6 +457,7 @@ function openAttachmentSmartFromEvent(view: EditorView, event: MouseEvent): bool
 }
 
 function openAttachmentContextMenuFromEvent(view: EditorView, event: MouseEvent): boolean {
+  if (event.defaultPrevented) return false;
   if (markdownLinkPrimaryModifier(event)) return previewMarkdownLinkFromEvent(view, event);
   const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
   if (pos == null) return false;

@@ -2188,12 +2188,22 @@ noema-tikz {
   display: block;
   box-sizing: content-box;
   width: var(--aaronnote-image-width, var(--aaronnote-tikz-natural-width, auto));
-  max-width: min(100%, var(--note-image-max, 100%));
+  max-width: var(--aaronnote-image-max-width, min(100%, var(--note-image-max, 100%)));
   max-height: var(--aaronnote-image-max-height, var(--note-image-max-height, none));
   margin: 0 auto;
   padding: var(--note-figure-paper-pad, 0.55em);
   border-radius: 4px;
   background: transparent;
+}
+.cm-editor .cm-tikz-env-widget.aaronnote-image-align-left .cm-tikz-env-image,
+.aaronnote-tikz.aaronnote-image-align-left .aaronnote-tikz-image {
+  margin-left: 0;
+  margin-right: auto;
+}
+.cm-editor .cm-tikz-env-widget.aaronnote-image-align-right .cm-tikz-env-image,
+.aaronnote-tikz.aaronnote-image-align-right .aaronnote-tikz-image {
+  margin-left: auto;
+  margin-right: 0;
 }
 /* TikZ Editor emits black as an SVG presentation attribute for the default
  * pen. Follow the note theme for that pen, while preserving authored colors. */
