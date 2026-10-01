@@ -149,6 +149,7 @@ import {
   mathLiveSnippetTemplate,
   matchingSnippetsAtTokenBoundary,
   matchingSnippetsForPrefix,
+  inputSnippetEditor,
   SnippetSession,
   SnippetUsageStore,
   snippetDetail,
@@ -157,6 +158,7 @@ import {
   snippetScore,
 } from "./snippets.ts";
 import { MathSnippetIndex } from "./math-snippet-index.ts";
+import { tableCellSnippetContext, type TableCellCompletionDetail } from "../src/cm6/table-cell-assist.ts";
 import { collectTagSuggestions, createTagPicker } from "./tag-picker.ts";
 import {
   metadataTagsFromMarkdown,
@@ -2862,6 +2864,92 @@ document.addEventListener("keydown", (event) => {
 }, { capture: true });
 const snippetSession = new SnippetSession(editor);
 const mathSnippetIndex = new MathSnippetIndex(editor);
+let tableSnippetInput: HTMLInputElement | null = null;
+let tableSnippetSession: SnippetSession | null = null;
+let tableSnippetApplying = false;
+let tableSnippetSuppressedPrefix = "";
+function tableSnippetSessionFor(input: HTMLInputElement): SnippetSession {
+  if (tableSnippetInput !== input || !tableSnippetSession) {
+    tableSnippetInput = input;
+    tableSnippetSession = new SnippetSession(inputSnippetEditor(input));
+    tableSnippetSuppressedPrefix = "";
+  }
+  return tableSnippetSession;
+}
+document.addEventListener("aaronnote:table-cell-completion-request", (event) => {
+  const input = (event as CustomEvent<TableCellCompletionDetail>).detail?.input;
+  if (!input || !host.contains(input) || document.activeElement !== input || tableSnippetApplying || currentReadOnly) return;
+  tableSnippetSessionFor(input);
+  const { prefix, mode } = tableCellSnippetContext(input.value, input.selectionStart ?? input.value.length);
+  if (!prefix || prefix === tableSnippetSuppressedPrefix || input.selectionStart !== input.selectionEnd) {
+    if (snippetPopupChooseHandler) hideSnippetPopup();
+    return;
+  }
+  const math = mode === "tex-mode";
+  const candidates = math ? mathSnippetCandidates() : snippets;
+  const options = {
+    kind: currentSnippetKind(), mode, limit: 10,
+    allowFuzzy: math && (prefix.startsWith("\\") || prefix.startsWith("@")),
+    context: math ? "math" as const : undefined,
+    usage: snippetUsage,
+    documentFrequency: mathSnippetIndex.frequencies(),
+  };
+  const match = math
+    ? matchingSnippetsAtTokenBoundary(candidates, prefix, options)
+    : { prefix, deleteBefore: prefix.length, matches: matchingSnippetsForPrefix(candidates, prefix, options) };
+  const visible = match.matches.filter((snippet) => {
+    if (snippet.context === "org-meta") return false;
+    if (snippet.context?.startsWith("math")) return math;
+    return true;
+  });
+  if (visible.length === 0) {
+    if (snippetPopupChooseHandler) hideSnippetPopup();
+    return;
+  }
+  const rect = input.getBoundingClientRect();
+  showSnippetPopup(match.prefix, visible, match.deleteBefore, { left: rect.left, top: rect.top, bottom: rect.bottom }, (snippet) => {
+    if (!input.isConnected || document.activeElement !== input) return false;
+    const caret = input.selectionStart ?? input.value.length;
+    const live = tableCellSnippetContext(input.value, caret);
+    if (input.selectionStart !== input.selectionEnd || live.mode !== mode
+      || !input.value.slice(0, caret).endsWith(match.prefix)) return false;
+    tableSnippetApplying = true;
+    try {
+      const inserted = tableSnippetSessionFor(input).insert(snippet, match.deleteBefore);
+      if (inserted) input.focus();
+      return inserted;
+    } finally { tableSnippetApplying = false; }
+  });
+});
+document.addEventListener("aaronnote:table-cell-completion-key", (event) => {
+  const detail = (event as CustomEvent<TableCellCompletionDetail & {
+    key?: string; shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean; isComposing?: boolean;
+  }>).detail;
+  const input = detail?.input;
+  if (!input || input !== tableSnippetInput || document.activeElement !== input) return;
+  if (!snippetPopup.hidden && snippetPopupChooseHandler) {
+    const action = snippetPopupKeyAction({
+      key: detail.key || "", shiftKey: detail.shiftKey, ctrlKey: detail.ctrlKey,
+      commandKey: detail.metaKey && !detail.ctrlKey, altKey: detail.altKey,
+      isComposing: detail.isComposing, acceptEnter: true,
+    });
+    if (action.type === "dismiss") tableSnippetSuppressedPrefix = snippetPopup.dataset.prefix ?? "";
+    const handled = applySnippetPopupKeyAction(action);
+    if (handled) { event.preventDefault(); event.stopPropagation(); return; }
+  }
+  if (detail.key !== "Tab" || detail.isComposing || detail.ctrlKey || detail.metaKey || detail.altKey) return;
+  const moved = detail.shiftKey ? tableSnippetSession?.previous() : tableSnippetSession?.next();
+  if (moved) { event.preventDefault(); event.stopPropagation(); }
+});
+document.addEventListener("aaronnote:table-cell-completion-close", (event) => {
+  const input = (event as CustomEvent<TableCellCompletionDetail>).detail?.input;
+  if (input !== tableSnippetInput) return;
+  tableSnippetSession?.clear();
+  tableSnippetSession = null;
+  tableSnippetInput = null;
+  tableSnippetSuppressedPrefix = "";
+  if (snippetPopupChooseHandler) hideSnippetPopup();
+});
 const MATH_EDITOR_LAYOUT_ALIASES: Record<string, string> = {
   alig: "ali",
   align: "ali",
@@ -11314,8 +11402,10 @@ function runSelectionCommand(command: string): void {
 
 function runAssistUpdate(flags: AssistUpdateFlags): void {
   const insertMode = vim.mode() === "insert";
-  const wantsSnippets = !visualMathEditorActive && insertMode && (flags.snippets || !snippetPopup.hidden);
+  const tableInputActive = tableSnippetInput != null && document.activeElement === tableSnippetInput;
+  const wantsSnippets = !tableInputActive && !visualMathEditorActive && insertMode && (flags.snippets || !snippetPopup.hidden);
   const wantsMathPreview = !passiveServerReader
+    && !tableInputActive
     && !visualMathEditorActive
     && (flags.mathPreview || !mathPreview.hidden);
   if (passiveServerReader || visualMathEditorActive) hideMathPreview();
@@ -11338,7 +11428,7 @@ function runAssistUpdate(flags: AssistUpdateFlags): void {
   // MathLive drives the shared snippet popup with its own cursor and prefix.
   // A scheduled CM6 assist pass must not replace or hide that popup using the
   // source cursor sitting behind the visual formula widget.
-  if (visualMathEditorActive) return;
+  if (visualMathEditorActive || tableInputActive) return;
   if (!insertMode) {
     hideSnippetPopup();
     if (ctx && wantsMathPreview) updateMathPreview(ctx, flags.mathPreview, activeMath);

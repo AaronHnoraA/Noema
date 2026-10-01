@@ -54,6 +54,9 @@ import { getBlockMathRanges, mergeOverlappingRanges, rangeInsideAny, rangeOverla
 import { scanInlineMathRanges } from "../inline-math.ts";
 import { sanitizeEmbeddedHtml } from "../sanitize-html.ts";
 import { renderMarkdownHTML } from "../render-html.ts";
+import { getKatexMacros } from "../katex-macros.ts";
+import { tableCellMathRanges, type TableCellCompletionDetail } from "./table-cell-assist.ts";
+import { mountVisualTexInlineEditor, normalizeVisualTexLatex, type VisualTexInlineEditor } from "./extensions/visual/widgets/visualtex-inline.ts";
 import {
   applyLayoutAttrs,
   layoutFromAttrs,
@@ -1187,6 +1190,7 @@ class TableWidget extends MeasuredWidget {
   sourceTo: number;
   to: number;
   layout: LayoutAttrs;
+  private disposeCellEditor: () => void = () => {};
 
   constructor(source: string, from: number, sourceTo: number, to: number, layout: LayoutAttrs) {
     super();
@@ -1222,6 +1226,7 @@ class TableWidget extends MeasuredWidget {
 
   toDOM(view: EditorView): HTMLElement {
     const data = parseMarkdownTable(this.source);
+    const editable = !view.state.readOnly;
     const wrap = document.createElement("div");
     wrap.className = "cm-table-block cm-table-editable-block";
     wrap.dataset.cmSourceFrom = String(this.from);
@@ -1330,11 +1335,13 @@ class TableWidget extends MeasuredWidget {
       }, { row: 1, col: 0, edit: true, select: true })),
     );
 
-    const table = renderEditableTable(data, (row, col) => {
+    const rendered = renderEditableTable(data, (row, col) => {
       activeRow = row;
       activeCol = col;
-    }, commit, scheduleCommit, () => view.requestMeasure());
-    installTableDragHandles(table, {
+    }, commit, scheduleCommit, () => view.requestMeasure(), view, this.from, editable);
+    const table = rendered.table;
+    this.disposeCellEditor = rendered.dispose;
+    if (editable) installTableDragHandles(table, {
       moveRow: (from, to) => apply((next) => {
         if (from < 1 || to < 1 || from >= next.rows.length || to >= next.rows.length || from === to) return;
         const [row] = next.rows.splice(from, 1);
@@ -1360,11 +1367,17 @@ class TableWidget extends MeasuredWidget {
       next.aligns.push("");
     }, (next) => ({ row: activeRow, col: (next.rows[0]?.length ?? 1) - 1, edit: true, select: true })));
     addColumnEdge.className = "cm-table-edge-add cm-table-edge-add-column";
-    wrap.append(toolbar, table, addRowEdge, addColumnEdge);
+    if (editable) wrap.append(toolbar, table, addRowEdge, addColumnEdge);
+    else wrap.append(table);
     return this.registerMeasured(wrap, view);
   }
 
   ignoreEvent(): boolean { return true; }
+
+  destroy(dom: HTMLElement): void {
+    this.disposeCellEditor();
+    super.destroy(dom);
+  }
 }
 
 function stopEvent(event: Event): void {
@@ -1558,11 +1571,23 @@ function renderEditableTable(
   commit: (focusTarget?: TableFocusTarget | null) => void,
   scheduleCommit: (focusTarget?: TableFocusTarget | null) => void,
   requestMeasure: () => void,
-): HTMLTableElement {
+  view: EditorView,
+  tableFrom: number,
+  editable = true,
+): { table: HTMLTableElement; dispose: () => void } {
   const table = document.createElement("table");
-  table.className = "cm-markdown-table-preview cm-markdown-table-editable";
+  table.className = editable ? "cm-markdown-table-preview cm-markdown-table-editable" : "cm-markdown-table-preview";
   const colCount = data.rows[0]?.length ?? 1;
   let pendingFocusTarget: TableFocusTarget | null = null;
+  let activeFormula: { editor: VisualTexInlineEditor; cell: HTMLTableCellElement; source: string; from: number; to: number; draft: string } | null = null;
+  const completion = (input: HTMLInputElement, type: "request" | "close" | "key", key?: KeyboardEvent): boolean => {
+    const event = new CustomEvent<TableCellCompletionDetail & { key?: string; shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean; isComposing?: boolean }>(
+      `aaronnote:table-cell-completion-${type}`,
+      { bubbles: true, cancelable: true, detail: { input, key: key?.key, shiftKey: key?.shiftKey, ctrlKey: key?.ctrlKey, metaKey: key?.metaKey, altKey: key?.altKey, isComposing: key?.isComposing } },
+    );
+    input.dispatchEvent(event);
+    return event.defaultPrevented;
+  };
   const cellInput = (cell: HTMLTableCellElement): HTMLInputElement | null =>
     cell.querySelector<HTMLInputElement>(".cm-table-cell-input");
   const restorePreview = (cell: HTMLTableCellElement): void => {
@@ -1572,6 +1597,70 @@ function renderEditableTable(
     cell.dataset.dirty = "false";
     cell.dataset.editSource = source;
     requestMeasure();
+  };
+  const closeFormula = (save: boolean): boolean => {
+    const active = activeFormula;
+    if (!active) return false;
+    activeFormula = null;
+    const draft = normalizeVisualTexLatex(active.draft);
+    active.editor.destroy();
+    if (!active.cell.isConnected) return false;
+    if (!save) active.cell.dataset.source = active.source;
+    const changed = save && draft !== active.source.slice(active.from + 2, active.to - 2);
+    if (changed) {
+      active.cell.dataset.source = active.source.slice(0, active.from + 2) + draft + active.source.slice(active.to - 2);
+      active.cell.dataset.dirty = "true";
+      commit({ row: Number(active.cell.dataset.row), col: Number(active.cell.dataset.col) });
+    } else restorePreview(active.cell);
+    return changed;
+  };
+  const openFormula = (cell: HTMLTableCellElement, span: HTMLElement, pointer: MouseEvent): boolean => {
+    const source = cell.dataset.source ?? "";
+    const spans = Array.from(cell.querySelectorAll<HTMLElement>(".aaronnote-math-inline"));
+    const index = spans.indexOf(span);
+    const range = tableCellMathRanges(source)[index];
+    if (!range || range.tex !== span.dataset.tex) return false;
+    cell.dataset.editing = "math";
+    let draft = range.tex;
+    span.classList.add("cm-table-math-editor");
+    span.dataset.aaronnoteVim = "native";
+    // Keep the table editor's formula lifecycle observable without reaching
+    // into MathLive's shadow DOM or coupling callers to its implementation.
+    span.addEventListener("aaronnote:table-math-draft", (event) => {
+      const latex = (event as CustomEvent<{ latex?: unknown }>).detail?.latex;
+      if (typeof latex === "string") {
+        draft = latex;
+        if (activeFormula?.cell === cell) activeFormula.draft = latex;
+      }
+    });
+    span.addEventListener("aaronnote:table-math-commit", () => closeFormula(true));
+    const unavailable = (): void => {
+      if (activeFormula?.cell !== cell || !cell.isConnected) return;
+      closeFormula(false);
+      cell.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+      const input = cellInput(cell);
+      input?.focus();
+      input?.setSelectionRange(range.from, range.to);
+    };
+    span.addEventListener("aaronnote:table-math-unavailable", unavailable);
+    const editor = mountVisualTexInlineEditor(span, {
+      latex: range.tex,
+      macros: getKatexMacros(),
+      entry: { kind: "point", x: pointer.clientX, y: pointer.clientY },
+      onInput: (latex) => {
+        draft = latex;
+        if (activeFormula?.cell === cell) {
+          activeFormula.draft = latex;
+          cell.dataset.source = source.slice(0, range.from + 2) + latex + source.slice(range.to - 2);
+          cell.dataset.dirty = "true";
+        }
+      },
+      onCommit: () => closeFormula(true),
+      onUnavailable: unavailable,
+    });
+    activeFormula = { editor, cell, source, from: range.from, to: range.to, draft };
+    requestMeasure();
+    return true;
   };
   const enterEditing = (cell: HTMLTableCellElement): HTMLInputElement => {
     const existing = cellInput(cell);
@@ -1586,11 +1675,35 @@ function renderEditableTable(
     input.className = "cm-table-cell-input";
     input.value = source;
     input.spellcheck = true;
-    cell.append(input);
+    const live = document.createElement("div");
+    live.className = "cm-table-cell-live-preview";
+    live.setAttribute("aria-hidden", "true");
+    let frame = 0;
+    const renderDraft = (): void => {
+      frame = 0;
+      if (!input.isConnected) return;
+      if (!/[\\*_~`!\[<^#:]/.test(input.value) && !input.value.includes("@@")) {
+        if (!live.hidden) {
+          live.replaceChildren();
+          live.hidden = true;
+          requestMeasure();
+        }
+        return;
+      }
+      live.innerHTML = inlineMarkdownHTML(input.value);
+      live.hidden = live.children.length === 0;
+      requestMeasure();
+    };
+    input.addEventListener("input", () => {
+      if (!frame) frame = window.requestAnimationFrame(renderDraft);
+    });
+    cell.append(input, live);
+    renderDraft();
     requestMeasure();
     return input;
   };
   const addCellEvents = (cell: HTMLTableCellElement, row: number, col: number): void => {
+    if (!editable) return;
     cell.tabIndex = 0;
     cell.dataset.row = String(row);
     cell.dataset.col = String(col);
@@ -1602,11 +1715,19 @@ function renderEditableTable(
       input.dataset.bound = "true";
       input.addEventListener("input", () => {
         cell.dataset.dirty = "true";
+        completion(input, "request");
       });
       input.addEventListener("mousedown", (event) => event.stopPropagation());
       input.addEventListener("mouseup", (event) => event.stopPropagation());
-      input.addEventListener("click", (event) => event.stopPropagation());
+      input.addEventListener("click", (event) => {
+        event.stopPropagation();
+        completion(input, "request");
+      });
+      input.addEventListener("keyup", (event) => {
+        if (!["ArrowUp", "ArrowDown", "Tab", "Enter", "Escape"].includes(event.key)) completion(input, "request");
+      });
       input.addEventListener("blur", (event) => {
+        completion(input, "close");
         const focusTarget = pendingFocusTarget;
         pendingFocusTarget = null;
         let appendedRow = false;
@@ -1633,6 +1754,10 @@ function renderEditableTable(
       });
       input.addEventListener("keydown", (event) => {
         event.stopPropagation();
+        if (completion(input, "key", event)) {
+          event.preventDefault();
+          return;
+        }
         if (event.key === "Enter") {
           event.preventDefault();
           pendingFocusTarget = { row: row + 1, col, edit: true, select: true };
@@ -1642,6 +1767,7 @@ function renderEditableTable(
           event.preventDefault();
           pendingFocusTarget = null;
           cell.dataset.dirty = "false";
+          completion(input, "close");
           restorePreview(cell);
           cell.focus();
         }
@@ -1663,13 +1789,46 @@ function renderEditableTable(
     cell.addEventListener("mousedown", (event) => {
       event.stopPropagation();
       setActiveCell(row, col);
+      if (activeFormula) {
+        const activeCell = activeFormula.cell;
+        const activeHost = activeCell.querySelector<HTMLElement>(".cm-table-math-editor");
+        if (activeCell === cell && event.target instanceof Node && activeHost?.contains(event.target)) return;
+        const formula = event.target instanceof Element
+          ? event.target.closest<HTMLElement>(".aaronnote-math-inline") : null;
+        const formulaIndex = formula && cell.contains(formula)
+          ? Array.from(cell.querySelectorAll(".aaronnote-math-inline")).indexOf(formula) : -1;
+        const { clientX, clientY } = event;
+        const changed = closeFormula(true);
+        if (changed || activeCell === cell) {
+          event.preventDefault();
+          window.requestAnimationFrame(() => {
+            const updated = view.dom.querySelector<HTMLTableElement>(
+              `.cm-table-block[data-cm-source-from="${tableFrom}"] table`,
+            );
+            const nextCell = updated?.rows[row]?.cells[col] as HTMLTableCellElement | undefined;
+            const nextTarget = formulaIndex >= 0
+              ? nextCell?.querySelectorAll<HTMLElement>(".aaronnote-math-inline")[formulaIndex] : nextCell;
+            nextTarget?.dispatchEvent(new MouseEvent("mousedown", {
+              bubbles: true, cancelable: true, clientX, clientY,
+            }));
+          });
+          return;
+        }
+      }
       if (event.target instanceof HTMLInputElement) return;
+      const formula = event.target instanceof Element
+        ? event.target.closest<HTMLElement>(".aaronnote-math-inline") : null;
+      if (formula && cell.contains(formula) && openFormula(cell, formula, event)) {
+        event.preventDefault();
+        return;
+      }
       event.preventDefault();
       const input = openEditor(cell);
       window.setTimeout(() => {
         input.focus();
         const end = input.value.length;
         input.setSelectionRange(end, end);
+        completion(input, "request");
       }, 0);
     });
     cell.addEventListener("focus", () => {
@@ -1717,7 +1876,13 @@ function renderEditableTable(
     }
   });
 
-  return table;
+  return { table, dispose: () => {
+    const active = activeFormula;
+    activeFormula = null;
+    active?.editor.destroy();
+    const input = table.querySelector<HTMLInputElement>(".cm-table-cell-input");
+    if (input) completion(input, "close");
+  } };
 }
 
 function tableRowsFromDOM(table: HTMLTableElement): string[][] {
@@ -1725,6 +1890,7 @@ function tableRowsFromDOM(table: HTMLTableElement): string[][] {
     Array.from(row.cells).map((cell) => (
       cell.dataset.dirty === "true"
         ? cell.querySelector<HTMLInputElement>(".cm-table-cell-input")?.value
+          ?? cell.dataset.source
           ?? cell.textContent
           ?? ""
         : cell.dataset.source ?? cell.textContent ?? ""

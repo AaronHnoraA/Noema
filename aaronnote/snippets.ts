@@ -582,15 +582,45 @@ export function insertExpandedSnippetIntoContentEditable(
   return true;
 }
 
+type SnippetEditor = Pick<Editor, "getSelection" | "textBetween" | "replaceRange" | "setSelection" | "insertText">
+  & Partial<Pick<Editor, "onViewUpdate" | "onDocumentReset">>;
+
+/** Give a focused table input the same snippet fields and Tab navigation as CM6. */
+export function inputSnippetEditor(input: HTMLInputElement): SnippetEditor {
+  const selection = () => ({
+    from: input.selectionStart ?? input.value.length,
+    to: input.selectionEnd ?? input.value.length,
+  });
+  const replace: SnippetEditor["replaceRange"] = (from, to, text, select = "end") => {
+    const start = Math.max(0, Math.min(input.value.length, from));
+    const end = Math.max(start, Math.min(input.value.length, to));
+    input.setRangeText(text, start, end, "preserve");
+    const insertedEnd = start + text.length;
+    input.setSelectionRange(select === "end" ? insertedEnd : start, select === "all" ? insertedEnd : select === "end" ? insertedEnd : start);
+    input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertReplacementText", data: text }));
+    return { from: start, to: insertedEnd };
+  };
+  return {
+    getSelection: selection,
+    textBetween: (from, to) => input.value.slice(from, to),
+    setSelection: (from, to = from) => input.setSelectionRange(from, to),
+    replaceRange: replace,
+    insertText: (text, deleteBefore = 0) => {
+      const current = selection();
+      return replace(Math.max(0, current.from - deleteBefore), current.to, text, "end");
+    },
+  };
+}
+
 export class SnippetSession {
   private frames: SnippetFrame[] = [];
-  private readonly editor: Editor;
+  private readonly editor: SnippetEditor;
   private observesTransactions = false;
   private internalUpdateDepth = 0;
   private suspended = false;
   private allowDetachedSelection = false;
 
-  constructor(editor: Editor) {
+  constructor(editor: SnippetEditor) {
     this.editor = editor;
     if (typeof this.editor.onViewUpdate === "function") {
       this.observesTransactions = true;
