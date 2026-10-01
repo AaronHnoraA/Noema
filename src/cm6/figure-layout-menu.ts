@@ -1,7 +1,7 @@
 import type { EditorView } from "@codemirror/view";
 import type { Text } from "@codemirror/state";
 import { imageLayoutFromAttrs, imageLayoutToAttrMap, type ImageLayoutAttrs } from "../image-attrs.ts";
-import { LAYOUT_ATTR_KEYS, readLayoutAttrsLine, readLayoutTrailingAttrs } from "../layout-attrs.ts";
+import { LAYOUT_ATTR_KEYS, readLayoutAttrSuffix, readLayoutAttrsLine, readLayoutTrailingAttrs } from "../layout-attrs.ts";
 import type { NoemaMenuItem } from "../menu-system.ts";
 
 type FigureKind = "image" | "tikz" | "table" | "diagram";
@@ -49,8 +49,8 @@ export function figureLayoutTarget(view: EditorView, node: EventTarget | null): 
     if (line.from !== from || !/^\s*#\+\s*begin\s+tikz\b/i.test(line.text)) return null;
     baseTo = line.to;
     const brace = line.text.indexOf("{");
-    const parsed = brace >= 0 ? readLayoutTrailingAttrs(line.text, brace) : null;
-    if (parsed && !line.text.slice(parsed.to).trim()) attrs = parsed.attrs;
+    const parsed = brace >= 0 ? readLayoutAttrSuffix(line.text, brace) : null;
+    if (parsed) attrs = parsed.attrs;
   } else if (widget.classList.contains("cm-table-editable-block")) {
     kind = "table";
     baseTo = Number(widget.dataset.cmSourceBaseTo);
@@ -83,9 +83,9 @@ export function applyFigureLayout(view: EditorView, target: FigureLayoutTarget, 
     const line = doc.lineAt(target.from);
     if (line.to !== target.baseTo || !/^\s*#\+\s*begin\s+tikz\b/i.test(line.text)) return false;
     const brace = line.text.indexOf("{");
-    const old = brace >= 0 ? readLayoutTrailingAttrs(line.text, brace) : null;
-    const previous = old && !line.text.slice(old.to).trim() ? old.attrs : {};
-    const head = old && !line.text.slice(old.to).trim() ? line.text.slice(0, old.from).trimEnd() : line.text.trimEnd();
+    const old = brace >= 0 ? readLayoutAttrSuffix(line.text, brace) : null;
+    const previous = old?.attrs ?? {};
+    const head = old ? line.text.slice(0, old.from).trimEnd() : line.text.trimEnd();
     const suffix = layoutSuffix(next, previous);
     const insert = head + (suffix ? ` ${suffix}` : "");
     if (insert === line.text) return false;

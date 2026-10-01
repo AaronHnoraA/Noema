@@ -66,6 +66,43 @@ describe("figure layout context menu", () => {
     } finally { cleanup(); setTikzRendererForTests(null); }
   });
 
+  test("repeated TikZ wrap choices replace old attributes and keep the picture visible", async () => {
+    const originalCurrentFile = window.AaronnoteCurrentFile;
+    window.AaronnoteCurrentFile = () => "/notes/layout-wrap.md";
+    setTikzRendererForTests(async () => '<svg viewBox="0 0 20 10"><path d="M0 0L20 10"/></svg>');
+    const body = "\\draw (0,0) -- (1,1);\n#+end tikz";
+    const source = `before\n#+begin tikz aaa {wrap=left} {wrap=left} {wrap=right} {wrap=right}\n${body}\nafter`;
+    const { editor, host, cleanup } = mount(source);
+    try {
+      const figure = () => host.querySelector<HTMLElement>(".cm-tikz-env-widget")!;
+      expect(figureLayoutTarget(editor.view, figure())?.layout).toMatchObject({ align: "right", wrap: true });
+      expect(figure().classList.contains("aaronnote-image-align-right")).toBe(true);
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+      expect(figure().querySelector("svg")).toBeTruthy();
+      expect(applyFigureLayout(editor.view, figureLayoutTarget(editor.view, figure())!, { align: "left", wrap: true })).toBe(true);
+      expect(editor.getMarkdown()).toBe(`before\n#+begin tikz aaa {wrap=left}\n${body}\nafter`);
+      expect(figure().classList.contains("aaronnote-image-align-left")).toBe(true);
+      expect(figure().classList.contains("cm-aaronnote-measured-widget")).toBe(false);
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+      expect(figure().querySelector("svg")).toBeTruthy();
+      expect(applyFigureLayout(editor.view, figureLayoutTarget(editor.view, figure())!, { align: "left", wrap: true })).toBe(false);
+      expect(applyFigureLayout(editor.view, figureLayoutTarget(editor.view, figure())!, { align: "right", wrap: true })).toBe(true);
+      expect(editor.getMarkdown()).toBe(`before\n#+begin tikz aaa {wrap=right}\n${body}\nafter`);
+    } finally { cleanup(); window.AaronnoteCurrentFile = originalCurrentFile; setTikzRendererForTests(null); }
+  });
+
+  test("TikZ layout changes preserve unrelated title attributes", () => {
+    const source = "#+begin tikz aaa {note=keep} {wrap=left}\n\\draw (0,0) -- (1,1);\n#+end tikz";
+    const { editor, host, cleanup } = mount(source);
+    try {
+      const figure = host.querySelector<HTMLElement>(".cm-tikz-env-widget")!;
+      expect(figure.classList.contains("aaronnote-image-align-left")).toBe(true);
+      expect(applyFigureLayout(editor.view, figureLayoutTarget(editor.view, figure)!, { align: "right", wrap: true })).toBe(true);
+      expect(editor.getMarkdown()).toContain("#+begin tikz aaa {note=keep} {wrap=right}\n");
+      expect(host.querySelector(".cm-tikz-env-widget")?.classList.contains("aaronnote-image-align-right")).toBe(true);
+    } finally { cleanup(); }
+  });
+
   test("table and diagram use a separate layout line and reset cleanly", () => {
     for (const [source, selector, kind] of [
       ["| A | B |\n|---|---|\n| 1 | 2 |\nend", ".cm-table-editable-block", "table"],

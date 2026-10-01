@@ -413,6 +413,16 @@ y^2
     expect(html).toContain("--aaronnote-image-width: 320px");
   });
 
+  test("uses the last layout choice in TikZ titles with repeated attribute groups", () => {
+    const html = renderMarkdownHTML([
+      "#+ begin tikz axis {wrap=right} {wrap=left}",
+      "\\draw (0,0) -- (1,1);",
+      "#+ end tikz",
+    ].join("\n"));
+    expect(html).toContain("aaronnote-image-align-left");
+    expect(html).toContain('data-aaronnote-image-wrap="true"');
+  });
+
   test("does not treat lean4 begin/end syntax as an org env", () => {
     const html = renderMarkdownHTML([
       "#+begin lean4 basic",

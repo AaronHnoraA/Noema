@@ -49,7 +49,8 @@ import {
   showMetaTag,
   type MetaSummary,
 } from "../../../../org-meta.ts";
-import { applyImageLayout, imageLayoutFromAttrs, readImageTrailingAttrs, type ImageLayoutAttrs } from "../../../../image-attrs.ts";
+import { applyImageLayout, imageLayoutFromAttrs, type ImageLayoutAttrs } from "../../../../image-attrs.ts";
+import { readLayoutAttrSuffix } from "../../../../layout-attrs.ts";
 import { supportedDiagramLang } from "../../../../diagram-langs.ts";
 import { api } from "../../../../../aaronnote/api-client.ts";
 import { writeSystemClipboard } from "../../../../system-clipboard.ts";
@@ -771,10 +772,10 @@ function splitTikzTitle(title: string): { head: string; attrsRaw: string; layout
   const raw = String(title || "").trim();
   const open = raw.indexOf("{");
   if (open < 0) return { head: raw, attrsRaw: "", layout: imageLayoutFromAttrs({}) };
-  const trailing = readImageTrailingAttrs(raw, open);
-  if (!trailing || raw.slice(trailing.to).trim()) return { head: raw, attrsRaw: "", layout: imageLayoutFromAttrs({}) };
+  const trailing = readLayoutAttrSuffix(raw, open);
+  if (!trailing) return { head: raw, attrsRaw: "", layout: imageLayoutFromAttrs({}) };
   return {
-    head: raw.slice(0, open).trim(),
+    head: raw.slice(0, trailing.from).trim(),
     attrsRaw: trailing.raw,
     layout: imageLayoutFromAttrs(trailing.attrs),
   };
@@ -3077,6 +3078,7 @@ class TikzWidget extends MeasuredWidget {
   body: string;
   from: number;
   to: number;
+  layout: ImageLayoutAttrs;
 
   constructor(title: string, body: string, from: number, to: number) {
     super();
@@ -3084,7 +3086,10 @@ class TikzWidget extends MeasuredWidget {
     this.body = body;
     this.from = from;
     this.to = to;
+    this.layout = splitTikzTitle(title).layout;
   }
+
+  protected get measuredBlock(): boolean { return !this.layout.wrap; }
 
   // The old timestamp title happened to invalidate the height estimate after a
   // render. Content hashes now own freshness, so the measured-height key must

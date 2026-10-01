@@ -27,6 +27,7 @@ export function parseAttrArgs(raw?: string): AttrMap;
 export function findSingleLineClose(text: string, open: number, closeChar: "]" | "}"): number;
 export function readTrailingAttrs(text: string, from: number, options?: TrailingAttrsOptions): TrailingAttrs | null;
 export function readLayoutTrailingAttrs(text: string, from: number): TrailingAttrs | null;
+export function readLayoutAttrSuffix(text: string, from?: number): TrailingAttrs | null;
 export function readLayoutAttrsLine(text: string): TrailingAttrs | null;
 export function layoutFromAttrs(attrs: AttrMap): LayoutAttrs;
 export function layoutClasses(kind: string, layout: LayoutAttrs): string;

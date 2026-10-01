@@ -9,6 +9,7 @@ export {
   layoutLatexFigure,
   layoutLatexLength,
   layoutStyle,
+  readLayoutAttrSuffix,
   readLayoutAttrsLine,
   readLayoutTrailingAttrs,
 } from "../shared/layout-attrs.mjs";

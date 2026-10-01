@@ -141,6 +141,32 @@ export function readLayoutTrailingAttrs(text, from) {
   return readTrailingAttrs(text, from, { allowWhitespace: true, knownKeys: LAYOUT_ATTR_KEYS });
 }
 
+/** Accept and collapse adjacent layout groups left by older figure controls. */
+export function readLayoutAttrSuffix(text, from = 0) {
+  let open = text.indexOf("{", from);
+  while (open >= 0) {
+    const first = readLayoutTrailingAttrs(text, open);
+    if (!first) {
+      open = text.indexOf("{", open + 1);
+      continue;
+    }
+    const attrs = { ...first.attrs };
+    let end = first.to;
+    while (true) {
+      let nextOpen = end;
+      while (text[nextOpen] === " " || text[nextOpen] === "\t") nextOpen++;
+      if (text[nextOpen] !== "{") break;
+      const next = readLayoutTrailingAttrs(text, nextOpen);
+      if (!next) break;
+      Object.assign(attrs, next.attrs);
+      end = next.to;
+    }
+    if (!text.slice(end).trim()) return { from: first.from, to: end, raw: text.slice(first.from, end), attrs };
+    open = text.indexOf("{", first.to);
+  }
+  return null;
+}
+
 export function readLayoutAttrsLine(text) {
   const from = text.match(/^\s*/)?.[0].length ?? 0;
   const trailing = readLayoutTrailingAttrs(text, from);

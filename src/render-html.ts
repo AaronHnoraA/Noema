@@ -8,7 +8,7 @@ import type StateInline from "markdown-it/lib/rules_inline/state_inline.mjs";
 import { cleanEditorHTML } from "./export-html.ts";
 import { supportedDiagramLang } from "./diagram-langs.ts";
 import { imageLayoutClasses, imageLayoutFromAttrs, imageLayoutStyle, readImageTrailingAttrs } from "./image-attrs.ts";
-import { layoutClasses, layoutFromAttrs, layoutStyle, readLayoutAttrsLine, type LayoutAttrs } from "./layout-attrs.ts";
+import { layoutClasses, layoutFromAttrs, layoutStyle, readLayoutAttrSuffix, readLayoutAttrsLine, type LayoutAttrs } from "./layout-attrs.ts";
 import { katexStylesheetHref, renderMathHTML } from "./math-render.ts";
 import { markdownLinkDestination } from "./markdown-link.ts";
 import { safeHref } from "./url-safety.ts";
@@ -1122,8 +1122,8 @@ function tikzTitleLayout(title: string): LayoutAttrs {
   const raw = String(title || "").trim();
   const open = raw.indexOf("{");
   if (open < 0) return layoutFromAttrs({});
-  const trailing = readImageTrailingAttrs(raw, open);
-  if (!trailing || raw.slice(trailing.to).trim()) return layoutFromAttrs({});
+  const trailing = readLayoutAttrSuffix(raw, open);
+  if (!trailing) return layoutFromAttrs({});
   return imageLayoutFromAttrs(trailing.attrs);
 }
 
