@@ -524,6 +524,22 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
     },
   });
   viewportStabilizer = new EditorViewportStabilizer(view, host);
+  // WKWebView can resize its enclosing Emacs window without a useful window
+  // resize event. Measure the actual editor box once its CSS width has changed.
+  let hostWidth = 0;
+  let hostResizeFrame = 0;
+  const hostResizeObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver((entries) => {
+    const width = entries[0]?.contentRect.width ?? 0;
+    if (width <= 0 || Math.abs(width - hostWidth) <= 1) return;
+    hostWidth = width;
+    if (hostResizeFrame) window.cancelAnimationFrame(hostResizeFrame);
+    hostResizeFrame = window.requestAnimationFrame(() => {
+      hostResizeFrame = 0;
+      if (!view.dom.isConnected) return;
+      view.requestMeasure();
+    });
+  });
+  hostResizeObserver?.observe(host);
   const onEditorScroll = (): void => {
     beginFormulaScrollBurst(view);
     pauseScrollingImageAnimationTemporarily(view.contentDOM, 256);
@@ -1150,6 +1166,8 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
     },
 
     destroy(): void {
+      hostResizeObserver?.disconnect();
+      if (hostResizeFrame) window.cancelAnimationFrame(hostResizeFrame);
       finishInlineMathEditing(view);
       externalUpdateListeners.clear();
       documentResetListeners.clear();

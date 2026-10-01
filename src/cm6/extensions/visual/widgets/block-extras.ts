@@ -3090,6 +3090,8 @@ class TikzWidget extends MeasuredWidget {
   }
 
   protected get measuredBlock(): boolean { return !this.layout.wrap; }
+  protected get floatedBlock(): boolean { return this.layout.wrap; }
+  protected get observeSize(): boolean { return true; }
 
   // The old timestamp title happened to invalidate the height estimate after a
   // render. Content hashes now own freshness, so the measured-height key must
@@ -3109,7 +3111,8 @@ class TikzWidget extends MeasuredWidget {
     if (this.title !== previous.title || this.body !== previous.body) return false;
     // Edits before the block shift its source offsets, but the picture is
     // unchanged. Keep the same SVG node and only update click navigation.
-    setSourceRange(dom, this.from, this.to);
+    const figure = this.layout.wrap ? dom.firstElementChild as HTMLElement : dom;
+    setSourceRange(figure, this.from, this.to);
     return true;
   }
 

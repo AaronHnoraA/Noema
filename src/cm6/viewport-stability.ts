@@ -483,7 +483,9 @@ export class EditorViewportStabilizer {
         || !this.scrollHost.isConnected) return;
 
     this.writeScrollTop(snapshot.scrollTop);
-    this.scrollHost.scrollLeft = snapshot.scrollLeft;
+    if (Math.abs(this.scrollHost.scrollLeft - snapshot.scrollLeft) > 0.5) {
+      this.scrollHost.scrollLeft = snapshot.scrollLeft;
+    }
     if (snapshot.anchorOffset != null) {
       try {
         const hostTop = this.scrollHost.getBoundingClientRect().top;
@@ -510,6 +512,7 @@ export class EditorViewportStabilizer {
   }
 
   private writeScrollTop(value: number): void {
+    if (Math.abs(this.scrollHost.scrollTop - value) <= 0.5) return;
     this.scrollHost.scrollTop = value;
     this.expectedProgrammaticScrollTop = this.scrollHost.scrollTop;
   }

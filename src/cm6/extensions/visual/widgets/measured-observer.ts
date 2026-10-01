@@ -79,6 +79,7 @@ function cacheElementHeight(el: HTMLElement, height: number): void {
 
 const elementToView = new WeakMap<Element, EditorView>();
 const lastHeights = new WeakMap<Element, number>();
+const lastWidths = new WeakMap<Element, number>();
 let sharedRO: ResizeObserver | null = null;
 let measurementPaused = false;
 let measureScheduler: ViewMeasureScheduler<EditorView> | null = null;
@@ -104,9 +105,15 @@ function getSharedRO(): ResizeObserver | null {
     for (const entry of entries) {
       const el = entry.target as HTMLElement;
       const newH = stableMeasuredHeight(resizeEntryHeight(entry, el), devicePixelRatio());
+      const box = entry.borderBoxSize as unknown as ResizeObserverSize | readonly ResizeObserverSize[] | undefined;
+      const borderBox = Array.isArray(box) ? box[0] : box;
+      const rawWidth = borderBox?.inlineSize ?? entry.contentRect.width;
+      const newW = stableMeasuredHeight(rawWidth, devicePixelRatio());
       const oldH = lastHeights.get(el);
-      if (!measuredHeightChanged(oldH, newH)) continue;
+      const oldW = lastWidths.get(el);
+      if (!measuredHeightChanged(oldH, newH) && !measuredHeightChanged(oldW, newW)) continue;
       lastHeights.set(el, newH);
+      lastWidths.set(el, newW);
       cacheElementHeight(el, newH);
       const view = elementToView.get(el);
       if (view) scheduler.schedule(view);
@@ -143,4 +150,5 @@ export function unobserveWidget(el: HTMLElement): void {
   sharedRO?.unobserve(el);
   elementToView.delete(el);
   lastHeights.delete(el);
+  lastWidths.delete(el);
 }

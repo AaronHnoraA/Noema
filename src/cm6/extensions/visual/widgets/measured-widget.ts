@@ -31,7 +31,9 @@ import { measuredHeightCache, observeWidget, unobserveWidget } from "./measured-
  *
  * For inline widgets (no block height contribution) override measuredBlock:
  *   protected get measuredBlock() { return false; }
- * Then registerMeasured is a no-op and estimatedHeight stays -1.
+ * Then estimatedHeight stays -1; override observeSize to observe inline floats.
+ * Block decorations whose contents float must instead override floatedBlock:
+ * CM6 measures an in-flow, zero-height anchor, never the floated figure itself.
  *
  * Subclasses with their own destroy() MUST call super.destroy(dom) to
  * unregister from the observer.
@@ -41,22 +43,35 @@ export abstract class MeasuredWidget extends WidgetType {
 
   protected get measuredBlock(): boolean { return true; }
 
+  protected get floatedBlock(): boolean { return false; }
+
+  // Floats contribute no block height at their source line, but changes to
+  // their border box still change the width and height of surrounding lines.
+  protected get observeSize(): boolean { return this.measuredBlock; }
+
   protected measureGroupKey(): string | null { return null; }
 
   protected estimatedHeightFallback(): number { return -1; }
 
   protected registerMeasured(dom: HTMLElement, view: EditorView): HTMLElement {
-    if (this.measuredBlock) {
+    if (this.measuredBlock && !this.floatedBlock) {
       dom.classList.add("cm-aaronnote-measured-widget");
       dom.dataset.cmMeasureKey = this.measureKey();
       const groupKey = this.measureGroupKey();
       if (groupKey) dom.dataset.cmMeasureGroupKey = groupKey;
-      observeWidget(dom, view);
+    }
+    if (this.observeSize) observeWidget(dom, view);
+    if (this.floatedBlock) {
+      const anchor = document.createElement("div");
+      anchor.className = "cm-float-anchor";
+      anchor.append(dom);
+      return anchor;
     }
     return dom;
   }
 
   get estimatedHeight(): number {
+    if (this.floatedBlock) return 0;
     if (!this.measuredBlock) return -1;
     const exact = measuredHeightCache.get(this.measureKey());
     if (exact !== undefined) return exact;
@@ -69,6 +84,9 @@ export abstract class MeasuredWidget extends WidgetType {
   }
 
   destroy(dom: HTMLElement): void {
-    if (this.measuredBlock) unobserveWidget(dom);
+    if (this.observeSize) {
+      const observed = this.floatedBlock ? dom.firstElementChild : dom;
+      if (observed instanceof HTMLElement) unobserveWidget(observed);
+    }
   }
 }

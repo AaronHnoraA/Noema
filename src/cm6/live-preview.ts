@@ -1192,6 +1192,8 @@ class TableWidget extends MeasuredWidget {
   layout: LayoutAttrs;
   private disposeCellEditor: () => void = () => {};
 
+  protected get floatedBlock(): boolean { return this.layout.wrap; }
+
   constructor(source: string, from: number, sourceTo: number, to: number, layout: LayoutAttrs) {
     super();
     this.source = source;

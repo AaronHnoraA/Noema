@@ -1344,6 +1344,7 @@ y^2
       expect(document.querySelector(".cm-tikz-env-widget")?.classList.contains("cm-image-widget")).toBe(true);
       expect(document.querySelector(".cm-tikz-env-widget")?.classList.contains("aaronnote-image-align-right")).toBe(true);
       expect(document.querySelector(".cm-tikz-env-widget")?.classList.contains("aaronnote-image-wrap")).toBe(true);
+      expect(document.querySelector(".cm-tikz-env-widget")?.parentElement?.className).toBe("cm-float-anchor");
       expect((document.querySelector<HTMLElement>(".cm-tikz-env-widget")?.style.getPropertyValue("--aaronnote-image-width") || "").trim()).toBe("320px");
       expect(document.querySelector('.cm-org-env-rail[data-org-env-kind="tikz"]')).toBeNull();
       expect(view.contentDOM.textContent).not.toContain("#+ begin tikz");
@@ -1352,6 +1353,14 @@ y^2
       const svg = document.querySelector<SVGSVGElement>(".cm-tikz-env-widget svg");
       expect(svg).toBeTruthy();
       expect(svg?.getAttribute("viewBox")).toBe("0 0 20 10");
+
+      // A prose edit before the float must retain its SVG and update the
+      // source range on the inner figure (the outer anchor has no source UI).
+      editor.view.dispatch({ changes: { from: 0, insert: "!" }, selection: { anchor: 1 } });
+      await new Promise((resolve) => window.setTimeout(resolve, 180));
+      const figure = document.querySelector<HTMLElement>(".cm-tikz-env-widget");
+      expect(figure?.querySelector("svg")).toBe(svg);
+      expect(Number(figure?.dataset.cmSourceFrom)).toBe(md.indexOf("#+ begin tikz") + 1);
 
       editor.toggleSource();
       expect(view.contentDOM.textContent).toContain("#+ begin tikz");
@@ -1749,7 +1758,8 @@ After`;
 
     const tableBlock = document.querySelector<HTMLElement>(".cm-table-block");
     expect(tableBlock).toBeTruthy();
-    expect(tableBlock!.classList.contains("cm-aaronnote-measured-widget")).toBe(true);
+    expect(tableBlock!.classList.contains("cm-aaronnote-measured-widget")).toBe(false);
+    expect(tableBlock!.parentElement?.className).toBe("cm-float-anchor");
     expect(tableBlock!.classList.contains("aaronnote-table-align-right")).toBe(true);
     expect(tableBlock!.classList.contains("aaronnote-table-wrap")).toBe(true);
     expect(tableBlock!.style.getPropertyValue("--aaronnote-table-width")).toBe("75%");

@@ -1848,7 +1848,7 @@ The corresponding density operator is
 |\psi\rangle\langle \psi|.
 \]
 
-This operator is positive semidefinite, Hermitian, trace-one, and idempotent.
+This operator is positive semidefinite, Hermitian, trace-one, and idempotent. sadasdas tus gus this this this this this this ts hhhhhhhhhhhhhhhhhh this this thi
 
 \[
 \rho_\psi^\dagger = \rho_\psi.
@@ -1883,8 +1883,7 @@ such that
 
 #+begin note Positivity and Hermitian structure
 In finite-dimensional quantum theory, positivity already implies
-self-adjointness. However, listing Hermitian symmetry explicitly is often
-pedagogically useful because it reminds us that observables and density
+self-adjointness. However, listing Hermitian symmetry explicitly is often this this this tis this this this this this thi sthis this this this
 operators belong to the real vector space of Hermitian operators.
 
 中文直觉：正半定保证测量概率非负；迹为一保证总概率为一。

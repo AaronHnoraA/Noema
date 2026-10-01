@@ -148,8 +148,12 @@ describe("CM6 viewport position mapping", () => {
 
     try {
       expect(scrollHost.scrollTop).toBe(0);
+      const topWrites = vi.spyOn(scrollHost, "scrollTop", "set");
+      const leftWrites = vi.spyOn(scrollHost, "scrollLeft", "set");
       stabilizer.preserve(() => { documentTop = 53; });
       expect(scrollHost.scrollTop).toBe(0);
+      expect(topWrites).not.toHaveBeenCalled();
+      expect(leftWrites).not.toHaveBeenCalled();
     } finally {
       stabilizer.destroy();
       scrollHost.remove();

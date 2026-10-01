@@ -47,6 +47,22 @@ afterEach(() => {
 });
 
 describe("optimal Visual-mode line breaking", () => {
+  test("leaves paragraphs beside a wrapped figure to the browser's actual float width", async () => {
+    installLayoutMocks();
+    const source = "![diagram](missing.png){align:left; wrap:on}\n\n"
+      + "A paragraph beside the figure must use its remaining width instead of the full editor line width. ".repeat(3);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const editor = createEditor(host, { initialContent: source });
+    editor.setMarkdownSelection(source.length);
+
+    await settleLayout();
+    expect(host.querySelector(".aaronnote-image-wrap")).not.toBeNull();
+    expect(host.querySelector(".cm-kp-break")).toBeNull();
+    expect(editor.getMarkdown()).toBe(source);
+    editor.destroy();
+  });
+
   test("adds zero-source line breaks without changing Markdown", async () => {
     installLayoutMocks();
     const source = "中文排版需要在整个段落中选择更好的断点，同时保持English words readable and stable。";

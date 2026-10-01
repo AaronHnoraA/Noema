@@ -112,6 +112,7 @@ class ImageWidget extends MeasuredWidget {
   }
 
   protected get measuredBlock(): boolean { return !this.layout.wrap; }
+  protected get observeSize(): boolean { return true; }
 
   protected measureKey(): string { return "img:" + this.src; }
 

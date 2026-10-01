@@ -754,6 +754,16 @@
 .cm-editor .noema-image-animation-freeze-frame {
   pointer-events: none;
 }
+/* Block replacements participate in CM6's height map. A floated figure does
+ * not advance the following line: measure this zero-height in-flow anchor,
+ * with the float escaping into the content's formatting context. */
+.cm-editor .cm-float-anchor {
+  display: block;
+  height: 0;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+}
 .cm-editor .cm-image-widget {
   position: relative;
   display: flow-root;

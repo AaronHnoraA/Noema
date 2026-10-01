@@ -463,6 +463,16 @@ class OptimalLinebreakPlugin {
     deferred: boolean;
   } | null {
     if (view.state !== state || !this.context) return null;
+    // A float narrows only the lines beside it. The cm-line border box still
+    // reports the full editor width, so canvas breaks computed from that box
+    // disagree with WebKit's actual wrapping and destabilize CM6 coordinates.
+    // Let native line wrapping own this layout until the float is removed.
+    if (view.contentDOM.querySelector(".aaronnote-image-wrap, .aaronnote-table-wrap, .aaronnote-diagram-wrap")) {
+      this.cache.clear();
+      this.cacheBytes = 0;
+      this.combinedDecorations = Decoration.none;
+      return { state, generation, decorations: Decoration.none, deferred: false };
+    }
     const parseTo = view.visibleRanges.reduce((maximum, range) => Math.max(maximum, range.to), 0);
     if (!ensureSyntaxTree(state, parseTo, 8)) {
       this.dropDirtyCache();

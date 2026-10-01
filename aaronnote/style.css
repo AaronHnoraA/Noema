@@ -402,11 +402,14 @@ body[data-host-mode="server"][data-server-reader-editing-aids="false"] :is(
   height: 100%;
   min-height: 0;
   overflow: auto;
+  scrollbar-gutter: stable;
   overscroll-behavior: contain;
 }
 
 .aaronnote-focused-editor .typora-web-wrap {
   display: flex;
+  width: 100%;
+  min-width: 0;
   min-height: 100%;
   flex-direction: column;
   transform: scale(var(--aaronnote-visual-zoom));
@@ -415,6 +418,8 @@ body[data-host-mode="server"][data-server-reader-editing-aids="false"] :is(
 
 .aaronnote-focused-editor .typora-web-editor-host {
   display: flex;
+  width: 100%;
+  min-width: 0;
   min-height: 100%;
   flex: 1 0 auto;
   flex-direction: column;
@@ -422,6 +427,7 @@ body[data-host-mode="server"][data-server-reader-editing-aids="false"] :is(
 
 .aaronnote-focused-editor .cm-editor {
   width: 100%;
+  min-width: 0;
   min-height: 100%;
   flex: 1 0 auto;
 }
