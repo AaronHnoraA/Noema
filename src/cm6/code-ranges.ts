@@ -105,25 +105,43 @@ export function scanFencedCodeRangesInDoc(doc: Text): SourceRange[] {
 }
 
 export function changesMightAffectFencedCodeRanges(doc: Text, changes: ChangeSet): boolean {
-  let might = false;
+  let possible = false;
   changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
+    if (possible) return;
+    const first = doc.lineAt(Math.min(fromA, doc.length));
+    const last = doc.lineAt(Math.min(toA, doc.length));
+    possible = /[`~]/.test(doc.sliceString(first.from, last.to))
+      || /[`~]/.test(inserted.toString());
+  });
+  if (!possible) return false;
+
+  // Inspect the final lines rather than replaying each edit independently.
+  // Two cursors can add one backtick apiece to the same line and jointly make
+  // a fence even though neither insertion would do so on its own.
+  const nextDoc = changes.apply(doc);
+  let might = false;
+  changes.iterChanges((fromA, toA, fromB, toB) => {
     if (might) return;
-    const removed = doc.sliceString(fromA, toA);
-    const added = inserted.toString();
-
-    const fromLine = doc.lineAt(Math.min(fromA, doc.length));
-    const toLine = doc.lineAt(Math.min(Math.max(fromA, toA), doc.length));
-    const oldText = doc.sliceString(fromLine.from, toLine.to);
-    if (!/[`~]/.test(oldText) && !/[`~]/.test(removed) && !/[`~]/.test(added)) return;
-
-    const relFrom = Math.max(0, fromA - fromLine.from);
-    const relTo = Math.max(relFrom, toA - fromLine.from);
-    const nextText = oldText.slice(0, relFrom) + added + oldText.slice(relTo);
-    const oldLines = oldText.split("\n");
-    const nextLines = nextText.split("\n");
-    might = oldLines.length !== nextLines.length
-      ? oldLines.some(isFencedCodeFenceLine) || nextLines.some(isFencedCodeFenceLine)
-      : oldLines.some((line, index) => fenceLineShape(line) !== fenceLineShape(nextLines[index]!));
+    const oldStart = doc.lineAt(Math.min(fromA, doc.length)).number;
+    const oldEnd = doc.lineAt(Math.min(toA, doc.length)).number;
+    const nextStart = nextDoc.lineAt(Math.min(fromB, nextDoc.length)).number;
+    const nextEnd = nextDoc.lineAt(Math.min(toB, nextDoc.length)).number;
+    if (oldEnd - oldStart !== nextEnd - nextStart) {
+      for (let line = oldStart; line <= oldEnd; line++) {
+        if (isFencedCodeFenceLine(doc.line(line).text)) { might = true; return; }
+      }
+      for (let line = nextStart; line <= nextEnd; line++) {
+        if (isFencedCodeFenceLine(nextDoc.line(line).text)) { might = true; return; }
+      }
+      return;
+    }
+    for (let offset = 0; offset <= oldEnd - oldStart; offset++) {
+      if (fenceLineShape(doc.line(oldStart + offset).text)
+          !== fenceLineShape(nextDoc.line(nextStart + offset).text)) {
+        might = true;
+        return;
+      }
+    }
   });
   return might;
 }

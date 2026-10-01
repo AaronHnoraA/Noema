@@ -75,6 +75,19 @@ describe("large-document bounded editing", () => {
     }, 20_000);
   }
 
+  test("inline backticks stay bounded without any code fences in the 5 MB note", () => {
+    const noFenceContent = content.replace(/^```.*$/gm, "plain fence replacement");
+    expect(medianEditLatency(noFenceContent, "`")).toBeLessThan(BOUNDED_CEILING_MS);
+  }, 20_000);
+
+  test("editing a real table cell stays bounded in the 5 MB note", () => {
+    const tableStart = content.indexOf("| Object | Mathematical form |", Math.floor(content.length / 2));
+    const cellStart = content.indexOf("| Pure state |", tableStart);
+    expect(tableStart).toBeGreaterThan(0);
+    expect(cellStart).toBeGreaterThan(tableStart);
+    expect(medianEditLatency(content, "x", cellStart + "| Pure ".length)).toBeLessThan(BOUNDED_CEILING_MS);
+  }, 20_000);
+
   test("org-env identity title patches remain bounded in the 5 MB fixture", () => {
     const prefix = "#+begin theorem Spectral {#0198fbac-0780-7c99-85e6-333333333333}\nBody.\n#+end theorem\n\n";
     const identityContent = prefix + content;

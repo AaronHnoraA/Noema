@@ -335,6 +335,50 @@ maybeDescribe("CM6 markdown typing affordances", () => {
     expect(ed.getMarkdownSelection().from).toBe(ed.getMarkdown().indexOf("after"));
     ed.destroy();
   });
+
+  it("table commands treat an escaped pipe as cell text", async () => {
+    const { createEditorCM6 } = await import("../../src/cm6/editor-cm6.ts");
+    const { splitTableCells } = await import("../../src/cm6/table-model.ts");
+    const { tableNavigateCell } = await import("../../src/cm6/commands/index.ts");
+    const host = document.createElement("div");
+    const source = "| A\\|B | C |\n| --- | --- |\n| x | y |";
+    const ed = createEditorCM6(host, { initialContent: source });
+    try {
+      ed.setSelection(source.indexOf("A\\|B") + 1);
+      expect(tableNavigateCell(ed.view, 1)).toBe(true);
+      expect(ed.getMarkdownSelection().from).toBe(source.indexOf("C"));
+      ed.setSelection(ed.getMarkdown().indexOf("y"));
+      expect(ed.runCommand("table-insert-row")).toBe(true);
+      const lines = ed.getMarkdown().split("\n");
+      expect(splitTableCells(lines[0]!)).toEqual(["A\\|B", "C"]);
+      expect(splitTableCells(lines[3]!)).toHaveLength(2);
+      expect(lines).toHaveLength(4);
+    } finally {
+      ed.destroy();
+    }
+  });
+
+  it("moving between formatted table cells leaves the source untouched", async () => {
+    const { createEditorCM6 } = await import("../../src/cm6/editor-cm6.ts");
+    const { tableNavigateCell, tableEnterSameColumn } = await import("../../src/cm6/commands/index.ts");
+    const { formatTableLines, parseTableModel } = await import("../../src/cm6/table-model.ts");
+    const lines = ["| A | B |", "| --- | --- |", "| x | y |", "| z | w |"];
+    const source = formatTableLines(parseTableModel(lines, 1, 0, 0)).join("\n");
+    const host = document.createElement("div");
+    const ed = createEditorCM6(host, { initialContent: source });
+    try {
+      ed.setSelection(source.indexOf("x"));
+      const doc = ed.view.state.doc;
+      expect(tableNavigateCell(ed.view, 1)).toBe(true);
+      expect(ed.view.state.doc).toBe(doc);
+      ed.setSelection(source.indexOf("x"));
+      expect(tableEnterSameColumn(ed.view)).toBe(true);
+      expect(ed.view.state.doc).toBe(doc);
+      expect(ed.getMarkdown()).toBe(source);
+    } finally {
+      ed.destroy();
+    }
+  });
 });
 
 maybeDescribe("CM6 runCommand — block insert", () => {

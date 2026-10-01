@@ -27,4 +27,16 @@ describe("fenced code range updates", () => {
     const firstOpen = state.doc.toString().indexOf("```js");
     edit(firstOpen, firstOpen + 3, "~~~");
   });
+
+  test("two edits on one line can jointly create a fence", () => {
+    let state = EditorState.create({
+      doc: "`\n| A | B |\n| --- | --- |\n| x | y |\n",
+      extensions: [fencedCodeRangesExtension],
+    });
+    state = state.update({ changes: [
+      { from: 0, insert: "`" },
+      { from: 1, insert: "`" },
+    ] }).state;
+    expect(getFencedCodeRanges(state)).toEqual(scanFencedCodeRangesInDoc(state.doc));
+  });
 });

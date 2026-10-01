@@ -1697,6 +1697,51 @@ After`;
     cleanup();
   });
 
+  test("table syntax inside a code fence stays literal through fence edits", () => {
+    const source = "```md\n| A | B |\n| --- | --- |\n| 1 | 2 |\n```\n";
+    const { editor, cleanup } = mountCM6(source);
+    try {
+      expect(document.querySelector(".cm-table-block")).toBeNull();
+      editor.view.dispatch({ changes: { from: 0, to: 6 } });
+      expect(document.querySelector(".cm-table-block table")).toBeTruthy();
+      editor.view.dispatch({ changes: { from: 0, insert: "```md\n" } });
+      expect(document.querySelector(".cm-table-block")).toBeNull();
+      expect(editor.getMarkdown()).toBe(source);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("two cursors forming a fence hide a table in the same transaction", () => {
+    const { editor, cleanup } = mountCM6("`\n| A | B |\n| --- | --- |\n| 1 | 2 |\n");
+    try {
+      expect(document.querySelector(".cm-table-block")).toBeTruthy();
+      editor.view.dispatch({ changes: [
+        { from: 0, insert: "`" },
+        { from: 1, insert: "`" },
+      ] });
+      expect(document.querySelector(".cm-table-block")).toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("changing a table separator updates the widget immediately", () => {
+    const source = "| A | B |\n| --- | --- |\n| 1 | 2 |";
+    const { editor, cleanup } = mountCM6(source);
+    try {
+      expect(document.querySelector(".cm-table-block")).toBeTruthy();
+      const separator = source.indexOf("---");
+      editor.view.dispatch({ changes: { from: separator, to: separator + 3 } });
+      expect(document.querySelector(".cm-table-block")).toBeNull();
+      editor.view.dispatch({ changes: { from: separator, insert: "---" } });
+      expect(document.querySelector(".cm-table-block")).toBeTruthy();
+      expect(editor.getMarkdown()).toBe(source);
+    } finally {
+      cleanup();
+    }
+  });
+
   test("table widgets consume trailing layout attrs", () => {
     const md = "| A | B |\n| --- | --- |\n| 1 | 2 |\n{size:75%; align:right; wrap:on}\n\nDone";
     const { editor, cleanup } = mountCM6(md);
@@ -1715,6 +1760,21 @@ After`;
     expect((editor.view as unknown as { contentDOM: HTMLElement }).contentDOM.textContent)
       .toContain("{size:75%; align:right; wrap:on}");
     cleanup();
+  });
+
+  test("table controls preserve an escaped pipe in another cell", () => {
+    const md = "| A\\|B | C |\n| --- | --- |\n| x | y |";
+    const { editor, cleanup } = mountCM6(md);
+    try {
+      document.querySelector<HTMLButtonElement>(".cm-table-toolbar button[title='Insert row below']")!.click();
+      expect(editor.getMarkdown()).toContain("| A\\|B | C |");
+      expect(editor.getMarkdown()).not.toContain("A\\\\|B");
+      const first = document.querySelector<HTMLTableCellElement>(".cm-markdown-table-editable th");
+      first!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+      expect(first!.querySelector<HTMLInputElement>("input")?.value).toBe("A|B");
+    } finally {
+      cleanup();
+    }
   });
 
   test("aligned table widget clicks do not use visual coords as cursor offsets", () => {

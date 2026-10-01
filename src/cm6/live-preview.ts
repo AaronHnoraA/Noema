@@ -62,7 +62,7 @@ import {
 } from "../layout-attrs.ts";
 import { tocIndexFromState } from "./toc-index.ts";
 import { hasViewportDecorationRefresh, refreshViewportDecorations, viewportDecorationRefreshRanges } from "./viewport-refresh.ts";
-import { getFencedCodeRanges } from "./code-ranges.ts";
+import { changesMightAffectFencedCodeRanges, getFencedCodeRanges } from "./code-ranges.ts";
 import { orgEnvContextForRange } from "./extensions/visual/widgets/block-extras.ts";
 import { markdownLinkDestination } from "../markdown-link.ts";
 import {
@@ -857,7 +857,6 @@ const livePreviewPlugin = ViewPlugin.fromClass(LivePreviewPlugin, {
 // blockquote line so themes can apply font-size / indentation / border.
 // ---------------------------------------------------------------------------
 
-const CODE_FENCE_LINE_RE = /^[ \t]{0,3}(`{3,}|~{3,})/;
 const SEMANTIC_HEADING_TEXT_RE = /@@(?:part|section)(?:\(|[ \t]+\[)/;
 
 interface MarkdownTable {
@@ -877,16 +876,13 @@ function splitTableRow(line: string): string[] {
   const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
   const cells: string[] = [];
   let cell = "";
-  let escaped = false;
-  for (const ch of trimmed) {
-    if (escaped) {
-      cell += ch;
-      escaped = false;
-      continue;
-    }
-    if (ch === "\\") {
-      cell += ch;
-      escaped = true;
+  for (let i = 0; i < trimmed.length; i++) {
+    const ch = trimmed[i]!;
+    if (ch === "\\" && i + 1 < trimmed.length) {
+      const next = trimmed[++i]!;
+      // The widget edits cell text, so decode only the table delimiter escape.
+      // Serialization adds that escape back exactly once on commit.
+      cell += next === "|" ? "|" : `\\${next}`;
       continue;
     }
     if (ch === "|") {
@@ -909,10 +905,6 @@ function isTableRowLine(line: string): boolean {
   return /^\s*\|.*\|\s*$/.test(line);
 }
 
-function isCodeFenceLine(line: string): boolean {
-  return CODE_FENCE_LINE_RE.test(line);
-}
-
 function nextLayoutAttrsLine(doc: Text, sourceTo: number): { to: number; layout: LayoutAttrs } | null {
   const currentLine = doc.lineAt(sourceTo);
   if (currentLine.number >= doc.lines) return null;
@@ -930,6 +922,7 @@ function collectMarkdownTablesInLineRange(
   const tables: MarkdownTable[] = [];
   const doc = state.doc;
   const blockMathRanges = getBlockMathRanges(state);
+  const fencedRanges = getFencedCodeRanges(state);
   let lineNum = Math.max(1, startLine);
   const lastLine = Math.min(doc.lines, endLine);
 
@@ -939,6 +932,7 @@ function collectMarkdownTablesInLineRange(
     if (
       !separator
       || rangeOverlapsAny(header.from, separator.to, blockMathRanges)
+      || rangeOverlapsAny(header.from, separator.to, fencedRanges)
       || !isTableRowLine(header.text)
       || !isTableRowLine(separator.text)
       || !isTableSeparatorLine(separator.text)
@@ -950,7 +944,9 @@ function collectMarkdownTablesInLineRange(
     let endLine = lineNum + 1;
     while (endLine + 1 <= lastLine) {
       const next = doc.line(endLine + 1);
-      if (rangeOverlapsAny(next.from, next.to, blockMathRanges) || !isTableRowLine(next.text)) break;
+      if (rangeOverlapsAny(next.from, next.to, blockMathRanges)
+          || rangeOverlapsAny(next.from, next.to, fencedRanges)
+          || !isTableRowLine(next.text)) break;
       endLine++;
     }
 
@@ -977,6 +973,17 @@ function markdownTablesFromState(state: EditorState): readonly MarkdownTable[] {
   return state.field(markdownTablesField, false) ?? collectMarkdownTables(state);
 }
 
+function firstTableEndingAtOrAfter(tables: readonly MarkdownTable[], from: number): number {
+  let first = 0;
+  let past = tables.length;
+  while (first < past) {
+    const middle = (first + past) >> 1;
+    if (tables[middle]!.to < from) first = middle + 1;
+    else past = middle;
+  }
+  return first;
+}
+
 function mapMarkdownTables(tables: readonly MarkdownTable[], changes: ChangeSet): readonly MarkdownTable[] {
   return tables.map((table) => ({
     ...table,
@@ -991,6 +998,7 @@ function canMapMarkdownTables(
   tables: readonly MarkdownTable[],
   changes: ChangeSet,
 ): boolean {
+  if (changesMightAffectFencedCodeRanges(doc, changes)) return false;
   let canMap = true;
   changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
     if (!canMap) return;
@@ -1000,7 +1008,8 @@ function canMapMarkdownTables(
       canMap = false;
       return;
     }
-    if (tables.some((table) => fromA <= table.to && toA >= table.from)) {
+    const table = tables[firstTableEndingAtOrAfter(tables, fromA)];
+    if (table && toA >= table.from) {
       canMap = false;
       return;
     }
@@ -1025,27 +1034,54 @@ function expandedTableLineWindow(doc: Text, from: number, to: number): { startLi
   return { startLine, endLine };
 }
 
-function expandedCodeFenceLineWindow(doc: Text, from: number, to: number): { startLine: number; endLine: number } {
-  const startCenter = doc.lineAt(Math.min(from, doc.length)).number;
-  const endCenter = doc.lineAt(Math.min(Math.max(from, to), doc.length)).number;
-  let startLine = startCenter;
-  let endLine = endCenter;
-  for (let lineNum = startCenter - 1; lineNum >= 1; lineNum--) {
-    if (isCodeFenceLine(doc.line(lineNum).text)) {
-      startLine = lineNum;
-      break;
+function affectedFenceWindow(
+  oldState: EditorState,
+  nextState: EditorState,
+  changes: ChangeSet,
+): { from: number; to: number } | null {
+  if (!changesMightAffectFencedCodeRanges(oldState.doc, changes)) return null;
+  let from = Number.POSITIVE_INFINITY;
+  let to = 0;
+  const oldRanges = getFencedCodeRanges(oldState);
+  const nextRanges = getFencedCodeRanges(nextState);
+  changes.iterChanges((fromA, toA, fromB, toB) => {
+    from = Math.min(from, fromB);
+    to = Math.max(to, toB);
+    for (const range of oldRanges) {
+      if (range.from > toA || range.to < fromA) continue;
+      from = Math.min(from, changes.mapPos(range.from, -1));
+      to = Math.max(to, changes.mapPos(range.to, 1));
     }
-  }
-  for (let lineNum = endCenter + 1; lineNum <= doc.lines; lineNum++) {
-    if (isCodeFenceLine(doc.line(lineNum).text)) {
-      endLine = lineNum;
-      break;
+    for (const range of nextRanges) {
+      if (range.from > toB || range.to < fromB) continue;
+      from = Math.min(from, range.from);
+      to = Math.max(to, range.to);
     }
+  });
+  return Number.isFinite(from) ? { from, to } : null;
+}
+
+function affectedTableLineWindow(
+  oldState: EditorState,
+  nextState: EditorState,
+  changes: ChangeSet,
+): { startLine: number; endLine: number } {
+  let from = Number.POSITIVE_INFINITY;
+  let to = 0;
+  changes.iterChanges((_fromA, _toA, fromB, toB) => {
+    from = Math.min(from, fromB);
+    to = Math.max(to, toB);
+  });
+  const fence = affectedFenceWindow(oldState, nextState, changes);
+  if (fence) {
+    from = Math.min(from, fence.from);
+    to = Math.max(to, fence.to);
   }
-  return { startLine, endLine };
+  return expandedTableLineWindow(nextState.doc, from, to);
 }
 
 function updateMarkdownTablesNearChanges(
+  oldState: EditorState,
   state: EditorState,
   tables: readonly MarkdownTable[],
   changes: ChangeSet,
@@ -1059,13 +1095,20 @@ function updateMarkdownTablesNearChanges(
     toB = Math.max(toB, nextTo);
   });
   if (changeCount === 0 || !Number.isFinite(fromB)) return mapMarkdownTables(tables, changes);
-  const { startLine, endLine } = expandedTableLineWindow(state.doc, fromB, toB);
+  const { startLine, endLine } = affectedTableLineWindow(oldState, state, changes);
   const affectedFrom = state.doc.line(startLine).from;
   const affectedTo = state.doc.line(endLine).to;
   const rescanned = collectMarkdownTablesInLineRange(state, startLine, endLine);
   const mapped = mapMarkdownTables(tables, changes)
     .filter((table) => table.to < affectedFrom || table.from > affectedTo);
-  return [...mapped, ...rescanned].sort((a, b) => a.from - b.from || a.to - b.to);
+  let first = 0;
+  let past = mapped.length;
+  while (first < past) {
+    const middle = (first + past) >> 1;
+    if (mapped[middle]!.from < affectedFrom) first = middle + 1;
+    else past = middle;
+  }
+  return mapped.slice(0, first).concat(rescanned, mapped.slice(first));
 }
 
 function inlineMarkdownHTML(markdown: string): string {
@@ -1702,7 +1745,7 @@ const markdownTablesField = StateField.define<readonly MarkdownTable[]>({
     if (tr.docChanged) {
       return canMapMarkdownTables(tr.startState.doc, tables, tr.changes)
         ? mapMarkdownTables(tables, tr.changes)
-        : updateMarkdownTablesNearChanges(tr.state, tables, tr.changes) ?? collectMarkdownTables(tr.state);
+        : updateMarkdownTablesNearChanges(tr.startState, tr.state, tables, tr.changes) ?? collectMarkdownTables(tr.state);
     }
     return tables;
   },
@@ -1717,8 +1760,9 @@ function buildTableDecoRanges(
   const tables = markdownTablesFromState(state);
   const sel = state.selection.main;
 
-  for (const table of tables) {
-    if (table.to < from || table.from > to) continue;
+  for (let index = firstTableEndingAtOrAfter(tables, from);
+       index < tables.length && tables[index]!.from <= to; index++) {
+    const table = tables[index]!;
     if (table.sourceTo < table.to && sel.from <= table.to && sel.to >= table.sourceTo) continue;
     decos.push(
       Decoration.replace({
@@ -1741,13 +1785,9 @@ function activeTableAttrsKey(state: EditorState): string {
   // its source attributes needs to swap that table back to editable source.
   if (!sel.empty) return "";
   const tables = markdownTablesFromState(state);
-  const keys: string[] = [];
-  for (const table of tables) {
-    if (table.sourceTo < table.to && sel.from <= table.to && sel.to >= table.sourceTo) {
-      keys.push(`${table.from}:${table.to}`);
-    }
-  }
-  return keys.join("|");
+  const table = tables[firstTableEndingAtOrAfter(tables, sel.from)];
+  return table && table.sourceTo < table.to && sel.from >= table.sourceTo && sel.from <= table.to
+    ? `${table.from}:${table.to}` : "";
 }
 
 function tableRangesFromKey(key: string): Array<{ from: number; to: number }> {
@@ -1803,7 +1843,7 @@ const tableDecoField = StateField.define<DecorationSet>({
       const tables = markdownTablesFromState(tr.startState);
       return canMapMarkdownTables(tr.startState.doc, tables, tr.changes)
         ? value.map(tr.changes)
-        : patchTableDecosNearChanges(tr.state, value.map(tr.changes), tr.changes);
+        : patchTableDecosNearChanges(tr.startState, tr.state, value.map(tr.changes), tr.changes);
     }
     if (tr.selection != null) {
       const oldKey = activeTableAttrsKey(tr.startState);
@@ -1816,6 +1856,7 @@ const tableDecoField = StateField.define<DecorationSet>({
 });
 
 function patchTableDecosNearChanges(
+  oldState: EditorState,
   state: EditorState,
   mapped: DecorationSet,
   changes: ChangeSet,
@@ -1827,7 +1868,7 @@ function patchTableDecosNearChanges(
     toB = Math.max(toB, nextTo);
   });
   if (!Number.isFinite(fromB)) return mapped;
-  const { startLine, endLine } = expandedTableLineWindow(state.doc, fromB, toB);
+  const { startLine, endLine } = affectedTableLineWindow(oldState, state, changes);
   const affectedFrom = state.doc.line(startLine).from;
   const affectedTo = state.doc.line(endLine).to;
   return mapped
@@ -1860,10 +1901,18 @@ function buildLineDecoRanges(
     decos.push(Decoration.line({ attributes: { class: className } }).range(line.from));
   }
 
-  for (const heading of tocIndexFromState(state).headings) {
+  const headings = tocIndexFromState(state).headings;
+  let firstHeading = 0;
+  let pastHeading = headings.length;
+  while (firstHeading < pastHeading) {
+    const middle = (firstHeading + pastHeading) >> 1;
+    if (headings[middle]!.pos < windowFrom) firstHeading = middle + 1;
+    else pastHeading = middle;
+  }
+  for (let index = firstHeading; index < headings.length && headings[index]!.pos <= windowTo; index++) {
+    const heading = headings[index]!;
     if (heading.source === "semantic") continue;
     const line = doc.lineAt(Math.max(0, Math.min(heading.pos, doc.length)));
-    if (line.to < windowFrom || line.from > windowTo) continue;
     if (rangeInsideAny(line.from, line.to, lineExcludedRanges)) continue;
     decos.push(Decoration.line({ attributes: { class: `cm-md-h${heading.renderLevel ?? heading.level}` } }).range(line.from));
   }
@@ -1903,8 +1952,10 @@ function buildLineDecoRanges(
     },
   });
 
-  for (const table of markdownTablesFromState(state)) {
-    if (table.to < windowFrom || table.from > windowTo) continue;
+  const tables = markdownTablesFromState(state);
+  const firstTable = firstTableEndingAtOrAfter(tables, windowFrom);
+  for (let index = firstTable; index < tables.length && tables[index]!.from <= windowTo; index++) {
+    const table = tables[index]!;
     let lineNum = Math.max(firstLine, doc.lineAt(table.from).number);
     const lastLine = Math.min(lastWindowLine, doc.lineAt(table.to).number);
     while (lineNum <= lastLine) {
@@ -1947,14 +1998,14 @@ const lineDecoField = StateField.define<DecorationSet>({
     // below it. Repair this small structural boundary in the same transaction.
     if (tr.docChanged && blankLineClassChanged(tr.startState.doc, tr.state.doc, tr.changes)) {
       return canPatchLineDecosNearChanges(tr.startState.doc, tr.changes)
-        ? patchLineDecosNearChanges(tr.startState.doc, tr.state, value.map(tr.changes), tr.changes)
+        ? patchLineDecosNearChanges(tr.startState, tr.state, value.map(tr.changes), tr.changes)
         : buildLineDecos(tr.state);
     }
     if (isCoalescedVisualTypingTransaction(tr)) return value.map(tr.changes);
     if (tr.docChanged) {
       if (canMapLineDecos(tr.startState.doc, tr.changes)) return value.map(tr.changes);
       if (canPatchLineDecosNearChanges(tr.startState.doc, tr.changes)) {
-        return patchLineDecosNearChanges(tr.startState.doc, tr.state, value.map(tr.changes), tr.changes);
+        return patchLineDecosNearChanges(tr.startState, tr.state, value.map(tr.changes), tr.changes);
       }
       return buildLineDecos(tr.state);
     }
@@ -2002,9 +2053,9 @@ function blankLineClassChanged(oldDoc: Text, newDoc: Text, changes: ChangeSet): 
 
 function canPatchLineDecosNearChanges(doc: Text, changes: ChangeSet): boolean {
   // Newline edits (every Enter press) are patched near the change, not full-doc
-  // rebuilt: patchLineDecosNearChanges already expands its window over contiguous
-  // table rows and enclosing code fences, so a newline's structural reach is
-  // covered. This mirrors htmlBlockDecoField, which patches near changes
+  // rebuilt: patchLineDecosNearChanges expands over contiguous table rows and
+  // indexed code fences affected by the change. This mirrors htmlBlockDecoField,
+  // which patches near changes
   // unconditionally. Without this, each Enter in a large document forced a
   // whole-document syntaxTree.iterate (full parse) via buildLineDecos.
   // Semantic part/section headings still need a full rebuild (they renumber
@@ -2022,7 +2073,7 @@ function canPatchLineDecosNearChanges(doc: Text, changes: ChangeSet): boolean {
 }
 
 function patchLineDecosNearChanges(
-  oldDoc: Text,
+  oldState: EditorState,
   state: EditorState,
   mapped: DecorationSet,
   changes: ChangeSet,
@@ -2033,20 +2084,15 @@ function patchLineDecosNearChanges(
     fromB = Math.min(fromB, state.doc.line(startLine).from);
     toB = Math.max(toB, state.doc.line(endLine).to);
   };
-  changes.iterChanges((fromA, toA, nextFrom, nextTo, inserted) => {
+  changes.iterChanges((_fromA, _toA, nextFrom, nextTo) => {
     const tableWindow = expandedTableLineWindow(state.doc, nextFrom, nextTo);
     includeNewLines(tableWindow.startLine, tableWindow.endLine);
-    const removed = oldDoc.sliceString(fromA, toA);
-    const added = inserted.toString();
-    if (!/[`~]/.test(removed) && !/[`~]/.test(added)) return;
-
-    const oldWindow = expandedCodeFenceLineWindow(oldDoc, fromA, toA);
-    fromB = Math.min(fromB, changes.mapPos(oldDoc.line(oldWindow.startLine).from, -1));
-    toB = Math.max(toB, changes.mapPos(oldDoc.line(oldWindow.endLine).to, 1));
-
-    const newWindow = expandedCodeFenceLineWindow(state.doc, nextFrom, nextTo);
-    includeNewLines(newWindow.startLine, newWindow.endLine);
   });
+  const fence = affectedFenceWindow(oldState, state, changes);
+  if (fence) {
+    fromB = Math.min(fromB, fence.from);
+    toB = Math.max(toB, fence.to);
+  }
   if (!Number.isFinite(fromB)) return mapped;
   const startLine = state.doc.lineAt(Math.max(0, Math.min(fromB, state.doc.length))).number;
   const endLine = state.doc.lineAt(Math.max(0, Math.min(toB, state.doc.length))).number;

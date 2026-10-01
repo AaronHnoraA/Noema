@@ -12,7 +12,7 @@
 import { EditorView } from "@codemirror/view";
 import type { Text } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
-import { parseTableModel, formatTableLines, tableTooLarge, type TableAlign } from "../table-model.ts";
+import { parseTableModel, formatTableLines, splitTableCells, tableTooLarge, type TableAlign } from "../table-model.ts";
 import { writeSystemClipboard } from "../../system-clipboard.ts";
 import type {
   EditorBlockContext,
@@ -781,7 +781,16 @@ function findTableInfo(view: EditorView): TableInfo | null {
 }
 
 function splitCells(row: string): string[] {
-  return row.split("|").slice(1, -1).map((c) => c.trim() || " ");
+  return splitTableCells(row).map((cell) => cell || " ");
+}
+
+function tablePipeOffsets(row: string): number[] {
+  const offsets: number[] = [];
+  for (let i = 0; i < row.length; i++) {
+    if (row[i] === "\\" && i + 1 < row.length) { i++; continue; }
+    if (row[i] === "|") offsets.push(i);
+  }
+  return offsets;
 }
 
 function buildRow(cells: string[]): string {
@@ -797,9 +806,9 @@ function columnIndexAtOffset(row: string, offset: number): number {
   const cellCount = splitCells(row).length;
   if (cellCount <= 0) return 0;
   let col = 0;
-  for (let i = 0; i < row.length; i++) {
-    if (i >= offset) break;
-    if (row[i] === "|") col++;
+  for (const pipe of tablePipeOffsets(row)) {
+    if (pipe >= offset) break;
+    col++;
   }
   return Math.max(0, Math.min(cellCount - 1, col - 1));
 }
@@ -809,12 +818,8 @@ function rowOffset(lines: string[], rowIdx: number): number {
 }
 
 function cellOffset(row: string, colIdx: number): number {
-  let seen = -1;
-  for (let i = 0; i < row.length; i++) {
-    if (row[i] !== "|") continue;
-    seen++;
-    if (seen === colIdx) return Math.min(row.length, i + 2);
-  }
+  const pipe = tablePipeOffsets(row)[colIdx];
+  if (pipe != null) return Math.min(row.length, pipe + (row[pipe + 1] === " " ? 2 : 1));
   return Math.max(0, row.length - 1);
 }
 
@@ -944,7 +949,6 @@ export function tableNavigateCell(view: EditorView, dir: 1 | -1): boolean {
 
   const sepIdx = lines.findIndex(isSeparatorRow);
   const colCount = splitCells(lines[0] ?? "").length;
-  const bodyRows = lines.filter((_, i) => i !== sepIdx);
 
   // Build flat cell list (skip separator)
   type Cell = { rowIdx: number; colIdx: number };
@@ -983,12 +987,15 @@ export function tableNavigateCell(view: EditorView, dir: 1 | -1): boolean {
   const newText = formatted.join("\n");
   const targetRowText = formatted[target.rowIdx] ?? "";
   const cursor = startPos + rowOffset(formatted, target.rowIdx) + cellOffset(targetRowText, target.colIdx);
-  view.dispatch({
-    changes: { from: startPos, to: endPos, insert: newText },
-    selection: { anchor: cursor },
-    scrollIntoView: true,
-  });
-  void bodyRows;
+  if (newText === lines.join("\n")) {
+    view.dispatch({ selection: { anchor: cursor }, scrollIntoView: true });
+  } else {
+    view.dispatch({
+      changes: { from: startPos, to: endPos, insert: newText },
+      selection: { anchor: cursor },
+      scrollIntoView: true,
+    });
+  }
   return true;
 }
 
@@ -1053,11 +1060,15 @@ export function tableEnterSameColumn(view: EditorView): boolean {
   const newText = formatted.join("\n");
   const targetRowText = formatted[nextRow] ?? "";
   const cursor = startPos + rowOffset(formatted, nextRow) + cellOffset(targetRowText, currentColIdx);
-  view.dispatch({
-    changes: { from: startPos, to: endPos, insert: newText },
-    selection: { anchor: cursor },
-    scrollIntoView: true,
-  });
+  if (newText === lines.join("\n")) {
+    view.dispatch({ selection: { anchor: cursor }, scrollIntoView: true });
+  } else {
+    view.dispatch({
+      changes: { from: startPos, to: endPos, insert: newText },
+      selection: { anchor: cursor },
+      scrollIntoView: true,
+    });
+  }
   return true;
 }
 
