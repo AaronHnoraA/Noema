@@ -118,3 +118,12 @@
   --aaron-status-error: #e4b3b3;
   --aaron-status-info: #a9cbff;
 }
+
+/* The SVG preserves authored colours, including dark blue labels. Give TikZ
+ * its original paper surface in dark themes and use dark default-pen ink. */
+:root:not([data-noema-theme]),
+:root[data-noema-theme="aaronnote"],
+:root[data-noema-theme="midnight"] {
+  --note-tikz-background: #fbfaf7;
+  --note-tikz-ink: #24201a;
+}

@@ -27,8 +27,7 @@
    * LaTeX's \textfloatsep is 2em; GitHub uses ~1em. */
   --note-figure-gap-top: 0.72em;
   --note-figure-gap-bottom: 0.9em;
-  /* Vector figures (TikZ) are compiled as black-on-transparent artwork, so they
-   * need a page-like surface to stay legible on a dark theme. */
+  /* Diagram paper also supplies the dark theme's TikZ preview surface. */
   --note-figure-paper: #fbfaf7;
   --note-figure-paper-pad: 0.55em;
   --note-table-image-max: 180px;

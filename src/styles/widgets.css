@@ -2168,7 +2168,7 @@
   cursor: default;
 }
 /* Mermaid uses its light default theme, so its #333 strokes need a light
- * surface in a dark editor. TikZ uses theme colors and stays transparent. */
+ * surface in a dark editor. */
 .cm-editor .cm-mermaid-block:not(.cm-diagram-error),
 .cm-editor .cm-mermaid-block-preview:not(.cm-diagram-error),
 .cm-editor pre .cb-diagram-preview:not(.cm-diagram-error) {
@@ -2212,13 +2212,14 @@ noema-tikz {
 .aaronnote-tikz-image {
   display: block;
   box-sizing: content-box;
+  color: var(--note-tikz-ink, inherit);
   width: var(--aaronnote-image-width, var(--aaronnote-tikz-natural-width, auto));
   max-width: var(--aaronnote-image-max-width, min(100%, var(--note-image-max, 100%)));
   max-height: var(--aaronnote-image-max-height, var(--note-image-max-height, none));
   margin: 0 auto;
   padding: var(--note-figure-paper-pad, 0.55em);
   border-radius: 4px;
-  background: transparent;
+  background: var(--note-tikz-background, transparent);
 }
 .cm-editor .cm-tikz-env-widget.aaronnote-image-align-left .cm-tikz-env-image,
 .aaronnote-tikz.aaronnote-image-align-left .aaronnote-tikz-image {
