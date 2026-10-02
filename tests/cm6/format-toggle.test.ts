@@ -395,7 +395,7 @@ describe("details found by comparing with MarkText, files.md and Marker", () => 
     expect(ed.getMarkdown()).toBe("a **[docs](u)**\n**then `code`** here");
   });
 
-  it("relinks an existing link and leaves code and multiline selections intact", () => {
+  it("relinks an existing link and leaves code and separate blocks intact", () => {
     const linked = open("see [docs](old) now", 7);
     linked.runCommand("link", "https://new.example");
     expect(linked.getMarkdown()).toBe("see [docs](https://new.example) now");
@@ -404,9 +404,52 @@ describe("details found by comparing with MarkText, files.md and Marker", () => 
     expect(code.runCommand("link")).toBe(false);
     expect(code.getMarkdown()).toBe("use `code` now");
 
-    const lines = open("first\nsecond", 0, 12);
+    const lines = open("first\n\nsecond", 0, 13);
     expect(lines.runCommand("link")).toBe(false);
-    expect(lines.getMarkdown()).toBe("first\nsecond");
+    expect(lines.getMarkdown()).toBe("first\n\nsecond");
+  });
+
+  it("recognizes formats and links across a soft line break", () => {
+    const bold = open("**first\nsecond**", 10);
+    expect(bold.runCommand("bold")).toBe(true);
+    expect(bold.getMarkdown()).toBe("first\nsecond");
+    expect(bold.getMarkdownSelection()).toEqual({ from: 8, to: 8 });
+
+    const code = open("use `first\nsecond` now", 13);
+    expect(code.runCommand("bold")).toBe(false);
+    expect(code.runCommand("link")).toBe(false);
+    expect(code.runCommand("code")).toBe(true);
+    expect(code.getMarkdown()).toBe("use first\nsecond now");
+
+    const linked = open("see [first\nsecond](url) now", 12);
+    expect(linked.runCommand("link")).toBe(true);
+    expect(linked.getMarkdown()).toBe("see first\nsecond now");
+  });
+
+  it("links a soft-wrapped paragraph and relinks an existing soft-wrapped link", () => {
+    const plain = open("first\nsecond", 0, 12);
+    expect(plain.runCommand("link")).toBe(true);
+    expect(plain.getMarkdown()).toBe("[first\nsecond](https://)");
+
+    const linked = open("see [first\nsecond](old) now", 11);
+    expect(linked.runCommand("link", "new")).toBe(true);
+    expect(linked.getMarkdown()).toBe("see [first\nsecond](new) now");
+  });
+
+  it("clears a format spanning a soft line break", () => {
+    const ed = open("**first\nsecond**", 9);
+    expect(ed.runCommand("clear-format")).toBe(true);
+    expect(ed.getMarkdown()).toBe("first\nsecond");
+  });
+
+  it("keeps quoted and listed paragraphs intact across a soft break", () => {
+    const quote = open("> **first\n> second**", 14);
+    expect(quote.runCommand("bold")).toBe(true);
+    expect(quote.getMarkdown()).toBe("> first\n> second");
+
+    const item = open("- [first\n  second](url)", 14);
+    expect(item.runCommand("link")).toBe(true);
+    expect(item.getMarkdown()).toBe("- first\n  second");
   });
 
   it("turns an angle autolink into a single link", async () => {

@@ -39,7 +39,7 @@ import { revisionAdviceRange, revisionSource, type RevisionSourceOptions } from 
 import { moveBlockAtCursor } from "../block-move.ts";
 import { clearInlineFormatSpec, inlineFormatsAvailable, toggleInlineFormatSpec, type InlineFormatKind } from "../inline-format.ts";
 import { changeHeadingLevelSpec, toggleBlockquoteSpec, toggleHeadingSpec, toggleListSpec, type ListKind } from "../block-format.ts";
-import { parseMarkdownLine } from "../languages/markdown/index.ts";
+import { markdownInlineContext } from "../languages/markdown/index.ts";
 
 // ---------------------------------------------------------------------------
 // Inline wrap (bold / italic / highlight / strike / code / link / image)
@@ -71,9 +71,8 @@ function wordAround(doc: Text, pos: number): { from: number; to: number } | null
 }
 
 function insideImage(state: EditorView["state"], pos: number): boolean {
-  const line = state.doc.lineAt(pos);
-  const tree = parseMarkdownLine(line.text);
-  const local = pos - line.from;
+  const { tree, base } = markdownInlineContext(state, pos);
+  const local = pos - base;
   for (let node: SyntaxNode | null = tree.resolveInner(local, 1); node; node = node.parent) {
     if (node.name === "Image" && node.from < local) return true;
   }
@@ -81,9 +80,8 @@ function insideImage(state: EditorView["state"], pos: number): boolean {
 }
 
 function insideInlineCode(state: EditorView["state"], pos: number): boolean {
-  const line = state.doc.lineAt(pos);
-  const tree = parseMarkdownLine(line.text);
-  const local = pos - line.from;
+  const { tree, base } = markdownInlineContext(state, pos);
+  const local = pos - base;
   for (let node: SyntaxNode | null = tree.resolveInner(local, 1); node; node = node.parent) {
     if (node.name === "InlineCode" && node.from < local && local < node.to) return true;
   }
@@ -94,15 +92,13 @@ type LocalLink = { node: SyntaxNode; base: number };
 
 function linkAtSelection(state: EditorView["state"]): LocalLink | null {
   const { from, to } = state.selection.main;
-  const line = state.doc.lineAt(from);
-  if (state.doc.lineAt(to).number !== line.number) return null;
-  const tree = parseMarkdownLine(line.text);
-  const localFrom = from - line.from;
-  const localTo = to - line.from;
+  const { tree, base } = markdownInlineContext(state, from, to);
+  const localFrom = from - base;
+  const localTo = to - base;
   const linkAt = (side: -1 | 1) => {
     let node: SyntaxNode | null = tree.resolveInner(localFrom, side);
     while (node && node.name !== "Link") node = node.parent;
-    return node && node.from <= localFrom && node.to >= localTo ? { node, base: line.from } : null;
+    return node && node.from <= localFrom && node.to >= localTo ? { node, base } : null;
   };
   return linkAt(1) ?? linkAt(-1);
 }
@@ -118,13 +114,19 @@ function linkLabel(state: EditorView["state"], { node, base }: LocalLink): strin
 
 /** Keep source constructs whole; flatten existing links before making one link. */
 function linkSelectionText(state: EditorView["state"], from: number, to: number): { from: number; to: number; text: string } | null {
-  const line = state.doc.lineAt(from);
-  if (state.doc.lineAt(to).number !== line.number) return null;
-  const base = line.from;
-  const tree = parseMarkdownLine(line.text);
+  const { tree, base } = markdownInlineContext(state, from, to);
+  // A soft line break is valid link text; a blank line or another block is not.
+  const localFrom = from - base;
+  const localTo = to - base;
+  let oneBlock = false;
+  for (let node: SyntaxNode | null = tree.resolveInner(localFrom, 1); node; node = node.parent) {
+    if (["Paragraph", "ATXHeading", "SetextHeading", "TableCell"].includes(node.name)
+        && node.to >= localTo) { oneBlock = true; break; }
+  }
+  if (!oneBlock) return null;
   const atomic = new Set(["Link", "Image", "Autolink", "InlineCode", "InlineMath"]);
-  let start = from - base;
-  let end = to - base;
+  let start = localFrom;
+  let end = localTo;
   for (let node: SyntaxNode | null = tree.resolveInner(start, 1); node; node = node.parent) {
     if (atomic.has(node.name) && node.from < start && start < node.to) start = Math.min(start, node.from);
   }

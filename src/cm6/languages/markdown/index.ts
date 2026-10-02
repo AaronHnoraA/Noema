@@ -7,7 +7,9 @@
  */
 
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import type { Extension } from "@codemirror/state";
+import { syntaxTree, syntaxTreeAvailable } from "@codemirror/language";
+import type { EditorState, Extension, Text } from "@codemirror/state";
+import type { Tree } from "@lezer/common";
 import { inlineMathMarkdownExtension } from "../../../inline-math.ts";
 import { nestingAwareLinkExtension } from "./nested-links.ts";
 import { cjkEmphasisMarkdownExtension } from "../../../cjk-emphasis.ts";
@@ -18,12 +20,61 @@ const markdownOptions = {
   extensions: [inlineMathMarkdownExtension, nestingAwareLinkExtension, cjkEmphasisMarkdownExtension],
 };
 
-// Commands that touch one source line need the same inline grammar without
-// asking CM6 to parse every preceding megabyte of a large document.
-const lineParser = markdown(markdownOptions).language.parser;
+const localParser = markdown(markdownOptions).language.parser;
 
-export function parseMarkdownLine(text: string) {
-  return lineParser.parse(text);
+export type MarkdownInlineContext = { tree: Tree; base: number; to: number };
+const contextCache = new WeakMap<Text, MarkdownInlineContext[]>();
+const CACHE_CHAR_LIMIT = 256 * 1024;
+
+function body(text: string): string {
+  return text.replace(/^(?:[ \t]{0,3}>[ \t]?)*/u, "");
+}
+
+function startsList(text: string): boolean {
+  return /^[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+/u.test(body(text));
+}
+
+function singleLineBlock(text: string): boolean {
+  return /^[ \t]{0,3}(?:#{1,6}(?:[ \t]+|$)|`{3,}|~{3,}|\||(?:-[ \t]*){3,}$|(?:\*[ \t]*){3,}$|(?:_[ \t]*){3,}$|=+[ \t]*$|#\+(?:begin|end)\b)/iu.test(body(text));
+}
+
+/**
+ * Inline syntax can cross soft line breaks. Use CM6's existing tree when ready;
+ * otherwise parse the selected blocks and their paragraph continuations, rather
+ * than forcing the parser through every earlier megabyte of the document.
+ */
+export function markdownInlineContext(state: EditorState, from: number, to = from): MarkdownInlineContext {
+  if (syntaxTreeAvailable(state, to)) return { tree: syntaxTree(state), base: 0, to: state.doc.length };
+  const doc = state.doc;
+  const cached = contextCache.get(doc) ?? [];
+  const hit = cached.find((context) => context.base <= from && context.to >= to);
+  if (hit) return hit;
+  let first = doc.lineAt(from);
+  let last = doc.lineAt(to);
+  if (!singleLineBlock(first.text) && !startsList(first.text)) {
+    while (first.number > 1) {
+      const previous = doc.line(first.number - 1);
+      if (!body(previous.text).trim() || singleLineBlock(previous.text)) break;
+      first = previous;
+      if (startsList(previous.text)) break;
+    }
+  }
+  if (!singleLineBlock(last.text)) {
+    while (last.number < doc.lines) {
+      const next = doc.line(last.number + 1);
+      if (!body(next.text).trim() || singleLineBlock(next.text) || startsList(next.text)) break;
+      last = next;
+    }
+  }
+  const context = { tree: localParser.parse(doc.sliceString(first.from, last.to)), base: first.from, to: last.to };
+  cached.push(context);
+  let size = cached.reduce((sum, entry) => sum + entry.to - entry.base, 0);
+  while (cached.length > 1 && (cached.length > 8 || size > CACHE_CHAR_LIMIT)) {
+    const removed = cached.shift()!;
+    size -= removed.to - removed.base;
+  }
+  contextCache.set(doc, cached);
+  return context;
 }
 
 export function createMarkdownLanguageExtension(): Extension {

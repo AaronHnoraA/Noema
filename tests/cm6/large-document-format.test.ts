@@ -7,7 +7,8 @@ import { activeInlineFormats, inlineFormatsAvailable } from "../../src/cm6/inlin
 describe("inline commands beyond the syntax parser's initial viewport", () => {
   it("recognizes a code block and a formatted link near the end of a 5 MB note", () => {
     const fixture = readFileSync(join(process.cwd(), "tests/synthetic_qc_note_5mb.md"), "utf8");
-    const tail = "\n```js\n**literal**\n```\n\n**tail** and see [docs](old)";
+    const tail = "\n```js\n**literal**\n```\n\n**tail** and see [docs](old)"
+      + "\n\n**first\nsecond**\n\nuse `first\nsecond` now\n\nsee [first\nsecond](url)";
     const doc = fixture + tail;
     const host = document.createElement("div");
     document.body.append(host);
@@ -24,12 +25,27 @@ describe("inline commands beyond the syntax parser's initial viewport", () => {
       editor.setSelection(boldAt, boldAt);
       expect(activeInlineFormats(editor.view.state).has("bold")).toBe(true);
       expect(editor.runCommand("bold")).toBe(true);
-      expect(editor.getMarkdown().endsWith("\n```js\n**literal**\n```\n\ntail and see [docs](old)")).toBe(true);
+      expect(editor.getMarkdown()).toContain("\n```js\n**literal**\n```\n\ntail and see [docs](old)");
 
       const linkStart = editor.getMarkdown().lastIndexOf("see [docs]");
       editor.setSelection(linkStart, linkStart + 7);
       expect(editor.runCommand("link")).toBe(true);
-      expect(editor.getMarkdown().endsWith("tail and [see docs](https://)")).toBe(true);
+      expect(editor.getMarkdown()).toContain("tail and [see docs](https://)");
+
+      let current = editor.getMarkdown();
+      editor.setSelection(current.lastIndexOf("second**") + 2);
+      expect(editor.runCommand("bold")).toBe(true);
+      expect(editor.getMarkdown()).toContain("\n\nfirst\nsecond\n\n");
+
+      current = editor.getMarkdown();
+      editor.setSelection(current.lastIndexOf("`first\nsecond`") + 9);
+      expect(editor.runCommand("bold")).toBe(false);
+      expect(editor.runCommand("link")).toBe(false);
+
+      current = editor.getMarkdown();
+      editor.setSelection(current.lastIndexOf("[first\nsecond](url)") + 9);
+      expect(editor.runCommand("link")).toBe(true);
+      expect(editor.getMarkdown().endsWith("see first\nsecond")).toBe(true);
     } finally {
       editor.destroy();
       host.remove();

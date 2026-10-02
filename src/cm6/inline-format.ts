@@ -32,7 +32,7 @@ import {
 } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
 import type { Tree } from "@lezer/common";
-import { parseMarkdownLine } from "./languages/markdown/index.ts";
+import { markdownInlineContext } from "./languages/markdown/index.ts";
 
 export type InlineFormatKind =
   | "bold"
@@ -192,31 +192,35 @@ export function inlineFormatSpans(
   const doc = state.doc;
   const lo = Math.max(0, Math.min(from, to));
   const hi = Math.min(doc.length, Math.max(from, to));
+  // A local parse may start inside a fenced block whose opening fence is
+  // outside this paragraph window. Its literal markers are not formats.
+  if (insideCodeBlock(state, lo) && insideCodeBlock(state, hi)) return [];
   const spans: InlineFormatSpan[] = [];
-  for (let number = doc.lineAt(lo).number; number <= doc.lineAt(hi).number; number++) {
-    const line = doc.line(number);
-    if (insideCodeBlock(state, line.from + Math.min(1, line.length))) continue;
-    const tree = parseMarkdownLine(line.text);
-    if (kind === "highlight") {
-      const codes = codeRangesIn(tree, 0, line.length)
-        .map((range) => ({ from: line.from + range.from, to: line.from + range.to }));
+  const { tree, base } = markdownInlineContext(state, lo, hi);
+  if (kind === "highlight") {
+    for (let number = doc.lineAt(lo).number; number <= doc.lineAt(hi).number; number++) {
+      const line = doc.line(number);
+      if (insideCodeBlock(state, line.from + Math.min(1, line.length))) continue;
+      const codes = codeRangesIn(tree, line.from - base, line.to - base)
+        .map((range) => ({ from: base + range.from, to: base + range.to }));
       spans.push(...highlightSpansInLine(line.text, line.from, codes));
-      continue;
     }
-    const { node: nodeName, mark } = TREE_FORMATS[kind];
-    tree.iterate({
-      from: Math.max(0, lo - line.from),
-      to: Math.min(line.length, hi - line.from),
-      enter(node) {
-        if (node.name !== nodeName) return;
-        const open = node.node.firstChild;
-        const close = node.node.lastChild;
-        if (!open || !close || open.name !== mark || close.name !== mark || open.from === close.from) return;
-        spans.push({ kind, from: line.from + node.from, to: line.from + node.to,
-          contentFrom: line.from + open.to, contentTo: line.from + close.from });
-      },
-    });
+    return spans;
   }
+  const { node: nodeName, mark } = TREE_FORMATS[kind];
+  tree.iterate({
+    from: lo - base,
+    to: hi - base,
+    enter(node) {
+      if (CODE_BLOCK_NODES.has(node.name)) return false;
+      if (node.name !== nodeName) return;
+      const open = node.node.firstChild;
+      const close = node.node.lastChild;
+      if (!open || !close || open.name !== mark || close.name !== mark || open.from === close.from) return;
+      spans.push({ kind, from: base + node.from, to: base + node.to,
+        contentFrom: base + open.to, contentTo: base + close.from });
+    },
+  });
   return spans;
 }
 
@@ -253,10 +257,11 @@ function insideCodeBlock(state: EditorState, pos: number): boolean {
 }
 
 function insideInlineCode(state: EditorState, pos: number): boolean {
-  const line = state.doc.lineAt(pos);
-  let node: ReturnType<Tree["resolveInner"]> | null = parseMarkdownLine(line.text).resolveInner(pos - line.from, -1);
+  const { tree, base } = markdownInlineContext(state, pos);
+  const local = pos - base;
+  let node: ReturnType<Tree["resolveInner"]> | null = tree.resolveInner(local, -1);
   for (; node; node = node.parent) {
-    if (node.name === "InlineCode" && node.from < pos - line.from && pos - line.from < node.to) return true;
+    if (node.name === "InlineCode" && node.from < local && local < node.to) return true;
   }
   return false;
 }
@@ -379,19 +384,16 @@ const ATOMIC_INLINE_NODES = new Set(["Link", "Image", "Autolink", "InlineCode", 
  * extends the selection over the link. Noema extends it.
  */
 function expandOverAtomicInlines(state: EditorState, from: number, to: number): { from: number; to: number } {
-  const firstLine = state.doc.lineAt(from);
-  const lastLine = state.doc.lineAt(to);
-  const firstTree = parseMarkdownLine(firstLine.text);
-  const lastTree = firstLine.number === lastLine.number ? firstTree : parseMarkdownLine(lastLine.text);
-  const localFrom = from - firstLine.from;
-  const localTo = to - lastLine.from;
+  const { tree, base } = markdownInlineContext(state, from, to);
+  const localFrom = from - base;
+  const localTo = to - base;
   let start = from;
   let end = to;
-  for (let node: ReturnType<Tree["resolveInner"]> | null = firstTree.resolveInner(localFrom, 1); node; node = node.parent) {
-    if (ATOMIC_INLINE_NODES.has(node.name) && node.from < localFrom && node.to > localFrom) start = Math.min(start, firstLine.from + node.from);
+  for (let node: ReturnType<Tree["resolveInner"]> | null = tree.resolveInner(localFrom, 1); node; node = node.parent) {
+    if (ATOMIC_INLINE_NODES.has(node.name) && node.from < localFrom && node.to > localFrom) start = Math.min(start, base + node.from);
   }
-  for (let node: ReturnType<Tree["resolveInner"]> | null = lastTree.resolveInner(localTo, -1); node; node = node.parent) {
-    if (ATOMIC_INLINE_NODES.has(node.name) && node.from < localTo && node.to > localTo) end = Math.max(end, lastLine.from + node.to);
+  for (let node: ReturnType<Tree["resolveInner"]> | null = tree.resolveInner(localTo, -1); node; node = node.parent) {
+    if (ATOMIC_INLINE_NODES.has(node.name) && node.from < localTo && node.to > localTo) end = Math.max(end, base + node.to);
   }
   return { from: start, to: end };
 }
