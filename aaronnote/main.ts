@@ -72,6 +72,7 @@ import {
 import { Epoch } from "../src/async-epoch.ts";
 import { CoalescedTimer } from "../src/coalesced-timer.ts";
 import { findSlashHint, resolveHintMenuItems } from "../src/hint-core.ts";
+import { emojiCompletionContext, emojiCompletions } from "../src/emoji-shortcodes.ts";
 import { matchHotKey } from "../src/hotkey.ts";
 import { noemaPlatformLabels, primaryModifierDown } from "../src/platform-compat.ts";
 import type { HeadingNumberFormat } from "../src/heading-number.ts";
@@ -10773,6 +10774,46 @@ function showSlashQuickInsert(
   return true;
 }
 
+/** `:name` completes to the emoji character (MarkText/files.md emoji picker). */
+function showEmojiCompletion(
+  ctx: ReturnType<typeof editor.cursorContext>,
+  activeMath: ReturnType<typeof mathAtCursor> | undefined,
+): boolean {
+  const selection = editor.getMarkdownSelection();
+  if (selection.from !== selection.to) return false;
+  const context = emojiCompletionContext(ctx.before);
+  if (!context) return false;
+  const blockType = editor.getBlockContext().type.toLowerCase();
+  if (blockType.includes("code") || blockType.includes("html")) return false;
+  if (snippetContextMode(ctx, activeMath === undefined ? mathAtCursor(ctx) : activeMath) !== "markdown-mode") return false;
+  const matches = emojiCompletions(context.query);
+  if (matches.length === 0) return false;
+  showSnippetPopup(
+    `:${context.query}`,
+    matches.map(({ name, emoji }) => ({
+      id: `emoji:${name}`,
+      key: name,
+      name: `${emoji}  :${name}:`,
+      description: "Emoji",
+      mode: "markdown-mode",
+      group: "emoji",
+      body: emoji,
+      source: `:${name}:`,
+      provider: "emoji",
+      browserCompatible: true,
+    })),
+    context.deleteBefore,
+    ctx.rect,
+    (snippet) => {
+      const current = editor.getMarkdownSelection();
+      const from = Math.max(0, current.from - context.deleteBefore);
+      editor.replaceMarkdownRange(from, current.to, String(snippet.body || ""), "end");
+      return true;
+    },
+  );
+  return true;
+}
+
 function updateSnippetPopup(
   ctx: ReturnType<typeof editor.cursorContext>,
   activeMath: ReturnType<typeof mathAtCursor> | undefined = undefined,
@@ -10969,6 +11010,11 @@ function updateSnippetPopup(
   }
 
   if (showSlashQuickInsert(ctx, activeMath)) {
+    clearCompletionCache();
+    return;
+  }
+
+  if (showEmojiCompletion(ctx, activeMath)) {
     clearCompletionCache();
     return;
   }

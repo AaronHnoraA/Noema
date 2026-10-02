@@ -57,6 +57,7 @@ import { sanitizeEmbeddedHtml } from "../sanitize-html.ts";
 import { renderMarkdownHTML } from "../render-html.ts";
 import { getKatexMacros } from "../katex-macros.ts";
 import { tableCellMathRanges, type TableCellCompletionDetail } from "./table-cell-assist.ts";
+import { scanEmojiShortcodes } from "../emoji-shortcodes.ts";
 import { mountVisualTexInlineEditor, normalizeVisualTexLatex, type VisualTexInlineEditor } from "./extensions/visual/widgets/visualtex-inline.ts";
 import {
   applyLayoutAttrs,
@@ -190,7 +191,8 @@ type LivePreviewToken =
   | { kind: "block-mark"; from: number; to: number; line: number }
   | { kind: "autolink"; from: number; to: number }
   | { kind: "static"; from: number; to: number; cls: string }
-  | { kind: "html-inline"; from: number; to: number; source: string };
+  | { kind: "html-inline"; from: number; to: number; source: string }
+  | { kind: "emoji"; from: number; to: number; emoji: string; name: string };
 
 function mapLivePreviewTokens(tokens: readonly LivePreviewToken[], changes: ChangeSet): LivePreviewToken[] {
   return tokens.map((token) => {
@@ -273,6 +275,41 @@ function addHighlightTokens(
       }
     }
   }
+}
+
+/** `:name:` shortcodes outside code and math, rendered as the emoji. */
+function addEmojiTokens(
+  tokens: LivePreviewToken[],
+  doc: Text,
+  ranges: readonly { from: number; to: number }[],
+  excludedRanges: readonly { from: number; to: number }[],
+  codeRanges: readonly { from: number; to: number }[],
+): void {
+  for (const { from, to } of ranges) {
+    for (const match of scanEmojiShortcodes(doc.sliceString(from, to), from)) {
+      if (rangeOverlapsAny(match.from, match.to, codeRanges) || rangeOverlapsAny(match.from, match.to, excludedRanges)) continue;
+      tokens.push({ kind: "emoji", from: match.from, to: match.to, emoji: match.emoji, name: match.name });
+    }
+  }
+}
+
+class EmojiWidget extends WidgetType {
+  readonly emoji: string;
+  readonly name: string;
+  constructor(emoji: string, name: string) {
+    super();
+    this.emoji = emoji;
+    this.name = name;
+  }
+  eq(other: EmojiWidget): boolean { return other.emoji === this.emoji && other.name === this.name; }
+  toDOM(): HTMLElement {
+    const span = document.createElement("span");
+    span.className = "cm-emoji";
+    span.textContent = this.emoji;
+    span.title = `:${this.name}:`;
+    return span;
+  }
+  ignoreEvent(): boolean { return false; }
 }
 
 function toVisibleDocPos(doc: Text, pos: number): number {
@@ -445,6 +482,7 @@ function collectLivePreviewTokens(
   addWikiLinkTokens(tokens, doc, ranges, allExcluded);
   addJupyterLinkTokens(tokens, doc, ranges, allExcluded);
   addHighlightTokens(tokens, doc, ranges, allExcluded, codeRanges);
+  addEmojiTokens(tokens, doc, ranges, allExcluded, codeRanges);
   addPairedHtmlTokens(tokens, doc);
 
   return tokens;
@@ -574,6 +612,11 @@ function buildDecorations(view: EditorView, tokens = collectLivePreviewTokens(vi
         }
         break;
       }
+      case "emoji":
+        if (!selectionIntersectsSpan(sel, token.from, token.to)) {
+          decos.push(Decoration.replace({ widget: new EmojiWidget(token.emoji, token.name) }).range(token.from, token.to));
+        }
+        break;
     }
   }
 
@@ -596,6 +639,7 @@ function selectionAffectingTokenKey(state: EditorState, tokens: readonly LivePre
         break;
       case "autolink":
       case "html-inline":
+      case "emoji":
         if (selectionIntersectsSpan(sel, token.from, token.to)) {
           keys.push(`${token.kind}:${token.from}:${token.to}`);
         }
