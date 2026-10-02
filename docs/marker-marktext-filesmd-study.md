@@ -60,8 +60,11 @@ resizing, block drag handles, language-picker for fences, word-sized undo.
 Measured with the 5 MB fixture (`tests/synthetic_qc_note_5mb.md`) under
 happy-dom, heap after forced GC:
 
-- Opening the 5 MB note costs about 80 MB (Lezer tree, height map, ~165k line
-  decorations); 1,200 keystrokes plateau after the 200-step history depth.
+- Opening the 5 MB note cost +85.5 MB; it now costs +53.2 MB. ~165k line
+  decorations each carried their own attribute map (now one shared value per
+  class / org-env kind and depth), and org-env block titles and bodies were
+  substrings of a whole-note `toString()`, pinning a 9.9 MB copy of the note.
+  1,200 keystrokes plateau after the 200-step history depth.
 - 1,200 note switches (`setMarkdown`, typing, source toggles) over 40 notes:
   the editor's own objects stay flat; the remaining drift is happy-dom's style
   cache.
