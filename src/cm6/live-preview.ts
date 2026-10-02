@@ -1192,7 +1192,34 @@ type TableFocusTarget = {
   col: number;
   edit?: boolean;
   select?: boolean;
+  /** Where the caret lands in an edited cell when nothing is selected. */
+  caret?: "start" | "end";
 };
+
+type TableExit = "before" | "after";
+
+/**
+ * Put the document caret beside the table that starts at TABLE_FROM: at the
+ * end of the line above, or the start of the line below. A table at either
+ * edge of the note gets an empty line to land on, as MarkText appends a
+ * paragraph when ArrowDown leaves its last block.
+ */
+function leaveTableAt(view: EditorView, tableFrom: number, where: TableExit): void {
+  const tables = markdownTablesFromState(view.state);
+  const table = tables.find((candidate) => candidate.from === tableFrom)
+    ?? tables[firstTableEndingAtOrAfter(tables, tableFrom)];
+  if (!table) return;
+  const doc = view.state.doc;
+  if (where === "before") {
+    if (table.from > 0) view.dispatch({ selection: { anchor: table.from - 1 }, scrollIntoView: true, userEvent: "select" });
+    else view.dispatch({ changes: { from: 0, insert: "\n" }, selection: { anchor: 0 }, scrollIntoView: true, userEvent: "input" });
+  } else if (table.to < doc.length) {
+    view.dispatch({ selection: { anchor: table.to + 1 }, scrollIntoView: true, userEvent: "select" });
+  } else {
+    view.dispatch({ changes: { from: doc.length, insert: "\n" }, selection: { anchor: doc.length + 1 }, scrollIntoView: true, userEvent: "input" });
+  }
+  view.focus();
+}
 
 type TableFocusResolver = TableFocusTarget | ((data: MarkdownTableData) => TableFocusTarget | null);
 
@@ -1627,6 +1654,10 @@ function focusTableCellInTable(table: HTMLTableElement, target?: TableFocusTarge
     if (input) {
       input.focus();
       if (target.select) input.select();
+      else if (target.caret) {
+        const at = target.caret === "start" ? 0 : input.value.length;
+        input.setSelectionRange(at, at);
+      }
     }
   }
   return true;
@@ -1662,6 +1693,8 @@ function renderEditableTable(
   const colCount = data.rows[0]?.length ?? 1;
   const editingHandles = new WeakMap<HTMLTableCellElement, Element[]>();
   let pendingFocusTarget: TableFocusTarget | null = null;
+  let pendingExit: TableExit | null = null;
+  let pendingRowInsert = false;
   let activeFormula: { editor: VisualTexInlineEditor; cell: HTMLTableCellElement; source: string; from: number; to: number; draft: string } | null = null;
   const completion = (input: HTMLInputElement, type: "request" | "close" | "key", key?: KeyboardEvent): boolean => {
     const event = new CustomEvent<TableCellCompletionDetail & { key?: string; shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean; isComposing?: boolean }>(
@@ -1790,6 +1823,46 @@ function renderEditableTable(
     requestMeasure();
     return input;
   };
+  /**
+   * Arrow keys and Backspace at the edge of a cell's text move between cells
+   * and, past the table's edge, back into the document — MarkText's
+   * `TableCellContent.arrowHandler`/`backspaceHandler`. Inside the text the
+   * keys keep their native caret movement.
+   */
+  const moveFromCellByKey = (event: KeyboardEvent, input: HTMLInputElement, row: number, col: number): boolean => {
+    if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return false;
+    const start = input.selectionStart ?? 0;
+    const end = input.selectionEnd ?? start;
+    const collapsed = start === end;
+    const atStart = collapsed && start === 0;
+    const atEnd = collapsed && end === input.value.length;
+    const lastRow = table.rows.length - 1;
+    let target: TableFocusTarget | null = null;
+    let exit: TableExit | null = null;
+    if (event.key === "ArrowUp") {
+      if (row > 0) target = { row: row - 1, col, edit: true, caret: "end" };
+      else exit = "before";
+    } else if (event.key === "ArrowDown") {
+      if (row < lastRow) target = { row: row + 1, col, edit: true, caret: "start" };
+      else exit = "after";
+    } else if ((event.key === "ArrowLeft" || event.key === "Backspace") && atStart) {
+      if (col > 0) target = { row, col: col - 1, edit: true, caret: "end" };
+      else if (row > 0) target = { row: row - 1, col: colCount - 1, edit: true, caret: "end" };
+      else if (event.key === "ArrowLeft") exit = "before";
+      else return false;
+    } else if (event.key === "ArrowRight" && atEnd) {
+      if (col < colCount - 1) target = { row, col: col + 1, edit: true, caret: "start" };
+      else if (row < lastRow) target = { row: row + 1, col: 0, edit: true, caret: "start" };
+      else exit = "after";
+    } else {
+      return false;
+    }
+    event.preventDefault();
+    pendingFocusTarget = target;
+    pendingExit = exit;
+    input.blur();
+    return true;
+  };
   const addCellEvents = (cell: HTMLTableCellElement, row: number, col: number): void => {
     if (!editable) return;
     cell.tabIndex = 0;
@@ -1830,7 +1903,11 @@ function renderEditableTable(
         completion(input, "close");
         const focusTarget = pendingFocusTarget;
         pendingFocusTarget = null;
-        let appendedRow = false;
+        const exit = pendingExit;
+        pendingExit = null;
+        const exitFrom = exit ? tableFrom() : 0;
+        let appendedRow = pendingRowInsert;
+        pendingRowInsert = false;
         if (focusTarget && focusTarget.row >= table.rows.length) {
           appendEmptyTableRow(table, colCount);
           appendedRow = true;
@@ -1852,12 +1929,23 @@ function renderEditableTable(
         if (!changed && focusTarget) {
           window.setTimeout(() => focusTableCellInTable(table, focusTarget), 0);
         }
+        if (exit) leaveTableAt(view, exitFrom, exit);
       });
       input.addEventListener("keydown", (event) => {
         event.stopPropagation();
         if (composing || event.isComposing || event.keyCode === 229) return;
         if (completion(input, "key", event)) {
           event.preventDefault();
+          return;
+        }
+        if (moveFromCellByKey(event, input, row, col)) return;
+        if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey) {
+          // MarkText's Mod-Enter: a new row below this one, caret in its first cell.
+          event.preventDefault();
+          insertEmptyTableRow(table, row + 1, colCount);
+          pendingRowInsert = true;
+          pendingFocusTarget = { row: row + 1, col: 0, edit: true };
+          input.blur();
           return;
         }
         if (event.key === "Enter") {
@@ -1963,6 +2051,18 @@ function renderEditableTable(
         if (command(view)) focusTableCellAfterRender(view, from, { row, col });
         return;
       }
+      const step = event.metaKey || event.ctrlKey || event.altKey || event.shiftKey ? null
+        : event.key === "ArrowUp" ? [-1, 0] : event.key === "ArrowDown" ? [1, 0]
+          : event.key === "ArrowLeft" ? [0, -1] : event.key === "ArrowRight" ? [0, 1] : null;
+      if (step && event.target === cell) {
+        // A selected (not edited) cell moves like a spreadsheet cursor.
+        event.preventDefault();
+        focusTableCellInTable(table, {
+          row: Math.max(0, Math.min(table.rows.length - 1, row + step[0]!)),
+          col: Math.max(0, Math.min(colCount - 1, col + step[1]!)),
+        });
+        return;
+      }
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
         const input = openEditor(cell);
@@ -2018,6 +2118,15 @@ function tableRowsFromDOM(table: HTMLTableElement): string[][] {
           ?? ""
         : cell.dataset.source ?? cell.textContent ?? ""
     )));
+}
+
+/** An empty body row at ROW_INDEX (a table row index; the header is row 0). */
+function insertEmptyTableRow(table: HTMLTableElement, rowIndex: number, colCount: number): void {
+  const tbody = table.tBodies[0] ?? table.createTBody();
+  const bodyRows = tbody.querySelectorAll(":scope > tr").length;
+  const bodyIndex = Math.max(0, Math.min(rowIndex - 1, bodyRows));
+  const tr = tbody.insertRow(bodyIndex);
+  for (let col = 0; col < colCount; col++) tr.insertCell().dataset.source = "";
 }
 
 function appendEmptyTableRow(table: HTMLTableElement, colCount: number): void {
