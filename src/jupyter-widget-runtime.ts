@@ -206,12 +206,28 @@ class AaronnoteWidgetManager extends KernelWidgetManager {
       mimeTypes: [WIDGET_VIEW_MIMETYPE],
       createRenderer: (options) => new WidgetRenderer(options, this as never),
     }, 0);
-    window.addEventListener("resize", () => {
-      for (const view of this.views) {
-        const widget = view.luminoWidget || view.pWidget;
-        if (widget) MessageLoop.postMessage(widget, LuminoWidgets.Widget.ResizeMessage.UnknownSize);
-      }
-    });
+    window.addEventListener("resize", this.onWindowResize);
+  }
+
+  private readonly onWindowResize = (): void => {
+    for (const view of this.views) {
+      const widget = view.luminoWidget || view.pWidget;
+      if (widget) MessageLoop.postMessage(widget, LuminoWidgets.Widget.ResizeMessage.UnknownSize);
+    }
+  };
+
+  /**
+   * A kernel restart replaces this manager. The window listener would
+   * otherwise keep it, its views and every widget model alive for the life
+   * of the page.
+   */
+  override dispose(): void {
+    if (this.isDisposed) return;
+    window.removeEventListener("resize", this.onWindowResize);
+    this.views.clear();
+    this.replayedMessages.clear();
+    this.seededOutputComms.clear();
+    super.dispose();
   }
 
   get rendermime(): RenderMimeRegistry {
@@ -566,13 +582,18 @@ function runtimeKey(runtime: JupyterWidgetRuntime): string {
   return `${runtime.id}:${Number(runtime.generation || 1)}`;
 }
 
+function disposeRuntimeEntry({ kernel, manager }: RuntimeEntry): void {
+  try { manager.dispose(); } catch { /* already torn down with its kernel */ }
+  kernel.dispose();
+}
+
 function disposeOlderGenerations(runtime: JupyterWidgetRuntime): void {
   const keep = runtimeKey(runtime);
   const entries = runtimeEntryMap();
   for (const [key, pending] of Array.from(entries.entries())) {
     if (!key.startsWith(`${runtime.id}:`) || key === keep) continue;
     entries.delete(key);
-    void pending.then(({ kernel }) => kernel.dispose()).catch(() => {});
+    void pending.then(disposeRuntimeEntry).catch(() => {});
   }
 }
 
@@ -679,7 +700,7 @@ export function disposeJupyterWidgetRuntimes(): void {
   const entries = runtimeEntryMap();
   for (const [key, pending] of Array.from(entries.entries())) {
     entries.delete(key);
-    void pending.then(({ kernel }) => kernel.dispose()).catch(() => {});
+    void pending.then(disposeRuntimeEntry).catch(() => {});
   }
 }
 

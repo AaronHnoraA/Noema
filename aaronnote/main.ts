@@ -3650,6 +3650,18 @@ type JupyterPanelExecutionResult = {
 
 const JUPYTER_CELL_RE = /^([ \t]*)@@cell(?:[ \t]*\(([^)\n]*)\))?(?:[ \t]+\[([^\]\n]*)\])?[ \t]*$/i;
 const jupyterTaskState = new Map<string, Partial<JupyterPanelCell>>();
+const JUPYTER_TASK_STATE_LIMIT = 512;
+
+/** Run status per cell, kept for the pane's lifetime across notes, so bounded. */
+function setJupyterTaskState(key: string, value: Partial<JupyterPanelCell>): void {
+  jupyterTaskState.delete(key);
+  jupyterTaskState.set(key, value);
+  while (jupyterTaskState.size > JUPYTER_TASK_STATE_LIMIT) {
+    const oldest = jupyterTaskState.keys().next();
+    if (oldest.done) break;
+    jupyterTaskState.delete(oldest.value);
+  }
+}
 
 function cleanJupyterToken(value: string, fallback: string): string {
   const clean = String(value || "").trim();
@@ -4109,7 +4121,7 @@ async function runJupyterCell(cell: JupyterPanelCell, allCells = scanJupyterCell
     return false;
   }
   const key = jupyterCellKey(cell);
-  jupyterTaskState.set(key, { status: "running" });
+  setJupyterTaskState(key, { status: "running" });
   renderJupyterPanel();
   const started = performance.now();
   try {
@@ -4137,7 +4149,7 @@ async function runJupyterCell(cell: JupyterPanelCell, allCells = scanJupyterCell
           session: itemCell.session,
           result: item,
         });
-        jupyterTaskState.set(jupyterCellKey(itemCell), {
+        setJupyterTaskState(jupyterCellKey(itemCell), {
           status: isLeanJupyterCell(itemCell) ? "synced" : item.status === "error" ? "error" : "ok",
           executionCount: isLeanJupyterCell(itemCell) ? null : item.executionCount,
           durationMs: performance.now() - started,
@@ -4155,7 +4167,7 @@ async function runJupyterCell(cell: JupyterPanelCell, allCells = scanJupyterCell
         result,
       });
     }
-    jupyterTaskState.set(key, {
+    setJupyterTaskState(key, {
       status: isLeanJupyterCell(cell) ? "synced" : result.status === "error" ? "error" : "ok",
       executionCount: isLeanJupyterCell(cell) ? null : result.executionCount,
       durationMs: performance.now() - started,
@@ -4163,7 +4175,7 @@ async function runJupyterCell(cell: JupyterPanelCell, allCells = scanJupyterCell
     });
     return result.status !== "error";
   } catch (error) {
-    jupyterTaskState.set(key, {
+    setJupyterTaskState(key, {
       status: "error",
       durationMs: performance.now() - started,
     });
@@ -4199,7 +4211,7 @@ async function runJupyterCells(mode: "all" | "above" | "below" | "section"): Pro
     const anchor = groupCells[0];
     if (!anchor) continue;
     const started = performance.now();
-    for (const cell of groupCells) jupyterTaskState.set(jupyterCellKey(cell), { status: "running" });
+    for (const cell of groupCells) setJupyterTaskState(jupyterCellKey(cell), { status: "running" });
     renderJupyterPanel();
     await ensureJupyterScript(anchor, allCells);
     const result = await api.jupyterCell.executeScriptCell({
@@ -4225,7 +4237,7 @@ async function runJupyterCells(mode: "all" | "above" | "below" | "section"): Pro
         session: itemCell.session,
         result: item,
       });
-      jupyterTaskState.set(jupyterCellKey(itemCell), {
+      setJupyterTaskState(jupyterCellKey(itemCell), {
         status: isLeanJupyterCell(itemCell) ? "synced" : item.status === "error" ? "error" : "ok",
         executionCount: isLeanJupyterCell(itemCell) ? null : item.executionCount,
         durationMs: performance.now() - started,

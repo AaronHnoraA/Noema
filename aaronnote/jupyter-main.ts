@@ -93,6 +93,8 @@ const removeB3ComponentSystem = installB3ComponentSystem(document.body);
 void loadNoemaAppConfig().catch(() => {});
 
 let currentDocument: TabState | undefined;
+/** Elapsed-time ticker for a visible research run; null while idle. */
+let runClock: number | null = null;
 let statusTimer = 0;
 let refreshTimer = 0;
 const outputDisposers = new Set<() => void>();
@@ -421,6 +423,7 @@ function renderResearchRunStatus(tab: TabState, cell: CellSnapshot, target?: HTM
   const status = runValue(tab, "status") || cell.status || "running";
   const started = Date.parse(runValue(tab, "startedAt")) || tab.runStartedAt || Date.now();
   tab.runStartedAt ||= started;
+  if (!tab.runTerminal) ensureRunClock();
   const elapsed = Math.max(0, Math.floor((Date.now() - started) / 1000));
   const panel = document.createElement("section");
   panel.className = "noema-research-run-status";
@@ -1172,17 +1175,26 @@ if (initial) {
 }
 // Elapsed time is a local display concern; unchanged server snapshots need
 // neither network traffic nor a replacement output panel.
-const runClock = window.setInterval(() => {
-  const tab = currentDocument;
-  if (!tab?.runSnapshot || tab.runTerminal || !tab.runStartedAt) return;
-  const cell = runCell(tab);
-  if (!cell || cell.outputUi?.liveOutput === true) return;
-  const summary = cellCard(cell)?.querySelector(".noema-research-run-summary strong");
-  if (summary) summary.textContent = `${runValue(tab, "status") || cell.status} · ${Math.max(0, Math.floor((Date.now() - tab.runStartedAt) / 1000))}s`;
-}, 1000);
+// The clock ticks only while a run's status panel is showing, so an idle page
+// takes no timer wake-ups.
+function stopRunClock(): void {
+  if (runClock != null) window.clearInterval(runClock);
+  runClock = null;
+}
+function ensureRunClock(): void {
+  if (runClock != null) return;
+  runClock = window.setInterval(() => {
+    const tab = currentDocument;
+    if (!tab?.runSnapshot || tab.runTerminal || !tab.runStartedAt) { stopRunClock(); return; }
+    const cell = runCell(tab);
+    if (!cell || cell.outputUi?.liveOutput === true) return;
+    const summary = cellCard(cell)?.querySelector(".noema-research-run-summary strong");
+    if (summary) summary.textContent = `${runValue(tab, "status") || cell.status} · ${Math.max(0, Math.floor((Date.now() - tab.runStartedAt) / 1000))}s`;
+  }, 1000);
+}
 
 window.addEventListener("beforeunload", () => {
-  window.clearInterval(runClock);
+  stopRunClock();
   stopResearchRunStream();
   dialogOutputDispose?.();
   disposeOutputs();

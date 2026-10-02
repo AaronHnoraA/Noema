@@ -1800,7 +1800,7 @@ function loadCeilKernels(file: string, current: string): Promise<CeilKernelSpec[
           })).filter((kernel) => kernel.name)
         : [];
       const kernels = [...specs, ...attachable];
-      ceilKernelsCache.set(file, { at: Date.now(), kernels });
+      setBoundedMap(ceilKernelsCache, file, { at: Date.now(), kernels }, 64);
       return kernels;
     })
     .catch(() => fallbackCeilKernels(current))

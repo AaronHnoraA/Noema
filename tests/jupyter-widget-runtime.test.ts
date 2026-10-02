@@ -87,4 +87,14 @@ describe("Jupyter widget runtime", () => {
     expect(source).toContain("export function disposeJupyterWidgetRuntimes()");
     expect(source).toContain('window.addEventListener("pagehide", () => disposeJupyterWidgetRuntimes());');
   });
+
+  test("a replaced runtime releases its manager and window listener", () => {
+    const source = readFileSync(join(process.cwd(), "src/jupyter-widget-runtime.ts"), "utf8");
+    expect(source).toContain('window.addEventListener("resize", this.onWindowResize);');
+    expect(source).toContain('window.removeEventListener("resize", this.onWindowResize);');
+    // Older generations and page teardown both go through the entry disposer,
+    // which disposes the manager before its kernel connection.
+    expect(source.match(/pending\.then\(disposeRuntimeEntry\)/g)).toHaveLength(2);
+    expect(source).toMatch(/function disposeRuntimeEntry\(\{ kernel, manager \}: RuntimeEntry\): void \{\n\s+try \{ manager\.dispose\(\);/);
+  });
 });
