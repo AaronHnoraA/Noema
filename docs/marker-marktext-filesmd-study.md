@@ -25,7 +25,7 @@ only document model.
 | Inline formats | MarkText `tabHandler` jumps past a closing format | Tab at the end of a span's content moves past `**`, `` ` ``, `==`, `~~`, `\)` or a link's `](url)` |
 | Tables | MarkText `TableCellContent` arrow/Enter/Backspace handlers | Arrows and Backspace at a cell's text edge move between cells and, past the table, back to the document (opening a line at the note's edge); Mod-Enter adds a row below; a selected cell moves with arrows |
 | Tables | MarkText `TableRectSelection`, Marker's prosemirror-tables `DeleteCells` | Drag / Shift-click / Shift+Arrow rectangle selection; Mod-C copies a cell's text or a GFM sub-table; Delete empties cells, then removes spanned columns, rows or the table; Mod-X; Mod-A grows cell → table → document |
-| Tables | GFM, export (markdown-it) | `|-|:-:|` delimiter rows render in the editor (one hyphen per cell) |
+| Tables | GFM, export (markdown-it), Lezer | `|-|:-:|` delimiter rows and tables without outer pipes render in the editor; the body runs to a blank line, another block or a `{layout}` line, so plain text directly under a table is a row, as in export |
 | Emoji | MarkText emoji picker, files.md `CompleteEmoji` | `:name:` renders in live preview from export's own table; `:na` completes to the character |
 | Media | files.md `fold-image`, Marker `ImageView` | `![](clip.mp4)` / `![](talk.mp3)` become native players (no autoplay) in editor and export |
 | Footnotes | MarkText footnote tool | Hovering a reference shows its definition or flags it as undefined |
