@@ -3738,8 +3738,27 @@ interface OrgEnvRailMeasure {
   left: number;
 }
 
-const createOrgEnvBlocks = (state: EditorState): readonly OrgEnvBlock[] =>
-  scanOrgEnvBlocks(state.doc.toString(), 0, 0, blockExtraExcludedRanges(state));
+/**
+ * A copy of S that does not share storage with the string it was sliced from.
+ * Block fields are cut from one `doc.toString()`; engines keep a substring's
+ * whole parent alive, so a few titles pinned a full second copy of the note.
+ */
+function ownString(value: string): string {
+  return value.length < 13 ? value : (" " + value).slice(1);
+}
+
+/** Scan the whole note, keeping no reference into the temporary flat string. */
+function scanOrgEnvDocument(state: EditorState): readonly OrgEnvBlock[] {
+  return scanOrgEnvBlocks(state.doc.toString(), 0, 0, blockExtraExcludedRanges(state)).map((block) => ({
+    ...block,
+    kind: ownString(block.kind),
+    title: ownString(block.title),
+    blockId: block.blockId == null ? block.blockId : ownString(block.blockId),
+    body: ownString(block.body),
+  }));
+}
+
+const createOrgEnvBlocks = (state: EditorState): readonly OrgEnvBlock[] => scanOrgEnvDocument(state);
 
 const orgEnvBlocksField = StateField.define<readonly OrgEnvBlock[]>({
   create: createOrgEnvBlocks,
@@ -3748,7 +3767,7 @@ const orgEnvBlocksField = StateField.define<readonly OrgEnvBlock[]>({
     markEditedTikzBlocks(tr.startState, tr.changes, blocks);
     if (!canMapOrgEnvBlocks(tr.startState.doc, blocks, tr.changes)) {
       return patchOrgEnvBlocksForTitleChange(tr.startState.doc, tr.state.doc, blocks, tr.changes)?.blocks
-        ?? scanOrgEnvBlocks(tr.state.doc.toString(), 0, 0, blockExtraExcludedRanges(tr.state));
+        ?? scanOrgEnvDocument(tr.state);
     }
     return mapOrgEnvBlocks(blocks, tr.changes, tr.state.doc);
   },
@@ -3759,7 +3778,7 @@ const orgEnvBlocksField = StateField.define<readonly OrgEnvBlock[]>({
 export const orgEnvBlocksExtension: Extension = [tikzSourceEditingField, orgEnvBlocksField];
 
 function orgEnvBlocksFromState(state: EditorState): readonly OrgEnvBlock[] {
-  return state.field(orgEnvBlocksField, false) ?? scanOrgEnvBlocks(state.doc.toString(), 0, 0, blockExtraExcludedRanges(state));
+  return state.field(orgEnvBlocksField, false) ?? scanOrgEnvDocument(state);
 }
 
 export type OrgEnvBlockIdentity = {
