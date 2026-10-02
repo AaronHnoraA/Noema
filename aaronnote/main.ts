@@ -1442,6 +1442,8 @@ const editorCommands = new Set<EditorCommand>([
   "edit-properties",
   "move-block-up",
   "move-block-down",
+  "duplicate-block",
+  "delete-block",
   "blockquote",
   "bullet-list",
   "ordered-list",
@@ -5167,6 +5169,17 @@ function showContextMenu(event: MouseEvent, target: Partial<AaronContextMenuTarg
       }
       if (block.type.includes("code")) {
         items.push({ label: "Copy Code", detail: "block", run: () => runContextEditorCommand("copy-code") });
+      }
+      if (!currentReadOnly && !block.empty) {
+        // Block actions, as MarkText's paragraph menu offers them.
+        items.push(
+          { separator: true, label: "" },
+          { label: "Duplicate Block", detail: "below", run: () => runContextEditorCommand("duplicate-block") },
+          { label: "Move Block Up", detail: "", run: () => runContextEditorCommand("move-block-up") },
+          { label: "Move Block Down", detail: "", run: () => runContextEditorCommand("move-block-down") },
+          { label: "Delete Block", detail: block.type.replace(/_/g, " "), danger: true, run: () => runContextEditorCommand("delete-block") },
+          { separator: true, label: "" },
+        );
       }
       items.push({ label: "Find in Note", detail: primaryShortcut("F"), run: () => openFindPanel() });
       if (serverReader.showSource) {

@@ -378,3 +378,53 @@ export const blockMoveGutterExtension: Extension = gutter({
     },
   },
 });
+
+/** Kinds whose copy must be set apart by a blank line, or it would merge into the original. */
+const SEPARATED_KINDS = new Set<MovableBlockKind>(["paragraph", "table", "fence", "math", "org-env"]);
+
+/**
+ * Insert a copy of the block at the caret after it and move the caret to the
+ * same place in the copy (MarkText's block menu "Duplicate").
+ */
+export function duplicateBlockAtCursor(view: EditorView): boolean {
+  const state = view.state;
+  const block = movableBlockAt(state, state.selection.main.head);
+  if (!block || block.tooLarge) return false;
+  let source = state.doc.sliceString(block.from, block.to);
+  const endsWithBreak = source.endsWith("\n");
+  if (!endsWithBreak) source += "\n";
+  const lead = endsWithBreak ? "" : "\n";
+  const gap = SEPARATED_KINDS.has(block.kind) ? "\n" : "";
+  const insert = `${lead}${gap}${source}`;
+  const copyFrom = block.to + lead.length + gap.length;
+  const offset = Math.max(0, Math.min(state.selection.main.head - block.from, source.length - 1));
+  view.dispatch({
+    changes: { from: block.to, insert: endsWithBreak ? insert : insert.slice(0, -1) },
+    selection: { anchor: copyFrom + offset },
+    scrollIntoView: true,
+    userEvent: "input",
+  });
+  return true;
+}
+
+/** Remove the block at the caret, keeping at most one blank line where it stood. */
+export function deleteBlockAtCursor(view: EditorView): boolean {
+  const state = view.state;
+  const block = movableBlockAt(state, state.selection.main.head);
+  if (!block || block.tooLarge) return false;
+  const doc = state.doc;
+  let from = block.from;
+  let to = block.to;
+  const blankBefore = from === 0 || doc.sliceString(Math.max(0, from - 2), from) === "\n\n";
+  // Swallow one following blank line when one already precedes, so the
+  // neighbours keep a single separator instead of two.
+  if (blankBefore && to < doc.length && doc.lineAt(to).length === 0) to = Math.min(doc.length, to + 1);
+  if (to === doc.length && from > 0 && doc.sliceString(from - 1, from) === "\n") from -= 1;
+  view.dispatch({
+    changes: { from, to },
+    selection: { anchor: Math.min(from, doc.length - (to - from)) },
+    scrollIntoView: true,
+    userEvent: "delete",
+  });
+  return true;
+}

@@ -36,7 +36,7 @@ import {
   unfoldHeadingAtCursor,
 } from "../heading-fold.ts";
 import { revisionAdviceRange, revisionSource, type RevisionSourceOptions } from "../../authoring-syntax.ts";
-import { moveBlockAtCursor } from "../block-move.ts";
+import { deleteBlockAtCursor, duplicateBlockAtCursor, moveBlockAtCursor } from "../block-move.ts";
 import { clearInlineFormatSpec, inlineFormatsAvailable, toggleInlineFormatSpec, type InlineFormatKind } from "../inline-format.ts";
 import { changeHeadingLevelSpec, toggleBlockquoteSpec, toggleHeadingSpec, toggleListSpec, type ListKind } from "../block-format.ts";
 import { markdownInlineContext } from "../languages/markdown/index.ts";
@@ -1383,6 +1383,8 @@ export function tableEnterSameColumn(view: EditorView): boolean {
 
 export function runCommandCM6(view: EditorView, command: EditorCommand, value = ""): boolean {
   if (command === "move-block-up") return moveBlockAtCursor(view, -1);
+  if (command === "duplicate-block") return duplicateBlockAtCursor(view);
+  if (command === "delete-block") return deleteBlockAtCursor(view);
   if (command === "move-block-down") return moveBlockAtCursor(view, 1);
   if (command === "fold-heading") return foldHeadingAtCursor(view);
   if (command === "unfold-heading") return unfoldHeadingAtCursor(view);

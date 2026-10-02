@@ -66,6 +66,8 @@ export type EditorCommand =
   | "edit-properties"
   | "move-block-up"
   | "move-block-down"
+  | "duplicate-block"
+  | "delete-block"
   | "blockquote"
   | "bullet-list"
   | "ordered-list"
