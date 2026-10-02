@@ -78,6 +78,7 @@ import type { HeadingNumberFormat } from "../src/heading-number.ts";
 import { createMenuController, type NoemaMenuItem } from "../src/menu-system.ts";
 import { figureLayoutMenuItems, figureLayoutTarget } from "../src/cm6/figure-layout-menu.ts";
 import { createTransientSurfaceRegistry } from "../src/transient-surfaces.ts";
+import { previewPlacement } from "./preview-placement.ts";
 import { blobToBase64 } from "../src/paste.ts";
 import { collectFindMatches, createFindPattern, findMatchIndexFrom, replacementText, type FindMatch, type FindOptions } from "./find.ts";
 import { AssistScheduler, type AssistUpdateFlags, type AssistUpdateOptions } from "./assist-scheduler.ts";
@@ -9731,12 +9732,14 @@ function hideMathPreview(): void {
   mathPreview.style.top = "";
   mathPreview.style.width = "";
   mathPreview.style.height = "";
+  mathPreview.style.visibility = "";
   mathPreviewSession = null;
   mathPreviewPendingErrorKey = "";
   mathPreviewWidth = 0;
 }
 
 function hideSnippetPopup(): void {
+  const wasVisible = !snippetPopup.hidden;
   snippetPopup.hidden = true;
   snippetPopupItems = [];
   snippetPopupIndex = 0;
@@ -9744,6 +9747,14 @@ function hideSnippetPopup(): void {
   snippetRenderKey = "";
   snippetPopupMatchKey = "";
   snippetPopupChooseHandler = null;
+  if (wasVisible) repositionMathPreviewForCompletion();
+}
+
+function repositionMathPreviewForCompletion(): void {
+  if (mathPreview.hidden || !mathPreviewSession) return;
+  const session = mathPreviewSession;
+  placeFloatingAbove(mathPreview, session.anchorRect,
+    Number.parseFloat(mathPreview.style.width) || mathPreviewWidth || 320, session.bottomRect);
 }
 
 function placeFloating(el: HTMLElement, rect: { left: number; top: number; bottom: number } | null, width = 340): void {
@@ -9789,6 +9800,19 @@ function placeFloatingAbove(
   el.style.left = `${left}px`;
   el.style.top = `${top}px`;
   el.style.width = `${resolvedWidth}px`;
+  if (el === mathPreview) {
+    const placement = previewPlacement(
+      { left, top, width: el.offsetWidth || resolvedWidth, height: el.offsetHeight || height },
+      snippetPopup.hidden ? null : snippetPopup.getBoundingClientRect(),
+      { width: window.innerWidth, height: window.innerHeight },
+      { top: rect.top, bottom: (bottomRect ?? rect).bottom },
+    );
+    el.style.visibility = placement ? "" : "hidden";
+    if (placement) {
+      el.style.left = `${placement.left}px`;
+      el.style.top = `${placement.top}px`;
+    }
+  }
 }
 
 function currentSnippetKind(): string {
@@ -10380,6 +10404,7 @@ function renderSnippetPopup(prefix: string, rect: { left: number; top: number; b
   const nextKey = `${prefix}\n${snippetPopupIndex}\n${snippetPopupItems.map((snippet) => `${snippet.mode}:${snippet.key}:${snippet.name}`).join("\n")}`;
   if (!snippetPopup.hidden && snippetRenderKey === nextKey) {
     placeFloating(snippetPopup, rect);
+    repositionMathPreviewForCompletion();
     revealSnippetPopupActiveOption();
     return;
   }
@@ -10433,6 +10458,7 @@ function renderSnippetPopup(prefix: string, rect: { left: number; top: number; b
   snippetPopup.setAttribute("aria-activedescendant", `aaronnote-snippet-option-${snippetPopupIndex}`);
   snippetPopup.hidden = false;
   placeFloating(snippetPopup, rect);
+  repositionMathPreviewForCompletion();
   revealSnippetPopupActiveOption();
 }
 
@@ -10464,10 +10490,6 @@ function showSnippetPopup(
   rect: { left: number; top: number; bottom: number } | null,
   chooseHandler: ((snippet: SnippetSummary) => boolean) | null = null,
 ): void {
-  // Completion owns the cursor's floating surface while it is visible.
-  // Keeping LiveTeX open at the same time makes both surfaces chase the same
-  // caret and lets the preview cover selectable completion rows.
-  if (rect && (!mathPreview.hidden || mathPreviewSession)) hideMathPreview();
   const matchKey = `${prefix}\n${items.map((snippet) => `${snippet.kind}:${snippet.mode}:${snippet.group}:${snippet.key}:${snippet.name}`).join("\n")}`;
   snippetDeleteBefore = deleteBefore;
   if (matchKey !== snippetPopupMatchKey) {
@@ -11245,7 +11267,7 @@ function updateMathPreview(
   allowNewPreview: boolean,
   activeMath: ReturnType<typeof mathAtCursor> = mathAtCursor(ctx),
 ): void {
-  if (visualMathEditorActive || !snippetPopup.hidden) {
+  if (visualMathEditorActive) {
     if (!mathPreview.hidden || mathPreviewSession) hideMathPreview();
     return;
   }
