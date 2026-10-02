@@ -41,6 +41,25 @@ function definitionIndex(doc: Text): ReadonlyMap<string, number> {
   return index;
 }
 
+/**
+ * The text of footnote LABEL's definition, for the reference's tooltip: the
+ * definition line after `[^label]:` and its indented continuation lines,
+ * capped. MarkText's footnote tool and GitHub show the note on the reference.
+ */
+export function footnoteDefinitionPreview(doc: Text, label: string, limit = 400): string | null {
+  const position = definitionIndex(doc).get(label);
+  if (position == null) return null;
+  const first = doc.lineAt(position);
+  const parts = [first.text.replace(FOOTNOTE_DEFINITION_RE, "").trim()];
+  for (let number = first.number + 1; number <= doc.lines && number - first.number <= 8; number++) {
+    const text = doc.line(number).text;
+    if (!/^(?: {2,}|\t)\S/u.test(text)) break;
+    parts.push(text.trim());
+  }
+  const preview = parts.filter(Boolean).join(" ");
+  return preview.length > limit ? `${preview.slice(0, limit - 1)}…` : preview;
+}
+
 function referenceIndex(doc: Text): ReadonlyMap<string, readonly number[]> {
   const key = doc as unknown as object;
   const cached = referenceIndexCache.get(key);
@@ -83,6 +102,14 @@ class FootnoteReferenceWidget extends WidgetType {
     button.textContent = this.label;
     button.title = `Jump to footnote ${this.label}`;
     button.setAttribute("aria-label", button.title);
+    // Read the definition only when the pointer arrives; rendering stays free.
+    button.addEventListener("mouseenter", () => {
+      const preview = footnoteDefinitionPreview(view.state.doc, this.label);
+      button.title = preview == null
+        ? `Footnote ${this.label} has no definition`
+        : `${preview || `Footnote ${this.label}`}\n— click to jump`;
+      button.classList.toggle("cm-footnote-undefined", preview == null);
+    });
     button.addEventListener("mousedown", (event) => {
       event.preventDefault();
       event.stopPropagation();

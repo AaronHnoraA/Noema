@@ -5018,3 +5018,8 @@ body.has-diagram-fullscreen {
 }
 .cm-editor .cm-markdown-table-preview.cm-table-rect-active { user-select: none; }
 .cm-editor .cm-markdown-table-preview .cm-table-cell-selected:focus { outline: none; }
+
+/* A reference whose [^label]: definition is missing (known after hover). */
+.cm-editor .cm-footnote-reference button.cm-footnote-undefined {
+  text-decoration: underline wavy color-mix(in srgb, #d14 60%, transparent);
+}

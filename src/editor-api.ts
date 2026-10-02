@@ -323,6 +323,22 @@ const builtInQuickInsertItems: QuickInsertItem[] = [
     keywords: ["fence", "source"],
   },
   {
+    id: "mermaid-diagram",
+    label: "Mermaid diagram",
+    detail: "```mermaid",
+    command: "code-block",
+    value: "mermaid",
+    keywords: ["diagram", "flowchart", "sequence", "graph", "chart"],
+  },
+  {
+    id: "mind-map",
+    label: "Mind map",
+    detail: "```mindmap",
+    command: "code-block",
+    value: "mindmap",
+    keywords: ["diagram", "markmind", "outline", "tree"],
+  },
+  {
     id: "jupyter-cell",
     label: "Jupyter cell",
     detail: "@@cell",
