@@ -361,6 +361,49 @@ describe("details found by comparing with MarkText, files.md and Marker", () => 
     const image = open("![alt](i.png)", 3);
     expect(image.runCommand("link")).toBe(false);
   });
+
+  it("links whole inline objects and flattens old links instead of nesting them", () => {
+    const code = open("use `code` now", 0, 7);
+    code.runCommand("link");
+    expect(code.getMarkdown()).toBe("[use `code`](https://) now");
+
+    const linked = open("see [docs](u) now", 0, 7);
+    linked.runCommand("link");
+    expect(linked.getMarkdown()).toBe("[see docs](https://) now");
+
+    const image = open("see ![cat](c.png) now", 0, 7);
+    image.runCommand("link");
+    expect(image.getMarkdown()).toBe("[see ![cat](c.png)](https://) now");
+  });
+
+  it("keeps inline objects whole at both ends of a multiline format selection", () => {
+    const doc = "a [docs](u)\nthen `code` here";
+    const ed = open(doc, doc.indexOf("docs") + 1, doc.indexOf("code") + 2);
+    ed.runCommand("bold");
+    expect(ed.getMarkdown()).toBe("a **[docs](u)**\n**then `code`** here");
+  });
+
+  it("relinks an existing link and leaves code and multiline selections intact", () => {
+    const linked = open("see [docs](old) now", 7);
+    linked.runCommand("link", "https://new.example");
+    expect(linked.getMarkdown()).toBe("see [docs](https://new.example) now");
+
+    const code = open("use `code` now", 6);
+    expect(code.runCommand("link")).toBe(false);
+    expect(code.getMarkdown()).toBe("use `code` now");
+
+    const lines = open("first\nsecond", 0, 12);
+    expect(lines.runCommand("link")).toBe(false);
+    expect(lines.getMarkdown()).toBe("first\nsecond");
+  });
+
+  it("turns an angle autolink into a single link", async () => {
+    const ed = open("see <https://old.example> now", 6, 14);
+    ed.runCommand("link", "https://new.example");
+    expect(ed.getMarkdown()).toBe("see [https://old.example](https://new.example) now");
+    const { renderMarkdownHTML } = await import("../../src/render-html.ts");
+    expect(renderMarkdownHTML(ed.getMarkdown()).match(/<a\b/g)).toHaveLength(1);
+  });
 });
 
 describe("format availability", () => {
@@ -370,6 +413,17 @@ describe("format availability", () => {
     expect(inlineFormatsAvailable(code.view.state)).toBe(false);
     const prose = open("text", 0, 4);
     expect(inlineFormatsAvailable(prose.view.state)).toBe(true);
+  });
+
+  it("does not insert literal bold markers at a caret inside inline code", async () => {
+    const { inlineFormatAvailable } = await import("../../src/cm6/inline-format.ts");
+    const ed = open("use `code` now", 6);
+    expect(inlineFormatAvailable(ed.view.state, "bold")).toBe(false);
+    expect(inlineFormatAvailable(ed.view.state, "code")).toBe(true);
+    expect(ed.runCommand("bold")).toBe(false);
+    expect(ed.getMarkdown()).toBe("use `code` now");
+    expect(ed.runCommand("code")).toBe(true);
+    expect(ed.getMarkdown()).toBe("use code now");
   });
 });
 

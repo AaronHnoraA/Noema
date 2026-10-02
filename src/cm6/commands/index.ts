@@ -12,6 +12,7 @@
 import { EditorView } from "@codemirror/view";
 import type { Text } from "@codemirror/state";
 import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
+import type { SyntaxNode } from "@lezer/common";
 import { parseTableModel, formatTableLines, splitTableCells, tableTooLarge, type TableAlign } from "../table-model.ts";
 import { writeSystemClipboard } from "../../system-clipboard.ts";
 import type {
@@ -36,8 +37,9 @@ import {
 } from "../heading-fold.ts";
 import { revisionAdviceRange, revisionSource, type RevisionSourceOptions } from "../../authoring-syntax.ts";
 import { moveBlockAtCursor } from "../block-move.ts";
-import { clearInlineFormatSpec, toggleInlineFormatSpec, type InlineFormatKind } from "../inline-format.ts";
+import { clearInlineFormatSpec, inlineFormatsAvailable, toggleInlineFormatSpec, type InlineFormatKind } from "../inline-format.ts";
 import { changeHeadingLevelSpec, toggleBlockquoteSpec, toggleHeadingSpec, toggleListSpec, type ListKind } from "../block-format.ts";
+import { parseMarkdownLine } from "../languages/markdown/index.ts";
 
 // ---------------------------------------------------------------------------
 // Inline wrap (bold / italic / highlight / strike / code / link / image)
@@ -69,10 +71,85 @@ function wordAround(doc: Text, pos: number): { from: number; to: number } | null
 }
 
 function insideImage(state: EditorView["state"], pos: number): boolean {
-  for (let node: ReturnType<ReturnType<typeof syntaxTree>["resolveInner"]> | null = syntaxTree(state).resolveInner(pos, 1); node; node = node.parent) {
-    if (node.name === "Image" && node.from < pos) return true;
+  const line = state.doc.lineAt(pos);
+  const tree = parseMarkdownLine(line.text);
+  const local = pos - line.from;
+  for (let node: SyntaxNode | null = tree.resolveInner(local, 1); node; node = node.parent) {
+    if (node.name === "Image" && node.from < local) return true;
   }
   return false;
+}
+
+function insideInlineCode(state: EditorView["state"], pos: number): boolean {
+  const line = state.doc.lineAt(pos);
+  const tree = parseMarkdownLine(line.text);
+  const local = pos - line.from;
+  for (let node: SyntaxNode | null = tree.resolveInner(local, 1); node; node = node.parent) {
+    if (node.name === "InlineCode" && node.from < local && local < node.to) return true;
+  }
+  return false;
+}
+
+type LocalLink = { node: SyntaxNode; base: number };
+
+function linkAtSelection(state: EditorView["state"]): LocalLink | null {
+  const { from, to } = state.selection.main;
+  const line = state.doc.lineAt(from);
+  if (state.doc.lineAt(to).number !== line.number) return null;
+  const tree = parseMarkdownLine(line.text);
+  const localFrom = from - line.from;
+  const localTo = to - line.from;
+  const linkAt = (side: -1 | 1) => {
+    let node: SyntaxNode | null = tree.resolveInner(localFrom, side);
+    while (node && node.name !== "Link") node = node.parent;
+    return node && node.from <= localFrom && node.to >= localTo ? { node, base: line.from } : null;
+  };
+  return linkAt(1) ?? linkAt(-1);
+}
+
+function linkLabel(state: EditorView["state"], { node, base }: LocalLink): string | null {
+  const marks = node.getChildren("LinkMark");
+  const open = marks[0];
+  const close = marks[1];
+  return open && close && state.doc.sliceString(base + open.from, base + open.to) === "["
+    ? state.doc.sliceString(base + open.to, base + close.from)
+    : null;
+}
+
+/** Keep source constructs whole; flatten existing links before making one link. */
+function linkSelectionText(state: EditorView["state"], from: number, to: number): { from: number; to: number; text: string } | null {
+  const line = state.doc.lineAt(from);
+  if (state.doc.lineAt(to).number !== line.number) return null;
+  const base = line.from;
+  const tree = parseMarkdownLine(line.text);
+  const atomic = new Set(["Link", "Image", "Autolink", "InlineCode", "InlineMath"]);
+  let start = from - base;
+  let end = to - base;
+  for (let node: SyntaxNode | null = tree.resolveInner(start, 1); node; node = node.parent) {
+    if (atomic.has(node.name) && node.from < start && start < node.to) start = Math.min(start, node.from);
+  }
+  for (let node: SyntaxNode | null = tree.resolveInner(end, -1); node; node = node.parent) {
+    if (atomic.has(node.name) && node.from < end && end < node.to) end = Math.max(end, node.to);
+  }
+  let text = "";
+  let cursor = start;
+  let invalid = false;
+  tree.iterate({
+    from: start,
+    to: end,
+    enter(node) {
+      if (node.name !== "Link" && node.name !== "Autolink") return;
+      const label = node.name === "Link"
+        ? linkLabel(state, { node: node.node, base })
+        : state.doc.sliceString(base + node.from + 1, base + node.to - 1);
+      if (label === null) { invalid = true; return false; }
+      text += state.doc.sliceString(base + cursor, base + node.from) + label;
+      cursor = node.to;
+      return false;
+    },
+  });
+  if (invalid) return null;
+  return { from: base + start, to: base + end, text: text + state.doc.sliceString(base + cursor, base + end) };
 }
 
 /**
@@ -82,27 +159,22 @@ function insideImage(state: EditorView["state"], pos: number): boolean {
  */
 function unlinkAtSelection(view: EditorView): boolean {
   const state = view.state;
-  const { from, to } = state.selection.main;
-  const linkAt = (side: -1 | 1) => {
-    let node: ReturnType<ReturnType<typeof syntaxTree>["resolveInner"]> | null = syntaxTree(state).resolveInner(from, side);
-    while (node && node.name !== "Link") node = node.parent;
-    return node && node.from <= from && node.to >= to ? node : null;
-  };
   // A caret on either edge of the link counts: a new link glued to an
   // existing one is never what the command was for.
-  const node = linkAt(1) ?? linkAt(-1);
-  if (!node) return false;
+  const found = linkAtSelection(state);
+  if (!found) return false;
+  const { node, base } = found;
   const marks = node.getChildren("LinkMark");
   const open = marks[0];
   const close = marks[1];
-  if (!open || !close || state.doc.sliceString(open.from, open.to) !== "[") return false;
-  const label = state.doc.sliceString(open.to, close.from);
+  const label = linkLabel(state, found);
+  if (!open || !close || label === null) return false;
   // Keep the caret on the same character of the text it was in.
-  const place = (pos: number): number => node.from + Math.max(0, Math.min(label.length, pos - open.to));
+  const place = (pos: number): number => base + node.from + Math.max(0, Math.min(label.length, pos - base - open.to));
   const anchor = state.selection.main.anchor;
   const head = state.selection.main.head;
   view.dispatch({
-    changes: { from: node.from, to: node.to, insert: label },
+    changes: { from: base + node.from, to: base + node.to, insert: label },
     selection: { anchor: place(anchor), head: place(head) },
     scrollIntoView: true,
   });
@@ -1266,15 +1338,32 @@ export function runCommandCM6(view: EditorView, command: EditorCommand, value = 
   if (command === "edit-properties") return editProperties(view);
 
   if (command === "link") {
+    if (!inlineFormatsAvailable(view.state)) return false;
     if (!value && unlinkAtSelection(view)) return true;
-    if (insideImage(view.state, view.state.selection.main.from)) return false;
+    const existing = value ? linkAtSelection(view.state) : null;
+    if (existing) {
+      const label = linkLabel(view.state, existing);
+      if (label === null) return false;
+      const text = `[${label}](${value})`;
+      const hrefFrom = existing.base + existing.node.from + label.length + 3;
+      view.dispatch({
+        changes: { from: existing.base + existing.node.from, to: existing.base + existing.node.to, insert: text },
+        selection: { anchor: hrefFrom, head: hrefFrom + value.length },
+        scrollIntoView: true,
+      });
+      return true;
+    }
     let { from, to } = view.state.selection.main;
     if (from === to) {
+      if (insideImage(view.state, from) || insideInlineCode(view.state, from)) return false;
       // A caret inside a word links that word, as Typora does.
       const word = wordAround(view.state.doc, from);
       if (word) ({ from, to } = word);
     }
-    const selected = view.state.doc.sliceString(from, to);
+    const selection = from === to ? null : linkSelectionText(view.state, from, to);
+    if (from !== to && !selection) return false;
+    if (selection) ({ from, to } = selection);
+    const selected = selection?.text ?? "";
     if (!value && /^(?:https?:\/\/|mailto:)\S+$/i.test(selected)) {
       // A selected URL becomes its own target with the text selected to retitle.
       const text = `[${selected}](${selected})`;

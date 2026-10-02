@@ -26,11 +26,13 @@ import {
   EditorSelection,
   type ChangeSpec,
   type EditorState,
+  type Text,
   type SelectionRange,
   type TransactionSpec,
 } from "@codemirror/state";
-import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
+import { syntaxTree } from "@codemirror/language";
 import type { Tree } from "@lezer/common";
+import { parseMarkdownLine } from "./languages/markdown/index.ts";
 
 export type InlineFormatKind =
   | "bold"
@@ -91,8 +93,40 @@ const CODE_BLOCK_NODES = new Set(["FencedCode", "CodeBlock", "IndentedCode"]);
  */
 const BLOCK_PREFIX_RE = /^[ \t]*(?:>[ \t]?)*[ \t]*(?:#{1,6}[ \t]+|(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)?/u;
 
-function treeFor(state: EditorState, upto: number): Tree {
-  return ensureSyntaxTree(state, Math.min(state.doc.length, upto), 200) ?? syntaxTree(state);
+/** Fence intervals are built once per immutable document, then queried cheaply. */
+const fenceCache = new WeakMap<Text, Array<{ from: number; to: number }>>();
+
+function fencedRanges(doc: Text): Array<{ from: number; to: number }> {
+  const cached = fenceCache.get(doc);
+  if (cached) return cached;
+  const ranges: Array<{ from: number; to: number }> = [];
+  let open: { from: number; char: string; length: number; list: boolean } | null = null;
+  let offset = 0;
+  for (const line of doc.iterLines()) {
+    const ordinary: RegExpExecArray | null = /^(?:[ \t]{0,3}>[ \t]?)*[ \t]{0,3}(`{3,}|~{3,})([^\n]*)$/u.exec(line);
+    const listed: RegExpExecArray | null = ordinary ? null
+      : /^(?:[ \t]{0,3}>[ \t]?)*[ \t]{0,3}(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?[ \t]{0,3}(`{3,}|~{3,})([^\n]*)$/u.exec(line);
+    const continued: RegExpExecArray | null = open?.list && !ordinary && !listed
+      ? /^(?:[ \t]{0,3}>[ \t]?)*[ \t]{0,7}(`{3,}|~{3,})([ \t]*)$/u.exec(line)
+      : null;
+    const candidate: RegExpExecArray | null = ordinary ?? listed ?? continued;
+    if (candidate) {
+      const marker: string = candidate[1]!;
+      const rest = candidate[2]!.trim();
+      if (open) {
+        if (marker[0] === open.char && marker.length >= open.length && !rest) {
+          ranges.push({ from: open.from, to: offset + line.length });
+          open = null;
+        }
+      } else if (marker[0] !== "`" || !rest.includes("`")) {
+        open = { from: offset, char: marker[0]!, length: marker.length, list: Boolean(listed) };
+      }
+    }
+    offset += line.length + 1;
+  }
+  if (open) ranges.push({ from: open.from, to: doc.length });
+  fenceCache.set(doc, ranges);
+  return ranges;
 }
 
 function escapedAt(text: string, index: number): boolean {
@@ -158,30 +192,31 @@ export function inlineFormatSpans(
   const doc = state.doc;
   const lo = Math.max(0, Math.min(from, to));
   const hi = Math.min(doc.length, Math.max(from, to));
-  const tree = treeFor(state, hi);
-  if (kind === "highlight") {
-    const spans: InlineFormatSpan[] = [];
-    const first = doc.lineAt(lo).number;
-    const last = doc.lineAt(hi).number;
-    for (let number = first; number <= last; number++) {
-      const line = doc.line(number);
-      spans.push(...highlightSpansInLine(line.text, line.from, codeRangesIn(tree, line.from, line.to)));
-    }
-    return spans.filter((span) => span.from <= hi && span.to >= lo);
-  }
-  const { node: nodeName, mark } = TREE_FORMATS[kind];
   const spans: InlineFormatSpan[] = [];
-  tree.iterate({
-    from: lo,
-    to: hi,
-    enter(node) {
-      if (node.name !== nodeName) return;
-      const open = node.node.firstChild;
-      const close = node.node.lastChild;
-      if (!open || !close || open.name !== mark || close.name !== mark || open.from === close.from) return;
-      spans.push({ kind, from: node.from, to: node.to, contentFrom: open.to, contentTo: close.from });
-    },
-  });
+  for (let number = doc.lineAt(lo).number; number <= doc.lineAt(hi).number; number++) {
+    const line = doc.line(number);
+    if (insideCodeBlock(state, line.from + Math.min(1, line.length))) continue;
+    const tree = parseMarkdownLine(line.text);
+    if (kind === "highlight") {
+      const codes = codeRangesIn(tree, 0, line.length)
+        .map((range) => ({ from: line.from + range.from, to: line.from + range.to }));
+      spans.push(...highlightSpansInLine(line.text, line.from, codes));
+      continue;
+    }
+    const { node: nodeName, mark } = TREE_FORMATS[kind];
+    tree.iterate({
+      from: Math.max(0, lo - line.from),
+      to: Math.min(line.length, hi - line.from),
+      enter(node) {
+        if (node.name !== nodeName) return;
+        const open = node.node.firstChild;
+        const close = node.node.lastChild;
+        if (!open || !close || open.name !== mark || close.name !== mark || open.from === close.from) return;
+        spans.push({ kind, from: line.from + node.from, to: line.from + node.to,
+          contentFrom: line.from + open.to, contentTo: line.from + close.from });
+      },
+    });
+  }
   return spans;
 }
 
@@ -197,9 +232,31 @@ function enclosingSpan(state: EditorState, kind: InlineFormatKind, range: Select
 }
 
 function insideCodeBlock(state: EditorState, pos: number): boolean {
-  let node: ReturnType<Tree["resolveInner"]> | null = treeFor(state, pos).resolveInner(pos, -1);
+  const parsed = syntaxTree(state);
+  if (parsed.length > pos) {
+    for (let node: ReturnType<Tree["resolveInner"]> | null = parsed.resolveInner(pos, -1); node; node = node.parent) {
+      if (CODE_BLOCK_NODES.has(node.name)) return true;
+    }
+    return false;
+  }
+  const ranges = fencedRanges(state.doc);
+  let low = 0;
+  let high = ranges.length;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if (ranges[mid]!.to < pos) low = mid + 1;
+    else high = mid;
+  }
+  if (low < ranges.length && ranges[low]!.from <= pos) return true;
+  const line = state.doc.lineAt(pos);
+  return /^[ \t]{4,}\S/u.test(line.text) && (line.number === 1 || !state.doc.line(line.number - 1).text.trim());
+}
+
+function insideInlineCode(state: EditorState, pos: number): boolean {
+  const line = state.doc.lineAt(pos);
+  let node: ReturnType<Tree["resolveInner"]> | null = parseMarkdownLine(line.text).resolveInner(pos - line.from, -1);
   for (; node; node = node.parent) {
-    if (CODE_BLOCK_NODES.has(node.name)) return true;
+    if (node.name === "InlineCode" && node.from < pos - line.from && pos - line.from < node.to) return true;
   }
   return false;
 }
@@ -322,20 +379,25 @@ const ATOMIC_INLINE_NODES = new Set(["Link", "Image", "Autolink", "InlineCode", 
  * extends the selection over the link. Noema extends it.
  */
 function expandOverAtomicInlines(state: EditorState, from: number, to: number): { from: number; to: number } {
-  const tree = treeFor(state, to);
+  const firstLine = state.doc.lineAt(from);
+  const lastLine = state.doc.lineAt(to);
+  const firstTree = parseMarkdownLine(firstLine.text);
+  const lastTree = firstLine.number === lastLine.number ? firstTree : parseMarkdownLine(lastLine.text);
+  const localFrom = from - firstLine.from;
+  const localTo = to - lastLine.from;
   let start = from;
   let end = to;
-  for (let node: ReturnType<Tree["resolveInner"]> | null = tree.resolveInner(from, 1); node; node = node.parent) {
-    if (ATOMIC_INLINE_NODES.has(node.name) && node.from < from && node.to > from) start = Math.min(start, node.from);
+  for (let node: ReturnType<Tree["resolveInner"]> | null = firstTree.resolveInner(localFrom, 1); node; node = node.parent) {
+    if (ATOMIC_INLINE_NODES.has(node.name) && node.from < localFrom && node.to > localFrom) start = Math.min(start, firstLine.from + node.from);
   }
-  for (let node: ReturnType<Tree["resolveInner"]> | null = tree.resolveInner(to, -1); node; node = node.parent) {
-    if (ATOMIC_INLINE_NODES.has(node.name) && node.from < to && node.to > to) end = Math.max(end, node.to);
+  for (let node: ReturnType<Tree["resolveInner"]> | null = lastTree.resolveInner(localTo, -1); node; node = node.parent) {
+    if (ATOMIC_INLINE_NODES.has(node.name) && node.from < localTo && node.to > localTo) end = Math.max(end, lastLine.from + node.to);
   }
   return { from: start, to: end };
 }
 
 function toggleRange(state: EditorState, kind: InlineFormatKind, range: SelectionRange): RangeEdit | null {
-  if (kind !== "code" && insideCodeBlock(state, range.from)) return null;
+  if (!inlineFormatAvailable(state, kind, range)) return null;
 
   const enclosing = enclosingSpan(state, kind, range);
   if (enclosing) return unwrapEdit(state, enclosing, range);
@@ -414,4 +476,14 @@ export function activeInlineFormats(state: EditorState): Set<InlineFormatKind> {
 export function inlineFormatsAvailable(state: EditorState): boolean {
   const range = state.selection.main;
   return !insideCodeBlock(state, range.from) && !insideCodeBlock(state, range.to);
+}
+
+/** A caret inside inline code can only toggle the code span itself. */
+export function inlineFormatAvailable(
+  state: EditorState,
+  kind: InlineFormatKind,
+  range: SelectionRange = state.selection.main,
+): boolean {
+  if (insideCodeBlock(state, range.from) || insideCodeBlock(state, range.to)) return false;
+  return kind === "code" || !range.empty || !insideInlineCode(state, range.from);
 }

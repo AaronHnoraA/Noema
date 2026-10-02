@@ -233,7 +233,7 @@ import {
 import { installActiveCoreReconnect } from "./active-core-reconnect.ts";
 import { noteAutoSaveEnabled } from "./save-policy.ts";
 import { defaultSaveRetryDelayMs, SaveDrain } from "./save-drain.ts";
-import { activeInlineFormats, INLINE_FORMAT_KINDS, inlineFormatsAvailable, type InlineFormatKind } from "../src/cm6/inline-format.ts";
+import { activeInlineFormats, INLINE_FORMAT_KINDS, inlineFormatAvailable, inlineFormatsAvailable, type InlineFormatKind } from "../src/cm6/inline-format.ts";
 import {
   EditorSaveChangeTracker,
   sourceLineEnding,
@@ -11403,8 +11403,10 @@ function markActiveSelectionFormats(): void {
   for (const button of selectionTool.querySelectorAll<HTMLButtonElement>("[data-selection-command]")) {
     const command = button.dataset.selectionCommand ?? "";
     const format = INLINE_FORMAT_KINDS.includes(command as InlineFormatKind);
-    if (!format && command !== "clear-format") continue;
-    button.disabled = !available;
+    if (!format && command !== "clear-format" && command !== "link") continue;
+    button.disabled = format
+      ? !inlineFormatAvailable(state, command as InlineFormatKind)
+      : !available;
     if (format) button.setAttribute("aria-pressed", String(active.has(command as InlineFormatKind)));
   }
 }
