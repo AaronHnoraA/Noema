@@ -670,3 +670,34 @@ export function inlineFormatAvailable(
       && (range.empty || formattableSelections(state, range).length === 0)) return false;
   return kind === "code" || !range.empty || !insideInlineCode(state, range.from);
 }
+
+/**
+ * Where Tab leaves an inline span when the caret sits at the end of its
+ * content: past `**`, `` ` ``, `==`, `\)`, or a link's `](url)`. MarkText's
+ * `ParagraphContent.tabHandler` jumps over the closing format the same way,
+ * so typing can continue after a span whose markers live preview hides.
+ * Returns null when the caret is not at such an end.
+ */
+export function inlineFormatExitTarget(state: EditorState, pos: number): number | null {
+  let best: { to: number; size: number } | null = null;
+  const consider = (closeFrom: number, to: number, from: number): void => {
+    if (closeFrom !== pos || to <= pos) return;
+    if (!best || to - from < best.size) best = { to, size: to - from };
+  };
+  for (const kind of INLINE_FORMAT_KINDS) {
+    for (const span of inlineFormatSpans(state, kind, pos, pos)) {
+      if (span.contentTo < span.to) consider(span.contentTo, span.to, span.from);
+    }
+  }
+  const { tree, base } = formatContext(state, pos, pos);
+  for (let node: ReturnType<Tree["resolveInner"]> | null = tree.resolveInner(pos - base, -1); node; node = node.parent) {
+    if (node.name === "Link" || node.name === "Image") {
+      const marks = node.getChildren("LinkMark");
+      const close = marks.find((mark) => state.doc.sliceString(base + mark.from, base + mark.to) === "]");
+      if (close) consider(base + close.from, base + node.to, base + node.from);
+    } else if (node.name === "InlineMath" && state.doc.sliceString(base + node.to - 2, base + node.to) === "\\)") {
+      consider(base + node.to - 2, base + node.to, base + node.from);
+    }
+  }
+  return (best as { to: number } | null)?.to ?? null;
+}

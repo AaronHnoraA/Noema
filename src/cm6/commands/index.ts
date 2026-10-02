@@ -584,26 +584,81 @@ export function insertLineBeforeHeading(view: EditorView): boolean {
   return true;
 }
 
+/**
+ * The list item an indented empty item belongs to: the nearest line above
+ * with a list marker at a smaller indent. Blank and more-indented lines are
+ * the parent's own body; anything else at or left of the item ends the search.
+ */
+function parentListLineAbove(doc: Text, lineNumber: number, indentWidth: number, limit = 200): string | null {
+  for (let number = lineNumber - 1; number >= 1 && lineNumber - number <= limit; number -= 1) {
+    const text = doc.line(number).text;
+    if (!text.trim()) continue;
+    const item = markdownListLine(text);
+    if (item && item.indentWidth < indentWidth) return text;
+    if (lineIndentWidth(text) < indentWidth && !item) return null;
+  }
+  return null;
+}
+
+/**
+ * Leave a list item or quote through an empty line that keeps a blank line
+ * on each side wherever text would otherwise touch it.
+ *
+ * Markdown continues a paragraph onto the next unindented line ("lazy"
+ * continuation), so clearing `- ` under `- a` and typing `foo` produced
+ * `- a\nfoo` — one list item whose text runs on. MarkText's block model makes
+ * the exit a paragraph between lists; in source that paragraph needs its
+ * blank lines. SEPARATOR is the blank line's own container prefix.
+ */
+function exitToSeparatedLine(view: EditorView, line: { from: number; to: number; number: number }, keep: string, separator: string): void {
+  const doc = view.state.doc;
+  const strip = (text: string): string => text.startsWith(separator) ? text.slice(separator.length) : text;
+  const touches = (number: number): boolean =>
+    number >= 1 && number <= doc.lines && /\S/u.test(strip(doc.line(number).text).replace(/^\s*>?/u, ""));
+  const before = touches(line.number - 1) ? `${separator}\n` : "";
+  const after = touches(line.number + 1) ? `\n${separator}` : "";
+  view.dispatch({
+    changes: { from: line.from, to: line.to, insert: before + keep + after },
+    selection: { anchor: line.from + before.length + keep.length },
+    scrollIntoView: true,
+    userEvent: "input",
+  });
+}
+
 export function exitEmptyMarkdownBlock(view: EditorView): boolean {
   const sel = view.state.selection.main;
   if (!sel.empty) return false;
-  const line = view.state.doc.lineAt(sel.from);
+  const doc = view.state.doc;
+  const line = doc.lineAt(sel.from);
   const quoteList = line.text.match(EMPTY_QUOTE_LIST_RE);
   if (quoteList) {
     const prefix = quoteList[1] ?? "";
-    view.dispatch({
-      changes: { from: line.from, to: line.to, insert: prefix },
-      selection: { anchor: line.from + prefix.length },
-      scrollIntoView: true,
-    });
+    exitToSeparatedLine(view, line, prefix, prefix.trimEnd());
     return true;
   }
-  if (!EMPTY_LIST_RE.test(line.text) && !EMPTY_QUOTE_RE.test(line.text)) return false;
-  view.dispatch({
-    changes: { from: line.from, to: line.to, insert: "" },
-    selection: { anchor: line.from },
-    scrollIntoView: true,
-  });
+  const emptyItem = EMPTY_LIST_RE.exec(line.text);
+  if (emptyItem) {
+    // A nested empty item steps out one level and continues the parent list,
+    // as Shift-Tab would; only a top-level item leaves the list.
+    const indentWidth = lineIndentWidth(emptyItem[1] ?? "");
+    const parent = indentWidth > 0 ? parentListLineAbove(doc, line.number, indentWidth) : null;
+    const parentMarkup = parent?.match(CONTINUE_MARKUP_RE);
+    if (parentMarkup) {
+      const insert = `${parentMarkup[1] ?? ""}${parentMarkup[2] ?? ""}${nextListMarker(parentMarkup)}`;
+      view.dispatch({
+        changes: { from: line.from, to: line.to, insert },
+        selection: { anchor: line.from + insert.length },
+        scrollIntoView: true,
+        userEvent: "input",
+      });
+      renumberMarkdownOrderedLists(view);
+      return true;
+    }
+    exitToSeparatedLine(view, line, "", "");
+    return true;
+  }
+  if (!EMPTY_QUOTE_RE.test(line.text)) return false;
+  exitToSeparatedLine(view, line, "", "");
   return true;
 }
 

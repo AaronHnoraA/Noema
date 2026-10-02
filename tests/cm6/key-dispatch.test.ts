@@ -34,17 +34,18 @@ async function press(
 describe("Enter reaches the canonical chain in src/cm6/input-commands.ts", () => {
   it("exits an empty list item instead of continuing it", async () => {
     const { doc } = await press("- item\n- ", 9, "Enter");
-    expect(doc).toBe("- item\n");
+    // The blank line keeps the next text out of the item (lazy continuation).
+    expect(doc).toBe("- item\n\n");
   });
 
   it("exits an empty block quote instead of continuing it", async () => {
     const { doc } = await press("> quote\n> ", 10, "Enter");
-    expect(doc).toBe("> quote\n");
+    expect(doc).toBe("> quote\n\n");
   });
 
   it("exits an empty task item", async () => {
     const { doc } = await press("- [ ] a\n- [ ] ", 14, "Enter");
-    expect(doc).toBe("- [ ] a\n");
+    expect(doc).toBe("- [ ] a\n\n");
   });
 
   it("still continues a non-empty bullet", async () => {

@@ -287,7 +287,7 @@ describe("list continuation", () => {
   it("Enter on an empty task item of any marker exits the list", () => {
     const ed = open("* [ ] a\n* [ ] ", 14);
     runEditorEnter(ed.view);
-    expect(ed.getMarkdown()).toBe("* [ ] a\n");
+    expect(ed.getMarkdown()).toBe("* [ ] a\n\n");
   });
 });
 

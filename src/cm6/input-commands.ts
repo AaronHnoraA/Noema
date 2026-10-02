@@ -26,6 +26,8 @@ import {
 } from "@codemirror/lang-markdown";
 import { EditorView } from "@codemirror/view";
 
+import { inlineFormatExitTarget } from "./inline-format.ts";
+
 import { codeBlockTab, explodeCodeBracketsOnEnter, fencedBodyAt } from "./code-block-input.ts";
 import { getFencedCodeRanges } from "./code-ranges.ts";
 import { getBlockMathRanges } from "./math-ranges.ts";
@@ -366,11 +368,23 @@ export function runEditorEnter(view: EditorView): boolean {
   return run();
 }
 
+/** Tab at the end of an inline span's content moves past its closing markup. */
+function tabPastInlineFormat(view: EditorView): boolean {
+  const state = view.state;
+  const range = state.selection.main;
+  if (!range.empty || state.selection.ranges.length > 1) return false;
+  const target = inlineFormatExitTarget(state, range.head);
+  if (target == null) return false;
+  view.dispatch({ selection: EditorSelection.cursor(target), scrollIntoView: true, userEvent: "select" });
+  return true;
+}
+
 /** Canonical Tab behavior shared by native CM6 and xwidget input. */
 export function runEditorTab(view: EditorView, shift = false): boolean {
   if (view.state.readOnly) return true;
   const direction = shift ? -1 : 1;
   return tableNavigateCell(view, direction)
     || codeBlockTab(view, shift)
+    || (!shift && tabPastInlineFormat(view))
     || indentMarkdownBlock(view, direction);
 }
