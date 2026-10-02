@@ -1018,9 +1018,14 @@
 
 /* ─── CM6 heading fold chevron ───────────────────────────────────── */
 .cm-editor .cm-heading-fold-arrow {
+  /* A negative inline margin before CM6's widget buffer can create a whole
+   * extra line in WebKit with break-spaces. That line disappeared whenever
+   * viewport decorations dropped the off-screen chevron, changing the note's
+   * height during a scroll. The gutter control must not take part in wrapping. */
+  position: absolute;
+  inset-inline-start: -1.15rem;
   display: inline-block;
   width: 1rem;
-  margin-left: -1.15rem;
   color: var(--aaron-muted, #777);
   cursor: pointer;
   opacity: 0;
@@ -2304,7 +2309,9 @@ noema-tikz {
   position: relative;
   overflow: hidden;
   cursor: grab;
-  overscroll-behavior: contain;
+  /* Inline figures share the document's wheel gesture. The fullscreen portal
+   * below owns its own scroll containment. */
+  overscroll-behavior: auto;
   user-select: none;
 }
 .cm-editor .cm-diagram-interactive.is-panning {

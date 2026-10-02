@@ -357,7 +357,7 @@ class MermaidWidget extends MeasuredWidget {
     div.className = "cm-mermaid-block";
     applyLayoutAttrs(div, "diagram", this.layout);
     wrap.append(div);
-    renderMermaidWidget(this.source, this.lang, div, () => view.requestMeasure());
+    renderMermaidWidget(this.source, this.lang, div, wrap, this.estimatedHeight, () => view.requestMeasure());
     return this.registerMeasured(wrap, view);
   }
 
@@ -410,16 +410,31 @@ class MermaidPreviewWidget extends MeasuredWidget {
     div.className = "cm-mermaid-block-preview";
     applyLayoutAttrs(div, "diagram", this.layout);
     wrap.append(div);
-    renderMermaidWidget(this.source, this.lang, div, () => view.requestMeasure());
+    renderMermaidWidget(this.source, this.lang, div, wrap, this.estimatedHeight, () => view.requestMeasure());
     return this.registerMeasured(wrap, view);
   }
 
   ignoreEvent(): boolean { return true; }
 }
 
-function renderMermaidWidget(source: string, lang: string, div: HTMLElement, onRender?: () => void): void {
+function renderMermaidWidget(
+  source: string, lang: string, div: HTMLElement, wrap: HTMLElement,
+  estimatedHeight: number, onRender: () => void,
+): void {
   const key = `mermaid\n${lang}\n${source.trim()}`;
   div.dataset.diagramRenderKey = key;
+  // Even a cached SVG crosses an async import when a virtualized widget mounts
+  // again. Keep its measured space until then, rather than briefly measuring
+  // the much shorter loading label and moving the surrounding text twice.
+  wrap.setAttribute("aria-busy", "true");
+  if (estimatedHeight > 0 && !wrap.classList.contains("aaronnote-diagram-wrap")) {
+    wrap.style.minHeight = `${estimatedHeight}px`;
+  }
+  const finish = () => {
+    wrap.removeAttribute("aria-busy");
+    wrap.style.removeProperty("min-height");
+    onRender();
+  };
   div.textContent = "Loading diagram renderer...";
   void import("../../../../diagram-render.ts")
     .then(({ renderMermaidLazy }) => {
@@ -427,13 +442,13 @@ function renderMermaidWidget(source: string, lang: string, div: HTMLElement, onR
       renderMermaidLazy(source, div, (err) => {
         div.classList.add("cm-diagram-error");
         div.textContent = err;
-      }, { lang, onRender });
+      }, { lang, onRender: finish });
     })
     .catch((err: unknown) => {
       if (div.dataset.diagramRenderKey !== key) return;
       div.classList.add("cm-diagram-error");
       div.textContent = err instanceof Error ? err.message : String(err);
-      onRender?.();
+      finish();
     });
 }
 

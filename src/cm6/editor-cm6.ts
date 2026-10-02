@@ -544,13 +544,15 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
     });
   });
   hostResizeObserver?.observe(host);
-  const onEditorScroll = (): void => {
+  const onEditorScroll = (event: Event): void => {
+    if (event.target !== host && event.target !== view.scrollDOM) return;
     beginFormulaScrollBurst(view);
     pauseScrollingImageAnimationTemporarily(view.contentDOM, 256);
   };
-  // Capture runs before CM6's own bubbling scroll listener, so formula
-  // widgets entering during its synchronous viewport measure see the burst.
-  view.scrollDOM.addEventListener("scroll", onEditorScroll, { capture: true, passive: true });
+  // The outer host owns scrolling in Emacs. An inner cm-scroller listener
+  // never sees that event. Capture on the host also covers embeddings where
+  // cm-scroller owns it, before CM6's synchronous viewport measurement.
+  host.addEventListener("scroll", onEditorScroll, { capture: true, passive: true });
   scheduleViewportDecorationRefresh(view);
   void document.fonts?.ready.then(() => {
     if (view.dom.isConnected) view.requestMeasure();
@@ -1193,7 +1195,7 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
       externalUpdateListeners.clear();
       documentResetListeners.clear();
       view.contentDOM.removeEventListener("mousedown", onSourceWidgetMouseDown, { capture: true });
-      view.scrollDOM.removeEventListener("scroll", onEditorScroll, { capture: true });
+      host.removeEventListener("scroll", onEditorScroll, { capture: true });
       viewportStabilizer!.destroy();
       forgetViewportDecorationRefresh(view);
       forgetFormulaScrollBurst(view);

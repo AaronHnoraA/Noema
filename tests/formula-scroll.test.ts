@@ -19,7 +19,25 @@ function connectedView(): FormulaScrollView {
 }
 
 describe("formula scroll burst", () => {
-  test("coalesces expensive formula mounts until 120 ms after the last scroll", () => {
+  test("the actual outer editor scroll host defers newly mounted formulas", async () => {
+    const { createEditor } = await import("../src/editor-api.ts");
+    const host = document.createElement("div");
+    document.body.append(host);
+    const editor = createEditor(host, { kernel: "cm6", initialContent: "text" });
+    try {
+      const element = document.createElement("div");
+      editor.view.dom.append(element);
+      const mount = vi.fn();
+      host.dispatchEvent(new Event("scroll"));
+      expect(deferFormulaScrollWork(editor.view, element, mount)).toBe(true);
+      expect(mount).not.toHaveBeenCalled();
+    } finally {
+      editor.destroy();
+      host.remove();
+    }
+  });
+
+  test("continuous scroll cannot starve the bounded formula mount queue", () => {
     vi.useFakeTimers();
     const frames: FrameRequestCallback[] = [];
     vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
@@ -27,25 +45,27 @@ describe("formula scroll burst", () => {
       return 1;
     });
     const view = connectedView();
-    const first = document.createElement("div");
-    const second = document.createElement("div");
-    view.dom.append(first, second);
+    const elements = Array.from({ length: 3 }, () => document.createElement("div"));
+    view.dom.append(...elements);
     const mounted: string[] = [];
 
     beginFormulaScrollBurst(view);
-    expect(deferFormulaScrollWork(view, first, () => mounted.push("first"))).toBe(true);
+    elements.forEach((element, index) => {
+      expect(deferFormulaScrollWork(view, element, () => mounted.push(String(index)))).toBe(true);
+    });
+    expect(frames).toHaveLength(1);
     vi.advanceTimersByTime(80);
     beginFormulaScrollBurst(view);
-    expect(deferFormulaScrollWork(view, second, () => mounted.push("second"))).toBe(true);
-    vi.advanceTimersByTime(119);
-    expect(frames).toHaveLength(0);
     expect(mounted).toEqual([]);
-
-    vi.advanceTimersByTime(1);
     expect(frames).toHaveLength(1);
     frames[0]!(performance.now());
-    expect(mounted).toEqual(["first", "second"]);
+    expect(mounted).toEqual(["0", "1"]);
     expect(view.requestMeasure).toHaveBeenCalledTimes(1);
+    expect(frames).toHaveLength(2);
+    beginFormulaScrollBurst(view);
+    frames[1]!(performance.now());
+    expect(mounted).toEqual(["0", "1", "2"]);
+    expect(view.requestMeasure).toHaveBeenCalledTimes(2);
 
     forgetFormulaScrollBurst(view);
     view.dom.remove();
@@ -65,6 +85,25 @@ describe("formula scroll burst", () => {
 
     expect(mount).not.toHaveBeenCalled();
     expect(view.requestMeasure).not.toHaveBeenCalled();
+    view.dom.remove();
+  });
+
+  test("mounts visible formulas before overscan and drops detached work", () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => { frames.push(callback); return frames.length; });
+    const view = connectedView();
+    const elements = [document.createElement("div"), document.createElement("div"), document.createElement("div")];
+    view.dom.append(...elements);
+    const mounted: number[] = [];
+    beginFormulaScrollBurst(view);
+    elements.forEach((element, index) => {
+      vi.spyOn(element, "getBoundingClientRect").mockReturnValue({ top: index === 1 ? 10 : 10000, bottom: index === 1 ? 100 : 10100 } as DOMRect);
+      deferFormulaScrollWork(view, element, () => mounted.push(index));
+    });
+    elements[2]!.remove();
+    frames[0]!(performance.now());
+    expect(mounted).toEqual([1, 0]);
+    forgetFormulaScrollBurst(view);
     view.dom.remove();
   });
 });

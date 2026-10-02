@@ -38,6 +38,7 @@
  */
 
 import { syntaxTree } from "@codemirror/language";
+import { isolateHistory, redo, undo } from "@codemirror/commands";
 import {
   Decoration,
   EditorView,
@@ -1328,7 +1329,11 @@ class TableWidget extends MeasuredWidget {
       if (!current) return;
       const nextSource = buildMarkdownTableSource({ rows, aligns: data.aligns.slice(0, rows[0]!.length) });
       if (nextSource !== current.source) {
-        view.dispatch({ changes: { from: current.from, to: current.sourceTo, insert: nextSource } });
+        view.dispatch({
+          changes: { from: current.from, to: current.sourceTo, insert: nextSource },
+          annotations: isolateHistory.of("full"),
+          userEvent: "input",
+        });
         focusTableCellAfterRender(view, current.from, focusTarget);
       } else {
         focusTableCellInTable(table, focusTarget);
@@ -1355,7 +1360,11 @@ class TableWidget extends MeasuredWidget {
       mutate(next);
       const nextSource = buildMarkdownTableSource(next);
       const target = typeof focusTarget === "function" ? focusTarget(next) : focusTarget;
-      view.dispatch({ changes: { from: current.from, to: current.sourceTo, insert: nextSource } });
+      if (nextSource !== current.source) view.dispatch({
+        changes: { from: current.from, to: current.sourceTo, insert: nextSource },
+        annotations: isolateHistory.of("full"),
+        userEvent: "input",
+      });
       focusTableCellAfterRender(view, current.from, target);
       view.requestMeasure();
     };
@@ -1792,9 +1801,20 @@ function renderEditableTable(
     const bindInput = (input: HTMLInputElement): void => {
       if (input.dataset.bound === "true") return;
       input.dataset.bound = "true";
-      input.addEventListener("input", () => {
-        cell.dataset.dirty = "true";
+      // Candidate confirmation belongs to the IME, not table navigation.
+      // WebKit can end composition before its confirming keydown (229).
+      let composing = false;
+      input.addEventListener("compositionstart", () => {
+        composing = true;
+        completion(input, "close");
+      });
+      input.addEventListener("compositionend", () => {
+        composing = false;
         completion(input, "request");
+      });
+      input.addEventListener("input", (event) => {
+        cell.dataset.dirty = "true";
+        if (!composing && !(event as InputEvent).isComposing) completion(input, "request");
       });
       input.addEventListener("mousedown", (event) => event.stopPropagation());
       input.addEventListener("mouseup", (event) => event.stopPropagation());
@@ -1803,6 +1823,7 @@ function renderEditableTable(
         completion(input, "request");
       });
       input.addEventListener("keyup", (event) => {
+        if (composing || event.isComposing || event.keyCode === 229) return;
         if (!["ArrowUp", "ArrowDown", "Tab", "Enter", "Escape"].includes(event.key)) completion(input, "request");
       });
       input.addEventListener("blur", (event) => {
@@ -1834,12 +1855,24 @@ function renderEditableTable(
       });
       input.addEventListener("keydown", (event) => {
         event.stopPropagation();
+        if (composing || event.isComposing || event.keyCode === 229) return;
         if (completion(input, "key", event)) {
           event.preventDefault();
           return;
         }
         if (event.key === "Enter") {
           event.preventDefault();
+          if (event.shiftKey) {
+            // Match MarkText's cell line break while retaining native input
+            // undo when the browser supports insertText on an input element.
+            const start = input.selectionStart ?? 0;
+            if (!input.ownerDocument.execCommand?.("insertText", false, "<br>")) {
+              input.setRangeText("<br>", start, input.selectionEnd ?? start, "end");
+              input.setSelectionRange(start + 4, start + 4);
+              input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: "<br>" }));
+            }
+            return;
+          }
           pendingFocusTarget = { row: row + 1, col, edit: true, select: true };
           input.blur();
         }
@@ -1920,6 +1953,16 @@ function renderEditableTable(
     });
     cell.addEventListener("keydown", (event) => {
       event.stopPropagation();
+      if (event.isComposing || event.keyCode === 229) return;
+      const historyKey = event.key.toLowerCase();
+      if ((event.metaKey || event.ctrlKey) && !event.altKey
+          && (historyKey === "z" || (historyKey === "y" && event.ctrlKey))) {
+        event.preventDefault();
+        const from = tableFrom();
+        const command = historyKey === "y" || event.shiftKey ? redo : undo;
+        if (command(view)) focusTableCellAfterRender(view, from, { row, col });
+        return;
+      }
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
         const input = openEditor(cell);
@@ -2162,6 +2205,14 @@ function buildLineDecoRanges(
     const line = doc.lineAt(Math.max(0, Math.min(heading.pos, doc.length)));
     if (rangeInsideAny(line.from, line.to, lineExcludedRanges)) continue;
     decos.push(Decoration.line({ attributes: { class: `cm-md-h${heading.renderLevel ?? heading.level}` } }).range(line.from));
+    // CM6 samples a short, plain-text line for its default line height. A
+    // heading kept around the caret can lose its viewport-only marks when
+    // scrolled off screen, making it look like that sample. The larger heading
+    // font then resets the height map for the entire note. Keep a structural
+    // mark alongside the persistent line style so it is never sampled as prose.
+    if (line.to > line.from) {
+      decos.push(Decoration.mark({ class: "cm-heading-text" }).range(line.from, line.to));
+    }
   }
 
   const pushLineRange = (from: number, to: number, cls: string): void => {
@@ -2170,6 +2221,11 @@ function buildLineDecoRanges(
     while (lineNum <= lastLine) {
       const line = doc.line(lineNum);
       decos.push(Decoration.line({ attributes: { class: cls } }).range(line.from));
+      // Code and other styled blocks are not representative prose samples
+      // either, even before their viewport syntax highlighting is available.
+      if (line.to > line.from) {
+        decos.push(Decoration.mark({ class: "cm-block-text" }).range(line.from, line.to));
+      }
       lineNum++;
     }
   };

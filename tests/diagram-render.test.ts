@@ -117,17 +117,18 @@ describe("diagram render helpers", () => {
     expect(svg.style.transform).toContain("translate(0px, 0px) scale(1)");
   });
 
-  test("wheel and trackpad scrolling pan the diagram", () => {
+  test("ordinary wheel and trackpad scrolling pass through an inline diagram", () => {
     const div = document.createElement("div");
     div.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg"><g id="node-a"><text>Root</text></g></svg>';
     const svg = div.querySelector<SVGSVGElement>("svg")!;
 
     enableDiagramInteraction(div);
+    const transform = svg.style.transform;
     const event = new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaX: 12, deltaY: 24, clientX: 8, clientY: 8 });
     svg.dispatchEvent(event);
 
-    expect(event.defaultPrevented).toBe(true);
-    expect(svg.style.transform).toContain("translate(-12px, -24px) scale(1)");
+    expect(event.defaultPrevented).toBe(false);
+    expect(svg.style.transform).toBe(transform);
   });
 
   test("ctrl-wheel trackpad pinch zooms around the gesture point", () => {

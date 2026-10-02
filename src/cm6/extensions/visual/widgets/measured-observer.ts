@@ -61,7 +61,9 @@ function resizeEntryHeight(entry: ResizeObserverEntry, el: HTMLElement): number 
 }
 
 function cacheElementHeight(el: HTMLElement, height: number): void {
-  if (height <= 0) return;
+  // A loading placeholder's estimate must not replace the last real height.
+  // Otherwise revisiting a formula teaches the cache its own approximation.
+  if (height <= 0 || el.getAttribute("aria-busy") === "true") return;
   const key = el.dataset.cmMeasureKey;
   if (key) cacheSet(key, height);
   const groupKey = el.dataset.cmMeasureGroupKey;

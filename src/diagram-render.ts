@@ -794,6 +794,11 @@ function bindDiagramInteraction(element: HTMLElement): DiagramInteractionState {
   element.addEventListener("wheel", (event) => {
     const target = event.target;
     if (target instanceof Element && target.closest(".cm-diagram-toolbar")) return;
+    // Inline figures belong to the reading surface. Passing over one during a
+    // wheel gesture must not switch that gesture from document scroll to pan.
+    // Drag still pans; pinch/modifier-wheel zooms; an expanded diagram owns pan.
+    if (!event.ctrlKey && !event.metaKey && !webkitGestureActive
+        && !element.classList.contains("is-diagram-fullscreen")) return;
     event.preventDefault();
     event.stopPropagation();
     if (webkitGestureActive) return;
