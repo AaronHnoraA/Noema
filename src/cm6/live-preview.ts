@@ -973,8 +973,41 @@ function isTableSeparatorLine(line: string): boolean {
   return cells.length > 0 && cells.every((cell) => /^:?-+:?$/.test(cell.replace(/\s+/g, "")));
 }
 
-function isTableRowLine(line: string): boolean {
-  return /^\s*\|.*\|\s*$/.test(line);
+/** Whether LINE has a `|` that is not backslash-escaped. */
+function hasUnescapedPipe(line: string): boolean {
+  for (let index = line.indexOf("|"); index >= 0; index = line.indexOf("|", index + 1)) {
+    let slashes = 0;
+    for (let pos = index - 1; pos >= 0 && line[pos] === "\\"; pos--) slashes++;
+    if (slashes % 2 === 0) return true;
+  }
+  return false;
+}
+
+/** A row's cells without the optional outer pipes. */
+function tableRowCells(line: string): string[] {
+  return splitTableRow(line);
+}
+
+/**
+ * GFM table start, by the rules export's markdown-it applies: the header has
+ * an unescaped pipe, the delimiter row is made of `-`, `:`, `|` and spaces
+ * with as many cells as the header, and neither is indented as code. Outer
+ * pipes are optional (`a | b` / `--- | ---`).
+ */
+function isTableStart(header: string, delimiter: string): boolean {
+  if (/^(?: {4}|\t)/u.test(header) || /^(?: {4}|\t)/u.test(delimiter)) return false;
+  if (!hasUnescapedPipe(header)) return false;
+  if (!/^\s*[-:|][-:|\s]*$/u.test(delimiter) || /^\s*-\s/u.test(delimiter)) return false;
+  if (!isTableSeparatorLine(delimiter)) return false;
+  return tableRowCells(header).length === tableRowCells(delimiter).length;
+}
+
+/** A line that starts another block and so ends a table body (blank lines end it too). */
+const TABLE_BODY_BREAK_RE = /^(?: {0,3}(?:#{1,6}(?:\s|$)|>|[-*+]\s|\d{1,9}[.)]\s|`{3,}|~{3,}|<[A-Za-z/!?]|(?:\*\s*){3,}$|(?:-\s*){3,}$|(?:_\s*){3,}$)| {4}|\t)/u;
+
+function isTableBodyLine(line: string): boolean {
+  // A `{...}` layout line belongs to the table as its attributes, not a row.
+  return line.trim().length > 0 && !TABLE_BODY_BREAK_RE.test(line) && !readLayoutAttrsLine(line);
 }
 
 function nextLayoutAttrsLine(doc: Text, sourceTo: number): { to: number; layout: LayoutAttrs } | null {
@@ -1005,9 +1038,7 @@ function collectMarkdownTablesInLineRange(
       !separator
       || rangeOverlapsAny(header.from, separator.to, blockMathRanges)
       || rangeOverlapsAny(header.from, separator.to, fencedRanges)
-      || !isTableRowLine(header.text)
-      || !isTableRowLine(separator.text)
-      || !isTableSeparatorLine(separator.text)
+      || !isTableStart(header.text, separator.text)
     ) {
       lineNum++;
       continue;
@@ -1018,7 +1049,7 @@ function collectMarkdownTablesInLineRange(
       const next = doc.line(endLine + 1);
       if (rangeOverlapsAny(next.from, next.to, blockMathRanges)
           || rangeOverlapsAny(next.from, next.to, fencedRanges)
-          || !isTableRowLine(next.text)) break;
+          || !isTableBodyLine(next.text)) break;
       endLine++;
     }
 
@@ -1085,6 +1116,15 @@ function canMapMarkdownTables(
       canMap = false;
       return;
     }
+    // Text on the line right after a table joins its body (rows need no pipe).
+    const lineStart = doc.lineAt(Math.min(fromA, doc.length)).from;
+    if (lineStart > 0) {
+      const above = tables[firstTableEndingAtOrAfter(tables, lineStart - 1)];
+      if (above && above.from <= lineStart - 1 && above.sourceTo >= lineStart - 1) {
+        canMap = false;
+        return;
+      }
+    }
 
     const startLine = doc.lineAt(Math.min(fromA, doc.length)).number;
     const endLine = doc.lineAt(Math.min(Math.max(fromA, toA), doc.length)).number;
@@ -1101,8 +1141,10 @@ function canMapMarkdownTables(
 function expandedTableLineWindow(doc: Text, from: number, to: number): { startLine: number; endLine: number } {
   let startLine = Math.max(1, doc.lineAt(Math.min(from, doc.length)).number - 2);
   let endLine = Math.min(doc.lines, doc.lineAt(Math.min(to, doc.length)).number + 2);
-  while (startLine > 1 && isTableRowLine(doc.line(startLine - 1).text)) startLine--;
-  while (endLine < doc.lines && isTableRowLine(doc.line(endLine + 1).text)) endLine++;
+  // A table runs until a blank line, and its body rows need no pipes, so an
+  // edit inside it rescans the whole run of non-blank lines around it.
+  while (startLine > 1 && doc.line(startLine - 1).text.trim()) startLine--;
+  while (endLine < doc.lines && doc.line(endLine + 1).text.trim()) endLine++;
   return { startLine, endLine };
 }
 

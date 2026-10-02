@@ -144,3 +144,31 @@ describe("short delimiter rows", () => {
     expect(host.querySelector("table")?.rows.length).toBe(2);
   });
 });
+
+describe("GFM tables without outer pipes", () => {
+  it.each([
+    ["a | b\n--- | ---\n1 | 2", 2],
+    ["| a | b\n|---|---\n| 1 | 2", 2],
+    ["a | b |\n---|---|\n1 | 2 |\nplain row\n\nafter", 3],
+  ])("renders %j as export does", (doc, rows) => {
+    const { host } = open(doc);
+    expect(host.querySelector("table")?.rows.length).toBe(rows);
+  });
+
+  it.each([
+    "a | b\n---",
+    "use `x|y` here\n---",
+    "a | b\n--- | --- | ---",
+    "    a | b\n    --- | ---",
+  ])("leaves %j as prose or code", (doc) => {
+    const { host } = open(doc);
+    expect(host.querySelector("table")).toBeNull();
+  });
+
+  it("a line typed right under a table joins its body", async () => {
+    const { editor, host } = open("| a | b |\n| --- | --- |\n| 1 | 2 |\n");
+    editor.view.dispatch({ changes: { from: editor.view.state.doc.length, insert: "x" } });
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    expect(host.querySelector("table")?.rows.length).toBe(3);
+  });
+});
