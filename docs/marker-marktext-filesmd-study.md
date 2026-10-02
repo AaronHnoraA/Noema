@@ -82,6 +82,11 @@ signatures are now lazy). 5 MB note 17.8 → 16.6 ms near the start; near the
 end about 50 ms, of which ~70% is Lezer re-balancing the flat top-level node
 of a ~100k-block document.
 
+In headless WebKit with real key presses, keydown to the second following
+frame measures 34 ms median for a near-empty note (the two frame waits) and
+42 ms for a 120 KB note (1 MB: 41 ms): typing adds about 8 ms of script,
+layout and paint, inside one 16 ms frame.
+
 ## Verification
 
 Unit tests run under happy-dom. `scripts/check-editor-interactions.mjs`
