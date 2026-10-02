@@ -35,7 +35,7 @@ import {
 import { wikiLinkAt } from "../../shared/wiki-link.mjs";
 import { vscodeCloseBrackets } from "./close-brackets-vscode.ts";
 import { texSourceInput } from "./tex-source-input.ts";
-import { runEditorDelete, runEditorEnter, runEditorTab } from "./input-commands.ts";
+import { openLineAfterTrailingBlock, runEditorDelete, runEditorEnter, runEditorTab } from "./input-commands.ts";
 import { isWordChar } from "./text-boundaries.ts";
 import {
   pasteTargetExtension,
@@ -783,7 +783,10 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
     })));
     const nextRanges = ranges.map((range) => {
       if (!insertion.vimRegister) {
-        return EditorSelection.cursor(changeSet.mapPos(range.from, 1));
+        // After the inserted text. `mapPos(from, 1)` of a replaced range
+        // lands at its start, so a paste over a selection left the caret in
+        // front of what was pasted.
+        return EditorSelection.cursor(changeSet.mapPos(range.from, -1) + range.text.length);
       }
       const start = changeSet.mapPos(range.from, -1);
       if (pasteOptions?.placement?.kind === "line" && range.text.includes("\n")) {
@@ -1340,6 +1343,7 @@ function buildExtensions(
       { key: "Delete", run: (view) => runEditorDelete(view, "forward") },
       { key: "Enter", run: runEditorEnter },
       { key: "Mod-Enter", run: (view) => exitCurrentOrgEnv(view) || exitFencedCode(view) },
+      { key: "ArrowDown", run: openLineAfterTrailingBlock },
       { key: "Tab", run: (view) => runEditorTab(view) },
       { key: "Shift-Tab", run: (view) => runEditorTab(view, true) },
       { key: "Mod-d", run: selectNextMarkdownOccurrence },

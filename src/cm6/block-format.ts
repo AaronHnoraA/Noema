@@ -30,6 +30,33 @@ export type ListKind = "bullet" | "ordered" | "task";
 const ATX_RE = /^(\s{0,3})(#{1,6})(?:[ \t]+|$)/u;
 const QUOTE_RE = /^(\s{0,3})>[ \t]?/u;
 const LIST_RE = /^([ \t]*)(?:([-*+])|(\d{1,9})([.)]))[ \t]+(?:\[([ xX])\](?:[ \t]+|$))?/u;
+/** Quote markers and a list marker (with task box) that contain a line's block. */
+const CONTAINER_RE = /^(?:[ \t]{0,3}>[ \t]?)*(?:[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)?/u;
+
+type HeadingParts = { from: number; markLength: number; indent: string; level: number };
+
+/**
+ * The heading inside a line's containers. A heading command changes only the
+ * block the caret is in, as MarkText's `updateParagraph` does: `> # T` keeps
+ * its quote and `- item` stays a list item (`- ## item`) instead of becoming
+ * `# > # T` or `## - item`.
+ */
+function headingParts(line: Line): HeadingParts {
+  const container = CONTAINER_RE.exec(line.text)?.[0] ?? "";
+  const match = ATX_RE.exec(line.text.slice(container.length));
+  return {
+    from: line.from + container.length,
+    markLength: match?.[0].length ?? 0,
+    indent: match?.[1] ?? "",
+    level: match ? (match[2] ?? "").length : 0,
+  };
+}
+
+function setHeadingLevel(state: EditorState, parts: HeadingParts, level: number): ChangeSpec | null {
+  const insert = level === 0 ? parts.indent : `${parts.indent}${"#".repeat(level)} `;
+  if (state.doc.sliceString(parts.from, parts.from + parts.markLength) === insert) return null;
+  return { from: parts.from, to: parts.from + parts.markLength, insert };
+}
 
 /** Lines touched by the selection; a range ending at a line start excludes that line. */
 function selectedLines(state: EditorState): Line[] {
@@ -73,17 +100,9 @@ export function toggleHeadingSpec(state: EditorState, level: number): Transactio
   const lines = selectedLines(state);
   const targets = lines.length > 1 ? lines.filter((line) => line.text.trim()) : lines;
   if (targets.length === 0) return null;
-  const marker = "#".repeat(level);
-  const allAtLevel = targets.every((line) => ATX_RE.exec(line.text)?.[2] === marker);
-  const changes: ChangeSpec[] = [];
-  for (const line of targets) {
-    const match = ATX_RE.exec(line.text);
-    const oldLength = match?.[0].length ?? 0;
-    const indent = match?.[1] ?? "";
-    const prefix = allAtLevel ? indent : `${indent}${marker} `;
-    const change = replacePrefix(line, oldLength, prefix);
-    if (change) changes.push(change);
-  }
+  const parts = targets.map(headingParts);
+  const allAtLevel = parts.every((part) => part.level === level);
+  const changes = parts.flatMap((part) => setHeadingLevel(state, part, allAtLevel ? 0 : level) ?? []);
   return withMappedSelection(state, changes);
 }
 
@@ -96,15 +115,12 @@ export function changeHeadingLevelSpec(state: EditorState, delta: -1 | 1): Trans
   const lines = selectedLines(state);
   const targets = lines.length > 1 ? lines.filter((line) => line.text.trim()) : lines;
   const changes: ChangeSpec[] = [];
-  for (const line of targets) {
-    const match = ATX_RE.exec(line.text);
-    const level = match ? (match[2] ?? "").length : 0;
+  for (const part of targets.map(headingParts)) {
     const next = delta < 0
-      ? (level === 0 ? 6 : Math.max(1, level - 1))
-      : (level === 0 ? 0 : level === 6 ? 0 : level + 1);
-    if (next === level) continue;
-    const indent = match?.[1] ?? "";
-    const change = replacePrefix(line, match?.[0].length ?? 0, next === 0 ? indent : `${indent}${"#".repeat(next)} `);
+      ? (part.level === 0 ? 6 : Math.max(1, part.level - 1))
+      : (part.level === 0 || part.level === 6 ? 0 : part.level + 1);
+    if (next === part.level) continue;
+    const change = setHeadingLevel(state, part, next);
     if (change) changes.push(change);
   }
   return withMappedSelection(state, changes);
@@ -145,16 +161,62 @@ function listKindOf(match: RegExpExecArray | null): ListKind | null {
  * Turn every selected line into a KIND list item, or back into text when all
  * already are. Quote prefixes stay outside the list marker.
  */
+type ParsedListLine = { line: Line; quote: string; match: RegExpExecArray | null };
+
+function parseListLine(line: Line): ParsedListLine {
+  const quote = /^(?:\s{0,3}>[ \t]?)*/u.exec(line.text)?.[0] ?? "";
+  return { line, quote, match: LIST_RE.exec(line.text.slice(quote.length)) };
+}
+
+function indentWidth(text: string): number {
+  let width = 0;
+  for (const char of text) width += char === "\t" ? 4 : 1;
+  return width;
+}
+
+/** Same list: same quote depth, indentation and marker family. */
+function sameList(a: ParsedListLine, b: ParsedListLine): boolean {
+  if (!a.match || !b.match || a.quote.trim() !== b.quote.trim()) return false;
+  if (indentWidth(a.match[1] ?? "") !== indentWidth(b.match[1] ?? "")) return false;
+  return a.match[2] ? a.match[2] === b.match[2] : a.match[4] === b.match[4];
+}
+
+/**
+ * Every item of the list ITEM belongs to, at its own level. Continuation
+ * lines, nested items and the blank lines of a loose list are crossed; a
+ * shallower line or a different list ends it.
+ */
+function siblingListItems(state: EditorState, item: ParsedListLine): ParsedListLine[] {
+  const base = indentWidth(item.match?.[1] ?? "");
+  const collect = (step: -1 | 1): ParsedListLine[] => {
+    const found: ParsedListLine[] = [];
+    for (let number = item.line.number + step; number >= 1 && number <= state.doc.lines; number += step) {
+      const parsed = parseListLine(state.doc.line(number));
+      const body = parsed.line.text.slice(parsed.quote.length);
+      if (parsed.quote.trim() !== item.quote.trim() && body.trim()) break;
+      if (!body.trim()) continue;
+      if (sameList(parsed, item)) { found.push(parsed); continue; }
+      if (indentWidth(/^[ \t]*/u.exec(body)![0]) > base) continue;
+      break;
+    }
+    return found;
+  };
+  return [...collect(-1).reverse(), item, ...collect(1)];
+}
+
 export function toggleListSpec(state: EditorState, kind: ListKind): TransactionSpec | null {
   const lines = selectedLines(state);
   const targets = lines.length > 1 ? lines.filter((line) => line.text.trim()) : lines;
   if (targets.length === 0) return null;
-  const parsed = targets.map((line) => {
-    const quote = /^(?:\s{0,3}>[ \t]?)*/u.exec(line.text)?.[0] ?? "";
-    const rest = line.text.slice(quote.length);
-    const match = LIST_RE.exec(rest);
-    return { line, quote, match };
-  });
+  let parsed = targets.map(parseListLine);
+  // Inside one list, the command is about that list: MarkText converts or
+  // unwraps the list at the caret (`_closestListAtCursor`), and so does
+  // Typora. Converting only the selected items split one list into several.
+  if (parsed.every(({ match }) => match) && parsed.every((entry) => sameList(entry, parsed[0]!))) {
+    const siblings = siblingListItems(state, parsed[0]!);
+    const siblingLines = new Set(siblings.map((sibling) => sibling.line.number));
+    if (parsed.every((entry) => siblingLines.has(entry.line.number))) parsed = siblings;
+  }
   const allKind = parsed.every(({ match }) => listKindOf(match) === kind);
   const changes: ChangeSpec[] = [];
   let ordinal = 0;
@@ -168,12 +230,11 @@ export function toggleListSpec(state: EditorState, kind: ListKind): TransactionS
     }
     ordinal += 1;
     const checked = (match?.[5] ?? " ").toLowerCase() === "x";
-    // A heading marker cannot follow a list marker on the same line; drop it.
-    const heading = match ? null : ATX_RE.exec(line.text.slice(quote.length));
-    const headingLength = heading?.[0].length ?? 0;
+    // A heading stays a heading inside the new item (`- # Title`), as
+    // MarkText's list wrap keeps the wrapped block.
     const leading = match ? indent : (/^[ \t]*/u.exec(line.text.slice(quote.length))?.[0] ?? "");
     const prefix = `${quote}${leading}${listMarker(kind, ordinal, checked, match)}`;
-    const replaceLength = match ? oldLength : quote.length + Math.max(headingLength, leading.length);
+    const replaceLength = match ? oldLength : quote.length + leading.length;
     const change = replacePrefix(line, replaceLength, prefix);
     if (change) changes.push(change);
   }

@@ -1,6 +1,6 @@
 import { deleteBracketPair } from "@codemirror/autocomplete";
 import { countColumn, EditorSelection, type Transaction } from "@codemirror/state";
-import { getIndentUnit } from "@codemirror/language";
+import { ensureSyntaxTree, getIndentUnit, syntaxTree } from "@codemirror/language";
 import {
   cursorCharLeft,
   cursorCharRight,
@@ -26,11 +26,14 @@ import {
 } from "@codemirror/lang-markdown";
 import { EditorView } from "@codemirror/view";
 
-import { codeBlockTab, explodeCodeBracketsOnEnter } from "./code-block-input.ts";
+import { codeBlockTab, explodeCodeBracketsOnEnter, fencedBodyAt } from "./code-block-input.ts";
+import { getFencedCodeRanges } from "./code-ranges.ts";
+import { getBlockMathRanges } from "./math-ranges.ts";
 import {
   closeFencedCodeOnEnter,
   continueMarkdownBlock,
   exitEmptyMarkdownBlock,
+  insertLineBeforeHeading,
   indentMarkdownBlock,
   tableEnterSameColumn,
   tableNavigateCell,
@@ -43,6 +46,7 @@ import { nextGraphemePosition, previousGraphemePosition } from "./text-boundarie
 import {
   activateInlineMathFromArrow,
   moveInsertLineWithDisplayMathEntry,
+  orgEnvExitTarget,
 } from "./extensions/visual/index.ts";
 
 export type EditorDeleteDirection = "backward" | "forward";
@@ -83,6 +87,58 @@ export function runEditorTextInput(view: EditorView, text: string): boolean {
   return true;
 }
 
+const TRAILING_FENCE_RE = /^[ \t]{0,3}(?:`{3,}|~{3,})[ \t]*$/u;
+const TRAILING_RULE_RE = /^[ \t]{0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/u;
+
+function lastLineEndsRenderedBlock(view: EditorView): boolean {
+  const state = view.state;
+  const line = state.doc.line(state.doc.lines);
+  if (TRAILING_RULE_RE.test(line.text)) return true;
+  if (TRAILING_FENCE_RE.test(line.text)) {
+    // An unmatched opening fence also has this shape. Only a paired closer
+    // gives the user a rendered block to move below.
+    return getFencedCodeRanges(state).some((range) => range.to === line.to && range.from < line.from);
+  }
+  if (/^[ \t]*\\\][ \t]*$/u.test(line.text)) {
+    return getBlockMathRanges(state).some((range) => range.to === line.to);
+  }
+  if (/^[ \t]*\|.*\|[ \t]*$/u.test(line.text)) {
+    // A lone pipe row is prose. Check the Markdown parser's actual table node
+    // instead of treating the row's punctuation as proof of a table.
+    const tree = ensureSyntaxTree(state, line.to, 25) ?? syntaxTree(state);
+    for (let node: ReturnType<typeof tree.resolveInner> | null = tree.resolveInner(line.to - 1, -1); node; node = node.parent) {
+      if (node.name === "Table") return true;
+    }
+    return false;
+  }
+  if (/^#\+end\b/iu.test(line.text)) return orgEnvExitTarget(state) === line.to;
+  return false;
+}
+
+/**
+ * ArrowDown on the document's last line, when that line ends a table, code
+ * fence, display formula, environment or rule, opens an empty line below and
+ * moves there. Otherwise the caret could never get below a block that ends the
+ * note, and the next keystroke was appended to the block's own source
+ * (`\`\`\`x`, `| 2 |x`). MarkText's `arrowHandler` appends a paragraph the same way.
+ */
+export function openLineAfterTrailingBlock(view: EditorView): boolean {
+  const state = view.state;
+  const range = state.selection.main;
+  if (!range.empty || state.selection.ranges.length > 1 || state.readOnly) return false;
+  const line = state.doc.lineAt(range.head);
+  // ArrowDown from inside the last source line may still move through a
+  // wrapped visual line. Only the end of the document needs an escape line.
+  if (range.head !== state.doc.length || line.number !== state.doc.lines || !lastLineEndsRenderedBlock(view)) return false;
+  view.dispatch(state.update({
+    changes: { from: line.to, insert: "\n" },
+    selection: EditorSelection.cursor(line.to + 1),
+    scrollIntoView: true,
+    userEvent: "input",
+  }));
+  return true;
+}
+
 /** Canonical Insert-mode movement, including visual-math entry boundaries. */
 export function runEditorMovement(
   view: EditorView,
@@ -96,6 +152,7 @@ export function runEditorMovement(
     const moved = moveInsertLineWithDisplayMathEntry(view, key === "ArrowDown");
     if (moved) return moved;
   }
+  if (!extend && key === "ArrowDown" && openLineAfterTrailingBlock(view)) return "cursor";
 
   const command = key === "ArrowLeft" ? (extend ? selectCharLeft : cursorCharLeft)
     : key === "ArrowRight" ? (extend ? selectCharRight : cursorCharRight)
@@ -141,6 +198,89 @@ function deleteIndentUnitBackward(view: EditorView): boolean {
     selection: EditorSelection.cursor(from),
     scrollIntoView: true,
     userEvent: "delete.backward",
+  }));
+  return true;
+}
+
+/**
+ * Backspace right after a task box removes the box and keeps the list item:
+ * `- [ ] |task` becomes `- |task`, and the next Backspace leaves the list.
+ *
+ * `deleteMarkupBackward` drops the whole `- [ ] ` at once, taking two levels
+ * of structure with one key. Removing one level per press matches the empty
+ * quoted list item exit and Typora; MarkText's own step lands on a paragraph,
+ * which the following Backspace reaches here too.
+ */
+function deleteTaskBoxBackward(view: EditorView): boolean {
+  const state = view.state;
+  const range = state.selection.main;
+  if (!range.empty || state.selection.ranges.length > 1) return false;
+  const line = state.doc.lineAt(range.head);
+  const before = line.text.slice(0, range.head - line.from);
+  const match = /^((?:[ \t]{0,3}>[ \t]?)*[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+)\[[ xX]\][ \t]+$/u.exec(before);
+  if (!match) return false;
+  const from = line.from + match[1]!.length;
+  view.dispatch(state.update({
+    changes: { from, to: range.head },
+    selection: EditorSelection.cursor(from),
+    scrollIntoView: true,
+    userEvent: "delete.backward",
+  }));
+  return true;
+}
+
+/**
+ * Backspace at the start of a heading's text turns the heading back into a
+ * paragraph, as MarkText's `AtxHeadingContent.backspaceHandler` and Typora
+ * do. Deleting one character left `#Title`, which is no heading at all and
+ * shows its `#` as text.
+ */
+function deleteHeadingMarkerBackward(view: EditorView): boolean {
+  const state = view.state;
+  const range = state.selection.main;
+  if (!range.empty || state.selection.ranges.length > 1) return false;
+  const line = state.doc.lineAt(range.head);
+  const match = /^((?:[ \t]{0,3}>[ \t]?)*)[ \t]{0,3}#{1,6}[ \t]+/u.exec(line.text);
+  if (!match || range.head !== line.from + match[0].length) return false;
+  const from = line.from + match[1]!.length;
+  view.dispatch(state.update({
+    changes: { from, to: range.head },
+    selection: EditorSelection.cursor(from),
+    scrollIntoView: true,
+    userEvent: "delete.backward",
+  }));
+  return true;
+}
+
+const STRUCTURAL_LINE_RE = /^(?:[ \t]{0,3}>[ \t]?)*[ \t]{0,3}(?:`{3,}|~{3,}|\|.*\||\\\[|\\\]|(?:\*[ \t]*){3,}$|(?:-[ \t]*){3,}$|(?:_[ \t]*){3,}$)/u;
+const NEXT_BLOCK_PREFIX_RE = /^(?:[ \t]{0,3}>[ \t]?)*[ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?|#{1,6}[ \t]+)?/u;
+
+/**
+ * Delete at the end of a line joins the next block's text, not its markup.
+ *
+ * Joining raw lines pulled the hidden marker into view: `para` + `- item`
+ * became `para- item`, `- a` + `- b` became `- a- b`. MarkText's
+ * `Format.deleteHandler` appends the next paragraph's text and leaves code
+ * and tables alone; a fence, table row, rule or display-math delimiter on
+ * either side is likewise left unjoined here rather than broken.
+ */
+function deleteForwardJoinBlock(view: EditorView): boolean {
+  const state = view.state;
+  const range = state.selection.main;
+  if (!range.empty || state.selection.ranges.length > 1) return false;
+  const line = state.doc.lineAt(range.head);
+  if (range.head !== line.to || line.number >= state.doc.lines) return false;
+  const next = state.doc.line(line.number + 1);
+  if (!next.text.trim()) return false;
+  if (fencedBodyAt(state, range.head) && fencedBodyAt(state, next.from)) return false;
+  if (STRUCTURAL_LINE_RE.test(line.text) || STRUCTURAL_LINE_RE.test(next.text)) return true;
+  const prefix = NEXT_BLOCK_PREFIX_RE.exec(next.text)?.[0] ?? "";
+  if (!/[>\-*+#.)\]]/u.test(prefix)) return false;
+  view.dispatch(state.update({
+    changes: { from: line.to, to: next.from + prefix.length },
+    selection: EditorSelection.cursor(line.to),
+    scrollIntoView: true,
+    userEvent: "delete.forward",
   }));
   return true;
 }
@@ -192,12 +332,15 @@ export function runEditorDelete(
   if (direction === "backward") {
     return deleteTexSourceAutoPair(view)
       || deleteBracketPair(view)
+      || deleteTaskBoxBackward(view)
+      || deleteHeadingMarkerBackward(view)
       || deleteMarkupBackward(view)
       || deleteIndentUnitBackward(view)
       || deleteGraphemes(view, direction);
   }
 
   return deleteTexSourceAutoPairForward(view)
+    || deleteForwardJoinBlock(view)
     || deleteGraphemes(view, direction);
 }
 
@@ -213,6 +356,7 @@ export function runEditorEnter(view: EditorView): boolean {
     return tableEnterSameColumn(view)
       || explodeCodeBracketsOnEnter(view)
       || closeFencedCodeOnEnter(view)
+      || insertLineBeforeHeading(view)
       || exitEmptyMarkdownBlock(view)
       || continueMarkdownBlock(view)
       || insertNewlineContinueMarkup(view)

@@ -7,7 +7,7 @@
 import { afterEach, describe, expect, it } from "@voidzero-dev/vite-plus-test";
 import { EditorSelection } from "@codemirror/state";
 import { createEditorCM6 } from "../../src/cm6/editor-cm6.ts";
-import { runEditorEnter } from "../../src/cm6/input-commands.ts";
+import { runEditorDelete, runEditorEnter } from "../../src/cm6/input-commands.ts";
 import type { Editor } from "../../src/editor-api.ts";
 
 const editors: Editor[] = [];
@@ -286,5 +286,181 @@ describe("heading promote / demote", () => {
     const ed = open("# Title", 3);
     const ids = ed.getQuickInsertItems("heading").map((item) => item.id);
     expect(ids).toEqual(expect.arrayContaining(["heading-promote", "heading-demote"]));
+  });
+});
+
+describe("details found by comparing with MarkText, files.md and Marker", () => {
+  it("headings change inside quotes and list items instead of breaking them", () => {
+    const quote = open("> # T", 5);
+    quote.runCommand("heading-1");
+    expect(quote.getMarkdown()).toBe("> T");
+    const item = open("- item", 4);
+    item.runCommand("heading-2");
+    expect(item.getMarkdown()).toBe("- ## item");
+    item.runCommand("heading-promote");
+    expect(item.getMarkdown()).toBe("- # item");
+  });
+
+  it("a list command inside a list converts the whole list", () => {
+    const ed = open("- a\n- b\n- c", 4, 7);
+    ed.runCommand("ordered-list");
+    expect(ed.getMarkdown()).toBe("1. a\n2. b\n3. c");
+    ed.setSelection(6, 6);
+    ed.runCommand("ordered-list");
+    expect(ed.getMarkdown()).toBe("a\nb\nc");
+  });
+
+  it("list conversion crosses nested items and loose blank lines but stops at another list", () => {
+    const ed = open("- a\n  - x\n\n- b\n\n1. other", 0);
+    ed.runCommand("task-list");
+    expect(ed.getMarkdown()).toBe("- [ ] a\n  - x\n\n- [ ] b\n\n1. other");
+  });
+
+  it("a heading keeps its marker when it becomes a list item", () => {
+    const ed = open("# Title", 3);
+    ed.runCommand("bullet-list");
+    expect(ed.getMarkdown()).toBe("- # Title");
+  });
+
+  it("Backspace after a task box removes the box before the list marker", () => {
+    const ed = open("- [ ] task", 6);
+    runEditorDelete(ed.view, "backward");
+    expect(ed.getMarkdown()).toBe("- task");
+  });
+
+  it("closes fences opened inside list items and quotes with their prefixes", () => {
+    const item = open("- ```js", 7);
+    runEditorEnter(item.view);
+    expect(item.getMarkdown()).toBe("- ```js\n  \n  ```");
+    const quote = open("> ```js", 7);
+    runEditorEnter(quote.view);
+    expect(quote.getMarkdown()).toBe("> ```js\n> \n> ```");
+  });
+
+  it("a format never splits a link or code span", () => {
+    const link = open("see [docs](u) now", 0, 7);
+    link.runCommand("bold");
+    expect(link.getMarkdown()).toBe("**see [docs](u)** now");
+    const code = open("a `b c` d", 0, 5);
+    code.runCommand("italic");
+    expect(code.getMarkdown()).toBe("*a `b c`* d");
+  });
+
+  it("the link command toggles and uses the word at the caret", () => {
+    const word = open("word", 2);
+    word.runCommand("link");
+    expect(word.getMarkdown()).toBe("[word](https://)");
+    const linked = open("see [docs](u) now", 7);
+    linked.runCommand("link");
+    expect(linked.getMarkdown()).toBe("see docs now");
+    expect(linked.getMarkdownSelection()).toEqual({ from: 6, to: 6 });
+    const url = open("https://x.y", 0, 11);
+    url.runCommand("link");
+    expect(url.getMarkdown()).toBe("[https://x.y](https://x.y)");
+    expect(url.getMarkdownSelection()).toEqual({ from: 1, to: 12 });
+    const image = open("![alt](i.png)", 3);
+    expect(image.runCommand("link")).toBe(false);
+  });
+});
+
+describe("format availability", () => {
+  it("reports inline formats unavailable inside a code block", async () => {
+    const { inlineFormatsAvailable } = await import("../../src/cm6/inline-format.ts");
+    const code = open("```\ncode\n```", 5, 7);
+    expect(inlineFormatsAvailable(code.view.state)).toBe(false);
+    const prose = open("text", 0, 4);
+    expect(inlineFormatsAvailable(prose.view.state)).toBe(true);
+  });
+});
+
+describe("table cell navigation", () => {
+  const table = "| a | b |\n| --- | --- |\n| one | two |\n|  |  |";
+
+  it("Tab selects the next cell's text so typing replaces it", async () => {
+    const { runEditorTab } = await import("../../src/cm6/input-commands.ts");
+    const ed = open(table, table.indexOf("one") + 1);
+    runEditorTab(ed.view);
+    const { from, to } = ed.getMarkdownSelection();
+    expect(ed.getMarkdown().slice(from, to)).toBe("two");
+  });
+
+  it("Enter selects the same column below, and an empty cell gets a caret", () => {
+    const ed = open(table, table.indexOf("a") + 1);
+    runEditorEnter(ed.view);
+    let { from, to } = ed.getMarkdownSelection();
+    expect(ed.getMarkdown().slice(from, to)).toBe("one");
+    runEditorEnter(ed.view);
+    ({ from, to } = ed.getMarkdownSelection());
+    expect(from).toBe(to);
+  });
+});
+
+describe("heading Enter and Backspace at the start of the text", () => {
+  it("Enter opens a line above and keeps the heading", () => {
+    const ed = open("# Title", 2);
+    runEditorEnter(ed.view);
+    expect(ed.getMarkdown()).toBe("\n# Title");
+    expect(ed.getMarkdownSelection()).toEqual({ from: 3, to: 3 });
+    const quoted = open("> ## T", 5);
+    runEditorEnter(quoted.view);
+    expect(quoted.getMarkdown()).toBe(">\n> ## T");
+  });
+
+  it("Backspace turns the heading into a paragraph instead of leaving #Title", () => {
+    const ed = open("## Title", 3);
+    runEditorDelete(ed.view, "backward");
+    expect(ed.getMarkdown()).toBe("Title");
+  });
+});
+
+describe("Delete at a line end joins text, not markup", () => {
+  it.each([
+    ["para\n- item", 4, "paraitem"],
+    ["para\n# H", 4, "paraH"],
+    ["para\n> q", 4, "paraq"],
+    ["- a\n- b", 3, "- ab"],
+    ["- [ ] a\n- [x] b", 7, "- [ ] ab"],
+    ["a\nb", 1, "ab"],
+  ])("%j", (doc, at, expected) => {
+    const ed = open(doc, at);
+    runEditorDelete(ed.view, "forward");
+    expect(ed.getMarkdown()).toBe(expected);
+    expect(ed.getMarkdownSelection()).toEqual({ from: at, to: at });
+  });
+
+  it("leaves code fences and the lines inside code alone", () => {
+    const fence = open("para\n```js\nx\n```", 4);
+    runEditorDelete(fence.view, "forward");
+    expect(fence.getMarkdown()).toBe("para\n```js\nx\n```");
+    const code = open("```js\n- a\n- b\n```", 9);
+    runEditorDelete(code.view, "forward");
+    expect(code.getMarkdown()).toBe("```js\n- a- b\n```");
+  });
+});
+
+describe("leaving a block that ends the note", () => {
+  it.each([
+    ["| a | b |\n| - | - |\n| 1 | 2 |"],
+    ["```js\nx\n```"],
+    ["\\[\nx\n\\]"],
+    ["#+begin note\nx\n#+end note"],
+    ["text\n\n---"],
+  ])("ArrowDown on the last line of %j opens a line below", async (doc) => {
+    const { openLineAfterTrailingBlock } = await import("../../src/cm6/input-commands.ts");
+    const ed = open(doc, doc.length);
+    expect(openLineAfterTrailingBlock(ed.view)).toBe(true);
+    expect(ed.getMarkdown()).toBe(`${doc}\n`);
+    expect(ed.getMarkdownSelection()).toEqual({ from: doc.length + 1, to: doc.length + 1 });
+  });
+
+  it("does nothing after an ordinary paragraph or before the last line", async () => {
+    const { openLineAfterTrailingBlock } = await import("../../src/cm6/input-commands.ts");
+    expect(openLineAfterTrailingBlock(open("plain text", 3).view)).toBe(false);
+    expect(openLineAfterTrailingBlock(open("```js\nx\n```\n", 2).view)).toBe(false);
+    expect(openLineAfterTrailingBlock(open("| a | b |", 9).view)).toBe(false);
+    expect(openLineAfterTrailingBlock(open("```js", 5).view)).toBe(false);
+    expect(openLineAfterTrailingBlock(open("#+end note", 10).view)).toBe(false);
+    expect(openLineAfterTrailingBlock(open("$$", 2).view)).toBe(false);
+    expect(openLineAfterTrailingBlock(open("| a | b |\n| --- | --- |\n| a long cell | b |", 28).view)).toBe(false);
   });
 });

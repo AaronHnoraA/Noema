@@ -72,9 +72,17 @@ describe("range selection keeps rich widgets rendered", () => {
     expect(result.text).not.toContain("![cat]");
   });
 
-  test("a caret on the image opens its source", () => {
+  test("a caret on the image opens its source and keeps the picture under it", () => {
     const at = md.indexOf("cat.png");
     const result = widgets(md, at, at);
+    expect(result.images).toBe(1);
+    expect(result.text).toContain("![cat](cat.png)");
+  });
+
+  test("an image inside a sentence shows only its source while edited", () => {
+    const inline = "text ![cat](cat.png) more";
+    const at = inline.indexOf("cat.png");
+    const result = widgets(inline, at, at);
     expect(result.images).toBe(0);
     expect(result.text).toContain("![cat](cat.png)");
   });

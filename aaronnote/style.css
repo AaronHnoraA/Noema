@@ -5007,6 +5007,12 @@ html.aaronnote-paused *::after {
   color: var(--aaron-red-dark);
 }
 
+.aaronnote-selection-tool button:disabled {
+  opacity: 0.38;
+  cursor: default;
+  pointer-events: none;
+}
+
 .aaronnote-selection-tool button[aria-pressed="true"] {
   border-color: color-mix(in srgb, var(--aaron-red), transparent 55%);
   background: color-mix(in srgb, var(--aaron-red), transparent 88%);

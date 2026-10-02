@@ -38,6 +38,10 @@ type PasteContextKind = "code-block" | "inline-code" | "table-row" | "link-desti
 const CODE_BLOCK_NODES = new Set(["FencedCode", "CodeBlock", "IndentedCode"]);
 const TABLE_NODES = new Set(["Table", "TableHeader", "TableRow", "TableCell", "TableDelimiter"]);
 const SINGLE_URL_RE = /^(?:https?:\/\/|mailto:|file:\/\/|zotero:\/\/)[^\s<>]+$/i;
+const LINK_NODES = new Set(["Link", "Image", "Autolink", "URL", "InlineCode"]);
+/** Quote markers, list indentation, and a list marker with optional task box. */
+const CONTAINER_RE = /^((?:[ \t]{0,3}>[ \t]?)*)([ \t]*)((?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)?/u;
+const PASTED_LIST_RE = /^([ \t]*)(?:[-*+]|\d{1,9}[.)])[ \t]+/u;
 const MARKDOWN_LINK_RE = /^\[[^\]\n]*\]\(\s*<?([^\s<>()]+(?:\([^\s()]*\))*[^\s<>()]*)>?(?:\s+"[^"\n]*")?\s*\)$/;
 
 function contextAt(state: EditorState, range: SelectionRange): PasteContextKind {
@@ -53,6 +57,60 @@ function contextAt(state: EditorState, range: SelectionRange): PasteContextKind 
   const after = doc.sliceString(range.to, line.to);
   if (/\]\(\s*$/.test(before) && /^\s*\)/.test(after)) return "link-destination";
   return "text";
+}
+
+/** Whether [from, to] lies inside a link, image, URL or code span. */
+function insideLinkOrCode(state: EditorState, from: number, to: number): boolean {
+  const tree = ensureSyntaxTree(state, to, 100) ?? syntaxTree(state);
+  for (const pos of [from, to]) {
+    for (let node: ReturnType<typeof tree.resolveInner> | null = tree.resolveInner(pos, pos === from ? 1 : -1); node; node = node.parent) {
+      if (LINK_NODES.has(node.name) && node.from < to && node.to > from) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Multi-line text pasted inside a quote or list item stays in that container.
+ *
+ * MarkText inserts pasted blocks as children of the block at the caret and
+ * merges a pasted list into the list it lands in (`tryMergeListPaste`). In
+ * source the same result needs the container's prefix on every following
+ * line: a quote's `> `, a list item's continuation indent, or — for a pasted
+ * list — the list's own indentation so the items stay siblings. A pasted list
+ * on an empty item takes over that item's marker; at the end of an item it
+ * starts the next item.
+ */
+function adaptToContainer(state: EditorState, range: SelectionRange, text: string): string {
+  if (!text.includes("\n")) return text;
+  const line = state.doc.lineAt(range.from);
+  if (state.doc.lineAt(range.to).number !== line.number) return text;
+  const match = CONTAINER_RE.exec(line.text)!;
+  const [prefix, quote = "", indent = "", marker = ""] = match;
+  if (!quote && !marker) return text;
+  if (range.from - line.from < prefix.length) return text;
+  const before = line.text.slice(prefix.length, range.from - line.from);
+  const after = line.text.slice(range.to - line.from);
+  const lines = text.split("\n");
+  const pastedList = Boolean(marker) && PASTED_LIST_RE.test(lines[0]!);
+  const quoteBlank = quote.trimEnd();
+  if (pastedList && !after.trim()) {
+    const base = PASTED_LIST_RE.exec(lines[0]!)![1]!.length;
+    const sibling = (raw: string): string => {
+      if (!raw.trim()) return quoteBlank;
+      const own = /^[ \t]*/u.exec(raw)![0].length;
+      return `${quote}${indent}${raw.slice(Math.min(own, base))}`;
+    };
+    if (!before.trim()) {
+      // The empty item keeps its marker; the first pasted item supplies text.
+      const first = lines[0]!.replace(PASTED_LIST_RE, "");
+      const keepBox = /\[[ xX]\][ \t]+$/u.test(marker);
+      return [keepBox ? first.replace(/^\[[ xX]\][ \t]+/u, "") : first, ...lines.slice(1).map(sibling)].join("\n");
+    }
+    return ["", ...lines.map(sibling)].join("\n");
+  }
+  const continuation = `${quote}${" ".repeat(indent.length + marker.length)}`;
+  return [lines[0]!, ...lines.slice(1).map((raw) => (raw.trim() ? `${continuation}${raw}` : quoteBlank))].join("\n");
 }
 
 function singleUrl(source: PasteSourceText): string | null {
@@ -101,13 +159,15 @@ export function adaptPasteText(state: EditorState, range: SelectionRange, source
       return link?.[1] ?? source.markdown;
     }
     case "text": {
-      if (range.empty) return source.markdown;
-      const selected = state.doc.sliceString(range.from, range.to);
-      const url = singleUrl(source);
-      if (url && selected.trim() && !/[\n[\]]/.test(selected) && !SINGLE_URL_RE.test(selected.trim())) {
-        return `[${selected}](${url})`;
+      if (!range.empty) {
+        const selected = state.doc.sliceString(range.from, range.to);
+        const url = singleUrl(source);
+        if (url && selected.trim() && !/[\n[\]]/.test(selected) && !SINGLE_URL_RE.test(selected.trim())
+            && !insideLinkOrCode(state, range.from, range.to)) {
+          return `[${selected}](${url})`;
+        }
       }
-      return source.markdown;
+      return adaptToContainer(state, range, source.markdown);
     }
   }
 }

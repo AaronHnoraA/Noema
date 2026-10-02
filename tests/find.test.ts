@@ -4,6 +4,7 @@ import {
   collectFindMatches,
   createFindPattern,
   smartCaseSensitive,
+  findMatchIndexFrom,
   escapeFindQuery,
   replacementText,
   replaceAllFindMatches,
@@ -74,5 +75,16 @@ describe("find options", () => {
     const result = createFindPattern("a\\-b", { regex: true });
     expect(result.error).toBeUndefined();
     expect(collectFindMatches("a-b", result.pattern).length).toBe(1);
+  });
+});
+
+describe("replace continuation", () => {
+  test("the next match starts after a replacement that itself matches", () => {
+    const after = "aa b a";
+    const matches = collectFindMatches(after, createFindPattern("a").pattern);
+    expect(findMatchIndexFrom(matches, 2)).toBe(2);
+    expect(matches[2]!.from).toBe(5);
+    expect(findMatchIndexFrom(matches, 6)).toBe(-1);
+    expect(findMatchIndexFrom(collectFindMatches("aa", createFindPattern("a").pattern), 2)).toBe(-1);
   });
 });

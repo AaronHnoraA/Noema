@@ -3388,9 +3388,12 @@ after
     editor.setMarkdownSelection(md.length);
     expect(document.querySelector(".cm-task-checkbox")).toBeTruthy();
 
+    // The source opens and the picture stays under it while it is edited.
     editor.setMarkdownSelection(md.indexOf("![alt]") + 1);
-    expect(document.querySelector(".cm-image-widget")).toBeNull();
+    expect(editor.view.contentDOM.textContent).toContain("![alt](missing.png)");
+    expect(document.querySelectorAll(".cm-image-widget")).toHaveLength(1);
     editor.setMarkdownSelection(md.length);
+    expect(editor.view.contentDOM.textContent).not.toContain("![alt](missing.png)");
     expect(document.querySelector(".cm-image-widget")).toBeTruthy();
     cleanup();
   });
@@ -3807,7 +3810,7 @@ maybeDescribe("cm6 kernel: text mutations", () => {
         getData: () => "",
       } as unknown as DataTransfer);
       expect(handled).toBe(true);
-      expect(editor.getMarkdown()).toBe("![plot.png](./images/topic/plot.png)");
+      expect(editor.getMarkdown()).toBe("![](./images/topic/plot.png)");
     } finally {
       editor.destroy();
       host.remove();

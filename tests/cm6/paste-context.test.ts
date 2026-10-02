@@ -134,7 +134,7 @@ describe("file drop", () => {
     expect(event.defaultPrevented).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(uploads).toEqual(["cat.png"]);
-    expect(editor.getMarkdown()).toBe("a![cat](assets/cat.png)b");
+    expect(editor.getMarkdown()).toBe("a![](assets/cat.png)b");
   });
 
   it("leaves a drop of text files to CodeMirror", () => {
@@ -152,5 +152,43 @@ describe("file drop", () => {
     });
     editor.view.contentDOM.dispatchEvent(event);
     expect(editor.getMarkdown()).toBe("ab");
+  });
+});
+
+describe("paste inside containers and links", () => {
+  it("leaves the caret after text pasted over a selection", () => {
+    const ed = open("abc", 0, 3);
+    ed.pastePlainText("xyz");
+    expect(ed.getMarkdownSelection()).toEqual({ from: 3, to: 3 });
+  });
+
+  it("does not nest a link when the selection is already link text", () => {
+    const ed = open("see [docs](old) now", 5, 9);
+    ed.pastePlainText("https://new.example");
+    expect(ed.getMarkdown()).toBe("see [https://new.example](old) now");
+  });
+
+  it("merges a pasted list into an empty item and keeps nested siblings aligned", () => {
+    const ed = open("- ", 2);
+    ed.pastePlainText("- a\n- b");
+    expect(ed.getMarkdown()).toBe("- a\n- b");
+    const nested = open("  - x\n  - ", 10);
+    nested.pastePlainText("- a\n- b");
+    expect(nested.getMarkdown()).toBe("  - x\n  - a\n  - b");
+  });
+
+  it("starts a new item when a list is pasted at the end of an item", () => {
+    const ed = open("- x", 3);
+    ed.pastePlainText("- a\n- b");
+    expect(ed.getMarkdown()).toBe("- x\n- a\n- b");
+  });
+
+  it("keeps pasted lines inside a quote or list item", () => {
+    const quote = open("> quote ", 8);
+    quote.pastePlainText("one\n\ntwo");
+    expect(quote.getMarkdown()).toBe("> quote one\n>\n> two");
+    const item = open("- item ", 7);
+    item.pastePlainText("one\n\ntwo");
+    expect(item.getMarkdown()).toBe("- item one\n\n  two");
   });
 });

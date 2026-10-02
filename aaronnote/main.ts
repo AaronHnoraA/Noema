@@ -79,7 +79,7 @@ import { createMenuController, type NoemaMenuItem } from "../src/menu-system.ts"
 import { figureLayoutMenuItems, figureLayoutTarget } from "../src/cm6/figure-layout-menu.ts";
 import { createTransientSurfaceRegistry } from "../src/transient-surfaces.ts";
 import { blobToBase64 } from "../src/paste.ts";
-import { collectFindMatches, createFindPattern, replacementText, type FindMatch, type FindOptions } from "./find.ts";
+import { collectFindMatches, createFindPattern, findMatchIndexFrom, replacementText, type FindMatch, type FindOptions } from "./find.ts";
 import { AssistScheduler, type AssistUpdateFlags, type AssistUpdateOptions } from "./assist-scheduler.ts";
 import { hostCommandTargetsClient } from "./host-command-target.ts";
 import {
@@ -233,7 +233,7 @@ import {
 import { installActiveCoreReconnect } from "./active-core-reconnect.ts";
 import { noteAutoSaveEnabled } from "./save-policy.ts";
 import { defaultSaveRetryDelayMs, SaveDrain } from "./save-drain.ts";
-import { activeInlineFormats, INLINE_FORMAT_KINDS, type InlineFormatKind } from "../src/cm6/inline-format.ts";
+import { activeInlineFormats, INLINE_FORMAT_KINDS, inlineFormatsAvailable, type InlineFormatKind } from "../src/cm6/inline-format.ts";
 import {
   EditorSaveChangeTracker,
   sourceLineEnding,
@@ -1725,6 +1725,7 @@ const editor = createEditor(host, {
 });
 editor.onViewUpdate((update) => {
   if (update.docChanged) editorSaveChanges.record(update.changes);
+  if (update.docChanged) markFindStale();
 });
 editor.onDocumentReset(() => {
   editorSaveChanges.reset();
@@ -7353,6 +7354,62 @@ window.AaronnoteCopyBlockTarget = async (blockId: string): Promise<string> => {
 
 let findMatches: FindMatch[] = [];
 let findIndex = -1;
+/** Single replacement reached EOF; navigation or a new edit starts another pass. */
+let replaceAtEnd = false;
+/** The document changed since `findMatches` was collected. */
+let findStale = false;
+let findRecountTimer = 0;
+
+/**
+ * Keep an open find panel honest while the note is edited: the highlights
+ * map through edits, but the match list and count did not, so ↑/↓ selected
+ * the old offsets. Recount shortly after typing stops, without moving the
+ * caret (MarkText re-runs its search on every content change).
+ */
+function markFindStale(): void {
+  if (findPanel.hidden || !findInput.value) return;
+  replaceAtEnd = false;
+  findStale = true;
+  window.clearTimeout(findRecountTimer);
+  findRecountTimer = window.setTimeout(() => {
+    findRecountTimer = 0;
+    if (findStale && !findPanel.hidden) recountFind();
+  }, 180);
+}
+
+/** Recollect matches and keep the current one by position; the selection stays. */
+function recountFind(): void {
+  findStale = false;
+  const result = createFindPattern(findInput.value, currentFindOptions());
+  if (result.error || !result.pattern) {
+    clearFindHighlights();
+    if (result.error) findCount.textContent = result.error;
+    return;
+  }
+  findMatches = collectFindMatches(editor.getMarkdown(), result.pattern);
+  const selection = editor.getMarkdownSelection();
+  const from = Math.min(selection.from, selection.to);
+  const exact = findMatches.findIndex((match) => match.from === from && match.to === Math.max(selection.from, selection.to));
+  findIndex = exact >= 0 ? exact : findMatches.findIndex((match) => match.from >= from);
+  if (findIndex < 0 && findMatches.length > 0) findIndex = 0;
+  updateFindHighlights();
+  findCount.textContent = findMatches.length ? `${exact >= 0 ? findIndex + 1 : "–"}/${findMatches.length}` : "0/0";
+}
+
+/** Step to the next/previous match from fresh positions. */
+function stepFindMatch(direction: 1 | -1): void {
+  if (findStale) {
+    recountFind();
+    const selection = editor.getMarkdownSelection();
+    const exact = findMatches[findIndex]?.from === Math.min(selection.from, selection.to);
+    // Not sitting on a match: the match recountFind chose is the next one.
+    if (!exact && direction > 0) {
+      gotoFindMatch(findIndex);
+      return;
+    }
+  }
+  gotoFindMatch(findIndex + direction);
+}
 
 function selectedMarkdownText(): string {
   const selection = editor.getMarkdownSelection();
@@ -7378,6 +7435,7 @@ function updateFindHighlights(): void {
 }
 
 function gotoFindMatch(index: number): void {
+  replaceAtEnd = false;
   if (findMatches.length === 0) {
     findIndex = -1;
     updateFindHighlights();
@@ -7392,6 +7450,7 @@ function gotoFindMatch(index: number): void {
 }
 
 function refreshFind(query = findInput.value, keepCurrent = true): void {
+  replaceAtEnd = false;
   const result = createFindPattern(query, currentFindOptions());
   if (result.error) {
     clearFindHighlights();
@@ -7426,6 +7485,9 @@ function openFindPanel(): void {
 }
 
 function closeFindPanel(): void {
+  window.clearTimeout(findRecountTimer);
+  findRecountTimer = 0;
+  findStale = false;
   findPanel.hidden = true;
   clearFindHighlights();
   editor.focus();
@@ -7443,7 +7505,9 @@ function setFindReplaceVisible(visible: boolean): void {
 /** Replace the current match and move on to the one that follows it. */
 function replaceCurrentFindMatch(): void {
   if (rejectReadOnlyAction("Read-only pane")) return;
-  refreshFind(findInput.value, true);
+  if (replaceAtEnd) return;
+  if (findStale) recountFind();
+  else refreshFind(findInput.value, true);
   const match = findMatches[findIndex];
   if (!match) return;
   const insert = replacementText(match.match, findReplacementInput.value, findOptions.regex);
@@ -7452,9 +7516,18 @@ function replaceCurrentFindMatch(): void {
     selection: { anchor: match.from + insert.length },
     userEvent: "input.replace",
   });
-  // The replacement may itself match; continue from after it.
-  findIndex = -1;
-  refreshFind(findInput.value, false);
+  // Continue strictly after the replacement: replacing `a` with `aa` used to
+  // land on the replacement's own second `a`, so Enter grew it forever.
+  recountFind();
+  const next = findMatchIndexFrom(findMatches, match.from + insert.length);
+  if (next < 0) {
+    replaceAtEnd = true;
+    findIndex = -1;
+    updateFindHighlights();
+    findCount.textContent = findMatches.length ? `–/${findMatches.length}` : "0/0";
+    return;
+  }
+  gotoFindMatch(next);
 }
 
 /** Replace every match as one undoable change. */
@@ -11324,11 +11397,15 @@ function updateSelectionTool(active = activeEditorSelection()): void {
 
 /** Show which inline formats the selection already has, as Marker's bubble menu does. */
 function markActiveSelectionFormats(): void {
-  const active = activeInlineFormats(editor.view.state);
+  const state = editor.view.state;
+  const available = inlineFormatsAvailable(state);
+  const active = available ? activeInlineFormats(state) : new Set<InlineFormatKind>();
   for (const button of selectionTool.querySelectorAll<HTMLButtonElement>("[data-selection-command]")) {
-    const command = button.dataset.selectionCommand as InlineFormatKind;
-    if (!INLINE_FORMAT_KINDS.includes(command)) continue;
-    button.setAttribute("aria-pressed", String(active.has(command)));
+    const command = button.dataset.selectionCommand ?? "";
+    const format = INLINE_FORMAT_KINDS.includes(command as InlineFormatKind);
+    if (!format && command !== "clear-format") continue;
+    button.disabled = !available;
+    if (format) button.setAttribute("aria-pressed", String(active.has(command as InlineFormatKind)));
   }
 }
 
@@ -11502,6 +11579,15 @@ function runSelectionCommand(command: string): void {
   if (!["bold", "italic", "highlight", "strike", "code", "link", "superscript", "subscript", "clear-format", "insert-footnote"].includes(command)) return;
   if (rejectReadOnlyAction("Read-only pane")) return;
   editor.runCommand(command as EditorCommand);
+  // Inline formats keep the same text selected, so the toolbar stays for the
+  // next one (bold, then italic), with its pressed state refreshed — Marker's
+  // bubble menu and MarkText's format toolbar both stay open. Link and
+  // footnote move the caret elsewhere, so they close it.
+  const selection = editor.getMarkdownSelection();
+  if (INLINE_FORMAT_KINDS.includes(command as InlineFormatKind) && selection.from !== selection.to) {
+    updateSelectionTool();
+    return;
+  }
   closeSelectionTool();
 }
 
@@ -11966,11 +12052,11 @@ function runHostCommand(detail: unknown): boolean {
       return true;
     case "find-next":
       if (findPanel.hidden) openFindPanel();
-      else gotoFindMatch(findIndex + 1);
+      else stepFindMatch(1);
       return true;
     case "find-previous":
       if (findPanel.hidden) openFindPanel();
-      else gotoFindMatch(findIndex - 1);
+      else stepFindMatch(-1);
       return true;
     case "focus":
       reclaimHostInputFocus();
@@ -12727,8 +12813,8 @@ findInput.addEventListener("keydown", (event) => {
     gotoFindMatch(findIndex + (event.shiftKey ? -1 : 1));
   }
 });
-findPrevButton.addEventListener("click", () => gotoFindMatch(findIndex - 1));
-findNextButton.addEventListener("click", () => gotoFindMatch(findIndex + 1));
+findPrevButton.addEventListener("click", () => stepFindMatch(-1));
+findNextButton.addEventListener("click", () => stepFindMatch(1));
 findCloseButton.addEventListener("click", closeFindPanel);
 for (const button of findPanel.querySelectorAll<HTMLButtonElement>("[data-find-option]")) {
   button.addEventListener("click", () => {

@@ -131,3 +131,14 @@ export function replaceAllFindMatches(
   next += markdown.slice(cursor);
   return next;
 }
+
+/**
+ * The first match starting at or after POS, without wrapping. Replacement
+ * traversal must stop at the document end: if `a` becomes `aa`, wrapping
+ * would select the new text and repeated Replace presses would grow it forever.
+ */
+export function findMatchIndexFrom(matches: readonly FindMatch[], pos: number): number {
+  if (matches.length === 0) return -1;
+  const index = matches.findIndex((match) => match.from >= pos);
+  return index;
+}

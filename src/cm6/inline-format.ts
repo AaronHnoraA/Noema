@@ -253,8 +253,12 @@ function wrapEdit(
   backward: boolean,
 ): RangeEdit | null {
   const doc = state.doc;
-  const start = Math.min(from, ...spans.map((span) => span.from));
-  const end = Math.max(to, ...spans.map((span) => span.to));
+  let start = from;
+  let end = to;
+  for (const span of spans) {
+    start = Math.min(start, span.from);
+    end = Math.max(end, span.to);
+  }
   const removed = markerDeletions(spans);
   // Plain text of [start, end) with the merged spans' markers dropped.
   let text = "";
@@ -307,6 +311,29 @@ function wrapEdit(
     : { changes, anchor: start + contentStart, head: start + contentEnd };
 }
 
+/** Inline constructs a format must wrap whole, never split. */
+const ATOMIC_INLINE_NODES = new Set(["Link", "Image", "Autolink", "InlineCode", "InlineMath", "HTMLTag"]);
+
+/**
+ * Widen [from, to) so neither end splits a link, image, code span or formula.
+ *
+ * Wrapping `see [do` in `**` produced `**see [do**cs](u)`, which renders as
+ * neither bold nor a link. MarkText formats inside tokens only; Typora
+ * extends the selection over the link. Noema extends it.
+ */
+function expandOverAtomicInlines(state: EditorState, from: number, to: number): { from: number; to: number } {
+  const tree = treeFor(state, to);
+  let start = from;
+  let end = to;
+  for (let node: ReturnType<Tree["resolveInner"]> | null = tree.resolveInner(from, 1); node; node = node.parent) {
+    if (ATOMIC_INLINE_NODES.has(node.name) && node.from < from && node.to > from) start = Math.min(start, node.from);
+  }
+  for (let node: ReturnType<Tree["resolveInner"]> | null = tree.resolveInner(to, -1); node; node = node.parent) {
+    if (ATOMIC_INLINE_NODES.has(node.name) && node.from < to && node.to > to) end = Math.max(end, node.to);
+  }
+  return { from: start, to: end };
+}
+
 function toggleRange(state: EditorState, kind: InlineFormatKind, range: SelectionRange): RangeEdit | null {
   if (kind !== "code" && insideCodeBlock(state, range.from)) return null;
 
@@ -322,9 +349,10 @@ function toggleRange(state: EditorState, kind: InlineFormatKind, range: Selectio
     };
   }
 
-  const neighbours = inlineFormatSpans(state, kind, range.from, range.to)
-    .filter((span) => span.from < range.to && span.to > range.from);
-  return wrapEdit(state, kind, range.from, range.to, neighbours, range.head < range.anchor);
+  const { from, to } = expandOverAtomicInlines(state, range.from, range.to);
+  const neighbours = inlineFormatSpans(state, kind, from, to)
+    .filter((span) => span.from < to && span.to > from);
+  return wrapEdit(state, kind, from, to, neighbours, range.head < range.anchor);
 }
 
 /** Toggle KIND over every selection range, as one undoable transaction. */
@@ -375,4 +403,15 @@ export function activeInlineFormats(state: EditorState): Set<InlineFormatKind> {
     if (enclosingSpan(state, kind, range)) active.add(kind);
   }
   return active;
+}
+
+/**
+ * Whether inline formats can apply to the main selection. Inside a fenced or
+ * indented code block they insert nothing, so the toolbar shows them
+ * disabled rather than as buttons that silently do nothing (MarkText hides
+ * its format toolbar in code blocks).
+ */
+export function inlineFormatsAvailable(state: EditorState): boolean {
+  const range = state.selection.main;
+  return !insideCodeBlock(state, range.from) && !insideCodeBlock(state, range.to);
 }

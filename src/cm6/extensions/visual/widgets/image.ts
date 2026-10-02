@@ -409,7 +409,6 @@ function buildImageDecorations(view: EditorView): DecorationSet {
         // selection (scroll, resize) used to reveal every crossed image.
         const cursorInside = !vimKeepsRenderedObjects(view)
           && sel.empty && sel.from <= fullTo && sel.from >= node.from;
-        if (cursorInside) return false; // editable source
 
         const raw = doc.sliceString(node.from, node.to);
         const m = raw.match(IMAGE_RE);
@@ -418,6 +417,21 @@ function buildImageDecorations(view: EditorView): DecorationSet {
         const srcFull = m?.[2] ?? "";
         const src = markdownLinkDestination(srcFull);
         const layout = imageLayoutFromAttrs(trailing?.attrs ?? {});
+        if (cursorInside) {
+          // Editing the source of an image that has a line to itself keeps the
+          // picture under it, as MarkText and Typora show source and image
+          // together. Replacing the picture with one line of source collapsed
+          // the page every time the caret passed an image.
+          if (!line.text.slice(0, node.from - line.from).trim() && !line.text.slice(fullTo - line.from).trim()) {
+            decos.push(
+              Decoration.widget({
+                widget: new ImageWidget(src, alt, node.from, node.to, fullTo, layout),
+                side: 1,
+              }).range(fullTo),
+            );
+          }
+          return false; // editable source
+        }
 
         decos.push(
           Decoration.replace({

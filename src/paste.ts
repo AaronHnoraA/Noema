@@ -72,8 +72,12 @@ function markdownLinkHref(value: string): string {
 function assetToMarkdown(asset: StoredPasteAsset): string {
   const path = markdownLinkHref(asset.markdownPath || "");
   if (!path) return "";
-  const name = markdownLinkText(asset.name || (asset.isImage ? "image" : "attachment"));
-  return asset.isImage ? `![${name}](${path})` : `[${name}](${path})`;
+  // An image's alt text is shown as its caption. A stored file name
+  // (`image-1.png`) is not a caption, so pasted and dropped images get an
+  // empty alt, as MarkText and files.md insert them; attachments keep their
+  // name as the visible link text.
+  if (asset.isImage) return `![](${path})`;
+  return `[${markdownLinkText(asset.name || "attachment")}](${path})`;
 }
 
 function assetListToMarkdown(assets: StoredPasteAsset[]): string {

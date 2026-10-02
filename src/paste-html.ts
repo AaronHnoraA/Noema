@@ -15,6 +15,46 @@ const turndown = new TurndownService({
 
 turndown.use(gfm);
 
+const orderedListNumbers = new WeakMap<Element, WeakMap<Element, number>>();
+
+function orderedListNumber(parent: Element, item: Element): number {
+  let numbers = orderedListNumbers.get(parent);
+  if (!numbers) {
+    numbers = new WeakMap<Element, number>();
+    const items = Array.from(parent.children).filter((child) => child.tagName === "LI");
+    const reversed = parent.hasAttribute("reversed");
+    const start = parent.getAttribute("start");
+    let ordinal = start !== null && /^-?\d+$/u.test(start) ? Number(start) : reversed ? items.length : 1;
+    for (const child of items) {
+      const value = child.getAttribute("value");
+      if (value !== null && /^-?\d+$/u.test(value)) ordinal = Number(value);
+      numbers.set(child, ordinal);
+      ordinal += reversed ? -1 : 1;
+    }
+    orderedListNumbers.set(parent, numbers);
+  }
+  return numbers.get(item) ?? 1;
+}
+
+// One space after the marker and nested content indented to the marker's
+// width (`- ` → 2, `10. ` → 4), as Marker's turndown rule writes lists;
+// turndown's default `-   item` padded every item with three spaces.
+turndown.addRule("compactListItem", {
+  filter: "li",
+  replacement: (content, node) => {
+    const parent = node.parentNode as HTMLElement | null;
+    let prefix = "- ";
+    if (parent?.nodeName === "OL") {
+      prefix = `${orderedListNumber(parent, node as Element)}. `;
+    }
+    const body = content
+      .replace(/^\n+/, "")
+      .replace(/\n+$/, "\n")
+      .replace(/\n/gm, `\n${" ".repeat(prefix.length)}`);
+    return `${prefix}${body}${node.nextSibling && !/\n$/.test(body) ? "\n" : ""}`;
+  },
+});
+
 turndown.addRule("strikethrough", {
   filter: (node) => ["DEL", "S", "STRIKE"].includes(node.nodeName),
   replacement: (content) => content ? `~~${content}~~` : "",
@@ -148,6 +188,74 @@ function plainTextFromHtml(html: string): string {
   return normalizeMarkdown(template.content.textContent ?? "");
 }
 
+function styleWeightBold(style: string): boolean {
+  const weight = /font-weight\s*:\s*([a-z0-9]+)/i.exec(style)?.[1]?.toLowerCase();
+  if (!weight) return false;
+  return weight === "bold" || weight === "bolder" || (/^\d+$/.test(weight) && Number(weight) >= 600);
+}
+
+function hasFormatAncestor(element: Element, names: readonly string[]): boolean {
+  for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+    if (names.includes(parent.tagName)) return true;
+  }
+  return false;
+}
+
+function removeRedundantDescendants(element: Element, selector: string): void {
+  for (const child of Array.from(element.querySelectorAll(selector))) {
+    child.replaceWith(...Array.from(child.childNodes));
+  }
+}
+
+/**
+ * Inline structure that HTML sources express in ways turndown misreads.
+ *
+ * - Google Docs wraps the whole clipboard in `<b style="font-weight:normal">`
+ *   and marks real bold/italic on `<span style>`: the wrapper became stray
+ *   `**` around every paragraph while the actual formatting was lost. Word and
+ *   many web editors also style spans instead of using tags.
+ * - A link whose text is its own address is a bare URL (MarkText unlinks it);
+ *   `[u](u)` only doubles it, and GFM autolinks a bare URL anyway.
+ * - An empty link — a heading's `#` permalink anchor — produced `[](#x)`.
+ */
+export function normalizePastedInlines(root: ParentNode): void {
+  for (const wrapper of Array.from(root.querySelectorAll("b, strong"))) {
+    const style = wrapper.getAttribute("style") ?? "";
+    if (/font-weight\s*:\s*(normal|[1-5]00)\b/i.test(style)) wrapper.replaceWith(...Array.from(wrapper.childNodes));
+  }
+  for (const span of Array.from(root.querySelectorAll("span[style]"))) {
+    const style = span.getAttribute("style") ?? "";
+    const tags: string[] = [];
+    if (styleWeightBold(style) && !hasFormatAncestor(span, ["B", "STRONG"])) tags.push("strong");
+    if (/font-style\s*:\s*italic/i.test(style) && !hasFormatAncestor(span, ["I", "EM"])) tags.push("em");
+    if (/text-decoration[^;]*line-through/i.test(style) && !hasFormatAncestor(span, ["S", "STRIKE", "DEL"])) tags.push("del");
+    if (tags.length === 0 || !span.textContent?.trim()) continue;
+    // A style covers the whole span, so semantic tags of the same kind inside
+    // it add no information. Leaving both produced `****bold****` and `**italic**`.
+    for (const tag of tags) {
+      removeRedundantDescendants(span, tag === "strong" ? "b, strong" : tag === "em" ? "i, em" : "s, strike, del");
+    }
+    let inner: Node[] = Array.from(span.childNodes);
+    for (const tag of tags) {
+      const element = document.createElement(tag);
+      element.append(...inner);
+      inner = [element];
+    }
+    span.replaceWith(...inner);
+  }
+  for (const link of Array.from(root.querySelectorAll("a"))) {
+    const text = link.textContent?.trim() ?? "";
+    const href = link.getAttribute("href") ?? "";
+    if (!text && !link.querySelector("img")) {
+      link.remove();
+      continue;
+    }
+    if (href && text && (text === href || text === href.replace(/\/$/, "")) && /^(?:https?|mailto):/i.test(href)) {
+      link.replaceWith(document.createTextNode(text));
+    }
+  }
+}
+
 export function htmlToMarkdown(html: string): string {
   const raw = String(html || "");
   if (raw.length > MAX_HTML_TO_MARKDOWN_CHARS) return plainTextFromHtml(raw);
@@ -164,5 +272,6 @@ export function htmlToMarkdown(html: string): string {
   const template = document.createElement("template");
   template.innerHTML = clean;
   normalizePastedTables(template.content);
+  normalizePastedInlines(template.content);
   return normalizeMarkdown(turndown.turndown(template.innerHTML));
 }

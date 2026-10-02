@@ -56,6 +56,59 @@ function dispatchSpec(view: EditorView, spec: ReturnType<typeof toggleListSpec>)
   return true;
 }
 
+function wordAround(doc: Text, pos: number): { from: number; to: number } | null {
+  const line = doc.lineAt(pos);
+  const offset = pos - line.from;
+  const isWord = (char: string | undefined): boolean => Boolean(char && /[\p{L}\p{N}_]/u.test(char));
+  if (!isWord(line.text[offset - 1]) || !isWord(line.text[offset])) return null;
+  let start = offset;
+  let end = offset;
+  while (start > 0 && isWord(line.text[start - 1])) start--;
+  while (end < line.text.length && isWord(line.text[end])) end++;
+  return { from: line.from + start, to: line.from + end };
+}
+
+function insideImage(state: EditorView["state"], pos: number): boolean {
+  for (let node: ReturnType<ReturnType<typeof syntaxTree>["resolveInner"]> | null = syntaxTree(state).resolveInner(pos, 1); node; node = node.parent) {
+    if (node.name === "Image" && node.from < pos) return true;
+  }
+  return false;
+}
+
+/**
+ * The link command on an existing link removes it and keeps its text, the
+ * way Marker's `toggleLink` and MarkText's link format toggle. Images are
+ * left alone.
+ */
+function unlinkAtSelection(view: EditorView): boolean {
+  const state = view.state;
+  const { from, to } = state.selection.main;
+  const linkAt = (side: -1 | 1) => {
+    let node: ReturnType<ReturnType<typeof syntaxTree>["resolveInner"]> | null = syntaxTree(state).resolveInner(from, side);
+    while (node && node.name !== "Link") node = node.parent;
+    return node && node.from <= from && node.to >= to ? node : null;
+  };
+  // A caret on either edge of the link counts: a new link glued to an
+  // existing one is never what the command was for.
+  const node = linkAt(1) ?? linkAt(-1);
+  if (!node) return false;
+  const marks = node.getChildren("LinkMark");
+  const open = marks[0];
+  const close = marks[1];
+  if (!open || !close || state.doc.sliceString(open.from, open.to) !== "[") return false;
+  const label = state.doc.sliceString(open.to, close.from);
+  // Keep the caret on the same character of the text it was in.
+  const place = (pos: number): number => node.from + Math.max(0, Math.min(label.length, pos - open.to));
+  const anchor = state.selection.main.anchor;
+  const head = state.selection.main.head;
+  view.dispatch({
+    changes: { from: node.from, to: node.to, insert: label },
+    selection: { anchor: place(anchor), head: place(head) },
+    scrollIntoView: true,
+  });
+  return true;
+}
+
 function nextFootnoteId(view: EditorView): string {
   const used = new Set<number>();
   const source = view.state.doc.toString();
@@ -371,7 +424,9 @@ function nearestJupyterCellArgs(view: EditorView): string {
   return previous || next || "python, default";
 }
 
-const OPENING_FENCE_RE = /^([ \t]{0,3})(`{3,}|~{3,})([^\n]*)$/;
+// Groups: 1 quote markers, 2 list indent + marker (+ task box), 3 fence indent,
+// 4 fence, 5 info string. A fence may open inside a quote or a list item.
+const OPENING_FENCE_RE = /^((?:[ \t]{0,3}>[ \t]?)*)([ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)?([ \t]{0,3})(`{3,}|~{3,})([^\n]*)$/;
 
 /**
  * Enter at the end of an opening code fence that has no closing fence yet
@@ -391,12 +446,17 @@ export function closeFencedCodeOnEnter(view: EditorView): boolean {
   if (sel.head !== line.to) return false;
   const match = OPENING_FENCE_RE.exec(line.text);
   if (!match) return false;
-  const indent = match[1] ?? "";
-  const fence = match[2] ?? "```";
-  const info = match[3] ?? "";
+  const quote = match[1] ?? "";
+  const item = match[2] ?? "";
+  const fenceIndent = match[3] ?? "";
+  const fence = match[4] ?? "```";
+  const info = match[5] ?? "";
   // A backtick fence's info string cannot contain a backtick.
   if (fence.startsWith("`") && info.includes("`")) return false;
-  const markFrom = line.from + indent.length;
+  const markFrom = line.from + quote.length + item.length + fenceIndent.length;
+  // New lines continue the containers: the quote marker, then the list item's
+  // content column, then the fence's own indentation.
+  const indent = `${quote}${" ".repeat(item.length)}${fenceIndent}`;
   const tree = ensureSyntaxTree(state, line.to, 100) ?? syntaxTree(state);
   let node: ReturnType<typeof tree.resolveInner> | null = tree.resolveInner(markFrom + 1, 1);
   while (node && node.name !== "FencedCode") node = node.parent;
@@ -407,6 +467,33 @@ export function closeFencedCodeOnEnter(view: EditorView): boolean {
   view.dispatch({
     changes: { from: line.to, insert },
     selection: { anchor: line.to + 1 + indent.length },
+    scrollIntoView: true,
+    userEvent: "input",
+  });
+  return true;
+}
+
+/**
+ * Enter with the caret at the start of a heading's text opens an empty line
+ * above the heading and leaves the heading whole. The marker is hidden in the
+ * preview, so the caret looks like it is at the line start; splitting there
+ * left an empty `# ` and demoted the title to a paragraph. MarkText's
+ * `AtxHeadingContent.enterHandler` inserts a paragraph before the heading for
+ * any caret inside the marker.
+ */
+export function insertLineBeforeHeading(view: EditorView): boolean {
+  const state = view.state;
+  const sel = state.selection.main;
+  if (!sel.empty || state.selection.ranges.length > 1) return false;
+  const line = state.doc.lineAt(sel.head);
+  const match = /^((?:[ \t]{0,3}>[ \t]?)*)([ \t]{0,3}#{1,6})(?:[ \t]+|$)/u.exec(line.text);
+  if (!match || !line.text.slice(match[0].length).trim()) return false;
+  const markerEnd = line.from + match[0].length;
+  if (sel.head < line.from + match[1]!.length || sel.head > markerEnd) return false;
+  const insert = `${match[1]!.trimEnd()}\n`;
+  view.dispatch({
+    changes: { from: line.from, insert },
+    selection: { anchor: markerEnd + insert.length },
     scrollIntoView: true,
     userEvent: "input",
   });
@@ -843,6 +930,31 @@ function cellOffset(row: string, colIdx: number): number {
   return Math.max(0, row.length - 1);
 }
 
+/**
+ * Where Tab/Enter lands in cell COLIDX of ROW, relative to the row: the cell's
+ * text selected, so typing replaces it as in a spreadsheet — HyperMD's `tab`,
+ * files.md's `tableEnterCell` and prosemirror-tables' `goToNextCell` all
+ * select the next cell's content — or the caret inside an empty cell.
+ */
+function cellTarget(row: string, colIdx: number): { anchor: number; head: number } {
+  const pipes = tablePipeOffsets(row);
+  const open = pipes[colIdx];
+  if (open == null) {
+    const at = cellOffset(row, colIdx);
+    return { anchor: at, head: at };
+  }
+  const close = pipes[colIdx + 1] ?? row.length;
+  let from = open + 1;
+  let to = close;
+  while (from < to && row[from] === " ") from++;
+  while (to > from && row[to - 1] === " ") to--;
+  if (from === to) {
+    const at = cellOffset(row, colIdx);
+    return { anchor: at, head: at };
+  }
+  return { anchor: from, head: to };
+}
+
 function runTableCommandCM6(view: EditorView, command: EditorCommand): boolean {
   const info = findTableInfo(view);
   if (!info) return false;
@@ -1008,13 +1120,15 @@ export function tableNavigateCell(view: EditorView, dir: 1 | -1): boolean {
   const formatted = tableTooLarge(model) ? lines : formatTableLines(model);
   const newText = formatted.join("\n");
   const targetRowText = formatted[target.rowIdx] ?? "";
-  const cursor = startPos + rowOffset(formatted, target.rowIdx) + cellOffset(targetRowText, target.colIdx);
+  const rowStart = startPos + rowOffset(formatted, target.rowIdx);
+  const cell = cellTarget(targetRowText, target.colIdx);
+  const selection = { anchor: rowStart + cell.anchor, head: rowStart + cell.head };
   if (newText === lines.join("\n")) {
-    view.dispatch({ selection: { anchor: cursor }, scrollIntoView: true });
+    view.dispatch({ selection, scrollIntoView: true });
   } else {
     view.dispatch({
       changes: { from: startPos, to: endPos, insert: newText },
-      selection: { anchor: cursor },
+      selection,
       scrollIntoView: true,
     });
   }
@@ -1109,13 +1223,15 @@ export function tableEnterSameColumn(view: EditorView): boolean {
   const formatted = tableTooLarge(model) ? lines : formatTableLines(model);
   const newText = formatted.join("\n");
   const targetRowText = formatted[nextRow] ?? "";
-  const cursor = startPos + rowOffset(formatted, nextRow) + cellOffset(targetRowText, currentColIdx);
+  const rowStart = startPos + rowOffset(formatted, nextRow);
+  const cell = cellTarget(targetRowText, currentColIdx);
+  const selection = { anchor: rowStart + cell.anchor, head: rowStart + cell.head };
   if (newText === lines.join("\n")) {
-    view.dispatch({ selection: { anchor: cursor }, scrollIntoView: true });
+    view.dispatch({ selection, scrollIntoView: true });
   } else {
     view.dispatch({
       changes: { from: startPos, to: endPos, insert: newText },
-      selection: { anchor: cursor },
+      selection,
       scrollIntoView: true,
     });
   }
@@ -1150,8 +1266,26 @@ export function runCommandCM6(view: EditorView, command: EditorCommand, value = 
   if (command === "edit-properties") return editProperties(view);
 
   if (command === "link") {
-    const { from, to } = view.state.selection.main;
-    const sel = from === to ? "link" : view.state.doc.sliceString(from, to);
+    if (!value && unlinkAtSelection(view)) return true;
+    if (insideImage(view.state, view.state.selection.main.from)) return false;
+    let { from, to } = view.state.selection.main;
+    if (from === to) {
+      // A caret inside a word links that word, as Typora does.
+      const word = wordAround(view.state.doc, from);
+      if (word) ({ from, to } = word);
+    }
+    const selected = view.state.doc.sliceString(from, to);
+    if (!value && /^(?:https?:\/\/|mailto:)\S+$/i.test(selected)) {
+      // A selected URL becomes its own target with the text selected to retitle.
+      const text = `[${selected}](${selected})`;
+      view.dispatch({
+        changes: { from, to, insert: text },
+        selection: { anchor: from + 1, head: from + 1 + selected.length },
+        scrollIntoView: true,
+      });
+      return true;
+    }
+    const sel = from === to ? "link" : selected;
     const href = value || "https://";
     const text = `[${sel}](${href})`;
     const hrefFrom = from + sel.length + 3;
