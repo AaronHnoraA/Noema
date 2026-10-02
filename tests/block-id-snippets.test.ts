@@ -20,8 +20,8 @@ describe("org-env block ID snippets", () => {
     const expanded = expandSnippetBody({ key: "tikz", name: "TikZ", mode: "markdown-mode", body }, {
       newId: () => "0198fbac-0780-7c99-85e6-333333333333",
     });
-    expect(expanded.text).toMatch(/^#\+ begin tikz 0198fbac-0780-7c99-85e6-333333333333\n/);
-    expect(expanded.text).toContain("#+ end tikz");
+    expect(expanded.text).toMatch(/^#\+begin tikz 0198fbac-0780-7c99-85e6-333333333333\n/);
+    expect(expanded.text).toContain("#+end tikz");
   });
 
   test("keeps ordinary snippets ID-free and provides repeated-final-letter variants", async () => {
