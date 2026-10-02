@@ -5023,3 +5023,18 @@ body.has-diagram-fullscreen {
 .cm-editor .cm-footnote-reference button.cm-footnote-undefined {
   text-decoration: underline wavy color-mix(in srgb, #d14 60%, transparent);
 }
+
+/* Slash-menu hint on the focused empty line. Absolutely placed, so the line
+ * box, caret and height map are exactly those of an empty line. Hidden in
+ * Vim normal/visual mode, where `/` searches. */
+.cm-editor .cm-line.cm-empty-line-hint { position: relative; }
+.cm-editor .cm-line.cm-empty-line-hint::before {
+  content: attr(data-hint);
+  position: absolute;
+  pointer-events: none;
+  user-select: none;
+  white-space: nowrap;
+  color: var(--muted, color-mix(in srgb, currentColor 38%, transparent));
+  opacity: 0.7;
+}
+.cm-editor[data-vim-mode]:not([data-vim-mode="insert"]) .cm-line.cm-empty-line-hint::before { display: none; }

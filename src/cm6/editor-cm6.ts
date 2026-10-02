@@ -34,6 +34,7 @@ import {
 } from "./markdown-link-events.ts";
 import { wikiLinkAt } from "../../shared/wiki-link.mjs";
 import { vscodeCloseBrackets } from "./close-brackets-vscode.ts";
+import { emptyLineHintExtension } from "./empty-line-hint.ts";
 import { texSourceInput } from "./tex-source-input.ts";
 import { openLineAfterTrailingBlock, runEditorDelete, runEditorEnter, runEditorTab } from "./input-commands.ts";
 import { isWordChar } from "./text-boundaries.ts";
@@ -1339,7 +1340,7 @@ function buildExtensions(
     vscodeCloseBrackets(),
     closeBrackets(),
     EditorView.inputHandler.of(wrapSelectedMarkdownInput),
-    ...(standalone ? [rectangularSelection()] : []),
+    ...(standalone ? [rectangularSelection(), emptyLineHintExtension] : []),
     keymap.of([
       { key: "Backspace", run: (view) => runEditorDelete(view, "backward") },
       { key: "Delete", run: (view) => runEditorDelete(view, "forward") },
