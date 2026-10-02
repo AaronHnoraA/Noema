@@ -33,7 +33,7 @@ import {
   type ImageAlign,
   type ImageLayoutAttrs,
 } from "../../../../image-attrs.ts";
-import { applyFigureLayout } from "../../../figure-layout-menu.ts";
+import { applyFigureLayout, figureLayoutTarget } from "../../../figure-layout-menu.ts";
 import { markdownLinkDestination } from "../../../../markdown-link.ts";
 import {
   VISUAL_ATTACHMENT_IFRAME_ALLOW,
@@ -95,6 +95,7 @@ function setVisualFrameSource(
 
 class ImageWidget extends MeasuredWidget {
   src: string;
+  resolvedSrc: string;
   alt: string;
   from: number;
   baseTo: number;
@@ -104,6 +105,7 @@ class ImageWidget extends MeasuredWidget {
   constructor(src: string, alt: string, from: number, baseTo: number, to: number, layout: ImageLayoutAttrs) {
     super();
     this.src = src;
+    this.resolvedSrc = resolveImageSrc(src);
     this.alt = alt;
     this.from = from;
     this.baseTo = baseTo;
@@ -114,12 +116,17 @@ class ImageWidget extends MeasuredWidget {
   protected get measuredBlock(): boolean { return !this.layout.wrap; }
   protected get observeSize(): boolean { return true; }
 
-  protected measureKey(): string { return "img:" + this.src; }
+  protected measureKey(): string {
+    // Intrinsic dimensions belong to a resource; rendered height belongs to
+    // this layout and caption. Two sizes of the same picture cannot share it.
+    return "img:" + JSON.stringify([this.resolvedSrc, this.alt, this.layout]);
+  }
 
   protected measureGroupKey(): string {
     const kind = visualAttachmentKind(this.src) || "image";
     const caption = this.alt.trim() ? "caption" : "plain";
-    return ["img", kind, this.layout.align, this.layout.wrap ? "wrap" : "block", caption].join(":");
+    return ["img", kind, this.layout.align, this.layout.wrap ? "wrap" : "block", caption,
+      this.layout.width, this.layout.height].join(":");
   }
 
   protected estimatedHeightFallback(): number {
@@ -132,15 +139,26 @@ class ImageWidget extends MeasuredWidget {
   }
 
   eq(other: ImageWidget): boolean {
-    return this.src === other.src &&
-      this.alt === other.alt &&
-      this.from === other.from &&
+    return this.sameContent(other) && this.from === other.from &&
       this.baseTo === other.baseTo &&
-      this.to === other.to &&
+      this.to === other.to;
+  }
+
+  private sameContent(other: ImageWidget): boolean {
+    return this.src === other.src && this.resolvedSrc === other.resolvedSrc && this.alt === other.alt &&
       this.layout.align === other.layout.align &&
       this.layout.wrap === other.layout.wrap &&
       this.layout.width === other.layout.width &&
       this.layout.height === other.layout.height;
+  }
+
+  updateDOM(dom: HTMLElement, _view: EditorView, previous: ImageWidget): boolean {
+    if (!this.sameContent(previous)) return false;
+    // Moving source offsets must not reload an iframe, restart an animation,
+    // or send a decoded image through a second lazy-load/layout cycle.
+    setSourceRange(dom, this.from, this.to);
+    dom.dataset.cmSourceBaseTo = String(this.baseTo);
+    return true;
   }
 
   toDOM(view: EditorView): HTMLElement {
@@ -153,7 +171,7 @@ class ImageWidget extends MeasuredWidget {
 
     if (this.src) {
       const kind = visualAttachmentKind(this.src);
-      const resolvedSrc = resolveImageSrc(this.src);
+      const resolvedSrc = this.resolvedSrc;
       if (kind) {
         if (visualAttachmentEmbeddableP(kind, resolvedSrc)) {
           const frame = visualAttachmentFrame(kind, resolvedSrc);
@@ -206,7 +224,9 @@ class ImageWidget extends MeasuredWidget {
     // `{...}` layout attrs on the image source, preserving the base markdown
     // (including any title) so the change round-trips byte-for-byte.
     const applyLayout = (next: ImageLayoutAttrs): void => {
-      applyFigureLayout(view, { kind: "image", from: this.from, baseTo: this.baseTo, to: this.to, layout: this.layout, document: view.state.doc }, next);
+      if (view.state.readOnly) return;
+      const target = figureLayoutTarget(view, wrap);
+      if (target) applyFigureLayout(view, target, next);
     };
     wrap.append(buildImageToolbar(this.layout, applyLayout));
     if (resizableImage) {
@@ -236,10 +256,12 @@ function buildImageResizeHandle(
   handle.setAttribute("aria-label", handle.title);
 
   handle.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || view.state.readOnly) return;
     event.preventDefault();
     event.stopPropagation();
     const startX = event.clientX;
+    const originalWidth = wrap.style.getPropertyValue("--aaronnote-image-width");
+    const originalMaxWidth = wrap.style.getPropertyValue("--aaronnote-image-max-width");
     const fallbackWidth = Number.parseFloat(layout.width) || 320;
     const startWidth = image.getBoundingClientRect().width || fallbackWidth;
     const contentWidth = Math.max(160, view.contentDOM.clientWidth || wrap.parentElement?.clientWidth || 960);
@@ -284,8 +306,10 @@ function buildImageResizeHandle(
       if (frame) window.cancelAnimationFrame(frame);
       handle.releasePointerCapture?.(cancelEvent.pointerId);
       detach();
-      if (layout.width) wrap.style.setProperty("--aaronnote-image-width", layout.width);
+      if (originalWidth) wrap.style.setProperty("--aaronnote-image-width", originalWidth);
       else wrap.style.removeProperty("--aaronnote-image-width");
+      if (originalMaxWidth) wrap.style.setProperty("--aaronnote-image-max-width", originalMaxWidth);
+      else wrap.style.removeProperty("--aaronnote-image-max-width");
       view.requestMeasure();
     };
 
@@ -551,7 +575,7 @@ class ImagePlugin {
 
   update(update: ViewUpdate): void {
     if (update.view.compositionStarted && update.selectionSet && !update.docChanged && !update.viewportChanged) return;
-    if (isCoalescedVisualTyping(update)) {
+    if (isCoalescedVisualTyping(update) && this.mapSourceRanges(update)) {
       this.decorations = this.decorations.map(update.changes);
       return;
     }
@@ -564,6 +588,25 @@ class ImagePlugin {
       this.activeSourceKey = nextSourceKey;
       this.decorations = buildImageDecorations(update.view);
     }
+  }
+
+  private mapSourceRanges(update: ViewUpdate): boolean {
+    // The decoration positions map during a typing burst; their DOM metadata
+    // must follow too, since source clicks, attachment links and layout menus
+    // use it before the delayed rebuild. This only touches mounted figures and
+    // reads no layout. Editing a figure itself requires a fresh render instead.
+    const figures = [...update.view.dom.querySelectorAll<HTMLElement>(".cm-image-widget[data-cm-source-base-to]:not(.cm-tikz-env-widget)")];
+    if (figures.some((figure) => update.changes.touchesRange(
+      Number(figure.dataset.cmSourceFrom), Number(figure.dataset.cmSourceTo),
+    ))) return false;
+    for (const figure of figures) {
+      const from = update.changes.mapPos(Number(figure.dataset.cmSourceFrom), 1);
+      const to = update.changes.mapPos(Number(figure.dataset.cmSourceTo), -1);
+      const baseTo = update.changes.mapPos(Number(figure.dataset.cmSourceBaseTo), -1);
+      setSourceRange(figure, from, to);
+      figure.dataset.cmSourceBaseTo = String(baseTo);
+    }
+    return true;
   }
 
   destroy(): void {
