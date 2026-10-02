@@ -2116,15 +2116,16 @@ function renderEditableTable(
   const endDrag = (): void => {
     const finished = drag;
     drag = null;
-    document.removeEventListener("mousemove", onDragMove);
-    document.removeEventListener("mouseup", endDrag);
+    document.removeEventListener("mousemove", onDragMove, true);
+    document.removeEventListener("mouseup", endDrag, true);
     if (finished?.selecting && rectFocus) cellElement(rectFocus)?.focus({ preventScroll: true });
   };
   const startDrag = (pos: TableCellPosition): void => {
     endDrag();
     drag = { origin: pos, selecting: false };
-    document.addEventListener("mousemove", onDragMove);
-    document.addEventListener("mouseup", endDrag);
+    // Capture: the widget stops mouseup from bubbling past its wrapper.
+    document.addEventListener("mousemove", onDragMove, true);
+    document.addEventListener("mouseup", endDrag, true);
   };
   if (editable) {
     table.addEventListener("focusout", (event) => {

@@ -74,6 +74,9 @@ describe("table rectangle selection", () => {
     mouse(cell(2, 1), "mousemove");
     mouse(cell(2, 1), "mouseup", { buttons: 0 });
     expect(selected(host).sort()).toEqual(["1,0", "1,1", "2,0", "2,1"]);
+    // The drag's end reaches the selection even though the widget stops
+    // mouseup from bubbling, so the keyboard acts on the rectangle.
+    expect((document.activeElement as HTMLElement).dataset.row).toBe("2");
     expect(host.querySelector("input")).toBeNull();
   });
 
