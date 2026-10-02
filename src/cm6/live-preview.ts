@@ -1202,6 +1202,7 @@ class TableWidget extends MeasuredWidget {
   to: number;
   layout: LayoutAttrs;
   private disposeCellEditor: () => void = () => {};
+  private domContext: { widget: TableWidget; data: MarkdownTableData } | null = null;
 
   protected get floatedBlock(): boolean { return this.layout.wrap; }
 
@@ -1237,8 +1238,55 @@ class TableWidget extends MeasuredWidget {
       && this.layout.height === other.layout.height;
   }
 
+  updateDOM(dom: HTMLElement, view: EditorView, previous: TableWidget): boolean {
+    const context = previous.domContext;
+    if (!context || this.layout.align !== previous.layout.align || this.layout.wrap !== previous.layout.wrap
+        || this.layout.width !== previous.layout.width || this.layout.height !== previous.layout.height) return false;
+    const wrap = this.layout.wrap ? dom.firstElementChild as HTMLElement | null : dom;
+    const table = wrap?.querySelector<HTMLTableElement>("table");
+    if (!wrap || !table) return false;
+    if (this.source !== previous.source && table.querySelector(".cm-table-cell-input, .cm-table-math-editor")) return false;
+    if (table.classList.contains("cm-markdown-table-editable") === view.state.readOnly) return false;
+    const data = parseMarkdownTable(this.source);
+    if (context.data.rows.length !== data.rows.length
+        || context.data.rows.some((row, index) => row.length !== data.rows[index]!.length)) return false;
+    const rows = Array.from(table.rows);
+    if (rows.length !== data.rows.length || rows.some((row, index) => row.cells.length !== data.rows[index]!.length)) return false;
+
+    // Keep cells and their interaction handlers when only text/alignment or
+    // source offsets changed. Keep the shared data current for the existing
+    // handlers; write actions resolve their source range from the live DOM.
+    context.widget = this;
+    context.data.rows = data.rows;
+    context.data.aligns = data.aligns;
+    this.domContext = context;
+    this.disposeCellEditor = previous.disposeCellEditor;
+    rows.forEach((row, rowIndex) => {
+      Array.from(row.cells).forEach((cell, col) => {
+        const source = data.rows[rowIndex]![col]!;
+        if (cell.dataset.source !== source) {
+          const handles = Array.from(cell.children).filter((child) => child.classList.contains("cm-table-drag-handle"));
+          cell.dataset.source = source;
+          cell.dataset.editSource = source;
+          cell.dataset.dirty = "false";
+          cell.innerHTML = inlineMarkdownHTML(source);
+          cell.prepend(...handles);
+        }
+        cell.style.textAlign = data.aligns[col] ?? "";
+      });
+    });
+    wrap.dataset.cmSourceFrom = String(this.from);
+    wrap.dataset.cmSourceTo = String(this.to);
+    wrap.dataset.cmSourceBaseTo = String(this.sourceTo);
+    if (!this.layout.wrap) wrap.dataset.cmMeasureKey = this.measureKey();
+    view.requestMeasure();
+    return true;
+  }
+
   toDOM(view: EditorView): HTMLElement {
     const data = parseMarkdownTable(this.source);
+    const context = { widget: this, data };
+    this.domContext = context;
     const editable = !view.state.readOnly;
     const wrap = document.createElement("div");
     wrap.className = "cm-table-block cm-table-editable-block";
@@ -1247,6 +1295,14 @@ class TableWidget extends MeasuredWidget {
     wrap.dataset.cmSourceBaseTo = String(this.sourceTo);
     wrap.dataset.cmOpenSource = "false";
     applyLayoutAttrs(wrap, "table", this.layout);
+    const currentTable = (): MarkdownTable | null => {
+      // Decorations can map through an edit before the table without replacing
+      // the widget. Resolve the live position when an action writes source.
+      const pos = view.posAtDOM(wrap);
+      const tables = markdownTablesFromState(view.state);
+      const found = tables[firstTableEndingAtOrAfter(tables, pos)];
+      return found && found.from <= pos && found.to >= pos ? found : null;
+    };
     const stopWidgetMouseEvent = (event: Event): void => {
       event.stopPropagation();
     };
@@ -1268,10 +1324,12 @@ class TableWidget extends MeasuredWidget {
       cancelPendingCommit();
       const rows = tableRowsFromDOM(table);
       if (rows.length === 0) return;
+      const current = currentTable();
+      if (!current) return;
       const nextSource = buildMarkdownTableSource({ rows, aligns: data.aligns.slice(0, rows[0]!.length) });
-      if (nextSource !== this.source) {
-        view.dispatch({ changes: { from: this.from, to: this.sourceTo, insert: nextSource } });
-        focusTableCellAfterRender(view, this.from, focusTarget);
+      if (nextSource !== current.source) {
+        view.dispatch({ changes: { from: current.from, to: current.sourceTo, insert: nextSource } });
+        focusTableCellAfterRender(view, current.from, focusTarget);
       } else {
         focusTableCellInTable(table, focusTarget);
       }
@@ -1290,13 +1348,15 @@ class TableWidget extends MeasuredWidget {
       focusTarget?: TableFocusResolver,
     ): void => {
       cancelPendingCommit();
+      const current = currentTable();
+      if (!current) return;
       const rows = tableRowsFromDOM(table);
       const next = { rows, aligns: data.aligns.slice(0, rows[0]?.length ?? 1) };
       mutate(next);
       const nextSource = buildMarkdownTableSource(next);
       const target = typeof focusTarget === "function" ? focusTarget(next) : focusTarget;
-      view.dispatch({ changes: { from: this.from, to: this.sourceTo, insert: nextSource } });
-      focusTableCellAfterRender(view, this.from, target);
+      view.dispatch({ changes: { from: current.from, to: current.sourceTo, insert: nextSource } });
+      focusTableCellAfterRender(view, current.from, target);
       view.requestMeasure();
     };
 
@@ -1351,7 +1411,7 @@ class TableWidget extends MeasuredWidget {
     const rendered = renderEditableTable(data, (row, col) => {
       activeRow = row;
       activeCol = col;
-    }, commit, scheduleCommit, () => view.requestMeasure(), view, this.from, editable);
+    }, commit, scheduleCommit, () => view.requestMeasure(), view, () => currentTable()?.from ?? context.widget.from, editable);
     const table = rendered.table;
     this.disposeCellEditor = rendered.dispose;
     if (editable) installTableDragHandles(table, {
@@ -1585,12 +1645,13 @@ function renderEditableTable(
   scheduleCommit: (focusTarget?: TableFocusTarget | null) => void,
   requestMeasure: () => void,
   view: EditorView,
-  tableFrom: number,
+  tableFrom: () => number,
   editable = true,
 ): { table: HTMLTableElement; dispose: () => void } {
   const table = document.createElement("table");
   table.className = editable ? "cm-markdown-table-preview cm-markdown-table-editable" : "cm-markdown-table-preview";
   const colCount = data.rows[0]?.length ?? 1;
+  const editingHandles = new WeakMap<HTMLTableCellElement, Element[]>();
   let pendingFocusTarget: TableFocusTarget | null = null;
   let activeFormula: { editor: VisualTexInlineEditor; cell: HTMLTableCellElement; source: string; from: number; to: number; draft: string } | null = null;
   const completion = (input: HTMLInputElement, type: "request" | "close" | "key", key?: KeyboardEvent): boolean => {
@@ -1605,7 +1666,11 @@ function renderEditableTable(
     cell.querySelector<HTMLInputElement>(".cm-table-cell-input");
   const restorePreview = (cell: HTMLTableCellElement): void => {
     const source = cell.dataset.source ?? "";
+    const handles = editingHandles.get(cell)
+      ?? Array.from(cell.children).filter((child) => child.classList.contains("cm-table-drag-handle"));
     cell.innerHTML = inlineMarkdownHTML(source);
+    cell.prepend(...handles);
+    editingHandles.delete(cell);
     cell.dataset.editing = "false";
     cell.dataset.dirty = "false";
     cell.dataset.editSource = source;
@@ -1622,7 +1687,7 @@ function renderEditableTable(
     const changed = save && draft !== active.source.slice(active.from + 2, active.to - 2);
     if (changed) {
       active.cell.dataset.source = active.source.slice(0, active.from + 2) + draft + active.source.slice(active.to - 2);
-      active.cell.dataset.dirty = "true";
+      restorePreview(active.cell);
       commit({ row: Number(active.cell.dataset.row), col: Number(active.cell.dataset.col) });
     } else restorePreview(active.cell);
     return changed;
@@ -1682,6 +1747,7 @@ function renderEditableTable(
     cell.dataset.editSource = source;
     cell.dataset.editing = "true";
     cell.dataset.dirty = "false";
+    editingHandles.set(cell, Array.from(cell.children).filter((child) => child.classList.contains("cm-table-drag-handle")));
     cell.textContent = "";
     const input = document.createElement("input");
     input.type = "text";
@@ -1750,9 +1816,11 @@ function renderEditableTable(
         }
         const nextSource = input.value;
         const changed = nextSource !== (cell.dataset.editSource ?? "");
+        if (changed) cell.dataset.source = nextSource;
+        // Finish the local edit before dispatch so the table can update this
+        // cell in place instead of rebuilding all rows around a live input.
+        restorePreview(cell);
         if (changed || appendedRow) {
-          if (changed) cell.dataset.source = nextSource;
-          cell.dataset.dirty = "true";
           const nextTarget = event.relatedTarget;
           const movingInsideTable = nextTarget instanceof Node && table.contains(nextTarget);
           if (movingInsideTable) scheduleCommit(focusTarget);
@@ -1760,7 +1828,6 @@ function renderEditableTable(
         } else {
           cell.dataset.dirty = "false";
         }
-        restorePreview(cell);
         if (!changed && focusTarget) {
           window.setTimeout(() => focusTableCellInTable(table, focusTarget), 0);
         }
@@ -1816,7 +1883,7 @@ function renderEditableTable(
           event.preventDefault();
           window.requestAnimationFrame(() => {
             const updated = view.dom.querySelector<HTMLTableElement>(
-              `.cm-table-block[data-cm-source-from="${tableFrom}"] table`,
+              `.cm-table-block[data-cm-source-from="${tableFrom()}"] table`,
             );
             const nextCell = updated?.rows[row]?.cells[col] as HTMLTableCellElement | undefined;
             const nextTarget = formulaIndex >= 0

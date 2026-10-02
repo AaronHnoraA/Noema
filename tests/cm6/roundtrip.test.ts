@@ -1817,12 +1817,33 @@ After`;
     cleanup();
   });
 
+  test("updates table cells in place and keeps toolbar writes at shifted source offsets", () => {
+    const md = "Intro\n\n| A | B |\n| --- | --- |\n| one | two |";
+    const { editor, cleanup } = mountCM6(md);
+    try {
+      const table = editor.view.dom.querySelector<HTMLTableElement>(".cm-table-block table")!;
+      const cell = table.querySelector<HTMLTableCellElement>("tbody td")!;
+      const at = md.indexOf("one");
+      editor.view.dispatch({ changes: { from: at, to: at + 3, insert: "**one**" } });
+      expect(editor.view.dom.querySelector(".cm-table-block table")).toBe(table);
+      expect(table.querySelector("tbody td")).toBe(cell);
+      expect(cell.querySelector("strong")?.textContent).toBe("one");
+      expect(cell.querySelector(".cm-table-row-drag-handle")).toBeTruthy();
+
+      editor.view.dispatch({ changes: { from: 0, insert: "Lead\n\n" } });
+      expect(editor.view.dom.querySelector(".cm-table-block table")).toBe(table);
+      editor.view.dom.querySelector<HTMLButtonElement>(".cm-table-toolbar button[title='Insert row below']")!.click();
+      expect(editor.getMarkdown()).toBe("Lead\n\nIntro\n\n| A | B |\n| --- | --- |\n|  |  |\n| **one** | two |");
+    } finally { cleanup(); }
+  });
+
   test("edits table cells directly without a lower preview copy", async () => {
     const md = "| A | B |\n| --- | --- |\n| 1 | 2 |";
     const { editor, cleanup } = mountCM6(md);
     editor.setMarkdownSelection(md.indexOf("1"));
     const cell = document.querySelector<HTMLElement>("tbody td");
     expect(cell).toBeTruthy();
+    const table = cell!.closest("table");
     expect(document.querySelector(".cm-table-block-preview")).toBeNull();
     cell!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
     await new Promise((resolve) => window.setTimeout(resolve, 0));
@@ -1833,6 +1854,8 @@ After`;
     input!.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
     await new Promise((resolve) => window.setTimeout(resolve, 0));
     expect(editor.getMarkdown()).toContain("| edited | 2 |");
+    expect(editor.view.dom.querySelector(".cm-table-block table")).toBe(table);
+    expect(cell!.querySelector(".cm-table-row-drag-handle")).toBeTruthy();
     cleanup();
   });
 
@@ -1953,7 +1976,8 @@ After`;
 
     expect(editor.getMarkdown()).toBe(md);
     expect(firstBodyCell!.querySelector(".cm-table-cell-input")).toBeNull();
-    expect(firstBodyCell!.textContent).toBe("1");
+    expect(firstBodyCell!.dataset.source).toBe("1");
+    expect(firstBodyCell!.querySelector(".cm-table-row-drag-handle")).toBeTruthy();
     cleanup();
   });
 

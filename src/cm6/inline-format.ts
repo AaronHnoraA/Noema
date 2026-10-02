@@ -12,9 +12,8 @@
  *   - whitespace at the selection edges stays outside the markers, since
  *     `** word **` is not emphasis in CommonMark (files.md and MarkText both
  *     trim);
- *   - a selection across lines is wrapped line by line after each line's block
- *     prefix (list marker, quote, heading marks), because emphasis cannot span
- *     a paragraph break;
+ *   - a soft-wrapped paragraph gets one marker pair across its lines; a
+ *     selection crossing blocks is wrapped line by line after block prefixes;
  *   - a bare caret outside any span inserts an empty marker pair around it.
  *
  * Spans come from the Lezer Markdown tree, except `==highlight==`, which the
@@ -30,7 +29,7 @@ import {
   type SelectionRange,
   type TransactionSpec,
 } from "@codemirror/state";
-import { syntaxTree } from "@codemirror/language";
+import { syntaxTree, syntaxTreeAvailable } from "@codemirror/language";
 import type { Tree } from "@lezer/common";
 import { markdownInlineContext } from "./languages/markdown/index.ts";
 
@@ -86,6 +85,7 @@ const DEFAULT_MARKER: Record<InlineFormatKind, string> = {
 
 const CODE_NODES = new Set(["InlineCode", "FencedCode", "CodeBlock", "IndentedCode"]);
 const CODE_BLOCK_NODES = new Set(["FencedCode", "CodeBlock", "IndentedCode"]);
+const NON_TEXT_BLOCK_NODES = new Set([...CODE_BLOCK_NODES, "Table", "HorizontalRule"]);
 
 /**
  * The block prefix a line's inline content starts after: indentation, quote
@@ -127,6 +127,29 @@ function fencedRanges(doc: Text): Array<{ from: number; to: number }> {
   if (open) ranges.push({ from: open.from, to: doc.length });
   fenceCache.set(doc, ranges);
   return ranges;
+}
+
+function formatContext(state: EditorState, from: number, to: number) {
+  let start = from;
+  let end = to;
+  if (!syntaxTreeAvailable(state, to)) {
+    const ranges = fencedRanges(state.doc);
+    for (const pos of [from, to]) {
+      let low = 0;
+      let high = ranges.length;
+      while (low < high) {
+        const mid = (low + high) >>> 1;
+        if (ranges[mid]!.to < pos) low = mid + 1;
+        else high = mid;
+      }
+      const fence = ranges[low];
+      if (fence && fence.from <= pos) {
+        start = Math.min(start, fence.from);
+        end = Math.max(end, fence.to);
+      }
+    }
+  }
+  return markdownInlineContext(state, start, end);
 }
 
 function escapedAt(text: string, index: number): boolean {
@@ -192,11 +215,8 @@ export function inlineFormatSpans(
   const doc = state.doc;
   const lo = Math.max(0, Math.min(from, to));
   const hi = Math.min(doc.length, Math.max(from, to));
-  // A local parse may start inside a fenced block whose opening fence is
-  // outside this paragraph window. Its literal markers are not formats.
-  if (insideCodeBlock(state, lo) && insideCodeBlock(state, hi)) return [];
   const spans: InlineFormatSpan[] = [];
-  const { tree, base } = markdownInlineContext(state, lo, hi);
+  const { tree, base } = formatContext(state, lo, hi);
   if (kind === "highlight") {
     for (let number = doc.lineAt(lo).number; number <= doc.lineAt(hi).number; number++) {
       const line = doc.line(number);
@@ -256,6 +276,71 @@ function insideCodeBlock(state: EditorState, pos: number): boolean {
   return /^[ \t]{4,}\S/u.test(line.text) && (line.number === 1 || !state.doc.line(line.number - 1).text.trim());
 }
 
+/** A format over whole blocks must not turn a fence, table or rule into text. */
+function selectionIntersectsNonTextBlock(state: EditorState, from: number, to: number): boolean {
+  if (insideCodeBlock(state, from) || insideCodeBlock(state, to > from ? to - 1 : to)) return true;
+  if (from === to) return false;
+  if (!syntaxTreeAvailable(state, to)) {
+    const ranges = fencedRanges(state.doc);
+    let low = 0;
+    let high = ranges.length;
+    while (low < high) {
+      const mid = (low + high) >>> 1;
+      if (ranges[mid]!.to <= from) low = mid + 1;
+      else high = mid;
+    }
+    if (low < ranges.length && ranges[low]!.from < to) return true;
+  }
+  const { tree, base } = markdownInlineContext(state, from, to);
+  const localFrom = from - base;
+  const localTo = to - base;
+  let inOneCell = false;
+  for (let node: ReturnType<Tree["resolveInner"]> | null = tree.resolveInner(localFrom, 1); node; node = node.parent) {
+    if (node.name === "TableCell" && node.to >= localTo) { inOneCell = true; break; }
+  }
+  let blocked = false;
+  tree.iterate({
+    from: localFrom,
+    to: localTo,
+    enter(node) {
+      if (node.from >= localTo || node.to <= localFrom) return false;
+      if (node.name === "Table" && inOneCell) return false;
+      if (NON_TEXT_BLOCK_NODES.has(node.name)) { blocked = true; return false; }
+    },
+  });
+  return blocked;
+}
+
+/** MarkText formats each text leaf while preserving intervening block syntax. */
+function formattableSelections(state: EditorState, range: SelectionRange): SelectionRange[] {
+  const { tree, base } = formatContext(state, range.from, range.to);
+  const selections: SelectionRange[] = [];
+  tree.iterate({
+    from: range.from - base,
+    to: range.to - base,
+    enter(node) {
+      if (CODE_BLOCK_NODES.has(node.name)) return false;
+      const heading = /^(?:ATX|Setext)Heading[1-6]?$/u.test(node.name);
+      if (!heading && node.name !== "Paragraph" && node.name !== "TableCell") return;
+      let from = Math.max(range.from, base + node.from);
+      let to = Math.min(range.to, base + node.to);
+      if (heading) {
+        const marks = node.node.getChildren("HeaderMark");
+        for (const mark of marks) {
+          if (mark.from === node.from) from = Math.max(from, base + mark.to);
+          else to = Math.min(to, base + mark.from);
+        }
+      }
+      const text = state.doc.sliceString(from, Math.max(from, to));
+      from += text.length - text.trimStart().length;
+      to -= text.length - text.trimEnd().length;
+      if (from < to) selections.push(EditorSelection.range(from, to));
+      return false;
+    },
+  });
+  return selections;
+}
+
 function insideInlineCode(state: EditorState, pos: number): boolean {
   const { tree, base } = markdownInlineContext(state, pos);
   const local = pos - base;
@@ -302,6 +387,44 @@ function unwrapEdit(state: EditorState, span: InlineFormatSpan, range: Selection
   return { changes, anchor, head };
 }
 
+/** Spans that cover every selected line's text; empty lines need no marker. */
+function selectedFormatSpans(state: EditorState, kind: InlineFormatKind, range: SelectionRange): InlineFormatSpan[] | null {
+  const doc = state.doc;
+  const spans = inlineFormatSpans(state, kind, range.from, range.to);
+  if (spans.length === 0) return null;
+  const selected = new Map<string, InlineFormatSpan>();
+  let spanIndex = 0;
+  for (let number = doc.lineAt(range.from).number; number <= doc.lineAt(range.to).number; number++) {
+    const line = doc.line(number);
+    let start = Math.max(range.from, line.from);
+    let end = Math.min(range.to, line.to);
+    if (start === line.from) start += (line.text.match(BLOCK_PREFIX_RE)?.[0] ?? "").length;
+    if (start >= end) continue;
+    const segment = doc.sliceString(start, end);
+    start += segment.length - segment.trimStart().length;
+    end -= segment.length - segment.trimEnd().length;
+    if (start >= end) continue;
+    while (spanIndex < spans.length && spans[spanIndex]!.to <= start) spanIndex++;
+    const covering = spans[spanIndex];
+    if (!covering || covering.from > start || covering.to < end) return null;
+    selected.set(`${covering.from}:${covering.to}`, covering);
+  }
+  return selected.size === 0 ? null : [...selected.values()];
+}
+
+function unwrapSelectedLines(state: EditorState, kind: InlineFormatKind, range: SelectionRange): RangeEdit | null {
+  const spans = selectedFormatSpans(state, kind, range);
+  if (!spans) return null;
+  const changes = markerDeletions(spans);
+  const set = state.changes(changes);
+  const forward = range.anchor <= range.head;
+  return {
+    changes,
+    anchor: set.mapPos(range.anchor, forward ? -1 : 1),
+    head: set.mapPos(range.head, forward ? 1 : -1),
+  };
+}
+
 /**
  * Wrap [from, to) after merging the partly-overlapping SPANS of the same kind.
  * Returns null when nothing but whitespace or block prefixes was selected.
@@ -335,6 +458,29 @@ function wrapEdit(
     cursor = Math.max(cursor, deletion.to);
   }
   const firstPos = firstKept < 0 ? start : firstKept;
+
+  // In one paragraph a soft break belongs to the same inline token. Wrap it
+  // once, as MarkText does for a block's text, instead of writing a pair of
+  // markers on every visual line. Container boundaries still use the
+  // line-by-line path below.
+  if (text.includes("\n") && ["bold", "italic", "strike", "code"].includes(kind)) {
+    const { tree, base } = markdownInlineContext(state, start, end);
+    const localStart = start - base;
+    const localEnd = end - base;
+    for (let node: ReturnType<Tree["resolveInner"]> | null = tree.resolveInner(localStart, 1); node; node = node.parent) {
+      if (node.name !== "Paragraph" || node.from > localStart || node.to < localEnd) continue;
+      const lead = text.length - text.trimStart().length;
+      const trail = text.length - text.trimEnd().length;
+      const inner = text.slice(lead, text.length - trail);
+      if (!inner) break;
+      const { open, close } = markersFor(kind, inner);
+      const output = text.slice(0, lead) + open + inner + close + text.slice(text.length - trail);
+      const changes: ChangeSpec[] = [{ from: start, to: end, insert: output }];
+      return backward
+        ? { changes, anchor: start + output.length - trail - close.length, head: start + lead + open.length }
+        : { changes, anchor: start + lead + open.length, head: start + output.length - trail - close.length };
+    }
+  }
 
   let output = "";
   let contentStart = -1;
@@ -398,7 +544,7 @@ function expandOverAtomicInlines(state: EditorState, from: number, to: number): 
   return { from: start, to: end };
 }
 
-function toggleRange(state: EditorState, kind: InlineFormatKind, range: SelectionRange): RangeEdit | null {
+function toggleTextRange(state: EditorState, kind: InlineFormatKind, range: SelectionRange): RangeEdit | null {
   if (!inlineFormatAvailable(state, kind, range)) return null;
 
   const enclosing = enclosingSpan(state, kind, range);
@@ -413,10 +559,43 @@ function toggleRange(state: EditorState, kind: InlineFormatKind, range: Selectio
     };
   }
 
+  const selectedLines = unwrapSelectedLines(state, kind, range);
+  if (selectedLines) return selectedLines;
+
   const { from, to } = expandOverAtomicInlines(state, range.from, range.to);
   const neighbours = inlineFormatSpans(state, kind, from, to)
     .filter((span) => span.from < to && span.to > from);
   return wrapEdit(state, kind, from, to, neighbours, range.head < range.anchor);
+}
+
+function rangeHasFormat(state: EditorState, kind: InlineFormatKind, range: SelectionRange): boolean {
+  return Boolean(enclosingSpan(state, kind, range) || (!range.empty && selectedFormatSpans(state, kind, range)));
+}
+
+function toggleRange(state: EditorState, kind: InlineFormatKind, range: SelectionRange): RangeEdit | null {
+  if (range.empty || !selectionIntersectsNonTextBlock(state, range.from, range.to)) {
+    return toggleTextRange(state, kind, range);
+  }
+  const selections = formattableSelections(state, range);
+  if (selections.length === 0) return null;
+  const active = selections.map((selection) => rangeHasFormat(state, kind, selection));
+  const remove = active.every(Boolean);
+  const entries = selections.map((selection, index) => ({
+    selection,
+    edit: remove || !active[index] ? toggleTextRange(state, kind, selection) : null,
+  }));
+  const changes = entries.flatMap((entry) => entry.edit?.changes ?? []);
+  if (changes.length === 0) return null;
+  const combined = state.changes(changes);
+  const boundary = (entry: typeof entries[number], end: boolean): number => {
+    if (!entry.edit) return combined.mapPos(end ? entry.selection.to : entry.selection.from, end ? 1 : -1);
+    const own = state.changes(entry.edit.changes);
+    const shift = combined.mapPos(entry.selection.from, -1) - own.mapPos(entry.selection.from, -1);
+    return (end ? entry.edit.head : entry.edit.anchor) + shift;
+  };
+  const from = boundary(entries[0]!, false);
+  const to = boundary(entries[entries.length - 1]!, true);
+  return range.anchor <= range.head ? { changes, anchor: from, head: to } : { changes, anchor: to, head: from };
 }
 
 /** Toggle KIND over every selection range, as one undoable transaction. */
@@ -463,21 +642,22 @@ export function clearInlineFormatSpec(state: EditorState): TransactionSpec | nul
 export function activeInlineFormats(state: EditorState): Set<InlineFormatKind> {
   const range = state.selection.main;
   const active = new Set<InlineFormatKind>();
+  const selections = !range.empty && selectionIntersectsNonTextBlock(state, range.from, range.to)
+    ? formattableSelections(state, range) : [range];
   for (const kind of INLINE_FORMAT_KINDS) {
-    if (enclosingSpan(state, kind, range)) active.add(kind);
+    if (selections.length > 0 && selections.every((selection) => rangeHasFormat(state, kind, selection))) active.add(kind);
   }
   return active;
 }
 
 /**
- * Whether inline formats can apply to the main selection. Inside a fenced or
- * indented code block they insert nothing, so the toolbar shows them
- * disabled rather than as buttons that silently do nothing (MarkText hides
- * its format toolbar in code blocks).
+ * Whether the main selection contains formattable text. A mixed selection
+ * applies to its text leaves; a selection wholly in code has no such target.
  */
 export function inlineFormatsAvailable(state: EditorState): boolean {
   const range = state.selection.main;
-  return !insideCodeBlock(state, range.from) && !insideCodeBlock(state, range.to);
+  return !selectionIntersectsNonTextBlock(state, range.from, range.to)
+    || (!range.empty && formattableSelections(state, range).length > 0);
 }
 
 /** A caret inside inline code can only toggle the code span itself. */
@@ -486,6 +666,7 @@ export function inlineFormatAvailable(
   kind: InlineFormatKind,
   range: SelectionRange = state.selection.main,
 ): boolean {
-  if (insideCodeBlock(state, range.from) || insideCodeBlock(state, range.to)) return false;
+  if (selectionIntersectsNonTextBlock(state, range.from, range.to)
+      && (range.empty || formattableSelections(state, range).length === 0)) return false;
   return kind === "code" || !range.empty || !insideInlineCode(state, range.from);
 }

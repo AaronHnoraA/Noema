@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "@voidzero-dev/vite-plus-test";
 import { EditorSelection } from "@codemirror/state";
 import { createEditorCM6 } from "../../src/cm6/editor-cm6.ts";
 import { runEditorDelete, runEditorEnter } from "../../src/cm6/input-commands.ts";
+import { activeInlineFormats, inlineFormatsAvailable } from "../../src/cm6/inline-format.ts";
 import type { Editor } from "../../src/editor-api.ts";
 
 const editors: Editor[] = [];
@@ -85,6 +86,71 @@ describe("inline format toggles", () => {
     const ed = open("- one\n- two", 0, 11);
     ed.runCommand("bold");
     expect(ed.getMarkdown()).toBe("- **one**\n- **two**");
+    expect(activeInlineFormats(ed.view.state).has("bold")).toBe(true);
+    ed.runCommand("bold");
+    expect(ed.getMarkdown()).toBe("- one\n- two");
+    expect(activeInlineFormats(ed.view.state).has("bold")).toBe(false);
+  });
+
+  it("pressing bold twice over a soft-wrapped paragraph restores the text", () => {
+    const ed = open("first\nsecond", 0, 12);
+    ed.runCommand("bold");
+    expect(ed.getMarkdown()).toBe("**first\nsecond**");
+    ed.runCommand("bold");
+    expect(ed.getMarkdown()).toBe("first\nsecond");
+  });
+
+  it.each([
+    ["italic", "*first\nsecond*"],
+    ["strike", "~~first\nsecond~~"],
+    ["code", "`first\nsecond`"],
+  ] as const)("%s spans one soft-wrapped paragraph and toggles off", (kind, formatted) => {
+    const ed = open("first\nsecond", 0, 12);
+    expect(ed.runCommand(kind)).toBe(true);
+    expect(ed.getMarkdown()).toBe(formatted);
+    expect(ed.runCommand(kind)).toBe(true);
+    expect(ed.getMarkdown()).toBe("first\nsecond");
+  });
+
+  it("adds formatting to an unformatted line without stripping a formatted neighbor", () => {
+    const ed = open("- **one**\n- two", 0, 15);
+    expect(activeInlineFormats(ed.view.state).has("bold")).toBe(false);
+    ed.runCommand("bold");
+    expect(ed.getMarkdown()).toBe("- **one**\n- **two**");
+  });
+
+  it.each([
+    ["before\n\n```js\nx\n```\n\nafter", "**before**\n\n```js\nx\n```\n\n**after**"],
+    ["before\n\n| a | b |\n| --- | --- |\n| x | y |\n\nafter", "**before**\n\n| **a** | **b** |\n| --- | --- |\n| **x** | **y** |\n\n**after**"],
+    ["before\n\n---\n\nafter", "**before**\n\n---\n\n**after**"],
+  ])("formats text across structural blocks without rewriting their syntax", (doc, formatted) => {
+    const ed = open(doc, 0, doc.length);
+    expect(inlineFormatsAvailable(ed.view.state)).toBe(true);
+    expect(ed.runCommand("bold")).toBe(true);
+    expect(ed.getMarkdown()).toBe(formatted);
+    expect(activeInlineFormats(ed.view.state).has("bold")).toBe(true);
+    expect(ed.runCommand("bold")).toBe(true);
+    expect(ed.getMarkdown()).toBe(doc);
+  });
+
+  it("allows formatting text inside one table cell", () => {
+    const doc = "| a | b |\n| --- | --- |\n| cell | value |";
+    const from = doc.indexOf("cell");
+    const ed = open(doc, from, from + 4);
+    expect(inlineFormatsAvailable(ed.view.state)).toBe(true);
+    expect(ed.runCommand("bold")).toBe(true);
+    expect(ed.getMarkdown()).toBe(doc.replace("cell", "**cell**"));
+  });
+
+  it("keeps a backward mixed-block selection and already-formatted text", () => {
+    const doc = "**before**\n\n```js\n**literal**\n```\n\nafter";
+    const ed = open(doc);
+    ed.view.dispatch({ selection: EditorSelection.range(doc.length, 0) });
+    expect(ed.runCommand("bold")).toBe(true);
+    expect(ed.getMarkdown()).toBe("**before**\n\n```js\n**literal**\n```\n\n**after**");
+    expect(ed.view.state.selection.main.anchor).toBeGreaterThan(ed.view.state.selection.main.head);
+    expect(ed.runCommand("bold")).toBe(true);
+    expect(ed.getMarkdown()).toBe("before\n\n```js\n**literal**\n```\n\nafter");
   });
 
   it("toggles highlight, strike, sup and sub", () => {
@@ -392,7 +458,7 @@ describe("details found by comparing with MarkText, files.md and Marker", () => 
     const doc = "a [docs](u)\nthen `code` here";
     const ed = open(doc, doc.indexOf("docs") + 1, doc.indexOf("code") + 2);
     ed.runCommand("bold");
-    expect(ed.getMarkdown()).toBe("a **[docs](u)**\n**then `code`** here");
+    expect(ed.getMarkdown()).toBe("a **[docs](u)\nthen `code`** here");
   });
 
   it("relinks an existing link and leaves code and separate blocks intact", () => {
@@ -436,6 +502,16 @@ describe("details found by comparing with MarkText, files.md and Marker", () => 
     expect(linked.getMarkdown()).toBe("see [first\nsecond](new) now");
   });
 
+  it.each([
+    ["# Title", "# [Title](https://)"],
+    ["## Title ##", "## [Title](https://) ##"],
+    ["Title\n=====", "[Title](https://)\n====="],
+  ])("links heading content while preserving its markers", (doc, expected) => {
+    const ed = open(doc, 0, doc.length);
+    expect(ed.runCommand("link")).toBe(true);
+    expect(ed.getMarkdown()).toBe(expected);
+  });
+
   it("clears a format spanning a soft line break", () => {
     const ed = open("**first\nsecond**", 9);
     expect(ed.runCommand("clear-format")).toBe(true);
@@ -462,8 +538,7 @@ describe("details found by comparing with MarkText, files.md and Marker", () => 
 });
 
 describe("format availability", () => {
-  it("reports inline formats unavailable inside a code block", async () => {
-    const { inlineFormatsAvailable } = await import("../../src/cm6/inline-format.ts");
+  it("reports inline formats unavailable inside a code block", () => {
     const code = open("```\ncode\n```", 5, 7);
     expect(inlineFormatsAvailable(code.view.state)).toBe(false);
     const prose = open("text", 0, 4);

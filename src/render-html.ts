@@ -1517,11 +1517,20 @@ function createMarkdownIt(options: RenderMarkdownHTMLOptions): MarkdownIt {
   return md;
 }
 
+// Table previews render many independent cells. MarkdownIt keeps its grammar
+// and renderer rules on the instance, while each render gets fresh token/env
+// state, so default calls can share the configured parser.
+let defaultMarkdownIt: MarkdownIt | undefined;
+
+function markdownItForRender(options?: RenderMarkdownHTMLOptions): MarkdownIt {
+  return options ? createMarkdownIt(options) : (defaultMarkdownIt ??= createMarkdownIt({}));
+}
+
 export function renderMarkdownHTML(
   markdown: string,
-  options: RenderMarkdownHTMLOptions = {},
+  options?: RenderMarkdownHTMLOptions,
 ): string {
-  const md = createMarkdownIt(options);
+  const md = markdownItForRender(options);
   const root = document.createElement("div");
   const protectedHtml = protectIframeNavigationAttrsForDom(md.render(isolateBlockLayoutAttrLines(markdown)));
   root.innerHTML = protectedHtml.html;
@@ -1531,9 +1540,9 @@ export function renderMarkdownHTML(
 
 export function renderMarkdownInlineHTML(
   markdown: string,
-  options: RenderMarkdownHTMLOptions = {},
+  options?: RenderMarkdownHTMLOptions,
 ): string {
-  const md = createMarkdownIt(options);
+  const md = markdownItForRender(options);
   const root = document.createElement("span");
   root.innerHTML = md.renderInline(markdown);
   return cleanEditorHTML(root);

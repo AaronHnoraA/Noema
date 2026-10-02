@@ -9,6 +9,16 @@ import {
 } from "../src/render-html.ts";
 
 describe("shared markdown HTML renderer", () => {
+  test("shared default parser keeps each render's references and options independent", () => {
+    const source = "A claim[^proof].\n\n[^proof]: proof";
+    const first = renderMarkdownHTML(source);
+    expect(renderMarkdownHTML(source)).toBe(first);
+    renderMarkdownHTML("[label][target]\n\n[target]: https://example.com");
+    expect(renderMarkdownHTML("[label][target]")).not.toContain("https://example.com");
+    expect(renderMarkdownHTML("<b>text</b>", { allowHtml: true })).toContain("<b>text</b>");
+    expect(renderMarkdownHTML("<b>text</b>")).toContain("&lt;b&gt;text&lt;/b&gt;");
+  });
+
   test("renders Wiki links with optional labels while leaving code untouched", () => {
     const html = renderMarkdownHTML("[[Tensor]] and [[Daily Note|today]] and `[[code]]`");
     expect(html).toContain('href="roam://wiki/Tensor"');

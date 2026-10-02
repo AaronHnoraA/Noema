@@ -51,6 +51,16 @@ export function markdownInlineContext(state: EditorState, from: number, to = fro
   if (hit) return hit;
   let first = doc.lineAt(from);
   let last = doc.lineAt(to);
+  // A table body row has no Table node without its header and delimiter row.
+  // Include adjacent pipe rows so cell boundaries are available at distant
+  // positions that CM6 has not parsed yet. The grammar decides whether these
+  // lines actually form a table.
+  if (first.text.includes("|")) {
+    while (first.number > 1 && doc.line(first.number - 1).text.includes("|")) first = doc.line(first.number - 1);
+  }
+  if (last.text.includes("|")) {
+    while (last.number < doc.lines && doc.line(last.number + 1).text.includes("|")) last = doc.line(last.number + 1);
+  }
   if (!singleLineBlock(first.text) && !startsList(first.text)) {
     while (first.number > 1) {
       const previous = doc.line(first.number - 1);

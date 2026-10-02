@@ -118,15 +118,25 @@ function linkSelectionText(state: EditorView["state"], from: number, to: number)
   // A soft line break is valid link text; a blank line or another block is not.
   const localFrom = from - base;
   const localTo = to - base;
-  let oneBlock = false;
+  let block: SyntaxNode | null = null;
   for (let node: SyntaxNode | null = tree.resolveInner(localFrom, 1); node; node = node.parent) {
-    if (["Paragraph", "ATXHeading", "SetextHeading", "TableCell"].includes(node.name)
-        && node.to >= localTo) { oneBlock = true; break; }
+    if ((node.name === "Paragraph" || node.name === "TableCell" || /^(?:ATX|Setext)Heading[1-6]?$/u.test(node.name))
+        && node.to >= localTo) { block = node; break; }
   }
-  if (!oneBlock) return null;
+  if (!block) return null;
   const atomic = new Set(["Link", "Image", "Autolink", "InlineCode", "InlineMath"]);
   let start = localFrom;
   let end = localTo;
+  if (/Heading/u.test(block.name)) {
+    for (const mark of block.getChildren("HeaderMark")) {
+      if (mark.from === block.from) start = Math.max(start, mark.to);
+      else end = Math.min(end, mark.from);
+    }
+    const text = state.doc.sliceString(base + start, base + Math.max(start, end));
+    start += text.length - text.trimStart().length;
+    end -= text.length - text.trimEnd().length;
+    if (start >= end) return null;
+  }
   for (let node: SyntaxNode | null = tree.resolveInner(start, 1); node; node = node.parent) {
     if (atomic.has(node.name) && node.from < start && start < node.to) start = Math.min(start, node.from);
   }
