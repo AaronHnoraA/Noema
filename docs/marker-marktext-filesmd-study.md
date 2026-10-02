@@ -92,3 +92,8 @@ leave the table, Backspace selects a rendered embed whole, and Tab leaves
 bold. It found that the table widget stopped `mouseup` before the drag's
 document listener, so those listeners run in the capture phase.
 
+`scripts/check-memory-soak.mjs` repeats the long-session test in Chromium with
+GC forced through the DevTools protocol: 18.2 MB at start, 22.0–22.7 MB from
+switch 100 to switch 600 over 40 notes, 24.2 → 23.7 MB across 20 editor
+destroy/re-create cycles.
+
