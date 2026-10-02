@@ -26,6 +26,7 @@ import type { SyntaxNode, Tree } from "@lezer/common";
 export const skipOrderedListRenumber = Annotation.define<boolean>();
 
 const ORDERED_MARK_RE = /^(\d{1,9})([.)])$/;
+const ORDERED_LINE_RE = /^(?:[ \t]{0,3}>[ \t]?)*[ \t]*\d{1,9}[.)](?:[ \t]+|$)/u;
 
 type Range = readonly [number, number];
 
@@ -103,6 +104,7 @@ export const orderedListRenumber: Extension = EditorState.transactionFilter.of((
   const ranges: Range[] = [];
   const multiLineRanges: Range[] = [];
   let maxTo = 0;
+  let listStructureMayChange = false;
 
   tr.changes.iterChanges((fromA, toA, fromB, toB) => {
     ranges.push([fromB, toB]);
@@ -110,9 +112,15 @@ export const orderedListRenumber: Extension = EditorState.transactionFilter.of((
     const crossedLineInOld = oldDoc.lineAt(fromA).number !== oldDoc.lineAt(toA).number;
     const crossedLineInNew = newDoc.lineAt(fromB).number !== newDoc.lineAt(toB).number;
     if (crossedLineInOld || crossedLineInNew) multiLineRanges.push([fromB, toB]);
+    // Editing ordinary prose (including a list's continuation paragraph) does
+    // not change its numbering. Avoid asking the parser to reach a distant
+    // caret just to discover that there is no ordered marker on this line.
+    if (crossedLineInOld || crossedLineInNew
+      || ORDERED_LINE_RE.test(oldDoc.lineAt(fromA).text)
+      || ORDERED_LINE_RE.test(newDoc.lineAt(fromB).text)) listStructureMayChange = true;
   });
 
-  if (ranges.length === 0) return tr;
+  if (ranges.length === 0 || !listStructureMayChange) return tr;
 
   const lists = collectOrderedLists(tr.state, ranges, maxTo);
   if (lists.length === 0) return tr;

@@ -247,6 +247,12 @@ function updateBlockMathIndex(
 ): BlockMathIndex {
   const { oldWindows, newWindows } = changedLineWindows(oldDoc, newDoc, changes);
   const firstChangeFrom = firstChangedOffset(changes);
+  const rescanned = scanBlockMathFencesInLines(newDoc, newWindows);
+  const lastFence = index.fences[index.fences.length - 1];
+  // Text below every formula cannot move an existing fence or alter its TeX.
+  // Keep the index itself when no new delimiter was introduced, avoiding a
+  // walk through thousands of formulas to append one ordinary character.
+  if (rescanned.length === 0 && (!lastFence || oldWindows[0]!.from > lastFence.to)) return index;
 
   // Surviving fences stay in document order, and a rescan of the changed lines
   // is ordered too, so the two runs merge in linear time. Sorting the whole
@@ -263,7 +269,7 @@ function updateBlockMathIndex(
           kind: fence.kind,
         });
   }
-  const fences = mergeFences(surviving, scanBlockMathFencesInLines(newDoc, newWindows));
+  const fences = mergeFences(surviving, rescanned);
   return {
     fences,
     ranges: rangesFromFences(newDoc, fences, index.ranges, changes, firstChangeFrom),

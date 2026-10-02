@@ -50,7 +50,7 @@ import { MeasuredWidget } from "./extensions/visual/widgets/measured-widget.ts";
 import { shortHash } from "./extensions/visual/widgets/measured-observer.ts";
 import { StateField, type ChangeSet, type EditorState, type Text } from "@codemirror/state";
 import type { Range } from "@codemirror/state";
-import { getBlockMathRanges, mergeOverlappingRanges, rangeInsideAny, rangeOverlapsAny } from "./math-ranges.ts";
+import { blockMathRangesOverlapping, getBlockMathRanges, mergeOverlappingRanges, rangeInsideAny, rangeOverlapsAny } from "./math-ranges.ts";
 import { scanInlineMathRanges } from "../inline-math.ts";
 import { sanitizeEmbeddedHtml } from "../sanitize-html.ts";
 import { renderMarkdownHTML } from "../render-html.ts";
@@ -285,7 +285,7 @@ function collectLivePreviewTokens(
 ): LivePreviewToken[] {
   const tokens: LivePreviewToken[] = [];
   const doc = view.state.doc;
-  const blockMathRanges = getBlockMathRanges(view.state);
+  const blockMathRanges = blockMathRangesOverlapping(view.state, ranges);
   const inlineMathRanges = ranges.flatMap(({ from, to }) =>
     scanInlineMathRanges(doc.sliceString(from, to), from));
   const excludedRanges = combineRanges(blockMathRanges, inlineMathRanges);

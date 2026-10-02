@@ -91,6 +91,18 @@ describe("block math range queries", () => {
     expect(getBlockMathRanges(next)).toMatchObject([{ tex: "x" }]);
   });
 
+  test("keeps the formula index when typing below its last fence, but notices a new formula", () => {
+    const state = EditorState.create({
+      doc: "\\[\na\n\\]\ntext",
+      extensions: [blockMathRangesExtension],
+    });
+    const ranges = getBlockMathRanges(state);
+    const typed = state.update({ changes: { from: state.doc.length, insert: "!" } }).state;
+    expect(getBlockMathRanges(typed)).toBe(ranges);
+    const formula = typed.update({ changes: { from: typed.doc.length, insert: "\n\\[\nb\n\\]" } }).state;
+    expect(getBlockMathRanges(formula).map((range) => range.tex)).toEqual(["a", "b"]);
+  });
+
   test("pairs a new closing fence with an existing unmatched opener", () => {
     const state = EditorState.create({
       doc: "before\n\\[\nx\nafter",

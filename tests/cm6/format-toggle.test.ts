@@ -191,6 +191,18 @@ describe("block format toggles", () => {
 });
 
 describe("list continuation", () => {
+  it("renumbers ordered siblings after a structural insertion", () => {
+    const ed = open("1. a\n2. b\n3. c");
+    ed.view.dispatch({ changes: { from: 5, insert: "1. new\n" }, userEvent: "input.paste" });
+    expect(ed.getMarkdown()).toBe("1. a\n2. new\n3. b\n4. c");
+  });
+
+  it("still repairs a changed ordered marker inside a quote", () => {
+    const ed = open("> 1. a\n> 2. b");
+    ed.view.dispatch({ changes: { from: 9, to: 10, insert: "8" }, userEvent: "input.type" });
+    expect(ed.getMarkdown()).toBe("> 1. a\n> 2. b");
+  });
+
   it("a new item after a checked task starts unchecked", () => {
     const ed = open("- [x] done", 10);
     runEditorEnter(ed.view);
