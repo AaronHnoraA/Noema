@@ -58,6 +58,18 @@ import { renderMarkdownHTML } from "../render-html.ts";
 import { getKatexMacros } from "../katex-macros.ts";
 import { tableCellMathRanges, type TableCellCompletionDetail } from "./table-cell-assist.ts";
 import { scanEmojiShortcodes } from "../emoji-shortcodes.ts";
+import { writeSystemClipboard } from "../system-clipboard.ts";
+import {
+  clearRectCells,
+  rectCellSources,
+  rectContains,
+  rectCoversTable,
+  rectIsSingleCell,
+  removeRectStructure,
+  tableCellRect,
+  type TableCellPosition,
+  type TableCellRect,
+} from "./table-rect-selection.ts";
 import { mountVisualTexInlineEditor, normalizeVisualTexLatex, type VisualTexInlineEditor } from "./extensions/visual/widgets/visualtex-inline.ts";
 import {
   applyLayoutAttrs,
@@ -955,9 +967,10 @@ function splitTableRow(line: string): string[] {
   return cells;
 }
 
+/** GFM delimiter row: one hyphen per cell is enough (`|-|:-:|`), as in export. */
 function isTableSeparatorLine(line: string): boolean {
   const cells = splitTableRow(line);
-  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s+/g, "")));
+  return cells.length > 0 && cells.every((cell) => /^:?-+:?$/.test(cell.replace(/\s+/g, "")));
 }
 
 function isTableRowLine(line: string): boolean {
@@ -1242,6 +1255,13 @@ type TableFocusTarget = {
 
 type TableExit = "before" | "after";
 
+/** Whole-table writes a rectangular cell selection needs from its widget. */
+type TableStructureActions = {
+  aligns: () => MarkdownTableData["aligns"];
+  replace: (rows: string[][], aligns: MarkdownTableData["aligns"], focus: TableFocusTarget | null) => void;
+  remove: () => void;
+};
+
 /**
  * Put the document caret beside the table that starts at TABLE_FROM: at the
  * end of the line above, or the start of the line below. A table at either
@@ -1491,7 +1511,26 @@ class TableWidget extends MeasuredWidget {
     const rendered = renderEditableTable(data, (row, col) => {
       activeRow = row;
       activeCol = col;
-    }, commit, scheduleCommit, () => view.requestMeasure(), view, () => currentTable()?.from ?? context.widget.from, editable);
+    }, commit, scheduleCommit, () => view.requestMeasure(), view, () => currentTable()?.from ?? context.widget.from, editable, {
+      aligns: () => [...data.aligns],
+      replace: (rows, aligns, focus) => apply((next) => {
+        next.rows = rows;
+        next.aligns = aligns;
+      }, focus ?? undefined),
+      remove: () => {
+        const current = currentTable();
+        if (!current) return;
+        const doc = view.state.doc;
+        const to = current.to < doc.length && doc.sliceString(current.to, current.to + 1) === "\n" ? current.to + 1 : current.to;
+        view.dispatch({
+          changes: { from: current.from, to },
+          selection: { anchor: current.from },
+          scrollIntoView: true,
+          userEvent: "delete",
+        });
+        view.focus();
+      },
+    });
     const table = rendered.table;
     this.disposeCellEditor = rendered.dispose;
     if (editable) installTableDragHandles(table, {
@@ -1731,6 +1770,7 @@ function renderEditableTable(
   view: EditorView,
   tableFrom: () => number,
   editable = true,
+  structure: TableStructureActions | null = null,
 ): { table: HTMLTableElement; dispose: () => void } {
   const table = document.createElement("table");
   table.className = editable ? "cm-markdown-table-preview cm-markdown-table-editable" : "cm-markdown-table-preview";
@@ -1907,6 +1947,192 @@ function renderEditableTable(
     input.blur();
     return true;
   };
+  // ── Rectangular cell selection (MarkText TableRectSelection) ───────────
+  let rectAnchor: TableCellPosition | null = null;
+  let rectFocus: TableCellPosition | null = null;
+  let lastCell: TableCellPosition | null = null;
+  let drag: { origin: TableCellPosition; selecting: boolean } | null = null;
+  const RECT_CLASSES = ["cm-table-cell-selected", "cm-table-rect-top", "cm-table-rect-bottom", "cm-table-rect-left", "cm-table-rect-right"];
+  const cellElement = (pos: TableCellPosition): HTMLTableCellElement | undefined =>
+    table.rows[pos.row]?.cells[pos.col] as HTMLTableCellElement | undefined;
+  const paintRect = (): void => {
+    for (const cell of Array.from(table.querySelectorAll(".cm-table-cell-selected"))) cell.classList.remove(...RECT_CLASSES);
+    table.classList.toggle("cm-table-rect-active", Boolean(rectAnchor && rectFocus));
+    if (!rectAnchor || !rectFocus) return;
+    const rect = tableCellRect(rectAnchor, rectFocus);
+    for (let row = rect.top; row <= rect.bottom; row++) {
+      for (let col = rect.left; col <= rect.right; col++) {
+        const classes = cellElement({ row, col })?.classList;
+        if (!classes) continue;
+        classes.add("cm-table-cell-selected");
+        if (row === rect.top) classes.add("cm-table-rect-top");
+        if (row === rect.bottom) classes.add("cm-table-rect-bottom");
+        if (col === rect.left) classes.add("cm-table-rect-left");
+        if (col === rect.right) classes.add("cm-table-rect-right");
+      }
+    }
+  };
+  const clearRect = (): void => {
+    if (!rectAnchor && !rectFocus) return;
+    rectAnchor = null;
+    rectFocus = null;
+    paintRect();
+  };
+  const selectRect = (anchor: TableCellPosition, focus: TableCellPosition, focusCell = true): void => {
+    const active = document.activeElement;
+    if (active instanceof HTMLInputElement && table.contains(active)) active.blur();
+    // A click opens its cell's editor at once; a drag out of the cell closes
+    // it again, keeping whatever was typed.
+    let dirty = false;
+    for (const input of Array.from(table.querySelectorAll<HTMLInputElement>(".cm-table-cell-input"))) {
+      const cell = input.closest<HTMLTableCellElement>("td, th");
+      if (!cell) continue;
+      if (input.value !== (cell.dataset.editSource ?? "")) {
+        cell.dataset.source = input.value;
+        dirty = true;
+      }
+      completion(input, "close");
+      restorePreview(cell);
+    }
+    if (dirty) commit(null);
+    rectAnchor = anchor;
+    rectFocus = focus;
+    paintRect();
+    window.getSelection?.()?.removeAllRanges();
+    if (focusCell) cellElement(focus)?.focus({ preventScroll: true });
+  };
+  const tableRows = (): string[][] => tableRowsFromDOM(table);
+  const setCellSources = (rect: TableCellRect, value: string): void => {
+    for (let row = rect.top; row <= rect.bottom; row++) {
+      for (let col = rect.left; col <= rect.right; col++) {
+        const cell = cellElement({ row, col });
+        if (!cell || (cell.dataset.source ?? "") === value) continue;
+        cell.dataset.source = value;
+        restorePreview(cell);
+      }
+    }
+  };
+  /** First press empties the cells; on empty cells it removes the structure they span. */
+  const deleteRect = (allowStructure: boolean): void => {
+    if (!rectAnchor || !rectFocus) return;
+    const rect = tableCellRect(rectAnchor, rectFocus);
+    const rows = tableRows();
+    if (clearRectCells(rows, rect)) {
+      setCellSources(rect, "");
+      commit(null);
+      paintRect();
+      cellElement(rectFocus)?.focus({ preventScroll: true });
+      return;
+    }
+    const removal = allowStructure && structure ? removeRectStructure(rows, structure.aligns(), rect) : null;
+    clearRect();
+    if (!removal || !structure) return;
+    if (removal.kind === "table") structure.remove();
+    else {
+      const rowCount = removal.rows.length;
+      const colCount = removal.rows[0]?.length ?? 1;
+      structure.replace(removal.rows, removal.kind === "columns" ? removal.aligns as MarkdownTableData["aligns"] : structure.aligns(), {
+        row: Math.max(0, Math.min(rect.top, rowCount - 1)),
+        col: Math.max(0, Math.min(rect.left, colCount - 1)),
+      });
+    }
+  };
+  const copyRect = (): void => {
+    if (!rectAnchor || !rectFocus) return;
+    const rect = tableCellRect(rectAnchor, rectFocus);
+    const cells = rectCellSources(tableRows(), rect);
+    const aligns = (structure?.aligns() ?? []).slice(rect.left, rect.right + 1);
+    // One cell copies as its text; a rectangle as a GFM table whose first
+    // selected row becomes the header, as MarkText's copy does.
+    const text = rectIsSingleCell(rect) ? cells[0]?.[0] ?? "" : buildMarkdownTableSource({ rows: cells, aligns });
+    void writeSystemClipboard(text);
+  };
+  /** Keys over a selected rectangle; returns false to let the cell handle the key. */
+  const handleRectKey = (event: KeyboardEvent): boolean => {
+    if (!rectAnchor || !rectFocus) return false;
+    const mod = (event.metaKey || event.ctrlKey) && !event.altKey;
+    const key = event.key.toLowerCase();
+    if (event.key === "Escape") {
+      clearRect();
+    } else if ((event.key === "Backspace" || event.key === "Delete") && !mod) {
+      deleteRect(true);
+    } else if (mod && key === "a" && !event.shiftKey) {
+      const rowCount = table.rows.length;
+      if (rectCoversTable(tableCellRect(rectAnchor, rectFocus), rowCount, colCount)) {
+        // Cell → table → document, as MarkText's selectAll escalates.
+        clearRect();
+        view.focus();
+        view.dispatch({ selection: { anchor: 0, head: view.state.doc.length }, userEvent: "select" });
+      } else {
+        selectRect({ row: 0, col: 0 }, { row: rowCount - 1, col: colCount - 1 });
+      }
+    } else if (mod && key === "c" && !event.shiftKey) {
+      copyRect();
+    } else if (mod && key === "x" && !event.shiftKey) {
+      copyRect();
+      const rect = tableCellRect(rectAnchor, rectFocus);
+      if (rectCoversTable(rect, table.rows.length, colCount) && structure) {
+        clearRect();
+        structure.remove();
+      } else deleteRect(false);
+    } else if (event.shiftKey && !mod && event.key.startsWith("Arrow")) {
+      const [dr, dc] = event.key === "ArrowUp" ? [-1, 0] : event.key === "ArrowDown" ? [1, 0]
+        : event.key === "ArrowLeft" ? [0, -1] : [0, 1];
+      selectRect(rectAnchor, {
+        row: Math.max(0, Math.min(table.rows.length - 1, rectFocus.row + dr)),
+        col: Math.max(0, Math.min(colCount - 1, rectFocus.col + dc)),
+      });
+    } else {
+      clearRect();
+      return false;
+    }
+    event.preventDefault();
+    return true;
+  };
+  const cellPositionAt = (target: EventTarget | null): TableCellPosition | null => {
+    const cell = target instanceof Element ? target.closest<HTMLTableCellElement>("td, th") : null;
+    if (!cell || !table.contains(cell)) return null;
+    const row = Number(cell.dataset.row);
+    const col = Number(cell.dataset.col);
+    return Number.isFinite(row) && Number.isFinite(col) ? { row, col } : null;
+  };
+  const onDragMove = (event: MouseEvent): void => {
+    if (!drag) return;
+    if (!(event.buttons & 1)) { endDrag(); return; }
+    const pos = cellPositionAt(event.target);
+    if (!pos) return;
+    if (!drag.selecting) {
+      // Within one cell the pointer is placing a caret; leaving it selects cells.
+      if (pos.row === drag.origin.row && pos.col === drag.origin.col) return;
+      drag.selecting = true;
+      selectRect(drag.origin, pos, false);
+      return;
+    }
+    if (rectFocus && pos.row === rectFocus.row && pos.col === rectFocus.col) return;
+    rectFocus = pos;
+    paintRect();
+    window.getSelection?.()?.removeAllRanges();
+  };
+  const endDrag = (): void => {
+    const finished = drag;
+    drag = null;
+    document.removeEventListener("mousemove", onDragMove);
+    document.removeEventListener("mouseup", endDrag);
+    if (finished?.selecting && rectFocus) cellElement(rectFocus)?.focus({ preventScroll: true });
+  };
+  const startDrag = (pos: TableCellPosition): void => {
+    endDrag();
+    drag = { origin: pos, selecting: false };
+    document.addEventListener("mousemove", onDragMove);
+    document.addEventListener("mouseup", endDrag);
+  };
+  if (editable) {
+    table.addEventListener("focusout", (event) => {
+      const next = event.relatedTarget;
+      if (!(next instanceof Node) || !table.contains(next)) clearRect();
+    });
+  }
+
   const addCellEvents = (cell: HTMLTableCellElement, row: number, col: number): void => {
     if (!editable) return;
     cell.tabIndex = 0;
@@ -1933,7 +2159,10 @@ function renderEditableTable(
         cell.dataset.dirty = "true";
         if (!composing && !(event as InputEvent).isComposing) completion(input, "request");
       });
-      input.addEventListener("mousedown", (event) => event.stopPropagation());
+      input.addEventListener("mousedown", (event) => {
+        event.stopPropagation();
+        if (event.button === 0 && !event.shiftKey) startDrag({ row, col });
+      });
       input.addEventListener("mouseup", (event) => event.stopPropagation());
       input.addEventListener("click", (event) => {
         event.stopPropagation();
@@ -2033,6 +2262,14 @@ function renderEditableTable(
     };
     cell.addEventListener("mousedown", (event) => {
       event.stopPropagation();
+      if (event.button === 0 && event.shiftKey && !activeFormula) {
+        event.preventDefault();
+        selectRect(rectAnchor ?? lastCell ?? { row, col }, { row, col });
+        return;
+      }
+      clearRect();
+      lastCell = { row, col };
+      if (event.button === 0) startDrag({ row, col });
       setActiveCell(row, col);
       if (activeFormula) {
         const activeCell = activeFormula.cell;
@@ -2070,6 +2307,8 @@ function renderEditableTable(
       event.preventDefault();
       const input = openEditor(cell);
       window.setTimeout(() => {
+        // A drag that left this cell turned the click into a cell selection.
+        if (!input.isConnected || rectAnchor) return;
         input.focus();
         const end = input.value.length;
         input.setSelectionRange(end, end);
@@ -2077,6 +2316,8 @@ function renderEditableTable(
       }, 0);
     });
     cell.addEventListener("focus", () => {
+      if (rectAnchor && rectFocus && !rectContains(tableCellRect(rectAnchor, rectFocus), row, col)) clearRect();
+      lastCell = { row, col };
       setActiveCell(row, col);
     });
     cell.addEventListener("click", (event) => {
@@ -2086,6 +2327,19 @@ function renderEditableTable(
     cell.addEventListener("keydown", (event) => {
       event.stopPropagation();
       if (event.isComposing || event.keyCode === 229) return;
+      if (event.target === cell && handleRectKey(event)) return;
+      if (event.target === cell && event.shiftKey && event.key.startsWith("Arrow")
+          && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        // Shift+Arrow from a selected cell starts a rectangle.
+        event.preventDefault();
+        const step = event.key === "ArrowUp" ? [-1, 0] : event.key === "ArrowDown" ? [1, 0]
+          : event.key === "ArrowLeft" ? [0, -1] : [0, 1];
+        selectRect({ row, col }, {
+          row: Math.max(0, Math.min(table.rows.length - 1, row + step[0]!)),
+          col: Math.max(0, Math.min(colCount - 1, col + step[1]!)),
+        });
+        return;
+      }
       const historyKey = event.key.toLowerCase();
       if ((event.metaKey || event.ctrlKey) && !event.altKey
           && (historyKey === "z" || (historyKey === "y" && event.ctrlKey))) {
@@ -2144,6 +2398,7 @@ function renderEditableTable(
   });
 
   return { table, dispose: () => {
+    endDrag();
     const active = activeFormula;
     activeFormula = null;
     active?.editor.destroy();

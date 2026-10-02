@@ -5005,3 +5005,16 @@ body.has-diagram-fullscreen {
 .cm-embed-query-truncated {
   padding: 0 0.65rem 0.5rem;
 }
+
+/* Rectangular cell selection (drag, Shift-click, Shift+Arrow). The ring sits
+ * inside the cell so it never changes the table's measured height. */
+.cm-editor .cm-markdown-table-preview .cm-table-cell-selected {
+  background: var(--aaronnote-table-selection, color-mix(in srgb, var(--accent, #3b82f6) 16%, transparent));
+}
+.cm-editor .cm-markdown-table-preview .cm-table-cell-selected.cm-table-rect-top { box-shadow: inset 0 2px 0 var(--accent, #3b82f6); }
+.cm-editor .cm-markdown-table-preview .cm-table-cell-selected.cm-table-rect-bottom { box-shadow: inset 0 -2px 0 var(--accent, #3b82f6); }
+.cm-editor .cm-markdown-table-preview .cm-table-cell-selected.cm-table-rect-top.cm-table-rect-bottom {
+  box-shadow: inset 0 2px 0 var(--accent, #3b82f6), inset 0 -2px 0 var(--accent, #3b82f6);
+}
+.cm-editor .cm-markdown-table-preview.cm-table-rect-active { user-select: none; }
+.cm-editor .cm-markdown-table-preview .cm-table-cell-selected:focus { outline: none; }
