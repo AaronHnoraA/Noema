@@ -15,7 +15,7 @@ import { appendFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/pro
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import { LATEX_MARKS } from "../../shared/latex-marks.mjs";
-import { latexLogDiagnostics } from "./latex-export.mjs";
+import { latexLogDiagnostics, latexNeedsAnotherPass } from "./latex-export.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -394,20 +394,27 @@ function draftModeFlag(engine) {
 async function compileLatex({ tex, dir, latexBin, engine = "pdflatex", sourceDir, timeoutMs, signal }) {
   const texFile = join(dir, "out.tex");
   await writeFile(texFile, tex, "utf8");
+  // Each candidate needs fresh cross-reference state. Otherwise a previous
+  // draft's .aux can make a changed citation look resolved on its first pass.
+  await Promise.all(["aux", "toc", "out"].map((ext) => rm(join(dir, `out.${ext}`), { force: true })));
   // Compile inside the staging dir (so filecontents-based classes stay there),
   // but let \includegraphics / \input resolve assets next to the source note.
   const env = { ...process.env };
   if (sourceDir) env.TEXINPUTS = `${sourceDir}//:${env.TEXINPUTS || ""}`;
   try {
-    await execFileAsync(latexBin, [
+    const args = [
       "-interaction=nonstopmode",
       "-halt-on-error",
       draftModeFlag(engine),
       `-output-directory=${dir}`,
       texFile,
-    ], { cwd: dir, env, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, signal });
+    ];
     let log = "";
-    try { log = await readFile(join(dir, "out.log"), "utf8"); } catch {}
+    for (let pass = 0; pass < 3; pass += 1) {
+      await execFileAsync(latexBin, args, { cwd: dir, env, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, signal });
+      log = await readFile(join(dir, "out.log"), "utf8").catch(() => "");
+      if (!latexNeedsAnotherPass(log)) break;
+    }
     // The final export compile rejects undefined references/citations and
     // missing glyphs. Applying the same test here stops a document that can
     // never be published from first paying for a full agent session.

@@ -734,7 +734,7 @@ export function latexLogDiagnostics(log) {
 // A single LaTeX pass leaves cross-references, the table of contents, and
 // citation labels unresolved. Only rerun when the compiler says so.
 export function latexNeedsAnotherPass(log) {
-  return /Rerun to get (?:cross-references|the bibliography|outlines) right|Rerun LaTeX|Label\(s\) may have changed|No file .*\.toc/i.test(String(log || ""));
+  return /Rerun to get (?:cross-references|the bibliography|outlines) right|Rerun LaTeX|Label\(s\) may have changed|No file .*\.toc|LaTeX Warning: (?:Citation|Reference).+undefined|There were undefined (?:references|citations)/i.test(String(log || ""));
 }
 
 export async function readLatexTemplate(templatesRoot, templatePath = "") {

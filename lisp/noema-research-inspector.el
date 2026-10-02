@@ -120,10 +120,12 @@ kernel's normalized action."
          (paths (noema-research-attention--list
                  (noema-research-attention--value action "paths")))
          (argv (noema-research-attention--list
-                (noema-research-attention--value action "argv"))))
+                (noema-research-attention--value action "argv")))
+         (command (noema-research-attention--string action "command")))
     (insert (propertize (format "%s · %s" kind id) 'face 'bold) "\n")
     (when paths (insert "  paths: " (mapconcat (lambda (value) (format "%s" value)) paths ", ") "\n"))
     (when argv (insert "  command: " (mapconcat (lambda (value) (format "%s" value)) argv " ") "\n"))
+    (when command (insert "  command: " command "\n"))
     (noema-research-attention--insert-preview id)
     ;; Why the policy left this to a person, e.g. a concurrent edit.
     (when-let* ((reason (noema-research-attention--string permission "policyReason"))
@@ -214,6 +216,60 @@ kernel's normalized action."
     (truncate-string-to-width (replace-regexp-in-string "[\n\r]+" " " text)
                               240 nil nil "…")))
 
+(defun noema-research-attention--run-memory-p (proposal)
+  "Return non-nil when PROPOSAL came from an exact Run Handoff excerpt."
+  (equal (noema-research-attention--string proposal "sourceAdapter")
+         "noema-run-handoff"))
+
+(defun noema-research-attention--run-memory-review (proposal)
+  "Return a reviewed payload for run-memory PROPOSAL after human confirmation."
+  (let* ((payload (noema-research-attention--value proposal "payload"))
+         (finding (noema-research-attention--value payload "finding"))
+         (statement (noema-research-attention--string finding "statement")))
+    (unless (and (hash-table-p payload) (hash-table-p finding) (not (string-empty-p statement)))
+      (user-error "Run memory Proposal has no reviewable Finding"))
+    (unless (yes-or-no-p (format "Evidence checked for %s? " statement))
+      (user-error "Memory Proposal remains pending"))
+    (let* ((edited (copy-hash-table payload))
+           (reviewed (copy-hash-table finding))
+           (verification (copy-hash-table
+                          (noema-research-attention--value finding "verification" (make-hash-table)))))
+      (puthash "status" "supported" reviewed)
+      (puthash "level" "human_reviewed" verification)
+      (puthash "reviewers" ["human:emacs"] verification)
+      (puthash "verification" verification reviewed)
+      (puthash "finding" reviewed edited)
+      edited)))
+
+(defun noema-research-attention--show-run-memory-evidence (proposal)
+  "Open the complete Handoff artifact cited by run-memory PROPOSAL."
+  (let* ((payload (noema-research-attention--value proposal "payload"))
+         (finding (noema-research-attention--value payload "finding"))
+         (span (car (noema-research-attention--list
+                     (noema-research-attention--value finding "evidence"))))
+         (artifact-id (noema-research-attention--string span "artifactId"))
+         (root noema-research-attention--origin))
+    (unless (and root (not (string-empty-p artifact-id)))
+      (user-error "Run memory Proposal has no Handoff evidence"))
+    (my/noema-api-call
+     "aaronnote:api:research:artifact:read"
+     (vector `((root . ,root) (id . ,artifact-id)))
+     (lambda (result error-object)
+       (if error-object
+           (message "Handoff evidence unavailable: %s"
+                    (noema-research-attention--error error-object))
+         (let* ((encoded (noema-research-attention--string result "dataBase64"))
+                (content (decode-coding-string (base64-decode-string encoded) 'utf-8 t))
+                (buffer (get-buffer-create (format "*Noema Handoff: %s*" artifact-id))))
+           (with-current-buffer buffer
+             (let ((inhibit-read-only t))
+               (erase-buffer)
+               (insert content)
+               (goto-char (point-min)))
+             (special-mode))
+           (pop-to-buffer buffer))))
+     30)))
+
 (declare-function noema-research-merge-disk-outputs "noema-research-mode" ())
 
 (defun noema-research-attention--reconcile-materialized (result)
@@ -234,6 +290,10 @@ Without this, the next JuText save would overwrite the Cell Node wrote."
                      (string-trim (read-string "Rejection reason: "))
                    ""))
          (origin noema-research-attention--origin)
+         (edited (and (equal decision "accept")
+                      (not (equal (noema-research-attention--string proposal "status") "accepting"))
+                      (noema-research-attention--run-memory-p proposal)
+                      (noema-research-attention--run-memory-review proposal)))
          (buffer (current-buffer)))
     (when (and (equal decision "reject") (string-empty-p reason))
       (user-error "A rejection reason is required"))
@@ -241,7 +301,8 @@ Without this, the next JuText save would overwrite the Cell Node wrote."
      "aaronnote:api:research:proposal:review"
      (vector `((cwd . ,origin) (proposalId . ,proposal-id)
                (decision . ,decision) (expectedVersion . ,version)
-               (reviewedBy . "human:emacs") (reason . ,reason)))
+               (reviewedBy . "human:emacs") (reason . ,reason)
+               ,@(when edited `((editedPayload . ,edited)))))
      (lambda (result error-object)
        (if error-object
            (message "Noema Proposal review lost/conflicted: %s"
@@ -262,6 +323,12 @@ Without this, the next JuText save would overwrite the Cell Node wrote."
     (insert (propertize (format "%s · %s" kind id) 'face 'bold) "\n")
     (insert "  " status " · " proposed-by "\n")
     (insert "  " (noema-research-attention--proposal-summary proposal) "\n  ")
+    (when (noema-research-attention--run-memory-p proposal)
+      (insert-text-button "Handoff evidence" 'follow-link t
+                          'help-echo "Read the complete source Handoff before reviewing"
+                          'action (lambda (_button)
+                                    (noema-research-attention--show-run-memory-evidence proposal)))
+      (insert "  "))
     (insert-text-button
      (if (equal status "accepting") "Resume acceptance" "Accept")
      'follow-link t

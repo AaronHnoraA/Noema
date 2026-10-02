@@ -161,7 +161,7 @@ export class CoreTaskManager {
       Promise.resolve()
         .then(() => {
           if (task.controller.signal.aborted) throw abortError();
-          return task.run({ signal: task.controller.signal, progress: (text) => this.#progress(task, text) });
+          return task.run({ id: task.id, signal: task.controller.signal, progress: (text) => this.#progress(task, text) });
         })
         .then((result) => {
           if (task.controller.signal.aborted) throw abortError();

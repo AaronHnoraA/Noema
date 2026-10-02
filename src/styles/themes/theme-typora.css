@@ -27,7 +27,7 @@
    * LaTeX's \textfloatsep is 2em; GitHub uses ~1em. */
   --note-figure-gap-top: 0.72em;
   --note-figure-gap-bottom: 0.9em;
-  /* Diagram paper also supplies the dark theme's TikZ preview surface. */
+  /* Mermaid's default dark ink needs a light diagram canvas. */
   --note-figure-paper: #fbfaf7;
   --note-figure-paper-pad: 0.55em;
   --note-table-image-max: 180px;

@@ -52,6 +52,7 @@
 (autoload 'noema-research-graph-buffer "noema-research-graph" nil nil)
 (autoload 'noema-research-attention "noema-research-inspector" nil t)
 (autoload 'noema-research-propose-with-magent "noema-research-synthesis" nil t)
+(autoload 'noema-research-propose-memory-from-run "noema-research-synthesis" nil t)
 (autoload 'noema-research-settings "noema-research-settings" nil t)
 (autoload 'noema-capability-manager "noema-capability-ui" nil t)
 (autoload 'noema-skill-manager "noema-capability-ui" nil t)

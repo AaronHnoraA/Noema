@@ -129,6 +129,13 @@ func TestNoemaResearchRoutes(t *testing.T) {
 	if list, _ := eventData["events"].([]any); len(list) != 1 {
 		t.Fatalf("unexpected events %v", events)
 	}
+	recentEvents := call("/api/noema/research/events", map[string]any{
+		"root": root, "workstreamId": "ws_api", "latest": true, "limit": 10,
+	})
+	recentEventData, _ := recentEvents["data"].(map[string]any)
+	if list, _ := recentEventData["events"].([]any); len(list) != 1 {
+		t.Fatalf("unexpected recent workstream events %v", recentEvents)
+	}
 	location := call("/api/noema/research/cell/resolve", map[string]any{
 		"root": root, "notebookId": "nb_api", "cellId": "c-q",
 	})

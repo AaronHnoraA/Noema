@@ -495,6 +495,40 @@ history, and goes away on its own once idle and hidden."
         (noema-agent-acp-show-buffer (plist-get local :buffer))
       (noema-sessions--visit-entry (noema-sessions--durable name) noema-sessions--root))))
 
+(defun noema-sessions-conversation-tree ()
+  "Open the conversation tree for the session on this line.
+Resume a recorded conversation first when its agent buffer is closed."
+  (interactive)
+  (let* ((name (noema-sessions--name-at-point))
+         (local (noema-sessions--local name))
+         (buffer (if local
+                     (plist-get local :buffer)
+                   (noema-sessions--entry-buffer
+                    (noema-sessions--durable name) noema-sessions--root))))
+    (if (noema-agent-acp-state-value buffer '(:session :id))
+        (noema-agent-acp-conversation-tree buffer)
+      (let (subscription opened)
+        (cl-labels ((open-tree ()
+                      (unless opened
+                        (setq opened t)
+                        (noema-agent-acp-unsubscribe
+                         :buffer buffer :subscription subscription)
+                        (when (buffer-live-p buffer)
+                          (condition-case err
+                              (noema-agent-acp-conversation-tree buffer)
+                            (error (message "Noema conversation tree: %s"
+                                            (error-message-string err))))))))
+          (setq subscription
+                (noema-agent-acp-subscribe
+                 :buffer buffer :event 'init-finished
+                 :callback (lambda (_event) (open-tree))))
+          ;; Initialization can finish between the first state check and
+          ;; subscription.  Check once more so the tree never waits forever.
+          (when (noema-agent-acp-state-value buffer '(:session :id))
+            (open-tree))
+          (unless opened
+            (message "Opening %s's conversation tree after the agent connects" name)))))))
+
 (defun noema-sessions--project-jutext-buffers (root)
   "Return live JuText buffers of files under ROOT."
   (seq-filter (lambda (buffer)
@@ -765,6 +799,7 @@ most likely fail the same way."
     (define-key map (kbd "c") #'noema-sessions-compact)
     (define-key map (kbd "u") #'noema-sessions-mark-read)
     (define-key map (kbd "s") #'noema-sessions-side-chat)
+    (define-key map (kbd "T") #'noema-sessions-conversation-tree)
     (define-key map (kbd "R") #'noema-sessions-retry)
     (define-key map (kbd "!") #'noema-sessions-next-attention)
     map)
@@ -795,6 +830,7 @@ RET switch to (or resume) the session's buffer   r rename   F fork
 a archive/restore   k kill buffer   i pin into the source work block
 j jump to latest work block   t file/project scope   c compact context
 u mark read   ! next session needing attention   s side chat beside it
+T native conversation tree for this session
 R rerun the work block of a failed latest Run
 P Pi   g refresh
 
@@ -852,8 +888,9 @@ first; a context send must never revive a recorded conversation."
    (if live-only
        (let* ((sessions (seq-filter
                          (lambda (session)
-                           (noema-sessions--execution-live-p
-                            (plist-get session :buffer)))
+                           (and (not (noema-agent-acp-export-session-p session))
+                                (noema-sessions--execution-live-p
+                                 (plist-get session :buffer))))
                          (noema-agent-acp-sessions)))
               (local (seq-filter (lambda (session)
                                    (equal (plist-get session :root) root))

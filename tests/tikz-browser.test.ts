@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
 
 import {
   inlineTikzFigures,
+  prepareTikzSvg,
   renderTikzBrowser,
   setTikzRendererForTests,
 } from "../src/tikz-browser.ts";
@@ -9,6 +10,38 @@ import {
 const SVG = '<svg viewBox="0 0 40 20"><path stroke="black" d="M0 0L40 20"/></svg>';
 
 describe("browser TikZ rendering", () => {
+  test("keeps authored colours in the SVG and adds readable dark variants", () => {
+    const host = document.createElement("div");
+    host.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg">
+      <text fill="#000099">label</text>
+      <path data-source-id="node:1" stroke="black" fill="#d9d9ff" />
+      <text data-source-id="node:1" fill="#000000">x</text>
+      <text data-source-id="node:1" fill="#000099">blue x</text>
+      <svg color="#000099"><path fill="currentColor" /></svg>
+    </svg>`;
+    const svg = host.querySelector("svg")!;
+    prepareTikzSvg(svg);
+
+    const label = svg.querySelector("text")!;
+    const darkBlue = label.style.getPropertyValue("--note-tikz-dark-fill");
+    expect(label.getAttribute("fill")).toBe("#000099");
+    expect(label.hasAttribute("data-noema-tikz-dark-fill")).toBe(true);
+    expect(darkBlue).toMatch(/^#[0-9a-f]{6}$/);
+    const rgb = darkBlue.slice(1).match(/../g)!.map((part) => parseInt(part, 16));
+    const linear = (value: number) => {
+      const normalized = value / 255;
+      return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+    };
+    const luminance = (channels: number[]) =>
+      0.2126 * linear(channels[0]) + 0.7152 * linear(channels[1]) + 0.0722 * linear(channels[2]);
+    expect((luminance(rgb) + 0.05) / (luminance([20, 26, 39]) + 0.05)).toBeGreaterThanOrEqual(5.45);
+    expect(svg.querySelector("path")?.hasAttribute("data-noema-tikz-dark-fill")).toBe(false);
+    expect(svg.querySelector("path")?.hasAttribute("data-noema-tikz-dark-stroke")).toBe(false);
+    expect(svg.querySelector('text[data-source-id="node:1"]')?.hasAttribute("data-noema-tikz-on-light")).toBe(true);
+    expect(svg.querySelectorAll('text[data-source-id="node:1"]')[1]?.hasAttribute("data-noema-tikz-dark-fill")).toBe(false);
+    expect(svg.querySelector("svg")?.hasAttribute("data-noema-tikz-dark-color")).toBe(true);
+  });
+
   test("hydrates a figure only when it first approaches the viewport", async () => {
     let onEntries: ((entries: IntersectionObserverEntry[]) => void) | undefined;
     vi.stubGlobal("IntersectionObserver", class {
@@ -104,6 +137,18 @@ describe("browser TikZ rendering", () => {
       expect(html).toContain('class="aaronnote-tikz-image"');
       expect(html).not.toContain('data-source=');
       expect(html).not.toContain('tikz-*.svg');
+    } finally {
+      setTikzRendererForTests(null);
+    }
+  });
+
+  test("standalone TikZ carries the dark colour variant without changing its authored fill", async () => {
+    setTikzRendererForTests(async () => '<svg viewBox="0 0 40 20"><text fill="#000099">label</text></svg>');
+    try {
+      const html = await inlineTikzFigures('<html><body><noema-tikz data-source="\\node {label};"></noema-tikz></body></html>');
+      expect(html).toContain('fill="#000099"');
+      expect(html).toContain("data-noema-tikz-dark-fill");
+      expect(html).toContain("--note-tikz-dark-fill:");
     } finally {
       setTikzRendererForTests(null);
     }

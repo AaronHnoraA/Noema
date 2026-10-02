@@ -131,6 +131,53 @@ func TestProposalFindingReviewValidatesEvidenceAndDeduplicates(t *testing.T) {
 	}
 }
 
+func TestReviewedRunHandoffPromotesProvisionalFinding(t *testing.T) {
+	store, _, artifact := setupSynthesisTest(t)
+	provisionalInput := findingProposalInput("proposal-provisional", artifact)
+	provisional := mapValue(provisionalInput.Payload["finding"])
+	provisional["status"] = "proposed"
+	provisional["verification"] = map[string]any{"level": "unreviewed"}
+	first, err := store.CreateProposal(provisionalInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstReview, err := store.ReviewProposal(ReviewProposalInput{
+		ProposalID: first.ID, Decision: "accept", ExpectedVersion: 1, ReviewedBy: "human:test",
+	})
+	if err != nil || firstReview.Finding == nil || firstReview.Finding.Status != "proposed" {
+		t.Fatalf("initial Finding must remain provisional: %+v (%v)", firstReview, err)
+	}
+
+	runInput := findingProposalInput("proposal-reviewed-handoff", artifact)
+	runInput.SourceAdapter = "noema-run-handoff"
+	runFinding := mapValue(runInput.Payload["finding"])
+	runFinding["status"] = "proposed"
+	runFinding["verification"] = map[string]any{"level": "unreviewed"}
+	runProposal, err := store.CreateProposal(runInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewedPayload := cloneMap(runInput.Payload)
+	reviewedFinding := mapValue(reviewedPayload["finding"])
+	reviewedFinding["status"] = "supported"
+	reviewedFinding["verification"] = map[string]any{"level": "human_reviewed", "reviewers": []any{"human:test"}}
+	result, err := store.ReviewProposal(ReviewProposalInput{
+		ProposalID: runProposal.ID, Decision: "accept", ExpectedVersion: 1,
+		ReviewedBy: "human:test", EditedPayload: reviewedPayload,
+	})
+	if err != nil || !result.Deduplicated || result.Finding == nil {
+		t.Fatalf("reviewed Handoff must deduplicate the provisional Finding: %+v (%v)", result, err)
+	}
+	if result.Finding.ID != firstReview.Finding.ID || result.Finding.Version != 2 ||
+		result.Finding.Status != "supported" || result.Finding.VerificationLevel != "human_reviewed" {
+		t.Fatalf("human review must promote the existing Finding: %+v", result.Finding)
+	}
+	stored, err := store.GetFinding(result.Finding.ID)
+	if err != nil || stored.Status != "supported" || stored.VerificationLevel != "human_reviewed" {
+		t.Fatalf("promotion must be durable: %+v (%v)", stored, err)
+	}
+}
+
 func TestProposalRejectRequiresReasonAndPreservesOriginal(t *testing.T) {
 	store, _, _ := setupSynthesisTest(t)
 	proposal, err := store.CreateProposal(CreateProposalInput{

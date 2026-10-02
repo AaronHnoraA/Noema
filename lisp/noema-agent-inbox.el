@@ -23,7 +23,15 @@
 (defvar-local noema-agent-inbox--pending nil)
 (defvar-local noema-agent-inbox--generation 0)
 (defvar-local noema-agent-inbox--actions nil)
+(defvar-local noema-agent-inbox--refresh-timer nil)
+(defvar-local noema-agent-inbox--needs-host-refresh nil)
+(defvar-local noema-agent-inbox--dirty-roots nil)
+(defvar-local noema-agent-inbox--request-serials nil)
 (defvar noema-agent-inbox--serial 0)
+
+(defconst noema-agent-inbox--buffer-name "*Noema Agents*")
+(defconst noema-agent-inbox--refresh-delay 0.4
+  "Seconds to combine bursts of agent events into one Inbox update.")
 
 (defconst noema-agent-inbox--skip-directories
   '(".git" ".noema" ".agent" "node_modules" "vendor" "dist" "build")
@@ -180,37 +188,143 @@ not descend into Noema's disposable worktrees or generated directories."
                (when (plist-get response :error) (cl-incf errors)))
              noema-agent-inbox--results)
     (setq header-line-format
-          (format "Noema agents · %d Projects · %d Sessions · %d loading · %d errors  |  RET open  j WorkNode  p Project  s Sessions  g refresh  G rescan"
+          (format "Noema agents · %d Projects · %d Sessions · %d loading · %d errors  |  RET open  ! next alert  u read  j WorkNode  p Project  s Sessions  g refresh  G rescan"
                   (length noema-agent-inbox--roots) (- (length rows) errors)
                   (length noema-agent-inbox--pending) errors))
     (tabulated-list-print t)))
 
 (defun noema-agent-inbox--request (buffer generation root)
   "Fetch ROOT's named sessions for BUFFER at GENERATION."
-  (noema-sessions--api
-   "aaronnote:api:research:session:names" `((root . ,root))
-   (lambda (result error-object)
-     (when (and (buffer-live-p buffer)
-                (= generation (buffer-local-value 'noema-agent-inbox--generation buffer)))
-       (with-current-buffer buffer
-         (puthash root (if error-object (list :error error-object) result)
-                  noema-agent-inbox--results)
-         (setq noema-agent-inbox--pending (delete root noema-agent-inbox--pending))
-         (noema-agent-inbox--render))))))
+  (let ((serial (cl-incf noema-agent-inbox--serial)))
+    (puthash root serial noema-agent-inbox--request-serials)
+    (noema-sessions--api
+     "aaronnote:api:research:session:names" `((root . ,root))
+     (lambda (result error-object)
+       (when (and (buffer-live-p buffer)
+                  (= generation (buffer-local-value 'noema-agent-inbox--generation buffer)))
+         (with-current-buffer buffer
+           (when (equal serial (gethash root noema-agent-inbox--request-serials))
+             (puthash root (if error-object (list :error error-object) result)
+                      noema-agent-inbox--results)
+             (setq noema-agent-inbox--pending
+                   (delete root noema-agent-inbox--pending))
+             (noema-agent-inbox--render))))))))
 
 (defun noema-agent-inbox-refresh (&optional rescan)
   "Refresh the global inbox.  With RESCAN, discover Project roots again."
   (interactive "P")
+  (when (timerp noema-agent-inbox--refresh-timer)
+    (cancel-timer noema-agent-inbox--refresh-timer))
+  (setq noema-agent-inbox--refresh-timer nil
+        noema-agent-inbox--needs-host-refresh nil
+        noema-agent-inbox--dirty-roots nil)
   (when (or rescan (null noema-agent-inbox--roots))
     (setq noema-agent-inbox--roots (noema-agent-inbox--known-roots)))
   (setq noema-agent-inbox--generation (cl-incf noema-agent-inbox--serial)
         noema-agent-inbox--results (make-hash-table :test #'equal)
+        noema-agent-inbox--request-serials (make-hash-table :test #'equal)
         noema-agent-inbox--pending (copy-sequence noema-agent-inbox--roots))
   (noema-agent-inbox--render)
   (let ((buffer (current-buffer))
         (generation noema-agent-inbox--generation))
     (dolist (root noema-agent-inbox--roots)
       (noema-agent-inbox--request buffer generation root))))
+
+(defun noema-agent-inbox--refresh-roots (roots)
+  "Fetch only ROOTS, preserving cached rows from other Projects."
+  (let ((buffer (current-buffer))
+        (generation noema-agent-inbox--generation))
+    (dolist (root roots)
+      (cl-pushnew root noema-agent-inbox--pending :test #'equal))
+    (noema-agent-inbox--render)
+    (dolist (root roots)
+      (noema-agent-inbox--request buffer generation root))))
+
+(defun noema-agent-inbox--visible-window (buffer)
+  "Return a visible window displaying BUFFER."
+  (get-buffer-window buffer 'visible))
+
+(defun noema-agent-inbox--unsubscribe ()
+  "Stop listening while the Inbox is hidden or closed."
+  (remove-hook 'noema-agent-acp-changed-functions
+               #'noema-agent-inbox--session-changed)
+  (remove-hook 'noema-agent-worker-run-finished-functions
+               #'noema-agent-inbox--worker-changed)
+  (remove-hook 'noema-agent-worker-attention-changed-functions
+               #'noema-agent-inbox--worker-changed))
+
+(defun noema-agent-inbox--subscribe ()
+  "Listen for changes to live agents and recorded Runs."
+  (add-hook 'noema-agent-acp-changed-functions
+            #'noema-agent-inbox--session-changed)
+  (add-hook 'noema-agent-worker-run-finished-functions
+            #'noema-agent-inbox--worker-changed)
+  (add-hook 'noema-agent-worker-attention-changed-functions
+            #'noema-agent-inbox--worker-changed))
+
+(defun noema-agent-inbox--queue-update (host-refresh &optional root)
+  "Schedule an Inbox update for ROOT, or all Projects if HOST-REFRESH."
+  (when-let* ((buffer (get-buffer noema-agent-inbox--buffer-name)))
+    (with-current-buffer buffer
+      (when (and root (hash-table-p noema-agent-inbox--results))
+        (unless (member root noema-agent-inbox--roots)
+          (setq noema-agent-inbox--roots
+                (sort (cons root noema-agent-inbox--roots) #'string-lessp)))
+        (cl-pushnew root noema-agent-inbox--dirty-roots :test #'equal))
+      (if (not (noema-agent-inbox--visible-window buffer))
+          (noema-agent-inbox--unsubscribe)
+        (setq noema-agent-inbox--needs-host-refresh
+              (or host-refresh (null noema-agent-inbox--results)
+                  noema-agent-inbox--needs-host-refresh))
+        (unless (timerp noema-agent-inbox--refresh-timer)
+          (setq noema-agent-inbox--refresh-timer
+                (run-with-timer noema-agent-inbox--refresh-delay nil
+                                #'noema-agent-inbox--timer-fire buffer)))))))
+
+(defun noema-agent-inbox--session-changed (_buffer)
+  "Update live agent state without querying the host."
+  (noema-agent-inbox--queue-update nil))
+
+(defun noema-agent-inbox--worker-changed (worker &rest _event)
+  "Refresh WORKER's Project after a Run or attention event."
+  (let* ((path (and (fboundp 'noema-agent-worker-p)
+                    (noema-agent-worker-p worker)
+                    (noema-agent-worker-root worker)))
+         (root (and path (noema-agent-inbox--project-root path))))
+    (noema-agent-inbox--queue-update (not root) root)))
+
+(defun noema-agent-inbox--timer-fire (buffer)
+  "Update visible Inbox BUFFER after combining recent agent events."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq noema-agent-inbox--refresh-timer nil)
+      (if-let* ((window (noema-agent-inbox--visible-window buffer)))
+          (let ((host-refresh noema-agent-inbox--needs-host-refresh)
+                (roots (nreverse noema-agent-inbox--dirty-roots)))
+            (setq noema-agent-inbox--needs-host-refresh nil
+                  noema-agent-inbox--dirty-roots nil)
+            (with-selected-window window
+              (cond (host-refresh (noema-agent-inbox-refresh
+                                   (null noema-agent-inbox--results)))
+                    (roots (noema-agent-inbox--refresh-roots roots))
+                    (t (noema-agent-inbox--render)))))
+        (noema-agent-inbox--unsubscribe)))))
+
+(defun noema-agent-inbox--shown (_window)
+  "Catch up on agent and host changes when the Inbox becomes visible."
+  (when (and (noema-agent-inbox--visible-window (current-buffer))
+             (not (memq #'noema-agent-inbox--session-changed
+                        noema-agent-acp-changed-functions)))
+    (noema-agent-inbox--subscribe)
+    (noema-agent-inbox--queue-update t)))
+
+(defun noema-agent-inbox--teardown ()
+  "Cancel a pending Inbox update and detach global listeners."
+  (when (timerp noema-agent-inbox--refresh-timer)
+    (cancel-timer noema-agent-inbox--refresh-timer))
+  (setq noema-agent-inbox--refresh-timer nil)
+  (setq noema-agent-inbox--dirty-roots nil)
+  (noema-agent-inbox--unsubscribe))
 
 (defun noema-agent-inbox--selected ()
   "Return the selected row action, or signal when point is off a row."
@@ -230,6 +344,41 @@ not descend into Noema's disposable worktrees or generated directories."
                  (plist-get row :session-id)))
       ('error (user-error "Project session query failed: %s"
                           (noema-sessions--error (plist-get row :error)))))))
+
+(defun noema-agent-inbox-next-attention ()
+  "Move to the next Session needing attention, wrapping across Projects."
+  (interactive)
+  (let ((origin (line-beginning-position)) positions)
+    (save-excursion
+      (goto-char (point-min))
+      (while (not (eobp))
+        (let ((row (and (hash-table-p noema-agent-inbox--actions)
+                        (gethash (tabulated-list-get-id) noema-agent-inbox--actions))))
+          (when (and (eq (plist-get row :kind) 'durable)
+                     (not (string-empty-p
+                           (noema-sessions--attention (plist-get row :entry)))))
+            (push (line-beginning-position) positions)))
+        (forward-line 1)))
+    (setq positions (nreverse positions))
+    (if-let* ((next (or (seq-find (lambda (position) (> position origin)) positions)
+                        (car positions))))
+        (goto-char next)
+      (message "No agent session needs attention"))))
+
+(defun noema-agent-inbox-mark-read ()
+  "Mark the selected durable Session read, keeping failures actionable."
+  (interactive)
+  (let* ((row (noema-agent-inbox--selected))
+         (root (plist-get row :root))
+         (buffer (current-buffer)))
+    (unless (eq (plist-get row :kind) 'durable)
+      (user-error "Only a recorded Noema Session can be marked read"))
+    (noema-sessions--mark-read
+     root (plist-get row :name)
+     (lambda (ok)
+       (when (and ok (buffer-live-p buffer))
+         (with-current-buffer buffer
+           (noema-agent-inbox--queue-update nil root)))))))
 
 (defun noema-agent-inbox-project ()
   "Open the selected session's Project overview."
@@ -263,6 +412,8 @@ not descend into Noema's disposable worktrees or generated directories."
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map tabulated-list-mode-map)
     (define-key map (kbd "RET") #'noema-agent-inbox-visit)
+    (define-key map (kbd "!") #'noema-agent-inbox-next-attention)
+    (define-key map (kbd "u") #'noema-agent-inbox-mark-read)
     (define-key map (kbd "j") #'noema-agent-inbox-jump)
     (define-key map (kbd "p") #'noema-agent-inbox-project)
     (define-key map (kbd "s") #'noema-agent-inbox-sessions)
@@ -272,7 +423,8 @@ not descend into Noema's disposable worktrees or generated directories."
 
 (define-derived-mode noema-agent-inbox-mode tabulated-list-mode "Noema-Agents"
   "Browse agent sessions across known Noema Projects.
-RET opens a conversation, j visits its latest work block,
+RET opens a conversation, ! moves to the next alert, u marks it read,
+j visits its latest work block,
 p opens its Project, s opens its Session list.
 g refreshes status; G rescans the note root and Emacs' known projects."
   (setq tabulated-list-format
@@ -280,17 +432,20 @@ g refreshes status; G rescans the note root and Emacs' known projects."
          ("Session" 26 t) ("Agent" 12 t) ("State" 12 t)
          ("Last Run" 32 t)])
   (setq-local revert-buffer-function (lambda (&rest _) (noema-agent-inbox-refresh)))
+  (add-hook 'window-buffer-change-functions #'noema-agent-inbox--shown nil t)
+  (add-hook 'kill-buffer-hook #'noema-agent-inbox--teardown nil t)
   (tabulated-list-init-header))
 
 ;;;###autoload
 (defun noema-agent-inbox ()
   "Open the Emacs-native agent inbox for known Noema Projects."
   (interactive)
-  (let ((buffer (get-buffer-create "*Noema Agents*")))
+  (let ((buffer (get-buffer-create noema-agent-inbox--buffer-name)))
     (with-current-buffer buffer
       (unless (derived-mode-p 'noema-agent-inbox-mode)
         (noema-agent-inbox-mode))
-      (setq default-directory (or (noema-agent-inbox--note-root) default-directory)))
+      (setq default-directory (or (noema-agent-inbox--note-root) default-directory))
+      (noema-agent-inbox--subscribe))
     (pop-to-buffer buffer)
     (noema-sessions--ensure-host
      (lambda ()

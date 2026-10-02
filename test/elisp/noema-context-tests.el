@@ -229,12 +229,18 @@ SPEC is a list of (NAME . CONTENT) files created in it and bound to
   "Recorded sessions and dead ACP buffers never appear in context sends."
   (let ((local (generate-new-buffer " *context-local*"))
         (other (generate-new-buffer " *context-other*"))
-        (dead (generate-new-buffer " *context-dead*")))
+        (dead (generate-new-buffer " *context-dead*"))
+        (export (generate-new-buffer " *context-latex-export*"))
+        (legacy-export (generate-new-buffer " *context-legacy-export*")))
     (unwind-protect
         (let ((sessions (list (list :buffer other :name "other" :agent "claude"
                                     :root "/other/")
                               (list :buffer dead :name "old" :agent "codex"
                                     :root "/project/")
+                              (list :buffer export :name "latex" :agent "claude"
+                                    :origin 'latex-export :root "/project/")
+                              (list :buffer legacy-export :name "old-latex" :agent "claude"
+                                    :origin 'side :root "/tmp/latex-export--note-123/")
                               (list :buffer local :name "current" :agent "codex"
                                     :root "/project/"))))
           (cl-letf (((symbol-function 'noema-agent-acp-sessions)
@@ -250,7 +256,7 @@ SPEC is a list of (NAME . CONTENT) files created in it and bound to
               (should-not (seq-some (lambda (choice)
                                       (string-match-p "old" (car choice)))
                                     choices)))))
-      (mapc #'kill-buffer (list local other dead)))))
+      (mapc #'kill-buffer (list local other dead export legacy-export)))))
 
 (ert-deftest noema-sessions-native-resume-keeps-the-recorded-name ()
   "A session chosen from official history reuses its Noema name."

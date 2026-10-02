@@ -290,6 +290,36 @@ describe("latex-export-codex helpers", () => {
     expect(result).toMatchObject({ usedAgent: false, compiled: true, attempts: 0, body: "Clean answer.\n" });
   });
 
+  test("resolves first-pass bibliography warnings before validating the draft", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aaronnote-citation-passes-"));
+    roots.push(root);
+    const workdir = join(root, "work");
+    await mkdir(workdir);
+    const compiler = join(root, "two-pass-latex.sh");
+    await writeFile(compiler, [
+      "#!/bin/sh",
+      "if [ ! -f .first-pass-complete ]; then",
+      "  touch .first-pass-complete",
+      "  printf '%s\\n' 'LaTeX Warning: Citation A on page 1 undefined' 'LaTeX Warning: There were undefined references.' > out.log",
+      "else",
+      "  printf '%s\\n' 'References resolved.' > out.log",
+      "fi",
+      "exit 0",
+    ].join("\n"), "utf8");
+    await chmod(compiler, 0o755);
+    const result = await polishBodyWithAgent({
+      sourceMarkdown: "See @@cite(refs) [A].",
+      draftBody: "See \\cite{A}.\\begin{thebibliography}{9}\\bibitem{A} Example.\\end{thebibliography}",
+      templateText: "{{body}}",
+      assemble: (body: string) => body,
+      latexBin: compiler,
+      agentBin: "/usr/bin/true",
+      makeWorkdir: async () => workdir,
+      polishVerifiedDraft: false,
+    });
+    expect(result).toMatchObject({ compiled: true, attempts: 0 });
+  });
+
   test("does not invoke the Agent for a non-fatal layout warning unless polish is enabled", async () => {
     const root = await mkdtemp(join(tmpdir(), "aaronnote-layout-warning-"));
     roots.push(root);

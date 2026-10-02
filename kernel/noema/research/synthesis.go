@@ -776,6 +776,18 @@ func (s *Store) createFindingFromProposalTx(tx *sql.Tx, proposal Proposal, paylo
 			CreatedAt: formatMillis(nowMs), Version: 1, Evidence: []FindingEvidence{}, Relations: []FindingRelation{}}
 	} else {
 		deduplicated = true
+		// A reviewed Handoff excerpt can confirm an earlier provisional Finding
+		// with the same semantic identity. Never revive disputed, refuted or
+		// superseded Findings through this path.
+		if proposal.SourceAdapter == "noema-run-handoff" && spec.Status == "supported" &&
+			level == "human_reviewed" && finding.Status == "proposed" {
+			if _, err := tx.Exec(`UPDATE findings SET status = ?, verification_level = ?, verification_json = ? WHERE id = ?`,
+				spec.Status, level, string(verificationJSON), finding.ID); err != nil {
+				return Finding{}, false, err
+			}
+			finding.Status, finding.VerificationLevel, finding.Verification = spec.Status, level, spec.Verification
+			aggregateChanged = true
+		}
 		if finding.Disclosure != "local_only" && spec.Disclosure == "local_only" {
 			if _, err := tx.Exec(`UPDATE findings SET disclosure = 'local_only' WHERE id = ?`, finding.ID); err != nil {
 				return Finding{}, false, err

@@ -78,11 +78,13 @@ describe("Core task manager", () => {
   test("reruns an opted-in terminal task with a fresh task and controller", async () => {
     const manager = new CoreTaskManager({ maxConcurrent: 1 });
     let runs = 0;
+    const seenIds: string[] = [];
     const first = manager.start({
       kind: "latex-export",
       title: "Retry export",
       restartable: true,
-      run: () => {
+      run: ({ id }: { id: string }) => {
+        seenIds.push(id);
         runs += 1;
         if (runs === 1) throw new Error("first export failed");
         return { ok: true };
@@ -96,5 +98,6 @@ describe("Core task manager", () => {
     await turn();
     expect(manager.get(retry.task.id)).toMatchObject({ status: "completed", retryable: true });
     expect(runs).toBe(2);
+    expect(seenIds).toEqual([first.id, retry.task.id]);
   });
 });

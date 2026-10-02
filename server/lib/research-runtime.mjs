@@ -39,6 +39,7 @@ import {
   validateResearchNotebook,
 } from "./research-notebook.mjs";
 import { findResearchProjectRoot, readProjectLayout } from "./research-project.mjs";
+import { selectRunMemory } from "./research-memory.mjs";
 
 export { findResearchProjectRoot };
 
@@ -621,10 +622,18 @@ async function resolveContextItems({ root, notebook, sourceCell, declared, provi
     const output = latestOutputForWork(notebook, workId);
     if (!output) throw researchError(`No work output exists for ${ref}`, 404, "ERR_RESEARCH_CONTEXT");
     checkDisclosure(output.cell, notebook);
+    // A non-completed Run can leave useful partial output on the Work
+    // cell. Keep it available, but never present it as a completed result.
+    const status = output.status || "unknown";
+    const bytes = status === "completed" ? output.text
+      : "# Noema upstream Run output (" + status + ")\n\n"
+        + "Source Run: " + (output.runId || "unknown")
+        + ". This is partial or unverified output; check the upstream Run before treating it as a completed result.\n\n"
+        + output.text;
     return asContextItem({
       ref,
       resolvedUri: `noema://work-output/${encodeURIComponent(notebookId)}/${encodeURIComponent(researchWorkNodeId(notebook, workId) || workId)}${output.runId ? `/${encodeURIComponent(output.runId)}` : ""}`,
-      bytes: output.text,
+      bytes,
       mediaType: "text/markdown; charset=utf-8",
     });
   };
@@ -759,12 +768,20 @@ async function latestParentHandoff(provider, root, sessionId, workNodeId = "") {
     : values(sessionRuns);
   const handoffItem = async (run, artifactId) => {
     const stored = await provider.readArtifact({ root, id: artifactId });
+    const status = valueString(run.status) || "unknown";
+    const content = Buffer.from(valueString(stored.dataBase64), "base64");
+    const bytes = status === "completed" ? content : Buffer.concat([
+      Buffer.from("# Noema upstream Handoff (" + status + ")\n\n"
+        + "Source Run: " + run.id
+        + ". This Handoff came from an incomplete or unverified Run; check its outcome before relying on it.\n\n"),
+      content,
+    ]);
     return {
       run,
       item: asContextItem({
         ref: `handoff:${run.id}`,
         resolvedUri: `noema://artifact/${encodeURIComponent(artifactId)}`,
-        bytes: Buffer.from(valueString(stored.dataBase64), "base64"),
+        bytes,
         mediaType: valueString(stored.artifact?.mediaType) || "text/markdown; charset=utf-8",
       }),
     };
@@ -785,16 +802,7 @@ async function latestParentHandoff(provider, root, sessionId, workNodeId = "") {
       for (let index = events.length - 1; index >= 0; index -= 1) {
         const artifactId = valueString(events[index]?.payload?.handoff_artifact_id);
         if (!artifactId) continue;
-        const stored = await provider.readArtifact({ root, id: artifactId });
-        return {
-          run,
-          item: asContextItem({
-            ref: `handoff:${run.id}`,
-            resolvedUri: `noema://artifact/${encodeURIComponent(artifactId)}`,
-            bytes: Buffer.from(valueString(stored.dataBase64), "base64"),
-            mediaType: valueString(stored.artifact?.mediaType) || "text/markdown; charset=utf-8",
-          }),
-        };
+        return handoffItem(run, artifactId);
       }
       const next = Number(live.seq) || after;
       if (events.length < 1000 || next <= after) break;
@@ -1806,8 +1814,28 @@ export function createResearchRuntimeService({
       const resolvedSkills = resolvedSkillsForRun(capabilityEnvironment);
       const resolvedPacks = resolvedPacksForRun(capabilityEnvironment);
       candidateContext.push(...resolvedPacks.items, ...resolvedSkills.items);
+      let memoryUnavailable = false;
+      if (automaticContext && source.workstreamId && typeof runtimeProvider.findings === "function") {
+        try {
+          const findings = await runtimeProvider.findings({
+            root, workstreamId: source.workstreamId, limit: 1000, includeLocal: false,
+          });
+          for (const memory of selectRunMemory(findings, source.prompt, source.workstreamId)) {
+            candidateContext.push({ ...asContextItem({
+              ref: `finding:${memory.id}`,
+              resolvedUri: `noema://finding/${encodeURIComponent(memory.id)}/${memory.version}`,
+              bytes: memory.content,
+              mediaType: "text/plain; charset=utf-8",
+            }), auto: true });
+          }
+        } catch {
+          // Recall is advisory. A temporary index failure must not prevent a Run.
+          memoryUnavailable = true;
+        }
+      }
       const automaticContextRefs = new Set(candidateContext.filter((item) => item.auto).map((item) => item.ref));
       const { items: contextItems, omitted: omittedContext } = fitAutomaticContext(candidateContext);
+      if (memoryUnavailable) omittedContext.push({ ref: "finding:*", reason: "memory index unavailable", bytes: 0 });
       const capabilities = normalizeCapabilities(source.executor.capabilities, body.capabilities);
       assertCapabilityEnvelope(route.agent, capabilities, body, source.executor);
       const externalSandbox = Boolean(body.externalSandbox ?? body.external_sandbox ?? source.executor.external_sandbox);
@@ -2526,6 +2554,46 @@ export function createResearchRuntimeService({
       return { root, proposal };
     },
 
+    async proposeRunMemory(body = {}) {
+      const root = await rootFor(body);
+      const runId = valueString(body.runId || body.run_id);
+      const statement = valueString(body.statement);
+      const kind = valueString(body.kind);
+      const disclosure = valueString(body.disclosure) || "local_only";
+      if (!runId || !["decision", "lesson"].includes(kind) || !statement
+          || Buffer.byteLength(statement) > 2000 || !["project", "local_only"].includes(disclosure)) {
+        throw researchError("A completed Run, decision or lesson, bounded statement and disclosure are required", 422, "ERR_RESEARCH_MEMORY");
+      }
+      const run = object(await provider().run({ root, id: runId }));
+      if (valueString(run.id) !== runId || valueString(run.status) !== "completed" || !valueString(run.workstreamId)) {
+        throw researchError("Memory candidates require a completed Run in this project", 422, "ERR_RESEARCH_MEMORY");
+      }
+      const artifactId = valueString((await provider().runHandoff({ root, id: runId }))?.handoffArtifactId);
+      if (!artifactId) {
+        throw researchError("The completed Run has no Handoff artifact to cite", 422, "ERR_RESEARCH_MEMORY");
+      }
+      const stored = object(await provider().readArtifact({ root, id: artifactId }));
+      const bytes = Buffer.from(valueString(stored.dataBase64), "base64");
+      const excerpt = Buffer.from(statement);
+      const byteStart = bytes.indexOf(excerpt);
+      if (byteStart < 0) {
+        throw researchError("The statement must be an exact excerpt from the Run Handoff", 422, "ERR_RESEARCH_MEMORY");
+      }
+      const payload = { finding: {
+        kind, statement, status: "proposed", verification: { level: "unreviewed" },
+        scope: { workstreamId: run.workstreamId }, origin: { runId, handoffArtifactId: artifactId },
+        disclosure, evidence: [{ relation: "supports", artifactId,
+          byteStart, byteEnd: byteStart + excerpt.byteLength }], relations: [],
+      } };
+      const requestId = `run-memory:${sha256(`${runId}\n${artifactId}\n${kind}\n${statement}\n${disclosure}`)}`;
+      const proposal = await provider().createProposal({ root, proposal: {
+        clientRequestId: requestId, workstreamId: run.workstreamId,
+        kind: "finding.create", payload, proposedBy: "human:emacs",
+        sourceAdapter: "noema-run-handoff",
+      } });
+      return { root, proposal };
+    },
+
     async supervisorProposal(body = {}) {
       const root = await rootFor(body);
       const nested = object(body.proposal);
@@ -3014,7 +3082,8 @@ export function createResearchRuntimeService({
 		provider().tasks({ root, workstreamId, limit: 1000, includeLocal: true }),
 		provider().jobs({ root, workstreamId, limit: 1000 }), provider().schedulerWorkers({ root, limit: 1000 }),
 		provider().delegations({ root, workstreamId, limit: 1000 }),
-		provider().proposals({ root, workstreamId, limit: 1000 }), provider().events({ root, after: 0, limit: 1000 }),
+		provider().proposals({ root, workstreamId, limit: 1000 }),
+		provider().events({ root, workstreamId, latest: true, limit: 1000 }),
 	  ]);
 	  const invocationGroups = await Promise.all(jobs.map(async (job) => ({ jobId: valueString(job.id),
 		invocations: await provider().invocations({ root, jobId: valueString(job.id), limit: 100 }) })));

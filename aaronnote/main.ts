@@ -755,6 +755,23 @@ function renderTaskManager(): void {
       });
       actions.appendChild(retry);
     }
+    if (task.kind === "latex-export" && task.status === "failed") {
+      const intervene = document.createElement("button");
+      intervene.type = "button";
+      intervene.textContent = "Intervene in Emacs";
+      intervene.addEventListener("click", async () => {
+        intervene.disabled = true;
+        try {
+          await api.latex.intervene(task.id);
+          taskManagerStatus.textContent = "Opened a separate Emacs agent session for this export.";
+          closeTaskManager();
+        } catch (error) {
+          taskManagerStatus.textContent = error instanceof Error ? error.message : String(error);
+          intervene.disabled = false;
+        }
+      });
+      actions.appendChild(intervene);
+    }
     if (task.closeable) {
       const close = document.createElement("button");
       close.type = "button";

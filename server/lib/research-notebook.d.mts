@@ -85,7 +85,7 @@ export type ResearchGraphProjection = {
 export type ResearchIndexer = {
   index(args: { root: string; path: string; actor?: string; reason?: string }): Promise<any>;
   status(args: { root: string; path: string }): Promise<any>;
-  events(args: { root: string; notebookId?: string; after?: number; limit?: number; latestPerWorkNode?: boolean }): Promise<any[]>;
+  events(args: { root: string; notebookId?: string; workstreamId?: string; after?: number; limit?: number; latest?: boolean; latestPerWorkNode?: boolean }): Promise<any[]>;
 };
 
 export type ResearchMutation = { notebook: ResearchNotebook; cell: ResearchCellSummary | null; workNode?: ResearchWorkNodeSummary | null };

@@ -466,5 +466,80 @@
     (should (equal durable '("manual-chat")))
     (should (memq 'side noema-agent-acp-auto-stop-origins))))
 
+(ert-deftest noema-agent-acp-conversation-tree-requires-history-capabilities ()
+  (require 'agent-shell-fork-tree)
+  (with-temp-buffer
+    (setq-local major-mode 'agent-shell-mode
+                agent-shell--state '((:supports-session-list . t)
+                                     (:supports-session-load . t)))
+    (let ((source (current-buffer)) opened resolved)
+      (cl-letf (((symbol-function 'agent-shell-fork-tree)
+                 (lambda ()
+                   (setq opened (current-buffer)
+                         resolved (file-truename "/noema/target-only/workspace")))))
+        (noema-agent-acp-conversation-tree source)
+        (should (eq opened source))
+        (should (equal resolved "/noema/target-only/workspace")))
+      (setf (map-elt agent-shell--state :supports-session-load) nil)
+      (should-error (noema-agent-acp-conversation-tree source) :type 'user-error))))
+
+(ert-deftest noema-agent-acp-conversation-tree-visit-adopts-new-branch ()
+  (save-window-excursion
+    (let ((source (generate-new-buffer " *tree-source*"))
+          (branch (generate-new-buffer " *tree-branch*"))
+          adopted shown)
+      (unwind-protect
+          (progn
+            (with-current-buffer source
+              (setq-local noema-agent-acp-session-root "/tmp/noema-project/"))
+            (with-current-buffer branch
+              (setq-local major-mode 'agent-shell-mode))
+            (set-window-buffer (selected-window) branch)
+            (set-window-parameter (selected-window) 'noema-agent-workspace t)
+            (with-temp-buffer
+              (setq-local agent-shell-fork-tree--source source)
+              (cl-letf (((symbol-function 'noema-agent-acp-adopt)
+                         (lambda (buffer &rest properties)
+                           (setq adopted (cons buffer properties))))
+                        ((symbol-function 'noema-agent-acp-show-buffer)
+                         (lambda (buffer) (setq shown buffer))))
+                (noema-agent-acp--conversation-tree-visit-a
+                 (lambda (&rest _) (selected-window)))))
+            (should (eq (car adopted) branch))
+            (should (eq (plist-get (cdr adopted) :origin) 'tree))
+            (should (equal (plist-get (cdr adopted) :root) "/tmp/noema-project/"))
+            (should (eq shown branch)))
+        (set-window-parameter (selected-window) 'noema-agent-workspace nil)
+        (kill-buffer source)
+        (kill-buffer branch)))))
+
+(ert-deftest noema-agent-acp-conversation-tree-never-reuses-another-workspace ()
+  (let ((source (generate-new-buffer " *tree-scope-source*"))
+        (same (generate-new-buffer " *tree-scope-same*"))
+        (other (generate-new-buffer " *tree-scope-other*"))
+        visible)
+    (unwind-protect
+        (progn
+          (dolist (buffer (list source same other))
+            (with-current-buffer buffer
+              (setq-local agent-shell--state
+                          '((:agent-config . ((:identifier . codex)))))))
+          (with-current-buffer source (setq default-directory "/tmp/project-a/"))
+          (with-current-buffer same (setq default-directory "/tmp/project-a/"))
+          (with-current-buffer other (setq default-directory "/tmp/project-b/"))
+          (with-temp-buffer
+            (setq-local agent-shell-fork-tree--source source)
+            (cl-letf (((symbol-function 'agent-shell-buffers)
+                       (lambda () (list same other)))
+                      ((symbol-function 'noema-agent-acp-agent-buffer-p)
+                       (lambda (_buffer) nil)))
+              (noema-agent-acp--conversation-tree-visit-a
+               (lambda (&rest _)
+                 (setq visible (agent-shell-buffers))
+                 nil))))
+          (should (equal visible (list same))))
+      (dolist (buffer (list source same other))
+        (kill-buffer buffer)))))
+
 (provide 'noema-agent-acp-tests)
 ;;; noema-agent-acp-tests.el ends here

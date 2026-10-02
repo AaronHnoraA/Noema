@@ -262,6 +262,178 @@
     (should (gethash "perm_1" noema-agent-worker--permissions))
     (should (= noema-agent-worker--attention-count 1))))
 
+(ert-deftest noema-agent-worker-preserves-opaque-command-and-raw-file-path ()
+  "ACP rawInput must reach the policy even without a locations array."
+  (let ((command (noema-agent-worker--action
+                  '((:kind . "execute")
+                    (:raw-input . ((command . "git push origin main"))))))
+        (file (noema-agent-worker--action
+               '((:kind . "edit")
+                 (:raw-input . ((filepath . "../outside.md")))))))
+    (should (equal (alist-get 'command command) "git push origin main"))
+    (should (equal (alist-get 'paths file) ["../outside.md"]))))
+
+(ert-deftest noema-agent-worker-fails-when-a-recorded-decision-cannot-reach-acp ()
+  "A callback failure must terminate the Run, not leave it apparently running."
+  (dolist (case '(("permission-decision" "permissionId" "perm_1" "optionId" "allow_once")
+                  ("input-response" "requestId" "input_1" "answer" "answer")))
+    (let* ((worker (noema-agent-worker--create :run-id "run_1" :session-id "ses_1" :epoch 7))
+           (noema-agent-worker--permissions (make-hash-table :test #'equal))
+           (noema-agent-worker--inputs (make-hash-table :test #'equal))
+           (noema-agent-worker--previews (make-hash-table :test #'equal))
+           (noema-agent-worker--attention-count 1)
+           (kind (nth 0 case))
+           (id (nth 2 case))
+           (table (if (equal kind "permission-decision")
+                      noema-agent-worker--permissions noema-agent-worker--inputs))
+           submitted)
+      (puthash id (cons worker (lambda (_value)
+                                 (should (gethash id table))
+                                 (error "ACP callback failed"))) table)
+      (if (equal kind "permission-decision")
+          (setf (noema-agent-worker-pending-permissions worker) (list id))
+        (setf (noema-agent-worker-pending-inputs worker) (list id)))
+      (cl-letf (((symbol-function 'noema-agent-worker--submit-terminal)
+                 (lambda (_worker) (setq submitted t))))
+        (noema-agent-worker-apply-command
+         `((type . ,kind) (,(intern (nth 1 case)) . ,id)
+           (,(intern (nth 3 case)) . ,(nth 4 case))
+           (runId . "run_1") (sessionId . "ses_1") (epoch . 7))))
+      (should submitted)
+      (should (equal (noema-agent-worker-terminal-status worker) "failed"))
+      (should (string-match-p "ACP callback failed"
+                              (noema-agent-worker-terminal-reason worker)))
+      (should-not (gethash id table))
+      (should (= noema-agent-worker--attention-count 0)))))
+
+(ert-deftest noema-agent-worker-fails-when-automatic-permission-callback-throws ()
+  "An automatic kernel decision still needs a successful ACP callback."
+  (let ((worker (noema-agent-worker--create :run-id "run_1" :session-id "ses_1" :epoch 7))
+        (noema-agent-worker--permissions (make-hash-table :test #'equal))
+        submitted)
+    (setf (noema-agent-worker-started worker) t)
+    (cl-letf (((symbol-function 'noema-agent-worker--api)
+               (lambda (_channel _body callback &optional _timeout)
+                 (funcall callback
+                          '((permission . ((id . "perm_auto") (optionId . "allow_once"))))
+                          nil)))
+              ((symbol-function 'noema-agent-worker--submit-terminal)
+               (lambda (_worker) (setq submitted t))))
+      (should (noema-agent-worker--permission-responder
+               worker '((:tool-call . ((:tool-call-id . "tool_1") (:kind . "read")))
+                        (:options . (((:option-id . "allow_once") (:kind . "allow_once"))))
+                        (:respond . (lambda (_option) (error "ACP auto callback failed")))))))
+    (should submitted)
+    (should (equal (noema-agent-worker-terminal-status worker) "failed"))
+    (should (string-match-p "ACP auto callback failed"
+                            (noema-agent-worker-terminal-reason worker)))))
+
+(ert-deftest noema-agent-worker-ignores-broker-replies-after-termination ()
+  "A late API response cannot recreate pending callbacks on a stopped Run."
+  (let ((worker (noema-agent-worker--create :run-id "run_1" :session-id "ses_1" :epoch 7))
+        (noema-agent-worker--permissions (make-hash-table :test #'equal))
+        (noema-agent-worker--inputs (make-hash-table :test #'equal))
+        (noema-agent-worker--attention-count 0)
+        callbacks)
+    (setf (noema-agent-worker-started worker) t)
+    (cl-letf (((symbol-function 'noema-agent-worker--api)
+               (lambda (_channel _body callback &optional _timeout)
+                 (push callback callbacks))))
+      (should (noema-agent-worker--permission-responder
+               worker '((:tool-call . ((:tool-call-id . "tool_1") (:kind . "read")))
+                        (:options . (((:option-id . "allow_once") (:kind . "allow_once"))))
+                        (:respond . ignore))))
+      (should (noema-agent-worker-request-input worker "native_1" "Question?" #'ignore))
+      (setf (noema-agent-worker-terminal worker) t)
+      (dolist (callback callbacks)
+        (funcall callback '((permission . ((id . "perm_1") (state . "pending")))
+                           (request . ((id . "input_1") (state . "pending")))) nil)))
+    (should (= (hash-table-count noema-agent-worker--permissions) 0))
+    (should (= (hash-table-count noema-agent-worker--inputs) 0))
+    (should (= noema-agent-worker--attention-count 0))))
+
+(ert-deftest noema-agent-worker-does-not-fall-back-to-native-approval-while-running ()
+  "An unbrokerable ACP request cannot bypass the kernel approval policy."
+  (let ((worker (noema-agent-worker--create :run-id "run_1" :session-id "ses_1" :epoch 7))
+        submitted)
+    (setf (noema-agent-worker-started worker) t)
+    (cl-letf (((symbol-function 'noema-agent-worker--submit-terminal)
+               (lambda (_worker) (setq submitted t))))
+      (should (noema-agent-worker--permission-responder
+               worker '((:tool-call . ((:kind . "execute")))
+                        (:options . (((:option-id . "allow_once") (:kind . "allow_once"))))
+                        (:respond . ignore)))))
+    (should submitted)
+    (should (equal (noema-agent-worker-terminal-status worker) "failed"))
+    (should (string-match-p "cannot be brokered"
+                            (noema-agent-worker-terminal-reason worker)))))
+
+(ert-deftest noema-agent-worker-does-not-double-clear-reentrant-decision ()
+  "A callback may synchronously end the Run before returning to the downlink."
+  (let* ((worker (noema-agent-worker--create :run-id "run_1" :session-id "ses_1" :epoch 7))
+         (noema-agent-worker--permissions (make-hash-table :test #'equal))
+         (noema-agent-worker--previews (make-hash-table :test #'equal))
+         (noema-agent-worker--attention-count 1))
+    (setf (noema-agent-worker-pending-permissions worker) '("perm_1"))
+    (puthash "perm_1"
+             (cons worker (lambda (_option)
+                            (noema-agent-worker--terminal worker "failed" "ACP ended")))
+             noema-agent-worker--permissions)
+    (cl-letf (((symbol-function 'noema-agent-worker--submit-terminal) #'ignore))
+      (noema-agent-worker-apply-command
+       '((type . "permission-decision") (permissionId . "perm_1")
+         (optionId . "allow_once") (runId . "run_1") (sessionId . "ses_1")
+         (epoch . 7))))
+    (should-not (gethash "perm_1" noema-agent-worker--permissions))
+    (should (= noema-agent-worker--attention-count 0))))
+
+(ert-deftest noema-agent-worker-recovers-decisions-after-a-lost-gateway-notice ()
+  "Lease reconciliation uses durable decisions and rejects an old epoch."
+  (let* ((worker (noema-agent-worker--create :run-id "run_1" :session-id "ses_1"
+                                             :root "/tmp/noema-test/" :epoch 7))
+         (noema-agent-worker--permissions (make-hash-table :test #'equal))
+         (noema-agent-worker--inputs (make-hash-table :test #'equal))
+         (noema-agent-worker--previews (make-hash-table :test #'equal))
+         (noema-agent-worker--attention-count 2)
+         (stored-epoch 6)
+         received)
+    (setf (noema-agent-worker-pending-permissions worker) '("perm_1")
+          (noema-agent-worker-pending-inputs worker) '("input_1"))
+    (puthash "perm_1" (cons worker (lambda (value) (push (list 'permission value) received)))
+             noema-agent-worker--permissions)
+    (puthash "input_1" (cons worker (lambda (value) (push (list 'input value) received)))
+             noema-agent-worker--inputs)
+    (cl-letf (((symbol-function 'noema-agent-worker--api)
+               (lambda (channel _body callback &optional _timeout)
+                 (pcase channel
+                   ("aaronnote:api:research:permission:get"
+                    (funcall callback
+                             `((permission . ((state . "resolved") (optionId . "allow_once")
+                                               (runId . "run_1") (sessionId . "ses_1")
+                                               (epoch . ,stored-epoch)))) nil))
+                   ("aaronnote:api:research:input:get"
+                    (funcall callback
+                             `((request . ((state . "resolved") (answer . "approved")
+                                            (runId . "run_1") (sessionId . "ses_1")
+                                            (epoch . ,stored-epoch)))) nil))))))
+      (noema-agent-worker--reconcile-pending-decisions worker)
+      (should-not received)
+      (should (= noema-agent-worker--attention-count 2))
+      (setq stored-epoch 7)
+      (noema-agent-worker-apply-command
+       '((type . "permission-decision") (permissionId . "perm_1")
+         (optionId . "allow_once") (epoch . 7)))
+      (should-not received)
+      (noema-agent-worker--reconcile-pending-decisions worker)
+      (should (equal (nreverse received)
+                     '((permission "allow_once") (input "approved"))))
+      (should (= noema-agent-worker--attention-count 0))
+      (noema-agent-worker--reconcile-pending-decisions worker)
+      (should-not (noema-agent-worker-pending-permissions worker))
+      (should-not (noema-agent-worker-pending-inputs worker))
+      (should-not (gethash "perm_1" noema-agent-worker--permissions))
+      (should-not (gethash "input_1" noema-agent-worker--inputs)))))
+
 (ert-deftest noema-agent-worker-cancels-the-cell-wherever-its-execution-is ()
   (noema-api-test--with-project root
     (let* ((file (expand-file-name "work.noema" root))

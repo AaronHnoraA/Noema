@@ -57,6 +57,7 @@ export type ResearchRuntimeService = {
   respondInput: RuntimeMethod;
   attention: RuntimeMethod;
   createProposal: RuntimeMethod;
+  proposeRunMemory: RuntimeMethod;
   supervisorProposal: RuntimeMethod;
   proposal: RuntimeMethod;
   proposals: RuntimeMethod;

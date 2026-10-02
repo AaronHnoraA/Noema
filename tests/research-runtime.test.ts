@@ -11,6 +11,7 @@ import {
   manualTUICommand,
   parseResearchPrompt,
 } from "../server/lib/research-runtime.mjs";
+import { selectRunMemory } from "../server/lib/research-memory.mjs";
 import {
   createResearchCell,
   createResearchNotebook,
@@ -40,6 +41,89 @@ async function installProjectSkill(root: string, id: string): Promise<void> {
 }
 
 describe("research runtime service", () => {
+  test("recalls only relevant, reviewed Findings from the current workstream and freezes them in the Run", async () => withProject(async (root) => {
+    const created = createResearchCell(createResearchNotebook({ title: "Memory", defaultAgent: "codex" }), {
+      kind: "work", title: "Storage", source: "采用 SQLite 存储研究索引。",
+    });
+    const file = join(root, "memory.noema");
+    await writeResearchNotebookFile(file, created.notebook, { create: true });
+    const workstreamId = created.notebook.metadata.noema_research.workstream_id;
+    const finding = (overrides: Record<string, any> = {}) => ({
+      id: "finding_storage", workstreamId, kind: "decision", statement: "采用 SQLite 存储研究索引。",
+      status: "supported", verificationLevel: "human_reviewed", disclosure: "project", version: 2,
+      evidence: [{ artifactId: "art_source", byteStart: 0, byteEnd: 32 }], ...overrides,
+    });
+    const findings = vi.fn(async () => [finding(), finding({ id: "finding_private", disclosure: "local_only" }),
+      finding({ id: "finding_other", workstreamId: "ws_other" }),
+      finding({ id: "finding_draft", verificationLevel: "unreviewed" })]);
+    const provider = { runs: vi.fn(async () => []), findings,
+      prepareRun: vi.fn(async ({ run }: any) => ({ id: "run_memory", ...run })) };
+    const service = createResearchRuntimeService({ getProvider: () => provider as any });
+    const preview = await service.previewRunContext({ root, file, cellId: created.cell.id });
+    expect(preview.context.filter((item: any) => item.ref.startsWith("finding:")))
+      .toEqual([expect.objectContaining({ ref: "finding:finding_storage", automatic: true })]);
+    expect(provider.prepareRun).not.toHaveBeenCalled();
+    const prepared = await service.prepareRun({ root, file, cellId: created.cell.id });
+    const memory = prepared.contextItems.find((item: any) => item.ref === "finding:finding_storage");
+    expect(Buffer.from(memory.contentBase64, "base64").toString()).toContain("art_source:0-32");
+    expect(prepared.spec.context).toContainEqual(expect.objectContaining({ ref: "finding:finding_storage" }));
+    expect(findings).toHaveBeenCalledWith({ root, workstreamId, limit: 1000, includeLocal: false });
+
+    const unsaved = structuredClone(created.notebook);
+    unsaved.cells.find((cell: any) => cell.id === created.cell.id)!.source = "@@ctx(none)\n\n采用 SQLite 存储研究索引。";
+    const quiet = await service.previewRunContext({ root, file, cellId: created.cell.id, notebook: unsaved });
+    expect(quiet.context.some((item: any) => item.ref.startsWith("finding:"))).toBe(false);
+
+    const unavailable = createResearchRuntimeService({ getProvider: () => ({
+      ...provider, findings: async () => { throw new Error("index offline"); },
+    }) as any });
+    const stillPrepared = await unavailable.prepareRun({ root, file, cellId: created.cell.id });
+    expect(stillPrepared.spec.context_omitted).toContainEqual({
+      ref: "finding:*", reason: "memory index unavailable", bytes: 0,
+    });
+  }));
+
+  test("memory prefetch rejects weak matches and stays within its own budget", () => {
+    const base = { workstreamId: "ws", kind: "decision", status: "supported",
+      verificationLevel: "human_reviewed", disclosure: "project", version: 1,
+      evidence: [{ artifactId: "art_1", byteStart: 0, byteEnd: 10 }] };
+    expect(selectRunMemory([{ ...base, id: "f_weak", statement: "SQLite 用于完全不同的任务调度。" }],
+      "SQLite 存储研究索引", "ws")).toEqual([]);
+    expect(selectRunMemory([{ ...base, id: "f_full", statement: "SQLite 存储研究索引" }],
+      "SQLite 存储研究索引", "ws", { maxChars: 20 })).toEqual([]);
+  });
+
+  test("proposes a decision only from an exact completed Run Handoff span", async () => withProject(async (root) => {
+    const handoff = Buffer.from("Earlier work.\n采用 SQLite 存储研究索引。\nCheck migration.");
+    const proposal = vi.fn(async ({ proposal }: any) => ({ id: "prop_memory", ...proposal, status: "pending" }));
+    const provider = {
+      run: vi.fn(async () => ({ id: "run_done", status: "completed", workstreamId: "ws_memory" })),
+      runHandoff: vi.fn(async () => ({ handoffArtifactId: "art_handoff" })),
+      readArtifact: vi.fn(async () => ({ dataBase64: handoff.toString("base64") })),
+      createProposal: proposal,
+    };
+    const service = createResearchRuntimeService({ getProvider: () => provider as any });
+    const request = { root, runId: "run_done", kind: "decision", statement: "采用 SQLite 存储研究索引。", disclosure: "project" };
+    const result = await service.proposeRunMemory(request);
+    expect(result.proposal).toMatchObject({ id: "prop_memory", status: "pending" });
+    expect(proposal).toHaveBeenCalledWith({ root, proposal: expect.objectContaining({
+      workstreamId: "ws_memory", kind: "finding.create", sourceAdapter: "noema-run-handoff",
+      payload: { finding: expect.objectContaining({
+        statement: request.statement, status: "proposed", disclosure: "project",
+        evidence: [{ relation: "supports", artifactId: "art_handoff",
+          byteStart: handoff.indexOf(Buffer.from(request.statement)),
+          byteEnd: handoff.indexOf(Buffer.from(request.statement)) + Buffer.byteLength(request.statement) }],
+      }) },
+    }) });
+    expect((await service.proposeRunMemory(request)).proposal.id).toBe("prop_memory");
+    expect(proposal.mock.calls[0][0].proposal.clientRequestId)
+      .toBe(proposal.mock.calls[1][0].proposal.clientRequestId);
+    await expect(service.proposeRunMemory({ ...request, statement: "Handoff never said this" }))
+      .rejects.toMatchObject({ code: "ERR_RESEARCH_MEMORY" });
+    expect(proposal).toHaveBeenCalledTimes(2);
+    expect(createResearchApiHandlers(service)["aaronnote:api:research:memory:propose-from-run"])
+      .toBeTypeOf("function");
+  }));
   test("route preview uses unsaved lineage changes and shares one runtime snapshot", async () => withProject(async (root) => {
     let notebook = createResearchNotebook({ title: "Preview", defaultAgent: "codex" });
     const parent = createResearchCell(notebook, { kind: "work", title: "Read", source: "@@agent(opencode)\nRead." });
@@ -434,6 +518,36 @@ describe("research runtime service", () => {
       .toEqual(["@@agent(pi)\n\nPersisted evidence."]);
   }));
 
+  test("marks inherited output from a failed Run as partial context", async () => withProject(async (root) => {
+    let notebook = createResearchNotebook({ title: "Partial upstream", defaultAgent: "codex" });
+    const parent = createResearchCell(notebook, { kind: "work", title: "Parent", source: "Investigate." });
+    notebook = upsertResearchRunOutput(parent.notebook, {
+      workId: parent.workNode.id, runId: "run_partial", agent: "codex",
+      status: "failed", content: "A promising but unverified finding.",
+    }).notebook;
+    const child = createResearchCell(notebook, {
+      kind: "work", title: "Child", source: "Continue carefully.", lineageParent: parent.workNode.id,
+    });
+    const file = join(root, "partial.noema");
+    await writeResearchNotebookFile(file, child.notebook, { create: true });
+    const provider = {
+      runs: vi.fn(async () => []),
+      prepareRun: vi.fn(async ({ run }: any) => ({ id: "run_child", ...run })),
+    };
+    const service = createResearchRuntimeService({ getProvider: () => provider as any });
+    const prepared = await service.prepareRun({ file, cellId: child.cell.id, cwd: root });
+    const context = prepared.contextItems.find((item: any) => item.ref === `result:${parent.workNode.id}`);
+    const text = Buffer.from(context.contentBase64, "base64").toString("utf8");
+    expect(text).toContain("upstream Run output (failed)");
+    expect(text).toContain("Source Run: run_partial");
+    expect(text).toContain("partial or unverified output");
+    expect(text).toContain("A promising but unverified finding.");
+    expect(prepared.spec.context).toContainEqual(expect.objectContaining({
+      ref: `result:${parent.workNode.id}`, resolved_uri: context.resolvedUri,
+      bytes: Buffer.byteLength(text),
+    }));
+  }));
+
   test("counts duplicate file references only once against the context budget", async () => withProject(async (root) => {
     await writeFile(join(root, "context.md"), "x".repeat(35_000));
     const file = join(root, "read.noema");
@@ -629,6 +743,32 @@ describe("research runtime service", () => {
     expect(prepared.contextItems.map((item: any) => Buffer.from(item.contentBase64, "base64").toString())).toEqual(["Handoff"]);
     expect(provider.runHandoff).toHaveBeenCalledTimes(2);
     expect(liveRun).not.toHaveBeenCalled();
+  }));
+
+  test("marks a failed Run Handoff as unverified when inheriting it", async () => withProject(async (root) => {
+    const file = join(root, "handoff.prompt");
+    await writeFile(file, "@agent(codex)\n@session(continue)\n@workstream(ws_context)\n\nContinue.");
+    const provider = {
+      sessions: vi.fn(async () => [{ id: "ses_context", state: "warm", executionTarget: root }]),
+      runs: vi.fn(async () => [{ id: "run_failed", status: "failed" }]),
+      runHandoff: vi.fn(async () => ({ handoffArtifactId: "art_failed_handoff" })),
+      readArtifact: vi.fn(async () => ({
+        artifact: { mediaType: "text/markdown" },
+        dataBase64: Buffer.from("Partial handoff.").toString("base64"),
+      })),
+      prepareRun: vi.fn(async ({ run }: any) => ({ id: "run_next", ...run })),
+    };
+    const service = createResearchRuntimeService({ getProvider: () => provider as any });
+    const prepared = await service.prepareRun({ promptFile: file, cwd: root, context: ["handoff.latest"] });
+    const context = prepared.contextItems[0];
+    const text = Buffer.from(context.contentBase64, "base64").toString("utf8");
+    expect(text).toContain("upstream Handoff (failed)");
+    expect(text).toContain("Source Run: run_failed");
+    expect(text).toContain("incomplete or unverified Run");
+    expect(text).toContain("Partial handoff.");
+    expect(prepared.spec.context).toContainEqual(expect.objectContaining({
+      ref: "handoff.latest", bytes: Buffer.byteLength(text),
+    }));
   }));
 
   test("routing still finds a WorkNode's own conversation beyond the newest 1000 Runs", async () => withProject(async (root) => {
@@ -1094,6 +1234,7 @@ describe("research runtime service", () => {
       proposals: [], events: [{ id: 1, workstream_id: "ws_demo", type: "job.queued" }],
     });
     expect(provider.tasks).toHaveBeenCalledWith({ root, workstreamId: "ws_demo", limit: 1000, includeLocal: true });
+    expect(provider.events).toHaveBeenCalledWith({ root, workstreamId: "ws_demo", latest: true, limit: 1000 });
   }));
 
   test("fails closed without a project manifest or kernel", async () => {

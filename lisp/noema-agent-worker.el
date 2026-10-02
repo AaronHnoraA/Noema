@@ -169,19 +169,25 @@ D-034: this replaces per-Run echo-area messages."
         (append (or global-mode-string '(""))
                 (list noema-agent-worker--mode-line-entry))))
 
-(defun noema-agent-worker--attention-note (delta)
+(defvar noema-agent-worker-attention-changed-functions nil
+  "Hook run with WORKER and pending count after a decision count changes.")
+
+(defun noema-agent-worker--attention-note (delta &optional worker)
   "Adjust the pending-attention count by DELTA and update its indicator.
 A single `message' fires only on the 0->positive transition, so a burst of
 simultaneous requests does not spam the echo area; the running count lives
 in the mode line until Attention (`C-c C-a') or a resolved decision brings
-it back to zero."
+it back to zero.  Notify listeners of WORKER when provided."
   (let ((previous noema-agent-worker--attention-count))
     (setq noema-agent-worker--attention-count
           (max 0 (+ noema-agent-worker--attention-count delta)))
     (when (and (zerop previous) (> noema-agent-worker--attention-count 0))
       (message "Noema: agent awaiting a decision (C-c C-a for Attention)")
       (noema-agent-worker--notify "Noema" "An agent is waiting for your decision"))
-    (force-mode-line-update t)))
+    (force-mode-line-update t)
+    (when (and worker (/= previous noema-agent-worker--attention-count))
+      (run-hook-with-args 'noema-agent-worker-attention-changed-functions
+                          worker noema-agent-worker--attention-count))))
 
 (cl-defstruct (noema-agent-worker
                (:constructor noema-agent-worker--create))
@@ -784,10 +790,10 @@ file."
 	(dolist (permission-id (noema-agent-worker-pending-permissions worker))
 	  (remhash permission-id noema-agent-worker--permissions)
 	  (remhash permission-id noema-agent-worker--previews)
-	  (noema-agent-worker--best-effort #'noema-agent-worker--attention-note -1))
+	  (noema-agent-worker--best-effort #'noema-agent-worker--attention-note -1 worker))
 	(dolist (request-id (noema-agent-worker-pending-inputs worker))
 	  (remhash request-id noema-agent-worker--inputs)
-	  (noema-agent-worker--best-effort #'noema-agent-worker--attention-note -1))
+	  (noema-agent-worker--best-effort #'noema-agent-worker--attention-note -1 worker))
 	(setf (noema-agent-worker-pending-permissions worker) nil
 	      (noema-agent-worker-pending-inputs worker) nil)
     (when (timerp (noema-agent-worker-segment-timer worker))
@@ -908,7 +914,43 @@ file."
              (noema-agent-worker--terminal worker "interrupted" "worker lease renewal failed"))
          (let* ((lease (or (noema-agent-worker--value result "lease") result))
                 (epoch (noema-agent-worker--value lease "epoch")))
-	           (when (numberp epoch) (setf (noema-agent-worker-epoch worker) epoch))))))))
+           (when (numberp epoch)
+             (setf (noema-agent-worker-epoch worker) epoch))
+           (unless (noema-agent-worker-terminal worker)
+             (noema-agent-worker--reconcile-pending-decisions worker))))))))
+
+(defun noema-agent-worker--reconcile-pending-decisions (worker)
+  "Recover decisions recorded by the kernel whose gateway notice was lost.
+Only a still-live leased WORKER may pass the stored answer to its ACP callback;
+`noema-agent-worker-apply-command' checks the exact epoch again."
+  (dolist (permission-id (copy-sequence (noema-agent-worker-pending-permissions worker)))
+    (noema-agent-worker--api
+     "aaronnote:api:research:permission:get"
+     `((root . ,(noema-agent-worker-root worker)) (id . ,permission-id))
+     (lambda (result error-object)
+       (unless (or error-object (noema-agent-worker-terminal worker))
+         (let ((permission (or (noema-agent-worker--value result "permission") result)))
+           (when (equal (noema-agent-worker--string permission "state") "resolved")
+             (noema-agent-worker-apply-command
+              `((type . "permission-decision") (permissionId . ,permission-id)
+                (optionId . ,(noema-agent-worker--string permission "optionId"))
+                (runId . ,(noema-agent-worker--string permission "runId"))
+                (sessionId . ,(noema-agent-worker--string permission "sessionId"))
+                (epoch . ,(noema-agent-worker--value permission "epoch"))))))))))
+  (dolist (request-id (copy-sequence (noema-agent-worker-pending-inputs worker)))
+    (noema-agent-worker--api
+     "aaronnote:api:research:input:get"
+     `((root . ,(noema-agent-worker-root worker)) (id . ,request-id))
+     (lambda (result error-object)
+       (unless (or error-object (noema-agent-worker-terminal worker))
+         (let ((request (or (noema-agent-worker--value result "request") result)))
+           (when (equal (noema-agent-worker--string request "state") "resolved")
+             (noema-agent-worker-apply-command
+              `((type . "input-response") (requestId . ,request-id)
+                (answer . ,(noema-agent-worker--value request "answer"))
+                (runId . ,(noema-agent-worker--string request "runId"))
+                (sessionId . ,(noema-agent-worker--string request "sessionId"))
+                (epoch . ,(noema-agent-worker--value request "epoch")))))))))))
 
 (defun noema-agent-worker--start-renewal (worker)
   "Start periodic lease renewal after WORKER becomes physically active."
@@ -927,10 +969,17 @@ file."
   (let* ((kind (or (map-elt tool-call :kind) "other"))
          (raw (map-elt tool-call :raw-input))
          (locations (or (map-elt tool-call :locations) '()))
-         (paths (delq nil (mapcar (lambda (location)
-                                    (or (map-elt location 'path)
-                                        (map-elt location :path)))
-                                  locations)))
+         (raw-path (and (listp raw)
+                        (seq-find #'stringp
+                                  (mapcar (lambda (key) (map-elt raw key))
+                                          '(filepath fileName path file_path)))))
+         (paths (delete-dups
+                 (delq nil (cons raw-path
+                                 (mapcar (lambda (location)
+                                           (let ((path (or (map-elt location 'path)
+                                                           (map-elt location :path))))
+                                             (and (stringp path) path)))
+                                         locations)))))
          (command (and (listp raw) (or (map-elt raw 'command) (map-elt raw :command))))
          (argv (cond ((vectorp command) (append command nil))
                      ((listp command) command)
@@ -942,6 +991,8 @@ file."
         (setq action
               (append action
                       `((argv . ,(vconcat (mapcar (lambda (part) (format "%s" part)) argv)))))))
+      (when (stringp command)
+        (setq action (append action `((command . ,command)))))
       action)))
 
 (declare-function noema-research-attention "noema-research-inspector" (&optional origin))
@@ -968,9 +1019,14 @@ this point goes beyond the project, so Attention opens to decide it."
          (request-id (or (map-elt tool-call :permission-request-id)
                          (map-elt tool-call :tool-call-id)))
          (options (map-elt permission :options)))
-    (if (or (not (functionp respond)) (not request-id) (not (noema-agent-worker-started worker)))
-        nil
-      (progn
+    (cond
+     ((not (noema-agent-worker-started worker)) nil)
+     ((or (not (functionp respond)) (not request-id))
+      ;; Returning nil would let agent-shell open its own approval dialog,
+      ;; outside Noema's durable policy, while this Run is active.
+      (noema-agent-worker--terminal worker "failed" "ACP permission request cannot be brokered" t)
+      t)
+     (t
         (noema-agent-worker--api
          "aaronnote:api:research:worker:permission"
          (append (noema-agent-worker--worker-body worker)
@@ -983,8 +1039,10 @@ this point goes beyond the project, so Attention opens to decide it."
                                             (label . ,(format "%s" (or (map-elt option :label) "")))))
                                         options)))))
          (lambda (result error-object)
-           (if error-object
-               (let ((reject (seq-find
+           (cond
+            ((noema-agent-worker-terminal worker) nil)
+            (error-object
+             (let ((reject (seq-find
                               (lambda (option)
                                 (string-prefix-p "reject" (format "%s" (or (map-elt option :kind) ""))))
                               options)))
@@ -992,12 +1050,15 @@ this point goes beyond the project, so Attention opens to decide it."
                  ;; agent-shell UI: that would bypass Noema's durable decision.
                  (message "Noema permission broker failed: %s" (noema-agent-worker--error error-object))
                  (if reject
-                     (funcall respond (noema-agent-worker--option-id reject))
+                     (noema-agent-worker--apply-decision-callback
+                      worker "broker fallback" (format "%s" request-id)
+                      respond (noema-agent-worker--option-id reject))
                    (when-let* ((buffer (noema-agent-worker-buffer worker))
                                ((buffer-live-p buffer)))
                      (ignore-errors (noema-agent-acp-shutdown buffer)))
                    (noema-agent-worker--terminal
-                    worker "failed" "permission broker failed and ACP offered no reject option")))
+                    worker "failed" "permission broker failed and ACP offered no reject option"))))
+            (t
              (let* ((stored (or (noema-agent-worker--value result "permission") result))
                     (permission-id (noema-agent-worker--string stored "id"))
                     ;; The kernel omits an empty optionId: a pending request
@@ -1006,14 +1067,20 @@ this point goes beyond the project, so Attention opens to decide it."
                                            (and (stringp value) (not (string-empty-p value))))
                                          (list (noema-agent-worker--string result "autoDecision")
                                                (noema-agent-worker--string stored "optionId")))))
-               (if automatic
-                   (funcall respond automatic)
+               (cond
+                ((and (not automatic) (not permission-id))
+                 (noema-agent-worker--terminal worker "failed" "permission broker returned no permission id"))
+                (automatic
+                 (noema-agent-worker--apply-decision-callback
+                  worker "automatic permission" (or permission-id (format "%s" request-id))
+                  respond automatic))
+                (t
                  (puthash permission-id (cons worker respond) noema-agent-worker--permissions)
                  (when-let* ((preview (noema-agent-worker--diff-preview tool-call)))
                    (puthash permission-id preview noema-agent-worker--previews))
                  (push permission-id (noema-agent-worker-pending-permissions worker))
-                 (noema-agent-worker--attention-note 1)
-                 (noema-agent-worker--show-permission-request worker))))))
+                 (noema-agent-worker--attention-note 1 worker)
+                 (noema-agent-worker--show-permission-request worker))))))))
         t))))
 
 (defun noema-agent-worker-apply-command (command)
@@ -1023,22 +1090,27 @@ this point goes beyond the project, so Attention opens to decide it."
      (let* ((permission-id (noema-agent-worker--string command "permissionId"))
             (option-id (noema-agent-worker--string command "optionId"))
             (entry (gethash permission-id noema-agent-worker--permissions)))
-	   (when (and entry (noema-agent-worker--command-current-p (car entry) command))
+	   (when (and entry (noema-agent-worker--command-current-p (car entry) command)
+                  (noema-agent-worker--apply-decision-callback
+                   (car entry) "permission" permission-id (cdr entry) option-id)
+                  (eq entry (gethash permission-id noema-agent-worker--permissions)))
          (remhash permission-id noema-agent-worker--permissions)
          (remhash permission-id noema-agent-worker--previews)
          (setf (noema-agent-worker-pending-permissions (car entry))
                (delete permission-id (noema-agent-worker-pending-permissions (car entry))))
-         (funcall (cdr entry) option-id)
-         (noema-agent-worker--attention-note -1))))
+	     (noema-agent-worker--attention-note -1 (car entry)))))
 	("input-response"
 	 (let* ((request-id (noema-agent-worker--string command "requestId"))
 	        (entry (gethash request-id noema-agent-worker--inputs)))
-	   (when (and entry (noema-agent-worker--command-current-p (car entry) command))
+	   (when (and entry (noema-agent-worker--command-current-p (car entry) command)
+                  (noema-agent-worker--apply-decision-callback
+                   (car entry) "input" request-id (cdr entry)
+                   (noema-agent-worker--value command "answer"))
+                  (eq entry (gethash request-id noema-agent-worker--inputs)))
 	     (remhash request-id noema-agent-worker--inputs)
 	     (setf (noema-agent-worker-pending-inputs (car entry))
 	           (delete request-id (noema-agent-worker-pending-inputs (car entry))))
-	     (funcall (cdr entry) (noema-agent-worker--value command "answer"))
-	     (noema-agent-worker--attention-note -1))))
+	     (noema-agent-worker--attention-note -1 (car entry)))))
 	("notebook-writeback"
 	 (when-let* ((file (noema-agent-worker--string command "file")))
 	   (noema-agent-worker--resync-file-buffer file)))
@@ -1053,15 +1125,29 @@ this point goes beyond the project, so Attention opens to decide it."
                          (noema-agent-worker--string command "sessionId"))))
        (message "Noema completion check: %s" (noema-agent-worker-check-completion worker))))))
 
+(defun noema-agent-worker--apply-decision-callback (worker kind id callback value)
+  "Pass a recorded KIND decision ID to ACP, or fail WORKER visibly.
+The gateway notification and kernel resolution do not prove that ACP accepted
+the callback.  Never silently continue a Run after the callback throws."
+  (condition-case failure
+      (progn (funcall callback value) t)
+    ((error quit)
+     (noema-agent-worker--terminal
+      worker "failed"
+      (format "%s %s ACP callback failed: %s"
+              kind id (error-message-string failure))
+      t)
+     nil)))
+
 (defun noema-agent-worker--command-current-p (worker command)
   "Return non-nil when COMMAND targets WORKER's exact leased execution."
   (let ((epoch (noema-agent-worker--value command "epoch"))
 		(run-id (noema-agent-worker--string command "runId"))
 		(session-id (noema-agent-worker--string command "sessionId")))
-    (if (and (numberp epoch)
+    (if (and run-id session-id (numberp epoch)
 		     (= epoch (or (noema-agent-worker-epoch worker) 0))
-		     (or (not run-id) (equal run-id (noema-agent-worker-run-id worker)))
-		     (or (not session-id) (equal session-id (noema-agent-worker-session-id worker))))
+		     (equal run-id (noema-agent-worker-run-id worker))
+		     (equal session-id (noema-agent-worker-session-id worker)))
 		t
 	  (message "Noema rejected stale worker command for Run %s (command epoch %s, worker epoch %s)"
 		   (noema-agent-worker-run-id worker) epoch (noema-agent-worker-epoch worker))
@@ -1085,7 +1171,8 @@ RESPOND receives the eventual JSON answer. Return non-nil when accepted."
 		       (inputKind . ,(or input-kind "text"))
 		       (options . ,(vconcat (or options '())))))
      (lambda (result error-object)
-       (if error-object
+       (unless (noema-agent-worker-terminal worker)
+         (if error-object
 	   (progn
 	     (message "Noema input broker failed: %s" (noema-agent-worker--error error-object))
 	     (noema-agent-worker--terminal worker "failed" "input broker failed"))
@@ -1095,7 +1182,7 @@ RESPOND receives the eventual JSON answer. Return non-nil when accepted."
 	       (noema-agent-worker--terminal worker "failed" "input broker returned no request id")
 	     (puthash request-id (cons worker respond) noema-agent-worker--inputs)
 	     (push request-id (noema-agent-worker-pending-inputs worker))
-	     (noema-agent-worker--attention-note 1))))))
+	     (noema-agent-worker--attention-note 1 worker)))))))
     t))
 
 (defun noema-agent-worker--cancel (worker)

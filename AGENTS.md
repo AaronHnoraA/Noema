@@ -63,6 +63,12 @@ D-016/D-021/D-022 still govern hosting and the AI integration boundary.
   claim was verified against moved?" from `artifact_links` and the
   content-addressed digests the Runs already wrote. It never changes a
   WorkNode's state, and neither should anything built on it.
+- **Reviewed memory is a frozen projection.** Run preparation may attach only
+  relevant, evidence-backed, non-local Findings from the current workstream as
+  low-priority automatic context. Explicit `@@ctx(none)` suppresses it. Handoff
+  excerpts enter as pending `finding.create` Proposals; only a person's
+  evidence review may promote one to `supported`/`human_reviewed`. Do not infer
+  a durable fact from a transcript, a retrieval hit or a Pi coordinator reply.
 - **Recorded is not applied.** `research_state` writes a durable request; the
   editor applies it. Say so in the result and give the agent
   `{action: "status"}` to find out, rather than letting it assume the document
@@ -131,6 +137,10 @@ agent-shell, acp.el and shell-maker are pristine package-vc dependencies;
 their audited revisions are declared in AaronEmacs `init-ai-ide.el` and
 `package-lock.el`. Do not re-vendor or modify their package source. Preserve
 upstream features and complete implementations rather than writing replacements.
+`agent-shell-fork-tree` is likewise a pinned, pristine package-vc dependency.
+Noema enters it through `noema-agent-acp.el`, registers native branches as
+named Agent sessions, and keeps its text index in memory. Its shared-history
+tree is a navigation view, not a WorkNode DAG or authoritative `parentName`.
 The optional bounded hidden-render adapter is `lisp/noema-agent-render.el`,
 owned by the ACP boundary. Run its contract tests when upgrading the group.
 

@@ -34,8 +34,9 @@ export function createKernelResearchProvider({ baseUrl, fetchImpl = globalThis.f
     status({ root, path }) {
       return post("status", { root, path });
     },
-    async events({ root, notebookId = "", after = 0, limit = 200, latestPerWorkNode = false }) {
-      const data = await post("events", { root, notebookId, after, limit,
+    async events({ root, notebookId = "", workstreamId = "", after = 0, limit = 200, latest = false, latestPerWorkNode = false }) {
+      const data = await post("events", { root, notebookId, workstreamId, after, limit,
+        ...(latest ? { latest: true } : {}),
         ...(latestPerWorkNode ? { latestPerWorkNode: true } : {}) });
       return Array.isArray(data.events) ? data.events : [];
     },

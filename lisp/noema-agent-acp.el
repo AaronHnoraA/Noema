@@ -213,6 +213,7 @@ The function receives the live agent buffer and owns only its presentation.")
                    ("C-c M-k" . noema-agent-acp-close-others)
                    ("C-c C-w" . noema-sessions-agent-rename)
                    ("C-c C-f" . noema-sessions-agent-fork)
+                   ("C-c C-t" . noema-agent-acp-conversation-tree)
                    ("C-c C-q" . noema-sessions-agent-side-chat)
                    ("C-c C-d" . noema-sessions-agent-archive)
                    ("C-c C-j" . noema-sessions-agent-jump)
@@ -407,6 +408,69 @@ the real agent-shell buffer, so it accepts input and interrupts directly."
     (unless (noema-agent-acp-agent-buffer-p candidate)
       (user-error "No Noema agent session here"))
     candidate))
+
+(declare-function agent-shell-fork-tree "agent-shell-fork-tree" ())
+(defvar agent-shell-fork-tree--source)
+
+(defun noema-agent-acp-conversation-tree (&optional buffer)
+  "Browse BUFFER's native ACP conversation tree in the Noema workflow.
+The tree is an in-memory view of native sessions in the agent's workspace;
+Noema's named Sessions list and WorkNode DAG retain their own meanings."
+  (interactive)
+  (let ((source (noema-agent-acp-command-buffer buffer)))
+    (unless (and (noema-agent-acp-state-value source '(:supports-session-list))
+                 (noema-agent-acp-state-value source '(:supports-session-load)))
+      (user-error "This agent needs ACP session/list and session/load for a conversation tree"))
+    (unless (require 'agent-shell-fork-tree nil t)
+      (user-error "agent-shell-fork-tree is not installed; restore packages from package-lock.el"))
+    (with-current-buffer source
+      ;; Upstream resolves the ACP cwd to a target-native path, then calls
+      ;; `file-truename' on it.  On a remote target that would inspect this
+      ;; machine's filesystem.  The Noema process directory is already the
+      ;; canonical ACP cwd, so keep that native path verbatim for tree lookup.
+      (cl-letf (((symbol-function 'file-truename) #'identity))
+        (agent-shell-fork-tree)))))
+
+(defun noema-agent-acp--conversation-tree-visit-a (original &rest args)
+  "Bring an upstream tree continuation or fork into Noema's Agent workspace."
+  (let* ((source agent-shell-fork-tree--source)
+         (root (and (buffer-live-p source)
+                    (buffer-local-value 'noema-agent-acp-session-root source)))
+         (agent (and (buffer-live-p source)
+                     (noema-agent-acp-state-value source '(:agent-config :identifier))))
+         (directory (and (buffer-live-p source)
+                         (expand-file-name (buffer-local-value 'default-directory source))))
+         (all-shells (symbol-function 'agent-shell-buffers))
+         ;; Upstream's endpoint reuse checks the native ID alone.  IDs are
+         ;; scoped to an agent and execution directory in Noema, including
+         ;; remote targets, so narrow that lookup during this action.
+         (window (cl-letf (((symbol-function 'agent-shell-buffers)
+                            (lambda ()
+                              (seq-filter
+                               (lambda (buffer)
+                                 (and (equal agent (noema-agent-acp-state-value
+                                                    buffer '(:agent-config :identifier)))
+                                      (equal directory
+                                             (expand-file-name
+                                              (buffer-local-value 'default-directory buffer)))))
+                               (funcall all-shells)))))
+                   (apply original args)))
+         (target (and (window-live-p window) (window-buffer window))))
+    (when (noema-agent-acp-agent-buffer-p target)
+      ;; The upstream tree starts a native ACP session.  Give a newly created
+      ;; branch a Noema name, so Sessions and context handoff can find it.
+      (unless (buffer-local-value 'noema-agent-acp-session-name target)
+        (noema-agent-acp-adopt target :origin 'tree :root root))
+      (noema-agent-acp-show-buffer target)
+      (when (and (window-live-p window)
+                 (not (window-parameter window 'noema-agent-workspace))
+                 (eq (window-buffer window) target))
+        (quit-window nil window)))
+    window))
+
+(with-eval-after-load 'agent-shell-fork-tree
+  (advice-add 'agent-shell-fork-tree--visit :around
+              #'noema-agent-acp--conversation-tree-visit-a))
 
 (defun noema-agent-acp-busy-p (buffer)
   "Return non-nil while agent BUFFER answers a prompt or serves a Noema Run."
@@ -610,7 +674,7 @@ request, no timer.  It is the one place Noema reads agent-shell's usage."
             :turns (let ((turns (map-elt state :request-count)))
                      (if (natnump turns) turns 0))))))
 
-(defcustom noema-agent-acp-ephemeral-origins '(side)
+(defcustom noema-agent-acp-ephemeral-origins '(side latex-export)
   "Session origins that never enter a project's durable session registry.
 A side chat asks a quick question beside a session without becoming one of
 the project's conversations; it is listed while it lives and then goes.
@@ -622,7 +686,7 @@ Adopted from Pisper's temporary side chat."
   "Name of the session this ephemeral side chat was opened beside.")
 (put 'noema-agent-acp-side-parent 'permanent-local t)
 
-(defcustom noema-agent-acp-auto-stop-origins '(run probe pi side)
+(defcustom noema-agent-acp-auto-stop-origins '(run probe pi side latex-export)
   "Session origins whose idle, hidden agents may be stopped automatically.
 Automatic stops are the periodic warm-buffer sweep and closing a project when
 its last `.noema' document goes.  Sessions a person opened -- `manual',
@@ -630,6 +694,17 @@ its last `.noema' document goes.  Sessions a person opened -- `manual',
 their back; close them with \\[noema-agent-acp-close] instead."
   :type '(repeat symbol)
   :group 'noema-agent-session)
+
+(defun noema-agent-acp-export-session-p (session)
+  "Whether SESSION is a private LaTeX export turn, including older side turns."
+  (let ((origin (plist-get session :origin))
+        (root (plist-get session :root)))
+    (or (eq origin 'latex-export)
+        (and (eq origin 'side)
+             (stringp root)
+             (string-prefix-p "latex-export--"
+                              (file-name-nondirectory
+                               (directory-file-name root)))))))
 
 (defun noema-agent-acp-note-activity (&rest _)
   "Record that the current agent buffer changed: input, output or a prompt.
@@ -820,6 +895,7 @@ renders.  Return non-nil when a prompt was written now."
       ["Restart session" (noema-sessions-agent-restart ,buffer) :active ,named]
       ["Rename session..." (noema-sessions-agent-rename ,buffer) :active ,named]
       ["Fork session..." (noema-sessions-agent-fork ,buffer) :active ,named]
+      ["Conversation tree" (noema-agent-acp-conversation-tree ,buffer)]
       ["Side chat beside it" (noema-sessions-agent-side-chat ,buffer) :active ,named]
       ["Jump to latest work block" (noema-sessions-agent-jump ,buffer) :active ,named]
       ["Archive session" (noema-sessions-agent-archive ,buffer) :active ,named]
@@ -864,6 +940,7 @@ Mouse
   \\[noema-agent-acp-close-others]\tclose the other tabs
   \\[noema-sessions-agent-rename]\trename the session
   \\[noema-sessions-agent-fork]\tfork the session
+  \\[noema-agent-acp-conversation-tree]\tbrowse this conversation's branches
   \\[noema-sessions-agent-side-chat]\tside chat: ask beside it without interrupting
   \\[noema-sessions-agent-archive]\tarchive the session and close its tab
   \\[noema-sessions-agent-jump]\tjump to its latest work block
@@ -911,7 +988,7 @@ Mouse
                                      (lambda (left right)
                                        (> (car (window-edges left))
                                           (car (window-edges right)))))))
-         (base (or right-pane (selected-window)))
+         (base (or right-pane (frame-selected-window frame)))
          (bottom (condition-case nil
                      (if (noema-agent-acp--right-pane-p base)
                          (split-window base nil 'below)
@@ -928,7 +1005,12 @@ Mouse
 
 (defun noema-agent-acp--display-workspace-buffer (buffer)
   "Show agent BUFFER itself in its frame's one bottom-right Agent window."
-  (let* ((frame (selected-frame))
+  (let* ((frame (if (frame-parameter (selected-frame) 'noema-agent-standalone)
+                    (or (seq-find (lambda (candidate)
+                                    (not (frame-parameter candidate 'noema-agent-standalone)))
+                                  (frame-list))
+                        (selected-frame))
+                  (selected-frame)))
          (root (buffer-local-value 'noema-agent-acp-session-root buffer))
          (existing (noema-agent-acp--workspace-window frame)))
     ;; A previous version placed the window across the whole bottom edge.
@@ -953,6 +1035,7 @@ Mouse
                    (noema-agent-acp-agent-buffer-p (window-buffer other)))
           (ignore-errors (quit-window nil other))))
       (select-window window)
+      (select-frame-set-input-focus frame)
       window)))
 
 (defun noema-agent-acp--retire-transcript-workspace ()
@@ -1369,7 +1452,8 @@ machine nor a routed host can run the agent there."
     (file-name-as-directory process)))
 
 (cl-defun noema-agent-acp-start (&key config directory session-id fork-session-id focus
-                                      (origin 'manual) (render-policy 'visible))
+                                      (origin 'manual) (render-policy 'visible)
+                                      display-function)
   "Start CONFIG in DIRECTORY, optionally resuming or forking a native session.
 The buffer is displayed only when FOCUS is non-nil (D-033): a document Run
 never pops its agent buffer; the person opens it on purpose.
@@ -1410,9 +1494,11 @@ visible-only render policy.  Neither setting affects ACP transport or events."
                       agent-shell-confirm-interrupt nil
                       noema-agent-render-policy render-policy
                       noema-agent-acp-session-origin origin
+                      noema-agent-acp-display-buffer-function display-function
                       noema-agent-acp-session-root
                       (file-name-as-directory (expand-file-name directory)))
-          (noema-agent-acp--install-workspace-tabs buffer))
+          (unless display-function
+            (noema-agent-acp--install-workspace-tabs buffer)))
         ;; acp.el starts the client process for the asynchronous handshake.
         (noema-agent-acp-subscribe
          :buffer buffer :event 'init-handshake
@@ -1465,7 +1551,8 @@ workspace is meant to replace."
                                 (or (map-nested-elt agent-shell--state
                                                       '(:agent-config :identifier))
                                     "agent"))))
-          (noema-agent-acp--install-workspace-tabs buffer))
+          (unless noema-agent-acp-display-buffer-function
+            (noema-agent-acp--install-workspace-tabs buffer)))
         (noema-agent-acp-show-buffer buffer))
     (apply orig buffer args)))
 

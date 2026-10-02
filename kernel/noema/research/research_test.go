@@ -133,6 +133,31 @@ func eventTypes(events []Event) []string {
 	return types
 }
 
+func TestRecentEventsFiltersBeforeApplyingTheLatestWindow(t *testing.T) {
+	store, _ := openTestStore(t)
+	tx, err := store.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, workstreamID := range []string{"ws_target", "ws_other", "ws_target", "ws_target"} {
+		if _, err := appendEvent(tx, Event{Type: "test.event", WorkstreamID: workstreamID}, int64(index+1),
+			map[string]any{"index": index + 1}); err != nil {
+			_ = tx.Rollback()
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	events, err := store.RecentEvents("", "ws_target", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[0].Payload["index"] != float64(3) || events[1].Payload["index"] != float64(4) {
+		t.Fatalf("expected the newest target events in ascending order, got %+v", events)
+	}
+}
+
 func TestParseNotebookProjectsResearchCells(t *testing.T) {
 	data := []byte(`{
 	  "nbformat": 4, "nbformat_minor": 5,

@@ -192,6 +192,70 @@ export function sanitizedTikzSvg(svg: string): string {
   return String(DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true } }));
 }
 
+/** Keep authored SVG colours for light themes, with readable equivalents for dark themes. */
+export function prepareTikzSvg(svg: SVGSVGElement): void {
+  const background = [20, 26, 39]; // Aaronnote's dark page.
+  const targetContrast = 5.5;
+  const channel = (value: number) => {
+    const normalized = value / 255;
+    return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+  };
+  const luminance = (rgb: number[]) =>
+    0.2126 * channel(rgb[0]) + 0.7152 * channel(rgb[1]) + 0.0722 * channel(rgb[2]);
+  const backgroundLuminance = luminance(background);
+  const rgbFromHex = (value: string): number[] | null => {
+    const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(value.trim());
+    if (!hex) return null;
+    const digits = hex[1].length === 3
+      ? [...hex[1]].map((part) => part + part)
+      : hex[1].match(/../g)!;
+    return digits.map((part) => parseInt(part, 16));
+  };
+  const lighten = (value: string): string | null => {
+    const rgb = rgbFromHex(value);
+    if (!rgb) return null;
+    if (luminance(rgb) >= targetContrast * (backgroundLuminance + 0.05) - 0.05) return null;
+    let low = 0;
+    let high = 1;
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const middle = (low + high) / 2;
+      const mixed = rgb.map((part) => part + (255 - part) * middle);
+      if ((luminance(mixed) + 0.05) / (backgroundLuminance + 0.05) < targetContrast) low = middle;
+      else high = middle;
+    }
+    return `#${rgb.map((part) => Math.round(part + (255 - part) * high).toString(16).padStart(2, "0")).join("")}`;
+  };
+  // TikZ Editor gives a node's fill and its label the same source id. A pale
+  // fill stays pale on the dark page, so its default black label must stay dark.
+  const lightFillSources = new Set<string>();
+  for (const element of svg.querySelectorAll<SVGElement>("[data-source-id][fill]")) {
+    const fill = rgbFromHex(element.getAttribute("fill") || "");
+    const sourceId = element.getAttribute("data-source-id");
+    if (fill && sourceId && luminance(fill) > 0.62 && Number(element.getAttribute("fill-opacity") ?? 1) > 0.5) {
+      lightFillSources.add(sourceId);
+    }
+  }
+  for (const element of svg.querySelectorAll<SVGElement>("[stroke], [fill], [color]")) {
+    const onLightFill = lightFillSources.has(element.getAttribute("data-source-id") || "")
+      && (element.localName === "text" || element.getAttribute("data-text-renderer") === "mathjax");
+    for (const attribute of ["stroke", "fill", "color"] as const) {
+      const source = element.getAttribute(attribute);
+      // The default black pen already follows currentColor in widgets.css.
+      if (!source || source === "black" || source.toLowerCase() === "#000000"
+        || (onLightFill && attribute !== "stroke")) continue;
+      const adjusted = lighten(source);
+      if (!adjusted) continue;
+      element.dataset[`noemaTikzDark${attribute[0].toUpperCase()}${attribute.slice(1)}`] = "";
+      element.style.setProperty(`--note-tikz-dark-${attribute}`, adjusted);
+    }
+  }
+  for (const element of svg.querySelectorAll<SVGElement>("text[data-source-id], svg[data-text-renderer][data-source-id]")) {
+    if (!lightFillSources.has(element.getAttribute("data-source-id") || "")) continue;
+    const ink = (element.getAttribute("fill") || element.getAttribute("color") || "").toLowerCase();
+    if (ink === "black" || ink === "#000000") element.dataset.noemaTikzOnLight = "";
+  }
+}
+
 /** Freeze browser-rendered TikZ into a standalone document with no asset file. */
 export async function inlineTikzFigures(html: string): Promise<string> {
   if (!html.includes("<noema-tikz")) return html;
@@ -202,7 +266,11 @@ export async function inlineTikzFigures(html: string): Promise<string> {
     const result = await renderTikzBrowser(source);
     if (result.ok && result.svg) {
       figure.innerHTML = sanitizedTikzSvg(result.svg);
-      figure.querySelector("svg")?.classList.add("aaronnote-tikz-image");
+      const svg = figure.querySelector("svg");
+      if (svg) {
+        prepareTikzSvg(svg);
+        svg.classList.add("aaronnote-tikz-image");
+      }
       figure.removeAttribute("data-source");
       if (result.intrinsic) {
         figure.style.setProperty("--aaronnote-tikz-natural-width", `${result.intrinsic.widthEm}em`);
@@ -232,7 +300,11 @@ function installTikzElement(): void {
       if (!figure.isConnected || figure.dataset.source !== source) return;
       if (result.ok && result.svg) {
         figure.innerHTML = sanitizedTikzSvg(result.svg);
-        figure.querySelector("svg")?.classList.add("aaronnote-tikz-image");
+        const svg = figure.querySelector("svg");
+        if (svg) {
+          prepareTikzSvg(svg);
+          svg.classList.add("aaronnote-tikz-image");
+        }
         figure.dataset.rendered = "true";
         figure.removeAttribute("data-source");
         if (result.intrinsic) {

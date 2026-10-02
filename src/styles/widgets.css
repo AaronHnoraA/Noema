@@ -2212,14 +2212,13 @@ noema-tikz {
 .aaronnote-tikz-image {
   display: block;
   box-sizing: content-box;
-  color: var(--note-tikz-ink, inherit);
   width: var(--aaronnote-image-width, var(--aaronnote-tikz-natural-width, auto));
   max-width: var(--aaronnote-image-max-width, min(100%, var(--note-image-max, 100%)));
   max-height: var(--aaronnote-image-max-height, var(--note-image-max-height, none));
   margin: 0 auto;
   padding: var(--note-figure-paper-pad, 0.55em);
   border-radius: 4px;
-  background: var(--note-tikz-background, transparent);
+  background: transparent;
 }
 .cm-editor .cm-tikz-env-widget.aaronnote-image-align-left .cm-tikz-env-image,
 .aaronnote-tikz.aaronnote-image-align-left .aaronnote-tikz-image {
@@ -2231,8 +2230,8 @@ noema-tikz {
   margin-left: auto;
   margin-right: 0;
 }
-/* TikZ Editor emits black as an SVG presentation attribute for the default
- * pen. Follow the note theme for that pen, while preserving authored colors. */
+/* The default black pen follows the note theme. Authored dark colours get a
+ * contrast-adjusted variant on dark pages without changing the light SVG. */
 .cm-editor .cm-tikz-env-image [stroke="black"],
 .cm-editor .cm-tikz-env-image [stroke="#000000"],
 .aaronnote-tikz-image [stroke="black"],
@@ -2248,6 +2247,22 @@ noema-tikz {
 .cm-editor .cm-tikz-env-image [color="#000000"],
 .aaronnote-tikz-image [color="#000000"] {
   color: inherit;
+}
+:root:is(:not([data-noema-theme]), [data-noema-theme="aaronnote"], [data-noema-theme="midnight"])
+  :is(.cm-tikz-env-image, .aaronnote-tikz-image) [data-noema-tikz-dark-stroke] {
+  stroke: var(--note-tikz-dark-stroke);
+}
+:root:is(:not([data-noema-theme]), [data-noema-theme="aaronnote"], [data-noema-theme="midnight"])
+  :is(.cm-tikz-env-image, .aaronnote-tikz-image) [data-noema-tikz-dark-fill] {
+  fill: var(--note-tikz-dark-fill);
+}
+:root:is(:not([data-noema-theme]), [data-noema-theme="aaronnote"], [data-noema-theme="midnight"])
+  :is(.cm-tikz-env-image, .aaronnote-tikz-image) [data-noema-tikz-dark-color] {
+  color: var(--note-tikz-dark-color);
+}
+:root:is(:not([data-noema-theme]), [data-noema-theme="aaronnote"], [data-noema-theme="midnight"])
+  :is(.cm-tikz-env-image, .aaronnote-tikz-image) [data-noema-tikz-on-light] {
+  color: #24201a;
 }
 .cm-editor .cm-tikz-env-image.is-tikz-stale {
   opacity: 0.55;

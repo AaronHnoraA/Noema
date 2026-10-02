@@ -879,7 +879,7 @@ async function emacsLatexAgentStatus() {
 let latexAgentRequestNumber = 0;
 async function runEmacsLatexAgent({ backend, workdir, prompt, hardTimeoutMs, signal }) {
   const requestId = `latex-${process.pid}-${++latexAgentRequestNumber}`;
-  const cancel = () => gatewayNotify("aaronnote.latex.agent-cancel", { requestId });
+  const cancel = () => gatewayNotify("aaronnote.latex.agent-cancel", { requestId, workdir });
   if (signal?.aborted) return { ok: false, message: "aborted" };
   signal?.addEventListener("abort", cancel, { once: true });
   try {
@@ -892,6 +892,9 @@ async function runEmacsLatexAgent({ backend, workdir, prompt, hardTimeoutMs, sig
     return { ok: false, message: String(error?.message || error) };
   } finally {
     signal?.removeEventListener("abort", cancel);
+    // A completed export must not leave its private ACP session in Emacs.
+    // The Emacs handler is idempotent, including after normal prompt finish.
+    await gatewayRequest("aaronnote.latex.agent-cancel", { requestId, workdir }, 5_000).catch(() => {});
   }
 }
 
@@ -2465,6 +2468,27 @@ const apiRouter = new ApiRouter().register({
   },
   "aaronnote:api:latex:templates": () => listLatexTemplates(),
   "aaronnote:api:latex:choose-output-path": (body) => chooseLatexOutputPath(body || {}),
+  "aaronnote:api:latex:intervene": async (body) => {
+    const task = coreTasks.get(body?.id);
+    if (!task || task.kind !== "latex-export" || task.status !== "failed") {
+      const error = new Error("LaTeX intervention requires a failed export task");
+      error.statusCode = 409;
+      throw error;
+    }
+    if (hostMode !== "emacs") {
+      const error = new Error("LaTeX intervention requires the Emacs host");
+      error.statusCode = 501;
+      throw error;
+    }
+    const status = await latexExportAgentStatus();
+    return gatewayRequest("aaronnote.latex.intervene", {
+      taskId: task.id,
+      file: task.metadata.file,
+      outputPath: task.metadata.outputPath,
+      error: task.error,
+      backend: status.agent,
+    }, 10_000);
+  },
   "aaronnote:api:latex:export": (body) => {
     const request = { ...(body || {}) };
     const file = String(request.file || request.sourceFile || "");
@@ -2487,18 +2511,49 @@ const apiRouter = new ApiRouter().register({
         templatePath: String(request.templatePath || ""),
         engine: String(request.engine || ""),
       },
-      run: async ({ signal, progress }) => {
-        if (hostMode === "emacs" && request.polish === true) {
-          const status = await emacsLatexAgentStatus();
-          if (status.engine !== "mechanical"
-              && !status.agents.some((agent) => agent.id === status.agent && agent.available)) {
-            throw new Error(`Emacs ACP LaTeX agent is unavailable: ${status.agent}`);
+      run: async ({ id, signal, progress }) => {
+        const agentWorkdirs = new Set();
+        try {
+          if (hostMode === "emacs" && request.polish === true) {
+            const status = await emacsLatexAgentStatus();
+            if (status.engine !== "mechanical"
+                && !status.agents.some((agent) => agent.id === status.agent && agent.available)) {
+              throw new Error(`Emacs ACP LaTeX agent is unavailable: ${status.agent}`);
+            }
+          }
+          return await exportLatex({
+            ...request, signal, onProgress: progress,
+            ...(hostMode === "emacs" ? {
+              agentRunner: (options) => {
+                agentWorkdirs.add(options.workdir);
+                return runEmacsLatexAgent(options);
+              },
+            } : {}),
+          });
+        } catch (error) {
+          if (hostMode === "emacs" && !signal.aborted && error?.name !== "AbortError") {
+            const agent = await latexExportAgentStatus().catch(() => ({}));
+            gatewayNotify("aaronnote.event", {
+              type: "latex-export-failed",
+              payload: {
+                taskId: id, file, outputPath,
+                error: String(error?.message || error || "LaTeX export failed"),
+                backend: String(agent.agent || "codex"),
+              },
+            });
+          }
+          throw error;
+        } finally {
+          // The task boundary is the final owner of every private export ACP
+          // session, including one whose prompt callback never arrived.
+          if (hostMode === "emacs") {
+            for (const workdir of agentWorkdirs) {
+              await gatewayRequest("aaronnote.latex.agent-cancel", {
+                requestId: "", workdir,
+              }, 5_000).catch(() => {});
+            }
           }
         }
-        return exportLatex({
-          ...request, signal, onProgress: progress,
-          ...(hostMode === "emacs" ? { agentRunner: runEmacsLatexAgent } : {}),
-        });
       },
       restartable: true,
       exclusiveKey: outputPath ? `latex-export:${outputPath}` : "",
@@ -3175,6 +3230,7 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
       setAgent: function(body) { return call("aaronnote:api:latex:set-agent", [body || {}]); },
       templates: function() { return call("aaronnote:api:latex:templates", []); },
       chooseOutputPath: function(body) { return call("aaronnote:api:latex:choose-output-path", [body || {}]); },
+      intervene: function(body) { return call("aaronnote:api:latex:intervene", [body || {}]); },
       export: function(body) { return call("aaronnote:api:latex:export", [body || {}]); }
     },
     tasks: {

@@ -530,6 +530,9 @@ func TestPermissionPolicyApprovesProjectWorkAndAsksBeyondIt(t *testing.T) {
 	}
 	for _, denied := range []probe{
 		{"push", map[string]any{"kind": "execute", "argv": []any{"git", "push", "origin", "main"}}},
+		{"string-push", map[string]any{"kind": "execute", "command": "git push origin main"}},
+		{"flag-push", map[string]any{"kind": "execute", "argv": []any{"git", "-C", root, "push", "origin", "main"}}},
+		{"second-git-push", map[string]any{"kind": "execute", "command": "git reset --soft HEAD~1; git -C . push origin main"}},
 		{"sudo", map[string]any{"kind": "execute", "argv": []any{"sudo", "rm", "-rf", "build"}}},
 		{"credential", map[string]any{"kind": "credential"}},
 	} {
@@ -549,6 +552,10 @@ func TestPermissionPolicyApprovesProjectWorkAndAsksBeyondIt(t *testing.T) {
 	for _, beyond := range []probe{
 		{"network", map[string]any{"kind": "fetch", "network": true}},
 		{"curl", map[string]any{"kind": "execute", "argv": []any{"curl", "https://example.com"}}},
+		{"opaque-shell", map[string]any{"kind": "execute", "command": "go test ./..."}},
+		{"missing-command", map[string]any{"kind": "execute"}},
+		{"missing-path", map[string]any{"kind": "edit"}},
+		{"unknown-tool", map[string]any{"kind": "other"}},
 		{"outside-read", map[string]any{"kind": "read", "paths": []any{"/etc/hosts"}}},
 		{"home", map[string]any{"kind": "execute", "argv": []any{"cat", "~/.ssh/config"}}},
 	} {
@@ -577,6 +584,54 @@ func TestPermissionPolicyApprovesProjectWorkAndAsksBeyondIt(t *testing.T) {
 	}
 	if other := request("outside-3", map[string]any{"kind": "edit", "paths": []any{"../elsewhere.md"}}); other.State != "pending" {
 		t.Fatalf("a remembered rule must not widen to other outside paths: %+v", other)
+	} else if _, err := store.DecidePermission(DecidePermissionInput{PermissionID: other.ID, OptionID: "reject_once", ExpectedVersion: other.Version, DecidedBy: "user"}); err != nil {
+		t.Fatal(err)
+	}
+	stringCommand := map[string]any{"kind": "execute", "command": "go test ./..."}
+	firstCommand := request("command-1", stringCommand)
+	if firstCommand.State != "pending" {
+		t.Fatalf("an opaque shell command must ask first: %+v", firstCommand)
+	}
+	if _, err := store.DecidePermission(DecidePermissionInput{PermissionID: firstCommand.ID, OptionID: "allow_always", ExpectedVersion: firstCommand.Version, DecidedBy: "user"}); err != nil {
+		t.Fatal(err)
+	}
+	if remembered := request("command-2", stringCommand); remembered.State != "resolved" || !strings.HasPrefix(remembered.DecidedBy, "policy-rule:") {
+		t.Fatalf("an exact shell command can be remembered: %+v", remembered)
+	}
+	if different := request("command-3", map[string]any{"kind": "execute", "command": "go test ./other/..."}); different.State != "pending" {
+		t.Fatalf("remembering a shell command must not allow another one: %+v", different)
+	} else if _, err := store.DecidePermission(DecidePermissionInput{PermissionID: different.ID, OptionID: "reject_once", ExpectedVersion: different.Version, DecidedBy: "user"}); err != nil {
+		t.Fatal(err)
+	}
+	missing := request("unscoped-always", map[string]any{"kind": "other"})
+	if missing.State != "pending" {
+		t.Fatalf("an unscoped action must ask: %+v", missing)
+	}
+	if _, err := store.DecidePermission(DecidePermissionInput{PermissionID: missing.ID, OptionID: "allow_always", ExpectedVersion: missing.Version, DecidedBy: "user"}); err == nil || !strings.Contains(err.Error(), "cannot remember") {
+		t.Fatalf("an unscoped action must not create a broad rule: %v", err)
+	}
+}
+
+func TestPermissionPolicyDoesNotAutoAllowSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "external")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if pathInsideProject(root, "external/new.md") {
+		t.Fatal("a new file below an outside symlink must require approval")
+	}
+	if pathInsideProject(root, filepath.Join(root, "external", "existing.md")) {
+		t.Fatal("an absolute path below an outside symlink must require approval")
+	}
+	if !pathInsideProject(root, "notes/new.md") {
+		t.Fatal("an ordinary new project file should remain approvable")
+	}
+	if !commandLeavesProject(root, []string{"cat external/new.md"}) {
+		t.Fatal("a shell command naming a relative path through a symlink must ask")
+	}
+	if got, want := projectPathKey(root, "external/new.md"), projectPathKey(root, filepath.Join(outside, "new.md")); got != want {
+		t.Fatalf("the symlink and its target must have one conflict key: %q != %q", got, want)
 	}
 }
 

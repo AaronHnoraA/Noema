@@ -716,6 +716,7 @@ type NativeApi = {
     setAgent?: (body?: Record<string, unknown>) => Promise<unknown>;
     templates?: () => Promise<unknown>;
     chooseOutputPath?: (body?: Record<string, unknown>) => Promise<unknown>;
+    intervene?: (body?: Record<string, unknown>) => Promise<unknown>;
     export?: (body?: LatexExportRequest) => Promise<unknown>;
   };
   tasks?: {
@@ -1534,6 +1535,10 @@ export const api = {
     async chooseOutputPath(body: Record<string, unknown>): Promise<Record<string, unknown>> {
       const call = requireMethod(nativeApi().latex?.chooseOutputPath, "LaTeX output path chooser");
       return await call(body) as Record<string, unknown>;
+    },
+    async intervene(id: string): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().latex?.intervene, "LaTeX export intervention");
+      return ensureOk(await call({ id }) as Record<string, unknown>, "LaTeX export intervention failed");
     },
     async export(body: LatexExportRequest): Promise<Record<string, unknown>> {
       const call = requireMethod(nativeApi().latex?.export, "LaTeX export");

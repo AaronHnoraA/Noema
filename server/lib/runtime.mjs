@@ -6391,15 +6391,12 @@ async function compileLatexExportPdf({ latex, outputPath, engine, sourceDir, sup
     // both succeeded.
     const logFile = join(buildDir, `${basename(texFile, extname(texFile))}.log`);
     throwIfAborted(signal);
-    await execFileAsync(latexBin, args, { cwd: buildDir, env, timeout: 120_000, maxBuffer: 16 * 1024 * 1024, signal });
-    throwIfAborted(signal);
-    let log = await readFile(logFile, "utf8").catch(() => "");
-    // A second pass only matters when the first one left cross-references, a
-    // table of contents, or citation labels unresolved.
-    if (latexNeedsAnotherPass(log)) {
+    let log = "";
+    for (let pass = 0; pass < 3; pass += 1) {
       await execFileAsync(latexBin, args, { cwd: buildDir, env, timeout: 120_000, maxBuffer: 16 * 1024 * 1024, signal });
       throwIfAborted(signal);
       log = await readFile(logFile, "utf8").catch(() => "");
+      if (!latexNeedsAnotherPass(log)) break;
     }
     const builtPdf = join(buildDir, `${basename(texFile, extname(texFile))}.pdf`);
     const diagnostics = latexLogDiagnostics(log);

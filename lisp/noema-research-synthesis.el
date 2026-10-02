@@ -34,6 +34,29 @@
 (defconst noema-research-synthesis--max-context-bytes (* 64 1024)
   "Maximum UTF-8 research context sent to one proposal sample.")
 
+;;;###autoload
+(defun noema-research-propose-memory-from-run (run-id kind statement disclosure)
+  "Propose a reviewed memory from completed RUN-ID's exact Handoff excerpt.
+KIND is decision or lesson. STATEMENT must occur verbatim in the Handoff.
+DISCLOSURE is local_only or project. The result stays pending in Attention."
+  (interactive
+   (list (read-string "Completed Run ID: ")
+         (completing-read "Memory kind: " '("decision" "lesson") nil t)
+         (read-string "Exact Handoff excerpt: ")
+         (completing-read "Disclosure: " '("local_only" "project") nil t nil nil "local_only")))
+  (let ((root (or (noema-current-project) (user-error "No Noema project here"))))
+    (my/noema-api-call
+     "aaronnote:api:research:memory:propose-from-run"
+     (vector `((root . ,root) (runId . ,run-id) (kind . ,kind)
+               (statement . ,statement) (disclosure . ,disclosure)))
+     (lambda (result error-object)
+       (if error-object
+           (message "Noema memory proposal failed: %s"
+                    (or (noema-research--get error-object "message") "unavailable"))
+         (message "Memory proposal %s is pending in Attention"
+                  (or (noema-research--get (noema-research--get result "proposal") "id") "unknown"))))
+     30)))
+
 (defconst noema-research-synthesis--system
   (concat
    "You are a proposal-only research curator. Return exactly one JSON object and nothing else. "

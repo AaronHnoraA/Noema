@@ -833,6 +833,28 @@ describe("LaTeX export", () => {
     await expect(readFile(malformedOut, "utf8")).rejects.toThrow();
   });
 
+  test("compiles a cited BibTeX entry into a PDF without unresolved references", async () => {
+    const { notes } = await setupRoot();
+    const bibDir = join(notes, "bib");
+    const meetingDir = join(notes, "meeting");
+    await mkdir(bibDir);
+    await mkdir(meetingDir);
+    await writeFile(join(bibDir, "refs.bib"),
+      "@book{Alpha, author={Author, Alice}, title={Example Book}, year={2026}}\n", "utf8");
+    const note = join(meetingDir, "setup.md");
+    await writeFile(note, [
+      "#+begin meta", "bib: ../bib", "#+end meta", "",
+      "The result follows @@cite(refs) [Alpha].", "",
+    ].join("\n"), "utf8");
+    const out = join(notes, "setup.tex");
+    const result = await exportLatex({ file: note, outputPath: out, polish: false }) as { pdfFile?: string };
+    const tex = await readFile(out, "utf8");
+    expect(tex).toContain("\\cite{");
+    expect(tex).toContain("\\bibitem{");
+    expect(result.pdfFile).toBeTruthy();
+    expect((await readFile(result.pdfFile!)).subarray(0, 4).toString()).toBe("%PDF");
+  });
+
   test("runs the configured agent when a polish pass is explicitly requested", async () => {
     const { root, notes } = await setupRoot();
     const agent = join(root, "fake-opencode.sh");

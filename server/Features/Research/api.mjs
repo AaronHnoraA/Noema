@@ -66,6 +66,7 @@ const METHODS = Object.freeze({
 	"input:respond": "respondInput",
 	"attention:list": "attention",
 	"proposal:create": "createProposal",
+	"memory:propose-from-run": "proposeRunMemory",
 	"supervisor:propose": "supervisorProposal",
 	"proposal:get": "proposal",
 	"proposal:list": "proposals",

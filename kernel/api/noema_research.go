@@ -86,13 +86,15 @@ func noemaResearchEvents(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var notebookID string
+	var notebookID, workstreamID string
 	var after, limit float64
-	var latestPerWorkNode bool
+	var latestPerWorkNode, latest bool
 	if !util.ParseJsonArgs(arg, ret,
 		util.BindJsonArg("notebookId", &notebookID, false, false),
+		util.BindJsonArg("workstreamId", &workstreamID, false, false),
 		util.BindJsonArg("after", &after, false, false),
 		util.BindJsonArg("limit", &limit, false, false),
+		util.BindJsonArg("latest", &latest, false, false),
 		util.BindJsonArg("latestPerWorkNode", &latestPerWorkNode, false, false)) {
 		return
 	}
@@ -104,6 +106,8 @@ func noemaResearchEvents(c *gin.Context) {
 	var err error
 	if latestPerWorkNode {
 		events, err = store.LatestWorkNodeActivity(notebookID)
+	} else if latest {
+		events, err = store.RecentEvents(notebookID, workstreamID, int(limit))
 	} else {
 		events, err = store.Events(notebookID, int64(after), int(limit))
 	}

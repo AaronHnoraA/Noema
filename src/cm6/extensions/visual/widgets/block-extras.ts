@@ -79,7 +79,7 @@ import { AttributeViewWidget } from "./attribute-view.ts";
 import { EmbedQueryWidget } from "./embed-query.ts";
 import { getKatexMacrosVersion } from "../../../../katex-macros.ts";
 import { renderTocInlineMath } from "../../../../toc-inline-math.ts";
-import { renderTikzBrowser, sanitizedTikzSvg, type BrowserTikzResult } from "../../../../tikz-browser.ts";
+import { prepareTikzSvg, renderTikzBrowser, sanitizedTikzSvg, type BrowserTikzResult } from "../../../../tikz-browser.ts";
 import { newNoemaId } from "../../../../../shared/identity.mjs";
 
 // ---------------------------------------------------------------------------
@@ -3188,6 +3188,7 @@ function tikzSvgElement(
   container.innerHTML = sanitizedTikzSvg(result.svg || "");
   const svg = container.querySelector("svg");
   if (!svg) return tikzPlaceholder("TikZ rendering produced no SVG", true);
+  prepareTikzSvg(svg);
   svg.classList.add("cm-image-render", "cm-tikz-env-image");
   svg.setAttribute("role", "img");
   // The browser renderer's own viewBox dimensions stay relative to body text.

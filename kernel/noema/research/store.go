@@ -401,6 +401,7 @@ var schemaStatements = []string{
 		payload_json  TEXT NOT NULL DEFAULT '{}'
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_events_notebook_seq ON events(notebook_id, seq)`,
+	`CREATE INDEX IF NOT EXISTS idx_events_workstream_seq ON events(workstream_id, seq)`,
 	// Terminal-artifact lookups and segment retention read one Run's events by type.
 	`CREATE INDEX IF NOT EXISTS idx_events_run_type ON events(run_id, type)`,
 	`CREATE INDEX IF NOT EXISTS idx_edges_dst ON edges(notebook_id, dst_cell_id)`,
@@ -1539,6 +1540,55 @@ func (s *Store) Events(notebookID string, after int64, limit int) ([]Event, erro
 		events = append(events, event)
 	}
 	return events, rows.Err()
+}
+
+// RecentEvents returns the newest bounded event window for a notebook and/or
+// workstream, ordered oldest-to-newest so callers can render it like Events.
+func (s *Store) RecentEvents(notebookID, workstreamID string, limit int) ([]Event, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+	query := `SELECT seq, id, type, ts, COALESCE(workstream_id, ''), COALESCE(notebook_id, ''), COALESCE(cell_id, ''), COALESCE(work_node_id, ''),
+		COALESCE(run_id, ''), COALESCE(session_id, ''), COALESCE(causation_id, ''), payload_json
+		FROM events WHERE 1 = 1`
+	args := []any{}
+	if notebookID != "" {
+		query += ` AND notebook_id = ?`
+		args = append(args, notebookID)
+	}
+	if workstreamID != "" {
+		query += ` AND workstream_id = ?`
+		args = append(args, workstreamID)
+	}
+	query += ` ORDER BY seq DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	events := []Event{}
+	for rows.Next() {
+		var event Event
+		var ts int64
+		var payload string
+		if err := rows.Scan(&event.Seq, &event.ID, &event.Type, &ts, &event.WorkstreamID, &event.NotebookID, &event.CellID, &event.WorkNodeID,
+			&event.RunID, &event.SessionID, &event.CausationID, &payload); err != nil {
+			return nil, err
+		}
+		event.TS = formatMillis(ts)
+		if err := json.Unmarshal([]byte(payload), &event.Payload); err != nil {
+			event.Payload = map[string]any{}
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for left, right := 0, len(events)-1; left < right; left, right = left+1, right-1 {
+		events[left], events[right] = events[right], events[left]
+	}
+	return events, nil
 }
 
 func nullable(value string) any {

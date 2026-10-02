@@ -6,7 +6,9 @@ package research
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"unicode"
@@ -130,15 +132,25 @@ func concurrentEditReasonTx(tx *sql.Tx, run Run, action map[string]any) (string,
 // projectPathKey returns PATH relative to TARGET for comparison, or "".
 func projectPathKey(target, path string) string {
 	path = strings.Trim(strings.TrimSpace(path), `"'`)
-	if path == "" {
+	if path == "" || strings.TrimSpace(target) == "" {
 		return ""
 	}
-	if filepath.IsAbs(path) && strings.TrimSpace(target) != "" {
-		if rel, err := filepath.Rel(filepath.Clean(target), filepath.Clean(path)); err == nil {
-			return filepath.ToSlash(rel)
-		}
+	root, err := canonicalPolicyPath(target)
+	if err != nil {
+		return ""
 	}
-	return filepath.ToSlash(filepath.Clean(path))
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(root, path)
+	}
+	actual, err := canonicalPolicyPath(path)
+	if err != nil {
+		return ""
+	}
+	rel, err := filepath.Rel(root, actual)
+	if err != nil {
+		return ""
+	}
+	return filepath.ToSlash(rel)
 }
 
 func hardDenyReason(action map[string]any) string {
@@ -146,13 +158,14 @@ func hardDenyReason(action map[string]any) string {
 	if kind == "credential" || kind == "elevate" || kind == "privilege" {
 		return "credentials and privilege elevation are always denied"
 	}
-	argv := strings.ToLower(strings.Join(actionStringSlice(action["argv"]), " "))
-	if argv == "" {
-		argv = strings.ToLower(strings.Join(actionStringSlice(action["command"]), " "))
+	parts := actionStringSlice(action["argv"])
+	if len(parts) == 0 {
+		parts = actionStringSlice(action["command"])
 	}
+	argv := strings.ToLower(strings.Join(parts, " "))
 	if strings.Contains(argv, "git push") || strings.Contains(argv, "git reset --hard") ||
 		strings.Contains(argv, "git rebase") || strings.Contains(argv, "git filter-repo") ||
-		strings.Contains(argv, "git branch -f") {
+		strings.Contains(argv, "git branch -f") || gitDangerousSubcommand(commandTokens(parts)) {
 		return "remote push and git history rewriting are always denied"
 	}
 	if strings.HasPrefix(argv, "sudo ") || strings.HasPrefix(argv, "doas ") || strings.HasPrefix(argv, "su ") ||
@@ -160,6 +173,39 @@ func hardDenyReason(action map[string]any) string {
 		return "privilege elevation is always denied"
 	}
 	return ""
+}
+
+func gitDangerousSubcommand(tokens []string) bool {
+	for index, token := range tokens {
+		if filepath.Base(strings.ToLower(token)) != "git" {
+			continue
+		}
+	subcommands:
+		for next := index + 1; next < len(tokens); next++ {
+			subcommand := strings.ToLower(tokens[next])
+			switch subcommand {
+			case "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env":
+				next++ // options with one value before the subcommand
+			case "push", "rebase", "filter-repo":
+				return true
+			case "reset":
+				if next+1 < len(tokens) && strings.ToLower(tokens[next+1]) == "--hard" {
+					return true
+				}
+				break subcommands
+			case "branch":
+				if next+1 < len(tokens) && strings.ToLower(tokens[next+1]) == "-f" {
+					return true
+				}
+				break subcommands
+			default:
+				if !strings.HasPrefix(subcommand, "-") {
+					break subcommands
+				}
+			}
+		}
+	}
+	return false
 }
 
 // projectAutoAllowReason returns why ACTION may proceed without asking: it
@@ -170,14 +216,26 @@ func projectAutoAllowReason(target string, action map[string]any) string {
 	if kind == "fetch" || kind == "network" || actionBool(action, "network") {
 		return ""
 	}
-	for _, path := range actionStringSlice(action["paths"]) {
+	paths := actionStringSlice(action["paths"])
+	argv := actionStringSlice(action["argv"])
+	// ACP tools may omit locations or provide a shell command as a single
+	// string.  An empty projection is not proof that work stays in TARGET.
+	switch kind {
+	case "read", "edit", "write", "delete", "move":
+		if len(paths) == 0 {
+			return ""
+		}
+	case "execute":
+		if len(argv) == 0 || strings.TrimSpace(runtimeStringValue(action["command"])) != "" {
+			return ""
+		}
+	default:
+		return ""
+	}
+	for _, path := range paths {
 		if !pathInsideProject(target, path) {
 			return ""
 		}
-	}
-	argv := actionStringSlice(action["argv"])
-	if len(argv) == 0 {
-		argv = actionStringSlice(action["command"])
 	}
 	if commandLeavesProject(target, argv) {
 		return ""
@@ -187,21 +245,56 @@ func projectAutoAllowReason(target string, action map[string]any) string {
 
 func pathInsideProject(target, path string) bool {
 	path = strings.Trim(strings.TrimSpace(path), `"'`)
-	if path == "" {
-		return true
-	}
-	if strings.HasPrefix(path, "~") || strings.HasPrefix(path, "$HOME") {
+	if path == "" || strings.TrimSpace(target) == "" ||
+		strings.HasPrefix(path, "~") || strings.HasPrefix(path, "$HOME") {
 		return false
 	}
-	if filepath.IsAbs(path) {
-		if strings.TrimSpace(target) == "" {
-			return false
-		}
-		rel, err := filepath.Rel(filepath.Clean(target), filepath.Clean(path))
-		return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	root, err := canonicalPolicyPath(target)
+	if err != nil {
+		return false
 	}
-	clean := filepath.Clean(path)
-	return clean != ".." && !strings.HasPrefix(clean, ".."+string(filepath.Separator))
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(root, path)
+	}
+	actual, err := canonicalPolicyPath(path)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(root, actual)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// canonicalPolicyPath resolves existing symlinks, including in the parent of a
+// file that has not been created yet.  Unresolvable symlinks fail closed.
+func canonicalPolicyPath(path string) (string, error) {
+	candidate, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	missing := []string{}
+	for {
+		resolved, err := filepath.EvalSymlinks(candidate)
+		if err == nil {
+			for i := len(missing) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, missing[i])
+			}
+			return filepath.Clean(resolved), nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		if _, lstatErr := os.Lstat(candidate); lstatErr == nil {
+			return "", err // dangling symlink, not an ordinary missing path
+		} else if !errors.Is(lstatErr, os.ErrNotExist) {
+			return "", lstatErr
+		}
+		parent := filepath.Dir(candidate)
+		if parent == candidate {
+			return "", err
+		}
+		missing = append(missing, filepath.Base(candidate))
+		candidate = parent
+	}
 }
 
 // networkCommands reach the network whatever their arguments.
@@ -229,12 +322,7 @@ var networkSubcommands = map[string][]string{
 // commandLeavesProject reports whether ARGV, possibly one shell string, names
 // a path outside TARGET or runs a command that reaches the network.
 func commandLeavesProject(target string, argv []string) bool {
-	tokens := []string{}
-	for _, part := range argv {
-		tokens = append(tokens, strings.FieldsFunc(part, func(r rune) bool {
-			return unicode.IsSpace(r) || strings.ContainsRune(";&|()`<>\"'", r)
-		})...)
-	}
+	tokens := commandTokens(argv)
 	for index, token := range tokens {
 		lower := strings.ToLower(token)
 		if strings.Contains(lower, "://") || strings.HasPrefix(lower, "git@") {
@@ -255,7 +343,7 @@ func commandLeavesProject(target string, argv []string) bool {
 		if token == "/dev/null" || strings.HasPrefix(token, "-") {
 			continue
 		}
-		if value := token; strings.HasPrefix(value, "/") || strings.HasPrefix(value, "~") ||
+		if value := token; strings.Contains(value, string(filepath.Separator)) || strings.HasPrefix(value, "~") ||
 			strings.HasPrefix(value, "$HOME") || strings.Contains(value, "..") {
 			if !pathInsideProject(target, value) {
 				return true
@@ -263,6 +351,16 @@ func commandLeavesProject(target string, argv []string) bool {
 		}
 	}
 	return false
+}
+
+func commandTokens(parts []string) []string {
+	tokens := []string{}
+	for _, part := range parts {
+		tokens = append(tokens, strings.FieldsFunc(part, func(r rune) bool {
+			return unicode.IsSpace(r) || strings.ContainsRune(";&|()`<>\"'", r)
+		})...)
+	}
+	return tokens
 }
 
 // preferredAllowOption picks a one-time approval when the agent offers one, so
@@ -335,6 +433,9 @@ func permissionRuleMatches(matcher, action map[string]any) bool {
 			return false
 		}
 	}
+	if command, ok := matcher["command"].(string); ok && command != runtimeStringValue(action["command"]) {
+		return false
+	}
 	return true
 }
 
@@ -353,11 +454,17 @@ func sameStringSlice(left, right []string) bool {
 func actionStringSlice(value any) []string {
 	switch values := value.(type) {
 	case []string:
-		return append([]string(nil), values...)
+		result := make([]string, 0, len(values))
+		for _, value := range values {
+			if strings.TrimSpace(value) != "" {
+				result = append(result, value)
+			}
+		}
+		return result
 	case []any:
 		result := make([]string, 0, len(values))
 		for _, value := range values {
-			if stringValue, ok := value.(string); ok {
+			if stringValue, ok := value.(string); ok && strings.TrimSpace(stringValue) != "" {
 				result = append(result, stringValue)
 			}
 		}
@@ -380,6 +487,12 @@ func createPermissionRuleTx(tx *sql.Tx, permission Permission, run Run, optionID
 		effect = "reject"
 	}
 	matcher := permissionMatcher(permission.Action)
+	if len(matcher) == 0 ||
+		(len(actionStringSlice(matcher["paths"])) == 0 &&
+			len(actionStringSlice(matcher["argv_prefix"])) == 0 &&
+			strings.TrimSpace(runtimeStringValue(matcher["command"])) == "") {
+		return PermissionRule{}, errors.New("cannot remember a permission without an exact path or command; choose a one-time decision")
+	}
 	matcherJSON, err := json.Marshal(matcher)
 	if err != nil {
 		return PermissionRule{}, fmt.Errorf("encode permission rule: %w", err)
@@ -412,6 +525,9 @@ func permissionMatcher(action map[string]any) map[string]any {
 	}
 	if argv := actionStringSlice(action["argv"]); len(argv) > 0 {
 		matcher["argv_prefix"] = argv
+	}
+	if command := strings.TrimSpace(runtimeStringValue(action["command"])); command != "" {
+		matcher["command"] = command
 	}
 	return matcher
 }
