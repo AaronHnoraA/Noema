@@ -81,3 +81,14 @@ gutter walked each visible heading's whole section on every edit; the TOC
 signatures are now lazy). 5 MB note 17.8 → 16.6 ms near the start; near the
 end about 50 ms, of which ~70% is Lezer re-balancing the flat top-level node
 of a ~100k-block document.
+
+## Verification
+
+Unit tests run under happy-dom. `scripts/check-editor-interactions.mjs`
+drives a real WebKit page for what an emulator cannot judge: emoji and media
+render, the empty-line hint leaves the line box and caret unchanged, a mouse
+drag selects a table rectangle and Delete empties it, arrows cross cells and
+leave the table, Backspace selects a rendered embed whole, and Tab leaves
+bold. It found that the table widget stopped `mouseup` before the drag's
+document listener, so those listeners run in the capture phase.
+
