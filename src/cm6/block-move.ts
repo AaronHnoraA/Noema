@@ -14,6 +14,8 @@ const MAX_BLOCK_LINES = 20_000;
 const MAX_BLOCK_BYTES = 1024 * 1024;
 const STRUCTURAL_RE = /^(?:#{1,6}\s|[-*+]\s|\d+[.)]\s|```|~~~|\\\[\s*$|#\+begin\s+|@@cell\b|\|)/i;
 const LIST_RE = /^([ \t]*)(?:[-*+]\s+|\d+[.)]\s+|- \[[ xX]\]\s+)/;
+/** GFM delimiter row; one hyphen per cell is enough. */
+const TABLE_DELIMITER_RE = /^\s*\|?(?:\s*:?-+:?\s*\|)+\s*(?::?-+:?\s*)?$/;
 const protectedPreambleCache = new WeakMap<object, readonly { from: number; to: number }[]>();
 
 function lineWithBreakTo(state: EditorState, lineNumber: number): number {
@@ -73,7 +75,7 @@ function positionProtected(state: EditorState, pos: number): boolean {
   return protectedPreambleRange(state).some((range) => pos >= range.from && pos < range.to);
 }
 
-function blockBeginningAtLine(state: EditorState, startLine: number): MovableBlock | null {
+export function blockBeginningAtLine(state: EditorState, startLine: number): MovableBlock | null {
   const start = state.doc.line(startLine);
   const text = start.text;
   if (!text.trim() || positionProtected(state, start.from)) return null;
@@ -163,7 +165,7 @@ function blockBeginningAtLine(state: EditorState, startLine: number): MovableBlo
 
   if (/^\s*\|/.test(text)) {
     const next = startLine < state.doc.lines ? state.doc.line(startLine + 1).text : "";
-    if (/^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*$/.test(next)) {
+    if (TABLE_DELIMITER_RE.test(next)) {
       let end = startLine + 1;
       for (let lineNumber = startLine + 2; lineNumber <= state.doc.lines; lineNumber += 1) {
         const line = state.doc.line(lineNumber);
@@ -187,6 +189,27 @@ function blockBeginningAtLine(state: EditorState, startLine: number): MovableBlo
     end = lineNumber;
   }
   return cappedBlock(state, startLine, end, "paragraph");
+}
+
+/**
+ * The kind of block that starts at STARTLINE, by the same rules as
+ * `blockBeginningAtLine` but without walking to the block's end. The gutter
+ * asks this for every visible line on every edit; walking a heading's whole
+ * section there made the gutter the largest per-keystroke cost of a note.
+ */
+export function blockStartAtLine(state: EditorState, startLine: number): MovableBlockKind | null {
+  const start = state.doc.line(startLine);
+  const text = start.text;
+  if (!text.trim() || positionProtected(state, start.from)) return null;
+  if (/^#{1,6}\s+/.test(text)) return "heading";
+  if (/^\s{0,3}(?:`{3,}|~{3,})/.test(text)) return "fence";
+  if (/^\s*\\\[\s*$/.test(text)) return "math";
+  if (/^\s*#\+begin\s+[A-Za-z][\w-]*\b/i.test(text)) return "org-env";
+  if (/^\s*@@cell\b/i.test(text)) return "jupyter";
+  if (LIST_RE.test(text)) return "list";
+  if (/^\s*\|/.test(text) && startLine < state.doc.lines && TABLE_DELIMITER_RE.test(state.doc.line(startLine + 1).text)) return "table";
+  if (startLine > 1 && state.doc.line(startLine - 1).text.trim() && !STRUCTURAL_RE.test(text)) return null;
+  return "paragraph";
 }
 
 export function movableBlockAt(state: EditorState, pos: number): MovableBlock | null {
@@ -249,30 +272,31 @@ export function moveBlockAtCursor(view: EditorView, direction: -1 | 1): boolean 
   return moveBlockTo(view, block, next.to);
 }
 
+/** A drag handle on the first line of a block; its size limit is checked at drag start. */
 class BlockHandleMarker extends GutterMarker {
   readonly from: number;
-  readonly disabled: boolean;
   readonly kind: MovableBlockKind;
-  constructor(from: number, disabled: boolean, kind: MovableBlockKind) {
+  constructor(from: number, kind: MovableBlockKind) {
     super();
     this.from = from;
-    this.disabled = disabled;
     this.kind = kind;
   }
   eq(other: BlockHandleMarker): boolean {
-    return this.from === other.from && this.disabled === other.disabled && this.kind === other.kind;
+    return this.from === other.from && this.kind === other.kind;
   }
   toDOM(): Node {
     const handle = document.createElement("span");
-    handle.className = `cm-block-drag-handle${this.disabled ? " is-disabled" : ""}`;
+    handle.className = "cm-block-drag-handle";
     handle.textContent = "⠿";
-    handle.draggable = !this.disabled;
+    handle.draggable = true;
     handle.dataset.blockFrom = String(this.from);
-    handle.title = this.disabled ? "Block exceeds the 1 MiB / 20,000 line move limit" : `Drag ${this.kind}`;
+    handle.title = `Drag ${this.kind}`;
     handle.setAttribute("aria-label", handle.title);
     return handle;
   }
 }
+
+const TOO_LARGE_TITLE = "Block exceeds the 1 MiB / 20,000 line move limit";
 
 const draggedBlocks = new WeakMap<EditorView, MovableBlock>();
 
@@ -286,9 +310,12 @@ function blockForGutterEvent(view: EditorView, line: BlockInfo, event: Event): M
     ? event.target.closest<HTMLElement>(".cm-block-drag-handle")
     : null;
   const markerFrom = Number(element?.dataset.blockFrom);
-  if (Number.isFinite(markerFrom)) {
-    const block = movableBlockAt(view.state, markerFrom);
-    if (block?.from === markerFrom) return block;
+  if (Number.isFinite(markerFrom) && markerFrom <= view.state.doc.length) {
+    const start = view.state.doc.lineAt(markerFrom);
+    if (start.from === markerFrom) {
+      const block = blockBeginningAtLine(view.state, start.number);
+      if (block) return block;
+    }
   }
   return blockForGutterLine(view, line);
 }
@@ -296,14 +323,22 @@ function blockForGutterEvent(view: EditorView, line: BlockInfo, event: Event): M
 export const blockMoveGutterExtension: Extension = gutter({
   class: "cm-block-drag-gutter",
   lineMarker(view, line) {
-    const block = blockForGutterLine(view, line);
-    return block ? new BlockHandleMarker(block.from, block.tooLarge, block.kind) : null;
+    const start = view.state.doc.lineAt(line.from);
+    const kind = blockStartAtLine(view.state, start.number);
+    return kind ? new BlockHandleMarker(start.from, kind) : null;
   },
   lineMarkerChange: (update) => update.docChanged || update.viewportChanged,
   domEventHandlers: {
     dragstart(view, line, event) {
       const block = blockForGutterEvent(view, line, event);
-      if (!block || block.tooLarge) return false;
+      if (block?.tooLarge) {
+        // The size limit is only known once the block's end is found.
+        event.preventDefault();
+        const handle = event.target instanceof Element ? event.target.closest<HTMLElement>(".cm-block-drag-handle") : null;
+        if (handle) handle.title = TOO_LARGE_TITLE;
+        return true;
+      }
+      if (!block) return false;
       draggedBlocks.set(view, block);
       const drag = event as DragEvent;
       drag.dataTransfer?.setData("text/x-aaronnote-block", String(block.from));

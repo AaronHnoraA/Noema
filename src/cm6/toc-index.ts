@@ -175,11 +175,15 @@ function buildTocIndex(
 ): TocIndex {
   const sortedHeadings = sorted ? headings : sortHeadings(headings);
   const sortedAnchors = sorted ? anchors : sortAnchors(anchors);
+  // The signatures cost O(headings) string building and only the floating
+  // TOC compares them, so they are built on first read, not per keystroke.
+  let headingKey: string | undefined;
+  let anchorKey: string | undefined;
   return {
     headings: sortedHeadings,
     anchors: sortedAnchors,
-    headingSignature: headingSignature(sortedHeadings),
-    anchorSignature: anchorSignature(sortedAnchors),
+    get headingSignature() { return headingKey ??= headingSignature(sortedHeadings); },
+    get anchorSignature() { return anchorKey ??= anchorSignature(sortedAnchors); },
     hasFences: fenceRanges.length > 0,
     fenceRanges,
   };
