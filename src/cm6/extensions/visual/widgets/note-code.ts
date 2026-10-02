@@ -13,7 +13,7 @@ import { hasViewportDecorationRefresh, scheduleViewportDecorationRefresh } from 
 import { parseNoteCodeLine } from "../../../../../shared/note-code.mjs";
 import { sourceEditorName } from "../../../../../aaronnote/host-mode.ts";
 import { noemaPlatformLabels } from "../../../../platform-compat.ts";
-import { isPointerSelecting, updateHasPointerSelectionEffect } from "../selection.ts";
+import { isPointerSelecting, selectionRevealsSource, updateHasPointerSelectionEffect } from "../selection.ts";
 import { isCoalescedVisualTyping } from "../typing-burst.ts";
 import { rememberPersistentVisualPluginState, restorePersistentVisualPluginState } from "../visual-mode.ts";
 
@@ -244,7 +244,7 @@ function buildNoteCodeDecos(view: EditorView): DecorationSet {
       if (parsed) {
         const commandFrom = line.from + parsed.commandFrom;
         const commandTo = line.from + parsed.commandTo;
-        const cursorInside = sel.from <= commandTo && sel.to >= commandFrom;
+        const cursorInside = selectionRevealsSource(sel, commandFrom, commandTo);
         if (!cursorInside) {
           decos.push(
             Decoration.replace({

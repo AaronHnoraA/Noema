@@ -147,7 +147,7 @@ describe("pasteDataTransfer", () => {
 
     expect(await pasteDataTransfer(emptyTransfer(), { insertMarkdown, readSystemClipboardFallback })).toBe(true);
     expect(readSystemClipboardFallback).toHaveBeenCalled();
-    expect(insertMarkdown).toHaveBeenCalledWith("from host", undefined);
+    expect(insertMarkdown).toHaveBeenCalledWith("from host", undefined, { plainText: "from host" });
   });
 
   test("still prefers the event's own data", async () => {
@@ -162,6 +162,6 @@ describe("pasteDataTransfer", () => {
 
     expect(await pasteDataTransfer(data, { insertMarkdown, readSystemClipboardFallback })).toBe(true);
     expect(readSystemClipboardFallback).not.toHaveBeenCalled();
-    expect(insertMarkdown).toHaveBeenCalledWith("from event", undefined);
+    expect(insertMarkdown).toHaveBeenCalledWith("from event", undefined, { plainText: "from event" });
   });
 });

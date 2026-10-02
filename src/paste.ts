@@ -42,11 +42,17 @@ export type EditorPasteTarget = {
   readonly owner: object;
 };
 
+/** What the clipboard held besides the Markdown made from it. */
+export type EditorPasteSource = {
+  /** The clipboard's plain text, for destinations that take text literally (code). */
+  plainText?: string;
+};
+
 export type EditorPasteContext = {
   currentFile?: () => string;
   assets?: EditorPasteAssetStore;
   readSystemClipboardFallback?: () => Promise<EditorClipboardPayload | null>;
-  insertMarkdown: (markdown: string, options?: EditorPasteOptions) => boolean;
+  insertMarkdown: (markdown: string, options?: EditorPasteOptions, source?: EditorPasteSource) => boolean;
 };
 
 function markdownLinkText(value: string): string {
@@ -147,7 +153,7 @@ export function pastePlainText(
   options?: EditorPasteOptions,
 ): boolean {
   const markdown = normalizePastedSourceText(text);
-  return markdown ? context.insertMarkdown(markdown, options) : false;
+  return markdown ? context.insertMarkdown(markdown, options, { plainText: markdown }) : false;
 }
 
 export async function pasteDataTransfer(
@@ -157,8 +163,9 @@ export async function pasteDataTransfer(
 ): Promise<boolean> {
   const files = filesFromDataTransfer(data);
   if (files.length > 0 && await pasteFiles(files, context, options)) return true;
+  const plainText = normalizePastedSourceText(data.getData("text/plain"));
   const markdown = markdownFromClipboard(data);
-  if (markdown) return context.insertMarkdown(markdown, options);
+  if (markdown) return context.insertMarkdown(markdown, options, { plainText: plainText || undefined });
   // A paste event whose DataTransfer carries nothing is not an empty clipboard.
   // The Emacs xwidget host routinely delivers one: WKWebView dispatches the
   // event but declines to expose the macOS pasteboard to the page. Ask the host
@@ -193,7 +200,9 @@ async function pasteClipboardItems(
     if (!plain && item.types.includes("text/plain")) plain = await (await item.getType("text/plain")).text();
   }
   const markdown = markdownFromClipboardParts(plain, html);
-  return markdown ? context.insertMarkdown(markdown, options) : false;
+  return markdown
+    ? context.insertMarkdown(markdown, options, { plainText: normalizePastedSourceText(plain) || undefined })
+    : false;
 }
 
 async function pasteFallbackPayload(
@@ -204,7 +213,9 @@ async function pasteFallbackPayload(
   if (!payload || payload.kind === "empty") return false;
   if (payload.kind === "text") {
     const markdown = markdownFromClipboardParts(payload.text, payload.html || "");
-    return markdown ? context.insertMarkdown(markdown, options) : false;
+    return markdown
+      ? context.insertMarkdown(markdown, options, { plainText: normalizePastedSourceText(payload.text) || undefined })
+      : false;
   }
   if (payload.kind === "asset") return pasteStoredAssets(context, [payload.asset], options);
   return pasteStoredAssets(context, payload.assets, options);

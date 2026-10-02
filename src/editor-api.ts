@@ -59,6 +59,7 @@ export type EditorCommand =
   | "link"
   | "superscript"
   | "subscript"
+  | "clear-format"
   | "insert-footnote"
   | "insert-revision"
   | "edit-revision"
@@ -96,6 +97,8 @@ export type EditorCommand =
   | "heading-4"
   | "heading-5"
   | "heading-6"
+  | "heading-promote"
+  | "heading-demote"
   | "fold-heading"
   | "unfold-heading"
   | "toggle-fold"
@@ -176,6 +179,8 @@ export function blockCommands(type: string): EditorCommand[] {
     "heading-4",
     "heading-5",
     "heading-6",
+    "heading-promote",
+    "heading-demote",
     "blockquote",
     "bullet-list",
     "ordered-list",
@@ -267,6 +272,20 @@ const builtInQuickInsertItems: QuickInsertItem[] = [
     detail: "######",
     command: "heading-6",
     keywords: ["h6"],
+  },
+  {
+    id: "heading-promote",
+    label: "Promote heading",
+    detail: "# level up",
+    command: "heading-promote",
+    keywords: ["upgrade", "raise", "heading level"],
+  },
+  {
+    id: "heading-demote",
+    label: "Demote heading",
+    detail: "# level down",
+    command: "heading-demote",
+    keywords: ["degrade", "lower", "heading level"],
   },
   {
     id: "bullet-list",

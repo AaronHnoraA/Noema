@@ -1,0 +1,290 @@
+/**
+ * Toggle semantics for inline and block formats, list continuation and fence
+ * closing — the behaviours MarkText, HyperMD (files.md) and Tiptap (Marker)
+ * share and Noema's plain wrap/prefix commands lacked.
+ */
+
+import { afterEach, describe, expect, it } from "@voidzero-dev/vite-plus-test";
+import { EditorSelection } from "@codemirror/state";
+import { createEditorCM6 } from "../../src/cm6/editor-cm6.ts";
+import { runEditorEnter } from "../../src/cm6/input-commands.ts";
+import type { Editor } from "../../src/editor-api.ts";
+
+const editors: Editor[] = [];
+
+function open(doc: string, from = 0, to = from): Editor {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const editor = createEditorCM6(host, { initialContent: doc });
+  editor.setSelection(from, to);
+  editors.push(editor);
+  return editor;
+}
+
+afterEach(() => {
+  while (editors.length) editors.pop()!.destroy();
+});
+
+describe("inline format toggles", () => {
+  it("removes bold when the selection is its content", () => {
+    const ed = open("**hello** world", 2, 7);
+    expect(ed.runCommand("bold")).toBe(true);
+    expect(ed.getMarkdown()).toBe("hello world");
+    expect(ed.getMarkdownSelection()).toEqual({ from: 0, to: 5 });
+  });
+
+  it("removes bold when the selection includes the markers", () => {
+    const ed = open("**hello** world", 0, 9);
+    ed.runCommand("bold");
+    expect(ed.getMarkdown()).toBe("hello world");
+    expect(ed.getMarkdownSelection()).toEqual({ from: 0, to: 5 });
+  });
+
+  it("removes bold around a bare caret inside it", () => {
+    const ed = open("say **hello** now", 8);
+    ed.runCommand("bold");
+    expect(ed.getMarkdown()).toBe("say hello now");
+    expect(ed.getMarkdownSelection()).toEqual({ from: 6, to: 6 });
+  });
+
+  it("re-applying bold round-trips", () => {
+    const ed = open("hello world", 0, 5);
+    ed.runCommand("bold");
+    expect(ed.getMarkdown()).toBe("**hello** world");
+    ed.runCommand("bold");
+    expect(ed.getMarkdown()).toBe("hello world");
+    expect(ed.getMarkdownSelection()).toEqual({ from: 0, to: 5 });
+  });
+
+  it("keeps selection-edge whitespace outside the markers", () => {
+    const ed = open("say hello world", 3, 10);
+    ed.runCommand("bold");
+    expect(ed.getMarkdown()).toBe("say **hello** world");
+    expect(ed.getMarkdownSelection()).toEqual({ from: 6, to: 11 });
+  });
+
+  it("merges partly-overlapping spans instead of nesting markers", () => {
+    const ed = open("a **b c** d", 0, 6);
+    ed.runCommand("bold");
+    expect(ed.getMarkdown()).toBe("**a b c** d");
+  });
+
+  it("absorbs spans fully inside the selection", () => {
+    const ed = open("a **b** c", 0, 9);
+    ed.runCommand("bold");
+    expect(ed.getMarkdown()).toBe("**a b c**");
+  });
+
+  it("toggles bold inside bold-italic without touching the italic", () => {
+    const ed = open("***word***", 5);
+    ed.runCommand("bold");
+    expect(ed.getMarkdown()).toBe("*word*");
+  });
+
+  it("wraps a multi-line selection line by line after block prefixes", () => {
+    const ed = open("- one\n- two", 0, 11);
+    ed.runCommand("bold");
+    expect(ed.getMarkdown()).toBe("- **one**\n- **two**");
+  });
+
+  it("toggles highlight, strike, sup and sub", () => {
+    const ed = open("==mark== ~~gone~~ x^2^ H~2~O", 3);
+    ed.runCommand("highlight");
+    expect(ed.getMarkdown()).toBe("mark ~~gone~~ x^2^ H~2~O");
+    ed.setSelection(8, 8);
+    ed.runCommand("strike");
+    expect(ed.getMarkdown()).toBe("mark gone x^2^ H~2~O");
+    ed.setSelection(12, 12);
+    ed.runCommand("superscript");
+    expect(ed.getMarkdown()).toBe("mark gone x2 H~2~O");
+    ed.setSelection(15, 15);
+    ed.runCommand("subscript");
+    expect(ed.getMarkdown()).toBe("mark gone x2 H2O");
+  });
+
+  it("inline code picks a fence longer than any backtick run inside", () => {
+    const ed = open("use a`b here", 4, 7);
+    ed.runCommand("code");
+    expect(ed.getMarkdown()).toBe("use ``a`b`` here");
+    ed.setSelection(7, 7);
+    ed.runCommand("code");
+    expect(ed.getMarkdown()).toBe("use a`b here");
+  });
+
+  it("formats every selection range", () => {
+    const ed = open("one two", 0);
+    ed.view.dispatch({ selection: EditorSelection.create([EditorSelection.range(0, 3), EditorSelection.range(4, 7)]) });
+    ed.runCommand("italic");
+    expect(ed.getMarkdown()).toBe("*one* *two*");
+  });
+
+  it("does not insert emphasis markers inside a fenced code block", () => {
+    const ed = open("```\ncode\n```", 6);
+    expect(ed.runCommand("bold")).toBe(false);
+    expect(ed.getMarkdown()).toBe("```\ncode\n```");
+  });
+
+  it("is one undo step", () => {
+    const ed = open("**hello** world", 2, 7);
+    ed.runCommand("bold");
+    ed.undo();
+    expect(ed.getMarkdown()).toBe("**hello** world");
+  });
+
+  it("clear-format removes every format the selection touches", () => {
+    const ed = open("a **b** *c* `d` ==e== f", 0, 23);
+    expect(ed.runCommand("clear-format")).toBe(true);
+    expect(ed.getMarkdown()).toBe("a b c d e f");
+  });
+});
+
+describe("block format toggles", () => {
+  it("heading of the same level turns back into text", () => {
+    const ed = open("# Title", 3);
+    ed.runCommand("heading-1");
+    expect(ed.getMarkdown()).toBe("Title");
+    expect(ed.getMarkdownSelection()).toEqual({ from: 1, to: 1 });
+  });
+
+  it("heading keeps the caret on the same text", () => {
+    const ed = open("Title", 2);
+    ed.runCommand("heading-2");
+    expect(ed.getMarkdown()).toBe("## Title");
+    expect(ed.getMarkdownSelection()).toEqual({ from: 5, to: 5 });
+  });
+
+  it("blockquote toggles every selected line", () => {
+    const ed = open("one\n\ntwo", 0, 8);
+    ed.runCommand("blockquote");
+    expect(ed.getMarkdown()).toBe("> one\n>\n> two");
+    ed.setSelection(0, ed.getMarkdown().length);
+    ed.runCommand("blockquote");
+    expect(ed.getMarkdown()).toBe("one\n\ntwo");
+  });
+
+  it("lists convert every selected line and toggle off", () => {
+    const ed = open("a\nb\nc", 0, 5);
+    ed.runCommand("ordered-list");
+    expect(ed.getMarkdown()).toBe("1. a\n2. b\n3. c");
+    ed.setSelection(0, ed.getMarkdown().length);
+    ed.runCommand("bullet-list");
+    expect(ed.getMarkdown()).toBe("- a\n- b\n- c");
+    ed.setSelection(0, ed.getMarkdown().length);
+    ed.runCommand("bullet-list");
+    expect(ed.getMarkdown()).toBe("a\nb\nc");
+  });
+
+  it("task conversion keeps an existing checked state and indentation", () => {
+    const ed = open("  - [x] done\n  - [ ] todo", 0, 25);
+    ed.runCommand("bullet-list");
+    expect(ed.getMarkdown()).toBe("  - done\n  - todo");
+    const tasks = open("  * [x] done", 0, 12);
+    tasks.runCommand("ordered-list");
+    expect(tasks.getMarkdown()).toBe("  1. done");
+  });
+
+  it("a list item becomes a task without losing its bullet", () => {
+    const ed = open("* item", 3);
+    ed.runCommand("task-list");
+    expect(ed.getMarkdown()).toBe("* [ ] item");
+  });
+});
+
+describe("list continuation", () => {
+  it("a new item after a checked task starts unchecked", () => {
+    const ed = open("- [x] done", 10);
+    runEditorEnter(ed.view);
+    expect(ed.getMarkdown()).toBe("- [x] done\n- [ ] ");
+  });
+
+  it("continues tasks under any bullet and ordered markers", () => {
+    const star = open("* [ ] star", 10);
+    runEditorEnter(star.view);
+    expect(star.getMarkdown()).toBe("* [ ] star\n* [ ] ");
+    const ordered = open("1. [X] first", 12);
+    runEditorEnter(ordered.view);
+    expect(ordered.getMarkdown()).toBe("1. [X] first\n2. [ ] ");
+  });
+
+  it("Enter on an empty task item of any marker exits the list", () => {
+    const ed = open("* [ ] a\n* [ ] ", 14);
+    runEditorEnter(ed.view);
+    expect(ed.getMarkdown()).toBe("* [ ] a\n");
+  });
+});
+
+describe("fenced code Enter", () => {
+  it("closes an opening fence and puts the caret inside", () => {
+    const ed = open("```python", 9);
+    runEditorEnter(ed.view);
+    expect(ed.getMarkdown()).toBe("```python\n\n```");
+    expect(ed.getMarkdownSelection()).toEqual({ from: 10, to: 10 });
+  });
+
+  it("closes tilde fences and keeps indentation", () => {
+    const ed = open("  ~~~", 5);
+    runEditorEnter(ed.view);
+    expect(ed.getMarkdown()).toBe("  ~~~\n  \n  ~~~");
+  });
+
+  it("leaves a closing fence alone", () => {
+    const ed = open("```js\nx\n```", 11);
+    runEditorEnter(ed.view);
+    expect(ed.getMarkdown()).toBe("```js\nx\n```\n");
+  });
+
+  it("leaves an already-closed opener alone", () => {
+    const ed = open("```js\n```", 5);
+    runEditorEnter(ed.view);
+    expect(ed.getMarkdown()).toBe("```js\n\n```");
+    expect(ed.getMarkdownSelection()).toEqual({ from: 6, to: 6 });
+  });
+});
+
+describe("table quick create", () => {
+  it("Enter after a lone header row adds the delimiter and a body row", () => {
+    const ed = open("| a | b |", 9);
+    runEditorEnter(ed.view);
+    expect(ed.getMarkdown()).toBe("| a   | b   |\n| --- | --- |\n|     |     |");
+    expect(ed.getMarkdownSelection()).toEqual({ from: 30, to: 30 });
+  });
+
+  it("a single pipe cell is not mistaken for a table", () => {
+    const ed = open("| note |", 8);
+    runEditorEnter(ed.view);
+    expect(ed.getMarkdown()).toBe("| note |\n");
+  });
+
+  it("Tab on pipes without a delimiter row indents instead of reformatting", async () => {
+    const { runEditorTab } = await import("../../src/cm6/input-commands.ts");
+    const ed = open("| a | b |", 3);
+    runEditorTab(ed.view);
+    expect(ed.getMarkdown().trimStart()).toBe("| a | b |");
+  });
+});
+
+describe("heading promote / demote", () => {
+  it("promotes text to h6 and stops at h1", () => {
+    const ed = open("Title", 2);
+    ed.runCommand("heading-promote");
+    expect(ed.getMarkdown()).toBe("###### Title");
+    ed.setMarkdown("## Title");
+    ed.setSelection(4, 4);
+    ed.runCommand("heading-promote");
+    expect(ed.getMarkdown()).toBe("# Title");
+    expect(ed.runCommand("heading-promote")).toBe(false);
+  });
+
+  it("demotes h6 back to text and leaves text alone", () => {
+    const ed = open("###### Title", 8);
+    ed.runCommand("heading-demote");
+    expect(ed.getMarkdown()).toBe("Title");
+    expect(ed.runCommand("heading-demote")).toBe(false);
+  });
+
+  it("is offered by quick insert", () => {
+    const ed = open("# Title", 3);
+    const ids = ed.getQuickInsertItems("heading").map((item) => item.id);
+    expect(ids).toEqual(expect.arrayContaining(["heading-promote", "heading-demote"]));
+  });
+});

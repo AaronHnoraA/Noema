@@ -580,7 +580,9 @@ function buildMermaidDecoRanges(
 
   for (const block of blocks) {
     if (block.to < from || block.from > to) continue;
-    const cursorInBlock = sel.from < block.to && sel.to > block.from;
+    // Only a caret opens a diagram's source; a range keeps it rendered, as
+    // `activeMermaidBlockKey` assumes when it ignores range selections.
+    const cursorInBlock = sel.empty && sel.from > block.from && sel.from < block.to;
     if (!cursorInBlock) {
       decos.push(
         Decoration.replace({

@@ -404,8 +404,11 @@ function buildImageDecorations(view: EditorView): DecorationSet {
         const line = doc.lineAt(node.to);
         const trailing = readImageTrailingAttrs(doc.sliceString(node.to, line.to), 0);
         const fullTo = trailing ? node.to + trailing.to : node.to;
+        // Only a caret opens an image's source. A range keeps it rendered,
+        // as `activeImageSourceKey` already assumes: a rebuild during a range
+        // selection (scroll, resize) used to reveal every crossed image.
         const cursorInside = !vimKeepsRenderedObjects(view)
-          && sel.from <= fullTo && sel.to >= node.from;
+          && sel.empty && sel.from <= fullTo && sel.from >= node.from;
         if (cursorInside) return false; // editable source
 
         const raw = doc.sliceString(node.from, node.to);
@@ -446,7 +449,7 @@ function buildImageDecorations(view: EditorView): DecorationSet {
           const trailing = readImageTrailingAttrs(doc.sliceString(to, line.to), 0);
           const fullTo = trailing ? to + trailing.to : to;
           const cursorInside = !vimKeepsRenderedObjects(view)
-            && sel.from <= fullTo && sel.to >= from;
+            && sel.empty && sel.from <= fullTo && sel.from >= from;
           if (cursorInside) continue;
           const layout = imageLayoutFromAttrs(trailing?.attrs ?? {});
           decos.push(

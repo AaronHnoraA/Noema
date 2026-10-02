@@ -79,7 +79,7 @@ import { createMenuController, type NoemaMenuItem } from "../src/menu-system.ts"
 import { figureLayoutMenuItems, figureLayoutTarget } from "../src/cm6/figure-layout-menu.ts";
 import { createTransientSurfaceRegistry } from "../src/transient-surfaces.ts";
 import { blobToBase64 } from "../src/paste.ts";
-import { collectFindMatches, createFindPattern, type FindMatch } from "./find.ts";
+import { collectFindMatches, createFindPattern, replacementText, type FindMatch, type FindOptions } from "./find.ts";
 import { AssistScheduler, type AssistUpdateFlags, type AssistUpdateOptions } from "./assist-scheduler.ts";
 import { hostCommandTargetsClient } from "./host-command-target.ts";
 import {
@@ -232,8 +232,15 @@ import {
 } from "./features/writing-stats/controller.ts";
 import { installActiveCoreReconnect } from "./active-core-reconnect.ts";
 import { noteAutoSaveEnabled } from "./save-policy.ts";
-import { SaveDrain } from "./save-drain.ts";
-import { EditorSaveChangeTracker, type EditorSaveChangeToken } from "./editor-save-changes.ts";
+import { defaultSaveRetryDelayMs, SaveDrain } from "./save-drain.ts";
+import { activeInlineFormats, INLINE_FORMAT_KINDS, type InlineFormatKind } from "../src/cm6/inline-format.ts";
+import {
+  EditorSaveChangeTracker,
+  sourceLineEnding,
+  sourceWithLineEnding,
+  type EditorSaveChangeToken,
+  type SourceLineEnding,
+} from "./editor-save-changes.ts";
 import {
   installNoemaThemeRuntime,
   loadNoemaAppConfig,
@@ -839,6 +846,7 @@ selectionTool.innerHTML = `
   <button type="button" data-selection-command="code" title="Inline code">&lt;&gt;</button>
   <button type="button" data-selection-command="superscript" title="Superscript">x²</button>
   <button type="button" data-selection-command="subscript" title="Subscript">x₂</button>
+  <button type="button" data-selection-command="clear-format" title="Clear formatting (${primaryShortcut("\\")})">Tx</button>
   <button type="button" data-selection-command="insert-footnote" title="Insert footnote">Fn</button>
   <button type="button" data-selection-command="revision-form" title="Suggest revision">Rev</button>
   <button type="button" data-selection-command="link" title="Link">@</button>
@@ -1069,11 +1077,20 @@ const findPanel = document.createElement("div");
 findPanel.className = "aaronnote-find-panel";
 findPanel.hidden = true;
 findPanel.innerHTML = `
-  <input type="search" data-find-query autocomplete="off" spellcheck="false" />
+  <input type="search" data-find-query autocomplete="off" spellcheck="false" aria-label="Find" />
+  <button type="button" data-find-option="case" aria-pressed="false" title="Match case (off: smart case)">Aa</button>
+  <button type="button" data-find-option="word" aria-pressed="false" title="Whole word">W</button>
+  <button type="button" data-find-option="regex" aria-pressed="false" title="Regular expression">.*</button>
   <span data-find-count>0/0</span>
-  <button type="button" data-find-prev title="Previous">↑</button>
-  <button type="button" data-find-next title="Next">↓</button>
+  <button type="button" data-find-prev title="Previous (Shift-Enter)">↑</button>
+  <button type="button" data-find-next title="Next (Enter)">↓</button>
+  <button type="button" data-find-replace-toggle aria-pressed="false" title="Replace">⇄</button>
   <button type="button" data-find-close title="Close">×</button>
+  <div class="aaronnote-find-replace" data-find-replace-row hidden>
+    <input type="text" data-find-replacement autocomplete="off" spellcheck="false" aria-label="Replace with" placeholder="Replace" />
+    <button type="button" data-find-replace title="Replace current match (Enter)">1</button>
+    <button type="button" data-find-replace-all title="Replace all matches (Alt-Enter)">All</button>
+  </div>
 `;
 document.body.appendChild(findPanel);
 const findInput = findPanel.querySelector<HTMLInputElement>("[data-find-query]")!;
@@ -1081,6 +1098,21 @@ const findCount = findPanel.querySelector<HTMLElement>("[data-find-count]")!;
 const findPrevButton = findPanel.querySelector<HTMLButtonElement>("[data-find-prev]")!;
 const findNextButton = findPanel.querySelector<HTMLButtonElement>("[data-find-next]")!;
 const findCloseButton = findPanel.querySelector<HTMLButtonElement>("[data-find-close]")!;
+const findReplaceToggle = findPanel.querySelector<HTMLButtonElement>("[data-find-replace-toggle]")!;
+const findReplaceRow = findPanel.querySelector<HTMLElement>("[data-find-replace-row]")!;
+const findReplacementInput = findPanel.querySelector<HTMLInputElement>("[data-find-replacement]")!;
+const findReplaceButton = findPanel.querySelector<HTMLButtonElement>("[data-find-replace]")!;
+const findReplaceAllButton = findPanel.querySelector<HTMLButtonElement>("[data-find-replace-all]")!;
+/** Panel toggles; match case off means smart case, as in Emacs isearch. */
+const findOptions = { matchCase: false, wholeWord: false, regex: false };
+
+function currentFindOptions(): FindOptions {
+  return {
+    regex: findOptions.regex,
+    caseSensitive: findOptions.matchCase ? true : "smart",
+    wholeWord: findOptions.wholeWord,
+  };
+}
 
 let currentFile = "";
 let currentTitle = "";
@@ -1088,6 +1120,8 @@ let currentClient = rendererClient;
 let currentKind = "";
 let currentStandalone = false;
 let currentIncrementalSave = false;
+/** The opened file's line ending; a file CM6 offsets cannot patch saves whole. */
+let currentLineEnding: { eol: SourceLineEnding; patchable: boolean } = { eol: "lf", patchable: true };
 let currentRemote = false;
 let currentReadOnly = initialReadOnly;
 let currentMtimeMs = 0;
@@ -5273,7 +5307,9 @@ function saveBody(changeToken: EditorSaveChangeToken | null = null, forceFull = 
     Boolean(changeToken);
   return {
     file: currentFile,
-    ...(incremental ? { changes: changeToken!.payload } : { content: editor.getMarkdown() }),
+    ...(incremental
+      ? { changes: changeToken!.payload }
+      : { content: sourceWithLineEnding(editor.getMarkdown(), currentLineEnding.eol) }),
     mode: editor.isSourceMode() ? "source" : "markdown",
     clientId,
     seq: ++saveSequence,
@@ -5344,7 +5380,7 @@ const saveDrain = new SaveDrain<EditorSaveSnapshot, Awaited<ReturnType<typeof ap
     }
     currentMtimeMs = Number(result.mtimeMs) || currentMtimeMs;
     currentVersion = String(result.version || currentVersion);
-    if (typeof result.incrementalSave === "boolean") currentIncrementalSave = result.incrementalSave;
+    if (typeof result.incrementalSave === "boolean") currentIncrementalSave = result.incrementalSave && currentLineEnding.patchable;
     forceFullEditorSave = false;
     applyIndexPayload(result);
     savedRevision = Math.max(savedRevision, snapshot.revision);
@@ -5352,13 +5388,22 @@ const saveDrain = new SaveDrain<EditorSaveSnapshot, Awaited<ReturnType<typeof ap
     setStatus(revision === savedRevision ? "Saved" : "Saving newer edit...");
     return true;
   },
-  fail(error, snapshot) {
+  fail(error, snapshot, retryInMs) {
     restoreEditorSaveChanges(snapshot);
-    setStatus(error instanceof Error ? error.message : "Save failed");
+    const message = error instanceof Error ? error.message : "Save failed";
+    setStatus(retryInMs === null ? message : `${message} — retrying in ${Math.round(retryInMs / 1000)}s`);
   },
   active() {
     updateTitle();
   },
+  // A thrown write (host restarting, transport error) is retried with backoff
+  // so an author who stopped typing does not keep an unsaved note. Remote and
+  // read-only notes are saved by hand, so they never retry on their own.
+  retryDelayMs: (attempt) => (
+    !currentReadOnly && currentFile && noteAutoSaveEnabled(currentRemote)
+      ? defaultSaveRetryDelayMs(attempt)
+      : null
+  ),
 });
 
 let keepaliveSaveKey = "";
@@ -5670,13 +5715,16 @@ function applyOpenedNote(
   const resetVim = options.resetVim !== false;
   const reloadNoteIndex = options.reloadNotes !== false;
   currentFile = String(opened.file || fallbackFile || "");
+  // A retry scheduled for the previous note must not fire into this one.
+  if (currentFile !== previousFile) saveDrain.cancelRetry();
   // The same file can be reopened with its document revision reset to zero.
   // Let that new editing session emit its own pagehide keepalive.
   keepaliveSaveKey = "";
   currentTitle = String(opened.title || "").trim();
   currentKind = String(opened.kind || "");
   currentStandalone = Boolean(opened.standalone);
-  currentIncrementalSave = opened.incrementalSave === true;
+  currentLineEnding = sourceLineEnding(String(opened.content ?? ""));
+  currentIncrementalSave = opened.incrementalSave === true && currentLineEnding.patchable;
   currentRemote = Boolean(opened.remote);
   currentReadOnly = initialReadOnly;
   applyReadOnlyUi();
@@ -6418,6 +6466,7 @@ function runFormattingShortcut(event: KeyboardEvent): boolean {
     : !event.shiftKey && key === "b" ? "bold"
     : !event.shiftKey && key === "i" ? "italic"
     : !event.shiftKey && key === "k" ? "link"
+    : !event.shiftKey && (key === "\\" || event.code === "Backslash") ? "clear-format"
     : "";
   if (!command) return false;
   event.preventDefault();
@@ -7343,7 +7392,7 @@ function gotoFindMatch(index: number): void {
 }
 
 function refreshFind(query = findInput.value, keepCurrent = true): void {
-  const result = createFindPattern(query, false);
+  const result = createFindPattern(query, currentFindOptions());
   if (result.error) {
     clearFindHighlights();
     findCount.textContent = result.error;
@@ -7380,6 +7429,51 @@ function closeFindPanel(): void {
   findPanel.hidden = true;
   clearFindHighlights();
   editor.focus();
+}
+
+function setFindReplaceVisible(visible: boolean): void {
+  findReplaceRow.hidden = !visible;
+  findReplaceToggle.setAttribute("aria-pressed", String(visible));
+  if (visible) {
+    findReplacementInput.focus();
+    findReplacementInput.select();
+  }
+}
+
+/** Replace the current match and move on to the one that follows it. */
+function replaceCurrentFindMatch(): void {
+  if (rejectReadOnlyAction("Read-only pane")) return;
+  refreshFind(findInput.value, true);
+  const match = findMatches[findIndex];
+  if (!match) return;
+  const insert = replacementText(match.match, findReplacementInput.value, findOptions.regex);
+  editor.view.dispatch({
+    changes: { from: match.from, to: match.to, insert },
+    selection: { anchor: match.from + insert.length },
+    userEvent: "input.replace",
+  });
+  // The replacement may itself match; continue from after it.
+  findIndex = -1;
+  refreshFind(findInput.value, false);
+}
+
+/** Replace every match as one undoable change. */
+function replaceAllFindMatches(): void {
+  if (rejectReadOnlyAction("Read-only pane")) return;
+  refreshFind(findInput.value, true);
+  if (findMatches.length === 0) return;
+  const count = findMatches.length;
+  editor.view.dispatch({
+    changes: findMatches.map((match) => ({
+      from: match.from,
+      to: match.to,
+      insert: replacementText(match.match, findReplacementInput.value, findOptions.regex),
+    })),
+    userEvent: "input.replace.all",
+    scrollIntoView: true,
+  });
+  refreshFind(findInput.value, false);
+  setStatus(`Replaced ${count} match${count === 1 ? "" : "es"}`);
 }
 
 /** A non-empty DOM selection inside `@@cell` output or source text, if any. */
@@ -8404,7 +8498,7 @@ async function updateNoteMeta(
   try {
     const msg = await action({
       file: currentFile,
-      content: editor.getMarkdown(),
+      content: sourceWithLineEnding(editor.getMarkdown(), currentLineEnding.eol),
       ...body,
     });
     applyOpenedNote(msg, currentFile);
@@ -11224,7 +11318,18 @@ function updateSelectionTool(active = activeEditorSelection()): void {
   const top = Math.max(margin, rect.top - 46);
   selectionTool.style.left = `${left}px`;
   selectionTool.style.top = `${top}px`;
+  markActiveSelectionFormats();
   selectionTool.hidden = false;
+}
+
+/** Show which inline formats the selection already has, as Marker's bubble menu does. */
+function markActiveSelectionFormats(): void {
+  const active = activeInlineFormats(editor.view.state);
+  for (const button of selectionTool.querySelectorAll<HTMLButtonElement>("[data-selection-command]")) {
+    const command = button.dataset.selectionCommand as InlineFormatKind;
+    if (!INLINE_FORMAT_KINDS.includes(command)) continue;
+    button.setAttribute("aria-pressed", String(active.has(command)));
+  }
 }
 
 async function copyActiveSelection(): Promise<void> {
@@ -11394,7 +11499,7 @@ function runSelectionCommand(command: string): void {
     void insertRoamIdLink();
     return;
   }
-  if (!["bold", "italic", "highlight", "strike", "code", "link", "superscript", "subscript", "insert-footnote"].includes(command)) return;
+  if (!["bold", "italic", "highlight", "strike", "code", "link", "superscript", "subscript", "clear-format", "insert-footnote"].includes(command)) return;
   if (rejectReadOnlyAction("Read-only pane")) return;
   editor.runCommand(command as EditorCommand);
   closeSelectionTool();
@@ -12625,6 +12730,34 @@ findInput.addEventListener("keydown", (event) => {
 findPrevButton.addEventListener("click", () => gotoFindMatch(findIndex - 1));
 findNextButton.addEventListener("click", () => gotoFindMatch(findIndex + 1));
 findCloseButton.addEventListener("click", closeFindPanel);
+for (const button of findPanel.querySelectorAll<HTMLButtonElement>("[data-find-option]")) {
+  button.addEventListener("click", () => {
+    const option = button.dataset.findOption;
+    if (option === "case") findOptions.matchCase = !findOptions.matchCase;
+    else if (option === "word") findOptions.wholeWord = !findOptions.wholeWord;
+    else if (option === "regex") findOptions.regex = !findOptions.regex;
+    button.setAttribute("aria-pressed", String(
+      option === "case" ? findOptions.matchCase : option === "word" ? findOptions.wholeWord : findOptions.regex,
+    ));
+    refreshFind(findInput.value, false);
+    findInput.focus();
+  });
+}
+findReplaceToggle.addEventListener("click", () => setFindReplaceVisible(findReplaceRow.hidden));
+findReplaceButton.addEventListener("click", replaceCurrentFindMatch);
+findReplaceAllButton.addEventListener("click", replaceAllFindMatches);
+findReplacementInput.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeFindPanel();
+    return;
+  }
+  if (event.key === "Enter") {
+    event.preventDefault();
+    if (event.altKey) replaceAllFindMatches();
+    else replaceCurrentFindMatch();
+  }
+});
 document.addEventListener("aaronnote:open-url", (event) => {
   const custom = event as CustomEvent<{ href?: string; newWindow?: boolean }>;
   const href = custom.detail?.href;

@@ -25,6 +25,10 @@ separate editor implementation.
 | `src/cm6/close-brackets-vscode.ts` | VSCode-style bracket pairing, selection wrapping, overtyping, and paired deletion. |
 | `src/cm6/languages/markdown/` | Lezer Markdown boundary, including nested-bracket link parsing. |
 | `src/cm6/commands/index.ts` | Editing commands, block context, and quick insert registry. |
+| `src/cm6/inline-format.ts`, `src/cm6/block-format.ts` | Toggle semantics for inline formats (bold … subscript, clear) and for headings, blockquotes and lists over every selected line; the rules follow MarkText's `format()`/`updateParagraph`. |
+| `src/cm6/paste-context.ts` | What a paste becomes where it lands (code, table row, link destination, URL over a selection, multi-cursor). `src/paste.ts` converts the clipboard once and passes its plain text along. |
+| `src/cm6/code-block-input.ts`, `src/cm6/history-grouping.ts` | Fenced-code Enter/Tab/Mod-Enter, and word/kind-boundary undo grouping through CM6 `joinToEvent`. |
+| `src/cjk-emphasis.ts` | CJK-friendly emphasis flanking shared by the Lezer editor grammar and the markdown-it renderer; strictly additive over CommonMark. |
 | `src/cm6/extensions/visual/widgets/*.ts` | Math, code fence, image, task, TOC, org-env, and related widgets. `block-extras.ts` hosts the `@@cell` Jupyter widget; it renders cell output through the shared JupyterLab stack (lazy-loaded). |
 | `src/jupyter-rendermime.ts` | Shared JupyterLab render stack for cell output — the same `@jupyterlab/rendermime` + `@jupyterlab/outputarea` pipeline VS Code Jupyter uses. Adds a KaTeX LaTeX typesetter, an HTML renderer that sandboxes script-bearing HTML in an auto-sizing iframe (and routes math-only HTML to KaTeX), and a widget-view renderer bridging to the live kernel manager. Loaded lazily (large). |
 | `src/jupyter-widget-runtime.ts` | ipywidgets frontend: a `KernelWidgetManager` subclass over the live kernel (via `server/lib/jupyter-kernel-ws.mjs`). Mounts kernel-state-first (`restoreWidgets`), replays captured comm messages only as a fallback, and seeds Output widgets with server-captured outputs. Shares the render stack above. Lazy chunk. |

@@ -25,6 +25,25 @@ export const selectionIntersects = (
   || (extents.from <= range.to && extents.to >= range.to)
 ));
 
+/**
+ * Whether the main selection opens the source of a rendered object [from, to].
+ *
+ * A caret inside the object, or touching either edge, opens it. A range opens
+ * it only when one of its ends falls inside: those ends are what the author is
+ * placing. A range that merely crosses an object keeps it rendered, so Select
+ * All or a paragraph drag no longer turns every widget it passes back into
+ * source and reflows the page (files.md made its folds caret-only for the
+ * same reason; MarkText decides from the anchor and focus).
+ */
+export function selectionRevealsSource(
+  selection: { from: number; to: number; empty: boolean },
+  from: number,
+  to: number,
+): boolean {
+  if (selection.empty) return selection.from >= from && selection.from <= to;
+  return (selection.from > from && selection.from < to) || (selection.to > from && selection.to < to);
+}
+
 export const extendBackwardsOverEmptyLines = (
   doc: Text,
   line: Line,

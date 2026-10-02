@@ -11,7 +11,7 @@
 
 import { EditorView } from "@codemirror/view";
 import type { Text } from "@codemirror/state";
-import { syntaxTree } from "@codemirror/language";
+import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import { parseTableModel, formatTableLines, splitTableCells, tableTooLarge, type TableAlign } from "../table-model.ts";
 import { writeSystemClipboard } from "../../system-clipboard.ts";
 import type {
@@ -36,28 +36,23 @@ import {
 } from "../heading-fold.ts";
 import { revisionAdviceRange, revisionSource, type RevisionSourceOptions } from "../../authoring-syntax.ts";
 import { moveBlockAtCursor } from "../block-move.ts";
+import { clearInlineFormatSpec, toggleInlineFormatSpec, type InlineFormatKind } from "../inline-format.ts";
+import { changeHeadingLevelSpec, toggleBlockquoteSpec, toggleHeadingSpec, toggleListSpec, type ListKind } from "../block-format.ts";
 
 // ---------------------------------------------------------------------------
 // Inline wrap (bold / italic / highlight / strike / code / link / image)
 // ---------------------------------------------------------------------------
 
-function wrapInline(view: EditorView, open: string, close: string): boolean {
-  const { from, to } = view.state.selection.main;
-  if (from === to) {
-    view.dispatch({
-      changes: { from, insert: open + close },
-      selection: { anchor: from + open.length },
-      scrollIntoView: true,
-    });
-  } else {
-    const selected = view.state.doc.sliceString(from, to);
-    const wrapped = open + selected + close;
-    view.dispatch({
-      changes: { from, to, insert: wrapped },
-      selection: { anchor: from + open.length, head: from + open.length + selected.length },
-      scrollIntoView: true,
-    });
-  }
+function toggleInline(view: EditorView, kind: InlineFormatKind): boolean {
+  const spec = toggleInlineFormatSpec(view.state, kind);
+  if (!spec) return false;
+  view.dispatch(spec);
+  return true;
+}
+
+function dispatchSpec(view: EditorView, spec: ReturnType<typeof toggleListSpec>): boolean {
+  if (!spec) return false;
+  view.dispatch(spec);
   return true;
 }
 
@@ -185,27 +180,17 @@ function editProperties(view: EditorView): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Line prefix transform (headings / blockquote / list types)
+// List markup (headings / blockquote / list toggles live in ../block-format.ts)
 // ---------------------------------------------------------------------------
 
-function mutateCurrentLine(view: EditorView, fn: (line: string) => string): boolean {
-  const { from } = view.state.selection.main;
-  const line = view.state.doc.lineAt(from);
-  const newText = fn(line.text);
-  view.dispatch({
-    changes: { from: line.from, to: line.to, insert: newText },
-    selection: { anchor: line.from + newText.length },
-    scrollIntoView: true,
-  });
-  return true;
-}
-
-// Strip common list/task prefixes so commands can re-apply cleanly.
-const LIST_PREFIX_RE = /^\s*(?:[-*+]\s+|\d+[.)]\s+|- \[[ xX]\]\s+)/;
-const EMPTY_LIST_RE = /^(\s*)(?:[-*+]\s+|\d+[.)]\s+|- \[[ xX]\]\s*)$/;
+// A list item whose marker (and optional task box) is all there is. Every
+// bullet kind and ordered markers can carry a task box.
+const EMPTY_LIST_RE = /^(\s*)(?:[-*+]|\d+[.)])(?:[ \t]+\[[ xX]\][ \t]*|[ \t]+)$/;
 const EMPTY_QUOTE_RE = /^\s{0,3}>\s?$/;
-const EMPTY_QUOTE_LIST_RE = /^(\s{0,3}(?:>\s*)+)(?:[-*+]\s*|\d+[.)]\s*|- \[[ xX]\]\s*)$/;
-const CONTINUE_MARKUP_RE = /^(\s{0,3}(?:>\s*)*)(\s*)(?:(- \[[ xX]\]\s+)|([-*+])\s+|(\d+)([.)])\s+)(.*)$/;
+const EMPTY_QUOTE_LIST_RE = /^(\s{0,3}(?:>\s*)+)(?:[-*+]|\d+[.)])(?:[ \t]+\[[ xX]\])?[ \t]*$/;
+// Groups: 1 quote prefix, 2 indent, 3 bullet, 4 ordinal, 5 delimiter, 6 task
+// box, 7 content.
+const CONTINUE_MARKUP_RE = /^(\s{0,3}(?:>\s*)*)(\s*)(?:([-*+])|(\d+)([.)]))\s+(\[[ xX]\]\s+)?(.*)$/;
 const CONTINUE_QUOTE_RE = /^(\s{0,3}(?:>\s*)+)(.*)$/;
 const JUPYTER_CELL_LINE_RE = /^[ \t]*@@cell(?:[ \t]*\(([^)\n]*)\))?(?:[ \t]+\[[^\]\n]*\])?[ \t]*$/i;
 
@@ -386,6 +371,48 @@ function nearestJupyterCellArgs(view: EditorView): string {
   return previous || next || "python, default";
 }
 
+const OPENING_FENCE_RE = /^([ \t]{0,3})(`{3,}|~{3,})([^\n]*)$/;
+
+/**
+ * Enter at the end of an opening code fence that has no closing fence yet
+ * inserts the closing fence and puts the caret on the blank line between —
+ * MarkText converts the paragraph to a code block on the same Enter, and
+ * files.md closes the fence as it is typed. Without it, every line below the
+ * new fence turns into code until the author remembers to close it.
+ *
+ * The syntax tree decides: a fence line that closes an earlier block, or an
+ * opener that is already closed further down, is left to the ordinary Enter.
+ */
+export function closeFencedCodeOnEnter(view: EditorView): boolean {
+  const state = view.state;
+  const sel = state.selection.main;
+  if (!sel.empty || state.selection.ranges.length > 1) return false;
+  const line = state.doc.lineAt(sel.head);
+  if (sel.head !== line.to) return false;
+  const match = OPENING_FENCE_RE.exec(line.text);
+  if (!match) return false;
+  const indent = match[1] ?? "";
+  const fence = match[2] ?? "```";
+  const info = match[3] ?? "";
+  // A backtick fence's info string cannot contain a backtick.
+  if (fence.startsWith("`") && info.includes("`")) return false;
+  const markFrom = line.from + indent.length;
+  const tree = ensureSyntaxTree(state, line.to, 100) ?? syntaxTree(state);
+  let node: ReturnType<typeof tree.resolveInner> | null = tree.resolveInner(markFrom + 1, 1);
+  while (node && node.name !== "FencedCode") node = node.parent;
+  if (!node || node.from !== markFrom) return false;
+  const marks = node.getChildren("CodeMark");
+  if (marks.length !== 1) return false;
+  const insert = `\n${indent}\n${indent}${fence}`;
+  view.dispatch({
+    changes: { from: line.to, insert },
+    selection: { anchor: line.to + 1 + indent.length },
+    scrollIntoView: true,
+    userEvent: "input",
+  });
+  return true;
+}
+
 export function exitEmptyMarkdownBlock(view: EditorView): boolean {
   const sel = view.state.selection.main;
   if (!sel.empty) return false;
@@ -409,6 +436,16 @@ export function exitEmptyMarkdownBlock(view: EditorView): boolean {
   return true;
 }
 
+/**
+ * The marker for the item after a CONTINUE_MARKUP_RE match: the same bullet,
+ * the next ordinal, and an unchecked box when the item was a task — a new task
+ * is never born done (HyperMD and MarkText both reset it).
+ */
+function nextListMarker(match: RegExpMatchArray): string {
+  const base = match[3] ? `${match[3]} ` : `${Number(match[4]) + 1}${match[5] ?? "."} `;
+  return match[6] ? `${base}[ ] ` : base;
+}
+
 export function continueMarkdownMarkup(view: EditorView): boolean {
   const sel = view.state.selection.main;
   if (!sel.empty) return false;
@@ -421,16 +458,7 @@ export function continueMarkdownMarkup(view: EditorView): boolean {
 
   const quotePrefix = match[1] ?? "";
   const indent = match[2] ?? "";
-  const task = match[3];
-  const bullet = match[4];
-  const ordered = match[5];
-  const orderedDelim = match[6] ?? ".";
-  const nextMarker = task
-    ? task
-    : bullet
-      ? `${bullet} `
-      : `${Number(ordered) + 1}${orderedDelim} `;
-  const insert = `\n${quotePrefix}${indent}${nextMarker}`;
+  const insert = `\n${quotePrefix}${indent}${nextListMarker(match)}`;
   view.dispatch({
     changes: { from: sel.from, insert },
     selection: { anchor: sel.from + insert.length },
@@ -471,15 +499,7 @@ export function continueMarkdownQuote(view: EditorView): boolean {
 export function markdownContinuationPrefix(text: string): string {
   const markup = text.match(CONTINUE_MARKUP_RE);
   if (markup && (markup[7] ?? "").trim().length > 0) {
-    const task = markup[3];
-    const bullet = markup[4];
-    const ordered = markup[5];
-    const marker = task
-      ? task
-      : bullet
-        ? `${bullet} `
-        : `${Number(ordered) + 1}${markup[6] ?? "."} `;
-    return `${markup[1] ?? ""}${markup[2] ?? ""}${marker}`;
+    return `${markup[1] ?? ""}${markup[2] ?? ""}${nextListMarker(markup)}`;
   }
   const quote = text.match(CONTINUE_QUOTE_RE);
   if (quote && (quote[2] ?? "").trim().length > 0) return quote[1] ?? "";
@@ -948,6 +968,8 @@ export function tableNavigateCell(view: EditorView, dir: 1 | -1): boolean {
   const { from } = view.state.selection.main;
 
   const sepIdx = lines.findIndex(isSeparatorRow);
+  // Pipes without a delimiter row are not a table; Tab indents as usual.
+  if (sepIdx < 0) return false;
   const colCount = splitCells(lines[0] ?? "").length;
 
   // Build flat cell list (skip separator)
@@ -999,6 +1021,33 @@ export function tableNavigateCell(view: EditorView, dir: 1 | -1): boolean {
   return true;
 }
 
+/**
+ * Enter at the end of a lone `| a | b |` line makes it a table header: the
+ * delimiter row and an empty body row are added and the caret moves into the
+ * first body cell, as HyperMD's newlineAndContinue and MarkText's Enter
+ * conversion do. Without a delimiter row the pipes are not a table at all, so
+ * any other pipe-only text keeps the ordinary Enter.
+ */
+function createTableFromHeaderRow(view: EditorView, info: TableInfo): boolean {
+  const { lines, startLineNum } = info;
+  if (lines.length !== 1) return false;
+  const line = view.state.doc.line(startLineNum);
+  const { from, to } = view.state.selection.main;
+  if (from !== to || from !== line.to) return false;
+  const columns = splitCells(lines[0] ?? "").length;
+  if (columns < 2) return false;
+  const draft = [lines[0]!, buildRow(Array(columns).fill("---")), buildRow(Array(columns).fill(" "))];
+  const model = parseTableModel(draft, startLineNum, 2, 0);
+  const formatted = tableTooLarge(model) ? draft : formatTableLines(model);
+  const cursor = line.from + rowOffset(formatted, 2) + cellOffset(formatted[2] ?? "", 0);
+  view.dispatch({
+    changes: { from: line.from, to: line.to, insert: formatted.join("\n") },
+    selection: { anchor: cursor },
+    scrollIntoView: true,
+  });
+  return true;
+}
+
 /** Enter in a table cell: move to same column in next body row; on empty last row exit the table. */
 export function tableEnterSameColumn(view: EditorView): boolean {
   const info = findTableInfo(view);
@@ -1010,7 +1059,8 @@ export function tableEnterSameColumn(view: EditorView): boolean {
   const { from } = view.state.selection.main;
 
   const sepIdx = lines.findIndex(isSeparatorRow);
-  const firstBodyRow = sepIdx >= 0 ? sepIdx + 1 : 2;
+  if (sepIdx < 0) return createTableFromHeaderRow(view, info);
+  const firstBodyRow = sepIdx + 1;
   const colCount = splitCells(lines[0] ?? "").length;
 
   // If cursor is in last row and the row is empty → delete it and move below table
@@ -1086,13 +1136,14 @@ export function runCommandCM6(view: EditorView, command: EditorCommand, value = 
   if (command === "unfold-all-headings") return unfoldAllHeadings(view);
 
   // ── Inline marks ────────────────────────────────────────────────────────
-  if (command === "bold") return wrapInline(view, "**", "**");
-  if (command === "italic") return wrapInline(view, "*", "*");
-  if (command === "highlight") return wrapInline(view, "==", "==");
-  if (command === "strike") return wrapInline(view, "~~", "~~");
-  if (command === "code") return wrapInline(view, "`", "`");
-  if (command === "superscript") return wrapInline(view, "^", "^");
-  if (command === "subscript") return wrapInline(view, "~", "~");
+  if (command === "bold") return toggleInline(view, "bold");
+  if (command === "italic") return toggleInline(view, "italic");
+  if (command === "highlight") return toggleInline(view, "highlight");
+  if (command === "strike") return toggleInline(view, "strike");
+  if (command === "code") return toggleInline(view, "code");
+  if (command === "superscript") return toggleInline(view, "superscript");
+  if (command === "subscript") return toggleInline(view, "subscript");
+  if (command === "clear-format") return dispatchSpec(view, clearInlineFormatSpec(view.state));
   if (command === "insert-footnote") return insertFootnote(view);
   if (command === "insert-revision") return insertRevision(view, value);
   if (command === "edit-revision") return editRevision(view, value);
@@ -1198,23 +1249,19 @@ export function runCommandCM6(view: EditorView, command: EditorCommand, value = 
 
   // ── Line prefix commands (heading / blockquote / lists) ──────────────────
   const headingMatch = command.match(/^heading-([1-6])$/);
-  if (headingMatch) {
-    const level = Number(headingMatch[1]);
-    return mutateCurrentLine(view, (line) =>
-      `${"#".repeat(level)} ${line.replace(/^\s{0,3}#{1,6}\s+/, "")}`);
-  }
+  if (headingMatch) return dispatchSpec(view, toggleHeadingSpec(view.state, Number(headingMatch[1])));
+  if (command === "heading-promote") return dispatchSpec(view, changeHeadingLevelSpec(view.state, -1));
+  if (command === "heading-demote") return dispatchSpec(view, changeHeadingLevelSpec(view.state, 1));
 
-  if (command === "blockquote") {
-    return mutateCurrentLine(view, (line) => line.startsWith("> ") ? line : `> ${line}`);
-  }
-  if (command === "bullet-list") {
-    return mutateCurrentLine(view, (line) => `- ${line.replace(LIST_PREFIX_RE, "")}`);
-  }
-  if (command === "ordered-list") {
-    return mutateCurrentLine(view, (line) => `1. ${line.replace(LIST_PREFIX_RE, "")}`);
-  }
-  if (command === "task-list") {
-    return mutateCurrentLine(view, (line) => `- [ ] ${line.replace(LIST_PREFIX_RE, "")}`);
+  if (command === "blockquote") return dispatchSpec(view, toggleBlockquoteSpec(view.state));
+  const listKind: ListKind | null = command === "bullet-list" ? "bullet"
+    : command === "ordered-list" ? "ordered"
+      : command === "task-list" ? "task"
+        : null;
+  if (listKind) {
+    const changed = dispatchSpec(view, toggleListSpec(view.state, listKind));
+    if (changed && listKind === "ordered") renumberMarkdownOrderedLists(view);
+    return changed;
   }
 
   return false;

@@ -10,6 +10,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import type { Extension } from "@codemirror/state";
 import { inlineMathMarkdownExtension } from "../../../inline-math.ts";
 import { nestingAwareLinkExtension } from "./nested-links.ts";
+import { cjkEmphasisMarkdownExtension } from "../../../cjk-emphasis.ts";
 
 export function createMarkdownLanguageExtension(): Extension {
   return markdown({
@@ -20,7 +21,9 @@ export function createMarkdownLanguageExtension(): Extension {
     // and deleteMarkupBackward itself, so nothing is lost by opting out.
     addKeymap: false,
     base: markdownLanguage,
-    extensions: [inlineMathMarkdownExtension, nestingAwareLinkExtension],
+    // CJK text needs emphasis next to its punctuation (`**（注）**说明`); the
+    // widening is additive, so CommonMark input parses unchanged.
+    extensions: [inlineMathMarkdownExtension, nestingAwareLinkExtension, cjkEmphasisMarkdownExtension],
   });
 }
 

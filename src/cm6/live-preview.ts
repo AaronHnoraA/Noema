@@ -209,8 +209,19 @@ function mapLivePreviewTokens(tokens: readonly LivePreviewToken[], changes: Chan
   });
 }
 
+/**
+ * Whether the selection reveals the source markers of span [from, to].
+ *
+ * A caret reveals the span it sits inside. A range selection reveals only the
+ * spans its two ends fall inside, as MarkText's `checkNeedRender` does from
+ * the anchor and focus: those are the boundaries the author is adjusting.
+ * Revealing every span a range covered (files.md had the same problem and
+ * stopped revealing on ranges altogether) made Select All or a paragraph drag
+ * expose every marker in it and reflow the text under the selection.
+ */
 function selectionIntersectsSpan(sel: { from: number; to: number; empty: boolean }, from: number, to: number): boolean {
-  return sel.empty ? sel.from > from && sel.from < to : sel.from < to && sel.to > from;
+  if (sel.empty) return sel.from > from && sel.from < to;
+  return (sel.from > from && sel.from < to) || (sel.to > from && sel.to < to);
 }
 
 function escapedAt(text: string, index: number): boolean {
@@ -2334,8 +2345,9 @@ function collectHtmlBlockDecoRanges(
       if (rangeOverlapsAny(node.from, node.to, mathRanges)) return false;
       // Skip nodes inside org-env blocks (e.g. #+begin html body lines)
       if (orgEnvContextForRange(state, node.from, node.to)) return false;
-      // Reveal source when cursor is inside the block
-      if (sel.from <= node.to && sel.to >= node.from) return false;
+      // Only a caret reveals the source; a range keeps the block rendered, as
+      // `activeHtmlBlockKey` assumes when it ignores range selections.
+      if (sel.empty && sel.from >= node.from && sel.from <= node.to) return false;
       const source = state.doc.sliceString(node.from, node.to);
       decos.push(
         Decoration.replace({

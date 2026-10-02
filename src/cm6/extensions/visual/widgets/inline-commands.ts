@@ -1057,7 +1057,9 @@ function buildInlineCommandDecos(
       const to = vFrom + cmd.fullTo;
       const blockTo = vFrom + (cmd.blockTo ?? cmd.fullTo);
       if (positionInsideAnyRange(from, excludedRanges)) continue;
-      const cursorInside = sel.from <= blockTo && sel.to >= from;
+      // A range keeps commands rendered, as `activeInlineCommandKey` assumes;
+      // only a caret opens one's source.
+      const cursorInside = sel.empty && sel.from <= blockTo && sel.from >= from;
       if (cmd.name === "itodo" && !cursorInside) {
         if (cmd.blockBodyFrom !== undefined && cmd.blockTo !== undefined) {
           decos.push(Decoration.line({ class: "cm-itodo-block-anchor-line" }).range(doc.lineAt(from).from));

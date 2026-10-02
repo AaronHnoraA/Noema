@@ -3,6 +3,7 @@ import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 import {
   collectFindMatches,
   createFindPattern,
+  smartCaseSensitive,
   escapeFindQuery,
   replacementText,
   replaceAllFindMatches,
@@ -42,5 +43,36 @@ describe("find helpers", () => {
 
     const regex = createFindPattern("(todo):(\\d+)", true).pattern!;
     expect(replaceAllFindMatches("todo:1 todo:2", regex, "$2-$1", true)).toBe("1-todo 2-todo");
+  });
+});
+
+describe("find options", () => {
+  const text = "Noema noema NOEMA noemaX café Café";
+
+  test("smart case ignores case until the query has an uppercase letter", () => {
+    expect(collectFindMatches(text, createFindPattern("noema").pattern).length).toBe(4);
+    expect(collectFindMatches(text, createFindPattern("Noema").pattern).map((m) => m.from)).toEqual([0]);
+    expect(collectFindMatches(text, createFindPattern("café").pattern).length).toBe(2);
+  });
+
+  test("a regex class escape does not count as an uppercase letter", () => {
+    expect(smartCaseSensitive("\\Snoema", true)).toBe(false);
+    expect(smartCaseSensitive("\\Snoema", false)).toBe(true);
+  });
+
+  test("match case is exact", () => {
+    expect(collectFindMatches(text, createFindPattern("noema", { caseSensitive: true }).pattern).map((m) => m.from)).toEqual([6, 18]);
+  });
+
+  test("whole word respects letters of every script", () => {
+    const words = collectFindMatches(text, createFindPattern("noema", { wholeWord: true }).pattern).map((m) => m.from);
+    expect(words).toEqual([0, 6, 12]);
+    expect(collectFindMatches("x café y cafés", createFindPattern("café", { wholeWord: true }).pattern).map((m) => m.from)).toEqual([2]);
+  });
+
+  test("a regex valid only without unicode mode still runs", () => {
+    const result = createFindPattern("a\\-b", { regex: true });
+    expect(result.error).toBeUndefined();
+    expect(collectFindMatches("a-b", result.pattern).length).toBe(1);
   });
 });

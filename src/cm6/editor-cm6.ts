@@ -54,7 +54,11 @@ import {
   pasteFromClipboard as runPasteFromClipboard,
   pastePlainText as runPastePlainText,
   type EditorPasteOptions,
+  type EditorPasteSource,
 } from "../paste.ts";
+import { adaptPasteText, pasteTransactionSpec } from "./paste-context.ts";
+import { joinTypingEvent, lastEditKindField } from "./history-grouping.ts";
+import { exitFencedCode } from "./code-block-input.ts";
 import { renderMarkdownHTML } from "../render-html.ts";
 import {
   applyMarkdownFormat,
@@ -497,7 +501,7 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
   const initialDoc = options.initialContent ?? "";
   const headingFoldMemory = new Map<string, string[]>();
   const historyCompartment = new Compartment();
-  const historyExtension = history({ minDepth: 200, newGroupDelay: 500 });
+  const historyExtension = history({ minDepth: 200, newGroupDelay: 500, joinToEvent: joinTypingEvent });
   let activeDocumentKey = currentDocumentKey();
   const createState = (doc: string, visual = true): EditorState => EditorState.create({
     doc,
@@ -754,17 +758,30 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
     };
   }
 
-  function insertPastedMarkdown(text: string, pasteOptions?: EditorPasteOptions): boolean {
+  function insertPastedMarkdown(text: string, pasteOptions?: EditorPasteOptions, source?: EditorPasteSource): boolean {
     if (options.readOnly) return false;
     if (!text) return false;
     const insertion = pasteInsertRanges(pasteOptions, text);
     if (!insertion || insertion.ranges.length === 0) return false;
-    const changeSet = view.state.changes(insertion.ranges.map((range) => ({
+    // A selection paste adapts to where each range lands (code, table row,
+    // link destination). Vim register and line/character placements insert
+    // the register text exactly as it was yanked.
+    const adapt = !insertion.vimRegister && !(pasteOptions?.placement && "where" in pasteOptions.placement);
+    const ranges = adapt
+      ? insertion.ranges.map((range) => ({
+          ...range,
+          text: adaptPasteText(view.state, EditorSelection.range(range.from, range.to), {
+            markdown: range.text,
+            plainText: source?.plainText,
+          }),
+        }))
+      : insertion.ranges;
+    const changeSet = view.state.changes(ranges.map((range) => ({
       from: range.from,
       to: range.to,
       insert: range.text,
     })));
-    const nextRanges = insertion.ranges.map((range) => {
+    const nextRanges = ranges.map((range) => {
       if (!insertion.vimRegister) {
         return EditorSelection.cursor(changeSet.mapPos(range.from, 1));
       }
@@ -784,6 +801,7 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
         selection: EditorSelection.create(nextRanges, insertion.mainIndex),
       } : {}),
       scrollIntoView: insertion.ownsSelection,
+      userEvent: "input.paste",
     }));
     return true;
   }
@@ -1296,7 +1314,7 @@ function buildExtensions(
   onFoldStateChanged: () => void,
   mode: AaronnoteMarkdownExtensionMode,
   notifyExternalUpdate?: (update: import("@codemirror/view").ViewUpdate) => void,
-  standaloneHistory: Extension = history({ minDepth: 200, newGroupDelay: 500 }),
+  standaloneHistory: Extension = history({ minDepth: 200, newGroupDelay: 500, joinToEvent: joinTypingEvent }),
 ): Extension[] {
   const standalone = mode === "standalone";
   return [
@@ -1308,6 +1326,7 @@ function buildExtensions(
     EditorView.clickAddsSelectionRange.of((event) => event.altKey || event.metaKey || event.ctrlKey),
     ...(standalone ? [
       drawSelection({ cursorBlinkRate: -1 }),
+      lastEditKindField,
       standaloneHistory,
     ] : []),
     texSourceInput(),
@@ -1320,7 +1339,7 @@ function buildExtensions(
       { key: "Backspace", run: (view) => runEditorDelete(view, "backward") },
       { key: "Delete", run: (view) => runEditorDelete(view, "forward") },
       { key: "Enter", run: runEditorEnter },
-      { key: "Mod-Enter", run: exitCurrentOrgEnv },
+      { key: "Mod-Enter", run: (view) => exitCurrentOrgEnv(view) || exitFencedCode(view) },
       { key: "Tab", run: (view) => runEditorTab(view) },
       { key: "Shift-Tab", run: (view) => runEditorTab(view, true) },
       { key: "Mod-d", run: selectNextMarkdownOccurrence },
@@ -1369,6 +1388,7 @@ function buildExtensions(
       blur: () => { options.onBlur?.(); return false; },
       copy: (_event, copyView) => { mirrorCopyToHostClipboard(copyView.state); return false; },
       cut: (_event, cutView) => { mirrorCopyToHostClipboard(cutView.state); return false; },
+      drop: (event, dropView) => dropAttachmentFiles(dropView, event, options),
       paste: (event, pasteView) => {
         const data = event.clipboardData;
         if (!data) return false;
@@ -1382,15 +1402,12 @@ function buildExtensions(
           currentFile: options.getCurrentFile,
           assets: options.pasteAssets,
           readSystemClipboardFallback: options.readSystemClipboardFallback,
-          insertMarkdown: (markdown, pasteOptions) => {
+          insertMarkdown: (markdown, _pasteOptions, source) => {
             if (!markdown) return false;
-            const selection = pasteView.state.selection.main;
-            pasteView.dispatch({
-              changes: { from: selection.from, to: selection.to, insert: markdown },
-              selection: { anchor: selection.from + markdown.length },
-              scrollIntoView: true,
-            });
-            void pasteOptions;
+            pasteView.dispatch(pasteTransactionSpec(pasteView.state, {
+              markdown,
+              plainText: source?.plainText,
+            }));
             return true;
           },
         }).catch(() => {});
@@ -1398,6 +1415,37 @@ function buildExtensions(
       },
     }),
   ];
+}
+
+/**
+ * Dropped files that are not plain text become attachments at the drop point.
+ *
+ * CodeMirror's own drop reads every dropped file as text and silently ignores
+ * one that looks binary, so dragging an image or PDF in did nothing. As in
+ * MarkText's `dragDropImage`, the files go through the same asset store a
+ * pasted file does and land as Markdown image/attachment links where they were
+ * dropped. A drop of only text files keeps CodeMirror's behaviour.
+ */
+export function dropAttachmentFiles(view: EditorView, event: DragEvent, options: EditorOptions): boolean {
+  const data = event.dataTransfer;
+  if (!data || options.readOnly || !options.pasteAssets?.uploadBlobAsset) return false;
+  const files = Array.from(data.files ?? []);
+  if (files.length === 0 || files.every((file) => file.type.startsWith("text/"))) return false;
+  const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+  if (pos == null) return false;
+  event.preventDefault();
+  view.dispatch({ selection: { anchor: pos }, userEvent: "select.pointer" });
+  view.focus();
+  void pasteDataTransfer(data, {
+    currentFile: options.getCurrentFile,
+    assets: options.pasteAssets,
+    insertMarkdown: (markdown) => {
+      if (!markdown) return false;
+      view.dispatch(pasteTransactionSpec(view.state, { markdown }));
+      return true;
+    },
+  }).catch(() => {});
+  return true;
 }
 
 /**

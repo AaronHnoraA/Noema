@@ -26,7 +26,9 @@ import {
 } from "@codemirror/lang-markdown";
 import { EditorView } from "@codemirror/view";
 
+import { codeBlockTab, explodeCodeBracketsOnEnter } from "./code-block-input.ts";
 import {
+  closeFencedCodeOnEnter,
   continueMarkdownBlock,
   exitEmptyMarkdownBlock,
   indentMarkdownBlock,
@@ -209,6 +211,8 @@ export function runEditorEnter(view: EditorView): boolean {
     if (view.state.selection.ranges.length > 1) return insertNewlineAndIndent(view);
 
     return tableEnterSameColumn(view)
+      || explodeCodeBracketsOnEnter(view)
+      || closeFencedCodeOnEnter(view)
       || exitEmptyMarkdownBlock(view)
       || continueMarkdownBlock(view)
       || insertNewlineContinueMarkup(view)
@@ -222,5 +226,7 @@ export function runEditorEnter(view: EditorView): boolean {
 export function runEditorTab(view: EditorView, shift = false): boolean {
   if (view.state.readOnly) return true;
   const direction = shift ? -1 : 1;
-  return tableNavigateCell(view, direction) || indentMarkdownBlock(view, direction);
+  return tableNavigateCell(view, direction)
+    || codeBlockTab(view, shift)
+    || indentMarkdownBlock(view, direction);
 }

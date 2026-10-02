@@ -5007,6 +5007,12 @@ html.aaronnote-paused *::after {
   color: var(--aaron-red-dark);
 }
 
+.aaronnote-selection-tool button[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--aaron-red), transparent 55%);
+  background: color-mix(in srgb, var(--aaron-red), transparent 88%);
+  color: var(--aaron-red-dark);
+}
+
 .aaronnote-selection-tool span {
   width: 1px;
   height: 18px;
@@ -5058,6 +5064,36 @@ html.aaronnote-paused *::after {
   width: 26px;
   height: 26px;
   padding: 0;
+}
+
+.aaronnote-find-panel {
+  flex-wrap: wrap;
+  max-width: calc(100vw - 36px);
+}
+
+.aaronnote-find-panel [data-find-option],
+.aaronnote-find-panel [data-find-replace-all] {
+  width: auto;
+  min-width: 26px;
+  padding: 0 5px;
+  font: 11px/1 var(--aaron-font-mono);
+}
+
+.aaronnote-find-panel button[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--aaron-red), transparent 35%);
+  background: color-mix(in srgb, var(--aaron-red), transparent 85%);
+  color: var(--aaron-ink);
+}
+
+.aaronnote-find-replace {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.aaronnote-find-replace[hidden] {
+  display: none;
 }
 
 .aaronnote-selection-more {

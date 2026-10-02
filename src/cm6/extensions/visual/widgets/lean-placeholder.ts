@@ -9,7 +9,7 @@ import type { Range } from "@codemirror/state";
 import { MeasuredWidget } from "./measured-widget.ts";
 import { parseLeanPlaceholderLine } from "../../../../../shared/lean-placeholder.mjs";
 import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
-import { isPointerSelecting, updateHasPointerSelectionEffect } from "../selection.ts";
+import { isPointerSelecting, selectionRevealsSource, updateHasPointerSelectionEffect } from "../selection.ts";
 import { isCoalescedVisualTyping } from "../typing-burst.ts";
 import { rememberPersistentVisualPluginState, restorePersistentVisualPluginState } from "../visual-mode.ts";
 
@@ -131,7 +131,7 @@ function buildLeanPlaceholderDecos(view: EditorView): DecorationSet {
       if (parsed) {
         const commandFrom = line.from + parsed.commandFrom;
         const commandTo = line.from + parsed.commandTo;
-        const cursorInside = sel.from <= commandTo && sel.to >= commandFrom;
+        const cursorInside = selectionRevealsSource(sel, commandFrom, commandTo);
         if (!cursorInside) {
           decos.push(
             Decoration.replace({

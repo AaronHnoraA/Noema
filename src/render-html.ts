@@ -6,6 +6,7 @@ import type StateCore from "markdown-it/lib/rules_core/state_core.mjs";
 import type StateInline from "markdown-it/lib/rules_inline/state_inline.mjs";
 
 import { cleanEditorHTML } from "./export-html.ts";
+import { markdownItCjkEmphasis } from "./cjk-emphasis.ts";
 import { supportedDiagramLang } from "./diagram-langs.ts";
 import { imageLayoutClasses, imageLayoutFromAttrs, imageLayoutStyle, readImageTrailingAttrs } from "./image-attrs.ts";
 import { layoutClasses, layoutFromAttrs, layoutStyle, readLayoutAttrSuffix, readLayoutAttrsLine, type LayoutAttrs } from "./layout-attrs.ts";
@@ -1390,7 +1391,7 @@ function createMarkdownIt(options: RenderMarkdownHTMLOptions): MarkdownIt {
     html: options.allowHtml === true,
     linkify: true,
     typographer: false,
-  }).use(emoji);
+  }).use(emoji).use(markdownItCjkEmphasis);
 
   md.validateLink = () => true;
   md.block.ruler.before("fence", "front_matter", frontMatterRule, { alt: [] });
