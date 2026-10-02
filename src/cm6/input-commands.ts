@@ -287,6 +287,60 @@ function deleteForwardJoinBlock(view: EditorView): boolean {
   return true;
 }
 
+/**
+ * The source range of the image (with any trailing `{...}` layout attributes)
+ * that ends at POS, or that starts at POS when looking forward.
+ */
+function imageSourceAt(view: EditorView, pos: number, direction: EditorDeleteDirection): { from: number; to: number } | null {
+  const state = view.state;
+  const line = state.doc.lineAt(pos);
+  const tree = ensureSyntaxTree(state, line.to, 25) ?? syntaxTree(state);
+  const imageAt = (at: number, side: -1 | 1) => {
+    for (let node: ReturnType<typeof tree.resolveInner> | null = tree.resolveInner(at, side); node; node = node.parent) {
+      if (node.name === "Image") return node;
+    }
+    return null;
+  };
+  const withAttrs = (from: number, to: number): { from: number; to: number } => {
+    const rest = state.doc.sliceString(to, line.to);
+    const attrs = /^\{[^{}\n]*\}/u.exec(rest);
+    return { from, to: attrs ? to + attrs[0].length : to };
+  };
+  if (direction === "forward") {
+    const image = imageAt(pos, 1);
+    return image && image.from === pos ? withAttrs(image.from, image.to) : null;
+  }
+  let image = imageAt(pos, -1);
+  if (image && image.to === pos) return withAttrs(image.from, image.to);
+  if (state.doc.sliceString(pos - 1, pos) !== "}") return null;
+  const open = state.doc.sliceString(line.from, pos).lastIndexOf("{");
+  if (open < 0) return null;
+  image = imageAt(line.from + open, -1);
+  if (!image || image.to !== line.from + open) return null;
+  const range = withAttrs(image.from, image.to);
+  return range.to === pos ? range : null;
+}
+
+/**
+ * Backspace after an image (Delete before one) selects it first; the next
+ * press deletes it whole. One character at a time turned the picture into
+ * broken source (`![](a.png`). MarkText selects the image the same way.
+ */
+function selectImageBeforeDelete(view: EditorView, direction: EditorDeleteDirection): boolean {
+  const range = view.state.selection.main;
+  if (!range.empty || view.state.selection.ranges.length > 1) return false;
+  const image = imageSourceAt(view, range.head, direction);
+  if (!image) return false;
+  view.dispatch({
+    selection: direction === "backward"
+      ? EditorSelection.range(image.to, image.from)
+      : EditorSelection.range(image.from, image.to),
+    scrollIntoView: true,
+    userEvent: "select",
+  });
+  return true;
+}
+
 function deleteGraphemes(view: EditorView, direction: EditorDeleteDirection): boolean {
   let changed = false;
   const spec = view.state.changeByRange((range) => {
@@ -333,6 +387,7 @@ export function runEditorDelete(
 
   if (direction === "backward") {
     return deleteTexSourceAutoPair(view)
+      || selectImageBeforeDelete(view, direction)
       || deleteBracketPair(view)
       || deleteTaskBoxBackward(view)
       || deleteHeadingMarkerBackward(view)
@@ -342,6 +397,7 @@ export function runEditorDelete(
   }
 
   return deleteTexSourceAutoPairForward(view)
+    || selectImageBeforeDelete(view, direction)
     || deleteForwardJoinBlock(view)
     || deleteGraphemes(view, direction);
 }
