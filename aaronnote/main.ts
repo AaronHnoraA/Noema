@@ -5574,6 +5574,9 @@ function currentCursorPosition(): CursorPosition | null {
   };
 }
 
+// The session store keeps the 240 most recent (server/Features/Session/manager.mjs).
+const CURSOR_POSITION_LIMIT = 240;
+
 function rememberCursorPosition(position: CursorPosition, positions?: CursorPosition[]): void {
   if (Array.isArray(positions)) {
     cursorPositions = positions;
@@ -5584,7 +5587,11 @@ function rememberCursorPosition(position: CursorPosition, positions?: CursorPosi
     entry.file === position.file && (entry.client || "") === client
   ));
   if (index >= 0) cursorPositions[index] = position;
-  else cursorPositions.unshift(position);
+  else {
+    cursorPositions.unshift(position);
+    // One entry per note and pane for the pane's lifetime: keep the recent ones.
+    if (cursorPositions.length > CURSOR_POSITION_LIMIT) cursorPositions.length = CURSOR_POSITION_LIMIT;
+  }
 }
 
 async function loadCursorPositions(): Promise<CursorPosition[]> {
