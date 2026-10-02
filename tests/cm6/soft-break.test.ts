@@ -1,4 +1,4 @@
-/** Shift-Enter continues the item or quote without a new marker (HyperMD newline). */
+/** Shift-Enter continues the item or quote (HyperMD newline); Enter closes an opening HTML block tag (MarkText). */
 
 import { afterEach, describe, expect, it } from "@voidzero-dev/vite-plus-test";
 import { ensureSyntaxTree } from "@codemirror/language";
@@ -46,5 +46,35 @@ describe("Shift-Enter", () => {
     const doc = "```\n  x\n```";
     const ed = shiftEnter(doc, 7);
     expect(ed.getMarkdown()).toBe("```\n  x\n  \n```");
+  });
+});
+
+describe("Enter after an opening HTML block tag", () => {
+  function enter(doc: string): Editor {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const ed = createEditorCM6(host, { initialContent: doc });
+    editors.push(ed);
+    ed.setSelection(doc.length, doc.length);
+    ed.view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    return ed;
+  }
+  it("closes the tag around an empty line", () => {
+    const ed = enter("<details>");
+    expect(ed.getMarkdown()).toBe("<details>\n\n</details>");
+    expect(ed.getMarkdownSelection().from).toBe(10);
+    expect(enter('<div class="note">').getMarkdown()).toBe('<div class="note">\n\n</div>');
+  });
+  it("leaves inline, void and already-closed tags alone", () => {
+    expect(enter("<span>").getMarkdown()).not.toContain("</span>");
+    expect(enter("<br>").getMarkdown()).not.toContain("</br>");
+    const doc = "<details>\nbody\n</details>";
+    const host = document.createElement("div");
+    document.body.append(host);
+    const ed = createEditorCM6(host, { initialContent: doc });
+    editors.push(ed);
+    ed.setSelection(9, 9);
+    ed.view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    expect(ed.getMarkdown().match(/<\/details>/g)).toHaveLength(1);
   });
 });

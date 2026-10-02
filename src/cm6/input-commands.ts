@@ -33,6 +33,7 @@ import { getFencedCodeRanges } from "./code-ranges.ts";
 import { getBlockMathRanges } from "./math-ranges.ts";
 import {
   closeFencedCodeOnEnter,
+  closeHtmlBlockOnEnter,
   continueMarkdownBlock,
   exitEmptyMarkdownBlock,
   insertLineBeforeHeading,
@@ -414,6 +415,7 @@ export function runEditorEnter(view: EditorView): boolean {
     return tableEnterSameColumn(view)
       || explodeCodeBracketsOnEnter(view)
       || closeFencedCodeOnEnter(view)
+      || closeHtmlBlockOnEnter(view)
       || insertLineBeforeHeading(view)
       || exitEmptyMarkdownBlock(view)
       || continueMarkdownBlock(view)

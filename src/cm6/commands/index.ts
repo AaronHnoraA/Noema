@@ -557,6 +557,40 @@ export function closeFencedCodeOnEnter(view: EditorView): boolean {
   return true;
 }
 
+/** HTML elements that open a block and are written with a closing tag. */
+const HTML_BLOCK_TAGS = new Set([
+  "address", "article", "aside", "blockquote", "center", "details", "dialog", "div", "dl", "fieldset",
+  "figure", "footer", "form", "header", "main", "nav", "ol", "section", "table", "ul",
+]);
+
+/**
+ * Enter at the end of a line that is only an opening block tag (`<details>`,
+ * `<div class="x">`) closes it and puts the caret on the line between, as
+ * MarkText converts such a paragraph into an HTML block. A tag that is
+ * already closed further down is left to the ordinary Enter.
+ */
+export function closeHtmlBlockOnEnter(view: EditorView): boolean {
+  const state = view.state;
+  const sel = state.selection.main;
+  if (!sel.empty || state.selection.ranges.length > 1) return false;
+  const line = state.doc.lineAt(sel.head);
+  if (sel.head !== line.to) return false;
+  const match = /^([ \t]{0,3})<([A-Za-z][\w-]*)(?:\s[^<>]*)?>[ \t]*$/u.exec(line.text);
+  const tag = match?.[2]?.toLowerCase();
+  if (!match || !tag || !HTML_BLOCK_TAGS.has(tag)) return false;
+  const lookahead = state.doc.sliceString(line.to, Math.min(state.doc.length, line.to + 20_000)).toLowerCase();
+  if (lookahead.includes(`</${tag}>`)) return false;
+  const indent = match[1] ?? "";
+  const insert = `\n${indent}\n${indent}</${tag}>`;
+  view.dispatch({
+    changes: { from: line.to, insert },
+    selection: { anchor: line.to + 1 + indent.length },
+    scrollIntoView: true,
+    userEvent: "input",
+  });
+  return true;
+}
+
 /**
  * Enter with the caret at the start of a heading's text opens an empty line
  * above the heading and leaves the heading whole. The marker is hidden in the
