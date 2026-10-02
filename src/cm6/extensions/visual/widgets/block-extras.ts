@@ -4033,20 +4033,31 @@ function buildOrgEnvBodyLineDecoRanges(
   }
 
   for (const [lineFrom, block] of lineBlocks) {
-    decos.push(
-      Decoration.line({
-        attributes: {
-          class: "cm-org-env-line cm-org-env-body-line",
-          "data-org-env-kind": block.kind,
-          "data-org-env-depth": String(block.depth),
-          style: `--org-env-depth: ${block.depth};`,
-        },
-      }).range(lineFrom),
-    );
+    decos.push(orgEnvBodyLineDecoration(block.kind, block.depth).range(lineFrom));
   }
 
   decos.sort((a, b) => a.from - b.from || a.to - b.to);
   return decos;
+}
+
+/** Shared per kind and depth: every body line of every block reuses one value. */
+const orgEnvBodyLineDecorationCache = new Map<string, Decoration>();
+function orgEnvBodyLineDecoration(kind: string, depth: number): Decoration {
+  const key = `${kind}\0${depth}`;
+  let decoration = orgEnvBodyLineDecorationCache.get(key);
+  if (!decoration) {
+    decoration = Decoration.line({
+      attributes: {
+        class: "cm-org-env-line cm-org-env-body-line",
+        "data-org-env-kind": kind,
+        "data-org-env-depth": String(depth),
+        style: `--org-env-depth: ${depth};`,
+      },
+    });
+    // Kinds come from the document; keep the cache from growing with typos.
+    if (orgEnvBodyLineDecorationCache.size < 512) orgEnvBodyLineDecorationCache.set(key, decoration);
+  }
+  return decoration;
 }
 
 function buildOrgEnvBodyLineDecos(state: EditorState): DecorationSet {

@@ -2596,7 +2596,7 @@ function buildLineDecoRanges(
     const className = continued
       ? "cm-prose-blank-line cm-prose-blank-line-continued"
       : "cm-prose-blank-line";
-    decos.push(Decoration.line({ attributes: { class: className } }).range(line.from));
+    decos.push(lineClassDecoration(className).range(line.from));
   }
 
   const headings = tocIndexFromState(state).headings;
@@ -2612,7 +2612,7 @@ function buildLineDecoRanges(
     if (heading.source === "semantic") continue;
     const line = doc.lineAt(Math.max(0, Math.min(heading.pos, doc.length)));
     if (rangeInsideAny(line.from, line.to, lineExcludedRanges)) continue;
-    decos.push(Decoration.line({ attributes: { class: `cm-md-h${heading.renderLevel ?? heading.level}` } }).range(line.from));
+    decos.push(lineClassDecoration(`cm-md-h${heading.renderLevel ?? heading.level}`).range(line.from));
     // CM6 samples a short, plain-text line for its default line height. A
     // heading kept around the caret can lose its viewport-only marks when
     // scrolled off screen, making it look like that sample. The larger heading
@@ -2628,7 +2628,7 @@ function buildLineDecoRanges(
     const lastLine = Math.min(lastWindowLine, doc.lineAt(to).number);
     while (lineNum <= lastLine) {
       const line = doc.line(lineNum);
-      decos.push(Decoration.line({ attributes: { class: cls } }).range(line.from));
+      decos.push(lineClassDecoration(cls).range(line.from));
       // Code and other styled blocks are not representative prose samples
       // either, even before their viewport syntax highlighting is available.
       if (line.to > line.from) {
@@ -2650,7 +2650,7 @@ function buildLineDecoRanges(
         if (calloutM) {
           const type = calloutM[1]!.toLowerCase();
           pushLineRange(node.from, node.to, `cm-md-blockquote cm-md-callout cm-md-callout-${type}`);
-          decos.push(Decoration.line({ attributes: { class: "cm-md-callout-title" } }).range(firstLine.from));
+          decos.push(lineClassDecoration("cm-md-callout-title").range(firstLine.from));
         } else {
           pushLineRange(node.from, node.to, "cm-md-blockquote");
         }
@@ -2674,13 +2674,25 @@ function buildLineDecoRanges(
       const cls = isTableSeparatorLine(line.text)
         ? "cm-md-table cm-md-table-separator"
         : "cm-md-table";
-      decos.push(Decoration.line({ attributes: { class: cls } }).range(line.from));
+      decos.push(lineClassDecoration(cls).range(line.from));
       lineNum++;
     }
   }
 
   decos.sort((a, b) => a.from - b.from || a.to - b.to);
   return decos;
+}
+
+/**
+ * One shared decoration per line class. A 5 MB note carried ~70k identical
+ * line decorations (one object and attribute map per blank line); decorations
+ * are immutable values, so every line with the same class can share one.
+ */
+const lineClassDecorations = new Map<string, Decoration>();
+function lineClassDecoration(className: string): Decoration {
+  let decoration = lineClassDecorations.get(className);
+  if (!decoration) lineClassDecorations.set(className, decoration = Decoration.line({ attributes: { class: className } }));
+  return decoration;
 }
 
 function buildLineDecos(state: EditorState): DecorationSet {
