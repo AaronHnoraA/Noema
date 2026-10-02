@@ -30,6 +30,9 @@ only document model.
 | Media | files.md `fold-image`, Marker `ImageView` | `![](clip.mp4)` / `![](talk.mp3)` become native players (no autoplay) in editor and export |
 | Footnotes | MarkText footnote tool | Hovering a reference shows its definition or flags it as undefined |
 | Quick insert | MarkText paragraph placeholder and diagram entries | "Type / for commands" on the focused empty line (not in code or Vim normal mode); Mermaid and mind-map entries |
+| Blocks | MarkText paragraph front menu (Duplicate, Delete) | `duplicate-block` / `delete-block` commands and context-menu entries with Move Up/Down; copies of paragraphs, tables, fences and math are set apart by a blank line |
+| Images | MarkText `Format.backspaceHandler` selects an inline image first | Backspace after (Delete before) an image selects it with its `{layout}` attributes; the next press removes it whole |
+| Line breaks | HyperMD `newline` (Shift-Enter) | Shift-Enter continues a list item at its content indent or a quote with its `>`, never a new marker; the xwidget path maps WebKit's `insertLineBreak` to it |
 
 ## Already equivalent or better in Noema
 
@@ -48,6 +51,9 @@ resizing, block drag handles, language-picker for fences, word-sized undo.
   multi-cell rectangle (MarkText cancels it too).
 - Treating Enter in a paragraph as a new block: Noema keeps source line
   semantics.
+- Rich (`text/html`) copy as MarkText writes it: in the Emacs host every copy
+  is mirrored to the macOS pasteboard as plain text, so it needs a host
+  transport for HTML first.
 
 ## Memory, lifecycle and responsiveness
 
