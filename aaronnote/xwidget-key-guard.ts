@@ -3,6 +3,7 @@ import type { VimLiteController } from "./vim-lite.ts";
 import {
   runEditorDelete,
   runEditorEnter,
+  runEditorSoftBreak,
   runEditorMovement,
   runEditorTab,
   type EditorMovementKey,
@@ -369,7 +370,7 @@ function runEditorSpecialKey(key: XwidgetSpecialKey, context: XwidgetKeyContext,
     return handled;
   }
   if (key === "Enter") {
-    const handled = runEditorEnter(context.editor.view);
+    const handled = shiftKey ? runEditorSoftBreak(context.editor.view) : runEditorEnter(context.editor.view);
     if (handled) context.editor.focus();
     return handled;
   }
@@ -572,7 +573,8 @@ export function handleXwidgetSpecialBeforeInput(event: InputEvent, context: Xwid
   if (!shouldHandleXwidgetSpecialEvent(event, context, key)) return false;
   if (key === "Tab") return false; // let CM6 insert \t naturally; snippet expansion happens in keydown
   hardStop(event);
-  if (!recentlyHandledKeydown(context.editor, key)) runEditorSpecialKey(key, context);
+  // WebKit reports Shift-Enter as a line break rather than a paragraph.
+  if (!recentlyHandledKeydown(context.editor, key)) runEditorSpecialKey(key, context, event.inputType === "insertLineBreak");
   restoreEditorFocusAfterCommand(context.editor);
   return true;
 }

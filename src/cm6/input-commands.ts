@@ -435,6 +435,38 @@ function tabPastInlineFormat(view: EditorView): boolean {
   return true;
 }
 
+/** The prefix that keeps a new line inside TEXT's list item or quote, without a new marker. */
+export function markdownSoftBreakPrefix(text: string): string {
+  const item = /^((?:[ \t]{0,3}>[ \t]?)*)([ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)/u.exec(text);
+  if (item) return `${item[1] ?? ""}${" ".repeat((item[2] ?? "").length)}`;
+  const quote = /^((?:[ \t]{0,3}>[ \t]?)+)/u.exec(text);
+  if (quote) return quote[1]!.endsWith(" ") || quote[1]!.endsWith("\t") ? quote[1]! : `${quote[1]!} `;
+  // A continuation line already indented to an item's content keeps it.
+  return /^[ \t]+(?=\S)/u.exec(text)?.[0] ?? "";
+}
+
+/**
+ * Shift-Enter: a new line in the same paragraph, list item or quote — the
+ * item's content indentation or the quote marker, never a new bullet
+ * (HyperMD's `newline`, MarkText's soft break). A bare newline let the text
+ * fall out of a quote's source and lazily join list text at column 0.
+ */
+export function runEditorSoftBreak(view: EditorView): boolean {
+  if (view.state.readOnly) return true;
+  const state = view.state;
+  if (state.selection.ranges.length > 1 || fencedBodyAt(state, state.selection.main.head)) return insertNewlineAndIndent(view);
+  const range = state.selection.main;
+  const line = state.doc.lineAt(range.from);
+  const insert = `\n${markdownSoftBreakPrefix(line.text)}`;
+  view.dispatch(state.update({
+    changes: { from: range.from, to: range.to, insert },
+    selection: EditorSelection.cursor(range.from + insert.length),
+    scrollIntoView: true,
+    userEvent: "input",
+  }));
+  return true;
+}
+
 /** Canonical Tab behavior shared by native CM6 and xwidget input. */
 export function runEditorTab(view: EditorView, shift = false): boolean {
   if (view.state.readOnly) return true;

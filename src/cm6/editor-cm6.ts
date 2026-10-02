@@ -36,7 +36,7 @@ import { wikiLinkAt } from "../../shared/wiki-link.mjs";
 import { vscodeCloseBrackets } from "./close-brackets-vscode.ts";
 import { emptyLineHintExtension } from "./empty-line-hint.ts";
 import { texSourceInput } from "./tex-source-input.ts";
-import { openLineAfterTrailingBlock, runEditorDelete, runEditorEnter, runEditorTab } from "./input-commands.ts";
+import { openLineAfterTrailingBlock, runEditorDelete, runEditorEnter, runEditorSoftBreak, runEditorTab } from "./input-commands.ts";
 import { isWordChar } from "./text-boundaries.ts";
 import {
   pasteTargetExtension,
@@ -1345,6 +1345,7 @@ function buildExtensions(
       { key: "Backspace", run: (view) => runEditorDelete(view, "backward") },
       { key: "Delete", run: (view) => runEditorDelete(view, "forward") },
       { key: "Enter", run: runEditorEnter },
+      { key: "Shift-Enter", run: runEditorSoftBreak },
       { key: "Mod-Enter", run: (view) => exitCurrentOrgEnv(view) || exitFencedCode(view) },
       { key: "ArrowDown", run: openLineAfterTrailingBlock },
       { key: "Tab", run: (view) => runEditorTab(view) },
