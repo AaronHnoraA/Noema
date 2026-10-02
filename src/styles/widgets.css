@@ -916,6 +916,13 @@
   object-fit: contain;
   cursor: pointer;
 }
+/* Media written with image syntax: the native player takes the figure's
+ * width contract; an audio bar has no intrinsic width worth keeping. */
+.cm-editor .cm-media-player { cursor: auto; }
+.cm-editor audio.cm-media-player {
+  width: var(--aaronnote-image-width, min(100%, 32rem));
+  height: auto;
+}
 /* Static Markdown/HTML export path. The CM widget above owns the same contract
  * in live visual mode; rendered documents put these classes on the <img>. */
 .cm-editor img.aaronnote-image {

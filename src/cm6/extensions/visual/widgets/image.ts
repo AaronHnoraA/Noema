@@ -42,6 +42,7 @@ import {
   visualAttachmentKind,
   visualAttachmentSandbox,
   visualAttachmentTitle,
+  mediaPlayerKind,
 } from "../../../../visual-attachments.ts";
 import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
 import { isCoalescedVisualTyping } from "../typing-burst.ts";
@@ -193,6 +194,24 @@ class ImageWidget extends MeasuredWidget {
           wrap.append(card);
         }
         wrap.classList.add("cm-visual-attachment", `cm-visual-attachment-${kind}`);
+      } else if (mediaPlayerKind(this.src)) {
+        // No autoplay: a note full of clips must not decode them all while
+        // scrolling. Metadata alone sizes the player.
+        const media = document.createElement(mediaPlayerKind(this.src)!);
+        media.className = "cm-image-render cm-media-player";
+        media.src = resolvedSrc;
+        media.controls = true;
+        media.preload = "metadata";
+        if (media instanceof HTMLVideoElement) media.playsInline = true;
+        if (this.alt) media.title = this.alt;
+        media.addEventListener("loadedmetadata", () => { if (wrap.isConnected) view.requestMeasure(); });
+        media.addEventListener("error", () => {
+          wrap.classList.add("cm-image-broken");
+          wrap.title = `Media not found: ${this.src}`;
+          view.requestMeasure();
+        });
+        wrap.classList.add("cm-media-widget");
+        wrap.append(media);
       } else {
         const img = document.createElement("img");
         img.src = resolvedSrc;
@@ -238,7 +257,7 @@ class ImageWidget extends MeasuredWidget {
 
   ignoreEvent(event: Event): boolean {
     const target = event.target as HTMLElement | null;
-    return Boolean(target?.closest(".cm-image-toolbar, .cm-image-resize-handle"));
+    return Boolean(target?.closest(".cm-image-toolbar, .cm-image-resize-handle, .cm-media-player"));
   }
 }
 

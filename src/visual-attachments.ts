@@ -214,3 +214,17 @@ export function visualAttachmentFrame(kind: VisualAttachmentKind, resolvedSrc: s
   }
   return { kind, mode: "srcdoc", srcdoc: drawioSrcdoc(resolvedSrc) };
 }
+
+export type MediaPlayerKind = "video" | "audio";
+
+/**
+ * `![caption](clip.mp4)` and `![](talk.mp3)` play inline, as files.md and
+ * Marker render media written with image syntax. The extension of the path
+ * (before any query or fragment) decides; everything else stays an image.
+ */
+export function mediaPlayerKind(src: string): MediaPlayerKind | null {
+  const path = String(src || "").split(/[?#]/u, 1)[0] ?? "";
+  if (/\.(?:mp4|m4v|webm|mov|ogv)$/iu.test(path)) return "video";
+  if (/\.(?:mp3|m4a|aac|oga|ogg|opus|wav|weba|flac)$/iu.test(path)) return "audio";
+  return null;
+}

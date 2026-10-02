@@ -43,6 +43,8 @@ import {
   visualAttachmentSandbox,
   visualAttachmentTitle,
   type VisualAttachmentKind,
+  mediaPlayerKind,
+  type MediaPlayerKind,
 } from "./visual-attachments.ts";
 
 declare global {
@@ -752,6 +754,16 @@ function applyImageAttrs(tokens: Token[], idx: number): void {
   token.attrSet("data-aaronnote-image-align", layout.align);
   token.attrSet("data-aaronnote-image-wrap", layout.wrap ? "true" : "false");
   joinTokenStyle(token, imageLayoutStyle(layout));
+}
+
+function renderMediaPlayer(token: Token, kind: MediaPlayerKind, resolvedSrc: string): string {
+  const alt = (token.content || token.attrGet("alt") || "").trim();
+  const style = token.attrGet("style");
+  const classes = ["cm-image-widget", "cm-media-widget", token.attrGet("class") || ""].join(" ").trim();
+  const extra = kind === "video" ? " playsinline" : "";
+  const player = `<${kind} class="cm-image-render cm-media-player" src="${escapeAttr(resolvedSrc)}" controls preload="metadata"${extra}${alt ? ` title="${escapeAttr(alt)}"` : ""}></${kind}>`;
+  const caption = alt ? `<figcaption class="cm-image-caption">${escapeHtml(alt)}</figcaption>` : "";
+  return `<figure class="${escapeAttr(classes)}"${style ? ` style="${escapeAttr(style)}"` : ""}>${player}${caption}</figure>`;
 }
 
 function renderVisualAttachmentImage(token: Token, kind: VisualAttachmentKind, resolvedSrc: string): string {
@@ -1509,6 +1521,8 @@ function createMarkdownIt(options: RenderMarkdownHTMLOptions): MarkdownIt {
       const kind = visualAttachmentKind(src);
       const resolvedSrc = resolveAssetSrc(src, options.assetResolver);
       if (kind) return renderVisualAttachmentImage(token, kind, resolvedSrc);
+      const media = mediaPlayerKind(src);
+      if (media) return renderMediaPlayer(token, media, resolvedSrc);
       token.attrSet("src", resolvedSrc);
     }
     return originalImage(tokens, idx, opts, env, self);
