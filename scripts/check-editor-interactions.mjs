@@ -1,6 +1,7 @@
 // WebKit checks for editor interactions a DOM emulator cannot judge: the
 // empty-line hint must not move the caret or change line height, a real
-// mouse drag must select a table rectangle, and emoji/media must render.
+// mouse drag must select a table rectangle, emoji/media must render, and the
+// keyboard paths through cells, embeds and inline marks behave natively.
 // NOEMA_PLAYWRIGHT_MODULE may point to an external Playwright installation.
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
@@ -88,8 +89,49 @@ try {
   const source = await page.evaluate(() => editor.getMarkdown());
   assert.ok(source.includes("|  |  | 3 |\n|  |  | 6 |"), `Delete empties the rectangle:\n${source}`);
 
+  // Keyboard: arrows cross cells at the text edge and leave the table.
+  await page.keyboard.press("Escape");
+  await cell(1, 2).click();
+  await page.waitForTimeout(50);
+  // Cell (1,2) holds "3"; one press reaches its start, the next crosses.
+  await page.keyboard.press("End");
+  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.press("ArrowLeft");
+  await page.waitForTimeout(80);
+  const leftCell = await page.evaluate(() => document.activeElement?.closest("td, th")?.dataset.col);
+  assert.equal(leftCell, "1", "ArrowLeft at a cell's start enters the previous cell");
+  await page.keyboard.press("ArrowDown");
+  await page.waitForTimeout(80);
+  await page.keyboard.press("ArrowDown");
+  await page.waitForTimeout(120);
+  const afterTable = await page.evaluate(() => ({
+    inEditor: editor.view.hasFocus,
+    line: editor.view.state.doc.lineAt(editor.getMarkdownSelection().from).text,
+  }));
+  assert.equal(afterTable.inEditor, true, "ArrowDown past the last row returns to the document");
+  assert.equal(afterTable.line, "", "caret lands on the line below the table");
+
+  // Backspace after an embed selects it whole and keeps it rendered.
+  const mediaEnd = await page.evaluate(() => editor.getMarkdown().indexOf("(clip.mp4)") + "(clip.mp4)".length);
+  await page.evaluate((at) => { editor.view.focus(); editor.setMarkdownSelection(at); }, mediaEnd);
+  await page.keyboard.press("Backspace");
+  await page.waitForTimeout(80);
+  const media = await page.evaluate(() => {
+    const { from, to } = editor.getMarkdownSelection();
+    return { selected: editor.getMarkdown().slice(from, to), players: document.querySelectorAll("video.cm-media-player").length };
+  });
+  assert.equal(media.selected, "![Clip](clip.mp4)", "Backspace selects the whole embed");
+  assert.equal(media.players, 1, "the selected embed stays rendered");
+  await page.keyboard.press("Escape");
+
+  // Tab leaves bold at its content end.
+  await page.evaluate(() => { editor.setMarkdown("x **bold** y"); editor.view.focus(); editor.setMarkdownSelection(8); });
+  await page.keyboard.press("Tab");
+  assert.equal(await page.evaluate(() => editor.getMarkdownSelection().from), 10, "Tab moves past **");
+  assert.equal(await page.evaluate(() => editor.getMarkdown()), "x **bold** y", "Tab inserts nothing there");
+
   assert.deepEqual(errors, [], "page errors");
-  console.log(JSON.stringify({ checks: "emoji, media, empty-line hint geometry, table drag selection", hint: withHint, selected }));
+  console.log(JSON.stringify({ checks: "emoji, media, empty-line hint geometry, table drag selection, cell arrows, embed Backspace, Tab past bold", hint: withHint, selected }));
 } finally {
   await browser.close();
   await server.close();
