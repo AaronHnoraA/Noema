@@ -1937,7 +1937,7 @@ The expression
 does not uniquely determine the ensemble \(\{p_j,|\psi_j\rangle\}_j\).
 
 Different classical preparation procedures may induce the same density
-operator. Operationally, the density operator is the object that determines
+operator. Operationally, the density operator is the object that determines thsi this this this t we will solve this later ans this ls hard to improve jjjjjjjjjjjjjjjjjjjjjjjjjjjjjj
 all measurement statistics.
 #+end important
 
@@ -2313,7 +2313,7 @@ many times.
 ## 4.10. Conceptual summary
 
 #+begin summary Section summary
-The conceptual chain of this section is:
+The conceptual chain of this section is: \(\frac{asdas}{sadsa} \times \sqrt[2]{ adasda } - \sum^{asdas}_{asda} a_{a,b} s fr\) 
 
 \[
 \text{state vector}
