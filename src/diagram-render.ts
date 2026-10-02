@@ -59,10 +59,23 @@ type DiagramInteractionState = {
   applyScale: (next: number, originX?: number, originY?: number) => void;
   reset: () => void;
   fit: () => void;
-  toggleFullscreen: () => void;
+  toggleFullscreen: (restoreFocus?: boolean) => void;
 };
 
 const diagramInteractions = new WeakMap<HTMLElement, DiagramInteractionState>();
+
+/** Release a diagram whose owning widget is being removed. */
+export function disposeDiagramInteraction(element: HTMLElement): void {
+  element.removeAttribute("data-diagram-render-key");
+  const state = diagramInteractions.get(element);
+  if (!state) return;
+  if (state.fullscreenDom) state.toggleFullscreen(false);
+  if (state.longPressTimer != null) window.clearTimeout(state.longPressTimer);
+  state.longPressTimer = null;
+  state.resizeObserver?.disconnect();
+  state.resizeObserver = null;
+  diagramInteractions.delete(element);
+}
 
 function mermaidEntryBytes(v: DiagramCacheValue): number {
   return (v.html.length + (v.error?.length ?? 0)) * 2;
@@ -492,7 +505,7 @@ function bindDiagramInteraction(element: HTMLElement): DiagramInteractionState {
       state.autoFit = true;
       state.applyTransform();
     },
-    toggleFullscreen: () => {
+    toggleFullscreen: (restoreFocus = true) => {
       const expanded = element.classList.contains("is-diagram-fullscreen");
       if (expanded) {
         element.classList.remove("is-diagram-fullscreen");
@@ -519,6 +532,9 @@ function bindDiagramInteraction(element: HTMLElement): DiagramInteractionState {
           state.autoFit = snapshot.autoFit;
         }
         state.applyTransform();
+        // Moving the focused diagram out of its portal drops focus in WebKit.
+        // Keep keyboard pan/zoom working after Escape, without scrolling to it.
+        if (restoreFocus && element.isConnected) element.focus({ preventScroll: true });
         return;
       }
 

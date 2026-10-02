@@ -23,7 +23,7 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import { MeasuredWidget } from "./measured-widget.ts";
-import { shortHash } from "./measured-observer.ts";
+import { observeWidget, shortHash, unobserveWidget } from "./measured-observer.ts";
 import { StateEffect, StateField, type ChangeSet, type EditorState, type Text } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
 import type { Range } from "@codemirror/state";
@@ -31,7 +31,7 @@ import { highlightCodeForEditor, onCodeHighlightReady } from "../../../../code-h
 import { supportedDiagramLang } from "../../../../diagram-langs.ts";
 import { writeSystemClipboard } from "../../../../system-clipboard.ts";
 import { getBlockMathRanges, rangeInsideAny, rangeOverlapsAny } from "../../../math-ranges.ts";
-import { applyLayoutAttrs, layoutFromAttrs, readLayoutAttrsLine, type LayoutAttrs } from "../../../../layout-attrs.ts";
+import { applyLayoutAttrs, layoutFromAttrs, layoutIsDefault, readLayoutAttrsLine, type LayoutAttrs } from "../../../../layout-attrs.ts";
 import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
 import { isCoalescedVisualTyping } from "../typing-burst.ts";
 import {
@@ -301,6 +301,11 @@ class CodeFoldButtonWidget extends MeasuredWidget {
 // Mermaid widgets
 // ---------------------------------------------------------------------------
 
+function diagramMeasureKey(prefix: string, source: string, lang: string, layout: LayoutAttrs): string {
+  const key = prefix + shortHash(lang + "\n" + source);
+  return layoutIsDefault(layout) ? key : key + ":" + JSON.stringify(layout);
+}
+
 class MermaidWidget extends MeasuredWidget {
   source: string;
   lang: string;
@@ -308,6 +313,7 @@ class MermaidWidget extends MeasuredWidget {
   to: number;
   sourceFrom: number;
   layout: LayoutAttrs;
+  private disposeRender: () => void = () => {};
 
   constructor(source: string, lang: string, from: number, to: number, sourceFrom: number, layout: LayoutAttrs) {
     super();
@@ -319,11 +325,14 @@ class MermaidWidget extends MeasuredWidget {
     this.layout = layout;
   }
 
-  protected measureKey(): string { return "mermaid:" + shortHash(this.lang + "\n" + this.source); }
+  protected get measuredBlock(): boolean { return !this.layout.wrap; }
+  get estimatedHeight(): number { return this.layout.wrap ? 0 : super.estimatedHeight; }
+  protected measureKey(): string { return diagramMeasureKey("mermaid:", this.source, this.lang, this.layout); }
 
   protected measureGroupKey(): string {
     const bucket = Math.min(8, Math.ceil(this.source.split(/\n/).length / 8));
-    return ["mermaid", this.lang, this.layout.align, this.layout.wrap ? "wrap" : "block", bucket].join(":");
+    return ["mermaid", this.lang, this.layout.align, this.layout.wrap ? "wrap" : "block", bucket,
+      this.layout.width, this.layout.height].join(":");
   }
 
   protected estimatedHeightFallback(): number {
@@ -334,15 +343,29 @@ class MermaidWidget extends MeasuredWidget {
   }
 
   eq(other: MermaidWidget): boolean {
-    return this.source === other.source &&
-      this.lang === other.lang &&
-      this.from === other.from &&
+    return this.sameDiagram(other) && this.from === other.from &&
       this.to === other.to &&
-      this.sourceFrom === other.sourceFrom &&
+      this.sourceFrom === other.sourceFrom;
+  }
+
+  private sameDiagram(other: MermaidWidget): boolean {
+    return this.source === other.source && this.lang === other.lang &&
       this.layout.align === other.layout.align &&
       this.layout.wrap === other.layout.wrap &&
       this.layout.width === other.layout.width &&
       this.layout.height === other.layout.height;
+  }
+
+  updateDOM(dom: HTMLElement, _view: EditorView, previous: MermaidWidget): boolean {
+    if (!this.sameDiagram(previous)) return false;
+    this.disposeRender = previous.disposeRender;
+    setSourceRange(dom, this.from, this.to, this.sourceFrom, true);
+    return true;
+  }
+
+  destroy(dom: HTMLElement): void {
+    this.disposeRender();
+    super.destroy(dom);
   }
 
   toDOM(view: EditorView): HTMLElement {
@@ -357,7 +380,7 @@ class MermaidWidget extends MeasuredWidget {
     div.className = "cm-mermaid-block";
     applyLayoutAttrs(div, "diagram", this.layout);
     wrap.append(div);
-    renderMermaidWidget(this.source, this.lang, div, wrap, this.estimatedHeight, () => view.requestMeasure());
+    this.disposeRender = renderMermaidWidget(this.source, this.lang, div, wrap, this.estimatedHeight, view);
     return this.registerMeasured(wrap, view);
   }
 
@@ -368,6 +391,7 @@ class MermaidPreviewWidget extends MeasuredWidget {
   source: string;
   lang: string;
   layout: LayoutAttrs;
+  private disposeRender: () => void = () => {};
 
   constructor(source: string, lang: string, layout: LayoutAttrs) {
     super();
@@ -376,11 +400,14 @@ class MermaidPreviewWidget extends MeasuredWidget {
     this.layout = layout;
   }
 
-  protected measureKey(): string { return "mermp:" + shortHash(this.lang + "\n" + this.source); }
+  protected get measuredBlock(): boolean { return !this.layout.wrap; }
+  get estimatedHeight(): number { return this.layout.wrap ? 0 : super.estimatedHeight; }
+  protected measureKey(): string { return diagramMeasureKey("mermp:", this.source, this.lang, this.layout); }
 
   protected measureGroupKey(): string {
     const bucket = Math.min(8, Math.ceil(this.source.split(/\n/).length / 8));
-    return ["mermp", this.lang, this.layout.align, this.layout.wrap ? "wrap" : "block", bucket].join(":");
+    return ["mermp", this.lang, this.layout.align, this.layout.wrap ? "wrap" : "block", bucket,
+      this.layout.width, this.layout.height].join(":");
   }
 
   protected estimatedHeightFallback(): number {
@@ -410,17 +437,28 @@ class MermaidPreviewWidget extends MeasuredWidget {
     div.className = "cm-mermaid-block-preview";
     applyLayoutAttrs(div, "diagram", this.layout);
     wrap.append(div);
-    renderMermaidWidget(this.source, this.lang, div, wrap, this.estimatedHeight, () => view.requestMeasure());
+    this.disposeRender = renderMermaidWidget(this.source, this.lang, div, wrap, this.estimatedHeight, view);
     return this.registerMeasured(wrap, view);
   }
 
   ignoreEvent(): boolean { return true; }
+
+  destroy(dom: HTMLElement): void {
+    this.disposeRender();
+    super.destroy(dom);
+  }
 }
 
 function renderMermaidWidget(
   source: string, lang: string, div: HTMLElement, wrap: HTMLElement,
-  estimatedHeight: number, onRender: () => void,
-): void {
+  estimatedHeight: number, view: EditorView,
+): () => void {
+  let disposed = false;
+  let disposeInteraction = () => {};
+  const floating = wrap.classList.contains("aaronnote-diagram-wrap");
+  // The outer float anchor has no height. Observe the actual floated content
+  // so later SVG/font changes still invalidate the surrounding text layout.
+  if (floating) observeWidget(div, view);
   const key = `mermaid\n${lang}\n${source.trim()}`;
   div.dataset.diagramRenderKey = key;
   // Even a cached SVG crosses an async import when a virtualized widget mounts
@@ -431,25 +469,33 @@ function renderMermaidWidget(
     wrap.style.minHeight = `${estimatedHeight}px`;
   }
   const finish = () => {
+    if (disposed) return;
     wrap.removeAttribute("aria-busy");
     wrap.style.removeProperty("min-height");
-    onRender();
+    if (wrap.isConnected) view.requestMeasure();
   };
   div.textContent = "Loading diagram renderer...";
   void import("../../../../diagram-render.ts")
-    .then(({ renderMermaidLazy }) => {
-      if (div.dataset.diagramRenderKey !== key) return;
+    .then(({ renderMermaidLazy, disposeDiagramInteraction }) => {
+      if (disposed || div.dataset.diagramRenderKey !== key) return;
+      disposeInteraction = () => disposeDiagramInteraction(div);
       renderMermaidLazy(source, div, (err) => {
         div.classList.add("cm-diagram-error");
         div.textContent = err;
       }, { lang, onRender: finish });
     })
     .catch((err: unknown) => {
-      if (div.dataset.diagramRenderKey !== key) return;
+      if (disposed || div.dataset.diagramRenderKey !== key) return;
       div.classList.add("cm-diagram-error");
       div.textContent = err instanceof Error ? err.message : String(err);
       finish();
     });
+  return () => {
+    disposed = true;
+    div.removeAttribute("data-diagram-render-key");
+    disposeInteraction();
+    if (floating) unobserveWidget(div);
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -884,6 +930,16 @@ class FencedCodePlugin {
   }
 
   update(update: ViewUpdate): void {
+    if (update.docChanged && update.startState.field(mermaidBlocksField, false)?.length) {
+      // The persistent block field often maps its decorations without creating
+      // new widgets. Keep menu and source-click metadata current in that path.
+      for (const figure of update.view.dom.querySelectorAll<HTMLElement>(".cm-mermaid-widget[data-cm-source-from]")) {
+        setSourceRange(figure,
+          update.changes.mapPos(Number(figure.dataset.cmSourceFrom), 1),
+          update.changes.mapPos(Number(figure.dataset.cmSourceTo), -1),
+          update.changes.mapPos(Number(figure.dataset.cmSourceAnchor), -1), true);
+      }
+    }
     if (update.view.compositionStarted && update.selectionSet && !update.docChanged && !update.viewportChanged) return;
     if (isCoalescedVisualTyping(update)) {
       this.decorations = this.decorations.map(update.changes);

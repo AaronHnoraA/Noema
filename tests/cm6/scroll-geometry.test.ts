@@ -9,6 +9,7 @@ vi.mock("../../src/diagram-render.ts", () => ({
     renders.push({ element, fail, finish: options.onRender });
   },
   disposeDiagramRuntime: () => {},
+  disposeDiagramInteraction: () => {},
 }));
 
 const editors: Editor[] = [];

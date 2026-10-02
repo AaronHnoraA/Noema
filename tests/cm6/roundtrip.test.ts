@@ -2068,7 +2068,7 @@ After`;
     const diagram = document.querySelector<HTMLElement>(".cm-mermaid-block");
     expect(widget).toBeTruthy();
     expect(diagram).toBeTruthy();
-    expect(widget!.classList.contains("cm-aaronnote-measured-widget")).toBe(true);
+    expect(widget!.classList.contains("cm-aaronnote-measured-widget")).toBe(false); // zero-height anchor; observe the inner float
     expect(widget!.classList.contains("aaronnote-image-wrap")).toBe(false);
     expect(diagram!.classList.contains("aaronnote-diagram-align-right")).toBe(true);
     expect(diagram!.classList.contains("aaronnote-diagram-wrap")).toBe(true);
