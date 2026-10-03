@@ -1,9 +1,10 @@
-import DOMPurify from "dompurify";
+import { FOREIGN_OBJECT_HTML_ATTR, sanitizeDiagramSvg } from "./diagram-sanitize.ts";
 import { getKatexMacros } from "./katex-macros.ts";
 import { ensureMathStyles } from "./math-render.ts";
 import { katexCompatibleLatex } from "./tex-compat.ts";
 import { safeHref } from "./url-safety.ts";
 export { supportedDiagramLang } from "./diagram-langs.ts";
+export { sanitizeDiagramSvg } from "./diagram-sanitize.ts";
 
 type DiagramCacheValue = { html: string; error?: string };
 
@@ -110,44 +111,6 @@ export function diagramRenderCacheSize(): number {
 
 export function disposeDiagramRuntime(): void {
   clearDiagramRenderCache();
-}
-
-const FOREIGN_OBJECT_HTML_ATTR = "data-noema-foreign-html";
-
-function sanitizeForeignObjectHtml(html: string): string {
-  const template = document.createElement("template");
-  template.innerHTML = html;
-  template.content.querySelectorAll("script, iframe, object, embed, link, meta, base, style").forEach((node) => node.remove());
-  template.content.querySelectorAll("*").forEach((node) => {
-    Array.from(node.attributes).forEach((attribute) => {
-      if (/^on/i.test(attribute.name) || attribute.name.toLowerCase() === "srcdoc") {
-        node.removeAttribute(attribute.name);
-      }
-    });
-  });
-  return DOMPurify.sanitize(template.innerHTML, {
-    USE_PROFILES: { html: true, mathMl: true },
-    FORBID_TAGS: ["script", "iframe", "object", "embed", "link", "meta", "base", "style"],
-    FORBID_ATTR: ["srcdoc"],
-  });
-}
-
-export function sanitizeDiagramSvg(svg: string): string {
-  const template = document.createElement("template");
-  template.innerHTML = svg;
-  template.content.querySelectorAll<SVGForeignObjectElement>("foreignObject").forEach((foreignObject) => {
-    const safeHtml = sanitizeForeignObjectHtml(foreignObject.innerHTML);
-    foreignObject.replaceChildren();
-    foreignObject.setAttribute(FOREIGN_OBJECT_HTML_ATTR, safeHtml);
-  });
-
-  return DOMPurify.sanitize(template.innerHTML, {
-    USE_PROFILES: { svg: true, svgFilters: true, mathMl: true },
-    // foreignObject is needed for Mermaid mindmap labels. Its HTML was sanitized
-    // separately and is carried through this SVG-only pass in an inert data attr.
-    ADD_TAGS: ["foreignObject"],
-    ADD_ATTR: ["href", "xlink:href", "target", "title", "requiredExtensions", "xmlns", "style"],
-  });
 }
 
 function hydrateDiagramForeignObjects(element: HTMLElement): void {
@@ -894,6 +857,82 @@ export function presentDiagramFigure(element: HTMLElement): void {
     openDiagramLightbox(element);
   });
   element.append(expand);
+}
+
+/**
+ * Render a diagram to standalone SVG, outside any widget.
+ *
+ * Mermaid needs a real browser to lay text out, so there is no server-side
+ * renderer: an export that wants a picture of a fence asks the page that is
+ * already showing it. LaTeX export and standalone HTML both go through here,
+ * and share the editor's render cache, so an exported figure is exactly the
+ * figure on screen.
+ */
+export type DiagramSVGOptions = {
+  /**
+   * Draw labels as SVG `<text>` instead of HTML in a `<foreignObject>`.
+   *
+   * A page renders HTML labels, which is what gives a diagram its typography
+   * and its KaTeX math. A vector converter does not: `rsvg-convert` drops a
+   * `foreignObject` outright, so a PDF figure made from the page's own SVG
+   * would arrive with every label missing. Export asks for text labels.
+   */
+  textLabels?: boolean;
+};
+
+export async function renderDiagramSVG(
+  source: string,
+  lang = "",
+  options: DiagramSVGOptions = {},
+): Promise<string> {
+  const trimmed = normalizeMermaidSource(source, lang).trim();
+  if (!trimmed) return "";
+  if (trimmed.length > MAX_MERMAID_SOURCE_CHARS) throw new Error("Diagram is too large to render");
+  const staticMindmap = staticAaronMindmap(lang);
+  const renderSource = staticMindmap ? aaronMindmapThemeSource(trimmed) : trimmed;
+  const textLabels = options.textLabels === true;
+  const key = `mermaid\n${staticMindmap ? "aaron-mindmap" : "interactive"}${textLabels ? "\ntext-labels" : ""}\n${renderSource}`;
+
+  const cached = cachedMermaid(key);
+  if (cached) {
+    if (cached.error) throw new Error(cached.error);
+    return cached.html;
+  }
+
+  const mermaid = (await import("mermaid")).default;
+  if (trimmed.includes("$$")) ensureMathStyles();
+  // Mermaid's published types omit `mindmap.htmlLabels`, which its mindmap
+  // renderer does read; the global flag alone does not reach every diagram type.
+  const labelConfig: Record<string, unknown> = textLabels
+    ? { htmlLabels: false, flowchart: { htmlLabels: false }, mindmap: { htmlLabels: false } }
+    : {};
+  if (staticMindmap) {
+    mermaid.initialize({ startOnLoad: false, securityLevel: "antiscript", legacyMathML: true, ...labelConfig });
+  } else {
+    mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: "default", legacyMathML: true, ...labelConfig });
+  }
+  try {
+    const result = await mermaid.render(`aaronnote-mermaid-export-${Date.now()}-${++renderSeq}`, renderSource);
+    const html = preserveDiagramTextSpacing(sanitizeDiagramSvg(result.svg));
+    rememberMermaid(key, { html });
+    return html;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    rememberMermaid(key, { html: "", error: message });
+    throw new Error(message);
+  }
+}
+
+/**
+ * Mermaid writes a wrapped label as one `<tspan>` per word, carrying the space
+ * at the start of the next word. A browser keeps that space; `rsvg-convert`
+ * applies XML whitespace stripping and turns "Three questions" into
+ * "Threequestions". Saying so explicitly keeps both renderers in agreement.
+ */
+export function preserveDiagramTextSpacing(svg: string): string {
+  return String(svg || "").replace(/<(text|tspan)(\s|>)/g, (_match, tag: string, next: string) => (
+    `<${tag} xml:space="preserve"${next === ">" ? ">" : next}`
+  ));
 }
 
 export function renderMermaidLazy(

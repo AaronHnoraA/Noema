@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
 import { registerHooks } from "node:module";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
 import { Window } from "happy-dom";
 import { loadKatexMacros } from "../server/lib/katex-macros.mjs";
 
@@ -69,6 +70,11 @@ const macrosDir = resolve(
       ? join(process.env.AARONNOTE_WORKSPACE_ROOT, "etc", "katex-macros")
       : join(scriptDir, "..", "..", "..", "..", "etc", "katex-macros")),
 );
+const drawioCacheDir = resolve(
+  process.env.NOEMA_DRAWIO_CACHE_DIR
+    || join(process.env.AARONNOTE_STATE_DIR
+      || join(process.env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "noema"), "drawio-svg"),
+);
 const { setKatexMacros } = await import("../src/katex-macros.ts");
 setKatexMacros(loadKatexMacros(macrosDir).macros);
 
@@ -83,6 +89,37 @@ function renderOne(input) {
       leanRegions: input.leanRegions ?? undefined,
       noteFile: input.noteFile ?? undefined,
     });
+}
+
+/**
+ * Inline every draw.io diagram.
+ *
+ * The live editor fetches the export through the host, which a standalone or
+ * published file cannot reach, so the SVG is put straight into the document —
+ * the same treatment TikZ gets below.
+ */
+async function inlineDrawio(html, noteFile) {
+  if (!html.includes("data-aaronnote-drawio-src")) return html;
+  const { drawioExportSVG } = await import("../server/lib/drawio-export.mjs");
+  const { sanitizeDiagramSvg } = await import("../src/diagram-sanitize.ts");
+  const fullDocument = /^\s*<!doctype|^\s*<html\b/i.test(html);
+  const root = fullDocument
+    ? new window.DOMParser().parseFromString(html, "text/html")
+    : window.document.createElement("div");
+  if (!fullDocument) root.innerHTML = html;
+  const baseDir = noteFile ? dirname(resolve(String(noteFile))) : process.cwd();
+  for (const image of root.querySelectorAll("[data-aaronnote-drawio-src]")) {
+    const source = image.getAttribute("data-aaronnote-drawio-src") || "";
+    const page = Number(image.getAttribute("data-aaronnote-drawio-page") || 0) || 0;
+    const file = isAbsolute(source) ? source : resolve(baseDir, source);
+    const result = await drawioExportSVG(file, { page, cacheDir: drawioCacheDir });
+    const figure = window.document.createElement("span");
+    figure.className = image.className;
+    // A failed export still says so in the page rather than leaving a dead URL.
+    figure.innerHTML = sanitizeDiagramSvg(result.svg);
+    image.replaceWith(figure);
+  }
+  return fullDocument ? `<!DOCTYPE html>\n${root.documentElement.outerHTML}` : root.innerHTML;
 }
 
 async function inlineTikz(html) {
@@ -120,7 +157,11 @@ async function inlineTikz(html) {
   return fullDocument ? `<!DOCTYPE html>\n${root.documentElement.outerHTML}` : root.innerHTML;
 }
 
+async function inlineDiagrams(item) {
+  return inlineTikz(await inlineDrawio(renderOne(item), item?.noteFile));
+}
+
 const html = Array.isArray(input.batch)
-  ? await Promise.all(input.batch.map((item) => inlineTikz(renderOne(item ?? {}))))
-  : await inlineTikz(renderOne(input));
+  ? await Promise.all(input.batch.map((item) => inlineDiagrams(item ?? {})))
+  : await inlineDiagrams(input);
 process.stdout.write(JSON.stringify({ html }));

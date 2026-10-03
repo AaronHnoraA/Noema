@@ -8469,11 +8469,17 @@ async function exportLatexTool(): Promise<void> {
       setStatus(`LaTeX export failed: ${String(chosen.message || "output path was not selected")}`);
       return;
     }
+    // The server has no Mermaid renderer, so the page that is showing these
+    // diagrams renders them here; without this they would typeset as source.
+    setStatus("Rendering diagrams…");
+    const { collectExportDiagrams } = await import("./export-diagrams.ts");
+    const diagrams = await collectExportDiagrams(content);
     setStatus("Exporting LaTeX…");
     await api.latex.export({
       file: currentFile,
       content,
       documentContent: currentMarkdownText(),
+      ...(diagrams.length > 0 ? { diagrams } : {}),
       outputPath: String(chosen.path),
       title,
       scope,

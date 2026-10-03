@@ -235,29 +235,51 @@ counterpart of the Project workspace."
    (list (intern (completing-read "Agent in a new worktree: "
                                   noema-agent-worktree-agents nil t nil nil "codex"))
          (read-string "Worktree name: ")))
-  (require 'noema-agent-acp)
-  (let* ((root (noema-agent-acp-project-root))
-         (workspace (if (require 'noema-research nil t)
-                        (noema-project-workspace root)
-                      root))
-         (config (or (noema-agent-acp-config-for agent)
-                     (user-error "No agent-shell configuration for %s" agent)))
-         (checkout (or (noema-agent-worktree-checkout workspace)
-                       (user-error "The Project workspace is not a Git repository: %s"
-                                   workspace)))
-         (offset (file-relative-name workspace (plist-get checkout :toplevel)))
-         (worktree (noema-agent-worktree-create workspace name))
-         (directory (file-name-as-directory
-                     (expand-file-name offset (plist-get worktree :path))))
-         (buffer (noema-agent-acp-start :config config :directory directory
-                                        :origin 'manual :focus t)))
-    (noema-agent-acp-adopt
-     buffer :agent agent :origin 'manual :root root
-     :name (noema-agent-acp--unique-name
-            (format "worktree/%s" (noema-agent-worktree--slug name)) root))
+  (let ((started (noema-agent-worktree--start agent name :focus t)))
     (message "Noema: %s works on branch %s in %s"
-             agent (plist-get worktree :branch) (plist-get worktree :path))
-    buffer))
+             agent (plist-get started :branch) (plist-get started :path))
+    (plist-get started :buffer)))
+
+(defun noema-agent-worktree--workspace ()
+  "Return (ROOT . WORKSPACE) of the current Project."
+  (require 'noema-agent-acp)
+  (let ((root (noema-agent-acp-project-root)))
+    (cons root (if (require 'noema-research nil t)
+                   (noema-project-workspace root)
+                 root))))
+
+(cl-defun noema-agent-worktree--start (agent name &key focus group)
+  "Start AGENT in a new worktree NAME of the current Project; return a plist.
+FOCUS shows the session.  GROUP, a slug, records the worktree as one attempt
+of that parallel group.  The plist is the worktree's plus :buffer."
+  (pcase-let* ((`(,root . ,workspace) (noema-agent-worktree--workspace))
+               (config (or (noema-agent-acp-config-for agent)
+                           (user-error "No agent-shell configuration for %s" agent)))
+               (checkout (or (noema-agent-worktree-checkout workspace)
+                             (user-error "The Project workspace is not a Git repository: %s"
+                                         workspace)))
+               (offset (file-relative-name workspace (plist-get checkout :toplevel)))
+               (worktree (noema-agent-worktree-create workspace name))
+               (branch (plist-get worktree :branch)))
+    (noema-agent-worktree--set worktree "noemaAgent" (format "%s" agent))
+    (when group
+      (noema-agent-worktree--set worktree "noemaGroup" group))
+    (let ((buffer (noema-agent-acp-start
+                   :config config :origin 'manual :focus focus
+                   :directory (file-name-as-directory
+                               (expand-file-name offset (plist-get worktree :path))))))
+      (noema-agent-acp-adopt
+       buffer :agent agent :origin 'manual :root root
+       :name (noema-agent-acp--unique-name
+              (format "worktree/%s" (substring branch (length noema-agent-worktree-branch-prefix)))
+              root))
+      (append (list :buffer buffer :agent (format "%s" agent) :group group) worktree))))
+
+(defun noema-agent-worktree--set (worktree key value)
+  "Record VALUE under KEY in the branch configuration of WORKTREE."
+  (noema-agent-worktree--git-ok (plist-get worktree :path) "config"
+                                (format "branch.%s.%s" (plist-get worktree :branch) key)
+                                value))
 
 (defun noema-agent-worktree--require-magit ()
   "Load Magit or explain that the review commands need it."
@@ -288,14 +310,35 @@ against the point it branched from; otherwise the uncommitted edits."
     (magit-diff-working-tree
      (and base (noema-agent-worktree--git-ok top "merge-base" base "HEAD")))))
 
+(defun noema-agent-worktree--branch-config (top)
+  "Return Noema's branch settings in repository TOP as an alist.
+Each entry is (BRANCH . PLIST) with :base, :agent and :group, read in one
+Git call however many worktrees there are."
+  (let ((result (noema-agent-worktree--git
+                 top "config" "--get-regexp" "^branch\\..*\\.noema"))
+        branches)
+    (when (eq (car result) 0)
+      (dolist (line (split-string (cdr result) "\n" t))
+        ;; branch.<name>.<key> <value>; a branch name may hold dots, a key not.
+        (when (string-match "\\`branch\\.\\(.+\\)\\.\\(noema[a-z]+\\) \\(.*\\)\\'" line)
+          (let* ((branch (match-string 1 line))
+                 (key (pcase (match-string 2 line)
+                        ("noemabase" :base) ("noemaagent" :agent) ("noemagroup" :group)))
+                 (cell (or (assoc branch branches)
+                           (car (push (list branch) branches)))))
+            (when key
+              (setcdr cell (plist-put (cdr cell) key (match-string 3 line))))))))
+    branches))
+
 (defun noema-agent-worktree-list (directory)
   "Return Noema's worktrees of the repository at DIRECTORY.
-Each is a plist with :path (an Emacs name), :branch, :base and :repo, the
-checkout DIRECTORY belongs to, from which Git removes it."
+Each is a plist with :path (an Emacs name), :branch, :base, :agent, :group
+and :repo, the checkout DIRECTORY belongs to, from which Git removes it."
   (let* ((checkout (or (noema-agent-worktree-checkout directory)
                        (user-error "Not in a Git repository: %s" directory)))
          (top (plist-get checkout :toplevel))
          (native-top (plist-get checkout :native-toplevel))
+         (settings (noema-agent-worktree--branch-config top))
          (porcelain (noema-agent-worktree--git-ok top "worktree" "list" "--porcelain"))
          result path)
     (dolist (line (split-string porcelain "\n"))
@@ -304,15 +347,13 @@ checkout DIRECTORY belongs to, from which Git removes it."
         (setq path (substring line (length "worktree "))))
        ((and path (string-prefix-p "branch refs/heads/" line))
         (let* ((branch (substring line (length "branch refs/heads/")))
-               (base (noema-agent-worktree--git
-                      top "config" "--get" (format "branch.%s.noemaBase" branch))))
-          (when (eq (car base) 0)
-            (push (list :path (file-name-as-directory
-                               (expand-file-name
-                                (file-relative-name path native-top) top))
-                        :branch branch
-                        :base (string-trim (cdr base))
-                        :repo top)
+               (setting (cdr (assoc branch settings))))
+          (when (plist-get setting :base)
+            (push (append (list :path (file-name-as-directory
+                                       (expand-file-name
+                                        (file-relative-name path native-top) top))
+                                :branch branch :repo top)
+                          setting)
                   result))))))
     (nreverse result)))
 
@@ -361,11 +402,17 @@ one an open agent session still works in is always refused."
     (when (yes-or-no-p (format "%s worktree %s (branch %s is kept)? "
                                (if dirty "Discard changes and remove" "Remove")
                                path branch))
-      (let ((repo (plist-get worktree :repo)))
-        (apply #'noema-agent-worktree--git-ok repo "worktree" "remove"
-               (append (and dirty '("--force"))
-                       (list (directory-file-name (file-relative-name path repo))))))
+      (noema-agent-worktree--remove worktree dirty)
       (message "Noema: removed %s; branch %s is kept" path branch))))
+
+(defun noema-agent-worktree--remove (worktree force)
+  "Remove WORKTREE without asking; FORCE discards its uncommitted edits.
+The branch is kept.  Callers check for open sessions and edits first."
+  (let ((repo (plist-get worktree :repo)))
+    (apply #'noema-agent-worktree--git-ok repo "worktree" "remove"
+           (append (and force '("--force"))
+                   (list (directory-file-name
+                          (file-relative-name (plist-get worktree :path) repo)))))))
 
 (provide 'noema-agent-worktree)
 ;;; noema-agent-worktree.el ends here

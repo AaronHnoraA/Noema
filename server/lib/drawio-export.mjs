@@ -86,9 +86,9 @@ export function drawioPlaceholderSVG(file, message) {
 </svg>`;
 }
 
-function cacheKey(file, stats, page) {
+function cacheKey(file, stats, page, format) {
   return createHash("sha256")
-    .update(`${EXPORT_VERSION}\u0000${file}\u0000${stats.mtimeMs}\u0000${stats.size}\u0000${page}`)
+    .update(`${EXPORT_VERSION}\u0000${file}\u0000${stats.mtimeMs}\u0000${stats.size}\u0000${page}\u0000${format}`)
     .digest("hex")
     .slice(0, 40);
 }
@@ -116,32 +116,41 @@ function acquireExportSlot() {
 }
 
 /** The cache id for an export, so a caller can answer a conditional request. */
-export async function drawioExportTag(file, { page = 0 } = {}) {
+export async function drawioExportTag(file, { page = 0, format = "svg" } = {}) {
   try {
-    return cacheKey(file, await stat(file), page);
+    return cacheKey(file, await stat(file), page, format);
   } catch {
     return "";
   }
 }
 
 /**
- * Export PAGE of FILE to SVG, caching the result under CACHEDIR keyed by the
- * file's path, size and mtime. Returns `{ svg, cached, error }`; `error` is set
- * when `svg` is the placeholder rather than a real export.
+ * Export PAGE of FILE, caching the result under CACHEDIR keyed by the file's
+ * path, size, mtime, page and format. FORMAT is "svg" for a page (the picture
+ * Noema shows) or "pdf" for LaTeX, which has no SVG support of its own and
+ * takes draw.io's own vector PDF rather than a converted one.
+ *
+ * Returns `{ svg, data, cached, error }`; `error` is set when the result is the
+ * placeholder rather than a real export, and `data` is the raw bytes.
  */
-export async function drawioExportSVG(file, { page = 0, cacheDir, timeoutMs = EXPORT_TIMEOUT_MS } = {}) {
+export async function drawioExportSVG(file, { page = 0, format = "svg", cacheDir, timeoutMs = EXPORT_TIMEOUT_MS } = {}) {
+  const outFormat = format === "pdf" ? "pdf" : "svg";
+  const placeholder = (message) => (outFormat === "pdf"
+    ? { svg: "", data: null, cached: false, error: message }
+    : { svg: drawioPlaceholderSVG(file, message), data: null, cached: false, error: message });
   let stats;
   try {
     stats = await stat(file);
   } catch {
-    return { svg: drawioPlaceholderSVG(file, "File not found"), cached: false, error: "File not found" };
+    return placeholder("File not found");
   }
 
-  const key = cacheKey(file, stats, page);
-  const cacheFile = cacheDir ? join(cacheDir, `${key}.svg`) : "";
+  const key = cacheKey(file, stats, page, outFormat);
+  const cacheFile = cacheDir ? join(cacheDir, `${key}.${outFormat}`) : "";
   if (cacheFile) {
     try {
-      return { svg: await readFile(cacheFile, "utf8"), cached: true, error: "" };
+      const data = await readFile(cacheFile);
+      return { svg: outFormat === "svg" ? data.toString("utf8") : "", data, cached: true, error: "" };
     } catch {}
   }
 
@@ -150,20 +159,16 @@ export async function drawioExportSVG(file, { page = 0, cacheDir, timeoutMs = EX
 
   const task = (async () => {
     const exporter = drawioExporter();
-    if (!exporter) {
-      return {
-        svg: drawioPlaceholderSVG(file, "draw.io is not installed (set NOEMA_DRAWIO_BIN)"),
-        cached: false,
-        error: "draw.io is not installed",
-      };
-    }
+    if (!exporter) return placeholder("draw.io is not installed (set NOEMA_DRAWIO_BIN)");
     const outDir = cacheDir || tmpdir();
     mkdirSync(outDir, { recursive: true });
-    const outFile = cacheFile || join(outDir, `${key}.svg`);
+    const outFile = cacheFile || join(outDir, `${key}.${outFormat}`);
     const args = [
       "--no-sandbox",
       "-x",
-      "-f", "svg",
+      "-f", outFormat,
+      // A PDF figure is cropped to the diagram; a page is not.
+      ...(outFormat === "pdf" ? ["--crop"] : []),
       // Always the diagram's authored colours. draw.io's dark theme inverts the
       // fills an author chose, and a diagram's colours are its content; only the
       // sheet it sits on follows the editor theme.
@@ -174,7 +179,7 @@ export async function drawioExportSVG(file, { page = 0, cacheDir, timeoutMs = EX
       "--embed-svg-fonts", "false",
       // Keep the source inside the export, the way a committed `.drawio.svg`
       // carries it, so the picture can still be opened and edited in draw.io.
-      "--embed-diagram",
+      ...(outFormat === "svg" ? ["--embed-diagram"] : []),
       // draw.io counts pages from 1.
       "-p", String(page + 1),
       "-o", outFile,
@@ -185,17 +190,23 @@ export async function drawioExportSVG(file, { page = 0, cacheDir, timeoutMs = EX
       // Another request may have finished this exact export while we queued.
       if (cacheFile) {
         try {
-          return { svg: await readFile(cacheFile, "utf8"), cached: true, error: "" };
+          const data = await readFile(cacheFile);
+          return { svg: outFormat === "svg" ? data.toString("utf8") : "", data, cached: true, error: "" };
         } catch {}
       }
       await execFileAsync(exporter, args, { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 });
-      const svg = await readFile(outFile, "utf8");
-      if (!svg.trim().startsWith("<")) throw new Error("Exporter produced no SVG");
-      return { svg, cached: false, error: "" };
+      const data = await readFile(outFile);
+      if (outFormat === "svg" && !data.toString("utf8").trim().startsWith("<")) {
+        throw new Error("Exporter produced no SVG");
+      }
+      if (outFormat === "pdf" && data.subarray(0, 4).toString("latin1") !== "%PDF") {
+        throw new Error("Exporter produced no PDF");
+      }
+      return { svg: outFormat === "svg" ? data.toString("utf8") : "", data, cached: false, error: "" };
     } catch (err) {
       await rm(outFile, { force: true }).catch(() => {});
       const message = err?.killed ? "draw.io export timed out" : String(err?.message || err).split("\n")[0];
-      return { svg: drawioPlaceholderSVG(file, message), cached: false, error: message };
+      return placeholder(message);
     } finally {
       releaseExportSlot();
     }

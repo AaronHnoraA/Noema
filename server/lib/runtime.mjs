@@ -9,6 +9,7 @@ import { createHash } from "node:crypto";
 import { changedRoamFilesSince, fileHistory, restoreFileFromCommit, discardFileChanges, roamRepoStatus, roamRepoChanges, diffRoamFile, diffRoamCommit, pullRoam, pushRoam, repoHistory, headSha } from "./roam-git.mjs";
 import { buildWikiIndex, wikiIndexStatus } from "./wiki-workspace.mjs";
 import { configureTmpRoot, aaronnoteTmpRoot, runtimeMkdtemp, runtimeTmpFile } from "./tmp.mjs";
+import { prepareLatexDiagrams } from "./latex-export-diagrams.mjs";
 import { applyLatexTemplate, bibliographyReferencesToLatex, defaultLatexOutputPath, escapeLatexText, escapeLatexTitle, escapeLatexUrl, latexLogDiagnostics, latexMacrosPackage, latexNeedsAnotherPass, readLatexTemplate, writeLatexExport } from "./latex-export.mjs";
 import { aaronnoteMarkdownToLatexPandoc, extractAaronnoteMetadata } from "./latex-export-pandoc.mjs";
 import { agentAvailable, loadAgentRules, normalizeAgentTitle, polishBodyWithAgent } from "./latex-export-codex.mjs";
@@ -6674,6 +6675,30 @@ export async function exportLatex(body = {}) {
   const onProgress = typeof body.onProgress === "function" ? body.onProgress : null;
   const emit = (text) => { if (onProgress && text) { try { onProgress(text); } catch {} } };
 
+  // 0. Diagrams become figures before Pandoc sees them. A Mermaid fence would
+  // otherwise typeset as a code listing and a `.drawio` link as a missing
+  // image; both are pictures in the editor and have to be pictures here.
+  emit("Rendering diagrams…");
+  const diagramStage = await runtimeMkdtemp("latex-diagrams", sourceFile || "export");
+  let diagramFiles = [];
+  let diagramWarnings = [];
+  let exportContent = content;
+  try {
+    const prepared = await prepareLatexDiagrams(content, {
+      sourceDir: sourceFile ? dirname(sourceFile) : "",
+      diagrams: Array.isArray(body.diagrams) ? body.diagrams : [],
+      cacheDir: join(stateRoot, "drawio-svg"),
+      tmpDir: diagramStage,
+      signal,
+    });
+    exportContent = prepared.markdown;
+    diagramFiles = prepared.files;
+    diagramWarnings = prepared.warnings;
+  } finally {
+    await rm(diagramStage, { recursive: true, force: true }).catch(() => {});
+  }
+  throwIfAborted(signal);
+
   // 1. Mechanical base conversion, extended by any agent-maintained rules.
   emit("Converting with Pandoc…");
   const rules = await loadAgentRules(latexAgentDir);
@@ -6691,7 +6716,7 @@ export async function exportLatex(body = {}) {
   const documentMeta = typeof latexProvider?.metadata === "function"
     ? await latexProvider.metadata(documentContent)
     : extractAaronnoteMetadata(documentContent);
-  const converted = await aaronnoteMarkdownToLatexPandoc(content, {
+  const converted = await aaronnoteMarkdownToLatexPandoc(exportContent, {
     sourceFile,
     sourceDir: sourceFile ? dirname(sourceFile) : "",
     pandocBin: executablePath("pandoc"),
@@ -6739,7 +6764,7 @@ export async function exportLatex(body = {}) {
   const generatedSharedFiles = template.text.includes("\\usepackage{aaronnote-macros}")
     ? [{ name: "aaronnote-macros.sty", content: Buffer.from(latexMacrosPackage(macroResult.macros, macroFeatures), "utf8") }]
     : [];
-  const sharedFiles = [...declaredSharedFiles, ...generatedSharedFiles];
+  const sharedFiles = [...declaredSharedFiles, ...generatedSharedFiles, ...diagramFiles];
   throwIfAborted(signal);
 
   // A document title is a compact label, not a content synopsis. Preserve the
@@ -6787,6 +6812,7 @@ export async function exportLatex(body = {}) {
   // Every bibliography and citation diagnostic already failed the preflight
   // above with a 422, so none of them can reach the warning list from here.
   const warnings = Array.isArray(converted.warnings) ? [...converted.warnings] : [];
+  warnings.push(...diagramWarnings);
   const backend = ["codex", "claude", "opencode"].includes(latexExportAgent) ? latexExportAgent : "codex";
   const agentBin = executablePath(backend === "claude" ? latexClaudeBin : backend === "opencode" ? latexOpencodeBin : latexCodexBin);
   const agentRunner = typeof body.agentRunner === "function" ? body.agentRunner : null;

@@ -3448,6 +3448,16 @@ function drawioAssetFile(src) {
   if (parsed.protocol !== "aaronnote-asset:" || parsed.hostname !== "media") {
     throw new Error(`Unsupported draw.io source: ${raw}`);
   }
+  // A published vault resolves assets through its own catalogue, which is also
+  // what keeps the export inside the served note root.
+  if (hostMode === "server") {
+    const file = currentServerCatalog().asset(
+      parsed.searchParams.get("file") || "",
+      parsed.searchParams.get("base") || "",
+    );
+    if (!file) throw new Error("draw.io file is outside the served vault");
+    return file;
+  }
   return resolveAssetFile(raw);
 }
 
@@ -3492,6 +3502,10 @@ async function serveAaronnoteAsset(url, req, res) {
   try {
     parsedRaw = new URL(raw);
   } catch {}
+  if (parsedRaw?.hostname === "drawio-svg") {
+    await serveDrawioSVG(raw, req, res);
+    return;
+  }
   if (hostMode === "server") {
     if (parsedRaw?.hostname !== "media") {
       sendText(res, 404, "Asset not found");
@@ -3508,10 +3522,6 @@ async function serveAaronnoteAsset(url, req, res) {
     const data = await readFile(file);
     res.writeHead(200, { "Content-Type": mimeFor(file), "Cache-Control": "public, max-age=300" });
     res.end(data);
-    return;
-  }
-  if (parsedRaw?.hostname === "drawio-svg") {
-    await serveDrawioSVG(raw, req, res);
     return;
   }
   const file = resolveAssetFile(raw);

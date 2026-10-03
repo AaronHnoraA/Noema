@@ -8,6 +8,7 @@ import type StateInline from "markdown-it/lib/rules_inline/state_inline.mjs";
 import { cleanEditorHTML } from "./export-html.ts";
 import { markdownItCjkEmphasis } from "./cjk-emphasis.ts";
 import { supportedDiagramLang } from "./diagram-langs.ts";
+import { hydrateDiagramForeignObjectMarkup, sanitizeDiagramSvg } from "./diagram-sanitize.ts";
 import { imageLayoutClasses, imageLayoutFromAttrs, imageLayoutStyle, readImageTrailingAttrs } from "./image-attrs.ts";
 import { layoutClasses, layoutFromAttrs, layoutStyle, readLayoutAttrSuffix, readLayoutAttrsLine, type LayoutAttrs } from "./layout-attrs.ts";
 import { katexStylesheetHref, renderMathHTML } from "./math-render.ts";
@@ -65,7 +66,19 @@ export type RenderMarkdownHTMLOptions = {
   allowHtml?: boolean;
   /** Render @@cell command lines as read-only hydration targets instead of hiding them. */
   renderJupyterCells?: boolean;
+  /**
+   * Pictures for the diagram fences in this document, as `{ [key]: svg }` where
+   * the key is `diagramFenceKey(lang, source)`. Mermaid needs a browser to lay
+   * text out, so a Node caller has none and its fences stay code blocks; a
+   * caller rendering in a page supplies them and the fences become figures.
+   */
+  diagrams?: Record<string, string>;
 };
+
+/** The identity a rendered diagram is filed under: lowercased lang, trimmed source. */
+export function diagramFenceKey(lang: string, source: string): string {
+  return `${String(lang || "").trim().toLowerCase()}\u0000${String(source || "").trim()}`;
+}
 
 export type RenderPublishedNoteOptions = {
   title: string;
@@ -795,9 +808,13 @@ function renderDrawioImage(token: Token, src: string, resolver?: (src: string) =
     if (value) attrs.push(`${name}="${escapeAttr(value)}"`);
   }
 
+  // The export URL only resolves against a live host, so every rendering also
+  // carries the diagram's own path: a standalone or published file has the
+  // publish step inline the SVG instead, the way it already does for TikZ.
+  const pathAttrs = `data-aaronnote-drawio-src="${escapeAttr(path)}"${page > 0 ? ` data-aaronnote-drawio-page="${page}"` : ""}`;
   const body = exported
-    ? `<img class="cm-image-render aaronnote-image cm-drawio-render" src="${escapeAttr(exported)}" alt="${escapeAttr(alt)}" title="${escapeAttr(drawioAttachmentTitle(alt))}" loading="lazy" decoding="async">`
-    : `<div class="cm-image-render cm-visual-file-card cm-visual-file-card-drawio" title="${escapeAttr(`System Open: ${resolved}`)}">${escapeHtml(drawioAttachmentTitle(alt))}</div>`;
+    ? `<img class="cm-image-render aaronnote-image cm-drawio-render" src="${escapeAttr(exported)}" alt="${escapeAttr(alt)}" title="${escapeAttr(drawioAttachmentTitle(alt))}" ${pathAttrs} loading="lazy" decoding="async">`
+    : `<div class="cm-image-render cm-visual-file-card cm-visual-file-card-drawio" ${pathAttrs} title="${escapeAttr(`System Open: ${resolved}`)}">${escapeHtml(drawioAttachmentTitle(alt))}</div>`;
   const caption = alt ? `<figcaption class="cm-image-caption">${escapeHtml(alt)}</figcaption>` : "";
   return `<figure ${attrs.join(" ")}>${body}${caption}</figure>`;
 }
@@ -1123,11 +1140,25 @@ function diagramLangFromInfo(info: string): string {
   return String(info || "").trim().split(/\s+/, 1)[0] ?? "";
 }
 
-function renderDiagramFence(token: Token, layout: LayoutAttrs): string {
+function renderDiagramFence(token: Token, layout: LayoutAttrs, diagrams?: Record<string, string>): string {
   const lang = diagramLangFromInfo(token.info);
-  const cls = classList("aaronnote-diagram-code", layoutClasses("diagram", layout));
   const style = layoutStyle("diagram", layout);
   const styleAttr = style ? ` style="${escapeAttr(style)}"` : "";
+
+  // A diagram is a picture wherever it is read, so a supplied render is
+  // inlined as SVG. Without one the source stays visible rather than
+  // disappearing — a reader can still see what the diagram says.
+  const svg = diagrams?.[diagramFenceKey(lang, token.content)];
+  if (svg) {
+    const figureCls = classList(
+      "cm-mermaid-block-preview",
+      "aaronnote-diagram-figure",
+      layoutClasses("diagram", layout),
+    );
+    return `<figure class="${escapeAttr(figureCls)}"${styleAttr} data-aaronnote-diagram-lang="${escapeAttr(lang)}">${hydrateDiagramForeignObjectMarkup(sanitizeDiagramSvg(svg))}</figure>\n`;
+  }
+
+  const cls = classList("aaronnote-diagram-code", layoutClasses("diagram", layout));
   const codeClass = lang ? ` class="language-${escapeAttr(lang)}"` : "";
   return `<pre class="${escapeAttr(cls)}"${styleAttr}><code${codeClass}>${escapeHtml(token.content)}</code></pre>\n`;
 }
@@ -1539,8 +1570,11 @@ function createMarkdownIt(options: RenderMarkdownHTMLOptions): MarkdownIt {
   md.renderer.rules.fence = (tokens, idx, opts, env, self) => {
     const token = tokens[idx]!;
     if (supportedDiagramLang(token.info)) {
-      const layout = consumeLayoutAttrsParagraph(tokens, idx + 1);
-      if (layout) return renderDiagramFence(token, layout);
+      // Every diagram fence goes through the diagram renderer, with or without a
+      // trailing `{...}` layout: a diagram is a picture wherever it is read, and
+      // the layout only says how big and where.
+      const layout = consumeLayoutAttrsParagraph(tokens, idx + 1) ?? layoutFromAttrs({});
+      return renderDiagramFence(token, layout, options.diagrams);
     }
     return originalFence(tokens, idx, opts, env, self);
   };
