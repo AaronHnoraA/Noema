@@ -37,6 +37,10 @@ import {
 } from "./org-meta.ts";
 import {
   VISUAL_ATTACHMENT_IFRAME_ALLOW,
+  drawioAttachmentP,
+  drawioAttachmentTitle,
+  drawioImageSrc,
+  splitDrawioSource,
   visualAttachmentEmbeddableP,
   visualAttachmentFrame,
   visualAttachmentKind,
@@ -764,6 +768,38 @@ function renderMediaPlayer(token: Token, kind: MediaPlayerKind, resolvedSrc: str
   const player = `<${kind} class="cm-image-render cm-media-player" src="${escapeAttr(resolvedSrc)}" controls preload="metadata"${extra}${alt ? ` title="${escapeAttr(alt)}"` : ""}></${kind}>`;
   const caption = alt ? `<figcaption class="cm-image-caption">${escapeHtml(alt)}</figcaption>` : "";
   return `<figure class="${escapeAttr(classes)}"${style ? ` style="${escapeAttr(style)}"` : ""}>${player}${caption}</figure>`;
+}
+
+/**
+ * A `.drawio` reference is a picture, not an editor. The host exports the file
+ * to SVG and this renders that SVG, the way GitHub renders a committed
+ * `.drawio.svg`. A diagram that is not a Noema asset has no exporter, so it
+ * degrades to the same file card other unembeddable attachments use.
+ */
+function renderDrawioImage(token: Token, src: string, resolver?: (src: string) => string): string {
+  const alt = (token.content || token.attrGet("alt") || "").trim();
+  const { path, page } = splitDrawioSource(src);
+  const resolved = resolveAssetSrc(path, resolver);
+  const exported = drawioImageSrc(resolved, page);
+  const classes = [
+    "cm-image-widget",
+    "aaronnote-visual-attachment",
+    "aaronnote-visual-attachment-drawio",
+    token.attrGet("class") || "",
+  ].join(" ").trim().replace(/\s+/g, " ");
+  const style = token.attrGet("style");
+  const attrs = [`class="${escapeAttr(classes)}"`, 'data-aaronnote-visual-kind="drawio"'];
+  if (style) attrs.push(`style="${escapeAttr(style)}"`);
+  for (const name of ["data-aaronnote-image-align", "data-aaronnote-image-wrap"]) {
+    const value = token.attrGet(name);
+    if (value) attrs.push(`${name}="${escapeAttr(value)}"`);
+  }
+
+  const body = exported
+    ? `<img class="cm-image-render aaronnote-image cm-drawio-render" src="${escapeAttr(exported)}" alt="${escapeAttr(alt)}" title="${escapeAttr(drawioAttachmentTitle(alt))}" loading="lazy" decoding="async">`
+    : `<div class="cm-image-render cm-visual-file-card cm-visual-file-card-drawio" title="${escapeAttr(`System Open: ${resolved}`)}">${escapeHtml(drawioAttachmentTitle(alt))}</div>`;
+  const caption = alt ? `<figcaption class="cm-image-caption">${escapeHtml(alt)}</figcaption>` : "";
+  return `<figure ${attrs.join(" ")}>${body}${caption}</figure>`;
 }
 
 function renderVisualAttachmentImage(token: Token, kind: VisualAttachmentKind, resolvedSrc: string): string {
@@ -1517,6 +1553,8 @@ function createMarkdownIt(options: RenderMarkdownHTMLOptions): MarkdownIt {
     if (src && !safeHref(src)) {
       const attrIndex = token.attrIndex("src");
       if (attrIndex >= 0) token.attrs?.splice(attrIndex, 1);
+    } else if (src && drawioAttachmentP(src)) {
+      return renderDrawioImage(token, src, options.assetResolver);
     } else if (src) {
       const kind = visualAttachmentKind(src);
       const resolvedSrc = resolveAssetSrc(src, options.assetResolver);

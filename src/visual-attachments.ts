@@ -1,4 +1,4 @@
-export type VisualAttachmentKind = "drawio" | "html";
+export type VisualAttachmentKind = "html";
 
 export type VisualAttachmentFrame =
   | { kind: VisualAttachmentKind; mode: "src"; src: string }
@@ -46,13 +46,27 @@ export function imageAttachmentP(name: string, type = ""): boolean {
   return IMAGE_EXT_RE.test(withoutUrlSuffix(name));
 }
 
+/**
+ * A `.drawio` file referenced with image syntax. It renders as a picture, not
+ * as an editor: the host exports the file to SVG once and Noema shows that SVG
+ * the way GitHub shows a committed `.drawio.svg`. Editing happens in the real
+ * draw.io application, as in org-drawio.
+ */
+export function drawioAttachmentP(src: string, type = ""): boolean {
+  const lowerType = String(type || "").toLowerCase();
+  const path = withoutUrlSuffix(src);
+  if (!path && !lowerType) return false;
+  if (src && !safeVisualSourceP(src)) return false;
+  if (imageAttachmentP(path, lowerType)) return false;
+  return DRAWIO_EXT_RE.test(path) || lowerType.includes("jgraph") || lowerType.includes("drawio");
+}
+
 export function visualAttachmentKind(src: string, type = ""): VisualAttachmentKind | null {
   const lowerType = String(type || "").toLowerCase();
   const path = withoutUrlSuffix(src);
   if (!path && !lowerType) return null;
   if (src && !safeVisualSourceP(src)) return null;
   if (imageAttachmentP(path, lowerType)) return null;
-  if (DRAWIO_EXT_RE.test(path) || lowerType.includes("jgraph") || lowerType.includes("drawio")) return "drawio";
   if (HTML_EXT_RE.test(path) || lowerType === "text/html" || lowerType.startsWith("text/html;")) return "html";
   return null;
 }
@@ -64,13 +78,20 @@ export function visualAttachmentEmbeddableP(kind: VisualAttachmentKind, resolved
 }
 
 export function visualMarkdownAttachmentP(name: string, type = ""): boolean {
-  return imageAttachmentP(name, type) || visualAttachmentKind(name, type) !== null;
+  return imageAttachmentP(name, type)
+    || drawioAttachmentP(name, type)
+    || visualAttachmentKind(name, type) !== null;
 }
 
 export function visualAttachmentTitle(kind: VisualAttachmentKind, alt = ""): string {
-  const prefix = kind === "drawio" ? "draw.io diagram" : "HTML document";
+  void kind;
   const label = String(alt || "").trim();
-  return label ? `${prefix}: ${label}` : prefix;
+  return label ? `HTML document: ${label}` : "HTML document";
+}
+
+export function drawioAttachmentTitle(alt = ""): string {
+  const label = String(alt || "").trim();
+  return label ? `draw.io diagram: ${label}` : "draw.io diagram";
 }
 
 export function visualAttachmentSandbox(kind: VisualAttachmentKind): string {
@@ -106,12 +127,6 @@ function aaronnoteMediaSource(src: string): { mediaUrl: string; proxyUrl: string
   }
 }
 
-function visualAttachmentLocalFrameSrc(kind: VisualAttachmentKind, resolvedSrc: string): string {
-  const url = new URL(`aaronnote-asset://visual-frame/${kind}`);
-  url.searchParams.set("src", resolvedSrc);
-  return url.toString();
-}
-
 function proxiedAaronnoteAssetUrl(proxyUrl: string, assetUrl: string): string {
   const absolute = /^[A-Za-z][A-Za-z0-9+.-]*:/.test(proxyUrl);
   const url = new URL(proxyUrl, "https://aaronnote.local");
@@ -122,97 +137,35 @@ function proxiedAaronnoteAssetUrl(proxyUrl: string, assetUrl: string): string {
   return `${url.pathname}${url.search}`;
 }
 
-function frameBaseStyle(): string {
-  return [
-    "html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#fff;color:#1f2937;",
-    "font:13px/1.45 system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}",
-    "body{position:relative}",
-    "iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:#fff}",
-    ".status{position:absolute;inset:0;z-index:2;box-sizing:border-box;display:grid;place-items:center;padding:18px;text-align:center;color:#6b7280;background:#fff}",
-    ".status.error{color:#9f1239;background:#fff7f7}",
-    ".status a{color:#1d4ed8}",
-  ].join("");
+/**
+ * `![Fig](diagram.drawio#page=2)` picks a page, the way org-drawio's
+ * `#+drawio: diagram.drawio :page 1` does. The page marker is ours, so it is
+ * split off before the path reaches the asset resolver.
+ */
+export function splitDrawioSource(src: string): { path: string; page: number } {
+  const raw = String(src || "").trim();
+  const match = raw.match(/[?#]page=(\d+)\s*$/i);
+  if (!match) return { path: raw, page: 0 };
+  return { path: raw.slice(0, match.index).trim(), page: Math.max(0, Number(match[1]) - 1) };
 }
 
-function scriptString(value: string): string {
-  return JSON.stringify(String(value ?? ""))
-    .replace(/</g, "\\u003c")
-    .replace(/\u2028/g, "\\u2028")
-    .replace(/\u2029/g, "\\u2029");
-}
-
-function drawioSrcdoc(src: string): string {
-  return `<!doctype html>
-<html>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${frameBaseStyle()}</style></head>
-<body>
-<div id="status" class="status">Loading draw.io diagram...</div>
-<iframe id="drawio-frame" title="draw.io diagram" allow="fullscreen; clipboard-read; clipboard-write" src="https://embed.diagrams.net/?embed=1&proto=json&spin=1&ui=min&libraries=1&noSaveBtn=1&noExitBtn=1"></iframe>
-<script>
-(function () {
-  var source = ${scriptString(src)};
-  var statusEl = document.getElementById("status");
-  var frame = document.getElementById("drawio-frame");
-  var xml = "";
-  function status(message, failed) {
-    statusEl.hidden = false;
-    statusEl.className = failed ? "status error" : "status";
-    statusEl.textContent = message;
-    if (failed) {
-      statusEl.appendChild(document.createElement("br"));
-      var link = document.createElement("a");
-      link.href = source;
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-      link.textContent = "Open file";
-      statusEl.appendChild(link);
-    }
-  }
-  function sendLoad() {
-    if (!xml || !frame.contentWindow) return;
-    frame.contentWindow.postMessage(JSON.stringify({
-      action: "load",
-      autosave: 0,
-      modified: 0,
-      title: "draw.io diagram",
-      xml: xml
-    }), "*");
-  }
-  window.addEventListener("message", function (event) {
-    var data = event.data;
-    try {
-      if (typeof data === "string" && data.charAt(0) === "{") data = JSON.parse(data);
-    } catch (err) {}
-    if (data === "ready" || data && data.event === "init") sendLoad();
-    if (data && data.event === "load") statusEl.hidden = true;
-  });
-  fetch(source).then(function (response) {
-    if (!response.ok) throw new Error(response.status + " " + response.statusText);
-    return response.text();
-  }).then(function (text) {
-    xml = text;
-    sendLoad();
-  }).catch(function (err) {
-    status("Could not load draw.io file: " + (err && err.message ? err.message : err), true);
-  });
-}());
-</script>
-</body>
-</html>`;
+/**
+ * The URL that serves a `.drawio` file as SVG. Only a Noema asset can be
+ * exported, because exporting runs on the host that owns the file; anything
+ * else (an `http:` diagram, say) has no exporter and falls back to a card.
+ */
+export function drawioImageSrc(resolvedSrc: string, page = 0): string | null {
+  const media = aaronnoteMediaSource(resolvedSrc);
+  if (!media) return null;
+  const url = new URL("aaronnote-asset://drawio-svg/");
+  url.searchParams.set("src", media.mediaUrl);
+  if (page > 0) url.searchParams.set("page", String(page));
+  const exportUrl = url.toString();
+  return media.proxyUrl ? proxiedAaronnoteAssetUrl(media.proxyUrl, exportUrl) : exportUrl;
 }
 
 export function visualAttachmentFrame(kind: VisualAttachmentKind, resolvedSrc: string): VisualAttachmentFrame {
-  if (kind === "html") return { kind, mode: "src", src: resolvedSrc };
-  const media = aaronnoteMediaSource(resolvedSrc);
-  if (media) {
-    const frameSrc = visualAttachmentLocalFrameSrc(kind, media.mediaUrl);
-    return {
-      kind,
-      mode: "src",
-      src: media.proxyUrl ? proxiedAaronnoteAssetUrl(media.proxyUrl, frameSrc) : frameSrc,
-    };
-  }
-  return { kind, mode: "srcdoc", srcdoc: drawioSrcdoc(resolvedSrc) };
+  return { kind, mode: "src", src: resolvedSrc };
 }
 
 export type MediaPlayerKind = "video" | "audio";

@@ -1,6 +1,5 @@
 // WebKit checks for editor interactions a DOM emulator cannot judge: the
-// empty-line hint must not move the caret or change line height, a real
-// mouse drag must select a table rectangle, emoji/media must render, and the
+// a real mouse drag must select a table rectangle, emoji/media must render, and the
 // keyboard paths through cells, embeds and inline marks behave natively.
 // NOEMA_PLAYWRIGHT_MODULE may point to an external Playwright installation.
 import assert from "node:assert/strict";
@@ -51,26 +50,6 @@ try {
   // Emoji and media render as in export.
   assert.equal(await page.locator(".cm-emoji").first().textContent(), "🎉");
   assert.equal(await page.locator("video.cm-media-player").count(), 1, "mp4 is a video player");
-
-  // The empty-line hint changes neither the line box nor the caret.
-  const blankFrom = "Intro line :tada:\n".length;
-  const measure = () => page.evaluate((at) => {
-    const line = editor.view.domAtPos(at).node.closest?.(".cm-line") ?? editor.view.domAtPos(at).node.parentElement.closest(".cm-line");
-    const rect = line.getBoundingClientRect();
-    const caret = editor.view.coordsAtPos(at);
-    return { height: rect.height, top: rect.top, caretLeft: caret.left, caretTop: caret.top, hinted: line.classList.contains("cm-empty-line-hint") };
-  }, blankFrom);
-  await page.evaluate((at) => { editor.view.focus(); editor.setMarkdownSelection(at); }, blankFrom);
-  await page.waitForTimeout(100);
-  const withHint = await measure();
-  await page.evaluate(() => editor.view.contentDOM.blur());
-  await page.waitForTimeout(100);
-  const withoutHint = await measure();
-  assert.equal(withHint.hinted, true, "focused empty line carries the hint");
-  assert.equal(withoutHint.hinted, false, "blurred editor drops the hint");
-  for (const key of ["height", "top", "caretLeft", "caretTop"]) {
-    assert.ok(Math.abs(withHint[key] - withoutHint[key]) < 0.5, `hint moved ${key}: ${withHint[key]} vs ${withoutHint[key]}`);
-  }
 
   // A real drag from cell (1,0) to (2,1) selects the 2x2 rectangle; Delete empties it.
   const cell = (row, col) => page.locator(".cm-markdown-table-preview").locator("tr").nth(row).locator("td, th").nth(col);

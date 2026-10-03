@@ -30,6 +30,7 @@
 (require 'noema-agent-acp)
 (require 'noema-sessions)
 (require 'noema-md-bridge)
+(require 'noema-agent-worktree)
 
 (declare-function gptel-context-add "gptel-context" (&optional arg confirm))
 (declare-function gptel-context-add-file "gptel-context" (path))
@@ -145,10 +146,14 @@ A region that stops at the beginning of a line does not include that line."
 (defun noema-context--reference (file root &optional buffer region session)
   "Return the reference plist for FILE, limited to REGION of BUFFER when given.
 :file is FILE's Emacs name, :agent-file the path SESSION's agent opens, and
-:relative is relative to ROOT when FILE is inside it, else :agent-file."
+:relative is relative to ROOT when FILE is inside it, else :agent-file.
+A file of the main checkout sent to a session in a linked worktree names the
+worktree's copy, as `noema-agent-worktree-redirect' explains."
   (let* ((file (expand-file-name file))
          (agent-file (noema-context--agent-file file session))
-         (relative (noema-context--relative file root)))
+         (redirect (and session (noema-agent-worktree-redirect file session)))
+         (agent-file (if redirect (car redirect) agent-file))
+         (relative (if redirect (cdr redirect) (noema-context--relative file root))))
     (append (list :file file
                   :agent-file agent-file
                   :relative (if (equal relative file) agent-file relative)

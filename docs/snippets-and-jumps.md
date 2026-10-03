@@ -17,6 +17,12 @@ The popup shows at most ten results. Use Up/Down, Page Up/Page Down, Home/End,
 Cmd+1…Cmd+0, or Tab. Enter remains normal editor input. Escape dismisses the
 current popup. Snippet choices use the same popup.
 
+In Markdown prose, type a key to open the same completion popup. Structural
+keys include `h1`–`h6` (headings), `ul`, `ol`, `bq`, `todo`, `code`, `table`,
+`math`, `hr`, `mer`, `mind`, `toc`, `img`, and `link`. The shared
+`snippets/markdown-mode/` catalog supplies these in both Noema and Emacs.
+`/` remains ordinary Markdown text; it does not open a command menu.
+
 Ranking is deterministic: valid context and exactness come first, then local
 snippet priority, current-note frequency, Overleaf frequency, and local usage
 history. Local history never leaves the browser. Use **Tools → Reset snippet

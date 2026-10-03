@@ -1,12 +1,29 @@
-import { describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
+import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
 import {
-  enableDiagramInteraction,
+  disposeDiagramInteraction,
   normalizeMermaidSource,
+  presentDiagramFigure,
   sanitizeDiagramSvg,
   staticAaronMindmap,
 } from "../src/diagram-render.ts";
 import { setKatexMacros } from "../src/katex-macros.ts";
+
+/**
+ * Lay the diagram out as a figure, then open its viewer the way a reader does.
+ * Pan and zoom live on the viewer's stage, never on the figure in the document.
+ */
+function expandDiagram(figure: HTMLElement): { stage: HTMLElement; svg: SVGSVGElement } {
+  presentDiagramFigure(figure);
+  figure.querySelector<HTMLButtonElement>(".cm-diagram-expand")!
+    .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  const stage = document.querySelector<HTMLElement>(".cm-diagram-lightbox .cm-diagram-stage")!;
+  return { stage, svg: stage.querySelector<SVGSVGElement>("svg")! };
+}
+
+function closeDiagram(): void {
+  document.querySelector<HTMLButtonElement>(".cm-diagram-control-close")?.click();
+}
 
 function pointerEvent(type: string, init: MouseEventInit & { pointerId?: number; pointerType?: string }): MouseEvent {
   const event = new MouseEvent(type, init);
@@ -79,7 +96,7 @@ describe("diagram render helpers", () => {
     const div = document.createElement("div");
     div.innerHTML = sanitized;
 
-    enableDiagramInteraction(div);
+    presentDiagramFigure(div);
 
     expect(div.querySelector("foreignObject .katex")?.textContent).toBe("x");
     // Mermaid's legacy math output includes a KaTeX HTML layer, while browsers
@@ -89,112 +106,121 @@ describe("diagram render helpers", () => {
     expect(div.querySelector("img")?.hasAttribute("onerror") ?? false).toBe(false);
   });
 
-  test("enables diagram interaction with toolbar chrome and lets nodes be selected", () => {
-    const div = document.createElement("div");
-    div.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg"><g id="node-a"><text>Root</text></g></svg>';
-
-    enableDiagramInteraction(div);
-    div.querySelector("text")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-
-    expect(div.classList.contains("cm-diagram-interactive")).toBe(true);
-    expect(div.querySelector(".cm-diagram-toolbar")).toBeTruthy();
-    expect(div.querySelectorAll(".cm-diagram-control")).toHaveLength(5);
-    expect(div.querySelector("#node-a")?.classList.contains("cm-diagram-selected")).toBe(true);
-  });
-
-  test("diagram toolbar zooms and resets the svg", () => {
+  test("an inline diagram is a plain figure: no toolbar, no pan, no captured clicks", () => {
     const div = document.createElement("div");
     div.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"><g id="node-a"><text>Root</text></g></svg>';
     const svg = div.querySelector<SVGSVGElement>("svg")!;
 
-    enableDiagramInteraction(div);
-    div.querySelector<HTMLButtonElement>(".cm-diagram-control-zoom-in")!
-      .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    expect(svg.style.transform).toContain("scale(1.18)");
+    presentDiagramFigure(div);
 
-    div.querySelector<HTMLButtonElement>(".cm-diagram-control-reset")!
-      .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    expect(svg.style.transform).toContain("translate(0px, 0px) scale(1)");
+    expect(div.classList.contains("cm-diagram-figure")).toBe(true);
+    expect(div.classList.contains("cm-diagram-interactive")).toBe(false);
+    expect(div.querySelector(".cm-diagram-toolbar")).toBeNull();
+    expect(svg.style.transform).toBe("");
+    expect(svg.style.height).toBe("auto");
+
+    // A click on the diagram must reach the editor so the fence's source opens.
+    const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+    svg.dispatchEvent(click);
+    expect(click.defaultPrevented).toBe(false);
+
+    const down = pointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, clientX: 10, clientY: 20 });
+    svg.dispatchEvent(down);
+    div.dispatchEvent(pointerEvent("pointermove", { bubbles: true, cancelable: true, button: 0, clientX: 40, clientY: 50 }));
+    expect(down.defaultPrevented).toBe(false);
+    expect(svg.style.transform).toBe("");
   });
 
-  test("ordinary wheel and trackpad scrolling pass through an inline diagram", () => {
+  test("an inline diagram does not swallow wheel scrolling", () => {
     const div = document.createElement("div");
     div.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg"><g id="node-a"><text>Root</text></g></svg>';
     const svg = div.querySelector<SVGSVGElement>("svg")!;
 
-    enableDiagramInteraction(div);
-    const transform = svg.style.transform;
-    const event = new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaX: 12, deltaY: 24, clientX: 8, clientY: 8 });
-    svg.dispatchEvent(event);
+    presentDiagramFigure(div);
+    const plain = new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaX: 12, deltaY: 24, clientX: 8, clientY: 8 });
+    svg.dispatchEvent(plain);
+    const pinch = new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -40, clientX: 8, clientY: 8 });
+    Object.defineProperty(pinch, "ctrlKey", { value: true });
+    svg.dispatchEvent(pinch);
 
-    expect(event.defaultPrevented).toBe(false);
-    expect(svg.style.transform).toBe(transform);
+    expect(plain.defaultPrevented).toBe(false);
+    expect(pinch.defaultPrevented).toBe(false);
+    expect(svg.style.transform).toBe("");
   });
 
-  test("ctrl-wheel trackpad pinch zooms around the gesture point", () => {
-    const div = document.createElement("div");
-    div.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg"><g id="node-a"><text>Root</text></g></svg>';
-    const svg = div.querySelector<SVGSVGElement>("svg")!;
-
-    enableDiagramInteraction(div);
-    const event = new WheelEvent("wheel", {
-      bubbles: true,
-      cancelable: true,
-      deltaY: -40,
-      clientX: 8,
-      clientY: 8,
-    });
-    Object.defineProperty(event, "ctrlKey", { value: true });
-    svg.dispatchEvent(event);
-
-    expect(event.defaultPrevented).toBe(true);
-    expect(Number(div.dataset.diagramScale)).toBeGreaterThan(1);
-    expect(svg.style.transform).not.toContain("scale(1)");
-  });
-
-  test("pseudo-fullscreen expands inside the web view and Escape restores the view", () => {
+  test("the ⤢ button opens a viewer that owns a clone, and closing disposes it", () => {
     const host = document.createElement("section");
     const div = document.createElement("div");
     const after = document.createElement("span");
     host.append(div, after);
     document.body.append(host);
     div.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"><g><text>Root</text></g></svg>';
-    const svg = div.querySelector<SVGSVGElement>("svg")!;
+    const figureSvg = div.querySelector<SVGSVGElement>("svg")!;
 
-    enableDiagramInteraction(div);
-    div.querySelector<HTMLButtonElement>(".cm-diagram-control-zoom-in")!.click();
-    const before = svg.style.transform;
-    div.querySelector<HTMLButtonElement>(".cm-diagram-control-fullscreen")!.click();
+    const { stage, svg } = expandDiagram(div);
+    const overlay = stage.parentElement!;
 
-    expect(div.classList.contains("is-diagram-fullscreen")).toBe(true);
+    expect(overlay.classList.contains("cm-diagram-lightbox")).toBe(true);
+    expect(overlay.parentElement).toBe(document.body);
+    expect(overlay.dataset.aaronnoteVim).toBe("native");
+    expect(overlay.dataset.noemaGestureScope).toBe("diagram");
     expect(document.body.classList.contains("has-diagram-fullscreen")).toBe(true);
-    expect(div.parentElement?.classList.contains("cm-diagram-fullscreen-portal")).toBe(true);
-    expect(div.parentElement?.parentElement).toBe(document.body);
-    expect(div.parentElement?.dataset.aaronnoteVim).toBe("native");
-    expect(div.parentElement?.dataset.noemaGestureScope).toBe("diagram");
-    expect(host.querySelector(".cm-diagram-fullscreen-placeholder")).not.toBeNull();
-    expect(div.querySelector<HTMLButtonElement>(".cm-diagram-control-fullscreen")!.textContent).toBe("Exit");
-
-    div.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }));
-    expect(div.classList.contains("is-diagram-fullscreen")).toBe(false);
-    expect(document.body.classList.contains("has-diagram-fullscreen")).toBe(false);
+    expect(stage.querySelector(".cm-diagram-toolbar")).toBeTruthy();
+    expect(stage.querySelectorAll(".cm-diagram-control")).toHaveLength(5);
+    // The figure stays exactly where it was, untouched.
     expect(div.parentElement).toBe(host);
     expect(host.children[0]).toBe(div);
     expect(host.children[1]).toBe(after);
-    expect(document.querySelector(".cm-diagram-fullscreen-portal")).toBeNull();
-    expect(host.querySelector(".cm-diagram-fullscreen-placeholder")).toBeNull();
-    expect(div.tabIndex).toBe(0);
-    expect(svg.style.transform).toBe(before);
+    expect(svg).not.toBe(figureSvg);
+
+    stage.querySelector<HTMLButtonElement>(".cm-diagram-control-zoom-in")!.click();
+    expect(svg.style.transform).toContain("scale(1.18)");
+    expect(figureSvg.style.transform).toBe("");
+
+    stage.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }));
+    expect(document.querySelector(".cm-diagram-lightbox")).toBeNull();
+    expect(document.body.classList.contains("has-diagram-fullscreen")).toBe(false);
     host.remove();
   });
 
-  test("fullscreen keeps trackpad pan, native pinch, and touchscreen pinch local to the diagram", () => {
+  test("the viewer toolbar zooms and resets its clone", () => {
+    const div = document.createElement("div");
+    div.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"><g id="node-a"><text>Root</text></g></svg>';
+    document.body.append(div);
+
+    const { stage, svg } = expandDiagram(div);
+    stage.querySelector<HTMLButtonElement>(".cm-diagram-control-zoom-in")!
+      .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(svg.style.transform).toContain("scale(1.18)");
+
+    stage.querySelector<HTMLButtonElement>(".cm-diagram-control-reset")!
+      .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(svg.style.transform).toContain("translate(0px, 0px) scale(1)");
+
+    closeDiagram();
+    div.remove();
+  });
+
+  test("a node in the viewer can be selected", () => {
+    const div = document.createElement("div");
+    div.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg"><g id="node-a"><text>Root</text></g></svg>';
+    document.body.append(div);
+
+    const { stage } = expandDiagram(div);
+    stage.querySelector("text")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(stage.classList.contains("cm-diagram-interactive")).toBe(true);
+    expect(stage.querySelector("#node-a")?.classList.contains("cm-diagram-selected")).toBe(true);
+
+    closeDiagram();
+    div.remove();
+  });
+
+  test("the viewer keeps trackpad pan, native pinch, and touchscreen pinch local to the diagram", () => {
     const div = document.createElement("div");
     div.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"><g><text>Root</text></g></svg>';
     document.body.append(div);
-    const svg = div.querySelector<SVGSVGElement>("svg")!;
-    enableDiagramInteraction(div);
-    div.querySelector<HTMLButtonElement>(".cm-diagram-control-fullscreen")!.click();
+    const { stage, svg } = expandDiagram(div);
 
     const pan = new WheelEvent("wheel", {
       bubbles: true,
@@ -217,7 +243,7 @@ describe("diagram render helpers", () => {
     });
     svg.dispatchEvent(gestureStart);
     svg.dispatchEvent(gestureChange);
-    expect(Number(div.dataset.diagramScale)).toBeCloseTo(1.5);
+    expect(Number(stage.dataset.diagramScale)).toBeCloseTo(1.5);
 
     svg.dispatchEvent(pointerEvent("pointerdown", {
       bubbles: true,
@@ -237,7 +263,7 @@ describe("diagram render helpers", () => {
       pointerId: 12,
       pointerType: "touch",
     }));
-    div.dispatchEvent(pointerEvent("pointermove", {
+    stage.dispatchEvent(pointerEvent("pointermove", {
       bubbles: true,
       cancelable: true,
       button: 0,
@@ -246,95 +272,98 @@ describe("diagram render helpers", () => {
       pointerId: 12,
       pointerType: "touch",
     }));
-    expect(Number(div.dataset.diagramScale)).toBeGreaterThan(1.5);
+    expect(Number(stage.dataset.diagramScale)).toBeGreaterThan(1.5);
 
-    div.dispatchEvent(pointerEvent("pointerup", {
-      bubbles: true,
-      cancelable: true,
-      button: 0,
-      clientX: 120,
-      clientY: 50,
-      pointerId: 12,
-      pointerType: "touch",
-    }));
-    div.dispatchEvent(pointerEvent("pointerup", {
-      bubbles: true,
-      cancelable: true,
-      button: 0,
-      clientX: 30,
-      clientY: 40,
-      pointerId: 11,
-      pointerType: "touch",
-    }));
-    div.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }));
+    closeDiagram();
     div.remove();
   });
 
-  test("touch input starts dragging after a long press", () => {
-    vi.useFakeTimers();
-    try {
-      const div = document.createElement("div");
-      div.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg"><g id="node-a"><text>Root</text></g></svg>';
-      const svg = div.querySelector<SVGSVGElement>("svg")!;
+  test("touch drags the viewer directly, with no long press to wait out", () => {
+    const div = document.createElement("div");
+    div.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg"><g id="node-a"><text>Root</text></g></svg>';
+    document.body.append(div);
+    const { stage, svg } = expandDiagram(div);
 
-      enableDiagramInteraction(div);
-      svg.dispatchEvent(pointerEvent("pointerdown", {
-        bubbles: true,
-        cancelable: true,
-        button: 0,
-        clientX: 10,
-        clientY: 20,
-        pointerId: 8,
-        pointerType: "touch",
-      }));
-      expect(div.classList.contains("is-long-pressing")).toBe(true);
+    svg.dispatchEvent(pointerEvent("pointerdown", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      clientX: 10,
+      clientY: 20,
+      pointerId: 8,
+      pointerType: "touch",
+    }));
+    stage.dispatchEvent(pointerEvent("pointermove", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      clientX: 22,
+      clientY: 29,
+      pointerId: 8,
+      pointerType: "touch",
+    }));
 
-      vi.advanceTimersByTime(260);
-      div.dispatchEvent(pointerEvent("pointermove", {
-        bubbles: true,
-        cancelable: true,
-        button: 0,
-        clientX: 22,
-        clientY: 29,
-        pointerId: 8,
-        pointerType: "touch",
-      }));
+    expect(stage.classList.contains("is-panning")).toBe(true);
+    expect(svg.style.transform).toContain("translate(12px, 9px)");
 
-      expect(div.classList.contains("is-panning")).toBe(true);
-      expect(svg.style.transform).toContain("translate(12px, 9px)");
-    } finally {
-      vi.useRealTimers();
-    }
+    closeDiagram();
+    div.remove();
   });
 
-  test("static Aaron mindmap diagrams use the same interaction controller", () => {
+  test("an Aaron mind map is a figure too, and its viewer pans like any other", () => {
     const div = document.createElement("div");
     div.className = "cm-aaron-mindmap";
     div.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg"><g class="mindmap-node" id="root"><text>Root</text></g></svg>';
-    const svg = div.querySelector<SVGSVGElement>("svg")!;
+    document.body.append(div);
+    const figureSvg = div.querySelector<SVGSVGElement>("svg")!;
 
-    enableDiagramInteraction(div);
+    presentDiagramFigure(div);
+    expect(div.getAttribute("style")).toBeNull();
+    expect(figureSvg.style.height).toBe("auto");
+
+    const { stage, svg } = expandDiagram(div);
+    expect(stage.classList.contains("cm-aaron-mindmap")).toBe(true);
     svg.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, clientX: 0, clientY: 0 }));
-    div.dispatchEvent(new MouseEvent("pointermove", { bubbles: true, cancelable: true, button: 0, clientX: 12, clientY: 9 }));
+    stage.dispatchEvent(new MouseEvent("pointermove", { bubbles: true, cancelable: true, button: 0, clientX: 12, clientY: 9 }));
 
-    expect(div.querySelector(".cm-diagram-toolbar")).toBeTruthy();
+    expect(stage.querySelector(".cm-diagram-toolbar")).toBeTruthy();
     expect(svg.style.transform).toContain("translate(12px, 9px)");
+
+    closeDiagram();
+    div.remove();
   });
 
-  test("drags diagrams by translating the svg", () => {
+  test("drags the viewer by translating the svg", () => {
     const div = document.createElement("div");
     div.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg"><g id="node-a"><text>Root</text></g></svg>';
-    const svg = div.querySelector<SVGSVGElement>("svg")!;
+    document.body.append(div);
+    const { stage, svg } = expandDiagram(div);
 
-    enableDiagramInteraction(div);
     svg.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, clientX: 10, clientY: 20 }));
-    div.dispatchEvent(new MouseEvent("pointermove", { bubbles: true, cancelable: true, button: 0, clientX: 28, clientY: 15 }));
-    div.dispatchEvent(new MouseEvent("pointerup", { bubbles: true, cancelable: true, button: 0, clientX: 28, clientY: 15 }));
+    stage.dispatchEvent(new MouseEvent("pointermove", { bubbles: true, cancelable: true, button: 0, clientX: 28, clientY: 15 }));
+    stage.dispatchEvent(new MouseEvent("pointerup", { bubbles: true, cancelable: true, button: 0, clientX: 28, clientY: 15 }));
 
     expect(svg.style.transform).toContain("translate(18px, -5px)");
+
+    closeDiagram();
+    div.remove();
   });
 
-  test("sanitizes SVG diagram links and dispatches safe links", () => {
+  test("disposing a diagram closes a viewer it still owns", () => {
+    const div = document.createElement("div");
+    div.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg"><g><text>Root</text></g></svg>';
+    document.body.append(div);
+    expandDiagram(div);
+    expect(document.querySelector(".cm-diagram-lightbox")).toBeTruthy();
+
+    disposeDiagramInteraction(div);
+
+    expect(document.querySelector(".cm-diagram-lightbox")).toBeNull();
+    expect(document.body.classList.contains("has-diagram-fullscreen")).toBe(false);
+    div.remove();
+  });
+
+  test("sanitizes SVG diagram links and dispatches safe links from the figure", () => {
     const div = document.createElement("div");
     div.innerHTML = [
       '<svg xmlns="http://www.w3.org/2000/svg">',
@@ -348,7 +377,7 @@ describe("diagram render helpers", () => {
       opened = (event as CustomEvent<{ href: string }>).detail.href;
     });
 
-    enableDiagramInteraction(div);
+    presentDiagramFigure(div);
     div.querySelector("#ok text")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(div.querySelector("#ok")?.getAttribute("target")).toBe("_blank");

@@ -37,6 +37,10 @@ import { applyFigureLayout, figureLayoutTarget } from "../../../figure-layout-me
 import { markdownLinkDestination } from "../../../../markdown-link.ts";
 import {
   VISUAL_ATTACHMENT_IFRAME_ALLOW,
+  drawioAttachmentP,
+  drawioAttachmentTitle,
+  drawioImageSrc,
+  splitDrawioSource,
   visualAttachmentEmbeddableP,
   visualAttachmentFrame,
   visualAttachmentKind,
@@ -61,10 +65,21 @@ function setSourceRange(el: HTMLElement, from: number, to: number): void {
   el.dataset.cmOpenSource = "true";
 }
 
-function resolveImageSrc(src: string): string {
+/**
+ * A `.drawio` reference resolves to the host's SVG export of that file, so the
+ * widget below renders it through the ordinary `<img>` path. `card` is true
+ * when the file is not a Noema asset and therefore has no exporter.
+ */
+function resolveImageSrc(src: string): { src: string; card: boolean } {
   const raw = String(src || "").trim();
-  if (!raw) return raw;
-  return window.AaronnoteResolveAssetUrl?.(raw) ?? raw;
+  if (!raw) return { src: raw, card: false };
+  if (drawioAttachmentP(raw)) {
+    const { path, page } = splitDrawioSource(raw);
+    const resolved = window.AaronnoteResolveAssetUrl?.(path) ?? path;
+    const exported = drawioImageSrc(resolved, page);
+    return exported ? { src: exported, card: false } : { src: resolved, card: true };
+  }
+  return { src: window.AaronnoteResolveAssetUrl?.(raw) ?? raw, card: false };
 }
 
 function happyDomTestEnvironmentP(): boolean {
@@ -97,6 +112,8 @@ function setVisualFrameSource(
 class ImageWidget extends MeasuredWidget {
   src: string;
   resolvedSrc: string;
+  /** A `.drawio` outside the vault: no exporter, so it shows as a file card. */
+  drawioCard: boolean;
   alt: string;
   from: number;
   baseTo: number;
@@ -106,7 +123,9 @@ class ImageWidget extends MeasuredWidget {
   constructor(src: string, alt: string, from: number, baseTo: number, to: number, layout: ImageLayoutAttrs) {
     super();
     this.src = src;
-    this.resolvedSrc = resolveImageSrc(src);
+    const resolution = resolveImageSrc(src);
+    this.resolvedSrc = resolution.src;
+    this.drawioCard = resolution.card;
     this.alt = alt;
     this.from = from;
     this.baseTo = baseTo;
@@ -173,7 +192,14 @@ class ImageWidget extends MeasuredWidget {
     if (this.src) {
       const kind = visualAttachmentKind(this.src);
       const resolvedSrc = this.resolvedSrc;
-      if (kind) {
+      if (this.drawioCard) {
+        const card = document.createElement("div");
+        card.className = "cm-image-render cm-visual-file-card cm-visual-file-card-drawio";
+        card.textContent = drawioAttachmentTitle(this.alt);
+        card.title = `System Open: ${this.src}`;
+        wrap.append(card);
+        wrap.classList.add("cm-visual-attachment", "cm-visual-attachment-drawio");
+      } else if (kind) {
         if (visualAttachmentEmbeddableP(kind, resolvedSrc)) {
           const frame = visualAttachmentFrame(kind, resolvedSrc);
           const iframe = document.createElement("iframe");
@@ -214,9 +240,14 @@ class ImageWidget extends MeasuredWidget {
         wrap.append(media);
       } else {
         const img = document.createElement("img");
+        const drawio = drawioAttachmentP(this.src);
         img.src = resolvedSrc;
         img.alt = this.alt;
-        img.className = "cm-image-render";
+        img.className = drawio ? "cm-image-render cm-drawio-render" : "cm-image-render";
+        if (drawio) {
+          img.title = drawioAttachmentTitle(this.alt);
+          wrap.classList.add("cm-visual-attachment", "cm-visual-attachment-drawio");
+        }
         img.loading = "lazy";
         img.decoding = "async";
         img.addEventListener("load", () => { if (wrap.isConnected) view.requestMeasure(); });

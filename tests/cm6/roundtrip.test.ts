@@ -87,10 +87,6 @@ function iframeSrc(iframe: HTMLIFrameElement): string {
   return iframe.getAttribute("src") || iframe.getAttribute("data-aaronnote-src") || "";
 }
 
-function iframeSrcdoc(iframe: HTMLIFrameElement): string {
-  return iframe.getAttribute("srcdoc") || iframe.getAttribute("data-aaronnote-srcdoc") || "";
-}
-
 function nextTick(): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, 0));
 }
@@ -3469,17 +3465,24 @@ after
     cleanup();
   });
 
-  test("draw.io attachments render through the image widget iframe", () => {
+  test("draw.io attachments render as the exported picture, not an editor", () => {
     const md = "![Diagram title](attachments/demo.drawio)\n\ntext";
-    const { editor, cleanup } = mountCM6(md);
-    editor.setMarkdownSelection(md.length);
+    const previous = window.AaronnoteResolveAssetUrl;
+    window.AaronnoteResolveAssetUrl = (src) =>
+      `aaronnote-asset://media?file=${encodeURIComponent(src)}`;
+    try {
+      const { editor, cleanup } = mountCM6(md);
+      editor.setMarkdownSelection(md.length);
 
-    const iframe = document.querySelector<HTMLIFrameElement>(".cm-visual-embed-drawio");
-    expect(iframe).toBeTruthy();
-    expect(iframeSrcdoc(iframe!)).toContain("embed.diagrams.net");
-    expect(iframeSrcdoc(iframe!)).toContain('action: "load"');
-    expect(document.querySelector(".cm-image-widget img")).toBeNull();
-    cleanup();
+      const img = document.querySelector<HTMLImageElement>(".cm-image-widget img.cm-drawio-render");
+      expect(img).toBeTruthy();
+      expect(img!.getAttribute("src")).toContain("aaronnote-asset://drawio-svg/");
+      expect(img!.title).toBe("draw.io diagram: Diagram title");
+      expect(document.querySelector(".cm-visual-embed-drawio")).toBeNull();
+      cleanup();
+    } finally {
+      window.AaronnoteResolveAssetUrl = previous;
+    }
   });
 
   test("html attachments render through an isolated image widget iframe", () => {

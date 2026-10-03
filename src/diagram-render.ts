@@ -34,13 +34,6 @@ type DiagramTouchGesture = {
   panY: number;
 };
 
-type DiagramFullscreenDom = {
-  portal: HTMLDivElement;
-  placeholder: HTMLDivElement;
-  parent: Node;
-  nextSibling: ChildNode | null;
-};
-
 type DiagramInteractionState = {
   scale: number;
   panX: number;
@@ -51,30 +44,34 @@ type DiagramInteractionState = {
   longPressTimer: number | null;
   suppressNextClick: boolean;
   zoomLabel: HTMLButtonElement | null;
-  fullscreenButton: HTMLButtonElement | null;
-  fullscreenSnapshot: { scale: number; panX: number; panY: number; autoFit: boolean } | null;
-  fullscreenDom: DiagramFullscreenDom | null;
   resizeObserver: ResizeObserver | null;
   applyTransform: () => void;
   applyScale: (next: number, originX?: number, originY?: number) => void;
   reset: () => void;
   fit: () => void;
-  toggleFullscreen: (restoreFocus?: boolean) => void;
+  close: () => void;
 };
 
-const diagramInteractions = new WeakMap<HTMLElement, DiagramInteractionState>();
+type DiagramLightbox = {
+  overlay: HTMLDivElement;
+  stage: HTMLDivElement;
+  state: DiagramInteractionState;
+  origin: HTMLElement | null;
+  onKeyDown: (event: KeyboardEvent) => void;
+};
+
+/**
+ * An inline diagram is a picture: no pan, no zoom, no pointer capture, so a
+ * click reaches the editor and opens the source. The pan/zoom machinery below
+ * belongs to the lightbox a reader opens on demand, and it is torn down with
+ * that lightbox. One lightbox is open at a time.
+ */
+let openLightbox: DiagramLightbox | null = null;
 
 /** Release a diagram whose owning widget is being removed. */
 export function disposeDiagramInteraction(element: HTMLElement): void {
   element.removeAttribute("data-diagram-render-key");
-  const state = diagramInteractions.get(element);
-  if (!state) return;
-  if (state.fullscreenDom) state.toggleFullscreen(false);
-  if (state.longPressTimer != null) window.clearTimeout(state.longPressTimer);
-  state.longPressTimer = null;
-  state.resizeObserver?.disconnect();
-  state.resizeObserver = null;
-  diagramInteractions.delete(element);
+  if (openLightbox?.origin === element) openLightbox.state.close();
 }
 
 function mermaidEntryBytes(v: DiagramCacheValue): number {
@@ -420,11 +417,10 @@ function installDiagramToolbar(element: HTMLElement, state: DiagramInteractionSt
   const zoomOut = diagramControlButton("−", "zoom-out", "Zoom out", () => state.applyScale(state.scale / DIAGRAM_ZOOM_FACTOR));
   const zoomLabel = diagramControlButton("100%", "reset", "Reset to 100%", () => state.reset());
   const zoomIn = diagramControlButton("+", "zoom-in", "Zoom in", () => state.applyScale(state.scale * DIAGRAM_ZOOM_FACTOR));
-  const fit = diagramControlButton("Fit", "fit", "Fit mind map to view", () => state.fit());
-  const fullscreen = diagramControlButton("Expand", "fullscreen", "Expand in Noema window", () => state.toggleFullscreen());
+  const fit = diagramControlButton("Fit", "fit", "Fit diagram to view", () => state.fit());
+  const close = diagramControlButton("Close", "close", "Close the diagram viewer", () => state.close());
   state.zoomLabel = zoomLabel;
-  state.fullscreenButton = fullscreen;
-  toolbar.append(zoomOut, zoomLabel, zoomIn, fit, fullscreen);
+  toolbar.append(zoomOut, zoomLabel, zoomIn, fit, close);
   element.append(toolbar);
   state.applyTransform();
 }
@@ -434,15 +430,12 @@ function bindDiagramInteraction(element: HTMLElement): DiagramInteractionState {
     scale: 1,
     panX: 0,
     panY: 0,
-    autoFit: element.classList.contains("cm-aaron-mindmap"),
+    autoFit: true,
     drag: null,
     pendingDrag: null,
     longPressTimer: null,
     suppressNextClick: false,
     zoomLabel: null,
-    fullscreenButton: null,
-    fullscreenSnapshot: null,
-    fullscreenDom: null,
     resizeObserver: null,
     applyTransform: () => {
       const activeSvg = currentDiagramSvg(element);
@@ -451,13 +444,6 @@ function bindDiagramInteraction(element: HTMLElement): DiagramInteractionState {
       activeSvg.style.transform = `translate(${state.panX}px, ${state.panY}px) scale(${state.scale})`;
       element.dataset.diagramScale = String(state.scale);
       if (state.zoomLabel) state.zoomLabel.textContent = `${Math.round(state.scale * 100)}%`;
-      if (state.fullscreenButton) {
-        const expanded = element.classList.contains("is-diagram-fullscreen");
-        state.fullscreenButton.textContent = expanded ? "Exit" : "Expand";
-        state.fullscreenButton.title = expanded ? "Exit full screen" : "Expand in Noema window";
-        state.fullscreenButton.setAttribute("aria-label", state.fullscreenButton.title);
-        state.fullscreenButton.setAttribute("aria-pressed", expanded ? "true" : "false");
-      }
     },
     applyScale: (next: number, originX = element.clientWidth / 2, originY = element.clientHeight / 2) => {
       const prev = state.scale;
@@ -505,82 +491,24 @@ function bindDiagramInteraction(element: HTMLElement): DiagramInteractionState {
       state.autoFit = true;
       state.applyTransform();
     },
-    toggleFullscreen: (restoreFocus = true) => {
-      const expanded = element.classList.contains("is-diagram-fullscreen");
-      if (expanded) {
-        element.classList.remove("is-diagram-fullscreen");
-        document.body.classList.remove("has-diagram-fullscreen");
-        const fullscreenDom = state.fullscreenDom;
-        state.fullscreenDom = null;
-        if (fullscreenDom) {
-          if (fullscreenDom.placeholder.isConnected) {
-            fullscreenDom.placeholder.replaceWith(element);
-          } else if (fullscreenDom.parent.isConnected) {
-            const nextSibling = fullscreenDom.nextSibling?.parentNode === fullscreenDom.parent
-              ? fullscreenDom.nextSibling
-              : null;
-            fullscreenDom.parent.insertBefore(element, nextSibling);
-          }
-          fullscreenDom.portal.remove();
-        }
-        const snapshot = state.fullscreenSnapshot;
-        state.fullscreenSnapshot = null;
-        if (snapshot) {
-          state.scale = snapshot.scale;
-          state.panX = snapshot.panX;
-          state.panY = snapshot.panY;
-          state.autoFit = snapshot.autoFit;
-        }
-        state.applyTransform();
-        // Moving the focused diagram out of its portal drops focus in WebKit.
-        // Keep keyboard pan/zoom working after Escape, without scrolling to it.
-        if (restoreFocus && element.isConnected) element.focus({ preventScroll: true });
-        return;
+    close: () => {
+      if (openLightbox?.state !== state) return;
+      const lightbox = openLightbox;
+      openLightbox = null;
+      document.removeEventListener("keydown", lightbox.onKeyDown, true);
+      document.body.classList.remove("has-diagram-fullscreen");
+      if (state.longPressTimer != null) window.clearTimeout(state.longPressTimer);
+      state.longPressTimer = null;
+      state.resizeObserver?.disconnect();
+      state.resizeObserver = null;
+      // Only hand the keyboard back when the viewer still had it. A diagram
+      // disposed while the reader is typing somewhere else must not steal focus.
+      const hadFocus = lightbox.overlay.contains(document.activeElement);
+      lightbox.overlay.remove();
+      if (hadFocus && lightbox.origin?.isConnected) {
+        const expand = lightbox.origin.querySelector<HTMLButtonElement>(".cm-diagram-expand");
+        expand?.focus({ preventScroll: true });
       }
-
-      const parent = element.parentNode;
-      if (!parent) return;
-      const rect = element.getBoundingClientRect();
-      const computed = window.getComputedStyle(element);
-      const placeholder = document.createElement("div");
-      placeholder.className = "cm-diagram-fullscreen-placeholder";
-      placeholder.setAttribute("aria-hidden", "true");
-      if (rect.width > 0) placeholder.style.width = `${rect.width}px`;
-      if (rect.height > 0) placeholder.style.height = `${rect.height}px`;
-      placeholder.style.maxWidth = "100%";
-      placeholder.style.marginTop = computed.marginTop;
-      placeholder.style.marginRight = computed.marginRight;
-      placeholder.style.marginBottom = computed.marginBottom;
-      placeholder.style.marginLeft = computed.marginLeft;
-
-      const portal = document.createElement("div");
-      portal.className = "cm-editor cm-diagram-fullscreen-portal";
-      portal.setAttribute("role", "dialog");
-      portal.setAttribute("aria-modal", "true");
-      portal.setAttribute("aria-label", "Expanded diagram");
-      portal.setAttribute("data-aaronnote-vim", "native");
-      portal.setAttribute("data-noema-gesture-scope", "diagram");
-      const nextSibling = element.nextSibling;
-      element.replaceWith(placeholder);
-      document.body.append(portal);
-      portal.append(element);
-      state.fullscreenDom = { portal, placeholder, parent, nextSibling };
-      state.fullscreenSnapshot = {
-        scale: state.scale,
-        panX: state.panX,
-        panY: state.panY,
-        autoFit: state.autoFit,
-      };
-      element.classList.add("is-diagram-fullscreen");
-      document.body.classList.add("has-diagram-fullscreen");
-      element.tabIndex = 0;
-      element.focus({ preventScroll: true });
-      state.applyTransform();
-      const schedule = window.requestAnimationFrame?.bind(window)
-        ?? ((callback: FrameRequestCallback) => window.setTimeout(() => callback(performance.now()), 0));
-      schedule(() => {
-        if (element.classList.contains("is-diagram-fullscreen")) state.fit();
-      });
     },
   };
 
@@ -663,18 +591,7 @@ function bindDiagramInteraction(element: HTMLElement): DiagramInteractionState {
     if (pointerType === "touch") {
       touchPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
       if (beginTouchGesture()) return;
-      if (element.classList.contains("is-diagram-fullscreen")) {
-        beginDrag(start, event.pointerId);
-        return;
-      }
-      clearLongPress();
-      state.pendingDrag = start;
-      element.classList.add("is-long-pressing");
-      const pointerId = event.pointerId;
-      state.longPressTimer = window.setTimeout(() => {
-        if (!state.pendingDrag) return;
-        beginDrag(state.pendingDrag, pointerId);
-      }, DIAGRAM_LONG_PRESS_MS);
+      beginDrag(start, event.pointerId);
       return;
     }
     if (pointerType === "pen") {
@@ -748,7 +665,7 @@ function bindDiagramInteraction(element: HTMLElement): DiagramInteractionState {
       clearLongPress();
       element.releasePointerCapture?.(event.pointerId);
       const remaining = touchPointers.entries().next().value as [number, DiagramTouchPoint] | undefined;
-      if (remaining && element.classList.contains("is-diagram-fullscreen")) {
+      if (remaining) {
         const [pointerId, point] = remaining;
         beginDrag({ x: point.x, y: point.y, panX: state.panX, panY: state.panY, moved: true }, pointerId);
       } else {
@@ -810,11 +727,6 @@ function bindDiagramInteraction(element: HTMLElement): DiagramInteractionState {
   element.addEventListener("wheel", (event) => {
     const target = event.target;
     if (target instanceof Element && target.closest(".cm-diagram-toolbar")) return;
-    // Inline figures belong to the reading surface. Passing over one during a
-    // wheel gesture must not switch that gesture from document scroll to pan.
-    // Drag still pans; pinch/modifier-wheel zooms; an expanded diagram owns pan.
-    if (!event.ctrlKey && !event.metaKey && !webkitGestureActive
-        && !element.classList.contains("is-diagram-fullscreen")) return;
     event.preventDefault();
     event.stopPropagation();
     if (webkitGestureActive) return;
@@ -843,9 +755,9 @@ function bindDiagramInteraction(element: HTMLElement): DiagramInteractionState {
   }, { passive: false });
   element.addEventListener("keydown", (event) => {
     if (event.target instanceof HTMLButtonElement && event.key !== "Escape") return;
-    if (event.key === "Escape" && element.classList.contains("is-diagram-fullscreen")) {
+    if (event.key === "Escape") {
       stopDiagramControlEvent(event);
-      state.toggleFullscreen();
+      state.close();
       return;
     }
     const pan = (x: number, y: number): void => {
@@ -874,33 +786,114 @@ function bindDiagramInteraction(element: HTMLElement): DiagramInteractionState {
   return state;
 }
 
-export function enableDiagramInteraction(element: HTMLElement): void {
+/**
+ * Open the diagram in a viewer. The viewer owns a clone of the SVG, so the
+ * figure in the document is never moved, re-parented, or left behind in a
+ * transformed state — which is what made an edit above a diagram lose its
+ * zoom before. Closing it disposes every listener it installed.
+ */
+export function openDiagramLightbox(origin: HTMLElement): void {
+  const svg = currentDiagramSvg(origin);
+  if (!svg) return;
+  openLightbox?.state.close();
+
+  const overlay = document.createElement("div");
+  overlay.className = "cm-editor cm-diagram-lightbox";
+  overlay.setAttribute("role", "dialog");
+  overlay.setAttribute("aria-modal", "true");
+  overlay.setAttribute("aria-label", "Expanded diagram");
+  overlay.setAttribute("data-aaronnote-vim", "native");
+  overlay.setAttribute("data-noema-gesture-scope", "diagram");
+
+  const stage = document.createElement("div");
+  stage.className = "cm-diagram-interactive cm-diagram-stage";
+  if (origin.classList.contains("cm-aaron-mindmap")) stage.classList.add("cm-aaron-mindmap");
+  stage.tabIndex = 0;
+  stage.style.touchAction = "none";
+  stage.append(svg.cloneNode(true) as SVGSVGElement);
+  overlay.append(stage);
+  document.body.append(overlay);
+  document.body.classList.add("has-diagram-fullscreen");
+
+  sanitizeDiagramLinks(stage);
+  const stageSvg = currentDiagramSvg(stage);
+  if (stageSvg) configureDiagramSvg(stageSvg, stage);
+
+  const state = bindDiagramInteraction(stage);
+  const onKeyDown = (event: KeyboardEvent): void => {
+    if (event.key !== "Escape" || openLightbox?.state !== state) return;
+    event.preventDefault();
+    event.stopPropagation();
+    state.close();
+  };
+  openLightbox = { overlay, stage, state, origin, onKeyDown };
+  document.addEventListener("keydown", onKeyDown, true);
+  overlay.addEventListener("pointerdown", (event) => {
+    if (event.target === overlay) state.close();
+  });
+
+  installDiagramToolbar(stage, state);
+  stage.focus({ preventScroll: true });
+  const schedule = window.requestAnimationFrame?.bind(window)
+    ?? ((callback: FrameRequestCallback) => window.setTimeout(() => callback(performance.now()), 0));
+  schedule(() => {
+    if (openLightbox?.state === state) state.fit();
+  });
+}
+
+/**
+ * Lay a rendered diagram out as a figure: intrinsic size, capped at the text
+ * measure, no fixed viewport and no input handlers. GitHub and Gitea render a
+ * Mermaid block the same way, and it is what keeps a click on the figure
+ * reaching CodeMirror so the fence's source opens.
+ */
+export function presentDiagramFigure(element: HTMLElement): void {
   hydrateDiagramForeignObjects(element);
   const svg = currentDiagramSvg(element);
   if (!svg) return;
 
-  element.classList.add("cm-diagram-interactive");
-  if (element.tabIndex < 0) element.tabIndex = 0;
-  element.style.overflow = "hidden";
-  element.style.touchAction = "none";
-  configureDiagramSvg(svg, element);
+  element.classList.add("cm-diagram-figure");
+  element.classList.remove("cm-diagram-interactive");
+  element.removeAttribute("style");
+  svg.style.removeProperty("transform");
+  svg.style.removeProperty("touch-action");
+  svg.style.maxWidth = "100%";
+  svg.style.maxHeight = "none";
+  svg.style.height = "auto";
+  svg.style.removeProperty("width");
   sanitizeDiagramLinks(element);
 
-  let state = diagramInteractions.get(element);
-  if (!state) {
-    state = bindDiagramInteraction(element);
-    diagramInteractions.set(element, state);
-    element.dataset.diagramInteractionBound = "true";
-  }
-  installDiagramToolbar(element, state);
-  state.applyTransform();
-  if (element.classList.contains("cm-aaron-mindmap") && state.autoFit) {
-    const schedule = window.requestAnimationFrame?.bind(window)
-      ?? ((callback: FrameRequestCallback) => window.setTimeout(() => callback(performance.now()), 0));
-    schedule(() => {
-      if (element.isConnected && state?.autoFit) state.fit();
+  // The only event the figure claims: a link inside the diagram still routes
+  // through the host so it opens where other Noema links open. Every other
+  // click is left alone and reaches CodeMirror.
+  if (element.dataset.diagramLinksBound !== "true") {
+    element.dataset.diagramLinksBound = "true";
+    element.addEventListener("click", (event) => {
+      const anchor = (event.target as Element | null)?.closest<SVGElement>("a");
+      if (!anchor) return;
+      const href = diagramHrefFromAnchor(anchor);
+      if (href) dispatchDiagramLink(element, event, href);
     });
   }
+
+  Array.from(element.children).forEach((child) => {
+    if (child instanceof HTMLElement && child.classList.contains("cm-diagram-expand")) child.remove();
+  });
+  const expand = document.createElement("button");
+  expand.type = "button";
+  expand.className = "cm-diagram-expand";
+  expand.textContent = "⤢";
+  expand.title = "Open the diagram viewer";
+  expand.setAttribute("aria-label", expand.title);
+  // The figure belongs to the document: only this button takes the event, so
+  // every other click still places the caret and reveals the source.
+  expand.addEventListener("mousedown", stopDiagramControlEvent);
+  expand.addEventListener("pointerdown", stopDiagramControlEvent);
+  expand.addEventListener("click", (event) => {
+    stopDiagramControlEvent(event);
+    openDiagramLightbox(element);
+  });
+  element.append(expand);
 }
 
 export function renderMermaidLazy(
@@ -934,7 +927,7 @@ export function renderMermaidLazy(
       options.onRender?.();
     } else {
       element.innerHTML = cached.html;
-      enableDiagramInteraction(element);
+      presentDiagramFigure(element);
       options.onRender?.();
     }
     return;
@@ -951,9 +944,11 @@ export function renderMermaidLazy(
     try {
       const mermaid = (await import("mermaid")).default;
       if (trimmed.includes("$$")) ensureMathStyles();
-      // Aaron mindmap (marmind/markmind): antiscript lets the per-diagram frontmatter
-      // ---config--- block take effect (strict blocks it). DOMPurify is our sanitizer anyway.
-      // Interactive diagrams keep strict for defence-in-depth.
+      // A diagram's own colours are its content, so Mermaid keeps its palette and
+      // only the sheet the figure sits on follows the editor theme. Aaron mindmap
+      // (marmind/markmind): antiscript lets the per-diagram frontmatter
+      // ---config--- block take effect (strict blocks it). DOMPurify is our
+      // sanitizer anyway. Interactive diagrams keep strict for defence-in-depth.
       if (staticMindmap) {
         mermaid.initialize({ startOnLoad: false, securityLevel: "antiscript", legacyMathML: true });
       } else {
@@ -965,7 +960,7 @@ export function renderMermaidLazy(
       const html = sanitizeDiagramSvg(result.svg);
       rememberMermaid(key, { html });
       element.innerHTML = html;
-      enableDiagramInteraction(element);
+      presentDiagramFigure(element);
       options.onRender?.();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

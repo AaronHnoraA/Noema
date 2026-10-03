@@ -33,18 +33,29 @@ try {
   }, { root, diagram });
   await page.waitForFunction(() => document.querySelectorAll(".cm-mermaid-widget svg").length === 2);
   await page.evaluate(() => document.fonts.ready);
-  await page.locator(".cm-diagram-control-zoom-in").first().click();
-  await page.evaluate(() => document.querySelector(".cm-diagram-interactive").focus({ preventScroll: true }));
-  await page.keyboard.press("ArrowRight");
-  const transform = await page.evaluate(() => {
+  // The figure in the document carries no transform: it is a picture, and a
+  // click on it belongs to CodeMirror.
+  const figureState = await page.evaluate(() => {
     window.originalSvg = document.querySelector(".cm-mermaid-widget svg");
-    return originalSvg.style.transform;
+    const figure = originalSvg.closest(".cm-diagram-figure");
+    return {
+      transform: originalSvg.style.transform,
+      interactive: Boolean(document.querySelector(".cm-mermaid-widget .cm-diagram-interactive")),
+      toolbar: Boolean(document.querySelector(".cm-mermaid-widget .cm-diagram-toolbar")),
+      expand: Boolean(figure?.querySelector(".cm-diagram-expand")),
+      height: Math.round(figure.getBoundingClientRect().height),
+    };
   });
-  assert.ok(transform.includes("scale(1.18)") && !transform.includes("translate(0px, 0px)"));
+  assert.equal(figureState.transform, "", "an inline diagram must not be transformed");
+  assert.equal(figureState.interactive, false, "an inline diagram must not bind the pan/zoom controller");
+  assert.equal(figureState.toolbar, false, "an inline diagram must not carry the viewer toolbar");
+  assert.equal(figureState.expand, true, "an inline diagram needs its viewer affordance");
+  // The old fixed 380-620px mind-map window is gone: a two-node graph is short.
+  assert.ok(figureState.height > 0 && figureState.height < 320, `figure height ${figureState.height}px is not content-sized`);
   await page.evaluate(() => editor.view.dispatch({ changes: { from: 0, insert: "new paragraph\n\n" }, userEvent: "input" }));
   await page.waitForTimeout(200);
   assert.equal(await page.evaluate(() => originalSvg === document.querySelector(".cm-mermaid-widget svg")), true);
-  assert.equal(await page.evaluate(() => originalSvg.style.transform), transform);
+  assert.equal(await page.evaluate(() => originalSvg.style.transform), "");
   await page.evaluate(async (root) => {
     const { figureLayoutTarget } = await import(root + "src/cm6/figure-layout-menu.ts");
     editor.view.dispatch({ changes: { from: 0, insert: "x" }, userEvent: "input.type" });
@@ -65,15 +76,29 @@ try {
   });
   assert.equal(float.height, 0);
   assert.equal(float.estimates[1], 0);
-  await page.locator(".cm-diagram-control-fullscreen").first().click();
+  // The viewer: opened on demand, owns a clone, and pans/zooms there only.
+  await page.locator(".cm-diagram-expand").first().click();
+  await page.waitForSelector(".cm-diagram-lightbox .cm-diagram-stage");
+  await page.locator(".cm-diagram-control-zoom-in").first().click();
+  await page.keyboard.press("ArrowRight");
+  const viewer = await page.evaluate(() => ({
+    transform: document.querySelector(".cm-diagram-lightbox svg").style.transform,
+    figureTransform: originalSvg.style.transform,
+    clone: document.querySelector(".cm-diagram-lightbox svg") !== originalSvg,
+  }));
+  assert.ok(viewer.transform.includes("scale(1.18)") && !viewer.transform.includes("translate(0px, 0px)"), viewer.transform);
+  assert.equal(viewer.clone, true, "the viewer must not move the figure out of the document");
+  assert.equal(viewer.figureTransform, "", "the viewer must not transform the figure");
   await page.keyboard.press("Escape");
-  assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("cm-diagram-interactive")), true, "Escape lost keyboard focus");
-  await page.locator(".cm-diagram-control-fullscreen").first().click();
+  assert.equal(await page.locator(".cm-diagram-lightbox").count(), 0, "Escape did not close the viewer");
+  assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("cm-diagram-expand")), true, "Escape lost keyboard focus");
+  await page.locator(".cm-diagram-expand").first().click();
+  await page.waitForSelector(".cm-diagram-lightbox");
   await page.evaluate(() => editor.setMarkdown("The diagram was deleted."));
-  assert.equal(await page.locator(".cm-diagram-fullscreen-portal").count(), 0);
+  assert.equal(await page.locator(".cm-diagram-lightbox").count(), 0);
   assert.equal(await page.evaluate(() => document.body.classList.contains("has-diagram-fullscreen")), false);
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ checks: "SVG identity, zoom/pan, mapped source, float estimate, Escape focus, fullscreen disposal", transform, float }));
+  console.log(JSON.stringify({ checks: "static figure, SVG identity, mapped source, float estimate, viewer clone + zoom, Escape focus, viewer disposal", figureState, viewer, float }));
 } finally {
   await browser.close();
   await server.close();

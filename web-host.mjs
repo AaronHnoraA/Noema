@@ -80,6 +80,7 @@ import {
   noteSelfWriteRecently,
   notePathWatchRelevant,
 } from "./server/lib/state.mjs";
+import { drawioExportSVG, drawioExportTag, drawioPlaceholderSVG } from "./server/lib/drawio-export.mjs";
 import { createKernelMarkdownProvider } from "./server/lib/kernel-markdown-provider.mjs";
 import { createKernelPlanningProvider } from "./server/lib/kernel-planning-provider.mjs";
 import { createKernelKatexMacrosProvider } from "./server/lib/kernel-katex-macros-provider.mjs";
@@ -297,6 +298,7 @@ const stateRoot = serverConfig
   : resolve(process.env.AARONNOTE_STATE_DIR
     || join(process.env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "noema"));
 const tmpRoot = resolve(process.env.AARONNOTE_TMP_DIR || join(stateRoot, "tmp"));
+const drawioCacheDir = resolve(process.env.NOEMA_DRAWIO_CACHE_DIR || join(stateRoot, "drawio-svg"));
 const snippetsRoot = resolve(process.env.AARONNOTE_SNIPPETS_ROOT || (serverConfig ? join(runtimeRoot, "resources", "snippets") : join(workspaceRoot, "snippets")));
 const templatesRoot = resolve(process.env.AARONNOTE_TEMPLATES_ROOT || (serverConfig ? join(runtimeRoot, "resources", "templates", "noema") : join(workspaceRoot, "templates", "noema")));
 const katexMacrosDir = resolve(process.env.AARONNOTE_KATEX_MACROS_DIR || (serverConfig ? join(runtimeRoot, "resources", "katex-macros") : join(workspaceRoot, "etc", "katex-macros")));
@@ -3410,73 +3412,6 @@ function cleanAssetSource(source) {
   return value.split(/[?#]/, 1)[0] || "";
 }
 
-function visualFrameBaseStyle() {
-  return [
-    "html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#fff;color:#1f2937;",
-    "font:13px/1.45 system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}",
-    "body{position:relative}",
-    "iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:#fff}",
-    ".status{position:absolute;inset:0;z-index:2;box-sizing:border-box;display:grid;place-items:center;padding:18px;text-align:center;color:#6b7280;background:#fff}",
-    ".status.error{color:#9f1239;background:#fff7f7}",
-  ].join("");
-}
-
-function htmlEscape(value) {
-  return String(value || "").replace(/[&<>"]/g, (ch) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    "\"": "&quot;",
-  }[ch]));
-}
-
-function visualFrameErrorHTML(message) {
-  return `<!doctype html>
-<html>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${visualFrameBaseStyle()}</style></head>
-<body><div class="status error">${htmlEscape(message || "Visual attachment failed")}</div></body>
-</html>`;
-}
-
-function scriptString(value) {
-  return JSON.stringify(String(value ?? ""))
-    .replace(/</g, "\\u003c")
-    .replace(/\u2028/g, "\\u2028")
-    .replace(/\u2029/g, "\\u2029");
-}
-
-function drawioFrameHTML(xml) {
-  return `<!doctype html>
-<html>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${visualFrameBaseStyle()}</style></head>
-<body>
-<iframe id="drawio-frame" title="draw.io diagram" allow="fullscreen; clipboard-read; clipboard-write" src="https://embed.diagrams.net/?embed=1&proto=json&spin=1&ui=min&libraries=1&noSaveBtn=1&noExitBtn=1"></iframe>
-<script>
-(function () {
-  var xml = ${scriptString(xml)};
-  var frame = document.getElementById("drawio-frame");
-  function sendLoad() {
-    frame.contentWindow.postMessage(JSON.stringify({
-      action: "load",
-      autosave: 0,
-      modified: 0,
-      title: "draw.io diagram",
-      xml: xml
-    }), "*");
-  }
-  window.addEventListener("message", function (event) {
-    var data = event.data;
-    try {
-      if (typeof data === "string" && data.charAt(0) === "{") data = JSON.parse(data);
-    } catch (err) {}
-    if (data === "ready" || data && data.event === "init") sendLoad();
-  });
-}());
-</script>
-</body>
-</html>`;
-}
-
 function resolveAssetFile(rawUrl) {
   const parsed = new URL(String(rawUrl || ""));
   if (parsed.protocol !== "aaronnote-asset:") throw new Error(`Unsupported asset URL: ${rawUrl}`);
@@ -3506,32 +3441,52 @@ function resolveAssetFile(rawUrl) {
   throw new Error(`Unknown Noema asset host: ${host}`);
 }
 
-function visualFrameSourceFile(src) {
+function drawioAssetFile(src) {
   const raw = String(src || "");
-  if (!raw) throw new Error("Missing visual attachment source");
+  if (!raw) throw new Error("Missing draw.io source");
   const parsed = new URL(raw);
   if (parsed.protocol !== "aaronnote-asset:" || parsed.hostname !== "media") {
-    throw new Error(`Unsupported visual attachment source: ${raw}`);
+    throw new Error(`Unsupported draw.io source: ${raw}`);
   }
   return resolveAssetFile(raw);
 }
 
-async function serveVisualFrame(rawUrl, res) {
+/**
+ * Serve a `.drawio` file as SVG. Noema shows the export as a picture, so this
+ * always answers with an SVG: a failed export becomes a placeholder naming the
+ * problem rather than a broken image or the hosted draw.io editor.
+ */
+async function serveDrawioSVG(rawUrl, req, res) {
+  let file = "";
   try {
     const parsed = new URL(String(rawUrl || ""));
-    const kind = decodeURIComponent(parsed.pathname.replace(/^\/+/, ""));
-    const file = visualFrameSourceFile(parsed.searchParams.get("src"));
-    if (kind === "drawio") {
-      sendHtmlNoStore(res, drawioFrameHTML(await readFile(file, "utf8")));
+    file = drawioAssetFile(parsed.searchParams.get("src"));
+    const page = Math.max(0, Number(parsed.searchParams.get("page") || 0) || 0);
+    // The export id already covers the file's mtime and size, so a re-render of
+    // an unchanged diagram costs one 304 and never touches the exporter.
+    const tag = await drawioExportTag(file, { page });
+    if (tag && req.headers["if-none-match"] === `"${tag}"`) {
+      res.writeHead(304, { ETag: `"${tag}"`, "Cache-Control": "no-cache" });
+      res.end();
       return;
     }
-    throw new Error(`Unknown visual attachment kind: ${kind}`);
+    const result = await drawioExportSVG(file, { page, cacheDir: drawioCacheDir });
+    const headers = {
+      "Content-Type": "image/svg+xml; charset=utf-8",
+      "Cache-Control": result.error ? "no-store" : "no-cache",
+      "X-Noema-Drawio": result.error ? "placeholder" : (result.cached ? "cached" : "exported"),
+    };
+    if (tag && !result.error) headers.ETag = `"${tag}"`;
+    res.writeHead(200, headers);
+    res.end(result.svg);
   } catch (err) {
-    sendHtmlNoStore(res, visualFrameErrorHTML(err instanceof Error ? err.message : String(err)));
+    const message = err instanceof Error ? err.message : String(err);
+    res.writeHead(200, { "Content-Type": "image/svg+xml; charset=utf-8", "Cache-Control": "no-store" });
+    res.end(drawioPlaceholderSVG(file, message));
   }
 }
 
-async function serveAaronnoteAsset(url, res) {
+async function serveAaronnoteAsset(url, req, res) {
   const raw = url.searchParams.get("url") || "";
   let parsedRaw = null;
   try {
@@ -3555,8 +3510,8 @@ async function serveAaronnoteAsset(url, res) {
     res.end(data);
     return;
   }
-  if (parsedRaw?.hostname === "visual-frame") {
-    await serveVisualFrame(raw, res);
+  if (parsedRaw?.hostname === "drawio-svg") {
+    await serveDrawioSVG(raw, req, res);
     return;
   }
   const file = resolveAssetFile(raw);
@@ -3828,7 +3783,7 @@ const server = createServer(async (req, res) => {
     }
 
     if (url.pathname === "/aaronnote-asset") {
-      await serveAaronnoteAsset(url, res);
+      await serveAaronnoteAsset(url, req, res);
       return;
     }
 

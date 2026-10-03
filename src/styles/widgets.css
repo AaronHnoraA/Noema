@@ -946,8 +946,27 @@
   max-width: var(--aaronnote-image-max-width, var(--note-float-width, 45%));
   margin: 0 0 0.4em 1em;
 }
-/* Embedded live attachments (drawio, HTML) are viewports, not artwork, so they
- * keep an explicit box — unlike a plain image, they have no intrinsic size. */
+/* A draw.io diagram is artwork: the host exports it to SVG, so it has an
+ * intrinsic size and is laid out as a picture, never as a framed viewport.
+ * The export is requested in the page's own theme (light or dark) and comes
+ * back on a transparent ground, so it sits on the page like any other figure
+ * rather than on a card that glares. Only an embedded HTML document still
+ * needs an explicit box. */
+.cm-editor .cm-drawio-render,
+.aaronnote-visual-attachment-drawio .cm-drawio-render {
+  display: block;
+  box-sizing: border-box;
+  width: var(--aaronnote-image-width, auto);
+  height: var(--aaronnote-image-height, auto);
+  max-width: var(--aaronnote-image-max-width, min(100%, var(--note-image-max, 100%)));
+  max-height: var(--aaronnote-image-max-height, none);
+  margin: 0 auto;
+  padding: var(--note-figure-paper-pad, 0.55em);
+  border: 1px solid color-mix(in srgb, var(--aaron-paper-line, #cec4b6), transparent 62%);
+  border-radius: 6px;
+  background: var(--note-figure-paper, transparent);
+}
+/* An embedded HTML document has no intrinsic size, so it keeps an explicit box. */
 .cm-editor .cm-visual-embed,
 .aaronnote-visual-embed {
   display: block;
@@ -2179,14 +2198,16 @@
 .cm-editor .cm-mermaid-block-preview {
   cursor: default;
 }
-/* Mermaid uses its light default theme, so its #333 strokes need a light
- * surface in a dark editor. */
+/* Mermaid paints with the editor's own palette (diagramThemeVariables), so a
+ * diagram sits on the page like any other figure. The white card this rule used
+ * to draw existed only to carry Mermaid's light default theme. */
 .cm-editor .cm-mermaid-block:not(.cm-diagram-error),
 .cm-editor .cm-mermaid-block-preview:not(.cm-diagram-error),
 .cm-editor pre .cb-diagram-preview:not(.cm-diagram-error) {
   padding: var(--note-figure-paper-pad, 0.55em);
-  border-radius: 4px;
-  background: var(--note-figure-paper, #fbfaf7);
+  border: 1px solid color-mix(in srgb, var(--aaron-paper-line, #cec4b6), transparent 62%);
+  border-radius: 6px;
+  background: var(--note-figure-paper, transparent);
 }
 .aaronnote-tikz,
 .cm-editor .cm-tikz-env-widget {
@@ -2312,6 +2333,34 @@ noema-tikz {
   width: var(--aaronnote-diagram-width, var(--note-float-width, 45%));
   margin: 0 0 0.4em 1em;
 }
+.cm-editor .cm-diagram-figure {
+  position: relative;
+}
+/* Hover-only, like GitHub's code-block affordances: the figure itself stays a
+ * picture, and a click anywhere else opens the fence's source. */
+.cm-editor .cm-diagram-expand {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--aaron-paper-line, #414b61), transparent 30%);
+  border-radius: 6px;
+  opacity: 0;
+  background: color-mix(in srgb, var(--aaron-paper, #171b28), transparent 8%);
+  color: var(--aaron-ink, #e4ecff);
+  font: 600 13px/1 var(--aaron-font-sans, system-ui, sans-serif);
+  cursor: pointer;
+  transition: opacity 120ms ease;
+}
+.cm-editor .cm-diagram-figure:hover .cm-diagram-expand,
+.cm-editor .cm-diagram-expand:focus-visible {
+  opacity: 1;
+}
 .cm-editor .cm-diagram-interactive {
   position: relative;
   overflow: hidden;
@@ -2379,60 +2428,29 @@ noema-tikz {
   border-left: 1px solid color-mix(in srgb, var(--aaron-paper-line, #414b61), transparent 38%);
   border-radius: 0 999px 999px 0;
 }
+/* A mind map is a figure too: its height comes from the diagram, not from a
+ * fixed viewport. The old clamp(380px, 56vh, 620px) box cropped a small map and
+ * scrolled a large one; the ⤢ viewer is where a big map gets room. */
 .cm-editor .cm-aaron-mindmap {
-  width: var(--aaronnote-diagram-width, 100%);
+  width: var(--aaronnote-diagram-width, auto);
   max-width: var(--aaronnote-diagram-max-width, 100%);
-  height: var(--aaronnote-diagram-height, clamp(380px, 56vh, 620px));
+  height: var(--aaronnote-diagram-height, auto);
   max-height: var(--aaronnote-diagram-max-height, none);
-  overflow: hidden;
-  padding: 0;
-  border-color: color-mix(in srgb, var(--aaron-paper-line, #414b61), var(--aaron-ink, #e4ecff) 10%);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--aaron-paper, #171b28), var(--aaron-accent, #9de7ff) 5%);
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 6%),
-    0 8px 24px color-mix(in srgb, #000, transparent 72%);
-  cursor: grab;
-}
-.cm-editor .cm-aaron-mindmap svg {
-  max-height: none !important;
 }
 .cm-editor .cm-aaron-mindmap :is(.katex, math) {
-  color: var(--aaron-ink, #e4ecff);
+  color: inherit;
   font-size: 1em;
 }
 .cm-editor .cm-aaron-mindmap svg :is(text, tspan) {
   font-family: var(--aaron-font-sans, "Avenir Next", Inter, system-ui, sans-serif);
   letter-spacing: 0;
 }
-.cm-editor .cm-aaron-mindmap svg :is(.edge, path.edge, line.edge) {
-  stroke: color-mix(in srgb, var(--aaron-muted, #6c6358), var(--aaron-red, #b31b1b) 10%) !important;
-  stroke-width: 2.25px !important;
-}
-.cm-editor .cm-aaron-mindmap svg .mindmap-node :is(rect, path, circle, polygon) {
-  stroke: color-mix(in srgb, var(--aaron-muted, #6c6358), transparent 14%) !important;
-  stroke-width: 1.5px;
-}
+/* Node fills, strokes and edge colours now come from the Mermaid palette that
+ * diagramThemeVariables() derives from the live theme tokens, so the sheet of
+ * per-section !important overrides that used to fight the light default theme
+ * is gone. Only typography is restated here. */
 .cm-editor .cm-aaron-mindmap svg .mindmap-node :is(text, tspan) {
-  fill: var(--aaron-ink, #e4ecff) !important;
   font-weight: 520;
-}
-.cm-editor .cm-aaron-mindmap svg .mindmap-node.section-root :is(rect, path, circle, polygon) {
-  fill: color-mix(in srgb, var(--aaron-red, #d79a9a), var(--aaron-paper, #171b28) 78%) !important;
-  stroke: color-mix(in srgb, var(--aaron-red, #b31b1b), var(--aaron-muted, #6c6358) 36%) !important;
-}
-.cm-editor .cm-aaron-mindmap svg .mindmap-node:is(.section-0, .section-3, .section-6, .section-9) :is(rect, path, circle, polygon) {
-  fill: var(--aaron-panel, #232b3d) !important;
-}
-.cm-editor .cm-aaron-mindmap svg .mindmap-node:is(.section-1, .section-4, .section-7, .section-10) :is(rect, path, circle, polygon) {
-  fill: color-mix(in srgb, var(--aaron-accent-soft, #253c43), var(--aaron-panel, #232b3d) 45%) !important;
-}
-.cm-editor .cm-aaron-mindmap svg .mindmap-node:is(.section-2, .section-5, .section-8) :is(rect, path, circle, polygon) {
-  fill: color-mix(in srgb, var(--aaron-link-soft, #253c43), var(--aaron-panel-strong, #2b3549) 42%) !important;
-}
-.cm-editor .cm-aaron-mindmap svg .mindmap-node line {
-  stroke: color-mix(in srgb, var(--aaron-muted, #6c6358), transparent 28%) !important;
-  stroke-width: 2px !important;
 }
 
 /* ── Aaron mindmap: foreignObject labels (Mermaid renders text via HTML div/p) */
@@ -2446,7 +2464,6 @@ noema-tikz {
   font-size: 13px !important;
   font-weight: 510 !important;
   line-height: 1.42 !important;
-  color: var(--aaron-ink, #e4ecff) !important;
   letter-spacing: 0 !important;
   text-align: center !important;
 }
@@ -2488,7 +2505,9 @@ noema-tikz {
 body.has-diagram-fullscreen {
   overflow: hidden !important;
 }
-.cm-diagram-fullscreen-portal {
+/* The diagram viewer. A reader opens it from the figure's ⤢ button; it owns a
+ * clone of the SVG, so pan/zoom never touch the figure in the document. */
+.cm-diagram-lightbox {
   position: fixed !important;
   z-index: 2147482999 !important;
   inset: 0 !important;
@@ -2504,28 +2523,19 @@ body.has-diagram-fullscreen {
   overflow: hidden !important;
   overscroll-behavior: none;
   touch-action: none;
-  background: var(--aaron-paper, #171b28);
+  background: color-mix(in srgb, var(--aaron-paper, #171b28), transparent 4%);
   isolation: isolate;
 }
-.cm-diagram-fullscreen-placeholder {
-  display: block;
-  visibility: hidden;
-  pointer-events: none;
-}
-.cm-editor .cm-diagram-interactive.is-diagram-fullscreen {
-  position: fixed !important;
-  z-index: 2147483000 !important;
-  inset: 0 !important;
-  box-sizing: border-box !important;
-  width: 100% !important;
-  max-width: none !important;
-  height: 100% !important;
-  max-height: none !important;
-  margin: 0 !important;
-  border-radius: 0 !important;
+.cm-diagram-lightbox .cm-diagram-stage {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
   background: var(--aaron-paper, #171b28);
 }
-.cm-editor .cm-diagram-interactive.is-diagram-fullscreen .cm-diagram-toolbar {
+.cm-diagram-lightbox .cm-diagram-toolbar {
   bottom: 18px;
 }
 .cm-editor .cm-mermaid-block svg,
@@ -2540,11 +2550,16 @@ body.has-diagram-fullscreen {
   max-height: var(--note-diagram-max-height, none);
   height: auto;
   margin: 0 auto;
+}
+.cm-diagram-lightbox .cm-diagram-stage svg {
+  max-width: none;
+  max-height: none;
+  margin: 0;
   touch-action: none;
   cursor: grab;
   will-change: transform;
 }
-.cm-editor .cm-diagram-interactive.is-panning svg {
+.cm-diagram-lightbox .cm-diagram-stage.is-panning svg {
   cursor: grabbing;
 }
 .cm-editor .cm-diagram-error {
@@ -5023,18 +5038,3 @@ body.has-diagram-fullscreen {
 .cm-editor .cm-footnote-reference button.cm-footnote-undefined {
   text-decoration: underline wavy color-mix(in srgb, #d14 60%, transparent);
 }
-
-/* Slash-menu hint on the focused empty line. Absolutely placed, so the line
- * box, caret and height map are exactly those of an empty line. Hidden in
- * Vim normal/visual mode, where `/` searches. */
-.cm-editor .cm-line.cm-empty-line-hint { position: relative; }
-.cm-editor .cm-line.cm-empty-line-hint::before {
-  content: attr(data-hint);
-  position: absolute;
-  pointer-events: none;
-  user-select: none;
-  white-space: nowrap;
-  color: var(--muted, color-mix(in srgb, currentColor 38%, transparent));
-  opacity: 0.7;
-}
-.cm-editor[data-vim-mode]:not([data-vim-mode="insert"]) .cm-line.cm-empty-line-hint::before { display: none; }

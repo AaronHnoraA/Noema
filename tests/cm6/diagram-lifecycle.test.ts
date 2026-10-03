@@ -10,7 +10,7 @@ vi.mock("../../src/diagram-render.ts", async (original) => {
     ...actual,
     renderMermaidLazy: (_source: string, element: HTMLElement, _fail: unknown, options: { onRender: () => void }) => {
       element.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"><text>Diagram</text></svg>';
-      actual.enableDiagramInteraction(element);
+      actual.presentDiagramFigure(element);
       options.onRender();
     },
   };
@@ -23,7 +23,7 @@ async function open(markdown = `before\n\n${diagram}\n\nafter`) {
   document.body.append(host);
   const editor = createEditor(host, { initialContent: markdown });
   editors.push(editor);
-  await vi.waitFor(() => expect(host.querySelector(".cm-diagram-control-zoom-in")).toBeTruthy());
+  await vi.waitFor(() => expect(host.querySelector(".cm-diagram-expand")).toBeTruthy());
   return { host, editor };
 }
 function widgets(view: EditorView): WidgetType[] {
@@ -51,15 +51,15 @@ test("typing before a diagram keeps its layout menu and source anchor current", 
   expect(Number(figure.dataset.cmSourceAnchor)).toBe(editor.getMarkdown().indexOf("graph"));
 });
 
-test("inserting a paragraph before a diagram preserves its SVG and zoom", async () => {
+test("inserting a paragraph before a diagram preserves its SVG", async () => {
   const { host, editor } = await open();
   const svg = host.querySelector<SVGSVGElement>(".cm-mermaid-widget svg")!;
-  host.querySelector<HTMLButtonElement>(".cm-diagram-control-zoom-in")!.click();
-  const transform = svg.style.transform;
   editor.view.dispatch({ changes: { from: 0, insert: "new paragraph\n\n" }, userEvent: "input" });
   await new Promise(requestAnimationFrame);
   expect(host.querySelector(".cm-mermaid-widget svg")).toBe(svg);
-  expect(svg.style.transform).toBe(transform);
+  // A figure carries no view state to lose, which is why the edit above used to
+  // reset a zoom that lived on the element itself.
+  expect(svg.style.transform).toBe("");
 });
 
 test("a wrapped diagram always estimates zero block height, even after the same diagram was measured", async () => {
@@ -76,24 +76,24 @@ test("the same diagram at two sizes keeps separate measured heights", async () =
   expect(widgets(editor.view).map((widget) => widget.estimatedHeight)).toEqual([150, 430]);
 });
 
-test.each(["delete", "destroy"])("%s closes an expanded diagram owned by the editor", async (action) => {
+test.each(["delete", "destroy"])("%s closes a diagram viewer owned by the editor", async (action) => {
   const { host, editor } = await open();
-  host.querySelector<HTMLButtonElement>(".cm-diagram-control-fullscreen")!.click();
-  expect(document.querySelector(".cm-diagram-fullscreen-portal")).toBeTruthy();
+  host.querySelector<HTMLButtonElement>(".cm-diagram-expand")!.click();
+  expect(document.querySelector(".cm-diagram-lightbox")).toBeTruthy();
   if (action === "delete") editor.setMarkdown("Only text remains");
   else { editor.destroy(); editors.splice(editors.indexOf(editor), 1); }
-  expect(document.querySelector(".cm-diagram-fullscreen-portal")).toBeNull();
+  expect(document.querySelector(".cm-diagram-lightbox")).toBeNull();
   expect(document.body.classList.contains("has-diagram-fullscreen")).toBe(false);
 });
 
-test("disposing an expanded diagram leaves another input's focus alone", async () => {
+test("disposing an open diagram viewer leaves another input's focus alone", async () => {
   const { host, editor } = await open();
-  host.querySelector<HTMLButtonElement>(".cm-diagram-control-fullscreen")!.click();
+  host.querySelector<HTMLButtonElement>(".cm-diagram-expand")!.click();
   const input = document.createElement("input");
   document.body.append(input);
   input.focus();
   editor.destroy();
   editors.splice(editors.indexOf(editor), 1);
   expect(document.activeElement).toBe(input);
-  expect(document.querySelector(".cm-diagram-fullscreen-portal")).toBeNull();
+  expect(document.querySelector(".cm-diagram-lightbox")).toBeNull();
 });

@@ -29,7 +29,7 @@ only document model.
 | Emoji | MarkText emoji picker, files.md `CompleteEmoji` | `:name:` renders in live preview from export's own table; `:na` completes to the character |
 | Media | files.md `fold-image`, Marker `ImageView` | `![](clip.mp4)` / `![](talk.mp3)` become native players (no autoplay) in editor and export |
 | Footnotes | MarkText footnote tool | Hovering a reference shows its definition or flags it as undefined |
-| Quick insert | MarkText paragraph placeholder and diagram entries | "Type / for commands" on the focused empty line (not in code or Vim normal mode); Mermaid and mind-map entries |
+| Quick insert | MarkText paragraph placeholder and diagram entries | Mermaid and mind-map templates use keyword snippets; the slash menu and empty-line prompt were later removed |
 | Blocks | MarkText paragraph front menu (Duplicate, Delete) | `duplicate-block` / `delete-block` commands and context-menu entries with Move Up/Down; copies of paragraphs, tables, fences and math are set apart by a blank line |
 | Images | MarkText `Format.backspaceHandler` selects an inline image first | Backspace after (Delete before) an image selects it with its `{layout}` attributes; the next press removes it whole |
 | Line breaks | HyperMD `newline` (Shift-Enter) | Shift-Enter continues a list item at its content indent or a quote with its `>`, never a new marker; the xwidget path maps WebKit's `insertLineBreak` to it |
@@ -91,7 +91,7 @@ layout and paint, inside one 16 ms frame.
 
 Unit tests run under happy-dom. `scripts/check-editor-interactions.mjs`
 drives a real WebKit page for what an emulator cannot judge: emoji and media
-render, the empty-line hint leaves the line box and caret unchanged, a mouse
+render, a mouse
 drag selects a table rectangle and Delete empties it, arrows cross cells and
 leave the table, Backspace selects a rendered embed whole, and Tab leaves
 bold. It found that the table widget stopped `mouseup` before the drag's
@@ -101,4 +101,3 @@ document listener, so those listeners run in the capture phase.
 GC forced through the DevTools protocol: 18.2 MB at start, 22.0–22.7 MB from
 switch 100 to switch 600 over 40 notes, 24.2 → 23.7 MB across 20 editor
 destroy/re-create cycles.
-

@@ -19,6 +19,7 @@
 (require 'noema-research)
 (require 'noema-agent-acp)
 (require 'noema-agent-promote)
+(require 'noema-agent-worktree)
 
 (declare-function my/noema-api-call "init-aaronnote" (channel args callback &optional timeout))
 (declare-function my/noema--api-call-sync "init-aaronnote" (channel args &optional timeout))
@@ -690,6 +691,28 @@ most likely fail the same way."
     (noema-sessions--jump-to-run noema-sessions--root name (noema-sessions--get entry "lastRun"))
     (noema-sessions--note-read entry noema-sessions--root)))
 
+;;; Reviewing a session's checkout
+
+(defun noema-sessions--checkout-directory (name)
+  "Return the directory session NAME's agent works in."
+  (let* ((local (noema-sessions--local name))
+         (entry (noema-sessions--entry name))
+         (buffer (or (plist-get local :buffer)
+                     (and entry (noema-sessions--live-buffer entry noema-sessions--root)))))
+    (or (and (buffer-live-p buffer) (buffer-local-value 'default-directory buffer))
+        (and entry (noema-sessions--string entry "executionTarget"))
+        (user-error "Session “%s” has no recorded directory" name))))
+
+(defun noema-sessions-magit-status (name)
+  "Open Magit status for the checkout session NAME works in."
+  (interactive (list (noema-sessions--name-at-point)))
+  (noema-agent-worktree-magit-status (noema-sessions--checkout-directory name)))
+
+(defun noema-sessions-magit-diff (name)
+  "Show what session NAME changed; see `noema-agent-worktree-magit-diff'."
+  (interactive (list (noema-sessions--name-at-point)))
+  (noema-agent-worktree-magit-diff (noema-sessions--checkout-directory name)))
+
 ;;; Agent window tab commands
 
 (defun noema-sessions--agent-target (buffer)
@@ -802,6 +825,8 @@ most likely fail the same way."
     (define-key map (kbd "T") #'noema-sessions-conversation-tree)
     (define-key map (kbd "R") #'noema-sessions-retry)
     (define-key map (kbd "!") #'noema-sessions-next-attention)
+    (define-key map (kbd "m") #'noema-sessions-magit-status)
+    (define-key map (kbd "d") #'noema-sessions-magit-diff)
     map)
   "Keymap for `noema-sessions-mode'.")
 

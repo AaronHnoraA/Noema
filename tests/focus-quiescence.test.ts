@@ -285,7 +285,7 @@ describe("shared focus quiescence controller", () => {
     }
   });
 
-  test("pointerdown wakes before CM6 pointer handling and does not intercept drag", () => {
+  test("pointer acquisition leaves focus to CM6 after its clicked selection is established", () => {
     vi.useFakeTimers();
     const harness = createHarness();
     const focusSpy = vi.spyOn(harness.contentDOM, "focus");
@@ -295,8 +295,12 @@ describe("shared focus quiescence controller", () => {
       focusSpy.mockClear();
       const event = new PointerEvent("pointerdown", { bubbles: true, cancelable: true });
       harness.contentDOM.dispatchEvent(event);
-      expect(focusSpy).toHaveBeenLastCalledWith({ preventScroll: true });
+      harness.contentDOM.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+      expect(focusSpy).not.toHaveBeenCalled();
       expect(event.defaultPrevented).toBe(false);
+      // The subsequent CM6 handler (or the host's deferred fallback) acquires
+      // focus only after placing the selection at the pointer's coordinates.
+      focus(harness.contentDOM);
       expect(document.activeElement).toBe(harness.contentDOM);
       harness.contentDOM.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
     } finally {

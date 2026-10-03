@@ -14,6 +14,7 @@
 (require 'tabulated-list)
 (require 'noema-research)
 (require 'noema-sessions)
+(require 'noema-agent-worktree)
 
 (declare-function my/noema-workspace-root "init-aaronnote" ())
 (declare-function remote-file-name-target "remote-fs" (file-name))
@@ -408,6 +409,26 @@ not descend into Noema's disposable worktrees or generated directories."
     (let ((default-directory root))
       (noema-sessions 'project))))
 
+(defun noema-agent-inbox--checkout-directory ()
+  "Return the directory the selected session's agent works in."
+  (let* ((row (noema-agent-inbox--selected))
+         (entry (plist-get row :entry))
+         (buffer (or (plist-get row :buffer)
+                     (and entry (noema-sessions--live-buffer entry (plist-get row :root))))))
+    (or (and (buffer-live-p buffer) (buffer-local-value 'default-directory buffer))
+        (and entry (noema-sessions--string entry "executionTarget"))
+        (user-error "This session has no recorded directory"))))
+
+(defun noema-agent-inbox-magit-status ()
+  "Open Magit status for the checkout the selected session works in."
+  (interactive)
+  (noema-agent-worktree-magit-status (noema-agent-inbox--checkout-directory)))
+
+(defun noema-agent-inbox-magit-diff ()
+  "Show what the selected session changed; see `noema-agent-worktree-magit-diff'."
+  (interactive)
+  (noema-agent-worktree-magit-diff (noema-agent-inbox--checkout-directory)))
+
 (defvar noema-agent-inbox-mode-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map tabulated-list-mode-map)
@@ -417,6 +438,8 @@ not descend into Noema's disposable worktrees or generated directories."
     (define-key map (kbd "j") #'noema-agent-inbox-jump)
     (define-key map (kbd "p") #'noema-agent-inbox-project)
     (define-key map (kbd "s") #'noema-agent-inbox-sessions)
+    (define-key map (kbd "m") #'noema-agent-inbox-magit-status)
+    (define-key map (kbd "d") #'noema-agent-inbox-magit-diff)
     (define-key map (kbd "g") #'noema-agent-inbox-refresh)
     (define-key map (kbd "G") (lambda () (interactive) (noema-agent-inbox-refresh t)))
     map))

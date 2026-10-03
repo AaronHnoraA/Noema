@@ -10,7 +10,6 @@ import {
   createEditor,
   type EditorClipboardPayload,
   type EditorCommand,
-  type QuickInsertItem,
   type StoredPasteAsset,
 } from "../src/lib.ts";
 import { setupCopilot } from "../plugins/noema-copilot/renderer.ts";
@@ -71,7 +70,6 @@ import {
 } from "./api-client.ts";
 import { Epoch } from "../src/async-epoch.ts";
 import { CoalescedTimer } from "../src/coalesced-timer.ts";
-import { findSlashHint, resolveHintMenuItems } from "../src/hint-core.ts";
 import { emojiCompletionContext, emojiCompletions } from "../src/emoji-shortcodes.ts";
 import { matchHotKey } from "../src/hotkey.ts";
 import { noemaPlatformLabels, primaryModifierDown } from "../src/platform-compat.ts";
@@ -1226,74 +1224,6 @@ let snippetPopupMatchKey = "";
 let snippetPopupChooseHandler: ((snippet: SnippetSummary) => boolean) | null = null;
 const snippetUsage = new SnippetUsageStore();
 
-const QUICK_INSERT_ALIASES: Readonly<Record<string, readonly string[]>> = {
-  footnote: ["脚注", "jiaozhu", "jiaoz", "jz", "引用"],
-  revision: ["修订", "xiuding", "建议", "jianyi"],
-  metadata: ["属性", "shuxing", "sx", "元数据", "yuanshuju"],
-  "heading-1": ["一级标题", "标题", "yijibiaoti", "biaoti", "bt"],
-  "heading-2": ["二级标题", "标题", "erjibiaoti", "biaoti", "bt"],
-  "heading-3": ["三级标题", "标题", "sanjibiaoti", "biaoti", "bt"],
-  "heading-4": ["四级标题", "标题", "sijibiaoti", "biaoti", "bt"],
-  "heading-5": ["五级标题", "标题", "wujibiaoti", "biaoti", "bt"],
-  "heading-6": ["六级标题", "标题", "liujibiaoti", "biaoti", "bt"],
-  "bullet-list": ["无序列表", "wuxuliebiao", "wxlb", "liebia", "liebiao", "lb"],
-  "ordered-list": ["有序列表", "youxuliebiao", "yxlb", "编号", "bianhao", "lb"],
-  "task-list": ["任务列表", "renwuliebiao", "rwlb", "待办", "daiban", "db"],
-  blockquote: ["引用块", "yinyong", "yy", "引用"],
-  "code-block": ["代码块", "daimakuai", "daima", "dmk", "dm"],
-  "jupyter-cell": ["计算单元", "jisuan", "代码单元", "daimadanyuan"],
-  table: ["表格", "biaoge", "bg"],
-  "table-insert-row": ["插入行", "charuhang", "表格"],
-  "table-insert-column": ["插入列", "charulie", "表格"],
-  "table-delete-row": ["删除行", "shanchuhang", "表格"],
-  "table-delete-column": ["删除列", "shanchulie", "表格"],
-  "table-align-left": ["左对齐", "zuoduiqi", "表格"],
-  "table-align-center": ["居中", "juzhong", "表格"],
-  "table-align-right": ["右对齐", "youduiqi", "表格"],
-  "table-format": ["格式化表格", "geshihua", "表格"],
-  "math-block": ["公式", "gongshi", "gs", "数学", "shuxue"],
-  toc: ["目录", "mulu", "ml", "大纲", "dagang"],
-  "horizontal-rule": ["分割线", "分隔线", "fengexian", "fgx", "fg"],
-  "org-env-proof": ["证明", "zhengming"],
-  "org-env-theorem": ["定理", "dingli"],
-  "org-env-note": ["注记", "笔记块", "zhuji", "biji"],
-  image: ["图片", "tupian", "tp", "图像", "tuxiang"],
-};
-
-type SlashMenuPreferences = {
-  enabled: boolean;
-  order: string[];
-  hidden: Set<string>;
-};
-
-function readStringArrayStorage(key: string): string[] {
-  try {
-    const value = JSON.parse(localStorage.getItem(key) || "[]");
-    return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
-  } catch {
-    return [];
-  }
-}
-
-function loadSlashMenuPreferences(): SlashMenuPreferences {
-  let enabled = true;
-  try {
-    enabled = localStorage.getItem("noema.quickInsert.enabled") !== "false";
-  } catch {
-    // Storage can be unavailable in a locked-down browser; defaults remain safe.
-  }
-  return {
-    enabled,
-    order: readStringArrayStorage("noema.quickInsert.order"),
-    hidden: new Set(readStringArrayStorage("noema.quickInsert.hidden")),
-  };
-}
-
-let slashMenuPreferences = loadSlashMenuPreferences();
-window.addEventListener("storage", (event) => {
-  if (event.key?.startsWith("noema.quickInsert.")) slashMenuPreferences = loadSlashMenuPreferences();
-});
-
 const HEADING_NUMBER_FORMATS = new Set<HeadingNumberFormat>([
   "decimal-hierarchical",
   "upper-alpha-hierarchical",
@@ -1360,6 +1290,14 @@ const LATEX_MARK_SNIPPETS: SnippetSummary[] = latexMarkSnippetDefinitions().map(
   source: BUILTIN_SNIPPET_SOURCE,
 }));
 const BUILTIN_SNIPPETS: SnippetSummary[] = [{
+  key: ";",
+  name: "Inline math",
+  mode: "markdown-mode",
+  group: "Noema builtin",
+  kind: "",
+  body: "\\($1\\) $0",
+  source: BUILTIN_SNIPPET_SOURCE,
+}, {
   key: ":",
   name: "Display math",
   mode: "markdown-mode",
@@ -5302,17 +5240,6 @@ function showContextMenu(event: MouseEvent, target: Partial<AaronContextMenuTarg
       ...(block.type.includes("code") ? [
         { label: "Copy Code", detail: "block", run: () => runContextEditorCommand("copy-code") },
       ] : []),
-      {
-        label: "Insert…",
-        detail: "quick insert",
-        disabled: currentReadOnly,
-        loadSubmenu: async () => editor.getQuickInsertItems("").map((item) => ({
-          id: `quick-insert:${item.id}`,
-          label: item.label,
-          detail: item.detail,
-          run: () => editor.runQuickInsert(item),
-        })),
-      },
       { label: "Document Properties", detail: "org-env(meta)", disabled: currentReadOnly, run: () => runContextEditorCommand("edit-properties") },
       { label: "Paste", detail: primaryShortcut("V"), disabled: currentReadOnly, run: () => pasteIntoEditorFromContextMenu() },
       { label: "Find in Note", detail: primaryShortcut("F"), run: () => openFindPanel() },
@@ -10734,78 +10661,6 @@ function scheduleAsyncCompletion(
   });
 }
 
-function quickInsertFilter(item: QuickInsertItem): string[] {
-  return [
-    item.id,
-    item.label,
-    item.detail ?? "",
-    item.command ?? "",
-    item.value ?? "",
-    ...(item.keywords ?? []),
-    ...(QUICK_INSERT_ALIASES[item.id] ?? []),
-  ].filter(Boolean);
-}
-
-function showSlashQuickInsert(
-  ctx: ReturnType<typeof editor.cursorContext>,
-  activeMath: ReturnType<typeof mathAtCursor> | undefined,
-): boolean {
-  const selection = editor.getMarkdownSelection();
-  if (selection.from !== selection.to) return false;
-  const blockType = editor.getBlockContext().type.toLowerCase();
-  if (blockType.includes("code") || blockType.includes("html")) return false;
-  if (snippetContextMode(ctx, activeMath === undefined ? mathAtCursor(ctx) : activeMath) !== "markdown-mode") return false;
-
-  const trigger = findSlashHint(ctx.before, ctx.after);
-  if (!trigger) return false;
-  const sourceItems = editor.getQuickInsertItems("");
-  const byId = new Map(sourceItems.map((item) => [item.id, item]));
-  const items = resolveHintMenuItems(sourceItems.map((item) => ({
-    entryKey: item.id,
-    filter: quickInsertFilter(item),
-    item,
-  })), {
-    enabled: slashMenuPreferences.enabled,
-    query: trigger.query,
-    order: slashMenuPreferences.order,
-    visible: (entryKey) => !slashMenuPreferences.hidden.has(entryKey),
-  });
-  if (items.length === 0) {
-    hideSnippetPopup();
-    return true;
-  }
-
-  showSnippetPopup(
-    `${trigger.key}${trigger.query}`,
-    items.slice(0, 18).map(({ item }) => ({
-      id: `quick-insert:${item.id}`,
-      key: item.id,
-      name: item.label,
-      description: item.detail,
-      mode: "markdown-mode",
-      group: "quick-insert",
-      body: item.markdown ?? "",
-      source: item.detail ?? item.command ?? "",
-      provider: "quick-insert",
-      browserCompatible: true,
-    })),
-    trigger.deleteBefore,
-    ctx.rect,
-    (snippet) => {
-      const item = byId.get(String(snippet.key || ""));
-      if (!item) return false;
-      const current = editor.getMarkdownSelection();
-      const from = Math.max(0, current.from - trigger.deleteBefore);
-      const removed = editor.markdownBetween(from, current.to);
-      editor.replaceMarkdownRange(from, current.to, "");
-      const applied = editor.runQuickInsert(item);
-      if (!applied) editor.replaceMarkdownRange(from, from, removed);
-      return applied;
-    },
-  );
-  return true;
-}
-
 /** `:name` completes to the emoji character (MarkText/files.md emoji picker). */
 function showEmojiCompletion(
   ctx: ReturnType<typeof editor.cursorContext>,
@@ -11038,11 +10893,6 @@ function updateSnippetPopup(
       ctx.rect,
       () => matchingTodoRefCompletions(depRefPrefix, quoted),
     );
-    return;
-  }
-
-  if (showSlashQuickInsert(ctx, activeMath)) {
-    clearCompletionCache();
     return;
   }
 

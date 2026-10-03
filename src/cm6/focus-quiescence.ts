@@ -180,7 +180,7 @@ export type FocusQuiescenceController = {
   setQuiescent(quiescent: boolean): void;
   /** Mark editor activity without manufacturing focus. */
   notifyActivity(): void;
-  /** Wake the editor synchronously for an input or pointer event. */
+  /** Acquire focus synchronously for keyboard input or an explicit command. */
   wake(): void;
   /** Park the editor if the current surface is safe to quiesce. */
   park(): void;
@@ -369,7 +369,11 @@ export function createFocusQuiescenceController(
   const onPointerDown = (event: PointerEvent | MouseEvent): void => {
     if (!canUseEditorSurface() || !isEditorPointerTarget(event.target)) return;
     pointerActive = true;
-    if (parked) wakeNow();
+    // CM6 must resolve the clicked position before acquiring native focus.
+    // In WebKit, even focus({ preventScroll: true }) here restores the old
+    // off-screen DOM caret and scrolls to it before CM6's mousedown hit test.
+    // CM6 owns content clicks; the renderer's deferred pointer-focus fallback
+    // covers the surrounding host. focusin clears parked once either finishes.
   };
 
   const finishPointer = (): void => {

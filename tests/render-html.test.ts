@@ -531,19 +531,18 @@ Body.
     expect(diagramHtml).toContain("aaronnote-diagram-wrap");
   });
 
-  test("renders draw.io image syntax as a visual attachment iframe", () => {
+  test("renders draw.io image syntax as the host's SVG export, not an editor", () => {
     const html = renderMarkdownHTML("![diagram](./attachments/demo.drawio){size:640; align:left}");
 
     expect(html).toContain("aaronnote-visual-attachment-drawio");
-    expect(html).toContain("aaronnote-visual-embed-drawio");
-    expect(html).toContain("embed.diagrams.net");
-    expect(html).toContain('srcdoc="');
     expect(html).toContain('data-aaronnote-visual-kind="drawio"');
-    expect(html).toContain("diagram");
-    expect(html).not.toContain("<img");
+    expect(html).toContain("cm-visual-file-card-drawio");
+    expect(html).toContain("draw.io diagram: diagram");
+    expect(html).not.toContain("embed.diagrams.net");
+    expect(html).not.toContain("<iframe");
   });
 
-  test("routes proxied Noema draw.io assets through the local visual frame", () => {
+  test("routes proxied Noema draw.io assets through the local SVG exporter", () => {
     const mediaUrl = "aaronnote-asset://media?file=./attachments/demo.drawio&base=/notes/demo.md";
     const proxied = `http://127.0.0.1:50815/aaronnote-asset?url=${encodeURIComponent(mediaUrl)}`;
     const html = renderMarkdownHTML("![diagram](./attachments/demo.drawio)", {
@@ -551,12 +550,26 @@ Body.
     });
 
     expect(html).toContain("aaronnote-visual-attachment-drawio");
-    expect(html).toContain("aaronnote-visual-embed-drawio");
+    expect(html).toContain("cm-drawio-render");
     expect(html).toContain('src="http://127.0.0.1:50815/aaronnote-asset?url=');
-    expect(html).toContain(encodeURIComponent("aaronnote-asset://visual-frame/drawio"));
+    expect(html).toContain(encodeURIComponent("aaronnote-asset://drawio-svg/"));
     expect(html).toContain(encodeURIComponent(encodeURIComponent(mediaUrl)));
-    expect(html).not.toContain('srcdoc="');
-    expect(html).not.toContain("Loading draw.io diagram");
+    expect(html).not.toContain("<iframe");
+    expect(html).not.toContain("embed.diagrams.net");
+  });
+
+  test("a draw.io page marker reaches the exporter and never the asset path", () => {
+    const mediaUrl = "aaronnote-asset://media?file=./attachments/demo.drawio&base=/notes/demo.md";
+    const seen: string[] = [];
+    const html = renderMarkdownHTML("![diagram](./attachments/demo.drawio#page=2)", {
+      assetResolver: (src) => {
+        seen.push(src);
+        return mediaUrl;
+      },
+    });
+
+    expect(seen).toEqual(["./attachments/demo.drawio"]);
+    expect(html).toContain("page=1");
   });
 
   test("renders html image syntax as an isolated visual attachment iframe", () => {
