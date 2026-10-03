@@ -124,6 +124,30 @@
       ;; The reference still names the buffer the person selected in.
       (should (equal (plist-get reference :file) (expand-file-name "src/a.el" repo))))))
 
+(ert-deftest noema-agent-worktree-region-must-match-worktree-copy ()
+  (noema-agent-worktree-tests--with-repo
+    (let* ((path (plist-get (noema-agent-worktree-create repo "lines") :path))
+           (session (noema-agent-worktree-tests--session path))
+           (source (find-file-noselect (expand-file-name "src/a.el" repo)))
+           (region (with-current-buffer source
+                     ;; "two\n": ends at the start of the next line.
+                     (cons (progn (goto-char (point-min)) (forward-line 1) (point))
+                           (point-max)))))
+      (setq sessions (list session source))
+      (let ((reference (noema-context--reference
+                        (expand-file-name "src/a.el" repo) repo source region session)))
+        (should (equal (list (plist-get reference :line-start)
+                             (plist-get reference :line-end))
+                       '(2 2))))
+      ;; The agent's copy moved on: the same line now holds other text.
+      (with-temp-file (expand-file-name "src/a.el" path) (insert "one\nchanged\n"))
+      (should-error (noema-context--reference
+                     (expand-file-name "src/a.el" repo) repo source region session)
+                    :type 'user-error)
+      ;; A whole-file reference is still fine.
+      (should (noema-context--reference (expand-file-name "src/a.el" repo) repo
+                                        nil nil session)))))
+
 (ert-deftest noema-agent-worktree-list-and-remove ()
   (noema-agent-worktree-tests--with-repo
     (let* ((worktree (progn (noema-agent-worktree-create repo "keep")

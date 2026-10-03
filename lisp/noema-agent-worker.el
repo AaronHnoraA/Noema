@@ -202,6 +202,19 @@ it back to zero.  Notify listeners of WORKER when provided."
 (defvar noema-agent-worker--runs (make-hash-table :test #'equal)
   "Run id to `noema-agent-worker' mapping.")
 
+(defun noema-agent-worker-owns-buffer-p (buffer)
+  "Return non-nil when an open Run executes in agent BUFFER.
+The worker reports that Run's attention, so the session-level attention in
+`noema-agent-acp' stands aside for it."
+  (catch 'owned
+    (maphash (lambda (_id worker)
+               (when (eq (noema-agent-worker-buffer worker) buffer)
+                 (throw 'owned t)))
+             noema-agent-worker--runs)
+    nil))
+
+(add-hook 'noema-agent-acp-run-owned-functions #'noema-agent-worker-owns-buffer-p)
+
 (defvar noema-agent-worker--previews (make-hash-table :test #'equal)
   "Pending permission id to the file changes its tool call would make.
 A preview is presentation only: the kernel decides on the normalized action,

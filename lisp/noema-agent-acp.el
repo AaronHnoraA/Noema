@@ -564,6 +564,113 @@ Listeners should coalesce; several changes arrive together.")
   (unless (plist-get args :cache-enabled)
     (noema-agent-acp--changed)))
 
+;;;; ── Attention of sessions no Run owns ────────────────────────────────────
+;;
+;; A Run's permission requests and results are recorded by the host, which
+;; derives the Session's attention and the worker notifies.  A session the
+;; person started by hand -- `C-c A a', a worktree session, the popup pool, a
+;; resumed conversation -- has no Run, so it would finish or stop on a
+;; permission request without telling anyone.  This is its Emacs-side
+;; counterpart: it lives only in this Emacs and is cleared by looking.
+;; Adopted from Agent Fleet's blocked/done attention loop.
+
+(defcustom noema-agent-acp-notify-function #'noema-agent-acp-notify-default
+  "Function called with TITLE and BODY when a session without a Run needs you.
+It fires only while no Emacs frame has focus, when such a session asks for a
+permission or finishes a turn.  nil turns these notifications off.  Runs
+notify through `noema-agent-worker-notify-function' instead."
+  :type '(choice (const :tag "Off" nil) function)
+  :group 'noema-agent-session)
+
+(defvar noema-agent-acp-run-owned-functions nil
+  "Abnormal hook run with an agent buffer; non-nil means a Run owns it now.
+While one does, its attention comes from the host, so the Emacs-side
+attention below stands aside rather than report the same event twice.")
+
+(defvar-local noema-agent-acp-attention nil
+  "Why this session needs the person: `permission', `done' or nil.
+Set when the agent asks for a permission or finishes a turn while its buffer
+is not on screen, and cleared when the buffer is shown.")
+
+(defvar-local noema-agent-acp--attention-watched nil
+  "Non-nil once this buffer's permission and turn events are watched.")
+
+(defun noema-agent-acp-notify-default (title body)
+  "Send TITLE and BODY through the host's `notify-send', when it has one."
+  (when (fboundp 'notify-send)
+    (funcall 'notify-send :title title :body body)))
+
+(defun noema-agent-acp-attention-mark (buffer)
+  "Return BUFFER's Emacs-side attention as a list mark, or nil."
+  (when (buffer-live-p buffer)
+    (pcase (buffer-local-value 'noema-agent-acp-attention buffer)
+      ('permission "!approve")
+      ('done "done"))))
+
+(defun noema-agent-acp-clear-attention (buffer)
+  "Forget BUFFER's Emacs-side attention, telling listeners when it had one."
+  (when (and (buffer-live-p buffer)
+             (buffer-local-value 'noema-agent-acp-attention buffer))
+    (with-current-buffer buffer
+      (setq-local noema-agent-acp-attention nil)
+      (noema-agent-acp--changed))))
+
+(defun noema-agent-acp--note-attention (buffer reason)
+  "Record that BUFFER's agent needs the person for REASON."
+  (when (and (buffer-live-p buffer)
+             (not (memq (buffer-local-value 'noema-agent-acp-session-origin buffer)
+                        (cons 'probe noema-agent-acp-ephemeral-origins)))
+             (not (run-hook-with-args-until-success
+                   'noema-agent-acp-run-owned-functions buffer)))
+    (let ((focused (seq-some (lambda (frame) (eq (frame-focus-state frame) t))
+                             (frame-list))))
+      ;; A buffer on screen is seen once Emacs has focus again; a mark on it
+      ;; would never be cleared by showing it.
+      (unless (get-buffer-window buffer 'visible)
+        (with-current-buffer buffer
+          (setq-local noema-agent-acp-attention reason)
+          (noema-agent-acp--changed)))
+      (when (and noema-agent-acp-notify-function (not focused))
+        (condition-case nil
+            (funcall noema-agent-acp-notify-function "Noema"
+                     (format "%s %s"
+                             (or (buffer-local-value 'noema-agent-acp-session-name buffer)
+                                 (buffer-name buffer))
+                             (if (eq reason 'permission)
+                                 "is waiting for your permission"
+                               "finished its turn")))
+          (error nil))))))
+
+(defun noema-agent-acp--attention-shown (_window)
+  "Clear the current agent buffer's attention now that a window shows it."
+  (noema-agent-acp-clear-attention (current-buffer)))
+
+(defun noema-agent-acp--subscribe-attention (buffer)
+  "Watch BUFFER's permission requests and finished turns, once."
+  (unless (buffer-local-value 'noema-agent-acp--attention-watched buffer)
+    (with-current-buffer buffer
+      (setq-local noema-agent-acp--attention-watched t)
+      (add-hook 'window-buffer-change-functions
+                #'noema-agent-acp--attention-shown nil t))
+    (noema-agent-acp-subscribe
+     :buffer buffer :event 'permission-request
+     :callback (lambda (_event) (noema-agent-acp--note-attention buffer 'permission)))
+    (noema-agent-acp-subscribe
+     :buffer buffer :event 'turn-complete
+     :callback (lambda (event)
+                 ;; An interrupt is the person's own act and is not news.
+                 (unless (equal (format "%s" (or (map-elt (map-elt event :data)
+                                                          :stop-reason)
+                                                 ""))
+                                "cancelled")
+                   (noema-agent-acp--note-attention buffer 'done))))))
+
+(defun noema-agent-acp--watch-attention (buffer)
+  "Watch agent-shell BUFFER for attention; other buffers have no events."
+  (when (and (buffer-live-p buffer)
+             (with-current-buffer buffer (derived-mode-p 'agent-shell-mode)))
+    (noema-agent-acp--subscribe-attention buffer)))
+
 (advice-add 'agent-shell--update-header-and-mode-line :after
             #'noema-agent-acp--header-updated-a)
 
@@ -1107,6 +1214,7 @@ older physical session; it gives the name up so lookups stay unambiguous."
       (noema-agent-acp--install-workspace-tabs buffer)
       (noema-agent-acp-touch buffer)
       (noema-agent-acp-hide-client-stderr buffer)
+      (noema-agent-acp--watch-attention buffer)
       (when directory
         (setq-local noema-agent-acp-session-root
                     (file-name-as-directory (expand-file-name directory))))
@@ -1528,6 +1636,7 @@ visible-only render policy.  Neither setting affects ACP transport or events."
     (noema-agent-acp--install-workspace-tabs buffer)
     (noema-agent-acp--display-workspace-buffer buffer))
   (noema-agent-acp-touch buffer)
+  (noema-agent-acp-clear-attention buffer)
   (noema-agent-render-flush buffer)
   buffer)
 

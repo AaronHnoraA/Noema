@@ -159,6 +159,34 @@ checkout.  nil means no redirection."
       (cons (concat (plist-get checkout :native-toplevel) relative) relative))))
 
 
+;; A region names lines of the buffer the person selected in.  The worktree's
+;; copy may have moved on, and the same numbers would then point the agent at
+;; other code; refuse such a reference rather than send it.
+(defun noema-agent-worktree--lines (first last)
+  "Return lines FIRST to LAST of the current buffer, or nil when it is shorter."
+  (save-restriction
+    (widen)
+    (save-excursion
+      (goto-char (point-min))
+      (when (zerop (forward-line (1- first)))
+        (let ((start (point)))
+          (when (zerop (forward-line (- last first)))
+            (buffer-substring-no-properties start (line-end-position))))))))
+
+(defun noema-agent-worktree-check-region (buffer first last relative session)
+  "Signal unless lines FIRST to LAST of BUFFER read the same in SESSION's copy.
+RELATIVE is the file's path in SESSION's checkout."
+  (let ((copy (expand-file-name
+               relative
+               (plist-get (noema-agent-worktree--session-checkout session) :toplevel)))
+        (text (with-current-buffer buffer (noema-agent-worktree--lines first last))))
+    (unless (equal text (with-temp-buffer
+                          (insert-file-contents copy)
+                          (noema-agent-worktree--lines first last)))
+      (user-error "Lines %d-%d of %s differ in worktree %s; select them in its copy"
+                  first last relative
+                  (plist-get (noema-agent-worktree--session-checkout session) :toplevel)))))
+
 ;;;; ── Creating, reviewing and removing worktrees ───────────────────────────
 
 (defun noema-agent-worktree--slug (name)

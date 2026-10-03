@@ -122,7 +122,7 @@ its project is not a Noema project, so it is listed here beside the rest.")
   "Return the `tabulated-list-entries' row for local SESSION."
   (let ((name (noema-sessions--local-label session)))
     (list name
-          (vector ""
+          (vector (or (noema-agent-acp-attention-mark (plist-get session :buffer)) "")
                   name
                   (or (plist-get session :agent) "")
                   "local"
@@ -228,7 +228,12 @@ the person first."
          (last (noema-sessions--get entry "lastRun"))
          (aliases (noema-sessions--list (noema-sessions--get entry "aliases"))))
     (list name
-          (vector (noema-sessions--attention entry)
+          (vector (let ((mark (noema-sessions--attention entry)))
+                    (if (string-empty-p mark)
+                        (or (noema-agent-acp-attention-mark
+                             (noema-sessions--live-buffer entry root))
+                            "")
+                      mark))
                   (if aliases (format "%s (was %s)" name (string-join aliases ", ")) name)
                   (or (noema-sessions--string entry "agent") "")
                   (noema-sessions--status entry root)
@@ -374,6 +379,10 @@ the person first."
 (defun noema-sessions-mark-read (name)
   "Mark session NAME read.  A failure stays until a later Run succeeds."
   (interactive (list (noema-sessions--name-at-point)))
+  (let ((entry (noema-sessions--entry name)))
+    (noema-agent-acp-clear-attention
+     (or (plist-get (noema-sessions--local name) :buffer)
+         (and entry (noema-sessions--live-buffer entry noema-sessions--root)))))
   (noema-sessions--durable name)
   (noema-sessions--mark-read noema-sessions--root name
                              (noema-sessions--refresher (current-buffer))))

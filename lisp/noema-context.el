@@ -154,14 +154,17 @@ worktree's copy, as `noema-agent-worktree-redirect' explains."
          (redirect (and session (noema-agent-worktree-redirect file session)))
          (agent-file (if redirect (car redirect) agent-file))
          (relative (if redirect (cdr redirect) (noema-context--relative file root))))
-    (append (list :file file
-                  :agent-file agent-file
-                  :relative (if (equal relative file) agent-file relative)
-                  :kind (if region 'region 'file))
-            (when region
-              (list :line-start (with-current-buffer buffer
-                                  (line-number-at-pos (car region) t))
-                    :line-end (noema-context--end-line buffer (cdr region)))))))
+    (let ((first (and region (with-current-buffer buffer
+                               (line-number-at-pos (car region) t))))
+          (last (and region (noema-context--end-line buffer (cdr region)))))
+      (when (and redirect region)
+        (noema-agent-worktree-check-region buffer first last (cdr redirect) session))
+      (append (list :file file
+                    :agent-file agent-file
+                    :relative (if (equal relative file) agent-file relative)
+                    :kind (if region 'region 'file))
+              (when region
+                (list :line-start first :line-end last))))))
 
 (defun noema-context--resolve (&optional context root session)
   "Return (REFERENCES . SKIPPED) for CONTEXT, relative to session ROOT.

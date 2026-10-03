@@ -104,6 +104,23 @@ not descend into Noema's disposable worktrees or generated directories."
              ((noema-sessions--get entry "openRun") 3)
              (t 4)))))
 
+(defun noema-agent-inbox--local-rank (buffer)
+  "Rank live BUFFER by its Emacs-side attention, as the host ranks a Session's."
+  (pcase (and (buffer-live-p buffer)
+              (buffer-local-value 'noema-agent-acp-attention buffer))
+    ('permission 0)
+    ('done 2)
+    (_ 4)))
+
+(defun noema-agent-inbox--attention (entry buffer)
+  "Return ENTRY's attention mark, else live BUFFER's Emacs-side one.
+The host's mark comes from Runs; a turn taken outside a Run only marks the
+live buffer."
+  (let ((mark (noema-sessions--attention entry)))
+    (if (string-empty-p mark)
+        (or (noema-agent-acp-attention-mark buffer) "")
+      mark)))
+
 (defun noema-agent-inbox--project-label (root)
   "Return a compact but unambiguous label for ROOT."
   (abbreviate-file-name (directory-file-name root)))
@@ -121,8 +138,12 @@ not descend into Noema's disposable worktrees or generated directories."
                    (min 3 (noema-agent-inbox--attention-rank entry))
                  (noema-agent-inbox--attention-rank entry)))
          (id (list 'durable root (or session-id name))))
-    (list rank id
-          (vector (noema-sessions--attention entry)
+    (list (if (and (string-empty-p (noema-sessions--attention entry))
+                   (noema-agent-acp-attention-mark buffer))
+              (min rank (noema-agent-inbox--local-rank buffer))
+            rank)
+          id
+          (vector (noema-agent-inbox--attention entry buffer)
                   (noema-agent-inbox--project-label root)
                   target
                   (or name "")
@@ -140,8 +161,9 @@ not descend into Noema's disposable worktrees or generated directories."
          (root (or (plist-get session :root) default-directory))
          (busy (plist-get session :busy))
          (id (list 'local buffer)))
-    (list (if busy 3 4) id
-          (vector "" (noema-agent-inbox--project-label root)
+    (list (min (if busy 3 4) (noema-agent-inbox--local-rank buffer)) id
+          (vector (or (noema-agent-acp-attention-mark buffer) "")
+                  (noema-agent-inbox--project-label root)
                   (noema-agent-inbox--target
                    (buffer-local-value 'default-directory buffer))
                   (or (plist-get session :name) (buffer-name buffer))
@@ -355,9 +377,9 @@ not descend into Noema's disposable worktrees or generated directories."
       (while (not (eobp))
         (let ((row (and (hash-table-p noema-agent-inbox--actions)
                         (gethash (tabulated-list-get-id) noema-agent-inbox--actions))))
-          (when (and (eq (plist-get row :kind) 'durable)
+          (when (and (memq (plist-get row :kind) '(durable local))
                      (not (string-empty-p
-                           (noema-sessions--attention (plist-get row :entry)))))
+                           (aref (or (tabulated-list-get-entry) [""]) 0))))
             (push (line-beginning-position) positions)))
         (forward-line 1)))
     (setq positions (nreverse positions))
@@ -367,19 +389,25 @@ not descend into Noema's disposable worktrees or generated directories."
       (message "No agent session needs attention"))))
 
 (defun noema-agent-inbox-mark-read ()
-  "Mark the selected durable Session read, keeping failures actionable."
+  "Mark the selected Session read, keeping failures actionable.
+A live session's Emacs-side attention is cleared too; a session with no
+Project record has only that."
   (interactive)
   (let* ((row (noema-agent-inbox--selected))
          (root (plist-get row :root))
          (buffer (current-buffer)))
-    (unless (eq (plist-get row :kind) 'durable)
-      (user-error "Only a recorded Noema Session can be marked read"))
-    (noema-sessions--mark-read
-     root (plist-get row :name)
-     (lambda (ok)
-       (when (and ok (buffer-live-p buffer))
-         (with-current-buffer buffer
-           (noema-agent-inbox--queue-update nil root)))))))
+    (let ((live (or (plist-get row :buffer)
+                    (and (plist-get row :entry)
+                         (noema-sessions--live-buffer (plist-get row :entry) root)))))
+      (noema-agent-acp-clear-attention live))
+    (if (not (eq (plist-get row :kind) 'durable))
+        (noema-agent-inbox--render)
+      (noema-sessions--mark-read
+       root (plist-get row :name)
+       (lambda (ok)
+         (when (and ok (buffer-live-p buffer))
+           (with-current-buffer buffer
+             (noema-agent-inbox--queue-update nil root))))))))
 
 (defun noema-agent-inbox-project ()
   "Open the selected session's Project overview."
