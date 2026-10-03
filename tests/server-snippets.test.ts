@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "@voidzero-dev/vite-plus-test"
 import { mkdtemp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
+import { expandSnippetBody, matchingSnippetsForPrefix } from "../aaronnote/snippets.ts";
 
 // @ts-ignore The server is a Node ESM module outside the TS app graph.
 import { parseSnippetBody, scanSnippets } from "../server/lib/runtime.mjs";
@@ -29,6 +30,27 @@ afterEach(() => {
 });
 
 describe("server snippet catalog", () => {
+  test("offers shared Markdown structure by typed keys", async () => {
+    process.env.AARONNOTE_SNIPPETS = join(process.cwd(), "resources", "snippets");
+    const catalog = (await scanSnippets({ force: true }))
+      .filter((snippet: ScannedSnippet) => snippet.mode === "markdown-mode");
+    const expected = new Map([
+      ["h1", "# "], ["h2", "## "], ["h3", "### "],
+      ["h4", "#### "], ["h5", "##### "], ["h6", "###### "],
+      ["ul", "- "], ["ol", "1. "], ["bq", "> "],
+      ["hr", "---"], ["math", "\\[\n"], ["code", "```"],
+      ["mer", "```mermaid"], ["mind", "```marmind"],
+    ]);
+    for (const [key, start] of expected) {
+      const match = matchingSnippetsForPrefix(catalog, key, {
+        mode: "markdown-mode", kind: "", limit: 10,
+      }).find((snippet) => snippet.key === key);
+      expect(match, `missing completion for ${key}`).toBeDefined();
+      expect(match?.browserCompatible).toBe(true);
+      expect(expandSnippetBody(match!).text.startsWith(start)).toBe(true);
+    }
+  });
+
   test("preserves intentional body whitespace", () => {
     const parsed = parseSnippetBody("# key: x\n# --\nbody  \n\n");
     expect(parsed.body).toBe("body  \n");

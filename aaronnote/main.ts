@@ -10020,7 +10020,7 @@ function completionPreviewText(snippet: SnippetSummary): string {
 function pathCompletionPrefix(before: string): string {
   const match = before.match(/(?:^|[\s([{"'=])([^\s\])}"'`<>#@]*\/[^\s\])}"'`<>#@]*)$/);
   const prefix = match?.[1] ?? "";
-  if (!prefix || prefix.startsWith("//") || hrefProtocol(prefix)) return "";
+  if (!prefix || prefix === "/" || prefix.startsWith("//") || hrefProtocol(prefix)) return "";
   return prefix;
 }
 

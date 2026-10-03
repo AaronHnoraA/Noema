@@ -70,6 +70,10 @@ file with arbitrary backtick Lisp, `$()` evaluation, or an unsupported
 TextMate variable remains usable in Emacs but is marked browser-incompatible
 and omitted from Noema completion.
 
+Escape literal Markdown fence backticks as `\`` in shared YAS files. Emacs
+then inserts backticks instead of evaluating the fence as Lisp, and Noema
+removes the same YAS escape when expanding the snippet.
+
 Generated metadata uses YAS's native `uuid` and `contributor` headers. The
 URL-encoded contributor suffix is decoded only by Noema, so YAS loads the
 same files without unknown-directive warnings:

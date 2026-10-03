@@ -5853,7 +5853,8 @@ function snippetBrowserCompatibility(body) {
     .replace(safeSelected, "")
     .replace(safeChoice, "")
     .replace(safeNoemaId, "");
-  const dynamicBacktick = [...stripped.matchAll(/`([^`]*)`/g)]
+  const withoutFencedCode = stripped.replace(/^[ \t]*```[^\n]*\n[\s\S]*?^[ \t]*```[ \t]*$/gm, "");
+  const dynamicBacktick = [...withoutFencedCode.replace(/\\`/g, "").matchAll(/`([^`]*)`/g)]
     .some((match) => !/\$(?:\d+|\{\d+(?::[^}]*)?\})/.test(match[1] || ""));
   if (dynamicBacktick || /\$\$?\([^)]*\)/.test(stripped)) {
     return { browserCompatible: false, diagnostic: "dynamic Emacs Lisp is not executed in Noema" };

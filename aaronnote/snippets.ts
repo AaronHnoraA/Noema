@@ -52,7 +52,8 @@ const SAFE_NOEMA_ID_RE = /`\(my\/noema-new-id\s+(?:"(repository|page|block)"|'(r
 const YAS_TABSTOP_RE = /\$(?:\d+|\{\d+(?::[^}]*)?\})/;
 
 function hasDynamicBacktickExpression(body: string): boolean {
-  for (const match of body.matchAll(/`([^`]*)`/g)) {
+  const withoutFencedCode = body.replace(/^[ \t]*```[^\n]*\n[\s\S]*?^[ \t]*```[ \t]*$/gm, "");
+  for (const match of withoutFencedCode.replace(/\\`/g, "").matchAll(/`([^`]*)`/g)) {
     // A backtick span containing a field is Markdown snippet output (for
     // example, `$1`), not a YAS backquoted Emacs Lisp expression.
     if (!YAS_TABSTOP_RE.test(match[1] ?? "")) return true;
@@ -248,6 +249,11 @@ export function expandSnippetBody(snippet: SnippetSummary, options: SnippetExpan
       }
 
       if (source[i] !== "$") {
+        if (source[i] === "\\" && source[i + 1] === "`") {
+          text += "`";
+          i += 2;
+          continue;
+        }
         if (source[i] === "\\" && source[i + 1] === "$") {
           // YAS escapes `$` only after an odd run of backslashes. A TeX row
           // break immediately followed by `$1` has two backslashes and must
