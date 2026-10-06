@@ -5873,6 +5873,7 @@ async function reloadCurrentFilePreservingCursor(options: {
   if (!commitActiveLiveTexForBoundary(false)) return false;
   const file = currentFile;
   const startingRevision = revision;
+  const startingExternalSave = pendingExternalSave;
   const position = trackCursorPosition();
   if (position) rememberCursorPosition(position);
   if (!currentReadOnly && revision !== savedRevision) {
@@ -5887,10 +5888,12 @@ async function reloadCurrentFilePreservingCursor(options: {
   if (!options.silent) setStatus("Refreshing...");
   try {
     const opened = await api.notes.open(file);
-    // An agent event can arrive while the user is typing or navigating.
-    // Never install an older disk snapshot over that newer page state.
-    if (options.ifClean && (currentFile !== file || revision !== startingRevision
-        || revision !== savedRevision)) return false;
+    // Every reload is asynchronous, including a manual refresh and a core
+    // reconnect.  A newer edit, navigation, or file event invalidates this
+    // snapshot before it can replace the page.
+    if (currentFile !== file || revision !== startingRevision
+        || (options.ifClean && (revision !== savedRevision
+          || pendingExternalSave !== startingExternalSave))) return false;
     applyOpenedNote(
       opened,
       file,
@@ -5924,7 +5927,7 @@ async function reconcileCurrentFileAfterCoreReconnect(): Promise<void> {
   // Never overwrite a genuine local draft merely because the event stream
   // was interrupted. Its next save will use the normal mtime conflict guard.
   if (revision !== savedRevision) return;
-  await reloadCurrentFilePreservingCursor({ silent: true, preserveView: true });
+  await reloadCurrentFilePreservingCursor({ silent: true, preserveView: true, ifClean: true });
 }
 
 async function refreshPendingExternalSaveOnFocus(): Promise<void> {
