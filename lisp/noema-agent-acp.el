@@ -595,6 +595,10 @@ is not on screen, and cleared when the buffer is shown.")
 (defvar-local noema-agent-acp--attention-watched nil
   "Non-nil once this buffer's permission and turn events are watched.")
 
+(defvar noema-agent-acp-turn-complete-functions nil
+  "Abnormal hook called with agent BUFFER and EVENT after an ACP turn ends.
+Consumers should defer filesystem work outside the event callback.")
+
 (defun noema-agent-acp-notify-default (title body)
   "Send TITLE and BODY through the host's `notify-send', when it has one."
   (when (fboundp 'notify-send)
@@ -658,6 +662,8 @@ is not on screen, and cleared when the buffer is shown.")
     (noema-agent-acp-subscribe
      :buffer buffer :event 'turn-complete
      :callback (lambda (event)
+                 (run-hook-with-args
+                  'noema-agent-acp-turn-complete-functions buffer event)
                  ;; An interrupt is the person's own act and is not news.
                  (unless (equal (format "%s" (or (map-elt (map-elt event :data)
                                                           :stop-reason)
@@ -670,6 +676,16 @@ is not on screen, and cleared when the buffer is shown.")
   (when (and (buffer-live-p buffer)
              (with-current-buffer buffer (derived-mode-p 'agent-shell-mode)))
     (noema-agent-acp--subscribe-attention buffer)))
+
+(defun noema-agent-acp--watch-attention-h ()
+  "Subscribe the current agent-shell buffer to ACP attention events."
+  (noema-agent-acp--watch-attention (current-buffer)))
+
+;; The turn-complete hook must also reach bare agent-shell sessions (including
+;; Claude) when session adoption is disabled or has not finished yet.
+(add-hook 'agent-shell-mode-hook #'noema-agent-acp--watch-attention-h)
+(dolist (buffer (buffer-list))
+  (noema-agent-acp--watch-attention buffer))
 
 (advice-add 'agent-shell--update-header-and-mode-line :after
             #'noema-agent-acp--header-updated-a)

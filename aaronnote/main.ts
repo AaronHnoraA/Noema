@@ -5867,25 +5867,33 @@ async function openFile(
 async function reloadCurrentFilePreservingCursor(options: {
   silent?: boolean;
   preserveView?: boolean;
-} = {}): Promise<void> {
-  if (!currentFile) return;
-  if (!commitActiveLiveTexForBoundary(false)) return;
+  ifClean?: boolean;
+} = {}): Promise<boolean> {
+  if (!currentFile || (options.ifClean && revision !== savedRevision)) return false;
+  if (!commitActiveLiveTexForBoundary(false)) return false;
+  const file = currentFile;
+  const startingRevision = revision;
   const position = trackCursorPosition();
   if (position) rememberCursorPosition(position);
   if (!currentReadOnly && revision !== savedRevision) {
+    if (options.ifClean) return false;
     if (!noteAutoSaveEnabled(currentRemote)) {
       setStatus("Remote note has unsaved changes; save before refreshing");
-      return;
+      return false;
     }
     await save();
-    if (revision !== savedRevision) return;
+    if (revision !== savedRevision) return false;
   }
   if (!options.silent) setStatus("Refreshing...");
   try {
-    const opened = await api.notes.open(currentFile);
+    const opened = await api.notes.open(file);
+    // An agent event can arrive while the user is typing or navigating.
+    // Never install an older disk snapshot over that newer page state.
+    if (options.ifClean && (currentFile !== file || revision !== startingRevision
+        || revision !== savedRevision)) return false;
     applyOpenedNote(
       opened,
-      currentFile,
+      file,
       position ? [position, ...cursorPositions] : cursorPositions,
       options.silent
         ? {
@@ -5898,10 +5906,12 @@ async function reloadCurrentFilePreservingCursor(options: {
           }
         : { preserveView: options.preserveView },
     );
-    if (pendingExternalSave?.file === currentFile) pendingExternalSave = null;
+    if (!options.ifClean && pendingExternalSave?.file === file) pendingExternalSave = null;
     if (!options.silent) setStatus(currentReadOnly ? "Read-only refreshed" : "Refreshed");
+    return true;
   } catch (error) {
     setStatus(error instanceof Error ? error.message : "Refresh failed");
+    return false;
   }
 }
 
@@ -5930,11 +5940,25 @@ async function refreshPendingExternalSaveOnFocus(): Promise<void> {
   }
   pendingExternalSaveRefreshInFlight = true;
   try {
-    if (pending.mtimeMs) currentMtimeMs = pending.mtimeMs;
-    await reloadCurrentFilePreservingCursor({ silent: true, preserveView: true });
-    if (pendingExternalSave === pending) pendingExternalSave = null;
+    const reloaded = await reloadCurrentFilePreservingCursor({
+      silent: true, preserveView: true, ifClean: true,
+    });
+    if (reloaded && pendingExternalSave === pending) pendingExternalSave = null;
   } finally {
     pendingExternalSaveRefreshInFlight = false;
+    if (pendingExternalSave && pendingExternalSave !== pending && !paused) {
+      queueMicrotask(() => void refreshPendingExternalSaveOnFocus());
+    }
+  }
+}
+
+function noteExternalFileChanged(file: string, mtimeMs = 0, immediate = false): void {
+  if (!currentFile || file !== currentFile) return;
+  pendingExternalSave = { file, mtimeMs };
+  if (revision !== savedRevision) {
+    setStatus("Changed on disk; local edits kept — review before saving");
+  } else if (immediate && !paused) {
+    void refreshPendingExternalSaveOnFocus();
   }
 }
 
@@ -11834,6 +11858,7 @@ function runHostCommand(detail: unknown): boolean {
     settings?: LanguageToolSettings;
     label?: string;
     settingsRevision?: string;
+    full?: boolean;
     repositoryId?: string;
     phase?: string;
     error?: string;
@@ -11872,6 +11897,14 @@ function runHostCommand(detail: unknown): boolean {
           undefined,
           ours ? SELF_NOTES_REFRESH_DELAY_MS : undefined,
         );
+      }
+      return true;
+    }
+    case "note-files-changed": {
+      if (!currentFile) return true;
+      const files = Array.isArray(body.files) ? body.files : [];
+      if (body.full === true || files.includes(currentFile)) {
+        noteExternalFileChanged(currentFile, 0, true);
       }
       return true;
     }
@@ -11922,10 +11955,12 @@ function runHostCommand(detail: unknown): boolean {
       if (!savedFile || savedFile !== currentFile) return true;
       if (String(body.clientId || "") === clientId) return true;
       const mtimeMs = Number(body.mtimeMs) || 0;
-      pendingExternalSave = { file: savedFile, mtimeMs };
-      if (revision !== savedRevision) {
-        setStatus("Changed in another pane; refresh before saving");
-      }
+      // A completed turn is a hint, not proof that this note changed. Skip
+      // the full read when its disk version still matches the open page.
+      if (body.clientId === "agent-turn" && mtimeMs > 0
+          && currentMtimeMs > 0 && mtimeMs === currentMtimeMs) return true;
+      noteExternalFileChanged(savedFile, mtimeMs,
+        body.clientId === "remote-external" || body.clientId === "agent-turn");
       return true;
     }
     case "key":
@@ -11935,6 +11970,7 @@ function runHostCommand(detail: unknown): boolean {
       return true;
     case "resume":
       setPausedReason("host", false);
+      void refreshPendingExternalSaveOnFocus();
       return true;
     case "toggle-pause":
       setPausedReason("host", !pauseReasons.has("host"));

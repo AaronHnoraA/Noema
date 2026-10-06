@@ -1,5 +1,5 @@
 import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { basename, delimiter, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { execFile, spawn } from "node:child_process";
@@ -2758,12 +2758,22 @@ async function rememberAgendaPayload(body, todayKey, payload) {
 let notesIndexVersion = 1;
 export function notesIndexVersionValue() { return notesIndexVersion; }
 
-// Registry of files the server wrote itself (atomic renames). The watcher
-// ignores self-writes within a 2-second window to avoid triggering redundant
-// re-scans immediately after save. Capped at 256 entries to prevent unbounded growth.
+// Registry of files the server wrote itself (atomic renames). A time window
+// alone can hide an agent edit made just after an autosave, so compare the
+// final file identity and high-resolution timestamp as well. This costs one
+// local stat per write/event, never a poll or a whole-vault scan.
 const recentSelfWrites = new Map();
+function noteFileSignature(file) {
+  if (file.startsWith("/fs:")) return null;
+  try {
+    const info = statSync(file, { bigint: true });
+    return `${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`;
+  } catch {
+    return null;
+  }
+}
 export function noteSelfWrite(file) {
-  recentSelfWrites.set(file, Date.now());
+  recentSelfWrites.set(file, { at: Date.now(), signature: noteFileSignature(file) });
   if (recentSelfWrites.size > 256) {
     // Delete the oldest entry
     const oldest = recentSelfWrites.keys().next().value;
@@ -2771,10 +2781,10 @@ export function noteSelfWrite(file) {
   }
 }
 export function noteSelfWriteRecently(file, windowMs = 2000) {
-  const ts = recentSelfWrites.get(file);
-  if (!ts) return false;
-  if (Date.now() - ts > windowMs) { recentSelfWrites.delete(file); return false; }
-  return true;
+  const record = recentSelfWrites.get(file);
+  if (!record) return false;
+  if (Date.now() - record.at > windowMs) { recentSelfWrites.delete(file); return false; }
+  return record.signature !== null && record.signature === noteFileSignature(file);
 }
 
 // Whether a vault-relative path is eligible to affect the note index.

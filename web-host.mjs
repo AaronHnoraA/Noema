@@ -88,6 +88,7 @@ import { createKernelLatexProvider } from "./server/lib/kernel-latex-provider.mj
 import { createKernelAssetsProvider } from "./server/lib/kernel-assets-provider.mjs";
 import { createKernelSessionProvider } from "./server/lib/kernel-session-provider.mjs";
 import { createKernelBibliographyProvider } from "./server/lib/kernel-bibliography-provider.mjs";
+import { rendererCommandDetail } from "./server/lib/host-command.mjs";
 import { createKernelVaultGitProvider } from "./server/lib/kernel-vaultgit-provider.mjs";
 import {
   createKernelKnowledgeSearch,
@@ -940,8 +941,8 @@ void sweepGlobalOrphanKernels({ stderr: process.stderr }).then(({ reaped }) => {
 // Vault file watcher: marks the note index dirty on external changes (Emacs
 // saves, git pull, dired renames, etc.) and broadcasts a notes-index-changed
 // SSE event so connected pages can refresh their notes array without polling.
-// Self-writes (the server's own atomic saves/renames) are suppressed within a
-// 2-second window to avoid redundant index re-reads.
+// Self-writes (the server's own atomic saves/renames) are suppressed only while
+// the file still matches the saved identity, even inside the 2-second window.
 // Set AARONNOTE_WATCH=0 to disable (useful in test environments).
 
 // Invalidate now, rebuild when someone reads.
@@ -1331,6 +1332,9 @@ const noteWatcher = hostMode !== "server" && process.env.AARONNOTE_WATCH !== "0"
         for (const file of noteFiles) markNotesDirty(file);
         if (noteFiles.length > 0) {
           broadcast("command", { command: "notes-index-changed", version: notesIndexVersionValue() });
+          // One batch per watcher flush lets open Markdown panes notice agent
+          // edits without adding a watcher or a stat loop to each page.
+          broadcast("command", { command: "note-files-changed", files: noteFiles });
         }
         if (files.length > 0) {
           scheduleWikiRefresh(files);
@@ -1347,6 +1351,7 @@ const noteWatcher = hostMode !== "server" && process.env.AARONNOTE_WATCH !== "0"
         markNotesDirty();
         clearBibliographyCache();
         broadcast("command", { command: "notes-index-changed", version: notesIndexVersionValue() });
+        broadcast("command", { command: "note-files-changed", full: true });
         broadcast("command", { command: "bibliography-index-changed", version: bibliographyVersion() });
         scheduleWikiRefresh();
       },
@@ -2720,18 +2725,11 @@ async function callApi(channel, args = []) {
 
 async function handleEmacsCommand(body = {}) {
   if (body.type === "command" || body.command) {
-    const detail = {
-      ...(body.detail && typeof body.detail === "object" ? body.detail : {}),
-      command: String(body.command || ""),
-    };
+    const detail = rendererCommandDetail(body);
     // `targetClient` is the routing address: only the renderer whose page URL
     // carries this client runs the command. `client` is kept alongside it for
     // retained xwidget pages built before the split, and is never the address
     // for server-originated broadcasts, which use it as the event's subject.
-    if (body.client) {
-      detail.targetClient = String(body.client);
-      detail.client = String(body.client);
-    }
     rememberClientLifecycle(clientLifecycleStates, detail);
     broadcast("command", detail);
     return { ok: true };

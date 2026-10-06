@@ -6,6 +6,53 @@
 (require 'ert)
 (require 'noema-agent-acp)
 
+(ert-deftest noema-agent-acp-turn-complete-forwards-one-public-event ()
+  (let ((buffer (generate-new-buffer " *noema-turn-event*"))
+        (subscriptions nil)
+        (events nil))
+    (unwind-protect
+        (with-current-buffer buffer
+          (setq-local major-mode 'agent-shell-mode)
+          (let ((noema-agent-acp-turn-complete-functions
+                 (list (lambda (source event)
+                         (push (list source event) events)))))
+            (cl-letf (((symbol-function 'noema-agent-acp-subscribe)
+                       (lambda (&rest args)
+                         (push args subscriptions)
+                         'mock-subscription))
+                      ((symbol-function 'noema-agent-acp--note-attention)
+                       (lambda (&rest _) nil)))
+              (noema-agent-acp--subscribe-attention buffer)
+              (noema-agent-acp--subscribe-attention buffer)
+              (should (= (length subscriptions) 2))
+              (let ((callback (plist-get (car subscriptions) :callback))
+                    (event '((:event . turn-complete)
+                             (:data . ((:stop-reason . "end_turn"))))))
+                (funcall callback event)
+                (should (equal events (list (list buffer event))))))))
+      (when (buffer-live-p buffer) (kill-buffer buffer)))))
+
+(ert-deftest noema-agent-acp-turn-complete-watches-bare-claude-shell ()
+  "An unadopted Claude agent-shell still subscribes to turn completion."
+  (let ((buffer (generate-new-buffer " *bare-claude-shell*"))
+        (noema-agent-acp-adopt-foreign-sessions nil)
+        subscriptions)
+    (unwind-protect
+        (with-current-buffer buffer
+          (setq-local major-mode 'agent-shell-mode)
+          (should (memq #'noema-agent-acp--watch-attention-h
+                        agent-shell-mode-hook))
+          (cl-letf (((symbol-function 'noema-agent-acp-subscribe)
+                     (lambda (&rest args)
+                       (push (plist-get args :event) subscriptions)
+                       'mock-subscription)))
+            (noema-agent-acp--watch-attention-h)
+            (should (memq 'permission-request subscriptions))
+            (should (memq 'turn-complete subscriptions))
+            (noema-agent-acp--watch-attention-h)
+            (should (= (length subscriptions) 2))))
+      (when (buffer-live-p buffer) (kill-buffer buffer)))))
+
 (ert-deftest noema-agent-acp-renamed-shell-restores-real-input-and-submits ()
   "Exercise the real shell process, prompt filter, Evil keys and input sender."
   (save-window-excursion

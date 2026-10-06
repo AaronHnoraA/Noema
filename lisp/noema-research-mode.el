@@ -46,6 +46,7 @@
                   "noema-research-graph" (graph))
 (declare-function noema-research-graph-refresh "noema-research-graph" ())
 (defvar my/noema--ready)
+(defvar my/auto-revert-agent-refresh-function)
 (defvar noema-research-graph--source)
 
 (autoload 'noema-research-graph-open "noema-research-graph" nil t)
@@ -970,22 +971,55 @@ number of lines changed."
     (cancel-timer noema-research--disk-sync-timer))
   (setq noema-research--disk-sync-timer nil))
 
-(defun noema-research--sync-from-disk (buffer)
-  "Merge another Noema writer's change into BUFFER without any prompt."
+(defun noema-research--disk-content-without-outputs (document)
+  "Serialize DOCUMENT without the fields a Run changes in its output cell."
+  (let ((copy (copy-hash-table document)))
+    ;; Copy only the containers being edited.  Large agent replies never enter
+    ;; this comparison's serialization, and DOCUMENT remains untouched.
+    (puthash "cells"
+             (vconcat
+              (mapcar (lambda (cell)
+                        (let ((without-output (copy-hash-table cell)))
+                          (remhash "outputs" without-output)
+                          (remhash "execution_count" without-output)
+                          without-output))
+                      (noema-research-cells document)))
+             copy)
+    (noema-research-serialize copy)))
+
+(defun noema-research--disk-content-changed-p (disk)
+  "Return non-nil when DISK changed beyond Run outputs since the last sync."
+  (and noema-research--base
+       (not (equal (noema-research--disk-content-without-outputs
+                    (noema-research-parse-json noema-research--base))
+                   (noema-research--disk-content-without-outputs disk)))))
+
+(defun noema-research--sync-from-disk (buffer &optional notified)
+  "Refresh BUFFER from another writer without discarding unsaved edits.
+NOTIFIED means a file watch saw a write, so compare content even if the
+filesystem reports the same modification time."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (setq noema-research--disk-sync-timer nil)
       (when (and buffer-file-name noema-research--document
-                 (file-exists-p buffer-file-name)
-                 (not (equal (noema-research-file-revision buffer-file-name)
-                             noema-research--revision)))
+                 (or notified (not noema-research--revision)
+                     (not (verify-visited-file-modtime buffer)))
+                 (file-exists-p buffer-file-name))
         (condition-case error-object
-            (progn
-              (noema-research-merge-disk-outputs)
-              (noema-research--schedule-session-routes))
+            (let ((revision (noema-research-file-revision buffer-file-name)))
+              (unless (equal revision noema-research--revision)
+                (let ((disk (noema-research-read-file buffer-file-name)))
+                  ;; Run outputs merge in place.  An agent may also edit an
+                  ;; existing cell's source or title; that needs the full
+                  ;; JuText projection when the buffer has no local edits.
+                  (if (and (not (buffer-modified-p))
+                           (noema-research--disk-content-changed-p disk))
+                      (revert-buffer :ignore-auto :noconfirm :preserve-modes)
+                    (noema-research-merge-disk-outputs disk revision))
+                  (noema-research--schedule-session-routes))))
           (error
            (display-warning 'noema-research
-                            (format "Could not merge %s from disk: %s"
+                            (format "Could not refresh %s from disk: %s"
                                     (buffer-name) (error-message-string error-object))
                             :warning)))))))
 
@@ -996,7 +1030,7 @@ number of lines changed."
       (when (timerp noema-research--disk-sync-timer)
         (cancel-timer noema-research--disk-sync-timer))
       (setq noema-research--disk-sync-timer
-            (run-at-time 0.2 nil #'noema-research--sync-from-disk buffer)))))
+            (run-at-time 0.2 nil #'noema-research--sync-from-disk buffer t)))))
 
 (defun noema-research--watch-file ()
   "Watch this document so Run outputs and Proposals merge in place.
@@ -1087,22 +1121,23 @@ Local titles, states and relation edits always win."
             (setq changed t))))
       changed)))
 
-(defun noema-research-merge-disk-outputs ()
+(defun noema-research-merge-disk-outputs (&optional disk revision)
   "Merge what other Noema writers persisted into the in-memory document.
 Work outputs come from disk.  Structure that appeared on disk since this
 buffer last loaded or saved (an accepted Proposal) is added.  Unsaved JuText
 text is synced first and, like local structure edits, always wins.
 Afterwards the buffer is current with disk, so saving never asks about
-external changes."
+external changes.  DISK and REVISION reuse an already-read file snapshot."
   (when (and buffer-file-name noema-research--document
              (file-exists-p buffer-file-name)
              ;; Idempotent: the Run resync and the file watch may both fire
              ;; for one write; an unchanged revision only refreshes modtime.
              (or (not (equal noema-research--revision
-                             (noema-research-file-revision buffer-file-name)))
+                             (or revision
+                                 (noema-research-file-revision buffer-file-name))))
                  (progn (set-visited-file-modtime) nil)))
     (let ((modified (buffer-modified-p))
-          (disk (noema-research-read-file buffer-file-name))
+          (disk (or disk (noema-research-read-file buffer-file-name)))
           (memory (make-hash-table :test #'equal))
           structure)
       (noema-research-mode--sync)
@@ -1124,7 +1159,8 @@ external changes."
         (noema-research--reproject)
         (unless modified (set-buffer-modified-p nil))
         (noema-research--notify-graph))
-      (setq-local noema-research--revision (noema-research-file-revision buffer-file-name))
+      (setq-local noema-research--revision
+                  (or revision (noema-research-file-revision buffer-file-name)))
       (setq-local noema-research--base (noema-research-serialize disk))
       (set-visited-file-modtime)
       (noema-research-mode--refresh-decorations)
@@ -2835,6 +2871,8 @@ register file watches, start agents, or rearrange the workspace."
   ;; outputs, accepted Proposals) merge in place through a file watch, never
   ;; through auto-revert's reload or the stale-file prompt.
   (setq-local global-auto-revert-ignore-buffer t)
+  (setq-local my/auto-revert-agent-refresh-function
+              #'noema-research--sync-from-disk)
   (add-hook 'kill-buffer-hook #'noema-research--unwatch-file nil t)
   (let* ((file buffer-file-name)
          (on-disk (and file (file-exists-p file))))

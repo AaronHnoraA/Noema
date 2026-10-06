@@ -135,6 +135,18 @@ refs/backlinks 和 mtime/size 缓存在 immutable Markdown snapshot 及持久索
 watch/save 每次只替换变化路径，再在内存重连关系；`notes:list`、completion、Agenda、
 Graph 和 related Knowledge 共用该投影。standalone 文件打开后仍扫描其本地 sibling root，
 不会错误复用 canonical note-root catalog。
+host 还复用笔记库的单个递归 watcher，把 250 ms 合并后的 Markdown 变更路径推送给已连接页面；
+Emacs 内的 ACP agent 完成一轮时，Noema 订阅 agent-shell 的 `turn-complete` 事件，
+包括裸启动的 Claude 会话；对已打开的 Markdown 页面各查一次文件时间戳，只有变化时
+才让页面读取正文。可见和最近的 JuText buffer 同时由自己的磁盘同步器检查一次；
+无草稿时重新投影外部正文变更，有草稿时保留本地内容并合并运行输出。
+ACP 回合完成只先查 JuText 文件时间戳；没有变化就不读取或哈希整份 `.noema`。
+本地文件通知携带实际写入信号，即使时间戳相同也核对内容修订。
+Emacs 网关的 `aaronnote.command` 只把 `detail` 内的 `file`、`mtimeMs`、`clientId`
+转发给页面；顶层 `command`、`client` 属于 host 路由协议。
+页面仅在无草稿时重读当前文件，异步读取期间再次检查页面版本。没有为库外
+独立 Markdown 新增常驻 watch 或轮询。自身保存事件依文件身份和高精度时间戳过滤，
+紧随其后的外部改动仍会触发通知。
 
 Agenda/Todo/Attribute View 的 canonical workspace projection 也只由 Go 生成。kernel 在一次
 request 中联结窄 note metadata、planning nodes 与可选 property blocks；Node 不再先 walk/stat/read

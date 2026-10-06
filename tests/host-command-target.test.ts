@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { hostCommandTargetsClient } from "../aaronnote/host-command-target.ts";
 import { provesHostInputFocus } from "../aaronnote/host-input-focus.ts";
+// @ts-ignore Headless host protocol module.
+import { rendererCommandDetail } from "../server/lib/host-command.mjs";
 
 const mainSource = readFileSync(join(process.cwd(), "aaronnote", "main.ts"), "utf8");
 
@@ -52,9 +54,16 @@ describe("web host command addressing", () => {
   const hostSource = readFileSync(join(process.cwd(), "web-host.mjs"), "utf8");
 
   test("an Emacs command carries a routing address", () => {
-    const start = hostSource.indexOf("async function handleEmacsCommand");
-    const handler = hostSource.slice(start, hostSource.indexOf("if (body.type === \"client-close\")", start));
-    expect(handler).toContain("detail.targetClient = String(body.client);");
+    expect(rendererCommandDetail({ command: "pause", client: "client-a" }))
+      .toEqual({ command: "pause", targetClient: "client-a", client: "client-a" });
+  });
+
+  test("forwards the file identity and mtime needed by Markdown reload", () => {
+    const detail = { file: "/tmp/note.md", mtimeMs: 1234, clientId: "agent-turn" };
+    expect(rendererCommandDetail({ type: "command", command: "note-saved", detail }))
+      .toEqual({ command: "note-saved", ...detail });
+    expect(rendererCommandDetail({ type: "command", command: "note-saved", ...detail }))
+      .toEqual({ command: "note-saved" });
   });
 
   test("client-closed announces a subject and reaches every surviving renderer", () => {
